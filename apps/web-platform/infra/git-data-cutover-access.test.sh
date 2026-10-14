@@ -1411,7 +1411,7 @@ case_hang() {
   [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=124' "$OUT"
 }
 case_capture_census() { # <script>
-  local code outside calls
+  local code outside calls params stray
   code="$(sed -E 's/^[[:space:]]*#.*$//' "$1")"
   # Lines outside access_gate/gd_capture/gd_exec/resolve_roster that expand an ssh
   # invocation. gd_exec (PR2) is the write twin of gd_capture — same bound, same pin, no
@@ -1420,12 +1420,17 @@ case_capture_census() { # <script>
     /^(access_gate|gd_capture|gd_exec|resolve_roster)\(\) \{/ {skip=1; next}
     skip && /^\}/ {skip=0; next}
     !skip' | grep -nE '"\$\{(inv|gdinv)\[@\]\}"|\$\{?GIT_DATA_SSH|\$\{?WEB_HOST_SSH' || true)"
-  calls="$(printf '%s\n' "$code" | grep -cE '^[[:space:]]+gd_capture ' || true)"
-  CAPTURE_DETAIL="calls=$calls outside=[$(printf '%s' "$outside" | tr '\n' '|' | cut -c1-300)]"
+  # every call FORM in command position (line-leading, after ; & | ( { ! or $( , after if/then/do/else/while/until/elif, as in
+  # `: "$(gd_capture ...)"` and `if gd_capture ...; then`); the definition `gd_capture() {` and prose mentions do not match
+  calls="$(printf '%s\n' "$code" | grep -oE '(^[[:space:]]*|[;&|({!][[:space:]]*|\$\([[:space:]]*|\b(if|then|do|else|while|until|elif)[[:space:]]+)gd_capture[[:space:]]' | wc -l | tr -d ' ')"
+  # the stdin-file and bound parameters (#10138) belong to ONE caller: mode_wipe_assert's call, and no other gd_capture call carries them
+  params="$(printf '%s\n' "$code" | awk '/^mode_wipe_assert\(\) \{/ {f=1} f && /^\}/ {f=0} f' | grep -cE 'gd_capture[^|]*"\$body"[[:space:]]+"\$tmo"' || true)"
+  stray="$(printf '%s\n' "$code" | awk '/^mode_wipe_assert\(\) \{/ {f=1; next} f && /^\}/ {f=0; next} !f' | grep -E 'gd_capture[[:space:]]' | grep -cE '"\$body"|"\$tmo"|\$body|\$tmo|/dev/null [0-9]' || true)"
+  CAPTURE_DETAIL="calls=$calls params=$params stray=$stray outside=[$(printf '%s' "$outside" | tr '\n' '|' | cut -c1-300)]"
   # Six: refuse_if_unmounted, the store session, the freeze probe, the fence probe, the freeze gc check
   # and mode_wipe_assert's one call (#10138: it adds the optional stdin-file and bound parameters, the
   # single ssh site is unchanged).
-  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 6 ]
+  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 6 ] && [ "$params" = 1 ] && [ "$stray" = 0 ]
 }
 if case_line2; then pass "S8a/G5: a findmnt answer with an injected second line is probe_failed rc=96 and neither line is printed"
 else fail "S8a/G5: a multi-line captured value was accepted or printed" "$(ctx)"; fi
@@ -1435,7 +1440,7 @@ run_case g5big "${KEYED[@]}" SHIM_FINDMNT=big
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=96' "$OUT" && ! grep -q 'aaaaaaaaaa' "$OUT"; then
   pass "G5: a 5005-byte answer that would match once truncated is refused (cap 4096), never printed"
 else fail "G5: an oversized answer was truncated into an accepted value, or printed" "$(ctx)"; fi
-if case_capture_census "$SCRIPT"; then pass "G5 census: exactly six gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
+if case_capture_census "$SCRIPT"; then pass "G5 census: exactly six gd_capture call sites in every call form (line-leading, \$(...), if/then, after ; & |); the stdin-file and bound parameters are passed by mode_wipe_assert's one call and no other; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
 else fail "G5 census: a raw capture or a stray invocation exists" "$CAPTURE_DETAIL"; fi
 
 # ── GUARD 7 — real modes are refused before any remote call ───────────────────────────
@@ -1444,11 +1449,11 @@ case_refuse() { # <label> <VAR=value>
   [ "$RC" = 5 ] && [ ! -s "$TLF" ] \
     && grep -qE '^\[git-data-cutover\] REFUSE verdict=real_cutover_unreconciled vars=' "$OUT" \
     && [ "$(grep -E '^::' "$OUT")" = "::error title=git-data-cutover::verdict=real_cutover_unreconciled" ] \
-    && grep -q '#8211' "$OUT"
+    && grep -q '#10138' "$OUT"
 }
 for kv in DRY_RUN=0 ROLLBACK=1 CONFIRM_WIPE=1 DRY_RUN=true; do
   _lbl="$(printf '%s' "$kv" | tr '=A-Z' '-a-z')"
-  if case_refuse "$_lbl" "$kv"; then pass "S9/G7 ($kv): exit 5 real_cutover_unreconciled naming #8211, and the timeline is EMPTY"
+  if case_refuse "$_lbl" "$kv"; then pass "S9/G7 ($kv): exit 5 real_cutover_unreconciled naming #10138 (the wipe job, which owns the plaintext-volume wipe), and the timeline is EMPTY"
   else fail "S9/G7 ($kv): a real mode was not refused before any remote call" "$(ctx)"; fi
 done
 run_case g7empty "${KEYED[@]}" DRY_RUN= ROLLBACK= CONFIRM_WIPE=
@@ -2069,11 +2074,14 @@ check("N-order: checkout (persist-credentials false) precedes the local notify-o
       and "continue-on-error" not in issue_s and "if" not in issue_s and "gh issue comment" in str(issue_s.get("run", "")),
       (n_co, n_em, n_is, email_s.get("continue-on-error"), issue_s.get("continue-on-error")))
 bodies = [x.get("run") or "" for x in nsteps]
-check("N-body: no notify run: body interpolates a ${{ }} expression and the job never references inputs.* in any spelling (inputs.x, inputs['x'], github.event) — every value arrives through env:",
+_nb_json = json.dumps(notify)
+_vid_bind = '"WIPE_VOLUME_ID": "${{ inputs.volume_id }}"'
+check("N-body: no notify run: body interpolates a ${{ }} expression and the job references inputs.* in exactly ONE place (the body step's env WIPE_VOLUME_ID = inputs.volume_id, which the body fills into the recovery command only when it is 1 to 12 digits) and in no other spelling (inputs['x'], github.event) — every value arrives through env:",
       bool(notify) and not any("${{" in b for b in bodies)
-      and not re.search(r"\binputs\b|github\.event|toJSON|vars\.", json.dumps(notify)), [b[:60] for b in bodies if "${{" in b])
+      and _nb_json.count(_vid_bind) == 1 and not re.search(r"\binputs\b|github\.event|toJSON|vars\.", _nb_json.replace(_vid_bind, ""))
+      and "case \"${WIPE_VOLUME_ID:-}\" in ''|*[!0-9]*) ;;" in "\n".join(bodies), [b[:60] for b in bodies if "${{" in b])
 EXPR_OK = [r"needs\.cutover\.result", r"needs\.cutover\.outputs\.(mode|finalizer_ran|freeze_held|recovery_failed|probe_failed|gc_timer_stopped|started)",
-           r"needs\.wipe\.result", r"needs\.wipe\.outputs\.(mode|started|phase|refusal)",
+           r"needs\.wipe\.result", r"needs\.wipe\.outputs\.(mode|started|phase|refusal)", re.escape("inputs.volume_id"),
            re.escape("needs.cutover.outputs.mode || needs.wipe.outputs.mode"),
            re.escape("needs.cutover.result == 'skipped' && needs.wipe.result || needs.cutover.result"),
            r"github\.(run_id|server_url|repository)", r"secrets\.(GITHUB_TOKEN|RESEND_API_KEY)",
@@ -2081,11 +2089,11 @@ EXPR_OK = [r"needs\.cutover\.result", r"needs\.cutover\.outputs\.(mode|finalizer
 exprs = [e.strip() for e in re.findall(r"\$\{\{(.*?)\}\}", json.dumps(nsteps))]
 bad_exprs = [e for e in exprs if not any(re.fullmatch(p_, e) for p_ in EXPR_OK)]
 body_env = (next((x for x in nsteps if x.get("id") == "body"), {}).get("env")) or {}
-check("N-exprs: every ${{ }} expression in the notify steps is on the allowlist (the needs.cutover and needs.wipe verdict outputs and results, the two pinned || forms, run id/url, the two secrets, the body step's own outputs and the email outcome), and the body step's env is EXACTLY the thirteen inputs (the MODE and RESULT merges, the cutover result, the three wipe inputs, the five cutover verdict inputs plus the run id and url) with their canonical sources",
+check("N-exprs: every ${{ }} expression in the notify steps is on the allowlist (the needs.cutover and needs.wipe verdict outputs and results, the two pinned || forms, run id/url, the two secrets, the body step's own outputs and the email outcome), and the body step's env is EXACTLY the fourteen inputs (the MODE and RESULT merges, the cutover result, the three wipe outputs plus the typed volume id, the five cutover verdict inputs plus the run id and url) with their canonical sources",
       bool(exprs) and not bad_exprs and body_env == {
           "MODE": "${{ needs.cutover.outputs.mode || needs.wipe.outputs.mode }}", "RESULT": "${{ needs.cutover.result == 'skipped' && needs.wipe.result || needs.cutover.result }}", "CUTOVER_RESULT": "${{ needs.cutover.result }}",
           "WIPE_STARTED": "${{ needs.wipe.outputs.started }}", "WIPE_PHASE": "${{ needs.wipe.outputs.phase }}", "WIPE_REFUSAL": "${{ needs.wipe.outputs.refusal }}",
-          "FINALIZER_RAN": "${{ needs.cutover.outputs.finalizer_ran }}", "FREEZE_HELD": "${{ needs.cutover.outputs.freeze_held }}",
+          "WIPE_VOLUME_ID": "${{ inputs.volume_id }}", "FINALIZER_RAN": "${{ needs.cutover.outputs.finalizer_ran }}", "FREEZE_HELD": "${{ needs.cutover.outputs.freeze_held }}",
           "RECOVERY_FAILED": "${{ needs.cutover.outputs.recovery_failed }}", "PROBE_FAILED": "${{ needs.cutover.outputs.probe_failed }}",
           "GC_TIMER_STOPPED": "${{ needs.cutover.outputs.gc_timer_stopped }}", "RUN_ID": "${{ github.run_id }}", "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"},
       (bad_exprs, sorted(body_env)))
@@ -2722,6 +2730,16 @@ fi
 if mutate g5-raw-capture "$SCRIPT" 1 's#^  \[ -n "\$STORE_SOURCE" \] \|\| _store_refuse store-on-mapper probe_failed$#  local -a inv; read -ra inv <<< "${GIT_DATA_SSH:-}"; STORE_SOURCE="$("${inv[@]}" "$GIT_DATA_HOST" findmnt -no SOURCE /mnt/git-data)"\n&#'; then
   mutant_red g5-raw-capture case_capture_census "$MUTANT"
 fi
+# G5 rows 5-7 (#10138) — a seventh session in a non-line-leading form, and a second caller of the new parameters.
+if mutate g5-nested-subst "$SCRIPT" 1 's#^main\(\) \{$#nest_a() { : "$(gd_capture '"'"'^.*$'"'"' "ls -A $OLD_ROOT" </dev/null)"; }\n&#'; then
+  mutant_red g5-nested-subst case_capture_census "$MUTANT"
+fi
+if mutate g5-if-form "$SCRIPT" 1 's#^main\(\) \{$#nest_b() { if gd_capture "^x$" "ls -A /mnt" /dev/null 60; then :; fi; }\n&#'; then
+  mutant_red g5-if-form case_capture_census "$MUTANT"
+fi
+if mutate g5-second-param-caller "$SCRIPT" 1 's#^main\(\) \{$#nest_c() { local body=x tmo=9; gd_capture "^x$" "cat" "$body" "$tmo" || true; }\n&#'; then
+  mutant_red g5-second-param-caller case_capture_census "$MUTANT"
+fi
 # G7 row 1 — re-add a rollback input.
 if mutate g7-rollback-input "$WF" 2 's#^      confirm:$#&\n      rollback:\n        type: boolean#'; then
   python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-g7.tsv" 2>&1
@@ -2840,6 +2858,9 @@ g2n_row g2n-11-cutover-job-continue-on-error 1 's#^    timeout-minutes: 120$#&\n
 g2n_row g2n-12-event-json-in-body-env 1 's#^          RUN_ID: \$\{\{ github\.run_id \}\}$#&\n          EV: ${{ toJSON(github.event) }}#' "N-body:"
 g2n_row g2n-13-email-step-not-best-effort 1 '/^        id: email$/{n;/continue-on-error: true/d}' "N-order:"
 g2n_row g2n-14-body-id-renamed 2 's#^        id: body$#        id: bodz#' "N-refs:"
+# #10138 — the notify body binds the typed volume id and nothing else from the inputs.
+g2n_row g2n-15-wipe-volume-from-lineage 2 's#^          WIPE_VOLUME_ID: \$\{\{ inputs\.volume_id \}\}$#          WIPE_VOLUME_ID: ${{ inputs.lineage }}#' "N-body:"
+g2n_row g2n-16-second-input-bound 1 's#^          WIPE_VOLUME_ID: \$\{\{ inputs\.volume_id \}\}$#&\n          WIPE_ORIGIN: ${{ inputs.origin_run }}#' "N-body:"
 # #9439 — mutants over the runner-side changes (item 8 gc timer + CTO ruling, item 5 probe pre-flight, item 6 unwind marker).
 # The case functions are the SAME ones the MZ rows call (a tightened row tightens its mutant), run against $MUTANT (CASE_SCRIPT).
 # m9439-1: the old warn-and-continue branch is back (a failed restart no longer fails the verb).
@@ -3533,7 +3554,10 @@ fi
 # test), fz8-gc-trap-deleted, fz9-child-6-is-held, nb6-gc-word-drops-verdict, nb7-gc-word-dropped (the previous nb6 was retargeted
 # onto the new word, m9439-5..8 became fz6/fz7/nb5 and kept), fw1-marker-conditional-false, g3p-3, g3p-4, wf-unfreeze-no-gc-output
 # and g2n-15-gc-output-dropped = 12, so exactly 136. Fix pass: -m9439-13 and -nb6 (both still killed: MZ-VO2/VX rows and NB1c), +fz10, fu1, g3p-5, g3p-6 = 138. Ship: plus fz11-held-latch-dropped (the cross-call word invariant) = 139 (measured). Wipe body (#10138): plus g2n-9w-wipe-started-clause-dropped, g4-1-cutover-if-wipe-check-dropped, g4-2-wipe-if-widened and g4-5-run-name-trailing-id (the cross-job pins of the new `wipe` job and `run-name`) = 143 (measured); g2n-3, g2n-8, g2n-9 and nb1 were re-anchored on the two-clause notify `if:` and the wipe-aware `if [ -z "$words" ] && [ "$wipe_family" != 1 ]` line, each still counted once.
-MUTANT_FLOOR=143
+# Review round 2 (#10138): plus g5-nested-subst, g5-if-form and g5-second-param-caller (a seventh gd_capture session in a non-line-leading
+# form, and a second caller of the stdin-file and bound parameters) and g2n-15-wipe-volume-from-lineage and g2n-16-second-input-bound (the
+# notify body's one inputs.volume_id binding) = 5, so exactly 148; the G5 census row and the N-body / N-exprs verdicts were restated in place.
+MUTANT_FLOOR=148
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3557,7 +3581,8 @@ fi
 # nets the standalone rows down by 5 (8 rows to 3), and the new FU row adds 1: -4, so 613 (measured).
 # Ship: 139 mutants x 2 = 278 (+2); FZ22 and the MZ-VO failing-member loops sit inside case_fz / the existing rows and add none: 615.
 # Wipe body (#10138): 143 mutants x 2 = 286 (+8 over 139 x 2); two new standalone workflow verdicts (WF-runname, WF-cutover-if), which also move the workflow verdict count 54 -> 56: 625.
-FLOOR=625
+# Review round 2 (#10138): 148 mutants x 2 = 296 (+10 over 143 x 2); no new standalone row (the G5 census, N-body and N-exprs were restated in place): 635.
+FLOOR=635
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

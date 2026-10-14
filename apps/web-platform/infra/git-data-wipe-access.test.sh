@@ -16,8 +16,16 @@
 # Duplication note: the Hetzner `curl` shim is a trimmed copy of the one in git-data-wipe.test.sh, and
 # assert_fixture_dir / the instrument self-test are copies of the canonical forms (the old suites do the same).
 #
-# CLO forbidden-phrase list (Guard 8): "erased", "wiped", "secure", "no copies". No summary, echo or notify word of
-# the wipe job may contain any of them; the only claim is that the DEVICE was deleted at the provider API.
+# CLO forbidden-phrase list (Guard 8), widened: erased, wiped, secure(ly), no copies/snapshots/backups, retention closed/ended,
+# retention_end, Art. 17 satisfied/compliant, holds no personal data, volume/store (is) empty, irrecoverable, unrecoverable,
+# permanently. No step line, notify word or executed summary of the wipe job may contain any of them (only the exact PA-36(f)
+# standing sentence is whitelisted); the only claim is that the DEVICE was deleted at (or is absent from) the provider API.
+#
+# Round 2 (review panel): the fail-closed gates are driven on their NEGATIVE paths (section H: bad origin runs, a rollback after
+# the stamp, a boot verdict that is not ok, a detach/attach/detach history, the listing mode), each with a one-line-edit mutant
+# that must reach the delete; the workflow-to-script environment contract of the W10 host read is derived from the script and
+# EXECUTED against the real git-data-cutover.sh (section I); the copied bridge / key-fetch / ssh_config steps are pinned equal to
+# the cutover job's and the ssh_config body is executed (section I); step-level keys and env names are allow-listed.
 #
 # Platform behaviour (outputs of a cancelled or timed-out step) cannot be observed offline: the simulator keeps
 # output files of a killed/cancelled step and the rows say so; the owner confirms on the first wipe_check run.
@@ -82,7 +90,7 @@ mkdir -p "$T/cz" "$T/mut" "$T/sim" "$T/specs" "$T/cases" || { printf 'FAIL SETUP
 
 printf '\n=== git-data wipe job census (plan Phase 4/5, Guard Contract 1-8) ===\n\n'
 
-MUTANT_FLOOR=97
+MUTANT_FLOOR=161
 cat > "$T/wfsim.py" <<'PYEOF'
 #!/usr/bin/env python3
 # wfsim: a tiny GitHub-Actions expression engine, the wipe-job census, a step-by-step simulator that runs the
@@ -431,14 +439,26 @@ WIPE_IF = "inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode 
 RUN_NAME = "${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}"
 MODES = ["proof", "flip", "rollback", "unfreeze", "redeploy", "wipe", "wipe_finish", "wipe_check"]
 NOTIFY_MODES = MODES + ["wipe_unknown"]
-PHASE_CHAIN = "${{ steps.wipe_readback.outputs.phase || steps.wipe_delete.outputs.phase || steps.wipe_delete_gate.outputs.phase || steps.wipe_detach.outputs.phase || steps.wipe_detach_gate.outputs.phase || steps.wipe_identity.outputs.phase }}"
+PHASE_CHAIN = "${{ steps.wipe_readback.outputs.phase || steps.wipe_delete.outputs.phase || steps.wipe_delete_gate.outputs.phase || steps.wipe_detach.outputs.phase || steps.wipe_detach_gate.outputs.phase }}"
 NIF = "always() && (((needs.cutover.result == 'failure' || needs.cutover.result == 'cancelled') && needs.cutover.outputs.started != 'false') || ((needs.wipe.result == 'failure' || needs.wipe.result == 'cancelled') && needs.wipe.outputs.started != 'false'))"
-FORBIDDEN = re.compile(r"\b(erased|wiped|secure|no copies)\b", re.I)
+# The CLO ruling's list (Guard 8), widened (review F-CLO-9). One source for the census, the executed-output scans and the
+# must-fire fixtures; the bash side reads the same text out of this module (FORBID_ERE), never a second copy.
+FORBIDDEN_SRC = r"\b(erased|wiped|secure(ly)?|no (copies|snapshots|backups)|retention (closed|ended)|retention_end|art\.? ?17 (satisfied|compliant)|holds no personal data|(volume|store) (is )?empty|irrecoverabl\w*|unrecoverable|permanently)\b"
+FORBIDDEN = re.compile(FORBIDDEN_SRC, re.I)
+# The ONE sentence that is whitelisted: the standing non-claim of the W12 step (PA-36(f)). It is removed (as exact text)
+# from a line before the scan; a variant of it is scanned like any other text.
+STANDING = "This run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), residue on the served store, or any copy held by someone with prior access."
 SECRET_RE = re.compile(r"secrets\.([A-Za-z0-9_]+)")
-ECHO_VARS_ALLOWED = {"DOPPLER_CLI_SHA256", "MODE", "RUN_ATTEMPT", "want", "v", "gv", "would", "W3_WOULD", "line", "ORIGIN_RUN", "VOLUME_ID", "reason", "row_epoch",
-                     "origin_epoch", "d", "w4", "w7", "tok", "dt"}
-# the names the wipe run echoes with a dollar expansion are pinned; `tok`/`dt` are only ever in add-mask printf of a token
-# the run fetched itself. Anything new is RED until reviewed.
+ECHO_VARS_ALLOWED = {"DOPPLER_CLI_SHA256", "rrc", "cls", "MODE", "RUN_ATTEMPT", "want", "v", "gv", "would", "W3_WOULD", "line", "ORIGIN_RUN", "VOLUME_ID", "reason", "row_epoch",
+                     "origin_epoch", "d", "w4", "w7"}
+# The names the wipe run expands in echo/printf output are pinned. A credential-holding variable (`tok`, `dt`) is NOT on the
+# list: `printf '::add-mask::%s\n' "$tok"` is excluded by the add-mask scan, and `echo "$tok"` is therefore RED.
+STEP_KEYS_RUN = {"name", "id", "if", "env", "run"}
+STEP_KEYS_USES = {"name", "id", "if", "uses", "with"}
+ENV_DENY = re.compile(r"^(BASH_ENV|ENV|LD_.*|PATH|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|IFS|BASH_FUNC_.*|BASH_XTRACEFD|CDPATH|GLOBIGNORE)$")
+XT2 = re.compile(r'case "\$-" in\n  \*x\*\) echo "::error title=git-data-cutover key::refusing to run under xtrace"; exit 78 ;;\nesac\n')
+FINISH_CMD_ORIGIN = 'finish_cmd_origin="gh workflow run git-data-cutover.yml --ref main -f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=${vid} -f origin_run=ORIGIN_RUN_ID"'
+FINISH_CMD = 'finish_cmd_here="gh workflow run git-data-cutover.yml --ref main -f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=${vid} -f origin_run=${orig}"'
 
 
 class Census:
@@ -569,20 +589,21 @@ class Census:
             got = tostr(interp(outs.get("phase") or "", ctx, {}))
             if got != marks[k - 1]:
                 chain_bad.append("after %s -> %r (want %r)" % (owners[k - 1], got, marks[k - 1]))
+        # the wipe_finish identity front no longer writes a phase (a volume that was ALREADY detached says nothing about what
+        # THIS run did): the chain must not read wipe_identity at all, and a stray identity phase must not leak into the output
         ctx_id = {"steps": {"wipe_identity": {"outputs": {"phase": "detached"}}}}
-        if tostr(interp(outs.get("phase") or "", ctx_id, {})) != "detached":
-            chain_bad.append("the wipe_finish identity front's phase=detached is not published by the chain")
+        if tostr(interp(outs.get("phase") or "", ctx_id, {})) != "":
+            chain_bad.append("the phase chain publishes a wipe_identity phase")
         c("G3-phase-chain-eval: with the markers published in order, the phase output EVALUATES to the latest one at every stage (deleted never loses to delete_sent)", not chain_bad, chain_bad)
         c("G3-phase-vocab: the helper's `phases` vocabulary is exactly the five markers the chain owners publish, in order", phases == marks, phases)
         # which steps can publish a phase: the workflow's own marker writes plus the helper verbs that write one
         writers = set()
         for s in steps:
             r = code_text(s.get("run") or "")
-            if re.search(r'echo "phase=', r) or re.search(r"git-data-wipe\.sh\"?\s+(detach|delete|readback)\b", r) \
-               or re.search(r"identity --expect detached[^\n]*--record write", r):
+            if re.search(r'echo "phase=', r) or re.search(r"git-data-wipe\.sh\"?\s+(detach|delete|readback)\b", r):
                 writers.add(skey(s))
         in_chain = set(re.findall(r"steps\.([a-z_]+)\.outputs\.phase", str(outs.get("phase"))))
-        c("G3-phase-writers: every step that can publish a phase (a workflow marker write, or a helper call to detach/delete/readback, or the wipe_finish identity front that writes phase=detached) is read by the phase chain, and the chain reads nothing else",
+        c("G3-phase-writers: every step that can publish a phase (a workflow marker write, or a helper call to detach/delete/readback; the identity front publishes none) is read by the phase chain, and the chain reads nothing else",
           writers == in_chain, "writers-not-in-chain=%s chain-not-writers=%s" % (sorted(writers - in_chain), sorted(in_chain - writers)))
         helper_writes = dict()
         for fn, ph in (("do_detach", "detached"), ("do_delete", "delete_sent"), ("do_readback", "deleted")):
@@ -739,11 +760,12 @@ class Census:
         c("G3-notify-if: notify-failure needs [cutover, wipe] and its if: is exactly two OR-ed clauses, each pairing its own result check with its own started != 'false'", notify.get("needs") == ["cutover", "wipe"] and nif == NIF, (notify.get("needs"), nif))
         nb = next((s for s in (notify.get("steps") or []) if s.get("id") == "body"), {})
         nbe = nb.get("env") or {}
-        c("G3-notify-env: the notify body binds the wipe inputs from needs.wipe.outputs, merges MODE and RESULT across both jobs and binds CUTOVER_RESULT",
+        c("G3-notify-env: the notify body binds the wipe inputs from needs.wipe.outputs (and the typed volume id from inputs.volume_id), merges MODE and RESULT across both jobs and binds CUTOVER_RESULT",
           nbe.get("MODE") == "${{ needs.cutover.outputs.mode || needs.wipe.outputs.mode }}"
           and nbe.get("RESULT") == "${{ needs.cutover.result == 'skipped' && needs.wipe.result || needs.cutover.result }}"
           and nbe.get("CUTOVER_RESULT") == "${{ needs.cutover.result }}"
-          and nbe.get("WIPE_STARTED") == "${{ needs.wipe.outputs.started }}" and nbe.get("WIPE_PHASE") == "${{ needs.wipe.outputs.phase }}" and nbe.get("WIPE_REFUSAL") == "${{ needs.wipe.outputs.refusal }}", nbe)
+          and nbe.get("WIPE_STARTED") == "${{ needs.wipe.outputs.started }}" and nbe.get("WIPE_PHASE") == "${{ needs.wipe.outputs.phase }}" and nbe.get("WIPE_REFUSAL") == "${{ needs.wipe.outputs.refusal }}"
+          and nbe.get("WIPE_VOLUME_ID") == "${{ inputs.volume_id }}", nbe)
         nrun = nb.get("run") or ""
         m = re.search(r'^\s*case "\$MODE" in ([^)]*)\) ;; \*\) MODE=unknown ;; esac$', nrun, re.M)
         c("G3-notify-case-list: the MODE whitelist of the notify body lists exactly the nine modes, wipe_unknown included (a wipe-family mode dropped from it reads MODE=unknown)", bool(m) and m.group(1).split("|") == NOTIFY_MODES, m.group(1) if m else None)
@@ -757,8 +779,16 @@ class Census:
         c("G3-notify-phase-map: the notify wipe block has one arm for every phase value of the helper's vocabulary (and the normaliser lists them all); an unmapped phase falls to WIPE_STATE_UNKNOWN",
           bool(phases) and all(p in arms for p in phases) and bool(norm) and all(p in norm.group(1).split("|") for p in phases) and "unknown) words=" in wtxt, (arms, norm.group(1) if norm else None))
         va = [l for l in wtxt.splitlines() if "VOLUME_ALREADY_DETACHED" in l and "words=" in l]
-        c("G3-notify-refusal-map: both refusal words are mapped and VOLUME_ALREADY_DETACHED carries the wipe_finish command with origin_run",
-          bool(va) and "${finish_cmd}" in va[0] and "STORE_NOT_SERVING_DO_NOT_FINISH" in wtxt and 'finish_cmd="gh workflow run git-data-cutover.yml --ref main -f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=<the volume id you typed> -f origin_run=' in wtxt, va[:1])
+        c("G3-notify-refusal-map: both refusal words are mapped and VOLUME_ALREADY_DETACHED carries the wipe_finish command with the WORD ORIGIN_RUN_ID (finish_cmd_origin, never the refused run's own id, even for mode=wipe)",
+          bool(va) and "${finish_cmd_origin}" in va[0] and "${finish_cmd_here}" not in va[0] and "STORE_NOT_SERVING_DO_NOT_FINISH" in wtxt and FINISH_CMD in wtxt and FINISH_CMD_ORIGIN in wtxt, va[:1])
+        # the recovery command: plain-word placeholders (no angle bracket: the body is HTML and the issue is markdown), the
+        # volume id filled only from a 1-12 digit input, the origin run filled only for a mode=wipe run (its own id)
+        fcl = [l for l in wtxt.splitlines() if re.search(r"^\s+(vid|orig|finish_cmd_here|finish_cmd_origin)=|\bvid=|\borig=", l) and "words=" not in l]
+        c("G3-notify-finish-cmd: the finish command is built from `vid` (default the word VOLUME_ID; the typed id only when WIPE_VOLUME_ID is digits only and at most 12 long) and `orig` (default the word ORIGIN_RUN_ID; the run's own id only when MODE is wipe), and no line that builds or names it carries an angle bracket",
+          'vid=VOLUME_ID' in wtxt and "case \"${WIPE_VOLUME_ID:-}\" in ''|*[!0-9]*) ;; *) if [ \"${#WIPE_VOLUME_ID}\" -le 12 ]; then vid=\"$WIPE_VOLUME_ID\"; fi ;; esac" in wtxt
+          and 'orig=ORIGIN_RUN_ID' in wtxt and 'if [ "$MODE" = wipe ]; then orig="$RUN_ID"; fi' in wtxt
+          and len(fcl) >= 4 and not any(re.search(r"[<>]", l.replace(">>", "")) for l in fcl) and not re.search(r"gh workflow run[^\n]*[<>]", wtxt),
+          fcl[:6])
         # ---- Guard 4 ---------------------------------------------------------------------------------------
         cu = jobs.get("cutover") or {}
         cconf = next((s for s in (cu.get("steps") or []) if s.get("id") == "confirm"), {})
@@ -781,23 +811,136 @@ class Census:
         fb = []
         for k, t in texts.items():
             for l in t.splitlines():
-                if FORBIDDEN.search(l):
+                if FORBIDDEN.search(l.replace(STANDING, "")):
                     fb.append("%s: %s" % (k, l.strip()[:70]))
         for l in wtxt.splitlines():
-            if FORBIDDEN.search(l):
+            if FORBIDDEN.search(l.replace(STANDING, "")):
                 fb.append("notify: %s" % l.strip()[:70])
-        c("G8-forbidden: no wipe step line and no wipe notify word contains a phrase the CLO ruling forbids (erased, wiped, secure, no copies)", not fb and bool(wtxt) and len(texts) >= 21, fb)
+        c("G8-forbidden: no wipe step line and no wipe notify word contains a phrase the CLO ruling forbids (erased, wiped, secure(ly), no copies/snapshots/backups, retention closed/ended, retention_end, Art. 17 satisfied/compliant, holds no personal data, volume/store (is) empty, irrecoverable, unrecoverable, permanently); only the exact PA-36(f) standing sentence is whitelisted", not fb and bool(wtxt) and len(texts) >= 21, fb)
+        c("G8-standing: the W12 read-back step carries the PA-36(f) standing sentence ('does not address provider-side snapshot or backup retention ... any copy held by someone with prior access') exactly once, and no other wipe step names PA-36(f)",
+          texts.get("wipe_readback", "").count(STANDING) == 1 and not any("PA-36" in t for k, t in texts.items() if k != "wipe_readback") and "PA-36(f), not measured" in STANDING, texts.get("wipe_readback", "").count(STANDING))
+        rb12 = texts.get("wipe_readback", "")
+        c("G8-w12-conditional: the W12 summary names a delete only when THIS run's delete step wrote phase=delete_sent (DELETE_PHASE from steps.wipe_delete.outputs.phase); otherwise it says the volume is absent at the provider API, that the run made no delete call, and names the origin run",
+          (by.get("wipe_readback") or {}).get("env", {}).get("DELETE_PHASE") == "${{ steps.wipe_delete.outputs.phase }}"
+          and (by.get("wipe_readback") or {}).get("env", {}).get("ORIGIN_RUN") == "${{ inputs.origin_run }}"
+          and 'if [[ "$DELETE_PHASE" == "delete_sent" ]]; then' in rb12 and "the plaintext volume was deleted at the provider API" in rb12
+          and "the plaintext volume is absent at the provider API" in rb12 and "This run made no delete call. The delete outcome is in the origin run (run id ${ORIGIN_RUN:-unknown})." in rb12
+          and "It does not state that the volume was empty or held no personal data" in rb12, "")
         exp = set()
         for k, t in texts.items():
             for l in t.splitlines():
-                if re.search(r"\b(echo|printf)\b", l) and "add-mask" not in l:
-                    for v in re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)", l.split(">>")[0]):
+                # only what follows the echo/printf word is output (a variable in an `if [[ ... ]]; then echo ...` test is not)
+                m_ = re.search(r"\b(echo|printf)\b(.*)", l)
+                if m_ and "add-mask" not in l:
+                    for v in re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)", m_.group(2).split(">>")[0]):
                         exp.add(v)
         exp -= {"GITHUB_STEP_SUMMARY", "GITHUB_OUTPUT", "RUNNER_TEMP", "GITHUB_PATH", "d", "HOME", "PATH", "GITHUB_WORKSPACE", "keyfile", "kh", "cfg", "key", "tmp"}
         extra = sorted(exp - ECHO_VARS_ALLOWED)
         c("G8-no-names: the variables a wipe step expands into echo/printf output are on the pinned allow-list (verdict words, modes, ids and epochs); a step that echoes anything else, such as a value read from the volume, is RED", not extra, extra)
         ssh_users = [k for k, t in texts.items() if k != "wipe_ssh_config" and re.search(r"(^|\s)(ssh|scp|rsync)\s", t)]
         c("G8-no-host-listing: no wipe step runs ssh itself or reads a store path (the host read is the one pinned verb, whose output the host script bounds)", not ssh_users and not any(re.search(r"repositories|\bls\b|\bfind\b", t) for t in texts.values()), ssh_users)
+        # ---- step keys, step env names, transport/credential copies, the workflow-to-script contract (review round 2) ------
+        key_bad = []
+        for s_ in steps:
+            allowed = STEP_KEYS_USES if s_.get("uses") else STEP_KEYS_RUN
+            extra = sorted(set(s_) - allowed)
+            if extra:
+                key_bad.append("%s: %s" % (skey(s_), extra))
+        c("G1-step-keys: every wipe step carries only {name, id, if, env, run} (a uses: step only {name, id, if, uses, with}); no shell:, working-directory:, continue-on-error, timeout-minutes or any other step-level key (the runner honours them around the exec env -i)",
+          not key_bad and len(steps) >= 21, key_bad)
+        env_bad = []
+        for s_ in steps:
+            for nm in list((s_.get("env") or {}).keys()) + list((s_.get("with") or {}).keys()):
+                if ENV_DENY.match(str(nm)):
+                    env_bad.append("%s: %s" % (skey(s_), nm))
+        for nm in list((wipe.get("env") or {}).keys()) + list((wf.get("env") or {}).keys()):
+            if ENV_DENY.match(str(nm)):
+                env_bad.append("job/workflow env: %s" % nm)
+        c("G1-step-env-names: no step env: or with:, no job env and no workflow env names a variable the shell or the dynamic linker honours before line 1 (BASH_ENV, ENV, LD_*, PATH, SHELLOPTS, BASHOPTS, PS4, PROMPT_COMMAND, IFS, BASH_FUNC_*, BASH_XTRACEFD, CDPATH, GLOBIGNORE)",
+          not env_bad and len(steps) >= 21, env_bad)
+        xt_bad = []
+        xt_n = 0
+        for s_ in steps:
+            if s_.get("uses") or not s_.get("run"):
+                continue
+            named = set(SECRET_RE.findall(json.dumps(s_.get("env") or {}))) - {"GITHUB_TOKEN"}
+            if named:
+                xt_n += 1
+                if XTRACE_LINE not in [l_.strip() for l_ in code_lines(s_.get("run"))[:2]]:
+                    xt_bad.append(skey(s_))
+        c("G1-xtrace-all: every wipe step that binds a secret other than GITHUB_TOKEN refuses xtrace (the #7797 case line is among its first two executable lines); live count reported",
+          not xt_bad and xt_n >= 7, "%d steps bind a secret; missing=%s" % (xt_n, xt_bad))
+        inst = code_text((by.get("wipe_doppler_install") or {}).get("run") or "")
+        i_c, i_s, i_t = inst.find("curl "), inst.find("sha256sum -c"), inst.find("tar xzf")
+        c("G1-install-verifies: the inline Doppler install checks the downloaded archive against the pinned sha256 (`sha256sum -c -`, fed from DOPPLER_CLI_SHA256) AFTER the download and BEFORE the unpack",
+          0 <= i_c < i_s < i_t and 'echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -' in inst, (i_c, i_s, i_t))
+        kfr = code_text((by.get("wipe_key_fetch") or {}).get("run") or "")
+        c("G1-key-validated: the root-key fetch validates what it fetched (non-empty, an OpenSSH private key per `ssh-keygen -y`) and fails with reason=not_openssh_key / empty / rc_nonzero before the job continues",
+          'ssh-keygen -y -f "$keyfile"' in kfr and "reason=not_openssh_key" in kfr and "reason=empty" in kfr and "reason=rc_nonzero" in kfr and kfr.find("ssh-keygen -y") < kfr.rfind("exit 1"), "")
+        # the copied bridge / key-fetch / ssh_config steps equal the cutover job's copies modulo ids, if:, the redundant second
+        # xtrace guard of the cutover copy, and the `git-data-wipe` / `git-data-cutover` title text
+        cj = {(x.get("id") or x.get("uses")): x for x in (jobs.get("cutover") or {}).get("steps") or []}
+        def norm(st):
+            d = {k: v for k, v in st.items() if k not in ("id", "if")}
+            if isinstance(d.get("run"), str):
+                d["run"] = re.sub(r"title=git-data-(?:wipe|cutover)", "title=GD", XT2.sub("", d["run"]))
+            return d
+        pairs = (("./.github/actions/cf-tunnel-ssh-bridge", "wipe_bridge"), ("key_fetch", "wipe_key_fetch"), ("ssh_config", "wipe_ssh_config"))
+        par_bad = [b for a_, b in pairs if a_ not in cj or b not in by or norm(cj[a_]) != norm(by[b])]
+        c("WS-copy-parity: the wipe job's CF Tunnel SSH bridge, root-key fetch and ssh_config steps equal the cutover job's copies after masking the step id, the if:, the cutover copy's second (title-carrying) xtrace guard and the git-data-wipe / git-data-cutover title text",
+          not par_bad and all(a_ in cj for a_, _ in pairs), par_bad)
+        # the workflow-to-script environment contract: every name git-data-cutover.sh's wipe_assert path reads is passed by every
+        # step that runs it under `exec env -i`
+        hv = open(a["host_verb"]).read()
+        def fbody(name):
+            m_ = re.search(r"^%s\(\) \{\n(.*?)^\}" % name, hv, re.S | re.M)
+            return m_.group(1) if m_ else ""
+        scr = fbody("access_gate") + fbody("resolve_roster") + fbody("mode_wipe_assert")
+        PRE_ONLY = {"WIPE_ROW_DT", "WIPE_LISTING"}
+        need = set(re.findall(r"\$\{(WEB_HOST_SSH|GIT_DATA_SSH|WEB_HOSTS|WIPE_[A-Z_]+)[:}-]", scr)) - PRE_ONLY
+        need -= set(re.findall(r"^(WIPE_[A-Z_]+)=", hv, re.M))   # script constants, not inputs
+        if re.search(r'^MODE="\$\{MODE:-', hv, re.M):
+            need.add("MODE")
+        cont_bad = []
+        cont_steps = []
+        for s_ in steps:
+            r_ = s_.get("run") or ""
+            if "git-data-cutover.sh" not in r_ or not first_statement(r_)[0].startswith("exec env -i "):
+                continue
+            cont_steps.append(skey(s_))
+            joined = re.sub(r"\\\n\s*", " ", r_)
+            supplied = set(n_ for n_, _ in ASSIGN_RE.findall(joined))
+            for x_ in re.findall(r"\bexport\s+([A-Za-z_ ]+)", joined):
+                supplied.update(x_.split())
+            miss = sorted(need - supplied)
+            leak = sorted(PRE_ONLY & supplied) if "'pre'" not in str((s_.get("env") or {}).get("WIPE_PHASE")) else []
+            if miss or leak:
+                cont_bad.append("%s: missing=%s pre-only-passed=%s" % (skey(s_), miss, leak))
+        c("G10-env-contract: DERIVED from git-data-cutover.sh (the names access_gate, resolve_roster and mode_wipe_assert read: WEB_HOST_SSH, GIT_DATA_SSH, WEB_HOSTS and every WIPE_* input except the pre-only WIPE_ROW_DT / WIPE_LISTING, plus MODE), every wipe step that runs it under `exec env -i` passes each name; live names and steps reported",
+          not cont_bad and "wipe_post_detach_read" in cont_steps and {"WEB_HOST_SSH", "GIT_DATA_SSH", "WEB_HOSTS", "WIPE_PHASE", "WIPE_VOLUME_ID", "WIPE_LUKS_VOLUME_ID", "WIPE_SERVER_ID"} <= need,
+          "need=%s steps=%s %s" % (sorted(need), cont_steps, cont_bad))
+        h7, h10 = code_text((by.get("wipe_host_assert") or {}).get("run") or ""), code_text((by.get("wipe_post_detach_read") or {}).get("run") or "")
+        c("G7-record-ids: W7 and W10 take the typed volume id, the server id and the LUKS id from the verdict record W4 wrote (plaintext_id= / server_id= / luks_id=, Hetzner's normalised answer), never from the raw input: a leading-zero id reaches the host as the number",
+          all(("s/^plaintext_id=//p" in t) and ("s/^server_id=//p" in t) and ("s/^luks_id=//p" in t) for t in (h7, h10))
+          and not re.search(r"WIPE_VOLUME_ID=\"?\$\{?VOLUME_ID", h7 + h10), "")
+        c("G7-listing-env: W7 runs the plaintext layout listing for mode=wipe only (WIPE_LISTING is `run` for wipe and `skip` otherwise), passes the boot row's epoch as WIPE_ROW_DT for the pre phase only, and passes WIPE_PHASE pre|finish",
+          ((by.get("wipe_host_assert") or {}).get("env") or {}).get("WIPE_LISTING") == "${{ steps.wipe_confirm.outputs.mode == 'wipe' && 'run' || 'skip' }}"
+          and ((by.get("wipe_host_assert") or {}).get("env") or {}).get("WIPE_ROW_EPOCH") == "${{ steps.wipe_boot_read.outputs.row_epoch }}"
+          and 'WIPE_ROW_DT="$WIPE_ROW_EPOCH"' in h7 and "unset WIPE_LISTING" in h7
+          and ((by.get("wipe_host_assert") or {}).get("env") or {}).get("WIPE_PHASE") == "${{ steps.wipe_confirm.outputs.mode == 'wipe_finish' && 'finish' || 'pre' }}", "")
+        tdn = code_text((by.get("wipe_teardown") or {}).get("run") or "")
+        c("G10-store-not-serving-rc5: W10 captures the host verb's stdout (wipe-w10.out, printed, shredded by the teardown) and publishes refusal=store_not_serving only when the verb exited 5 AND the output carries no ' verdict=probe_failed' (a read that did not answer is not a store verdict); the access gate's 3 and every other exit fail the step without that claim",
+          'bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-cutover.sh" > "$out" || rc=$?' in h10 and 'out="$RUNNER_TEMP/wipe-w10.out"' in h10 and "cat \"$out\"" in h10
+          and 'if [[ "$rc" -eq 5 ]] && ! grep -qF " verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi' in h10
+          and h10.count("refusal=store_not_serving") == 1 and '"$RUNNER_TEMP/wipe-w10.out"' in tdn, "")
+        wr_lim = re.search(r'WIPE_RUNS_LIST_LIMIT:-(\d+)\}', code_text((by.get("wipe_flag_precheck") or {}).get("run") or ""))
+        lib_lim = re.search(r"^readonly WIPE_RUNS_LIST_LIMIT=(\d+)$", libtext, re.M)
+        c("G6-limit-parity: the W3 `gh run list --limit` default equals the run lib's WIPE_RUNS_LIST_LIMIT (the lib's `list is full` reach test compares against it), and the list asks for exactly the fields the lib reads",
+          bool(wr_lim) and bool(lib_lim) and wr_lim.group(1) == lib_lim.group(1)
+          and "--json databaseId,displayTitle,createdAt,conclusion,headBranch,event" in code_text((by.get("wipe_flag_precheck") or {}).get("run") or "")
+          and "--json databaseId,displayTitle,createdAt,conclusion,headBranch,event" in libtext, (wr_lim.group(1) if wr_lim else None, lib_lim.group(1) if lib_lim else None))
+        c("G3-identity-no-phase: the helper's identity verb publishes no phase (a volume that was already detached says nothing about what THIS run did); the phase vocabulary is written only by detach, delete and readback",
+          bool(fn("do_identity")) and "gho phase" not in fn("do_identity"), "")
         # ---- parity ----------------------------------------------------------------------------------------
         self.parity(a, wf, text, wtxt, helper_text, libtext)
 
@@ -1040,12 +1183,28 @@ exit 1
 '''
 
 GH_SH = r'''#!/usr/bin/env bash
+# The gh shim accepts EXACTLY the argv the workflow is modeled to send (subcommand, --workflow, --limit, the --json field
+# list, the run id) and answers exit 64 plus a refusal line the suite asserts empty on every golden run. It never decides
+# a verdict: the fixtures (runlist.json, origin.json) are the world, the workflow and the run lib judge them.
 W='__W__'
 . "$W/lib.sh"
 ev "gh $1 $2 env=$(leaks)"
-if [ "${1:-}" = run ] && [ "${2:-}" = list ]; then cat "$W/runlist.json"; exit 0; fi
-if [ "${1:-}" = run ] && [ "${2:-}" = view ]; then [ -f "$W/origin.json" ] && { cat "$W/origin.json"; exit 0; }; exit 1; fi
-exit 1
+refuse() { printf '%s\n' "$*" >> "$W/gh-refusals.log"; ev "gh REFUSED $*"; exit 64; }
+if [ "${1:-}" = run ] && [ "${2:-}" = list ]; then
+  [ $# -eq 8 ] && [ "${3:-}" = --workflow ] && [ "${4:-}" = git-data-cutover.yml ] && [ "${5:-}" = --limit ] && [ "${6:-}" = "$(cat "$W/runs_limit")" ] \
+    && [ "${7:-}" = --json ] && [ "${8:-}" = "$(cat "$W/runs_fields")" ] || refuse "run list argv: $*"
+  [ -f "$W/runlist_fail" ] && exit 1
+  cat "$W/runlist.json"; exit 0
+fi
+if [ "${1:-}" = run ] && [ "${2:-}" = view ]; then
+  [ $# -eq 5 ] && [ "${3:-}" = "$(cat "$W/origin_id")" ] && [ "${4:-}" = --json ] || refuse "run view argv: $*"
+  for f in displayTitle headBranch event createdAt workflowName jobs; do
+    case ",${5:-}," in *",$f,"*) ;; *) refuse "run view --json lacks $f: $5" ;; esac
+  done
+  [ -f "$W/origin.json" ] || exit 1
+  jq -c --arg f "${5:-}" '. as $o | ($f | split(",")) | map({key: ., value: $o[.]}) | from_entries' "$W/origin.json"; exit 0
+fi
+refuse "gh argv: $*"
 '''
 
 DATE_SH = r'''#!/usr/bin/env bash
@@ -1081,16 +1240,26 @@ phase="${WIPE_PHASE:-}"; mode="${MODE:-}"; listing="${WIPE_LISTING-unset}"; vid=
 set -a; . "$W/state.env"; set +a
 refuse() { ev "host phase=$phase REFUSED $1 env=$(leaks)"; echo "[git-data-cutover] STORE probe=wipe-assert verdict=$1"; exit 5; }
 [ "$mode" = wipe_assert ] || { ev "host BADMODE $mode"; exit 2; }
+# The real script's access_gate reads these before it dials anything (exit 3); the stub reads the same names.
+if [ -z "${WEB_HOST_SSH:-}" ]; then ev "host phase=$phase ACCESS web_host_ssh_unset"; echo "[git-data-cutover] ACCESS role=web host=- verdict=web_host_ssh_unset"; exit 3; fi
+if [ -z "${GIT_DATA_SSH:-}" ] || [ -z "${WEB_HOSTS:-}" ]; then ev "host phase=$phase ACCESS inputs_unset"; exit 3; fi
+[ "${HOST_ACCESS_FAIL:-0}" = 1 ] && { ev "host phase=$phase ACCESS transport_fail"; echo "[git-data-cutover] ACCESS role=git-data-jump host=- verdict=ssh_failed"; exit 3; }
+[ "${HOST_PROBE_FAIL:-0}" = 1 ] && { ev "host phase=$phase PROBE_FAILED"; echo "[git-data-cutover] STORE probe=wipe-assert verdict=probe_failed rc=255"; exit 5; }
 [ -n "$vid" ] && [ -n "$sid" ] && [ -n "$lid" ] || { ev "host MISSING_RECORD_FIELDS phase=$phase"; exit 2; }
+# The ids are the RECORD's (Hetzner's normalised answer): a raw leading-zero input or another volume's id is no input here.
+if [ "$vid" != "$PT_ID" ] || [ "$sid" != "$SRV_ID" ] || [ "$lid" != "$LUKS_ID" ]; then ev "host IDMISMATCH phase=$phase vid=$vid sid=$sid lid=$lid"; refuse wipe_device_absent; fi
 case "$phase" in
   pre)
+    case "${WIPE_RUN_MODE:-}:$listing" in wipe:run|wipe_check:skip) ;; *) ev "host BADLISTING mode=${WIPE_RUN_MODE:-} listing=$listing"; exit 2 ;; esac
+    [ "${WIPE_ROW_DT:-}" = "$(cat "$W/boot_epoch" 2>/dev/null)" ] || { ev "host BADROWDT row_dt=${WIPE_ROW_DT:-none}"; exit 2; }
     [ "$PT_SERVER" = "$SRV_ID" ] || refuse wipe_device_absent
-    ev "host phase=pre ok listing=$listing row_dt=${WIPE_ROW_DT:-none} env=$(leaks)"
+    ev "host phase=pre ok listing=$listing row_dt=${WIPE_ROW_DT:-none} vid=$vid env=$(leaks)"
     echo "wipe_assert pre ok layout_signal=ok journal=clean top_d=0 top_f=0 top_l=0 top_o=0 repos=0 boot_to_row_s=600" ;;
   post_detach|finish)
+    [ -z "${WIPE_ROW_DT:-}${WIPE_LISTING:-}" ] || { ev "host BADPRE_ONLY phase=$phase"; exit 2; }
     [ "$PT_SERVER" != "$SRV_ID" ] || refuse wipe_device_still_attached
     [ "${HOST_SERVING:-1}" = 1 ] || refuse wipe_mapper_read_failed
-    ev "host phase=$phase ok env=$(leaks)"
+    ev "host phase=$phase ok vid=$vid env=$(leaks)"
     echo "wipe_assert $phase ok byid=gone mapper_read=ok store_root=ok" ;;
   *) ev "host BADPHASE $phase"; exit 2 ;;
 esac
@@ -1107,15 +1276,30 @@ if [ "${FLAG_STATE:-true}" != true ]; then
 fi
 echo "flag=true mode=${FLAG_MODE:-}"
 case "${FLAG_MODE:-}" in
-  wipe|wipe_check) echo "wipe_soak floor_days=7 stamp_epoch=1700000000 elapsed_s=9999999" ;;
+  wipe|wipe_check) [ "${STAMP_ABSENT:-0}" = 1 ] || echo "wipe_soak floor_days=7 stamp_epoch=1700000000 elapsed_s=9999999" ;;
 esac
 [ "${FLAG_MODE:-}" = wipe_check ] && echo "would_refuse=none"
 exit 0
 '''
 
-BOOT_STUB = r'''# stub of scripts/lib/git-data-boot-signal-poll.sh (the BetterStack read), logs its calls
-git_data_boot_fields_read() { . "__W__/lib.sh"; W='__W__'; ev "boot_read env=$(leaks)"; printf '{"epoch":%s}\n' "$(( $(cat "$W/clock") - 600 ))" > "$1"; : > "$2"; return 0; }
-git_data_boot_fields_verdict() { printf 'wipe_boot_ok\n'; return 0; }
+BOOT_STUB = r'''# stub of scripts/lib/git-data-boot-signal-poll.sh (the BetterStack read), logs its calls. The verdict function takes the
+# read's rc and the server's created epoch from the WORKFLOW and judges them against the world: a read that failed is
+# unreadable, a created epoch that is not the server's own is a row that proves nothing; the world's verdict decides the rest.
+git_data_boot_fields_read() {
+  . "__W__/lib.sh"; W='__W__'; ev "boot_read env=$(leaks)"
+  printf '%s' "$(( $(cat "$W/clock") - 600 ))" > "$W/boot_epoch"
+  printf '{"epoch":%s}\n' "$(cat "$W/boot_epoch")" > "$1"; : > "$2"
+  return "$(cat "$W/boot_rc" 2>/dev/null || echo 0)"
+}
+git_data_boot_fields_verdict() {
+  . "__W__/lib.sh"; W='__W__'
+  local want; want="$(/usr/bin/date -u -d "$(sed -n 's/^SRV_CREATED=//p' "$W/state.env" | tail -n 1)" +%s)"
+  ev "boot_verdict rrc=${1-} created=${3-}"
+  if [ "${1-}" != 0 ]; then printf 'wipe_boot_unreadable\n'; return 1; fi
+  if [ "${3-}" != "$want" ]; then printf 'wipe_boot_row_not_after_server\n'; return 1; fi
+  local v; v="$(cat "$W/boot_verdict" 2>/dev/null || echo wipe_boot_ok)"
+  printf '%s\n' "$v"; [ "$v" = wipe_boot_ok ]
+}
 '''
 
 
@@ -1175,6 +1359,17 @@ def sim_main(spec):
     open(W + "/seq", "w").write("0")
     open(W + "/step", "w").write("-")
     open(W + "/runlist.json", "w").write(spec.get("runlist", "[]"))
+    # what the gh shim accepts: derived from the run lib's own contract (limit constant, --json field list), not typed here
+    libtxt = open(spec["lib"]).read()
+    open(W + "/runs_limit", "w").write(re.search(r"^readonly WIPE_RUNS_LIST_LIMIT=(\d+)$", libtxt, re.M).group(1))
+    open(W + "/runs_fields", "w").write(re.search(r"--json (databaseId,[A-Za-z,]+)", libtxt).group(1))
+    open(W + "/origin_id", "w").write(str(spec.get("origin_run", "")))
+    if spec.get("runlist_fail"):
+        open(W + "/runlist_fail", "w").write("1")
+    if spec.get("boot_verdict"):
+        open(W + "/boot_verdict", "w").write(spec["boot_verdict"])
+    if spec.get("boot_rc"):
+        open(W + "/boot_rc", "w").write(str(spec["boot_rc"]))
     lib = LIBSH
     if spec.get("mute_events"):
         lib = lib.replace("ev() {", "ev() { return 0; }\nev_real() {")
@@ -1188,8 +1383,6 @@ def sim_main(spec):
     with open(W + "/state.env", "w") as fh:
         for k, v in st.items():
             fh.write("%s=%s\n" % (k, v))
-    if spec.get("actions_json"):
-        open(W + "/actions.json", "w").write(spec["actions_json"])
     for nm, txt in (("curl", CURL_SH), ("doppler", DOPPLER_SH), ("gh", GH_SH), ("date", DATE_SH), ("sleep", SLEEP_SH), ("sudo", SUDO_SH), ("env", ENV_SH)):
         write_exec(BIN + "/" + nm, txt, W)
     write_exec(ws + "/apps/web-platform/infra/git-data-cutover.sh", HOST_STUB, W)
@@ -1227,11 +1420,18 @@ def sim_main(spec):
             names.append({"name": (k if spec.get("origin_names") == "ids" else (s.get("name") or ("Run " + str(s.get("uses") or "")))), "conclusion": "success"})
             if k == ("wipe_delete_gate" if spec.get("origin_through") == "delete" else "wipe_detach_gate"):
                 break
+        if spec.get("gate_conclusion"):
+            for nm_ in names:
+                nm_["conclusion"] = spec["gate_conclusion"]
         origin = {"displayTitle": "git-data wipe %s" % inputs["volume_id"], "headBranch": "main", "event": "workflow_dispatch", "createdAt": "2026-10-14T14:55:00Z",
-                  "jobs": [{"name": "wipe", "steps": names}]}
-        open(W + "/origin.json", "w").write(json.dumps(origin))
+                  "workflowName": wf.get("name"), "jobs": [{"name": "wipe", "steps": names}]}
+        origin.update(spec.get("origin_override") or {})
+        if not spec.get("origin_absent"):
+            open(W + "/origin.json", "w").write(json.dumps(origin))
         if st.get("PT_SERVER") == "null":
             open(W + "/actions.json", "w").write(json.dumps({"actions": [{"id": 5, "command": "detach_volume", "status": "success", "started": "2026-10-14T15:00:00Z", "finished": "2026-10-14T15:00:09Z", "progress": 100}], "meta": {"pagination": {"page": 1, "per_page": 50, "total_entries": 1}}}))
+    if spec.get("actions_json"):
+        open(W + "/actions.json", "w").write(spec["actions_json"])
     gh_env = {}
     state = {"failed": False, "cancelled": False}
     results = []
@@ -1277,7 +1477,8 @@ def sim_main(spec):
             elif u == "./.github/actions/cf-tunnel-ssh-bridge":
                 wi = {k: tostr(interp(v, ctx)) for k, v in (s.get("with") or {}).items()}
                 kf = RT + "/ci-key"; open(kf, "w").write("synthetic\n")
-                gh_env.update({"SERVER_IP": wi.get("server-ip", ""), "CLOUDFLARED_PID": "", "CI_SSH_KEYFILE": kf})
+                gh_env.update({"SERVER_IP": wi.get("server-ip", ""), "CLOUDFLARED_PID": "", "CI_SSH_KEYFILE": kf,
+                               "WEB_HOST_SSH": "ssh -F /dev/null -i %s -o StrictHostKeyChecking=yes -l root" % kf})
                 open(W + "/step", "a").close()
                 with open(W + "/events.log", "a") as fh:
                     sq = int(open(W + "/seq").read()) + 1; open(W + "/seq", "w").write(str(sq)); fh.write("%d\t%s\tbridge doppler_token_ok=%s\n" % (sq, key, int(wi.get("doppler-token") == sec["DOPPLER_TOKEN"])))
@@ -1342,17 +1543,17 @@ def sim_main(spec):
            "secrets": [v for v in list(sec.values()) + list(loaded.values()) + [ro, rw]]}
     if spec.get("notify"):
         needs = {"cutover": {"result": "skipped", "outputs": {}}, "wipe": {"result": result, "outputs": job_outputs}}
-        res["notify"] = notify_run(wf, needs, gh, run + "/notify", sec)
+        res["notify"] = notify_run(wf, needs, gh, run + "/notify", sec, {"volume_id": inputs["volume_id"], "mode": mode})
     open(run + "/result.json", "w").write(json.dumps(res))
 
 
 NOTIFY_ENV_BASE = ["PATH", "HOME"]
 
 
-def notify_run(wf, needs, gh, d, sec=None):
+def notify_run(wf, needs, gh, d, sec=None, inputs=None):
     os.makedirs(d + "/rt", exist_ok=True)
     nj = (wf.get("jobs") or {}).get("notify-failure") or {}
-    ctx = {"needs": needs, "github": gh, "secrets": sec or {}, "steps": {}}
+    ctx = {"needs": needs, "github": gh, "secrets": sec or {}, "steps": {}, "inputs": inputs or {}}
     try:
         cond = truthy(ev(str(nj.get("if") or "false"), ctx, {"failed": False, "cancelled": False}))
     except Exception as e:
@@ -1380,7 +1581,7 @@ def notify_cases_main(spec):
         os.makedirs(d, exist_ok=True)
         gh = {"run_id": c.get("run_id", "9000000123"), "server_url": "https://github.example", "repository": "example/repo"}
         needs = c["needs"]
-        r = notify_run(wf, needs, gh, d)
+        r = notify_run(wf, needs, gh, d, None, {"volume_id": c.get("volume_id", "")})
         r["id"] = c["id"]
         out.append(r)
     open(spec["out"], "w").write(json.dumps(out))
@@ -1486,8 +1687,8 @@ MUTANTS = {
     "g3-5-mode-before-refusal": [S("wipe_confirm", '          if ! [[ "$VOLUME_ID" =~ ^[0-9]{1,12}$ ]]; then\n', '          echo "mode=$MODE" >> "$GITHUB_OUTPUT"\n          if ! [[ "$VOLUME_ID" =~ ^[0-9]{1,12}$ ]]; then\n')],
     "g3-6-unfreeze-in-word": [J("notify", "VOLUME_DETACHED (the volume is detached and not deleted. Finish with:", "VOLUME_DETACHED (the volume is detached and not deleted. Re-dispatch mode=unfreeze. Finish with:")],
     "g3-7a-refusal-dropped": [J("notify", 'elif [ "${WIPE_REFUSAL:-}" = volume_already_detached ]; then', "elif false; then")],
-    "g3-7b-no-finish-command": [J("notify", "If a wipe run detached it, finish with: ${finish_cmd})", "If a wipe run detached it, finish it.)")],
-    "g3-8-phase-arm-removed": [J("notify", 'deleted) words=" VOLUME_DELETED_TEARDOWN_FAILED (the provider API read-back confirmed the delete; only the runner teardown failed afterwards)"; swords=" VOLUME_DELETED_TEARDOWN_FAILED" ;;', "")],
+    "g3-7b-no-finish-command": [J("notify", "If a wipe run detached it, finish with: ${finish_cmd_origin}, replacing ORIGIN_RUN_ID by the id of the wipe run that detached it; this run refused and is not that run)", "If a wipe run detached it, finish it.)")],
+    "g3-8-phase-arm-removed": [J("notify", 'deleted) words=" VOLUME_DELETED_TEARDOWN_FAILED (the provider API read-back confirmed the volume is no longer listed; only the runner teardown failed afterwards)"; swords=" VOLUME_DELETED_TEARDOWN_FAILED" ;;', "")],
     # Guard 4
     "g4-1-cutover-if-operand": [F("    if: inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check'\n", "    if: inputs.mode != 'wipe' && inputs.mode != 'wipe_finish'\n")],
     "g4-2-fourth-mode": [F("options: [proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check]", "options: [proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check, wipe_force]")],
@@ -1499,30 +1700,95 @@ MUTANTS = {
     "g6-1-flag-mode-mapping": [S("wipe_flag_precheck", "mode == 'wipe_check' && 'wipe_check' || 'wipe' }}", "mode == 'wipe_check' && 'wipe' || 'wipe' }}")],
     "g7-1-precheck-removed": [{"op": "delete", "step": "wipe_flag_precheck"}],
     # Guard 8
-    "g8-2a-forbidden-summary": [S("wipe_readback", "It makes no statement about what the volume held.", "The volume was erased.")],
+    "g8-2a-forbidden-summary": [S("wipe_readback", "It does not state that the volume was empty or held no personal data;", "The volume was erased;")],
     "g8-2b-forbidden-notify-word": [J("notify", "only the runner teardown failed afterwards)", "only the runner teardown failed after the volume was wiped)")],
     "g8-names-echo": [S("wipe_host_assert", "          bash apps/web-platform/infra/git-data-cutover.sh\n", '          bash apps/web-platform/infra/git-data-cutover.sh\n          echo "$listing"\n')],
     "g8-3-helper-new-word": [F("  gho phase deleted\n", "  gho phase deleted\n  refuse wipe_zz_new_word\n")],
     # naming / misc
     "n-1a-detach-gate-name-differs": [S("wipe_detach_gate", "name: wipe_detach_gate", "name: Detach marker and W7-epoch bound (W9a)")],
     "n-1b-delete-gate-name-differs": [S("wipe_delete_gate", "name: wipe_delete_gate", "name: Delete marker and W10b-epoch bound (W11a)")],
-    "n-2-chain-without-identity": [J("wipe", "|| steps.wipe_detach_gate.outputs.phase || steps.wipe_identity.outputs.phase }}", "|| steps.wipe_detach_gate.outputs.phase }}")],
+    "n-2-chain-with-identity": [J("wipe", "|| steps.wipe_detach_gate.outputs.phase }}", "|| steps.wipe_detach_gate.outputs.phase || steps.wipe_identity.outputs.phase }}")],
     "g3-9a-wipe-unknown-not-in-family": [J("notify", 'case "$MODE" in wipe|wipe_finish|wipe_check|wipe_unknown)\n', 'case "$MODE" in wipe|wipe_finish|wipe_check)\n')],
     "g3-9b-lost-runner-setter-removed": [J("notify", 'if [ -z "$MODE" ] && [ "${CUTOVER_RESULT:-}" = skipped ]; then MODE=wipe_unknown; fi\n', "")],
     "g3-9c-wipe-unknown-not-in-whitelist": [J("notify", "wipe_check|wipe_unknown) ;; *) MODE=unknown ;; esac", "wipe_check) ;; *) MODE=unknown ;; esac")],
+    # ---- review round 2: step keys, copies, the workflow-to-script contract, executed negatives ---------------------
+    "c-step-env-bash-env": [S("wipe_delete", "        run: |\n          case", "        env:\n          BASH_ENV: ${{ github.workspace }}/hook\n        run: |\n          case")],
+    "c-step-shell": [S("wipe_delete", "        run: |\n          case", "        shell: bash {0}\n        run: |\n          case")],
+    "c-step-workdir": [S("wipe_delete", "        run: |\n          case", "        working-directory: /tmp\n        run: |\n          case")],
+    "d-echo-tok": [S("wipe_delete", "          IFS= read -r tok\n", "          IFS= read -r tok\n          [[ ${#tok} -gt 4096 ]] && echo \"$tok\"\n")],
+    "e-shkc-lax": [S("wipe_ssh_config", "StrictHostKeyChecking yes", "StrictHostKeyChecking " + "no", 2)],
+    "e-forward-agent": [S("wipe_ssh_config", "ForwardAgent no", "ForwardAgent yes", 2)],
+    "e-hostkeyalias": [S("wipe_ssh_config", "HostKeyAlias git-data", "HostKeyAlias web-1")],
+    "e-updatehostkeys": [S("wipe_ssh_config", "UpdateHostKeys no", "UpdateHostKeys yes", 2)],
+    "e-sha-dropped": [S("wipe_doppler_install", '          echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -\n', "")],
+    "e-keyval-dropped": [S("wipe_key_fetch", '            [[ "$pub" == ssh-* ]] || reason=not_openssh_key\n', "            :\n")],
+    "e-xtrace-identity": [S("wipe_identity", '          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac\n', "")],
+    "b-w10-no-web-host-ssh": [S("wipe_post_detach_read", ' WEB_HOST_SSH="${WEB_HOST_SSH:-}"', "")],
+    "g-w7-raw-id": [S("wipe_host_assert", "WIPE_VOLUME_ID=\"$(sed -n 's/^plaintext_id=//p' \"$rec\")\"", 'WIPE_VOLUME_ID="$VOLUME_ID"')],
+    "g-w10-raw-id": [S("wipe_post_detach_read", 'WIPE_VOLUME_ID="$(sed -n "s/^plaintext_id=//p" "$rec")"', 'WIPE_VOLUME_ID="$VOLUME_ID"')],
+    "a1-origin-exit5": [S("wipe_origin_check", '              echo "::error title=git-data-wipe::verdict=${v//[^a-z_]/?}"\n              exit 5\n', '              echo "::error title=git-data-wipe::verdict=${v//[^a-z_]/?}"\n')],
+    "a1-origin-rc0": [S("wipe_origin_check", 'v="$(wipe_origin_run_ok "$j" "$VOLUME_ID" detach)" || rc=$?', 'v="$(wipe_origin_run_ok "$j" "$VOLUME_ID" detach)" || rc=0')],
+    "a1-origin-wrong-run": [S("wipe_origin_check", 'gh run view "$ORIGIN_RUN" --json', 'gh run view "$GITHUB_RUN_ID" --json')],
+    "a1-origin-no-jobs": [S("wipe_origin_check", "createdAt,workflowName,jobs)", "createdAt,workflowName)")],
+    "a1-origin-no-workflowname": [S("wipe_origin_check", "createdAt,workflowName,jobs)", "createdAt,jobs)")],
+    "a1-origin-delete-gate-open": [S("wipe_origin_check", 'wipe_origin_run_ok "$j" "$VOLUME_ID" delete >/dev/null || rc2=$?', 'wipe_origin_run_ok "$j" "$VOLUME_ID" delete >/dev/null || rc2=0')],
+    "a2-precheck-exit5": [S("wipe_flag_precheck", '                echo "::error title=git-data-wipe::verdict=${gv//[^a-z_]/?}"\n                exit 5\n', '                echo "::error title=git-data-wipe::verdict=${gv//[^a-z_]/?}"\n')],
+    "a2-wipemode-check": [S("wipe_flag_precheck", "WIPE_MODE: ${{ steps.wipe_confirm.outputs.mode }}", "WIPE_MODE: wipe_check")],
+    "a2-runs-fallback-open": [S("wipe_flag_precheck", '              runs=""\n', '              runs="[]"\n')],
+    "a2-limit-10": [S("wipe_flag_precheck", '--limit "${WIPE_RUNS_LIST_LIMIT:-100}"', "--limit 10")],
+    "a2-no-event-field": [S("wipe_flag_precheck", "--json databaseId,displayTitle,createdAt,conclusion,headBranch,event)", "--json databaseId,displayTitle,createdAt,conclusion,headBranch)")],
+    "a3-boot-exit5": [S("wipe_boot_read", '            echo "verdict=${v//[^a-z_]/?}" >> "$GITHUB_OUTPUT"\n            exit 5\n', '            echo "verdict=${v//[^a-z_]/?}" >> "$GITHUB_OUTPUT"\n')],
+    "a3-created-zero": [S("wipe_boot_read", 'git_data_boot_fields_verdict "$rrc" "$rows" "$created"', 'git_data_boot_fields_verdict "$rrc" "$rows" 0')],
+    "a3-rrc-zero": [S("wipe_boot_read", 'git_data_boot_fields_verdict "$rrc" "$rows" "$created"', 'git_data_boot_fields_verdict 0 "$rows" "$created"')],
+    "a4-no-actions-call": [S("wipe_identity", '                helper actions --volume-id "$VOLUME_ID" --since "$ORIGIN_EPOCH"\n', "                true\n")],
+    "a4-no-since": [S("wipe_identity", ' --since "$ORIGIN_EPOCH"', "")],
+    "a4-never-detached": [S("wipe_identity", 'if [[ "$vs" == "detached" ]]; then', 'if [[ "$vs" == "never_true" ]]; then')],
+    "a5-listing-skip": [S("wipe_host_assert", "WIPE_LISTING: ${{ steps.wipe_confirm.outputs.mode == 'wipe' && 'run' || 'skip' }}", "WIPE_LISTING: skip")],
+    "a5-row-dt-empty": [S("wipe_host_assert", 'WIPE_ROW_DT="$WIPE_ROW_EPOCH"', 'WIPE_ROW_DT=""')],
+    "a5-server-from-luks": [S("wipe_host_assert", "WIPE_SERVER_ID=\"$(sed -n 's/^server_id=//p' \"$rec\")\"", "WIPE_SERVER_ID=\"$(sed -n 's/^luks_id=//p' \"$rec\")\"")],
+    "w10-rc-any": [S("wipe_post_detach_read", 'if [[ "$rc" -eq 5 ]] && ! grep -qF " verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi', 'echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"')],
+    "w10-probe-excl": [S("wipe_post_detach_read", ' && ! grep -qF " verdict=probe_failed" "$out"', "")],
+    "nv-already-here": [J("notify", "finish with: ${finish_cmd_origin}, replacing", "finish with: ${finish_cmd_here}, replacing")],
+    "w12-always-deleted": [S("wipe_readback", 'if [[ "$DELETE_PHASE" == "delete_sent" ]]; then', "if true; then")],
+    "w12-standing-dropped": [S("wipe_readback", "This run does not address provider-side", "This run addresses provider-side")],
+    "f-retention-closed": [S("wipe_readback", "It does not state that the volume was empty", "Retention closed. It does not state that the volume was empty")],
+    "nv-vid-unvalidated": [J("notify", "case \"${WIPE_VOLUME_ID:-}\" in ''|*[!0-9]*) ;; *) if [ \"${#WIPE_VOLUME_ID}\" -le 12 ]; then vid=\"$WIPE_VOLUME_ID\"; fi ;; esac", 'vid="${WIPE_VOLUME_ID:-VOLUME_ID}"')],
+    "nv-orig-always": [J("notify", 'if [ "$MODE" = wipe ]; then orig="$RUN_ID"; fi', 'orig="$RUN_ID"')],
+    "nv-angle": [J("notify", "            vid=VOLUME_ID\n", "            vid='<VOLUME_ID>'\n")],
+    "h-identity-phase": [F('  gho volume_state "$CLS"\n  gho luks_state attached\n  local ids=""', '  gho volume_state "$CLS"\n  gho phase detached\n  gho luks_state attached\n  local ids=""')],
 }
+
+def dump_main(spec):
+    """Write one real step body (and its interpolated env:) of a job to <out>.sh / <out>.env.json for a bash-driven row."""
+    wf = load_yaml(spec["wf"])
+    job = (wf.get("jobs") or {}).get(spec["job"]) or {}
+    step = next((s for s in (job.get("steps") or []) if skey(s) == spec["step"]), None)
+    if step is None:
+        raise SystemExit("dump: step %s not found" % spec["step"])
+    ctx = dict(spec.get("ctx") or {})
+    ctx["env"] = {k: tostr(interp(v, ctx)) for k, v in (wf.get("env") or {}).items()}
+    env = {k: tostr(interp(v, ctx)) for k, v in (step.get("env") or {}).items()}
+    open(spec["out"] + ".sh", "w").write(step.get("run") or "")
+    json.dump(env, open(spec["out"] + ".env.json", "w"))
+
 
 def main():
     if len(sys.argv) < 3:
-        print("usage: wfsim.py census|mutate|sim|notify|cases SPEC.json", file=sys.stderr); sys.exit(2)
+        print("usage: wfsim.py census|mutate|sim|notify|cases|dump SPEC.json", file=sys.stderr); sys.exit(2)
     spec = json.load(open(sys.argv[2]))
-    {"census": census_main, "mutate": mutate_main, "sim": sim_main, "notify": notify_cases_main, "cases": step_cases_main}[sys.argv[1]](spec)
+    {"census": census_main, "mutate": mutate_main, "sim": sim_main, "notify": notify_cases_main, "cases": step_cases_main, "dump": dump_main}[sys.argv[1]](spec)
 
 
 if __name__ == "__main__":
     main()
 PYEOF
 PY=(python3 -I "$T/wfsim.py")
+# The forbidden-phrase ERE and the one whitelisted sentence: read out of the module the census uses (one source, two scanners).
+FORBID_ERE="$(python3 -I -c 'import importlib.util,sys; sp=importlib.util.spec_from_file_location("w",sys.argv[1]); m=importlib.util.module_from_spec(sp); sp.loader.exec_module(m); print(m.FORBIDDEN_SRC)' "$T/wfsim.py")"
+STANDING_TXT="$(python3 -I -c 'import importlib.util,sys; sp=importlib.util.spec_from_file_location("w",sys.argv[1]); m=importlib.util.module_from_spec(sp); sp.loader.exec_module(m); print(m.STANDING)' "$T/wfsim.py")"
+[ -n "$FORBID_ERE" ] && [ -n "$STANDING_TXT" ] || { printf 'FAIL SETUP: the forbidden-phrase source is empty\n' >&2; exit 1; }
+# forbidden <text>: 0 (true) when the text carries a forbidden phrase once the exact standing sentence is removed
+forbidden() { local t="${1-}"; t="${t//"$STANDING_TXT"/}"; grep -qiE -- "$FORBID_ERE" <<<"$t"; }
 
 # jmk <out> k=v ...: a flat JSON object; a value starting json: is spliced as JSON, anything else is a string.
 jmk() {
@@ -1569,7 +1835,14 @@ declare -A WANT=(
   [g3-5-mode-before-refusal]=1 [g3-6-unfreeze-in-word]=2 [g3-7a-refusal-dropped]=2 [g3-7b-no-finish-command]=2 [g3-8-phase-arm-removed]=2
   [g4-1-cutover-if-operand]=2 [g4-2-fourth-mode]=2 [g4-3-volume-id-in-flip]=2 [g4-4-attempt-in-one-mode]=2 [g4-5-runname-trailing-id]=2
   [g4h-a-volume-id-input-deleted]=5 [g6-1-flag-mode-mapping]=2 [g7-1-precheck-removed]=41 [g8-2a-forbidden-summary]=2
-  [g8-2b-forbidden-notify-word]=2 [g8-names-echo]=1 [g8-3-helper-new-word]=1 [n-1a-detach-gate-name-differs]=2 [n-1b-delete-gate-name-differs]=2 [n-2-chain-without-identity]=2 [g3-9a-wipe-unknown-not-in-family]=2 [g3-9b-lost-runner-setter-removed]=3 [g3-9c-wipe-unknown-not-in-whitelist]=2
+  [g8-2b-forbidden-notify-word]=2 [g8-names-echo]=1 [g8-3-helper-new-word]=1 [n-1a-detach-gate-name-differs]=2 [n-1b-delete-gate-name-differs]=2 [n-2-chain-with-identity]=2 [g3-9a-wipe-unknown-not-in-family]=2 [g3-9b-lost-runner-setter-removed]=3 [g3-9c-wipe-unknown-not-in-whitelist]=2
+  [c-step-env-bash-env]=2 [c-step-shell]=1 [c-step-workdir]=1 [d-echo-tok]=1 [e-shkc-lax]=4 [e-forward-agent]=4 [e-hostkeyalias]=2 [e-updatehostkeys]=4
+  [e-sha-dropped]=1 [e-keyval-dropped]=2 [e-xtrace-identity]=1 [b-w10-no-web-host-ssh]=2 [g-w7-raw-id]=2 [g-w10-raw-id]=2
+  [a1-origin-exit5]=1 [a1-origin-rc0]=2 [a1-origin-wrong-run]=2 [a1-origin-no-jobs]=2 [a1-origin-no-workflowname]=2 [a1-origin-delete-gate-open]=2
+  [a2-precheck-exit5]=1 [a2-wipemode-check]=2 [a2-runs-fallback-open]=2 [a2-limit-10]=2 [a2-no-event-field]=2
+  [a3-boot-exit5]=1 [a3-created-zero]=2 [a3-rrc-zero]=2 [a4-no-actions-call]=2 [a4-no-since]=2 [a4-never-detached]=2
+  [a5-listing-skip]=2 [a5-row-dt-empty]=2 [a5-server-from-luks]=2 [w10-rc-any]=2 [w10-probe-excl]=2 [nv-already-here]=2 [w12-always-deleted]=2 [w12-standing-dropped]=2
+  [f-retention-closed]=2 [nv-vid-unvalidated]=2 [nv-orig-always]=2 [nv-angle]=2 [h-identity-phase]=1
 )
 MUT_FILE=""
 mutate() { # <name> <src> [ops-json]
@@ -1723,10 +1996,39 @@ cmut g8-3-helper-new-word helper "G8-parity:"
 # the naming contract with the run lib and the identity phase in the chain are permanent pins now
 cmut n-1a-detach-gate-name-differs wf "WS-naming-steps:"
 cmut n-1b-delete-gate-name-differs wf "WS-naming-steps:"
-cmut n-2-chain-without-identity wf "G3-outputs:" "G3-phase-writers:" "G3-phase-chain-eval:"
+cmut n-2-chain-with-identity wf "G3-outputs:" "G3-phase-writers:" "G3-phase-chain-eval:"
 cmut g3-9a-wipe-unknown-not-in-family wf "G3-notify-wipe-block:"
 cmut g3-9b-lost-runner-setter-removed wf "G3-notify-lost-runner:"
 cmut g3-9c-wipe-unknown-not-in-whitelist wf "G3-notify-case-list:"
+# round 2 (static halves; the executed halves are in sections D, E, F and G): step keys, copies, the env contract, ids
+cmut c-step-env-bash-env wf "G1-step-env-names:"
+cmut c-step-shell wf "G1-step-keys:"
+cmut c-step-workdir wf "G1-step-keys:"
+cmut d-echo-tok wf "G8-no-names:"
+cmut e-shkc-lax wf "WS-copy-parity:"
+cmut e-forward-agent wf "WS-copy-parity:"
+cmut e-hostkeyalias wf "WS-copy-parity:"
+cmut e-updatehostkeys wf "WS-copy-parity:"
+cmut e-sha-dropped wf "G1-install-verifies:"
+cmut e-keyval-dropped wf "G1-key-validated:" "WS-copy-parity:"
+cmut e-xtrace-identity wf "G1-xtrace-all:"
+cmut b-w10-no-web-host-ssh wf "G10-env-contract:"
+cmut g-w7-raw-id wf "G7-record-ids:"
+cmut g-w10-raw-id wf "G7-record-ids:"
+cmut a2-limit-10 wf "G6-limit-parity:"
+cmut a2-no-event-field wf "G6-limit-parity:"
+cmut a5-listing-skip wf "G7-listing-env:"
+cmut a5-row-dt-empty wf "G7-listing-env:"
+cmut w10-rc-any wf "G10-store-not-serving-rc5:"
+cmut w10-probe-excl wf "G10-store-not-serving-rc5:"
+cmut nv-already-here wf "G3-notify-refusal-map:"
+cmut w12-always-deleted wf "G8-w12-conditional:"
+cmut w12-standing-dropped wf "G8-standing:"
+cmut f-retention-closed wf "G8-forbidden:"
+cmut nv-vid-unvalidated wf "G3-notify-finish-cmd:"
+cmut nv-orig-always wf "G3-notify-finish-cmd:"
+cmut nv-angle wf "G3-notify-finish-cmd:"
+cmut h-identity-phase helper "G3-identity-no-phase:"
 
 echo "-- D. W1 and the cutover confirm step, EXECUTED over the real run: text --"
 NCASES=()
@@ -1836,9 +2138,9 @@ CASES_RUN=$((W1_CASES_N + CC_N))
 echo "-- E. the notify body and the notify if:, EXECUTED over the real text with synthesized env --"
 NC=()
 NIDS=()
-ncase() { # <id> <wipe result> <mode> <started> <phase> <refusal> [run id]
+ncase() { # <id> <wipe result> <mode> <started> <phase> <refusal> [run id] [typed volume id]
   NIDS+=("$1")
-  NC+=("$(jq -nc --arg id "$1" --arg r "$2" --arg m "$3" --arg s "$4" --arg p "$5" --arg f "$6" --arg rid "${7-9000000123}" '{id:$id,run_id:$rid,needs:{cutover:{result:"skipped",outputs:{}},wipe:{result:$r,outputs:{mode:$m,started:$s,phase:$p,refusal:$f}}}}')")
+  NC+=("$(jq -nc --arg id "$1" --arg r "$2" --arg m "$3" --arg s "$4" --arg p "$5" --arg f "$6" --arg rid "${7-9000000123}" --arg vol "${8-424242}" '{id:$id,run_id:$rid,volume_id:$vol,needs:{cutover:{result:"skipped",outputs:{}},wipe:{result:$r,outputs:{mode:$m,started:$s,phase:$p,refusal:$f}}}}')")
 }
 ncase_empty() { NIDS+=("$1"); NC+=("$(jq -nc --arg id "$1" --arg r "$2" '{id:$id,run_id:"9000000123",needs:{cutover:{result:"skipped",outputs:{}},wipe:{result:$r,outputs:{}}}}')"); }
 ncase_cut() { # <id> <cutover result> <mode> <finalizer_ran> [wipe result]
@@ -1859,6 +2161,15 @@ for _mo in wipe wipe_finish; do
   ncase "$_mo-already-detached" failure "$_mo" true "" volume_already_detached
   ncase "$_mo-store-not-serving" failure "$_mo" true detached store_not_serving
 done
+# the typed volume id reaches the recovery command only as 1 to 12 digits (anything else: the word VOLUME_ID)
+ncase v-vid-12 failure wipe true detached "" 9000000123 123456789012
+ncase v-vid-zeros failure wipe true detached "" 9000000123 000000012345
+ncase h-vid-alpha failure wipe true detached "" 9000000123 12ab
+ncase h-vid-13 failure wipe true detached "" 9000000123 1234567890123
+ncase h-vid-inject failure wipe true detached "" 9000000123 '1;touch x'
+ncase h-vid-newline failure wipe true detached "" 9000000123 $'1\nsubject=evil'
+ncase h-vid-empty failure wipe true detached "" 9000000123 ""
+ncase h-vid-finish failure wipe_finish true detached "" 9000000123 '$(touch x)'
 ncase wipe_check-refused failure wipe_check true "" ""
 ncase wipe_check-phase failure wipe_check true deleted ""
 ncase wipe_check-unknown failure wipe_check "" "" ""
@@ -1929,18 +2240,36 @@ notify_rows() { # <label-suffix>: every executed notify row against $NJ
     nrow "NB-$mo-state-unknown$sfx: absent phase and absent started reads WIPE_STATE_UNKNOWN (never the refused-before-any-call claim)" "$mo-state-unknown" "WIPE_STATE_UNKNOWN" "$(only WIPE_STATE_UNKNOWN)"
     nrow "NB-$mo-cancelled$sfx: a cancelled $mo with no outputs reads WIPE_STATE_UNKNOWN and names the mode" "$mo-cancelled-state-unknown" "WIPE_STATE_UNKNOWN.*(cancelled|timed out)|\[git-data-cutover $mo cancelled\]" "$(only WIPE_STATE_UNKNOWN)"
     nrow "NB-$mo-phase-detach_attempted$sfx: phase detach_attempted -> DETACH_ATTEMPTED_UNCONFIRMED (read the volume first)" "$mo-phase-detach_attempted" "DETACH_ATTEMPTED_UNCONFIRMED.*read the volume first" "$(only DETACH_ATTEMPTED_UNCONFIRMED)"
-    nrow "NB-$mo-phase-detached$sfx: phase detached -> VOLUME_DETACHED with the wipe_finish command" "$mo-phase-detached" "VOLUME_DETACHED.*-f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=<the volume id you typed> -f origin_run=" "$(only VOLUME_DETACHED)"
+    nrow "NB-$mo-phase-detached$sfx: phase detached -> VOLUME_DETACHED with the wipe_finish command carrying the typed volume id" "$mo-phase-detached" "VOLUME_DETACHED.*-f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=424242 -f origin_run=" "$(only VOLUME_DETACHED)"
     nrow "NB-$mo-phase-delete_attempted$sfx: phase delete_attempted -> DELETE_ATTEMPTED_UNCONFIRMED" "$mo-phase-delete_attempted" "DELETE_ATTEMPTED_UNCONFIRMED" "$(only DELETE_ATTEMPTED_UNCONFIRMED)"
     nrow "NB-$mo-phase-delete_sent$sfx: phase delete_sent -> DELETE_SENT_UNCONFIRMED" "$mo-phase-delete_sent" "DELETE_SENT_UNCONFIRMED" "$(only DELETE_SENT_UNCONFIRMED)"
     nrow "NB-$mo-phase-deleted$sfx: phase deleted plus a later failure -> VOLUME_DELETED_TEARDOWN_FAILED, not DELETE_SENT_UNCONFIRMED" "$mo-phase-deleted" "VOLUME_DELETED_TEARDOWN_FAILED.*only the runner teardown failed" "$(only VOLUME_DELETED_TEARDOWN_FAILED)"
     nrow "NB-$mo-bogus-phase$sfx: an unrecognised phase reads WIPE_STATE_UNKNOWN" "$mo-bogus-phase" "WIPE_STATE_UNKNOWN.*unrecognised phase" "$(only WIPE_STATE_UNKNOWN)"
     nrow "NB-$mo-bogus-refusal$sfx: an unrecognised refusal is ignored and the phase decides" "$mo-bogus-refusal-over-phase" "DELETE_ATTEMPTED_UNCONFIRMED" "$(only DELETE_ATTEMPTED_UNCONFIRMED)"
-    nrow "NB-$mo-already-detached$sfx: refusal volume_already_detached -> VOLUME_ALREADY_DETACHED carrying the wipe_finish command with origin_run" "$mo-already-detached" "VOLUME_ALREADY_DETACHED.*-f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA.*-f origin_run=" "$(only VOLUME_ALREADY_DETACHED)"
+    nrow "NB-$mo-already-detached$sfx: refusal volume_already_detached -> VOLUME_ALREADY_DETACHED carrying the wipe_finish command with the WORD ORIGIN_RUN_ID (the refused run is not the origin, even when it is a mode=wipe run)" "$mo-already-detached" "VOLUME_ALREADY_DETACHED.*-f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA.*-f origin_run=ORIGIN_RUN_ID" "$(only VOLUME_ALREADY_DETACHED)|origin_run=$RUNID"
     nrow "NB-$mo-store-not-serving$sfx: refusal store_not_serving beats the detached phase -> STORE_NOT_SERVING_DO_NOT_FINISH and offers no finish command" "$mo-store-not-serving" "STORE_NOT_SERVING_DO_NOT_FINISH.*Do NOT dispatch wipe_finish" "$(only STORE_NOT_SERVING_DO_NOT_FINISH)|-f mode=wipe_finish -f"
   done
+  # no angle bracket in any recovery command: the notify body is HTML and the issue is markdown, and either swallows <text>
+  local ab=0 abn=0 abid
+  for abid in "${NIDS[@]}"; do
+    case "$abid" in wipe*|v-*|h-vid*) ;; *) continue ;; esac
+    # the html body carries <p> tags around the text: drop those, then no angle bracket may remain in a line naming the command
+    _pl="$(nbody "$abid" | sed -E 's#</?p>##g')"
+    if grep -E -- 'gh workflow run' <<<"$_pl" | grep -qE '[<>]'; then ab=$((ab + 1)); fi
+    abn=$((abn + $(grep -cE -- 'gh workflow run' <<<"$_pl" || true)))
+  done
+  [ "$ab" = 0 ] && [ "$abn" -ge 12 ] && pass "NB-no-angle$sfx: none of the $abn recovery commands across the wipe-family notifications carries an angle bracket (plain-word placeholders only)" || fail "NB-no-angle$sfx: $ab notification(s) carry an angle bracket in the recovery command ($abn commands)"
   nrow "NB-wipe-detached-origin$sfx: a wipe run's VOLUME_DETACHED command fills origin_run with THIS run's id" "wipe-phase-detached" "origin_run=$RUNID" -
   nrow "NB-wipe-detach_attempted-origin$sfx: a wipe run's DETACH_ATTEMPTED_UNCONFIRMED command fills origin_run with THIS run's id" "wipe-phase-detach_attempted" "origin_run=$RUNID" -
-  nrow "NB-finish-detached-placeholder$sfx: a wipe_finish run's VOLUME_DETACHED keeps the placeholder (its own id is not the detaching run)" "wipe_finish-phase-detached" "origin_run=<the id of the wipe run that detached the volume>" "origin_run=$RUNID"
+  nrow "NB-finish-detached-placeholder$sfx: a wipe_finish run's VOLUME_DETACHED keeps the word ORIGIN_RUN_ID (its own id is not the detaching run)" "wipe_finish-phase-detached" "origin_run=ORIGIN_RUN_ID" "origin_run=$RUNID"
+  nrow "NB-finish-already-detached-placeholder$sfx: a wipe_finish run's VOLUME_ALREADY_DETACHED keeps ORIGIN_RUN_ID too and tells the reader to replace it" "wipe_finish-already-detached" "origin_run=ORIGIN_RUN_ID, replacing ORIGIN_RUN_ID by the id of the wipe run that detached it" "origin_run=$RUNID"
+  nrow "NB-vid-filled$sfx: the typed volume id is filled into the recovery command for a 1-12 digit input (leading zeros as typed)" "v-vid-12" "-f volume_id=123456789012 -f origin_run=$RUNID" "VOLUME_ID"
+  nrow "NB-vid-zeros$sfx: 000000012345 is digits and 12 long: filled as typed" "v-vid-zeros" "-f volume_id=000000012345 -f origin_run=" "VOLUME_ID"
+  local hv hbad=0
+  for hv in h-vid-alpha h-vid-13 h-vid-inject h-vid-newline h-vid-empty h-vid-finish; do
+    ncheck "$hv" "-f volume_id=VOLUME_ID -f origin_run=" "touch|12ab|1234567890123|evil" >/dev/null && [ "$(nlines "$hv")" = 2 ] || { hbad=$((hbad + 1)); echo "  vid hostile $hv: $(ncheck "$hv" "-f volume_id=VOLUME_ID" "touch|12ab|evil")"; }
+  done
+  [ "$hbad" = 0 ] && pass "NB-vid-hostile$sfx: a volume id that is not 1 to 12 digits (letters, 13 digits, a semicolon, a newline, a command substitution, empty) never reaches the recovery command: it reads the word VOLUME_ID and the output keeps its two lines" || fail "NB-vid-hostile$sfx: $hbad hostile volume id(s) reached the command"
   nrow "NB-check-refused$sfx: a failed wipe_check reads WIPE_CHECK_FAILED with read-only wording" "wipe_check-refused" "WIPE_CHECK_FAILED.*read-only: nothing on any host or at the provider was changed" "$(only WIPE_CHECK_FAILED)"
   nrow "NB-check-any-phase$sfx: wipe_check ignores any phase value and stays WIPE_CHECK_FAILED" "wipe_check-phase" "WIPE_CHECK_FAILED" "$(only WIPE_CHECK_FAILED)"
   nrow "NB-check-unknown$sfx: wipe_check with no outputs still reads WIPE_CHECK_FAILED" "wipe_check-unknown" "WIPE_CHECK_FAILED" "$(only WIPE_CHECK_FAILED)"
@@ -1967,7 +2296,7 @@ notify_rows() { # <label-suffix>: every executed notify row against $NJ
     case "$id" in *lost-runner*|h-mode*|h-runid*) continue ;; esac
     n=$((n + 1))
     if grep -qiE -- 'mode=unfreeze|UNFREEZE-GIT-DATA|freeze sentinel|lineage=' <<<"$(nbody "$id")"; then leak=$((leak + 1)); echo "  unfreeze remedy in $id"; fi
-    if grep -qiE -- '\b(erased|wiped|secure|no copies)\b' <<<"$(nbody "$id")"; then forb=$((forb + 1)); echo "  forbidden phrase in $id"; fi
+    if forbidden "$(nbody "$id")"; then forb=$((forb + 1)); echo "  forbidden phrase in $id"; fi
   done
   [ "$leak" = 0 ] && [ "$n" -ge 28 ] && pass "NB-no-unfreeze$sfx: none of $n wipe-family notifications carries the unfreeze remedy (mode=unfreeze, UNFREEZE-GIT-DATA, lineage)" || fail "NB-no-unfreeze$sfx: $leak of $n wipe notifications carry the unfreeze remedy"
   [ "$forb" = 0 ] && pass "G8-notify-executed$sfx: none of $n executed wipe notifications contains a forbidden phrase" || fail "G8-notify-executed$sfx: $forb notifications contain a forbidden phrase"
@@ -2007,8 +2336,20 @@ mutate g3-8-phase-arm-removed "$WF" && { notify_run m-g3-8 "$MUT_FILE"; NJ="$T/c
   if ! ncheck wipe-phase-deleted "VOLUME_DELETED_TEARDOWN_FAILED" - >/dev/null; then pass "M-g3-8: with the deleted arm removed the executed phase row goes RED (it would read WIPE_REFUSED_BEFORE_ANY_CALL)"
   else fail "M-g3-8: the executed phase row stayed GREEN"; fi; }
 mutate g8-2b-forbidden-notify-word "$WF" && { notify_run m-g8-2b "$MUT_FILE"; NJ="$T/cases/m-g8-2b.notify.json"
-  if grep -qiE '\b(erased|wiped|secure|no copies)\b' <<<"$(nbody wipe-phase-deleted)"; then pass "M-g8-2b: a forbidden phrase in a wipe word is visible to the executed notify output rows"
+  if forbidden "$(nbody wipe-phase-deleted)"; then pass "M-g8-2b: a forbidden phrase in a wipe word is visible to the executed notify output rows"
   else fail "M-g8-2b: the forbidden phrase did not reach the executed output"; fi; }
+mutate nv-vid-unvalidated "$WF" && { notify_run m-nvv "$MUT_FILE"; NJ="$T/cases/m-nvv.notify.json"
+  if ! ncheck h-vid-inject "-f volume_id=VOLUME_ID -f origin_run=" "touch" >/dev/null && ! ncheck h-vid-alpha "-f volume_id=VOLUME_ID -f origin_run=" "12ab" >/dev/null; then pass "M-nv-vid: filling the volume id without the 1-12 digit test lets a free-text id into the recovery command (the executed hostile rows go RED)"
+  else fail "M-nv-vid: the executed hostile volume-id rows stayed GREEN"; fi; }
+mutate nv-orig-always "$WF" && { notify_run m-nvo "$MUT_FILE"; NJ="$T/cases/m-nvo.notify.json"
+  if ! ncheck wipe_finish-phase-detached "origin_run=ORIGIN_RUN_ID" "origin_run=$RUNID" >/dev/null; then pass "M-nv-orig: filling the run's own id for a wipe_finish run too puts a non-origin run id into the command (the executed placeholder row goes RED)"
+  else fail "M-nv-orig: the executed placeholder row stayed GREEN"; fi; }
+mutate nv-angle "$WF" && { notify_run m-nva "$MUT_FILE"; NJ="$T/cases/m-nva.notify.json"
+  if ! ncheck h-vid-empty "-f volume_id=VOLUME_ID -f origin_run=" "volume_id=<|origin_run=<" >/dev/null; then pass "M-nv-angle: an angle-bracket placeholder in the recovery command is visible to the executed rows (RED)"
+  else fail "M-nv-angle: the executed rows stayed GREEN"; fi; }
+mutate nv-already-here "$WF" && { notify_run m-nvh "$MUT_FILE"; NJ="$T/cases/m-nvh.notify.json"
+  if ! ncheck wipe-already-detached "origin_run=ORIGIN_RUN_ID" "origin_run=$RUNID" >/dev/null; then pass "M-nv-already: the already-detached word built from the run's own command puts the refused run's id into origin_run (the executed row goes RED)"
+  else fail "M-nv-already: the executed row stayed GREEN"; fi; }
 mutate "m-if-drop-wipe-started" "$WF" '[{"op":"sub","job":"notify","old":" && needs.wipe.outputs.started != '"'"'false'"'"'","new":"","count":1}]' && { notify_run m-ifw "$MUT_FILE"; NJ="$T/cases/m-ifw.notify.json"
   if ! iftab if-wipe-typo false; then pass "M-if-wipe: dropping the wipe started clause makes a typo'd wipe dispatch email (the if table goes RED)"; else fail "M-if-wipe: the if table stayed GREEN"; fi; }
 mutate "m-if-drop-cutover-started" "$WF" '[{"op":"sub","job":"notify","old":" && needs.cutover.outputs.started != '"'"'false'"'"'","new":"","count":1}]' && { notify_run m-ifc "$MUT_FILE"; NJ="$T/cases/m-ifc.notify.json"
@@ -2084,6 +2425,60 @@ simdef reread-protected wipe world_before='json:{"wipe_reread":{"PT_PROT":"true"
 simdef reread-reattached wipe world_before='json:{"wipe_reread":{"PT_SERVER":"@SRV"}}' notify="$T_TRUE"
 simdef target-is-luks wipe volume_id=900000002
 simdef no-tier-b wipe no_tier_b="$T_TRUE"
+# round 2: the fail-closed gates on their NEGATIVE paths. Each scenario is required REFUSED at its own step with zero detach
+# POSTs and zero DELETEs (section G); the one-line-edit mutants that disarm a gate must make the scenario reach the delete.
+FIN_W=(wipe_finish origin_run=8000000555 world='json:{"PT_SERVER":"null"}' origin_names=ids)
+simdef neg-origin-branch "${FIN_W[@]}" origin_override='json:{"headBranch":"feature-x"}'
+simdef neg-origin-event "${FIN_W[@]}" origin_override='json:{"event":"push"}'
+simdef neg-origin-title "${FIN_W[@]}" origin_override='json:{"displayTitle":"git-data wipe 1"}'
+simdef neg-origin-workflow "${FIN_W[@]}" origin_override='json:{"workflowName":"some other workflow"}'
+simdef neg-origin-gate "${FIN_W[@]}" gate_conclusion=failure
+simdef neg-origin-createdat "${FIN_W[@]}" origin_override='json:{"createdAt":null}'
+simdef neg-origin-unreadable "${FIN_W[@]}" origin_absent="$T_TRUE"
+RL_ROLLBACK='[{"databaseId":11,"displayTitle":"git-data rollback","createdAt":"2026-10-10T12:00:00Z","conclusion":"success","headBranch":"main","event":"workflow_dispatch"}]'
+simdef neg-rollback wipe runlist="$RL_ROLLBACK"
+simdef neg-rollback-check wipe_check runlist="$RL_ROLLBACK"
+simdef neg-runlist-unreadable wipe runlist_fail="$T_TRUE"
+simdef neg-stamp-absent wipe world='json:{"STAMP_ABSENT":"1"}'
+simdef neg-boot-verdict wipe boot_verdict=wipe_boot_row_absent
+simdef neg-boot-unreadable wipe boot_rc=1
+_act() { jq -nc --argjson a "$1" '{actions:$a,meta:{pagination:{page:1,per_page:50,total_entries:($a|length)}}}'; }
+ACT_ATTACH="$(_act '[{"id":9,"command":"detach_volume","status":"success","started":"2026-10-14T15:05:00Z","finished":"2026-10-14T15:05:09Z","progress":100},{"id":8,"command":"attach_volume","status":"success","started":"2026-10-14T15:03:00Z","finished":"2026-10-14T15:03:09Z","progress":100},{"id":7,"command":"detach_volume","status":"success","started":"2026-10-14T15:00:00Z","finished":"2026-10-14T15:00:09Z","progress":100}]')"
+ACT_OLD="$(_act '[{"id":7,"command":"detach_volume","status":"success","started":"2026-10-14T14:50:00Z","finished":"2026-10-14T14:50:09Z","progress":100}]')"
+ACT_NONE="$(_act '[]')"
+simdef neg-actions-attach "${FIN_W[@]}" actions_json="$ACT_ATTACH"
+simdef neg-actions-old "${FIN_W[@]}" actions_json="$ACT_OLD"
+simdef neg-actions-none "${FIN_W[@]}" actions_json="$ACT_NONE"
+simdef lead-zero wipe pt_id=12345 volume_id=000000012345
+simdef host-read-access-fail wipe world_before='json:{"wipe_post_detach_read":{"HOST_ACCESS_FAIL":"1"}}' notify="$T_TRUE"
+simdef host-read-probe-failed wipe world_before='json:{"wipe_post_detach_read":{"HOST_PROBE_FAIL":"1"}}' notify="$T_TRUE"
+# the one-line-edit mutants of those gates, each driven by the scenario that must catch it
+mutate a1-origin-exit5 "$WF" && simdef m-a1-exit5 "${FIN_W[@]}" wf="$MUT_FILE" origin_override='json:{"headBranch":"feature-x"}'
+mutate a1-origin-rc0 "$WF" && simdef m-a1-rc0 "${FIN_W[@]}" wf="$MUT_FILE" origin_override='json:{"headBranch":"feature-x"}'
+mutate a1-origin-delete-gate-open "$WF" && simdef m-a1-delgate "${FIN_W[@]}" wf="$MUT_FILE" origin_override='json:{"headBranch":"feature-x"}'
+mutate a1-origin-wrong-run "$WF" && simdef m-a1-wrongrun "${FIN_W[@]}" wf="$MUT_FILE"
+mutate a1-origin-no-jobs "$WF" && simdef m-a1-nojobs "${FIN_W[@]}" wf="$MUT_FILE"
+mutate a1-origin-no-workflowname "$WF" && simdef m-a1-nowfname "${FIN_W[@]}" wf="$MUT_FILE"
+mutate a2-precheck-exit5 "$WF" && simdef m-a2-exit5 wipe wf="$MUT_FILE" runlist="$RL_ROLLBACK"
+mutate a2-wipemode-check "$WF" && simdef m-a2-wipemode wipe wf="$MUT_FILE" runlist="$RL_ROLLBACK"
+mutate a2-runs-fallback-open "$WF" && simdef m-a2-fallback wipe wf="$MUT_FILE" runlist_fail="$T_TRUE"
+mutate a2-limit-10 "$WF" && simdef m-a2-limit wipe wf="$MUT_FILE"
+mutate a2-no-event-field "$WF" && simdef m-a2-noevent wipe wf="$MUT_FILE"
+mutate a3-boot-exit5 "$WF" && simdef m-a3-exit5 wipe wf="$MUT_FILE" boot_verdict=wipe_boot_row_absent
+mutate a3-created-zero "$WF" && simdef m-a3-created wipe wf="$MUT_FILE"
+mutate a3-rrc-zero "$WF" && simdef m-a3-rrc wipe wf="$MUT_FILE" boot_rc=1
+mutate a4-no-actions-call "$WF" && simdef m-a4-nocall "${FIN_W[@]}" wf="$MUT_FILE" actions_json="$ACT_ATTACH"
+mutate a4-no-since "$WF" && simdef m-a4-nosince "${FIN_W[@]}" wf="$MUT_FILE" actions_json="$ACT_ATTACH"
+mutate a4-never-detached "$WF" && simdef m-a4-never "${FIN_W[@]}" wf="$MUT_FILE" actions_json="$ACT_ATTACH"
+mutate a5-listing-skip "$WF" && simdef m-a5-listing wipe wf="$MUT_FILE"
+mutate a5-row-dt-empty "$WF" && simdef m-a5-rowdt wipe wf="$MUT_FILE"
+mutate a5-server-from-luks "$WF" && simdef m-a5-server wipe wf="$MUT_FILE"
+mutate b-w10-no-web-host-ssh "$WF" && simdef m-b-w10 wipe wf="$MUT_FILE"
+mutate g-w7-raw-id "$WF" && simdef m-g-w7 wipe wf="$MUT_FILE" pt_id=12345 volume_id=000000012345
+mutate g-w10-raw-id "$WF" && simdef m-g-w10 wipe wf="$MUT_FILE" pt_id=12345 volume_id=000000012345
+mutate w10-rc-any "$WF" && simdef m-w10-rc wipe wf="$MUT_FILE" world_before='json:{"wipe_post_detach_read":{"HOST_ACCESS_FAIL":"1"}}' notify="$T_TRUE"
+mutate w10-probe-excl "$WF" && simdef m-w10-probe wipe wf="$MUT_FILE" world_before='json:{"wipe_post_detach_read":{"HOST_PROBE_FAIL":"1"}}' notify="$T_TRUE"
+mutate w12-always-deleted "$WF" && simdef m-w12-always wipe_finish wf="$MUT_FILE" origin_run=8000000555 world='json:{"PT_SERVER":"gone"}' origin_names=ids
 SIMS_RUN=${#SIMS[@]}
 
 # run them, three at a time (the machine is loaded; each run is a few seconds of bash)
@@ -2223,7 +2618,7 @@ mk_row "G3-kill-after-W9: a run killed after W9 leaves phase=detached and pages 
 mk_row "G3-kill-after-W11a: a run killed after W11a leaves phase=delete_attempted, sent no DELETE, and pages DELETE_ATTEMPTED_UNCONFIRMED" kill-delete delete_attempted 'curl DELETE' 'DELETE_ATTEMPTED_UNCONFIRMED' "mode=wipe_finish"
 mk_row "G3-cancel-after-marker: a marker written by a step that is then cancelled still publishes (stub level: output files of a cancelled step are kept; the platform behaviour is confirmed on the first wipe_check run)" cancel-after-gate detach_attempted 'curl POST' 'DETACH_ATTEMPTED_UNCONFIRMED' "."
 mk_row "G3-cancel-after-W9: the same for the detached marker written by the helper in W9" cancel-after-detach detached 'curl DELETE' 'VOLUME_DETACHED' "origin_run=9000000123"
-mk_row "G3-delete-sent: a read-back that fails after the DELETE leaves phase=delete_sent and pages DELETE_SENT_UNCONFIRMED" delete-sent delete_sent 'zzzz-never' 'DELETE_SENT_UNCONFIRMED' "read the volume first"
+mk_row "G3-delete-sent: a read-back that fails after the DELETE leaves phase=delete_sent and pages DELETE_SENT_UNCONFIRMED" delete-sent delete_sent 'zzzz-never' 'DELETE_SENT_UNCONFIRMED' "read the volume at the provider first"
 mk_row "G3-teardown-after-delete: a failing teardown after a confirmed delete pages VOLUME_DELETED_TEARDOWN_FAILED, not DELETE_SENT_UNCONFIRMED" teardown-fail deleted 'zzzz-never' 'VOLUME_DELETED_TEARDOWN_FAILED' "only the runner teardown failed"
 _snot="$(snot teardown-fail)"; { [ "$(R teardown-fail .job_result)" = failure ] && ! grep -q 'DELETE_SENT_UNCONFIRMED' <<<"$_snot"; } && pass "G3-teardown-wording: the teardown failure run is red and never says DELETE_SENT_UNCONFIRMED" || fail "G3-teardown-wording"
 mk_row "G3-store-not-serving: a post-detach host read that fails publishes refusal=store_not_serving and pages STORE_NOT_SERVING_DO_NOT_FINISH (no finish command)" store-not-serving detached 'curl DELETE' 'STORE_NOT_SERVING_DO_NOT_FINISH' "Do NOT dispatch wipe_finish"
@@ -2245,19 +2640,232 @@ if [ "$(leakscan m-g1-2)" -ge 1 ]; then pass "M-g1-2: a credential on an env -i 
 if ! flow_ok m-g1-9; then pass "M-g1-9: a loader given doppler-token-legacy answers source=legacy and the W9a gate refuses (executed), RED"; else fail "M-g1-9: legacy input stayed GREEN"; fi
 if ! flow_ok m-g3-1d; then pass "M-g3-1: a marker step moved after its call (gate and detach swapped) is RED in the executed flow"; else fail "M-g3-1d"; fi
 if [ "$(R m-g3-2 .outputs.phase)" != detach_attempted ]; then pass "M-g3-2: with W9a merged away (no marker of its own) a run killed at W9 leaves no detach_attempted marker (RED against the marker row)"; else fail "M-g3-2: marker row stayed GREEN"; fi
-if grep -qiE '\b(erased|wiped|secure|no copies)\b' "$T/sim/m-g8-2a/summary.md"; then pass "M-g8-2: a forbidden phrase added to a summary line shows in the executed summary the forbidden-phrase row scans (RED)"; else fail "M-g8-2: executed summary scan did not see the phrase"; fi
+if forbidden "$(cat "$T/sim/m-g8-2a/summary.md")"; then pass "M-g8-2: a forbidden phrase added to a summary line shows in the executed summary the forbidden-phrase row scans (RED)"; else fail "M-g8-2: executed summary scan did not see the phrase"; fi
 # Guard 8: every executed summary, stdout and notify body of the green runs is free of the forbidden phrases
 _fb=0; _scanned=0
 for _s in gold-wipe gold-finish gold-finish-absent gold-check check-flag-false kill-detach kill-post-detach kill-delete delete-sent teardown-fail store-not-serving already-detached precheck-refused; do
   _scanned=$((_scanned + 1))
   _txt="$(cat "$T/sim/$_s/summary.md" "$T"/sim/"$_s"/steps/*.stdout "$T"/sim/"$_s"/steps/*.stderr 2>/dev/null | grep -v '^::add-mask::' || true)"
-  if grep -qiE '\b(erased|wiped|secure|no copies)\b' <<<"$_txt"; then _fb=$((_fb + 1)); fi
-  if [ "$(R "$_s" '.notify // empty | .gho // empty')" != "" ] && grep -qiE '\b(erased|wiped|secure|no copies)\b' <<<"$(snot "$_s")"; then _fb=$((_fb + 1)); fi
+  if forbidden "$_txt"; then _fb=$((_fb + 1)); fi
+  if [ "$(R "$_s" '.notify // empty | .gho // empty')" != "" ] && forbidden "$(snot "$_s")"; then _fb=$((_fb + 1)); fi
 done
-[ "$_fb" = 0 ] && pass "G8-executed: no summary, step output or notify body of $_scanned executed runs contains a forbidden phrase (erased, wiped, secure, no copies); the success summary claims only that the device was deleted at the provider API" || fail "G8-executed: $_fb executed outputs contain a forbidden phrase"
-grep -qF 'deleted at the provider API' "$T/sim/gold-wipe/summary.md" && grep -qF 'makes no statement about what the volume held' "$T/sim/gold-wipe/summary.md" && pass "G8-claim: the success summary states the device was deleted at the provider API and makes no statement about what the volume held" || fail "G8-claim"
+[ "$_fb" = 0 ] && pass "G8-executed: no summary, step output or notify body of $_scanned executed runs contains a forbidden phrase (the widened CLO list; only the PA-36(f) standing sentence is whitelisted); the summaries claim only that the device was deleted at, or is absent from, the provider API" || fail "G8-executed: $_fb executed outputs contain a forbidden phrase"
 _names="$(cat "$T"/sim/gold-wipe/steps/*.stdout 2>/dev/null | grep -v '^::add-mask::' | grep -ciE 'repositories|\.git\b|/srv|/var/lib' || true)"
 [ "$_names" = 0 ] && pass "G8-no-names-exec: no executed wipe step output mentions a store path, repository or name" || fail "G8-no-names-exec: $_names lines"
+
+echo "-- H. the fail-closed gates on their NEGATIVE paths, executed (each refused at its own step, zero detach POSTs, zero DELETEs) --"
+negsim() { # <sim> <failed step> <verdict regex in that step's own output>
+  simok "$1" && [ "$(R "$1" .job_result)" = failure ] && [ "$(failed_step "$1")" = "$2" ] && [ "$(nev "$1" 'curl POST .*/actions/detach')" = 0 ] \
+    && [ "$(nev "$1" 'curl DELETE')" = 0 ] && [ "$(nev "$1" 'loader inputs')" = 0 ] && has_out "$1" "$2" "$3"
+}
+neg_row() { # <label> <sim> <step> <regex>
+  if negsim "$2" "$3" "$4"; then pass "$1"
+  else fail "$1" "failed=$(failed_step "$2") job=$(R "$2" .job_result) POST=$(nev "$2" 'curl POST .*/actions/detach') DELETE=$(nev "$2" 'curl DELETE') :: $(stepout "$2" "$3" | tail -n 2 | tr '\n' '|' | cut -c1-200)"; fi
+}
+neg_row "N-origin-branch: a wipe_finish whose origin run ran on another branch is refused at wipe_origin_check (wipe_origin_run_not_main); no detach, no delete" neg-origin-branch wipe_origin_check 'verdict=wipe_origin_run_not_main'
+neg_row "N-origin-event: an origin run started by a push (not a dispatch) is refused at wipe_origin_check (wipe_origin_run_not_dispatch)" neg-origin-event wipe_origin_check 'verdict=wipe_origin_run_not_dispatch'
+neg_row "N-origin-title: an origin run titled for another volume is refused at wipe_origin_check (wipe_origin_run_title_mismatch)" neg-origin-title wipe_origin_check 'verdict=wipe_origin_run_title_mismatch'
+neg_row "N-origin-workflow: an origin run of another workflow is refused at wipe_origin_check (wipe_origin_run_workflow_mismatch)" neg-origin-workflow wipe_origin_check 'verdict=wipe_origin_run_workflow_mismatch'
+neg_row "N-origin-gate: an origin run whose detach gate did not succeed (and has no delete gate) is refused at wipe_origin_check (wipe_origin_run_gate_not_success)" neg-origin-gate wipe_origin_check 'verdict=wipe_origin_run_gate_not_success'
+neg_row "N-origin-createdat: an origin run whose createdAt is null is refused at wipe_origin_check (wipe_origin_run_unreadable reason=created_at), never an empty --since" neg-origin-createdat wipe_origin_check 'verdict=wipe_origin_run_unreadable reason=created_at'
+neg_row "N-origin-unreadable: an origin run gh cannot read is refused at wipe_origin_check (wipe_origin_run_unreadable)" neg-origin-unreadable wipe_origin_check 'verdict=wipe_origin_run_unreadable'
+neg_row "N-rollback: a git-data rollback run newer than the soak stamp refuses mode=wipe at wipe_flag_precheck (wipe_precondition_rollback_after_stamp) before any Hetzner call" neg-rollback wipe_flag_precheck 'verdict=wipe_precondition_rollback_after_stamp'
+[ "$(nev neg-rollback 'curl ')" = 0 ] && pass "N-rollback-nocall: the rollback refusal happens before the first Hetzner call (0 curl calls)" || fail "N-rollback-nocall" "$(nev neg-rollback 'curl ') curl calls"
+neg_row "N-runlist-unreadable: a gh run list that fails reads as unreadable, never as 'no rollback' (wipe_precondition_run_list_unreadable)" neg-runlist-unreadable wipe_flag_precheck 'verdict=wipe_precondition_run_list_unreadable'
+neg_row "N-stamp-absent: an absent soak stamp refuses mode=wipe at wipe_flag_precheck (wipe_precondition_stamp_absent)" neg-stamp-absent wipe_flag_precheck 'verdict=wipe_precondition_stamp_absent'
+if simok neg-rollback-check && [ "$(R neg-rollback-check .job_result)" = success ] && grep -qF 'W3 would be wipe_precondition_rollback_after_stamp; UNVERIFIED' "$T/sim/neg-rollback-check/summary.md" && [ "$(nev neg-rollback-check 'curl (POST|DELETE)')" = 0 ]; then
+  pass "N-rollback-check: the same rollback leaves wipe_check GREEN and reports W3 would be wipe_precondition_rollback_after_stamp (report-only; only mode=wipe is stopped by it)"
+else fail "N-rollback-check" "job=$(R neg-rollback-check .job_result) :: $(head -c 200 "$T/sim/neg-rollback-check/summary.md")"; fi
+neg_row "N-boot-verdict: a boot-read verdict that is not wipe_boot_ok refuses at wipe_boot_read (the verdict word is the step's own), before the bridge, the host read and the loader" neg-boot-verdict wipe_boot_read 'verdict=wipe_boot_row_absent'
+[ "$(nev neg-boot-verdict 'host phase=')" = 0 ] && [ "$(nev neg-boot-verdict 'bridge')" = 0 ] && pass "N-boot-nohost: nothing after the refused boot read ran (no bridge, no host read)" || fail "N-boot-nohost"
+neg_row "N-boot-unreadable: a boot-signal read that failed (rc 1) is wipe_boot_unreadable at wipe_boot_read, not an accepted row" neg-boot-unreadable wipe_boot_read 'verdict=wipe_boot_unreadable'
+neg_row "N-actions-attach: a detach, then an attach, then a detach after the origin run started is not evidence: refused at wipe_identity (wipe_detach_not_evidenced reason=attach_after)" neg-actions-attach wipe_identity 'wipe_detach_not_evidenced.*reason=attach_after'
+neg_row "N-actions-old: the only detach started BEFORE the origin run: refused at wipe_identity (reason=started_before_origin)" neg-actions-old wipe_identity 'wipe_detach_not_evidenced.*reason=started_before_origin'
+neg_row "N-actions-none: no detach action at all: refused at wipe_identity (reason=no_detach)" neg-actions-none wipe_identity 'wipe_detach_not_evidenced.*reason=no_detach'
+_gh_ref=""; for _s in gold-wipe gold-finish gold-finish-faithful gold-finish-absent gold-check lead-zero neg-origin-branch neg-rollback neg-boot-verdict neg-actions-attach; do [ ! -s "$T/sim/$_s/world/gh-refusals.log" ] || _gh_ref+=" $_s"; done
+[ -z "$_gh_ref" ] && pass "N-gh-argv: the gh shim (which accepts only the modeled argv: subcommand, --workflow, --limit from the run lib, the --json field list, the dispatched origin run id) refused nothing in 10 runs" || fail "N-gh-argv: the gh shim refused an argv in:$_gh_ref" "$(cat "$T"/sim/gold-wipe/world/gh-refusals.log 2>/dev/null | head -3)"
+# listing, row epoch and ids reach the host verb as the record and the boot read say
+_clk=1760457600
+if [ "$(nev gold-wipe "host phase=pre ok listing=run row_dt=$((_clk - 600)) vid=900000001")" = 1 ] && [ "$(nev gold-check 'host phase=pre ok listing=skip row_dt=')" = 1 ] && [ "$(nev gold-wipe 'host (IDMISMATCH|BADLISTING|BADROWDT|BADPRE_ONLY)')" = 0 ]; then
+  pass "N-host-inputs: the W7 host read of a mode=wipe run asks for the layout listing (run), carries the boot row's epoch as its row date and the record's ids; a wipe_check run skips the listing"
+else fail "N-host-inputs" "$(grep -a 'host phase=pre' "$(EVL gold-wipe)" | head -2)"; fi
+if flow_ok lead-zero && [ "$(nev lead-zero 'host phase=pre ok listing=run row_dt=[0-9]+ vid=12345 ')" = 1 ] && [ "$(nev lead-zero 'host phase=post_detach ok vid=12345 ')" = 1 ] && [ "$(nev lead-zero 'vid=000000012345')" = 0 ]; then
+  pass "N-lead-zero: volume_id=000000012345 is normalised in the record (plaintext_id=12345) and W7 and W10 send the RECORD's id (12345) to the host verb; the run completes (phase=deleted)"
+else fail "N-lead-zero" "job=$(R lead-zero .job_result) failed=$(failed_step lead-zero) $(grep -a 'host phase' "$(EVL lead-zero)" | head -3 | tr '\t' ' ')"; fi
+# W10: the host verb's refusal word is published only for an exit-5 verdict
+if simok host-read-access-fail && [ "$(failed_step host-read-access-fail)" = wipe_post_detach_read ] && [ "$(R host-read-access-fail .outputs.refusal)" = "" ] && [ "$(R host-read-access-fail .outputs.phase)" = detached ] \
+   && grep -qE 'VOLUME_DETACHED' <<<"$(snot host-read-access-fail)" && ! grep -qE 'STORE_NOT_SERVING' <<<"$(snot host-read-access-fail)" && [ "$(nev host-read-access-fail 'curl DELETE')" = 0 ]; then
+  pass "N-w10-rc3: a post-detach host read that did not answer (access gate, exit 3) fails W10 without refusal=store_not_serving: phase detached, VOLUME_DETACHED with the finish command, no DO-NOT-FINISH, no delete"
+else fail "N-w10-rc3" "failed=$(failed_step host-read-access-fail) refusal=$(R host-read-access-fail .outputs.refusal) phase=$(R host-read-access-fail .outputs.phase)"; fi
+if simok host-read-probe-failed && [ "$(failed_step host-read-probe-failed)" = wipe_post_detach_read ] && [ "$(R host-read-probe-failed .outputs.refusal)" = "" ] && [ "$(R host-read-probe-failed .outputs.phase)" = detached ] \
+   && grep -qE 'VOLUME_DETACHED' <<<"$(snot host-read-probe-failed)" && ! grep -qE 'STORE_NOT_SERVING' <<<"$(snot host-read-probe-failed)" && [ "$(nev host-read-probe-failed 'curl DELETE')" = 0 ]; then
+  pass "N-w10-probe: a post-detach host read that exits 5 with verdict=probe_failed (unanswered) publishes no refusal: VOLUME_DETACHED with the finish command, no DO-NOT-FINISH"
+else fail "N-w10-probe" "refusal=$(R host-read-probe-failed .outputs.refusal) phase=$(R host-read-probe-failed .outputs.phase)"; fi
+if simok store-not-serving && [ "$(R store-not-serving .outputs.refusal)" = store_not_serving ] && ! grep -qF 'verdict=probe_failed' "$T/sim/store-not-serving/steps/"*wipe_post_detach_read.stdout; then pass "N-w10-verdict: a real store verdict (exit 5, not probe_failed) still publishes refusal=store_not_serving"; else fail "N-w10-verdict"; fi
+if simok m-w10-probe && [ "$(R m-w10-probe .outputs.refusal)" = store_not_serving ]; then pass "M-w10-probe: without the probe_failed exclusion an unanswered read pages DO-NOT-FINISH (N-w10-probe goes RED)"; else fail "M-w10-probe: the mutant did not change the refusal" "$(R m-w10-probe .outputs.refusal)"; fi
+# W12 summaries: a delete is claimed only when THIS run's delete step wrote its marker; the standing PA-36(f) sentence closes every summary
+_sm() { cat "$T/sim/$1/summary.md" 2>/dev/null; }
+_cnt() { grep -cF -- "$STANDING_TXT" <<<"$(_sm "$1")" || true; }
+if grep -qF 'the plaintext volume was deleted at the provider API' "$T/sim/gold-wipe/summary.md" && grep -qF 'It does not state that the volume was empty or held no personal data' "$T/sim/gold-wipe/summary.md" \
+   && ! grep -qF 'absent at the provider API' "$T/sim/gold-wipe/summary.md" && [ "$(_cnt gold-wipe)" = 1 ] && [ "$(_cnt gold-finish)" = 1 ]; then
+  pass "G8-claim: the summary of a run that sent the delete says the volume was deleted at the provider API, disclaims what the volume held ('does not state that the volume was empty or held no personal data'), and ends with the PA-36(f) standing sentence once"
+else fail "G8-claim" "$(_sm gold-wipe | tail -n 5 | tr '\n' '|' | cut -c1-300)"; fi
+if grep -qF 'git-data wipe: the plaintext volume is absent at the provider API' "$T/sim/gold-finish-absent/summary.md" && grep -qF 'This run made no delete call. The delete outcome is in the origin run (run id 8000000555).' "$T/sim/gold-finish-absent/summary.md" \
+   && ! grep -qF 'was deleted at the provider API' "$T/sim/gold-finish-absent/summary.md" && [ "$(_cnt gold-finish-absent)" = 1 ]; then
+  pass "G8-claim-absent: a wipe_finish that found the volume already absent says it is ABSENT at the provider API, that it made no delete call, names the origin run (8000000555), and still carries the standing sentence once"
+else fail "G8-claim-absent" "$(_sm gold-finish-absent | tail -n 5 | tr '\n' '|' | cut -c1-300)"; fi
+grep -qF 'was deleted at the provider API' "$T/sim/gold-finish/summary.md" && ! grep -qF 'absent at the provider API' "$T/sim/gold-finish/summary.md" && pass "G8-claim-finish: a wipe_finish that sent the delete itself (volume detached) says it was deleted" || fail "G8-claim-finish"
+if ! grep -qF 'was deleted at the provider API' "$T/sim/m-w12-always/summary.md" 2>/dev/null; then fail "M-w12: the always-deleted mutant did not claim a delete on an absent volume (the row has no teeth)"; else pass "M-w12-always: with the DELETE_PHASE test removed the absent-volume summary claims a delete (G8-claim-absent goes RED)"; fi
+# the one-line-edit mutants
+mut_neg() { # <label> <sim> <step> <regex>: the scenario is NO LONGER refused at its own step (the gate is disarmed)
+  if negsim "$2" "$3" "$4"; then fail "$1 (the negative scenario is still refused: the mutant did not disarm the gate)"; else pass "$1"; fi
+}
+mut_neg "M-a1-exit5: deleting the exit 5 of the origin check lets a bad origin run through (the negative row goes RED)" m-a1-exit5 wipe_origin_check 'verdict=wipe_origin_run_not_main'
+mut_neg "M-a1-rc0: '|| rc=0' on the detach-gate check lets a bad origin run through (RED)" m-a1-rc0 wipe_origin_check 'verdict=wipe_origin_run_not_main'
+mut_neg "M-a1-delgate: a delete-gate fallback that always passes lets a bad origin run through (RED)" m-a1-delgate wipe_origin_check 'verdict=wipe_origin_run_not_main'
+for _p in "m-a1-wrongrun:gh run view of a different run id" "m-a1-nojobs:dropping jobs from --json" "m-a1-nowfname:dropping workflowName from --json"; do
+  _sim="${_p%%:*}"; _msg="${_p#*:}"
+  if ! finish_ok "$_sim" && [ -s "$T/sim/$_sim/world/gh-refusals.log" ]; then pass "M-${_sim#m-}: $_msg is refused by the argv-exact gh shim and the golden wipe_finish goes RED"; else fail "M-${_sim#m-}: $_msg stayed GREEN or was not seen by the shim" "job=$(R "$_sim" .job_result)"; fi
+done
+mut_neg "M-a2-exit5: deleting the exit 5 of the rollback-recency refusal lets a rollback after the stamp through (RED)" m-a2-exit5 wipe_flag_precheck 'verdict=wipe_precondition_rollback_after_stamp'
+mut_neg "M-a2-wipemode: WIPE_MODE bound to wipe_check turns the refusal into a report for a real wipe (RED)" m-a2-wipemode wipe_flag_precheck 'verdict=wipe_precondition_rollback_after_stamp'
+mut_neg "M-a2-fallback: an unreadable run list accepted as '[]' lets the wipe through (RED)" m-a2-fallback wipe_flag_precheck 'verdict=wipe_precondition_run_list_unreadable'
+for _p in "m-a2-limit:--limit 10" "m-a2-noevent:dropping event from --json"; do
+  _sim="${_p%%:*}"; _msg="${_p#*:}"
+  if ! flow_ok "$_sim" && [ -s "$T/sim/$_sim/world/gh-refusals.log" ]; then pass "M-${_sim#m-}: $_msg is refused by the argv-exact gh shim (the lib's list-reach test needs the whole window) and the golden wipe goes RED"; else fail "M-${_sim#m-}: $_msg stayed GREEN" "job=$(R "$_sim" .job_result)"; fi
+done
+mut_neg "M-a3-exit5: deleting the exit 5 of the boot-verdict refusal lets a missing boot row through (RED)" m-a3-exit5 wipe_boot_read 'verdict=wipe_boot_row_absent'
+mut_neg "M-a3-rrc: passing 0 for the boot read's rc lets a failed read through (RED)" m-a3-rrc wipe_boot_read 'verdict=wipe_boot_unreadable'
+if ! flow_ok m-a3-created && [ "$(failed_step m-a3-created)" = wipe_boot_read ]; then pass "M-a3-created: passing 0 for the server's created epoch is refused by the boot verdict (the stub checks the argument against the server's own created time) and the golden wipe goes RED"; else fail "M-a3-created: the created-epoch argument is unchecked" "failed=$(failed_step m-a3-created)"; fi
+mut_neg "M-a4-nocall: dropping the 'helper actions --since' call lets an attach-after-detach history through (RED)" m-a4-nocall wipe_identity 'wipe_detach_not_evidenced'
+mut_neg "M-a4-nosince: dropping --since lets an attach-after-detach history through (report mode accepts it) (RED)" m-a4-nosince wipe_identity 'wipe_detach_not_evidenced'
+mut_neg "M-a4-never: a '\$vs == detached' test that is never true skips the evidence call (RED)" m-a4-never wipe_identity 'wipe_detach_not_evidenced'
+for _p in "m-a5-listing:WIPE_LISTING=skip for a real wipe (the plaintext-not-empty check never runs)" "m-a5-rowdt:an empty WIPE_ROW_DT" "m-a5-server:the server id read from luks_id" "m-b-w10:dropping WEB_HOST_SSH from the W10 allow-list"; do
+  _sim="${_p%%:*}"; _msg="${_p#*:}"
+  if ! flow_ok "$_sim"; then pass "M-${_sim#m-}: $_msg refuses at the host stub (it reads the same inputs the real verb does) and the golden wipe goes RED"; else fail "M-${_sim#m-}: $_msg stayed GREEN"; fi
+done
+for _m in m-g-w7 m-g-w10; do
+  if ! flow_ok "$_m" && { [ "$(nev "$_m" 'vid=000000012345')" -ge 1 ] || [ "$(nev "$_m" 'host IDMISMATCH')" -ge 1 ]; }; then pass "M-${_m#m-}: sending \$VOLUME_ID (000000012345) instead of the record's id to the host verb is refused by the id-exact host stub (RED)"; else fail "M-${_m#m-}: the raw id reached the host unnoticed" "$(grep -a 'host' "$(EVL "$_m")" | head -2 | tr '\t' ' ')"; fi
+done
+if simok m-w10-rc && [ "$(R m-w10-rc .outputs.refusal)" = store_not_serving ] && grep -qE 'STORE_NOT_SERVING' <<<"$(snot m-w10-rc)"; then pass "M-w10-rc: publishing the refusal for any non-zero exit pages DO-NOT-FINISH for an access-gate failure (the N-w10-rc3 row goes RED)"; else fail "M-w10-rc: the any-exit mutant did not change the published refusal" "refusal=$(R m-w10-rc .outputs.refusal)"; fi
+
+echo "-- I. the wipe job's copied ssh_config and the workflow-to-script contract, EXECUTED over the real step bodies --"
+mkdir -p "$T/dump" "$T/exec"
+dump_step() { # <name> <workflow> <job> <step> <ctx-json>: the step's real run: text to $T/dump/<name>.sh, its env: to .env.json
+  jmk "$T/dump/$1.json" wf="$2" job="$3" step="$4" ctx="json:$5" out="$T/dump/$1"
+  "${PY[@]}" dump "$T/dump/$1.json" 2> "$T/dump/$1.err"
+}
+ssh-keygen -q -t ed25519 -N '' -C gdw-pin-fixture -f "$T/gdw-pin-key" || { printf 'FAIL SETUP: ssh-keygen gd pin\n' >&2; exit 1; }
+GDW_PIN="$(cut -d' ' -f1,2 "$T/gdw-pin-key.pub")"
+cat > "$T/scw.py" <<'UEOF'
+import sys, re, subprocess
+cfg, kh = sys.argv[1], sys.argv[2]
+try: lines = open(cfg).read().splitlines()
+except Exception as e: print("unreadable"); sys.exit()
+blocks = {}; cur = None; problems = []
+for l in lines:
+    t = l.strip()
+    if not t: continue
+    kw = t.split(None, 1)[0].lower()
+    if kw in ("host", "match"):
+        cur = t; blocks[cur] = []; continue
+    if cur is None: problems.append("option outside a block"); continue
+    blocks[cur].append(t)
+if sorted(blocks) != ["Host 10.0.1.10", "Host 10.0.1.20"]: problems.append("hosts %r" % sorted(blocks))
+want = {"Host 10.0.1.10": "web-1", "Host 10.0.1.20": "git-data"}
+for h, alias in want.items():
+    o = blocks.get(h, [])
+    for need in ("StrictHostKeyChecking yes", "ForwardAgent no", "ClearAllForwardings yes", "UpdateHostKeys no", "HostKeyAlias " + alias, "GlobalKnownHostsFile /dev/null", "UserKnownHostsFile " + kh, "IdentitiesOnly yes", "BatchMode yes"):
+        if need not in o: problems.append("%s lacks %s" % (h, need))
+    for k in ("stricthostkeychecking", "forwardagent", "clearallforwardings", "updatehostkeys", "hostkeyalias"):
+        if sum(1 for x in o if x.lower().split()[0] == k) != 1: problems.append("%s: %s not exactly once" % (h, k))
+if not any(x.startswith("ProxyCommand ssh -F %s -W 10.0.1.20:22 10.0.1.10" % cfg) for x in blocks.get("Host 10.0.1.20", [])): problems.append("no ProxyCommand through web-1")
+try:
+    for host, alias in (("10.0.1.10", "web-1"), ("10.0.1.20", "git-data")):
+        g = subprocess.run(["ssh", "-G", "-F", cfg, host], capture_output=True, text=True, timeout=20).stdout.lower().splitlines()
+        want_g = {"stricthostkeychecking true", "forwardagent no", "clearallforwardings yes", "updatehostkeys false", "hostkeyalias " + alias, "globalknownhostsfile /dev/null"}
+        miss = sorted(w for w in want_g if w not in g)
+        if miss: problems.append("ssh -G %s: %s" % (host, miss))
+except FileNotFoundError:
+    problems.append("ssh unavailable")
+print("OK" if not problems else "; ".join(problems))
+UEOF
+scw_check() { # <name> <workflow>: OK, or the problems found in the config the wipe job's real ssh_config body writes
+  local n="$1" wfp="$2" sr="$T/exec/scw-$1"
+  assert_fixture_dir "$sr"; rm -rf "$sr"; mkdir -p "$sr/rt"
+  dump_step "scw-$n" "$wfp" wipe wipe_ssh_config '{}' || { echo "dump failed"; return; }
+  printf 'fixture-root-key\n' > "$sr/rt/gd-root-key"; printf 'fixture-ci-key\n' > "$sr/ci-key"; printf '%s\n' "$GDW_PIN" > "$sr/rt/git-data.pin"
+  if ! env -i PATH=/usr/bin:/bin HOME="$sr" RUNNER_TEMP="$sr/rt" GITHUB_WORKSPACE="$ROOT" CI_SSH_KEYFILE="$sr/ci-key" bash --noprofile --norc -eo pipefail "$T/dump/scw-$n.sh" > "$sr/stdout" 2>&1; then
+    echo "writer failed: $(tr '\n' '|' < "$sr/stdout" | cut -c1-200)"; return
+  fi
+  python3 -I "$T/scw.py" "$sr/rt/gd-ssh-config" "$sr/rt/gd-known-hosts"
+}
+_r="$(scw_check pristine "$WF")"
+[ "$_r" = OK ] && pass "SCW: the wipe job's REAL ssh_config body, executed, writes both Host blocks with StrictHostKeyChecking yes, ForwardAgent no, ClearAllForwardings yes, UpdateHostKeys no, HostKeyAlias web-1 / git-data, GlobalKnownHostsFile /dev/null and the web-1 ProxyCommand, and real OpenSSH (ssh -G) resolves them the same way" || fail "SCW: the wipe ssh_config writer" "$_r"
+for _m in e-shkc-lax e-forward-agent e-hostkeyalias e-updatehostkeys; do
+  mutate "$_m" "$WF" && { _r="$(scw_check "m-$_m" "$MUT_FILE")"
+    if [ "$_r" != OK ]; then pass "M-$_m: the executed ssh_config row goes RED ($(cut -c1-70 <<<"$_r"))"; else fail "M-$_m: the executed ssh_config row stayed GREEN"; fi; }
+done
+
+# W10 under exactly its exec env -i allow-list, against the REAL git-data-cutover.sh with an ssh PATH shim
+envrow_run() { # <name> <workflow> <shim mode: ok|verdict|accessfail>: prints "rc|refusal|ssh-calls|has-unset|last-call"
+  local n="$1" wfp="$2" mode="$3" d="$T/exec/w10-$1" rc=0
+  assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d/ws/apps/web-platform/infra" "$d/bin" "$d/rt"
+  ln -s "$HOST_VERB" "$d/ws/apps/web-platform/infra/git-data-cutover.sh"; ln -s "$HOST_ASSERT" "$d/ws/apps/web-platform/infra/git-data-wipe-assert.sh"
+  printf 'server_id=800000001\nplaintext_id=12345\nluks_id=900000002\n' > "$d/rt/git-data-wipe-record"
+  : > "$d/out"; : > "$d/sum"; : > "$d/ssh.log"; printf '%s' "$mode" > "$d/shim.mode"
+  cat > "$d/bin/ssh" <<SHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$d/ssh.log"
+mode="\$(cat "$d/shim.mode")"
+last="\${*: -1}"
+if [[ " \$* " == *" -W "* ]]; then echo "SSH-2.0-OpenSSH_shim"; exit 0; fi
+if [[ "\$last" == true ]]; then [ "\$mode" = accessfail ] && exit 255; exit 0; fi
+if [[ "\$last" == WIPE_PHASE=*" bash -s" ]]; then
+  cat > /dev/null
+  [ "\$mode" = verdict ] && exit 41
+  [ "\$mode" = probefail ] && { echo "something else entirely"; exit 0; }
+  ph="\${last#WIPE_PHASE=}"; ph="\${ph%% *}"
+  echo "wipe_assert \$ph ok byid=gone mapper_read=ok store_root=ok"; exit 0
+fi
+exit 255
+SHIM
+  chmod +x "$d/bin/ssh"
+  dump_step "w10-$n" "$wfp" wipe wipe_post_detach_read "{\"runner\":{\"temp\":\"$d/rt\"},\"steps\":{\"wipe_confirm\":{\"outputs\":{\"mode\":\"wipe\"}},\"wipe_identity\":{\"outputs\":{}}}}" || { echo "dump failed"; return; }
+  local -a ev_=()
+  mapfile -t ev_ < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' "$T/dump/w10-$n.env.json")
+  # the OUTER environment is what the runner gives the step: the step env:, the job env, and what the bridge wrote to GITHUB_ENV
+  # (WEB_HOST_SSH) plus a loaded credential decoy that the env -i must not pass on
+  env -i PATH="$d/bin:/usr/bin:/bin" HOME="$d" RUNNER_TEMP="$d/rt" GITHUB_WORKSPACE="$d/ws" GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/sum" VOLUME_ID=12345 \
+    WEB_HOST_SSH="ssh -F /dev/null -i $d/ci-key -l root" HCLOUD_TOKEN=synthdecoyW10 "${ev_[@]}" \
+    bash --noprofile --norc -e "$T/dump/w10-$n.sh" > "$d/stdout" 2>&1 || rc=$?
+  printf '%s|%s|%s|%s|%s' "$rc" "$(sed -n 's/^refusal=//p' "$d/out" | tr '\n' ',')" "$(wc -l < "$d/ssh.log" | tr -d ' ')" "$(grep -c 'web_host_ssh_unset' "$d/stdout" || true)" "$(tail -n 1 "$d/ssh.log")"
+}
+_r="$(envrow_run pristine "$WF" ok)"
+IFS='|' read -r _rc _ref _calls _unset _last <<<"$_r"
+if [ "$_rc" = 0 ] && [ -z "$_ref" ] && [ "$_calls" -ge 4 ] && [ "$_unset" = 0 ] && grep -qF 'WIPE_PHASE=post_detach WIPE_TYPED_ID=12345 WIPE_LUKS_ID=900000002 WIPE_SERVER_ID=800000001' <<<"$_last"; then
+  pass "H-W10-contract: the W10 body, run as the runner runs it (job env + bridge env in, its own exec env -i allow-list between) against the REAL git-data-cutover.sh, passes the access gate (web, jump, git-data-auth) and the host read ($_calls ssh calls) carrying the record's ids, exit 0"
+else fail "H-W10-contract: the real W10 body did not get past the access gate" "$_r :: $(tr '\n' '|' < "$T/exec/w10-pristine/stdout" | cut -c1-240)"; fi
+mutate b-w10-no-web-host-ssh "$WF" && { _r="$(envrow_run m-b-w10 "$MUT_FILE" ok)"; IFS='|' read -r _rc _ref _calls _unset _last <<<"$_r"
+  if [ "$_rc" = 3 ] && [ "$_unset" -ge 1 ] && [ -z "$_ref" ]; then pass "M-b-w10-exec: without WEB_HOST_SSH in the allow-list the REAL access gate refuses web_host_ssh_unset (exit 3) before dialing, and publishes no store verdict"
+  else fail "M-b-w10-exec: the executed contract row stayed GREEN against the allow-list without WEB_HOST_SSH" "$_r"; fi; }
+_r="$(envrow_run verdict "$WF" verdict)"; IFS='|' read -r _rc _ref _calls _unset _last <<<"$_r"
+if [ "$_rc" = 5 ] && [ "$_ref" = "store_not_serving," ]; then pass "H-W10-verdict: a real store verdict from the host (the remote script's exit 41, wipe_mapper_read_failed) is the verb's exit 5 and W10 publishes refusal=store_not_serving"; else fail "H-W10-verdict" "$_r"; fi
+_r="$(envrow_run probefail "$WF" probefail)"; IFS='|' read -r _rc _ref _calls _unset _last <<<"$_r"
+if [ "$_rc" = 5 ] && [ -z "$_ref" ] && grep -qF 'verdict=probe_failed' "$T/exec/w10-probefail/stdout"; then pass "H-W10-probefail: an answer that does not match the fixed shape is the verb's exit 5 with verdict=probe_failed (an unanswered read) and W10 publishes NO store_not_serving refusal"; else fail "H-W10-probefail" "$_r"; fi
+mutate w10-probe-excl "$WF" && { _r="$(envrow_run m-probe "$MUT_FILE" probefail)"; IFS='|' read -r _rc _ref _calls _unset _last <<<"$_r"
+  if [ "$_ref" = "store_not_serving," ]; then pass "M-w10-probe-exec: without the probe_failed exclusion the unanswered read is published as store_not_serving (the executed row goes RED)"; else fail "M-w10-probe-exec: the executed probe_failed row stayed GREEN" "$_r"; fi; }
+_r="$(envrow_run accessfail "$WF" accessfail)"; IFS='|' read -r _rc _ref _calls _unset _last <<<"$_r"
+if [ "$_rc" = 3 ] && [ -z "$_ref" ]; then pass "H-W10-access: a web host that does not answer is the access gate's exit 3 and W10 publishes NO store_not_serving refusal (the store was not read)"; else fail "H-W10-access" "$_r"; fi
+
+echo "-- J. forbidden-phrase fixtures: every alternative of the widened regex fires; the retained lines do not --"
+FIRE=("the volume was erased" "the volume was wiped clean" "the store is secure" "securely deleted" "no copies remain" "no snapshots remain" "no backups remain" "retention closed" "retention ended" "retention_end=2026-11-12" "Art. 17 satisfied" "art 17 compliant" "the volume holds no personal data" "the volume is empty" "store empty" "irrecoverable" "irrecoverably gone" "unrecoverable" "permanently deleted")
+CLEAN=("the plaintext volume was deleted at the provider API" "It does not state that the volume was empty or held no personal data" "wipe_check wipe_finish wipe" "an insecure default" "permanent and recoverable are other words" "backup retention is not addressed" "$STANDING_TXT")
+_miss=""; for _f in "${FIRE[@]}"; do forbidden "$_f" || _miss+=" [$_f]"; done
+_over=""; for _f in "${CLEAN[@]}"; do forbidden "$_f" && _over+=" [$_f]"; done
+[ -z "$_miss" ] && [ "${#FIRE[@]}" -ge 19 ] && pass "G8-fixtures-fire: all ${#FIRE[@]} must-fire fixtures (one per alternative, secure and securely and irrecoverably included) are caught by the widened regex" || fail "G8-fixtures-fire: not caught:$_miss"
+[ -z "$_over" ] && [ "${#CLEAN[@]}" -ge 7 ] && pass "G8-fixtures-clean: all ${#CLEAN[@]} retained lines (the delete claim, the disclaimer, the standing sentence, ordinary words that merely contain a stem) are NOT flagged" || fail "G8-fixtures-clean: wrongly flagged:$_over"
+forbidden "${STANDING_TXT}, permanently" && pass "G8-standing-exact: the whitelist is the exact sentence only: the same sentence with an appended forbidden word is still flagged" || fail "G8-standing-exact: an extended sentence slipped through the whitelist"
 
 echo
 echo "=== verdict ==="
@@ -2267,16 +2875,16 @@ floor_bad=0
 chk_floor() { # <label> <live> <min>
   if ! [[ "$2" =~ ^[0-9]+$ ]] || [ "$2" -lt "$3" ]; then printf 'FAIL FLOOR: %s is %s, floor %s\n' "$1" "$2" "$3" >&2; floor_bad=1; fi
 }
-chk_floor "census rows executed" "$ROWS_N" 69
+chk_floor "census rows executed" "$ROWS_N" 84
 chk_floor "wipe steps checked" "$STEPS_LIVE" 21
 chk_floor "post-loader steps checked" "$POST_LIVE" 8
 chk_floor "adjacent chain pairs" "$PAIRS_LIVE" 11
 chk_floor "verdict words derived" "$WORDS_LIVE" 60
 chk_floor "notify words derived" "$NWORDS_LIVE" 10
 chk_floor "W1 and cutover cases executed" "$CASES_RUN" 52
-chk_floor "notify cases executed" "$NOTIFY_CASES_N" 54
-chk_floor "simulator runs" "$SIMS_RUN" 59
-MIN_ASSERTIONS=365
+chk_floor "notify cases executed" "$NOTIFY_CASES_N" 62
+chk_floor "simulator runs" "$SIMS_RUN" 104
+MIN_ASSERTIONS=551
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions passed, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$passes" "$MIN_ASSERTIONS" >&2
   exit 1

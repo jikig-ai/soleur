@@ -92,7 +92,8 @@
 # A host-key failure is its own verdict, host_key_mismatch, with a reason word (see
 # _access_reason, plan H4).
 #
-# CAPTURED VALUES (P8). gd_capture bounds every remote read (30 s, 4096 bytes), accepts a value
+# CAPTURED VALUES (P8). gd_capture bounds every remote read (30 s by default, 4096 bytes; a caller may
+# pass a script file for stdin and a longer bound of at most 999 s), accepts a value
 # only when it matches an anchored pattern in full, and never prints the value. A pinned host
 # key authenticates the host, not the answer's truth: a compromised web-1 or git-data can still
 # answer "mounted, empty", so the bounds stay.
@@ -191,7 +192,8 @@ trap cleanup EXIT
 #             and for pre: WIPE_ROW_DT (the boot_complete row's dt: epoch seconds or
 #             `YYYY-MM-DD HH:MM:SS`, UTC) and WIPE_LISTING=run|skip (skip = the wipe_check mode: no
 #             snapshot is taken, layout_signal=not_run). Verdicts are exit 5 with a fixed word.
-# The legacy arm still stands for DRY_RUN!=1/CONFIRM_WIPE!=0 (the wipe is a later PR);
+# The legacy arm still stands for DRY_RUN!=1/CONFIRM_WIPE!=0 (refused below: the wipe is the `wipe` job of
+# the workflow, which drives MODE=wipe_assert and the Hetzner helper, not this script's legacy env);
 # ROLLBACK=1 maps to MODE=rollback at the WORKFLOW level, not here.
 MODE="${MODE:-proof}"
 case "$MODE" in
@@ -215,7 +217,7 @@ refuse_legacy_modes() {
   [ -n "$bad" ] || return 0
   log "REFUSE verdict=real_cutover_unreconciled vars=${bad# }"
   echo "::error title=git-data-cutover::verdict=real_cutover_unreconciled"
-  log "remedy: MODE selects the verb (proof|freeze|unfreeze|probe); the wipe remains a later PR (#8211)."
+  log "remedy: MODE selects the verb (proof|freeze|unfreeze|probe|wipe_assert); the plaintext-volume wipe is the workflow's wipe job (#10138), not these env words."
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf -- '- REFUSE verdict=real_cutover_unreconciled\n' >> "$GITHUB_STEP_SUMMARY" || true
   fi
@@ -900,7 +902,8 @@ mode_probe() {
 # the wipe words are held to their own parity rows (git-data-wipe-assert.test.sh P1-P3).
 _wipe_refuse() { _store_refuse wipe-assert "$@"; }
 _wipe_emit() { _store_emit wipe-assert "$@"; }
-WIPE_RETENTION_END="2026-11-12"
+# ADR-239 outer date for the ledger exception and the CLO re-ruling; not a retention end.
+WIPE_OUTER_DATE="2026-11-12"
 mode_wipe_assert() {
   step "wipe_assert: host evidence for the plaintext-volume wipe (read-only toward the store and the volume)"
   local phase="${WIPE_PHASE:-}" typed="${WIPE_VOLUME_ID:-}" luks="${WIPE_LUKS_VOLUME_ID:-}" srv="${WIPE_SERVER_ID:-}"
@@ -989,11 +992,11 @@ mode_wipe_assert() {
   fi
   if [ "$phase" = pre ]; then
     local end_epoch now_epoch days
-    end_epoch="$(date -u -d "$WIPE_RETENTION_END" +%s 2>/dev/null)" || end_epoch=""
+    end_epoch="$(date -u -d "$WIPE_OUTER_DATE" +%s 2>/dev/null)" || end_epoch=""
     now_epoch="$(date -u +%s 2>/dev/null)" || now_epoch=""
     if [[ "$end_epoch" =~ ^[0-9]+$ && "$now_epoch" =~ ^[0-9]+$ ]]; then
       if [ "$end_epoch" -gt "$now_epoch" ]; then days=$(( (end_epoch - now_epoch) / 86400 )); else days=0; fi
-      log "WIPE_ASSERT reboot_since_row=no retention_end=${WIPE_RETENTION_END} days_left=${days}"
+      log "WIPE_ASSERT reboot_since_row=no outer_date=${WIPE_OUTER_DATE} days_to_outer_date=${days}"
     fi
   fi
 }

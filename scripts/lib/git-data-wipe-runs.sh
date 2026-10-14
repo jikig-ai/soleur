@@ -33,13 +33,15 @@
 #       rc 2 with `wipe_runs_bad_args` when the stamp is not a non-negative integer.
 #
 #   wipe_origin_run_ok <gh-run-view-json> <volume_id> [detach|delete]   the wipe_finish origin-run check (CTO A)
-#       The JSON is `gh run view <origin_run> --json displayTitle,headBranch,event,createdAt,jobs`. The run must be titled
-#       exactly `git-data wipe <volume_id>`, ran on main by workflow_dispatch, and the job named exactly `wipe` must
+#       The JSON is `gh run view <origin_run> --json displayTitle,headBranch,event,createdAt,workflowName,jobs`. The run
+#       must be titled exactly `git-data wipe <volume_id>`, belong to THIS workflow (`workflowName` equal to
+#       $WIPE_LEGACY_TITLE, which is the workflow's `name:`: a run-name is free text, any workflow on main can set one),
+#       ran on main by workflow_dispatch, and the job named exactly `wipe` must
 #       list EXACTLY ONE step named $WIPE_ORIGIN_DETACH_STEP (mode detach, the default) or $WIPE_ORIGIN_DELETE_STEP (mode
 #       delete: the absent-volume branch) with conclusion `success`. Later steps are NOT constrained (a detach that was
 #       accepted but unconfirmed, or a lost runner, is what this arm recovers from).
 #       prints `ok` (rc 0) or one refusal word (rc 5): wipe_origin_run_unreadable | wipe_origin_run_title_mismatch |
-#       wipe_origin_run_not_main | wipe_origin_run_not_dispatch | wipe_origin_run_gate_not_success.
+#       wipe_origin_run_workflow_mismatch | wipe_origin_run_not_main | wipe_origin_run_not_dispatch | wipe_origin_run_gate_not_success.
 #       rc 2 with `wipe_runs_bad_args` for a volume_id outside ^[0-9]{1,12}$ or an unknown mode word.
 #
 # NAMING CONTRACT WITH THE WORKFLOW. `gh run view --json jobs` exposes a step's `name`, not its `id`. The workflow's
@@ -114,8 +116,9 @@ wipe_last_rollback_epoch() {
 
 # shellcheck disable=SC2016  # a jq program
 _WIPE_RUNS_JQ_ORIGIN='
-  if (type != "object") or ((.displayTitle | type) != "string") or ((.jobs | type) != "array") then "wipe_origin_run_unreadable"
+  if (type != "object") or ((.displayTitle | type) != "string") or ((.workflowName | type) != "string") or ((.jobs | type) != "array") then "wipe_origin_run_unreadable"
   elif .displayTitle != ("git-data wipe " + $vid) then "wipe_origin_run_title_mismatch"
+  elif .workflowName != $wf then "wipe_origin_run_workflow_mismatch"
   elif .headBranch != "main" then "wipe_origin_run_not_main"
   elif .event != "workflow_dispatch" then "wipe_origin_run_not_dispatch"
   else
@@ -136,11 +139,11 @@ wipe_origin_run_ok() {
     delete) step="$WIPE_ORIGIN_DELETE_STEP" ;;
     *) printf 'wipe_runs_bad_args\n'; return 2 ;;
   esac
-  out="$(jq -r --arg vid "$vid" --arg job "$WIPE_ORIGIN_JOB" --arg step "$step" "$_WIPE_RUNS_JQ_ORIGIN" <<<"$body" 2>/dev/null)" || rc=$?
+  out="$(jq -r --arg vid "$vid" --arg wf "$WIPE_LEGACY_TITLE" --arg job "$WIPE_ORIGIN_JOB" --arg step "$step" "$_WIPE_RUNS_JQ_ORIGIN" <<<"$body" 2>/dev/null)" || rc=$?
   if [[ "$rc" -ne 0 ]]; then printf 'wipe_origin_run_unreadable\n'; return 5; fi
   case "$out" in
     ok) printf 'ok\n'; return 0 ;;
-    wipe_origin_run_unreadable|wipe_origin_run_title_mismatch|wipe_origin_run_not_main|wipe_origin_run_not_dispatch|wipe_origin_run_gate_not_success)
+    wipe_origin_run_unreadable|wipe_origin_run_title_mismatch|wipe_origin_run_workflow_mismatch|wipe_origin_run_not_main|wipe_origin_run_not_dispatch|wipe_origin_run_gate_not_success)
       printf '%s\n' "$out"; return 5 ;;
   esac
   printf 'wipe_origin_run_unreadable\n'

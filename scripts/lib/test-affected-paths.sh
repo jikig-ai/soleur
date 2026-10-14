@@ -298,11 +298,6 @@ ALWAYS_ON_SUITES=(
   # the runner's own wiring (default arm, epilogue emit), a runner-SUT property
   # suite like its sibling above.
   "scripts/test-all-weight-drift"
-  # #10138: the git-data wipe wedge test censuses EVERY tracked workflow (git ls-files .github/workflows) for the
-  # ones that run `terraform plan|apply` in the web-platform root, so a workflow added or edited anywhere can open the
-  # wedge. Its edge array below also declares the workflow directory; both are listed so the suite selects on any
-  # workflow diff and on a registration-only runner diff alike.
-  "tests/scripts/git-data-wipe-wedge"
   # --- #9763 withdrawn-to-edge-selection (committed weight >10s): these run on CI legs,
   # merge_group, push and --full like every registered suite, and locally only when their
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The

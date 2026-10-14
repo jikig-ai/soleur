@@ -148,6 +148,15 @@ wa_main() {
     [[ "${f[6]}" =~ ^[0-9]+$ && "${f[13]}" =~ ^[0-9]+$ ]] || return 1
     printf '%s %s' "${f[6]}" "${f[13]}"
   }
+  # awk_hit <input> <awk args...> — a membership gate over a read. awk exits 0 on a hit and 1 on none (the
+  # programs below end `exit !f`); any other status means the INSTRUMENT failed, never "no hit": a missing or
+  # crashing awk must not read as "not mounted / no snapshot / journal replayed" (rc 16, never a verdict).
+  awk_hit() {
+    local in="$1" arc=0
+    shift
+    printf '%s\n' "$in" | awk "$@" || arc=$?
+    case "$arc" in 0) return 0 ;; 1) return 1 ;; *) die 16 awk_failed ;; esac
+  }
   # wl_same — the by-id link still names the device pinned at resolution (a path is not an identity).
   wl_same() {
     local mm
@@ -159,7 +168,7 @@ wa_main() {
   # --- inputs ------------------------------------------------------------------------------------------
   local PHASE="${WIPE_PHASE-}" TYPED="${WIPE_TYPED_ID-}" LUKSID="${WIPE_LUKS_ID-}" SERVERID="${WIPE_SERVER_ID-}"
   local OLD_ROOT="${WIPE_OLD_ROOT-}" MAPPER="${WIPE_LUKS_MAPPER-}" MARKER="${WIPE_STORE_VERIFIED-}"
-  local ROW_DT="${WIPE_ROW_DT-}" LISTING="${WIPE_LISTING-}"
+  local ROW_DT="${WIPE_ROW_DT-}" LISTING="${WIPE_LISTING-}" w_late
   [[ "$PHASE" =~ ^(pre|finish|post_detach)$ ]] || die 16 arg_phase
   [[ "$TYPED" =~ ^[0-9]{1,12}$ && "$LUKSID" =~ ^[0-9]{1,12}$ && "$SERVERID" =~ ^[0-9]{1,12}$ ]] || die 16 arg_ids
   [ "$TYPED" != "$LUKSID" ] || die 16 arg_ids_equal
@@ -218,7 +227,7 @@ wa_main() {
   h6_to_h7() {
     local mi hits hold names rc try
     mi="$(cat -- /proc/self/mountinfo)" || die 16 mountinfo
-    if printf '%s\n' "$mi" | awk -v d="$(devno_dec "$MM")" '$3 == d { f = 1 } END { exit !f }'; then die 24 in_mountinfo; fi
+    if awk_hit "$mi" -v d="$(devno_dec "$MM")" '$3 == d { f = 1 } END { exit !f }'; then die 24 in_mountinfo; fi
     rc=0
     hits="$(findmnt -n -S "$DEV")" || rc=$?
     { [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; } || die 16 findmnt_source_lookup
@@ -226,7 +235,7 @@ wa_main() {
     hold="$(ls -A -- "$SYS/holders")" || die 25 holders_unreadable
     [ -z "$hold" ] || die 25 holders
     names="$(dmsetup ls)" || die 16 dmsetup_ls
-    if printf '%s\n' "$names" | awk -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then die 26 snapshot_present; fi
+    if awk_hit "$names" -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then die 26 snapshot_present; fi
     # One find over /proc (a fork per descriptor would not finish on a busy host). A vanished process
     # makes find exit non-zero, so a second look decides, and a doubt refuses.
     for try in 1 2; do
@@ -262,9 +271,9 @@ wa_main() {
     [[ "$upi" =~ ^[0-9]+$ ]] || die 16 uptime_unparseable
     now="$(date +%s)" || die 16 date_failed
     [[ "$now" =~ ^[0-9]+$ ]] || die 16 date_unparseable
-    boot=$((now - upi))
+    boot=$((10#$now - 10#$upi))
     [ "$boot" -le "$ROW_DT" ] || die 32 host_booted_after_row
-    delta=$((ROW_DT - boot))
+    delta=$((10#$ROW_DT - boot))
     [ "$delta" -le "$WA_ROW_WINDOW_S" ] || die 32 row_outside_window "boot_to_row_s=$delta"
     BOOT_TO_ROW="$delta"
   }
@@ -273,7 +282,7 @@ wa_main() {
   # Inputs: DEV MM SYS BYID W0 (set by the identity stages). Outputs: J (dirty|clean), TOP_D TOP_F TOP_L
   # TOP_O REPOS. The loopback suite extracts this unit (and the core above) by their sentinels and drives
   # them on real loop devices.
-  wl_has_nr() { printf '%s\n' "$1" | awk '/^Filesystem features:/ && / needs_recovery( |$)/ { f = 1 } END { exit !f }'; }
+  wl_has_nr() { awk_hit "$1" '/^Filesystem features:/ && / needs_recovery( |$)/ { f = 1 } END { exit !f }'; }
   wl_valid() {
     local st
     st="$(dmsetup status "$WA_SNAP")" || die 33 snapshot_status_unreadable
@@ -305,7 +314,7 @@ wa_main() {
     [ "$saw_end" = 1 ] || die 33 listing_failed
   }
   wipe_listing() {
-    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn names_after hold_after
+    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn names_after hold_after w_after ro_after
     wl_same
     sb="$(timeout 20 dumpe2fs -h "$DEV")" || die 33 dumpe2fs_failed
     if wl_has_nr "$sb"; then J=dirty; else J=clean; fi
@@ -341,7 +350,7 @@ wa_main() {
     [ "$got" = "$want" ] || die 33 mount_source_not_snapshot
     ssb="$(timeout 20 dumpe2fs -h "/dev/mapper/$WA_SNAP")" || die 33 snapshot_superblock_unreadable
     if wl_has_nr "$ssb"; then die 33 journal_not_replayed; fi
-    if printf '%s\n' "$ssb" | awk '/^Filesystem state:/ && /with errors/ { f = 1 } END { exit !f }'; then die 33 snapshot_with_errors; fi
+    if awk_hit "$ssb" '/^Filesystem state:/ && /with errors/ { f = 1 } END { exit !f }'; then die 33 snapshot_with_errors; fi
     dm="$(dmsetup info -c --noheadings -o blkdevname "$WA_SNAP")" || die 33 blkdevname_unreadable
     e0="$(wl_errs "$dm")" || die 33 errors_count_unreadable
     [ "$e0" = "$eh" ] || die 33 errors_count_changed_by_replay
@@ -362,11 +371,13 @@ wa_main() {
     # Teardown BEFORE any verdict is spoken, then the origin must be as untouched as before.
     wa_release || die 36 teardown_failed
     names_after="$(dmsetup ls)" || die 36 snapshot_ls_failed
-    if printf '%s\n' "$names_after" | awk -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then die 36 snapshot_remains; fi
-    [ "$(wstat)" = "$W0" ] || die 29 origin_written_during_listing
+    if awk_hit "$names_after" -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then die 36 snapshot_remains; fi
+    w_after="$(wstat)" || die 16 stat_unreadable_after
+    [ "$w_after" = "$W0" ] || die 29 origin_written_during_listing
     hold_after="$(ls -A -- "$SYS/holders")" || die 25 holders_unreadable_after
     [ -z "$hold_after" ] || die 25 holders_after
-    [ "$(blockdev --getro "$DEV")" = 1 ] || die 30 ro_flag_lost_after
+    ro_after="$(blockdev --getro "$DEV")" || die 16 getro_failed_after
+    [ "$ro_after" = 1 ] || die 30 ro_flag_lost_after
     # Verdicts: off-list beats not-empty (the counts on stderr are digits only).
     if [ "$OFFLIST" = 1 ]; then
       say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D top_f=$TOP_F top_l=$TOP_L top_o=$TOP_O repos=$REPOS"
@@ -416,7 +427,8 @@ wa_main() {
   budget
   # Re-pin the identity and the counters once more at the end: nothing changed under the read.
   wl_same
-  [ "$(wstat)" = "$W0" ] || die 29 sectors_written_late
+  w_late="$(wstat)" || die 16 stat_unreadable_late
+  [ "$w_late" = "$W0" ] || die 29 sectors_written_late
   store_facts
   line_pre
   return 0

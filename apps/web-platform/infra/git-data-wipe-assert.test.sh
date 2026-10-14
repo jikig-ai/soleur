@@ -120,6 +120,8 @@ case "$n" in
         c=0; [ -f "$ST/stat_calls" ] && c="$(cat "$ST/stat_calls")"
         printf '%s' "$((c + 1))" > "$ST/stat_calls"
         if flag stat_alt && [ "$c" -ge 1 ]; then exec cat "$W/stat_alt"; fi
+        # stat_fail_from <n>: the n-th and every later sysfs stat read fails (an instrument fault, not a value)
+        if flag stat_fail_from && [ "$c" -ge "$(cat "$W/stat_fail_from")" ]; then exit 1; fi
         exec cat "$W/files$last" ;;
       /sys/*|/proc/*|/var/lib/cloud/*)
         [ -f "$W/files$last" ] || exit 1
@@ -131,6 +133,12 @@ case "$n" in
     exec date "$@" ;;
   sleep) exit 0 ;;
   udevadm) exit 0 ;;
+  awk)
+    # awk_fail_at <n>: the n-th awk call the host script makes exits 2 (a crashed or missing instrument)
+    a=0; [ -f "$ST/awk_calls" ] && a="$(cat "$ST/awk_calls")"
+    a=$((a + 1)); printf '%s' "$a" > "$ST/awk_calls"
+    if flag awk_fail_at && [ "$a" = "$(cat "$W/awk_fail_at")" ]; then exit 2; fi
+    exec awk "$@" ;;
   stat)
     case "$last" in
       /dev/*)
@@ -201,7 +209,12 @@ case "$n" in
     exit 9 ;;
   blockdev)
     case "${1-}" in
-      --getro) cat "$W/ro"; exit 0 ;;
+      --getro)
+        g=0; [ -f "$ST/getro_calls" ] && g="$(cat "$ST/getro_calls")"
+        printf '%s' "$((g + 1))" > "$ST/getro_calls"
+        # getro_fail_from <n>: the n-th and every later getro read fails
+        if flag getro_fail_from && [ "$g" -ge "$(cat "$W/getro_fail_from")" ]; then exit 1; fi
+        cat "$W/ro"; exit 0 ;;
       --getsz) echo 2097152; exit 0 ;;
     esac
     exit 9 ;;
@@ -269,7 +282,7 @@ echo "shim: no arm for $n" >&2
 exit 99
 SHIM
 chmod +x "$SH/_shim" || instrument "chmod shim failed"
-for _n in cat date sleep udevadm stat realpath findmnt cryptsetup blockdev ls find dd dumpe2fs losetup dmsetup mount umount; do
+for _n in awk cat date sleep udevadm stat realpath findmnt cryptsetup blockdev ls find dd dumpe2fs losetup dmsetup mount umount; do
   ln -s _shim "$SH/$_n" || instrument "ln shim $_n failed"
 done
 
@@ -656,6 +669,31 @@ printf '0 0 0 0 0 0 0\n' > "$W/files/sys/dev/block/8:16/stat"
 run_script pre
 expect_refuse "A84 a sysfs stat without discard fields is unreadable, never zero" 16 stat_unreadable
 
+# A failed READ is an instrument failure (rc 16), never a host verdict: the three late reads used to compare an
+# empty string and report wipe_device_written / wipe_ro_flag_lost.
+world a-stat-late-fail
+printf '2' > "$W/stat_fail_from"
+run_script pre WIPE_LISTING=skip
+expect_refuse "A85 the final sysfs stat read fails: an instrument failure, not sectors_written_late" 16 stat_unreadable_late
+world a-stat-after-fail
+printf '2' > "$W/stat_fail_from"
+run_script pre
+expect_refuse "A86 the sysfs stat read after the listing teardown fails: an instrument failure, not origin_written_during_listing" 16 stat_unreadable_after
+world a-getro-after-fail
+printf '1' > "$W/getro_fail_from"
+run_script pre
+expect_refuse "A87 the read-only flag read after the listing fails: an instrument failure, not ro_flag_lost_after" 16 getro_failed_after
+# the awk membership gates: a crashed awk is not "no hit" (the 1st awk call is the mountinfo gate, the 2nd the
+# snapshot-name gate; with the listing run the 3rd reads the origin superblock, the 4th the snapshot's
+# features, the 5th its state, and the 6th the post-teardown name list)
+for _g in 1:in_mountinfo:pre-skip 2:snapshot_present:pre-skip 3:origin_superblock:pre 4:snapshot_features:pre 5:snapshot_state:pre 6:snapshot_remains:pre; do
+  _n="${_g%%:*}"; _rest="${_g#*:}"; _w="${_rest%%:*}"; _m="${_rest#*:}"
+  world "a-awk-$_n"
+  printf '%s' "$_n" > "$W/awk_fail_at"
+  if [ "$_m" = pre-skip ]; then run_script pre WIPE_LISTING=skip; else run_script pre; fi
+  expect_refuse "A88.$_n the awk gate ($_w) crashes: an instrument failure (rc 16 awk_failed), not a clean pass" 16 awk_failed
+done
+
 # ── H9/H10: the instance and the boot generation ─────────────────────────────────────────────────
 world a-instance
 printf '999999999\n' > "$W/files/var/lib/cloud/data/instance-id"
@@ -795,6 +833,7 @@ set_notblock() { printf '/dev/sdb file 8:10\n/dev/sdc block 8:20\n' > "$W/nodes"
 caught_rc()   { # <rc> — true when the run is refused with that rc and prints nothing on stdout
   [ "$RC" = "$1" ] && [ ! -s "$W/out" ]
 }
+caught_16() { caught_rc 16; }
 caught_34() { caught_rc 34; }
 caught_29() { caught_rc 29; }
 caught_23() { caught_rc 23; }
@@ -838,6 +877,14 @@ mutant_row m11-teardown-swallowed '    wa_release || die 36 teardown_failed' '  
   '      wa_release || { say "wipe-assert: rc=36 reason=teardown_failed"; exit 36; }' '      wa_release || true'
 # M12: a non-block node is accepted
 mutant_row m12-block-unchecked '    [ "$t" = "block special file" ] || die 21 not_block' '    :' set_notblock pre caught_21
+# M13-M15: a failed read compared as an empty string (the three late reads)
+set_stat_late()  { printf '2' > "$W/stat_fail_from"; }
+set_getro_after() { printf '1' > "$W/getro_fail_from"; }
+set_awk_gate1()  { printf '1' > "$W/awk_fail_at"; }
+mutant_row m13-late-stat-read-unchecked '  w_late="$(wstat)" || die 16 stat_unreadable_late' '  w_late="$(wstat)"' set_stat_late pre-skip caught_16
+mutant_row m14-after-stat-read-unchecked '    w_after="$(wstat)" || die 16 stat_unreadable_after' '    w_after="$(wstat)"' set_stat_late pre caught_16
+mutant_row m15-getro-after-unchecked '    ro_after="$(blockdev --getro "$DEV")" || die 16 getro_failed_after' '    ro_after="$(blockdev --getro "$DEV")"' set_getro_after pre caught_16
+mutant_row m16-awk-gate-fails-open '    case "$arc" in 0) return 0 ;; 1) return 1 ;; *) die 16 awk_failed ;; esac' '    case "$arc" in 0) return 0 ;; *) return 1 ;; esac' set_awk_gate1 pre-skip caught_16
 echo "    ($MUT_ROWS mutation rows run)"
 
 # Harness rows (the mutation machinery itself is not neutered)
@@ -1276,12 +1323,12 @@ fi
 # FLOOR — self-contained: bash builtins and this suite's own counters, reported by printf + exit and
 # never through ok()/no() (ADR-193). Each bound is a literal on the line directly above its `if`.
 # ══════════════════════════════════════════════════════════════════════════════════════════
-EXPECTED_INVARIANT_RUNS=70
+EXPECTED_INVARIANT_RUNS=79
 if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=365
+MIN_ASSERTIONS=405
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1

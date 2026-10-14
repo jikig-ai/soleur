@@ -216,18 +216,18 @@ git_data_boot_fields_read() { _git_data_bs_read git_data_boot_fields_read git_da
 #                                                      the row has no epoch, or <created_epoch> is not an integer
 # Only the FIRST (newest) row decides. No value from the row is ever printed except the sanitised journal word.
 git_data_boot_fields_verdict() {
-  local rc="${1-}" rows="${2-}" created="${3-}" line first="" fresh frc=0 f want val journal
+  local rc="${1-}" rows="${2-}" created="${3-}" line first="" fresh f want val journal
   [[ "$rc" =~ ^[0-9]+$ && "$rc" -eq 0 ]] || { echo wipe_boot_unreadable; return 2; }
   [[ "$created" =~ ^[0-9]+$ ]] || { echo wipe_boot_unreadable; return 2; }
   # Shape, not content: every non-blank line must open a row object; a ClickHouse mid-stream exception is a bare line.
   while IFS= read -r line; do
     [[ -z "${line//[[:space:]]/}" ]] && continue
-    [[ "$line" == '{"epoch":'* || "$line" == '{'* ]] || { echo wipe_boot_unreadable; return 2; }
+    [[ "$line" == '{'* ]] || { echo wipe_boot_unreadable; return 2; }
     [[ -n "$first" ]] || first="$line"
   done <<<"$rows"
   [[ -n "$first" ]] || { echo wipe_boot_absent; return 1; }
   jq -e 'type == "object"' <<<"$first" >/dev/null 2>&1 || { echo wipe_boot_unreadable; return 2; }
-  fresh="$(git_data_boot_complete_freshness "$first" "$created")" || frc=$?
+  fresh="$(git_data_boot_complete_freshness "$first" "$created")" || :   # a non-fresh word, or none, lands in the case below
   case "$fresh" in
     fresh) : ;;
     stale_boot_complete) echo wipe_boot_predates_server; return 1 ;;

@@ -26,9 +26,12 @@
 #                                       labelled and located like the LUKS volume
 #   actions --volume-id N [--since EPOCH]
 #                                       [ro]  GET /volumes/<id>/actions: without --since it reports the
-#                                       count and the latest command word; with --since it requires the
+#                                       count and the latest command word (then refuses
+#                                       wipe_detach_in_flight when the newest attach/detach is running); with --since it requires the
 #                                       newest attach/detach action to be detach_volume success started
-#                                       at or after EPOCH, and nothing running
+#                                       at or after EPOCH, NO attach_volume action started at or after
+#                                       EPOCH anywhere in the list (detach, attach, detach is refused),
+#                                       and nothing running
 #   detach --volume-id N                [rw]  record_check w7, ONE POST detach (201), poll the SAME
 #                                       action every 2 s at most 30 times, never re-POST, then confirm
 #                                       the volume has no server
@@ -45,7 +48,9 @@
 #
 # $GITHUB_OUTPUT keys: verdict (refusals), refusal (volume_already_detached only), volume_state
 # (attached|detached|absent), luks_state, phase (detached | delete_sent | deleted, written the moment
-# the call is confirmed), actions_count, actions_latest, detach_action, record_age_s.
+# the call is confirmed: `detached` only by the detach verb after its confirm read, never by
+# `identity`, whose subject is an input of the run and not an event of it), actions_count,
+# actions_latest, detach_evidence (ok: the --since proof held), detach_action, record_age_s.
 #
 # SHAPES PINNED FROM A LIVE READ-ONLY CALL (2026-10-14, HCLOUD_TOKEN_READONLY): GET /servers?name= and
 # GET /volumes?name= answer 200 with .servers[] / .volumes[] (id number, name, server number|null,
@@ -71,14 +76,28 @@ readonly WIPE_LUKS_NAME='soleur-git-data-luks-store'
 readonly WIPE_LABEL_APP='soleur-web-platform'
 # Pinned, assigned unconditionally: no environment value, input or argument can move them (the soak
 # floor's rule). The W7 bound is sized from the loader measurement of plan Phase 0.4 (twice the
-# largest observed W7b + loader + gaps, floor 120 s); 240 is the working value until that is read.
-readonly WIPE_W7_BOUND_SECONDS=240
+# largest observed W7b + loader + gaps, floor 120 s). MEASURED 2026-10-14 over 83 samples of recent
+# apply/drift runs: the Tier-B loader step took 0 s x3, 1 s x73, 2 s x7; so the formula lands on its
+# floor and the bound is that floor, 120 s.
+readonly WIPE_W7_BOUND_SECONDS=120
 readonly WIPE_W10B_BOUND_SECONDS=60
 readonly WIPE_W4_OUTER_BOUND_SECONDS=900
 readonly WIPE_POLL_INTERVAL_SECONDS=2
 readonly WIPE_POLL_MAX_ATTEMPTS=30
 readonly WIPE_CURL_MAX_TIME=20
 readonly WIPE_CURL_MAX_FILESIZE=1048576
+
+# `phases` is a static vocabulary: no workspace, no library, no token, no network. It is dispatched here,
+# before the library source, so a sandbox with nothing but PATH (preflight's probe) can run it.
+do_phases() {
+  if [[ $# -gt 0 ]]; then printf '[git-data-wipe] verdict=wipe_usage reason=option_not_allowed\n' >&2; exit 2; fi
+  printf '%s\n' detach_attempted detached delete_attempted delete_sent deleted
+}
+if [[ "${1-}" == phases ]]; then shift; do_phases "$@"; exit 0; fi
+
+# The sibling scripts pin the locale: a UTF-8 locale would widen the [A-Za-z] classes that guard the
+# $GITHUB_OUTPUT and verdict-record writes below.
+export LC_ALL=C
 
 if
   source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"
@@ -139,7 +158,7 @@ now_epoch() {
   local t
   t="$(date +%s)" || refuse wipe_clock_unreadable
   [[ "$t" =~ ^[0-9]{9,11}$ ]] || refuse wipe_clock_unreadable
-  NOW="$t"
+  NOW=$((10#$t))
 }
 
 # --- credentials: one stdin line, by NAME, no fall-back -------------------------------------------
@@ -274,8 +293,9 @@ record_verify() { # <w7|w10b> [<typed volume id, normalised>]
   esac
   [[ -n "$e" ]] || refuse wipe_assertion_stale reason=unstamped
   now_epoch
-  if (( e > NOW + 5 )); then refuse wipe_assertion_stale reason=future; fi
-  age=$(( NOW - e ))
+  # e passed the ^[0-9]{9,11}$ shape check in rec_load; 10# keeps a leading zero from reading as octal.
+  if (( 10#$e > NOW + 5 )); then refuse wipe_assertion_stale reason=future; fi
+  age=$(( NOW - 10#$e ))
   (( age >= 0 )) || age=0
   (( age <= bound )) || refuse wipe_assertion_stale "reason=expired age_s=$age bound_s=$bound"
   REC_AGE="$age"
@@ -323,11 +343,6 @@ read_protection() { # of the single volume in the body: sets V_PROT (true|false)
 V_PROT=""
 
 # --- verbs ----------------------------------------------------------------------------------------------
-do_phases() {
-  only_opts ""
-  printf '%s\n' detach_attempted detached delete_attempted delete_sent deleted
-}
-
 classify_server() { # <volume server field> -> attached|detached|other_host (relative to SRV_ID)
   if [[ "$1" == null ]]; then CLS=detached
   elif [[ "$1" == "$SRV_ID" ]]; then CLS=attached
@@ -435,7 +450,6 @@ do_identity() {
   esac
   gho volume_state "$CLS"
   gho luks_state attached
-  if [[ "$EXPECT" == detached && "$RECORD_MODE" == write ]]; then gho phase detached; fi
   local ids=""
   if (( SHOW_IDS )); then ids=" server_id=$SRV_ID plaintext_id=$ptid luks_id=$luks_id"; fi
   out "identity ok expect=$EXPECT volume_state=$CLS luks_state=attached servers=1 plaintext_volumes=1 luks_volumes=1 protection_delete=false label=ok location=ok record=${RECORD_MODE:-none}${ids}"
@@ -460,6 +474,10 @@ do_actions() {
   gho actions_latest "$latest"
   if [[ "$GIVEN" != *" since "* ]]; then
     out "actions ok count=$count latest=$latest"
+    # An accepted detach that is still running leaves the volume listing its server: the evidence line above is
+    # printed first (wipe_check keeps it), then the call refuses, with or without --since.
+    jget '.actions | sort_by(-.id) | ([ .[] | select(.command=="attach_volume" or .command=="detach_volume") ] | first) | if . != null and .status=="running" then "yes" else "no" end' || refuse wipe_actions_unreadable reason=shape
+    [[ "$JV" == yes ]] && refuse wipe_detach_in_flight
     return 0
   fi
   jget '.actions | sort_by(-.id) as $a
@@ -467,6 +485,7 @@ do_actions() {
       else ([ $a[] | select(.command=="attach_volume" or .command=="detach_volume") ] | first) as $n
         | if $n == null then "no_detach"
           elif $n.command == "attach_volume" then "attach_after"
+          elif any($a[]; .command=="attach_volume" and ((.started|type) != "string" or (.started|fromdateiso8601) >= $since)) then "attach_after"
           elif $n.status != "success" then "status_not_success"
           elif ($n.started|type) != "string" then error("shape")
           elif ($n.started|fromdateiso8601) < $since then "started_before_origin"
@@ -584,7 +603,7 @@ do_stamp() {
   [[ "$EPOCH_NAME" == w7 ]] || usage_fail epoch_name
   rec_load
   now_epoch
-  if (( NOW - R_w4_epoch > WIPE_W4_OUTER_BOUND_SECONDS )); then refuse wipe_assertion_stale reason=w4_expired; fi
+  if (( NOW - 10#$R_w4_epoch > WIPE_W4_OUTER_BOUND_SECONDS )); then refuse wipe_assertion_stale reason=w4_expired; fi
   R_w7_epoch="$NOW"
   R_w10b_epoch=""
   rec_save
@@ -595,7 +614,6 @@ VERB="${1-}"
 if [[ $# -gt 0 ]]; then shift; fi
 parse_args "$@"
 case "$VERB" in
-  phases)       do_phases ;;
   state)        do_state ;;
   identity)     do_identity ;;
   actions)      do_actions ;;

@@ -619,9 +619,21 @@ sites = [("step", s.get("id") or s.get("name")) for s in steps if "DOPPLER_TOKEN
 job = (wf.get("jobs") or {}).get("cutover") or {}
 sites += [("job", k) for k, v in job.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
 sites += [("top", k) for k, v in wf.items() if k != "jobs" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
-sites += [("job", j) for j, b in (wf.get("jobs") or {}).items() if j != "cutover" and "DOPPLER_TOKEN_PRD" in json.dumps(b, default=str)]
-check("G1-census: DOPPLER_TOKEN_PRD is named only by the flag precheck step (%d steps scanned)" % len(steps),
-      len(steps) >= 1 and sites == [("step", "flag_precheck")], sites)
+# The wipe job (#10138) legitimately reads the prd flag in exactly two steps (the W3 precheck and the W7b
+# re-read); every OTHER job, and every other wipe-job site, is still a violation.
+wipe = (wf.get("jobs") or {}).get("wipe") or {}
+wsteps = wipe.get("steps") or []
+wsites = [("step", s.get("id") or s.get("name")) for s in wsteps if "DOPPLER_TOKEN_PRD" in json.dumps(s)]
+wsites += [("job", k) for k, v in wipe.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
+sites += [("job", j) for j, b in (wf.get("jobs") or {}).items() if j not in ("cutover", "wipe") and "DOPPLER_TOKEN_PRD" in json.dumps(b, default=str)]
+# The exact shape of each allowed site: the secret is named ONCE, as env.DOPPLER_TOKEN of the step, nowhere in its run text.
+def prd_once_as_env(s):
+    return (json.dumps(s).count("DOPPLER_TOKEN_PRD") == 1 and (s.get("env") or {}).get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN_PRD }}")
+allowed = [s for s in steps if s.get("id") == "flag_precheck"] + [s for s in wsteps if s.get("id") in ("wipe_flag_precheck", "wipe_flag_reread")]
+check("G1-census: DOPPLER_TOKEN_PRD is named only by cutover.flag_precheck, wipe.wipe_flag_precheck and wipe.wipe_flag_reread, once each, as the step's env DOPPLER_TOKEN (%d + %d steps scanned)" % (len(steps), len(wsteps)),
+      len(steps) >= 1 and len(wsteps) >= 1 and sites == [("step", "flag_precheck")]
+      and wsites == [("step", "wipe_flag_precheck"), ("step", "wipe_flag_reread")]
+      and len(allowed) == 3 and all(prd_once_as_env(s) for s in allowed), (sites, wsites))
 # #9725: the flip must also require the SERVED image to carry the dual-root
 # tenant deny — the GIT_DATA_DENY_FLOOR arm (env bound, refusal emitted).
 fp = [s for s in steps if s.get("id") == "flip_preconditions"]
@@ -714,6 +726,18 @@ fi
 if mutate prd-in-script-step "$WF" 1 's#^          MODE: proof$#&\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}#'; then
   python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census.tsv" 2>&1
   mutant_red prd-in-script-step wf_row "$T/mut/wf-census.tsv" "G1-census:"
+fi
+# Row 3b — the wipe job's root-key fetch step is re-pointed at the prd flag token: a third wipe site.
+# shellcheck disable=SC2016
+if mutate prd-in-wipe-key-fetch "$WF" 2 '/id: wipe_key_fetch/,/^        run:/ s#DOPPLER_TOKEN_GIT_DATA_ROOT#DOPPLER_TOKEN_PRD#'; then
+  python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census-wipe.tsv" 2>&1
+  mutant_red prd-in-wipe-key-fetch wf_row "$T/mut/wf-census-wipe.tsv" "G1-census:"
+fi
+# Row 3c — a fourth job (not cutover, not wipe) binds the prd flag token: the per-job allow-list is closed.
+# shellcheck disable=SC2016
+if mutate prd-in-notify-job "$WF" 2 '/^  notify-failure:/,/^    steps:/ s#^    steps:$#    env:\n      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}\n    steps:#'; then
+  python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census-job.tsv" 2>&1
+  mutant_red prd-in-notify-job wf_row "$T/mut/wf-census-job.tsv" "G1-census:"
 fi
 # Row 4 — compare `true` case-insensitively.
 # shellcheck disable=SC2016
@@ -857,12 +881,12 @@ if case_deny collapsed-flip "$T/deny-collapsed" flip   && [ "$RC" = 5 ] && grep 
 else fail "D7: flag-collapsed helper shape was not detected as absent" "$(detail)"; fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=26  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7)
+MUTANT_FLOOR=28  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 + wipe rows 26 + wipe mutants 7 x 2 + 1 must-refuse row = 142 (exact).
-FLOOR=142
+# Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 + census mutants 2 x 2 + wipe rows 26 + wipe mutants 7 x 2 + 1 must-refuse row = 146 (exact).
+FLOOR=146
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

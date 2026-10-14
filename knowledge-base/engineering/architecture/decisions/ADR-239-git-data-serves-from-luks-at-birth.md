@@ -522,3 +522,12 @@ rehearsal and an evidence-only PR land, and the rotate's own interlock refuses u
 amendment does not change the status line, the retention date or any legal wording, and makes no
 claim about key escrow. The recovery order and the half-rotated host are in the runbook entry of
 the same date.
+
+## Amendment 2026-10-14 — pointer: the empty-id rehearsal moved to PR-R, and the wipe mechanism PR is not hash-bound (#10138)
+
+Appended; nothing above is edited. The Consequences bullet "The wipe branch needs a rehearsal of its own" and the 2026-10-12 amendment's blocker chain ("a hash-bound wipe PR with its own rung-2 rehearsal, then the wipe itself") describe a sequence that the built work does not follow, by a CTO ruling of 2026-10-14 (`knowledge-base/project/specs/feat-one-shot-10138-git-data-wipe-body/decision-challenges.md`, row "PR-W scope").
+
+- **The wipe mechanism PR (#10294) is not hash-bound.** It adds a workflow job, a runner-side Hetzner helper and a host verb that the runner sends over stdin (`git-data-cutover.sh` `MODE=wipe_assert`, `git-data-wipe-assert.sh`). None of them is part of the rendered `user_data` or of a `file()`-bound payload, so the rung-2 template hash does not move and this PR carries no rehearsal.
+- **The empty-id rung-2 rehearsal moved to PR-R (#10296).** The render branch selected by an empty `git_data_volume_id` is first rendered by the record PR (PR-C) that removes `hcloud_volume.git_data`, so the rehearsal binds PR-C only. PR-R must merge before PR-C, not before the wipe, and should be on `main` before the wipe is dispatched because it needs a paid host. The requirement that the branch be rehearsed before it can reach the live host is unchanged; where it lives is what moved.
+- **What the owner records before the dispatch.** The runbook ("The wipe", "Before naming `mode=wipe`") has #6897 carry the link to a READY PR-C, the main-dispatched empty-id rehearsal evidence (PR-R) or a recorded owner acceptance of a longer wedge, and the dispatch-to-merge bound. The alternative to the evidence is the CTO's wording of that ruling, not an addition of this note, and no workflow checks any of the three.
+- **Unchanged.** The 2026-11-12 outer date, the CLO re-ruling due 2026-10-24, and the rule that moving the ledger `expires_on` past 2026-11-12 needs a CLO re-ruling linked on #6897.

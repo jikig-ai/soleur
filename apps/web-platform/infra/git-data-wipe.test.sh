@@ -301,8 +301,8 @@ use_first="$(grep -nE '(^|[^_A-Za-z])bc_(curl|ok_var|refuse)[ "$]' "$HELPER_PRIS
 [ -n "$src_first" ] && [ -n "$use_first" ] && [ "$src_first" -lt "$use_first" ] && pass "A6 the library is sourced on a line of its own that opens with 'source' (the S4 population form) before its first use" || fail "A6 source line ($src_first) not before first library use ($use_first)"
 grep -qE '^set -[a-z]*e|^set -e|set -o errexit' "$HELPER_PRISTINE" && fail "A7 the helper sets errexit (every status is handled explicitly)" || pass "A7 no errexit (statuses are handled explicitly; a silent abort cannot read as a verdict)"
 grep -qiE 'erased|wiped|secure|no cop|snapshot|erasure|art\. ?17' "$HELPER_PRISTINE" && fail "A8 the script text carries a word the CLO ruling forbids" || pass "A8 no forbidden over-claiming word in the helper text (erased/wiped/secure/no copies/snapshot/erasure)"
-[ "$(grep -cE '^(readonly WIPE_W7_BOUND_SECONDS=240|readonly WIPE_W10B_BOUND_SECONDS=60|readonly WIPE_POLL_INTERVAL_SECONDS=2|readonly WIPE_POLL_MAX_ATTEMPTS=30|readonly WIPE_W4_OUTER_BOUND_SECONDS=900)$' "$HELPER_PRISTINE" || true)" = 5 ] \
-  && pass "A9 the time and poll constants are pinned literals, assigned unconditionally (W7 240 s, W10b 60 s, poll 2 s x 30, W4 outer 900 s)" || fail "A9 a pinned constant moved"
+[ "$(grep -cE '^(readonly WIPE_W7_BOUND_SECONDS=120|readonly WIPE_W10B_BOUND_SECONDS=60|readonly WIPE_POLL_INTERVAL_SECONDS=2|readonly WIPE_POLL_MAX_ATTEMPTS=30|readonly WIPE_W4_OUTER_BOUND_SECONDS=900)$' "$HELPER_PRISTINE" || true)" = 5 ] \
+  && pass "A9 the time and poll constants are pinned literals, assigned unconditionally (W7 120 s, W10b 60 s, poll 2 s x 30, W4 outer 900 s)" || fail "A9 a pinned constant moved"
 python3 "$ROOT/scripts/lint-shell-trace-credential-refusal.py" "$HELPER_PRISTINE" > "$T/lint.out" 2>&1; lrc=$?
 [ "$lrc" = 0 ] && pass "A10 scripts/lint-shell-trace-credential-refusal.py is clean on the helper (Rules A/B/C/D/E, in no baseline)" || fail "A10 the xtrace-refusal lint fails on the helper" "$(head -c 300 "$T/lint.out")"
 first_cmd="$(grep -vE '^[[:space:]]*(#|$)' "$HELPER_PRISTINE" | sed -n '1p')"
@@ -359,12 +359,18 @@ done
 reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 30)) ""; run_helper "$RW_TOK" detach --volume-id abc
 refused wipe_volume_id_shape && [ "$(ncalls)" = 0 ] && pass "B20 detach with a malformed id refuses before any request" || fail "B20 detach shape"
 
-reset_world; RC=0; EMPTYWS="$T/emptyws"; mkdir -p "$EMPTYWS"; EXTRA_ENV=("GITHUB_WORKSPACE=$EMPTYWS"); run_helper "$RO_TOK" phases; EXTRA_ENV=()
+reset_world; RC=0; EMPTYWS="$T/emptyws"; mkdir -p "$EMPTYWS"; EXTRA_ENV=("GITHUB_WORKSPACE=$EMPTYWS"); run_helper "$RO_TOK" state; EXTRA_ENV=()
 [ "$RC" = 1 ] && grep -qF 'verdict=wipe_library_missing' "$CUR/stderr" && pass "B21 a checkout without scripts/lib/bearer-curl.sh: wipe_library_missing, exit 1" || fail "B21 library missing" "rc=$RC"
-reset_world; EXTRA_ENV=("GITHUB_WORKSPACE="); run_helper "$RO_TOK" phases; EXTRA_ENV=()
+reset_world; EXTRA_ENV=("GITHUB_WORKSPACE="); run_helper "$RO_TOK" state; EXTRA_ENV=()
 [ "$RC" = 1 ] && pass "B22 GITHUB_WORKSPACE empty: refuses, exit 1, nothing sourced from an inherited path" || fail "B22 empty workspace" "rc=$RC"
-reset_world; EXTRA_ENV=("TMPDIR=$T/no/such/dir"); run_helper "$RO_TOK" phases; EXTRA_ENV=()
+reset_world; EXTRA_ENV=("TMPDIR=$T/no/such/dir"); run_helper "$RO_TOK" state; EXTRA_ENV=()
 [ "$RC" = 1 ] && grep -qF 'verdict=wipe_scratch_unavailable' "$CUR/stderr" && pass "B23 no scratch file available: wipe_scratch_unavailable, exit 1" || fail "B23 scratch" "rc=$RC"
+sc_phases_bare() { # preflight Check 10's sandbox: env -i, no GITHUB_WORKSPACE, no RUNNER_TEMP, no stdin
+  reset_world
+  RC=0; env -i PATH="$BIN:$REALPATH_DIRS" HOME="$CUR/home" "$BASH_BIN" "$HELPER" phases <&- > "$CUR/stdout" 2> "$CUR/stderr" || RC=$?
+  [ "$RC" = 0 ] && [ "$(cat "$CUR/stdout")" = "$(printf 'detach_attempted\ndetached\ndelete_attempted\ndelete_sent\ndeleted')" ] && [ "$(ncalls)" = 0 ]
+}
+sc_phases_bare && pass "B24 phases needs no GITHUB_WORKSPACE, RUNNER_TEMP or stdin (env -i PATH only): the five words, rc 0, no request" || fail "B24 phases bare" "rc=$RC $(head -c 160 "$CUR/stderr")"
 
 # =====================================================================================================
 # C. credentials: one stdin line, by name, no fall-back
@@ -440,9 +446,11 @@ ok_run && out_has "luks_id=$LUKS" && pass "E4 --show-ids prints the pair" || fai
 reset_world; run_helper "$RO_TOK" identity --expect attached --volume-id $PT
 ! grep -qF -e "$LUKS" -e "$SRV" "$CUR/stdout" && ok_run && pass "E5 default output prints neither the server id nor the LUKS id" || fail "E5"
 reset_world PT_SERVER=null; run_helper "$RO_TOK" identity --expect detached --volume-id $PT --record write
-ok_run && gho_has volume_state=detached && gho_has phase=detached && [ -e "$CUR/rt/git-data-wipe-record" ] && pass "E6 detached + record write (the wipe_finish front): ok, phase=detached written, record created" || fail "E6"
+ok_run && gho_has volume_state=detached && ! grep -q '^phase=' "$CUR/gho" && [ -e "$CUR/rt/git-data-wipe-record" ] && pass "E6 detached + record write (the wipe_finish front): ok, record created, NO phase key written (the volume's detached state is this run's input, not an event of it: a refused wipe_finish must not notify VOLUME_DETACHED)" || fail "E6"
 reset_world PT_SERVER=null; run_helper "$RO_TOK" identity --expect detached --volume-id $PT
-ok_run && ! grep -qxF phase=detached "$CUR/gho" && pass "E7 detached without a record write does not emit a phase" || fail "E7"
+ok_run && ! grep -q '^phase=' "$CUR/gho" && pass "E7 detached without a record write does not emit a phase" || fail "E7"
+reset_world; run_helper "$RO_TOK" identity --expect attached --volume-id $PT --record write
+ok_run && ! grep -q '^phase=' "$CUR/gho" && pass "E7b identity (attached, record write) writes no phase key either" || fail "E7b"
 reset_world PT_SERVER=gone; run_helper "$RO_TOK" identity --expect detached --volume-id $PT --record write
 ok_run && gho_has volume_state=absent && out_has "record=none" && [ ! -e "$CUR/rt/git-data-wipe-record" ] && ! grep -qxF phase=detached "$CUR/gho" && [ "$(nmut)" = 0 ] && pass "E8 absent under --expect detached: ok volume_state=absent, NO record written, no phase, no mutating call" || fail "E8"
 
@@ -539,10 +547,10 @@ reset_world; run_helper "" record_check --epoch w7
 refused wipe_record_absent && [ "$(ncalls)" = 0 ] && pass "F1 no record: wipe_record_absent" || fail "F1"
 reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 30)) ""; run_helper "" record_check --epoch w7
 ok_run && out_has "record_check ok epoch=w7 age_s=30" && gho_has record_age_s=30 && [ "$(ncalls)" = 0 ] && pass "F2 a fresh W7 stamp passes and makes no request" || fail "F2"
-reset_world; mk_record $((CLOCK0 - 400)) $((CLOCK0 - 240)) ""; run_helper "" record_check --epoch w7
-ok_run && pass "F3 boundary: a W7 epoch exactly at the 240 s bound passes" || fail "F3"
-reset_world; mk_record $((CLOCK0 - 400)) $((CLOCK0 - 241)) ""; run_helper "" record_check --epoch w7
-refused wipe_assertion_stale && verdict_line_has wipe_assertion_stale "reason=expired age_s=241 bound_s=240" && pass "F4 boundary: 241 s past the W7 stamp is wipe_assertion_stale" || fail "F4"
+reset_world; mk_record $((CLOCK0 - 400)) $((CLOCK0 - 120)) ""; run_helper "" record_check --epoch w7
+ok_run && pass "F3 boundary: a W7 epoch exactly at the 120 s bound passes" || fail "F3"
+reset_world; mk_record $((CLOCK0 - 400)) $((CLOCK0 - 121)) ""; run_helper "" record_check --epoch w7
+refused wipe_assertion_stale && verdict_line_has wipe_assertion_stale "reason=expired age_s=121 bound_s=120" && pass "F4 boundary: 121 s past the W7 stamp is wipe_assertion_stale" || fail "F4"
 reset_world; mk_record $((CLOCK0 - 400)) $((CLOCK0 + 600)) ""; run_helper "" record_check --epoch w7
 refused wipe_assertion_stale && verdict_line_has wipe_assertion_stale reason=future && pass "F5 an epoch in the future is stale (a forged or skewed stamp)" || fail "F5"
 reset_world; mk_record $((CLOCK0 - 400)) "" ""; run_helper "" record_check --epoch w7
@@ -581,6 +589,10 @@ reset_world; mk_record $((CLOCK0 - 901)) "" ""; run_helper "" stamp --epoch w7
 refused wipe_assertion_stale && verdict_line_has wipe_assertion_stale reason=w4_expired && pass "F22 stamp more than 900 s after the W4 read is refused (the outer bound)" || fail "F22"
 reset_world; mk_record $((CLOCK0 - 900)) "" ""; run_helper "" stamp --epoch w7
 ok_run && pass "F23 boundary: stamp exactly 900 s after W4 passes" || fail "F23"
+sc_octal_w7() { reset_world; mk_record $((CLOCK0 - 400)) "0$((CLOCK0 - 30))" ""; run_helper "" record_check --epoch w7; ok_run && out_has "record_check ok epoch=w7 age_s=30"; }
+sc_octal_w4() { reset_world; mk_record "0$((CLOCK0 - 901))" "" ""; run_helper "" stamp --epoch w7; refused wipe_assertion_stale && verdict_line_has wipe_assertion_stale reason=w4_expired; }
+sc_octal_w7 && pass "F24 a leading-zero W7 epoch (decimal, shape-checked) reads as decimal, not octal: age_s=30" || fail "F24" "rc=$RC $(head -c 160 "$CUR/stderr")"
+sc_octal_w4 && pass "F25 a leading-zero W4 epoch 901 s old is refused w4_expired (read as octal the arithmetic errors and the bound check silently reads false: fail-open)" || fail "F25" "rc=$RC $(head -c 160 "$CUR/stderr")"
 reset_world; EXTRA_ENV=("RUNNER_TEMP=relative/dir"); run_helper "" record_check --epoch w7; EXTRA_ENV=()
 [ "$RC" = 2 ] && grep -qF 'is RELATIVE' "$CUR/stderr" && pass "F24 a relative RUNNER_TEMP is refused by the canonical guard before any record operand is used" || fail "F24" "rc=$RC"
 reset_world; EXTRA_ENV=("RUNNER_TEMP="); run_helper "" record_check --epoch w7; EXTRA_ENV=()
@@ -637,6 +649,22 @@ reset_world; run_helper "$RO_TOK" actions --volume-id $PT --since abc
 refused wipe_actions_unreadable && [ "$(ncalls)" = 0 ] && pass "G18 a malformed --since refuses before any request" || fail "G18"
 reset_world; act_json detach_volume success 2026-10-14T15:00:05+00:00 31 > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT --since "$A0"
 refused wipe_actions_unreadable && pass "G19 an off-format timestamp fails closed (only the pinned Z form is evidence)" || fail "G19"
+sc_inflight_report() { reset_world; act_json detach_volume running 2026-10-14T15:00:05Z 32 attach_volume success 2026-10-14T14:34:00Z 30 > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT; refused wipe_detach_in_flight && out_has "actions ok count=2 latest=detach_volume"; }
+sc_inflight_report && pass "G24 report mode (no --since): the newest attach/detach is a RUNNING detach: the evidence line is printed, then wipe_detach_in_flight (rc 5, no mutating call)" || fail "G24"
+reset_world; act_json detach_volume success 2026-10-14T15:00:05Z 31 > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT
+ok_run && out_has "latest=detach_volume" && pass "G25 report mode: a succeeded latest detach is ok" || fail "G25"
+reset_world; act_json detach_volume error 2026-10-14T15:00:05Z 31 > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT
+ok_run && pass "G26 report mode: an errored latest detach is ok (a finished action is not in flight)" || fail "G26"
+reset_world; act_json attach_volume success 2026-10-14T15:30:00Z 32 detach_volume running 2026-10-14T15:00:05Z 31 > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT
+ok_run && pass "G27 report mode: an older running detach under a newer succeeded attach is not the newest relevant action: ok" || fail "G27"
+sc_dad() { reset_world; act_json detach_volume success 2026-10-14T15:20:00Z 33 attach_volume success 2026-10-14T15:10:00Z 32 detach_volume success 2026-10-14T15:00:05Z 31 > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT --since "$A0"; refused wipe_detach_not_evidenced && verdict_line_has wipe_detach_not_evidenced reason=attach_after; }
+sc_dad && pass "G20 detach, attach, detach: ANY attach started at/after the origin start refuses (reason=attach_after), though the newest action is a detach" || fail "G20"
+reset_world; act_json detach_volume success 2026-10-14T15:00:05Z 32 attach_volume success 2026-10-14T15:00:00Z 31 > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT --since "$A0"
+refused wipe_detach_not_evidenced && verdict_line_has wipe_detach_not_evidenced reason=attach_after && pass "G21 boundary: an attach started exactly at the origin start refuses" || fail "G21"
+reset_world; act_json detach_volume success 2026-10-14T15:00:05Z 32 attach_volume success 2026-10-14T14:59:59Z 31 > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT --since "$A0"
+ok_run && gho_has detach_evidence=ok && pass "G22 must-PASS: an attach started one second before the origin start (older history) does not refuse" || fail "G22"
+reset_world; act_json detach_volume success 2026-10-14T15:20:00Z 33 attach_volume success null 32 detach_volume success 2026-10-14T15:00:05Z 31 > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT --since "$A0"
+refused wipe_detach_not_evidenced && verdict_line_has wipe_detach_not_evidenced reason=attach_after && pass "G23 an attach with no start time cannot be placed before the origin: refuses (fail closed)" || fail "G23"
 
 # =====================================================================================================
 # H. detach
@@ -677,9 +705,9 @@ reset_world; rec_for_detach; fault GET '^/volumes/'"$PT"'$' 200 '{"volume":{"id"
 [ "$RC" = 5 ] && verdict_line_has wipe_detach_not_confirmed reason=still_attached && ! grep -qxF phase=detached "$CUR/gho" && pass "H13 the action says success but the volume still names a server: wipe_detach_not_confirmed reason=still_attached, no phase=detached" || fail "H13"
 reset_world; rec_for_detach; fault GET '^/volumes/'"$PT"'$' 500 '-'; run_helper "$RW_TOK" detach --volume-id $PT
 [ "$RC" = 5 ] && verdict_line_has wipe_detach_not_confirmed "reason=confirm_unreadable code=500" && pass "H14 the confirm read fails: wipe_detach_not_confirmed reason=confirm_unreadable" || fail "H14"
-reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 241)) ""; run_helper "$RW_TOK" detach --volume-id $PT
+reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 121)) ""; run_helper "$RW_TOK" detach --volume-id $PT
 refused wipe_assertion_stale && [ "$(ncalls)" = 0 ] && pass "H15 a stale W7 epoch: wipe_assertion_stale and the detach is NOT sent (zero requests)" || fail "H15"
-reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 240)) ""; run_helper "$RW_TOK" detach --volume-id $PT
+reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 120)) ""; run_helper "$RW_TOK" detach --volume-id $PT
 ok_run && pass "H16 boundary: exactly at the bound the detach proceeds" || fail "H16"
 reset_world; run_helper "$RW_TOK" detach --volume-id $PT
 refused wipe_record_absent && [ "$(ncalls)" = 0 ] && pass "H17 no verdict record: wipe_record_absent and zero requests" || fail "H17"
@@ -865,6 +893,7 @@ sc_nofallback() { reset_world; EXTRA_ENV=("HCLOUD_TOKEN=$RW_TOK"); run_helper ""
 sc_poll_bound() { reset_world ACT_END=never; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 30)) ""; run_helper "$RW_TOK" detach --volume-id $PT; [ "$RC" = 5 ] && [ "$(npost)" = 1 ] && [ "$(nactions_get)" = 30 ]; }
 sc_record_bind() { reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 30)) "" 123456789; run_helper "$RW_TOK" detach --volume-id $PT; refused wipe_record_volume_mismatch && [ "$(ncalls)" = 0 ]; }
 sc_confirm_detach() { reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 30)) ""; fault GET '^/volumes/'"$PT"'$' 200 '{"volume":{"id":900000001,"server":800000001}}'; run_helper "$RW_TOK" detach --volume-id $PT; [ "$RC" = 5 ] && verdict_is wipe_detach_not_confirmed; }
+sc_identity_no_phase() { reset_world PT_SERVER=null; run_helper "$RO_TOK" identity --expect detached --volume-id $PT --record write; ok_run && ! grep -q '^phase=' "$CUR/gho"; }
 sc_check_binding() { reset_world PT_SERVER=null LUKS_ID=900000055; mk_record $((CLOCK0 - 90)) $((CLOCK0 - 80)) ""; run_helper "$RO_TOK" identity --expect detached --volume-id $PT --record check; refused wipe_target_changed; }
 
 mutate no-w7-record-check-in-detach 2 's/^  record_verify w7 "\$VID"$/  :/'
@@ -894,10 +923,22 @@ mutate detach-confirm-removed 4 -e 's/^  jget .\.volume \| must\(type=="object" 
 mutant_red detach-confirm-removed sc_confirm_detach
 mutate record-binding-check-removed 2 's/^      \[\[ "\$R_luks_id" == "\$luks_id" \]\] \|\| refuse wipe_target_changed reason=luks_volume$/      :/'
 mutant_red record-binding-check-removed sc_check_binding
-[ "$MUTANTS_RUN" -ge 13 ] && pass "N-floor: $MUTANTS_RUN mutants were applied and each was run against its named scenario (floor 13)" || fail "N-floor: only $MUTANTS_RUN mutants ran (floor 13)"
+mutate identity-phase-written 1 's/^  local ids=""$/  if [[ "$EXPECT" == detached \&\& "$RECORD_MODE" == write ]]; then gho phase detached; fi\n  local ids=""/'
+mutant_red identity-phase-written sc_identity_no_phase
+mutate inflight-report-check-removed 2 's/^    \[\[ "\$JV" == yes \]\] && refuse wipe_detach_in_flight$/    :/'
+mutant_red inflight-report-check-removed sc_inflight_report
+mutate attach-after-since-removed 2 's/^          elif any\(\$a\[\]; \.command=="attach_volume" and .*$/          elif false then "attach_after"/'
+mutant_red attach-after-since-removed sc_dad
+mutate phases-dispatch-after-library 2 's/^if \[\[ "\$\{1-\}" == phases \]\]; then shift; do_phases "\$@"; exit 0; fi$/:/'
+mutant_red phases-dispatch-after-library sc_phases_bare
+mutate w4-octal-guard-removed 2 's/NOW - 10#\$R_w4_epoch > WIPE_W4_OUTER_BOUND_SECONDS/NOW - R_w4_epoch > WIPE_W4_OUTER_BOUND_SECONDS/'
+mutant_red w4-octal-guard-removed sc_octal_w4
+mutate w7-octal-guard-removed 2 's/age=\$\(\( NOW - 10#\$e \)\)/age=$(( NOW - e ))/'
+mutant_red w7-octal-guard-removed sc_octal_w7
+[ "$MUTANTS_RUN" -ge 19 ] && pass "N-floor: $MUTANTS_RUN mutants were applied and each was run against its named scenario (floor 19)" || fail "N-floor: only $MUTANTS_RUN mutants ran (floor 19)"
 # control: the pristine helper is GREEN on every named scenario (a scenario that is always RED would make the mutant rows vacuous)
 ctl_bad=""
-for s in sc_stale_detach sc_stale_delete sc_norecord_delete sc_luks_typed sc_id_mismatch sc_protect sc_readback_luks sc_readback_name sc_nofallback sc_poll_bound sc_record_bind sc_confirm_detach sc_check_binding; do
+for s in sc_stale_detach sc_stale_delete sc_norecord_delete sc_luks_typed sc_id_mismatch sc_protect sc_readback_luks sc_readback_name sc_nofallback sc_poll_bound sc_record_bind sc_confirm_detach sc_check_binding sc_identity_no_phase sc_dad sc_inflight_report sc_phases_bare sc_octal_w4 sc_octal_w7; do
   "$s" || ctl_bad+=" $s"
 done
 [ -z "$ctl_bad" ] && pass "N-control: every named scenario is GREEN against the pristine helper" || fail "N-control: scenario(s) red against the pristine helper:$ctl_bad"
@@ -909,5 +950,5 @@ if [ "$fails" -gt 0 ]; then
   printf 'FAILED:\n'; printf '  - %s\n' "${FAILURES[@]}"
   exit 1
 fi
-[ "$passes" -ge 270 ] || { printf 'FAIL: only %d rows executed (floor 270)\n' "$passes"; exit 1; }
+[ "$passes" -ge 294 ] || { printf 'FAIL: only %d rows executed (floor 294)\n' "$passes"; exit 1; }
 exit 0

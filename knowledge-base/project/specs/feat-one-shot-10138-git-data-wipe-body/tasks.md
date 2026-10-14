@@ -10,7 +10,7 @@ Constraints: nothing is dispatched, applied or deleted; no legal document, no `A
 - [ ] 0.1 Re-read live Hetzner state (servers, both volumes, `/volumes/<id>/actions`) read-only; pin stub shapes from the real read and the retired job `git show 3ed3e4e6da^:.github/workflows/workspaces-luks-cutover.yml`
 - [ ] 0.2 Baseline pass counts of the pinned suites (access census, flag-precheck, tier census, argv-bearer sweep S3/S4, boot-signal-poll, dirty-scan, size, target-parity, fixture-relative-assert, lint-workflows)
 - [ ] 0.3 Read the retired wipe job and `git-data-plaintext-snapshot-loopback.test.sh`
-- [ ] 0.4 Measure loader step durations over the last 30 apply runs (`gh run view --json jobs`) to size the epoch bounds
+- [x] 0.4 Measure loader step durations over the last 30 apply runs (`gh run view --json jobs`) to size the epoch bounds: measured 2026-10-14 over 83 samples of recent apply/drift runs, the Tier-B loader step took 0 s x3, 1 s x73, 2 s x7, so the W7 bound sits on its 120 s floor (`WIPE_W7_BOUND_SECONDS=120` in `git-data-wipe.sh`)
 - [ ] 0.5 Post the V-13 retention measurement on #6897 (counts, commands, 2027-01-09 horizon; no ids, no names)
 
 ### Phase 1 — Libraries and flag precheck

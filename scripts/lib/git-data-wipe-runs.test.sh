@@ -187,9 +187,9 @@ if ! case_unreaching_refuses '[]'; then pass "G17c (harness) the reach row goes 
 # ---------------------------------------------------------------------------------------------------
 echo "== wipe_origin_run_ok (the wipe_finish origin-run read)"
 VID=123456789
-view() { # TITLE BRANCH EVENT JOBS-JSON
-  jq -cn --arg t "$1" --arg b "$2" --arg e "$3" --argjson j "$4" \
-    '{displayTitle: $t, headBranch: $b, event: $e, createdAt: "2026-10-02T12:00:00Z", jobs: $j}'
+view() { # TITLE BRANCH EVENT JOBS-JSON [WORKFLOWNAME: default the real workflow name]
+  jq -cn --arg t "$1" --arg b "$2" --arg e "$3" --argjson j "$4" --arg w "${5-$WIPE_LEGACY_TITLE}" \
+    '{displayTitle: $t, headBranch: $b, event: $e, workflowName: $w, createdAt: "2026-10-02T12:00:00Z", jobs: $j}'
 }
 jobs_of() { # JOBNAME STEP|CONC ...
   local n="$1" a; shift
@@ -208,6 +208,9 @@ check_out "O2b a title that merely STARTS with the typed id's digits (12345678 v
 check_out "O2c the wipe_finish title is not an origin run" wipe_origin_run_title_mismatch 5 -- OR "$(view "git-data wipe_finish $VID" main workflow_dispatch "$GOOD_JOBS")"
 check_out "O2d the wipe_check title is not an origin run" wipe_origin_run_title_mismatch 5 -- OR "$(view "git-data wipe_check $VID" main workflow_dispatch "$GOOD_JOBS")"
 check_out "O2e a trailing space on the title" wipe_origin_run_title_mismatch 5 -- OR "$(view "git-data wipe $VID " main workflow_dispatch "$GOOD_JOBS")"
+check_out "O2f the right title under ANOTHER workflow (a run-name is free text)" wipe_origin_run_workflow_mismatch 5 -- OR "$(view "git-data wipe $VID" main workflow_dispatch "$GOOD_JOBS" 'some other workflow')"
+check_out "O2g a workflow name that merely contains the real one" wipe_origin_run_workflow_mismatch 5 -- OR "$(view "git-data wipe $VID" main workflow_dispatch "$GOOD_JOBS" "${WIPE_LEGACY_TITLE} copy")"
+check_out "O2h no workflowName in the answer (the field was not requested) is unreadable, never trusted" wipe_origin_run_unreadable 5 -- OR "$(view "git-data wipe $VID" main workflow_dispatch "$GOOD_JOBS" | jq -c 'del(.workflowName)')"
 check_out "O3 a run on another branch" wipe_origin_run_not_main 5 -- OR "$(view "git-data wipe $VID" feature/x workflow_dispatch "$GOOD_JOBS")"
 check_out "O3b a run not started by workflow_dispatch" wipe_origin_run_not_dispatch 5 -- OR "$(view "git-data wipe $VID" main schedule "$GOOD_JOBS")"
 BAD_STEP_FAIL="[$(jobs_of wipe "$WIPE_ORIGIN_DETACH_STEP|failure")]"
@@ -235,9 +238,13 @@ check_out "O7 an empty volume id is a wiring fault" wipe_runs_bad_args 2 -- OR "
 check_out "O7b a non-numeric volume id" wipe_runs_bad_args 2 -- OR "$GOOD" 'abc'
 check_out "O7c a 13-digit volume id" wipe_runs_bad_args 2 -- OR "$GOOD" 1234567890123
 check_out "O7d an unknown gate mode" wipe_runs_bad_args 2 -- OR "$GOOD" "$VID" apply
-check_out "O8 (must-PASS) extra fields and another key order" ok 0 -- OR '{"z":1,"jobs":[{"steps":[{"conclusion":"success","name":"wipe_detach_gate","number":9}],"name":"wipe"}],"event":"workflow_dispatch","headBranch":"main","displayTitle":"git-data wipe 123456789"}'
+check_out "O8 (must-PASS) extra fields and another key order" ok 0 -- OR '{"z":1,"jobs":[{"steps":[{"conclusion":"success","name":"wipe_detach_gate","number":9}],"name":"wipe"}],"event":"workflow_dispatch","headBranch":"main","workflowName":"git-data cutover (#5274 / ADR-220 / ADR-239)","displayTitle":"git-data wipe 123456789"}'
 if ! case_origin_good '[]'; then pass "O9 (harness) the origin-ok case goes RED against an emptied fixture"; else fail "O9 the origin-ok case survived an empty fixture"; fi
 
+case_origin_workflow_refuses() { # right title, branch, event and gate under another workflow: must refuse
+  local out rc=0; out="$(wipe_origin_run_ok "$(view "git-data wipe $VID" main workflow_dispatch "$GOOD_JOBS" 'some other workflow')" "$VID" 2>/dev/null)" || rc=$?
+  [[ "$out" == wipe_origin_run_workflow_mismatch && "$rc" -eq 5 ]]
+}
 case_origin_prefix_refuses() { # the typed id is a PREFIX of the title's id: must refuse
   local out rc=0; out="$(wipe_origin_run_ok "$(view "git-data wipe ${VID}0" main workflow_dispatch "$GOOD_JOBS")" "$VID" 2>/dev/null)" || rc=$?
   [[ "$out" == wipe_origin_run_title_mismatch && "$rc" -eq 5 ]]
@@ -283,10 +290,12 @@ if mutant_lib end-anchor-loosened 2 's/redeploy\)\\\\z/redeploy)$/'; then red_in
 if mutant_lib gate-conclusion-ignored 2 's/\.conclusion == "success"/.conclusion != "never"/'; then red_in_mutant gate-conclusion-ignored case_origin_gate_refuses "$(view "git-data wipe $VID" main workflow_dispatch "$BAD_STEP_FAIL")"; fi
 # shellcheck disable=SC2016
 if mutant_lib origin-title-prefix 2 's/\.displayTitle != \("git-data wipe " \+ \$vid\)/(.displayTitle | startswith("git-data wipe " + $vid) | not)/'; then red_in_mutant origin-title-prefix case_origin_prefix_refuses; fi
+# shellcheck disable=SC2016
+if mutant_lib origin-workflow-unchecked 2 's/elif \.workflowName != \$wf then/elif false then/'; then red_in_mutant origin-workflow-unchecked case_origin_workflow_refuses; fi
 
 # ---------------------------------------------------------------------------------------------------
 echo "== epilogue"
-MUTANT_MIN=9
+MUTANT_MIN=10
 if [[ "$MUTANTS_RUN" -lt "$MUTANT_MIN" ]]; then
   printf '[FATAL] mutant floor: only %d mutants executed, expected >= %d.\n' "$MUTANTS_RUN" "$MUTANT_MIN" >&2
   exit 1
@@ -298,7 +307,7 @@ printf '== %d passed, %d failed\n' "$PASS" "$FAIL"
 # PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=106
+MIN_ASSERTIONS=111
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2
