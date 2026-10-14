@@ -551,7 +551,9 @@ read_verify() {
     soleur_op_red "  the write-doppler stage has not completed — run it first"
     return 1
   fi
-  local repo_root; repo_root="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+  # git, not a fixed ../ count: this script moves one level deeper when its spec dir is archived.
+  local repo_root; repo_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" \
+    || { soleur_op_red "  cannot resolve the repo root from ${SCRIPT_DIR}"; return 1; }
   local out rc=0
   out="$(cd "$repo_root" && doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
     bash scripts/probe-github-app-mint.sh 2>&1)" || rc=$?
