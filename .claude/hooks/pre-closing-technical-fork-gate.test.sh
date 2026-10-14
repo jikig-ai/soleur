@@ -640,8 +640,8 @@ preask_mut_row "G2-5 the pre-ask hook asks for shared (arm dispatch dead)" hook 
 # G2-7/G2-8 run the other way (control ALLOW, mutant DENY): a mutant that makes the ask cue MORE aggressive must flip a
 # must-allow fixture. G2-7 judges the concatenation of every '?' segment instead of one segment at a time; G2-8 drops the
 # ask-only veto (drop, defer, scope).
-preask_mut_row "G2-7 the ask check reads all segments at once" lib 'done <<<"${asked//\? /$'"'"'\n'"'"'}"' 'done <<<"$asked"' "Should I run the migration as a new pipeline? Should I note the backup as unfixed?" allow deny
-preask_mut_row "G2-8 the ask-only veto is dropped" lib ' && ! grep -qE "$TFC_ASK_VETO_RE" <<<"$seg"' '' "Item 3 is out of scope per your brief; should it be run as a new pipeline or recorded as not fixed?" allow deny
+preask_mut_row "G2-7 the ask check reads all segments at once" lib '"${asked//\? /$'"'"'\n'"'"'}"' '"$asked"' "Should I run the migration as a new pipeline? Should I note the backup as unfixed?" allow deny
+preask_mut_row "G2-8 the ask-only veto is dropped" lib ' | grep -vE "$TFC_ASK_VETO_RE"' '' "Item 3 is out of scope per your brief; should it be run as a new pipeline or recorded as not fixed?" allow deny
 # G2-6: the Stop carrier widened with the ask cue must flip the closing allow row (A1b) pass -> block.
 mut_row "G2-6 the Stop carrier is widened with the ask cue" lib '    shared+closing) closing=1 ;;' '    shared+closing) closing=1; ask=1 ;;' pass "$STATUS $AK3_TEXT"
 

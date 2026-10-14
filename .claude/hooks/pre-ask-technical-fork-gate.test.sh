@@ -820,6 +820,12 @@ TIMED_MIN=60000 timed_deny "T3" deny "How strict the evidence gate? ${t_tail64}"
 t_many="$(printf 'ok. fine! how strict the evidence gate? %.0s' $(seq 1 1500))"
 TIMED_MIN=55000 timed_deny "T4" deny "$t_many"
 
+# T5 — the ask check must be linear in the number of `?` segments too: a per-segment loop forks a grep per `?` (about 1.6 ms
+# each, 6+ s for 4,000 of them) and the model controls that count. No earlier cue fires on this question, so the ask
+# branch runs over every segment.
+t_segs="$(printf 'ok. fine! is the gate ready? %.0s' $(seq 1 4000))"
+TIMED_MIN=100000 timed_deny "T5" allow "$t_segs"
+
 # V6 — every member of the operator-vocabulary VETO is witnessed. One weak-cue (C1) question per member; each must
 # allow. The list is spelled here, not read out of the hook, so deleting a member from the hook reds this case.
 TOTAL=$((TOTAL+1))
@@ -911,8 +917,8 @@ run_ruling "AL14 the ask-only veto: a sentence that names defer stays the operat
   "$(qobj "Should I defer items 3 and 4 as a new pipeline or record them as not fixed?" | mq_payload)"
 run_ruling "AL15 ROUTE is pipeline-shaped: a triage ask about an issue is not a routing call" allow none \
   "$(qobj "Should I file a new issue for the typo or note it as not addressed?" | mq_payload)"
-run_ruling "AL16 no question mark: the weak-cue block is not entered" allow none \
-  "$(qobj "Run them as a new pipeline now, or record them as not fixed." | mq_payload)"
+run_ruling "AL16 a declarative sentence after a question: the disposition halves are not in a question" allow none \
+  "$(qobj "Is the audit ready? Then run them as a new pipeline now, or record them as not fixed." | mq_payload)"
 run_ruling "AL17 the RECORD gap is bounded at 30 characters" allow none \
   "$(qobj "Should I record the remaining roadmap items from the earlier brief as not fixed, or run them as a new pipeline?" | mq_payload)"
 run_ruling "AL18 stated residual: the halves only in the option labels (never read)" allow none \
@@ -935,9 +941,12 @@ else echo "  FAIL: AK1b the ask reason lead/tail is wrong, or a generic denial c
 # (the miss, cue, fixture loop counts per cue). The ledger is the suite's own sandbox, written by the AK/R rows above.
 TOTAL=$((TOTAL+1))
 ak_ledger="${INCIDENTS_REPO_ROOT:?sandbox root unset}/.claude/.rule-incidents.jsonl"
-if [[ -s "$ak_ledger" ]] && grep -qF '[cue=ask]' "$ak_ledger" && grep -qF '[cue=strict]' "$ak_ledger"; then
-  echo "  PASS: AK1c the incident message carries the cue name ([cue=ask] and [cue=strict] both recorded)"; PASS=$((PASS+1))
-else echo "  FAIL: AK1c the incident ledger lacks [cue=ask] or [cue=strict] (the deny message must name the cue)" >&2; FAIL=$((FAIL+1)); fi
+if [[ -s "$ak_ledger" ]] \
+   && grep -F 'who owns items 3 and 4' "$ak_ledger" | grep -qF '[cue=ask]' \
+   && grep -F 'status move from adopting to accepted' "$ak_ledger" | grep -qF '[cue=status]' \
+   && grep -F 'how strict must the emptiness evidence be' "$ak_ledger" | grep -qF '[cue=strict]'; then
+  echo "  PASS: AK1c each incident row names the cue that fired (ask, status and strict, per row)"; PASS=$((PASS+1))
+else echo "  FAIL: AK1c an incident row does not carry the cue that fired (the deny message must name it)" >&2; FAIL=$((FAIL+1)); fi
 # NR3 — the group argument is honoured by the lib itself: `shared` and `shared+closing` never reach the ask cue, only
 # `shared+ask` does, and it reports the cue name. A lib that ignored the group (or set ask=1 for every group) fails here.
 TOTAL=$((TOTAL+1))
@@ -971,9 +980,13 @@ m2_err="$m2_root/skew.stderr"
 m2_r1=$(qobj "$R1_Q" | mq_payload | bash "$m2_root/pre-ask-technical-fork-gate.sh" 2>"$m2_err" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
 m2_ak_out=$(qobj "These remaining items are outside the original fix. Run them as a new pipeline now (a), or record them as not fixed (b)?" | mq_payload | bash "$m2_root/pre-ask-technical-fork-gate.sh" 2>/dev/null)
 m2_ak=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${m2_ak_out:-{\}}" 2>/dev/null || echo allow)
-if [[ "$m2_fail" -eq 0 && "$m2_r1" == "deny" && "$m2_ak" == "allow" ]] && grep -qF 'retrying with group shared' "$m2_err"; then
-  echo "  PASS: ML2 a lib without group shared+ask is announced and falls back to shared (R1 still denies, the ask cue is off)"; PASS=$((PASS+1))
-else printf '  FAIL: ML2 skew: setup_fail=%s r1=%s ask=%s (want 0/deny/allow plus the stderr line)\n' "$m2_fail" "$m2_r1" "$m2_ak" >&2; FAIL=$((FAIL+1)); fi
+m2_cl_out=$(qobj "what is the right design for the retry queue?" | mq_payload | bash "$m2_root/pre-ask-technical-fork-gate.sh" 2>/dev/null)
+m2_cl=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${m2_cl_out:-{\}}" 2>/dev/null || echo allow)
+m2_clean_err="$m2_root/clean.stderr"
+qobj "Drop item 3 from this release?" | mq_payload | "$HOOK" >/dev/null 2>"$m2_clean_err"
+if [[ "$m2_fail" -eq 0 && "$m2_r1" == "deny" && "$m2_ak" == "allow" && "$m2_cl" == "allow" ]] && grep -qF 'retrying with group shared' "$m2_err" && [[ ! -s "$m2_clean_err" ]]; then
+  echo "  PASS: ML2 a lib without group shared+ask is announced and falls back to shared (R1 denies, ask cue off, closing cues stay off, a clean allow is silent)"; PASS=$((PASS+1))
+else printf '  FAIL: ML2 skew: setup_fail=%s r1=%s ask=%s closing=%s clean_stderr_bytes=%s (want 0/deny/allow/allow/0 plus the stderr line)\n' "$m2_fail" "$m2_r1" "$m2_ak" "$m2_cl" "$(wc -c <"$m2_clean_err" | tr -d ' ')" >&2; FAIL=$((FAIL+1)); fi
 
 # NR1 — the pre-ask hook is NOT widened for the CLOSING cues (it asks for `shared+ask`, which adds only the ask cue).
 # The five sentences the plan measured against the pre-ask cues (the three closing-message questions that must block
@@ -1031,24 +1044,52 @@ if [[ "$m1_fail" -eq 0 && "$m1_ctl" == "deny" && "$m1_dec" == "allow" ]] && grep
 else printf '  FAIL: ML1 missing-lib: setup_fail=%s control=%s without_lib=%s (want 0/deny/allow plus the stderr line)\n' "$m1_fail" "$m1_ctl" "$m1_dec" >&2; FAIL=$((FAIL+1)); fi
 
 # ML3 — a lib that lost one of its ask constants is parse doubt: an EMPTY TFC_ASK_VETO_RE would veto every segment and an empty
-# ROUTE/RECORD would match every line, so tfc_self_check must refuse it and the ruling arm must be skipped with the stderr line.
+# ROUTE/RECORD would match every line, so tfc_self_check must refuse each of the three and the ruling arm must be skipped
+# with the stderr line (R1, a plain ruling question, is allowed under every variant).
 TOTAL=$((TOTAL+1))
 m3_root="${SOLEUR_TEST_INCIDENT_ROOT:?sandbox root unset}/m3-empty-ask-constant"
-m3_fail=0
+m3_bad=""
 assert_fixture_dir "$m3_root"
-mkdir -p "$m3_root/lib" || m3_fail=1
-if [[ "$m3_fail" -eq 0 ]]; then
-  for m3_f in "$(dirname "$HOOK")"/lib/*.sh; do cp "$m3_f" "$m3_root/lib/" || m3_fail=1; done
-  cp "$HOOK" "$m3_root/pre-ask-technical-fork-gate.sh" || m3_fail=1
-  sed -i "s/^TFC_ASK_VETO_RE=.*/TFC_ASK_VETO_RE=''/" "$m3_root/lib/technical-fork-cues.sh" || m3_fail=1
-  cmp -s "$LIB" "$m3_root/lib/technical-fork-cues.sh" && m3_fail=1
-fi
-m3_err="$m3_root/empty.stderr"
-m3_out=$(qobj "$R1_Q" | mq_payload | bash "$m3_root/pre-ask-technical-fork-gate.sh" 2>"$m3_err")
-m3_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${m3_out:-{\}}" 2>/dev/null || echo allow)
-if [[ "$m3_fail" -eq 0 && "$m3_dec" == "allow" ]] && grep -qF 'cue lib missing or incomplete' "$m3_err"; then
-  echo "  PASS: ML3 a lib with an emptied ask constant fails the self-check and the ruling arm is skipped with a stderr line"; PASS=$((PASS+1))
-else printf '  FAIL: ML3 empty-constant: setup_fail=%s decision=%s (want 0/allow plus the stderr line)\n' "$m3_fail" "$m3_dec" >&2; FAIL=$((FAIL+1)); fi
+mkdir -p "$m3_root" || m3_bad="$m3_bad setup"
+for m3_c in TFC_ASK_ROUTE_RE TFC_ASK_RECORD_RE TFC_ASK_VETO_RE; do
+  m3_dir="$m3_root/$m3_c"
+  assert_fixture_dir "$m3_dir"
+  mkdir -p "$m3_dir/lib" || { m3_bad="$m3_bad $m3_c:mkdir"; continue; }
+  for m3_f in "$(dirname "$HOOK")"/lib/*.sh; do cp "$m3_f" "$m3_dir/lib/" || m3_bad="$m3_bad $m3_c:cp"; done
+  cp "$HOOK" "$m3_dir/pre-ask-technical-fork-gate.sh" || m3_bad="$m3_bad $m3_c:cp"
+  sed -i "s/^${m3_c}=.*/${m3_c}=''/" "$m3_dir/lib/technical-fork-cues.sh" || m3_bad="$m3_bad $m3_c:sed"
+  cmp -s "$LIB" "$m3_dir/lib/technical-fork-cues.sh" && m3_bad="$m3_bad $m3_c:nochange"
+  m3_out=$(qobj "$R1_Q" | mq_payload | bash "$m3_dir/pre-ask-technical-fork-gate.sh" 2>"$m3_dir/empty.stderr")
+  m3_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${m3_out:-{\}}" 2>/dev/null || echo allow)
+  [[ "$m3_dec" == "allow" ]] && grep -qF 'cue lib missing or incomplete' "$m3_dir/empty.stderr" || m3_bad="$m3_bad $m3_c:not-skipped(dec=$m3_dec)"
+done
+if [[ -z "$m3_bad" ]]; then
+  echo "  PASS: ML3 a lib with any one emptied ask constant fails the self-check and the ruling arm is skipped with a stderr line"; PASS=$((PASS+1))
+else printf '  FAIL: ML3 empty-constant:%s (want every variant skipped with allow plus the stderr line)\n' "$m3_bad" >&2; FAIL=$((FAIL+1)); fi
+
+# V7 — the ask cue's vocabulary, member by member. Every ROUTE and RECORD member is witnessed alone in a deny, so dropping a
+# member (or narrowing the RECORD gap, which "record items 3 and 4 as not fixed" crosses at 17 characters) reds this row;
+# the ROUTE nouns the cue deliberately does NOT carry (pr, run, issue) are witnessed as allows in both alternations.
+TOTAL=$((TOTAL+1))
+v7_bad=""
+for v7_r in "as a new pipeline" "in a new pipeline" "via a new pipeline" "into a new pipeline" "as a fresh pipeline" "as a separate pipeline" "as a new one-shot" "as a new one shot" "start a new pipeline" "starting a new pipeline" "open a new pipeline" "file a new pipeline" "spin up a new pipeline"; do
+  v7_out=$(qobj "Should the leftover items go $v7_r, or be recorded as not fixed?" | mq_payload | "$HOOK" 2>/dev/null)
+  [[ "$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${v7_out:-{\}}" 2>/dev/null || echo allow)" == "deny" ]] || v7_bad="$v7_bad route:[$v7_r]"
+done
+for v7_c in "record them as not fixed" "recorded as not fixed" "note them as not fixed" "mark them as not fixed" "log them as not fixed" "document them as not fixed" "list them as not fixed" "leave them not fixed" "record them as unfixed" "record them as not addressed" "record them as not done" "record them as a known gap" "record them as known gaps" "record items 3 and 4 as not fixed"; do
+  v7_out=$(qobj "Should the leftover items run as a new pipeline, or $v7_c?" | mq_payload | "$HOOK" 2>/dev/null)
+  [[ "$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${v7_out:-{\}}" 2>/dev/null || echo allow)" == "deny" ]] || v7_bad="$v7_bad record:[$v7_c]"
+done
+for v7_n in "as a new pr" "as a new run" "as a new issue" "open a new pr" "file a new issue" "start a new run"; do
+  v7_out=$(qobj "Should the leftover items go $v7_n, or be recorded as not fixed?" | mq_payload | "$HOOK" 2>/dev/null)
+  [[ "$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${v7_out:-{\}}" 2>/dev/null || echo allow)" == "allow" ]] || v7_bad="$v7_bad not-route:[$v7_n]"
+done
+for v7_v in "dropping them" "deferring them" "descoping them" "dropped" "deferred"; do
+  v7_out=$(qobj "Should I run the leftover items as a new pipeline or record $v7_v as not fixed?" | mq_payload | "$HOOK" 2>/dev/null)
+  [[ "$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${v7_out:-{\}}" 2>/dev/null || echo allow)" == "allow" ]] || v7_bad="$v7_bad veto:[$v7_v]"
+done
+if [[ -z "$v7_bad" ]]; then echo "  PASS: V7 every ask ROUTE and RECORD member denies alone, the excluded ROUTE nouns and the veto inflections allow"; PASS=$((PASS+1))
+else printf '  FAIL: V7 ask vocabulary:%s\n' "$v7_bad" >&2; FAIL=$((FAIL+1)); fi
 
 # V4— the ruling arm's EXEMPTION must stay a permission-shape vocabulary. Structural, like V3: extract
 # the regex from the hook source, require a non-vacuous member count, and refuse any bare action verb. A
@@ -1104,8 +1145,8 @@ else
 fi
 
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 175 ]]; then echo "  PASS: V1 full inventory ran (175 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 175 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 177 ]]; then echo "  PASS: V1 full inventory ran (177 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 177 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
 #
@@ -1185,7 +1226,7 @@ fi
 # The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
 # added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
 # paying anything, cannot satisfy it.
-MIN_CASES=175
+MIN_CASES=177
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

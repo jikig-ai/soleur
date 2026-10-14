@@ -635,12 +635,12 @@ describe("Technical-ruling delegation wiring", () => {
     expect(override.includes("OPEN DECISION"), "reference section 5 lost the OPEN DECISION trigger").toBe(true);
     expect(override.includes('"ask the operator once, then act"'), "reference section 5 lost the quoted incident wording").toBe(true);
     const scope = between(ref, "- **scope**", "- **priority / schedule**");
-    expect(scope.includes("the routing of an already-identified gap"), "reference section 1 lost the scope-routing classification").toBe(true);
+    expect(scope.includes("the routing of an already-identified gap") && scope.includes("is technical and goes to the CTO"), "reference section 1 lost the scope-routing classification or its polarity").toBe(true);
     expect(scope.includes("assigning work to a named person stays the operator's"), "reference section 1 lost the assignment carve-out").toBe(true);
     const edge = between(flat("commands/go.md"), "A technical ruling is never the operator's to make", "**Why:**");
     expect(edge.includes("OPEN DECISION"), "the first go Sharp Edge lost the OPEN DECISION trigger").toBe(true);
     const shim = flat("skills/go/SKILL.md");
-    expect(shim.includes("OPEN DECISION") && shim.includes("technical-ruling-delegation.md"), "the go shim lost the trigger sentence or its link").toBe(true);
+    expect(shim.includes("OPEN DECISION") && shim.includes("never a reason to ask") && shim.includes("technical-ruling-delegation.md"), "the go shim lost the trigger sentence, its polarity or its link").toBe(true);
   });
 });
 

@@ -371,7 +371,7 @@ elif [[ -n "$RULING_ROWS" ]]; then
     [[ -n "$__rq" ]] || continue
     # The verdict (weak cues over the interrogative sentences, strong cues, the operator-vocabulary veto and the
     # permission exemption, all judged over THIS question's text alone) is the shared lib's `tfc_is_fork`.
-    # Exit 1 is a pass and exit 2 (bad arguments) is treated as a pass: this arm can only ever deny on a clear hit.
+    # Exit 1 is a pass; exit 2 (a group the lib does not know) is handled below. This arm can only ever deny on a clear hit.
     # Group `shared+ask` is this hook's own (the `ask` cue is reachable from here only). A lib that predates the group
     # answers exit 2 for it; that must not silently switch off every OTHER ruling cue, so announce it and retry once
     # with `shared` (the vocabulary every lib version understands). Exit 1 is a pass; any other non-zero is a pass.

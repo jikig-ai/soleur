@@ -15,8 +15,8 @@
 # the existing veto silences one of them (the word `deploy` inside `deploy-channel`). So the closing
 # group adds three cues and a narrower veto; the pre-ask hook is NOT widened by them. It asks for `shared+ask`, which
 # adds ONE cue of its own (`ask`, 2026-10-14: a brief's "ask the operator" question about how named leftover items are
-# disposed of, run as a new pipeline vs recorded as not fixed). `shared` itself is unchanged and no production hook
-# calls plain `shared` any more (the pre-ask suite's NR3 row still drives it, so do not "clean it up"). The closing
+# disposed of, run as a new pipeline vs recorded as not fixed). `shared` itself is unchanged; no production hook asks for
+# plain `shared` first, but the pre-ask hook's version-skew fallback does (do not "clean it up"). The closing
 # group never sets `ask`, so the Stop carrier cannot reach it: the cue was fitted to AskUserQuestion text, a closing
 # message was never sampled against it, and a cue nobody measured on that carrier is not added to it.
 #
@@ -95,7 +95,7 @@ TFC_CLOSING_EXTRA_RE='\b(prioriti[sz]\w*|publish\w*|announce\w*|auditors?|accoun
 # three TFC_ASK_* patterns, or a second paraphrase miss, means stop widening (ADR-084 addendum).
 TFC_ASK_ROUTE_RE='(\b(as|in|via|into) (a |an )?(new|separate|fresh) (pipeline|one-shot|one shot)\b|\b(start|open|file|spin up)[a-z]* (a |an )?(new|separate|fresh) (pipeline|one-shot|one shot)\b)'
 TFC_ASK_RECORD_RE='\b(record|note|mark|log|document|list|leave)[a-z]* [^?.;]{0,30}\b(not fixed|unfixed|not addressed|not done|known gaps?)\b'
-TFC_ASK_VETO_RE='\b(drop(ped)?|defer(red)?|scope)\b'
+TFC_ASK_VETO_RE='\b(drop(s|ped|ping)?|defer(s|red|ring)?|de-?scop[a-z]*|scope)\b'
 
 # CLOSING-ONLY permission shapes (Ruled by CTO agent, 2026-10-12 review): an authorization request that the shared
 # RULING_PERM_RE (pinned by the pre-ask suite, never edited for a closing-only reason) does not name. Each member binds
@@ -143,11 +143,12 @@ tfc_is_fork() {
     if [[ -z "$hit" ]] && grep -qE "$RULING_STATUS_RE" <<<"$asked" && grep -qE "$RULING_ADR_RE" <<<"$asked"; then hit="status"; fi
     if [[ -z "$hit" ]] && grep -qE "$RULING_AB_RE" <<<"$asked" && grep -qE "$RULING_TECH_RE" <<<"$asked"; then hit="ab"; fi
     if [[ -z "$hit" && "$ask" -eq 1 ]]; then
-      # Per SEGMENT, not over the concatenation: two unrelated questions must not combine into one disposition ask.
-      while IFS= read -r seg; do
-        [[ -n "$seg" ]] || continue
-        if grep -qE "$TFC_ASK_ROUTE_RE" <<<"$seg" && grep -qE "$TFC_ASK_RECORD_RE" <<<"$seg" && ! grep -qE "$TFC_ASK_VETO_RE" <<<"$seg"; then hit="ask"; break; fi
-      done <<<"${asked//\? /$'\n'}"
+      # Per SEGMENT, not over the concatenation: two unrelated questions must not combine into one disposition ask. One
+      # linear pipeline over the newline-split segments: a loop would fork a grep per `?` (about 1.6 ms each, 34 s for 20,000
+      # of them), and the model controls that count. Read through a command substitution (no `grep -q`, so no SIGPIPE under
+      # pipefail); `|| true` keeps it safe for a caller that runs with errexit.
+      seg="$(printf '%s\n' "${asked//\? /$'\n'}" | grep -E "$TFC_ASK_ROUTE_RE" | grep -E "$TFC_ASK_RECORD_RE" | grep -vE "$TFC_ASK_VETO_RE" || true)"
+      [[ -z "$seg" ]] || hit="ask"
     fi
   fi
   # STRONG cues (bar, adopting...accepted, sufficiency): technical on their own, no `?` needed. The
