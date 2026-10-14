@@ -660,6 +660,23 @@ unattributed interpreter error (#7474).
 
 Or add them globally in `~/.claude/settings.json` for all projects.
 
+### External output filters (rtk, Headroom)
+
+**Issue:** User-installed output-filtering tools (rtk's Bash rewriting, Headroom's
+compression, local proxies) can remove literals Soleur's evidence gates read, and a
+resulting failure arrives looking like a Soleur defect. Soleur does not adopt these
+tools; rtk command wrappers are unwrapped by the destructive-command guard, and a
+`SOLEUR_EXT_FILTER` session-start marker reports detected filters with an
+evidence-gated posture.
+
+`SOLEUR_DISABLE_EXT_FILTER_DETECT=1` turns the marker off.
+
+**Workaround:** follow the three-rung diagnosis — check the `SOLEUR_EXT_FILTER`
+marker, reproduce with the filter disabled (`mode = "disabled"` in
+`~/.config/rtk/config.toml`, or `rtk run` passthrough; there is no `RTK_DISABLED`
+env var), then compare verbatim vs filtered output. Postures, footguns and the
+canonical grammar table: [known-external-tools](https://soleur.ai/known-external-tools/)
+
 ## Version History
 
 See [GitHub Releases](https://github.com/jikig-ai/soleur/releases) for detailed version history.
