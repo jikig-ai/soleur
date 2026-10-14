@@ -24,6 +24,8 @@ function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
     "support-live": false,
     "guided-tour": false,
     "codex-engine": false,
+    "untrusted-content-classify": false,
+    "untrusted-content-wrap": false,
   };
 }
 
