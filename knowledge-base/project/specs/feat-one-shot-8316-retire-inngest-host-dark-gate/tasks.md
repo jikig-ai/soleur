@@ -7,7 +7,7 @@ Base: `git merge-base origin/main HEAD` (planning time `b6d745fe78`). Ref #8316 
 ## Phase 0 — Baseline and kill-set reference (read-only)
 
 - [ ] 0.1 Record the base SHA; confirm the base suite is green (309 passed, `_FLOOR=309`, 37 predicates, tokens 19/19).
-- [ ] 0.2 Write the mutant generator (scratch dir, not the repo): one mutant per guard-shaped non-comment line of `_ihdg_graded_row`, its helpers, `_IHDG_*`, `_ihdg_verdict`, `inngest_execute_registry_gate`, `_erg_*`; key by line content + occurrence index; require >= 100 mutants.
+- [ ] 0.2 Write the mutant generator (scratch dir, not the repo; jq-valid per-shape operators, keys per (function, content, occurrence); pristine rc-0 control; kills counted only when verdict-attributed): mutants for guard-shaped non-comment lines of `_ihdg_graded_row`, its helpers, `_IHDG_*`, `_ihdg_verdict`, `inngest_execute_registry_gate`, `_erg_*`; key by line content + occurrence index; require >= 100 mutants.
 - [ ] 0.3 Run the list against a `git archive <base>` copy with the base suite (4-way parallel, ~15 min) -> K_main / S_main.
 
 ## Phase 1 — Library
@@ -23,10 +23,10 @@ Base: `git merge-base origin/main HEAD` (planning time `b6d745fe78`). Ref #8316 
 - [ ] 2.1 Rewrite suite header; drop `ROWS`/`FIN`/`rows-selftest`; `GATE_FN` defaults to the execute gate; drop dark arms of `_gate_default_args`, `gate()`, `mutate()`.
 - [ ] 2.2 Delete 0b, dark BASELINE, sections 1, 2/2a/2c/2b, 3 H-rows, B13, B10 rows G4-G20, section 5.
 - [ ] 2.3 Keep B12 trimmed (execute fields, `B12_ERG_MSG`, schema cross-pin); keep Rows 6a/6b, re-word 6c; keep Row 9 (execute-only regex).
-- [ ] 2.4 Move 0c (predicate self-test) and the `mutate` cannot-land self-test into section 6, rebound to execute fixtures.
-- [ ] 2.5 Section 6/7: rename `mutate_both` -> `mutate_shared` (drop sibling args), remove `-sib` halves, the `[G2] sibling` line, 6.5 recut rows, the `GATE_FN=inngest_host_dark_gate` pair, section 7 recut rows/canary/default-path; reword "sibling"/"recut gate" comments.
+- [ ] 2.4 Move 0c (predicate self-test) after `erows selftest` + `HB`, and the `mutate` cannot-land self-test into 6.4 beside H7, rebound to execute fixtures; roll the self-tests' `dark` out of `_seen_tokens`.
+- [ ] 2.5 Section 6/7: rename `mutate_both` -> `mutate_shared` (drop sibling args), remove `-sib` halves, the `[G2] sibling` line, 6.5 recut rows, the `GATE_FN=inngest_host_dark_gate` pair, section 7 duplicate rows L1722/L1726/L1743 (REBIND L1736, L1752, L1767, L1771 to the execute gate); reword "sibling"/"recut gate" comments.
 - [ ] 2.6 Rebind Row 8/8b (default clock) to the execute gate unconditionally; add section 6.6 ports (E5d, E3b/E3c, M1, Row10, torn, outer, E9d, M5, M7, I1/I2, R2) only where the iterate-until-superset run (Phase 7.2) shows a lost kill.
-- [ ] 2.7 Recompute `_PRED_FLOOR`, token floor, exact `_FLOOR` from a measured run; rewrite the itemised floor-history comment.
+- [ ] 2.7 After Phase 7 settles: exact `_FLOOR`, exact `_PRED_FLOOR` (`-ne`), `_T_n -eq 11`, exact `_DARK_FLOOR` replacing `_dark_n -ge 2`; diff base/branch assertion label lists; rewrite the itemised floor-history comment.
 - [ ] 2.8 `cutover-inngest-workflow.test.sh` L2606-2619: reword comments, strengthen the census assertion (word-boundary strip + widened name family), add mutation rows 1-4 incl. positive control; show the old form passes row 3.
 
 ## Phase 3 — Stale prose (line-local)
@@ -34,7 +34,8 @@ Base: `git merge-base origin/main HEAD` (planning time `b6d745fe78`). Ref #8316 
 - [ ] 3.1 `.github/workflows/cutover-inngest.yml` L201-206.
 - [ ] 3.2 `scripts/cutover-inngest.sh` L3437.
 - [ ] 3.3 `scripts/cutover-inngest.sh` L2659 (the "DOES exist (it shipped in #7695)" sentence and the earlier "inngest-volume-recut apply target" clause); `bash -n`.
-- [ ] 3.4 Confirm no edit to `inngest-bootstrap.sh`, `cloud-init-inngest.yml`, `inngest-host.tf`, `vector.toml`, `inngest-cutover-flip.sh`, `inngest-server-flip-guard.sh`.
+- [ ] 3.4 Comment-only rewords: `cutover-inngest.sh` L2092-2093, workflow-test L2561, `inngest.test.sh` L877-884; run `bash scripts/lib/inngest-probe-row.test.sh`.
+- [ ] 3.5 Confirm no edit to `inngest-bootstrap.sh`, `cloud-init-inngest.yml`, `inngest-host.tf`, `vector.toml`, `inngest-cutover-flip.sh`, `inngest-server-flip-guard.sh`.
 
 ## Phase 4 — ADR-199 addendum
 

@@ -15,6 +15,26 @@ requires_cpo_signoff: false
 
 # chore(inngest): retire the suite-only `inngest_host_dark_gate` entry point (Ref #8316)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-14
+**Sections enhanced:** 9 (Research Reconciliation, Research Insights, Phases 0/1/2/3/6/7, Guard Contract, Observability)
+**Agents used:** soleur:engineering:cto (14 rulings), learnings-researcher, functional-discovery (no overlap, nothing installed), plan-review panel (DHH, Kieran, code-simplicity), architecture-strategist, test-design-reviewer, git-history-analyzer, verify-the-negative / dropped-symbol grep sweep. Not run: the "every available agent" fan-out (security, performance, data-migration, UI and marketing agents have no surface in a test-library deletion).
+
+### Key Improvements
+1. The differential mutation run now uses jq-valid per-shape operators, keys mutants per function, requires a pristine control, and counts only verdict-attributed kills (a `:` inside a jq program is a syntax error that every test would "kill").
+2. Four section-7 rows (`/dev/null` lib, permissive lib, canary-discriminates, default-path resolution) are rebound to the execute gate instead of deleted: they are the only tests of the selector-resolution default.
+3. Floors made exact, and the vacuous `_dark_n -ge 2` floor (self-test `dark` tokens never rolled back) replaced by an exact `_DARK_FLOOR`.
+4. The ADR-199 addendum names the surviving sole-copy protection (conditional on ADR-282, status adopting) instead of overclaiming the loss.
+5. Attribution corrected: #8285's PR A is #9784 and PR B is #9877; #8285, #8078, #7695, #6894 are issues.
+
+### New Considerations Discovered
+- `scripts/cutover-inngest.sh` L2659 carries a NEW false claim ("`inngest-volume-recut` DOES exist"), added by #8248 and rewritten by #9681, in addition to the stale prose the issue lists.
+- `inngest-bootstrap.sh` (two stale comment mentions) is baked into the OCI image: editing it, comments included, chains into an image build, a pin bump and latent `user_data` drift (parked PR #10081), so it is left and tracked in a follow-up.
+- Three more comment-only rewords found: `cutover-inngest.sh` L2092, workflow-test L2561, `inngest.test.sh` L877-884; `scripts/lib/inngest-probe-row.test.sh` must stay green.
+- The census assertion's trailing `grep -v` drops whole lines, so a line holding the allowed name AND a forbidden helper escapes; the rewrite strengthens it and proves it with mutation rows.
+
+
 Spec lacks valid `lane:` (no spec.md for this one-shot branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
 ## Overview
@@ -22,7 +42,7 @@ Spec lacks valid `lane:` (no spec.md for this one-shot branch) — defaulted to 
 `tests/scripts/lib/inngest-host-dark-gate.sh` carries two entry points over one set of shared probe-row helpers.
 `inngest_execute_registry_gate` is live: `scripts/cutover-inngest.sh` calls it from `op=execute` step 2.0 and from the
 `registry-probe` arm (the P0 cutover double-fire guard). `inngest_host_dark_gate` ("Guard 2" of the long-gone
-`inngest-volume-recut` target) has had no production caller since #8285 PR A and is kept only by its own suite, "pending the
+`inngest-volume-recut` target) has had no production caller since #8285's PR A (#9784, merged 2026-10-09; its `if ! inngest_host_dark_gate` call was removed in `d7dee46bb0`) and is kept only by its own suite, "pending the
 retire-or-keep decision" on #8316. The decision inputs have resolved: PR #8248 is MERGED, #8285 CLOSED (the plaintext backstop
 volume answered 404 on 2026-10-09), #7777 CLOSED, #8078 CLOSED (G8 already carries the wide predicate), #7695 and #6894 CLOSED.
 
@@ -42,7 +62,7 @@ every execute-gate row (E1..E13, plus E14) still bites. The live gate's code, th
 | "suite sections 6 and 7 unchanged" | Sections 6.4/6.5 run each shared-helper mutation against both entry points (`mutate_both`, `GATE_FN=inngest_host_dark_gate` rows), and section 7 has five recut-gate selector rows plus a recut-gate canary and default-path row. `gate()`, `mutate()` and the 0b/0c wrapper self-tests default to the dark gate. | Execute-gate assertion lines stay byte-identical; sibling halves and the defaults necessarily change (decision row P1). |
 | "(a) ... `.github/workflows/cutover-inngest.yml` ~L204 'recuts /mnt/data today'" | Present: L201-206, a CORRECTED-2026-08-25 comment still saying no `apply_target` recuts and "the design for one is tracked in #7695". | Line-local rewrite of those lines (Phase 3). |
 | "(a) `scripts/cutover-inngest.sh` ~L3437 'recovery from `aborted` is a /mnt/data recut'" | Present at L3437 in the `op=resume` KNOWN DEAD END comment. | Line-local rewrite (Phase 3). |
-| "verify whether 'No apply_target recuts THIS volume yet' ... already fixed on main" | Fixed: `git grep -n 'recuts THIS volume\|THIS volume yet'` is empty repo-wide. **But the same G3.7 `latched` `::error::` (L2659) now asserts the opposite falsehood:** "`apply_target=inngest-volume-recut` DOES exist (it shipped in #7695)" and tells the reader to use it. No test pins that sentence. | Fix the one sentence in this PR (CTO F2). |
+| "verify whether 'No apply_target recuts THIS volume yet' ... already fixed on main" | Fixed: `git grep -n 'recuts THIS volume\|THIS volume yet'` is empty repo-wide. **But the same G3.7 `latched` `::error::` (L2659; the sentence was added by `673db24c2d`, PR #8248, when the target still existed, and last rewritten by `791c4244d8`, PR #9681) now asserts the opposite falsehood:** "`apply_target=inngest-volume-recut` DOES exist (it shipped in #7695)" and tells the reader to use it. No test pins that sentence. | Fix the one sentence in this PR (CTO F2). |
 | "verify ... model.c4 inngestRedis description already fixed" | Fixed: the anchor "becomes crypto_LUKS only when the gated" is gone; the description now states LUKS live, sole copy, backstop destroyed 2026-10-09 (#8285). `model.c4` names only `inngest_execute_registry_gate`. | Leave `model.c4` and `model.likec4.json`. |
 | "ADR-199 Consequences paragraph 'Until the host is replaced, every dispatch'" | Present at L131-132. The brief also says "amend ADR-199 ... (append, change nothing above)". ADR-199's own convention is "Appended; nothing above is changed". | One append-only addendum that supersedes the paragraph by name (CTO F1). |
 | ADR-199's 2026-10-09 addendum: the invariant "is unchanged and still enforced by `inngest-host-dark-gate.sh` for `scripts/cutover-inngest.sh`" | Overclaim. The execute gate grades "positively dark host" (E1..E14); the measured-empty-store, mount-devid pin, live id pin, #7674 followthrough, flag allowlist and diagnostic-boot predicates (G8-G20) die with the entry point and have no executable form afterwards. | The addendum states this plainly (CTO F12). |
@@ -56,7 +76,7 @@ every execute-gate row (E1..E13, plus E14) still bites. The live gate's code, th
 ## Research Insights
 
 **Premise Validation (Phase 0.6).** Checked: #8316 OPEN (closedByPullRequestsReferences empty); PR #10268 draft, `closingIssuesReferences` `[]`;
-PR #8248 MERGED; #8285, #7777, #8078, #7695, #6894 CLOSED; PR #10257 and PR #10081 OPEN drafts (#10081 labelled `parked`, "do not merge
+PR #8248 MERGED; issues #8285, #7777, #8078, #7695, #6894 CLOSED (they are issues, not PRs; the merged PRs are #9784 / #9877 for #8285 and #9681 for #8078); PR #10257 and PR #10081 OPEN drafts (#10081 labelled `parked`, "do not merge
 until an approved `apply_target=inngest-host-replace` window exists"). Cited symbols confirmed on base: `inngest_host_dark_gate`
 (L725), `_ihdg_finished_count` (L387), `inngest_execute_registry_gate` (L1228), the Row 6a/6b wiring rows, and the workflow-test
 rows at L2606-2619. Mechanism vs ADR corpus: ADR-199 (the retired entry point's decision), ADR-100 section 7 and ADR-142 describe
@@ -123,11 +143,10 @@ after 1-2, Phase 5 last before the final push (derived artifacts).
  (`_ihdg_field`, `_ihdg_rows`, `_ihdg_newest_dt`, `_ihdg_row_count`, `_ihdg_tied_newest`, `_ihdg_undecodable`,
  `_ihdg_epoch_from_dt`, `_ihdg_decoded_rows`, `_ihdg_refuse`, `_ihdg_verdict`, `_IHDG_*`) and of `inngest_execute_registry_gate` /
  `_erg_*` that matches the guard shapes (`|| { _ihdg_refuse|_ihdg_verdict ...}`, `[[ ... ]]` predicates, `select(...)`, `sort`,
- `unique`, `max`, `startswith`, jq filters), emit one mutant that neutralises that single line (`:` for a guard, `select(true)` for a
- select). Key each mutant by `(line content, occurrence index)`, never by line number (the deletion shifts lines). Census at planning
+ `unique`, `max`, `startswith`, jq filters), emit one mutant per SHAPE that keeps the program syntactically valid: for a bash guard `:`; for a jq program line `select(true)`/identity (never `:`, which is a jq syntax error that every test would 'kill'); plus shape substitutions the line-neutralising operators miss (`read -ra` -> `toks=($msg)`, `or` -> `and` inside `wrong_host_rows`, `unique`/`max`/`sort_by` removed, one operand dropped from the `source ... || ! declare -F ... || ! inngest_probe_row_selftest` line). Key each mutant by `(enclosing function, line content, occurrence index within the function)`, never by line number or file-wide index (the deletion shifts both). Census at planning
  time: ~120 candidate lines. Store the list in the scratch directory, not the repo.
-0.3 Run the list against a scratch `git archive <base>` copy with the base suite (4-way parallel; each run is ~31 s, ~15 min wall).
- Output: kill-set K_main (mutants for which the suite exits non-zero) and survivor set S_main. Per-case attribution is not needed: ports are found by iteration (Phase 7.2 — any K_main mutant missing from K_branch gets a port or a written justification, repeat until K_branch is a superset). First filter: shared lines already paired by a `mutate_both` main half are proven killed by an execute-gate case and need no port. This is the reference, and
+0.3 First run a pristine control (suite rc 0 on the unmutated tree) in each tree. Run the list against a scratch `git archive <base>` copy with the base suite (4-way parallel; each run is ~31 s, ~15 min wall).
+ Output: kill-set K_main = mutants for which the suite exits exactly 1 AND at least one `FAIL:` line is an `expect`/`predicate`/helper-case verdict failure (not a `B10[...]`/`mutate` anchor row, not a structural grep row such as `[helper] host conjunction`, splice-count or `_leaks`, and not a crash/syntax error with rc >= 2) - and survivor set S_main. Per-case attribution is not needed: ports are found by iteration (Phase 7.2 — any K_main mutant missing from K_branch gets a port or a written justification, repeat until K_branch is a superset). First filter: shared lines already paired by a `mutate_both` main half are proven killed by an execute-gate case and need no port. This is the reference, and
  `mutate()`'s own contract is NOT applied here — only "suite red or not". The mutant floor is the measured base count (recorded in the PR body), not a fixed number.
 
 ### Phase 1 — Library: delete the entry point, rewrite the header
@@ -145,7 +164,7 @@ after 1-2, Phase 5 last before the final push (derived artifacts).
  It must **not** say the entry point is kept pending any decision. List, in the header's retirement note, every dangling mention left
  in kept helper comments (`grep -n 'inngest_host_dark_gate\|_ihdg_finished_count\|recut gate\|SECOND entry\|BOTH entry' tests/scripts/lib/inngest-host-dark-gate.sh`)
  so none is silent (CTO F6).
-1.4 Guard against dropping a sentence the AC checks need: `dbsize` must still appear on **zero** lines of the lib (the B13 row is
+1.4 `bash scripts/lib/inngest-probe-row.test.sh` must stay green: it lists the lib in `MUST_FIND` and checks the lib still sources `scripts/lib/inngest-probe-row.sh` and selects through `inngest_probe_row` (selector block L203-244 is outside every edit). Guard against dropping a sentence the AC checks need: `dbsize` must still appear on **zero** lines of the lib (the B13 row is
  deleted, but the lib stays clean); `SOLEUR_INNGEST_SERVER_PROBE` stays on zero non-comment lines (`[#8846-once]`).
 1.5 Invariant check (run, do not eyeball): `diff <(sed '1,178d;387,412d;725,1060d' <base lib>) <(sed '1,<N>d' <branch lib>)` where N is the new header's last line must show only the banner prose changes of 1.3 (function bodies and `_IHDG_*` assignments byte-identical; an awk extract of `_ihdg_*`/`_erg_*`/`inngest_execute_registry_gate` bodies, minus `_ihdg_finished_count`, must be empty-diff).
 
@@ -174,8 +193,11 @@ Disposition map (line numbers at base; the executor recomputes them):
 | L933-1046 (section 4 harness definitions) | Keep `PRISTINE`, `mutate`, `_kills_*`, `_LIB_TOKENS`, `mutate_open`; drop the dark-gate arms of the `case` blocks; rebind the `mutate SELFTEST` "mutation that cannot land" check to `$EROWS`, placed in 6.4 beside H7. |
 | L1048-1082 (B10 rows G4-G20) | Delete. |
 | L1084-1102 (section 5 operands) | Delete (`ERG-operand` rows cover the shared operands; dark-only ones die with the gate). |
+| L1692-1778 (section 7) specifics | Of the 11 selector rows, only L1722, L1726 and L1743 are true duplicates (recut-gate twins of execute rows) and die. **Rebind to the execute gate (not delete):** L1736 (`/dev/null` selector lib sources but defines nothing), L1752 (permissive lib fails its selftest), L1767 (canary discriminates: a `$TMP` copy with no override refuses) and L1771 (default path resolves `scripts/lib/inngest-probe-row.sh` from the lib's own location) - they are the only tests of that resolution because the suite exports `INNGEST_PROBE_ROW_LIB` for everything else. |
 | L1104-1780 (sections 6, 6.1-6.5, 7) | Execute-gate assertion lines **byte-identical**. Removed: the `-sib` halves of `mutate_both` (rename to `mutate_shared`, 4-arg), their sibling fixture args, the `[G2] the sibling ...` line, the four `GATE_FN=inngest_host_dark_gate expect`/`mutate` rows in 6.5, the `GATE_FN=inngest_host_dark_gate; unset` pair, section 7's five recut-gate rows, the recut canary row and the recut default-path row. Comments that name "the sibling"/"recut gate" are reworded or listed as historical. |
-| L1780-1872 floors | Recompute `_PRED_FLOOR`, the token floor (`_T_n -ge 11` holds: lib tokens = 11), and exact `_FLOOR` from a measured run; rewrite the itemised history comment to end at this change. |
+| L1780-1872 floors | After Phase 7's iteration ends (not before) recompute from a measured run: `_FLOOR` exact; `_PRED_FLOOR` becomes exact (`-ne`, was `-lt` with two slots of slack; an `expect` used where `predicate` was meant is invisible to it); the token floor becomes `_T_n -eq 11`; replace `_dark_n -ge 2` — it is vacuous, because the must-fail self-tests call `expect ... dark` and `_seen_tokens` is never rolled back (four such calls after this change) — by rolling the self-tests' `dark` out of `_seen_tokens` and an exact measured `_DARK_FLOOR` (`-ne`). Also diff the base and branch assertion LABEL lists so a measured count cannot hide an accidental deletion. Rewrite the itemised history comment to end at this change. |
+
+**Ordering under `set -uo pipefail`.** The moved 0c predicate self-test goes AFTER `erows selftest` (so `erg-selftest.json` exists) and after `HB` is defined (section 6 preamble, near L1141-1150); the `mutate` cannot-land self-test goes into 6.4 beside H7 — left in section 4 with `$EROWS` it aborts the script before the floors. Row 8 rebuilt with `erows` yields `erg-now.json` / `erg-old.json`: update Row 9's allowlist (`*rows-now.json*|*rows-old.json*`) to those names. Stamp the Row 8 probe row and heartbeat from ONE `date` capture; in 8b the heartbeat is a `noop-*` row, so E14 cannot fire and the `stale_row` is E5's alone. With one entry point `mutate_shared` is plain `mutate`; reword the `_unscoped` failure message and rationale accordingly.
 
 **Ports (new section 6.6, execute gate, appended after 6.5).** Row 8 / 8b (the default-clock branch: a row stamped now clears, a 2 h-old row
 is `stale_row`) is an unconditional REBIND of an existing test to the execute gate. The table below is conditional: each port lands only if
@@ -212,7 +234,7 @@ Phase 0's kill-set shows the shared line is killed solely by a deleted dark-gate
 
 3.1 `.github/workflows/cutover-inngest.yml` L201-206: rewrite the CORRECTED-2026-08-25 comment so it stops saying "No apply_target
  recuts /mnt/data today; the design for one is tracked in #7695". New text (verify each clause against the tree before writing): no
- `apply_target` exists that recuts `/mnt/data` (`inngest-volume-recut` was converted and then deleted by #8285 PR A/B; the plaintext
+ `apply_target` exists that recuts `/mnt/data` (`inngest-volume-recut` was converted by #8285's PR A (#9784) and deleted by PR B (#9877); the plaintext
  volume is destroyed), a replace re-attaches the same volume so it does not clear the latch, and the in-repo latch remedies are the
  ones the script's own `latched` text names (`op=reflush`, #7777 — confirm it exists on base before citing it). Keep the sentence about
  narrowing `FLUSH_LATCH_SINCE` on a false premise.
@@ -224,7 +246,8 @@ Phase 0's kill-set shows the shared line is killed solely by a deleted dark-gate
  with text that says the target was retired by #8285; keep `op=reflush` and `op=luks-cutover` guidance and the `FLUSH_LATCH_SINCE`
  advice. No other byte of the file changes; `bash -n scripts/cutover-inngest.sh` must pass, and the cutover workflow test (which greps
  this script) must stay green.
-3.4 `inngest-bootstrap.sh`, `cloud-init-inngest.yml`, `inngest-host.tf`, `vector.toml`, `inngest-cutover-flip.sh`,
+3.4 Three more line-local COMMENT rewords found at deepen time (no runtime effect; none overlaps a PR #10257 hunk — its `inngest.test.sh` hunk starts at L2399, ours is L877-884): `scripts/cutover-inngest.sh` L2092-2093 ("the gate is tests/scripts/lib/inngest-host-dark-gate.sh's second entry point" -> "the lib's one entry point"); `apps/web-platform/infra/cutover-inngest-workflow.test.sh` L2561 header (same phrase; fold into the Phase 2b edit); `apps/web-platform/infra/inngest.test.sh` L877-884 ("the store facts Guard 2 decides on ... authorizes the recut" -> say the fields remain emitted and pinned, and that their only consumer, Guard 2, was retired under #8316; the `never 0` assertions stay untouched).
+3.5 `inngest-bootstrap.sh`, `cloud-init-inngest.yml`, `inngest-host.tf`, `vector.toml`, `inngest-cutover-flip.sh`,
  `inngest-server-flip-guard.sh`: **untouched** (CTO F9). Their dangling mentions are listed in the follow-up issue (Phase 8).
 
 ### Phase 4 — ADR-199 addendum (append-only)
@@ -240,6 +263,7 @@ is 0). Content, each statement checked against the tree:
 - What is NOT reproduced by the survivor: store-empty (G11-G13), mount-devid pin (G14), live volume id pin (G17), #7674 followthrough
  (G18), cutover-flag allowlist at dispatch (G19), diagnostic-boot (G20). Any future destructive clearing target must reintroduce a
  measured-empty plus dark-host gate before it may plan a destroy.
+- Surviving plan-time wall (verify against `apps/web-platform/infra/inngest-redis-luks.tf` L108-165 before citing): the sole-copy LUKS volume carries Hetzner delete protection and `prevent_destroy` (#9879; ADR-282 carries `status: adopting` at planning time, so state its status as read at write time and say the protection is conditional on its apply having landed), so the loss is bounded to "a future destroy target written after protection is lifted"; the lift route is the two-step one in that file (lift delete protection first, then `prevent_destroy`). Tie the reintroduce-a-gate requirement to that lift. Do not overclaim the loss.
 - Historical, not edited: ADR-100 section 7 and its "Where the code is" paragraph; ADR-142 and ADR-225 path mentions.
 - Recovery point: a main SHA containing the gate (the base SHA at the final rebase) and the line ranges in the header note.
 - `status:` stays `accepted`; this addendum changes no front matter. #8316 stays open.
@@ -264,7 +288,7 @@ is 0). Content, each statement checked against the tree:
 6.3 One-time sweep for the SUBJECT: `git grep -n -i -E 'inngest_host_dark_gate|_ihdg_finished_count|recut gate|Guard 2|dark[- ]gate'` over the repo, plus the G-number pattern `G(8|9|1[0-9]|20)\b`
  restricted to `knowledge-base/engineering/operations/runbooks/` (elsewhere it matches unrelated tokens), excluding ADRs other than the new addendum, `archive/`, `learnings/`, `legal/audits/`, `specs/archive` and this feature's own
  `plans/` + `specs/` files. Classify every hit `historical` or `live` in the PR body; fix every `live`. Known classified residuals:
- `inngest-bootstrap.sh` L704/L992 (comment-only, image-baked), ADR-100/142/225 (historical), the two legal audits (attestation-class).
+ `inngest-bootstrap.sh` L704/L992 (comment-only, image-baked), `infra-validation.yml` L146/L154 and `scripts/lib/inngest-probe-row.test.sh` L151 (call the lib "the dark-gate lib"; the file and suite names stay, so the wording is accurate), ADR-100/142/225 (historical), the two legal audits (attestation-class).
 6.4 Apply the "full class" rule from the retirement-cleanup sharp edge: also grep opaque identifiers the gate pinned — volume id
  `106261946` / `scsi-0HC_Volume_106261946` — across `scripts/`, fixtures and population files, and read hits (the suite's `VOLID`
  fixture is expected; nothing outside it should pin the deleted gate's inputs). Never touch volume `106443278`.
@@ -320,9 +344,10 @@ is 0). Content, each statement checked against the tree:
 
 - `tests/scripts/lib/inngest-host-dark-gate.sh` — delete L725-1060 and L387-411; rewrite header L1-178.
 - `tests/scripts/test-inngest-host-dark-gate.sh` — trim, rebind harness, port, recompute floors (Phase 2).
-- `apps/web-platform/infra/cutover-inngest-workflow.test.sh` — L2606-2619 only (comments, one strengthened assertion, mutation rows).
+- `apps/web-platform/infra/cutover-inngest-workflow.test.sh` — L2561 and L2606-2619 only (comments, one strengthened assertion, mutation rows).
+- `apps/web-platform/infra/inngest.test.sh` — comment L877-884 only (Phase 3.4).
 - `.github/workflows/cutover-inngest.yml` — L201-206 comment only.
-- `scripts/cutover-inngest.sh` — L2659 (one sentence) and L3437 (one comment line).
+- `scripts/cutover-inngest.sh` — L2659 (one sentence), L3437 and L2092-2093 (comment lines).
 - `knowledge-base/engineering/architecture/decisions/ADR-199-destructive-clearance-requires-a-measured-empty-store-and-a-dark-host.md` — append addendum.
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md` — L1481-1483 reword; append one Update.
 - `scripts/test-affected-kb-consumers.baseline.txt`, `plugins/soleur/test/fixture-relative-assert.baseline.txt` — only if their own checkers report drift.
@@ -402,6 +427,7 @@ members are every `expect`/`predicate`/`mutate*` call in sections 6, 6.6 and 7. 
 | 3 | Add a second `predicate ERG-E1 ...` call (dup id) | no change to the distinct-predicate set — floor not inflated (existing `ERG-DUPTEST`) |
 | 4 | Drop the only assertion of `fsm_silent` | RED by token coverage (`_T_hit -ne _T_n`) |
 | 5 | Own dispatch: make `gate()` call the wrong function name | RED by `ERG SELF-TEST` (a serving row stops failing a `dark` expectation) |
+| 6 | Remove the self-tests' rollback of their `dark` token from `_seen_tokens` | RED by the exact `_DARK_FLOOR` (the base `-ge 2` floor passes on self-test tokens alone) |
 
 **Harness rows.** Suite edit that must go RED: lower `_FLOOR` by one — the run must report `STALE FLOOR`. Must-PASS non-canonical input:
 the `H5`/`H5b`/`H5c` rows in 6.2 (non-canonical dark rows) — already present, unchanged.
@@ -428,9 +454,36 @@ threshold: none, reason: the diff touches `apps/web-platform/infra/cutover-innge
 
 ## Observability
 
-Skipped by the Phase 2.9 skip clause: the plan is delete-only plus comment, test and documentation edits. It adds no code or
-infrastructure surface, no emitted signal, and removes none (the probe emitter, heartbeat and Better Stack rows are untouched; the
-execute gate's `::notice::`/`::error::` output is unchanged except one sentence of operator prose at `cutover-inngest.sh` L2659).
+Delete-only plus comment, test and documentation edits: no signal is added or removed. The surviving surface is the live execute gate's
+existing output, declared here so a reader can see the change leaves it untouched.
+
+```yaml
+liveness_signal:
+  what: the live execute gate stays wired - cutover-inngest.sh still calls inngest_execute_registry_gate (op=execute 2.0 and registry-probe); host liveness itself stays on the hourly probe row and betteruptime_heartbeat.inngest_server_probe
+  cadence: per cutover dispatch for the gate call; hourly for the probe heartbeat
+  alert_target: Better Stack heartbeat policy for the probe; GitHub Actions run status for the cutover workflow
+  configured_in: scripts/cutover-inngest.sh and apps/web-platform/infra/uptime-alerts.tf (both unchanged by this PR except one prose sentence at cutover-inngest.sh L2659)
+
+error_reporting:
+  destination: GitHub Actions annotations on the cutover-inngest.yml run (no Sentry project is involved in the gate)
+  fail_loud: the gate prints exactly one verdict token and the script emits a ::error:: REFUSED line with remedy text, then exits 1
+
+failure_modes:
+  - mode: a retire edit changes how the execute gate grades a row (a shared helper line is altered or loses its only test)
+    detection: Phase 7 differential mutation run in this PR, the exact-count suite floors, and CI test-scripts shards
+    alert_route: red CI check on PR 10268 and on every later main push
+  - mode: a stray reference to the deleted entry point survives in a live code path
+    detection: the strengthened census assertion in cutover-inngest-workflow.test.sh plus the one-time classified sweep
+    alert_route: red CI check
+
+logs:
+  where: GitHub Actions run logs for the cutover workflow and the test-scripts job
+  retention: GitHub default Actions log retention (90 days)
+
+discoverability_test:
+  command: git grep -c inngest_execute_registry_gate -- scripts/cutover-inngest.sh
+  expected_output: scripts/cutover-inngest.sh
+```
 
 ## Encryption Posture
 
@@ -508,7 +561,7 @@ Pre-merge (PR):
 - [ ] AC1. `grep -c '^inngest_host_dark_gate()' tests/scripts/lib/inngest-host-dark-gate.sh` prints `0`; `grep -c '_ihdg_finished_count'` over the lib prints `0`; `bash -n` passes; sourcing the lib defines `inngest_execute_registry_gate` and does not define `inngest_host_dark_gate` (`declare -F`).
 - [ ] AC2. Kept-code invariance: the awk extracts of `_ihdg_*` (all except `_ihdg_finished_count`), `_erg_*`, `inngest_execute_registry_gate`, `_IHDG_*` assignments are byte-identical between `git merge-base origin/main HEAD` and HEAD. Command: the Phase 1.5 script, exit 0.
 - [ ] AC3. `bash tests/scripts/test-inngest-host-dark-gate.sh` exits 0 with `0 failed`; the printed anti-vacuity line says `exactly N assertions` with `_FLOOR` set to that measured N (not hand-derived); drop-one floor and token coverage print `ok` with token coverage `11/11` and `dark` asserted >= 2x.
-- [ ] AC4. Sections 6/7 line-diff rule: diff the base and branch text of the base section-6/7 region; every removed or changed line is one of (a) a `-sib` / `GATE_FN=inngest_host_dark_gate` / recut-gate row, (b) a trailing sibling arg removed from a `mutate_shared` call, (d) the call renamed `mutate_both` -> `mutate_shared`, (c) a comment reworded for the sibling. Execute-gate fixtures and expected tokens show zero diff. `grep -c 'mutate_both' tests/scripts/test-inngest-host-dark-gate.sh` prints `0`; `grep -c 'inngest_host_dark_gate' tests/scripts/test-inngest-host-dark-gate.sh` counts only hits inside retirement-note comments (each listed in the PR body); zero code hits.
+- [ ] AC4. Sections 6/7 line-diff rule: diff the base and branch text of the base section-6/7 region; every removed or changed line is one of (a) a `-sib` / `GATE_FN=inngest_host_dark_gate` / recut-gate row, (b) a trailing sibling arg removed from a `mutate_shared` call, (d) the call renamed `mutate_both` -> `mutate_shared`, (e) a self-test's `dark` token rolled out of `_seen_tokens`, (c) a comment reworded for the sibling. Execute-gate fixtures and expected tokens show zero diff. `grep -c 'mutate_both' tests/scripts/test-inngest-host-dark-gate.sh` prints `0`; `grep -c 'inngest_host_dark_gate' tests/scripts/test-inngest-host-dark-gate.sh` counts only hits inside retirement-note comments (each listed in the PR body); zero code hits.
 - [ ] AC5. Differential mutation run (Phase 7): every mutant in K_main whose line survives on the branch is in K_branch; every shared-line survivor has a port or a written justification; the E1..E14 table is in the PR body with real mutant ids and kill classes; mutant count >= the measured base mutant count recorded in Phase 0 (a generator that silently emits fewer fails the procedure).
 - [ ] AC6. `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` exits 0; THIS assertion (not the whole file) reddens on mutation rows 1-3, the positive control (allowed name alone) passes, row 4 reddens the dedicated non-vacuity row, and the base form is shown to pass row 3.
 - [ ] AC7. Stale prose: `grep -n 'recuts /mnt/data today' .github/workflows/cutover-inngest.yml` and `grep -n 'recovery from .aborted. is a /mnt/data recut' scripts/cutover-inngest.sh` are empty; `grep -c 'DOES exist (it shipped in #7695)' scripts/cutover-inngest.sh` and `grep -c 'inngest-volume-recut apply target when' scripts/cutover-inngest.sh` print `0`; every sentence the diff ADDS in these three places cites a tree fact checked in Phase 3 (listed in the PR body); `bash -n scripts/cutover-inngest.sh` passes.
@@ -516,7 +569,7 @@ Pre-merge (PR):
 - [ ] AC9. PR hygiene: `gh pr view 10268 --json closingIssuesReferences --jq '.closingIssuesReferences | length'` prints `0` after every body edit; `git log <base>..HEAD --format=%B` has no closing-keyword-plus-reference and no `auto-closes`; every commit ends with the `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` trailer; the PR body ends with the `🤖 Generated with [Claude Code](https://claude.com/claude-code)` line and names #8316 only as `Ref #8316`.
 - [ ] AC10. No rename: `git diff -M --name-status <base>...HEAD` has no `R` line; the lib and suite paths are unchanged; `secret-scan-allow-rename` not added.
 - [ ] AC11. Diff scope and no-touch: `git diff --name-only <merge-base>...HEAD` is a subset of Files to Edit plus the pipeline-written files (`knowledge-base/INDEX.md`, `specs/<branch>/session-state.md`, this plan, tasks.md, decision-challenges.md); `git diff --quiet <merge-base> -- <each Files-NOT-to-Touch path>` exits 0 (merge-base, not moving tip); the hunk map vs PR #10257 still shows no overlapping hunks (re-read `gh pr diff 10257` hunk headers before the final push).
-- [ ] AC12. Baselines: `bash scripts/test-affected-kb-consumers.test.sh` and `bash plugins/soleur/test/fixture-relative-assert.test.sh` exit 0; `python3 scripts/regenerate-shard-manifest.py --group light --incremental` (no `--write`) reports no change to the two TSVs; `git diff --stat` shows neither TSV nor any `*.tsv.n` changed.
+- [ ] AC12. Baselines and neighbours: `bash scripts/lib/inngest-probe-row.test.sh` exits 0; `bash scripts/test-affected-kb-consumers.test.sh` and `bash plugins/soleur/test/fixture-relative-assert.test.sh` exit 0; `python3 scripts/regenerate-shard-manifest.py --group light --incremental` (no `--write`) reports no change to the two TSVs; `git diff --stat` shows neither TSV nor any `*.tsv.n` changed.
 - [ ] AC13. `bash plugins/soleur/test/c4-count-parity.test.sh` exits 0 (backs the "no C4 impact" conclusion); `python3 scripts/lint-guard-contract.py <this plan>` exits 0. Orphan-suite, shard-totality and infra-human-steps lints are left to CI.
 - [ ] AC14. Residual sweep: the classified-hits list (Phase 6.3) is in the PR body; zero hits classified live remain; `grep -c 'recut gate' knowledge-base/engineering/operations/runbooks/inngest-server.md` shows no live-position hit; the follow-up issue is filed and cited.
 - [ ] AC15. CI verdict reported from `plugins/soleur/scripts/ci-head-verdict.sh verdict 10268` (not from a draft-run `test` row); no merge and no auto-merge queued; the report asks for authorization.
@@ -549,6 +602,6 @@ The lib exposes one entry point. The measurable outcome is AC3 + AC5: suite gree
 
 ## References & Research
 
-- Issue #8316; PRs #8248 (merged), #8285 PR A/B, #10257 (open, overlapping files), #10081 (parked), #10268 (this PR).
+- Issue #8316; PRs #8248 (merged), #9784 and #9877 (#8285's PR A and PR B), #10257 (open, overlapping files), #10081 (parked), #10268 (this PR).
 - ADR-199, ADR-100 section 7, ADR-142 addenda, ADR-225; `knowledge-base/project/learnings/2026-10-12-retiring-a-probe-by-file-list-left-a-derived-baseline-row-and-live-runbook-claims.md`.
 - Decision record: `knowledge-base/project/specs/feat-one-shot-8316-retire-inngest-host-dark-gate/decision-challenges.md`.
