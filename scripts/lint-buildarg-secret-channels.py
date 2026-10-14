@@ -297,7 +297,11 @@ def sweep(root: str, exact: set[str], prefixes: list[str]) -> tuple[list[str], d
     for sh in shell:
         rel = os.path.relpath(sh, root)
         try:
-            with open(sh, encoding="utf-8") as fh:
+            # errors=replace: scripts/fixtures/shell-trace-refusal/malformed-not-utf8.sh
+            # is intentionally not UTF-8. Strict decoding aborted the whole sweep
+            # on that fixture. The build-arg channel is a contiguous ASCII flag,
+            # which replacement leaves visible.
+            with open(sh, encoding="utf-8", errors="replace") as fh:
                 body = fh.read()
         except OSError:
             continue

@@ -116,6 +116,10 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-agents-compound-sync-live"
   "scripts/lint-agents-enforcement-tags-live"
   "scripts/lint-anthropic-content-position-live"
+  # Walks the whole tree: .github/workflows, every Dockerfile, and every *.sh
+  # for a credential-shaped build-arg. A new file in any of those shapes moves
+  # the verdict, so this is repo-global rather than an edge.
+  "scripts/lint-buildarg-secret-channels-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-gh-argv-arg-live"
