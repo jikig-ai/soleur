@@ -201,10 +201,10 @@ MIN_POPULATION = 5
 # Row R3's "non-seam read-set" is the script's read-set MINUS the names Guard 1's in-script argv
 # gate unsets. Re-deriving it here would invert the intent: a naive read-set would demand every
 # fixture seam appear in `--only-secrets`, i.e. that the unit INJECT the very names the gate
-# exists to strip. These are the 17 names Guard 1 unsets (15 measured 2026-09-03 + CUTOVER_BOOT_ID
-# added by #7777's latch-clear record, which stamps the boot the clear was recorded under, +
-# CUTOVER_NOOP_THROTTLE_S added by #7696's noop-heartbeat throttle); when Guard 1's list
-# changes, this copy moves with it.
+# exists to strip. These are the 30 names Guard 1's gates unset (15 measured 2026-09-03 +
+# CUTOVER_BOOT_ID added by #7777's latch-clear record, which stamps the boot the clear was
+# recorded under, + CUTOVER_NOOP_THROTTLE_S added by #7696's noop-heartbeat throttle, + the
+# thirteen #6780 REFRESH_* seams); when a Guard-1 gate's list changes, this copy moves with it.
 GUARD1_UNSET = {
     'CUTOVER_BOOT_ID', 'CUTOVER_CURL_CMD', 'CUTOVER_DONE_OWNER_MARKER', 'CUTOVER_FLAG_SET_CMD',
     'CUTOVER_FLIP_FLAG', 'CUTOVER_GQL_URL', 'CUTOVER_HEALTH_URL', 'CUTOVER_LOGGER_CMD',
@@ -212,8 +212,17 @@ GUARD1_UNSET = {
     'CUTOVER_SYSTEMCTL_CMD',
     'CUTOVER_VERIFY_INTERVAL_S', 'CUTOVER_VERIFY_WINDOW_S', 'INNGEST_CUTOVER_LATCH',
     'INNGEST_CUTOVER_LATCH_MOUNT', 'INNGEST_CUTOVER_STATE',
+    # #6780 — the thirteen REFRESH_* fixture seams inngest-config-refresh.sh's own
+    # --fixture-seams argv gate unsets in production (cloud-init-inngest.yml). They are
+    # test-only names: the unit must never inject them, so they belong here, not in
+    # --only-secrets (the bound is the ONE real input, INNGEST_CONFIG_DIGEST).
+    'REFRESH_BUNDLE_REPO', 'REFRESH_COSIGN_IMAGE', 'REFRESH_DOCKER_BIN',
+    'REFRESH_IDENTITY_REGEXP', 'REFRESH_INSTALL_CMD', 'REFRESH_LOGGER_CMD',
+    'REFRESH_NOOP_THROTTLE_S', 'REFRESH_PHONE_HOME_CMD', 'REFRESH_PULL_TIMEOUT_S',
+    'REFRESH_STATE_DIR', 'REFRESH_TRUSTED_ROOT', 'REFRESH_VERIFY_TIMEOUT_S',
+    'REFRESH_ZOT_ENV_FILE',
 }
-GUARD1_UNSET_CARDINALITY = 17
+GUARD1_UNSET_CARDINALITY = 30
 
 # ── the ack list: AUTHORED, each entry carrying WHY, cardinality pinned ───────────────────────
 ACK_REASONS = {

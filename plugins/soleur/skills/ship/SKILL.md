@@ -1018,25 +1018,24 @@ For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name
 - `apps/web-platform/infra/hooks.json.tmpl`
 - `apps/web-platform/infra/deploy-inngest-bootstrap.sudoers`
 - `apps/web-platform/infra/infra-config-apply.sh`
-- `apps/web-platform/infra/infra-config-install.sh` (#4829 — delivered by the SSH bridge, kept in the hash for drift-guard sync)
+- `apps/web-platform/infra/infra-config-install.sh` (#4829)
 - `apps/web-platform/infra/push-infra-config.sh`
 - `apps/web-platform/infra/cat-infra-config-state.sh`
-- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492 — webhook-delivered cutover script; registered so a body-only edit re-deploys)
+- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492)
 - `apps/web-platform/infra/inngest-rearm-reminders.sh` (#5492)
 - `apps/web-platform/infra/inngest-wiped-volume-verify.sh` (#5492)
 - `apps/web-platform/infra/cat-inngest-verify-state.sh` (#5492)
-- `apps/web-platform/infra/inngest-inventory.sh` (#5509 — cutover full-state inventory op)
-- `apps/web-platform/infra/git-lock-chardevice-sweep.sh` (#5934 — durable char-device config.lock substrate sweep)
-- `apps/web-platform/infra/inngest-registry-probe.sh` (#6178 — web-host 2.0 empty-registry cutover pre-flight)
-- `apps/web-platform/infra/inngest-doublefire-probe.sh` (#6178 — web-host 2.6 exactly-once run-enumeration probe)
+- `apps/web-platform/infra/inngest-inventory.sh` (#5509)
+- `apps/web-platform/infra/git-lock-chardevice-sweep.sh` (#5934)
+- `apps/web-platform/infra/inngest-registry-probe.sh` (#6178)
+- `apps/web-platform/infra/inngest-doublefire-probe.sh` (#6178)
+- `apps/web-platform/infra/{inngest-redis-bootstrap,inngest-cutover-flip,inngest-server-flip-guard,cat-inngest-cutover-state,inngest-luks-cutover}.sh` (#6780 — the five dedicated-host carriers; ADR-135 refresh-set members)
 - `apps/web-platform/infra/soleur-doppler-token.tmpl` (#7095 — re-deliverable web-host Doppler credential; folded in as `local.webhook_doppler_token_env`, i.e. the RENDERED content, so a secret rotation alone changes the hash)
-- `apps/web-platform/infra/10-vector-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `vector.service` at the credential above)
-- `apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-heartbeat.service` at the credential above)
-- `apps/web-platform/infra/10-inngest-server-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-server.service` at the credential above; it runs `doppler run` UNCONDITIONALLY and is restarted on every co-located deploy)
+- `apps/web-platform/infra/10-{vector,inngest-heartbeat,inngest-server}-doppler-token.conf` (#7095 — systemd drop-ins re-pointing the generated units at the credential above)
 
 **Detection:**
 
-The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: a gate's regex, its documentation block, and its fixtures are one unit — changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
 
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
@@ -1059,13 +1058,18 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
   "apps/web-platform/infra/inngest-registry-probe.sh"
   "apps/web-platform/infra/inngest-doublefire-probe.sh"
+  "apps/web-platform/infra/inngest-redis-bootstrap.sh"
+  "apps/web-platform/infra/inngest-cutover-flip.sh"
+  "apps/web-platform/infra/inngest-server-flip-guard.sh"
+  "apps/web-platform/infra/cat-inngest-cutover-state.sh"
+  "apps/web-platform/infra/inngest-luks-cutover.sh"
   "apps/web-platform/infra/soleur-doppler-token.tmpl"
   "apps/web-platform/infra/10-vector-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-server-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-redis-doppler-token.conf"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|inngest-redis-bootstrap\.sh|inngest-cutover-flip\.sh|inngest-server-flip-guard\.sh|cat-inngest-cutover-state\.sh|inngest-luks-cutover\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```

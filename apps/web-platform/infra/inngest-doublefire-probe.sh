@@ -107,6 +107,23 @@ readonly LOG_TAG="inngest-doublefire-probe"
 # registry-probe's INNGEST_REMOTE_GQL_URL parameterisation.
 GQL_URL="${INNGEST_REMOTE_GQL_URL:-http://10.0.1.40:8288/v0/gql}"
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-100}"
+# #6940 item 3 — INNGEST_GQL_PAGE_SIZE reaches us through hooks.json.tmpl's url-query
+# pass-environment (?page_size=N), i.e. caller-supplied. It must be a positive integer in
+# 1..1000 BEFORE it reaches `--argjson first` below: a non-integer aborts jq mid-request-
+# build inside the page loop and presents as a transient transport failure, and a
+# four-digit page would trip the preflight's exhaustion bounds or a server-side cap.
+# Fail CLOSED (FATAL) — a bounded default can never be silently substituted for a page the
+# caller thought they sized.
+case "$PAGE_SIZE" in
+  ''|*[!0-9]*)
+    echo "inngest-doublefire-probe: FATAL INNGEST_GQL_PAGE_SIZE is not a positive integer ('$PAGE_SIZE') — refusing to page" >&2
+    exit 1 ;;
+esac
+if [ "$PAGE_SIZE" -lt 1 ] || [ "$PAGE_SIZE" -gt 1000 ]; then
+  echo "inngest-doublefire-probe: FATAL INNGEST_GQL_PAGE_SIZE=$PAGE_SIZE is out of range 1..1000" >&2
+  exit 1
+fi
+PAGE_SIZE=$((10#$PAGE_SIZE))  # normalize leading zeros — '007' is not valid JSON for --argjson
 FIXTURE_DIR="${INNGEST_DOUBLEFIRE_RUNS_FIXTURE:-}"
 
 # STARTED_AT lower bound. Same 365-day clamp + BusyBox-safe fallback as the sibling

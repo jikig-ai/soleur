@@ -216,8 +216,19 @@ const WEB_GZIP_FLOOR = 10_000;
 // re-inlined KB-scale blob — the failure mode this guards — still reds. Re-measure BOTH
 // numbers when this next moves; quoting a figure without re-deriving it is what produced the
 // stale paragraph above.
-const GIT_DATA_BUDGET = 10_500;
-const GIT_DATA_FLOOR = 3_000;
+//
+// (#6780, 2026-10-13) RE-BASELINED 10,500 -> 31,000 and FLOOR 3,000 -> 20,000, and the
+// "measured 9,096" figure above exposed as wrong: the model's `${name}` regex never
+// matched the template's `${indent(6, name)}` interpolations, so every indent-delivered
+// payload — git-data's ENTIRE baked script set, ~20 KB gzipped — was substituted as a
+// ~35-byte literal. 9,096 measured a render with the scripts missing; the honest model
+// reads 29,800 and the byte-authoritative terraform render (git-data-userdata-budget.sh)
+// reads 30,744 stored / 2,024 headroom. The same blind spot let git-data grow from
+// ~9 KB real to ~30.7 KB real with no arm objecting. TEMPLATE_VAR_RE now expands the
+// indent() form, and the FLOOR is raised to 20,000 specifically so that a regression
+// re-blinding the embed (model would fall back to ~9 KB) reds instead of greens.
+const GIT_DATA_BUDGET = 31_000;
+const GIT_DATA_FLOOR = 20_000;
 // (#7278) registry base64gzip'd budget. THE REGISTRY HAD NO ARM HERE AT ALL until #7278, and
 // that absence is the whole finding: `hcloud_server.registry` has rendered
 // `base64gzip(templatefile("cloud-init-registry.yml", …))` since #6122 with no comment strip and
@@ -293,8 +304,20 @@ const GROK_DOGFOOD_GZIP_FLOOR = 500;
 // host, so nothing it contains can come from the store it mounts. 22,500 keeps ~1.4 KB warning
 // margin over the model and stays ~10.2 KB below HETZNER_CAP; byte-authoritative terraform
 // measures 21,520 B stored (inngest-userdata-budget.sh, the CI gate).
-const INNGEST_GZIP_BUDGET = 22_500;
-const INNGEST_GZIP_FLOOR = 4_000;
+// #6780 (2026-10-13): +9,800 B re-baseline (22,500 -> 32,300) and FLOOR 4,000 -> 26,000.
+// The #6780 config-refresh consumer (ADR-135 amendment) adds the refresh script inline,
+// infra-config-install.sh + cosign-trusted-root.json as file()-backed `${indent(6, …)}`
+// embeds (the b64 forms were measured ~4.5 kB heavier and overflowed), two systemd units,
+// and the applied.version seed — modeled ~31.5 KB; byte-authoritative terraform measures
+// 31,868 stored / 900 B headroom (inngest-userdata-budget.sh, the CI gate). The
+// CAP-minus-8KB invariant the "stay discriminating" arm used to assert cannot hold any
+// more — the consumer took ~10.3 KB of the old headroom — so it relaxes to a strict
+// below-cap bracket with the real headroom recorded here. FLOOR 26,000 sits above the
+// ~24,948 the model computes with the indent() embeds dropped (the re-blinding
+// regression class; see the GIT_DATA_BUDGET rebaseline note), so a model that stops
+// substituting the two file() payloads reds instead of greens.
+const INNGEST_GZIP_BUDGET = 32_300;
+const INNGEST_GZIP_FLOOR = 26_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";
 // Modeled byte lengths for render-time values that are NOT base64-of-a-file. base64-of-file
@@ -424,7 +447,7 @@ function renderDopplerTokenEnv(githubAppToken: string = GITHUB_APP_TOKEN_FIXTURE
   });
 }
 
-function modeledLen(name: string, expr: string): number {
+function modeledLen(name: string, expr: string, tfSrc: string): number {
   const fileMatch = /^base64encode\(file\("\$\{path\.module\}\/([^"]+)"\)\)$/.exec(expr);
   if (fileMatch) return b64len(readFileSync(join(INFRA, fileMatch[1])).byteLength);
   // Guard: any other base64encode(file(...)) shape must be recognized, else the model would
@@ -432,6 +455,11 @@ function modeledLen(name: string, expr: string): number {
   if (/base64encode\(file\(/.test(expr)) {
     throw new Error(`unrecognized base64encode(file()) for ${name}: ${expr}`);
   }
+  // #6780 — file()-backed vars (`file(...)` / `replace(file(), local.<strip>, "")`) land
+  // real file text via the `${indent(6, …)}` idiom — resolve them through the shared
+  // helper rather than a bare-file x-run, which gzips ~1000:1 and reads as headroom.
+  const fileBacked = resolveFileBackedValue(expr, tfSrc, name);
+  if (fileBacked !== null) return Buffer.byteLength(fileBacked, "utf8");
   if (/^base64encode\(local\.hooks_json\)$/.test(expr)) {
     const tmpl = readFileSync(join(INFRA, "hooks.json.tmpl"), "utf8");
     const rendered = tmpl.replace(
@@ -494,6 +522,30 @@ function modeledLen(name: string, expr: string): number {
   return DEFAULT_REF_LEN;
 }
 
+// `${indent(N, name)}` — terraform's idiom for landing a multi-line file() var inside a
+// YAML block scalar (the template writes `      ${indent(6, name)}` under `content: |`;
+// terraform's indent() prepends spaces to lines 2..n and line 1 inherits the literal
+// indentation already in front of the interpolation). The model must expand it — leaving
+// it literal would drop the embedded file's ~27 kB from the measurement entirely, the
+// exact silent under-count this file exists to catch (#6780).
+const TEMPLATE_VAR_RE = /\$\{(?:indent\((\d+),\s*)?([a-zA-Z0-9_]+)\s*\)?\}/g;
+
+function applyTemplateVars(
+  cloudInitFile: string,
+  s: string,
+  resolve: (name: string) => string,
+): string {
+  return s.replace(TEMPLATE_VAR_RE, (_whole, indentN, name) => {
+    const v = resolve(name);
+    if (indentN === undefined) return v;
+    const pad = " ".repeat(parseInt(indentN, 10));
+    return v
+      .split("\n")
+      .map((l, i) => (i === 0 ? l : pad + l))
+      .join("\n");
+  });
+}
+
 // Model rendered `user_data` byte-length: substitute modeled values into the cloud-init
 // template, honoring terraform's `$${` -> `${` escape (those are shell vars, not template
 // interpolations, and must NOT be modeled).
@@ -501,7 +553,7 @@ function renderedSize(cloudInitFile: string, vars: Record<string, number>): numb
   const src = readFileSync(join(INFRA, cloudInitFile), "utf8");
   const ESC = "__SOLEUR_ESC__";
   let s = src.split("$${").join(ESC);
-  s = s.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_whole, name) => {
+  s = applyTemplateVars(cloudInitFile, s, (name) => {
     if (!(name in vars)) {
       throw new Error(`${cloudInitFile} references un-provided template var \${${name}}`);
     }
@@ -511,10 +563,34 @@ function renderedSize(cloudInitFile: string, vars: Record<string, number>): numb
   return Buffer.byteLength(s, "utf8");
 }
 
+// #6780 — file()-backed map vars land their real text in the template. Two sanctioned
+// shapes, both single-source (git-data's `${indent(6, …)}` convention):
+//   file("${path.module}/X")                                   — verbatim text
+//   replace(file("${path.module}/X"), local.<strip>, "")        — comment-stripped text
+// (Any `${path.module}/../` prefix is normalized away — every payload file lives in
+// INFRA; the throw-guards below still refuse any OTHER file()-backed shape.)
+function resolveFileBackedValue(
+  expr: string,
+  tfSrc: string,
+  errLabel: string,
+): string | null {
+  const stripMatch =
+    /^replace\(file\("\$\{path\.module\}\/((?:\.\.\/)*)([^"]+)"\),\s*local\.([a-z0-9_]+),\s*""\)$/.exec(
+      expr,
+    );
+  if (stripMatch) {
+    const re = extractStripRegex(tfSrc, stripMatch[3], `${errLabel} (var strip local)`);
+    return readFileSync(join(INFRA, stripMatch[2]), "utf8").replace(re, "");
+  }
+  const rawMatch = /^file\("\$\{path\.module\}\/((?:\.\.\/)*)([^"]+)"\)$/.exec(expr);
+  if (rawMatch) return readFileSync(join(INFRA, rawMatch[2]), "utf8");
+  return null;
+}
+
 function varLengths(tfSrc: string, cloudInitFile: string): Record<string, number> {
   const map = parseVarMap(extractTemplatefileMap(tfSrc, cloudInitFile));
   const out: Record<string, number> = {};
-  for (const [name, expr] of Object.entries(map)) out[name] = modeledLen(name, expr);
+  for (const [name, expr] of Object.entries(map)) out[name] = modeledLen(name, expr, tfSrc);
   return out;
 }
 
@@ -524,19 +600,25 @@ function varLengths(tfSrc: string, cloudInitFile: string): Record<string, number
 // ~1000:1 and would make the gzip budget non-discriminating). Small variable-length secrets/ids
 // stay as fixed-length "x".repeat placeholders: at ~600 B total they don't move the budget, and
 // their exact byte content is unknown at test time anyway.
-function modeledValue(name: string, expr: string): string {
+function modeledValue(name: string, expr: string, tfSrc: string): string {
   const fileMatch = /^base64encode\(file\("\$\{path\.module\}\/([^"]+)"\)\)$/.exec(expr);
   if (fileMatch) return readFileSync(join(INFRA, fileMatch[1])).toString("base64");
   if (/base64encode\(file\(/.test(expr)) {
     throw new Error(`unrecognized base64encode(file()) for ${name}: ${expr}`);
   }
+  // #6780 — bare `file("${path.module}/x")` and `replace(file(...), local.<strip>, "")`
+  // vars land real file text via the `${indent(6, …)}` template idiom (git-data's whole
+  // payload set, and the config-refresh consumer's two payloads). Real bytes, or the
+  // payload the host never receives is what gets measured.
+  const fileBacked = resolveFileBackedValue(expr, tfSrc, name);
+  if (fileBacked !== null) return fileBacked;
   // #7095 — the ACTUAL base64 of the rendered env file, not an x-run. x-runs compress ~1000:1,
   // so an x-run stand-in here would make the base64gzip budget non-discriminating for this arg
   // — the same reason the file() branch above substitutes real bytes.
   if (/^base64encode\(local\.webhook_doppler_token_env\)$/.test(expr)) {
     return Buffer.from(renderDopplerTokenEnv(), "utf8").toString("base64");
   }
-  return "x".repeat(modeledLen(name, expr));
+  return "x".repeat(modeledLen(name, expr, tfSrc));
 }
 
 // Model the base64gzip() OUTPUT length — what Hetzner stores against the 32,768 cap for git-data
@@ -549,11 +631,11 @@ function renderedGzipB64Len(cloudInitFile: string, tfSrc: string): number {
   const src = readFileSync(join(INFRA, cloudInitFile), "utf8");
   const ESC = "__SOLEUR_ESC__";
   let s = src.split("$${").join(ESC);
-  s = s.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_whole, name) => {
+  s = applyTemplateVars(cloudInitFile, s, (name) => {
     if (!(name in map)) {
       throw new Error(`${cloudInitFile} references un-provided template var \${${name}}`);
     }
-    return modeledValue(name, map[name]);
+    return modeledValue(name, map[name], tfSrc);
   });
   s = s.split(ESC).join("${");
   return gzipSync(Buffer.from(s, "utf8"), { level: 9 }).toString("base64").length;
@@ -907,11 +989,11 @@ function renderedGzipB64LenStripped(
   const src = readFileSync(join(INFRA, cloudInitFile), "utf8");
   const ESC = "__SOLEUR_ESC__";
   let s = src.split("$${").join(ESC);
-  s = s.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_whole, name) => {
+  s = applyTemplateVars(cloudInitFile, s, (name) => {
     if (!(name in map)) {
       throw new Error(`${cloudInitFile} references un-provided template var \${${name}}`);
     }
-    return modeledValue(name, map[name]);
+    return modeledValue(name, map[name], tfSrc);
   });
   s = s.split(ESC).join("${");
   // EXPLICIT null check. `s.replace(null, "")` coerces the argument to the STRING "null" and
@@ -1275,7 +1357,7 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     // x-run stand-in. (Testing modeledValue directly avoids the trap where injecting content
     // through a bypass path proves nothing about modeledValue.)
     const fileArg = 'base64encode(file("${path.module}/git-data-bootstrap.sh"))';
-    const real = modeledValue("git_data_bootstrap_b64", fileArg);
+    const real = modeledValue("git_data_bootstrap_b64", fileArg, gitDataTf);
     expect(real).toBe(readFileSync(join(INFRA, "git-data-bootstrap.sh")).toString("base64"));
     expect(real).not.toMatch(/^x+$/); // NOT the placeholder the non-file path would produce
     expect(real.length).toBeGreaterThan(1_000); // a real script's base64 is substantial, not ~600 B of noise
@@ -1325,8 +1407,18 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
   test("inngest size constants stay discriminating (#7695)", () => {
     // Budget and floor are self-referential — loosening them to the hard cap and 1 removes both
     // the re-inlining tripwire and the non-vacuity arm with nothing objecting.
-    expect(INNGEST_GZIP_BUDGET).toBeLessThan(HETZNER_CAP - 8_000); // real headroom, not the cap
+    // #6780 — the 8 KB cap-margin is no longer satisfiable: the config-refresh consumer
+    // brings the byte-authoritative stored size to 31,848 B (920 B headroom). What the
+    // bracket must still guarantee: the budget stays strictly below the cap by enough that
+    // a regressing model or a grown payload reds HERE before the hard cap assertion, and
+    // above the model's current 31,488 so it does not false-fire on the shipped tree.
+    expect(INNGEST_GZIP_BUDGET).toBeLessThan(HETZNER_CAP - 400); // strict under-cap bracket
     expect(INNGEST_GZIP_FLOOR).toBeGreaterThan(2_000); // a gutted payload must not clear it
+    // #6780 — the floor must ALSO sit above what the model computes with the indent()
+    // file() embeds dropped (~24,948): that is the regression class the earlier
+    // `${name}`-only substitution had silently for years on git-data, and a floor under
+    // it would green a blinded model.
+    expect(INNGEST_GZIP_FLOOR).toBeGreaterThan(25_000);
     expect(INNGEST_GZIP_FLOOR).toBeLessThan(INNGEST_GZIP_BUDGET);
   });
 

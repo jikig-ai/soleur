@@ -96,5 +96,26 @@ run_case OK 0 -- --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_APPLIED versi
 # no-applied-marker branch that the empty-marker DEAD-TIMER case does not exercise.
 run_case DIVERGED 2 -- --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_APPLIED version=7 verify=ok"
 
+# --- D5 family arms (#6780): the executor's widened --grep passes the LATEST state row of the
+# WHOLE SOLEUR_INFRA_PULL_ family, not APPLIED alone. The comparator is name-agnostic — it parses
+# version=/sha256= fields — so each family member must classify correctly. ------------------------
+# NOOP same-digest: the host is current and self-reports the applied sha. Reads as OK.
+run_case OK 0 -- --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_NOOP reason=same-digest version=7 sha256=${DIGEST_A}"
+# NOOP empty-pointer: the timer is alive but sees no injected pointer while one IS promoted —
+# genuine drift (an injection gap); the row carries no sha256= field → no-applied-marker.
+run_case DIVERGED 2 -- --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_NOOP reason=empty-pointer"
+# FLOOR marker under its OWN name — the consumer emits SOLEUR_INFRA_PULL_FLOOR carrying
+# version=floor sha256=<64 zeros>. It must still land the floor-only-stuck-delta arm.
+run_case DIVERGED 2 -- --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_FLOOR version=floor sha256=0000000000000000000000000000000000000000000000000000000000000000"
+out="$("$CMP" --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_FLOOR version=floor sha256=0000000000000000000000000000000000000000000000000000000000000000" 2>&1)"
+case "$out" in
+  *floor-only-stuck-delta*) pass ;;
+  *) fail "FLOOR-named marker must reach floor-only-stuck-delta — got: $out" ;;
+esac
+# VERIFY_FAIL is a FAILURE row, never a state row: it carries no sha256= field, and its
+# rejected version travels as rejver= (NOT version=) precisely so it cannot parse as
+# applied state. Pointer promoted + only failure rows → no-applied-marker DIVERGED.
+run_case DIVERGED 2 -- --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature offered=${DIGEST_A} rejver=8"
+
 echo "inngest-config-drift-compare.test.sh: ${passes} passed, ${fails} failed"
 [[ $fails -eq 0 ]] || exit 1

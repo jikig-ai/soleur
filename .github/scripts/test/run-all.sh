@@ -161,7 +161,8 @@ suite_exit_class() {
 # this runner carried none for its own.
 #
 # A FLOOR, not equality: the count is developer-incremented, so `-eq` would turn every added
-# suite into a spurious failure. Derived from a green run (14 suites, 2026-09-27, with
+# suite into a spurious failure. Derived from a green run (15 suites, 2026-10-14, with
+# test-check-inngest-bootstrap-build.sh, #8781; 14 on 2026-09-27 with
 # test-mint-inngest-bootstrap-tag.sh, #4326; 13 on 2026-09-24 with
 # test-cancel-superseded-pr-runs.sh; 12 on 2026-09-19; was 11 until
 # test-bump-inngest-bootstrap-pin.sh landed with #8359; 15 with
