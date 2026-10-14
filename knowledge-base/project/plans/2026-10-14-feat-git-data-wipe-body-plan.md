@@ -715,6 +715,7 @@ discoverability_test:
 - **Loaded machine:** targeted suites only; the 277 KB access census is slow; CI is the gate.
 - **PR-C preconditions** (#8571 or a recorded owner acceptance; a READY PR-C; the dispatch-to-merge bound) are runbook text, not machine-enforced.
 - **Reboot dead-end** (H8/H10 after any host reboot) is an accepted residual routed to the CLO; no flag accepts an owner-supplied read.
+- **Collision probe 2 (after planning, 2026-10-14):** the four `10138 in:body` PRs are all merged; one open sibling overlaps by file anchor: draft PR #10185 (`feat-one-shot-10119-10120-10091-10092-10093-argv-bearer-followups`, ADR-280 and the argv-bearer sweep family). The shared hot spots are the literal floors in `tests/scripts/test-argv-bearer-sweep.sh` (`S3_CALLS_FLOOR`, `S4_POP_FLOOR`, `S4_SCALLS_FLOOR`): merge main before the first push of the sweep edit and again before review, take main's line and re-apply this PR's one-token change, re-run the sweep after each resolution (learning: single-literal hot spots).
 - **Precedent drift:** the retired workspaces `wipe` job is read for sequence only; its fallback to the read/write token is never reused.
 
 ## References & Research
