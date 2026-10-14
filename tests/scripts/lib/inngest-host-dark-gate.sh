@@ -283,7 +283,7 @@ _ihdg_decoded_rows() {
 
 # _ihdg_undecodable <rows-file> — rc 0 when the file carries at least one NON-EMPTY line and NONE
 # of its lines decodes; rc 1 otherwise. No token, no policy: the caller names the refusal (E2 says
-# `unreadable`, E13 says `fsm_unreadable`). ONE definition for both consumers (#8054 review: the
+# `unreadable`, E13 says `fsm_unreadable`). ONE definition for its two consumers, E2 and E13 (#8054 review: the
 # two inline copies had already drifted from G10's idiom).
 #
 # NON-EMPTY lines (`grep -c .`), not physical lines (`grep -c ''`), and that distinction is what
@@ -303,8 +303,8 @@ _ihdg_undecodable() {
 }
 
 # _ihdg_refuse <token> — print a refusal token for the CALLER to dispatch, rc 1. Shared helpers
-# name the refusal; only the two entry points turn a token into an exit code (via _ihdg_verdict),
-# so policy cannot leak into a helper both of them trust. The test suite asserts no `_ihdg_*`
+# name the refusal; only the entry point turns a token into an exit code (via _ihdg_verdict),
+# so policy cannot leak into a helper it trusts. The test suite asserts no `_ihdg_*`
 # helper body calls _ihdg_verdict.
 _ihdg_refuse() {
   printf '%s\n' "$1"
@@ -330,7 +330,7 @@ _ihdg_epoch_from_dt() {
 # recut gate and E1-E7 of the execute gate are the same seven predicates; until #8054 they were
 # ~110 lines inlined in `inngest_host_dark_gate` and the execute gate would have had to carry a
 # second copy — the exact "two readers that disagree" class this family of defects keeps producing.
-# Both entry points call this and then grade the CONTENT of the row they get back.
+# The execute gate calls this and then grades the CONTENT of the row they get back.
 #
 # On success prints TWO lines — the graded row's age in seconds, then its message — and returns
 # 0. On refusal prints the refusal token alone and returns 1; the caller dispatches it through

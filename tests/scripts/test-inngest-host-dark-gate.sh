@@ -1058,7 +1058,7 @@ _rc=0; _out="$(_ihdg_graded_row "$TMP/erg-old.json" 0 "$HOSTV" "$HOSTNAMEV" 8 ""
 if [[ "$_rc" -eq 1 && "$_out" == "stale_row" ]]; then pass; else fail "[helper] _ihdg_graded_row with an EMPTY now_epoch must refuse a 2h-old row as stale_row on the real clock" "$_rc" "$_out"; fi
 # The lib defines exactly ONE entry point. The workflow-test census keys on the `inngest_*_gate` name
 # family, so a second entry point under another name would be invisible to it; this pins the count.
-_entry_n="$(grep -cE '^inngest_[a-z0-9_]+\(\) *\{' "$GATE")"
+_entry_n="$(grep -cE '^(function +)?inngest_[a-z0-9_]+ *(\(\))? *\{' "$GATE")"
 [[ "$_entry_n" -eq 1 ]] && pass || fail "[helper] the lib defines ${_entry_n} inngest_* entry point(s); it must define exactly one (inngest_execute_registry_gate)"
 
 # ── Ports: kills the retired battery held and this one did not ───────────────────

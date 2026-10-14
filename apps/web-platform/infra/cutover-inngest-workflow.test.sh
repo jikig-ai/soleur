@@ -3424,7 +3424,7 @@ assert "#8316 the word-bounded strip does not eat a longer name that begins with
 assert "#8316 the G3.7 latched ::error:: text no longer claims inngest-volume-recut exists" \
   "! grep -qE 'volume-recut.{0,40}DOES exist' '$BODY_SH'"
 assert "#8316 the G3.7 latched ::error:: text names the recut target as retired by #8285" \
-  "grep -qF 'inngest-volume-recut was retired by #8285' '$BODY_SH'"
+  "grep -F 'op=arm: G3.7 REFUSING' '$BODY_SH' | grep -qF 'inngest-volume-recut was retired by #8285'"
 # Row H — M1.2: the probe arm's call renamed. Property: the census (registry-probe=1) reds.
 check_rpg_census() { _gate_census "$1" >/dev/null; }
 mutate_file "rpg gate call renamed (census M1.2)" "$BODY_SH" "${_RPG_RANGE}"'s|^      RPG_VERDICT="\$(inngest_execute_registry_gate |      RPG_VERDICT="$(inngest_executeX_registry_gate |' check_rpg_census
