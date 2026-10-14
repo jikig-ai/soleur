@@ -108,6 +108,9 @@ ALWAYS_ON_SUITES=(
   "apps/web-platform/scripts/seed-live-verify-user.test.sh"
   "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh"
   "scripts/assert-dependabot-drain-live"
+  # #8875: the emitter-selection census walks the whole tracked tree — repo-global by
+  # construction (git ls-files + per-file comment-stripped invocation discovery).
+  "scripts/betterstack-emitter-read-live"
   "scripts/followthrough-varq-ban-live"
   "scripts/inngest-liveness-classify"
   "scripts/lint-agents-compound-sync-live"
@@ -2241,4 +2244,16 @@ AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
   "scripts/lib/repo-write-boundary.sh"
   "scripts/lib/repo-write-boundary.test.sh"
   "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/betterstack-emitter-read — the #8875 census mutation battery. It drives the guard
+# over git-init'd fixture trees, not the repo corpus; the `git ls-files` text that tripped
+# the corpus-walk arm is a comment naming the GUARD's producer. Declared from the repo paths
+# its suite file names.
+AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
+  "scripts/lib/bs-emitter-row.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-betterstack-emitter-read.sh"
+  "scripts/lint-betterstack-emitter-read.test.sh"
+  "scripts/test-all.sh"
 )

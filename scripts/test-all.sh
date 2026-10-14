@@ -5460,6 +5460,12 @@ if want_scripts; then
   # proof (both RED directions) that the guard can catch the banned form.
   run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
   run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
+  # #8875: the emitter-selection census — every tracked betterstack-query.sh reader must
+  # select rows by SYSLOG_IDENTIFIER (or a sourced emitter def) or carry a reasoned allowlist
+  # entry. Same two-line shape as varq-ban: -live runs the guard over the real tree, the
+  # .test.sh is the mutation battery over fixture git trees.
+  run_suite "scripts/betterstack-emitter-read-live" bash scripts/lint-betterstack-emitter-read.sh
+  run_suite "scripts/betterstack-emitter-read" bash scripts/lint-betterstack-emitter-read.test.sh
   # The differential oracle over every executable reader of the directive (#7490). Four copies
   # of the fence predicate cannot share code (two are prose an agent pastes; one is a hook that
   # must not `source` a repo file), so they are held in agreement by a walker instead.
