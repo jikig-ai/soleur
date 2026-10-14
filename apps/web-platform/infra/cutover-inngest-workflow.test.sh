@@ -302,7 +302,7 @@ assert "disjointness: >=1 OCI surface + >=1 webhook surface (min-cardinality)" "
 # four webhook surfaces even though its real delivery channel is the host's pull. The
 # exemption is DERIVED from inngest-config-refresh-set.txt — a non-member flip asset on a
 # webhook surface is still the topology error this guard exists to catch.
-REFRESH_SET_BN="$(grep -vE '^[[:space:]]*(#|$)' "$INFRA_DIR/inngest-config-refresh-set.txt" | xargs -r -n1 basename | sort -u)"
+REFRESH_SET_BN="$(grep -vE '^[[:space:]]*(#|$)' "$INFRA_DIR/inngest-config-refresh-set.txt" | xargs -r -n1 basename | sort -u || true)"
 for asset in "${FLIP_TRIO[@]}"; do
   assert "flip asset '$asset' present on an OCI/cloud-init surface" "grep -qF '$asset' ${OCI_SURFACES[*]}"
   for wfs in "${WEBHOOK_SURFACES[@]}"; do
@@ -436,7 +436,7 @@ _cw_mapped_names() { grep -oE '^[[:space:]]+CUTOVER_[A-Z_]+:' "$1" | tr -d ' :' 
   _cw_deferred="$(printf '%s\n' "${DEFERRED_CUTOVER_VARS[@]}" | cut -d'|' -f1 | sort -u)"
   _cw_accounted="$(printf '%s\n%s\n' "$_cw_mapped" "$_cw_deferred" | sort -u | grep -v '^$' || true)"
   assert "#6940 guard non-vacuous: the script dereferences >=10 CUTOVER_ names" "[[ \"\$(printf '%s\n' \"\$_cw_derefs\" | grep -c .)\" -ge 10 ]]"
-  _cw_unmapped="$(comm -23 <(printf '%s\n' "$_cw_derefs") <(printf '%s\n' "$_cw_accounted"))"
+  _cw_unmapped="$(LC_ALL=C comm -23 <(printf '%s\n' "$_cw_derefs") <(printf '%s\n' "$_cw_accounted"))"
   assert "#6940 completeness: every \$CUTOVER_* deref in cutover-inngest.sh is step-env mapped or on the named DEFERRED list" "[[ -z \"\$_cw_unmapped\" ]]"
   # Every deferred row must carry an issue ref + a reason (a bare name is not a deferral,
   # it is a gap with decoration).
@@ -446,7 +446,7 @@ _cw_mapped_names() { grep -oE '^[[:space:]]+CUTOVER_[A-Z_]+:' "$1" | tr -d ' :' 
   # pass on the mapping while the AC-V4 precondition was never re-checked). The DEFERRED
   # row is REMOVED when the mapping lands — pin that the table only holds still-unmapped
   # names.
-  _cw_defer_mapped="$(comm -12 <(printf '%s\n' "$_cw_deferred") <(printf '%s\n' "$_cw_mapped"))"
+  _cw_defer_mapped="$(LC_ALL=C comm -12 <(printf '%s\n' "$_cw_deferred") <(printf '%s\n' "$_cw_mapped"))"
   assert "#6940 deferred table: no DEFERRED name is simultaneously mapped (drop the row when it lands)" "[[ -z \"\$_cw_defer_mapped\" ]]"
   # AC-V4 precondition stays pinned: the baseline must remain unmapped while the gate is red.
   assert "#6940 CUTOVER_REGISTRY_BASELINE stays UNMAPPED (AC-V4 not green — dormant exit 1 stays dormant)" "! grep -qE '^[[:space:]]+CUTOVER_REGISTRY_BASELINE:' '$WF_YAML'"
@@ -483,13 +483,13 @@ FIX_CW_STALE_WF="$(mktemp)"; SCRATCH+=("$FIX_CW_STALE_WF")
 grep -vE '^[[:space:]]+CUTOVER_QUIESCE_PROBES:' "$WF_YAML" > "$FIX_CW_STALE_WF"
 assert "#6940 demo non-vacuous: the stale-workflow fixture really dropped the CUTOVER_QUIESCE_PROBES env line" "! grep -qE '^[[:space:]]+CUTOVER_QUIESCE_PROBES:' '$FIX_CW_STALE_WF' && grep -qE '^[[:space:]]+CUTOVER_QUIESCE_PROBES:' '$WF_YAML'"
 _cw_stale_acct="$(printf '%s\n%s\n' "$(_cw_mapped_names "$FIX_CW_STALE_WF")" "$_cw_deferred" | sort -u | grep -v '^$' || true)"
-_cw_stale_missing="$(comm -23 <(_cw_deref_names "$BODY_SH") <(printf '%s\n' "$_cw_stale_acct"))"
+_cw_stale_missing="$(LC_ALL=C comm -23 <(_cw_deref_names "$BODY_SH") <(printf '%s\n' "$_cw_stale_acct"))"
 assert "#6940 demo (a): against the stale fixture the guard's diff lists CUTOVER_QUIESCE_PROBES unmapped" "grep -qxF 'CUTOVER_QUIESCE_PROBES' <<<\"\$_cw_stale_missing\""
 
 FIX_CW_PHANTOM_SH="$(mktemp)"; SCRATCH+=("$FIX_CW_PHANTOM_SH")
 cat "$BODY_SH" > "$FIX_CW_PHANTOM_SH"
 printf '%s\n' '' '# fixture-injected unmapped deref (mutation row 1)' 'echo "${CUTOVER_NEVER_MAPPED_KNOB:-}"' >> "$FIX_CW_PHANTOM_SH"
-_cw_phantom_missing="$(comm -23 <(_cw_deref_names "$FIX_CW_PHANTOM_SH") <(printf '%s\n' "$_cw_accounted"))"
+_cw_phantom_missing="$(LC_ALL=C comm -23 <(_cw_deref_names "$FIX_CW_PHANTOM_SH") <(printf '%s\n' "$_cw_accounted"))"
 assert "#6940 demo (b): a new unmapped \$CUTOVER_ deref in the script body is caught (CUTOVER_NEVER_MAPPED_KNOB listed)" "grep -qxF 'CUTOVER_NEVER_MAPPED_KNOB' <<<\"\$_cw_phantom_missing\""
 
 FIX_CW_DOPPLER_SH="$(mktemp)"; SCRATCH+=("$FIX_CW_DOPPLER_SH")

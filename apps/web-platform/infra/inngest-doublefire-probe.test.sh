@@ -800,8 +800,8 @@ test_df_page_size_gate() {
   # wiring: the gate sits ABOVE the --argjson first site (a later-introduced
   # unvalidated read would re-open the channel this closes).
   local gate_ln argjson_ln
-  gate_ln=$(grep -n 'INNGEST_GQL_PAGE_SIZE is not a positive integer' "$TARGET" | head -1 | cut -d: -f1)
-  argjson_ln=$(grep -n -- '--argjson first "\$PAGE_SIZE"' "$TARGET" | head -1 | cut -d: -f1)
+  gate_ln=$(grep -n 'INNGEST_GQL_PAGE_SIZE is not a positive integer' "$TARGET" | head -1 | cut -d: -f1 || true)
+  argjson_ln=$(grep -n -- '--argjson first "\$PAGE_SIZE"' "$TARGET" | head -1 | cut -d: -f1 || true)
   if [[ -n "$gate_ln" && -n "$argjson_ln" && "$gate_ln" -lt "$argjson_ln" ]]; then
     PASS=$((PASS+1)); echo "  PASS: validation precedes --argjson first ($gate_ln < $argjson_ln)"
   else
