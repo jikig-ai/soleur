@@ -242,6 +242,8 @@ If a gate goes red, fix the edit; never loosen a baseline, renew an exception or
 
 Diff checks below use word-level added text, because the touched register and `Last Updated` lines are single paragraphs of 1 to 38 KB and a whole-line diff returns every pre-existing token on them: `ADDED() { git diff -U0 --word-diff=porcelain origin/main...HEAD -- "$@" | grep -E '^\+[^+]'; }` (tested on a scratch repo: one `+` line per contiguous added run; `+++` file headers are excluded).
 
+**Byte-level span check (ruled by CTO agent, 2026-10-14; word-diff alone is a reviewer aid, not the gate).** For every edited file, a throwaway script run with `python -I` and kept out of the repo loads the `origin/main` version and the working version, asserts each intended old span occurs exactly once in the old file, replaces it with the intended new text, and asserts the result is byte-identical to the working file. This is the acceptance check for AC8 and every "only these spans changed" claim; a failure blocks marking the PR ready.
+
 ### Pre-merge (PR)
 
 - [ ] AC1. `grep -c 'All communication with the Web Platform is protected by TLS' docs/legal/privacy-policy.md plugins/soleur/docs/pages/legal/privacy-policy.md` prints 0 for both, and the exact new bullet text of Phase 1a appears exactly once in each.
