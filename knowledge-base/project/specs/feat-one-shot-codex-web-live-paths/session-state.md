@@ -1699,3 +1699,19 @@
 - A newer docs-only commit and exact-source pairing/export/PR-body refresh are
   still required after this record. All operation and authorization holds
   remain in force.
+
+### Third main sync and offline verification — 2026-10-14
+
+- The exact-head watch again reported BEHIND. Main advanced to
+  `df6b1ebc3e986692be07339dc71e4479011846d5` (#10269), a CI/test registration
+  change for the Inngest bundle mirror. `git merge-tree --write-tree` was clean;
+  `plugins/soleur/scripts/sync-pr-behind.sh 9051 --step` merged and pushed it as
+  `e8f325e28d1c42e78e116a9aea9270b5e17ff3ff`. Qualification runtime, app and
+  migration files were not changed by this sync.
+- The complete registered offline wrapper passed on the merged head with
+  `POST_MAIN_7243_OFFLINE_RC=0`; all logged operations remain zero. The first
+  invocation yielded without a captured process exit, so a second bounded run
+  recorded the explicit zero exit. No live services or build command ran.
+- PR checks for the new head need a fresh watch. A final documentation record,
+  source pairing/export and PR description also remain due. Draft, disarmed,
+  default-off, customer-blocked and every authorization/operational hold persist.

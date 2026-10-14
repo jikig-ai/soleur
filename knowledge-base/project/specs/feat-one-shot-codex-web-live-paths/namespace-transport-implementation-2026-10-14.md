@@ -273,3 +273,14 @@ intended draft gate, not full-suite evidence. Tenant integration and all four
 deploy-script shards passed. The newer documentation record requires fresh
 head-bound pairing/export, PR description and CI watch. No ready or merge action
 was taken.
+
+## Third main sync and offline wrapper
+
+Main advanced to `df6b1ebc3e986692be07339dc71e4479011846d5` (#10269), which
+changes Inngest bundle mirroring, registered-suite coverage and CI metadata. The
+merge tree was clean, and the canonical sync pushed `e8f325e28d1c42e78e116a9aea9270b5e17ff3ff`.
+The complete registered offline qualification wrapper passed afterward with
+`POST_MAIN_7243_OFFLINE_RC=0`; its operation counts stayed zero. A first wrapper
+invocation did not yield an explicit exit receipt, so it was repeated in a
+bounded capture and the successful zero status was recorded. A fresh exact-head
+source pairing/export, PR description and check watch are still required.

@@ -146,3 +146,9 @@ cleans up when its context closes. Keep local evidence handling self-cleaning
 without a shell deletion command. Two documentation patch attempts also failed
 because their context did not match the on-disk line wraps; no files changed.
 Re-read exact tails and apply one file at a time when patch context fails.
+
+The first post-sync offline wrapper invocation yielded output but its shell
+session was no longer available when queried for an exit receipt. Re-run the
+bounded suite with explicit `rc=0; command || rc=$?` capture and a final status
+line; use only that second run's explicit `POST_MAIN_7243_OFFLINE_RC=0` as the
+success evidence.
