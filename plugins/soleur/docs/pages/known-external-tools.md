@@ -125,11 +125,17 @@ gates — the <code>gh pr merge</code> review-evidence gate, <code>git commit</c
 shared wrapper-prefix fragment (<code>plugins/soleur/scripts/lib/wrapper-boundary.sh</code>),
 so <code>rtk gh pr merge</code>, <code>sudo rtk git commit</code>,
 <code>X=1 rtk gh pr merge</code> and <code>… -- rtk gh pr merge</code> reach them judged.
-Two residual classes remain BY DESIGN: unknown wrappers are not unwrapped (the fragment is
-a closed grammar, not a heuristic), and opaque string payloads — <code>rtk run -c '…'</code>,
-<code>rtk summary --shell '…'</code> — join the hooks' existing declared-lexical-limit class
-(alongside <code>bash -c '…'</code>, subshells and eval): they are not matchable without
-parsing a string as shell, which the gates deliberately never do.</p>
+Three residual classes remain BY DESIGN: (1) wrappers and wrapper operands outside the
+closed atom grammar are not unwrapped — that includes <em>known</em> launchers whose
+operand words are unmodeled (<code>sudo -u root …</code>, <code>env -C dir …</code>,
+<code>nice -n N …</code>, <code>timeout N …</code>): the prefix stops at the flag word and
+the gated command is not reached; (2) opaque string payloads —
+<code>rtk run -c '…'</code>, <code>rtk summary --shell '…'</code> — join the hooks' existing
+declared-lexical-limit class (alongside <code>bash -c '…'</code>, subshells and eval): they
+are not matchable without parsing a string as shell, which the gates deliberately never do;
+and (3) sites whose boundary alternation itself differs (e.g. the <code>with_lock … --
+</code> member) — prefix tolerance is shared, boundary shape is per-site, tracked at
+<a href="https://github.com/jikig-ai/soleur/issues/10315">#10315</a>.</p>
 
 <h2>Three-rung diagnosis</h2>
 

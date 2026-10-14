@@ -20,7 +20,10 @@ TOTAL=0
 SSH_RE='^[[:space:]]*([-*]|[0-9]+\.)?[[:space:]]*`?(ssh\b|docker\s+exec\b|journalctl\s+.*(-f\b|--follow\b)|systemctl\s+(restart|stop|start|kill)\b|kill\b|systemd-run\b)'
 # The shared wrapper-boundary fragment (#10248) — same source the gate's own
 # incidents.sh chain provides; restated here so CMD_RE stays a faithful copy.
+# unset-first per the lib contract: an inherited env value must not masquerade
+# as the loaded fragment after a failed source.
 # shellcheck source=../../plugins/soleur/scripts/lib/wrapper-boundary.sh
+unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX SOLEUR_BOUNDARY_PFX_LOADED
 source "$SCRIPT_DIR/../../plugins/soleur/scripts/lib/wrapper-boundary.sh" 2>/dev/null || true
 CMD_RE='(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'
 

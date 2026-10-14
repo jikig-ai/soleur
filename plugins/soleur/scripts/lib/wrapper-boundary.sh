@@ -34,8 +34,11 @@ SOLEUR_ENV_ASN_RE='[A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+'
 SOLEUR_LAUNCHER_RE='(sudo|command|nice|env|xargs)'
 # Globals: -v/-vv/-vvv/--verbose (counted) and --skip-env (takes an optional
 # =value — the argv[0]-unwrap SUT accepts both spellings). Exec subcommands:
-# run|err|test|proxy|bypass|summary (canonical TSV, class=exec).
-SOLEUR_RTK_RE='rtk([[:space:]]+(-v|-vv|-vvv|--verbose|--skip-env(=[^[:space:]]+)?|run|err|test|proxy|bypass|summary))*'
+# run|err|test|proxy|bypass|summary (canonical TSV, class=exec). `--` is the
+# clap end-of-options marker — inert anywhere in the wrapper span, so
+# `rtk -- run gh` and `rtk run -- gh` both execute `gh` upstream and both
+# must reach the gated literal here (canonical TSV flag-global row).
+SOLEUR_RTK_RE='rtk([[:space:]]+(-v|-vv|-vvv|--verbose|--skip-env(=[^[:space:]]+)?|--|run|err|test|proxy|bypass|summary))*'
 SOLEUR_BOUNDARY_PFX="(${SOLEUR_ENV_ASN_RE}|${SOLEUR_LAUNCHER_RE}|${SOLEUR_RTK_RE})"
 
 # Load sentinel — suites assert this, never `[[ -n "$SOLEUR_BOUNDARY_PFX" ]]`,

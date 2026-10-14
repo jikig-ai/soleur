@@ -130,7 +130,14 @@ SCAN=$(strip_command_bodies "$CMD")
 # live-path rows into the deny — fail-closed (the hatch covers), because
 # this repo's pipeline never ships a non-main base.
 _MERGE_BOUNDARY='(^|&&|\|\||\||;|\(|`|\{|&|[[:space:]]--[[:space:]])'
-_MERGE_PREFIX='(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]&#|;()]+|if|while|until|then|do|elif|else|!|time|command|builtin|exec|nohup)[[:space:]]+)*((sudo|env|timeout|nice|stdbuf|ionice|setsid|xargs|watch|flock|doas|pkexec)([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+)?'
+# #10248: the rtk atom joins the first group's per-word alternation — the
+# whole `rtk run …` chain consumes as ONE atom (its inner members span
+# words), keeping this file's own env-asn/keyword/arg-launcher superset
+# intact rather than narrowing it to the shared fragment. The
+# `:-RTK_UNPROVISIONED_10248` default is a never-matching literal for the
+# fail-soft arm, since the atom position cannot tolerate an empty
+# expansion (it would match the empty string at every word boundary).
+_MERGE_PREFIX='(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]&#|;()]+|if|while|until|then|do|elif|else|!|time|command|builtin|exec|nohup|'"${SOLEUR_RTK_RE:-RTK_UNPROVISIONED_10248}"')[[:space:]]+)*((sudo|env|timeout|nice|stdbuf|ionice|setsid|xargs|watch|flock|doas|pkexec)([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+)?'
 _GH_GFLAGS='([[:space:]]+--?[A-Za-z0-9-]+(=[^[:space:]]+)?([[:space:]]+[^-[:space:]][^[:space:]]*)?)*'
 
 # _deny is defined BEFORE the trigger check below because the miss arm can

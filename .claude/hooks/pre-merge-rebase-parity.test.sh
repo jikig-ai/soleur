@@ -232,6 +232,8 @@ fi
 # boundary + wrapper-atom prefix, not `^[^g]*` — `X=g` strands that strip on
 # the env-assignment's own `g`, leaving the gated command unparsed.
 # Extract the function from the hook source and run it against the fragment.
+# unset-first per the lib contract (an inherited env value must not masquerade).
+unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX SOLEUR_BOUNDARY_PFX_LOADED
 source "$SCRIPT_DIR/../../plugins/soleur/scripts/lib/wrapper-boundary.sh" 2>/dev/null || true
 eval "$(sed -n '/^_merge_args()/,/^}/p' "$CLAUDE_HOOK")"
 _margs="$(_merge_args 'X=g rtk gh pr merge 5' 2>/dev/null)"

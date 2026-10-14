@@ -90,6 +90,8 @@ TF_APPLY="$(pfx '(terraform|tofu)[[:space:]]+apply([[:space:]]|;|\)|&|$)')"
 M "$GH_PR_MERGE" 'rtk gh pr merge 5'                    1 'rtk gh pr merge (bare rtk passthrough)'
 M "$GH_PR_MERGE" 'rtk run gh pr merge 5'               1 'rtk run gh pr merge'
 M "$GH_PR_MERGE" 'rtk -v run gh pr merge 5'            1 'rtk -v run gh pr merge (global pre-subcommand)'
+M "$GH_PR_MERGE" 'rtk run -- gh pr merge 5'            1 'rtk run -- gh pr merge (end-of-options marker, review F4)'
+M "$GH_PR_MERGE" 'rtk -- run gh pr merge 5'            1 'rtk -- run gh pr merge (marker before exec word)'
 M "$GH_PR_MERGE" 'rtk run --skip-env gh pr merge 5'    1 'rtk run --skip-env gh pr merge (global post-subcommand)'
 M "$GH_PR_MERGE" 'rtk run --skip-env=ci gh pr merge 5' 1 'rtk run --skip-env=<v> gh pr merge (=value form)'
 M "$GH_PR_MERGE" 'sudo rtk gh pr merge 5'              1 'sudo rtk gh pr merge (launcher + rtk compose)'
@@ -138,7 +140,11 @@ echo "-- fail-soft rows (fragment unset ⇒ identical pre-fix matching) --"
 # testing the degradation path needs its absence, not a stand-in name.
 (
   unset SOLEUR_BOUNDARY_PFX
-  PFX_EMPTY_RE="(^|&&|\\|\\||;|[[:space:]]--[[:space:]])[[:space:]]*(\${SOLEUR_BOUNDARY_PFX:-}[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)"
+  # No backslash on the var — inside this subshell it is genuinely unset, so
+  # ${SOLEUR_BOUNDARY_PFX:-} expands to empty and the pattern under test is the
+  # REAL fail-soft form `([[:space:]]+)*`. An escaped \${…} would paste the
+  # literal text into the regex and make the verdicts coincidental (P2 fix).
+  PFX_EMPTY_RE="(^|&&|\\|\\||;|[[:space:]]--[[:space:]])[[:space:]]*(${SOLEUR_BOUNDARY_PFX:-}[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)"
   echo "bare:$(grep -cE "$PFX_EMPTY_RE" <<<'gh pr merge 5' || true)"
   echo "rtk:$(grep -cE "$PFX_EMPTY_RE" <<<'rtk gh pr merge 5' || true)"
 ) > /tmp/bp-failsoft.$$ 2>/dev/null
@@ -232,6 +238,10 @@ is_exempt() {
 # (kubectl, aws, stripe) escapes derivation silently — extend the predicate when
 # a gate on a new command lands; a loose tail that misses sites is the worst
 # outcome for a drift guard.
+# NOTE on the boundary shape: inline candidacy requires a literal `(^|`
+# alternation — a site anchored on bare `^` (precommit-guard.sh COMMIT_RE) is
+# not derivable; its consumption is instead backstopped by the integration rows
+# above (a missing fragment reds `rtk git commit` → rc 1).
 # lib/ is in scope: the carrier itself (incidents.sh detect_bypass) holds
 # boundary-anchored git patterns — a census that cannot see its own carrier is
 # the blind spot the review design-pass flagged.
@@ -242,7 +252,14 @@ CANDIDATES="$(
     awk -v file="$rel" '
       /^[[:space:]]*#/ { next }
       { line = $0; sub(/[[:space:]]#.*$/, "", line) }
-      line ~ /\(\^\|/ && line ~ /(gh|git|terraform|tofu|doppler|rm)[ \\(\[|]/ { printf "%s:%d\n", file, NR }
+      line ~ /\(\^\|/ && line ~ /(gh|git|terraform|tofu|doppler|rm)[ \\(\[|]/ { printf "%s:%d:inline\n", file, NR; next }
+      # Variable-COMPOSED boundary patterns (review panel P1/P2): a gate whose
+      # boundary alternation lives in a variable (ship-kb-archive-gate.sh
+      # _MERGE_BOUNDARY/_MERGE_PREFIX) produces no `(^|`-and-literal line at all.
+      # The usage line — a `${…BOUNDARY|PREFIX|PFX}` reference next to a gated
+      # literal — is the candidate. `SOLEUR_` names are excluded: they are the
+      # shared fragment itself, already judged by the inline arm above.
+      line ~ /\$\{?[A-Za-z_]*(BOUNDARY|PREFIX)/ && line !~ /SOLEUR_/ && line ~ /(gh|git|terraform|tofu|doppler|rm)[ \\(\[|$]/ { printf "%s:%d:composed\n", file, NR }
     ' "$f"
   done
 )"
@@ -252,7 +269,23 @@ declare -A CONSUMING_FILES=()
 while IFS= read -r site; do
   [[ -n "$site" ]] || continue
   CAND_COUNT=$((CAND_COUNT + 1))
-  file="${site%:*}"; lineno="${site##*:}"
+  file="${site%%:*}"; rest="${site#*:}"; lineno="${rest%%:*}"; kind="${rest##*:}"
+  if [[ "$kind" == "composed" ]]; then
+    # Composed consumption is FILE-level: the composed definition must name a
+    # shared atom var. Non-comment lines only, so a commented-out reference
+    # cannot fake provision.
+    # awk one-pass — `grep -v | grep -q` under pipefail SIGPIPEs the producer
+    # (early match closes the pipe, rc 141 reads as failure).
+    if awk '/^[[:space:]]*#/ { next } /SOLEUR_(BOUNDARY_PFX|RTK_RE)/ { found=1 } END { exit !found }' "$REPO_ROOT/$file"; then
+      CONSUMING=$((CONSUMING + 1))
+      CONSUMING_FILES["$file"]=1
+    elif is_exempt "${site%:*}"; then
+      :
+    else
+      UNCOVERED+="$site"$'\n'
+    fi
+    continue
+  fi
   # Strip the trailing comment EXACTLY as the candidacy scan does — a
   # `${SOLEUR_BOUNDARY_PFX` mentioned only inside a trailing comment must not
   # count as consumption (review design-pass P2: raw-line vs stripped-line asymmetry).
@@ -260,7 +293,7 @@ while IFS= read -r site; do
   if [[ "$line" == *'${SOLEUR_BOUNDARY_PFX'* || "$line" == *'$SOLEUR_BOUNDARY_PFX'* ]]; then
     CONSUMING=$((CONSUMING + 1))
     CONSUMING_FILES["$file"]=1
-  elif is_exempt "$site"; then
+  elif is_exempt "${site%:*}"; then
     :
   else
     UNCOVERED+="$site"$'\n'
@@ -269,9 +302,9 @@ done <<<"$CANDIDATES"
 
 echo "  census: $CAND_COUNT candidates, $CONSUMING consuming, ${#EXEMPTIONS[@]} exempt"
 
-# Floor: the derived candidate set must be at least the known 32 (20 consumers +
+# Floor: the derived candidate set must be at least the known 36 (24 consumers +
 # 12 exemptions) — a neutered scan that finds 0 sites reds here.
-MIN_CANDIDATES=32
+MIN_CANDIDATES=36
 if [[ "$CAND_COUNT" -lt "$MIN_CANDIDATES" ]]; then
   printf '[FATAL] census floor: only %s boundary-anchored candidates found, floor is %s — the scan is neutered\n' "$CAND_COUNT" "$MIN_CANDIDATES" >&2
   exit 1
@@ -285,7 +318,10 @@ assert_eq "" "$UNCOVERED" "every derived boundary-anchored gated-command site co
 # sources the lib) or wrapper-boundary.sh directly.
 UNPROVISIONED=""
 for file in "${!CONSUMING_FILES[@]}"; do
-  grep -qE 'source.*(incidents\.sh|wrapper-boundary\.sh)' "$REPO_ROOT/$file" \
+  # Comment-stripped: `# shellcheck source=lib/incidents.sh` is present in
+  # every consumer and must not count as a live carrier source. awk one-pass —
+  # `grep -v | grep -q` under pipefail SIGPIPEs the producer on early match.
+  awk '/^[[:space:]]*#/ { next } /source.*(incidents\.sh|wrapper-boundary\.sh)/ { found=1 } END { exit !found }' "$REPO_ROOT/$file" \
     || UNPROVISIONED+="$file"$'\n'
 done
 assert_eq "" "$UNPROVISIONED" "every consuming file sources a carrier (incidents.sh or wrapper-boundary.sh)$( [[ -n "$UNPROVISIONED" ]] && printf ' — unprovisioned:\n%s' "$UNPROVISIONED" )"
@@ -307,7 +343,7 @@ done
 assert_eq "" "$STALE" "every exemption entry still names a live candidate line$( [[ -n "$STALE" ]] && printf ' — stale:\n%s' "$STALE" )"
 
 # --- assertion floor ---------------------------------------------------------
-MIN_CASES=52
+MIN_CASES=54
 if [[ $((PASS + FAIL)) -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$((PASS + FAIL))" "$MIN_CASES" >&2
   exit 1

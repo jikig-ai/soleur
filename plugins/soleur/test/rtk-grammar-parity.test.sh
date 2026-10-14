@@ -102,6 +102,12 @@ if [[ -f "$WBLIB" ]]; then
   [[ -n "$tsv_glob" ]] || { echo "FATAL: canonical TSV yielded no flag-global rows"; exit 3; }
   assert_eq "$tsv_glob" "$frag_glob" "wrapper-boundary SOLEUR_RTK_RE global-flag set matches canonical flag-global rows"
 
+  # Partition completeness: every member must land in exactly one asserted set —
+  # a member matching neither ^[a-z]+$ (exec) nor ^- (flag) would drift untested.
+  frag_all="$(grep -vE '^\s*$' <<<"$members" | sed 's/(=.*//' | sort | tr '\n' ' ' | sed 's/ $//')"
+  frag_union="$(printf '%s\n%s\n' "$frag_exec" "$frag_glob" | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ' | sed 's/ $//')"
+  assert_eq "$frag_all" "$frag_union" "fragment member partition is complete (exec ∪ globals == all members)"
+
   # flag-string flags (-c/--command/--shell) are the exclusion pin: the boundary
   # atom must NOT admit them (opaque-payload class), so zero members overlap.
   tsv_str="$(awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $2 == "flag-string" { print $1 }' "$CANON" | sort)"

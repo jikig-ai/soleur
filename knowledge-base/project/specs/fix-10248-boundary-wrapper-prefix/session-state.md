@@ -41,3 +41,11 @@
   - P3: exemption comment refs re-pointed; command-vocab extension note added.
 - Deferred: boundary-alternation canonicalization → filed #10315 (milestone Post-MVP/Later, meta/machinery); `:-` alternation drift = documented debt (benign, fires only when lib absent); doppler fallback verified verbatim pre-PR form.
 - Suite post-fix: boundary-prefix.test.sh 52/52 (census 32 candidates, 20 consuming, 12 exempt).
+
+## Review Phase (full panel)
+- Panel: 9 seats — design pass 2 + class panel 7 (architecture dedup'd via design pass).
+- Verdicts so far: 5× SIGN-OFF-WITH-FINDINGS, 1× SIGN-OFF (performance), 1× BLOCK (git-history) → resolved in-PR.
+- BLOCK finding (git-history P1, code-quality F1 convergent): `ship-kb-archive-gate.sh` — a 21st site landed on main after the pre-rebase enumeration; variable-composed boundary (`_MERGE_BOUNDARY`/`_MERGE_PREFIX`) is census-invisible AND has no rtk atom → `rtk gh pr merge` skipped the wg-kb-artifacts-archived-in-pr gate. Fixed: `${SOLEUR_RTK_RE:-RTK_UNPROVISIONED_10248}` joins `_MERGE_PREFIX`'s first group (preserves the file's richer env-asn/keyword/arg-launcher grammar); census gained a composed-variable second pass (36 candidates: 24 consuming + 12 exempt); T06b pins rtk/rtk-run deny + rtk-foo pass.
+- Landed fixes from all seats: `--` end-of-options member (rtk F4 — clap inert anywhere in the wrapper span, TSV flag-global row added); fail-soft rows unescaped (real unset-var expansion now exercised); comment-strip symmetry in consumption AND provision AND composed checks; awk one-pass replacing `grep -v | grep -q` (pipefail SIGPIPE trap); provision arm file-level check; partition-completeness arm in parity (16/16); unset-first in 3 direct-lib test fixtures; doc third-residual disclosure (launcher arg-grammars + boundary-shape #10315).
+- Deferred/lows accepted: `:-` fallback drift (documented debt, degraded-path only); doppler fallback = verbatim pre-PR form; doc flag-row extraction pin (F5 low); `^`-shape candidacy assumption now commented.
+- Suite state: boundary-prefix 54/54 (census 36/24/12), parity 16/16, kb-archive 97/97.

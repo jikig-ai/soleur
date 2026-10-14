@@ -24,6 +24,7 @@ summary	exec	argv+string-flag	--shell same as err
 -vvv	flag-global	-	verbose count 3; same
 --verbose	flag-global	-	verbose long form; same
 --skip-env	flag-global	-	optional =value form also accepted by the unwrap SUT; same
+--	flag-global	-	clap end-of-options marker; inert anywhere in the wrapper span
 -c	flag-string	string	payload becomes a shell string -> unparsed-wrapper ask; NOT a boundary atom
 --command	flag-string	string	same as -c
 --shell	flag-string	string	same as -c
