@@ -251,7 +251,7 @@ while IFS= read -r T; do
     moved|unresolvable)
       if [[ "$T" == "$PINNED" ]]; then
         printf '::error::tag=%s verdict=%s — the PINNED tag %s: live digest %s vs recorded %s. The cloud-init pin is orphaned (zot retention can evict the untagged manifest); the response is a NEW tag, never a re-pin to moved content — inngest-server.md §Bootstrap-image release.\n' \
-          "$T" "$verdict" "${live:-<unresolvable>}" "${rec:-<none>}"
+          "$T" "$verdict" "$T" "${live:-<unresolvable>}" "${rec:-<none>}"
         FINDINGS_ERR=1
       else
         printf '::warning::tag=%s verdict=%s — non-pinned tag: live digest %s vs recorded %s (a sanctioned re-publish moves a digest; the check exists so the movement is never silent).\n' \
