@@ -440,7 +440,9 @@ SWEEP_EXT_EXPECTED='sh bash bats yml yaml tf template js ts tsx mjs cjs py'
 SWEEP_PATHSPEC=()
 for _e in "${SWEEP_EXTS[@]}"; do SWEEP_PATHSPEC+=(":(glob)**/*.$_e"); done
 SWEEP_PATHSPEC+=(
-  ':(exclude)knowledge-base'
+  # Item F (item 9): knowledge-base code files are read, archived records are not. The exclusion is path-segment exact: an archive/ directory at
+  # any depth, never a name that merely contains the word. `.md` under knowledge-base stays unread because the extension list has no md.
+  ':(exclude,glob)knowledge-base/**/archive/**'
   # This file carries the forbidden shape in its own probe fixtures, so it cannot sweep itself.
   ':(exclude).claude/hooks/grep-q-pipe-guard.test.sh'
 )
