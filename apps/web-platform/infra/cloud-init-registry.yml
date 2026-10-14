@@ -169,8 +169,9 @@ write_files:
   #      discriminate ALL competing root causes in ONE event: fs-not-grown (resize_ok=false OR
   #      fs_size_gb << block_size_gb), gc-too-slow (resize_ok=true, fs≈60, pcent>=85), and
   #      zot-mid-write-crash (pcent<85, fs≈60, zot_restarts>0).
-  # disk_heartbeat_url + betterstack_ingest_url are terraform-interpolated (non-secret host
-  # routing); BETTERSTACK_LOGS_TOKEN is injected AT CRON TIME by `doppler run` from the isolated
+  # disk_heartbeat_url + betterstack_ingest_url are terraform-interpolated (the heartbeat URL's
+  # PATH is its secret, so the curl takes it on a stdin config feed, never on argv);
+  # BETTERSTACK_LOGS_TOKEN is injected AT CRON TIME by `doppler run` from the isolated
   # soleur-registry/prd config (NEVER baked into user_data). Plain dollar-VARs stay literal
   # (templatefile only expands dollar-brace); shell brace-expansions are written $${VAR:-}.
   # --- #8714 5.3b-iii: zot's BOOT IMAGE comes from a pinned GitHub release asset, not ghcr.io ----
@@ -1066,8 +1067,8 @@ write_files:
   #
   # ABSENCE-BASED, like the disk beat: ping ONLY inside the probe guard. An unconditional ping
   # would make the monitor decorative — green over a dead registry.
-  # liveness_heartbeat_url is terraform-interpolated (non-secret host routing, same class as
-  # disk_heartbeat_url). NO `doppler run` wrapper: the URL is baked, so there is no
+  # liveness_heartbeat_url is terraform-interpolated (its path is its secret, same class as
+  # disk_heartbeat_url, so it too rides a stdin config feed). NO `doppler run` wrapper: the URL is baked, so there is no
   # empty-variable failure mode (#4116) and no token to inject.
   - path: /usr/local/bin/zot-liveness-heartbeat.sh
     content: |
@@ -2554,6 +2555,8 @@ runcmd:
     fi
     [ -n "$ZOT_PULL_TOKEN" ] || { echo "[zot] FATAL: ZOT_PULL_TOKEN empty — refusing to build htpasswd"; exit 1; }
     [ -n "$ZOT_PUSH_TOKEN" ] || { echo "[zot] FATAL: ZOT_PUSH_TOKEN empty — refusing to build htpasswd"; exit 1; }
+    # htpasswd -i takes the password on stdin, never argv (readable by every local user). The file is created 0600 BEFORE the first write
+    # (no create-then-chmod window); each entry has its OWN pipe so htpasswd cannot consume the `bash -s` script text from stdin.
     install -d -m 755 /etc/zot
     install -m 600 /dev/null /etc/zot/htpasswd
     printf '%s' "$ZOT_PULL_TOKEN" | htpasswd -Bin '${zot_pull_user}'  > /etc/zot/htpasswd

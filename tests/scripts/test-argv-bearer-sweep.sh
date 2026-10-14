@@ -6444,8 +6444,8 @@ S6_REAL_REASONS="$S6_J_REASONS"; S6_REAL_SITES="$S6_J_SITES"; S6_REAL_FILES="$S6
 S6_REAL_SCAN="$(s6_scan "$REPO_ROOT")"
 if [[ -z "$S6_REAL_REASONS" ]]; then row "S6 Guard 3: no tracked htpasswd invocation outside the residual allowlist carries a password on argv ($S6_REAL_SITES invocations in $S6_REAL_FILES files, derived by git grep over apps/ scripts/ .github/)" ok
 else row "S6 Guard 3: an htpasswd invocation carries a password on argv outside the residual allowlist, or the workflow site or an allowlist entry drifted" fail "reasons='$S6_REAL_REASONS' sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
-if [[ "$S6_REAL_SITES" -ge "$S6_SITE_FLOOR" && "$S6_REAL_FILES" -ge "$S6_FILE_FLOOR" && "$S6_REAL_SITES" -eq 4 && "$S6_REAL_FILES" -eq 2 ]]; then row "S6 floor: the scan saw $S6_REAL_SITES invocations in $S6_REAL_FILES files (workflow 1 + registry template 3: the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files, and is the same after the follow-up converts the registry sites)" ok
-else row "S6 floor: the scan saw an unexpected population (the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files; exactly 4 in 2 are expected until the follow-up registry PR)" fail "sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
+if [[ "$S6_REAL_SITES" -ge "$S6_SITE_FLOOR" && "$S6_REAL_FILES" -ge "$S6_FILE_FLOOR" && "$S6_REAL_SITES" -eq 4 && "$S6_REAL_FILES" -eq 2 ]]; then row "S6 floor: the scan saw $S6_REAL_SITES invocations in $S6_REAL_FILES files (workflow 1 + registry template 3: the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files)" ok
+else row "S6 floor: the scan saw an unexpected population (the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files; exactly 4 in 2 are expected)" fail "sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
 # One anchored row per site: identity (file and the whole stripped line), never only a count.
 s6_site_is() { # <file> <whole line> <expect-b: 0|1>: exactly one record of <file> has that line, and its options hold a lowercase b iff <expect-b>
   awk -F'\t' -v f="$1" -v c="$2" -v b="$3" '$1 == f { n++; if ($4 == c && (($3 ~ /b/) ? 1 : 0) == b) ok++ } END { exit !(n == 1 && ok == 1) }' <<<"$S6_REAL_SCAN"
@@ -6546,7 +6546,9 @@ else row "S6 must-pass: a compliant or excluded form is flagged, or the complian
 # PROPERTY. In cloud-init-registry.yml no `curl` argument holds a `*_heartbeat_url` interpolation: the URL's path is the secret, argv is readable by every local
 # user. DERIVATION: every LOGICAL line of the YAML (backslash continuations joined), whole-line comments dropped, with a `curl` command word AND `heartbeat_url`
 # is a heartbeat site; with the stdin feed `< <(printf 'url = "%s"\n' '<literal>')` removed, a site that still holds `heartbeat_url` is VIOLATING. The two converted
-# sites (disk, liveness) are asserted by IDENTITY. NOT COVERED, named: a URL carried through a variable or an `eval`, and a template variable of another name.
+# sites (disk, liveness) are asserted by IDENTITY. A comment line is never continued by a trailing backslash (bash does not continue it either), and an absolute
+# path (`/usr/bin/curl`) is a curl command word. NOT COVERED, named: a URL carried through a variable or an `eval`, another HTTP client (wget, python), a
+# template variable of another name, and any file other than the registry template.
 S6R_PY="$S6/regheartbeat.py"
 cat > "$S6R_PY" <<'S6RPY'
 import re, sys
@@ -6555,14 +6557,14 @@ i, out = 0, []
 while i < len(lines):
     ln = i + 1
     t = lines[i]
-    while t.rstrip().endswith("\\") and i + 1 < len(lines):
+    while not t.lstrip().startswith("#") and t.rstrip().endswith("\\") and i + 1 < len(lines):
         i += 1
         t = t.rstrip()[:-1] + " " + lines[i].strip()
     i += 1
     s = t.strip()
     if s.startswith("#"):
         continue
-    if not re.search(r"(^|[^A-Za-z0-9_./-])curl([^A-Za-z0-9_-]|$)", s) or "heartbeat_url" not in s:
+    if not re.search(r"(^|[^A-Za-z0-9_.-])curl([^A-Za-z0-9_-]|$)", s) or "heartbeat_url" not in s:
         continue
     feed = re.sub(r"< <\(printf 'url = \"%s\"\\n' '[^']*'\)", "", s)
     out.append(("V" if "heartbeat_url" in feed else "S", ln, s))
@@ -6571,7 +6573,7 @@ for k, ln, s in out:
 S6RPY
 S6R_DISK="curl --disable --noproxy '*' -g -fsS -m 10 --config - >/dev/null 2>&1 < <(printf 'url = \"%s\"\\n' '\${disk_heartbeat_url}') || PING_RC=\$?"
 S6R_LIVE="if curl --disable --noproxy '*' -g -fsS -m 10 -o /dev/null --config - < <(printf 'url = \"%s\"\\n' '\${liveness_heartbeat_url}'); then PING=ok; else PING=fail; fi"
-S6R_REAL_SCAN="" ; S6R_J_REASONS=""
+S6R_REAL_SCAN="" ; S6R_J_REASONS="unscanned"   # non-empty until s6r_judge has actually run: deleting the real-tree call must not read as GREEN
 s6r_judge() { # <root>: sets S6R_J_REASONS (empty = GREEN) and S6R_REAL_SCAN. Reasons: floor, argv, disk-identity, liveness-identity.
   local scan sites
   scan="$(python3 -I "$S6R_PY" "$1/$S6_REG" 2>/dev/null)" || { S6R_J_REASONS="scan-failed"; return 0; }
@@ -6605,12 +6607,29 @@ S6R_M3="$(s6_fresh r3)"; sed -i 's/heartbeat_url/hb_url/g' "$S6R_M3/$S6_REG"
 s6r_judge "$S6R_M3"
 if [[ "$S6R_J_REASONS" == *floor* ]]; then row "S6-REG mutation 3: with the scanned variable renamed the scan sees no heartbeat site and the floor is RED" ok
 else row "S6-REG mutation 3: a scan that sees nothing is not RED" fail "reasons='$S6R_J_REASONS'"; fi
-# Must-pass: a whole-line comment naming curl and the variable, and a physical line break inside a converted curl (a backslash continuation), are not violations.
+# Must-pass: a whole-line comment naming curl and the variable is not a violation.
 S6R_M4="$(s6_fresh r4)"
 printf '%s\n' "      # curl -fsS -m 10 \"\${disk_heartbeat_url}\" would carry the URL on argv" >> "$S6R_M4/$S6_REG"
 s6r_judge "$S6R_M4"
 if [[ -z "$S6R_J_REASONS" ]]; then row "S6-REG must-pass: a whole-line comment that names curl and the heartbeat variable is not a violation" ok
 else row "S6-REG must-pass: a comment line is flagged" fail "reasons='$S6R_J_REASONS'"; fi
+
+# Evasions the first scanner missed: a comment line ending in a backslash swallowed the live line under it; an absolute curl path was not a command word.
+S6R_M5="$(s6_fresh r5)"
+printf '%s\n' "      # a note that ends in a backslash \\" "      curl -fsS -m 10 \"\${disk_heartbeat_url}\"" >> "$S6R_M5/$S6_REG"
+s6r_judge "$S6R_M5"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 5: a live argv curl under a comment line that ends in a backslash is RED (a comment is never continued)" ok
+else row "S6-REG mutation 5: a comment ending in a backslash hides the live line under it" fail "reasons='$S6R_J_REASONS'"; fi
+S6R_M6="$(s6_fresh r6)"
+printf '%s\n' "      /usr/bin/curl -fsS -m 10 \"\${liveness_heartbeat_url}\"" >> "$S6R_M6/$S6_REG"
+s6r_judge "$S6R_M6"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 6: an argv heartbeat curl spelled with an absolute path is RED" ok
+else row "S6-REG mutation 6: /usr/bin/curl is not seen as a curl command word" fail "reasons='$S6R_J_REASONS'"; fi
+S6R_M7="$(s6_fresh r7)"
+printf '%s\n' "      curl -fsS -m 10 \\" "        \"\${disk_heartbeat_url}\"" >> "$S6R_M7/$S6_REG"
+s6r_judge "$S6R_M7"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 7: an argv heartbeat curl split across two physical lines by a backslash continuation is RED (the logical line is joined)" ok
+else row "S6-REG mutation 7: a continuation-split argv heartbeat curl slips through" fail "reasons='$S6R_J_REASONS'"; fi
 
 # --- the executable rows: the REAL workflow step under a refusing stub docker -----------------
 # The step is extracted with PyYAML (job registry_pull_path_gate, step id `throwaway`) and cut at the htpasswd line: everything before it (the zot pin
@@ -6708,7 +6727,7 @@ echo "=== stage S6: Guard 3 rows (htpasswd password off argv: workflow site, res
 # (continuations joined, whole-line comments dropped) has its `< <(...)` stdin feed removed, is split into segments on `||`, `&&`, `;` and `|`, and every
 # segment holding a `curl` command word whose remaining text names `$URL`, `$hb_url` or a `*HEARTBEAT_URL` variable is a VIOLATION: the URL is on argv.
 # (`$INNGEST_HEALTH_URL`, the local health probe in the same file as the heartbeat, is not a heartbeat variable.) NOT COVERED, named: a URL carried in a
-# variable that is none of those names, an `eval`, and the registry template's own heartbeat curls (cloud-init-registry.yml, tracked in #10093).
+# variable that is none of those names, and an `eval`. The registry template's own heartbeat curls are S6-REG's (above).
 #
 # EXPLICIT RESIDUAL ALLOWLIST (S6H_ALLOW: file, the segment text, the exact number of occurrences): the same-class probe scripts that still carry the
 # URL on argv, tracked in #10093. THE ALLOWLIST SHRINKS BY DELETION ONLY: an entry the scan no longer sees, or a count that moved, is RED.
@@ -7536,8 +7555,8 @@ SELFTEST_PASSES=0
 # 781 -> 796 at #10093 (stage S7, Guard 3 for markdown: bearer and apikey headers off curl argv in plugins/**/*.md): the 15 S7 rows, measured (796 passed, 0 failed).
 # 796 -> 801 at the PR #10185 fix round (S7: the Rule E header names, the executed-snippet rows and their control): 5 more S7 rows, measured (801 passed, 0 failed).
 # 801 -> 802 at the fix-round batch (S7: an executed row for the deploy-status-debugging snippet; the ship row also covers APP_DOMAIN_BASE): measured (802 passed, 0 failed).
-# 802 -> 808 at PR B (#10119, registry template): S6 registry site rows now identity rows, the ceiling row also judges a grow-by-one allowlist, mutation 8 (each registry site back to argv) and the S6-REG heartbeat scan (real tree, two mutations, one must-pass): measured (808 passed, 0 failed).
-EXPECTED_TESTS=808
+# 802 -> 808 at PR B (#10119, registry template): S6 registry site rows now identity rows, the ceiling row also judges a grow-by-one allowlist, mutation 8 (each registry site back to argv) and the S6-REG heartbeat scan (real tree, three mutations, one must-pass): measured (808 passed, 0 failed). 808 -> 811 at review (S6-REG mutations 5-7: comment-backslash, absolute curl path, continuation split).
+EXPECTED_TESTS=811
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

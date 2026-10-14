@@ -151,14 +151,22 @@ EOF
 # what leaves the host reads this file. Validates argv: a POST with no --data-raw is a bug.
 cat > "$BIN/curl" <<'EOF'
 #!/usr/bin/env bash
-body=""; has_m=0
+body=""; has_m=0; cfg=0; argv="$*"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --data-raw) body="$2"; shift 2 ;;
     -m|--max-time) has_m=1; shift 2 ;;
+    --config) cfg=1; shift 2 ;;
     *) shift ;;
   esac
 done
+# The heartbeat PING (#10119): the URL arrives as a `url = "..."` line on the stdin config, never in argv. Record both so a row can pin it.
+if [[ "$cfg" == 1 && -z "$body" ]]; then   # the row POST also carries --config (its auth header) but has a --data-raw body; the ping has none
+  [[ "$has_m" == 1 ]] || { echo "curl stub: unbounded ping (no -m/--max-time)" >&2; exit 64; }
+  printf '%s\n' "$argv" >> "${HB_PING_ARGV:-/dev/null}"
+  timeout 2 cat >> "${HB_PING_CFG:-/dev/null}"
+  exit 0
+fi
 [[ "$has_m" == 1 ]] || { echo "curl stub: unbounded call (no -m/--max-time)" >&2; exit 64; }
 [[ -n "$body" ]] || { echo "curl stub: POST with no --data-raw" >&2; exit 64; }
 printf '%s\n' "$body" >> "${HB_POSTED:-/dev/null}"
@@ -411,8 +419,8 @@ posture_case() {
   local name="$1"; shift
   local fx="$TMP/fixture.log" posted="$TMP/posted.log"
   printf '%s\n' "${POSTURE_FIXTURE:-$TIER2_BENIGN}" > "$fx"
-  : > "$posted"
-  env PATH="$BIN:$PATH" HB_FIXTURE="$fx" HB_POSTED="$posted" \
+  : > "$posted"; : > "$TMP/ping.argv"; : > "$TMP/ping.cfg"
+  env PATH="$BIN:$PATH" HB_FIXTURE="$fx" HB_POSTED="$posted" HB_PING_ARGV="$TMP/ping.argv" HB_PING_CFG="$TMP/ping.cfg" \
       BETTERSTACK_LOGS_TOKEN="test-token-not-a-secret" "$@" \
       bash "$HB" >/dev/null 2>&1
   HB_EXIT=$?
@@ -720,6 +728,13 @@ assert_field "P-healthy luks"     store_luks           "yes"
 # difference between "failed open onto the root disk" and "attached to some other volume",
 # which are opposite remedies. The sibling books the same field as a required audit column.
 assert_field "P-healthy base"     store_mount_base     "sdb"
+# (#10119) The ping's URL rides the stdin config, not argv: one ping, `--config -` on its argv, the URL on NEITHER side of the argv (the harness
+# rewrites ${disk_heartbeat_url} to http://127.0.0.1:9/hb), the URL as a `url = "..."` config line, and the curl exit recorded as ping_rc=0.
+assert "P-healthy ping | exactly one ping, with --config - and a bounded -m" \
+  "[ \"\$(grep -c . '$TMP/ping.argv')\" -eq 1 ] && grep -qF -e '--config -' '$TMP/ping.argv' && grep -qE -e '-m 10( |\$)' '$TMP/ping.argv'"
+assert "P-healthy ping | the heartbeat URL is NOT on the curl argv" "! grep -qF -e '127.0.0.1' -e '/hb' '$TMP/ping.argv'"
+assert "P-healthy ping | the URL is delivered as a stdin config line" "[ \"\$(cat '$TMP/ping.cfg')\" = 'url = \"http://127.0.0.1:9/hb\"' ]"
+assert_field "P-healthy ping_rc"  ping_rc              "0"
 
 # --- E2 no mount: findmnt rc 1 AND empty output. The __NOMOUNT__ arm is a CONJUNCTION -------
 posture_case "P-nomount" HB_FINDMNT_OUT="" HB_FINDMNT_RC=1

@@ -296,16 +296,18 @@ rend_dir="$(mktemp -d -p "$TMPDIR" reg-rendered.XXXXXXXX)"
 "$SCRIPT" "$rend_dir/rendered.yml" >/dev/null 2>&1
 hb_urls="$(grep -oE "printf 'url = \"%s\"\\\\n' '[^']*'" "$rend_dir/rendered.yml" 2>/dev/null | sed -E "s/^.*%s\"\\\\n' '//; s/'\$//")"
 hb_n="$(printf '%s\n' "$hb_urls" | grep -c . || true)"
-hb_bad="$(printf '%s\n' "$hb_urls" | grep -vE '^https://[A-Za-z0-9._~:/?&=%+-]+$' | grep -c . || true)"
+HB_URL_ERE='^https://[A-Za-z0-9._~:/?&=%+-]+$'   # ONE expression: the gate below and its hostile-value control both run it
+hb_bad="$(printf '%s\n' "$hb_urls" | grep -vE "$HB_URL_ERE" | grep -c . || true)"
 if [ "$hb_n" -eq 2 ] && [ "$hb_bad" -eq 0 ]; then
   pass "both rendered heartbeat URLs ($hb_n) are plain https literals safe inside a single-quoted stdin config line"
 else
   fail "rendered heartbeat URLs are shape-safe" "found $hb_n literal(s) (expected 2), $hb_bad outside ^https://[A-Za-z0-9._~:/?&=%+-]+\$"
 fi
-# The shape check is only a gate if it can say no: a URL with a quote, a backslash or a newline must NOT match.
+# The shape check is only a gate if it can say no: a URL with a quote, a backslash or a newline must NOT pass. Each hostile value goes through
+# the SAME `grep -vE "$HB_URL_ERE"` pipeline as the gate (a newline splits it into two lines, and the second fails), not through a re-typed copy.
 hb_ctl=0
 for hostile in "https://h/x'y" 'https://h/x"y' 'https://h/x\y' "$(printf 'https://h/x\ny')" 'http://h/x'; do
-  [[ "$hostile" =~ ^https://[A-Za-z0-9._~:/?\&=%+-]+$ ]] && hb_ctl=$((hb_ctl + 1))
+  [ "$(printf '%s\n' "$hostile" | grep -vE "$HB_URL_ERE" | grep -c . || true)" -eq 0 ] && hb_ctl=$((hb_ctl + 1))
 done
 if [ "$hb_ctl" -eq 0 ]; then pass "the heartbeat URL shape check rejects a quote, a double quote, a backslash, a newline and plain http"
 else fail "the heartbeat URL shape check rejects hostile values" "$hb_ctl hostile value(s) matched"; fi
