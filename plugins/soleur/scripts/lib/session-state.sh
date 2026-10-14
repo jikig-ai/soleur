@@ -82,6 +82,7 @@ _session_state_require_flock() {
 # correct against the same lock_file.
 declare -gA _SESSION_LOCK_FDS 2>/dev/null || true
 declare -gA _SESSION_LOCK_FILES 2>/dev/null || true
+declare -gA _SESSION_LOCK_ACQUIRED 2>/dev/null || true
 # Stash the started_at this shell wrote into each lease so `release_lease`
 # can verify "I'm the recorded owner" before deleting. Closes the PID-reuse
 # window where a new shell inheriting our pid would otherwise release.
@@ -102,20 +103,90 @@ _acquire_lock_impl() {
     return 0
   fi
 
+  # The name reaches two filesystem paths (.lock and .holder) — constrain it
+  # before either is formed (the charset also rules out `/` traversal).
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || return 99
+
   local lock_file="$LOCK_DIR/$name.lock"
+  # A non-regular lock path (fifo, dir) blocks in open(2) BEFORE the bounded
+  # flock below is ever exec'd — the exec boundary cannot cover a wait that
+  # precedes it. A symlink is refused outright: dangling, `exec {fd}>>` would
+  # create the linked-to path; resolved, the named lock would alias a foreign
+  # inode — both plantable on the cross-user /tmp orphan-fallback LOCK_DIR.
+  [[ -L "$lock_file" ]] && return 99
+  [[ -e "$lock_file" && ! -f "$lock_file" ]] && return 99
   local fd
   exec {fd}>>"$lock_file" || return 99
 
   local flag="-x"
   [[ "$mode" == "s" ]] && flag="-s"
 
-  if ! flock -w "$timeout_s" "$flag" "$fd"; then
+  # #7697: bound the wait at the EXEC boundary, not only inside flock. flock's
+  # own -w expiry is delivered via SIGALRM; a caller that inherited that
+  # signal as BLOCKED (an outer process sigprocmask'd it before exec —
+  # measured: `flock -w 3` still waiting at 6 s, a live holder then kept the
+  # repo-wide lock for 4.6 days) defeats it silently. `timeout -k` wraps the
+  # flock call: its deadline does not depend on this process's signal mask,
+  # and the trailing SIGKILL needs no cooperation at all. The flock CHILD
+  # shares this shell's fd, and flock(2) attaches to the open file
+  # description — an acquisition lands on our fd even though flock ran in a
+  # child, and a timeout kill releases nothing we hold.
+  local _to_cmd="" _slack="${SOLEUR_LOCK_BOUND_SLACK_S:-60}"
+  [[ "$_slack" =~ ^[0-9]+$ ]] || _slack=60
+  # timeout_s reaches $(( )) arithmetic AND `flock -w` — a non-digit value is
+  # an arithmetic name under `set -u` (unbound abort) or a silent 0 bound;
+  # normalize like test-contention's tc_acquire does for its copy.
+  [[ "$timeout_s" =~ ^[0-9]+$ ]] || timeout_s=30
+  if command -v timeout >/dev/null 2>&1; then _to_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then _to_cmd=gtimeout; fi
+
+  local _flock_rc=0
+  if [[ -n "$_to_cmd" ]]; then
+    # Outer bound = declared wait + slack; a normal -w expiry arrives first as
+    # flock's own rc=1, so rc=124 from timeout means the inner expiry never
+    # fired — the #7697 blocked-mask case. 137 is the same event one rung
+    # later: timeout had to deliver the -k SIGKILL.
+    "$_to_cmd" -k 5 "$(( timeout_s + _slack ))" flock -w "$timeout_s" "$flag" "$fd" || _flock_rc=$?
+    if [[ "$_flock_rc" == "124" || "$_flock_rc" == "137" ]]; then
+      echo "[contention] LOCK_BOUND_FORCED: '$name' — flock -w ${timeout_s}s never returned; the exec-boundary bound fired at ${timeout_s}s+${_slack}s. A blocked signal mask (SIGALRM) defeats flock's own expiry — proceeding contended." >&2
+      _flock_rc=1
+    fi
+  else
+    [[ -z "${_SESSION_LOCK_BOUND_NOTED:-}" ]] && {
+      _SESSION_LOCK_BOUND_NOTED=1
+      echo "[note] session-state: timeout(1) absent — lock waits bounded only by flock -w (a blocked SIGALRM mask can still defeat it; #7697)" >&2
+    }
+    flock -w "$timeout_s" "$flag" "$fd" || _flock_rc=$?
+  fi
+  if [[ "$_flock_rc" != "0" ]]; then
     eval "exec ${fd}>&-" 2>/dev/null || true
     return 99
   fi
 
   _SESSION_LOCK_FDS[$name]="$fd"
   _SESSION_LOCK_FILES[$name]="$lock_file"
+  _SESSION_LOCK_ACQUIRED[$name]="${EPOCHSECONDS:-0}"
+
+  # Advisory holder marker (#7697): waiters' heartbeats read this to tell a
+  # progressing holder from a wedged one. The reader treats a torn or absent
+  # file as holder=unreadable/none, never an error. Written via mktemp+mv:
+  # a plain `>` follows a planted symlink — and on the /tmp orphan-fallback
+  # LOCK_DIR a predictable name is cross-user plantable — and is non-atomic.
+  # Shared (-s) holders have no single holder identity, so they mint none.
+  if [[ "$mode" != "s" ]]; then
+    local _hf_tmp
+    # lint-trap-ownership: ok sourced library — an EXIT trap would clobber the consumer's; every path removes _hf_tmp and the SIGKILL-window residual is one ~150B file
+    _hf_tmp=$(mktemp "$LOCK_DIR/.holder.XXXXXXXX" 2>/dev/null) && {
+      {
+        printf 'pid=%s\n' "$$"
+        printf 'ppid=%s\n' "$PPID"
+        printf 'acquired_epoch=%s\n' "${_SESSION_LOCK_ACQUIRED[$name]}"
+        printf 'progress_epoch=%s\n' "${_SESSION_LOCK_ACQUIRED[$name]}"
+      } > "$_hf_tmp" 2>/dev/null \
+        && mv -f "$_hf_tmp" "$LOCK_DIR/$name.holder" 2>/dev/null
+    } || true
+    [[ -n "${_hf_tmp:-}" && -e "$_hf_tmp" ]] && rm -f "$_hf_tmp" 2>/dev/null || true
+  fi
   return 0
 }
 
@@ -132,9 +203,51 @@ release_lock() {
   _session_state_disabled && return 0
   local fd="${_SESSION_LOCK_FDS[$name]:-}"
   [[ -z "$fd" ]] && return 0
+  local lock_file="${_SESSION_LOCK_FILES[$name]:-}"
+  # The advisory holder marker (#7697) dies BEFORE our hold does: removing
+  # it while the fd is still open is provably removing OUR marker — after
+  # the close, a queued successor could already have minted its own and we
+  # would unlink that instead, leaving its hold markerless until release.
+  [[ -n "$lock_file" ]] && rm -f "${lock_file%.lock}.holder" 2>/dev/null || true
   eval "exec ${fd}>&-" 2>/dev/null || true
   unset "_SESSION_LOCK_FDS[$name]"
+  unset "_SESSION_LOCK_ACQUIRED[$name]"
   unset "_SESSION_LOCK_FILES[$name]"
+  return 0
+}
+
+# stamp_lock_holder <name> [key=value ...] — refresh the holder marker's
+# progress_epoch and set progress fields, in place. Call sites are the
+# consumers' own progress points (test-all stamps once per suite boundary).
+# NEVER mints: a marker is born at acquire and dies at release — stamping a
+# lock this shell does not hold would fabricate holder identity, so it is a
+# silent no-op. All failures are silent too: the marker is advisory.
+stamp_lock_holder() {
+  # Guard BEFORE shift: a zero-arg call must be a silent no-op (the marker is
+  # advisory), and a bare `shift` with no args aborts a `set -e` caller.
+  [[ -n "${1:-}" ]] || return 0
+  local name="$1"
+  shift
+  _session_state_disabled && return 0
+  [[ -n "${_SESSION_LOCK_FDS[$name]:-}" ]] || return 0
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
+  local hf="$LOCK_DIR/$name.holder"
+  # Regular-file + not-a-link: a planted symlink must not be stamped through
+  # (the mint is mktemp+mv for the same reason), and anything that is not a
+  # marker we minted is left alone.
+  [[ -f "$hf" && ! -L "$hf" ]] || return 0
+  local _hf_tmp
+  # lint-trap-ownership: ok sourced library — same as the mint above; every path removes _hf_tmp, SIGKILL-window residual is a single file
+  _hf_tmp=$(mktemp "$LOCK_DIR/.holder.XXXXXXXX" 2>/dev/null) || return 0
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'ppid=%s\n' "$PPID"
+    printf 'acquired_epoch=%s\n' "${_SESSION_LOCK_ACQUIRED[$name]:-}"
+    printf 'progress_epoch=%s\n' "${EPOCHSECONDS:-0}"
+    local kv
+    for kv in "$@"; do printf '%s\n' "${kv//$'\n'/ }"; done
+  } > "$_hf_tmp" 2>/dev/null && mv -f "$_hf_tmp" "$hf" 2>/dev/null || true
+  [[ -e "$_hf_tmp" ]] && rm -f "$_hf_tmp" 2>/dev/null || true
   return 0
 }
 

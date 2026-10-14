@@ -1796,6 +1796,13 @@ run_suite() {
   # per-suite git snapshots would narrow it further and cost ~660 extra process spawns, which is
   # not worth it for a strictly-narrower answer.
   _repo_last_suite="$label"
+  # #7697 — one holder-marker stamp per suite boundary. A waiter staring at
+  # the held lock then sees last_suite/progress_epoch advancing (or NOT, which
+  # is the wedge signature the heartbeat's holder_progress_age names).
+  # Advisory only: silent no-op when the lib is absent or the lock isn't ours.
+  if declare -F stamp_lock_holder >/dev/null 2>&1; then
+    stamp_lock_holder test-all "last_suite=$label" "suites_done=$_suites_completed"
+  fi
   local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
   # #8940 — tee every suite's combined output into a per-suite file inside the
@@ -1939,6 +1946,7 @@ run_suite() {
       printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
     fi
   fi
+  _suites_completed=$(( _suites_completed + 1 ))
 }
 
 # A DECLINE IS A VERDICT, NOT AN ABSENCE (ADR-181).
@@ -4220,7 +4228,7 @@ tc_capacity_line >&2
 #
 # It fires HERE, AFTER tc_preamble (which computes the count) and BEFORE tc_acquire, deliberately.
 # Refusing after tc_acquire would make a run that should never have started wait up to
-# TC_LOCK_TIMEOUT (900 s) to be told so, and take the advisory lock a legitimate sibling is queued
+# TC_LOCK_TIMEOUT (3600 s) to be told so, and take the advisory lock a legitimate sibling is queued
 # on. A refused run must cost nothing.
 #
 # ADDITIVE, not a replacement: the SOLEUR_SUBAGENT arm above is untouched and still exits 4.
@@ -4333,6 +4341,9 @@ fi
 _RUN_START_EPOCH="${EPOCHSECONDS:-0}"
 _ceiling_tripped=0
 _ceiling_declined=0
+# Suites this run has completed — stamped into the holder marker (#7697) once
+# per run_suite call. Same splice-window constraint as the ceiling state.
+_suites_completed=0
 
 # --- #8940 / #8993 state ---------------------------------------------------
 # Declared HERE, at top level, for the same splice-window reason as the
@@ -4611,7 +4622,15 @@ _run_log_retain() {
   fi
   return 0
 }
-trap '_repo_boundary_exit_note; _run_log_retain; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm; _run_wd_disarm' EXIT
+# #7697: test-all never calls release_lock — the fd dies with the process —
+# so the holder marker minted at acquire needs an explicit removal or every
+# completed run reads as a wedged holder to the next waiter. declare -F
+# guarded: sandbox splices of this file may never source session-state.sh.
+_lock_holder_cleanup() {
+  declare -F release_lock >/dev/null 2>&1 || return 0
+  release_lock test-all 2>/dev/null || true
+}
+trap '_repo_boundary_exit_note; _run_log_retain; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm; _run_wd_disarm; _lock_holder_cleanup' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass

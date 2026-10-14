@@ -108,9 +108,9 @@ scan_rules() {
   local fixture_dir="$TMP/scan.$RANDOM"
   mkdir -p "$fixture_dir"
   printf '%s\n' "$1" > "$fixture_dir/fixture.txt"
-  gitleaks dir "$fixture_dir" --config "$CONFIG" --no-banner \
+  gl_run 120 gitleaks dir "$fixture_dir" --config "$CONFIG" --no-banner \
     --report-format json --report-path "$fixture_dir/report.json" >/dev/null 2>&1
-  jq -r '.[].RuleID' "$fixture_dir/report.json" 2>/dev/null | sort -u
+  gl_run 30 jq -r '.[].RuleID' "$fixture_dir/report.json" 2>/dev/null | sort -u
 }
 
 # scan_rules_at <scan-root-relative-path> <fixture-line>
@@ -163,9 +163,9 @@ scan_rules_at() {
     echo "FATAL: scan root holds $nfiles files, expected 1 — T11 fixtures are leaking across rows" >&2
     exit 2
   fi
-  ( cd "$root" && gitleaks dir . --config "$CONFIG" --no-banner \
+  ( cd "$root" && gl_run 120 gitleaks dir . --config "$CONFIG" --no-banner \
       --report-format json --report-path "$report" >/dev/null 2>&1 )
-  SCAN_RULES=$(jq -r '.[].RuleID' "$report" 2>/dev/null | sort -u)
+  SCAN_RULES=$(gl_run 30 jq -r '.[].RuleID' "$report" 2>/dev/null | sort -u)
 }
 
 echo "=== gitleaks custom-rule fixture tests ==="
