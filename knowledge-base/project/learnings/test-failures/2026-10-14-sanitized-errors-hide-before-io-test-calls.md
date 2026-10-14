@@ -86,6 +86,18 @@ paths and returned errors; `rg --files` located the actual README, session-state
 and learning records. Use discovered paths and give each mock sequence enough
 ticks to reach the intended refusal boundary.
 
+An integrity follow-up combined a failing `fsync` with a close operation that
+released its descriptor and then raised. Cleanup retried the close, exposed
+`EBADF`, and left the manifest. Transfer descriptor ownership before closing;
+make cleanup best-effort in each independent step, and pin file and directory
+close failures separately. Both new synthetic regressions pass in the expanded
+17-case image-observation suite.
+
+A grouped focused command invoked sibling-module unittest names from the
+worktree root and failed import before running those two suites. Re-run them
+from `scripts/codex-qualification`, their supported module context, and record
+the failed invocation as setup-only rather than a code verdict.
+
 The resumed image-observation test was first invoked from the repository root,
 where its sibling-module import was unavailable; run it from
 `scripts/codex-qualification`, as the wrapper does. A follow-up edit reused the

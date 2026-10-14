@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 import tempfile
 import unittest
@@ -186,6 +187,57 @@ class ImageObservations(unittest.TestCase):
                             with self.assertRaisesRegex(Refused, 'File-only action manifest write failed'):
                                 observations.write_action_manifest(path, value, pairing_sha256=PAIRING, operational_sha256=OPERATIONAL)
                     self.assertFalse(path.exists())
+
+    def test_manifest_writer_close_errors_are_sanitized_and_cleanup_is_complete(self):
+        value = observations.action_manifest(self.ids, PAIRING, OPERATIONAL)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'manifest'
+            real_close = os.close
+            attempts = [0]
+
+            def fsync_fails(fd):
+                raise OSError('SYNTHETIC_FSYNC_FAILURE')
+
+            def close_releases_then_fails(fd):
+                if stat.S_ISREG(os.fstat(fd).st_mode) and attempts[0] == 0:
+                    attempts[0] += 1
+                    real_close(fd)
+                    raise OSError('SYNTHETIC_CLOSE_FAILURE')
+                return real_close(fd)
+
+            with patch.object(observations.os, 'fsync', side_effect=fsync_fails), \
+                    patch.object(observations.os, 'close', side_effect=close_releases_then_fails):
+                with self.assertRaisesRegex(Refused, 'File-only action manifest write failed') as caught:
+                    observations.write_action_manifest(path, value, pairing_sha256=PAIRING,
+                                                       operational_sha256=OPERATIONAL)
+            self.assertTrue(caught.exception.__suppress_context__)
+            self.assertNotIn('SYNTHETIC_', ''.join(__import__('traceback').format_exception(caught.exception)))
+            self.assertEqual(attempts[0], 1)
+            self.assertFalse(path.exists())
+
+    def test_manifest_writer_directory_close_failure_does_not_leak_next_descriptor(self):
+        value = observations.action_manifest(self.ids, PAIRING, OPERATIONAL)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'manifest'
+            root = os.stat('/')
+            real_close = os.close
+            attempts = [0]
+
+            def root_close_releases_then_fails(fd):
+                metadata = os.fstat(fd)
+                if (metadata.st_dev, metadata.st_ino) == (root.st_dev, root.st_ino) and attempts[0] == 0:
+                    attempts[0] += 1
+                    real_close(fd)
+                    raise OSError('SYNTHETIC_DIRECTORY_CLOSE_FAILURE')
+                return real_close(fd)
+
+            with patch.object(observations.os, 'close', side_effect=root_close_releases_then_fails):
+                with self.assertRaisesRegex(Refused, 'File-only action manifest write failed') as caught:
+                    observations.write_action_manifest(path, value, pairing_sha256=PAIRING,
+                                                       operational_sha256=OPERATIONAL)
+            self.assertTrue(caught.exception.__suppress_context__)
+            self.assertEqual(attempts[0], 1)
+            self.assertFalse(path.exists())
 
     def test_manifest_writer_pins_parent_and_refuses_parent_swap(self):
         value = observations.action_manifest(self.ids, PAIRING, OPERATIONAL)

@@ -77,8 +77,13 @@ backward-clock and exception-sanitization oracles (9 tests passed at baseline).
 The local follow-up pins parent traversal and leaf operations to a no-follow
 directory descriptor, checks the named parent after fsync, binds manifest
 contents to separately supplied expected hashes, and sanitizes/captures the
-transport request callable. Fifteen synthetic observation tests and 23
-transport tests pass after these changes; the fixes are unpushed and await
+transport request callable. Integrity then reproduced one more cleanup fault:
+an `fsync` error followed by a close error retried a released descriptor and
+left the partial file. Descriptor ownership now transfers before close, and
+close/cleanup failures cannot interrupt inode-bound removal or leak raw errors.
+Two additional synthetic close-failure controls cover file and directory fds.
+Seventeen synthetic observation tests and 23 transport tests pass; the fixes
+are unpushed and await
 exact-head independent reverification. Parent-swap regression uses only a
 temporary directory. No operational endpoint was contacted.
 

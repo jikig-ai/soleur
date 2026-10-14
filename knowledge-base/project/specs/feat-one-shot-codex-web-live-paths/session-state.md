@@ -1632,7 +1632,10 @@
   exception sanitization. The source patch pins parent traversal/leaf writes to
   a no-follow directory descriptor, binds writer input to expected hashes,
   sanitizes and captures the request callable, and adds synthetic regressions.
-- Current local focused result: image observations 15/15 and namespace
+  A second integrity pass reproduced a close-after-fsync failure that could
+  leak raw errors and leave a partial file. Descriptor ownership now transfers
+  before close; new synthetic tests cover file and directory close failures.
+- Current local focused result: image observations 17/17 and namespace
   transports 23/23. The current changes are unpushed and require review at the
   exact pushed head, then full offline/census/preparation/export and CI refresh.
   No Docker/build, SQL, real endpoint, credential/provider, browser/account,

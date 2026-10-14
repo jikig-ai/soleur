@@ -88,8 +88,9 @@ def write_action_manifest(path, manifest, *, pairing_sha256, operational_sha256)
         parent_descriptor = os.open('/', directory_flags)
         for component in path.parent.parts[1:]:
             next_descriptor = os.open(component, directory_flags, dir_fd=parent_descriptor)
-            os.close(parent_descriptor)
+            old_descriptor = parent_descriptor
             parent_descriptor = next_descriptor
+            os.close(old_descriptor)
         parent_stat = os.fstat(parent_descriptor)
         named_parent = os.stat(path.parent, follow_symlinks=False)
         require((parent_stat.st_dev, parent_stat.st_ino) ==
@@ -107,23 +108,40 @@ def write_action_manifest(path, manifest, *, pairing_sha256, operational_sha256)
         named_parent = os.stat(path.parent, follow_symlinks=False)
         require((parent_stat.st_dev, parent_stat.st_ino) ==
                 (named_parent.st_dev, named_parent.st_ino), 'Manifest parent changed during write')
+        closing_descriptor = descriptor
+        descriptor = None
+        os.close(closing_descriptor)
     except Exception:
         if descriptor is not None:
-            os.close(descriptor)
+            closing_descriptor = descriptor
             descriptor = None
+            try:
+                os.close(closing_descriptor)
+            except Exception:
+                pass
         if created is not None:
             try:
                 current = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
                 if (current.st_dev, current.st_ino) == created:
                     os.unlink(path.name, dir_fd=parent_descriptor)
-            except OSError:
+            except Exception:
                 pass
         raise Refused('File-only action manifest write failed') from None
     finally:
         if descriptor is not None:
-            os.close(descriptor)
+            closing_descriptor = descriptor
+            descriptor = None
+            try:
+                os.close(closing_descriptor)
+            except Exception:
+                pass
         if parent_descriptor is not None:
-            os.close(parent_descriptor)
+            closing_descriptor = parent_descriptor
+            parent_descriptor = None
+            try:
+                os.close(closing_descriptor)
+            except Exception:
+                pass
     return hashlib.sha256(payload).hexdigest()
 
 
