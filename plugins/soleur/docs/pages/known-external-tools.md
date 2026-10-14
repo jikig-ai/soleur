@@ -112,11 +112,18 @@ canonical set lives in <code>plugins/soleur/scripts/lib/ext-filter-grammar.tsv</
 
 <pre>exec subcommands:  run|err|test|proxy|bypass|summary
 string payloads:   -c | --command | --shell  →  unparsed-wrapper ask, never silent allow
-globals:           -v/-vv/-vvv/--verbose (pre-subcommand), --skip-env (either position)</pre>
+globals:           -v/-vv/-vvv/--verbose, --skip-env (either position — clap global=true)</pre>
 
 <p><strong>Coverage caveat:</strong> rtk's rewrite hook only intercepts <em>Bash</em> tool
 calls. <code>Read</code>, <code>Grep</code>, and <code>Glob</code> results are not filtered —
 savings claims like "90%" are scoped to terminal-output tokens, not your bill.</p>
+
+<p><strong>Boundary-anchor gap:</strong> the unwrap above covers Soleur's
+<em>destructive-command</em> guard (and the pkill/proc siblings). Boundary-anchored gates —
+the <code>gh pr merge</code> review-evidence gate, <code>git commit</code> guards — do not
+yet unwrap <code>rtk</code>-prefixed forms, so <code>rtk gh pr merge</code> still reaches
+them unjudged until <a href="https://github.com/jikig-ai/soleur/issues/10248">#10248</a>
+lands.</p>
 
 <h2>Three-rung diagnosis</h2>
 
@@ -160,6 +167,14 @@ savings claims like "90%" are scoped to terminal-output tokens, not your bill.</
 <li><strong>rtk's hook emits its own permission decisions</strong> on some integrations —
   Soleur's guard judges the original command text either way (the two hook chains
   compose, not replace).</li>
+<li><strong>Proxy-layer filters see your API key and full prompt stream.</strong>
+  Headroom's proxy mode — and any non-default <code>ANTHROPIC_BASE_URL</code>
+  endpoint — sits on the credential path, not just the output path: your key and
+  every prompt and tool result transit that infrastructure before reaching
+  Anthropic. Read the vendor's privacy terms <em>before</em> installing a
+  proxy-mode filter or pointing <code>ANTHROPIC_BASE_URL</code> at a third-party
+  endpoint; a <code>tool=proxy posture=unknown</code> marker is Soleur telling
+  you the transit exists, not judging it.</li>
 <li><strong>Reporting bugs:</strong> when filing, paste the full marker line into the bug
   report's marker field and answer the filter dropdown — <em>triage</em> applies the
   <code>external-env</code> label when it isn't <code>none</code> (don't add it yourself).</li>

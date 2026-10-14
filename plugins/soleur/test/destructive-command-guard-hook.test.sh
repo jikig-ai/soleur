@@ -604,7 +604,7 @@ def unwrap(name, args):
                 i += 1
                 if a == "--":
                     break
-                if a == "--skip-env" or a.startswith("--skip-env="):
+                if a in ("-v", "-vv", "-vvv", "--verbose", "--skip-env") or a.startswith("--skip-env="):
                     continue
                 i -= 1
                 break
@@ -1747,7 +1747,8 @@ X @@ wrapper: rtk summary rm -rf ~ @@ deny @@ - @@ rtk summary rm -rf ~
 X @@ wrapper: rtk -v run rm -rf ~ @@ deny @@ - @@ rtk -v run rm -rf ~
 X @@ wrapper: rtk -vv rm -rf ~ @@ deny @@ - @@ rtk -vv rm -rf ~
 X @@ wrapper: rtk --skip-env run rm -rf ~ @@ deny @@ - @@ rtk --skip-env run rm -rf ~
-X @@ wrapper: rtk run --skip-env rm -rf ~ (the one global legal after the subcommand) @@ deny @@ - @@ rtk run --skip-env rm -rf ~
+X @@ wrapper: rtk run --skip-env rm -rf ~ (globals legal after the subcommand, clap global=true) @@ deny @@ - @@ rtk run --skip-env rm -rf ~
+X @@ wrapper: rtk run -v rm -rf ~ (post-subcommand -v, same global set) @@ deny @@ - @@ rtk run -v rm -rf ~
 X @@ wrapper: rtk -- rm -rf ~ @@ deny @@ - @@ rtk -- rm -rf ~
 X @@ wrapper: rtk run -- rm -rf ~ @@ deny @@ - @@ rtk run -- rm -rf ~
 X @@ wrapper: rtk run rtk run rm -rf ~ @@ deny @@ - @@ rtk run rtk run rm -rf ~
@@ -2894,7 +2895,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=1275
+MIN_CASES=1276
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
