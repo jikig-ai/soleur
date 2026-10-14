@@ -14,7 +14,9 @@ lane: cross-domain
 ---
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- lint-infra-ignore start -->
 <!-- Phase 2.8 justification: this PR ships zero infrastructure changes — CI scripts, a read-only scheduled workflow, suite assertions, and runbook text only. Every deferred item routes through EXISTING Terraform apply targets (inngest-host-replace) or existing workflow dispatches; nothing here is provisioned by hand. -->
+<!-- lint-infra-ignore end -->
 
 ## Enhancement Summary
 
