@@ -4,6 +4,8 @@ status: active
 date: 2026-09-30
 amends: ADR-181, ADR-242
 related_adrs: [ADR-181, ADR-183, ADR-188, ADR-217, ADR-242]
+amended_by:
+  - "ADR-276 S4 (2026-10-14, #9729) — the premise R1 'No merge queue is enforced' and the PR-arm admission rule are reversed for the PR arm; see ## Amendment — 2026-10-14"
 issue: 9323
 ---
 
@@ -134,3 +136,7 @@ assertion and a relevance manifest are rejected there):
 
 ADR-181, ADR-183, ADR-217, ADR-242; issue #9323; `scripts/test-all.sh` (`_diff_touches`), `scripts/lib/test-relevance-paths.sh`,
 `scripts/lint-orphan-test-suites.sh`, `scripts/test-all-pr-battery-gate.test.sh`, `scripts/ci-battery-gate-replay.sh`.
+
+## Amendment — 2026-10-14 (S4 PR B, #9729, ADR-276)
+
+Pointer only. Two things this record assumes are reversed for the PR arm by ADR-276 Decision 5, as implemented by its `## Amendment 2026-10-14 (S4 PR B, #9729)`: (1) the Residuals premise "No merge queue is enforced" (R1; ADR-270 enforces it, so the `merge_group` candidate run, not the PR run, is the full-battery authority), and (2) the Decision 4 admission rule and the two rejected Alternatives that follow from it (job-level gating of the heavy legs, the affected classifier on CI), because the PR arm grows from the five self-test batteries here to the affected set. The reversal takes effect only when ADR-276's `CI_PR_AFFECTED` switch is activated, which PR B does not do (it ships dark and locked); until then this record describes the PR arm as written. The five batteries' own decisions, arrays and guards are unchanged.
