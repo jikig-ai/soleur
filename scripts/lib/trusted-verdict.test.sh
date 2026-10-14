@@ -20,7 +20,7 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 # canonical fixture-dir guard (the one ci-push-dedupe-soak-9512.test.sh carries): the rows added by the review call it before a write
 assert_fixture_dir() {
   case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY; a write under it would retarget %s\n' "$PWD" >&2; exit 2 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
     */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
     /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
     /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
@@ -343,7 +343,7 @@ mkc() { # <file> then <login> <body> <createdAt|-> triples; `-` omits createdAt;
 mkp() { assert_fixture_dir "$SB"; printf "$1" > "$SB/pm.tsv"; }   # printf format with literal \t and \n
 bodies_of() { jq -r '.b' <<<"$1"; }
 # in_out <needle> -> 0 when the {t,b} stream in RAW_OUT carries a body line equal to needle
-in_out() { bodies_of "$RAW_OUT" | grep -qxF -- "$1"; }
+in_out() { grep -qxF -- "$1" < <(bodies_of "$RAW_OUT"); }
 
 h_h1() { # M-H1 the repro: a CONTRIBUTOR-association admin author IS trusted
   mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
@@ -384,7 +384,7 @@ h_h4_parity() { # M-H4 parity: the bodies view equals the .b projection of the {
 h_h4_abs() { # M-H4 ABSOLUTE: a fenced marker (both spellings) is absent from the {t,b} output; the unfenced ones are present
   fence_fixture
   run_case_raw trusted_verdict_comments 9818 "$SB/hf.json" "$SB/pm.tsv"
-  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && ! in_out 'S2-ACTIVATED: 2026-10-11T00:00:00Z' && ! bodies_of "$RAW_OUT" | grep -q 'x/y' \
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && ! in_out 'S2-ACTIVATED: 2026-10-11T00:00:00Z' && ! grep -q 'x/y' < <(bodies_of "$RAW_OUT") \
      && in_out 'S2-DEACTIVATED: 2026-10-12T00:00:00Z' && in_out 'S2-EXIT-CENSUS: https://github.com/a/b'; then
     pass "M-H4: markers inside backtick and tilde fences are stripped from the {t,b} view, unfenced ones survive"
   else fail "M-H4 absolute: rc=$RAW_RC out=[$RAW_OUT]"; fi
@@ -457,7 +457,7 @@ h_h10() { # M-H10 exactly one `gh issue view` per view invocation
 h_crlf() { # must-PASS non-canonical: digits and interior hyphens in the login, CRLF line endings in the body
   mkc "$SB/h.json" a1-b2-op $'activated\r\nS2-ACTIVATED: '"$T2"$'\r' "$T2"; mkp 'a1-b2-op\twrite\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
-  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && bodies_of "$RAW_OUT" | tr -d '\r' | grep -qxF "S2-ACTIVATED: $T2"; then
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && grep -qxF "S2-ACTIVATED: $T2" < <(bodies_of "$RAW_OUT" | tr -d '\r'); then
     pass "must-PASS: a login with digits and interior hyphens and a CRLF body is kept (the caller strips the CR)"
   else fail "CRLF: rc=$RAW_RC out=[$RAW_OUT]"; fi
 }
@@ -466,7 +466,7 @@ h_h11() { # M-H11 login-shape guard: a login that is not a GitHub login is untru
   mkp 'a/../b\tadmin\nx?y\tadmin\nline1\tadmin\nline2\tadmin\n-lead\tadmin\ngood-op\tadmin\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
   if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(nreq perm)" == 1 ]] && grep -qxF 'perm good-op' "$SB/req.log" \
-     && in_out 'RESULT: good' && ! bodies_of "$RAW_OUT" | grep -q evil; then
+     && in_out 'RESULT: good' && ! grep -q evil < <(bodies_of "$RAW_OUT"); then
     pass "M-H11: malformed logins (path, query, newline, leading dash) make zero permission requests and drop only their own comments"
   else fail "M-H11: rc=$RAW_RC miss=$RAW_MISS requests=[$(tr '\n' ',' < "$SB/req.log")] out=[$RAW_OUT]"; fi
 }
@@ -642,7 +642,7 @@ h_login_shape() { # M-SHAPE login boundaries: 39 chars resolve; 40, a trailing n
   mkc "$SB/h.json" "$l39" "RESULT: ok39" "$T1" "$l40" "RESULT: evil40" "$T1" $'nl-op\n' "RESULT: evilnl" "$T1" 'a%2fb' "RESULT: evilpct" "$T1" 'a.b' "RESULT: evildot" "$T1" '-lead' "RESULT: evildash" "$T1"
   mkp "$l39\\tadmin\\n"   # ONLY the 39-char login has a permission row: a refused shape that reached the permission endpoint would also exit the stub non-zero
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
-  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(nreq perm)" == 1 ]] && grep -qxF "perm $l39" "$SB/req.log" && in_out 'RESULT: ok39' && ! bodies_of "$RAW_OUT" | grep -q evil; then
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(nreq perm)" == 1 ]] && grep -qxF "perm $l39" "$SB/req.log" && in_out 'RESULT: ok39' && ! grep -q evil < <(bodies_of "$RAW_OUT"); then
     pass "M-SHAPE: a 39-char login resolves; a 40-char login, a trailing newline, %, . and a leading dash are refused with zero requests"
   else fail "M-SHAPE: rc=$RAW_RC miss=$RAW_MISS perm-requests=$(nreq perm) (want 1) out-lines=$(bodies_of "$RAW_OUT" | grep -c .)"; fi
 }
