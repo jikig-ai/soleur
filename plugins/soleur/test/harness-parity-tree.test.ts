@@ -145,7 +145,8 @@ describe("harness-parity tree census (Guard 3)", () => {
   test("the exempt surface is bounded: one file, three regions, a fixed site count", () => {
     const exemptDocs = result.docs.filter((d) => d.counts.EXEMPT > 0).map((d) => d.path);
     expect(exemptDocs).toEqual(["plugins/soleur/commands/go.md"]);
-    expect(result.totals.EXEMPT).toBe(21);
+    // 2026-10-06: Cursor spellings inside the three existing regions move 21 to 44.
+    expect(result.totals.EXEMPT).toBe(44);
     const goMd = docs.find((d) => d.path === "plugins/soleur/commands/go.md");
     expect(goMd).toBeDefined();
     const starts = (goMd as { text: string }).text.match(/^<!-- harness-forms:start -->$/gm) ?? [];

@@ -39,6 +39,10 @@ LOCAL_REPO="localhost/soleur-mirror/zot-linux-${ARCH}"
 
 die() { echo "zot-image-oci-archive: $2" >&2; exit "$1"; }
 
+# Token-shape guard: the anonymous ghcr.io pull token is a JWT (A-Za-z0-9._-); a value outside the
+# bearer charset would break out of the one-line curl config the token is fed through on stdin.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 # The canonical absolute-path guard (a COPY of plugins/soleur/test/test-helpers.sh — do not reword
 # it here only): every write below lands under $W, and $W is proven absolute before the first one.
 assert_fixture_dir() {
@@ -108,17 +112,21 @@ build() {
   case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
   assert_fixture_dir "$W"; assert_fixture_dir "$out"
   mkdir -p "$W/img/blobs/sha256"
-  tok="$(curl -fsS --proto =https --retry 3 "https://ghcr.io/token?scope=repository:${REPO}:pull" | jq -er .token)" \
+  tok="$(curl --disable --noproxy '*' -fsS --proto =https --retry 3 "https://ghcr.io/token?scope=repository:${REPO}:pull" | jq -er .token)" \
     || die 1 "could not obtain an anonymous ghcr.io pull token for ${REPO}"
-  curl -fsSL --proto =https --proto-redir =https --retry 3 -H "Authorization: Bearer ${tok}" \
+  # The token rides curl's stdin config channel, never its argv (/proc/<pid>/cmdline is world-readable).
+  _bearer_ok "$tok" || die 1 "the ghcr.io pull token for ${REPO} is empty or has an unexpected shape (refusing to build a curl config from it)"
+  curl --disable --noproxy '*' -fsSL --proto =https --proto-redir =https --retry 3 \
     -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-    "https://ghcr.io/v2/${REPO}/manifests/sha256:${D}" > "$W/img/blobs/sha256/$D" \
+    --config - "https://ghcr.io/v2/${REPO}/manifests/sha256:${D}" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$tok") > "$W/img/blobs/sha256/$D" \
     || die 1 "could not fetch manifest sha256:${D}"
   [[ "$(sha "$W/img/blobs/sha256/$D")" == "$D" ]] || die 1 "manifest bytes do not hash to the pinned D sha256:${D}"
   for h in $(referenced "$W/img/blobs/sha256/$D"); do
     [[ "$h" =~ ^[0-9a-f]{64}$ ]] || die 1 "manifest names a malformed digest: $h"
-    curl -fsSL --proto =https --proto-redir =https --retry 3 -H "Authorization: Bearer ${tok}" \
-      "https://ghcr.io/v2/${REPO}/blobs/sha256:${h}" > "$W/img/blobs/sha256/$h" || die 1 "could not fetch blob sha256:${h}"
+    curl --disable --noproxy '*' -fsSL --proto =https --proto-redir =https --retry 3 \
+      --config - "https://ghcr.io/v2/${REPO}/blobs/sha256:${h}" \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$tok") > "$W/img/blobs/sha256/$h" || die 1 "could not fetch blob sha256:${h}"
     [[ "$(sha "$W/img/blobs/sha256/$h")" == "$h" ]] || die 1 "blob bytes do not hash to sha256:${h}"
   done
   write_views img
@@ -141,10 +149,10 @@ verify() {
   # files or directories. A symlink/hardlink/FIFO/device member is refused here, not after extraction
   # (a FIFO hangs sha256sum; an absolute symlink would make the digest checks read the runner's files).
   got="$(tar -tf "$in" | LC_ALL=C sort)" || die 1 "not a readable tar: $in"
-  printf '%s\n' "$got" | grep -qvE '^(oci-layout|index\.json|manifest\.json|blobs/|blobs/sha256/|blobs/sha256/[0-9a-f]{64})$' \
+  printf '%s\n' "$got" | grep -cvE '^(oci-layout|index\.json|manifest\.json|blobs/|blobs/sha256/|blobs/sha256/[0-9a-f]{64})$' >/dev/null \
     && die 1 "archive carries a member outside the OCI layout"
   [[ -z "$(printf '%s\n' "$got" | uniq -d)" ]] || die 1 "archive carries a duplicate member"
-  tar -tvf "$in" | cut -c1 | grep -qv '^[-d]$' && die 1 "archive carries a non-regular member (link, FIFO or device)"
+  tar -tvf "$in" | cut -c1 | grep -cv '^[-d]$' >/dev/null && die 1 "archive carries a non-regular member (link, FIFO or device)"
   tar -xf "$in" -C "$W/img" --no-same-owner
   [[ -z "$(find "$W/img" -mindepth 1 ! -type f ! -type d -print -quit)" ]] \
     || die 1 "archive extracted a non-regular member (link, FIFO or device)"

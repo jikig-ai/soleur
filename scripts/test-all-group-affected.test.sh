@@ -60,7 +60,7 @@ fi
 # run_suite chokepoint; a want_* that excluded affected would silently remove that
 # group's suites from the denominator — the invisible-coverage defect ADR-181 recorded.
 for fn in want_scripts want_scripts_heavy want_bun want_webplat want_infra; do
-  if grep -E "^${fn}\(\)" "$TARGET" | grep -q '"affected"'; then
+  if grep -E "^${fn}\(\)" "$TARGET" | grep -c >/dev/null '"affected"'; then
     pass "A2 — $fn registers under affected"
   else
     fail "A2 — $fn does not include affected"
@@ -78,23 +78,23 @@ else
 fi
 # Counted decline: the branch must increment suites AND skipped AND its own counter —
 # a decline that increments nothing vanishes from the denominator.
-if sed -n "${_affect_line},+15p" "$TARGET" | grep -q 'suites=$((suites + 1))' \
-   && sed -n "${_affect_line},+15p" "$TARGET" | grep -q 'skipped=$((skipped + 1))' \
-   && sed -n "${_affect_line},+15p" "$TARGET" | grep -q '_affected_declined=$((_affected_declined + 1))'; then
+if sed -n "${_affect_line},+15p" "$TARGET" | grep -c >/dev/null 'suites=$((suites + 1))' \
+   && sed -n "${_affect_line},+15p" "$TARGET" | grep -c >/dev/null 'skipped=$((skipped + 1))' \
+   && sed -n "${_affect_line},+15p" "$TARGET" | grep -c >/dev/null '_affected_declined=$((_affected_declined + 1))'; then
   pass "A3 — the affected decline is counted (suites, skipped, _affected_declined)"
 else
   fail "A3 — affected decline is not fully counted"
 fi
 # Timing row carries the reason label — consumers grep skip=<reason> as a LABELLED
 # trailing field; an unlabelled append would be positionally ambiguous.
-if sed -n "${_affect_line},+20p" "$TARGET" | grep -q 'skip=%s.*"affected"'; then
+if sed -n "${_affect_line},+20p" "$TARGET" | grep -c >/dev/null 'skip=%s.*"affected"'; then
   pass "A3 — declined suites write a skip=affected timing-log row"
 else
   fail "A3 — no skip=affected timing-log row in the decline branch"
 fi
 # Enumerate mode must emit a DECLINED record, not omit the line — the shard-totality
 # reference is built from enumerate output, so an omission silently forks the count.
-if sed -n "${_affect_line},+10p" "$TARGET" | grep -q '_shard_enumerate_declined_dispatch'; then
+if sed -n "${_affect_line},+10p" "$TARGET" | grep -c >/dev/null '_shard_enumerate_declined_dispatch'; then
   pass "A3 — enumerate mode emits a declined record for affected skips"
 else
   fail "A3 — enumerate mode does not record affected declines"
@@ -119,9 +119,9 @@ for lbl in 'registry-gate-mutation-battery' 'apps/web-platform [unit]' \
 done
 
 # A5 — fail-open arms inside the predicate: FORCE_ALL, CI, undeterminable diff.
-if grep -A25 '^_suite_affected() {' "$TARGET" | grep -q 'SOLEUR_TEST_FORCE_ALL' \
-   && grep -A25 '^_suite_affected() {' "$TARGET" | grep -q '"${CI:-}"' \
-   && grep -A25 '^_suite_affected() {' "$TARGET" | grep -q '_diff_detect_ok'; then
+if grep -A25 '^_suite_affected() {' "$TARGET" | grep -c >/dev/null 'SOLEUR_TEST_FORCE_ALL' \
+   && grep -A25 '^_suite_affected() {' "$TARGET" | grep -c >/dev/null '"${CI:-}"' \
+   && grep -A25 '^_suite_affected() {' "$TARGET" | grep -c >/dev/null '_diff_detect_ok'; then
   pass "A5 — predicate fails open on FORCE_ALL, CI and undeterminable diff"
 else
   fail "A5 — a fail-open arm is missing from _suite_affected"
@@ -131,7 +131,7 @@ fi
 # refusal that prescribes prose-only selection would reintroduce the hand-derived
 # command list this mode replaces.
 _sub_refusal_line=$(grep -n 'SOLEUR_SUBAGENT:-}' "$TARGET" | head -1 | cut -d: -f1)
-if sed -n "${_sub_refusal_line},+25p" "$TARGET" | grep -q 'TEST_GROUP=affected bash scripts/test-all.sh' \
+if sed -n "${_sub_refusal_line},+25p" "$TARGET" | grep -c >/dev/null 'TEST_GROUP=affected bash scripts/test-all.sh' \
    && grep -E 'SOLEUR_SUBAGENT.*!= .affected' "$TARGET" >/dev/null; then
   pass "A6 — subagent refusal exempts affected and names it as the substitute"
 else
@@ -139,8 +139,8 @@ else
 fi
 _sib_refusal_line=$(grep -n '^if \[\[ "${TC_SIBLING_RUN_COUNT:-0}"' "$TARGET" | head -1 | cut -d: -f1)
 if [[ -n "$_sib_refusal_line" ]] \
-   && sed -n "${_sib_refusal_line},+6p" "$TARGET" | grep -q '"$TEST_GROUP" != "affected"' \
-   && sed -n "${_sib_refusal_line},+30p" "$TARGET" | grep -q 'TEST_GROUP=affected bash scripts/test-all.sh'; then
+   && sed -n "${_sib_refusal_line},+6p" "$TARGET" | grep -c >/dev/null '"$TEST_GROUP" != "affected"' \
+   && sed -n "${_sib_refusal_line},+30p" "$TARGET" | grep -c >/dev/null 'TEST_GROUP=affected bash scripts/test-all.sh'; then
   pass "A6 — sibling refusal exempts affected and names it as the substitute"
 else
   fail "A6 — sibling refusal does not exempt/name affected"
@@ -149,7 +149,7 @@ fi
 # A7 — the untracked-files append is gated to affected mode (the base set covers only
 # the curated relevance prefixes; a new untracked SUT anywhere else must select its
 # suites, but the append must not widen every other gate's diff view).
-if grep -A3 'if \[\[ "$TEST_GROUP" == "affected" \]\]' "$TARGET" | grep -qF 'ls-files --others --exclude-standard'; then
+if grep -A3 'if \[\[ "$TEST_GROUP" == "affected" \]\]' "$TARGET" | grep -cF >/dev/null 'ls-files --others --exclude-standard'; then
   pass "A7 — affected mode appends the whole-tree untracked listing"
 else
   fail "A7 — whole-tree untracked append missing or ungated"

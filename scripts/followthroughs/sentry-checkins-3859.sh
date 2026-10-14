@@ -33,7 +33,10 @@ case "$-" in
     ;;
 esac
 
-if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
+# Token-shape guard: a newline in the token would inject a curl config directive on the stdin
+# channel below, and an empty one would send the request headerless. Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN unusable" >&2; exit 2; fi
 
 # `jikigai-eu`: the legacy `jikigai` org was cancelled vendor-side and 403s for every credential.
 ORG="jikigai-eu"
@@ -56,9 +59,9 @@ errors=0
 for slug in "${SLUGS[@]}"; do
   total_count=$((total_count + 1))
   http_code=$(curl --disable --noproxy '*' -sS -o /tmp/ck.json -w '%{http_code}' \
-    --max-time 30 \
-    -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
-    "${API}/organizations/${ORG}/monitors/${slug}/checkins/?limit=5" || echo "000")
+    --max-time 30 --config - \
+    "${API}/organizations/${ORG}/monitors/${slug}/checkins/?limit=5" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") || echo "000")
 
   if [[ "$http_code" != "200" ]]; then
     echo "FAIL: ${slug} — HTTP ${http_code}"

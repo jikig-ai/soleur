@@ -238,6 +238,6 @@ approximate "many readers each holding a different C".
 ## References
 
 - PR #2858 (feat-cc-single-leader-routing)
-- Plan: `knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md`
 - ADR-022: `knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md`
 - Related: `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md`

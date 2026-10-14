@@ -61,7 +61,7 @@ chmod +x "$STUB"
 NOJQ="$SUITE_TMP/nojq"
 mkdir -p "$NOJQ"
 assert_fixture_dir "$NOJQ"
-printf '#!/bin/sh\nexit 127\n' > "$NOJQ/jq"
+printf '#!/bin/sh\n[ -t 0 ] || timeout 2 cat >/dev/null\nexit 127\n' > "$NOJQ/jq"
 chmod +x "$NOJQ/jq"
 
 CALLS="$SUITE_TMP/calls.log"
@@ -162,7 +162,7 @@ clean_ prod-shape-closed      5 "WITHOUT merging"  "$BIN" PR_OUT='{"state":"CLOS
 clean_ prod-shape-gh-absent   3 "CANNOT ESTABLISH" "$SUITE_TMP/empty-dir"
 
 # Source pin: the probe never exits 1 (the sweeper reads 1 as FAIL / reopen).
-if grep -vE '^[[:space:]]*#' "$PROBE" | grep -qE '\bexit 1\b'; then
+if grep -vE '^[[:space:]]*#' "$PROBE" | grep -cE >/dev/null '\bexit 1\b'; then
   no "probe-never-exits-1 (an exit 1 appears)"
 else ok "probe-never-exits-1"; fi
 

@@ -42,14 +42,14 @@ AT='@'
 for tok in "${AT}~/.ssh/id_rsa" "${AT}~/.doppler/.doppler.yaml" "${AT}\$HOME/.aws/credentials" \
            "${AT}\${HOME}/.netrc" "${AT}/home/alice/.git-credentials" "${AT}/root/.ssh/id_ed25519" \
            "${AT}/etc/shadow" "${AT}/tmp/secret.json"; do
-  if printf '%s\n' "curl --data-binary $tok" | detect | grep -q .; then ok; else bad "detector missed: $tok"; fi
+  if printf '%s\n' "curl --data-binary $tok" | detect | grep -c >/dev/null .; then ok; else bad "detector missed: $tok"; fi
 done
 
 echo "=== 2. no false positives on legitimate at-sign uses ==="
 for tok in "${AT}11ty/eleventy" "${AT}types/node" "${AT}anthropic-ai/sdk" "${AT}/lib/foo" \
            "${AT}/components/x" "user${AT}example.com" "${AT}octocat" "${AT}<doppler-config-file>" \
            "${AT}<credential-file>"; do
-  if printf '%s\n' "$tok" | detect | grep -q .; then bad "false positive on: $tok"; else ok; fi
+  if printf '%s\n' "$tok" | detect | grep -c >/dev/null .; then bad "false positive on: $tok"; else ok; fi
 done
 
 echo "=== 3. repo scan: auto-loaded content surface must contain ZERO footgun tokens ==="

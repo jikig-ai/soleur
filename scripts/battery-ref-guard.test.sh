@@ -132,12 +132,12 @@ try_tag() {
 
 FIX_COMMON="$(cd "$WORK/fixture/.git" && pwd -P)"
 
-ck; if [[ "$(try_tag wired "$HOOK_DIR" "$FIX_COMMON")" != "0" ]] && ! git -C "$WORK/fixture" tag -l | grep -qx wired; then
+ck; if [[ "$(try_tag wired "$HOOK_DIR" "$FIX_COMMON")" != "0" ]] && ! git -C "$WORK/fixture" tag -l | grep -cx >/dev/null wired; then
   pass "WIRING: real git invokes the hook — a tag CREATE is refused and no tag appears"
 else fail "WIRING: git did not invoke the hook — core.hooksPath arming does not reach real git"; fi
 
 cp -r "$HOOK_DIR" "$WORK/nohook" && rm -f "$WORK/nohook/reference-transaction"
-ck; if [[ "$(try_tag unwired "$WORK/nohook" "$FIX_COMMON")" == "0" ]] && git -C "$WORK/fixture" tag -l | grep -qx unwired; then
+ck; if [[ "$(try_tag unwired "$WORK/nohook" "$FIX_COMMON")" == "0" ]] && git -C "$WORK/fixture" tag -l | grep -cx >/dev/null unwired; then
   pass "MUTATION: with the hook removed the same CREATE succeeds — the refusal is its doing"
 else fail "MUTATION: the CREATE still failed with the hook removed — refusals are NOT attributable"; fi
 

@@ -98,6 +98,9 @@ locals {
     git_data_luks_reopen_service     = replace(file("${DIR}/git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
     git_data_luks_reopen_failure_service = replace(file("${DIR}/git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
     git_data_luks_reopen_timer           = replace(file("${DIR}/git-data-luks-reopen.timer"), local.git_data_rationale_strip, "")
+    git_data_liveness                    = replace(file("${DIR}/git-data-liveness.sh"), local.git_data_rationale_strip, "")
+    git_data_liveness_service            = replace(file("${DIR}/git-data-liveness.service"), local.git_data_rationale_strip, "")
+    git_data_liveness_timer              = replace(file("${DIR}/git-data-liveness.timer"), local.git_data_rationale_strip, "")
     git_transport_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBTRANSPORTKEYAAAAAAAAAAAAAAAAAAAAA"
     git_provision_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBPROVISIONKEYAAAAAAAAAAAAAAAAAAAAA"
     git_remove_pubkey                = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBREMOVEKEYAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -132,7 +135,7 @@ raw=$(console 'local.rendered')
 # A render FAILURE still prints a warning banner and "(known after apply)" on stdout, so
 # emptiness is not the tell — look for the diagnostic explicitly. Fail-closed: an
 # unmeasurable template must never read as one that fits.
-if [ -s "$TFDIR/err" ] || printf '%s' "$raw" | grep -q 'known after apply'; then
+if [ -s "$TFDIR/err" ] || printf '%s' "$raw" | grep -c 'known after apply' >/dev/null; then
   echo "git-data-userdata-budget: RENDER FAILED" >&2
   sed 's/\x1b\[[0-9;]*m//g' "$TFDIR/err" >&2
   exit 2

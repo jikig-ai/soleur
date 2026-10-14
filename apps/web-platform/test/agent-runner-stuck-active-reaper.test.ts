@@ -1,14 +1,14 @@
 /**
  * Phase 3 (#stuck-active fix) — periodic reaper for stuck-active conversations.
  *
- * Plan: knowledge-base/project/plans/2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
  *
  * The reaper periodically calls `find_stuck_active_conversations` (migration
  * 037) and finalizes any candidate row to status='failed', releases the
  * (possibly orphan) concurrency slot, and aborts the in-process session.
  *
  * AC2/AC5 requires:
- *   - `setInterval` cadence at 60 s; signal is slot-heartbeat staleness.
+ *   - `setInterval` cadence at 300 s (widened 60→300 s, 2026-06-02); signal is slot-heartbeat staleness.
  *   - Order in the loop: status flip → releaseSlot → abortSession.
  *   - Idempotent: an already-released slot row is a no-op.
  *   - The RPC error path mirrors to Sentry via `reportSilentFallback`.
@@ -72,7 +72,30 @@ vi.mock("../server/error-sanitizer", () => ({
   sanitizeErrorForClient: vi.fn(() => "error"),
 }));
 vi.mock("../server/sandbox", () => ({ isPathInWorkspace: vi.fn(() => true) }));
-vi.mock("../server/agent-env", () => ({ buildAgentEnv: vi.fn(() => ({})) }));
+vi.mock("../server/agent-env", async () => {
+  // feat-open-web-egress (#9534): keep the REAL exports —
+  // agent-runner-sandbox-config derives the web-egress deny census
+  // from ALLOWED_SERVICE_ENV_VARS at module init; a bare stub drops
+  // it and crashes every transitive importer.
+  const actual =
+    await vi.importActual<typeof import("../server/agent-env")>("../server/agent-env");
+  return { ...actual, buildAgentEnv: vi.fn(() => ({})) };
+});
+// feat-open-web-egress (#9534): entitlement read + forwarder lifecycle —
+// default off; the factory must resolve the module (mocked) on every
+// dispatch even when the grant is false.
+vi.mock("@/server/resolve-web-egress", () => ({
+  resolveWebEgress: vi.fn(async () => false),
+  resolveWebEgressStrict: vi.fn(async () => false),
+}));
+vi.mock("@/server/egress-forwarder", () => ({
+  spawnEgressForwarder: vi.fn(),
+  teardownEgressForwarder: vi.fn(),
+  reapOrphanEgressForwarders: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
+}));
+
 vi.mock("../server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => vi.fn()),
 }));

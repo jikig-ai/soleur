@@ -135,9 +135,9 @@ done
 PROBE_SRC="$SCRIPT_DIR/../../../scripts/followthroughs/registry-luks-live-8386.sh"
 if [ -r "$PROBE_SRC" ]; then
   # shellcheck disable=SC2034  # read inside assert()'s eval'd condition string, which shellcheck cannot follow
-  EMITTED_NAMES="$(printf '%s\n' "$LINE_ASSIGN" | grep -oE 'store_[a-z_]+=' | sed 's/=$//' | sort -u)"
+  EMITTED_NAMES="$(printf '%s\n' "$LINE_ASSIGN" | grep -oE 'store_[a-z_]+=' | sed 's/=$//' | LC_ALL=C sort -u)"
   # shellcheck disable=SC2034  # read inside assert()'s eval'd condition string, which shellcheck cannot follow
-  CONSUMED_NAMES="$(grep -oE '^F_[A-Z]+="store_[a-z_]+"' "$PROBE_SRC" | sed -E 's/.*"(store_[a-z_]+)"/\1/' | sort -u)"
+  CONSUMED_NAMES="$(grep -oE '^F_[A-Z]+="store_[a-z_]+"' "$PROBE_SRC" | sed -E 's/.*"(store_[a-z_]+)"/\1/' | LC_ALL=C sort -u)"
   assert "the emitter ships at least one store_* field (extraction non-vacuity)" \
     "[ -n \"\$EMITTED_NAMES\" ]"
   assert "the grader names at least one store_* field (extraction non-vacuity)" \
@@ -146,7 +146,7 @@ if [ -r "$PROBE_SRC" ]; then
   # not required: store_mount_base is emitted for off-box auditability of a __NOMATCH__ row and
   # is producer-only by design (CTO ruling, #8386 review).
   assert "every field the grader reads is a field the emitter ships" \
-    "[ -z \"\$(comm -23 <(printf '%s\\n' \"\$CONSUMED_NAMES\") <(printf '%s\\n' \"\$EMITTED_NAMES\"))\" ]"
+    "[ -z \"\$(LC_ALL=C comm -23 <(printf '%s\\n' \"\$CONSUMED_NAMES\") <(printf '%s\\n' \"\$EMITTED_NAMES\"))\" ]"
 else
   assert "the grader source is readable (the seam assertion above is not vacuous)" "false"
 fi
@@ -298,8 +298,15 @@ for v in MEM_TOTAL_KB MEM_TOTAL INSPECT ID STATE_STATUS OOM_KILLED \
   assert "new var \$$v is \$\$-escaped wherever brace-formed (single=$n_single double=$n_double)" \
     "[ '$n_single' = '$n_double' ]"
 done
-assert "ships via Better Stack Logs Authorization: Bearer token" \
-  "grep -qF 'Authorization: Bearer \$TOKEN' '$CI'"
+assert "ships via Better Stack Logs with the bearer on curl's stdin config (all four posting scripts)" \
+  "[ \"\$(grep -cF 'header = \"Authorization: Bearer %s\"' '$CI')\" = 4 ] && [ \"\$(grep -cF -- '--config -' '$CI')\" -ge 4 ]"
+# Continuation-aware: backslash-newline joins are folded first, so a header on the second line of a two-line curl (the shipper's) is seen.
+no_argv_auth_header() { # <file>: rc 0 when no curl line carries an Authorization header (any -H / --header spelling)
+  local folded; folded="$(awk 'BEGIN { ORS = "" } /\\$/ { sub(/\\$/, ""); print; next } { print; print "\n" }' "$1")"
+  ! grep -qiE "curl.*(-H|--header)[ =]*['\"]?authorization" <<<"$folded"
+}
+assert "no curl in the template carries an Authorization header on its own argument list, on any continuation line (ADR-280, lint Rule E)" \
+  "no_argv_auth_header '$CI'"
 assert "cron wraps the reporter in doppler run (isolated soleur-registry/prd)" \
   "grep -qF 'doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh' '$CI'"
 assert "absence-based <85% liveness ping retained" "grep -qE '\"\\\$USE\" -lt 85' '$CI'"
@@ -344,8 +351,9 @@ echo "--- structural: the registry host type this cloud-init is rendered for (#7
 # was unasserted anywhere in this repo until R3 below — measured: inverting its ternary, and
 # deleting the local outright, both left this suite and zot-image-staleness / git-data-luks /
 # registry-luks green (86/0, 15/0, 133/0, 34/0). R3 closes that. The two SIBLING consumers of
-# the same derivation (local.doppler_sha256, and registry-userdata-budget.sh's hardcoded
-# zot_image_amd64 branch) are still uncovered — #7335.
+# the same derivation are owned elsewhere: the local.doppler_sha256 checksum PAIRING by
+# git-data-luks.test.sh A15, the doppler_arch templatefile wiring by R5 below, and
+# registry-userdata-budget.sh's hardcoded amd64 branch is made valid by R4 below (#7335).
 #
 # The repin's rationale, probe series and sources are SINGLE-SOURCED at zot-registry.tf, anchor
 # "STOCK REALITY". Do not restate them here: an earlier version of this comment did, drifted
@@ -376,6 +384,18 @@ assert "R1: var.registry_server_type default is cpx22 (#7309 repin)" \
 assert "R2: the default is not a cax* type, so local.registry_arch derives amd64" \
   "[ -n '$REGISTRY_DEFAULT' ] && case '$REGISTRY_DEFAULT' in cax*) false ;; *) true ;; esac"
 
+# HCL comment stripper for the Terraform pins below. Line comments (# and //) go first because they
+# are line-scoped (a glob like `infra/*` inside one must not open a block comment); then /* ... */
+# spans, including multi-line ones, which Terraform also treats as comments.
+_strip_hcl_comments() {
+  sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | awk '{ line = $0; out = ""
+    while (1) {
+      if (inb) { i = index(line, "*/"); if (!i) { line = ""; break } line = substr(line, i + 2); inb = 0; continue }
+      i = index(line, "/*"); if (!i) break
+      out = out substr(line, 1, i - 1); line = substr(line, i + 2); inb = 1
+    }
+    print out line }'
+}
 # R3: the arch DERIVATION is oriented correctly — the assertion R2 cannot make.
 #
 # `local.registry_arch = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"` selects
@@ -396,8 +416,13 @@ p_registry_arch_derivation() {
   # Anchored on the ASSIGNMENT at line-start: that distinguishes a DECLARATION from a reference
   # such as `zot_image = local.registry_arch == "arm64" ? ...` two lines below, whose `==` an
   # unanchored `registry_arch[[:space:]]*=` would match first and read as the declaration.
-  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*registry_arch[[:space:]]*=' | sed -n '1p')"
+  expr="$(_strip_hcl_comments "$1" | grep -E '^[[:space:]]*registry_arch[[:space:]]*=' | sed -n '1p')"
   [ -n "$expr" ] || { echo 0; return; }
+  # The WHOLE declaration must be the one grammar the replay below understands: a negation, an
+  # extra disjunct or a wrapper around startswith(...) would otherwise pass on its fragment. And
+  # exactly one line-start declaration, so a decoy or second declaration cannot hide the real one.
+  grep -qE '^[[:space:]]*registry_arch[[:space:]]*=[[:space:]]*startswith\(var\.registry_server_type,[[:space:]]*"[a-z]+"\)[[:space:]]*\?[[:space:]]*"[a-z0-9]+"[[:space:]]*:[[:space:]]*"[a-z0-9]+"[[:space:]]*$' <<<"$expr" || { echo 0; return; }
+  [ "$(_strip_hcl_comments "$1" | grep -cE '^[[:space:]]*registry_arch[[:space:]]*=')" = 1 ] || { echo 0; return; }
   pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.registry_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
   tval="$(printf '%s' "$expr" | grep -oE '\?[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
   fval="$(printf '%s' "$expr" | grep -oE ':[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
@@ -414,6 +439,117 @@ p_registry_arch_derivation() {
 }
 assert "R3: local.registry_arch derivation is oriented correctly (catches an INVERTED ternary)" \
   "[ \"\$(p_registry_arch_derivation '$SCRIPT_DIR/zot-registry.tf')\" = 1 ]"
+
+# MUTATION ARMS for R3, R4 and R5. Each arm applies ONE sed edit to a temp COPY of zot-registry.tf
+# (never the real file, never cloud-init-registry.yml) and replays the same predicate on it. The
+# verdict is computed OUTSIDE assert() so sed metacharacters never pass through eval.
+#   SEDERR  sed rejected the expression    NOLAND  the edit changed nothing (a vacuous catch)
+#   RED     the predicate printed 0        GREEN   the predicate printed 1
+#   UNRESOLVED  anything else (a crashed predicate), never a pass and never a catch
+# Every RED row's meaning rests on a baseline assertion that the SAME predicate returns 1 on the
+# real file, so an unreadable file cannot masquerade as a catch. Mirrors git-data-luks.test.sh
+# assert_mutation; the EXIT trap is the only one in this suite.
+MUT_DIR="$(mktemp -d)" || exit 2
+trap 'rm -rf "$MUT_DIR"' EXIT
+# $3 is the file to mutate (default: the real zot-registry.tf); only the instrument controls pass another.
+_mutant_verdict() {
+  local fn="$1" expr="$2" real="${3:-$SCRIPT_DIR/zot-registry.tf}" out
+  sed -E "$expr" "$real" > "$MUT_DIR/m.tf" 2>/dev/null || { echo SEDERR; return; }
+  if cmp -s "$real" "$MUT_DIR/m.tf"; then echo NOLAND; return; fi
+  out="$("$fn" "$MUT_DIR/m.tf")"
+  case "$out" in 0) echo RED ;; 1) echo GREEN ;; *) echo UNRESOLVED ;; esac
+}
+_arm() { local v; v="$(_mutant_verdict "$3" "$4")"; assert "$1" "[ '$v' = $2 ]"; }
+
+# Instrument controls: the verdict must be COMPUTED from the mutated file, a malformed edit must
+# report SEDERR, and a crashed predicate must be UNRESOLVED rather than a pass.
+printf 'GOOD\n' > "$MUT_DIR/ctl.txt"
+_ctl_pred() { if grep -q GOOD "$1"; then echo 1; else echo 0; fi; }
+_ctl_crash() { return 127; }
+v="$(_mutant_verdict _ctl_pred 's/GOOD/BAD/' "$MUT_DIR/ctl.txt")"
+assert "harness: a damaging edit is scored RED from the mutated file" "[ '$v' = RED ]"
+v="$(_mutant_verdict _ctl_pred 's/GOOD/GOOD # x/' "$MUT_DIR/ctl.txt")"
+assert "harness: a benign edit is scored GREEN from the mutated file" "[ '$v' = GREEN ]"
+v="$(_mutant_verdict _ctl_crash 's/GOOD/GOOD # x/' "$MUT_DIR/ctl.txt")"
+assert "harness: a crashed predicate is UNRESOLVED, never a pass" "[ '$v' = UNRESOLVED ]"
+v="$(_mutant_verdict _ctl_pred 's/(/x/' "$MUT_DIR/ctl.txt")"
+assert "harness: a malformed edit reports SEDERR" "[ '$v' = SEDERR ]"
+
+# Every expression is anchored to its target line: the zot_image selector and doppler_sha256
+# lines also contain `registry_arch ==`, and the error_message strings repeat local.registry_arch.
+_R3_DECL='/^[[:space:]]*registry_arch[[:space:]]*=/'
+_arm "R3 arm: INVERTING the ternary branches goes RED" RED p_registry_arch_derivation \
+  "$_R3_DECL s/\? \"arm64\" : \"amd64\"/? \"amd64\" : \"arm64\"/"
+_arm "R3 arm: DELETING the declaration goes RED (empty extraction fails loud)" RED p_registry_arch_derivation "${_R3_DECL}d"
+_arm "R3 arm: WIDENING the prefix cax -> ca goes RED (only the ca99 fixture separates them)" RED p_registry_arch_derivation \
+  "$_R3_DECL s/\"cax\"/\"ca\"/"
+_arm "R3 arm: NEGATING the condition goes RED (the full grammar is pinned, not the startswith fragment)" RED p_registry_arch_derivation \
+  "$_R3_DECL s/startswith\(/!startswith(/"
+_arm "R3 arm: an extra disjunct on the condition goes RED" RED p_registry_arch_derivation \
+  "$_R3_DECL s/\"cax\"\)/\"cax\") || true/"
+_arm "R3 arm: hiding the declaration in a multi-line block comment goes RED" RED p_registry_arch_derivation \
+  "$_R3_DECL i /*"$'\n'"$_R3_DECL a */"
+_arm "R3 arm: a SECOND declaration goes RED (the guard reads exactly one)" RED p_registry_arch_derivation \
+  "$_R3_DECL a \\  registry_arch = \"arm64\""
+_arm "R3 arm: a reformatted EQUIVALENT declaration stays GREEN (not spelling-bound)" GREEN p_registry_arch_derivation \
+  "$_R3_DECL s/ \? \"arm64\" : \"amd64\"/?\"arm64\":\"amd64\" \/\/ reformatted/"
+_arm "R3 arm: a # comment ABOVE the declaration containing a /* glob stays GREEN (line comments strip before block comments)" GREEN p_registry_arch_derivation \
+  "$_R3_DECL i # see /var/*"
+_arm "R3 arm: an edit that matches nothing reports NOLAND, not a false catch" NOLAND p_registry_arch_derivation \
+  's/this-text-is-not-in-the-file/x/'
+
+# R4: hcloud_server.registry carries the plan-time refusal of any non-amd64 arch.
+#
+# registry-userdata-budget.sh measures the rendered user_data against the 32,768 B cap with the
+# amd64 artifacts hardcoded (doppler_arch = "amd64", the amd64 operand of doppler_sha256, the
+# zot_image_amd64 pin). That measurement describes the real host only while this precondition
+# forbids an arm64 host; the boot image is mirrored for amd64 only (zot_mirror_asset_sha256_amd64 /
+# zot_config_digest_amd64). R1/R2/R3 are file-string pins and cannot see a tfvars override of
+# registry_server_type; only the precondition can, and terraform plan itself is not runnable here.
+# Comment-stripped and scoped to the resource block AND the precondition block, so an
+# error_message string or a same-text condition elsewhere does not count.
+p_registry_amd64_only_precondition() {
+  _strip_hcl_comments "$1" | awk '
+    /^resource "hcloud_server" "registry" \{/ { r = 1 }
+    r && /^[[:space:]]*precondition[[:space:]]*\{/ { p = 1 }
+    r && p && /^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*==[[:space:]]*"amd64"[[:space:]]*$/ { f = 1 }
+    p && /^[[:space:]]*\}/ { p = 0 }
+    r && /^\}/ { r = 0 }
+    END { print (f ? 1 : 0) }'
+}
+assert "R4: hcloud_server.registry carries the amd64-only precondition (baseline on the real file)" \
+  "[ \"\$(p_registry_amd64_only_precondition '$SCRIPT_DIR/zot-registry.tf')\" = 1 ]"
+_R4_COND='/^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*==[[:space:]]*"amd64"/'
+_arm "R4 arm: DELETING the condition line goes RED" RED p_registry_amd64_only_precondition "${_R4_COND}d"
+_arm "R4 arm: WEAKENING the condition to true goes RED" RED p_registry_amd64_only_precondition \
+  '/^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.registry_arch/ s/local\.registry_arch[[:space:]]*==[[:space:]]*"amd64"/true/'
+_arm "R4 arm: COMMENTING OUT the condition line goes RED" RED p_registry_amd64_only_precondition "$_R4_COND s/^/# /"
+_arm "R4 arm: BLOCK-COMMENTING the condition goes RED" RED p_registry_amd64_only_precondition \
+  "$_R4_COND i /*"$'\n'"$_R4_COND a */"
+_arm "R4 arm: turning the precondition into a postcondition goes RED (it would create the host first)" RED p_registry_amd64_only_precondition \
+  '/^[[:space:]]*precondition[[:space:]]*\{/{N;/local\.registry_arch[[:space:]]*==[[:space:]]*"amd64"/s/precondition/postcondition/}'
+_arm "R4 arm: RELOCATING the precondition out of the registry resource goes RED" RED p_registry_amd64_only_precondition \
+  's/^resource "hcloud_server" "registry" \{/resource "hcloud_server" "registry2" {/'
+_arm "R4 arm: a reformatted EQUIVALENT condition stays GREEN (not spelling-bound)" GREEN p_registry_amd64_only_precondition \
+  '/^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.registry_arch/ s/condition[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*==[[:space:]]*"amd64"/condition=local.registry_arch=="amd64" # ok/'
+
+# R5: the templatefile map hands the derived arch to the boot script. A hardcoded literal there
+# would render the wrong Doppler CLI build on the host while R3 and R4 stay green.
+p_registry_doppler_arch_wired() {
+  _strip_hcl_comments "$1" | awk '
+    /^resource "hcloud_server" "registry" \{/ { r = 1 }
+    r && /^[[:space:]]*doppler_arch[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*$/ { n++ }
+    r && /^\}/ { r = 0 }
+    END { print (n == 1 ? 1 : 0) }'
+}
+assert "R5: the templatefile map passes doppler_arch = local.registry_arch (baseline on the real file)" \
+  "[ \"\$(p_registry_doppler_arch_wired '$SCRIPT_DIR/zot-registry.tf')\" = 1 ]"
+_arm "R5 arm: HARDCODING doppler_arch in the templatefile map goes RED" RED p_registry_doppler_arch_wired \
+  '/^[[:space:]]*doppler_arch[[:space:]]*=/ s/local\.registry_arch/"arm64"/'
+_arm "R5 arm: a different local on the right-hand side goes RED (the line is anchored)" RED p_registry_doppler_arch_wired \
+  '/^[[:space:]]*doppler_arch[[:space:]]*=/ s/local\.registry_arch/local.registry_arch_other/'
+_arm "R5 arm: a DUPLICATED wiring line goes RED (exactly one inside the registry resource)" RED p_registry_doppler_arch_wired \
+  '/^[[:space:]]*doppler_arch[[:space:]]*=[[:space:]]*local\.registry_arch/ a \    doppler_arch   = local.registry_arch'
 
 echo ""
 # --- #7500: the two redact() copies, and the tier tag -------------------------------------
@@ -537,11 +673,10 @@ echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 # and exit 0, and this suite is a REQUIRED check (infra-validation.yml). Deleting a whole block
 # is the same class. A FLOOR, not equality — a new assertion must never be a spurious failure.
 # Set to the full count at the time of writing; raise it in lockstep, never lower it to pass.
-# 88 before #7500; #7500 added 12 (the two-copy drift check, the order pins and the degrade/tier-tag
-# assertions); #7960 adds 1 (the `err_redact_rev=` field-presence row). Measured, not tallied by
-# hand: the suite runs 105, and leaving the floor at 104 left #7960's own assertion deletable at
-# green -- exactly the slack this comment warns about.
-MIN_ASSERTIONS=123
+# Set to the measured count: the suite runs 154 assertions, so slack here is exactly how many
+# assertions can be deleted before this floor notices (a floor of 134 against 139 once left five
+# arms deletable at green). #7335 added 26 (the mutation arms, their instrument controls, R4 and R5).
+MIN_ASSERTIONS=154
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2

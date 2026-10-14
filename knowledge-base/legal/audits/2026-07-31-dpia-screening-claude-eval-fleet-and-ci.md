@@ -3,7 +3,7 @@ title: "DPIA screening memo — Anthropic-egressing Inngest function fleet, comm
 type: dpia-screening-memo
 date: 2026-07-31
 issue: 7100
-plan: knowledge-base/project/plans/2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
+plan: knowledge-base/project/plans/archive/20261013-051752-2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
 status: draft-requires-counsel-review
 processing_activity: "Article 30 register Processing Activity 31 (Anthropic-egressing Inngest function fleet), Processing Activity 32 (community observation and republication) and Processing Activity 33 (Jikigai-keyed Anthropic API surface in GitHub Actions CI)"
 conclusion: "SPLIT. PA-31 and PA-33: full DPIA NOT required — two and one WP248 criteria engaged respectively, no public-output limb, named accepted residuals and pinned re-screening triggers are the proportionate Art. 24/25 record. PA-32 (community observation and republication): a full DPIA IS required under Art. 35(1) — six WP248 rev.01 criteria are engaged, and Art. 35(1) requires the assessment PRIOR TO the processing, so it is overdue by approximately five months. The memo records that remediation R1-R4 collapses four of the six criteria at once and may therefore be the better path than assessing a limb that should not exist in its current form."
@@ -128,7 +128,7 @@ assessment is **overdue by approximately five months**, and the public-issue-com
 continues to run. This is recorded as a compliance finding, not as a plan.
 
 The full DPIA is tracked as deferred item **DEF-5** (#7121; body drafted at
-`knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`;
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`;
 #7121). PA-32 §(g) records **DPIA status: FULL DPIA REQUIRED — and overdue**, with the
 ~2026-02-19 date and the DEF-5 scoping in the sentences that follow it. **[2026-07-31
 CORRECTION (#7100), applied at review: the preceding sentence previously presented a
@@ -195,6 +195,47 @@ on a public surface under Jikigai's bot identity. *Accepted only as an interim p
 because it overlaps R4 and is separately tracked as deferred item **DEF-7** (#7122). *Re-screening
 trigger:* first observed injected content reaching a published artefact — or immediately, if
 counsel assesses the absence of a human gate as unacceptable at any volume.
+
+> **Superseded in part 2026-10-06 (#7122) - residuals (a) and (b); append-only, nothing above is retracted.**
+> The text above is the record of the position on 2026-07-31 and stays as written.
+>
+> - **Residual (a)**: "no closed output allowlist ... on the digest path" no longer holds for
+>   `cron-community-monitor`. From the merge of #7122 its digest and tracking issue are rendered by the
+>   handler from a closed-schema draft (bounded integers and closed enum members, no free-text field;
+>   ADR-273), so unsolicited Art. 9 text cannot be carried into that publication. Unchanged: Art. 9
+>   content still reaches Anthropic with no PII scrub on the input (#7124), a disclosure already in a
+>   published digest is still un-erasable (residual (c)), and `cron-daily-triage` has no output
+>   allowlist (#9606).
+> - **Residual (b)**: for `cron-community-monitor` the injection-to-public-publication finding is
+>   **narrowed**, not eliminated. Attacker-chosen free text can no longer reach the digest or the issue.
+>   Still open for that cron: there is no human gate (auto-merge), an injection can choose in-set enum
+>   members and in-range counts (numeric truth is not verified), and the schema is not free of
+>   personal-data risk because counts can single a person out. Open in full for `cron-daily-triage`
+>   (a PA-32 member that comments publicly, with no hook), tracked at #9606. R4's objective is met for
+>   the community digest by a different mechanism; whether that substitutes for R4 is for counsel at
+>   #7119. The finding stays recorded as an interim posture for the fleet as a whole. The conclusion of
+>   this memo (full DPIA required for PA-32, overdue, #7121) is unchanged.
+
+> **Further correction 2026-10-06 (#7122, review) - residuals (a) and (b); append-only.** Corrections to the
+> 2026-10-06 note above, which stays as written.
+>
+> - **Residual (a)**: "unsolicited Art. 9 text cannot be carried into that publication" is scoped to the
+>   **published artefacts**. For `cron-community-monitor` alone the agent's redacted final message (up to 16 KiB) is
+>   memoised in the `claude-eval` step output (Inngest run state, not a published surface) before it is validated, so a
+>   non-conforming message could hold such text there without being republished.
+> - **Residual (b)**: the agent holds **no GitHub write credential** during its run, and nothing wider is claimed: the
+>   Discord, Bluesky, X and LinkedIn credentials for the read collectors, several of them posting credentials, remain in
+>   the spawn environment (ADR-273 residual (g)). Review found a P1 on this very finding: trailing arguments of allowlisted
+>   router verbs reached `python3 -c` source and bash arithmetic evaluation, so the agent could execute code with that
+>   environment; a strict argument grammar plus script-side operand validation now closes the code-execution leg (a
+>   grammar-conforming query token can still reach `hn.algolia.com`; ADR-273 residual (e)) and the allowlist is fourteen
+>   verbs, not sixteen. The counts caveat is wider than the note says: Discord `members` and `messages` for a private guild
+>   and `github.newStargazers` can single a person out as well, and with the period fixed at one day the published series
+>   is a daily time series. The phrase "R4's objective is met for the community digest by a different mechanism" is
+>   withdrawn: the exposure R4 described is **narrowed** for future output, and whether that substitutes for R4 is for
+>   counsel at #7119. This PR closes issue #7122; `cron-daily-triage` stays OPEN under #9606.
+
+> **Further correction 2026-10-06 (#7122, review round 2); append-only.** the allowlist is **thirteen exact-literal** commands with no agent-chosen argument other than a numeric Discord channel id, so the statement that a grammar-conforming query token can still reach `hn.algolia.com` is withdrawn (the HN query word is a pinned literal; ADR-273 residual (e)). "Fixed at one day" and "daily time series" are withdrawn as stated: the collection windows differ by platform (GitHub 1 day; Hacker News mentions 7 days; Discord the latest 50 messages per channel; X, Bluesky and LinkedIn totals as of collection), so the published series is a daily series of mixed-window values.**
 
 **(c) The already-published corpus cannot be erased.** 80 digests, 45 with the commenter
 table, 65 naming stargazers, on a public repository with two forks, with zero deletions ever.
@@ -289,6 +330,23 @@ for the affected activity.
    final form (consultation closes **30 October 2026**), or any EDPB/CNIL guidance addressing
    LLM-agent publication of third-party content.
 9. Quarterly review alongside the Article 30 register cadence.
+
+> **Superseded in part 2026-10-06 (#7122) - triggers 1 and 4; append-only.** Trigger 1 ("R1-R4
+> landing") has **not fired as written**: R1-R4 have not landed as specified. #7122 is a different
+> mechanism that narrows what future output of `cron-community-monitor` can contain; whether it
+> counts as the trigger-1 event, and whether the criteria tally falls from six, is for counsel at
+> #7119, and until then the full-DPIA conclusion for PA-32 stands. Trigger 4 ("a new write path to a
+> public surface") is **not fired** by #7122: it removes agent write paths, and the handler publishes
+> only the same two surfaces as before (the committed digest and the tracking issue). Trigger 4
+> **would** fire on a new free-text field in the publication schema or an additional published
+> surface; those are also named re-evaluation triggers in
+> `knowledge-base/legal/audits/2026-10-clo-attestation-7122.md`.
+
+> **Further correction 2026-10-06 (#7122, review) - triggers 1 and 4; append-only.** Trigger 4 would also fire on
+> any new allowlisted router verb, or any script that interpolates an argument, for a cron whose agent ingests
+> third-party content: review found that trailing arguments of allowlisted verbs are a code-execution and egress path
+> unless the argument grammar and the scripts' operand validation hold. Trigger 1's "has not fired as written" stands, and
+> "narrowed" (not "met") is the word for what #7122 does to the R4 exposure.
 
 ---
 

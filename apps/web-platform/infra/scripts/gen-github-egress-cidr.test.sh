@@ -262,7 +262,7 @@ fi
 # probe, not this generator, is the control for that residual; this row pins the behaviour so
 # it can only change on purpose. The .api-ONLY member (203.0.113.50/32) is the same shape and
 # there the carve would otherwise delete the only entry admitting it.
-if grep '^# Excluded' "$OUT1" | grep -qE '198\.51\.100\.77/32|198\.51\.100\.90/32|203\.0\.113\.50/32|233\.252\.0\.9'; then
+if grep '^# Excluded' "$OUT1" | grep -cE '198\.51\.100\.77/32|198\.51\.100\.90/32|203\.0\.113\.50/32|233\.252\.0\.9' >/dev/null; then
   no "exact-member hole (.git / .web-only / .api-only) or outside-every-prefix hole produced an Excluded line"
 else
   ok "holes equal to an exact .git, .web-only or .api-only member, and a hole outside every prefix: no Excluded line"
@@ -302,14 +302,14 @@ fi
 echo "-- oracle self-check (the oracle can go RED) --"
 cp "$OUT1" "$WORK/tampered.txt"
 echo '192.0.2.33/32' >> "$WORK/tampered.txt"
-if python3 "$ORACLE" "$FIXTURE" "$WORK/tampered.txt" | grep -qE '^CHECKED=[0-9]+ BAD=[1-9]'; then
+if python3 "$ORACLE" "$FIXTURE" "$WORK/tampered.txt" | grep -cE '^CHECKED=[0-9]+ BAD=[1-9]' >/dev/null; then
   ok "oracle flags a re-admitted carved IP"
 else
   no "oracle did not flag a re-admitted carved IP (vacuous oracle)"
 fi
 cp "$OUT1" "$WORK/tampered2.txt"
 sed -i '/^203.0.113.10\/32$/d' "$WORK/tampered2.txt"
-if python3 "$ORACLE" "$FIXTURE" "$WORK/tampered2.txt" | grep -qE '^CHECKED=[0-9]+ BAD=[1-9]'; then
+if python3 "$ORACLE" "$FIXTURE" "$WORK/tampered2.txt" | grep -cE '^CHECKED=[0-9]+ BAD=[1-9]' >/dev/null; then
   ok "oracle flags a dropped allow IP"
 else
   no "oracle did not flag a dropped allow IP"
@@ -612,7 +612,7 @@ fi
 hole_json() { python3 -c 'import json,sys; print(json.dumps(["192.0.2.%d/32" % (i + 100) for i in range(int(sys.argv[1]))]))' "$1"; }
 with_packages holes64 "$(hole_json 64)"
 if gen_run "$WORK/holes64.json" "$WORK/holes64.out"; then
-  grep -c '^# Excluded' "$WORK/holes64.out" | grep -qx 64 && ok "64 effective holes accepted (cap boundary)" || no "64 holes: header count != 64"
+  grep -c '^# Excluded' "$WORK/holes64.out" | grep -cx 64 >/dev/null && ok "64 effective holes accepted (cap boundary)" || no "64 holes: header count != 64"
   oracle_check "64-hole fixture" "$WORK/holes64.json" "$WORK/holes64.out" 500
 else
   no "64 effective holes must be accepted (stderr: $(head -c 200 "$WORK/err.txt"))"
@@ -776,7 +776,7 @@ grep -qE 'mktemp .*\$\{?OUT' "$GEN" && ok "mktemp in the target dir (atomic mv, 
 # Anchored on the LIVE curl invocation, comment-stripped: the emit_file heredoc and the header
 # comment both quote a `curl -fsS --max-time 30` recipe, which a bare grep would accept even
 # with the real fetch unbounded.
-if grep -vE '^[[:space:]]*#' "$GEN" | grep -qE '^[[:space:]]*meta_json="\$\(curl -fsS --max-time 30 "\$META_URL"\)"'; then
+if grep -vE '^[[:space:]]*#' "$GEN" | grep -cE '^[[:space:]]*meta_json="\$\(curl -fsS --max-time 30 "\$META_URL"\)"' >/dev/null; then
   ok "live fetch is bounded (the meta_json= curl invocation carries --max-time 30, AC11)"
 else
   no "live fetch bounded (no comment-stripped meta_json=\"\$(curl -fsS --max-time 30 \"\$META_URL\")\" line)"

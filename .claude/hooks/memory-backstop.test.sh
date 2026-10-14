@@ -343,7 +343,7 @@ else
   # -p list too — adding a fifth runtime cap means updating all three; the pin
   # whitelists so ANY non-runtime member (OOMPolicy, BindsTo, ...) reds.
   _reentry_want=$'MemoryHigh\nMemoryMax\nMemorySwapMax\nTasksMax'
-  if printf '%s' "$_reentry_norm" | grep -qE '"\$scope" true 4( |$)' \
+  if printf '%s' "$_reentry_norm" | grep -cE >/dev/null '"\$scope" true 4( |$)' \
      && [[ "$_reentry_props" == "$_reentry_want" && "$_reentry_block" != *OOMPolicy* ]]; then
     pass "T21 re-entry SetUnitProperties carries exactly the four runtime-settable caps (\"\$scope\" true 4)"
   else
@@ -949,7 +949,7 @@ EOF
     && grep -q 'SetUnitProperties.*soleur-agent-stale\.scope' "$rs/busctl.calls" \
     && grep -q 'SetUnitProperties.*soleur-agent-failbus\.scope' "$rs/busctl.calls" \
     && ! grep 'SetUnitProperties' "$rs/busctl.calls" \
-         | grep -qE 'soleur-agent-(current|vanished)\.scope|foreign-unit\.scope'; then
+         | grep -cE >/dev/null 'soleur-agent-(current|vanished)\.scope|foreign-unit\.scope'; then
     pass "AC7 SetUnitProperties fires ONLY on cap-mismatched owned scopes (stale + failbus; current/vanished/foreign untouched)"
   else
     fail "AC7 repair fan-out wrong ($sp_calls SetUnitProperties calls):
@@ -969,10 +969,10 @@ $(cat "$rs/busctl.calls" 2>/dev/null)"
   # and must NOT carry OOMPolicy: on scopes it is creation-only, and because
   # SetUnitProperties is all-or-nothing a rejected OOMPolicy drops the four
   # caps with it (measured on systemd 261 — the hook's own comment).
-  if grep 'SetUnitProperties' "$rs/busctl.calls" | grep -q 'true 4' \
-    && grep 'SetUnitProperties' "$rs/busctl.calls" | grep -q "TasksMax t $SCOPE_TASKS_MAX" \
-    && grep 'SetUnitProperties' "$rs/busctl.calls" | grep -q "MemoryMax t $SCOPE_MAX_BYTES" \
-    && ! grep 'SetUnitProperties' "$rs/busctl.calls" | grep -q 'OOMPolicy'; then
+  if grep 'SetUnitProperties' "$rs/busctl.calls" | grep -c >/dev/null 'true 4' \
+    && grep 'SetUnitProperties' "$rs/busctl.calls" | grep -c >/dev/null "TasksMax t $SCOPE_TASKS_MAX" \
+    && grep 'SetUnitProperties' "$rs/busctl.calls" | grep -c >/dev/null "MemoryMax t $SCOPE_MAX_BYTES" \
+    && ! grep 'SetUnitProperties' "$rs/busctl.calls" | grep -c >/dev/null 'OOMPolicy'; then
     pass "AC7 repair call is runtime=true carrying the four caps and no OOMPolicy (creation-only on scopes)"
   else
     fail "AC7 repair call shape wrong:
@@ -1182,7 +1182,7 @@ sys.exit(0)
     systemctl --user stop "$PSCOPE" >/dev/null 2>&1
     for _ in $(seq 1 40); do kill -0 "$CHILD" 2>/dev/null || break; sleep 0.05; done
     child_dead=0; kill -0 "$CHILD" 2>/dev/null || child_dead=1
-    unit_gone=1; systemctl --user list-units "$CSCOPE" --all --no-pager 2>/dev/null | grep -qF "$CSCOPE" && unit_gone=0
+    unit_gone=1; systemctl --user list-units "$CSCOPE" --all --no-pager 2>/dev/null | grep -cF >/dev/null "$CSCOPE" && unit_gone=0
     if [[ "$bt" == *"$PSCOPE"* && "$child_dead" == "1" && "$unit_gone" == "1" ]]; then
       pass "T11 BindsTo: property=$PSCOPE, stopping the parent left the child PID dead and its unit absent"
     else

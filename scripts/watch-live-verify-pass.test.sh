@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Tests for watch-live-verify-pass.sh — the deterministic daily watcher that
 # records the FIRST qualifying live-verify CI PASS on the flip-tracker issue
@@ -19,7 +22,7 @@ check() { TOTAL=$((TOTAL+1)); if [[ "$2" == "0" ]]; then PASS=$((PASS+1)); else 
 # appended to $MOCKD/comment_calls so the test can assert record-or-not.
 # Args: state_json comments_json runs_json jobs_json log_text
 run_sut() {
-  local mock_dir; mock_dir="$(mktemp -d)"
+  local mock_dir; mock_dir="$(mktemp -d -p "$SUITE_TMP")"
   printf '%s' "$1" > "$mock_dir/state"
   printf '%s' "$2" > "$mock_dir/comments"
   printf '%s' "$3" > "$mock_dir/runs"
@@ -31,12 +34,12 @@ run_sut() {
 #!/usr/bin/env bash
 case "$1 $2" in
   "issue view")
-    if printf '%s ' "$@" | grep -q -- '--json state';    then cat "$MOCKD/state";    exit 0; fi
-    if printf '%s ' "$@" | grep -q -- '--json comments'; then cat "$MOCKD/comments"; exit 0; fi ;;
+    if printf '%s ' "$@" | grep -c >/dev/null -- '--json state';    then cat "$MOCKD/state";    exit 0; fi
+    if printf '%s ' "$@" | grep -c >/dev/null -- '--json comments'; then cat "$MOCKD/comments"; exit 0; fi ;;
   "run list") cat "$MOCKD/runs"; exit 0 ;;
   "run view")
-    if printf '%s ' "$@" | grep -q -- '--json jobs'; then cat "$MOCKD/jobs"; exit 0; fi
-    if printf '%s ' "$@" | grep -q -- '--log';        then cat "$MOCKD/log";  exit 0; fi ;;
+    if printf '%s ' "$@" | grep -c >/dev/null -- '--json jobs'; then cat "$MOCKD/jobs"; exit 0; fi
+    if printf '%s ' "$@" | grep -c >/dev/null -- '--log';        then cat "$MOCKD/log";  exit 0; fi ;;
   "issue comment")
     bf=""; while [[ $# -gt 0 ]]; do [[ "$1" == "--body-file" ]] && { bf="$2"; break; }; shift; done
     [[ -n "$bf" && -f "$bf" ]] && cat "$bf" >> "$MOCKD/comment_calls"

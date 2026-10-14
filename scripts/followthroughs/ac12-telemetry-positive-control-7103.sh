@@ -38,6 +38,17 @@
 #   BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD
 set -uo pipefail
 
+# Refuse to run under xtrace with a live credential set (#7797): tracing prints expanded
+# commands, and this script queries Better Stack with a query password.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ASSERT="$REPO_ROOT/scripts/betterstack-assert-absence.sh"
 
@@ -78,7 +89,8 @@ fi
 # absence assertion non-vacuous: without deploys there are no ci-deploy-correlated events to be
 # absent, and "zero" would mean "nothing happened", not "nothing broke".
 deploy_rows_rc=0
-deploy_out="$(bash "$ASSERT" --host "$HOST" --absence 'SOLEUR_DEPLOY_INVOCATION' --since "$WINDOW" 2>&1)" || deploy_rows_rc=$?
+deploy_out="$(bash "$ASSERT" --host "$HOST" --absence 'SOLEUR_DEPLOY_INVOCATION' --since "$WINDOW" \
+        --control-require-field 'SYSLOG_IDENTIFIER=web-zot-consumer-probe' 2>&1)" || deploy_rows_rc=$?
 case "$deploy_rows_rc" in
   1) : ;;  # `present` — deploys DID run, which is what we want here
   2) echo "FAIL: the telemetry channel for $HOST is not shipping (unshipping). An absence assertion cannot be graded through a dark channel."
@@ -101,7 +113,8 @@ fi
 rc=0
 out="$(bash "$ASSERT" --host "$HOST" \
         --absence 'Doppler Error: Invalid Auth token' \
-        --since "$WINDOW" 2>&1)" || rc=$?
+        --since "$WINDOW" \
+        --control-require-field 'SYSLOG_IDENTIFIER=web-zot-consumer-probe' 2>&1)" || rc=$?
 printf '%s\n' "$out"
 case "$rc" in
   0) echo "PASS: zero 'Doppler Error: Invalid Auth token' events for $HOST across ${deploy_rows} ci-deploy invocation(s) in $WINDOW, with the Source-4 positive control confirmed live at the sink. AC12 re-verified."

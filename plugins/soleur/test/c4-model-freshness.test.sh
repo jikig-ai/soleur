@@ -16,7 +16,7 @@
 # runs directly — so no two of them can disagree on what "fresh" means.
 #
 # Locally (no global likec4), `npx -y likec4@1.50.0` downloads the pinned CLI on
-# first run; CI's global install makes it instant.
+# first run; CI's global install only warms npx's download cache.
 
 set -euo pipefail
 

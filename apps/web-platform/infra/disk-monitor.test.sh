@@ -35,6 +35,7 @@ trap 'rm -rf "$SUITE_SCRATCH"' EXIT
 #
 # Files created by mocks:
 #   $MOCK_DIR/curl_args    - all curl invocation args (one line per call)
+#   $MOCK_DIR/curl_stdin   - curl stdin when `--config -` is present (the Bearer header line)
 setup_mocks_and_run() {
   local mock_dir="$1"
 
@@ -44,7 +45,7 @@ setup_mocks_and_run() {
   # Create env file
   local env_file="$mock_dir/disk-monitor-env"
   if [[ "${MOCK_NO_WEBHOOK:-}" != "1" ]]; then
-    printf 'RESEND_API_KEY=%s\n' "${MOCK_RESEND_KEY:-re_test_fake_key_123}" > "$env_file"
+    printf 'RESEND_API_KEY=%q\n' "${MOCK_RESEND_KEY:-re_test_fake_key_123}" > "$env_file"
   else
     : > "$env_file"
   fi
@@ -108,6 +109,14 @@ fi
 # A plain-http (loopback) call must NOT carry --proto '=https' — a mechanical
 # "confine every curl" sweep would break it silently (the stub answers 200).
 if [[ "\$scheme_http" -eq 1 && "\$has_proto" -eq 1 ]]; then echo "PROTO_ON_HTTP" >> "$mock_dir/curl_violations"; fi
+# (#9597) The credential rides curl's stdin config channel (`--config -`). Consume
+# stdin when that flag pair is present, otherwise the process-substitution writer
+# is never read; one recorded line per call, never the argv.
+_prev=""
+for arg in "\$@"; do
+  if [[ "\$_prev" == "--config" && "\$arg" == "-" ]]; then cat >> "$mock_dir/curl_stdin"; fi
+  _prev="\$arg"
+done
 echo "\$*" >> "$mock_dir/curl_args"
 if [[ "\${MOCK_CURL_FAIL:-}" == "1" ]]; then
   echo "000"
@@ -644,14 +653,82 @@ test_static_curl_shape() {
 test_static_curl_shape
 
 echo ""
+echo "--- (#9597) credential rides stdin (--config -), never argv ---"
+
+# Valid key: argv carries no credential and no Authorization header, the stdin
+# config carries the exact header line, and `--config -` is present. The
+# `curl_stdin` existence check is the vacuity floor.
+test_bearer_off_argv() {
+  TOTAL=$((TOTAL + 1))
+  local description="valid key: argv has no credential/Authorization, stdin config has the exact header"
+  local mock_dir
+  mock_dir=$(mktemp -d -t disk-monitor-bearer.XXXXXXXX)
+  local output actual_exit
+  output=$(
+    export MOCK_DF_USAGE=82
+    setup_mocks_and_run "$mock_dir" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+  local ok=1 largs="$mock_dir/curl_args" lstdin="$mock_dir/curl_stdin"
+  [[ "$actual_exit" -eq 0 ]] || ok=0
+  [[ -f "$largs" && -f "$lstdin" ]] || ok=0
+  grep -qF -- "re_test_fake_key_123" "$largs" 2>/dev/null && ok=0
+  grep -qF -- "Authorization" "$largs" 2>/dev/null && ok=0
+  grep -qF -- "--config -" "$largs" 2>/dev/null || ok=0
+  [[ "$(cat "$lstdin" 2>/dev/null)" == 'header = "Authorization: Bearer re_test_fake_key_123"' ]] || ok=0
+  [[ ! -f "$mock_dir/curl_violations" ]] || ok=0
+  if [[ "$ok" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $description (exit=$actual_exit)"
+    echo "        curl_args: $(cat "$largs" 2>/dev/null)"
+    echo "        output: $output"
+  fi
+  rm -rf "$mock_dir"
+}
+test_bearer_off_argv
+
+# Unusable key (newline / quote / space): curl is NOT invoked, the skip is
+# reported on the existing marker family (stdout + off-box logger row), the exit
+# stays 0, and the key never reaches output or the logger row.
+assert_token_refused() {
+  local description="$1" key="$2" frag="$3"
+  TOTAL=$((TOTAL + 1))
+  local mock_dir
+  mock_dir=$(mktemp -d -t disk-monitor-bearer.XXXXXXXX)
+  local output actual_exit
+  output=$(
+    export MOCK_DF_USAGE=82 MOCK_RESEND_KEY="$key"
+    setup_mocks_and_run "$mock_dir" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+  local ok=1 largs="$mock_dir/logger_args"
+  [[ "$actual_exit" -eq 0 ]] || ok=0
+  [[ ! -f "$mock_dir/curl_args" ]] || ok=0
+  [[ ! -f "$mock_dir/curl_stdin" ]] || ok=0
+  grep -cF 'SOLEUR_DISK_MONITOR_REFUSED channel=resend reason=token_shape' <<<"$output" >/dev/null || ok=0
+  grep -qF 'SOLEUR_DISK_MONITOR_REFUSED channel=resend reason=token_shape' "$largs" 2>/dev/null || ok=0
+  grep -qF -- "$frag" "$largs" 2>/dev/null && ok=0
+  grep -cF -- "$frag" <<<"$output" >/dev/null && ok=0
+  if [[ "$ok" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $description (exit=$actual_exit, curl called: $(test -f "$mock_dir/curl_args" && echo yes || echo no))"
+    echo "        output: $output"
+  fi
+  rm -rf "$mock_dir"
+}
+assert_token_refused "key with an embedded newline: curl not invoked, REFUSED token_shape (pages), exit 0" $'synthetic-fixture-token\nheader = "X-Injected: 1"' "X-Injected"
+assert_token_refused "key with a double quote: curl not invoked, REFUSED token_shape (pages), exit 0" 'synthetic-fixture"-token-0002' 'fixture"-token'
+assert_token_refused "key with a space: curl not invoked, REFUSED token_shape (pages), exit 0" 'synthetic fixture token 0003' 'fixture token'
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 # Anti-vacuity floor (ADR-193): the results line above is a human convention;
 # CI reads only the exit status, so a deleted row-dispatch line would vanish
 # green. Read the INDEPENDENT total and report directly — never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ "$TOTAL" -lt 15 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= 15. A row was deleted or its dispatch line removed.\n' "$TOTAL" >&2
+if [[ "$TOTAL" -lt 19 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= 19. A row was deleted or its dispatch line removed.\n' "$TOTAL" >&2
   exit 1
 fi
 

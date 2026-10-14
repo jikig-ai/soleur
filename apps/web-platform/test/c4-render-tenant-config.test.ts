@@ -135,6 +135,12 @@ beforeAll(async () => {
   stagingRoot = tmp("c4-staging-root-");
   vi.stubEnv("LIKEC4_BIN", BIN);
   vi.stubEnv("C4_RENDER_STAGING_ROOT", stagingRoot);
+  // #8752: the close-fds prelude opens the committed filter artifact; point it
+  // at the repo copy (prod default is the image's /app/infra path).
+  vi.stubEnv(
+    "SOLEUR_BWRAP_SECCOMP_BPF",
+    join(dirname(fileURLToPath(import.meta.url)), "../infra/bwrap-userns-clone3-deny.bpf"),
+  );
   // Outside production only: without a usable bwrap, the acceptance rows still
   // exercise real likec4 on the direct path.
   if (!BWRAP_OK) vi.stubEnv("C4_RENDER_SANDBOX", "off");
@@ -399,6 +405,31 @@ s.on("error", (e) => { out.net = e.code; console.log(JSON.stringify(out)); });
     });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout.trim()).toBe("no-fd7");
+  }, 60_000);
+
+  it("H4: a nested user namespace is denied inside the sandbox (filter on fd 9), while forking still works", () => {
+    // #8752 — the --seccomp 9 filter denies clone/unshare carrying
+    // CLONE_NEWUSER. Positive control: the same unshare WITHOUT the filter
+    // (direct bwrap, no --seccomp) succeeds wherever nested userns is
+    // reachable at all — if it fails here, the kernel denies it anyway and
+    // the deny assertion below cannot attribute the EPERM to the filter.
+    const unfiltered = spawnSync("/usr/bin/bwrap", [
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/usr", "/usr",
+      "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
+      "--dev", "/dev", "--", "/usr/bin/unshare", "-U", "/usr/bin/true",
+    ], { encoding: "utf8", timeout: 30_000 });
+    expect(unfiltered.status, `unfiltered control: ${unfiltered.stderr}`).toBe(0);
+
+    const denied = run(stage(), ["/usr/bin/unshare", "-U", "/usr/bin/true"]);
+    expect(denied.status).not.toBe(0);
+    // The denial must surface from the sandboxed unshare (EPERM), never from
+    // bwrap's own setup failing — a `bwrap:` line means the filter never
+    // installed (expected-fail inversion).
+    expect(String(denied.stderr)).not.toContain("bwrap:");
+    expect(String(denied.stderr)).toMatch(/Operation not permitted/);
+    // Not blanket-deny: a forked child still runs.
+    const ok = run(stage(), ["/usr/bin/sh", "-c", "/usr/bin/true"]);
+    expect(ok.status, String(ok.stderr)).toBe(0);
   }, 60_000);
 
   it("H4: the exit-code status record still arrives through the close-fds step", () => {

@@ -779,7 +779,7 @@ exit 0'
   else
     ok "AC-A7: no ANSI residue in the sanitized detail"
   fi
-  if printf '%s' "$adv" | LC_ALL=C grep -q '[^ -~]'; then
+  if printf '%s' "$adv" | LC_ALL=C grep -c >/dev/null '[^ -~]'; then
     no "AC-A8: non-ASCII/control bytes survived the sanitizer"
   else
     ok "AC-A8: sanitized detail is printable-ASCII only"
@@ -801,7 +801,7 @@ exit 0'
   u8="$(printf '%s' "$u8raw" | jq -r '.tags.detail // empty' 2>/dev/null)"
   if ! printf '%s' "$u8" | grep -cF 'OK-TAIL-MARKER' >/dev/null; then
     no "AC-A13b: FIXTURE ERROR — the ASCII tail marker did not survive; assertion is vacuous"
-  elif printf '%s' "$u8" | LC_ALL=C grep -q '[^ -~]'; then
+  elif printf '%s' "$u8" | LC_ALL=C grep -c >/dev/null '[^ -~]'; then
     no "AC-A13b: non-ASCII/partial-sequence bytes survived the cap, got: '$(printf '%s' "$u8" | head -c 60)'"
   else
     ok "AC-A13b: the post-cap pass leaves printable ASCII only (no split-sequence residue)"

@@ -89,8 +89,8 @@ DONE_ST='<tool-use-id>toolu_01</tool-use-id>
 <status>completed</status>
 <summary>Monitor "CI poll" stream ended</summary>'
 
-reported() { printf '%s' "$1" | grep -q '"additionalContext"'; }
-blocked()  { printf '%s' "$1" | grep -q '"permissionDecision"'; }
+reported() { printf '%s' "$1" | grep -c >/dev/null '"additionalContext"'; }
+blocked()  { printf '%s' "$1" | grep -c >/dev/null '"permissionDecision"'; }
 
 CI='{"command":"gh pr checks 7753","description":"CI poll","timeout_ms":600000}'
 CI2='{"command":"gh pr checks 7753 --json state","description":"CI again","timeout_ms":600000}'
@@ -169,7 +169,7 @@ fresh 8
 record s1 Monitor "$CI" '{"taskId":"T1"}'
 record s1 Monitor '{"command":"gh pr view 7753","description":"merge","timeout_ms":600000}' '{"taskId":"T2"}'
 out=$(guard s1 "$CI2")
-rc=1; printf '%s' "$out" | grep -q 'T1' && printf '%s' "$out" | grep -q 'T2' && rc=0
+rc=1; printf '%s' "$out" | grep -c >/dev/null 'T1' && printf '%s' "$out" | grep -c >/dev/null 'T2' && rc=0
 verdict "$rc" 'ALL still-live arms are named, not just the most recent'
 
 fresh 9
@@ -177,7 +177,7 @@ record s1 Monitor "$CI" '{"taskId":"T1"}'
 record s1 Monitor '{"command":"gh pr view 7753","description":"merge","timeout_ms":600000}' '{"taskId":"T2"}'
 record s1 TaskStop '{"task_id":"T1"}' '{}'
 out=$(guard s1 "$CI2")
-rc=1; printf '%s' "$out" | grep -q 'T2' && ! printf '%s' "$out" | grep -q 'T1' && rc=0
+rc=1; printf '%s' "$out" | grep -c >/dev/null 'T2' && ! printf '%s' "$out" | grep -c >/dev/null 'T1' && rc=0
 verdict "$rc" 'stopping ONE arm clears only that arm (the stop is keyed by task id)'
 
 # --- 10: complying must not blind the session --------------------------------
@@ -324,7 +324,7 @@ fresh 28
 record s1 Monitor "$CI" '{"taskId":"T1"}'
 out=$(cd / && jq -nc --arg tp "$TRANSCRIPT" --argjson ti "$CI2" \
       '{session_id:"s1",tool_name:"Monitor",tool_input:$ti,transcript_path:$tp}' | bash "$GUARD" 2>/dev/null)
-rc=1; printf '%s' "$out" | grep -q additionalContext && rc=0
+rc=1; printf '%s' "$out" | grep -c >/dev/null additionalContext && rc=0
 verdict "$rc" 'the hook works when invoked from an unrelated cwd'
 
 # --- 29: both delivery channels are emitted ---------------------------------
@@ -374,7 +374,7 @@ record s1 Monitor "$CI" '{"taskId":"TEXP"}'
 record s1 Monitor '{"command":"gh pr view 7753","description":"merge","timeout_ms":600000}' '{"taskId":"TLIVE"}'
 expire_task TEXP
 out=$(guard s1 "$CI2")
-rc=1; printf '%s' "$out" | grep -q 'TLIVE' && ! printf '%s' "$out" | grep -q 'TEXP' && rc=0
+rc=1; printf '%s' "$out" | grep -c >/dev/null 'TLIVE' && ! printf '%s' "$out" | grep -c >/dev/null 'TEXP' && rc=0
 verdict "$rc" 'one expired + one live on one target names exactly the live id'
 
 # Must-PASS non-canonical: the expiry notice's tail varies (window, event count);

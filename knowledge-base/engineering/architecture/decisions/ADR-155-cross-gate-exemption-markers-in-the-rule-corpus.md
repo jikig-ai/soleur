@@ -236,7 +236,7 @@ recorded here rather than assumed.
 
 Per ADR-084, two reviewer challenges contradict explicit operator direction and are recorded rather
 than applied, with the operator's direction kept as the default. Both are in
-`knowledge-base/project/specs/feat-one-shot-net-issue-flow-mandated-filing-exemption/decision-challenges.md`:
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-net-issue-flow-mandated-filing-exemption/decision-challenges.md`:
 
 - **DC-2** — three reviewers argue the corpus mechanism is disproportionate versus a `reason=` token
   or an OPEN + `deferred-automation` label check. Addressed under "Rejected alternatives" above: both

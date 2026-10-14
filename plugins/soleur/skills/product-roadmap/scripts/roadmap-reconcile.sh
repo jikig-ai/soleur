@@ -56,7 +56,7 @@ extract_phase_counts() {
   ' \
   | grep -E '^\| Phase [0-9]+' \
   | while IFS= read -r line; do
-      printf '%s\n' "$line" | grep -qE '[0-9]+ open, [0-9]+ closed' || continue
+      grep -qE '[0-9]+ open, [0-9]+ closed' <<<"$line" || continue
       num="$(printf '%s\n' "$line" | sed -E 's/^\| Phase ([0-9]+).*/\1/')"
       counts="$(printf '%s\n' "$line" | grep -oE '[0-9]+ open, [0-9]+ closed' | head -1)"
       open="$(printf '%s\n' "$counts" | sed -E 's/^([0-9]+) open.*/\1/')"

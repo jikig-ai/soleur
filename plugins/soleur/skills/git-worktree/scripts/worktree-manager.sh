@@ -3209,6 +3209,15 @@ cleanup_orphan_worktree_dirs() {
 # purge take, so the three can never run destructively at once. Contention or
 # a missing classifier skips LOUDLY and returns 0 — a sweep failure must never
 # abort the unrelated maintenance below (repo lock, fetch, reap loop).
+# _sweep_uint <value> <default> — a decimal integer from an env var, or the default. These values feed
+# `$(( ))` and `(( ))`: `08` is an octal ERROR (a floor comparison then silently reads false and is
+# skipped), and `5s` or `a[$(cmd)]` is an arithmetic error / command-substitution vector that
+# aborts the sweep before it prints its summary. Plain digits only, `10#` pins base 10 (#9677 review).
+_sweep_uint() {
+  local v="${1-}"
+  if [[ "$v" =~ ^[0-9]{1,9}$ ]]; then printf '%s' "$((10#$v))"; else printf '%s' "$2"; fi
+}
+
 sweep_orphan_scratch_dirs() {
   local tc_lib="$SCRIPT_DIR/../../../scripts/lib/tmp-classify.sh"
   if [[ ! -f "$tc_lib" ]]; then
@@ -3253,9 +3262,12 @@ sweep_orphan_scratch_dirs() {
     echo "SOLEUR_TMP_SWEEP skipped reason=bases-empty — SOLEUR_SWEEP_BASES='' disables the sweep"
     return 0
   fi
-  local age_min="${SOLEUR_SWEEP_AGE_MIN:-1440}"
-  local wt_cap="${SOLEUR_SWEEP_WT_CAP:-50}"
-  local deadline=$(( t0 + ${SOLEUR_SWEEP_TIMEBOX_S:-10} ))
+  local age_min wt_cap wt_age
+  age_min="$(_sweep_uint "${SOLEUR_SWEEP_AGE_MIN-}" 1440)"
+  wt_cap="$(_sweep_uint "${SOLEUR_SWEEP_WT_CAP-}" 50)"
+  wt_age="$(_sweep_uint "${SOLEUR_SWEEP_WT_AGE_MIN-}" 4320)"
+  local box_s; box_s="$(_sweep_uint "${SOLEUR_SWEEP_TIMEBOX_S-}" 10)"
+  local deadline=$(( t0 + box_s ))
   # Amortized clock: EPOCHSECONDS is a bash-5 builtin (zero forks); the
   # `${EPOCHSECONDS:-$(date)}` fallback keeps bash 3.2 correct at one fork
   # per check. The deadline bounds EVERY arm — the mass-death backlog is
@@ -3263,7 +3275,7 @@ sweep_orphan_scratch_dirs() {
   # while the operator waits at session start.
   now_s() { printf '%s' "${EPOCHSECONDS:-$(date +%s)}"; }
 
-  local reaped=0 quar=0 retained=0 deferred=0 wt_done=0 map_tried=0
+  local reaped=0 quar=0 retained=0 deferred=0 wt_done=0 map_tried=0 map_s=0 drained=0 drained_bytes=0
   local base d name verdict fstype dest
 
   for base in $bases; do
@@ -3288,7 +3300,7 @@ sweep_orphan_scratch_dirs() {
           verdict="$(tc_classify_git_dir "$d")"
           case "$verdict" in
             registered)
-              if (( "$(tc_tree_age_min "$d")" >= ${SOLEUR_SWEEP_WT_AGE_MIN:-4320} )) \
+              if (( "$(tc_tree_age_min "$d")" >= wt_age )) \
                  && tc_worktree_safe_to_remove "$d"; then
                 if _tc_git --git-dir="$(tc_git_main_dir "$d")" worktree remove "$d" 2>/dev/null; then
                   tc_ledger_append "worktree-remove" "worktrees" "$d" "-"
@@ -3303,7 +3315,7 @@ sweep_orphan_scratch_dirs() {
               # Same conjuncts the purge applies to this class: age floor +
               # no live handles + no nested mount. Registry-absence alone is
               # not proof the tree is idle.
-              if (( "$(tc_tree_age_min "$d")" >= ${SOLEUR_SWEEP_WT_AGE_MIN:-4320} )) \
+              if (( "$(tc_tree_age_min "$d")" >= wt_age )) \
                  && ! tc_entry_is_live "$d" "" \
                  && ! tc_tree_has_mount "$d" \
                  && dest="$(tc_quarantine_move "$d" "$base" "worktrees" 2>/dev/null)"; then
@@ -3333,10 +3345,24 @@ sweep_orphan_scratch_dirs() {
       # Lazy liveness map: built on the first declared-owner candidate, not
       # unconditionally — a clean host pays nothing for the sweep. Failure
       # leaves the per-candidate walk fallback in charge (fail-closed).
+      # A live-owner candidate is retained by tc_reap_decide BEFORE it reads the map, so it must not
+      # pay for the build either: an active sibling session's soleur-run.<pid>.* dir would otherwise
+      # cost every session start the whole 5-12 s build for nothing.
+      if (( map_tried == 0 )) && tc_owner_pid_verify "$d" >/dev/null 2>&1 && tc_owner_alive "$TC_PID"; then
+        retained=$((retained + 1)); continue
+      fi
       if (( map_tried == 0 )); then
         map_tried=1
+        local map_t0; map_t0="$(now_s)"
         # shellcheck disable=SC2086  # space-separated base list — splitting IS the contract
         tc_build_inuse_map $bases || true
+        # The map is a FIXED cost paid once per sweep (12.7 s measured on a 739-process host,
+        # #9677), not per-candidate work. Charging it to the timebox let a build longer than the
+        # timebox defer EVERY later candidate on every session start, so marked dirs were never
+        # reclaimed. The timebox now restarts when the map is built and bounds the work that is
+        # actually per-candidate; the map cost is reported as map_s.
+        map_s=$(( $(now_s) - map_t0 ))
+        deadline=$(( $(now_s) + box_s ))
       fi
 
       # Single-sourced conjunct chain — same gates as Reaper 3 and the purge:
@@ -3350,11 +3376,14 @@ sweep_orphan_scratch_dirs() {
       fstype="$(findmnt -no FSTYPE --target "$base" 2>/dev/null || true)"
       # Direct delete only for schema-NAMED roots on tmpfs (creation-certain
       # attribution + mv frees no RAM); marker-only dirs quarantine on every
-      # base. Terminal deletes get an action-time liveness re-walk — the map
-      # is a snapshot.
+      # base. Terminal deletes get one more liveness check against the map tc_reap_decide just
+      # refreshed (at most TC_INUSE_TTL_S old). The interactive sweep does NOT use the full
+      # per-process walk here (tc_tree_has_live_handles_now, which the unattended guard keeps):
+      # it was measured at 138 s for one candidate on a loaded 743-process host, inside the flock,
+      # against ~5 s for one map build, and a truncated or unbuilt map still falls back to that walk.
       if [[ ( "$fstype" == "tmpfs" || "$fstype" == "ramfs" ) ]] \
          && tc_schema_owner_pid "$name" >/dev/null 2>&1 \
-         && ! tc_tree_has_live_handles_now "$d"; then
+         && ! tc_tree_has_live_handles "$d"; then
         if find "$d" -xdev -depth -delete 2>/dev/null; then
           reaped=$((reaped + 1))
           tc_ledger_append "delete" "scratch" "$d" "-"
@@ -3372,21 +3401,49 @@ sweep_orphan_scratch_dirs() {
     done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -user "$uid" -print0 2>/dev/null)
   done
 
+  # Opt-in session-start drain of EXPIRED quarantine entries (#9677). It runs here, BEFORE the
+  # flock fd is closed, so it is serialised against tmpfs-guard.sh and soleur-tmp-purge.sh exactly
+  # like the sweep itself; the early returns above (lock-contended, flock-missing, bases-empty)
+  # never reach it. Without the opt-in this sweep behaves as it always has: a terminal delete on a
+  # machine Soleur does not own is the user's choice, and the optional systemd timer remains the
+  # default drain trigger (ADR-250). Each TTL is floored (default 1440 min) so an exported 0 can
+  # never make a session start empty the quarantine it just filled.
+  if [[ "${SOLEUR_QUARANTINE_DRAIN-}" == "1" ]]; then
+    local qfloor sttl wttl ddl dcap
+    qfloor="$(_sweep_uint "${SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN-}" 1440)"
+    sttl="$(_sweep_uint "${SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN-}" 10080)"
+    wttl="$(_sweep_uint "${SOLEUR_SWEEP_QUAR_WT_TTL_MIN-}" 43200)"
+    dcap="$(_sweep_uint "${SOLEUR_SWEEP_DRAIN_MAX_ENTRIES-}" 200)"
+    (( dcap > 0 )) || dcap=200                 # 0 means unbounded in the library; never from an env var
+    if (( sttl < qfloor )); then sttl=$qfloor; fi
+    if (( wttl < qfloor )); then wttl=$qfloor; fi
+    ddl=$(( $(now_s) + $(_sweep_uint "${SOLEUR_SWEEP_DRAIN_TIMEBOX_S-}" 5) ))
+    for base in $bases; do
+      [[ -d "$base" ]] || continue
+      tc_drain_quarantine "$base" 0 "$sttl" "$wttl" "$ddl" "$dcap" || true
+      # tc_drain_quarantine resets TC_DRAINED on every call: sum per base here.
+      drained=$((drained + TC_DRAINED)); drained_bytes=$((drained_bytes + TC_DRAINED_BYTES))
+    done
+    _SPACE_LOGICAL_BYTES=$(( ${_SPACE_LOGICAL_BYTES:-0} + drained_bytes ))
+  fi
+
   if [[ -n "$sweep_fd" ]]; then exec {sweep_fd}>&- 2>/dev/null || true; fi
   local ms=$(( ("$(now_s)" - t0) * 1000 ))
-  echo "SOLEUR_TMP_SWEEP bases=[$bases] reaped=$reaped quarantined=$quar retained=$retained deferred=$deferred wt_scanned=$wt_done ms=$ms"
+  echo "SOLEUR_TMP_SWEEP bases=[$bases] reaped=$reaped quarantined=$quar retained=$retained deferred=$deferred drained=$drained drained_bytes=$drained_bytes map_s=$map_s wt_scanned=$wt_done ms=$ms"
   if (( deferred > 0 )); then
-    echo "SWEEP-DEFER: $deferred candidate(s) beyond the ${SOLEUR_SWEEP_TIMEBOX_S:-10}s/${wt_cap}-worktree bound — deferred to the next session start"
+    echo "SWEEP-DEFER: $deferred candidate(s) beyond the ${box_s}s/${wt_cap}-worktree bound (the ${map_s}s liveness-map build is not counted) — deferred to the next session start"
   fi
   # Drain has no always-on trigger unless the systemd timer is installed or an
   # operator runs --drain — surface a non-empty quarantine so the bytes don't
   # sit forever on a host with no scheduled guard.
-  for base in $bases; do
-    if compgen -G "$base/soleur-quarantine.$uid" >/dev/null 2>&1 \
-       && compgen -G "$base/soleur-quarantine.$uid/*/*" >/dev/null 2>&1; then
-      echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --drain or install scripts/tmpfs-guard.timer for TTL draining"
-    fi
-  done
+  if [[ "${SOLEUR_QUARANTINE_DRAIN-}" != "1" ]]; then
+    for base in $bases; do
+      if compgen -G "$base/soleur-quarantine.$uid" >/dev/null 2>&1 \
+         && compgen -G "$base/soleur-quarantine.$uid/*/*" >/dev/null 2>&1; then
+        echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --drain, install scripts/tmpfs-guard.timer, or set SOLEUR_QUARANTINE_DRAIN=1 for TTL draining"
+      fi
+    done
+  fi
   return 0
 }
 
@@ -3895,6 +3952,8 @@ cleanup_merged_worktrees() {
   done
 
   # Output summary
+  # Exported for cleanup_merged_run (#9677): the Docker step is gated on a removal this run.
+  _SOLEUR_CLEANED_COUNT=${#cleaned[@]}
   if [[ ${#cleaned[@]} -gt 0 ]]; then
     echo -e "${GREEN}Cleaned ${#cleaned[@]} merged worktree(s): ${cleaned[*]}${NC}"
     # A recovery pointer, once per run rather than once per branch. A deleted local ref is
@@ -3918,8 +3977,9 @@ cleanup_merged_worktrees() {
           echo -e "${RED}Error: could not force-update refs/heads/main${NC}"
         fi
       fi
-      # Auto-sync stale on-disk files so the next session reads current versions
-      sync_bare_files
+      # Auto-sync stale on-disk files so the next session reads current versions. A failure here
+      # (e.g. the root's HEAD names a branch this run just reaped) must not skip the rest of cleanup.
+      sync_bare_files || echo -e "${YELLOW}Warning: sync-bare-files failed; run it again after fixing the root's HEAD${NC}"
     else
       # SOLEUR-GUARD-MAINRESET-START
       # Establish the precondition BEFORE the destructive call, not after it (#8400).
@@ -4011,6 +4071,142 @@ cleanup_merged_worktrees() {
   # Kill runaway processes that waste CPU (e.g., stuck gst-plugin-scanner)
   cleanup_runaway_processes
 
+  return 0
+}
+
+# --- Effective-space report and opt-in Docker builder-cache prune (#9677) ---------------------
+# Freed bytes are not the same as bytes the filesystem reports free: on btrfs with snapper, a
+# snapshot keeps every deleted block referenced until the snapshot rotates out. So cleanup-merged
+# prints what it LOGICALLY reclaimed next to the MEASURED `df` delta, and names snapshot pinning
+# when it is detectable. Read-only: this never calls `snapper` and never touches a snapshot.
+_SPACE_LOGICAL_BYTES=0
+_SPACE_BEFORE_KB=""
+_SOLEUR_CLEANED_COUNT=0
+
+# The filesystem the drain frees. /var/tmp by default (the disk-class scratch base); a missing
+# directory falls back to /.
+_space_path() { local p="${SOLEUR_SPACE_PATH:-/var/tmp}"; [[ -d "$p" ]] || p=/; printf '%s' "$p"; }
+
+# Available KB via POSIX `df -Pk` (column 4) — works on macOS and Linux; GNU `--output` does not.
+_space_avail_kb() {
+  df -Pk "$(_space_path)" 2>/dev/null | awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print $4; exit }'
+}
+
+space_begin() {
+  _SPACE_LOGICAL_BYTES=0
+  _SPACE_BEFORE_KB="$(_space_avail_kb || true)"
+}
+
+report_cleanup_space() {
+  local logical="-" delta="-" fstype="unknown" snaps="unknown" dock="off" after_kb conf p
+  if [[ -n "${_SPACE_BEFORE_KB:-}" ]]; then
+    logical="${_SPACE_LOGICAL_BYTES:-0}"
+    after_kb="$(_space_avail_kb || true)"
+    if [[ -n "$after_kb" ]]; then delta=$(( (after_kb - _SPACE_BEFORE_KB) * 1024 )); fi
+  fi
+  p="$(_space_path)"
+  if command -v findmnt >/dev/null 2>&1; then
+    fstype="$(findmnt -no FSTYPE --target "$p" 2>/dev/null | head -n 1 || true)"
+    fstype="${fstype//[^A-Za-z0-9._+-]/_}"      # the field sits before others in a parsed marker row
+    [[ -n "$fstype" ]] || fstype="unknown"
+  fi
+  case "$fstype" in
+    unknown) snaps="unknown" ;;
+    btrfs)
+      conf="${SOLEUR_SNAPPER_CONFIG_DIR:-/etc/snapper/configs}/root"
+      if [[ -f "$conf" ]]; then snaps="snapper"; else snaps="none"; fi ;;
+    *) snaps="none" ;;
+  esac
+  case "${SOLEUR_DOCKER_PRUNE-}" in 1) dock="dry-run" ;; apply) dock="apply" ;; esac
+  echo "SOLEUR_CLEANUP_SPACE logical_bytes=$logical df_delta_bytes=$delta fstype=$fstype docker_prune=$dock snapshots=$snaps"
+  if [[ "$snaps" == "snapper" ]]; then
+    echo "SOLEUR_CLEANUP_SPACE note: freed space can stay pinned by snapper snapshots until they rotate out; Soleur never deletes snapshots."
+  fi
+  return 0
+}
+
+# One bounded Docker call: sets _DOCKER_RC and _DOCKER_OUT. `timeout -k 5` escalates to KILL for a CLI
+# that ignores TERM, which exits 137 rather than 124.
+_DOCKER_RC=0; _DOCKER_OUT=""; _DOCKER_TOBIN=""
+_docker_run() {
+  local secs="$1"; shift
+  _DOCKER_RC=0
+  _DOCKER_OUT="$("$_DOCKER_TOBIN" -k 5 "$secs" docker "$@" 2>&1)" || _DOCKER_RC=$?
+}
+# After a _docker_run: when it failed, print the named skip (`timeout` for 124/137, else $1) and
+# return 0 so the caller returns; return 1 when the call succeeded.
+_docker_failed() {
+  case "$_DOCKER_RC" in
+    0) return 1 ;;
+    124|137) echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout" ;;
+    *) echo "SOLEUR_DOCKER_PRUNE skipped reason=$1" ;;
+  esac
+  return 0
+}
+
+# Opt-in (SOLEUR_DOCKER_PRUNE=1 dry-run, =apply) prune of OLD Docker build cache and dangling images
+# only, and only when this run removed a worktree. Never `-a`, never volumes, never containers,
+# never `system prune`. `until=24h` keeps a sibling session's active build on the shared daemon
+# safe. Docker's own `Total` lines are echoed verbatim (selected by line, never interpreted).
+docker_builder_prune() {
+  local mode="${SOLEUR_DOCKER_PRUNE-}" secs
+  [[ -n "$mode" ]] || return 0
+  case "$mode" in
+    1) mode="dry-run" ;;
+    apply) mode="apply" ;;
+    *) echo "SOLEUR_DOCKER_PRUNE skipped reason=invalid-value"; return 0 ;;
+  esac
+  if (( ${_SOLEUR_CLEANED_COUNT:-0} < 1 )); then
+    echo "SOLEUR_DOCKER_PRUNE skipped reason=no-worktree-removed"; return 0
+  fi
+  command -v docker >/dev/null 2>&1 || { echo "SOLEUR_DOCKER_PRUNE skipped reason=docker-missing"; return 0; }
+  # The prune acts on whatever daemon the environment names. A tcp:// or ssh:// DOCKER_HOST is a remote
+  # machine this cleanup has no business pruning, and the marker row would never say so.
+  case "${DOCKER_HOST-}" in
+    ""|unix://*) ;;
+    *) echo "SOLEUR_DOCKER_PRUNE skipped reason=remote-daemon"; return 0 ;;
+  esac
+  # Same timeout -> gtimeout resolution the install arms use (stock macOS has neither on PATH by default).
+  if command -v timeout >/dev/null 2>&1; then _DOCKER_TOBIN="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then _DOCKER_TOBIN="gtimeout"
+  else echo "SOLEUR_DOCKER_PRUNE skipped reason=no-timeout"; return 0; fi
+  secs="$(_sweep_uint "${SOLEUR_DOCKER_TIMEOUT_S-}" 60)"; (( secs > 0 )) || secs=60
+
+  # The probe separates a down daemon (named, and 5 s) from a hung one (a full prune timeout).
+  _docker_run 5 info
+  if _docker_failed "daemon-unreachable"; then return 0; fi
+
+  if [[ "$mode" == "dry-run" ]]; then
+    # `docker system df` ignores the until=24h filter, so this is an UPPER BOUND on what apply frees.
+    _docker_run "$secs" system df
+    if _docker_failed "df-failed rc=$_DOCKER_RC"; then return 0; fi
+    echo "SOLEUR_DOCKER_PRUNE mode=dry-run (upper bound; ignores until=24h) build_cache=\"$(printf '%s\n' "$_DOCKER_OUT" | grep -i 'build cache' | head -n 1 || true)\""
+    return 0
+  fi
+
+  _docker_run "$secs" builder prune -f --filter until=24h
+  if _docker_failed "prune-failed rc=$_DOCKER_RC"; then return 0; fi
+  local out_b="$_DOCKER_OUT"
+  _docker_run "$secs" image prune -f --filter until=24h
+  if _docker_failed "prune-failed rc=$_DOCKER_RC"; then return 0; fi
+  echo "SOLEUR_DOCKER_PRUNE mode=apply builder=\"$(printf '%s\n' "$out_b" | grep '^Total' | tail -n 1 || true)\" images=\"$(printf '%s\n' "$_DOCKER_OUT" | grep '^Total' | tail -n 1 || true)\""
+  return 0
+}
+
+# What `cleanup-merged` dispatches to. cleanup_merged_worktrees stays untouched (several suites
+# extract its body by name); the wrapper takes the `df` baseline BEFORE it, then runs the Docker
+# step and the report AFTER it has returned — i.e. after the cleanup-merged lock was released by its
+# RETURN trap, so a slow Docker call never holds the lock siblings give up on after 5 s, and the
+# report prints on every early return (lock contended, fetch failure). The inner function is called
+# bare on purpose: an `||`/`if` would switch errexit off inside it. So an inner FAILURE aborts the
+# script under `set -e` exactly as it did when the dispatch called it directly — the Docker step and
+# the report are skipped on that path, and no status read follows the call (it could never run).
+cleanup_merged_run() {
+  _SOLEUR_CLEANED_COUNT=0
+  space_begin || true
+  cleanup_merged_worktrees
+  docker_builder_prune || headless_or_stderr warn "cleanup-merged: docker builder prune step failed; continuing"
+  report_cleanup_space || headless_or_stderr warn "cleanup-merged: space report failed; continuing"
   return 0
 }
 
@@ -4259,6 +4455,19 @@ create_draft_pr() {
   echo -e "${GREEN}Draft PR created: $pr_url${NC}"
 }
 
+# _prune_has_symlink_ancestor <rel>: true when the real path of <rel>'s directory differs from its
+# spelled-out path under the real bare root, i.e. a component is a symlink (or `..`, `.`, `//`).
+# `rm -f` follows a symlinked parent, so a history path under a directory that later became a symlink
+# would delete the link TARGET: a tracked file (HEAD:dir/f does not resolve through a symlink, so the
+# blob guard cannot see it) or a file outside the root. Needs GIT_ROOT_REAL; a candidate that cannot
+# be resolved counts as true, so the caller skips it.
+_prune_has_symlink_ancestor() {
+  local dir="${1%/*}" real
+  [[ "$dir" == "$1" ]] && return 1
+  real=$(cd -P -- "$GIT_ROOT/$dir" 2>/dev/null && pwd -P) || return 0
+  [[ "$real" != "$GIT_ROOT_REAL/$dir" ]]
+}
+
 # Sync critical on-disk files from git HEAD in a bare repo.
 # Bare repos have no working tree, so on-disk files become stale after merges.
 # This extracts the latest versions from git and overwrites the stale copies.
@@ -4268,7 +4477,25 @@ sync_bare_files() {
     return 0
   fi
 
+  # Every write below is rooted at $GIT_ROOT: an empty or relative value would retarget it.
+  if [[ -z "$GIT_ROOT" || "$GIT_ROOT" != /* ]]; then
+    echo -e "${RED}Error: bare root is not an absolute path ('${GIT_ROOT}')${NC}" >&2
+    return 1
+  fi
+
   echo -e "${BLUE}Syncing on-disk files from git HEAD...${NC}"
+
+  # The BARE ROOT's HEAD, resolved once. This runs from the bare root or any worktree of it; a bare
+  # `git ... HEAD` in a worktree is THAT worktree's branch, so every git call below runs in the root
+  # (-C / cd) and uses this sha. Without it a feature branch that deleted a file `main` still tracks
+  # made the prune remove it from the root, and the blob guard asked the same wrong HEAD.
+  local head_sha
+  if ! head_sha=$(git -C "$GIT_ROOT" rev-parse --verify -q 'HEAD^{commit}' 2>/dev/null); then
+    local head_ref
+    head_ref=$(sed -n 's/^ref: //p' "$(git -C "$GIT_ROOT" rev-parse --absolute-git-dir 2>/dev/null)/HEAD" 2>/dev/null || true)
+    echo -e "${RED}Error: the bare root's HEAD does not resolve (${head_ref:-detached}); nothing was synced${NC}"
+    return 1
+  fi
 
   # Full mirror, not a whitelist. The bare root carries a legacy populated working
   # tree that DRIFTS from HEAD in two ways the old archive-a-whitelist approach left
@@ -4280,31 +4507,96 @@ sync_bare_files() {
   # tracked file from HEAD (content refresh, additive -- never touches untracked
   # node_modules/.env/.mcp.json/.worktrees/_site/.playwright-mcp); a history-scoped
   # prune then removes tracked-deleted leftovers. Result: on-disk == HEAD exactly.
-  local tmp_index
-  tmp_index=$(mktemp)
-  if ! GIT_INDEX_FILE="$tmp_index" git read-tree HEAD 2>/dev/null \
-    || ! GIT_INDEX_FILE="$tmp_index" git --work-tree="$GIT_ROOT" checkout-index -a -f 2>/dev/null; then
+  local scratch
+  scratch=$(mktemp -d)
+  if ! (cd "$GIT_ROOT" && GIT_INDEX_FILE="$scratch/index" git read-tree "$head_sha" 2>/dev/null) \
+    || ! (cd "$GIT_ROOT" && GIT_INDEX_FILE="$scratch/index" git --work-tree="$GIT_ROOT" checkout-index -a -f 2>/dev/null); then
     echo -e "${RED}Error: checkout-index from HEAD failed${NC}"
-    rm -f "$tmp_index"
+    rm -rf "$scratch"
     return 1
   fi
-  rm -f "$tmp_index"
 
-  # Prune stale tracked-deleted files: paths git EVER tracked (the history
-  # discriminator -- NOT a raw disk scan) that are absent from HEAD but still on disk.
-  # The history gate is the safety boundary: untracked runtime artifacts were never
-  # tracked, so they never enter the candidate set and are never removed. rmdir -p
-  # cleans directories emptied by the removal (stops at the first non-empty parent).
-  local stale_count=0 rel
-  while IFS= read -r rel; do
-    [[ -n "$rel" && -e "$GIT_ROOT/$rel" ]] || continue
-    if rm -f "$GIT_ROOT/$rel"; then
-      stale_count=$((stale_count + 1))
-      rmdir -p "$(dirname "$GIT_ROOT/$rel")" 2>/dev/null || true
+  # Prune stale tracked-deleted files: paths git EVER tracked (the history discriminator, NOT a raw
+  # disk scan) that are absent from HEAD but still on disk. A path git never tracked (a runtime
+  # artifact) never enters the set; one tracked once and since untracked and ignored (a committed-by-
+  # mistake .env) does, and is removed.
+  #
+  # Every sed/sort/comm stage runs under LC_ALL=C: a comm in the user's locale over C-sorted input
+  # prints "not in sorted order" and returns a WRONG difference that included tracked files (it
+  # deleted .claude-plugin/marketplace.json and broke the local plugin marketplace).
+  # core.quotePath=false keeps non-ASCII names byte-exact; git still quotes names holding a tab,
+  # newline, quote or backslash, and those are skipped, so such a deleted file stays stale (safe).
+  #
+  # Safety net, independent of sort order: each on-disk candidate is checked against the pinned
+  # commit right before removal, and ANY tracked hit abandons the whole prune (a set proven wrong
+  # cannot be trusted for its other members). Candidates that merely look removable are skipped:
+  # a non-plain path or one under a symlink (_prune_has_symlink_ancestor), and, when the root IS the
+  # git dir, the top-level names git owns (best effort; the production layout is `<root>/.git`).
+  # SOLEUR_SYNC_PRUNE_MAX (default 5000) bounds the paths about to be REMOVED, not the candidates
+  # (a healthy history already yields thousands). Every skip returns 0 and is announced.
+  local stale_count=0 rel prune_ok=1 prune_skipped=0 tracked_hit="" root_is_gitdir=0
+  local prune_max="${SOLEUR_SYNC_PRUNE_MAX:-5000}"
+  local -a prune_list=()
+  if ! [[ "$prune_max" =~ ^[0-9]{1,9}$ ]]; then
+    printf '%bWARN: ignoring invalid SOLEUR_SYNC_PRUNE_MAX=%s (want 0-999999999), using 5000%b\n' "$YELLOW" "$prune_max" "$NC" >&2
+    prune_max=5000
+  fi
+  prune_max=$((10#$prune_max))   # 10#: "08" is an octal ERROR in [[ -gt ]] and would silence the ceiling
+  git -C "$GIT_ROOT" -c core.quotePath=false log "$head_sha" --pretty=format: --name-only --diff-filter=AMRC 2>/dev/null \
+    | LC_ALL=C sed '/^$/d' | LC_ALL=C sort -u > "$scratch/ever" || prune_ok=0
+  git -C "$GIT_ROOT" -c core.quotePath=false ls-tree -r --name-only "$head_sha" 2>/dev/null \
+    | LC_ALL=C sort -u > "$scratch/head" || prune_ok=0
+  if [[ "$prune_ok" -eq 1 && -s "$scratch/head" ]]; then
+    LC_ALL=C comm -23 "$scratch/ever" "$scratch/head" > "$scratch/cand" || prune_ok=0
+  else
+    prune_ok=0
+  fi
+  if [[ "$prune_ok" -ne 1 ]]; then
+    prune_skipped=1
+    printf '%bWARN: prune skipped, could not compute the candidate set from git%b\n' "$YELLOW" "$NC" >&2
+  else
+    local GIT_ROOT_REAL
+    GIT_ROOT_REAL=$(cd -P -- "$GIT_ROOT" && pwd -P)
+    if [[ "$(git -C "$GIT_ROOT" rev-parse --absolute-git-dir 2>/dev/null)" == "$GIT_ROOT_REAL" ]]; then
+      root_is_gitdir=1
     fi
-  done < <(comm -23 \
-    <(git log HEAD --pretty=format: --name-only --diff-filter=AMRC 2>/dev/null | LC_ALL=C sort -u | sed '/^$/d') \
-    <(git ls-tree -r --name-only HEAD 2>/dev/null | LC_ALL=C sort -u))
+    while IFS= read -r rel; do
+      [[ "$rel" == \"* || "${rel%%/*}" == ".git" ]] && continue
+      if [[ "$root_is_gitdir" -eq 1 ]]; then
+        case "${rel%%/*}" in
+          HEAD|config|config.worktree|description|packed-refs|hooks|info|objects|refs|logs|worktrees|shallow|modules|index|branches|FETCH_HEAD|ORIG_HEAD|MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|AUTO_MERGE|COMMIT_EDITMSG|gc.log|gc.pid|rr-cache|*.lock) continue ;;
+        esac
+      fi
+      [[ -f "$GIT_ROOT/$rel" || -L "$GIT_ROOT/$rel" ]] || continue
+      _prune_has_symlink_ancestor "$rel" && continue
+      # blob, not cat-file -e: -e also succeeds for a tree, and a path that is a
+      # directory at HEAD is not a tracked file.
+      if [[ "$(git -C "$GIT_ROOT" cat-file -t "$head_sha:$rel" 2>/dev/null)" == "blob" ]]; then
+        tracked_hit="$rel"
+        break
+      fi
+      prune_list+=("$rel")
+    done < "$scratch/cand"
+    if [[ -n "$tracked_hit" ]]; then
+      prune_skipped=1
+      printf '%bERROR: tracked path in prune set: %s%b\n' "$RED" "$tracked_hit" "$NC" >&2
+      printf '%bWARN: prune aborted, the candidate set is wrong (an ordering bug); nothing removed%b\n' "$YELLOW" "$NC" >&2
+    elif [[ "${#prune_list[@]}" -gt "$prune_max" ]]; then
+      prune_skipped=1
+      printf '%bWARN: prune skipped, %s stale paths exceed SOLEUR_SYNC_PRUNE_MAX=%s; raise it to prune anyway%b\n' \
+        "$YELLOW" "${#prune_list[@]}" "$prune_max" "$NC" >&2
+    else
+      for rel in ${prune_list[@]+"${prune_list[@]}"}; do
+        if rm -f "$GIT_ROOT/$rel"; then
+          stale_count=$((stale_count + 1))
+          # rmdir -p cleans directories emptied by the removal; relative to the root, so the walk
+          # stops at the first non-empty parent and can never climb above it.
+          (cd "$GIT_ROOT" && rmdir -p -- "$(dirname -- "$rel")" 2>/dev/null) || true
+        fi
+      done
+    fi
+  fi
+  rm -rf "$scratch"
   if [[ "$stale_count" -gt 0 ]]; then
     echo -e "${YELLOW}Removed $stale_count stale tracked-deleted file(s) from bare root${NC}"
   fi
@@ -4315,7 +4607,11 @@ sync_bare_files() {
   chmod +x "$GIT_ROOT/plugins/soleur/hooks/"*.sh 2>/dev/null || true
   chmod +x "$GIT_ROOT/.claude/hooks/"*.sh 2>/dev/null || true
 
-  echo -e "${GREEN}Synced on-disk files from git HEAD${NC}"
+  if [[ "$prune_skipped" -eq 1 ]]; then
+    echo -e "${YELLOW}Synced on-disk files from git HEAD (prune skipped, see the warning above)${NC}"
+  else
+    echo -e "${GREEN}Synced on-disk files from git HEAD${NC}"
+  fi
 }
 
 # Main command handler
@@ -4342,7 +4638,11 @@ main() {
       cleanup_worktrees
       ;;
     cleanup-merged)
-      cleanup_merged_worktrees
+      cleanup_merged_run
+      ;;
+    space-report)
+      # Read-only: current df/fstype/snapshot state and the Docker opt-in; no baseline, no mutation.
+      report_cleanup_space
       ;;
     cleanup-tmp)
       cleanup_claude_tmp
@@ -4420,6 +4720,8 @@ Commands:
                                       files, kills runaway procs)
                                       NOTE: does NOT durably archive spec dirs
                                       — see ship/SKILL.md Phase 7 Step 4.
+  space-report                        Print current disk/snapshot state (read-only; same
+                                      SOLEUR_CLEANUP_SPACE line cleanup-merged prints)
   cleanup-tmp                         Remove stale Claude task output files
                                       (reclaims RAM from /tmp/claude-<uid>/)
   cleanup-procs                       Kill runaway processes wasting CPU

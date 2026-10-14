@@ -19,7 +19,10 @@ import {
   runReportLabelFor,
   sweepableRunReports,
 } from "../../../server/inngest/functions/_cron-run-reports";
-import { CRON_BASH_ALLOWLISTS } from "../../../server/inngest/functions/_cron-claude-eval-substrate";
+import {
+  CRON_BASH_ALLOWLISTS,
+  CRON_RUN_REPORT_LABELS,
+} from "../../../server/inngest/functions/_cron-claude-eval-substrate";
 import { TASK_INVENTORY } from "../../../server/inngest/functions/cron-cloud-task-heartbeat";
 
 const FUNCTIONS_DIR = join(__dirname, "../../../server/inngest/functions");
@@ -121,12 +124,41 @@ describe("run-report leaf parity (#8076)", () => {
     expect(callers.get("cron-a")).toBe("scheduled-a");
   });
 
-  it("(ii) every row's fn is a cron with `gh issue create` in CRON_BASH_ALLOWLISTS", () => {
+  it("(ii) every AGENT-filed row's fn is a cron with `gh issue create` in CRON_BASH_ALLOWLISTS; a HANDLER-filed row's is not (#7122)", () => {
+    // `filer` says who files the run-report issue. An agent row's cron must hold
+    // the verb (or `runHookSelfTest` would abort every spawn probing the
+    // directive); a handler row's cron must NOT, or the agent could still publish
+    // the issue the handler is meant to author.
+    const filers = new Set(RUN_REPORT_CRONS.map((r) => r.filer));
+    expect([...filers].sort()).toEqual(["agent", "handler"]);
     for (const row of RUN_REPORT_CRONS) {
       const allow = CRON_BASH_ALLOWLISTS[row.fn];
       expect(allow, `${row.fn} has no CRON_BASH_ALLOWLISTS entry`).toBeDefined();
-      expect(allow, `${row.fn} cannot file: no gh issue create prefix`).toContain("gh issue create");
+      if (row.filer === "handler") {
+        expect(allow, `${row.fn} is handler-filed but its allowlist still carries gh issue create`).not.toContain("gh issue create");
+      } else {
+        expect(allow, `${row.fn} cannot file: no gh issue create prefix`).toContain("gh issue create");
+      }
     }
+    // Non-vacuity: the handler branch is exercised by at least one real row.
+    const handlerRows = RUN_REPORT_CRONS.filter((r) => r.filer === "handler");
+    expect(handlerRows.length).toBeGreaterThanOrEqual(1);
+    expect(handlerRows.map((r) => r.fn)).toContain("cron-community-monitor");
+    expect(RUN_REPORT_CRONS.filter((r) => r.filer === "agent").length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("(ii″) the directive source skips handler rows and keeps agent rows", () => {
+    for (const row of RUN_REPORT_CRONS) {
+      if (row.filer === "handler") {
+        expect(CRON_RUN_REPORT_LABELS[row.fn], `${row.fn} is handler-filed: no run-report-label directive`).toBeUndefined();
+      } else {
+        expect(CRON_RUN_REPORT_LABELS[row.fn]).toBe(row.label);
+      }
+      // The leaf keeps EVERY row (row (i) maps the handler row's call site back to it).
+      expect(runReportLabelFor(row.fn)).toBe(row.label);
+    }
+    // The sweeper keeps the handler row: the handler-created issue has the same App author.
+    expect(sweepableRunReports().map((r) => r.fn)).toContain("cron-community-monitor");
   });
 
   it("(ii′) no bash allow entry is spelled like a directive — the directive's ONLY producer is buildAllowlistLines", () => {
@@ -134,7 +166,7 @@ describe("run-report leaf parity (#8076)", () => {
     // file with no provenance check, so a `run-report-label <slug>` string in
     // any CRON_BASH_ALLOWLISTS array would grant exit 0 to that cron outside
     // RUN_REPORT_CRONS and outside parity (i). Pin the producer set here.
-    const DIRECTIVE = /^(mcp-allow|navigate-origin|run-report-label)\b/;
+    const DIRECTIVE = /^(mcp-allow|navigate-origin|run-report-label|no-file-tools)\b/;
     for (const [fn, allow] of Object.entries(CRON_BASH_ALLOWLISTS)) {
       for (const entry of allow) {
         expect(entry, `${fn}: bash allow entry spelled like a directive: ${entry}`).not.toMatch(DIRECTIVE);

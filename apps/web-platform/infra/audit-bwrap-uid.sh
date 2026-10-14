@@ -114,7 +114,7 @@ SECURITY_OPT_ENTRIES=$(
     || true
 )
 
-if printf '%s\n' "$SECURITY_OPT_ENTRIES" | grep -qF "$EXPECTED_APPARMOR"; then
+if printf '%s\n' "$SECURITY_OPT_ENTRIES" | grep -cF "$EXPECTED_APPARMOR" >/dev/null; then
   emit_pass "HostConfig.SecurityOpt includes $EXPECTED_APPARMOR"
 else
   emit_fail "HostConfig.SecurityOpt missing $EXPECTED_APPARMOR (got: $SECURITY_OPT_ENTRIES)"

@@ -8,6 +8,11 @@
 # workspaces_luks_cutover_gate directly, so the CI decision logic is the SAME bytes the test
 # exercises (no re-derived inline copy to drift).
 #
+# HISTORICAL since #6604 step 7: the five resources exist (the volume now under prevent_destroy +
+# delete_protection) and web-1's plaintext volume is wiped, deleted and out of state, so this
+# first-provision path is done — a re-dispatch plans no create and this gate aborts. The
+# backstop notes below describe the pre-step-7 topology.
+#
 # ⚠️ DP-1 (terraform-architect F1, P1) — THIS IS A FIRST PROVISION, NOT A HOST -replace.
 # All FIVE workspaces_luks resources are OPERATOR_APPLIED_EXCLUSIONS not yet in state
 # (terraform-target-parity.test.ts lists them + the token exclusion, "ride the operator's
@@ -23,26 +28,30 @@
 # NOTHING else. The create job `-target`s exactly these five (precedent: warm-standby -targets
 # exactly its excluded resources, apply-web-platform-infra.yml — never untargeted, which pulls
 # unrelated drift):
-#   - random_password.workspaces_luks         (workspaces-luks.tf:51 — the passphrase)
-#   - doppler_secret.workspaces_luks_key       (workspaces-luks.tf:98 — REQUIRED: the escrow
+#   - random_password.workspaces_luks         (workspaces-luks.tf `resource "random_password" "workspaces_luks"` — the passphrase)
+#   - doppler_secret.workspaces_luks_key       (workspaces-luks.tf `resource "doppler_secret" "workspaces_luks_key"` — REQUIRED: the escrow
 #       proof + the host unlock read WORKSPACES_LUKS_KEY via the prd_workspaces_luks config)
-#   - doppler_service_token.workspaces_luks     (workspaces-luks.tf:118 — the scoped read token)
-#   - hcloud_volume.workspaces_luks             (workspaces-luks.tf:165 — the encrypted volume)
-#   - hcloud_volume_attachment.workspaces_luks  (workspaces-luks.tf:185 — attaches it to web-1)
+#   - doppler_service_token.workspaces_luks     (workspaces-luks.tf `resource "doppler_service_token" "workspaces_luks"` — the scoped read token)
+#   - hcloud_volume.workspaces_luks             (workspaces-luks.tf `resource "hcloud_volume" "workspaces_luks"` — the encrypted volume)
+#   - hcloud_volume_attachment.workspaces_luks  (workspaces-luks.tf `resource "hcloud_volume_attachment" "workspaces_luks"` — attaches it to web-1)
 #
 # THE SOLE-COPY-DATA BACKSTOPS (each named, operator-legible; several redundant with
 # out_of_scope but they name the specific catastrophe):
-#   - old_volume_touched     — hcloud_volume.workspaces["web-1"] (server.tf:1241, for_each) is
-#       the LIVE plaintext /mnt/data. #6593 deliberately shipped NO `prevent_destroy` (it fails
-#       the whole for_each plan). This counter IS AC20's STOP — the old volume's only protection.
-#   - old_attachment_touched — hcloud_volume_attachment.workspaces["web-1"] (server.tf:1253):
-#       detaching the live /mnt/data mid-cutover strands sole-copy data (terraform-architect F3).
-#   - web1_server_touched    — hcloud_server.web["web-1"] (server.tf:99): cx33 is unrebuildable in
+#   - old_volume_touched     — hcloud_volume.workspaces["web-1"] (server.tf, for_each) WAS the
+#       serving plaintext /mnt/data at first provision (HISTORICAL: retired and out of state since
+#       #6604 step 7). #6593 shipped it without `prevent_destroy`; #6459 later added one. This
+#       counter was AC20's STOP — then the old volume's only protection.
+#   - old_attachment_touched — hcloud_volume_attachment.workspaces["web-1"] (server.tf): detaching
+#       the then-serving /mnt/data mid-cutover would have stranded sole-copy data (F3; retired).
+#   - web1_server_touched    — hcloud_server.web["web-1"] (server.tf `resource "hcloud_server" "web"`): cx33 is unrebuildable in
 #       all 3 EU DCs, so a destroyed/replaced web-1 is "the product is gone", not "a workspace".
 #   - luks_volume_destroyed  — a delete OR forget of the encrypted volume this job just created.
 #   - luks_passphrase_touched — update/delete/forget (NEVER create) on random_password.workspaces_luks
 #       OR doppler_secret.workspaces_luks_key: a re-mint opens a NEW header, stranding at-rest data
-#       (the C19/F4 catastrophe). A FIRST create is legal; a later re-mint is not.
+#       (the C19/F4 catastrophe). A FIRST create is legal; a later re-mint is not. PLUS (#9377) ANY
+#       positive action, create included, on the web host class's pair random_password.workspaces_luks_web
+#       and doppler_secret.workspaces_luks_web_key: this job never creates them (the push-apply did, and it now refuses a create of the password), so
+#       a touch here is a touch on that class passphrase.
 #   - resource_deletes       — a delete OR forget of ANYTHING: a pure `+create` provision has no
 #       deletes, so any delete/forget is by definition out of shape.
 #   - out_of_scope           — any positive (create/update/delete/forget) action on an address
@@ -110,6 +119,15 @@ workspaces_luks_cutover_gate() {
         "hcloud_volume_attachment.workspaces[\"web-1\"]",
         "hcloud_server.web[\"web-1\"]"
       ];
+      # The web host class passphrase pair (#9377, decision A1). This job NEVER creates them (they ride the
+      # push-apply), so ANY positive action here, create included, is a touch on that class passphrase.
+      # out_of_scope EXCLUDES this list while luks_passphrase_touched names the two addresses INLINE, so that
+      # clause is their SOLE catcher and each name is independently load-bearing (delete one name from the
+      # clause and the plan passes, which the suite proves; an edit of this list alone changes nothing).
+      def web_passphrase: [
+        "random_password.workspaces_luks_web",
+        "doppler_secret.workspaces_luks_web_key"
+      ];
       def positive: (.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"));
       $p[0] as $plan
       | {
@@ -134,15 +152,15 @@ workspaces_luks_cutover_gate() {
             | length
           ),
           old_volume_touched: (
-            # The AC20 STOP — the LIVE plaintext /mnt/data. #6593 shipped NO prevent_destroy; this
-            # counter is the sole protection for the old volume. bracketed indexed address, 4-verb.
+            # The AC20 STOP — the web-1 plaintext /mnt/data (HISTORICAL: retired, out of state since
+            # #6604 step 7; this counter was its sole protection then). bracketed indexed address, 4-verb.
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.workspaces[\"web-1\"]")
               | select(positive) ]
             | length
           ),
           old_attachment_touched: (
-            # Detaching the live /mnt/data mid-cutover strands sole-copy data (F3).
+            # Detaching the then-serving /mnt/data mid-cutover stranded sole-copy data (F3; retired).
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume_attachment.workspaces[\"web-1\"]")
               | select(positive) ]
@@ -165,10 +183,16 @@ workspaces_luks_cutover_gate() {
             # DP-1: update/delete/forget ONLY, NEVER create. A FIRST create of the passphrase /
             # its doppler_secret is legal (this is a first provision); a later re-mint opens a
             # NEW header and strands the at-rest data (the C19/F4 catastrophe).
-            [ $plan.resource_changes[]?
-              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key")
-              | select(.change.actions? | any(. == "update" or . == "delete" or . == "forget")) ]
-            | length
+            # (#9377) PLUS the web host class pair under the FULL four-verb rule: this job never creates
+            # them, so even a create is a touch. The two terms are summed so one counter, one message.
+            ( [ $plan.resource_changes[]?
+                | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key")
+                | select(.change.actions? | any(. == "update" or . == "delete" or . == "forget")) ]
+              | length )
+            + ( [ $plan.resource_changes[]?
+                  | select(.address == "random_password.workspaces_luks_web" or .address == "doppler_secret.workspaces_luks_web_key")
+                  | select(positive) ]
+                | length )
           ),
           resource_deletes: (
             # A pure +create provision has NO deletes. Any delete/forget is out of shape — EXCEPT the
@@ -186,7 +210,7 @@ workspaces_luks_cutover_gate() {
             # GENUINELY un-enumerated addresses, and the named clauses solely own their addresses.
             [ $plan.resource_changes[]?
               | select(positive)
-              | select((IN(.address; allow[]) | not) and (IN(.address; named_live[]) | not)) ]
+              | select((IN(.address; allow[]) | not) and (IN(.address; named_live[]) | not) and (IN(.address; web_passphrase[]) | not)) ]
             | length
           )
         }
@@ -216,6 +240,6 @@ workspaces_luks_cutover_gate() {
     echo "workspaces_luks_cutover_gate: PASS — scoped workspaces-luks first provision permitted (volume + attachment + doppler_secret created; old plaintext volume/attachment + web-1 server untouched; no re-mint, no destroy, nothing out of scope)"
     return 0
   fi
-  echo "workspaces_luks_cutover_gate: ABORT — plan is NOT the exact scoped workspaces-luks first provision (a touch on the old plaintext volume/attachment or the web-1 server, a luks-volume destroy/forget, a passphrase re-mint, any delete, an out-of-scope positive action, or a missing volume/attachment/secret create)"
+  echo "workspaces_luks_cutover_gate: ABORT — plan is NOT the exact scoped workspaces-luks first provision (a touch on the old plaintext volume/attachment or the web-1 server, a luks-volume destroy/forget, a passphrase re-mint or any touch on the web-class passphrase pair, any delete, an out-of-scope positive action, or a missing volume/attachment/secret create)"
   return 1
 }

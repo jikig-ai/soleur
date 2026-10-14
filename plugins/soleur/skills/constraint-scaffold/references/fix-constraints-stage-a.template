@@ -96,9 +96,16 @@ jobs:
       - name: Dispatch agent to fix the gate (fix-only)
         if: steps.gate.outputs.rc != '0' && steps.preflight.outputs.ok == 'true'
         id: agent
-        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
+        uses: anthropics/claude-code-action@20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # `id-token: write` is deliberately ABSENT here (untrusted pull_request
+          # context — see ADR-074): the explicit input is the only safe token
+          # path. Verified at the pinned SHA: inputs.github_token ->
+          # OVERRIDE_GITHUB_TOKEN makes setupGitHubToken return BEFORE
+          # getOidcToken. Without it the agent step OIDC-hard-fails ~15 s in —
+          # the latent defect the dogfood copy carried until its repair.
+          github_token: ${{ github.token }}
           # Model pin + action SHA mirror claude-code-review.yml verbatim (CI-validated).
           # Pin freshness is model-launch-review's job — do NOT substitute a model id from memory.
           claude_args: '--model claude-sonnet-5-5 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'

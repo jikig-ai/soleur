@@ -71,4 +71,4 @@ This learning IS the session-errors capture. The three errors enumerated at Phas
 - `2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md` — precedent for the sentinel-sweep miss class.
 - `2026-04-22-scope-by-new-column-audit-every-query-not-just-the-helper.md` — same lesson, scope-by-new-column angle.
 - `2026-05-15-brainstorm-leader-research-sequencing-and-prior-art-cwd.md` — the reconciliation rule that caught this miss.
-- Source artifacts: `knowledge-base/project/brainstorms/2026-05-22-byok-delegations-brainstorm.md` (Session Errors §1-3) and `knowledge-base/project/specs/feat-byok-delegations-4232/spec.md` (G9 enumeration).
+- Source artifacts: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-22-byok-delegations-brainstorm.md` (Session Errors §1-3) and `knowledge-base/project/specs/archive/20261013-014038-feat-byok-delegations-4232/spec.md` (G9 enumeration).

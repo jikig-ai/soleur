@@ -91,7 +91,7 @@ MIGRATION_RE='(/migrations/|/migrate/|\.sql$)'
 PERSIST_RE='(apps/web-platform/(server|supabase|lib)/)'
 PERF_RE='(apps/web-platform/(server|supabase)/|inngest|cron|queue|worker|bench|perf)'
 AGENT_SURFACE_RE='(apps/web-platform/(app|components)/|plugins/soleur/(agents|skills|commands|docs)/)'
-TEST_RE='(\.test\.|\.spec\.|_test\.|_spec\.|(^|/)test_[^/]*\.py$|__tests__/|(^|/)tests?/|(^|/)spec/|Tests\.swift$)'
+TEST_RE='(\.test\.|\.spec\.|_test\.|_spec\.|(^|/)test_[^/]*\.py$|__tests__/|(^|/)tests?/|(^|/)spec/|Tests\.swift$|\.e2e\.[jt]sx?$|(^|/)e2e/|\.cy\.)'
 SHELL_RE='\.(sh|bash|zsh)$'
 ANTISLOP_RE='(apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$|apps/web-platform/server/.*\.(ts|tsx)$|plugins/soleur/docs/.*\.(njk|css)$)'
 
@@ -133,23 +133,23 @@ while IFS= read -r f; do
   f="${f#\"}"; f="${f%\"}"        # quote-path wrapping (spaces/non-ASCII in git --name-only)
   [[ -n "$f" ]] || continue
   area=0
-  if printf '%s\n' "$f" | grep -qE "$MIGRATION_RE"; then
+  if grep -qE "$MIGRATION_RE" <<<"$f"; then
     add data-integrity-guardian; add data-migration-expert; add deployment-verification-agent
     area=1
   fi
-  if printf '%s\n' "$f" | grep -qE "$PERSIST_RE"; then add data-integrity-guardian; area=1; fi
-  if printf '%s\n' "$f" | grep -qE "$SENSITIVE_PATH_RE"; then add security-sentinel; area=1; fi
-  if printf '%s\n' "$f" | grep -qE "$GDPR_PATH_RE"; then add gdpr-gate; area=1; fi
-  if printf '%s\n' "$f" | grep -qE "$ANTISLOP_RE"; then add anti-slop; area=1; fi
-  if printf '%s\n' "$f" | grep -qE "$AGENT_SURFACE_RE"; then add agent-native-reviewer; area=1; fi
-  if printf '%s\n' "$f" | grep -qE "$PERF_RE"; then add performance-oracle; area=1; fi
-  if printf '%s\n' "$f" | grep -qE "$TEST_RE"; then add test-design-reviewer; area=1; fi
-  if printf '%s\n' "$f" | grep -qE "$SHELL_RE"; then
+  if grep -qE "$PERSIST_RE" <<<"$f"; then add data-integrity-guardian; area=1; fi
+  if grep -qE "$SENSITIVE_PATH_RE" <<<"$f"; then add security-sentinel; area=1; fi
+  if grep -qE "$GDPR_PATH_RE" <<<"$f"; then add gdpr-gate; area=1; fi
+  if grep -qE "$ANTISLOP_RE" <<<"$f"; then add anti-slop; area=1; fi
+  if grep -qE "$AGENT_SURFACE_RE" <<<"$f"; then add agent-native-reviewer; area=1; fi
+  if grep -qE "$PERF_RE" <<<"$f"; then add performance-oracle; area=1; fi
+  if grep -qE "$TEST_RE" <<<"$f"; then add test-design-reviewer; area=1; fi
+  if grep -qE "$SHELL_RE" <<<"$f"; then
     add shellcheck
-  elif printf '%s\n' "$f" | grep -qE "$SOURCE_RE"; then
+  elif grep -qE "$SOURCE_RE" <<<"$f"; then
     add semgrep-sast
   fi
-  if printf '%s\n' "$f" | grep -qE "$SOURCE_RE"; then
+  if grep -qE "$SOURCE_RE" <<<"$f"; then
     # The floor guards "a source fix with no judgment seat". Deterministic
     # seats (semgrep/shellcheck) do NOT satisfy it — they are scanners, not
     # reviewers; only an area arm (a judgment seat) exempts the floor.

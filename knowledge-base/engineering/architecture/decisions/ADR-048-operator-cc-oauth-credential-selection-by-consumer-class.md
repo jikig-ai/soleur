@@ -5,7 +5,7 @@ date: 2026-06-02
 related: [4825, 4824]
 related_adrs: [ADR-042]
 related_plans:
-  - knowledge-base/project/plans/2026-06-02-feat-operator-cc-oauth-credential-plan.md
+  - knowledge-base/project/plans/archive/20261013-032858-2026-06-02-feat-operator-cc-oauth-credential-plan.md
 brand_survival_threshold: single-user incident
 ---
 

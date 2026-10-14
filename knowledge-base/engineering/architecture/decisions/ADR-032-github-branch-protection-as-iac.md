@@ -2,8 +2,8 @@
 title: "ADR-032 — GitHub branch-protection ruleset as IaC"
 status: accepted
 date: 2026-05-16
-plan: knowledge-base/project/plans/2026-05-16-feat-ci-required-ruleset-widening-via-terraform-plan.md
-spec: knowledge-base/project/specs/feat-one-shot-pr-3888-ruleset-required-checks-widening/tasks.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-16-feat-ci-required-ruleset-widening-via-terraform-plan.md
+spec: knowledge-base/project/specs/archive/20261013-014038-feat-one-shot-pr-3888-ruleset-required-checks-widening/tasks.md
 issue: 3888
 supersedes: none
 related:
@@ -839,7 +839,7 @@ The organisation plan change the 2026-09-14 amendment named as reopener
 (iii) has occurred: `gh api orgs/jikig-ai --jq .plan.name` returns `team`,
 verified 2026-09-22T10:19:56Z (`UPGRADE_NOT_BEFORE`, recorded as `earliest=`
 on #8450's enrolled followthrough directive and in
-`knowledge-base/project/specs/feat-8450-ci-concurrency/measurements.md` via
+`knowledge-base/project/specs/archive/20261013-051752-feat-8450-ci-concurrency/measurements.md` via
 the ledger PR). The concurrent-job pool is now documented at 60 hosted
 jobs, up from the Free plan's 20 that made capacity a binding factor.
 
@@ -876,3 +876,43 @@ and neither has occurred.
 **The queue stays off.** #5840 remains the tracker. This amendment changes
 only the bookkeeping: (iii) is now a closed precondition behind (a) or (b),
 not an open blocker.
+
+## Amendment — 2026-10-03 (#9454): advisory CodeQL adopted; the queue is re-adopted (ADR-270)
+
+**Pointer.** [ADR-270](./ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md)
+(status `adopting`) exercises re-adoption trigger (b) of the 2026-07-01
+amendment, "a deliberate decision to make CodeQL advisory", and supersedes, in
+part, two rulings above: the 2026-07-01 decision "queue stays OFF; CodeQL stays a
+blocking required check", and the 2026-09-14 capacity rejection (whose reopener
+(iii) the 2026-09-22 amendment already recorded as satisfied). The dated bodies
+above are left as written; read them as the record of why the queue was off, not
+as the current state. Everything else in this ADR (the ruleset-as-IaC contract,
+the required-check inventory, the DR script, the destroy-guard) stands.
+
+The checklist items in the 2026-06-30 amendment's "Post-enablement canary" and
+"The hard precondition" sections move to the canary in ADR-270 ("Canary
+measurements"); the "Blocked by `codeql-action#1537`" bullet no longer applies
+because CodeQL is removed from `required_status_checks`. The CI Required context
+count is 23 after this change (the `CodeQL` row at integration id 57789 is gone),
+and the `merge-queue-cla-synthetics.yml` and `merge-queue-stall-check.yml`
+workflows listed above as "restore on re-adoption" are restored by the PR that
+carries ADR-270, the stall threshold set to 45 minutes against the new 60-minute
+`check_response_timeout_minutes`.
+
+**Alternatives (updated).** The 2026-07-01 binary choice, restated with its
+current disposition:
+
+| Alternative | Disposition |
+| --- | --- |
+| CodeQL required (blocks merge), no merge queue | The state through 2026-10-03; replaced by the row below. |
+| Merge queue, CodeQL advisory (removed from `required_status_checks`; `pull_request` scan kept; post-merge `codeql-main-alert-gate.yml`) | **advisory CodeQL, adopted by ADR-270.** |
+| Advanced CodeQL setup with an `on: merge_group` trigger | Still rejected: it does not fix `codeql-action#1537` (the analysis runs; the status context never posts). Do NOT restore it as a fix. |
+| Re-tighten (CodeQL required again with the queue) | Reserved for when `codeql-action#1537` closes: one Terraform diff (ADR-270 re-tighten recipe), watched by `codeql-1537-revisit-watch.yml`. |
+
+## Addendum 2026-10-09 (ADR-276 S2, #9512): one named exception to the `e2e` job-level `if:`/`needs:` prohibition
+
+The #8450 amendment above rejects a job-level `if:` or `needs:` on `e2e` (a failed detector job would needs-skip a required check, which posts green). ADR-276's S2 stage adds exactly one pair on `e2e` and on `test`: `needs: [push-dedupe]` and a condition that opens with the status function `!cancelled()` (`always()` for `test`) and names `merge_group` positively, so a failed or skipped `push-dedupe` never skips a required context on `pull_request` or `merge_group`; it is false only on an elided push to `main`. `plugins/soleur/test/ci-e2e-skip-anchors.test.sh` pins the one allowed pair; any other job-level `if:`/`needs:` on `e2e` is still refused. Whether a required context is evaluated on a direct push to `main` was not settled from the repository (the ruleset lists the contexts without an event scope); the elision is safe regardless, because it requires a green identical-SHA `merge_group` run.
+
+## Addendum 2026-10-09 (ADR-276 S3, #9728): the required `test` aggregator is red by design on one event class
+
+ADR-276's S3 stage makes the `test` aggregator conclude red, with the message `draft: full battery owed at ready`, in a `pull_request` run of a draft PR while the repository variable `CI_DRAFT_LIGHT` is `on` (Option R; the heavy families are skipped by a `draft-light` job and the aggregator exits 1 before its final check). It is never red on `merge_group` or `push`, and the `ready_for_review` run is always full. A required context is therefore not "pending or skipped-green" on any event: it reports, red, until the ready run's newer `test` row replaces it (the newest row per name decides, measured on the S3 entry-gate probe: BLOCKED while a newer row is pending, CLEAN once it is green). S2 left one named exception for `e2e`; this is the second class of deliberate red on a required context.

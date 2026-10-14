@@ -101,7 +101,7 @@ echo ""
 # --- TS7: line-number prefix in output ---
 echo "TS7: scanner output is in 'lineno:matched-text' format for caller attribution"
 OUT=$(run_scan "$FIXTURES/checkbox-trigger.txt")
-if printf '%s\n' "$OUT" | grep -qE '^[0-9]+:'; then
+if printf '%s\n' "$OUT" | grep -cE >/dev/null '^[0-9]+:'; then
   echo "  PASS: each match line is prefixed with 'lineno:'"
   PASS=$((PASS + 1))
 else

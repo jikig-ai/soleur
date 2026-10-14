@@ -5,7 +5,7 @@
 - **Issue:** #6459 (blue-green host replacement — the ADR this issue asked for). Related: #6608 (inngest allowlist), #6570 (git-data root blocker), #6441/ADR-115 (fresh-boot NIC + boot-unlock), #6538 (web-2 retirement), #5274/ADR-068 (multi-host `/workspaces`).
 - **Amends:** `hr-prod-host-config-change-immutable-redeploy`, ADR-103 (adds the drain-gated volume-preserving reprovision path for the `web-1` key).
 - **Extends:** ADR-068 (this is the ingress + host-lifecycle layer; the serving/writer model is unchanged and its `replicas=1` invariant remains in force until ADR-068 Phase-3 GA).
-- **Plan:** `knowledge-base/project/plans/2026-07-24-feat-web-active-active-cluster-iac-plan.md` (6-agent review applied).
+- **Plan:** `knowledge-base/project/plans/archive/20261013-041741-2026-07-24-feat-web-active-active-cluster-iac-plan.md` (6-agent review applied).
 
 ## Context
 
@@ -313,3 +313,37 @@ a baked provisioner ([ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.
 statements above (the R3 couplings and the `workspaces_luks` guard text) are historical. Merging it changes no
 running host: web-2's live volume is converted by the single-use rebirth tracked as #9372, and the anti-pooling
 coupling (`WORKSPACES_LUKS_CUTOVER_AT`) stays the fence until a flip orchestrator consumes the marker (#9358).
+
+> **Superseded 2026-10-12 (#9372), in part:** the single-use rebirth ran on 2026-10-06 and its workflow is retired (ADR-263
+> addendum 2026-10-12); the anti-pooling fence is unchanged.
+
+## Addendum — 2026-10-01 (#6604 step 7, PR B #9348): §Consequences "sole-copy protection" corrected
+
+Status unchanged. This corrects two claims in the §Consequences **Positive** bullet, "Sole-copy
+protection (precise, PR-1 state)". That text is kept above as written.
+
+1. **"`hcloud_volume.workspaces_luks` … does NOT yet carry `prevent_destroy` … deferred to #6931" is
+   superseded.** On the merge of PR #9348, Terraform declares `prevent_destroy = true` and
+   `delete_protection = true` on `hcloud_volume.workspaces_luks`, and `prevent_destroy = true` on
+   `hcloud_volume_attachment.workspaces_luks` (ADR-119, the PR-B addendum's D1). The collision that
+   justified the deferral is gone: the `workspaces-luks-recut` job is hard-retired (its first step
+   exits 1), and its `-replace` would plan-fail against `prevent_destroy` anyway. `delete_protection`
+   is effective only after the post-merge SSH-stage apply delivers it. The off-host snapshot is still
+   not built: there is no backup or snapshot of the sole copy (#5274, #8625). Lifting the protection is
+   a reviewed PR, `delete_protection` first in its own apply: removing `prevent_destroy` while
+   `delete_protection` stays on makes a destroy apply detach the mounted volume and then fail the
+   delete, an outage.
+2. **"Interim guards on `workspaces_luks`: absent from the push `-target` allow-list" was never a
+   sufficient guard, and this predates PR #9348.** The volume is not in the guarded plan's `-target`
+   list, but it is in the `-target` closure of the `apply` job's SSH stage, "Terraform apply
+   (SSH-provisioned resources, over the bridge)". That stage runs `terraform apply -auto-approve` with
+   no destroy-guard and targets `terraform_data.workspaces_boot_unlock_install`, which interpolates
+   `hcloud_volume.workspaces_luks.id` (its precondition, the boot-unlock envfile writer and the
+   crypttab `LINE`, all in `apps/web-platform/infra/workspaces-luks.tf`). So a ForceNew change to the
+   volume reached by that stage would have been applied. From PR #9348, `prevent_destroy` makes that
+   plan fail, and the same stage is what delivers the `delete_protection` update.
+
+The "residual exposure" clause (a targeted `destroy`/`-replace` of `workspaces_luks` during the defer
+window) is closed by `prevent_destroy` for every plan that keeps the resource in config. It is not
+closed for a state-only removal (`terraform state rm`, a `removed {}` block), which `prevent_destroy`
+does not see.

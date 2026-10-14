@@ -50,11 +50,15 @@ setup() {
   cat > "${MOCKBIN}/curl" <<MOCK
 #!/usr/bin/env bash
 url="\${!#}"
-body=""; prev=""; outfile=""
+body=""; prev=""; outfile=""; cfg=0
 for a in "\$@"; do
-  case "\$prev" in --data-binary|-d) body="\$a" ;; -o) outfile="\$a" ;; esac
+  case "\$prev" in --data-binary|-d) body="\$a" ;; -o) outfile="\$a" ;; --config) [[ "\$a" == - ]] && cfg=1 ;; esac
   prev="\$a"
 done
+# The Bearer travels on the stdin config channel (--config -), never argv: consume + record it,
+# otherwise the process-substitution writer is never read. ARGV is recorded separately.
+if [[ "\$cfg" == 1 ]]; then cat >> "${MOCKBIN}/curl_stdin"; fi
+echo "ARGV: \$*" >> "${MOCKBIN}/curl_argv.log"
 case "\$url" in
   *schedule-reminder*) [[ -n "\$body" ]] && echo "ARM_BODY: \$body" >> "$ARM_LOG"; printf '202' ;;
   *health*)    [[ -n "\$outfile" ]] && printf '{"status":200,"message":"OK"}' > "\$outfile"; printf '200' ;;
@@ -126,7 +130,7 @@ run_verify() {
     INNGEST_VERIFY_EXECSTART="$execstart" \
     INNGEST_VERIFY_MARKER_ID="${INNGEST_VERIFY_MARKER_ID:-}" \
     INNGEST_VERIFY_STATE="${MOCKBIN}/verify.state" \
-    INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
+    INNGEST_MANUAL_TRIGGER_SECRET="${WVV_SECRET_OVERRIDE-test-secret}" \
     INNGEST_VERIFY_SETTLE_SECS=0 \
     WVV_FUNCTIONS_BODY="${WVV_FUNCTIONS_BODY:-}" \
     bash "$TARGET" 2>&1
@@ -174,6 +178,42 @@ test_throwaway_posts_no_comment() {
   assert_not_contains "throwaway is NOT an issue-comment (no real-issue post)" "$body" '"type":"issue-comment"'
   assert_contains "throwaway uses the sentinel unregistered check" "$body" "cutover-verify-noop"
   teardown
+}
+
+# --- Test 3b: the Bearer is on curl's stdin config channel, never on argv ---
+test_bearer_on_stdin_not_argv() {
+  setup
+  make_enum_stub '[]'
+  run_verify >/dev/null 2>&1 || true
+  assert_eq "Bearer secret is NOT on any curl argv" "0" "$(grep -cF 'test-secret' "${MOCKBIN}/curl_argv.log" || true)"
+  assert_contains "arm curl reads its config from stdin" "$(grep 'schedule-reminder' "${MOCKBIN}/curl_argv.log" | head -1)" "--config -"
+  assert_eq "Authorization Bearer header delivered on stdin" "1" "$(grep -cxF 'header = "Authorization: Bearer test-secret"' "${MOCKBIN}/curl_stdin" || true)"
+  teardown
+}
+
+# --- Test 3c (DESTRUCTIVE script): a secret outside the token charset is refused at the read,
+# BEFORE the arm curl and before any stop/wipe/start — through the existing abort path. ---
+test_unusable_shape_secret_refused_before_wipe() {
+  local label val
+  for label in newline quote space; do
+    case "$label" in
+      newline) val=$'synthetic-fixture-token-0001\nheader = "X-Injected: 1"' ;;
+      quote) val='synthetic-fixture-token"0001' ;;
+      space) val='synthetic fixture-token-0001' ;;
+    esac
+    setup
+    make_enum_stub '[]'
+    local out rc=0
+    out=$(WVV_SECRET_OVERRIDE="$val" run_verify) || rc=$?
+    assert_eq "unusable-shape secret ($label): exits 1" "1" "$rc"
+    assert_eq "unusable-shape secret ($label): reason secret_shape via abort()" "secret_shape" "$(jq -r .reason "${MOCKBIN}/verify.state" 2>/dev/null || echo "<no state>")"
+    assert_contains "unusable-shape secret ($label): refusal is reported" "$out" "unusable shape"
+    assert_eq "unusable-shape secret ($label): no stop/start/restart verb" "0" "$(count_unit_verbs)"
+    assert_eq "unusable-shape secret ($label): data dir NOT wiped" "sqlite" "$(cat "${MOCKBIN}/inngest-data/main.db")"
+    assert_eq "unusable-shape secret ($label): arm curl never invoked" "0" "$(if [[ -f "${MOCKBIN}/curl_argv.log" ]]; then grep -c 'schedule-reminder' "${MOCKBIN}/curl_argv.log" || true; else echo 0; fi)"
+    assert_eq "unusable-shape secret ($label): marker NOT armed" "0" "$(grep -c '^ARM_BODY:' "$ARM_LOG" || true)"
+    teardown
+  done
 }
 
 # --- Test 4: clean gate → stop precedes wipe precedes start; data dir wiped ---
@@ -325,6 +365,8 @@ test_abort_on_spoofed_prefix_real_reminder
 test_abort_when_quiesced
 test_abort_on_non_durable_backend
 test_throwaway_posts_no_comment
+test_bearer_on_stdin_not_argv
+test_unusable_shape_secret_refused_before_wipe
 test_happy_wipe_order
 test_no_functions_aborts_loud
 test_marker_unique
@@ -332,7 +374,7 @@ test_marker_unique
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Exact assertion floor: a deleted, skipped or early-returning row changes the dispatched count.
-readonly EXPECTED_ASSERTIONS=49
+readonly EXPECTED_ASSERTIONS=73
 if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
   printf '  FAIL: dispatched %s assertions, expected exactly %s — a row was added, removed or skipped\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS"
   exit 1

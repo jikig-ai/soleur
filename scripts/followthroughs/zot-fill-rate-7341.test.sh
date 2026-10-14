@@ -318,6 +318,32 @@ then pass "a repo completing 1 of 3 started cycles is reported, not called healt
 else fail "the intermittent under-completion shape read as healthy. Output: $OUT"
 fi
 
+# 28. THE UPLOAD-ERROR COUNTER (#9373). The real line is level:error with the handler named only in
+#     the parsed `func` field (written at the END of the row, just before `goroutine`). The retired
+#     message-prefix key counted it as 0; a header that spells the func text mid-row must not count.
+GC_UPL="$(gcrow "$ENVP {time:2026-10-10T00:00:00Z,level:error,message:unexpected error, removing .uploads/ files,error:unexpected EOF,caller:zotregistry.dev/zot/v2/pkg/api/routes.go:2190,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:369}")
+$(gcrow "$ENVP {time:2026-10-10T00:00:01Z,level:error,message:HTTP API,headers:{User-Agent:[x,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:1]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/zot/v2/pkg/api.SessionLogger.func1.1,goroutine:2}")"
+# Boundary rows: a forged row cut at EXACTLY 800 characters must not count, a real-shaped 799-character row must.
+GC_FN='zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload'
+gc_pre='{level:error,message:HTTP API,headers:{User-Agent:['
+gc_suf="]},caller:c,func:$GC_FN,goroutine:9}"
+GC_PAD800=$(head -c $((800 - ${#gc_pre} - ${#gc_suf})) /dev/zero | tr '\0' x)
+gc_pre2='{level:error,message:note,error:'
+gc_suf2=",caller:c,func:$GC_FN,goroutine:9}"
+GC_PAD799=$(head -c $((799 - ${#gc_pre2} - ${#gc_suf2})) /dev/zero | tr '\0' x)
+GC_UPL="$GC_UPL
+$(gcrow "$ENVP {time:2026-10-10T00:00:02Z,level:info,message:note,caller:c,func:$GC_FN,goroutine:7}")
+$(gcrow "$ENVP {time:2026-10-10T00:00:03Z,level:error,message:note,caller:c,func:$GC_FN.func1,goroutine:8}")
+$(gcrow "$ENVP {time:2026-10-10T00:00:05Z,level:error,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*FooRouteHandler).PatchBlobUpload,goroutine:6}")
+$(gcrow "$ENVP ${gc_pre}${GC_PAD800}${gc_suf}")
+$(gcrow "$ENVP ${gc_pre2}${GC_PAD799}${gc_suf2}")"
+run "$FAILSPEC" 0 "" "" "" "$GC_UPL"
+cases=$((cases + 1))
+if [[ "$OUT" == *"patch_blob_upload=2 "* ]]
+then pass "the real row and a 799-char real-shaped row count; decoys, a Foo receiver and an 800-char cut row do not"
+else fail "expected patch_blob_upload=2 (real + 799-char counted, decoys and the 800-char cut row not). Output: $OUT"
+fi
+
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This harness's own dispatch. A stub that stops emitting, a `run()` that stops invoking the
 # probe, an early `return` — any of these leaves the suite asserting nothing about a probe whose
@@ -328,9 +354,9 @@ fi
 # neutering the verdict machinery silenced the rows AND the floor that exists to notice the
 # silence. A floor enforced through the suspect cannot witness the suspect.
 #
-# Measured from a green run with ZERO slack: 29 assertions (22 expect() rows + 7 inline
+# Measured from a green run with ZERO slack: 30 assertions (22 expect() rows + 8 inline
 # if/else rows). Ratchet upward only.
-MIN_CHECKS=29
+MIN_CHECKS=30
 if (( cases < MIN_CHECKS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CHECKS" >&2

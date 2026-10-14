@@ -350,7 +350,7 @@ check_entry() { # <path>
 
   # 5. the filename's slug must not outrun the entry's own scope
   slug_re="$(printf '%s' "$slug" | sed 's/-/[- ]/g')"
-  if ! printf '%s' "$(fm_value "$file" scope)" | grep -qiE "$slug_re"; then
+  if ! grep -qiE "$slug_re" < <(printf '%s' "$(fm_value "$file" scope)"); then
     report "$file" "slug-outruns-scope" "the filename's concept slug ('${slug//-/ }') does not appear in the entry's own scope:; to an external reader the filename is the claim"
   fi
 
@@ -366,7 +366,7 @@ check_entry() { # <path>
   while IFS= read -r line; do
     [[ -n "${line//[[:space:]]/}" ]] || continue
     searched_items=$((searched_items + 1))
-    printf '%s' "$line" | grep -q -- '->' || searched_bad=$((searched_bad + 1))
+    grep -q -- '->' <<<"$line" || searched_bad=$((searched_bad + 1))
   done <<< "$(fm_value "$file" searched)"
   if [[ "$searched_items" -gt 0 && "$searched_bad" -gt 0 ]]; then
     report "$file" "searched-no-result" "$searched_bad of $searched_items searched: item(s) record a command with no result: each line is '<command> -> <what it returned>', because an unauditable search is the claim this field exists to replace"

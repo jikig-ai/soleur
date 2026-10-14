@@ -22,6 +22,16 @@ import {
   drainCcQueriesForShutdown,
   startCcIdleReaper,
 } from "./cc-dispatcher";
+// feat-open-web-egress (#9534) — the orphan-forwarder reaper runs at BOOT,
+// not lazily on first dispatch (getSoleurGoRunner): a dispatcher restart
+// leaves the previous generation's forwarders reparented to init with live
+// token files — waiting for the first dispatch leaves a window where dead
+// sessions' credentials still authenticate at the gateway.
+// GATED on SOLEUR_EGRESS_REAPER=1: only the dir-owning app container sets it.
+// A second container sharing the host dir (the deploy canary, ci-deploy.sh)
+// runs this same server — its /proc cannot see the prod forwarders, so an
+// ungated sweep would mass-revoke the prod dispatcher's live tokens.
+import { reapOrphanEgressForwarders } from "./egress-forwarder";
 import { handleConversationMessages } from "./api-messages";
 import { releaseAllHeldLeases } from "./worktree-write-lease";
 import { createChildLogger } from "./logger";
@@ -42,6 +52,9 @@ import {
 } from "./readiness";
 import { isLoopbackHost } from "./loopback";
 import { verifyC4RenderSandboxOnce } from "./c4-render";
+import { verifyAgentSandboxHardening } from "./agent-runner-sandbox-config";
+import { verifyOuterWrapInterpose } from "./agent-runner-query-options";
+import { verifyOuterWrapRealizedIsolation } from "./agent-outer-wrap";
 import { startWatchdogDispatchClock } from "./watchdog-dispatch-clock";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
@@ -270,6 +283,12 @@ app.prepare().then(() => {
   }
 
   server.listen(port, () => {
+    // #9534 — reap orphaned forwarder processes + their gateway tokens before
+    // serving dispatches (best-effort, never throws). Only on the owning
+    // dispatcher — see the import comment.
+    if (process.env.SOLEUR_EGRESS_REAPER === "1") {
+      reapOrphanEgressForwarders();
+    }
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
     log.info({
       sentryConfigured: !!process.env.SENTRY_DSN,
@@ -299,6 +318,49 @@ app.prepare().then(() => {
             feature: "c4-rerender",
             op: "sandbox-selfprobe",
             message: "c4 render sandbox self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+      // #8752: the Agent SDK sandbox's hardening pair (bwrap PATH shim +
+      // committed nested-userns filter artifact) is measured once here —
+      // report-only like the C4 probe; it never gates a deploy.
+      void Promise.resolve()
+        .then(verifyAgentSandboxHardening)
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "sandbox-hardening-selfprobe",
+            message: "agent sandbox hardening self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+      // #5863: the outer-wrap interpose is installed ONLY when the rollout
+      // flag is on — a flag-on-but-unwired build would silently run the CLI
+      // unwrapped (the file-tool tier exposed). Same report-only fork.
+      void Promise.resolve()
+        .then(verifyOuterWrapInterpose)
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "outer-wrap-selfprobe",
+            message: "agent sandbox outer-wrap self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+      // #5863 T3.2 (opt-in): AGENT_OUTER_WRAP_BOOT_PROBE=1 runs the realized
+      // mountns + shared payload once at boot inside the PROD container —
+      // the file-cap posture measured where sessions will actually run.
+      // NOTE: the probe is synchronous (spawnSync, 30s bound) — the resolved-
+      // promise hop does not off-thread it, so flag-on stalls the event loop
+      // up to ~30s once at boot. Opt-in-only by design; acceptable for a
+      // bounded diagnostic, never enabled in the default rollout.
+      void Promise.resolve()
+        .then(() => verifyOuterWrapRealizedIsolation())
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "outer-wrap-realized-probe",
+            message: "agent sandbox outer-wrap realized probe threw",
             extra: { err: String(err) },
           }),
         );

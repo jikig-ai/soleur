@@ -392,6 +392,7 @@ declare -A PRIVILEGED_WHY=(
   [git-data-plaintext-snapshot-loopback.test.sh]="dm-snapshot/mkfs evidence needs root (#5274)"
   [inngest-redis-luks-loopback.test.sh]="LUKS loopback blkid apparatus needs root (#7695)"
   [workspaces-luks-loopback.test.sh]="cryptsetup loopback needs root (#6588)"
+  [sandbox-masked-proc-docker.test.sh]="apparmor_parser + sysctl + docker daemon need root (#10032)"
 )
 PRIV_SUITES=()
 SUITES=()
@@ -1064,7 +1065,7 @@ dump_one() {
 UNACCOUNTED=()
 if (( PASS + RED != ${#SUITES[@]} )); then
   mapfile -t UNACCOUNTED < <(
-    comm -13 \
+    LC_ALL=C comm -13 \
       <(sed -nE 's/^(PASS|RED) +//p' "$LOG" | LC_ALL=C sort -u) \
       <(printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u)
   )

@@ -114,10 +114,18 @@ export function getNavLastLocation(): string {
   return lastLocation;
 }
 
-/** Called by the island's commit watcher on every pathname/searchParams change. */
-export function noteNavLocation(): void {
+/**
+ * Called by the island's commit watcher on every pathname/searchParams change.
+ * Returns true iff the current pathname+search differs from the previously
+ * noted one (the watcher's first run uses it to tell "a commit landed before I
+ * mounted" from "nothing has committed yet").
+ */
+export function noteNavLocation(): boolean {
   const key = currentLocationKey();
-  if (key) lastLocation = key;
+  if (!key) return false;
+  const moved = key !== lastLocation;
+  lastLocation = key;
+  return moved;
 }
 
 function forceStopStalledEpisode(): void {

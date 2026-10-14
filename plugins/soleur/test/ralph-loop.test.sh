@@ -4,6 +4,9 @@
 # Run: bash plugins/soleur/test/ralph-loop.test.sh
 
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # jq is required by stop-hook.sh (tested here). Skip gracefully if missing.
 if ! command -v jq &>/dev/null; then
@@ -42,7 +45,7 @@ SUBSTANTIVE_RESPONSE="I have completed the refactoring of the authentication mod
 
 setup_test() {
   local test_dir
-  test_dir=$(mktemp -d)
+  test_dir=$(mktemp -d -p "$SUITE_TMP")
   assert_fixture_dir "$test_dir"
   git -C "$test_dir" init -q
   mkdir -p "$test_dir/.claude"
@@ -914,7 +917,7 @@ cleanup_test "$TEST_DIR"
 echo ""
 
 # === Pipeline Tally Capped Floor Tests (Guard 4, #9403) ===
-# Contract: knowledge-base/project/specs/feat-one-shot-9403-cost-tally/
+# Contract: knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9403-cost-tally/
 # interface-contract.md §stop-hook.sh — if the branch's counter ledger carries
 # a non-empty `capped=<dim>`, the hook exits 0 WITHOUT emitting {"decision":
 # "block"} and prints SOLEUR_TALLY_CAPPED + a resume hint to stderr.

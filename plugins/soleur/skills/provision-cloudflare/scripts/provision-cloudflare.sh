@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL: the scoped deploy token is read
+# from `terraform output` at runtime, BELOW this point, so a conditional arm would test an
+# empty variable at guard time and then trace the acquisition itself. Stdout, because agent
+# runtimes surface stdout and swallow stderr.
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
 SLUG=""
 CF_ZONE_ID=""
 CF_ACCOUNT_ID=""
@@ -177,8 +188,9 @@ if $DRY_RUN; then
   echo "--- Smoke-test (run after TF apply) ---"
   echo "cd ${PROVISIONING_DIR} && terraform output -raw cf_deploy_token | ("
   echo "  read -r TOKEN"
-  echo "  curl -sS -H \"Authorization: Bearer \$TOKEN\" \\"
-  echo "    https://api.cloudflare.com/client/v4/user/tokens/verify | jq .result.status"
+  echo "  curl --disable --noproxy '*' -sS --config - \\"
+  echo "    https://api.cloudflare.com/client/v4/user/tokens/verify \\"
+  echo "    < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"\$TOKEN\") | jq .result.status"
   echo ")"
   echo ""
   echo "--- Teardown ---"
@@ -219,11 +231,22 @@ read -p "TF apply complete? Type 'yes': " ACK
 echo ""
 echo "--- Smoke-test: verifying scoped token ---"
 
+# Token-shape guard (never echoes the value): the token is written into curl's stdin config
+# below, so a quote or newline in it would inject a config directive. An unusable token
+# makes zero curl calls and aborts the run non-zero, never a green smoke-test.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 VERIFY_RESULT=$(
   cd "$PROVISIONING_DIR" && terraform output -raw cf_deploy_token | (
-    read -r TOKEN
-    curl -sS -H "Authorization: Bearer $TOKEN" \
-      https://api.cloudflare.com/client/v4/user/tokens/verify
+    read -r TOKEN || true
+    if ! _bearer_ok "$TOKEN"; then
+      echo "Error: the deploy token from terraform output is missing or has an unexpected shape; not sent." >&2
+      exit 1
+    fi
+    # The bearer rides curl's stdin config channel, never its argument list.
+    curl --disable --noproxy '*' -sS --config - \
+      https://api.cloudflare.com/client/v4/user/tokens/verify \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN")
   )
 )
 

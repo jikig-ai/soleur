@@ -59,7 +59,7 @@ for id in $ids; do
   # boot trail has been checked for a terminal `::error::...booted DARK`. Absent that,
   # the run is TRANSIENT (needs a human look) rather than a verdict on the host.
   if [ "$concl" != "success" ]; then
-    if gh run view "$id" --log 2>/dev/null | grep -qF 'booted DARK at stage'; then
+    if grep -qF 'booted DARK at stage' < <(gh run view "$id" --log 2>/dev/null); then
       echo "FAIL: ${JOB_NAME} run ${id} concluded '${concl}' AND the boot trail names a dark boot."
       echo "      gh run view ${id} --log | grep 'booted DARK'"
       exit 1

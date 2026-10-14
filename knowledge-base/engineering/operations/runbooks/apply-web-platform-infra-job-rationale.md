@@ -356,6 +356,66 @@ A GREEN APPLY IS NOT A GREEN BOOT. `runcmd` is once-per-instance: a host that ab
 at stage=verify is not repairable by a reboot, only by replacement. That asymmetry is
 why the coherence preflight is mandatory and PRE-apply, and why R2 exists at all.
 
+### Escrow readiness preflight (web_host_create, web_host_replace) and the workspaces passphrase HALT (apply), #9377
+
+Relocated here from the workflow (ADR-231: the workflow file is near its byte gate, so rationale lives in this file and
+the logic lives in committed scripts).
+A third consumer runs the same script outside a birth: the dispatch-only, read-only diagnostic `web-host-escrow-diagnose.yml` (ADR-241 D2 note, 2026-10-04), so an agent can ask whether escrow is ready before it dispatches one. It is not a host-creating job, so the census below does not apply to it.
+
+**The preflight step.** Both birth routes run one step, `bash scripts/web-host-escrow-preflight.sh`, after the ADR-128 R1
+backend-credentials step and before `Terraform init` (the R1 step is deliberately the first reader of Doppler, so the
+preflight follows it rather than preceding it). It runs `scripts/check-web-host-escrow-config.sh --live` and fails closed:
+exit 1 (a required name is missing), 2 (usage or no credential) and 3 (Doppler unreadable) all fail the step, and none is
+read as absence. It has no `if:`, no `continue-on-error` and no `|| true`, and `timeout-minutes: 2`. The checker reads
+names only, so it proves the web-class config carries the key, bucket, endpoint and R2 pair names; it cannot prove the
+values are right. A present but wrong R2 pair passes it and surfaces later as a paged `escrow=missing` from the
+provisioner (its `reason=` is decoded in `web-host-replace.md`; that page shares the paging rule's 35-minute throttle, which is
+fleet-wide and spans boots because all boot events share one Sentry issue group, so the stage is also read directly after a birth). The cause map (which missing name means the push-apply has not run, which means the live R2 mint is still
+pending) lives in the checker's own output, not here.
+
+**Why a wrapper.** `--live` needs a token that can list both configs: a workplace-scope token (`TF_VAR_doppler_token_tf`,
+exported masked by the Tier-B loader, or the `prd_terraform` secret `DOPPLER_TOKEN_TF` in the legacy arm); the step's own
+config-scoped token exits 3. The wrapper prefers the environment value, otherwise reads exactly one named secret (never
+`doppler run`, which would hand the checker every `prd_terraform` secret), refuses xtrace first, shape-checks a fallback
+value before masking it, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. One reusable script keeps the
+single-use web-2 rebirth workflow (#9372) to one added line, and `web-host-escrow-preflight-census.test.ts` makes any
+job that runs `terraform apply` with a `-target` or `-replace` of `hcloud_server.web[` carry it. The step runs after the
+reviewer approval of the dispatch environment, so a refused birth spends one approval; moving it to a preceding ungated
+job is recorded as a taste call in the #9377 decision challenges. The provider token is write-capable; a read-only
+preflight token is a tracked deferral (<https://github.com/jikig-ai/soleur/issues/9461>). *(2026-10-12 (#9372): the single-use rebirth workflow named above is deleted; the census still applies to every remaining job that runs `terraform apply` with a `-target` or `-replace` of `hcloud_server.web[`.)*
+
+**The widened HALT in `apply`.** `luks_passphrase_rotations` (the jq counter in
+`tests/scripts/lib/destroy-guard-filter-web-platform.jq`) now covers six addresses: the inngest pair and, for the
+workspaces store, `random_password.workspaces_luks`, `doppler_secret.workspaces_luks_key`,
+`random_password.workspaces_luks_web` and `doppler_secret.workspaces_luks_web_key`. The HALT sits before the
+`destroy_count` sum and outside it, so `[ack-destroy]` cannot reach it: a replace of a password also trips
+`resource_deletes`, and acking an unrelated delete in the same merge would otherwise ack the rotation with it. A first
+`create` stays legal (the web-class pair had never been applied when this gate was written, so the swap to a distinct password was a first create; it was applied on 2026-10-04, so a later change is not);
+`update`, `delete`, `forget` and an unreadable verb list stop the apply. The remediation text names the supported rotation
+(a header re-key, then an intentional state change under review, never a replace) and the recovery from a tainted first
+create. After the swap web-1's password leaves the push-apply graph; its addresses stay in the list as defense in depth.
+`[skip-web-platform-apply]` is the only bypass and skips the apply entirely.
+
+> **Superseded 2026-10-06 (#9372), in part, from the merge of the retirement change:** the sentence "A first `create` stays
+> legal" is no longer true for the web-class passphrase (`random_password.workspaces_luks_web`). The HALT now counts a
+> `create` of it and refuses it, with no acknowledgement path. A first `create` stays legal at the other five addresses,
+> the web-class key copy (`doppler_secret.workspaces_luks_web_key`) included: a create of the copy alone restores the same
+> state-held value, and a missing copy is itself an incident. The single-use escrow-create workflow is retired, and there
+> is no documented or verified automated recovery for a lost passphrase entry: importing the existing value is not a
+> supported route (measured in a sandbox with the lock-pinned random provider, the import plans `special = true -> false`,
+> a forced replacement that `prevent_destroy` refuses and that, forced, would mint a new passphrase). The live value is
+> unharmed while its Doppler copy exists; merge with the kill-switch line and escalate to the owner, who decides the repair
+> (the state backend has no versioning, ADR-006). Whether an import plus a state-attribute fix yields a clean plan is
+> unmeasured and tracked on #9572. The text above is kept as the dated record.
+>
+> **Superseded 2026-10-10 (#9879), in part:** "the other five addresses" above is now "the other four". The HALT also counts
+> a `create` of `random_password.inngest_redis_luks` (the inngest recut route that made a first create legal is retired,
+> #8285), alone or together with its Doppler copy, so a first `create` stays legal only at `doppler_secret.inngest_redis_luks_key`,
+> `doppler_secret.workspaces_luks_web_key`, `random_password.workspaces_luks` and `doppler_secret.workspaces_luks_key`. A
+> create of the inngest Doppler copy alone still restores the same state-held value. While state has lost the passphrase
+> entry, every merge's per-merge apply halts until the owner repairs state (see ADR-282 and the runbook
+> `inngest-luks-cutover-6894.md` section 5c). The text above is kept as the dated record.
+
 ## registry_luks_recut
 
 See also: knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md
@@ -411,55 +471,19 @@ dispatches issued during an outage: worst-case wait for an emergency dispatch st
 routine merge apply moves from 16 min to 47 min, and this group covers `ci_ssh_token_replace`
 — described in this same file as "the ONE arm that can run while the SSH bridge is dead".
 
-## inngest_volume_recut
+### Retired job: `inngest_backstop_retire` (formerly `inngest_volume_recut`)
 
-─── inngest Redis AOF volume recut: plaintext ext4 -> LUKS (#7695) ────────────
-Selected by `-f apply_target=inngest-volume-recut`. A scoped
-`terraform -replace=hcloud_volume.inngest_redis` (+ its attachment) that DESTROYS the plaintext
-ext4 AOF volume (soleur-inngest-redis-store) and creates a RAW replacement with the same name,
-which cloud-init-inngest.yml's five-arm blkid discriminator then luksFormats on the next boot.
+The dispatch-only job that retired the plaintext Inngest Redis AOF backstop volume (`apply_target=inngest-backstop-retire`,
+four reviewer-approved phases: detach, wipe, teardown, destroy; dispatched three times) ran to completion on 2026-10-09 (detach run 37950928039,
+wipe run 37955244979, destroy run 37958051426) and was deleted by #8285 PR B together with its gate library, its
+throwaway wipe host and its five dispatch inputs. Hetzner answered `GET /v1/volumes/106261946 -> 404` at 2026-10-09T16:21:26Z.
+Its predecessor `inngest_volume_recut` (#7695, `apply_target=inngest-volume-recut`) was replaced earlier by the 2026-09-20
+additive LUKS cutover (ADR-142). What the job proved and in what order is recorded in
+`knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md` and ADR-142's 2026-10-09 addendum; the code is in
+git history at commit d7dee46bb0 (PR #9784). The LUKS volume is now the only copy of the Inngest queue and run state.
 
-THIS IS THE ONE DISPATCH THAT DESTROYS PRODUCTION SCHEDULER STATE, and it is the only apply_target
-in this file that must PROVE something about the WORLD before it plans. Five layers, and the
-first is the only authorization:
-
-  1. `environment: inngest-cutover` — required-reviewer gate. The SOLE human authorization
-     (DP-11 F8); the reviewer set is terraform-backed at inngest-arm-write-token.tf and is
-     asserted non-empty by its own check. The whole job waits before ANY step runs.
-  2. `confirm=RECUT-INNGEST-VOLUME` — a TYPO-GUARD, not authorization. Distinct from every other
-     confirm literal in this file, so a token typed for one target cannot authorize another.
-  3. `expected_inngest_volume_id` — the operator names the physical volume. Pinned twice, against
-     two independent sources: the LIVE Hetzner attachment (Guard 2 / G17) and the PLAN's
-     `.change.before.id` (Guard 1). They can disagree — a plan is a projection of state, and
-     state can be wrong about the world — and it is the world that gets destroyed.
-  4. Guard 1 (tests/scripts/lib/inngest-volume-recut-gate.sh) — the plan destroy-guard.
-  5. Guard 2 (tests/scripts/lib/inngest-host-dark-gate.sh) — the layer absent from the workspaces
-     template: twenty predicates proving, from ONE probe row on the CURRENT boot plus four
-     synchronous dispatch-time re-reads, that the host is dark and the store is measured empty.
-     It runs BEFORE the plan, so a serving host costs nothing and reaches no terraform.
-
-NO [ack-destroy] BYPASS, NEVER AUTO-EXECUTED, NEVER CHAINED. This job dispatches nothing and is
-dispatched by nothing: it is reachable only from the menu (hr-menu-option-ack-not-prod-write-auth).
-
-⚠️ CONCURRENCY — THE GROUP IS `deploy-inngest-restart`, NOT A NEW `inngest-cutover` LITERAL, AND
-THE DEVIATION FROM THE PLAN'S AC B9 IS DELIBERATE. The property B9 is about is stated in the
-plan's own words: "a mutex on one side of a race is not a mutex". The race is an
-`op=arm` landing between Guard 2's read and this job's apply — the flip flag goes to `armed`, the
-on-host 30s timer fires `run_preflush_flip`, and terraform destroys the volume mid-`FLUSHALL`.
-`cutover-inngest.yml` ALREADY serializes on `deploy-inngest-restart`, and so do
-`deploy-inngest-image.yml` and `restart-inngest-server.yml` — three surfaces that all restart or
-re-provision inngest-server. A job may declare only ONE concurrency group, so minting
-`inngest-cutover` and putting it on the cutover job would have REMOVED that job from the group it
-shares with the deploy pipeline: the deploy could then restart inngest-server mid-cutover, which
-is a strictly worse race than the one B9 set out to close. Joining the existing literal covers
-SIX surfaces instead of four and orphans none. The plan is authoritative for the intent (one
-shared mutex across every surface that can touch this Redis), never for the literal.
-tests/scripts/test-inngest-volume-recut-gate.sh asserts the PROPERTY — that all four surfaces
-carry one identical group — rather than the string, so the guard survives a future rename.
-
-Zero downtime is NOT claimed and must not be: the volume being destroyed is the inngest
-scheduler's own store, and Guard 2 refuses unless the host is already dark. There is nothing to
-take down because nothing is serving.
+Heading level is deliberate: a `## <id>` heading here must be matched by a `# Rationale: ... §<id>` pointer in a workflow
+(`workflow-file-size.test.ts` enforces both directions), and no workflow carries one for this job any more.
 
 ## apply/Measure the apex origin (ADR-194 Hypothesis Z)
 
@@ -629,9 +653,17 @@ always distinct -- a token typed for a birth cannot authorize a destroy.
 
 **What actually gates each target.**
 
-- `web-host-create`, `web-host-replace`, `git-data-host-create`, `workspaces-luks-recut`
-  and `inngest-volume-recut` carry an `environment:` with a REVIEWER. The reviewer click
-  is the human authorization on those paths.
+- `web-host-create`, `web-host-replace`, `git-data-host-create` and `workspaces-luks-recut`
+  carry an `environment:` with a REVIEWER (`inngest-backstop-retire`, converted from `inngest-volume-recut` by #8285,
+  did too until #8285 PR B deleted it). The reviewer click is the human authorization on those paths.
+  *(Note, 2026-10-01, #6604 PR B #9348: on that PR's merge the `workspaces-luks-recut` job is
+  hard-retired -- its first step exits 1 before any credential is loaded -- and Terraform
+  declares `prevent_destroy = true` on `hcloud_volume.workspaces_luks` and on
+  `hcloud_volume_attachment.workspaces_luks`. As a second barrier, the recut's
+  `-replace='hcloud_volume.workspaces_luks'` would plan-fail with `Instance cannot be destroyed`
+  for the live volume, which holds the only copy of every workspace once the wipe dispatch D has
+  concluded with `delete_issued=true`. That failure is the guard, not a defect. A recut now
+  requires a new reviewed PR; re-scoping the target is #6931's topology work.)*
 - Since #8209 / ADR-241 D2 every OTHER target carries `environment: infra-privileged`.
   That environment has no reviewer -- it serves unattended jobs -- but its
   deployment-branch policy admits `main` only, so a dispatch from any other ref is refused
@@ -702,7 +734,10 @@ Three consumers read this name and all three carry the refusal: `apply-github-in
 and auto-mint composite, `.github/actions/mint-soleur-ai-app-token/action.yml`, renamed to
 `.github/actions/mint-infra-app-token/action.yml` in #9262. It left the population: it no longer
 reads `GITHUB_APP_PRIVATE_KEY` (or `prd_terraform` at all), and it mints the Tier-B `soleur-infra`
-identity from the fixed Tier-B project `soleur-infra-privileged`. G4e's floor moved from 4 to 3.
+identity from the fixed Tier-B project `soleur-infra-privileged`. G4e's floor moved from 4 to 3. *(Dated
+2026-10-03, #9321: its source is now the validated `doppler-project` input, default the narrow
+`soleur-infra-app` project; `soleur-infra-privileged` is read only by a caller that names it, which is
+`apply-github-infra.yml`. G4e is unaffected: the composite never read `GITHUB_APP_PRIVATE_KEY`.)*
 
 *Updated 2026-10-01 (#9360):* one consumer remains, `board-status-sync.yml`'s legacy arm.
 `apply-github-infra.yml` now mints its verify token from the Tier-B soleur-infra App through
@@ -887,7 +922,7 @@ workflow-injection guidance. All action references are SHA-pinned.
     mutex already runs a 90-minute apply. Priced honestly: the worst case for an emergency
     dispatch issued while a merge apply is in flight is now a 47-minute wait.
 
-## inngest_volume_recut/registry-host scoped -replace
+## registry-host scoped -replace
 
   Selected by `-f apply_target=registry-host-replace`. zot-registry.tf resources are
   OPERATOR_APPLIED_EXCLUSIONS (CTO ruling 2026-07-06) — deliberately NOT in the per-PR
@@ -969,6 +1004,18 @@ workflow-injection guidance. All action references are SHA-pinned.
   fails CLOSED instead of serving every worktree rolled back to 2026-07-23; the LUKS volume
   still sits attached and unopened, which is why the refusal stands. See
   tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
+
+  Superseded 2026-10-08 (#6604 step 7), as to "DECISIVELY ... rolled back to
+  2026-07-23": this note holds only after the wipe dispatch D concludes with
+  delete_issued=true, which zeroes web-1's plaintext volume (105149570) with a read-back
+  `readback=zero` over 21474836480 bytes and deletes it 2026-10-08T15:42:04Z (destruction record:
+  knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md). On the merge of
+  PR #9348 hcloud_volume.workspaces ranges over every web host except web-1 and web-1's
+  workspaces_volume_id is the literal "retired-6604", so a rebuilt web-1 would emit
+  `workspaces_mount fatal` and keep booting on an empty, writable root-disk /mnt/data (fails
+  loud, not closed) rather than serve a rolled-back copy. The refusal STANDS on the other
+  grounds above, and hcloud_volume.workspaces_luks (106443278) is then the sole copy of every
+  workspace.
 
   A REPLACE DESTROYS BEFORE IT CREATES, so the stock preflight is mandatory here rather
   than advisory: Hetzner's entire cx and cax lines were orderable in 0 of 3 EU DCs on

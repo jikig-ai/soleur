@@ -101,6 +101,7 @@ LANE_MEMBERS=(
 # Conditional-tier trigger inputs: when any of these moved on EITHER side of the
 # merge delta, the kb-consumers ratchet can newly fail and its member runs.
 KB_CONSUMERS_INPUTS=(
+  "knowledge-base/"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-affected-kb-consumers.test.sh"

@@ -195,6 +195,23 @@ describe("scrubSentryEvent — inbound-email attachment metadata (S1)", () => {
   });
 });
 
+describe("scrubSentryEvent — inbound-email routing recipients (ADR-269)", () => {
+  test("`recipients` in Inngest event_data is redacted (co-addressees are third-party PII)", () => {
+    const event = {
+      extra: {
+        event_data: {
+          recipients: ["cro@inbound.soleur.ai", "jane.doe@example.org"],
+        },
+      },
+    };
+    const result = scrubSentryEvent(event) as {
+      extra: { event_data: Record<string, unknown> };
+    };
+    expect(result.extra.event_data.recipients).toBe("[Redacted]");
+    expect(JSON.stringify(result)).not.toContain("jane.doe");
+  });
+});
+
 describe("scrubSentryEvent — request URL/query sanitization (#8984 tx envelopes)", () => {
   test("transaction request.url loses query + hash; query_string key dropped", () => {
     // OAuth `?code=` and implicit-flow `#access_token=` ride request.url;

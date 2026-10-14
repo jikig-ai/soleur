@@ -8,7 +8,7 @@ related: [5756, 5733, 4520]
 related_plans:
   - knowledge-base/project/plans/2026-06-30-feat-multi-owner-ownership-rpcs-reconcile-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-one-shot-5756-multi-owner-ownership-rpcs/tasks.md
+  - knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-5756-multi-owner-ownership-rpcs/tasks.md
 brand_survival_threshold: single-user incident
 ---
 

@@ -145,16 +145,16 @@ while IFS= read -r line; do
   # Require the journald SYSLOG_IDENTIFIER to be ci-deploy, the same isolation
   # ghcr-read-retired-8036.sh applies for the same reason.
   # See knowledge-base/project/learnings/2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md
-  printf '%s' "$line" | grep -qE '"?SYSLOG_IDENTIFIER\\?"?[^A-Za-z0-9_]{1,8}ci-deploy' || continue
+  grep -qE '"?SYSLOG_IDENTIFIER\\?"?[^A-Za-z0-9_]{1,8}ci-deploy' <<<"$line" || continue
 
   is_ok=0 is_erofs=0
   # OK: an authenticated login. Anchor on the outcome phrase, not a bare "ok".
-  if printf '%s' "$line" | grep -qE 'ZOT_GATE: active .* docker login .* ok'; then
+  if grep -qE 'ZOT_GATE: active .* docker login .* ok' <<<"$line"; then
     is_ok=1
   fi
   # EROFS/cred_store FAILURE: a FAILED login line still carrying the repair-target signature.
-  if printf '%s' "$line" | grep -qE '(ZOT_GATE|PRELUDE): docker login .* FAILED' \
-     && printf '%s' "$line" | grep -qE 'class=cred_store|kw=[a-z,]*erofs'; then
+  if grep -qE '(ZOT_GATE|PRELUDE): docker login .* FAILED' <<<"$line" \
+     && grep -qE 'class=cred_store|kw=[a-z,]*erofs' <<<"$line"; then
     is_erofs=1
     # Record the actual kw= so the FAIL message names the real fault (erofs vs a mkdir-failed
     # enoent) instead of hard-coding "erofs".

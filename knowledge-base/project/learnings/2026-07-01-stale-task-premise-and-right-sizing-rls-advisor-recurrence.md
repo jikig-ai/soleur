@@ -6,8 +6,8 @@ module: inngest-rls / one-shot
 tags: [supabase, rls, advisor, inngest, one-shot, requires_cpo_signoff, right-sizing, deepen-plan]
 related:
   - knowledge-base/engineering/architecture/decisions/ADR-030-inngest-as-durable-trigger-layer.md
-  - knowledge-base/project/plans/2026-06-30-security-durable-rls-inngest-event-trigger-plan.md
-  - knowledge-base/project/plans/2026-06-29-security-inngest-prd-enable-rls-lockdown-plan.md
+  - knowledge-base/project/plans/archive/20261013-041741-2026-06-30-security-durable-rls-inngest-event-trigger-plan.md
+  - knowledge-base/project/plans/archive/20261013-032858-2026-06-29-security-inngest-prd-enable-rls-lockdown-plan.md
 pr: 5807
 issue: 5813
 ---

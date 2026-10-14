@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2329,SC2015,SC2016  # row/mutation functions are dispatched indirectly; A && B || why is the assertion idiom; jq programs are single-quoted on purpose
 # Suite for plugins/soleur/scripts/check-red-on-main.sh (#9402) -- Guard 1 of the plan's Guard
-# Contract (knowledge-base/project/plans/2026-10-01-chore-quarantine-red-main-checks-plan.md).
+# Contract (knowledge-base/project/plans/archive/20261013-062704-2026-10-01-chore-quarantine-red-main-checks-plan.md).
 #
 # ── THE SEAM ─────────────────────────────────────────────────────────────────────────────────
 # `gh` is a PATH stub that answers ONLY the requests the SUT is expected to make, keyed on the
@@ -232,7 +232,7 @@ run() { # <dir> <sut-args...> ; RUN_PATH overrides PATH
 why() { echo "      why: $*" >&2; return 1; }
 rc_is()   { [[ "$(cat "$1/rc")" == "$2" ]] || why "rc=$(cat "$1/rc"), want $2; out: $(tail -3 "$1/out" | tr '\n' '|') err: $(tail -2 "$1/err" | tr '\n' '|')"; }
 outis()   { [[ "$(cat "$1/out")" == "$2" ]] || why "stdout is not exactly: $2 -- got: $(cat "$1/out")"; }
-verdict() { tail -1 "$1/out" | grep -q "^SOLEUR_RED_ON_MAIN verdict=$2 " || why "last line is not verdict=$2: $(tail -1 "$1/out")"; }
+verdict() { tail -1 "$1/out" | grep -c >/dev/null "^SOLEUR_RED_ON_MAIN verdict=$2 " || why "last line is not verdict=$2: $(tail -1 "$1/out")"; }
 onemarker() { [[ "$(grep -c '^SOLEUR_RED_ON_MAIN ' "$1/out")" == 1 ]] || why "want exactly 1 marker line, got: $(cat "$1/out")"; }
 nomiss()  { ! grep -q '^STUB-MISS' "$1/log" || why "stub refused: $(grep '^STUB-MISS' "$1/log" | head -1)"; }
 logs()    { grep -Fq -- "$2" "$1/log" || why "stub log lacks request: $2"; }

@@ -62,6 +62,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-machinery-drain",
   "cron-main-health-monitor",
   "cron-membership-health",
+  "cron-merge-queue-stall-dispatch",
   "cron-nag-4216-readiness",
   "cron-oauth-probe",
   "cron-plausible-goals",

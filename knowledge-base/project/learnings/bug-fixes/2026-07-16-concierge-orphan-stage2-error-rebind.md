@@ -10,7 +10,7 @@ tags:
   - hard-cap
   - harness-reliability
 related:
-  - knowledge-base/project/plans/2026-07-16-fix-concierge-agent-stop-mid-run-plan.md
+  - knowledge-base/project/plans/archive/20261013-041741-2026-07-16-fix-concierge-agent-stop-mid-run-plan.md
   - knowledge-base/project/learnings/best-practices/2026-06-12-idle-watchdog-reset-on-sdk-heartbeat-and-upstream-fix-exposes-downstream-timeout.md
   - knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md
 ---

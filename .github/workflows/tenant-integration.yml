@@ -103,7 +103,7 @@ jobs:
             # ambiguity fails open to true. workflow_dispatch stays tenant=true
             # because the manual event has no PR merge to prove against.
             if [[ "$EVENT_NAME" == "push" ]] && \
-               bash scripts/main-push-duplicate-skip.sh tenant-integration.yml "${MERGE_SHA}" tenant-integration | grep -qx 'duplicate=true'; then
+               bash scripts/main-push-duplicate-skip.sh tenant-integration.yml "${MERGE_SHA}" tenant-integration | grep -cx 'duplicate=true' >/dev/null; then
               echo "::notice::push run is a proven duplicate of the merged PR's green run; suite skipped"
               printf 'tenant=false\n' >> "$GITHUB_OUTPUT"
             else
@@ -132,7 +132,7 @@ jobs:
           # PRs, defeating the rate-budget purpose that is the reason for #5585.
           # Route-level isolation relies on the anchored lib/supabase/ clients +
           # DB RLS policies (migrations, anchored). See ADR-032 amendment.
-          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$|scripts/dev-suite-mutex\.sh$|\.github/actions/dev-migration-drift-probe/|apps/web-platform/scripts/lint-migration-immutability|apps/web-platform/scripts/dev-ledger-parity)'; then
+          if printf '%s\n' "$CHANGED" | grep -cE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$|scripts/assert-dev-doppler-scope\.sh$|scripts/dev-suite-mutex\.sh$|\.github/actions/dev-migration-drift-probe/|apps/web-platform/scripts/lint-migration-immutability|apps/web-platform/scripts/dev-ledger-parity)' >/dev/null; then
             printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -419,48 +419,17 @@ jobs:
             exit 1
           fi
 
+      # The env=dev + DC-1 (SUPABASE_ACCESS_TOKEN-absence) assertions live in
+      # scripts/assert-dev-doppler-scope.sh — the ONE copy, shared with
+      # scheduled-integration-suites.yml and dev-ledger-reconcile.yml, so a
+      # hardening edit cannot drift between the three dev-scoped consumers
+      # (#9947 review). The pull_request hazard it guards is unchanged:
+      # PR-authored SQL/shell must never reach prd through a Management-API
+      # token (#8028).
       - name: Assert Doppler config resolves to environment=dev
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
-        run: |
-          set -uo pipefail
-          env_name=$(doppler configs get dev_scheduled -p soleur --json 2>/dev/null \
-            | jq -r '.environment // empty') || env_name=""
-          if [[ -z "$env_name" ]]; then
-            echo "::error::doppler configs get dev_scheduled -p soleur returned empty. Config does not exist or token lacks read access."
-            exit 1
-          fi
-          if [[ "$env_name" != "dev" ]]; then
-            # Strip CR/LF + ASCII control bytes via tr, then multi-byte
-            # UTF-8 separators (U+2028, U+2029, U+200B, U+FEFF) via sed —
-            # bash `tr` is byte-oriented and cannot match multi-byte
-            # sequences. Mirrors scheduled-realtime-probe.yml's
-            # strip_log_injection function (tr + sed two-stage).
-            env_safe=$(printf '%s' "$env_name" | LC_ALL=C tr -d '\000-\037\177' \
-              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g')
-            echo "::error::dev_scheduled config resolves to environment=${env_safe} (expected: dev). Token rotated to wrong scope; reset before running tenant-integration."
-            exit 1
-          fi
-          echo "Doppler config dev_scheduled -> environment=dev (verified)."
-          # DC-1 (#8028): a pull_request job must never hold the account-scoped
-          # Supabase Management-API token — PR-authored SQL/shell would then be
-          # able to run arbitrary queries against prd through the reload hook.
-          # The hook soaks the token's ABSENCE as a ::notice::; this is the
-          # only mechanical guard that the absence still holds. Names only;
-          # the value is never read.
-          # Capture first, then test: on a doppler error the pipe form hands jq
-          # empty input, `jq -e` exits 4, the `if` is false and the step would
-          # print "(verified)" having verified nothing (advisor consult, #8137).
-          names_json=$(doppler secrets --only-names --json -p soleur -c dev_scheduled 2>/dev/null) || names_json=""
-          if [[ -z "$names_json" ]]; then
-            echo "::error::doppler secrets --only-names -p soleur -c dev_scheduled returned empty. Cannot verify the token's absence; failing closed."
-            exit 1
-          fi
-          if printf '%s' "$names_json" | jq -e 'has("SUPABASE_ACCESS_TOKEN")' >/dev/null; then
-            echo "::error::SUPABASE_ACCESS_TOKEN is present in Doppler dev_scheduled — a pull_request job must not hold a Management-API token (#8028 DC-1). Remove it; dev CI keeps the reload hook's absence-soak by design."
-            exit 1
-          fi
-          echo "Doppler config dev_scheduled carries no SUPABASE_ACCESS_TOKEN (verified)."
+        run: bash scripts/assert-dev-doppler-scope.sh
 
       # Cross-ref advisory mutex on the shared dev-Supabase project (#7964).
       # The per-ref concurrency group above serializes a ref against itself
@@ -588,7 +557,7 @@ jobs:
           guard_out=$(doppler run -p soleur -c dev_scheduled -- \
             bash "$GUARD_COPY" check --base "origin/$base_ref" --repo "$GITHUB_WORKSPACE" --head-branch "$HEAD_BRANCH") || guard_rc=$?
           printf '%s\n' "$guard_out"
-          if ! printf '%s\n' "$guard_out" | grep -qE '^ledger-parity: (clean|RED) \('; then
+          if ! printf '%s\n' "$guard_out" | grep -cE '^ledger-parity: (clean|RED) \(' >/dev/null; then
             echo "::error::the dev-ledger-parity guard printed no ledger-parity summary line (rc=$guard_rc) — it did not complete a measurement"
             exit 1
           fi
@@ -645,8 +614,12 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
         run: |
           set -uo pipefail
+          # $GITHUB_WORKSPACE, not a relative path: plugins/ is repo-root-only
+          # and this step runs from apps/web-platform — a relative
+          # `plugins/...` can never resolve and silently hit the `||` arm on
+          # every run (#9947 review).
           doppler run -p soleur -c dev_scheduled -- \
-            bun plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed \
+            bun "$GITHUB_WORKSPACE/plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts" seed \
             || echo "::warning::bot-fixture.ts seed failed — migrations will degrade gracefully"
 
       - name: Apply migrations to dev

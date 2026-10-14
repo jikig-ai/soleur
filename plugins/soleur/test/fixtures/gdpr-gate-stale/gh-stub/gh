@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # gh stub for the gdpr-gate-self-test workflow (issue #3536).
 #
-# Provides a deterministic `gh run list` response so Case B of the
+# Provides a deterministic `gh pr list` response so Case B of the
 # self-test can assert that the operator-attested-mode banner is
 # SUPPRESSED when the cron-run binding has a parseable timestamp.
 # Any other gh invocation exits 1 so the stub cannot accidentally mask
 # unrelated gh usage in the test harness.
+#
+# `pr list` replaced `run list` when the binding moved off the deleted
+# GHA workflow query (#7255): the attestation PR's creation date is the
+# liveness signal now.
 
-if [[ "$1 $2" == "run list" ]]; then
+if [[ "$1 $2" == "pr list" ]]; then
   printf '2026-02-01T00:00:00Z\n'
   exit 0
 fi

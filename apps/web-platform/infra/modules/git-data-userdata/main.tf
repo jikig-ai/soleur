@@ -112,6 +112,12 @@ locals {
     git_data_luks_reopen_service         = replace(file("${path.module}/../../git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
     git_data_luks_reopen_failure_service = replace(file("${path.module}/../../git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
     git_data_luks_reopen_timer           = replace(file("${path.module}/../../git-data-luks-reopen.timer"), local.git_data_rationale_strip, "")
+    # (#9438) The host-originated liveness feeder: script + unit + timer. Same strip, same
+    # one-line shape; the URL it pings is NOT here (it is read at runtime from the scoped
+    # Doppler config), so the rung-2 rehearsal render carries no production monitor.
+    git_data_liveness         = replace(file("${path.module}/../../git-data-liveness.sh"), local.git_data_rationale_strip, "")
+    git_data_liveness_service = replace(file("${path.module}/../../git-data-liveness.service"), local.git_data_rationale_strip, "")
+    git_data_liveness_timer   = replace(file("${path.module}/../../git-data-liveness.timer"), local.git_data_rationale_strip, "")
     # trimspace()'d by the CALLER — see local.git_transport_pubkey in git-data.tf.
     git_transport_pubkey = var.git_transport_pubkey
     git_provision_pubkey = var.git_provision_pubkey

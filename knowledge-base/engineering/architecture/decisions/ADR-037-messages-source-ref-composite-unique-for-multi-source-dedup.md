@@ -5,7 +5,7 @@ date: 2026-05-19
 related: [3244, 4066]
 related_adrs: [ADR-034]
 related_plans:
-  - knowledge-base/project/plans/2026-05-19-feat-daily-priorities-multi-source-pr-h-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-daily-priorities-multi-source-pr-h-plan.md
 brand_survival_threshold: single-user incident
 ---
 

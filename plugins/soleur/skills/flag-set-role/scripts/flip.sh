@@ -202,9 +202,16 @@ command -v python3 >/dev/null || { echo "missing: python3" >&2; exit 2; }
 TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain 2>/dev/null || true)
 [[ -z "$TOKEN" ]] && { echo "FLAGSMITH_MANAGEMENT_API_KEY not in Doppler soleur/cli_ops" >&2; exit 2; }
 
+# Token-shape guard: a newline in the key would inject a curl config directive on the stdin
+# channel below. Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_bearer_ok "$TOKEN" || { echo "FLAGSMITH_MANAGEMENT_API_KEY has an unexpected shape" >&2; exit 2; }
+
 # --- helpers ----------------------------------------------------------------
+# The Flagsmith management key travels on curl's stdin config channel, never on argv.
 fs_api() {
-  curl --disable --noproxy '*' -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "Content-Type: application/json" "$@" --config - \
+    < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN")
 }
 
 resolve_feature_id() {
@@ -241,6 +248,7 @@ sys.exit(3)
 # Uses numeric env_id (the /features/feature-segments/ endpoint accepts int).
 read_feature_segment_id() {
   local env_id="$1" feature_id="$2" segment_id="$3"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
   fs_api "${FLAGSMITH_API}/features/feature-segments/?environment=${env_id}&feature=${feature_id}" \
     | python3 -c "
 import json, sys
@@ -255,6 +263,7 @@ print('')
 # Get the live (published, is_live) version uuid for (env, feature).
 get_live_version_uuid() {
   local env_id="$1" feature_id="$2"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
   fs_api "${FLAGSMITH_API}/environments/${env_id}/features/${feature_id}/versions/" \
     | python3 -c "
 import json, sys
@@ -271,6 +280,7 @@ sys.exit(3)
 # segment overrides in one call.
 read_segment_state() {
   local env_id="$1" feature_id="$2" segment_id="$3"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "missing"; return; }
   local live_uuid
   live_uuid=$(get_live_version_uuid "$env_id" "$feature_id") || { echo "missing"; return; }
   fs_api "${FLAGSMITH_API}/environments/${env_id}/features/${feature_id}/versions/${live_uuid}/featurestates/" \
@@ -293,6 +303,7 @@ print('missing')
 # whether a feature_segment row already exists.
 flip_segment_in_env() {
   local env_id="$1" feature_id="$2" segment_id="$3" enabled="$4"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
 
   local existing_fs_id
   existing_fs_id=$(read_feature_segment_id "$env_id" "$feature_id" "$segment_id")
@@ -381,7 +392,9 @@ print(json.dumps({
   'project': ${FLAGSMITH_PROJECT_ID},
   'rules': [{'type':'ALL','rules':[{'type':'ANY','rules':[],'conditions':[]}],'conditions':[]}],
 }))")
-    resp=$(echo "$body" | fs_api -X POST "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/" -d @-) \
+    # The body rides argv (-d "$body"), NOT stdin: stdin is curl's config channel (fs_api feeds the
+    # Api-Key header there), so a `-d @-` body would be read as config. A segment definition is not a credential.
+    resp=$(fs_api -X POST "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/" -d "$body") \
       || { echo "failed to create segment $seg_name" >&2; return 3; }
     seg_id=$(echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id",""))') \
       || { echo "segment create response not JSON: $resp" >&2; return 3; }
@@ -650,7 +663,8 @@ json.dump(seg, sys.stdout)
 ") || { echo "failed to build updated $SEG_NAME JSON (unexpected structure)" >&2; exit 3; }
 
   echo "→ Writing updated $SEG_NAME membership to Flagsmith…"
-  RESP=$(echo "$UPDATED_JSON" | fs_api -X PUT "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/" -d @-) \
+  # Body on argv, not stdin (stdin is curl's config channel); the segment JSON is not a credential.
+  RESP=$(fs_api -X PUT "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/" -d "$UPDATED_JSON") \
     || { echo "PUT segment failed" >&2; exit 3; }
   echo "$RESP" | python3 -c "
 import json, sys

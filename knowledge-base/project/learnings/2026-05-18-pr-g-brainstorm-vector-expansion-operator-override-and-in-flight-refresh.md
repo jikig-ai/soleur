@@ -51,7 +51,7 @@ The PR-G brainstorm (2026-05-18, brainstorm of issue #3947 for the agent-runtime
 
 ## Pattern 3 — In-flight feature refresh is effective compute right-sizing when an adjacent plan carries Domain Review
 
-**Observation.** PR-F merged 2026-05-17 (yesterday); its plan at `knowledge-base/project/plans/2026-05-18-feat-pr-f-inngest-iac-plan.md` carries `## Domain Review` and `## User-Brand Impact` sections. PR-G is the next slice in the same umbrella, with new UX surfaces (scope-grant UI, audit viewer, onboarding explainer). The brainstorm-skill Phase 0.5 step 4 names three options: carry-forward only, focused refresh, full triad spawn.
+**Observation.** PR-F merged 2026-05-17 (yesterday); its plan at `knowledge-base/project/plans/archive/20261013-014038-2026-05-18-feat-pr-f-inngest-iac-plan.md` carries `## Domain Review` and `## User-Brand Impact` sections. PR-G is the next slice in the same umbrella, with new UX surfaces (scope-grant UI, audit viewer, onboarding explainer). The brainstorm-skill Phase 0.5 step 4 names three options: carry-forward only, focused refresh, full triad spawn.
 
 The operator chose **focused refresh**. Outcome: three triad agents returned narrowly-scoped assessments (≤350 words each) in 60–180 seconds, surfacing one new vector (Pattern 1 above), four new legal-doc deltas (CLO), and concrete substrate verification (CTO grepped `apps/web-platform/` for `scope_grants` and confirmed absence). Full triad spawn would have cost ~5-8 min compute and reproduced PR-F's substrate analysis; carry-forward only would have missed the read-path vector that PR-F could not anticipate.
 
@@ -80,10 +80,10 @@ Naming these patterns explicitly in the brainstorm skill turns late-umbrella-sli
 
 # References
 
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-18-pr-g-cohort-onboarding-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-pr-g-cohort-onboarding/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-18-pr-g-cohort-onboarding-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-pr-g-cohort-onboarding/spec.md`
 - Issue: [#3947](https://github.com/jikig-ai/issues/3947)
 - Draft PR: [#3984](https://github.com/jikig-ai/soleur/pull/3984)
 - Predecessor brainstorm (PR-F): `knowledge-base/project/brainstorms/archive/20260517-203729-2026-05-17-pr-f-inngest-trigger-layer-brainstorm.md`
-- Predecessor plan (PR-F): `knowledge-base/project/plans/2026-05-18-feat-pr-f-inngest-iac-plan.md`
-- Umbrella spec: `knowledge-base/project/specs/feat-agent-runtime-platform/spec.md`
+- Predecessor plan (PR-F): `knowledge-base/project/plans/archive/20261013-014038-2026-05-18-feat-pr-f-inngest-iac-plan.md`
+- Umbrella spec: `knowledge-base/project/specs/archive/20261013-014038-feat-agent-runtime-platform/spec.md`

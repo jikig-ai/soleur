@@ -198,7 +198,7 @@ else
   fail "the all-good fixture MUST pass; a gate that cannot go green is unfireable" "$rc" "$out"
 fi
 
-if printf '%s' "$out" | grep -qF "verdict=AUTHORIZED"; then
+if printf '%s' "$out" | grep -cF >/dev/null "verdict=AUTHORIZED"; then
   pass "the green verdict is stated in machine-readable form"
 else
   fail "a passing gate must state its verdict explicitly" "$rc" "$out"
@@ -210,7 +210,7 @@ health_stub "$W/health" "" 1
 out="$(run_gate "$W")"; rc=$?
 # Assert the exit-code guard SPECIFICALLY. The empty-.version guard downstream also emits an A0
 # abort, so a row matching only "A0" passes identically against a gate that ignores health_rc.
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF "could not read"; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -cF >/dev/null "could not read"; then
   pass "A0: /health unreachable => ABORT by the exit-code guard (could-not-measure aborts)"
 else
   fail "an unreachable /health must abort, naming A0" "$rc" "$out"
@@ -230,7 +230,7 @@ fi
 W="$(world "$TMP/w-health-nosha")"
 health_stub "$W/health" "{\"status\":\"ok\",\"version\":\"${VER}\"}"
 out="$(run_gate "$W")"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF "build_sha"; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -cF >/dev/null "build_sha"; then
   pass "A0: /health without build_sha => ABORT (a cached edge response cannot satisfy A0)"
 else
   fail "A0 must assert build_sha as well as version" "$rc" "$out"
@@ -254,7 +254,7 @@ done
 W="$(world "$TMP/w-a1-wording")"
 crane_stub "$W/crane" notfound
 out="$(run_gate "$W")"; rc=$?
-if printf '%s' "$out" | grep -qiE 'not visible|packages: read|credential'; then
+if printf '%s' "$out" | grep -ciE >/dev/null 'not visible|packages: read|credential'; then
   pass "A1: NOTFOUND admits 'absent OR not visible to this credential'"
 else
   fail "A1's NOTFOUND must not assert the image was deleted" "$rc" "$out"
@@ -264,7 +264,7 @@ fi
 W="$(world "$TMP/w-a1-unknown")"
 crane_stub "$W/crane" unknown
 out="$(run_gate "$W")"; rc=$?
-if printf '%s' "$out" | grep -qF "UNKNOWN"; then
+if printf '%s' "$out" | grep -cF >/dev/null "UNKNOWN"; then
   pass "A1: an unclassifiable source failure is reported as UNKNOWN, not absent"
 else
   fail "the default classifier arm must name itself UNKNOWN" "$rc" "$out"
@@ -298,7 +298,7 @@ done
 W="$(world "$TMP/w-a2-msg")"
 restore_stub "$W/restore" 3
 out="$(run_gate "$W")"; rc=$?
-if printf '%s' "$out" | grep -qF "exit 3"; then
+if printf '%s' "$out" | grep -cF >/dev/null "exit 3"; then
   pass "A2: the abort names the restore's specific exit code"
 else
   fail "a rehearsal failure must name which exit code it was" "$rc" "$out"
@@ -330,7 +330,7 @@ fi
 W="$(world "$TMP/w-a4-stale")"
 drift_stub "$W/drift" 1 0 0 1   # a MEASURED dead count
 out="$(run_gate "$W")"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF "MEASURED DEAD"; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -cF >/dev/null "MEASURED DEAD"; then
   pass "A4: verdict 'stale' (a MEASURED dead count) => ABORT by the stale arm specifically"
 else
   fail "a measured-dead sink credential must abort before the destroy" "$rc" "$out"
@@ -385,13 +385,13 @@ fi
 # abort in its place, the floor was unreachable and a mutation deleting it went undetected.
 W="$(world "$TMP/w-a3-underivable")"
 out="$(REGISTRY_GATE_CLOUD_INIT="$TMP/nonexistent-cloud-init.yml" run_gate "$W")"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF "A3"; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -cF >/dev/null "A3"; then
   pass "A3: an underivable required pin falls to the floor and ABORTS (floor is reachable)"
 else
   fail "an underivable required pin must abort via the A3 floor" "$rc" "$out"
 fi
 
-if printf '%s' "$out" | grep -qF "missed:"; then
+if printf '%s' "$out" | grep -cF >/dev/null "missed:"; then
   pass "A3: the abort names WHICH required pin was missed"
 else
   fail "the floor abort must name the missed pin, not just the count" "$rc" "$out"
@@ -437,7 +437,7 @@ fi
 #     that no longer exists.
 W="$(world "$TMP/w-nosink-verdict")"
 out="$(run_gate "$W")"; rc=$?
-if [[ "$rc" -eq 0 ]] && ! printf '%s' "$out" | grep -qF "sink_probe="; then
+if [[ "$rc" -eq 0 ]] && ! printf '%s' "$out" | grep -cF >/dev/null "sink_probe="; then
   pass "no-A5: the verdict line carries no sink_probe field"
 else
   fail "the verdict must not report a sink predicate that was removed" "$rc" "$out"
@@ -681,7 +681,7 @@ fi
 # ── Argument validation. ────────────────────────────────────────────────────────────────────
 W="$(world "$TMP/w-args")"
 out="$(run_gate "$W" --nope)"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qiF "unknown argument"; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -ciF >/dev/null "unknown argument"; then
   pass "unknown argument rejected"
 else
   fail "an unknown argument must be rejected" "$rc" "$out"
@@ -706,7 +706,7 @@ out="$(REGISTRY_GATE_HEALTH_CMD="$W/health" REGISTRY_GATE_CRANE_CMD="$W/crane" \
        REGISTRY_GATE_RESTORE_CMD="$W/restore" REGISTRY_GATE_DRIFT_CMD="$W/drift" \
        APP_DOMAIN_BASE=soleur.ai \
        ZOT_PUSH_USER=u ZOT_PUSH_TOKEN=t bash "$GATE" 2>&1)"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF -- "--rehearse-target"; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -cF >/dev/null -- "--rehearse-target"; then
   pass "--rehearse-target is required for a verdict (A2 cannot be skipped)"
 else
   fail "the gate must refuse to render a verdict without a rehearsal target" "$rc" "$out"

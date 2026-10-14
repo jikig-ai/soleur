@@ -162,4 +162,4 @@ state. Not a new rule, an enforcement miss.
 - Issue: [#2769](https://github.com/jikig-ai/soleur/issues/2769)
 - PR: `feat-app-url-ci-guard` branch (3 commits; PR-B of
   `feat-app-url-hardening` bundle)
-- Plan: `knowledge-base/project/plans/2026-04-22-feat-app-url-ci-guard-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-22-feat-app-url-ci-guard-plan.md`

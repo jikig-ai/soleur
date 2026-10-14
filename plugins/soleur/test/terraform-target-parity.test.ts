@@ -59,13 +59,15 @@
 
 import { describe, test, expect, beforeAll } from "bun:test";
 import { parse as parseYaml } from "yaml";
-import { resolve, join } from "path";
+import { resolve, join, posix } from "path";
 import {
   readFileSync,
   existsSync,
   readdirSync,
+  lstatSync,
   writeFileSync,
   mkdtempSync,
+  mkdirSync,
   rmSync,
 } from "fs";
 import { tmpdir } from "os";
@@ -74,8 +76,22 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-// #6931: 234 -> 235 for the fresh-boot credential coverage test.
-const TEST_FLOOR = 235;
+// Exactly `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (the final describe counts the
+// same pattern). Re-derive with that command and edit this constant in the same change as any added or removed test.
+// 278 -> 266 (#8285 PR B, -12): the "inngest-backstop-retire dispatch" describe (17 tests: registration, id-pin ordering,
+// confirm literal, environment, phase gating, destroy preconditions, literal state-only -targets, mutex, timeout, strip,
+// ...) was replaced by a 5-test describe (G1 "stays retired" across every workflow, G1b deleted files/variables, B9 mutex
+// over the three surviving surfaces, B6, B5): the job those rows graded no longer exists. The floor is exact
+// (grep -cE '^\s*test\(' = 266). Each deleted row's mutation, and what kills it now, is in the PR B plan
+// (knowledge-base/project/plans/archive/20261009-235733-2026-10-09-chore-pr-b-retire-inngest-backstop-wipe-apparatus-plan.md).
+// 266 -> 271 (#9879, +5): G2 reachability (sole-copy census) rows G2 live/mutation/spelling/scripts/harness in the B5/B6 describe.
+// 271 -> 277 (#9879 review fixes, +6): G2 destroy spellings + sub-root normalisation, G2 scanner linearity, and the G2e attribute pin
+// (live, mutation matrix, comment-stripper robustness, per-merge edge to the volume).
+// 277 -> 278 (#9879 review round 2, +1): G2e lexer/scanner linearity.
+// 278 -> 276 (#9372 retirement): the declared count was 279 (floor 278, one row loose); the single-use rebirth workflow's five-target describe (three tests) retired with the workflow and the G2 test was rewritten in place, so 279 - 3 = 276.
+// Exact again: grep -cE '^\s*test\(' = 276.
+// 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
+const TEST_FLOOR = 279;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -106,7 +122,8 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // Still `>=`, so adding an SSH-provisioned resource does not need an edit here.
 // #8706: raised 17 -> 18 for terraform_data.luks_monitor_install (workspaces-luks.tf).
 // #9151: raised 18 -> 19 for terraform_data.deploy_pipeline_fix_web2 (server.tf).
-const MIN_SSH_PROVISIONED = 19;
+// #9534-review: raised 19 -> 20 for terraform_data.journald_persistent_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 20;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -1189,17 +1206,12 @@ function stripDispatchJobs(workflowText: string): string {
   // rather than merely uniform: ALL EIGHTEEN of its -targets are
   // OPERATOR_APPLIED_EXCLUSIONS (ADR-103), so folding them into `allTargets` would assert
   // per-merge coverage for a fan-out the per-merge apply deliberately never touches.
-  // inngest_volume_recut (#7695): the dispatch-only recut of the inngest Redis AOF volume. Its 2
-  // -targets (hcloud_volume.inngest_redis + its attachment) are BOTH already
-  // OPERATOR_APPLIED_EXCLUSIONS, so stripping is coverage-neutral today — but strip it per the
-  // uniform rule: a dispatch writer surface must never broaden the per-merge coverage anchor, so a
-  // FUTURE recut -target that is NOT an exclusion cannot silently mask a per-merge miss.
   //
   // NOTE for whoever edits this function next: the guard above extracts EVERY
   // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
   // job. Adding any other lowercase quoted literal here — even in a helper call — makes
   // that guard treat it as a job name and go red. Comments are fine; literals are not.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_volume_recut");
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -1270,6 +1282,8 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // (#8754): the "operator full apply" route they were excluded for no longer exists, so they ride
   // the per-merge -target list, where the same apply's arm step measures a beat before arming. The
   // birth route still refuses them (GIT_DATA_BIRTH_REFUSED).
+  // betteruptime_heartbeat.git_data_host_prd + doppler_secret.git_data_host_heartbeat_url_prd (#9438)
+  // are in the same position from birth: per-merge targeted, refused by the birth route.
   // #5274 Phase 3 (ADR-068) — the multi-host cluster's new resources all ride the
   // operator's MAINTENANCE-WINDOW apply, exactly like hcloud_server.web + the
   // git-data keys above, NOT the #5566 per-PR-CI class:
@@ -1388,7 +1402,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // #6122 (ADR-096) — the zot registry host + its volume/network/firewall/creds/heartbeat
   // ALL ride the operator's initial full (untargeted) `terraform apply` + drift detector,
   // exactly like the git-data host above (CTO ruling 2026-07-06,
-  // knowledge-base/project/specs/feat-registry-oidc-migration/apply-path-cto-ruling.md).
+  // knowledge-base/project/specs/archive/20261013-041741-feat-registry-oidc-migration/apply-path-cto-ruling.md).
   // The per-PR CI `-target` path bridges over SSH to the EXISTING web host; it cannot
   // provision a brand-new host, a new private network attach, or that host's firewall.
   // NONE are in the workflow `-target` list. `doppler_secret.*` here (incl the host-token copies
@@ -1458,15 +1472,22 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // precedent); they are `doppler_secret`/`doppler_project`, not the CI-published token types the
   // #5566 test forces. Fresh signing/event keys (AC-KEYROTATE — not reused from the co-located inngest.tf).
   "hcloud_server.inngest",
-  "hcloud_volume.inngest_redis",
-  "hcloud_volume_attachment.inngest_redis",
-  // #6894 / ADR-142. The ADDITIVE target volume and its attachment. Both are
-  // operator-applied via `apply_target=inngest-host`; neither is in the per-merge
-  // allowlist, because creating a volume is a billable resource change that wants
-  // the dispatch gate rather than a merge side effect. They are listed here the
-  // moment the resources exist — check_resource_partition reds on any managed
-  // address that is neither reachable nor excluded, so the coverage test would go
-  // red on the commit that declares the volume if these two lines lagged it.
+  // #8285 — the throwaway wipe host and the plaintext pair `hcloud_volume.inngest_redis` /
+  // `hcloud_volume_attachment.inngest_redis` are gone: the apparatus is deleted and the volume was destroyed
+  // 2026-10-09. A managed address that no longer exists needs no exclusion (Guard 1 below pins that the
+  // retired addresses are not targeted by any job).
+  // #6894 / ADR-142. The ADDITIVE target volume and its attachment. They are listed here the moment the
+  // resources exist — check_resource_partition reds on any managed address that is neither reachable nor
+  // excluded, so the coverage test would go red on the commit that declares the volume if these two lines lagged it.
+  //  - The ATTACHMENT is operator-applied via `apply_target=inngest-host` / `inngest-host-replace`; it is not in
+  //    the per-merge allowlist.
+  //  - The VOLUME is not a `-target` of any per-merge step either (this entry is what `-target` coverage reads), but
+  //    it is NOT unreachable from a merge: it rides the per-merge plan as a DEPENDENCY of the per-merge target
+  //    `logtail_exploration.inngest_luks_wrong_volume`, through the alias local that interpolates
+  //    `hcloud_volume.inngest_redis_luks.id` (betterstack-logs-alerts.tf). That edge is how an in-place update
+  //    (delete_protection, #9879) reaches the live volume, and the same edge would carry a create or a replace,
+  //    which prevent_destroy refuses and the G2e attribute pin holds in place. The edge is pinned by the
+  //    "G2e: the per-merge edge to the volume" test (ADR-282); this exclusion does not make the volume operator-only.
   "hcloud_volume.inngest_redis_luks",
   "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
@@ -1600,6 +1621,10 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
       "doppler_config.workspaces_luks_web",
       "doppler_service_token.workspaces_luks_fresh_boot_web",
       "cloudflare_r2_bucket.workspaces_luks_header_web",
+      // The web-class passphrase generator (#9377 decision A1): the key secret's value is its `.result`, so it
+      // must ride the same default apply (a `-target` pulls dependencies, but the explicit target keeps the
+      // push-apply's plan stable and the declared/targeted parity honest).
+      "random_password.workspaces_luks_web",
       "doppler_secret.workspaces_luks_web_key",
       "doppler_secret.workspaces_luks_web_header_bucket",
       "doppler_secret.workspaces_luks_web_header_r2_endpoint",
@@ -2159,6 +2184,72 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     expect(gitDataJobBlock).toMatch(/git_data_host_replace_gate\s+tfplan\.json\s+"?\$?GATE_MODE/);
   });
 
+  test("the apply step grades the saved plan through the mode-aware post-apply backstop (#10137)", () => {
+    // The apply step used to carry an inline loop asserting BOTH data volumes preserved, which failed
+    // the rotate dispatch on its own intended LUKS replace. Every pin below runs on the step with
+    // comments stripped, anchored on a non-comment line: a comment that quotes the construct (the
+    // step documents all of them) must not satisfy a pin.
+    const raw = extractStep(gitDataJobBlock, /Terraform apply \(git-data-host -replace\)/);
+    expect(raw, "apply step not found in git_data_host_replace").not.toBeNull();
+    const step = stripComments(raw!);
+    // Step shape the flip gate / poll / summary key on, and nothing that tolerates a refusal.
+    expect(step).toMatch(/^\s*id: apply$/m);
+    expect(step).toMatch(/^\s*if: inputs\.plan_only != true$/m);
+    expect(step, "a continue-on-error (any quoting) would turn a refusal into a tolerated failure").not.toMatch(/continue-on-error/);
+    // The mode is the one the plan step's gate accepted, read through env (no second mapping).
+    expect(step).toMatch(/^\s*GATE_MODE: \$\{\{ steps\.plan\.outputs\.gate_mode \}\}$/m);
+    expect(step).not.toContain("APPLY_TARGET");
+    // The lib is actually sourced, at the step's top level, and the guarded call follows it
+    // IMMEDIATELY: nothing between them can wrap the call in a condition or reassign the mode.
+    const src = step.match(/^ {10}source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-host-replace-gate\.sh"$/m);
+    expect(src, "the lib must be sourced by a real top-level line").not.toBeNull();
+    const callRe = /^ {10}if ! git_data_host_post_apply_assert tfplan\.json "\$\{GATE_MODE:-\}"; then\n([\s\S]*?)\n {10}fi\n/m;
+    const call = step.match(callRe);
+    expect(call, "the post-apply call must be a top-level `if ! … ; then … fi`").not.toBeNull();
+    expect(step.slice(src!.index! + src![0].length, call!.index!).trim()).toBe("");
+    // The refusal body must actually exit 1 (an annotation alone lets the job go green).
+    expect(call![1]).toMatch(/^\s*exit 1$/m);
+    // The call comes after the terraform apply, and nothing between them reassigns the mode or
+    // exits successfully early.
+    const applyAt = step.indexOf("terraform apply -no-color -input=false tfplan");
+    expect(applyAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeLessThan(call!.index!);
+    // (scanned from the START of the step: a reassignment before the apply line is the same failure)
+    expect(step.slice(0, call!.index!)).not.toMatch(/\bGATE_MODE\+?=|-v GATE_MODE|\bread\b[^\n]*\bGATE_MODE\b|GATE_MODE:=|\bexit 0\b/);
+    // The inline loop is gone, and the old display name (false under rotate) with it.
+    expect(step).not.toMatch(/for VOL in hcloud_volume\.git_data/);
+    expect(gitDataJobBlock).not.toContain("both-volumes-preserved assert");
+    expect(gitDataJobBlock).toContain("Validate dispatch inputs (rotate confirm token)");
+    // The rotate failure annotation is its own arm, and an unknown mode takes a neutral arm rather
+    // than the plain-replace claim that both volumes are preserved.
+    expect(step).toMatch(/^\s*rotate\)\n\s*echo "::error::terraform apply \(git-data-host-rotate\) failed mid-replace/m);
+    expect(step).toMatch(/^\s*\*\)\n\s*echo "::error::terraform apply \(git-data host\) failed mid-replace and the dispatch mode is unknown/m);
+    // Exactly one call site in the job (the Observability probe counts it).
+    expect(gitDataJobBlock.match(/git_data_host_post_apply_assert tfplan\.json/g)?.length).toBe(1);
+  });
+
+  test("the plan step publishes the mode its gate accepted, once, directly after the gate block (#10137)", () => {
+    const raw = extractStep(gitDataJobBlock, /Terraform plan \(scoped git-data-host -replace\)/);
+    expect(raw, "plan step not found in git_data_host_replace").not.toBeNull();
+    const step = stripComments(raw!);
+    const publish = "printf 'gate_mode=%s\\n' \"$GATE_MODE\" >> \"$GITHUB_OUTPUT\"";
+    expect(step.split(publish).length - 1, "the plan step must publish gate_mode exactly once").toBe(1);
+    const gateCall = step.indexOf('if ! git_data_host_replace_gate tfplan.json "$GATE_MODE"; then');
+    expect(gateCall).toBeGreaterThan(-1);
+    // The gate block closes at the step's top-level `fi` (a nested `fi` is indented deeper).
+    const closeAt = step.indexOf("\n          fi\n", gateCall);
+    expect(closeAt).toBeGreaterThan(gateCall);
+    const publishAt = step.indexOf(publish);
+    expect(publishAt).toBeGreaterThan(closeAt);
+    // Directly after the gate block, at the top level: nothing between the gate's closing `fi` and
+    // the publish, so it is unconditional and cannot follow a reassignment of the mode (the #10137
+    // failure shape: rotate graded as replace again, with the gate having accepted rotate).
+    expect(step.slice(closeAt + "\n          fi\n".length, publishAt).trim()).toBe("");
+    expect(step.slice(step.lastIndexOf("\n", publishAt) + 1, publishAt)).toBe("          ");
+    // One reader of the output in the whole job.
+    expect(gitDataJobBlock.split("steps.plan.outputs.gate_mode").length - 1).toBe(1);
+  });
+
   test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {
     // The deliberate divergence from registry (whose store volume IS in-scope for a resize). An
     // untargeted resource cannot be planned for destroy, so omission is what preserves it.
@@ -2294,28 +2385,34 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     }
   });
 
-  // #6604 step 7 — a workflow that WRITES the main root's state without planning (a dispatched
-  // `terraform state rm|mv|push`, e.g. workspaces-plaintext-forget.yml) is invisible to the planner
-  // census below, but a Terraform version other than the apply workflows' could upgrade the state format
-  // under them. Discovered, not listed, so PR B deleting the forget workflow needs no edit here.
-  test("every main-root state-write-only workflow pins TERRAFORM_VERSION == apply-web-platform-infra's", () => {
+  // #6604 step 7 — a workflow that WRITES the main root's state outside plan/apply (a dispatched
+  // `terraform state rm|mv|push`). The last one, the single-use workspaces-plaintext-forget.yml, was
+  // retired in #6604 PR B, so this row's old per-writer TERRAFORM_VERSION loop iterated over ZERO
+  // files and asserted nothing. It is now an EXACT-EMPTY assertion instead: a state write can forget
+  // hcloud_volume.workspaces_luks (prevent_destroy is config-scoped and does not see a `state rm`) and
+  // reopen the bare-create recut shape, and a Terraform version other than the apply workflows' could
+  // upgrade the state format under them. A new writer must edit this row deliberately, and pin
+  // TERRAFORM_VERSION to apply-web-platform-infra's when it does.
+  test("no workflow writes main-root state outside plan/apply (terraform state rm|mv|push)", () => {
     const dir = resolve(REPO_ROOT, ".github/workflows");
-    const STATE_WRITE = /terraform\s+state\s+(rm|mv|push)\b/;
-    const MAIN_ROOT = /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m;
-    // Non-vacuity: the discovery pattern must match the shape it exists for.
-    expect(STATE_WRITE.test("          terraform state rm \"${addrs[@]}\"")).toBe(true);
-    const applyEnv = (parseYaml(readFileSync(resolve(dir, "apply-web-platform-infra.yml"), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
-    expect(typeof applyEnv.TERRAFORM_VERSION).toBe("string");
+    const STATE_WRITE = /terraform\s+(?:-chdir=\S+\s+)?state\s+(rm|mv|push|replace-provider)\b/;
+    // The four main-root spellings the planner census below uses, not just INFRA_DIR.
+    const MAIN_ROOT_FORMS = [
+      /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /^\s*-\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /working-directory:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /-chdir=["']?apps\/web-platform\/infra(?![\w\/-])/,
+    ];
+    const isWriter = (t: string) => STATE_WRITE.test(t) && MAIN_ROOT_FORMS.some((re) => re.test(t));
+    // Non-vacuity: the discovery predicate must match the shapes it exists for (the retired forget
+    // workflow's, and a -chdir spelling), and must not match a planner.
+    expect(isWriter("env:\n  INFRA_DIR: apps/web-platform/infra\n        run: terraform state rm \"${addrs[@]}\"")).toBe(true);
+    expect(isWriter("        run: terraform -chdir=apps/web-platform/infra state rm 'hcloud_volume_attachment.workspaces_luks'")).toBe(true);
+    expect(isWriter("env:\n  INFRA_DIR: apps/web-platform/infra\n        run: terraform plan -out=tfplan")).toBe(false);
     const writers = readdirSync(dir)
       .filter((f) => f.endsWith(".yml"))
-      .filter((f) => {
-        const t = stripComments(readFileSync(join(dir, f), "utf8"));
-        return STATE_WRITE.test(t) && MAIN_ROOT.test(t);
-      });
-    for (const f of writers) {
-      const env = (parseYaml(readFileSync(join(dir, f), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
-      expect([f, env.TERRAFORM_VERSION]).toEqual([f, applyEnv.TERRAFORM_VERSION]);
-    }
+      .filter((f) => isWriter(stripComments(readFileSync(join(dir, f), "utf8"))));
+    expect(writers).toEqual([]);
   });
 
   test("the main-root workflow census is complete (a new planner cannot skip the variable)", () => {
@@ -2770,9 +2867,12 @@ const WEB_HOST_REPLACE_PRESERVED = [
   "hcloud_volume.workspaces_luks",
   "random_password.workspaces_luks",
   "doppler_secret.workspaces_luks_key",
-  // The web-class copy of the same passphrase (#9377): every copy must stay out of the -target set,
-  // and the gate's luks_passphrase_touched names it too.
+  // The web-class key copy (#9377), which now carries its OWN generator's value (random_password.workspaces_luks_web),
+  // not web-1's: it must stay out of the -target set, and the gate's luks_passphrase_touched names it too.
   "doppler_secret.workspaces_luks_web_key",
+  // The web-class passphrase generator (#9377 decision A1): a replace of it rotates a passphrase whose old value
+  // survives nowhere, so no replace job may name it.
+  "random_password.workspaces_luks_web",
   // The apex A record is pinned to web-1's ipv4_address. This job REFUSES web-1, so the
   // record must never move; its presence in the -target set would be the difference between
   // "replace a standby" and "re-point production DNS".
@@ -3451,218 +3551,1146 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
   });
 });
 
+// --- G2 reachability (#9879): reachability of the inngest sole-copy addresses -------------------------------------------
+// Extends B5/B6 (below) with one census over EVERY workflow and tracked script. Built on the existing chokepoints:
+// extractJobBlock (per-job text), extractAllTargets (the job-found non-vacuity check), stripDispatchJobs (the
+// per-merge view), stripShellLineComments and joinContinuations (comment strip, continuation fold).
+//
+// Comment policy: ONLY whole-line `#` comments are removed. A trailing `# ...` is KEPT: shell has `$#`, `${#a[@]}`
+// and `"a #b"`, so a quote-unaware trailing-comment strip (stripComments) would let `echo "$#"; terraform ... -replace=X`
+// hide its own flag. The cost is a conservative false RED on a trailing comment that spells a flag, which is fixable
+// in review; the alternative is a fail-open scan.
+const SOLE_COPY_ADDRS = [
+  "hcloud_volume.inngest_redis_luks",
+  "hcloud_volume_attachment.inngest_redis_luks",
+  "random_password.inngest_redis_luks",
+  "doppler_secret.inngest_redis_luks_key",
+  "doppler_project.inngest",
+  "doppler_environment.inngest_prd",
+];
+// Full regexp-metacharacter escape (backslash included) for address literals interpolated into a RegExp.
+const g2Esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const G2_ADDR_ALT = SOLE_COPY_ADDRS.map((a) => g2Esc(a)).join("|");
+const G2_WORKFLOW = "apply-web-platform-infra.yml";
+// MEASURED 2026-10-10 on the live tree with
+//   grep -nE "^[^#]*-(target|replace)[= ]+['\"]?(<the six addresses>)\b" .github/workflows/*.yml
+// = seven lines, all in apply-web-platform-infra.yml (657-658 per-merge `apply`; 1673/1674/1680/1681 `inngest_host`;
+// 1975 `inngest_host_replace`), zero -replace, zero -destroy. Entry shape: workflow|job|verb|address.
+// Edited only with a reviewer reading it: the workflow is the other side of the comparison.
+const SOLE_COPY_EXPECTED: readonly string[] = [
+  `${G2_WORKFLOW}|apply|target|random_password.inngest_redis_luks`,
+  `${G2_WORKFLOW}|apply|target|doppler_secret.inngest_redis_luks_key`,
+  `${G2_WORKFLOW}|inngest_host|target|hcloud_volume.inngest_redis_luks`,
+  `${G2_WORKFLOW}|inngest_host|target|hcloud_volume_attachment.inngest_redis_luks`,
+  `${G2_WORKFLOW}|inngest_host|target|doppler_project.inngest`,
+  `${G2_WORKFLOW}|inngest_host|target|doppler_environment.inngest_prd`,
+  `${G2_WORKFLOW}|inngest_host_replace|target|hcloud_volume_attachment.inngest_redis_luks`,
+];
+const G2_TOP = "<top-level>";
+
+/** Comment-stripped (whole-line), continuation-folded, LF-normalised code. */
+const g2Code = (text: string): string => joinContinuations(stripShellLineComments(text.replace(/\r\n/g, "\n")));
+
+/** job id -> block (via extractJobBlock); the text outside `jobs:` is keyed G2_TOP. Throws on a header it cannot parse. */
+function g2Jobs(text: string): Map<string, string> {
+  const lf = text.replace(/\r\n/g, "\n");
+  const out = new Map<string, string>();
+  const m = /^jobs:[ \t]*(?:#.*)?$/m.exec(lf);
+  if (!m) {
+    out.set(G2_TOP, lf);
+    return out;
+  }
+  let body = lf.slice(m.index + m[0].length);
+  const tail = /\n(?=[A-Za-z_][^\n]*:)/.exec(body); // a column-0 key after `jobs:` ends the section
+  let rest = "";
+  if (tail) {
+    rest = body.slice(tail.index);
+    body = body.slice(0, tail.index);
+  }
+  out.set(G2_TOP, lf.slice(0, m.index) + rest);
+  const ids = new Set<string>();
+  for (const line of body.split("\n")) {
+    if (/^ {2}\S/.test(line) && !/^ {2}#/.test(line)) {
+      const h = /^ {2}([A-Za-z0-9_-]+):/.exec(line);
+      if (!h) throw new Error(`g2Jobs: unparseable job header ${JSON.stringify(line)}`);
+      ids.add(h[1]);
+    }
+  }
+  if (ids.size === 0) throw new Error("g2Jobs: no jobs found under jobs:");
+  for (const id of ids) out.set(id, extractJobBlock(body, id));
+  return out;
+}
+
+const g2Named = (code: string): string[] =>
+  SOLE_COPY_ADDRS.filter((a) => new RegExp(`(?<![A-Za-z0-9_])${g2Esc(a)}(?![A-Za-z0-9_])`).test(code));
+
+const G2_STATE_VERBS: Array<[string, RegExp]> = [
+  ["state-rm", /(?<![\w-])state\s+rm(?![\w-])/],
+  ["state-mv", /(?<![\w-])state\s+mv(?![\w-])/],
+  ["state-push", /(?<![\w-])state\s+push(?![\w-])/],
+  ["import", /\bterraform(?:\s+-chdir=\S+)?\s+import(?![\w-])/],
+  ["taint", /\bterraform(?:\s+-chdir=\S+)?\s+taint(?![\w-])/],
+];
+
+/** A state-write verb in `code` x every sole-copy address `code` names (co-occurrence: a loop or variable cannot hide it). */
+function g2StateWriteHits(code: string): Array<[string, string]> {
+  const named = g2Named(code);
+  const out: Array<[string, string]> = [];
+  for (const [verb, re] of G2_STATE_VERBS) if (re.test(code)) for (const a of named) out.push([verb, a]);
+  return out;
+}
+
+// Command position for `terraform [-chdir=X] destroy`: line start, a separator, a shell keyword, a YAML `run:`, an env
+// assignment run, a privilege/exec wrapper (`sudo`, `env`, `time`, `timeout N`, `nice`, `flock x`, ...) with its options,
+// `--` (doppler run), or the opening quote of `bash -c "..."`. The binary may be path-qualified (`/usr/bin/terraform`,
+// `./terraform`), `$VAR` or `$(... terraform ...)`. Prose has a backtick, a quote or ordinary words in front, so it is not
+// the command. STATED NON-GOALS (defence in depth only; prevent_destroy and the Hetzner lock are the real controls): `flock x
+// -c '...'`, a binary renamed through a symlink, a destroy assembled at run time (`terraform "$verb"`), and a test-named
+// driver script (skipped by G2_TEST_OR_FIXTURE: nothing in CI runs it as an apply; making it one is an edit to that script
+// that a reviewer sees, and the destroy still meets prevent_destroy). This is a spelling list, not "every spelling".
+// LINEARITY: a bare `{`, `!` or `--` is a prefix only when followed by whitespace (a long `{a={a=` token has no start per
+// character), a keyword is a start only at a word boundary, and every repeated group is BOUNDED, so one start costs a
+// constant number of tokens and the match is linear (two perf rows in the spelling suite pin it).
+const G2_OPTS = String.raw`(?:[ \t]+-\S+(?!\S)(?:[ \t]+[\w./@:=+][^\s;&|()]*(?![^\s;&|()]))?){0,16}`;
+const G2_CMD_PREFIX =
+  String.raw`(?:^|[;&|(]|\{(?=[ \t])|!(?=[ \t])|--(?=[ \t])|\b(?:then|do|else|elif|if|while|until)\b|\brun:|\b(?:sudo|exec|time|command|env|nohup|xargs|eval|nice|ionice|setsid)\b${G2_OPTS}|\btimeout\b${G2_OPTS}[ \t]+\d[\w.]*|\bflock\b${G2_OPTS}[ \t]+\S+|\b(?:ba|z|da|k)?sh[ \t]+(?:-\w+[ \t]+)*-\w*c[ \t]+["'])`;
+const G2_TERRAFORM_BIN = String.raw`(?:\$(?:\{\w+\}|\w+)|\$\([^()]*\bterraform\b[^()]*\)|(?:[\w.-]*/){0,8}terraform)`;
+const G2_DESTROY_CMD = new RegExp(
+  String.raw`${G2_CMD_PREFIX}[ \t]*(?:[A-Za-z_]\w*=[^\s;&|()]*[ \t]+){0,64}${G2_TERRAFORM_BIN}(?:[ \t]+-chdir[= ]\S+)?[ \t]+destroy(?![\w-])`,
+  "m",
+);
+const G2_DESTROY_FLAG = /(?<![\w-])-destroy(?![\w-])/;
+
 /**
- * `apply_target=inngest-volume-recut` (#7695) is the ONE dispatch in this workflow that must prove
- * something about the WORLD before it plans. Everything below pins the six registration sites AC B6
- * enumerates, the enum<->job binding of B7, and the shared-mutex property of B9.
- *
- * B9 IS ASSERTED AS A PROPERTY, NOT AS A STRING, and the deviation is deliberate. The plan named a
- * NEW `inngest-cutover` concurrency literal for four jobs. A GitHub job may declare exactly ONE
- * concurrency group, and `cutover-inngest.yml` already serializes on `deploy-inngest-restart`
- * together with `deploy-inngest-image.yml` and `restart-inngest-server.yml` — so minting a new
- * literal and putting it on the cutover job would have REMOVED that job from the group it shares
- * with the deploy pipeline, letting a deploy restart inngest-server mid-cutover. That is a strictly
- * worse race than the one B9 set out to close ("a mutex on one side of a race is not a mutex" is
- * the plan's own framing). Joining the EXISTING literal covers six surfaces instead of four and
- * orphans none. Asserting the property — all four surfaces carry ONE identical group — rather than
- * the literal is also what keeps this guard alive across a future rename.
+ * Is this step's `working-directory` a rehearsal SUB-ROOT (its own state)? The path is NORMALISED first: `apps/web-platform/infra/.`
+ * and `.../infra/./` are the main root itself, and `.../infra/sub/..` is too, so none of them is an exemption. `[ \t]*` (never `\s*`)
+ * keeps the scan linear: `\s*` with /m crosses newlines and goes quadratic on a whitespace-only input.
  */
-describe("inngest-volume-recut dispatch: registration, binding, and the shared mutex (#7695)", () => {
+function g2IsSubRoot(step: string): boolean {
+  const m = /^[ \t]*(?:-[ \t]+)?working-directory:[ \t]*(.*)$/m.exec(step); // greedy then trim: a lazy `(.*?)[ \t]*$` is quadratic on a long whitespace run
+  if (!m) return false;
+  const v = m[1].replace(/^(["'])(.*)\1$/, "$2").trim();
+  if (/^\$\{\{\s*env\.REHEARSAL_DIR\s*\}\}$/.test(v)) return true;
+  const root = "apps/web-platform/infra/";
+  const i = v.indexOf(root);
+  if (i < 0) return false;
+  const rest = posix.normalize(v.slice(i));
+  if (!rest.startsWith(root)) return false;
+  const seg = rest.slice(root.length).split("/")[0];
+  return seg !== ""; // `.`/`..` cannot survive posix.normalize behind the root prefix (fuzzed: 0 of 200k), so no further check
+}
+
+/** Every (verb, address) a job's code reaches: -target/-replace in `=`/space/quoted/escaped-quote spellings, destroy, state writes. */
+function g2JobVerbs(code: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  const flag = new RegExp(`-(target|replace)(?:=|\\s+)[\\\\'"]*(?:module\\.[A-Za-z0-9_-]+\\.)*(${G2_ADDR_ALT})(?![A-Za-z0-9_])`, "g");
+  for (const m of code.matchAll(flag)) out.push([m[1], m[2]]);
+  // Destroy, judged per STEP: a step whose `working-directory` is a rehearsal SUB-ROOT (its own state; the two rehearsal
+  // workflows and their teardown steps) is out of scope unless it also names a sole-copy address (the flag scan above and
+  // the state-write scan below already see that). Every other destroy is a hit. `[ack-destroy]` has a word char before the
+  // dash, and prose `terraform destroy` sits behind a backtick/quote, so neither is the command.
+  for (const step of code.split(/\n(?= {6}- )/)) {
+    const isDestroy = G2_DESTROY_FLAG.test(step) || G2_DESTROY_CMD.test(step);
+    if (isDestroy && !g2IsSubRoot(step)) out.push(["destroy", "*"]);
+  }
+  out.push(...g2StateWriteHits(code));
+  return out;
+}
+
+/** Sorted unique `workflow|job|verb|address` over a {workflow filename: text} map. */
+function g2Census(files: Record<string, string>): string[] {
+  const set = new Set<string>();
+  for (const [name, text] of Object.entries(files)) {
+    for (const [job, block] of g2Jobs(text)) {
+      for (const [verb, addr] of g2JobVerbs(g2Code(block))) set.add(`${name}|${job}|${verb}|${addr}`);
+    }
+  }
+  return [...set].sort();
+}
+
+/** Non-vacuity: every (workflow, job) the expected set names must exist and still carry a -target flag. */
+function g2MissingJobs(files: Record<string, string>, expected: readonly string[]): string[] {
+  const missing: string[] = [];
+  for (const key of new Set(expected.map((e) => e.split("|").slice(0, 2).join("|")))) {
+    const [file, job] = key.split("|");
+    const block = files[file] === undefined ? "" : (g2Jobs(files[file]).get(job) ?? "");
+    if (!/-target(?:=|\s)/.test(g2Code(block))) missing.push(key);
+  }
+  return missing;
+}
+
+/** Empty array = GREEN. Anything else names the defect. */
+function g2Verdict(files: Record<string, string>, expected: readonly string[] = SOLE_COPY_EXPECTED): string[] {
+  const got = g2Census(files);
+  const want = new Set(expected);
+  return [
+    ...g2MissingJobs(files, expected).map((k) => `job-not-found: ${k}`),
+    ...got.filter((t) => !want.has(t)).map((t) => `unexpected: ${t}`),
+    ...[...want].filter((t) => !got.includes(t)).map((t) => `absent: ${t}`),
+  ];
+}
+
+function g2LiveWorkflows(): Record<string, string> {
+  const dir = resolve(REPO_ROOT, ".github/workflows");
+  const out: Record<string, string> = {};
+  for (const f of readdirSync(dir).filter((n) => /\.ya?ml$/.test(n)).sort()) out[f] = readFileSync(resolve(dir, f), "utf8");
+  return out;
+}
+
+/**
+ * Tracked files the script scan covers: composite actions, CI helper scripts, repo scripts, every app's infra tree and the
+ * web-platform scripts, in the extensions that can drive terraform. A symlink (lstat) is skipped, so a link into the tree
+ * is not scanned twice or followed out of it. Test files and fixtures are skipped by name: they spell the forbidden verbs
+ * on purpose, and nothing in CI runs them as an apply.
+ */
+const G2_SCRIPT_DIRS = /^(?:\.github\/actions\/|\.github\/scripts\/|scripts\/|apps\/[^/]+\/infra\/|apps\/web-platform\/scripts\/)/;
+const G2_SCRIPT_EXT = /\.(?:sh|bash|py|ts|mjs|yml|yaml)$/;
+const G2_TEST_OR_FIXTURE = /(?:^|\/)(?:tests?|fixtures?|__tests__|__fixtures__)\/|(?:^|\/)test[-_][^/]*$|[.-]tests?\.[a-z]+$|[-_]test\.[a-z]+$/;
+/** The scan population among `paths` (repo-relative): in the directories and extensions above, not a test/fixture, a real file (not a symlink) under `root`. */
+function g2ScanPopulation(paths: string[], root: string): string[] {
+  return paths
+    .filter((p) => G2_SCRIPT_DIRS.test(p) && G2_SCRIPT_EXT.test(p) && !G2_TEST_OR_FIXTURE.test(p))
+    .filter((p) => {
+      try {
+        return lstatSync(resolve(root, p)).isFile(); // false for a symlink, a directory or a path deleted in the worktree
+      } catch {
+        return false;
+      }
+    });
+}
+
+function g2TrackedScripts(): string[] {
+  const r = spawnSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 1 << 27 });
+  if (r.status !== 0) throw new Error(`git ls-files failed: ${r.stderr}`);
+  return g2ScanPopulation(r.stdout.split("\0"), REPO_ROOT);
+}
+
+/** Whole-line comments out: `#` for every extension, `//` as well for ts/mjs. Trailing comments are kept (see the policy note above). */
+const g2ScriptCode = (rel: string, text: string): string => {
+  const code = g2Code(text);
+  return /\.(?:ts|mjs)$/.test(rel) ? code.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n") : code;
+};
+
+// Flag spellings and destroy, as FILE-level verbs: in a script there is no job or step to scope them to, so the rule is the
+// same co-occurrence the state verbs use (verb anywhere x sole-copy address anywhere in the same file).
+const G2_FILE_FLAG_VERBS: Array<[string, RegExp]> = [
+  ["target", /(?<![\w-])-target(?![\w-])/],
+  ["replace", /(?<![\w-])-replace(?![\w-])/],
+  ["destroy", new RegExp(`${G2_DESTROY_FLAG.source}|${G2_DESTROY_CMD.source}`, "m")],
+];
+
+/** `script|verb|address` for any state-write or flag verb in a file that names a sole-copy address anywhere. */
+function g2ScriptHits(rel: string, text: string): string[] {
+  const code = g2ScriptCode(rel, text);
+  const named = g2Named(code);
+  if (named.length === 0) return [];
+  const verbs = [...G2_STATE_VERBS, ...G2_FILE_FLAG_VERBS];
+  return verbs.flatMap(([v, re]) => (re.test(code) ? named.map((a) => `${rel}|${v}|${a}`) : []));
+}
+
+/** Insert `newLines` (indented like the anchor) BEFORE the first line matching `anchor` inside `jobId` (any job if omitted). */
+function g2InsertBefore(text: string, anchor: RegExp, newLines: string[], jobId?: string): string {
+  const out: string[] = [];
+  let inJob = jobId === undefined;
+  let done = false;
+  for (const line of text.split("\n")) {
+    if (jobId !== undefined && /^ {2}[A-Za-z0-9_-]+:/.test(line)) inJob = new RegExp(`^ {2}${jobId}:`).test(line);
+    if (inJob && !done && anchor.test(line)) {
+      const indent = /^\s*/.exec(line)![0];
+      for (const n of newLines) out.push(indent + n);
+      done = true;
+    }
+    out.push(line);
+  }
+  if (!done) throw new Error(`g2InsertBefore: anchor ${anchor} not found${jobId ? ` in job ${jobId}` : ""}`);
+  return out.join("\n");
+}
+
+/**
+ * The inngest dispatch surfaces after the plaintext-backstop retirement (#8285 PR B).
+ *
+ * `apply_target=inngest-backstop-retire` and its `inngest_backstop_retire` job were deleted once the
+ * volume was destroyed. What stays pinned: the retired surface stays RETIRED (Guard 1: a conflict
+ * resolution or a revert-of-a-revert cannot silently bring the destroy dispatch back), and the properties
+ * of the surfaces that remain (the shared inngest mutex, the replace job's targets, the LUKS passphrase
+ * pair's place in the per-merge list).
+ *
+ * THE MUTEX IS TWO GROUPS, and a job can carry only one. The job-level group is the inngest one
+ * (`deploy-inngest-restart`, shared with cutover-inngest.yml and the host jobs); the root's
+ * serializer (`terraform-apply-web-platform-host`, the state backend has use_lockfile = false) is the
+ * WORKFLOW-level group, which already governs every job in this file. Both are asserted as properties.
+ */
+describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-  const jobBlock = extractJobBlock(wf, "inngest_volume_recut");
+  const RETIRED_ADDRS = [
+    "hcloud_volume.inngest_redis",
+    "hcloud_volume_attachment.inngest_redis",
+    "hcloud_server.inngest_backstop_wipe",
+    "hcloud_volume_attachment.inngest_backstop_wipe",
+  ];
 
-  test("B6/B7: the enum option and its bound job BOTH exist", () => {
-    // The binding is asserted in BOTH directions on purpose. An option with no job is a menu entry
-    // that silently no-ops (every job's `if:` is false, the run is green, nothing happened) — the
-    // worst outcome for a destructive target. A job with no option is unreachable and rots.
-    expect(wf).toMatch(/^ {10}- inngest-volume-recut$/m);
-    expect(jobBlock.length).toBeGreaterThan(0);
-    expect(jobBlock).toContain("inputs.apply_target == 'inngest-volume-recut'");
-  });
-
-  test("B7 (non-vacuity): the binding check can distinguish present from absent", () => {
-    // Without this, the two `toContain`s above would pass against a workflow where the option and
-    // the job merely happen to coexist for unrelated reasons.
-    const noOption = wf.replace(/^ {10}- inngest-volume-recut$/m, "");
-    expect(/^ {10}- inngest-volume-recut$/m.test(noOption)).toBe(false);
-    const noJob = stripJob(wf, "inngest_volume_recut");
-    expect(noJob).not.toContain("inputs.apply_target == 'inngest-volume-recut'");
-  });
-
-  test("-targets are exactly the AOF volume and its attachment", () => {
-    const targets = extractAllTargets(jobBlock);
-    expect([...targets].sort()).toEqual([
-      "hcloud_volume.inngest_redis",
-      "hcloud_volume_attachment.inngest_redis",
-    ]);
-  });
-
-  test("carries exactly one -replace flag, on the volume", () => {
-    // Anchored on the flag syntax, not a bare address: the same address appears as a `-target=` on
-    // the next line and throughout the job's prose, so a bare-token grep would pass against a job
-    // that lost its -replace entirely and therefore planned a no-op.
-    const replaced = [...jobBlock.matchAll(/-replace='([^']+)'/g)].map((m) => m[1]);
-    expect(replaced).toEqual(["hcloud_volume.inngest_redis"]);
-  });
-
-  test("sources BOTH gates and states there is no ack-destroy bypass", () => {
-    expect(jobBlock).toContain("tests/scripts/lib/inngest-volume-recut-gate.sh");
-    expect(jobBlock).toContain("tests/scripts/lib/inngest-host-dark-gate.sh");
-    expect(jobBlock).toMatch(/^\s*if ! inngest_volume_recut_gate /m);
-    expect(jobBlock).toMatch(/^\s*if ! inngest_host_dark_gate /m);
-    // Anchored on the phrase inside the job BODY, not the header comment: extractJobBlock starts
-    // at the `  inngest_volume_recut:` line, so a header-comment anchor would be asserting text
-    // the block does not contain — and a reader "fixing" that would reach for the header rather
-    // than for the operator-visible ::error:: where the claim actually has to hold.
-    expect(jobBlock).toContain("NO [ack-destroy] bypass on this path.");
-  });
-
-  test("Guard 2 runs BEFORE the plan", () => {
-    // A serving host must cost nothing and reach no terraform at all. If the plan ran first, a
-    // refusal would still be correct but would have already touched state — and the ordering is
-    // exactly the kind of thing a later edit reorders without noticing.
-    const darkAt = jobBlock.indexOf("inngest_host_dark_gate");
-    const planAt = jobBlock.indexOf("terraform plan -no-color");
-    expect(darkAt).toBeGreaterThan(-1);
-    expect(planAt).toBeGreaterThan(-1);
-    expect(darkAt).toBeLessThan(planAt);
-  });
-
-  test("does NOT re-derive an inline copy of Guard 1's counter logic in the plan step", () => {
-    // The gate must be the SAME BYTES the test suite exercises. An inline jq over
-    // resource_changes inside the PLAN step would be a second, untested implementation.
-    // (The APPLY step's jq backstops are deliberate and separate — they re-read the SAVED plan
-    // after the gate has already passed, so they are redundancy, not a second decision.)
-    const planStep = jobBlock.slice(
-      jobBlock.indexOf("Terraform plan (inngest-redis volume recut"),
-      jobBlock.indexOf("Terraform apply (inngest-redis volume recut"),
+  test("G1: the retired dispatch stays retired (no job, enum option, confirm literal, input or -target) in ANY workflow", () => {
+    // Quotes and a trailing comment are tolerated on every form: YAML accepts all of them, so a guard that
+    // matches only the bare spelling is defeated by re-quoting the revert.
+    const JOB = /^ {2}["']?inngest_backstop_retire["']?:[ \t]*(?:#.*)?$/m;
+    const OPTION = /^ +- ["']?inngest-backstop-retire["']?[ \t]*(?:#.*)?$/m;
+    const INPUT = /^ +["']?(expected_inngest_volume_id|phase|wipe_run_id|erasure|clo_attestation_ref)["']?:[ \t]*(?:#.*)?$/m;
+    // A retired address reaching terraform as -target / -replace, in either `=` or space form, in any job.
+    const ADDR_FLAG = new RegExp(
+      `-(?:target|replace)(?:=|\\s+)["']?(?:${RETIRED_ADDRS.map((a) => g2Esc(a)).join("|")})\\b`,
     );
-    expect(planStep.length).toBeGreaterThan(0);
-    expect(planStep).not.toContain("resource_changes");
+    // Non-vacuity: each pattern recognises the form it forbids, so an empty result is not a blind scan.
+    expect(JOB.test("  inngest_backstop_retire:\n")).toBe(true);
+    expect(JOB.test("  'inngest_backstop_retire': # x\n")).toBe(true);
+    expect(OPTION.test("          - inngest-backstop-retire\n")).toBe(true);
+    expect(OPTION.test("      - inngest-backstop-retire\n")).toBe(true); // any indent
+    expect(OPTION.test('          - "inngest-backstop-retire"\n')).toBe(true);
+    expect(INPUT.test("      wipe_run_id:\n")).toBe(true);
+    expect(INPUT.test("      phase:\n")).toBe(true);
+    expect(ADDR_FLAG.test("-target=hcloud_server.inngest_backstop_wipe")).toBe(true);
+    // A line continuation between the flag and its operand is folded (as the census does) before the scan.
+    expect(ADDR_FLAG.test("-target \\\n  hcloud_server.inngest_backstop_wipe".replace(/\\\r?\n\s*/g, " "))).toBe(true);
+    expect(ADDR_FLAG.test('-replace "hcloud_volume.inngest_redis"')).toBe(true);
+    // The LIVE sibling must not match (the \b / name boundary is what keeps `inngest_redis_luks` legal).
+    expect(ADDR_FLAG.test("-target=hcloud_volume.inngest_redis_luks")).toBe(false);
+    expect(extractAllTargets(wf).size).toBeGreaterThan(50);
+
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    const workflows = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
+    expect(workflows.length).toBeGreaterThan(10); // non-vacuity: the directory scan reached the workflows
+    for (const f of workflows) {
+      const text = readFileSync(resolve(dir, f), "utf8");
+      const code = stripComments(text);
+      expect(JOB.test(text), `${f}: retired job key`).toBe(false);
+      expect(OPTION.test(text), `${f}: retired apply_target option`).toBe(false);
+      // `phase` is a generic word: only the retired job's workflow could have carried it, so it is scoped to the
+      // file the dispatch lived in; the other four inputs are unique to the retired job and scanned everywhere.
+      const inputRe = f === "apply-web-platform-infra.yml" ? INPUT : /^ +["']?(expected_inngest_volume_id|wipe_run_id|erasure|clo_attestation_ref)["']?:/m;
+      expect(inputRe.test(text), `${f}: retired workflow_dispatch input`).toBe(false);
+      expect(code, `${f}: confirm literal`).not.toContain("RETIRE-INNGEST-BACKSTOP");
+      expect(text, `${f}: gate library`).not.toContain("inngest-backstop-retire-gate.sh");
+      expect(ADDR_FLAG.test(code.replace(/\\\r?\n\s*/g, " ")), `${f}: retired address as -target/-replace`).toBe(false);
+    }
+    const all = extractAllTargets(wf);
+    for (const addr of RETIRED_ADDRS) {
+      expect(all.has(addr), `${addr} must not be a -target of any job`).toBe(false);
+    }
   });
 
-  test("requires the typed confirm and the id-pin before planning", () => {
-    expect(jobBlock).toContain("RECUT-INNGEST-VOLUME");
-    expect(jobBlock).toContain("expected_inngest_volume_id");
+  test("G1b: the deleted apparatus files and the four wipe variables stay deleted", () => {
+    const GONE = [
+      "apps/web-platform/infra/inngest-backstop-wipe.tf",
+      "apps/web-platform/infra/cloud-init-inngest-backstop-wipe.yml",
+      "apps/web-platform/infra/inngest-backstop-wipe.test.sh",
+      "tests/scripts/lib/inngest-backstop-retire-gate.sh",
+      "tests/scripts/test-inngest-backstop-retire-gate.sh",
+    ];
+    // Non-vacuity: the check resolves a path that DOES exist, so an always-false existsSync would not pass it.
+    expect(existsSync(resolve(REPO_ROOT, "apps/web-platform/infra/inngest-redis-luks.tf"))).toBe(true);
+    for (const rel of GONE) expect(existsSync(resolve(REPO_ROOT, rel)), `${rel} was deleted by #8285 PR B`).toBe(false);
+    const vars = stripComments(readFileSync(resolve(INFRA_DIR, "variables.tf"), "utf8"));
+    expect(vars).toMatch(/variable "inngest_redis_volume_size"/); // non-vacuity: a live sibling variable is found
+    expect(vars).not.toMatch(/variable\s+"inngest_backstop_/);
   });
 
-  test("B8: RECUT-INNGEST-VOLUME is distinct from every other confirm literal", () => {
-    // A token typed for one target must never authorize another. Derived from the workflow rather
-    // than from a hand-kept list, so a future target that reuses the literal reddens here.
-    const literals = [...wf.matchAll(/"\$CONFIRM" != "([A-Z-]+)"/g)].map((m) => m[1]);
-    expect(literals).toContain("RECUT-INNGEST-VOLUME");
-    // Exactly ONE job gates on it. A GLOBAL uniqueness assertion would be wrong and was measured
-    // so: RECUT-REGISTRY-LUKS legitimately appears twice, because registry_pull_path_gate and
-    // registry_luks_recut are two jobs bound to the SAME apply_target and must accept the same
-    // token. The property that matters is per-TOKEN, not per-occurrence — a token typed for one
-    // TARGET must not authorize a different one.
-    expect(literals.filter((l) => l === "RECUT-INNGEST-VOLUME")).toHaveLength(1);
-    // …and no OTHER target's token collides with it.
-    const others = literals.filter((l) => l !== "RECUT-INNGEST-VOLUME");
-    expect(others.length).toBeGreaterThan(0); // non-vacuity: there ARE siblings to be distinct from
-    expect(others).not.toContain("RECUT-INNGEST-VOLUME");
-  });
-
-  test("B6: the `confirm` input DESCRIPTION names this target as environment-gated", () => {
-    // The description enumerates which targets carry an `environment:` reviewer gate. Leaving it
-    // stale makes the workflow's own documentation assert something false about the one field an
-    // operator reads before firing a destroy.
-    const confirmDesc = /confirm:\n\s*description: "([^"]*)"/.exec(wf);
-    expect(confirmDesc).not.toBeNull();
-    expect(confirmDesc![1]).toContain("inngest-volume-recut");
-  });
-
-  test("declares the required-reviewer environment (the SOLE authorization)", () => {
-    expect(jobBlock).toMatch(/^ {4}environment: inngest-cutover$/m);
-  });
-
-  test("asserts the reviewer set is non-empty at dispatch time (DP-11 F8)", () => {
-    // A zero-reviewer environment AUTO-APPROVES, which silently demotes layer 1 — the only
-    // authorization in the chain — to decoration while every other layer still reports green. It
-    // lives in the GitHub API, so no test in this repo can observe it; the job must read it.
-    expect(jobBlock).toContain("environments/inngest-cutover");
-    expect(jobBlock).toContain("required_reviewers");
-  });
-
-  test("B9: the recut, inngest_host, inngest_host_replace and cutover-inngest share ONE mutex", () => {
-    const CUTOVER_WORKFLOW = resolve(
-      REPO_ROOT,
-      ".github/workflows/cutover-inngest.yml",
-    );
+  test("B9: inngest_host, inngest_host_replace and cutover-inngest share ONE job-level mutex; the workflow-level root group governs all", () => {
+    const CUTOVER_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/cutover-inngest.yml");
     const groupOf = (block: string): string | null => {
       const m = /^ {4}concurrency:\n {6}group: (\S+)\n {6}cancel-in-progress: (\S+)$/m.exec(block);
       return m ? `${m[1]}|${m[2]}` : null;
     };
     const surfaces: Array<[string, string | null]> = [
-      ["inngest_volume_recut", groupOf(jobBlock)],
       ["inngest_host", groupOf(extractJobBlock(wf, "inngest_host"))],
       ["inngest_host_replace", groupOf(extractJobBlock(wf, "inngest_host_replace"))],
-      [
-        "cutover-inngest.yml:cutover",
-        groupOf(
-          extractJobBlock(readFileSync(CUTOVER_WORKFLOW, "utf8"), "cutover"),
-        ),
-      ],
+      ["cutover-inngest.yml:cutover", groupOf(extractJobBlock(readFileSync(CUTOVER_WORKFLOW, "utf8"), "cutover"))],
     ];
-    // Every surface declares one, and every declaration is the SAME literal with
-    // cancel-in-progress: false. GitHub does NOT error on divergent group strings — they silently
-    // fail to serialize — which is why this is asserted rather than assumed.
     for (const [name, g] of surfaces) {
       expect(g, `${name} declares no job-level concurrency group`).not.toBeNull();
     }
-    const groups = new Set(surfaces.map(([, g]) => g));
-    expect([...groups]).toEqual(["deploy-inngest-restart|false"]);
+    expect([...new Set(surfaces.map(([, g]) => g))]).toEqual(["deploy-inngest-restart|false"]);
+    // The root's serializer (no state lock): a workflow-level group, identical to apply-deploy-pipeline-fix.yml's.
+    expect(wf).toMatch(/^concurrency:\n(?:  #[^\n]*\n)*  group: terraform-apply-web-platform-host\n  cancel-in-progress: false$/m);
   });
 
-  test("pins timeout-minutes below GitHub's 360-minute default", () => {
-    const m = /timeout-minutes:\s*(\d+)/.exec(jobBlock);
-    expect(m).not.toBeNull();
-    expect(Number(m![1])).toBeLessThanOrEqual(30);
-  });
-
-  test("stripDispatchJobs removes this job's -targets from the coverage set", () => {
-    const strippedTargets = extractAllTargets(stripDispatchJobs(wf));
-    // Non-vacuity: unstripped, the whole-file scan DOES see them.
-    expect(extractAllTargets(wf).has("hcloud_volume.inngest_redis")).toBe(true);
-    expect(strippedTargets.has("hcloud_volume.inngest_redis")).toBe(false);
-    // The ATTACHMENT survives stripDispatchJobs, and that is NOT this job's doing:
-    // inngest_host_replace also -targets it and is one of the two inngest dispatch jobs
-    // deliberately "left folded-in historically" (see the stripDispatchJobs comment). Asserting
-    // its absence here would be asserting someone else's property and would redden on a change
-    // this job does not own — so the claim is narrowed to what this strip actually removes, and
-    // the attachment is checked against a text with that sibling removed too.
-    const alsoNoReplace = extractAllTargets(
-      stripJob(stripDispatchJobs(wf), "inngest_host_replace"),
-    );
-    expect(alsoNoReplace.has("hcloud_volume_attachment.inngest_redis")).toBe(false);
-  });
-
-  test("B6: inngest_host_replace carries the ADDITIVE attachment, and neither durable volume (#6894)", () => {
-    // A replace re-creates the server, so every attachment that interpolates the server id is
-    // ForceNew. An attachment NOT -targeted here is simply left behind: the new host boots with that
-    // volume DETACHED. For the additive LUKS volume that is harmless before the cutover and fatal
-    // after it — the pointer then names a volume that is not attached, the resolver refuses, and
-    // Redis stays down. The job's own comment claimed the target for a whole phase while the -target
-    // list carried only three lines; this is the pin that comment never had.
+  test("B6: inngest_host_replace does not target the plaintext pair, still carries the LUKS attachment, and no volume (#6894, #8285)", () => {
     const replaceJob = extractJobBlock(wf, "inngest_host_replace");
     const targets = extractAllTargets(replaceJob);
     expect(targets.has("hcloud_server.inngest")).toBe(true); // non-vacuity: the extraction reached the job
-    expect(targets.has("hcloud_volume_attachment.inngest_redis")).toBe(true);
     expect(targets.has("hcloud_volume_attachment.inngest_redis_luks")).toBe(true);
-    // Both VOLUMES are preserved by OMISSION — targeting either would put a sole-copy store one
-    // replace away from a destroy.
+    expect(targets.has("hcloud_volume_attachment.inngest_redis")).toBe(false);
+    // The durable volume is preserved by OMISSION - targeting it would put the sole copy one replace from a destroy.
     expect(targets.has("hcloud_volume.inngest_redis")).toBe(false);
     expect(targets.has("hcloud_volume.inngest_redis_luks")).toBe(false);
+    expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume.inngest_redis")).toBe(false);
+    expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume_attachment.inngest_redis")).toBe(false);
   });
 
-  test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not this job's", () => {
-    // The passphrase must exist before any host boots that reads it, so it is minted at MERGE.
-    // It must NOT be in the recut job's -target set: Guard 1 refuses any update/delete/forget on
-    // it, and targeting it here would put a rotation one plan away from the volume it opens.
-    expect(extractAllTargets(jobBlock).has("random_password.inngest_redis_luks")).toBe(false);
+  test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not the inngest_host job's", () => {
+    expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("random_password.inngest_redis_luks")).toBe(false);
     const perMerge = extractAllTargets(stripDispatchJobs(wf));
     expect(perMerge.has("random_password.inngest_redis_luks")).toBe(true);
     expect(perMerge.has("doppler_secret.inngest_redis_luks_key")).toBe(true);
+  });
+
+  // ---- G2 reachability (#9879): the sole-copy addresses are reachable ONLY through the expected (workflow, job, verb) set ----
+  test("G2: live tree - the (workflow, job, verb, address) census over every workflow equals the expected set", () => {
+    const files = g2LiveWorkflows();
+    expect(Object.keys(files).length).toBeGreaterThan(10); // non-vacuity: the directory scan reached the workflows
+    expect(Object.keys(files)).toContain(G2_WORKFLOW);
+    expect(SOLE_COPY_EXPECTED.length).toBe(7);
+    expect(g2Verdict(files)).toEqual([]);
+    expect(g2Census(files)).toEqual([...SOLE_COPY_EXPECTED].sort());
+    // Zero -replace and zero destroy of any of them, anywhere.
+    expect(g2Census(files).filter((t) => /\|(replace|destroy)\|/.test(t))).toEqual([]);
+    // Non-vacuity through the EXISTING chokepoints: the three expected jobs are found and carry -targets.
+    for (const job of ["apply", "inngest_host", "inngest_host_replace"]) {
+      expect(extractAllTargets(extractJobBlock(wf, job)).size, `${job} extracted empty`).toBeGreaterThan(0);
+      expect(g2Jobs(wf).get(job)).toBe(extractJobBlock(wf.slice(wf.indexOf("\njobs:\n") + 6), job));
+    }
+    // The per-merge view after stripDispatchJobs: the inngest_host job is gone from it, the other two expected jobs remain.
+    const perMerge = g2Census({ [G2_WORKFLOW]: stripDispatchJobs(wf) });
+    expect(perMerge).toEqual(SOLE_COPY_EXPECTED.filter((t) => !t.includes("|inngest_host|")).sort());
+    // The two Doppler parents are targeted (never replaced or destroyed) and only by inngest_host.
+    for (const parent of ["doppler_project.inngest", "doppler_environment.inngest_prd"]) {
+      expect(g2Census(files).filter((t) => t.endsWith(`|${parent}`))).toEqual([`${G2_WORKFLOW}|inngest_host|target|${parent}`]);
+    }
+  }, 60_000);
+
+  test("G2: mutation matrix rows 1-7 each turn the verdict RED (scratch copies only)", () => {
+    const live = g2LiveWorkflows();
+    const VOL = "hcloud_volume.inngest_redis_luks";
+    const ATT = "hcloud_volume_attachment.inngest_redis_luks";
+    const att = /-target='hcloud_volume_attachment\.inngest_redis_luks' \\$/;
+    const withWf = (text: string, extra: Record<string, string> = {}) => ({ ...live, [G2_WORKFLOW]: text, ...extra });
+    const rows: Array<[string, Record<string, string>, RegExp]> = [
+      ["1 -replace of the volume in inngest_host_replace",
+        withWf(g2InsertBefore(wf, att, [`-replace='${VOL}' \\`], "inngest_host_replace")), /unexpected: .*\|inngest_host_replace\|replace\|hcloud_volume\.inngest_redis_luks/],
+      ["2 -target of the volume in inngest_host_replace",
+        withWf(g2InsertBefore(wf, att, [`-target='${VOL}' \\`], "inngest_host_replace")), /unexpected: .*\|inngest_host_replace\|target\|hcloud_volume\.inngest_redis_luks/],
+      ["3 the attachment target in a third job (both legal ones intact)",
+        withWf(g2InsertBefore(wf, /^\s*-target=/, [`-target='${ATT}' \\`], "registry_host_replace")), /unexpected: .*\|registry_host_replace\|target\|hcloud_volume_attachment\.inngest_redis_luks/],
+      ["4 a terraform destroy step in a main-root workflow",
+        withWf(wf, { "apply-deploy-pipeline-fix.yml": g2InsertBefore(live["apply-deploy-pipeline-fix.yml"], /^\s+terraform plan -target=/, ["terraform destroy -auto-approve"]) }), /unexpected: apply-deploy-pipeline-fix\.yml\|.*\|destroy\|\*/],
+      ["5 -target X spelled with a space and a line continuation",
+        withWf(g2InsertBefore(wf, att, ["-target \\", `  ${VOL} \\`], "inngest_host_replace")), /unexpected: .*\|inngest_host_replace\|target\|hcloud_volume\.inngest_redis_luks/],
+      ["6 renamed job (expected job not found)",
+        withWf(wf.replace(/^ {2}inngest_host_replace:/m, "  inngest_host_replace_renamed:")), /job-not-found: .*\|inngest_host_replace/],
+      ["7 a new workflow file naming the pair in -target",
+        withWf(wf, { "zz-new.yml": `name: x\njobs:\n  j:\n    steps:\n      - run: |\n          terraform apply \\\n            -target=random_password.inngest_redis_luks \\\n            -target=doppler_secret.inngest_redis_luks_key\n` }), /unexpected: zz-new\.yml\|j\|target\|random_password\.inngest_redis_luks/],
+    ];
+    expect(g2Verdict(live)).toEqual([]); // control: the unmutated tree is GREEN, so a RED below is the mutation's doing
+    for (const [name, files, want] of rows) {
+      if (name.startsWith("6")) expect(files[G2_WORKFLOW]).not.toBe(wf);
+      const verdict = g2Verdict(files);
+      expect(verdict.length, `row ${name} stayed GREEN`).toBeGreaterThan(0);
+      expect(verdict.join("\n"), `row ${name} was RED for the wrong reason`).toMatch(want);
+    }
+  }, 60_000);
+
+  test("G2: every spelling is seen - flags, destroy, taint, state write, import (in a non-expected job)", () => {
+    const live = { [G2_WORKFLOW]: wf }; // one file is enough for a per-spelling verdict and keeps the loop fast
+    const VOL = "hcloud_volume.inngest_redis_luks";
+    const PW = "random_password.inngest_redis_luks";
+    const anchor = /-target='hcloud_volume_attachment\.inngest_redis_luks' \\$/;
+    const spellings: Array<[string, string[], string, RegExp?]> = [
+      ["-target=X", [`-target=${VOL} \\`], "target"],
+      ["-target X", [`-target ${VOL} \\`], "target"],
+      ["-target 'X'", [`-target '${VOL}' \\`], "target"],
+      ['-target="X"', [`-target="${VOL}" \\`], "target"],
+      ['-target=\\"X\\"', [`-target=\\"${VOL}\\" \\`], "target"],
+      ["-replace=X", [`-replace=${VOL} \\`], "replace"],
+      ["-replace X", [`-replace ${VOL} \\`], "replace"],
+      ["-replace 'X'", [`-replace '${VOL}' \\`], "replace"],
+      ["-destroy", ["-destroy \\"], "destroy"],
+      ["terraform destroy (own line)", ["terraform destroy -auto-approve"], "destroy", /^\s*set \+e$/],
+      ["doppler run -- terraform destroy", ["doppler run -p soleur -c prd_terraform -- terraform destroy -auto-approve"], "destroy", /^\s*set \+e$/],
+      ["cd x && terraform destroy", ["cd x && terraform destroy -auto-approve"], "destroy", /^\s*set \+e$/],
+      ["terraform taint", [`terraform taint ${PW}`], "taint"],
+      ["state rm", [`terraform state rm ${PW}`], "state-rm"],
+      ["state mv", [`terraform state mv ${PW} random_password.elsewhere`], "state-mv"],
+      ["state push (job also names an address)", ["terraform state push errored.tfstate"], "state-push"],
+      ["import", [`terraform import ${PW} id`], "import"],
+    ];
+    for (const [name, lines, verb, own] of spellings) {
+      const text = g2InsertBefore(wf, own ?? anchor, lines, "inngest_host_replace");
+      const census = g2Census({ ...live, [G2_WORKFLOW]: text });
+      expect(census.filter((t) => t.includes(`|inngest_host_replace|${verb}|`)), `spelling "${name}" was not seen`).not.toEqual([]);
+      expect(g2Verdict({ ...live, [G2_WORKFLOW]: text }).length, `spelling "${name}" stayed GREEN`).toBeGreaterThan(0);
+    }
+    // The scanner's own non-vacuity: `[ack-destroy]` prose is not the -destroy flag, and a sibling address is not a sole-copy one.
+    expect(g2JobVerbs(g2Code("echo 'add [ack-destroy] to the commit'"))).toEqual([]);
+    expect(g2JobVerbs(g2Code("terraform plan -target=hcloud_volume.inngest_redis_luks_other -target=doppler_project.inngest_x"))).toEqual([]);
+    // Comments are stripped: a whole-line comment naming a flag is not a hit.
+    expect(g2JobVerbs(g2Code(`# -replace=${VOL}\n  # terraform destroy`))).toEqual([]);
+    // A `#` inside a string or `$#` cannot hide a flag behind it (trailing comments are deliberately NOT stripped).
+    expect(g2JobVerbs(g2Code(`echo "$#"; terraform apply -replace=${VOL}`))).toEqual([["replace", VOL]]);
+  }, 60_000);
+
+  test("G2: destroy spellings in a main-root workflow are RED; prose, sub-root steps and non-destroy words stay GREEN", () => {
+    const jobOf = (stepBody: string): string => `name: x\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n${stepBody}\n`;
+    const verdictOf = (stepBody: string): string[] => g2Census({ "zz.yml": jobOf(stepBody) });
+    const RUN = (cmd: string) => `      - run: |\n          ${cmd}`;
+    const wd = (dir: string, cmd = "terraform destroy -auto-approve") => `      - name: t\n        working-directory: ${dir}\n        run: ${cmd}`;
+    const red: Array<[string, string]> = [
+      ["- run: terraform destroy (single-line step)", "      - run: terraform destroy"],
+      ["if terraform destroy ...; then", RUN("if terraform destroy -auto-approve; then echo done; fi")],
+      ["sudo terraform destroy", RUN("sudo terraform destroy -auto-approve")],
+      ["sudo -E terraform destroy", RUN("sudo -E terraform destroy")],
+      ["VAR=x terraform destroy", RUN("TF_VAR_x=1 terraform destroy -auto-approve")],
+      ["two assignments then destroy", RUN("A=1 B=2 terraform destroy")],
+      ['bash -c "terraform destroy"', RUN('bash -c "terraform destroy -auto-approve"')],
+      ["sh -ec 'terraform destroy'", RUN("sh -ec 'terraform destroy'")],
+      ["env X=1 terraform destroy", RUN("env X=1 terraform destroy")],
+      ["terraform -chdir=x destroy", RUN("terraform -chdir=apps/web-platform/infra destroy")],
+      ["a && terraform destroy", RUN("cd x && terraform destroy")],
+      ["wd apps/web-platform/infra/. is the main root", wd("apps/web-platform/infra/.")],
+      ["wd apps/web-platform/infra/ ./ form", wd("apps/web-platform/infra/./")],
+      ["wd ./apps/web-platform/infra/.", wd("./apps/web-platform/infra/.")],
+      ["wd apps/web-platform/infra/sub/.. is the main root", wd("apps/web-platform/infra/sub/..")],
+      ["wd no working-directory", "      - name: t\n        run: terraform destroy"],
+      ["wd quoted main root", wd(`"apps/web-platform/infra/."`)],
+    ];
+    const green: Array<[string, string]> = [
+      ["prose in an echo", RUN('echo "this job never runs terraform destroy"')],
+      ["prose in backticks", RUN("echo 'see `terraform destroy` in the runbook'")],
+      ["::error:: annotation", RUN('echo "::error::terraform destroy refused"')],
+      ["whole-line comment", RUN("# terraform destroy -auto-approve\n          echo ok")],
+      ["a terraform plan", RUN("terraform plan -out tfplan")],
+      ["the [ack-destroy] marker", RUN("echo 'add [ack-destroy] to the commit'")],
+      ["REHEARSAL_DIR sub-root", wd("${{ env.REHEARSAL_DIR }}")],
+      ["a named sub-dir sub-root", wd("apps/web-platform/infra/rehearsal")],
+      ["a ./-prefixed sub-dir sub-root", wd("./apps/web-platform/infra/rehearsal/inner")],
+      ["a workspace-prefixed sub-dir sub-root", wd("${{ github.workspace }}/apps/web-platform/infra/rehearsal")],
+      ["a binary that merely ends in terraform", RUN("my-terraform destroy")],
+      ["a path segment that merely ends in terraform", RUN("./xterraform destroy")],
+      ["a variable that is an argument, not the command", RUN("echo $TF destroy")],
+      ["prose behind sudo and an option value", RUN("sudo -u root echo terraform destroy")],
+      ["terraform destroys (a longer word)", RUN("terraform destroys")],
+      ["a quoted $TF in prose", RUN('echo "run $TF destroy later"')],
+    ];
+    // TABLE: one row per alternative of G2_CMD_PREFIX (and per binary spelling). Each line reaches `terraform` ONLY through the
+    // named alternative (line start + whitespace cannot skip the leading word), so dropping any one alternative reds its row.
+    const table: Array<[string, string]> = [
+      [";", "echo a; terraform destroy"],
+      ["&", "echo a & terraform destroy"],
+      ["|", "echo a | terraform destroy"],
+      ["(", "(terraform destroy)"],
+      ["{ ", "{ terraform destroy; }"],
+      ["! ", "! terraform destroy"],
+      ["-- ", "doppler run -- terraform destroy"],
+      ["then", "then terraform destroy"],
+      ["do", "do terraform destroy"],
+      ["else", "else terraform destroy"],
+      ["elif", "elif terraform destroy; then"],
+      ["if", "if terraform destroy; then"],
+      ["while", "while terraform destroy; do"],
+      ["until", "until terraform destroy; do"],
+      ["sudo", "sudo terraform destroy"],
+      ["exec", "exec terraform destroy"],
+      ["time", "time terraform destroy"],
+      ["command", "command terraform destroy"],
+      ["env", "env terraform destroy"],
+      ["nohup", "nohup terraform destroy"],
+      ["xargs", "xargs terraform destroy"],
+      ["eval", "eval terraform destroy"],
+      ["nice", "nice terraform destroy"],
+      ["ionice", "ionice -c3 terraform destroy"],
+      ["setsid", "setsid terraform destroy"],
+      ["timeout N", "timeout 60 terraform destroy"],
+      ["timeout -k N D", "timeout -k 5 60s terraform destroy"],
+      ["flock FILE", "flock /tmp/l terraform destroy"],
+      ["flock -w N FILE", "flock -w 5 /tmp/l terraform destroy"],
+      ["bash -c", 'bash -c "terraform destroy"'],
+      ["sh -c", "sh -c 'terraform destroy'"],
+      ["zsh -c", 'zsh -c "terraform destroy"'],
+      ["dash -ec", "dash -ec 'terraform destroy'"],
+      ["ksh -c", "ksh -c 'terraform destroy'"],
+      ["run:", "      - run: terraform destroy"],
+      ["assignment run", "TF_LOG=1 TF_IN_AUTOMATION=1 terraform destroy"],
+      ["sudo -u root", "sudo -u root terraform destroy"],
+      ["sudo -n -E -u root", "sudo -n -E -u root terraform destroy"],
+      ["nice -n 10", "nice -n 10 terraform destroy"],
+      ["env -u A B=1", "env -u A B=1 terraform destroy"],
+      ["path /usr/bin/terraform", "/usr/bin/terraform destroy"],
+      ["path ./terraform", "./terraform destroy"],
+      ["path + -chdir", "sudo /usr/local/bin/terraform -chdir=x destroy"],
+      ["$TF", "$TF destroy"],
+      ["${TF}", "${TERRAFORM} destroy"],
+      ["$(which terraform)", "$(which terraform) destroy"],
+    ];
+    for (const [name, step] of red) {
+      expect(verdictOf(step).filter((t) => t.endsWith("|destroy|*")), `destroy spelling "${name}" stayed GREEN`).not.toEqual([]);
+    }
+    for (const [name, cmd] of table) {
+      const step = cmd.startsWith("      - run:") ? cmd : RUN(cmd);
+      expect(verdictOf(step).filter((t) => t.endsWith("|destroy|*")), `prefix alternative "${name}" stayed GREEN: ${cmd}`).not.toEqual([]);
+    }
+    for (const [name, step] of green) {
+      expect(verdictOf(step), `"${name}" must stay GREEN`).toEqual([]);
+    }
+    // g2IsSubRoot directly: the normalisation, not a regex shape, decides.
+    for (const [dir, want] of [
+      ["apps/web-platform/infra/.", false],
+      ["apps/web-platform/infra/./", false],
+      ["apps/web-platform/infra", false],
+      ["apps/web-platform/infra/sub/..", false],
+      ["apps/web-platform/infra/../infra/.", false],
+      ["apps/web-platform/infra/sub", true],
+      ["apps/web-platform/infra/./sub", true],
+      ["${{ env.REHEARSAL_DIR }}", true],
+      ["apps/other/infra/sub", false],
+    ] as const) {
+      expect(g2IsSubRoot(`        working-directory: ${dir}`), `working-directory: ${dir}`).toBe(want);
+    }
+    // The existing per-job path agrees: the same insertion into a live non-expected job is RED for the new spellings.
+    const live = { [G2_WORKFLOW]: wf };
+    for (const line of ["sudo terraform destroy", "if terraform destroy; then", "TF_VAR_x=1 terraform destroy", 'bash -c "terraform destroy"']) {
+      const text = g2InsertBefore(wf, /^\s*set \+e$/, [line], "inngest_host_replace");
+      expect(g2Verdict({ ...live, [G2_WORKFLOW]: text }).join("\n"), line).toMatch(/unexpected: .*\|inngest_host_replace\|destroy\|\*/);
+    }
+  }, 60_000);
+
+  test("G2: scanners are linear - whitespace-only, assignment-run, and separator-run inputs finish in under 2s", () => {
+    const hostile: Array<[string, string]> = [
+      ["300 KB of newline-space-tab", "\n \t".repeat(100_000)],
+      ["300 KB of newline-space-tab after a working-directory key", "      - run: x\n        working-directory:" + "\n \t".repeat(100_000)],
+      ["a run of `;a=` separators", ";a=".repeat(100_000)],
+      ["a run of `;a= ` assignment tokens", ";a= ".repeat(75_000)],
+      ["a long `a=a=a=` token", "a=".repeat(150_000)],
+      ["repeated `terraform ` words", "terraform ".repeat(30_000)],
+      ["repeated `sudo -x ` wrappers", "sudo -x ".repeat(40_000)],
+      ["a run of `-target` and whitespace", "-target \n".repeat(40_000)],
+      // the prefix alternatives that start a scan at every occurrence: a bare `{`, `!`, `--` and keywords inside assignment values
+      ["a run of `{a=` tokens", "{a=".repeat(100_000)],
+      ["a run of `!a=` tokens", "!a=".repeat(100_000)],
+      ["a run of `--a=` tokens", "--a=".repeat(100_000)],
+      ["a run of `a=sudo ` assignment values", "a=sudo ".repeat(40_000)],
+      ["a run of `a=then ` assignment values", "a=then ".repeat(40_000)],
+      ["a run of `sudo -sudo ` wrappers", "sudo -sudo ".repeat(30_000)],
+      ["`sudo -` and one 300 KB option word", "sudo -" + "a".repeat(300_000)],
+      ["repeated `timeout 5 ` and `flock x ` wrappers", "timeout 5 flock x ".repeat(20_000)],
+      ["a run of `;$(a` command substitutions", ";$(a".repeat(60_000)],
+      ["one 300 KB path-shaped word", "; " + "a/".repeat(150_000)],
+      ["a long whitespace run inside a working-directory value", "      - run: x\n        working-directory: a" + " ".repeat(100_000) + "y"],
+    ];
+    for (const [name, text] of hostile) {
+      const t0 = performance.now();
+      const verbs = g2JobVerbs(g2Code(text));
+      const hits = g2ScriptHits("h.sh", text);
+      g2IsSubRoot(text);
+      const ms = performance.now() - t0;
+      expect(ms, `${name}: ${ms.toFixed(0)} ms`).toBeLessThan(2000);
+      expect([name, verbs, hits]).toEqual([name, [], []]); // nothing real in the text: the fast path is also the correct path
+    }
+  }, 60_000);
+
+  test("G2: tracked scripts - no state-write or flag verb co-occurs with a sole-copy address", () => {
+    const scripts = g2TrackedScripts();
+    // MEASURED 2026-10-10: 537 files after the test/fixture skip (1063 before it), zero hits. The floor is a non-vacuity bound, not the count.
+    expect(scripts.length).toBeGreaterThan(400); // the listing reached every directory class below, not just scripts/
+    for (const dir of [/^\.github\/actions\//, /^\.github\/scripts\//, /^scripts\//, /^apps\/[^/]+\/infra\//]) {
+      expect(scripts.filter((p) => dir.test(p)).length, `no scanned file under ${dir}`).toBeGreaterThan(0);
+    }
+    for (const ext of [".sh", ".py", ".yml"]) expect(scripts.some((p) => p.endsWith(ext)), `no scanned ${ext} file`).toBe(true);
+    // Non-vacuity: the scan can SEE a sole-copy address in this population (three files name one without a verb) - an empty hit list is not a blind scan.
+    const naming = scripts.filter((rel) => g2Named(g2ScriptCode(rel, readFileSync(resolve(REPO_ROOT, rel), "utf8"))).length > 0);
+    expect(naming.length).toBeGreaterThan(0);
+    const hits = scripts.flatMap((rel) => g2ScriptHits(rel, readFileSync(resolve(REPO_ROOT, rel), "utf8")));
+    expect(hits).toEqual([]);
+    // Scratch control (the real-content control, a script retired with the rebirth workflow): a verb IS present
+    // and no sole-copy address is named, so the line is legal by content, not by exemption. It flows through the same two
+    // functions the population scan uses (g2Code/G2_STATE_VERBS and g2Named), embedded in a longer line with a leading `cd x &&`
+    // and a trailing comment, so a verb-less scanner (empty G2_STATE_VERBS) or a blind matcher cannot pass it.
+    const control = g2Code(`cd x && terraform state rm 'hcloud_volume.workspaces["web-2"]' # web-2 pinned form`);
+    expect(G2_STATE_VERBS.some(([v, re]) => v === "state-rm" && re.test(control))).toBe(true);
+    expect(g2Named(control)).toEqual([]);
+    expect(g2ScriptHits("c.sh", `cd x && terraform state rm 'hcloud_volume.workspaces["web-2"]' # web-2 pinned form`)).toEqual([]);
+    // The same line plus a second line naming a sole-copy address must report exactly that one hit, not "at least one" and not none.
+    expect(g2ScriptHits("c.sh", `cd x && terraform state rm 'hcloud_volume.workspaces["web-2"]'\nterraform state rm hcloud_volume.inngest_redis_luks`)).toEqual(["c.sh|state-rm|hcloud_volume.inngest_redis_luks"]);
+    // Mutations on scratch strings: each spelling in a script is RED; the web-2 pinned form is not.
+    const VOL = "hcloud_volume.inngest_redis_luks";
+    expect(g2ScriptHits("s.sh", `terraform state rm 'hcloud_volume.inngest_redis_luks'`)).toEqual(["s.sh|state-rm|hcloud_volume.inngest_redis_luks"]);
+    expect(g2ScriptHits("s.sh", `addrs=(doppler_project.inngest)\n(cd x && terraform state rm "\${addrs[@]}")`)).toEqual(["s.sh|state-rm|doppler_project.inngest"]);
+    expect(g2ScriptHits("s.sh", `terraform \\\n  import doppler_environment.inngest_prd p/e`)).toEqual(["s.sh|import|doppler_environment.inngest_prd"]);
+    expect(g2ScriptHits("s.sh", `# terraform state rm hcloud_volume.inngest_redis_luks`)).toEqual([]);
+    expect(g2ScriptHits("s.sh", `terraform state rm 'hcloud_volume.workspaces["web-2"]'`)).toEqual([]);
+    // The flag verbs co-occur the same way, in every extension of the population.
+    for (const [rel, line, verb] of [
+      ["a.sh", `terraform apply -replace=${VOL}`, "replace"],
+      ["a.bash", `terraform apply -target=${VOL}`, "target"],
+      ["a.sh", `terraform plan -destroy -out p # ${VOL}`, "destroy"],
+      ["a.py", `subprocess.run(["terraform", "-replace", "${VOL}"])`, "replace"],
+      ["a.yml", `      - run: terraform destroy\n      - run: echo ${VOL}`, "destroy"],
+      ["a.ts", `await $\`terraform apply -target=\${"${VOL}"}\``, "target"],
+    ] as const) {
+      expect(g2ScriptHits(rel, line), `${rel}: ${line}`).toEqual([`${rel}|${verb}|${VOL}`]);
+    }
+    // Legal by content: a flag or destroy with NO sole-copy address in the file (the rehearsal sub-root teardown, a web-2 replace);
+    // the address with NO verb; a comment-only mention (`#`, and `//` for ts/mjs).
+    expect(g2ScriptHits("r.sh", `cd apps/web-platform/infra/rehearsal && terraform destroy -auto-approve -target=hcloud_server.web2`)).toEqual([]);
+    expect(g2ScriptHits("r.sh", `echo ${VOL}`)).toEqual([]);
+    expect(g2ScriptHits("r.ts", `// terraform apply -replace=${VOL}\nconsole.log(1)`)).toEqual([]);
+    expect(g2ScriptHits("r.sh", `# terraform destroy ${VOL}`)).toEqual([]);
+    // Population filter: a symlink, a test file and a fixture are out; a real file is in; a path outside the directory classes is out.
+    const root = mkdtempSync(join(tmpdir(), "g2-pop-"));
+    try {
+      const mk = (rel: string, body = "x") => {
+        const abs = join(root, rel);
+        spawnSync("mkdir", ["-p", join(abs, "..")]);
+        writeFileSync(abs, body);
+      };
+      mk("scripts/real.sh");
+      mk("scripts/real.test.sh");
+      mk("scripts/test/helper.sh");
+      mk("scripts/fixtures/f.sh");
+      mk("scripts/target.sh");
+      mk("docs/other.sh");
+      spawnSync("ln", ["-s", join(root, "scripts/real.sh"), join(root, "scripts/link.sh")]);
+      const all = ["scripts/real.sh", "scripts/real.test.sh", "scripts/test/helper.sh", "scripts/fixtures/f.sh", "scripts/link.sh", "scripts/gone.sh", "docs/other.sh", "scripts/data.json"];
+      expect(g2ScanPopulation(all, root)).toEqual(["scripts/real.sh"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("G2: harness - superset/subset constants are RED; a comment/continuation/quote-rewritten copy still equals the set", () => {
+    const live = g2LiveWorkflows();
+    // SUITE edit: a superset constant (one extra triple) and a subset constant (one triple dropped) both turn the live tree RED.
+    expect(g2Verdict(live, [...SOLE_COPY_EXPECTED, `${G2_WORKFLOW}|inngest_host_replace|target|hcloud_volume.inngest_redis_luks`]).length).toBeGreaterThan(0);
+    expect(g2Verdict(live, SOLE_COPY_EXPECTED.slice(1)).join("\n")).toMatch(/unexpected: /);
+    // Superset constant naming a job that does not exist: the non-vacuity check, not the diff, catches it.
+    expect(g2Verdict(live, [...SOLE_COPY_EXPECTED, `${G2_WORKFLOW}|no_such_job|target|doppler_project.inngest`]).join("\n")).toMatch(/job-not-found: .*no_such_job/);
+    // Must-PASS: rewrite every sole-copy -target (`=` -> space, re-quoted, folded onto a continuation) and add whole-line
+    // comments that would be hits if they were code. The census must still equal the expected set.
+    let n = 0;
+    const flagRe = new RegExp(`^(\\s*)-target=(['"]?)(${G2_ADDR_ALT})\\2 \\\\$`, "gm");
+    let rewritten = wf.replace(flagRe, (_m, ind: string, _q: string, addr: string) => {
+      const quote = ["", "'", '"'][n++ % 3];
+      return `${ind}# -replace=${addr} \\\n${ind}-target \\\n${ind}  ${quote}${addr}${quote} \\`;
+    });
+    expect(n).toBe(7);
+    expect(rewritten).not.toBe(wf);
+    expect(g2Verdict({ ...live, [G2_WORKFLOW]: rewritten })).toEqual([]);
+    // The rewrite is real: the original spelling no longer appears for any sole-copy address.
+    expect(new RegExp(`-target=['"]?(${G2_ADDR_ALT})\\b`).test(rewritten)).toBe(false);
+    // Control for the same rewrite: add a real flag to it and it goes RED, so GREEN above is not a blind scan.
+    expect(g2Verdict({ ...live, [G2_WORKFLOW]: rewritten + `\n      - run: terraform apply -replace=hcloud_volume.inngest_redis_luks\n` }).length).toBeGreaterThan(0);
+  }, 60_000);
+});
+
+// --- G2e attribute pin (#9879): the INDEPENDENT anchor for the Guard 1 suite, in a REQUIRED check ---------------------------
+// Guard 1 (apps/web-platform/infra/inngest-luks-sole-copy.test.sh) runs in infra-validation.yml, which is NOT a required check,
+// so one diff could weaken the pins and the guard that pins them together and merge green. This file runs in the required `test`
+// check (ADR-282), so the same attributes are asserted here on EFFECTIVE text (comments removed), with a lexer of its own: a
+// defect shared by both lexers would have to be written twice, in two languages, in one reviewed diff.
+// Fail closed: a block that cannot be found, is found twice, or reads as zero attributes is RED, never "zero checks, green".
+// SUNSET: fold G2e into Guard 1 when Guard 1 becomes a required check (#9927). Until then G2e must not become a superset of it:
+// it holds what one diff must not weaken (delete_protection, prevent_destroy, no ignore_changes, no depth-0 count/for_each/provider/
+// provisioner, the attachment unpinned), over exactly the six addresses G2 and census G4h name (tied below).
+
+/**
+ * HCL with comments removed: whole-line and trailing `#` and `//`, and `/* ... *\/` (newlines kept). Strings are copied whole (a
+ * string never spans a line, so a stray quote cannot blind the rest of the file). A heredoc opener is recognised ONLY in code, so a
+ * trailing comment such as `# see <<EOF` is consumed as a comment first and starts nothing; a real heredoc body is blanked
+ * (`blank`) or kept verbatim (`keep`, for a reader that needs the SQL).
+ */
+function g2eStrip(text: string, heredoc: "blank" | "keep" = "blank"): string {
+  const t = text.replace(/\r\n/g, "\n");
+  const n = t.length;
+  let out = "";
+  let i = 0;
+  while (i < n) {
+    const c = t[i];
+    const c2 = t[i + 1];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < n && t[j] !== '"' && t[j] !== "\n") j += t[j] === "\\" ? 2 : 1;
+      const end = j < n && t[j] === '"' ? j + 1 : Math.min(j, n);
+      out += t.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (c === "#" || (c === "/" && c2 === "/")) {
+      while (i < n && t[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && c2 === "*") {
+      const e = t.indexOf("*/", i + 2);
+      const end = e < 0 ? n : e + 2;
+      out += t.slice(i, end).replace(/[^\n]/g, "");
+      i = end;
+      continue;
+    }
+    if (c === "<" && c2 === "<") {
+      const m = /^<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?=\n)/.exec(t.slice(i, i + 80));
+      if (m) {
+        const term = new RegExp(`\\n[ \\t]*${m[1]}[ \\t]*(?=\\n|$)`, "g");
+        term.lastIndex = i + m[0].length;
+        const tm = term.exec(t);
+        const end = tm ? tm.index + tm[0].length : n;
+        out += heredoc === "keep" ? t.slice(i, end) : `""${"\n".repeat((t.slice(i, end).match(/\n/g) ?? []).length)}`;
+        i = end;
+        continue;
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/** Index just past the `}` that closes the block whose `{` is at `open`, skipping strings; -1 if it never closes. */
+function g2eClose(s: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '"' && s[j] !== "\n") j += s[j] === "\\" ? 2 : 1;
+      i = j;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+
+/** The body of the single `resource "type" "name" { ... }` in comment-stripped HCL, or a defect string. */
+function g2eResource(stripped: string, type: string, name: string): { body: string } | { defect: string } {
+  const re = new RegExp(`(?:^|\\n)[ \\t]*resource[ \\t]+"${type}"[ \\t]+"${name}"[ \\t]*\\{`, "g");
+  const ms = [...stripped.matchAll(re)];
+  if (ms.length === 0) return { defect: "missing" };
+  if (ms.length > 1) return { defect: "duplicate" };
+  const open = ms[0].index! + ms[0][0].length - 1;
+  const close = g2eClose(stripped, open);
+  return close < 0 ? { defect: "unterminated" } : { body: stripped.slice(open + 1, close - 1) };
+}
+
+/** A block body split into its depth-0 text (nested braces emptied, so a nested attribute cannot pass for a top-level one) and its nested blocks. */
+function g2eSplit(body: string): { top: string; nested: Array<{ name: string; body: string }> } | null {
+  let top = "";
+  const nested: Array<{ name: string; body: string }> = [];
+  let depth = 0;
+  let from = 0;
+  let nm = "";
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < body.length && body[j] !== '"' && body[j] !== "\n") j += body[j] === "\\" ? 2 : 1;
+      if (depth === 0) top += body.slice(i, j + 1);
+      i = j;
+      continue;
+    }
+    if (c === "{") {
+      if (depth === 0) {
+        nm = /([A-Za-z_][\w-]*)[ \t]*$/.exec(body.slice(Math.max(0, i - 128), i))?.[1] ?? ""; // `labels = {` ends in `=`, so a map literal has no block name; a 128-char tail of the FLAT body (not of the growing `top` rope) keeps the scan linear
+        from = i + 1;
+      }
+      depth++;
+    } else if (c === "}") {
+      if (--depth < 0) return null;
+      if (depth === 0) {
+        nested.push({ name: nm, body: body.slice(from, i) });
+        top += "{}";
+      }
+    } else if (depth === 0) top += c;
+  }
+  return depth === 0 ? { top, nested } : null;
+}
+
+/** Values of every depth-0 `key = value` line in `top`. */
+const g2eAttr = (top: string, key: string): string[] =>
+  [...top.matchAll(new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(.*)$`, "gm"))].map((m) => m[1].trim()); // greedy then trim: a lazy `(.*?)[ \t]*$` is quadratic on a long whitespace run
+
+const G2E_META = ["count", "for_each", "provider"] as const;
+interface G2ePin {
+  file: "luks" | "host";
+  type: string;
+  name: string;
+  /** "lifecycle": exactly one lifecycle block carrying `prevent_destroy = true`. "none": no lifecycle block and no prevent_destroy at all. */
+  protect: "lifecycle" | "none";
+  deleteProtection?: true;
+}
+const G2E_PINS: readonly G2ePin[] = [
+  { file: "luks", type: "hcloud_volume", name: "inngest_redis_luks", protect: "lifecycle", deleteProtection: true },
+  { file: "luks", type: "random_password", name: "inngest_redis_luks", protect: "lifecycle" },
+  { file: "luks", type: "doppler_secret", name: "inngest_redis_luks_key", protect: "lifecycle" },
+  { file: "host", type: "doppler_project", name: "inngest", protect: "lifecycle" },
+  { file: "host", type: "doppler_environment", name: "inngest_prd", protect: "lifecycle" },
+  { file: "luks", type: "hcloud_volume_attachment", name: "inngest_redis_luks", protect: "none" },
+];
+
+/** Defects (empty = GREEN) and the number of positive checks evaluated (a pass with zero checks is not a pass). */
+function g2eVerdict(src: { luks: string; host: string }, pins: readonly G2ePin[] = G2E_PINS): { defects: string[]; checks: number } {
+  const defects: string[] = [];
+  let checks = 0;
+  const stripped = { luks: g2eStrip(src.luks), host: g2eStrip(src.host) };
+  for (const pin of pins) {
+    const addr = `${pin.type}.${pin.name}`;
+    const r = g2eResource(stripped[pin.file], pin.type, pin.name);
+    if ("defect" in r) {
+      defects.push(`${addr}: ${r.defect} in ${pin.file === "luks" ? "inngest-redis-luks.tf" : "inngest-host.tf"}`);
+      continue;
+    }
+    checks++;
+    const split = g2eSplit(r.body);
+    if (!split) {
+      defects.push(`${addr}: unbalanced braces`);
+      continue;
+    }
+    if (!/^[ \t]*[A-Za-z_]\w*[ \t]*=/m.test(split.top)) {
+      defects.push(`${addr}: extractor read zero attributes`);
+      continue;
+    }
+    checks++;
+    // Depth-0 meta-arguments rewrite WHAT the block is (count = 0 removes it from state without a destroy plan, for_each/provider
+    // move it to another instance or provider, a provisioner runs code on it). A nested `count` word (a labels map) is not depth 0.
+    const meta = [...G2E_META.filter((k) => g2eAttr(split.top, k).length > 0), ...(/^[ \t]*provisioner\b/m.test(split.top) ? ["provisioner"] : [])];
+    if (meta.length > 0) defects.push(`${addr}: depth-0 meta-argument ${meta.join(", ")} (the sole-copy block must be one plain instance)`);
+    else checks++;
+    if (pin.deleteProtection) {
+      const dp = g2eAttr(split.top, "delete_protection");
+      if (dp.length !== 1 || dp[0] !== "true") defects.push(`${addr}: delete_protection is not exactly one code line \`= true\` (found ${JSON.stringify(dp)})`);
+      else checks++;
+    }
+    const lifecycles = split.nested.filter((b) => b.name === "lifecycle");
+    if (pin.protect === "lifecycle") {
+      const inner = lifecycles.length === 1 ? g2eSplit(lifecycles[0].body) : null;
+      const pd = inner ? g2eAttr(inner.top, "prevent_destroy") : [];
+      if (pd.length !== 1 || pd[0] !== "true") defects.push(`${addr}: no lifecycle block with exactly one \`prevent_destroy = true\` code line (lifecycle blocks: ${lifecycles.length}, prevent_destroy: ${JSON.stringify(pd)})`);
+      else checks++;
+      // ignore_changes stops Terraform delivering or re-asserting an attribute (delete_protection) and hides an out-of-band lift from the plan.
+      if (/\bignore_changes\b/.test(lifecycles.map((b) => b.body.replace(/"[^"\n]*"/g, '""')).join("\n"))) defects.push(`${addr}: lifecycle carries ignore_changes (the pinned attributes must stay managed)`);
+      else checks++;
+    } else if (lifecycles.length > 0 || /\bprevent_destroy\b/.test(r.body)) {
+      defects.push(`${addr}: carries a lifecycle block / prevent_destroy (a sanctioned host replace would become a plan error)`);
+    } else checks++;
+  }
+  return { defects, checks };
+}
+
+/** Rewrite the single column-0 `resource "type" "name" { ... }` block of RAW text (closing brace at column 0, as terraform fmt writes it). */
+function g2eMutate(text: string, type: string, name: string, fn: (block: string) => string): string {
+  const m = new RegExp(`^resource "${type}" "${name}" \\{\\n[\\s\\S]*?\\n\\}$`, "m").exec(text);
+  if (!m) throw new Error(`g2eMutate: ${type}.${name} not found`);
+  const out = text.slice(0, m.index) + fn(m[0]) + text.slice(m.index + m[0].length);
+  if (out === text) throw new Error(`g2eMutate: no-op on ${type}.${name}`);
+  return out;
+}
+
+// The alert edge (ADR-282, F1): the volume is NOT a per-merge `-target`. An in-place update of it (delete_protection) reaches the
+// per-merge plan only as a DEPENDENCY of `logtail_exploration.inngest_luks_wrong_volume`, through the alias local that interpolates
+// `hcloud_volume.inngest_redis_luks.id`. Remove the exploration from the list, or stop the alias reading the volume, and the
+// in-place update stops being applied by any merge; the chain below is what keeps that edge from being cut silently.
+const G2E_EDGE_TARGETS = ["logtail_exploration.inngest_luks_wrong_volume", "logtail_exploration_alert.inngest_luks_wrong_volume"];
+function g2eEdgeVerdict(wfText: string, alertsTf: string): string[] {
+  const defects: string[] = [];
+  const applyTargets = extractAllTargets(extractJobBlock(wfText, "apply"));
+  if (applyTargets.size < 50) defects.push(`apply job extracted ${applyTargets.size} targets (job not found?)`);
+  for (const a of G2E_EDGE_TARGETS) if (!applyTargets.has(a)) defects.push(`${a} is not in the per-merge apply job's -target list`);
+  const code = g2eStrip(alertsTf, "keep");
+  if (!/^[ \t]*inngest_luks_wrong_volume_alias[ \t]*=[ \t]*"[^"\n]*\$\{[ \t]*hcloud_volume\.inngest_redis_luks\.id[ \t]*\}[^"\n]*"[ \t]*$/m.test(code)) {
+    defects.push("local.inngest_luks_wrong_volume_alias does not interpolate hcloud_volume.inngest_redis_luks.id");
+  }
+  if (!/^[ \t]*inngest_luks_wrong_volume_sql[ \t]*=[ \t]*<<-?SQL[ \t]*\n[\s\S]*?\$\{[ \t]*local\.inngest_luks_wrong_volume_alias[ \t]*\}[\s\S]*?\n[ \t]*SQL[ \t]*$/m.test(code)) {
+    defects.push("local.inngest_luks_wrong_volume_sql does not interpolate local.inngest_luks_wrong_volume_alias");
+  }
+  const ex = g2eResource(g2eStrip(alertsTf), "logtail_exploration", "inngest_luks_wrong_volume");
+  if ("defect" in ex) defects.push(`logtail_exploration.inngest_luks_wrong_volume: ${ex.defect}`);
+  else if (!/^[ \t]*sql_query[ \t]*=.*\blocal\.inngest_luks_wrong_volume_sql\b/m.test(ex.body)) {
+    defects.push("logtail_exploration.inngest_luks_wrong_volume.sql_query does not read local.inngest_luks_wrong_volume_sql");
+  }
+  return defects;
+}
+
+describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text, in a required check (ADR-282)", () => {
+  const read = (f: string): string => readFileSync(resolve(INFRA_DIR, f), "utf8");
+  const live = { luks: read("inngest-redis-luks.tf"), host: read("inngest-host.tf") };
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const alertsTf = read("betterstack-logs-alerts.tf");
+  // volume 6 (found, attributes read, meta-arguments, delete_protection, prevent_destroy, no ignore_changes) + four protected blocks x 5
+  // + attachment 4 (found, attributes read, meta-arguments, no lifecycle)
+  const LIVE_CHECKS = 30;
+
+  /** Insert `line` as a depth-0 attribute right after the opening line of a block. */
+  const addTop = (b: string, line: string): string => b.replace("{\n", `{\n  ${line}\n`);
+  /** Insert `line` inside the block's lifecycle, right after its opening line. */
+  const addToLifecycle = (b: string, line: string): string => b.replace(/^([ \t]*)lifecycle \{\n/m, `$&$1  ${line}\n`);
+  const rmPD = (b: string): string => b.replace(/^[ \t]*prevent_destroy[ \t]*=[ \t]*true[ \t]*\n/m, "");
+  const withLuks = (t: string) => ({ ...live, luks: t });
+  const withHost = (t: string) => ({ ...live, host: t });
+  const VOL: [string, string] = ["hcloud_volume", "inngest_redis_luks"];
+  const PW: [string, string] = ["random_password", "inngest_redis_luks"];
+  const KEY: [string, string] = ["doppler_secret", "inngest_redis_luks_key"];
+  const ATT: [string, string] = ["hcloud_volume_attachment", "inngest_redis_luks"];
+  const PROJ: [string, string] = ["doppler_project", "inngest"];
+  const ENV: [string, string] = ["doppler_environment", "inngest_prd"];
+
+  test("G2e: live tree - all six blocks are found, read as non-empty, and carry exactly the pinned attributes", () => {
+    expect(G2E_PINS.length).toBe(6);
+    // Tie: the pinned set IS the G2 sole-copy address set and the inngest half of census G4H_EXPECTED, so a seventh address added to
+    // either side without a pin here is RED (it would otherwise get no attribute pin in the required check).
+    expect(G2E_PINS.map((p) => `${p.type}.${p.name}`).sort()).toEqual([...SOLE_COPY_ADDRS].sort());
+    const census = readFileSync(resolve(REPO_ROOT, "tests/scripts/test-infra-privileged-tier-census.sh"), "utf8");
+    const g4h = [...(/G4H_EXPECTED = frozenset\(\{([^}]*)\}\)/.exec(census)?.[1] ?? "").matchAll(/"([a-z_]+\.[a-z_]+)"/g)].map((m) => m[1]);
+    expect(g4h.length, "G4H_EXPECTED is not found, not parsed or not the eight addresses (six inngest + two workspaces_luks) in the census suite").toBe(8); // six inngest + the two workspaces_luks entries
+    expect(g4h.filter((a) => !a.endsWith(".workspaces_luks")).sort()).toEqual([...SOLE_COPY_ADDRS].sort());
+    const v = g2eVerdict(live);
+    expect(v.defects).toEqual([]);
+    expect(v.checks).toBe(LIVE_CHECKS); // a verdict that evaluated nothing is not GREEN
+    // Non-vacuity of the extractor itself: it reads the volume's real attributes, not an empty body.
+    const vol = g2eResource(g2eStrip(live.luks), "hcloud_volume", "inngest_redis_luks");
+    expect("body" in vol && g2eAttr(g2eSplit(vol.body)!.top, "location")).toEqual(["var.location"]);
+    // Comment prose that spells the attributes is not code: the file's own header says `prevent_destroy` many times.
+    expect(live.luks.match(/prevent_destroy/g)!.length).toBeGreaterThan(4);
+    expect(g2eStrip(live.luks).match(/^[ \t]*prevent_destroy[ \t]*=[ \t]*true[ \t]*$/gm)!.length).toBe(3); // volume, password, secret (the project and environment live in inngest-host.tf)
+    expect(g2eStrip(live.luks).match(/^[ \t]*delete_protection[ \t]*=/gm)!.length).toBe(1);
+  });
+
+  test("G2e: mutation matrix - each weakening turns the verdict RED for the right reason (in-memory copies only)", () => {
+    const sub = (type: string, name: string, fn: (b: string) => string, file: "luks" | "host" = "luks") =>
+      file === "luks" ? withLuks(g2eMutate(live.luks, type, name, fn)) : withHost(g2eMutate(live.host, type, name, fn));
+    const rows: Array<[string, { luks: string; host: string }, RegExp]> = [
+      ["flip delete_protection to false", sub(...VOL, (b) => b.replace(/delete_protection = true/, "delete_protection = false")), /hcloud_volume\.inngest_redis_luks: delete_protection/],
+      ["delete the delete_protection line", sub(...VOL, (b) => b.replace(/^[ \t]*delete_protection[ \t]*=.*\n/m, "")), /hcloud_volume\.inngest_redis_luks: delete_protection/],
+      ["comment the delete_protection line out", sub(...VOL, (b) => b.replace(/^([ \t]*)delete_protection/m, "$1# delete_protection")), /hcloud_volume\.inngest_redis_luks: delete_protection/],
+      ["delete_protection moved into a nested map", sub(...VOL, (b) => b.replace(/^[ \t]*delete_protection[ \t]*=.*\n/m, "").replace(/app = /, "delete_protection = true\n    app = ")), /hcloud_volume\.inngest_redis_luks: delete_protection/],
+      ["delete prevent_destroy: volume", sub(...VOL, rmPD), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
+      ["delete prevent_destroy: random_password", sub(...PW, rmPD), /random_password\.inngest_redis_luks: no lifecycle block/],
+      ["delete prevent_destroy: doppler_secret", sub(...KEY, rmPD), /doppler_secret\.inngest_redis_luks_key: no lifecycle block/],
+      ["delete prevent_destroy: doppler_project", sub(...PROJ, rmPD, "host"), /doppler_project\.inngest: no lifecycle block/],
+      ["delete prevent_destroy: doppler_environment", sub(...ENV, rmPD, "host"), /doppler_environment\.inngest_prd: no lifecycle block/],
+      ["prevent_destroy = false", sub(...VOL, (b) => b.replace(/prevent_destroy = true/, "prevent_destroy = false")), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
+      ["prevent_destroy only in a comment", sub(...PW, (b) => b.replace(/^([ \t]*)prevent_destroy/m, "$1# prevent_destroy")), /random_password\.inngest_redis_luks: no lifecycle block/],
+      ["prevent_destroy only behind //", sub(...PW, (b) => b.replace(/^([ \t]*)prevent_destroy/m, "$1// prevent_destroy")), /random_password\.inngest_redis_luks: no lifecycle block/],
+      ["prevent_destroy inside a /* */ comment", sub(...KEY, (b) => b.replace(/^([ \t]*)prevent_destroy = true/m, "$1/* prevent_destroy = true */")), /doppler_secret\.inngest_redis_luks_key: no lifecycle block/],
+      ["the whole lifecycle wrapped in /* */", sub(...VOL, (b) => b.replace(/lifecycle \{\n[ \t]*prevent_destroy = true\n[ \t]*\}/, (m) => `/* ${m} */`)), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
+      ["prevent_destroy moved into a nested map (not a lifecycle)", sub(...PW, (b) => b.replace(/lifecycle \{/, "tags = {")), /random_password\.inngest_redis_luks: no lifecycle block/],
+      ["add a lifecycle with prevent_destroy to the ATTACHMENT", sub(...ATT, (b) => b.replace(/\n\}$/, "\n\n  lifecycle {\n    prevent_destroy = true\n  }\n}")), /hcloud_volume_attachment\.inngest_redis_luks: carries a lifecycle/],
+      ["add any lifecycle block to the ATTACHMENT", sub(...ATT, (b) => b.replace(/\n\}$/, "\n\n  lifecycle {\n    ignore_changes = []\n  }\n}")), /hcloud_volume_attachment\.inngest_redis_luks: carries a lifecycle/],
+      ["rename the volume (extractor must not read zero attributes and pass)", sub(...VOL, (b) => b.replace(/^resource "hcloud_volume" "inngest_redis_luks"/, 'resource "hcloud_volume" "inngest_redis_luks_renamed"')), /hcloud_volume\.inngest_redis_luks: missing/],
+      ["rename the project", sub(...PROJ, (b) => b.replace('"inngest" {', '"inngest_renamed" {'), "host"), /doppler_project\.inngest: missing/],
+      ["rename the attachment", sub(...ATT, (b) => b.replace('"inngest_redis_luks" {', '"inngest_redis_luks_x" {')), /hcloud_volume_attachment\.inngest_redis_luks: missing/],
+      ["a second copy of the volume block", withLuks(live.luks + "\n" + /^resource "hcloud_volume" "inngest_redis_luks" \{\n[\s\S]*?\n\}$/m.exec(live.luks)![0] + "\n"), /hcloud_volume\.inngest_redis_luks: duplicate/],
+      ["an unterminated /* before everything blinds the file: RED, not zero checks", withLuks("/* oops\n" + live.luks), /missing/],
+      ["an empty body (attributes read as zero)", sub(...PW, (b) => 'resource "random_password" "inngest_redis_luks" {\n}'), /random_password\.inngest_redis_luks: extractor read zero attributes/],
+      ["`# see <<EOF` before the lifecycle, prevent_destroy removed", sub(...VOL, (b) => rmPD(b.replace(/\n[ \t]*lifecycle \{/, "\n  # see <<EOF\n  lifecycle {"))), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
+      ["`// see <<-EOT` trailing, the lifecycle commented out", sub(...KEY, (b) => b.replace(/\n([ \t]*)lifecycle \{\n[ \t]*prevent_destroy = true\n[ \t]*\}/, "\n  # x // see <<-EOT\n/*\n$1lifecycle {\n    prevent_destroy = true\n  }\n*/")), /doppler_secret\.inngest_redis_luks_key: no lifecycle block/],
+      ["trailing `# see <<EOF` on an attribute, then prevent_destroy removed", sub(...PW, (b) => rmPD(b.replace(/^(  length .*)$/m, "$1 # see <<EOF"))), /random_password\.inngest_redis_luks: no lifecycle block/],
+      // ignore_changes beside prevent_destroy: Terraform stops delivering / re-asserting the attribute (and hides an out-of-band lift)
+      ["ignore_changes = [delete_protection] in the volume lifecycle", sub(...VOL, (b) => addToLifecycle(b, "ignore_changes = [delete_protection]")), /hcloud_volume\.inngest_redis_luks: lifecycle carries ignore_changes/],
+      ["ignore_changes = all in the passphrase lifecycle", sub(...PW, (b) => addToLifecycle(b, "ignore_changes = all")), /random_password\.inngest_redis_luks: lifecycle carries ignore_changes/],
+      ["ignore_changes in the secret lifecycle", sub(...KEY, (b) => addToLifecycle(b, "ignore_changes = [value]")), /doppler_secret\.inngest_redis_luks_key: lifecycle carries ignore_changes/],
+      ["ignore_changes in the project lifecycle", sub(...PROJ, (b) => addToLifecycle(b, "ignore_changes = [description]"), "host"), /doppler_project\.inngest: lifecycle carries ignore_changes/],
+      ["ignore_changes in the environment lifecycle", sub(...ENV, (b) => addToLifecycle(b, "ignore_changes = [name]"), "host"), /doppler_environment\.inngest_prd: lifecycle carries ignore_changes/],
+      // depth-0 meta-arguments, one row per argument and per block family (volume, passphrase pair, the host pair, the attachment)
+      ["count = 0 on the volume", sub(...VOL, (b) => addTop(b, "count = 0")), /hcloud_volume\.inngest_redis_luks: depth-0 meta-argument count/],
+      ["count = 0 on the passphrase", sub(...PW, (b) => addTop(b, "count = 0")), /random_password\.inngest_redis_luks: depth-0 meta-argument count/],
+      ["count = 0 on the secret", sub(...KEY, (b) => addTop(b, "count = var.on ? 1 : 0")), /doppler_secret\.inngest_redis_luks_key: depth-0 meta-argument count/],
+      ["count = 0 on the project", sub(...PROJ, (b) => addTop(b, "count = 0"), "host"), /doppler_project\.inngest: depth-0 meta-argument count/],
+      ["count = 0 on the environment", sub(...ENV, (b) => addTop(b, "count = 0"), "host"), /doppler_environment\.inngest_prd: depth-0 meta-argument count/],
+      ["count = 0 on the attachment", sub(...ATT, (b) => addTop(b, "count = 0")), /hcloud_volume_attachment\.inngest_redis_luks: depth-0 meta-argument count/],
+      ["for_each on the volume", sub(...VOL, (b) => addTop(b, 'for_each = toset(["a"])')), /hcloud_volume\.inngest_redis_luks: depth-0 meta-argument for_each/],
+      ["for_each on the passphrase", sub(...PW, (b) => addTop(b, 'for_each = toset(["a"])')), /random_password\.inngest_redis_luks: depth-0 meta-argument for_each/],
+      ["provider alias on the volume", sub(...VOL, (b) => addTop(b, "provider = hcloud.other")), /hcloud_volume\.inngest_redis_luks: depth-0 meta-argument provider/],
+      ["provider alias on the secret", sub(...KEY, (b) => addTop(b, "provider = doppler.other")), /doppler_secret\.inngest_redis_luks_key: depth-0 meta-argument provider/],
+      ["provisioner on the volume", sub(...VOL, (b) => addTop(b, 'provisioner "local-exec" {\n    command = "true"\n  }')), /hcloud_volume\.inngest_redis_luks: depth-0 meta-argument provisioner/],
+      ["provisioner on the passphrase", sub(...PW, (b) => addTop(b, 'provisioner "local-exec" {\n    command = "true"\n  }')), /random_password\.inngest_redis_luks: depth-0 meta-argument provisioner/],
+      // lexer: a brace the lexer must NOT count. The passphrase block's `# {` would run it into the secret block in a lexer that
+      // counts trailing-comment braces, and the secret's `prevent_destroy = true` would then stand in for the passphrase's own.
+      ["brace in a trailing comment runs the passphrase block into the secret block", withLuks(g2eMutate(g2eMutate(live.luks, ...PW, (b) => b.replace(/^(  length .*)$/m, "$1 # {").replace(/prevent_destroy = true/, "create_before_destroy = false")), ...KEY, (b) => b.replace(/\n\}$/, "\n} # }"))), /random_password\.inngest_redis_luks: no lifecycle block/],
+      // lexer: a heredoc body is data. A fake `lifecycle { prevent_destroy = true }` in `format = <<-EOT` must not satisfy the pin.
+      ["a fake lifecycle inside a heredoc stands in for the real one", sub(...VOL, (b) => b.replace(/\n[ \t]*lifecycle \{\n[ \t]*prevent_destroy = true\n[ \t]*\}/, '\n  format = <<-EOT\n  lifecycle {\n    prevent_destroy = true\n  }\n  EOT')), /hcloud_volume\.inngest_redis_luks: no lifecycle block with exactly one `prevent_destroy = true` code line \(lifecycle blocks: 0/],
+    ];
+    expect(g2eVerdict(live).defects).toEqual([]); // control: the live tree is GREEN, so a RED below is the mutation's doing
+    for (const [name, files, want] of rows) {
+      const v = g2eVerdict(files);
+      expect(v.defects.length, `row "${name}" stayed GREEN`).toBeGreaterThan(0);
+      expect(v.defects.join("\n"), `row "${name}" was RED for the wrong reason`).toMatch(want);
+    }
+  });
+
+  test("G2e: the comment stripper is not blinded - benign comments, heredoc-shaped comments and real heredocs stay GREEN with every check evaluated", () => {
+    const sub = (type: string, name: string, fn: (b: string) => string) => withLuks(g2eMutate(live.luks, type, name, fn));
+    const rows: Array<[string, { luks: string; host: string }]> = [
+      ["`# see <<EOF` on its own line before the lifecycle", sub(...VOL, (b) => b.replace(/\n[ \t]*lifecycle \{/, "\n  # see <<EOF\n  lifecycle {"))],
+      ["`# see <<EOF` trailing on the lifecycle opener", sub(...VOL, (b) => b.replace(/lifecycle \{/, "lifecycle { # see <<EOF"))],
+      ["`// see <<-EOT` trailing on an attribute", sub(...VOL, (b) => b.replace(/^(  size .*)$/m, "$1 // see <<-EOT"))],
+      ["`/* <<EOF */` inline", sub(...VOL, (b) => b.replace(/lifecycle \{/, "/* <<EOF */ lifecycle {"))],
+      ["trailing comments on the two pinned attributes", sub(...VOL, (b) => b.replace(/delete_protection = true/, "delete_protection = true # x").replace(/prevent_destroy = true/, "prevent_destroy = true // y"))],
+      ["a real heredoc holding a lone quote, braces and a comment opener, ahead of the blocks", withLuks("locals {\n  x = <<-EOT\n    it's a \" quote } { /* #\n  EOT\n}\n" + live.luks)],
+      ["a /* */ comment spanning lines that spells the protected blocks", withLuks("/*\nresource \"hcloud_volume\" \"inngest_redis_luks\" {\n  delete_protection = false\n}\n*/\n" + live.luks)],
+      // meta-argument words that are NOT depth-0 attributes: a nested map, a comment, a heredoc body, a string (must not trip the new check)
+      ["count/for_each/provider words inside the labels map", sub(...VOL, (b) => b.replace(/app = /, "count = 1\n    for_each = 2\n    provider = x\n    provisioner = y\n    app = "))],
+      ["count/provider spelled in comments", sub(...VOL, (b) => b.replace(/^(  size .*)$/m, "  # count = 0\n  // provider = x\n  /* for_each = {} */\n$1 # provisioner \"x\" {"))],
+      ["count/provider/ignore_changes inside a heredoc body", sub(...VOL, (b) => addTop(b, "x_note = <<-EOT\n  count = 0\n  provider = x\n  lifecycle {\n    ignore_changes = all\n  }\n  EOT"))],
+      ["a brace in a trailing comment", sub(...PW, (b) => b.replace(/^(  length .*)$/m, "$1 # {{").replace(/special = false/, "special = false # }"))],
+      ["a lone `}` inside a string (each lexer must skip strings on its own)", sub(...PW, (b) => addTop(b, 'keepers = { a = "}" }'))],
+      ["a lone `{` inside a string", sub(...PW, (b) => addTop(b, 'keepers = { a = "{" }'))],
+      ["ignore_changes spelled only in a comment of the lifecycle", sub(...VOL, (b) => addToLifecycle(b, "# ignore_changes = [delete_protection]"))],
+    ];
+    for (const [name, files] of rows) {
+      const v = g2eVerdict(files);
+      expect(v.defects, `row "${name}" must stay GREEN`).toEqual([]);
+      expect(v.checks, `row "${name}" evaluated fewer checks`).toBe(LIVE_CHECKS);
+    }
+    // The heredoc opener in a comment starts nothing; in code it does, and its body is blanked/kept as asked.
+    expect(g2eStrip("a = 1 # see <<EOF\nb = 2\n")).toBe("a = 1 \nb = 2\n");
+    expect(g2eStrip('x = <<-SQL\n  y # z\nSQL\nb = 2\n')).toContain("b = 2");
+    expect(g2eStrip('x = <<-SQL\n  y # z\nSQL\nb = 2\n')).not.toContain("y # z");
+    expect(g2eStrip('x = <<-SQL\n  y # z\nSQL\nb = 2\n', "keep")).toContain("y # z");
+  });
+
+  test("G2e: the lexer and attribute scanners are linear - long word, whitespace and sibling-block runs finish in under 2s", () => {
+    const hostile: Array<[string, () => unknown, unknown]> = [
+      ["g2eSplit: a 100 KB word run then `={`", () => g2eSplit("a".repeat(100_000) + "={\n  x = 1\n}\n")?.nested.length, 1],
+      ["g2eSplit: 20000 sibling blocks", () => g2eSplit("blk {\n  x = 1\n}\n".repeat(20_000))?.nested.length, 20_000],
+      ["g2eSplit: 100 KB of `a-` words then a block", () => g2eSplit("a-".repeat(50_000) + " {\n}\n")?.nested.length, 1],
+      ["g2eAttr: a 100 KB whitespace run inside a value", () => g2eAttr("key = x" + " ".repeat(100_000) + "y\n", "key"), ["x" + " ".repeat(100_000) + "y"]],
+      ["g2eAttr: a 100 KB whitespace run after a value", () => g2eAttr("key = x" + " ".repeat(100_000) + "\n", "key"), ["x"]],
+      ["g2eAttr: 20000 near-miss lines", () => g2eAttr("  keyx = 1\n".repeat(20_000), "key"), []],
+      ["g2eStrip: 30000 unterminated heredoc openers", () => g2eStrip("<<-A\n".repeat(30_000)).length > 0, true],
+      ["g2eStrip: 100000 quotes", () => g2eStrip('"'.repeat(100_000)).length, 100_000],
+      ["g2eResource: a 100 KB run of braces", () => "defect" in g2eResource('resource "a" "b" {' + "{".repeat(100_000), "a", "b"), true],
+    ];
+    for (const [name, run, want] of hostile) {
+      const t0 = performance.now();
+      const got = run();
+      const ms = performance.now() - t0;
+      expect(ms, `${name}: ${ms.toFixed(0)} ms`).toBeLessThan(2000);
+      expect(got, `${name}: wrong result`).toEqual(want);
+    }
+  });
+
+  test("G2e: the per-merge edge to the volume - alert in the apply job's -target list AND the alias local interpolates the volume id", () => {
+    expect(g2eEdgeVerdict(wf, alertsTf)).toEqual([]);
+    // Non-vacuity: the volume itself is NOT a per-merge -target (the edge is the only route), and the alias is the sole reader of its id here.
+    expect(extractAllTargets(extractJobBlock(wf, "apply")).has("hcloud_volume.inngest_redis_luks")).toBe(false);
+    expect(extractAllTargets(extractJobBlock(wf, "apply")).has("logtail_exploration.inngest_luks_wrong_volume")).toBe(true);
+    expect(alertsTf).toContain("hcloud_volume.inngest_redis_luks.id");
+    const dropTarget = (addr: string): string => {
+      const out = wf.replace(new RegExp(`^[ \\t]*-target=${g2Esc(addr)} \\\\\\n`, "m"), "");
+      expect(out).not.toBe(wf);
+      return out;
+    };
+    const rows: Array<[string, string, string, RegExp]> = [
+      ["the exploration removed from the per-merge list", dropTarget("logtail_exploration.inngest_luks_wrong_volume"), alertsTf, /logtail_exploration\.inngest_luks_wrong_volume is not in the per-merge apply job/],
+      ["the alert removed from the per-merge list", dropTarget("logtail_exploration_alert.inngest_luks_wrong_volume"), alertsTf, /logtail_exploration_alert\.inngest_luks_wrong_volume is not in the per-merge apply job/],
+      ["the alias no longer reads the volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)\$\{hcloud_volume\.inngest_redis_luks\.id\}/m, "$110626194"), /alias does not interpolate hcloud_volume\.inngest_redis_luks\.id/],
+      ["the alias reads the volume only in a comment", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)$/m, "  # $1\n  inngest_luks_wrong_volume_alias = \"scsi-0HC_Volume_1\""), /alias does not interpolate/],
+      ["the alias reads a sibling volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)hcloud_volume\.inngest_redis_luks\.id/m, "$1hcloud_volume.workspaces_luks.id"), /alias does not interpolate/],
+      ["the sql local stops using the alias", wf, alertsTf.replace("${local.inngest_luks_wrong_volume_alias}", "x"), /sql does not interpolate local\.inngest_luks_wrong_volume_alias/],
+      ["the exploration stops reading the sql local", wf, alertsTf.replace("trimspace(local.inngest_luks_wrong_volume_sql)", "trimspace(\"select 1\")"), /sql_query does not read local\.inngest_luks_wrong_volume_sql/],
+      ["the exploration resource renamed", wf, alertsTf.replace('resource "logtail_exploration" "inngest_luks_wrong_volume"', 'resource "logtail_exploration" "inngest_luks_wrong_volume_x"'), /logtail_exploration\.inngest_luks_wrong_volume: missing/],
+      ["the apply job not found (renamed)", wf.replace(/^ {2}apply:/m, "  apply_renamed:"), alertsTf, /apply job extracted 0 targets/],
+    ];
+    for (const [name, w, tf, want] of rows) {
+      const defects = g2eEdgeVerdict(w, tf);
+      expect(defects.length, `edge row "${name}" stayed GREEN`).toBeGreaterThan(0);
+      expect(defects.join("\n"), `edge row "${name}" was RED for the wrong reason`).toMatch(want);
+    }
   });
 });
 
@@ -3707,8 +4735,8 @@ describe("registry gate allow-sets match their jobs' -target sets", () => {
  *
  * The gate's allow-set is a literal in the same repo as the workflow it grades, so one diff could
  * widen both — this is the outside anchor the plan's Guard Contract names, and it mirrors the
- * registry parity block above. The call assertion follows the inngest-volume-recut "sources BOTH
- * gates" test: anchored on the `if !` call form over COMMENT-STRIPPED text, so a
+ * registry parity block above. The call assertion follows the "sources and CALLS" shape the
+ * retired inngest-backstop-retire dispatch used: anchored on the `if !` call form over COMMENT-STRIPPED text, so a
  * `# shellcheck source=` directive or prose cannot satisfy it.
  */
 describe("inngest_host dispatch: shape gate wired and allow-set === -target set (#6894)", () => {
@@ -3747,7 +4775,7 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
     expect(defAllow).not.toBeNull();
     const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
     const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
-    expect(targets.length).toBe(17); // non-vacuity floor (#8754 dropped the inngest attachment)
+    expect(targets.length).toBe(15); // non-vacuity floor (#8754 dropped the inngest attachment; #8285 dropped the plaintext pair)
     expect(allow).toEqual(targets);
     // The passphrase pair is per-merge -targeted and must never join this allow-set.
     expect(allow).not.toContain("random_password.inngest_redis_luks");
@@ -3842,13 +4870,39 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(readdirSync(INFRA_DIR).filter((f) => f.endsWith(".tf.json"))).toEqual([]);
   });
 
-  test("the git-data heartbeat pair is per-merge targeted, no longer an exclusion, and still refused by the birth", () => {
-    const pair = ["betteruptime_heartbeat.git_data_prd", "doppler_secret.git_data_heartbeat_url_prd"];
+  test("the git-data heartbeat pairs are per-merge targeted, no longer an exclusion, and still refused by the birth", () => {
+    // The web-fed pair (#8754) and the host-originated pair (#9438): the second monitor is born
+    // paused and is NOT in the per-merge arm list, because its feeder reaches the host only
+    // through the owner-authorized replace.
+    const pair = [
+      "betteruptime_heartbeat.git_data_prd",
+      "doppler_secret.git_data_heartbeat_url_prd",
+      "betteruptime_heartbeat.git_data_host_prd",
+      "doppler_secret.git_data_host_heartbeat_url_prd",
+    ];
     const birth = extractAllTargets(extractJobBlock(wf, "git_data_host_create"));
     expect(birth.has("hcloud_server.git_data")).toBe(true); // non-vacuity
     expect(missingFrom(pair, planTargets)).toEqual([]);
     expect(pair.filter((a) => OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
     expect(presentIn(pair, birth)).toEqual([]);
+  });
+
+  test("the host heartbeat secret reaches ONLY its heartbeat: project and config are literals, so the per-merge closure cannot pull in doppler_config.git_data_prd or hcloud_server.git_data (#9438)", () => {
+    const src = tf("git-data.tf");
+    const res = block(src, /^resource\s+"doppler_secret"\s+"git_data_host_heartbeat_url_prd"\s*\{/m);
+    expect(res).toMatch(/^\s*project\s*=\s*"soleur"\s*$/m);
+    expect(res).toMatch(/^\s*config\s*=\s*local\.git_data_liveness_doppler_cfg\s*$/m);
+    // The local is a plain string, never a resource address (the closure stays resource-free).
+    expect(src).toMatch(/^\s*git_data_liveness_doppler_cfg\s*=\s*"prd_git_data"\s*$/m);
+    expect(res).toMatch(/^\s*value\s*=\s*betteruptime_heartbeat\.git_data_host_prd\.url\s*$/m);
+    // Every address-shaped token in the block, minus the one heartbeat it must reference.
+    const refs = [...res.matchAll(/\b(?:hcloud|doppler|betteruptime|random|tls|terraform)_[a-z_]+\.[a-z_0-9]+/g)].map((m) => m[0]);
+    expect([...new Set(refs)]).toEqual(["betteruptime_heartbeat.git_data_host_prd"]);
+    // The heartbeat is born paused and its arm is not a per-merge concern.
+    const hb = block(src, /^resource\s+"betteruptime_heartbeat"\s+"git_data_host_prd"\s*\{/m);
+    expect(hb).toMatch(/^\s*paused\s*=\s*true\s*$/m);
+    expect(hb).toMatch(/^\s*push\s*=\s*false\s*$/m);
+    expect(hb).toMatch(/ignore_changes\s*=\s*\[paused\]/);
   });
 
   test("the deployment policy is adopted by import into a NEW, destroy-proof address and the phantom address is forgotten", () => {
@@ -4281,6 +5335,11 @@ const GIT_DATA_BIRTH_REFUSED = [
   // measuring nothing.
   "betteruptime_heartbeat.git_data_prd",
   "doppler_secret.git_data_heartbeat_url_prd",
+  // (#9438) The host-originated pair: its feeder rides the host's own cloud-init, and the URL is
+  // read at runtime from the scoped config, so the birth's exact -target set has no use for it and
+  // must not take a Doppler write into prd_git_data.
+  "betteruptime_heartbeat.git_data_host_prd",
+  "doppler_secret.git_data_host_heartbeat_url_prd",
   // SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY not plan.
   "terraform_data.git_data_probe_install",
 ];
@@ -5938,7 +6997,14 @@ describe("the ARM gate's deadlines fit its job", () => {
     // and then fires EXIT too, and bash defers the handler until the foreground `sleep` returns.
     expect(stripped).not.toMatch(/^\s*trap\b/m);
     // ONE PATCH implementation, with real status-code semantics rather than `-f` (#7658 E6).
-    expect(stripped.match(/curl\b/g)?.length).toBe(2);
+    // Since #7797 the bearer rides curl's stdin config channel, so the transport flags, the token
+    // guard and the header live in ONE wrapper (`bs_api`) holding the file's only `curl`; the two
+    // call sites (the GET and the PATCH) go through it, so what is pinned is one curl + two calls.
+    // #9980 added a THIRD credentialed call site: the named-monitor resolver's paginated list read
+    // (`--status` / `--arm-one`). The count is the honest number of call sites, and the intent of the
+    // pin survives: every credentialed call goes through `bs_api`, and `curl` stays at exactly one.
+    expect(stripped.match(/curl\b/g)?.length).toBe(1);
+    expect(stripped.match(/\$\(bs_api /g)?.length).toBe(3);
     expect(stripped).toMatch(/-w '%\{http_code\}'/);
     expect(stripped).toMatch(/\[\[ "\$HB_PATCH_CODE" =~ \^2 \]\]/);
     // The sweep's outcome vocabulary is closed and documented in the same file.
@@ -6106,6 +7172,774 @@ describe("Guard 2 mutation battery (#7587)", () => {
     expect(() => pinnedFromMeasurements("NO_SUCH_PIN")).toThrow(/no LADDER-PIN/);
   });
 });
+
+// ─── #9377 decision A2: job reach of the web-class passphrase pair ─────────────────────────────────
+//
+// The non-ackable rotation HALT (luks_passphrase_rotations) lives in ONE job: `apply`. If a second job could
+// reach the web-class passphrase or its Doppler copy, a rotation could be applied there without the HALT (the
+// 2026-09-24 learning: a rotation resource reachable by more than one workflow without its gate). So the pair
+// must be `-target`ed by `apply` and by NO other job in this workflow, nor by ANY other workflow file, and `apply`
+// must carry the HALT, evaluated before the destroy_count sum. The transitive reach (`-target` pulls dependencies)
+// was traced by reading the closures at plan time; these rows pin the direct reach.
+//
+// apply-deploy-pipeline-fix.yml SHARES the destroy-guard filter (destroy-guard-filter-web-platform.jq) but reads only
+// host_creates, non_terraform_data_deletes and reboot_updates from it: it has NO luks_passphrase_rotations HALT, so a
+// -target/-replace of the pair there would rotate it unguarded. That is why the scan below covers EVERY workflow
+// file and not just apply-web-platform-infra.yml.
+//
+// The HALT itself is pinned structurally (luksHaltViolations), not by text: inserting
+// `[[ -n "${ALLOW_LUKS:-}" ]] && exit 0` before its `exit 1` kept the earlier text pins green.
+const LUKS_FILTER = resolve(REPO_ROOT, "tests/scripts/lib/destroy-guard-filter-web-platform.jq");
+const WEB_PASSPHRASE_PAIR = ["random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_web_key"];
+const escRe = (a: string) => a.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+/** Whole-line `#` comments out. (stripComments is HCL-flavoured and also eats `//`, which shell lines may contain.) */
+const stripShellLineComments = (t: string) =>
+  t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+
+/** The six counted addresses, read from the filter's own `luks_passphrase_addrs` so the list has ONE source. */
+function luksPassphraseAddrs(jqSource: string): string[] {
+  const m = /def luks_passphrase_addrs: \[([^\]]*)\];/.exec(jqSource);
+  return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];
+}
+
+/** Addresses from `addrs` that `text` does not name as a whole token (so `...workspaces_luks` is not satisfied by `..._web`). */
+function missingAddrs(text: string, addrs: string[]): string[] {
+  return addrs.filter((a) => !new RegExp(`(?<![A-Za-z0-9_])${escRe(a)}(?![A-Za-z0-9_])`).test(text));
+}
+
+/** Join `\`-continued physical lines into logical lines (whitespace collapsed), as the shell reads them. */
+const joinContinuations = (t: string): string => t.replace(/\\\r?\n[ \t]*/g, " ");
+
+/**
+ * ALLOW-LIST of the statements permitted from the START of the apply step's `run:` block through the end of the luks
+ * HALT. A deny-list ("no line with exit/return") cannot see `[[ "$HEAD_MSG" == *"[ack-luks]"* ]] && luks_rotations=0`
+ * or `echo x; [[ -n "${SKIP_LUKS:-}" ]] && exit 0`, nor anything BEFORE the `counts=$(jq …)` line, so every logical
+ * line in that span must match one of the shapes below, and the required statements must appear once each, in order.
+ * `lines` are comment-stripped job lines; `readIdx`/`start`/`end` locate the counter read, the HALT `if` and its `fi`.
+ */
+function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: number, end: number): string[] {
+  const v: string[] = [];
+  let runIdx = -1;
+  for (let i = (readIdx >= 0 ? readIdx : start) - 1; i >= 0; i--) {
+    if (/^\s*run:\s*[|>][-+]?\s*$/.test(lines[i])) {
+      runIdx = i;
+      break;
+    }
+  }
+  if (runIdx < 0) return ["the apply step's `run: |` header was not found above the counter read"];
+  const logical = joinContinuations(lines.slice(runIdx + 1, end + 1).join("\n"))
+    .split("\n")
+    .map((l) => l.trim().replace(/\s+/g, " "))
+    .filter((l) => l !== "");
+  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\}[^"$`;&|]*)?"| -target=[A-Za-z0-9_.\[\]-]+)+$/;
+  const COUNTS = 'counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)';
+  const READ_RE = /^([a-z_]+)=\$\(echo "\$counts" \| jq -r '\.([a-z_]+)'\)$/;
+  const GREP_RE = /^grep -F( -e (?:random_password|doppler_secret)\.[a-z_]+){6} -e 'Plan:' tfplan\.txt >&2 \|\| true$/;
+  const COUNTERS = ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"];
+  const READS = [...COUNTERS, "plan_ok"];
+  const KNOWN_VARS = new Set([...READS, "rc", "luks_passphrase_rotations"]);
+  /** A complete `echo "::error::..."` whose body cannot run code: no unescaped quote/backtick, no `$(`, and every `$` is a plain known variable. */
+  const echoOk = (t: string): boolean => {
+    if (!(t.startsWith('echo "::error::') && t.endsWith('"'))) return false;
+    const inner = t.slice('echo "'.length, -1).replace(/\\./g, "");
+    if (/["`]/.test(inner)) return false;
+    const rest = inner.replace(/\$\{([A-Za-z_]+)\}|\$([A-Za-z_]+)/g, (_m, x, y) => (KNOWN_VARS.has(x ?? y) ? "" : "\u0000"));
+    return !/[$\u0000]/.test(rest);
+  };
+  const numericOk = (t: string): boolean => {
+    const m = /^if ((?:\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\](?: \|\| )?)+); then$/.exec(t);
+    if (!m) return false;
+    const names = [...m[1].matchAll(/"\$([a-z_]+)"/g)].map((x) => x[1]);
+    return COUNTERS.every((c) => names.includes(c)) && names.every((n) => COUNTERS.includes(n));
+  };
+  type Step =
+    | { kind: "stmt"; name: string; test: (t: string) => boolean }
+    | { kind: "reads" }
+    | { kind: "block"; name: string; header: (t: string) => boolean; grep: boolean; exit: string };
+  const eq = (x: string) => (t: string) => t === x;
+  // A CLOSED SEQUENCE: every line from the step start through the luks HALT's `fi` is consumed by exactly one step below,
+  // in this order, and nothing else may appear. `exit`, `fi` and the `rc` block exist only at their one expected place,
+  // so an inserted `exit $rc`, a second `if [[ $rc -ne 0 ]]` with an extra `fi`, or an echo/grep carrying a
+  // `${a[x=0]}` expansion has no slot to occupy (an allow-list of line SHAPES passed all four).
+  const steps: Step[] = [
+    { kind: "stmt", name: "set -euo pipefail", test: eq("set -euo pipefail") },
+    { kind: "stmt", name: "set +e", test: eq("set +e") },
+    { kind: "stmt", name: "the doppler-wrapped terraform plan", test: (t) => PLAN_RE.test(t) },
+    { kind: "stmt", name: "rc=$?", test: eq("rc=$?") },
+    { kind: "block", name: "the plan-failure block", header: eq("if [[ $rc -ne 0 ]]; then"), grep: false, exit: "exit $rc" },
+    { kind: "stmt", name: "set -e", test: eq("set -e") },
+    { kind: "stmt", name: "terraform show -no-color", test: eq("terraform show -no-color tfplan > tfplan.txt") },
+    { kind: "stmt", name: "terraform show -json", test: eq("terraform show -json tfplan > tfplan.json") },
+    { kind: "stmt", name: "the counts= jq read", test: eq(COUNTS) },
+    { kind: "reads" },
+    { kind: "block", name: "the plan_ok check", header: eq('if [[ "$plan_ok" != "true" ]]; then'), grep: false, exit: "exit 1" },
+    { kind: "block", name: "the numeric validation (every counter)", header: numericOk, grep: false, exit: "exit 1" },
+    { kind: "block", name: "the undecidable HALT", header: eq('if [[ "$undecidable_entries" -gt 0 ]]; then'), grep: false, exit: "exit 1" },
+    { kind: "block", name: "the luks HALT", header: eq('if [[ "$luks_rotations" -gt 0 ]]; then'), grep: true, exit: "exit 1" },
+  ];
+  const WHY = "a statement outside the destroy-guard allow-list between the step start and the luks HALT";
+  let at = 0;
+  const peek = () => logical[at] ?? "<end of the span>";
+  walk: for (const st of steps) {
+    if (st.kind === "stmt") {
+      if (!st.test(peek())) {
+        v.push(`${WHY} (expected ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+    } else if (st.kind === "reads") {
+      const seen: string[] = [];
+      for (let k = 0; k < READS.length; k++) {
+        const m = READ_RE.exec(peek());
+        const ok = m && (m[1] === m[2] || (m[1] === "luks_rotations" && m[2] === "luks_passphrase_rotations")) && !seen.includes(m[1]) && READS.includes(m[1]);
+        if (!ok) {
+          v.push(`${WHY} (expected one of the ${READS.length} counter reads, each once): ${peek().slice(0, 90)}`);
+          break walk;
+        }
+        seen.push(m![1]);
+        at++;
+      }
+    } else {
+      if (!st.header(peek())) {
+        v.push(`${WHY} (expected ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+      let echoes = 0;
+      while (logical[at]?.startsWith("echo ")) {
+        if (!echoOk(logical[at])) {
+          v.push(`${WHY} (an echo that can run code or expands an unknown variable in ${st.name}): ${logical[at].slice(0, 90)}`);
+          break walk;
+        }
+        echoes++;
+        at++;
+      }
+      if (echoes === 0) {
+        v.push(`${WHY} (${st.name} has no ::error:: echo): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      if (st.grep) {
+        if (!GREP_RE.test(peek())) {
+          v.push(`${WHY} (expected the literal six-address grep -F in ${st.name}): ${peek().slice(0, 90)}`);
+          break walk;
+        }
+        at++;
+      }
+      if (peek() !== st.exit) {
+        v.push(`${WHY} (expected '${st.exit}' closing ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+      if (peek() !== "fi") {
+        v.push(`${WHY} (expected 'fi' closing ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+    }
+  }
+  if (v.length === 0 && at !== logical.length) v.push(`${WHY} (trailing lines after the luks HALT's fi): ${peek().slice(0, 90)}`);
+  const fiCount = logical.filter((t) => t === "fi").length;
+  const ifCount = logical.filter((t) => t.startsWith("if ")).length;
+  if (fiCount !== ifCount) v.push(`${WHY} (if/fi imbalance: ${ifCount} if vs ${fiCount} fi)`);
+  return v;
+}
+
+/**
+ * Structural violations of the apply job's luks_rotations HALT, on the job's comment-stripped code. The shape the
+ * host_creates HALT checker (web-host-escrow-preflight-census.test.ts) enforces, with a stricter body: EVERY
+ * executable line in the body must be an `echo "::error::..."`, the plan-line grep to stderr, or the final `exit 1`,
+ * all at one indent, so a conditional or short-circuit exit cannot hide in it.
+ */
+function luksHaltViolations(code: string): string[] {
+  const lines = code.split("\n");
+  const ifRe = /^(\s*)if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/;
+  const start = lines.findIndex((l) => ifRe.test(l));
+  if (start < 0) return ['no `if [[ "$luks_rotations" -gt 0 ]]; then` HALT (exact, unconditioned) found'];
+  const indent = ifRe.exec(lines[start])![1];
+  const v: string[] = [];
+  const indentOf = (l: string) => /^(\s*)/.exec(l)![1];
+  const readIdx = lines.findIndex((l) => /^\s*luks_rotations=\$\(echo "\$counts" \| jq -r '\.luks_passphrase_rotations'\)\s*$/.test(l));
+  const sumIdx = lines.findIndex((l) => /^\s*destroy_count=\$\(\(resource_deletes\b/.test(l));
+  if (readIdx < 0) v.push("the luks_rotations counter is not read from the destroy-guard filter output");
+  else if (indentOf(lines[readIdx]) !== indent) v.push("the HALT is nested at a different level than the counter read (inside a conditional?)");
+  if (sumIdx < 0) v.push("the destroy_count sum was not found");
+  else if (indentOf(lines[sumIdx]) !== indent) v.push("the destroy_count sum is at a different level than the HALT");
+  if (readIdx >= 0 && start < readIdx) v.push("the HALT precedes the counter read");
+  if (sumIdx >= 0 && start > sumIdx) v.push("the HALT is positioned AFTER the destroy_count sum ([ack-destroy] could then reach it)");
+  let end = -1;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i] === `${indent}fi`) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return [...v, "the HALT block has no closing fi at its own indent"];
+  const body = lines.slice(start + 1, end).filter((l) => l.trim() !== "");
+  const bodyIndent = `${indent}  `;
+  const last = body[body.length - 1];
+  if (last !== `${bodyIndent}exit 1`) v.push("the HALT body does not END in an unconditional `exit 1`");
+  for (const l of body) {
+    if (indentOf(l) !== bodyIndent) {
+      v.push(`HALT body line nested or mis-indented (a conditional around the exit?): ${l.trim().slice(0, 60)}`);
+      continue;
+    }
+    const t = l.trim();
+    if (t === "exit 1") continue;
+    if (t.startsWith('echo "::error::') && t.endsWith('"')) {
+      const inner = t.slice('echo "'.length, -1).replace(/\\./g, "");
+      if (/["`]|\$\(/.test(inner)) v.push(`an echo in the HALT body can run code (unescaped quote, backtick or $( ): ${t.slice(0, 60)}`);
+      continue;
+    }
+    if (/^grep -F\b[^;&|]* tfplan\.txt >&2( \|\| true)?$/.test(t)) continue;
+    v.push(`executable line in the HALT body that is not an echo, the plan-line grep or the final exit 1: ${t.slice(0, 80)}`);
+  }
+  if (body.some((l) => /\bexit 0\b/.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body can `exit 0`");
+  if (body.some((l) => /ack|skip|override|bypass/i.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
+  // Everything from the START of the apply step's run block through the HALT: an allow-list, not a heuristic.
+  v.push(...destroyGuardPrefixViolations(lines, readIdx, start, end));
+  return v;
+}
+
+describe("the web-class passphrase pair is reachable only from the apply job, which carries the rotation HALT (#9377)", () => {
+  let wf: string;
+  let jobIds: string[];
+  let applyCode: string;
+
+  function jobIdsOf(text: string): string[] {
+    const idx = text.indexOf("\njobs:\n");
+    if (idx < 0) return [];
+    const ids: string[] = [];
+    for (const line of text.slice(idx).split("\n")) {
+      const m = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
+      if (m) ids.push(m[1]);
+    }
+    return ids;
+  }
+  const baseOf = (a: string) => a.replace(/\[.*$/, "");
+  const reachesByFlag = (code: string, a: string) =>
+    new RegExp(`-(?:replace|target)(?:=\\s*|\\s+)\\\\?['"]?${escRe(a)}(?![A-Za-z0-9_])`).test(code);
+
+  beforeAll(() => {
+    wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    jobIds = jobIdsOf(wf);
+    applyCode = stripShellLineComments(extractJobBlock(wf, "apply"));
+  });
+
+  test("the job census is non-vacuous (apply plus the dispatch jobs were all extracted)", () => {
+    expect(jobIds).toContain("apply");
+    for (const dispatch of ["web_host_create", "web_host_replace", "workspaces_luks_cutover", "workspaces_luks_recut", "inngest_host_replace"]) {
+      expect(jobIds, `${dispatch} must be among the extracted jobs`).toContain(dispatch);
+    }
+    expect(jobIds.length).toBeGreaterThanOrEqual(15);
+    const applyTargets = extractTargetsWithKeys(extractJobBlock(wf, "apply")).map(baseOf);
+    expect(applyTargets.length).toBeGreaterThanOrEqual(50);
+  });
+
+  test("the apply job -targets both members of the pair", () => {
+    const applyTargets = new Set(extractTargetsWithKeys(extractJobBlock(wf, "apply")).map(baseOf));
+    for (const a of WEB_PASSPHRASE_PAIR) {
+      expect(applyTargets.has(a), `${a} must be in the apply job's -target list`).toBe(true);
+    }
+  });
+
+  test("NO other job in the workflow -targets or -replaces either member of the pair", () => {
+    for (const id of jobIds.filter((j) => j !== "apply")) {
+      const text = extractJobBlock(wf, id);
+      expect(text, `job ${id} must extract non-empty`).not.toEqual("");
+      // Scan the JOINED logical lines: a `\`-continuation between the flag and its value must not evade the scan.
+      const code = joinContinuations(stripComments(text));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(targets.has(a), `job ${id} must not -target ${a}`).toBe(false);
+      }
+      // -replace, and a bare mention in a command line, are the other ways to reach it.
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(reachesByFlag(code, a), `job ${id} must not -replace or -target ${a}`).toBe(false);
+      }
+    }
+  });
+
+  test("NO other workflow FILE -targets or -replaces either member of the pair (apply-deploy-pipeline-fix shares the filter but has no luks HALT)", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== "apply-web-platform-infra.yml");
+    expect(files, "the scan must cover the sibling main-root planners").toContain("apply-deploy-pipeline-fix.yml");
+    expect(files.length).toBeGreaterThan(10);
+    for (const f of files) {
+      const text = readFileSync(join(dir, f), "utf8");
+      const code = joinContinuations(stripComments(text));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(targets.has(a), `${f} must not -target ${a}`).toBe(false);
+        expect(reachesByFlag(code, a), `${f} must not -replace or -target ${a}`).toBe(false);
+      }
+    }
+  });
+
+  test("the reach scan sees a flag and its value split by a line continuation (instrument rows)", () => {
+    const a = "random_password.workspaces_luks_web";
+    const scan = (t: string) => {
+      const code = joinContinuations(stripComments(t));
+      return reachesByFlag(code, a) || extractTargetsWithKeys(code).map(baseOf).includes(a);
+    };
+    expect(scan("terraform apply \\\n  -replace=random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target \\\n  random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target=\\\n  random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target=random_password.workspaces_luks_web_x tfplan")).toBe(false);
+    expect(scan("terraform apply \\\n  -target=hcloud_server.web tfplan")).toBe(false);
+    // Without the join the continuation forms evade (the defect this row closes).
+    expect(reachesByFlag(stripComments("terraform apply \\\n  -target \\\n  random_password.workspaces_luks_web tfplan"), a)).toBe(false);
+  });
+
+  test("the apply job carries the rotation HALT, parsed, validated and BEFORE the destroy_count sum", () => {
+    expect(applyCode).toContain("luks_rotations=$(echo \"$counts\" | jq -r '.luks_passphrase_rotations')");
+    expect(applyCode.search(/if \[\[ "\$luks_rotations" -gt 0 \]\]; then/), "the HALT must exist").toBeGreaterThan(-1);
+    expect(applyCode.indexOf("destroy_count=$((resource_deletes"), "the destroy_count sum must exist").toBeGreaterThan(-1);
+    // Structural: unconditional, ack-free, ends in `exit 1`, positioned before the sum (see luksHaltViolations).
+    expect(luksHaltViolations(applyCode)).toEqual([]);
+  });
+
+  // MUTANTS of the checker itself: each is an implementation that satisfies the old text pins while defeating the
+  // HALT. A checker row that stays green on any of these proves nothing.
+  describe("luksHaltViolations rejects each way of defeating the HALT", () => {
+    const mutate = (code: string, edit: (lines: string[], start: number, end: number, read: number, sum: number) => string[]): string => {
+      const lines = code.split("\n");
+      const start = lines.findIndex((l) => /^\s*if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/.test(l));
+      const ind = /^(\s*)/.exec(lines[start])![1];
+      const end = lines.findIndex((l, i) => i > start && l === `${ind}fi`);
+      const read = lines.findIndex((l) => l.includes("luks_rotations=$(echo"));
+      const sum = lines.findIndex((l) => l.includes("destroy_count=$((resource_deletes"));
+      expect(start, "the HALT must be locatable for the mutant").toBeGreaterThan(-1);
+      return edit(lines, start, end, read, sum).join("\n");
+    };
+    const exitIdx = (lines: string[], end: number) => end - 1;
+
+    test("control: the unmutated code is clean (an always-red checker would pass every row below)", () => {
+      expect(luksHaltViolations(applyCode)).toEqual([]);
+    });
+    test("an ALLOW_LUKS short-circuit before the exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            [[ -n "${ALLOW_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("executable line in the HALT body");
+    });
+    test("an exit 0 in place of the exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => ((l[exitIdx(l, e)] = l[exitIdx(l, e)].replace("exit 1", "exit 0")), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("a conditional exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => ((l[exitIdx(l, e)] = '            [[ -z "${ALLOW_LUKS:-}" ]] && exit 1'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("an exit 1 nested under a condition is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 1, '            if [[ -z "${ALLOW_LUKS:-}" ]]; then', "              exit 1", "            fi", "            exit 1"), l));
+      expect(luksHaltViolations(m).join("\n")).toMatch(/nested or mis-indented|executable line in the HALT body/);
+    });
+    test("an acknowledgement token in an executable body line is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            ack_ok=${ack_destroy:-false}'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("acknowledgement/skip path");
+    });
+    test("a body without an exit is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 1), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    const ALLOW = "outside the destroy-guard allow-list";
+    test("an early short-circuit exit between the counter read and the HALT is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          [[ -n "${ALLOW_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a counter rewrite keyed on the commit message (no exit, no return) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          [[ "$HEAD_MSG" == *"[ack-luks]"* ]] && luks_rotations=0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("an echo-prefixed short-circuit (echo x; [[ ... ]] && exit 0) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          echo x; [[ -n "${SKIP_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a short-circuit on the line BEFORE the counts=$(jq …) read skips the whole guard and is refused", () => {
+      const m = mutate(applyCode, (l) => {
+        const c = l.findIndex((x) => x.includes("counts=$(jq -f"));
+        l.splice(c, 0, '          [[ -n "${SKIP_GUARD:-}" ]] && exit 0');
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a short-circuit at the very start of the step (before the plan runs) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => {
+        let run = r;
+        while (run > 0 && !/^\s*run:\s*[|>]/.test(l[run])) run--;
+        l.splice(run + 1, 0, '          [[ "$HEAD_MSG" == *"[skip-web-platform-apply]"* ]] && exit 0');
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("an exit 0 inside the undecidable HALT body is refused", () => {
+      const m = mutate(applyCode, (l) => {
+        const u = l.findIndex((x) => x.includes('"$undecidable_entries" -gt 0'));
+        const x = l.findIndex((y, i) => i > u && /^\s*exit 1\s*$/.test(y));
+        l[x] = l[x].replace("exit 1", "exit 0");
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a counter read swapped to a different key (luks_rotations from resource_deletes) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => ((l[r] = l[r].replace(".luks_passphrase_rotations", ".resource_deletes")), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    // The four one-line edits that an allow-list of line SHAPES accepted AND that run past the HALT (each is also run,
+    // unchecked, by T64m in the counter suite, which shows rc 0: the checker rows below are what stops them).
+    test("(a) an `exit $rc` inserted just before the HALT if (rc is 0 after a good plan) is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, "          exit $rc"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(b) a second `if [[ $rc -ne 0 ]]` wrapped around the HALT with an extra fi is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(e + 1, 0, "          fi"), l.splice(s, 0, "          if [[ $rc -ne 0 ]]; then"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(c) an echo that assigns through an array subscript inside a parameter expansion is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, '          echo "::error::${a[luks_rotations=0]:-}"'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(d) a plan-line grep that assigns through an array subscript is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, "          grep -F x${a[luks_rotations=0]:-} tfplan.txt >&2 || true"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(e) an arithmetic or command-substitution expansion inside an echo is refused", () => {
+      for (const bad of ['echo "::error::$((luks_rotations=0))"', 'echo "::error::$(true)"', 'echo "::error::`true`"', 'echo "::error::${HOME}"']) {
+        const m = mutate(applyCode, (l, s) => (l.splice(s, 0, `          ${bad}`), l));
+        expect(luksHaltViolations(m).join("\n"), bad).toContain(ALLOW);
+      }
+    });
+    test("(f) a stray fi or a grep that is not the literal six-address -F form is refused", () => {
+      const stray = mutate(applyCode, (l, s) => (l.splice(s, 0, "          fi"), l));
+      expect(luksHaltViolations(stray).join("\n")).toContain(ALLOW);
+      const grep = mutate(applyCode, (l) => {
+        const g = l.findIndex((x) => /^\s*grep -F -e random_password\.inngest_redis_luks/.test(x));
+        l[g] = "          grep -F -e random_password.inngest_redis_luks -e 'Plan:' tfplan.txt >&2 || true";
+        return l;
+      });
+      expect(luksHaltViolations(grep).join("\n")).toContain(ALLOW);
+    });
+    test("removing the luks_rotations numeric validation from the validation line is refused (every counter is required)", () => {
+      const m = mutate(applyCode, (l) => {
+        const n = l.findIndex((x) => x.includes('! "$luks_rotations" =~ ^[0-9]+$'));
+        expect(n, "the numeric validation line must be locatable").toBeGreaterThan(-1);
+        l[n] = l[n].replace(' || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]]', "");
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain("numeric validation");
+    });
+    test("removing ANY single counter from the numeric validation is refused", () => {
+      for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"]) {
+        const m = mutate(applyCode, (l) => {
+          const n = l.findIndex((x) => x.includes(`! "$${c}" =~ ^[0-9]+$`));
+          const before = l[n];
+          l[n] = l[n].replace(new RegExp(` \\|\\| \\[\\[ ! "\\$${c}" =~ \\^\\[0-9\\]\\+\\$ \\]\\]|\\[\\[ ! "\\$${c}" =~ \\^\\[0-9\\]\\+\\$ \\]\\] \\|\\| `), "");
+          expect(l[n], `the ${c} removal must land`).not.toBe(before);
+          return l;
+        });
+        expect(luksHaltViolations(m).join("\n"), c).toContain("numeric validation");
+      }
+    });
+    test("a removed counter read is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r, 1), l));
+      expect(luksHaltViolations(m).join("\n")).toMatch(/counter read for luks_rotations is missing|is not read from the destroy-guard/);
+    });
+    test("a HALT moved after the destroy_count sum is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r, sum) => {
+        const block = l.splice(s, e - s + 1);
+        const newSum = l.findIndex((x) => x.includes("destroy_count=$((resource_deletes"));
+        l.splice(newSum + 1, 0, ...block);
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain("AFTER the destroy_count sum");
+    });
+    test("a HALT nested one level deeper than the counter read is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(s, e - s + 1, ...l.slice(s, e + 1).map((x) => `  ${x}`)), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("different level");
+    });
+    test("an echo that can run code (an unescaped quote closing the string) is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            echo "::error::x"; [[ -n "${ALLOW_LUKS:-}" ]] && exit 0; echo "y"'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("can run code");
+    });
+  });
+
+  test("the HALT names every counted address and its plan-line grep reaches all of them (derived from the filter, not retyped)", () => {
+    const addrs = luksPassphraseAddrs(readFileSync(LUKS_FILTER, "utf8"));
+    expect(addrs.length, "luks_passphrase_addrs must parse (six members)").toBeGreaterThanOrEqual(6);
+    for (const a of ["random_password.workspaces_luks", "random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_key", "doppler_secret.workspaces_luks_web_key"]) {
+      expect(addrs, `${a} must be a counted address`).toContain(a);
+    }
+    const halt = applyCode.split("\n");
+    const start = halt.findIndex((l) => /^\s*if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/.test(l));
+    const end = halt.findIndex((l, i) => i > start && /^ {10}fi\s*$/.test(l));
+    const body = halt.slice(start, end);
+    const message = body.find((l) => l.includes("terraform plan would CREATE, UPDATE, DELETE or FORGET")) ?? "";
+    const grepLine = body.find((l) => /^\s*grep -F\b/.test(l)) ?? "";
+    expect(message, "the HALT headline must exist").not.toBe("");
+    expect(grepLine, "the plan-line grep must exist").not.toBe("");
+    expect(missingAddrs(message, addrs), "the HALT headline must name every counted address").toEqual([]);
+    expect(missingAddrs(grepLine, addrs), "the plan-line grep must name every counted address").toEqual([]);
+    expect(grepLine, "the plan-line grep must not truncate the lines it exists to show").not.toMatch(/\|\s*head\b/);
+    // Instrument rows: dropping ONE address from the text must red, including the one that is a prefix of another.
+    const dropped = message.replace("random_password.workspaces_luks, ", "");
+    expect(dropped).not.toBe(message);
+    expect(missingAddrs(dropped, addrs)).toEqual(["random_password.workspaces_luks"]);
+    const droppedWeb = message.replace(", random_password.workspaces_luks_web", "");
+    expect(droppedWeb).not.toBe(message);
+    expect(missingAddrs(droppedWeb, addrs)).toEqual(["random_password.workspaces_luks_web"]);
+  });
+});
+
+// --- the d6 rotate marker and the flip gate that reads it (#10166) ------------------------------
+// The flip's d6_replace_stale precondition matched a step NAME (`rotate confirm token`) that is
+// unconditional and concludes success on EVERY target, so a plain replace or a plan-only rotate
+// discharged it. The fix is a last-step marker plus a gate that reads it through
+// scripts/lib/git-data-rotate-stamp.sh. Both endpoints are unit-tested elsewhere (the lib suite and
+// the census); what pins the WIRE between them is here: the marker's position and `if:`, the gate
+// sourcing and calling the lib in order, the name constants shared by lib and workflow, and the
+// confirm-token step staying unconditional and unread. Every text pin runs on comment-stripped,
+// line-anchored text (a comment can quote the forbidden spelling), and the structural pins read
+// the PARSED job steps so a quoting variant of `always()` or `continue-on-error` cannot hide.
+const MARKER_IF = "inputs.apply_target == 'git-data-host-rotate' && inputs.plan_only != true";
+const CONFIRM_STEP = "Validate dispatch inputs (rotate confirm token)";
+
+/** The step block holding `id: <id>` (header to the next step or job header), or null. */
+function extractStepById(workflowText: string, id: string): string | null {
+  const lines = workflowText.split("\n");
+  const idAt = lines.findIndex((l) => new RegExp(`^ {8}id: ${id}\\s*$`).test(l));
+  if (idAt === -1) return null;
+  let start = idAt;
+  while (start >= 0 && !/^ {6}- name:/.test(lines[start])) start--;
+  if (start < 0) return null;
+  let end = lines.length;
+  for (let i = idAt + 1; i < lines.length; i++) {
+    if (/^ {6}- name:/.test(lines[i]) || /^ {2}[A-Za-z0-9_-]+:/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+/** Violations of the marker/gate/constants wiring; empty on a healthy tree. */
+function checkRotateMarkerWiring(applyText: string, cutoverText: string, libText: string): string[] {
+  const v: string[] = [];
+  const constant = (name: string): string | null =>
+    libText.match(new RegExp(`^readonly ${name}="([^"]*)"$`, "m"))?.[1] ?? null;
+  const jobId = constant("GDRS_JOB_NAME");
+  const preName = constant("GDRS_PRECONDITION_STEP");
+  const applyName = constant("GDRS_APPLY_STEP");
+  const markerName = constant("GDRS_MARKER_STEP");
+  for (const [k, val] of [["GDRS_JOB_NAME", jobId], ["GDRS_PRECONDITION_STEP", preName], ["GDRS_APPLY_STEP", applyName], ["GDRS_MARKER_STEP", markerName]] as const) {
+    if (val === null || val === "") v.push(`lib constant ${k} is missing or empty`);
+  }
+  if (!jobId || !preName || !applyName || !markerName) return v;
+  // P-h: the em dash is U+2014 in both lib constants that carry one.
+  if (!preName.includes("\u2014") || !applyName.includes("\u2014")) v.push("the lib's precondition/apply constants lost the U+2014 em dash");
+
+  let steps: Array<Record<string, unknown>>;
+  try {
+    const doc = parseYaml(applyText) as { jobs: Record<string, { name?: unknown; steps?: Array<Record<string, unknown>> }> };
+    steps = doc.jobs[jobId]?.steps ?? [];
+    // The lib matches the job by its DISPLAY name, which is the job id only while the job has no `name:`.
+    if ("name" in (doc.jobs[jobId] ?? {})) v.push(`job ${jobId} gained a name: key, so the lib's exact job-name match no longer sees it`);
+    if ("continue-on-error" in (doc.jobs[jobId] ?? {})) v.push(`job ${jobId} carries continue-on-error, so a failed job could still read green`);
+    // The marker only means "the whole job succeeded" if no step can fail while the job stays green.
+    for (const st of steps) if ("continue-on-error" in st) v.push(`step '${String(st.name)}' of ${jobId} carries continue-on-error, so a failed step could still reach the marker`);
+    // No other job may carry the job's display name or a marker-named step (the lib reads `.jobs[]` by name).
+    for (const [id, job] of Object.entries(doc.jobs)) {
+      if (id === jobId) continue;
+      if (job.name === jobId) v.push(`job ${id} is named '${jobId}', so the lib could read it as the replace job`);
+      if ((job.steps ?? []).some((st) => st.name === markerName)) v.push(`job ${id} carries a step named '${markerName}'`);
+    }
+  } catch (e) {
+    return [...v, `the apply workflow does not parse: ${(e as Error).message.split("\n")[0]}`];
+  }
+  if (steps.length === 0) return [...v, `job ${jobId} has no steps (the lib's GDRS_JOB_NAME no longer names a job)`];
+  const named = (n: string) => steps.filter((s) => s.name === n);
+  // P-a: position. The marker is the literal last step, directly after Dispatch summary.
+  if (steps[steps.length - 1].name !== markerName) v.push(`the last step of ${jobId} is '${String(steps[steps.length - 1].name)}', not the marker '${markerName}'`);
+  if (steps.length < 2 || steps[steps.length - 2].name !== "Dispatch summary") v.push("the step before the marker is not 'Dispatch summary'");
+  // P-g: constants parity. Each name exists exactly once in the job.
+  for (const [what, n] of [["marker", markerName], ["precondition", preName], ["apply", applyName]] as const) {
+    if (named(n).length !== 1) v.push(`the ${what} step '${n}' appears ${named(n).length} times in ${jobId} (expected exactly 1)`);
+  }
+  // P-b: the marker's `if:` is exactly the ruled string, and it carries no other gating key.
+  const marker = named(markerName)[0];
+  if (marker) {
+    if (marker.if !== MARKER_IF) v.push(`the marker's if: is '${String(marker.if)}', not '${MARKER_IF}'`);
+    for (const key of ["continue-on-error", "timeout-minutes"]) if (key in marker) v.push(`the marker carries ${key}`);
+  }
+  // P-c: the name matches none of the census G5 gate-name patterns
+  // (tests/scripts/test-infra-privileged-tier-census.sh GATE_NAME) and, per the #10166 ruling, carries
+  // neither 'Validate' nor 'confirm'.
+  if (/interlock|validate|confirm|verify\s+required|preflight/i.test(markerName)) v.push("the marker's name matches a census gate-name pattern or contains 'Validate'/'confirm'");
+  // P-d: the confirm-token step still exists once and stays unconditional (census G5c).
+  const confirm = named(CONFIRM_STEP);
+  if (confirm.length !== 1) v.push(`the confirm-token step appears ${confirm.length} times (expected 1)`);
+  else if ("if" in confirm[0]) v.push("the confirm-token step gained an if: (it must stay unconditional, census G5c)");
+
+  // P-e/P-f: the gate. Pins run on the comment-stripped flip_preconditions step.
+  const rawGate = extractStepById(cutoverText, "flip_preconditions");
+  if (rawGate === null) return [...v, "the flip_preconditions step was not found in git-data-cutover.yml"];
+  const gate = stripComments(rawGate);
+  if (!/^ {10}source "\$\{GITHUB_WORKSPACE:\?\}\/scripts\/lib\/git-data-rotate-stamp\.sh" \|\| fail d6_run_unreadable /m.test(gate)) v.push("the gate does not source the stamp lib with a fail-closed || fail");
+  if ((gate.match(/git_data_d6_scan/g) ?? []).length !== 1) v.push("the gate must call git_data_d6_scan exactly once");
+  if (!/^ {12}\*\) fail d6_run_unreadable /m.test(gate)) v.push("the gate's case has no fail-closed *) arm");
+  // P-f: the gate no longer reads the confirm-token step or inlines a step-selection jq.
+  const cutoverStripped = stripComments(cutoverText);
+  if (/rotate confirm token/i.test(cutoverStripped)) v.push("git-data-cutover.yml still reads the 'rotate confirm token' step");
+  if (/select\(\.name \| test\(/.test(cutoverStripped)) v.push("git-data-cutover.yml still has an inline step-selection jq");
+  if (/\bjobs_json=/.test(cutoverStripped)) v.push("git-data-cutover.yml still captures jobs_json inline");
+  return v;
+}
+
+describe("the d6 rotate marker and the flip gate that reads it (#10166)", () => {
+  const applyText = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const cutoverText = readFileSync(resolve(REPO_ROOT, ".github/workflows/git-data-cutover.yml"), "utf8");
+  const libText = readFileSync(resolve(REPO_ROOT, "scripts/lib/git-data-rotate-stamp.sh"), "utf8");
+
+  test("the real tree satisfies every wiring pin (marker last + exact if:, gate sources/scans/cases, constants, confirm step unconditional)", () => {
+    expect(checkRotateMarkerWiring(applyText, cutoverText, libText)).toEqual([]);
+  });
+
+  test("twelve mutants of the wiring each make the check non-empty, for the right reason, and each mutation actually landed", () => {
+    const markerRun = 'run: echo "git-data-host-rotate completed - apply, boot poll, pin load and summary succeeded (the d6 marker)"';
+    const mutants: Array<{ label: string; want: RegExp; apply?: (s: string) => string; cutover?: (s: string) => string; lib?: (s: string) => string }> = [
+      { label: "drop the plan_only conjunct", want: /the marker's if: is/, apply: (s) => s.replace(` && inputs.plan_only != true\n        ${markerRun}`, `\n        ${markerRun}`) },
+      { label: "drop the apply_target conjunct", want: /the marker's if: is/, apply: (s) => s.replace(`if: inputs.apply_target == 'git-data-host-rotate' && inputs.plan_only != true\n        ${markerRun}`, `if: inputs.plan_only != true\n        ${markerRun}`) },
+      { label: "add always() to the marker", want: /the marker's if: is/, apply: (s) => s.replace(`if: ${MARKER_IF}\n        ${markerRun}`, `if: always() && ${MARKER_IF}\n        ${markerRun}`) },
+      { label: "append a step after the marker", want: /the last step of git_data_host_replace is/, apply: (s) => s.replace(`        ${markerRun}\n`, `        ${markerRun}\n\n      - name: Trailing step\n        run: echo trailing\n`) },
+      {
+        label: "restore the old confirm-token read in the gate",
+        want: /still reads the 'rotate confirm token' step/,
+        cutover: (s) => s.replace('          d6="$(git_data_d6_scan <<<"$ids")" || true\n', '          d6="$(git_data_d6_scan <<<"$ids")" || true\n          rotate_ok="$(jq -r \'.steps[] | select(.name | test("rotate confirm token"; "i")) | .conclusion\' <<<"$jobs_json")"\n'),
+      },
+      {
+        label: "add continue-on-error to the apply step",
+        want: /carries continue-on-error/,
+        apply: (s) => s.replace("      - name: Terraform apply (git-data-host -replace) \u2014 post-apply backstop\n", "      - name: Terraform apply (git-data-host -replace) \u2014 post-apply backstop\n        continue-on-error: true\n"),
+      },
+      { label: "give the job a name: key", want: /gained a name: key/, apply: (s) => s.replace("\n  git_data_host_replace:\n", "\n  git_data_host_replace:\n    name: git-data host replace\n") },
+      {
+        label: "carry the marker step name in another job",
+        want: /carries a step named/,
+        apply: (s) => {
+          const at = s.indexOf("      - name: Dispatch summary", s.indexOf("      - name: Rotate completed (d6 marker)"));
+          return at < 0 ? s : s.slice(0, at) + "      - name: Rotate completed (d6 marker)" + s.slice(at + "      - name: Dispatch summary".length);
+        },
+      },
+      { label: "add continue-on-error to the job", want: /job git_data_host_replace carries continue-on-error/, apply: (s) => s.replace("\n  git_data_host_replace:\n", "\n  git_data_host_replace:\n    continue-on-error: true\n") },
+      {
+        label: "name another job like the replace job",
+        want: /is named 'git_data_host_replace'/,
+        apply: (s) => s.replace("\n  workspaces_luks_cutover:\n", "\n  workspaces_luks_cutover:\n    name: git_data_host_replace\n"),
+      },
+      {
+        label: "rename the marker to a census gate-name pattern (workflow and lib together)",
+        want: /matches a census gate-name pattern/,
+        apply: (s) => s.replace("      - name: Rotate completed (d6 marker)\n", "      - name: Rotate preflight done\n"),
+        lib: (s) => s.replace('readonly GDRS_MARKER_STEP="Rotate completed (d6 marker)"', 'readonly GDRS_MARKER_STEP="Rotate preflight done"'),
+      },
+      { label: "change one character of the marker constant", want: /the last step of git_data_host_replace is|appears 0 times/, lib: (s) => s.replace('readonly GDRS_MARKER_STEP="Rotate completed (d6 marker)"', 'readonly GDRS_MARKER_STEP="Rotate completed (d6 markes)"') },
+    ];
+    expect(mutants.length).toBe(12);
+    for (const m of mutants) {
+      const a = m.apply ? m.apply(applyText) : applyText;
+      const c = m.cutover ? m.cutover(cutoverText) : cutoverText;
+      const l = m.lib ? m.lib(libText) : libText;
+      expect(a !== applyText || c !== cutoverText || l !== libText, `the mutation '${m.label}' did not change any text`).toBe(true);
+      const violations = checkRotateMarkerWiring(a, c, l);
+      expect(violations, `the mutant '${m.label}' was not caught`).not.toEqual([]);
+      // Caught for the RIGHT reason: a mutant that merely breaks the parse would also be non-empty.
+      expect(violations.join("\n"), `the mutant '${m.label}' was caught for the wrong reason`).toMatch(m.want);
+    }
+  });
+
+  test("the gate's d6 block, EXECUTED against a modelled gh, reaches the right verdict for each scan outcome", () => {
+    const doc = parseYaml(cutoverText) as { jobs: Record<string, { steps?: Array<{ id?: string; run?: string }> }> };
+    const run = Object.values(doc.jobs).flatMap((j) => j.steps ?? []).find((st) => st.id === "flip_preconditions")?.run;
+    expect(run, "the flip_preconditions run block must exist").toBeTruthy();
+    const failFn = run!.match(/^ *fail\(\) \{.*\}$/m)?.[0];
+    expect(failFn, "the step's own fail() must be extractable").toBeTruthy();
+    const from = run!.indexOf('source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-rotate-stamp.sh"');
+    const to = run!.indexOf("# deploy_in_flight");
+    expect(from, "the d6 block must start at the lib source line").toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const blockText = run!.slice(from, to);
+    const harnessFor = (block: string) => `set -euo pipefail\n${failFn}\nlast_ok=""\n${block}\necho "LAST_OK=$last_ok"\n`;
+
+    const c = (n: string) => libText.match(new RegExp(`^readonly ${n}="([^"]*)"$`, "m"))![1];
+    const [pre, apply, marker] = [c("GDRS_PRECONDITION_STEP"), c("GDRS_APPLY_STEP"), c("GDRS_MARKER_STEP")];
+    const job = (conclusion: string | null, steps: Array<[string, string | null]>) =>
+      JSON.stringify({ jobs: [{ name: c("GDRS_JOB_NAME"), conclusion, steps: steps.map(([name, conclusion]) => ({ name, conclusion })) }] });
+    const stamped = job("success", [[pre, "success"], [apply, "success"], [marker, "success"]]);
+    const plain = job("success", [[pre, "skipped"], [apply, "success"], [marker, "skipped"]]);
+    const failedRotate = job("failure", [[pre, "success"], [apply, "failure"], [marker, "skipped"]]);
+    const inFlight = job(null, [[pre, "success"], [apply, null]]);
+
+    // gh models exactly the two calls the block may make and REFUSES any other argv (exit 64: the full
+    // `run list` argv is compared word for word, so an added, removed, reordered or changed selector turns the
+    // capture into a failure instead of quietly reading the right fixture). The list goes through the REAL --jq filter.
+    const ghStub = `#!/usr/bin/env bash
+if [[ "\${1-} \${2-}" == "run list" ]]; then
+  [[ $# -eq 14 && "\${*:1:13}" == "run list --workflow apply-web-platform-infra.yml --branch main --event workflow_dispatch --limit 100 --json databaseId,status --jq" ]] \
+    || { echo "gh stub refused: $*" >&2; exit 64; }
+  jqf="\${14}"
+  [[ -f "$FX/list.json" ]] || exit 1
+  exec jq -r "$jqf" "$FX/list.json"
+fi
+if [[ "\${1-} \${2-}" == "run view" && "\${4-}" == "--json" && "\${5-}" == "jobs" && $# -eq 5 ]]; then
+  [[ -f "$FX/$3.json" ]] || exit 1
+  cat "$FX/$3.json"; exit 0
+fi
+echo "gh stub refused: $*" >&2
+exit 64
+`;
+    type Case = { name: string; list: Array<[number | string, string]> | null; bodies: Record<number, string>; rc: number; verdict?: string; has?: string[]; hasNot?: string[]; mutate?: [string, string] };
+    const cases: Case[] = [
+      { name: "an older stamped run behind a newer plain replace discharges D6", list: [[2, "completed"], [1, "completed"]], bodies: { 2: plain, 1: stamped }, rc: 0, has: ["d6 rotate stamp: run 1", "LAST_OK=1"] },
+      { name: "only plain replaces leaves D6 open", list: [[2, "completed"]], bodies: { 2: plain }, rc: 1, verdict: "d6_replace_stale", has: ["apply_target=git-data-host-rotate"] },
+      { name: "an empty run list leaves D6 open", list: [], bodies: {}, rc: 1, verdict: "d6_replace_stale" },
+      { name: "a failed newest rotate blocks over an older stamp", list: [[3, "completed"], [1, "completed"]], bodies: { 3: failedRotate, 1: stamped }, rc: 1, verdict: "d6_last_rotate_failed", has: ["run 3", "gh run view 3 --log-failed", "dispatch a FRESH rotate", "Do not re-run the failed run"] },
+      { name: "an in-flight newest run blocks over an older stamp", list: [[3, "in_progress"], [1, "completed"]], bodies: { 3: inFlight, 1: stamped }, rc: 1, verdict: "d6_rotate_in_flight", has: ["(run 3)", "Cancel it only if", "never cancel an in_progress run"] },
+      { name: "an unreadable newest run blocks over an older stamp", list: [[4, "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run 4)", "gh run view 4 --json jobs"] },
+      { name: "a non-numeric id stops the scan and the gate names no run", list: [["abc", "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run n/a)"], hasNot: ["gh run view"] },
+      // The bare-stamp guard is unreachable through the real lib (it always prints an id), so drive it by replacing the scan.
+      { name: "a stamp reported without a run id fails closed", list: [[1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["without a run id"], mutate: ['"$(git_data_d6_scan <<<"$ids")"', '"$(echo d6_stamped)"'] },
+      { name: "a failed run list blocks", list: null, bodies: {}, rc: 1, verdict: "d6_run_unreadable" },
+      // Control: the stub is SELECTIVE. The same block with its --event selector changed is refused by the stub,
+      // and the refusal flips the verdict (an accepting stub would have let the stamped fixture discharge D6).
+      { name: "CONTROL: a changed selector is refused by the modelled gh", list: [[1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["gh stub refused"], mutate: ["--event workflow_dispatch", "--event push"] },
+    ];
+    const root = mkdtempSync(join(tmpdir(), "d6-gate-exec-"));
+    try {
+      mkdirSync(join(root, "bin"));
+      writeFileSync(join(root, "bin", "gh"), ghStub, { mode: 0o755 });
+      for (const [i, cs] of cases.entries()) {
+        const fx = join(root, `fx${i}`);
+        mkdirSync(fx);
+        if (cs.list) writeFileSync(join(fx, "list.json"), JSON.stringify(cs.list.map(([databaseId, status]) => ({ databaseId, status }))));
+        for (const [id, body] of Object.entries(cs.bodies)) writeFileSync(join(fx, `${id}.json`), body);
+        let block = blockText;
+        if (cs.mutate) {
+          block = blockText.replace(cs.mutate[0], cs.mutate[1]);
+          expect(block, `${cs.name}: the mutation must change the block`).not.toBe(blockText);
+        }
+        const r = spawnSync("bash", ["--noprofile", "--norc", "-c", harnessFor(block)], {
+          encoding: "utf8",
+          env: { PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}`, HOME: root, LC_ALL: "C", FX: fx, GITHUB_WORKSPACE: REPO_ROOT },
+        });
+        const out = `${r.stdout}${r.stderr}`;
+        expect(r.status, `${cs.name}: exit status (output: ${out.slice(0, 400)})`).toBe(cs.rc);
+        if (cs.verdict) expect(out, `${cs.name}: verdict`).toContain(`verdict=${cs.verdict}`);
+        for (const h of cs.has ?? []) expect(out, `${cs.name}: output`).toContain(h);
+        for (const h of cs.hasNot ?? []) expect(out, `${cs.name}: output must not contain`).not.toContain(h);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 
 // --- suite-level anti-vacuity (#7656 C8) --------------------------------------------------------
 // The bash side has had a minimum-cardinality floor since it was written; this file had none. A

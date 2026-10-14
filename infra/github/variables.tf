@@ -34,8 +34,13 @@ variable "actions_integration_id" {
   default     = 15368
 }
 
+# UNUSED while CodeQL is advisory (#9454): the `CodeQL` required_check was removed from
+# ruleset-ci-required.tf when the merge queue was adopted (CodeQL cannot report on
+# `merge_group`, codeql-action#1537). Kept — not deleted — because the rollback / re-tighten
+# recipe (re-add the `CodeQL` required_check bound to this id) references it, and the
+# `CODEQL_INTEGRATION_ID` Doppler key (ADR-241, tf-var transformer) still feeds it.
 variable "codeql_integration_id" {
-  description = "CodeQL integration_id. Verified 57789 via the same API capture; appears only on the CodeQL rollup check."
+  description = "CodeQL integration_id. Verified 57789 via the same API capture; appears only on the CodeQL rollup check. UNUSED while CodeQL is advisory (#9454); kept for the re-tighten/rollback recipe."
   type        = number
   default     = 57789
 }

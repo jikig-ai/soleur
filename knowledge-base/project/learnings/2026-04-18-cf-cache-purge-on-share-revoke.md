@@ -97,5 +97,5 @@ Enforcement tier: skill instruction (prose; the failure mode surfaces only when 
 - Related learnings:
     - `2026-04-18-cloudflare-default-bypasses-dynamic-paths.md` — sibling: CF default cache-eligibility (this learning's TTL backstop is meaningful only because that ruleset opts `/api/shared/*` *into* edge caching)
     - `2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` — meta: the architecture-strategist agent caught the drift-path bypass inline that the plan had deferred
-- Plan: `knowledge-base/project/plans/2026-04-18-fix-purge-cf-cache-on-share-revoke-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-18-fix-purge-cf-cache-on-share-revoke-plan.md`
 - AGENTS.md rules applied: `cq-silent-fallback-must-mirror-to-sentry`, `cq-doppler-service-tokens-are-per-config`, `cq-cloudflare-dynamic-path-cache-rule-required`, `cq-vite-test-files-esm-only`, `cq-in-worktrees-run-vitest-via-node-node`, `cq-always-run-npx-markdownlint-cli2-fix-on`

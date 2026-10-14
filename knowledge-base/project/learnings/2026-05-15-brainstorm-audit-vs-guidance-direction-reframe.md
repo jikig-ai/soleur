@@ -55,8 +55,8 @@ When a brainstorm description names an external pattern + cites `alirezarezvani/
 
 ## Related
 
-- Source brainstorm: `knowledge-base/project/brainstorms/2026-05-15-karpathy-check-brainstorm.md`
-- Source spec: `knowledge-base/project/specs/feat-karpathy-check-2727/spec.md`
+- Source brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-karpathy-check-brainstorm.md`
+- Source spec: `knowledge-base/project/specs/archive/20261013-014038-feat-karpathy-check-2727/spec.md`
 - Companion prior-art (guidance direction): `knowledge-base/project/learnings/best-practices/2026-05-03-karpathy-claude-md-prior-art.md`
 - Target agent: `plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md`
 - Orchestrator: `plugins/soleur/skills/review/SKILL.md`

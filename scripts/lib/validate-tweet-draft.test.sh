@@ -7,6 +7,9 @@
 # #5022 — feature-tweet now cross-posts to X AND Bluesky, so the gate additionally
 # requires a `bluesky` channel token and a non-empty `## Bluesky` section.
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/lib/validate-tweet-draft.sh"
@@ -23,7 +26,7 @@ _report() {
 }
 
 _write() {
-  local f; f=$(mktemp)
+  local f; f=$(mktemp -p "$SUITE_TMP")
   printf '%s\n' "$1" > "$f"
   echo "$f"
 }

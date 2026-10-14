@@ -79,7 +79,7 @@ while IFS=$'\t' read -r rid created _concl; do
     | jq -rs '[.[].jobs[] | select(.name | test("inngest.host.replace"; "i")) | .conclusion][]' || true)"
   [[ -n "$jobs" ]] || continue   # this dispatch was a different apply_target
   replace_run_id="$rid"; replace_at="$created"
-  if printf '%s\n' "$jobs" | grep -qx 'success'; then
+  if grep -qx 'success' <<<"$jobs"; then
     echo "found successful inngest_host_replace job in run $rid ($created)"
   else
     echo "FAIL: inngest_host_replace job in run $rid concluded '${jobs//$'\n'/,}' — the apply window needs a human" >&2

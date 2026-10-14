@@ -125,6 +125,14 @@ resource "doppler_project" "inngest" {
   # Doppler's API caps `description` at 255, unchecked by the provider and by plan;
   # scripts/lint-doppler-description-length.py enforces it at PR time.
   description = "Isolated boot-credential project for the dedicated Inngest singleton (#6178, ADR-100). Its prd root config holds ONLY the inngest secret set (signing/event keys, Redis password, out-of-band Postgres URI); cross-project isolation from soleur/prd."
+
+  # Cascade parent of INNGEST_REDIS_LUKS_KEY, the only opener the host reads for the sole-copy store (#9879): a
+  # targeted replace of the project or its environment deletes the secret without planning the
+  # secret's own destroy, so `prevent_destroy` on the secret alone would never fire. A deliberate
+  # recreate of the whole project needs a reviewed lift first (runbook: "Sole-copy protection and key loss").
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # A TF-created doppler_project is created BARE — no default dev/stg/prd configs that the
@@ -138,6 +146,11 @@ resource "doppler_environment" "inngest_prd" {
   project = doppler_project.inngest.name
   slug    = "prd"
   name    = "Production"
+
+  # Cascade parent of the host-read opener (#9879); see the note on doppler_project.inngest.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # TF owns these three values → NO ignore_changes (mirrors zot_*_token_registry, NOT the
@@ -321,9 +334,12 @@ locals {
   # Prose in a .tmpl that rides in user_data is NOT free; prose in .tf is. Keep the rationale — it
   # just stops being shipped to the host.
   inngest_user_data_plain = replace(templatefile("${path.module}/cloud-init-inngest.yml", {
-    # Mount the Redis AOF volume by its specific id (by-id pattern). Known at plan time;
-    # the attachment is a separate resource.
-    inngest_volume_id = hcloud_volume.inngest_redis.id
+    # The retired plaintext backstop volume's id, as a LITERAL (#8285, D1). Deleting
+    # hcloud_volume.inngest_redis would otherwise change this input, change user_data, and
+    # force-replace the sole scheduler. The rendered user_data stays byte-identical, so the
+    # server plans no change. In pointer mode this id is only an allowlist member; if the Doppler
+    # pointer were ever lost the pre-cutover arm fails closed on the absent device.
+    inngest_volume_id = local.inngest_retired_plaintext_volume_id
     # #6894 / ADR-142. The ADDITIVE target volume's id. The two-device resolver in
     # cloud-init needs BOTH ids: the allowlist of devices it may touch is built from
     # this pair, so a device that is neither is refused rather than probed. Threaded
@@ -346,6 +362,12 @@ locals {
     # isolated secret set, never a foreign project. NEVER baked into user_data directly beyond
     # this scoped token (which is itself minimal-blast-radius by construction).
     doppler_token = doppler_service_token.inngest.key
+    # #9175: the Doppler CONFIG NAME the boot surface resolves (`--config`, the env-file
+    # DOPPLER_CONFIG= lines) — rendered literally at every site. Prod is "prd", stated at
+    # the call site rather than defaulted so the prod resolution is visible here; the
+    # inngest-provision-rehearsal root passes its scratch `rehearsal_<runid>` config so a
+    # throwaway host never resolves the real prd. Mirroring git-data's doppler_config_name.
+    inngest_doppler_config = "prd"
     # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
     # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
     # to a private VIP when active-active-N web lands (#6459; web-2 retired #6538). Consumed by inngest-bootstrap.sh.
@@ -486,7 +508,7 @@ resource "hcloud_server" "inngest" {
   # reach a running host — Terraform's only way to "apply" it is to REPLACE the host.
   # Rotating `hcloud_ssh_key.default` (an operator credential rotation, not an infra
   # change) therefore armed a force-replacement on this SOLE-scheduler host plus a
-  # cascading replace of hcloud_volume_attachment.inngest_redis. Mirrors the
+  # cascading replace of the (now retired) AOF volume attachment. Mirrors the
   # ignore_changes=[ssh_keys] that server.tf already carries. Deliberately NOT widened to
   # user_data — that force-replace is the intended replace-to-reprovision path (above).
   lifecycle {
@@ -524,10 +546,6 @@ resource "hcloud_server" "inngest" {
     # `#cloud-config` is cloud-init's format sniffer, and losing it does NOT fail the apply — the
     # host boots and simply never recognises the payload, so NOTHING in it runs. Dark, silent, and
     # indistinguishable from success.
-    #
-    # HONEST LIMIT: on a BIRTH apply `hcloud_volume.inngest_redis.id` can be unknown at plan time,
-    # which makes this condition unknown and defers it. It is therefore weaker for birth and full
-    # strength for REPLACE — and replace is the case that destroyed the host.
     precondition {
       condition     = length(local.inngest_user_data_b64gz) <= 32768 && startswith(local.inngest_user_data_plain, "#cloud-config\n")
       error_message = "inngest user_data is ${length(local.inngest_user_data_b64gz)} B base64gzip'd against Hetzner's 32,768 B cap, or has lost its #cloud-config header. Refusing to plan: a -replace would DESTROY the host and then fail the create (this is exactly what happened 2026-09-08). Shed payload — prose is stripped for free by local.inngest_rationale_strip, so what remains is code."
@@ -549,65 +567,13 @@ resource "hcloud_server" "inngest" {
   }
 }
 
-# ---------------- Redis AOF block volume ----------------
-# The queue/run-state AOF lives here — never tmpfs (a wiped AOF loses in-flight
-# step.sleep/queued jobs across a reboot; the exact data-loss trap the durable backend
-# fixes). Mounted at /mnt/data (inngest-redis.conf `dir /mnt/data/redis`). Shape mirrors
-# hcloud_volume.registry.
-resource "hcloud_volume" "inngest_redis" {
-  name     = "soleur-inngest-redis-store"
-  size     = var.inngest_redis_volume_size
-  location = var.location
-
-  labels = {
-    app = "soleur-web-platform"
-  }
-
-  # #7695. `format` IS NOT DECLARED, AND THAT IS THE POINT — the LUKS precedents
-  # (hcloud_volume.workspaces_luks, hcloud_volume.registry_store) omit it so the
-  # device is born RAW and `blkid -o value -s TYPE` is a sound discriminator.
-  #
-  # AN EARLIER REVISION OF THIS BLOCK KEPT `format = "ext4"` AND ARGUED FOR IT AT
-  # LENGTH. The argument was that `format` is ForceNew, so removing the line would
-  # queue a volume replace, and `apply_target=inngest-host`'s additive-only destroy
-  # guard would then abort PERMANENTLY. Every word of that is plausible and the
-  # conclusion is false, because it reasons about ForceNew while ignoring the
-  # `ignore_changes` directly beneath it. MEASURED 2026-09-03, `terraform plan`
-  # against live state with the line removed and the lifecycle block kept:
-  #
-  #     hcloud_volume.inngest_redis  actions=["no-op"]  after.format=ext4
-  #
-  # No replace is queued; `ignore_changes = [format]` suppresses the diff exactly as
-  # it is designed to. The lifecycle block is RETAINED for that reason — it is what
-  # keeps the existing ext4 volume's plan empty now that the config no longer names
-  # a format.
-  #
-  # And the cost of having believed it, measured the same way on the recut plan
-  # (`-replace=hcloud_volume.inngest_redis`):
-  #
-  #     with    format = "ext4":  actions=["delete","create"]  after.format=ext4
-  #     without format = "ext4":  actions=["delete","create"]  after.format=null
-  #
-  # `ignore_changes` suppresses DIFFS, never CREATES. So with the line present the
-  # replacement volume is created ext4, cloud-init's ARM 1 mounts it plaintext, and
-  # the one-shot empty-store window — the whole reason this apparatus exists — is
-  # spent producing an unencrypted volume while the workflow prints "The new volume
-  # is RAW" twice. inngest_volume_recut_gate reads `.change.after.format` from the
-  # plan and refuses unless it is null, so this is enforced against the PLAN rather
-  # than against this file staying the way it is.
-  #
-  # AC B4: `terraform plan` for apply_target=inngest-host must show ZERO deletes of
-  # this volume with this block in place. Re-measured 2026-09-03: no-op. Record the
-  # verbatim plan line when re-deriving it.
-
-  lifecycle {
-    ignore_changes = [format]
-  }
-}
-
-resource "hcloud_volume_attachment" "inngest_redis" {
-  volume_id = hcloud_volume.inngest_redis.id
-  server_id = hcloud_server.inngest.id
+# ---------------- Retired plaintext AOF backstop (#8285) ----------------
+# hcloud_volume.inngest_redis (the pre-cutover ext4 copy of the Redis AOF) and its attachment are
+# no longer declared. They were retired on 2026-10-09 by the reviewer-gated `inngest-backstop-retire`
+# dispatch (since deleted; runbook inngest-luks-cutover-6894.md, "Retiring the backstop"): the volume is
+# gone from Hetzner (GET -> 404 at 2026-10-09T16:21:26Z) and from state. Only the id below remains.
+locals {
+  inngest_retired_plaintext_volume_id = "106261946"
 }
 
 # ---------------- Deny-all PUBLIC ingress firewall ----------------

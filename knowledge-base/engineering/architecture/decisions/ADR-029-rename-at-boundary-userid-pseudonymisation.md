@@ -99,9 +99,9 @@ When adding a new pseudonymisation boundary:
 - Parallel: #3696 (client-side `lib/client-observability.ts` track)
 - Follow-ups: PR-B (Sentry-side symmetric + setUser; filed pre-merge), PR-C (operator CLI + PA8 §(f) retention + compliance-posture refresh; filed pre-merge), #3708 (DPD §(l) telemetry user-facing entry)
 - Related ADR: ADR-026 (PII gate as plan/work phase skill with diff hook)
-- Plan: `knowledge-base/project/plans/2026-05-12-feat-pino-userid-formatters-log-plan.md`
-- Spec: `knowledge-base/project/specs/feat-pino-userid-redaction-3698/spec.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-12-pino-userid-formatters-log-brainstorm.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-pino-userid-formatters-log-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-pino-userid-redaction-3698/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-12-pino-userid-formatters-log-brainstorm.md`
 - Pino Node types: `apps/web-platform/node_modules/pino/pino.d.ts:642-663`
 - Pino source (formatters→redact ordering): `apps/web-platform/node_modules/pino/lib/tools.js:161-200`
 - Sentry init (server, `beforeSend` wired): `apps/web-platform/sentry.server.config.ts:12-16`

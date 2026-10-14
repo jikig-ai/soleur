@@ -99,7 +99,7 @@ module: cc-concierge / system-prompt builders
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-05-06-fix-sidebar-pdf-summarize-out-of-boundary-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-06-fix-sidebar-pdf-summarize-out-of-boundary-plan.md`
 - AGENTS.md rule: `cq-regex-unicode-separators-escape-only`
 - Related learning: `2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` (this PR is another instance — multi-agent review caught a single-user incident-class vector that 3-agent plan-time review missed)
 - Prior iterations on same surface: #3253, #3263, #3278, #3287, #3288, #3294, #3338, #3353 (this PR closes the gated-Read fallback that prior fixes left open)

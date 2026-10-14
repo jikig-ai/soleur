@@ -11,7 +11,7 @@
 SELECT 'idempotent_rearchive' AS check_name,
        CASE WHEN pg_get_functiondef(
               'public.set_inbox_item_state(uuid,text)'::regprocedure)
-                 LIKE "%status = 'archived' THEN RETURN%"
+                 LIKE '%status = ''archived'' THEN RETURN%'
             THEN 0 ELSE 1 END AS bad;
 
 -- (2) The archive-guard still fires on un-acted action_required.

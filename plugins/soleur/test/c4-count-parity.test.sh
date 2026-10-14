@@ -135,6 +135,7 @@ REGISTRY=(
   "C6|github -> sentry|and [0-9]+ from webapp|num|derive_webapp_slugs|C4 - C5 (monitors not checking in from GitHub)"
   "C7|github -> resend|one of [a-z]+ Resend emitters under [.]github/|word|derive_resend_emitters|grep -rlE 'api[.]resend[.]com|notify-ops-email' .github/workflows/ .github/actions/ | wc -l"
   "C8|plugin.agents|[0-9]+ domain agents across|num|derive_registry_agents|git ls-files ':(glob)plugins/soleur/agents/**/*.md' | wc -l"
+  "C9|webapp -> sentry|satisfy the [0-9]+ Inngest-substrate sentry_cron_monitors|num|derive_webapp_slugs|C4 - C5, same derivation as C6 (the opposite edge states the same count; #9482 left it at 44 while C6 moved to 45)"
 )
 
 for row in "${REGISTRY[@]}"; do

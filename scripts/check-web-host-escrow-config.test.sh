@@ -244,6 +244,92 @@ T="$(mk_tree)"; assert_fixture_dir "$T"
 sed -i -E 's/doppler_service_token\.workspaces_luks([^A-Za-z0-9_]|$)/doppler_service_token.workspaces_luks_gone\1/g' "$T/workspaces-luks.tf"
 expect_red "TK-5 web-1's definition file stops addressing its token (a broken scan must not read as clean)" "$T" "the token-address census found no reference"
 
+# --- Guard 1: the web-class passphrase is independent of web-1's (#9377 decision A1) ---------------------------
+# The whole-tree census: the word-bounded address random_password.workspaces_luks (not _web) may appear in code only in
+# workspaces-luks.tf. Value distinctness is NOT checkable offline; this proves no code path derives the web-class
+# value from web-1's generator.
+T="$(mk_tree)"; assert_fixture_dir "$T"
+mutate "$T" workspaces-luks-header-web.tf 's/random_password\.workspaces_luks_web\.result/random_password.workspaces_luks.result/' \
+  && expect_red "PW-1 the web-class key secret re-pointed at web-1's random_password" "$T" "workspaces-luks-header-web.tf: names web-1's random_password.workspaces_luks" || no "PW-1 mutation did not land"
+plant_red "PW-2 a second reference to web-1's random_password in server.tf (a local laundering the value)" server.tf \
+  'locals { stray = random_password.workspaces_luks.result }' \
+  "escrow-split-contract:FAIL server.tf: names web-1's random_password.workspaces_luks"
+plant_red "PW-2b a NEW .tf file outputs web-1's random_password" web-new-output.tf \
+  'output "leak" { value = random_password.workspaces_luks.result }' \
+  "escrow-split-contract:FAIL web-new-output.tf: names web-1's random_password.workspaces_luks"
+plant_red "PW-2c a NEW .sh file names web-1's random_password" web-new-pw.sh \
+  'echo random_password.workspaces_luks.result' \
+  "escrow-split-contract:FAIL web-new-pw.sh: names web-1's random_password.workspaces_luks"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+rm -f "$T/workspaces-luks-header-web.tf"
+expect_red "PW-3 the web-class header file is missing from the root (census-empty, never a pass)" "$T" "census-empty: workspaces-luks-header-web.tf"
+# must-PASS: a comment naming the address for contrast, the _web address itself, and web-1's own file naming its password
+T="$(mk_tree)"; assert_fixture_dir "$T"
+printf '# contrast: web-1 uses random_password.workspaces_luks; this file uses random_password.workspaces_luks_web\n' >> "$T/workspaces-luks-header-web.tf"
+printf '# random_password.workspaces_luks is web-1-only\n' >> "$T/server.tf"
+expect_green "PW-4 (must-pass) comments naming random_password.workspaces_luks, and the _web address in code" "$T"
+if grep -qE 'random_password\.workspaces_luks_web\.result' "$T/workspaces-luks-header-web.tf" && grep -qE 'random_password\.workspaces_luks\.result' "$T/workspaces-luks.tf"; then ok "PW-4b the must-pass tree still carries the _web reference and web-1's own reference (the census is not vacuous)"; else no "PW-4b the must-pass tree lost one of the two references"; fi
+
+# --- Guard 1, continued: web-1's Doppler COPY of the passphrase, the other spellings, and the exact exemption ----------------
+# The same value reaches Terraform as doppler_secret.workspaces_luks_key (.value/.id). The census bans that address too, scans *.tf.json
+# and the host-bound file types (.yml, .tpl, .tftpl: a value reaches a host through cloud-init and templates), and the exemption is the
+# exact relative path workspaces-luks.tf, never a suffix. Scope decision: .yml/.yaml/.tpl/.tftpl/.service stay IN scope (they carry
+# values to hosts); .tfvars is out (it cannot spell a resource address).
+KEYREF='doppler_secret.workspaces_luks_key'
+plant_red "PW-5 a local launders web-1's Doppler copy of the passphrase (server.tf)" server.tf \
+  "locals { stray = ${KEYREF}.value }" \
+  "escrow-split-contract:FAIL server.tf: names web-1's doppler_secret.workspaces_luks_key"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+mutate "$T" workspaces-luks-header-web.tf 's/random_password\.workspaces_luks_web\.result/doppler_secret.workspaces_luks_key.value/' \
+  && expect_red "PW-5b the web-class key secret re-pointed at web-1's Doppler copy" "$T" "workspaces-luks-header-web.tf: names web-1's doppler_secret.workspaces_luks_key" || no "PW-5b mutation did not land"
+plant_red "PW-5c a NEW .tf shadows WORKSPACES_LUKS_KEY in the web config from web-1's copy, the address at END OF LINE" web-new-shadow.tf \
+  "resource \"doppler_secret\" \"shadow\" { value = ${KEYREF}" \
+  "escrow-split-contract:FAIL web-new-shadow.tf: names web-1's doppler_secret.workspaces_luks_key"
+plant_red "PW-6 end-of-line arm: web-1's generator address as the LAST token of a line (no trailing .result)" web-new-eol.tf \
+  'locals { x = random_password.workspaces_luks' \
+  "escrow-split-contract:FAIL web-new-eol.tf: names web-1's random_password.workspaces_luks"
+plant_red "PW-7 a *.tf.json file carries web-1's generator" web-new.tf.json \
+  '{"locals":{"x":"${random_password.workspaces_luks.result}"}}' \
+  "escrow-split-contract:FAIL web-new.tf.json: names web-1's random_password.workspaces_luks"
+plant_red "PW-7b a *.tf.json file carries web-1's Doppler copy" web-new-key.tf.json \
+  "{\"locals\":{\"x\":\"\${${KEYREF}.value}\"}}" \
+  "escrow-split-contract:FAIL web-new-key.tf.json: names web-1's doppler_secret.workspaces_luks_key"
+plant_red "PW-8 a NEW .yml names web-1's generator (host-bound file type in scope)" web-new.yml \
+  '  key: ${random_password.workspaces_luks.result}' \
+  "escrow-split-contract:FAIL web-new.yml: names web-1's random_password.workspaces_luks"
+plant_red "PW-8b a NEW .tpl names web-1's Doppler copy" web-new.tpl \
+  "KEY=\${${KEYREF}.value}" \
+  "escrow-split-contract:FAIL web-new.tpl: names web-1's doppler_secret.workspaces_luks_key"
+plant_red "PW-8c a NEW .tftpl names web-1's generator" web-new.tftpl \
+  'KEY=${random_password.workspaces_luks.result}' \
+  "escrow-split-contract:FAIL web-new.tftpl: names web-1's random_password.workspaces_luks"
+plant_red "PW-9 the exemption is the exact file name: a file that merely ENDS in workspaces-luks.tf is not exempt" zz-workspaces-luks.tf \
+  'locals { x = random_password.workspaces_luks.result }' \
+  "escrow-split-contract:FAIL zz-workspaces-luks.tf: names web-1's random_password.workspaces_luks"
+plant_red "PW-9c the same exact-name rule for web-1's Doppler copy: zz-workspaces-luks.tf naming it is not exempt" zz-workspaces-luks.tf \
+  "locals { x = ${KEYREF}.value }" \
+  "escrow-split-contract:FAIL zz-workspaces-luks.tf: names web-1's doppler_secret.workspaces_luks_key"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+mkdir -p "$T/sub"; printf 'locals { x = random_password.workspaces_luks.result }\n' > "$T/sub/workspaces-luks.tf"
+expect_red "PW-9b the exemption is the exact RELATIVE path: a workspaces-luks.tf in a subdirectory is not exempt" "$T" "escrow-split-contract:FAIL sub/workspaces-luks.tf: names web-1's random_password.workspaces_luks"
+
+# Doppler data sources: none outside web-1's own files (a data source can read web-1's passphrase from its config by name).
+plant_red "DS-1 a NEW .tf declares data \"doppler_secrets\" (config from a variable, so only this check can see it)" web-new-data.tf \
+  'data "doppler_secrets" "w1" { project = "soleur"  config = var.c }' \
+  "escrow-split-contract:FAIL web-new-data.tf: declares or references a Doppler data source"
+plant_red "DS-1b a NEW .tf references data.doppler_secrets.x" web-new-ref.tf \
+  'locals { k = data.doppler_secrets.w1.map["WORKSPACES_LUKS_KEY"] }' \
+  "escrow-split-contract:FAIL web-new-ref.tf: declares or references a Doppler data source"
+plant_red "DS-1c a *.tf.json declares a doppler_secrets data source" web-new-data.tf.json \
+  '{"data":{"doppler_secrets":{"w1":{"project":"soleur"}}}}' \
+  "escrow-split-contract:FAIL web-new-data.tf.json: declares or references a Doppler data source"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+printf '%s\n' '# a comment may name data "doppler_secrets" and data.doppler_secrets.x' 'resource "doppler_secret" "ok" { name = "X" }' > "$T/web-new-ok2.tf"
+expect_green "DS-2 (must-pass) a comment naming the data source, and the singular resource type, do not trip the data-source census" "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+printf 'data "doppler_secrets" "own" { project = "soleur"  config = var.c }\n' >> "$T/workspaces-luks-header.tf"
+expect_green "DS-3 (must-pass) a data source inside one of web-1's own files is outside the web-class census" "$T"
+
 # --- CLI contract of the checker itself ---------------------------------------------------------------
 bash "$SUT" >/dev/null 2>&1; rc=$?
 if [[ "$rc" -eq 2 ]]; then ok "U1 no mode given -> usage error rc=2"; else no "U1 expected rc=2 with no mode, got $rc"; fi
@@ -348,6 +434,53 @@ for req in WORKSPACES_LUKS_KEY WORKSPACES_HEADER_BUCKET WORKSPACES_HEADER_R2_END
   live_expect_line "L3d only decorated near-names of ${req} in the web config -> RED naming the exact missing name" 1 "escrow-split-contract:FAIL missing in prd_workspaces_luks_web: ${req}"
 done
 
+# CM: the one-line CAUSE map on failure (#9377 decision B1; it lives in the checker's output ONLY, the runbooks point at it).
+# A missing Terraform-created name is consistent with the web-platform push-apply not having created it; a missing R2 pair name is
+# consistent with the live mint not having been done (both hedged and marked unmeasured: a missing name is measured, its cause is not). The cause lines are exact whole-line matches, and a name of the OTHER family must not select the wrong cause.
+CAUSE_TF='escrow-split-contract:CAUSE a missing WORKSPACES_LUKS_KEY, WORKSPACES_HEADER_BUCKET or WORKSPACES_HEADER_R2_ENDPOINT is consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured)'
+CAUSE_R2='escrow-split-contract:CAUSE a missing WORKSPACES_HEADER_R2_ACCESS_KEY_ID or WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY is consistent with the live R2 credential mint (#9377) not having been done yet (unmeasured)'
+cause_expect() { # <label> <missing name(s)...>: the cause lines the failure must carry (set CM_TF / CM_R2 to 1 or 0 first)
+  local lbl="$1"; shift
+  reset_mock; for m in "$@"; do grep -vx "$m" "$MOCK/prd_workspaces_luks_web.names" > "$MOCK/w.tmp"; mv "$MOCK/w.tmp" "$MOCK/prd_workspaces_luks_web.names"; done
+  run_live
+  local has_tf=0 has_r2=0
+  grep -qxF -- "$CAUSE_TF" <<<"$OUT" && has_tf=1
+  grep -qxF -- "$CAUSE_R2" <<<"$OUT" && has_r2=1
+  if [[ "$RC" -eq 1 && "$has_tf" == "$CM_TF" && "$has_r2" == "$CM_R2" ]]; then ok "$lbl (push-apply cause=$has_tf, mint cause=$has_r2)"; else no "$lbl: expected rc=1 tf=$CM_TF r2=$CM_R2, got rc=$RC tf=$has_tf r2=$has_r2: ${OUT:0:400}"; fi
+}
+CM_TF=1; CM_R2=0
+cause_expect "CM1 WORKSPACES_LUKS_KEY missing -> the push-apply cause only" WORKSPACES_LUKS_KEY
+cause_expect "CM1b WORKSPACES_HEADER_BUCKET missing -> the push-apply cause only" WORKSPACES_HEADER_BUCKET
+cause_expect "CM1c WORKSPACES_HEADER_R2_ENDPOINT missing -> the push-apply cause only" WORKSPACES_HEADER_R2_ENDPOINT
+CM_TF=0; CM_R2=1
+cause_expect "CM2 the R2 access key id missing -> the mint cause only" WORKSPACES_HEADER_R2_ACCESS_KEY_ID
+cause_expect "CM2b the R2 secret missing -> the mint cause only" WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY
+CM_TF=1; CM_R2=1
+cause_expect "CM3 a name of each family missing -> both cause lines" WORKSPACES_LUKS_KEY WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY
+reset_mock; run_live
+if [[ "$RC" -eq 0 && "$OUT" != *"escrow-split-contract:CAUSE"* ]]; then ok "CM4 a passing contract prints no cause line"; else no "CM4 the passing run carried a cause line (rc=$RC): ${OUT:0:300}"; fi
+
+# NT: the absent-web-config note. Before the reviewed push-apply the web-class config does not exist; the read failure alone looks like
+# a Doppler outage, so the checker says what it is consistent with, hedged and unmeasured. Only for THAT config and THAT failure.
+reset_mock; rm -f "$MOCK/prd_workspaces_luks_web.names"; run_live
+live_expect "NT1 the web-class config not found -> exit 3, never a pass" 3 "escrow-split-contract:unreadable: config prd_workspaces_luks_web"
+if grep -qE '^escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply \(apply-web-platform-infra\.yml\) not having created it yet \(unmeasured: ' <<<"$OUT"; then ok "NT1b the not-found web config prints the hedged NOTE (usually consistent with, unmeasured)"; else no "NT1b the NOTE line is missing or not hedged: ${OUT:0:400}"; fi
+reset_mock; rm -f "$MOCK/prd.names"; run_live
+if [[ "$RC" -eq 3 && "$OUT" != *"escrow-split-contract:NOTE"* ]]; then ok "NT2 the PRD root not found (web config readable) prints no push-apply NOTE"; else no "NT2 a NOTE was printed for the prd root (rc=$RC): ${OUT:0:300}"; fi
+reset_mock; run_live MOCK_UNREADABLE=prd_workspaces_luks_web
+if [[ "$RC" -eq 3 && "$OUT" != *"escrow-split-contract:NOTE"* ]]; then ok "NT3 the web config unreadable for a different reason (access) prints no push-apply NOTE"; else no "NT3 a NOTE was printed for an access failure (rc=$RC): ${OUT:0:300}"; fi
+reset_mock; run_live
+if [[ "$OUT" != *"escrow-split-contract:NOTE"* ]]; then ok "NT4 a passing run prints no NOTE"; else no "NT4 the passing run carried a NOTE"; fi
+
+# AD: ESCROW_ADVISORY=count (set by the preflight wrapper). The repo is public and the preflight runs on every birth, so the CI log
+# carries a count of the prd-root names that match the scan, never the names. A direct --live run (L5, L5b, L5c) lists them.
+reset_mock; printf '%s\n' R2_BACKUP_TOKEN AWS_ACCESS_KEY_ID CLOUDFLARE_ZONE_ID >> "$MOCK/prd.names"
+run_live ESCROW_ADVISORY=count
+if [[ "$RC" -eq 0 && "$OUT" == *"escrow-split-contract:live-ok"* ]] && grep -qE '^advisory: 6 prd-root name\(s\) are reachable from a web-class token' <<<"$OUT"; then ok "AD1 count mode prints one advisory line carrying the count (3 seeded + 3 added = 6) and keeps rc 0"; else no "AD1 count line missing or wrong (rc=$RC): ${OUT:0:400}"; fi
+if [[ "$OUT" != *R2_BACKUP_TOKEN* && "$OUT" != *CLOUDFLARE_ZONE_ID* && "$OUT" != *AWS_ACCESS_KEY_ID* && "$OUT" != *CF_API_TOKEN* && "$OUT" != *DOPPLER_PROJECT* ]]; then ok "AD2 count mode never prints a prd-root secret name"; else no "AD2 a name leaked in count mode: ${OUT:0:400}"; fi
+reset_mock; run_live ESCROW_ADVISORY=names
+if [[ "$OUT" == *"advisory: CF_API_TOKEN (prd root;"* ]]; then ok "AD3 any value other than 'count' keeps the names (only the wrapper's exact opt-in withholds them)"; else no "AD3 ESCROW_ADVISORY=names did not list names: ${OUT:0:300}"; fi
+
 # L4d: the prd-root leak check is by EXACT name too: a decorated near-name in prd is not the leaked credential.
 reset_mock; printf '%s\n' WORKSPACES_LUKS_KEY_X X_WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY_OLD >> "$MOCK/prd.names"
 run_live
@@ -380,8 +513,13 @@ if [[ "$RC" -eq 3 && "$OUT" != *PLANTEDleak7731* && "$OUT" == *"dp.REDACTED"* &&
 reset_mock; run_live MOCK_UNREADABLE=prd_workspaces_luks_web MOCK_LEAKTOK=dp.ct.Planted_Leak-7731.TAIL9
 if [[ "$RC" -eq 3 && "$OUT" != *Planted_Leak* && "$OUT" != *TAIL9* && "$OUT" == *"dp.REDACTED"* ]]; then ok "L12b a dp.ct.* token with punctuation in its body is redacted whole"; else no "L12b the punctuated token reached the output (rc=$RC): ${OUT:0:400}"; fi
 
+# L13: control characters in the CLI's error text (ESC, tab, DEL, U+2028/U+2029 line separators) are flattened to spaces: the echo is
+# printable ASCII on one line, so no terminal escape or Unicode line break reaches the CI log.
+reset_mock; run_live MOCK_UNREADABLE=prd "MOCK_LEAKTOK=$(printf 'a\033[1mb\342\200\250c\342\200\251\177d\te')"
+if [[ "$RC" -eq 3 && "$OUT" == *"does not have access to requested config"* && "$OUT" != *$'\033'* && "$OUT" != *$'\xe2\x80\xa8'* && "$OUT" != *$'\xe2\x80\xa9'* && "$OUT" != *$'\177'* && "$OUT" != *$'\t'* ]]; then ok "L13 ESC, tab, DEL and U+2028/U+2029 in the Doppler error body are flattened out of the unreadable line"; else no "L13 a control character reached the unreadable line (rc=$RC): $(printf '%s' "${OUT:0:300}" | od -c | head -5)"; fi
+
 # --- Anti-vacuity: an exact assertion count ------------------------------------------------------------
-EXPECTED_PASSES=65
+EXPECTED_PASSES=105
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of rows was deleted or added without moving the number"; fi
 
 echo ""

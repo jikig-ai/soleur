@@ -342,13 +342,13 @@ if [[ "$FIX_ROUND" -eq 1 ]]; then
   # deduping.
   [[ -n "$EFFECTIVE_HEAD" ]] || EFFECTIVE_HEAD="$FIX_SINCE"
   RANGE="${FIX_SINCE}..${EFFECTIVE_HEAD}"
-  if git log "$SCOPE" --format='%(trailers:key='"$FIX_RANGE_KEY"',valueonly)' 2>/dev/null \
-       | grep -qF "$RANGE"; then
+  if grep -qF "$RANGE" \
+       < <(git log "$SCOPE" --format='%(trailers:key='"$FIX_RANGE_KEY"',valueonly)' 2>/dev/null); then
     echo "emit-review-trailer: a fix-round attestation over ${RANGE} already exists — skipping."
     exit 0
   fi
-elif git log "$SCOPE" --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' 2>/dev/null \
-     | grep -q '[^[:space:]]'; then
+elif grep -q '[^[:space:]]' \
+     < <(git log "$SCOPE" --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' 2>/dev/null); then
   # Skipping is right for a REPEATED pass and wrong when the recorded reality CHANGED — e.g. a
   # degraded 0/N review whose agents later ran to N/N (#7220, 2026-08-04). The stale trailer then
   # misdescribes coverage to every downstream consumer, in the direction that looks safe. To

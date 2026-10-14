@@ -90,7 +90,7 @@ dir_err="$(mktemp)"; trap 'rm -f "$dir_err"' EXIT
 if ! issue_body="$(gh issue view "$ISSUE" --json body --jq .body 2>"$dir_err")"; then
   echo "TRANSIENT: could not read #${ISSUE} (rc from gh): $(head -c 400 "$dir_err")"; exit 2
 fi
-if ! printf '%s' "$issue_body" | grep -q 'script=scripts/followthroughs/cpx22-invoice-reconcile-7431.sh'; then
+if ! grep -q 'script=scripts/followthroughs/cpx22-invoice-reconcile-7431.sh' <<<"$issue_body"; then
   echo "TRANSIENT: #${ISSUE} no longer carries this probe's followthrough directive — retarget the script, do not guess."
   exit 2
 fi

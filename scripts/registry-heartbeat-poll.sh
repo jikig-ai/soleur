@@ -106,9 +106,16 @@ HB_ID=$(jq -r --arg a "$HB_ADDR" \
 if [[ -z "$HB_ID" || "$HB_ID" == "null" ]]; then
   die "heartbeat address ${HB_ADDR} not found in ${TFSTATE} — cannot verify the registry came back. Refusing to report success."
 fi
+# The id is interpolated into the credentialed request URL below; Better Stack heartbeat ids are
+# numeric, so anything else is refused rather than forwarded the bearer.
+[[ "$HB_ID" =~ ^[0-9]+$ ]] || die "heartbeat id in ${TFSTATE} is not numeric — refusing to build a credentialed request URL from it."
 
+# Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+# curl config directive on the stdin channel in hb_status). Never echoes the value. Unusable =>
+# die (exit 1) before any curl call: this gate fails closed, never green.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 if [[ -z "${REGISTRY_HB_STATUS_CMD:-}" ]]; then
-  [[ -n "${BETTERSTACK_API_TOKEN:+x}" ]] || die "BETTERSTACK_API_TOKEN unset — cannot read heartbeat ${HB_ID}. This is the Uptime mgmt API token, NOT BETTERSTACK_QUERY_* and NOT the host-side ingest-only BETTERSTACK_LOGS_TOKEN."
+  _bearer_ok "${BETTERSTACK_API_TOKEN:-}" || die "BETTERSTACK_API_TOKEN unset or unusable — cannot read heartbeat ${HB_ID}. This is the Uptime mgmt API token, NOT BETTERSTACK_QUERY_* and NOT the host-side ingest-only BETTERSTACK_LOGS_TOKEN."
   echo "::add-mask::${BETTERSTACK_API_TOKEN}"
 fi
 
@@ -118,9 +125,11 @@ hb_status() {
     $REGISTRY_HB_STATUS_CMD "$HB_ID"
     return
   fi
+  # The bearer rides curl's stdin config channel, never its argument list.
   curl --disable --noproxy '*' -fsS --max-time 15 \
-    -H "Authorization: Bearer ${BETTERSTACK_API_TOKEN}" -H 'Accept: application/json' \
-    "https://uptime.betterstack.com/api/v2/heartbeats/${HB_ID}" 2>/dev/null \
+    -H 'Accept: application/json' \
+    --config - "https://uptime.betterstack.com/api/v2/heartbeats/${HB_ID}" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$BETTERSTACK_API_TOKEN") \
     | jq -r '.data.attributes.status // empty' 2>/dev/null
 }
 

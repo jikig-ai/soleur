@@ -733,7 +733,7 @@ ok "$([ -n "$_l_mi" ] && [ -n "$_l_wbu" ] && [ "$_l_wbu" -gt "$_l_mi" ]; echo $?
 VEC_BLOCK=$(awk '/^\[sources\.host_scripts_journald\]/{f=1} f{print} f&&/^include_matches\.SYSLOG_IDENTIFIER/{l=1} l&&/\]/{exit}' "$WBU_VECTOR")
 n=$(printf '%s\n' "$VEC_BLOCK" | grep -c '"workspaces-luks-reopen"' || true)
 ok "$([ "$n" -eq 1 ]; echo $?)" "V1 vector.toml include_matches.SYSLOG_IDENTIFIER carries \"workspaces-luks-reopen\" exactly once ($n)"
-ok "$(printf '%s\n' "$VEC_BLOCK" | grep -q '"luks-monitor"'; echo $?)" "V2 the same list still carries the sibling luks-monitor tag (extraction sanity)"
+ok "$(printf '%s\n' "$VEC_BLOCK" | grep -c >/dev/null '"luks-monitor"'; echo $?)" "V2 the same list still carries the sibling luks-monitor tag (extraction sanity)"
 
 # systemd-analyze verify (present on systemd hosts; a failure here is a verdict, not a skip).
 # The verify rc is checked SEPARATELY from the filtered output — a nonzero rc with
@@ -1191,7 +1191,7 @@ for c in $STUB_NAMES; do
   r=$(PATH="$SCRATCH/bin:/usr/bin:/bin" command -v "$c" 2>/dev/null || true)
   [ "$r" = "$SCRATCH/bin/$c" ] || { printf '[FATAL] instrument: %s resolves to %s, not the stub — refusing to run (rc 2)\n' "$c" "${r:-nothing}" >&2; exit 2; }
 done
-ok "$(PATH="$SCRATCH/bin:/usr/bin:/bin" command -v systemd-escape | grep -qx '/usr/bin/systemd-escape'; echo $?)" \
+ok "$(PATH="$SCRATCH/bin:/usr/bin:/bin" command -v systemd-escape | grep -cx >/dev/null '/usr/bin/systemd-escape'; echo $?)" \
   "H1 systemd-escape resolves to the REAL binary (deliberately unstubbed — a stub would test itself)"
 
 # Fixture runner. run_script copies the script-under-test into the fixture dir so the
@@ -1658,7 +1658,12 @@ X
   mutate "MR-2 the emit level downgraded from fatal" 1 WBU_REPORTER "$RU" "s.replace('WL_LEVEL=fatal', 'WL_LEVEL=warning', 1)"
   mutate "MTI-1 OnUnitActiveSec dropped (the standing retry is gone)" 1 WBU_TIMER "$TI" "re.sub(r'(?m)^OnUnitActiveSec=15min\n', '', s, 1)"
   mutate "MWF-1 the -target line dropped from the workflow" 1 WBU_WF "$W" "re.sub(r'(?m)^\\s*-target=terraform_data\\.workspaces_boot_unlock_install[^\\n]*\\n', '', s, 1)"
-  mutate "MV-1 the workspaces-luks-reopen tag dropped from vector.toml" 1 WBU_VECTOR "$V" "s.replace('  \"workspaces-luks-reopen\",\n', '', 1)"
+  # MV-1 targets the OWNING occurrence: #6551's partition repeats the tag set on
+  # Sources 1/2's exclude_matches AND names the section in a line-103 comment, so
+  # an unanchored index or first-match replace lands upstream of the real section
+  # and the include would survive — an invisible escape. The \n anchor requires
+  # the section header at column 0.
+  mutate "MV-1 the workspaces-luks-reopen tag dropped from vector.toml" 1 WBU_VECTOR "$V" "s[:s.index('\n[sources.host_scripts_journald]')] + s[s.index('\n[sources.host_scripts_journald]'):].replace('  \"workspaces-luks-reopen\",\n', '', 1)"
 
   # ── print mutations ──
   mutate "MP-1 an unguarded substitution in the before-print" 1 WBU_LUKS_TF "$T" "$(cat <<'X'

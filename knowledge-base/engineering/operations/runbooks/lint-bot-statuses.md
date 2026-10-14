@@ -62,7 +62,7 @@ skill-security-scan PR gate
 cla-check
 ```
 
-**`CodeQL` is intentionally absent.** The `CI Required` ruleset pins `CodeQL` to `integration_id: 57789` (`github-advanced-security`). A synthetic check-run posted by `github-actions[bot]` (`integration_id: 15368`) with `name=CodeQL` would NOT satisfy the ruleset — the GHAS integration_id is the load-bearing match condition. CodeQL default setup runs on every PR (including bot PRs) and concludes `neutral`, which satisfies the required check per GitHub Docs. See [`codeql-bot-coverage.md`](codeql-bot-coverage.md) for the empirical audit + the load-bearing comment block in [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt) for the rationale.
+**`CodeQL` is intentionally absent.** CodeQL is advisory and no longer a required status check on the `CI Required` ruleset: it cannot report on `merge_group` in any setup mode (github/codeql-action#1537), so the required `CodeQL` row was removed when the merge queue was adopted (#9454). It was previously pinned to `integration_id: 57789` (`github-advanced-security`), and a synthetic check-run posted by `github-actions[bot]` (`integration_id: 15368`) with `name=CodeQL` would never have satisfied that pin, which is why it was never synthesized. CodeQL default setup still runs on every pull request (including bot PRs); a bot PR whose scan never ran is a coverage gap, not a blocked merge, and `codeql-main-alert-gate.yml` turns the pushed commit's alerts into an issue after the merge. See [`codeql-bot-coverage.md`](codeql-bot-coverage.md) for the empirical audit + the load-bearing comment block in [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt) for the rationale.
 
 **Adding a new required check requires THREE edits in one PR:**
 
@@ -103,17 +103,37 @@ Verify locally before pushing: `bash scripts/lint-bot-synthetic-completeness.sh`
 
 ### Adding a new bot workflow
 
-Prefer the composite action. Create `.github/workflows/<feature>.yml` (any filename except `pr-quality-guards.yml`) with:
+Prefer the composite action. Since #9454 it needs a `soleur-infra` App token for the PR itself, so the workflow follows the shape of `weakness-miner.yml` (ADR-285): a job with no secrets produces the content, and a second job on the main-only `infra-privileged` environment mints the token and calls the composite. Create `.github/workflows/<feature>.yml` (any filename except `pr-quality-guards.yml`); the content job (no environment, no secret) uploads one file as an artifact, and the credential job (`needs:` it, `if: github.ref == 'refs/heads/main'`, `environment: infra-privileged`, permissions `contents: read` + `checks: write`) has exactly these steps, every third-party action pinned to a 40-hex SHA:
 
 ```yaml
+- uses: actions/checkout@<sha>
+  with:
+    ref: main
+    persist-credentials: false
+- uses: actions/download-artifact@<sha>
+  with:
+    name: <artifact>
+    path: knowledge-base/<dir>
+- uses: DopplerHQ/cli-action@<sha>
+- id: app
+  uses: ./.github/actions/mint-infra-app-token
+  with:
+    doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
+    installation-id: "166065653"
+    permissions: '{"contents":"write","pull_requests":"write"}'
+    repositories: soleur
 - uses: ./.github/actions/bot-pr-with-synthetic-checks
   with:
-    branch: ci/<feature>-<date>
-    title: "<feature>: <date>"
-    body: "..."
+    add-paths: <one allowlisted path>
+    branch-prefix: ci/<feature>-
+    commit-message: "<feature>: weekly"
+    pr-title-prefix: "<feature>: weekly"
+    pr-body: "<single line>"
+    pr-token: ${{ steps.app.outputs.token }}
+    gh-token: ${{ github.token }}
 ```
 
-The composite action handles synthetic posting for ALL required checks automatically. No `lint-bot-statuses` action required.
+The composite action handles synthetic posting for ALL required checks automatically. No `lint-bot-statuses` action required. `tests/scripts/test-weakness-miner.sh` (`t_workflow_pr_identity`) evaluates every caller of the composite and goes red on a missing or workflow-token `pr-token`; a new caller also needs a dated edit to census row G7f in `tests/scripts/test-infra-privileged-tier-census.sh`.
 
 If you need inline synthetic posting (e.g., a bot workflow that has additional state-machine logic), follow the pattern in [`scheduled-content-publisher.yml`](../../../../.github/workflows/scheduled-content-publisher.yml) or [`scheduled-disk-io-24h-recheck.yml`](../../../../.github/workflows/scheduled-disk-io-24h-recheck.yml). Verify locally before pushing.
 

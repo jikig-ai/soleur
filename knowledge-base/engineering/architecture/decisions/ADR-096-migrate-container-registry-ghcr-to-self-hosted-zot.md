@@ -345,7 +345,10 @@ host. Read the amendment before relying on any bullet below:
     a retraction turns into a new false statement): for `reusable-release.yml` the
     annotation is now `::error::`, not `::warning::`, and the Slack ⚠️ line is reachable
     ONLY on an operator override — the Slack step carries an implicit `success()`, so on a
-    blocked release it does not run at all. For `build-inngest-bootstrap-image.yml` the
+    blocked release it does not run at all. **AMENDED 2026-10-09 (#7256):** a separate
+    failure-gated step, "Post to Slack (release BLOCKED)", now announces a blocked release
+    once a draft exists (a failure before `Create GitHub Release`, a cancel or a timeout
+    stays email-only). For `build-inngest-bootstrap-image.yml` the
     original text still holds, since clause (h) scopes that workflow out.
     **The blanket "the rest of this bullet is unaffected and remains current" sentence that
     stood here has been REMOVED (2026-07-30, same-day correction).** It recertified ~110
@@ -2128,3 +2131,49 @@ the residuals below, are tracked outside this ADR and do not reopen it:
 rolling-deploy path only. The inngest bootstrap and fresh boots are pinned by digest (integrity, not
 authenticity); see "Fresh-boot images are digest-pinned (integrity), not verified at boot" earlier in
 this ADR.
+
+## Amendment 2026-10-03 (#9393) — how the carved firewall artifacts reach hosts that are already running
+
+The "What Accepted does and does not claim" list above names #9393 as delivery to hosts that are already
+running. Decided 2026-10-03, with no new Terraform delivery code:
+
+- **web-2** is delivered by rebirth only (#9372, ADR-263), never by a plain replace: ADR-263's discriminate
+  step refuses the live plaintext web-2 volume, and a plain replace would power the host off. A reborn host
+  boots from the baked image, whose host scripts carry the carve, so the rebirth is the delivery event. Its
+  `image_tag` must be built from a commit that already carries the 2026-10-03 resolver and loader changes
+  (`cron-egress-resolve.sh`, `cron-egress-nftables.sh`: baked host scripts whose content hash moves).
+  > **Superseded 2026-10-12 (#9372), in part:** the rebirth ran on 2026-10-06 and its workflow is retired; web-2's volume is
+  > LUKS-formatted, so the plain-replace refusal described here no longer applies (ADR-263 addendum 2026-10-12).
+- **web-1** is delivered by the first run of `apply-web-platform-infra.yml` (the only workflow whose
+  `-target` list names `terraform_data.cron_egress_firewall`): that resource hashes the carve file, the resolver
+  and the post-apply assertion, so a green run whose SSH apply step actually ran (it can green-skip, #7539) is
+  the proof. `apply-deploy-pipeline-fix.yml` does not target it.
+- **Re-enabling the apply workflows** is not decided here. It is a production-write authorization with no
+  safe subset: it restores push-apply of every merged infra change, and the first apply after the pause
+  carries all of them. It is the operator's approval, requested with a recommendation to enable after a
+  read-only look at what would be applied.
+- This **supersedes** the "until its next replace" wording for web-2 in the 2026-10-01 amendment (above): web-2 is
+  never delivered by a plain replace.
+- #9393 stays open with two readable close conditions (an apply run after the change whose provisioner
+  executed green, and the #9372 rebirth run) and a dated re-evaluation on 2026-10-17. #9390 and #9391 are
+  tracked in their issues; read their state there rather than from this list.
+
+## Amendment 2026-10-08 (#9390) — the hosts-file deny names three hosts
+
+The host-process hosts-file deny (the registry's runcmd entry, its byte copies in `cloud-init.yml` and in
+`server.tf` `local.ghcr_deny_sh`, and the apply-time assertion `local.ghcr_deny_assert_sh`) now names
+`ghcr.io`, `pkg-containers.githubusercontent.com` and `docker.pkg.github.com`, in that order. The mechanism is
+unchanged: one `0.0.0.0` line and one `::` line per name, idempotent, written to `/etc/hosts` and to cloud-init's
+hosts template. This closes the open item that the 2026-10-01 and 2026-10-02 amendments recorded
+as #9390 (the `docker.pkg.github.com` hosts-file line); their statements that the deny covers two
+names describe the state before this date and are left as written.
+
+- **Delivery to the registry** is the registry-host replace that follows the merge: the entry is part of
+  `user_data`, so the host receives it only at birth. Delivery to the running web hosts is not part of it. The merge carries the two kill-switch lines,
+  so the push applies do not re-run `zot_consumer_probe_install` (web-1) and `deploy_pipeline_fix_web2` (web-2);
+  the new `local.ghcr_deny_sh` reaches them with the next apply that includes those resources, and a fresh or
+  reborn web host gets it from `cloud-init.yml` at birth.
+- **What proves it.** `ghcr_blocked` in the registry heartbeat probes `ghcr.io` only, so no per-name telemetry
+  exists for the third name. The proof is `zot-image-fetch.test.sh` R10 (the rendered entry executed against a
+  re-rooted hosts file) and `web-ghcr-deny.test.sh` (byte parity of all copies on both `web_tunnel_connector`
+  arms, and the assertion's per-name behaviour).

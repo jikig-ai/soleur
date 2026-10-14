@@ -59,14 +59,19 @@ import { decide } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
 import {
   buildAllowlistLines,
   buildCronEvalSettings,
+  COMMUNITY_ROUTER_READ_VERBS,
   CRON_BASH_ALLOWLISTS,
   CRON_MCP_ALLOWLISTS,
+  CRON_NO_FILE_TOOLS,
   CRON_RUN_REPORT_LABELS,
   DEFAULT_CLAUDE_SETTINGS,
+  FINAL_MESSAGE_CAP_BYTES,
   ISSUE_CREATOR_BASH_ALLOWLIST,
+  makeThrewSpawnResult,
   parseClaudeResultLine,
   resolveEvalCaptureStatus,
   runHookSelfTest,
+  setupEphemeralWorkspace,
   spawnClaudeEval,
   spawnSimple,
   STDOUT_TAIL_CAP_BYTES,
@@ -315,17 +320,22 @@ describe("restored auto-cron prompt commands vs the hook (#5199)", () => {
     // load-bearing, not cosmetic.
     expect(v("cron-community-monitor", "bash $ROUTER discord guild-info")).toBe("deny");
     expect(v("cron-community-monitor", 'ROUTER="x"; bash $ROUTER discord')).toBe("deny");
-    // The dedup-staleness read the prompt now uses (gh api was hook-denied).
+    // #7122: the dedup read is gone (the handler upserts the issue) and so is every
+    // other gh verb — `gh issue list --jq env` was an env dump the hook allowed.
     expect(
       v("cron-community-monitor", "gh issue list --label scheduled-community-monitor --json updatedAt,number"),
-    ).toBe("allow");
+    ).toBe("deny");
+    expect(v("cron-community-monitor", "gh issue create --title t --label scheduled-community-monitor")).toBe("deny");
+    // Posting verbs are denied: the router prefix is no longer allowlisted as a whole.
+    expect(
+      v("cron-community-monitor", "bash plugins/soleur/skills/community/scripts/community-router.sh bsky post hello"),
+    ).toBe("deny");
   });
 
   it("each restored auto-cron's gh issue create + dedup list ALLOW; exfil forms DENY", () => {
     const RESTORED = [
       "cron-growth-audit", "cron-growth-execution", "cron-competitive-analysis",
       "cron-seo-aeo-audit", "cron-content-generator", "cron-campaign-calendar",
-      "cron-community-monitor",
     ];
     for (const cron of RESTORED) {
       expect(
@@ -646,17 +656,20 @@ describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
 
 // --- #8076: the run-report directive (exit 0) — delivery + self-test probes ---
 describe("run-report directive (#8076)", () => {
-  it("CRON_RUN_REPORT_LABELS is derived from the leaf: ten crons, community-monitor → its slug, ux-audit absent", () => {
-    expect(Object.keys(CRON_RUN_REPORT_LABELS).length).toBe(10);
-    expect(CRON_RUN_REPORT_LABELS["cron-community-monitor"]).toBe("scheduled-community-monitor");
+  it("CRON_RUN_REPORT_LABELS is derived from the leaf: nine agent-filed crons, seo-aeo-audit → its slug, ux-audit AND the handler-filed community-monitor absent (#7122)", () => {
+    expect(Object.keys(CRON_RUN_REPORT_LABELS).length).toBe(9);
+    expect(CRON_RUN_REPORT_LABELS["cron-seo-aeo-audit"]).toBe("scheduled-seo-aeo-audit");
     expect(CRON_RUN_REPORT_LABELS["cron-legal-audit"]).toBe("scheduled-legal-audit");
     expect(CRON_RUN_REPORT_LABELS["cron-ux-audit"]).toBeUndefined();
+    // The handler files this cron's issue; a directive here would make
+    // runHookSelfTest probe a filing the agent must not be able to make.
+    expect(CRON_RUN_REPORT_LABELS["cron-community-monitor"]).toBeUndefined();
   });
 
   it("buildAllowlistLines writes `run-report-label <label>` for a mapped cron and never for ux-audit (AC3)", () => {
-    const cm = buildAllowlistLines("cron-community-monitor", ISSUE_CREATOR_BASH_ALLOWLIST, {});
-    expect(cm.lines).toContain("run-report-label scheduled-community-monitor");
-    expect(cm.runReportLabel).toBe("scheduled-community-monitor");
+    const cm = buildAllowlistLines("cron-seo-aeo-audit", ISSUE_CREATOR_BASH_ALLOWLIST, {});
+    expect(cm.lines).toContain("run-report-label scheduled-seo-aeo-audit");
+    expect(cm.runReportLabel).toBe("scheduled-seo-aeo-audit");
     // Directives are appended AFTER the bash prefixes and never replace one.
     for (const p of ISSUE_CREATOR_BASH_ALLOWLIST) expect(cm.lines).toContain(p);
 
@@ -674,15 +687,15 @@ describe("run-report directive (#8076)", () => {
   it("self-test passes when the file delivered the directive (probe a allows, b/c deny)", () => {
     const fileLines = [
       ...ISSUE_CREATOR_BASH_ALLOWLIST,
-      "run-report-label scheduled-community-monitor",
+      "run-report-label scheduled-seo-aeo-audit",
     ];
     const spawnCwd = makeSpawnCwd({ allow: fileLines });
     expect(() =>
       runHookSelfTest({
         spawnCwd,
-        cronName: "cron-community-monitor",
+        cronName: "cron-seo-aeo-audit",
         allow: ISSUE_CREATOR_BASH_ALLOWLIST,
-        runReportLabel: "scheduled-community-monitor",
+        runReportLabel: "scheduled-seo-aeo-audit",
       }),
     ).not.toThrow();
   });
@@ -692,9 +705,9 @@ describe("run-report directive (#8076)", () => {
     expect(() =>
       runHookSelfTest({
         spawnCwd,
-        cronName: "cron-community-monitor",
+        cronName: "cron-seo-aeo-audit",
         allow: ISSUE_CREATOR_BASH_ALLOWLIST,
-        runReportLabel: "scheduled-community-monitor",
+        runReportLabel: "scheduled-seo-aeo-audit",
       }),
     ).toThrow(/run-report/);
   });
@@ -712,22 +725,22 @@ describe("run-report directive (#8076)", () => {
       'if (input.tool_name === "Bash") {',
       '  const c = String(input.tool_input?.command ?? "");',
       '  if (/\\/proc\\//.test(c)) v = "deny";',
-      '  else if (c.startsWith("gh issue create")) v = c.includes("scheduled-community-monitor") ? "allow" : "deny";',
+      '  else if (c.startsWith("gh issue create")) v = c.includes("scheduled-seo-aeo-audit") ? "allow" : "deny";',
       '  else v = "allow";',
       '} else if (input.tool_name === "Task" || input.tool_name === "Skill") v = "allow";',
       "process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: \"PreToolUse\", permissionDecision: v } }));",
       "process.exit(0);",
     ].join("\n");
     const spawnCwd = makeSpawnCwd({
-      allow: [...ISSUE_CREATOR_BASH_ALLOWLIST, "run-report-label scheduled-community-monitor"],
+      allow: [...ISSUE_CREATOR_BASH_ALLOWLIST, "run-report-label scheduled-seo-aeo-audit"],
       hookSource: rawMatchHook,
     });
     expect(() =>
       runHookSelfTest({
         spawnCwd,
-        cronName: "cron-community-monitor",
+        cronName: "cron-seo-aeo-audit",
         allow: ISSUE_CREATOR_BASH_ALLOWLIST,
-        runReportLabel: "scheduled-community-monitor",
+        runReportLabel: "scheduled-seo-aeo-audit",
       }),
     ).toThrow(/run-report/);
   });
@@ -750,14 +763,14 @@ describe("run-report directive (#8076)", () => {
       "process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: \"PreToolUse\", permissionDecision: v } }));",
       "process.exit(0);",
     ].join("\n");
-  const LABEL = "scheduled-community-monitor";
+  const LABEL = "scheduled-seo-aeo-audit";
   const selfTestWith = (hookSource: string) => () =>
     runHookSelfTest({
       spawnCwd: makeSpawnCwd({
         allow: [...ISSUE_CREATOR_BASH_ALLOWLIST, `run-report-label ${LABEL}`],
         hookSource,
       }),
-      cronName: "cron-community-monitor",
+      cronName: "cron-seo-aeo-audit",
       allow: ISSUE_CREATOR_BASH_ALLOWLIST,
       runReportLabel: LABEL,
     });
@@ -781,6 +794,211 @@ describe("run-report directive (#8076)", () => {
 
   it("the real hook passes all four probes for a mapped cron", () => {
     expect(selfTestWith(readFileSync(REAL_HOOK, "utf-8"))).not.toThrow();
+  });
+});
+
+// #7122 — the `no-file-tools` directive: delivery cross-check + deny probes. A
+// cron carrying it must NOT be able to Write/Grep/Task/Skill; the Tier-2 relax
+// probes above (Task and Skill must ALLOW) are replaced for it by deny probes.
+describe("no-file-tools directive (#7122)", () => {
+  const COMMUNITY = "cron-community-monitor";
+  const communityLines = () => buildAllowlistLines(COMMUNITY, CRON_BASH_ALLOWLISTS[COMMUNITY], {});
+
+  it("buildAllowlistLines emits `no-file-tools` for exactly the CRON_NO_FILE_TOOLS crons, after the bash prefixes, and never a run-report-label for the handler-filed cron", () => {
+    expect(CRON_NO_FILE_TOOLS).toEqual([COMMUNITY]);
+    const cm = communityLines();
+    expect(cm.noFileTools).toBe(true);
+    expect(cm.lines).toContain("no-file-tools");
+    expect(cm.lines.slice(0, COMMUNITY_ROUTER_READ_VERBS.length)).toEqual([...COMMUNITY_ROUTER_READ_VERBS]);
+    expect(cm.runReportLabel).toBeNull();
+    expect(cm.lines.some((l) => l.startsWith("run-report-label"))).toBe(false);
+    for (const cron of Object.keys(CRON_BASH_ALLOWLISTS).filter((c) => c !== COMMUNITY)) {
+      const b = buildAllowlistLines(cron, CRON_BASH_ALLOWLISTS[cron], { NEXT_PUBLIC_APP_URL: "https://app.soleur.ai" });
+      expect(b.noFileTools, cron).toBe(false);
+      expect(b.lines, cron).not.toContain("no-file-tools");
+    }
+  });
+
+  // P2-6 — behavioural, not a token anchor: run the REAL setupEphemeralWorkspace for the
+  // community cron with a `git` shim on PATH that "clones" a minimal tree whose hook is a
+  // stub. If setupEphemeralWorkspace forwards `noFileTools: true` to runHookSelfTest, the
+  // stub (which allows Write) aborts the setup with the directive's own message; a
+  // mutation that passes `false` (or drops the argument) skips that probe, the stub
+  // satisfies every other probe, and setup RESOLVES — which fails this test.
+  describe("setupEphemeralWorkspace forwards the directive to the self-test (behavioural)", () => {
+    const savedEnv = { PATH: process.env.PATH, ROOT: process.env.CRON_WORKSPACE_ROOT, HOOK: process.env.FAKE_CLONE_HOOK_SRC };
+    afterEach(() => {
+      process.env.PATH = savedEnv.PATH;
+      if (savedEnv.ROOT === undefined) delete process.env.CRON_WORKSPACE_ROOT;
+      else process.env.CRON_WORKSPACE_ROOT = savedEnv.ROOT;
+      if (savedEnv.HOOK === undefined) delete process.env.FAKE_CLONE_HOOK_SRC;
+      else process.env.FAKE_CLONE_HOOK_SRC = savedEnv.HOOK;
+    });
+
+    /** PATH shim: `git clone <url> <dest>` lays down the plugin sentinel and copies the hook at FAKE_CLONE_HOOK_SRC. */
+    function installGitShim(hookSource: string): string {
+      const dir = mkdtempSync(join(tmpdir(), "soleur-git-shim-"));
+      tmpDirs.push(dir);
+      const hookSrc = join(dir, "hook.mjs");
+      writeFileSync(hookSrc, hookSource, "utf-8");
+      const shim = join(dir, "git");
+      writeFileSync(
+        shim,
+        [
+          "#!/usr/bin/env bash",
+          'if [[ "$1" == "clone" ]]; then',
+          '  dest="${@: -1}"',
+          '  mkdir -p "$dest/plugins/soleur/.claude-plugin" "$dest/apps/web-platform/server/inngest"',
+          '  : > "$dest/plugins/soleur/.claude-plugin/plugin.json"',
+          '  cp "$FAKE_CLONE_HOOK_SRC" "$dest/apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs"',
+          "  exit 0",
+          "fi",
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      process.env.FAKE_CLONE_HOOK_SRC = hookSrc;
+      process.env.CRON_WORKSPACE_ROOT = dir;
+      process.env.PATH = `${dir}:${savedEnv.PATH}`;
+      return dir;
+    }
+
+    // Denies the canonical exfil (/proc/…) and the unknown/egress classes, ALLOWS every
+    // file tool and every other Bash command: the only probe that can catch it is the
+    // no-file-tools Write probe (and, for P2-4, the hostile-argument probe).
+    const permissiveStub = String.raw`#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+const input = JSON.parse(readFileSync(0, "utf-8"));
+let v = "deny";
+if (input.tool_name === "Bash") {
+  v = /\/proc\//.test(String(input.tool_input?.command ?? "")) ? "deny" : "allow";
+} else if (["Write", "Grep", "Task", "Skill"].includes(input.tool_name)) {
+  v = "allow";
+}
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: v } }));
+process.exit(0);
+`;
+
+    it("the community cron: a hook that allows Write aborts setup with the no-file-tools message", async () => {
+      installGitShim(permissiveStub);
+      await expect(
+        setupEphemeralWorkspace({ installationToken: "ghs_FAKEtoken0123456789ABCDEFghijklmnop", cronName: COMMUNITY }),
+      ).rejects.toThrow(/no-file-tools.*Write|Write.*no-file-tools/s);
+    });
+
+    it("control: the same permissive stub passes setup for a cron WITHOUT the directive (so the rejection above is the forwarded flag, not the stub)", async () => {
+      installGitShim(permissiveStub);
+      const { ephemeralRoot } = await setupEphemeralWorkspace({
+        installationToken: "ghs_FAKEtoken0123456789ABCDEFghijklmnop",
+        cronName: "cron-no-directive-control",
+      });
+      expect(typeof ephemeralRoot).toBe("string");
+    });
+
+    it("the community cron passes setup against the REAL hook (directive delivered and honoured end to end)", async () => {
+      installGitShim(readFileSync(join(process.cwd(), "server/inngest/cron-bash-allowlist-hook.mjs"), "utf-8"));
+      const { spawnCwd } = await setupEphemeralWorkspace({
+        installationToken: "ghs_FAKEtoken0123456789ABCDEFghijklmnop",
+        cronName: COMMUNITY,
+      });
+      expect(readFileSync(join(spawnCwd, ".claude/cron-allow.txt"), "utf-8")).toContain("no-file-tools");
+    });
+  });
+
+  // P2-4 — an allowlisted verb with a HOSTILE trailing argument is the real residual
+  // surface. The self-test now probes it for a no-file-tools cron and aborts the spawn
+  // if the delivered hook ALLOWS it.
+  it("P2-4: throws when the delivered hook allows an allowlisted verb with a hostile trailing argument (the stub allows everything but the exfil probe and the file tools)", () => {
+    const stub = String.raw`#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+const input = JSON.parse(readFileSync(0, "utf-8"));
+let v = "deny";
+if (input.tool_name === "Bash") {
+  v = /\/proc\//.test(String(input.tool_input?.command ?? "")) ? "deny" : "allow";
+}
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: v } }));
+process.exit(0);
+`;
+    const spawnCwd = makeSpawnCwd({ hookSource: stub });
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [...COMMUNITY_ROUTER_READ_VERBS], noFileTools: true }),
+    ).toThrow(/hostile or altered variant/);
+  });
+
+  it("P2-4: the hostile probes cover discord messages and hn mentions, and do NOT run for a cron without the directive", () => {
+    const seen: string[] = [];
+    const recorder = String.raw`#!/usr/bin/env node
+import { readFileSync, appendFileSync } from "node:fs";
+const input = JSON.parse(readFileSync(0, "utf-8"));
+const c = String(input.tool_input?.command ?? "");
+if (input.tool_name === "Bash") appendFileSync(process.env.PROBE_LOG, c + "\n");
+const v = input.tool_name === "Bash" && !/\/proc\/|\$\(/.test(c) ? "allow" : "deny";
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: v } }));
+process.exit(0);
+`;
+    const log = join(mkdtempSync(join(tmpdir(), "soleur-probe-log-")), "log.txt");
+    tmpDirs.push(join(log, ".."));
+    process.env.PROBE_LOG = log;
+    try {
+      const spawnCwd = makeSpawnCwd({ hookSource: recorder });
+      // Everything but the file tools denied by the recorder -> the no-file-tools Write probe passes; Bash allow[0] allows.
+      runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [...COMMUNITY_ROUTER_READ_VERBS], noFileTools: true });
+      seen.push(...readFileSync(log, "utf-8").split("\n").filter(Boolean));
+      expect(seen.some((c) => /discord messages 'HOME\[\$\(id\)\]'/.test(c)), seen.join("|")).toBe(true);
+      expect(seen.some((c) => /hn mentions --query 'x\$\(id\)'/.test(c)), seen.join("|")).toBe(true);
+      writeFileSync(log, "");
+      // No directive: the probes are not run (no `$(id)` command is ever sent).
+      runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [...COMMUNITY_ROUTER_READ_VERBS] });
+    } catch (e) {
+      // The second call may legitimately throw on the Tier-2 probes of the recorder; only the log matters.
+      if (!/self-test FAILED/.test(String(e))) throw e;
+    } finally {
+      delete process.env.PROBE_LOG;
+    }
+    expect(readFileSync(log, "utf-8")).not.toContain("$(id)");
+  });
+
+  it("passes against the real hook when the file delivered the directive (Write/Grep/Task/Skill all deny; the Task-allow relax probe is not run)", () => {
+    const c = communityLines();
+    const spawnCwd = makeSpawnCwd({ allow: c.lines });
+    expect(() =>
+      runHookSelfTest({
+        spawnCwd,
+        cronName: COMMUNITY,
+        allow: [...COMMUNITY_ROUTER_READ_VERBS],
+        runReportLabel: c.runReportLabel,
+        noFileTools: c.noFileTools,
+      }),
+    ).not.toThrow();
+  });
+
+  it("throws when the directive is expected but the file did NOT deliver it (delivery cross-check)", () => {
+    const spawnCwd = makeSpawnCwd({ allow: [...COMMUNITY_ROUTER_READ_VERBS] });
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [...COMMUNITY_ROUTER_READ_VERBS], noFileTools: true }),
+    ).toThrow(/no-file-tools/);
+  });
+
+  it("throws when the delivered hook ALLOWS Write — a hook stub that allows Write aborts the spawn", () => {
+    // Denies the exfil probe; allows Write. Every other tool denies.
+    const spawnCwd = makeSpawnCwd({ hookSource: stubHook({ Bash: "deny", Write: "allow" }, "deny") });
+    expect(() => runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [], noFileTools: true })).toThrow(/no-file-tools.*Write|Write.*no-file-tools/s);
+  });
+
+  it("each deny probe stands alone: a stub that allows only Grep / Task / Skill is caught by that tool's probe", () => {
+    for (const tool of ["Grep", "Task", "Skill"]) {
+      const spawnCwd = makeSpawnCwd({ hookSource: stubHook({ Bash: "deny", [tool]: "allow" }, "deny") });
+      expect(
+        () => runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [], noFileTools: true }),
+        tool,
+      ).toThrow(new RegExp(`no-file-tools[^]*${tool}`));
+    }
+  });
+
+  it("without the flag the Tier-2 relax is unchanged (Task/Skill still must allow)", () => {
+    const spawnCwd = makeSpawnCwd({ hookSource: stubHook({ Bash: "deny", Write: "allow" }, "deny") });
+    expect(() => runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] })).toThrow(/Task/);
   });
 });
 });
@@ -843,7 +1061,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
 
   const TOKEN = "ghs_FAKEtoken0123456789ABCDEFghijklmnop";
 
-  async function runFakeEval(spawnCwd: string) {
+  async function runFakeEval(spawnCwd: string, extra: { captureFinalMessage?: boolean } = {}) {
     return spawnClaudeEval({
       spawnCwd,
       installationToken: TOKEN,
@@ -853,8 +1071,11 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
       cronName: "cron-bug-fixer",
       buildSpawnEnv: () => process.env,
       logger: noopLogger,
+      ...extra,
     });
   }
+  // #7122 P2-3 — finalMessage exists only for a caller that opts in.
+  const runCapturing = (spawnCwd: string) => runFakeEval(spawnCwd, { captureFinalMessage: true });
 
   // #8603 — the pinned CLI treats an unknown `--effort` VALUE as a warning, not
   // an error: it writes `Unknown --effort value '<v>' — ignoring it and using
@@ -947,6 +1168,110 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     await runFakeEval(spawnCwd);
     expect(filingDenyMock).toHaveBeenCalledTimes(1);
     expect(filingDenyMock.mock.calls[0][0]).toMatchObject({ fn: "cron-bug-fixer", count: 0, capture_status: "field-absent" });
+  });
+
+  // #7122 — SpawnResult.finalMessage: the community draft rides the `result` event's
+  // text, NOT the 8 KiB front-cut stdoutTail (a cut tail is not parseable and cannot
+  // signal oversize). Redacted with the child redactor, capped at 16 KiB with a flag,
+  // never tail-sliced; absent for a run with no result.
+  const resultEvent = (result: unknown, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ type: "result", subtype: "success", is_error: false, result, permission_denials: [], ...extra });
+  const emitLine = (line: string) => `process.stdout.write(${JSON.stringify(line)} + "\\n");`;
+
+  it("#7122 P2-3: finalMessage / finalMessageTruncated are ABSENT by default (siblings spread the whole SpawnResult into Sentry extras) and present on opt-in", async () => {
+    const draft = '{"periodDays":7,"topics":[]}';
+    const bin = () => installFakeClaudeBin(emitLine(resultEvent(`${draft} ${TOKEN}`)));
+    const off = await runFakeEval(bin());
+    expect(off.finalMessage).toBeUndefined();
+    expect(off.finalMessageTruncated).toBeUndefined();
+    expect("finalMessage" in off).toBe(false);
+    expect("finalMessageTruncated" in off).toBe(false);
+    expect(JSON.stringify(off)).not.toContain('"finalMessage"');
+    // The legacy bounded tail is unchanged by the flag.
+    expect(off.stdoutTail).toContain(draft);
+    const on = await runFakeEval(bin(), { captureFinalMessage: true });
+    expect(on.finalMessage).toContain(draft);
+    expect(on.finalMessageTruncated).toBe(false);
+    // An explicit false is the default, not a third state.
+    const explicitOff = await runFakeEval(bin(), { captureFinalMessage: false });
+    expect("finalMessage" in explicitOff).toBe(false);
+  });
+
+  it("#7122: finalMessage is the result text verbatim (redacted), finalMessageTruncated false, makeThrewSpawnResult carries neither", async () => {
+    const draft = '{"periodDays":7,"topics":[]}';
+    const res = await runCapturing(
+      installFakeClaudeBin(`${emitLine(JSON.stringify({ type: "system", subtype: "init" }))}${emitLine(resultEvent(draft))}`),
+    );
+    expect(res.finalMessage).toBe(draft);
+    expect(res.finalMessageTruncated).toBe(false);
+    // The tail path is untouched: the same text still folds into stdoutTail.
+    expect(res.stdoutTail).toContain(draft);
+    const threw = makeThrewSpawnResult("cron-community-monitor");
+    expect("finalMessage" in threw).toBe(false);
+    expect("finalMessageTruncated" in threw).toBe(false);
+  });
+
+  it("#7122: finalMessage passes through the child redactor (the installation token is never carried)", async () => {
+    const res = await runCapturing(installFakeClaudeBin(emitLine(resultEvent(`echo ${TOKEN} done`))));
+    expect(res.finalMessage).toContain("[REDACTED-INSTALLATION-TOKEN]");
+    expect(res.finalMessage).not.toContain(TOKEN);
+  });
+
+  it("#7122: a result-less run leaves finalMessage and finalMessageTruncated undefined (plain text only)", async () => {
+    const res = await runCapturing(installFakeClaudeBin(`process.stdout.write("Error: Reached max turns (80)\\n");`));
+    expect(res.finalMessage).toBeUndefined();
+    expect(res.finalMessageTruncated).toBeUndefined();
+  });
+
+  it("#7122: a result EVENT without a string `result` (error_max_turns) is also absent, not the two-character empty-string stand-in", async () => {
+    const line = JSON.stringify({ type: "result", subtype: "error_max_turns", is_error: true, num_turns: 80, permission_denials: [] });
+    const res = await runCapturing(installFakeClaudeBin(emitLine(line)));
+    expect(res.finalMessage).toBeUndefined();
+    expect(res.finalMessageTruncated).toBeUndefined();
+    expect(res.stdoutTail).toContain('""'); // the legacy tail keeps its stand-in; only the new field is strict
+  });
+
+  it("#7122: an oversized result is cut at FINAL_MESSAGE_CAP_BYTES from the HEAD (no tail slicing) and flagged", async () => {
+    expect(FINAL_MESSAGE_CAP_BYTES).toBe(16 * 1024);
+    const big = `HEADMARK${"A".repeat(FINAL_MESSAGE_CAP_BYTES + 5000)}TAILMARK`;
+    const res = await runCapturing(installFakeClaudeBin(emitLine(resultEvent(big))));
+    expect(res.finalMessageTruncated).toBe(true);
+    expect(Buffer.byteLength(res.finalMessage!, "utf8")).toBe(FINAL_MESSAGE_CAP_BYTES);
+    expect(res.finalMessage!.startsWith("HEADMARK")).toBe(true);
+    expect(res.finalMessage).not.toContain("TAILMARK");
+  });
+
+  it("#7122: a result of exactly FINAL_MESSAGE_CAP_BYTES is NOT flagged", async () => {
+    const exact = "B".repeat(FINAL_MESSAGE_CAP_BYTES);
+    const res = await runCapturing(installFakeClaudeBin(emitLine(resultEvent(exact))));
+    expect(res.finalMessage).toBe(exact);
+    expect(res.finalMessageTruncated).toBe(false);
+  });
+
+  it("#7122: a token straddling the cap boundary is redacted BEFORE the cut (no partial token survives)", async () => {
+    const text = `${"C".repeat(FINAL_MESSAGE_CAP_BYTES - 10)}${TOKEN}${"D".repeat(100)}`;
+    const res = await runCapturing(installFakeClaudeBin(emitLine(resultEvent(text))));
+    expect(res.finalMessageTruncated).toBe(true);
+    expect(res.finalMessage).not.toContain(TOKEN.slice(0, 12));
+  });
+
+  it("#7122: permissionDenialCount and deniedTools surface ALL denials as closed tool names (unknowns collapse to other)", async () => {
+    const line = resultEvent("done", {
+      permission_denials: [
+        { tool_name: "Write", tool_input: { file_path: "x" } },
+        { tool_name: "Grep", tool_input: { pattern: "k" } },
+        { tool_name: "Bash", tool_input: { command: "gh issue comment 1" } },
+        { tool_name: "mcp__evil__tool", tool_input: {} },
+        { tool_name: "Bash", tool_input: { command: "gh label create x" } },
+      ],
+    });
+    const res = await runFakeEval(installFakeClaudeBin(emitLine(line)));
+    expect(res.permissionDenialCount).toBe(5);
+    expect(res.deniedTools).toEqual(["Write", "Grep", "Bash", "other"]);
+    // A run with no result event leaves both absent.
+    const none = await runFakeEval(installFakeClaudeBin(`process.stdout.write("no result\\n");`));
+    expect(none.permissionDenialCount).toBeUndefined();
+    expect(none.deniedTools).toBeUndefined();
   });
 
   it("captures a stdout tail and redacts the installation token", async () => {

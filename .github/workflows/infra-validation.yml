@@ -46,6 +46,16 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
+      # (#10032) The masked-/proc regression suite measures the shim an image installs and the argv the SDK
+      # replays through it; an edit to the Dockerfile COPY, the sandbox config or the canary must run it.
+      - "apps/web-platform/Dockerfile"
+      - "apps/web-platform/server/agent-runner-sandbox-config.ts"
+      - "apps/web-platform/scripts/sandbox-canary.mjs"
+      # (#10065) The same suite replays the C4 render argv and the outer-wrap spawn constants run under the masks, and the
+      # vendored SDK builds the tail it replays; a lockfile bump or an edit to either spawn path must run it.
+      - "apps/web-platform/package-lock.json"
+      - "apps/web-platform/server/c4-render.ts"
+      - "apps/web-platform/server/agent-outer-wrap.ts"
       # (#8097) Suites under apps/web-platform/test/infra/ run inside deploy-script-tests-fixed
       # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
       - "apps/web-platform/test/infra/**"
@@ -78,6 +88,16 @@ on:
       # three paths, and PR #7094 ran this job only incidentally, because it also touched
       # apps/web-platform/infra/ (already covered by the first glob above).
       - ".github/workflows/git-data-rung2-rehearsal.yml"
+      # (#9175) Same defect class for the inngest provision-race rehearsal route:
+      # inngest-provision-rehearsal.test.sh asserts ~60 properties across the workflow, the
+      # plan-shape guard, the capture script and the probe — none of which matched a glob
+      # above, so a PR editing ONLY one of them would skip the suite that guards it.
+      - ".github/workflows/inngest-provision-rehearsal.yml"
+      - "scripts/inngest-provision-plan-shape.sh"
+      - "scripts/inngest-provision-rehearsal-probe.sh"
+      - "scripts/followthroughs/inngest-provision-rehearsal-capture.sh"
+      - "scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh"
+      - "tests/scripts/test-inngest-provision-plan-shape.sh"
       # (#8189) Same defect for the two workflows git-data-root-key.test.sh and
       # git-data-cutover-access.test.sh parse: a PR editing only one of them must run its guard.
       - ".github/workflows/apply-git-data-root-key.yml"
@@ -163,6 +183,16 @@ on:
       # a stale row reads green) would skip the guard whose job is to turn that red.
       - "scripts/lib/web2-luks-rows.sh"
       - "scripts/betterstack-query.sh"
+      # (#9879) The shared HCL effective-text lexer sourced by workspaces-luks.test.sh (Guard B4) and
+      # inngest-luks-sole-copy.test.sh (Guard 1). It sits under tests/scripts/lib/, outside every glob
+      # above, so a lexer-ONLY edit (weakening strip_comments, say) would skip both consuming suites.
+      - "tests/scripts/lib/hcl-effective-text.sh"
+      # (#9879) inngest-luks-sole-copy.test.sh (under apps/*/infra/**) asserts that the runbook heading every
+      # failure message cites exists (H1b) and that the read-back command it carries matches the postmerge
+      # skill's (H2). A docs-only heading rename or runbook command edit would otherwise skip the suite. PR list only:
+      # the push list above is deliberately narrower.
+      - "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+      - "plugins/soleur/skills/postmerge/SKILL.md"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
       # — so a guard that cannot fire when its own subjects are edited would be
@@ -200,6 +230,9 @@ on:
       - "scripts/supabase-advisor-scan.sh"
       - "apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts"
       - "knowledge-base/engineering/architecture/diagrams/model.c4"
+      # (#9391) The hosts-file GHCR deny lost alert's drift guard resolves the runbook anchor in
+      # its incident link against this file; a docs-only heading rename must run the guard.
+      - "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"
   workflow_dispatch:
 
 permissions:
@@ -786,6 +819,19 @@ jobs:
       - name: Run registry store-not-LUKS alert drift guard (#8408)
         run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
 
+      # (#9391) The hosts-file GHCR deny lost Logs alert: both emitters' needles read from their own source,
+      # the two-arm value-0 predicate compared whole, head-scoping, the paging windows, both -target lines
+      # (the only enforcement for logtail resources), the runbook anchor, and its mutation rows.
+      - name: Run hosts-file GHCR deny lost alert drift guard (#9391)
+        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh
+
+      # (#9534 review) The egress-gateway Logs alerts: deny-spike shape, the
+      # host-attributed probe-silent predicate (count(DISTINCT host_name), the
+      # host-mask fix), the new probe-fail paging alert, every -target line, and
+      # the mutation rows that each require this guard to red.
+      - name: Run egress gateway alerts drift guard (#9534 host-mask + fail paging)
+        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh
+
       # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
       # queries the emitter's real shape and field path, aggregates only, every -target line, and
       # its mutation rows.
@@ -883,6 +929,24 @@ jobs:
           SDK_SANDBOX_REGRESSION_DOCKER: "1"
         run: bash apps/web-platform/scripts/sandbox-canary-regression.test.sh
 
+      # (#9860 / #10032) THE PRODUCTION-POSTURE GATE FOR THE SANDBOX /proc MASK. The step above is deliberately
+      # NEVER-FAIL (it skips on an unusable runner) and runs under apparmor=unconfined, which is how a fresh
+      # `--proc /proc` the shim spliced shipped green while docker's default masked /proc refused it on every
+      # sandboxed spawn. This suite runs the shipped shim in a container carrying the production tuple (the
+      # committed seccomp + soleur-bwrap AppArmor profiles, uid 1001, the Debian bubblewrap the production base
+      # installs, docker's DEFAULT masks): a control arm proves the runner really has masks, the canary replay
+      # must pass, and a sibling process must be invisible through the shim and visible through the real bwrap.
+      # Since #10065 the container is DERIVED from the parsed prod docker run tuple (a closed-world check over the
+      # canary, prod and first-boot tuples), the Dockerfile runner -> cli-tools lineage and PATH order, and the
+      # isolation argv from the committed canary fixture; a recorder arm proves the shim DROPS the vendor procfs
+      # bind rather than covering it, and the C4 render argv (which bypasses the shim) runs under the masks.
+      # It NEVER self-skips: an unusable docker/AppArmor/sysctl fails with a literal token. It loads an AppArmor
+      # profile and sets a sysctl, so it runs under sudo (PRIVILEGED_WHY in run-registered-suites.sh keeps it off
+      # the unprivileged matrix legs). The bound is the step's own timeout: the image build (apt-bounded) plus the static arms and ~15 docker execs.
+      - name: Run sandbox masked-/proc docker regression (production posture; never skips)
+        timeout-minutes: 10
+        run: sudo bash apps/web-platform/infra/sandbox-masked-proc-docker.test.sh
+
       # (#7025) THE REHEARSAL ROOT GETS NO `terraform validate` FROM THE `validate` JOB.
       # That job derives its matrix with `sed -E 's|^(apps/[^/]+/infra)/.*|\1|'`, which
       # COLLAPSES apps/web-platform/infra/rung2-rehearsal/... to apps/web-platform/infra and
@@ -912,6 +976,17 @@ jobs:
         working-directory: apps/web-platform/infra/git-data-root-key
         env:
           TF_DATA_DIR: ${{ runner.temp }}/git-data-root-key-tf
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+
+      # (#9175) Same gap again: the inngest rehearsal root nests under the infra dir, so the
+      # validate matrix never parses it — without this step a syntax error surfaces only at
+      # dispatch, after the environment approval. -backend=false, TF_DATA_DIR out of tree.
+      - name: Terraform validate the inngest provision rehearsal root
+        working-directory: apps/web-platform/infra/inngest-provision-rehearsal
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/inngest-provision-rehearsal-tf
         run: |
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
@@ -984,9 +1059,11 @@ jobs:
             apps/web-platform/infra/git-data-gc.timer \
             apps/web-platform/infra/git-data-luks-reopen.service \
             apps/web-platform/infra/git-data-luks-reopen-failure.service \
-            apps/web-platform/infra/git-data-luks-reopen.timer 2>&1 || true)
+            apps/web-platform/infra/git-data-luks-reopen.timer \
+            apps/web-platform/infra/git-data-liveness.service \
+            apps/web-platform/infra/git-data-liveness.timer 2>&1 || true)
           echo "$out"
-          if printf '%s' "$out" | grep -E 'git-data-(gc|luks-reopen)[^:]*\.(service|timer):' ; then
+          if printf '%s' "$out" | grep -E 'git-data-(gc|luks-reopen|liveness)[^:]*\.(service|timer):' ; then
             echo "::error::systemd-analyze verify reported problems in the git-data unit set"
             exit 1
           fi

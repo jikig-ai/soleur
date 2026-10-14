@@ -64,6 +64,18 @@ describe("trigger-paths.txt (AC5)", () => {
       triggers(["apps/web-platform/app/(auth)/login/page.tsx"], patterns),
     ).toBe(true);
   });
+
+  it("RUNS for a harness change itself (self-verification)", () => {
+    expect(
+      triggers(["apps/web-platform/scripts/live-verify/run.ts"], patterns),
+    ).toBe(true);
+    expect(
+      triggers(
+        ["apps/web-platform/scripts/live-verify/trigger-paths.txt"],
+        patterns,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("drift canary (AC5)", () => {

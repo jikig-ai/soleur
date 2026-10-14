@@ -82,7 +82,7 @@ For each route:
 
 1. If `auth: bot`, invoke [bot-signin.ts](./scripts/bot-signin.ts) once per run (the storage-state file is reused across routes). Script writes the Supabase SSR auth cookie to `${GITHUB_WORKSPACE}/tmp/ux-audit/storage-state.json` (absolute path, per [hr-mcp-tools-playwright-etc-resolve-paths]).
 2. Verify route `fixture_prereqs` are satisfied. If `kb_workspace_deferred` appears in `fixture_prereqs`, log `route skipped: missing prereq kb_workspace_deferred (tracked in #2351)` and continue. The [bot-fixture.ts](./scripts/bot-fixture.ts) `seed` subcommand idempotently satisfies `tcs_accepted`, `billing_active`, and `chat_conversations`.
-3. Launch Playwright MCP. Use `browser_navigate` + `browser_take_screenshot` at the route's `viewport` size.
+3. Launch Playwright MCP. Use `browser_navigate` + `browser_take_screenshot` at the route's `viewport` size. If the first browser call fails with `Chromium sandboxing failed!` or `No usable sandbox!`, stop and read the sandbox entry in `agent-browser/SKILL.md` troubleshooting; never edit the Playwright config or env to disable the sandbox (the proxy refuses it and the MCP server then fails to start), and tell the user the host needs Google Chrome or a non-root user.
 
    **Credential safety — this skill publishes its captures (#7947).** These
    screenshots are taken INSIDE an authenticated bot session (step 1) and are
@@ -214,7 +214,7 @@ Also write the same JSON to `${GITHUB_WORKSPACE}/tmp/ux-audit/summary.json` so t
 
 ### 8. Cleanup
 
-Call `browser_close` to release the Playwright session (per [cq-after-completing-a-playwright-task-call]). Leave `storage-state.json` in place — it's gitignored and the workflow runner is ephemeral.
+Call `browser_close` to release the Playwright session (ADR-271: a browser's lifetime belongs to its launching session, and no hook reaps it for you). Leave `storage-state.json` in place — it's gitignored and the workflow runner is ephemeral.
 
 ## Bot fixture spec
 

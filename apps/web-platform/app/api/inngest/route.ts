@@ -57,6 +57,7 @@ import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
 import { cronLinkedinTokenCheck } from "@/server/inngest/functions/cron-linkedin-token-check";
 import { cronMainHealthMonitor } from "@/server/inngest/functions/cron-main-health-monitor";
 import { cronMembershipHealth } from "@/server/inngest/functions/cron-membership-health";
+import { cronMergeQueueStallDispatch } from "@/server/inngest/functions/cron-merge-queue-stall-dispatch";
 import { cronNag4216Readiness } from "@/server/inngest/functions/cron-nag-4216-readiness";
 import { cronOauthProbe } from "@/server/inngest/functions/cron-oauth-probe";
 import { cronPlausibleGoals } from "@/server/inngest/functions/cron-plausible-goals";
@@ -171,6 +172,7 @@ const handlers = serve({
     cronLinkedinTokenCheck,
     cronMainHealthMonitor,
     cronMembershipHealth,
+    cronMergeQueueStallDispatch,
     cronNag4216Readiness,
     cronOauthProbe,
     cronPlausibleGoals,

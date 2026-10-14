@@ -24,6 +24,10 @@ export type Arming =
  * the arming line is deleted, i.e. prose alone would satisfy the guard built to kill prose.
  * Matching runs against a COMMENT-STRIPPED view for the same reason.
  *
+ * A `cron` row may instead name a WORKFLOW (`.github/workflows/<x>.yml`) and the `bash scripts/<x>.sh`
+ * line that runs the verifier (ADR-117 amendment 2026-10-11): `checkFeeders` then also requires a
+ * `schedule:` trigger or a `WATCHDOG_DISPATCH_TABLE` row, and that the script exists.
+ *
  * `none` is the honest declaration that nothing pings this heartbeat yet. It is not a loophole: it
  * costs a `tracking_issue`, and the guard asserts the heartbeat has no feeder by EITHER delivery
  * route this repo uses (see `feederDeliveryProbes`).
@@ -272,6 +276,31 @@ export const MANIFEST: ManifestEntry[] = [
     replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },
   },
   {
+    name: "git_data_host_prd",
+    // #9438: the git-data HOST's own recurring liveness beat (git-data-liveness.timer), distinct
+    // from git_data_prd above, which is fed by a web-host cron and proves only that some web host
+    // can open a TCP connection to the port. Armed by the host's OWN cloud-init, so it is
+    // dedicated-host-boot, which makes ADR-103's replace_target requirement fire: cloud-init is
+    // per-instance, so the feeder reaches the host only on a fresh boot (git-data-host-replace).
+    arming: "dedicated-host-boot",
+    // Born paused and stays paused in source; live arming is the owner-authorized, measured
+    // arm step after the replaced host's first beats (ADR-117, ADR-283).
+    paused: true,
+    feeder: {
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/cloud-init-git-data.yml",
+        pattern: "systemctl enable --now git-data-liveness.timer",
+      },
+    },
+    replace_target: { choice: "git-data-host-replace", server: "hcloud_server.git_data" },
+    // No `arming_pending` (record PR for #9438). This row carried `arming_pending: { tracking_issue: 9438 }`
+    // while the monitor was paused-yet-fed between the host replace and the arm. On 2026-10-12 a measured
+    // arm (`arm-heartbeats.sh --arm-one`, #9980) read `up` within 11 s; the verdict and the pre/post
+    // `--status` reads are on #9438. That is a dated record: the live state is read from Better Stack, not
+    // from this file. `paused: true` above stays: it is the source `.tf` state (born paused).
+  },
+  {
     name: "registry_disk_prd",
     arming: "dedicated-host-boot",
     paused: false,
@@ -286,5 +315,28 @@ export const MANIFEST: ManifestEntry[] = [
       },
     },
     replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },
+  },
+  {
+    name: "inngest_server_probe",
+    // #8516 — the dead-probe sibling of logtail_exploration_alert.inngest_luks_wrong_volume:
+    // a pusher beats it only while a fresh host_role=dedicated inngest-server-probe row
+    // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). FED and ARMED.
+    // No `arming_pending` (record PR for #9703). This row carried `arming_pending: { tracking_issue: 9703 }`
+    // while the monitor was paused-yet-fed. On 2026-10-12 the runbook arm block unpaused it; its read-back
+    // was `status=up paused=false`, and the feeder (scripts/inngest-probe-heartbeat-feeder.sh) then reported
+    // `verdict=beat` on runs 38264380002 (forced), 38265381453 and 38267189184 (clock-dispatched). That is a
+    // dated record: the live state is read from Better Stack, not from this file. `paused: true` below stays:
+    // it is the source `.tf` state (born paused).
+    arming: "external-probe",
+    paused: true,
+    feeder: {
+      kind: "cron",
+      evidence: {
+        file: ".github/workflows/scheduled-inngest-probe-heartbeat.yml",
+        pattern: "bash scripts/inngest-probe-heartbeat-feeder.sh",
+      },
+    },
+    exempt_reason:
+      "fed and armed (2026-10-12, #9703) — the feeder is a repo-side verifier workflow, remediation never requires an inngest-host-replace, precisely because a host push cannot see Vector-allowlist or sink failures (#6780). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
 ];

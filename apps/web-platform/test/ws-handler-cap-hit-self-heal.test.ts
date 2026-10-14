@@ -1,7 +1,7 @@
 /**
  * Phase 4 (#stuck-active fix) — self-healing cap_hit ledger-divergence recovery.
  *
- * Plan: knowledge-base/project/plans/2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
  *
  * When `acquireSlot` returns `cap_hit` and the user's *visible* active
  * conversations (status in active/waiting_for_user, archived_at IS NULL)
@@ -139,8 +139,8 @@ registerLiveLoopProbe(mockHasActiveCcQuery);
  * Captures runtime values the mock observes so tests can assert on the
  * production code's filter arguments (e.g. the stale-heartbeat cutoff
  * timestamp). Without this, the mock would silently accept any cutoff
- * value and a constant-value regression (e.g. `120` instead of
- * `120_000`) would not fail the test.
+ * value and a constant-value regression (e.g. `240` instead of
+ * `240_000`) would not fail the test.
  */
 interface MockCapture {
   /** Last `last_heartbeat_at` cutoff passed to `.lt(...)` on the
@@ -152,7 +152,7 @@ function setupSupabaseMock(args: {
   visibleConversations: Array<{ id: string }>;
   slotRows: Array<{ conversation_id: string }>;
   /**
-   * Slots whose `last_heartbeat_at < now() - STALE_HEARTBEAT_THRESHOLD_SECONDS`.
+   * Slots whose `last_heartbeat_at < now() - SLOT_STALENESS_THRESHOLD_SECONDS`.
    * A separate SELECT on `user_concurrency_slots` with an `.lt(...)` clause
    * must resolve to these rows. The first SELECT (orphan path, no `.lt()`)
    * resolves to `slotRows`. Defaults to `[]` so existing tests are
@@ -340,10 +340,10 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
 // 2026-05-06-fix-one-shot-conversation-limit-stuck-executing-plan.md)
 //
 // `tryLedgerDivergenceRecovery` widened to also reap slots whose
-// `last_heartbeat_at` lapsed past STUCK_ACTIVE_THRESHOLD_SECONDS even when
+// `last_heartbeat_at` lapsed past SLOT_STALENESS_THRESHOLD_SECONDS even when
 // the conversation row IS still visible (status='active', archived_at IS
-// NULL). This closes the 0-180s dead-end window between an old WS
-// supersession and the next reaper tick.
+// NULL). This closes the dead-end window between an old WS supersession and
+// the next reaper tick (240 s staleness + up to one 300 s poll ≈ ~9 min).
 // ---------------------------------------------------------------------------
 
 describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
@@ -370,7 +370,7 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     // Reproduction of the May-6 dead-end: dashboard's stuck-Executing
     // conversation IS visible (status='active', archived_at NULL), so the
     // orphan check returns []. The widened helper must additionally
-    // detect that the slot's heartbeat is stale (>120s) and reap it.
+    // detect that the slot's heartbeat is stale (>240s) and reap it.
     const before = Date.now();
     const capture = setupSupabaseMock({
       visibleConversations: [{ id: "conv-stuck-active" }],

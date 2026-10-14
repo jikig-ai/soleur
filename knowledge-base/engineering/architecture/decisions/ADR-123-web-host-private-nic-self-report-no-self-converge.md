@@ -251,3 +251,13 @@ amendment of the same date owns the mechanism. This entry records only the scope
 - **Status: adopting.** This is a mechanism-level argument until a fresh web boot is observed
   zot-served. That observation is the `web-host-replace` of web-2 graded by
   `scripts/followthroughs/web-fresh-boot-zot-8651.sh`.
+
+## Addendum — 2026-10-06 (#9632)
+
+- **The beat now means "nic_ok AND the guard could report".** The guard withholds its heartbeat when it cannot even
+  attempt to ship (token or ingest URL unset, URL not equal to the pinned literal, token outside the token
+  alphabet). Absence of `soleur-web-nic-guard-<host>` therefore has two causes, a missing private NIC or a guard that
+  refused; the guard's stderr in Better Stack discriminates (see `betterstack-log-query.md`). A POST that was
+  attempted and failed does not withhold the beat.
+- **The guard refuses to run under xtrace** (exit 78) and sends its bearer only to the pinned Better Stack source.
+  The no-reboot rule above is unchanged.

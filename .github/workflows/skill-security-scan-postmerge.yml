@@ -116,7 +116,7 @@ jobs:
           # the `^plugins/...` filter below and a weaponised agent skipped this gate. Even with
           # it, git still quotes a path containing a tab, newline, `"` or `\`; refuse those
           # rather than let them fall out of the scan set.
-          if printf '%s\n' "$raw" | grep -qE '^"(plugins/soleur/(skills|agents)/|\.claude/(skills|agents)/)'; then
+          if printf '%s\n' "$raw" | grep -cE '^"(plugins/soleur/(skills|agents)/|\.claude/(skills|agents)/)' >/dev/null; then
             echo "::error::skill-security-scan postmerge: a quoted path (tab, newline, quote or backslash in the name) under a scanned skill/agent directory cannot be scanned safely; rename it."
             printf '%s\n' "$raw" | grep -E '^"' >&2 || true
             exit 1
@@ -186,7 +186,7 @@ jobs:
             scanned=$((scanned + 1))
             if [ "$verdict" = "HIGH-RISK" ]; then
               slug=$(path_to_slug "$path")
-              if [ -z "$slug" ] || ! echo "$matched_skills" | grep -qFx -- "$slug"; then
+              if [ -z "$slug" ] || ! echo "$matched_skills" | grep -cFx -- "$slug" >/dev/null; then
                 violations="$violations $path"
               fi
             fi

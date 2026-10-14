@@ -101,9 +101,9 @@ Session error inventory: none detected. The plan session was clean — research 
 # References
 
 - This session's artifacts:
-  - Plan: `knowledge-base/project/plans/2026-05-16-feat-pr-d-attachments-storage-tenant-rls-plan.md`
-  - Tasks: `knowledge-base/project/specs/feat-pr-d-attachments-storage-tenant-rls/tasks.md`
-  - Brainstorm: `knowledge-base/project/brainstorms/2026-05-16-pr-d-attachments-storage-tenant-rls-brainstorm.md`
+  - Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-16-feat-pr-d-attachments-storage-tenant-rls-plan.md`
+  - Tasks: `knowledge-base/project/specs/archive/20261013-014038-feat-pr-d-attachments-storage-tenant-rls/tasks.md`
+  - Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-16-pr-d-attachments-storage-tenant-rls-brainstorm.md`
   - Draft PR: #3883
 - Adjacent learnings:
   - `2026-05-16-brainstorm-verify-register-citations-and-adjacent-silent-failures.md` (same session's brainstorm-phase learning)

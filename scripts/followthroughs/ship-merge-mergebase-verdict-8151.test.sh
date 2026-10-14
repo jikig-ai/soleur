@@ -98,7 +98,7 @@ echo_row() {  # webhook receipt echoing BOTH markers -- the #6475 shape
 { pass_row; } > "$WORK/fx-pass.json"
 make_mock "$WORK/fx-pass.json" 0
 run_case "one mergeBaseOk row -> PASS (AC-PM1 satisfied)" 0
-printf '%s' "$LAST_OUT" | grep -q 'AC-PM1' || fail "PASS output names the acceptance criterion"
+printf '%s' "$LAST_OUT" | grep -c >/dev/null 'AC-PM1' || fail "PASS output names the acceptance criterion"
 
 # 2. TRANSIENT -- zero rows (no qualifying run yet).
 : > "$WORK/fx-zero.json"

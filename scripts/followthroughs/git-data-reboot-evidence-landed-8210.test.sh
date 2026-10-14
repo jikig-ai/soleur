@@ -150,8 +150,8 @@ expect() {
   if [[ "$RC" == "$2" ]]; then pass "$1 (rc=$RC)"; else fail "$1: want rc=$2, got rc=$RC"; printf '%s\n' "$OUT" >&2; fi
 }
 # want_out / deny_out <label> <needle>  — read against the LAST run_probe output.
-want_out() { if printf '%s' "$OUT" | grep -qF -- "$2"; then pass "$1"; else fail "$1: output lacks '$2'"; fi; }
-deny_out() { if printf '%s' "$OUT" | grep -qF -- "$2"; then fail "$1: output carries '$2'"; else pass "$1"; fi; }
+want_out() { if printf '%s' "$OUT" | grep -cF >/dev/null -- "$2"; then pass "$1"; else fail "$1: output lacks '$2'"; fi; }
+deny_out() { if printf '%s' "$OUT" | grep -cF >/dev/null -- "$2"; then fail "$1: output carries '$2'"; else pass "$1"; fi; }
 
 # The two token sets, copied from the gate's contract (#8010) and from the probe's own `case`.
 # Driven one arm per member: membership IS the decision, so a sampled table would leave the

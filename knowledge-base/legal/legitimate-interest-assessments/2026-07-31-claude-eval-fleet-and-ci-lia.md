@@ -2,7 +2,7 @@
 title: "Legitimate Interest Assessment — Anthropic-egressing Inngest function fleet, community observation and republication, and the Jikigai-keyed GitHub Actions CI surface"
 type: legitimate-interest-assessment
 date: 2026-07-31
-plan: knowledge-base/project/plans/2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
+plan: knowledge-base/project/plans/archive/20261013-051752-2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
 issue: 7100
 status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the controller. Anthropic PBC is an Art. 28 processor for every flow assessed here, because every flow runs under the Jikigai-controlled `ANTHROPIC_API_KEY` and not under an end-user BYOK key — this is NOT the BYOK independent-controller carve-out at Article 30 register §0."
@@ -324,7 +324,7 @@ rather than the raw message object — would materially reduce what reaches Anth
 preserving the operator's awareness of activity level and location. That measure does not
 exist today. It is a genuine Art. 25(1) data-protection-by-design gap and is tracked as
 deferred item **DEF-3** (#7124; input-side minimization for the community collectors; body drafted
-at `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
+at `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
 ).
 
 Necessity is nevertheless **satisfied for the collection-and-egress limb as scoped**, because
@@ -458,7 +458,7 @@ remediation" — and that is what PA-32 records.**
 **Conditions under which this conclusion would change.** The remediation set is small, and
 CLO's estimate for it is about a day. It is source work and is therefore outside this
 docs-only PR's scope; it is tracked as deferred item **DEF-0** (#7119; body drafted at
-`knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
 ):
 
 | | Remediation | Effect on this conclusion |
@@ -474,6 +474,31 @@ necessity objection would fall away, and Art. 6(1)(f) would become available for
 remaining aggregate publication.** Until then, the limb should be minimised or cease. Note
 that R4 alone is not sufficient for the **already-published** 80 digests: R5, or an accepted
 finding that the existing corpus cannot be erased, is the only honest disposition for those.
+
+> **Superseded in part 2026-10-06 (#7122) - the R4 row only; append-only, nothing above is retracted.**
+> The R4 row's mechanism ("a code-level redaction pass over the digest file and the issue body")
+> was **not built**, and its stated reason ("there is no output allowlist and there is a publication
+> tool") no longer describes `cron-community-monitor`: from the merge of #7122 its digest and tracking
+> issue are rendered by the handler from a closed schema (bounded integers and closed enum members; no
+> free-text field), and the agent has no write tool, no publication verb and no write credential
+> during its run (ADR-273). That is a different mechanism that reaches R4's objective for **future**
+> output of that one cron. Whether it substitutes for R4, and what it means for R1-R3 (future output is
+> structurally incapable of that content), is **for counsel at #7119**. It does not touch the
+> already-published 80 digests (R5), `cron-daily-triage` (no output allowlist, no human gate, no hook;
+> #9606), the necessity conclusion of this Arm, or the lawful-basis cell of PA-32, all of which stand
+> as written. There is still no human gate, and counts in the schema can single a person out.
+
+> **Further correction 2026-10-06 (#7122, review) - the R4 row only; append-only.** In the note above, "no write
+> credential" is read as "**no GitHub write credential**" (the Discord, Bluesky, X and LinkedIn credentials for the read
+> collectors remain in the spawn environment; ADR-273 residual (g)), and "reaches R4's objective" is withdrawn in favour of
+> "**narrows** the exposure R4 described, for future output of that one cron": no redaction pass was built and nothing
+> here treats R4 as met. Counts that can single a person out are not limited to external contributors, interactions and
+> topic counts: Discord `members` and `messages` for a private guild and `newStargazers` can too, and with the period fixed
+> at one day the published series is a daily time series. The statement that no model-chosen text is persisted is scoped
+> to the published artefacts; the agent's redacted final message (up to 16 KiB) is memoised in the `claude-eval` step
+> output, unvalidated, and is not republished. Whether any of this substitutes for R4 is for counsel at #7119.
+
+> **Further correction 2026-10-06 (#7122, review round 2); append-only.** the allowlist is **thirteen exact-literal** commands with no agent-chosen argument other than a numeric Discord channel id, so the statement that a grammar-conforming query token can still reach `hn.algolia.com` is withdrawn (the HN query word is a pinned literal; ADR-273 residual (e)). "Fixed at one day" and "daily time series" are withdrawn as stated: the collection windows differ by platform (GitHub 1 day; Hacker News mentions 7 days; Discord the latest 50 messages per channel; X, Bluesky and LinkedIn totals as of collection), so the published series is a daily series of mixed-window values.**
 
 ---
 
@@ -565,7 +590,7 @@ counsel review #7086 found: a record claiming a compliance state the system does
 **Remediation is multi-channel, not one Privacy Policy section**, precisely because
 14(5)(b) fails for two of the three sub-populations. Tracked as deferred item **DEF-1 (#7120)**
 (body drafted at
-`knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
 ): (a) a pinned notice or server-description line in the
 Discord guild; (b) a line in the repository's README / CONTRIBUTING / issue templates; (c) a
 Privacy Policy §4.15 following the §4.13/§4.14 pattern, mirrored to

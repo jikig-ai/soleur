@@ -19,6 +19,8 @@ import { sanitizeDisplayString } from "@/lib/sanitize-display";
 import { NOT_LEGAL_ADVICE_NOTICE } from "@/lib/email-triage/statutory-rules";
 import type { InboxItemSeverity } from "@/lib/inbox-severity";
 import type { FailureReason } from "@/lib/failure-reason";
+import type { WSMessage } from "@/lib/types";
+import { isConversationViewed } from "./session-registry";
 
 const log = createChildLogger("notifications");
 
@@ -821,8 +823,11 @@ async function sendInboxItemEmailNotification(
 // ---------------------------------------------------------------------------
 
 /**
- * Insert an inbox_item row, then dispatch the push/email nudge. Fire-and-forget
- * (never throws) — callers must not await it.
+ * Insert an inbox_item row, then dispatch the push/email nudge. Never throws.
+ * Returns the inserted row id (`null` on dedup/failure); `dispatch: false`
+ * performs the insert only — `notifyTaskCompleted` awaits it for exactly that
+ * (it needs the id for the `task_completed` frame and defers the dispatch
+ * decision to itself). Other callers may fire-and-forget it.
  *
  * Idempotent (ADR-037): plain-insert + catch 23505 rather than
  * `ON CONFLICT DO NOTHING` (unreliable under supabase-js — returns data:null).
@@ -852,9 +857,16 @@ export async function notifyInboxItem(opts: {
    * (23505 → silent skip). Such an emitter must namespace the key per user_id.
    */
   dedupKey?: string | null;
+  /**
+   * Default true. When false, the row is inserted but push/email dispatch is
+   * skipped — the caller dispatches (or deliberately suppresses) itself.
+   * Used by `notifyTaskCompleted`, which must decide suppression AFTER the
+   * row exists (the inline frame carries the inserted id).
+   */
+  dispatch?: boolean;
   /** Same-origin relative deep-link path built from sourceRef ids. */
   deepLinkPath: string;
-}): Promise<void> {
+}): Promise<string | null> {
   // Reject a non-relative / protocol-relative deep link at the emit boundary —
   // the email CTA (sendInboxItemEmailNotification) prefixes appUrl() without an
   // origin re-check (unlike sw.js on click), so a `//evil.host` or absolute URL
@@ -867,7 +879,7 @@ export async function notifyInboxItem(opts: {
       message: "notifyInboxItem rejected a non-relative deepLinkPath",
       extra: { workspaceId: opts.workspaceId, source: opts.source },
     });
-    return;
+    return null;
   }
   // action_required failures (insert OR dispatch) key the Sentry alert on this op.
   const failOp =
@@ -893,20 +905,26 @@ export async function notifyInboxItem(opts: {
 
     if (insertErr) {
       // 23505 = deduped (idempotent no-op) — expected, not a failure, no push.
-      if ((insertErr as { code?: string }).code === "23505") return;
+      if ((insertErr as { code?: string }).code === "23505") return null;
       reportSilentFallback(insertErr, {
         feature: "inbox",
         op: failOp,
         message: "inbox_item insert failed",
         extra: { workspaceId: opts.workspaceId, source: opts.source },
       });
-      return;
+      return null;
     }
-    if (!inserted) return;
+    if (!inserted) return null;
+
+    const inboxItemId = (inserted as { id: string }).id;
+
+    // dispatch:false — insert-only caller (notifyTaskCompleted suppression
+    // seam) owns the dispatch decision from here.
+    if (opts.dispatch === false) return inboxItemId;
 
     const payload: InboxItemNotificationPayload = {
       type: "inbox_item",
-      inboxItemId: (inserted as { id: string }).id,
+      inboxItemId,
       title: opts.title,
       severity: opts.severity,
       deepLinkPath: opts.deepLinkPath,
@@ -916,7 +934,7 @@ export async function notifyInboxItem(opts: {
       // notifyOfflineUser mirrors its own dispatch failures via
       // mirrorNotifyFailure (op=notify-inbox-action-required for action_required).
       await notifyOfflineUser(opts.userId, payload);
-      return;
+      return inboxItemId;
     }
 
     // Broadcast: dispatch to every Owner of the workspace.
@@ -932,13 +950,14 @@ export async function notifyInboxItem(opts: {
         message: "inbox_item broadcast owner lookup failed",
         extra: { workspaceId: opts.workspaceId },
       });
-      return;
+      return inboxItemId;
     }
     await Promise.allSettled(
       (owners ?? []).map((o) =>
         notifyOfflineUser((o as { user_id: string }).user_id, payload),
       ),
     );
+    return inboxItemId;
   } catch (err) {
     reportSilentFallback(err, {
       feature: "inbox",
@@ -946,6 +965,7 @@ export async function notifyInboxItem(opts: {
       message: "notifyInboxItem failed",
       extra: { workspaceId: opts.workspaceId },
     });
+    return null;
   }
 }
 
@@ -966,15 +986,93 @@ export async function notifyTaskCompleted(opts: {
   conversationId: string;
   workspaceId: string;
   title: string;
+  /**
+   * WS emitter — the caller passes ws-handler `sendToClient` (returns true
+   * when the frame reached an OPEN socket). Injected so this module never
+   * imports the ws-handler graph, which would close the
+   * `ws-handler → cc-dispatcher → notifications → ws-handler` import cycle.
+   */
+  emit: (userId: string, msg: WSMessage) => boolean;
 }): Promise<void> {
-  await notifyInboxItem({
+  // feat-session-completion-inline — "inline + notify if unseen": when the
+  // operator has this exact conversation mounted (its chat surface owns the
+  // page's socket), the completion renders as an in-conversation card and the
+  // push/email nudge is suppressed. The inbox_item row is written in BOTH
+  // paths — it stays the durable record (inserted `unread`; the client marks
+  // it `read` when it renders the card, so a delivered-but-unrendered frame
+  // still leaves an honest unread row + nav badge).
+  const deepLinkPath = `/dashboard/chat/${opts.conversationId}`;
+  const inboxItemId = await notifyInboxItem({
     workspaceId: opts.workspaceId,
     userId: opts.userId,
     severity: "info",
     source: "task_completed",
     title: opts.title,
     sourceRef: { conversationId: opts.conversationId },
-    deepLinkPath: `/dashboard/chat/${opts.conversationId}`,
+    deepLinkPath,
+    dispatch: false,
+  });
+  if (!inboxItemId) return;
+
+  // Emit unconditionally — sendToClient stamps the frame into the
+  // per-conversation replay ring regardless of delivery (ADR-059), so a
+  // within-grace reconnect still renders the card. The emitter is
+  // caller-injected: a throwing sink degrades to "undelivered" (the nudge
+  // fires) rather than rejecting this never-throws path.
+  let delivered = false;
+  try {
+    delivered = opts.emit(opts.userId, {
+      type: "task_completed",
+      conversationId: opts.conversationId,
+      inboxItemId,
+      title: opts.title,
+    });
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "inbox",
+      op: "task-completed-emit-failed",
+      message: "task_completed frame emit threw",
+      extra: { conversationId: opts.conversationId },
+    });
+  }
+
+  // Suppression requires the frame actually reaching an OPEN socket bound to
+  // THIS conversation — the predicate is read at decision time (post-emit,
+  // same synchronous tick on the sessions Map), so a rebind during the insert
+  // await above reads false → the nudge fires. Any uncertainty resolves
+  // toward over-notify, deliberately — including a throwing predicate (the
+  // callers `void` this function, so an unguarded throw would be an
+  // unhandled rejection AND a skipped nudge).
+  let viewing = false;
+  try {
+    viewing = isConversationViewed(opts.userId, opts.conversationId);
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "inbox",
+      op: "task-completed-viewing-check-failed",
+      message: "isConversationViewed threw — degrading to notify",
+      extra: { conversationId: opts.conversationId },
+    });
+  }
+  if (delivered && viewing) {
+    log.info(
+      {
+        userId: opts.userId,
+        conversationId: opts.conversationId,
+        inboxItemId,
+        op: "task-completed-suppressed",
+      },
+      "task_completed push/email suppressed — operator is viewing the conversation",
+    );
+    return;
+  }
+
+  await notifyOfflineUser(opts.userId, {
+    type: "inbox_item",
+    inboxItemId,
+    title: opts.title,
+    severity: "info",
+    deepLinkPath,
   });
 }
 

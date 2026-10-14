@@ -1,0 +1,3 @@
+# fixture data, never executed: kill behind env and an assignment prefix; two P
+env FOO=1 kill -9 "$PPID"
+FOO=1 kill -9 "$PPID"

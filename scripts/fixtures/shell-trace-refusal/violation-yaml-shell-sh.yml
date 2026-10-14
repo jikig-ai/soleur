@@ -1,0 +1,12 @@
+# Rule E must fire ONCE. `shell: sh` is a POSIX shell, not an interpreter that makes the body
+# non-bash: it must stay SCANNED (adding `sh` to SKIP_SHELLS would blind the lint to it).
+name: fixture-shell-sh
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: sh step
+        shell: sh
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

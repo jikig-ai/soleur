@@ -16,8 +16,10 @@ import { ScopeGrantRow } from "@/components/scope-grants/scope-grant-row";
 import { TemplateAuthorizationRow } from "@/components/scope-grants/template-authorization-row";
 import { BashAutonomousToggle } from "@/components/settings/bash-autonomous-toggle";
 import { DebugModeToggle } from "@/components/settings/debug-mode-toggle";
+import { WebEgressToggle } from "@/components/settings/web-egress-toggle";
 import { resolveBashAutonomous } from "@/server/resolve-bash-autonomous";
 import { resolveDebugMode } from "@/server/resolve-debug-mode";
+import { resolveWebEgress } from "@/server/resolve-web-egress";
 import { isDebugModeAvailable, type Role } from "@/lib/feature-flags/server";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
@@ -65,11 +67,11 @@ export default async function ScopeGrantsPage() {
     .maybeSingle();
   const isWorkspaceOwner = membership?.role === "owner";
 
-  // feat-debug-mode-stream — internal harness-stream toggle. Visible ONLY to
-  // the `dev` cohort (server-resolved availability, fail-closed; a Flagsmith
-  // outage keeps it hidden for prd). Owner-WRITE: a non-owner dev sees the
-  // current state read-only. Read the dev role from the cookie/RLS-scoped
-  // client (caller reads its own users row), then the member-checked toggle.
+  // feat-debug-mode-stream — workspace harness-stream toggle. Open to all
+  // roles during beta (server-resolved availability via the `debug-mode`
+  // flag). Owner-WRITE: a non-owner sees the current state read-only. The
+  // role read still feeds the Flagsmith identity so the flag can be
+  // re-segmented for a partial beta rollback.
   const { data: debugRoleRow } = await supabase
     .from("users")
     .select("role")
@@ -84,6 +86,13 @@ export default async function ScopeGrantsPage() {
     subscriptionStatus: null,
   });
   const debugMode = debugAvailable ? await resolveDebugMode(user.id) : false;
+
+  // feat-open-web-egress (#9534) — workspace "Agent web access" grant.
+  // Member-checked read (fail-closed false); the write path is owner-only
+  // inside the SECURITY DEFINER RPC. Rendered for all members — a member
+  // sees a locked read-only switch so the workspace's egress posture is
+  // visible to everyone it affects.
+  const webEgress = await resolveWebEgress(user.id);
 
   // Belt-and-suspenders .eq("founder_id", user.id) defends against any
   // future RLS loosening on scope_grants. Comment per today/route.ts
@@ -182,8 +191,13 @@ export default async function ScopeGrantsPage() {
           <p className="mb-4 text-sm text-soleur-text-secondary">
             The Concierge runs commands to get work done. With autonomous mode
             on it runs non-blocked commands without asking you to approve each
-            one; with it off, it asks before every command. The blocklist
-            (curl, wget, sudo, …) and secret redaction always apply.
+            one, except that it pauses to ask before common forms of a
+            default-branch force-push or delete, terraform destroy, or gh ref
+            or repository delete (it does not recognise every spelling); with
+            it off, it asks before every command outside a short read-only
+            allowlist (unless you choose Approve all for a simple command
+            prefix), and a request you leave unanswered is denied. The blocklist (curl, wget,
+            sudo, …) applies, but no blocklist is perfect.
           </p>
           <BashAutonomousToggle
             initialAutonomous={autonomous}
@@ -202,11 +216,45 @@ export default async function ScopeGrantsPage() {
             id="debug-mode-heading"
             className="mb-2 text-sm font-medium uppercase tracking-wide text-soleur-text-muted"
           >
-            Debug mode (internal)
+            Debug mode
           </h2>
           <DebugModeToggle initialDebugMode={debugMode} isOwner={isWorkspaceOwner} />
         </section>
       )}
+
+      {/* feat-open-web-egress (#9534) — agent-web-access.pen. The "View
+          egress audit log" footer affordance is deferred (#9545): no
+          queryable store ships in Phase A. */}
+      <section
+        id="agent-web-access"
+        aria-labelledby="agent-web-access-heading"
+        className="mb-8 rounded-none border border-soleur-border-default bg-soleur-bg-surface-1 p-4"
+      >
+        <h2
+          id="agent-web-access-heading"
+          className="mb-2 text-sm font-medium uppercase tracking-wide text-soleur-text-muted"
+        >
+          Agent web access
+        </h2>
+        <p className="mb-4 text-sm text-soleur-text-secondary">
+          Hosted agent sessions run with no network access by default. When
+          enabled, agents in this workspace can fetch documentation, install
+          packages, and call external APIs over HTTPS.
+        </p>
+        <WebEgressToggle
+          initialWebEgress={webEgress}
+          isOwner={isWorkspaceOwner}
+        />
+        <p className="mt-4 rounded-none border border-soleur-accent-gold-fg bg-soleur-bg-surface-2 p-3 text-xs text-soleur-text-secondary">
+          <strong className="text-soleur-text-primary">
+            Widens the security boundary.
+          </strong>{" "}
+          A compromised or prompt-injected agent could send workspace data to
+          external hosts. While enabled, sandboxed commands run without
+          platform credentials (agents can't push to git remotes or use
+          stored API keys while this is on).
+        </p>
+      </section>
 
       {Array.from(ACTION_CLASSES_BY_CATEGORY.entries()).map(
         ([category, classes]) => {

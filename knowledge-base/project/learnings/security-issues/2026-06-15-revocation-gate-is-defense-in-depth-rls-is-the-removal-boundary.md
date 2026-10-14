@@ -6,7 +6,7 @@ module: apps/web-platform/middleware.ts
 tags: [auth, middleware, rls, revocation, fail-open, fail-closed, supabase, "#4307"]
 related:
   - knowledge-base/project/learnings/2026-03-20-middleware-error-handling-fail-open-vs-closed.md
-  - knowledge-base/project/plans/2026-06-15-fix-session-disconnect-and-login-rate-limit-blocking-plan.md
+  - knowledge-base/project/plans/archive/20261013-032858-2026-06-15-fix-session-disconnect-and-login-rate-limit-blocking-plan.md
 ---
 
 # Learning: the #4307 revocation gate is defense-in-depth, not the removal boundary

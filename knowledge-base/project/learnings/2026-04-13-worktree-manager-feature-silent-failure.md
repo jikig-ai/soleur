@@ -9,7 +9,7 @@ tags: [integration-issues, worktree-manager]
 
 ## Problem
 
-Running `worktree-manager.sh feature chat-message-ux` reported success (green output, "Feature setup complete!") but only created the `knowledge-base/project/specs/feat-chat-message-ux/` directory inside an empty `.worktrees/feat-chat-message-ux/` folder. No `.git` file was created, the branch was not registered in `git worktree list`, and all subsequent git commands failed with "fatal: this operation must be run in a work tree."
+Running `worktree-manager.sh feature chat-message-ux` reported success (green output, "Feature setup complete!") but only created the `knowledge-base/project/specs/archive/20261013-003106-feat-chat-message-ux/` directory inside an empty `.worktrees/feat-chat-message-ux/` folder. No `.git` file was created, the branch was not registered in `git worktree list`, and all subsequent git commands failed with "fatal: this operation must be run in a work tree."
 
 The script output showed the worktree being prepared and HEAD set, dependency installation, and a success message — but the actual git worktree was not functional. This led to 5 consecutive failed commit attempts before the root cause was identified.
 

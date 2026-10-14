@@ -12,7 +12,8 @@ import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env"
 // The web Concierge loads the plugin's hooks.json (SDK `plugins:[{type:"local"}]`;
 // `settingSources:[]` does not exclude it), so an operator-CLI Stop hook runs
 // against end users and can steer the model into leaking internal vocabulary
-// (`<stop>OPERATOR-GATE...` replacing a CRM question list). Scope: the `Stop`
+// (the then-`<stop>OPERATOR-GATE...` tag replacing a CRM question list; the hook now
+// teaches a plain `Paused:`/`Blocked:` label instead). Scope: the `Stop`
 // event only — it is the one event that can force an extra model turn and
 // rewrite the visible reply. See the ADR-093 amendment (2026-09-30).
 //
@@ -38,8 +39,6 @@ const REGISTRY: Record<string, Classification> = {
   // stale ones. Not spawned here: classification is tracked with the non-Stop hooks.
   "stop-hook.sh": { kind: "deferred", issue: "#9289" },
   "unkept-promise-hook.sh": { kind: "web-disabled", optOutVar: "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK" },
-  // Kills host Chrome processes; whether that can reach another tenant is unverified.
-  "browser-cleanup-hook.sh": { kind: "deferred", issue: "#9281" },
 };
 
 // The incident's closing, and a differently-phrased promise, so a hook that
@@ -151,9 +150,12 @@ describe("plugin Stop hooks are classified for the web runtime", () => {
     }
   });
 
-  it("the runner strip removes the sentinel span in the hook's REAL block reason", () => {
-    // Couples the strip to the producer: if the hook's wording changes, the boundary
-    // stops matching and this reds instead of both suites staying green on copies.
+  it("the hook's REAL block reason teaches a plain label, never markup the strip must hide", () => {
+    // Couples the producer to the boundary from the other side: the hook used to instruct
+    // `<stop>OPERATOR-GATE...` (which users read as a defect and the runner strip had to
+    // remove). It now instructs a plain `Paused:` / `Blocked:` sentence. If the reason ever
+    // teaches angle-bracket markup again, this reds -- and the legacy strip below stays
+    // honest about what it is: a cleaner for old rows, not for the live producer.
     const r = spawnSync("bash", [join(HOOKS_DIR, "unkept-promise-hook.sh")], {
       cwd: REPO,
       input: JSON.stringify({ last_assistant_message: FORM_CLOSING, stop_hook_active: false, session_id: "parity" }),
@@ -162,7 +164,10 @@ describe("plugin Stop hooks are classified for the web runtime", () => {
       timeout: 20_000,
     });
     const reason: string = JSON.parse(r.stdout).reason;
-    expect(reason).toMatch(/<stop>\s*OPERATOR-GATE/i);
-    expect(stripStopGateMarkup(reason).hadMarkup).toBe(true);
+    expect(reason).toMatch(/Paused:/);
+    expect(reason).toMatch(/Blocked:/);
+    expect(reason).not.toMatch(/<\/?stop/i);
+    expect(reason).not.toMatch(/<[a-z!]/i);
+    expect(stripStopGateMarkup(reason).hadMarkup).toBe(false);
   });
 });

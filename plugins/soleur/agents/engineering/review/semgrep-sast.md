@@ -8,7 +8,7 @@ You are a SAST specialist that uses semgrep to find known vulnerability patterns
 
 ## Execution Protocol
 
-1. Confirm semgrep is available (`command -v semgrep`). The review skill runs `plugins/soleur/skills/review/scripts/ensure-semgrep.sh` before spawning this agent, so the binary should be on PATH. If it is not, re-run the bootstrap script once; on second failure report the install error and abort.
+1. Confirm semgrep is available AND RUNS (`semgrep --version`). The review skill runs `plugins/soleur/skills/review/scripts/ensure-semgrep.sh` before spawning this agent, which already verifies execution — a `command -v` hit alone is not sufficient: a resolvable-but-dead shim (broken shebang) must re-trigger the bootstrap, not read as present (#9964). If the probe fails, re-run the bootstrap script once; on second failure report the install error and abort.
 2. Identify source code files changed in the PR using `git diff --name-only --diff-filter=ACMR origin/main...HEAD`. Filter to source code extensions only.
 3. Run semgrep with stacked rule packs so each config contributes rules. A typical JS/TS invocation:
 
@@ -28,6 +28,7 @@ You are a SAST specialist that uses semgrep to find known vulnerability patterns
 ## Critical Constraints
 
 - If semgrep-core crashes with `io_uring_queue_init: Cannot allocate memory` (exit 2, 0 files scanned), the result is VOID, not clean: re-run with `EIO_BACKEND=posix semgrep -j 1 …`. **Why:** #9096.
+- `Ran N rules on 0 files` is VOID too: semgrep skips `test/` paths by default (`.semgrepignore`) and honours git-tracking. For test files extract them into a directory holding ONLY those files and pass `--no-git-ignore` with an empty `.semgrepignore`; confirm M equals the file count. **Why:** #9496.
 
 - **Inline-only output.** Never write findings to files or commit semgrep output. Aggregated security findings in open-source repos create an attack surface.
 - **Changed files only.** Scan only files in the PR diff, not the entire repository. Full-repo scans produce pre-existing noise that buries PR-introduced findings.

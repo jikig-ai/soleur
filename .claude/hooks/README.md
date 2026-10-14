@@ -159,7 +159,7 @@ One command, no SSH, no dashboard. It proves both halves: the operator is told
 **later** (the aggregate counter).
 
 ```bash
-R=$(mktemp -d)
+R=$(mktemp -d -t soleur-run.$$.XXXXXXXX)  # signed root: reapable if the rm -rf is missed (#10017)
 cp AGENTS.md AGENTS.rules.md "$R/"          # the aggregator resolves rules from this root
 printf 'not-json' | INCIDENTS_REPO_ROOT="$R" bash .claude/hooks/guardrails.sh \
   | jq -r '.hookSpecificOutput.permissionDecision'          # -> "ask"
@@ -180,11 +180,11 @@ here after running it.
 ### Scope of the mandate
 
 **Mandatory** for hooks on the `Bash` matcher and for blocking write guards —
-the 20 hooks that can change whether a tool call proceeds:
+the 21 hooks that can change whether a tool call proceeds:
 
 `guardrails` · `cla-signed-author-gate` · `context-reviewed-gate` ·
 `follow-through-directive-gate` · `prod-write-defer-gate` ·
-`ship-net-issue-flow-gate` · `ship-operator-step-gate` · `ship-runbook-ssh-gate` ·
+`ship-kb-archive-gate` · `ship-net-issue-flow-gate` · `ship-operator-step-gate` · `ship-runbook-ssh-gate` ·
 `ship-soak-followthrough-gate` · `ship-unpushed-commits-gate` ·
 `background-poll-prefer-monitor` · `brand-hex-commit-gate` ·
 `doppler-secrets-delete-redirect` · `git-commit-secret-scan` ·
@@ -197,7 +197,7 @@ the 20 hooks that can change whether a tool call proceeds:
 `grep-rewrite`
 
 A rewriter consumes the same untrusted envelope and is bound by the same trust
-boundary, but two of the twenty's properties do not apply to it **by
+boundary, but two of the twenty-one's properties do not apply to it **by
 construction**, so it is classified rather than folded into the list above:
 
 - It does not call `hook_input_should_ask`. Asking is the designated
@@ -205,7 +205,7 @@ construction**, so it is classified rather than folded into the list above:
   *optimization*, not a missing safety check — escalating would spend an
   operator prompt on a non-event.
 - It is **not** silent on stdout. Emitting `updatedInput` is the entire point;
-  the twenty are asserted to emit nothing unless they are the responder.
+  the twenty-one are asserted to emit nothing unless they are the responder.
 
 Everything else still binds: fail-hard `source`, a real parse gate, a recorded
 fault, and `exit 0` on every payload class. `hook-input-contract.test.sh`
@@ -447,6 +447,7 @@ helper itself errors.
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
 | `pkill-self-match-guard.sh` | 2 | `pkill-self-match-guard-readonly` (the `-f` arm emits none) |
 | `browser-snapshot-credential-guard.sh` — **ships in `plugins/soleur/hooks/`**, not here, because `${CLAUDE_PLUGIN_ROOT}` resolves into the installed plugin and a script under `.claude/` never reaches a customer (#7947). Its suite lives here because `.claude/hooks/*.test.sh` is an auto-globbed suite path. | 1 | — (plain deny) |
+| `destructive-command-guard.sh` — **ships in `plugins/soleur/hooks/`**, not here, for the same reason as the snapshot guard above (W2, #9601, ADR-277). A PreToolUse hook on `^Bash$` that lexes the command (vendored `lib/shell-argv.pl`) and **asks** before `terraform\|tofu destroy` / `apply -destroy` and a force-push or delete of a default branch, and **denies** a recursive `rm` of `/`, an ancestor of home or home itself (an ask for the working directory or an ancestor). Not decided, by design: obfuscation, a plain `terraform apply`, secret writes, SQL, non-Bash tools (Devin `exec`); it is a seatbelt, not a boundary. Hosted sessions disable it through `AGENT_ENV_OVERRIDES`. Its suites (`destructive-command-guard-hook.test.sh`, `destructive-command-guard-mutation.test.sh`, `shell-argv-parity.test.sh`) live in `plugins/soleur/test/`. | 1 | `recursive-delete-home` (deny), `recursive-delete-workdir`, `infra-destroy`, `default-branch-force-push`, `unresolved-cd-before-destructive`, `unparsed-wrapper`, `wrapper-depth` (asks); input the guard cannot check in full asks under `command-not-parsed`, `envelope-unreadable`, `lexer-empty`, `bound`; a missing dependency asks under `guard-degraded-jq-missing`, `guard-degraded-perl-missing`; when `jq` cannot build the output, `guard-output-fallback` keeps the decision (a deny stays a deny) |
 
 ### PreToolUse rewriters (no deny semantics)
 
@@ -558,6 +559,57 @@ vector the `is-inside-work-tree` guard exists to block. The evidence gap on that
 path is accepted in exchange for the write guard; the FALLBACK stamp still
 carries a `loaded: N of M` count.
 The directory is gitignored.
+
+### Bare-root HEAD self-heal
+
+In this repo's layout the root has `core.bare=true` and every feature branch lives in a linked
+worktree. After a PR merges and its branch is deleted, the root's `.git/HEAD` can be left as
+`ref: refs/heads/<deleted-branch>`. git does not call that an error, but `git rev-parse HEAD` fails
+there, the `[session-context] branch:` line reads `HEAD`, and `worktree-manager.sh sync-bare-files`
+(`git read-tree HEAD`) cannot refresh the root's on-disk copies.
+
+`session-rules-loader.sh` repairs it by calling `bare-head-self-heal.sh` as a time-boxed child
+process (5 s, where `timeout` exists; stock macOS has none and runs it untimed) just before it reads the branch, so the branch line already reflects the repaired
+HEAD. The helper header lists the exact conditions. In short: `<dir>/.git` is a real directory whose
+config FILE says `core.bare=true` (read from the file, not from `--is-bare-repository`, which
+ADR-173 records as lying under a masked config), HEAD names a branch that does not EXIST, and
+`refs/heads/main` exists. The write runs with hooks and fsmonitor disabled. It costs no model
+tokens and always exits 0.
+
+- **Marker:** exactly one line, `SOLEUR_BARE_HEAD_HEALED from=<old-ref> to=refs/heads/main`,
+  appended as the LAST line of `additionalContext` (after the tmpfs alarm block, so lines 1-5 keep
+  their positions). A healthy session emits nothing, so absence is the healthy state. It is
+  informational: find it by grepping session transcripts for `SOLEUR_BARE_HEAD_HEALED`. No monitor
+  or telemetry allowlist consumes it.
+- **Never touched:** a HEAD that resolves (including a non-main branch), a ref that exists but
+  names a missing object (that is corruption, left for a human), a non-branch ref, a non-bare repo,
+  a linked worktree, a `.git` file that redirects elsewhere, a true-bare repo (a mirror or server
+  repo is not this layout), a detached HEAD, a repo with no `refs/heads/main`. A failed write
+  (`HEAD.lock` held, read-only filesystem) prints no marker, because a marker claims a repair that
+  happened.
+- **Unborn branches:** HEAD naming a branch that does not exist yet (for example `master`, about to
+  be pushed) is repointed to `main` when `main` exists. In this layout the root already holds
+  commits, and the marker discloses it.
+- **Scope of the trigger:** the heal runs when the session's cwd IS the bare root. A session
+  started inside a linked worktree never reaches the root's HEAD, so nothing is repaired until a
+  session starts at the root. The same loader is bound for Devin (`devin-dispositions.tsv`), so it
+  heals there too. Codex binds the loader from `.codex/config.toml` through
+  `git rev-parse --show-toplevel`, which fails at a bare root, so it never reaches the heal there;
+  Grok and Cursor sessions do not run this loader and get no heal.
+- **Fail-open:** the loader takes only the helper's first line and only if it starts with the
+  marker prefix, so a missing, failing, noisy or hung helper cannot inject anything or fail the
+  hook.
+- **Bootstrap order:** the bare root's copies of these files are a synced mirror, and the sync
+  itself needs a resolving HEAD. The first sync after this landed carries the loader and helper
+  to the root; if the root HEAD is already dangling at that moment, heal it once by hand
+  (`git symbolic-ref HEAD refs/heads/main`). From then on drift repairs itself.
+- **Side effect worth knowing:** with HEAD resolving again, `sync-bare-files` runs its forced
+  mirror and prune, which a dangling HEAD had been blocking. That is the point, and it also means
+  local drift in the root's legacy working tree is overwritten on the next sync.
+- **Follow-up trigger:** if the marker shows up repeatedly, something at the bare root keeps
+  moving `HEAD` (a root-level `git checkout`, `git branch -m`, or `gh pr merge --delete-branch`).
+  Only then is a guardrail blocking `git symbolic-ref HEAD` / `git branch -m` at the bare root
+  worth filing. It is deliberately not built now.
 
 ### Sharp Edges (SessionStart hook design)
 
@@ -829,6 +881,7 @@ to silence a narrow false positive is how a guard goes quietly dark.
 | `SOLEUR_SKIP_RUNBOOK_SSH_GATE=1` | `ship-runbook-ssh-gate.sh` | The `hr-no-ssh-fallback-in-runbooks` deny on runbook edits. |
 | `CLAUDE_HOOK_BYPASS=1` (+ `_REASON`) | `prod-write-defer-gate.sh` | The prod-write defer. Requires a reason and is audit-logged — see the F2 section above. |
 | `SOLEUR_DISABLE_GREP_REWRITE=1` | `grep-rewrite.sh` | The `grep()` prefix rewrite. Not a denial override — it disarms the **rewrite** disposition, restoring the ugrep shim and with it the 9.5 GB blowup (#7163). Listed here because it is the rollback lever for a hook on the hot path of every Bash call, and is read as the hook's first executable statement so it works even when the hook's own dependencies are broken. **Operator-only, and requires a session restart** — a PreToolUse hook is spawned by the `claude` process, so an inline `VAR=1 <cmd>` or an `export` from a Bash call cannot reach it (measured). An agent needing per-call escape uses `command grep`, which bypasses both the shim and this rewrite. |
+| `SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` | `plugins/soleur/hooks/destructive-command-guard.sh` | The whole guard: exits 0 with no output, as the hook's first executable statement (before any dependency probe). Exactly `1` only; empty, `0` and anything else leave it on. **Operator-only, and requires a session restart** — the hook is spawned by the `claude` process, so an inline `VAR=1 <cmd>` or an `export` from a Bash call cannot reach it. Set it in the shell that starts the session, or in a settings-level `env` block (`settings.json` `"env"`), which no Bash guard sees and which an agent that can edit a settings file can also use: this is a seatbelt, not a boundary (ADR-277, D2/D5). Hosted sessions set it through `AGENT_ENV_OVERRIDES`. |
 
 Not denial overrides, documented elsewhere in this file: `SOLEUR_DEFER_DRYRUN`
 (F2 mode switch), `SOLEUR_DISABLE_AGENT_TOKEN_TEE`, `SOLEUR_DISABLE_SKILL_LOGGER`,

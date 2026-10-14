@@ -62,4 +62,4 @@ The unifying principle: **a translation-style optimization or a routing-style op
 - Source PR: #3492 (this PR — three-change pipeline optimization for one-shot)
 - Precedent PR: #3488 (Dependabot dual-lockfile bump that motivated the optimization; routes to `deletion-dominated` post-fix because it has no new source files)
 - AGENTS.md `cq-write-failing-tests-before` carve-out for infrastructure-only changes (this PR qualified)
-- Plan: `knowledge-base/project/plans/2026-05-09-perf-one-shot-pipeline-token-cost-optimizations-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-09-perf-one-shot-pipeline-token-cost-optimizations-plan.md`

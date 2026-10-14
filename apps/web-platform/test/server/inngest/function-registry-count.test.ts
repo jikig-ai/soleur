@@ -87,6 +87,10 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
 
 const NON_INNGEST_MONITORS = new Set([
   "scheduled-terraform-drift",
+  // W3 (epic #9601, #9826): GHA-fired on its own daily `schedule:` (image-cve-scan.yml), advisory, with
+  // no Inngest cron function and therefore no SENTRY_MONITOR_SLUG. The monitor covers both a missed run
+  // and an unmeasured scan (exit 3 posts `error`).
+  "image-cve-scan",
   // #7471: GHA-fired on its own `schedule:` (scheduled-marketplace-drift.yml). It checks the
   // PUBLISHED marketplace manifest with two unauthenticated raw GETs and no product secrets, so
   // there is deliberately no Inngest cron function and therefore no SENTRY_MONITOR_SLUG — same
@@ -155,6 +159,13 @@ const NON_INNGEST_MONITORS = new Set([
   // class, deliberately NOT an Inngest function; its final sentry-heartbeat
   // step pings the check-in. Same class as scheduled-realtime-probe.
   "scheduled-zot-restart-loop",
+  // #9703: GHA-fired (scheduled-inngest-probe-heartbeat.yml, dispatched by the web
+  // watchdog clock every 15 min) — the verifier that feeds the inngest-server probe's
+  // dead-probe Better Stack heartbeat. It must stay external to Inngest scheduling: the
+  // heartbeat is the sole paging surface, so an Inngest-fired feeder would make every
+  // Inngest/web-1 outage page as "probe dark" (ADR-248 amendment 2026-10-11);
+  // no cron-*.ts counterpart. Its final sentry-heartbeat step pings the check-in.
+  "scheduled-inngest-probe-heartbeat",
   // #6374: GHA-fired (scheduled-inngest-health.yml, on.schedule '*/15') — the
   // EXTERNAL inngest health watchdog. It MUST be external to Inngest (a
   // self-hosted inngest cron cannot detect inngest being down — the #5542 blind
@@ -216,6 +227,13 @@ const NON_INNGEST_MONITORS = new Set([
   // no SENTRY_MONITOR_SLUG; the workflow's terminal sentry-heartbeat step posts
   // the check-in. Same class as scheduled-terraform-drift / main-health-monitor.
   "scheduled-supabase-watchdog",
+  // #9855: GHA-fired (scheduled-integration-suites.yml, on.schedule
+  // '30 4 * * *') — the nightly env-gated integration-suites leg's dead-man
+  // monitor. Its work is git/repo-scoped test execution on an ephemeral
+  // runner, so it has no cron-*.ts counterpart and declares no
+  // SENTRY_MONITOR_SLUG; its terminal sentry-heartbeat step posts the
+  // check-in. Same class as scheduled-realtime-probe.
+  "scheduled-integration-suites",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
@@ -244,8 +262,9 @@ describe("Inngest function registry — drift guards", () => {
   // NON_INNGEST_MONITORS like scheduled-terraform-drift).
   // 70 -> 69: cron-gh-pages-cert-state deleted (ADR-194: the origin cert it polled is abandoned).
   // 69 -> 71: cron-actions-queue-health-dispatch + cron-bot-pr-reaper (#9273/#9274).
+  // 71 -> 72: cron-merge-queue-stall-dispatch (#9482 follow-up (a)).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(71);
+    expect(routeEntries.length).toBe(72);
   });
 
   // An event function is invisible to the cron-glob guards; an unserved settle

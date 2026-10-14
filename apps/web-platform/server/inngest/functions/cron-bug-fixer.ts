@@ -750,7 +750,7 @@ export async function cronBugFixerHandler({
     // best-effort outcome for an autonomous fixer — bug-fixer has the highest
     // benign-non-zero frequency in the fleet, so its benign path MUST stay green
     // (the #4730/#4727 decoupling; H1 in
-    // knowledge-base/project/plans/2026-06-01-fix-scheduled-bug-fixer-cron-error-checkin-plan.md).
+    // knowledge-base/project/plans/archive/20261013-032858-2026-06-01-fix-scheduled-bug-fixer-cron-error-checkin-plan.md).
     // But resolveBestEffortEvalOk inspects the captured tail: a non-zero exit
     // matching a FATAL class (credit exhausted, auth/401 revoked, spawn fault,
     // AbortController timeout) now flips the monitor RED and records the scrubbed

@@ -165,7 +165,7 @@ describe("scratch-path-collision (#6486)", () => {
           `read or clobber each other's artifacts:\n` +
           offenders.map((o) => `  ${o}`).join("\n") +
           `\n\nCapture a unique path and echo it so it stays findable:\n` +
-          `  log=$(mktemp -t <name>.XXXXXXXX.log); <cmd> > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"\n` +
+          `  log=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)"); <cmd> > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"\n` +
           `Use "$(git rev-parse --absolute-git-dir)" instead when a LATER, separate Bash call\n` +
           `must find the artifact by name AND no concurrent agent shares this worktree.\n` +
           `Fix READS too — a reader left on the old path consumes a sibling's file.\n` +

@@ -1,0 +1,7 @@
+# fixture data, never executed: targeted group and name-pattern signals; six L, nothing gated
+kill -- -$pgid
+kill -TERM -"$pg"
+pkill -g "$pg"
+pkill -f "some-daemon"
+killall -q helper
+pkill -P "$$"

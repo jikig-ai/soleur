@@ -138,7 +138,9 @@ case "$1 ${2:-}" in
       ""|-*)
         stub_log doppler read "$@"
         [[ -f "$STUB_ROOT/doppler/tokens-unreadable" ]] && exit 1
-        [[ -f "$T/$proj" ]] || { echo '[]'; exit 0; }
+        # An empty list: real Doppler printed `null`, not `[]`, for a config with no tokens (observed 2026-10-03).
+        # The `tokens-null` flag selects that spelling, so the script's jq is exercised against it.
+        [[ -s "$T/$proj" ]] || { if [[ -f "$STUB_ROOT/doppler/tokens-null" ]]; then echo null; else echo '[]'; fi; exit 0; }
         awk -F'|' 'BEGIN{printf "["} {printf "%s{\"slug\":\"%s\",\"name\":\"%s\"}", (NR>1?",":""), $1, $2} END{print "]"}' "$T/$proj"; exit 0 ;;
     esac ;;
 esac
@@ -304,7 +306,7 @@ stub_world_default() {
   : > "$STUB_ROOT/doppler/project-soleur-infra-app"; : > "$STUB_ROOT/doppler/project-soleur-infra-privileged"
   printf '%s\n' "$STUB_APP_ID_VALUE" > "$STUB_ROOT/doppler/val/soleur-infra-privileged/GITHUB_INFRA_APP_ID"
   printf '%s\n' "$STUB_PEM_SENTINEL" > "$STUB_ROOT/doppler/val/soleur-infra-privileged/GITHUB_INFRA_APP_PRIVATE_KEY"
-  rm -f "$STUB_ROOT"/doppler/val/soleur-infra-app/* "$STUB_ROOT"/doppler/tokens/* "$STUB_ROOT"/gh/env-secrets-* "$STUB_ROOT/doppler/token-seq" "$STUB_ROOT/app-code" "$STUB_ROOT/doppler/download-extra" "$STUB_ROOT/gh/secret-set-fails" "$STUB_ROOT/gh/org-unreadable" "$STUB_ROOT/gh/repo-secrets.json" "$STUB_ROOT/gh/org-secrets.json" "$STUB_ROOT/doppler/tokens-unreadable"
+  rm -f "$STUB_ROOT"/doppler/val/soleur-infra-app/* "$STUB_ROOT"/doppler/tokens/* "$STUB_ROOT"/gh/env-secrets-* "$STUB_ROOT/doppler/token-seq" "$STUB_ROOT/app-code" "$STUB_ROOT/doppler/download-extra" "$STUB_ROOT/gh/secret-set-fails" "$STUB_ROOT/gh/org-unreadable" "$STUB_ROOT/gh/repo-secrets.json" "$STUB_ROOT/gh/org-secrets.json" "$STUB_ROOT/doppler/tokens-unreadable" "$STUB_ROOT/doppler/tokens-null"
   assert_fixture_dir "$STUB_LOG"
   assert_fixture_dir "$STUB_SNAP"
   # The stub App knows the hash of the real key's bytes (the value, a trailing newline, as the

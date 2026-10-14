@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The re-cut #9321 bootstrap, driven stage by stage against STUBBED vendors (ADR-264).
 #
-# knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh gives the two
+# knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh gives the two
 # App-token release jobs a Doppler credential that reads only the two soleur-infra App values: copy
 # the values into the soleur-infra-app container, prove the copy is the live App with a real RS256
 # JWT, mint the read-only service token scoped to that container, store it as the infra-privileged
@@ -45,7 +45,7 @@ PLUGIN_ROOT="$(cd "${SUITE_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${PLUGIN_ROOT}/../.." && pwd)"
 LIB="${PLUGIN_ROOT}/scripts/lib/operator-script.sh"
 HOOK="${PLUGIN_ROOT}/hooks/operator-stage-approval.sh"
-S="${REPO_ROOT}/knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+S="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -218,7 +218,7 @@ mkdir -p "$STUB_ROOT/doppler/tokens"; printf 'slug99|release-app-mint\n' >> "$ST
 OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash -c "$newc" </dev/null 2>&1)"; RC=$?
 [[ "$RC" -eq 75 && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PLAN_DRIFT stage=mint-and-store-token' <<<"$OUT"
 check "a vendor change after the approval: PLAN_DRIFT, exit 75, zero writes" $?
-ls "$XDG_STATE_HOME/soleur/approvals" | grep -qv '\.consumed$' && fail "the receipt is still live after plan drift" || pass "the receipt was burned on plan drift"
+ls "$XDG_STATE_HOME/soleur/approvals" | grep -cv >/dev/null '\.consumed$' && fail "the receipt is still live after plan drift" || pass "the receipt was burned on plan drift"
 
 echo "== failure paths keep their safety =="
 world vfail
@@ -297,8 +297,9 @@ OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" BASH_ENV="$SB/xtrace-env.sh" 
 
 echo "== the environment-secret census (G7d) still accepts the re-cut script =="
 census_out="$(cd "$REPO_ROOT" && bash tests/scripts/test-infra-privileged-tier-census.sh 2>&1)"; census_rc=$?
-# The census has many checks and some compare against the base ref (G4c reds on a branch that is merely
-# BEHIND main), so this row asserts the ONE check that reads this script line by line (G7d), by its own
+# The census has many checks and some compare against the base ref (G4c resolves the merge-base
+# since #10053 — a merely-BEHIND branch greens; only deletions relative to the fork point red), so
+# this row asserts the ONE check that reads this script line by line (G7d), by its own
 # verdict line, never the census's overall exit status.
 if grep -qE '^[[:space:]]*ok[[:space:]]+G7d' <<<"$census_out" && ! grep -qE '^[[:space:]]*FAIL[[:space:]]+G7d' <<<"$census_out"; then
   pass "census G7d (tests/scripts/test-infra-privileged-tier-census.sh) accepts the re-cut script: the store is only gh secret set --env infra-privileged"
@@ -306,7 +307,7 @@ else
   fail "census G7d did not report ok for the re-cut script (census rc ${census_rc}): $(grep -E 'G7d' <<<"$census_out" | head -2 | tr '\n' ' ')"
 fi
 grep -qE '^GH_ENVIRONMENT="infra-privileged"$' "$S"; check "GH_ENVIRONMENT=\"infra-privileged\" stays pinned on its own line, top-level" $?
-! grep -vE '^[[:space:]]*#' "$S" | grep -qE 'soleur_op_gh_secret_set|gh variable set'; check "no other store path exists in the script (no soleur_op_gh_secret_set, no gh variable set)" $?
+! grep -vE '^[[:space:]]*#' "$S" | grep -cE >/dev/null 'soleur_op_gh_secret_set|gh variable set'; check "no other store path exists in the script (no soleur_op_gh_secret_set, no gh variable set)" $?
 
 echo "== the approved flow: no child inherits the nonce, no secret on argv, the approval binds the script bytes =="
 world flow
@@ -326,7 +327,7 @@ printf '\n# edited after the plan\n' >> "$EDITED"
 OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash -c "$newc" </dev/null 2>&1)"; RC=$?
 [[ -n "$newc" && "$RC" -eq 75 && "$(mut)" -eq 0 ]]
 check "a script edited AFTER its plan and approval no longer matches (exit 75, zero writes): the approval binds the bytes (rc ${RC})" $?
-ls "$XDG_STATE_HOME/soleur/approvals" | grep -qv '\.consumed$' && fail "the receipt is still live after the edit was refused" || pass "the receipt was burned when the edited script was refused"
+ls "$XDG_STATE_HOME/soleur/approvals" | grep -cv >/dev/null '\.consumed$' && fail "the receipt is still live after the edit was refused" || pass "the receipt was burned when the edited script was refused"
 
 echo "== the live-App proof is a real JWT check, not a 200 that ignores the request =="
 world jwt
@@ -447,6 +448,7 @@ assert_fixture_dir "$STUB_ROOT"
 assert_fixture_dir "$STUB_ROOT"
 assert_fixture_dir "$STUB_ROOT"
 prop_unreadable_is_inconclusive() { S="$1"; world pm7; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/doppler/tokens-unreadable"; run --stage mint-and-store-token; [[ -z "$(digest)" ]]; }
+prop_null_token_list_is_none() { S="$1"; world pm7n; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/doppler/tokens-null"; run --stage mint-and-store-token; [[ "$RC" -eq 0 && -n "$(digest)" && "$(ops)" -ge 1 ]]; }
 prop_revoke_new_on_failed_store() { S="$1"; world pm8; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/gh/secret-set-fails"; approve mint-and-store-token >/dev/null 2>&1; [[ ! -s "$STUB_ROOT/doppler/tokens/soleur-infra-app" ]]; }
 prop_no_secret_on_argv() { S="$1"; world pm9; assert_fixture_dir "$STUB_ROOT"; approve copy-app-values >/dev/null 2>&1; ! grep -qF "$STUB_PEM_SENTINEL" "$STUB_LOG"; }
 prop_live_jwt_checked() { S="$1"; world pm10; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; run --stage prove-live-app; [[ "$RC" -eq 0 ]]; }
@@ -497,7 +499,7 @@ mutant9321() { # <label> <property-function> ; perl on stdin
   "$prop" "$dst"; rc=$?; S="$S_PRISTINE"
   if [[ "$rc" -eq 0 ]]; then fail "9321 mutant '${label}': property ${prop} stayed GREEN — no row sees the defect"; else pass "9321 mutant '${label}': property ${prop} went RED"; fi
 }
-for prop in prop_no_write_without_receipt prop_env_level_store prop_new_before_old prop_no_token_on_stdout prop_xtrace_refused prop_ready_from_vendor_state prop_unreadable_is_inconclusive prop_revoke_new_on_failed_store prop_no_secret_on_argv prop_live_jwt_checked prop_rotation_failure_keeps_stored prop_finish_rotation_no_proofs prop_missing_binary_named prop_glob_off prop_edit_after_plan_refused; do
+for prop in prop_no_write_without_receipt prop_env_level_store prop_new_before_old prop_no_token_on_stdout prop_xtrace_refused prop_ready_from_vendor_state prop_unreadable_is_inconclusive prop_null_token_list_is_none prop_revoke_new_on_failed_store prop_no_secret_on_argv prop_live_jwt_checked prop_rotation_failure_keeps_stored prop_finish_rotation_no_proofs prop_missing_binary_named prop_glob_off prop_edit_after_plan_refused; do
   "$prop" "$S_PRISTINE" && pass "control: ${prop} holds on the real script" || fail "control: ${prop} does NOT hold on the real script (the mutation rows below would be meaningless)"
 done
 S="$S_PRISTINE"
@@ -521,6 +523,9 @@ s{(read_verify\(\) \{\n  local names all name org="clear"\n)}{$1  printf 'SOLEUR
 PERL
 mutant9321 "an unreadable token list read as none" prop_unreadable_is_inconclusive <<'PERL'
 s{TP_SLUGS="\$\(token_slugs\)" \|\| return 1}{TP_SLUGS="\$(token_slugs)" \|\| true}
+PERL
+mutant9321 "the empty-token-list guard reverted (Doppler prints null)" prop_null_token_list_is_none <<'PERL'
+s{\(\. // \[\]\)\[\]}{.[]}g
 PERL
 mutant9321 "a failed store leaves the new token live" prop_revoke_new_on_failed_store <<'PERL'
 s{(      soleur_op_red "  storing \$\{ENV_SECRET\} failed; the new token was revoked)}{      :\n$1}; s{(  if ! printf '%s' "\$tokval" \| gh secret set[^\n]*\n    unset tokval\n    if )revoke_confirmed "\$new_slug"}{$1false}
@@ -562,8 +567,9 @@ before="$FAIL_COUNT"
 if [[ "$FAIL_COUNT" -eq $((before + 1)) ]]; then FAIL_COUNT="$before"; pass "instrument self-test: check() moves the failure count on a known-false condition"; else fail "instrument self-test: check() did not register a known-false condition"; fi
 
 # --- floor (reported directly: ADR-193) --------------------------------------------------------------
+# 117 -> 120 (#9321 PR-2 review, 2026-10-04): the null-token-list control and its mutation row (landed + RED). Measured: 120 ran.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=117
+FLOOR=120
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"

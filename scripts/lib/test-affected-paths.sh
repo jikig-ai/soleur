@@ -32,13 +32,25 @@
 #     coverage) and the census linter flags it RED. Never leave a suite
 #     unclassified on purpose; never classify it wrong to silence the census.
 #
-# AN ENTRY IS A PATH OR A DIRECTORY PREFIX. A trailing "/" denotes a directory
-# prefix match; anything else is a literal path. Keep entries repo-relative.
-# Matching is ANCHORED (#9307): a directory entry selects a suite only when a
-# diff path STARTS with it, a file entry only when a diff path EQUALS it, and a
-# directory written without the trailing "/" is normalised to one. So `test/`
-# does not match `apps/web-platform/test/x.ts` or `specs/feat-x-test-y/spec.md`.
-# Entries rooted at `.` or `..` keep the legacy substring match.
+# AN ENTRY IS A PATH, A DIRECTORY PREFIX, OR A `glob:` PATTERN. A trailing "/"
+# denotes a directory prefix match; anything else is a literal path — except
+# `glob:<literal-head>/<glob-tail>` (#9813), the extension-aware edge for
+# corpus walkers: a diff line under <literal-head> matching <glob-tail> under
+# bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers
+# `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike). `glob:` is
+# DECLARED-ARRAY-ONLY: the token extractors never emit it on purpose (a
+# `glob:`-spelled literal in scanned content still hits the same mint arm —
+# widen-only). The relevance arrays DO stay verbatim substring edges — a
+# `glob:` member there is a dead edge the relevance census catches.
+# Malformed entries fail toward coverage: they mint an always-match
+# `^glob:<verbatim>` edge (the malformed-shape invariant — closed charset +
+# repo-relative head — in scripts/test-all.sh _affected_add_edge), and the
+# census linter flags them statically. Keep entries repo-relative. Matching is ANCHORED (#9307): a directory entry
+# selects a suite only when a diff path STARTS with it, a file entry only
+# when a diff path EQUALS it, and a directory written without the trailing
+# "/" is normalised to one. So `test/` does not match
+# `apps/web-platform/test/x.ts` or `specs/feat-x-test-y/spec.md`. Entries
+# rooted at `.` or `..` keep the legacy substring match.
 #
 # BASH 3.2. No `declare -A`. The runner indexes selection by registration
 # ORDINAL and resolves per-label arrays by name (`eval`/indirection idiom).
@@ -48,7 +60,11 @@
 # is the dangerous edit, and it must select the suites it could blind. And this
 # file itself, like scripts/test-all.sh, is a runner/index self-edge: a diff
 # touching either degrades the gate to full (runner-changed), so no declaration
-# here can silently shrink what it would have run.
+# here can silently shrink what it would have run. The one exception is a REGISTRATION-ONLY
+# runner diff (nothing but new single-line run_suite registrations for new suites, ADR-242
+# decision 20): it takes the bounded selection, together with, for each suite that same diff
+# registers, its own AFFECTED_*_PATHS block and ALWAYS_ON_SUITES entry. Any other hunk in THIS file
+# still degrades to full.
 
 # CLOSURE LEAVES (ADR-242 decision 18). The derive follows what a file's text NAMES (invocation
 # and $VAR/path tokens) as well as what it sources; for these two files the names are the whole
@@ -92,6 +108,9 @@ ALWAYS_ON_SUITES=(
   "apps/web-platform/scripts/seed-live-verify-user.test.sh"
   "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh"
   "scripts/assert-dependabot-drain-live"
+  # #8875: the emitter-selection census walks the whole tracked tree — repo-global by
+  # construction (git ls-files + per-file comment-stripped invocation discovery).
+  "scripts/betterstack-emitter-read-live"
   "scripts/followthrough-varq-ban-live"
   "scripts/inngest-liveness-classify"
   "scripts/lint-agents-compound-sync-live"
@@ -99,13 +118,14 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-anthropic-content-position-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
+  "scripts/lint-gh-argv-arg-live"
   "scripts/lint-guard-contract-live"
+  "scripts/lint-integration-env-gates-live"
   "scripts/lint-legal-mirror-drift-baseline-live"
   "scripts/lint-legal-registers-live"
   "scripts/lint-legal-scope-block-placement-live"
   "scripts/lint-migrated-rule-ids-live"
   "scripts/lint-rule-bodies-live"
-  "scripts/lint-shell-capture-exit-live"
   "scripts/lint-window-closure-assertion-live"
   "scripts/lint-workflow-errexit-capture-live"
   "scripts/lint-workflow-install-sites-live"
@@ -113,7 +133,6 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-step-env-refs-live"
   "scripts/review-reminder-liveness"
   "scripts/watch-live-verify-pass"
-  "tests/scripts/sentry-alert-live-fidelity"
   # live-scanner batteries named for the gates they probe (#8384 landed these)
   "scripts/cosign-verify-live-8037"
   "scripts/generate-kb-index-live"
@@ -122,32 +141,20 @@ ALWAYS_ON_SUITES=(
   # Verdicts assert properties of the runner itself or of the whole
   # registration set — both invisible to any file-based selection.
   "scripts/test-all-capacity-signal"
-  "scripts/test-all-enumerate-toolchain"
-  "scripts/test-all-infra-coverage-notice"
-  "scripts/test-all-killed-classification"
   # #8993/#8940's run-path watchdog + durable-log battery — a runner-SUT
   # property suite like its killed-classification sibling.
-  "scripts/test-all-orphan-log-retention"
-  "scripts/test-all-runtime-ceiling"
   "scripts/test-all-webplat-gate"
   # scripts/test-all-affected is NOT here: ADR-262 withdrew it (see AFFECTED_CONSUMED_EDGES). Its
   # verdict is computed on sandbox copies of named files, not on the live tree.
   # #8591's TEST_GROUP=affected mutation suite — a runner-SUT property battery
   # like its sibling above; renamed out of the add/add collision with #8322's.
   "scripts/test-all-group-affected"
-  "scripts/test-contention"
   "scripts/suite-exit-class-parity"
-  "scripts/battery-tag-authorship"
-  "scripts/test-all-pr-battery-gate"
-  "scripts/lint-orphan-test-suites"
   # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected,
   # battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864).
   # Each is a mutation battery over a NAMED set of files, run on sandbox copies, so its edge set is
   # a declared array (AFFECTED_CONSUMED_EDGES) and not "the whole tree". Their SUBJECTS stay here.
-  "plugins/soleur/test/fanout-suite-scope.test.sh"
-  "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"
-  "plugins/soleur/test/scripts-shard-totality.test.sh"
 
   # --- corpus linters: verdict spans a file class scanned wholesale -------------
   # A ratchet counts a property across the whole tree and references nothing —
@@ -163,12 +170,9 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-legal-scope-block-placement-unit"
   "scripts/lint-migrated-rule-ids-unit"
   "scripts/lint-shell-capture-exit"
-  "scripts/lint-shell-trace-credential-refusal"
   "scripts/lint-shell-trace-credential-refusal-repo"
   "scripts/lint-supabase-deprecated-endpoints-unit"
-  "scripts/lint-trap-tempfile-ownership"
   "scripts/lint-workflow-errexit-capture"
-  "scripts/lint-workflow-install-sites"
   "scripts/lint-workflow-issue-write-scope"
   "scripts/lint-workflow-step-env-refs"
   "plugins/soleur/test/lint-bot-synthetic-completeness.test.sh"
@@ -180,47 +184,37 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/debug-probe-residue.test.sh"
   # operator-script's property is discovered, not enumerated: it greps the whole
   # tree for `lib/operator-script.sh` sourcers and asserts the no-secret-leak
-  # property over each. A diff adding a consumer anywhere must re-run it —
-  # scoping to the lib's own path would decline exactly that diff.
-  "plugins/soleur/test/operator-script.test.sh"
+  # property over each. #9763 demoted all three operator suites below to
+  # edge-selection with declared scopes covering every dir that holds *.sh
+  # (including knowledge-base/ — generated operator scripts ship under
+  # knowledge-base/project/specs/): a diff adding a consumer in one of those
+  # dirs still re-runs them, while an unrelated diff no longer pays ~220 s.
   # operator-ack-guard (#8486): Guard 1 censuses every tracked *.sh for raw typed-yes
   # prompts and confirm-skip flags, and Guard 2's population is every
-  # soleur_op_ack_or_die caller in the tree. A diff adding a prompt or an ack caller
-  # anywhere must re-run it — scoping to the scripts it names would decline that diff.
-  "plugins/soleur/test/operator-ack-guard.test.sh"
+  # soleur_op_ack_or_die caller in the tree — covered by the same shell-dir edges.
   # operator-agent-runnable (ADR-264): Guard 1 DISCOVERS every generated operator script in the tree
-  # (git grep over file content) and drives each stage with no TTY, so a diff adding or editing a
-  # generated script anywhere must re-run it. A file edge cannot express "every file carrying a
-  # header", which is why this one is always-on. operator-stage-approval-hook (derived edge: every
+  # (git grep over file content) — its declared edge covers knowledge-base/ where
+  # generated scripts ship. operator-stage-approval-hook (derived edge: every
   # diff under plugins/soleur) and operator-9321-stages (declared edge below) are scoped, not
   # always-on: measured ~85 CPU-s that an unrelated web-platform or docs diff does not need to pay.
-  "plugins/soleur/test/operator-agent-runnable.test.sh"
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
 
   # --- whole-corpus guards, drift checks, parity and census gates ---------------
-  "scripts/guard-vacuity-floor"
   "scripts/ensure-kb-index"
   "plugins/soleur/test/kb-caches-untracked.test.sh"
   # (#8846) census of every tracked inngest probe-row reader over git ls-files.
-  "scripts/lib/inngest-probe-row.test.sh"
-  "scripts/check-cloudflare-token-drift"
-  "scripts/devin-docs-drift-check"
   "scripts/marketplace-drift-check"
-  "scripts/prod-version-drift-check"
   "scripts/digest-oracle-guard"
   "scripts/follow-through-closure-guard"
   "scripts/followthrough-exec-bit"
-  "scripts/followthrough-varq-ban"
   "scripts/alarm-issue-filing-guard"
   "scripts/battery-ref-guard"
   "scripts/betterstack-assert-absence"
   "scripts/betterstack-ingest-parity"
   "scripts/rule-metrics-aggregate"
   "scripts/skill-freshness-aggregate"
-  "scripts/sweep-followthroughs"
   # #8563's Tier-B credential census — a repo-global property census over every
   # workflow + Terraform tier declaration; no diff-scoped edge can reach it.
-  "tests/scripts/infra-privileged-tier-census"
   "scripts/cron-artifact-age"
   "scripts/rename-guard"
   "scripts/assert-dependabot-drain-unit"
@@ -235,10 +229,7 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/c4-count-parity.test.sh"
   "plugins/soleur/test/workflow-run-deploy-invariants.test.sh"
   "plugins/soleur/test/reusable-release-caller-permissions.test.sh"
-  "plugins/soleur/test/fixture-env-adoption.test.sh"
-  "plugins/soleur/test/fixture-dir-operand-assert.test.sh"
   "plugins/soleur/test/gitleaks-merge-commit.test.sh"
-  "plugins/soleur/test/hook-input-classification-mutation.test.sh"
   "plugins/soleur/skills/eval-harness/test/registry-completeness.test.sh"
   "apps/web-platform/scripts/assert-byok-rules-exist.test.sh"
   ".claude/hooks/hookeventname-coverage.test.sh"
@@ -260,12 +251,11 @@ ALWAYS_ON_SUITES=(
   # --- the never-gated web-platform arm -----------------------------------------
   # repo-wide's subject is the repository by construction (#7498); component
   # runs alongside it by a measured, twice-affirmed decision (#7666 revert).
-  "apps/web-platform [repo-wide+component]"
   # --- re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh) ---------------
   # Each was demoted on one inotify run in PR 1; the committed recorder (verdict `disqualified`:
   # a file test/stat/ls/find operand it cannot resolve or a carried-disqualifier hit, or `uncovered`:
   # reads outside the cover) no longer supports the demotion. Always-on is the safe side of every
-  # verdict. Evidence per suite: knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 2".
+  # verdict. Evidence per suite: knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md "Round 2".
   "scripts/lint-agents-rule-budget-live"
   "scripts/lint-agents-rule-budget-unit"
   "scripts/lint-workflow-run-body-syntax"
@@ -281,14 +271,14 @@ ALWAYS_ON_SUITES=(
   "scripts/check-pa-22-unit"
   "scripts/check-pa-22-live"
   "scripts/frontmatter-strip-parity"
-  "plugins/soleur/test/gitleaks-rules.test.sh"
   "plugins/soleur/test/terraform-drift-step-order.test.sh"
   "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
   # --- A5 hedge (#9307 PR-C): the runner stopped being a closure leaf for text mentions and this suite lost 726 of
-  # its 736 derived edges; the recorder could not produce evidence for it (57 of 145 assertions fail under env -i
-  # with no network). 10.5 s of suite time (suite-durations.tsv) buys not having to guess which of the 726 it
-  # read. Evidence: always-on-audit.md "Round 3".
-  "scripts/orphan-process-reaper"
+  # its 736 derived edges. Its demote verdict is `disqualified` on the recorder's own rule (unresolved probe operands,
+  # git-other and clock-epoch regex hits), so it stays hedged: 10.5 s of suite time (suite-durations.tsv) buys not having
+  # to guess which of the 726 it read. The earlier explanation ("57 of 145 assertions fail under env -i with no network")
+  # was disproved on 2026-10-04: the recorder ran suites as namespace-root and this suite refuses a privileged caller;
+  # as the invoking user it passes 148/0. Evidence: always-on-audit.md "Round 3" and the 2026-10-04 addendum.
   # --- Round 3 re-check with the contamination fix (review of PR 9422, always-on-audit.md "Round 3 re-check"). The first recorder
   # runs reported the first window of every run as `contaminated` (tracked-but-gitignored files made the private checkout look dirty), so
   # the "unreliable" rows were an artifact. Re-run: these two are `uncovered` (reads outside their cover) and go back; the four after them
@@ -298,8 +288,21 @@ ALWAYS_ON_SUITES=(
   "scripts/check-tom4-rls-posture"
   "plugins/soleur/test/worktree-manager-atomic-config.test.sh"
   "plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh"
-  "plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh"
-  "tests/scripts/scratch-session"
+  # --- Round 4 (section 2 of #9307; measurements and cost in always-on-audit.md, 2026-10-04 addendum). The recorder,
+  # now running suites as the invoking user, recorded this suite completely and its read set is the registration corpus
+  # itself: no short declaration bounds it, and the knowledge-base tree (read through `git ls-files`, invisible to
+  # inotify) is a second input. Hedged rather than declared; revisit trigger in ADR-242 decision 19.
+
+  "scripts/test-all-fast-tier-budget"
+  # #9814: the local weight-drift detector — its verdict asserts properties of
+  # the runner's own wiring (default arm, epilogue emit), a runner-SUT property
+  # suite like its sibling above.
+  "scripts/test-all-weight-drift"
+  # --- #9763 withdrawn-to-edge-selection (committed weight >10s): these run on CI legs,
+  # merge_group, push and --full like every registered suite, and locally only when their
+  # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
+  # fast-tier budget lint (scripts/test-all-fast-tier-budget) pins this set.
+
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -314,6 +317,11 @@ AFFECTED_CONSUMED_EDGES=(
   "plugins/soleur/test/c4-from-components.test.sh|C4_PRODUCER_PATHS"
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
   "apps/web-platform [unit]|WEBPLAT_APP_PATHS"
+  # Same consumed edge as [unit]: the bundle's app-local half (component) is
+  # subject to the app, and repo-wide is the ungated sibling — post-#9815 its
+  # argv no longer mentions apps/web-platform directly (it execs the wrapper),
+  # so the derivation channel reads only the wrapper's own file.
+  "apps/web-platform [repo-wide+component]|WEBPLAT_APP_PATHS"
   # The infra runner maps to AFFECTED_INFRA_RUNNER_PATHS (declared just below,
   # in THIS lib — the consumed mapping mechanism does not care which file owns
   # the array). Its edges are the same two predicates _infra_in_diff checks.
@@ -361,7 +369,32 @@ AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(
 AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS=(
   ".github/workflows/apply-github-infra.yml"
   ".github/actions/mint-infra-app-token/"
+  "scripts/verify-ruleset-required-checks.sh"             # #9362: the gate it drives
+  "scripts/lib/canonicalize-required-status-checks.sh"    # #9362: the projection the gate shares
+  "scripts/ci-required-ruleset-canonical-required-status-checks.json"      # #9362: gate input
+  "scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"  # #9362: gate input
+  "tests/scripts/fixtures/tfplan-real-ruleset-baseline.json"               # #9362: the real plan capture the rows are built from
+  ".github/actions/infra-credentials/"                    # #9362: the loader that supplies every Terraform input the apply now takes
+  "infra/github/"                                         # #9362: the rulesets the gated addresses must cover (G2c)
   "tests/scripts/test-apply-github-infra-mint-shape.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
+)
+
+# apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh (#9756) — a corpus walker: its set-identity rows read every
+# shell file under apps/cla-evidence for a curl that carries `--aws-sigv4` or `-u`/`--user`, so any shell edit
+# there is its subject (the glob edge), not only the helper it is named for.
+AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS__R2_SIGV4_CURL_TEST_SH_PATHS=(
+  "glob:apps/cla-evidence/**.sh"
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
+)
+
+# apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh (#9756) — executes the real infra/bootstrap.sh (named only
+# through a script-dir-relative cd, which no derivation channel reaches) with the helper and the two scripts it sources.
+AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS_BOOTSTRAP_R2_PROBE_TEST_SH_PATHS=(
+  "apps/cla-evidence/infra/bootstrap.sh"
+  "apps/cla-evidence/scripts/_r2-sigv4-curl.sh"
+  "apps/cla-evidence/scripts/_cf-admin-token.sh"
+  "apps/cla-evidence/scripts/_r2-endpoint.sh"
   "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )
 
@@ -444,10 +477,12 @@ AFFECTED_TEST_CONTENT_PUBLISHER_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 # scripts/test-affected-kb-consumers (#9307) — the dropped-consumer ratchet for the demotions
-# below. Declared rather than always-on: one run costs a full `--print-selection` walk (~11 min
-# of derive today), so it is selected when its own inputs change and always runs under CI's full
-# battery, which is where a knowledge-base read added to some OTHER suite is caught.
+# below. #9763 withdrew it from ALWAYS_ON: its read set is the registration corpus itself PLUS the
+# knowledge-base/ tree (the ADR-242 decision-19 hedge was "unbounded kb reads"), so knowledge-base/
+# is declared here — a kb diff selects it like the corpus inputs do. This array is RETAINED for
+# pre-push-ratchet-lane arm 21, which pins the lane's KB_CONSUMERS_INPUTS to it; do not delete it.
 AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
+  "knowledge-base/"
   "scripts/test-affected-kb-consumers.test.sh"
   "scripts/test-affected-kb-consumers.baseline.txt"
   "scripts/test-all.sh"
@@ -460,6 +495,17 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
 AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_PATHS=(
   "scripts/test-affected-derive.test.sh"
   "scripts/affected-prepass-bench.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+# scripts/test-affected-derive-cache (#9812) — the cross-run derive cache lib and its runner
+# integration. Declared rather than always-on for the same reason as its sibling: the SUT is the
+# cache lib plus the runner's derive span (extracted by content anchor), and nothing else can move
+# its verdict. test-all.sh is a closure leaf, so a lib-only diff reaches this suite ONLY through
+# this declaration.
+AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_CACHE_PATHS=(
+  "scripts/test-affected-derive-cache.test.sh"
+  "scripts/lib/test-affected-derive-cache.sh"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -494,12 +540,14 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.ts"
   "scripts/lib/test-affected-paths.sh"
 )
-# ALWAYS-ON AUDIT DEMOTIONS (#9307). Each suite below left ALWAYS_ON_SUITES because its
+# ALWAYS-ON AUDIT DEMOTIONS (#9307). (Every demotion below was recorded BEFORE the recorder stamped an identity, i.e.
+# under idmap=root; they stand as a deliberate exception until the next edit to the suite's edge array, see ADR-242 decision 19. A skipped arm prints SKIP and
+# rates its row unreliable; a silent skip is the residual risk.) Each suite below left ALWAYS_ON_SUITES because its
 # OBSERVED reads are confined to the paths declared here: it ran serially under an inotify
 # open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its
 # edge set is the cover of what it opened -- a directory whose listing mattered, otherwise
 # the exact files. The evidence per suite is in
-# knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md; a suite
+# knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md; a suite
 # is added here only with that evidence (the census linter does not check that), and the
 # dropped-consumer ratchet (scripts/test-affected-kb-consumers.test.sh) covers
 # knowledge-base/ reads ONLY. A demotion also moves the suite from a free always-on skip to a
@@ -529,6 +577,18 @@ AFFECTED_APPS_WEB_PLATFORM_TEST_PARSE_GITLEAKS_ALLOWLISTS_PATHS=(
   "apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# vitest-related (#9815) — suite, wrapper, the runner arm it guards, the lib whose
+# functions+META it exercises, and the config the META derivation reads. The meta
+# set's members outside the app are listed too: a commit narrowing the predicate
+# must run the suite the predicate gates (self-inclusion convention).
+AFFECTED_APPS_WEB_PLATFORM_TEST_VITEST_RELATED_PATHS=(
+  "apps/web-platform/scripts/vitest-related.sh"
+  "apps/web-platform/test/vitest-related.test.sh"
+  "apps/web-platform/vitest.config.ts"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
   "plugins/soleur/hooks/hooks.json"
   "plugins/soleur/hooks/operator-stage-approval.sh"
@@ -539,7 +599,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
-  "knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+  "knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
   "plugins/soleur/hooks/operator-stage-approval.sh"
   "plugins/soleur/scripts/lib/operator-script.sh"
   "plugins/soleur/test/lib/operator-stub-world.sh"
@@ -554,6 +614,17 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
   "plugins/soleur/skills/incident/test/redact-sentinel.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# plugins/soleur/test/web-host-escrow-diagnose-workflow (#9377) — reads the workflow, both runbooks and the two escrow scripts
+# through $REPO-built paths no derivation channel reaches, so a later edit to any of them must still select this guard.
+AFFECTED_PLUGINS_SOLEUR_TEST_WEB_HOST_ESCROW_DIAGNOSE_WORKFLOW_TEST_SH_PATHS=(
+  ".github/workflows/web-host-escrow-diagnose.yml"
+  "scripts/web-host-escrow-preflight.sh"
+  "scripts/check-web-host-escrow-config.sh"
+  "knowledge-base/engineering/operations/runbooks/web-host-birth.md"
+  "knowledge-base/engineering/operations/runbooks/web-host-replace.md"
+  "plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                              # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_PROC_TEST_SH_PATHS=(
   "plugins/soleur/scripts/lib/proc.sh"
   "plugins/soleur/test/proc.test.sh"
@@ -561,6 +632,22 @@ AFFECTED_PLUGINS_SOLEUR_TEST_PROC_TEST_SH_PATHS=(
   "scripts/lib/scratch-root.sh"
   "scripts/lib/test-contention.sh"
   "scripts/lib/test-affected-paths.sh"
+)
+# plugins/soleur/test/test-pyramid-fixtures.test.sh — pins the fixture pair AND the
+# `## Pyramid & Fast-Feedback Check` vocabulary in the agent body; name-stem derivation
+# reaches neither, so both are declared edges here. The four restatement files are
+# drift-pinned too, so their edits re-select this suite; test-helpers.sh is declared
+# explicitly even though derivation reaches it (chokepoint of the whole suite).
+AFFECTED_PLUGINS_SOLEUR_TEST_TEST_PYRAMID_FIXTURES_TEST_SH_PATHS=(
+  "plugins/soleur/agents/engineering/review/test-design-reviewer.md"
+  "plugins/soleur/skills/review/SKILL.md"
+  "plugins/soleur/skills/review/workflows/review.workflow.js"
+  "plugins/soleur/skills/plan/references/plan-issue-templates.md"
+  "plugins/soleur/skills/work/SKILL.md"
+  "plugins/soleur/test/fixtures/test-pyramid/"
+  "plugins/soleur/test/test-helpers.sh"
+  "plugins/soleur/test/test-pyramid-fixtures.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"
@@ -608,7 +695,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "knowledge-base/legal/recommended-tools.md"
   "knowledge-base/marketing/brand-guide.md"
   "knowledge-base/overview/vision.md"
-  "knowledge-base/project/specs/feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
+  "knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
@@ -616,6 +703,14 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
 # is the subject; the python reader is data to the test that drives it. Added after the
 # demotions above so a rebase over a sibling registration does not move an unrelated array.
 AFFECTED_SCRIPTS_AUDIT_SUITE_READS_PATHS=(
+  # the five file reads the 2026-10-04 recording found outside the old cover: the suite's one real-runner enumerate
+  # (`test-all.sh --enumerate-commands all` under env -i) reads them. The 3,185 directory listings of that same walk are
+  # NOT declared: the suite asserts only `>= 400` registrations, so a listing cannot move its verdict.
+  ".bun-version"
+  ".gitignore"
+  "apps/web-platform/.gitignore"
+  "apps/web-platform/infra/.gitignore"
+  "apps/web-platform/supabase/.gitignore"
   "scripts/audit-suite-reads.sh"
   "scripts/audit-suite-reads.test.sh"
   "scripts/lib/inotify-open-recorder.py"
@@ -624,7 +719,7 @@ AFFECTED_SCRIPTS_AUDIT_SUITE_READS_PATHS=(
 
 # ---------------------------------------------------------------------------
 # CLOSURE-LEAF RUNTIME READS (A5). Per-label arrays over the shared sets above; the recorder evidence is in
-# knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 3".
+# knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md "Round 3".
 # ---------------------------------------------------------------------------
 AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_BARE_SYNC_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
@@ -838,6 +933,65 @@ AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
   "tests/scripts/test-betterstack-roundtrip-latency.sh"
 )
 
+# tests/scripts/argv-bearer-sweep (#7843) — derived edges could not reach its subject: the population is
+# DISCOVERED (every tracked scripts/followthroughs probe holding a credentialed curl, run under a PATH-shim
+# curl), so the edge is the directory prefix, and the rows are keyed off the Rule E baseline.
+AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
+  "scripts/followthroughs/"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
+  # S2 (#9597): the suite pins the sentences these records carry about the converted surfaces.
+  "knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md"
+  "knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md"
+  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  "knowledge-base/engineering/operations/runbooks/inngest-server.md"
+  "knowledge-base/legal/article-30-register.md"
+  # S3 (ADR-280): the S3 stage derives its population from the workflow and composite step texts and
+  # executes the representative `run:` bodies, so an edit to any of them (or to the library) must select it.
+  "scripts/lib/bearer-curl.sh"
+  ".github/actions/anthropic-preflight/"
+  ".github/actions/notify-ops-email/"
+  ".github/workflows/board-status-sync.yml"
+  ".github/workflows/canary-status.yml"
+  ".github/workflows/git-data-cutover.yml"
+  ".github/workflows/git-data-rung2-rehearsal.yml"
+  ".github/workflows/kb-drift-walker.yml"
+  ".github/workflows/rule-audit.yml"
+  ".github/workflows/scheduled-inngest-health.yml"
+  ".github/workflows/scheduled-prod-version-drift.yml"
+  ".github/workflows/scheduled-terraform-drift.yml"
+  ".github/workflows/sentry-audit-gate.yml"
+  # S4 (ADR-280): the S4 stage executes the REAL step bodies and scripts it names (extracted from the YAML, run under a
+  # recording curl) and derives the library-user manifest from the tree, so an edit to any consumer must select it.
+  # The repo-wide HMAC census rides the full run: no edge can name "any tracked file".
+  ".github/actions/dispatch-web-redeploy/"
+  ".github/actions/mint-infra-app-token/"
+  ".github/scripts/bump-inngest-bootstrap-pin.sh"
+  ".github/workflows/apply-deploy-pipeline-fix.yml"
+  ".github/workflows/apply-github-infra.yml"
+  ".github/workflows/apply-inngest-rls.yml"
+  ".github/workflows/deploy-inngest-image.yml"
+  ".github/workflows/restart-inngest-server.yml"
+  ".github/workflows/web-platform-release.yml"
+  ".github/workflows/workspaces-luks-cutover.yml"
+  "apps/web-platform/infra/infra-config-apply.sh"
+  "apps/web-platform/infra/infra-config-gate.sh"
+  "apps/web-platform/infra/infra-config-verify.sh"
+  "apps/web-platform/infra/push-infra-config.sh"
+  "apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"
+  "apps/web-platform/scripts/github-app-key-status.sh"
+  # The census allow-list and the parity audit pin the cutover script (two held-back argv HMAC arms, 17 converted copies); the live
+  # lint row runs the checkout lint on the real tree; the redeploy row sources the seccomp alert emitter and hashes the profile.
+  "scripts/cutover-inngest.sh"
+  "scripts/lint-workflow-local-action-checkout.py"
+  "scripts/seccomp-unenforced-alert.sh"
+  "apps/web-platform/infra/seccomp-bwrap.json"
+  "scripts/inngest-liveness-classify.sh"
+  "scripts/inngest-restart-poll-classify.sh"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/postmerge/references/deploy-status-debugging.md"
+)
+
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_RULE_ID_REGEX_PARITY_PATHS=(
@@ -883,7 +1037,7 @@ AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_GITHUB_PATHS=(
 AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_SENTRY_PATHS=(
   ".github/workflows/apply-sentry-infra.yml"
   "apps/web-platform/infra/sentry"
-  "knowledge-base/project/specs/fix-7650-sentry-alert-migration/"
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-destroy-counts.sh"
   "tests/scripts/fixtures"
@@ -1012,7 +1166,7 @@ AFFECTED_TESTS_SCRIPTS_SENTRY_AC17_DERIVED_COUNTS_PATHS=(
 # tests/scripts/sentry-alert-drift-workflow — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_DRIFT_WORKFLOW_PATHS=(
-  "knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
   "scripts/alarm-issue-filing-guard.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-alert-live-fidelity.sh"
@@ -1045,6 +1199,67 @@ AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/skill-security-scan-step-body.test.sh"
+)
+
+# scripts/secret-scan-smoke-gate (#9727, ADR-276 S1) — the suite extracts the smoke-relevance step body and the
+# smoke-tests job from the workflow, reads scripts/required-checks.txt and the canonical required-checks ruleset JSON,
+# and sweeps every tracked file (git ls-files) through the body; declared from the repo paths its suite file names
+# (a directory entry carries a trailing slash). The runbook is named as text and as a subject operand, not read; the
+# edge is the conservative cover for the kb-consumer ratchet, since SUBJECT_RE lists that exact path.
+AFFECTED_SCRIPTS_SECRET_SCAN_SMOKE_GATE_PATHS=(
+  ".github/workflows/secret-scan.yml"
+  ".gitleaks.toml"
+  "apps/web-platform/scripts/"
+  "knowledge-base/engineering/operations/secret-scanning.md"
+  "scripts/ci-required-ruleset-canonical-required-status-checks.json"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/required-checks.txt"
+  "scripts/secret-scan-smoke-gate.test.sh"
+)
+
+# scripts/learning-retrieval-bench — the suite runs the bench script's own --self-test once, as a subprocess, under a
+# hostile environment; the subject is the script, and the suite file is its own edge.
+AFFECTED_SCRIPTS_LEARNING_RETRIEVAL_BENCH_PATHS=(
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/learning-retrieval-bench.sh"
+  "scripts/learning-retrieval-bench.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/ci-push-dedupe (#9512, ADR-276 S2) — the suite extracts the push-dedupe proof step from ci.yml and executes it,
+# parses the eight gated conditions and pins the test aggregator; the only repo file it reads is the workflow. Declared
+# from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that drives its floor).
+AFFECTED_SCRIPTS_CI_PUSH_DEDUPE_PATHS=(
+  ".github/workflows/ci.yml"
+  "scripts/ci-push-dedupe.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/ci-draft-light (#9728, ADR-276 S3) — the suite extracts the draft-light step, the four gated conditions and the test
+# aggregator's draft arm from ci.yml and executes them; it also reads the required-check name sources it pins the gated set against.
+# Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that drives its floor).
+AFFECTED_SCRIPTS_CI_DRAFT_LIGHT_PATHS=(
+  ".github/workflows/ci.yml"
+  ".github/actions/bot-pr-with-synthetic-checks/action.yml"
+  "apps/web-platform/server/inngest/functions/_cron-safe-commit.ts"
+  "infra/github/ruleset-ci-required.tf"
+  "scripts/ci-draft-light.test.sh"
+  "scripts/ci-required-ruleset-canonical-required-status-checks.json"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/required-checks.txt"
+)
+
+# plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
+# ci.yml, executes the classifier script, and sweeps every workflow for the falsy-middle ternary shape, so the one corpus it walks
+# is .github/workflows. Declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_SHARD_TOTALITY_SKIP_TEST_SH_PATHS=(
+  ".github/workflows"
+  "plugins/soleur/test/ci-shard-totality-skip.test.sh"
+  "scripts/ci-shard-totality-classify.sh"
+  "scripts/lib/test-affected-paths.sh"
 )
 
 # plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh (#8631, ADR-235) — its corpus
@@ -1119,6 +1334,18 @@ AFFECTED_PLUGINS_SOLEUR_TEST_FLAG_DETACH_SHARED_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/flagsmith-stdin-config.test.sh — extracts the shipped `_bearer_ok` + `fs_api` text out of each
+# Flagsmith operator script at run time, so no derived import edge reaches its subjects; declared from the four
+# scripts it names.
+AFFECTED_PLUGINS_SOLEUR_TEST_FLAGSMITH_STDIN_CONFIG_TEST_SH_PATHS=(
+  "plugins/soleur/skills/flag-create/scripts/create.sh"
+  "plugins/soleur/skills/flag-delete/scripts/delete.sh"
+  "plugins/soleur/skills/flag-list/scripts/list.sh"
+  "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+  "plugins/soleur/test/flagsmith-stdin-config.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/flag-org-scoping-pr2.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_FLAG_ORG_SCOPING_PR2_TEST_SH_PATHS=(
@@ -1139,9 +1366,11 @@ AFFECTED_PLUGINS_SOLEUR_TEST_GIT_FIXTURE_ENV_SHELL_TEST_SH_PATHS=(
 # plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_HEARTBEAT_RECONCILE_ISSUE_STEP_TEST_SH_PATHS=(
+  ".github/actions/notify-ops-email/action.yml"
   ".github/workflows/scheduled-terraform-drift.yml"
   "plugins/soleur/lib/heartbeat-live-reconcile.ts"
   "plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh"
+  "scripts/lib/bearer-curl.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -1168,6 +1397,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_MACHINERY_DRAIN_FLOOR_TEST_SH_PATHS=(
   ".github/workflows/scheduled-machinery-drain.yml"
   "plugins/soleur/skills/drain-labeled-backlog/SKILL.md"
   "plugins/soleur/test/machinery-drain-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/claude-code-action-auth.test.sh — a census over every workflow file; any
+# new or edited workflow under .github/workflows/ can add a consumer (or strip a token path), so
+# the directory prefix is the edge. Derived edges reach none of the workflow subjects.
+AFFECTED_PLUGINS_SOLEUR_TEST_CLAUDE_CODE_ACTION_AUTH_TEST_SH_PATHS=(
+  ".github/workflows/"
+  "plugins/soleur/test/claude-code-action-auth.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -1298,7 +1536,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
 # plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_CREATE_FROM_ORIGIN_MAIN_TEST_SH_PATHS=(
-  "knowledge-base/project/plans/2026-05-14-fix-worktree-create-from-origin-main-plan.md"
+  "knowledge-base/project/plans/archive/20261013-014038-2026-05-14-fix-worktree-create-from-origin-main-plan.md"
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1331,7 +1569,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_NO_REPO_FAIL_LOUD_TEST_SH_PATHS
 # plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_ORPHAN_REAPER_HONEST_COUNT_TEST_SH_PATHS=(
-  "knowledge-base/project/plans/2026-07-31-fix-honest-failure-reporting-hook-timeout-and-orphan-reaper-plan.md"
+  "knowledge-base/project/plans/archive/20261013-041741-2026-07-31-fix-honest-failure-reporting-hook-timeout-and-orphan-reaper-plan.md"
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1340,7 +1578,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_ORPHAN_REAPER_HONEST_COUNT_TEST
 # plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_REAP_ARCHIVE_PERSISTENCE_TEST_SH_PATHS=(
-  "knowledge-base/project/plans/2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md"
+  "knowledge-base/project/plans/archive/20261013-051752-2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md"
   "plugins/soleur/scripts/lib/session-state.sh"
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"
@@ -1350,7 +1588,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_REAP_ARCHIVE_PERSISTENCE_TEST_S
 # plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_STALE_LOCK_SWEEP_TEST_SH_PATHS=(
-  "knowledge-base/project/plans/2026-07-01-fix-stale-git-lock-sweep-worktree-plan.md"
+  "knowledge-base/project/plans/archive/20261013-041741-2026-07-01-fix-stale-git-lock-sweep-worktree-plan.md"
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1372,10 +1610,13 @@ AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
   "apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh"
   "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh"
+  "apps/web-platform/infra/cron-egress-firewall.test.sh"
+  "apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh"
   ".claude/hooks/grep-q-pipe-guard.test.sh"
   ".claude/hooks/lib/"
   "plugins/."
   "plugins/soleur/skills/compound/test/phase-16.test.sh"
+  "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-sentry-full-root-apply.sh"
 )
@@ -1458,10 +1699,23 @@ AFFECTED_PLUGINS_SOLEUR_TEST_TICKET_TRIAGE_CLAUSES_TEST_SH_PATHS=(
 AFFECTED_TESTS_SCRIPTS_DEV_SUITE_MUTEX_WIRING_PATHS=(
   ".github/actions/dev-migration-drift-probe/action.yml"
   ".github/workflows/scheduled-dev-migration-drift.yml"
+  ".github/workflows/scheduled-integration-suites.yml"
   ".github/workflows/tenant-integration.yml"
   "scripts/dev-suite-mutex.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-dev-suite-mutex-wiring.sh"
+)
+
+# tests/scripts/assert-dev-doppler-scope-wiring — the wiring gate for the
+# shared dev-Doppler boundary script (#9947): its SUT is the script plus the
+# three workflow consumers it pins.
+AFFECTED_TESTS_SCRIPTS_ASSERT_DEV_DOPPLER_SCOPE_WIRING_PATHS=(
+  ".github/workflows/dev-ledger-reconcile.yml"
+  ".github/workflows/scheduled-integration-suites.yml"
+  ".github/workflows/tenant-integration.yml"
+  "scripts/assert-dev-doppler-scope.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-assert-dev-doppler-scope-wiring.sh"
 )
 
 # tests/scripts/no-tofu-ssh-mutation — mutation harness for the no-tofu-ssh
@@ -1503,7 +1757,16 @@ AFFECTED_TESTS_SCRIPTS_TMP_PURGE_PATHS=(
 )
 
 # tests/scripts/scratch-session — allocator + Reaper 3 + session sweep
-# (#7004/ADR-250); declared from the repo paths its suite file names.
+# (#7004/ADR-250) is ALWAYS_ON (above), so it declares no array here.
+
+# tests/scripts/cleanup-merged-space — opt-in Docker prune, space report and the
+# cleanup-merged wrapper (#9677); declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_CLEANUP_MERGED_SPACE_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cleanup-merged-space.sh"
+)
 
 # tests/scripts/soleur-sandbox — agent sandbox allocator (ADR-250 Amendment 1);
 # declared from the repo paths its suite file names.
@@ -1530,4 +1793,473 @@ AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
   "tests/scripts/_git_fixture_env.py"
   "tests/scripts/test-scratch-residue.sh"
   "tests/scripts/test-weakness-miner.sh"
+)
+
+# plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime — the browser-lifetime guard contract.
+# Its verdict is a property of the hook registry (every command of every event, plus the scripts they invoke),
+# both MCP registrations, the slot script the project launch string sources, the proxy that string runs and the
+# config it names. Argv literals reach only the slot script and the proxy; the registry and registrations are
+# read from parsed JSON at test time, so no derivation sees them.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_AGENT_BROWSER_TEST_PLAYWRIGHT_MCP_LIFETIME_TEST_SH_PATHS=(
+  ".claude/playwright-mcp.config.json"
+  ".mcp.json"
+  "plugins/soleur/.mcp.json"
+  "plugins/soleur/hooks/"
+  "plugins/soleur/skills/agent-browser/scripts/playwright-mcp-profile-slot.sh"
+  "plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py"
+  "plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py"
+  "plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# --- #9763: declared edges for suites withdrawn from ALWAYS_ON whose derivation is self-only.
+# A self-only derivation degrades to `unclassified` which SELECTS fail-safe — for a heavy suite that
+# would leak it back into every local --affected run. Each array binds the suite to the subject its
+# verdict is actually a property of.
+
+# plugins/soleur/test/hook-input-classification-mutation — a mutation battery over the hook-input
+# classifier: it mutates the SUT and the contract suite under .claude/hooks/.
+AFFECTED_PLUGINS_SOLEUR_TEST_HOOK_INPUT_CLASSIFICATION_MUTATION_TEST_SH_PATHS=(
+  ".claude/hooks/hook-input-contract.test.sh"
+  ".claude/hooks/lib/hook-input.sh"
+  "plugins/soleur/test/hook-input-classification-mutation.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/devin-docs-drift-check — behavioural gate for the scheduled docs-drift workflow: the check
+# step's anchors it extracts verbatim, plus the docs trees the watch scans.
+AFFECTED_SCRIPTS_DEVIN_DOCS_DRIFT_CHECK_PATHS=(
+  ".github/workflows/scheduled-devin-docs-drift.yml"
+  "docs/"
+  "plugins/soleur/docs/"
+  "scripts/devin-docs-drift-check.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# tests/scripts/infra-privileged-tier-census — the Tier-B privileged-credential census (#8209,
+# ADR-241): scans every workflow for environment: declarations and the terraform deployment-policy
+# objects that arm them.
+AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
+
+  ".github/"
+  "apps/"
+  "infra/"
+  "tests/scripts/test-infra-privileged-tier-census.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/battery-tag-authorship — census of tag-authoring git commands reachable from the battery:
+# the write-boundary softening in repo-write-boundary.sh and the runner's own command surface.
+AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
+  "scripts/battery-tag-authorship.test.sh"
+  "scripts/battery-tag-authorship-mutations.test.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+
+# scripts/test-all-fast-tier-budget (#9763) — the fast-tier budget ratchet. Its verdict reads the
+# always-on list and the committed duration manifest; a change to either must select it.
+AFFECTED_SCRIPTS_TEST_ALL_FAST_TIER_BUDGET_PATHS=(
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/suite-durations.tsv"
+  "scripts/test-all-fast-tier-budget.test.sh"
+  "scripts/test-all.sh"
+)
+
+# scripts/test-all-weight-drift (#9814) — the local weight-drift detector. Its
+# verdict reads the comparator lib, the runner wiring (default arm + epilogue
+# emit + registration), and every committed durations/shard-legs manifest. The
+# edge is `glob:scripts/*.tsv`, not `suite-durations*`: the #9813 grammar
+# requires a /-terminated literal head, so a file-prefix glob cannot be
+# declared — covering the manifest class is the honest widening.
+AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS=(
+  "scripts/test-all-weight-drift.test.sh"
+  "scripts/lib/test-weight-drift.sh"
+  "scripts/test-all.sh"
+  "glob:scripts/*.tsv"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# --- #9763 fast-tier demotions: declared scopes for suites withdrawn from ALWAYS_ON whose
+# verdicts walk a corpus. The orphan lint refuses a demotion without a named scope; each array
+# names the trees the suite actually reads (edges are ^-prefixed path matches — a suffix walk
+# like `*.sh` becomes the dirs where those files live).
+
+# plugins/soleur/test/operator-ack-guard — finds every *.sh sourcing or calling the ack guard
+# (find . -name '*.sh' + grep -rl --include='*.sh' across the tree). Edge = the dirs that hold shell.
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=(
+
+  "apps/"
+  "bin/"
+  ".claude/"
+  ".github/"
+  "glob:knowledge-base/**.sh"
+  "knowledge-base/legal/tenant-dpa-register.md"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "plugins/soleur/test/operator-ack-guard.test.sh"
+  "plugins/soleur/test/fixtures/operator-ack-arms.tsv"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/operator-script — same whole-tree *.sh walk for the operator-script lib.
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_SCRIPT_TEST_SH_PATHS=(
+
+  "apps/"
+  "bin/"
+  ".claude/"
+  ".github/"
+  "glob:knowledge-base/**.sh"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "plugins/soleur/test/operator-script.test.sh"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-shell-capture-exit-live — live scanner over *.sh for capture-exit shape.
+AFFECTED_SCRIPTS_LINT_SHELL_CAPTURE_EXIT_LIVE_PATHS=(
+
+  "apps/"
+  "bin/"
+  ".claude/"
+  ".github/"
+  "glob:knowledge-base/**.sh"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "scripts/lint-shell-capture-exit.py"
+  "scripts/lint-shell-capture-exit.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# tests/scripts/sentry-alert-live-fidelity — live probe of the sentry alert arms; the corpus it
+# cares about is the sentry infra + the workflows that invoke it.
+AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_LIVE_FIDELITY_PATHS=(
+  "apps/web-platform/infra/sentry/"
+  ".github/workflows/"
+  "tests/scripts/test-sentry-alert-live-fidelity.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/test-contention — measures the contention machinery itself (test-contention.sh, the
+# runner's lock/queue paths). A docs-only diff can never move its verdict.
+AFFECTED_SCRIPTS_TEST_CONTENTION_PATHS=(
+  "scripts/lib/test-contention.sh"
+  "scripts/test-all.sh"
+  "scripts/test-contention.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/test-all-infra-coverage-notice — census of infra-suite registration coverage; its
+# subject is the infra tree + the runner's registration corpus.
+AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
+  "apps/web-platform/infra/"
+  ".github/workflows/"
+  "tests/scripts/"
+  "scripts/test-all.sh"
+  "scripts/test-all-infra-coverage-notice.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/guard-vacuity-floor — derives its population from git ls-files '*.test.sh' —
+# the suite corpus under these roots.
+# Verified read set (#9969): `git ls-files '*.test.sh'` whole-tree — every *.test.sh
+# under EVERY top-level root — plus fixture scripts/fixtures/vacuity-contract-control.sh
+# and its own file (covered by the scripts/ prefix). The glob: entries below cover the
+# 13 roots that lacked a declared prefix; the dir prefixes stay because converting them
+# would narrow coverage the suite already had (the #9945 precedent). Residual: a
+# dir-less `x.test.sh` at repo root is corpus yet inexpressible in this `dir/`
+# grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
+# re-derives the live root set to catch NEW top-level dirs, and its th8 row
+# (#10117) REDs the battery on any dir-less corpus member — grammar extension
+# deferred to #10198.
+AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
+
+  "apps/"
+  ".claude/"
+  ".github/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "glob:.agents/**.test.sh"
+  "glob:.claude-plugin/**.test.sh"
+  "glob:.codex/**.test.sh"
+  "glob:.cursor-plugin/**.test.sh"
+  "glob:.devin/**.test.sh"
+  "glob:.grok/**.test.sh"
+  "glob:LICENSES/**.test.sh"
+  "glob:bin/**.test.sh"
+  "glob:docs/**.test.sh"
+  "glob:infra/**.test.sh"
+  "glob:knowledge-base/**.test.sh"
+  "glob:spike/**.test.sh"
+  "glob:todos/**.test.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-integration-env-gates-battery — mutation battery over the
+# env-gate sentinel + synthetic fixture repos; its verdict moves only with its
+# SUT, itself, or the canonical fixture-dir guard it copies.
+AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
+
+  "scripts/lint-integration-env-gates.sh"
+  "scripts/lint-integration-env-gates.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-orphan-test-suites — scans the registration corpus for unregistered suites;
+# subject is every *.test.* tree plus the runner that registers them.
+# Verified read set (#9969): `git ls-files '*.test.sh'` whole-tree, plus
+# `.github/workflows/*.yml` surfaces and the REQUIRED_RUNNERS files — the non-corpus
+# reads are already covered by the .github/, scripts/ and apps/ prefixes, so only the
+# *.test.sh corpus needed glob: coverage for the 13 roots without a declared prefix.
+# Residual: a dir-less `x.test.sh` at repo root is corpus yet inexpressible in this
+# `dir/` grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
+# re-derives the live root set to catch NEW top-level dirs, and its th8 row
+# (#10117) REDs the battery on any dir-less corpus member — grammar extension
+# deferred to #10198.
+AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
+
+  "apps/"
+  ".claude/"
+  ".github/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "glob:.agents/**.test.sh"
+  "glob:.claude-plugin/**.test.sh"
+  "glob:.codex/**.test.sh"
+  "glob:.cursor-plugin/**.test.sh"
+  "glob:.devin/**.test.sh"
+  "glob:.grok/**.test.sh"
+  "glob:LICENSES/**.test.sh"
+  "glob:bin/**.test.sh"
+  "glob:docs/**.test.sh"
+  "glob:infra/**.test.sh"
+  "glob:knowledge-base/**.test.sh"
+  "glob:spike/**.test.sh"
+  "glob:todos/**.test.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-trap-tempfile-ownership — *.sh-wide trap/tempfile ownership lint.
+AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
+
+  "apps/"
+  "bin/"
+  ".claude/"
+  ".github/"
+  "glob:knowledge-base/**.sh"
+  "glob:knowledge-base/**.bash"
+  "glob:knowledge-base/**.py"
+  "glob:knowledge-base/**.ts"
+  "glob:knowledge-base/**.mjs"
+  "glob:knowledge-base/**.js"
+  "glob:knowledge-base/*bunfig.toml"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "scripts/lint-trap-tempfile-ownership.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/check-cloudflare-token-drift — scans .github/ workflows and actions for token drift.
+AFFECTED_SCRIPTS_CHECK_CLOUDFLARE_TOKEN_DRIFT_PATHS=(
+  ".github/"
+  "infra/"
+  "scripts/check-cloudflare-token-drift.sh"
+  "scripts/check-cloudflare-token-drift.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/fanout-suite-scope — drives a sandbox recorder over test-all.sh's
+# registration corpus; subject is the runner itself.
+AFFECTED_PLUGINS_SOLEUR_TEST_FANOUT_SUITE_SCOPE_TEST_SH_PATHS=(
+  "scripts/test-all.sh"
+  "scripts/lib/"
+  "plugins/soleur/test/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/fixture-env-adoption — census of fixture-env adoption across the test corpus.
+AFFECTED_PLUGINS_SOLEUR_TEST_FIXTURE_ENV_ADOPTION_TEST_SH_PATHS=(
+
+  "apps/web-platform/test/"
+  "apps/web-platform/infra/"
+  ".github/scripts/"
+  "plugins/soleur/test/"
+  "test/"
+  "tests/"
+  "scripts/lib/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/fixture-dir-operand-assert — same corpus walk for fixture-dir operand shape.
+AFFECTED_PLUGINS_SOLEUR_TEST_FIXTURE_DIR_OPERAND_ASSERT_TEST_SH_PATHS=(
+
+  "apps/web-platform/test/"
+  "apps/web-platform/infra/"
+  ".github/scripts/"
+  "plugins/soleur/test/"
+  "test/"
+  "tests/"
+  "scripts/lib/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/scripts-shard-totality — manifest-vs-registration census; subject is the
+# shard manifests + the runner's registration surface.
+AFFECTED_PLUGINS_SOLEUR_TEST_SCRIPTS_SHARD_TOTALITY_TEST_SH_PATHS=(
+  "scripts/suite-durations.tsv"
+  "scripts/suite-shard-legs.tsv"
+  "scripts/suite-durations-heavy.tsv"
+  "scripts/regenerate-shard-manifest.py"
+  "scripts/test-all.sh"
+  "scripts/lib/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/preflight-check10-suite-integrity (#9763 demotion) — the Check-10
+# regression-suite anti-vacuity floor. Its subject is the four Check-10 suites it guards, the
+# manifest it reads, and the preflight skill whose contract it pins. Self-only derivation would
+# classify unclassified and leak it into every local run.
+AFFECTED_PLUGINS_SOLEUR_TEST_PREFLIGHT_CHECK10_SUITE_INTEGRITY_TEST_SH_PATHS=(
+  "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
+  "plugins/soleur/test/preflight-discoverability-test.test.ts"
+  "plugins/soleur/test/observability-schema-parity.test.ts"
+  "plugins/soleur/test/fullsuite-merge-gate.test.ts"
+  "plugins/soleur/test/preflight-founder-check.test.ts"
+  "plugins/soleur/test/fixtures/check10-test-manifest.txt"
+  "plugins/soleur/skills/preflight/SKILL.md"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-shell-trace-credential-refusal (#9763 demotion) — tree-wide *.sh scan for
+# credential-trace refusal shape; scope = the dirs where shell lives.
+AFFECTED_SCRIPTS_LINT_SHELL_TRACE_CREDENTIAL_REFUSAL_PATHS=(
+
+  "apps/"
+  "bin/"
+  ".claude/"
+  ".github/"
+  "glob:knowledge-base/**.sh"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "scripts/lint-shell-trace-credential-refusal.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lib/inngest-probe-row.test.sh (#9763 demotion) — Guard 1 censuses every tracked file
+# naming the probe-row marker; scope = the trees that host probe emitters and consumers.
+AFFECTED_SCRIPTS_LIB_INNGEST_PROBE_ROW_TEST_SH_PATHS=(
+  "apps/web-platform/infra/"
+  "apps/web-platform/test/infra/"
+  ".github/workflows/"
+  "plugins/soleur/test/"
+  "scripts/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/operator-agent-runnable (#9763 demotion) — Guard 1 discovers every
+# generated operator script in the tree; generated scripts ship under knowledge-base/project/specs/.
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
+  "apps/"
+  "bin/"
+  ".claude/"
+  ".github/"
+  # NOT a glob: the Guard-1 corpus is content-keyed, not extension-bounded —
+  # g1_discover scans the whole tree for the generated-script marker on ANY
+  # extension (a kb .md quoting it is in scope), so **.sh would under-cover.
+  "knowledge-base/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "plugins/soleur/test/operator-agent-runnable.test.sh"
+  "plugins/soleur/test/lib/operator-stub-world.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/probe-github-app-mint (#9995) — the JWT reaches curl only through
+# scripts/lib/bearer-curl.sh's stdin-config channel, and the mu1 step of
+# scheduled-integration-suites.yml invokes it; an edit to either must select it.
+AFFECTED_SCRIPTS_PROBE_GITHUB_APP_MINT_PATHS=(
+  "scripts/probe-github-app-mint.sh"
+  "scripts/probe-github-app-mint.test.sh"
+  "scripts/lib/bearer-curl.sh"
+  ".github/workflows/scheduled-integration-suites.yml"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/audit-dev-scheduled-shapes (#9995) — census + per-name shape audit;
+# declared edges pin its SUT and its own battery.
+AFFECTED_SCRIPTS_AUDIT_DEV_SCHEDULED_SHAPES_PATHS=(
+  "scripts/audit-dev-scheduled-shapes.sh"
+  "scripts/audit-dev-scheduled-shapes.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lib/repo-write-boundary.test.sh (#9969) — verified read set: whole-tree
+# `git ls-files '*.sh'` content-keyed on `test-all\.sh` (every *.sh under every root is
+# corpus), plus scripts/test-all.sh (RUNNER: sandbox copies + sed), its SUT lib
+# scripts/lib/repo-write-boundary.sh, and its own file. Uniformly glob:-scoped: a dir
+# prefix over a doc-heavy root would over-select on non-.sh churn, and there is no
+# legacy prefix set to preserve. Residual: a dir-less `x.sh` at repo root is
+# inexpressible in this `dir/` grammar (no head to mint); the th6 row in
+# scripts/test-all-affected.test.sh re-derives the live root set for NEW dirs,
+# and its th8 row (#10117) REDs the battery on any dir-less corpus member —
+# grammar extension deferred to #10198.
+AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
+  "glob:.agents/**.sh"
+  "glob:.claude/**.sh"
+  "glob:.claude-plugin/**.sh"
+  "glob:.codex/**.sh"
+  "glob:.cursor-plugin/**.sh"
+  "glob:.devin/**.sh"
+  "glob:.github/**.sh"
+  "glob:.grok/**.sh"
+  "glob:LICENSES/**.sh"
+  "glob:apps/**.sh"
+  "glob:bin/**.sh"
+  "glob:docs/**.sh"
+  "glob:infra/**.sh"
+  "glob:knowledge-base/**.sh"
+  "glob:plugins/**.sh"
+  "glob:scripts/**.sh"
+  "glob:spike/**.sh"
+  "glob:test/**.sh"
+  "glob:tests/**.sh"
+  "glob:todos/**.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "scripts/lib/repo-write-boundary.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/betterstack-emitter-read — the #8875 census mutation battery. It drives the guard
+# over git-init'd fixture trees, not the repo corpus; the `git ls-files` text that tripped
+# the corpus-walk arm is a comment naming the GUARD's producer. Declared from the repo paths
+# its suite file names.
+AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
+  "scripts/lib/bs-emitter-row.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-betterstack-emitter-read.sh"
+  "scripts/lint-betterstack-emitter-read.test.sh"
+  "scripts/test-all.sh"
 )

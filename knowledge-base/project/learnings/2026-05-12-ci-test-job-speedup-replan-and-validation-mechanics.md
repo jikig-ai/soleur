@@ -129,9 +129,9 @@ The `test-scripts` shard intentionally omits `setup-bun`. The version-check bloc
 
 ## Related
 
-- Plan: `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`
-- Spec: `knowledge-base/project/specs/feat-ci-test-job-speedup/spec.md` (superseded by replan)
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-12-ci-test-job-speedup-brainstorm.md` (superseded by replan)
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-ci-test-job-speedup-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-ci-test-job-speedup/spec.md` (superseded by replan)
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-12-ci-test-job-speedup-brainstorm.md` (superseded by replan)
 - FPE class: `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md`
 - Orphan-suite invariant: `knowledge-base/project/learnings/2026-05-11-test-all-exit-gate-self-validated-on-creating-pr.md` (issue #3533, PR #3534)
 - Fail-closed precedent: `.github/workflows/scheduled-compound-promote.yml`

@@ -67,7 +67,9 @@
 # Seams: IPT_GITHUB_DIR (the workflow/action input tree; default <repo>/.github), IPT_REPO_ROOT
 # (the tree the `*.tf` model and `bash <repo-path>` resolution read; default <repo>),
 # IPT_STATE_LIST (an operator-pasted `terraform state list`; default unset), IPT_BASE_REF (the
-# ref whose `*.tf` are the base for the deleted-resource-block row; default origin/main).
+# ref whose `*.tf` are the base for the deleted-resource-block row; default the merge-base of
+# HEAD and refs/remotes/origin/main — the tree the diff under test actually diverged from —
+# falling back to the refs/remotes/origin/main tip when no merge base resolves).
 #
 # Run: bash tests/scripts/test-infra-privileged-tier-census.sh
 
@@ -79,7 +81,52 @@ ROOT="$(cd "$DIR/../.." && pwd)"
 GHDIR="${IPT_GITHUB_DIR:-$ROOT/.github}"
 REPODIR="${IPT_REPO_ROOT:-$ROOT}"
 STATE_LIST="${IPT_STATE_LIST:-}"
-BASE_REF="${IPT_BASE_REF:-origin/main}"
+
+# resolve_base_ref <repodir> — the ref whose `*.tf` are the G4c base. `IPT_BASE_REF` verbatim;
+# else `git merge-base HEAD refs/remotes/origin/main` — the tree the diff under test actually
+# diverged from, so a resource block added on main after the fork point is not attributed to
+# the diff as a deletion (#9956: the tip diff reported the six egress blocks #9529 ADDED on
+# main as orphans on a stale `pull/N/merge` checkout); else the refs/remotes/origin/main tip,
+# the pre-#9956 semantics, when no merge base resolves (no origin/main, shallow clone, orphan
+# branch). The `env -u` scrub is the repo convention for git calls in hook-reachable code
+# (scripts/test-all.sh › _aff_rd_diff) — an inherited GIT_DIR/GIT_INDEX_FILE overrides `git -C`
+# and would resolve the merge-base against the caller's repository.
+# The resolution contract: `IPT_BASE_REF` verbatim; else `git merge-base HEAD
+# refs/remotes/origin/main`; else the refs/remotes/origin/main tip. Prints the chosen ref on
+# stdout and names the arm on stderr via IPT_G4C_BASE_ARM=<override|merge-base|fallback> — the
+# silent-fallback arm silently restored the #9956 false-red class, so it must be observable.
+# `assert_fixture_dir` is defined below and resolved at call time.
+resolve_base_ref() {
+  local _mb="" _rs
+  # `git -C ""` widens to the CALLER's repository — an empty operand here would resolve the
+  # merge-base against the wrong repo and materialize a plausible-looking base from it.
+  assert_fixture_dir "${1-}"
+  if [ -n "${IPT_BASE_REF:-}" ]; then
+    # The ref string is scrubbed before hitting a log line — it is operator-controlled and
+    # could otherwise splice a forged `FAIL <row>` into the merged suite stream a sibling
+    # suite greps. [[:cntrl:]] is load-bearing: $'\x00' cannot embed a NUL in a bash word, so
+    # a $'\x00-\x1f\x7f' class expands empty and scrubs nothing (measured).
+    _rs="${IPT_BASE_REF//[[:cntrl:]$'\u2028\u2029']/?}"
+    printf 'IPT_G4C_BASE_ARM=override ref=%s\n' "$_rs" >&2
+    printf '%s' "$IPT_BASE_REF"
+    return 0
+  fi
+  # The full ref name: a `refs/heads/origin/main` or tag can shadow the remote-tracking ref in
+  # the DWIM order and rebind every operand below to a different commit. merge-base without
+  # --all prints ONE best common ancestor; on criss-cross histories a different best exists —
+  # accepted residual (a linear PR history is the norm in this repo).
+  _mb="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+    git -C "$1" merge-base HEAD refs/remotes/origin/main 2>/dev/null)" || _mb=""
+  if [ -n "$_mb" ]; then
+    printf 'IPT_G4C_BASE_ARM=merge-base ref=%s\n' "$_mb" >&2
+    printf '%s' "$_mb"
+  else
+    # Tip fallback restores pre-#9956 semantics — the failure direction is a false RED on
+    # post-fork main-side additions, never a hidden green, and the marker makes it visible.
+    printf 'IPT_G4C_BASE_ARM=fallback ref=refs/remotes/origin/main\n' >&2
+    printf '%s' "refs/remotes/origin/main"
+  fi
+}
 
 passes=0; fails=0; MUTANTS_RUN=0
 FAILURES=()
@@ -112,16 +159,31 @@ assert_fixture_dir() {
   esac
 }
 
+# (#9956) THE FIXTURE GIT ENVIRONMENT, sourced BEFORE any fixture is created. The G4c base legs
+# below build this suite's first `git init` fixture (a synthetic repo exercising the production
+# resolve_base_ref/materialize_base_dir path), so this file MUST go through the #7849 chokepoint:
+# sourcing it ARMS the tripwire that refuses an inherited GIT_DIR — in a linked worktree git
+# exports GIT_DIR/GIT_INDEX_FILE to every hook as absolute paths, and they override `git -C`, so
+# an un-scrubbed `git init` would initialise nothing and its commits would land on the caller's
+# live branch (#7833). `git_fixture_env` then exports the ceiling ($T's parent), a synthesized
+# identity, and config hermeticity into THIS shell, so every `git -C` fixture call is contained.
+# The suite's own `git -C "$REPODIR"` reads are unaffected: REPODIR is itself the repo root, so
+# discovery finds its .git without ever climbing to the ceiling.
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "${ROOT}/plugins/soleur/test/lib/git-fixture-env.sh" \
+  || { printf 'FAIL SETUP: could not source the fixture git environment\n' >&2; exit 1; }
+
 T="$(mktemp -d "${TMPDIR}/infra-privileged-tier-census.XXXXXX")" || { printf 'FAIL SETUP: mktemp\n' >&2; exit 1; }
 _REACHED_VERDICT=""; _rc=0
 trap '_rc=$?; rm -rf "$T"; if [ "$_rc" -eq 0 ] && [ -z "$_REACHED_VERDICT" ]; then printf "FAIL: suite exited 0 before its verdict\n" >&2; exit 1; fi' EXIT
 assert_fixture_dir "$T"
+git_fixture_env "$T" || { printf 'FAIL SETUP: git_fixture_env refused the fixture root %s\n' "$T" >&2; exit 1; }
 mkdir -p "$T/mut" || { printf 'FAIL SETUP: mkdir %s/mut\n' "$T" >&2; exit 1; }
 
 printf '\n=== infra-privileged tier census (Guards 1, 2 and 4; #8209, ADR-241) ===\n\n'
 
 cat > "$T/ipt.py" <<'PY'
-import sys, os, re, json, yaml, subprocess, glob
+import sys, os, re, json, yaml, subprocess, glob, posixpath, tempfile
 
 GHDIR, REPO = sys.argv[1], sys.argv[2]
 STATE_LIST = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else ""
@@ -368,8 +430,9 @@ def apply_steps(j):
 # would run credential-less and strand a paid host. A destroy needs the same credentials as the
 # apply and writes the same state object. G4b and G5 keep `apply_steps`: they reason about -target
 # lists and plan_only guards, which a teardown carries neither of.
-# #6604 step 7 widened it to `state rm|mv|push`: workspaces-plaintext-forget.yml writes this state with
-# `terraform state rm` and no apply at all, which must classify exactly like an apply (G1h).
+# #6604 step 7 widened it to `state rm|mv|push`: the single-use workspaces-plaintext-forget.yml (retired in
+# #6604 PR B) wrote this state with `terraform state rm` and no apply at all, which must classify exactly
+# like an apply (G1h). The widening stays for any future state-write-only job.
 STATE_WRITE = re.compile(r"(?<![-\w])terraform\s+(apply|destroy|state\s+(rm|mv|push))(?![-\w])")
 def state_write_steps(j):
     for s in j.steps:
@@ -401,7 +464,7 @@ def tf_roots():
 
 def block_bodies(text, opener):
     """Brace-counted bodies of every block whose opening line matches `opener` (a compiled regex
-    anchored at column 0). Returns (match, body)."""
+    anchored at line start, optional indentation allowed for the removed/moved openers). Returns (match, body)."""
     res = []
     for m in opener.finditer(text):
         i = text.index("{", m.end() - 1) if "{" not in m.group(0) else m.start() + m.group(0).index("{")
@@ -418,7 +481,49 @@ def block_bodies(text, opener):
     return res
 
 RES_OPEN = re.compile(r'^resource\s+"([A-Za-z0-9_]+)"\s+"([A-Za-z0-9_]+)"\s*\{', re.M)
-REMOVED_OPEN = re.compile(r'^removed\s*\{', re.M)
+# `removed`/`moved` may be INDENTED (HCL ignores indentation), so the openers allow leading blanks; the scan runs on
+# hcl_code_only(text) so a `removed {` inside a comment or a heredoc body is not a block.
+REMOVED_OPEN = re.compile(r'^[ \t]*removed\s*\{', re.M)
+MOVED_OPEN = re.compile(r'^[ \t]*moved\s*\{', re.M)
+_HCL_HEREDOC = re.compile(r"<<-?[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*\r?$", re.M)
+def hcl_code_only(text):
+    """`text` with every `#` / `//` comment, `/* */` comment and heredoc body overwritten by spaces (newlines kept, so
+    offsets and line starts are unchanged). Quoted strings are tracked (a `//` inside "https://x" is not a comment);
+    HCL strings never span lines, so a newline closes one. FAIL-OPEN direction, stated plainly: an unterminated
+    heredoc or block comment blanks to end of file, and hiding a `removed`/`moved` block turns G4h green. Two things
+    bound that: terraform rejects an unterminated heredoc or comment, so such a file cannot reach apply; and G4h4 pins
+    the LIVE removed/moved counts to the unscrubbed count, so a real block blanked on a real file reds it. The G4h
+    probe strings below only cover the shapes written into them, not an arbitrary real file."""
+    out, i, n, in_str = [], 0, len(text), False
+    blank = lambda seg: re.sub(r"[^\n]", " ", seg)
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\" and i + 1 < n:
+                out.append(text[i:i + 2]); i += 2; continue
+            if c in '"\n':
+                in_str = False
+            out.append(c); i += 1; continue
+        if c == '"':
+            in_str = True; out.append(c); i += 1; continue
+        if c == "#" or text.startswith("//", i):
+            j = text.find("\n", i); j = n if j < 0 else j
+            out.append(blank(text[i:j])); i = j; continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2); j = n if j < 0 else j + 2
+            out.append(blank(text[i:j])); i = j; continue
+        hm = _HCL_HEREDOC.match(text, i) if text.startswith("<<", i) else None
+        if hm:
+            em = re.compile(r"^[ \t]*" + re.escape(hm.group(1)) + r"[ \t]*\r?$", re.M).search(text, hm.end())
+            k = em.end() if em else n
+            out.append(text[i:hm.end()]); out.append(blank(text[hm.end():k])); i = k; continue
+        out.append(c); i += 1
+    return "".join(out)
+def read_tf(path):
+    """The ONE reader of a `.tf` file for Guard 4: the file's text with comments and heredoc bodies blanked
+    (hcl_code_only). Every Guard 4 reader (the removed/moved collectors, declared_addrs, base_declared) goes through
+    it, so a resource wrapped in a comment is not "declared" and a `removed {` in a comment is not a block."""
+    return hcl_code_only(open(path, encoding="utf-8", errors="replace").read())
 BACKEND_OPEN = re.compile(r'^\s*backend\s+"s3"\s*\{', re.M)
 
 tf_root_files = {r: tf_files(r) for r in tf_roots()}
@@ -746,15 +851,31 @@ check("G2c: the loader step precedes every `doppler run` and every terraform ste
 # runtime identity — the key the web app mints every connected user's installation token from.
 # A `removed` block that destroys instead of forgetting disconnects every connected user.
 removed_blocks, g4_files = [], 0
+# `moved` blocks get their OWN collector (G4h, #9879): `removed_blocks` also feeds G4a/G4b/G4c, which demand a `from`
+# and `lifecycle { destroy = false }` of every entry, so a `moved` block put there would false-RED them.
+moved_blocks = []
+MOVED_ATTR = re.compile(r"(?:^|[\s{;])(from|to)\s*=\s*([A-Za-z0-9_.\[\]\"-]+)")
+def moved_collect(text, rel, root):
+    out = []
+    for _m, b in block_bodies(text, MOVED_OPEN):
+        attrs = {}
+        for ln in b.splitlines():
+            if ln.lstrip().startswith(("#", "//")):
+                continue
+            for k, v in MOVED_ATTR.findall(ln):
+                attrs.setdefault(k, v)
+        out.append((root, rel, attrs.get("from", ""), attrs.get("to", "")))
+    return out
 for r in GUARD4_ROOTS:
     for p in tf_files(r):
         g4_files += 1
-        t = open(p, encoding="utf-8", errors="replace").read()
+        t = read_tf(p)
         for _m, b in block_bodies(t, REMOVED_OPEN):
             fr = re.search(r"^\s*from\s*=\s*([A-Za-z0-9_.\[\]\"-]+)\s*$", b, re.M)
             lif = [lb for _lm, lb in block_bodies(b, re.compile(r"^\s*lifecycle\s*\{", re.M))]
             guarded = any(re.search(r"^\s*destroy\s*=\s*false\s*$", lb, re.M) for lb in lif)
             removed_blocks.append((r, os.path.relpath(p, REPO), fr.group(1) if fr else "", guarded))
+        moved_blocks.extend(moved_collect(t, os.path.relpath(p, REPO), r))
 print("IPT_G4_FILES=%d" % g4_files, file=sys.stderr)
 
 ungrd = ["%s %s" % (f, a or "<no from>") for _r, f, a, g in removed_blocks if not (g and a)]
@@ -772,6 +893,15 @@ for j in jobs:
         root_targets.setdefault(wd, set()).update(TARGET.findall(body))
         root_targeted[wd] = root_targeted.get(wd, False) or ("-target=" in body)
 
+# EVERY `-target`/`-replace` operand in ANY step of ANY job (plan steps included). `root_targets` above reads only
+# `terraform apply` bodies, but the dispatch jobs name their addresses on a `terraform plan -out=` step and apply the
+# saved plan, so an apply-body scan is blind to them. RETIRED_STATE_ABSENT consults this broader set.
+ANY_TARGET = re.compile(r"-(?:target|replace)(?:=|\s+)[\"']?([A-Za-z0-9_]+\.[A-Za-z0-9_]+)")
+any_targeted = set()
+for j in jobs:
+    for s_ in j.steps:
+        any_targeted.update(ANY_TARGET.findall(CONT.sub(" ", str(s_.get("run") or ""))))
+
 unreached = []
 for r, f, a, _g in removed_blocks:
     if not a:
@@ -783,19 +913,29 @@ check("G4b: every `removed` address is reached by its root's apply — in the `-
       "so the forget never happens and the resource is orphaned under management",
       not unreached, unreached[:8])
 
+def declared_in(text):
+    """The `type.name` addresses of the resource blocks in `text` (already read through read_tf)."""
+    return {"%s.%s" % (m.group(1), m.group(2)) for m, _b in block_bodies(text, RES_OPEN)}
+# Reader probe (G4c): a real .tf FILE holding one resource inside a multi-line comment and one real resource must read
+# as exactly the real one. It drives read_tf itself (a path in, not a text), so a reader that stops scrubbing reds it.
+with tempfile.TemporaryDirectory() as _td:
+    _tp = os.path.join(_td, "probe.tf")
+    with open(_tp, "w", encoding="utf-8") as _fh:
+        _fh.write('/*\nresource "x_y" "commented" {\n  a = 1\n}\n*/\n# resource "x_y" "hashed" {\n'
+                  'resource "x_y" "real" {\n  a = 1\n}\n')
+    g4c_probe_ok = declared_in(read_tf(_tp)) == {"x_y.real"}
 declared_addrs, forgotten_addrs = {}, {}
 for r in GUARD4_ROOTS:
     declared_addrs[r] = set()
     for p in tf_files(r):
-        t = open(p, encoding="utf-8", errors="replace").read()
-        for m, _b in block_bodies(t, RES_OPEN):
-            declared_addrs[r].add("%s.%s" % (m.group(1), m.group(2)))
+        declared_addrs[r] |= declared_in(read_tf(p))
     forgotten_addrs[r] = {a for rr, _f, a, _g in removed_blocks if rr == r and a}
 
 # Row 3: a resource block deleted with NO `removed` block. The only sound signal is the BASE
 # tree — the repo carries pre-existing `-target=` lines for addresses no resource block declares,
-# so "targeted but undeclared" is not it. $BASE_ROOT is the base ref's copy of the touched roots,
-# materialised by the suite; an unreadable base FAILS CLOSED rather than passing vacuously.
+# so "targeted but undeclared" is not it. $BASE_ROOT is the merge-base's copy of the touched
+# roots (the tree the diff under test actually diverged from — #9956), materialised by the
+# suite; an unreadable base FAILS CLOSED rather than passing vacuously.
 base_declared, n_base = {}, 0
 if BASE_ROOT:
     for r in GUARD4_ROOTS:
@@ -807,9 +947,7 @@ if BASE_ROOT:
             if not f.endswith(".tf"):
                 continue
             n_base += 1
-            t = open(os.path.join(d, f), encoding="utf-8", errors="replace").read()
-            for m, _b in block_bodies(t, RES_OPEN):
-                base_declared[r].add("%s.%s" % (m.group(1), m.group(2)))
+            base_declared[r] |= declared_in(read_tf(os.path.join(d, f)))
 # INTENDED DESTROYS. A resource block deleted ON PURPOSE so the per-merge apply destroys it: a bare
 # `-target=` on an address with no configuration plans its delete (the #9062 precedent). An entry
 # is honoured only when its root's apply still targets it bare (else the delete is never planned
@@ -824,7 +962,37 @@ INTENDED_DESTROYS = {
         "doppler_secret.ghcr_minter_doppler_token": "#8714 ADR-096 5.4",
     },
 }
-G4_PROTECTED = {"doppler_secret.github_app_id", "doppler_secret.github_app_private_key"}
+# RETIRED, STATE-ABSENT. A resource block deleted because its resource was already gone: a count-gated throwaway
+# whose own teardown destroyed it, so state holds no entry and there is nothing for a `-target` to destroy or a
+# `removed` block to forget. Honoured only when NO job still targets the address (a leftover target would be a
+# stale line, not a deletion), and never for the App identity (G4f). Each entry names the evidence; a new entry
+# is a claim about live state and belongs in the PR that deletes the block. The two entries below leave when #9786's
+# next-replace removal list lands (G4g refuses a re-declared one).
+# SOLEUR-DEBT: remove both entries once #9786's next-replace removal list lands; nothing here expires them mechanically.
+RETIRED_STATE_ABSENT = {
+    "apps/web-platform/infra": {
+        "hcloud_server.inngest_backstop_wipe": "#8285 PR B: throwaway wipe host destroyed by the wipe dispatch teardown 2026-10-09 (run 37955244979); Hetzner lists no such server",
+        "hcloud_volume_attachment.inngest_backstop_wipe": "#8285 PR B: destroyed by the same teardown; the volume itself was destroyed 2026-10-09 (run 37958051426)",
+    },
+}
+# Never destroyable and never "retired": the App identity (forget-only) and the SOLE-COPY live stores (the Inngest LUKS
+# volume, its attachment, passphrase and key secret, web-1's workspaces LUKS volume and its attachment, and the two
+# Inngest Doppler parents doppler_project.inngest and doppler_environment.inngest_prd, #9879). A later PR that lists one of these
+# in INTENDED_DESTROYS or RETIRED_STATE_ABSENT trips G4f instead of silently masking its destroy (#8285 PR B review).
+G4_PROTECTED = {
+    "doppler_secret.github_app_id", "doppler_secret.github_app_private_key",
+    "hcloud_volume.inngest_redis_luks", "hcloud_volume_attachment.inngest_redis_luks",
+    "random_password.inngest_redis_luks", "doppler_secret.inngest_redis_luks_key",
+    "hcloud_volume.workspaces_luks", "hcloud_volume_attachment.workspaces_luks",
+    # #9879: the Inngest Doppler parents. Replacing either strands the LUKS passphrase secret above it (the sole copy of
+    # the key). One address per line: the mutation row deletes exactly one.
+    "doppler_project.inngest",
+    "doppler_environment.inngest_prd",
+}
+# The two App-identity entries are the ONLY protected addresses with legitimate `removed` blocks (forget-only, in
+# github-app.tf). G4H_SOLE_COPY is DERIVED from the single list above, never a second hand-written list.
+G4_APP_IDENTITY = frozenset({"doppler_secret.github_app_id", "doppler_secret.github_app_private_key"})
+G4H_SOLE_COPY = frozenset(G4_PROTECTED) - G4_APP_IDENTITY
 orphans = []
 for r in GUARD4_ROOTS:
     for a in sorted(base_declared.get(r, set())):
@@ -832,15 +1000,101 @@ for r in GUARD4_ROOTS:
             if (a in INTENDED_DESTROYS.get(r, {}) and a not in G4_PROTECTED
                     and a in root_targets.get(r, set())):
                 continue
+            if (a in RETIRED_STATE_ABSENT.get(r, {}) and a not in G4_PROTECTED
+                    and a not in any_targeted):
+                continue
             orphans.append("%s %s" % (r, a))
 check("G4c: every `resource` block the base ref declares and HEAD no longer declares is claimed by a "
       "`removed` block — a deleted resource block with none leaves the resource managed with no HCL, "
       "and the next apply plans a plain DESTROY [base .tf files: %d]" % n_base,
-      bool(BASE_ROOT) and n_base >= 1 and not orphans,
-      ("base unavailable" if not BASE_ROOT else "orphans=%s" % orphans[:8]))
-bad_intended = sorted({a for _r, d in INTENDED_DESTROYS.items() for a in d if a in G4_PROTECTED})
-check("G4f: no INTENDED_DESTROYS entry names the App identity (%s) — that pair may only ever be "
-      "FORGOTTEN, never destroyed" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
+      bool(BASE_ROOT) and n_base >= 1 and g4c_probe_ok and not orphans,
+      ("base unavailable" if not BASE_ROOT else "declared-reader probe failed (a commented-out resource read as declared, or a real one did not)" if not g4c_probe_ok else "orphans=%s" % orphans[:8]))
+bad_intended = sorted({a for _r, d in list(INTENDED_DESTROYS.items()) + list(RETIRED_STATE_ABSENT.items()) for a in d if a in G4_PROTECTED})
+check("G4f: no INTENDED_DESTROYS or RETIRED_STATE_ABSENT entry names a protected address (the App identity, which "
+      "may only ever be FORGOTTEN, or a sole-copy live store: %s)" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
+# G4g: a RETIRED_STATE_ABSENT entry is a claim that the address is GONE. If HEAD declares it again the claim is
+# false and a later deletion of that new block would ride the allowance with no `removed` block (re-declare, apply,
+# delete). Entries are removed when #9786's next-replace work lands or at the first census edit after merge.
+redeclared = sorted("%s %s" % (r, a) for r, d in RETIRED_STATE_ABSENT.items() for a in d if a in declared_addrs.get(r, set()))
+check("G4g: no RETIRED_STATE_ABSENT address is declared at HEAD (the allowance is only for an address that is "
+      "gone; a re-declared one must go through `removed` or INTENDED_DESTROYS)", not redeclared, redeclared)
+
+# ── G4h (#9879, ADR-282): no `removed {}` or `moved {}` over a sole-copy address ─────────────────────────────
+# A `removed` block (forget) or a `moved` block (rename) naming one of these addresses detaches or renames the object
+# the `prevent_destroy` / `delete_protection` pins are written against, so the pins stop applying while the object
+# lives on unprotected (or, with `destroy = true`, is deleted). Both attributes, both block kinds, every `.tf` under
+# every GUARD4_ROOTS entry. An index suffix (`x["k"]`) is stripped before comparing.
+def _g4h_addr(a):
+    return re.sub(r"\[.*$", "", a.strip().strip('"'))
+# Dispatch non-vacuity: the `moved` collector must read a known block out of a synthetic probe. A collector that
+# silently reads zero blocks (a broken opener regex) would leave every `moved` clause below vacuously green.
+_probe = moved_collect('moved {\n  from = hcloud_volume.p\n  to   = hcloud_volume.q["k"]\n}\n', "probe.tf", "probe")
+g4h_probe_ok = _probe == [("probe", "probe.tf", "hcloud_volume.p", 'hcloud_volume.q["k"]')]
+# Second probe: an INDENTED `moved`/`removed` is read, and a commented or heredoc one is not (hcl_code_only).
+_p2 = hcl_code_only('# moved { from = a.b }\n  moved {\n    from = a.b\n    to = a.c\n  }\n'
+                    'x = <<EOT\n  removed {\n  from = a.d\n  }\nEOT\n/* moved {\n from = a.e\n} */\n  removed {\n    from = a.f\n  }\n')
+g4h_probe_ok = (g4h_probe_ok
+                and [(a, b) for _r, _f, a, b in moved_collect(_p2, "probe2.tf", "probe")] == [("a.b", "a.c")]
+                and [fr.group(1) for _m, bb in block_bodies(_p2, REMOVED_OPEN)
+                     for fr in [re.search(r"^\s*from\s*=\s*(\S+)\s*$", bb, re.M)]] == ["a.f"])
+# Third probe: the scrubber's comment/string lexing. Each shape sits AHEAD of an indented `removed {` that must STILL be
+# read; a scrubber that mis-lexes the shape blanks that block (a `/*` opens a block comment to EOF, a `<<EOF` opens a
+# heredoc to EOF). Shapes: `#` line comment holding `/*`; `//` line comment holding `/*`; a quoted string holding `/*`
+# (string tracking); a trailing `#` comment holding a heredoc opener. Neutering the `#`/`//` branch or the string
+# tracking turns this red (checker-copy mutants g4h-9 and g4h-10).
+_p3 = hcl_code_only('# glob /mnt/*\n  removed {\n    from = a.g\n  }\n'
+                    '// glob /mnt/*\n  removed {\n    from = a.h\n  }\n'
+                    'x = "/mnt/*"\n  removed {\n    from = a.i\n  }\n'
+                    'x = 1 # see <<EOF\n  removed {\n    from = a.j\n  }\n')
+g4h_probe_ok = (g4h_probe_ok
+                and [fr.group(1) for _m, bb in block_bodies(_p3, REMOVED_OPEN)
+                     for fr in [re.search(r"^\s*from\s*=\s*(\S+)\s*$", bb, re.M)]] == ["a.g", "a.h", "a.i", "a.j"])
+g4h_hits = []
+for _r, f, a, _g in removed_blocks:
+    if a and _g4h_addr(a) in G4H_SOLE_COPY:
+        g4h_hits.append("removed from=%s (%s)" % (a, f))
+for _r, f, a, b_ in moved_blocks:
+    for k, v in (("from", a), ("to", b_)):
+        if v and _g4h_addr(v) in G4H_SOLE_COPY:
+            g4h_hits.append("moved %s=%s (%s)" % (k, v, f))
+print("IPT_G4H=removed:%d moved:%d probe:%d hits:%d" % (len(removed_blocks), len(moved_blocks), int(g4h_probe_ok), len(g4h_hits)), file=sys.stderr)
+check("G4h: no `removed` or `moved` block names a sole-copy address (G4H_SOLE_COPY, %d addresses) as `from` or `to` "
+      "[%d removed + %d moved blocks over %d .tf files; %d hits]"
+      % (len(G4H_SOLE_COPY), len(removed_blocks), len(moved_blocks), g4_files, len(g4h_hits)),
+      g4_files >= 1 and g4h_probe_ok and not g4h_hits,
+      ("moved collector probe failed" if not g4h_probe_ok else sorted(g4h_hits)[:8]))
+# G4h2: the exact-set pin. G4H_SOLE_COPY is derived from G4_PROTECTED, so deleting an entry from G4_PROTECTED would
+# silently shrink what G4h guards. The literal below is the second side of that comparison; a reviewer reads both when
+# either changes (lifting protection is a reviewed two-step change, ADR-282).
+G4H_EXPECTED = frozenset({
+        "hcloud_volume.inngest_redis_luks", "hcloud_volume_attachment.inngest_redis_luks",
+        "random_password.inngest_redis_luks", "doppler_secret.inngest_redis_luks_key",
+        "hcloud_volume.workspaces_luks", "hcloud_volume_attachment.workspaces_luks",
+        "doppler_project.inngest", "doppler_environment.inngest_prd",
+})
+g4h_drift = sorted((G4H_SOLE_COPY ^ G4H_EXPECTED)) + sorted(G4_APP_IDENTITY - G4_PROTECTED)
+check("G4h2: G4H_SOLE_COPY (G4_PROTECTED minus the two App-identity entries) equals the pinned sole-copy set "
+      "[%d addresses] and both App-identity entries stay protected" % len(G4H_EXPECTED), not g4h_drift, g4h_drift)
+
+# G4h4: the LIVE collectors read every real `removed`/`moved` block. G4h reads its blocks through hcl_code_only, which
+# fails OPEN (an unterminated heredoc or comment blanks to EOF and a hidden block cannot trip G4h), and its probe strings
+# only cover the shapes written into them. So the live counts are pinned to the UNSCRUBBED opener count over the same
+# files: a scrubber regression that blanks a real block on a real file reads as a count mismatch here, not as zero
+# blocks and a green G4h. Derived, never hardcoded. A heredoc body or block comment that merely LOOKS like a block makes
+# the raw count exceed the scrubbed one; that is a reviewed case (M-g4h-8 drives it), not a silent pass.
+raw_removed = raw_moved = 0
+for r in GUARD4_ROOTS:
+    for p in tf_files(r):
+        _raw = open(p, encoding="utf-8", errors="replace").read()
+        raw_removed += len(REMOVED_OPEN.findall(_raw))
+        raw_moved += len(MOVED_OPEN.findall(_raw))
+print("IPT_G4H4=raw_removed:%d raw_moved:%d scrubbed_removed:%d scrubbed_moved:%d" % (raw_removed, raw_moved, len(removed_blocks), len(moved_blocks)), file=sys.stderr)
+check("G4h4: the scrubbed removed/moved collectors read exactly as many blocks as an unscrubbed grep of the same files "
+      "(no real block blanked by hcl_code_only) [%d removed + %d moved scrubbed vs %d + %d raw]"
+      % (len(removed_blocks), len(moved_blocks), raw_removed, raw_moved),
+      g4_files >= 1 and raw_removed + raw_moved >= 1
+      and raw_removed == len(removed_blocks) and raw_moved == len(moved_blocks),
+      "scrubbed removed=%d moved=%d, raw removed=%d moved=%d" % (len(removed_blocks), len(moved_blocks), raw_removed, raw_moved))
 
 if STATE_LIST:
     live = set(open(STATE_LIST, encoding="utf-8", errors="replace").read().split())
@@ -1425,6 +1679,145 @@ g7_bad_e = sorted({rel for rel, t in g6_scan if G7_XREF.search(t)})
 check("G7e: no workflow, action, reachable script, .tf, .tmpl or cloud-init file carries a Doppler reference "
       "`${soleur-infra-app.` [%d files scanned]" % len(g6_scan), not g7_bad_e, g7_bad_e[:5])
 
+# G7f (#9321, ADR-241 D11) -- every call of the App-token composite is exactly ONE of two source shapes, and the
+# composite itself offers nothing else:
+#   narrow  no `doppler-project` input; `doppler-token` is secrets.DOPPLER_TOKEN_INFRA_APP (the release jobs and,
+#           since #9454, the weekly digest job);
+#   broad   `doppler-project: soleur-infra-privileged` and secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED, and only in
+#           a job that also calls the infra-credentials loader (it already holds the whole Tier-B project).
+# The composite's `doppler-project` default is the narrow project, its allow-list is exactly the two project
+# literals, and it makes exactly two `doppler secrets get` calls (the App id and key, project from the validated
+# variable, config prd); no command-position read of an App value exists anywhere else.
+#
+# POPULATION is derived, never listed: (a) every workflow-job step whose `uses` resolves to the composite, in the
+# local `./.github/actions/<dir>`, the remote `owner/repo/.github/actions/<dir>@ref` and the `..`-spelled forms
+# (the two non-canonical spellings are themselves refused, clause `spelling`), plus every composite action that
+# wraps the composite in its own `runs.steps` (refused, clause `wrapper`); (b) the composite file the same
+# resolution finds, parsed for the input default, the DOPPLER_SOURCE env mapping, the validation `case` literals
+# and EVERY command-position `doppler secrets get|download` / `doppler run` in it (so a third read of ANOTHER name
+# is seen, which the App-value regex of (c) cannot do); (c) every command-position `doppler secrets get` of an App
+# value in any workflow or action `run:` body, so a second reader or a second composite cannot escape by living in
+# a new file. Command position (cmd_sites) means a comment, an echo argument or a heredoc body is not a read. Token
+# references match in the dotted and the whitespace spellings (the bracket spelling is refused repo-wide by G1e, and
+# refused here as an unnamed token). Each failure carries a `[clause]` tag and the row detail lists the clauses that
+# fired, so a red row says which clause caught it. "Release job" is a job that calls the composite and not the
+# loader: a release job that later adds the loader escapes the broad-shape restriction; the per-suite
+# no-broad-tier-b rows pin the two named jobs.
+# The live tree has exactly four callers (a fifth is a deliberate, dated edit here); a fixture needs >= 1.
+# 3 -> 4 (2026-10-11, #9454 item 4, ADR-285): weakness-miner.yml::open-pr, the third narrow-shape caller
+# (the fourth overall; apply-github-infra.yml is the broad one). Unlike the two release jobs it
+# authors the weekly digest PR as the App.
+G7F_COMP_REL = "actions/mint-infra-app-token/action.yml"
+G7F_NARROW, G7F_BROAD = "soleur-infra-app", "soleur-infra-privileged"
+G7F_NARROW_TOK, G7F_BROAD_TOK = "DOPPLER_TOKEN_INFRA_APP", "DOPPLER_TOKEN_INFRA_PRIVILEGED"
+G7F_APP_READ = re.compile(r"\bdoppler\b[^\n]*?\bsecrets\s+get\b[^\n]*?\bGITHUB_INFRA_APP_(?:ID|PRIVATE_KEY)\b")
+# `run` is anchored to the subcommand position (only whitespace-separated words, none of them a shell operator,
+# between `doppler` and `run`), so the English word in `doppler --version ... || { echo "...run the install step"; }`
+# is not a read, while a flag value that contains a space (`--token "$(cat f)" run`) still is.
+G7F_ANY_READ = re.compile(r"\bdoppler\b(?:[^\n]*?\bsecrets\s+(?:get|download)\b|(?:\s+[^\s|&;<>]+)*?\s+run\b)")
+G7F_SECRET = re.compile(r"^\$\{\{\s*secrets\s*\.\s*([A-Za-z0-9_]+)\s*\}\}$", re.I)
+G7F_LOADER = re.compile(r"^\./\.github/actions/infra-credentials/?$")
+G7F_CANON = re.compile(r"^\./\.github/actions/mint-infra-app-token/?$")
+def g7f_target(uses):
+    """The `.github`-relative path a `uses` string names, or None: the local `./.github/...` form, the remote
+    `owner/repo/.github/...@ref` form, and a `..`-spelled path all normalise to the same target."""
+    u = str(uses or "").strip().split("@", 1)[0]
+    if u.startswith("./"):
+        pth = u[2:]
+    else:
+        rm = re.match(r"^[^/\s]+/[^/\s]+/(\.github/.*)$", u)
+        if not rm:
+            return None
+        pth = rm.group(1)
+    pth = posixpath.normpath(pth)
+    return pth[len(".github/"):] if pth.startswith(".github/") else None
+def g7f_is_comp(uses):
+    t = g7f_target(uses)
+    return t is not None and (t + "/action.yml" == G7F_COMP_REL or t == G7F_COMP_REL)
+g7f_bad, g7f_callers = [], []
+# Every failure is tagged with the clause that fired, so a red row names its cause and the mutation rows can
+# pin ONE clause each (a mutant two clauses both catch hides a clause that was deleted).
+def g7f_fail(tag, msg):
+    g7f_bad.append("[%s] %s" % (tag, msg))
+for rel, (doc, text) in sorted(docs.items()):
+    # (iii) a composite that wraps the mint composite: the token/project pairing cannot be proven statically
+    # through an `inputs.*` pass-through, so a wrapper is refused outright (the composite itself is exempt).
+    runs_ = doc.get("runs")
+    if rel != G7F_COMP_REL and isinstance(runs_, dict):
+        for st in (runs_.get("steps") or []):
+            if isinstance(st, dict) and g7f_is_comp(st.get("uses")):
+                g7f_fail("wrapper", "%s wraps the mint composite inside another composite action" % rel)
+    for jn, jb in (doc.get("jobs") or {}).items():
+        if not isinstance(jb, dict):
+            continue
+        steps_ = [st for st in (jb.get("steps") or []) if isinstance(st, dict)]
+        has_loader = any(G7F_LOADER.match(str(st.get("uses") or "")) for st in steps_)
+        for st in steps_:
+            if not g7f_is_comp(st.get("uses")):
+                continue
+            who = "%s::%s" % (rel, jn)
+            g7f_callers.append(who)
+            # (i)/(ii) the remote and `..` spellings name the same composite but escape every other census
+            # mapping (`./.github/actions/<dir>`); only the one local spelling is admitted.
+            if not G7F_CANON.match(str(st.get("uses") or "")):
+                g7f_fail("spelling", "%s names the composite as %r, not ./.github/actions/mint-infra-app-token" % (who, st.get("uses")))
+            w = st.get("with") or {}
+            tm = G7F_SECRET.match(str(w.get("doppler-token", "")).strip())
+            tok = tm.group(1).upper() if tm else None   # secret names are case-insensitive at GitHub
+            if "doppler-project" not in w:
+                if tok != G7F_NARROW_TOK:
+                    g7f_fail("caller-shape", "%s: no doppler-project (narrow source) but doppler-token is %r, not secrets.%s" % (who, w.get("doppler-token"), G7F_NARROW_TOK))
+            elif str(w.get("doppler-project")) == G7F_BROAD:
+                if tok != G7F_BROAD_TOK:
+                    g7f_fail("caller-shape", "%s: doppler-project %s but doppler-token is %r, not secrets.%s" % (who, G7F_BROAD, w.get("doppler-token"), G7F_BROAD_TOK))
+                if not has_loader:
+                    g7f_fail("loader", "%s: the broad source in a job that does not call the infra-credentials loader" % who)
+            else:
+                g7f_fail("caller-shape", "%s: doppler-project %r is neither absent nor %s" % (who, w.get("doppler-project"), G7F_BROAD))
+g7f_comp = docs.get(G7F_COMP_REL)
+if g7f_comp is None:
+    g7f_fail("composite-missing", "the composite %s was not found" % G7F_COMP_REL)
+else:
+    cdoc = g7f_comp[0]
+    dflt = (((cdoc.get("inputs") or {}).get("doppler-project")) or {}).get("default")
+    if dflt != G7F_NARROW:
+        g7f_fail("default", "composite doppler-project default is %r, not %s" % (dflt, G7F_NARROW))
+    # the env mapping that feeds every read: DOPPLER_SOURCE is the validated input and nothing else
+    csrc = [(st.get("env") or {}).get("DOPPLER_SOURCE") for st in ((cdoc.get("runs") or {}).get("steps") or [])
+            if isinstance(st, dict) and "DOPPLER_SOURCE" in (st.get("env") or {})]
+    if csrc != ["${{ inputs.doppler-project }}"]:
+        g7f_fail("env-map", "composite DOPPLER_SOURCE env is %r, not exactly one ${{ inputs.doppler-project }}" % (csrc,))
+    cbody = "\n".join(str(b) for b in step_bodies(cdoc))
+    allowed = set()
+    for alts in re.findall(r"^\s*([A-Za-z0-9_-]+(?:\|[A-Za-z0-9_-]+)*)\)\s*:\s*;;", cbody, re.M):
+        allowed |= set(alts.split("|"))
+    if allowed != {G7F_NARROW, G7F_BROAD}:
+        g7f_fail("allow-list", "composite allow-list is %s, not exactly {%s, %s}" % (sorted(allowed), G7F_NARROW, G7F_BROAD))
+    csites = [line for line, _m in cmd_sites(cbody, G7F_ANY_READ)]
+    cnames = sorted(re.findall(r"\bsecrets\s+get\s+(?:\S+\s+)*?(GITHUB_INFRA_APP_(?:ID|PRIVATE_KEY))\b", " ".join(csites)))
+    if len(csites) != 2 or cnames != ["GITHUB_INFRA_APP_ID", "GITHUB_INFRA_APP_PRIVATE_KEY"]:
+        g7f_fail("read-count", "composite makes %d Doppler read/run call(s) naming %s, not exactly the two App-value reads" % (len(csites), cnames))
+    for line in csites:
+        if not (re.search(r'--project\s+"\$DOPPLER_SOURCE"', line) and re.search(r"--config\s+prd\b", line)):
+            g7f_fail("read-argv", "composite read without --project \"$DOPPLER_SOURCE\" --config prd: %s" % line.strip()[:80])
+for rel, (doc, text) in sorted(docs.items()):
+    if rel == G7F_COMP_REL:
+        continue
+    for _job, body in step_sites(doc):
+        if any(True for _l, _m in cmd_sites(body, G7F_APP_READ)):
+            g7f_fail("outside-read", "%s reads an App value with doppler secrets get outside the composite" % rel)
+g7f_n = len(g7f_callers)
+if CHECK_GIT and g7f_n != 4:
+    g7f_fail("caller-count", "%d callers, the live tree has exactly 4 (a fifth is a deliberate, dated edit here)" % g7f_n)
+elif g7f_n < 1:
+    g7f_fail("caller-count", "no caller of the composite was scanned")
+check("G7f: every mint-infra-app-token call is the narrow shape (no doppler-project, secrets.%s) or the loader-job broad "
+      "shape (doppler-project %s, secrets.%s), the composite defaults to %s with a two-literal allow-list and exactly "
+      "two pinned reads, and no other workflow or action run body reads an App value [%d callers, composite %s]"
+      % (G7F_NARROW_TOK, G7F_BROAD, G7F_BROAD_TOK, G7F_NARROW, g7f_n, "found" if g7f_comp is not None else "missing"),
+      not g7f_bad,
+      "clauses=%s callers=%s bad=%s" % (sorted({b[1:b.index("]")] for b in g7f_bad}), sorted(g7f_callers), sorted(set(g7f_bad))[:4]))
+
 # G6l -- the provider fact the state-residency argument rests on.
 g6_lock = os.path.join(REPO, G6_LOCK_REL)
 g6_ver = ""
@@ -1561,7 +1954,8 @@ check("G6u: every unit or drop-in that loads /etc/default/soleur-doppler-token a
 
 print("\n".join(out))
 PY
-CENSUS_ROWS=41  # 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+CENSUS_ROWS=46  # 43 -> 45 (#9879): +2 rows, G4h (no removed/moved over a sole-copy address) and G4h2 (the exact sole-copy set); main carries 43 live rows against a floor of 42 (the floor sat one below the live count), and the floor is now exactly the live count. 45 -> 46 (#9879 round 2): +1 row, G4h4 (the live removed/moved counts equal the unscrubbed count). 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+# 41 -> 42 (#9321 PR-2, 2026-10-03): G7f, the App-token composite and callers source-shape row.
 # 34 -> 38 (#8609 review): G6o (plan-context invariance), G6q (exact opt-in set), G6s (cosign
 # caller-ref pin), G6u (UnsetEnvironment sweep).
 
@@ -1584,27 +1978,72 @@ census_rows() {
 }
 
 # wf_row <tsv> <name-prefix> — 1 only when the named row is PRESENT and not ok. An ABSENT row (the
-# census crashed on a fixture) returns 0, so a mutant can never read as RED for the wrong reason.
+# census crashed on a fixture) returns 0, so a mutant can never read as RED for the wrong reason. A TSV that
+# is MISSING or EMPTY (a fixcensus line deleted, so awk had nothing to read) is UNRESOLVED: rc 2 and a stderr
+# note, never 1, so it cannot read as RED either (review #9453: awk exits 2 on a missing file and every caller
+# used to take any non-zero rc as RED).
 # shellcheck disable=SC2317  # invoked indirectly through mutant_red
-wf_row() { awk -F'\t' -v p="$2" 'index($2, p) == 1 { found = 1; if ($1 != "ok") bad = 1 } END { exit (found && bad) ? 1 : 0 }' "$1"; }
+wf_row() {
+  [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }
+  awk -F'\t' -v p="$2" 'index($2, p) == 1 { found = 1; if ($1 != "ok") bad = 1 } END { exit (found && bad) ? 1 : 0 }' "$1"
+}
+# wf_red <tsv> <name-prefix> — true ONLY on the verdict "present and not ok" (rc exactly 1), never on UNRESOLVED.
+wf_red() { local rc=0; wf_row "$@" || rc=$?; [ "$rc" -eq 1 ]; }
+# wf_clause <tsv> <name-prefix> <clause> [<clause that must NOT fire>] — as wf_row, but the row must be red
+# BECAUSE the named G7f clause fired (its detail lists `clauses=['...']`), and optionally not because of a
+# second one. This is how a mutant pins ONE clause: a mutant two clauses both catch hides a deleted clause.
+# shellcheck disable=SC2317  # invoked indirectly through mutant_red
+wf_clause() {
+  [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }
+  awk -F'\t' -v p="$2" -v w="'$3'" -v a="${4:+'$4'}" '
+    index($2, p) == 1 { found = 1; if ($1 != "ok") { bad = 1; if (match($3, /clauses=\[[^]]*\]/)) cl = substr($3, RSTART, RLENGTH) } }
+    END { exit (found && bad && index(cl, w) > 0 && (a == "" || index(cl, a) == 0)) ? 1 : 0 }' "$1"
+}
 
 # ── the base tree for the deleted-resource-block row (Guard 4 row 3) ─────────────────
 # `git show <ref>:<path>` per file rather than a worktree checkout: this suite must never touch
 # the caller's index or working tree.
+# materialize_base_dir <repodir> <ref> <destdir> — copy <ref>'s *.tf under GUARD4_ROOTS into
+# <destdir>. Extracted so the G4c base legs below drive the PRODUCTION path (a fixture that
+# re-implements the materialization proves the fixture, not the guard).
+materialize_base_dir() {
+  local _rd="$1" _ref="$2" _dest="$3" _rc=0 _lst _f _r="" _n _why=""
+  assert_fixture_dir "$_rd"
+  assert_fixture_dir "$_dest"
+  mkdir -p "$_dest/apps/web-platform/infra/git-data-root-key" || { _rc=1; _why="mkdir"; }
+  if [ "$_rc" -eq 0 ]; then
+    for _r in apps/web-platform/infra apps/web-platform/infra/git-data-root-key; do
+      _lst="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+        git -C "$_rd" ls-tree -r --name-only "$_ref" -- "$_r" 2>/dev/null)" || { _why="ls-tree"; _rc=1; break; }
+      [ -n "$_lst" ] || { _why="empty-listing"; _rc=1; break; }
+      _n=0
+      while IFS= read -r _f; do
+        case "$_f" in *.tf) ;; *) continue ;; esac
+        [ "${_f%/*}" = "$_r" ] || continue
+        env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+          git -C "$_rd" show "$_ref:$_f" > "$_dest/$_f" 2>/dev/null || { _rc=1; _why="show"; }
+        _n=$((_n + 1))
+      done <<< "$_lst"
+      # Per-root floor: a root whose listing holds only non-.tf or nested files contributes
+      # zero materialized files — without this its base_declared reads {} and that root's
+      # deletions blind-green (the file floor in ipt.py is global across both roots).
+      # Fail-closed by direction: a branch forked before a root's first .tf reds 'base
+      # unavailable', which the IPT_BASE_REF seam covers — the blind-green alternative is worse.
+      [ "$_n" -ge 1 ] || { _rc=1; _why="floor"; }
+      # `show`/`floor` do not break inside the while — break HERE, while `_r` still names the
+      # failing root, so the root= field cannot mis-attribute a root-1 failure to root 2.
+      [ "$_rc" -eq 0 ] || break
+    done
+  fi
+  if [ "$_rc" -ne 0 ]; then
+    printf 'IPT_G4C_BASE_MATERIALIZE=fail step=%s root=%s ref=%s\n' \
+      "${_why:-unknown}" "${_r:-pre-roots}" "${_ref//[[:cntrl:]$'\u2028\u2029']/?}" >&2
+  fi
+  [ "$_rc" -eq 0 ]
+}
 BASEDIR="$T/base"; assert_fixture_dir "$BASEDIR"
-base_rc=0
-mkdir -p "$BASEDIR/apps/web-platform/infra/git-data-root-key" || base_rc=1
-for r in apps/web-platform/infra apps/web-platform/infra/git-data-root-key; do
-  [ "$base_rc" -eq 0 ] || break
-  rc=0; lst="$(git -C "$REPODIR" ls-tree -r --name-only "$BASE_REF" -- "$r" 2>/dev/null)" || rc=$?
-  [ "$rc" -eq 0 ] && [ -n "$lst" ] || { base_rc=1; break; }
-  while IFS= read -r f; do
-    case "$f" in *.tf) ;; *) continue ;; esac
-    [ "${f%/*}" = "$r" ] || continue
-    git -C "$REPODIR" show "$BASE_REF:$f" > "$BASEDIR/$f" 2>/dev/null || base_rc=1
-  done <<< "$lst"
-done
-[ "$base_rc" -eq 0 ] || BASEDIR=""
+BASE_REF="$(resolve_base_ref "$REPODIR")"
+materialize_base_dir "$REPODIR" "$BASE_REF" "$BASEDIR" || BASEDIR=""
 
 # ── the live census (this is the guard) ──────────────────────────────────────────────
 python3 "$T/ipt.py" "$GHDIR" "$REPODIR" "$STATE_LIST" "$BASEDIR" > "$T/live.tsv" 2> "$T/live.err"
@@ -1626,6 +2065,7 @@ fi
 # control the mutation matrix is measured against; see the header for why the live tree is not.
 FIX="$T/fix"; assert_fixture_dir "$FIX"
 mkdir -p "$FIX/tree/.github/workflows" "$FIX/tree/.github/actions/infra-credentials" \
+         "$FIX/tree/.github/actions/mint-infra-app-token" \
          "$FIX/tree/scripts" "$FIX/tree/apps/web-platform/infra/git-data-root-key" \
          "$FIX/base/apps/web-platform/infra/git-data-root-key" \
   || { printf 'FAIL SETUP: fixture mkdir\n' >&2; exit 1; }
@@ -1755,6 +2195,83 @@ jobs:
         run: |
           set -euo pipefail
           doppler run -p soleur -c prd_terraform -- terraform plan -refresh=false
+EOF
+
+# G7f (#9321): the compliant App-token composite and its two call shapes. The composite's default is
+# the narrow project, its allow-list is exactly the two named projects, and it makes exactly the two
+# pinned reads. The release-shaped caller (narrow: no project input, the narrow token) and the
+# loader-calling caller (broad: the explicit project input, the broad token) are the two shapes the
+# live tree has. Without them the G7f row could only ever show its empty-population branch, and the
+# control would be red.
+cat > "$FIX/tree/.github/actions/mint-infra-app-token/action.yml" <<'EOF'
+name: "Mint App token (fixture)"
+description: "fixture composite"
+inputs:
+  doppler-token:
+    required: true
+  doppler-project:
+    required: false
+    default: soleur-infra-app
+  installation-id:
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Mint
+      id: mint
+      shell: bash
+      env:
+        DOPPLER_SOURCE: ${{ inputs.doppler-project }}
+      run: |
+        set -euo pipefail
+        case "${DOPPLER_SOURCE:-}" in
+          soleur-infra-app|soleur-infra-privileged) : ;;
+          *) echo "::error::doppler-project must be one of the two named projects"; exit 1 ;;
+        esac
+        APP_ID=$(doppler secrets get GITHUB_INFRA_APP_ID --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null)
+        PEM=$(doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null)
+        echo "::add-mask::$APP_ID" > /dev/null
+        echo "$PEM" > /dev/null
+EOF
+
+cat > "$FIX/tree/.github/workflows/release.yml" <<'EOF'
+name: fixture release job (narrow source)
+on: workflow_dispatch
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    environment: infra-privileged
+    steps:
+      - name: Verify DOPPLER_TOKEN_INFRA_APP present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
+        run: |
+          set -euo pipefail
+          test -n "$DOPPLER_TOKEN_CHECK"
+      - name: Mint
+        uses: ./.github/actions/mint-infra-app-token
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
+          installation-id: "166065653"
+EOF
+
+cat > "$FIX/tree/.github/workflows/marketplace-verify.yml" <<'EOF'
+name: fixture marketplace verify (broad source, loader job)
+on: workflow_dispatch
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    environment: infra-privileged
+    steps:
+      - uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+      - name: Mint
+        uses: ./.github/actions/mint-infra-app-token
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-project: soleur-infra-privileged
+          installation-id: "166065653"
 EOF
 
 # A compliant App-key consumer for G4e. Tier A on purpose: board-status-sync is
@@ -1952,6 +2469,15 @@ removed {
   lifecycle {
     destroy = false
   }
+}
+EOF
+
+# G4h (#9879): a benign `moved` block between UNPROTECTED addresses (the shape placement-group.tf has live). The control
+# must stay green on it, and the harness reads the collector's count of it back (IPT_G4H moved:1) as its non-vacuity.
+cat > "$FIX/tree/apps/web-platform/infra/placement-group.tf" <<'EOF'
+moved {
+  from = hcloud_server.web
+  to   = hcloud_server.web["web-1"]
 }
 EOF
 
@@ -2159,7 +2685,7 @@ mkdir -p "$_EMPTYTF/tree/.github" "$_EMPTYTF/base" || { printf 'FAIL SETUP: empt
 cp -r "$FIX/tree/.github/workflows" "$FIX/tree/.github/actions" "$_EMPTYTF/tree/.github/" \
   || { printf 'FAIL SETUP: empty-tf copy\n' >&2; exit 1; }
 fixcensus "$_EMPTYTF" "$T/empty-tf.tsv" ""
-if grep -q '^IPT_G4_FILES=0$' "$T/empty-tf.tsv.err" && ! wf_row "$T/empty-tf.tsv" "G4a:"; then
+if grep -q '^IPT_G4_FILES=0$' "$T/empty-tf.tsv.err" && wf_red "$T/empty-tf.tsv" "G4a:"; then
   pass "H5: Guard 4's instrument self-test — an empty \`.tf\` set reports 0 files and reds G4a"
 else
   fail "H5: an empty .tf set did not red Guard 4" "$(grep -E 'IPT_G4_FILES|G4a' "$T/empty-tf.tsv.err" "$T/empty-tf.tsv" | cut -c1-200)"
@@ -2168,14 +2694,14 @@ _EMPTYGH="$T/empty-gh"; assert_fixture_dir "$_EMPTYGH"
 mkdir -p "$_EMPTYGH/tree/.github/workflows" "$_EMPTYGH/tree/.github/actions" "$_EMPTYGH/base" \
   || { printf 'FAIL SETUP: empty-gh fixture\n' >&2; exit 1; }
 fixcensus "$_EMPTYGH" "$T/empty-gh.tsv" ""
-if grep -q '^IPT_FILES_SCANNED=0$' "$T/empty-gh.tsv.err" && ! wf_row "$T/empty-gh.tsv" "G1a:"; then
+if grep -q '^IPT_FILES_SCANNED=0$' "$T/empty-gh.tsv.err" && wf_red "$T/empty-gh.tsv" "G1a:"; then
   pass "H6: the dispatch self-test — an empty input tree reports '0 files scanned' and reds G1a (the suite's own SCAN FLOOR then exits non-zero)"
 else
   fail "H6: an empty input tree did not report 0 files scanned" "$(head -2 "$T/empty-gh.tsv.err")"
 fi
 # G6g / G6g2 — Guard 6's own dispatch self-tests, over the same two empty trees. Without them an
 # empty tree reds only G1a/G4a, and a Guard 6 that had stopped scanning would still read green.
-if ! wf_row "$T/empty-gh.tsv" "G6a:"; then
+if wf_red "$T/empty-gh.tsv" "G6a:"; then
   pass "G6g: an empty workflow tree reds a G6 row (G6a: 0 files, 0 referencing jobs), not only G1a"
 else
   fail "G6g: an empty workflow tree left G6a green" "$(grep -F 'G6a:' "$T/empty-gh.tsv" | cut -c1-200)"
@@ -2223,16 +2749,72 @@ fixture_written() { # <name> <file>
   if [ -s "$2" ]; then MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-$1: fixture $(basename "$2") written ($(md5sum < "$2" | cut -c1-8))"; return 0; fi
   fail "M-$1: fixture not written"; return 1
 }
-mutant_red() { # <name> <case-fn> [args...] — the named case must go RED
-  local name="$1"; shift
-  if "$@"; then fail "M-$name: the named census row stayed GREEN against the mutant"
-  else pass "M-$name: the named census row goes RED against the mutant"; fi
+mutant_red() { # <name> <case-fn> [args...] — the named case must go RED (rc exactly 1); rc 2 is UNRESOLVED
+  local name="$1" rc=0; shift
+  "$@" || rc=$?
+  case "$rc" in
+    0) fail "M-$name: the named census row stayed GREEN against the mutant" ;;
+    1) pass "M-$name: the named census row goes RED against the mutant" ;;
+    *) fail "M-$name: UNRESOLVED (the case returned rc=$rc: a missing or empty census TSV is not a verdict)" ;;
+  esac
 }
 # mutant_red self-test (ADR-193), both directions, in a subshell so the counters roll back.
 _mr="$( (mutant_red st-green true >/dev/null; printf '%s,%s ' "$passes" "$fails"; mutant_red st-red false >/dev/null; printf '%s,%s' "$passes" "$fails") )"
 if [ "$_mr" != "$passes,$((fails + 1)) $((passes + 1)),$((fails + 1))" ]; then
   printf 'FAIL INSTRUMENT: mutant_red self-test read "%s" (from %s,%s) — a GREEN case must fail, a RED case must pass\n' "$_mr" "$passes" "$fails" >&2; exit 1
 fi
+# The third direction (review #9453): a case that cannot reach a verdict (a deleted fixcensus leaves its TSV
+# missing; an emptied one leaves it empty) must FAIL the row, not pass it as RED. Driven through the real
+# wf_row / wf_clause / presence helpers, in subshells so the counters roll back.
+: > "$T/st-empty.tsv"
+for _st in "wf_row $T/st-missing.tsv G7f:" "wf_row $T/st-empty.tsv G7f:" "wf_clause $T/st-missing.tsv G7f: spelling" \
+           "wf_clause $T/st-empty.tsv G7f: spelling"; do
+  # shellcheck disable=SC2086  # the helper name and its arguments are split on purpose
+  _mr="$( (mutant_red st-unresolved $_st >/dev/null 2>&1; printf '%s,%s' "$passes" "$fails") )"
+  if [ "$_mr" != "$passes,$((fails + 1))" ]; then
+    printf 'FAIL INSTRUMENT: mutant_red read a missing/empty TSV as RED for [%s] (got "%s" from %s,%s)\n' "$_st" "$_mr" "$passes" "$fails" >&2; exit 1
+  fi
+done
+pass "H7: a mutant row whose census TSV is missing or empty (a deleted fixcensus) is UNRESOLVED and fails, never RED (wf_row, wf_clause, 4 drives)"
+# H7b (review #9453, pass 2): the verdict helpers' OWN logic, driven with hand-written one-line TSVs and an exact rc
+# each (printf + exit, never through the helpers it backstops). Without these, wf_clause could accept any red, or
+# ignore its exclusion, wf_red could read UNRESOLVED as RED, and the empty-TSV guards could be dropped, with every
+# mutant row above still green: their verdicts happen to coincide today.
+printf 'bad\tG7f: demo\tclauses=[%s]\n' "'spelling'" > "$T/st-one.tsv"
+printf 'bad\tG7f: demo\tclauses=[%s, %s]\n' "'spelling'" "'wrapper'" > "$T/st-two.tsv"
+printf 'ok\tG7f: demo\t\n' > "$T/st-ok.tsv"
+_h7b() { # <exact rc wanted> <helper> [args...]
+  local want="$1" rc=0; shift
+  "$@" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = "$want" ] || { printf 'FAIL INSTRUMENT: H7b [%s] returned rc %s, wanted %s\n' "$*" "$rc" "$want" >&2; exit 1; }
+}
+_h7b 1 wf_clause "$T/st-one.tsv" G7f: spelling             # the named clause fired: RED (1)
+_h7b 0 wf_clause "$T/st-one.tsv" G7f: wrapper              # a DIFFERENT clause fired: not this row's clause (0)
+_h7b 0 wf_clause "$T/st-two.tsv" G7f: spelling wrapper     # the excluded clause fired too: not isolated (0)
+_h7b 1 wf_clause "$T/st-two.tsv" G7f: spelling             # two clauses fired, none excluded: RED (1)
+_h7b 0 wf_clause "$T/st-ok.tsv" G7f: spelling              # an ok row is never RED (0)
+_h7b 1 wf_row "$T/st-one.tsv" G7f:                         # a present, not-ok row: 1
+_h7b 0 wf_row "$T/st-ok.tsv" G7f:                          # a present, ok row: 0
+_h7b 2 wf_row "$T/st-empty.tsv" G7f:                       # an EMPTY TSV is UNRESOLVED, exactly 2 (awk alone says 0)
+_h7b 2 wf_row "$T/st-missing.tsv" G7f:
+_h7b 2 wf_clause "$T/st-empty.tsv" G7f: spelling
+_h7b 2 wf_clause "$T/st-missing.tsv" G7f: spelling
+_h7b 0 wf_red "$T/st-one.tsv" G7f:                         # wf_red is true on a RED row ...
+_h7b 1 wf_red "$T/st-ok.tsv" G7f:                          # ... false on an ok row ...
+_h7b 1 wf_red "$T/st-missing.tsv" G7f:                     # ... and false on a missing or an empty TSV (not a verdict)
+_h7b 1 wf_red "$T/st-empty.tsv" G7f:
+# An ABSENT row on a NON-empty TSV (the census crashed on a fixture, so the named row is not there) is 0, never RED:
+# flipping wf_row's `(found && bad)` to `(!found || bad)` would read every absent row as RED.
+_h7b 0 wf_row "$T/st-one.tsv" NoSuchRow:
+_h7b 0 wf_clause "$T/st-one.tsv" NoSuchRow: spelling
+_h7b 1 wf_red "$T/st-one.tsv" NoSuchRow:
+# _h7b's OWN logic, in both directions, in subshells (it exits 1 on a mismatch): a drive with a deliberately wrong
+# wanted rc must make _h7b exit 1. Neutering _h7b (`true || {`) would leave all 18 drives above vacuous.
+for _w in "0 wf_row $T/st-one.tsv G7f:" "1 wf_row $T/st-ok.tsv G7f:" "2 wf_clause $T/st-one.tsv G7f: spelling"; do
+  _hrc=0; ( _h7b $_w ) >/dev/null 2>&1 || _hrc=$?
+  [ "$_hrc" = 1 ] || { printf 'FAIL INSTRUMENT: H7b self-test: _h7b accepted a WRONG wanted rc [%s] (subshell rc %s, wanted 1)\n' "$_w" "$_hrc" >&2; exit 1; }
+done
+pass "H7b: wf_row, wf_clause and wf_red return their exact verdicts on hand-written TSVs (named clause, other clause, excluded clause, ok, empty, missing, absent row; 18 drives) and _h7b itself rejects a wrong wanted rc (3 self-test drives)"
 
 # shellcheck disable=SC2016  # sed programs and fixture YAML are data
 {
@@ -2304,7 +2886,7 @@ fi
 
 # Row 11 (#6604 step 7) — a STATE-RM-ONLY job against the privileged-state root, no `environment:`.
 # `terraform state rm` writes the same state object an apply does; before the STATE_WRITE widening this
-# job scored Tier A and G1h never saw it (workspaces-plaintext-forget.yml is the live instance).
+# job scored Tier A and G1h never saw it (workspaces-plaintext-forget.yml was the instance, retired in #6604 PR B).
 MUTDIR="$(fixcopy g1-11)"; assert_fixture_dir "$MUTDIR"
 printf 'name: zz\non: workflow_dispatch\nenv:\n  INFRA_DIR: apps/web-platform/infra\njobs:\n  forget:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ./.github/actions/infra-credentials\n        with:\n          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}\n      - name: Forget\n        working-directory: ${{ env.INFRA_DIR }}\n        run: |\n          set -euo pipefail\n          terraform state rm \x27hcloud_volume.workspaces["web-1"]\x27\n' > "$MUTDIR/tree/.github/workflows/zz-forget.yml"
 if fixture_written g1-11-state-rm-only-no-environment "$MUTDIR/tree/.github/workflows/zz-forget.yml"; then
@@ -2573,6 +3155,457 @@ MUTDIR="$(fixcopy g4-7)"; assert_fixture_dir "$MUTDIR"
 if mutate g4-7-intended-destroy-untargeted "$MUTDIR/base/apps/web-platform/infra/github-app.tf" 5 '$a\resource "doppler_secret" "ghcr_read_token" {\n  project = "soleur"\n  config  = "prd"\n  name    = "GHCR_READ_TOKEN"\n}'; then
   fixcensus "$MUTDIR" "$T/mut/g4-7.tsv" ""
   mutant_red g4-7-intended-destroy-untargeted wf_row "$T/mut/g4-7.tsv" "G4c:"
+fi
+
+# Row 8 — ACCEPT arm of the retired-state-absent allowance (#8285 PR B): the base declares a listed address, HEAD deletes
+# it, and no job targets it. G4c must stay GREEN, or deleting a count-gated throwaway whose teardown already destroyed it
+# has no sanctioned path. Its REFUSAL arm is row 3 (an unlisted deletion with no `removed` block stays RED).
+MUTDIR="$(fixcopy g4-8)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-8-retired-absent-base "$MUTDIR/base/apps/web-platform/infra/github-app.tf" 3 '$a\resource "hcloud_server" "inngest_backstop_wipe" {\n  name = "x"\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-8.tsv" ""
+  if wf_row "$T/mut/g4-8.tsv" "G4c:"; then pass "M-g4-8-retired-state-absent: a listed, untargeted deletion is ACCEPTED by G4c"
+  else fail "M-g4-8-retired-state-absent: G4c refused a listed, untargeted deletion" "$(grep G4c "$T/mut/g4-8.tsv" | cut -c1-240)"; fi
+fi
+
+# Row 9 — REFUSAL arm of the retired-state-absent allowance: the same listed deletion, but a PLAN step still
+# `-target`s the address (the dispatch jobs target on a plan step and apply the saved plan, which an apply-body scan
+# cannot see). The allowance must not be honoured, so G4c goes RED.
+MUTDIR="$(fixcopy g4-9)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-9-retired-absent-base "$MUTDIR/base/apps/web-platform/infra/github-app.tf" 3 '$a\resource "hcloud_server" "inngest_backstop_wipe" {\n  name = "x"\n}' \
+   && mutate g4-9-plan-step-target "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 3 '/^          bash scripts\/tierb-helper\.sh$/a\      - name: Terraform plan\n        run: |\n          terraform plan -input=false -out=tfplan -target=hcloud_server.inngest_backstop_wipe'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-9.tsv" ""
+  mutant_red g4-9-listed-but-targeted-on-a-plan-step wf_row "$T/mut/g4-9.tsv" "G4c:"
+fi
+# Row 10 — a PROTECTED address placed in RETIRED_STATE_ABSENT trips G4f. The allowance lives in the checker, so the
+# mutant is a copy of the checker with the App identity added to the dict.
+MUTDIR="$(fixcopy g4-10)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4-10.py" || { printf 'FAIL SETUP: g4-10 checker copy\n' >&2; exit 1; }
+if mutate g4-10-protected-in-allowance "$T/ipt-g4-10.py" 1 's/^(        )("hcloud_server\.inngest_backstop_wipe": ".*)$/\1"doppler_secret.github_app_id": "x",\n\1\2/'; then
+  python3 "$T/ipt-g4-10.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4-10.tsv" 2> "$T/mut/g4-10.tsv.err"
+  mutant_red g4-10-protected-in-allowance wf_row "$T/mut/g4-10.tsv" "G4f:"
+fi
+# Row 12 — a SOLE-COPY live store (the Inngest LUKS volume) placed in the allowance trips G4f, like the App identity.
+MUTDIR="$(fixcopy g4-12)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4-12.py" || { printf 'FAIL SETUP: g4-12 checker copy\n' >&2; exit 1; }
+if mutate g4-12-live-store-in-allowance "$T/ipt-g4-12.py" 1 's/^(        )("hcloud_server\.inngest_backstop_wipe": ".*)$/\1"hcloud_volume.inngest_redis_luks": "x",\n\1\2/'; then
+  python3 "$T/ipt-g4-12.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4-12.tsv" 2> "$T/mut/g4-12.tsv.err"
+  mutant_red g4-12-live-store-in-allowance wf_row "$T/mut/g4-12.tsv" "G4f:"
+fi
+# Rows 13 and 14 — the two other spellings ANY_TARGET reads on a plan step: the space form `-target ADDR` and `-replace=ADDR`.
+# Row 9 drives only `-target=`; dropping either alternative from the regex left the suite green.
+for _spelling in "13:-target hcloud_server.inngest_backstop_wipe" "14:-replace=hcloud_server.inngest_backstop_wipe"; do
+  _n="${_spelling%%:*}"; _arg="${_spelling#*:}"
+  MUTDIR="$(fixcopy g4-$_n)"; assert_fixture_dir "$MUTDIR"
+  if mutate g4-$_n-retired-absent-base "$MUTDIR/base/apps/web-platform/infra/github-app.tf" 3 '$a\resource "hcloud_server" "inngest_backstop_wipe" {\n  name = "x"\n}' \
+     && mutate g4-$_n-plan-step-spelling "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 3 '/^          bash scripts\/tierb-helper\.sh$/a\      - name: Terraform plan\n        run: |\n          terraform plan -input=false -out=tfplan '"$_arg"; then
+    fixcensus "$MUTDIR" "$T/mut/g4-$_n.tsv" ""
+    mutant_red g4-$_n-listed-but-targeted-by-spelling wf_row "$T/mut/g4-$_n.tsv" "G4c:"
+  fi
+done
+# Row 11 — an allowance entry that HEAD declares again (re-declare, then delete, would ride it): G4g RED.
+MUTDIR="$(fixcopy g4-11)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-11-redeclared "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 3 '$a\resource "hcloud_server" "inngest_backstop_wipe" {\n  name = "x"\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-11.tsv" ""
+  mutant_red g4-11-allowance-entry-redeclared wf_row "$T/mut/g4-11.tsv" "G4g:"
+fi
+
+# ── G4h (#9879): no `removed` / `moved` block over a sole-copy address ───────────────────────────────────────────────
+# MUST-PASS arm first: the compliant fixture carries the two App-identity forget-only `removed` blocks (github-app.tf)
+# and a benign `moved` block (placement-group.tf), and G4h and G4h2 stay green on all of them.
+_g4h_ctl="$(sed -n 's/^IPT_G4H=//p' "$T/control.tsv.err" | tail -1)"
+if grep -q 'from = doppler_secret.github_app_id' "$FIX/tree/apps/web-platform/infra/github-app.tf" \
+   && grep -q 'from = doppler_secret.github_app_private_key' "$FIX/tree/apps/web-platform/infra/github-app.tf" \
+   && wf_row "$T/control.tsv" "G4h:" && wf_row "$T/control.tsv" "G4h2:" \
+   && grep -q "^ok$(printf '\t')G4h: " "$T/control.tsv" && grep -q "^ok$(printf '\t')G4h2: " "$T/control.tsv" \
+   && case "$_g4h_ctl" in "removed:6 moved:1 probe:1 hits:0") true ;; *) false ;; esac; then
+  pass "M-g4h-must-pass: the App-identity forget-only removed blocks and a benign moved block stay green on G4h and G4h2 ($_g4h_ctl)"
+else
+  fail "M-g4h-must-pass: G4h/G4h2 refused the App-identity forget-only blocks or a benign moved block, or the collector counts drifted" "ipt=$_g4h_ctl $(grep -E 'G4h' "$T/control.tsv" | cut -c1-200)"
+fi
+# Row 1 — a `removed` block forgetting the Inngest LUKS volume: its pins stop applying and the volume lives on unprotected.
+MUTDIR="$(fixcopy g4h-1)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-1-removed-sole-copy "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 6 '$a\removed {\n  from = hcloud_volume.inngest_redis_luks\n  lifecycle {\n    destroy = false\n  }\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-1.tsv" ""
+  mutant_red g4h-1-removed-sole-copy wf_row "$T/mut/g4h-1.tsv" "G4h:"
+fi
+# Row 2 — a `moved` block renaming the volume (state-only): the address the pins name no longer exists.
+MUTDIR="$(fixcopy g4h-2)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-2-moved-from-sole-copy "$MUTDIR/tree/apps/web-platform/infra/placement-group.tf" 4 '$a\moved {\n  from = hcloud_volume.inngest_redis_luks\n  to   = hcloud_volume.renamed\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-2.tsv" ""
+  mutant_red g4h-2-moved-from-sole-copy wf_row "$T/mut/g4h-2.tsv" "G4h:"
+fi
+# Row 2b — the same through `to`, and through an indexed address: neither attribute nor an index suffix may hide it.
+MUTDIR="$(fixcopy g4h-2b)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-2b-moved-to-sole-copy-indexed "$MUTDIR/tree/apps/web-platform/infra/placement-group.tf" 4 '$a\moved {\n  from = hcloud_volume.elsewhere\n  to   = hcloud_volume.workspaces_luks["web-1"]\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-2b.tsv" ""
+  mutant_red g4h-2b-moved-to-sole-copy-indexed wf_row "$T/mut/g4h-2b.tsv" "G4h:"
+fi
+# Row 3 — SECOND-MEMBER: a compliant `removed` block for an UNPROTECTED address first, then a second one for a Doppler
+# parent. A scan that stopped at the first compliant block would stay green.
+MUTDIR="$(fixcopy g4h-3)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-3-second-member-doppler-parent "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 12 '$a\removed {\n  from = doppler_service_token.unrelated\n  lifecycle {\n    destroy = false\n  }\n}\nremoved {\n  from = doppler_environment.inngest_prd\n  lifecycle {\n    destroy = false\n  }\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-3.tsv" ""
+  mutant_red g4h-3-second-member-doppler-parent wf_row "$T/mut/g4h-3.tsv" "G4h:"
+fi
+# Must-pass — a `removed` block for an UNPROTECTED address with `lifecycle { destroy = false }` (the G4a shape) is green.
+MUTDIR="$(fixcopy g4h-mp)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-mp-unprotected-removed "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 6 '$a\removed {\n  from = doppler_service_token.unrelated\n  lifecycle {\n    destroy = false\n  }\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-mp.tsv" ""
+  if wf_row "$T/mut/g4h-mp.tsv" "G4h:" && grep -q "^ok$(printf '\t')G4h: " "$T/mut/g4h-mp.tsv" \
+     && grep -q '^IPT_G4H=removed:7 moved:1 probe:1 hits:0$' "$T/mut/g4h-mp.tsv.err"; then
+    pass "M-g4h-mp-unprotected-removed: a compliant removed block for an unprotected address is ACCEPTED by G4h"
+  else
+    fail "M-g4h-mp-unprotected-removed: G4h refused a compliant removed block for an unprotected address" "$(grep G4h "$T/mut/g4h-mp.tsv" | cut -c1-240)"
+  fi
+fi
+# Row 4 — `doppler_environment.inngest_prd` deleted from G4_PROTECTED while its `removed` block stays. G4h itself goes green
+# (the address left the set), so the EXACT-SET row (G4h2) is what must red; the mutant is a copy of the checker.
+MUTDIR="$(fixcopy g4h-4)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4h-4.py" || { printf 'FAIL SETUP: g4h-4 checker copy\n' >&2; exit 1; }
+if mutate g4h-4-removed-block-stays "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 6 '$a\removed {\n  from = doppler_environment.inngest_prd\n  lifecycle {\n    destroy = false\n  }\n}' \
+   && mutate g4h-4-protected-entry-deleted "$T/ipt-g4h-4.py" 1 '/^    "doppler_environment\.inngest_prd",$/d'; then
+  python3 "$T/ipt-g4h-4.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4h-4.tsv" 2> "$T/mut/g4h-4.tsv.err"
+  mutant_red g4h-4-protected-entry-deleted wf_row "$T/mut/g4h-4.tsv" "G4h2:"
+fi
+# Row 5 — DISPATCH NON-VACUITY: the `moved` collector reads zero blocks (opener regex broken) on a fixture that holds a
+# `moved` block over a sole-copy address. The collector probe must fail G4h; without it the moved clause is vacuously green.
+MUTDIR="$(fixcopy g4h-5)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4h-5.py" || { printf 'FAIL SETUP: g4h-5 checker copy\n' >&2; exit 1; }
+if mutate g4h-5-moved-in-fixture "$MUTDIR/tree/apps/web-platform/infra/placement-group.tf" 4 '$a\moved {\n  from = hcloud_volume.inngest_redis_luks\n  to   = hcloud_volume.renamed\n}' \
+   && mutate g4h-5-collector-blind "$T/ipt-g4h-5.py" 2 "/^MOVED_OPEN = /s/moved/movedX/"; then
+  python3 "$T/ipt-g4h-5.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4h-5.tsv" 2> "$T/mut/g4h-5.tsv.err"
+  if grep -q '^IPT_G4H=.* moved:0 probe:0 ' "$T/mut/g4h-5.tsv.err"; then
+    mutant_red g4h-5-collector-blind wf_row "$T/mut/g4h-5.tsv" "G4h:"
+  else
+    fail "M-g4h-5-collector-blind: the blinded collector did not read zero moved blocks" "$(grep IPT_G4H "$T/mut/g4h-5.tsv.err")"
+  fi
+fi
+# Row 6 — an INDENTED `moved` block over the volume. HCL ignores indentation; an opener anchored at column 0 read zero
+# blocks here and left G4h and G4h2 green.
+MUTDIR="$(fixcopy g4h-6)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-6-indented-moved-sole-copy "$MUTDIR/tree/apps/web-platform/infra/placement-group.tf" 4 '$a\  moved {\n    from = hcloud_volume.inngest_redis_luks\n    to   = hcloud_volume.renamed\n  }'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-6.tsv" ""
+  mutant_red g4h-6-indented-moved-sole-copy wf_row "$T/mut/g4h-6.tsv" "G4h:"
+fi
+# Row 7 — an INDENTED `removed` block over a Doppler parent, compliant in every other respect (from + destroy = false).
+MUTDIR="$(fixcopy g4h-7)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-7-indented-removed-doppler-parent "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 6 '$a\  removed {\n    from = doppler_environment.inngest_prd\n    lifecycle {\n      destroy = false\n    }\n  }'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-7.tsv" ""
+  mutant_red g4h-7-indented-removed-doppler-parent wf_row "$T/mut/g4h-7.tsv" "G4h:"
+fi
+# Must-pass — a `removed` / `moved` look-alike that is NOT a block: a line comment, a heredoc body (indented, as a shell
+# or JSON payload would carry it) and a block comment, all naming sole-copy addresses. The scan runs on comment- and
+# heredoc-blanked text, so G4h stays green and the collector counts are the control's.
+MUTDIR="$(fixcopy g4h-8)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-8-lookalikes-in-comment-and-heredoc "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 19 '$a\# removed {\n#   from = hcloud_volume.inngest_redis_luks\n# }\nlocals {\n  g4h_note = <<-EOT\n    moved {\n      from = hcloud_volume.inngest_redis_luks\n      to   = hcloud_volume.renamed\n    }\n    removed {\n      from = doppler_environment.inngest_prd\n    }\n  EOT\n}\n/*\n  moved {\n    from = hcloud_volume.inngest_redis_luks\n  }\n*/'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-8.tsv" ""
+  if wf_row "$T/mut/g4h-8.tsv" "G4h:" && grep -q "^ok$(printf '\t')G4h: " "$T/mut/g4h-8.tsv" && grep -q "^ok$(printf '\t')G4h2: " "$T/mut/g4h-8.tsv" \
+     && grep -q '^IPT_G4H=removed:6 moved:1 probe:1 hits:0$' "$T/mut/g4h-8.tsv.err" \
+     && grep -q '^IPT_G4H4=raw_removed:7 raw_moved:3 scrubbed_removed:6 scrubbed_moved:1$' "$T/mut/g4h-8.tsv.err" && wf_red "$T/mut/g4h-8.tsv" "G4h4:"; then
+    pass "M-g4h-8-lookalikes: a removed/moved look-alike in a comment, a heredoc body and a block comment is NOT read as a block (G4h stays green, counts unchanged; G4h4 reds on the 3 look-alikes the raw grep sees, by design)"
+  else
+    fail "M-g4h-8-lookalikes: G4h read a comment or heredoc look-alike as a block, or the collector counts drifted" "$(grep -E 'G4h' "$T/mut/g4h-8.tsv" | cut -c1-240) $(grep IPT_G4H "$T/mut/g4h-8.tsv.err")"
+  fi
+fi
+# Rows g4h-9 / g4h-10 — the hcl_code_only scrubber's lexing, pinned by the third probe (_p3): each is a COPY of the checker
+# with one branch neutered, run over the unmutated fixture. Neutering the `#`/`//` comment branch (g4h-9) or the string
+# tracking (g4h-10) lets a `/*` or `<<EOF` inside a comment or string open a block comment / heredoc to EOF, which
+# blanks a real `removed {` that follows; the probe reads fewer blocks and G4h reds ("moved collector probe failed").
+MUTDIR="$(fixcopy g4h-9)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4h-9.py" || { printf 'FAIL SETUP: g4h-9 checker copy\n' >&2; exit 1; }
+if mutate g4h-9-line-comment-branch-neutered "$T/ipt-g4h-9.py" 2 '/^        if c == "#" or text\.startswith\("\/\/", i\):$/s/.*/        if False:/'; then
+  python3 "$T/ipt-g4h-9.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4h-9.tsv" 2> "$T/mut/g4h-9.tsv.err"
+  mutant_red g4h-9-line-comment-branch-neutered wf_row "$T/mut/g4h-9.tsv" "G4h:"
+fi
+MUTDIR="$(fixcopy g4h-10)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4h-10.py" || { printf 'FAIL SETUP: g4h-10 checker copy\n' >&2; exit 1; }
+if mutate g4h-10-string-tracking-neutered "$T/ipt-g4h-10.py" 2 "/^        if c == '\"':\$/s/.*/        if False:/"; then
+  python3 "$T/ipt-g4h-10.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4h-10.tsv" 2> "$T/mut/g4h-10.tsv.err"
+  mutant_red g4h-10-string-tracking-neutered wf_row "$T/mut/g4h-10.tsv" "G4h:"
+fi
+# Row g4h-11 — the LIVE-count pin (G4h4). An unterminated heredoc at the top of the file that holds the fixture's
+# `removed` blocks makes hcl_code_only blank them to EOF: G4h itself stays green (a hidden block cannot be a hit; the
+# fail-open case), so the count pin is the only row that can see it. Asserted both ways: G4h green, G4h4 red.
+MUTDIR="$(fixcopy g4h-11)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-11-unterminated-heredoc-hides-removed "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 1 '1i\x = <<EOT'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-11.tsv" ""
+  if grep -q "^ok$(printf '\t')G4h: " "$T/mut/g4h-11.tsv"; then
+    mutant_red g4h-11-unterminated-heredoc-hides-removed wf_row "$T/mut/g4h-11.tsv" "G4h4:"
+  else
+    fail "M-g4h-11-unterminated-heredoc-hides-removed: G4h was not green, so the fixture does not model the fail-open case" "$(grep -E 'G4h' "$T/mut/g4h-11.tsv" | cut -c1-240)"
+  fi
+fi
+# Row g4c-read-tf — Guard 4's declared-address reader must scrub. A copy of the checker whose read_tf returns the raw file
+# reads a resource wrapped in a multi-line comment as declared; the G4c reader probe reds.
+MUTDIR="$(fixcopy g4c-read-tf)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4c-read-tf.py" || { printf 'FAIL SETUP: g4c-read-tf checker copy\n' >&2; exit 1; }
+if mutate g4c-read-tf-unscrubbed "$T/ipt-g4c-read-tf.py" 2 '/^    return hcl_code_only\(open\(path, /s/.*/    return open(path, encoding="utf-8", errors="replace").read()/'; then
+  python3 "$T/ipt-g4c-read-tf.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4c-read-tf.tsv" 2> "$T/mut/g4c-read-tf.tsv.err"
+  mutant_red g4c-read-tf-unscrubbed wf_row "$T/mut/g4c-read-tf.tsv" "G4c:"
+fi
+# Row presence — G4 row PRESENCE (a count floor cannot tell a renamed or dropped row from a duplicated one), as G6h2/G7h2
+# do for their guards: the pin must RED when G4h is removed from a copy of the control TSV.
+G4_ROW_IDS="G4a G4b G4c G4d G4e G4f G4g G4h G4h2 G4h4"
+# rows_present <tsv> <ids> — shared by g4_present/g6_present/g7_present (one idiom, three row-id lists): rc 0 = every id present, 1 = one absent, 2 = UNRESOLVED (TSV missing or empty).
+rows_present() { [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }; local id; for id in $2; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
+g4_present() { rows_present "$1" "$G4_ROW_IDS"; }
+if g4_present "$T/live.tsv" && g4_present "$T/control.tsv"; then
+  pass "G4h3: every named G4 row id ($G4_ROW_IDS) is present in the live and the control census"
+else
+  fail "G4h3: a named G4 row id is missing from the live or the control census"
+fi
+grep -v "$(printf '\tG4h: ')" "$T/control.tsv" > "$T/mut/g4h-presence.tsv"
+if [ "$(grep -c . "$T/mut/g4h-presence.tsv")" -eq "$(( $(grep -c . "$T/control.tsv") - 1 ))" ]; then
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-g4h-presence-row-missing: exactly one G4 row (G4h) removed from a copy of the control TSV"
+  mutant_red g4h-presence-row-missing g4_present "$T/mut/g4h-presence.tsv"
+else
+  fail "M-g4h-presence-row-missing: the removal did not land on exactly one line"
+fi
+
+# ── G4c base-resolution legs (#9956): the PRODUCTION resolve_base_ref + materialize_base_dir
+# path over a synthetic git repo. The compliant fixture's static `$FIX/base` tree cannot reach
+# these semantics — the base there is handed to ipt.py already materialized. Here the base is
+# RESOLVED from git history: M0 declares A, B, B2, RK; refs/remotes/origin/main is M1 = M0 plus
+# terraform_data.main_c, the stand-in for a resource block main adds after the fork point (the
+# #9956/#8904 false-red class: a stale checkout diffed against the moving tip reports it as an
+# orphan). HEAD variants differ per leg; merge-base(HEAD, origin/main) is M0 for every leg
+# except b8's orphan HEAD (which exercises the fallback arm). Only the
+# G4c TSV row is read — unrelated fixture-row verdicts are out of scope by convention.
+G4GIT="$T/g4git"; assert_fixture_dir "$G4GIT"
+mkdir -p "$G4GIT/repo/apps/web-platform/infra/git-data-root-key" "$G4GIT/repo/.github" \
+  || { printf 'FAIL SETUP: g4git mkdir\n' >&2; exit 1; }
+cp -r "$FIX/tree/.github/." "$G4GIT/repo/.github/" \
+  || { printf 'FAIL SETUP: g4git .github copy\n' >&2; exit 1; }
+cat > "$G4GIT/repo/apps/web-platform/infra/main.tf" <<'EOF'
+resource "terraform_data" "base_a" {}
+resource "terraform_data" "base_b" {}
+resource "terraform_data" "base_b2" {}
+EOF
+cat > "$G4GIT/repo/apps/web-platform/infra/git-data-root-key/main.tf" <<'EOF'
+resource "terraform_data" "base_rk" {}
+EOF
+# _g4git — git against the fixture repo under the env -u scrub convention (hook-reachable code).
+_g4git() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$G4GIT/repo" "$@"; }
+_g4git init -q -b main \
+  && _g4git add -A && _g4git commit -qm "M0: base declares A B B2 RK" \
+  || { printf 'FAIL SETUP: g4git M0\n' >&2; exit 1; }
+G4_M0="$(_g4git rev-parse HEAD)"
+printf 'resource "terraform_data" "main_c" {}\n' >> "$G4GIT/repo/apps/web-platform/infra/main.tf"
+_g4git add -A && _g4git commit -qm "M1: main adds C post-fork" \
+  || { printf 'FAIL SETUP: g4git M1\n' >&2; exit 1; }
+G4_M1="$(_g4git rev-parse HEAD)"
+_g4git update-ref refs/remotes/origin/main "$G4_M1" || { printf 'FAIL SETUP: g4git origin/main\n' >&2; exit 1; }
+# M2 — a ref whose git-data-root-key dir holds only non-.tf content, the driver for b9's
+# per-root floor arm (a root that lists but contributes zero .tf).
+_g4git rm -q apps/web-platform/infra/git-data-root-key/main.tf \
+  && mkdir -p "$G4GIT/repo/apps/web-platform/infra/git-data-root-key" \
+  && printf 'placeholder\n' > "$G4GIT/repo/apps/web-platform/infra/git-data-root-key/README" \
+  && _g4git add -A && _g4git commit -qm "M2: root-key holds no .tf" \
+  || { printf 'FAIL SETUP: g4git M2\n' >&2; exit 1; }
+G4_M2="$(_g4git rev-parse HEAD)"
+
+# g4git_row <out-tsv> [<ref>] — resolve the base over the fixture repo, materialize it through
+# the production helper, run the census on the repo's working tree. The IPT_BASE_REF scrub is
+# load-bearing: it is a documented operator seam for the LIVE arm, and an ambient export must
+# not silently change which resolution arm a fixture leg exercises. It is spelled `unset` inside
+# the substitution — `env -u` cannot exec a shell FUNCTION (measured: ref="" → every leg
+# 'base unavailable'). When <ref> is passed it is materialized verbatim (the override legs
+# resolve it themselves first).
+g4git_row() {
+  local out="$1" dest ref
+  dest="$T/g4base/$(basename "$out" .tsv)"
+  assert_fixture_dir "$out"
+  if [ "${2+set}" = set ]; then
+    ref="$2"
+  else
+    # Helper markers are appended to the leg's .err so the per-leg artifact carries the
+    # resolution+materialization story (and the deliberate failures in b7/b8d/b9 don't print
+    # untagged `=fail` lines to the suite's merged stderr).
+    ref="$(unset IPT_BASE_REF; resolve_base_ref "$G4GIT/repo" 2>>"$out.err")"
+  fi
+  assert_fixture_dir "$dest"
+  materialize_base_dir "$G4GIT/repo" "$ref" "$dest" 2>>"$out.err" || dest=""
+  python3 "$T/ipt.py" "$G4GIT/repo/.github" "$G4GIT/repo" "" "$dest" > "$out" 2>>"$out.err"
+}
+# g4c_detail <tsv> — the G4c row's detail field (orphans list / "base unavailable").
+g4c_detail() { awk -F'\t' 'index($2, "G4c:") == 1 { print $3; exit }' "$1"; }
+
+# b1 — resolution sanity: with HEAD at M0 the resolved base IS M0, not the M1 tip — and the
+# merge-base arm announces itself on stderr. Both direct resolves are `unset`-scrubbed like
+# g4git_row: without it an ambient IPT_BASE_REF reroutes the leg to the override arm (red via
+# the marker clause — and a value-only assertion would have passed it silently).
+_g4git checkout -q -B feat "$G4_M0" || { printf 'FAIL SETUP: g4git feat checkout\n' >&2; exit 1; }
+_r1="$(unset IPT_BASE_REF; resolve_base_ref "$G4GIT/repo" 2>"$T/g4b1-resolve.err")"
+if [ "$_r1" = "$G4_M0" ] && grep -q '^IPT_G4C_BASE_ARM=merge-base' "$T/g4b1-resolve.err"; then
+  pass "G4c-b1: resolve_base_ref returns the merge-base (${G4_M0:0:10}), not the origin/main tip"
+else
+  fail "G4c-b1: resolve_base_ref did not return the merge-base" "want $G4_M0 got $(unset IPT_BASE_REF; resolve_base_ref "$G4GIT/repo" 2>/dev/null)"
+fi
+
+# b2 — the #9956 regression: HEAD == M0 while origin/main carries the post-fork addition C.
+# The tip diff reported C as an orphan; the merge-base diff must not (GREEN row present+ok —
+# grep, not wf_row, so an ABSENT row cannot read as green). The checkout is restated: every
+# mutating leg re-anchors its own HEAD, so a leg order change can never silently lose this
+# arm's precondition.
+_g4git checkout -q -B feat "$G4_M0" || { printf 'FAIL SETUP: g4git feat checkout\n' >&2; exit 1; }
+g4git_row "$T/g4b2-fork.tsv"
+if grep -q "^ok$(printf '\t')G4c:" "$T/g4b2-fork.tsv"; then
+  pass "G4c-b2: a resource origin/main adds after the fork point is not attributed to the diff as a deletion"
+else
+  fail "G4c-b2: a post-fork main-side addition read as an orphan (tip-diff regression)" "$(g4c_detail "$T/g4b2-fork.tsv")"
+fi
+
+# b3 — a real unclaimed deletion still reds: HEAD deletes base_b with no `removed` block; the
+# orphan list names base_b and never main_c.
+_g4git checkout -q -B feat "$G4_M0" || { printf 'FAIL SETUP: g4git feat reset\n' >&2; exit 1; }
+cat > "$G4GIT/repo/apps/web-platform/infra/main.tf" <<'EOF'
+resource "terraform_data" "base_a" {}
+resource "terraform_data" "base_b2" {}
+EOF
+_g4git add -A && _g4git commit -qm "del base_b unclaimed" || { printf 'FAIL SETUP: g4git del-b\n' >&2; exit 1; }
+g4git_row "$T/g4b3-del.tsv"
+if wf_red "$T/g4b3-del.tsv" "G4c:"; then
+  pass "G4c-b3: an unclaimed resource-block deletion at HEAD turns G4c RED under the merge-base"
+else
+  fail "G4c-b3: a real deletion stayed GREEN — the guard lost its true-positive arm" "$(g4c_detail "$T/g4b3-del.tsv")"
+fi
+_d="$(g4c_detail "$T/g4b3-del.tsv")"
+if [[ "$_d" == *"terraform_data.base_b'"* && "$_d" != *"main_c"* ]]; then
+  pass "G4c-b3d: the orphan list names base_b and not the post-fork main_c"
+else
+  fail "G4c-b3d: the orphan list does not isolate base_b" "$_d"
+fi
+
+# b4 — second-member-after-compliant-first: HEAD deletes only base_b2 of {A, B, B2}; orphans
+# names base_b2 and not base_b (quote-terminated: 'base_b2' must not satisfy a 'base_b' match).
+_g4git checkout -q -B feat "$G4_M0" || { printf 'FAIL SETUP: g4git feat reset\n' >&2; exit 1; }
+cat > "$G4GIT/repo/apps/web-platform/infra/main.tf" <<'EOF'
+resource "terraform_data" "base_a" {}
+resource "terraform_data" "base_b" {}
+EOF
+_g4git add -A && _g4git commit -qm "del base_b2 unclaimed" || { printf 'FAIL SETUP: g4git del-b2\n' >&2; exit 1; }
+g4git_row "$T/g4b4-del2.tsv"
+if wf_red "$T/g4b4-del2.tsv" "G4c:"; then
+  pass "G4c-b4: deleting the second of two base-declared resources turns G4c RED"
+else
+  fail "G4c-b4: the second-member deletion stayed GREEN" "$(g4c_detail "$T/g4b4-del2.tsv")"
+fi
+_d="$(g4c_detail "$T/g4b4-del2.tsv")"
+if [[ "$_d" == *"terraform_data.base_b2'"* && "$_d" != *"terraform_data.base_b'"* ]]; then
+  pass "G4c-b4d: the orphan list names base_b2 and not base_b"
+else
+  fail "G4c-b4d: the orphan list does not isolate base_b2" "$_d"
+fi
+
+# b5 — the claim path is intact under the new base: HEAD deletes base_b but carries
+# `removed { from = terraform_data.base_b; lifecycle { destroy = false } }` → forgotten_addrs
+# covers it → GREEN.
+_g4git checkout -q -B feat "$G4_M0" || { printf 'FAIL SETUP: g4git feat reset\n' >&2; exit 1; }
+cat > "$G4GIT/repo/apps/web-platform/infra/main.tf" <<'EOF'
+resource "terraform_data" "base_a" {}
+resource "terraform_data" "base_b2" {}
+removed {
+  from = terraform_data.base_b
+
+  lifecycle {
+    destroy = false
+  }
+}
+EOF
+_g4git add -A && _g4git commit -qm "del base_b claimed" || { printf 'FAIL SETUP: g4git del-claimed\n' >&2; exit 1; }
+g4git_row "$T/g4b5-claimed.tsv"
+if grep -q "^ok$(printf '\t')G4c:" "$T/g4b5-claimed.tsv"; then
+  pass "G4c-b5: a deletion claimed by a removed{destroy=false} block stays GREEN under the merge-base"
+else
+  fail "G4c-b5: a claimed deletion went RED — the claim path broke under the new base" "$(g4c_detail "$T/g4b5-claimed.tsv")"
+fi
+
+# b6 — the override is honored verbatim: IPT_BASE_REF=<M1 tip> on the same HEAD==M0 fixture
+# reproduces the pre-#9956 tip semantics (C reads as an orphan), proving the fixture
+# discriminates old vs new rather than passing under both. The env-prefix runs inside the
+# command substitution's own subshell, so the override cannot leak into the later legs — and
+# g4git_row's `unset` scrub is bypassed by passing the resolved ref explicitly.
+_g4git checkout -q -B feat "$G4_M0" || { printf 'FAIL SETUP: g4git feat reset\n' >&2; exit 1; }
+_r6="$(IPT_BASE_REF="$G4_M1" resolve_base_ref "$G4GIT/repo" 2>"$T/g4b6-resolve.err")"
+if [ "$_r6" = "$G4_M1" ] && grep -q '^IPT_G4C_BASE_ARM=override' "$T/g4b6-resolve.err"; then
+  g4git_row "$T/g4b6-override.tsv" "$_r6"
+  _d="$(g4c_detail "$T/g4b6-override.tsv")"
+  if wf_red "$T/g4b6-override.tsv" "G4c:" && [[ "$_d" == *"terraform_data.main_c'"* ]]; then
+    pass "G4c-b6: IPT_BASE_REF=<tip> materializes the tip verbatim and C reads as an orphan (the fixture discriminates old vs new semantics)"
+  else
+    fail "G4c-b6: the override arm did not reproduce tip semantics" "$(g4c_detail "$T/g4b6-override.tsv")"
+  fi
+else
+  fail "G4c-b6: resolve_base_ref did not honor the IPT_BASE_REF override verbatim" "want $G4_M1 got $_r6"
+fi
+
+# b8 — merge-base-fails-with-tip-resolvable arm: an orphan-history HEAD shares no ancestor with
+# origin/main, so resolution must return the fallback literal AND announce the arm on stderr —
+# a silent fallback restores the #9956 false-red class with nothing observable. The materialized
+# base then exercises tip semantics: main_c reads as an orphan, exactly as pre-#9956.
+_g4git checkout -q --orphan g4-orphan || { printf 'FAIL SETUP: g4git orphan checkout\n' >&2; exit 1; }
+_g4git add -A && _g4git commit -qm "orphan HEAD, no common ancestor" || { printf 'FAIL SETUP: g4git orphan commit\n' >&2; exit 1; }
+_r8="$(unset IPT_BASE_REF; resolve_base_ref "$G4GIT/repo" 2>"$T/g4b8-resolve.err")"
+if [ "$_r8" = "refs/remotes/origin/main" ] && grep -q '^IPT_G4C_BASE_ARM=fallback' "$T/g4b8-resolve.err"; then
+  pass "G4c-b8: merge-base failure with a resolvable tip falls back AND announces the arm on stderr"
+else
+  fail "G4c-b8: the fallback arm did not engage or did not announce" "ref=$_r8 err=$(head -2 "$T/g4b8-resolve.err")"
+fi
+g4git_row "$T/g4b8-fallback.tsv"
+_d="$(g4c_detail "$T/g4b8-fallback.tsv")"
+if wf_red "$T/g4b8-fallback.tsv" "G4c:" && [[ "$_d" == *"terraform_data.main_c'"* ]]; then
+  pass "G4c-b8d: the fallback arm exercises tip semantics — main_c reads as an orphan"
+else
+  fail "G4c-b8d: the fallback arm did not reproduce tip semantics" "$(g4c_detail "$T/g4b8-fallback.tsv")"
+fi
+
+# b7 — fail-closed preserved: with origin/main deleted and IPT_BASE_REF unset, resolution
+# returns the fallback literal, the materialization cannot list it, and the row reports
+# "base unavailable". The update-ref -d is safe because the ref is restored immediately after
+# this leg — the restore, not leg order, is what keeps later legs on the full fixture.
+_g4git update-ref -d refs/remotes/origin/main || { printf 'FAIL SETUP: g4git delete origin/main\n' >&2; exit 1; }
+g4git_row "$T/g4b7-nobase.tsv"
+_d="$(g4c_detail "$T/g4b7-nobase.tsv")"
+if wf_red "$T/g4b7-nobase.tsv" "G4c:" && [ "$_d" = "base unavailable" ]; then
+  pass "G4c-b7: no origin/main and no IPT_BASE_REF fails closed as 'base unavailable'"
+else
+  fail "G4c-b7: the unresolvable-base arm did not fail closed" "$(g4c_detail "$T/g4b7-nobase.tsv")"
+fi
+# Restore the ref so a later-appended leg starts from the full fixture state, not b7's deletion.
+_g4git update-ref refs/remotes/origin/main "$G4_M1" || { printf 'FAIL SETUP: g4git restore origin/main\n' >&2; exit 1; }
+
+# b9 — the per-root floor arm: a base ref whose root-key dir lists only non-.tf content fails
+# materialization (the root would read base_declared={}, blind-greening its deletions), the
+# materialize step names itself on stderr, and the census row reports 'base unavailable'.
+_d9="$T/g4base/b9mat"; assert_fixture_dir "$_d9"
+materialize_base_dir "$G4GIT/repo" "$G4_M2" "$_d9" 2>"$T/g4b9-mat.err" || _d9=""
+if [ -z "$_d9" ] && grep -q '^IPT_G4C_BASE_MATERIALIZE=fail step=floor root=apps/web-platform/infra/git-data-root-key' "$T/g4b9-mat.err"; then
+  pass "G4c-b9: a base ref whose root contributes zero .tf fails materialization and names the floor step"
+else
+  fail "G4c-b9: the per-root floor arm did not fire or did not announce" "err=$(head -2 "$T/g4b9-mat.err")"
+fi
+g4git_row "$T/g4b9-floor.tsv" "$G4_M2"
+_d="$(g4c_detail "$T/g4b9-floor.tsv")"
+if wf_red "$T/g4b9-floor.tsv" "G4c:" && [ "$_d" = "base unavailable" ]; then
+  pass "G4c-b9d: the floor arm reaches the census row as 'base unavailable', never vacuous green"
+else
+  fail "G4c-b9d: the floor arm did not fail closed at the row" "$(g4c_detail "$T/g4b9-floor.tsv")"
+fi
+
+# parity — the bash materialization root list and ipt.py's GUARD4_ROOTS must enumerate the same
+# set: a root added to ONE side alone leaves that root censused at HEAD with no materialized
+# base (or materialized but never scanned), and its deletions slip silently. Extract both lists
+# by their literal anchors and compare as sets. The py side takes the LAST assignment (python
+# binds last); the sh side anchors on the code shape (an indented `for _r in apps/`, which a
+# comment line or a differently-rooted loop cannot satisfy). Residual: a column-0
+# `GUARD4_ROOTS +=`/`append` or an indented rebind escapes the py anchor, and a second
+# `for _r in apps/` above the function would shadow the sh side — accepted grep-parity limits.
+_g4_py_roots="$(grep -E '^GUARD4_ROOTS *=' "$T/ipt.py" | tail -1 | grep -oE '"apps/[^"]+"' | tr -d '"' | sort)"
+_g4_sh_roots="$(grep -m1 '^[[:space:]]*for _r in apps/' "${BASH_SOURCE[0]}" | grep -oE 'apps/[a-z0-9_/-]+' | sort)"
+if [ -n "$_g4_py_roots" ] && [ "$_g4_py_roots" = "$_g4_sh_roots" ]; then
+  pass "G4c-parity: materialize_base_dir's root list equals ipt.py's GUARD4_ROOTS"
+else
+  fail "G4c-parity: the bash and python root lists diverged" "bash={$_g4_sh_roots} python={$_g4_py_roots}"
 fi
 
 # ── Guard 6 (#8609): the soleur-github-app read token stays in Tier B ───────────────────
@@ -2923,9 +3956,193 @@ if awk -F'\t' 'index($2, "G7c:") == 1 && $1 == "ok" { c = 1 } index($2, "G7d:") 
 else
   fail "M-g7-must-pass: a G7 row reds a compliant input" "$(grep -E '^(FAIL)' "$T/mut/g7-pass.tsv" | cut -c1-240)"
 fi
+# ── G7f (#9321): every App-token call and the composite use only the two permitted source shapes ──
+# Each row is written against the compliant control (a release-shaped caller on the narrow source, a
+# loader-calling caller on the broad one, the composite with a narrow default, a two-literal allow-list and
+# exactly two pinned reads). M1 flips the composite default; M2 widens its allow-list; M2b adds a third read of
+# ANOTHER name (the App-value regex of clause (c) cannot see it); M3 appends a SECOND caller job in the
+# same file after a compliant first one (a check that stops at the first member is the defect); M4 a Tier-A token;
+# M5 the broad token in bracket spelling with the narrow default; M6 a NEW workflow that reads an App value
+# inline; M7 an empty tree (a population of zero must not pass).
+G7F_COMP='tree/.github/actions/mint-infra-app-token/action.yml'
+MUTDIR="$(fixcopy g7f-m1)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m1-composite-default-flipped "$MUTDIR/$G7F_COMP" 2 's/^    default: soleur-infra-app$/    default: soleur-infra-privileged/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m1.tsv" ""
+  mutant_red g7f-m1-composite-default-flipped wf_row "$T/mut/g7f-m1.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m2)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m2-allow-list-widened "$MUTDIR/$G7F_COMP" 2 's/soleur-infra-app\|soleur-infra-privileged\)/soleur-infra-app|soleur-infra-privileged|soleur)/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m2.tsv" ""
+  mutant_red g7f-m2-allow-list-widened wf_row "$T/mut/g7f-m2.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m2b)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m2b-third-read-of-another-name "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        X=$(doppler secrets get HCLOUD_TOKEN --plain --project soleur-infra-app --config prd 2>/dev/null)'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m2b.tsv" ""
+  mutant_red g7f-m2b-third-read-of-another-name wf_row "$T/mut/g7f-m2b.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m3)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m3-second-caller-broad-no-loader "$MUTDIR/tree/.github/workflows/release.yml" 10 '$a\  second:\n    runs-on: ubuntu-24.04\n    environment: infra-privileged\n    steps:\n      - name: Mint again\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          doppler-project: soleur-infra-privileged\n          installation-id: "166065653"'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m3.tsv" ""
+  mutant_red g7f-m3-second-caller-broad-no-loader wf_row "$T/mut/g7f-m3.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m4)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m4-tier-a-token "$MUTDIR/tree/.github/workflows/release.yml" 2 's/^          doppler-token: \$\{\{ secrets\.DOPPLER_TOKEN_INFRA_APP \}\}$/          doppler-token: ${{ secrets.DOPPLER_TOKEN }}/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m4.tsv" ""
+  mutant_red g7f-m4-tier-a-token wf_row "$T/mut/g7f-m4.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m5)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m5-broad-token-bracket-spelling-narrow-default "$MUTDIR/tree/.github/workflows/release.yml" 2 "s/^          doppler-token: \\$\\{\\{ secrets\\.DOPPLER_TOKEN_INFRA_APP \\}\\}\$/          doppler-token: \\$\\{\\{ secrets['DOPPLER_TOKEN_INFRA_PRIVILEGED'] \\}\\}/"; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m5.tsv" ""
+  mutant_red g7f-m5-broad-token-bracket-spelling-narrow-default wf_row "$T/mut/g7f-m5.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m6)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m6-inline-app-key-read "$MUTDIR/tree/.github/workflows/tiera.yml" 1 '$a\          PEM=$(doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project soleur-infra-app --config prd)'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m6.tsv" ""
+  mutant_red g7f-m6-inline-app-key-read wf_row "$T/mut/g7f-m6.tsv" "G7f:"
+fi
+# ── clause-isolated rows (review #9453): each pins ONE G7f clause through the `clauses=[...]` the row detail
+# lists, and a clause a second one could also catch is told apart by naming the one that must NOT fire. Every
+# mutant below keeps the rest of the tree compliant, so only its own clause is available to catch it.
+# M2b' -- a third read of another name whose project IS "$DOPPLER_SOURCE": only the read-COUNT clause sees it
+# (M2b hard-codes the project, so the per-read argv clause catches that one too and hides a deleted count clause).
+MUTDIR="$(fixcopy g7f-m2bp)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m2bp-third-read-via-source-variable "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        X=$(doppler secrets get HCLOUD_TOKEN --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null)'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m2bp.tsv" ""
+  mutant_red g7f-m2bp-third-read-via-source-variable wf_clause "$T/mut/g7f-m2bp.tsv" "G7f:" read-count read-argv
+fi
+# M2c -- exactly two App-value reads, but the project is hard-coded: only the per-read argv clause sees it.
+MUTDIR="$(fixcopy g7f-m2c)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m2c-two-reads-hard-coded-project "$MUTDIR/$G7F_COMP" 4 's/--project "\$DOPPLER_SOURCE"/--project soleur-infra-app/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m2c.tsv" ""
+  mutant_red g7f-m2c-two-reads-hard-coded-project wf_clause "$T/mut/g7f-m2c.tsv" "G7f:" read-argv read-count
+fi
+# M-run -- a `doppler run` (not `secrets get`) line in the composite: the `|run` alternative of the read regex.
+MUTDIR="$(fixcopy g7f-mrun)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mrun-doppler-run-in-composite "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        doppler run --project "$DOPPLER_SOURCE" --config prd -- true'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mrun.tsv" ""
+  mutant_red g7f-mrun-doppler-run-in-composite wf_clause "$T/mut/g7f-mrun.tsv" "G7f:" read-count read-argv
+fi
+# M-run2 -- the same read with global flags before the subcommand (`doppler --project ... run`): the anchored
+# `run` still sees it, so narrowing the regex to `doppler run` alone cannot pass.
+MUTDIR="$(fixcopy g7f-mrun2)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mrun2-doppler-flags-then-run "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        doppler --project "$DOPPLER_SOURCE" --config prd run -- true'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mrun2.tsv" ""
+  mutant_red g7f-mrun2-doppler-flags-then-run wf_clause "$T/mut/g7f-mrun2.tsv" "G7f:" read-count read-argv
+fi
+# M-run3 -- the same read with a global flag whose quoted value contains a space (`--token "$(cat f)" run`): the
+# old one-word-per-flag anchor missed it, so a third, unpinned read went unseen.
+MUTDIR="$(fixcopy g7f-mrun3)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mrun3-doppler-spaced-flag-value-then-run "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        doppler --token "$(cat /dev/null)" --project "$DOPPLER_SOURCE" --config prd run -- true'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mrun3.tsv" ""
+  mutant_red g7f-mrun3-doppler-spaced-flag-value-then-run wf_clause "$T/mut/g7f-mrun3.tsv" "G7f:" read-count read-argv
+fi
+# M-env -- the DOPPLER_SOURCE env mapping hard-wired to the broad literal: default, allow-list and both reads
+# still look compliant, so only the env-map clause sees it.
+MUTDIR="$(fixcopy g7f-menv)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-menv-source-env-hard-wired "$MUTDIR/$G7F_COMP" 2 's/^        DOPPLER_SOURCE: \$\{\{ inputs\.doppler-project \}\}$/        DOPPLER_SOURCE: soleur-infra-privileged/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-menv.tsv" ""
+  mutant_red g7f-menv-source-env-hard-wired wf_clause "$T/mut/g7f-menv.tsv" "G7f:" env-map read-argv
+fi
+# M-wrongtok -- the broad shape (explicit broad project, in the loader job) with the NARROW token.
+MUTDIR="$(fixcopy g7f-mwrongtok)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mwrongtok-broad-project-narrow-token "$MUTDIR/tree/.github/workflows/marketplace-verify.yml" 2 's/^          doppler-token: \$\{\{ secrets\.DOPPLER_TOKEN_INFRA_PRIVILEGED \}\}$/          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mwrongtok.tsv" ""
+  mutant_red g7f-mwrongtok-broad-project-narrow-token wf_clause "$T/mut/g7f-mwrongtok.tsv" "G7f:" caller-shape loader
+fi
+# M-remote / M-dotdot -- the compliant narrow caller, with the composite named by its remote spelling and by a
+# `..` path: neither matches the `./.github/actions/<dir>` mapping the other census rows use, so only the
+# spelling clause (G7f resolves both to the composite and refuses a non-canonical form) sees them.
+MUTDIR="$(fixcopy g7f-mremote)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mremote-remote-spelling "$MUTDIR/tree/.github/workflows/release.yml" 2 's#^        uses: \./\.github/actions/mint-infra-app-token$#        uses: jikig-ai/soleur/.github/actions/mint-infra-app-token@main#'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mremote.tsv" ""
+  mutant_red g7f-mremote-remote-spelling wf_clause "$T/mut/g7f-mremote.tsv" "G7f:" spelling caller-shape
+fi
+MUTDIR="$(fixcopy g7f-mdotdot)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mdotdot-dot-dot-spelling "$MUTDIR/tree/.github/workflows/release.yml" 2 's#^        uses: \./\.github/actions/mint-infra-app-token$#        uses: ./.github/actions/../actions/mint-infra-app-token#'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mdotdot.tsv" ""
+  mutant_red g7f-mdotdot-dot-dot-spelling wf_clause "$T/mut/g7f-mdotdot.tsv" "G7f:" spelling caller-shape
+fi
+# M-wrapper -- a NEW composite action whose own `runs.steps` call the mint composite (the caller loop used to
+# walk only `jobs.*.steps`, so a wrapper forwarding the broad project and an `inputs.*` token was invisible).
+MUTDIR="$(fixcopy g7f-mwrapper)"; assert_fixture_dir "$MUTDIR"
+mkdir -p "$MUTDIR/tree/.github/actions/zz-wrap" || { printf 'FAIL SETUP: g7f-mwrapper dir\n' >&2; exit 1; }
+cat > "$MUTDIR/tree/.github/actions/zz-wrap/action.yml" <<'EOF'
+name: "Wrapper (fixture)"
+description: "fixture composite that wraps the mint composite"
+inputs:
+  tok:
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Mint through the wrapper
+      uses: ./.github/actions/mint-infra-app-token
+      with:
+        doppler-token: ${{ inputs.tok }}
+        doppler-project: soleur-infra-privileged
+        installation-id: "166065653"
+EOF
+if fixture_written g7f-mwrapper-composite-wraps-the-mint "$MUTDIR/tree/.github/actions/zz-wrap/action.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mwrapper.tsv" ""
+  mutant_red g7f-mwrapper-composite-wraps-the-mint wf_clause "$T/mut/g7f-mwrapper.tsv" "G7f:" wrapper spelling
+fi
+# M7 -- the empty tree (no caller, no composite): "0 scanned" must not pass. It reds through the
+# composite-missing clause AND the caller-count clause; it does not measure the live-tree 3-caller pin.
+MUTANTS_RUN=$((MUTANTS_RUN + 1))
+mutant_red g7f-m7-empty-tree wf_row "$T/empty-gh.tsv" "G7f:"
+# H2 (must-PASS, non-canonical): the composite mentions the broad project and a would-be extra read ONLY in
+# comments; the loader-calling caller lists its `with:` keys in a different order and spells the broad token
+# with whitespace around the dot; the release caller spells the narrow token the same way. (The bracket
+# spelling is not usable here: G1e bans `secrets[...]` repo-wide, so a bracket-spelled caller reds that row.)
+# All of it is compliant, so G7f AND every other census row must stay GREEN (a guard that rejects
+# everything also reds every mutant above).
+MUTDIR="$(fixcopy g7f-h2)"; assert_fixture_dir "$MUTDIR"
+python3 - "$MUTDIR/$G7F_COMP" <<'PY' || { printf 'FAIL SETUP: g7f-h2 composite\n' >&2; exit 1; }
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '        set -euo pipefail\n'
+assert s.count(old) == 1
+cmt = ('        # the broad project soleur-infra-privileged is the second allowed source\n'
+       '        # doppler secrets get HCLOUD_TOKEN --plain --project soleur-infra-privileged --config prd\n')
+open(p, "w").write(s.replace(old, old + cmt, 1))
+PY
+printf 'name: fixture marketplace verify (reordered keys, spaced spelling)\non: workflow_dispatch\njobs:\n  verify:\n    runs-on: ubuntu-24.04\n    environment: infra-privileged\n    steps:\n      - name: Mint\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          installation-id: "166065653"\n          doppler-project: soleur-infra-privileged\n          doppler-token: ${{ secrets . DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n      - uses: ./.github/actions/infra-credentials\n        with:\n          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n' > "$MUTDIR/tree/.github/workflows/marketplace-verify.yml"
+sed -i -E "s/^          doppler-token: \\$\\{\\{ secrets\\.DOPPLER_TOKEN_INFRA_APP \\}\\}\$/          doppler-token: \\$\\{\\{ secrets . DOPPLER_TOKEN_INFRA_APP \\}\\}/" "$MUTDIR/tree/.github/workflows/release.yml"
+fixcensus "$MUTDIR" "$T/mut/g7f-h2.tsv" ""
+if grep -q 'secrets \. DOPPLER_TOKEN_INFRA_APP' "$MUTDIR/tree/.github/workflows/release.yml" \
+   && grep -q '^ok	G7f:' "$T/mut/g7f-h2.tsv" && [ -z "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h2.tsv")" ]; then
+  pass "M-g7f-h2-must-pass: G7f and every other census row stay GREEN on a compliant tree with comment-only mentions, reordered with: keys and spaced spellings"
+else
+  fail "M-g7f-h2-must-pass: a compliant non-canonical tree reds a census row" "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h2.tsv" | cut -c1-240)"
+fi
+# H3 (must-PASS): prose that merely contains the English word "run" on a line starting with `doppler` is not a
+# read. The composite gets a CLI-presence check whose message says "run the install step"; the read regex used to
+# match the bare word and red read-count and read-argv on it. The real `doppler run` rows (M-run, M-run2) still red.
+MUTDIR="$(fixcopy g7f-h3)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-h3-prose-run-in-composite "$MUTDIR/$G7F_COMP" 1 '/^        set -euo pipefail$/a\        doppler --version >/dev/null 2>\&1 || { echo "::error::doppler CLI missing; run the install step"; exit 1; }'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-h3.tsv" ""
+  if grep -q '^        doppler --version' "$MUTDIR/$G7F_COMP" && grep -q '^ok	G7f:' "$T/mut/g7f-h3.tsv" \
+     && [ -z "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h3.tsv")" ]; then
+    pass "M-g7f-h3-must-pass: G7f and every other census row stay GREEN when the composite carries prose containing the word run on a doppler line"
+  else
+    fail "M-g7f-h3-must-pass: prose containing the word run reds a census row" "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h3.tsv" | cut -c1-240)"
+  fi
+fi
+# H4 (must-PASS): a release caller that spells the narrow token in lowercase names the same secret (secret names
+# are case-insensitive at GitHub), so G7f accepts it; it used to refuse it as an unnamed token.
+MUTDIR="$(fixcopy g7f-h4)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-h4-lowercase-narrow-token "$MUTDIR/tree/.github/workflows/release.yml" 2 's/^          doppler-token: \$\{\{ secrets\.DOPPLER_TOKEN_INFRA_APP \}\}$/          doppler-token: ${{ secrets.doppler_token_infra_app }}/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-h4.tsv" ""
+  if grep -q 'secrets\.doppler_token_infra_app' "$MUTDIR/tree/.github/workflows/release.yml" && grep -q '^ok	G7f:' "$T/mut/g7f-h4.tsv"; then
+    pass "M-g7f-h4-must-pass: G7f accepts the narrow token spelled in lowercase (secret names are case-insensitive)"
+  else
+    fail "M-g7f-h4-must-pass: G7f refuses the lowercase narrow token" "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h4.tsv" | cut -c1-240)"
+  fi
+fi
 # G7 row PRESENCE (a count floor cannot tell a renamed or dropped row from a duplicated one), as G6h2 does for Guard 6.
-G7_ROW_IDS="G7c G7d G7e"
-g7_present() { local id; for id in $G7_ROW_IDS; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
+G7_ROW_IDS="G7c G7d G7e G7f"
+g7_present() { rows_present "$1" "$G7_ROW_IDS"; }
 if g7_present "$T/live.tsv" && g7_present "$T/control.tsv"; then
   pass "G7h2: every named G7 row id ($G7_ROW_IDS) is present in the live and the control census"
 else
@@ -2939,10 +4156,30 @@ else
   fail "M-g7h2-row-missing: the removal did not land on exactly one line"
 fi
 
+# H1 (#9321): the same presence check, with G7f removed from a copy of the control TSV.
+grep -v "$(printf '\tG7f: ')" "$T/control.tsv" > "$T/mut/g7h2-f.tsv"
+if [ "$(grep -c . "$T/mut/g7h2-f.tsv")" -eq "$(( $(grep -c . "$T/control.tsv") - 1 ))" ]; then
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-g7h2-g7f-row-missing: exactly one G7 row (G7f) removed from a copy of the control TSV"
+  mutant_red g7h2-g7f-row-missing g7_present "$T/mut/g7h2-f.tsv"
+else
+  fail "M-g7h2-g7f-row-missing: the removal did not land on exactly one line"
+fi
+
 # G6h2 — PRESENCE of every named G6 row (a count floor cannot tell a renamed or dropped row from
 # a duplicated one). Positive on the live and control TSVs, negative on a control with one removed.
 G6_ROW_IDS="G6a G6a2 G6a3 G6b G6c G6c2 G6d G6e G6m G6n G6l G6o G6q G6s G6u"
-g6_present() { local id; for id in $G6_ROW_IDS; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
+g6_present() { rows_present "$1" "$G6_ROW_IDS"; }
+# The presence helpers get the same third direction as wf_row (a missing or empty TSV is UNRESOLVED, rc 2, never the
+# "a row is absent" verdict that mutant_red reads as RED); subshells roll the counters back, printf + exit on a miss.
+for _st in "g7_present $T/st-missing.tsv" "g7_present $T/st-empty.tsv" "g6_present $T/st-missing.tsv" "g6_present $T/st-empty.tsv" \
+           "g4_present $T/st-missing.tsv" "g4_present $T/st-empty.tsv"; do
+  # shellcheck disable=SC2086  # the helper name and its arguments are split on purpose
+  _mr="$( (mutant_red st-unresolved-presence $_st >/dev/null 2>&1; printf '%s,%s' "$passes" "$fails") )"
+  if [ "$_mr" != "$passes,$((fails + 1))" ]; then
+    printf 'FAIL INSTRUMENT: mutant_red read a missing/empty TSV as RED for [%s] (got "%s" from %s,%s)\n' "$_st" "$_mr" "$passes" "$fails" >&2; exit 1
+  fi
+done
+pass "H8: the G4/G6/G7 presence helpers read a missing or empty census TSV as UNRESOLVED, never as an absent row that reads RED (6 drives)"
 if g6_present "$T/live.tsv" && g6_present "$T/control.tsv"; then
   pass "G6h2: every named G6 row id ($G6_ROW_IDS) is present in the live and the control census"
 else
@@ -2971,7 +4208,22 @@ fi
 # G6h self-run (review: simplicity P2, patterns P3-4): with equality enforced here, deleting ANY
 # mutant trips this line by construction, not only the one G6h deleted; and a mutant added without
 # raising the number names its real cause instead of reding G6h.
-MUTANT_FLOOR=94
+# 94 -> 103 (#9321 PR-2, 2026-10-03): G7f M1, M2, M2b, M3, M4, M5, M6 (7 landings), M7 (the empty tree) and the G7f presence-row removal (H1).
+# 103 -> 111 (#9321 PR-2 review, 2026-10-04): G7f M2b', M2c, M-run, M-env, M-wrongtok, M-remote, M-dotdot, M-wrapper (8 landings).
+# 111 -> 114 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3, H4 (3 landings).
+# 114 -> 115 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (spaced flag value before run; 1 landing). Measured: 115 ran.
+# 115 -> 116 (#8285 PR B): g4-8 (the retired-state-absent ACCEPT arm; 1 landing). Measured: 116 ran.
+# 116 -> 120 (#8285 PR B review): g4-9 (listed address still targeted on a PLAN step; 2 landings), g4-10 (App identity in the
+#   allowance; 1 landing), g4-11 (allowance entry re-declared at HEAD; 1 landing). Measured: 120 ran.
+# 120 -> 125 (#8285 PR B fix round): g4-12 (live store in the allowance; 1 landing), g4-13/g4-14 (space-form `-target ADDR` and
+#   `-replace=ADDR` on a plan step; 2 landings each). Measured: 125 ran.
+# 125 -> 135 (#9879, G4h): g4h-1, g4h-2, g4h-2b, g4h-3, g4h-mp (1 landing each), g4h-4 and g4h-5 (2 landings each: a tree edit
+#   and a checker edit), and the G4h presence-row removal (1). Measured: 135 ran.
+# 135 -> 138 (#9879 review): g4h-6 (indented `moved` over the volume), g4h-7 (indented `removed` over a Doppler parent) and g4h-8
+#   (comment / heredoc / block-comment look-alikes stay green); 1 landing each. Measured: 138 ran.
+# 138 -> 142 (#9879 round 2): g4h-9 (scrubber `#`/`//` branch neutered), g4h-10 (string tracking neutered), g4h-11 (unterminated
+#   heredoc hides the fixture's removed blocks; only the G4h4 count pin sees it) and g4c-read-tf (Guard 4 reader unscrubbed); 1 landing each. Measured: 142 ran.
+MUTANT_FLOOR=142
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -2994,7 +4246,28 @@ _ran=$((passes + fails))
 # fixture (1), and the cause checks added to e1/e2 (2). Measured: 205 ran.
 # 205 -> 220 (#9321): live G7c/G7d (2), G7g (1), 6 landings + 6 verdicts. Measured: 220 ran (this branch alone: 175 -> 190).
 # 220 -> 250 (#9321 review): live G7e, G7h2 presence, the must-pass row and 14 new mutant rows. Measured: 250 ran.
-FLOOR=250
+# 250 -> 269 (#9321 PR-2, 2026-10-03): live G7f (1), G7f M1/M2/M2b/M3/M4/M5/M6 (7 landings + 7 verdicts), M7 (1 verdict), the G7f must-pass row (1), the G7f presence-row removal (1 landing + 1 verdict). Measured: 269 ran.
+# 269 -> 287 (#9321 PR-2 review, 2026-10-04): 8 clause-isolated G7f mutants (8 landings + 8 verdicts) and the H7 and H8 unresolved-TSV controls (2). Measured: 287 ran.
+# 287 -> 294 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3 (prose "run") and H4 (lowercase token) (3 landings + 3 verdicts) and the H7b exact-verdict drives (1). Measured: 294 ran.
+# 294 -> 296 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (1 landing + 1 verdict); the H7b absent-row and _h7b self-test drives add no assertion (inside the one H7b pass). Measured: 296 ran.
+# 296 -> 298 (#8285 PR B): g4-8 landing + verdict. Measured: 298 ran.
+# 298 -> 306 (#8285 PR B review): live G4g (1), g4-9 (2 landings + 1 verdict), g4-10 (1 + 1), g4-11 (1 + 1). Measured: 306 ran.
+# 306 -> 314 (#8285 PR B fix round): g4-12 (1 landing + 1 verdict), g4-13 and g4-14 (2 landings + 1 verdict each). Measured: 314 ran.
+# 314 -> 336 (#9879, G4h): live G4h and G4h2 (2), the must-pass control row (1), g4h-1/2/2b/3 (1 landing + 1 verdict each), g4h-mp (1 + 1),
+#   g4h-4 and g4h-5 (2 landings + 1 verdict each), the G4 presence row (1), the presence-row removal (1 + 1). Measured: 336 ran.
+# 336 -> 342 (#9879 review): g4h-6 and g4h-7 (1 landing + 1 verdict each), g4h-8 (1 landing + 1 must-pass verdict). Measured: 342 ran.
+# 342 -> 351 (#9879 round 2): live G4h4 (1), g4h-9 / g4h-10 / g4h-11 / g4c-read-tf (1 landing + 1 verdict each); g4h-8 gains clauses inside its one must-pass verdict (0). Measured: 351 ran.
+# 351 -> 360 (#9956): G4c-b1..b7 base-resolution legs over the synthetic git repo — resolution sanity (1),
+#   post-fork addition invisible (1), unclaimed deletion RED + detail (2), second-member RED + detail (2),
+#   removed{} claim GREEN (1), IPT_BASE_REF override discriminates tip semantics (1), no-base fail-closed (1).
+#   Measured: 360 ran.
+# 360 -> 363 (#9956 review): G4c-b8 + b8d fallback-arm provenance (merge-base fails, tip resolvable —
+#   falls back AND announces), G4c-parity bash↔python GUARD4_ROOTS set check. Measured: 363 ran.
+# 363 -> 364 (#9956 review round 2): G4c-b9 per-root floor arm driver (M2's root-key holds no .tf).
+#   Measured: 364 ran.
+# 364 -> 365 (#9956 review round 2 fixes): G4c-b9d — the floor arm reaches the row as
+#   'base unavailable' end-to-end. Measured: 365 ran.
+FLOOR=365
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

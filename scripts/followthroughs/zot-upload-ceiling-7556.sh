@@ -33,10 +33,12 @@
 #     TRAILING-EDGE check (a registry heartbeat in the last 12h), so a shipper or warehouse outage at
 #     either end cannot be read as a quiet week;
 #   * the real `PatchBlobUpload` error line carries `message:unexpected error, removing .uploads/ files`
-#     and names the handler only in `func:`, so the shipper's cap-exempt arm keyed on a `PatchBlobUpload*`
-#     message prefix does not see it, and an absence claim made only of error rows is blind. The
-#     claim-bearing signal (n2) is the paired HTTP API row — a 5xx on /v2/*/blobs/uploads/* at
-#     deadline-shaped latency — which IS exempt; n1 (the error row) is best-effort corroboration. A guard
+#     and names the handler only in `func:`, so the shipper's earlier cap-exempt arm keyed on a
+#     `PatchBlobUpload*` message prefix never saw it (#9373 re-keyed that arm onto the parsed `func`
+#     field, so the error row is now exempt on a host running that shipper), and an absence claim
+#     made only of error rows was blind. The claim-bearing signal (n2) is still the paired HTTP API
+#     row — a 5xx on /v2/*/blobs/uploads/* at deadline-shaped latency — which IS exempt; n1 (the error
+#     row) is corroboration, and a host not yet carrying the re-keyed shipper still sheds it. A guard
 #     over SOLEUR_ZOT_LOG_DROPPED rows protects n2's loss mode;
 #   * the shared error-payload check grepped RAW rows for "exception|syntax error|Code: N", so one
 #     GitHub-webhook row quoting an issue body wedged the probe for up to 7 days. It is now structural;
@@ -351,7 +353,7 @@ decode log
 # after an undelivered POST) count once.
 #   patch      PATCH upload rows with a 2xx status (the sample floor: real pushes, not 401s or cuts)
 #   long_ok    of those, rows at >= 60 s (uploads surviving past the OLD ceiling; printed, never graded)
-#   n1         level:error PatchBlobUpload rows with `i/o timeout` (best-effort: the line is not cap-exempt)
+#   n1         level:error PatchBlobUpload rows with `i/o timeout` (corroboration: exempt only on a shipper carrying #9373)
 #   n2         upload rows of ANY method with a 5xx at >= 95% of the deadline (the claim-bearing signal)
 #   other5xx   5xx at any other latency (EOF-shaped, out of scope)
 #   unparse    forged/duplicated-field, unmatched, or non-Go-duration-5xx upload rows
@@ -584,8 +586,10 @@ echo "PASS: both zot HTTP deadlines report ${DEADLINE_NS} ns on the newest start
 echo "  ${patch_rows} PATCH 2xx upload rows there is no upload 5xx at deadline-shaped latency and no 'i/o timeout' error row."
 echo "  SCOPE: this grades the DEADLINE sub-mode only. 'unexpected EOF' is a separate shape, was observed during a"
 echo "  SUCCESSFUL run, and is out of scope for #7555 (${other5xx} upload 5xx row(s) at other latencies are not graded)."
-echo "  WEIGHT: the error row is not exempt from the shipper's caps, so the absence rests on the paired HTTP-API"
-echo "  row, guarded by drop accounting; the error-row count is best-effort. patch_rows is a lower bound (ordinary"
-echo "  rows are rate-capped; ${long_ok} of them ran 60 s or longer), and a clean week of this size is a tripwire, not"
-echo "  proof: DELIVERY is the causal evidence. It is also not a claim that any particular release succeeded."
+echo "  WEIGHT: the error row is exempt from the shipper's ordinary cap only on a host carrying the func-keyed arm"
+echo "  (#9373), so the absence rests on the paired HTTP-API row, guarded by drop accounting; the error-row count is"
+echo "  corroboration. The error row and the HTTP row share one 8-slot sub-quota, so about 4 failed uploads in a tick"
+echo "  produce exempt_cap drops, which hold this probe at TRANSIENT (never PASS). patch_rows is a lower bound"
+echo "  (ordinary rows are rate-capped; ${long_ok} of them ran 60 s or longer), and a clean week of this size is a"
+echo "  tripwire, not proof: DELIVERY is the causal evidence. It is also not a claim that any particular release succeeded."
 exit 0

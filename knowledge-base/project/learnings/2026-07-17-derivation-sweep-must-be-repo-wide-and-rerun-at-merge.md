@@ -79,5 +79,5 @@ mid-flight and must be audited before merge.
 - `knowledge-base/project/learnings/best-practices/2026-06-14-all-members-drift-guard-must-rebase-before-ship.md`
   (sibling PR adds a guarded-set member on `main` → post-merge red).
 - The B0 evidence for #6538:
-  `knowledge-base/project/specs/feat-6538-web2-fsn1-orphan/measurements/b0-findings.md`
+  `knowledge-base/project/specs/archive/20261013-041741-feat-6538-web2-fsn1-orphan/measurements/b0-findings.md`
   (records the original 9-file derivation set — the baseline this consumer was absent from).

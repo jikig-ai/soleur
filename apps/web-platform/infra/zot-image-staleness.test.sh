@@ -61,7 +61,7 @@ MAX_AGE_DAYS=90
 # A FLOOR, not equality. `-eq` would turn every legitimately-added assertion into a spurious
 # failure, which trains people to edit the number without thinking — the opposite of a guard.
 # Raise it in lockstep when assertions are added; never lower it to make a red run green.
-MIN_ASSERTIONS=15
+MIN_ASSERTIONS=16
 
 PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); echo "  PASS: $1"; }
@@ -227,7 +227,14 @@ fi
 # against the pinned zot (v2.1.2)" — the PARENTHESIZED form, which the bare anchor cannot see.
 # A guard that misses a live instance of the exact defect it was written for is worse than no
 # guard, because its green is read as coverage. If a new phrasing appears, widen this shape.
-followers=("$DIR/ci-deploy.sh" "$DIR/ci-deploy.test.sh" "$DIR/cloud-init-registry.yml")
+# ONE definition: checks 7 and 11 match through it, so widening the phrasing widens both.
+#
+# ci-deploy.sh is DELIBERATELY NOT a follower (#9799 item 2). It is a deploy_pipeline_fix
+# trigger file (server.tf triggers_replace hashes its bytes), so a version token in a comment
+# there made every zot bump a comment-only edit that redelivered the script to both web hosts.
+# Its comment now points at the sidecar's claim register and check 11 keeps it that way.
+CLAIM_RE='zot \(?v[0-9]+\.[0-9]+\.[0-9]+'
+followers=("$DIR/ci-deploy.test.sh" "$DIR/cloud-init-registry.yml")
 stale_claims=""
 followers_seen=0
 for f in "${followers[@]}"; do
@@ -240,7 +247,7 @@ for f in "${followers[@]}"; do
     [[ -z "$hit" ]] && continue
     v="${hit##*zot }"; v="${v#(}"   # strip the optional opening paren
     [[ "$v" == "$tf_ver_amd64" ]] || stale_claims+="    $(basename "$f"): 'zot $v' (pinned is $tf_ver_amd64)"$'\n'
-  done < <(grep -ohE 'zot \(?v[0-9]+\.[0-9]+\.[0-9]+' "$f" 2>/dev/null | sort -u || true)
+  done < <(grep -ohE "$CLAIM_RE" "$f" 2>/dev/null | sort -u || true)
 done
 # A follower that still EXISTS but whose claim was reworded (`zot version 2.1.20`, `the
 # pinned zot`) yields zero loop iterations, an empty stale_claims, and a PASS whose text
@@ -248,11 +255,11 @@ done
 # claims examined read as full coverage, which is the vacuous-green class one level down
 # from the MIN_ASSERTIONS floor. The two locations the sidecar's version-scoped claim
 # register names MUST each carry at least one claim.
-required_claim_locations=("$DIR/ci-deploy.sh" "$DIR/cloud-init-registry.yml")
+required_claim_locations=("$DIR/ci-deploy.test.sh" "$DIR/cloud-init-registry.yml")
 missing_claims=""
 for f in "${required_claim_locations[@]}"; do
   [[ -f "$f" ]] || continue   # absence already failed above
-  n_hits="$(grep -cE 'zot \(?v[0-9]+\.[0-9]+\.[0-9]+' "$f" 2>/dev/null || true)"
+  n_hits="$(grep -cE "$CLAIM_RE" "$f" 2>/dev/null || true)"
   [[ "$n_hits" -ge 1 ]] || missing_claims+="    $(basename "$f"): 0 version-scoped claims found"$'\n'
 done
 if [[ "$followers_seen" -ne "${#followers[@]}" ]]; then
@@ -315,6 +322,31 @@ elif [[ "$(printf '%s\n%s\n' "${floor#v}" "${tf_ver_amd64#v}" | sort -V | head -
   fail "pinned version $tf_ver_amd64 is BELOW the sidecar's declared floor $floor -- a coherent downgrade is still a downgrade; every coherence check above passes on one"
 else
   pass "pinned version $tf_ver_amd64 is at or above the declared floor $floor"
+fi
+
+# --- 11. ci-deploy.sh (a trigger file) carries NO version-scoped claim (#9799 item 2) ---
+# The decoupling invariant. Check 7 proves every FOLLOWER names the pinned version; this proves
+# the file that must not be a follower stays free of the claim. A claim here, current or stale,
+# is the defect: ci-deploy.sh feeds triggers_replace of the web hosts' SSH provisioners, so the
+# next bump would have to edit it and redeliver it to both hosts for a comment. A missing file
+# is a FAIL, not a pass: zero files examined must not read as clean. The pointer the file now
+# carries is asserted too, together with the sidecar heading it names, so a rename of that
+# heading cannot leave the pointer dangling.
+TRIGGER_NOCLAIM="$DIR/ci-deploy.sh"
+REGISTER_HEADING='## Version-scoped claim register'
+if [[ ! -f "$TRIGGER_NOCLAIM" ]]; then
+  fail "ci-deploy.sh missing at $TRIGGER_NOCLAIM -- cannot verify it carries no version-scoped claim"
+else
+  trig_hits="$(grep -ohE "$CLAIM_RE" "$TRIGGER_NOCLAIM" 2>/dev/null | sort -u | tr '\n' ' ' || true)"
+  if [[ -n "$trig_hits" ]]; then
+    fail "ci-deploy.sh carries a version-scoped claim ($trig_hits) -- point the comment at the sidecar's '$REGISTER_HEADING' instead; a version token in a deploy_pipeline_fix trigger file makes every zot bump redeliver the script to both web hosts"
+  elif ! grep -qF -- "$REGISTER_HEADING" "$PROV"; then
+    fail "the sidecar has no '$REGISTER_HEADING' heading -- the pointer in ci-deploy.sh (and check 11's pointer assertion) names it; restore the heading or move the pointer with it"
+  elif ! grep -qF -- "$REGISTER_HEADING" "$TRIGGER_NOCLAIM"; then
+    fail "ci-deploy.sh no longer points at the sidecar's '$REGISTER_HEADING' -- the measured /v2/ claim in it has lost the place that records its version and date"
+  else
+    pass "ci-deploy.sh (a deploy_pipeline_fix trigger file) carries no 'zot vX.Y.Z' claim and points at the sidecar register, so a zot bump never has to edit it"
+  fi
 fi
 
 echo "RESULT: $PASS passed, $FAIL failed"

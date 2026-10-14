@@ -5,9 +5,9 @@ date: 2026-06-11
 related: [5086, 5085, 5173]
 related_adrs: [ADR-053]
 related_plans:
-  - knowledge-base/project/plans/2026-06-11-feat-ci-api-spend-ledger-plan.md
+  - knowledge-base/project/plans/archive/20261013-032858-2026-06-11-feat-ci-api-spend-ledger-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-loop-token-cost-ledger/spec.md
+  - knowledge-base/project/specs/archive/20261013-032858-feat-loop-token-cost-ledger/spec.md
 brand_survival_threshold: single-user incident
 ---
 

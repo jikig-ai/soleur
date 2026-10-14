@@ -131,7 +131,19 @@ cat > "$BIN/sleep" <<'SLP'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FX/sleeps"
 SLP
-chmod +x "$BIN/gh" "$BIN/sleep"
+# The head-verdict resolver (ADR-276 S3, #9728) is stubbed through the CI_HEAD_VERDICT_BIN seam: <dir>/vstate holds
+# "<state> [run-id] [sha]" (default n/a), <dir>/vstate.fail makes it exit 3, <dir>/vlog logs each call. The real
+# resolver has its own suite (plugins/soleur/test/ci-head-verdict.test.sh); the wiring suite pins that this script calls it.
+cat > "$BIN/verdict.sh" <<'VS'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FX/vlog"
+# The REAL error shape: a state=error marker (outside the six-state set) AND exit 3, carrying the real sha like the resolver does.
+[[ -f "$FX/vstate.fail" ]] && { printf 'SOLEUR_CI_HEAD_VERDICT state=error pr=%s sha=%s run=none reason=api-error\n' "$STUB_PR" "$STUB_SHA"; exit 3; }
+st=n/a; rn=none; sh="$STUB_SHA"
+[[ -f "$FX/vstate" ]] && read -r st rn sh < "$FX/vstate"
+printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=%s sha=%s run=%s reason=stub\n' "${st:-n/a}" "$STUB_PR" "${sh:-$STUB_SHA}" "${rn:-none}"
+VS
+chmod +x "$BIN/gh" "$BIN/sleep" "$BIN/verdict.sh"
 # A PATH with jq but no gh, for the missing-tool row.
 NOGH="$SANDBOX/nogh"; mkdir -p "$NOGH"; ln -s "$(command -v jq)" "$NOGH/jq"
 
@@ -181,8 +193,8 @@ setrun() { runs "$1" "map(if .name == \"$2\" then $3 else . end)" "${4:-runs.jso
 run() { # <dir> <sut-args...> ; RUN_PATH / RUN_UNSET_POLL / RUN_POLL override the environment
   local d="$1"; shift
   assert_fixture_dir "$d"
-  : > "$d/log"; rm -f "$d/.polls" "$d/sleeps"
-  local -a envv=(FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_SHA="$SHA" STUB_GREEN="$GREEN" STUB_P1="$P1" PATH="${RUN_PATH:-$BIN:$PATH}")
+  : > "$d/log"; rm -f "$d/.polls" "$d/sleeps" "$d/vlog"
+  local -a envv=(FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_SHA="$SHA" STUB_GREEN="$GREEN" STUB_P1="$P1" PATH="${RUN_PATH:-$BIN:$PATH}" CI_HEAD_VERDICT_BIN="$BIN/verdict.sh")
   if [[ -z "${RUN_UNSET_POLL:-}" ]]; then envv+=(ADMIN_MERGE_READY_POLL_SECONDS="${RUN_POLL:-0}"); fi
   env -u ADMIN_MERGE_READY_POLL_SECONDS "${envv[@]}" "$TIMEOUT_BIN" 30 "$BASH" "$SUT" "$@" > "$d/out" 2> "$d/err"
   echo $? > "$d/rc"
@@ -192,14 +204,20 @@ rc_is()   { [[ "$(cat "$1/rc")" == "$2" ]] || why "rc=$(cat "$1/rc"), want $2; o
 line()    { grep -Fxq -- "$2" "$1/out" || why "missing stdout line: $2"; }
 noline()  { ! grep -Fq -- "$2" "$1/out" || why "unexpected stdout text: $2"; }
 tailis()  { local l; l=$(tail -1 "$1/out"); [[ "$l" == *" $2" ]] || why "marker tail is '$l', want '* $2'"; }
-verdict() { tail -1 "$1/out" | grep -q "^SOLEUR_ADMIN_MERGE_READY verdict=$2 " || why "last line is not verdict=$2: $(tail -1 "$1/out")"; }
-reason()  { tail -1 "$1/out" | grep -q " reason=$2 " || why "last line lacks reason=$2: $(tail -1 "$1/out")"; }
+verdict() { tail -1 "$1/out" | grep -c >/dev/null "^SOLEUR_ADMIN_MERGE_READY verdict=$2 " || why "last line is not verdict=$2: $(tail -1 "$1/out")"; }
+reason()  { tail -1 "$1/out" | grep -c >/dev/null " reason=$2 " || why "last line lacks reason=$2: $(tail -1 "$1/out")"; }
 nomiss()  { ! grep -q '^STUB-MISS' "$1/log" || why "stub refused: $(grep '^STUB-MISS' "$1/log" | head -1)"; }
 polls()   { [[ "$(cat "$1/.polls" 2>/dev/null || echo 0)" == "$2" ]] || why "polls=$(cat "$1/.polls" 2>/dev/null), want $2"; }
 sleeps()  { [[ "$(cat "$1/sleeps" 2>/dev/null | wc -l)" == "$2" ]] || why "sleeps=$(cat "$1/sleeps" 2>/dev/null | wc -l), want $2"; }
 count()   { [[ "$(grep -c -- "$2" "$1/out")" == "$3" ]] || why "count of '$2' = $(grep -c -- "$2" "$1/out"), want $3"; }
 logs()    { grep -Fq -- "$2" "$1/log" || why "stub log lacks request: $2"; }
 nocall()  { [[ ! -s "$1/log" ]] || why "gh was called: $(head -1 "$1/log")"; }
+
+setv() { printf '%s\n' "${*:2}" > "$1/vstate"; }                          # setv <dir> <state> [run-id] [sha]
+vcalls() { [[ -f "$1/vlog" ]] && wc -l < "$1/vlog" || echo 0; }
+vcalled() { [[ "$(vcalls "$1")" == "$2" ]] || why "resolver calls=$(vcalls "$1"), want $2"; }
+TEST_URL_RUN8='https://example.invalid/o/r/actions/runs/8/job/1'
+TEST_URL_RUN6='https://example.invalid/o/r/actions/runs/6/job/2'
 
 case_ok() { CASES_RUN=$((CASES_RUN + 1)); if "$2"; then pass "$1"; else fail "$1"; fi; }
 # case_mutant <id> <row-fn> <defect-fn> <python-old> <python-new>
@@ -369,6 +387,27 @@ row_R35() { local d; d=$(mkrow R35); assert_fixture_dir "$d"
   # The same context required from two different apps: both entries must be satisfied.
   jqf "$d" rules.json '.[0] |= map(if .ruleset_id == 13304872 and .type == "required_status_checks" then .parameters.required_status_checks += [{context: "CodeQL", integration_id: 15368}] else . end)'
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  CodeQL" && tailis "$d" 'required=27 absent=["CodeQL"] pending=[] failed=[]'; }
+# R36/R37 (#9454): the POST-ADOPTION live rule shape -- the CI Required ruleset gains a
+# `merge_queue` rule and LOSES its `CodeQL` required context (CodeQL is advisory: it cannot report on
+# `merge_group`). The base capture above is the PRE-adoption shape (26 contexts incl. CodeQL/57789), so
+# these rows derive the new shape from it rather than hand-writing a required set.
+#   R36: merge_queue present + CodeQL not required -> READY with required=25 (24 CI Required minus
+#        CodeQL = 23, plus the 2 CLA contexts); a FAILED advisory CodeQL run must not block.
+#        Before the fix the script errored `unsupported-rule` on the `merge_queue` type, so every
+#        admin-merge gate would have failed closed the moment the queue went live.
+#   R37: the allowlist stayed SPECIFIC -- merge_queue present alongside an unevaluated type
+#        (`workflows`) is still an `unsupported-rule` error.
+_mq_rule='{type: "merge_queue", ruleset_id: 14145388, parameters: {merge_method: "SQUASH", grouping_strategy: "ALLGREEN", max_entries_to_merge: 1, min_entries_to_merge: 1, min_entries_to_merge_wait_minutes: 0, max_entries_to_build: 2, check_response_timeout_minutes: 60}}'
+_post_adoption_rules() { # <dir>
+  jqf "$1" rules.json "(.[0] |= map(if .type == \"required_status_checks\" then .parameters.required_status_checks |= map(select(.context != \"CodeQL\")) else . end)) | (.[0] += [$_mq_rule])"
+}
+row_R36() { local d; d=$(mkrow R36); assert_fixture_dir "$d"; _post_adoption_rules "$d"
+  setrun "$d" CodeQL '.conclusion = "failure"'
+  run "$d" "$PR" "$SHA"; rc_is "$d" 0 && nomiss "$d" && verdict "$d" ready \
+    && tailis "$d" 'required=25 absent=[] pending=[] failed=[]'; }
+row_R37() { local d; d=$(mkrow R37); assert_fixture_dir "$d"; _post_adoption_rules "$d"
+  jqf "$d" rules.json '.[0] += [{type: "workflows", ruleset_id: 1}]'
+  run "$d" "$PR" "$SHA"; rc_is "$d" 3 && nomiss "$d" && verdict "$d" error && reason "$d" unsupported-rule; }
 row_help() { local d; d=$(mkrow help); assert_fixture_dir "$d"; run "$d" --help
   rc_is "$d" 0 && grep -q SOLEUR_ADMIN_MERGE_READY "$d/out" && nocall "$d"; }
 
@@ -540,6 +579,65 @@ row_L15() { local d; d=$(mkrow L15); assert_fixture_dir "$d"
   run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
   rc_is "$d" 1 && reason "$d" carryover-local-not-clean; }
 
+# ── ADR-276 S3 (#9728): the draft-era red `test` row of a PR that was marked ready ─────────────
+# Under CI_DRAFT_LIGHT a draft's `test` is red by design. The latest-row-per-context rule already makes a NEWER ready-run
+# row decide (S3/S4 pin that), but until that row exists the draft row is the latest: read as FAILED it ends --wait at
+# once, and read as the whole truth it hides a ready run that was never created. The script asks the resolver ONLY when
+# `test` is FAILED at the graded head, and can only move the context to PENDING or ABSENT, never to green.
+row_S1() { local d; d=$(mkrow S1); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" pending-full 8
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "PENDING test (draft-era-row-while-ready-run-pending)" && verdict "$d" not-ready && reason "$d" not-green \
+    && tailis "$d" 'required=26 absent=[] pending=["test"] failed=[]' && vcalled "$d" 1 && grep -Fxq "verdict $PR" "$d/vlog" || why "S1: $(tail -2 "$d/out" | tr '\n' '|')"; }
+row_S2() { local d; d=$(mkrow S2); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"' runs.1.json; setv "$d" pending-full 8
+  run "$d" "$PR" "$SHA" --wait; rc_is "$d" 0 && nomiss "$d" && polls "$d" 2 && verdict "$d" ready && sleeps "$d" 1 && count "$d" '^WAIT ' 1 && line "$d" 'WAIT poll=1/60 absent=[] pending=["test"]'; }
+row_S3() { local d; d=$(mkrow S3); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'
+  runs "$d" '. + [(.[] | select(.name == "test") | .id = (.id + 100) | .status = "queued" | .conclusion = null | .started_at = null)]'; setv "$d" pending-full 8
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "PENDING test (queued)" && tailis "$d" 'required=26 absent=[] pending=["test"] failed=[]' && vcalled "$d" 0; }
+row_S4() { local d; d=$(mkrow S4); assert_fixture_dir "$d"
+  runs "$d" '. + [(.[] | select(.name == "test") | .id = (.id - 100) | .conclusion = "failure")]'; setv "$d" no-run
+  run "$d" "$PR" "$SHA"; rc_is "$d" 0 && nomiss "$d" && verdict "$d" ready && tailis "$d" "$READY_TAIL" && vcalled "$d" 0; }
+row_S5() { local d; d=$(mkrow S5); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" no-run
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "PENDING test (no-ready-run)" && reason "$d" not-green || return 1
+  run "$d" "$PR" "$SHA" --wait --timeout 120; rc_is "$d" 1 && polls "$d" 2 && verdict "$d" timeout && tailis "$d" 'required=26 absent=[] pending=["test"] failed=[]'; }
+row_S6() { local d; d=$(mkrow S6); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" stalled
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && verdict "$d" not-ready && reason "$d" stalled && line "$d" "ABSENT  test (stalled: no full CI run decided after the ready event)" \
+    && tailis "$d" 'required=26 absent=["test"] pending=[] failed=[]' && grep -Fq "gh pr ready --undo $PR" "$d/out" && grep -Fq "gh pr ready $PR" "$d/out" \
+    && ! grep -Fq 'gh run rerun' "$d/out" || return 1
+  run "$d" "$PR" "$SHA" --wait; rc_is "$d" 1 && polls "$d" 1 && reason "$d" stalled; }
+row_S7() { local d; d=$(mkrow S7); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" awaiting-approval 8
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && reason "$d" awaiting-approval && line "$d" "PENDING test (awaiting-approval: a maintainer must approve the fork workflow run)" \
+    && tailis "$d" 'required=26 absent=[] pending=["test"] failed=[]' || return 1
+  run "$d" "$PR" "$SHA" --wait; rc_is "$d" 1 && polls "$d" 1 && reason "$d" awaiting-approval; }
+row_S8() { local d; d=$(mkrow S8); assert_fixture_dir "$d"; setrun "$d" test ".conclusion = \"failure\" | .details_url = \"$TEST_URL_RUN8\""; setv "$d" full-decided 8
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && reason "$d" not-green && tailis "$d" 'required=26 absent=[] pending=[] failed=["test"]' || return 1
+  run "$d" "$PR" "$SHA" --wait; rc_is "$d" 1 && polls "$d" 1 && verdict "$d" not-ready; }
+row_S9() { local d; d=$(mkrow S9); assert_fixture_dir "$d"
+  setrun "$d" test ".details_url = \"$TEST_URL_RUN8\""
+  runs "$d" ". + [(.[] | select(.name == \"test\") | .id = (.id + 1) | .conclusion = \"failure\" | .details_url = \"$TEST_URL_RUN6\")]"; setv "$d" full-decided 8
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && verdict "$d" not-ready && reason "$d" stale-row && line "$d" "FAILED  test (stale-row: the newest test row belongs to run 6, not the deciding run 8)" \
+    && tailis "$d" 'required=26 absent=[] pending=[] failed=["test"]' && grep -Fq "gh pr ready --undo $PR" "$d/out" || return 1
+  run "$d" "$PR" "$SHA" --wait; rc_is "$d" 1 && polls "$d" 1 && reason "$d" stale-row; }
+row_S10() { local d; d=$(mkrow S10); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" n/a
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && reason "$d" not-green && vcalled "$d" 1; }
+row_S11() { local d; d=$(mkrow S11); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" pending-full 8; touch "$d/vstate.fail"
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && reason "$d" not-green && vcalled "$d" 1; }
+row_S12() { local d; d=$(mkrow S12); assert_fixture_dir "$d"; drop "$d" test; setv "$d" pending-full 8
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  test" && tailis "$d" 'required=26 absent=["test"] pending=[] failed=[]' && vcalled "$d" 0; }
+row_S13() { local d; d=$(mkrow S13); assert_fixture_dir "$d"
+  jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"; setrun "$d" test '.conclusion = "failure"'; setv "$d" pending-full 8
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && vcalled "$d" 0; }
+row_S14() { local d; d=$(mkrow S14); assert_fixture_dir "$d"; setfiles "$d" '[[{"filename":".github/workflows/ci.yml"}]]'; setrun "$d" test '.conclusion = "failure"'; setv "$d" pending-full 8
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && reason "$d" untrusted-ci && grep -q '^UNTRUSTED-CI' "$d/out" && vcalled "$d" 0 || return 1
+  run "$d" "$PR" "$SHA" --wait; rc_is "$d" 1 && polls "$d" 1 && reason "$d" untrusted-ci; }
+row_S15() { local d; d=$(mkrow S15); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" pending-full 8 1111111111111111111111111111111111111111
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && reason "$d" not-green; }
+# S16: whatever the resolver says, a red or absent test is never READY (the guard cannot be a reject-everything stub: S4 passes).
+row_S16() { local d st t
+  for st in n/a full-decided pending-full no-run stalled awaiting-approval; do for t in red absent; do
+    d=$(mkrow "S16-$st-$t"); assert_fixture_dir "$d"; setv "$d" "$st" 8
+    if [[ "$t" == red ]]; then setrun "$d" test '.conclusion = "failure"'; else drop "$d" test; fi
+    run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && verdict "$d" not-ready || return 1
+  done; done; }
+
 # defect probes for the mutation rows: the mutant must show the defect, not merely crash.
 # R2's mutant iterates present checks, so the absent `test` is never named (the positive
 # readiness count then refuses it as an error rather than a ready -- defence in depth).
@@ -552,6 +650,7 @@ dfx_R8_green()   { [[ "$(rc_of R8)" == 0 ]]; }
 dfx_R26_ready()  { grep -q 'verdict=ready' "$(rowdir R26)/out"; }
 dfx_R32_green()  { [[ "$(rc_of R32)" == 0 ]]; }
 dfx_R28_green()  { [[ "$(rc_of R28)" == 0 ]]; }
+dfx_R36_unsupported() { [[ "$(rc_of R36)" == 3 ]] && grep -q 'reason=unsupported-rule' "$(rowdir R36)/out"; }
 dfx_L2_ready()   { [[ "$(rc_of L2)" == 0 ]]; }
 dfx_L4_ready()   { [[ "$(rc_of L4)" == 0 ]]; }
 dfx_L5_ready()   { [[ "$(rc_of L5)" == 0 ]]; }
@@ -559,7 +658,7 @@ dfx_L6_ready()   { [[ "$(rc_of L6)" == 0 ]]; }
 dfx_L1_reason()  { [[ "$(rc_of L1)" == 0 ]] && ! grep -q 'reason=carryover-local-docs' "$(rowdir L1)/out"; }
 
 echo "== admin-merge-ready.sh (Guard 1)"
-for r in H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 G1 G2 G3 G4 G5 G6 G7 G8 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15 help; do
+for r in S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 R36 R37 G1 G2 G3 G4 G5 G6 G7 G8 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15 help; do
   case_ok "$r" "row_$r"
 done
 
@@ -582,6 +681,8 @@ case_mutant R26-actions row_R26 dfx_R26_ready 'select(test("^\\.github/(workflow
 case_mutant R32-headsha row_R32 dfx_R32_green '| [.[] | .check_runs[] | select(.head_sha == $sha)] as $runs' '| [.[] | .check_runs[]] as $runs'
 # R28: read only the first page of the rules.
 case_mutant R28-rulespage row_R28 dfx_R28_green '($rules[0] | add // []) as $all' '($rules[0][0] // []) as $all'
+# R36 -- drop merge_queue from the evaluated rule types: the live post-adoption shape errors.
+case_mutant R36-known row_R36 dfx_R36_unsupported '"required_signatures","required_status_checks","merge_queue"] as $known' '"required_signatures","required_status_checks"] as $known'
 
 # ── mutation rows for the --allow-local-merge arm (#9401) ─────────────────────
 # LM-clean: drop the byte-identical patch bijection -- a smuggled file now certifies.
@@ -610,10 +711,32 @@ case_mutant LM-reason row_L1 dfx_L1_reason \
   'REASON="carryover-local-docs"' \
   'REASON="all-green"'
 
+# ── ADR-276 S3 mutation rows: the head-verdict handling ────────────────────────────────────────
+dfx_S1_failed()  { grep -Fq 'FAILED  test' "$(rowdir S1)/out"; }
+dfx_S6_noabsent() { ! grep -Fq 'absent=["test"]' "$(rowdir S6)/out"; }
+dfx_S9_nostale() { ! grep -Fq 'reason=stale-row' "$(rowdir S9)/out"; }
+dfx_S13_called() { [[ "$(vcalls "$(rowdir S13)")" != 0 ]]; }
+dfx_S15_softened() { grep -Fq 'PENDING test' "$(rowdir S15)/out"; }
+dfx_S6_noreason() { ! grep -Fq 'reason=stalled' "$(rowdir S6)/out"; }
+# MS1 -- pending-full no longer softens the draft row: --wait ends at once on a FAILED context again.
+case_mutant MS1-pending row_S1 dfx_S1_failed '    pending-full)
+      jq -c' '    pending-full-off)
+      jq -c'
+# MS2 -- stalled is reported as PENDING instead of ABSENT.
+case_mutant MS2-stalled row_S6 dfx_S6_noabsent '.failed -= ["test"] | .absent += ["test"]' '.failed -= ["test"] | .pending += ["test"]'
+# MS3 -- stalled loses its terminal reason: a --wait would burn the whole budget on a PR that will never run.
+case_mutant MS3-reason row_S6 dfx_S6_noreason 'REASON_OVERRIDE="stalled"' 'REASON_OVERRIDE=""'
+# MS4 -- a verdict for ANOTHER head is honoured.
+case_mutant MS4-sha row_S15 dfx_S15_softened '[[ "$m" == *" sha=$SHA "* ]] || return 1' 'true'
+# MS5 -- the carryover arm (grading another sha) consults the resolver for the PR head.
+case_mutant MS5-carryover row_S13 dfx_S13_called '[[ "$CHECK_SHA" == "$SHA" ]] && jq -e' 'jq -e'
+# MS6 -- the stale-row comparison inverted.
+case_mutant MS6-stale row_S9 dfx_S9_nostale '"$last_run" != "$V_RUN"' '"$last_run" == "$V_RUN"'
+
 # ── H4: anti-vacuity ─────────────────────────────────────────────────────────────────────────
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=74
+_min_cases=99
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

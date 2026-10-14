@@ -61,6 +61,20 @@
 #                 must return exactly the written value, else verdict=flag_write_readback_failed
 #   success     : flag_write=ok value=<written>
 #
+# SANDBOX DENY-ROOTS (#9725). The agent sandbox's tenant denyRead must cover the
+# worktree root BEFORE the flag flips — denying only WORKSPACES_ROOT when
+# workspacePathForWorkspaceId resolves under WORKTREE_ROOT masks an empty
+# directory while every sibling stays readable. This is a source-level probe on
+# the checkout (no runtime, no creds): `workspace-resolver.ts` must export
+# `workspaceTenantDenyRoots` AND `agent-runner-sandbox-config.ts` must call it.
+# One line, like TOFU_ARM:
+#   SANDBOX_DENY_ROOTS present   -> both markers found
+#   SANDBOX_DENY_ROOTS absent    -> files readable, marker missing (old posture)
+#   SANDBOX_DENY_ROOTS unknown   -> files unreadable/missing (never "absent")
+# Blocking on FLAG_MODE=flip: anything but `present` refuses
+# verdict=sandbox_deny_coverage_{absent,unknown}, because a flip without the
+# coverage ships a sandbox that denies nothing real.
+#
 # GIT-DATA HOST-KEY PIN (#7226, plan D3). The same step, with the same `prd` token, reads
 # GIT_DATA_SSH_HOST_KEY (published by Terraform when git-data is born or replaced) with the same
 # --no-exit-on-missing-secret semantics, validates its shape, and writes it to
@@ -122,12 +136,51 @@ case "$FLAG_MODE" in
   *) echo "::error title=git-data-flag-precheck::verdict=flag_mode_invalid mode=${FLAG_MODE}"; exit 2 ;;
 esac
 
+# --- SANDBOX_DENY_ROOTS detector (#9725) ---
+# Markers are code-shaped, not name-mentions: the resolver must define the
+# helper AND read the RAW WORKTREE_ROOT (the flag-collapsed form is the
+# #9725 deviation — absent); the config must CALL it (a stale import or
+# comment mention does not count as coverage). Shared by the write gate and
+# the read-side informational arm; defined here because the write arm runs
+# before the read probes.
+detect_deny_roots() {
+  local dir="${SANDBOX_SRC_DIR:-$(dirname "$0")/../server}"
+  if [ -r "$dir/workspace-resolver.ts" ] && [ -f "$dir/workspace-resolver.ts" ] \
+     && [ -r "$dir/agent-runner-sandbox-config.ts" ] && [ -f "$dir/agent-runner-sandbox-config.ts" ]; then
+    # Function-scoped: the RAW env read must be inside the helper body — a
+    # flag-collapsed body (calling getWorkspaceWorktreeRoot()) yields absent,
+    # while a file-scoped grep would still hit that helper's own env read.
+    if grep -qE 'export function workspaceTenantDenyRoots' "$dir/workspace-resolver.ts" \
+       && grep -qF 'process.env.WORKTREE_ROOT' \
+          < <(sed -n '/export function workspaceTenantDenyRoots/,/^}/p' "$dir/workspace-resolver.ts") \
+       && grep -qE '=[[:space:]]*workspaceTenantDenyRoots\(' "$dir/agent-runner-sandbox-config.ts"; then
+      echo present
+    else
+      echo absent
+    fi
+  else
+    echo unknown
+  fi
+}
+
 # ---- Write path (#8573): returns before the read probes --------------------------
 if [ -n "${FLAG_WRITE_VALUE:-}" ]; then
   case "$FLAG_WRITE_VALUE" in
     true|false) : ;;
     *) echo "::error title=git-data-flag-precheck::verdict=flag_write_value_invalid value=${FLAG_WRITE_VALUE}"; exit 2 ;;
   esac
+  # A `true` write (ANY mode — the read-side deny refuse fires only under
+  # flip, and the write arm exits before it) must not land on a source tree
+  # without the #9725 deny coverage. Refuse unless the markers prove present;
+  # `unknown` (unreadable source) fails closed the same way.
+  if [ "$FLAG_WRITE_VALUE" = true ]; then
+    wr_deny="$(detect_deny_roots)"
+    if [ "$wr_deny" != present ]; then
+      echo "::error title=git-data-flag-precheck::verdict=sandbox_deny_coverage_${wr_deny} — the sandbox tenant denyRead does not verifiably cover WORKTREE_ROOT; land the #9725 deny-root fix before writing GIT_DATA_STORE_ENABLED=true"
+      echo "[git-data-flag-precheck] verdict=sandbox_deny_coverage_${wr_deny}"
+      exit 5
+    fi
+  fi
   if [ -z "${DOPPLER_TOKEN_GIT_DATA_FLAG:-}" ]; then
     echo "::error title=git-data-flag-precheck::verdict=flag_write_credential_absent — DOPPLER_TOKEN_GIT_DATA_FLAG unset; the #8573 write seam is not provisioned. Never substitute DOPPLER_TOKEN_WRITE (prd_terraform-scoped)."
     echo "[git-data-flag-precheck] verdict=flag_write_credential_absent"
@@ -212,6 +265,13 @@ elif grep -qiF "StrictHostKeyChecking=accept-""new" "$GIT_AUTH_TS"; then
   echo "::warning title=git-data-flag-precheck::TOFU_ARM present - the app still carries the unpinned git-data fallback (#5914); it must be deleted before GIT_DATA_STORE_ENABLED is ever set"
 else
   echo "TOFU_ARM absent"
+fi
+
+# --- SANDBOX_DENY_ROOTS (#9725) ---
+deny_state="$(detect_deny_roots)"
+echo "SANDBOX_DENY_ROOTS $deny_state"
+if [ "$FLAG_MODE" = flip ] && [ "$deny_state" != present ]; then
+  refuse "sandbox_deny_coverage_${deny_state} — the sandbox tenant denyRead does not verifiably cover WORKTREE_ROOT; land the #9725 deny-root fix before flipping GIT_DATA_STORE_ENABLED"
 fi
 
 # --- git-data host-key pin ---

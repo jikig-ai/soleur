@@ -118,7 +118,13 @@ if [[ ! -s "$MAIN_PROG" || ! -s "$G2_PROG" ]]; then
   echo "FATAL: could not extract the guard's PYEOF and G2EOF programs -- the scoping below would be vacuous." >&2
   exit 2
 fi
-n_join=$(grep -cF 'os.path.join(INFRA' "$MAIN_PROG")
+# Exact OCCURRENCE counts for the pinned spellings below (the earlier grep -c
+# idiom counts LINES -- two call sites on one line read as 1 and the bound
+# passes vacuously). `[[:space:]]*\(` absorbs the legal `name ()` spelling
+# evasion; `tr -d` strips BSD wc -l padding.
+_sites() { grep -oE "$1" "$2" | wc -l | tr -d '[:space:]'; }
+
+n_join=$(_sites 'os\.path\.join[[:space:]]*\(INFRA' "$MAIN_PROG")
 if [[ "$n_join" != "1" ]]; then
   echo "FATAL: expected exactly one 'os.path.join(INFRA' in the guard (the read() helper), found $n_join." >&2
   echo "  A second reader can take an input this battery never sandboxes. Route it through read()." >&2
@@ -126,18 +132,20 @@ if [[ "$n_join" != "1" ]]; then
 fi
 
 # No `open(` outside the read() helper. The helper's own line is the single permitted match.
-n_open=$(grep -c 'open(' "$MAIN_PROG")
+n_open=$(_sites 'open[[:space:]]*\(' "$MAIN_PROG")
 if [[ "$n_open" != "1" ]]; then
   echo "FATAL: expected exactly one 'open(' in the guard (inside def read), found $n_open." >&2
   echo "  A direct open() bypasses read() and can take an input this battery never sandboxes." >&2
   exit 2
 fi
 
-# Every `read(` call site passes a STRING LITERAL. `grep -c 'read('` counts the `def read(n)`
+# Every `read(` call site passes a STRING LITERAL. `read[[:space:]]*\(` counts the `def read(n)`
 # line too, so the literal-site count must be exactly one fewer. A `read(SOME_VAR)` breaks this
 # (6 vs 4) while leaving the two assertions above satisfied -- that is the bypass review drove.
-n_read_call=$(grep -c 'read(' "$MAIN_PROG")
-n_read_lit=$(grep -c 'read("' "$MAIN_PROG")
+# The `[^.a-zA-Z_]` prefix excludes `.read(` (the open().read() method call on
+# the def line is not the helper); `read_text(` never matched anyway.
+n_read_call=$(_sites '(^|[^.a-zA-Z_])read[[:space:]]*\(' "$MAIN_PROG")
+n_read_lit=$(_sites '(^|[^.a-zA-Z_])read[[:space:]]*\("' "$MAIN_PROG")
 if [[ "$((n_read_call - 1))" != "$n_read_lit" ]]; then
   echo "FATAL: the guard has $((n_read_call - 1)) read() call sites but only $n_read_lit pass a" >&2
   echo "  string literal. A non-literal filename is invisible to the sandbox-membership check" >&2
@@ -159,15 +167,17 @@ fi
 # that does not reintroduce a suppression path.
 while IFS= read -r wiring; do
   grep -qF -- "$wiring" "$GUARD" || {
-    echo "FATAL: the guard no longer contains the production ALLOWLIST wiring:" >&2
+    echo "FATAL: the guard no longer contains a pinned production wiring:" >&2
     echo "  $wiring" >&2
-    echo "  §5's hygiene checks and §2's allowlist consult are unobservable while ALLOWLIST is" >&2
-    echo "  empty, so this presence check is the only thing standing between them and deletion." >&2
+    echo "  The §5 hygiene checks / §2 allowlist consult and the EXT_RESIDENCE" >&2
+    echo "  unclassifiable consult are unobservable from .tf mutation, so this" >&2
+    echo "  presence check is the only thing standing between them and deletion." >&2
     exit 2
   }
 done <<'WIRINGS'
 check_allowlist(ALLOWLIST, "ALLOWLIST")
 if dest in ALLOWLIST: continue
+isinstance(entry, dict) and entry.get("unclassifiable")
 WIRINGS
 
 n_reads=0
@@ -185,11 +195,92 @@ if [[ "$n_reads" -lt "${#INPUTS[@]}" ]]; then
 fi
 
 # Guard 2 reads files ONLY through one `git ls-files` enumeration and one read_text() on its
-# results. A second reader (an open(), a literal path, an rglob) could take a file the scratch
-# repository below does not carry, so each shape is pinned and nothing else may open a file.
-if [[ "$(grep -c '"ls-files"' "$G2_PROG")" != 1 || "$(grep -c 'read_text(' "$G2_PROG")" != 1 \
-      || "$(grep -c 'open(' "$G2_PROG")" != 0 || "$(grep -c 'glob(' "$G2_PROG")" != 0 ]]; then
-  echo "FATAL: Guard 2 must read files only via one git ls-files enumeration and one read_text()." >&2
+# results, and stats them ONLY through the pin check's is_file()/is_symlink()/resolve() trio
+# (the other two .resolve() sites are the REPO/INFRA argv canonicalization).
+# A second reader (open/read_bytes/read(...)), enumerator (iterdir/walk/...),
+# stat spelling (os.path.*, stat-family, access...), writer (write_text/mkdir/
+# symlink...) or exec channel (subprocess/Popen/eval...) could take or plant a
+# file the scratch repository below does not carry, so the plausible natural
+# spellings are pinned by occurrence -- `symlink(` alone is bound at 1 (it is
+# the is_symlink call's own substring). This is a tripwire over spellings, not
+# a closed sequence (the file's own lesson: per-line allow-lists admit
+# permitted-shape bypasses) -- `group(`, `str.replace(` and os.path.*-via-
+# from-import spellings cannot be pinned without colliding with legitimate
+# code, and a deliberate hostile edit defeats any grep; the real bound is the
+# sandbox + this list's fail-loud drift.
+if [[ "$(_sites '"ls-files"' "$G2_PROG")" != 1 \
+      || "$(_sites 'read_text[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites 'is_file[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites 'is_symlink[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites '\.resolve[[:space:]]*\(' "$G2_PROG")" != 3 \
+      || "$(_sites 'subprocess\.run[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites 'open[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'read[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'read_bytes' "$G2_PROG")" != 0 \
+      || "$(_sites 'glob[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'iterdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'walk[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'scandir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'listdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'stat[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'statvfs' "$G2_PROG")" != 0 \
+      || "$(_sites 'statfs' "$G2_PROG")" != 0 \
+      || "$(_sites 'exists[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'access[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getxattr' "$G2_PROG")" != 0 \
+      || "$(_sites 'listxattr' "$G2_PROG")" != 0 \
+      || "$(_sites 'isfile[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'islink[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'isdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'ismount[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_junction[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_dir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_socket[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_fifo[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_mount[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_block_device[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_char_device[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'samefile[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'readlink[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getsize[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getmtime[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getatime[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getctime[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'realpath[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'abspath[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'owner[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'write_text' "$G2_PROG")" != 0 \
+      || "$(_sites 'write_bytes' "$G2_PROG")" != 0 \
+      || "$(_sites 'touch[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'mkdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'makedirs' "$G2_PROG")" != 0 \
+      || "$(_sites 'symlink[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites 'symlink_to[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'hardlink_to' "$G2_PROG")" != 0 \
+      || "$(_sites 'rename[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'unlink[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'rmdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'shutil\.' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.path\.' "$G2_PROG")" != 0 \
+      || "$(_sites 'Popen' "$G2_PROG")" != 0 \
+      || "$(_sites 'check_output' "$G2_PROG")" != 0 \
+      || "$(_sites 'check_call' "$G2_PROG")" != 0 \
+      || "$(_sites 'subprocess\.call[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.system' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.popen' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.spawn' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.exec' "$G2_PROG")" != 0 \
+      || "$(_sites 'eval[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'exec[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getattr[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites '__import__' "$G2_PROG")" != 0 \
+      || "$(_sites 'importlib' "$G2_PROG")" != 0 \
+      || "$(_sites 'socket\.' "$G2_PROG")" != 0 \
+      || "$(_sites 'urllib' "$G2_PROG")" != 0 \
+      || "$(_sites 'requests\.' "$G2_PROG")" != 0 ]]; then
+  echo "FATAL: Guard 2 must read files only via one git ls-files enumeration and one read_text()," >&2
+  echo "  and touch paths only via the pin check's is_file()/is_symlink()/resolve() sites --" >&2
+  echo "  a second reader, enumerator, stat spelling, writer or exec channel drifted in." >&2
   exit 2
 fi
 # Every tracked (or new, unignored) .tf / .tf.json in the repo, as a path RELATIVE TO THE INFRA
@@ -205,6 +296,37 @@ fi
 SANDBOX_FILES=("${INPUTS[@]}")
 for f in "${TF_FILES[@]}"; do
   [[ " ${INPUTS[*]} " == *" $f "* ]] || SANDBOX_FILES+=("$f")
+done
+
+# ── EXT_RESIDENCE pin files (#10147) ─────────────────────────────────────────
+# Every EXT_RESIDENCE entry's `pin` is a repo-relative `*.test.sh`/`*.test.ts`
+# path verified at guard runtime (suffix, resolve()-inside-REPO, not a symlink,
+# extant), so the scratch repository must carry each pin file at its repo path
+# -- an unsandboxed pin fails loudly on the baseline row. The list is DERIVED from the guard's own `"pin"` values and
+# reconciled against the hardcoded G2_PIN_INPUTS -- the EXPECTED_INPUTS/
+# DERIVED_INPUTS pattern: a new EXT_RESIDENCE entry is a deliberate two-file
+# edit whose omission is loud, not a silent widening of what the sandbox covers.
+G2_PIN_INPUTS=(
+  apps/web-platform/infra/luks-monitor-install.test.sh
+  apps/web-platform/infra/workspaces-boot-unlock.test.sh
+  plugins/soleur/test/terraform-target-parity.test.ts
+)
+mapfile -t DERIVED_PINS < <(
+  grep -oE '"pin": "[^"]+"' "$G2_PROG" | sed 's/^"pin": "//; s/"$//' | LC_ALL=C sort -u
+)
+if [[ "${DERIVED_PINS[*]-}" != "${G2_PIN_INPUTS[*]}" ]]; then
+  echo "FATAL: the guard's EXT_RESIDENCE pin set has drifted." >&2
+  echo "  derived from $GUARD: ${DERIVED_PINS[*]-<none>}" >&2
+  echo "  expected by this battery: ${G2_PIN_INPUTS[*]}" >&2
+  echo "  Update G2_PIN_INPUTS and confirm every new pin file is sandboxed." >&2
+  exit 2
+fi
+# Repo-relative -> infra-relative: infra pins keep their short name, the rest
+# are reached through ../../../ (the TF_FILES convention).
+for p in "${G2_PIN_INPUTS[@]}"; do
+  rel="${p#apps/web-platform/infra/}"
+  [[ "$rel" == "$p" ]] && rel="../../../$p"
+  SANDBOX_FILES+=("$rel")
 done
 
 pass=0
@@ -266,6 +388,14 @@ restore() {
 
 apply_mutation() {
   local file="$1" script="$2"
+  # Compile-check the mutator BEFORE running the battery cycle: the canonical
+  # mistake is an extra-needle arg landing in the script slot (a needle string
+  # is not python) — fail fast and named rather than 'mutator errored' mid-run.
+  python3 -c 'import ast,sys; ast.parse(sys.argv[1])' "$script" || {
+    printf '\n[FATAL] mutator script is not valid python for %s -- expected a mutator, got: %.60s...\n' \
+      "$file" "$script" >&2
+    exit 1
+  }
   python3 - "$SANDBOX/$file" <<PYEOF
 import sys
 p = sys.argv[1]
@@ -277,9 +407,15 @@ PYEOF
 
 mutations_run=0
 
-# expect_red <label> <file> <expected-anchor> <mutator>
+# expect_red <label> <file> <expected-anchor> <mutator> [<extra-needle>...]
+# The Python mutator is always the 4th argument; extra needles trail it. Every extra
+# needle must be a substring of the guard's [FAIL] output (mutation_scorer_failed_on
+# all-of semantics) — used when a mutation is expected to red via MORE than one
+# diagnostic arm (M4j pins uncovered + stale).
 expect_red() {
   local label="$1" file="$2" anchor="$3" script="$4"
+  shift 4
+  local extra_needles=("$@")
   cases=$((cases + 1))
   restore
   if ! apply_mutation "$file" "$script"; then
@@ -291,7 +427,7 @@ expect_red() {
   mutations_run=$((mutations_run + 1))
   if run_guard; then
     no "$label: guard still PASSED with the invariant broken -- it cannot detect this"
-  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
+  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor" ${extra_needles[@]+"${extra_needles[@]}"}; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor'. Either it failed for an unrelated reason
@@ -330,7 +466,7 @@ fi
 
 # ── §1: resource enumeration and host-pinning ────────────────────────────────────────
 expect_red "M1 (§1 floor: a provisioner deleted)" server.tf \
-  "1: swept only 18 SSH-connected" '
+  "1: swept only 21 SSH-connected" '
 import re
 m = re.search(r"resource \"terraform_data\" \"orphan_reaper_install\" \{", s)
 assert m, "anchor missing"
@@ -368,7 +504,7 @@ s = s.replace(old, "    host        = local.web1_ip\n    user        = \"root\"\
 # Repointing the sibling's dial to web-1 removes it from W2_DIALERS, so the presence check
 # (deploy_pipeline_fix_web2 present=) fires -- the class rule, not the pin check.
 expect_red "M4a (§1: web-2 sibling repointed to web-1)" server.tf \
-  "deploy_pipeline_fix_web2 present=False" '
+  "web-2 dialers=['deploy_pipeline_fix_web2', 'egress_gateway_web2']" '
 old = "    host        = hcloud_server.web[\"web-2\"].ipv4_address"
 assert old in s
 s = s.replace(old, "    host        = hcloud_server.web[\"web-1\"].ipv4_address", 1)
@@ -378,7 +514,7 @@ s = s.replace(old, "    host        = hcloud_server.web[\"web-1\"].ipv4_address"
 # webhook_doppler_token_env, and only the credential-exclusion check sees it.
 expect_red "M4b (§1: credential material injected into the web-2 sibling)" server.tf \
   "credential-material references" '
-old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),"
 assert old in s
 s = s.replace(old, "    local.webhook_doppler_token_env,\n" + old, 1)
 '
@@ -388,7 +524,7 @@ s = s.replace(old, "    local.webhook_doppler_token_env,\n" + old, 1)
 # `doppler_token|DOPPLER_TOKEN` set must catch it.
 expect_red "M4c (§1: raw var.doppler_token injected into the web-2 sibling)" server.tf \
   "credential-material references" '
-old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),"
 assert old in s
 s = s.replace(old, "    var.doppler_token,\n" + old, 1)
 '
@@ -398,7 +534,7 @@ s = s.replace(old, "    var.doppler_token,\n" + old, 1)
 # `webhook_doppler_token_env`-only grep.
 expect_red "M4d (§1: soleur_doppler_token_env_b64 injected into the web-2 sibling)" server.tf \
   "credential-material references" '
-old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),"
 assert old in s
 s = s.replace(old, "    local.soleur_doppler_token_env_b64,\n" + old, 1)
 '
@@ -417,27 +553,108 @@ s = s.replace(old, "hooks_json = templatefile(\"${path.module}/hooks.json.tmpl\"
 # arbitrary paths the inline sweep cannot see — reported, never swept.
 expect_red "M4f (§2: a remote-exec scripts= arg is unprovable, not skippable)" server.tf \
   "uses remote-exec" '
-old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
+old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
 assert old in s
-s = s.replace(old, "  provisioner \"remote-exec\" {\n    scripts = [\"${path.module}/web-probe-envwrite.sh\"]\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
+s = s.replace(old, "  provisioner \"remote-exec\" {\n    scripts = [\"${path.module}/web-probe-envwrite.sh\"]\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
 '
 
 # A same-line `inline = ["..."]` (review enumeration 2b): the old `\n\s*\]` terminator
 # missed single-line arrays entirely.
 expect_red "M4g (§2: single-line inline array is still swept)" server.tf \
   "/etc/soleur/singleline-inline.conf is written by" '
-old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
+old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
 assert old in s
-s = s.replace(old, "  provisioner \"remote-exec\" {\n    inline = [\"install /tmp/x /etc/soleur/singleline-inline.conf\"]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
+s = s.replace(old, "  provisioner \"remote-exec\" {\n    inline = [\"install /tmp/x /etc/soleur/singleline-inline.conf\"]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
 '
 
-# Terraform identifiers legally contain uppercase and hyphens. v1 matched `[a-z_0-9]+`, so such
-# a resource was skipped by every section at once -- and because all floors are `>=`, invisibly.
-# This is a GREEN control: after the rename the resource must still be swept (count unchanged).
-expect_green "control-C (uppercase/hyphen resource name is still swept)" server.tf '
+# #9534: a NEW web-1-only SSH dialer must be forced through the fleet-sibling
+# classification — without it a running sibling silently never receives the artifact.
+expect_red "M4h (§1: unclassified web-1-only dialer reds)" server.tf \
+  "uncovered=['phantom_w1_probe@web-2']" '
+old = "resource \"terraform_data\" \"egress_gateway_web2\" {"
+assert old in s
+s = s.replace(old, """resource "terraform_data" "phantom_w1_probe" {
+  triggers_replace = { h = timestamp() }
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    host_key    = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" { inline = ["set -e", "true"] }
+}
+
+""" + old, 1)
+'
+
+# #9534 N-host: a web-3 SSH dialer reds on EVERY guard at once — the host-pinning
+# allow-set, the fleet roster (dialers on undeclared hosts), and G2's host_key
+# allow-set. The roster is declared, not discovered, so a fleet grow is a deliberate
+# edit with all three tripwires live.
+expect_red "M4i (§1: a web-3 dialer hits the undeclared-host clause)" server.tf \
+  "dialers on undeclared hosts" '
+old = "resource \"terraform_data\" \"egress_gateway_web2\" {"
+assert old in s
+s = s.replace(old, """resource "terraform_data" "phantom_w3_probe" {
+  triggers_replace = { h = timestamp() }
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-3"].ipv4_address
+    user        = "root"
+    host_key    = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" { inline = ["set -e", "true"] }
+}
+
+""" + old, 1)
+'
+
+# Terraform identifiers legally contain uppercase and hyphens. With `_norm()` normalizing
+# at the classification boundary (lower + hyphen->underscore) (#9970), `Cosign-Trusted_Root`
+# and `cosign_trusted_root` resolve to ONE resource identity — this rename is swept AND
+# stays justified, so the correct verdict is GREEN. The row pins that transparency:
+# deleting `_norm` re-breaks it via `uncovered` + `stale`, and narrowing the `hcl_blocks`
+# `([^"]+)` name capture to `[a-z_0-9]+` re-breaks it via `stale` + the swept floors
+# (an unswept resource can never be `uncovered`; the second `_all_tf_names` capture
+# feeds only the twin-base exemption — control-D below pins its `_norm` call site).
+expect_green "control-C (uppercase/hyphen rename is swept by the classification)" server.tf '
 old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
 assert old in s
 s = s.replace(old, "resource \"terraform_data\" \"Cosign-Trusted_Root\" {", 1)
+'
+
+# Normalization must not swallow detection (#9970): a rename landing on a normalized-UNIQUE
+# name still lands in `ssh_resources` but loses its `ONLY_JUSTIFIED` key, so the
+# classification must still RED it — `uncovered` for the new name plus `stale` for the
+# vacated one (both needles pinned).
+expect_red "M4j (§1: a normalized-unique rename is uncovered+stale)" server.tf \
+  "uncovered=['cosign_trusted_root_v2@web-2']" '
+old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"cosign_trusted_root_v2\" {", 1)
+' "stale entries=['cosign_trusted_root@web-2']"
+
+# The collision emit (names collide after normalization) is the only diagnostic that names
+# the collision — two SSH resources whose spellings normalize to ONE key, the later block
+# silently shadowing the earlier key. `stale` and the two swept floors co-fire as
+# side-effects, but none discriminates: deleting the collide check alone flips this row
+# to red-not-via-anchor. Rename onto apparmor_bwrap_profile's normalized identity (#9970).
+expect_red "M4k (§1: two names normalizing to one key collide)" server.tf \
+  "collide after normalization" '
+old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"Apparmor-Bwrap_Profile\" {", 1)
+'
+
+# `_all_tf_names` is normalized at the same boundary (#9970): the non-SSH twin base
+# `deploy_pipeline_fix` (local-exec, never enters `ssh_resources`) supplies `_base`
+# coverage for `deploy_pipeline_fix_web2` only via the NORMALIZED name — a case/hyphen
+# rename must stay GREEN; deleting `_norm` at the `_all_tf_names` call site re-breaks
+# the web-2 twin as `uncovered`.
+expect_green "control-D (case/hyphen rename of a non-SSH twin base stays covered)" server.tf '
+old = "resource \"terraform_data\" \"deploy_pipeline_fix\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"Deploy-Pipeline_Fix\" {", 1)
 '
 
 # ── §2: the destination sweep (the load-bearing invariant) ───────────────────────────
@@ -818,11 +1035,12 @@ s = s.replace(a, a + """
 # Measured: 2 [FAIL] lines. That is the deliberate cost of margin-zero floors on overlapping
 # sweeps -- the anchor still attributes this case to FLOOR_DESTS, which is what the rule requires.
 # The expected count tracks FLOOR_DESTS - 1 and must be re-derived whenever the baseline
-# moves: 56 while the baseline was 57, 58 since #7539 took it to 59. A stale literal here does
+# moves: 56 while the baseline was 57, 58 since #7539 took it to 59, 78 since #9534 took
+# it to 79. A stale literal here does
 # not fail loudly -- the guard still goes red, just via a different message -- so the battery
 # reports "red but NOT via <expected>" and the mutation stops being attributed to this floor.
 expect_red "M30 (§2 floor: one delivered artifact removed)" server.tf \
-  "2: swept only 74 destinations" '
+  "2: swept only 78 destinations" '
 blk = """  provisioner "file" {
     source      = "${path.module}/cron-egress-alarm@.service"
     destination = "/etc/systemd/system/cron-egress-alarm@.service"
@@ -920,7 +1138,7 @@ s = s.replace(old, ins + old, 1)
 # -- the exact "clean sweep of nothing" the new floor exists to name. §2 co-fires with fifteen
 # uncovered destinations, which is inherent: §3 quantifies over an intersection §2 also owns.
 expect_red "M35 (§3 floor: the seed-baked check quietly stops checking anything)" soleur-host-bootstrap.sh \
-  "3: the seed-baked check ran over only 27" '
+  "3: the seed-baked check ran over only 31" '
 old = "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/system/$f\""
 assert old in s
 s = s.replace(old, "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/units.d/$f\"", 1)
@@ -933,12 +1151,18 @@ s = s.replace(old, "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/syste
 # cannot be turned into a way to silence a real finding.
 probes_run=0
 probe_reds=0
+ext_probes_run=0
+ext_probe_reds=0
 
-# expect_probe_red <label> <anchor> <json> [mutator-file] [mutator-script]
-# The optional mutation runs FIRST, so a case can require the guard to reach a §2 verdict and
-# THEN check what the probe did or did not do to it (P4).
-expect_probe_red() {
-  local label="$1" anchor="$2" probe="$3" mfile="${4:-}" mscript="${5:-}"
+# Shared probe-row machinery (#10147): the §5 pair and the EXT_RESIDENCE pair were
+# ~46 lines each of the same dance, differing only in env-var name and which
+# counter family they feed. One impl keeps the families in lockstep.
+#   _probe_row_red_impl  <env-var> <run-var> <red-var> <label> <anchor> <json> [mutator-file] [mutator-script]
+#   _probe_row_green_impl <env-var> <run-var> <label> <json>
+# The optional mutation runs FIRST, so a case can require the guard to reach a
+# real verdict and THEN check what the probe did or did not do to it (P4, X6).
+_probe_row_red_impl() {
+  local varname="$1" runvar="$2" redvar="$3" label="$4" anchor="$5" probe="$6" mfile="${7:-}" mscript="${8:-}"
   cases=$((cases + 1))
   restore
   if [[ -n "$mfile" ]]; then
@@ -949,9 +1173,10 @@ expect_probe_red() {
       no "$label: mutation did NOT land ($mfile byte-identical to pristine)"; restore; return
     fi
   fi
-  probes_run=$((probes_run + 1))
-  probe_reds=$((probe_reds + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
+  local -n _run="$runvar" _red="$redvar"
+  _run=$((_run + 1))
+  _red=$((_red + 1))
+  if env SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" "$varname=$probe" bash "$GUARD" >"$OUT" 2>&1; then
     no "$label: guard still PASSED with the hygiene rule broken -- the check asserts nothing"
   elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
@@ -961,18 +1186,25 @@ expect_probe_red() {
   restore
 }
 
-expect_probe_green() {
-  local label="$1" probe="$2"
+_probe_row_green_impl() {
+  local varname="$1" runvar="$2" label="$3" probe="$4"
   cases=$((cases + 1))
   restore
-  probes_run=$((probes_run + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
-    ok "$label: guard stayed GREEN on a well-formed entry"
+  local -n _run="$runvar"
+  _run=$((_run + 1))
+  if env SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" "$varname=$probe" bash "$GUARD" >"$OUT" 2>&1; then
+    ok "$label: guard stayed GREEN on a well-formed probe entry"
   else
-    no "$label: guard went RED on a WELL-FORMED probe entry, so the two REDs above prove only
+    no "$label: guard went RED on a WELL-FORMED probe entry, so the REDs above prove only
       that ANY probe reddens -- not that the hygiene rules discriminate. Output: $(<"$OUT")"
   fi
 }
+
+# expect_probe_red <label> <anchor> <json> [mutator-file] [mutator-script]
+expect_probe_red()       { _probe_row_red_impl SOLEUR_PARITY_ALLOWLIST_PROBE probes_run probe_reds "$@"; }
+expect_probe_green()     { _probe_row_green_impl SOLEUR_PARITY_ALLOWLIST_PROBE probes_run "$@"; }
+expect_ext_probe_red()   { _probe_row_red_impl SOLEUR_PARITY_EXT_RESIDENCE_PROBE ext_probes_run ext_probe_reds "$@"; }
+expect_ext_probe_green() { _probe_row_green_impl SOLEUR_PARITY_EXT_RESIDENCE_PROBE ext_probes_run "$@"; }
 
 expect_probe_red "P1 (§5: an entry with a blank reason)" \
   "ALLOWLIST probe entry '/usr/local/bin/disk-monitor.sh' has no stated reason" \
@@ -984,6 +1216,15 @@ expect_probe_red "P2 (§5: an entry naming a path nothing writes)" \
 
 expect_probe_green "P3 (§5 control: a well-formed entry is accepted)" \
   '{"/usr/local/bin/disk-monitor.sh": "parity verified by fresh-boot-parity.test.sh"}'
+
+# ── EXT_RESIDENCE probe family (#10147/#10148) ────────────────────────────────
+# Same contract as the §5 family, a different env var:
+# SOLEUR_PARITY_EXT_RESIDENCE_PROBE feeds a synthetic {file: {type.name: entry}}
+# table through the guard's ext_residence_hygiene() -- additive-only, NEVER
+# merged into the fleet_elsewhere/unclassifiable exemption consults (X6 is the
+# negative control). Its rows feed their own counters (ext_probes_run /
+# ext_probe_reds) with their own floors, so one family's silent deletion cannot
+# be masked by the other. The X rows themselves sit after the mutation rows.
 
 # P4 is the NEGATIVE CONTROL for the whole probe design, and the only case here that can catch
 # the probe becoming a fail-open switch. The guard claims twice, in prose, that the probe "can
@@ -1196,6 +1437,509 @@ resource "terraform_data" "g2_phantom_web2" {
   }
 }
 """
+' "g2_phantom_web2"
+
+# A web-1 dialer WITH the correct local in a DIFFERENT .tf satisfies every host_key
+# arm but escapes §1's server.tf-scoped census — the fleet residence arm fires
+# (#9998: G2-18 proved web-2; this is the symmetric web-1 escape).
+expect_red "G2-19 (a web-1-dialing block WITH the correct local in a DIFFERENT .tf)" tunnel.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_phantom_web1" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+' "g2_phantom_web1"
+
+# The EXT_RESIDENCE allowance is (file, type.name)-scoped: workspaces-luks.tf is an
+# allowlisted FILE, but a NEW phantom resource inside it matches no declared member.
+expect_red "G2-20 (a second phantom web-1 dialer in an allowlisted file)" workspaces-luks.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_phantom_wl" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+' "g2_phantom_wl"
+
+# And host-scoped: workspaces-luks.tf's entries cover web-1 only, so a web-2
+# dialer in the same allowlisted file is still an escape.
+expect_red "G2-21 (a web-2 dialer in an allowlisted file)" workspaces-luks.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_phantom_wl2" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-2"].ipv4_address
+    user = "root"
+    host_key = local.web_2_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+' "g2_phantom_wl2"
+
+# The stale-allowance arm: delete the connection block an EXT_RESIDENCE entry
+# covers and the entry no longer sweeps a matching dial (#9998 G2-22).
+# NB: no `swept only` co-fire needle -- whether the block floor also trips
+# depends on the SANDBOX's whole-repo census (untracked .tf artifacts from
+# sibling suites differ between local and CI), so the co-fire is
+# environment-dependent and must not gate the row (CI leg 4, 2026-10-12).
+expect_red "G2-22 (residence allowance entry gone stale)" ci-ssh-key.tf \
+  "stale EXT_RESIDENCE" '
+old = """  connection {
+    type     = "ssh"
+    host     = hcloud_server.web["web-1"].ipv4_address
+    user     = "root"
+    agent    = true
+    host_key = local.web_1_ssh_host_key
+  }
+"""
+assert old in s
+s = s.replace(old, "", 1)
+'
+
+# The exemption is keyed on the full `type.name`, not the resource name alone: a
+# same-name/different-type resource is a DIFFERENT resource and must not claim
+# terraform_data.root_authorized_keys' entry (design-pass P2, #9998).
+expect_red "G2-23 (a same-name/different-type phantom in an allowlisted file)" ci-ssh-key.tf \
+  "outside server.tf" '
+s += """
+resource "null_resource" "root_authorized_keys" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+' "null_resource.root_authorized_keys"
+
+# Attribution is span-bounded, not nearest-header: a connection {} inside a
+# `data` block after root_authorized_keys is in NO resource span -> unattributed
+# -> flagged (design-pass P2: nearest-header would have claimed the entry).
+expect_red "G2-24 (a web-1 dialer inside a data block in an allowlisted file)" ci-ssh-key.tf \
+  "outside server.tf" '
+s += """
+data "external" "g2_phantom_data" {
+  program = ["true"]
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+}
+"""
+' "unattributed"
+
+# A fake `resource "t" "member"` literal inside a phantom's OWN heredoc produces a
+# span nested inside the phantom's real span. Outermost-first resolution + the
+# nested-span drop mean the fake can never outrank the real container — the
+# phantom's connection attributes to the phantom, not the member (design-pass P3).
+expect_red "G2-25 (a heredoc-spoofed member header inside a phantom)" ci-ssh-key.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_spoof_hdr" {
+  provisioner "local-exec" {
+    command = <<-EOF
+      echo deploying
+      resource "terraform_data" "root_authorized_keys" {
+      provisioner "x" {
+    EOF
+  }
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+' "g2_spoof_hdr"
+
+# Span-capture laundering (security review P2-1): a fake member header inside a
+# NON-resource construct's heredoc used to open a span that swallowed the NEXT
+# real resource. blank_heredocs now makes the fake invisible entirely — the
+# phantom's own resource is what the residence arm flags.
+expect_red "G2-26 (a member-name literal inside a locals heredoc)" workspaces-luks.tf \
+  "outside server.tf" '
+s += """
+locals {
+  spoof = <<-EOF
+    padding
+    resource "terraform_data" "luks_monitor_install" {
+    filler {
+    filler2 {
+  EOF
+}
+resource "terraform_data" "g2_span_capture" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+' "g2_span_capture"
+
+# A same-`type.name` duplicate resource attributes its blocks to the member's
+# address — exempt for free without the collision arm (§1 name-collision
+# precedent; pattern-review P2). Invalid HCL, but the guard does not outsource
+# identity to `terraform validate`.
+expect_red "G2-27 (a duplicate same-address member resource)" ci-ssh-key.tf \
+  "duplicate resource address" '
+s += """
+resource "terraform_data" "root_authorized_keys" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+# §1's census is terraform_data-typed, so the residence carve-out inside
+# server.tf only covers terraform_data.* blocks — a null_resource dialer there
+# escapes BOTH enumerations without the refinement (enum U3, the largest hole).
+expect_red "G2-28 (a null_resource web-1 dialer inside server.tf)" server.tf \
+  "outside server.tf" '
+s += """
+resource "null_resource" "g2_srv_phantom" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+' "g2_srv_phantom"
+
+# `type = "winrm"` exempts a block from the host_key arms (winrm has no ssh
+# host_key) but must not exempt it from residence — a winrm-labeled fleet dialer
+# is a one-line bypass (enum U1).
+expect_red "G2-29 (a winrm-labeled web-1 dialer outside server.tf)" tunnel.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_winrm" {
+  connection {
+    type = "winrm"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "Administrator"
+  }
+}
+"""
+' "g2_winrm"
+
+# `dynamic "connection"` previously matched no sweep token — the whole dynamic
+# block is now swept and its inner host/host_key lines seen (enum U2).
+expect_red "G2-30 (a dynamic-spelled web-1 dialer outside server.tf)" tunnel.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_dyn" {
+  dynamic "connection" {
+    for_each = ["x"]
+    content {
+      type = "ssh"
+      host = hcloud_server.web["web-1"].ipv4_address
+      user = "root"
+      host_key = local.web_1_ssh_host_key
+    }
+  }
+}
+"""
+' "g2_dyn"
+
+# A fake member header nested inside a NON-resource construct's braces (not a
+# heredoc) plus a stray top-level connection {} could claim the member's
+# exemption: the non-resource span drop now deletes the fake span entirely and
+# reports it (enum U7). The stray connection is separately unattributed.
+expect_red "G2-31 (stray connection + member-name literal in output braces)" ci-ssh-key.tf \
+  "inside a containing block span" '
+s += """
+output "spoof" {
+  value = { a = 1 }
+  resource "terraform_data" "root_authorized_keys" {
+    filler = { x = 1 }
+  }
+}
+connection {
+  type = "ssh"
+  host = hcloud_server.web["web-1"].ipv4_address
+  user = "root"
+  host_key = local.web_1_ssh_host_key
+}
+"""
+'
+
+# blank_heredocs is comment/string-aware: a `<<TAG` inside a # comment (or a
+# quoted string) must NOT pair with a later bare TAG line -- pre-fix that
+# pairing blanked REAL code and hid the phantom from every arm (fix-round N1).
+expect_red "G2-32 (a <<TAG inside a comment must not blank real code)" tunnel.tf \
+  "outside server.tf" '
+s += """
+# the marker below uses <<-X
+resource "terraform_data" "g2_blank_spoof" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+locals {
+  real = <<-X
+    body
+  X
+}
+"""
+' "g2_blank_spoof"
+
+# A `resource` header nested inside a non-resource construct whose brace opens
+# on the NEXT line (locals\n{) must still hit the drop arm — the nonres span
+# regex accepts one newline before `{` (fix-round N2).
+expect_red "G2-33 (a member-name literal inside locals-next-line-brace)" ci-ssh-key.tf \
+  "inside a containing block span" '
+s += """
+locals
+{
+  filler = 1
+  resource "terraform_data" "root_authorized_keys" {
+    nested = { x = 1 }
+  }
+}
+"""
+'
+
+# The server.tf carve-out delegates to §1's census, which speaks a narrower
+# dialect: literal `connection {}` + `type = "ssh"` inside terraform_data only.
+# A dynamic-spelled connection inside a server.tf terraform_data is invisible
+# to §1 — the carve-out must not exempt spellings §1 cannot see (enum RES-A).
+expect_red "G2-34 (a dynamic-spelled dialer inside server.tf terraform_data)" server.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_dyn_srv" {
+  dynamic "connection" {
+    for_each = ["x"]
+    content {
+      type = "ssh"
+      host = hcloud_server.web["web-1"].ipv4_address
+      user = "root"
+      host_key = local.web_1_ssh_host_key
+    }
+  }
+}
+"""
+' "g2_dyn_srv"
+
+# Same dialect gap, RES-B: a winrm-typed block inside server.tf terraform_data
+# is invisible to §1 (requires type = "ssh") — the carve-out must not exempt it.
+expect_red "G2-35 (a winrm-typed block inside server.tf terraform_data)" server.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_winrm_srv" {
+  connection {
+    type = "winrm"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "Administrator"
+  }
+}
+"""
+' "g2_winrm_srv"
+
+# The carve-out only exempts blocks §1's census can see — which requires the
+# literal `type = "ssh"` token (terraform's default IS ssh, so a type-less
+# connection is a real SSH dialer that §1 cannot see; fix-round verifier A).
+expect_red "G2-36 (a type-less connection inside server.tf terraform_data)" server.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_typeless_srv" {
+  connection {
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+}
+"""
+' "g2_typeless_srv"
+
+# Blank line(s) between a non-resource keyword and its brace must not slip the
+# nonres span regex (locals\n\n{); the drop arm must still fire (verifier B).
+expect_red "G2-37 (a member-name literal inside locals-blank-line-brace)" ci-ssh-key.tf \
+  "inside a containing block span" '
+s += """
+locals
+
+{
+  filler = 1
+  resource "terraform_data" "root_authorized_keys" {
+    nested = { x = 1 }
+  }
+}
+"""
+'
+
+# Membership is per-RESOURCE by design: a second same-host connection inside a
+# member (a second resource-level connection) stays in declared scope. A future
+# per-block tightening must deliberately flip this control.
+expect_green "G2-C5 (a second web-1 connection INSIDE a member stays exempt)" ci-ssh-key.tf '
+old = """  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /root/.ssh","""
+assert old in s
+s = s.replace(old, """  connection {
+    type     = "ssh"
+    host     = hcloud_server.web["web-1"].ipv4_address
+    user     = "root"
+    agent    = true
+    host_key = local.web_1_ssh_host_key
+  }
+
+""" + old, 1)
+'
+
+# CLOSED RESIDUAL (was the declared-residual control G2-C6): #10148's
+# unclassifiable-dial arm landed, so the indirect dialer this row adds now reds
+# via `unclassifiable` — the pinned gap became the pinned coverage, exactly as
+# the control's note prescribed. Same mutator, flipped expectation.
+expect_red "G2-38 (an indirect (non-literal) host dial outside server.tf is unclassifiable)" tunnel.tf \
+  "unclassifiable connection dial" '
+s += """
+resource "terraform_data" "g2_indirect" {
+  connection {
+    type = "ssh"
+    host = local.web_1_ipv4
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+# Arm isolation: a valid pinned host_key keeps every host_key arm green, so only
+# the unclassifiable arm can fire on a raw-IP dialer.
+expect_red "G2-39 (a raw-IP dialer with a valid host_key outside server.tf)" tunnel.tf \
+  "unclassifiable connection dial" '
+s += """
+resource "terraform_data" "g2_rawip" {
+  connection {
+    type = "ssh"
+    host = "203.0.113.10"
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+# Iteration completeness: the arm does not stop at the first unclassifiable
+# block -- both members of the file are named in the finding.
+expect_red "G2-40 (two unclassifiable dialers in one file are both named)" tunnel.tf \
+  "unclassifiable connection dial" '
+s += """
+resource "terraform_data" "g2_indirect_a" {
+  connection {
+    type = "ssh"
+    host = var.web1_ip
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["true"]
+  }
+}
+resource "terraform_data" "g2_indirect_b" {
+  connection {
+    type = "ssh"
+    host = each.value.ipv4
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["true"]
+  }
+}
+"""
+' "g2_indirect_a" "g2_indirect_b"
+
+# #10147 must-PASS control: the bound is the DECLARED pin requirement, not
+# in-guard content matching -- a provisioner-body edit inside an EXT_RESIDENCE
+# member changes swept member content but keeps the guard GREEN (the declared
+# pin suite owns body coverage).
+expect_green "G2-C7 (a provisioner-body edit inside an EXT_RESIDENCE member stays GREEN)" workspaces-luks.tf '
+old = "      \"df -P /etc | tail -1 || true\","
+assert old in s
+s = s.replace(old, old + "\n      \"echo g2-c7 benign member-content edit\",", 1)
+'
+
+# DECLARED RESIDUAL (CTO ruling, #10148): the unclassifiable arm scopes to blocks
+# OUTSIDE server.tf, so a non-terraform_data resource inside server.tf dialing
+# through indirection engages no classification arm (§1's census is
+# terraform_data-typed; fleet_elsewhere needs a literal dial). This pins the
+# gap GREEN deliberately -- the same instrument G2-C6 was for the pre-#10148
+# outside-server.tf gap. If the residual is ever closed, this flips RED.
+expect_green "G2-C8 (a non-terraform_data indirect dialer inside server.tf stays GREEN -- declared residual)" server.tf '
+s += """
+resource "null_resource" "g2_residual" {
+  connection {
+    type = "ssh"
+    host = var.web1_ip
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["true"]
+  }
+}
+"""
 '
 
 expect_red "G2-4 (a new connection block without host_key in a DIFFERENT .tf)" tunnel.tf \
@@ -1322,6 +2066,10 @@ s = s[:j] + "  # benign comment added by the mutation battery\n" + s[j:]
 
 # .tf.json: a NEW file (so it is created and removed inline, not through restore()).
 G2_JSON="$SANDBOX/zz-g2.tf.json"
+# want==green is currently unreachable by construction (#10148): every .tf.json
+# connection block outside server.tf dials something the guard cannot classify,
+# so no green shape remains -- the branch stays because the helper is generic
+# and a future .tf.json EXT_RESIDENCE entry could make one.
 _g2_json_row() { # <label> <json> <expect: red|green> <anchor>
   local label="$1" json="$2" want="$3" anchor="${4:-}"
   cases=$((cases + 1))
@@ -1343,8 +2091,12 @@ _g2_json_row "G2-13 (.tf.json connection without host_key)" \
   '{"resource":{"terraform_data":{"j":{"connection":{"type":"ssh","host":"192.0.2.12"}}}}}' red "zz-g2.tf.json:"
 _g2_json_row "G2-14 (.tf.json connection with host_key null)" \
   '{"resource":{"terraform_data":{"j":{"connection":[{"host":"192.0.2.13","host_key":null}]}}}}' red "(host_key = null)"
-_g2_json_row "G2-C3 (.tf.json connection pinned to the local stays GREEN)" \
-  '{"resource":{"terraform_data":{"j":{"connection":{"host":"192.0.2.14","host_key":"${local.web_1_ssh_host_key}"}}}}}' green
+# G2-C3 converted green -> red (#10148): after the unclassifiable-dial arm there
+# is no green .tf.json-outside-server.tf shape left — a raw-IP dial in a
+# .tf.json block is unclassifiable by construction. The mutation it was meant to
+# kill is preserved, re-scored.
+_g2_json_row "G2-C3 (.tf.json connection pinned to the local is unclassifiable)" \
+  '{"resource":{"terraform_data":{"j":{"connection":{"host":"192.0.2.14","host_key":"${local.web_1_ssh_host_key}"}}}}}' red "unclassifiable connection dial"
 
 cases=$((cases + 1))
 restore
@@ -1362,8 +2114,205 @@ else
 fi
 restore
 
+# ── EXT_RESIDENCE probe rows X1-X7 (#10147/#10148) ───────────────────────────
+# The table's own invariants (mandatory pin, swept-block resolution, the
+# unclassifiable flag's discipline) are unreachable from .tf mutation — they are
+# driven through SOLEUR_PARITY_EXT_RESIDENCE_PROBE, additive-only like §5's
+# ALLOWLIST probe: X6 is the negative control proving a probe entry can never
+# suppress a real unclassifiable finding.
+expect_ext_probe_red "X1 (EXT probe: unparseable JSON is named, not a traceback)" \
+  "not parseable JSON" '{oops'
+
+expect_ext_probe_red "X2 (EXT probe: an entry missing its pin)" \
+  "EXT_RESIDENCE probe pin" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe"}}}'
+
+expect_ext_probe_red "X3 (EXT probe: a pin naming a dangling path)" \
+  "EXT_RESIDENCE probe pin" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe","pin":"apps/web-platform/infra/nope.test.sh"}}}'
+
+expect_ext_probe_red "X4 (EXT probe: a pin lacking the *.test.sh/*.test.ts suffix)" \
+  "EXT_RESIDENCE probe pin" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe","pin":"apps/web-platform/infra/server.tf"}}}'
+
+expect_ext_probe_red "X5 (EXT probe: an unclassifiable-flagged entry over no swept block)" \
+  "stale EXT_RESIDENCE probe" \
+  '{"apps/web-platform/infra/workspaces-luks.tf":{"terraform_data.g2_probe_phantom":{"hosts":[],"reason":"probe","pin":"apps/web-platform/infra/luks-monitor-install.test.sh","unclassifiable":true}}}'
+
+# X6 is the P4 analog: break the real invariant (the G2-38 phantom), then hand
+# the probe a well-formed `unclassifiable: true` entry covering exactly that
+# (file, type.name). The finding must survive -- the probe is never merged into
+# the exemption consults.
+expect_ext_probe_red "X6 (EXT probe negative control: a probe entry cannot suppress an unclassifiable finding)" \
+  "unclassifiable connection dial" \
+  '{"apps/web-platform/infra/tunnel.tf":{"terraform_data.g2_indirect":{"hosts":[],"reason":"probe","pin":"apps/web-platform/infra/luks-monitor-install.test.sh","unclassifiable":true}}}' \
+  tunnel.tf '
+s += """
+resource "terraform_data" "g2_indirect" {
+  connection {
+    type = "ssh"
+    host = local.web_1_ipv4
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+expect_ext_probe_green "X7 (EXT probe control: a well-formed entry is accepted)" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe green control","pin":"apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+# X8-X20 close the probe-family's own coverage of every hygiene branch (review
+# found the shape-check, the malformed arms, each conjunct of the field gate,
+# per-entry iteration, and the pin-bound clauses all deletable under X1-X7).
+expect_ext_probe_red "X8 (EXT probe: a non-object probe is named, not a traceback)" \
+  "must be a JSON object" '["x"]'
+
+# The ghost member's own name is the discriminating anchor: it appears in the
+# finding only if iteration reached the second entry (the well-formed first
+# member resolves clean, so only the ghost can red).
+expect_ext_probe_red "X9 (EXT probe: hygiene iterates EVERY entry -- a second member sweeping nothing)" \
+  "terraform_data.ghost" '
+{
+  "apps/web-platform/infra/ci-ssh-key.tf": {
+    "terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"},
+    "terraform_data.ghost": {"hosts": [], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh", "unclassifiable": true}
+  }
+}
+'
+
+expect_ext_probe_red "X10 (EXT probe: a non-dict member map is malformed)" \
+  "malformed EXT_RESIDENCE probe member map" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": 5}'
+
+expect_ext_probe_red "X11 (EXT probe: a non-dict entry is malformed)" \
+  "(malformed entry)" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": "y"}}'
+
+expect_ext_probe_red "X12 (EXT probe: empty hosts without unclassifiable: true is malformed)" \
+  "empty hosts" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": [], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+expect_ext_probe_red "X13 (EXT probe: a non-bool unclassifiable flag is malformed)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh", "unclassifiable": "yes"}}}'
+
+expect_ext_probe_red "X14 (EXT probe: a non-set hosts field is malformed)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": "web-1", "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+expect_ext_probe_red "X15 (EXT probe: an empty reason is malformed)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+# `hosts ⊆ dialed` with swept >= 1: G2-22 fires `not swept` simultaneously, so
+# only a probe row over the real member isolates the over-declared-hosts clause.
+expect_ext_probe_red "X16 (EXT probe: an over-declared hosts set pre-authorizes a future dial)" \
+  "stale EXT_RESIDENCE probe" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1", "web-9"], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+# The absolute pin must name an EXISTING file so only the startswith("/")
+# conjunct can reject it -- a dangling one would red via is_file() regardless.
+expect_ext_probe_red "X17 (EXT probe: an absolute pin path escapes the repo-relative bound)" \
+  "EXT_RESIDENCE probe pin" \
+  "{\"apps/web-platform/infra/ci-ssh-key.tf\": {\"terraform_data.root_authorized_keys\": {\"hosts\": [\"web-1\"], \"reason\": \"probe\", \"pin\": \"$TF_REPO/apps/web-platform/infra/luks-monitor-install.test.sh\"}}}"
+
+# The traversal resolves onto an EXISTING in-tree .test.ts pin -- only the
+# ".."-in-parts conjunct can reject it (is_file() would pass post-resolution).
+expect_ext_probe_red "X18 (EXT probe: a parent-traversal pin path escapes the repo-relative bound)" \
+  "EXT_RESIDENCE probe pin" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/../plugins/soleur/test/terraform-target-parity.test.ts"}}}'
+
+# The wrong-extension file is created in the scratch repo first -- only the
+# *.test.sh/*.test.ts endswith conjunct can reject it (is_file() would pass).
+X19_FILE="$TF_REPO/apps/web-platform/infra/x19-notes.test.txt"
+touch "$X19_FILE" || { echo "FATAL: X19 setup could not create $X19_FILE" >&2; exit 2; }
+expect_ext_probe_red "X19 (EXT probe: a pin with a non-test extension is rejected)" \
+  "EXT_RESIDENCE probe pin" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/x19-notes.test.txt"}}}'
+rm -f "$X19_FILE"
+
+# X20 exercises the is_symlink() clause: a committed-symlink pin would satisfy
+# the existence stat while naming nothing in-tree. The link is created in the
+# scratch repo and removed before restore.
+cases=$((cases + 1))
+restore
+ext_probes_run=$((ext_probes_run + 1))
+ext_probe_reds=$((ext_probe_reds + 1))
+ln -s luks-monitor-install.test.sh "$TF_REPO/apps/web-platform/infra/x20-pin-link.test.sh"   || { echo "FATAL: X20 setup could not create the symlink" >&2; exit 2; }
+[[ -L "$TF_REPO/apps/web-platform/infra/x20-pin-link.test.sh" ]]   || { echo "FATAL: X20 setup produced no symlink (fs rejects links?)" >&2; exit 2; }
+if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" \
+   SOLEUR_PARITY_EXT_RESIDENCE_PROBE='{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/x20-pin-link.test.sh"}}}' \
+   bash "$GUARD" >"$OUT" 2>&1; then
+  no "X20 (EXT probe: a symlink pin is rejected): guard still PASSED"
+elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "EXT_RESIDENCE probe pin"; then
+  ok "X20 (EXT probe: a symlink pin is rejected): guard went RED on 'EXT_RESIDENCE probe pin'"
+else
+  no "X20 (EXT probe: a symlink pin is rejected): guard went red but NOT via the pin arm. Output: $(<"$OUT")"
+fi
+rm -f "$TF_REPO/apps/web-platform/infra/x20-pin-link.test.sh"
+restore
+
+# X21: `reason` non-str conjunct. Deleting `not isinstance(reason, str)` leaves
+# `5.strip()` → AttributeError traceback → red without the anchor → row fails.
+expect_ext_probe_red "X21 (EXT probe: a non-string reason is malformed)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": 5, "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+# X22: an unhashable hosts member stays a list through normalization so the
+# malformed arm names it -- deleting the `except TypeError: pass` leaves an
+# uncaught TypeError → red without the anchor.
+expect_ext_probe_red "X22 (EXT probe: an unhashable hosts member is malformed, not a traceback)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": [["web-1"]], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+# X23: outer-loop iteration -- a phantom member in a SECOND file key only reds
+# if hygiene iterates every fpath, not just the first.
+expect_ext_probe_red "X23 (EXT probe: hygiene iterates EVERY file entry -- a phantom in file two)" \
+  "workspaces-luks.tf:terraform_data.ghost" '
+{
+  "apps/web-platform/infra/ci-ssh-key.tf": {
+    "terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}
+  },
+  "apps/web-platform/infra/workspaces-luks.tf": {
+    "terraform_data.ghost": {"hosts": [], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh", "unclassifiable": true}
+  }
+}
+'
+
+# X24 exercises the resolve()-containment clause: the pin leaf is a REAL file
+# reached through a symlinked DIRECTORY component escaping REPO -- leaf
+# is_symlink() and is_file() both pass, only the resolve() bound rejects it.
+# The escape target lives under PRISTINE_REPO: per-run (no shared-TMPDIR name
+# collision), outside REPO (the discrimination the row needs), and inside the
+# EXIT trap's cleanup set.
+cases=$((cases + 1))
+restore
+ext_probes_run=$((ext_probes_run + 1))
+ext_probe_reds=$((ext_probe_reds + 1))
+X24_TARGET="$PRISTINE_REPO/x24-target.test.sh"
+touch "$X24_TARGET" || { echo "FATAL: X24 setup could not create $X24_TARGET" >&2; exit 2; }
+ln -s "$PRISTINE_REPO" "$TF_REPO/apps/web-platform/infra/x24-out" \
+  || { echo "FATAL: X24 setup could not create the dir symlink" >&2; exit 2; }
+[[ -L "$TF_REPO/apps/web-platform/infra/x24-out" && -f "$X24_TARGET" ]] \
+  || { echo "FATAL: X24 setup did not land" >&2; exit 2; }
+if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" \
+   SOLEUR_PARITY_EXT_RESIDENCE_PROBE='{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/x24-out/x24-target.test.sh"}}}' \
+   bash "$GUARD" >"$OUT" 2>&1; then
+  no "X24 (EXT probe: a pin resolving through an out-of-repo dir symlink is rejected): guard still PASSED"
+elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "EXT_RESIDENCE probe pin"; then
+  ok "X24 (EXT probe: a pin resolving through an out-of-repo dir symlink is rejected): guard went RED on 'EXT_RESIDENCE probe pin'"
+else
+  no "X24 (EXT probe: a pin resolving through an out-of-repo dir symlink is rejected): guard went red but NOT via the pin arm. Output: $(<"$OUT")"
+fi
+rm -f "$TF_REPO/apps/web-platform/infra/x24-out" "$X24_TARGET"
+restore
+
 # ── Accounting conservation (ADR-193 #3) ────────────────────────────────────────────────
-# Ordered BEFORE the three floors (ADR-193 #4). A neutered `ok` deflates `pass` while `cases`
+# Ordered BEFORE the five floor checks (ADR-193 #4): mutations + the two per-family probe pairs. A neutered `ok` deflates `pass` while `cases`
 # keeps moving, so the floors would ALSO trip and would report "anchors drifted" -- a diagnosis
 # that sends the reader to the guard's failure text when the fault is in this battery's own
 # accounting. This says "a verdict was discarded" instead.
@@ -1390,7 +2339,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=57  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18). Re-derive from the battery log when adding rows.
+FLOOR=98  # floor = census (test-design review): 93 expect_red + M33b + 3 _g2_json_row + G2-C2 = 98 mutations_run. Slack lets rows vanish unflagged; G2-C5/G2-C7/G2-C8 (expect_green) do not increment, G2-C2/C3 DO. Prior derivation: +5 #9151 (M4a,M4b,G2-15..17) +7 review-pass (M2b,M4c..g,G2-18) +1 net #9970 (control-C -> green -1, M4j+M4k +2) +15 #9998 (G2-19..33) +3 #10148 (G2-C6->G2-38 red conversion + G2-39/G2-40; G2-C3 red conversion already counted). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2
@@ -1399,26 +2348,48 @@ if (( mutations_run < FLOOR )); then
   exit 1
 fi
 
-# The probes are counted separately: they never touch a file, so `mutations_run`'s
-# landed-vs-pristine proof does not apply to them and folding them in would weaken it.
+# The probes are counted separately: a probe row's own bookkeeping is not a
+# landed-vs-pristine proof, so folding them into `mutations_run` would weaken
+# it. (P4 and X6 DO apply a file mutation first -- but the probe assertion, not
+# the mutation, is what the row exists to score.)
 #
 # RED probes are counted separately AGAIN. The first version floored `probes_run`, which
 # `expect_probe_green` also increments -- so three GREEN controls would have satisfied a floor
 # whose failure text claims the RED arms ran. A floor that a passing control can satisfy is not
 # a floor on the thing it names.
-PROBE_FLOOR=7
-PROBE_RED_FLOOR=6
+#
+# Per-FAMILY floors (review, #10147): a single aggregate bound would let the
+# first future slack row mask the silent deletion of a whole family, so each
+# probe family carries its own run/red pair.
+PROBE_FLOOR=7   # P1-P7 (§5 ALLOWLIST family) = 7 probes_run
+PROBE_RED_FLOOR=6  # 6 §5 reds; the GREEN control cannot satisfy it
+EXT_PROBE_FLOOR=24   # X1-X24 (EXT_RESIDENCE family) = 24 ext_probes_run
+EXT_PROBE_RED_FLOOR=23  # 23 EXT reds; X7's GREEN control cannot satisfy it
 if (( probes_run < PROBE_FLOOR )); then
-  printf '\n[FATAL] anti-vacuity floor (probes): only %d ALLOWLIST hygiene probe(s) ran, expected >= %d.\n' \
+  printf '\n[FATAL] anti-vacuity floor (probes): only %d §5-hygiene probe(s) ran, expected >= %d.\n' \
     "$probes_run" "$PROBE_FLOOR" >&2
   printf '  §5 is unproven: the probe arms were deleted or never reached.\n' >&2
   echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
   exit 1
 fi
 if (( probe_reds < PROBE_RED_FLOOR )); then
-  printf '\n[FATAL] anti-vacuity floor (probe RED arms): only %d RED-arm probe(s) ran, expected >= %d.\n' \
+  printf '\n[FATAL] anti-vacuity floor (probe RED arms): only %d §5 RED-arm probe(s) ran, expected >= %d.\n' \
     "$probe_reds" "$PROBE_RED_FLOOR" >&2
   printf '  The GREEN controls cannot stand in for them; §5 failure arms are unproven.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
+fi
+if (( ext_probes_run < EXT_PROBE_FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (EXT probes): only %d EXT_RESIDENCE probe(s) ran, expected >= %d.\n' \
+    "$ext_probes_run" "$EXT_PROBE_FLOOR" >&2
+  printf '  The EXT_RESIDENCE hygiene surface is unproven: probe rows were deleted or never reached.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
+fi
+if (( ext_probe_reds < EXT_PROBE_RED_FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (EXT probe RED arms): only %d EXT RESIDENCE RED-arm probe(s) ran, expected >= %d.\n' \
+    "$ext_probe_reds" "$EXT_PROBE_RED_FLOOR" >&2
+  printf '  The GREEN controls cannot stand in for them; EXT_RESIDENCE failure arms are unproven.\n' >&2
   echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
   exit 1
 fi

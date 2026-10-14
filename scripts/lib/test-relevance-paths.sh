@@ -4,6 +4,8 @@
 #   at a time and cannot see a cross-file consumer. The de-reference anchor in the linter is
 #   what actually proves each array is consumed -- see ADR-181.
 # Relevance predicates for the expensive suites the local gate declines on an irrelevant diff
+# (and — since #9815 — two pure query functions over the diff blob:
+# webplat_related_meta_hit / webplat_related_files; still zero side effects).
 # (ADR-181, extended by its 2026-08-12 addendum from the two heavy mutation batteries to four
 # suites).
 #
@@ -32,8 +34,10 @@
 # This block exists because three of the sites were otherwise discoverable only by reading an
 # archived plan, and this file is where a reader adding a gate actually lands.
 #
-# DECLARATIONS ONLY. No `set -e`, no `exit`, no side effects, nothing executed. Two very
-# different consumers source this file and both need it to be inert:
+# DECLARATIONS ONLY — plus, since #9815, two PURE query functions
+# (webplat_related_meta_hit / webplat_related_files): functions of their
+# arguments only, no I/O, no side effects, nothing executed at source time.
+# Two very different consumers source this file and both need it to be inert:
 #
 #   scripts/test-all.sh              — sources it at TOP LEVEL to guard its relevance-gated run_suite calls
 #   scripts/lint-orphan-test-suites.sh — sources it to assert every declared path still resolves
@@ -145,7 +149,7 @@ CF_TUNNEL_BATTERY_PATHS=(
   ".github/workflows/apply-deploy-pipeline-fix.yml"         # W7_EXPECTED
   ".github/workflows/apply-web-platform-infra.yml"          # W7_EXPECTED (also APPLY_REL)
   ".github/workflows/git-data-cutover.yml"                  # W7_EXPECTED, and mutated directly by M4
-  ".github/workflows/workspaces-luks-cutover.yml"           # W7_EXPECTED (three call sites)
+  ".github/workflows/workspaces-luks-cutover.yml"           # W7_EXPECTED (two call sites)
   ".github/workflows/workspaces-luks-verify.yml"            # W7_EXPECTED
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/cf-tunnel-liveness-gate-mutations.test.sh"       # SELF — see the note above
@@ -235,8 +239,9 @@ TEST_ALL_AFFECTED_BATTERY_PATHS=(
 #
 # KNOWN LIMIT — a LOWER BOUND, not a closed set, exactly as the cf-tunnel block above says of
 # itself. Two real dependencies are deliberately NOT declared: `.bun-version` (run_producer invokes
-# `bun "$PRODUCER"`) and the likec4 version pin, which lives in three places (package.json,
-# apps/web-platform/Dockerfile, the ci.yml install step) and none of them here. Declaring them
+# `bun "$PRODUCER"`) and the likec4 version pin, which lives in several places (package.json,
+# apps/web-platform/Dockerfile, the ci.yml and monitor install steps; BUMPING LIKEC4 in
+# render-c4-model.sh lists them) and none of them here. Declaring them
 # would arm this suite on every toolchain bump for no added signal, and the window is bounded three
 # ways: the pin trio has its own UNGATED guard (apps/web-platform's c4-likec4-version-pin.test.ts),
 # the suite DEGRADES rather than fails when the CLI is unreachable, and CI runs everything.
@@ -336,6 +341,59 @@ WEBPLAT_APP_PATHS=(
   # predicate gates, or the narrowing ships unexercised.
   "scripts/lib/test-relevance-paths.sh"
 )
+
+# Paths whose diff means "the vitest run's SEMANTICS changed", invisible (or
+# partial) to the per-test import graph `vitest related` walks (#9815). Any one
+# present in the diff forces the FULL local projects — the related narrowing
+# declines. Measured set; the derivation is pinned by
+# apps/web-platform/test/vitest-related.test.sh's A9d arm. Explicitly NOT here:
+# test/helpers, mocks and fixtures — they are ordinary import-graph members and
+# `related` resolves their importers correctly.
+WEBPLAT_RELATED_META=(
+  "apps/web-platform/vitest.config.ts"
+  "apps/web-platform/test/vitest.canary.config.ts"
+  "apps/web-platform/test/repo-wide-suites.ts"
+  "apps/web-platform/test/repo-wide-containment.test.ts"
+  "apps/web-platform/test/setup-node.ts"
+  "apps/web-platform/test/setup-dom.ts"
+  "apps/web-platform/test/global-setup-git-tripwire.ts"
+  "apps/web-platform/package.json"
+  "apps/web-platform/package-lock.json"
+  "apps/web-platform/tsconfig.json"
+  "apps/web-platform/.npmrc"
+  "apps/web-platform/.nvmrc"
+  "apps/web-platform/scripts/vitest-related.sh"
+  "scripts/lib/test-relevance-paths.sh"
+)
+
+# webplat_related_meta_hit <diff_names_blob> — prints the first META member the
+# blob carries, rc 1 when none. Pure function of its argument.
+webplat_related_meta_hit() {
+  local _m
+  for _m in "${WEBPLAT_RELATED_META[@]+"${WEBPLAT_RELATED_META[@]}"}"; do
+    case "$1" in
+      *"$_m"*) printf '%s\n' "$_m"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# webplat_related_files <diff_names_blob> — prints app-relative paths under
+# apps/web-platform/, one per line, deduped. Tokenizes like the runner's
+# _AFFECT_PATTERNS loop (IFS space+tab: `M\tpath` and `R100\told\tnew` rows keep
+# every path field and drop status tokens).
+webplat_related_files() {
+  local _line _tok
+  while IFS= read -r _line; do
+    local -a _fields=()
+    IFS=$' \t' read -ra _fields <<<"$_line"
+    for _tok in "${_fields[@]+"${_fields[@]}"}"; do
+      case "$_tok" in
+        apps/web-platform/*) printf '%s\n' "${_tok#apps/web-platform/}" ;;
+      esac
+    done
+  done <<<"$1" | LC_ALL=C sort -u
+}
 
 TEST_RELEVANCE_PREFIXES=(
   "apps/web-platform"

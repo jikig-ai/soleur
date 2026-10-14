@@ -46,12 +46,39 @@ import type { NotificationPayload } from "./notifications";
 import type { WSMessage } from "@/lib/types";
 import {
   type BashApprovalCache,
-  deriveBashCommandPrefix,
+  batchGrantablePrefix,
 } from "./permission-callback-bash-batch";
 import { warnSilentFallback } from "./observability";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import { isSupportAllowedSkill } from "./support-directive";
+import { denySupport } from "./support-escalation";
+import { SUPPORT_AGENT_SESSION_HINT } from "@/lib/support-handoff";
 import type { Persona } from "./workspace-mode";
+import type { ProtectedBranches } from "./destroy-ask-classifier";
+import {
+  detectDestroyAsk,
+  buildDestroyAskQuestion,
+  logDestroyOutcome,
+  destroyRejectedMessage,
+  destroyExpiredMessage,
+} from "./destroy-ask-lane";
+
+// Write-class file tools denied (with escalation record) on support personas —
+// the read-class file tools (Read/Glob/Grep/LS/NotebookRead) stay on the normal
+// containment flow because kb-search's corpus path needs them. MultiEdit is
+// schema-removed AND not a FILE_TOOLS member (deny-by-default covers it), but
+// listing it here is harmless future-proofing if it ever joins the set.
+const SUPPORT_WRITE_FILE_TOOLS = new Set<string>([
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+]);
+
+// The support deny message that names the concrete next surface — one site
+// owns the literal so the model-relayed prose, the rendered link, and the
+// directive can never drift.
+const SUPPORT_BASH_DENY_MESSAGE = `This chat is read-only app help — I can't run that command. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`;
 
 const log = createChildLogger("permission");
 
@@ -218,6 +245,36 @@ export interface CanUseToolDeps {
    * not-autonomous) rather than being shown an ack button they cannot use.
    */
   isOwner?: boolean;
+  /**
+   * #9556 — whether the dispatching workspace had a connected repo when the
+   * dispatch resolved it (`repoUrl !== null` in cc-dispatcher — the SAME read
+   * every dispatch already performs, so zero added DB reads). The closure-local
+   * `deny()` wrapper below stamps it onto every support escalation record so
+   * the route's `support_handoff` frame carries it and the rendered copy can
+   * degrade honestly for repo-less users. Optional: dep-less contexts (unit
+   * tests, any future runner that builds deps without the field) leave it
+   * unwired — the record stores `undefined`, the emitted frame omits the
+   * field, and the copy falls back to the legacy caveat arm. `undefined` also
+   * occurs on a WIRED dep whose dispatch-time read resolved degraded (a
+   * transient blip, not an honest "no repo" — see cc-dispatcher), so in
+   * production the flag is {true, false, undefined}, not a bare boolean.
+   * (The legacy `agent-runner.ts` construction is NOT such a producer: it
+   * hard-pins `command_center` and never sets `persona`, so it cannot reach
+   * a support deny at all.)
+   */
+  repoConnected?: boolean;
+  /**
+   * #9776 / ADR-284 — the hosted must-ask lane's protected-branch resolver (union of the API default branch, the
+   * local origin/HEAD and main/master; memoised per session record). Awaited only after a force, delete or mirror
+   * push with a named destination is found. Unwired (legacy runner, tests) the lane fails toward ask: every such
+   * push asks.
+   */
+  resolveProtectedBranches?: () => Promise<ProtectedBranches>;
+  /**
+   * #9776 — `owner/name` of the connected repo, from `parseConnectedRepo(repoUrl)` at dispatch. `ctx.repoOwner` /
+   * `ctx.repoName` are empty strings on the cc path, so the lane's telemetry reads this instead. Pino only.
+   */
+  connectedRepoSlug?: string;
 }
 
 export interface CanUseToolContext {
@@ -246,16 +303,113 @@ export interface CanUseToolContext {
   deps: CanUseToolDeps;
 }
 
+// Wording shared by every Bash deny the agent reads: the command did NOT run, and a retry or a respelling is the
+// evasion the must-ask lane exists to stop (same wording as destroy-ask-lane's NO_RETRY).
+const BASH_NOT_RUN_NO_RETRY =
+  "The command was NOT run. Do not retry it and do not rephrase or respell it to get around the check. Tell the user what you were trying to do and ask how they want to proceed.";
+const BASH_GATE_EXPIRED_MESSAGE = `The approval request for this Bash command expired without an answer. ${BASH_NOT_RUN_NO_RETRY}`;
+const BASH_REJECTED_MESSAGE = `User rejected the Bash command. ${BASH_NOT_RUN_NO_RETRY}`;
+const AUTONOMOUS_NOTICE_EXPIRED_MESSAGE =
+  "The autonomous-mode notice was not answered, so this command was held and NOT run. Ask the user to open the notice and choose, then retry once.";
+
 export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   const { deps } = ctx;
+  // #9556 — one injection point for the deny→handoff flag: every support deny
+  // path THAT ESCALATES calls `deny(`, which stamps the dispatch-resolved
+  // repo-connected state onto the escalation record. (The deliberately
+  // NON-escalating support denies below — `AskUserQuestion`,
+  // `TodoWrite`/`ExitPlanMode` and the other UX-signal belts — bypass `deny(`;
+  // recording an escalation for them would emit a spurious support_handoff
+  // frame, the very thing their "no interactive surface" comments forbid.)
+  // This mirrors denySupport's own contract ("every present and future
+  // ESCALATING support deny path gets record + telemetry for free") one level
+  // up — a future deny site that calls `deny(` cannot forget the field.
+  // The spread order makes deps.repoConnected authoritative even if a call site
+  // passed its own; an unwired dep records `undefined` (the frame then omits
+  // the field → legacy copy arm).
+  const deny = (
+    opts: Parameters<typeof denySupport>[0],
+  ): ReturnType<typeof denySupport> =>
+    denySupport({ ...opts, repoConnected: deps.repoConnected });
+  // #10054 — the hold/await/restore lifecycle of every user-facing Bash gate (review card, first-run disclosure,
+  // existing-workspace opt-out) lives HERE so a future gate cannot forget a half of it. These gates were dead code
+  // until the SDK began calling canUseTool for sandboxed Bash. Guarantees:
+  //   - a gate expiry/abort (abortableReviewGate rejects ONLY on timeout or abort) resolves to null => the caller
+  //     DENIES; it never throws out of canUseTool and never allows;
+  //   - the conversation status flips to waiting_for_user on the FIRST pending gate and back to active only when
+  //     the LAST one resolves (parallel Bash calls stack cards; the first answer must not mark the turn active
+  //     while another card is still waiting);
+  //   - a status write that fails is mirrored to Sentry and never replaces the verdict.
+  let pendingGates = 0;
+  const holdForUser = async (
+    gateId: string,
+    signal: AbortSignal,
+    gateOptions: string[],
+    kind?: "autonomous_disclosure",
+  ): Promise<string | null> => {
+    if (pendingGates++ === 0) {
+      try {
+        await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
+      } catch (err) {
+        warnSilentFallback(err, { feature: "cc-permissions", op: "bash-gate-status-hold" });
+      }
+    }
+    try {
+      return kind
+        ? await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions, kind)
+        : await deps.abortableReviewGate(ctx.session, gateId, signal, undefined, gateOptions);
+    } catch {
+      // review: swallowed — rejects ONLY on timeout or abort (review-gate.ts); every rejection is an expiry. Fail closed.
+      return null;
+    } finally {
+      pendingGates -= 1;
+      if (pendingGates === 0) {
+        try {
+          await deps.updateConversationStatus(ctx.conversationId, "active");
+        } catch (err) {
+          warnSilentFallback(err, { feature: "cc-permissions", op: "bash-gate-status-restore" });
+        }
+      }
+    }
+  };
+  const gateExpiredDeny = (toolName: string, reason: string, message: string): PermissionResult => {
+    log.info(
+      { sec: true, tool: toolName, decision: "bash-gate-expired", reason, repo: `${ctx.repoOwner}/${ctx.repoName}` },
+      "Bash gate expired without an answer; denied",
+    );
+    logPermissionDecision("canUseTool-bash", toolName, "deny", reason);
+    return { behavior: "deny" as const, message };
+  };
   return async (toolName, toolInput, options): Promise<PermissionResult> => {
     const subagentCtx = options.agentID ? ` [subagent=${options.agentID}]` : "";
 
     // Defense-in-depth: catch any file tool that bypasses PreToolUse hooks.
     // Hooks are the primary enforcement (layer 1); this is layer 2. See #891.
     if (isFileTool(toolName)) {
+      // Support persona (#9539): write-class file tools are schema-removed via
+      // SUPPORT_EXTRA_DISALLOWED_TOOLS; a model emitting one anyway is an
+      // engineering attempt — deny + record rather than letting the sandbox
+      // reject the write AFTER a `diff`/`notebook_edit` frame already went to
+      // the WS sink. Read-class file tools flow through containment below.
+      if (ctx.persona === "support" && SUPPORT_WRITE_FILE_TOOLS.has(toolName)) {
+        return deny({
+          conversationId: ctx.conversationId,
+          toolName,
+          source: "tool",
+          message: `This chat is read-only app help — I can't edit or write files. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+        });
+      }
       const filePath = extractToolPath(toolInput);
       if (filePath && !isPathInWorkspace(filePath, ctx.workspacePath)) {
+        if (ctx.persona === "support") {
+          return deny({
+            conversationId: ctx.conversationId,
+            toolName,
+            source: "tool",
+            message: `This chat is read-only app help — that path is outside my reach. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+            detail: "outside workspace",
+          });
+        }
         logPermissionDecision(
           "canUseTool-file-tool",
           toolName,
@@ -283,6 +437,36 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
 
     // Review gates: intercept AskUserQuestion
     if (toolName === "AskUserQuestion") {
+      // Support persona (#9539): the gate below emits `review_gate` over
+      // `deps.sendToClient` — the WS sink — which a support-panel user can
+      // never answer (the SSE turn dies at the route cap while the gate
+      // stalls for REVIEW_GATE_TIMEOUT_MS, then auto-allows with a
+      // synthesized selection). Schema removal (`SUPPORT_EXTRA_DISALLOWED_
+      // TOOLS`) is the primary lever; this belt covers a model emitting a
+      // removed tool. NO escalation record — a clarifying question is not an
+      // engineering attempt.
+      if (ctx.persona === "support") {
+        log.info(
+          {
+            sec: true,
+            tool: toolName,
+            decision: "deny-support-question",
+            conversationId: ctx.conversationId,
+          },
+          "Support persona denied an interactive question (no gate surface)",
+        );
+        logPermissionDecision(
+          "canUseTool-support-question",
+          toolName,
+          "deny",
+          "no interactive surface",
+        );
+        return {
+          behavior: "deny" as const,
+          message:
+            "This chat can't render interactive questions — ask the user directly in your reply text.",
+        };
+      }
       const gateId = randomUUID();
       const gate = extractReviewGateInput(toolInput);
 
@@ -349,6 +533,40 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       };
     }
 
+    // Support persona (#9539): TodoWrite / ExitPlanMode are schema-removed
+    // (SUPPORT_EXTRA_DISALLOWED_TOOLS) AND filtered from `allowedTools` for
+    // support dispatches — either reaching here means a model emitted a
+    // removed tool AND slipped the auto-approve filter, which is exactly the
+    // case the AskUserQuestion belt hedges. Deny WITHOUT an escalation
+    // record (a UX signal is not an engineering attempt).
+    if (
+      ctx.persona === "support" &&
+      (toolName === "TodoWrite" ||
+        toolName === "ExitPlanMode" ||
+        SOLEUR_GO_SAFE_UX_TOOLS.has(toolName))
+    ) {
+      log.info(
+        {
+          sec: true,
+          tool: toolName,
+          decision: "deny-support-question",
+          conversationId: ctx.conversationId,
+        },
+        "Support persona denied a UX-signal tool (no interactive surface)",
+      );
+      logPermissionDecision(
+        "canUseTool-support-question",
+        toolName,
+        "deny",
+        "no interactive surface",
+      );
+      return {
+        behavior: "deny" as const,
+        message:
+          "This chat can't render interactive prompts — answer in plain text instead.",
+      };
+    }
+
     // ExitPlanMode: plan-preview-acknowledgment tool surfaced by the
     // soleur plugin. No filesystem path, no command execution — purely
     // a UX signal that the planning phase is complete. Stage 2.11.
@@ -380,6 +598,19 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         };
       }
       if (isBashCommandBlocked(command)) {
+        // Support persona: a blocklisted attempt is still a write attempt —
+        // deny with the handoff message AND record the escalation so the
+        // turn ends with the "Ask an agent" affordance rather than a bare
+        // pattern-mismatch dead-end.
+        if (ctx.persona === "support") {
+          return deny({
+            conversationId: ctx.conversationId,
+            toolName,
+            source: "bash",
+            message: SUPPORT_BASH_DENY_MESSAGE,
+            detail: "BLOCKED_BASH_PATTERNS match",
+          });
+        }
         log.info(
           {
             sec: true,
@@ -460,6 +691,137 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         }
       }
 
+      // Support persona (#9539): a non-safe Bash command on a support turn
+      // must never reach any interactive gate — every path below emits over
+      // `deps.sendToClient`, the WS sink a support-panel user cannot answer:
+      // the review-gate (stalls REVIEW_GATE_TIMEOUT_MS while the SSE turn
+      // dies at the route cap), the autonomous-disclosure hold (a consent ack
+      // granted on the WRONG surface), and — on an acked autonomous
+      // workspace — the silent auto-allow itself (the command would EXECUTE
+      // inside the read-only sandbox, still inside the WS-emit blast radius
+      // of `notifyOfflineUser` + `waiting_for_user` writes). Deny here,
+      // record the escalation, and let the route render the handoff
+      // affordance at turn end.
+      if (ctx.persona === "support") {
+        return deny({
+          conversationId: ctx.conversationId,
+          toolName,
+          source: "bash",
+          message: SUPPORT_BASH_DENY_MESSAGE,
+        });
+      }
+
+      // #9776 / ADR-284 — HOSTED MUST-ASK LANE. One chokepoint, placed AFTER the
+      // blocklist deny (curl x && git push -f origin main still denies), the safe-bash
+      // allow (no ask row is safe-bash: corpus invariant) and the support-persona deny,
+      // and BEFORE the autonomous bypass, the first-run disclosure hold, the existing-
+      // workspace opt-out hold and the batched-approval cache. A match RETURNS from here,
+      // so none of those four routes can stand in for the Approve. The gate offers exactly
+      // Approve and Reject; approval is this command only (no ack, no cache entry, no
+      // `grant`); any selection other than the exact string `Approve` denies, so a forged
+      // `Approve all <prefix>` frame cannot reach the cache. Reject, timeout and abort deny
+      // and tell the agent not to retry or respell. A classifier error is itself a match.
+      {
+        const laneAckPosture = deps.resolveAckPosture
+          ? deps.resolveAckPosture()
+          : deps.autonomousAckAt;
+        const destroyMatch = await detectDestroyAsk(
+          {
+            key: ctx,
+            autonomous: Boolean(deps.bashAutonomous),
+            isOwner: Boolean(deps.isOwner),
+            acked: laneAckPosture != null,
+            repo: deps.connectedRepoSlug ?? "",
+            resolveProtectedBranches: deps.resolveProtectedBranches,
+          },
+          command,
+        );
+        if (destroyMatch) {
+          const destroyGateId = randomUUID();
+          const destroyQuestion = buildDestroyAskQuestion(destroyMatch, command);
+          const destroyOptions = ["Approve", "Reject"];
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "deny",
+            "hosted-destroy-ask",
+          );
+          const destroyDelivered = deps.sendToClient(ctx.userId, {
+            type: "review_gate",
+            gateId: destroyGateId,
+            question: destroyQuestion,
+            options: destroyOptions,
+          });
+          if (!destroyDelivered) {
+            deps.notifyOfflineUser(ctx.userId, {
+              type: "review_gate",
+              conversationId: ctx.conversationId,
+              agentName: ctx.leaderId ?? "Agent",
+              question: destroyQuestion,
+            }).catch((err) =>
+              log.error(
+                { userId: ctx.userId, err },
+                "Offline notification failed (destroy gate)",
+              ),
+            );
+          }
+          await deps.updateConversationStatus(
+            ctx.conversationId,
+            "waiting_for_user",
+          );
+          let destroySelection: string | null = null;
+          try {
+            destroySelection = await deps.abortableReviewGate(
+              ctx.session,
+              destroyGateId,
+              options.signal,
+              undefined,
+              destroyOptions,
+            );
+          } catch {
+            // review: swallowed — abortableReviewGate rejects ONLY on timeout or abort (review-gate.ts), so every rejection
+            // here is an expiry. Fail closed (deny), never an allow; the outcome line below records it.
+            destroySelection = null;
+          } finally {
+            await deps.updateConversationStatus(ctx.conversationId, "active");
+          }
+          if (destroySelection === null) {
+            logDestroyOutcome("expired", destroyMatch, Boolean(deps.isOwner));
+            logPermissionDecision(
+              "canUseTool-bash",
+              toolName,
+              "deny",
+              "destroy-ask-expired",
+            );
+            return {
+              behavior: "deny" as const,
+              message: destroyExpiredMessage(),
+            };
+          }
+          if (destroySelection !== "Approve") {
+            logDestroyOutcome("rejected", destroyMatch, Boolean(deps.isOwner));
+            logPermissionDecision(
+              "canUseTool-bash",
+              toolName,
+              "deny",
+              "destroy-ask-rejected",
+            );
+            return {
+              behavior: "deny" as const,
+              message: destroyRejectedMessage(),
+            };
+          }
+          logDestroyOutcome("approved", destroyMatch, Boolean(deps.isOwner));
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "allow",
+            "destroy-ask-approved",
+          );
+          return allow(toolInput);
+        }
+      }
+
       // Issue B part 2 — autonomous/trusted bypass. Placed AFTER the
       // blocklist (deny, above) and AFTER isBashCommandSafe + near-miss
       // telemetry (so the drift signal still fires) but BEFORE the
@@ -513,28 +875,23 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             gateId,
             existingWorkspace: false,
           });
-          await deps.updateConversationStatus(
-            ctx.conversationId,
-            "waiting_for_user",
-          );
           // Await the owner's ack via the same gate bridge the review-gate uses
           // (registered in `_ccBashGates`; resolved by the
           // `autonomous_disclosure_response` ws-handler case). The selection
           // distinguishes "Got it" / "Keep autonomous on" (proceed) from
-          // "Ask me each time" (decline this run).
-          const selection = await deps.abortableReviewGate(
-            ctx.session,
+          // "Ask me each time" (decline this run). P1 — the HOLD registers under
+          // the autonomous_disclosure kind so a forged/cross `review_gate_response`
+          // cannot release it; only the owner-checked
+          // `autonomous_disclosure_response` (which writes the ack first) can.
+          const selection = await holdForUser(
             gateId,
             options.signal,
-            undefined,
             ["Got it"],
-            // P1 — register the HOLD under the autonomous_disclosure kind so a
-            // forged/cross `review_gate_response` cannot release it; only the
-            // owner-checked `autonomous_disclosure_response` (which writes the
-            // ack first) can.
             "autonomous_disclosure",
           );
-          await deps.updateConversationStatus(ctx.conversationId, "active");
+          if (selection === null) {
+            return gateExpiredDeny(toolName, "autonomous-disclosure-expired", AUTONOMOUS_NOTICE_EXPIRED_MESSAGE);
+          }
 
           if (selection === "Ask me each time") {
             logPermissionDecision(
@@ -546,6 +903,15 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             return {
               behavior: "deny" as const,
               message: "User chose to approve each command; this run was held.",
+            };
+          }
+          // Only the two documented proceed values release the hold; anything else is a deny (fail closed), so
+          // an unexpected selection can never reach the allow path through an unwired verifyAutonomousAck.
+          if (selection !== "Got it" && selection !== "Keep autonomous on") {
+            logPermissionDecision("canUseTool-bash", toolName, "deny", "autonomous-disclosure-unexpected-selection");
+            return {
+              behavior: "deny" as const,
+              message: AUTONOMOUS_NOTICE_EXPIRED_MESSAGE,
             };
           }
           // P1 defense-in-depth — the gate resolved "proceed", but consent is
@@ -673,19 +1039,15 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             gateId,
             existingWorkspace: true,
           });
-          await deps.updateConversationStatus(
-            ctx.conversationId,
-            "waiting_for_user",
-          );
-          const selection = await deps.abortableReviewGate(
-            ctx.session,
+          const selection = await holdForUser(
             gateId,
             options.signal,
-            undefined,
             ["Keep autonomous on", "Ask me each time"],
             "autonomous_disclosure",
           );
-          await deps.updateConversationStatus(ctx.conversationId, "active");
+          if (selection === null) {
+            return gateExpiredDeny(toolName, "autonomous-disclosure-expired", AUTONOMOUS_NOTICE_EXPIRED_MESSAGE);
+          }
 
           if (selection === "Keep autonomous on") {
             // The ws-handler flipped the toggle + wrote the ack. Verify the ack
@@ -773,7 +1135,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // cache dep is wired, augment the gate options array with
       // `Approve all <prefix>` so the user can collapse the modal cliff.
       const cachePrefix = deps.bashApprovalCache
-        ? deriveBashCommandPrefix(command)
+        ? (batchGrantablePrefix(command) ?? "")
         : "";
       const gateOptions =
         deps.bashApprovalCache && cachePrefix
@@ -814,17 +1176,10 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         );
       }
 
-      await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
-
-      const selection = await deps.abortableReviewGate(
-        ctx.session,
-        gateId,
-        options.signal,
-        undefined,
-        gateOptions,
-      );
-
-      await deps.updateConversationStatus(ctx.conversationId, "active");
+      const selection = await holdForUser(gateId, options.signal, gateOptions);
+      if (selection === null) {
+        return gateExpiredDeny(toolName, "bash-review-gate-expired", BASH_GATE_EXPIRED_MESSAGE);
+      }
 
       // Selection can be "Approve", "Approve all `<prefix>`", or "Reject".
       const approveAllOption =
@@ -844,7 +1199,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         );
         return {
           behavior: "deny" as const,
-          message: "User rejected the Bash command",
+          message: BASH_REJECTED_MESSAGE,
         };
       }
 
@@ -886,6 +1241,17 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     // Agent tool: spawns subagents under the same SDK sandbox. Explicit
     // allow (replaces prior SAFE_TOOLS auto-allow) for auditability. See #910.
     if (toolName === "Agent") {
+      // Support persona (#9539): `Agent` is schema-removed for support; an
+      // emitted-despite-removal call is engineering fan-out on a read-only
+      // turn — deny + record.
+      if (ctx.persona === "support") {
+        return deny({
+          conversationId: ctx.conversationId,
+          toolName,
+          source: "tool",
+          message: `This chat is read-only app help — I can't spawn engineering agents. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+        });
+      }
       if (subagentCtx) {
         log.info(
           { sec: true, agentId: options.agentID },
@@ -913,21 +1279,13 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         logPermissionDecision("canUseTool-support-skill", toolName, "allow", requested);
         return allow(toolInput);
       }
-      log.info(
-        { sec: true, tool: toolName, decision: "deny-support-skill", requested },
-        "Support persona denied a non-allowlisted skill",
-      );
-      logPermissionDecision(
-        "canUseTool-support-skill",
+      return deny({
+        conversationId: ctx.conversationId,
         toolName,
-        "deny",
-        requested || "(missing)",
-      );
-      return {
-        behavior: "deny" as const,
-        message:
-          "Support can only use app-help (knowledge-base search). For engineering work — building, fixing, or deploying — use \"Ask an agent\" (the Command Center).",
-      };
+        source: "skill",
+        message: `Support can only use app-help (knowledge-base search). For engineering work — building, fixing, or deploying — ${SUPPORT_AGENT_SESSION_HINT}.`,
+        detail: requested || "(missing)",
+      });
     }
 
     // Safe SDK tools (no filesystem-path inputs). See tool-path-checker.ts.
@@ -940,6 +1298,19 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     // `platformToolNames` (not blanket mcp__ prefix) so future MCP servers
     // never auto-allow without explicit review.
     if (ctx.platformToolNames.includes(toolName)) {
+      // Support persona (#9539): a platform tool is repo-capable by
+      // construction (its gated tier emits a `review_gate` on the WS sink;
+      // its auto-approve tier executes unconditionally). For support
+      // dispatches `platformToolNames` is empty — this belt is for a future
+      // tool added to the list without a persona check.
+      if (ctx.persona === "support") {
+        return deny({
+          conversationId: ctx.conversationId,
+          toolName,
+          source: "tool",
+          message: `This chat is read-only app help — that integration isn't available here. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+        });
+      }
       const tier: ToolTier = getToolTier(toolName);
 
       if (tier === "blocked") {
@@ -1069,6 +1440,15 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     }
 
     // Deny-by-default: block unrecognized tools
+    if (ctx.persona === "support") {
+      return deny({
+        conversationId: ctx.conversationId,
+        toolName,
+        source: "tool",
+        message: `This chat is read-only app help — I can't do that here. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+        detail: "unrecognized tool",
+      });
+    }
     logPermissionDecision(
       "canUseTool-deny-default",
       toolName,

@@ -105,9 +105,9 @@ the operator/agent to remember to probe each cited PR.
 
 ## Cross-References
 
-- Parent brainstorm: `knowledge-base/project/brainstorms/2026-05-22-dsar-workspace-member-extension-brainstorm.md`
-- This brainstorm: `knowledge-base/project/brainstorms/2026-05-22-dsar-author-redaction-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-dsar-author-redaction-4319/spec.md`
+- Parent brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-22-dsar-workspace-member-extension-brainstorm.md`
+- This brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-22-dsar-author-redaction-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-dsar-author-redaction-4319/spec.md`
 - Issues: #4319 (this), #4230 (parent), #4229 (umbrella)
 - PR dependency: #4289 (legal scaffolding, MERGED 2026-05-22T08:07Z)
 - Related learnings:

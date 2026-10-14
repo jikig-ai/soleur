@@ -27,7 +27,7 @@ case "$-" in
 esac
 
 # Arm 1 (dependency): #7400 closed.
-if gh issue view 7400 --repo jikig-ai/soleur --json state --jq '.state' 2>/dev/null | grep -qi '^CLOSED$'; then
+if grep -qi '^CLOSED$' < <(gh issue view 7400 --repo jikig-ai/soleur --json state --jq '.state' 2>/dev/null); then
   echo "dependency arm fired: #7400 (retire KB archival) is closed — archive-kb.sh fix is due-or-moot"
   exit 0
 fi

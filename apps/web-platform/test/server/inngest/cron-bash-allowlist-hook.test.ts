@@ -1007,3 +1007,418 @@ describe("Bash — wrapped filings stay denied under a gh issue create grant (#9
     expect(reason(bash('bash -c "gh issue create --title x"'))).toContain("not allowlisted");
   });
 });
+
+// #7122 — the `no-file-tools` directive (ADR-058 file-driven per-cron pattern). A
+// cron whose allow file carries the exact line `no-file-tools` loses every tool
+// that can read, write or delegate: the agent holds Bash and nothing else. The
+// directive is per-cron (a file without it keeps today's behaviour), parsed only
+// as a whole-line match, and never enters the bash prefix list.
+describe("no-file-tools — per-cron removal of file and sub-agent tools (#7122)", () => {
+  const BASH_ONLY = ["gh issue list"];
+  const WITH = [...BASH_ONLY, "no-file-tools"];
+  const v = (input: unknown, lines: string[]) =>
+    decide(input, lines).hookSpecificOutput.permissionDecision;
+  const TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "MultiEdit", "Task", "Agent", "Skill"];
+  const call = (tool_name: string) => ({
+    tool_name,
+    tool_input: { file_path: "knowledge-base/x.md", path: "knowledge-base", pattern: "x" },
+  });
+
+  it("parseAllowlist reads the directive into noFileTools and keeps it out of bash", async () => {
+    const { parseAllowlist } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+    const parsed = parseAllowlist(WITH) as { bash: string[]; noFileTools: boolean };
+    expect(parsed.noFileTools).toBe(true);
+    expect(parsed.bash).toEqual(BASH_ONLY);
+    expect((parseAllowlist(BASH_ONLY) as { noFileTools: boolean }).noFileTools).toBe(false);
+    // Only the whole-line spelling is a directive; anything else is an ordinary bash prefix.
+    const near = parseAllowlist(["no-file-tools extra", "no-file-toolsx"]) as { bash: string[]; noFileTools: boolean };
+    expect(near.noFileTools).toBe(false);
+    expect(near.bash).toEqual(["no-file-tools extra", "no-file-toolsx"]);
+  });
+
+  it("denies all nine tools when the directive is present", () => {
+    for (const t of TOOLS) expect(v(call(t), WITH), t).toBe("deny");
+  });
+
+  it("the deny reason names the directive (diagnosable from the permission_denials channel)", () => {
+    const r = decide(call("Write"), WITH).hookSpecificOutput as { permissionDecisionReason?: string };
+    expect(r.permissionDecisionReason).toContain("no-file-tools");
+  });
+
+  it("keeps today's behaviour without the directive (per-cron, not global)", () => {
+    for (const t of TOOLS) expect(v(call(t), BASH_ONLY), t).toBe("allow");
+  });
+
+  it("NotebookEdit is denied with AND without the directive (the catch-all already covers it)", () => {
+    const nb = { tool_name: "NotebookEdit", tool_input: { notebook_path: "x.ipynb" } };
+    expect(v(nb, WITH)).toBe("deny");
+    expect(v(nb, BASH_ONLY)).toBe("deny");
+  });
+
+  it("denies the bypass shapes a path deny-list cannot see", () => {
+    expect(v({ tool_name: "Grep", tool_input: { pattern: "K", path: "/", glob: "proc/*/environ" } }, WITH)).toBe("deny");
+    expect(v({ tool_name: "Glob", tool_input: { pattern: "**/.git/config", path: "/tmp" } }, WITH)).toBe("deny");
+    expect(v({ tool_name: "Grep", tool_input: { pattern: "K", path: "/pro*" } }, WITH)).toBe("deny");
+    expect(v({ tool_name: "Grep", tool_input: { pattern: "K", path: "/" } }, BASH_ONLY)).toBe("allow");
+  });
+
+  it("does not touch Bash, and keeps the inert internal tools usable", () => {
+    // The allow line is an exact literal under the directive: the bare verb runs, an
+    // appended argument does not (the strict grammar suite below covers the rule).
+    expect(v(bash("gh issue list"), WITH)).toBe("allow");
+    expect(v(bash("gh issue list --limit 5"), WITH)).toBe("deny");
+    expect(v(bash("gh issue list --limit 5"), BASH_ONLY)).toBe("allow");
+    expect(v(bash("gh issue close 1"), WITH)).toBe("deny");
+    expect(v({ tool_name: "ToolSearch", tool_input: { query: "select:Bash" } }, WITH)).toBe("allow");
+    expect(v({ tool_name: "TodoWrite", tool_input: { todos: [] } }, WITH)).toBe("allow");
+  });
+
+  it("the directive line is not a bash allow prefix", () => {
+    expect(v(bash("no-file-tools"), WITH)).toBe("deny");
+  });
+});
+
+// #7122 P1-A — the trailing arguments of an allowlisted verb. The allowlist
+// matches `<prefix> ` and the quote-stripped metachar screen drops every
+// single-quoted span, so `<verb> 'HOME[$(id)]'` was ALLOWED and the router script
+// then evaluated the argument (`(( limit ))` arithmetic, `python3 -c "…'$query'"`).
+// For a cron with the `no-file-tools` directive two layers run on the RAW text: a
+// closed token charset (no quoting form can hide anything) and, since round 1, an
+// EXACT-LITERAL match (each segment equals one allow line token for token; `<uint>`
+// is the only variable token), which closes the free-text `--query <word>` channel.
+describe("no-file-tools — strict argument grammar and exact-literal matching (#7122 P1-A)", () => {
+  const R = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+  const LITERALS = [
+    `${R} platforms`,
+    `${R} discord messages <uint> 50`,
+    `${R} github activity 1`,
+    `${R} hn mentions --query soleur --limit 20`,
+  ];
+  const WITH = [...LITERALS, "no-file-tools"];
+  // The same commands as PREFIX lines, with no directive: the pre-#7122 shape every other cron keeps.
+  const WITHOUT = [`${R} platforms`, `${R} discord messages`, `${R} hn mentions`, `${R} github activity`];
+  const v = (command: string, lines: string[]) =>
+    decide({ tool_name: "Bash", tool_input: { command } }, lines).hookSpecificOutput.permissionDecision;
+
+  // Each shape would be admitted by the old PREFIX semantics, followed by a payload.
+  const EXPLOITS: ReadonlyArray<[string, string]> = [
+    ["array-subscript arithmetic payload, single-quoted", `${R} discord messages 'HOME[$(cat .git/config /proc/self/environ >&2)]'`],
+    ["same, after a channel id", `${R} discord messages 123 'HOME[$(id)]'`],
+    ["same, double-quoted", `${R} discord messages "HOME[$(id)]"`],
+    ["same, unquoted brackets", `${R} discord messages 1 HOME[1]`],
+    ["python source breakout in --query (double-quoted)", `${R} hn mentions --query "x'+str(__import__('os').system('id'))+'"`],
+    ["python source breakout in --query (single quote inside double)", `${R} hn mentions --query "x'+__import__('os').getcwd()+'"`],
+    ["command substitution in a single-quoted --query", `${R} hn mentions --query 'x$(id)'`],
+    ["bare command substitution in --query", `${R} hn mentions --query '$(id)'`],
+    ["backtick in a single-quoted --query", `${R} hn mentions --query '\`id\`'`],
+    ["parameter expansion in a single-quoted arg", `${R} github activity 1 '\${HOME}'`],
+    ["brace expansion", `${R} discord messages 1 a{b,c}`],
+    ["a quoted semicolon", `${R} github activity 1 'a;b'`],
+    ["a quoted space (one token with whitespace)", `${R} hn mentions --query 'a b'`],
+    ["a double-quoted query (no $, no ')", `${R} hn mentions --query "a b" --limit 20`],
+    ["a backslash escape", `${R} github activity 1 \\$HOME`],
+    ["a glob", `${R} github activity 1 *`],
+    ["a tilde", `${R} github activity ~`],
+    ["a comment start", `${R} github activity 1 #x`],
+    ["an option carrying a substitution", `${R} github activity 1 --x=$(id)`],
+    ["a newline between tokens", `${R} github activity 1\nid`],
+    ["a non-breaking-space separator", `${R} github activity\u00a01`],
+    ["a non-ASCII token", `${R} hn mentions --query é --limit 20`],
+    ["a bare pipe-or in the chain", `${R} github activity 1 || id`],
+    ["a single ampersand", `${R} github activity 1 & id`],
+    ["a quoted verb token", `${R} 'github' activity 1`],
+  ];
+
+  it.each(EXPLOITS)("DENIES %s", (_label, command) => {
+    expect(v(command, WITH), command).toBe("deny");
+  });
+
+  it("the deny reasons are fixed text: they echo nothing from the command (charset layer AND literal layer)", () => {
+    const secret = "INJECTEDSENTENCE";
+    for (const command of [
+      `${R} hn mentions --query '${secret}$(id)'`, // charset layer
+      `${R} hn mentions --query ${secret} --limit 20`, // literal layer
+      `${R} platforms ${secret}`,
+    ]) {
+      const r = decide({ tool_name: "Bash", tool_input: { command } }, WITH).hookSpecificOutput as {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+      };
+      expect(r.permissionDecision, command).toBe("deny");
+      expect(r.permissionDecisionReason, command).toContain("no-file-tools");
+      expect(r.permissionDecisionReason, command).not.toContain(secret);
+    }
+  });
+
+  // The exact commands the community prompt emits stay allowed (and nothing else does).
+  const MUST_ALLOW: ReadonlyArray<string> = [
+    `${R} platforms`,
+    `${R} github activity 1`,
+    `${R} hn mentions --query soleur --limit 20`,
+    `${R} discord messages 123456789012345678 50`,
+    `${R} discord messages 0 50`,
+    `${R} github activity 1; ${R} hn mentions --query soleur --limit 20`,
+    `${R} github activity 1 && ${R} platforms`,
+    `${R} github activity 1;${R} platforms`,
+    `${R} platforms;`,
+    `  ${R} platforms\t`,
+  ];
+  it.each(MUST_ALLOW.map((c) => [c] as [string]))("ALLOWS %s", (command) => {
+    expect(v(command, WITH), command).toBe("allow");
+  });
+
+  // EXACT-LITERAL rows: each is one allowlisted invocation plus ONE deviation. The
+  // `--query <any word>` row is the round-1 residual (in-context member content
+  // leaving word by word through a third-party search API).
+  const NOT_LITERAL: ReadonlyArray<[string, string]> = [
+    ["an extra trailing token on a no-argument literal", `${R} platforms extra`],
+    ["an extra trailing token after <uint> 50", `${R} discord messages 1 50 extra`],
+    ["a different --query word", `${R} hn mentions --query other --limit 20`],
+    ["a longer --query word", `${R} hn mentions --query soleurx --limit 20`],
+    ["a different --limit", `${R} hn mentions --query soleur --limit 21`],
+    ["--limit with a leading zero", `${R} hn mentions --query soleur --limit 020`],
+    ["a missing --limit", `${R} hn mentions --query soleur`],
+    ["a bare prefix of a longer literal", `${R} hn mentions`],
+    ["swapped option order", `${R} hn mentions --limit 20 --query soleur`],
+    ["a repeated --query", `${R} hn mentions --query soleur --query other --limit 20`],
+    ["a different fixed limit after <uint>", `${R} discord messages 1 51`],
+    ["a missing fixed limit after <uint>", `${R} discord messages 1`],
+    ["a leading-zero <uint> operand", `${R} discord messages 08 50`],
+    ["a leading-zero <uint> (all zeros)", `${R} discord messages 00 50`],
+    ["a signed <uint> operand", `${R} discord messages +1 50`],
+    ["a negative <uint> operand", `${R} discord messages -1 50`],
+    ["a decimal <uint> operand", `${R} discord messages 1.5 50`],
+    ["a hex <uint> operand", `${R} discord messages 0x1 50`],
+    ["an alphabetic <uint> operand", `${R} discord messages abc 50`],
+    ["the placeholder text itself", `${R} discord messages <uint> 50`],
+    ["a different fixed argument on a github literal", `${R} github activity 7`],
+    ["a different verb with the allowlisted arguments", `${R} github contributors 1`],
+    ["a different script path", `bash plugins/soleur/skills/community/scripts/x-community.sh platforms`],
+    ["an extra leading token", `time ${R} platforms`],
+  ];
+  it.each(NOT_LITERAL)("DENIES (not an exact literal) %s", (_label, command) => {
+    expect(v(command, WITH), command).toBe("deny");
+  });
+
+  it("control: the same deviations ARE allowed by prefix semantics when the cron has no directive, so the deny above is the literal layer", () => {
+    for (const [label, command] of [
+      ["extra token", `${R} platforms extra`],
+      ["different query", `${R} hn mentions --query other --limit 20`],
+      ["leading zero", `${R} discord messages 08 50 extra`],
+      ["quoted payload", `${R} discord messages 'HOME[$(id)]'`],
+    ] as const) {
+      expect(v(command, WITHOUT), label).toBe("allow");
+    }
+    // ...and an ordinary quoted gh argument still works for such a cron.
+    expect(v("gh issue list --search 'is:open label:x'", ["gh issue list"])).toBe("allow");
+  });
+
+  // Position coverage (test-design P2-1): the rule judges EVERY segment. A mutation that
+  // applies the grammar to the last segment only (`.slice(-1)`) passes a table that
+  // puts the bad segment last.
+  const OK_A = `${R} platforms`;
+  const OK_B = `${R} github activity 1`;
+  const BAD_SEGMENTS: ReadonlyArray<[string, string]> = [
+    ["a hostile single-quoted operand (charset layer)", `${R} discord messages 'HOME[$(id)]'`],
+    ["an extra trailing token (literal layer)", `${R} platforms extra`],
+    ["a different query word (literal layer)", `${R} hn mentions --query other --limit 20`],
+    ["a leading-zero operand (literal layer)", `${R} discord messages 08 50`],
+  ];
+  const POSITIONS: ReadonlyArray<[string, (bad: string, sep: string) => string]> = [
+    ["first", (bad, sep) => `${bad}${sep}${OK_A}${sep}${OK_B}`],
+    ["middle", (bad, sep) => `${OK_A}${sep}${bad}${sep}${OK_B}`],
+    ["last", (bad, sep) => `${OK_A}${sep}${OK_B}${sep}${bad}`],
+  ];
+  describe.each([["; ", "semicolon"], [" && ", "and-and"], [";", "bare semicolon"]])("separator %j (%s)", (sep) => {
+    for (const [badLabel, bad] of BAD_SEGMENTS) {
+      for (const [pos, build] of POSITIONS) {
+        it(`a chain with ${badLabel} in the ${pos} segment is denied as a whole`, async () => {
+          const command = build(bad, sep);
+          expect(v(command, WITH), command).toBe("deny");
+          // The grammar function itself (not only the later layers of decide()).
+          const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+          expect(typeof strictArgumentGrammarReason(command, LITERALS.filter((l) => l.startsWith("bash"))), command).toBe("string");
+        });
+      }
+    }
+    it("control: the three good segments in any order, with this separator, are allowed", () => {
+      expect(v([OK_A, OK_B, `${R} discord messages 9 50`].join(sep), WITH)).toBe("allow");
+    });
+  });
+
+  it("charset layer alone (no literal lines): a bad token in the first, middle or last segment is denied", async () => {
+    const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+    for (const bad of ["x 'y'", "x $(id)", 'x "y"', "x a\\b"]) {
+      for (const [pos, build] of [
+        ["first", (b: string) => `${b}; a b; c d`],
+        ["middle", (b: string) => `a b; ${b}; c d`],
+        ["last", (b: string) => `a b; c d; ${b}`],
+      ] as const) {
+        expect(typeof strictArgumentGrammarReason(build(bad)), `${pos}: ${bad}`).toBe("string");
+      }
+    }
+  });
+
+  it("a chain of exact literals is allowed (batches are the prompt's normal shape)", () => {
+    expect(
+      v(
+        [`${R} platforms`, `${R} discord messages 1234567890 50`, `${R} github activity 1`, `${R} hn mentions --query soleur --limit 20`].join(" && "),
+        WITH,
+      ),
+    ).toBe("allow");
+  });
+
+  it("must PASS: a cron WITHOUT the directive is unaffected (the same payloads keep their old verdicts, so the denies above are the grammar)", () => {
+    expect(v(`${R} discord messages 'HOME[$(id)]'`, WITHOUT)).toBe("allow");
+    expect(v(`${R} hn mentions --query 'a b'`, WITHOUT)).toBe("allow");
+    expect(v(`${R} github activity 1 'x y'`, WITHOUT)).toBe("allow");
+    // A `<uint>` placeholder is a literal word in a prefix-semantics file, never a pattern.
+    expect(v(`${R} discord messages 1 50`, [`${R} discord messages <uint> 50`])).toBe("deny");
+  });
+
+  it("strictArgumentGrammarReason is exported and pure: null for a clean command, a fixed string otherwise", async () => {
+    const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+    expect(strictArgumentGrammarReason("a b; c d && e")).toBeNull();
+    expect(typeof strictArgumentGrammarReason("a 'b'")).toBe("string");
+    expect(strictArgumentGrammarReason("a 'INJECTED'")).not.toContain("INJECTED");
+    expect(typeof strictArgumentGrammarReason("")).toBe("string");
+    expect(typeof strictArgumentGrammarReason(" ; ; ")).toBe("string");
+    expect(typeof strictArgumentGrammarReason(42 as unknown as string)).toBe("string");
+  });
+
+  // COMPLEMENT SWEEP (test-design P3-1): every character OUTSIDE the closed charset is
+  // denied, so widening the charset by even one character turns a row red. Run on the
+  // charset-only function (no literal lines) so the literal layer cannot mask a widening.
+  describe("charset complement sweep", () => {
+    const IN_CHARSET = /^[A-Za-z0-9._:=@/+-]$/;
+    // Space and `;` are token / segment separators by design (a b; c d is clean).
+    const SEPARATORS = new Set([" ", ";"]);
+    const NON_ASCII = ["\u00a0", "\u2028", "\u2029", "\u200b", "\ufeff", "\u0085", "é", "\uff0f", "\uff1b", "\u{1f600}"];
+    const complement = [
+      ...Array.from({ length: 0x80 }, (_, i) => String.fromCharCode(i)),
+      ...NON_ASCII,
+    ].filter((c) => !IN_CHARSET.test(c) && !SEPARATORS.has(c) && c !== "\t");
+
+    it("the sweep is non-vacuous: it covers every printable ASCII character that is not in the charset", () => {
+      const printable = Array.from({ length: 0x5f }, (_, i) => String.fromCharCode(0x20 + i));
+      for (const c of printable.filter((c) => !IN_CHARSET.test(c) && !SEPARATORS.has(c))) expect(complement).toContain(c);
+      expect(complement.length).toBeGreaterThan(60);
+    });
+
+    it("every non-charset character, inside a token, is denied by the charset layer", async () => {
+      const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      const allowed: string[] = [];
+      for (const ch of complement) {
+        for (const command of [`a${ch}b`, `a ${ch}`, `${ch}`, `a b; c${ch}`]) {
+          if (strictArgumentGrammarReason(command) === null) allowed.push(JSON.stringify(command));
+        }
+      }
+      expect(allowed).toEqual([]);
+    });
+
+    it("every non-charset character is denied by decide() end to end (inside the first, middle and last segment)", () => {
+      const bad: string[] = [];
+      for (const ch of complement) {
+        const lit = `${R} platforms`;
+        for (const command of [`${lit}${ch}`, `${lit}${ch}; ${lit}`, `${lit}; ${lit}${ch}; ${lit}`, `${lit}; ${lit} a${ch}`]) {
+          if (v(command, WITH) !== "deny") bad.push(JSON.stringify(command));
+        }
+      }
+      expect(bad).toEqual([]);
+    });
+
+    it("control: every charset character is accepted by the charset layer", async () => {
+      const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      const all = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:=@/+-";
+      for (const ch of all) expect(strictArgumentGrammarReason(`a${ch}b`), ch).toBeNull();
+      // tab separates tokens exactly like space
+      expect(strictArgumentGrammarReason("a\tb\t;\tc")).toBeNull();
+    });
+  });
+
+  // PERFORMANCE (perf P2-1): the hook runs once per Bash call and a crashed or slow hook is
+  // a containment question, so padding must cost a constant. Bounds are loose (CI noise)
+  // yet three orders below the quadratic behaviour (100k spaces took 25 s).
+  describe("running time is bounded on padded input", () => {
+    const timed = <T,>(fn: () => T): [T, number] => {
+      const t0 = performance.now();
+      const out = fn();
+      return [out, performance.now() - t0];
+    };
+
+    it("200k spaces before a quote on a no-file-tools cron: denied in < 500 ms", () => {
+      const command = `${R} platforms${" ".repeat(200_000)}'`;
+      const [verdict, ms] = timed(() => v(command, WITH));
+      expect(verdict).toBe("deny");
+      expect(ms).toBeLessThan(500);
+    });
+
+    it("the same padding on a cron WITHOUT the directive (the pre-existing quadratic in decide()) is linear too", () => {
+      const command = `gh issue list${" ".repeat(100_000)}'`;
+      const [verdict, ms] = timed(() => v(command, ["gh issue list"]));
+      expect(verdict).toBe("deny");
+      expect(ms).toBeLessThan(500);
+      const [verdict2, ms2] = timed(() => v(`gh issue list${" ".repeat(100_000)}x`, ["gh issue list"]));
+      expect(verdict2).toBe("allow");
+      expect(ms2).toBeLessThan(500);
+    });
+
+    it("spaceTabTokens (the trim under the length cap) is linear on a whitespace run of any length and keeps non-ASCII spaces as token text", async () => {
+      const { spaceTabTokens } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      const [toks, ms] = timed(() => spaceTabTokens(`a${" ".repeat(200_000)}'`));
+      expect(toks).toEqual(["a", "'"]);
+      expect(ms).toBeLessThan(300);
+      const [lead, ms2] = timed(() => spaceTabTokens(`${"\t ".repeat(100_000)}x${" ".repeat(100_000)}`));
+      expect(lead).toEqual(["x"]);
+      expect(ms2).toBeLessThan(300);
+      // NOT String.trim: U+00A0 is part of a token, so it reaches the charset check.
+      expect(spaceTabTokens(" \u00a0 ")).toEqual(["\u00a0"]);
+      expect(spaceTabTokens("")).toEqual([]);
+      expect(spaceTabTokens(" \t ")).toEqual([]);
+    });
+
+    it("splitSegments is linear on a long whitespace run with no separator", () => {
+      const [segs, ms] = timed(() => splitSegments(`a${" ".repeat(150_000)}b`));
+      expect(segs).toHaveLength(1);
+      expect(ms).toBeLessThan(300);
+    });
+
+    it("tab padding and a padded middle segment are equally cheap", () => {
+      const [verdict, ms] = timed(() => v(`${R} platforms;${"\t".repeat(100_000)}${R} platforms${" ".repeat(50_000)}'`, WITH));
+      expect(verdict).toBe("deny");
+      expect(ms).toBeLessThan(500);
+    });
+
+    it("a command over 8 KiB is denied by the length cap before any regex runs (even when it is otherwise a valid chain)", async () => {
+      const { MAX_NO_FILE_TOOLS_COMMAND_CHARS } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      expect(MAX_NO_FILE_TOOLS_COMMAND_CHARS).toBe(8192);
+      const chain = (n: number) => Array(n).fill(`${R} platforms`).join("; ");
+      let n = 1;
+      while (chain(n).length <= 8192) n++;
+      // `n` segments is the smallest chain over the cap; one fewer is under it and allowed.
+      expect(v(chain(n - 1), WITH)).toBe("allow");
+      const over = chain(n);
+      expect(over.length).toBeGreaterThan(8192);
+      const r = decide({ tool_name: "Bash", tool_input: { command: over } }, WITH).hookSpecificOutput as {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+      };
+      expect(r.permissionDecision).toBe("deny");
+      expect(r.permissionDecisionReason).toContain("too long");
+    });
+
+    it("every cron has a hard bound (a single exec argument cannot exceed 128 KiB), and just under it still decides", async () => {
+      const { MAX_BASH_COMMAND_CHARS } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      expect(MAX_BASH_COMMAND_CHARS).toBe(131072);
+      const r = decide(
+        { tool_name: "Bash", tool_input: { command: "gh issue list " + "x".repeat(MAX_BASH_COMMAND_CHARS) } },
+        ["gh issue list"],
+      ).hookSpecificOutput as { permissionDecision: string; permissionDecisionReason?: string };
+      expect(r.permissionDecision).toBe("deny");
+      expect(r.permissionDecisionReason).toContain("command too long");
+      const [ok, ms] = timed(() => v("gh issue list " + "x".repeat(MAX_BASH_COMMAND_CHARS - 20), ["gh issue list"]));
+      expect(ok).toBe("allow");
+      expect(ms).toBeLessThan(500);
+    });
+  });
+});

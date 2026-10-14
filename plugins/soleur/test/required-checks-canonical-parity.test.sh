@@ -359,7 +359,7 @@ for f in "${PARSER_FILES[@]}"; do
   # must not return in CODE. Filter full-line comments first — every parser file
   # (and this test) documents the old form in prose, which a bare grep would
   # false-match (the grep-over-own-comments trap).
-  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\$\{(line|rcline)%%#'; then
+  if grep -vE '^[[:space:]]*#' "$f" | grep -cE >/dev/null '\$\{(line|rcline)%%#'; then
     echo "  FAIL: (6) $base contains a truncating inline #-strip in code — re-introduces #6049"
     FAIL=$((FAIL + 1))
   else
@@ -429,8 +429,10 @@ preflight_line=$(grep -nE '^[[:space:]]*if ! python3 scripts/lint-credential-pat
 # `git push` rather than the far-downstream check-run POST catches a reorder that
 # pushes the bot branch BEFORE scanning it (test-design review of PR #6883). The
 # check-run POST anchor is retained below as an independent, weaker upper bound.
-sideeffect_line=$(grep -nE '^[[:space:]]*git push ' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
-postrun_line=$(grep -nE '^[[:space:]]*gh api "repos/\$\{REPO\}/check-runs"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+# Since #9454 (ADR-285) the push is `git_remote push ...` (the App token as a per-command header) and
+# the check-run POST is `gh_gate api ...` (the workflow token); the bare spellings stay accepted.
+sideeffect_line=$(grep -nE '^[[:space:]]*(git push |git_remote push )' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+postrun_line=$(grep -nE '^[[:space:]]*(gh|gh_gate) api "repos/\$\{REPO\}/check-runs"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
 
 if [[ -n "$preflight_line" ]]; then
   echo "  PASS: (8a) action.yml runs lint-credential-path-literals.py over \"\${PATHS[@]}\" (line $preflight_line)"

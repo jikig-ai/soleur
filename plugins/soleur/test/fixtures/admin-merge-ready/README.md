@@ -14,3 +14,8 @@ on 2026-09-22 and trimmed with `jq` to the fields the script reads.
 Every suite row is a `jq` edit of this base. To recapture, rerun both commands against a
 recently merged PR whose required contexts are all green, trim the same way, and update this file.
 The suite's H6 preconditions fail loudly if a recapture drops something a row relies on.
+
+The base is the PRE-adoption shape (CodeQL/57789 required, no `merge_queue` rule), captured before #9454.
+Rows R36/R37 DERIVE the post-adoption shape from it with `jq` (drop the `CodeQL` required context, append a
+synthesized `merge_queue` rule) instead of recapturing, which is impossible before the apply. Recapture the
+base after the apply if you want it to match the live rules exactly.

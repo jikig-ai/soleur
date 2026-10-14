@@ -1,0 +1,21 @@
+# S3: the lines the codemod routes to its hand queue as data or X that are converted by the same one-token transform, read in context in the plan.
+# Base-side (origin/main d0b5d2e35b (identical to fd1c4d5cac for these files)) path:line:kind. Kinds: stub-heredoc (quoted heredoc written to a stub that is executed), eval-string (assertion string run by eval or bash -c), stub-body (argument of a stub() helper written to an executed script), x-false-positive (producer screen refused the line because the word sleep sits inside the quoted pattern; the producer is printf).
+# verify counts these as verified (plain transform); it cannot tell code from data, so this list plus the plan's table is the classification evidence.
+scripts/followthroughs/concierge-strand-754ee124-5733.test.sh:59:stub-heredoc
+scripts/lib/trusted-verdict.test.sh:57:stub-heredoc
+scripts/lib/trusted-verdict.test.sh:58:stub-heredoc
+scripts/watch-live-verify-pass.test.sh:34:stub-heredoc
+scripts/watch-live-verify-pass.test.sh:35:stub-heredoc
+scripts/watch-live-verify-pass.test.sh:38:stub-heredoc
+scripts/watch-live-verify-pass.test.sh:39:stub-heredoc
+scripts/pre-push-ratchet-lane.test.sh:578:stub-body
+scripts/followthroughs/web2-luks-live-6931.test.sh:135:eval-string
+scripts/followthroughs/web2-luks-live-6931.test.sh:255:eval-string
+scripts/followthroughs/web2-luks-live-6931.test.sh:258:eval-string
+scripts/web2-rebirth-recovery-check.test.sh:119:eval-string
+scripts/web2-rebirth-recovery-check.test.sh:122:eval-string
+scripts/web2-rebirth-recovery-check.test.sh:123:eval-string
+scripts/web2-rebirth-recovery-check.test.sh:171:eval-string
+scripts/web2-rebirth-recovery-check.test.sh:173:eval-string
+scripts/web2-rebirth-recovery-check.test.sh:174:eval-string
+scripts/test-all-orphan-log-retention.test.sh:82:x-false-positive

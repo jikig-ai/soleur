@@ -33,7 +33,7 @@ cq-when-running-terraform-commands-locally | 2026-04-23 | #2865 | env-var errors
 wg-use-ship-to-automate-the-full-commit | 2026-04-23 | #2865 | /ship skill is documented in skill list; enforcement surfaces on invocation
 
 # Pointer deletes (hook/skill always-invoked in relevant context; full rule preserved in enforcement file):
-cq-after-completing-a-playwright-task-call | 2026-04-23 | #2865 | plugins/soleur/hooks/browser-cleanup-hook.sh
+cq-after-completing-a-playwright-task-call | 2026-04-23 | #2865 | retired (Stop hook removed 2026-10-04, ADR-271); agents still call browser_close when the flow ends (see plugins/soleur/skills/agent-browser/SKILL.md)
 cq-before-calling-mcp-pencil-open-document | 2026-04-23 | #2865 | .claude/hooks/pencil-open-guard.sh
 wg-when-a-research-sprint-produces | 2026-04-23 | #2865 | plugins/soleur/skills/work/SKILL.md#phase-25
 cq-never-skip-hooks | 2026-04-23 | #2865 | .claude/hooks/lib/incidents.sh detect_bypass() — blocks --no-verify on git commands

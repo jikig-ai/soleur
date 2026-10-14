@@ -34,6 +34,9 @@ fi
 if [ "$REGENERATE" = "1" ]; then
   echo "regenerating manifest SHAs..." >&2
   tmp_manifest="$(mktemp)"
+  # Owning trap (ADR-129): mv consumes the file on success (rm -f then no-ops);
+  # the trap covers the awk/mv failure window.
+  trap 'rm -f "$tmp_manifest"' EXIT
   awk -v skill_dir="$SKILL_DIR/references" '
     /^[[:space:]]*-[[:space:]]*path:/ {
       path = $0
