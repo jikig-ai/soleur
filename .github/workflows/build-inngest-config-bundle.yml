@@ -134,9 +134,10 @@ jobs:
       # script degrades loudly instead; one branch keeps the warning, the summary line and the
       # outputs together. mirror_status / mirror_reason have no reader in this workflow today.
       # The bridge keeps its own continue-on-error, since an `if:` without a status function gets an
-      # implicit success(). INTERIM CONTRACT: the host-side consumer of this bundle is not live yet
-      # (HARD-11), so a missing zot copy cannot hurt a host and exit 0 is right. When that consumer
-      # reads zot only (ADR-096 amendments), this step must stop being soft, as in reusable-release.yml.
+      # implicit success().
+      # SOLEUR-DEBT: exit 0 while no host consumer reads this bundle (HARD-11, runbook inngest-config-refresh); go
+      # blocking like reusable-release.yml once the consumer reads zot only, and reconcile ADR-135 (still says
+      # GHCR-direct) with ADR-096's AP-016 lapse (no host holds a GHCR credential). Tracked in the issue filed at ship.
       # Guard: plugins/soleur/test/inngest-config-bundle-mirror.test.sh.
       - name: Mirror bundle GHCR->zot (crane, digest-preserving)
         id: zot_mirror
@@ -153,7 +154,7 @@ jobs:
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
             echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
             echo "::warning::zot mirror degraded for ${ZOT_DST} (reason=${reason} rc=${rc} ${detail}). The GHCR bundle publish is unaffected; this run did not confirm a zot copy, and no automated backfill exists."
-            echo "- zot mirror degraded (reason=${reason} rc=${rc}); the GHCR bundle is published" >> "$GITHUB_STEP_SUMMARY"
+            echo "- zot mirror degraded (reason=${reason} rc=${rc}); this run's GHCR push succeeded before the mirror attempt" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           }
           if [[ "${BRIDGE_OUTCOME:-}" != "success" ]]; then
@@ -164,7 +165,8 @@ jobs:
           # Install crane (SHA-pinned; supply-chain discipline, matches reusable-release.yml).
           CRANE_VERSION="v0.20.2"
           CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
-          CRANE_TGZ="${RUNNER_TEMP:-/tmp}/crane.tgz"
+          CRANE_TGZ="${RUNNER_TEMP:-$(mktemp -d)}/crane.tgz"
+          trap 'rm -f "$CRANE_TGZ"' EXIT
           # One simple command per stage, each routed with || degraded: a checksum mismatch (a
           # supply-chain signal) gets its own reason instead of reading as a network blip, and
           # sha256sum's stderr stays unredirected so the mismatch is in the step log.
@@ -172,10 +174,9 @@ jobs:
             "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
             || degraded crane_download "$?" "crane fetch failed on the runner"
           echo "${CRANE_SHA256}  ${CRANE_TGZ}" | sha256sum -c - \
-            || { rc=$?; rm -f "$CRANE_TGZ"; degraded crane_checksum "$rc" "crane checksum mismatch or sha256sum failure; the archive was not extracted"; }
+            || { rc=$?; degraded crane_checksum "$rc" "crane checksum mismatch or sha256sum failure; the archive was not extracted"; }
           sudo tar -xzf "$CRANE_TGZ" -C /usr/local/bin crane \
             || degraded crane_extract "$?" "crane extract failed on the runner"
-          rm -f "$CRANE_TGZ"
           # crane copy of a tag is expected to keep the digest, so the pointer's @sha256 would resolve on
           # both registries; this step does not verify that (DIGEST is plumbed but unused today).
           retry crane copy "${IMAGE}:v${VERSION}" "${ZOT_DST}" || degraded copy "$?" "crane copy failed after 3 attempts"

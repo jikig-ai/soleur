@@ -60,6 +60,16 @@ if [[ "$_st" != "11" ]]; then
 fi
 
 [[ -f "$WF" ]] || { echo "FATAL: workflow not found at $WF" >&2; exit 2; }
+# The crane pin the stubs enforce comes from a SECOND, independent file: a stub that read the pin from the
+# workflow under test would agree with whatever that workflow says.
+RR="$REPO_ROOT/.github/workflows/reusable-release.yml"
+PIN_VERSION=$(sed -n 's/^ *CRANE_VERSION="\(v[0-9.]*\)"$/\1/p' "$RR" 2>/dev/null) || PIN_VERSION=""
+PIN_SHA=$(sed -n 's/^ *CRANE_SHA256="\([0-9a-f]\{64\}\)"$/\1/p' "$RR" 2>/dev/null) || PIN_SHA=""
+if [[ -z "$PIN_VERSION" || -z "$PIN_SHA" || "$PIN_VERSION" == *$'\n'* || "$PIN_SHA" == *$'\n'* ]]; then
+  echo "FATAL: could not read exactly one CRANE_VERSION and CRANE_SHA256 from $RR" >&2
+  exit 2
+fi
+EXPECT_URL="https://github.com/google/go-containerregistry/releases/download/${PIN_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
 python3 -I -c 'import yaml' 2>/dev/null || { echo "FATAL: python3 pyyaml unavailable (isolated mode)" >&2; exit 2; }
 
 # ---------------------------------------------------------------------------
@@ -74,7 +84,7 @@ import yaml
 wf, name, body_out = sys.argv[1:4]
 doc = yaml.safe_load(open(wf))
 jobs = doc["jobs"]
-LEAK = re.compile(r"steps\s*(\.|\[\s*['\"])\s*zot_bridge", re.I)
+LEAK = re.compile(r"steps\s*(\.|\[\s*['\"])\s*zot_bridge|tojson\(\s*steps\s*\)", re.I)
 GATE = "steps.docker_build.outcome == 'success'"
 BRIDGE_USES = "./.github/actions/cf-tunnel-registry-bridge"
 
@@ -129,11 +139,11 @@ mkdir -p "$STUBS"
 cat > "$STUBS/curl" <<'STUB'
 #!/usr/bin/env bash
 echo "curl $*" >> "$STUB_LOG"
-if [[ "$#" -ne 4 || "$1" != "-fsSL" || "$2" != "-o" || "$3" != "$RUNNER_TEMP"/* \
-  || "$4" != "https://github.com/google/go-containerregistry/releases/download/"* ]]; then
+if [[ "$#" -ne 4 || "$1" != "-fsSL" || "$2" != "-o" || "$3" != "$RUNNER_TEMP/crane.tgz" || "$4" != "$EXPECT_URL" ]]; then
   echo "REFUSE curl $*" >> "$STUB_LOG"
   exit 64
 fi
+[[ "${STUB_CURL_RC:-0}" == "0" ]] && : > "$3"
 exit "${STUB_CURL_RC:-0}"
 STUB
 cat > "$STUBS/sha256sum" <<'STUB'
@@ -141,7 +151,7 @@ cat > "$STUBS/sha256sum" <<'STUB'
 line=""
 [ -t 0 ] || line=$(cat)
 echo "sha256sum $* <<< $line" >> "$STUB_LOG"
-if [[ "$#" -ne 2 || "$1" != "-c" || "$2" != "-" || ! "$line" =~ ^[0-9a-f]{64}\ \ "$RUNNER_TEMP"/crane\.tgz$ ]]; then
+if [[ "$#" -ne 2 || "$1" != "-c" || "$2" != "-" || "$line" != "$PIN_SHA  $RUNNER_TEMP/crane.tgz" || ! -f "$RUNNER_TEMP/crane.tgz" ]]; then
   echo "REFUSE sha256sum $*" >> "$STUB_LOG"
   exit 64
 fi
@@ -151,7 +161,7 @@ cat > "$STUBS/sudo" <<'STUB'
 #!/usr/bin/env bash
 echo "sudo $*" >> "$STUB_LOG"
 if [[ "$#" -ne 6 || "$1" != "tar" || "$2" != "-xzf" || "$3" != "$RUNNER_TEMP/crane.tgz" \
-  || "$4" != "-C" || "$5" != "/usr/local/bin" || "$6" != "crane" ]]; then
+  || "$4" != "-C" || "$5" != "/usr/local/bin" || "$6" != "crane" || ! -f "$RUNNER_TEMP/crane.tgz" ]]; then
   echo "REFUSE sudo $*" >> "$STUB_LOG"
   exit 64
 fi
@@ -159,6 +169,7 @@ exit "${STUB_SUDO_RC:-0}"
 STUB
 cat > "$STUBS/sleep" <<'STUB'
 #!/usr/bin/env bash
+echo "sleep $*" >> "$STUB_LOG"
 exit 0
 STUB
 cat > "$STUBS/crane" <<'STUB'
@@ -178,8 +189,9 @@ STUB
 chmod +x "$STUBS"/*
 
 REAL_PATH="$PATH"
-# Hermeticity: every external the body calls must resolve inside the stub directory, or a
-# stub-path mistake would run a real download or a real sudo.
+# Hermeticity: every network or privileged external the body calls must resolve inside the stub directory,
+# or a stub-path mistake would run a real download or a real sudo (rm and echo run for real, scoped by
+# RUNNER_TEMP to the arm directory).
 for _c in curl sha256sum sudo crane sleep; do
   _r=$(PATH="$STUBS:$REAL_PATH" command -v "$_c" 2>/dev/null) || _r=""
   if [[ "$_r" != "$STUBS/$_c" ]]; then
@@ -209,7 +221,7 @@ run_arm() {
   (
     env "${benv[@]}" "$@" IMAGE="ghcr.io/jikig-ai/soleur-inngest-config" VERSION="7" DIGEST="sha256:abc123" \
       GITHUB_OUTPUT="$d/gho" GITHUB_STEP_SUMMARY="$d/sum" STUB_LOG="$d/log" STUB_COPY_COUNT="$d/copycount" \
-      RUNNER_TEMP="$d" PATH="$STUBS:$REAL_PATH" \
+      RUNNER_TEMP="$d" PIN_SHA="$PIN_SHA" EXPECT_URL="$EXPECT_URL" PATH="$STUBS:$REAL_PATH" \
       bash --noprofile --norc -eo pipefail -c 'source "$1"; echo SENTINEL_REACHED' _ "$BODY_FILE" > "$d/stdout" 2>&1
   ) || rc=$?
   echo "$rc" > "$d/rc"
@@ -263,17 +275,19 @@ degraded_ok() { # <dir> <label> <reason> <rc> <expected-crane-copies> <expected-
   [[ "$(count_eq "mirror_reason=$r" "$a/gho")" == "1" ]] || ok=0
   [[ "$(count_eq "mirror_status=ok" "$a/gho")" == "0" ]] || ok=0
   [[ "$(count_pfx "$head" "$a/stdout")" == "1" ]] || ok=0
-  [[ "$(count_pfx "::warning::" "$a/stdout")" == "1" ]] || ok=0
+  [[ "$(count_pfx "::" "$a/stdout")" == "1" ]] || ok=0
+  [[ ! -e "$a/crane.tgz" ]] || ok=0
   [[ "$(count_pfx "- zot mirror degraded (reason=$r rc=$rc)" "$a/sum")" == "1" ]] || ok=0
   [[ "$(count_eq "SENTINEL_REACHED" "$a/stdout")" == "0" ]] || ok=0
   [[ "$(copies "$a")" == "$n" ]] || ok=0
   [[ "$(count_has "REFUSE" "$a/log")" == "0" ]] || ok=0
   if [[ "$calls" == "none" ]]; then [[ ! -s "$a/log" ]] || ok=0; fi
-  chk "$ok" "$l: exit 0, one anchored warning and summary line, reason=$r rc=$rc, $n crane copies, no stub refused, shell left via exit"
+  chk "$ok" "$l: exit 0, one anchored warning and summary line, archive removed, reason=$r rc=$rc, $n crane copies, no stub refused, shell left via exit"
 }
 
-# evaluate <workflow-file> <out-dir> <step-name> [struct] -> writes <out-dir>/verdicts
-# The optional 4th argument stops after the structural leg (mutants that only edit structure).
+# evaluate <workflow-file> <out-dir> <step-name> [struct|ok|failure|copyfail] -> writes <out-dir>/verdicts
+# The optional 4th argument narrows the run: `struct` stops after the structural leg (mutants that only
+# edit structure); an arm name runs only that behavioural arm (mutants named for that arm's checks).
 evaluate() {
   local wf="$1" out="$2" name="$3" mode="${4:-full}"
   mkdir -p "$out"
@@ -297,7 +311,9 @@ evaluate() {
     return 0
   fi
   local d="$out/arm" ok
+  want() { [[ "$mode" == "full" || "$mode" == "$1" ]]; }
 
+  if want ok; then
   run_arm "$d/ok" success
   ok=1
   [[ "$(cat "$d/ok/rc")" == "0" ]] || ok=0
@@ -305,11 +321,16 @@ evaluate() {
   [[ "$(count_has "mirror_status=degraded" "$d/ok/gho")" == "0" ]] || ok=0
   [[ "$(count_has "mirror_reason" "$d/ok/gho")" == "0" ]] || ok=0
   [[ ! -s "$d/ok/sum" ]] || ok=0
-  [[ "$(count_has "::warning::" "$d/ok/stdout")" == "0" ]] || ok=0
+  [[ "$(count_pfx "::" "$d/ok/stdout")" == "0" ]] || ok=0
   [[ "$(copies "$d/ok")" == "1" ]] || ok=0
   [[ "$(count_eq "crane copy $EXPECT_SRC $EXPECT_DST" "$d/ok/log")" == "1" ]] || ok=0
-  [[ "$(count_has "REFUSE" "$d/ok/log")" == "0" ]] || ok=0
-  chk "$ok" "bridge success: only mirror_status=ok, no warning or summary line, one crane copy of the expected source and destination, no stub refused"
+  chk "$ok" "bridge success: only mirror_status=ok, no workflow command or summary line, one crane copy of the expected source and destination"
+  chk "$([[ "$(count_has "REFUSE" "$d/ok/log")" == "0" ]] && echo 1 || echo 0)" \
+    "stub contracts: no stub refused its argv or pinned-value contract (bridge success)"
+  chk "$([[ ! -e "$d/ok/crane.tgz" ]] && echo 1 || echo 0)" "archive removed after the step (bridge success)"
+  fi
+
+  if want failure; then
 
   run_arm "$d/failure" failure
   degraded_ok "$d/failure" "bridge failure" bridge_down n/a 0 none
@@ -318,17 +339,23 @@ evaluate() {
     run_arm "$d/b-$b" "$b"
     degraded_ok "$d/b-$b" "bridge '$b'" bridge_down n/a 0 none
   done
+  fi
 
+  if want copyfail; then
   run_arm "$d/copyfail" success STUB_CRANE_COPY_FAIL_N=99 STUB_CRANE_COPY_RC=42
   degraded_ok "$d/copyfail" "crane copy failing every time" copy 42 3 any
+  chk "$([[ "$(count_eq "sleep 3" "$d/copyfail/log")" == "1" && "$(count_eq "sleep 6" "$d/copyfail/log")" == "1" ]] && echo 1 || echo 0)" \
+    "crane copy failing every time: backoff sleeps 3 then 6 between the three attempts"
+  fi
 
+  if [[ "$mode" != "full" ]]; then return 0; fi
   run_arm "$d/copyflaky" success STUB_CRANE_COPY_FAIL_N=2
   ok=1
   [[ "$(cat "$d/copyflaky/rc")" == "0" ]] || ok=0
   [[ "$(count_eq "mirror_status=ok" "$d/copyflaky/gho")" == "1" ]] || ok=0
   [[ "$(count_has "mirror_reason" "$d/copyflaky/gho")" == "0" ]] || ok=0
   [[ ! -s "$d/copyflaky/sum" ]] || ok=0
-  [[ "$(count_has "::warning::" "$d/copyflaky/stdout")" == "0" ]] || ok=0
+  [[ "$(count_pfx "::" "$d/copyflaky/stdout")" == "0" ]] || ok=0
   [[ "$(copies "$d/copyflaky")" == "3" ]] || ok=0
   chk "$ok" "crane copy failing twice then succeeding: mirror_status=ok after 3 attempts, no warning or summary line"
 
@@ -419,6 +446,20 @@ elif name == "curl-flag-dropped":
     s = must_sub(r"curl -fsSL -o", "curl -sSL -o", s)
 elif name == "extract-dir-moved":
     s = must_sub(r"-C /usr/local/bin crane", "-C /tmp crane", s)
+elif name == "crane-sha-changed":
+    s = must_sub(r'(CRANE_SHA256=")c', r"\g<1>d", s)
+elif name == "crane-version-changed":
+    s = must_sub(r'CRANE_VERSION="v0\.20\.2"', 'CRANE_VERSION="v0.20.3"', s)
+elif name == "crane-arch-changed":
+    s = must_sub(r"Linux_x86_64", "Linux_arm64", s)
+elif name == "download-path-decoupled":
+    s = must_sub(r'curl -fsSL -o "\$CRANE_TGZ"', 'curl -fsSL -o "$RUNNER_TEMP/other.tgz"', s)
+elif name == "backoff-removed":
+    s = must_sub(r"sleep \$\(\(n \* 3\)\)", "true", s)
+elif name == "retry-returns-1":
+    s = must_sub(r'return "\$rc"; sleep', "return 1; sleep", s)
+elif name == "drop-cleanup":
+    s = must_sub(r"          trap 'rm -f \"\$CRANE_TGZ\"' EXIT\n", "", s)
 elif name == "variant-no-if":
     s = must_sub(r"(id: zot_mirror\n)\s+if: [^\n]*\n", r"\1", s)
 elif name == "variant-reworded":
@@ -443,6 +484,9 @@ printf 'OK\tx\nBAD\tthe y check\n' > "$TMP/v-bad"
 [[ "$(bad_count "$TMP/v-empty")" != "0" ]] && pass "bad_count: an empty verdict file is bad, never clean" || fail "bad_count: an empty verdict file read as clean"
 if bad_has "$TMP/v-bad" "the y check"; then pass "bad_has: finds the named BAD label"; else fail "bad_has: missed a present label"; fi
 if bad_has "$TMP/v-bad" "no such label"; then fail "bad_has: matched an absent label"; else pass "bad_has: rejects an absent label"; fi
+if bad_has "$TMP/v-bad" "x"; then fail "bad_has: matched a label that only an OK line carries"; else pass "bad_has: ignores OK lines"; fi
+printf 'prefix ::warning::mid-line\n::warning::at start\n' > "$TMP/v-pfx"
+[[ "$(count_pfx "::" "$TMP/v-pfx")" == "1" ]] && pass "count_pfx: only a line-start workflow command counts" || fail "count_pfx: counted a mid-line occurrence"
 
 # ---------------------------------------------------------------------------
 # Canonical evaluation
@@ -467,8 +511,7 @@ if [[ "$CANON_RED" -ne 0 ]]; then
   echo "  battery skipped: the canonical workflow is itself RED, so mutant verdicts would be meaningless"
 else
   ROWS=(
-    "regate-on-bridge|struct|mirror step gate"
-    "regate-on-bridge|struct|reads steps.zot_bridge"
+    "regate-on-bridge|struct|mirror step gate;reads steps.zot_bridge"
     "bridge-loses-continue-on-error|struct|bridge-action step"
     "second-gated-step|struct|reads steps.zot_bridge"
     "second-gated-step-bracket|struct|reads steps.zot_bridge"
@@ -478,16 +521,23 @@ else
     "hard-step-between|struct|between docker_build"
     "rename-docker-build-id|struct|share the mirror's job"
     "shell-sh|struct|shell is absent or bash"
-    "delete-bridge-branch|full|bridge failure"
-    "degraded-returns|full|bridge failure"
-    "degraded-exit-1|full|bridge failure"
-    "drop-copy-route|full|crane copy failing every time"
-    "rc-lost|full|crane copy failing every time"
-    "install-before-branch|full|bridge failure"
-    "ok-publishes-degraded|full|bridge success"
-    "checksum-flag-dropped|full|bridge success"
-    "curl-flag-dropped|full|bridge success"
-    "extract-dir-moved|full|bridge success"
+    "delete-bridge-branch|failure|bridge failure"
+    "degraded-returns|failure|bridge failure"
+    "degraded-exit-1|failure|bridge failure"
+    "install-before-branch|failure|bridge failure"
+    "drop-copy-route|copyfail|crane copy failing every time"
+    "rc-lost|copyfail|crane copy failing every time"
+    "retry-returns-1|copyfail|crane copy failing every time"
+    "backoff-removed|copyfail|backoff sleeps"
+    "ok-publishes-degraded|ok|bridge success"
+    "checksum-flag-dropped|ok|stub contracts"
+    "curl-flag-dropped|ok|stub contracts"
+    "extract-dir-moved|ok|stub contracts"
+    "crane-sha-changed|ok|stub contracts"
+    "crane-version-changed|ok|stub contracts"
+    "crane-arch-changed|ok|stub contracts"
+    "download-path-decoupled|ok|stub contracts"
+    "drop-cleanup|ok|archive removed"
   )
   for row in "${ROWS[@]}"; do
     IFS='|' read -r m kind expect <<< "$row"
@@ -502,14 +552,15 @@ else
       fail "mutation $m produced a copy identical to canonical"
       continue
     fi
-    mode=full
-    [[ "$kind" == "struct" ]] && mode=struct
-    evaluate "$mwf" "$TMP/mut-$m.out" "$STEP_NAME" "$mode"
-    if bad_has "$TMP/mut-$m.out/verdicts" "$expect"; then
-      pass "mutation $m fails the check named '$expect'"
-    else
-      fail "mutation $m SURVIVED the check named '$expect' (bad lines: $(bad_count "$TMP/mut-$m.out/verdicts"))"
-    fi
+    evaluate "$mwf" "$TMP/mut-$m.out" "$STEP_NAME" "$kind"
+    IFS=';' read -ra labels <<< "$expect"
+    for label in "${labels[@]}"; do
+      if bad_has "$TMP/mut-$m.out/verdicts" "$label"; then
+        pass "mutation $m fails the check named '$label'"
+      else
+        fail "mutation $m SURVIVED the check named '$label' (bad lines: $(bad_count "$TMP/mut-$m.out/verdicts"))"
+      fi
+    done
   done
 
   # Harness row: a wrong step name must fail on the empty extraction, never pass with zero arms.
@@ -541,7 +592,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=51
+MIN_ASSERTIONS=63
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1
