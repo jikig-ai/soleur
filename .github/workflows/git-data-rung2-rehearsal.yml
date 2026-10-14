@@ -61,6 +61,7 @@ permissions:
 env:
   TERRAFORM_VERSION: "1.10.5"
   REHEARSAL_DIR: apps/web-platform/infra/rung2-rehearsal
+  TF_VAR_rehearsal_attach_delay_s: "150"
   # The trailing hyphen is LOAD-BEARING: `soleur-git-data` is a PREFIX of
   # `soleur-git-data-rehearsal-…`, so a prefix match written without it would also match the
   # PRODUCTION host. The same literal is pinned in the orphan sweep in

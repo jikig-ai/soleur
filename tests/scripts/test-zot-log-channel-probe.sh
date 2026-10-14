@@ -678,15 +678,24 @@ assert "S7 boot_id absent from every stamped row -> exit 3 (no boot can be deriv
 # S6: THE VACUITY GUARD. A pass that emits nothing (or non-integers) must exit 3 — a failed awk
 # reading as 'zero rows everywhere' would post verdicts on a measurement that never happened.
 FAKEBIN="$TMP/fakebin"; mkdir -p "$FAKEBIN"
-printf '#!/bin/sh\nexit 1\n' > "$FAKEBIN/awk"; chmod +x "$FAKEBIN/awk"
+# Both fake awks read their stdin FIRST (the probe pipes `sort` into awk under pipefail, so a stub that exits unread lets the writer take
+# SIGPIPE, #9217); the first keeps the bytes for the wire assert below.
+printf '#!/bin/sh\n[ -t 0 ] || timeout 2 cat > "$0.stdin"\nexit 1\n' > "$FAKEBIN/awk"; chmod +x "$FAKEBIN/awk"
 run_probe "$S1_LOG" "$S1_CTL" PATH="$FAKEBIN:/usr/bin:/bin"
 assert "S6 an awk that produces NO summary -> exit 3, not a vacuous clean" \
   "[[ '$CASE_RC' -eq 3 ]] && grep -q 'grading pass produced no usable summary' <<<\"$CASE_OUT\""
-printf '#!/bin/sh\necho not-a-summary\n' > "$FAKEBIN/awk"; chmod +x "$FAKEBIN/awk"
+# Wire assert (#9217): the stub received every row the pass pipes (the log rows and the control rows, one line each). ${KNOB:-default}: an
+# exported-empty knob must not compare "" with "".
+# The value is interpolated into a condition assert() runs through eval, so an override that is not a bare integer falls back to the computed default.
+_awk_want="${S6_AWK_STDIN_LINES:-}"
+[[ "$_awk_want" =~ ^[0-9]+$ ]] || _awk_want="$(( $(grep -c . "$S1_LOG") + $(grep -c . "$S1_CTL") ))"
+assert "S6 the fake awk received the rows the grading pass pipes into it" \
+  "[[ \"\$(grep -c . '$FAKEBIN/awk.stdin' 2>/dev/null)\" == '$_awk_want' && '$_awk_want' -gt 0 ]]"
+printf '#!/bin/sh\n[ -t 0 ] || timeout 2 cat >/dev/null\necho not-a-summary\n' > "$FAKEBIN/awk"; chmod +x "$FAKEBIN/awk"
 run_probe "$S1_LOG" "$S1_CTL" PATH="$FAKEBIN:/usr/bin:/bin"
 assert "S6 an awk that produces a non-integer summary -> exit 3" \
   "[[ '$CASE_RC' -eq 3 ]] && grep -q 'grading pass produced no usable summary' <<<\"$CASE_OUT\""
-rm -f "$FAKEBIN/awk"
+rm -f "$FAKEBIN/awk" "$FAKEBIN/awk.stdin"
 
 # S8: THE MARKER TIGHTENS THE BOUNDARY to ~provision time. With control rows on the boot at
 # 10:00 only, the boundary without a marker is 10:00 — a row in the (provision, first-heartbeat)

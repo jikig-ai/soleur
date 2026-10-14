@@ -1,0 +1,15 @@
+# ext-filter divergence corpus — one READ-ONLY deterministic offline command per line
+# (see ext-filter-divergence.sh header for the corpus rules: >3 lines of output so the
+# head -3 control can diverge, no network/auth). Each line exercises several literal
+# classes at once; the control arm must lose them, the rtk arm must not.
+git grep -n "wrap_skip\|fold_name\|decide_walk" -- plugins/soleur/hooks/destructive-command-guard.sh | head -8
+git log --oneline -6
+printf ' M plugins/soleur/hooks/hooks.json\n?? plugins/soleur/hooks/ext-filter-detect.sh\n M .claude/hooks/pkill-self-match-guard.sh\n?? plugins/soleur/scripts/ext-filter-divergence.sh\n M plugins/soleur/scripts/lib/proc.sh\n'
+printf 'src/hooks/destructive-command-guard.sh:1180 asks\nsrc/hooks/pkill-self-match-guard.sh:224 matches\nplugins/soleur/hooks/ext-filter-detect.sh:1 emits\nlib/proc.sh:75 wraps\nlib/guardrails.sh:143 anchors\n'
+printf 'abc1234 merged fix\nPR #10248 tracks the deferral\ncommit 9f8e7d6c5b4a3\nsee #5175 for context\nreviewed in #10227\n'
+printf 'SOLEUR_EXT_FILTER tool=rtk\nSOLEUR_GIT_REPO_READY=true\nSOLEUR_COMPACTION_SKIPPED reason=startup\nSOLEUR_DISABLE_EXT_FILTER_DETECT=1\nSOLEUR_HOOK_TRACE=file\n'
+printf 'eval-gate:block on recursive-delete-home\neval-gate:pass on porcelain check\neval-gate:ask on unparsed-wrapper\neval-gate:block second sample\neval-gate:pass final\n'
+printf 'rule anchors: [id: recursive-delete-home] denies\n[id: unparsed-wrapper] asks\n[id: guard-degraded-jq-missing] degraded\n[id: wrapper-depth] caps\n[id: default-branch-force-push] asks\n'
+printf '{"title":"x","number":10230,"state":"OPEN","labels":["external-env"],"body":"b","url":"u"}\n{"title":"y","number":10231,"state":"OPEN","labels":[],"body":"c","url":"v"}\n{"title":"z","number":10227,"state":"DRAFT","labels":[],"body":"d","url":"w"}\n{"title":"q","number":1,"state":"CLOSED","labels":[],"body":"e","url":"x"}\n'
+printf 'killed=0 would_signal=9 failed=0 refused=5\nlate_refused=0 skipped_same_pgroup=1 scanned=20\nmode=dry-run passes=64 fails=0\nselected=40 union=100\n'
+printf 'plugins/soleur/hooks/hooks.json:82 matcher\nplugins/soleur/hooks/ext-filter-detect.sh:38 kill-switch\nplugins/soleur/hooks/version-banner.sh:19 xtrace\nplugins/soleur/hooks/compaction-state.sh:129 bounded\nplugins/soleur/hooks/destructive-command-guard.sh:5 kill-switch\n'

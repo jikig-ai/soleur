@@ -29,3 +29,12 @@ None. (Non-blocking notes: the `soleur:deepen-plan` Post-Enhancement AskUserQues
 - Panel re-ran at full coverage after the rate-limit reset: 8/8 seats. Findings: P1×2 (fixture non-replayable — unprepped subpath bind sources + literal tmpfs target; fixture stale vs #9599 `--unsetenv`), P2×2 (no structural invariant test; doCapture JSDoc), P3×~10 (stale enumerations, test vocab drift, traversal, mount-order coverage).
 - Fixes: commits 7563b6aa, aec5907e (synced main + in-image re-capture: --unsetenv names only), 288a4291, 6d1a490f.
 - Fix-round seats 7/7: 0 P1 / 0 P2. data-integrity empirically replayed the new fixture under real bwrap 0.12.0 — exit 0. In-image --verify: verify_ok (twice).
+
+## SHIPPED — 2026-10-07T11:52Z
+- PR #9636 merged via merge queue (`8b43d09caa`). #9614 + #9618 closed COMPLETED.
+- Final tree: fixture sdkVersion 0.3.284, 112 argv tokens, 7 prepDirs (placeholder roots + subpath bind sources + literal mount targets).
+- `sandbox-canary-capture-gate` green on the merge ref — the blocking ack (`sdk-bump-verified:`) is no longer required for capture-input PRs.
+- Real-bwrap replay verified empirically (data-integrity seat, bwrap 0.12.0: full 112-token argv exits 0).
+- Review: full 8-seat panel + 7-seat fix round; 0 P1/P2 remaining. Trailer superseded to `full 8/8 agents`.
+- Local battery: contention-artifact failure only (test-all-infra-coverage-notice arm timed out on the shared lock; identical file passed 211/211 in the CI shard in 157s).
+- Merge-queue note: first queue entry ejected after ~53 min without a group ref; re-enqueue merged cleanly.

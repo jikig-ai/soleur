@@ -31,7 +31,10 @@
 # named scripts, not two; the ten relevance-gated registrations are outside the population; a suite
 # whose argv names neither a code file nor a directory (`python3 -m unittest`) reads nothing here;
 # the directory form scans only `*.test.*` / `*.spec.*` files (the files a runner executes), not
-# every script below the directory. The baseline records the gaps the oracle DOES see.
+# every script below the directory. A dir-ref `^glob:` edge covers only when every TRACKED member
+# beneath the dir matches the minted glob (#10117) — an UNTRACKED non-conforming member under a
+# covered dir is a transient window that closes at `git add` (index-defined census, CI-immune). The
+# baseline records the gaps the oracle DOES see.
 #
 # BASELINE. Uncovered references the oracle sees are recorded in
 # scripts/test-affected-kb-consumers.baseline.txt (no header line; it is plain TSV). An `argv-code` row is
@@ -48,8 +51,10 @@
 # MUTATIONS. The oracle is itself guarded: rows below drive it with a covering edge removed, an
 # empty enumeration, a second non-compliant member after a compliant first, a fixture-only
 # suite that must NOT be flagged, a real read that merely shares its line with the word "fixture"
-# (which MUST be flagged), a `..` spelling that must not name the knowledge-base root, and a
-# sibling-prefix edge (`^knowledge-base/legal/` does not cover `knowledge-base/legal-x/f`).
+# (which MUST be flagged), a `..` spelling that must not name the knowledge-base root, a
+# sibling-prefix edge (`^knowledge-base/legal/` does not cover `knowledge-base/legal-x/f`), and the
+# k6 dir-ref arm (nest-revert, all->any, empty-guard, boundary-slash, direct-children, and dispatch
+# mutants — the last two on a scratch repo since the live index can't fixture them).
 #
 # AUTHORING (work/SKILL.md): never `producer | grep -q` under pipefail; capture rc on its own
 # line; `cases` is incremented at the call site.
@@ -149,14 +154,13 @@ DECLARATION_FILES = ("scripts/lib/test-affected-paths.sh", "scripts/lib/test-rel
 _TRACKED = None
 
 
-def tracked(p):
-    """A path counts as existing only when git TRACKS it (a file, or a directory with a tracked file
-    below it): the baseline must not depend on a generated, gitignored file such as
-    knowledge-base/INDEX.md that one checkout has and a fresh CI checkout does not."""
+def _tracked():
+    """Populate _TRACKED once and return the (files, dirs) pair."""
     global _TRACKED
     if _TRACKED is None:
         import subprocess
-        out = subprocess.run(["git", "ls-files", "-z", "--", "knowledge-base"], capture_output=True).stdout
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        out = subprocess.run(["git", "ls-files", "-z", "--", "knowledge-base"], capture_output=True, env=env).stdout
         files = [f for f in out.decode("utf-8", "replace").split("\0") if f]
         dirs = set()
         for f in files:
@@ -165,7 +169,14 @@ def tracked(p):
                 d = d.rsplit("/", 1)[0]
                 dirs.add(d)
         _TRACKED = (set(files), dirs)
-    files, dirs = _TRACKED
+    return _TRACKED
+
+
+def tracked(p):
+    """A path counts as existing only when git TRACKS it (a file, or a directory with a tracked file
+    below it): the baseline must not depend on a generated, gitignored file such as
+    knowledge-base/INDEX.md that one checkout has and a fresh CI checkout does not."""
+    files, dirs = _tracked()
     return p in files or p in dirs
 
 
@@ -284,15 +295,26 @@ def covers(edge, p):
                     or "//" in head or "/./" in head or "/../" in head
                     or "*" not in tail or tail.endswith("/")):
                 return True
-            if os.path.isdir(p):
-                # A dir ref is covered iff p/head nest — the glob's reach intersects it.
-                # This is an optimistic approximation: declared globs scope by
-                # extension-class, and a dir ref under the head may carry file
-                # classes the tail declines. #9969 widened the carrier set (the
-                # *.test.sh pair now hold glob:knowledge-base/**.test.sh while
-                # charged reads under those dirs include .md/.yml); tightening
-                # the rule to tail-vs-charged-classes is tracked as a scope-out.
-                return p.startswith(head) or head.startswith(p.rstrip("/") + "/")
+            if p in _tracked()[1] or os.path.isdir(p):
+                # A dir ref is covered iff EVERY tracked member beneath it
+                # matches the minted glob — path nesting alone certifies
+                # nothing (#10117). The nest approximation this replaced
+                # certified a dir whose charged file classes the tail declines
+                # (e.g. a knowledge-base read charged against **.sh while the
+                # suite reads .md/.yml beneath it). Dual dispatch: the index
+                # dirs materialization catches a kb dir missing on disk
+                # (sparse checkout / uncommitted rm — never judged by basename
+                # through the file arm); isdir catches foreign dirs so a
+                # memberless ref declines rather than vacuously covering via
+                # all([]) (index dirs always have members by construction).
+                # Deliberately per-edge dominant: violations() asks any(e:
+                # all(m)); a dir collectively covered by COMPLEMENTARY globs
+                # (different tails per member class) still declines — the
+                # faithful all(m: any(e)) would certify it; decline is the
+                # safe direction and today no multi-tail carrier exists.
+                pre = p + "/"
+                members = [f for f in _tracked()[0] if f.startswith(pre)]
+                return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)
             return fnmatch.fnmatchcase(p, g)
         if e.endswith("/"):
             return p.startswith(e) or (p + "/") == e
@@ -419,14 +441,14 @@ _nonlit=$(awk -F'\t' 'NF>=3{n++} END{print n+0}' "$BASELINE")
 if [[ -z "$_unclass" ]]; then
   pass "c1: every non-literal baseline row has a shape-valid 'false-positive: <reason>' classification (n=$_nonlit; shape-checked, not verified)"
 else
-  fail "c1: unclassified baseline row(s): $_unclass"
+  fail "c1: unclassified baseline row(s): $_unclass — classify each 'false-positive: <reason>' in the baseline file, or give the read a covering edge and --write-baseline"
 fi
 
 # Row f0 (population floor for the form table): each form in the table sees at least one registration
 # in the real corpus, else a form row is dead weight and its fixture rows prove nothing about the repo.
 cases=$((cases + 1))
 _forms=$( cd "$REPO_ROOT" && python3 "$ORACLE" forms )
-_dir_regs=$(python3 - "$ROWS" "$CMDS" "$ORACLE" <<'F0PY'
+_dir_regs=$(cd "$REPO_ROOT" && python3 - "$ROWS" "$CMDS" "$ORACLE" <<'F0PY'
 import os, sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[3]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 rows, cmds = o.load_rows(sys.argv[1]), o.load_cmds(sys.argv[2])
@@ -448,7 +470,7 @@ fi
 # to bite on.
 cases=$((cases + 1))
 ( cd "$REPO_ROOT" && python3 "$ORACLE" refs "$ROWS" "$CMDS" ) > "$TESTROOT/refs.tsv"
-_edge_covered=$(python3 - "$ROWS" "$TESTROOT/refs.tsv" "$ORACLE" <<'PY'
+_edge_covered=$(cd "$REPO_ROOT" && python3 - "$ROWS" "$TESTROOT/refs.tsv" "$ORACLE" <<'PY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[3]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 rows = o.load_rows(sys.argv[1])
@@ -468,7 +490,7 @@ else
 fi
 
 # Mutation rows drive the ORACLE with edited inputs.
-_first=$(python3 - "$ROWS" "$TESTROOT/refs.tsv" "$ORACLE" <<'PY'
+_first=$(cd "$REPO_ROOT" && python3 - "$ROWS" "$TESTROOT/refs.tsv" "$ORACLE" <<'PY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[3]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 rows = o.load_rows(sys.argv[1])
@@ -488,7 +510,7 @@ PY
 
 # m1: drop every knowledge-base edge from that suite -> the oracle must flag it.
 cases=$((cases + 1))
-python3 - "$ROWS" "$TESTROOT/rows-m1.tsv" "$_first" <<'PY'
+( cd "$REPO_ROOT" && python3 - "$ROWS" "$TESTROOT/rows-m1.tsv" "$_first" <<'PY'
 import sys
 out = open(sys.argv[2], "w")
 for line in open(sys.argv[1]):
@@ -497,6 +519,7 @@ for line in open(sys.argv[1]):
         f[4] = "|".join(e for e in f[4].split("|") if "knowledge-base" not in e)
     out.write("\t".join(f) + "\n")
 PY
+)
 _m1=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$TESTROOT/rows-m1.tsv" "$CMDS" /dev/null 2>&1 | grep -F "$_first" ); _rc=$?
 _m1_ctl=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$ROWS" "$CMDS" /dev/null 2>&1 | grep -F "$_first" ); _rc=$?
 if [[ -n "$_first" && -n "$_m1" && -z "$_m1_ctl" ]]; then
@@ -696,14 +719,24 @@ else
 fi
 
 # k5: the ^glob: arm — a valid glob covers .sh under its head at any depth and no
-# other file; every malformed minted edge covers by construction (never narrows);
-# a dir ref under or equal to the head is covered via the nest clause. The kb
-# literal is COMPOSED — a bare token here would be charged to this suite as a read.
+# other file; every malformed minted edge covers by construction (never narrows).
+# A dir ref is covered only when EVERY tracked member beneath it matches the glob
+# tail (#10117 all-containment — the old nest clause certified a dir whose charged
+# classes the tail declines, e.g. knowledge-base under **.sh). knowledge-base/legal
+# is the all-.md member set; knowledge-base/project is mixed; docs/ exists on disk
+# but holds no tracked kb members (the empty-set decline). The kb literal is
+# COMPOSED — a bare token here would be charged to this suite as a read.
 cases=$((cases + 1))
 _k5=$(cd "$REPO_ROOT" && python3 - "$ORACLE" <<'COVPY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 KB = "knowledge" + "-base"
+# Synthetic sibling dir injected into the index materialization: no
+# knowledge-base/legal-x/ exists in the tree, and without a member there the
+# boundary mutant (member prefix losing its trailing slash) is indistinguishable
+# — legal-x/evil.sh would leak into a legal/ dir ref only under that mutant.
+o._TRACKED = (o._tracked()[0] | {KB + "/legal-x/evil.sh"},
+              o._tracked()[1] | {KB + "/legal-x"})
 tests = [
     ("^glob:" + KB + "/**.sh", KB + "/x.sh"),
     ("^glob:" + KB + "/**.sh", KB + "/a/b/c.sh"),
@@ -712,16 +745,212 @@ tests = [
     ("^glob:glob:a*/b", "anywhere/file"),           # malformed mint: always-cover
     ("^glob:glob:../x/*.sh", KB + "/x.sh"),         # ../-head verbatim: always-cover
     ("^glob:glob:x:y/*.sh", KB + "/x.sh"),          # charset verbatim: always-cover
-    ("^glob:" + KB + "/**.sh", KB),                 # dir ref equal to head → nest
-    ("^glob:" + KB + "/**.sh", KB + "/project"),    # dir ref under head → nest
+    ("^glob:" + KB + "/**.sh", KB),                 # dir ref = head; members mixed → decline
+    ("^glob:" + KB + "/**.sh", KB + "/project"),    # dir ref under head; mixed members → decline
+    ("^glob:" + KB + "/**.md", KB + "/legal"),      # dir ref, all members match — accept
+    ("^glob:" + KB + "/**.sh", KB + "/legal"),      # dir ref, members all .md — decline
+    ("^glob:" + KB + "/**.md", KB + "/project"),    # dir ref, mixed members — decline
+    ("^glob:" + KB + "/**.sh", "plugins/soleur"),   # non-kb dir ref — decline
+    ("^glob:" + KB + "/**.md", "docs"),             # dir with zero kb members — decline
+    ("^glob:" + KB + "/**.md", KB + "/legal/audits"),  # nested member depth via ** — accept
+    ("^glob:../x/*.sh", KB + "/x.sh"),              # ../-head → always-cover
+    ("^glob:" + KB + "/x", KB + "/x"),              # *-less tail → always-cover
+    ("^glob:" + KB + "/x*/", "anywhere/file"),      # /-ending tail → always-cover
+    ("^glob:foo*.sh", KB + "/legal"),               # non-/ head → always-cover
+    ("^glob:" + KB + "/**.md", KB + "/legal/art-22-assessments"),  # single-member dir → accept
+    ("^glob:" + KB + "/legal/audits/**.md", KB + "/legal"),        # head ⊋ ref: members outside head decline
+    ("^glob:" + KB + "/project/**.md", KB),                        # same at root scale → decline
+    ("^glob:" + KB + "/*.md", KB + "/legal"),                      # single-* crosses / like ** (parity) → accept
 ]
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in tests))
 COVPY
 )
-if [[ "$_k5" == "1 1 0 0 1 1 1 1 1" ]]; then
-  pass "k5: ^glob: covers .sh at any depth, declines .md and out-of-head paths, always-covers malformed mints, and nests dir refs"
+if [[ "$_k5" == "1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 1 1 0 0 1" ]]; then
+  pass "k5: ^glob: covers .sh at any depth, declines .md/out-of-head/mixed-or-memberless dir refs, always-covers malformed mints"
 else
-  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 1 1)"
+  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 1 1 0 0 1)"
+fi
+
+# k6 (Guard 3, #10117) — mutation dispatch over the dir-ref all-containment arm.
+#        Each row mutates ONE clause of a scratch copy and asserts the mutant's
+#        verdict flips where the real predicate's pins hold. A surviving mutant
+#        would mean the new cells bind nothing.
+
+# k6-m1: nest-clause revert — restore the pre-#10117 "dir ref covered iff p/head
+#        nest" verdict; it re-covers the mixed-member dir the new arm declines.
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m1.py"
+_k6m1_n=$(grep -cF 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m1.py")
+sed -i 's|return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)|return p.startswith(head) or head.startswith(p.rstrip("/") + "/")|' "$TESTROOT/oracle-k6m1.py"
+_k6m1=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m1.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.sh", KB + "/project"),     # nest mutant re-covers: 1
+    ("^glob:" + KB + "/**.sh", "plugins/soleur"),    # non-kb dir: stays 0
+]))
+COVPY
+)
+if [[ "$_k6m1_n" == "1" && "$_k6m1" == "1 0" ]]; then
+  pass "k6-m1: nest-clause revert re-covers the mixed dir (all-containment binds the decline)"
+else
+  fail "k6-m1: landed=$_k6m1_n mutant='${_k6m1}' (want landed=1 mutant='1 0')"
+fi
+
+# k6-m2: all()→any() — a dir whose SOME-but-not-all members match must stay
+#        uncovered; any() would certify it (second-member defect class).
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m2.py"
+_k6m2_n=$(grep -cF 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m2.py")
+sed -i 's|return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)|return bool(members) and any(fnmatch.fnmatchcase(f, g) for f in members)|' "$TESTROOT/oracle-k6m2.py"
+_k6m2=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m2.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", KB + "/project"),     # some .md, not all: any()=1
+    ("^glob:" + KB + "/**.sh", KB + "/legal"),       # zero .sh members: stays 0
+]))
+COVPY
+)
+if [[ "$_k6m2_n" == "1" && "$_k6m2" == "1 0" ]]; then
+  pass "k6-m2: the any() mutant certifies a some-match dir (all() is load-bearing)"
+else
+  fail "k6-m2: landed=$_k6m2_n mutant='${_k6m2}' (want landed=1 mutant='1 0')"
+fi
+
+# k6-m3: empty-member vacuous-true — dropping the `members` conjunct makes
+#        all([])=True cover a dir with zero tracked kb members (docs/ exists
+#        on disk, holds no kb-tracked files).
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m3.py"
+_k6m3_n=$(grep -cF 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m3.py")
+sed -i 's|return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)|return all(fnmatch.fnmatchcase(f, g) for f in members)|' "$TESTROOT/oracle-k6m3.py"
+_k6m3=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m3.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", "docs"),              # vacuous-all mutant: 1
+    ("^glob:" + KB + "/**.md", KB + "/legal"),       # populated dir: stays 1
+]))
+COVPY
+)
+if [[ "$_k6m3_n" == "1" && "$_k6m3" == "1 1" ]]; then
+  pass "k6-m3: dropping the empty-guard makes a memberless dir vacuously cover (the conjunct binds)"
+else
+  fail "k6-m3: landed=$_k6m3_n mutant='${_k6m3}' (want landed=1 mutant='1 1')"
+fi
+
+# k6-m4: harness guard — pin the emitted vector's SHAPE (23 binary cells) so a
+#        crashed or empty probe can't satisfy k5's exact-match comparison
+#        vacuously ("" would merely fail the ==, but a malformed vector passing
+#        this row would mean the probe machinery itself is lying).
+cases=$((cases + 1))
+if [[ "$_k5" =~ ^([01]\ ){22}[01]$ ]]; then
+  pass "k6-m4: the k5 vector emits 23 binary cells (a crashed probe cannot satisfy the shape)"
+else
+  fail "k6-m4: k5 vector '${_k5:0:60}' is not 23 0/1 cells — the comparison may be vacuous"
+fi
+
+# k6-m5: member-boundary mutant — dropping the trailing slash from the member
+#        prefix pulls a sibling dir's members (knowledge-base/legal-x/) into a
+#        legal/ dir ref. The synthetic member is injected because no legal-x/
+#        exists in the index; without it the mutant is indistinguishable.
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m5.py"
+_k6m5_n=$(grep -cF 'members = [f for f in _tracked()[0] if f.startswith(pre)]' "$TESTROOT/oracle-k6m5.py")
+sed -i 's|f.startswith(pre)|f.startswith(p)|' "$TESTROOT/oracle-k6m5.py"
+_k6m5=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m5.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+o._TRACKED = (o._tracked()[0] | {KB + "/legal-x/evil.sh"}, o._tracked()[1] | {KB + "/legal-x"})
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", KB + "/legal"),        # boundary mutant leaks evil.sh → 0
+    ("^glob:" + KB + "/**.md", KB + "/legal/audits"), # deeper dir unaffected → stays 1
+]))
+COVPY
+)
+if [[ "$_k6m5_n" == "1" && "$_k6m5" == "0 1" ]]; then
+  pass "k6-m5: dropping the member-prefix slash leaks a sibling member (the boundary binds)"
+else
+  fail "k6-m5: landed=$_k6m5_n mutant='${_k6m5}' (want landed=1 mutant='0 1')"
+fi
+
+# k6-m6/m7: member-enumeration and dispatch mutants need shapes the live index
+#        can't fixture — a dir whose DIRECT children all match while a nested
+#        member declines, and an index dir absent on disk — so they run on a
+#        scratch repo: dir/ has a matching direct member + nested non-match;
+#        ok/ is all-match; ghost/ is staged then deleted on disk (index dir,
+#        no filesystem presence — the sparse-checkout shape). `git add`
+#        populates the index, no commit (or GIT_* identity) needed; the rc
+#        sweep keeps a caller's GIT_DIR out of the fixture.
+_k6git() { ( for _v in "${!GIT_@}"; do unset "$_v"; done; exec git "$@" ); }
+_k6m6_repo="$TESTROOT/k6m6-repo"
+mkdir -p "$_k6m6_repo/knowledge-base/dir/sub" "$_k6m6_repo/knowledge-base/ok" "$_k6m6_repo/knowledge-base/ghost"
+printf 'x\n' > "$_k6m6_repo/knowledge-base/dir/a.md"
+printf 'x\n' > "$_k6m6_repo/knowledge-base/dir/sub/evil.sh"
+printf 'x\n' > "$_k6m6_repo/knowledge-base/ok/a.md"
+printf 'x\n' > "$_k6m6_repo/knowledge-base/ghost/a.md"
+( cd "$_k6m6_repo" && _k6git init -q && _k6git add knowledge-base && rm -rf knowledge-base/ghost ) || { fail "k6-m6/m7: fixture repo setup failed"; exit 2; }
+
+# k6-m6: recursion mutant — members restricted to direct children
+#        (dirname == p) misses the nested declining member.
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m6.py"
+_k6m6_n=$(grep -cF 'members = [f for f in _tracked()[0] if f.startswith(pre)]' "$TESTROOT/oracle-k6m6.py")
+sed -i 's|f.startswith(pre)|os.path.dirname(f) == p|' "$TESTROOT/oracle-k6m6.py"
+_k6m6=$( for _v in "${!GIT_@}"; do unset "$_v"; done; cd "$_k6m6_repo" && python3 - "$TESTROOT/oracle-k6m6.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", KB + "/dir"),       # mutant: nested evil.sh dropped → 1
+    ("^glob:" + KB + "/**.md", KB + "/ok"),        # all-match dir → 1 either way
+    ("^glob:" + KB + "/**.md", KB + "/dir/sub"),   # sub's own member still declines → 0
+]))
+COVPY
+)
+if [[ "$_k6m6_n" == "1" && "$_k6m6" == "1 1 0" ]]; then
+  pass "k6-m6: direct-children mutant hides the nested declining member (recursion binds)"
+else
+  fail "k6-m6: landed=$_k6m6_n mutant='${_k6m6}' (want landed=1 mutant='1 1 0')"
+fi
+
+# k6-m7: dispatch mutant — dropping the index-dirs disjunct sends an index dir
+#        with no filesystem presence (ghost/ — staged, then deleted on disk)
+#        down the file arm, where its basename is judged instead of its members.
+#        Control: the real oracle on the same repo emits 1 for ghost.
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m7.py"
+_k6m7_n=$(grep -cF 'if p in _tracked()[1] or os.path.isdir(p):' "$TESTROOT/oracle-k6m7.py")
+sed -i 's|if p in _tracked()\[1\] or os.path.isdir(p):|if os.path.isdir(p):|' "$TESTROOT/oracle-k6m7.py"
+_k6m7=$( for _v in "${!GIT_@}"; do unset "$_v"; done; cd "$_k6m6_repo" && python3 - "$TESTROOT/oracle-k6m7.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", KB + "/ghost"),     # isdir-only mutant: not on disk → file arm → 0
+    ("^glob:" + KB + "/**.md", KB + "/ok"),        # on-disk all-match dir → 1 either way
+]))
+COVPY
+)
+_k6m7_real=$( for _v in "${!GIT_@}"; do unset "$_v"; done; cd "$_k6m6_repo" && python3 - "$ORACLE" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", KB + "/ghost"),     # index dir: member a.md matches → 1
+    ("^glob:" + KB + "/**.md", KB + "/ok"),        # → 1
+]))
+COVPY
+)
+if [[ "$_k6m7_n" == "1" && "$_k6m7" == "0 1" && "$_k6m7_real" == "1 1" ]]; then
+  pass "k6-m7: dropping the index-dirs disjunct sends a disk-absent index dir to the file arm (dual dispatch binds)"
+else
+  fail "k6-m7: landed=$_k6m7_n mutant='${_k6m7}' real='${_k6m7_real}' (want landed=1 mutant='0 1' real='1 1')"
 fi
 
 # u1: the c1 predicate (the SAME function) flags UNCLASSIFIED, empty, unprefixed and reason-less classifications, and accepts a
@@ -738,7 +967,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=22
+MIN_CASES=30
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2

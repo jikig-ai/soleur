@@ -72,7 +72,11 @@ PROC_SH_SELF_PID="${PROC_SH_SELF_PID:-$$}"
 # is INVISIBLE to both verbs — and `timeout … bash <suite>` is a real shape in
 # this repo (scripts/lib/test-contention.sh says so in its own comments). An
 # invisible run is a silent `killed=0`, i.e. the D6 failure mode.
-_PROC_WRAPPERS='timeout env nohup nice ionice setsid stdbuf time taskset flock script unbuffer'
+_PROC_WRAPPERS='timeout env nohup nice ionice setsid stdbuf time taskset flock script unbuffer rtk'
+# `rtk` carries an optional exec-subcommand word (run|err|test|proxy|bypass|summary) between
+# itself and the real argv — `rtk run bash x.sh` execs bash, and `rtk bash x.sh` does too
+# (filtered subcommand or run_fallback raw exec). The walk below skips the wrapper's own
+# options, then that subcommand word if present, before landing.
 # NOT `busybox`: it is an applet multiplexer, not a shell, so admitting it makes
 # `busybox grep -rn test-all.sh` scan every later token and match — the same
 # over-match the wrapper walk below was corrected for.
@@ -333,6 +337,15 @@ _proc_is_match() {
             *) break ;;
           esac
         done
+        if [[ "$b" == rtk ]]; then
+          case "${argv[i]:-}" in run|err|test|proxy|bypass|summary) i=$(( i + 1 )) ;; esac
+          while (( i < ${#argv[@]} )); do
+            case "${argv[i]}" in
+              -* | *=* | [0-9]*) i=$(( i + 1 )) ;;
+              *) break ;;
+            esac
+          done
+        fi
         continue
         ;;
     esac

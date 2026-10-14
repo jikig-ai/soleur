@@ -32,6 +32,7 @@ import {
   tearDownSharedWorkspace,
   type SharedWorkspaceFixture,
 } from "@/test/helpers/workspace-members-fixtures";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -354,11 +355,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(revRows).toHaveLength(1);
       expect(revRows![0].removed_by_user_id).toBe(ownerA.userId);
 
-      // Cleanup D.
-      try {
-        await service.from("workspace_members").delete().eq("user_id", dId);
-        await service.auth.admin.deleteUser(dId);
-      } catch {}
+      // Cleanup D — fail-loud via the helper (#10096): the raw member-row
+      // delete fired the WORM audit trigger, leaving a
+      // workspace_member_actions RESTRICT child that re-blocked the auth
+      // delete inside the swallowed catch. anonymise_workspace_members
+      // scrubs D's ownership-transfer membership without re-firing audit.
+      await tearDownTenantUser(service, { id: dId, email: dEmail });
     }, 60_000);
 
     test("AC15 F6: user_session_state.current_organization_id cleared after removal", async () => {

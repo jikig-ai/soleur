@@ -1218,7 +1218,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # --- #9963: second unconditional emit, SAME invariant (no `if` may precede it) ---
 # Positive control for the SYSLOG_IDENTIFIER=systemd journald delivery path. Vector's
 # contains_match is OR-over-record-fields, so a `-t systemd -p err` row (PRIORITY 3) is
-# admitted by inngest_journald's include_matches.PRIORITY {0..4} arm regardless of unit —
+# admitted by inngest_journald's include_matches.PRIORITY {3,4} arm regardless of unit —
 # the SAME arm real PID-1 `Failed to start` rows take. The spoofed tag is load-bearing:
 # consumers discriminate the path by SYSLOG_IDENTIFIER=systemd, so the control must prove
 # THAT field shape transits. Absolute /usr/bin/logger per the FAILLOG ExecStart

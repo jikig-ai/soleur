@@ -17,7 +17,10 @@
  *
  * The pure functions below are exported and unit-tested offline against synthesized
  * fixtures (`plugins/soleur/test/harness-discovery-smoke.test.ts`); the CLI-driving
- * half is the same code under a real binary.
+ * half is the same code under a real binary. NOTE: importing this module binds a
+ * per-process scratch session (`ensureScratchSession()` at load, below) — importers
+ * of the pure functions get the environment mutation too; it is a no-op nested under
+ * an already-bound root.
  *
  * `scripts/codex-plugin-smoke.mjs` is deliberately UNTOUCHED: it is the operator-local
  * check of an already-installed plugin and its hooks, and needs `~/.codex` state this
@@ -29,6 +32,16 @@ import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
+import { ensureScratchSession } from "../test/lib/scratch-session";
+
+// Bind a per-process scratch session root (#7004, ADR-250) BEFORE anything
+// allocates: this script runs via `bun <file>` (ci.yml), where the bunfig
+// [test].preload does NOT run, so this statement IS the adoption — scratchDir()
+// below then lands every harness-discovery-* home/repo under an owned
+// soleur-run.<pid>.* root the reapers can attribute when a run is SIGKILLed
+// (clean exits were already covered by SCRATCH[]/cleanupScratch()). A nested
+// run under a runner inherits the parent's root and never deletes it.
+ensureScratchSession();
 
 export const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const PLUGIN_ROOT = resolve(REPO_ROOT, "plugins/soleur");

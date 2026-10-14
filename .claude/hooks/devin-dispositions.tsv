@@ -54,6 +54,7 @@ claude-settings	.claude/hooks/ship-operator-step-gate.sh	PreToolUse	Bash	bind	de
 claude-settings	.claude/hooks/ship-runbook-ssh-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-soak-followthrough-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-unpushed-commits-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
+claude-settings	.claude/hooks/ship-kb-archive-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	Bash	covered-by-plugin	hooks.json binds ^(Bash|exec)$ (#8155 merged)	runtime trace 2026-09-17 (AC12/AC13): deny+allow arms PASS on Devin local exec — EC§9; body gate normalized to kind
 #
 # --- .claude/settings.json — PreToolUse AskUserQuestion ----------------------
@@ -178,3 +179,4 @@ soleur-plugin	plugins/soleur/hooks/compaction-state.sh	SessionStart	startup|resu
 soleur-plugin	plugins/soleur/hooks/compaction-state.sh	PreCompact	manual|auto	n/a	no-devin-wire-name	PreCompact is a Claude Code lifecycle event with no Devin wire-name equivalent; there is no matcher to anchor. #8323, ADR-227
 soleur-plugin	plugins/soleur/hooks/operator-stage-approval.sh	PreToolUse	^(Bash|Monitor|Write|Edit|MultiEdit|NotebookEdit)$	skip	Devin cloud has no approval-prompt adapter for staged operator scripts; the script exits 75 and writes nothing there (ADR-264, per-harness adapters tracked as an open follow-up)	ADR-264 per-surface coverage table; no Devin run was possible for this change
 soleur-plugin	plugins/soleur/hooks/destructive-command-guard.sh	PreToolUse	^Bash$	skip	Devin ask unmeasured and Devin envelopes carry no cwd; follow-up	plugins/soleur/test/destructive-command-guard-hook.test.sh (Devin exec is not decided: the raw tool_name must be Bash; row "Devins exec is not decided (D2)"); W2 plan D9, ADR-277
+soleur-plugin	plugins/soleur/hooks/ext-filter-detect.sh	SessionStart	startup|resume|clear|compact	skip	claude-plugin-surface	external-filter detection marker (systemMessage is a Claude Code output channel; Devin source matchers never dispatch — a Devin session has no marker and the doc says so, it does not mean "no filter"). #10230
