@@ -85,6 +85,7 @@ case "${1:-}" in
     if [[ -z "$perm" ]]; then printf 'gh: no stub permission for %s\n' "$login" >&2; exit 1; fi
     if [[ "$perm" == "403" ]]; then printf 'gh: Resource not accessible by integration (HTTP 403)\n' >&2; exit 1; fi
     if [[ "$perm" == "404" ]]; then printf 'gh: %s is not a user (HTTP 404)\n' "$login" >&2; exit 1; fi
+    if [[ "$perm" == "502" ]]; then printf 'gh: Bad Gateway (HTTP 502)\n' >&2; exit 1; fi
     printf '{"permission":"%s"}\n' "$perm" | jq -r "$4"
     ;;
   *) refuse "$@" ;;
@@ -419,17 +420,17 @@ h_h6() { # M-H6 a failing permission read on the LAST of several authors is rc 2
   (( ok )) && pass "M-H6: a permission failure on the last of several distinct authors yields rc 2 and NO partial output (both views); the all-admin twin succeeds"
 }
 h_h7() { # M-H7 a 404 drops that author only; a second trusted author after a compliant first still comes through
-  mkc "$SB/h.json" github-actions "RESULT: PASS" "$T1" first-op "first" "$T1" second-op "second" "$T2"
+  mkc "$SB/h.json" github-actions "RESULT: PASS" "$T1" first-op "RESULT: first" "$T1" second-op "RESULT: second" "$T2"
   mkp 'github-actions\t404\nfirst-op\tadmin\nsecond-op\twrite\n'
   run_case_raw trusted_verdict_comments 6617 "$SB/h.json" "$SB/pm.tsv"
-  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && in_out first && in_out second && ! in_out 'RESULT: PASS'; then
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && in_out 'RESULT: first' && in_out 'RESULT: second' && ! in_out 'RESULT: PASS'; then
     pass "M-H7: a 404 drops only that author; two trusted authors after it both come through"
   else fail "M-H7: rc=$RAW_RC out=[$RAW_OUT]"; fi
 }
 h_h8() { # M-H8 the memo: two comments by one author cost one permission request; two distinct authors cost two
-  mkc "$SB/h.json" same-op "one" "$T1" same-op "two" "$T1" same-op "three" "$T2"; mkp 'same-op\tadmin\n'
+  mkc "$SB/h.json" same-op "RESULT: one" "$T1" same-op "RESULT: two" "$T1" same-op "RESULT: three" "$T2"; mkp 'same-op\tadmin\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"; local n1; n1="$(nreq perm)"
-  mkc "$SB/h.json" same-op "one" "$T1" other-op "two" "$T1" same-op "three" "$T2"; mkp 'same-op\tadmin\nother-op\tadmin\n'
+  mkc "$SB/h.json" same-op "RESULT: one" "$T1" other-op "RESULT: two" "$T1" same-op "RESULT: three" "$T2"; mkp 'same-op\tadmin\nother-op\tadmin\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"; local n2; n2="$(nreq perm)"
   if (( RAW_MISS == 0 )) && [[ "$n1" == 1 && "$n2" == 2 ]]; then
     pass "M-H8: one permission request per distinct author (3 comments by one author -> 1; two authors -> 2)"
@@ -461,11 +462,11 @@ h_crlf() { # must-PASS non-canonical: digits and interior hyphens in the login, 
   else fail "CRLF: rc=$RAW_RC out=[$RAW_OUT]"; fi
 }
 h_h11() { # M-H11 login-shape guard: a login that is not a GitHub login is untrusted with ZERO permission requests; only that author is dropped
-  mkc "$SB/h.json" "a/../b" "evil1" "$T1" "x?y" "evil2" "$T1" $'line1\nline2' "evil3" "$T1" "-lead" "evil4" "$T1" good-op "good" "$T2"
+  mkc "$SB/h.json" "a/../b" "RESULT: evil1" "$T1" "x?y" "RESULT: evil2" "$T1" $'line1\nline2' "RESULT: evil3" "$T1" "-lead" "RESULT: evil4" "$T1" good-op "RESULT: good" "$T2"
   mkp 'a/../b\tadmin\nx?y\tadmin\nline1\tadmin\nline2\tadmin\n-lead\tadmin\ngood-op\tadmin\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
   if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(nreq perm)" == 1 ]] && grep -qxF 'perm good-op' "$SB/req.log" \
-     && in_out good && ! bodies_of "$RAW_OUT" | grep -q evil; then
+     && in_out 'RESULT: good' && ! bodies_of "$RAW_OUT" | grep -q evil; then
     pass "M-H11: malformed logins (path, query, newline, leading dash) make zero permission requests and drop only their own comments"
   else fail "M-H11: rc=$RAW_RC miss=$RAW_MISS requests=[$(tr '\n' ',' < "$SB/req.log")] out=[$RAW_OUT]"; fi
 }
@@ -508,10 +509,12 @@ h_recfail() { # M-RECFAIL a failing record build is rc 2 with EMPTY stdout in bo
 }
 FSM_OK=1
 fsm_case() { # <label> <body> <expected stripped body>   one trusted comment through the {t,b} view
-  mkc "$SB/h.json" priv-op "$2" "$T2"; mkp 'priv-op\tadmin\n'
+  # a comment is only looked up and emitted when a line of it starts a marker, so every body is prefixed with a sentinel marker line
+  # (before the shape under test, so an unclosed fence or comment never swallows it) and the expected text carries the same prefix
+  mkc "$SB/h.json" priv-op "RESULT: SENT"$'\n'"$2" "$T2"; mkp 'priv-op\tadmin\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
   local got; got="$(bodies_of "$RAW_OUT")"
-  if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || "$got" != "$3" ]]; then FSM_OK=0; fail "M-FENCE $1: rc=$RAW_RC want=[$3] got=[$got]"; fi
+  if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || "$got" != "RESULT: SENT"$'\n'"$3" ]]; then FSM_OK=0; fail "M-FENCE $1: rc=$RAW_RC want=[$3] got=[$got]"; fi
 }
 h_fsm() { # M-FENCE the strip is a fence state machine: opener/closer character and length, indentation, an unclosed fence
   FSM_OK=1; local M="S2-ACTIVATED: $T2"
@@ -558,6 +561,37 @@ h_html() { # M-HTML HTML comments: invisible when rendered, live to a grep, so a
   fsm_case "CRLF: a marker inside a multi-line comment is hidden, the marker after it counts" $'<!--\r\nhidden\r\n-->\r\n'"$M" $'\r\n'"$M"
   (( FSM_OK )) && pass "M-HTML: 14 HTML-comment shapes (one-line, multi-line, text around the closer, two per line, unclosed, comment opener inside a fence, fence inside a comment, blank line, CRLF) strip as a renderer hides them"
 }
+h_e4() { # M-E4 permission lookups only for authors whose (fence/HTML-stripped) text carries a marker line; every other comment is dropped without a request
+  local view ok=1 M="S2-ACTIVATED: $T2"
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    # (a) a drive-by commenter whose permission read would 502 does not wedge the thread, and costs zero requests
+    mkc "$SB/h.json" noisy-op "thanks, looking forward to this" "$T1" priv-op "$M" "$T2"; mkp 'noisy-op\t502\npriv-op\tadmin\n'
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 ]] || [[ "$(nreq perm)" != 1 ]] || grep -qxF 'perm noisy-op' "$SB/req.log" || ! grep -qF "$M" <<<"$RAW_OUT"; then
+      ok=0; fail "M-E4a ($view): a non-marker commenter must cost no request and not wedge the thread, got rc=$RAW_RC perm-requests=[$(grep '^perm' "$SB/req.log" | tr '\n' ,)] out=[$RAW_OUT]"
+    fi
+    # (b) a marker commenter whose permission read 502s is still TRANSIENT with empty stdout
+    mkc "$SB/h.json" bad-op "$M" "$T1" priv-op "$M" "$T2"; mkp 'bad-op\t502\npriv-op\tadmin\n'
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 2 || -n "$RAW_OUT" ]]; then ok=0; fail "M-E4b ($view): a marker commenter whose read 502s must stay rc 2 + empty stdout, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+    mkc "$SB/h.json" bad-op "RESULT: PASS" "$T1"; mkp 'bad-op\t502\n'
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 2 || -n "$RAW_OUT" ]]; then ok=0; fail "M-E4b ($view): a RESULT: commenter whose read 502s must stay rc 2, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+    # (c) a marker only inside a fence, or only inside an HTML comment, is not a candidate: zero requests, no wedge
+    mkc "$SB/h.json" quote-op $'template:\n```\n'"$M"$'\n```' "$T1" hide-op $'<!--\n'"$M"$'\n-->' "$T1" priv-op "$M" "$T2"; mkp 'quote-op\t502\nhide-op\t502\npriv-op\tadmin\n'
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 ]] || [[ "$(nreq perm)" != 1 ]] || ! grep -qxF 'perm priv-op' "$SB/req.log"; then
+      ok=0; fail "M-E4c ($view): fenced-only and HTML-comment-only markers must not make a candidate, got rc=$RAW_RC perm-requests=[$(grep '^perm' "$SB/req.log" | tr '\n' ,)]"
+    fi
+    # (d) once an author is resolved and trusted, ALL of that author's comments come through (the resolved author's contribution is unchanged)
+    mkc "$SB/h.json" priv-op "just a note" "$T1" priv-op "$M" "$T2"; mkp 'priv-op\tadmin\n'
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 ]] || ! grep -qxF 'just a note' <<<"$(if [[ "$view" == trusted_verdict_comments ]]; then bodies_of "$RAW_OUT"; else printf '%s' "$RAW_OUT"; fi)"; then
+      ok=0; fail "M-E4d ($view): a trusted author's non-marker comment must still come through beside their marker comment, got rc=$RAW_RC out=[$RAW_OUT]"
+    fi
+  done
+  (( ok )) && pass "M-E4: only authors with a marker line (after the fence/HTML strip) are looked up; a non-marker drive-by whose read would 502 costs zero requests and does not wedge; a marker author whose read 502s is still rc 2; a resolved trusted author keeps every comment"
+}
 h_repo() { # M-REPO a non-default repository argument is used in BOTH the permission URL and the issue read, in BOTH views; the default repo is never touched
   mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
   local view pos ok=1 got
@@ -571,27 +605,27 @@ h_repo() { # M-REPO a non-default repository argument is used in BOTH the permis
   (( ok )) && pass "M-REPO: in both views repo other/repo is used for the issue read AND the permission URL; a call without it asks the DEFAULT repo and the stub refuses it"
 }
 h_case() { # M-CASE logins are case-insensitive: Admin1 and admin1 are one user, one permission lookup, both comments kept
-  mkc "$SB/h.json" Admin1 "one" "$T1" admin1 "two" "$T2"; mkp 'Admin1\tadmin\nadmin1\tadmin\n'
+  mkc "$SB/h.json" Admin1 "RESULT: one" "$T1" admin1 "two" "$T2"; mkp 'Admin1\tadmin\nadmin1\tadmin\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
-  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(nreq perm)" == 1 ]] && in_out one && in_out two; then
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(nreq perm)" == 1 ]] && in_out 'RESULT: one' && in_out two; then
     pass "M-CASE: comments by Admin1 and admin1 cost ONE permission request and both are kept (the memo key is the lower-cased login)"
   else fail "M-CASE: rc=$RAW_RC miss=$RAW_MISS perm-requests=$(nreq perm) (want 1) out=[$RAW_OUT]"; fi
 }
 h_login_shape() { # M-SHAPE login boundaries: 39 chars resolve; 40, a trailing newline, %, ., a leading dash are refused with ZERO requests
   local l39 l40; l39="$(printf 'a%.0s' {1..39})"; l40="${l39}a"
-  mkc "$SB/h.json" "$l39" ok39 "$T1" "$l40" evil40 "$T1" $'nl-op\n' evilnl "$T1" 'a%2fb' evilpct "$T1" 'a.b' evildot "$T1" '-lead' evildash "$T1"
+  mkc "$SB/h.json" "$l39" "RESULT: ok39" "$T1" "$l40" "RESULT: evil40" "$T1" $'nl-op\n' "RESULT: evilnl" "$T1" 'a%2fb' "RESULT: evilpct" "$T1" 'a.b' "RESULT: evildot" "$T1" '-lead' "RESULT: evildash" "$T1"
   mkp "$l39\\tadmin\\n"   # ONLY the 39-char login has a permission row: a refused shape that reached the permission endpoint would also exit the stub non-zero
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
-  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(nreq perm)" == 1 ]] && grep -qxF "perm $l39" "$SB/req.log" && in_out ok39 && ! bodies_of "$RAW_OUT" | grep -q evil; then
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(nreq perm)" == 1 ]] && grep -qxF "perm $l39" "$SB/req.log" && in_out 'RESULT: ok39' && ! bodies_of "$RAW_OUT" | grep -q evil; then
     pass "M-SHAPE: a 39-char login resolves; a 40-char login, a trailing newline, %, . and a leading dash are refused with zero requests"
   else fail "M-SHAPE: rc=$RAW_RC miss=$RAW_MISS perm-requests=$(nreq perm) (want 1) out-lines=$(bodies_of "$RAW_OUT" | grep -c .)"; fi
 }
 h_null_author() { # M-NULLAUTH a comment whose author is JSON null (a deleted account) is dropped, never fatal for the thread
   assert_fixture_dir "$SB"
-  printf '%s\n' '{"comments":[{"author":null,"authorAssociation":"OWNER","body":"RESULT: PASS","createdAt":"'"$T1"'"},{"author":{"login":"priv-op"},"authorAssociation":"CONTRIBUTOR","body":"keep","createdAt":"'"$T2"'"}]}' > "$SB/h.json"
+  printf '%s\n' '{"comments":[{"author":null,"authorAssociation":"OWNER","body":"RESULT: PASS","createdAt":"'"$T1"'"},{"author":{"login":"priv-op"},"authorAssociation":"CONTRIBUTOR","body":"RESULT: keep","createdAt":"'"$T2"'"}]}' > "$SB/h.json"
   mkp 'priv-op\tadmin\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
-  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && in_out keep && ! in_out 'RESULT: PASS' && [[ "$(nreq perm)" == 1 ]]; then
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && in_out 'RESULT: keep' && ! in_out 'RESULT: PASS' && [[ "$(nreq perm)" == 1 ]]; then
     pass "M-NULLAUTH: a comment with author null is dropped and the rest of the thread is read"
   else fail "M-NULLAUTH: rc=$RAW_RC miss=$RAW_MISS out=[$RAW_OUT]"; fi
 }
@@ -646,7 +680,8 @@ h_stagefail() { # M-STAGE each post-trust stage that fails is rc 2 + empty stdou
     "author|jq|case \"\$*\" in *\".[0]\"*) exit 5 ;; esac; exec $REAL_JQ \"\$@\""
     "body|jq|case \"\$*\" in *\".[1]\"*) exit 5 ;; esac; exec $REAL_JQ \"\$@\""
     "created|jq|case \"\$*\" in *\".[2]\"*) exit 5 ;; esac; exec $REAL_JQ \"\$@\""
-    "nulcheck|jq|case \"\$*\" in *\".[1:]\"*) exit 5 ;; esac; exec $REAL_JQ \"\$@\"")
+    "nulcheck|jq|case \"\$*\" in *\".[1:]\"*) exit 5 ;; esac; exec $REAL_JQ \"\$@\""
+    "candidate|grep|exit 2")
   for spec in "${specs[@]}"; do
     stage="${spec%%|*}"; tool="${spec#*|}"; body="${tool#*|}"; tool="${tool%%|*}"
     mkfailtool "$SB/bin-fail-$stage" "$tool" "$body"
@@ -659,7 +694,7 @@ h_stagefail() { # M-STAGE each post-trust stage that fails is rc 2 + empty stdou
     run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
     if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || -z "$RAW_OUT" ]]; then ok=0; fail "M-STAGE twin ($view): healthy tools must succeed, got rc=$RAW_RC"; fi
   done
-  (( ok )) && pass "M-STAGE: a failing awk strip, base64 decode, and jq field extraction .[0] / .[1] / .[2] / the NUL probe each yield rc 2, empty stdout and a message naming that stage, in both views"
+  (( ok )) && pass "M-STAGE: a failing awk strip, base64 decode, jq field extraction .[0] / .[1] / .[2] / the NUL probe, and the marker-line grep (stage candidate) each yield rc 2, empty stdout and a message naming that stage, in both views"
 }
 h_rowcount() { # M-ROWCOUNT a row-split loop that loses lines (a here-string failure, injected as a failing `read` after the first line) is rc 2, never a shorter thread
   local view ok=1
@@ -698,12 +733,12 @@ h_empty() { # M-EMPTY an empty thread, and a thread whose every comment is dropp
 h_bodyproj() { # M-BODYPROJ the bodies view's `jq -r .b` projection dying after printing its first record is rc 2 with EMPTY stdout (no prefix); the healthy twin returns both bodies
   assert_fixture_dir "$SB"
   mkfailtool "$SB/bin-bodyproj" jq "case \"\$*\" in \"-r .b\") $REAL_JQ \"\$@\" | head -n 1; exit 5 ;; esac; exec $REAL_JQ \"\$@\""
-  mkc "$SB/h.json" priv-op "first" "$T1" priv-op "second" "$T2"; mkp 'priv-op\tadmin\n'
+  mkc "$SB/h.json" priv-op "RESULT: first" "$T1" priv-op "second" "$T2"; mkp 'priv-op\tadmin\n'
   local ok=1
   STUB_BIN="$SB/bin-bodyproj" run_case_raw trusted_verdict_bodies 9818 "$SB/h.json" "$SB/pm.tsv"
   if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 2 ]] || [[ -s "$SB/raw.out" ]]; then ok=0; fail "M-BODYPROJ: a projection that prints a record and then fails must be rc 2 with EMPTY stdout, got rc=$RAW_RC out=[$RAW_OUT]"; fi
   run_case_raw trusted_verdict_bodies 9818 "$SB/h.json" "$SB/pm.tsv"
-  if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || "$RAW_OUT" != $'first\nsecond' ]]; then ok=0; fail "M-BODYPROJ twin: a healthy jq must return both bodies, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+  if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || "$RAW_OUT" != $'RESULT: first\nsecond' ]]; then ok=0; fail "M-BODYPROJ twin: a healthy jq must return both bodies, got rc=$RAW_RC out=[$RAW_OUT]"; fi
   (( ok )) && pass "M-BODYPROJ: a bodies projection that dies half way is rc 2 with empty stdout (no prefix), so rc 2 always leaves stdout empty; the healthy twin returns both bodies"
 }
 h_rowextra() { # M-ROWEXTRA the conservation check is two-sided: a split loop that GAINS a row (an injected duplicate) is rc 2 naming stage rowcount, never a longer thread
@@ -740,7 +775,7 @@ h_readonly() { # M-READONLY a readonly memo name is refused with a TRUTHFUL mess
   if [[ "$twin" != "sourced-rc=0" ]]; then ok=0; fail "M-READONLY twin: the same source without a readonly name must be silent and rc 0, got [$twin]"; fi
   (( ok )) && pass "M-READONLY: a readonly _TRUSTED_VERDICT_PERM is refused (rc 2) with a message that says readonly, not 'no associative arrays'; the clean twin sources silently"
 }
-LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_html h_repo h_case h_login_shape h_null_author h_underscore h_inherit h_nul h_stagefail h_rowcount h_logincount h_empty h_bodyproj h_rowextra h_stageempty h_readonly)
+LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_html h_e4 h_repo h_case h_login_shape h_null_author h_underscore h_inherit h_nul h_stagefail h_rowcount h_logincount h_empty h_bodyproj h_rowextra h_stageempty h_readonly)
 for _r in "${LIB_ROWS[@]}"; do "$_r"; done
 
 # --- harness integrity: a stub that answers `admin` to EVERYONE must redden the negative rows (the rows can fail) ----------
@@ -822,7 +857,7 @@ mutant_lib m-partial-output  "h_h6" "$RESOLVE"$'\n      return 2' "$RESOLVE"$'\n
 # EQUIVALENT single edits (measured: each survives every row above, so neither is a mutant on its own): turning the memo guard off alone, or the `seen` array (pass 1's distinct-author
 # collector) off alone, each leave exactly one request per distinct author because the OTHER one still deduplicates. Only the two together are a mutant.
 mutant_lib m-no-dedupe       "h_h8" '  if [[ -n "${_TRUSTED_VERDICT_PERM[$key]:-}" ]]; then' '  if false; then' \
-  '    if [[ -z "${seen[${author,,}]+x}" ]]; then' '    if true; then'
+  '    if (( cand_rc == 0 )) && [[ -z "${seen[${author,,}]+x}" ]]; then' '    if (( cand_rc == 0 )); then'
 mutant_lib m-jq-slice-100     "h_noslice" '        .comments[]' '        .comments[0:100][]'
 mutant_lib m-t-empty         "h_h5" "${Q}{t: \$t, b: .}${Q}" "${Q}{t: \"\", b: .}${Q}"
 CREATED_LINE='    created="$(printf '"'"'%s'"'"' "${rows[i]}" | jq -r '"'"'.[2]'"'"')" || { _trusted_verdict_stage_fail created "$issue"; return 2; }'
@@ -878,7 +913,7 @@ mutant_lib m-unset-unchecked "h_readonly" 'if ! unset _TRUSTED_VERDICT_PERM 2>/d
 mutant_lib m-nul-wording     "h_nul" ' "A trusted comment contains a NUL byte; this will not clear on retry: edit that comment."' ''
 mutant_lib m-no-rowcount     "h_rowcount" '_trusted_verdict_stage_fail rowcount "$issue"; return 2;' 'true;'
 mutant_lib m-no-logincount   "h_logincount" '_trusted_verdict_stage_fail logincount "$issue"; return 2;' 'true;'
-for _st in strip decode author body created nulcheck; do
+for _st in strip decode author body created nulcheck candidate; do
   mutant_lib "m-stage-$_st-unchecked" "h_stagefail" "_trusted_verdict_stage_fail $_st \"\$issue\"; return 2;" 'true;'
 done
 INFO_LINE='      if (ch == "`" && index(rest, "`") > 0) n = 0'
@@ -896,6 +931,12 @@ mutant_lib m-html-in-fence     "h_html" '        if (n > 0 && ch == fch && n >= 
 mutant_lib m-html-fence-in-comment "h_html" '      if (c) {' '      if (c && n == 0) {'
 mutant_lib m-html-drop-closing-rest "h_html" '        out = scrub(substr(line, p + 3))' '        out = ""'
 mutant_lib m-html-keep-empty   "h_html" '      if (out == "" && line != "") next' '      '
+CAND_LINE='    if (( cand_rc == 0 )) && [[ -z "${seen[${author,,}]+x}" ]]; then seen[${author,,}]=1; order+=("$author"); fi'
+mutant_lib m-e4-resolve-all    "h_e4" "$CAND_LINE" '    if [[ -z "${seen[${author,,}]+x}" ]]; then seen[${author,,}]=1; order+=("$author"); fi'
+mutant_lib m-e4-no-pass3-gate  "h_e4" '    [[ -n "${seen[${author,,}]+x}" ]] || continue
+' ''
+mutant_lib m-e4-result-only    "h_e4" "'^(RESULT|S[0-9]+-[A-Z][A-Z-]*):'" "'^RESULT:'"
+mutant_lib m-e4-marker-only    "h_e4" "'^(RESULT|S[0-9]+-[A-Z][A-Z-]*):'" "'^S[0-9]+-[A-Z][A-Z-]*:'"
 
 # --- harness controls: the mutant helper must be able to report a SURVIVOR, a CRASH, and a clean IDENTITY, or its verdicts mean nothing ----------
 CTRL_OK=0
@@ -951,7 +992,7 @@ lib_rows_quiet "$MUT_FILE" h_h2 h_h3
 if (( MUT_LANDED == 1 && MUT_CRASHED == 1 )) && bash -n "$MUT_FILE" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant whose runtime eval dies on a syntax error is flagged as crashed (CRASH_RE keeps that alternative)"
 else fail "harness control: the runtime syntax-error mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
 if (( CTRL_OK != 11 )); then fail "harness controls: $CTRL_OK of 11 held"; fi
-if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 64 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 64)"; fi
+if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 69 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 69)"; fi
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
@@ -981,7 +1022,7 @@ echo "passed=$PASS failed=$FAIL"
 #    meta-guard cannot recognise is indistinguishable from a floor that crashed.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=121
+MIN_ASSERTIONS=127
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

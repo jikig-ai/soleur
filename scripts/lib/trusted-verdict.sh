@@ -21,7 +21,13 @@
 # permission and does not depend on membership visibility (measured 2026-09-19:
 # `admin` for the operator, `none` for `github-actions[bot]`, under the operator
 # token). One call per DISTINCT author (logins are case-insensitive on GitHub,
-# so the memo key is the lower-cased login). The memo lives for ONE view invocation
+# so the memo key is the lower-cased login), and ONLY for authors with a candidate comment: at
+# least one line that, after the fence/HTML strip, starts `RESULT:` or `S<n>-<UPPERCASE-WORD>:`
+# (a superset of every consumer's own marker pattern). Every other author is dropped with no
+# request, so a drive-by commenter whose permission read fails cannot wedge the tracker (rc 2); an
+# author who IS a candidate and whose read fails still is rc 2. This decides WHICH authors are
+# resolved and never what a resolved trusted author contributes: all of their comments come through.
+# The memo lives for ONE view invocation
 # (`trusted_verdict_bodies` or `trusted_verdict_comments`): the shared core runs under
 # command substitution (`$(...)`), so its memo dies with that subshell and nothing carries
 # across view calls, which also means a login-keyed table that knows no repository cannot
@@ -30,7 +36,7 @@
 #
 # TWO VIEWS OF ONE CORE. `_trusted_verdict_core` is the only place a comment read
 # becomes trusted text; the public functions are projections of it:
-#   trusted_verdict_bodies    the trusted bodies, one per comment (`RESULT:` probes, and any
+#   trusted_verdict_bodies    the trusted bodies, one per comment of a candidate author (`RESULT:` probes, and any
 #                             probe that never reads the comment's time)
 #   trusted_verdict_comments  one compact JSON object `{t, b}` per trusted comment, `t`
 #                             the comment's `createdAt` (probes that order markers by time,
@@ -49,13 +55,13 @@
 #   3. a stage AFTER the comment read failed (stderr names it: `stage '<name>' failed`, or the
 #      author for the absent-memo guard): the row split lost or gained a row (rowcount), the
 #      base64 decode, a row-field extraction (author, body, created), the distinct-login count
-#      (logincount), an author with no memoized permission, a trusted body that holds a NUL byte
+#      (logincount), the marker-line grep (candidate), a candidate author with no memoized permission, a trusted body that holds a NUL byte
 #      (that one is deterministic: it will not clear on retry, edit the comment), the fence
 #      strip, the record build, or the bodies view's `jq -r .b` projection;
 #   4. the comments view ONLY: a trusted comment whose `createdAt` is missing or not ISO.
 # Every stage after the comment read is all-or-nothing: each substitution is checked, and two
 # counts (rows collected vs rows in the input, distinct logins collected vs distinct logins in
-# the memo) catch what a status cannot see. The NUL guard is defence in depth: real `gh`
+# the memo, which now counts candidates only) catch what a status cannot see. The NUL guard is defence in depth: real `gh`
 # rewrites control characters in its JSON output (U+0000 arrives as the two characters `^@`),
 # so a NUL cannot reach this lib in production; the suite drives it synthetically (its fake
 # `gh` runs the system jq). Fenced blocks are stripped by CommonMark-style
@@ -231,7 +237,7 @@ _trusted_verdict_stage_fail() {
 # _trusted_verdict_core <issue-number> <repo>
 #   THE chokepoint: the only place a comment read becomes trusted text. One
 #   `gh issue view --json comments` read (gh returns every page of comments: measured
-#   220 of 220 on #9777, gh 2.102.0, 2026-10-13; no suite pins it), every distinct author resolved
+#   220 of 220 on #9777, gh 2.102.0, 2026-10-13; no suite pins it), every distinct CANDIDATE author resolved
 #   through `_trusted_verdict_permission` BEFORE anything is emitted, then one JSON
 #   object `{t, b}` per trusted comment, API order: `t` = `createdAt` verbatim (empty
 #   when absent), `b` = the body with fenced blocks and HTML comments stripped.
@@ -248,8 +254,8 @@ _trusted_verdict_stage_fail() {
 #   (counted a second way, from the newlines), and the distinct logins that ended up in the
 #   memo must equal the distinct logins collected.
 _trusted_verdict_core() {
-  local issue="$1" repo="$2" raw b64 login row author body created perm rec nul out="" i n_in n_resolved=0 stripped_nl
-  local -a rows=() order=() authors=()
+  local issue="$1" repo="$2" raw b64 login row author body created perm rec nul out="" i n_in n_resolved=0 stripped_nl cand_rc
+  local -a rows=() order=() authors=() bodies=()
   local -A seen=()
   # `.author.login`, `.body` and `.createdAt`, as one base64 JSON array per comment. A
   # comment with no author cannot be attributed and is dropped by the first `select`, so
@@ -278,13 +284,27 @@ _trusted_verdict_core() {
   fi
   if (( ${#rows[@]} != n_in )); then _trusted_verdict_stage_fail rowcount "$issue"; return 2; fi
 
-  # Pass 1: decode each row once and collect the DISTINCT authors (first-seen order).
+  # Pass 1: decode each row once, strip its body, and collect the DISTINCT CANDIDATE authors (first-seen
+  # order): those with at least one line, after the fence/HTML strip, that starts a marker
+  # (`RESULT:` or `S<n>-<UPPERCASE-WORD>:`, a superset of every consumer's own pattern). An author
+  # with no such line contributes nothing a probe reads, so they are never looked up: a drive-by
+  # commenter whose permission read fails (any non-404 error) would otherwise wedge the tracker (rc 2).
   for ((i = 0; i < ${#rows[@]}; i++)); do
     { row="$(printf '%s' "${rows[i]}" | base64 -d)" && [[ -n "$row" ]]; } || { _trusted_verdict_stage_fail decode "$issue"; return 2; }
     rows[i]="$row"
     { author="$(printf '%s' "$row" | jq -r '.[0]')" && [[ -n "$author" ]]; } || { _trusted_verdict_stage_fail author "$issue"; return 2; }
     authors[i]="$author"
-    if [[ -z "${seen[${author,,}]+x}" ]]; then seen[${author,,}]=1; order+=("$author"); fi
+    # A lone CR is a line ending in CommonMark; normalise it to LF so the strip sees the
+    # same lines a renderer does (CRLF is left alone: the awk accepts a trailing CR). The `contains`
+    # guard keeps CR-free bodies (almost all of them) off the regex: gsub is quadratic in the number of
+    # lone CRs (measured 34 s for 65k of them on jq 1.8.2).
+    body="$(printf '%s' "$row" | jq -r '.[1] | if contains("\r") then gsub("\r(?!\n)"; "\n") else . end')" || { _trusted_verdict_stage_fail body "$issue"; return 2; }
+    body="$(printf '%s\n' "$body" | _trusted_verdict_strip_hidden)" || { _trusted_verdict_stage_fail strip "$issue"; return 2; }
+    bodies[i]="$body"
+    # grep rc 0 = a marker line, 1 = none, anything else = the grep itself failed (never read as "none")
+    grep -aqE '^(RESULT|S[0-9]+-[A-Z][A-Z-]*):' <<<"$body"; cand_rc=$?
+    if (( cand_rc > 1 )); then _trusted_verdict_stage_fail candidate "$issue"; return 2; fi
+    if (( cand_rc == 0 )) && [[ -z "${seen[${author,,}]+x}" ]]; then seen[${author,,}]=1; order+=("$author"); fi
   done
 
   # Pass 2: resolve every distinct author BEFORE anything is emitted.
@@ -302,9 +322,11 @@ _trusted_verdict_core() {
   fi
   if (( n_resolved != ${#seen[@]} )); then _trusted_verdict_stage_fail logincount "$issue"; return 2; fi
 
-  # Pass 3: the trusted rows.
+  # Pass 3: the trusted rows. An author who was never a candidate was never resolved and is dropped
+  # here by construction (not an "unresolved" author: the absent-memo guard below is for the others).
   for ((i = 0; i < ${#rows[@]}; i++)); do
     author="${authors[i]}"
+    [[ -n "${seen[${author,,}]+x}" ]] || continue
     perm="${_TRUSTED_VERDICT_PERM[${author,,}]:-}"
     # An ABSENT memo entry is not a negative answer. Pass 2 resolves exactly this author
     # set and returns 2 on any failure, so this is unreachable today: which is precisely
@@ -322,13 +344,8 @@ _trusted_verdict_core() {
     # can JOIN `S2-ACTI<NUL>VATED` into a live marker. Refuse the trusted comment instead.
     nul="$(printf '%s' "${rows[i]}" | jq -r '.[1:][] | explode | any(. == 0)')" || { _trusted_verdict_stage_fail nulcheck "$issue"; return 2; }
     case "$nul" in *true*) _trusted_verdict_stage_fail nul "$issue" "A trusted comment contains a NUL byte; this will not clear on retry: edit that comment."; return 2 ;; esac
-    # A lone CR is a line ending in CommonMark; normalise it to LF so the fence strip sees the
-    # same lines a renderer does (CRLF is left alone: the awk accepts a trailing CR). The `contains`
-    # guard keeps CR-free bodies (almost all of them) off the regex: gsub is quadratic in the number of
-    # lone CRs (measured 34 s for 65k of them on jq 1.8.2).
-    body="$(printf '%s' "${rows[i]}" | jq -r '.[1] | if contains("\r") then gsub("\r(?!\n)"; "\n") else . end')" || { _trusted_verdict_stage_fail body "$issue"; return 2; }
     created="$(printf '%s' "${rows[i]}" | jq -r '.[2]')" || { _trusted_verdict_stage_fail created "$issue"; return 2; }
-    body="$(printf '%s\n' "$body" | _trusted_verdict_strip_hidden)" || { _trusted_verdict_stage_fail strip "$issue"; return 2; }
+    body="${bodies[i]}"
     # The body goes to jq on STDIN, never as an `--arg` (one argv string is capped near 128 KiB:
     # a longer trusted body failed `Argument list too long`, the failure went unchecked and the
     # comment vanished with rc 0, the same silent drop this lib exists to remove).
