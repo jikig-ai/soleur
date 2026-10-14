@@ -941,10 +941,13 @@ else echo "  FAIL: AK1b the ask reason lead/tail is wrong, or a generic denial c
 # (the miss, cue, fixture loop counts per cue). The ledger is the suite's own sandbox, written by the AK/R rows above.
 TOTAL=$((TOTAL+1))
 ak_ledger="${INCIDENTS_REPO_ROOT:?sandbox root unset}/.claude/.rule-incidents.jsonl"
+# ledger_row_has <file> <row-needle> <cue-needle>: select the rows into a variable, then match it by here-string (no pipe
+# into an early-exit grep: under pipefail a match can read as a miss, #9217).
+ledger_row_has() { local rows; rows=$(grep -F -- "$2" "$1") || return 1; grep -qF -- "$3" <<<"$rows"; }
 if [[ -s "$ak_ledger" ]] \
-   && grep -F 'who owns items 3 and 4' "$ak_ledger" | grep -qF '[cue=ask]' \
-   && grep -F 'status move from adopting to accepted' "$ak_ledger" | grep -qF '[cue=status]' \
-   && grep -F 'how strict must the emptiness evidence be' "$ak_ledger" | grep -qF '[cue=strict]'; then
+   && ledger_row_has "$ak_ledger" 'who owns items 3 and 4' '[cue=ask]' \
+   && ledger_row_has "$ak_ledger" 'status move from adopting to accepted' '[cue=status]' \
+   && ledger_row_has "$ak_ledger" 'how strict must the emptiness evidence be' '[cue=strict]'; then
   echo "  PASS: AK1c each incident row names the cue that fired (ask, status and strict, per row)"; PASS=$((PASS+1))
 else echo "  FAIL: AK1c an incident row does not carry the cue that fired (the deny message must name it)" >&2; FAIL=$((FAIL+1)); fi
 # NR3 — the group argument is honoured by the lib itself: `shared` and `shared+closing` never reach the ask cue, only
