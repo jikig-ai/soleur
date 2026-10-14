@@ -502,8 +502,9 @@ _wenv_validate() {
 # the file, each rewrote it, the later mv lost the earlier's keys), was not atomic (the append hit the
 # live file after the mv) and widened a new file before the chmod.
 # The edit is built in a temp file `<.env>.wenv.XXXXXX` beside the RESOLVED .env (same filesystem, so the
-# final `mv -f` is one atomic rename; a namespace of its own, so the sweep below can never touch a user
-# file or the operator library's `.env.tmp.*` temps) under `umask 077` (0600 from birth), serialized by
+# final `mv -f` is one atomic rename; a namespace of its own, so the sweep below touches only that
+# namespace (a file there that is not a regular file this user owns is left alone), never the operator
+# library's `.env.tmp.*` temps) under `umask 077` (0600 from birth), serialized by
 # ONE mutual-exclusion mechanism on every platform: an owner-pid `mkdir` lock directory
 # (`<.env>.lock.d`) that is held until AFTER that rename. No flock (a flock run and a mkdir run exclude
 # nothing against each other, flock without a timeout blocks forever, and `exec {fd}<` needs bash 4.1
@@ -511,11 +512,13 @@ _wenv_validate() {
 # Stale-lock recovery is serialized as well, by a second `mkdir` mutex `<.env>.lock.d.recover`. A waiter
 # judges a lock stale when its owner pid is dead (or its owner file stayed empty for _WENV_EMPTY_POLLS
 # passes), then tries to take the mutex; a waiter that loses it keeps waiting. The winner RE-READS the
-# owner of the lock UNDER the mutex (the snapshot it judged on is never trusted: this re-read is the
-# compare-and-swap), removes the lock only if the owner is still a dead pid (or still not a pid after a
-# short pause), ALWAYS releases the mutex, and goes round the loop again. A recovering waiter never
-# writes while it recovers, nothing is renamed away and put back, and the lock path is never empty while
-# a live holder exists, so two waiters cannot both hold the lock.
+# owner of the lock UNDER the mutex (the snapshot it judged on is never trusted; the re-read narrows the
+# window to the few instructions between the read and the removal, it does not close it), removes the lock
+# only if the owner is still a dead pid, or if the snapshot AND the re-read (after a short pause) both found
+# no pid, ALWAYS releases the mutex, and goes round the loop again. A lock whose owner turned from a dead pid
+# into nothing has changed hands and is left alone. A recovering waiter never writes while it recovers,
+# nothing is renamed away and put back, and the lock path is never empty while a live holder exists, so two
+# waiters cannot both hold the lock. A SOLEUR_WENV_LOCK_TICKS below 2 never attempts recovery.
 # The wait is ONE bounded loop. Every failed `mkdir` pass either sleeps one tick (0.1 s; 1 s where
 # `sleep` takes no fraction) or fails at once, and every pass counts against SOLEUR_WENV_LOCK_TICKS
 # (digits only, at most _WENV_TICKS_MAX, else _WENV_TICKS_DEFAULT): about 10 s by default with a
@@ -555,7 +558,7 @@ _wenv_fail() { # <reason> <human text>: value-free marker on stderr, one human l
   exit 1
 }
 _wenv_write() {
-  local _wf="$1" _wre="$2" _wr _wl _wm _wd _wi=0 _ws=0 _wt _wown _wo2 _wstale _wgone _wwhy="" _wn _wrc _wum
+  local _wf="$1" _wre="$2" _wr _wl _wm _wd _wi=0 _ws=0 _wt _wown _wo2 _wsnap="" _wstale _wgone _wwhy="" _wn _wrc _wum
   shift 2
   if _wr="$(readlink -f -- "$_wf" 2>/dev/null)" && [[ -n "$_wr" ]]; then
     :
@@ -589,7 +592,7 @@ _wenv_write() {
       fi
       break
     fi
-    if [[ -L "$_wl" || ( -e "$_wl" && ! -d "$_wl" ) ]]; then
+    if [[ -L "$_wl" || -f "$_wl" ]]; then
       _wenv_fail env_lock_not_dir "The lock path ${_wl} exists but is not a directory; remove it."
     fi
     _wi=$((_wi + 1))
@@ -604,10 +607,10 @@ _wenv_write() {
       _wown=""
       { read -r _wown < "$_wl/owner"; } 2>/dev/null || _wown=""
       if [[ "$_wown" =~ ^[0-9]+$ ]]; then
-        _ws=0
+        _ws=0; _wsnap=pid
         if [[ "$_wown" == "$$" ]] || ! kill -0 "$_wown" 2>/dev/null; then _wstale=1; _wwhy=stale; else _wwhy=live; fi
       else
-        _ws=$((_ws + 1)); _wwhy=""
+        _ws=$((_ws + 1)); _wwhy=""; _wsnap=empty
         if (( _ws > _WENV_EMPTY_POLLS )); then _wstale=1; fi
       fi
     fi
@@ -616,12 +619,14 @@ _wenv_write() {
         _WENV_REC="$_wm"
         _wo2=""
         { read -r _wo2 < "$_wl/owner"; } 2>/dev/null || _wo2=""
-        if [[ ! "$_wo2" =~ ^[0-9]+$ ]]; then
+        if [[ "$_wsnap" == empty && ! "$_wo2" =~ ^[0-9]+$ ]]; then
           sleep "$_WENV_EMPTY_PAUSE" 2>/dev/null || sleep 1
           { read -r _wo2 < "$_wl/owner"; } 2>/dev/null || _wo2=""
         fi
         _wgone=0
-        if [[ ! "$_wo2" =~ ^[0-9]+$ ]] || [[ "$_wo2" == "$$" ]] || ! kill -0 "$_wo2" 2>/dev/null; then
+        if [[ "$_wo2" =~ ^[0-9]+$ ]]; then
+          if [[ "$_wo2" == "$$" ]] || ! kill -0 "$_wo2" 2>/dev/null; then rm -rf -- "$_wl"; _ws=0; _wgone=1; fi
+        elif [[ "$_wsnap" == empty ]]; then
           rm -rf -- "$_wl"; _ws=0; _wgone=1
         fi
         _wenv_unlock
@@ -631,7 +636,7 @@ _wenv_write() {
     if (( _wi >= _wt )); then
       if [[ "$_wwhy" != live && -d "$_wm" ]]; then _wwhy=recover; fi
       case "$_wwhy" in
-        live) _wenv_fail env_lock_timeout "Another write-env run holds the lock at ${_wl}; waited and gave up. If no other run is active, remove that directory." ;;
+        live) _wenv_fail env_lock_timeout "Another write-env run is still holding the lock at ${_wl}; wait for it to finish and run this again. If no other run is active, remove that directory." ;;
         recover) _wenv_fail env_lock_timeout "A lock recovery is in progress or was interrupted (${_wm} exists); waited and gave up. If no other run is active, remove that directory." ;;
         *) _wenv_fail env_lock_timeout "The lock at ${_wl} could not be taken or recovered; waited and gave up. If no other run is active, remove that directory." ;;
       esac

@@ -2272,7 +2272,7 @@ check "SIGKILL: the next run also swept the killed run's temp, and no .env.lock.
 # mutex; waiter 2 recovers the lock, takes it and sits in its critical section. When waiter 1 resumes it holds the mutex
 # with a stale snapshot: acting on that snapshot would delete waiter 2's LIVE lock. It must RE-READ the owner under the
 # mutex (the compare-and-swap) and leave the live lock alone.
-we_dead_pid() { ( : ) & local p=$!; wait "$p"; printf '%s' "$p"; }
+we_dead_pid() { ( : ) & local p=$!; wait "$p"; printf '%s\n' "$p"; }
 we_steal_scenario() { # <script-dir or -> ; waiter 1 = bsky (stalled at the recovery mutex), waiter 2 = x (long critical section)
   local s1=- s2=- w1 w2
   we_reset "$G4_SEED"
@@ -2460,11 +2460,13 @@ we_ticks_run() { # <ticks|-> : bsky write-env against a LIVE holder with the cou
 }
 we_ticks_run 5
 check "TICKS=5 against a live holder: 4 ticks slept, gave up with reason=env_lock_timeout (the counter measures the bound)" we_and 'test "$TK_N" -eq 4' 'test "$RC" -eq 1' '[[ "$ERR" == *"reason=env_lock_timeout "* ]]'
-check "a LIVE holder: the give-up text names the holder case and the directory to remove" bash -c '[[ "$1" == *"Another write-env run holds the lock at "*".env.lock.d; waited and gave up. If no other run is active, remove that directory."* ]]' _ "$OUT"
+check "a LIVE holder: the give-up text names the holder case and the directory to remove" bash -c '[[ "$1" == *"Another write-env run is still holding the lock at "*".env.lock.d; wait for it to finish and run this again. If no other run is active, remove that directory."* ]]' _ "$OUT"
 we_ticks_run -
 check "TICKS unset: the default bound of 100 ticks (99 slept)" test "$TK_N" -eq 99
 we_ticks_run "HOME[\$(touch $WED/pwned)]"
 check "TICKS='HOME[\$(touch X)]' (arithmetic-injection shape): the command is NEVER run and the default bound applies" we_and 'test "$TK_N" -eq 99' '[[ ! -e "$WED/pwned" ]]'
+we_ticks_run 08
+check "TICKS=08 (leading zero): read as decimal 8 (7 ticks slept), no arithmetic error text on either stream" we_and 'test "$TK_N" -eq 7' '[[ "$ERR$OUT" != *"value too great"* ]]'
 we_ticks_run 5000
 check "TICKS=5000 (above the cap): rejected, the default bound applies (the wait is not extended)" test "$TK_N" -eq 99
 we_ticks_run 1000
@@ -2913,8 +2915,8 @@ echo "community-argv.test.sh: $PASS passed, $FAIL failed"
 # Exact count, in the pre-existing guard-invisible form: a lower-case `-lt` floor would make this
 # `plugins/soleur/skills/*/test/` suite floor-bearing, which grows the DEFERRED ledger in
 # scripts/guard-vacuity-floor.test.sh (47 -> 48) until the file is promoted there.
-if [[ "$((PASS + FAIL))" -ne 1595 ]]; then
-  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1595\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 1596 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1596\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]

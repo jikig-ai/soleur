@@ -7114,7 +7114,8 @@ s7x_good() {
   [[ "$got" == "$want" ]] || r+=" stdin-differs"
   printf '%s' "${r# }"
 }
-S7X_PM="$S7_X/blk-pm.sh"; S7X_PF="$S7_X/blk-pf.sh"; S7X_SH="$S7_X/blk-sh.sh"
+S7X_PM="$S7_X/blk-pm.sh"; S7X_PF="$S7_X/blk-pf.sh"; S7X_SH="$S7_X/blk-sh.sh"; S7X_DS="$S7_X/blk-ds.sh"
+s7x_block plugins/soleur/skills/postmerge/references/deploy-status-debugging.md "hooks/deploy-status" > "$S7X_DS" || { rm -f "$S7X_DS"; }
 s7x_block plugins/soleur/skills/postmerge/SKILL.md "monitors/" > "$S7X_PM" || { rm -f "$S7X_PM"; }
 s7x_block plugins/soleur/skills/preflight/SKILL.md "rest/v1/" > "$S7X_PF" || { rm -f "$S7X_PF"; }
 s7x_block plugins/soleur/skills/ship/SKILL.md "infra-config-status" > "$S7X_SH" || { rm -f "$S7X_SH"; }
@@ -7150,14 +7151,32 @@ if [[ -s "$S7X_SH" ]]; then
   S7X_SIG=""; [[ -r "$S7X_REC/stdin.1" ]] && S7X_SIG="$(sed -n '1s/^header = "X-Signature-256: sha256=\([0-9a-f]\{64\}\)"$/\1/p' "$S7X_REC/stdin.1")"
   S7X_R1="$(s7x_good "$(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"' "$S7X_SIG" "$S7X_GOOD-CF_ACCESS_CLIENT_ID" "$S7X_GOOD-CF_ACCESS_CLIENT_SECRET")" "$S7X_GOOD" "$S7X_SIG")"
   [[ -z "$S7X_R1" && -n "$S7X_SIG" ]] || S7X_BAD_REASONS+=" good:${S7X_R1:-no-signature-line}"
-  for S7X_NM in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+  for S7X_NM in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET APP_DOMAIN_BASE; do
     s7x_run "sh-bad-$S7X_NM" "$S7X_SH" "$S7X_NM"
+    S7X_VAR="${S7X_NM/CF_ACCESS_CLIENT_/CF_ACCESS_}"
     [[ "$S7X_N" -eq 0 ]] || S7X_BAD_REASONS+=" $S7X_NM-refused-made-$S7X_N-calls"
-    [[ "$S7X_RC" -ne 0 && "$S7X_OUT" == *"unset or not [A-Za-z0-9._~+/=-]"* && "$S7X_OUT" != *"$S7X_BAD"* ]] || S7X_BAD_REASONS+=" $S7X_NM-refused-message(rc=$S7X_RC)"
+    [[ "$S7X_RC" -ne 0 && "$S7X_OUT" == *"$S7X_VAR unset or not [A-Za-z0-9._~+/=-]"* && "$S7X_OUT" != *"$S7X_BAD"* ]] || S7X_BAD_REASONS+=" $S7X_NM-refused-message-not-naming-$S7X_VAR(rc=$S7X_RC)"
   done
 else S7X_BAD_REASONS+=" block-not-found-exactly-once"; fi
 if [[ -z "$S7X_BAD_REASONS" ]]; then row "S7 executed (ship infra-config-status): the block run under bash sends X-Signature-256, CF-Access-Client-Id and CF-Access-Client-Secret on curl's stdin config only (none on the recorded argv), and a refused Access id or secret (each made bad alone) makes zero calls and a nonzero exit" ok
 else row "S7 executed (ship infra-config-status): the converted block does not behave as documented" fail "reasons='${S7X_BAD_REASONS# }'"; fi
+
+# postmerge deploy-status-debugging: the signature and the Access pair ride stdin, and a refused id or secret (each alone) makes zero calls and names that variable
+S7X_BAD_REASONS=""
+if [[ -s "$S7X_DS" ]]; then
+  s7x_run ds-good "$S7X_DS"
+  S7X_SIG=""; [[ -r "$S7X_REC/stdin.1" ]] && S7X_SIG="$(sed -n '1s/^header = "X-Signature-256: sha256=\([0-9a-f]\{64\}\)"$/\1/p' "$S7X_REC/stdin.1")"
+  S7X_R1="$(s7x_good "$(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"' "$S7X_SIG" "$S7X_GOOD-CF_ACCESS_CLIENT_ID" "$S7X_GOOD-CF_ACCESS_CLIENT_SECRET")" "$S7X_GOOD" "$S7X_SIG")"
+  [[ -z "$S7X_R1" && -n "$S7X_SIG" ]] || S7X_BAD_REASONS+=" good:${S7X_R1:-no-signature-line}"
+  s7x_argv_has "https://deploy.soleur.ai/hooks/deploy-status" || S7X_BAD_REASONS+=" url-not-called"
+  for S7X_NM in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+    s7x_run "ds-bad-$S7X_NM" "$S7X_DS" "$S7X_NM"
+    [[ "$S7X_N" -eq 0 ]] || S7X_BAD_REASONS+=" $S7X_NM-refused-made-$S7X_N-calls"
+    [[ "$S7X_RC" -ne 0 && "$S7X_OUT" == *"$S7X_NM unset or not [A-Za-z0-9._~+/=-]"* && "$S7X_OUT" != *"$S7X_BAD"* ]] || S7X_BAD_REASONS+=" $S7X_NM-refused-message(rc=$S7X_RC)"
+  done
+else S7X_BAD_REASONS+=" block-not-found-exactly-once"; fi
+if [[ -z "$S7X_BAD_REASONS" ]]; then row "S7 executed (postmerge deploy-status-debugging): the block run under bash sends X-Signature-256, CF-Access-Client-Id and CF-Access-Client-Secret on curl's stdin config only (so a dropped --config - or a swapped id and secret is RED), and a refused Access id or secret makes zero calls and a nonzero exit naming that variable" ok
+else row "S7 executed (postmerge deploy-status-debugging): the converted block does not behave as documented" fail "reasons='${S7X_BAD_REASONS# }'"; fi
 
 # CONTROL: the judge must go RED on a block that puts the token on argv, and a block whose shape guard is neutralised must make a call for a refused token
 S7X_BAD_REASONS=""
@@ -7430,7 +7449,8 @@ SELFTEST_PASSES=0
 # 770 -> 781 at #9757 (stage S6-HB, Guard 2: heartbeat URL off curl argv, derived population): the 11 S6-HB rows, measured (781 passed, 0 failed).
 # 781 -> 796 at #10093 (stage S7, Guard 3 for markdown: bearer and apikey headers off curl argv in plugins/**/*.md): the 15 S7 rows, measured (796 passed, 0 failed).
 # 796 -> 801 at the PR #10185 fix round (S7: the Rule E header names, the executed-snippet rows and their control): 5 more S7 rows, measured (801 passed, 0 failed).
-EXPECTED_TESTS=801
+# 801 -> 802 at the fix-round batch (S7: an executed row for the deploy-status-debugging snippet; the ship row also covers APP_DOMAIN_BASE): measured (802 passed, 0 failed).
+EXPECTED_TESTS=802
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

@@ -11,7 +11,7 @@ WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --project soleur --co
 CF_ACCESS_CLIENT_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --project soleur --config prd_terraform --plain)
 CF_ACCESS_CLIENT_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --project soleur --config prd_terraform --plain)
 SIGNATURE=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
-(LC_ALL=C; for v in "$SIGNATURE" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET"; do case "$v" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac; done) || { echo "SIGNATURE, CF_ACCESS_CLIENT_ID or CF_ACCESS_CLIENT_SECRET unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1; }
+(LC_ALL=C; for n in SIGNATURE CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do case "${!n}" in ''|*[!A-Za-z0-9._~+/=-]*) echo "$n unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1;; esac; done) || exit 1
 curl --disable --proto '=https' -m 30 -fsS -X GET --config - https://deploy.soleur.ai/hooks/deploy-status \
   < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIGNATURE" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET")
 ```

@@ -1101,9 +1101,10 @@ CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terrafor
 CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
 HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
 # argv shows in /proc/<pid>/cmdline: the headers ride curl's stdin config. Bash only; `bash -x` would print them.
-(LC_ALL=C; for v in "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET"; do case "$v" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac; done) || { echo "HMAC, CF_ACCESS_ID or CF_ACCESS_SECRET unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1; }
+APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)
+(LC_ALL=C; for n in HMAC CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE; do case "${!n}" in ''|*[!A-Za-z0-9._~+/=-]*) echo "$n unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1;; esac; done) || exit 1
 curl --disable --proto '=https' -m 30 -fsS --config - \
-  "https://deploy.$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)/hooks/infra-config-status" \
+  "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" \
   < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET") \
   | jq -e '.exit_code == 0 and .files_failed == 0 and .files_written == .files_total'
 ```
