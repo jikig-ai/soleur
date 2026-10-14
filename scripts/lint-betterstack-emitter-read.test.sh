@@ -72,7 +72,17 @@ mk_tree() {
   git -C "$t" init -q >/dev/null 2>&1
   printf '%s' "$t"
 }
-seed() { git -C "$1" add -A >/dev/null 2>&1; }
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+seed() { assert_fixture_dir "$1"; git -C "$1" add -A >/dev/null 2>&1; }
 
 EMPTY_ALLOW="$SANDBOX/empty.allow"
 : > "$EMPTY_ALLOW"
@@ -266,7 +276,7 @@ fi
 
 # --- DISPATCH-CLASS: a COPY with the emitter classifier neutered reds the GREEN fixture --
 MUT2="$SANDBOX/guard-no-classifier.sh"
-sed 's|grep -qE -- "\$EMITTER_RE" "\$WORK/code"|false|' "$GUARD" > "$MUT2"
+sed 's#grep -qE -- "\$EMITTER_RE" "\$WORK/code"#false#' "$GUARD" > "$MUT2"
 if cmp -s "$GUARD" "$MUT2"; then
   check 1 "" "DISPATCH-CLASS mutation did NOT land (the classifier line changed?) — the row would be vacuous"
 else

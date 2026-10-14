@@ -288,7 +288,9 @@ No C4 change expected — no new external system, container, or data flow (the V
 
 ## Downtime & Cutover
 
+<!-- lint-infra-ignore start -->
 - **Offline-inducing operations:** none in the PR. Web-host apply performs a `systemctl restart vector.service` inside the existing provisioner — a seconds-scale shipper gap, buffered by the journald cursor; the dedicated host takes the change only on an operator-gated `inngest-host-replace`.
+<!-- lint-infra-ignore end -->
 - **Zero-downtime evaluation:** the restart is the pre-existing delivery mechanism; the change itself introduces no new downtime surface.
 
 ## Domain Review

@@ -304,6 +304,7 @@ scripts/battery-ref-guard	150	measured
 scripts/battery-tag-authorship	26224	measured
 scripts/bearer-curl-s4-first-runs-9905	1194	floor
 scripts/betterstack-assert-absence	295	measured
+scripts/betterstack-emitter-read-live	1400	measured
 scripts/betterstack-ingest-parity	175	measured
 scripts/board/set-board-status	731	measured
 scripts/capture-web-1-host-key	433	measured

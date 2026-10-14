@@ -254,15 +254,22 @@ FOUND_LIST="$WORK/found"
 VERDICTS="$WORK/verdicts"
 : > "$VERDICTS"
 
+# Pre-pass (fast tier): a file that never writes the transport name or a seam token ANYWHERE —
+# comments included — cannot be a reader; comments cannot invoke. One repo-wide git grep narrows
+# the walk to the needle-bearing minority (~66 of 3201); comment-strip + classification still run
+# per file below, unchanged. n_walked still counts every eligible file (the census walked it — as
+# a candidate check, the same verdict the old per-file strip produced for needle-free files).
+grep -vE '^(knowledge-base/|docs/|tests/|.*[.]md$|.*[.]test[.](sh|ts|py|js|tsx)$|scripts/lint-betterstack-emitter-read[.]test[.]sh$|scripts/lint-betterstack-emitter-read[.]sh$)' \
+  "$WORK/lsfiles" > "$WORK/eligible" || true
+n_walked="$(wc -l < "$WORK/eligible" | tr -d ' ')"
+git -C "$TREE_ROOT" grep -lE 'betterstack-query[.]sh|bs_absence_query_script|_bs_query_rows|run_bq' -- . 2>/dev/null | sort > "$WORK/namehits" || true
+sort "$WORK/eligible" > "$WORK/eligible.sorted"
+comm -12 "$WORK/eligible.sorted" "$WORK/namehits" > "$WORK/candidates"
+
 while IFS= read -r rel; do
   [[ -n "$rel" ]] || continue
-  case "$rel" in
-    knowledge-base/*|docs/*|tests/*|*.md|*.test.sh|*.test.ts|*.test.py|*.test.js|*.test.tsx) continue ;;
-    scripts/lint-betterstack-emitter-read.sh|scripts/lint-betterstack-emitter-read.test.sh) continue ;;
-  esac
   f="$TREE_ROOT/$rel"
   [[ -f "$f" ]] || continue
-  n_walked=$((n_walked + 1))
   strip_code "$f" > "$WORK/code"
   # Adjacency is per LINE: the name-bearing lines alone are tested for invocation shape — a
   # hint string that embeds the recipe still counts (its verdict is the allowlist's "hint"
@@ -296,7 +303,7 @@ while IFS= read -r rel; do
     printf 'UNCLASSIFIED %s (invokes betterstack-query.sh but neither selects on SYSLOG_IDENTIFIER nor carries an allowlist reason — select through the decoded field, source scripts/lib/bs-emitter-row.sh, or record a reason)\n' "$rel" >> "$VERDICTS"
     violations=$((violations + 1))
   fi
-done < "$WORK/lsfiles"
+done < "$WORK/candidates"
 
 sort -o "$VERDICTS" "$VERDICTS"
 cat "$VERDICTS"
