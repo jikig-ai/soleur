@@ -98,25 +98,25 @@ build_fixture() {
   mkdir -p "$FIXTURE"
   (
     cd "$FIXTURE" || exit 1
-    git init -q -b trunk
-    git config user.email "merge-fixture@example.com"
-    git config user.name "merge fixture"
+    gl_run 60 git init -q -b trunk
+    gl_run 60 git config user.email "merge-fixture@example.com"
+    gl_run 60 git config user.name "merge fixture"
     echo base > conf.txt
-    git add -A
-    git commit -qm "base"
-    git rev-parse HEAD > .base-sha
-    git checkout -q -b feature
+    gl_run 60 git add -A
+    gl_run 60 git commit -qm "base"
+    gl_run 60 git rev-parse HEAD > .base-sha
+    gl_run 60 git checkout -q -b feature
     echo feature-side > conf.txt
-    git commit -qam "feature side"
-    git checkout -q trunk
+    gl_run 60 git commit -qam "feature side"
+    gl_run 60 git checkout -q trunk
     echo trunk-side > conf.txt
-    git commit -qam "trunk side"
+    gl_run 60 git commit -qam "trunk side"
     # Genuine 2-parent merge with a hand-resolved conflict. The resolution
     # introduces content present in NEITHER parent — the #6721 shape.
-    git merge feature -q >/dev/null 2>&1 || true
+    gl_run 60 git merge feature -q >/dev/null 2>&1 || true
     printf 'url = "%s"\n' "$SEC" > conf.txt
-    git add conf.txt
-    git commit -q --no-edit
+    gl_run 60 git add conf.txt
+    gl_run 60 git commit -q --no-edit
   )
   BASE_SHA=$(cat "$FIXTURE/.base-sha" 2>/dev/null)
 }
@@ -125,7 +125,7 @@ build_fixture() {
 scan_git() {
   (
     cd "$FIXTURE" || exit 1
-    gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$1" >/dev/null 2>&1
+    gl_run 120 gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$1" >/dev/null 2>&1
     echo $?
   )
 }
@@ -140,9 +140,9 @@ scan_git_count() {
   (
     cd "$FIXTURE" || exit 1
     rpt=$(mktemp -t glreport.XXXXXXXX.json)
-    gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$1" \
+    gl_run 120 gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$1" \
       --report-format json --report-path "$rpt" >/dev/null 2>&1
-    n=$(jq 'length' "$rpt" 2>/dev/null || echo 0)
+    n=$(gl_run 30 jq 'length' "$rpt" 2>/dev/null || echo 0)
     rm -f "$rpt"
     echo "${n:-0}"
   )
@@ -156,7 +156,7 @@ RULE="doppler-api-token"
 # A missing, empty or unparseable report yields nothing, so an oracle built on
 # this reads a scan that never ran as "not detected" — the fail-loud direction.
 report_rules() {
-  jq -r '.[].RuleID' "$1" 2>/dev/null | sort -u
+  gl_run 30 jq -r '.[].RuleID' "$1" 2>/dev/null | sort -u
 }
 
 # ...but that is only honest about gitleaks if jq can actually parse. Without this
@@ -174,7 +174,7 @@ scan_git_rules() {
   (
     cd "$1" || exit 1
     rpt=$(mktemp -t glreport.XXXXXXXX.json)
-    gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$2" \
+    gl_run 120 gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$2" \
       --report-format json --report-path "$rpt" >/dev/null 2>&1
     report_rules "$rpt"
     rm -f "$rpt"
@@ -186,7 +186,7 @@ scan_dir_rules() {
   (
     cd "$1" || exit 1
     rpt=$(mktemp -t glreport.XXXXXXXX.json)
-    gitleaks dir . --config "$CONFIG" --no-banner --exit-code 1 \
+    gl_run 120 gitleaks dir . --config "$CONFIG" --no-banner --exit-code 1 \
       --report-format json --report-path "$rpt" >/dev/null 2>&1
     report_rules "$rpt"
     rm -f "$rpt"
@@ -201,7 +201,7 @@ patch_bytes() {
   (
     cd "$FIXTURE" || exit 1
     # shellcheck disable=SC2086
-    git log -p $1 -1 HEAD | sed -n '/^diff --/,$p' | wc -c | tr -d ' '
+    gl_run 60 git log -p $1 -1 HEAD | sed -n '/^diff --/,$p' | wc -c | tr -d ' '
   )
 }
 
@@ -211,10 +211,10 @@ echo ""
 build_fixture
 
 echo "T0: fixture is a genuine 2-parent merge carrying content absent from both parents"
-parents=$( (cd "$FIXTURE" && git rev-list --parents -1 HEAD | wc -w) )
-in_merge=$( (cd "$FIXTURE" && git show HEAD:conf.txt) | grep -c 'dp\.pt\.' )
-in_p1=$( (cd "$FIXTURE" && git show HEAD^1:conf.txt) | grep -c 'dp\.pt\.' )
-in_p2=$( (cd "$FIXTURE" && git show HEAD^2:conf.txt) | grep -c 'dp\.pt\.' )
+parents=$( (cd "$FIXTURE" && gl_run 30 git rev-list --parents -1 HEAD | wc -w) )
+in_merge=$( (cd "$FIXTURE" && gl_run 30 git show HEAD:conf.txt) | grep -c 'dp\.pt\.' )
+in_p1=$( (cd "$FIXTURE" && gl_run 30 git show HEAD^1:conf.txt) | grep -c 'dp\.pt\.' )
+in_p2=$( (cd "$FIXTURE" && gl_run 30 git show HEAD^2:conf.txt) | grep -c 'dp\.pt\.' )
 if [[ "$parents" == "3" && "$in_merge" == "1" && "$in_p1" == "0" && "$in_p2" == "0" ]]; then
   pass "2-parent merge; secret in merge tree only (parents clean)"
 else
@@ -426,29 +426,29 @@ build_coupling_fixture() {
   mkdir -p "$COUPLING"
   (
     cd "$COUPLING" || exit 1
-    git init -q -b trunk
-    git config user.email "coupling-fixture@example.com"
-    git config user.name "coupling fixture"
+    gl_run 60 git init -q -b trunk
+    gl_run 60 git config user.email "coupling-fixture@example.com"
+    gl_run 60 git config user.name "coupling fixture"
     echo clean > readme.md
-    git add -A && git commit -qm "A: base"
-    git rev-parse HEAD > .a-sha
+    gl_run 60 git add -A && gl_run 60 git commit -qm "A: base"
+    gl_run 60 git rev-parse HEAD > .a-sha
     # B: trunk gains a secret of its own. Clean merge, no conflict anywhere —
     # this is the ordinary main-sync shape, not the #6721 conflict shape.
     printf 'url = "%s"\n' "$SEC" > trunk-secret.conf
-    git add -A && git commit -qm "B: trunk gains a secret"
-    git rev-parse HEAD > .b-sha
-    git checkout -q -b feature "$(cat .a-sha)"
+    gl_run 60 git add -A && gl_run 60 git commit -qm "B: trunk gains a secret"
+    gl_run 60 git rev-parse HEAD > .b-sha
+    gl_run 60 git checkout -q -b feature "$(cat .a-sha)"
     echo feature-work > feature.md
-    git add -A && git commit -qm "C: unrelated feature work"
-    git merge -q --no-ff trunk -m "M: sync trunk into feature" >/dev/null 2>&1
+    gl_run 60 git add -A && gl_run 60 git commit -qm "C: unrelated feature work"
+    gl_run 60 git merge -q --no-ff trunk -m "M: sync trunk into feature" >/dev/null 2>&1
   )
   CB=$(cat "$COUPLING/.b-sha" 2>/dev/null)
-  CM=$(git -C "$COUPLING" rev-parse HEAD 2>/dev/null)
+  CM=$(gl_run 30 git -C "$COUPLING" rev-parse HEAD 2>/dev/null)
 }
 scan_coupling() {
   (
     cd "$COUPLING" || exit 1
-    gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$1" >/dev/null 2>&1
+    gl_run 120 gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$1" >/dev/null 2>&1
     echo $?
   )
 }
@@ -472,7 +472,7 @@ else
     fi
   fi
   # P2: the merge must be a genuine 2-parent merge, else -m has nothing to expand.
-  if [[ "$(git -C "$COUPLING" rev-list --parents -n1 "$CM" | wc -w)" == "3" ]]; then
+  if [[ "$(gl_run 30 git -C "$COUPLING" rev-list --parents -n1 "$CM" | wc -w)" == "3" ]]; then
     pass "P2: M is a genuine 2-parent merge"
   else
     fail "P2: M is not a 2-parent merge — -m has nothing to expand"
@@ -513,6 +513,47 @@ if [[ "$pr_dash_m" == "0" ]]; then
   pass "no PR/merge_group step uses '-m BASE..HEAD' (would couple main's content — see above)"
 else
   fail "a PR/merge_group step uses '-m BASE..HEAD' ($pr_dash_m) — coupling is confirmed above"
+fi
+
+echo "T8: a wedged external invocation returns at its bound, not never (#7697)"
+# The 4.6-day wedged-holder incident was a gitleaks/git child parked in
+# anon_pipe_read while its parent held the repo-wide test-all lock. Every
+# external call in this suite routes through gl_run, which puts an exec-
+# boundary deadline on it. A PATH-pinned stub that never exits must return
+# rc=124-class inside the bound — not hang the suite.
+if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
+  echo "  [note] no timeout/gtimeout on PATH — bounded invocations degrade to unbounded by design; arm not measurable here"
+else
+  STUB_DIR="$TMP/stub-bin"; mkdir -p "$STUB_DIR"
+  printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$STUB_DIR/gitleaks"
+  printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$STUB_DIR/git"
+  chmod +x "$STUB_DIR/gitleaks" "$STUB_DIR/git"
+  _t8_start=$(date +%s)
+  # The stubs sleep an hour; an outer bound keeps a regressed gl_run failing
+  # here instead of stalling the suite.
+  timeout 60 env PATH="$STUB_DIR:$PATH" bash -c \
+    'source "$0"; gl_run 3 gitleaks git --config "$1" --log-opts="HEAD"' \
+    "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/gitleaks-probe.sh" \
+    "$CONFIG" >/dev/null 2>&1
+  _t8_rc=$?
+  _t8_elapsed=$(( $(date +%s) - _t8_start ))
+  if [[ "$_t8_rc" == "124" ]] && (( _t8_elapsed < 15 )); then
+    pass "a never-exiting gitleaks returns rc=124 in ${_t8_elapsed}s (bound=3s)"
+  else
+    fail "wedged gitleaks not bounded: rc=$_t8_rc elapsed=${_t8_elapsed}s"
+  fi
+  _t8_start=$(date +%s)
+  timeout 60 env PATH="$STUB_DIR:$PATH" bash -c \
+    'source "$0"; gl_run 3 git log -p -1 HEAD' \
+    "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/gitleaks-probe.sh" \
+    >/dev/null 2>&1
+  _t8_rc=$?
+  _t8_elapsed=$(( $(date +%s) - _t8_start ))
+  if [[ "$_t8_rc" == "124" ]] && (( _t8_elapsed < 15 )); then
+    pass "a never-exiting git returns rc=124 in ${_t8_elapsed}s (bound=3s)"
+  else
+    fail "wedged git not bounded: rc=$_t8_rc elapsed=${_t8_elapsed}s"
+  fi
 fi
 
 # CI fail-on-skip contract, asserted against the epilogue's REAL BYTES. That
