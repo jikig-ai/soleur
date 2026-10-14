@@ -1729,3 +1729,18 @@
 - That successful export is historical after this documentation update. Refresh
   exact-source pairing/export and PR description after the resulting commit;
   keep the draft check watch on the pushed head. All existing holds persist.
+
+### Fourth main sync and source retest — 2026-10-14
+
+- The next bounded watch observed BEHIND while main moved to
+  `29c58982941f6be6f9565db44d40a4034011c8d7` (#10185). The 31-file change
+  covers community setup scripts/shared shell helpers, server telemetry and
+  corresponding tests/docs. A clean merge tree preceded canonical sync; the
+  exact main was merged and pushed as `735c74b55e5ed26cd9ed11e9a5187bdf794146dc`.
+- The complete offline qualification wrapper passed after sync with explicit
+  `POST_MAIN_10185_OFFLINE_RC=0`; no operational counts changed from zero. The
+  source input set changed, so the preceding exact-head export and PR body are
+  historical. Refresh source pairing/export and body after this record.
+- PR #9051 remains OPEN, draft, disarmed and default-off. Customer content,
+  live operations, recovery/retry, build, deployment and promotion remain held.
+  Build authorization stays consumed and the withdrawn command stays forbidden.

@@ -295,3 +295,13 @@ still expected the prior inventory and refused; dynamic revalidation confirmed
 the new file in both mappings, exact preview/receipt agreement, zero operations
 and false execution authority. The next documentation commit invalidates this
 pairing, so the final exact-head export is still required.
+
+## Fourth main sync and offline wrapper
+
+Main advanced to `29c58982941f6be6f9565db44d40a4034011c8d7` (#10185), adding
+community setup and shared shell changes, a server telemetry edit and related
+tests/docs. The clean merge was pushed as `735c74b55e5ed26cd9ed11e9a5187bdf794146dc`.
+The full registered offline qualification wrapper passed afterward with
+`POST_MAIN_10185_OFFLINE_RC=0`; operation counts remained zero. Since the
+runtime/plugin source inventory changed, the exact-head pairing/export and PR
+body must be refreshed after this documentation commit.

@@ -159,3 +159,7 @@ Assembly completed, but the refusal was correct: one new runtime input has both
 runtime and vendored copies. Regenerate expected values from the preparation
 receipt, assert source-to-vendor relationships and total metadata counts, then
 compare preview and receipt. Do not carry forward stale source counts.
+
+A later documentation patch used a guessed terminal paragraph and did not match
+the actual file tail; the patch made no changes. Read the target tail immediately
+before applying and anchor to its exact final line.
