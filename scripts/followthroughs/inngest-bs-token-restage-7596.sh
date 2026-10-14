@@ -38,6 +38,10 @@
 # shipping a row was the exact false-close the issue names. Only BOTH fields
 # naming the dedicated host proves delivery.
 #
+# Tracker directive (goes in the issue body; a deferred operator step — the
+# probe is inert until enrolled):
+#   <!-- soleur:followthrough script=scripts/followthroughs/inngest-bs-token-restage-7596.sh earliest=<replace-date> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
+#
 # Secrets clause: BETTERSTACK_QUERY_HOST / BETTERSTACK_QUERY_USERNAME /
 # BETTERSTACK_QUERY_PASSWORD are already wired into the sweeper env (the
 # sibling #7674/#7500 probes' clause); none is a prd-terraform credential. No
@@ -62,9 +66,15 @@ QUERY="${RESTAGE_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"
 INNGEST_HOST="${RESTAGE_HOST:-soleur-inngest}"
 HOST_NAME="${RESTAGE_HOST_NAME:-soleur-inngest-prd}"
 WINDOW="${RESTAGE_WINDOW:-${SOLEUR_FT_WINDOW:-7d}}"
-LIMIT="${RESTAGE_LIMIT:-500}"
+LIMIT="${RESTAGE_LIMIT:-${SOLEUR_FT_LIMIT:-500}}"
 IDENT='inngest-bs-token-restage'
 MARKER='SOLEUR_INNGEST_BS_TOKEN_RESTAGED'
+# The SQL prefilter uses the PREFIX, not the D-suffixed marker: the failure
+# emit is SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED, which never contains
+# RESTAGED — a full-prefix grep is what lets restage_not_ok fire on the real
+# failure shape instead of misreporting it as channel_dark.
+MARKER_PREFIX='SOLEUR_INNGEST_BS_TOKEN_RESTAGE'
+
 
 # --- credentials: absent = TRANSIENT, never ${VAR:?} ------------------------
 missing=""
@@ -83,7 +93,7 @@ fi
 
 # --- query: marker prefilter, decode, host+identity isolation ----------------
 qrc=0
-rows="$("$QUERY" --since "$WINDOW" --grep "$MARKER" --limit "$LIMIT" 2>/dev/null)" || qrc=$?
+rows="$("$QUERY" --since "$WINDOW" --grep "$MARKER_PREFIX" --limit "$LIMIT" 2>/dev/null)" || qrc=$?
 if [[ "$qrc" -ne 0 ]]; then
   printf 'TRANSIENT: reason=query_failed rc=%s — the Better Stack read failed; no verdict can be formed this pass.\n' "$qrc" >&2
   exit 2
@@ -102,8 +112,8 @@ mine="$(printf '%s\n' "$rows" \
         | select(.SYSLOG_IDENTIFIER == $id)
         | select(.host == $h)
         | select(.host_name == $hn)
-        | select(.message | contains($m))
-        | .message' 2>/dev/null)" || jrc=$?
+        | select((.message // "") | contains($m))
+        | (.message // "")' 2>/dev/null)" || jrc=$?
 if [[ "$jrc" -ne 0 ]]; then
   printf 'TRANSIENT: reason=selector_failed rc=%s — jq failed to decode; the Better Stack raw shape may have changed.\n' "$jrc" >&2
   exit 2
@@ -125,14 +135,14 @@ if [[ -z "$mine" ]]; then
     printf 'TRANSIENT: reason=restage_not_ok — %s rows ARE arriving from %s/%s (the allowlist is live) but none carries %s ok=1; read the emitted reason= row for the failure class.\n' \
       "$IDENT" "$INNGEST_HOST" "$HOST_NAME" "$MARKER" >&2
   else
-    printf 'TRANSIENT: reason=channel_dark — zero %s rows from %s/%s in %sd. Expected until the next inngest-host-replace bakes and boots the #7457 allowlist; do NOT rekey on web-1 rows, which are live-but-inert by design (#7596).\n' \
+    printf 'TRANSIENT: reason=channel_dark — zero %s rows from %s/%s in %s. Expected until the next inngest-host-replace bakes and boots the #7457 allowlist; do NOT rekey on web-1 rows, which are live-but-inert by design (#7596).\n' \
       "$IDENT" "$INNGEST_HOST" "$HOST_NAME" "$WINDOW" >&2
   fi
   exit 2
 fi
 
 n_rows=$(printf '%s\n' "$mine" | grep -cF "$MARKER" || true)
-n_ok=$(printf '%s\n' "$mine" | grep -cF 'ok=1' || true)
+n_ok=$(printf '%s\n' "$mine" | grep -cE "$MARKER ok=1(\$|[[:space:]])" || true)
 if [[ "$n_ok" -ge 1 ]]; then
   printf 'PASS: observed %s ok=1 (%s marker row(s) in window %s) from SYSLOG_IDENTIFIER=%s host=%s host_name=%s — the #7457 allowlist is live on the inngest host; #7596 close evidence.\n' \
     "$MARKER" "$n_rows" "$WINDOW" "$IDENT" "$INNGEST_HOST" "$HOST_NAME"

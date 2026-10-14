@@ -52,7 +52,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=75   # anti-vacuity floor = the green run's exact count (75 on 2026-10-14, initial battery); raise when adding rows, never lower it silently
+MIN_ASSERTIONS=100  # anti-vacuity floor = the green run's exact count (75 on 2026-10-14 initial battery; 100 after the review fix-round arms J-M + Guard-2 pins); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -190,6 +190,23 @@ assert_out_lacks() { # name needle (fixed string)
   if grep -qF -- "$2" "$LAST_OUT"; then fail "$1" "output carries forbidden '$2'"
   else pass "$1"; fi
 }
+# assert_row_count <name> <n> — exactly one verdict row per tag (header
+# contract: "never zero rows, never a skipped tag"). Independent of which
+# verdict any single row carries.
+assert_row_count() { # name expected
+  local got
+  got=$(grep -cE '^tag=' "$LAST_OUT" 2>/dev/null || true)
+  if [[ "$got" == "$2" ]]; then pass "$1"
+  else fail "$1" "verdict rows=$got, expected $2 — $(tail -5 "$LAST_OUT" | tr '\n' '|')"; fi
+}
+# crane_calls <n> — the stub log counts every `crane digest` call; a preflight
+# refusal must reach the assertion with ZERO network calls (refusal-before-
+# network ordering), and the retry arm must show exactly the retried count.
+crane_calls() { grep -c '^crane digest' "$MOCK_CRANE_LOG" 2>/dev/null || true; }
+assert_crane_calls() { # name expected
+  if [[ "$(crane_calls)" == "$2" ]]; then pass "$1"
+  else fail "$1" "crane digest calls=$(crane_calls), expected $2"; fi
+}
 # verdict_row <name> <tag> <expected-verdict> — the per-tag row carries
 # `tag=<T> verdict=<v>`; assert the verdict field exactly.
 verdict_row() {
@@ -228,6 +245,8 @@ assert_result 'A:all-unchanged-result' ok
 verdict_row 'A:v9.9.1-unchanged' v9.9.1 unchanged
 verdict_row 'A:v9.9.2-unchanged' v9.9.2 unchanged
 assert_out_has 'A:both-tags-classified' 'tags=2'
+assert_row_count 'A:row-count' 2
+assert_crane_calls 'A:crane-calls' 2
 # The bump-AWAY edge, made explicit: v9.9.1's recorded digest is DIG_1, which
 # lives ONLY in the `hit^:` tree (the newest -G hit's own tree carries v9.9.2).
 # A `hit:`-only derivation reports never-recorded here and greens nothing.
@@ -324,6 +343,7 @@ assert_rc 'G:crane-fail-rc' 2
 assert_result 'G:crane-fail-result' unmeasurable
 assert_out_lacks 'G:no-content-verdicts' 'verdict=unchanged'
 assert_out_lacks 'G:no-moved-verdict' 'verdict=moved'
+assert_crane_calls 'G:retry-loop-exercised' 3
 unset MOCK_CRANE_FAIL
 # rc 0 with an unparseable body is the same instrument class.
 reset_state crane-garbage
@@ -344,6 +364,7 @@ run_vdf tagless
 assert_rc 'H:empty-tag-set-rc' 2
 assert_result 'H:empty-tag-set-result' unmeasurable
 assert_out_lacks 'H:no-ok' 'verdict='
+assert_crane_calls 'H:refusal-before-network' 0
 
 # ---------------------------------------------------------------------------
 # Arm I — the pin file is absent: nothing to grade severity against -> the
@@ -359,6 +380,98 @@ crane_serve v9.9.1 "$DIG_1"
 run_vdf nopin
 assert_rc 'I:unreadable-pin-rc' 2
 assert_result 'I:unreadable-pin-result' unmeasurable
+
+# ---------------------------------------------------------------------------
+# Arm J — a shallow checkout: `git tag --merged` drops tags below the graft
+# silently (#8782), so the refusal must fire BEFORE selection and before any
+# registry call. `git clone --depth` only honors depth over file://.
+# ---------------------------------------------------------------------------
+new_fixture_repo shallow-src
+write_fixture_cloud_inits "$F_REPO" v9.9.1 "$DIG_1"
+fixture_commit "bump pin to v9.9.1"
+seed_tag vinngest-v9.9.1
+write_fixture_cloud_inits "$F_REPO" v9.9.2 "$DIG_2"
+fixture_commit "bump pin to v9.9.2"
+seed_tag vinngest-v9.9.2
+SHALLOW="$TMP/shallow-repo"
+git clone -q --depth 1 "file://$F_REPO" "$SHALLOW" 2>/dev/null
+F_REPO="$SHALLOW"
+reset_state shallow
+crane_serve v9.9.1 "$DIG_1"
+crane_serve v9.9.2 "$DIG_2"
+run_vdf shallow
+assert_rc 'J:shallow-rc' 2
+assert_result 'J:shallow-result' unmeasurable
+assert_out_has 'J:shallow-named' 'is-shallow-repository'
+assert_crane_calls 'J:refusal-before-network' 0
+
+# ---------------------------------------------------------------------------
+# Arm K — the pinned tag is not a member of the merged tag set: the lifecycle
+# invariant broke (tag deleted/unpushed/off-history). Unmeasurable, not a
+# silent ok — the pin's live digest would otherwise go unmeasured while the
+# run reported clean.
+# ---------------------------------------------------------------------------
+new_fixture_repo pin-not-in-set
+write_fixture_cloud_inits "$F_REPO" v9.9.2 "$DIG_2"
+fixture_commit "bump pin to v9.9.2"
+seed_tag vinngest-v9.9.1   # a merged tag exists, but the PIN (v9.9.2) is not among them
+crane_serve v9.9.2 "$DIG_2"
+run_vdf pin-not-in-set
+assert_rc 'K:pin-not-in-set-rc' 2
+assert_result 'K:pin-not-in-set-result' unmeasurable
+assert_out_has 'K:membership-named' 'not a member of the merged vinngest-v* set'
+
+# ---------------------------------------------------------------------------
+# Arm L — divergent pins: the WEB-host file pins v9.9.1 while the dedicated
+# file pins v9.9.2 (the #6536 divergence class). A moved digest on the
+# web-pinned tag is ERROR-class — the sibling grades against both files.
+# ---------------------------------------------------------------------------
+new_fixture_repo divergent
+mkdir -p "$F_REPO/apps/web-platform/infra"
+printf '%s\n' \
+  '# fixture cloud-init.yml' '  runcmd:' \
+  "    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.1@$DIG_1" \
+  > "$F_REPO/apps/web-platform/infra/cloud-init.yml"
+printf '%s\n' \
+  '# fixture cloud-init-inngest.yml' '  runcmd:' \
+  "    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.2@$DIG_2" \
+  > "$F_REPO/apps/web-platform/infra/cloud-init-inngest.yml"
+fixture_commit "pin diverged: web v9.9.1, dedicated v9.9.2"
+seed_tag vinngest-v9.9.1
+seed_tag vinngest-v9.9.2
+crane_serve v9.9.1 "$DIG_1P"   # web-pinned tag moved
+crane_serve v9.9.2 "$DIG_2"
+run_vdf divergent
+assert_rc 'L:divergent-web-pin-moved-rc' 1
+assert_result 'L:divergent-web-pin-moved-result' findings
+verdict_row 'L:v9.9.1-moved-is-error-class' v9.9.1 moved
+assert_out_has 'L:error-annotation' '::error::'
+
+# ---------------------------------------------------------------------------
+# Arm M — never-recorded on the PINNED tag: warn-class, never silent ok.
+# The pin names a tag whose history never carried `<tag>@sha256:`.
+# ---------------------------------------------------------------------------
+new_fixture_repo pin-neverrec
+mkdir -p "$F_REPO/apps/web-platform/infra"
+# The pin line carries NO @digest, so `soleur-inngest-bootstrap:v9.9.3@` never
+# appears in history — never-recorded by construction, on the pinned tag.
+printf '%s\n' \
+  '# fixture cloud-init.yml' '  runcmd:' \
+  '    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.3' \
+  > "$F_REPO/apps/web-platform/infra/cloud-init.yml"
+printf '%s\n' \
+  '# fixture cloud-init-inngest.yml' '  runcmd:' \
+  '    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.3' \
+  > "$F_REPO/apps/web-platform/infra/cloud-init-inngest.yml"
+fixture_commit "pin v9.9.3 name-only (no recorded digest)"
+seed_tag vinngest-v9.9.3
+crane_serve v9.9.3 "$DIG_3"
+run_vdf pin-neverrec
+assert_rc 'M:pinned-never-recorded-rc' 0
+assert_result 'M:pinned-never-recorded-result' findings
+verdict_row 'M:v9.9.3-never-recorded' v9.9.3 never-recorded
+assert_out_has 'M:warning-annotation' '::warning::'
+assert_out_lacks 'M:no-error-annotation' '::error::'
 
 echo ""
 echo "=== Guard 2: workflow + script wiring shape ==="
@@ -391,6 +504,17 @@ file_has 'G2:wf-packages-read' "$WORKFLOW" 'packages: read'
 file_has 'G2:wf-contents-read' "$WORKFLOW" 'contents: read'
 file_has 'G2:wf-ghcr-login' "$WORKFLOW" 'docker/login-action'
 file_has 'G2:wf-runs-script' "$WORKFLOW" 'vinngest-digest-freshness.sh'
+# Anchored on the invocation inside the run block — a bare script-name grep
+# would be satisfied by the workflow header's own comment naming the script.
+file_has 'G2:wf-run-line' "$WORKFLOW" 'bash .github/scripts/vinngest-digest-freshness.sh || rc=$?'
+# The gate-override's "no prd secrets" attestation is only real if nothing
+# Doppler-flavored can appear under it — pin the invariant, not the comment.
+file_lacks 'G2:wf-no-doppler' "$WORKFLOW" 'DOPPLER'
+file_lacks 'G2:wf-no-prd-terraform' "$WORKFLOW" 'prd_terraform'
+# Per-step timeouts so a hang is a step failure that still reaches the Slack
+# step (the mint sibling's shape) — a job-level timeout would cancel silently.
+file_has 'G2:wf-step-timeout-checkout' "$WORKFLOW" 'timeout-minutes: 3'
+file_has 'G2:wf-step-timeout-vdf' "$WORKFLOW" 'timeout-minutes: 4'
 file_has 'G2:wf-slack-secret' "$WORKFLOW" 'SLACK_RELEASES_WEBHOOK_URL'
 # The Slack step must branch on the script's result= output, NEVER
 # `if: failure()` — the warning-class findings path exits 0 (CTO D4).

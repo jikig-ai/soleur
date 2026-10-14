@@ -37,11 +37,16 @@
 #              unreadable pin file). Could-not-measure is NEVER a content
 #              verdict (the QUERY_UNAVAILABLE precedent in
 #              inngest-config-drift.yml).
-#   moved or unresolvable on the PINNED tag   -> ::error::, result=findings, exit 1
+#   moved or unresolvable on a PINNED tag     -> ::error::, result=findings, exit 1
+#              (pinned = pinned by EITHER pin file — the bump sibling grades
+#              against the max over both because they can diverge, #6536)
 #   moved or unresolvable on a non-pinned tag -> ::warning::, result=findings, exit 0
-#   never-recorded                            -> summary row only (a merged tag
+#   never-recorded on a pinned tag            -> ::warning::, result=findings, exit 0
+#              (a pin with no history record is unmeasurable-by-construction)
+#   never-recorded on a non-pinned tag        -> summary row only (a merged tag
 #              superseded before its bump merged was legitimately never pinned)
 #   unmeasurable                              -> ::error::, result=unmeasurable, exit 2
+#   xtrace refused with a live credential set -> exit 78 (#7797 taxonomy)
 # When a tag is both never-recorded AND unresolvable, the CONTENT verdict
 # (unresolvable) wins the row — the recorded side governs only the comparison.
 #
@@ -81,10 +86,19 @@ export LC_ALL=C
 
 # Same leak class as the xtrace refusal: git's trace channels print request
 # lines to stderr. Scrub them unconditionally so a debugging `env:` line cannot
-# land them in logs.
+# land them in logs. Also scrub git's object-store/config redirection envs —
+# a polluted env could aim the history reads at a different repo than the
+# pin-file greps read ($REPO_DIR).
 unset GIT_TRACE GIT_TRACE_PACKET GIT_TRACE_PERFORMANCE GIT_TRACE_SETUP \
   GIT_TRACE_CURL GIT_TRACE_CURL_NO_DATA GIT_TRACE_REDACT GIT_TRACE2 \
-  GIT_TRACE2_PERF GIT_TRACE2_EVENT GIT_CURL_VERBOSE GIT_HTTP_TRACE_AUTH_HEADER
+  GIT_TRACE2_PERF GIT_TRACE2_EVENT GIT_CURL_VERBOSE GIT_HTTP_TRACE_AUTH_HEADER \
+  GIT_DIR GIT_WORK_TREE GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_PARAMETERS \
+  GIT_CONFIG_COUNT GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+for _gv in $(env | sed -n 's/^\(GIT_CONFIG_KEY_[A-Za-z0-9_]*\)=.*/\1/p') \
+           $(env | sed -n 's/^\(GIT_CONFIG_VALUE_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  unset "$_gv"
+done
+unset _gv
 
 F_WEB='apps/web-platform/infra/cloud-init.yml'
 F_DED='apps/web-platform/infra/cloud-init-inngest.yml'
@@ -132,16 +146,24 @@ shallow=$(git -C "$REPO_DIR" rev-parse --is-shallow-repository 2>/dev/null || tr
   || unmeasurable "the checkout is shallow (is-shallow-repository='${shallow:-<empty>}') — git tag --merged cannot see tags below the graft; the workflow needs fetch-depth: 0"
 walk_err=$(git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null || true)
 [[ -z "$walk_err" ]] \
-  || unmeasurable "git tag --merged reported an unreadable history ($(tr '\n' ' ' < <(printf '%s' "$walk_err") | cut -c1-200)) — refusing rather than reconciling a truncated tag set"
+  || unmeasurable "git tag --merged reported an unreadable history ($(tr '\n' ' ' < <(printf '%s' "$walk_err") | tr -d '[:cntrl:]' | cut -c1-200)) — refusing rather than reconciling a truncated tag set"
 
-# The pinned tag, read from the dedicated host's pin file — the row severity
-# (error vs warning class) is graded against it. An unreadable pin is an
-# instrument failure: the run cannot tell findings from clean.
-PINNED=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$REPO_DIR/$F_DED" 2>/dev/null | sed -n '1p' | sed 's/.*://' || true)
-case "$PINNED" in
-  v[0-9]*.[0-9]*.[0-9]*) : ;;
-  *) unmeasurable "could not read the pinned tag from $F_DED (got '${PINNED:-<empty>}') — verdict severity cannot be graded" ;;
-esac
+# The pinned tag SET, read from BOTH pin files — the bump sibling grades the
+# downgrade refusal against the max over both because the files can diverge
+# (#6536), so a tag pinned by EITHER file is error-class here. A pin readable
+# from neither file is an instrument failure: severity cannot be graded.
+for f in "$F_DED" "$F_WEB"; do
+  [[ -f "$REPO_DIR/$f" ]] \
+    || unmeasurable "pin file $f is absent — severity cannot be graded without it"
+done
+PINNED_TAGS=$(for f in "$F_DED" "$F_WEB"; do
+  grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$REPO_DIR/$f" 2>/dev/null | sed -n '1p' | sed 's/.*://'
+done | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true)
+[[ -n "$PINNED_TAGS" ]] \
+  || unmeasurable "could not read a pinned tag from either pin file ($F_DED, $F_WEB) — verdict severity cannot be graded"
+PINNED_SET=" $(printf '%s\n' "$PINNED_TAGS" | tr '\n' ' ')"
+PINNED_CSV=$(printf '%s\n' "$PINNED_TAGS" | paste -sd, -)
+is_pinned() { case "$PINNED_SET" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # --- selector: AC6-IDENTICAL minus `tail -1` — ALL merged tags (D3) ---------
 # The bump script's byte-equality convention applies modulo the one intended
@@ -153,6 +175,19 @@ VDF_TAGS=$(git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null
 [[ -n "$VDF_TAGS" ]] \
   || unmeasurable "no vinngest-v* tag is merged into HEAD — an empty selector is a broken checkout (fetch-tags: true missing or a tagless clone), never a green run"
 
+# Every pinned tag must be a member of the reconciled set — a pin pointing at a
+# tag that is absent, unmerged, or was deleted would otherwise get no row at
+# all while the run reads ok. That is a broken lifecycle invariant, not a
+# content verdict.
+VDF_SET=" $(printf '%s\n' "$VDF_TAGS" | tr '\n' ' ')"
+while IFS= read -r _pt; do
+  [[ -n "$_pt" ]] || continue
+  case "$VDF_SET" in
+    *" $_pt "*) : ;;
+    *) unmeasurable "pinned tag $_pt is not a member of the merged vinngest-v* set — the tag is deleted, unpushed, or points off history; the reconciler cannot grade severity" ;;
+  esac
+done < <(printf '%s\n' "$PINNED_TAGS")
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -161,15 +196,26 @@ trap 'rm -rf "$WORK"' EXIT
 # hit whose neither side still carries `<tag>@sha256:` (a history-read oddity
 # the run reports as unmeasurable).
 recorded_digest() {
-  local tag="$1" re hit rev f d
+  local tag="$1" re hit rev f d gerr
   re=$(printf '%s' "$tag" | sed 's/\./\\./g')
-  hit=$(git -C "$REPO_DIR" log --format=%H -n1 -G "soleur-inngest-bootstrap:${re}@" -- "$F_WEB" "$F_DED" 2>/dev/null || true)
+  # The -G walk reads blobs — a corruption class the tag --merged preflight
+  # does not reach. A mid-walk failure is an instrument failure (rc 3), never
+  # never-recorded; `--diff-merges=first-parent` so a merge-conflict edit that
+  # silently touched a pin cannot evade the walk.
+  hit=$(git -C "$REPO_DIR" log --format=%H -n1 --no-patch --diff-merges=first-parent -G "soleur-inngest-bootstrap:${re}@" -- "$F_WEB" "$F_DED" 2>"$WORK/g.err" || true)
+  gerr=$(cat "$WORK/g.err" 2>/dev/null || true)
+  [[ -z "$gerr" ]] || return 3
   [[ -n "$hit" ]] || return 1
   for rev in "$hit" "${hit}^"; do
     for f in "$F_WEB" "$F_DED"; do
       if git -C "$REPO_DIR" show "${rev}:${f}" > "$WORK/blob" 2>/dev/null; then
-        d=$(grep -oE "soleur-inngest-bootstrap:${re}@sha256:[0-9a-f]{64}" "$WORK/blob" | grep -oE 'sha256:[0-9a-f]{64}' | head -1 || true)
-        [[ -n "$d" ]] && { printf '%s\n' "$d"; return 0; }
+        d=$(grep -oE "soleur-inngest-bootstrap:${re}@sha256:[0-9a-f]{64}" "$WORK/blob" | grep -oE 'sha256:[0-9a-f]{64}' | sort -u || true)
+        if [[ -n "$d" ]]; then
+          # Two distinct recorded digests for the same tag in one file would
+          # make head -1 arbitrary — a divergent pin state, not a digest.
+          [[ "$(printf '%s\n' "$d" | wc -l)" -eq 1 ]] || return 3
+          printf '%s\n' "$d"; return 0
+        fi
       fi
     done
   done
@@ -189,9 +235,11 @@ live_resolve() {
     [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 2 ))
   done
   if [[ "$rc" -ne 0 ]]; then
-    # The 404 class is CONTENT (the tag names nothing); every other failure is
-    # the INSTRUMENT (auth, transport, throttling) and must not read as such.
-    if grep -qE 'MANIFEST_UNKNOWN|NAME_UNKNOWN|404|[Nn]ot.[Ff]ound' "$WORK/digest.err" 2>/dev/null; then
+    # Only the registry's own body codes are CONTENT (the tag names nothing).
+    # A bare "404"/"Not Found" in stderr can equally be a transport/front-door
+    # failure mid-incident — those must stay INSTRUMENT (rc 5), never read as
+    # the tag being gone.
+    if grep -qE 'MANIFEST_UNKNOWN|NAME_UNKNOWN' "$WORK/digest.err" 2>/dev/null; then
       return 4
     fi
     return 5
@@ -228,7 +276,7 @@ while IFS= read -r T; do
     lrc=$?
     case "$lrc" in
       4) live_status=unresolvable ;;
-      *) unmeasurable "crane could not measure ${IMAGE}:${T} after 3 attempts (rc=${lrc}): $(tr '\n' ' ' < "$WORK/digest.err" | cut -c1-200)" ;;
+      *) unmeasurable "crane could not measure ${IMAGE}:${T} after 3 attempts (rc=${lrc}): $(tr '\n' ' ' < "$WORK/digest.err" | tr -d '[:cntrl:]' | cut -c1-200)" ;;
     esac
   fi
 
@@ -248,8 +296,13 @@ while IFS= read -r T; do
   printf '| `%s` | %s | `%s` | `%s` |\n' "$T" "$verdict" "${rec:-—}" "${live:-—}" >> "$WORK/table"
 
   case "$verdict" in
+    never-recorded)
+      if is_pinned "$T"; then
+        printf '::warning::tag=%s verdict=never-recorded — the PINNED tag has no pin-history record (unmeasurable by construction): live digest %s. Check the pin history before assuming clean.\n' "$T" "${live:-<unresolvable>}"
+        FINDINGS_WARN=1
+      fi ;;
     moved|unresolvable)
-      if [[ "$T" == "$PINNED" ]]; then
+      if is_pinned "$T"; then
         printf '::error::tag=%s verdict=%s — the PINNED tag %s: live digest %s vs recorded %s. The cloud-init pin is orphaned (zot retention can evict the untagged manifest); the response is a NEW tag, never a re-pin to moved content — inngest-server.md §Bootstrap-image release.\n' \
           "$T" "$verdict" "$T" "${live:-<unresolvable>}" "${rec:-<none>}"
         FINDINGS_ERR=1
@@ -262,12 +315,12 @@ while IFS= read -r T; do
 done < <(printf '%s\n' "$VDF_TAGS")
 
 printf 'tags=%s pinned=%s findings_err=%s findings_warn=%s\n' \
-  "$N_TAGS" "$PINNED" "$FINDINGS_ERR" "$FINDINGS_WARN"
+  "$N_TAGS" "$PINNED_CSV" "$FINDINGS_ERR" "$FINDINGS_WARN"
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
     printf '### vinngest published-digest freshness\n\n'
-    printf 'Reconciler: live `crane digest` per merged `vinngest-v*` tag vs the digest its pin history recorded (the bump commits are the publish workflow'"'"'s authored record). Pinned tag: `%s`.\n\n' "$PINNED"
+    printf 'Reconciler: live `crane digest` per merged `vinngest-v*` tag vs the digest its pin history recorded (the bump commits are the publish workflow'"'"'s authored record). Pinned tag(s): `%s`.\n\n' "$PINNED_CSV"
     printf '| tag | verdict | recorded | live |\n|---|---|---|---|\n'
     cat "$WORK/table"
   } >> "$GITHUB_STEP_SUMMARY"

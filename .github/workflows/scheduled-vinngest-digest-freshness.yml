@@ -66,6 +66,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out this repository
+        timeout-minutes: 3
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           # The recorded digest is derived from git pin HISTORY, so the
@@ -77,16 +78,19 @@ jobs:
           persist-credentials: false
 
       - name: Login to GHCR
+        timeout-minutes: 2
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Byte-parity with the bump job's install block in
-      # build-inngest-bootstrap-image.yml (CRANE_VERSION + CRANE_SHA256 +
-      # the retry/degrade vocabulary) — the cross-workflow parity convention.
+      # Byte-parity with the SIGNING job's install block in
+      # build-inngest-bootstrap-image.yml:473-502 (CRANE_VERSION + CRANE_SHA256 +
+      # the retry/degrade vocabulary) — the cross-workflow parity convention
+      # (the bump job's own install tail differs).
       - name: Install crane (pinned)
+        timeout-minutes: 3
         env:
           CRANE_VERSION: v0.20.2
           CRANE_SHA256: c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b
@@ -114,10 +118,14 @@ jobs:
           case "$rc" in
             0)  crane version ;;
             11) echo "::error::crane tarball SHA256 mismatch — SUPPLY-CHAIN signal, not a network fault. A re-dispatch re-fetches the same pinned URL and cannot clear it." >&2; exit 1 ;;
-            *)  echo "::error::could not install crane (rc=${rc}) after 3 attempts; cannot resolve a digest to sign." >&2; exit 1 ;;
+            *)  echo "::error::could not install crane (rc=${rc}) after 3 attempts; cannot resolve a digest to compare." >&2; exit 1 ;;
           esac
 
+      # Per-step timeouts throughout (the mint sibling's shape): a hang lands
+      # as a step failure — which still reaches the Slack step — never as a
+      # job-level cancel that would make the run silent.
       - name: Reconcile live digests against pin history
+        timeout-minutes: 4
         id: vdf
         run: |
           set -uo pipefail
@@ -134,6 +142,7 @@ jobs:
       # missing result (the step never ran — a broken checkout or install) is
       # itself the could-not-measure class and posts ❌.
       - name: Post findings to Slack
+        timeout-minutes: 1
         if: ${{ !cancelled() && steps.vdf.outputs.result != 'ok' }}
         continue-on-error: true
         env:
