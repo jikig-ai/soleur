@@ -1493,8 +1493,12 @@ _hs_lt='<'
 } > "$hs_fx"
 
 cases=$((cases + 1))
-if floor_lines_of "$hs_fx" | grep -qE ':[[:space:]]*if \[ "\$cases" -lt 5 \]' && \
-   ! floor_lines_of "$hs_fx" | grep -q 'lt 999'; then
+_hs_floors="$(floor_lines_of "$hs_fx")"
+# `<<<` here-string feeds, not `producer | grep -q` — under pipefail a producer failure would
+# read as a miss (grep-q-pipe-guard #9217). This file is the detector's own home: a `<<<` in
+# ITS source is now safe precisely because of the fix under test (predecessor-`<` rejection).
+if grep -qE ':[[:space:]]*if \[ "\$cases" -lt 5 \]' <<< "$_hs_floors" && \
+   ! grep -q 'lt 999' <<< "$_hs_floors"; then
   pass "here-string fixture: floor after a \`<<<\` line is detected, and a real-heredoc decoy floor stays excluded"
 else
   fail "here-string fixture misclassified — \`<<<\` hid the tail floor OR a heredoc-body line leaked into candidates"
