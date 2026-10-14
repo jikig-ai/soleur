@@ -1,0 +1,5 @@
+live tree: shipped=33 widened=33  (want equal: 0 new hits)
+only in widened:
+known false positive (rc 0): x | grep -c p -eq
+known false positive (rc 0): x | xargs echo grep -q p
+fixture table ok=1

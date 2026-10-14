@@ -1,0 +1,67 @@
+# BAD = must match, GOOD = must not match, KNOWNFP = stated false positive. Data file: kept out of the .sh so the sweep (which now reads knowledge-base code files) does not read the fixture shapes as code.
+BAD x | sudo grep -q p
+BAD x | sudo -u root grep -q p
+BAD x | env -i grep -q p
+BAD x | env -i PATH=/bin grep -q p
+BAD x | nice -n 10 grep -q p
+BAD x | timeout -s KILL 5 grep -q p
+BAD x | time grep -q p
+BAD x | xargs grep -q p
+BAD x | xargs -n1 grep -q p
+BAD x | command -p grep -q p
+BAD x | nohup grep -q p
+BAD x | stdbuf -oL -eL grep -q p
+BAD x | zgrep -q p
+BAD x | rg -q p
+BAD x | rg --quiet p
+BAD x | ag -q p
+BAD x | ugrep -q p
+BAD x | pcregrep -q p
+BAD x | "$GREP" -q p
+BAD x | ${GREP_BIN} -qE p
+BAD x | $GREP --quiet p
+BAD x | ${GREP:-grep} -q p
+BAD x | grep p -q
+BAD x | grep -E p -q
+BAD x | grep -e a -e b -q
+BAD x | grep -d skip -q p
+BAD x | grep --context 3 -q p
+BAD x | grep --context=3 -q p
+BAD x | grep -5q p
+BAD x | grep --qui p
+BAD x | grep --sil p
+BAD x | grep --max=1 p
+BAD x | grep --max-c=1 p
+BAD x | grep -m 1 p
+BAD x | sh -c 'grep -q p'
+BAD x | bash -lc "grep -qE p"
+BAD x | head -1 | grep -q p
+BAD x | head -n 1 | grep -qE p
+GOOD x | grep -c p
+GOOD x | grep -v p
+GOOD x | grep -l p
+GOOD x | rg --smart-case p
+GOOD x | rg --max-depth 2 p
+GOOD x | rg --sort path p
+GOOD x | "$HOOK" -q p
+GOOD x | "$CMD" -hmac key
+GOOD x | grep -cE p >/dev/null
+GOOD x | grep -oE p
+GOOD x | head -1
+GOOD x | awk '{print; exit}'
+GOOD x | xargs echo foo
+GOOD x | sudo tee /etc/f
+GOOD x | time cat
+GOOD $(x | grep -c p) -eq 1
+GOOD x | sh -c 'grep -c p'
+GOOD x | sh -c 'echo ok'
+GOOD x | grep -c p; foo -q
+GOOD x | grep -c p && foo -q
+GOOD x | tr a b; grep p f -q
+GOOD x | command -v grep
+GOOD x | grep -cF 'a -q b' >/dev/null
+GOOD x | grep -c "mountpoint -q \"$d\"" file
+GOOD grep p -q <<<"$x"
+GOOD x || grep -q p <<<"$x"
+KNOWNFP x | grep -c p -eq
+KNOWNFP x | xargs echo grep -q p
