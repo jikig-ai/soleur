@@ -66,6 +66,7 @@ export function KeyboardShortcutsToggle() {
         aria-checked={enabled}
         aria-label="Enable keyboard shortcuts"
         onClick={toggle}
+        data-button-exempt="role=switch composite — fixed h-5 w-9 track + sliding thumb span cannot reduce to Button's padding/radius geometry"
         className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
           enabled ? "bg-soleur-accent-gold-fg" : "bg-soleur-bg-surface-2"
         }`}

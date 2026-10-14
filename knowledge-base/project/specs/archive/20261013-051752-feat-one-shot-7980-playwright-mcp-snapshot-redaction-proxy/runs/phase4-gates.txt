@@ -1,0 +1,19 @@
+== lint-credential-path-literals suite
+PASS: S19 FR17: no shipped skill file carries the OLD MCP-gap marker (whitespace-tolerant)
+
+PASS=39 FAIL=0 TOTAL=39
+RC=0
+== bare lint
+knowledge-base/project/specs/feat-one-shot-6005-cosign-verify-ghcr-auth-offline/tasks.md:19: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+OK: no resolvable credential-file path literals in 8323 scanned file(s) (18 advisory remote-host mention(s)).
+RC=0
+== FR17 old sentence
+grep-rc=1
+== refusing to start count
+8
+== guard-vacuity-floor
+[ok] conservation EXECUTES: a neutered verdict helper is caught by the accounting identity (exit 1)
+Total: 22 passed, 1 failed (23 assertions)
+RC=1
+== hook syntax
+RC=0

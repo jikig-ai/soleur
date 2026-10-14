@@ -46,13 +46,23 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   set_workspace_autonomous_ack: (c) => `select set_workspace_autonomous_ack('${c.wsA}')`,
   set_workspace_bash_autonomous: (c) => `select set_workspace_bash_autonomous('${c.wsA}',true)`,
   set_workspace_debug_mode: (c) => `select set_workspace_debug_mode('${c.wsA}',true)`,
+  set_workspace_web_egress: (c) => `select set_workspace_web_egress('${c.wsA}',true)`,
   get_workspace_autonomous_ack: (c) => `select get_workspace_autonomous_ack('${c.wsA}')`,
   get_workspace_bash_autonomous: (c) => `select get_workspace_bash_autonomous('${c.wsA}')`,
   get_workspace_debug_mode: (c) => `select get_workspace_debug_mode('${c.wsA}')`,
+  get_workspace_web_egress: (c) => `select get_workspace_web_egress('${c.wsA}')`,
   resolve_workspace_installation_id: (c) => `select resolve_workspace_installation_id('${c.wsA}')`,
   claim_repo_clone_lock: (c) => `select claim_repo_clone_lock('${c.wsA}')`,
   is_workspace_member: (c) => `select is_workspace_member('${c.wsA}', auth.uid())`,
   is_workspace_owner: (c) => `select is_workspace_owner('${c.wsA}', auth.uid())`,
+  set_workspace_default_engine: (c) => `select set_workspace_default_engine('${c.wsA}','claude-code','managed')`,
+  bind_agent_engine_run: (c) =>
+    `select bind_agent_engine_run('${c.wsA}','conversation','${c.convA}',NULL,NULL,'${c.userB}')`,
+  // Event append is authenticated-callable, but the run id is still tenant-
+  // scoped: use an existing tenant-A run and a valid envelope so authorization,
+  // not schema validation or a missing foreign key, decides the attack.
+  append_agent_engine_event: (c) =>
+    `select append_agent_engine_event('${c.engineRunA}','engine-event-1',1,'{"type":"lifecycle","source_type":"text"}'::jsonb)`,
   is_email_triage_workspace_owner: (c) => `select is_email_triage_workspace_owner('${c.wsA}', auth.uid())`,
   list_workspace_member_actions: (c) => `select count(*) from list_workspace_member_actions('${c.wsA}',10,null,null)`,
   invite_workspace_member: (c) =>

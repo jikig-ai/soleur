@@ -1,0 +1,36 @@
+# Session State
+
+## Plan Phase
+
+- Plan file: knowledge-base/project/plans/2026-10-09-chore-grep-q-wave-b-s4-tests-dir-plan.md
+- Status: plan written, measured on rehearsal clones, reviewed (3 seats) and deepened (gates 4.5 to 4.12 plus a test-design review); ready for work
+
+### Errors
+
+None.
+
+### Decisions
+
+- S4 owns one guard row (`tests/*`, 181 lines in 23 files: `tests/scripts/` 20 files / 171 lines, `tests/commands/` 3 files / 10 lines) and takes it to zero: the row is deleted, no counted pin remains.
+- 155 lines by the codemod (76 default + 79 with `--reviewed-suspect` for six `tests/scripts` files whose comments only name SIGPIPE), 19 stub-heredoc lines by a throwaway regexp, 3 hand edits that change the shape (a `-m` here-string, a `-qc` cluster, a sed expression coupled to a converted line), 4 detector-fixture lines kept and marked `# sigpipe-demo: intentional`. `verify`: 174 verified, 7 hand-edited, 0 unexplained.
+- The guard diff is the row deletion plus seven canary paths in the real-table probe (15 planted paths, literal 8 to 15); `SWEEP_PROBE_CHECKS` unchanged. Mutation-proved both ways: any excluded tests/ subtree and a resurrected row plus a covering hit are RED (both GREEN on the S3-form guard).
+- Merge fires no path-filtered workflow (0 of 24 for 18 filtered push workflows); the runner and the affected index are not edited (no runner-parity check, no `AFFECTED_FALLBACK`); open PRs touch the edited files only via #9784 at distant hunks, which also adds three new early-exit pipes under `tests/`.
+- All 23 owning suites and 5 adjacent ones read the same rc and final line on a real detached base clone and on the rehearsal.
+
+### Components Invoked
+
+soleur:plan, learnings-researcher, plan review (simplicity, correctness, overengineering), deepen-plan gates, test-design review of the guard matrix, rehearsal and mutation clones, codemod dry run and write, pair run of 28 suites, guard mutation battery, per-site observer mutants
+
+### Plan file (deepened)
+
+knowledge-base/project/plans/2026-10-09-chore-grep-q-wave-b-s4-tests-dir-plan.md
+
+## Work Phase
+
+- Status: conversion committed and pushed (commits 1 and 2 of the slice, evidence commit); pair run 28/28 identical; Guard 1 matrix as predicted; full numbers in `evidence.md`.
+- Not run locally (host load 25 to 33, CI is the gate by the user's decision): `--affected`, the ratchet-lane re-run (one member timed out at its cap), `guard-vacuity-floor`, the orphan and capture-exit lints, markdownlint and the discoverability re-measure.
+
+## Review Phase
+
+- 12 report-only seats plus the coverage consult; no P1. Guard fixes committed as `0a7e0a71`; doc fixes and the review addendum in `evidence.md`.
+- Next: second guard mutation battery on the reviewed guard (running), then compound, ship (CI is the gate), postmerge, tracker comment on #9217.

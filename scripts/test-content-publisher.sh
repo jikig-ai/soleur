@@ -21,6 +21,9 @@
 #   Exits 0 if all tests pass, 1 if any fail.
 
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -34,6 +37,11 @@ unset DISCORD_WEBHOOK_URL DISCORD_BLOG_WEBHOOK_URL \
 
 # shellcheck source=content-publisher.sh
 source "$SCRIPT_DIR/content-publisher.sh"
+
+# The sourced SUT installs `trap '((${#_TMPFILES[@]} > 0)) && rm -f …' EXIT`,
+# which REPLACED the suite's SUITE_TMP trap above — re-arm one handler that
+# does both legs (ADR-129: extend the cleanup path, never lose one).
+trap '((${#_TMPFILES[@]} > 0)) && rm -f "${_TMPFILES[@]}"; rm -rf "$SUITE_TMP"' EXIT
 
 PASS=0
 FAIL=0
@@ -66,7 +74,7 @@ rc_of() {
 }
 
 # Flag file that any stubbed curl writes to. Non-empty = curl was invoked.
-CURL_FLAG_FILE="$(mktemp)"
+CURL_FLAG_FILE="$(mktemp -p "$SUITE_TMP")"
 curl() {
   echo "curl-invoked: $*" >> "$CURL_FLAG_FILE"
   # Emit an HTTP 2xx code to stdout so post_discord's `-w "%{http_code}"`
@@ -83,14 +91,14 @@ curl() {
 echo "--- emit_stale_event unit tests ---"
 
 # TSV line written when STALE_EVENTS_FILE is set
-tmp_events=$(mktemp)
+tmp_events=$(mktemp -p "$SUITE_TMP")
 STALE_EVENTS_FILE="$tmp_events" emit_stale_event "/fake/path/foo.md" "2026-04-21" >/dev/null 2>&1
 assert_eq "emit-writes-one-line" "1" "$(wc -l < "$tmp_events" | tr -d ' ')"
 assert_eq "emit-writes-tsv-content" "$(printf 'foo.md\t2026-04-21')" "$(cat "$tmp_events")"
 rm -f "$tmp_events"
 
 # No-op + stderr warning when STALE_EVENTS_FILE is unset
-tmp_stderr=$(mktemp)
+tmp_stderr=$(mktemp -p "$SUITE_TMP")
 if (unset STALE_EVENTS_FILE; emit_stale_event "/fake/path/foo.md" "2026-04-21") 2>"$tmp_stderr"; then
   PASS=$((PASS + 1))
 else
@@ -106,7 +114,7 @@ fi
 rm -f "$tmp_stderr"
 
 # Append semantics: two calls produce two lines
-tmp_events=$(mktemp)
+tmp_events=$(mktemp -p "$SUITE_TMP")
 STALE_EVENTS_FILE="$tmp_events" emit_stale_event "/x/a.md" "2026-04-20" >/dev/null 2>&1
 STALE_EVENTS_FILE="$tmp_events" emit_stale_event "/x/b.md" "2026-04-21" >/dev/null 2>&1
 assert_eq "emit-append-two-lines" "2" "$(wc -l < "$tmp_events" | tr -d ' ')"
@@ -120,7 +128,7 @@ echo "--- stale-detection integration test ---"
 
 make_stale_fixture_dir() {
   local dir
-  dir=$(mktemp -d)
+  dir=$(mktemp -d -p "$SUITE_TMP")
   cat > "$dir/stale-test.md" <<'EOF'
 ---
 status: scheduled
@@ -135,7 +143,7 @@ EOF
 }
 
 fixture=$(make_stale_fixture_dir)
-tmp_events=$(mktemp)
+tmp_events=$(mktemp -p "$SUITE_TMP")
 : > "$CURL_FLAG_FILE"
 
 # First run: stale file should be emitted, transitioned to status: stale, NO curl.
@@ -170,7 +178,7 @@ echo "--- skip-sentinel unit tests (rc 3) ---"
 # state (missing creds / gate off) rather than absent content.
 make_full_fixture() {
   local f
-  f=$(mktemp)
+  f=$(mktemp -p "$SUITE_TMP")
   cat > "$f" <<'EOF'
 ---
 status: scheduled
@@ -206,7 +214,7 @@ EOF
 # to drive the empty-section skip paths.
 make_empty_sections_fixture() {
   local f
-  f=$(mktemp)
+  f=$(mktemp -p "$SUITE_TMP")
   cat > "$f" <<'EOF'
 ---
 status: scheduled
@@ -286,7 +294,7 @@ echo "--- skip-sentinel integration tests ---"
 
 # Stub the issue-creation seam so main() never touches gh/network. Records
 # each call's (title, body, labels) so tests can assert on them.
-NOWHERE_FLAG_FILE="$(mktemp)"
+NOWHERE_FLAG_FILE="$(mktemp -p "$SUITE_TMP")"
 create_dedup_issue() {
   # $1=title $2=body $3=labels
   {
@@ -305,7 +313,7 @@ TODAY="$(date +%Y-%m-%d)"
 # Usage: make_pub_fixture <channels> <extra-body>
 make_pub_fixture() {
   local channels="$1" body="$2" dir
-  dir=$(mktemp -d)
+  dir=$(mktemp -d -p "$SUITE_TMP")
   cat > "$dir/pub-test.md" <<EOF
 ---
 status: scheduled

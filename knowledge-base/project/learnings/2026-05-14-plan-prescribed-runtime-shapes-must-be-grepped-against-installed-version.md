@@ -56,6 +56,6 @@ The fix is structural, not "review harder." Plan-time precondition lists must en
 
 - Sibling learning (same PR, different surface): `2026-05-13-plan-verify-reducer-case-arms-with-grep-not-read-first-n.md` — reducer/switch-statement exhaustiveness via `grep "case "` enumeration.
 - Sibling learning (brainstorm-time symbol verification): `2026-05-13-brainstorm-grep-cited-flag-symbol-against-main-before-spawning-leaders.md`.
-- Plan: `knowledge-base/project/plans/2026-05-13-feat-cc-soleur-go-smoke-2939-pr-a-plan.md` §Research Reconciliation (which DID catch 6 plan-vs-codebase drifts at plan-time, demonstrating the value of the same discipline at the layers it actually covered).
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-13-feat-cc-soleur-go-smoke-2939-pr-a-plan.md` §Research Reconciliation (which DID catch 6 plan-vs-codebase drifts at plan-time, demonstrating the value of the same discipline at the layers it actually covered).
 - Issue: #2939
 - PR: #3743

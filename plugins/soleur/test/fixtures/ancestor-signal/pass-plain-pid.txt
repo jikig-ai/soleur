@@ -1,0 +1,4 @@
+# fixture data, never executed: signals to a captured pid; no finding
+kill "$pid"
+kill -TERM "$child" 2>/dev/null || true
+kill -9 $! 2>/dev/null

@@ -96,6 +96,7 @@ The soleur.ai website has strong brand voice and internal consistency, but it op
 | Changelog | **Navigational** | **Navigational** | Appropriate. No changes needed. |
 
 **Overall intent coverage:**
+
 - Informational intent: **0%** -- The site has zero content that answers "what is agentic engineering?", "what is company as a service?", or "how do AI agents help solo founders?"
 - Commercial investigation intent: **~10%** -- The homepage makes a case but uses no comparison language and targets no searchable commercial queries.
 - Transactional intent: **~40%** -- Getting Started serves this, though weakly.
@@ -140,6 +141,7 @@ Below are specific copy rewrites that incorporate target keywords while preservi
 ### 4.1 Homepage Hero Section
 
 **Current:**
+
 ```
 Badge: The Company-as-a-Service Platform
 H1: Build a Billion-Dollar Company. Alone.
@@ -147,6 +149,7 @@ Sub: Everything you need to build, ship, and scale -- powered by AI teams. For f
 ```
 
 **Suggested:**
+
 ```
 Badge: THE AGENTIC COMPANY PLATFORM
 H1: The First Company-as-a-Service Platform for Solo Founders
@@ -159,6 +162,7 @@ CTA: Start Building | See the Agents
 ### 4.2 Homepage Problem Section
 
 **Current:**
+
 ```
 Label: This Is the Way
 H2: One founder powered by a full-stack AI organization.
@@ -166,6 +170,7 @@ Desc: Not a copilot. Not an assistant. A full AI organization that reviews, plan
 ```
 
 **Suggested:**
+
 ```
 Label: AGENTIC ENGINEERING
 H2: One solo founder. A full AI company.
@@ -177,12 +182,14 @@ Desc: Not a copilot. Not an assistant. A full agentic company that reviews, plan
 ### 4.3 Homepage Features Section
 
 **Current:**
+
 ```
 Label: Your AI Organization
 H2: Every department. From idea to shipped.
 ```
 
 **Suggested:**
+
 ```
 Label: YOUR AI COMPANY
 H2: Every department an agentic company needs. From idea to shipped.
@@ -191,6 +198,7 @@ H2: Every department an agentic company needs. From idea to shipped.
 ### 4.4 Homepage Quote Section
 
 **Current:**
+
 ```
 "The first billion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it."
 -- The Soleur Thesis
@@ -201,12 +209,14 @@ H2: Every department an agentic company needs. From idea to shipped.
 ### 4.5 Homepage Final CTA
 
 **Current:**
+
 ```
 H2: Ready to build at scale?
 Sub: Your AI organization is ready. Are you?
 ```
 
 **Suggested:**
+
 ```
 H2: Ready to run an agentic company?
 Sub: Your AI organization is ready. 32 agents. 41 skills. Zero employees. Are you?
@@ -215,12 +225,14 @@ Sub: Your AI organization is ready. 32 agents. 41 skills. Zero employees. Are yo
 ### 4.6 Agents Page Hero
 
 **Current:**
+
 ```
 H1: Agents
 Sub: 32 specialized agents for code review, architecture, infrastructure, operations, product, design, and engineering workflows.
 ```
 
 **Suggested:**
+
 ```
 H1: AI Agents for Agentic Engineering
 Sub: 32 specialized agents organized as a full AI company -- from code review and architecture to marketing, operations, and product. Every department a solo founder needs, staffed by agents.
@@ -229,12 +241,14 @@ Sub: 32 specialized agents organized as a full AI company -- from code review an
 ### 4.7 Skills Page Hero
 
 **Current:**
+
 ```
 H1: Skills
 Sub: 41 specialized skills for development, content, deployment, and more.
 ```
 
 **Suggested:**
+
 ```
 H1: Agentic Engineering Skills
 Sub: 41 skills that power the company-as-a-service platform -- from brainstorming and planning to building, reviewing, and shipping. The full lifecycle of an AI company, automated.
@@ -245,6 +259,7 @@ Sub: 41 skills that power the company-as-a-service platform -- from brainstormin
 **Current:** Jumps directly to install command.
 
 **Suggested -- add before Installation:**
+
 ```
 H2: What is Soleur?
 Soleur is a company-as-a-service platform for solo founders. It provides 32 AI agents and 41 skills
@@ -257,6 +272,7 @@ Install it as a Claude Code plugin. Run it from your terminal. Build at the scal
 ### 4.9 llms.txt Rewrite
 
 **Current:**
+
 ```
 > Build, ship, and scale powered by AI teams.
 
@@ -264,6 +280,7 @@ Soleur is a Claude Code plugin providing 32 AI agents, 41 skills, and 8 commands
 ```
 
 **Suggested:**
+
 ```
 > The company-as-a-service platform for solo founders.
 

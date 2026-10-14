@@ -32,6 +32,7 @@ import {
   tearDownSharedWorkspace,
   type SharedWorkspaceFixture,
 } from "@/test/helpers/workspace-members-fixtures";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -156,13 +157,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       } catch {}
       await tearDownSharedWorkspace(service, fixtureX);
       await tearDownSharedWorkspace(service, fixtureY);
-      // #7101 — mirror the beforeAll's 60s budget. Teardown does strictly more
-      // remote work than setup: 11 sequential round-trips (1 explicit
-      // workspace_members delete + 6 for fixtureX's 2 members + 4 for
-      // fixtureY's 1 member), 3 of them `deleteUser` under withGoTrueRetry.
+      // #7101 — mirror the beforeAll's 60s budget. Teardown routes each
+      // member through tearDownTenantUser (anonymise-first, ~24 sequential
+      // round-trips per member): ~72 for fixtureX's 2 members + ~24 for
+      // fixtureY's 1 member + 3 `deleteUser` calls under withGoTrueRetry.
       // A fully-exhausted ladder is 4 sleeps (250/500/1000/2000ms base + up to
       // 250ms jitter each), so three of them cost up to ~14.25s — 71% of a 20s
-      // budget, leaving ~5.75s for all 11 round-trips. Inheriting the global
+      // budget before the ~96 round-trips. Inheriting the global
       // 20s here red-lined `main` on a docs-only PR with every assertion green.
     }, 60_000);
 
@@ -354,11 +355,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(revRows).toHaveLength(1);
       expect(revRows![0].removed_by_user_id).toBe(ownerA.userId);
 
-      // Cleanup D.
-      try {
-        await service.from("workspace_members").delete().eq("user_id", dId);
-        await service.auth.admin.deleteUser(dId);
-      } catch {}
+      // Cleanup D — fail-loud via the helper (#10096): the raw member-row
+      // delete fired the WORM audit trigger, leaving a
+      // workspace_member_actions RESTRICT child that re-blocked the auth
+      // delete inside the swallowed catch. anonymise_workspace_members
+      // scrubs D's ownership-transfer membership without re-firing audit.
+      await tearDownTenantUser(service, { id: dId, email: dEmail });
     }, 60_000);
 
     test("AC15 F6: user_session_state.current_organization_id cleared after removal", async () => {

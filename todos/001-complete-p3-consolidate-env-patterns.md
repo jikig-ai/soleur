@@ -21,7 +21,9 @@ The `.dockerignore` uses three separate lines for env file exclusions (`.env`, `
 ## Proposed Solutions
 
 ### Option A: Single .env* glob (Recommended)
+
 Replace three lines with: `.env*`
+
 - Pros: Simpler, broader coverage, catches future env file variants
 - Cons: Would also catch a hypothetical `.envrc` file (direnv) - but this is desirable
 - Effort: Small

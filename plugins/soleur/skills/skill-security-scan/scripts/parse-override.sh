@@ -69,19 +69,71 @@ for path in "${added[@]}"; do
   ' "$path")"
 
   required_fields=(skill source findings_json justification approver scanner_version rule_pack_sha256 verdict timestamp)
-  missing=""
-  for f in "${required_fields[@]}"; do
-    if ! echo "$fm" | grep -qE "^${f}:[[:space:]]"; then
-      missing+="$f "
-    fi
-  done
+  # Presence is TWO-ARMED (#10167, decision-challenges.md `#10167` ruling row,
+  # CTO): a `^f:` top-level key counts present iff (a) non-whitespace, non-null
+  # content follows the colon on the same line — `f: v`, `f: {}`, `f: |` — OR
+  # (b) a following INDENTED (whitespace-led) line carries content before the
+  # block ends — the block-mapping spelling the schema's `oneOf string|object`
+  # admits for findings_json. Rejects: `f:` bare, `f:   ` (whitespace-only —
+  # the CTO dissent; the pre-#10167 grep accepted it), `f: null`/`f: ~`
+  # (a YAML null is not present for a required field), and `f:value` — with
+  # no separation space YAML reads the whole line as a plain SCALAR, not a
+  # mapping entry, so the key arm requires `:` followed by whitespace or EOL.
+  # The block ends at the next recognized key line OR any other column-0
+  # content line (`other :`, `"q":`, `9x:`, `- item`, `...`) — an indented
+  # stray under a construct this gate does not parse cannot back-fill the
+  # pending key. `^`-anchored matching keeps a nested same-named key from
+  # false-presenting; comment and blank lines are neutral — they neither
+  # satisfy presence nor close the block. A repeated key RECOMPUTES rather
+  # than latching (YAML last-wins): `f: v` then `f:` reports missing. Scope:
+  # presence, not type — `f: []`/`f: 5` count present and remain the schema
+  # validator's problem — this gate checks presence only; value type is
+  # unenforced for the three fields with no downstream check (findings_json,
+  # source, justification). Quoted keys (`'f':`), `f : v`, and tab-separated
+  # `f:\tv` are spellings this gate does not recognize — they report missing
+  # (deny-direction by design); the key arm's ` ` (not [[:space:]]) and the
+  # block arm's leading-space requirement deny tab indentation, which YAML
+  # forbids (CRLF is normalized first — `\r` is stripped before matching, so a
+  # CRLF-authored block map still reads as a key + indented block). Duplicate
+  # keys resolve last-wins here AND in the value extractors below — presence
+  # and extraction must read the same occurrence, or the gate and the artifact
+  # disagree about which value was validated (ship advisor finding).
+  missing="$(printf '%s\n' "$fm" | awk -v fields="${required_fields[*]}" '
+    BEGIN { n = split(fields, req, " ") }
+    { sub(/\r$/, "") }
+    /^[A-Za-z_][A-Za-z0-9_-]*:( |$)/ {
+      key = $0; sub(/:.*/, "", key)
+      cur = key; seen[key] = 1
+      content[key] = 0
+      rest = $0; sub(/^[^:]*:[[:space:]]*/, "", rest)
+      if (rest !~ /^[[:space:]]*$/ && rest !~ /^[[:space:]]*#/ &&
+          rest !~ /^(null|Null|NULL|~)([[:space:]]|$)/) content[key] = 1
+      next
+    }
+    /^ +[^[:space:]#]/ {
+      if (cur != "") content[cur] = 1
+      next
+    }
+    /^[^[:space:]#]/ { cur = "" }
+    END {
+      out = ""
+      for (i = 1; i <= n; i++) {
+        f = req[i]
+        if (!(f in seen) || !content[f]) out = out f " "
+      }
+      printf "%s", out
+    }
+  ')"
   if [ -n "$missing" ]; then
     invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "missing fields: ${missing}" '. + [{path: $p, reason: $r}]')"
     continue
   fi
 
   # Verdict must be HIGH-RISK or REVIEW.
-  verdict="$(echo "$fm" | awk -F: '/^verdict:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/"|'"'"'/, "", $2); print $2; exit }')"
+  # Last-wins, whole-rest-of-line: a `-F:` field read truncates `verdict:
+  # HIGH-RISK:junk` at the embedded colon and validates the prefix, and a
+  # first-match read diverges from presence's last-wins — both fail open.
+  verdict="$(echo "$fm" | awk '/^verdict:/ { v = $0 } END { sub(/^verdict:[[:space:]]*/, "", v); gsub(/"|'"'"'/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v }')"
   case "$verdict" in
     HIGH-RISK|REVIEW) ;;
     *)
@@ -95,13 +147,14 @@ for path in "${added[@]}"; do
   # these `format:` constraints but no validator ran — enforce them here.
   field_value() {
     echo "$fm" | awk -v fld="$1" '
-      $0 ~ "^"fld":" {
-        # Capture everything after the first colon (preserve embedded :).
-        sub("^"fld":[[:space:]]*", "")
-        gsub(/^["'"'"']|["'"'"']$/, "")
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-        print
-        exit
+      $0 ~ "^"fld":" { v = $0 }
+      END {
+        # Capture everything after the first colon (preserve embedded :),
+        # last occurrence wins — presence resolved last-wins.
+        sub("^"fld":[[:space:]]*", "", v)
+        gsub(/^["'"'"']|["'"'"']$/, "", v)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+        print v
       }'
   }
   approver="$(field_value approver)"
@@ -130,13 +183,13 @@ for path in "${added[@]}"; do
     /^[[:space:]]*approver:/      { next }
     { print }
   ' "$path")"
-  if echo "$artifact_text" | grep -qE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'; then
+  if grep -qE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' <<<"$artifact_text"; then
     invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "artifact contains raw email pattern outside approver field — use path-form findings_json (point to redacted .scan-meta.json) instead of inline" '. + [{path: $p, reason: $r}]')"
     continue
   fi
 
   # Freshness: rule_pack_sha256 prefix must match current manifest sha (≥8 chars).
-  artifact_sha="$(echo "$fm" | awk -F: '/^rule_pack_sha256:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/"|'"'"'/, "", $2); print $2; exit }')"
+  artifact_sha="$(echo "$fm" | awk '/^rule_pack_sha256:/ { v = $0 } END { sub(/^rule_pack_sha256:[[:space:]]*/, "", v); gsub(/"|'"'"'/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v }')"
   prefix_len="${#artifact_sha}"
   if [ "$prefix_len" -lt 8 ]; then
     invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "rule_pack_sha256 prefix too short (need >=8 chars)" '. + [{path: $p, reason: $r}]')"
@@ -153,7 +206,7 @@ for path in "${added[@]}"; do
   # frontmatter slug match each other (defense-in-depth against template-copy
   # mistakes), AND that consumers (CI gate, PreToolUse hook) verify the slug
   # binds to the specific HIGH-RISK skill being installed.
-  artifact_skill="$(echo "$fm" | awk -F: '/^skill:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/"|'"'"'/, "", $2); print $2; exit }')"
+  artifact_skill="$(echo "$fm" | awk '/^skill:/ { v = $0 } END { sub(/^skill:[[:space:]]*/, "", v); gsub(/"|'"'"'/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v }')"
   if [ -z "$artifact_skill" ] || ! [[ "$artifact_skill" =~ $slug_re ]]; then
     invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "skill: field invalid (got: $artifact_skill)" '. + [{path: $p, reason: $r}]')"
     continue

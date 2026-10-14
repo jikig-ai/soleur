@@ -28,5 +28,7 @@ EnvironmentFile=-/etc/default/inngest-server
 # fail-closes the host if DOPPLER_PROJECT goes missing from it, and a host replace is not available.
 # The '-' prefix keeps this a no-op on a host that has not received the file yet.
 EnvironmentFile=-/etc/default/soleur-doppler-token
+# #8609: the key-read line is for ci-deploy.sh and the boot overlay only; this unit never needs it.
+UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN
 Environment=HOME=/root
 ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/cron-egress-resolve.sh; else exec /usr/local/bin/cron-egress-resolve.sh; fi'

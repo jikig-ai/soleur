@@ -3,6 +3,10 @@ name: every-style-editor
 description: "This skill should be used when reviewing or editing copy for adherence to Every's style guide. It provides systematic line-by-line review for grammar, punctuation, mechanics, and style compliance."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Every Style Editor
 
 This skill provides a systematic approach to reviewing copy against Every's comprehensive style guide. It transforms Claude into a meticulous line editor and proofreader specializing in grammar, mechanics, and style guide compliance.
@@ -10,6 +14,7 @@ This skill provides a systematic approach to reviewing copy against Every's comp
 ## When to Use This Skill
 
 Use this skill when:
+
 - Reviewing articles, blog posts, newsletters, or any written content
 - Ensuring copy follows Every's specific style conventions
 - Providing feedback on grammar, punctuation, and mechanics
@@ -30,6 +35,7 @@ This skill enables performing a comprehensive review of written content in four 
 ### Step 1: Initial Assessment
 
 Begin by reading the entire piece to understand:
+
 - Document type (article, knowledge base entry, social post, etc.)
 - Target audience
 - Overall tone and voice
@@ -38,6 +44,7 @@ Begin by reading the entire piece to understand:
 ### Step 2: Detailed Line Edit
 
 Review each paragraph systematically, checking for:
+
 - Sentence structure and grammar correctness
 - Punctuation usage (commas, semicolons, em dashes, etc.)
 - Capitalization rules (especially job titles, headlines)
@@ -49,6 +56,7 @@ Reference the complete [EVERY_WRITE_STYLE.md](./references/EVERY_WRITE_STYLE.md)
 ### Step 3: Mechanical Review
 
 Verify:
+
 - Spacing and formatting consistency
 - Style choices applied uniformly throughout
 - Special elements (lists, quotes, citations)

@@ -3,7 +3,9 @@
 #
 # Mirrors the reproducible subset of .github/workflows/ci.yml required checks:
 #   Phase 1 — fast always-run jobs (seconds)
-#   Phase 2 — scripts/test-all.sh (CI `test` aggregator: webplat + bun + scripts)
+#   Phase 2 — scripts/test-all.sh --affected (diff-selected suites + always-on
+#             ratchets; the FULL battery is the CI `test` aggregator's job, and
+#             is opt-in locally via `test-all.sh --full`)
 #   Phase 3 — web-platform next build (route-file validator; CI web-platform-build)
 #   Phase 4 — plugins/soleur/scripts/grok-fidelity-gate.sh (CI grok-fidelity)
 #
@@ -11,14 +13,15 @@
 # (dev Supabase), dependency-review, skill-security-scan, creds-gated propagation probes.
 #
 # infra-validation.yml (suites under apps/web-platform/infra/) IS covered by this gate now,
-# indirectly: it invokes `bash scripts/test-all.sh` with no TEST_GROUP, so `want_infra` holds
-# and test-all.sh runs run-registered-suites.sh as a nested suite whenever the diff touches
-# that directory (#7103 R5(a)).
+# indirectly: it invokes `bash scripts/test-all.sh --affected` with no TEST_GROUP, so
+# `want_infra` holds and test-all.sh runs run-registered-suites.sh as a nested suite whenever
+# the diff touches that directory — the affected selector carries the same infra edge, so
+# coverage is unchanged by the mode (#7103 R5(a), #8322).
 #
 # So do NOT "run it alongside this gate", which is what this comment used to say. That advice
 # predates the registration and is now actively harmful: both entry points default
 # TMPDIR=/var/tmp, so a concurrent second run reproduces the sibling-contention shape and can
-# self-inflict a false RED — while paying the ~4-5 minute cost twice. Read test-all.sh's
+# self-inflict a false RED — while paying the ~25-minute affected-gate cost twice. Read test-all.sh's
 # epilogue, which states whether the runner actually ran, and invoke it separately only when
 # that line says it did not (#7014 is why the coverage status is stated here at all).
 #
@@ -58,8 +61,36 @@ run_step() {
   local name="$1"
   shift
   step "$name"
-  if "$@"; then
+  # Capture rc — `if "$@"` is a boolean test and discards the exit code, so a step that
+  # reports 3 (test-all.sh's EXIT CONTRACT: zero suites failed, >= 1 suite terminated with a
+  # signal-shaped status) or 4 (REFUSED — nothing ran) would be re-labelled a failure.
+  # Non-zero either way: a step that was not measured is not a step that passed. What the
+  # distinct arms buy is that the MESSAGE names the cause that actually occurred.
+  local rc=0
+  "$@" || rc=$?
+  if (( rc == 0 )); then
     echo "[ok] $name"
+  elif (( rc == 3 )); then
+    # Worded WITHOUT promising [KILLED] lines. exit 3 is test-all.sh's contract, and
+    # run_step drives ten steps; the other nine emit no [KILLED] lines, so the old
+    # wording asserted evidence that would not be there. None of them returns 3 today
+    # (verified), which makes this latent rather than live — but a message that names
+    # absent evidence is the ADR-166 class this repo gates on.
+    echo "[UNRESOLVED] $name — exited 3 without reporting a failure; if this step is test-all.sh see its EXIT CONTRACT block" >&2
+    exit 3
+  elif (( rc == 4 )); then
+    # Same class as the rc=3 arm above, and the arm that arm exists to prevent: rc=4 is
+    # test-all.sh's REFUSED — NOTHING RAN — not a red diff, so routing it to [FAIL] names a
+    # cause that did not occur. Latent rather than live: the only step that can produce 4 is
+    # the test-all step, and under --affected both full-gate refusals are exempt — what CAN
+    # still produce 4 is a DEGRADED affected run (undecidable diff, missing index, or a diff
+    # touching the runner/index itself) that then meets sibling contention, or a gutted
+    # declarations index. It is arm'd anyway because the mislabel would be silent.
+    echo "[REFUSED] $name — exited 4: the run was declined before any suite started, so this says nothing about your diff." >&2
+    echo "  If this step is test-all.sh: affected mode degraded to the full battery and met a" >&2
+    echo "  sibling run or a subagent context — resolve the printed reason= and re-run, or wait" >&2
+    echo "  for the sibling. An AFFECTED_UNRESOLVED print names the refusal directly." >&2
+    exit 4
   else
     echo "[FAIL] $name" >&2
     exit 1
@@ -67,6 +98,34 @@ run_step() {
 }
 
 echo "grok-pre-push-gate: starting local CI parity (repo: $REPO_ROOT)"
+
+# --- Phase 0: pre-launch capacity probe (#7545) — ADVISORY, never a gate ---
+#
+# Answers "can this box absorb the gate I am about to start?" in ~3 s
+# (measured p50 on a 16-core box with ~640 pids; it walks /proc once). Phase 2
+# below runs `test-all.sh --affected` — the diff-selected set plus the
+# always-on ratchets, roughly half the ~45-min serial battery on the measured
+# baseline (#8322). The probe still earns its place: an affected run can DEGRADE to the
+# full battery (undecidable diff, runner/index touched, FORCE_ALL), and on a
+# contended box that run's REDs may be interleaving rather than regressions.
+#
+# `timeout` is not optional: on the loaded box this probe exists to diagnose, an
+# unbounded /proc walk can block the push gate with no marker at all.
+#
+# NOT run through run_step, and the `|| true` is deliberate: a capacity verdict
+# must never gate a push. It is a STATEMENT the operator reads, not a decision
+# the script makes — see the ADR-133 2026-08-19 addendum for why the blocking
+# form was cut. Its exit code is discarded so that a broken or missing probe
+# also cannot gate the push.
+echo "--- capacity (advisory, does not gate) ---"
+_cap_out="$(timeout 60 bash scripts/test-all.sh --capacity 2>&1 || true)"
+printf '%s\n' "$_cap_out"
+# ABSENCE IS ITS OWN OUTCOME. `|| true` on a bare call made a probe that died
+# before emitting indistinguishable from a healthy quiet box — the exact
+# vanishing answer the lib-stub arm exists to prevent, one layer out.
+if ! grep -q 'CAPACITY_' <<<"$_cap_out"; then
+  echo "[contention] BANNER CAPACITY_UNKNOWN reason=probe_failed_or_timed_out"
+fi
 
 # --- Phase 1: fast CI jobs (ci.yml always-run, no secrets) ---
 run_step "readme-counts" bash scripts/sync-readme-counts.sh --check
@@ -105,14 +164,26 @@ else
   echo "SKIP lockfile-sync (npm not on PATH)" >&2
 fi
 
-# --- Phase 2: full test aggregator (CI `test` required check) ---
-run_step "test-all (CI test aggregator)" bash scripts/test-all.sh
+# --- Phase 2: affected test gate (#8322) ---
+# `--affected`: the suites this diff can move, plus every always-on repo-global
+# ratchet — roughly half the ~45-min battery, and exempt from the full-gate
+# refusals unless the selection DEGRADES to full — so the
+# SOLEUR_ALLOW_FULL_GATE=1 hatch this step previously
+# carried is gone rather than merely unneeded. The full battery remains the
+# CI `test` required check's job (and `test-all.sh --full` locally). An
+# undecidable diff degrades this step to the full battery on its own — the
+# AFFECTED_FALLBACK line in its output says so.
+run_step "test-all (affected gate)" bash scripts/test-all.sh --affected
 
 # --- Phase 3: next build / route validator (CI web-platform-build) ---
+# Local APPROXIMATION of the CI job: since #8136 `web-platform-build` builds the Dockerfile's
+# `builder` stage from the apps/web-platform context (which is what catches a reference above
+# the app root — release 34773058045); a bare `next build` on a full checkout cannot see that
+# class. The context check itself lives in test/docker-context-import-containment.test.ts.
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   step "web-platform-build"
   if [[ -f apps/web-platform/package-lock.json ]]; then
-    (cd apps/web-platform && npm ci && npm run build)
+    (cd apps/web-platform && npm ci --ignore-scripts && npm run build)
     echo "[ok] web-platform-build"
   else
     echo "SKIP web-platform-build (no package-lock.json)" >&2

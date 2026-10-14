@@ -5,7 +5,7 @@
 - **Issue:** #6459 (blue-green host replacement — the ADR this issue asked for). Related: #6608 (inngest allowlist), #6570 (git-data root blocker), #6441/ADR-115 (fresh-boot NIC + boot-unlock), #6538 (web-2 retirement), #5274/ADR-068 (multi-host `/workspaces`).
 - **Amends:** `hr-prod-host-config-change-immutable-redeploy`, ADR-103 (adds the drain-gated volume-preserving reprovision path for the `web-1` key).
 - **Extends:** ADR-068 (this is the ingress + host-lifecycle layer; the serving/writer model is unchanged and its `replicas=1` invariant remains in force until ADR-068 Phase-3 GA).
-- **Plan:** `knowledge-base/project/plans/2026-07-24-feat-web-active-active-cluster-iac-plan.md` (6-agent review applied).
+- **Plan:** `knowledge-base/project/plans/archive/20261013-041741-2026-07-24-feat-web-active-active-cluster-iac-plan.md` (6-agent review applied).
 
 ## Context
 
@@ -147,6 +147,8 @@ The original `lb-weight-gate.sh` was deleted (#6575) because its first assertion
 `workspaces-luks.tf` implements LUKS as an **additive web-1 singleton** (`hcloud_volume.workspaces_luks`, ADR-119); web-2's `for_each` volume is plaintext, and its old "slated for destruction (#6538)" justification is now FALSE (web-2 is a permanent standby). AC5 requires web-2 LUKS-backed, but the fresh-boot LUKS path does not exist and modifying the sole-copy-volume cloud-init boot path is the highest blast radius in the repo.
 
 **Ruling: DEFER** the guest-side fresh-boot LUKS path to the **Phase-4 disposability-proof PR** (tracking **#6931**), CONDITIONAL on three couplings that make the defer fail-CLOSED (all built in this PR): **(1)** rewrite the void justification in `workspaces-luks.tf:169-179`; **(2)** add a `WORKSPACES_LUKS_CUTOVER_AT` precondition to `lb-weight-gate.sh` Condition B so a plaintext web-2 **cannot be pooled** (a flip reddens unless web-2 `/workspaces` is asserted LUKS-backed — the merge-blocker that makes the defer safe); **(3)** open #6931 + record here. **AC5 is REFRAMED**: LUKS-intent declared in HCL + plaintext-pooling physically gated + tracked for Phase-4. web-2 holds NO user data pre-flip (serves nothing; flip externally blocked on #6570) → no GDPR Art. 32 at-rest exposure. **Corrections the Phase-4 PR MUST inherit:** (i) use the `blkid -o value -s TYPE` discriminator, NEVER `cryptsetup isLuks` (the `cloud-init-git-data.yml:169` pattern is the documented data-destroyer on a populated device — safe there only because that host is single-purpose fresh; the web-host cloud-init is SHARED); (ii) **reconcile the two-mechanism topology split** — decide whether web-1's post-de-pet serving volume is the additive singleton or a fresh-boot `for_each` volume, so web-1/web-2 share ONE topology (cattle parity). **This split is an OPEN architectural question, deferred to Phase-4** (cross-ref ADR-119 additive design + ADR-068 §(c)); "mirror web-1's cutover" is ambiguous today because web-1 serves off the singleton, not off `hcloud_volume.workspaces["web-1"]`.
+
+> **Superseded in part - 2026-10-01 (#6931):** the DEFER above is resolved and "AC5 reframed" is replaced by "LUKS-backed at boot" (true of web-2 only after the live conversion); see [ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md).
 
 ## Alternatives Considered
 
@@ -295,3 +297,53 @@ build.
 > [ADR-068](./ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md) (addendum
 > 2026-07-27, D1–D10)**, because git-data is ADR-068's element, not this ADR's. Note this repin does
 > **not** make the host bornable — it still has no birth route (#6977).
+
+## Amendment — 2026-09-23 (#8611, ADR-243)
+
+Giving a second host serving weight for `/api/inngest` step calls reopens ADR-243 §2 (the
+process-local single-flight guard that stops duplicate paid Claude sessions assumes one
+step-executing host).
+
+**Addendum — 2026-09-28 (#7230):** the Phase-3 flip must also honour the execution placement classes (`portable`, `host-affine`,
+`volume-bound`) recorded per function in `apps/web-platform/server/inngest/execution-placement.ts`
+(ADR-033 amendment 2026-09-28, #7230; placement-aware execution is #9137).
+
+**Addendum — 2026-10-01 (#6931, ADR-263):** the Phase-4 guest-side fresh-boot LUKS path R3 deferred is delivered as
+a baked provisioner ([ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md)); the "deferred to #6931"
+statements above (the R3 couplings and the `workspaces_luks` guard text) are historical. Merging it changes no
+running host: web-2's live volume is converted by the single-use rebirth tracked as #9372, and the anti-pooling
+coupling (`WORKSPACES_LUKS_CUTOVER_AT`) stays the fence until a flip orchestrator consumes the marker (#9358).
+
+> **Superseded 2026-10-12 (#9372), in part:** the single-use rebirth ran on 2026-10-06 and its workflow is retired (ADR-263
+> addendum 2026-10-12); the anti-pooling fence is unchanged.
+
+## Addendum — 2026-10-01 (#6604 step 7, PR B #9348): §Consequences "sole-copy protection" corrected
+
+Status unchanged. This corrects two claims in the §Consequences **Positive** bullet, "Sole-copy
+protection (precise, PR-1 state)". That text is kept above as written.
+
+1. **"`hcloud_volume.workspaces_luks` … does NOT yet carry `prevent_destroy` … deferred to #6931" is
+   superseded.** On the merge of PR #9348, Terraform declares `prevent_destroy = true` and
+   `delete_protection = true` on `hcloud_volume.workspaces_luks`, and `prevent_destroy = true` on
+   `hcloud_volume_attachment.workspaces_luks` (ADR-119, the PR-B addendum's D1). The collision that
+   justified the deferral is gone: the `workspaces-luks-recut` job is hard-retired (its first step
+   exits 1), and its `-replace` would plan-fail against `prevent_destroy` anyway. `delete_protection`
+   is effective only after the post-merge SSH-stage apply delivers it. The off-host snapshot is still
+   not built: there is no backup or snapshot of the sole copy (#5274, #8625). Lifting the protection is
+   a reviewed PR, `delete_protection` first in its own apply: removing `prevent_destroy` while
+   `delete_protection` stays on makes a destroy apply detach the mounted volume and then fail the
+   delete, an outage.
+2. **"Interim guards on `workspaces_luks`: absent from the push `-target` allow-list" was never a
+   sufficient guard, and this predates PR #9348.** The volume is not in the guarded plan's `-target`
+   list, but it is in the `-target` closure of the `apply` job's SSH stage, "Terraform apply
+   (SSH-provisioned resources, over the bridge)". That stage runs `terraform apply -auto-approve` with
+   no destroy-guard and targets `terraform_data.workspaces_boot_unlock_install`, which interpolates
+   `hcloud_volume.workspaces_luks.id` (its precondition, the boot-unlock envfile writer and the
+   crypttab `LINE`, all in `apps/web-platform/infra/workspaces-luks.tf`). So a ForceNew change to the
+   volume reached by that stage would have been applied. From PR #9348, `prevent_destroy` makes that
+   plan fail, and the same stage is what delivers the `delete_protection` update.
+
+The "residual exposure" clause (a targeted `destroy`/`-replace` of `workspaces_luks` during the defer
+window) is closed by `prevent_destroy` for every plan that keeps the resource in config. It is not
+closed for a state-only removal (`terraform state rm`, a `removed {}` block), which `prevent_destroy`
+does not see.

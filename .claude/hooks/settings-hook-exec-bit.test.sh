@@ -39,13 +39,20 @@
 #       whole event fails even though the total stays high;
 #   (c) the derived command count equals the number of `type == "command"`
 #       entries in the file — self-consistent, no magic number to maintain.
-# (c) counts commands BEFORE de-duplication: three hooks are deliberately
-# registered under two matchers each (guardrails.sh, kb-domain-allowlist-guard.sh,
-# no-memory-write.sh), so the file holds 36 command entries over 33 distinct
-# paths. Comparing the DEDUPED count against the entry count would be a
-# permanently-red gate that the next person "fixes" by deleting the check.
+# (c) counts commands BEFORE de-duplication: several hooks are deliberately
+# registered under multiple matchers each (guardrails.sh spans Bash/write/
+# ask_user_question classes; the #8205 twin registrations added more), so the
+# command-entry count exceeds the distinct-path count. Comparing the DEDUPED
+# count against the entry count would be a permanently-red gate that the next
+# person "fixes" by deleting the check.
 
 set -uo pipefail
+
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -58,11 +65,10 @@ fail() { printf '  ✗ %s\n' "$1" >&2; fails=$((fails + 1)); }
 echo "settings-hook-exec-bit: every hook named in $SETTINGS must be committed 100755 and be executable on disk"
 
 if ! command -v jq >/dev/null 2>&1; then
-  # Fail, do not skip. Skipping on a missing tool is how a gate becomes
-  # permanently inert on the one machine that needed it.
-  fail "jq is not installed — cannot parse $SETTINGS, so this gate cannot run"
-  echo "FAILED: $fails" >&2
-  exit 1
+  # Not-green (3, UNRESOLVED), never skip. Skipping on a missing tool is how a
+  # gate becomes permanently inert on the one machine that needed it (#8616).
+  echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"
+  exit 3
 fi
 
 if [[ ! -f "$SETTINGS" ]]; then
@@ -71,12 +77,48 @@ if [[ ! -f "$SETTINGS" ]]; then
   exit 1
 fi
 
-# Every command string across every hook event, in file order, NOT de-duplicated.
-# The `"$CLAUDE_PROJECT_DIR"/` prefix is stripped to yield a repo-relative path.
-# Note the literal double quotes: settings.json stores `"$CLAUDE_PROJECT_DIR"/...`.
+# Normalize settings.json command strings on stdin into `<kind>\t<repo-relative path>`.
+#
+# THREE SHAPES, not one — the same three `.claude/hooks/hookeventname-coverage.test.sh`
+# learned about when #8377 introduced the first interpreter-prefixed entry. That sibling
+# extractor was updated and THIS one was not, so the new entry arrived here as the literal
+# string `bash "$CLAUDE_PROJECT_DIR"/scripts/ensure-kb-index.sh --soft`, matched no tracked
+# path, and reported a correctly-tracked 100755 file as "NOT tracked by git". A gate whose
+# failure text names the wrong cause is worse than one that skips.
+#   (1) "$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh         -> exec    .claude/hooks/x.sh
+#   (2) bash "$CLAUDE_PROJECT_DIR"/scripts/x.sh          -> interp  scripts/x.sh
+#   (3) bash "$CLAUDE_PROJECT_DIR"/scripts/x.sh --flag   -> interp  scripts/x.sh
+#
+# The KIND is load-bearing, not bookkeeping. The runtime execve()s shape (1), so a mode
+# other than 100755 means EACCES and the hook silently never runs (#7151) — that is the
+# defect this whole gate exists for. Shapes (2) and (3) are read by an interpreter that
+# ignores the mode bit entirely, so requiring 100755 there would assert a property the
+# runtime does not depend on and would fail honest configurations. Tracked-ness is required
+# for all three: CI can only mode-check a file it can see.
 # shellcheck disable=SC2016  # the literal string "$CLAUDE_PROJECT_DIR" is the match target, not an expansion
-all_commands=$(jq -r '.hooks | to_entries[] | .value[] | .hooks[] | .command' "$SETTINGS" 2>/dev/null \
-  | sed 's|^"\$CLAUDE_PROJECT_DIR"/||')
+normalize_hook_commands() {
+  awk '
+    {
+      kind = "exec"
+      if ($1 ~ /^(bash|sh|dash|zsh|python3?|node|bun)$/ && NF >= 2) {
+        kind = "interp"
+        sub(/^[^ \t]+[ \t]+/, "")
+      }
+      sub(/[ \t].*$/, "")               # drop trailing arguments
+      sub(/^"\$CLAUDE_PROJECT_DIR"\//, "")
+      if ($0 != "") print kind "\t" $0
+    }'
+}
+
+# Every command string across every hook event, in file order, NOT de-duplicated.
+all_entries=$(jq -r '.hooks | to_entries[] | .value[] | .hooks[] | .command' "$SETTINGS" 2>/dev/null \
+  | normalize_hook_commands)
+all_commands=$(printf '%s\n' "$all_entries" | cut -f2)
+
+# Paths the runtime execve()s directly. A path is held to the mode bit only if EVERY
+# occurrence of it is interpreter-run; a path registered both ways keeps the stricter
+# requirement, since the direct registration is the one that can EACCES.
+exec_paths=$(printf '%s\n' "$all_entries" | awk -F'\t' '$1=="exec"{print $2}' | sort -u)
 
 # (a) Non-empty listing.
 if [[ -z "$all_commands" ]]; then
@@ -115,7 +157,7 @@ else
     event_total=$((event_total + 1))
     # shellcheck disable=SC2016
     first=$(jq --arg ev "$ev" -r '[.hooks[$ev][] | .hooks[] | .command][0] // ""' "$SETTINGS" 2>/dev/null \
-      | sed 's|^"\$CLAUDE_PROJECT_DIR"/||')
+      | normalize_hook_commands | cut -f2)
     if [[ -z "$first" ]]; then
       fail "hook event '$ev' declares no commands in $SETTINGS"
       continue
@@ -139,20 +181,20 @@ while IFS= read -r p; do
   # `git ls-files -s` emits: <mode> <sha> <stage>\t<path>
   entry=$(git ls-files -s -- "$p" 2>/dev/null)
   if [[ -z "$entry" ]]; then
-    # Also catches a command carrying an interpreter or arguments: the derived
-    # token then is not a tracked path, and production would exec something CI
-    # never mode-checked.
-    fail "$p is named in $SETTINGS but is NOT tracked by git — production would exec a file CI never sees (or the command carries args/an interpreter this gate cannot parse)"
+    fail "$p is named in $SETTINGS but is NOT tracked by git — production would run a file CI never sees"
     continue
   fi
 
-  mode=${entry%% *}
-  if [[ "$mode" != "100755" ]]; then
-    fail "$p is committed mode $mode — settings.json execs it directly, so the runtime gets EACCES and the hook silently never runs (#7151)"
-  fi
+  # Mode assertions apply to the execve'd shape only; see normalize_hook_commands.
+  if grep -qxF -- "$p" <<< "$exec_paths"; then
+    mode=${entry%% *}
+    if [[ "$mode" != "100755" ]]; then
+      fail "$p is committed mode $mode — settings.json execs it directly, so the runtime gets EACCES and the hook silently never runs (#7151)"
+    fi
 
-  if [[ ! -x "$p" ]]; then
-    fail "$p is not executable on disk — the runtime execve's the on-disk file, so an index-only fix still cannot run here"
+    if [[ ! -x "$p" ]]; then
+      fail "$p is not executable on disk — the runtime execve's the on-disk file, so an index-only fix still cannot run here"
+    fi
   fi
 done <<< "$(printf '%s\n' "$all_commands" | sort -u)"
 
@@ -161,7 +203,8 @@ if [[ "$checked" -ne "$paths" ]]; then
 fi
 
 if (( fails == 0 )); then
-  pass "$checked distinct hook path(s) all tracked, committed 100755, and executable on disk"
+  n_exec=$(printf '%s\n' "$exec_paths" | grep -c . || true)
+  pass "$checked distinct hook path(s) all tracked; $n_exec directly-exec'd one(s) committed 100755 and executable on disk"
   echo "PASSED"
   exit 0
 fi

@@ -24,6 +24,7 @@ Line 451 of x-community.sh has `(($user.public_metrics.followers_count) // 0)` w
 ## Technical Details
 
 **Affected files:**
+
 - `plugins/soleur/skills/community/scripts/x-community.sh:451`
 - `test/x-community.test.ts:175`
 

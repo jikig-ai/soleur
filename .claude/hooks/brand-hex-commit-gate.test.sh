@@ -4,6 +4,15 @@
 # fixtures are synthesised inline (cq-test-fixtures-synthesized-only); none
 # are copied from app code.
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
+
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOOK="$REPO_ROOT/.claude/hooks/brand-hex-commit-gate.sh"
@@ -38,7 +47,7 @@ _reason()   { echo "$1" | jq -r '.hookSpecificOutput.permissionDecisionReason //
 # discovers: apps/web-platform/app/globals.css with a :root token block.
 # The palette here defines the "brand" colours; anything else is off-brand.
 _seed_repo() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   (
     cd "$tmp"
     git init -q -b main
@@ -360,7 +369,7 @@ t_palette_poison_via_unstaged_worktree() {
 #      yields a palette so the email off-brand check works ----
 
 t_single_line_token_css_palette() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   ( cd "$tmp"
     git init -q -b main
     git config user.email t@t; git config user.name t
@@ -406,7 +415,20 @@ t_four_digit_bracket_blocked
 t_message_flaglike_text_no_false_deny
 t_real_dash_a_scans_unstaged
 t_palette_poison_via_unstaged_worktree
+# Devin wire name `exec` reaches the gated scan (kind map, #8205).
+t_devin_exec_triggers() {
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "apps/web-platform/components/dashboard/banner.tsx" \
+'export const B = () => <div className="bg-[#2563eb]">x</div>;'
+  local out; out=$(_run "$repo" "exec" "git commit -m 'add'")
+  [[ "$(_decision "$out")" == "deny" ]] \
+    && _report "T24 Devin exec tool_name reaches scan -> deny" ok \
+    || _report "T24 Devin exec tool_name reaches scan -> deny" fail "$(_decision "$out")"
+  rm -rf "$repo"
+}
+
 t_single_line_token_css_palette
+t_devin_exec_triggers
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

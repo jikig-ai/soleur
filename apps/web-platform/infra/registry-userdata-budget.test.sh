@@ -37,7 +37,7 @@ TS_TEST="$REPO_ROOT/plugins/soleur/test/cloud-init-user-data-size.test.ts"
 # EQUALITY, not a floor. A `checks < N` floor cannot distinguish "all arms passed" from "one
 # arm's failure was swallowed" whenever a green run emits exactly N+1 — which is how the first
 # revision shipped (floor 8, green run 9). Adding an arm must move this constant.
-EXPECTED_CHECKS=16
+EXPECTED_CHECKS=28  # 22 + three #8714 5.3b-iii zot-mirror arms (landed + exit each)
 
 fails=0
 checks=0
@@ -90,10 +90,45 @@ else
   fail "strip is effective" "raw=$raw stripped=$stripped — expected stripped < raw/2"
 fi
 
-if [ -n "$headroom" ] && [ "$headroom" -ge 20000 ]; then
-  pass "headroom ${headroom} B >= 20000 B floor (stored ${stored} B)"
+ts_floor=$(grep -oE '^const REGISTRY_GZIP_FLOOR = [0-9_]+' "$TS_TEST" | grep -oE '[0-9_]+$' | tr -d '_')
+ts_budget=$(grep -oE '^const REGISTRY_GZIP_BUDGET = [0-9_]+' "$TS_TEST" | grep -oE '[0-9_]+$' | tr -d '_')
+
+# THE HEADROOM FLOOR IS DERIVED, NOT DECIDED HERE (#7444, CTO ruling).
+#
+# This arm used to read `headroom -ge 20000`. That literal was AC1 of the #7299 plan — a
+# ONE-SHOT verification that the measurer fix had landed (that the corrected reading was ~23.4 kB
+# rather than the phantom -3,636 B), transcribed verbatim into a standing regression arm where it
+# silently became a permanent capacity ceiling nobody decided on. It rationed every future
+# feature on this host to 3,360 B and blocked a correctness round at 11% over.
+#
+# Nothing else in the repo held that number: registry-userdata-budget.sh (the gate the operator
+# actually runs before a destructive replace) fails only on `stored >= cap`; the recut runbook
+# states the operational invariant as "headroom must be > 0, strictly"; the #7299 plan's own
+# rejected-alternatives table records "production is 71% under cap"; and the sibling git-data host
+# runs under GIT_DATA_BUDGET = 28_000, which PERMITS headroom as low as 4,768 — 4x less conservative
+# on the same 32,768 B ForceNew cap.
+#
+# That last clause is stated as what the budget AUTHORISES, not as a measurement, and deliberately
+# so: git-data's measured headroom was 12,312 B when ADR-185 was written and became 20,180 B four
+# days later when #7264 applied the same rationale-strip to git-data's own template. A comment
+# pinned to the measurement would have been false within the week; the budget constant is the part
+# that actually encodes a policy. See ADR-185 evidence 4.
+#
+# The ONE number authored as a policy is in the TS oracle: REGISTRY_GZIP_BUDGET < HETZNER_CAP -
+# 8_000, i.e. "preserve at least 8,000 B of real headroom". Largest measure-time-to-apply-time
+# divergence ever observed on this class is 612 B, so 8,000 is ~13x the worst case.
+#
+# So this arm DERIVES its floor from that single owning constant and is deliberately redundant
+# with the extracted cross-check below: its value is the message in the operator's unit, not an
+# independent constraint. Change the budget in cloud-init-user-data-size.test.ts and both move.
+if [ -z "$ts_budget" ] || [ -z "$ts_floor" ]; then
+  # EXPLICIT, not arithmetic-by-accident: an empty $ts_budget inside $(( )) is 0, which would
+  # demand headroom > cap and fail closed for a reason no message names.
+  fail "headroom floor derived from the TS budget" "could not extract REGISTRY_GZIP_FLOOR/BUDGET from $TS_TEST — the oracle is unreadable, not satisfied"
+elif [ -n "$headroom" ] && [ "$headroom" -ge "$(( cap - ts_budget ))" ]; then
+  pass "headroom ${headroom} B >= $(( cap - ts_budget )) B floor derived from REGISTRY_GZIP_BUDGET=${ts_budget} (stored ${stored} B)"
 else
-  fail "headroom >= 20000 B floor" "headroom=$headroom stored=$stored"
+  fail "headroom >= derived floor" "stored=$stored exceeds REGISTRY_GZIP_BUDGET=$ts_budget from plugins/soleur/test/cloud-init-user-data-size.test.ts, which is itself gated at HETZNER_CAP - 8000; headroom=$headroom floor=$(( cap - ts_budget ))"
 fi
 
 # THE OTHER SIDE OF THE SAME NUMBER. Without this, any mutation that under-reports the payload
@@ -117,8 +152,6 @@ fi
 # same payload with node zlib and pins its own bounds; requiring our byte-exact figure to fall
 # inside them triangulates the two measurers against each other. Bounds are EXTRACTED, not
 # restated, so they cannot drift.
-ts_floor=$(grep -oE '^const REGISTRY_GZIP_FLOOR = [0-9_]+' "$TS_TEST" | grep -oE '[0-9_]+$' | tr -d '_')
-ts_budget=$(grep -oE '^const REGISTRY_GZIP_BUDGET = [0-9_]+' "$TS_TEST" | grep -oE '[0-9_]+$' | tr -d '_')
 if [ -z "$ts_floor" ] || [ -z "$ts_budget" ]; then
   fail "cross-check against cloud-init-user-data-size.test.ts bounds" "could not extract REGISTRY_GZIP_FLOOR/BUDGET — the oracle is unreadable, not satisfied"
 elif [ -n "$stored" ] && [ "$stored" -gt "$ts_floor" ] && [ "$stored" -lt "$ts_budget" ]; then
@@ -132,7 +165,11 @@ fi
 # first revision did `grep -rcE ... "$DIR"/*.tf | grep -vE ':0$' | wc -l`, where the glob made
 # `-r` inert (subdirectories like modules/ were never scanned) and the count was of FILES — so
 # two assignments inside zot-registry.tf read as "exactly one".
-decls=$(git -C "$REPO_ROOT" grep -chE '^[[:space:]]*registry_rationale_strip[[:space:]]*=' -- '*.tf' 2>/dev/null | paste -sd+ - | bc 2>/dev/null || echo 0)
+# SUMMED WITH awk, NOT bc (#7960): `bc` is absent on some developer hosts, and the previous
+# `paste -sd+ - | bc 2>/dev/null || echo 0` turned that absence into `decls=0` -- a FALSE RED on
+# "declared exactly once repo-wide" that looks exactly like the real divergence this check exists
+# to catch. awk is in the same coreutils-class dependency set the rest of this file already needs.
+decls=$(git -C "$REPO_ROOT" grep -chE '^[[:space:]]*registry_rationale_strip[[:space:]]*=' -- '*.tf' 2>/dev/null | awk '{ s += $1 } END { print s + 0 }')
 if [ "$decls" = "1" ]; then
   pass "registry_rationale_strip is declared exactly once repo-wide (in .tf)"
 else
@@ -210,6 +247,44 @@ run_arm "over-broad strip eats the whole payload" \
   "sed -i 's|registry_rationale_strip = .*|registry_rationale_strip = \"/(?m)^.*\\\\n/\"|' zot-registry.tf" \
   2 \
   "grep -q 'registry_rationale_strip = \"/(?m)\\^\\.\\*' zot-registry.tf"
+
+# (#7582) Every zot-registry.tf literal the template map consumes is READ, never a stub copy — a
+# stub made a doppler_sha256 bump render byte-identical, so the dispatcher's render diff could not
+# see it. A missing literal is unmeasurable, never a silent default.
+run_arm "missing doppler_sha256 literal" \
+  "grep -vE '^[[:space:]]*doppler_sha256[[:space:]]*=' zot-registry.tf > tf.new && mv tf.new zot-registry.tf" \
+  2 \
+  "! grep -qE '^[[:space:]]*doppler_sha256[[:space:]]*=' zot-registry.tf"
+
+# (#7582) A literal read must be the ONLY thing right of `=`: a trailing comment carrying a quoted
+# string (`x = "a" # was "b"`) must be unmeasurable, never read as the comment's value.
+run_arm "trailing comment with a quote on a read literal" \
+  "sed -i -E 's|^([[:space:]]*registry_private_ip[[:space:]]*=[[:space:]]*\"10\\.0\\.1\\.30\")[[:space:]]*$|\\1 # was \"10.0.1.31\"|' zot-registry.tf" \
+  2 \
+  "grep -qE 'registry_private_ip = \"10\\.0\\.1\\.30\" # was' zot-registry.tf"
+
+# (#7582) The pin regex is prefix-agnostic: a pin that moves off ghcr.io (#8714 5.3b-iii) must
+# still render (exit 0), so the dispatcher sees it as an ordinary render change on both sides.
+run_arm "non-ghcr pin prefix still renders" \
+  "sed -i -E 's|(zot_image_amd64 = \")ghcr\\.io/project-zot/|\\1registry.example.test/mirror/project-zot/|' zot-registry.tf" \
+  0 \
+  "grep -qE 'zot_image_amd64 = \"registry\\.example\\.test/mirror/project-zot/zot-linux-amd64' zot-registry.tf"
+
+# (#8714 5.3b-iii) The zot-mirror locals are copied VERBATIM into the render, so the block's
+# boundaries and closure are part of what is measured: an unterminated block, a missing member the
+# template map reads, or a reference to a local the offline render cannot see is UNMEASURABLE.
+run_arm "zot-mirror block without its end marker" \
+  "grep -vE '^[[:space:]]*# zot-mirror:end[[:space:]]*$' zot-registry.tf > tf.new && mv tf.new zot-registry.tf" \
+  2 \
+  "! grep -qE '# zot-mirror:end' zot-registry.tf"
+run_arm "zot-mirror block missing zot_mirror_asset_url" \
+  "grep -vE '^[[:space:]]*zot_mirror_asset_url[[:space:]]*=' zot-registry.tf > tf.new && mv tf.new zot-registry.tf" \
+  2 \
+  "! grep -qE '^[[:space:]]*zot_mirror_asset_url[[:space:]]*=' zot-registry.tf"
+run_arm "zot-mirror block reading a local outside the block" \
+  "sed -i -E 's|(zot_manifest_digest[[:space:]]*=[[:space:]]*regex\\(.*)local\\.zot_image_amd64\\)|\\1local.zot_image)|' zot-registry.tf" \
+  2 \
+  "grep -qE 'zot_manifest_digest[[:space:]]*=.*local\\.zot_image\\)' zot-registry.tf"
 
 # --- non-vacuity ------------------------------------------------------------------------
 if [ "$checks" -ne "$EXPECTED_CHECKS" ]; then

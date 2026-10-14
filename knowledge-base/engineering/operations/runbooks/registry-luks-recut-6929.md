@@ -47,9 +47,11 @@ at the stock gate.
 
 **Re-probe rather than trusting that date.** Stock moves without notice and a revert needs a
 *second* successful create, so the reading that matters is the one taken immediately before firing.
-Read `.server_types.available` (never `.supported` — the type stays supported while availability is
-zero, which is the whole distinction); `apps/web-platform/infra/zot-registry.tf` carries the last
-recorded probe and the command shape. The durable fix is #7309.
+Read `locations[].available` from `GET /v1/server_types?name=<type>` (never the mere presence of a location
+entry — the type stays supported while availability is zero, which is the whole distinction; the old
+`/v1/datacenters` endpoint was removed, HTTP 410); `apps/web-platform/infra/zot-registry.tf` carries the last
+recorded probe (taken on the removed `/v1/datacenters`; use the probe command in the header of
+`tests/scripts/lib/stock-preflight-gate.sh` instead). The durable fix is #7309.
 
 > ### ⚠️ Do NOT route around it with `registry-region-migrate`
 >
@@ -147,7 +149,63 @@ restore exit-code table below).
 
 ---
 
+## Before ANY destructive step: try the read-only inventory lever FIRST
+
+**Everything below this heading destroys something. This does not.** Before the cold-vehicle
+re-verification, before Step 1 and before Step 2, dispatch the inventory lever and read its number.
+
+> **This lever has never executed in production.** Same discipline this runbook already applies
+> to the recut itself ("shipped with ZERO live executions") — it applies here too. At the time
+> of writing, runner egress to the pinned Better Stack ingest host is **unproven**, and #7339
+> is the open follow-through whose sole job is to observe a real marker. So the FIRST dispatch
+> is also the first test of the path.
+>
+> Read the outcome, not just the number. `outcome=partial` or `enumeration_complete=false`
+> means the sweep did not finish and `delta_gb` is a LOWER-bounded guess that runs HIGH —
+> every truncation path inflates it, which is the direction that makes destroying the store
+> look justified. A `delta_gb` under ~3 GB is not distinguishable from zero at all. If the run
+> produces no marker, that is a fact about the lever, not evidence about the store.
+
+```
+gh workflow run registry-zot-inventory.yml
+```
+
+It runs entirely from GitHub Actions, is read-only (`GET`/`HEAD` only, pull-user credentials, no
+`docker login`), changes nothing on the host and touches no Terraform. It walks the registry's OCI
+API over the existing Cloudflare-Access-gated `registry.` ingress and emits a
+`SOLEUR_ZOT_INVENTORY` marker to Better Stack, then reads it back before the run goes green. The
+workflow comments the line and its interpretation onto #7339 (the dedicated tracker; #7247 is the incident, which closes and would take the record with it).
+
+**Why this comes first.** The reason an operator reaches for a recut is almost always "the store
+is full and the registry is down". This lever answers *what is actually consuming the volume* —
+the question `SOLEUR_ZOT_DISK` structurally cannot answer, because it reports `pcent` with **no
+per-path breakdown**. A recut destroys the store and rebuilds it encrypted; it does not diagnose
+anything, and firing it without the number means destroying the only copy of the evidence.
+
+**How to read the number, and what it does not license:**
+
+- Require `enumeration_complete=true`. An incomplete sweep (`manifest_errors > 0`, a failed
+  `tags/list`, an unfollowed `Link` header) produces a large `delta_gb` that is indistinguishable
+  from the finding. `enumeration_complete=false` licenses **no** conclusion — re-dispatch.
+- `delta_gb` is an **upper bound on unreferenced bytes**, not a measurement of them. Two candidates
+  with different remedies are zot's dedupe cache DB and orphaned `.uploads/` staging. The lever
+  distinguishes neither. **Assert no cause from it.**
+- A `delta_gb` under about **3 GB is not distinguishable from zero** — `pcent` excludes ext4's root
+  reserve, which is ~2.95 GB on a 59 GB filesystem.
+
+**What it cannot do.** It cannot reclaim, restart, or change host config. No zot user holds
+`delete` (measured), and every write-shaped remedy needs a cloud-init-written config change, i.e. a
+host replace — which, until the recut first fired on 2026-08-10 (run 31437037877), was the unfired-recut fatal
+(#7287, closed 2026-08-12) this runbook was written inside. So the inventory is not an
+alternative to the recut; it is the measurement you must have **before** deciding the recut is the
+right destroy. See [ADR-172](../../architecture/decisions/ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md).
+
+---
+
 ## Before the FIRST-EVER fire: cold-vehicle re-verification (REQUIRED)
+
+*First fired 2026-08-10 ([run 31437037877](https://github.com/jikig-ai/soleur/actions/runs/31437037877)); this
+section is now the checklist for a future recut.*
 
 This dispatch shipped with **zero live executions**. Its guard *logic* is well covered by tests,
 but its *live* surfaces have never run against production. Since #7277 those surfaces are: two
@@ -157,6 +215,69 @@ Hetzner API probes, one Better Stack read, **GHCR-read-from-a-runner under `pack
 query that used to be listed here no longer exists.) They would otherwise first execute at the single highest-stakes
 moment: an irreversible destroy of the store.
 
+> ### Amendment 2026-08-09 — the throwaway-zot rehearsal has now run live, and it caught something
+>
+> The paragraph above is retained as the record of the pre-first-fire state. It is no longer
+> wholly true: **one of the four cold surfaces has now executed against production.**
+>
+> A recut was dispatched on 2026-08-09 (Actions run 31333047132) after all five checks below
+> passed. It **aborted safely** — `verdict=REFUSED predicate=A2`, `registry_luks_recut` skipped,
+> **nothing destroyed**. A0 derived the inventory (`v0.249.4` / `f838839ef11119ac46f4d38ccf926472dee393a8`),
+> A1 resolved 4/4 required pins at GHCR, A3 met its floor, A4 was `unmeasured` (non-aborting).
+>
+> The **throwaway-zot rehearsal** — cold surface #2, whose wall-clock and peak runner disk ADR-169
+> recorded as unmeasured — failed on its first live run with restore exit `6`:
+>
+> ```
+> crane: Error: validating children: failed to validate image
+> Manifests[1](sha256:0aa3be0e…): validating layers: gzip: invalid header
+> ```
+>
+> The cause was **not** the store. `ghcr.io/jikig-ai/soleur-web-platform` is a buildx OCI index
+> whose `manifests[1]` is an attestation manifest (`vnd.docker.reference.type=attestation-manifest`,
+> `platform: unknown/unknown`) carrying one `application/vnd.in-toto+json` layer — plain JSON,
+> never gzipped. `crane validate` walks index children and tries to gunzip every layer. Validating
+> that child digest **directly at GHCR**, a registry the recut never WRITES to (it does read from it, on every entry, via `crane digest` and `crane copy`), reproduced it
+> identically, which is what established it as a validator false positive rather than corruption.
+>
+> **Why this matters beyond the fix.** A2 is the gate's declared PASS condition, so this made the
+> dispatch structurally unfireable — during exactly the incident it exists to recover from, and for
+> the second time (the first was the `APP_DOMAIN_BASE` read corrected 2026-08-06). And the real
+> restore runs the **same engine on the same code path**: without the pre-destroy rehearsal the
+> recut would have destroyed the store and only then hit this, stranding production with an empty
+> store, no pull path (the host→GHCR edge is dead per the 2026-07-30 amendment), and an
+> unclassified exit 6. Rehearse-before-destroy is what caught it — evidence for ADR-169's
+> independence criterion, not against it.
+>
+> Fixed by verifying index blob completeness **per child** (platform children keep
+> `crane validate --remote`; attestation children are verified by blob presence via `crane blob`,
+> which never decompresses) plus a named `LAYERFORMAT` class so this shape can never again surface
+> as an unclassified exit 6. Both suites had **zero** attestation/in-toto/gzip coverage before this
+> — the same hermetic-fixture gap this document already records for the app-domain derivation.
+>
+> **What is now warm, and what is still cold.** Corrected 2026-08-10 — an earlier revision of this
+> paragraph listed the two Hetzner probes as cold on the reasoning that "the recut job was
+> skipped". That reasoning was wrong: **both Hetzner probes live in the `registry_pull_path_gate`
+> job, not in `registry_luks_recut`**, and both reported `success` in run 31333047132's step list.
+>
+> The paragraph this amends enumerates **six** surface groups. Five of them executed:
+>
+> | Surface | State | Where it ran |
+> |---|---|---|
+> | Hetzner volume/posture probe (D4) | **executed** | gate job, step `Resolve recovery posture (D4 live existence probe)` |
+> | Hetzner server-type availability probe | **executed** | gate job, step `Pre-rehearsal server-type availability probe` |
+> | GHCR-read-from-a-runner under `packages: read` | **executed** | gate job, A1 resolved 4/4 required pins |
+> | `/health` parse | **executed** | gate job, A0 derived `version` + `build_sha` |
+> | throwaway-zot rehearsal | **executed** | gate job — and it FAILED, which is this amendment |
+> | Better Stack heartbeat read | **still cold** | recut job (skipped) |
+> | post-destroy real restore over the CF Tunnel | **still cold** | `registry_store_restore` (skipped) |
+>
+> "Executed" is not "measured": the rehearsal aborted at verification 2, so the two quantities
+> ADR-169 records as unmeasured — its wall-clock and peak runner disk — remain unmeasured. The
+> in-recut *invocation* of `stock_preflight_gate` is also still cold, even though the Hetzner API
+> surface it uses was exercised by the pre-rehearsal probe. Re-run the five checks below before
+> the next attempt; five surfaces having executed does not retire the section.
+
 So the five checks below are **required before the first fire**, not advisory. If any fails, fix it
 and re-verify. **Do not proceed with a degraded gate** — a gate that cannot fail is worse than no
 gate, because it gets read as evidence.
@@ -164,10 +285,12 @@ gate, because it gets read as evidence.
 1. **The D10 gate can go BOTH red and green.** The suite leads with the green row — the
    criterion whose absence let an unpassable gate ship — and carries one positive control per
    abort class:
+
    ```bash
    bash tests/scripts/test-registry-pull-path-health.sh
    bash tests/scripts/test-registry-restore-from-ghcr.sh
    ```
+
    No Doppler wrapper and no `SENTRY_AUTH_TOKEN`: **the gate no longer reads Sentry at all.** The
    previous version of this check ran the suite under `doppler run -c prd_terraform` and named a
    rotated `SENTRY_AUTH_TOKEN` as the failure mode; both stopped describing the gate at #7277.
@@ -176,12 +299,14 @@ gate, because it gets read as evidence.
    would stay green against a workflow wired to a source that does not exist, which is exactly
    what shipped. Run the derivation itself and confirm it yields a bare base domain whose
    `/health` answers:
+
    ```bash
    bash scripts/derive-app-domain-base.sh            # expect: soleur.ai (stdout), resolution line on stderr
    bash scripts/derive-app-domain-base.test.sh       # the derivation's own unit suite
    bash tests/scripts/test-registry-d10-workflow-wiring.sh   # proves the workflow USES it
    curl -s -o /dev/null -w '%{http_code}\n' "https://app.$(bash scripts/derive-app-domain-base.sh)/health"
    ```
+
    The `curl` must print `200`, and it must be built from the script's own output rather than a
    typed domain — a hand-typed URL tests your typing, not the gate's input.
 
@@ -189,10 +314,12 @@ gate, because it gets read as evidence.
    ahead of the committed default, mirroring Terraform's own precedence. Absent an override the
    committed `variables.tf` value IS what Terraform applied; if one appears, that is the value
    production runs on and the base changes with it:
+
    ```bash
    [[ -z "${TF_VAR_app_domain_base:-}" ]] && echo "no exported override"   # tier 1 reads the PROCESS ENV
    doppler secrets -p soleur -c prd_terraform --only-names | grep -c APP_DOMAIN_BASE || true   # expect 0
    ```
+
    The first line is the one that matches this step's heading: the derivation's override tier
    reads `TF_VAR_app_domain_base` from the environment, so a Doppler check alone would pass
    while an exported override silently drove the `curl` above it. Measured 2026-08-06: no
@@ -204,14 +331,17 @@ gate, because it gets read as evidence.
    IS present in `prd_terraform` (`app.soleur.ai`), so `TF_VAR_app_domain` is injected on every
    apply. A domain move performed the only way it can be performed today would shift production
    while the gate kept measuring the old host:
+
    ```bash
    doppler secrets get APP_DOMAIN -p soleur -c prd_terraform --plain   # expect app.<derived base>
    ```
+
    The derivation aborts on a *committed* divergence by itself; this covers the live-override
    half, which it deliberately cannot see (reading Doppler is what this change removed from the
    gate).
 
 2. **Both Hetzner probes return the shape the gate parses.**
+
    ```bash
    HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)
    curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
@@ -219,6 +349,7 @@ gate, because it gets read as evidence.
    curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $HCLOUD_TOKEN" \
      'https://api.hetzner.cloud/v1/servers?name=soleur-registry'
    ```
+
    An API change here makes the id-pin's provenance step fail *after* you have already typed the
    confirm token.
 
@@ -235,26 +366,36 @@ gate, because it gets read as evidence.
 
 ---
 
-## Do NOT use `registry-host-replace` for this
+## `registry-host-replace` cannot perform a recut (it is the boot-problem lever)
 
-`registry-host-replace` **keeps** the storage volume. The volume is currently unencrypted, and the
-new boot code refuses to mount an unencrypted volume — by design, so it can never silently wipe
-your data. The result is that the registry **goes dark** and stays dark.
+`registry-host-replace` **keeps** the storage volume, so it cannot re-encrypt or empty the store.
+Only `registry-luks-recut` replaces the volume: it supplies all three `-replace` targets itself, as
+one atomic apply. A hand-rolled `terraform apply -replace` that misses the volume is likewise a host
+replace, not a recut.
 
-The same happens if a hand-rolled `terraform apply -replace` misses the volume.
+The boot code refuses any volume that is neither blank nor LUKS — by design, so it can never
+silently wipe your data. A replaced host reopens a LUKS volume (the reuse arm), which makes
+[`registry-host-replace`](registry-host-replace-dispatch.md) the right tool for an ordinary boot
+problem.
 
-`registry-luks-recut` exists so that cannot happen: it supplies all three `-replace` targets itself,
-as one atomic apply.
+**Before dispatching it, read the newest heartbeat row** (the query in
+[`registry_store_not_luks` fired: triage](#registry_store_not_luks-fired-triage)). Proceed only if
+that row is under an hour old and reads `store_luks=yes` **and** `store_escrow=ok` (or `pending` on
+a boot under 2 h old). Any other value — including `fail_key_absent`, `indeterminate`, `stale` or
+`none` — or no row in the last hour means stop and use the triage table: a replace alone does not
+fix those, and some of its arms end in a replace only after the key is restored.
 
-> **After a successful recut this reverses.** The volume is then encrypted, so
-> `registry-host-replace` becomes the *correct* tool for an ordinary boot problem. The warning above
-> applies only while the volume is still unencrypted.
->
-> **Until then, `registry-host-replace` is blocked too** (verified 2026-08-04,
-> [run 30926215332](https://github.com/jikig-ai/soleur/actions/runs/30926215332)): the #6929 LUKS
-> resources are declared but absent from Terraform state, so a replace pulls them in and its
-> destroy-guard aborts with `out_of_scope=2`. **Both** levers are currently unavailable — see
-> #7278 for the missing in-place restart lever, which is usually what you actually wanted.
+> **History (dated).** Until the first recut (2026-08-10,
+> [run 31437037877](https://github.com/jikig-ai/soleur/actions/runs/31437037877): the
+> `registry_luks_recut` job succeeded, and the `registry_store_restore` leg failed on a doppler-token
+> defect fixed by PR #7430, commit `4aef468c80`) the volume was plaintext ext4, so a replaced host
+> refused it and the registry went dark. From 2026-08-04
+> ([run 30926215332](https://github.com/jikig-ai/soleur/actions/runs/30926215332)) to that recut,
+> `registry-host-replace` was blocked too: the #6929 LUKS resources were declared but absent from
+> Terraform state, so a replace pulled them in and its destroy-guard aborted with `out_of_scope=2`.
+> Both levers were unavailable in that window — see #7278 for the missing in-place restart lever.
+> Current posture lives in one place: the `hcloud_volume.registry` row of
+> `scripts/encryption-posture-ledger.json`.
 
 ---
 
@@ -304,7 +445,7 @@ The job prints a line of counters before it decides. Find your case here.
 | `luks_key_touched=1` | The encryption key is not in the isolated Doppler config yet, so Terraform wants to create it. | Run the operator's untargeted apply (the `OPERATOR_APPLIED_EXCLUSIONS` contract) so the key lands, then re-fire. |
 | `logs_secret_destroyed=1` | The plan would delete the logging token; the rebuilt host would fail to start without it. | Reconcile the plan. Do not proceed. |
 | `out_of_scope=1` (or more) | The plan touches something outside the registry. | **Never widen the allow-set.** This is the only thing protecting the web host and the sole copy of `/mnt/data`. Reconcile the plan. |
-| `stock-preflight ABORTED` | Hetzner has no capacity for the replacement host right now. | **Nothing was destroyed.** Wait and re-fire. If the type is unavailable in this datacenter generally (#6460), see the caveat in [What authorizes a recut](#what-authorizes-a-recut) **before** reaching for `registry-region-migrate` — that dispatch has no confirm token, no id-pin, no posture probe and no D10 gate (#6946). |
+| `stock-preflight ABORTED` | The job's closing line now renders the real class itself — `stock-preflight ABORTED (class=<x>)` — with class-specific advice (#9510). `class=stock` — Hetzner reports no capacity for the replacement host right now; `class=config` — the plan names a type or location Hetzner does not list; `class=unreachable` — no 2xx answer (a bare `curl exit` is usually transient, but an `api_error=` of `deprecated_api_endpoint`, `unauthorized` or `forbidden` is not); `class=malformed` — Hetzner answered 2xx in a shape the gate does not accept, which is **not** a shortage; `class=plan` — an abort about the plan itself (unreadable JSON, a create with no address/type/location); `class=mixed` — two creates failed on different classes: read every `::error::` line above it. | **Nothing was destroyed.** For `class=stock`: wait and re-fire. For `class=unreachable`: re-fire **once** if it is a bare curl exit other than 22 or `api_error=rate_limit_exceeded`, otherwise do **not** blind re-fire. For `class=config`, `class=malformed` and `class=plan`: do **not** re-fire — read the `::error::` line and fix the plan, the token or the contract first. If the type is unavailable in this datacenter generally (#6460), see the caveat in [What authorizes a recut](#what-authorizes-a-recut) **before** reaching for `registry-region-migrate` — that dispatch has no confirm token, no id-pin, no posture probe and no D10 gate (#6946). |
 | `probe` / `did not report the pinned volume absent` | The job saw a "resume" shaped plan but the volume still exists. | This is a state problem, not a recut. Reconcile with `terraform import` — never let it `create`. |
 
 ### If the apply itself fails partway
@@ -326,8 +467,8 @@ and they need different fixes:
   its exit code in the table below, then **re-run that job** (the engine is resumable).
 
 - **It refused the volume.** Recoverable — *after a successful recut* the volume is encrypted, so
-  `registry-host-replace` is the right tool for this. (It is **not** available before one: while
-  the volume is still plaintext, that dispatch aborts `out_of_scope=2` — see the callout above.)
+  `registry-host-replace` is the right tool for this. (It was **not** available before the first
+  recut on 2026-08-10: that dispatch aborted `out_of_scope=2` — see the dated history above.)
 - **The disk was never attached in time** (`reason=device-absent`). This one **never self-heals**;
   it needs a full recut.
 
@@ -349,9 +490,31 @@ The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 | `0` | Every required reference restored **and** blob-verified, signature present. | Nothing. The window is closed. |
 | `2` | **Source unavailable** — GHCR could not be read. | Nothing was written. Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. |
 | `3` | **Sink unavailable** — the registry did not accept the write. **Retryable**, and the job already retries it: a replaced host can outrun the Cloudflare Tunnel's re-convergence. | If it exhausted its retries, confirm the registry host is serving, then re-run the job. |
-| `4` | **Verification failed** — a digest mismatched, a blob is missing, or a signature is absent. | **Do not deploy.** The store contents are not trustworthy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. |
+| `4` | **Verification failed OR the engine could not verify the shape** — a digest mismatched (including the new GHCR↔sink *signature* digest parity check), a blob is missing (including an *attestation* or *signature-bundle* child's blob), a **layer's content does not match its declared mediaType**, a signature is absent, or the engine met an artifact shape it declines to walk (see the ENGINE-CAPABILITY note below). | **Read the message before deploying anything — exit 4 now covers two different situations.** If the message names a digest mismatch, a missing blob or an absent signature, the store contents are not trustworthy: do not deploy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. A layer-format failure names **two causes the engine cannot tell apart**: the bytes really do disagree with the declared mediaType (corruption), OR the layer is legitimately not gzip (an uncompressed/zstd layer, or a child this engine failed to classify as an attestation) — a validator artifact. The message carries the discriminating command: re-run the identical `crane validate --remote` against `ghcr.io/<repo>@<child-digest>`; if GHCR fails the same way the store is fine. Also reaches exit 4: an index whose child list is empty, a child with no digest, a **nested** index child, an index with no platform child at all, an attestation manifest declaring no blobs, a sink manifest whose `.manifests` is not an array, and a sink manifest that is not JSON. For those SHAPE failures "re-run the job" is the wrong advice — they reproduce identically; capture the per-entry line and file it. |
 | `5` | **Credential unusable** — absent, empty, or **rejected** by the sink. **Not** retryable. | Retrying only burns the window. **Do NOT start by rotating anything** — see "If the sink rejects the credential" immediately below. |
-| `6` | **Could not classify** — a failure shape the engine does not recognise. | Read the crane stderr in the per-entry line before acting. Do **not** assume the images are absent. Worth filing alongside the recovery: an unenumerated failure is itself a defect. |
+| `6` | **Could not classify** — a failure shape the engine does not recognise. | Read the crane stderr in the per-entry line before acting. Do **not** assume the images are absent. Worth filing alongside the recovery: an unenumerated failure is itself a defect. **This arm proved that claim on 2026-08-09**: the first live A2 rehearsal exited 6 on `gzip: invalid header`, which was a *validator* false positive over a buildx attestation manifest and not a store problem at all. It is now classified (exit 4), so a fresh exit 6 is again a genuinely unenumerated shape — treat it as a defect to file, not a store to distrust. |
+
+> #### ENGINE-CAPABILITY refusals inside exit 4 (added #7410)
+>
+> Exit 4 now carries two populations, and they need opposite responses:
+>
+> | The message says | What it means | What to do |
+> |---|---|---|
+> | digest mismatch / missing blob / absent signature / signature digest parity mismatch | The store is genuinely wrong. | **Do not deploy.** |
+> | *"is an index nested inside another index"*, *"declares no digest"*, *"is an index with no children"*, *"declares a config but NO layers"*, *"`manifests` field that is not an array"*, *"an unrecognised shape"* | The engine **declines to verify a shape it has never measured**. The store may be perfectly healthy. | Do not deploy either — but the fix is a code change, not a re-copy. Capture the per-entry line and file it against the engine. Re-running reproduces it exactly. |
+>
+> The distinction matters because the first population motivates destroying and re-restoring, and
+> the second motivates neither. Conflating them is how a healthy store gets a second unnecessary
+> recut — and it is the same "could not measure" vs "measured, and it is bad" collapse that ADR-169
+> forbids in the gate's own verdicts.
+>
+> **The discriminating command has a blind spot on signature children.** The row above tells you to
+> re-run `crane validate --remote ghcr.io/<repo>@<child-digest>` and conclude the store is fine if
+> GHCR fails the same way. For a **sigstore bundle child** that command gunzip-fails at GHCR
+> *always*, healthy or not — the bundle layer is plain JSON and was never gzipped. The conclusion
+> it yields ("a validator artifact, store fine") happens to be correct for the healthy case, but
+> the command has no power to detect a genuinely corrupt bundle child, so it is not evidence. For
+> a signature child, use `crane blob ghcr.io/<repo>@<blob-digest>` and compare against the sink.
 
 ### If the sink rejects the credential (exit `5`, or a bridge `docker login` failure)
 
@@ -445,6 +608,57 @@ preference rather than the load-bearing mitigation it used to be.
 The run summary prints the **new volume id**. Record it — any future recut needs it as the safety
 pin, and re-deriving it means going back to Step 1.
 
+The new host's first boot writes `/var/lib/zot/.soleur-luks-sentinel` inside the opened LUKS
+filesystem (#8408). zot will not start unless that file is present, which is how a reboot with the
+mapper still closed fails loudly instead of serving an empty store. The recut moves images at the
+registry level (`crane copy`), so the file is never copied. If a store is ever copied at the
+filesystem level (`rsync`, `cp -a`), **exclude `.soleur-luks-sentinel`**. A copy that carries it
+onto an unencrypted path would pass the gate.
+
+---
+
+## `registry_store_not_luks` fired: triage
+
+The Better Stack alert `soleur-registry-store-not-luks-prd` (#8408) pages when the registry
+heartbeat's trusted head (everything before ` zot_last_err=`) lacks `store_luks=yes`, **or** carries <!-- markdownlint-disable-line MD038 -->
+a `store_escrow=` token other than `ok` or `pending`. Nothing here needs SSH. Read the newest rows:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK
+```
+
+Decode each row per the query script's header, cut it at ` zot_last_err=`, and read `store_luks=`, <!-- markdownlint-disable-line MD038 -->
+`luks_open_arm=`, `store_escrow=` and `store_escrow_age_s=` from the part before the cut. Never read
+a field from the tail: it is zot's own log text.
+
+**Arm A: `store_luks` is not `yes`.** `luks_open_arm=` says which branch of `registry-luks-open.sh`
+ran this boot:
+
+| `luks_open_arm=` | Meaning | Action |
+|---|---|---|
+| `key_empty` | Doppler returned no `REGISTRY_LUKS_KEY` | Restore the secret in `soleur-registry/prd` from Doppler's history, then replace the host (`registry-host-replace`). zot stays fail-closed until then. |
+| `open_failed` | The key did not open the header, or `doppler run` never reached the open | Check `store_escrow=`. `fail_passphrase` there confirms a key/header mismatch: restore the key the header was formatted with, from Doppler's history. |
+| `dev_absent` | The volume is not attached | Re-run the infra apply; the attachment is Terraform-owned. |
+| `not_luks` | The attached volume has no LUKS header | The store is plaintext or blank. Walk this runbook from **What authorizes a recut**. |
+| `none` / `already_open` / `opened` | The open path is not the cause | Read `store_mount_src=` and `store_backing_dev=`. A mount that does not come from `/dev/mapper/registry` means something other than the reopen script mounted `/var/lib/zot`. |
+
+**Arm B: `store_escrow` is not `ok`.** The store is up and on LUKS, and the question is whether the
+next reboot can reopen it:
+
+| `store_escrow=` | Meaning | Action |
+|---|---|---|
+| `fail_passphrase` | The Doppler key no longer opens the header | **Do not reboot or replace the host.** The mapper is open now, and the next reopen will fail. Restore the matching key from Doppler's history before anything restarts the host. |
+| `fail_header` | No readable LUKS header on the backing device | Treat as a store integrity incident. Do not reboot; plan a recut (this runbook). |
+| `fail_key_absent` | The escrow run had no key in its environment | Same as `key_empty` above, caught before a reboot needed it. |
+| `indeterminate` | The test could not run (low memory after three samples, a refused tool, a crash) | Not a verdict. One day of this is noise; two consecutive days means the job is not measuring. Check host memory on the heartbeat (`mem_total_mb`, `zot_anon_mb`). |
+| `stale` | The last `ok`/`indeterminate` is older than 26 h | The daily cron (03:19 UTC) is not running or not writing. |
+| `none` | No result file, and the host has been up for more than 2 h | The escrow job has never written on this boot. The first-boot run is deferred 15 minutes. |
+| `__UNREADABLE__` | The state file is off-vocabulary | Treat as `none`. |
+
+`pending` does **not** page. It means no result exists yet and the host has been up for less than
+2 hours (the first-boot run lands about 15 minutes after zot starts). One transient row does not page
+either: the rule needs at least 2 matching rows in a 900 s bucket.
+
 ---
 
 ## Related
@@ -506,12 +720,29 @@ So a recut buys a clean slate and does not address why the disk filled. The reve
 alternative — growing `var.registry_volume_size` — is blocked today by a circularity rather than
 by physics: the filesystem only grows via `resize2fs` on the next immutable redeploy, a redeploy
 replaces the host, and a replaced host meets a still-plaintext ext4 volume and hits the `blkid`
-FATAL refuse. zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
+FATAL refuse. *[Annotated 2026-09-22, #8535: this circularity was broken by the recut of 2026-08-10
+(run 31437037877); current posture is the ledger's `hcloud_volume.registry` row.]* zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
 existing ingress either. Breaking that circularity is what the recut actually buys. Record the
 post-recut fill rate before concluding the incident is closed.
-- **#7278** — the registry host has no in-place restart lever. Usually the thing you actually
-  wanted; try it first once it exists, rather than reaching for a destroy. #7287 additionally
-  declares it a **rollback dependency**, not merely a prerequisite.
+
+- **#7278** — the registry host has no in-place execution lever. **Partially delivered, and read
+  the split before relying on it.** What shipped is the **read-only inventory lever**
+  (`.github/workflows/registry-zot-inventory.yml`, see
+  [Before ANY destructive step](#before-any-destructive-step-try-the-read-only-inventory-lever-first))
+  — dispatch it before any destroy. *[Annotated 2026-09-22, #8535: the provisioning event below was
+  the recut, which fired 2026-08-10; the write-shaped actions still did not ship.]* What did **not**
+  ship, and is BLOCKED ON A PROVISIONING EVENT,
+  is every write-shaped action: `restart`, `push-config` and `reclaim`. Do not read "the lever
+  exists" as "the host is now reachable" — the earlier revision of this bullet said *"try it first
+  once it exists"* about a **restart** lever, and that lever is not what arrived. #7287 declares
+  #7278 a **rollback dependency** of this runbook, not merely a prerequisite, and vetoes the recut
+  while it is open. A restart-only lever was additionally refuted on the evidence: zot has already
+  been restarted 15,640 times into the same 100 %-full volume.
+  *[Annotated 2026-09-28, #7377: the write-shaped set is resolved by decision, not built. See
+  ADR-172 §"Amendment 2026-09-28": `push-config` ships as a merge to `main` that fires a
+  volume-preserving `registry-host-replace`; `restart` and `reclaim` will not be built. The
+  inventory lever is also dispatched automatically when the restart-loop alarm opens a new
+  non-OOM tracker.]*
 
 **Context:**
 
@@ -534,3 +765,14 @@ post-recut fill rate before concluding the incident is closed.
 - #7247 — the 22h zot crash-loop where both this runbook and `registry-host-replace` turned out to
   be blocked, which is how the staleness above was found.
 - #6946 — accepted residual: `registry-region-migrate` accepts a similar shape with no id-pin.
+- `ADR-172` — [CI may emit to the observability warehouse, and may measure the registry's read
+  surface](../../architecture/decisions/ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md).
+  The decision behind the inventory lever above: why the registry's **read** surface is
+  instrumentable today and its **write** surface is not (no zot user holds `delete` — measured),
+  why `delta_gb` is an upper bound rather than a measurement, and why the lever is a **measurement,
+  not a gate** — it authorizes nothing, so it does not become the live-zot predicate ADR-169
+  deliberately kept out of the D10 gate.
+- `scripts/zot-inventory.sh` + `tests/scripts/test-zot-inventory.sh` — the enumerator and its
+  tests. Read the exit taxonomy here before interpreting a run: `outcome` is one of
+  `ok`/`degraded`/`partial`/`failed`, and only `enumeration_complete=true` licenses a reading of
+  `delta_gb`.

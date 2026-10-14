@@ -4,8 +4,21 @@
 #
 # Scalar shapes for `command:`:
 #   inline   `command: curl …`
+#   inline   `command: "…"` / `'…'`     → YAML-quoted, decoded ONCE by yaml_inline_scalar()
 #   block    `command: |`  `|-`  `|+`   → continuations joined with NEWLINE
 #   folded   `command: >`  `>-`  `>+`   → continuations joined with SPACE
+#
+# Quoted-inline contract (#8102): `"…"` decodes `\"` and `\\` only (every other `\x` passes
+# through byte-for-byte, so a shell `\n` stays a backslash-n); `'…'` decodes `''` only. The
+# closing quote is found by SCANNING, and after it only ASCII `[ \t\r]*` or `[ \t\r]+#…` may
+# follow. An empty pair, an unterminated or mismatched pair, or any other trailing text
+# leaves the value unchanged. Block and fold content is never decoded. Nothing downstream
+# (SKILL.md Step 10.4) may strip or decode again.
+#
+# Host invariance comes from the CALLER: SKILL.md Step 10.4 runs this file under
+# `LC_ALL=C` (and the test harness does too), so `[[:space:]]`, `length` and `substr`
+# are byte-based on every host. Without that pin a UTF-8 gawk matches U+2028 as
+# `[[:space:]]` and parses the same plan differently from mawk or a C-locale gawk.
 #
 # Scalar extent follows YAML: a continuation is any non-empty line indented MORE than the
 # `command:` key; the first line indented <= the key ends the scalar. No key-name matching
@@ -32,6 +45,42 @@
 
 function indent(s,   t) { t = s; sub(/[^[:space:]].*$/, "", t); return length(t) }
 
+# Decode a YAML-quoted inline scalar per the contract in the header. POSIX awk only
+# (identical under gawk, gawk --posix, mawk and busybox, all under LC_ALL=C). Whitespace
+# after the closing quote is the explicit ASCII class `[ \t\r]`, never `[[:space:]]`: that
+# class also admits \f and \v, and outside the C-locale pin it admits U+2028. `\r` keeps a
+# CRLF plan decoding the same on both surfaces. Locals must not shadow awk builtins: a
+# parameter named `close` is a SYNTAX ERROR in every awk (gawk and busybox rc 1, mawk rc 2),
+# which Step 10.4 turns into a hard FAIL on every plan.
+function yaml_inline_scalar(v,   q, n, i, c, d, cq, rest, body, out) {
+  n = length(v); q = substr(v, 1, 1)
+  if (q != "\"" && q != "'") return v
+  # Scan for the first UNESCAPED closing quote of the same kind.
+  cq = 0
+  for (i = 2; i <= n; i++) {
+    c = substr(v, i, 1)
+    if (q == "\"" && c == "\\") { i++; continue }
+    if (c == q) {
+      if (q == "'" && substr(v, i + 1, 1) == "'") { i++; continue }
+      cq = i; break
+    }
+  }
+  # No closing quote, or an EMPTY body (`""` / `''`): unchanged. Decoding an empty pair to
+  # "" would make Step 10.4 fall through to Form B and run whatever fence follows.
+  if (cq < 3) return v
+  rest = substr(v, cq + 1)
+  if (rest !~ /^[ \t\r]*$/ && rest !~ /^[ \t\r]+#/) return v
+  # One left-to-right pass: a decoded character is never re-scanned.
+  body = substr(v, 2, cq - 2); out = ""
+  for (i = 1; i <= length(body); i++) {
+    c = substr(body, i, 1); d = substr(body, i + 1, 1)
+    if (q == "\"" && c == "\\" && (d == "\"" || d == "\\")) { out = out d; i++; continue }
+    if (q == "'" && c == "'" && d == "'") { out = out "'"; i++; continue }
+    out = out c
+  }
+  return out
+}
+
 # Folded/block headers. MUST precede the inline rule: `/^[[:space:]]*command:/` also
 # matches `command: >-` and would print the literal indicator, which then self-rejects
 # against Step 10.5's shell-active `>` branch (#6772). The `(#.*)?$` tail is load-bearing —
@@ -41,7 +90,7 @@ function indent(s,   t) { t = s; sub(/[^[:space:]].*$/, "", t); return length(t)
 !mode && /^[[:space:]]*command:[[:space:]]*\|[-+]?[[:space:]]*(#.*)?$/ { mode = "block"; key = indent($0); next }
 
 # Inline. `!mode` keeps this OUTSIDE a scalar only — see the header note.
-!mode && /^[[:space:]]*command:/ { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print; exit }
+!mode && /^[[:space:]]*command:/ { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print yaml_inline_scalar($0); exit }
 
 # Blank lines are legal inside a scalar and carry no indentation — skip before the
 # terminator, or indent()==0 would end every scalar at the first blank line.

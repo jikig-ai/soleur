@@ -1,0 +1,56 @@
+[Unit]
+# (#8210) OnFailure= handler for git-data-luks-reopen.service — the SINGLE emitter for every
+# way the reopen can fail: a script phase (the phase file names it), or the unit itself
+# (doppler run exited, exec failed, start-timeout, start-limit-hit — action=unit, discriminated
+# by the systemctl show tags). Its own unit because a dangling OnFailure= is a silent no-op.
+Description=Report a git-data LUKS reopen failure off-host
+Documentation=https://github.com/jikig-ai/soleur/issues/8210
+
+[Service]
+Type=oneshot
+Environment=HOME=/root
+# /dev/shm, NOT the reopen unit's RuntimeDirectory: two units sharing one RuntimeDirectory=
+# would remove it when either stops. The emitter's _devalue mktemp must still land on tmpfs.
+Environment=TMPDIR=/dev/shm
+EnvironmentFile=-/etc/default/git-data-doppler
+UMask=0077
+# That env file sets DOPPLER_CONFIG_DIR=/tmp/.doppler, and the CLI honours api-host/verify-tls
+# from a .doppler.yaml found there. Measured (review): a planted file redirected `doppler run`
+# to 127.0.0.1:9. The reopen unit is confined by PrivateTmp already; this unit was not, and a
+# tick that fires the reporter would have shipped DOPPLER_TOKEN to whoever owned the host's
+# real /tmp/.doppler. /run reads and TMPDIR=/dev/shm are unaffected.
+PrivateTmp=yes
+LimitCORE=0
+# The body, in order:
+#  1. action from the phase file the script maintains; `action=unit` when it never ran.
+#  2. the unit's own verdict tags (Result / ExecMainStatus / ExecMainCode / NRestarts) —
+#     measured on systemd 255 and 261 to survive the start-limit-hit transition.
+#  3. detail = the script's stderr log; when that is absent/empty, the unit journal's doppler
+#     CLI lines (credential-free by construction: "you must provide a token", "Invalid Auth
+#     token", "dial tcp … refused"), ANSI stripped, LAST two only — the emitter keeps the last
+#     180 bytes, so systemd's own "Failed with result" trailer would otherwise push the cause
+#     out; and when even that is empty, a fixed literal — never a path (the #7204 trap).
+#  4. one emit, under `doppler run` (the emitter's _devalue redactor sees the key), with a
+#     direct fallback arm from the baked DSN when Doppler is the broken stage. `timeout 90`
+#     keeps that arm reachable when Doppler HANGS rather than exits: without it
+#     TimeoutStartSec kills the cgroup and neither arm emits, on the one unit that is the
+#     sole signal for a store-absent host. Same --only-secrets/--no-fallback/templated
+#     --config as the unit it reports for.
+# No backslash sequences in the body: systemd's ExecStart parser C-unescapes them and reads
+# `\;` as a command separator (measured).
+ExecStart=/bin/sh -c 'u=git-data-luks-reopen.service; \
+  a=$(head -n1 /run/git-data-luks-reopen/action 2>/dev/null | grep -oE "^action=[a-z-]+" || echo action=unit); \
+  r=result=$(systemctl show --value -p Result "$u" 2>/dev/null); \
+  c=rc=$(systemctl show --value -p ExecMainStatus "$u" 2>/dev/null); \
+  k=code=$(systemctl show --value -p ExecMainCode "$u" 2>/dev/null); \
+  n=restarts=$(systemctl show --value -p NRestarts "$u" 2>/dev/null); \
+  d=/run/git-data-luks-reopen/log; \
+  if [ ! -s "$d" ]; then d="$(journalctl -u "$u" -o cat --no-pager -n 40 2>/dev/null | sed "s/[[:cntrl:]]//g; s/[[][0-9;]*m//g" | grep -E "Doppler Error|Unable to" | tail -n 2)"; fi; \
+  [ -n "$d" ] || d="git-data luks_reopen: the unit failed before the script wrote a detail (doppler run, exec, or start timeout)"; \
+  set -- /usr/local/bin/git-data-emit "git-data LUKS reopen FAILED" luks_reopen fatal "$d" "$a" "$r" "$c" "$k" "$n" "unit=$u"; \
+  timeout 90 /usr/local/bin/doppler run --project soleur --config "$GIT_DATA_DOPPLER_CONFIG" --only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback -- "$@" || "$@"'
+# 150, not 120: the Doppler arm's `timeout 90` plus the direct arm's own worst case (the
+# emitter's Sentry POST -m 10 --retry 2 ≈ 33 s, plus two Better Stack POSTs at -m 10 ≈ 53 s)
+# is 143 s, so at 120 the fallback got 30 s of a 53 s worst case (review). Nothing waits on
+# this oneshot, so the extra 30 s is free.
+TimeoutStartSec=150

@@ -101,7 +101,7 @@ needs observability you don't have, add the observability (or hand off) rather t
 
 ## Related
 
-- `knowledge-base/project/plans/2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md` (the prereqs plan; deferred GA remainder)
+- `knowledge-base/project/plans/archive/20261013-041741-2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md` (the prereqs plan; deferred GA remainder)
 - ADR-068 §Amendment (2026-07-03, #5887 blue-green ingress) + ADR-079 §Amendment (#5955 tag resolution)
 - `2026-07-02-zero-downtime-first-moved-block-statemv-and-blue-green-cutover.md` (the zero-downtime framing this session applied)
 - `2026-06-29-auto-closes-meta-content-in-commit-body-trips-github-autoclose-on-hand-rolled-merge.md` (the auto-close trap; this session is a recurrence + a proposed merge-path-independent guard)

@@ -4,7 +4,17 @@
 // panel surfaced (P0-A secret-read, P0-B argument injection, P1-F quoted-pipe)
 // has a case here. `decide()` is pure (JSON in → decision out), so no spawn.
 import { describe, expect, it } from "vitest";
-import { decide, tokenize, splitSegments } from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  decide,
+  hasDotSegment,
+  labelTokenEquals,
+  filingJustificationReason,
+  tokenize,
+  splitSegments,
+} from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
 
 // roadmap-review-shaped allowlist (the Tier-1 lead cron).
 const ALLOW = [
@@ -50,10 +60,19 @@ describe("Bash — allowlisted commands", () => {
   it("allows git push to origin", () => {
     expect(verdict(bash("git push origin HEAD"))).toBe("allow");
   });
+  // MIGRATED (#8038): this test pins the PATH policy -- a --body-file to a
+  // non-secret temp path is not a secret-path read. It now carries
+  // `--label meta/machinery` so it still fails for a PATH reason if the path
+  // policy regresses, rather than passing/failing for a justification reason it
+  // was never written to test. The justification gate has its own tests below.
   it("allows --body-file to a non-secret temp path (the scope-out filing pattern)", () => {
-    expect(verdict(bash("gh issue create --title t --body-file /tmp/scopeout-body.md"))).toBe(
-      "allow",
-    );
+    expect(
+      verdict(
+        bash(
+          "gh issue create --title t --body-file /tmp/scopeout-body.md --label meta/machinery",
+        ),
+      ),
+    ).toBe("allow");
   });
   // #5199 review — the allowlist matcher requires a separator after the prefix:
   // exact-equal, a following space, OR the prefix ending in `/` (a path
@@ -163,6 +182,18 @@ describe("Bash — chaining / substitution / redirection bypass", () => {
   });
   it("denies command substitution even inside double quotes", () => {
     expect(reason(bash('gh issue create --body "$(cat .git/config)"'))).toContain("metachar");
+  });
+  // A BARE `$NAME` expands inside double quotes too, and the spawn env carries
+  // GH_TOKEN / ANTHROPIC_API_KEY (`buildSpawnEnv`): `--title "$GH_TOKEN"` was
+  // an ALLOW that would post the installation token to the public repo with
+  // no file read (#8074 review, security seat). Both quoted and bare forms.
+  it("denies bare $VAR expansion (a secret in the env reaches gh without a read)", () => {
+    expect(reason(bash('gh issue create --title "$GH_TOKEN" --label meta/machinery'))).toContain("$VAR expansion");
+    expect(verdict(bash("gh issue create --title $ANTHROPIC_API_KEY --label meta/machinery"))).toBe("deny");
+    expect(verdict(bash("gh issue list --label $1"))).toBe("deny");
+    expect(verdict(bash("gh issue list --search $?"))).toBe("deny");
+    // A literal `$` inside single quotes is data, not an expansion.
+    expect(verdict(bash("gh issue list --search 'costs $5'"))).toBe("allow");
   });
   it("denies backtick substitution", () => {
     expect(verdict(bash("gh issue create --body `cat .git/config`"))).toBe("deny");
@@ -480,8 +511,13 @@ describe("mcp-allow — file-driven per-cron Playwright relaxation (#5199)", () 
 
   // --- bash surface unaffected; directives are not bash prefixes ---
   it("still allows the issue-creator bash surface", () => {
+    // Carries the machinery label (#8038) so this keeps testing the ALLOWLIST
+    // surface rather than the justification gate, which has its own tests.
     expect(
-      decideWith(bash("gh issue create --title x --body-file /tmp/b.md"), UX_ALLOW),
+      decideWith(
+        bash("gh issue create --title x --body-file /tmp/b.md --label meta/machinery"),
+        UX_ALLOW,
+      ),
     ).toBe("allow");
     expect(
       decideWith(bash("gh issue list --label ux-audit --state all"), UX_ALLOW),
@@ -535,5 +571,854 @@ describe("secret-path read-deny — bot session state (#5199)", () => {
         UX_ALLOW,
       ),
     ).toBe("deny");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Filing justification (#8038) — CLASS 3 of the filing surface.
+//
+// `guardrails:require-filing-justification` covers interactive agents, but a
+// cron-spawned agent never loads that chain: buildCronEvalSettings() registers
+// THIS hook as the only PreToolUse entry under a `*` matcher. Ten scheduled
+// agents carry `gh issue create` via ISSUE_CREATOR_BASH_ALLOWLIST and file
+// discretionary LLM-authored findings — the audit-exhaust population behind the
+// measured 626:39 skew. Covering only the interactive path would have left the
+// primary deliverable missing its primary population.
+// ---------------------------------------------------------------------------
+describe("Bash — filing justification (class 3)", () => {
+  it("denies an allowlisted gh issue create with no justification", () => {
+    expect(verdict(bash("gh issue create --title t --body b"))).toBe("deny");
+    expect(reason(bash("gh issue create --title t --body b"))).toMatch(
+      /names no user-visible consequence/,
+    );
+  });
+
+  it("exit 1 — a real --label meta/machinery token allows", () => {
+    expect(
+      verdict(bash("gh issue create --title t --body b --label meta/machinery")),
+    ).toBe("allow");
+    expect(
+      verdict(bash("gh issue create --title t --body b --label=meta/machinery")),
+    ).toBe("allow");
+  });
+
+  it("exit 1 — the label NAMED in prose does NOT open the machinery exit", () => {
+    // The tokens are dequoted, so a --body that merely mentions the flag stays
+    // inside ONE token and cannot be mistaken for it. Same bare-token class the
+    // interactive gate had to fix.
+    expect(
+      verdict(bash("gh issue create --title t --body 'use --label meta/machinery'")),
+    ).toBe("deny");
+  });
+
+  it("exit 3 — a well-formed Mandated-By claim allows", () => {
+    expect(
+      verdict(
+        bash(
+          "gh issue create --title t --body 'Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps'",
+        ),
+      ),
+    ).toBe("allow");
+  });
+
+  it("exit 3 — a malformed rule id does not", () => {
+    expect(
+      verdict(bash("gh issue create --title t --body 'Mandated-By: because I said so'")),
+    ).toBe("deny");
+  });
+
+  // Exit 2 needs TWO lines (User-Impact + Fix-Size), and the hook's pre-existing
+  // `metachar: multiline command` rule denies an inline multi-line --body before
+  // any of this runs. So for a cron the only route to exit 2 is --body-file --
+  // which is the shape review/SKILL.md prescribes anyway. Fixtured that way
+  // rather than with a body the sandbox would never permit.
+  const bodyFile = (contents: string) => {
+    const f = join(mkdtempSync(join(tmpdir(), "soleur-filing-")), "body.md");
+    writeFileSync(f, contents);
+    return f;
+  };
+
+  it("exit 2 — a named surface with a size ABOVE the inline threshold allows", () => {
+    const f = bodyFile(
+      "User-Impact: the /dashboard route 500s for org owners\nFix-Size: 240 lines / 9 files\n",
+    );
+    expect(verdict(bash(`gh issue create --title t --body-file ${f}`))).toBe("allow");
+  });
+
+  it("exit 2 — a size INSIDE the inline threshold is refused, naming ADR-131", () => {
+    const f = bodyFile(
+      "User-Impact: the /settings page mislabels the plan\nFix-Size: 19 lines / 1 file\n",
+    );
+    const cmd = bash(`gh issue create --title t --body-file ${f}`);
+    expect(verdict(cmd)).toBe("deny");
+    expect(reason(cmd)).toMatch(/inline threshold.*ADR-131/);
+  });
+
+  it("exit 2 — two Fix-Size lines is malformed, not first-wins", () => {
+    const f = bodyFile(
+      "User-Impact: the /dashboard route 500s\nFix-Size: 900 lines / 40 files\nFix-Size: 19 lines / 1 file\n",
+    );
+    expect(verdict(bash(`gh issue create --title t --body-file ${f}`))).toBe("deny");
+  });
+
+  // THE LOAD-BEARING PROPERTY: this check runs AFTER the allowlist match, so it
+  // can only ever NARROW. A cron whose allowlist omits `gh issue create` was
+  // already denied above and never reaches here; nothing else changes verdict.
+  it("narrows only — non-filing allowlisted commands are unaffected", () => {
+    expect(verdict(bash("gh issue list --limit 5"))).toBe("allow");
+    expect(verdict(bash("git commit -m x"))).toBe("allow");
+    expect(verdict(bash("gh issue comment 1 --body hi"))).toBe("allow");
+  });
+
+  // THE ROUTE THIS MIRROR EXISTS TO COVER. `gh api repos/jikig-ai/soleur/` is in
+  // the ALLOW fixture above because a real cron allowlist grants it. Matching
+  // only `gh issue create` therefore left the api spelling a silent ALLOW here
+  // — a total bypass for exactly the scheduled population this second chokepoint
+  // was added for, and a reopening of a route-around guardrails.sh documents an
+  // agent having actually taken.
+  it("class 4 — an unjustified gh api POST filing is denied, not silently allowed", () => {
+    const cmd = bash(
+      "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f body=nothing",
+    );
+    expect(verdict(cmd)).toBe("deny");
+    expect(reason(cmd)).toMatch(/labels\[\]=meta\/machinery/);
+  });
+
+  it("class 4 — labels[]=meta/machinery opens the machinery exit", () => {
+    expect(
+      verdict(
+        bash(
+          "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'labels[]=meta/machinery'",
+        ),
+      ),
+    ).toBe("allow");
+  });
+
+  it("class 4 — a body= field carrying Mandated-By opens exit 3", () => {
+    expect(
+      verdict(
+        bash(
+          "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'body=Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps'",
+        ),
+      ),
+    ).toBe("allow");
+  });
+
+  it("class 4 — a GET, and a POST to another endpoint, are not filings", () => {
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues"))).toBe("allow");
+    expect(
+      verdict(bash("gh api repos/jikig-ai/soleur/pulls -X POST -f title=x")),
+    ).toBe("allow");
+  });
+
+  // `--label` is a cobra StringSlice: `--label a,b` is ordinary gh syntax, and
+  // exact-equality denied it while telling the filer to pass the flag they had
+  // just passed.
+  it("comma-joined --label opens the machinery exit in either order", () => {
+    expect(
+      verdict(bash("gh issue create --title t --label meta/machinery,type/bug")),
+    ).toBe("allow");
+    expect(
+      verdict(bash("gh issue create --title t --label type/bug,meta/machinery")),
+    ).toBe("allow");
+  });
+
+  it("comma anchor does not widen into a substring match", () => {
+    expect(
+      verdict(bash("gh issue create --title t --label foo/meta/machinery")),
+    ).toBe("deny");
+    expect(
+      verdict(bash("gh issue create --title t --label meta/machineryX")),
+    ).toBe("deny");
+    expect(
+      verdict(bash("gh issue create --title t --label type/bug,type/chore")),
+    ).toBe("deny");
+  });
+
+  it("narrows only — a cron without the verb is still denied by the ALLOWLIST", () => {
+    const noCreate = ALLOW.filter((p) => p !== "gh issue create");
+    const d = decide(bash("gh issue create --title t --label meta/machinery"), noCreate);
+    expect(d.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(
+      (d.hookSpecificOutput as { permissionDecisionReason?: string })
+        .permissionDecisionReason,
+    ).toMatch(/not allowlisted/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8076 — the run-report exit (exit 0). A cron whose run completion is verified
+// by its own scheduled issue (`resolveOutputAwareOk` callers) MUST file that
+// issue; ADR-216 said no such filing existed and #8059 (community-monitor,
+// eleven hours after merge) took `meta/machinery` for a community digest. The
+// substrate writes `run-report-label scheduled-<task>` into the per-spawn
+// cron-allow.txt — the agent can neither read nor write that file — and the
+// hook honours it iff a REAL --label token equals it. Label only: a title-shape
+// half was cut because campaign-calendar's REQUIRED filings are
+// `[Content] Overdue: …`. Guard Contract: plan §Guard 1.
+// ---------------------------------------------------------------------------
+describe("Bash — the api filing shape is order- and spelling-agnostic (#8074 review)", () => {
+  // Every spelling gh routes to the create endpoint must reach the gate; a
+  // `$`-anchored endpoint match let `…/issues?x=1` and `…/issues/` through as
+  // total bypasses, and a path-then-method order requirement missed
+  // the method-less `-f title=` form (a method-FIRST spelling is stopped
+  // earlier by the allowlist prefix, but the shared predicate covers it for
+  // the deny-marker, which sees commands after any deny).
+  const shapes = [
+    "gh api repos/jikig-ai/soleur/issues?x=1 -X POST -f title=spam",
+    "gh api repos/jikig-ai/soleur/issues/ -X POST -f title=spam",
+    "gh api repos/jikig-ai/soleur/issues -f title=spam",
+    "gh api repos/jikig-ai/soleur/issues --method=POST -f body=b",
+    "gh api repos/jikig-ai/soleur/issues -XPOST",
+    // `--input body.json` moved to the --input refusal block below (#9089):
+    // its exits cannot be read, so it gets its own reason, not this one.
+  ];
+  it.each(shapes)("denies without a justification exit: %s", (cmd) => {
+    expect(reason(bash(cmd))).toContain("filing names no user-visible consequence");
+  });
+  it("still allows a non-create endpoint under the same prefix (comments POST, issues GET)", () => {
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues/123/comments -X POST -f body=b"))).toBe("allow");
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues?state=open"))).toBe("allow");
+  });
+  it("passes exit 1 on the api form with the method after the fields", () => {
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues -f title=t -f labels[]=meta/machinery -X POST"))).toBe("allow");
+  });
+  it("a method-FIRST spelling never reaches the gate: the allowlist prefix (`gh api repos/…/`) denies it first", () => {
+    expect(reason(bash("gh api -X POST repos/jikig-ai/soleur/issues -f title=spam"))).toContain("not allowlisted");
+  });
+});
+
+describe("Bash — run-report exit (class 3, #8076)", () => {
+  const LABEL = "scheduled-community-monitor";
+  const ALLOW_RR = [...ALLOW, `run-report-label ${LABEL}`];
+  const rr = (input: unknown) =>
+    decide(input, ALLOW_RR).hookSpecificOutput.permissionDecision;
+  const rrReason = (input: unknown) =>
+    (decide(input, ALLOW_RR).hookSpecificOutput as { permissionDecisionReason?: string })
+      .permissionDecisionReason ?? "";
+
+  it("parseAllowlist reads the directive into runReportLabel and keeps it out of bash", async () => {
+    const { parseAllowlist } = await import(
+      "../../../server/inngest/cron-bash-allowlist-hook.mjs"
+    );
+    const parsed = parseAllowlist(ALLOW_RR) as {
+      bash: string[];
+      runReportLabel: string | null;
+    };
+    expect(parsed.runReportLabel).toBe(LABEL);
+    expect(parsed.bash).not.toContain(`run-report-label ${LABEL}`);
+    expect((parseAllowlist(ALLOW) as { runReportLabel: string | null }).runReportLabel).toBeNull();
+  });
+
+  it("allows the REQUIRED filing on a real --label token (H2: --label, --label=, -l, comma-joined)", () => {
+    expect(rr(bash(`gh issue create --title "[Scheduled] Community Monitor - 2026-09-12" --label ${LABEL} --milestone "Post-MVP / Later"`))).toBe("allow");
+    expect(rr(bash(`gh issue create --title t --label=${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh issue create --title t -l ${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh issue create --title t --label ${LABEL},type/bug`))).toBe("allow");
+    expect(rr(bash(`gh issue create --title t --label type/bug,${LABEL}`))).toBe("allow");
+  });
+
+  it("-F <file> on the create form is --body-file, and the branch that reads it must not throw (no-undef caught by the repo-wide eslint guard at ship)", () => {
+    // `-F` is body-file for `gh issue create` and --raw-field for `gh api`; the
+    // discriminator (`isCreate`) was dropped in a refactor and the branch became
+    // a ReferenceError — a fail-closed "hook internal error" on every -F filing.
+    expect(rr(bash(`gh issue create --title t -F /nonexistent/body.md --label ${LABEL}`))).toBe("allow");
+    expect(reason(bash("gh issue create --title t -F /nonexistent/body.md"))).not.toContain("internal error");
+    expect(reason(bash("gh issue create --title t -F /nonexistent/body.md"))).toContain("filing names no user-visible consequence");
+  });
+
+  it("allows the two remaining spellings too (-l=<label>, bare labels[]= field) — every spelling exit 1 reads", () => {
+    expect(rr(bash(`gh issue create --title t -l=${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t labels[]=${LABEL}`))).toBe("allow");
+  });
+
+  it("denies a DIFFERENT valid run-report label (no cross-cron borrowing) and the meta/machinery exit still stands", () => {
+    expect(rr(bash("gh issue create --title t --label scheduled-roadmap-review"))).toBe("deny");
+    expect(rr(bash("gh issue create --title t --label meta/machinery"))).toBe("allow");
+  });
+
+  it("H2: campaign-calendar's [Content] Overdue: shape passes on its label (no title-shape half)", () => {
+    const ALLOW_CC = [...ALLOW, "run-report-label scheduled-campaign-calendar"];
+    const d = decide(
+      bash('gh issue create --title "[Content] Overdue: x (was scheduled for 2026-09-01)" --label action-required,scheduled-campaign-calendar --milestone "Post-MVP / Later"'),
+      ALLOW_CC,
+    );
+    expect(d.hookSpecificOutput.permissionDecision).toBe("allow");
+  });
+
+  it("H3: the same segment inside a && chain after an allowlisted command passes", () => {
+    expect(rr(bash(`gh issue list --label ${LABEL} && gh issue create --title t --label ${LABEL}`))).toBe("allow");
+  });
+
+  it("#2: the label NAMED in prose (--body) does not open exit 0", () => {
+    expect(rr(bash(`gh issue create --title t --body 'run-report-label ${LABEL}'`))).toBe("deny");
+    expect(rr(bash(`gh issue create --title t --body 'use --label ${LABEL}'`))).toBe("deny");
+  });
+
+  it("#3: comma-anchored — a suffix or a path-prefixed lookalike does not open exit 0", () => {
+    expect(rr(bash(`gh issue create --title t --label ${LABEL}x`))).toBe("deny");
+    expect(rr(bash(`gh issue create --title t --label foo/${LABEL}`))).toBe("deny");
+  });
+
+  it("#5/P3: without the directive the identical filing is denied exactly as today", () => {
+    expect(verdict(bash(`gh issue create --title t --label ${LABEL}`))).toBe("deny");
+    expect(reason(bash(`gh issue create --title t --label ${LABEL}`))).toMatch(
+      /names no user-visible consequence/,
+    );
+  });
+
+  it("#4/TR2: narrowing-only — a cron whose allowlist omits gh issue create stays denied", () => {
+    const NO_CREATE = ALLOW_RR.filter((l) => l !== "gh issue create");
+    const d = decide(bash(`gh issue create --title t --label ${LABEL}`), NO_CREATE);
+    expect(d.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(
+      (d.hookSpecificOutput as { permissionDecisionReason?: string }).permissionDecisionReason,
+    ).toMatch(/not allowlisted/);
+  });
+
+  it("deny text names the cron's own label when a directive exists", () => {
+    expect(rrReason(bash("gh issue create --title t --body b"))).toMatch(
+      new RegExp(`run-report label ${LABEL}`),
+    );
+  });
+
+  it("#8: exit 1 still works beside exit 0 (labelTokenEquals shared matcher)", () => {
+    expect(rr(bash("gh issue create --title t --label meta/machinery"))).toBe("allow");
+    expect(rr(bash("gh issue create --title t --label type/bug,meta/machinery"))).toBe("allow");
+  });
+
+  it("the api form honours the directive via -f labels[]=", () => {
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}x`))).toBe("deny");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #9089 — the cron mirror of the shared filing predicate (ADR-256).
+// ---------------------------------------------------------------------------
+describe("Bash — the --input filing refusal (#9089)", () => {
+  const INPUT_REFUSAL =
+    "this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f labels[]=meta/machinery. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line).";
+  // The .mjs default (`runReportLabel = null`) infers `null`; widen it here.
+  const fjrTyped = filingJustificationReason as (
+    tokens: string[],
+    readTaxonomy: (f: string) => string,
+    runReportLabel?: string | null,
+  ) => string | null;
+  const fjr = (cmd: string, runReportLabel: string | null = null) =>
+    fjrTyped(tokenize(cmd) as string[], () => "", runReportLabel);
+
+  it.each([
+    "gh api repos/jikig-ai/soleur/issues --input b.json",
+    "gh api repos/jikig-ai/soleur/issues --input=b.json",
+  ])("refuses %s with the --input reason", (cmd) => {
+    expect(fjr(cmd)).toBe(INPUT_REFUSAL);
+  });
+
+  // Reorder witness (G3-7): gh sends -f fields to the QUERY STRING when
+  // --input is present, so the label never reaches the issue. Exit 1 (and
+  // exit 0) must not win over the refusal.
+  it("--input with -f labels[]=meta/machinery STILL gets the --input refusal", () => {
+    expect(
+      fjr("gh api repos/jikig-ai/soleur/issues --input b.json -f labels[]=meta/machinery"),
+    ).toBe(INPUT_REFUSAL);
+    expect(
+      fjr("gh api repos/jikig-ai/soleur/issues --input b.json -f labels[]=scheduled-x", "scheduled-x"),
+    ).toBe(INPUT_REFUSAL);
+    expect(
+      reason(bash("gh api repos/jikig-ai/soleur/issues --input b.json -f labels[]=meta/machinery")),
+    ).toBe(`cron-containment: ${INPUT_REFUSAL}`);
+  });
+
+  it("a non-filing --input (another endpoint) is not refused by the filing gate", () => {
+    expect(fjr("gh api repos/jikig-ai/soleur/labels --input b.json")).toBeNull();
+  });
+});
+
+describe("Bash — gh api dot-segment containment (#9089, security #11)", () => {
+  // A measured GET of repos/jikig-ai/soleur/labels/../issues returned the
+  // issues collection, so a dot segment escapes the allowlist prefix.
+  it.each([
+    "gh api repos/jikig-ai/soleur/labels/../issues -X POST -f title=x",
+    "gh api repos/jikig-ai/soleur/labels/%2e%2e/issues -X POST -f title=x",
+    "gh api repos/jikig-ai/soleur/labels/%2E%2E/issues -X POST -f title=x",
+    "gh api repos/jikig-ai/soleur/./issues -X POST -f title=x",
+    "gh api repos/jikig-ai/soleur/../../../user",
+  ])("denies %s with the dot-segment reason", (cmd) => {
+    expect(verdict(bash(cmd))).toBe("deny");
+    expect(reason(bash(cmd))).toMatch(/^cron-containment: gh api path with a dot segment: /);
+  });
+
+  it("a dotted file name is not a dot segment", () => {
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/contents/.github/CODEOWNERS"))).toBe("allow");
+  });
+
+  it("a ..; (matrix-parameter) segment is a dot segment", () => {
+    expect(verdict(bash("gh api 'repos/jikig-ai/soleur/labels/..;/issues' -X POST -f title=x"))).toBe("deny");
+  });
+
+  it("the dot-segment check is linear: 280 KB of repos/ decides in well under a second", () => {
+    const t0 = Date.now();
+    expect(hasDotSegment(`${"/repos/".repeat(40000)}!`)).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+});
+
+describe("Bash — the cron tokenizer reads a command as bash does (#9089 review)", () => {
+  it("a backslash is an escape outside quotes, so i\\ssues is issues", () => {
+    expect(tokenize("gh api repos/o/r/i\\ssues -f ti\\tle=x")).toEqual(["gh", "api", "repos/o/r/issues", "-f", "title=x"]);
+  });
+  it("inside double quotes a backslash escapes only $ ` \" \\", () => {
+    expect(tokenize('x "a\\"b\\q" y')).toEqual(["x", 'a"b\\q', "y"]);
+  });
+  it("a word-start # begins a comment, so it cannot supply a label", () => {
+    expect(tokenize("gh issue create --title x # --label meta/machinery")).toEqual(["gh", "issue", "create", "--title", "x"]);
+  });
+  it("splits on space and tab only (bash does not split on \\f)", () => {
+    expect(tokenize("a  b\f c")).toEqual(["a", "b\f", "c"]);
+  });
+  it("an escaped endpoint is still an issues filing under the gh api grant", () => {
+    const d = decide(
+      JSON.stringify({ tool_name: "Bash", tool_input: { command: "gh api repos/jikig-ai/soleur/i\\ssues -f ti\\tle=x" } }),
+      ["gh api repos/jikig-ai/soleur/"],
+    );
+    expect(d.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+});
+
+describe("labelTokenEquals — an api labels[]= field is one exact label (#9089 review)", () => {
+  it("labels[]=meta/machinery,x is the label meta/machinery,x", () => {
+    expect(labelTokenEquals(["gh", "api", "x", "-f", "labels[]=meta/machinery,x"], "meta/machinery")).toBe(false);
+    expect(labelTokenEquals(["gh", "api", "x", "-f", "labels[]=meta/machinery"], "meta/machinery")).toBe(true);
+  });
+  it("--label stays a comma-separated slice", () => {
+    expect(labelTokenEquals(["gh", "issue", "create", "--label", "type/bug,meta/machinery"], "meta/machinery")).toBe(true);
+  });
+});
+
+describe("Bash — wrapped filings stay denied under a gh issue create grant (#9089 pin)", () => {
+  it("denies a filing inside $(…) by the metachar rule", () => {
+    expect(verdict(bash("URL=$(gh issue create --title x)"))).toBe("deny");
+    expect(reason(bash("URL=$(gh issue create --title x)"))).toContain("metachar");
+  });
+  it("denies a filing inside bash -c as not allowlisted", () => {
+    expect(verdict(bash('bash -c "gh issue create --title x"'))).toBe("deny");
+    expect(reason(bash('bash -c "gh issue create --title x"'))).toContain("not allowlisted");
+  });
+});
+
+// #7122 — the `no-file-tools` directive (ADR-058 file-driven per-cron pattern). A
+// cron whose allow file carries the exact line `no-file-tools` loses every tool
+// that can read, write or delegate: the agent holds Bash and nothing else. The
+// directive is per-cron (a file without it keeps today's behaviour), parsed only
+// as a whole-line match, and never enters the bash prefix list.
+describe("no-file-tools — per-cron removal of file and sub-agent tools (#7122)", () => {
+  const BASH_ONLY = ["gh issue list"];
+  const WITH = [...BASH_ONLY, "no-file-tools"];
+  const v = (input: unknown, lines: string[]) =>
+    decide(input, lines).hookSpecificOutput.permissionDecision;
+  const TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "MultiEdit", "Task", "Agent", "Skill"];
+  const call = (tool_name: string) => ({
+    tool_name,
+    tool_input: { file_path: "knowledge-base/x.md", path: "knowledge-base", pattern: "x" },
+  });
+
+  it("parseAllowlist reads the directive into noFileTools and keeps it out of bash", async () => {
+    const { parseAllowlist } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+    const parsed = parseAllowlist(WITH) as { bash: string[]; noFileTools: boolean };
+    expect(parsed.noFileTools).toBe(true);
+    expect(parsed.bash).toEqual(BASH_ONLY);
+    expect((parseAllowlist(BASH_ONLY) as { noFileTools: boolean }).noFileTools).toBe(false);
+    // Only the whole-line spelling is a directive; anything else is an ordinary bash prefix.
+    const near = parseAllowlist(["no-file-tools extra", "no-file-toolsx"]) as { bash: string[]; noFileTools: boolean };
+    expect(near.noFileTools).toBe(false);
+    expect(near.bash).toEqual(["no-file-tools extra", "no-file-toolsx"]);
+  });
+
+  it("denies all nine tools when the directive is present", () => {
+    for (const t of TOOLS) expect(v(call(t), WITH), t).toBe("deny");
+  });
+
+  it("the deny reason names the directive (diagnosable from the permission_denials channel)", () => {
+    const r = decide(call("Write"), WITH).hookSpecificOutput as { permissionDecisionReason?: string };
+    expect(r.permissionDecisionReason).toContain("no-file-tools");
+  });
+
+  it("keeps today's behaviour without the directive (per-cron, not global)", () => {
+    for (const t of TOOLS) expect(v(call(t), BASH_ONLY), t).toBe("allow");
+  });
+
+  it("NotebookEdit is denied with AND without the directive (the catch-all already covers it)", () => {
+    const nb = { tool_name: "NotebookEdit", tool_input: { notebook_path: "x.ipynb" } };
+    expect(v(nb, WITH)).toBe("deny");
+    expect(v(nb, BASH_ONLY)).toBe("deny");
+  });
+
+  it("denies the bypass shapes a path deny-list cannot see", () => {
+    expect(v({ tool_name: "Grep", tool_input: { pattern: "K", path: "/", glob: "proc/*/environ" } }, WITH)).toBe("deny");
+    expect(v({ tool_name: "Glob", tool_input: { pattern: "**/.git/config", path: "/tmp" } }, WITH)).toBe("deny");
+    expect(v({ tool_name: "Grep", tool_input: { pattern: "K", path: "/pro*" } }, WITH)).toBe("deny");
+    expect(v({ tool_name: "Grep", tool_input: { pattern: "K", path: "/" } }, BASH_ONLY)).toBe("allow");
+  });
+
+  it("does not touch Bash, and keeps the inert internal tools usable", () => {
+    // The allow line is an exact literal under the directive: the bare verb runs, an
+    // appended argument does not (the strict grammar suite below covers the rule).
+    expect(v(bash("gh issue list"), WITH)).toBe("allow");
+    expect(v(bash("gh issue list --limit 5"), WITH)).toBe("deny");
+    expect(v(bash("gh issue list --limit 5"), BASH_ONLY)).toBe("allow");
+    expect(v(bash("gh issue close 1"), WITH)).toBe("deny");
+    expect(v({ tool_name: "ToolSearch", tool_input: { query: "select:Bash" } }, WITH)).toBe("allow");
+    expect(v({ tool_name: "TodoWrite", tool_input: { todos: [] } }, WITH)).toBe("allow");
+  });
+
+  it("the directive line is not a bash allow prefix", () => {
+    expect(v(bash("no-file-tools"), WITH)).toBe("deny");
+  });
+});
+
+// #7122 P1-A — the trailing arguments of an allowlisted verb. The allowlist
+// matches `<prefix> ` and the quote-stripped metachar screen drops every
+// single-quoted span, so `<verb> 'HOME[$(id)]'` was ALLOWED and the router script
+// then evaluated the argument (`(( limit ))` arithmetic, `python3 -c "…'$query'"`).
+// For a cron with the `no-file-tools` directive two layers run on the RAW text: a
+// closed token charset (no quoting form can hide anything) and, since round 1, an
+// EXACT-LITERAL match (each segment equals one allow line token for token; `<uint>`
+// is the only variable token), which closes the free-text `--query <word>` channel.
+describe("no-file-tools — strict argument grammar and exact-literal matching (#7122 P1-A)", () => {
+  const R = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+  const LITERALS = [
+    `${R} platforms`,
+    `${R} discord messages <uint> 50`,
+    `${R} github activity 1`,
+    `${R} hn mentions --query soleur --limit 20`,
+  ];
+  const WITH = [...LITERALS, "no-file-tools"];
+  // The same commands as PREFIX lines, with no directive: the pre-#7122 shape every other cron keeps.
+  const WITHOUT = [`${R} platforms`, `${R} discord messages`, `${R} hn mentions`, `${R} github activity`];
+  const v = (command: string, lines: string[]) =>
+    decide({ tool_name: "Bash", tool_input: { command } }, lines).hookSpecificOutput.permissionDecision;
+
+  // Each shape would be admitted by the old PREFIX semantics, followed by a payload.
+  const EXPLOITS: ReadonlyArray<[string, string]> = [
+    ["array-subscript arithmetic payload, single-quoted", `${R} discord messages 'HOME[$(cat .git/config /proc/self/environ >&2)]'`],
+    ["same, after a channel id", `${R} discord messages 123 'HOME[$(id)]'`],
+    ["same, double-quoted", `${R} discord messages "HOME[$(id)]"`],
+    ["same, unquoted brackets", `${R} discord messages 1 HOME[1]`],
+    ["python source breakout in --query (double-quoted)", `${R} hn mentions --query "x'+str(__import__('os').system('id'))+'"`],
+    ["python source breakout in --query (single quote inside double)", `${R} hn mentions --query "x'+__import__('os').getcwd()+'"`],
+    ["command substitution in a single-quoted --query", `${R} hn mentions --query 'x$(id)'`],
+    ["bare command substitution in --query", `${R} hn mentions --query '$(id)'`],
+    ["backtick in a single-quoted --query", `${R} hn mentions --query '\`id\`'`],
+    ["parameter expansion in a single-quoted arg", `${R} github activity 1 '\${HOME}'`],
+    ["brace expansion", `${R} discord messages 1 a{b,c}`],
+    ["a quoted semicolon", `${R} github activity 1 'a;b'`],
+    ["a quoted space (one token with whitespace)", `${R} hn mentions --query 'a b'`],
+    ["a double-quoted query (no $, no ')", `${R} hn mentions --query "a b" --limit 20`],
+    ["a backslash escape", `${R} github activity 1 \\$HOME`],
+    ["a glob", `${R} github activity 1 *`],
+    ["a tilde", `${R} github activity ~`],
+    ["a comment start", `${R} github activity 1 #x`],
+    ["an option carrying a substitution", `${R} github activity 1 --x=$(id)`],
+    ["a newline between tokens", `${R} github activity 1\nid`],
+    ["a non-breaking-space separator", `${R} github activity\u00a01`],
+    ["a non-ASCII token", `${R} hn mentions --query é --limit 20`],
+    ["a bare pipe-or in the chain", `${R} github activity 1 || id`],
+    ["a single ampersand", `${R} github activity 1 & id`],
+    ["a quoted verb token", `${R} 'github' activity 1`],
+  ];
+
+  it.each(EXPLOITS)("DENIES %s", (_label, command) => {
+    expect(v(command, WITH), command).toBe("deny");
+  });
+
+  it("the deny reasons are fixed text: they echo nothing from the command (charset layer AND literal layer)", () => {
+    const secret = "INJECTEDSENTENCE";
+    for (const command of [
+      `${R} hn mentions --query '${secret}$(id)'`, // charset layer
+      `${R} hn mentions --query ${secret} --limit 20`, // literal layer
+      `${R} platforms ${secret}`,
+    ]) {
+      const r = decide({ tool_name: "Bash", tool_input: { command } }, WITH).hookSpecificOutput as {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+      };
+      expect(r.permissionDecision, command).toBe("deny");
+      expect(r.permissionDecisionReason, command).toContain("no-file-tools");
+      expect(r.permissionDecisionReason, command).not.toContain(secret);
+    }
+  });
+
+  // The exact commands the community prompt emits stay allowed (and nothing else does).
+  const MUST_ALLOW: ReadonlyArray<string> = [
+    `${R} platforms`,
+    `${R} github activity 1`,
+    `${R} hn mentions --query soleur --limit 20`,
+    `${R} discord messages 123456789012345678 50`,
+    `${R} discord messages 0 50`,
+    `${R} github activity 1; ${R} hn mentions --query soleur --limit 20`,
+    `${R} github activity 1 && ${R} platforms`,
+    `${R} github activity 1;${R} platforms`,
+    `${R} platforms;`,
+    `  ${R} platforms\t`,
+  ];
+  it.each(MUST_ALLOW.map((c) => [c] as [string]))("ALLOWS %s", (command) => {
+    expect(v(command, WITH), command).toBe("allow");
+  });
+
+  // EXACT-LITERAL rows: each is one allowlisted invocation plus ONE deviation. The
+  // `--query <any word>` row is the round-1 residual (in-context member content
+  // leaving word by word through a third-party search API).
+  const NOT_LITERAL: ReadonlyArray<[string, string]> = [
+    ["an extra trailing token on a no-argument literal", `${R} platforms extra`],
+    ["an extra trailing token after <uint> 50", `${R} discord messages 1 50 extra`],
+    ["a different --query word", `${R} hn mentions --query other --limit 20`],
+    ["a longer --query word", `${R} hn mentions --query soleurx --limit 20`],
+    ["a different --limit", `${R} hn mentions --query soleur --limit 21`],
+    ["--limit with a leading zero", `${R} hn mentions --query soleur --limit 020`],
+    ["a missing --limit", `${R} hn mentions --query soleur`],
+    ["a bare prefix of a longer literal", `${R} hn mentions`],
+    ["swapped option order", `${R} hn mentions --limit 20 --query soleur`],
+    ["a repeated --query", `${R} hn mentions --query soleur --query other --limit 20`],
+    ["a different fixed limit after <uint>", `${R} discord messages 1 51`],
+    ["a missing fixed limit after <uint>", `${R} discord messages 1`],
+    ["a leading-zero <uint> operand", `${R} discord messages 08 50`],
+    ["a leading-zero <uint> (all zeros)", `${R} discord messages 00 50`],
+    ["a signed <uint> operand", `${R} discord messages +1 50`],
+    ["a negative <uint> operand", `${R} discord messages -1 50`],
+    ["a decimal <uint> operand", `${R} discord messages 1.5 50`],
+    ["a hex <uint> operand", `${R} discord messages 0x1 50`],
+    ["an alphabetic <uint> operand", `${R} discord messages abc 50`],
+    ["the placeholder text itself", `${R} discord messages <uint> 50`],
+    ["a different fixed argument on a github literal", `${R} github activity 7`],
+    ["a different verb with the allowlisted arguments", `${R} github contributors 1`],
+    ["a different script path", `bash plugins/soleur/skills/community/scripts/x-community.sh platforms`],
+    ["an extra leading token", `time ${R} platforms`],
+  ];
+  it.each(NOT_LITERAL)("DENIES (not an exact literal) %s", (_label, command) => {
+    expect(v(command, WITH), command).toBe("deny");
+  });
+
+  it("control: the same deviations ARE allowed by prefix semantics when the cron has no directive, so the deny above is the literal layer", () => {
+    for (const [label, command] of [
+      ["extra token", `${R} platforms extra`],
+      ["different query", `${R} hn mentions --query other --limit 20`],
+      ["leading zero", `${R} discord messages 08 50 extra`],
+      ["quoted payload", `${R} discord messages 'HOME[$(id)]'`],
+    ] as const) {
+      expect(v(command, WITHOUT), label).toBe("allow");
+    }
+    // ...and an ordinary quoted gh argument still works for such a cron.
+    expect(v("gh issue list --search 'is:open label:x'", ["gh issue list"])).toBe("allow");
+  });
+
+  // Position coverage (test-design P2-1): the rule judges EVERY segment. A mutation that
+  // applies the grammar to the last segment only (`.slice(-1)`) passes a table that
+  // puts the bad segment last.
+  const OK_A = `${R} platforms`;
+  const OK_B = `${R} github activity 1`;
+  const BAD_SEGMENTS: ReadonlyArray<[string, string]> = [
+    ["a hostile single-quoted operand (charset layer)", `${R} discord messages 'HOME[$(id)]'`],
+    ["an extra trailing token (literal layer)", `${R} platforms extra`],
+    ["a different query word (literal layer)", `${R} hn mentions --query other --limit 20`],
+    ["a leading-zero operand (literal layer)", `${R} discord messages 08 50`],
+  ];
+  const POSITIONS: ReadonlyArray<[string, (bad: string, sep: string) => string]> = [
+    ["first", (bad, sep) => `${bad}${sep}${OK_A}${sep}${OK_B}`],
+    ["middle", (bad, sep) => `${OK_A}${sep}${bad}${sep}${OK_B}`],
+    ["last", (bad, sep) => `${OK_A}${sep}${OK_B}${sep}${bad}`],
+  ];
+  describe.each([["; ", "semicolon"], [" && ", "and-and"], [";", "bare semicolon"]])("separator %j (%s)", (sep) => {
+    for (const [badLabel, bad] of BAD_SEGMENTS) {
+      for (const [pos, build] of POSITIONS) {
+        it(`a chain with ${badLabel} in the ${pos} segment is denied as a whole`, async () => {
+          const command = build(bad, sep);
+          expect(v(command, WITH), command).toBe("deny");
+          // The grammar function itself (not only the later layers of decide()).
+          const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+          expect(typeof strictArgumentGrammarReason(command, LITERALS.filter((l) => l.startsWith("bash"))), command).toBe("string");
+        });
+      }
+    }
+    it("control: the three good segments in any order, with this separator, are allowed", () => {
+      expect(v([OK_A, OK_B, `${R} discord messages 9 50`].join(sep), WITH)).toBe("allow");
+    });
+  });
+
+  it("charset layer alone (no literal lines): a bad token in the first, middle or last segment is denied", async () => {
+    const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+    for (const bad of ["x 'y'", "x $(id)", 'x "y"', "x a\\b"]) {
+      for (const [pos, build] of [
+        ["first", (b: string) => `${b}; a b; c d`],
+        ["middle", (b: string) => `a b; ${b}; c d`],
+        ["last", (b: string) => `a b; c d; ${b}`],
+      ] as const) {
+        expect(typeof strictArgumentGrammarReason(build(bad)), `${pos}: ${bad}`).toBe("string");
+      }
+    }
+  });
+
+  it("a chain of exact literals is allowed (batches are the prompt's normal shape)", () => {
+    expect(
+      v(
+        [`${R} platforms`, `${R} discord messages 1234567890 50`, `${R} github activity 1`, `${R} hn mentions --query soleur --limit 20`].join(" && "),
+        WITH,
+      ),
+    ).toBe("allow");
+  });
+
+  it("must PASS: a cron WITHOUT the directive is unaffected (the same payloads keep their old verdicts, so the denies above are the grammar)", () => {
+    expect(v(`${R} discord messages 'HOME[$(id)]'`, WITHOUT)).toBe("allow");
+    expect(v(`${R} hn mentions --query 'a b'`, WITHOUT)).toBe("allow");
+    expect(v(`${R} github activity 1 'x y'`, WITHOUT)).toBe("allow");
+    // A `<uint>` placeholder is a literal word in a prefix-semantics file, never a pattern.
+    expect(v(`${R} discord messages 1 50`, [`${R} discord messages <uint> 50`])).toBe("deny");
+  });
+
+  it("strictArgumentGrammarReason is exported and pure: null for a clean command, a fixed string otherwise", async () => {
+    const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+    expect(strictArgumentGrammarReason("a b; c d && e")).toBeNull();
+    expect(typeof strictArgumentGrammarReason("a 'b'")).toBe("string");
+    expect(strictArgumentGrammarReason("a 'INJECTED'")).not.toContain("INJECTED");
+    expect(typeof strictArgumentGrammarReason("")).toBe("string");
+    expect(typeof strictArgumentGrammarReason(" ; ; ")).toBe("string");
+    expect(typeof strictArgumentGrammarReason(42 as unknown as string)).toBe("string");
+  });
+
+  // COMPLEMENT SWEEP (test-design P3-1): every character OUTSIDE the closed charset is
+  // denied, so widening the charset by even one character turns a row red. Run on the
+  // charset-only function (no literal lines) so the literal layer cannot mask a widening.
+  describe("charset complement sweep", () => {
+    const IN_CHARSET = /^[A-Za-z0-9._:=@/+-]$/;
+    // Space and `;` are token / segment separators by design (a b; c d is clean).
+    const SEPARATORS = new Set([" ", ";"]);
+    const NON_ASCII = ["\u00a0", "\u2028", "\u2029", "\u200b", "\ufeff", "\u0085", "é", "\uff0f", "\uff1b", "\u{1f600}"];
+    const complement = [
+      ...Array.from({ length: 0x80 }, (_, i) => String.fromCharCode(i)),
+      ...NON_ASCII,
+    ].filter((c) => !IN_CHARSET.test(c) && !SEPARATORS.has(c) && c !== "\t");
+
+    it("the sweep is non-vacuous: it covers every printable ASCII character that is not in the charset", () => {
+      const printable = Array.from({ length: 0x5f }, (_, i) => String.fromCharCode(0x20 + i));
+      for (const c of printable.filter((c) => !IN_CHARSET.test(c) && !SEPARATORS.has(c))) expect(complement).toContain(c);
+      expect(complement.length).toBeGreaterThan(60);
+    });
+
+    it("every non-charset character, inside a token, is denied by the charset layer", async () => {
+      const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      const allowed: string[] = [];
+      for (const ch of complement) {
+        for (const command of [`a${ch}b`, `a ${ch}`, `${ch}`, `a b; c${ch}`]) {
+          if (strictArgumentGrammarReason(command) === null) allowed.push(JSON.stringify(command));
+        }
+      }
+      expect(allowed).toEqual([]);
+    });
+
+    it("every non-charset character is denied by decide() end to end (inside the first, middle and last segment)", () => {
+      const bad: string[] = [];
+      for (const ch of complement) {
+        const lit = `${R} platforms`;
+        for (const command of [`${lit}${ch}`, `${lit}${ch}; ${lit}`, `${lit}; ${lit}${ch}; ${lit}`, `${lit}; ${lit} a${ch}`]) {
+          if (v(command, WITH) !== "deny") bad.push(JSON.stringify(command));
+        }
+      }
+      expect(bad).toEqual([]);
+    });
+
+    it("control: every charset character is accepted by the charset layer", async () => {
+      const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      const all = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:=@/+-";
+      for (const ch of all) expect(strictArgumentGrammarReason(`a${ch}b`), ch).toBeNull();
+      // tab separates tokens exactly like space
+      expect(strictArgumentGrammarReason("a\tb\t;\tc")).toBeNull();
+    });
+  });
+
+  // PERFORMANCE (perf P2-1): the hook runs once per Bash call and a crashed or slow hook is
+  // a containment question, so padding must cost a constant. Bounds are loose (CI noise)
+  // yet three orders below the quadratic behaviour (100k spaces took 25 s).
+  describe("running time is bounded on padded input", () => {
+    const timed = <T,>(fn: () => T): [T, number] => {
+      const t0 = performance.now();
+      const out = fn();
+      return [out, performance.now() - t0];
+    };
+
+    it("200k spaces before a quote on a no-file-tools cron: denied in < 500 ms", () => {
+      const command = `${R} platforms${" ".repeat(200_000)}'`;
+      const [verdict, ms] = timed(() => v(command, WITH));
+      expect(verdict).toBe("deny");
+      expect(ms).toBeLessThan(500);
+    });
+
+    it("the same padding on a cron WITHOUT the directive (the pre-existing quadratic in decide()) is linear too", () => {
+      const command = `gh issue list${" ".repeat(100_000)}'`;
+      const [verdict, ms] = timed(() => v(command, ["gh issue list"]));
+      expect(verdict).toBe("deny");
+      expect(ms).toBeLessThan(500);
+      const [verdict2, ms2] = timed(() => v(`gh issue list${" ".repeat(100_000)}x`, ["gh issue list"]));
+      expect(verdict2).toBe("allow");
+      expect(ms2).toBeLessThan(500);
+    });
+
+    it("spaceTabTokens (the trim under the length cap) is linear on a whitespace run of any length and keeps non-ASCII spaces as token text", async () => {
+      const { spaceTabTokens } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      const [toks, ms] = timed(() => spaceTabTokens(`a${" ".repeat(200_000)}'`));
+      expect(toks).toEqual(["a", "'"]);
+      expect(ms).toBeLessThan(300);
+      const [lead, ms2] = timed(() => spaceTabTokens(`${"\t ".repeat(100_000)}x${" ".repeat(100_000)}`));
+      expect(lead).toEqual(["x"]);
+      expect(ms2).toBeLessThan(300);
+      // NOT String.trim: U+00A0 is part of a token, so it reaches the charset check.
+      expect(spaceTabTokens(" \u00a0 ")).toEqual(["\u00a0"]);
+      expect(spaceTabTokens("")).toEqual([]);
+      expect(spaceTabTokens(" \t ")).toEqual([]);
+    });
+
+    it("splitSegments is linear on a long whitespace run with no separator", () => {
+      const [segs, ms] = timed(() => splitSegments(`a${" ".repeat(150_000)}b`));
+      expect(segs).toHaveLength(1);
+      expect(ms).toBeLessThan(300);
+    });
+
+    it("tab padding and a padded middle segment are equally cheap", () => {
+      const [verdict, ms] = timed(() => v(`${R} platforms;${"\t".repeat(100_000)}${R} platforms${" ".repeat(50_000)}'`, WITH));
+      expect(verdict).toBe("deny");
+      expect(ms).toBeLessThan(500);
+    });
+
+    it("a command over 8 KiB is denied by the length cap before any regex runs (even when it is otherwise a valid chain)", async () => {
+      const { MAX_NO_FILE_TOOLS_COMMAND_CHARS } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      expect(MAX_NO_FILE_TOOLS_COMMAND_CHARS).toBe(8192);
+      const chain = (n: number) => Array(n).fill(`${R} platforms`).join("; ");
+      let n = 1;
+      while (chain(n).length <= 8192) n++;
+      // `n` segments is the smallest chain over the cap; one fewer is under it and allowed.
+      expect(v(chain(n - 1), WITH)).toBe("allow");
+      const over = chain(n);
+      expect(over.length).toBeGreaterThan(8192);
+      const r = decide({ tool_name: "Bash", tool_input: { command: over } }, WITH).hookSpecificOutput as {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+      };
+      expect(r.permissionDecision).toBe("deny");
+      expect(r.permissionDecisionReason).toContain("too long");
+    });
+
+    it("every cron has a hard bound (a single exec argument cannot exceed 128 KiB), and just under it still decides", async () => {
+      const { MAX_BASH_COMMAND_CHARS } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+      expect(MAX_BASH_COMMAND_CHARS).toBe(131072);
+      const r = decide(
+        { tool_name: "Bash", tool_input: { command: "gh issue list " + "x".repeat(MAX_BASH_COMMAND_CHARS) } },
+        ["gh issue list"],
+      ).hookSpecificOutput as { permissionDecision: string; permissionDecisionReason?: string };
+      expect(r.permissionDecision).toBe("deny");
+      expect(r.permissionDecisionReason).toContain("command too long");
+      const [ok, ms] = timed(() => v("gh issue list " + "x".repeat(MAX_BASH_COMMAND_CHARS - 20), ["gh issue list"]));
+      expect(ok).toBe("allow");
+      expect(ms).toBeLessThan(500);
+    });
   });
 });

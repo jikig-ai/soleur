@@ -77,7 +77,7 @@ command -v terraform >/dev/null 2>&1 || { echo "Error: 'terraform' not found." >
 
 DPA_FILE="knowledge-base/legal/tenant-dpa-register.md"
 [[ -f "$DPA_FILE" ]] || { echo "DPA register not found at $DPA_FILE. Run from Soleur monorepo root." >&2; exit 3; }
-awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug && $8 ~ /^ *(dpa-signed|provisioning-in-progress) *$/) found=1 } END { exit !found }' "$DPA_FILE" \
+awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug) found = ($8 ~ /^ *(dpa-signed|provisioning-in-progress) *$/) } END { exit !found }' "$DPA_FILE" \
   || { echo "No active DPA row for '$SLUG'. Sign DPA (Step 0) first." >&2; exit 3; }
 
 # --- Idempotency check ---

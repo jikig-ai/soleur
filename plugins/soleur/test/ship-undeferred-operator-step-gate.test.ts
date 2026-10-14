@@ -127,9 +127,17 @@ describe("TC-1: ship/SKILL.md gate structure", () => {
   });
 
   test("gate body emits rule-application telemetry with the canonical wg-* ID", () => {
+    // ADR-179 decision 9 (#7450): the gate no longer sources incidents.sh from the git
+    // root and calls emit_incident — on the review path that root is the contributor's
+    // tree, and `source` executes into the current shell. It now prints an INERT marker
+    // that a monorepo-only PostToolUse hook validates and records. The property this
+    // guard was written for is unchanged: the gate must still name the canonical rule
+    // it enforces, in a form the capture hook actually accepts.
     expect(GATE_SECTION).toMatch(
-      new RegExp(`emit_incident\\s+${GATE_ID}\\s+applied`),
+      new RegExp(`SOLEUR_RULE_APPLIED\\s+rule=${GATE_ID}\\s+note=`),
     );
+    // And it must NOT have kept the retired construct.
+    expect(GATE_SECTION).not.toMatch(/source .*git rev-parse --show-toplevel.*incidents\.sh/);
   });
 
   test("gate body contains the 3-option structured prompt", () => {

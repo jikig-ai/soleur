@@ -5,7 +5,7 @@ category: security-issues
 module: apps/web-platform/middleware.ts
 tags: [auth, middleware, t-and-c, public-paths, open-redirect, otp, rate-limit, invite]
 related:
-  - knowledge-base/project/plans/2026-05-29-fix-invited-user-signin-otp-rate-limit-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-29-fix-invited-user-signin-otp-rate-limit-plan.md
   - knowledge-base/project/learnings/2026-04-11-map-supabase-errors-to-friendly-messages.md
 ---
 

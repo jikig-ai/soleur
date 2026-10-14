@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
 
 // PR-F Phase 2 (#3244, #3940). Signature-verify gate on /api/inngest POST.
@@ -8,6 +8,11 @@ import type { NextRequest } from "next/server";
 // "dev". Self-hosted Hetzner production runs cloud mode by setting
 // INNGEST_DEV=0 so the route handler validates `x-inngest-signature` against
 // INNGEST_SIGNING_KEY on every step-execution POST. ADR-030 invariant I4.
+//
+// #8611 / ADR-243: the route serves with `streaming: "force"`, so every POST answers HTTP 201 at
+// once and the real status arrives in the streamed JSON envelope. The 401 is therefore asserted
+// on the ENVELOPE (`status: 401`), and the HTTP status is pinned to 201 so a silent revert of
+// streaming (which would put 401 back on the status line) reds this file too.
 //
 // Test asserts: without a valid signature, the handler returns 401 BEFORE
 // any function dispatches. Phase 2 ships with functions:[] empty (Phase 3
@@ -30,6 +35,14 @@ process.env.INNGEST_EVENT_KEY =
   "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 process.env.INNGEST_DEV = "0";
 
+// Pass-through spy over the real wrapper, so every other test still sees the production behaviour.
+const { detachSpy } = vi.hoisted(() => ({ detachSpy: vi.fn() }));
+vi.mock("@/server/inngest/stream-detach", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/inngest/stream-detach")>();
+  detachSpy.mockImplementation(real.detachFromConsumerCancel);
+  return { ...real, detachFromConsumerCancel: detachSpy };
+});
+
 async function importRoute() {
   return await import("@/app/api/inngest/route");
 }
@@ -49,7 +62,25 @@ function makePostRequest(headers: Record<string, string> = {}): NextRequest {
   }) as unknown as NextRequest;
 }
 
+// The streamed response: HTTP 201, heartbeat spaces, then one JSON envelope carrying the real status.
+async function envelopeStatus(res: Response): Promise<number> {
+  expect(res.status).toBe(201);
+  const envelope = JSON.parse((await res.text()).trim()) as { status: number };
+  return envelope.status;
+}
+
 describe("app/api/inngest/route.ts — signature verification (cloud mode)", () => {
+  it("is the ONLY serve() mount (a second mount would bypass the stream-detach wrapper)", async () => {
+    const { execFileSync } = await import("node:child_process");
+    // Anchored on the IMPORT of `serve` from an inngest adapter (what a mount needs), not the bare
+    // token — prose explaining the wrapper mentions `serve({` and must not count.
+    const out = execFileSync("git", ["grep", "-lE", "^import \\{[^}]*\\bserve\\b[^}]*\\} from \"inngest/", "--", "app", "server", "pages", "middleware.ts"], {
+      cwd: `${__dirname}/../../..`,
+      encoding: "utf8",
+    }).trim().split("\n").filter(Boolean);
+    expect(out).toEqual(["app/api/inngest/route.ts"]);
+  });
+
   // Pre-warm the route module graph (Inngest SDK + 52 function modules) so the
   // first test doesn't pay the cold-import cost against testTimeout (16s) under
   // full-suite contention. Mirrors the pdfjs-dist pre-warm in
@@ -65,22 +96,22 @@ describe("app/api/inngest/route.ts — signature verification (cloud mode)", () 
     expect(typeof route.PUT).toBe("function");
   });
 
-  it("POST without x-inngest-signature header returns 401", async () => {
+  it("POST without x-inngest-signature header streams a 401 envelope", async () => {
     const { POST } = await importRoute();
     const res = await POST(makePostRequest(), undefined);
-    expect(res.status).toBe(401);
+    expect(await envelopeStatus(res)).toBe(401);
   });
 
-  it("POST with malformed x-inngest-signature returns 401", async () => {
+  it("POST with malformed x-inngest-signature streams a 401 envelope", async () => {
     const { POST } = await importRoute();
     const res = await POST(
       makePostRequest({ "x-inngest-signature": "this-is-not-a-valid-signature" }),
       undefined,
     );
-    expect(res.status).toBe(401);
+    expect(await envelopeStatus(res)).toBe(401);
   });
 
-  it("POST with valid-shaped but wrong-HMAC signature returns 401", async () => {
+  it("POST with valid-shaped but wrong-HMAC signature streams a 401 envelope", async () => {
     const { POST } = await importRoute();
     // Right shape (t=<unix>&s=<64-hex>), wrong HMAC.
     const t = Math.floor(Date.now() / 1000);
@@ -89,10 +120,10 @@ describe("app/api/inngest/route.ts — signature verification (cloud mode)", () 
       makePostRequest({ "x-inngest-signature": sig }),
       undefined,
     );
-    expect(res.status).toBe(401);
+    expect(await envelopeStatus(res)).toBe(401);
   });
 
-  it("POST with stale-timestamp signature returns 401", async () => {
+  it("POST with stale-timestamp signature streams a 401 envelope", async () => {
     const { POST } = await importRoute();
     // Timestamp 10 minutes in the past — Inngest's signature freshness window
     // is 5 minutes (allowExpiredSignatures defaults to false). Even with a
@@ -103,6 +134,18 @@ describe("app/api/inngest/route.ts — signature verification (cloud mode)", () 
       makePostRequest({ "x-inngest-signature": sig }),
       undefined,
     );
-    expect(res.status).toBe(401);
+    expect(await envelopeStatus(res)).toBe(401);
+  });
+
+  it("POST hands every response to the stream-detach wrapper (the SDK stream never sees a client disconnect)", async () => {
+    // The wrapper's behaviour (no heartbeat throw, no finalize rejection after a cancel) is proven
+    // against the real SDK createStream in stream-detach.test.ts. An end-to-end disconnect here cannot
+    // discriminate: an unsigned request finalizes before any client can cancel. So this pins the wiring.
+    const { POST } = await importRoute();
+    detachSpy.mockClear();
+    const res = await POST(makePostRequest(), undefined);
+    expect(detachSpy).toHaveBeenCalledTimes(1);
+    expect(res).toBe(detachSpy.mock.results[0]!.value);
+    expect(await envelopeStatus(res)).toBe(401);
   });
 });

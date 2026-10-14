@@ -9,6 +9,7 @@
 // (AC1/AC8) fail until it has an attack case.
 
 import type postgres from "postgres";
+import { withTransientRetry } from "./harness-fixture";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -19,14 +20,14 @@ type Sql = ReturnType<typeof postgres>;
  * jti-deny set is an overlaid *dimension*, not the enumerator.
  */
 export async function isolationSet(sql: Sql): Promise<string[]> {
-  const rows = await sql<{ tablename: string }[]>`
+  const rows = await withTransientRetry(() => sql<{ tablename: string }[]>`
     select distinct tablename
     from pg_policies
     where schemaname = 'public'
       and permissive = 'PERMISSIVE'
       and 'authenticated' = any(roles)
       and (qual ilike '%is_workspace_member%' or with_check ilike '%is_workspace_member%')
-    order by tablename`;
+    order by tablename`);
   return rows.map((r) => r.tablename);
 }
 
@@ -41,7 +42,7 @@ export async function isolationSet(sql: Sql): Promise<string[]> {
  * the harness the way `message_attachments`/`inbox_item` otherwise would.
  */
 export async function workspaceTenancyTables(sql: Sql): Promise<string[]> {
-  const rows = await sql<{ tablename: string }[]>`
+  const rows = await withTransientRetry(() => sql<{ tablename: string }[]>`
     select distinct c.relname as tablename
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
@@ -51,7 +52,7 @@ export async function workspaceTenancyTables(sql: Sql): Promise<string[]> {
       and c.relkind = 'r'
       and c.relrowsecurity
       and col.column_name in ('workspace_id', 'message_id')
-    order by tablename`;
+    order by tablename`);
   return rows.map((r) => r.tablename);
 }
 
@@ -71,7 +72,7 @@ export async function workspaceTenancyTables(sql: Sql): Promise<string[]> {
  * workspace-only policy denies even when the user_id clause is missing.
  */
 export async function userIsolationTables(sql: Sql): Promise<string[]> {
-  const rows = await sql<{ tablename: string }[]>`
+  const rows = await withTransientRetry(() => sql<{ tablename: string }[]>`
     with uid_keyed as (
       select distinct pol.tablename
       from pg_policies pol
@@ -99,7 +100,7 @@ export async function userIsolationTables(sql: Sql): Promise<string[]> {
     select tablename from uid_keyed
     where tablename not in (select tablename from ws_member)
       and tablename not in (select tablename from ws_tenancy)
-    order by tablename`;
+    order by tablename`);
   return rows.map((r) => r.tablename);
 }
 
@@ -115,7 +116,7 @@ export async function userIsolationTables(sql: Sql): Promise<string[]> {
  * membership on the NEW workspace_id.
  */
 export async function rowHijackTables(sql: Sql): Promise<string[]> {
-  const rows = await sql<{ tablename: string }[]>`
+  const rows = await withTransientRetry(() => sql<{ tablename: string }[]>`
     select distinct pol.tablename
     from pg_policies pol
     join information_schema.columns col
@@ -123,19 +124,19 @@ export async function rowHijackTables(sql: Sql): Promise<string[]> {
     where pol.schemaname = 'public' and pol.permissive = 'PERMISSIVE'
       and ('authenticated' = any(pol.roles) or 'public' = any(pol.roles))
       and pol.cmd in ('UPDATE', 'ALL')
-    order by pol.tablename`;
+    order by pol.tablename`);
   return rows.map((r) => r.tablename);
 }
 
 /** The jti-deny dimension: tables carrying a RESTRICTIVE `%_jti_not_denied` policy (mig 068). */
 export async function jtiDenySet(sql: Sql): Promise<string[]> {
-  const rows = await sql<{ tablename: string }[]>`
+  const rows = await withTransientRetry(() => sql<{ tablename: string }[]>`
     select distinct tablename
     from pg_policies
     where schemaname = 'public'
       and permissive = 'RESTRICTIVE'
       and policyname ilike '%jti_not_denied%'
-    order by tablename`;
+    order by tablename`);
   return rows.map((r) => r.tablename);
 }
 
@@ -152,7 +153,7 @@ export interface SecDefFn {
  * is a cross-tenant bypass invisible to base-table RLS.
  */
 export async function securityDefinerAuthenticatedFns(sql: Sql): Promise<SecDefFn[]> {
-  return sql<SecDefFn[]>`
+  return withTransientRetry(() => sql<SecDefFn[]>`
     select p.proname,
            pg_get_function_identity_arguments(p.oid) as args
     from pg_proc p
@@ -160,7 +161,7 @@ export async function securityDefinerAuthenticatedFns(sql: Sql): Promise<SecDefF
     where n.nspname = 'public'
       and p.prosecdef
       and has_function_privilege('authenticated', p.oid, 'EXECUTE')
-    order by p.proname, args`;
+    order by p.proname, args`);
 }
 
 /**
@@ -171,14 +172,14 @@ export async function securityDefinerAuthenticatedFns(sql: Sql): Promise<SecDefF
  * match means the static tier under-detects and cannot be trusted (parity guard).
  */
 export async function allSecurityDefinerFns(sql: Sql): Promise<SecDefFn[]> {
-  return sql<SecDefFn[]>`
+  return withTransientRetry(() => sql<SecDefFn[]>`
     select p.proname,
            pg_get_function_identity_arguments(p.oid) as args
     from pg_proc p
     join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and p.prosecdef
-    order by p.proname, args`;
+    order by p.proname, args`);
 }
 
 /**
@@ -196,7 +197,7 @@ export async function allSecurityDefinerFns(sql: Sql): Promise<SecDefFn[]> {
  * only, not a proof that anon isolation holds under attack.)
  */
 export async function securityDefinerAnonFns(sql: Sql): Promise<SecDefFn[]> {
-  return sql<SecDefFn[]>`
+  return withTransientRetry(() => sql<SecDefFn[]>`
     select p.proname,
            pg_get_function_identity_arguments(p.oid) as args
     from pg_proc p
@@ -204,5 +205,5 @@ export async function securityDefinerAnonFns(sql: Sql): Promise<SecDefFn[]> {
     where n.nspname = 'public'
       and p.prosecdef
       and has_function_privilege('anon', p.oid, 'EXECUTE')
-    order by p.proname, args`;
+    order by p.proname, args`);
 }

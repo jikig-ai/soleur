@@ -17,8 +17,10 @@ import {
   EXPECTED_CRON_FUNCTIONS,
   manualTriggerEventFor,
 } from "@/server/inngest/cron-manifest";
+import { randomUUID } from "node:crypto";
 import { ROUTINE_METADATA } from "@/server/inngest/routine-metadata";
 import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
+import { assertLegacyEngineBinding } from "@/server/agent-engine-route-guard";
 
 export type RunRoutineActorClass = "system" | "human" | "agent";
 
@@ -33,14 +35,24 @@ export interface RunRoutineInput {
   data?: Record<string, unknown>;
   /** Observability feature tag for sendInngestWithRetry. */
   feature?: string;
+  /** Trusted workspace context used by the engine binding repository. */
+  workspaceId?: string;
+  routineRunId?: string;
+  bindRun?: (input: {
+    workspaceId: string;
+    executionKind: "routine";
+    routineId: string;
+    routineRunId: string;
+    createdBy: string;
+  }) => Promise<unknown>;
 }
 
 export type RunRoutineResult =
   | { ok: true; event: string }
   | {
       ok: false;
-      code: "unknown_routine" | "confirmation_required";
-      status: 400 | 409;
+      code: "unknown_routine" | "confirmation_required" | "engine_binding_failed";
+      status: 400 | 409 | 503;
     };
 
 const EXPECTED = new Set(EXPECTED_CRON_FUNCTIONS);
@@ -56,7 +68,11 @@ export async function runRoutine(
     confirmed = false,
     data = {},
     feature = "run-routine",
+    workspaceId,
+    routineRunId,
+    bindRun,
   } = input;
+  let eventData = data;
 
   // Membership check excludes event-driven / one-shot functions.
   if (!EXPECTED.has(fnId)) {
@@ -77,6 +93,31 @@ export async function runRoutine(
         ? "manual-api"
         : "manual";
 
+  if (bindRun) {
+    if (!workspaceId) {
+      return { ok: false, code: "engine_binding_failed", status: 503 };
+    }
+    const boundRoutineRunId = routineRunId ??
+      (typeof data.run_id === "string" ? data.run_id : randomUUID());
+    try {
+      const persistedBinding = await bindRun({
+        workspaceId,
+        executionKind: "routine",
+        routineId: fnId,
+        routineRunId: boundRoutineRunId,
+        createdBy: actorId ?? delegatingPrincipal ?? "system",
+      });
+      assertLegacyEngineBinding(
+        persistedBinding && typeof persistedBinding === "object" && "binding" in persistedBinding
+          ? (persistedBinding as { binding: unknown }).binding
+          : persistedBinding,
+      );
+    } catch {
+      return { ok: false, code: "engine_binding_failed", status: 503 };
+    }
+    eventData = { ...data, engine_run_id: boundRoutineRunId };
+  }
+
   // The Inngest client is imported dynamically to defer its load-time
   // fail-closed throw (missing INNGEST_SIGNING_KEY) to call time.
   const { inngest } = await import("@/server/inngest/client");
@@ -87,7 +128,7 @@ export async function runRoutine(
         // Route-controlled attribution keys spread LAST (audit-poison guard):
         // a caller's `data` cannot override actor_class / actor_id / trigger.
         data: {
-          ...data,
+          ...eventData,
           trigger,
           at: new Date().toISOString(),
           actor_class: actorClass,

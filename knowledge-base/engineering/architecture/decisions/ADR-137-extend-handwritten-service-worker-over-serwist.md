@@ -85,8 +85,9 @@ wrapper, or touching the push handlers.
 - **The delta is genuinely small.** Offline fallback ≈ one fetch branch + one
   static file; update UX ≈ delete one line + add a message listener + a client
   toast; install UX ≈ one client component. A toolchain is not warranted.
-- **Zero new dependency** keeps `bunfig.toml` `minimumReleaseAge` and the
-  supply-chain surface untouched.
+- **Zero new dependency** keeps the release-age floor and the supply-chain surface
+  untouched. (The floor moved from `bunfig.toml` `minimumReleaseAge` to `.npmrc`
+  `min-release-age=3` in ADR-191; the argument is unchanged, only its spelling.)
 
 ## Consequences
 

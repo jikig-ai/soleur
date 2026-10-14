@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
+import type { VerifiedUser } from "@/server/request-auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 import { statKnownPaths } from "@/server/kb-reader";
@@ -15,7 +15,7 @@ import { DASHBOARD_FOUNDATION_KB_PATHS } from "@/lib/kb-constants";
 // KB directory and gated first paint on it. This route stats only the known
 // paths (via the active-workspace KB-root resolution shared with kb/tree) — no
 // whole-tree walk on cold load.
-async function getHandler(_req: Request, user: User) {
+async function getHandler(_req: Request, user: VerifiedUser) {
   const serviceClient = createServiceClient();
 
   // ADR-044 (#4543): the KB lives on the ACTIVE workspace, not the caller's own

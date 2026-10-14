@@ -181,3 +181,36 @@ prose has now failed three times on this class.
 - [[2026-07-20-adding-a-second-copy-of-a-guarded-literal-disarms-the-first]] — the inverse: ADDING a copy disarms a presence-guard; here REMOVING members stranded claims
 - [[2026-07-19-my-mutation-battery-was-green-and-it-only-measured-the-mutations-i-thought-of]] — the candidate-set finding is this, one axis over
 - [[2026-07-15-guard-gate-and-probe-must-pin-the-thing-they-name]] — self-match (SE-1) is the same hazard the strip-list pin hit
+
+## Addendum — 2026-09-17 (#7535 / PR #8242): the claim had FIVE spellings, and each grep certified the others clean
+
+This file's rule — index the sweep by CLAIM, not by file — was followed here and was **not enough**,
+because one claim can wear several spellings and a grep for any one of them reports the rest clean.
+
+The claim was a single measurement triple about a skip roster (census, executable call sites,
+declarable budget, ceiling), which had been taken on a discarded worktree and labelled
+"pre-existing". It existed in **nine copies across three files under five distinct spellings**:
+
+1. `declarable budget **14** vs ceiling **8**`  (the D9 section)
+2. `Skipped: 14 > 8`  (two rows — a poison table and a guard expectation)
+3. `returns **4** while the file has **7** executable call sites`  (spec `TR17`)
+4. `_SKIP_CEILING` `7 -> 8`  (a revision-reconciliation row)
+5. the word-for-word `AC28` / `tasks 2.6.3` triple
+
+Sweep 1 fixed spelling 1 and reported clean. Sweep 2, searching `Skipped:`, found spelling 2 — and
+one of its two instances hid inside a table row wide enough that truncated terminal output had cut
+it off. Only a review seat searching `returns \*\*4\*\*` and `7 -> 8` found spellings 3 and 4. Each
+sweep's residual-zero count was true about its string and false about the claim.
+
+**The added datum is spelling multiplicity.** Before believing a claim sweep:
+
+- Enumerate the claim's **spellings**, not just its files — a numeric claim mutates form freely
+  (`A vs B`, `A > B`, `A -> B`, prose, a table cell, an AC restatement).
+- Grep for the claim's **operands** (here the bare numbers `14`, `8`, `4`, `7`), not its phrasing —
+  noisy, but it is the only form that cannot be evaded by rewording.
+- Read hits with a **full-width** view. A residual-zero count and a truncated read are two different
+  ways to certify a miss.
+
+Corollary already in this file, now with a third instance: the fix landed in the D9 section first and
+left `AC28`, `tasks.md` and `spec.md` standing — the twin-copy shape, third occurrence in one
+session, each time after the author had just fixed an instance of it elsewhere.

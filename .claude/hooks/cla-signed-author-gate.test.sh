@@ -5,17 +5,56 @@
 # Isolation pattern mirrors ship-unpushed-commits-gate.test.sh.
 
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
+
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
+# Refuse before writing, rather than let an empty operand retarget a git write at whatever
+# repository the caller happens to be standing in. `git -C ""` does NOT error — it silently
+# operates on the current directory, which under TEST_GROUP=scripts is the developer's live
+# worktree, whose `.git/config` is the SHARED file every worktree on the machine inherits.
+#
+# Rejects, beyond empty: bare `/` AND its aliases `//` and `/.` (a `/*` arm accepts all three, and
+# `rm -rf "/"/*` is the worst outcome in this corpus — a one-character bypass of a stated
+# rejection); any path containing `..`, which can resolve back inside the real repo; and
+# /proc, /sys, /dev, because `/proc/self/cwd` is absolute, passes every other arm, and resolves
+# to precisely "whatever repository the caller happens to be standing in".
+#
+# Still no `realpath`: it breaks on a symlinked /tmp, which this corpus uses. So a symlink to
+# $HOME is ACCEPTED — stated here rather than left implied, because the arms above make this
+# look like a containment check and it is not.
+#
+# The body below is a COPY. The canonical definition lives in
+# plugins/soleur/test/test-helpers.sh; plugins/soleur/test/fixture-dir-operand-assert.test.sh
+# asserts this copy is byte-equal to it. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/cla-signed-author-gate.sh"
 UNSIGNED="noreply@anthropic.com"
 
 PASS=0; FAIL=0; TOTAL=0
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 init_git_repo() {
   local dir="$1"
+  assert_fixture_dir "$dir"
   git -C "$dir" init -q
   git -C "$dir" symbolic-ref HEAD refs/heads/main
   git -C "$dir" config user.email test@test.local
@@ -28,6 +67,7 @@ init_git_repo() {
 make_branch() {
   local tmp="$1" branch="$2" author_email="$3"
   local work="$tmp/work" origin="$tmp/origin.git" inc="$tmp/inc"
+  assert_fixture_dir "$tmp"
   mkdir -p "$work" "$inc"
   git init -q --bare "$origin"
   init_git_repo "$work"
@@ -72,27 +112,27 @@ assert_pass() {
 }
 
 # T1: unsigned-author commit + gh pr merge → DENY
-t1() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-x "$UNSIGNED")
+t1() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-x "$UNSIGNED")
   out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')"); rc=$?
   assert_deny "T1 unsigned author + gh pr merge denies" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T2: all-signed commits + gh pr merge → PASS
-t2() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-y test@test.local)
+t2() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-y test@test.local)
   out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')"); rc=$?
   assert_pass "T2 signed authors pass" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T3: unsigned author + gh pr ready → DENY (gate also covers ready)
-t3() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-z "$UNSIGNED")
+t3() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-z "$UNSIGNED")
   out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready 123')"); rc=$?
   assert_deny "T3 unsigned author + gh pr ready denies" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T4: unrelated command → no fire (PASS)
-t4() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-w "$UNSIGNED")
+t4() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-w "$UNSIGNED")
   out=$(run_hook "$inc" "$(make_payload "$work" 'git status')"); rc=$?
   assert_pass "T4 non-gh-pr command does not fire" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T5: on main → fail-open PASS even with command match
-t5() { local t; t=$(mktemp -d); local work="$t/work" inc="$t/inc"; mkdir -p "$work" "$inc"
+t5() { local t; t=$(mktemp -d -p "$SUITE_TMP"); local work="$t/work" inc="$t/inc"; mkdir -p "$work" "$inc"
   git init -q --bare "$t/o.git"; init_git_repo "$work"
   echo b > "$work/f"; git -C "$work" add f
   GIT_AUTHOR_EMAIL="$UNSIGNED" git -C "$work" commit -q -m c
@@ -103,7 +143,7 @@ t5() { local t; t=$(mktemp -d); local work="$t/work" inc="$t/inc"; mkdir -p "$wo
 # T6 (#5192): a `git commit` whose MESSAGE documents `gh pr merge` must NOT
 # fire — even with an unsigned-author commit on the branch (which would deny if
 # the trigger grep ran on the raw command). The strip blanks the -m body first.
-t6() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-fp "$UNSIGNED")
+t6() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-fp "$UNSIGNED")
   out=$(run_hook "$inc" "$(make_payload "$work" $'git add . && git commit -m "ship note\ngh pr merge must not be hand-rolled\n"')"); rc=$?
   assert_pass "T6 commit-body gh pr merge does not fire (#5192)" "$inc" "$out" "$rc"; rm -rf "$t"; }
 

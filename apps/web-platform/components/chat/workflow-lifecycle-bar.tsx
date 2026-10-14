@@ -1,7 +1,9 @@
 "use client";
 
 import React from "react";
+import { Button } from "@/components/ui/button";
 import type { WorkflowLifecycleState } from "@/lib/chat-state-machine";
+import { workflowEndedBadge } from "@/lib/workflow-ended-copy";
 
 /**
  * Stage 4 (#2886) — WorkflowLifecycleBar component.
@@ -53,13 +55,14 @@ export function WorkflowLifecycleBar({
           ) : null}
           {onSwitchWorkflow !== undefined ? (
             <div className="ml-auto">
-              <button
+              <Button
+                variant="outlined"
                 type="button"
                 onClick={onSwitchWorkflow}
                 className="rounded-md border border-soleur-border-default px-2 py-1 text-xs text-soleur-text-secondary hover:border-soleur-border-emphasized"
               >
                 Switch workflow
-              </button>
+              </Button>
             </div>
           ) : null}
         </div>
@@ -82,20 +85,25 @@ export function WorkflowLifecycleBar({
                   : "bg-red-900/40 text-red-300"
               }`}
             >
-              {lifecycle.status}
+              {/* Status renders through lib/workflow-ended-copy.ts ›
+                  workflowEndedBadge (terse label register — the sentence
+                  copy overflows this pill). Styling still keys on the raw
+                  status (completed=emerald, rest=red). */}
+              {workflowEndedBadge(lifecycle.status).copy}
             </span>
             {lifecycle.summary ? (
               <span className="truncate text-xs text-soleur-text-secondary">{lifecycle.summary}</span>
             ) : null}
           </div>
           <div>
-            <button
+            <Button
+              variant="gold"
               type="button"
               onClick={onStartNewConversation}
               className="rounded-md bg-amber-600 px-3 py-1 text-xs text-soleur-text-on-accent hover:bg-amber-500"
             >
               Start new conversation
-            </button>
+            </Button>
           </div>
         </div>
       );

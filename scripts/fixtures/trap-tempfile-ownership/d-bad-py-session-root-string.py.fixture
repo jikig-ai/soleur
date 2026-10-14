@@ -1,0 +1,7 @@
+import os
+import tempfile
+
+
+def build():
+    base = os.environ.get("SOLEUR_SCRATCH_SESSION_ROOT", "")
+    return tempfile.mkdtemp(prefix="demo-", dir=base or None)

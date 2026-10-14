@@ -62,8 +62,15 @@ describe("Soak-Gated Follow-Through Enrollment Gate — presence & shape", () =>
     }
   });
 
-  test("extracts trackers via Ref/Tracks/Closes/Fixes and checks enrollment triad", () => {
-    expect(gateSection).toMatch(/Ref\|Tracks\|Closes\|Fixes/);
+  test("extracts trackers via Ref/Tracks ONLY — a Closes target is not a soak tracker", () => {
+    expect(gateSection).toMatch(/\(Ref\|Tracks\)/);
+    // REGRESSION PIN (#7278 / PR #7343). Including the closing keywords made the gate demand
+    // sweeper enrollment for the very issue the PR closes — unsatisfiable (the issue stops
+    // existing at merge, and the sweeper skips non-OPEN issues) and therefore unshippable for
+    // every PR that closes an issue while declaring a soak. The escape was effectively
+    // unreachable too: adding the override marker needs `gh pr edit`, which an agent naturally
+    // chains with `gh pr ready` — and the hook's matcher denies that whole tool call.
+    expect(gateSection).not.toMatch(/\(Ref\|Tracks\|Closes\|Fixes\)/);
     // Enrollment = follow-through label + directive + on-disk script.
     expect(gateSection).toContain("follow-through");
     expect(gateSection).toContain("soleur:followthrough");

@@ -1,0 +1,12 @@
+# Synthesized fixture (not a real workflow). Stands in for the real CLA producer:
+# a pull_request_target job whose name equals the required context. It must NOT
+# count as an ambiguous second producer for a context the synthetic covers.
+name: fixture cla
+on:
+  pull_request_target:
+  issue_comment:
+jobs:
+  cla-check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo fixture

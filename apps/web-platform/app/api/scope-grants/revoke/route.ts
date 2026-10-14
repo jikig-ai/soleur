@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isKnownActionClass } from "@/server/scope-grants/action-class-map";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -22,10 +23,8 @@ export async function POST(req: Request) {
   if (!valid) return rejectCsrf("api/scope-grants/revoke", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -65,7 +64,7 @@ export async function POST(req: Request) {
       feature: "scope-grants",
       op: "revoke_action_class",
       message: "revoke_action_class RPC failed",
-      extra: { userId: user.id, action_class: actionClass, reason },
+      extra: { userId, action_class: actionClass, reason },
     });
     return NextResponse.json({ error: "rpc_failed" }, { status: 500 });
   }

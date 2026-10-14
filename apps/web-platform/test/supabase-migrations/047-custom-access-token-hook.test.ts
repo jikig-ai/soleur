@@ -31,7 +31,7 @@ import path from "node:path";
 // at the bottom; they activate when TENANT_INTEGRATION_TEST=1 and a
 // live Doppler DATABASE_URL_POOLER is available (PR-B precedent).
 //
-// Plan: knowledge-base/project/plans/2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md §1.5/§1.6/§2.1
+// Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md §1.5/§1.6/§2.1
 // ADR: knowledge-base/engineering/architecture/decisions/ADR-033-runtime-jwt-signing-substrate.md
 
 const MIGRATION_PATH = path.resolve(

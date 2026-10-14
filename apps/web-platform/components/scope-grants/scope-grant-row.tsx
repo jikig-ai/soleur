@@ -9,8 +9,10 @@
 // selections do not commit until the POST returns. On failure, radio reverts
 // to last known good state.
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import {
   TRUST_TIER_COPY,
   type TrustTier,
@@ -48,57 +50,42 @@ export function ScopeGrantRow({
   );
   const [acked, setAcked] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
-  const isDirty = selectedTier !== committedTier;
-  const isAutoSelected = selectedTier === "auto";
-  // Disabled-submit invariant: any tier change requires submit; auto-tier
-  // additionally requires the acknowledgement checkbox.
-  const canSubmit =
-    !isPending &&
-    isDirty &&
-    selectedTier !== null &&
-    (!isAutoSelected || acked);
-
-  function onSelect(t: TrustTier) {
-    setSelectedTier(t);
-    setError(null);
-    if (t !== "auto") setAcked(false);
-  }
-
-  function onGrant() {
-    if (!selectedTier) return;
-    startTransition(async () => {
-      try {
-        const res = await fetch("/api/scope-grants/grant", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action_class: actionClass,
-            tier: selectedTier,
-          }),
-        });
-        if (!res.ok) {
-          setError(`Failed to save (${res.status})`);
-          // Pessimistic revert.
+  // One shared flag for grant/revoke — a pending write disables the whole
+  // row (fieldset + both buttons), same as the hand-rolled useTransition.
+  // Per-row granularity is preserved: each row instance owns its hook.
+  // asyncFn never throws — failures land on the local `error` surface.
+  const { run, pending: isPending } = usePendingAction(
+    async (op: "grant" | "revoke") => {
+      if (op === "grant") {
+        if (!selectedTier) return;
+        try {
+          const res = await fetch("/api/scope-grants/grant", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action_class: actionClass,
+              tier: selectedTier,
+            }),
+          });
+          if (!res.ok) {
+            setError(`Failed to save (${res.status})`);
+            // Pessimistic revert.
+            setSelectedTier(committedTier);
+            setAcked(false);
+            return;
+          }
+          setCommittedTier(selectedTier);
+          setAcked(false);
+          router.refresh();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Network error");
           setSelectedTier(committedTier);
           setAcked(false);
-          return;
         }
-        setCommittedTier(selectedTier);
-        setAcked(false);
-        router.refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Network error");
-        setSelectedTier(committedTier);
-        setAcked(false);
+        return;
       }
-    });
-  }
-
-  function onRevoke() {
-    startTransition(async () => {
       try {
         const res = await fetch("/api/scope-grants/revoke", {
           method: "POST",
@@ -119,8 +106,27 @@ export function ScopeGrantRow({
       } catch (e) {
         setError(e instanceof Error ? e.message : "Network error");
       }
-    });
+    },
+  );
+
+  const isDirty = selectedTier !== committedTier;
+  const isAutoSelected = selectedTier === "auto";
+  // Disabled-submit invariant: any tier change requires submit; auto-tier
+  // additionally requires the acknowledgement checkbox.
+  const canSubmit =
+    !isPending &&
+    isDirty &&
+    selectedTier !== null &&
+    (!isAutoSelected || acked);
+
+  function onSelect(t: TrustTier) {
+    setSelectedTier(t);
+    setError(null);
+    if (t !== "auto") setAcked(false);
   }
+
+  const onGrant = () => run("grant");
+  const onRevoke = () => run("revoke");
 
   const copy = ACTION_CLASS_COPY[actionClass];
 
@@ -147,14 +153,20 @@ export function ScopeGrantRow({
           </code>
         </div>
         {committedTier ? (
-          <button
+          // text-soleur-text-danger referenced a token absent from the @theme
+          // map (dead class — the button was never red). variant="danger" is
+          // the live destructive treatment.
+          <Button
+            variant="danger"
             type="button"
             onClick={onRevoke}
             disabled={isPending}
-            className="rounded-md px-3 py-1.5 text-xs text-soleur-text-danger hover:bg-soleur-bg-surface-2 disabled:opacity-50"
+            loading={isPending}
+            loadingLabel="Revoking"
+            className="rounded-md text-xs"
           >
             Revoke
-          </button>
+          </Button>
         ) : null}
       </header>
 
@@ -239,14 +251,20 @@ export function ScopeGrantRow({
           Cost disclosure: Soleur runs use your BYOK Anthropic key. You set the
           spending cap.
         </p>
-        <button
+        {/* bg-soleur-gold / text-soleur-bg-page reference tokens absent from
+            the @theme map (dead classes — the CTA rendered unstyled).
+            variant="gold" is the live gold-CTA treatment. */}
+        <Button
+          variant="gold"
           type="button"
           onClick={onGrant}
           disabled={!canSubmit}
-          className="rounded-md bg-soleur-gold px-4 py-2 text-sm font-medium text-soleur-bg-page hover:opacity-90 disabled:opacity-40"
+          loading={isPending}
+          loadingLabel="Saving"
+          className="rounded-md disabled:opacity-40"
         >
-          {isPending ? "Saving…" : committedTier ? "Update" : "Authorize"}
-        </button>
+          {committedTier ? "Update" : "Authorize"}
+        </Button>
       </footer>
     </div>
   );

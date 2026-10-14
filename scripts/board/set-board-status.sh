@@ -114,7 +114,7 @@ recompute_issue() {
   state=$(jq -r '.data.node.state // "OPEN"' <<<"$resp")
   if [[ "$state" == "CLOSED" ]]; then set_issue "$issue_id" "$STATUS_DONE"; return; fi
   labels=$(jq -r '.data.node.labels.nodes[]?.name' <<<"$resp")
-  has() { printf '%s\n' "$labels" | grep -qx "$1"; }
+  has() { grep -qx "$1" <<<"$labels"; }
   if has "blocked"; then set_issue "$issue_id" "$STATUS_BLOCKED"; return; fi
   if has "pending"; then set_issue "$issue_id" "$STATUS_PENDING"; return; fi
   # Open linked PR (cross-reference) decides In review vs In progress.

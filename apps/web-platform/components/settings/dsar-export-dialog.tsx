@@ -12,6 +12,8 @@
 // for re-issue flows.
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface DsarExportDialogProps {
   /** Controlled open state — lifted so a Re-request button on an
@@ -35,12 +37,13 @@ export function DsarExportDialog({
   hasActiveJob,
 }: DsarExportDialogProps) {
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleConfirm() {
+  // Local `error` state (not the hook's slot): Cancel must be able to clear
+  // the visible message on close, which the hook's internal slot cannot do.
+  // asyncFn never throws.
+  const { run: handleConfirm, pending: busy } = usePendingAction(async () => {
     if (!password) return;
-    setBusy(true);
     setError(null);
     try {
       await onConfirmPassword(password);
@@ -48,22 +51,20 @@ export function DsarExportDialog({
       setPassword("");
     } catch (err) {
       setError((err as Error).message);
-    } finally {
-      setBusy(false);
     }
-  }
+  });
 
   if (!isOpen) {
     return (
-      <button
+      <Button
+        variant="outlined"
         type="button"
         onClick={onOpen}
         disabled={hasActiveJob}
         aria-disabled={hasActiveJob}
-        className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
       >
         Download my data
-      </button>
+      </Button>
     );
   }
 
@@ -123,15 +124,21 @@ export function DsarExportDialog({
       )}
 
       <div className="flex flex-wrap gap-3">
-        <button
+        {/* `bg-soleur-button-primary` referenced a token that does not exist in
+            the @theme map — this button rendered unstyled. variant="gold" is
+            the live primary CTA treatment. */}
+        <Button
+          variant="gold"
           type="button"
           onClick={handleConfirm}
           disabled={busy || password.length === 0}
-          className="rounded-lg bg-soleur-button-primary px-4 py-2 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-button-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          loading={busy}
+          loadingLabel="Preparing"
         >
-          {busy ? "Preparing…" : "Continue"}
-        </button>
-        <button
+          Continue
+        </Button>
+        <Button
+          variant="ghost"
           type="button"
           onClick={() => {
             onClose();
@@ -139,10 +146,10 @@ export function DsarExportDialog({
             setError(null);
           }}
           disabled={busy}
-          className="rounded-lg px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          className="hover:text-soleur-text-primary"
         >
           Cancel
-        </button>
+        </Button>
       </div>
 
       <p className="mt-4 text-xs text-soleur-text-muted">

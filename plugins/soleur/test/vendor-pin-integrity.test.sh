@@ -24,6 +24,44 @@ PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh
 SKILL_DIR="$REPO_ROOT/plugins/soleur/skills/gdpr-gate"
 LEFTHOOK="$REPO_ROOT/lefthook.yml"
 
+# --- Instrument self-test (Guard 1 harness row i) ---------------------------
+# Drive BOTH assertion helpers once each and refuse to continue unless both
+# counters actually moved. An assertion-count FLOOR cannot do this job: a
+# stubbed `assert_eq() { PASS=$((PASS+1)); }` still increments, so the floor
+# is satisfied by construction and the suite reports a full green having
+# verified nothing. Measured during #7710 — that exact stub survived both a
+# 27-assertion suite and a 39-assertion floor.
+#
+# Reported with printf + exit 1 rather than through pass/fail, per ADR-193:
+# a backstop must not be routed through the instrument it backstops.
+_selftest() {
+  local p0="$PASS" f0="$FAIL"
+  # EVERY helper this suite asserts through, not just the first one. Measured
+  # during #7710: a self-test driving only assert_eq left a neutered
+  # assert_contains fully undetected, and this suite asserts through both.
+  assert_eq       "x" "x"   "instrument self-test — assert_eq must record a pass"
+  assert_eq       "x" "y"   "instrument self-test — assert_eq must record a failure (EXPECTED FAIL above)"
+  assert_contains "xy" "x"  "instrument self-test — assert_contains must record a pass"
+  assert_contains "xy" "zz" "instrument self-test — assert_contains must record a failure (EXPECTED FAIL above)"
+  if (( PASS != p0 + 2 )); then
+    printf 'INSTRUMENT SELF-TEST FAILED: helpers did not record 2 passes (PASS %s -> %s).\n' "$p0" "$PASS" >&2
+    printf 'An assertion helper is neutered; every result below would be meaningless.\n' >&2
+    exit 1
+  fi
+  if (( FAIL != f0 + 2 )); then
+    printf 'INSTRUMENT SELF-TEST FAILED: helpers did not record 2 failures (FAIL %s -> %s).\n' "$f0" "$FAIL" >&2
+    printf 'A helper that cannot fail certifies nothing. Refusing to report a green run.\n' >&2
+    exit 1
+  fi
+  # Both counters moved; discard the self-test's own bookkeeping so it does
+  # not pollute the suite result.
+  PASS="$p0"
+  FAIL="$f0"
+  printf '  (instrument self-test OK — assert_eq and assert_contains can each both pass and fail)\n'
+}
+_selftest
+echo ""
+
 echo "=== vendor-pin-integrity tests ==="
 echo ""
 
@@ -44,6 +82,19 @@ set +e
 RC=$?
 set -e
 assert_eq "0" "$RC" "exit 0 when all lifted files match NOTICE blob SHAs"
+echo ""
+
+# --- TS1b: same run under a hook's inherited git environment ---
+# A pre-commit hook exports GIT_DIR (and GIT_INDEX_FILE in a worktree). With
+# GIT_DIR set, `git -C <dir> rev-parse --show-toplevel` answers <dir> itself, so
+# an unstripped root resolution reported every file "missing from working tree".
+echo "TS1b: hook-inherited GIT_DIR/GIT_INDEX_FILE → still exit 0 (#8150)"
+HOOK_GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir)"
+set +e
+( cd "$REPO_ROOT" && GIT_DIR="$HOOK_GIT_DIR" GIT_INDEX_FILE="$HOOK_GIT_DIR/index" bash "$INTEGRITY" "${LIFTED_PATHS[@]}" >/dev/null 2>&1 )
+RC=$?
+set -e
+assert_eq "0" "$RC" "exit 0 with GIT_DIR inherited from a hook"
 echo ""
 
 # --- TS2: SHA-mismatch fixture (mocked NOTICE) → exit 1 ---
@@ -147,7 +198,10 @@ echo ""
 # --no-filters (TR1; line-ending normalisation otherwise diverges from
 # upstream blob SHAs).
 echo "TS5: script uses 'git hash-object --no-filters' (TR1)"
-if grep -q 'git hash-object --no-filters' "$INTEGRITY"; then
+# Anchored on the CALL, not the bare literal: the phrase also appears in the
+# script's header comment, so a bare grep passes with the flag stripped from
+# the actual invocation (measured during #7710 review).
+if grep -qE '^[[:space:]]*actual=.*git hash-object --no-filters' "$INTEGRITY"; then
   echo "  PASS: --no-filters flag present"
   PASS=$((PASS + 1))
 else
@@ -156,4 +210,700 @@ else
 fi
 echo ""
 
-print_results
+# ---------------------------------------------------------------------------
+# Guard 1 — the vendored-pin registry (#7710)
+#
+# Property: every file under the gate's `references/**` carries a pin
+# appropriate to its provenance — upstream-derived files in `lifted-files`,
+# Soleur-authored files in `soleur-authored` — and no file appears in the
+# wrong list or in neither.
+#
+# The chokepoint is THIS WALK, not vendor-pin-integrity.sh: the script
+# iterates only over its arguments and never reads the tree, so the
+# symmetric-difference property is bought here and lefthook/CI do not reach
+# it through the script.
+# ---------------------------------------------------------------------------
+
+# Build a fixture NOTICE from a lifted-files block and a soleur-authored block.
+# Kept as a helper so each mutation case differs only in the registry content.
+make_notice() {
+  # $1 = destination path, $2 = lifted-files body, $3 = soleur-authored body
+  cat > "$1" <<NOTICE_EOF
+---
+upstream: github.com/goSprinto/compliance-skills
+pinned-commit: 7b58d68461cb1fc033a063e34cc9de63d0b4144b
+last-verified: 2026-05-10
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+$2
+soleur-authored:
+$3
+---
+
+# NOTICE (test fixture)
+NOTICE_EOF
+}
+
+# --- TS6: reverse parity — every references/** file is in exactly one list ---
+# Mutation 1 in the Guard Contract: a file listed in NEITHER registry must go
+# RED. This is the direction nothing asserted before #7710, and it is why
+# three files sat unpinned for 117 days.
+echo "TS6: disk(references/**) == lifted-files U soleur-authored (symmetric difference empty)"
+
+DISK_FILES=()
+while IFS= read -r f; do
+  DISK_FILES+=("${f#"$SKILL_DIR"/}")
+done < <(find "$SKILL_DIR/references" -type f -name '*.md' | sort)
+
+REGISTRY_FILES=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  REGISTRY_FILES+=("${line%%:*}")
+done < <(bash "$PARSER" lifted-files; bash "$PARSER" soleur-authored)
+
+# Own dispatch (mutation 5): `0 checked, 0 failed` must not read as success.
+# A walk that yields nothing is a broken harness, not a clean registry.
+if (( ${#DISK_FILES[@]} < 8 )); then
+  echo "  FAIL: disk walk yielded ${#DISK_FILES[@]} files under references/ (expected >= 8) — harness defect, not a clean registry"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: disk walk yielded ${#DISK_FILES[@]} files under references/"
+  PASS=$((PASS + 1))
+fi
+
+if (( ${#REGISTRY_FILES[@]} < 8 )); then
+  echo "  FAIL: registry union yielded ${#REGISTRY_FILES[@]} entries (expected >= 8) — parser or NOTICE defect"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: registry union yielded ${#REGISTRY_FILES[@]} entries"
+  PASS=$((PASS + 1))
+fi
+
+UNPINNED=()
+for d in "${DISK_FILES[@]}"; do
+  found=0
+  for r in "${REGISTRY_FILES[@]}"; do
+    [[ "$d" == "$r" ]] && { found=1; break; }
+  done
+  (( found )) || UNPINNED+=("$d")
+done
+assert_eq "" "${UNPINNED[*]:-}" "no references/ file is absent from both registries"
+
+ORPHANED=()
+for r in "${REGISTRY_FILES[@]}"; do
+  found=0
+  for d in "${DISK_FILES[@]}"; do
+    [[ "$d" == "$r" ]] && { found=1; break; }
+  done
+  (( found )) || ORPHANED+=("$r")
+done
+assert_eq "" "${ORPHANED[*]:-}" "no registry entry names a file absent from disk"
+echo ""
+
+# --- TS7: no file appears in BOTH registries (provenance falsification) ---
+# Mutation 2: moving a Soleur-authored file into lifted-files attests
+# goSprinto MIT provenance for Soleur's own writing. It must be REJECTED,
+# not merely un-required.
+echo "TS7: no file appears in both lifted-files and soleur-authored"
+BOTH=()
+while IFS= read -r lifted; do
+  [[ -z "$lifted" ]] && continue
+  lp="${lifted%%:*}"
+  while IFS= read -r auth; do
+    [[ -z "$auth" ]] && continue
+    ap="${auth%%:*}"
+    [[ "$lp" == "$ap" ]] && BOTH+=("$lp")
+  done < <(bash "$PARSER" soleur-authored)
+done < <(bash "$PARSER" lifted-files)
+assert_eq "" "${BOTH[*]:-}" "lifted-files and soleur-authored are disjoint"
+echo ""
+
+# --- TS8: Soleur-authored files are integrity-checked, not rejected ---
+# AC4 first half. Before #7710 these three exited 1 as "silent local
+# addition", which is why the documented v2->v3 lifecycle of
+# legal-consent.md could not be committed without --no-verify.
+echo "TS8: Soleur-authored reference files pass the integrity check"
+AUTHORED_PATHS=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  AUTHORED_PATHS+=("$SKILL_DIR/${line%%:*}")
+done < <(bash "$PARSER" soleur-authored)
+
+if (( ${#AUTHORED_PATHS[@]} == 0 )); then
+  echo "  FAIL: soleur-authored list is empty — nothing was checked"
+  FAIL=$((FAIL + 1))
+else
+  set +e
+  ( cd "$REPO_ROOT" && bash "$INTEGRITY" "${AUTHORED_PATHS[@]}" >/dev/null 2>&1 )
+  RC=$?
+  set -e
+  assert_eq "0" "$RC" "exit 0 for ${#AUTHORED_PATHS[@]} Soleur-authored files with matching SHAs"
+fi
+echo ""
+
+# --- TS9: mismatched Soleur-authored SHA is rejected, and named as such ---
+# AC4 second half. The message must name the Soleur-authored list rather
+# than "silent local addition" — a contributor who edits legal-consent.md
+# is following a documented lifecycle, not smuggling in a vendored file.
+echo "TS9: mismatched soleur-authored SHA -> exit 1, message names the right list"
+TMP_TS9="$(mktemp -d -t vpi-ts9.XXXXXXXX)"
+assert_fixture_dir "$TMP_TS9"
+trap 'rm -rf "$TMP_TS9"' EXIT
+
+make_notice "$TMP_TS9/NOTICE" \
+"  - path: references/fields.md
+    upstream-path: pii-detector/patterns/fields.md
+    upstream-blob-sha: c1bb748fe00a53b283efe66ec937fa39437d2efc
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/fields.md")
+    status: active-eu-extended" \
+"  - path: references/non-negotiables.md
+    local-blob-sha: 0000000000000000000000000000000000000000
+    status: soleur-authored"
+
+set +e
+STDERR=$( cd "$REPO_ROOT" && NOTICE_FILE="$TMP_TS9/NOTICE" bash "$INTEGRITY" \
+  "$SKILL_DIR/references/non-negotiables.md" 2>&1 >/dev/null )
+RC=$?
+set -e
+assert_eq "1" "$RC" "exit 1 on soleur-authored blob-sha mismatch"
+assert_contains "$STDERR" "non-negotiables.md" "stderr names the mismatched file"
+assert_contains "$STDERR" "soleur-authored" "stderr names the soleur-authored list"
+echo ""
+
+# --- TS10: second member — the walk must not stop at the first compliant file
+# Mutation 4: file A compliant, file B not, A ordered first.
+echo "TS10: a compliant first argument does not mask a non-compliant second"
+set +e
+STDERR=$( cd "$REPO_ROOT" && NOTICE_FILE="$TMP_TS9/NOTICE" bash "$INTEGRITY" \
+  "$SKILL_DIR/references/fields.md" "$SKILL_DIR/references/non-negotiables.md" 2>&1 >/dev/null )
+RC=$?
+set -e
+assert_eq "1" "$RC" "exit 1 when only the SECOND argument mismatches"
+assert_contains "$STDERR" "non-negotiables.md" "stderr names the second (failing) file"
+echo ""
+
+# --- TS11: entry order is not significant (must-PASS non-canonical input) ---
+# Harness row (ii). Reordering ENTRIES is permitted; reordering KEYS within
+# an entry is not, since _emit_files hard-codes `- path:` as each record's
+# first key. Quoted scalars are deliberately NOT used as the variant here —
+# notice-frontmatter.sh strips whitespace but not quotes, so a quoted SHA
+# would emit the quotes and the fix would loosen an injection guard.
+echo "TS11: reordering registry ENTRIES does not change the verdict"
+make_notice "$TMP_TS9/NOTICE-reordered" \
+"  - path: references/leakage-vectors.md
+    upstream-path: pii-detector/rules/leakage-vectors.md
+    upstream-blob-sha: 15a46e529e789930149f4b9bce875bfe5c53e478
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/leakage-vectors.md")
+    status: active-verbatim
+  - path: references/fields.md
+    upstream-path: pii-detector/patterns/fields.md
+    upstream-blob-sha: c1bb748fe00a53b283efe66ec937fa39437d2efc
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/fields.md")
+    status: active-eu-extended" \
+"  - path: references/legal-consent.md
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/legal-consent.md")
+    status: soleur-authored
+  - path: references/non-negotiables.md
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/non-negotiables.md")
+    status: soleur-authored"
+
+set +e
+( cd "$REPO_ROOT" && NOTICE_FILE="$TMP_TS9/NOTICE-reordered" bash "$INTEGRITY" \
+  "$SKILL_DIR/references/fields.md" \
+  "$SKILL_DIR/references/leakage-vectors.md" \
+  "$SKILL_DIR/references/non-negotiables.md" \
+  "$SKILL_DIR/references/legal-consent.md" >/dev/null 2>&1 )
+RC=$?
+set -e
+assert_eq "0" "$RC" "exit 0 with entries in non-canonical order"
+echo ""
+
+# --- TS12: the mismatch message names a mechanism that exists (AC18) ---
+# It told a blocked contributor to "run the vendor-drift workflow", which has
+# not existed since #4483. It is the only exit they get at the moment their
+# commit is refused.
+echo "TS12: mismatch guidance does not name the deleted vendor-drift workflow"
+if grep -q 'vendor-drift workflow' "$INTEGRITY"; then
+  echo "  FAIL: mismatch message still points at the workflow deleted in #4483"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: mismatch message does not name the deleted workflow"
+  PASS=$((PASS + 1))
+fi
+echo ""
+
+# --- TS13: lefthook glob reaches every registry path, legacy/ included ---
+# The pre-#7710 parity check (TS4) walked lifted-files only and matched two
+# single-level patterns. Adding references/legacy/** to a registry without
+# adding it to the glob would leave that file ungated while appearing pinned.
+echo "TS13: lefthook glob covers every registry path including references/legacy/"
+UNGLOBBED=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  rel_path="${line%%:*}"
+  # `references/*.md` reaches every depth: lefthook's gobwas `*` crosses `/`
+  # (measured, lefthook 2.1.6 — see the lefthook.yml comment). This mirrors
+  # that semantic rather than the intuitive single-level one, which is what an
+  # earlier revision of this test encoded.
+  if [[ ! "$rel_path" =~ ^references/.*\.md$ ]]; then
+    UNGLOBBED+=("$rel_path")
+  fi
+done < <(bash "$PARSER" lifted-files; bash "$PARSER" soleur-authored)
+assert_eq "" "${UNGLOBBED[*]:-}" "every registry path matches a lefthook glob pattern"
+
+# One subtree-covering pattern is what the gate needs. Asserting a
+# per-subdirectory list would re-encode the wrong glob model and would fail
+# the moment someone correctly removes the redundant `layers/` entry.
+SUBTREE_GLOB="plugins/soleur/skills/gdpr-gate/references/*.md"
+if grep -qF -- "\"$SUBTREE_GLOB\"" "$LEFTHOOK"; then
+  echo "  PASS: lefthook declares subtree-covering glob $SUBTREE_GLOB"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: lefthook is missing subtree-covering glob $SUBTREE_GLOB"
+  FAIL=$((FAIL + 1))
+fi
+echo ""
+
+# --- TS14: provenance oracle — the attribution header decides the list ---
+# Guard 1 mutation 2. TS7 asserts the two registries are DISJOINT, which is
+# necessary and NOT sufficient: moving a Soleur-authored file OUT of
+# soleur-authored and INTO lifted-files keeps them disjoint, so an
+# intersection check certifies a provenance falsification as clean. Measured
+# during #7710 — that mutation survived a 27-assertion suite.
+#
+# The oracle is the repo's own policy, content-vendoring.md §3 step 2: every
+# lifted file MUST start with the attribution header on line 1. A file
+# without it is not upstream-derived, whatever the registry claims; a
+# Soleur-authored file WITH it would be claiming MIT provenance for Soleur's
+# own writing. Both directions are asserted, because a one-directional check
+# is how the wrong-list case survives.
+echo "TS14: attribution header presence matches the registry a file is listed in"
+ATTRIB='<!-- Adapted from gosprinto/compliance-skills (MIT) — see NOTICE -->'
+
+LIFTED_CHECKED=0
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  rel="${line%%:*}"
+  LIFTED_CHECKED=$((LIFTED_CHECKED + 1))
+  if [[ "$(head -1 "$SKILL_DIR/$rel")" == "$ATTRIB" ]]; then
+    echo "  PASS: $rel (lifted-files) carries the upstream attribution header"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $rel is in lifted-files but line 1 is not the attribution header — it is not upstream-derived"
+    FAIL=$((FAIL + 1))
+  fi
+done < <(bash "$PARSER" lifted-files)
+
+AUTHORED_CHECKED=0
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  rel="${line%%:*}"
+  AUTHORED_CHECKED=$((AUTHORED_CHECKED + 1))
+  if [[ "$(head -1 "$SKILL_DIR/$rel")" == "$ATTRIB" ]]; then
+    echo "  FAIL: $rel is in soleur-authored but carries the upstream attribution header — provenance falsification"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: $rel (soleur-authored) carries no upstream attribution header"
+    PASS=$((PASS + 1))
+  fi
+done < <(bash "$PARSER" soleur-authored)
+
+# Own dispatch: both loops are driven by the parser, so an empty registry
+# would run zero iterations and report nothing rather than failing.
+#
+# The failing arm EXITS, it does not tally (ADR-193). Tallying routes this
+# floor through the same counters it exists to backstop, so the block itself
+# still exits 0 — which is precisely what `scripts/guard-vacuity-floor.test.sh`
+# measures, and it named this suite as the one covered file scoring NO_FIRE.
+# A broken registry read is a harness fault, not a test result to be counted.
+if (( LIFTED_CHECKED >= 8 && AUTHORED_CHECKED >= 3 )); then
+  echo "  PASS: provenance oracle examined $LIFTED_CHECKED lifted + $AUTHORED_CHECKED authored entries"
+  PASS=$((PASS + 1))
+else
+  # The wording is load-bearing, not prose. `guard-vacuity-floor.test.sh`
+  # classifies a firing floor by grepping stderr for a sentinel vocabulary,
+  # WITHOUT `-i` — `anti-vacuity`, `vacuit`, `[FAIL]:`, `assertions ran` are all
+  # matched lowercase. An all-caps "ANTI-VACUITY FLOOR TRIPPED" matches none of
+  # them, so a correctly-firing floor was scored CONSTRUCTION (the guard cannot
+  # tell it from a mutant that crashed). Measured on this exact line.
+  printf '[FAIL]: anti-vacuity floor tripped — provenance oracle examined %d lifted + %d authored entries (expected >= 8 and >= 3); the registry read is broken, this is NOT a pass.\n' \
+    "$LIFTED_CHECKED" "$AUTHORED_CHECKED" >&2
+  exit 1
+fi
+echo ""
+
+# --- TS15: multi-bundle — legal-generate via SKILL_PREFIX/NOTICE_FILE -----
+# The second vendored bundle (#8122) runs the SAME script parameterized by
+# env, not a forked copy (ADR-095 shared-engine precedent). These cases pin
+# that parameterization end to end: registry re-rooting, lefthook stanza
+# coverage, a corrupted pin naming the file, and the symmetric-difference
+# walk over the second bundle's references tree.
+echo "TS15: legal-generate bundle — env-parameterized integrity over its own NOTICE"
+LEGAL_DIR="$REPO_ROOT/plugins/soleur/skills/legal-generate"
+LEGAL_NOTICE_FILE="$LEGAL_DIR/NOTICE"
+assert_file_exists "$LEGAL_NOTICE_FILE" "legal-generate NOTICE exists"
+
+# TS15a: every lifted file passes under the env overrides.
+LG_PATHS=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  LG_PATHS+=("$LEGAL_DIR/${line%%:*}")
+done < <(NOTICE_FILE="$LEGAL_NOTICE_FILE" bash "$PARSER" lifted-files)
+
+if (( ${#LG_PATHS[@]} < 12 )); then
+  printf '[FAIL]: anti-vacuity floor tripped — legal-generate registry yielded %d lifted paths (expected >= 12); the registry read is broken, this is NOT a pass.\n' "${#LG_PATHS[@]}" >&2
+  exit 1
+fi
+
+set +e
+( cd "$REPO_ROOT" && SKILL_PREFIX="plugins/soleur/skills/legal-generate" \
+    NOTICE_FILE="$LEGAL_NOTICE_FILE" bash "$INTEGRITY" "${LG_PATHS[@]}" >/dev/null 2>&1 )
+RC=$?
+set -e
+assert_eq "0" "$RC" "exit 0 for legal-generate bundle under SKILL_PREFIX/NOTICE_FILE overrides"
+echo ""
+
+# TS15b: a corrupted local-blob-sha fails naming the file (second bundle is
+# not silently weaker than the first).
+echo "TS15b: corrupted legal-generate pin → exit 1 naming the file"
+TMP_LG_NOTICE="$(mktemp)"
+sed '0,/local-blob-sha: [0-9a-f]\{40\}/s//local-blob-sha: 0000000000000000000000000000000000000000/' \
+  "$LEGAL_NOTICE_FILE" > "$TMP_LG_NOTICE"
+set +e
+STDERR=$( ( cd "$REPO_ROOT" && SKILL_PREFIX="plugins/soleur/skills/legal-generate" \
+    NOTICE_FILE="$TMP_LG_NOTICE" bash "$INTEGRITY" \
+    "$LEGAL_DIR/references/templates/advisor-agreement/template.md" ) 2>&1 1>/dev/null )
+RC=$?
+set -e
+assert_eq "1" "$RC" "exit 1 on corrupted legal-generate pin"
+assert_contains "$STDERR" "advisor-agreement/template.md" "stderr names the corrupted legal-generate file"
+rm -f "$TMP_LG_NOTICE"
+echo ""
+
+# TS15c: symmetric-difference walk — disk(references/**) == lifted ∪ soleur-authored
+# for the second bundle too (its soleur-authored block is an explicit empty
+# list; the walk must still close).
+echo "TS15c: legal-generate disk(references/**) == lifted-files U soleur-authored"
+LG_DISK=()
+while IFS= read -r f; do
+  LG_DISK+=("${f#"$LEGAL_DIR"/}")
+done < <(find "$LEGAL_DIR/references" -type f -name '*.md' | sort)
+
+LG_REG=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  LG_REG+=("${line%%:*}")
+done < <(NOTICE_FILE="$LEGAL_NOTICE_FILE" bash "$PARSER" lifted-files; \
+         NOTICE_FILE="$LEGAL_NOTICE_FILE" bash "$PARSER" soleur-authored)
+
+if (( ${#LG_DISK[@]} < 12 )); then
+  printf '[FAIL]: anti-vacuity floor tripped — legal-generate disk walk yielded %d files (expected >= 12); harness defect, not a clean registry.\n' "${#LG_DISK[@]}" >&2
+  exit 1
+fi
+
+LG_DIFF=$(diff <(printf '%s\n' "${LG_DISK[@]}") <(printf '%s\n' "${LG_REG[@]}" | sort -u) || true)
+assert_eq "" "$LG_DIFF" "legal-generate symmetric difference is empty"
+echo ""
+
+# TS15d: the legal-generate lefthook stanza exists and covers the bundle.
+echo "TS15d: lefthook.yml declares the legal-generate integrity stanza"
+if grep -qE '^[[:space:]]+vendor-pin-integrity-legal-generate:' "$LEFTHOOK"; then
+  echo "  PASS: lefthook.yml has vendor-pin-integrity-legal-generate stanza"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: lefthook.yml is missing vendor-pin-integrity-legal-generate"
+  FAIL=$((FAIL + 1))
+fi
+for pat in '"plugins/soleur/skills/legal-generate/references/**"' '"plugins/soleur/skills/legal-generate/NOTICE"'; do
+  if grep -qF -- "$pat" "$LEFTHOOK"; then
+    echo "  PASS: lefthook glob declares $pat"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: lefthook glob is missing $pat"
+    FAIL=$((FAIL + 1))
+  fi
+done
+echo ""
+
+# ---------------------------------------------------------------------------
+# Guard 4 — the --verify-upstream binding check (#8181)
+#
+# Property: every NOTICE upstream-blob-sha equals the sha the Contents API
+# reports for upstream-path AT pinned-commit — path AND commit AND blob bound
+# in one call. The pre-#8181 check fetched `git/blobs/<sha>`, which proves
+# only that the object exists SOMEWHERE in the upstream store: a NOTICE
+# pinning a real blob under the wrong path passed while attesting content
+# upstream never published at that path.
+#
+# The gh stub below answers BOTH surfaces on purpose:
+#   contents/<path>?ref=<ref> — the new binding oracle, resolved per
+#     (path, ref) pair from a lookup table ("<path>|<ref>|<sha>" lines).
+#   git/blobs/<sha>           — the old existence oracle, KEPT so a reverted
+#     implementation still sees the blob-elsewhere fixture's sha as real:
+#     under the old check that fixture is GREEN, under the binding check it
+#     is RED. That asymmetry is what makes TS16b a mutation discriminator.
+# ---------------------------------------------------------------------------
+
+echo "TS16: --verify-upstream binds upstream-path + pinned-commit + blob (Guard 4, #8181)"
+
+TMP_TS16="$(mktemp -d -t vpi-ts16.XXXXXXXX)"
+assert_fixture_dir "$TMP_TS16"
+GHSTUB_DIR="$TMP_TS16/gh-stub"
+mkdir -p "$GHSTUB_DIR"
+
+cat > "$GHSTUB_DIR/gh" <<'STUB_EOF'
+#!/usr/bin/env bash
+# gh test double for --verify-upstream. See suite header for the two-surface
+# contract. $GH_STUB_TABLE holds "<path>|<ref>|<sha>" lines. The ref may
+# arrive inline (`contents/<p>?ref=<r>`) or as a `-f ref=<r>` field arg —
+# both are accepted so the stub discriminates the binding, not the syntax.
+#
+# METHOD SEMANTICS mirror real gh: a `-f` field with no explicit `-X GET`
+# makes gh POST, and POST on the contents endpoint 404s (measured on #8185
+# CI — the pre-fix run failed every binding). The stub reproduces that so
+# dropping `-X GET` turns the whole TS16 suite red.
+set -u
+if [[ "${1:-}" != "api" ]]; then
+  echo "gh stub: unhandled subcommand '$*'" >&2
+  exit 1
+fi
+shift
+url=""; ref=""; method=""; saw_field=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -f|--field)
+      saw_field=1
+      [[ "${2:-}" == ref=* ]] && ref="${2#ref=}"
+      shift 2 ;;
+    -X|--method)
+      method="$2"; shift 2 ;;
+    --jq|-H|--header)
+      shift 2 ;;
+    -*)
+      shift ;;
+    *)
+      url="$1"; shift ;;
+  esac
+done
+# gh defaults to POST when -f fields are present; contents only serves GET.
+if [[ "$saw_field" == 1 && "$method" != "GET" && "$url" == repos/*/contents/* ]]; then
+  exit 1
+fi
+case "$url" in
+  repos/*/contents/*)
+    path="${url#*contents/}"; path="${path%%\?*}"
+    [[ "$url" == *"?ref="* ]] && ref="${url##*ref=}"
+    while IFS='|' read -r p r s; do
+      if [[ "$p" == "$path" && "$r" == "$ref" ]]; then
+        printf '%s\n' "$s"
+        exit 0
+      fi
+    done < "$GH_STUB_TABLE"
+    # (path, ref) absent — the 404 arm.
+    exit 1
+    ;;
+  repos/*/git/blobs/*)
+    sha="${url##*/}"
+    while IFS='|' read -r _p _r s; do
+      [[ "$s" == "$sha" ]] && exit 0
+    done < "$GH_STUB_TABLE"
+    exit 1
+    ;;
+  *)
+    echo "gh stub: unexpected api url '$url'" >&2
+    exit 1
+    ;;
+esac
+STUB_EOF
+chmod +x "$GHSTUB_DIR/gh"
+
+PIN_A="1111111111111111111111111111111111111111"
+PIN_B="2222222222222222222222222222222222222222"
+SHA_ALPHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+SHA_BETA="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+SHA_OTHER="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+SHA_MOVED="9999999999999999999999999999999999999999"
+
+# What upstream actually serves: at PIN_A alpha->SHA_ALPHA, beta->SHA_BETA,
+# other->SHA_OTHER; at PIN_B alpha->SHA_MOVED (file changed), beta unchanged.
+# The `not-a-sha` row is load-bearing for TS16e: it lets the stub ANSWER a
+# query for the malformed ref, so a missing pinned-commit validation would
+# read green instead of merely 404ing — the mutation arm is real.
+cat > "$TMP_TS16/table" <<EOF
+rules/alpha.md|$PIN_A|$SHA_ALPHA
+rules/beta.md|$PIN_A|$SHA_BETA
+rules/other.md|$PIN_A|$SHA_OTHER
+rules/alpha.md|$PIN_B|$SHA_MOVED
+rules/beta.md|$PIN_B|$SHA_BETA
+rules/alpha.md|not-a-sha|$SHA_ALPHA
+EOF
+
+make_verify_notice() {
+  # $1 = destination, $2 = pinned-commit, $3 = lifted-files body
+  cat > "$1" <<NOTICE_EOF
+---
+upstream: github.com/acme/widgets
+pinned-commit: $2
+last-verified: 2026-09-01
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+$3
+---
+
+# NOTICE (verify-upstream test fixture)
+NOTICE_EOF
+}
+
+run_verify() {
+  # $1 = NOTICE fixture path. Prints combined output; returns script rc.
+  env NOTICE_FILE="$1" GH_STUB_TABLE="$TMP_TS16/table" \
+    PATH="$GHSTUB_DIR:$PATH" bash "$INTEGRITY" --verify-upstream 2>&1
+}
+
+# TS16a — happy path: every record's path at pinned-commit resolves to the
+# pinned blob.
+make_verify_notice "$TMP_TS16/NOTICE-ok" "$PIN_A" \
+"  - path: references/alpha.md
+    upstream-path: rules/alpha.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim
+  - path: references/beta.md
+    upstream-path: rules/beta.md
+    upstream-blob-sha: $SHA_BETA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-ok")
+RC=$?
+set -e
+assert_eq "0" "$RC" "valid path/commit/blob bindings pass --verify-upstream"
+assert_contains "$OUT" "verified" "success message printed on clean binding"
+
+# TS16b — mutation 1: NOTICE pins a REAL blob that lives elsewhere in the
+# upstream store (rules/other.md's sha) under rules/beta.md's path. The old
+# git/blobs existence check passes this fixture; the binding check must not.
+make_verify_notice "$TMP_TS16/NOTICE-elsewhere" "$PIN_A" \
+"  - path: references/alpha.md
+    upstream-path: rules/alpha.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim
+  - path: references/beta.md
+    upstream-path: rules/beta.md
+    upstream-blob-sha: $SHA_OTHER
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-elsewhere")
+RC=$?
+set -e
+assert_eq "1" "$RC" "blob existing ELSEWHERE but not at upstream-path fails"
+assert_contains "$OUT" "rules/beta.md" "stderr names the misbound path"
+assert_contains "$OUT" "binding" "stderr identifies the failure as a binding mismatch"
+
+# TS16c — mutation 3: correct path, wrong pinned-commit. alpha exists at
+# PIN_B but resolves to a different blob (the file changed between commits).
+make_verify_notice "$TMP_TS16/NOTICE-wrongcommit" "$PIN_B" \
+"  - path: references/alpha.md
+    upstream-path: rules/alpha.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim
+  - path: references/beta.md
+    upstream-path: rules/beta.md
+    upstream-blob-sha: $SHA_BETA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-wrongcommit")
+RC=$?
+set -e
+assert_eq "1" "$RC" "correct path at a DIFFERENT commit fails the binding"
+assert_contains "$OUT" "rules/alpha.md" "stderr names the file whose binding moved"
+
+# TS16d — mutation 3 second arm: the path does not exist at pinned-commit at
+# all (contents 404). Fail closed, not skip.
+make_verify_notice "$TMP_TS16/NOTICE-missing" "$PIN_A" \
+"  - path: references/gone.md
+    upstream-path: rules/gone.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-missing")
+RC=$?
+set -e
+assert_eq "1" "$RC" "path absent at pinned-commit fails"
+assert_contains "$OUT" "rules/gone.md" "stderr names the unresolvable path"
+
+# TS16e — fail-closed on a malformed pinned-commit: not 40-hex means the ref
+# under verification is corrupt, and a default-branch read would silently
+# attest the wrong commit. The `not-a-sha` table row above makes this arm a
+# real mutation discriminator: WITHOUT the charset check the stub resolves
+# the malformed ref to SHA_ALPHA and this test would go green.
+make_verify_notice "$TMP_TS16/NOTICE-badpin" "not-a-sha" \
+"  - path: references/alpha.md
+    upstream-path: rules/alpha.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-badpin")
+RC=$?
+set -e
+assert_eq "1" "$RC" "non-40-hex pinned-commit fails closed"
+assert_contains "$OUT" "pinned-commit" "stderr names the malformed field"
+
+# TS16f — mutation 4 / second member: first record binds, second does not.
+# A loop that stops at the first pass certifies this fixture as clean.
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-elsewhere")
+RC=$?
+set -e
+assert_eq "1" "$RC" "bad SECOND record still fails (loop checks every record)"
+
+# TS16g — fail-closed on an upstream path carrying URL metacharacters: a
+# `?` in the path segment would split the request early and smuggle a
+# second `ref` parameter, so the script must refuse rather than construct
+# the request (#8185 review). `rules/evil.md` itself is unregistered, so
+# without the charset guard the stub 404s and still fails — the DISCRIMINA-
+# TOR is the stderr token: only the validation path prints "unsafe".
+make_verify_notice "$TMP_TS16/NOTICE-evilpath" "$PIN_A" \
+"  - path: references/evil.md
+    upstream-path: rules/evil.md?ref=deadbeef
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-evilpath")
+RC=$?
+set -e
+assert_eq "1" "$RC" "upstream path with URL metacharacters fails closed"
+assert_contains "$OUT" "unsafe" "stderr names the charset refusal, not a binding miss"
+
+rm -rf "$TMP_TS16"
+echo ""
+
+# Anti-vacuity floor (Guard 1 harness row i). Without a floor,
+# print_results greens on `FAIL -eq 0` and nothing on `PASS > 0`, so
+# replacing assert_eq with a stub that always passes reported
+# "Passed: 27 / Failed: 0 / ALL TESTS PASSED" and exit 0 — measured during
+# #7710. A FLOOR, not equality: adding an assertion must not red the suite.
+# Derived from a green run (39 assertions: 37 on 2026-09-04 + TS16g's two).
+#
+# Kept in the `print_results <floor>` form deliberately. A second, directly-
+# reported floor was written here to satisfy `scripts/guard-vacuity-floor.test.sh`
+# and REVERTED: it made this suite floor-bearing under that guard's detector for
+# the first time, which pushed the guard's shrink-only construction ratchet from
+# 15 to 16 — a red on a different arm. The guard's actual finding (a floor that
+# EXITS 0 under neutered machinery) is fixed where it lives, at the
+# provenance-oracle dispatch check above, which now exits 1 directly instead of
+# tallying through FAIL.
+print_results 39

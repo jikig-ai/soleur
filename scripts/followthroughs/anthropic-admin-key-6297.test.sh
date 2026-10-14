@@ -82,6 +82,7 @@ make_sandbox() {
   local fixture="$1" probe="${2:-$PROBE_SRC}"
   local d
   d=$(mktmpd -t ft6297.XXXXXXXX)
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
   git -C "$d" init -q 2>/dev/null
   mkdir -p "$d/scripts/followthroughs"
   cp "$probe" "$d/scripts/followthroughs/anthropic-admin-key-6297.sh"
@@ -105,9 +106,10 @@ T1="2026-07-19 06:17:00"   # older
 T2="2026-07-20 06:17:00"   # newer
 
 # `env -i` — hermetic, mirroring how the sweeper actually runs probes. With a
-# plain `env VAR=…` an ambient SENTRY_AUTH_TOKEN/GH_TOKEN leaks in from the
+# plain `env VAR=…` an ambient SENTRY_ACTIONS_RO_TOKEN/GH_TOKEN leaks in from the
 # developer or CI shell and the zero-rows fixture makes a LIVE 25s network call
-# to sentry.io, so the suite's result depends on the machine it runs on.
+# to the pinned org host (jikigai-eu.sentry.io), so the suite's result depends on
+# the machine it runs on.
 run_probe() {
   local dir="$1"
   # TMPDIR is in the allowlist deliberately. `env -i` clears the environment, so without
@@ -150,6 +152,17 @@ echo "== #6297 follow-through probe fixtures =="
 f=$(mktmp -t ft.XXXXXXXX); envelope "$OK_ROW" > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 0 "healthy ok row → exit 0"
+
+# 1′ — the LIVE row shape: the pino payload nested under `.message` of the
+# decoded raw (measured 2026-09-12). A top-level-only reader reports zero
+# producer rows on every one of these.
+nested() { jq -c -n --argjson m "$1" '{message: $m, source_kind: "app"}'; }
+f=$(mktmp -t ft.XXXXXXXX); envelope "$(nested "$OK_ROW")" > "$f"
+d=$(make_sandbox "$f"); rc=$(run_probe "$d")
+check "$rc" 0 "healthy ok row NESTED under .message (live shape) → exit 0"
+f=$(mktmp -t ft.XXXXXXXX); envelope "$(nested "$DARK_ROW")" > "$f"
+d=$(make_sandbox "$f"); rc=$(run_probe "$d")
+check "$rc" 2 "key-missing row NESTED under .message → exit 2 (read as a producer row, not as zero rows)"
 
 # 2 — still un-minted → TRANSIENT (never PASS, never FAIL)
 f=$(mktmp -t ft.XXXXXXXX); envelope "$DARK_ROW" > "$f"
@@ -249,7 +262,7 @@ fi
 # 8-12 — the ZERO-ROW mitigations (AC14b).
 #
 # Tests 1-7 all run `run_probe`, which is `env -i` with only BETTERSTACK_QUERY_*
-# and discards stdout. So GH_TOKEN/SENTRY_AUTH_TOKEN are ALWAYS unset there and
+# and discards stdout. So GH_TOKEN/SENTRY_ACTIONS_RO_TOKEN are ALWAYS unset there and
 # every zero-row run takes the two "skipped/unavailable" arms — the Sentry
 # DIVERGENCE branch and the STALLED branch were reachable code that no fixture
 # ever executed, and no arm's output was asserted at all.
@@ -264,7 +277,7 @@ fi
 
 # Install stub `gh` / `curl` into the sandbox and run with tokens set,
 # capturing stdout. Passing a token here is what selects the live arm.
-run_probe_out() { # run_probe_out <dir> <gh-stub-body> <curl-stub-body>
+run_probe_out() { # run_probe_out <dir> <gh-stub-body> <curl-stub-body> [sentry-token]
   local dir="$1" gh_body="$2" curl_body="$3"
   mkdir -p "$dir/bin"
   printf '#!/usr/bin/env bash\n%s\n' "$gh_body" > "$dir/bin/gh"
@@ -275,7 +288,7 @@ run_probe_out() { # run_probe_out <dir> <gh-stub-body> <curl-stub-body>
       BETTERSTACK_QUERY_HOST=h \
       BETTERSTACK_QUERY_USERNAME=u \
       BETTERSTACK_QUERY_PASSWORD=p \
-      GH_TOKEN=t SENTRY_AUTH_TOKEN=s \
+      GH_TOKEN=t SENTRY_ACTIONS_RO_TOKEN="${4:-s}" \
       bash scripts/followthroughs/anthropic-admin-key-6297.sh 2>&1 )
 }
 
@@ -321,6 +334,45 @@ d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_401")
 check_out "$out" "Sentry cross-check inconclusive" "Sentry 401 → inconclusive, not a substantive zero"
 check_no_out "$out" "NOT decisive" "a 401 does not render the zero-events verdict"
+
+# 10b — the Sentry bearer must reach curl on STDIN (--config -), never on argv (#7797: argv is
+#       world-readable via /proc/<pid>/cmdline). The recording stub captures argv NUL-delimited
+#       and stdin; the assertions are that the token is ABSENT from argv and PRESENT on stdin as
+#       a config-file header line. Never loosen this to accept either channel.
+CURL_REC='n=$(ls curl.argv.* 2>/dev/null | wc -l)
+printf "%s\0" "$@" > "curl.argv.$n"
+cat > "curl.stdin.$n"
+echo "{\"data\":[{\"count()\":0}]}"'
+SENTRY_FAKE="FAKESENTRYTOKEN.abc-123_x"
+f=$(mktmp -t ft.XXXXXXXX)
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_REC" "$SENTRY_FAKE")
+if [[ -e "$d/curl.argv.0" ]] && ! tr '\0' '\n' < "$d/curl.argv.0" | grep -cF -- "$SENTRY_FAKE" >/dev/null; then
+  pass "Sentry bearer is ABSENT from curl argv"
+else
+  fail "Sentry bearer is ABSENT from curl argv — curl not called or token found on argv"
+fi
+if [[ -e "$d/curl.stdin.0" ]] && grep -qxF -- "header = \"Authorization: Bearer ${SENTRY_FAKE}\"" "$d/curl.stdin.0"; then
+  pass "Sentry bearer arrives on curl stdin as a config header line"
+else
+  fail "Sentry bearer arrives on curl stdin as a config header line — not found on stdin"
+fi
+if [[ -e "$d/curl.argv.0" ]] && [[ "$(tr '\0' '\n' < "$d/curl.argv.0" | head -1)" == "--disable" ]] \
+   && tr '\0' '\n' < "$d/curl.argv.0" | grep -cxF -- "--config" >/dev/null; then
+  pass "curl keeps --disable first and reads --config -"
+else
+  fail "curl keeps --disable first and reads --config - — argv shape wrong"
+fi
+
+# 10c — a token with a newline (curl config-directive injection) or an unset token yields ZERO curl
+#       calls and the cross-check is skipped; the verdict stays TRANSIENT (exit 2), never PASS.
+BAD_TOK=$(printf 'FAKE\nurl = evil')
+f=$(mktmp -t ft.XXXXXXXX)
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_REC" "$BAD_TOK")
+if [[ ! -e "$d/curl.argv.0" ]]; then pass "newline-bearing Sentry token → zero curl calls"; else fail "newline-bearing Sentry token → zero curl calls — curl was called"; fi
+check_out "$out" "Sentry cross-check skipped" "newline-bearing Sentry token → cross-check skipped"
+check_no_out "$out" "PASS:" "newline-bearing Sentry token never yields PASS"
 
 # 11 — the stall bound actually fires. A probe that shrugs identically forever
 #      is the decayed-dark-state defect #6297 exists to remove.

@@ -218,6 +218,7 @@ These items address the most critical discoverability gaps and the highest-lever
 **Status vs. March 23 plan:** REPEAT -- unfixed for 8 days (was P1-F1)
 
 **Rewrites:**
+
 - Homepage meta: "The open-source company-as-a-service platform. 63 AI agents across every business department -- engineering, marketing, legal, finance, and more. Built for solo founders."
 - Getting started meta: "Get started with Soleur in one command. Deploy 63 AI agents across engineering, marketing, legal, finance, and every business department. Free and open source."
 
@@ -242,6 +243,7 @@ These items address the most critical discoverability gaps and the highest-lever
 **Status vs. March 23 plan:** REPEAT -- still zero citations (was P1-F3)
 
 Add 2-3 authoritative citations to the homepage body. Updated candidates based on March 2026 coverage:
+
 - Fortune (March 23, 2026): Alibaba.com President on the one-person unicorn becoming reality
 - Inc.com: Amodei 70-80% prediction for billion-dollar solo company by 2026
 - TechCrunch: one-person unicorn article validating the solo founder thesis
@@ -258,6 +260,7 @@ The homepage is the most-visited page and has zero third-party validation. 11 of
 **Status vs. March 23 plan:** REPEAT -- unfixed (was P1-F4)
 
 Statistics needing source links:
+
 - Soleur vs. Cursor: "$2B+ ARR" claim (update: Cursor confirmed $500M+ ARR in June, per Codegen), "30%+ of PRs" claim
 - Soleur vs. Notion: "100M users" claim, "21,000+ agents" claim
 
@@ -289,6 +292,7 @@ Statistics needing source links:
 **File:** `ai-agents-for-solo-founders.md`
 
 The guide makes market claims without external attribution (AEO score 3.9 vs CaaS pillar's 5.0). Add 5+ external citations:
+
 - Anthropic "2026 Agentic Coding Trends Report": 80% developer AI adoption
 - Scalable.news Solo Founders Report (Jan 2026): 36.3% of new ventures are solo-founded
 - Siift/GREY Journal: 38% of seven-figure businesses led by solopreneurs
@@ -331,6 +335,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 **Rationale:** "How to run a company with AI" is a high-volume informational query with zero Soleur coverage. Entrepreneur, Growrai, PiXENDA all rank. This is the most natural top-of-funnel content for Soleur's ICP. The CaaS pillar explains what CaaS is; this article explains how to do it. Validated by market data: 41.8M solopreneurs in the US contributing $1.3T to the economy. The economics are clear: $200-500/month in AI tools vs $500K+ in annual salary costs for a traditional team.
 
 **Outline:**
+
 1. The economics of AI-run companies in 2026 (cite: 41.8M solopreneurs, $1.3T contribution, 95-98% cost reduction, 60-80% margins)
 2. What "running a company with AI" actually means (not chatbots -- full department coverage across 8 domains)
 3. The department-by-department breakdown (engineering, marketing, legal, finance, operations, product, sales, support -- what AI handles in each)
@@ -354,6 +359,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 **Rationale:** This is the highest-volume informational query directly aligned with Soleur's thesis. 10+ articles from major publications (Fortune March 23, TechCrunch, Inc, NxCode, Horasis, Medium, Investor Wedbush) target this query. Soleur's thesis -- "The first billion-dollar company run by one person isn't science fiction. It's an engineering problem." -- maps directly, but no dedicated page captures the phrase.
 
 **Updated evidence for inclusion (since March 23 plan):**
+
 - Fortune (March 23, 2026): Alibaba.com President says "The one-person unicorn is coming"
 - Gumloop: raised $17M Series A with 2 staff, aiming for $1B valuation with 10 employees
 - Base44: sold to Wix for $80M after reaching 250K users as solo operation
@@ -362,6 +368,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 - 36.3% of all new global startups are solo-founded (Scalable.news, Jan 2026)
 
 **Outline:**
+
 1. The predictions: Amodei (70-80% odds, 2026), Altman ("betting pool"), Krieger (Instagram co-founder), Alibaba.com President (Fortune, March 2026)
 2. The evidence: Base44 ($80M exit), HeadshotPro ($3.6M ARR solo), Midjourney ($200M ARR / 11 people), Gumloop ($17M raise / 2 staff), Cursor ($500M+ ARR / <50 people), Lovable (unicorn / 45 people)
 3. The economics: 95-98% cost reduction, 60-80% margins, $200-500/month AI tools vs $500K+ salary costs, revenue-per-employee as the new metric
@@ -386,6 +393,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 **Rationale:** Both the AEO and SEO audits flag the missing About page as a critical E-E-A-T gap. The author URL in `site.json` points to the homepage instead of an author page. Google's helpful content system evaluates author authority. AI models weigh author attribution when deciding whether to cite content. The blog now has 12 posts attributed to Jean Deruelle with no credentials page.
 
 **Content:**
+
 - Founder name and bio: Jean Deruelle (from brand guide Founder section)
 - Role: Founder and CEO, Jikigai (legal entity operating Soleur)
 - Company mission (from brand guide Identity section)
@@ -430,6 +438,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 **Rationale:** The pricing page mentions Devin but no dedicated comparison exists. Devin slashed pricing from $500/mo to $20/mo + $2.25/ACU and launched Devin 2.0 with Interactive Planning and Wiki. Multiple comparison articles rank for "Devin vs Cursor vs Copilot" (Technosysblogs, Codegen, MorphLLM). Soleur is absent from all coding agent comparisons. Devin's cloud-only deployment and coding-only scope are clear differentiators against Soleur's full organizational scope.
 
 **Outline:**
+
 1. What changed: Devin's price drop, 2.0 features, Windsurf acquisition
 2. Scope comparison: coding agent (Devin) vs full AI organization (Soleur)
 3. Knowledge architecture: Devin Wiki (auto-indexes repos) vs Soleur compound knowledge (cross-department, git-tracked)
@@ -453,6 +462,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 **Rationale:** The pricing page mentions Copilot but no dedicated comparison exists. Copilot is the incumbent ($10/mo, deep GitHub integration, Agent Mode). Multiple articles compare Copilot vs Cursor (NxCode, DEV Community, Digidai) but none include Soleur. The "code completion vs company completion" framing captures Soleur's full-organization differentiator.
 
 **Outline:**
+
 1. Copilot in 2026: Agent Mode, issue assignment, multi-IDE support
 2. What Copilot covers: inline suggestions, code generation, PR creation
 3. What Copilot does not cover: the other 70% (marketing, legal, finance, operations, product, sales, support)
@@ -476,6 +486,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 **Rationale:** Tanka AI positions as an "AI co-founder" targeting the same ICP (solo founders). EntrepreneurLoop has a dedicated article about Tanka. Tanka's approach (persistent memory + strategic guidance + fundraising agent) differs fundamentally from Soleur's (full AI organization with compound knowledge).
 
 **Outline:**
+
 1. What Tanka offers (AI co-founder, persistent memory, fundraising agent)
 2. What Soleur offers (63 agents, 8 departments, compound knowledge)
 3. Side-by-side comparison table (scope, pricing, deployment, knowledge architecture, open-source)
@@ -495,6 +506,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 **Rationale:** The Claude Code plugin ecosystem has matured significantly. VoltAgent lists 100+ subagents. wshobson/agents has 112 agents. claude-plugins.dev provides a community registry. Multiple "top 10" listicles exist. Soleur is absent from all. A Soleur-authored list establishes authority and naturally features Soleur.
 
 **Outline:**
+
 1. The Claude Code plugin ecosystem in 2026 (official docs, community registry, Claude Code v2.0.12+)
 2. Selection criteria for solo founders (cost, scope, compound knowledge, multi-department)
 3. 8-10 recommended plugins: Soleur (featured), Compound Engineering (Every), Claude HUD (monitoring), VoltAgent subagents, PR Review tools, Agent SDK plugins, Playwright integration
@@ -516,6 +528,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 **Rationale:** Every Inc. coined "compound engineering" for software development (now 7,000 GitHub stars, 300-700% productivity claims). The concept is becoming canonized (agentic-patterns.com lists it as a recognized pattern). Soleur extends the concept to 8 departments. This article stakes the claim that compound engineering's real power emerges when knowledge flows across departmental boundaries -- marketing knowledge informs legal decisions, legal reviews reference engineering specs.
 
 **Outline:**
+
 1. What compound engineering is (cite Every Inc., 7,000 stars, Kevin Rose demo, 300-700% claims)
 2. The limitation: compound engineering stops at the code editor (Every's 50/50 split is engineering-only)
 3. Soleur's extension: compound knowledge across engineering, marketing, legal, finance, operations, product, sales, support
@@ -539,6 +552,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 **Rationale:** "Context engineering" is emerging as the successor to "prompt engineering" in 2026. NxCode's one-person unicorn guide ties context engineering to solo founders. Soleur's architecture (git-tracked markdown knowledge base, CLAUDE.md, AGENTS.md, per-agent constitution) is a working production implementation of context engineering. No other article explains context engineering from a solo founder's operational perspective.
 
 **Outline:**
+
 1. What context engineering is and why it replaces prompt engineering (cite NxCode, Martin Fowler)
 2. The three layers: system context (CLAUDE.md), domain context (knowledge base), session context (agent memory)
 3. How Soleur implements each layer (with concrete examples from production)
@@ -613,6 +627,7 @@ Brand guide (updated 2026-03-22) prohibits "terminal-first" as a positioning adv
 | **E-E-A-T** (trust signal, not traffic-targeted) | 1 | 8% |
 
 **Shareable content pieces:**
+
 - N2: "One-Person Billion-Dollar Company" (Amodei/Altman predictions, Fortune coverage, solopreneur economics)
 - N8: "Compound Engineering Beyond Code" (original thesis extending a trending concept)
 - N10: "CaaS vs SaaS" (provocative contrarian thesis)

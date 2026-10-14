@@ -255,6 +255,7 @@ and returned:
 | 5 — Attestation text | APPROVE-WITH-AMENDMENT (non-blocking) | Consent legally sufficient + Art. 7(1)-demonstrable. Copy refinement (split into two sentences) recommended but **deferred** to the parallel `feat-team-workspace-legal-scaffolding` track (already flagged in the code comment); NOT a discharge blocker. |
 
 **Substantive judgment calls:**
+
 - **B1 lawful-basis split** — DEFENSIBLE. Access prong (6(1)(a)) governs the Owner's own controller-side content; derived-signals prong (6(1)(f)) unchanged; Co-Member own-data stays under PA-2 contract basis; basis is non-retroactive (080 skip).
 - **B2 third-party personal data in repos** — DEFER to re-evaluation trigger ACCEPTABLE for v1; recommendation (non-blocking) to cross-reference the AUP §4.7 Art-9/10 prohibition + `redactGithubSourcedText` as the active control.
 - **B3 consent bundling** — VALID under Art. 7 (no Art. 7(4)/Recital-43 vice: one indivisible operation, consent not the gate to an unrelated service); unbundling NOT required.
@@ -280,7 +281,7 @@ Once the CLO/CPO has signed every artifact row and made the LIA decision:
 3. Remove the `[DRAFT — pending CLO/counsel review per #4558]` marker from every
    legal artifact. Derive the authoritative list (do not hardcode a count):
    `grep -rl 'DRAFT — pending CLO/counsel review per #4558' docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/`
-   (the spec file `knowledge-base/project/specs/feat-workspace-repo-ownership/tasks.md`
+   (the spec file `knowledge-base/project/specs/archive/20261013-014038-feat-workspace-repo-ownership/tasks.md`
    also contains the literal string descriptively — do NOT strip it there; scope
    the edit to the legal directories). Remove the marker from both the section
    body AND the `Last Updated` byline of each doc; keep each canonical doc and its

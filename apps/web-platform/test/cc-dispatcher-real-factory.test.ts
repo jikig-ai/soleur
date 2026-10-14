@@ -24,6 +24,7 @@ const {
   mockGetUserServiceTokens,
   mockPatchWorkspacePermissions,
   mockReportSilentFallback,
+  mockInfoSilentFallback,
   mockSendToClient,
   mockBuildAgentEnv,
   mockBuildAgentSandboxConfig,
@@ -31,6 +32,10 @@ const {
   mockResolveInstallationId,
   mockGenerateInstallationToken,
   mockResolveBashAutonomous,
+  mockResolveWebEgress,
+  mockResolveWebEgressStrict,
+  mockSpawnEgressForwarder,
+  mockTeardownEgressForwarder,
   mockResolveAutonomousAck,
   mockResolveIsWorkspaceOwner,
   mockWriteAskpassScriptTo,
@@ -38,17 +43,24 @@ const {
   mockResolveActiveWorkspacePath,
   mockResolveActiveWorkspace,
   mockGetCurrentRepoUrl,
+  mockReadCurrentRepoUrlResult,
   mockGetCurrentRepoStatus,
   mockGetInstallationAccount,
   mockFindRepoOwnerInstallationForUser,
   mockEnsureWorkspaceRepoCloned,
+  mockResolveC4FlagEnabled,
+  mockWriteC4Diagram,
+  mockGetSessionMessages,
 } = vi.hoisted(() => ({
+  mockResolveC4FlagEnabled: vi.fn(async () => false),
+  mockWriteC4Diagram: vi.fn(),
   mockLogInfo: vi.fn(),
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
   mockGetUserServiceTokens: vi.fn(),
   mockPatchWorkspacePermissions: vi.fn(),
   mockReportSilentFallback: vi.fn(),
+  mockInfoSilentFallback: vi.fn(),
   mockSendToClient: vi.fn(),
   mockBuildAgentEnv: vi.fn(),
   mockBuildAgentSandboxConfig: vi.fn(),
@@ -56,6 +68,10 @@ const {
   mockResolveInstallationId: vi.fn(),
   mockGenerateInstallationToken: vi.fn(),
   mockResolveBashAutonomous: vi.fn(),
+  mockResolveWebEgress: vi.fn(),
+  mockResolveWebEgressStrict: vi.fn(),
+  mockSpawnEgressForwarder: vi.fn(),
+  mockTeardownEgressForwarder: vi.fn(),
   mockResolveAutonomousAck: vi.fn(),
   mockResolveIsWorkspaceOwner: vi.fn(),
   mockWriteAskpassScriptTo: vi.fn(),
@@ -63,6 +79,7 @@ const {
   mockResolveActiveWorkspacePath: vi.fn(),
   mockResolveActiveWorkspace: vi.fn(),
   mockGetCurrentRepoUrl: vi.fn(),
+  mockReadCurrentRepoUrlResult: vi.fn(),
   mockGetCurrentRepoStatus: vi.fn(),
   mockGetInstallationAccount: vi.fn(),
   mockFindRepoOwnerInstallationForUser: vi.fn(),
@@ -70,20 +87,30 @@ const {
   // installation-id the clone receives is inspectable — the load-bearing
   // assertion for the clone-consumes-self-healed-install fix.
   mockEnsureWorkspaceRepoCloned: vi.fn(async () => undefined),
+  // #9538 — named so a test can override the default `[]`: since the cc
+  // caller now passes `dropResumeOnEmptyHistory: true`, `[]` drops the
+  // resume id, so a test that wants resume to survive supplies a live
+  // user-terminated history instead.
+  mockGetSessionMessages: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: mockQuery,
   // Drift-guard for #3250: `realSdkQueryFactory` calls `getSessionMessages`
-  // when `args.resumeSessionId` is set. Returning `[]` keeps the guard's
-  // empty-history branch from blocking these tests and matches the
-  // behavior asserted by the prefill-guard test file's empty-history
-  // scenario.
-  getSessionMessages: vi.fn().mockResolvedValue([]),
+  // when `args.resumeSessionId` is set. `[]` exercises the guard's
+  // empty-history branch — which, since #9538 added the cc caller's
+  // `dropResumeOnEmptyHistory: true`, now DROPS the resume id; tests that
+  // need resume to survive override with a user-terminated history.
+  getSessionMessages: mockGetSessionMessages,
   // Return inspectable shapes so the soleur_platform always-build assertion
   // (#5370 T2) can read tool names off the registered server. `tool(name,…)`
-  // → `{ name }`; `createSdkMcpServer(cfg)` → cfg (passthrough).
-  tool: vi.fn((name: string) => ({ name })),
+  // → `{ name, handler }` — the handler passthrough lets the #8739 emit-seam
+  // test invoke edit_c4_diagram's handler directly;
+  // `createSdkMcpServer(cfg)` → cfg (passthrough).
+  tool: vi.fn((name: string, _d: unknown, _s: unknown, handler: unknown) => ({
+    name,
+    handler,
+  })),
   createSdkMcpServer: vi.fn((cfg: unknown) => cfg),
 }));
 
@@ -99,6 +126,9 @@ vi.mock("@/server/agent-runner-sandbox-config", () => ({
 
 vi.mock("@/server/agent-env", () => ({
   buildAgentEnv: mockBuildAgentEnv,
+  // feat-open-web-egress (#9534): the sandbox-config deny census derives
+  // from this set at module load — keep it non-empty.
+  ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]),
 }));
 
 vi.mock("@/server/sandbox-hook", () => ({
@@ -147,6 +177,24 @@ vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: mockResolveBashAutonomous,
 }));
 
+// feat-open-web-egress (#9534) — default off (false): entitlement
+// wiring is tested in web-egress.test.ts / dedicated factory cases;
+// factory-shape tests dispatch with no forwarder spawn.
+vi.mock("@/server/resolve-web-egress", () => ({
+  resolveWebEgress: mockResolveWebEgress,
+  resolveWebEgressStrict: mockResolveWebEgressStrict,
+}));
+
+// feat-open-web-egress (#9534) — never spawn a real forwarder in
+// unit tests; the module lifecycle is covered by web-egress.test.ts.
+vi.mock("@/server/egress-forwarder", () => ({
+  spawnEgressForwarder: mockSpawnEgressForwarder,
+  teardownEgressForwarder: mockTeardownEgressForwarder,
+  reapOrphanEgressForwarders: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
+}));
+
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs. Default
 // ack=null + owner=false so factory-shape tests dispatch with the review-gate
 // intact (un-acked non-owner ⇒ not the soft-gate path).
@@ -176,6 +224,7 @@ vi.mock("@/server/workspace-resolver", async () => {
 
 vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: mockGetCurrentRepoUrl,
+  readCurrentRepoUrlResult: mockReadCurrentRepoUrlResult,
   getCurrentRepoStatus: mockGetCurrentRepoStatus,
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
@@ -211,6 +260,7 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  infoSilentFallback: mockInfoSilentFallback,
   // #5733 — reportAgentReadinessSelfStop pre-hashes the workspace id via hashUserId.
   hashUserId: (s: string) => `hash-${s}`,
   // #3369: mirrorWithDebounce extracted to observability.
@@ -276,6 +326,21 @@ vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 
 vi.mock("@/server/ws-handler", () => ({
   sendToClient: mockSendToClient,
+}));
+
+// #8739: the flag resolver is real elsewhere — here it is a per-test switch so
+// the c4 gate (repo + installation + flag) is reachable without a Flagsmith
+// fixture. Defaults false: every pre-existing test's no-repo args never reach
+// it, and resolveC4Eligible stays false so the advertising path is unchanged.
+vi.mock("@/server/resolve-c4-eligible", () => ({
+  resolveC4FlagEnabled: mockResolveC4FlagEnabled,
+  resolveC4Eligible: vi.fn(async () => false),
+}));
+
+// #8739: the tool's persistence layer is never exercised from this file — the
+// emit-seam test needs a controllable ok/false result, not a GitHub commit.
+vi.mock("@/server/c4-writer", () => ({
+  writeC4Diagram: mockWriteC4Diagram,
 }));
 
 // `info` routes to the shared hoisted spy so the egress-posture log payload
@@ -386,7 +451,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },
@@ -400,6 +465,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockResolveInstallationId.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     mockResolveBashAutonomous.mockResolvedValue(false);
+    mockResolveWebEgress.mockResolvedValue(false);
     mockResolveAutonomousAck.mockResolvedValue(null);
     mockResolveIsWorkspaceOwner.mockResolvedValue(false);
     // ADR-044 PR-1: default to the solo workspace (= userId). Dispatch-path
@@ -412,6 +478,15 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // the self-heal branch is skipped for every pre-existing test. The
     // dedicated describe block overrides these per-test.
     mockGetCurrentRepoUrl.mockResolvedValue(null);
+    // #9556 — the SUT calls the degrade-aware variant; delegate to the same
+    // spy so the suite's existing url fixtures keep working (degraded=false;
+    // the degraded arm's ccDeps emission is pinned in T15b below).
+    mockReadCurrentRepoUrlResult.mockImplementation(
+      async (userId: string, workspaceId: string) => ({
+        url: await mockGetCurrentRepoUrl(userId, workspaceId),
+        degraded: false,
+      }),
+    );
     // #5394 — default repo readiness is `ready` so the gate never blocks the
     // pre-existing factory-shape tests; the dedicated gate describe overrides it.
     mockGetCurrentRepoStatus.mockResolvedValue({
@@ -437,7 +512,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockQuery).toHaveBeenCalledOnce();
     const callArg = mockQuery.mock.calls[0][0];
     expect(callArg.options.cwd).toBe(WORKSPACE_PATH);
-    expect(callArg.options.model).toBe("claude-sonnet-5");
+    expect(callArg.options.model).toBe("claude-sonnet-5-5");
   });
 
   // -------------------------------------------------------------------------
@@ -463,6 +538,91 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(toolNames).not.toContain("edit_c4_diagram");
   });
 
+  // #8739 — the emit seam: buildC4ConciergeTools' onDiagramSaved opt is wired
+  // to defaultSendToClient INSIDE the factory. Without this test, deleting the
+  // prop leaves the whole suite green and the feature emits nothing.
+  it("a successful edit_c4_diagram emits c4_diagram_saved via sendToClient", async () => {
+    mockGetCurrentRepoUrl.mockResolvedValueOnce(
+      "https://github.com/acme/kb-repo",
+    );
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockResolveC4FlagEnabled.mockResolvedValueOnce(true);
+
+    await realSdkQueryFactory(makeArgs());
+    const tools =
+      mockQuery.mock.calls[0][0].options.mcpServers.soleur_platform.tools;
+    const c4 = (tools ?? []).find(
+      (t: { name: string }) => t.name === "edit_c4_diagram",
+    );
+    expect(c4).toBeDefined();
+
+    mockWriteC4Diagram.mockResolvedValueOnce({
+      ok: true,
+      commitSha: "abc123",
+      rerendered: true,
+      rerenderDiagnostic: null,
+    });
+    const res = await c4.handler({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "model {}",
+    });
+    expect(res.isError).toBeUndefined();
+
+    await vi.waitFor(() =>
+      expect(mockSendToClient).toHaveBeenCalledWith("user-1", {
+        type: "c4_diagram_saved",
+        dirPath: "engineering/architecture/diagrams",
+        rerendered: true,
+        diagnostic: null,
+      }),
+    );
+    // #8966 — the emit is counted with its outcome: the silent-fallback
+    // incidence is a rate, and a rate needs the success denominator.
+    expect(mockInfoSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "c4-save-outcome",
+        tags: { outcome: "rerendered" },
+      }),
+    );
+  });
+
+  // #8966 — the rerendered:false arm counts too (the numerator of the rate).
+  it("a non-rerendered edit_c4_diagram counts outcome=rerendered-false on the same feature slug", async () => {
+    mockGetCurrentRepoUrl.mockResolvedValueOnce(
+      "https://github.com/acme/kb-repo",
+    );
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockResolveC4FlagEnabled.mockResolvedValueOnce(true);
+
+    await realSdkQueryFactory(makeArgs());
+    const tools =
+      mockQuery.mock.calls[0][0].options.mcpServers.soleur_platform.tools;
+    const c4 = (tools ?? []).find(
+      (t: { name: string }) => t.name === "edit_c4_diagram",
+    );
+    mockWriteC4Diagram.mockResolvedValueOnce({
+      ok: true,
+      commitSha: "abc123",
+      rerendered: false,
+      rerenderDiagnostic: "render failed",
+    });
+    await c4.handler({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "model {}",
+    });
+
+    await vi.waitFor(() =>
+      expect(mockInfoSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({
+          feature: "c4-save-outcome",
+          tags: { outcome: "rerendered-false" },
+        }),
+      ),
+    );
+  });
+
   // -------------------------------------------------------------------------
   // T3: plugins: [{ type: "local", path: <DEPLOYED plugin root> }]  (security fix)
   // -------------------------------------------------------------------------
@@ -486,12 +646,19 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.sandbox.failIfUnavailable).toBe(true);
     expect(opts.sandbox.allowUnsandboxedCommands).toBe(false);
+    // W1 (#9601): the dispatcher passes the builder's object through UNCHANGED.
+    // The builder is mocked here, so its `credentials` content is not the point;
+    // identity is: a spread or override at the call site (which would drop the
+    // credential deny the real builder returns) makes a new object.
+    expect(opts.sandbox).toBe(mockBuildAgentSandboxConfig.mock.results[0].value);
     // Helper was called with the workspace path AND fail-closed egress —
     // this dispatch has no connected repo, so no GitHub egress (#5041
     // follow-up).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
       readOnly: false,
+      // #9534 — entitlement-derived quarantine flag (unentitled → false).
+      allowWebEgress: false,
     });
   });
 
@@ -595,6 +762,33 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(ctx.leaderId).toBe("cc_router");
     expect(ctx.userId).toBe("user-1");
     expect(ctx.conversationId).toBe("conv-1");
+  });
+
+  // -------------------------------------------------------------------------
+  // T15b: ccDeps.repoConnected — url/degraded tri-state (#9556)
+  // -------------------------------------------------------------------------
+  it('T15b: ccDeps.repoConnected is true/false on the honest arms and undefined on a degraded read', async () => {
+    const readDep = async () => {
+      (createCanUseTool as unknown as { mockClear(): void }).mockClear();
+      await realSdkQueryFactory(makeArgs());
+      const ctx = (createCanUseTool as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+        deps: { repoConnected?: boolean };
+      };
+      return ctx.deps.repoConnected;
+    };
+    const REPO = "https://github.com/jikig-ai/soleur";
+
+    mockReadCurrentRepoUrlResult.mockResolvedValueOnce({ url: REPO, degraded: false });
+    expect(await readDep()).toBe(true);
+
+    mockReadCurrentRepoUrlResult.mockResolvedValueOnce({ url: null, degraded: false });
+    expect(await readDep()).toBe(false);
+
+    // A transient resolve failure is NOT "not connected": the dep must be
+    // undefined so the frame omits the field (legacy caveat arm) rather than
+    // rendering connect-repo copy to a connected user.
+    mockReadCurrentRepoUrlResult.mockResolvedValueOnce({ url: null, degraded: true });
+    expect(await readDep()).toBeUndefined();
   });
 
   // -------------------------------------------------------------------------
@@ -1021,6 +1215,14 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // Sandbox GitHub egress lockstep (#5041 follow-up) — egress and the
   // entitled token move together. The sandbox-config mock delegates to the
   // REAL implementation in this block so the assertions reach the actual
+// Expected signed-URL account fleet, generated locally (NOT imported from the
+// source const) so a typo in the source list cannot self-verify: sa0..sa99
+// minus sa22 (NXDOMAIN — see the docblock on GITHUB_ACTIONS_LOG_ACCOUNTS).
+const EXPECTED_SA_ACCOUNTS = Array.from(
+  { length: 100 },
+  (_, i) => `productionresultssa${i}.blob.core.windows.net`,
+).filter((h) => h !== "productionresultssa22.blob.core.windows.net");
+
   // allowedDomains the SDK receives (call-arg pinning alone cannot prove
   // the flag maps to the GitHub hosts).
   // -------------------------------------------------------------------------
@@ -1062,6 +1264,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: true,
         readOnly: false,
+        // #9534 — unentitled dispatch (webEgress grant off).
+        allowWebEgress: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       // Literal on purpose (canonical-literal style, do not import the
@@ -1069,6 +1273,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(opts.sandbox.network.allowedDomains).toEqual([
         "github.com",
         "api.github.com",
+        "registry.npmjs.org",
+        ...EXPECTED_SA_ACCOUNTS,
       ]);
     });
 
@@ -1081,6 +1287,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
         readOnly: false,
+        // #9534 — entitlement-derived quarantine flag (unentitled → false).
+        allowWebEgress: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1098,6 +1306,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
         readOnly: false,
+        // #9534 — entitlement-derived quarantine flag (unentitled → false).
+        allowWebEgress: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1120,7 +1330,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       );
       expect(postureCalls).toHaveLength(1);
       const payload = postureCalls[0][0];
-      expect(payload).toEqual({ userId: "user-1", githubEgress: true });
+      // #9558 — persona joined the posture payload (attribution axis).
+      expect(payload).toEqual({
+        userId: "user-1",
+        githubEgress: true,
+        persona: "command_center",
+      });
       expect(typeof payload.githubEgress).toBe("boolean");
       expect(JSON.stringify(payload)).not.toContain("ghs_default_test_token");
     });
@@ -1141,6 +1356,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(postureCalls[0][0]).toEqual({
         userId: "user-1",
         githubEgress: false,
+        persona: "command_center",
       });
     });
 
@@ -1284,6 +1500,82 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
+  // #9558 — support persona must mint NOTHING GitHub-side: a read-only docs
+  // session has no repo lifecycle, so installation resolution, the GH_TOKEN
+  // mint, the .soleur-askpass.sh write into the user's .git/, and the
+  // ENTITLED_EGRESS_DOMAINS open are ALL out of contract. Drive the same
+  // connected-repo shape that mints on command_center — the persona must be
+  // the only delta.
+  // -------------------------------------------------------------------------
+  it("T2b: support persona skips installation resolve, GH_TOKEN mint, askpass write, and GitHub egress", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+
+    await realSdkQueryFactory(makeArgs({ persona: "support" }));
+
+    // No GitHub machinery at all — not even the installation-id resolve or
+    // the clone (it mints a token via gitWithInstallationAuth internally).
+    expect(mockResolveInstallationId).not.toHaveBeenCalled();
+    expect(mockGetInstallationAccount).not.toHaveBeenCalled();
+    expect(mockFindRepoOwnerInstallationForUser).not.toHaveBeenCalled();
+    expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
+    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+    // No askpass helper is ever written under the user's .git/.
+    expect(mockWriteAskpassScriptTo).not.toHaveBeenCalled();
+    // The minted-token channel into the agent env stays empty.
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+    );
+    // Egress closed (also pinned in T2 via the sandbox-config call).
+    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+      "/app/shared/plugins/soleur",
+      expect.objectContaining({ allowGithubEgress: false }),
+    );
+    // The egress posture log carries the persona so a support dispatch that
+    // ever DID open egress is attributable (observability gate).
+    const egressLog = mockLogInfo.mock.calls.find(
+      ([, msg]) => msg === "Concierge sandbox GitHub egress posture",
+    );
+    expect(egressLog?.[0]).toMatchObject({
+      githubEgress: false,
+      persona: "support",
+    });
+  });
+
+  it("T2c: support persona strips the user's stored GITHUB_TOKEN from serviceTokens (env must carry no GitHub credential)", async () => {
+    // #9558 review: a write-closed sandbox still received the user's own
+    // GITHUB_TOKEN via the Connected-Services map — readable in-env and
+    // echoable into the transcript while every GitHub egress domain is
+    // closed. The strip is provider-specific: other service tokens stay.
+    mockGetUserServiceTokens.mockResolvedValueOnce({
+      GITHUB_TOKEN: "ghp_stored_user_pat",
+      STRIPE_SECRET_KEY: "sk_live_other",
+    });
+
+    await realSdkQueryFactory(makeArgs({ persona: "support" }));
+
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      { STRIPE_SECRET_KEY: "sk_live_other" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+    );
+  });
+
+  it("T2d: command_center keeps the stored GITHUB_TOKEN (strip is support-scoped)", async () => {
+    mockGetUserServiceTokens.mockResolvedValueOnce({
+      GITHUB_TOKEN: "ghp_stored_user_pat",
+    });
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+
+    await realSdkQueryFactory(makeArgs({ persona: "command_center" }));
+
+    const envArgs = mockBuildAgentEnv.mock.calls[0];
+    expect(envArgs[1]).toMatchObject({ GITHUB_TOKEN: "ghp_stored_user_pat" });
+  });
+
+  // -------------------------------------------------------------------------
   // T16: sandbox-required-but-unavailable substring → feature: "agent-sandbox"
   // (filtered by feature tag per learning
   // 2026-04-19-claude-agent-sdk-subprocess-exit-tag-via-stderr-substring.md)
@@ -1323,6 +1615,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
       readOnly: false,
+      // #9534 — entitlement-derived quarantine flag (unentitled → false).
+      allowWebEgress: false,
     });
   });
 
@@ -1330,6 +1624,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // Resume key: when resumeSessionId provided, options.resume is set.
   // -------------------------------------------------------------------------
   it("threads resumeSessionId into options.resume when present", async () => {
+    // #9538 — the cc call site now passes `dropResumeOnEmptyHistory: true`,
+    // so the default `[]` probe would drop the resume id. Give the guard a
+    // live user-terminated session so `resume:` survives.
+    mockGetSessionMessages.mockResolvedValueOnce([
+      { type: "user", uuid: "u1", session_id: "sess-abc", message: {}, parent_tool_use_id: null },
+    ]);
     await realSdkQueryFactory(makeArgs({ resumeSessionId: "sess-abc" }));
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBe("sess-abc");
@@ -1520,5 +1820,194 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         status: "waiting_for_user",
       });
     });
+  });
+  // -------------------------------------------------------------------------
+  // feat-open-web-egress (#9534) — workspace "Agent web access" grant.
+  // -------------------------------------------------------------------------
+  describe("web egress entitlement (#9534)", () => {
+    it("unentitled (default) → no forwarder spawn, no webEgress handle", async () => {
+      await realSdkQueryFactory(makeArgs());
+      expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+      const opts = mockQuery.mock.calls[0][0].options;
+      // WebFetch stays disallowed; WebSearch too.
+      expect(opts.disallowedTools).toContain("WebFetch");
+      expect(opts.disallowedTools).toContain("WebSearch");
+      expect(opts.allowedTools).not.toContain("WebFetch");
+      expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ egressProxy: undefined }),
+      );
+      expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ allowWebEgress: false }),
+      );
+    });
+
+    it("entitled + spawn OK → forwarder spawned for the workspace, handle threaded", async () => {
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockResolvedValue({
+        port: 28711,
+        token: "tok-abc",
+        pid: 4242,
+      });
+      await realSdkQueryFactory(makeArgs());
+      expect(mockSpawnEgressForwarder).toHaveBeenCalledWith(
+        "conv-1",
+        expect.any(String),
+      );
+      const opts = mockQuery.mock.calls[0][0].options;
+      // WebFetch re-enabled; WebSearch stays disallowed (Phase A).
+      expect(opts.disallowedTools).not.toContain("WebFetch");
+      expect(opts.disallowedTools).toContain("WebSearch");
+      // WebFetch is ask-class: without the auto-approve it would still die at
+      // canUseTool's deny-default (agent-native review critical finding).
+      expect(opts.allowedTools).toContain("WebFetch");
+      // The two security wires the tool-surface change depends on: the
+      // credentialed proxy URL reaches the spawned CLI env, and the sandbox
+      // credential census engages. Deleting either line in the factory is a
+      // silent-bypass regression — pin both.
+      expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({
+          egressProxy: { workspaceId: expect.any(String), token: "tok-abc", port: 28711 },
+        }),
+      );
+      expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ allowWebEgress: true }),
+      );
+    });
+
+    it("entitled + spawn failure → degrade to zero-egress, mirrored, Query still built", async () => {
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockRejectedValue(new Error("bind boom"));
+      await realSdkQueryFactory(makeArgs());
+      expect(mockQuery).toHaveBeenCalledOnce();
+      const opts = mockQuery.mock.calls[0][0].options;
+      expect(opts.disallowedTools).toContain("WebFetch");
+      const calls = mockReportSilentFallback.mock.calls.filter(
+        ([, o]) => o?.op === "web-egress-forwarder-spawn",
+      );
+      expect(calls).toHaveLength(1);
+    });
+
+    it("entitled but support persona → no forwarder (repo lifecycle is off)", async () => {
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockResolvedValue({
+        port: 28711,
+        token: "tok-abc",
+        pid: 4242,
+      });
+      await realSdkQueryFactory(makeArgs({ persona: "support" }));
+      expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #9776 / ADR-284 — hosted must-ask lane: factory wiring (AC-14, AC-23).
+//
+// This does NOT claim runtime proof that the real SDK calls `canUseTool` for sandboxed
+// Bash (the SDK is mocked here, as everywhere in this file). That proof is the real-SDK
+// probe `scripts/dev-probe-destroy-ask.ts` (CLO C9): it FAILED at #9977 (#10054) because
+// `autoAllowBashIfSandboxed: true` and the sandbox hook's `allow` pre-empted the callback.
+// It pins the wiring: the REAL `createCanUseTool` is the callback
+// in the options object (the sandbox value itself is pinned by agent-runner-sandbox-config.test.ts against the REAL
+// builder; this file mocks the builder, so asserting it here would only read the mock back),
+// `permissions.allow` stays empty, and the lane's inputs come from the dispatch
+// scope, never from the empty-string `ctx.repoOwner` / `ctx.repoName`.
+// ---------------------------------------------------------------------------
+describe("realSdkQueryFactory — hosted must-ask lane wiring (#9776)", () => {
+  async function realCanUseToolOptions() {
+    const actual = await vi.importActual<typeof import("@/server/permission-callback")>(
+      "@/server/permission-callback",
+    );
+    (createCanUseTool as unknown as { mockImplementationOnce(f: unknown): void }).mockImplementationOnce(
+      actual.createCanUseTool,
+    );
+    await realSdkQueryFactory(makeArgs());
+    return mockQuery.mock.calls[0][0].options;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetUserApiKey.mockResolvedValue("sk-test");
+    mockGetUserServiceTokens.mockResolvedValue({});
+    mockBuildAgentEnv.mockReturnValue({ ANTHROPIC_API_KEY: "sk-test" });
+    mockBuildAgentSandboxConfig.mockReturnValue({
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: false,
+      allowUnsandboxedCommands: false,
+      enableWeakerNestedSandbox: true,
+      network: { allowedDomains: [], allowManagedDomainsOnly: true },
+      filesystem: { allowWrite: [WORKSPACE_PATH], denyRead: ["/workspaces", "/proc"] },
+    });
+    mockQuery.mockReturnValue(makeFakeQuery());
+    mockResolveInstallationId.mockResolvedValue(null);
+    mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
+    mockResolveBashAutonomous.mockResolvedValue(true);
+    mockResolveAutonomousAck.mockResolvedValue("2026-10-10T00:00:00Z");
+    mockResolveIsWorkspaceOwner.mockResolvedValue(true);
+    mockResolveActiveWorkspace.mockImplementation(async (userId: string) => ({ ok: true, workspaceId: userId }));
+    mockGetCurrentRepoUrl.mockResolvedValue(null);
+    mockReadCurrentRepoUrlResult.mockImplementation(async (userId: string, workspaceId: string) => ({
+      url: await mockGetCurrentRepoUrl(userId, workspaceId),
+      degraded: false,
+    }));
+    mockGetCurrentRepoStatus.mockResolvedValue({ repoStatus: "ready", repoError: null });
+    mockWriteAskpassScriptTo.mockReturnValue(`${WORKSPACE_PATH}/.git/.soleur-askpass.sh`);
+  });
+
+  it("AC-14: the real canUseTool is wired, permissions.allow is empty, and a destroy command still reaches the review gate in an acked autonomous workspace", async () => {
+    mockSendToClient.mockReturnValue(true);
+    // The lane flips the conversation status around the card: give the tenant client a recursive, awaitable chain
+    // (`.update().eq().eq()` and `.in()` / `.select()` variants) so that write resolves instead of throwing.
+    const chain: Record<string, unknown> = {};
+    for (const m of ["update", "eq", "in", "select", "insert"]) chain[m] = () => chain;
+    chain.then = (resolve: (v: unknown) => void) => resolve({ error: null, data: [{ id: "conv-1" }] });
+    mockSupabaseFrom.mockImplementation((table: string) =>
+      table === "conversations" ? chain : { select: () => chain, insert: () => chain, update: () => chain },
+    );
+    const opts = await realCanUseToolOptions();
+    expect(typeof opts.canUseTool).toBe("function");
+    expect(opts.settingSources).toEqual([]);
+    expect(opts.permissions?.allow ?? []).toEqual([]);
+
+    const ac = new AbortController();
+    const pending = opts.canUseTool("Bash", { command: "terraform destroy" }, { signal: ac.signal, toolUseID: "t", requestId: "r" });
+    await new Promise((r) => setTimeout(r, 25));
+    const frame = mockSendToClient.mock.calls.map((c) => c[1]).find((m: { type: string }) => m.type === "review_gate");
+    expect(frame, "the lane must send a review_gate frame, not auto-approve").toBeDefined();
+    expect(frame.options).toEqual(["Approve", "Reject"]);
+    ac.abort();
+    const res = await pending;
+    expect(res.behavior).toBe("deny");
+  });
+
+  it("AC-23: the lane's inputs come from the dispatch scope (connected repo slug and a resolver), not from ctx.repoOwner / ctx.repoName", async () => {
+    mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/alice/app");
+    await realSdkQueryFactory(makeArgs());
+    const ctx = (createCanUseTool as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+      repoOwner: string;
+      repoName: string;
+      deps: { connectedRepoSlug?: string; resolveProtectedBranches?: () => Promise<unknown> };
+    };
+    expect(ctx.repoOwner).toBe("");
+    expect(ctx.repoName).toBe("");
+    expect(ctx.deps.connectedRepoSlug).toBe("alice/app");
+    expect(typeof ctx.deps.resolveProtectedBranches).toBe("function");
+  });
+
+  it("with no connected repo the slug is empty and the resolver still exists (it resolves unauthoritatively, so every force push asks)", async () => {
+    await realSdkQueryFactory(makeArgs());
+    const ctx = (createCanUseTool as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+      deps: { connectedRepoSlug?: string; resolveProtectedBranches?: () => Promise<{ authoritative: boolean }> };
+    };
+    expect(ctx.deps.connectedRepoSlug).toBe("");
+    const r = await ctx.deps.resolveProtectedBranches!();
+    expect(r.authoritative).toBe(false);
   });
 });

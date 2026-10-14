@@ -5,7 +5,7 @@ date: 2026-06-02
 related: [4825, 4824]
 related_adrs: [ADR-042]
 related_plans:
-  - knowledge-base/project/plans/2026-06-02-feat-operator-cc-oauth-credential-plan.md
+  - knowledge-base/project/plans/archive/20261013-032858-2026-06-02-feat-operator-cc-oauth-credential-plan.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -41,6 +41,7 @@ boundary decisions:
 ## Decision
 
 **Two rows by provider — no `credential_type` column.**
+
 - `provider='anthropic'` row = the api_key (raw-REST consumers).
 - `provider='anthropic_oauth'` row = the oauth_token (Agent-SDK path).
 - The existing `(user_id, provider)` UNIQUE constraint enforces at-most-one of
@@ -51,6 +52,7 @@ boundary decisions:
 
 **The REST/SDK boundary is STRUCTURAL, not a runtime check.** `byok-lease.ts`
 exposes two accessors instead of the former `getApiKey()`:
+
 - `getRestApiKey()` queries ONLY `provider='anthropic'` → physically cannot
   return an oauth token (it lives in a row this query never reads). The
   oauth→`x-api-key` leak is impossible by construction.

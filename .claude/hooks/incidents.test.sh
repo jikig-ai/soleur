@@ -8,6 +8,17 @@
 
 set -euo pipefail
 
+# pre-merge-rebase.sh now calls `gh pr view <N>` from the fixture's checkout
+# (#8778). With a local-path origin gh fails fast offline; GH_REPO/GH_HOST would
+# make it skip the remotes and query the real API with these fixture PR numbers.
+unset GH_REPO GH_HOST
+
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$SCRIPT_DIR/lib/incidents.sh"
 
@@ -214,19 +225,19 @@ STRIP_RC=0
   # (a) quoted -m body: the trigger phrase inside double quotes is blanked.
   a_in=$'git add . && git commit -m "doc\ngh issue create must include --milestone\n"'
   a_out=$(strip_command_bodies "$a_in")
-  if echo "$a_out" | grep -qE '(^|&&|\|\||;)[[:space:]]*gh[[:space:]]+issue[[:space:]]+create'; then
+  if echo "$a_out" | grep -cE >/dev/null '(^|&&|\|\||;)[[:space:]]*gh[[:space:]]+issue[[:space:]]+create'; then
     echo "  (a) quoted -m body NOT blanked"; exit 11
   fi
   # (b) bare heredoc body (`-F - <<EOF … EOF`) blanked.
   b_in=$'git commit -F - <<EOF\ngh issue create no milestone\nEOF\n'
   b_out=$(strip_command_bodies "$b_in")
-  if echo "$b_out" | grep -qE '(^|&&|\|\||;)[[:space:]]*gh[[:space:]]+issue[[:space:]]+create'; then
+  if echo "$b_out" | grep -cE >/dev/null '(^|&&|\|\||;)[[:space:]]*gh[[:space:]]+issue[[:space:]]+create'; then
     echo "  (b) heredoc body NOT blanked"; exit 12
   fi
   # (c) a real chained command AFTER the closing heredoc terminator survives.
   c_in=$'git commit -F - <<EOF\nbody text\nEOF\n && gh pr merge 7 --squash'
   c_out=$(strip_command_bodies "$c_in")
-  if ! echo "$c_out" | grep -qE '(^|&&|\|\||;)[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge'; then
+  if ! echo "$c_out" | grep -cE >/dev/null '(^|&&|\|\||;)[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge'; then
     echo "  (c) post-terminator chained cmd was lost"; exit 13
   fi
   # (d) a command with no quotes/heredoc is unchanged.

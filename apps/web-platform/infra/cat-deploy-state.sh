@@ -12,12 +12,15 @@ set -euo pipefail
 #   {"exit_code":-2,"reason":"no_prior_deploy"} -- no state file exists
 #   {"exit_code":-3,"reason":"corrupt_state"}   -- state file unparseable
 # Exit-code protocol defined in ci-deploy.sh header (#2205).
+# #8609: github_app_key_source / _fetch / _probe (and _probe_reason, on a rejected probe) ride the
+# base state verbatim (write_state adds them only once the GitHub App key overlay ran, each checked
+# against its closed enum; an absent key = it never ran).
 
-# Identify the host that answered this read (#6425). deploy.soleur.ai is a Cloudflare
-# Tunnel hostname and Cloudflare selects a connector per edge colo, so a read of
-# /hooks/deploy-status answers from whichever connector the caller's colo picked —
-# NOT necessarily the host the caller meant. Without this field a wrong-host answer is
-# indistinguishable from a correct one, which is exactly what made #6425 cost 16h.
+# Identify the host that answered this read (#6425). Today the `deploy.` ingress is
+# origin-relative to web-1's private IP (#6594), so every status read already answers
+# from web-1 — the field remains the assertion anchor (AC13): if a future ingress change
+# ever routes the read to a different host, host_id is what makes the wrong answer
+# distinguishable from a correct one, which is exactly what made #6425 cost 16h.
 # Resolved from the Hetzner metadata service (the hcloud_server id — the SAME value
 # terraform knows, so AC13 can assert identity against a TF-known value rather than
 # self-consistency), with /etc/machine-id as a reboot-stable fallback.
@@ -62,6 +65,14 @@ resolve_host_id() {
 # ABSENT field is indistinguishable from an old script, an empty one is not.
 HOST_ID="$(resolve_host_id || true)"
 readonly HOST_ID
+
+# #9151 — ci_deploy_sha256: the live sha256 of /usr/local/bin/ci-deploy.sh, so the
+# deploy-status body carries which script bytes the host serves TODAY (the parity
+# anchor for scripts/check-deploy-script-parity.sh). Same empty-string contract as
+# HOST_ID: an ABSENT field reads as an old script, an empty one as a read failure.
+# CI_DEPLOY_SH_PATH exists for the test harness only — production never sets it.
+CI_DEPLOY_SHA256="$(sha256sum "${CI_DEPLOY_SH_PATH:-/usr/local/bin/ci-deploy.sh}" 2>/dev/null | cut -d' ' -f1 || true)"
+readonly CI_DEPLOY_SHA256
 
 # Best-effort: systemctl may be unavailable in non-systemd contexts (local
 # tests, containers). `systemctl is-active` prints a canonical state word to
@@ -308,13 +319,26 @@ cron_drain_json() {
 # sentinel (verdict "unknown") when the file is absent because a deploy never ran
 # the canary. Best-effort + read-only. The canary-promotion follow-through
 # (scripts/followthroughs/canary-promotion-5875.sh) reads this field.
-sandbox_canary_json() {
-  # DURABLE path (NOT /var/run tmpfs) — MUST match ci-deploy.sh
-  # SANDBOX_CANARY_STATE_FILE. The soak accumulator must survive host reboots or
-  # it silently resets to zero (#5889); see the writer's rationale.
-  local f="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
+# Shared reader for a write_sandbox_canary_state ledger file — the soak
+# accumulator lives on the DURABLE volume (NOT /var/run tmpfs) and MUST
+# match ci-deploy.sh's state-file paths (must survive host reboots or the
+# soak silently resets to zero, #5889). Safe sentinel (verdict "unknown")
+# when the file is absent because a deploy never ran the arm.
+# $2 (optional): expected `ledger` stamp. A file whose stamp is PRESENT but
+# names a different mechanism (an env-alias misconfig interleaving two
+# ledgers' verdict vocabularies) reads as the sentinel — foreign `pass`
+# verdicts must never count toward this arm's soak. An ABSENT stamp is a
+# pre-stamp-era file and is read normally (rolling deploys must not blind
+# the existing soak histories).
+canary_state_json() {
+  local f="$1" expected_ledger="${2:-}"
   if [[ -f "$f" ]]; then
-    local v r s c cp fp
+    local v r s c cp fp stamp
+    stamp="$(jq -r '.ledger // ""' "$f" 2>/dev/null || echo '')"
+    if [[ -n "$expected_ledger" && -n "$stamp" && "$stamp" != "$expected_ledger" ]]; then
+      echo '{"verdict":"unknown","reason":"foreign_ledger_stamp","sdk_version":"","checked_at":0,"consecutive_pass":0,"first_pass_at":0}'
+      return 0
+    fi
     v="$(jq -r '.verdict // "unknown"' "$f" 2>/dev/null || echo unknown)"
     r="$(jq -r '.reason // ""' "$f" 2>/dev/null || echo '')"
     s="$(jq -r '.sdk_version // ""' "$f" 2>/dev/null || echo '')"
@@ -329,6 +353,36 @@ sandbox_canary_json() {
   else
     echo '{"verdict":"unknown","reason":"","sdk_version":"","checked_at":0,"consecutive_pass":0,"first_pass_at":0}'
   fi
+}
+
+# Cross-workspace isolation probe verdict (#2640). The no-SSH surface for the
+# report-only canary probe: the last deploy's verdict (pass |
+# workspace_isolation_failed | workspace_isolation_timeout | canary_infra_error),
+# its reason, and the soak accumulators the promotion follow-through reads
+# (scripts/followthroughs/workspace-isolation-verdict-2640.sh). Same reader as
+# the canary ledgers — the only delta is this ledger has no sdk_version (the
+# shared shape emits it as ""). Safe sentinel (verdict "unknown") when the file
+# is absent — a deploy that never ran the probe, or a host whose ci-deploy.sh
+# predates it (an ABSENT verdict is distinguishable from a failed one, never a
+# false green). Best-effort + read-only.
+workspace_isolation_json() {
+  # DURABLE path (NOT /var/run tmpfs) — MUST match ci-deploy.sh
+  # WORKSPACE_ISOLATION_STATE_FILE. The soak accumulator must survive host
+  # reboots; see the writer's rationale. The expected-ledger stamp refuses a
+  # file a foreign writer (env-aliased canary arm) left behind.
+  canary_state_json "${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}" "workspace-isolation"
+}
+
+# The canary-promotion follow-through
+# (scripts/followthroughs/canary-promotion-5875.sh) reads this field.
+sandbox_canary_json() {
+  canary_state_json "${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}" "sandbox-canary"
+}
+
+# Same shape, separate ledger (#5863): the outer-wrap canary's report-only
+# soak state. Read by the #5863 follow-through via /hooks/deploy-status.
+outer_wrap_canary_json() {
+  canary_state_json "${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}" "sandbox-canary-outer-wrap"
 }
 
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The no-SSH surface for
@@ -665,6 +719,49 @@ fi
 # read both so `inactive` alone is never re-read as a deploy failure (#4896).
 HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"
 INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
+# #7308 — inngest_server_version: the INSTALLED inngest binary's self-reported
+# version, so /hooks/deploy-status answers "which binary is live on this host"
+# by measurement, not by bootstrap-pin inference. Two deliberate non-features,
+# both measured dead on production before this shipped lean:
+#   1. No /proc/<MainPID>/exe resolution — inngest-server's ExecStart is
+#      `doppler run -- bash -c '… exec /usr/local/bin/inngest start …'`, so the
+#      unit's MainPID is the doppler wrapper (doppler forks; exec happens in its
+#      child), and same-UID non-descendant exe readlinks are denied under
+#      kernel.yama.ptrace_scope=1 anyway.
+#   2. No ExecStart path= parse — the structured token is /usr/bin/doppler, and
+#      `doppler version` is not a registered subcommand, so that leg could only
+#      emit "" or (worse, if the CLI ever grows one) doppler's own version.
+# The installed binary is the honest measured object: the bootstrap pins it by
+# version+sha256 and prod host changes ride the immutable-redeploy rule, so
+# installed≈running outside a seconds-wide replace window.
+# Sentinel contract (HOST_ID/CI_DEPLOY_SHA256): ABSENT field = old script;
+# failure states emit the discriminating tokens below, never a bare "".
+# `inngest version` prints a bare token (e.g. `1.45.1-abc1234` — no `v` prefix);
+# output is sanitized to the version charset and byte-capped before it enters
+# the response body.
+_isv_bin() {
+  # $1 = candidate binary path; emits its sanitized `version` token or nothing.
+  # MUST return 0 unconditionally: the result is captured in $() assignments
+  # under `set -e` — a nonzero last-command status would abort the whole hook.
+  local out
+  [[ -n "${1:-}" && -f "$1" && -x "$1" ]] || return 0
+  out="$(timeout -k 1 5 "$1" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[-0-9A-Za-z.]*' | head -1 | head -c 64 || true)"
+  if [[ -n "$out" ]]; then printf '%s' "$out"; fi
+}
+# Discriminating sentinels (the inngest_redis_binary convention, not bare ""):
+# `absent` (no binary), `unknown-no-timeout`, `version-unreadable` (ran but no
+# token). ABSENT key = old script.
+# INNGEST_SERVER_BIN exists for the test harness only — production never sets it.
+_isv="${INNGEST_SERVER_BIN:-/usr/local/bin/inngest}"
+if ! command -v timeout >/dev/null 2>&1; then
+  INNGEST_SERVER_VERSION="unknown-no-timeout"
+elif [[ ! -f "$_isv" || ! -x "$_isv" ]]; then
+  INNGEST_SERVER_VERSION="absent"
+else
+  INNGEST_SERVER_VERSION="$(_isv_bin "$_isv")"
+  [[ -n "$INNGEST_SERVER_VERSION" ]] || INNGEST_SERVER_VERSION="version-unreadable"
+fi
+readonly INNGEST_SERVER_VERSION
 VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
 # #5159 follow-up 2: surface the inngest-server's OWN journal tail (its
@@ -676,6 +773,8 @@ JOURNALD_STORAGE="$(journald_storage_json)"
 CONTAINER_RESTART="$(container_restart_json)"
 CRON_DRAIN="$(cron_drain_json)"
 SANDBOX_CANARY="$(sandbox_canary_json)"
+OUTER_WRAP_CANARY="$(outer_wrap_canary_json)"
+WORKSPACE_ISOLATION="$(workspace_isolation_json)"
 SECCOMP_PROFILE_SHA256="$(seccomp_profile_sha256_value)"
 SECCOMP_LIVE="$(seccomp_live_json)"
 
@@ -697,6 +796,7 @@ jq -nc \
   --arg hbd "$HEARTBEAT_DARK_ARM" \
   --arg hbt "$HEARTBEAT_TIMER_STATUS" \
   --arg is "$INNGEST_SERVER_STATUS" \
+  --arg isv "$INNGEST_SERVER_VERSION" \
   --arg vs "$VECTOR_STATUS" \
   --arg vj "$VECTOR_JOURNAL_TAIL" \
   --arg ij "$INNGEST_JOURNAL_TAIL" \
@@ -705,9 +805,12 @@ jq -nc \
   --argjson cr "$CONTAINER_RESTART" \
   --argjson cd "$CRON_DRAIN" \
   --argjson sc "$SANDBOX_CANARY" \
+  --argjson owc "$OUTER_WRAP_CANARY" \
+  --argjson wi "$WORKSPACE_ISOLATION" \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
   --argjson sl "$SECCOMP_LIVE" \
   --arg hid "$HOST_ID" \
+  --arg cds "$CI_DEPLOY_SHA256" \
   --arg rs "$INNGEST_REDIS_STATUS" \
   --arg rj "$INNGEST_REDIS_JOURNAL_TAIL" \
   --arg rr "$INNGEST_REDIS_RESULT" \
@@ -717,12 +820,13 @@ jq -nc \
   --arg rb "$INNGEST_REDIS_BINARY" \
   --arg rts "$INNGEST_REDIS_TAIL_STATUS" \
   --arg vci "$VECTOR_CONFIG_IDENTITY" \
-  '$base + $cr + $cd + $sl + {host_id: $hid, sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
+  '$base + $cr + $cd + $sl + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, outer_wrap_canary: $owc, workspace_isolation: $wi, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_journal_tail: $hbj,
     inngest_heartbeat_dark_arm: $hbd,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
+    inngest_server_version: $isv,
     vector: $vs,
     vector_journal_tail: $vj,
     inngest_journal_tail: $ij,

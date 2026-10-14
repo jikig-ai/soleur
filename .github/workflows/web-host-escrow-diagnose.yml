@@ -1,0 +1,89 @@
+# Web-host escrow readiness: a dispatch-only, read-only diagnostic (#9377 C8, ref #9461).
+#
+# WHAT IT DOES. Runs `scripts/web-host-escrow-preflight.sh` (the same step the host birth and replace jobs run) and writes
+# the verdict plus the missing-name causes to the job summary, so an agent can ask "is escrow ready?" BEFORE it starts a
+# birth, with no human step and nothing changed. It lists Doppler secret NAMES only; a green run is necessary, not
+# sufficient (it cannot tell a bucket-scoped R2 pair from another bucket's pair pasted under the new names).
+#
+# WHAT IT CANNOT DO. No infrastructure tool, no Doppler write or mint, no GitHub write, `contents: read`, one job, no
+# schedule, no inputs. Read-only is a property of THIS FILE'S STEPS: the token it uses is the workplace personal token the
+# Tier-B loader exports, which can read and write every Doppler project. Anyone who can merge to main can change what this
+# job does; ADR-241 (D2 note) states that residual in full.
+#
+# WHY DISPATCH-ONLY AND main-ONLY. The job runs on `infra-privileged` (Tier B, main-only branch policy, no reviewer), so a
+# dispatch from any other ref is blocked before any step runs. Dispatch it with `--ref main`. tests/ shape suite:
+# plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh.
+#
+# The first dispatch is the real test of the Tier-B project's workplace-token entry (a loader failure with no summary, a
+# NO TOKEN verdict, or an UNREADABLE one can each mean that entry is missing, empty or stale); the runbooks' step 0 decodes
+# each outcome.
+name: Web-host escrow config names check (read-only; necessary, not sufficient)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  escrow-check:
+    environment: infra-privileged
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+
+      - name: Escrow readiness check (read-only)
+        run: |
+          set -uo pipefail
+          rc=0
+          # Deny-by-default child environment: unset every exported name but the allowlist, in a subshell, so the loader's
+          # other exports are not inherited by the checker, the Doppler CLI or anything they spawn. This is hygiene against
+          # ACCIDENTAL inheritance, not a boundary (the parent step shell keeps the full environment readable at
+          # /proc/$PPID/environ by same-UID processes). No `env -i VAR=...` form: that would put the token in an argv.
+          # Exported shell functions are not variables (`compgen -e` never lists them), so they are unset by a second loop.
+          # `timeout` bounds a stalled Doppler call (TERM at 240 s, KILL 10 s later): the step then still prints what the child printed
+          # so far, a verdict and the summary, instead of the job being cancelled with no verdict line at all.
+          out="$(
+            while IFS= read -r v; do
+              case "$v" in PATH|HOME|TMPDIR|LANG|TF_VAR_doppler_token_tf) ;; *) unset "$v" 2>/dev/null || true ;; esac
+            done < <(compgen -e)
+            while read -r _k _t f; do unset -f "$f" 2>/dev/null; done < <(declare -Fx)
+            timeout -k 10 240 bash scripts/web-host-escrow-preflight.sh 2>&1
+          )" || rc=$?
+          # One redaction for the log and the summary alike: token shapes first, then any 40+ character run of key-like
+          # characters (a JWT-like or base64-like string that no token shape names).
+          out="$(printf '%s\n' "$out" | sed -E -e 's/dp\.[A-Za-z]+\.[A-Za-z0-9._-]+/dp.REDACTED/g' -e 's/[A-Za-z0-9+\/=_.-]{40,}/REDACTED/g')"
+          [[ -z "$out" ]] || printf '%s\n' "$out"      # keeps the preflight's annotations in the run log
+          case "$rc" in
+            0) if grep -qx 'escrow-split-contract:live-ok' <<<"$out"; then
+                 verdict="PASS (names only, necessary not sufficient): escrow-split-contract:live-ok"
+               else
+                 verdict="NOT READY: exit 0 without the live-ok line"; rc=1
+               fi ;;
+            1) verdict="FAIL: the escrow-split contract is violated; read the CAUSE and FAIL lines below" ;;
+            2) verdict="NO TOKEN: no Doppler provider token reached the check. Usually the Tier-B project has no usable workplace-token entry; the check also exits 2 when its own tools are missing, so read the step log" ;;
+            3) verdict="UNREADABLE: a config could not be read. The checker reads prd_workspaces_luks_web first, so a bad or rotated token names it too: a NOTE line means Doppler reported the config as not found, otherwise read the vendor detail in the step log. Never read as ready" ;;
+            124|137) verdict="UNEXPECTED exit ${rc}: the check timed out after 240 seconds, then was killed (Doppler or the network stalled): not ready" ;;
+            *) verdict="UNEXPECTED exit ${rc}: not ready" ;;
+          esac
+          # The run log carries the verdict and the run context too, so a command-line reader gets both without the web page
+          # (the gh CLI exposes no job-summary field).
+          printf 'Verdict: %s\n' "$verdict"
+          printf 'Run-context: sha=%s actor=%s utc=%s\n' "$GITHUB_SHA" "${GITHUB_ACTOR:-unknown}" "$(date -u '+%FT%TZ')"
+          {
+            printf '## Web-host escrow config names check (read-only)\n\n**%s**\n\n' "$verdict"
+            printf 'Dispatched at %s UTC by %s, SHA %s (ref %s). Valid at run time only; the birth and replace jobs re-run this check themselves. Names only: it does not prove the R2 pair is bucket-scoped, that web-1 is unreachable with it, or that a header backup restores.\n\n```text\n' "$(date -u '+%F %T')" "${GITHUB_ACTOR:-unknown}" "$GITHUB_SHA" "${GITHUB_REF_NAME//[^A-Za-z0-9._\/-]/_}"
+            printf '%s\n' "$out" | LC_ALL=C tr -c '\n\040-\176' ' ' | tr -d '`' \
+              | sed -E 's/^(escrow-split-contract:unreadable: config [A-Za-z0-9_]+).*/\1 (vendor detail withheld, see the run log)/' \
+              | { grep -E '^(escrow-split-contract:|advisory: [0-9]+ )' || true; } | cut -c1-600 | sed -n '1,40p'
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"

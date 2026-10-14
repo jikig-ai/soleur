@@ -1,6 +1,6 @@
 /**
  * SHA-256 hashes of each legal document's canonical source file. These
- * are compared at build/CI time by `scripts/check-tc-document-sha.sh` to
+ * are compared at build/CI time by `apps/web-platform/scripts/check-tc-document-sha.sh` to
  * detect content changes that require a TC_VERSION bump assessment.
  *
  * When you edit a legal document (docs/legal/*.md), regenerate the hash:
@@ -12,19 +12,20 @@
  */
 export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "acceptable-use-policy":
-    "eb8f4dd62418b7d58d43200bb45171e3113c323fdd44614c1412851aed49028a",
+    "813d5bf2f469a94d45a7156bbcb23e23419f20f36e04ee1fc3238c567efa2a44",
+
   "cookie-policy":
-    "3c3d57a9227069bccf2c7f671b389d2f2ac79980481647fb029793a957020cc8",
+    "ff889cbc7937d207374781dca15894292d1f6eaf63c66e6b6f1575f653c4e3c5",
   "corporate-cla":
-    "d41147d94cf53c9340cdf39d751b91b4140991ddbab092451308a1398eb00826",
+    "03cbf51b1543cdb3699ec71fbfa2946ff28d264ef574ae7252eac17b89ab6bad",
   "data-protection-disclosure":
-    "6864fac371a4083b9ef3ba4fd959692a74de78c56332e1302d2267a12262b844",
+    "e8049b3d94224a8bd3f1066cb0ce1a4b3855384b3f287600863754e7c7242fb4",
   "disclaimer":
-    "f02375aadf0b0aeb6f60718bbca3f75135bb6a949b2cded1bbfabbf704b117c2",
+    "19c9069f166d17c179e91e9747d816d25de81156e74752cf1d67ee210f3935d6",
   "gdpr-policy":
-    "56f8021cc0fabf3806131d3ea4370f18189b964b0f8bbda54bd45dd3b43c5ed0",
+    "3e1a1ae7872a9e77c0347d0f6e5071420d0f14f329db0fa7d6df0fb1e8d2ff55",
   "individual-cla":
-    "8d773e4331fd82e4b27a506eac2f968ad319adcef624d8f6115c0b71deb5e538",
+    "43836d36d4c8c96a9d0363ac70b2fe3d349c121b8ad030099f82189409830f25",
   "privacy-policy":
-    "dc2df0ce37ad1bbec032b8a79ebba3a81152ef342121bacb2789976dab8c4495",
+    "9dabfeaa333d9f8c05f32581e09c44ff9660d182593683c26d48889c91ad2ba6",
 };

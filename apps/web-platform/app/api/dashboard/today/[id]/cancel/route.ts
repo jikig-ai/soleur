@@ -6,7 +6,8 @@
 //
 // Auth model:
 //   1. Origin / CSRF gate at the route boundary.
-//   2. Supabase tenant client auth.getUser() — cookie-scoped.
+//   2. verifiedUserId(req) — middleware-verified cookie session (remote
+//      getUser() fallback when the minted header is absent).
 //   3. `messages` SELECT with `user_id = caller.id` join to confirm the
 //      caller owns this message (and therefore owns its action_sends
 //      row through the FK). This is the load-bearing tenant gate per
@@ -32,6 +33,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getServiceClient } from "@/lib/supabase/service";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -43,10 +45,8 @@ export async function POST(
   if (!valid) return rejectCsrf("api/dashboard/today/[id]/cancel", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -59,14 +59,14 @@ export async function POST(
     .from("messages")
     .select("id")
     .eq("id", messageId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .maybeSingle();
   if (msgErr) {
     reportSilentFallback(msgErr, {
       feature: "dashboard-cancel",
       op: "messages-owner-check",
       message: "messages select failed during cancel",
-      extra: { userId: user.id, messageId },
+      extra: { userId, messageId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
@@ -88,7 +88,7 @@ export async function POST(
       feature: "dashboard-cancel",
       op: "action-sends-cancel-write",
       message: "action_sends cancel UPDATE failed",
-      extra: { userId: user.id, messageId },
+      extra: { userId, messageId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }

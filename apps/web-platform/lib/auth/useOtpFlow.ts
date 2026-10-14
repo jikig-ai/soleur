@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { OTP_RESEND_COOLDOWN_MS } from "@/lib/auth/constants";
 import {
   type AuthErrorLike,
@@ -41,7 +42,6 @@ export function useOtpFlow({
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   // The email the active cooldown was started for. The cooldown is per-email
   // (GoTrue's rate window is per-user), so switching to a DIFFERENT email is
@@ -88,13 +88,15 @@ export function useOtpFlow({
     };
   }, []);
 
-  /** Send (or resend) an OTP for the current email. Returns true on success. */
-  async function sendOtp(): Promise<boolean> {
+  // feat-ui-action-feedback: send/resend and verify run through the shared
+  // pending contract — a stalled GoTrue call previously left `loading` true
+  // forever with no watchdog and no error surface. `loading` stays the
+  // public flag (send/resend/verify are one coupled auth action group).
+  const send = usePendingAction(async () => {
     // Source-level guard: refuse a same-email re-send inside the cooldown
     // window regardless of which control invoked us (send button, resend, or
     // a re-submit after "Try a different email" with the email unchanged).
-    if (cooldownActive) return false;
-    setLoading(true);
+    if (cooldownActive) return;
     setError("");
 
     const supabase = createClient();
@@ -108,8 +110,6 @@ export function useOtpFlow({
       // Transport failure (fetch reject) rejects rather than resolving `error`.
       error = thrown as AuthErrorLike;
     }
-
-    setLoading(false);
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
@@ -130,32 +130,18 @@ export function useOtpFlow({
       // login passes a handler that performs the no-account → /signup replace
       // and returns true to short-circuit; signup omits it.
       if (onSendError?.(error)) {
-        return false;
+        return;
       }
       setError(mapSupabaseAuthError(error));
-      return false;
+      return;
     }
 
     startCooldown();
-    return true;
-  }
+    setOtpSent(true);
+    setTimeout(() => otpRef.current?.focus(), 100);
+  });
 
-  async function handleSendOtp(e: React.FormEvent) {
-    e.preventDefault();
-    const ok = await sendOtp();
-    if (ok) {
-      setOtpSent(true);
-      setTimeout(() => otpRef.current?.focus(), 100);
-    }
-  }
-
-  async function handleResendOtp() {
-    await sendOtp();
-  }
-
-  async function handleVerifyOtp(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
+  const verify = usePendingAction(async () => {
     setError("");
 
     const supabase = createClient();
@@ -172,23 +158,43 @@ export function useOtpFlow({
       error = thrown as AuthErrorLike;
     }
 
-    setLoading(false);
-
-    if (error) {
-      console.error("[auth] Supabase error:", error.message);
-      reportSilentFallback(error, {
-        feature: "auth",
-        op: "verifyOtp",
-        extra: {
-          errorCode: error.code,
-          errorName: error.name,
-          status: error.status,
-        },
-      });
-      setError(mapSupabaseAuthError(error));
-    } else {
+    // Redirect latch (use-sign-out precedent): the success path hands off to
+    // `onVerifySuccess` → `window.location.assign` — `loading` must stay true
+    // through the handoff; the document teardown IS the reset. Re-enabling in
+    // the gap before the hard nav commits reopens a double-submit window.
+    // latch() marks ONLY this path terminal; every error path releases.
+    if (!error) {
+      verify.latch();
       onVerifySuccess();
+      return;
     }
+    console.error("[auth] Supabase error:", error.message);
+    reportSilentFallback(error, {
+      feature: "auth",
+      op: "verifyOtp",
+      extra: {
+        errorCode: error.code,
+        errorName: error.name,
+        status: error.status,
+      },
+    });
+    setError(mapSupabaseAuthError(error));
+  });
+
+  const loading = send.pending || verify.pending;
+
+  function handleSendOtp(e: React.FormEvent) {
+    e.preventDefault();
+    send.run();
+  }
+
+  function handleResendOtp() {
+    send.run();
+  }
+
+  function handleVerifyOtp(e: React.FormEvent) {
+    e.preventDefault();
+    verify.run();
   }
 
   return {

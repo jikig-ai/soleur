@@ -9,7 +9,8 @@
 //
 // Auth model (mirrors the /cancel route):
 //   1. Origin / CSRF gate at the route boundary.
-//   2. Supabase tenant client auth.getUser() — cookie-scoped.
+//   2. verifiedUserId(req) — middleware-verified cookie session (remote
+//      getUser() fallback when the minted header is absent).
 //   3. Service-role UPDATE scoped to the caller's OWN server-derived id.
 //      `users` has no permissive UPDATE RLS for tenants, so the service-role
 //      bypass is bounded by the `id = user.id` predicate — no cross-tenant
@@ -25,10 +26,10 @@
 
 import { NextResponse } from "next/server";
 
-import { createClient } from "@/lib/supabase/server";
 import { getServiceClient } from "@/lib/supabase/service";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -36,11 +37,8 @@ export async function POST(req: Request) {
   const { valid, origin } = validateOrigin(req);
   if (!valid) return rejectCsrf("api/dashboard/runtime/resume", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -48,14 +46,14 @@ export async function POST(req: Request) {
   const { data, error } = await service
     .from("users")
     .update({ runtime_paused_at: null })
-    .eq("id", user.id)
+    .eq("id", userId)
     .select("id");
   if (error) {
     reportSilentFallback(error, {
       feature: "runtime-resume",
       op: "clear-pause",
       message: "users runtime_paused_at clear failed",
-      extra: { userId: user.id },
+      extra: { userId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
@@ -66,7 +64,7 @@ export async function POST(req: Request) {
         feature: "runtime-resume",
         op: "clear-pause-rowcount",
         message: "resume clear matched != 1 row",
-        extra: { userId: user.id },
+        extra: { userId },
       },
     );
     return NextResponse.json({ error: "internal_error" }, { status: 500 });

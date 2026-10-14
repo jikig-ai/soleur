@@ -39,6 +39,7 @@ and is what this ADR names.
 What *is* per-backend is the **(hostname + CF Access app + service token + CI bridge action)**
 quadruple. That is deliberate least-privilege, not accident — `tunnel.tf`'s `registry_push` service-token block gives the
 registry its own token *"so registry-write access rotates/revokes independently of host-shell
+
 + webhook access"*. **That layering is correct and stays.**
 
 ### Observed blast radius — measured, and it refutes BOTH models
@@ -72,16 +73,16 @@ reporting green.
 
 Three things this settles, and one it does not:
 
-- **The masking is total, not partial.** `continue-on-error` forces the bridge's `conclusion`
++ **The masking is total, not partial.** `continue-on-error` forces the bridge's `conclusion`
   to `success`; the mirror's `if: steps.zot_bridge.outcome == 'success'` then skips it; a
   skipped step emits nothing, so `mirror_status` stays unset and the Slack degraded line —
   which reads that output *by step id* — stays inert. Every layer that could have reported the
   failure was, by construction, silent.
-- **The step `conclusion` field is unusable as evidence here.** Any probe or alert reading it
++ **The step `conclusion` field is unusable as evidence here.** Any probe or alert reading it
   is reading a value the platform is contractually obliged to falsify. Read `outcome`.
-- **The route is NOT pinned**, so I1 (connector homogeneity) is exactly the right frame: both
++ **The route is NOT pinned**, so I1 (connector homogeneity) is exactly the right frame: both
   replicas serve, and one of them cannot honor the rule.
-- **It does NOT settle the ~94% skew.** 15-of-16 under a fair 50/50 is ~0.03% likely, so
++ **It does NOT settle the ~94% skew.** 15-of-16 under a fair 50/50 is ~0.03% likely, so
   selection is heavily biased toward the unattached replica — but not absolute. The mechanism
   is unexplained, and it matters for I2 candidate (b) (which assumes a connector can be
   removed from rotation predictably). Tracked as an open question on #6441 rather than guessed
@@ -189,6 +190,7 @@ not a fix. Tracked in #6441; the audit of what may already have been written to 
 
 **Load-bearing constraint for any I2 implementation.** Do **NOT** repoint the 12
 <!-- AMENDED 2026-07-27 (#7000): the count is 15, not 12 — `server.tf` carries 15 SSH-connected
+     (17 as of #8097 / 2026-09-13: `inngest_consumer_probe_install` and `send_failed_alert_probe` joined; the zero-slack floor in `web-host-provisioner-parity.test.sh` is the mechanised count)
      `terraform_data` provisioners today (a 16th, `terraform_data.root_authorized_keys`, lives in
      ci-ssh-key.tf and is outside this file's scope). The constraint below is unchanged and was
      re-confirmed at #7000: it is why that issue's prescribed `for_each` fan-out was withdrawn
@@ -212,17 +214,18 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > two documents contradicted each other until this note existed.
 >
 > **What changed, precisely:**
-> - **I1 is enforced**, and substantively rather than vacuously: web-1 *is* a connector and
+>
+> + **I1 is enforced**, and substantively rather than vacuously: web-1 *is* a connector and
 >   *can* serve every ingress rule. The gate eliminates the risky population — a fresh host
 >   that boots `cloudflared` before its private NIC exists (the token rides `user_data` at
 >   create; the network attach always lands after). That race is unfixable at construction
 >   time, which is why (b) was called "the only shape that makes I1 well-formed".
-> - **I2 is NOT satisfied — it is made inert.** `ssh://localhost:22` and
+> + **I2 is NOT satisfied — it is made inert.** `ssh://localhost:22` and
 >   `http://localhost:9000` are unchanged and still connector-relative, so I2's antecedent
 >   still fires. They are not "genuinely host-agnostic routes"; they are routes only one host
 >   can currently answer. **I2's violation is latent, gated behind I1 holding.** Anything that
 >   re-pools a second connector re-manifests it immediately.
-> - The normative anti-pattern below **stands**: a per-hostname ingress does not pin a
+> + The normative anti-pattern below **stands**: a per-hostname ingress does not pin a
 >   connector, and the 12 `connection { host }` blocks must not be repointed.
 >
 > **The un-taken complement (worth filing against #6466).** Candidate (a) was disfavoured for
@@ -286,12 +289,13 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > recommends: *"The cheapest fix mirrors ADR-068 Option B — fan out `/hooks/infra-config` to
 > peers as `ci-deploy.sh` already does, needing no `.tf` and no tunnel change."* PR-B did **not**
 > take that path, for reasons that outlive #6594:
-> - **Fan-out cannot discharge I2 at all.** I2 governs the ingress `service` address; fan-out
+>
+> + **Fan-out cannot discharge I2 at all.** I2 governs the ingress `service` address; fan-out
 >   operates at the application layer and would leave `http://localhost:9000` in place, so the
 >   READ side (`/hooks/deploy-status`, `/hooks/infra-config-status`, `inngest-liveness`) stays
 >   coin-flipped. The verify gate self-verifies a coin-flipped WRITE against a *separately*
 >   coin-flipped READ — fan-out patches one leg of the WRITE and leaves the READ untouched.
-> - **Fan-out presumes web-2 should be converged.** Writing web-1's config to every peer
+> + **Fan-out presumes web-2 should be converged.** Writing web-1's config to every peer
 >   assumes the peer is a legitimate destination — exactly #6440's open question (whether a
 >   coin-flipped push already wrote to a host that should not hold that config). Origin-relative
 >   ingress makes the destination deterministic instead of multiplying it.
@@ -339,7 +343,8 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > **4 — The runtime arm (`ExecStartPre`) is REJECTED for now, not tracked as an open item.**
 > `ExecStartPre` is the shape that best matches I1's runtime wording, and is the long-term
 > preference on record from engineering review. It is rejected here on three grounds:
-> - **It puts the wait inside systemd's start timeout.** `TimeoutStartSec` (default 90 s) spans
+>
+> + **It puts the wait inside systemd's start timeout.** `TimeoutStartSec` (default 90 s) spans
 >   `ExecStartPre` **plus** `ExecStart` combined, so a 60 s NIC wait leaves ~30 s for the rest of
 >   activation, and any later increase to the wait silently converts this gate into a
 >   `systemctl start` failure. The runcmd shape has no such ceiling.
@@ -355,12 +360,14 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 >   > each independently sufficient, plus the `TimeoutStartSec` ceiling above, which is the
 >   > argument the original bullet should have made. Recorded rather than silently rewritten
 >   > because the wrong version was load-bearing in a commit message and a code comment.
-> - **Making it safe means re-tuning a fail-closed gate** currently pinned by an exact-string
+> + **Making it safe means re-tuning a fail-closed gate** currently pinned by an exact-string
 >   test assertion — coupling a low-risk fix to a change that can dark the sole origin.
-> - **Its value is smaller than assumed.** cloudflared dials its ingress origin **per
+> + **Its value is smaller than assumed.** cloudflared dials its ingress origin **per
 >   connection**, not at process start, so a connector that registered NIC-less begins serving
 >   the instant the attach lands. A NIC-less connector is a *converging* state, not a stuck
 >   one. The already-running case is separately covered by `web-private-nic-guard.timer`.
+>
+>   **Contested 2026-09-22: see [ADR-115 amendment (#8539)](ADR-115-dedicated-host-private-nic-boot-convergence.md).**
 >
 > Because the state converges on its own, this is a rejection rather than a deferral — the ADR
 > cannot call the state self-healing and simultaneously hold an open item to fix it. **Revival
@@ -492,6 +499,22 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > that `warm_standby`'s three `web-2` `-target`s had been no-ops since #6538 was the tracking item
 > #6575 closed by deleting them.
 
+> **Amendment (2026-09-29, #9151 — the "one SSHable host" reading of I2 gets a second member,
+> reached THROUGH web-1, and the tunnel model is untouched).** The origin-relative `ssh.`
+> ingress still terminates on web-1 alone — no new ingress rule, no new Access app, no new
+> service token, no cloudflared on web-2. What changed is a *runner-side* forward inside
+> `apply-deploy-pipeline-fix.yml`: after the shared bridge opens its `access tcp` listener to
+> web-1's sshd, the workflow opens `ssh -L 127.0.0.1:2223:<web-2-private>:22` THROUGH that
+> pinned bastion session and adds a second `iptables -t nat OUTPUT` rule so Terraform's Go
+> SSH client reaches `hcloud_server.web["web-2"].ipv4_address` transparently — the ADR-220
+> second-private-host pattern one hop earlier. The new `terraform_data.deploy_pipeline_fix_web2`
+> is the only consumer; the provisioner-parity guard keeps every SSH resource pinned to a
+> committed host ({web-1, web-2}), permits no `for_each`, and requires the web-2 block to
+> carry `local.web_2_ssh_host_key` (ADR-237's second committed pin). I1 is unaffected
+> (web-2 still runs no connector); I2's constraint holds in exactly the same form it always
+> did — the *route* is origin-relative to web-1, and the bastion hop is a property of the
+> caller's session, not of the tunnel.
+
 ### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 
 Two shapes are on the table: **(a)** per-host private-net-relative ingress (`ssh-web-1.` →
@@ -514,13 +537,13 @@ lost is normative and stated above: **do not repoint the 12 `connection { host }
 
 ## Relationship to other ADRs
 
-- **ADR-008** → `superseded-in-part`. Its Decision hardcodes single-host `localhost:` routes
++ **ADR-008** → `superseded-in-part`. Its Decision hardcodes single-host `localhost:` routes
   (dated 2026-03-27, when there was one host), and its claimed `app.soleur.ai → localhost:3000`
   route **does not exist** (measured: 0 `app.` ingress rules; app is a direct A record).
-- **ADR-068** → **extended**, not corrected. It stated the multi-connector fact and rejected
++ **ADR-068** → **extended**, not corrected. It stated the multi-connector fact and rejected
   per-host tunnels; it simply never generalized beyond the deploy path. Its "11 SSH
   provisioners" count is stale — measured **12**.
-- **ADR-096** → **vindicated, not amended.** Its Decision (zot primary, no cloudflared on the
++ **ADR-096** → **vindicated, not amended.** Its Decision (zot primary, no cloudflared on the
   registry host, GHCR fallback) is unchanged and was never the problem — the registry ingress
   it specifies is the one route that already had the right shape.
   > An earlier revision of this ADR attributed the singular phrase *"the web host's cloudflared
@@ -529,3 +552,14 @@ lost is normative and stated above: **do not repoint the 12 `connection { host }
   > `:199` ("bridges over SSH to the *existing* web host"), but that sentence is about the apply
   > path, not tunnel membership. Caught at review; the misattribution is recorded rather than
   > silently deleted because the *conclusion* (no amendment needed) never depended on it.
+
+## Cross-reference 2026-09-23 (#8651, #6438)
+
+The first-boot NIC gate in item 2 (`soleur-wait-nic` before `cloudflared service install`) is no
+longer the first private-network wait on a fresh web host. The seed image pull now logs in to
+and pulls from zot over the private network. A networkd fallback file and one early
+`networkctl reload` (the inngest #8539 primitive, scoped in ADR-123's amendment of this date) and
+an inline, bounded, fail-open wait (75 × 2 s) therefore run before it on **every** freshly booted
+web host, not only the connector. On a fresh connector host the wait can emit before
+`soleur-wait-nic`'s own event. The design is in ADR-096's 2026-09-23 amendment; this
+item's registration-timing reasoning is unchanged.

@@ -2,6 +2,7 @@ import { isTeamWorkspaceInviteEnabled, isByokDelegationsEnabled, type Identity }
 import { resolveCurrentOrganizationId, resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { userHasEffectiveByokKey } from "@/server/byok-resolver";
 import { reportSilentFallback } from "@/server/observability";
+import { boundedAuthGetUser } from "@/server/request-auth";
 
 // Server-only resolver for the /dashboard/settings/team membership page.
 // Factored out of the page component so AC-A's flag-OFF → notFound() behavior
@@ -24,14 +25,16 @@ export interface TeamMembershipRow {
   delegationFromMe?: {
     id: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
     active: boolean;
   };
   delegationToMe?: {
     id: string;
     grantorDisplayName: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
   };
 }
 
@@ -80,8 +83,8 @@ export async function resolveTeamMembershipPageData(
   supabase: AuthClient,
   service: ServiceClient,
 ): Promise<TeamMembershipPageResult> {
-  const userResp = await supabase.auth.getUser();
-  const user = userResp.data?.user;
+  const userData = await boundedAuthGetUser(supabase);
+  const user = userData?.user;
   if (!user) return { ok: false, reason: "not-found" };
 
   const orgId = await resolveCurrentOrganizationId(user.id, service);
@@ -96,7 +99,7 @@ export async function resolveTeamMembershipPageData(
   }).select("name").eq("id", orgId).single();
   const organizationName: string | null = orgNameResp.data?.name ?? null;
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId };
+  const identity: Identity = { userId: user.id, role: "prd", orgId, email: null, subscriptionStatus: null };
   if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) {
     return { ok: false, reason: "not-found" };
   }
@@ -248,7 +251,10 @@ export async function resolveTeamMembershipPageData(
         row.delegationFromMe = {
           id: fromMe.id,
           dailyCapCents: fromMe.daily_cap_cents,
-          todaySpentCents: 0,
+          // NOT a spend of zero — this surface performs no audit_byok_use read
+          // at all. A confident $0.00 on a billing surface is the exact lie
+          // #7829 removed from the Funded pane; `null` renders as unknown.
+          todaySpentCents: null,
           active: true,
         };
       }
@@ -259,7 +265,10 @@ export async function resolveTeamMembershipPageData(
           id: toMe.id,
           grantorDisplayName: grantorEmail.split("@")[0],
           dailyCapCents: toMe.daily_cap_cents,
-          todaySpentCents: 0,
+          // NOT a spend of zero — this surface performs no audit_byok_use read
+          // at all. A confident $0.00 on a billing surface is the exact lie
+          // #7829 removed from the Funded pane; `null` renders as unknown.
+          todaySpentCents: null,
         };
       }
     }

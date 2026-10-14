@@ -14,9 +14,14 @@
 
 > **Ordinal.** Renumbered 155 -> 156 at `/ship` time: a sibling PR landed its own ADR-155
 > (cross-gate exemption markers) on `origin/main` during this pipeline, and `adr-ordinals` is not a
-> required check, so the collision would have surfaced as red CI on `main` post-squash.
+> required check, so the collision would have surfaced as red CI on `main` post-squash. [Correction,
+> #7941: the renumber was right; the stated consequence was not — `adr-ordinals` was already a
+> required check when this note was written (IaC row since #6050, 2026-07-05), so the collision would
+> have blocked the merge on the PR, never landed on `main`.]
 
 ## Context
+
+> **Status note, 2026-09-23 (ADR-245, #8306).** The `.openhands/` mirror this describes was RETIRED and deleted from the tree. Nothing below is withdrawn — the reasoning stands as recorded, and it is the reason the re-entry criterion in ADR-245 requires a generator rather than another hand port. Read every present-tense claim about that mirror as historical.
 
 Every `PreToolUse` hook receives a JSON envelope on stdin describing the tool call it is being asked
 to adjudicate. That envelope is assembled from the model's own tool-call output. It is not operator

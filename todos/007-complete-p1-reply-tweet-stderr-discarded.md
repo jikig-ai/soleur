@@ -22,6 +22,7 @@ In `scripts/content-publisher.sh` line 235, reply tweet failures suppress stderr
 ## Proposed Solutions
 
 ### Solution A: Mirror hook tweet pattern (Recommended)
+
 Capture stderr to a temp file for reply tweets, matching the hook tweet pattern.
 
 - **Pros:** Consistent error handling, enables 402 detection on body tweets, diagnostic info in fallback issues

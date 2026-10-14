@@ -4,21 +4,70 @@
 # Contract: SKILL.md in the parent directory. ADR-038 v2 §"Fallback semantics"
 # documents the env-var mirror invariant this script enforces.
 #
-# Usage: bash flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--org <orgId>] [--dry-run]
-#        bash flip.sh <flag> <prd|dev> on --detach-shared --org <memberId> [--control-org <id>] [--confirmed]
+# Usage: bash flip.sh <flag> <prd|dev> <on|off> [--org <orgId>] [--dry-run]
+#        bash flip.sh <flag> <prd|dev> on --detach-shared --org <memberId> [--control-org <id>]
+#
+# Every write run changes BOTH Flagsmith environments (dev and prd), whichever
+# role segment it names. Run it in your OWN terminal: the ack below needs a person
+# to type yes, and no flag skips it (#8486, ADR-249). An agent runs only
+# `--dry-run` and prints the write command for the operator.
 #
 # Exit codes:
 #   0 — success / dry-run clean
-#   1 — fallback-fidelity rule violated
-#   2 — prerequisite missing
+#   1 — fallback-fidelity rule violated, or the operator did not type yes at the
+#       ack (stdout: SOLEUR_BOOTSTRAP_ABORTED stage=ack; nothing mutated)
+#   2 — prerequisite missing, a usage error, or an unknown flag (including the
+#       removed confirm-skip flag)
 #   3 — Flagsmith API error
-#   4 — Doppler write failed (partial state — operator must reconcile)
+#   4 — Doppler write failed (partial state — operator must reconcile), or the
+#       WORM audit append failed before any mutation
+#  64 — no TTY on stdin for a write run (stdout: SOLEUR_BOOTSTRAP_INPUT_REQUIRED);
+#       refused before any credential fetch or network call
 
 set -euo pipefail
+
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# every credential this script handles (the Flagsmith management key, and the
+# soleur/prd SUPABASE_SERVICE_ROLE_KEY the audit helper binds) is acquired by
+# `doppler secrets get` BELOW this point, so a conditional arm would test an empty
+# variable at guard time, open, and then trace the acquisition itself. The refusal
+# prints on STDOUT because agent runtimes surface stdout and swallow stderr
+# (knowledge-base/project/constitution.md > Code Style).
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of these credentials works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
 
 # Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
+
+# Human-presence gate (#8486, ADR-249). Every production write below waits on the
+# operator-script library's class-2 ack, which has NO skip variable and no flag:
+# it needs a person typing `yes` at a terminal, so an agent's tool subprocess
+# (no TTY) is refused with exit 64 before any credential fetch. Clear anything an
+# inherited environment could use to pre-empt the library's double-source guard
+# or to stand in for its ack before sourcing it. (BASH_ENV runs before this
+# script and cannot be cleared from inside it — recorded in ADR-249 as a
+# hijack-class residual.)
+unset _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED
+unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted
+# shellcheck source=../../../scripts/lib/operator-script.sh
+source "$SCRIPT_DIR/../../../scripts/lib/operator-script.sh"
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
 
 # --- constants (project-level, captured 2026-05-22) -------------------------
 # Note: Flagsmith Admin API is inconsistent — some endpoints want the numeric
@@ -62,11 +111,11 @@ declare -A FLAG_ENV_VARS=(
   ["support"]="FLAG_SUPPORT"
   ["support-live"]="FLAG_SUPPORT_LIVE"
   ["guided-tour"]="FLAG_GUIDED_TOUR"
+  ["codex-engine"]="FLAG_CODEX_ENGINE"
 )
 
 # --- arg parsing ------------------------------------------------------------
 DRY_RUN=0
-CONFIRMED=0
 TARGET_TYPE="role"
 TARGET_ORG=""
 CONTROL_ORG=""
@@ -78,12 +127,23 @@ VALUE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)       DRY_RUN=1; shift ;;
-    --confirmed)     CONFIRMED=1; shift ;;
-    --target)        TARGET_TYPE="$2"; shift 2 ;;
-    --org)           TARGET_ORG="$2"; shift 2 ;;
-    --control-org)   CONTROL_ORG="$2"; shift 2 ;;
+    # A value-taking option never swallows a flag as its value, so the defer
+    # hook's read-only escape and this parser cannot disagree about --dry-run.
+    --target|--org|--control-org)
+      [[ $# -ge 2 && "$2" != --* ]] || { echo "$1 needs a value that does not start with --" >&2; exit 2; }
+      case "$1" in
+        --target)      TARGET_TYPE="$2" ;;
+        --org)         TARGET_ORG="$2" ;;
+        --control-org) CONTROL_ORG="$2" ;;
+      esac
+      shift 2 ;;
     --detach-shared) DETACH_SHARED=1; shift ;;
-    --*)             echo "unknown flag: $1" >&2; exit 2 ;;
+    --*)
+      # Covers the confirm-skip flag this script used to accept for agent-driven
+      # use: it was removed (#8486), and no flag replaces it.
+      echo "unknown flag: $1 — flip.sh has no flag that skips its yes prompt (#8486)." >&2
+      echo "To apply a change, run the command without it in your own terminal and type yes at the prompt." >&2
+      exit 2 ;;
     *)
       if [[ -z "$FLAG" ]]; then FLAG="$1"
       elif [[ -z "$ROLE" ]]; then ROLE="$1"
@@ -94,8 +154,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 usage() {
-  echo "Usage: flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--org <orgId>] [--dry-run]" >&2
-  echo "       flip.sh <flag> <prd|dev> on --detach-shared --org <memberId> [--control-org <id>] [--confirmed]" >&2
+  echo "Usage: flip.sh <flag> <prd|dev> <on|off> [--org <orgId>] [--dry-run]" >&2
+  echo "       flip.sh <flag> <prd|dev> on --detach-shared --org <memberId> [--control-org <id>]" >&2
   echo "Known flags: ${!FLAG_ENV_VARS[*]}" >&2
   exit 2
 }
@@ -109,6 +169,7 @@ usage() {
 [[ "$VALUE" != "on" && "$VALUE" != "off" ]] && { echo "value must be on|off (got: $VALUE)" >&2; usage; }
 [[ "$TARGET_TYPE" != "role" && "$TARGET_TYPE" != "org" ]] && { echo "target must be role|org (got: $TARGET_TYPE)" >&2; usage; }
 [[ "$TARGET_TYPE" == "org" && -z "$TARGET_ORG" ]] && { echo "--target org requires --org <orgId>" >&2; usage; }
+[[ -n "$CONTROL_ORG" && -z "$TARGET_ORG" ]] && { echo "--control-org requires --org <orgId>" >&2; usage; }
 
 if [[ "$TARGET_TYPE" == "org" ]]; then
   [[ "$TARGET_ORG" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
@@ -124,6 +185,11 @@ if [[ "$TARGET_TYPE" == "org" ]]; then
     && echo "⚠ control-negative uses the synthetic default org ($DEFAULT_CONTROL_ORG) — pass --control-org <real-sibling-uuid> for a stronger leak assertion." >&2
 fi
 
+# --- no TTY, no write: refuse before any credential fetch or network call ---
+# Every non-dry-run arm is a production write, role=dev included: the flip is
+# applied in BOTH Flagsmith environments whichever role segment it names.
+if [[ $DRY_RUN -eq 0 ]]; then [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack; fi
+
 ENV_VAR="${FLAG_ENV_VARS[$FLAG]}"
 PROPOSED_ENABLED=$([[ "$VALUE" == "on" ]] && echo true || echo false)
 SEGMENT_NAME="role-$ROLE"
@@ -136,9 +202,16 @@ command -v python3 >/dev/null || { echo "missing: python3" >&2; exit 2; }
 TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain 2>/dev/null || true)
 [[ -z "$TOKEN" ]] && { echo "FLAGSMITH_MANAGEMENT_API_KEY not in Doppler soleur/cli_ops" >&2; exit 2; }
 
+# Token-shape guard: a newline in the key would inject a curl config directive on the stdin
+# channel below. Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_bearer_ok "$TOKEN" || { echo "FLAGSMITH_MANAGEMENT_API_KEY has an unexpected shape" >&2; exit 2; }
+
 # --- helpers ----------------------------------------------------------------
+# The Flagsmith management key travels on curl's stdin config channel, never on argv.
 fs_api() {
-  curl -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "Content-Type: application/json" "$@" --config - \
+    < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN")
 }
 
 resolve_feature_id() {
@@ -175,6 +248,7 @@ sys.exit(3)
 # Uses numeric env_id (the /features/feature-segments/ endpoint accepts int).
 read_feature_segment_id() {
   local env_id="$1" feature_id="$2" segment_id="$3"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
   fs_api "${FLAGSMITH_API}/features/feature-segments/?environment=${env_id}&feature=${feature_id}" \
     | python3 -c "
 import json, sys
@@ -189,6 +263,7 @@ print('')
 # Get the live (published, is_live) version uuid for (env, feature).
 get_live_version_uuid() {
   local env_id="$1" feature_id="$2"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
   fs_api "${FLAGSMITH_API}/environments/${env_id}/features/${feature_id}/versions/" \
     | python3 -c "
 import json, sys
@@ -205,6 +280,7 @@ sys.exit(3)
 # segment overrides in one call.
 read_segment_state() {
   local env_id="$1" feature_id="$2" segment_id="$3"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "missing"; return; }
   local live_uuid
   live_uuid=$(get_live_version_uuid "$env_id" "$feature_id") || { echo "missing"; return; }
   fs_api "${FLAGSMITH_API}/environments/${env_id}/features/${feature_id}/versions/${live_uuid}/featurestates/" \
@@ -227,6 +303,7 @@ print('missing')
 # whether a feature_segment row already exists.
 flip_segment_in_env() {
   local env_id="$1" feature_id="$2" segment_id="$3" enabled="$4"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
 
   local existing_fs_id
   existing_fs_id=$(read_feature_segment_id "$env_id" "$feature_id" "$segment_id")
@@ -258,18 +335,16 @@ doppler_mirror() {
   printf '%s' "$value" | doppler secrets set "${ENV_VAR}" -p soleur -c "$config" --silent || return 4
 }
 
+# The single gate every write arm passes (role, --org, --detach-shared). The ack
+# has no skip variable and no flag (#8486, ADR-249); it must return BEFORE the
+# arm's WORM audit append, which refuses to run without it.
 gate_or_confirm() {
   if [[ $DRY_RUN -eq 1 ]]; then
     echo "(dry-run — exiting 0 without mutation)"
     exit 0
   fi
-  if [[ $CONFIRMED -eq 0 ]]; then
-    echo
-    read -p "Proceed? Type 'yes' to apply: " ACK
-    [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
-  else
-    echo "(--confirmed: skipping interactive prompt)"
-  fi
+  echo
+  soleur_op_ack_or_die "Apply the change above to production Flagsmith (dev + prd) now? Type yes: "
 }
 
 # audit_append <target> [before_override] [after_override]
@@ -317,7 +392,9 @@ print(json.dumps({
   'project': ${FLAGSMITH_PROJECT_ID},
   'rules': [{'type':'ALL','rules':[{'type':'ANY','rules':[],'conditions':[]}],'conditions':[]}],
 }))")
-    resp=$(echo "$body" | fs_api -X POST "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/" -d @-) \
+    # The body rides argv (-d "$body"), NOT stdin: stdin is curl's config channel (fs_api feeds the
+    # Api-Key header there), so a `-d @-` body would be read as config. A segment definition is not a credential.
+    resp=$(fs_api -X POST "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/" -d "$body") \
       || { echo "failed to create segment $seg_name" >&2; return 3; }
     seg_id=$(echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id",""))') \
       || { echo "segment create response not JSON: $resp" >&2; return 3; }
@@ -365,7 +442,12 @@ print(json.dumps({
   ],
   'transient': True,
 }))")
-  resp=$(curl -sS -w '\n%{http_code}' -X POST "${FLAGSMITH_EDGE_API}/identities/" \
+  # --disable/--noproxy here too (#7898 review). env_key is the PUBLIC client-side
+  # Flagsmith key, so the leak value is low -- but the linter missed this call only
+  # because X-Environment-Key is absent from CURL_AUTH_HEADER, not because it is
+  # exempt, and "every credentialed curl in these files is confined" should be true
+  # as written rather than true-with-an-asterisk.
+  resp=$(curl --disable --noproxy '*' -sS -w '\n%{http_code}' -X POST "${FLAGSMITH_EDGE_API}/identities/" \
     -H "X-Environment-Key: ${env_key}" -H "Content-Type: application/json" \
     -d "$body") || { echo "eval request failed (curl transport) for org $org" >&2; return 3; }
   code=$(printf '%s' "$resp" | tail -n1)
@@ -454,13 +536,7 @@ if [[ $DETACH_SHARED -eq 1 ]]; then
     echo "  eval-verify member enabled=true / control enabled=false; exiting 0 without mutation)"
     exit 0
   fi
-  if [[ $CONFIRMED -eq 0 ]]; then
-    echo
-    read -p "Proceed? Type 'yes' to apply: " ACK
-    [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
-  else
-    echo "(--confirmed: skipping interactive prompt)"
-  fi
+  gate_or_confirm
 
   # Append-before-flip: WORM audit precedes the first Flagsmith mutation. Enablement
   # is UNCHANGED (the feature stays ON, now served by <flag>-orgs) → before=after=true.
@@ -549,13 +625,7 @@ print(','.join(orgs))
     echo "(dry-run — would provision $SEG_NAME (+ON override both envs), set membership above, then eval-verify; exiting 0 without mutation)"
     exit 0
   fi
-  if [[ $CONFIRMED -eq 0 ]]; then
-    echo
-    read -p "Proceed? Type 'yes' to apply: " ACK
-    [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
-  else
-    echo "(--confirmed: skipping interactive prompt)"
-  fi
+  gate_or_confirm
 
   # Append-before-flip: WORM audit precedes the first Flagsmith mutation (provision).
   audit_append "org:$TARGET_ORG"
@@ -593,7 +663,8 @@ json.dump(seg, sys.stdout)
 ") || { echo "failed to build updated $SEG_NAME JSON (unexpected structure)" >&2; exit 3; }
 
   echo "→ Writing updated $SEG_NAME membership to Flagsmith…"
-  RESP=$(echo "$UPDATED_JSON" | fs_api -X PUT "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/" -d @-) \
+  # Body on argv, not stdin (stdin is curl's config channel); the segment JSON is not a credential.
+  RESP=$(fs_api -X PUT "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/" -d "$UPDATED_JSON") \
     || { echo "PUT segment failed" >&2; exit 3; }
   echo "$RESP" | python3 -c "
 import json, sys

@@ -16,6 +16,9 @@
 set -euo pipefail
 
 LABEL="deferred-scope-out"
+# Excluded from every drain whose --label is not itself this value (see the
+# query below). Named once so the guard and its test cannot drift apart.
+MACHINERY_LABEL="meta/machinery"
 MILESTONE="Post-MVP / Later"
 TOP_N=0           # 0 = all clusters
 MIN_CLUSTER_SIZE=3
@@ -66,8 +69,8 @@ else
   # Validate milestone title exists before querying (fail fast).
   # gh milestone flags take the title, not numeric ID — rule
   # cq-gh-issue-create-milestone-takes-title.
-  if ! gh api "repos/:owner/:repo/milestones?state=open&per_page=100" \
-        --jq '.[].title' 2>/dev/null | grep -Fxq "$MILESTONE"; then
+  if ! grep -Fxq "$MILESTONE" \
+        < <(gh api "repos/:owner/:repo/milestones?state=open&per_page=100" --jq '.[].title' 2>/dev/null); then
     echo "Error: milestone title '$MILESTONE' not found (open milestones only)" >&2
     exit 2
   fi
@@ -75,19 +78,54 @@ else
   # Validate label exists before querying (rule cq-gh-issue-label-verify-name).
   # `gh label list` returns tab-separated name<TAB>description<TAB>color; match
   # the first column exactly.
-  if ! gh label list --limit 200 2>/dev/null \
-        | awk -F'\t' '{print $1}' | grep -Fxq "$LABEL"; then
+  if ! grep -Fxq "$LABEL" \
+        < <(gh label list --limit 200 2>/dev/null | awk -F'\t' '{print $1}'); then
     echo "Error: label '$LABEL' not found in repo" >&2
     exit 2
   fi
 
   # Two-stage piping: gh --json ... | jq. Never single-stage `gh --jq` with
   # `--arg`, which silently drops flags (learning 2026-04-15).
+  # The machinery ledger is excluded from every user-facing drain EXPLICITLY,
+  # never by accident of the default label. `/drain` defaults to
+  # `deferred-scope-out`, so `meta/machinery` is out of scope today only
+  # because nobody has changed that default -- a future change would silently
+  # pull hundreds of findings-about-guards into a drain the operator reads as
+  # user-facing work. The exclusion lifts only when the operator names the
+  # label outright, which is how the weekly machinery cadence drains it.
+  #
+  # WHY A jq POST-FILTER AND NOT A QUERY QUALIFIER. Measured 2026-09-10
+  # against this repo, `gh issue list` SILENTLY DISCARDS `--search` when
+  # `--label` is also passed: the self-exclusion control
+  #   gh issue list --label deferred-scope-out --search '-label:"deferred-scope-out"'
+  # returned the full 200 rather than 0. Dropping `--label` in favour of a
+  # pure `--search` fails the same control the same way -- `gh issue list`
+  # does not route through the search API. (The REST search endpoint DOES
+  # honour `-label:`, which is what makes the `gh issue list` behaviour a
+  # trap rather than a platform limit.) A query-level exclusion here would
+  # therefore have been a no-op that looked correct in any positive test,
+  # because a positive test passes whether or not the filter binds. The
+  # labels array is already materialised by `--json labels`, so filtering
+  # here costs nothing and is authoritative -- it is also immune to GitHub
+  # Search's eventual-consistency window on a freshly-applied label.
   ISSUES_JSON="$(gh issue list \
     --label "$LABEL" --state open \
     --milestone "$MILESTONE" \
     --json number,title,body,labels --limit 200)"
+  if [[ "$LABEL" != "$MACHINERY_LABEL" ]]; then
+    ISSUES_JSON="$(jq -c --arg m "$MACHINERY_LABEL" \
+      '[.[] | select([.labels[].name] | index($m) | not)]' <<<"$ISSUES_JSON")"
+  fi
 fi
+# The kill-switch labels are excluded for EVERY --label, the machinery one
+# included: the standing weekly measurement issue is machinery AND `keep-open`,
+# so a machinery drain that honoured only the exclusion above would close its
+# own measurement surface. Applied after the fetch/fixture fork so the fixture
+# path exercises the same filter. `keep-open` is the sweeper's kill-switch
+# (`KILLSWITCH_LABELS` in cron-stale-deferred-scope-outs.ts); the drain and
+# measurement line 1d honour the same label (#8076).
+ISSUES_JSON="$(jq -c \
+  '[.[] | select([.labels[].name] | (index("keep-open") or index("do-not-autoclose")) | not)]' <<<"$ISSUES_JSON")"
 
 # Single pure-jq pipeline: parse file paths from each issue body, pick the
 # "top" path per issue, derive its "area" (top two path segments). Ranking:

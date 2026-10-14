@@ -1,4 +1,5 @@
 import { type EvidenceRecord, SCHEMA_VERSION } from "./schema";
+import { INDIVIDUAL_CLA_DOC_PATH } from "./cla-doc-path";
 
 export class BackfillSchemaMismatchError extends Error {
   constructor(got: string) {
@@ -52,7 +53,7 @@ export function buildBackfillPayloads(input: ClaJsonInput, opts: BuildOpts): Evi
         type: row.name.endsWith("[bot]") ? "Bot" : "User",
       },
       pr_of_record: { number: prNumber, repo: "jikig-ai/soleur" },
-      cla_doc: { path: "docs/legal/individual-cla.md", git_sha: sha, content_sha256: contentSha256 },
+      cla_doc: { path: INDIVIDUAL_CLA_DOC_PATH, git_sha: sha, content_sha256: contentSha256 },
       signed_at: new Date(row.created_at).toISOString(),
       capture_method: preExisted ? "backfilled-pre-existed" : "backfilled",
       workflow_run_id: 0,

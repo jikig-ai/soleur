@@ -1,0 +1,38 @@
+# The closed taxonomy of USER-VISIBLE SURFACES.
+#
+# ONE source of truth, read by two consumers that must never disagree:
+#   - .claude/hooks/guardrails.sh  guardrails:require-filing-justification
+#       (a filing must name one of these in its `User-Impact:` line)
+#   - scripts/machinery-backfill-propose.sh
+#       (an issue naming none of these, while naming a machinery noun, is a
+#        machinery finding)
+#
+# WHY A POSITIVE ALLOW-LIST AND NOT A DENY-LIST OF BAD PHRASINGS. A deny-list
+# can only ever catch phrasings already in it; it rots against whatever wording
+# the current review agent happens to use, and a mutation row that tests it with
+# a phrase drawn from its own list cannot fail. The positive form is bounded,
+# does not rot, and lets the filing gate and the backfill classifier share one
+# concept instead of two that must be kept in agreement by hand.
+#
+# This is a SHAPE check, not a semantic one. It asserts that a filing named a
+# surface, never that the named consequence is true. That limit is recorded in
+# ADR-216 rather than left for a reader to discover.
+#
+# Lines beginning with `#` and blank lines are ignored. One token per line.
+# Matched case-insensitively, on a word boundary.
+route
+endpoint
+page
+screen
+component
+button
+form
+dashboard
+CLI
+command
+email
+notification
+document
+report
+invoice
+digest

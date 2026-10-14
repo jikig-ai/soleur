@@ -25,7 +25,10 @@
 > Five moves on one branch is the datum, not the anecdote: an ordinal is claimed at *merge*, and
 > this pipeline's plan→ship span is long enough that the claim reliably goes stale. Every one of
 > the four was surfaced by a `fetch`, a `rebase`, or a BEHIND sync — **never by a gate on this
-> branch**, because `adr-ordinals` is not a required check. Re-run `scripts/check-adr-ordinals.sh`
+> branch**, because `adr-ordinals` is not a required check [correction, #7941: it IS a required check
+> (IaC row since #6050) — what the note measured is real, a branch that is BEHIND cannot see the
+> collision until a sync brings the sibling's file in; once it does, the PR's own `adr-ordinals`
+> job reds and blocks the merge rather than landing on `main`]. Re-run `scripts/check-adr-ordinals.sh`
 > after ANY sync whose merge output lists the decisions directory, and read its exit code
 > directly: `bash …/check-adr-ordinals.sh | tail -3` reports `tail`'s status, not the script's.
 >

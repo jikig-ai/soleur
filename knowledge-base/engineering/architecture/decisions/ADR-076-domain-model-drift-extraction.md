@@ -5,9 +5,9 @@ date: 2026-07-01
 related_adrs: [ADR-038, ADR-044, ADR-073]
 related: [5754, 5871, 5872, 5773]
 related_plans:
-  - knowledge-base/project/plans/2026-07-01-feat-sync-domain-model-drift-plan.md
+  - knowledge-base/project/plans/archive/20261013-041741-2026-07-01-feat-sync-domain-model-drift-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-sync-domain-model/spec.md
+  - knowledge-base/project/specs/archive/20261013-041741-feat-sync-domain-model/spec.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -24,8 +24,8 @@ extraction conventions those consumers depend on.
 
 ## Decision
 
-1. **Deterministic-first extraction.** A bash analyzer (`scripts/domain-model-drift.sh`, tokenizer
-   in `scripts/lib/domain-model-lib.sh`) extracts structural facts. The LLM is confined to phrasing a
+1. **Deterministic-first extraction.** A bash analyzer (`plugins/soleur/scripts/domain-model-drift.sh`, tokenizer
+   in `plugins/soleur/scripts/lib/domain-model-lib.sh`) extracts structural facts. The LLM is confined to phrasing a
    candidate statement at interactive approval time — it is NEVER in the drift-detection or write
    path. Consequence: drift detection is a pure deterministic set-diff, so re-runs are byte-identical
    (`LC_ALL=C` sorts + `jq -S`), which is what makes it CI-gateable.
@@ -93,7 +93,7 @@ The fast-follow enforcement gates this ADR anticipated are now built. Design of 
    bounded structural scope of item 4). Trigger = migrations + `workspace-resolver.ts` + the register.
 4. **Ships blocking directly** (stale=0 on `main`; no advisory-first rollout apparatus). The residual
    citation-parser false-positive risk is covered by an actionable `stale>0` FAIL message.
-5. The `name_after()` `public.` default-schema strip (`scripts/lib/domain-model-lib.sh`) **enforces
+5. The `name_after()` `public.` default-schema strip (`plugins/soleur/scripts/lib/domain-model-lib.sh`) **enforces
    item 3** — anchors are `<table>.<object>`, not the previously-corrupt `public.<table>.public.<object>`.
 
 ### Scheduled drift cron (2026-07-02 amendment, #5872)

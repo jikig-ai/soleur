@@ -1,6 +1,6 @@
 // Prompt-injection defense for the Command Center `/soleur:go` runner.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // Stage 2 §"Files to create" (inline sketch) + Stage 2.7/2.16 (tests +
 // extraction). Untrusted-user threat model: the runner must NEVER pass a
 // bare user message as `prompt` to the Agent SDK's `query()`. Wrapping in
@@ -30,6 +30,10 @@ const POSTAMBLE = "Invoke /soleur:go on the user's intent.";
 // delimiter framing; only the trailing instruction differs.
 const SUPPORT_POSTAMBLE =
   "Answer the user's support question about using the Soleur app.";
+// crm-lead keeps persona command_center (no new persona value) but must not
+// carry the router dispatch line. Same framing as the support postamble.
+const CRM_LEAD_POSTAMBLE =
+  "Help the user enter a CRM lead. Do not dispatch /soleur:go.";
 
 export const MAX_USER_INPUT_CHARS = 8192;
 
@@ -41,9 +45,14 @@ const CONTROL_CHAR_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
 export function wrapUserInput(
   userMessage: string,
   persona: "command_center" | "support" = "command_center",
+  crmLead = false,
 ): string {
   const stripped = userMessage.replace(CONTROL_CHAR_RE, "");
   const capped = stripped.slice(0, MAX_USER_INPUT_CHARS);
-  const postamble = persona === "support" ? SUPPORT_POSTAMBLE : POSTAMBLE;
+  const postamble = crmLead
+    ? CRM_LEAD_POSTAMBLE
+    : persona === "support"
+      ? SUPPORT_POSTAMBLE
+      : POSTAMBLE;
   return `${WRAP_PREAMBLE}\n${OPEN}\n${capped}\n${CLOSE}\n\n${postamble}`;
 }

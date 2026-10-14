@@ -116,6 +116,69 @@ assert_eq "…and the hit is attributed to the infra path (not merely 'one hit s
   "$(hits_of "$FIX" | sed 's/: .*//')"
 rm "$FIX/apps/web-platform/infra/registry-userdata-budget.sh"
 
+# ── ARM 1b: #7578 — the message assembled into a shell VARIABLE ────────────────────────
+#
+# THE VERBATIM LINE FROM THE INCIDENT. For two days from 2026-08-14 19:06:58Z this ran every
+# 30 minutes naming two causes the run had measured FALSE — `rc=0` means the query SUCCEEDED,
+# and the real state was Better Stack refusing WRITES (402) while the READ path answered 200.
+#
+# It was invisible to all THREE predicates, which is why a two-filter reading of this bug
+# produces a fix that changes nothing:
+#
+#   1. OPERATOR_LINE — its helper-call alternative requires whitespace immediately before the
+#      quote (`\s+"`). An assignment has `=` there. The uppercase shell-var convention is a
+#      second, independent barrier (`^\s*[a-z_]`).
+#   2. CLAIM — its phrase list did not model the em-dash appendix `— <cause> / <cause>`.
+#   3. MEASURED — and this is the one nobody named: `VERDICT="TRANSIENT"` on the SAME LINE
+#      matches `verdict=` case-insensitively, so even with 1 and 2 widened the line is
+#      exonerated. Proximity is not evidence: a verdict variable nearby shows the job measured
+#      SOMETHING, not that it measured the cause the appendix names — and here the measurement
+#      it was next to (`rc=0`) CONTRADICTED that cause.
+#
+# The `VERDICT="TRANSIENT"; ` prefix is therefore LOAD-BEARING FIXTURE CONTEXT, not
+# decoration. Drop it and this case passes under a two-filter fix, hiding the defect it
+# exists to pin — measured: without the prefix, reverting the exoneration narrowing leaves
+# the whole suite green.
+cat > "$FIX/scripts/zot-restart-loop-alarm.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -z "$CONTROL" ]]; then
+  VERDICT="TRANSIENT"; DETAIL="recent ${WINDOW} empty AND control-marker query empty/errored (rc=${control_rc}) — Better Stack unreachable / creds unset"
+  emit_and_exit 2
+fi
+SH
+assert_eq "a message assembled into a shell variable trips it (#7578)" "1" "$(census_of "$FIX")"
+assert_eq "…attributed to the assignment line, not merely 'one hit somewhere'" \
+  "scripts/zot-restart-loop-alarm.sh:4" "$(hits_of "$FIX" | sed 's/: .*//')"
+rm "$FIX/scripts/zot-restart-loop-alarm.sh"
+
+# The SECOND carrier, after a compliant first. A check that stops at the first member is
+# itself an instance of the class this lint exists to catch, so the sibling is pinned
+# separately rather than assumed to follow. `NIC_VERDICT` is in the window here, which is the
+# exoneration path this fixture pins — the sibling used `_VERDICT\b` rather than `verdict=`,
+# so the two lines escaped through DIFFERENT alternatives of the same regex.
+cat > "$FIX/scripts/nic-alarm.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+NIC_VERDICT="FIRE"
+NIC_DETAIL_OK="newest boot_id=${newest}: nic_ok=true, converged within the bounded wait"
+NIC_DETAIL="recent ${WINDOW} empty for SOLEUR_PRIVATE_NIC AND the control-marker query is empty/errored (rc=${control_rc}) — Better Stack unreachable / creds unset"
+SH
+assert_eq "the second carrier trips it too, past a compliant first (#7578)" "1" "$(census_of "$FIX")"
+rm "$FIX/scripts/nic-alarm.sh"
+
+# #7318: the helper-call alternative is ^-anchored, so a call on a shell CONTINUATION line
+# is invisible. Same regex, same class, folded in here so the triage and the ratchet are paid
+# once rather than twice.
+cat > "$FIX/scripts/continuation.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+copy_image "$src" "$dst" \
+  || degraded sign "$?" "the mirror did not land — the registry rewrite is the fix"
+SH
+assert_eq "a helper call on a continuation line trips it (#7318)" "1" "$(census_of "$FIX")"
+rm "$FIX/scripts/continuation.sh"
+
 # ── ARM 2: fixtures that MUST NOT trip ─────────────────────────────────────────────────
 # A message that BRANCHES on a measured verdict is the fixed shape. Flagging it would make
 # the lint punish the correction it is asking for.
@@ -198,6 +261,56 @@ YAML
 assert_eq "near-miss phrasings do NOT trip (both word boundaries + the closed adjective list)" \
   "0" "$(census_of "$FIX")"
 rm "$FIX/.github/workflows/nearmiss.yml"
+
+# ── ARM 2b: the far side of #7578 ──────────────────────────────────────────────────────
+#
+# Rows 1b above are all RED-direction, and a guard that rejects EVERYTHING satisfies every
+# one of them. Only a must-PASS input that is NOT the canonical fixture can detect
+# over-rejection, which is the failure mode the tightened predicate exists to avoid. Each
+# case below differs from the offender in a way the contract explicitly permits.
+
+# (a) The appendix class, with the deliberate marker. This is the escape hatch the narrowed
+#     exoneration leaves open, and it is the ONLY one it leaves open for this class.
+cat > "$FIX/scripts/marked-appendix.sh" <<'SH'
+#!/usr/bin/env bash
+# MEASURED-BY: the 402 refusal code read by betterstack-ingest-probe.sh two lines up
+DETAIL="ingest probe returned 402 — quota exhausted"
+SH
+assert_eq "an appendix cause with an explicit MEASURED-BY does NOT trip" "0" "$(census_of "$FIX")"
+rm "$FIX/scripts/marked-appendix.sh"
+
+# (b) An appendix that INTERPOLATES the value it is explaining. This is the dominant shape in
+#     the live corpus and it is honest: the message restates a measurement it just took.
+#     Excluding `$` from the appendix span is what distinguishes it from the offender, whose
+#     appendix was static prose that the interpolated rc=0 contradicted — measured: without
+#     the exclusion the live census is 19 rather than 12, and all 7 of the difference are
+#     this shape.
+cat > "$FIX/scripts/interpolating-appendix.sh" <<'SH'
+#!/usr/bin/env bash
+code="$(curl -so /dev/null -w '%{http_code}' "$url")"
+echo "ZOT_GATE: /v2/ probe http=$code — GHCR path ($code means zot unreachable)"
+SH
+assert_eq "an appendix interpolating its own measurement does NOT trip" "0" "$(census_of "$FIX")"
+rm "$FIX/scripts/interpolating-appendix.sh"
+
+# (c) THE REGRESSION GUARD FOR THE NARROWED EXONERATION. The narrowing applies to the APPENDIX
+#     class only; a claim matched by CLAIM's pre-existing phrase list must keep the inferred
+#     MEASURED semantics it has today. Without this case, narrowing the exoneration for ALL
+#     claims would pass the entire suite while reddening the live tree for a dozen messages
+#     that were correctly exonerated before this PR — a fix that breaks the thing it extends.
+cat > "$FIX/.github/workflows/phrase-with-inferred-evidence.yml" <<'YAML'
+name: phrase-with-inferred-evidence
+jobs:
+  x:
+    steps:
+      - env:
+          TOKEN_VERDICT: ${{ steps.pre.outputs.verdict || 'unmeasured' }}
+        run: |
+          echo "::error::the push failed. Most likely cause: ${TOKEN_VERDICT}."
+YAML
+assert_eq "a phrase-list claim keeps its inferred exoneration (the narrowing is appendix-only)" \
+  "0" "$(census_of "$FIX")"
+rm "$FIX/.github/workflows/phrase-with-inferred-evidence.yml"
 
 # The path-based test exclusion, pinned. It was `/test/` — which matched NOTHING, because
 # the directories that exist are `tests/`, `test-fixtures/` and `fixtures/`. A guard whose

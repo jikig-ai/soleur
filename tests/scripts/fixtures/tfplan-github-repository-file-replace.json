@@ -1,0 +1,36 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "github_repository_file.marketplace_manifest",
+      "mode": "managed",
+      "type": "github_repository_file",
+      "name": "marketplace_manifest",
+      "change": {
+        "actions": ["delete", "create"],
+        "before": {
+          "repository": "soleur-marketplace",
+          "branch": "main",
+          "file": ".claude-plugin/marketplace.json"
+        },
+        "after": {
+          "repository": "soleur-marketplace",
+          "branch": "trunk",
+          "file": ".claude-plugin/marketplace.json"
+        }
+      }
+    },
+    {
+      "address": "github_repository_ruleset.marketplace_pr_required",
+      "mode": "managed",
+      "type": "github_repository_ruleset",
+      "name": "marketplace_pr_required",
+      "change": {
+        "actions": ["no-op"],
+        "before": { "rules": [{ "pull_request": [{ "required_approving_review_count": 1 }] }] },
+        "after": { "rules": [{ "pull_request": [{ "required_approving_review_count": 1 }] }] }
+      }
+    }
+  ]
+}

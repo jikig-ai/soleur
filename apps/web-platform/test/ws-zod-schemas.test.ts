@@ -224,6 +224,57 @@ describe("wsMessageSchema: new Stage 3 variants round-trip", () => {
   });
 });
 
+describe("wsMessageSchema: c4_diagram_saved (#8739)", () => {
+  test("a valid frame round-trips", () => {
+    const r = parseWSMessage({
+      type: "c4_diagram_saved",
+      dirPath: "engineering/architecture/diagrams",
+      rerendered: true,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok && r.msg.type === "c4_diagram_saved") {
+      expect(r.msg.dirPath).toBe("engineering/architecture/diagrams");
+      expect(r.msg.rerendered).toBe(true);
+    }
+  });
+
+  test("diagnostic is optional and nullable", () => {
+    for (const diagnostic of [undefined, null, "superseded by a newer save"]) {
+      const r = parseWSMessage({
+        type: "c4_diagram_saved",
+        dirPath: "engineering/architecture/diagrams",
+        rerendered: false,
+        diagnostic,
+      });
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  test("missing dirPath rejects", () => {
+    const r = parseWSMessage({ type: "c4_diagram_saved", rerendered: true });
+    expect(r.ok).toBe(false);
+  });
+
+  test("non-boolean rerendered rejects", () => {
+    const r = parseWSMessage({
+      type: "c4_diagram_saved",
+      dirPath: "engineering/architecture/diagrams",
+      rerendered: "yes",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  test("unknown extra keys reject (strictObject)", () => {
+    const r = parseWSMessage({
+      type: "c4_diagram_saved",
+      dirPath: "engineering/architecture/diagrams",
+      rerendered: true,
+      extra: 1,
+    });
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe("wsMessageSchema: rejection cases", () => {
   test("missing type rejects", () => {
     const r = parseWSMessage({ conversationId: "c-1" });

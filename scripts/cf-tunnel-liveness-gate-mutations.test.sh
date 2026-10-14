@@ -185,8 +185,18 @@ arm "M3 a step runs AFTER the gate (gate no longer final)" "W6" \
 
 # --- M4: membership drift with the COUNT held constant --------------------------------------
 # Repoint one caller at a different action and add a spare `uses:` elsewhere, so the total call
-# count is unchanged. A cardinality-only assertion passes this; only a membership assertion
-# catches it. This arm exists precisely because it is the one a lazy battery waves through.
+# count is unchanged. A cardinality-only assertion passes this. This arm exists precisely
+# because it is the one a lazy battery waves through.
+#
+# WHICH assertion covers it moved at #7542, and the move is the point. While
+# apply-web-platform-infra.yml had exactly ONE call site, removing it dropped the file from the
+# sorted list and the file-MEMBERSHIP half of W7 caught this. #7542 gave that workflow a second
+# call site (the vector_redeliver job), so the mutation now leaves the file listed, the donor
+# holds the total constant, and membership goes quiet — MEASURED: this arm SURVIVED against a
+# membership+total W7. The covering assertion is now the per-file DISTRIBUTION pin, which
+# subsumes both halves. Naming it here rather than loosening the arm is deliberate: `arm`
+# reports a mutant caught by the wrong assertion as a failure, and that property is why this
+# regression was visible at all.
 restore
 python3 - "$SB/repo/$APPLY_REL" "$SB/repo/.github/workflows" <<'PY'
 import sys, io, os, re
@@ -204,8 +214,8 @@ line = d[i:d.index("\n", i) + 1]
 io.open(donor, "w", encoding="utf-8").write(d[:i] + line + d[i:])
 PY
 assert_landed "$APPLY_REL"
-arm "M4 caller membership drifts while the total count is held constant" "W7" \
-    "bridge callers drifted"
+arm "M4 caller membership drifts while the total count is held constant" "W7 per-file distribution" \
+    "call-site DISTRIBUTION drifted"
 
 # --- M5: drop the -replace target, leaving the dispatch-input prose -------------------------
 restore

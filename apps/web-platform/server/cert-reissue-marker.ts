@@ -141,6 +141,17 @@ export interface CertReissueMarker {
   // failed gate says WHAT answered rather than only that it was wrong.
   acmeApexServer?: string | null;
   acmeWwwServer?: string | null;
+  // GitHub's OWN issuance verdict (`GET /pages/health`). `null` = the read
+  // failed, which is NOT the same as `false` and must stay distinguishable in
+  // the marker: "GitHub says no" and "we could not ask" have different remedies.
+  //
+  // These are the decisive fields for post-hoc diagnosis. During the 2026-08-16
+  // apex outage every OTHER field above read healthy while GitHub silently
+  // refused to issue, and their absence is why the incident was misdiagnosed as
+  // a server-side wedge needing GitHub Support.
+  httpsEligibleApex?: boolean | null;
+  httpsEligibleWww?: boolean | null;
+  healthCaaError?: string | null;
 
   // --- outcome ---
   outcome?: string | null;

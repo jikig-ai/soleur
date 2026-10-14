@@ -5,6 +5,7 @@ import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
 import { renameOrganization } from "@/server/workspace-membership";
 import { validateWorkspaceName } from "@/lib/workspace-name";
+import { verifiedUserId } from "@/server/request-auth";
 
 // POST /api/workspace/rename
 // Body: { organizationId, name }
@@ -18,10 +19,8 @@ export async function POST(request: Request) {
   if (!originValid) return rejectCsrf("api/workspace/rename", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -30,7 +29,7 @@ export async function POST(request: Request) {
   if (!pageData.ok) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  const identity: Identity = { userId: user.id, role: "prd", orgId: pageData.data.organizationId };
+  const identity: Identity = { userId, role: "prd", orgId: pageData.data.organizationId , email: null, subscriptionStatus: null };
   if (!(await isTeamWorkspaceInviteEnabled(pageData.data.organizationId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
@@ -55,7 +54,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "org_mismatch" }, { status: 403 });
   }
 
-  const callerRow = pageData.data.members.find((m) => m.userId === user.id);
+  const callerRow = pageData.data.members.find((m) => m.userId === userId);
   if (!callerRow || callerRow.role !== "owner") {
     return NextResponse.json({ error: "caller_not_owner" }, { status: 403 });
   }
@@ -63,7 +62,7 @@ export async function POST(request: Request) {
   const result = await renameOrganization({
     organizationId,
     name: validated.trimmed,
-    callerUserId: user.id,
+    callerUserId: userId,
   });
 
   if (!result.ok) {

@@ -1,0 +1,12 @@
+import { mkdtempSync as mk, rmSync as wipe } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+export function withScratch(fn: (d: string) => void): void {
+  const d = mk(join(tmpdir(), "demo-"));
+  try {
+    fn(d);
+  } finally {
+    wipe(d, { recursive: true, force: true });
+  }
+}

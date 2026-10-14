@@ -31,6 +31,7 @@ dependencies: []
 ## Technical Details
 
 **Affected files:**
+
 - `plugins/soleur/skills/community/scripts/x-community.sh:464-558`
 
 ## Acceptance Criteria

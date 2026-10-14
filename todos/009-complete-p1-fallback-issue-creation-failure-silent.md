@@ -20,6 +20,7 @@ When X posting fails AND the fallback issue creation also fails (e.g., GH_TOKEN 
 ## Proposed Solutions
 
 ### Solution A: Check return code and fail hard (Recommended)
+
 Check return code of `create_dedup_issue` in fallback functions. If the fallback issue cannot be created, return 1 so the workflow-level notification fires.
 
 - **Pros:** Ensures at least one notification path succeeds

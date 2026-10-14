@@ -449,7 +449,7 @@
           "description": "Alert when any CF Access service token (github-actions-deploy or github-actions-ci-ssh) approaches expiry",
           "email_integration": [
             {
-              "id": "ops@jikigai.com",
+              "id": "ops@example.com",
               "name": ""
             }
           ],
@@ -468,7 +468,7 @@
           "description": "Alert when any CF Access service token (github-actions-deploy or github-actions-ci-ssh) approaches expiry",
           "email_integration": [
             {
-              "id": "ops@jikigai.com",
+              "id": "ops@example.com",
               "name": ""
             }
           ],
@@ -707,7 +707,7 @@
         "before": {
           "allow_overwrite": false,
           "comment": "",
-          "content": "6410c1ec-4f01-4a69-ad98-7bb1621f6d37.cfargotunnel.com",
+          "content": "00000000-0000-4000-8000-000000000001.cfargotunnel.com",
           "created_on": "2026-03-20T21:48:32.844037Z",
           "data": [],
           "hostname": "deploy.soleur.ai",
@@ -728,7 +728,7 @@
         "after": {
           "allow_overwrite": false,
           "comment": "",
-          "content": "6410c1ec-4f01-4a69-ad98-7bb1621f6d37.cfargotunnel.com",
+          "content": "00000000-0000-4000-8000-000000000001.cfargotunnel.com",
           "created_on": "2026-03-20T21:48:32.844037Z",
           "data": [],
           "hostname": "deploy.soleur.ai",
@@ -902,7 +902,7 @@
         "before": {
           "allow_overwrite": false,
           "comment": "",
-          "content": "v=DMARC1; p=reject; rua=mailto:dmarc-reports@soleur.ai; pct=100",
+          "content": "v=DMARC1; p=reject; rua=mailto:dmarc-reports@example.com; pct=100",
           "created_on": "2026-03-18T15:55:40.187098Z",
           "data": [],
           "hostname": "_dmarc.soleur.ai",
@@ -923,7 +923,7 @@
         "after": {
           "allow_overwrite": false,
           "comment": "",
-          "content": "v=DMARC1; p=reject; rua=mailto:dmarc-reports@soleur.ai; pct=100",
+          "content": "v=DMARC1; p=reject; rua=mailto:dmarc-reports@example.com; pct=100",
           "created_on": "2026-03-18T15:55:40.187098Z",
           "data": [],
           "hostname": "_dmarc.soleur.ai",
@@ -2076,7 +2076,7 @@
         "before": {
           "allow_overwrite": false,
           "comment": "",
-          "content": "6410c1ec-4f01-4a69-ad98-7bb1621f6d37.cfargotunnel.com",
+          "content": "00000000-0000-4000-8000-000000000001.cfargotunnel.com",
           "created_on": "2026-05-20T17:09:51.326328Z",
           "data": [],
           "hostname": "ssh.soleur.ai",
@@ -2097,7 +2097,7 @@
         "after": {
           "allow_overwrite": false,
           "comment": "",
-          "content": "6410c1ec-4f01-4a69-ad98-7bb1621f6d37.cfargotunnel.com",
+          "content": "00000000-0000-4000-8000-000000000001.cfargotunnel.com",
           "created_on": "2026-05-20T17:09:51.326328Z",
           "data": [],
           "hostname": "ssh.soleur.ai",
@@ -2206,7 +2206,7 @@
         "before": {
           "allow_overwrite": false,
           "comment": "",
-          "content": "ifsccnjhymdmidffkzhl.supabase.co",
+          "content": "synthetic-ref.supabase.co",
           "created_on": "2026-04-03T09:07:19.609182Z",
           "data": [],
           "hostname": "api.soleur.ai",
@@ -2227,7 +2227,7 @@
         "after": {
           "allow_overwrite": false,
           "comment": "",
-          "content": "ifsccnjhymdmidffkzhl.supabase.co",
+          "content": "synthetic-ref.supabase.co",
           "created_on": "2026-04-03T09:07:19.609182Z",
           "data": [],
           "hostname": "api.soleur.ai",
@@ -5792,7 +5792,7 @@
           "footer_links": [],
           "header_bg_color": "",
           "http_only_cookie_attribute": false,
-          "id": "c02a91f4-7ea2-40a3-b736-41fd9adc824e",
+          "id": "00000000-0000-4000-8000-000000000003",
           "landing_page_design": [],
           "logo_url": "",
           "name": "Deploy Webhook - soleur-web-platform",
@@ -5832,7 +5832,7 @@
           "footer_links": [],
           "header_bg_color": "",
           "http_only_cookie_attribute": false,
-          "id": "c02a91f4-7ea2-40a3-b736-41fd9adc824e",
+          "id": "00000000-0000-4000-8000-000000000003",
           "landing_page_design": [],
           "logo_url": "",
           "name": "Deploy Webhook - soleur-web-platform",
@@ -5909,7 +5909,7 @@
           "footer_links": [],
           "header_bg_color": "",
           "http_only_cookie_attribute": false,
-          "id": "7230394c-8ae7-4d21-bd1e-6ea215891c72",
+          "id": "00000000-0000-4000-8000-000000000002",
           "landing_page_design": [],
           "logo_url": "",
           "name": "SSH (CI runner) - soleur-web-platform",
@@ -5949,7 +5949,7 @@
           "footer_links": [],
           "header_bg_color": "",
           "http_only_cookie_attribute": false,
-          "id": "7230394c-8ae7-4d21-bd1e-6ea215891c72",
+          "id": "00000000-0000-4000-8000-000000000002",
           "landing_page_design": [],
           "logo_url": "",
           "name": "SSH (CI runner) - soleur-web-platform",
@@ -6007,13 +6007,13 @@
         ],
         "before": {
           "account_id": null,
-          "application_id": "7230394c-8ae7-4d21-bd1e-6ea215891c72",
+          "application_id": "00000000-0000-4000-8000-000000000002",
           "approval_group": [],
           "approval_required": false,
           "connection_rules": [],
           "decision": "non_identity",
           "exclude": [],
-          "id": "b67442f8-a98a-4e86-ac97-b37141b69258",
+          "id": "00000000-0000-4000-8000-000000000004",
           "include": [
             {
               "any_valid_service_token": false,
@@ -6039,7 +6039,7 @@
               "okta": [],
               "saml": [],
               "service_token": [
-                "20d8c846-bf18-42af-bf35-fce42988326b"
+                "00000000-0000-4000-8000-000000000005"
               ]
             }
           ],
@@ -6054,13 +6054,13 @@
         },
         "after": {
           "account_id": null,
-          "application_id": "7230394c-8ae7-4d21-bd1e-6ea215891c72",
+          "application_id": "00000000-0000-4000-8000-000000000002",
           "approval_group": [],
           "approval_required": false,
           "connection_rules": [],
           "decision": "non_identity",
           "exclude": [],
-          "id": "b67442f8-a98a-4e86-ac97-b37141b69258",
+          "id": "00000000-0000-4000-8000-000000000004",
           "include": [
             {
               "any_valid_service_token": false,
@@ -6086,7 +6086,7 @@
               "okta": [],
               "saml": [],
               "service_token": [
-                "20d8c846-bf18-42af-bf35-fce42988326b"
+                "00000000-0000-4000-8000-000000000005"
               ]
             }
           ],
@@ -6174,13 +6174,13 @@
         ],
         "before": {
           "account_id": "",
-          "application_id": "c02a91f4-7ea2-40a3-b736-41fd9adc824e",
+          "application_id": "00000000-0000-4000-8000-000000000003",
           "approval_group": [],
           "approval_required": false,
           "connection_rules": [],
           "decision": "non_identity",
           "exclude": [],
-          "id": "df24d8e2-b4c4-46bb-b0a2-1497bf30ebe2",
+          "id": "00000000-0000-4000-8000-000000000007",
           "include": [
             {
               "any_valid_service_token": false,
@@ -6206,7 +6206,7 @@
               "okta": [],
               "saml": [],
               "service_token": [
-                "baa7825d-c52a-4cc4-bfe4-300140ed6bcb"
+                "00000000-0000-4000-8000-000000000006"
               ]
             }
           ],
@@ -6221,13 +6221,13 @@
         },
         "after": {
           "account_id": "",
-          "application_id": "c02a91f4-7ea2-40a3-b736-41fd9adc824e",
+          "application_id": "00000000-0000-4000-8000-000000000003",
           "approval_group": [],
           "approval_required": false,
           "connection_rules": [],
           "decision": "non_identity",
           "exclude": [],
-          "id": "df24d8e2-b4c4-46bb-b0a2-1497bf30ebe2",
+          "id": "00000000-0000-4000-8000-000000000007",
           "include": [
             {
               "any_valid_service_token": false,
@@ -6253,7 +6253,7 @@
               "okta": [],
               "saml": [],
               "service_token": [
-                "baa7825d-c52a-4cc4-bfe4-300140ed6bcb"
+                "00000000-0000-4000-8000-000000000006"
               ]
             }
           ],
@@ -6418,8 +6418,8 @@
               "warp_routing": []
             }
           ],
-          "id": "6410c1ec-4f01-4a69-ad98-7bb1621f6d37",
-          "tunnel_id": "6410c1ec-4f01-4a69-ad98-7bb1621f6d37"
+          "id": "00000000-0000-4000-8000-000000000001",
+          "tunnel_id": "00000000-0000-4000-8000-000000000001"
         },
         "after": {
           "account_id": "4d5ba6f096b2686fbdd404167dd4e125",
@@ -6449,8 +6449,8 @@
               "warp_routing": []
             }
           ],
-          "id": "6410c1ec-4f01-4a69-ad98-7bb1621f6d37",
-          "tunnel_id": "6410c1ec-4f01-4a69-ad98-7bb1621f6d37"
+          "id": "00000000-0000-4000-8000-000000000001",
+          "tunnel_id": "00000000-0000-4000-8000-000000000001"
         },
         "after_unknown": {},
         "before_sensitive": {

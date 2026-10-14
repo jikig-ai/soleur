@@ -53,7 +53,7 @@ const DISTINCT_OPS_GUARD = "reprovision-non-member-claim-reset";
 /** Extract the body of the repo_resolver_divergence resource block. */
 function divergenceAlertBlock(): string {
   const start = tf.indexOf(
-    'resource "sentry_issue_alert" "repo_resolver_divergence"',
+    'resource "sentry_alert" "repo_resolver_divergence"',
   );
   expect(start).toBeGreaterThanOrEqual(0);
   // Read to the next top-level `resource "` declaration (or EOF).
@@ -73,7 +73,7 @@ describe("repo-resolver-divergence alert feature contract", () => {
 
   it("issue-alerts.tf declares the repo_resolver_divergence alert resource", () => {
     expect(tf).toContain(
-      'resource "sentry_issue_alert" "repo_resolver_divergence"',
+      'resource "sentry_alert" "repo_resolver_divergence"',
     );
   });
 

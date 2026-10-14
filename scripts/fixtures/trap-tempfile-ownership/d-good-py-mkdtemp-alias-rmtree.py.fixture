@@ -1,0 +1,9 @@
+import atexit
+import tempfile
+from shutil import rmtree as _remove_tree
+
+
+def build():
+    work = tempfile.mkdtemp(prefix="demo-")
+    atexit.register(_remove_tree, work)
+    return work

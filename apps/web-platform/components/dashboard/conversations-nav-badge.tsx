@@ -28,6 +28,7 @@
 import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
+import { usePostFcp } from "@/hooks/use-post-fcp";
 import {
   NavCountBadge,
   useNavAttentionCount,
@@ -42,11 +43,14 @@ export async function fetchConversationAttentionCount([, repoUrl, workspaceId]: 
   string,
 ]): Promise<number> {
   const supabase = createClient();
-  const { data: auth } = await supabase.auth.getUser();
+  // getSession() is the local cookie read — the former getUser() was a
+  // browser→Supabase RTT for an id-only read (Phase 5); authorization stays
+  // server-side (middleware + RLS).
+  const { data: sessionData } = await supabase.auth.getSession();
   // Throw (not `return 0`) on no-user so a transient auth blip routes to
   // cold-omit / warm-last-good rather than blanking a warm badge to a false
   // "0" — matches how the dashboard list treats no-user as a hard error.
-  if (!auth.user) throw new Error("conversation attention count: not authenticated");
+  if (!sessionData.session?.user) throw new Error("conversation attention count: not authenticated");
   // Scope EXACTLY as the dashboard list (hooks/use-conversations.ts): active
   // repo + active workspace + not archived. RLS additionally scopes to the
   // owner, matching the list. `head: true` returns only the count.
@@ -72,8 +76,13 @@ export function ConversationsNavBadge({ collapsed }: { collapsed: boolean }) {
   const workspaceId = activeRepo?.workspaceId ?? null;
   // Gate the count until the active repo+workspace resolves (a disconnected repo
   // → no key → no count, and the dashboard shows its empty state anyway).
+  // #9178 — also gated on post-FCP: the badge count is non-critical chrome and
+  // must not contend with first paint. The active-repo read above stays
+  // ungated — it shares its key with the always-mounted useActiveRepo
+  // consumers, so gating it here would save nothing.
+  const postFcp = usePostFcp();
   const key =
-    repoUrl && workspaceId
+    postFcp && repoUrl && workspaceId
       ? swrKeys.dashboardConversationAttention(repoUrl, workspaceId)
       : null;
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, use } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import dynamic from "next/dynamic";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
@@ -102,9 +102,9 @@ export default function SharedDocumentPage({
         {/* Soleur branded header */}
         <header className="border-b border-soleur-border-default px-4 py-3">
           <div className="mx-auto flex max-w-3xl items-center justify-between">
-            <Link href="https://soleur.ai" className="text-lg font-semibold text-soleur-text-primary">
+            <NavLink href="https://soleur.ai" className="text-lg font-semibold text-soleur-text-primary">
               Soleur
-            </Link>
+            </NavLink>
             <span className="text-xs text-soleur-text-muted">Shared document</span>
           </div>
         </header>
@@ -239,12 +239,12 @@ function ErrorMessage({ title, message }: { title: string; message: string }) {
     <div className="flex flex-col items-center justify-center py-20 text-center">
       <h1 className="mb-2 text-lg font-semibold text-soleur-text-primary">{title}</h1>
       <p className="mb-6 text-sm text-soleur-text-secondary">{message}</p>
-      <Link
+      <NavLink
         href="https://soleur.ai"
         className="text-sm text-soleur-accent-gold-fg underline hover:text-soleur-accent-gold-text"
       >
         Learn about Soleur
-      </Link>
+      </NavLink>
     </div>
   );
 }

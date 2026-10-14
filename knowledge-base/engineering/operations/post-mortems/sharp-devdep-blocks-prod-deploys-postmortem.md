@@ -138,7 +138,6 @@ the recovery test a precise form: after this PR deploys, `/health`'s `build_sha`
 commit. Note `/api/health` is NOT the surface — it 307-redirects to `/login`; an earlier draft of
 this PIR cited it, which would have sent the next reader to a redirect.
 
-
 Verified pre-merge by reproducing the failing assertion rather than reasoning about it. In a clean
 temp dir containing only the new `package.json` + `package-lock.json`:
 

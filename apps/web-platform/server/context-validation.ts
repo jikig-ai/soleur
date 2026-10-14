@@ -15,14 +15,17 @@ function isSafePath(path: string): boolean {
   return filename.lastIndexOf(".") > 0;
 }
 /** Allowed context types */
-const ALLOWED_CONTEXT_TYPES = new Set(["kb-viewer", "routine-authoring"]);
+const ALLOWED_CONTEXT_TYPES = new Set(["kb-viewer", "routine-authoring", "crm-lead"]);
 
 /**
  * Mode-flag context types carry NO document (no path) — they only scope agent
  * behavior via a system-prompt directive. Document-context types (kb-viewer)
- * still require a valid path. #5402.
+ * still require a valid path. #5402. crm-lead is the same shape; the server
+ * stamps `crm-lead/<id>.mode` itself (the client does not supply it).
  */
-const MODE_FLAG_CONTEXT_TYPES = new Set(["routine-authoring"]);
+const MODE_FLAG_CONTEXT_TYPES = new Set(["routine-authoring", "crm-lead"]);
+
+export { crmLeadModePath, isCrmLeadModePath } from "@/lib/crm/crm-lead-mode";
 
 /**
  * Validate a ConversationContext payload from the client.

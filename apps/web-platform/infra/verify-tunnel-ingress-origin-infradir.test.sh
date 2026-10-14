@@ -52,7 +52,7 @@ OUT="$(cd "$INFRA_ABS" && INFRA_DIR="$REL_INFRA_DIR" PATH="$STUB_DIR:$PATH" \
   bash "$TARGET" 2>&1)"
 set -e
 
-if printf '%s' "$OUT" | grep -qiE 'cd:.*No such file or directory'; then
+if printf '%s' "$OUT" | grep -ciE 'cd:.*No such file or directory' >/dev/null; then
   echo "FAIL: script died on the relative-INFRA_DIR cd — #6595 regression:"
   printf '%s\n' "$OUT" | sed 's/^/    /'
   fails=1
@@ -75,13 +75,14 @@ else
   echo "PASS: infra dir is derived from BASH_SOURCE, not a relative env override"
 fi
 
-# --- Self-registration: this suite must be wired into infra-validation.yml. ---------
+# --- Self-registration: presence under infra/ is registration since #8736, so
+# what this suite pins is the CONNECTION — the legs' runner invocation. --------
 INFRA_VALIDATION="$REPO_ROOT/.github/workflows/infra-validation.yml"
 if [[ -f "$INFRA_VALIDATION" ]] && \
-   grep -qE 'bash apps/web-platform/infra/verify-tunnel-ingress-origin-infradir\.test\.sh' "$INFRA_VALIDATION"; then
-  echo "PASS: suite is registered in infra-validation.yml"
+   grep -qE 'run: bash apps/web-platform/infra/run-registered-suites\.sh' "$INFRA_VALIDATION"; then
+  echo "PASS: the suite runner is invoked in infra-validation.yml"
 else
-  echo "FAIL: suite is NOT registered in infra-validation.yml — it would be an orphan (#5417 class)"
+  echo "FAIL: the suite runner is NOT invoked in infra-validation.yml — no infra suite would run in CI (#5417 class)"
   fails=1
 fi
 

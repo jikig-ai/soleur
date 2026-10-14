@@ -5,7 +5,7 @@
  * Scope: DB-only v1. KB file seeding deferred to #2351 (files live in GitHub
  * workspace, not Supabase Storage).
  *
- * Usage: bun plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts <seed|reset>
+ * Usage: bun "${CLAUDE_PLUGIN_ROOT}/skills/ux-audit/scripts/bot-fixture.ts" <seed|reset>
  *
  * Env (from Doppler prd + prd_scheduled):
  *   SUPABASE_URL                    prd

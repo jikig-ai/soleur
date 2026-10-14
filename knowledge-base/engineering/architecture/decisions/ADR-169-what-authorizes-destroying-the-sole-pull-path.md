@@ -21,10 +21,12 @@ empty-store window**. Two independent failures ended that premise:
 1. **The premise was retracted (#7071).** The host→GHCR edge is dead: the read PAT is revoked
    (`GET api.github.com/user` → 401) and the pull-token minter is disabled (403 DENIED). Nothing
    covers the window. It is a total pull outage until the store is refilled.
-2. **The operand went dark.** `registry_pull_event ghcr-fallback` is emitted in `ci-deploy.sh`
-   only inside the *success* branch of `_ghcr_pull_or_recover`, i.e. only after a **successful**
-   GHCR pull. With the credential revoked it can never fire, so the operand that most directly
-   measured "is the fallback healthy" is permanently zero.
+2. **The operand went dark.** `registry_pull_event ghcr-fallback` was emitted in `ci-deploy.sh`
+   only inside the *success* branch of the GHCR pull helper, i.e. only after a **successful**
+   GHCR pull. With the credential revoked it could never fire, so the operand that most directly
+   measured "is the fallback healthy" was permanently zero. *(Since #8036 1c, 2026-09-23, both
+   the helper and the emit site are deleted — see Named residual 3. The reasoning above is kept
+   as written because it is what the gate's change rests on; only its tense has moved.)*
 
 On 2026-07-30 the gate was changed to refuse unconditionally. That was correct at the time and
 wrong to leave standing: it made the recut unfireable during exactly the incident it exists to
@@ -240,6 +242,25 @@ the removal is not a regression on what this gate asserts. What changes is the r
    `local-cache`, with no `.tf` diff for a reviewer to catch). Tracked separately. The
    compensating control is the chained restore, which *bounds the very window the alert was
    supposed to page on*.
+
+   > **Resolved 2026-09-23 (#8036 item 1c). Dark → DELETED; the rule is narrowed, not retired.**
+   > `registry_pull_event ghcr-fallback` had no reachable success arm, so the residual above was
+   > "an operand that cannot fire". 1c deleted the GHCR leg of the pull path, which turns that
+   > into "an operand that cannot exist" — the emit site is gone from `ci-deploy.sh`. The
+   > `zot_mirror_fallback_rate` Sentry rule was NARROWED to its other four conditions rather than
+   > retired (the in-code `RETIREMENT TRIPWIRE (#6285)` gave that instruction and it was
+   > executed), and `zot-soak-6122.sh`'s `FAIL_QUERIES[rolling]` entry went with it, together
+   > with its runtime cardinality floor (5 → 4, in the same edit — moving one without the other
+   > is the defect that floor exists to catch). #7295, which tracked this residual, closes with
+   > that PR. The semantic split this paragraph declined to invert is untouched: `local-cache`
+   > still means what it meant, and it is now the only tier between a zot miss and
+   > `image_pull_failed` — **but it is a NARROW tier, and the window arithmetic must not budget
+   > it as general coverage.** `_try_local_cache_reload` opens `[[ "$image_kind" == "web" ]] ||
+   > return 1` and reuses the ALREADY-RUNNING image, so it rescues only a **same-version `web`
+   > redeploy**. It does not apply to the inngest deploy site (`pull_image_with_fallback
+   > inngest`) and it does not apply to any new-version deploy — which is every ordinary
+   > release. For those paths a zot miss has **zero** tiers and goes straight to
+   > `image_pull_failed`.
 4. **`registry-region-migrate` is an unguarded bypass to the same creates** (#6946): no confirm
    token, no id-pin, no live posture probe, no D10. An operator whose recut aborts can fire it
    instead. Wiring D10 there needs a posture probe and an id-pin it does not have — a materially
@@ -361,3 +382,323 @@ dead read. The wiring is now asserted statically
 composite actions — scoping it to the workflow alone would leave a hole the exact shape of the
 bug, because the restore leg runs inside one.
 
+## Amendment 2026-08-09 — A2's blob-completeness obligation is PER CHILD
+
+**The decision is unchanged.** A recut is still authorized only when CI has just proven, by
+executing it, that every image reference production depends on can be re-materialised into an
+empty registry from GHCR. What this amendment settles is a question the original text left
+implicit: *what does "blob-verified" mean for a MULTI-MANIFEST image?*
+
+### What happened
+
+The first live A2 rehearsal (2026-08-09, Actions run 31333047132) failed, and the dispatch
+aborted safely with `verdict=REFUSED predicate=A2` — nothing destroyed. The restore engine exited
+`6` (could-not-classify) on:
+
+```
+crane: Error: validating children: failed to validate image
+Manifests[1](sha256:0aa3be0e…): validating layers: gzip: invalid header
+```
+
+`registry-restore-from-ghcr.sh` verification 2 ran a single `crane validate --remote` over the
+whole reference. `ghcr.io/jikig-ai/soleur-web-platform` is a buildx OCI **index**, and its
+`manifests[1]` is an attestation manifest (`vnd.docker.reference.type=attestation-manifest`,
+`platform: unknown/unknown`) whose one layer is `application/vnd.in-toto+json` — plain JSON,
+never gzipped. `crane validate` walks index children and attempts to gunzip every layer.
+
+Validating that child digest **directly at GHCR** — a registry the recut never writes to —
+reproduced the failure identically. That is what established it as a **validator false positive**
+rather than store corruption, and it is the measurement this amendment rests on.
+
+### The refinement
+
+Blob completeness is verified **per child**, at the sink:
+
+- **Platform children** keep the full `crane validate --remote`. Unchanged.
+- **Attestation children** are verified by **blob presence** (`crane blob`, which fetches bytes
+  without decompressing them), for the config blob and every layer the child declares.
+- **Non-index IMAGE references** keep the single-validate path unchanged.
+- **The cosign signature** is verified by blob presence, like an attestation child — and it is
+  itself an INDEX. Measured at GHCR 2026-08-10 (`soleur-web-platform:v0.249.4`), the referrers tag
+  `sha256-<hex>` resolves to an `application/vnd.oci.image.index.v1+json` with neither `.config`
+  nor `.layers`, whose child carries `artifactType: application/vnd.dev.sigstore.bundle.v0.3+json`.
+  So the signature is neither a "non-index reference" nor a child of the image index; it is a third
+  thing, and the bullet above said the opposite until #7410. Reading it as a plain manifest is
+  exactly what shipped a checker that fail-closed on a healthy signature and refused the recut on
+  run 31392395980. The walk descends **one** level, from a digest-pinned root.
+- A named `LAYERFORMAT` class maps a residual `gzip: invalid header` to exit **4** ("do not
+  deploy"), so exit 6 stays reserved for shapes the engine genuinely cannot name.
+
+This **narrows** the check; it does not skip anything. An attestation child whose blob is absent
+still fails, and the test suite carries that as an explicit negative control precisely so a later
+reader cannot mistake the narrowing for a skip.
+
+### Why this strengthens the independence criterion rather than weakening it
+
+The real restore runs the **same engine on the same code path** as the rehearsal. Without a
+pre-destroy rehearsal, the recut would have destroyed the store and only then met this failure —
+leaving production with an empty store, no pull path (the host→GHCR edge has been dead since
+2026-07-30), and an unclassified exit 6 to diagnose under outage. The gate refused for a reason
+that was *wrong about the store* but *right about the restore*: the restore genuinely could not
+complete, and A2 is the predicate that says so before anything is destroyed.
+
+That is the ADR's governing rule working as designed — *a gate on an irreversible destroy may not
+depend on the component whose failure motivates it*. A2 depends on a **throwaway** registry, not
+on prod zot, which is exactly why it could fail informatively while prod zot was unusable.
+
+### The residual this exposes
+
+A2's guard *logic* was well covered — and both suites still had **zero** occurrences of
+attestation, in-toto, or gzip. They were hermetic and stayed green against a shape production has
+had all along. This is the same hermetic-fixture gap that let the `APP_DOMAIN_BASE` read ship
+(corrected 2026-08-06): a suite that never instantiates the real input shape cannot fail on it.
+Recorded here as a standing caution for the remaining cold surfaces — the **post-destroy real
+restore over the CF Tunnel** in particular, which by construction cannot be rehearsed before a
+destroy and therefore has no positive control at all.
+
+### Rejected alternative — uniform blob-presence for EVERY child
+
+Considered and not taken: drop `crane validate` entirely and verify every child the way
+attestation children are verified — read the child manifest, then `crane blob` its config and
+every layer.
+
+It is genuinely attractive. It deletes the attestation-detection branch (and with it the
+`platform.architecture: unknown` assumption below), deletes the nested-index hazard, leaves one
+code path with one failure semantics, and — measured, not estimated — roughly halves the bytes:
+`crane validate` reads each layer TWICE, once via `Compressed()` for the layer digest and again
+via `Uncompressed()` for the diffID, which on a remote layer is a second blob GET. For this
+image that is 3.86 GiB per entry against 1.93 GiB of distinct content.
+
+It was rejected because of what it drops, not what it costs. `crane validate` additionally walks
+the tar structure, checks diffID/rootfs consistency, rejects duplicate file paths, and checks
+manifest/config self-consistency. Those are real verification properties on the children a host
+actually pulls. Blob presence plus content-digest integrity is the right floor for a child no
+host ever fetches (an attestation, a signature); it is a weaker check than the one platform
+children get today, and A2 is the predicate that authorizes an irreversible destroy.
+
+Recorded here rather than filed as work: this is a decision about verification depth, and the
+next reader will re-derive the same option from the same measurement. If the empty-store window
+ever becomes the binding constraint, the cheaper lever is memoising verification 2 by
+`dst_digest` — the required pin set resolves three tags to ONE index digest, so the same content
+is currently verified three times — which costs no coverage at all.
+
+### Amendment 2026-08-10 (#7410) — the signature root, and what the walk does NOT establish
+
+Two corrections to the amendment above, both from a nine-agent review of the fix:
+
+- **The walk is rooted at a DIGEST, not the referrers tag.** The first cut read the signature at
+  its tag and justified that in a comment with "there is no digest to pin it by". That was false —
+  both the GHCR digest and the sink digest are read a few lines earlier and were discarded. A tag
+  read is not byte-verified, so content-addressing the children below it bought integrity relative
+  to a root nobody had checked. The engine now asserts GHCR/sink digest parity for the signature
+  (mirroring what verification 1 has always done for the image) and then walks from the digest ref.
+- **`depth` must be threaded by every caller already inside a walk.** Defaulting it at the
+  attestation call site reset the counter one level down, so the engine walked TWO index levels
+  while its own comment claimed one — turning a shape the previous revision refused into a PASS.
+  The nested-index refusal in verification 2 keys on the PARENT's declared `mediaType`, which no
+  registry enforces against the child's body, so `verify_blobs_of`'s own fail-closed die was the
+  body-based backstop behind it. Removing that backstop was the regression.
+
+### Three narrowings this amendment does not close
+
+- **A config alone is not evidence.** The blob walk now requires a child to declare at least one
+  LAYER. Without that, a sigstore bundle child whose payload layer had been evicted verified green
+  by fetching its config — which is `application/vnd.oci.empty.v1+json`,
+  `sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a`, the hash of `{}`, an
+  object every registry holds by construction. The narrowing that remains: the engine verifies the
+  bundle blob is PRESENT and hashes correctly. It does not parse it, so it cannot say the signature
+  is over the right subject. A2 asserts the pull path is re-materialisable, not that `cosign verify`
+  will succeed.
+
+- **`platform.architecture: unknown` as an attestation signal** is an assumption, not a measured
+  invariant. Both it and the `vnd.docker.reference.type` annotation come from the same BuildKit
+  attestation-storage convention. The disjunction protects against either one changing; it does
+  not protect against both changing at once, which would reclassify an attestation child as a
+  platform child and reintroduce the gunzip failure through the `crane validate` arm. The
+  mutation battery carries a row per disjunct so neither can be silently dropped.
+- **The platform-child floor asserts existence, not completeness.** `n_platform > 0` proves the
+  index contains at least one image a host could pull. It does not prove the EXPECTED platforms
+  are present: an index that silently lost its arm64 child still passes. That is acceptable for
+  A2 as ADR-169 scopes it — the predicate is "the pull path can be re-materialised", not "every
+  platform is intact" — but it is a narrowing of the plain-language reading, so it is stated
+  here rather than left to be discovered.
+
+## Amendment 2026-08-16 — merge-to-`main` now authorizes a volume-preserving registry replace (#7555)
+
+This ADR's question is "what authorizes destroying the sole pull path". #7555 changed the answer
+for one class of destroy, so the change is recorded here rather than only in ADR-190.
+
+### What changed
+
+`registry-host-replace` is `workflow_dispatch`-only and carries **no `environment:` reviewer gate
+and no typed `confirm` token** — verified against the job's own guard.
+
+> **Superseded in part, 2026-09-22 (#8209, ADR-241 D2):** the job now declares
+> `environment: infra-privileged`. That is still **not a reviewer gate** — the environment has no
+> reviewers by design, because it serves unattended jobs — so the sentence above remains true of
+> the *human* authorization. What changed is the branch reach: the environment's deployment-branch
+> policy admits `main` only, so a dispatch from any other ref is refused before the job starts.
+
+ So before #7555 the entire
+human authorization for recreating the fleet's sole pull path was *an operator deliberately typed
+a dispatch*. Nothing in the repo fired it, which is why `apps/web-platform/infra/cloud-init-registry.yml`
+could merge and sit **inert** — the defect #7555 exists to remove.
+
+`.github/workflows/registry-host-replace-dispatch.yml` now fires that replace on a merge to `main`
+whose **rendered, comment-stripped** `cloud-init-registry.yml` differs. The interposed judgement is
+a delta gate plus a read-only preflight (`scripts/registry-replace-preflight.sh`), not a human.
+
+### Why this is a different class from the D10 destroy this ADR was written for
+
+The replace **preserves the store volume** (`store_destroyed==0`). D10's recut destroys it, which is
+why that path earns a rehearsal-based gate and this one deliberately does not (ADR-190
+§"Why the replace pre-check is not the D10 recut gate"). The loss window here is a host
+recreate, not a re-materialisation from GHCR.
+
+That is a real distinction, but it is not a licence: #7071 retracted the host→GHCR fallback, so
+while the fresh host boots, **nothing pulls**. The window is deploy-blocking, and the authorization
+question is therefore still this ADR's.
+
+### The two gating predicates, walked against the independence criterion
+
+> A gate on an irreversible destroy may not depend on the component whose failure motivates it.
+
+Applied honestly, **both predicates violate it**, and the criterion predicted both defects that
+review found:
+
+| Predicate | Reads | Component whose failure motivates the replace? | Consequence |
+|---|---|---|---|
+| P1 — local-cache pull events | the pull path | **yes** | a replace outage itself drives hosts to local-cache, so P1 blocks the recovery for 24 h |
+| P3 — in-flight zot-writing runs | the release pipeline | **yes** | merging fires the release and the dispatcher on the same push, so P3's refusing state is the *modal* one |
+| P5 — the replace will be observable | the log channel | **no** | cannot be tripped by the condition the replace cures; see below |
+
+P1 and P3 were not reasoned to from this criterion at design time; both were found empirically.
+The remedies are the criterion's own: P1 is skipped on the manual re-fire arm (the `--manual`
+flag, derived from `github.event_name`), and P3 **waits** for the writers to drain before refusing
+rather than converting the automated path back into an operator step.
+
+### P5 — the predicate this criterion actually *generates*
+
+P4's absence (no live serving probe) is defensible only because something else eventually verifies
+the host: #7556 reads zot's own boot `configuration settings` line out of the warehouse. That is a
+**standing assumption written into the design**, and #7569 showed it is not always true — the
+registry's log delivery stopped from ~2026-08-14 19:06Z to ~2026-08-16 20:45Z (corroborated by two
+independent markers on different emitters; `zot_restarts=0` and `pcent` 12→14 throughout, so the
+host was serving fine and only its telemetry stopped).
+
+The channel recovered before this shipped, so P5 passes today and delivery proceeds. That is the
+point rather than a caveat: for ~49 hours the assumption was false, nothing in the design noticed,
+and a replace fired in that window would have been unverifiable. P5 checks the assumption instead
+of inheriting it: *will I be able to see what I did?*
+
+The hazard it closes is the #6400 escalation, and the asymmetry is the whole argument. A degraded
+zot still **serves** pulls and only fails large-layer **pushes**. A host that boots dark serves
+nothing — and #7071 retracted the host→GHCR fallback, so there is no tier beneath it. Firing blind
+therefore trades a blocked release for a total deploy outage, with no signal until the next deploy
+fails.
+
+Two arms, because **an empty query is not evidence of a dark channel** — that error was made once
+already in this cycle and was caught only by a 72 h positive control. The control marker rides a
+different transport from the container-log channel, so a silent control means the *read* is broken
+(refuse for that reason) while a live control plus a silent channel means the *channel* is dark
+(refuse, and name #7569).
+
+P5 is deliberately **not** skippable by `--manual`. P1's bypass exists because P1 violates the
+independence criterion; P5 satisfies it, so there is no equivalent deadlock to escape. Forcing a
+replace past P5 would be forcing it into the void the predicate exists to detect.
+
+This is the criterion doing generative work rather than post-hoc diagnosis: applied to "what
+authorizes an irreversible destroy", it yields not only "do not depend on the failing component"
+but "**do not take an irreversible action whose result you cannot read back**".
+
+P4 (a live zot serving probe) remains deliberately absent, and here the criterion is decisive
+rather than advisory: #7555's motivating symptom **is** a degraded zot, so a serving predicate
+would refuse precisely when the fix is most needed. Same reasoning that removed D10's A5
+(ground 2 above).
+
+### Residual, stated rather than discovered
+
+The delta gate reads `cloud-init-registry.yml` only. The rendered `user_data` also depends on
+`templatefile` inputs — `zot_image`, the derived cgroup cap — that live in `zot-registry.tf` and
+`variables.tf`. **A zot digest bump therefore changes the bytes the host boots without firing this
+dispatcher**, and ADR-190's standing instruction is to re-measure on every zot bump. Closing it
+means comparing the *render* at both SHAs (`registry-userdata-budget.sh` already produces exactly
+those bytes offline, with no credentials and no state) instead of comparing the template file.
+That is the right shape and is not implemented here; it is tracked with the #7556 follow-through
+rather than left implicit in a passing gate.
+
+> **Note 2026-09-28 (#7582):** the residual above is closed for the push arm. The delta gate now
+> RENDERS the registry user_data at the delivery watermark and at the head
+> (`registry-userdata-budget.sh`, offline, both sides rendered by the head's script) and compares
+> the bytes; `push.paths` wakes it on `cloud-init-registry.yml`, `zot-registry.tf` and
+> `variables.tf`. The budget script now READS every `zot-registry.tf` literal the template map
+> consumes (it had hand-copied `doppler_sha256`, the users, the IP and the ingest URL, so a bump
+> to any of them rendered identical). What an offline render must stub is compared directly:
+> `registry_server_type`, `registry_location` and `registry_volume_size` by value, and the map,
+> derivation locals and registry resource blocks in `zot-registry.tf` as comment-stripped text.
+> On the push arm, an unreadable watermark revision and an unmeasurable or over-cap head render
+> are refusals (the replace's create would fail after its destroy); an unmeasurable WATERMARK
+> render delivers. The manual re-fire arm still delivers without rendering. Residual: an input
+> moved out of the three watched files. No decision text changes.
+
+> **Note 2026-09-19 (#8279):** the standing "#7556 verifies the host" pointer above described the #7555 soak only. The dispatcher now records each delivery's verdict on the delivering change's own tracker (the PR that changed the config, or the `tracker` input), and its step summary asserts no enrolment it did not measure — post-replace verification is whatever follow-through the delivering change enrolled. P4 remains absent; its defence above now rests on the delivering change enrolling a boot-line follow-through, which is not enforced — a delivery with none is verified only by the apply's conclusion (the dispatcher's own step summary says so). No decision text changes.
+
+> **Note 2026-09-28 (#7377):** this merge-to-replace path is also the ONLY registry config-delivery
+> mechanism by decision: ADR-172's amendment of 2026-09-28 records `push-config` as realized by it,
+> and `restart` / `reclaim` as not built. No in-place lever sits beside it.
+
+## Amendment 2026-09-28 — the boot-image asset is a replace precondition (P6, #8714 step 5.3b-iii)
+
+The registry host no longer pulls zot from ghcr.io at boot. It downloads a release asset of this
+repository, refuses it unless its sha256 equals the `T` pinned in `zot-registry.tf`, and refuses
+to start zot unless the loaded image ID is the upstream config digest `C` or manifest digest `D`
+(ADR-096 amendment 2026-09-28, part 2). So the release asset is now a **boot dependency of the sole
+pull path**. A replace onto an asset that is unpublished, deleted, or carries other bytes boots a
+host that serves nothing, and #7071 left no tier beneath it.
+
+`scripts/registry-replace-preflight.sh` therefore gains **P6, gating and fail-closed**. It reads
+the asset the rendered `user_data` will fetch from the same `zot-registry.tf` literals, asks GitHub
+for that release's asset `digest`, and refuses unless exactly one uploaded asset of that name
+carries `sha256:<T>`. A 404, an API error, a missing asset, an ambiguous asset list or a digest
+other than `T` each refuse, naming the cause.
+
+Against the independence criterion, P6 reads **GitHub**, not zot or the pull path. The condition a
+replace cures cannot trip it, so it keeps gating on the manual re-fire arm too (unlike P1). It runs
+**before** P3's drain wait, so a missing asset refuses in seconds rather than after 35 minutes.
+
+The dispatcher is not the only route that creates a registry host. `apply-web-platform-infra.yml`'s
+`registry_host_replace`, `registry_luks_recut` and `registry_region_migrate` jobs each run P6 alone
+(`registry-replace-preflight.sh --check-asset`) before terraform, so no route boots a host onto an
+asset P6 would refuse. The same `--check-asset` runs on rule-audit's cron. There, a deleted or
+replaced asset is named as a latent outage before the next replace, not at it. `zot-image-*` releases
+are never deleted, and a deleted one cannot be re-created under its tag (immutable releases). Recovery
+is workflow-only: `runbooks/registry-host-replace-dispatch.md` § "zot boot image (#8714)".
+
+## Amendment 2026-09-30 — cosign verification enforces by default (#6129); this decision is re-signed
+
+§"The `IMAGE_VERIFY_MODE=warn` dependency" said a flip to `enforce` needs this decision re-signed.
+The flip happened: `ci-deploy.sh` now defaults to `IMAGE_VERIFY_MODE=enforce`. The operator
+authorized it on 2026-09-30, after accepting the #6122 zot soak verdict (#6122 closed as completed).
+
+The decision stands unchanged, because it never relied on the tolerance. The restore has no
+unsigned arm. It copies each image's `sha256-<hex>` signature tag and fails if the tag can't be
+read back. A copied Sigstore v0.3 bundle binds to the digest, so it verifies unchanged at a zot ref.
+
+What changes is the failure mode, **for the web-platform image**, which is the only image
+`ci-deploy.sh` verifies. Before, a restored app image whose signature did not verify was deployed
+with a warning. Now it fails verification: the deploy keeps the old container running and emits
+`IMAGE_VERIFY_FAIL` plus the `cosign_verify_event` Sentry event. That turns the path
+§"Named residuals" worried about (an app image altered on GHCR, then restored) from a warning into
+a refusal. The restored inngest bootstrap image is not covered. Nothing verifies its signature; its
+boot pins a digest instead (see `cloud-init-inngest.yml`, #6617 / #7410, and the ADR-096 amendment
+of the same date). The cost is availability: a restore that loses a signature blocks releases until it is
+re-copied. It no longer runs unverified bits.
+
+## Amendment 2026-10-03 — while the push-apply workflows are paused, a merge no longer delivers a registry user_data change (#9393)
+
+The 2026-08-16 amendment above lets a merge to `main` authorize a volume-preserving registry replace. That
+holds only while the apply workflows run. `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml`
+have been `disabled_manually` since 2026-10-01T21:30Z (the hold for the web-1 plaintext wipe window), so a
+merge that changes a registry render input dispatches a workflow that does not run, and nothing re-fires the
+replace. Such a change waits until the pause is lifted; `scripts/registry-replace-preflight.sh` is read before
+it lands. The decision of this ADR is unchanged: the pause makes delivery late, not unauthorized.

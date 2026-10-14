@@ -1,0 +1,10 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+
+const BASE = "/tmp";
+
+export function scratch(): string {
+  const d = mkdtempSync(join(BASE, "demo-"));
+  process.on("exit", () => rmSync(d, { recursive: true, force: true }));
+  return d;
+}

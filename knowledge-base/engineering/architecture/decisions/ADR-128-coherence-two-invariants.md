@@ -284,3 +284,11 @@ against an absent job.
 - ADR-068 §(c) — the weight-flip conditions `lb-weight-gate.sh` checked
 - ADR-079 amendment (#5955) — the original `.tag`-is-last-attempt finding
 - ADR-096 — `OPERATOR_APPLIED_EXCLUSIONS`, the routing the `host_creates` HALT falls back to
+
+## Addendum — 2026-09-28 (#7230)
+
+The `lb-weight-gate.{sh,test.sh}` row above records a deletion that did not stay deleted:
+`apps/web-platform/infra/lb-weight-gate.{sh,test.sh}` were re-added on 2026-07-25 with the
+active-active web cluster (ADR-143), and its Condition C now holds `cloudflare_record.app` to web-1
+as the DNS half of single-host Inngest execution (ADR-033 amendment 2026-09-28). The row is kept
+as the record of 2026-07; the files exist.

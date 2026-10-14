@@ -11,6 +11,7 @@ import {
   type LiveRun,
 } from "@/server/routines/list-routines";
 import { EXPECTED_CRON_FUNCTIONS } from "@/server/inngest/cron-manifest";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -29,10 +30,8 @@ function pickEnum(raw: string | null, allowed: Set<string>): string | null {
 
 export async function GET(request: Request) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const url = new URL(request.url);

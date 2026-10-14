@@ -16,8 +16,8 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => mockSearchParams.current,
 }));
 
-vi.mock("next/font/google", () => ({
-  Inter: () => ({ className: "mock-sans", variable: "--font-inter" }),
+vi.mock("next/font/local", () => ({
+  default: () => ({ className: "mock-sans", variable: "--font-inter" }),
 }));
 
 vi.mock("@/lib/supabase/client", () => ({

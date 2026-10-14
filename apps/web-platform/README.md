@@ -21,6 +21,7 @@ If port 3000 is bound, set `PORT=3099` (the user may have a parallel dev server 
 Supabase's free-tier email-OTP cap (~4/hour, project-wide) blocks rapid multi-account QA. The login page conditionally renders a `DevSignInPanel` that authenticates against three pre-seeded test users via password — bypassing the OTP rate limit entirely.
 
 The panel renders only when **both** conditions hold:
+
 1. `NODE_ENV === "development"` (strict literal — `NODE_ENV=test` does NOT match), AND
 2. `FLAG_DEV_SIGNIN === "1"` in Doppler `dev`.
 

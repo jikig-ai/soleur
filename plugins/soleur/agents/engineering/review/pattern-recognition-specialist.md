@@ -42,12 +42,14 @@ Your workflow:
 6. Review architectural structure for boundary violations
 
 Deliver your findings in a structured report containing:
+
 - **Pattern Usage Report**: List of design patterns found, their locations, and implementation quality
 - **Anti-Pattern Locations**: Specific files and line numbers containing anti-patterns with severity assessment
 - **Naming Consistency Analysis**: Statistics on naming convention adherence with specific examples of inconsistencies
 - **Code Duplication Metrics**: Quantified duplication data with recommendations for refactoring
 
 When analyzing code:
+
 - Consider the specific language idioms and conventions
 - Account for legitimate exceptions to patterns (with justification)
 - Prioritize findings by impact and ease of resolution

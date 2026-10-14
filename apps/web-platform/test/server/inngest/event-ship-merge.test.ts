@@ -68,6 +68,8 @@ describe("handler source anchors", () => {
     ["buildSpawnEnv", "spawn env allowlist function"],
     ["spawnClaudeEval", "substrate spawn call"],
     ["setupEphemeralWorkspace", "workspace setup"],
+    ["--unshallow", "hosted ship unshallow after gh pr checkout"],
+    ["merge-base", "hosted ship merge-base probe after unshallow"],
     ["teardownEphemeralWorkspace", "workspace cleanup"],
     ["reportSilentFallback", "error reporting (no Sentry cron monitor)"],
     ["selectQualifyingPr", "PR selection logic function"],

@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { promises as fs } from "node:fs";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { verifiedUserId } from "@/server/request-auth";
 import {
   resolveActiveWorkspaceKbRoot,
   resolveActiveWorkspaceRepoMeta,
 } from "@/server/workspace-resolver";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
+import { kbGithubUrlPath } from "@/server/kb-github-path";
 // `syncWorkspace` (the git-pull reconcile + gated self-heal) was extracted to
 // `@/server/workspace-sync` so surfaces that must stay out of the App-Router
 // `next/headers` graph (c4-writer → cc-dispatcher WS bundle) can import it
@@ -28,7 +30,8 @@ export type KbRouteContext = {
   owner: string;
   repo: string;
   relativePath: string; // e.g. "domain/file.pdf"
-  filePath: string; // e.g. "knowledge-base/domain/file.pdf"
+  filePath: string; // e.g. "knowledge-base/domain/file.pdf" (raw: JSON bodies, logs)
+  urlPath: string; // filePath percent-encoded per segment: for GitHub API URLs only
   kbRoot: string; // absolute path to workspace/knowledge-base
   fullPath: string; // kbRoot + relativePath
   ext: string; // ".pdf" (lowercased)
@@ -63,12 +66,10 @@ export async function authenticateAndResolveKbPath(
     return { ok: false, response: rejectCsrf(opts.endpoint, origin) };
   }
 
-  // Auth
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return err(401, "Unauthorized");
+  // Auth — middleware-minted header first (zero auth-server RTT), bounded
+  // remote fallback on the absent arm (#8926 helper-level sweep).
+  const userId = await verifiedUserId(request);
+  if (!userId) return err(401, "Unauthorized");
 
   // ADR-044 resolver consolidation (#4543, #4956). Resolve the active
   // workspace's kbRoot + repo metadata via the two membership-scoped
@@ -95,7 +96,7 @@ export async function authenticateAndResolveKbPath(
   // code), so map to the legacy MESSAGE strings — 503 → "Workspace not ready",
   // 404/400 → "No repository connected".
   const serviceClient = createServiceClient();
-  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
   if (!access.ok) {
     return err(
       access.status,
@@ -106,7 +107,7 @@ export async function authenticateAndResolveKbPath(
   // credential all key to ONE membership-resolved id (no divergence under a
   // stale-claim self-heal; no redundant resolution) — mirrors kb/upload.
   const repoMeta = await resolveActiveWorkspaceRepoMeta(
-    user.id,
+    userId,
     serviceClient,
     access.activeWorkspaceId,
   );
@@ -129,6 +130,12 @@ export async function authenticateAndResolveKbPath(
   if (relativePath.includes("\0")) {
     return err(400, "Invalid path: null byte detected");
   }
+
+  // The GitHub URL form of the path, per-segment encoded. The filesystem
+  // containment check below cannot see URL-level traversal (`%2e%2e`, `\`),
+  // so this is the guard for every Contents URL built from the path.
+  const urlPath = kbGithubUrlPath(relativePath);
+  if (!urlPath) return err(400, "Invalid path");
 
   const ext = path.extname(relativePath).toLowerCase();
   if (opts.blockMarkdown && ext === ".md") {
@@ -162,7 +169,7 @@ export async function authenticateAndResolveKbPath(
   return {
     ok: true,
     ctx: {
-      user: { id: user.id },
+      user: { id: userId },
       userData: {
         workspace_path: userData.workspace_path,
         repo_url: userData.repo_url,
@@ -172,6 +179,7 @@ export async function authenticateAndResolveKbPath(
       repo,
       relativePath,
       filePath,
+      urlPath,
       kbRoot,
       fullPath,
       ext,

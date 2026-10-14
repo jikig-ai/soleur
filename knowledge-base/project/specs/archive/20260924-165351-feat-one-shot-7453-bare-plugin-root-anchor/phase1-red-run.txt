@@ -1,0 +1,273 @@
+(node:2001458) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+ RUN  v4.1.0 /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7453-bare-plugin-root-anchor/apps/web-platform
+
+ ❯  repo-wide  test/plugin-root-anchoring.test.ts (46 tests | 8 failed) 417ms
+     × W1: no payload doc reads the plugin root through anything but the exact token (Guard 1 i) 10ms
+     × W1b: no payload doc sets the root or defaults a variable into the payload (Guard 1 ii) 6ms
+     × W2: no payload doc composes a dynamic prefix into, or a `..` escape out of, the payload (Guard 2) 8ms
+     × W4d: the Read-surface set is exactly the named docs 1ms
+     × W4a: every Read-surface doc carries the root-delivery notice and the closed rule 0ms
+     × W4b: no payload doc points at a Read-surface doc CWD-relatively 104ms
+     × W4c: every fence using the token in a Read-surface doc opens with the sentinel export 1ms
+     × W5: the suite ran every assertion (anti-vacuity floor) 0ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL   repo-wide  test/plugin-root-anchoring.test.ts > plugin-root anchoring — whole payload markdown (#7453, ADR-179 A18/A20) > W1: no payload doc reads the plugin root through anything but the exact token (Guard 1 i)
+AssertionError: expected [ …(31) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "plugins/soleur/skills/archive-kb/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/brainstorm/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/community/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/compound-capture/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/compound/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/constraint-scaffold/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/deploy/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/drain-labeled-backlog/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/drain-prs/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/feature-video/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/fix-issue/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/git-worktree/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/harvest-debt/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/kb-search/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/merge-pr/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/model-launch-review/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/one-shot/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/pencil-setup/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/plan/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/preflight/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/product-roadmap/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/review/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/schedule/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/seo-aeo/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/ship/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/ship/references/settle-then-admin-merge.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/skill-creator/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/skill-security-scan/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++   "plugins/soleur/skills/work/SKILL.md — write \"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>\"; in prose say \"the `:-` default arm\", never spell the form",
++ ]
+
+ ❯ test/plugin-root-anchoring.test.ts:1906:7
+    1904|         (n) => `${n} — write "\${CLAUDE_PLUGIN_ROOT}/<payload-relative…
+    1905|       ),
+    1906|     ).toEqual([]);
+       |       ^
+    1907|   });
+    1908|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/8]⎯
+
+ FAIL   repo-wide  test/plugin-root-anchoring.test.ts > plugin-root anchoring — whole payload markdown (#7453, ADR-179 A18/A20) > W1b: no payload doc sets the root or defaults a variable into the payload (Guard 1 ii)
+AssertionError: expected [ …(31) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "plugins/soleur/skills/archive-kb/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/brainstorm/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/community/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/compound-capture/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/compound/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/constraint-scaffold/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/deploy/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/drain-labeled-backlog/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/drain-prs/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/feature-video/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/fix-issue/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/git-worktree/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/harvest-debt/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/kb-search/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/merge-pr/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/model-launch-review/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/one-shot/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/pencil-setup/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/plan/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/preflight/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/product-roadmap/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/review/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/schedule/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/seo-aeo/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/ship/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/ship/references/settle-then-admin-merge.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/skill-creator/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/skill-security-scan/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++   "plugins/soleur/skills/work/SKILL.md — never assign CLAUDE_PLUGIN_ROOT (except the Read-surface sentinel) or default any variable to plugins/soleur",
++ ]
+
+ ❯ test/plugin-root-anchoring.test.ts:1914:7
+    1912|         (n) => `${n} — never assign CLAUDE_PLUGIN_ROOT (except the Rea…
+    1913|       ),
+    1914|     ).toEqual([]);
+       |       ^
+    1915|   });
+    1916|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/8]⎯
+
+ FAIL   repo-wide  test/plugin-root-anchoring.test.ts > plugin-root anchoring — whole payload markdown (#7453, ADR-179 A18/A20) > W2: no payload doc composes a dynamic prefix into, or a `..` escape out of, the payload (Guard 2)
+AssertionError: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "plugins/soleur/commands/sync.md — the token already IS plugins/soleur: drop the git-root / double prefix, and never '..' out of it",
++   "plugins/soleur/skills/preflight/SKILL.md — the token already IS plugins/soleur: drop the git-root / double prefix, and never '..' out of it",
++ ]
+
+ ❯ test/plugin-root-anchoring.test.ts:1941:7
+    1939|         (n) => `${n} — the token already IS plugins/soleur: drop the g…
+    1940|       ),
+    1941|     ).toEqual([]);
+       |       ^
+    1942|   });
+    1943|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/8]⎯
+
+ FAIL   repo-wide  test/plugin-root-anchoring.test.ts > plugin-root anchoring — whole payload markdown (#7453, ADR-179 A18/A20) > W4d: the Read-surface set is exactly the named docs
+AssertionError: expected [ …(2) ] to deeply equal [ …(5) ]
+
+- Expected
++ Received
+
+  [
+-   "plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md",
+-   "plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md",
+    "plugins/soleur/skills/flag-bootstrap/SETUP.md",
+    "plugins/soleur/skills/review/references/review-e2e-testing.md",
+-   "plugins/soleur/skills/ship/references/settle-then-admin-merge.md",
+  ]
+
+ ❯ test/plugin-root-anchoring.test.ts:1960:50
+    1958|     // Fix hint: a new non-SKILL.md doc carrying the token must get th…
+    1959|     // sentinel, and join READ_SURFACE_DOCS in a reviewed edit (ADR-17…
+    1960|     check(readSurface.map((s) => s.name).sort()).toEqual([...READ_SURF…
+       |                                                  ^
+    1961|   });
+    1962|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/8]⎯
+
+ FAIL   repo-wide  test/plugin-root-anchoring.test.ts > plugin-root anchoring — whole payload markdown (#7453, ADR-179 A18/A20) > W4a: every Read-surface doc carries the root-delivery notice and the closed rule
+AssertionError: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "plugins/soleur/skills/flag-bootstrap/SETUP.md",
++   "plugins/soleur/skills/review/references/review-e2e-testing.md",
++ ]
+
+ ❯ test/plugin-root-anchoring.test.ts:1968:7
+    1966|         .filter((s) => !s.src.includes(READ_SURFACE_NOTICE_HEAD) || !s…
+    1967|         .map((s) => s.name),
+    1968|     ).toEqual([]);
+       |       ^
+    1969|   });
+    1970|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/8]⎯
+
+ FAIL   repo-wide  test/plugin-root-anchoring.test.ts > plugin-root anchoring — whole payload markdown (#7453, ADR-179 A18/A20) > W4b: no payload doc points at a Read-surface doc CWD-relatively
+AssertionError: expected [ …(9) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "plugins/soleur/skills/brainstorm/SKILL.md:197 → plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md",
++   "plugins/soleur/skills/brainstorm/SKILL.md:201 → plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md",
++   "plugins/soleur/skills/drain-prs/SKILL.md:124 → plugins/soleur/skills/ship/references/settle-then-admin-merge.md",
++   "plugins/soleur/skills/merge-pr/SKILL.md:528 → plugins/soleur/skills/ship/references/settle-then-admin-merge.md",
++   "plugins/soleur/skills/one-shot/SKILL.md:356 → plugins/soleur/skills/ship/references/settle-then-admin-merge.md",
++   "plugins/soleur/skills/review/SKILL.md:1300 → plugins/soleur/skills/review/references/review-e2e-testing.md",
++   "plugins/soleur/skills/ship/SKILL.md:1721 → plugins/soleur/skills/ship/references/settle-then-admin-merge.md",
++   "plugins/soleur/skills/ship/SKILL.md:2025 → plugins/soleur/skills/ship/references/settle-then-admin-merge.md",
++   "plugins/soleur/skills/ship/SKILL.md:2449 → plugins/soleur/skills/ship/references/settle-then-admin-merge.md",
++ ]
+
+ ❯ test/plugin-root-anchoring.test.ts:1975:56
+    1973|     // The union with READ_SURFACE_DOCS keeps this armed while W4d is …
+    1974|     const docs = [...new Set([...READ_SURFACE_DOCS, ...readSurface.map…
+    1975|     check(readSurfacePointerViolations(sources, docs)).toEqual([]);
+       |                                                        ^
+    1976|   });
+    1977|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/8]⎯
+
+ FAIL   repo-wide  test/plugin-root-anchoring.test.ts > plugin-root anchoring — whole payload markdown (#7453, ADR-179 A18/A20) > W4c: every fence using the token in a Read-surface doc opens with the sentinel export
+AssertionError: expected [ Array(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "plugins/soleur/skills/flag-bootstrap/SETUP.md:101",
++ ]
+
+ ❯ test/plugin-root-anchoring.test.ts:1979:75
+    1977|
+    1978|   it("W4c: every fence using the token in a Read-surface doc opens wit…
+    1979|     check(readSurface.flatMap((s) => unsentinelledFences(s.name, s.src…
+       |                                                                           ^
+    1980|   });
+    1981|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/8]⎯
+
+ FAIL   repo-wide  test/plugin-root-anchoring.test.ts > plugin-root anchoring — whole payload markdown (#7453, ADR-179 A18/A20) > W5: the suite ran every assertion (anti-vacuity floor)
+AssertionError: expected 21 to be 20 // Object.is equality
+
+- Expected
++ Received
+
+- 20
++ 21
+
+ ❯ test/plugin-root-anchoring.test.ts:2012:24
+    2010|     // Absolute and hand-ratcheted, same contract as P5/G7/R6. Raised …
+    2011|     // that adds an assertion.
+    2012|     expect(assertions).toBe(20);
+       |                        ^
+    2013|   });
+    2014| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/8]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  8 failed | 38 passed (46)
+   Start at  15:12:16
+   Duration  1.16s (transform 74ms, setup 21ms, import 549ms, tests 417ms, environment 0ms)
+
+
+---- SUMMARY (recorded 2026-09-24, pre-migration tree e61183a51c) ----
+W1  (Guard 1 i, readsRootUnsafely)   RED: 31 files (== the 31 `:-` files; comm -3 against git grep -l is empty)
+W1b (Guard 1 ii, plantsRootUnsafely) RED: 31 files
+W2  (Guard 2, 2a/2b/2c)              RED: 2 files (3 lines: sync.md:180, preflight:809, preflight:1011)
+W4a notice/closed rule               RED: 2 docs (SETUP.md, review-e2e-testing.md)
+W4b CWD-relative pointers            RED: 9 lines
+W4c sentinel-first fences            RED: 1 (SETUP.md:101) — predicate refined to fences that USE the token
+W4d set identity                     RED: set mismatch (3 `:-` docs not yet qualifying)
+W1-control / W2-control / W4-control GREEN (fixtures + live-scan dispatch)
+W5 floor: 21 (the run above shows 20 expected; corrected in the same edit)

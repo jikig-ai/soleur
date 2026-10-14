@@ -1,0 +1,15 @@
+# Rule E must fire ONCE. A COMPOSITE ACTION: the steps live under `runs.steps`, and the
+# step carries an explicit `shell: bash`.
+name: fixture-composite
+description: composite action fixture
+runs:
+  using: composite
+  steps:
+    - name: compliant first
+      shell: bash
+      run: |
+        curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+    - name: offending composite step
+      shell: bash
+      run: |
+        curl --disable --noproxy '*' -sS -H "X-API-Key: ${FIXTURE_TOKEN}" "$SINK_URL"

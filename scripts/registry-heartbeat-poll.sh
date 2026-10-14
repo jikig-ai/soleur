@@ -21,8 +21,9 @@
 #             AFTER the residual window, i.e. by the NEW host.
 #
 # Precedent for heartbeat gating being legitimate when done this way: `arm_one` in
-# .github/workflows/apply-web-platform-infra.yml, which likewise refuses to accept a level and
-# watches for a real beat. (The `registry-host-replace` job carries a recorded decision that its
+# apps/web-platform/infra/arm-heartbeats.sh, which likewise refuses to accept a level and
+# watches for a real beat. (It lived in .github/workflows/apply-web-platform-infra.yml until
+# #7587 extracted it; that workflow now only invokes the script.) (The `registry-host-replace` job carries a recorded decision that its
 # own best-effort status step is INFORMATIONAL and MUST NOT gate — that note is about a naive
 # level read during a fresh boot, which is exactly what Phase A fixes.)
 #
@@ -54,6 +55,22 @@
 #                           status string. Defaults to a curl against the Better Stack API.
 #   REGISTRY_HB_SLEEP_CMD   (test seam) — defaults to `sleep`.
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_API_TOKEN:+x}${BETTERSTACK_LOGS_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_API_TOKEN, BETTERSTACK_LOGS_TOKEN). Unset it to trace safely (see #7797).
+' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -uo pipefail
 
 TFSTATE="${1-}"
@@ -89,21 +106,30 @@ HB_ID=$(jq -r --arg a "$HB_ADDR" \
 if [[ -z "$HB_ID" || "$HB_ID" == "null" ]]; then
   die "heartbeat address ${HB_ADDR} not found in ${TFSTATE} — cannot verify the registry came back. Refusing to report success."
 fi
+# The id is interpolated into the credentialed request URL below; Better Stack heartbeat ids are
+# numeric, so anything else is refused rather than forwarded the bearer.
+[[ "$HB_ID" =~ ^[0-9]+$ ]] || die "heartbeat id in ${TFSTATE} is not numeric — refusing to build a credentialed request URL from it."
 
+# Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+# curl config directive on the stdin channel in hb_status). Never echoes the value. Unusable =>
+# die (exit 1) before any curl call: this gate fails closed, never green.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 if [[ -z "${REGISTRY_HB_STATUS_CMD:-}" ]]; then
-  [[ -n "${BETTERSTACK_API_TOKEN:-}" ]] || die "BETTERSTACK_API_TOKEN unset — cannot read heartbeat ${HB_ID}. This is the Uptime mgmt API token, NOT BETTERSTACK_QUERY_* and NOT the host-side ingest-only BETTERSTACK_LOGS_TOKEN."
+  _bearer_ok "${BETTERSTACK_API_TOKEN:-}" || die "BETTERSTACK_API_TOKEN unset or unusable — cannot read heartbeat ${HB_ID}. This is the Uptime mgmt API token, NOT BETTERSTACK_QUERY_* and NOT the host-side ingest-only BETTERSTACK_LOGS_TOKEN."
   echo "::add-mask::${BETTERSTACK_API_TOKEN}"
 fi
 
 # hb_status → echoes the status string, or "" on any failure (treated as fail-closed by callers).
 hb_status() {
-  if [[ -n "${REGISTRY_HB_STATUS_CMD:-}" ]]; then
+  if [[ -n "${REGISTRY_HB_STATUS_CMD:+x}" ]]; then
     $REGISTRY_HB_STATUS_CMD "$HB_ID"
     return
   fi
-  curl -fsS --max-time 15 \
-    -H "Authorization: Bearer ${BETTERSTACK_API_TOKEN}" -H 'Accept: application/json' \
-    "https://uptime.betterstack.com/api/v2/heartbeats/${HB_ID}" 2>/dev/null \
+  # The bearer rides curl's stdin config channel, never its argument list.
+  curl --disable --noproxy '*' -fsS --max-time 15 \
+    -H 'Accept: application/json' \
+    --config - "https://uptime.betterstack.com/api/v2/heartbeats/${HB_ID}" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$BETTERSTACK_API_TOKEN") \
     | jq -r '.data.attributes.status // empty' 2>/dev/null
 }
 
@@ -164,9 +190,9 @@ cat >&2 <<EOF
 ::error::registry-heartbeat-poll: heartbeat ${HB_ID} never reached 'up' within ${DEADLINE_S}s of the residual window closing. The store volume is already destroyed, so there is no rollback — the registry is DARK and GHCR fallback is serving pulls. Two causes, and they need DIFFERENT remedies:
 
   (1) blkid-arm FATAL — cloud-init found a device that is neither empty nor crypto_LUKS and
-      refused it ("refusing-non-luks-device"). The volume is now crypto_LUKS, so a boot flake
-      here is recoverable with 'registry-host-replace' — the do-not-use warning on that dispatch
-      applies ONLY to a still-PLAINTEXT volume.
+      refused it ("refusing-non-luks-device"). 'registry-host-replace' keeps the volume, so it
+      cannot recut: if the device is not crypto_LUKS, follow the registry_store_not_luks triage
+      in runbooks/registry-luks-recut-6929.md.
 
   (2) reason=device-absent — the attachment landed after the server, cloud-init's 60s device
       wait logged "refusing to luksFormat/mount a missing device" and CONTINUED, consuming the

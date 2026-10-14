@@ -14,15 +14,14 @@ import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
 import { CONTACT_COLUMNS } from "@/server/crm/crm-reads";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -40,7 +39,7 @@ export async function GET() {
       // should not carry row PII, but we mirror only the SQLSTATE regardless).
       Sentry.captureException(new Error(`crm-contacts:${error.code ?? "unknown"}`), {
         tags: { surface: "crm-contacts" },
-        extra: { op: "list", userId: user.id, code: error.code ?? null },
+        extra: { op: "list", userId, code: error.code ?? null },
       });
       return NextResponse.json({ error: "contacts_query_error" }, { status: 502 });
     }
@@ -65,7 +64,7 @@ export async function GET() {
       new Error(`crm-contacts:${(e as { code?: string })?.code ?? "throw"}`),
       {
         tags: { surface: "crm-contacts" },
-        extra: { op: "list", userId: user.id, code: (e as { code?: string })?.code ?? null },
+        extra: { op: "list", userId, code: (e as { code?: string })?.code ?? null },
       },
     );
     return NextResponse.json({ error: "contacts_query_error" }, { status: 502 });

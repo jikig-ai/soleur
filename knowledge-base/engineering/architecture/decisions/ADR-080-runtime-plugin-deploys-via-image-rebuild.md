@@ -1,9 +1,18 @@
 # ADR-080: Runtime-plugin changes deploy via image rebuild, not host-direct re-seed
 
+<!-- lint-infra-ignore start -->
+<!-- ADR metadata header, not a procedure (#7927). lint-infra-no-human-steps flags
+     this block because the Deciders line names the operator and the ADJACENT Relates-to
+     line cites sibling ADRs BY FILENAME, one of which ends -container-swap.md. An actor
+     and an imperative co-occur across the two lines while neither prescribes a step:
+     these are cross-references, not instructions. Pre-existing on main and invisible
+     there only because nothing had changed the file; surfaced by a whitespace-only
+     markdownlint sweep. Scoped to the header so the body stays fully linted. -->
 - **Status:** Adopting
 - **Date:** 2026-07-02
 - **Deciders:** Jean (operator), CPO sign-off (single-user-incident threshold), CTO agent (binding Option A vs B ruling), deepen-plan review (spec-flow-analyzer, architecture-strategist, code-simplicity-reviewer)
 - **Relates to:** production-incident remediation (`worktree-manager.sh` stale-git-lock self-heal merged 2026-07-01 but the Concierge host mount kept running the pre-fix script until a coincidental `apps/web-platform/**` deploy the next morning); #3045 (`Dockerfile` plugin vendor+bake — the image-baked seed model, previously undocumented); `ADR-030-multi-tenant-deploy-substrate.md` (tenant credential aggregation — a distinct concern); `ADR-064-live-production-verification-harness.md` (the live-verify gate that correctly SKIPs on plugin-only merges); `ADR-078-graceful-cron-drain-before-container-swap.md` (the deploy path a runtime-plugin merge now traverses)
+<!-- lint-infra-ignore end -->
 
 ## Context
 
@@ -46,6 +55,7 @@ different dialects:
 
 1. **Outer gate** — `web-platform-release.yml` `on.push.paths`, GitHub-Actions
    glob dialect (supports `**` and `!`):
+
    ```yaml
    paths:
      - 'apps/web-platform/**'
@@ -53,9 +63,11 @@ different dialects:
      - '!plugins/soleur/docs/**'
      - '!plugins/soleur/test/**'
    ```
+
 2. **Inner gate** — `reusable-release.yml` `check_changed`, git-pathspec dialect
    (`:(exclude)` magic, NO `**`), run under `set -euo pipefail` + `set -f` +
    an explicit git rc check, with the widened `path_filter`:
+
    ```
    "apps/web-platform/ plugins/soleur/ :(exclude)plugins/soleur/docs/ :(exclude)plugins/soleur/test/"
    ```

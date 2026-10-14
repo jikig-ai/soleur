@@ -19,6 +19,7 @@ import {
   LEADER_PROMPTS,
   type LeaderActionClass,
 } from "@/server/inngest/leader-prompts";
+import { stripComments } from "../../../helpers/strip-comments";
 
 const REPO_ROOT = path.join(__dirname, "../../../..");
 
@@ -59,9 +60,7 @@ describe("tool surface — AC8 sentinels", () => {
       // I2 documentation comment ("NEVER probeOctokit ... or raw new
       // Octokit(...)") does not trigger a false positive. We're hunting
       // executable code, not prose about the prohibition.
-      const stripped = src
-        .replace(/\/\*[\s\S]*?\*\//g, "") // block comments
-        .replace(/^\s*\/\/.*$/gm, "");    // line comments
+      const stripped = stripComments(src, file);
       if (/\bnew\s+Octokit\s*\(/.test(stripped)) {
         violations.push(`${file}: new Octokit(...)`);
       }

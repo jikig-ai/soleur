@@ -135,7 +135,7 @@ describe("GET /api/repo/status — health_snapshot", () => {
       "@/app/api/repo/status/route"
     );
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     const body = await res.json();
 
     expect(body.healthSnapshot).toEqual(snapshot);
@@ -174,7 +174,7 @@ describe("GET /api/repo/status — health_snapshot", () => {
       "@/app/api/repo/status/route"
     );
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     const body = await res.json();
 
     expect(body.healthSnapshot).toBeNull();
@@ -207,7 +207,7 @@ describe("GET /api/repo/status — health_snapshot", () => {
     mockConvMaybeSingle.mockResolvedValue({ data: null, error: null });
 
     const { GET } = await import("@/app/api/repo/status/route");
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     const body = await res.json();
 
     expect(body.hasKnowledgeBase).toBe(true);

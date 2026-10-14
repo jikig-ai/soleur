@@ -370,7 +370,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useRouter } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 
 // A device-local sync channel: the Settings toggle writes localStorage and
 // dispatches this so a live provider re-reads without a page reload (storage
@@ -426,7 +426,7 @@ export function ShortcutsProvider({
   onEscape?: () => void;
   children: React.ReactNode;
 }) {
-  const router = useRouter();
+  const router = usePendingRouter();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // SSR-safe: init ON (matches server render), then sync the device-local pref

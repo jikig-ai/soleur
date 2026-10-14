@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 
 export function ReviewGateCard({
   gateId,
@@ -82,10 +83,12 @@ export function ReviewGateCard({
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {options.map((option) => (
-          <button
+          <Button
+            variant="outlined"
             key={option}
             onClick={() => handleSelect(option)}
             disabled={pending !== null}
+            loading={pending === option}
             className={`flex flex-col items-start rounded-lg border px-4 py-2 text-sm transition-colors ${
               pending === option
                 ? "border-amber-500 bg-amber-900/50 text-amber-100"
@@ -98,7 +101,7 @@ export function ReviewGateCard({
             {descriptions?.[option] && (
               <span className="mt-0.5 text-xs text-soleur-text-secondary">{descriptions[option]}</span>
             )}
-          </button>
+          </Button>
         ))}
       </div>
       {gateError && (

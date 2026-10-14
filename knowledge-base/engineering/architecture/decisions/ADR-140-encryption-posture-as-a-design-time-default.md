@@ -120,7 +120,7 @@ uses for the terraform-drift cron.
 | **Layer B as a bare GitHub Actions cron, with the `prefer-inngest` hook overridden** | The circularity argument for exempting Layer B from Inngest was unsound (see Decision, above) — a plaintext AOF does not crash Inngest. ADR-033's own scope note already names the correct shape (Inngest-dispatch → `workflow_dispatch`-only workflow) for exactly this class of credential-heavy infra cron; using the hook's override hatch here would have been citing a rejection that does not apply. |
 | **Resolving `mechanism: luks` evidence by name/mount-path similarity** | Adversarial by construction: `hcloud_volume.workspaces` (plaintext) and `hcloud_volume.workspaces_luks` (encrypted) share a mapper name (`workspaces`) under any similarity join, so a row on the plaintext volume citing its sibling's apparatus would false-PASS — certifying the exact volume the feature exists to catch. Evidence must be reached via `device_binding` (the volume's own `hcloud_volume_attachment`), never a name match. |
 | **`git merge-base`-scoped lint (new-entrants only)** | Goes vacuous on a `fetch-depth: 1` checkout and again after its own PR merges. The committed ledger provides "don't re-litigate accepted debt" without the history dependency. |
-| **Advisory (non-required) CI job** | At a `single-user incident` brand-survival threshold, an advisory gate is no gate. Layer A is promoted to a required check via a byte-consistent coupling of edits in the same PR — see the **#6901 Amendment** below, which corrects this to a **five-site** coupling (not three) and pins the integration_id shape. |
+| **Advisory (non-required) CI job** | At a `single-user incident` brand-survival threshold, an advisory gate is no gate. Layer A is promoted to a required check via a byte-consistent coupling of edits in the same PR — see the **#6901 Amendment** below, which corrects this to a **five-site** coupling (not three) and pins the integration_id shape. *(Armed through the `test` aggregator on 2026-09-23 — see the addendum at the end.)* |
 
 ## Consequences
 
@@ -150,6 +150,8 @@ or system is introduced; `inngest` (`model.c4:188`) already models the container
 dispatch function runs in.
 
 ## Amendment (2026-07-24, #6901)
+
+*(Route not taken: the sweep was armed through the `test` aggregator instead — see the 2026-09-23 addendum at the end.)*
 
 Promoting the Layer A repo-sweep to a **required** check is a **five-site** byte-consistent
 coupling, not the three coupled edits the alternatives table above states. The two omitted sites
@@ -204,3 +206,123 @@ agents rather than into AGENTS.md regardless of budget or loader mechanics. A
 reader who sees both *stated* blockers voided should not conclude the rejection is
 now unsupported — it rests on placement, not on capacity. This ADR's Decision is
 NOT reopened here.
+
+## Addendum — 2026-09-23 (#6907): armed through the `test` aggregator, not a new ruleset context
+
+The Layer A sweep now **blocks merge**. The standalone `encryption-posture` job joined the
+`needs:` of `ci.yml`'s `test` job, which is already a required context, so a red sweep reds
+`test`. The "Required check" cell in the layers table above describes this route from this
+addendum on.
+
+**Why not the route in the 2026-07-24 amendment.** That route makes `encryption-posture` its
+own required context: four remaining sites (`required-checks.txt`, the ruleset `.tf` with a live
+`apply-github-infra.yml` apply, the canonical parity JSON, the bot action), the arm-time test
+MB-10, and a post-apply check that the integration id is right. Joining an existing required
+aggregator gives the same blocking property with no new context name, no ruleset apply and no
+integration-id risk — the edit #8136 used to arm `web-platform-build`. The 2026-07-24 amendment
+stays as the record of the route not taken (append-only).
+
+The trade-off, stated: with its own ruleset context, a PR that deleted the job left a required
+check that never reported, so it stayed blocked. Through the aggregator every piece of the gate
+lives in the repo (`needs:`, W2, W3, W4), so one PR editing `ci.yml` and the suite together can
+remove it and still go green. The #8136 precedent accepted the same trade.
+
+**Soak evidence (ADR-117 measure-then-arm)**, measured per run with the #6907 one-liner:
+
+- **`main` push runs, 2026-09-08 to 2026-09-23:** 248 of 249 green. The miss is run
+  34454724601, cancelled at run level before the job started — not a sweep red.
+- **`pull_request` runs, the 1,000 most recent (2026-09-18 to 2026-09-23):** 641 `success`,
+  **0 `failure`**, 188 `cancelled`, 169 with no `encryption-posture` job in the listing, 2
+  unreadable (`Server Error`). The 1,000-run cap shortened this window to five days.
+
+**What has to hold, and what pins it.**
+
+- The job must be able to conclude `failure`. Fail-OPEN shapes: a job-level `continue-on-error`,
+  a step-level `if:` or `continue-on-error`, or any run line other than the bare sweep
+  (`|| true`, `--today`, `--repo-root`, `--check-templates`). A job-level `if:` fails CLOSED
+  (the leg reads `skipped`, which reds `test`) but wedges the PRs it skips. Row W3 of
+  `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` refuses all of them; W4 refuses the
+  same shapes on the `test` job itself (removing `if: always()` makes `test` skipped, which
+  GitHub counts as passing) and rejects duplicate keys in `ci.yml`.
+- A missing default ledger now FAILs the sweep. It used to degrade to "not yet seeded → PASS",
+  which would have made deleting the ledger a one-line bypass.
+- An exception within 14 days of `expires_on` prints a `::warning::`. An expiry is a repo-wide
+  merge freeze on the day it lands; eight exceptions expire on 2026-10-22.
+- On a bot PR the synthetic-checks action fabricates `test`, so the sweep's green is fabricated
+  too. That is sound only while the action's `ALLOWED_PATHS` (`weakness-digest.md`) is disjoint
+  from the sweep's surface: the ledger, every `*.tf`, every file under `apps/*/infra/`, and the
+  `docs/legal/` `disclosed_as` anchors. (`evidence` strings are prose and are never opened.) The
+  action now also refuses to run off `main`, since a dispatch on another branch would carry that
+  branch's commits under fabricated checks. The same note sits in `action.yml` and
+  `required-checks.txt`.
+
+**Residuals, named.** An `--admin` merge (ruleset bypass actors) skips the gate. Any workflow
+with `checks: write` on a branch can post a `test` check-run as integration 15368 — true of
+every synthetic-backed required check, not specific to this one. An exception can expire after
+a PR's CI ran green; the PR can then merge until `main` moves or CI re-runs.
+
+## Addendum — 2026-10-10 (#9372, #9572): an indexed (`for_each`) `luks` row needs an apparatus, a key chain and its own passphrase
+
+The Layer A `luks` contract resolved a row through a literal `volume_id = <volume>.id` reference, a same-file
+`random_password` + `doppler_secret` pair, and a mapper name found in any file under `apps/*/infra/`. A web-host
+volume (`hcloud_volume.workspaces`, `for_each` over `local.plaintext_workspaces_hosts`, attachment indexed `[each.key]`) fits none of the three,
+and relaxing the first two alone would have produced a green row that proves nothing: the mapper `workspaces` also resolves
+through web-1's cutover script, which is the name-similarity join this ADR rejects. The contract therefore grows as follows
+(it also relates to ADR-263, whose fresh-boot key custody the key chain mirrors). A full `--repo-sweep` over the CURRENT
+ledger prints the same output as the previous linter; that sentence is about the current ledger, not a guarantee for a
+future row, because four of the checks below apply to every `luks` row and tighten the contract (a store that differs from
+its volume, one passphrase claimed by two rows, one file pinned by two rows, an address declared twice) and the generic
+(singleton) arm now reads comment-stripped text, so a commented-out apparatus or fstab line no longer certifies a row. No
+current row trips them.
+
+- **Indexed binding.** `volume_id = <volume>[each.key].id` is accepted only when the volume and the attachment each carry
+  exactly one `for_each`, the two expressions are identical, every other index form is refused, a `for_each` or `volume_id`
+  inside a nested block fails closed, and each address resolves exactly once across the scan scope. A multi-line `for_each`
+  value is compared whole. Which arm a row takes (indexed or singleton) is decided from that one declaration, so a decoy
+  copy in an earlier-sorted root or a commented-out block cannot route an indexed row to the singleton name join. These checks
+  read a comment- and string-aware code view; the singleton binding check also reads it, so a commented-out `volume_id`
+  cannot satisfy it while the live line is a wrapped or indexed form.
+- **`device_binding.key_chain`** (`consumer`, `token`, `secret`, `password`), indexed rows only and mandatory for them. The
+  attachment's `server_id` is `<consumer>[each.key].id`; the consumer's `user_data` argument carries a
+  `workspaces_volume_id` line whose value, or true branch, is the volume's `[each.key].id` reference (not a string) and the
+  token line the row names; the token and the secret sit on one Doppler config; the secret's value is the named password. It
+  replaces the same-file pair check for that row.
+- **One passphrase, one row.** No `random_password` may be claimed by two `luks` rows (a row claims its `key_chain.password`,
+  or, for a singleton row, every password in its attachment's own file), keyed by Terraform root.
+- **`device_binding.apparatus`**, indexed rows only and mandatory for them. The file that holds this volume's `luksFormat` and
+  `luksOpen`. It is spelled canonically (no `.`, `..`, `//`), a regular non-symlink file under `apps/*/infra/`, pinned by at
+  most one row carrying an apparatus, and tied to the host: it sits in the consumer's own directory, its basename is in the
+  consumer's host-script list, and the cloud-init the consumer's `user_data` templates invokes it under `runcmd:`. The mapper and the mount evidence are then read from that file only; two scanner arms exist for it alone (an
+  unquoted `MAPPER_NAME=literal` assignment, and an fstab-shaped line held in a variable such as
+  `FSTAB_LINE='/dev/mapper/<n> /mnt/data ext4 ...'`), because the provisioner is embedded in `user_data` and carries neither as
+  the older arms read them.
+- **The row's volume is the store it ledgers.** `device_binding.volume` must equal `store`.
+- **Mandatory when indexed.** An indexed row missing `apparatus` or `key_chain` fails naming the key, so deleting one to
+  silence a red lint cannot fall back to the name join.
+
+**What was cut.** A row-level `multiplicity` (the host keys the volume is created for, resolved from the `for_each`
+comprehension and the variable's default) was planned and removed: its resolver was the most fragile parsing in the change and
+exceeded its line budget. The same guarantee, a new web host key turning CI red until the ledger row is re-attested for it, is
+now a suite assertion (`lint-encryption-posture.test.sh`, case WC-29) rather than a linter check, with a positive control that
+the extractor sees a new key. A design review then removed the same-root rule (Terraform cannot reference across roots), the
+`retired-6604` sentinel from the `workspaces_volume_id` match, the singleton form of `key_chain` and `apparatus`, and a
+second comment-stripping view; case WC-30 runs the real ledger row, flipped, against the real tree so a rename in `server.tf`
+turns this suite red rather than the later flip.
+
+**What a PASS grades.** A `luks` row that passes grades configured wiring: the apparatus a host installs formats and opens
+this volume's mapper, the key reaches the host through the named chain, and no other row shares the passphrase. It does not
+grade recovery of a lost passphrase, reopen after a reboot, or clearance of the host's weight flip (ADR-263, #9948, #7992);
+those stay with their own gates. WC-29, not the linter, is what holds the row to the web-2 instance set.
+
+**Known limits.** The static chain describes the declared configuration of NEW hosts (`user_data` is under `ignore_changes`),
+not a running instance; a running instance is covered by its probe rows alone. The checks read variable and local text, so a
+`TF_VAR` override is invisible. The chain stops at Terraform: it does not read the `WORKSPACES_DOPPLER_CONFIG` literal in
+`cloud-init.yml`, the secret's `name`, the token's `project` or `access`, or the password's own project; and the host-script
+entry is matched by basename within the consumer's file. A miss there is a host that cannot boot the volume, which the
+host-side probe rows grade, not this linter. The apparatus and the cloud-init are read as TEXT after comments are removed:
+a `cryptsetup luksOpen` line that is inert (after `echo`, inside a heredoc body or an `if false` branch), a device operand not
+derived from `WORKSPACES_LUKS_DEV`, and a mapper variable assigned twice are not distinguished. The comment view strips from
+any `#` that starts a word, which can only hide evidence (a false FAIL), never show it. `disclosed_as` is not graded for a
+`luks` row, and a Terraform resource spelled `*.tf.json` or with an unquoted label is invisible to every arm (pre-existing).
+The `apparatus` pin is review-anchored, like the floor it feeds (ADR-141): a diff can edit the row and the code it grades
+together.

@@ -24,7 +24,8 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-WF="$REPO_ROOT/.github/workflows/scheduled-terraform-drift.yml"
+# TERRAFORM_DRIFT_WF points the suite at a sandbox copy (mutation checks).
+WF="${TERRAFORM_DRIFT_WF:-$REPO_ROOT/.github/workflows/scheduled-terraform-drift.yml}"
 
 PASS=0
 FAIL=0
@@ -114,7 +115,10 @@ td_if="$(grep -A 3 -F -- '      - name: Cloudflare token drift' <<<"$BLOCK" | gr
 guard_dir="$(grep -oE "matrix\.directory == '[^']+'" <<<"$td_if" | sed "s/.*== '//; s/'//")"
 if [[ -z "$guard_dir" ]]; then
   fail "could not extract the token-drift step's matrix.directory guard from: ${td_if:-<no if: found>}"
-elif grep -qF -- "- $guard_dir" <<<"$BLOCK"; then
+# EXACT line match, not a substring: the `apps/web-platform/infra/sentry` entry (#6612)
+# shares the guarded root as a prefix, so `grep -F -- "- $guard_dir"` stayed green with the
+# main-root entry deleted.
+elif grep -qxE "[[:space:]]+- ${guard_dir//./\\.}[[:space:]]*" <<<"$BLOCK"; then
   pass "matrix guard '$guard_dir' appears in the job's matrix list"
 else
   fail "token-drift step is gated on matrix.directory == '$guard_dir', which is NOT in this job's matrix list — the detector would never run and would fail silently"

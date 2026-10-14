@@ -103,7 +103,7 @@ rm -rf "$d"
 # reports a defect that is actually the documentation of its absence. (Caught by
 # this suite on its first run -- cq-assert-anchor-not-bare-token, verbatim.)
 SUT_CODE=$(grep -vE '^[[:space:]]*#' "$SUT")
-if printf '%s' "$SUT_CODE" | grep -qE '(^|[^0-9])101([^0-9]|$)'; then
+if printf '%s' "$SUT_CODE" | grep -cE >/dev/null '(^|[^0-9])101([^0-9]|$)'; then
   bad "T5 probe hardcodes the rule count 101 in executable code"
 else
   ok "T5 probe derives the count (no hardcoded 101 outside comments)"
@@ -112,7 +112,7 @@ fi
 # --- T6: runnable by preflight Check 10 ------------------------------------
 # Pins the reason this probe is a script at all. If someone later "simplifies"
 # it back to a pipeline in the plan, Check 10 silently stops verifying it.
-PLAN="$REPO_ROOT/knowledge-base/project/plans/2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md"
+PLAN="$REPO_ROOT/knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md"
 if [[ -r "$PLAN" ]]; then
   CMD=$(awk '/^## Observability$/{i=1;next} /^## /{if(i)exit} i' "$PLAN" \
         | awk '/^[[:space:]]*command:/{sub(/^[[:space:]]*command:[[:space:]]*/,"");print;exit}')

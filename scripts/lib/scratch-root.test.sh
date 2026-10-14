@@ -16,6 +16,14 @@ TMP_ROOT=$(mktemp -d -t scratchroottest.XXXXXXXX) || { echo "FATAL: cannot creat
 readonly TMP_ROOT
 trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
 
+# AMBIENT SENTINEL. Every case below that means "XDG_CACHE_HOME is unset" must
+# unset it itself; it cannot rely on the caller's environment being clean. CI
+# happens not to export XDG_CACHE_HOME and a desktop session does, so without
+# this line a misordered `--unset` passed in CI and failed on developer hosts
+# (#8263). Exporting a value the resolver must never return makes every runner
+# behave like the one that exposed the bug.
+export XDG_CACHE_HOME="$TMP_ROOT/ambient-xdg"
+
 fails=0
 pass() { echo "  PASS: $1"; }
 fail() { echo "  FAIL: $1"; fails=$((fails + 1)); }
@@ -26,7 +34,11 @@ fail() { echo "  FAIL: $1"; fails=$((fails + 1)); }
 # usable as `x=$(resolve ...)`: command substitution would run this in a subshell and
 # discard the variable assignments — the exact defect this PR exists to fix, which this
 # harness hit twice while being written.
-resolve() { # resolve <env assignments...>
+# ORDERING CONTRACT: pass every `--unset=NAME` BEFORE any `NAME=VALUE`. GNU env
+# stops option parsing at the first assignment, so a later `--unset=X` defines a
+# variable literally named `--unset` and unsets nothing (see the TMPDIR case at
+# the bottom of this file, and #8263 for the two cases that shipped misordered).
+resolve() { # resolve [--unset=NAME...] <env assignments...>
   RESOLVE_OUT=$(env "$@" bash -c 'source "'"$LIB"'"; soleur_scratch_root' 2>"$TMP_ROOT/err")
   RESOLVE_RC=$?
   RESOLVE_ERR=$(cat "$TMP_ROOT/err")
@@ -52,7 +64,7 @@ else
 fi
 
 # --- 3. falls back to \$HOME/.cache when XDG is unset -----------------------------------
-resolve "HOME=$TMP_ROOT/home" --unset=XDG_CACHE_HOME
+resolve --unset=XDG_CACHE_HOME "HOME=$TMP_ROOT/home"
 if [[ "$RESOLVE_RC" -eq 0 && "$RESOLVE_OUT" == "$TMP_ROOT/home/.cache/soleur/tmp" ]]; then
   pass "falls back to \$HOME/.cache/soleur/tmp"
 else
@@ -114,7 +126,7 @@ fi
 #        base and handing back the shared tmp root itself (or $TMPDIR) — that is the
 #        silent fallback which would send bulk writes back onto the RAM disk while every
 #        root-scoped assertion still read clean.
-resolve "HOME=$TMP_ROOT/home2" --unset=XDG_CACHE_HOME
+resolve --unset=XDG_CACHE_HOME "HOME=$TMP_ROOT/home2"
 shared_tmp="${TMPDIR:-/tmp}"; shared_tmp="${shared_tmp%/}"
 if [[ "$RESOLVE_RC" -eq 0 \
       && "$RESOLVE_OUT" == "$TMP_ROOT/home2/.cache/soleur/tmp" \

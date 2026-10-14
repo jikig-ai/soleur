@@ -5,22 +5,21 @@ import {
   invoiceEndpointThrottle,
   logRateLimitRejection,
 } from "@/server/rate-limiter";
+import { verifiedUserId } from "@/server/request-auth";
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   // Per-user rate limit — defense-in-depth behind Cloudflare. Keyed by user.id
   // so throttle applies consistently across IPs (corporate NAT, dev, etc.) and
   // unauthenticated requests (handled above) cannot pollute the bucket.
-  if (!invoiceEndpointThrottle.isAllowed(user.id)) {
-    logRateLimitRejection("invoice-endpoint", user.id);
+  if (!invoiceEndpointThrottle.isAllowed(userId)) {
+    logRateLimitRejection("invoice-endpoint", userId);
     return NextResponse.json(
       { error: "Too many requests" },
       { status: 429, headers: { "Retry-After": "60" } },
@@ -30,7 +29,7 @@ export async function GET() {
   const { data: userData } = await supabase
     .from("users")
     .select("stripe_customer_id")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
   if (!userData?.stripe_customer_id) {

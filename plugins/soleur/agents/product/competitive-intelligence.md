@@ -1,6 +1,6 @@
 ---
 name: competitive-intelligence
-description: "Use this agent when you need recurring competitive landscape monitoring and market research reports. After producing the base report, it cascades to 4 specialist agents (growth-strategist, pricing-strategist, deal-architect, programmatic-seo-specialist) to refresh downstream artifacts. Use business-validator for one-time idea validation; use this agent for ongoing competitor tracking."
+description: "Use this agent when you need recurring competitive landscape monitoring and market research reports. After producing the base report, it cascades to 4 specialist agents (soleur:marketing:growth-strategist, soleur:marketing:pricing-strategist, soleur:sales:deal-architect, soleur:marketing:programmatic-seo-specialist) to refresh downstream artifacts. Use soleur:product:business-validator for one-time idea validation; use this agent for ongoing competitor tracking."
 model: inherit
 ---
 
@@ -9,6 +9,7 @@ Competitive intelligence agent. Researches competitors via WebSearch and WebFetc
 ## Pre-Research Context Loading
 
 Read these files before any research:
+
 - knowledge-base/marketing/brand-guide.md (positioning, voice, differentiation)
 - knowledge-base/product/business-validation.md (existing competitive landscape, tier model)
 
@@ -17,6 +18,7 @@ If either file is missing, warn but continue.
 ## Research Process
 
 For each competitor in scope:
+
 1. WebSearch for recent news, product updates, pricing changes
 2. WebFetch their marketing site for positioning and feature claims
 3. Compare against existing knowledge-base data
@@ -48,16 +50,17 @@ After writing the base CI report, spawn downstream specialist agents to refresh 
 
 | Agent | Task | Write Target |
 |-------|------|-------------|
-| growth-strategist | Content gap analysis against updated competitors | Update knowledge-base/marketing/content-strategy.md |
-| pricing-strategist | Competitive pricing matrix refresh | Update knowledge-base/product/pricing-strategy.md |
-| deal-architect | Competitive battlecard update | Update/create files in knowledge-base/sales/battlecards/ |
-| programmatic-seo-specialist | Flag stale comparison pages for regeneration | Append stale pages list to knowledge-base/marketing/seo-refresh-queue.md |
+| soleur:marketing:growth-strategist | Content gap analysis against updated competitors | Update knowledge-base/marketing/content-strategy.md |
+| soleur:marketing:pricing-strategist | Competitive pricing matrix refresh | Update knowledge-base/product/pricing-strategy.md |
+| soleur:sales:deal-architect | Competitive battlecard update | Update/create files in knowledge-base/sales/battlecards/ |
+| soleur:marketing:programmatic-seo-specialist | Flag stale comparison pages for regeneration | Append stale pages list to knowledge-base/marketing/seo-refresh-queue.md |
 
 Spawn all 4 in parallel using a single message with multiple Task tool calls.
 
 ### Task Prompt Instructions
 
 Each Task prompt must include:
+
 - Path to the CI report: knowledge-base/product/competitive-intelligence.md
 - Scoped task description and write target from the delegation table above
 - Instruction to extract the full competitor list from the overlap matrix tables before beginning analysis
@@ -71,6 +74,7 @@ Each Task prompt must include:
 After all specialists complete (or fail), append a `## Cascade Results` section to the CI report. Do not retry failures -- report them only.
 
 Format:
+
 - Date line: _Generated: YYYY-MM-DD_
 - Per-specialist status table with columns: Specialist, Status, Files Modified, Summary
 - A `### Failures` subsection listing error details for any that failed (omit if all succeeded)

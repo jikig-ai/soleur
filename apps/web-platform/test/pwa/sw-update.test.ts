@@ -3,7 +3,15 @@ import {
   watchForUpdate,
   postSkipWaiting,
   reloadOnControllerChange,
+  watchUpdateAcceptance,
+  UPDATE_ACCEPT_TIMEOUT_MS,
 } from "@/lib/pwa/sw-update";
+
+const reportSilentFallback = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-observability", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  reportSilentFallback,
+}));
 
 // Minimal EventTarget-shaped mock with a settable state, matching the bits of
 // ServiceWorker / ServiceWorkerRegistration the helpers touch.
@@ -185,5 +193,101 @@ describe("reloadOnControllerChange", () => {
     container.fire("controllerchange");
 
     expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+describe("watchUpdateAcceptance (#7084 — the update path was previously unobservable)", () => {
+  function makeContainer(controller: unknown = {}) {
+    const listeners: Record<string, Array<() => void>> = {};
+    return {
+      controller,
+      addEventListener: (t: string, cb: () => void) => {
+        (listeners[t] ??= []).push(cb);
+      },
+      removeEventListener: (t: string, cb: () => void) => {
+        listeners[t] = (listeners[t] ?? []).filter((x) => x !== cb);
+      },
+      fire: (t: string) => (listeners[t] ?? []).forEach((cb) => cb()),
+      listenerCount: (t: string) => (listeners[t] ?? []).length,
+    };
+  }
+
+  // Controllable fake timer, so both arms are driven deterministically rather than by
+  // a real clock. Firing is explicit: nothing happens unless the test says so.
+  function makeTimer() {
+    let pending: (() => void) | null = null;
+    let cleared = false;
+    return {
+      set: (fn: () => void) => {
+        pending = fn;
+        return 1;
+      },
+      clear: () => {
+        cleared = true;
+        pending = null;
+      },
+      fire: () => pending?.(),
+      get cleared() {
+        return cleared;
+      },
+      get armed() {
+        return pending !== null;
+      },
+    };
+  }
+
+  beforeEach(() => reportSilentFallback.mockClear());
+
+  test("reports to Sentry when an accepted update produces no controllerchange in the window", () => {
+    const container = makeContainer({});
+    const timer = makeTimer();
+    watchUpdateAcceptance(container as never, UPDATE_ACCEPT_TIMEOUT_MS, timer.set, timer.clear);
+
+    expect(reportSilentFallback).not.toHaveBeenCalled(); // not yet — nothing has timed out
+    timer.fire();
+
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [err, opts] = reportSilentFallback.mock.calls[0];
+    expect(err).toBeInstanceOf(Error);
+    expect(opts.feature).toBe("pwa-update");
+    expect(opts.op).toBe("accept-timeout");
+    expect(opts.extra.timeoutMs).toBe(UPDATE_ACCEPT_TIMEOUT_MS);
+  });
+
+  // The must-PASS arm. Without it, a watchdog that reported unconditionally would pass
+  // the test above and page the operator on every successful update.
+  test("stays SILENT when the update lands", () => {
+    const container = makeContainer({});
+    const timer = makeTimer();
+    watchUpdateAcceptance(container as never, UPDATE_ACCEPT_TIMEOUT_MS, timer.set, timer.clear);
+
+    container.fire("controllerchange");
+
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+    expect(timer.cleared).toBe(true);
+    expect(container.listenerCount("controllerchange")).toBe(0);
+  });
+
+  test("a late timer fire after success cannot resurrect the report", () => {
+    const container = makeContainer({});
+    const timer = makeTimer();
+    watchUpdateAcceptance(container as never, UPDATE_ACCEPT_TIMEOUT_MS, timer.set, timer.clear);
+
+    container.fire("controllerchange");
+    timer.fire(); // a browser that fires a cleared timer anyway
+
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("unsubscribing cancels the watchdog (unmount before either outcome)", () => {
+    const container = makeContainer({});
+    const timer = makeTimer();
+    const stop = watchUpdateAcceptance(container as never, UPDATE_ACCEPT_TIMEOUT_MS, timer.set, timer.clear);
+
+    stop();
+    timer.fire();
+
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+    expect(container.listenerCount("controllerchange")).toBe(0);
   });
 });

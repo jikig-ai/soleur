@@ -1,0 +1,2 @@
+# fixture data, never executed: kill behind timeout with an option; one P
+timeout -k 1 5 kill -9 "$PPID"

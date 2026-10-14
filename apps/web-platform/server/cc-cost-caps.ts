@@ -1,6 +1,6 @@
 // Cost-cap env-var reader for the cc-soleur-go runner.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // Stage 2.18. Recalibrated 2026-04-24 (RERUN §"Cost caps vs measured
 // reality"): $5 brainstorm / $2 work / $25 user-daily / $500 global-daily.
 // CFO gate at Stage 6.5.1 before merge.
@@ -18,6 +18,7 @@ export const ENV_VARS = {
   default: "CC_MAX_COST_USD_DEFAULT",
   userDaily: "CC_USER_DAILY_USD_CAP",
   globalDaily: "CC_GLOBAL_DAILY_USD_CAP",
+  managedWarn: "CC_MANAGED_WARN_USD",
 } as const;
 
 export interface DailyCostCaps {
@@ -64,6 +65,18 @@ export function readCcCostCaps(
     },
     default: parsePositive(env[ENV_VARS.default], FALLBACK_COST_CAPS.default),
   };
+}
+
+/**
+ * feat-cc-cap-raise-resume (#9565) — telemetry-only threshold for managed
+ * (`oauth_token`) sessions. They skip per-conversation cap ENFORCEMENT
+ * entirely; crossing this emits one warn-level report per ActiveQuery so
+ * runaway spend stays observable. Default 50 USD.
+ */
+export function readCcManagedWarnCap(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  return parsePositive(env[ENV_VARS.managedWarn], 50.0);
 }
 
 export function readCcDailyCaps(

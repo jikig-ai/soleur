@@ -21,6 +21,7 @@
 ## Key API Patterns
 
 ### query() signature
+
 ```typescript
 const q = query({
   prompt: "...",
@@ -43,12 +44,14 @@ const q = query({
 ```
 
 ### Message types observed
+
 - `system` (subtypes: `hook_started`, `hook_response`, `init`)
 - `assistant` (content blocks: `text`, `tool_use`)
 - `result` (subtype: `success`, includes `session_id`)
 - Partial messages (streaming text deltas, ~250 per query)
 
 ### canUseTool behavior
+
 - **Only fires when tools are NOT pre-approved** via `allowedTools` or `.claude/settings.json`
 - Receives: `toolName` (string), `input` (full tool input including `file_path`), `options` (signal, suggestions, toolUseID)
 - Returns: `{ behavior: "allow" }` or `{ behavior: "deny", message: "..." }`
@@ -56,11 +59,13 @@ const q = query({
 - For workspace sandbox: validate `input.file_path` starts with user workspace path
 
 ### BYOK key injection
+
 - Use `env: { ANTHROPIC_API_KEY: decryptedKey }` in options
 - When omitted, SDK uses Claude Code's built-in authentication
 - Confirmed in SDK types: `env?: { [envVar: string]: string | undefined }`
 
 ### Plugin loading
+
 - `plugins: [{ type: 'local', path: '/absolute/path/to/plugin' }]` loads Soleur agents/skills/hooks
 - Plugin hooks fired (hook_started, hook_response) — confirms plugin was loaded
 - Agents defined in plugin are available via the Agent tool
@@ -68,11 +73,13 @@ const q = query({
 ## Concerns and Mitigations
 
 ### 1. License
-- License field says "SEE LICENSE IN README.md" → points to https://code.claude.com/docs/en/legal-and-compliance
+
+- License field says "SEE LICENSE IN README.md" → points to <https://code.claude.com/docs/en/legal-and-compliance>
 - Not an explicit open-source license (Apache/MIT). Subject to Anthropic's usage terms.
 - **Action needed:** Review the legal agreements page to confirm hosted multi-tenant use is permitted.
 
 ### 2. canUseTool "caching" (DISPROVEN — #876)
+
 - The callback was only called once for 5 tool uses. This was NOT SDK caching — two independent factors caused the observation:
   1. The spike workspace had `.claude/settings.json` with `permissions.allow: ["Read", "Glob", "Grep"]`, causing those tools to be resolved at permission chain step 4 (allow rules) before reaching step 5 (`canUseTool`).
   2. Running under Claude Code's bridge auth bypasses `canUseTool` entirely — the bridge handles permissions internally.
@@ -80,6 +87,7 @@ const q = query({
 - **For the web platform (BYOK keys):** `canUseTool` fires on every tool invocation as expected. Workspace sandbox via `canUseTool` is safe.
 
 ### 3. Path resolution
+
 - First Read attempted `/root/knowledge-base/...` instead of workspace-relative path
 - Agent self-corrected using Bash to find the correct location
 - **Mitigation:** Set `cwd` correctly. The agent's `Read` tool resolves relative to CWD.

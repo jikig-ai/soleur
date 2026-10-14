@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { Button } from "@/components/ui/button";
 
 // web-platform has no public privacy page; the established convention links the
 // marketing-site absolute URL (see app/(auth)/signup/page.tsx).
@@ -105,7 +106,8 @@ export function CtaBanner() {
             <span className="font-medium text-soleur-accent-gold-fg">Soleur</span>{" "}
             — AI agents for every department of your startup.
           </p>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={toggle}
             aria-expanded={expanded}
@@ -132,7 +134,7 @@ export function CtaBanner() {
             >
               <polyline points="18 15 12 9 6 15" />
             </svg>
-          </button>
+          </Button>
         </div>
 
         {/* Collapsible body — grid-template-rows 0fr↔1fr animates height in BOTH
@@ -190,13 +192,15 @@ export function CtaBanner() {
                     aria-hidden="true"
                     className="hidden"
                   />
-                  <button
+                  <Button
+                    variant="gold"
                     type="submit"
-                    disabled={status === "submitting"}
+                    loading={status === "submitting"}
+                    loadingLabel="Joining"
                     className="shrink-0 rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-amber-400 disabled:opacity-60 sm:w-auto"
                   >
-                    {status === "submitting" ? "Joining…" : "Join"}
-                  </button>
+                    Join
+                  </Button>
                 </div>
                 <p className="text-xs text-soleur-text-muted">
                   No spam. We email you once when early access opens.{" "}

@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { createRepo, GitHubApiError } from "@/server/github-app";
 import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import logger from "@/server/logger";
 
 /**
@@ -18,12 +18,9 @@ export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
   if (!valid) return rejectCsrf("api/repo/create", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -51,7 +48,7 @@ export async function POST(request: Request) {
   // which goes NULL for a newly-connected user once the write relocated to
   // `workspaces`). Returns null for "no install" OR a transient read error
   // (Sentry-mirrored inside the resolver) — both map to the existing 400.
-  const installationId = await resolveInstallationId(user.id);
+  const installationId = await resolveInstallationId(userId);
 
   if (!installationId) {
     return NextResponse.json(
@@ -71,7 +68,7 @@ export async function POST(request: Request) {
     if (err instanceof GitHubApiError && (err.statusCode === 422 || err.statusCode === 403)) {
       const status = err.statusCode === 422 ? 409 : 403;
       logger.warn(
-        { statusCode: err.statusCode, userId: user.id, repoName: name },
+        { statusCode: err.statusCode, userId, repoName: name },
         "GitHub API rejected repo creation (user-correctable)",
       );
       // 403 here is unexpected post-fix (the original /user/repos 403 is gone);
@@ -82,14 +79,14 @@ export async function POST(request: Request) {
         reportSilentFallback(err, {
           feature: "repo-create",
           op: "createRepo",
-          extra: { statusCode: 403, userId: user.id, repoName: name },
+          extra: { statusCode: 403, userId, repoName: name },
         });
       }
       return NextResponse.json({ error: err.message }, { status });
     }
 
     logger.error(
-      { err, userId: user.id, repoName: name },
+      { err, userId, repoName: name },
       "Failed to create repository",
     );
     Sentry.captureException(err);

@@ -13,6 +13,18 @@
 
 set -euo pipefail
 
+# Refuse to run traced while the R2 pair is in the environment: aws_exec binds it as
+# per-command env prefixes, and `bash -x` prints those assignments (see #7797). Placed before
+# anything reads the pair; the unset case (usage errors) still runs.
+case "$-" in
+  *x*)
+    if [ -n "${AWS_SECRET_ACCESS_KEY:+x}${R2_CLA_EVIDENCE_ACCESS_KEY_ID:+x}${R2_CLA_EVIDENCE_SECRET:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 mode="${1:-}"; shift || true
 arg="${1:-}"
 if [[ -z "$mode" || -z "$arg" ]]; then

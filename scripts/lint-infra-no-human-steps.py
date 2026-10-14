@@ -228,18 +228,44 @@ IGNORE_START_RE = re.compile(r"<!--\s*lint-infra-ignore\s+start\b", re.IGNORECAS
 IGNORE_END_RE = re.compile(r"<!--\s*lint-infra-ignore\s+end\b", re.IGNORECASE)
 
 
+# The ONE literal for the sanctioned SSH-class section that
+# `hr-no-ssh-fallback-in-runbooks` names. Both `_is_carve_heading` and
+# `_is_last_resort_heading` derive from this constant rather than restating it
+# (#7874 task 0.7): the two predicates must agree by construction, because
+# nothing else in the repo compares them. Prefix-anchored with a trailing `\b`
+# so a suffixed title (`Last-resort diagnosis — read-only`) still matches while
+# `Last resort diagnosis` (no hyphen) does not.
+LAST_RESORT_HEADING_RE = re.compile(r"Last-resort diagnosis\b", re.IGNORECASE)
+
+# `Resolved` at start, followed by end-of-title OR a non-word separator
+# (space+`(`, `—`, `:`, `-`) — but NOT another word like "questions".
+RESOLVED_HEADING_RE = re.compile(r"Resolved(?=$|\s*[^\w\s])", re.IGNORECASE)
+
+
+def _strip_heading_decoration(title: str) -> str:
+    """Drop leading decoration (emoji, ✅, whitespace) before the first letter."""
+    return re.sub(r"^[^A-Za-z]+", "", title)
+
+
+def _is_last_resort_heading(title: str) -> bool:
+    """True ONLY for a `Last-resort diagnosis` heading.
+
+    This is the narrow predicate the in-fence host-login exception consults.
+    It must never match the `Resolved` arm: `Resolved` carves ordinary prose,
+    but suppressing a fenced host-login command is a much stronger claim and is
+    reserved for the one section name the hard rule sanctions. Guard 1 row 2
+    (fixture F24) pins that separation.
+    """
+    return bool(LAST_RESORT_HEADING_RE.match(_strip_heading_decoration(title)))
+
+
 def _is_carve_heading(title: str) -> bool:
     """True for an exact `Resolved`/`Resolved (…)`/`Resolved — …` or a
     `Last-resort diagnosis` heading — NOT for `Resolved questions` etc."""
-    # Strip leading decoration (emoji, ✅, whitespace) before the first letter.
-    t = re.sub(r"^[^A-Za-z]+", "", title)
-    # `Resolved` at start, followed by end-of-title OR a non-word separator
-    # (space+`(`, `—`, `:`, `-`) — but NOT another word like "questions".
-    if re.match(r"Resolved(?=$|\s*[^\w\s])", t, re.IGNORECASE):
+    t = _strip_heading_decoration(title)
+    if RESOLVED_HEADING_RE.match(t):
         return True
-    if re.match(r"Last-resort diagnosis\b", t, re.IGNORECASE):
-        return True
-    return False
+    return _is_last_resort_heading(title)
 
 
 def _neutralize_filenames(text: str) -> str:
@@ -287,6 +313,9 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
     ignore_start_line = 0
     carve = False
     carve_level = 0
+    # #7874. Narrower than `carve`: true only inside a `Last-resort diagnosis`
+    # region, which is the only place a FENCED host-login command is suppressed.
+    carve_last_resort = False
 
     for i, raw in enumerate(lines):
         # 1. Inside an ignore region: only the terminating end marker matters.
@@ -333,7 +362,17 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
             # Sets BOTH actor and imperative: the line is self-contained (a human opening a
             # remote shell AND running a command), so it flags on same-line co-occurrence and
             # does not depend on an adjacent prose line that a fence would have hidden anyway.
-            if HOST_LOGIN_RE.search(raw):
+            #
+            # #7874 — the carve reaches this arm. Before this gate the exception
+            # fired under EVERY heading, so the `Last-resort diagnosis` section
+            # that `hr-no-ssh-fallback-in-runbooks` sanctions was unreachable for
+            # the only form these findings take (a fenced `ssh user@host`): this
+            # branch `continue`s before the heading/carve check below. The rule
+            # forbids `ssh` as a PRIMARY debug action and directs SSH-class steps
+            # into a last-resort section; that section is now the contract, and a
+            # runbook satisfies the rule by FRAMING the probe rather than by
+            # deleting the diagnostic it needs.
+            if HOST_LOGIN_RE.search(raw) and not carve_last_resort:
                 actor[i] = True
                 imper[i] = True
             continue
@@ -356,8 +395,16 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
             if _is_carve_heading(title):
                 carve = True
                 carve_level = level
+                # ASSIGN, never `|=`. An adjacent `## Last-resort diagnosis` ->
+                # `## Resolved` pair takes THIS branch, skipping the `elif` that
+                # clears the state — so an OR would leave the last-resort carve
+                # standing under `## Resolved` and silently suppress a fenced
+                # host-login there. Fixture F27 is the only case that separates
+                # the two forms; F24 passes under both.
+                carve_last_resort = _is_last_resort_heading(title)
             elif carve and level <= carve_level:
                 carve = False
+                carve_last_resort = False
             # Heading lines never carry a prescribed step.
             continue
         if carve:
@@ -533,6 +580,25 @@ def main(argv: list[str]) -> int:
         files = picked
     else:
         files = full_scan_files()
+        # #7874 task 0.8 — full-scan mode is FAIL-CLOSED on an empty file set.
+        # `full_scan_files()` silently skips a SCAN_DIRS entry that is not a
+        # directory, so a renamed/moved knowledge-base root (or a run from the
+        # wrong CWD) collected zero files and printed
+        # `OK: no human-run infra steps in 0 scanned file(s)` at exit 0 — a
+        # clean bill of health from a scan that examined nothing. That is the
+        # vacuous-pass shape this repo has documented repeatedly, and it is the
+        # durable form of Guard 1's dispatch row, which cannot be reached
+        # through `run_case` (every case passes an explicit positional path, and
+        # the `if args.paths:` branch short-circuits before here).
+        if not files:
+            print(
+                "ERROR: full-scan mode collected 0 files under "
+                f"{', '.join(SCAN_DIRS)}. Expected at least one *.md — a scan "
+                "that examines nothing must not report OK. Check the CWD is the "
+                "repo root and that the scan dirs exist. Fail-closed.",
+                file=sys.stderr,
+            )
+            return 2
 
     errors: list[str] = []
     for f in files:

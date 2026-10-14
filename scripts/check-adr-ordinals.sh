@@ -11,8 +11,17 @@
 # Three layers (per AC18 in 2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md):
 #   1. Exact-ordinal collision: two files named ADR-NNN-*.md for the same NNN.
 #   2. Required files exist with non-empty content: ADR-042 + ADR-041 (PR-B).
-#   3. Required-heading completeness: each file has ## Status / ## Context /
-#      ## Decision / ## Consequences (rules out stub-shaped ADRs).
+#   3. Required-heading completeness FOR THOSE TWO FILES ONLY: ADR-042 and
+#      ADR-041 each have ## Status / ## Context / ## Decision / ## Consequences
+#      (rules out stub-shaped ADRs).
+#      NOT a check on new ADRs. Layers 2 and 3 share the `for required in
+#      ADR-042 ADR-041` loop below, so a newly-added ADR is ordinal-checked by
+#      layer 1 and heading-checked by nothing. This comment previously read
+#      "each file", which is how a reader concludes the gate covers new ADRs;
+#      measured 2026-09-09, ADR-211 shipped with no ## Status heading and this
+#      script reported "ADR ordinal + content checks passed". Widening layer 3
+#      to every ADR is the real repair and is deliberately NOT done here — it
+#      would red in-flight PRs carrying a new ADR, so it needs its own change.
 #
 # Fails closed: exit 1 on any check trip. Stdout names the failing condition
 # so CI logs surface the specific drift.

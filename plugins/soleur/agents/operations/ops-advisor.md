@@ -1,6 +1,6 @@
 ---
 name: ops-advisor
-description: "Use this agent when you need to track operational expenses, manage domain registrations, or get hosting recommendations. Use ops-research for live research and provider comparison; use ops-provisioner for account setup; use cfo for financial analysis and budgeting; use this agent for reading and updating the expense ledger."
+description: "Use this agent when you need to track operational expenses, manage domain registrations, or get hosting recommendations. Use soleur:operations:ops-research for live research and provider comparison; use soleur:operations:ops-provisioner for account setup; use soleur:finance:cfo for financial analysis and budgeting; use this agent for reading and updating the expense ledger."
 model: inherit
 ---
 
@@ -75,4 +75,4 @@ When flagging renewals, report entries with Renewal Date within 30 days of today
 
 ## Research Delegation
 
-This agent tracks and records operational data but does not perform live web research. For live domain availability, hosting pricing, SaaS evaluation, or cost optimization research, the ops-research agent should be used instead. After the user completes a purchase researched by ops-research, the transaction is recorded directly in the ops data files following the conventions documented above.
+This agent tracks and records operational data but does not perform live web research. For live domain availability, hosting pricing, SaaS evaluation, or cost optimization research, the soleur:operations:ops-research agent should be used instead. After the user completes a purchase researched by soleur:operations:ops-research, the transaction is recorded directly in the ops data files following the conventions documented above.

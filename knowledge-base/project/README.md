@@ -172,7 +172,7 @@ Paths follow predictable patterns:
 
 ```bash
 # Install the plugin
-claude plugin install soleur
+claude plugin install soleur@soleur-marketplace
 
 # For existing projects, sync first
 /soleur:sync

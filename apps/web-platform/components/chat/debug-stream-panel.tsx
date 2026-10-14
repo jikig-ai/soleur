@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
 
@@ -16,11 +17,12 @@ import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
  * independent coverage for a redactor regex MISS — the server-side
  * DEBUG_REDACTION_PROBES superset is the real coverage backstop (Sharp Edge).
  *
- * Visibility is the `dev`-cohort `debug-mode` flag (`available`); the panel is
+ * Visibility is the `debug-mode` flag (`available`) — open to all roles
+ * during beta so any user can capture harness logs for support. The panel is
  * always READ-ONLY (the owner-gated flip lives in the settings toggle, so a
- * member/non-owner dev sees the stream with no control here). Emission is
- * server-gated independently — a flipped client flag can never unlock the
- * stream; this panel only renders what already arrived over the ephemeral WS.
+ * non-owner sees the stream with no control here). Emission is server-gated
+ * independently — a flipped client flag can never unlock the stream; this
+ * panel only renders what already arrived over the ephemeral WS.
  */
 
 // The server DROP placeholder for a tool_use whose input tripped the redaction
@@ -40,7 +42,7 @@ const KIND_LABEL: Record<ChatDebugEventMessage["debugKind"], string> = {
 };
 
 export interface DebugStreamPanelProps {
-  /** dev-cohort `debug-mode` flag — hide the whole panel when false. */
+  /** `debug-mode` flag — hide the whole panel when false. */
   available: boolean;
   /** Debug events filtered out of the main message list, in arrival order. */
   events: ChatDebugEventMessage[];
@@ -132,7 +134,7 @@ export function DebugStreamPanel({
       copyTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // Clipboard unavailable (insecure context / permission denied). This is a
-      // dev-cohort, same-origin panel (always a secure context in practice), so
+      // same-origin panel (always a secure context in practice), so
       // no execCommand fallback is warranted — mirrors components/kb/share-popover.tsx.
     }
   }, [events]);
@@ -170,11 +172,13 @@ export function DebugStreamPanel({
       className="mt-6 rounded-md border border-dashed border-soleur-border-default bg-soleur-bg-surface-1/30"
     >
       {/* Header row: the expand/collapse toggle and the Copy control are
-          SIBLING buttons (never nested — a <button> inside a <button> is
-          invalid HTML), so clicking Copy can never toggle the panel. */}
+          SIBLING buttons (never nested — a button element inside a button
+          element is invalid HTML), so clicking Copy can never toggle the
+          panel. */}
       <div className="flex w-full items-center justify-between gap-3 px-3 py-2">
         <button
           type="button"
+          data-button-exempt="aria-expanded disclosure toggle with composite header content"
           aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
           className="flex flex-1 items-center gap-2 text-left"
@@ -203,7 +207,8 @@ export function DebugStreamPanel({
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-2">
-          <button
+          <Button
+            variant="outlined"
             type="button"
             data-testid="debug-stream-copy"
             onClick={copyAll}
@@ -218,7 +223,7 @@ export function DebugStreamPanel({
             className="rounded-sm border border-soleur-accent-gold-text/30 px-1.5 py-0.5 text-[10px] font-medium text-soleur-accent-gold-text transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:text-soleur-text-muted disabled:opacity-40"
           >
             {copied ? "Copied" : "Copy"}
-          </button>
+          </Button>
           <span className="text-[10px] text-soleur-text-muted">not saved</span>
         </div>
       </div>
@@ -226,9 +231,9 @@ export function DebugStreamPanel({
       {expanded && (
         <div className="border-t border-soleur-border-default/40">
           <p className="px-3 py-1.5 text-[10px] text-soleur-text-muted">
-            Internal harness events for this workspace. Secrets are redacted;
-            this stream is <strong>not saved</strong> and visible only to the
-            Soleur team.
+            Harness events for this workspace. Secrets are redacted and the
+            stream is <strong>not saved</strong> — use Copy to share the log
+            with support.
           </p>
           {withheldCount > 0 && (
             <p

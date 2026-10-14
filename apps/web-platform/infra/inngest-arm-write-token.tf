@@ -30,7 +30,8 @@
 # matching the read token's by-reference wiring (inngest-host.tf:174-175). Consequence: the
 # per-merge `-target` of this token is a STANDING transitive path onto the excluded project/env.
 # A teardown/re-provision of doppler_project.inngest must be OPERATOR-applied FIRST — else the
-# next per-merge CI apply recreates the isolated project unattended. (Precedent for the
+# next per-merge CI apply recreates the isolated project unattended. It now ALSO needs a reviewed
+# lift of its prevent_destroy first (runbook "Sole-copy protection and key loss", #9879). (Precedent for the
 # transitive-edge concern: doppler_service_token.inngest, by-reference; NOT
 # doppler_service_token.write, which is a string-literal token with zero edges.)
 #
@@ -76,6 +77,34 @@ resource "github_repository_environment" "inngest_cutover" {
   reviewers {
     users = [54279]
   }
+
+  # #7695. THE REVIEWER RULE ALONE DOES NOT GATE THE CODE THAT RUNS. `workflow_dispatch` executes
+  # the SELECTED REF's workflow and the scripts that workflow sources, and the reviewer prompt
+  # shows a branch NAME, not a diff. The destructive `inngest_volume_recut` job added under this
+  # environment (later converted into `inngest_backstop_retire` by #8285, which sourced its gate the
+  # same way, and deleted by #8285 PR B once the backstop volume was destroyed) sourced BOTH of its
+  # guards from `${GITHUB_WORKSPACE}` — so without a branch pin,
+  # anyone who can dispatch can point the run at a branch carrying neutered guards and ask the
+  # reviewer to approve what reads as a routine recut.
+  #
+  # Measured 2026-09-03: `gh api repos/jikig-ai/soleur/environments/inngest-cutover` returned
+  # `deployment_branch_policy: null`, which the API reads as "every branch may deploy".
+  # web-host-birth-environment.tf already carries the full argument for why that is fatal for a
+  # gate sourced from the workspace, and already records THIS environment as one of three with a
+  # null policy — it was written as a warning about a sibling and is now a defect in the sibling.
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+# `custom_branch_policies = true` only declares that the environment uses a NAMED LIST; without
+# this resource the list is empty, which GitHub treats as "no branch may deploy" — the opposite
+# failure from omitting the block, and equally wrong. Both halves are required.
+resource "github_repository_environment_deployment_policy" "inngest_cutover_main" {
+  repository     = "soleur"
+  environment    = github_repository_environment.inngest_cutover.environment
+  branch_pattern = "main"
 }
 
 # The write token published as a REPO-level github_actions_secret. It was originally an ENVIRONMENT
@@ -88,9 +117,40 @@ resource "github_repository_environment" "inngest_cutover" {
 # op=rollback JOB declares `environment: inngest-cutover` (the github_repository_environment above),
 # which holds the run in "Waiting" for reviewer approval BEFORE any step executes — independent of
 # where the secret lives. Residual exposure: the token is readable by every workflow (the same
-# exposure class as doppler_token_write, an equally read/write Doppler token), bounded by the
-# conditional injection (`inputs.op == 'arm' && secrets.DOPPLER_TOKEN_INNGEST_ARM || ''`) and the
-# post-cutover revoke. Upgrade back to an environment secret if the App is later granted
+# exposure class as doppler_token_write, an equally read/write Doppler token).
+#
+# CONSUMERS — keep this list current; the bound stated here is only as true as the list.
+#   1. cutover-inngest.yml:123 — conditional injection
+#      (`(op == 'arm' || 'rollback' || 'resume') && secrets.… || ''`), and those jobs declare
+#      `environment: inngest-cutover` (cutover-inngest.yml:78), so they hold for the reviewer.
+#   2. (RETIRED by #8285 PR B) apply-web-platform-infra.yml, job `inngest_backstop_retire` (converted
+#      from `inngest_volume_recut` by #8285) — unconditional injection, but that job declared
+#      `environment: inngest-cutover`, so the human ack gated it. The job no longer exists; the item
+#      keeps its number so the references below stay valid.
+#   3. apply-web-platform-infra.yml, job `inngest_host_replace`, the #7228 inherited-`done`
+#      preflight (added 2026-09-17) — UNCONDITIONAL injection. Still the FIRST resolution site
+#      with neither of the two bounds above, and still the residual this comment is about.
+#      AMENDED 2026-09-23 (#8209, ADR-241 D2): the "job with NO `environment:` key" clause is
+#      no longer true — that job now declares `environment: infra-privileged`. That is NOT a
+#      third bound: the environment has no reviewers by design, so nothing human gates it. What
+#      it adds is branch reach — the deployment-branch policy admits `main` only, so the
+#      injection is unreachable from a dispatch on any other ref.
+#
+# An earlier revision of this comment asserted the residual was "bounded by the conditional
+# injection … and the post-cutover revoke". Consumer 3 falsifies the first half, and this file
+# is not in that PR's diff, which is exactly why the claim went unre-read. Corrected rather than
+# left standing: a comment that overstates a control teaches the next reader the wrong bound.
+#
+# What consumer 3 actually needs is ONE read of ONE key. What it carries is read/WRITE on the
+# whole soleur-inngest/prd config. The proportionate fix is a second, `access = "read"` service
+# token (`doppler_service_token` supports it) published as DOPPLER_TOKEN_INNGEST_FLIP_READ and
+# consumed there instead — which also survives the post-cutover revoke below, where consumer 3
+# otherwise degrades silently and permanently into its "read failed" branch. Tracked as a
+# follow-up because minting and publishing a new service token is a provisioning change with its
+# own apply, not a review edit. RE-EVAL TRIGGER: whichever comes first — the post-cutover revoke
+# of this token, or a FOURTH consumer being added.
+#
+# Upgrade back to an environment secret if the App is later granted
 # environment-secret write. NO lifecycle.ignore_changes → a `-replace` rotation of the token
 # propagates the new key here in the same apply (do NOT add ignore_changes = [plaintext_value]).
 resource "github_actions_secret" "doppler_token_inngest_arm" {

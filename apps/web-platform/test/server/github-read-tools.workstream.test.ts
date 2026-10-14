@@ -163,3 +163,58 @@ describe("listRepoIssues", () => {
     expect(out[0].labels).toEqual(["", "blocked", "raw-string"]);
   });
 });
+
+describe("listRepoIssues — per-page hooks (the progressive-feed contract)", () => {
+  it("fires onBatch once per fetched page (empty for all-PR pages) in fetch order", async () => {
+    // open: page1 = FULL (a short page stops the walk), page2 = a full all-PR
+    // page (onBatch still fires, with an empty batch), page3 = short → stop.
+    // closed: one empty page.
+    githubApiGet.mockImplementation((_i: unknown, p: string) => {
+      if (p.includes("state=open")) {
+        const page = pageOf(p);
+        if (page === 1)
+          return Promise.resolve(
+            Array.from({ length: 100 }, (_, i) => rawIssue({ number: i + 1 })),
+          );
+        if (page === 2)
+          return Promise.resolve(
+            Array.from({ length: 100 }, (_, i) =>
+              rawIssue({ number: 100 + i, pull_request: { url: "x" } }),
+            ),
+          );
+        return Promise.resolve([rawIssue({ number: 201 })]);
+      }
+      return Promise.resolve([]);
+    });
+    const batches: number[][] = [];
+    await listRepoIssues(123, "acme", "widgets", {
+      onBatch: (items) => batches.push(items.map((i) => i.number)),
+    });
+    // open p1 (full) → open p2 (all-PR → empty batch, still fires) →
+    // open p3 (short → stop) → closed p1 (empty → fires, then stops).
+    expect(batches).toEqual([
+      Array.from({ length: 100 }, (_, i) => i + 1),
+      [],
+      [201],
+      [],
+    ]);
+  });
+
+  it("fires onOpenTruncated exactly when the open cap drops a tail", async () => {
+    githubApiGet.mockImplementation((_i: unknown, p: string) =>
+      Promise.resolve(
+        p.includes("state=open")
+          ? Array.from({ length: 100 }, (_, i) => rawIssue({ number: i + 1 }))
+          : [],
+      ),
+    );
+    const onOpenTruncated = vi.fn();
+    await listRepoIssues(123, "acme", "widgets", { onOpenTruncated });
+    expect(onOpenTruncated).toHaveBeenCalledTimes(1);
+    // …and the flag does NOT fire for a clean (short-page) exhaust.
+    vi.clearAllMocks();
+    githubApiGet.mockResolvedValue([]);
+    await listRepoIssues(123, "acme", "widgets", { onOpenTruncated });
+    expect(onOpenTruncated).not.toHaveBeenCalled();
+  });
+});

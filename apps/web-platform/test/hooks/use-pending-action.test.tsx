@@ -1,0 +1,234 @@
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, act, renderHook, fireEvent } from "@testing-library/react";
+import {
+  usePendingAction,
+  PENDING_WATCHDOG_MS,
+} from "@/hooks/use-pending-action";
+import { Button } from "@/components/ui/button";
+import { reportSilentFallback } from "@/lib/client-observability";
+
+vi.mock("@/lib/client-observability", () => ({
+  reportSilentFallback: vi.fn(),
+  warnSilentFallback: vi.fn(),
+}));
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.mocked(reportSilentFallback).mockClear();
+});
+
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("usePendingAction", () => {
+  it("pending is true while the action is in flight, false after resolve", async () => {
+    const d = deferred();
+    const fn = vi.fn(() => d.promise);
+    const { result } = renderHook(() => usePendingAction(fn));
+    act(() => result.current.run());
+    expect(result.current.pending).toBe(true);
+    expect(result.current.error).toBeNull();
+    await act(async () => d.resolve());
+    expect(result.current.pending).toBe(false);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("pendingRef covers the click-to-first-render sync gap — a second run() is a no-op", () => {
+    const d = deferred();
+    const fn = vi.fn(() => d.promise);
+    const { result } = renderHook(() => usePendingAction(fn));
+    act(() => {
+      result.current.run();
+      result.current.run();
+    });
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejection surfaces an Error on the error channel and releases pending", async () => {
+    const d = deferred();
+    const { result } = renderHook(() => usePendingAction(() => d.promise));
+    act(() => result.current.run());
+    await act(async () => d.reject(new Error("send failed")));
+    expect(result.current.pending).toBe(false);
+    expect(result.current.error?.message).toBe("send failed");
+  });
+
+  it("non-Error rejections are wrapped into Error", async () => {
+    const d = deferred();
+    const { result } = renderHook(() => usePendingAction(() => d.promise));
+    act(() => result.current.run());
+    await act(async () => d.reject("plain string"));
+    expect(result.current.error).toBeInstanceOf(Error);
+    expect(result.current.error?.message).toBe("plain string");
+  });
+
+  it("latch() never resets pending once the action resolves", async () => {
+    const d = deferred();
+    const fn = vi.fn(async () => {
+      result.current.latch();
+      await d.promise;
+    });
+    const { result } = renderHook(() => usePendingAction(fn));
+    act(() => result.current.run());
+    await act(async () => d.resolve());
+    expect(result.current.pending).toBe(true);
+    // The latch also blocks re-runs — the redirect owns the teardown.
+    act(() => result.current.run());
+    expect(result.current.pending).toBe(true);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a resolve without latch() releases pending — terminality is explicit, never inferred", async () => {
+    // Regression for the resolution-inferred latch: an asyncFn with a
+    // non-navigating success path (confirm-cancel, handled !res.ok) must NOT
+    // leave the control latched.
+    const d = deferred();
+    const fn = vi.fn(async () => {
+      await d.promise;
+      // no latch() — models team-membership-list's confirm-cancel return
+    });
+    const { result } = renderHook(() => usePendingAction(fn));
+    act(() => result.current.run());
+    await act(async () => d.resolve());
+    expect(result.current.pending).toBe(false);
+    // And re-runs still work — a released control is not gated.
+    act(() => result.current.run());
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("latch() still releases pending on failure", async () => {
+    const d = deferred();
+    const { result } = renderHook(() =>
+      usePendingAction(async () => {
+        result.current.latch();
+        await d.promise;
+      }),
+    );
+    act(() => result.current.run());
+    await act(async () => d.reject(new Error("boom")));
+    expect(result.current.pending).toBe(false);
+    expect(result.current.error?.message).toBe("boom");
+    // A failed latched episode is non-terminal — the latch resets, so the
+    // released control is genuinely retryable, not enabled-but-dead.
+    act(() => result.current.run());
+    expect(result.current.pending).toBe(true);
+  });
+
+  it("a latched episode still reports at the watchdog horizon — teardown never arrived", () => {
+    vi.useFakeTimers();
+    const d = deferred();
+    const { result } = renderHook(() =>
+      usePendingAction(async () => {
+        result.current.latch();
+        await d.promise;
+      }),
+    );
+    act(() => result.current.run());
+    act(() => d.resolve());
+    // Resolve doesn't release (latched) but the watchdog stays armed.
+    act(() => vi.advanceTimersByTime(PENDING_WATCHDOG_MS));
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    // The higher-severity latched class gets its own op — separately
+    // queryable from a plain hung action.
+    expect(
+      vi.mocked(reportSilentFallback).mock.calls[0][1].op,
+    ).toBe("pending-watchdog-latch-held");
+    expect(
+      vi.mocked(reportSilentFallback).mock.calls[0][1].extra,
+    ).toMatchObject({ latched: "true" });
+    expect(result.current.pending).toBe(true);
+  });
+
+  it("watchdog mirrors a hung action to Sentry and releases pending at ~30s", () => {
+    vi.useFakeTimers();
+    const never = new Promise<void>(() => {});
+    const { result } = renderHook(() => usePendingAction(() => never));
+    act(() => result.current.run());
+    expect(result.current.pending).toBe(true);
+    act(() => vi.advanceTimersByTime(PENDING_WATCHDOG_MS));
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(result.current.pending).toBe(false);
+  });
+
+  it("a retry clears a stale error — re-run resets the error channel", async () => {
+    const d1 = deferred();
+    const d2 = deferred();
+    const fn = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(() => d1.promise)
+      .mockImplementationOnce(() => d2.promise);
+    const { result } = renderHook(() => usePendingAction(fn));
+    act(() => result.current.run());
+    await act(async () => d1.reject(new Error("first")));
+    expect(result.current.error?.message).toBe("first");
+    act(() => result.current.run());
+    expect(result.current.error).toBeNull();
+    await act(async () => d2.resolve());
+  });
+
+  it("unmount clears the watchdog — no post-unmount Sentry report", () => {
+    vi.useFakeTimers();
+    const never = new Promise<void>(() => {});
+    const { result, unmount } = renderHook(() => usePendingAction(() => never));
+    act(() => result.current.run());
+    expect(result.current.pending).toBe(true);
+    unmount();
+    act(() => vi.advanceTimersByTime(PENDING_WATCHDOG_MS + 1000));
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("a watchdog-released zombie cannot release the retried episode", async () => {
+    // Episode A hangs; the watchdog releases pending at 30s. The user
+    // retries → episode B. When A's asyncFn finally settles, its finally
+    // must NOT clear B's pending/watchdog — the zombie is superseded.
+    vi.useFakeTimers();
+    const dA = deferred();
+    const dB = deferred();
+    let calls = 0;
+    const fn = vi.fn(() => (calls++ === 0 ? dA.promise : dB.promise));
+    const { result } = renderHook(() => usePendingAction(fn));
+    act(() => result.current.run());           // A
+    act(() => vi.advanceTimersByTime(PENDING_WATCHDOG_MS));
+    expect(result.current.pending).toBe(false); // A watchdog-released
+    act(() => result.current.run());           // B
+    expect(result.current.pending).toBe(true);
+    // A settles late — its finally is a zombie and must not touch B.
+    await act(async () => dA.resolve());
+    expect(result.current.pending).toBe(true);
+    // B's own lifecycle still completes.
+    await act(async () => dB.resolve());
+    expect(result.current.pending).toBe(false);
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores focus to the invoking control on resolve when it collapsed to body", async () => {
+    const d = deferred();
+    function Harness() {
+      const { run, pending } = usePendingAction(() => d.promise);
+      return (
+        <Button loading={pending} onClick={() => run()}>
+          Send
+        </Button>
+      );
+    }
+    render(<Harness />);
+    const btn = screen.getByRole("button", { name: "Send" });
+    btn.focus();
+    expect(document.activeElement).toBe(btn);
+    act(() => fireEvent.click(btn));
+    expect(btn).toBeDisabled();
+    // Simulate the disabled-flip blur: focus collapsed to <body>. (happy-dom
+    // no-ops blur() on a disabled element; body.focus() moves activeElement.)
+    document.body.focus();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => d.resolve());
+    expect(document.activeElement).toBe(btn);
+  });
+});

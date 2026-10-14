@@ -25,6 +25,7 @@ The Polsia battlecard talk track (line 57) asserts the 20% revenue share as defi
 ## Technical Details
 
 **Affected files:**
+
 - `knowledge-base/sales/battlecards/tier-3-polsia.md` line 57
 
 ## Acceptance Criteria

@@ -1,18 +1,16 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import { verifiedUserId } from "@/server/request-auth";
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/push-subscription", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -44,7 +42,7 @@ export async function POST(request: Request) {
   const { count, error: countError } = await service
     .from("push_subscriptions")
     .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id);
+    .eq("user_id", userId);
 
   if (countError) {
     return NextResponse.json(
@@ -58,7 +56,7 @@ export async function POST(request: Request) {
     const { data: existing } = await service
       .from("push_subscriptions")
       .select("id")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("endpoint", body.endpoint)
       .limit(1);
 
@@ -71,11 +69,11 @@ export async function POST(request: Request) {
   }
 
   // push_subscriptions.workspace_id is NOT NULL (migration 059); resolve the
-  // active workspace (solo fallback = user.id) or the INSERT fails with 23502.
-  const workspaceId = await resolveCurrentWorkspaceId(user.id, service);
+  // active workspace (solo fallback = userId) or the INSERT fails with 23502.
+  const workspaceId = await resolveCurrentWorkspaceId(userId, service);
   const { error } = await service.from("push_subscriptions").upsert(
     {
-      user_id: user.id,
+      user_id: userId,
       workspace_id: workspaceId,
       endpoint: body.endpoint,
       p256dh: body.keys.p256dh,
@@ -99,12 +97,9 @@ export async function DELETE(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/push-subscription", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -120,7 +115,7 @@ export async function DELETE(request: Request) {
   const { error } = await service
     .from("push_subscriptions")
     .delete()
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("endpoint", body.endpoint);
 
   if (error) {

@@ -35,9 +35,17 @@ EMPTY_SHA="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ENV_KEY="INFRA_CONFIG_RENDERED_SHA__ETC_DEFAULT_SOLEUR_DOPPLER_TOKEN"
 
 pass=0; fail=0; asserts=0
-ok()  { echo "  PASS: $1"; pass=$((pass + 1)); asserts=$((asserts + 1)); }
-bad() { echo "  FAIL: $1"; fail=$((fail + 1)); asserts=$((asserts + 1)); }
-eq()  { if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (expected '$2', got '$3')"; fi }
+# `asserts` is incremented at the CALL SITE, never inside ok()/bad(). That placement is the
+# whole substance of the accounting-conservation check at the bottom of this file: a counter
+# that moves inside both verdict helpers moves WITH the verdict, so stubbing bad() to a no-op
+# drops the row and its count together and `pass+fail == asserts` still holds. Measured on this
+# shape before the fix: a neutered bad() printed "conservation GREEN — defect hidden", rc 0.
+#
+# Never increment inside `$( )` — a subshell discards it.
+ok()  { echo "  PASS: $1"; pass=$((pass + 1)); }
+bad() { echo "  FAIL: $1"; fail=$((fail + 1)); }
+# One assertion is about to be decided; eq() always resolves to exactly one verdict.
+eq()  { asserts=$((asserts + 1)); if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (expected '$2', got '$3')"; fi }
 
 TMP="$(mktemp -d)" || { echo "SETUP FAILED: mktemp"; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
@@ -72,8 +80,10 @@ PY
 # If a refactor renames the step or drops the id, the extraction above still "succeeds" against
 # nothing and every arm below passes vacuously. These make that a loud FIXTURE error rather than
 # a phantom green.
+asserts=$((asserts + 1))
 if [[ -s "$SCRIPT" ]]; then ok "extracted a non-empty step body for id=$STEP_ID"; else bad "extracted step body is EMPTY — every arm below would be vacuous"; fi
 for token in 'base64 -d' 'sha256sum' "$ENV_KEY"; do
+  asserts=$((asserts + 1))
   if grep -qF -- "$token" "$SCRIPT"; then
     ok "extracted body still contains '$token' (fixture is the real oracle)"
   else
@@ -85,6 +95,7 @@ done
 # The body must not carry ${{ }} expressions. This harness runs it as plain bash, so an
 # interpolation would be a literal string here and a DIFFERENT program in CI — the harness would
 # be testing something the workflow never executes. It is also the workflow-injection surface.
+asserts=$((asserts + 1))
 # shellcheck disable=SC2016
 if grep -q '\${{' "$SCRIPT"; then
   bad "step body contains a \${{ }} expression — it would evaluate differently in CI than under this harness"
@@ -95,6 +106,7 @@ fi
 # --- pull_request_target refusal (5.3) ------------------------------------------------------
 # This workflow holds prd Doppler credentials. pull_request_target runs with the BASE repo's
 # secrets against a HEAD-controlled checkout, so it would hand those credentials to any fork PR.
+asserts=$((asserts + 1))
 if python3 -c "
 import sys, yaml
 d = yaml.safe_load(open('$WF'))
@@ -163,28 +175,33 @@ GOOD_SHA=$(printf '%s' "$RENDERED" | sha256sum | awk '{print $1}')
 # --- Arm 1: the happy path exports the REAL digest ------------------------------------------
 run_arm "$GOOD_B64" 0
 eq "valid render exports the digest of the rendered bytes" "$GOOD_SHA" "$ARM_EXPORT"
+asserts=$((asserts + 1))
 if grep -q 'tier-2 byte compare ACTIVE' <<<"$ARM_OUT"; then ok "valid render announces tier-2 ACTIVE"; else bad "no tier-2 announcement: $ARM_OUT"; fi
 
 # --- Arm 2: THE #7140 RESIDUAL — `(sensitive value)` must NOT arm the gate -------------------
 # The headline case. This is what shipped, and what a shape check certified as ACTIVE.
 run_arm '(sensitive value)' 0
 eq "(sensitive value) exports NOTHING" "" "$ARM_EXPORT"
+asserts=$((asserts + 1))
 if [[ "$ARM_EXPORT" == "$EMPTY_SHA" ]]; then
   bad "(sensitive value) exported sha256 of the EMPTY STRING — #7140 has regressed"
 else
   ok "(sensitive value) did not export sha256(\"\") — the empty-digest oracle is dead"
 fi
+asserts=$((asserts + 1))
 if grep -q '::warning::' <<<"$ARM_OUT"; then ok "(sensitive value) degrades LOUDLY with a ::warning::"; else bad "silent degrade — a weaker gate would be mistaken for a passing one"; fi
 
 # --- Arm 3: terraform console fails outright ------------------------------------------------
 run_arm '' 1
 eq "a failed terraform console exports nothing" "" "$ARM_EXPORT"
+asserts=$((asserts + 1))
 if grep -q '::warning::' <<<"$ARM_OUT"; then ok "console failure degrades loudly"; else bad "console failure degraded silently"; fi
 
 # --- Arm 4: empty output with a SUCCESS rc --------------------------------------------------
 # The nastiest shape: rc=0 says "it worked", stdout says nothing. Must not become sha256("").
 run_arm '' 0
 eq "empty console output with rc=0 exports nothing" "" "$ARM_EXPORT"
+asserts=$((asserts + 1))
 if [[ "$ARM_EXPORT" == "$EMPTY_SHA" ]]; then bad "empty-but-successful output produced sha256(\"\")"; else ok "empty-but-successful output did not produce sha256(\"\")"; fi
 
 # --- Arm 5: MARKER ABSENT — decodable base64 that is not the credential ----------------------
@@ -243,9 +260,11 @@ chmod +x "$bin/terraform" "$bin/doppler"
 E_OUT=$(env -i PATH="$bin:/usr/bin:/bin" HOME="$TMP" GITHUB_ENV="$ARM_ENV" CI_SSH_PUB="$TMP/fake.pub" \
   bash -e "$SCRIPT" 2>&1); E_RC=$?
 eq "under CI's 'bash -e', a failing console still exits 0 (degrades, never blocks)" "0" "$E_RC"
+asserts=$((asserts + 1))
 if grep -q '::warning::' <<<"$E_OUT"; then ok "errexit arm still reaches its ::warning::"; else bad "errexit arm aborted before warning: $E_OUT"; fi
 # And assert the mechanism, not just the outcome — so a future edit removing `set +e` while the
 # body happens to have no failing command still reds here.
+asserts=$((asserts + 1))
 if grep -qE '^[[:space:]]*set \+e[[:space:]]*$' "$SCRIPT"; then
   ok "step explicitly disables errexit (set +e), rather than relying on every command succeeding"
 else
@@ -263,10 +282,13 @@ fi
 # very assertion tripped it, reporting a mask at line 50 against a "use" at line 26 that was a
 # sentence. A comment line begins with `#`, so requiring `echo "` and the real pipeline shape
 # pins code and nothing else.
+asserts=$((asserts + 1))
 if grep -qE '^[[:space:]]*echo "::add-mask::' "$SCRIPT"; then
   ok "step masks the rendered base64 (repo is public; nonsensitive() strips Terraform's guard)"
   mask_line=$(grep -nE '^[[:space:]]*echo "::add-mask::' "$SCRIPT" | head -1 | cut -d: -f1)
   hash_line=$(grep -nE '^[[:space:]]*[^#].*base64 -d.*\|[[:space:]]*sha256sum' "$SCRIPT" | head -1 | cut -d: -f1)
+  # A SECOND assertion is decided inside this branch; counted here, outside the `$( )` above.
+  asserts=$((asserts + 1))
   if [[ -n "$mask_line" && -n "$hash_line" && "$mask_line" -lt "$hash_line" ]]; then
     ok "the mask is registered (line $mask_line) before the value is consumed (line $hash_line)"
   else
@@ -277,6 +299,7 @@ else
 fi
 # The mask must cover the base64 itself, not the digest — a digest is a confirmation oracle and
 # is meant to be logged. Anchored on the echo for the same reason as above.
+asserts=$((asserts + 1))
 # shellcheck disable=SC2016
 if grep -qE '^[[:space:]]*echo "::add-mask::\$b64"' "$SCRIPT"; then
   ok "the masked value is \$b64 (the base64), not the digest"
@@ -291,14 +314,43 @@ fi
 # 23 running, and that slack was exactly enough to DELETE Arm 5 — the arm the whole design rests
 # on — while still printing "assertion floor met (22 >= 22)". Measured: removing Arm 5 in full
 # reported 23 passed, 0 failed, rc 0. A floor with slack is a floor you can walk under.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through bad(), and it no longer emits an
+# ok() row of its own. A floor that reports by calling bad() feeds the same counters the exit
+# status reads, so neutering bad() silences the rows AND the floor that exists to notice the
+# silence. A floor enforced through the suspect cannot witness the suspect.
+#
+# RE-RATCHETED from a re-measured green run after that conversion: deleting the floor's own
+# `ok "assertion floor met …"` row dropped the SUITE TOTAL 27 -> 26, but it did not move the
+# value the floor reads. That row was counted AFTER this check, so `asserts` here was 26 before
+# the conversion and is 26 after it. 26 is therefore still exactly zero-slack — measured, not
+# inherited: `26 passed, 0 failed (26 assertions)`.
 MIN_ASSERTS=26
-if [[ "$asserts" -ge "$MIN_ASSERTS" ]]; then
-  ok "assertion floor met ($asserts >= $MIN_ASSERTS)"
-else
-  bad "only $asserts assertions ran (floor $MIN_ASSERTS) — this suite is under-covering"
+if [[ "$asserts" -lt "$MIN_ASSERTS" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$asserts" "$MIN_ASSERTS" >&2
+  echo "digest-oracle-guard.test.sh: $pass passed, $fail failed ($asserts assertions)"
+  exit 1
+fi
+
+# --- Accounting conservation ----------------------------------------------------------------
+# The arm that actually catches a neutered verdict helper. The floor above catches "no assertions
+# RAN"; it cannot catch "assertions ran and their verdicts were discarded", because `asserts`
+# keeps its full value when bad() is a no-op. Every assertion records exactly one verdict, so
+# pass+fail MUST equal asserts. Reported directly for the same reason as the floor.
+if [[ $((pass + fail)) -ne "$asserts" ]]; then
+  printf '\n[FATAL] accounting: pass+fail (%d) != asserts (%d).\n' \
+    "$((pass + fail))" "$asserts" >&2
+  if [[ $((pass + fail)) -lt "$asserts" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered ok()/bad() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `asserts=$((asserts + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "digest-oracle-guard.test.sh: $pass passed, $fail failed ($asserts assertions)"
+  exit 1
 fi
 
 echo "---"
-echo "digest-oracle-guard.test.sh: $pass passed, $fail failed"
+echo "digest-oracle-guard.test.sh: $pass passed, $fail failed ($asserts assertions)"
 [[ "$fail" -eq 0 ]] || exit 1
 echo "OK"

@@ -1,0 +1,39 @@
+{
+  "skills": [
+    {
+      "name": "go",
+      "userInvocable": true,
+      "source": {
+        "type": "project",
+        "path": "/repo/.grok/commands/go.md"
+      }
+    },
+    {
+      "name": "go",
+      "userInvocable": false,
+      "source": {
+        "type": "plugin",
+        "plugin_name": "soleur",
+        "path": "/repo/.grok/plugins/soleur/skills/go/SKILL.md"
+      }
+    },
+    {
+      "name": "help",
+      "userInvocable": true,
+      "collidesWith": "help",
+      "invocableAs": "local:help",
+      "source": {
+        "type": "project",
+        "path": "/repo/.grok/commands/help.md"
+      }
+    },
+    {
+      "name": "sync",
+      "userInvocable": true,
+      "source": {
+        "type": "project",
+        "path": "/repo/.grok/commands/sync.md"
+      }
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+╭──────────────────────────────────────╮
+│ 🥊 lefthook v2.1.6  hook: pre-commit │
+╰──────────────────────────────────────╯
+sync hooks: ✔️ (pre-commit, pre-push)
+│  rust-format (skip) no matching staged files
+│  rust-lint-fix (skip) no matching staged files
+│  rust-lint-check (skip) no matching staged files
+┃  gitleaks-staged ❯ 
+
+[90m6:05PM[0m [32mINF[0m [1m1 commits scanned.[0m
+[90m6:05PM[0m [32mINF[0m [1mscanned ~1642225 bytes (1.64 MB) in 598ms[0m
+[90m6:05PM[0m [32mINF[0m [1mno leaks found[0m
+
+┃  markdown-lint ❯ 
+
+markdown-lint: 26 file(s) clean.
+
+┃  agents-compound-sync ❯ 
+
+lint-agents-compound-sync: OK (rule-threshold=115, warn=44000, reject=46000, per-rule-cap=600, 13 sites)
+
+┃  lint-fixture-content ❯ 
+
+
+│  rule-id-lint (skip) no matching staged files
+┃  lint-infra-no-human-steps ❯ 
+
+OK: no human-run infra steps in 31 scanned file(s)
+
+│  rule-budget-lint (skip) no matching staged files
+│  conversations-update-callsites (skip) no matching staged files
+┃  web-platform-typecheck ❯ 
+
+npm notice run soleur-web-platform@0.0.1 npx
+npm notice run 'tsc' --noEmit
+
+│  agents-enforcement-tag-lint (skip) no matching staged files
+│  client-pii-grep (skip) no files for inspection
+┃  scheduled-show-full-output-lint ❯ 
+
+
+│  gdpr-gate-advisory (skip) no files for inspection
+│  bun-test (skip) by condition
+│  vendor-pin-integrity (skip) no files for inspection
+┃  skill-security-scan-advisory ❯ 
+
+skill-security-scan-advisory: REVIEW on plugins/soleur/skills/plan/SKILL.md
+skill-security-scan-advisory: REVIEW on plugins/soleur/skills/review/SKILL.md
+skill-security-scan-advisory: REVIEW on plugins/soleur/skills/work/SKILL.md
+
+│  plugin-component-test (skip) name
+┃  terraform-fmt ❯ 
+
+
+│  kb-structure-guard (skip) no matching staged files
+┃  c4-model-regenerate ❯ 
+
+Regenerated /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/engineering/architecture/diagrams/model.likec4.json (74 elements, 149 relations, 76 views)
+NOTE: .c4 model changed but c4-model.md was not staged — review its ## Notes prose for staleness (advisory; commit not blocked).
+
+┃  generate-kb-index ❯ 
+
+Generated /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/INDEX.md (6548 files indexed)
+Generated /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/kb-tags.txt (4277 tags) and /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/kb-categories.txt (79 categories)
+
+┃  distribution-content-liquid-guard ❯ 
+
+
+                                      
+  ────────────────────────────────────
+summary: (done in 41.01 seconds)      
+✔️ gitleaks-staged (0.93 seconds)
+✔️ markdown-lint (4.59 seconds)
+✔️ agents-compound-sync (0.16 seconds)
+✔️ lint-fixture-content (0.08 seconds)
+✔️ lint-infra-no-human-steps (0.34 seconds)
+✔️ web-platform-typecheck (18.81 seconds)
+✔️ scheduled-show-full-output-lint (0.01 seconds)
+✔️ skill-security-scan-advisory (4.71 seconds)
+✔️ terraform-fmt (0.13 seconds)
+✔️ c4-model-regenerate (5.89 seconds)
+✔️ generate-kb-index (5.33 seconds)
+✔️ distribution-content-liquid-guard (0.01 seconds)
+Recorded resolution for 'knowledge-base/engineering/architecture/diagrams/model.likec4.json'.
+Recorded resolution for 'knowledge-base/legal/compliance-posture.md'.
+Recorded resolution for 'scripts/guard-vacuity-floor.test.sh'.
+RC=0

@@ -81,6 +81,9 @@ IFS=$'\t' read -r TOOL_NAME SESSION_ID SUBAGENT_TYPE TOTAL_TOKENS TOOL_USES DURA
 
 # Match guard: only fire on Agent tool. Hook matcher should already filter
 # but we double-check (cheap) so a stray non-Agent input fails silently.
+# DEVIN-SKIP reason=unverified-payload: Devin's run_subagent PostToolUse
+# carries {success,output,error} — no token stats (envelope-capture §7), so
+# there is nothing to tee. Raw name kept deliberately.
 [[ "$TOOL_NAME" != "Agent" ]] && exit 0
 
 # Sanitize untrusted string fields before storing: strip control chars

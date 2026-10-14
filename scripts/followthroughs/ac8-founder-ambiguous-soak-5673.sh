@@ -22,12 +22,33 @@
 #   1 = FAIL       (>=1 event in window; a duplicate slipped past the block — leave open, investigate)
 #   * = TRANSIENT  (Sentry API unreachable / auth / parse failure; retry next sweep)
 #
-# Required env: SENTRY_AUTH_TOKEN (wired in scheduled-followthrough-sweeper.yml
-#   as secrets.SENTRY_IAC_AUTH_TOKEN). Mirrors reconcile-ff-only-sentry-4977.sh.
+# Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml
+#   as secrets.SENTRY_ACTIONS_RO_TOKEN -- the org-level read-only `actions-read-prd` integration, ADR-031;
+#   rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md).
+#   Mirrors reconcile-ff-only-sentry-4977.sh.
 
 set -uo pipefail
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
+' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+# Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+# curl config directive on the stdin channel below). Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN unusable" >&2; exit 2; fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
@@ -45,10 +66,11 @@ END=$(date -u +%Y-%m-%dT%H:%M:%S)
 
 URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&start=${START}&end=${END}&per_page=10&field=title&field=timestamp&field=level"
 
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+# The bearer rides curl's stdin config channel, never its argument list.
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
   -H "Accept: application/json" \
-  "$URL")
+  --config - "$URL" \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN"))
 
 HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
 BODY=$(printf '%s' "$RESP" | sed '$d')

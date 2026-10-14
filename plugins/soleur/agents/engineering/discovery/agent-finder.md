@@ -1,16 +1,17 @@
 ---
 name: agent-finder
-description: "Use this agent when running /plan and the project uses a stack not covered by built-in agents. Queries external registries for community agents matching the detected stack gap. Use functional-discovery to check if a planned feature already exists; use this agent to find agents for a missing tech stack."
+description: "Use this agent when running soleur:plan and the project uses a stack not covered by built-in agents. Queries external registries for community agents matching the detected stack gap. Use soleur:engineering:discovery:functional-discovery to check if a planned feature already exists; use this agent to find agents for a missing tech stack."
 model: inherit
 ---
 
 # Community Agent/Skill Discovery
 
-Find and install community agents and skills for project stacks not covered by built-in agents. This agent is spawned by `/plan` when a stack gap is detected.
+Find and install community agents and skills for project stacks not covered by built-in agents. This agent is spawned by `soleur:plan` when a stack gap is detected.
 
 ## Input
 
 The spawning command provides:
+
 - `detected_stacks`: list of stacks detected in the project (e.g., `["flutter", "rust"]`)
 - `uncovered_stacks`: subset of detected_stacks with no matching `stack:` frontmatter in any agent file
 
@@ -76,6 +77,7 @@ Only keep results whose `name`, `description`, or `keywords`/`tags` contain the 
 ## Step 3: Present Suggestions
 
 Present up to 5 suggestions using the AskUserQuestion tool. For each suggestion, show:
+
 - Name and source (registry + author/namespace)
 - Trust tier indicator (Anthropic / Verified)
 - Description (first 200 characters)
@@ -122,7 +124,7 @@ Before installing, validate:
 2. **Required fields present** -- `name` and `description` must exist in frontmatter
 3. **Size check** -- content must be under 100KB
 4. **No path traversal** -- no `../` in any frontmatter field values
-5. **No executable code blocks** -- warn (but don't block) if content contains ```bash or ```sh blocks with destructive commands (`rm -rf`, `curl | bash`, etc.)
+5. **No executable code blocks** -- warn (but don't block) if content contains ```` ```bash ```` or ```` ```sh ```` blocks with destructive commands (`rm -rf`, `curl | bash`, etc.)
 
 If validation fails, skip with a message: "Artifact [name] failed validation: [reason]. Skipping."
 
@@ -132,13 +134,14 @@ Before frontmatter mutation, invoke the `skill-security-scan` advisory gate
 against the in-memory SKILL.md / agent content fetched in step 4a:
 
 ```bash
-echo "$content" | bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
+echo "$content" | bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh"
 ```
 
 The scanner emits a verdict (`LOW-RISK | REVIEW | HIGH-RISK`) plus per-category
 findings and a mandatory advisory disclaimer footer. Operator handling:
 
 - **`LOW-RISK`** — proceed silently to step 4c.
+- **No verdict line** (the scanner crashed, or the shell printed `No such file or directory` because the plugin root did not resolve) — treat as **`REVIEW`**, never `LOW-RISK`.
 - **`REVIEW`** — print the findings table to the operator and proceed; the
   PreToolUse hook may surface confirmation when the Write happens.
 - **`HIGH-RISK`** — print findings + override instructions referencing

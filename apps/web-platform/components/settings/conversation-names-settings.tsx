@@ -4,6 +4,7 @@ import { useState, useRef, useCallback } from "react";
 import { ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { validateCustomName } from "@/server/team-names-validation";
+import { Button } from "@/components/ui/button";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
@@ -168,19 +169,17 @@ function LeaderRow({
 
   return (
     <div className="flex items-center gap-4 rounded-lg px-2 py-3">
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={handleAvatarClick}
-        className="relative shrink-0 cursor-pointer rounded-lg focus:outline-none focus:ring-2 focus:ring-soleur-border-emphasized"
+        loading={uploading}
+        style={{ padding: 0 }}
+        className="shrink-0 cursor-pointer rounded-lg focus:outline-none focus:ring-2 focus:ring-soleur-border-emphasized"
         aria-label={`${name} avatar — click to upload custom icon`}
       >
         <LeaderAvatar leaderId={leaderId} size="lg" customIconPath={customIconPath} />
-        {uploading && (
-          <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/50">
-            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-          </span>
-        )}
-      </button>
+      </Button>
       <input
         ref={fileInputRef}
         type="file"
@@ -189,14 +188,15 @@ function LeaderRow({
         onChange={handleFileSelect}
       />
       {customIconPath && (
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={handleReset}
           className="shrink-0 text-xs text-soleur-text-muted hover:text-soleur-text-secondary"
           aria-label={`Reset ${name} icon to default`}
         >
           Reset
-        </button>
+        </Button>
       )}
       <span className="min-w-0 flex-1 text-sm text-soleur-text-secondary">{title}</span>
       <div className="w-full max-w-[12rem]">

@@ -39,8 +39,27 @@
 
 set -uo pipefail
 
-if [[ -z "${BETTERSTACK_API_TOKEN:-}" ]]; then
-  echo "TRANSIENT: BETTERSTACK_API_TOKEN is unset or empty — cannot query the Better Stack heartbeats API (declare it in the directive's secrets= clause and wire it into the sweeper env)." >&2
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_API_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_API_TOKEN). Unset it to trace safely (see #7797).
+' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+# Token-shape guard: a newline in the token would inject a curl config directive on the stdin
+# channel below. Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${BETTERSTACK_API_TOKEN:-}"; then
+  echo "TRANSIENT: BETTERSTACK_API_TOKEN is unset, empty or malformed — cannot query the Better Stack heartbeats API (declare it in the directive's secrets= clause and wire it into the sweeper env)." >&2
   exit 2
 fi
 
@@ -57,9 +76,10 @@ TARGETS=(
 # Pull the full heartbeats page once. A non-200 / unexpected shape is a probe fault, never a
 # verdict — do NOT default a missing .data to empty (a defaulted 0 reads as "monitor absent" on
 # what is really an auth/transport failure, the same false-DARK trap the probes it guards avoid).
-RESP="$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer ${BETTERSTACK_API_TOKEN}" -H "Accept: application/json" \
-  "$API" 2>/dev/null)"
+RESP="$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
+  -H "Accept: application/json" --config - \
+  "$API" 2>/dev/null \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$BETTERSTACK_API_TOKEN"))"
 STATUS="$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')"
 BODY="$(printf '%s' "$RESP" | sed '$d')"
 

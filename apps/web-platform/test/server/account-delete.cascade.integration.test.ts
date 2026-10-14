@@ -1,7 +1,7 @@
 /**
  * deleteAccount end-to-end cascade — pins mig 065 + 066 against regression.
  *
- * Plan ref: knowledge-base/project/plans/2026-05-22-fix-tenant-integration-cascade-4356-plan.md
+ * Plan ref: knowledge-base/project/plans/archive/20261013-014038-2026-05-22-fix-tenant-integration-cascade-4356-plan.md
  *
  * This test exists because:
  *   - The dsar-export-workspace-tables.integration.test.ts AC-GDPR-17-CALLER

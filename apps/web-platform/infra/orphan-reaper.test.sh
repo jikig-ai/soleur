@@ -36,7 +36,7 @@ test_no_orphaned_dirs() {
     bash "$REAPER_SCRIPT" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "No orphaned workspaces"; then
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -cF "No orphaned workspaces" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -60,7 +60,7 @@ test_missing_workspace_root() {
     bash "$REAPER_SCRIPT" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "does not exist"; then
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -cF "does not exist" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -96,7 +96,7 @@ test_old_orphaned_removed() {
 
   if [[ "$actual_exit" -eq 0 ]] && \
      [[ ! -d "$mock_dir/workspaces/workspace-abc.orphaned-1700000000" ]] && \
-     printf '%s\n' "$output" | grep -qF "Cleaned up 1"; then
+     printf '%s\n' "$output" | grep -cF "Cleaned up 1" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -129,7 +129,7 @@ test_recent_orphaned_kept() {
 
   if [[ "$actual_exit" -eq 0 ]] && \
      [[ -d "$mock_dir/workspaces/workspace-def.orphaned-1700000000" ]] && \
-     printf '%s\n' "$output" | grep -qF "No orphaned workspaces"; then
+     printf '%s\n' "$output" | grep -cF "No orphaned workspaces" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -168,7 +168,7 @@ test_multiple_orphaned_removed() {
      [[ ! -d "$mock_dir/workspaces/ws-1.orphaned-1700000001" ]] && \
      [[ ! -d "$mock_dir/workspaces/ws-2.orphaned-1700000002" ]] && \
      [[ ! -d "$mock_dir/workspaces/ws-3.orphaned-1700000003" ]] && \
-     printf '%s\n' "$output" | grep -qF "Cleaned up 3"; then
+     printf '%s\n' "$output" | grep -cF "Cleaned up 3" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -251,7 +251,7 @@ test_selective_cleanup() {
      [[ ! -d "$mock_dir/workspaces/ws-old.orphaned-1700000000" ]] && \
      [[ -d "$mock_dir/workspaces/ws-new.orphaned-1700099999" ]] && \
      [[ -d "$mock_dir/workspaces/ws-normal" ]] && \
-     printf '%s\n' "$output" | grep -qF "Cleaned up 1"; then
+     printf '%s\n' "$output" | grep -cF "Cleaned up 1" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else

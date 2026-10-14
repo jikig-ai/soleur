@@ -11,7 +11,7 @@ tags:
   - keyword-scanner
 related:
   - plugins/soleur/skills/brainstorm/SKILL.md
-  - knowledge-base/project/brainstorms/2026-05-15-goal-primitive-operator-escape-hatch-brainstorm.md
+  - knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-goal-primitive-operator-escape-hatch-brainstorm.md
 ---
 
 # Learning: Brainstorm leader-research sequencing and prior-art CWD

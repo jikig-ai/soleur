@@ -64,6 +64,7 @@ GitHub App installation-token auth surface (`server/github-app.ts`); the Create-
 ## Root Cause
 
 Two compounding causes:
+
 1. **Wrong API for the auth context.** GitHub App user-installation tokens cannot `POST /user/repos`. The correct path for cross-account repo creation is the template `/generate` endpoint (PR #3399's fix).
 2. **Test-fixture-vs-real-API drift.** The unit test mocked `POST /user/repos → 201` from imagination. A mock can assert any shape; nothing forced the fixture to match GitHub's real `403`. The green test actively masked the bug for ~30 days.
 

@@ -49,7 +49,7 @@ framing got challenged. The replacement got adopted. Nothing in between re-deriv
 source that carries it — here the LIA, the C4 model, and the Art. 30 register — before asserting
 it. Cheapest gate: `grep` the register and the model for the subject, not the article number.
 
-## 2. A runbook prescribed a command the repo's own hook denies
+## 2. A prescribed recovery lever that cannot clear the thing it is prescribed for
 
 The new per-tester runbook's 2-week-checkpoint step prescribed:
 
@@ -72,6 +72,25 @@ first time anyone runs it.
 **Prevention:** grep `.claude/hooks/` for every command a runbook prescribes. Then ask a second
 question the grep cannot answer — do the label's **automation semantics** match the work?
 (auto-close-on-probe vs becomes-due).
+
+**RECURRENCE, 2026-08-20 (#7586) — the lever was permitted, exited 0, and was still inert.**
+The `apply-web-platform-infra` failure email named exactly one recovery action for a heartbeat
+monitor left live-and-unfed: `gh workflow run apply-web-platform-infra.yml -f
+apply_target=manual-rerun`. Nothing denies that command. It runs, it succeeds — and it does
+nothing, because on the next run the arming function's op/state gate no-ops any monitor whose
+status is not `paused`, and a live-and-unfed monitor is precisely *not* `paused`. The lever was
+**provably inert for the one condition the email flagged as urgent.**
+
+That is the half a hook-grep structurally cannot see: the command is allowed, and the defect is
+in the *precondition of the thing it invokes*. So the check generalizes —
+
+> **Execute the prescribed lever against the exact state the message flags.** Not against a
+> healthy state, and not merely "is this command permitted". A lever can be permitted, exit 0,
+> and change nothing. When the message calls an item urgent, the fix is to read the invoked
+> code's own guard clause and assert the prescribed action's premise against it; the email's
+> branches now name Better Stack → Pause, and the `failure` arm says outright that a re-run will
+> not clear it. See
+> [the channel was silent on the path it was built for](./2026-08-20-the-channel-was-silent-on-the-path-it-was-built-for.md) §6.
 
 ## 3. Two sessions on one branch silently overwrite every branch-derived path
 

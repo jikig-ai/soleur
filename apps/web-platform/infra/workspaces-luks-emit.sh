@@ -14,7 +14,8 @@
 #  `doppler secrets get` ONLY. Copying that verbatim reintroduces the exact circular trap this
 #  emit exists to page on — the "Doppler unreachable ⇒ passphrase absent ⇒ mapper never opens"
 #  mode would lose its DSN by the SAME cause and go dark. So this reads the BAKED DSN first
-#  (/etc/default/luks-monitor, written root:root 0600 by cloud-init.yml), and only falls back to
+#  (/etc/default/luks-monitor, 0600 root: cloud-init.yml writes the DSN line on a fresh host,
+#  terraform_data.luks_monitor_install on web-1 since #8706), and only falls back to
 #  Doppler if the bake is somehow empty. The bake survives a total Doppler outage.
 #
 #  DP-8 (feature+op tags): the Sentry drift PAGE depends ENTIRELY on the direct-curl envelope
@@ -27,11 +28,21 @@
 # The nine discriminating fields (read from the WL_* environment the caller exports):
 #   device_type mount_source mapper_present luks_open_result header_uuid_match
 #   cryptsetup_unit_result doppler_reachable mountpoint_ok host reason
+# plus the nine #6807 readiness/probe fields, plus three #9123 delivery-state
+# fields (fstab_mnt_data_lines fstab_mapper_line covered_inode_immutable) —
+# all additive and `unknown`-defaulted, so a caller that sets none of them emits
+# the same envelope shape.
 #
 # Usage:  WL_REASON=<slug> WL_DEVICE_TYPE=... [WL_LEVEL=fatal|warning] \
 #           bash workspaces-luks-emit.sh
 #         (or `source` it and call `workspaces_luks_emit`). ALWAYS returns 0 — a paging emit must
 #         never itself brick a boot or a cutover step (fail-open, like _sentry_emit).
+
+# #7797: this file reads the Sentry DSN, so it refuses xtrace like its two sourcing callers
+# (luks-monitor.sh, workspaces-cutover.sh), which refuse first — sourced from them it is a no-op.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 # Strip `"` and `\` (JSON-structural) then any non-printable BEFORE interpolation into the Sentry
 # body — host id is cloud-metadata, not attacker-controlled, but a stray backslash/newline would
@@ -266,9 +277,28 @@ wl_count_workspace_dirs() {
   printf '%s' "$n"
 }
 
+# #8706 — the two exits below that drop a drift event (no DSN resolved; the Sentry POST failed) used
+# to be SILENT, which is how host failures stayed out of Sentry for nine weeks
+# (cq-silent-fallback-must-mirror-to-sentry). Sentry is the channel that failed, so the mirror is
+# the journal -> Vector -> Better Stack channel, at crit: SOLEUR_*_SEND_FAILED at PRIORITY 2 is what
+# logtail_exploration_alert.monitor_send_failed pages on (betterstack-logs-alerts.tf), and this
+# definer follows that alert's emitter contract (betterstack-send-failed-alert.test.sh §2). Both
+# exits lose a drift event, so both page. Reason CODE only: never the DSN, never a host path;
+# `drift_reason` is the caller's WL_REASON slug, scrubbed like every envelope field. stderr copy for
+# the run log (the verify job captures the probe's output); stdout is left untouched for callers.
+# `|| true` on both, so logging can never change the return value. Called only INSIDE
+# workspaces_luks_emit's subshell, where LUKS_LOG_TAG is assigned.
+emit_refusal() {
+  printf '[%s] %s\n' "${LUKS_LOG_TAG:-luks-monitor}" "$1" >&2 || true
+  logger -p user.crit -t "${LUKS_LOG_TAG:-luks-monitor}" -- "$1" 2>/dev/null || true
+}
+
 workspaces_luks_emit() {
   ( set +e
     local level dsn key shost proj host body
+    # Real assignment, workspaces-cutover.sh's shape; read by emit_refusal's own-line `logger -t`.
+    # Inside the subshell, so a sourcing caller's own LUKS_LOG_TAG/LOG_TAG is never touched.
+    LUKS_LOG_TAG="${WORKSPACES_LUKS_LOG_TAG:-luks-monitor}"
     level="$(_wl_scrub "${WL_LEVEL:-fatal}")"
     [ -n "$level" ] || level=fatal
 
@@ -284,7 +314,7 @@ workspaces_luks_emit() {
             || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
             || true)
     fi
-    [ -n "$dsn" ] || return 0
+    if [ -z "$dsn" ]; then emit_refusal "SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn drift_reason=$(_wl_scrub "${WL_REASON:-unspecified}")"; return 0; fi
 
     key=$(printf '%s' "$dsn" | sed -E 's#https://([^@]+)@.*#\1#')
     shost=$(printf '%s' "$dsn" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
@@ -293,15 +323,17 @@ workspaces_luks_emit() {
 
     # feature/op are the sentry_issue_alert filter keys (DP-8). The nine fields discriminate the
     # failure modes; every value is scrubbed of JSON-structural bytes.
-    # #6807 adds nine READINESS/PROBE fields after the original nine. Additive and defaulted, so an
-    # existing caller that sets none of them emits `unknown` and its envelope shape is unchanged.
+    # #6807 adds nine READINESS/PROBE fields after the original nine, and #9123 three
+    # DELIVERY-STATE fields after those (fstab_mnt_data_lines, fstab_mapper_line,
+    # covered_inode_immutable). Additive and defaulted, so an existing caller that sets
+    # none of them emits `unknown` and its envelope shape is unchanged.
     # The `op` is NOT parameterized: sentry_issue_alert.workspaces_luks_drift
     # (issue-alerts.tf:1704-1740) matches `filter_match="all"` on op EQUAL workspaces-luks-drift and
     # is the SOLE PAGING op of the nine this feature emits. A distinct readiness op would page
     # nobody and would be invisible to the wipe gate (workspaces-luks-soak-6604.sh). De-conflation
     # lives in `reason` + these fields + the exit code, never in a new op.
     # Integers only for the counts — workspace directory NAMES are user-identifying.
-    body=$(printf '{"message":"workspaces LUKS at-rest drift","level":"%s","logger":"luks-monitor","tags":{"feature":"workspaces-luks","op":"workspaces-luks-drift","device_type":"%s","mount_source":"%s","mapper_present":"%s","luks_open_result":"%s","header_uuid_match":"%s","cryptsetup_unit_result":"%s","doppler_reachable":"%s","mountpoint_ok":"%s","host":"%s","reason":"%s","readyz_writable":"%s","readyz_populated":"%s","readyz_capacity":"%s","workspace_count":"%s","workspace_count_expected":"%s","probe_last_code":"%s","probe_attempts":"%s","probe_elapsed_s":"%s","probe_class":"%s"}}' \
+    body=$(printf '{"message":"workspaces LUKS at-rest drift","level":"%s","logger":"luks-monitor","tags":{"feature":"workspaces-luks","op":"workspaces-luks-drift","device_type":"%s","mount_source":"%s","mapper_present":"%s","luks_open_result":"%s","header_uuid_match":"%s","cryptsetup_unit_result":"%s","doppler_reachable":"%s","mountpoint_ok":"%s","host":"%s","reason":"%s","readyz_writable":"%s","readyz_populated":"%s","readyz_capacity":"%s","workspace_count":"%s","workspace_count_expected":"%s","probe_last_code":"%s","probe_attempts":"%s","probe_elapsed_s":"%s","probe_class":"%s","fstab_mnt_data_lines":"%s","fstab_mapper_line":"%s","covered_inode_immutable":"%s"}}' \
       "$level" \
       "$(_wl_scrub "${WL_DEVICE_TYPE:-unknown}")" \
       "$(_wl_scrub "${WL_MOUNT_SOURCE:-unknown}")" \
@@ -321,12 +353,16 @@ workspaces_luks_emit() {
       "$(_wl_scrub "${WL_PROBE_LAST_CODE:-unknown}")" \
       "$(_wl_scrub "${WL_PROBE_ATTEMPTS:-unknown}")" \
       "$(_wl_scrub "${WL_PROBE_ELAPSED_S:-unknown}")" \
-      "$(_wl_scrub "${WL_PROBE_CLASS:-unknown}")")
+      "$(_wl_scrub "${WL_PROBE_CLASS:-unknown}")" \
+      "$(_wl_scrub "${WL_FSTAB_MNT_DATA_LINES:-unknown}")" \
+      "$(_wl_scrub "${WL_FSTAB_MAPPER_LINE:-unknown}")" \
+      "$(_wl_scrub "${WL_COVERED_INODE_IMMUTABLE:-unknown}")")
 
     curl -m 10 --retry 3 -sf -X POST "https://$shost/api/$proj/store/" \
       -H 'Content-Type: application/json' \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$key" \
-      -d "$body" >/dev/null 2>&1 || true
+      -d "$body" >/dev/null 2>&1 \
+      || emit_refusal "SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=send_failed drift_reason=$(_wl_scrub "${WL_REASON:-unspecified}")"
   ) || true
   return 0
 }

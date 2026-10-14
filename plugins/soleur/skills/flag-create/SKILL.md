@@ -3,6 +3,14 @@ name: flag-create
 description: "This skill should be used to create a runtime feature flag end-to-end across Flagsmith, server.ts, .env.example, and Doppler."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # flag-create
 
 Creates a new runtime feature flag in Flagsmith **and** wires it into the
@@ -44,10 +52,44 @@ with `soleur:flag-set-role <flag> <env> on --org <orgId>`.
 
 ## Procedure
 
+The agent runs only the preview:
+
 ```bash
-bash plugins/soleur/skills/flag-create/scripts/create.sh <flag-name> \
-  [--description "..."] [--dev-on] [--prd-on] [--dry-run]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-create/scripts/create.sh" <flag-name> \
+  [--description "..."] [--dev-on] [--prd-on] --dry-run
 ```
+
+## The write is the one typed-`yes` handoff (ADR-249)
+
+The write path asks for a typed `yes` through the operator-script library's TTY
+acknowledgement, because the audit row this script writes records only that kind of
+acknowledgement (ADR-249); moving it to the staged agent-run approval gate that
+generated operator scripts use is tracked in #9387. It has no skip variable and no
+flag. An agent's shell has no TTY, so a write run there stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` on
+stdout, before any credential is fetched. Exit `64` is a refusal, never a success.
+The agent therefore does every other step itself (reads, the dry-run preview,
+preflight, verification) and hands over only the typed-`yes` write:
+
+1. Runs the script with `--dry-run` and shows the preview. That mode needs no TTY
+   and makes no writes.
+2. Prints the exact write command below, in a fenced block, for the operator to type
+   at a terminal prompt (Warp), the one step an agent cannot take. It replaces `<WORKTREE>` with the absolute path of
+   the worktree that holds this change (`git rev-parse --show-toplevel`) and
+   `<ARGS>` with `<flag-name>` plus any `--description`, `--dev-on`, `--prd-on` or `--flagsmith-only` the operator chose, without `--dry-run`. It never prints a
+   `${CLAUDE_PLUGIN_ROOT}` or repo-relative form. The script also edits repo files in the directory it runs from, so an operator running it from the main checkout or another worktree would land the code wiring in the wrong tree while Flagsmith and Doppler change.
+3. Does not run the command, and does not run it through Claude Code's `!` prefix
+   either (whether that gives the command a TTY is unmeasured, ADR-249). The
+   printed command is an undone operator step under
+   `wg-block-pr-ready-on-undeferred-operator-steps`: record it where the pipeline
+   tracks operator steps, and do not mark a PR ready until the operator says it ran.
+
+<!-- operator-write-command -->
+```bash
+cd <WORKTREE> && bash <WORKTREE>/plugins/soleur/skills/flag-create/scripts/create.sh <ARGS>
+```
+
+The operator types `yes` at the prompt. Any other answer stops the script with exit
+`1` and `SOLEUR_BOOTSTRAP_ABORTED stage=ack`, before anything is written.
 
 The script (full in [scripts/create.sh](./scripts/create.sh)):
 
@@ -58,7 +100,8 @@ The script (full in [scripts/create.sh](./scripts/create.sh)):
    - server.ts: append `"<name>": "FLAG_<NAME>"` to `RUNTIME_FLAGS`.
    - .env.example: insert `FLAG_<NAME>=0` under the runtime flags section.
    - Doppler dev + prd: `FLAG_<NAME>=<0|1>` (mirrors prd-segment initial state).
-3. **Operator ack** — literal `yes`.
+3. **Operator ack** — a typed `yes` at the TTY prompt (no flag skips it; no TTY
+   means exit `64` before any credential fetch).
 4. **Create feature in Flagsmith** —
    `POST /api/v1/projects/39082/features/` with `name`, `description`,
    `default_enabled: false`.
@@ -75,11 +118,14 @@ The script (full in [scripts/create.sh](./scripts/create.sh)):
 ## Exit codes
 
 - `0` — success / dry-run.
-- `1` — name validation failure.
-- `2` — prerequisite missing.
+- `1` — name validation failure, or the operator did not type `yes`
+  (`SOLEUR_BOOTSTRAP_ABORTED stage=ack`; nothing written).
+- `2` — prerequisite missing, or a `--description` value that starts with `--`.
 - `3` — Flagsmith API error.
-- `4` — file edit failed.
+- `4` — file edit or audit append failed.
 - `5` — Doppler write failed.
+- `64` — a write run with no TTY (`SOLEUR_BOOTSTRAP_INPUT_REQUIRED`): hand the
+  command to the operator (above).
 
 ## Sharp edges
 

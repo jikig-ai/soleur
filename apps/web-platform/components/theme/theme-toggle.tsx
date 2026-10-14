@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { useTheme, type Theme } from "./theme-provider";
 
 type Segment = {
@@ -71,7 +72,8 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
     const current = SEGMENTS[visibleIndex];
     const next = SEGMENTS[(visibleIndex + 1) % SEGMENTS.length];
     return (
-      <button
+      <Button
+        variant="ghost"
         type="button"
         data-testid="theme-cycle-button"
         data-active={String(mounted)}
@@ -93,7 +95,7 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
         ].join(" ")}
       >
         <current.Icon className="h-4 w-4" />
-      </button>
+      </Button>
     );
   }
 
@@ -137,6 +139,7 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
         return (
           <button
             key={seg.value}
+            data-button-exempt="aria-pressed segmented theme toggle — three controls share one pill track; per-segment active ring/tint cannot reduce to a Button variant"
             ref={(el) => {
               buttonsRef.current[index] = el;
             }}

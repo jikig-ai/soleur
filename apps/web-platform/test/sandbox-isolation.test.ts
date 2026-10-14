@@ -1,6 +1,6 @@
 /**
  * Cross-workspace isolation suite — Path C (hybrid) per
- * knowledge-base/project/specs/feat-verify-workspace-isolation/{spec,sdk-probe-notes}.md.
+ * knowledge-base/project/specs/archive/20261013-003106-feat-verify-workspace-isolation/{spec,sdk-probe-notes}.md.
  *
  * Direct-bwrap cases (this file): FR2/3/4/5/6/7 — tier-4 process isolation, deterministic.
  * SDK-query cases (this file): FR2-smoke/8/9 — full-stack LLM sandbox, live API key.
@@ -18,6 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   createNamedWorkspacePair,
@@ -30,12 +31,85 @@ import {
   shellQuote,
   spawnBwrap,
   spawnSandboxB,
+  spawnSandboxed,
+  waitForFile,
+  type ProbeTier,
   type SandboxBHandle,
+  type SandboxProcessHandle,
   type WorkspacePair,
 } from "./helpers/sandbox-isolation-fixtures";
 
-const directProbe = probeSkip("direct");
-const queryProbe = probeSkip("query");
+/**
+ * Deploy-probe tier scoping (#2640). `SOLEUR_ISOLATION_TIERS` is a
+ * comma-separated allowlist of probe tiers (`direct`, `query`). When set, a
+ * suite whose tier is not listed is skipped BEFORE its `probeSkip` capability
+ * evaluation — so `SOLEUR_ISOLATION_TIERS=direct` in the canary exec keeps the
+ * query tier's live-ANTHROPIC_API_KEY runs (FR2-smoke/FR8/FR9) out of the
+ * deploy path entirely, and FR9's `ANTHROPIC_ISOLATION_TEST_OK` gate is
+ * unchanged (it lives inside the query describe, which never registers).
+ * Unset or empty runs the full matrix — the default CI/local behavior.
+ * An unrecognized tier name throws at load: a typo'd canary env would
+ * otherwise skip every suite and report a vacuous green — the same
+ * fail-loud opt-in class as `SOLEUR_ISOLATION_TEST_HOST` below.
+ */
+const KNOWN_TIERS: readonly ProbeTier[] = ["direct", "query"];
+
+/**
+ * In-image arm (#2640). `SOLEUR_ISOLATION_IN_IMAGE=1` marks a run inside the
+ * baked runner image (the ci-deploy.sh canary probe sets it on the docker
+ * exec). There PATH-resolved `bwrap` IS the deployed PATH shim
+ * (/usr/local/bin/bwrap precedes /usr/bin) and the shim's repo path
+ * (`infra/bwrap-shim/bwrap`) is never COPY'd in — so FR7b, which needs a
+ * real-binary CONTROL arm plus a symlink to the repo shim, is structurally
+ * un-runnable in-image and skips. FR7b's shim-splice property is still pinned
+ * by test/bwrap-shim.test.ts and the faithful-canary replay, so the exclusion
+ * loses no deploy signal.
+ */
+function isolationInImage(raw: string | undefined): boolean {
+  return raw === "1";
+}
+const ISOLATION_IN_IMAGE = isolationInImage(process.env.SOLEUR_ISOLATION_IN_IMAGE);
+
+function parseIsolationTiers(raw: string | undefined): Set<ProbeTier> | null {
+  if (raw === undefined || raw.trim() === "") return null;
+  const tiers = new Set<ProbeTier>();
+  const unknown: string[] = [];
+  for (const t of raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    if ((KNOWN_TIERS as readonly string[]).includes(t)) tiers.add(t as ProbeTier);
+    else unknown.push(t);
+  }
+  if (unknown.length) {
+    throw new Error(
+      `sandbox-isolation: unrecognized SOLEUR_ISOLATION_TIERS entries: ${unknown.join(", ")} ` +
+        `(known tiers: ${KNOWN_TIERS.join(", ")})`,
+    );
+  }
+  return tiers;
+}
+
+function isolationTierEnabled(tier: ProbeTier, raw: string | undefined): boolean {
+  const tiers = parseIsolationTiers(raw);
+  return tiers === null || tiers.has(tier);
+}
+
+// Bound once at module load — no default-parameter read inside
+// isolationTierEnabled, so an explicit `undefined` argument tests "unset"
+// rather than falling back to the live env.
+const ISOLATION_TIERS_RAW = process.env.SOLEUR_ISOLATION_TIERS;
+const directProbe = isolationTierEnabled("direct", ISOLATION_TIERS_RAW)
+  ? probeSkip("direct")
+  : { skip: true, reason: "SOLEUR_ISOLATION_TIERS excludes direct tier" };
+const queryProbe = isolationTierEnabled("query", ISOLATION_TIERS_RAW)
+  ? probeSkip("query")
+  : { skip: true, reason: "SOLEUR_ISOLATION_TIERS excludes query tier" };
+// #9723 — the deployed PATH shim (same file the prod image installs at
+// /usr/local/bin/bwrap) and its seccomp artifact, for the through-shim FR7b arm.
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const BWRAP_SHIM_PATH = path.join(APP_ROOT, "infra", "bwrap-shim", "bwrap");
+const BWRAP_BPF_PATH = path.join(APP_ROOT, "infra", "bwrap-userns-clone3-deny.bpf");
 // FR9 reads ~/.claude/projects/*.jsonl excerpts and sends them to the Anthropic
 // API. On a dev workstation, historical transcripts could leak if isolation
 // regresses. Require explicit opt-in rather than inferring from CI=true —
@@ -45,6 +119,7 @@ const fr9OptIn = process.env.ANTHROPIC_ISOLATION_TEST_OK === "1";
 describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", () => {
   const pairs: WorkspacePair[] = [];
   const sandboxes: SandboxBHandle[] = [];
+  const procHandles: SandboxProcessHandle[] = [];
 
   beforeAll(() => {
     rescueStaleFixtures();
@@ -53,6 +128,12 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
   afterEach(async () => {
     while (sandboxes.length) {
       const handle = sandboxes.pop();
+      if (!handle) continue;
+      handle.kill();
+      await handle.waitExit().catch(() => undefined);
+    }
+    while (procHandles.length) {
+      const handle = procHandles.pop();
       if (!handle) continue;
       handle.kill();
       await handle.waitExit().catch(() => undefined);
@@ -183,6 +264,161 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     // somehow read a legitimate /proc/<pid>/environ and got lucky that the
     // sentinel wasn't there.
     expect(result.stdout + result.stderr).toMatch(FS_DENY_RE);
+  });
+
+  test.skipIf(ISOLATION_IN_IMAGE)("FR7b (#9723/#10032): the vendored tail --bind /proc /proc is neutralized by the PATH shim", async () => {
+    // The harness argv (buildBwrapArgs) never emits the vendor tail bind, so
+    // FR7 measures a cleaner-than-production shape. This row appends the real
+    // tail — `--bind /proc /proc` (the enableWeakerNestedSandbox defect) — and
+    // runs the SAME argv through the PATH-resolved shim, so the assertion
+    // measures the deployed chain, not the vendor text.
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+    const sentinel = `FR7B_SECRET_${randomBytes(8).toString("hex")}`;
+    // The vendored argv's namespace set — --unshare-user is load-bearing under
+    // the shim: a /proc-exposing argv without it cannot mount a fresh procfs
+    // (bwrap 0.8.0 in-image → EPERM) and the shim refuses rather than ship the
+    // leak. The deploy-probe shape (pidns without userns) is the counter-case,
+    // pinned by the passthrough row in bwrap-shim.test.ts.
+    const VENDOR_TAIL = ["--unshare-user", "--bind", "/proc", "/proc"];
+
+    const handle = spawnSandboxB(pair.rootB, {
+      pair,
+      readyTimeoutMs: 5_000,
+      env: { ...process.env, FR7B_SECRET: sentinel },
+    });
+    sandboxes.push(handle);
+    await handle.ready;
+    const hostPid = handle.pid;
+
+    // Precondition (same as FR7): the sentinel must actually be on the host's
+    // procfs, or a "masked" result below would be vacuous. The environ READ is
+    // host-policy-dependent though — ptrace_scope≥2, a setuid bwrap binary
+    // (dumpable cleared), or a hidepid procfs all deny it even host→child —
+    // so on EACCES the precondition degrades to PID-dir existence and the
+    // `__SANDBOXB_SEEN__` control arm below (already policy-independent) does
+    // the discrimination. An ENOENT means the spawn died before probing —
+    // that still fails loud.
+    let hostEnviron = "";
+    try {
+      hostEnviron = fs.readFileSync(`/proc/${hostPid}/environ`, "utf8");
+      expect(hostEnviron).toContain(sentinel);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EACCES") throw err;
+      expect(fs.existsSync(`/proc/${hostPid}`)).toBe(true);
+    }
+
+    // Probe shape — positional, host-policy-independent. Whether a masked
+    // procfs leaves `/proc/<hostPid>/environ` READABLE is kernel-dependent
+    // (yama ptrace_scope / userns credentials deny it on some hosts even when
+    // procfs is exposed), so the discriminator is host-pid VISIBILITY: the
+    // sandboxB host pid is a /proc dir only when real procfs is mounted.
+    const probe = [
+      `test -d /proc/${hostPid} && echo __SANDBOXB_SEEN__`,
+      `cat /proc/${hostPid}/environ 2>/dev/null || true`,
+      // #10032: ANY /proc/<pid> entry means real procfs leaked — under the
+      // new realization /proc is an empty tmpfs (the vendored multicall's
+      // fd path is re-homed as a mount, not a procfs self-view).
+      `for d in /proc/[0-9]*; do [ -d "$d" ] && echo __PIDDIRS_SEEN__; done`,
+      `test -e /proc/self/environ && echo __SELFPROC_OK__`,
+    ].join("; ");
+
+    // CONTROL — the same argv straight through the real binary keeps the
+    // defect: the tail bind re-mounts HOST procfs over the pidns isolation,
+    // so the sandboxB host pid is visible in-sandbox.
+    const control = spawnBwrap(pair.rootA, probe, {
+      pair,
+      timeoutMs: 5_000,
+      extraArgs: VENDOR_TAIL,
+    });
+    expect(control.setupFailed, `control bwrap setup failed: ${control.stderr}`).toBe(false);
+    expect(control.stdout, "control must expose host procfs (the tail-bind defect is real)").toContain("__SANDBOXB_SEEN__");
+
+    // TREATMENT — the identical argv through the deployed shim (#10032): it
+    // DROPS the tail bind (never a fresh `--proc` — that EPERMs under
+    // docker's masked /proc) and lands a `--tmpfs /proc` mask, so in-sandbox
+    // /proc is EMPTY — nothing for the host-side sentinel to ride, and no
+    // procfs self-view (BY DESIGN — the vendored multicall's fd path is
+    // re-homed as a literal mount, not resolved through procfs).
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "iso-shim-"));
+    fs.symlinkSync(BWRAP_SHIM_PATH, path.join(shimDir, "bwrap"));
+    try {
+      const env = {
+        ...process.env,
+        PATH: `${shimDir}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+        SOLEUR_BWRAP_REAL: "/usr/bin/bwrap",
+        SOLEUR_BWRAP_SECCOMP_BPF: BWRAP_BPF_PATH,
+      };
+      const masked = spawnBwrap(pair.rootA, probe, {
+        pair,
+        timeoutMs: 5_000,
+        extraArgs: VENDOR_TAIL,
+        env,
+      });
+      expect(masked.setupFailed, `masked bwrap setup failed: ${masked.stderr}`).toBe(false);
+      expect(masked.stdout).not.toContain(sentinel);
+      expect(masked.stdout).not.toContain("__SANDBOXB_SEEN__");
+      expect(masked.stdout).not.toContain("__PIDDIRS_SEEN__");
+      // The empty tmpfs has no self-view either — the environ assertion from
+      // the #9723-era probe inverts under the new mask.
+      expect(masked.stdout).not.toContain("__SELFPROC_OK__");
+    } finally {
+      fs.rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  test("TOCTOU regression (#5862): a sibling created AFTER the namespace build stays masked", async () => {
+    // The ADR-075 residual: per-sibling `denyRead` enumeration could never
+    // cover a workspace created between the namespace build and session end.
+    // Under the parent-tmpfs ordering (`--tmpfs <parent>` + rw re-bind of own —
+    // the shape `spawnBwrap`'s `pair` option emits and the vendored CLI 2.1.284
+    // builder produces for `denyRead: [<root>]` + `allowWrite: [own]`), the
+    // late sibling lives under the masked host dir — invisible permanently.
+    //
+    // Drive it live: a long-running sandboxed shell in rootA waits on a flag
+    // file (inside the bind-mounted root, host-visible); the host creates the
+    // sibling WHILE the namespace is already built, then signals; the sandbox
+    // re-lists the parent and attempts the cross-read.
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+    const late = path.join(pair.parent, "late-sibling");
+    const readyFlag = path.join(pair.rootA, ".sandbox-ready");
+    const goFlag = path.join(pair.rootA, ".probe-go");
+    const script = [
+      `touch ${shellQuote(readyFlag)}`,
+      // Bounded poll — a broken handshake must not spin until the harness
+      // timeout with no diagnostic.
+      `for i in $(seq 1 400); do [ -f ${shellQuote(goFlag)} ] && break; sleep 0.05; done`,
+      `echo "__LS__"; ls ${shellQuote(pair.parent)}`,
+      `echo "__CAT__"; cat ${shellQuote(late + "/secret.md")} 2>&1 || echo "__CAT_RC__$?"`,
+    ].join("; ");
+
+    const handle = spawnSandboxed(pair.rootA, script, { pair, timeoutMs: 15_000 });
+    procHandles.push(handle);
+    // The namespace is confirmed built (marker written through the rw bind).
+    await waitForFile(readyFlag, 10_000);
+
+    // The late sibling arrives on the HOST after the namespace exists.
+    const { token } = seedMarker(late, "secret.md");
+    fs.writeFileSync(goFlag, "go");
+    const exit = await handle.waitExit();
+    expect(exit.code, `sandboxed probe exited early; stderr=${handle.stderrChunks.join("")}`).toBe(0);
+
+    const out = handle.stdoutChunks.join("");
+    // window-assembly: lsSection — everything between the __LS__ and __CAT__
+    // markers is exactly the `ls` listing of the parent dir (the script emits
+    // the markers around it; nothing else writes to stdout between them). The
+    // `cat` error line legitimately names the late-sibling PATH, so a
+    // whole-output `not.toContain` would false-fail — the window is required.
+    const lsSection = (out.split("__LS__")[1] ?? "").split("__CAT__")[0];
+    expect(lsSection).toContain("rootA");
+    // rootB existed BEFORE the build (masked by the tmpfs); late-sibling
+    // arrived AFTER — both are absent from the namespace's parent listing.
+    expect(lsSection).not.toContain("rootB");
+    expect(lsSection).not.toContain("late-sibling");
+    expect(out).toContain("__CAT_RC__");
+    expect(out).not.toContain(token);
+    expect(out).toMatch(FS_DENY_RE);
   });
 
   test("AC7-positive: two users in the SAME workspace see the same files (shared-workspace happy path)", () => {
@@ -471,7 +707,7 @@ async function runQueryAttempt(opts: QueryAttemptOpts): Promise<QueryAttemptResu
     prompt,
     options: {
       cwd,
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-5-5",
       permissionMode: "default",
       settingSources: [],
       maxTurns: 6,
@@ -479,20 +715,22 @@ async function runQueryAttempt(opts: QueryAttemptOpts): Promise<QueryAttemptResu
       sandbox: {
         enabled: true,
         failIfUnavailable: true,
+        // Test-local literal (NOT the production builder's value, which is false since #10054): this live-SDK run has
+        // no canUseTool and no allowedTools, so it needs the sandbox auto-allow to let its probe Bash run at all.
         autoAllowBashIfSandboxed: true,
         allowUnsandboxedCommands: false,
         enableWeakerNestedSandbox: true,
         network: { allowedDomains: [], allowManagedDomainsOnly: true },
         filesystem: {
-          // Mirror the prod fix (#5733 → per-sibling deny, #5848 follow-up):
-          // deny the SIBLING (rootB) explicitly, NOT the parent — so rootA
-          // (the session's own workspace) is never `--tmpfs`-shadowed and
-          // keeps read+WRITE via `allowWrite`, while rootB stays hidden. The
-          // cross-tenant leak assertions (rootB secret must not surface) still
-          // hold, and this now also mirrors that own-workspace writes work
-          // (the read-only `allowRead` re-bind of PR #5848 is gone).
+          // Mirror the prod fix (#5733 → per-sibling deny, #5862 → constant
+          // parent deny): deny the shared PARENT root explicitly. Under the
+          // vendored builder's deny-then-restore ordering the parent `--tmpfs`
+          // masks rootB (and any sibling created mid-session) while rootA —
+          // the session's own workspace — is re-bound rw via the `allowWrite`
+          // restore. This is the only tier that exercises the real SDK
+          // argv against the deny-then-restore shape.
           allowWrite: [pair.rootA],
-          denyRead: [pair.rootB, "/proc"],
+          denyRead: [pair.parent, "/proc"],
         },
       },
     },
@@ -563,6 +801,38 @@ describe("sandbox-isolation: coverage + test-hygiene guards", () => {
         );
       }
     }
+  });
+
+  test("SOLEUR_ISOLATION_TIERS filter: 'direct' excludes the query tier (deploy-probe contract, #2640)", () => {
+    // Pure-function check of the env filter — no suite is spawned and no API
+    // call is made. The live verification is
+    // `SOLEUR_ISOLATION_TIERS=direct npx vitest run test/sandbox-isolation.test.ts`
+    // reporting the query-tier suite skipped rather than executed.
+    expect(isolationTierEnabled("direct", "direct")).toBe(true);
+    expect(isolationTierEnabled("query", "direct")).toBe(false);
+    expect(isolationTierEnabled("query", "direct,query")).toBe(true);
+    expect(isolationTierEnabled("direct", " query , direct ")).toBe(true);
+    // Unset/empty runs the full matrix — the deploy exec sets it explicitly.
+    expect(isolationTierEnabled("query", undefined)).toBe(true);
+    expect(isolationTierEnabled("direct", "")).toBe(true);
+    // A typo'd tier throws at load instead of vacuously greening the canary.
+    expect(() => isolationTierEnabled("direct", "dirct")).toThrow(
+      /unrecognized SOLEUR_ISOLATION_TIERS/,
+    );
+  });
+
+  test("SOLEUR_ISOLATION_IN_IMAGE: only the literal '1' engages the FR7b skip (both polarities pinned)", () => {
+    // Polarity matters in BOTH directions: a `!== "1"` mutation would skip FR7b
+    // on every HOST run forever (a skip is green — silent); a truthy-check
+    // mutation ("0" → skip) would silently drop it in-image too.
+    expect(isolationInImage("1")).toBe(true);
+    expect(isolationInImage(undefined)).toBe(false);
+    expect(isolationInImage("0")).toBe(false);
+    expect(isolationInImage("true")).toBe(false);
+    expect(isolationInImage("")).toBe(false);
+    // The host-side contract: this run (no IN_IMAGE env) must not be the
+    // in-image arm — guards a polarity flip deadening FR7b in this process.
+    expect(ISOLATION_IN_IMAGE).toBe(process.env.SOLEUR_ISOLATION_IN_IMAGE === "1");
   });
 
   test("no test.fails uses a placeholder todo (#TBD, #todo, etc.)", () => {

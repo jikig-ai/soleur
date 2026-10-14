@@ -9,16 +9,122 @@
 
 set -uo pipefail
 
+# Git-location tripwire (#7833). These suites drive worktree-manager.sh, which runs
+# `git worktree remove`, `git branch -D` and `git reset --hard` -- the highest-damage git writes
+# in the corpus. An inherited GIT_DIR aims all of them at the developer's real repository, so
+# this file aborts rather than proceeding. Inline rather than sourcing test-helpers.sh, which
+# would also import an assertion framework these suites do not use.
+for _v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+          GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH; do
+  if [[ -n "${!_v:-}" && "${SOLEUR_GIT_TRIPWIRE_ALLOW:-0}" != "1" ]]; then
+    printf 'FATAL: %s started with an inherited git-location environment (%s=%s).\n' \
+      "${BASH_SOURCE[0]}" "$_v" "${!_v}" >&2
+    printf 'Fix the ENTRY POINT: unset %s && <runner>\n' "$_v" >&2
+    exit 97
+  fi
+done
+unset _v
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 WM="$REPO_ROOT/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
-SS="$REPO_ROOT/.claude/hooks/lib/session-state.sh"
+SS="$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh"
 
 PASS=0; FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d) || { echo "FATAL: mktemp -d failed — refusing to run with an empty \$TMP, every fixture path would resolve against /" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
+
+# Resolved ONCE, with `pwd -P`: TMPDIR is routinely a symlink, and comparing an
+# unresolved $TMP against a resolved toplevel false-FAILS every call.
+TMP_REAL="$(cd "$TMP" && pwd -P)" || TMP_REAL=""
+# An EMPTY TMP_REAL would silently disable the containment check below, because the
+# pattern `"$TMP_REAL"/*` degrades to `/*`, which matches every absolute path — the
+# guard would return 0 for a live repository. That is the same fail-open shape this
+# whole helper exists to close, so it is asserted rather than assumed. `readonly`
+# stops a later assignment from reintroducing it.
+case "$TMP_REAL" in
+  /*) : ;;
+  *)  echo "FATAL: could not resolve the fixture root '$TMP' to an absolute path — refusing, an empty root makes the containment check match everything" >&2
+      exit 2 ;;
+esac
+readonly TMP_REAL
+
+# cd into a fixture, or refuse. Two arms, and the second is why `cd X || exit` is
+# not enough:
+#   (a) the directory is absent  -> cd fails.
+#   (b) the directory EXISTS but is not a repository -> cd SUCCEEDS, and git then
+#       walks UP to the enclosing repository. On 2026-08-20 that enclosing repo was
+#       a live worktree: `git worktree add` had created the path and then failed, so
+#       every guard keyed on cd's exit status passed and the fixture's commits landed
+#       on a real branch. Measured on main at 58486e1ae: HEAD 10b74df57 -> f5fd37bd6,
+#       carrying "victim", "victim2", "v9 change", "v12 change".
+# So containment is asserted on the RESOLVED git toplevel, not on cd's exit status.
+cdx() {
+  local target="$1" top
+  if ! cd "$target" 2>/dev/null; then
+    printf '  FAIL: fixture directory absent: %s\n' "$target" >&2
+    printf '        refusing to run fixture commands in %s — that is a LIVE repository.\n' "$PWD" >&2
+    : > "$TMP/.cdx-failed"
+    exit 90
+  fi
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  case "${top:-<none>}" in
+    "$TMP_REAL"|"$TMP_REAL"/*) return 0 ;;
+  esac
+  printf '  FAIL: %s exists, but its git toplevel is %s\n' "$target" "${top:-<not a git repository>}" >&2
+  printf '        which is OUTSIDE the fixture root %s — refusing, git would write to that repository.\n' "$TMP_REAL" >&2
+  : > "$TMP/.cdx-failed"
+  exit 90
+}
+
+# MERGE-RESOLUTION SELF-CHECK. This file was ALREADY partially hardened once — two sites carried
+# explicit "Guarded cd" comments while five did not — and it regressed anyway; the reaper sites
+# carry no fixture-commit symptom, so a regression there is silent. Two independent fixes to this
+# file are in flight simultaneously, which makes "a merge drops one site back to a bare cd" a live
+# possibility rather than a hypothetical. Assert the PROPERTY here instead of trusting review to
+# notice. Excludes the `&&` forms, which short-circuit and are safe.
+# Keyed on STRUCTURE, never on any guard WORDING, and evaluated on LOGICAL lines.
+#
+# Three corrections, each found by mutation rather than by reading:
+#   1. Wording. A check greping for `cdx(` flags a site guarded correctly some other way; one
+#      greping for a guard PHRASE clears a site guarded with different wording. Not hypothetical
+#      -- a sibling session counted its own guarded sites with `grep -c <its guard phrase>`, got
+#      5, and the answer was 7: it had worded its two reaper guards differently.
+#   2. Reach. Anchoring at line start inspected 7 of this file 25 `cd "` sites -- the dominant
+#      `if ( cd "` form was invisible, while the message below claimed to refuse on ANY bare cd.
+#      A guard narrower than the claim it carries is this suite own subject, one level up.
+#   3. Line shape. Most sites here are backslash-continued, so the `&&` that handles the failure
+#      sits on the NEXT physical line. Judging physical lines both misses a real defect and
+#      false-flags a correctly guarded two-line site.
+#
+# So: strip comments (prose naming `cd "` must not be inspected -- this block itself would
+# match), join continuations into one logical line, then flag any `cd "` whose logical line
+# neither carries `&&`/`||` nor makes cd itself the tested command. `if ( cd "$X" ... )` is NOT
+# exempt merely for containing `if`: that tests the SUBSHELL, so a resolution dropping the `&&`
+# leaves cd failure swallowed and the next command running in the wrong directory, which parses
+# cleanly and is silent. That case is mutation-proven below.
+_bare_cd="$(awk '
+  BEGIN { start_ln = 1 }
+  {
+    l = $0
+    sub(/(^|[[:space:]])#.*$/, "", l)
+    line = line l
+    if (sub(/\\[[:space:]]*$/, " ", line)) next
+    if (line ~ /(^|[^[:alnum:]_])cd "/ \
+        && line !~ /&&/ && line !~ /\|\|/ \
+        && line !~ /(^|[[:space:]])(if|while|until)[[:space:]]+!?[[:space:]]*cd[[:space:]]"/ \
+        && line !~ /(^|[^[:alnum:]_])cdx[[:space:]]/) print start_ln ": " line
+    line = ""; start_ln = NR + 1
+  }
+' "${BASH_SOURCE[0]}")"
+if [[ -n "$_bare_cd" ]]; then
+  printf '  FAIL: unguarded cd site(s) in this suite — every fixture cd must go through cdx():\n' >&2
+  printf '%s\n' "$_bare_cd" >&2
+  printf '        A bare cd here runs git in the CALLER CWD when the fixture is missing.\n' >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Stand up a fake bare repo with two branches: main + feat-victim. Merge
@@ -30,7 +136,7 @@ git init --bare -b main "$BARE" >/dev/null
 # Seed a commit on main via a temporary clone
 SEED="$TMP/seed"
 git clone "$BARE" "$SEED" >/dev/null 2>&1
-( cd "$SEED"
+( cdx "$SEED"
   git -c user.email=t@t -c user.name=t commit --allow-empty -m "seed" >/dev/null
   git push origin main >/dev/null 2>&1
 )
@@ -47,7 +153,7 @@ mkdir -p "$WT_PARENT/.worktrees"
 # Anchor a fake "victim" checkout — the worktree that holds an active lease
 # and which a sibling cleanup-merged invocation must NOT reap.
 git -C "$BARE" worktree add -b feat-victim "$WT_PARENT/.worktrees/feat-victim" main >/dev/null 2>&1
-( cd "$WT_PARENT/.worktrees/feat-victim"
+( cdx "$WT_PARENT/.worktrees/feat-victim"
   echo hi > a.txt
   git -c user.email=t@t -c user.name=t add a.txt
   # Date the commit older than the 10-min recent-commit grace so the lease
@@ -72,6 +178,12 @@ git -C "$BARE" worktree add -b feat-actor "$WT_PARENT/.worktrees/feat-actor" mai
 # ---------------------------------------------------------------------------
 LEASE_ROOT="$BARE/soleur-session-state"
 mkdir -p "$LEASE_ROOT/leases" "$LEASE_ROOT/locks" "$LEASE_ROOT/logs"
+# Pre-stamp the #7409 first-run arming hold. Every scenario below asserts what
+# the reaper does with a lease present or absent; the hold suppresses reaping
+# entirely on a store's first armed run, so without this stamp "the victim
+# survived" would pass for the wrong reason in every one of them. Scenario 12
+# is where the hold itself is tested.
+: > "$LEASE_ROOT/reaper-armed"
 
 # Hold a real, alive PID for the lease. Background a long sleep.
 sleep 300 &
@@ -101,7 +213,15 @@ WT_ACTOR="$WT_PARENT/.worktrees/feat-actor"
 # matches the worktree being considered — so feat-victim is NOT protected
 # by that guard from a sibling session. Only the new lease guard protects it.
 (
-  cd "$WT_ACTOR"
+  # `|| exit` IS LOAD-BEARING (#7546 review). A bare `cd` that FAILS leaves the subshell in the
+  # INHERITED cwd -- the real worktree `test-all.sh` was invoked from -- and the cleanup-merged
+  # below then runs against it. All seven `worktree add` calls in this file swallow failure with
+  # `>/dev/null 2>&1`, so $WT_ACTOR being absent is a reachable state (a leftover branch from a
+  # crashed run is enough). Measured 2026-08-20: this escaped the sandbox and committed
+  # `victim change`, `victim2 change`, `v9 change` and `v12 change` onto a live feature branch in
+  # another session's worktree, then checked that worktree out to main and pulled. The fixture
+  # names map one-to-one onto the four cd-failure sites in this file.
+  cdx "$WT_ACTOR"
   SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
     bash "$WM" cleanup-merged >/tmp/cleanup-out.$$ 2>&1 || true
 )
@@ -125,7 +245,7 @@ kill "$HOLDER_PID" 2>/dev/null || true
 # `acquire_lease` records `pid=$$`, and every documented entry point is a
 # short-lived process that exits within milliseconds of writing the file:
 #
-#     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+#     bash <plugin-root>/scripts/lib/session-state.sh acquire_lease <worktree>
 #     bash .../worktree-manager.sh --yes create <branch>
 #
 # So in production the lease pid is ALWAYS dead moments after acquisition.
@@ -139,7 +259,7 @@ kill "$HOLDER_PID" 2>/dev/null || true
 # ---------------------------------------------------------------------------
 git -C "$BARE" worktree add -b feat-victim2 "$WT_PARENT/.worktrees/feat-victim2" main >/dev/null 2>&1
 WT_VICTIM2="$WT_PARENT/.worktrees/feat-victim2"
-( cd "$WT_VICTIM2"
+( cdx "$WT_VICTIM2"
   echo hi2 > b.txt
   git -c user.email=t@t -c user.name=t add b.txt
   # Older than the 10-minute recent-commit grace, so the LEASE is the only
@@ -171,7 +291,8 @@ elif kill -0 "$DEAD_PID" 2>/dev/null; then
 else
   pass "scenario 2 precondition: the acquiring process has exited (pid $DEAD_PID is dead)"
   (
-    cd "$WT_ACTOR"
+    # `|| exit` load-bearing -- see the note at the first cd site above.
+    cdx "$WT_ACTOR"
     SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
       bash "$WM" cleanup-merged >/tmp/cleanup2-out.$$ 2>&1 || true
   )
@@ -208,7 +329,7 @@ S3="$TMP/s3"; git clone "$UP3" "$S3" >/dev/null 2>&1
     && git push origin main >/dev/null 2>&1 )
 rm -rf "$S3"
 LOCAL3="$TMP/local3.git"; git init --bare -b main "$LOCAL3" >/dev/null
-( cd "$LOCAL3" && git remote add origin "$UP3" && git fetch origin main:main >/dev/null 2>&1 )
+( cd "$LOCAL3" && git remote add origin "$UP3" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
 
 LEASE_ROOT3="$LOCAL3/soleur-session-state"
 # `if ( cd … && … )` rather than `&& pass || fail` (SC2015) or a bare `cd`
@@ -218,7 +339,7 @@ LEASE_ROOT3="$LOCAL3/soleur-session-state"
 # REPO, creating a real worktree, branch and lease.
 if ( cd "$LOCAL3" \
      && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
-        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=137 \
         bash "$WM" --yes create feat-probe >"$TMP/create3.log" 2>&1 ); then
   pass "scenario 3: --yes create exited 0"
 else
@@ -250,10 +371,10 @@ if [[ -f "$LEASE3" ]]; then
     fail "scenario 3: lease does not carry skill=one-shot — the env var is not being read \
 (got: $(grep '^skill=' "$LEASE3" 2>/dev/null || echo NONE))"
   fi
-  if grep -q '^expected_duration_min=240$' "$LEASE3"; then
-    pass "scenario 3: SOLEUR_EXPECTED_DURATION_MIN reached the lease (240)"
+  if grep -q '^expected_duration_min=137$' "$LEASE3"; then
+    pass "scenario 3: SOLEUR_EXPECTED_DURATION_MIN reached the lease (137, a NON-default value)"
   else
-    fail "scenario 3: lease does not carry expected_duration_min=240 — the env var is not being read \
+    fail "scenario 3: lease does not carry expected_duration_min=137 — the env var is not being read \
 (got: $(grep '^expected_duration_min=' "$LEASE3" 2>/dev/null || echo NONE))"
   fi
 else
@@ -288,7 +409,7 @@ fi
 
 if ( cd "$LOCAL3" \
      && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
-        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=137 \
         bash "$WM" --yes create feat-probe >"$TMP/create4.log" 2>&1 ); then
   pass "scenario 4: --yes create on an existing worktree exited 0"
 else
@@ -328,7 +449,7 @@ fi
 # ---------------------------------------------------------------------------
 if ( cd "$LOCAL3" \
      && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
-        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=137 \
         bash "$WM" --yes feature probe5 >"$TMP/feature5.log" 2>&1 ); then
   : # exit status is asserted via the lease below; a push to the fixture origin
     # can legitimately warn without meaning the lease failed
@@ -344,7 +465,7 @@ fi
 rm -f "$LEASE5"
 if ( cd "$LOCAL3" \
      && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
-        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=137 \
         bash "$WM" --yes feature probe5 >"$TMP/feature5b.log" 2>&1 ); then
   :
 fi
@@ -356,20 +477,30 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# SCENARIO 6 (PR #7373): a name the lease layer cannot key on must SAY SO.
+# SCENARIO 6 (PR #7373, re-pointed by #7408): a name the lease layer cannot key
+# on must SAY SO.
 #
-# _validate_worktree_name rejects anything outside [A-Za-z0-9._-], so a
-# slash-bearing branch makes acquire_lease fail. Measured before this arm:
-# `--yes create feat/probe` exited 0, wrote ZERO leases, and emitted nothing an
-# orchestrating agent could see — #5454's exact signature, on the path this fix
-# exists to protect. The lease cannot be made to work for that shape here (the
-# key/reader mismatch is a separate design decision), so what is pinned is that
-# the failure is no longer SILENT.
+# _validate_worktree_name rejects anything outside [A-Za-z0-9._-]. Measured
+# before this arm: `--yes create feat/probe` exited 0, wrote ZERO leases, and
+# emitted nothing an orchestrating agent could see — #5454's exact signature.
+#
+# RE-POINTED by #7408. This arm used `feat/probe6`, and the premise it rested on
+# — "the lease cannot be made to work for that shape here" — is now FALSE:
+# #7408 derives the lease key through `_safe_worktree_name`, so `feat/probe6`
+# keys as `feat-probe6` and leases cleanly. Left as written, this arm asserted
+# that a FIXED bug was still broken, and it went red the moment the fix landed.
+#
+# The scenario's real subject is the RESIDUAL class: a legal git refname that is
+# still unkeyable AFTER slugification. `+` is legal in a refname (`git
+# check-ref-format` accepts `feat+probe6`) and is outside the validator's
+# character set, so it survives the transform unkeyable — which is exactly the
+# class #7408's new `reason=name-not-keyable` discriminator exists to report.
+# Asserting the reason= value here also gives that discriminator its only test.
 # ---------------------------------------------------------------------------
 if ( cd "$LOCAL3" \
      && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
-        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
-        bash "$WM" --yes create feat/probe6 >"$TMP/create6.log" 2>&1 ); then
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=137 \
+        bash "$WM" --yes create feat+probe6 >"$TMP/create6.log" 2>&1 ); then
   :
 fi
 if grep -q 'SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED' "$TMP/create6.log"; then
@@ -377,6 +508,27 @@ if grep -q 'SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED' "$TMP/create6.log"; then
 else
   fail "scenario 6: unleasable name ran UNLEASED and SILENT — no marker on stdout \
 (output: $(cat "$TMP/create6.log"))"
+fi
+if grep -q 'reason=name-not-keyable' "$TMP/create6.log"; then
+  pass "scenario 6b: the marker discriminates the residual class (reason=name-not-keyable)"
+else
+  fail "scenario 6b: marker did not carry reason=name-not-keyable — the #7408 discriminator \
+is unreported for a name that survives slugification unkeyable \
+(output: $(cat "$TMP/create6.log"))"
+fi
+# A slash-bearing name, by contrast, must now lease CLEANLY — the #7408 fix.
+# Without this the arm above could be satisfied by a transform that does nothing.
+if ( cd "$LOCAL3" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=137 \
+        bash "$WM" --yes create feat/probe6 >"$TMP/create6c.log" 2>&1 ); then
+  :
+fi
+if grep -q 'SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED' "$TMP/create6c.log"; then
+  fail "scenario 6c: a SLASH-bearing branch still failed to lease — #7408's fix is not in effect \
+(output: $(cat "$TMP/create6c.log"))"
+else
+  pass "scenario 6c: a slash-bearing branch leases cleanly under its slug"
 fi
 
 # ---------------------------------------------------------------------------
@@ -398,7 +550,7 @@ fi
 
 if ( cd "$LOCAL3" \
      && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
-        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=137 \
         bash "$WM" --yes switch feat-probe >"$TMP/switch7.log" 2>&1 ); then
   :
 fi
@@ -407,6 +559,456 @@ if [[ -f "$LEASE3" ]] && grep -q '^pid=' "$LEASE3"; then
 else
   fail "scenario 7: switch wrote NO lease — a switched-into session runs unleased and reapable \
 (output: $(cat "$TMP/switch7.log"))"
+fi
+
+# ---------------------------------------------------------------------------
+# SCENARIO 8 (#7409): the MARKETPLACE-INSTALL layout.
+#
+# Every scenario above runs `worktree-manager.sh` out of THIS repo, where
+# `../../../../..` reaches a tree that happens to contain the lease library. A
+# marketplace user has no such tree: the plugin is copied alone into
+# ~/.claude/plugins/cache/<mkt>/soleur/<ver>/, so a path walk that leaves the
+# plugin root resolves to nothing, the no-op stubs load, and the entire lock and
+# lease layer is silently absent for that entire population (#7409).
+#
+# FIXTURE DISCIPLINE: copy ONLY plugins/soleur. Copying the repo makes this
+# vacuous, because the bug *is* the absence of everything outside that
+# directory — asserted below as a precondition, not assumed.
+# ---------------------------------------------------------------------------
+CACHE_ROOT="$TMP/cache/soleur-mkt/soleur/9.9.9"
+mkdir -p "$CACHE_ROOT"
+cp -r "$REPO_ROOT/plugins/soleur/." "$CACHE_ROOT/" 2>/dev/null
+CACHE_WM="$CACHE_ROOT/skills/git-worktree/scripts/worktree-manager.sh"
+
+if [[ -z "$(find "$CACHE_ROOT" -name '.claude' -type d -print -quit 2>/dev/null)" ]]; then
+  pass "scenario 8 fixture: the cache tree contains no .claude/ — a real marketplace layout"
+else
+  fail "scenario 8 fixture: cache tree contains a .claude/ directory — the fixture cannot \
+reproduce #7409 and every assertion below would pass vacuously"
+fi
+
+# A throwaway repo with an origin remote (create_worktree resolves its base
+# through resolve_base_ref, which needs origin/<from>).
+UP8="$TMP/up8.git"; git init --bare -b main "$UP8" >/dev/null
+S8="$TMP/s8"; git clone "$UP8" "$S8" >/dev/null 2>&1
+( cd "$S8" && git -c user.email=t@t -c user.name=t commit --allow-empty -m seed >/dev/null \
+    && git push origin main >/dev/null 2>&1 )
+rm -rf "$S8"
+LOCAL8="$TMP/local8.git"; git init --bare -b main "$LOCAL8" >/dev/null
+( cd "$LOCAL8" && git remote add origin "$UP8" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
+LEASE_ROOT8="$LOCAL8/soleur-session-state"
+
+# Guarded cd — this suite runs `set -uo pipefail` WITHOUT -e, so an unguarded
+# `cd` failure would run `--yes create` against the developer's real repo.
+if ( cd "$LOCAL8" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT8" \
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=137 \
+        bash "$CACHE_WM" --yes create feat-cacheprobe >"$TMP/create8.log" 2>&1 ); then
+  : # Deliberately NO exit-code assertion: `--yes create` exits 0 in BOTH the
+    # broken and the fixed state (_acquire_worktree_lease early-returns 0 when the
+    # library is missing, and every call site is `|| true`). The exit code carries
+    # no information here; the lease FILE is the only discriminator.
+fi
+
+LEASE8="$LEASE_ROOT8/leases/feat-cacheprobe.lease"
+if [[ -f "$LEASE8" ]] && grep -q '^pid=' "$LEASE8"; then
+  pass "scenario 8: a cache-install worktree-manager.sh resolved the lease library and wrote a lease"
+else
+  fail "scenario 8: NO lease written from a marketplace-install layout — this is #7409; every \
+installed user runs with no lock/lease layer (output: $(cat "$TMP/create8.log" 2>/dev/null))"
+fi
+# 137, never 240: 240 is the default at BOTH worktree-manager.sh's
+# ${SOLEUR_EXPECTED_DURATION_MIN:-240} and session-state.sh's ${3:-240}, so
+# asserting it passes whether the env var is read or ignored (the #5454 vacuity
+# class). skill=one-shot is discriminating too — the default is `unknown`.
+if grep -q '^skill=one-shot$' "$LEASE8" 2>/dev/null; then
+  pass "scenario 8: SOLEUR_SKILL_NAME reached the lease from a cache install"
+else
+  fail "scenario 8: lease does not carry skill=one-shot \
+(got: $(grep '^skill=' "$LEASE8" 2>/dev/null || echo NONE))"
+fi
+if grep -q '^expected_duration_min=137$' "$LEASE8" 2>/dev/null; then
+  pass "scenario 8: SOLEUR_EXPECTED_DURATION_MIN reached the lease (137, a NON-default value)"
+else
+  fail "scenario 8: lease does not carry expected_duration_min=137 \
+(got: $(grep '^expected_duration_min=' "$LEASE8" 2>/dev/null || echo NONE))"
+fi
+
+# --- Scenario 8b (T2): the mutation arm -----------------------------------
+# Delete the library from the cache fixture. Scenario 8 must become
+# unsatisfiable — otherwise scenario 8 is passing for some reason other than
+# the library resolving, and pins nothing.
+CACHE_LIB="$(find "$CACHE_ROOT" -name 'session-state.sh' -print -quit 2>/dev/null)"
+if [[ -n "$CACHE_LIB" ]]; then
+  mv "$CACHE_LIB" "$CACHE_LIB.disabled"
+  if ( cd "$LOCAL8" \
+       && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT8" \
+          SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=137 \
+          bash "$CACHE_WM" --yes create feat-cachemutant >"$TMP/create8b.log" 2>&1 ); then
+    :
+  fi
+  if [[ -f "$LEASE_ROOT8/leases/feat-cachemutant.lease" ]]; then
+    fail "scenario 8b (mutation): a lease was written with the library REMOVED — scenario 8 is \
+vacuous, it is not measuring library resolution"
+  else
+    pass "scenario 8b (mutation): removing the library from the cache fixture stops the lease \
+being written — scenario 8 is non-vacuous"
+  fi
+  if grep -q 'SOLEUR_WORKTREE_LEASE_LIB_MISSING' "$TMP/create8b.log"; then
+    pass "scenario 8b (mutation): the absence is reported on stdout, not silent"
+  else
+    fail "scenario 8b (mutation): library absent but NO marker on stdout \
+(output: $(cat "$TMP/create8b.log" 2>/dev/null))"
+  fi
+  # The OK marker's DIRECTION, not just its presence. Scenario 10 asserts it
+  # fires when the library resolves; without this arm nothing asserts it does
+  # NOT fire when the library is gone — so hoisting the echo above the
+  # `if [[ -f "$_SS_LIB" ]]` (making it unconditional) left the whole suite
+  # green while the marker claimed protection was on with the layer absent.
+  # That is the worst possible failure for a signal whose entire purpose is to
+  # make silence unambiguous, and it is the marketplace user's only channel.
+  if grep -q 'SOLEUR_WORKTREE_LEASE_LIB_OK' "$TMP/create8b.log"; then
+    fail "scenario 8b (mutation): the ..._LIB_OK marker fired with the library ABSENT — \
+it is not conditioned on resolution and reports protection that is not there"
+  else
+    pass "scenario 8b (mutation): ..._LIB_OK is absent when the library is — the marker \
+discriminates rather than always firing"
+  fi
+  mv "$CACHE_LIB.disabled" "$CACHE_LIB"
+else
+  fail "scenario 8b (mutation): no session-state.sh found anywhere under the cache fixture — \
+the library does not ship in the plugin, which is the #7409 defect itself"
+fi
+
+# ---------------------------------------------------------------------------
+# SCENARIO 9 (#7409, T3): the DESTRUCTIVE direction, in a cache layout.
+#
+# This PR ARMS THE REAPER for the marketplace population. Pre-fix their library
+# is missing, so `is_lease_active(){ return 0; }` makes cleanup-merged refuse to
+# reap anything, ever. Post-fix the library resolves and an unrecoverable
+# operation — delete the worktree, the local branch, the remote branch, close
+# the PR — goes live for them for the first time. Scenarios 8/8b cover
+# ACQUISITION; nothing covers REFUSAL from a cache layout. That asymmetry is the
+# whole risk profile of this change.
+# ---------------------------------------------------------------------------
+BARE9="$TMP/repo9.git"; git init --bare -b main "$BARE9" >/dev/null
+SEED9="$TMP/seed9"; git clone "$BARE9" "$SEED9" >/dev/null 2>&1
+( cd "$SEED9" && git -c user.email=t@t -c user.name=t commit --allow-empty -m seed >/dev/null \
+    && git push origin main >/dev/null 2>&1 )
+rm -rf "$SEED9"
+WT9="$TMP/wt9"; mkdir -p "$WT9/.worktrees"
+git -C "$BARE9" worktree add -b feat-v9 "$WT9/.worktrees/feat-v9" main >/dev/null 2>&1
+( cdx "$WT9/.worktrees/feat-v9"
+  echo hi9 > c.txt
+  git -c user.email=t@t -c user.name=t add c.txt
+  # Older than the 10-minute recent-commit grace, so the LEASE is the only thing
+  # that can protect it — otherwise this passes via the grace window and proves
+  # nothing about lease resolution from a cache install.
+  GIT_COMMITTER_DATE="2025-01-01T00:00:00Z" \
+    git -c user.email=t@t -c user.name=t commit \
+      --date "2025-01-01T00:00:00Z" -m "v9 change" >/dev/null
+)
+git -C "$BARE9" update-ref refs/heads/main "$(git -C "$BARE9" rev-parse refs/heads/feat-v9)"
+git -C "$BARE9" worktree add -b feat-a9 "$WT9/.worktrees/feat-a9" main >/dev/null 2>&1
+
+LEASE_ROOT9="$BARE9/soleur-session-state"
+mkdir -p "$LEASE_ROOT9/leases"
+: > "$LEASE_ROOT9/reaper-armed"   # see the note at LEASE_ROOT above
+cat > "$LEASE_ROOT9/leases/feat-v9.lease" <<EOF
+pid=$$
+ppid=$$
+skill=one-shot
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+expected_duration_min=137
+hostname=$HOSTNAME
+EOF
+
+if ( cd "$WT9/.worktrees/feat-a9" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT9" \
+        bash "$CACHE_WM" cleanup-merged >"$TMP/cleanup9.log" 2>&1 ); then
+  :
+fi
+if [[ -d "$WT9/.worktrees/feat-v9" ]]; then
+  pass "scenario 9: from a CACHE install, the reaper refused to reap a leased worktree"
+else
+  fail "scenario 9: a cache-install cleanup-merged REAPED a leased worktree — this PR arms an \
+unrecoverable operation for every marketplace user (output: $(cat "$TMP/cleanup9.log" 2>/dev/null))"
+fi
+
+# Mutation arm: clear the lease and the SAME victim must now be reaped. Without
+# this, scenario 9 is satisfied by cleanup-merged doing nothing for any reason at
+# all — an early return, a lock it could not take, a fail-closed stub.
+rm -f "$LEASE_ROOT9/leases/feat-v9.lease"
+if ( cd "$WT9/.worktrees/feat-a9" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT9" \
+        bash "$CACHE_WM" cleanup-merged >"$TMP/cleanup9b.log" 2>&1 ); then
+  :
+fi
+if [[ -d "$WT9/.worktrees/feat-v9" ]]; then
+  fail "scenario 9b (mutation): the victim survived with NO lease — scenario 9 is vacuous, the \
+reaper is not reaping for some unrelated reason (output: $(cat "$TMP/cleanup9b.log" 2>/dev/null))"
+else
+  pass "scenario 9b (mutation): with the lease cleared the victim IS reaped — scenario 9's \
+refusal is attributable to the lease, not to an inert reaper"
+fi
+
+# ---------------------------------------------------------------------------
+# SCENARIO 10 (#7409, T3b): the SKILL.md anchor hop.
+#
+# Every other scenario in this file invokes worktree-manager.sh by absolute path
+# inside a fixture. A marketplace user never does that — their agent executes the
+# `"${CLAUDE_PLUGIN_ROOT}/…"` form written in SKILL.md (bare since #7453). That hop is the link the
+# whole fix has to traverse, and nothing tested it: the suite could be fully
+# green while delivering nothing to the population #7409 is about.
+# ---------------------------------------------------------------------------
+NONSOLEUR="$TMP/not-soleur"; mkdir -p "$NONSOLEUR"
+git init -b main "$NONSOLEUR" >/dev/null 2>&1
+( cd "$NONSOLEUR" && git -c user.email=t@t -c user.name=t commit --allow-empty -m seed >/dev/null 2>&1 )
+if [[ ! -e "$NONSOLEUR/plugins/soleur" ]]; then
+  pass "scenario 10 fixture: cwd is a non-Soleur repo (no ./plugins/soleur to fall back to)"
+else
+  fail "scenario 10 fixture: cwd contains ./plugins/soleur — the anchor's default arm would \
+resolve and the hop under test is bypassed"
+fi
+# `export` on its own line, NOT a `CLAUDE_PLUGIN_ROOT=… bash "${CLAUDE_PLUGIN_ROOT}/…"`
+# prefix assignment: a command-prefix assignment populates the COMMAND's
+# environment, but every expansion on that same command line is performed first,
+# against the current shell — so the anchor would expand EMPTY and this scenario
+# would silently test a root-anchored `/skills/…` path instead of the hop.
+# Measured: written that way, the run failed with `bash: ./plugins/…: No such
+# file or directory`, and the negative assertion below still reported `pass`.
+if ( cd "$NONSOLEUR" \
+     && export CLAUDE_PLUGIN_ROOT="$CACHE_ROOT" \
+     && bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" \
+        list >"$TMP/anchor10.log" 2>&1 ); then
+  :
+fi
+# The anchor must have resolved to a REAL script. Without this, every assertion
+# below is satisfied by the interpreter failing to find the file at all — which
+# is precisely how the fixture bug above stayed invisible.
+if grep -q 'No such file or directory' "$TMP/anchor10.log"; then
+  fail "scenario 10 precondition: the anchor did not resolve to a script — assertions below \
+cannot discriminate (output: $(cat "$TMP/anchor10.log" 2>/dev/null))"
+else
+  pass "scenario 10 precondition: the anchor resolved to a real script"
+fi
+if grep -q 'SOLEUR_WORKTREE_LEASE_LIB_OK' "$TMP/anchor10.log"; then
+  pass "scenario 10: reached through the SKILL.md anchor form, the library resolves (\
+..._LIB_OK on stdout)"
+else
+  fail "scenario 10: through the SKILL.md anchor form from a non-Soleur cwd the library did NOT \
+resolve — the hop a marketplace user actually traverses is broken \
+(output: $(cat "$TMP/anchor10.log" 2>/dev/null))"
+fi
+if grep -q 'SOLEUR_WORKTREE_LEASE_LIB_MISSING' "$TMP/anchor10.log"; then
+  fail "scenario 10: the MISSING marker was emitted through the anchor hop"
+else
+  pass "scenario 10: no MISSING marker through the anchor hop"
+fi
+
+# ---------------------------------------------------------------------------
+# SCENARIO 10b (#7453, ADR-179 A18): the same hop with the root UNSET, from a tree
+# that plants its own `./plugins/soleur/…/worktree-manager.sh` decoy. The bare anchor
+# must fail closed on a root-anchored `/skills/…` path and never run the decoy. The
+# twin runs the PRE-migration default-arm hop from the same directory and MUST run
+# the decoy — proving the decoy is reachable, so the empty ledger above means something.
+# The default arm is assembled from pieces so this file never spells the rejected form.
+# ---------------------------------------------------------------------------
+DECOYTREE="$TMP/decoy-tree"; mkdir -p "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts"
+DECOY_LEDGER="$(mktemp -p "$TMP" decoy-ledger.XXXXXX)"
+printf '#!/usr/bin/env bash\necho decoy-ran >> "%s"\n' "$DECOY_LEDGER" \
+  > "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+chmod +x "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+# The hop is the SHIPPED line, read out of SKILL.md — a hardcoded copy would stay green
+# if SKILL.md reverted to the default arm. All four emissions must be byte-identical.
+WT_SKILL="$REPO_ROOT/plugins/soleur/skills/git-worktree/SKILL.md"
+LIST_LINES="$(grep -E '^bash "[$][{]CLAUDE_PLUGIN_ROOT[}]/skills/git-worktree/scripts/worktree-manager[.]sh" list$' "$WT_SKILL")"
+if [[ "$(printf '%s\n' "$LIST_LINES" | grep -c .)" -ne 4 || "$(printf '%s\n' "$LIST_LINES" | sort -u | grep -c .)" -ne 1 ]]; then
+  printf '[FATAL] scenario 10b: expected 4 identical bare-anchor list lines in %s, got:\n%s\n' "$WT_SKILL" "$LIST_LINES" >&2; exit 1
+fi
+SHIPPED_LIST="$(printf '%s\n' "$LIST_LINES" | head -1)"
+( cd "$DECOYTREE" && env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
+    bash -c "$SHIPPED_LIST" \
+    >"$TMP/anchor10b.log" 2>&1 )
+rc10b=$?
+if [[ "$rc10b" -ne 0 ]] && grep -q '/skills/git-worktree/scripts/worktree-manager.sh: No such file' "$TMP/anchor10b.log" \
+   && [[ ! -s "$DECOY_LEDGER" ]]; then
+  pass "scenario 10b: root unset — the bare anchor fails closed and the planted decoy never runs"
+else
+  fail "scenario 10b: root unset — rc=$rc10b ledger=$(cat "$DECOY_LEDGER") out=$(cat "$TMP/anchor10b.log")"
+fi
+DEF=':-'
+( cd "$DECOYTREE" && env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
+    bash -c "bash \"\${CLAUDE_PLUGIN_ROOT${DEF}./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh\" list" \
+    >/dev/null 2>&1 )
+if grep -qx 'decoy-ran' "$DECOY_LEDGER"; then
+  pass "scenario 10b twin: the pre-migration default-arm hop DOES run the decoy"
+else
+  fail "scenario 10b twin: the decoy did not run — scenario 10b's empty ledger proves nothing"
+fi
+
+# ---------------------------------------------------------------------------
+# SCENARIO 11 (#7409, T6): OLD-tree / NEW-tree interoperation.
+#
+# During rollout, one worktree on disk predates the move and sources the library
+# from .claude/hooks/lib/, while a sibling sources it from the plugin. Both
+# anchor their lease store to `git rev-parse --git-common-dir`, so they share one
+# set of lease files. If the two copies disagreed about the lease FORMAT, a new
+# worktree would read an old worktree's lease as absent and reap it.
+#
+# AC10's byte-identity check proves the file is unchanged; it does NOT prove
+# interop, which is the property the rollout actually depends on. This arm runs
+# the ORIGIN/MAIN copy (genuinely old code) against the post-move copy.
+# ---------------------------------------------------------------------------
+# PINNED TO AN IMMUTABLE BLOB, never to a moving ref.
+#
+# The first draft resolved the pre-move path out of `origin/main`'s tree. That is
+# correct for exactly as long as this change is unmerged: the moment it lands,
+# `origin/main` IS this tree, `hooks/lib/session-state.sh` matches nothing, and
+# all three assertions below fail — permanently, on main, for every branch cut
+# from it. A proof-of-red pinned to a moving ref consumes its own fix, and it
+# fires when the rollout SUCCEEDS. (The prior comment defended the empty lookup
+# as anti-vacuity; loudness with no expiry is not a regression detector.)
+#
+# A blob SHA is reachable from history forever, so `git cat-file` keeps working
+# after the path is gone. It also removes the `.claude/hooks/lib/session-state.sh`
+# literal, which AC6 asserts is absent everywhere under plugins/soleur/skills/.
+OLD_BLOB="864f3865590ee92b1fc9348c0b2bc6371091b8fa"  # .claude/hooks/lib/session-state.sh @ pre-move main
+OLD_LIB="$TMP/oldtree/legacy-session-state.sh"
+mkdir -p "$(dirname "$OLD_LIB")"
+if git -C "$REPO_ROOT" cat-file -e "$OLD_BLOB" 2>/dev/null \
+   && git -C "$REPO_ROOT" cat-file blob "$OLD_BLOB" > "$OLD_LIB" 2>/dev/null \
+   && [[ -s "$OLD_LIB" ]]; then
+  pass "scenario 11 fixture: recovered the pre-move library from blob ${OLD_BLOB:0:12}"
+elif [[ -n "${CI:-}" ]]; then
+  # Under CI the checkout pins full depth, so reachability is contractual and an
+  # absent object is a real failure. Locally a blobless/shallow clone is ordinary,
+  # and degrading to a hard FAIL there would train people to ignore this suite.
+  fail "scenario 11 fixture: pre-move blob $OLD_BLOB unreachable under CI — \
+the checkout is not full-depth, so old/new interop is unverified"
+else
+  pass "scenario 11: SKIPPED — pre-move blob $OLD_BLOB not in this clone (blobless/shallow); \
+interop unverified locally, enforced under CI"
+fi
+NEW_LIB="$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh"
+SHARED11="$TMP/shared11"; mkdir -p "$SHARED11/leases"
+# The two arms below are only meaningful when the fixture actually materialized.
+# Without this guard a legitimate blobless-clone SKIP would report as two
+# failures — the arm reporting a fixture problem as a product defect.
+if [[ -s "$OLD_LIB" ]]; then
+  # OLD code acquires...
+  bash -c "
+    export SOLEUR_SESSION_STATE_ROOT='$SHARED11'
+    # shellcheck source=/dev/null
+    source '$OLD_LIB'
+    acquire_lease feat-interop one-shot 137
+  " >/dev/null 2>&1
+  if [[ -f "$SHARED11/leases/feat-interop.lease" ]]; then
+    pass "scenario 11: the pre-move library wrote a lease into the shared store"
+  else
+    fail "scenario 11: the pre-move library wrote no lease — fixture cannot discriminate"
+  fi
+else
+  pass "scenario 11: acquire arm skipped (no pre-move fixture)"
+fi
+# ...and NEW code must honour it. `is_lease_active` is only trustworthy here
+# because NEW_LIB genuinely exists: when it does not, worktree-manager.sh's
+# fail-closed STUB also returns 0, so this would pass vacuously against the exact
+# bug. Guard on the file, then call the real function.
+if [[ ! -s "$OLD_LIB" ]]; then
+  pass "scenario 11: honour arm skipped (no pre-move fixture)"
+elif [[ -f "$NEW_LIB" ]] && bash -c "
+  export SOLEUR_SESSION_STATE_ROOT='$SHARED11'
+  # shellcheck source=/dev/null
+  source '$NEW_LIB'
+  is_lease_active feat-interop
+" >/dev/null 2>&1; then
+  pass "scenario 11: the post-move library honours a lease written by the pre-move library"
+else
+  fail "scenario 11: the post-move library does NOT honour a pre-move lease — a mid-rollout \
+worktree would be reaped by a sibling (new lib present: $([[ -f "$NEW_LIB" ]] && echo yes || echo NO))"
+fi
+
+# ---------------------------------------------------------------------------
+# SCENARIO 12 (#7409): the one-time arming hold.
+#
+# This PR makes the reaper reachable for a population that never had it. Every
+# worktree already on such a machine was created by a `create` that could not
+# acquire a lease, so none of them can hold one — and cleanup-merged runs at
+# session start. Without a hold, the first post-upgrade session sweeps the whole
+# accumulated backlog at once, and the user's first notice of the feature is its
+# aftermath.
+#
+# Both directions matter and they fail differently: a hold that never fires
+# leaves the bulk reap live; a hold that never CLEARS makes cleanup dead
+# forever, which is worse than not having it.
+# ---------------------------------------------------------------------------
+BARE12="$TMP/repo12.git"; git init --bare -b main "$BARE12" >/dev/null
+S12="$TMP/s12"; git clone "$BARE12" "$S12" >/dev/null 2>&1
+( cd "$S12" && git -c user.email=t@t -c user.name=t commit --allow-empty -m seed >/dev/null \
+    && git push origin main >/dev/null 2>&1 )
+rm -rf "$S12"
+WT12="$TMP/wt12"; mkdir -p "$WT12/.worktrees"
+git -C "$BARE12" worktree add -b feat-v12 "$WT12/.worktrees/feat-v12" main >/dev/null 2>&1
+( cdx "$WT12/.worktrees/feat-v12"
+  echo hi12 > d.txt
+  git -c user.email=t@t -c user.name=t add d.txt
+  GIT_COMMITTER_DATE="2025-01-01T00:00:00Z" \
+    git -c user.email=t@t -c user.name=t commit \
+      --date "2025-01-01T00:00:00Z" -m "v12 change" >/dev/null
+)
+git -C "$BARE12" update-ref refs/heads/main "$(git -C "$BARE12" rev-parse refs/heads/feat-v12)"
+git -C "$BARE12" worktree add -b feat-a12 "$WT12/.worktrees/feat-a12" main >/dev/null 2>&1
+
+# Deliberately NOT pre-stamped: this is the only scenario that exercises a
+# genuinely first-armed store, which is the state every marketplace user is in
+# the moment they update.
+LEASE_ROOT12="$BARE12/soleur-session-state"
+mkdir -p "$LEASE_ROOT12/leases"
+if [[ ! -f "$LEASE_ROOT12/reaper-armed" ]]; then
+  pass "scenario 12 fixture: the store has never armed the reaper (no stamp)"
+else
+  fail "scenario 12 fixture: stamp already present — cannot exercise the first armed run"
+fi
+
+if ( cd "$WT12/.worktrees/feat-a12" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT12" \
+        bash "$CACHE_WM" cleanup-merged >"$TMP/hold12.log" 2>&1 ); then
+  :
+fi
+# The victim is unleased and stale — without the hold it would be reaped here.
+if [[ -d "$WT12/.worktrees/feat-v12" ]]; then
+  pass "scenario 12: the first armed run reaped nothing, even though the victim holds no lease"
+else
+  fail "scenario 12: an UNLEASED stale worktree was reaped on the very first armed run — \
+the bulk-reap-on-upgrade hold is not in effect (output: $(cat "$TMP/hold12.log" 2>/dev/null))"
+fi
+if grep -q 'SOLEUR_WORKTREE_REAPER_ARMED' "$TMP/hold12.log"; then
+  pass "scenario 12: the hold announces itself rather than silently doing nothing"
+else
+  fail "scenario 12: the reaper armed with no marker — indistinguishable from a run \
+that found nothing to do (output: $(cat "$TMP/hold12.log" 2>/dev/null))"
+fi
+if [[ -f "$LEASE_ROOT12/reaper-armed" ]]; then
+  pass "scenario 12: the run stamped the store"
+else
+  fail "scenario 12: no stamp written — the hold would repeat forever and cleanup would \
+never reap anything again"
+fi
+
+# SECOND run: the hold must be CLEARED. A hold that cannot clear is a worse
+# defect than the bulk reap it prevents, and nothing else in this suite would
+# notice — every other fixture is pre-stamped.
+if ( cd "$WT12/.worktrees/feat-a12" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT12" \
+        bash "$CACHE_WM" cleanup-merged >"$TMP/hold12b.log" 2>&1 ); then
+  :
+fi
+if [[ -d "$WT12/.worktrees/feat-v12" ]]; then
+  fail "scenario 12b: the victim survived the SECOND run too — the hold never clears, so \
+cleanup-merged is now permanently inert (output: $(cat "$TMP/hold12b.log" 2>/dev/null))"
+else
+  pass "scenario 12b: the second run reaps — the hold is one-shot, not a permanent disable"
 fi
 
 echo
@@ -421,7 +1023,12 @@ echo "FAIL: $FAIL"
 # on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
 # could not take. A floor cannot detect a no-op reap loop by itself, but it does
 # catch the case where the assertions were never reached.
-MIN_ASSERTIONS=17  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 scenarios 3-7)
+MIN_ASSERTIONS=42  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc. 8-12) -> 42 (#7453 sc. 10b)
+# Calibrated to the MEASURED count, not to a round number below it. At 32 against a
+# 34-dispatch suite the floor carried exactly two assertions of slack — and scenario 9
+# + 9b is exactly two dispatches, so deleting the reaper-refusal arm (the one guarding
+# an unrecoverable delete) left the suite green. A floor with slack is a floor sized
+# to the block it fails to notice.
 # Count DISPATCHES (PASS + FAIL), not wins. Counting PASS alone conflates two
 # different things: "the suite did not run" and "the suite ran and found bugs".
 # It printed "only N assertions ran — the suite did not execute what it claims
@@ -430,6 +1037,16 @@ MIN_ASSERTIONS=17  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 scenarios 3-7)
 # slip through whenever the defect happened to produce the expected dispatch
 # count. Matches scripts/lint-diagnosis-claims.test.sh and
 # scripts/lint-workflow-step-env-refs.test.sh, which both count PASS + FAIL.
+# `exit 90` inside `( cdx ... )` ends only the SUBSHELL, so without this marker the
+# suite would carry on against a fixture it never built and report whatever the
+# surviving assertions happened to say. Checked BEFORE the vacuity floor: a run that
+# refused is not a run with too few assertions, and must not be described as one.
+if [[ -f "$TMP/.cdx-failed" ]]; then
+  echo "FAIL: at least one fixture directory was absent or outside the fixture root."
+  echo "      The suite did not run as designed; its verdicts are not evidence."
+  exit 1
+fi
+
 if [[ $(( PASS + FAIL )) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $(( PASS + FAIL )) assertions ran, expected >= $MIN_ASSERTIONS — the suite did not execute what it claims to cover."
   exit 1

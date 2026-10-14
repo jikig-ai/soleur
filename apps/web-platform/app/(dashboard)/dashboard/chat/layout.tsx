@@ -35,7 +35,7 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
 
       const orgId = await resolveCurrentOrganizationId(user.id, supabase);
       if (orgId) {
-        const identity: Identity = { userId: user.id, role: "prd", orgId };
+        const identity: Identity = { userId: user.id, role: "prd", orgId , email: null, subscriptionStatus: null };
         if (await isByokDelegationsEnabled(orgId, identity)) {
           // The grantee's delegation lives in the ACTIVE (shared) workspace the
           // owner granted into — NOT their oldest/solo workspace. Resolve the

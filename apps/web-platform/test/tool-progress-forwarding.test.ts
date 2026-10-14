@@ -67,7 +67,7 @@ vi.mock("../server/tool-path-checker", () => ({
   isFileTool: vi.fn(() => false),
   isSafeTool: vi.fn(() => false),
 }));
-vi.mock("../server/agent-env", () => ({ buildAgentEnv: vi.fn(() => ({})) }));
+vi.mock("../server/agent-env", () => ({ buildAgentEnv: vi.fn(() => ({})), ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]) }));
 vi.mock("../server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => vi.fn()),
 }));
@@ -151,13 +151,13 @@ describe("agent-runner: tool_progress forwarding (FR4 #2861)", () => {
     );
     expect(calls.length).toBe(1);
     // Raw SDK tool_name is routed through buildToolLabel so internal tool
-    // names don't leak — `Bash` → `Running command...` (FALLBACK_LABELS.Bash).
+    // names don't leak — `Bash` → `Running command…` (FALLBACK_LABELS.Bash).
     // Security review (#2861) mandated parity with the `tool_use` channel.
     expect(calls[0][1]).toMatchObject({
       type: "tool_progress",
       leaderId: "cpo",
       toolUseId: "tu-1",
-      toolName: "Running command...",
+      toolName: "Running command…",
       elapsedSeconds: 5,
     });
   });

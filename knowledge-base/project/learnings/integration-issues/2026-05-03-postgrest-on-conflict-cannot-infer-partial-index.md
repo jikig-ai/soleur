@@ -75,7 +75,7 @@ Locked in by `bot-fixture.test.ts` "PostgREST infers ON CONFLICT against (user_i
 
 ## Lessons
 
-1. **Live-probe rule for query-shape claims.** When a plan asserts that PostgREST (or any other ORM/query layer) resolves a particular query construct against a particular DDL shape, the plan MUST include a live-probe step that exercises the exact request shape against the target database stack. The prior plan (`knowledge-base/project/plans/2026-04-18-fix-bot-fixture-hardening-plan.md`) made the exact opposite call — verbatim:
+1. **Live-probe rule for query-shape claims.** When a plan asserts that PostgREST (or any other ORM/query layer) resolves a particular query construct against a particular DDL shape, the plan MUST include a live-probe step that exercises the exact request shape against the target database stack. The prior plan (`knowledge-base/project/plans/archive/20261013-003106-2026-04-18-fix-bot-fixture-hardening-plan.md`) made the exact opposite call — verbatim:
 
    > "PostgREST upsert conflict-target explicitly verified. `on_conflict=<cols>` resolves against any unique constraint or unique index that exactly matches those columns — **including a partial unique index**. ... No live probe required; Supabase docs confirm."
 
@@ -92,7 +92,7 @@ Locked in by `bot-fixture.test.ts` "PostgREST infers ON CONFLICT against (user_i
 - Failing run: <https://github.com/jikig-ai/soleur/actions/runs/25210899975>
 - Postgres 17 `INSERT ON CONFLICT`: <https://www.postgresql.org/docs/17/sql-insert.html>
 - PostgREST `on_conflict`: <https://postgrest.org/en/stable/references/api/preferences.html#prefer-resolution>
-- Originating plan: `knowledge-base/project/plans/2026-04-18-fix-bot-fixture-hardening-plan.md`
+- Originating plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-18-fix-bot-fixture-hardening-plan.md`
 - Remediation plan: `knowledge-base/project/plans/2026-05-03-fix-ux-audit-seed-conflict-plan.md`
 - Migration 035: `apps/web-platform/supabase/migrations/035_conversations_user_id_session_id_unique_total.sql`
 - Contract test: `plugins/soleur/test/ux-audit/bot-fixture.test.ts` "PostgREST infers ON CONFLICT against (user_id, session_id) without 42P10"

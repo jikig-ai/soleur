@@ -109,6 +109,7 @@ But two layers stack and you must satisfy both:
   and effectively require consent or a pre-existing relationship even B2B.
 
 **Practical consequence for this campaign:**
+
 - Emailing a **corporate/role editorial address** of an EU/UK publication (e.g. an "editorial contact
   form" or `tips@`/`editor@`) is **lower-risk** and broadly defensible under legitimate interest +
   identification + opt-out.
@@ -152,6 +153,7 @@ notice.
 
 **YES — C3 is mandatory.** Before the first send, tag each of the ~11 targets as **US** or **EU/UK**
 (and ideally flag the stricter EU states). This is required because:
+
 - EU/UK recipients need the Art. 14 data-source line + opt-out + identity (the EU/UK email variant).
 - It lets you route higher-risk EU/UK *individual* addresses to DM/corporate-form instead of cold
   personal email.
@@ -192,6 +194,7 @@ itself a cited deficiency in FTC enforcement.
 ### Tier-2 "tested & ranked" vs Tier-1 editorial lists — does it differ?
 
 **Yes, materially:**
+
 - **Tier-2 independent testers** (Email B): these authors **hands-on test** the product *because of*
   the free access — the free access is the direct enabler of the review. **Material connection is
   squarely engaged; C4 disclosure instruction is required.** This is the higher-disclosure tier.
@@ -274,6 +277,7 @@ access for testing" is plenty). Honest, disclosed coverage is exactly what we wa
 ### Artifact edit — update the campaign file
 
 In `knowledge-base/marketing/listicle-outreach-briefs.md`:
+
 - Change frontmatter `status: ready-to-send (pending CLO pre-send review)` →
   `status: ready-to-send (CLO pre-send review DISCHARGED 2026-06-15 #5314 — conditions C1–C5 applied)`.
 - Add the C1/C3 footer and C4 line into the Email A / Email B templates (so the source-of-truth

@@ -127,6 +127,29 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     // forced its existence — a gate that always fails is an outage, not a tripwire.
     "scoped -replace of a Cloudflare Access service token (no server → stock-preflight is a no-op); its own blast-radius gate FORBIDS every hcloud_*/terraform_data/tls_private_key address, and gating it on server stock would fail-close the one remedy available when stock is zero (ADR-154)",
   ],
+  [
+    "vector-redeliver",
+    // #7542 scoped delivery of vector.toml to the RUNNING web-1 (job `vector_redeliver`). Its
+    // single `-target` is `terraform_data.journald_persistent`, and its own plan gate permits
+    // EXACTLY one delivery of that address — actions ["create","delete"] or a bare ["create"] —
+    // and refuses every other address in the plan. So the arm creates and replaces NO
+    // hcloud_server, and stock-preflight-gate.sh (which `select(.type == "hcloud_server")`) hits
+    // its legitimate-empty out-of-scope branch. Same class as workspaces-luks-recut and
+    // ci-ssh-token-replace: a scoped replace of a NON-server resource.
+    //
+    // The distinction that matters for THIS gate: a terraform_data replace destroys and
+    // recreates a STATE ENTRY, not a machine. There is no destroy-then-discover-no-stock
+    // surface, because the "create" half provisions nothing from Hetzner's pool — it re-runs
+    // remote-exec against a host that never stopped running. Nothing here can strand on
+    // `resource_unavailable`, which is the entire hazard stock-preflight exists to pre-empt.
+    //
+    // It is also FORBIDDEN the server plane rather than merely missing it: the arm's own plan
+    // gate counts any `hcloud_server`/`hcloud_volume` delete as `host_destroyed` and aborts by
+    // name, and counts every non-allow-set address as out-of-scope. web-1, web-2 and
+    // hcloud_volume.workspaces[*] are all inside the `-target` closure (`-target` is transitive
+    // on dependencies), so this is a live refusal, not a vacuous one.
+    "scoped delivery of a terraform_data state entry (no server created or replaced → stock-preflight is a no-op); the 'create' half re-runs remote-exec against an already-running host, so there is no destroy-then-no-stock strand, and the arm's own plan gate ABORTS on any hcloud_server/hcloud_volume delete or any out-of-scope address",
+  ],
 ]);
 
 // NON-VACUITY FLOOR ONLY. This exists to catch the options parser silently collapsing to
@@ -213,8 +236,31 @@ const callsGate = (job: Job) => /\bstock_preflight_gate\s+tfplan\.json\b/.test(j
 // five destroy paths. A gate that always fails is an outage, not a tripwire.
 const sourcesGate = (job: Job) =>
   /^\s*source\s+\S*stock-preflight-gate\.sh/m.test(jobBody(job));
+/** The local actions a job `uses:`, so a credential supplied by a composite action is visible. */
+function jobUses(job: Job): string[] {
+  return (job.steps ?? []).map((s) => String((s as { uses?: string }).uses ?? ""));
+}
+
+// (#8209, ADR-241) THE PROPERTY, RESTATED — "the job OBTAINS a Hetzner token", not "the job
+// performs this particular read".
+//
+// The property this guards is unchanged and still the one that matters: the stock preflight
+// gate needs a Hetzner token, and a job that calls it without one aborts EVERY dispatch —
+// an outage wearing a tripwire's clothes, as the assertion below says.
+//
+// What changed is where the token comes from. Before #8209 every gated job read it inline
+// with `doppler secrets get HCLOUD_TOKEN` from `prd_terraform`; those reads are now
+// redundant (the infra-credentials loader exports the name for the whole job) and WRONG
+// after operator step O10, when that name no longer exists in `prd_terraform` and the read
+// resolves empty — so the job would fail closed on a credential it already holds.
+//
+// So the first conjunct becomes a disjunction over the two ways a token can arrive, and the
+// `export` conjunct is untouched. This is NOT a weakening: a job that calls the gate with
+// NEITHER source still fails, which is the whole point, and the loader limb is anchored on
+// the action PATH rather than on a step name, so renaming the step cannot satisfy it.
 const readsToken = (job: Job) =>
-  /doppler secrets get HCLOUD_TOKEN\b/.test(jobBody(job)) &&
+  (/doppler secrets get HCLOUD_TOKEN\b/.test(jobBody(job)) ||
+    jobUses(job).includes("./.github/actions/infra-credentials")) &&
   /\bexport HCLOUD_TOKEN\b/.test(jobBody(job));
 
 beforeAll(() => {

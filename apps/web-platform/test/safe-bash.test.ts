@@ -17,7 +17,8 @@
  * behavior is covered by `permission-callback-safe-bash.test.ts`.
  */
 import { describe, test, expect } from "vitest";
-import { isBashCommandSafe } from "../server/safe-bash";
+import { EXACT_LITERAL_SAFE_COMMANDS, isBashCommandSafe } from "../server/safe-bash";
+import { SOLEUR_PLUGIN_PATH_DEFAULT } from "../server/plugin-path";
 
 const WT = "bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh";
 
@@ -71,10 +72,9 @@ describe("AC7 — gh WRITE verbs are NOT auto-approved (fall through to gate)", 
 // Slice B (#6121, ADR-093): the BARE `./plugins/soleur/…` server auto-approve is
 // REMOVED — on the Concierge server surface `./plugins/soleur` (CWD-relative)
 // resolves to the UNTRUSTED connected-repo committed copy. The read-only
-// worktree-manager verb is auto-approved ONLY via the exact `${CLAUDE_PLUGIN_ROOT
-// :-./plugins/soleur}` deployed form (F1 exact-literal carve-out, below), whose
-// runtime expansion is trusted on BOTH surfaces (server → /app deployed; CLI →
-// local checkout). CLAUDE_PLUGIN_ROOT reaches the sandboxed bash (F2, proven).
+// worktree-manager verb is auto-approved ONLY via the exact loader-anchored literals
+// (F1 exact-literal carve-out, below; re-anchored by #7453 / ADR-179 A19).
+// CLAUDE_PLUGIN_ROOT reaches the sandboxed bash (F2, proven).
 describe("Slice B AC6 — bare ./plugins worktree-manager auto-approve REMOVED (untrusted server copy)", () => {
   const removed = [
     `${WT} list`,
@@ -88,37 +88,54 @@ describe("Slice B AC6 — bare ./plugins worktree-manager auto-approve REMOVED (
   }
 });
 
-// F1 exact-literal carve-out (AC6): the ONLY `$`/`{`/`}`-bearing commands the
-// allowlist admits, matched by EXACT string equality on the trimmed segment —
-// no arg variation, so zero injection surface. Does NOT weaken
-// SHELL_METACHAR_DENYLIST (still rejects `$(…)`/`${…}` everywhere else).
-const CPR =
-  "bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh";
-describe("Slice B AC6 — ${CLAUDE_PLUGIN_ROOT} exact-literal carve-out (read-only verbs only)", () => {
-  test(`${CPR} list → true`, () => {
-    expect(isBashCommandSafe(`${CPR} list`)).toBe(true);
-  });
-  test(`${CPR} ls → true`, () => {
-    expect(isBashCommandSafe(`${CPR} ls`)).toBe(true);
-  });
-  // Trailing safe stderr redirect on the exact literal still auto-approves
-  // (stripped before the exact-match), file redirects do not.
-  test(`${CPR} list 2>/dev/null → true`, () => {
-    expect(isBashCommandSafe(`${CPR} list 2>/dev/null`)).toBe(true);
+// F1 exact-literal carve-out (AC6; #7453 / ADR-179 A19): the ONLY quote-bearing
+// worktree-manager commands the allowlist admits, matched by EXACT string equality on the
+// trimmed segment — no arg variation, so zero injection surface. Does NOT weaken
+// SHELL_METACHAR_DENYLIST (still rejects `$(…)`/`${…}` everywhere else). The members are the
+// skill text as the SDK loader delivers it, rooted at the deployed `/app` copy.
+const SUBSTITUTED = `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/worktree-manager.sh"`;
+const BARE = 'bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh"';
+describe("Slice B AC6 — plugin-root exact-literal carve-out (read-only verbs only)", () => {
+  for (const verb of ["list", "ls", "list 2>/dev/null"]) {
+    test(`${SUBSTITUTED} ${verb} → true`, () => {
+      expect(isBashCommandSafe(`${SUBSTITUTED} ${verb}`)).toBe(true);
+    });
+  }
+
+  test("identity pin: the carve-out is exactly the substituted {list, ls}", () => {
+    expect([...EXACT_LITERAL_SAFE_COMMANDS].sort()).toEqual([`${SUBSTITUTED} list`, `${SUBSTITUTED} ls`].sort());
   });
 
+  // Positive control for the `export … &&` negative below: a SAFE first segment chained
+  // to a member IS approved, so the negative is denied by its `export` segment.
+  test(`pwd && ${SUBSTITUTED} list → true (control)`, () => {
+    expect(isBashCommandSafe(`pwd && ${SUBSTITUTED} list`)).toBe(true);
+  });
+
+  const DEF = ":-"; // assembled so no literal here spells the rejected form
   const negatives = [
-    `${CPR} cleanup-merged`, // write verb — not in the exact set
-    `${CPR} create feat-x`, // write verb
-    `${CPR} draft-pr`, // write verb
-    `${CPR} list extra-arg`, // arg variation defeats exact match
-    `${CPR} list; rm -rf /`, // trailing injection — not the exact literal
-    `${CPR} list && rm -rf /`, // segment 2 unsafe (&&-decomposed)
-    "bash ${OTHER_VAR:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list", // different var
-    "bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh list", // no default-value form
-    "bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/../evil.sh list", // traversal in the literal
-    "bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/other.sh list", // different script
+    `${BARE} list`, // unsubstituted token — falls back to a prompt (fail-safe)
+    'bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh list', // unquoted
+    `bash \${CLAUDE_PLUGIN_ROOT${DEF}./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list`, // removed default-arm member
+    `bash "\${CLAUDE_PLUGIN_ROOT${DEF}./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh" list`, // quoted default arm
+    `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/worktree-manager.sh-pwn" list`, // name extension
+    'bash "/tmp/x/skills/git-worktree/scripts/worktree-manager.sh" list', // attacker root
+    `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/../evil.sh" list`, // traversal out of the root
+    `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/other.sh" list`, // different script
+    'bash "${OTHER_VAR}/skills/git-worktree/scripts/worktree-manager.sh" list', // different var
     "bash $(echo ./plugins/soleur)/skills/git-worktree/scripts/worktree-manager.sh list", // command substitution
+    `export CLAUDE_PLUGIN_ROOT=/tmp && ${SUBSTITUTED} list`, // segment 1 unsafe
+    `${SUBSTITUTED} list\nid`, // embedded newline
+    `${SUBSTITUTED} list\f`, // form feed: String.trim() strips it, bash passes it as argv
+    `${SUBSTITUTED} list\u00a0`, // NBSP tail
+    `\ufeff${SUBSTITUTED} list`, // BOM head
+    `${SUBSTITUTED} list\u2028`, // line separator tail
+    `${SUBSTITUTED} cleanup-merged`, // write verb — not in the exact set
+    `${SUBSTITUTED} create feat-x`, // write verb
+    `${SUBSTITUTED} draft-pr`, // write verb
+    `${SUBSTITUTED} list --json`, // arg variation defeats exact match
+    `${SUBSTITUTED} list; rm -rf /`, // trailing injection — not the exact literal
+    `${SUBSTITUTED} list && rm -rf /`, // segment 2 unsafe (&&-decomposed)
     "bash ./some/other/script.sh list",
     "bash -c 'rm -rf /'",
     "bash",
@@ -245,6 +262,134 @@ describe("review PR #4868 — git arg-pattern hardening", () => {
     const elapsedMs = performance.now() - start;
     expect(result).toBe(false); // `!` is outside PATH_TOKEN → no match
     expect(elapsedMs).toBeLessThan(50);
+  });
+});
+
+describe("#9555 — git branch read-only arms (create/delete/rename fall through to the gate)", () => {
+  // Contract: `git branch` auto-approves iff every post-`branch` token is a
+  // member of the closed read-only flag set, or — reachable only after a
+  // list-FORCING flag in the leading flag run — a non-dash
+  // pattern/commit-ish arg. Verified against git 2.55 (PR #9570 review):
+  // only --list, --show-current, --contains/--no-contains, --merged/
+  // --no-merged, --points-at force list mode (and -a/-r fatal on a
+  // positional); the display modifiers (-v/--verbose, --sort=, --format=,
+  // --color, --column, --ignore-case, --abbrev) do NOT — `git branch -v
+  // <name>` silently CREATES. Every create / delete / rename / copy /
+  // upstream / force / quiet / describe form must fall through to the
+  // review-gate. Litmus row (incident-derived): `git branch -d foo`
+  // auto-approved under the prior `(?:\s+PATH_TOKEN)*` tail — measured live
+  // on this branch.
+  const positives = [
+    "git branch",
+    "git branch -a",
+    "git branch -r",
+    "git branch -v",
+    "git branch -vv",
+    "git branch -av",
+    "git branch --list",
+    "git branch --list feat",
+    "git branch --show-current",
+    "git branch --merged main",
+    "git branch --contains HEAD~2",
+    "git branch --no-merged main",
+    "git branch --no-contains HEAD",
+    "git branch --points-at HEAD",
+    "git branch --sort=-committerdate",
+    "git branch --ignore-case --list x",
+    // forcing flag after display modifiers — order flexibility is safe
+    "git branch -v --list x",
+    "git branch --color=always --list x",
+    "git branch --list -v x",
+    "git branch --list --sort=-committerdate x",
+    // forcing flag + positional: -a/-r fatal in git ("do not take a branch
+    // name"), --show-current ignores the arg — admitted, cannot create
+    "git branch -a x",
+    "git branch --show-current x",
+  ];
+  for (const cmd of positives) {
+    test(`isBashCommandSafe(${JSON.stringify(cmd)}) === true`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(true);
+    });
+  }
+
+  const negatives = [
+    "git branch foo", // bare positional arg CREATES a branch
+    "git branch foo main", // create with explicit start point
+    "git branch -d foo", // delete
+    "git branch -D foo", // force-delete
+    "git branch --delete foo",
+    "git branch -m a b", // rename
+    "git branch -M a b", // force-rename
+    "git branch --move a b",
+    "git branch -c a b", // copy
+    "git branch -C a b", // force-copy
+    "git branch --copy a b",
+    "git branch -f foo", // force (overwrite)
+    "git branch -q foo", // -q is a write modifier — quiet create, NOT list-mode
+    "git branch -u origin/main foo", // upstream config write
+    "git branch --set-upstream-to=origin/main foo",
+    "git branch --unset-upstream foo",
+    "git branch --edit-description foo",
+    "git branch --list -d", // a write flag cannot launder in as a pattern arg
+    "git branch --list foo -D", // same, trailing position
+    "git branch --list ../x", // path-traversal denylist still wins
+    "git status && git branch -d x", // per-segment re-check across && decomposition
+    // Display-modifier flag + positional = CREATE (git 2.55 verified — these
+    // flags do not force list mode; the exact hole the Arm-2 forcing-flag
+    // requirement exists to close):
+    "git branch -v foo",
+    "git branch -vv foo",
+    "git branch --verbose foo",
+    "git branch --sort=-committerdate foo",
+    "git branch --format=x foo",
+    "git branch --abbrev foo",
+    "git branch --abbrev=4 foo",
+    "git branch --column foo",
+    "git branch --no-column foo",
+    "git branch --color foo",
+    "git branch --color=always foo",
+    "git branch --no-color foo",
+    "git branch --ignore-case foo",
+    "git branch -v foo HEAD~0", // modifier + create at chosen start-point
+    "git status && git branch -v x", // same, in an && segment
+    "git branch -i foo", // -i creates (it does not force list mode)
+    "git branch -t x", // --track is a create-time flag
+    "git branch --no-list foo", // parse-options auto-negation of --list CREATES
+    "git branch --no-all foo", // same class — reads read-only, creates
+  ];
+  for (const cmd of negatives) {
+    test(`isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(false);
+    });
+  }
+
+  // Accepted conservative denials (documented in the plan): a positional arg
+  // before the first list-mode flag would be a create, so Arm 2 requires the
+  // flag FIRST; and PATH_TOKEN excludes the shell-active chars a rich
+  // --format would need. These hit the review-gate — annoying, never unsafe.
+  const conservativeDenials = [
+    "git branch --format=%(refname:short)", // parens outside PATH_TOKEN
+    "git branch foo --list", // positional arg before any forcing flag
+    "git branch -l foo", // real read-only short flag, un-admitted — safe deny
+  ];
+  for (const cmd of conservativeDenials) {
+    test(`conservative deny: isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(false);
+    });
+  }
+
+  // ReDoS regression pin (PR #9570 fix-round, performance-oracle): a
+  // `-[arv]` bundle containing ≥1 a/r must have ONE parse — the
+  // `-[arv]*[ar][arv]*` shape gave each a/r position its own pivot parse,
+  // and the (…)* token loop multiplied them into ~2^m paths (~10 s at
+  // m≈25). The `-(?=[arv]*[ar])[arv]+` shape is maximal-munch.
+  test("multi-parse flag bundle + failing tail stays fast", () => {
+    const evil = `git branch ${"-ar ".repeat(200)}?`;
+    const start = performance.now();
+    const result = isBashCommandSafe(evil);
+    const elapsedMs = performance.now() - start;
+    expect(result).toBe(false);
+    expect(elapsedMs).toBeLessThan(100);
   });
 });
 

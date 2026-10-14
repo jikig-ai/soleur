@@ -1,0 +1,150 @@
+R10. extractor integrity (asserted BEFORE any row that depends on it)
+  PASS: go.md exists
+  PASS: R10: exactly 3 gate fences extracted by heading anchor
+  PASS: R10: no ~~~ fences
+  PASS: R10: no CRLF
+  PASS: R10: readiness fence body non-empty
+  PASS: R10: cloud-detect fence body non-empty
+  PASS: R10: session-start fence body non-empty
+R8. resolver byte-identity across the three fences
+  FAIL: R8: a resolver snippet is EMPTY (0=0 1=0 2=0 bytes)
+  PASS: R8: readiness == cloud-detect
+  PASS: R8: cloud-detect == session-start
+  FAIL: R8: readiness snippet holds the loader token exactly once (got '0', want '1')
+  FAIL: R8: cloud-detect snippet holds the loader token exactly once (got '0', want '1')
+  FAIL: R8: session-start snippet holds the loader token exactly once (got '0', want '1')
+R9. static bans over fence CODE lines (comments stripped)
+  PASS: R9: readiness fence enables no set -e/-u/-o pipefail
+  PASS: R9: readiness carries no Devin cache path
+  FAIL: R9: readiness emits no SOLEUR_PLUGIN_ROOT_RESOLVE line
+  PASS: R9: cloud-detect fence enables no set -e/-u/-o pipefail
+  FAIL: R9: Step 0.5 is missing a Devin cache path (found 1)
+  FAIL: R9: cloud-detect emits no SOLEUR_PLUGIN_ROOT_RESOLVE line
+  PASS: R9: session-start fence enables no set -e/-u/-o pipefail
+  PASS: R9: session-start carries no Devin cache path
+  FAIL: R9: session-start emits no SOLEUR_PLUGIN_ROOT_RESOLVE line
+  FAIL: R9: banned form '$CLAUDE_PLUGIN_ROOT' in fence code
+  PASS: R9: no '${CLAUDE_PLUGIN_ROOT:' in fence code
+  PASS: R9: no ':-./plugins/soleur' in fence code
+  PASS: R9: no ':-plugins/soleur' in fence code
+  PASS: R9: no 'xargs -r' in fence code
+  PASS: R9: no 'readlink -f' in fence code
+  PASS: R9: no 'stat -c' in fence code
+  PASS: R9: no 'sed -i' in fence code
+  PASS: R9: no 'timeout ' in fence code
+R3b. ${ROOT}-relative dispatch operands resolve under plugins/soleur/
+  PASS: R3b: readiness operand plugins/soleur/.claude-plugin/plugin.json exists
+  PASS: R3b: readiness operand plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh exists
+  PASS: R3b: cloud-detect operand plugins/soleur/scripts/cloud-detect.sh exists
+  PASS: R3b: session-start operand plugins/soleur/.claude-plugin/plugin.json exists
+  PASS: R3b: session-start operand plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh exists
+  PASS: R3b: found 5 ${ROOT}-relative operands (>=3)
+R1/R2/R3. delivered -> verified fixture root, environment unset
+  FAIL: R1: readiness resolves via the loader token (missing: SOLEUR_PLUGIN_ROOT_RESOLVE gate=readiness source=plugin-root-token verified=true)
+  FAIL: R1: readiness reached its dispatch (missing: SOLEUR_GIT_REPO_READY=true)
+  FAIL: R1: readiness emits no skip marker (present: SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=plugin-root-unverified)
+  FAIL: R2: cloud-detect resolves via the loader token (missing: SOLEUR_PLUGIN_ROOT_RESOLVE gate=cloud-detect source=plugin-root-token verified=true)
+  FAIL: R2: cloud-detect reached its dispatch (missing: not-local:no-devin-env)
+  FAIL: R2: cloud-detect emits no skip marker (present: SOLEUR_CLOUD_DETECT_SKIPPED reason=script-unreachable)
+  FAIL: R3: session-start resolves via the loader token (missing: SOLEUR_PLUGIN_ROOT_RESOLVE gate=session-start source=plugin-root-token verified=true)
+  FAIL: R3: session-start reached its dispatch (missing: STUB_WORKTREE_MANAGER argv=cleanup-merged)
+  FAIL: R3: session-start emits no skip marker (present: SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified)
+  FAIL: R3: .mcp.json NOT restored (working copy still differs from main)
+R3c. session-class gate: a not-local verdict never reaches cleanup-merged
+  FAIL: R3c: cloud session skips session-start (missing: SOLEUR_SESSION_START_SKIPPED reason=cloud-session)
+  PASS: R3c: cleanup-merged never dispatched on a cloud session
+R4. undelivered fence, environment unset -> source=none, honest skip
+  FAIL: R4: readiness reports source=none (missing: SOLEUR_PLUGIN_ROOT_RESOLVE gate=readiness source=none verified=false)
+  PASS: R4: readiness emits its existing skip marker
+  FAIL: R4: cloud-detect reports source=none (missing: SOLEUR_PLUGIN_ROOT_RESOLVE gate=cloud-detect source=none verified=false)
+  PASS: R4: cloud-detect emits its existing skip marker
+  FAIL: R4: session-start reports source=none (missing: SOLEUR_PLUGIN_ROOT_RESOLVE gate=session-start source=none verified=false)
+  PASS: R4: session-start emits its existing skip marker
+  PASS: R4: Step 0.0 fallback prints the ordered pair false then true
+R5/R5b. undelivered fence + an explicit root in the environment
+  FAIL: R5: readiness falls through to GROK_PLUGIN_ROOT (missing: gate=readiness source=grok-env verified=true)
+  PASS: R5: readiness reached its dispatch via grok-env
+  FAIL: R5b: readiness read-from-disk harness happy path (missing: gate=readiness source=plugin-root-token verified=true)
+  PASS: R5b: readiness reached its dispatch via the variable
+  FAIL: R5: cloud-detect falls through to GROK_PLUGIN_ROOT (missing: gate=cloud-detect source=grok-env verified=true)
+  PASS: R5: cloud-detect reached its dispatch via grok-env
+  FAIL: R5b: cloud-detect read-from-disk harness happy path (missing: gate=cloud-detect source=plugin-root-token verified=true)
+  PASS: R5b: cloud-detect reached its dispatch via the variable
+  FAIL: R5: session-start falls through to GROK_PLUGIN_ROOT (missing: gate=session-start source=grok-env verified=true)
+  PASS: R5: session-start reached its dispatch via grok-env
+  FAIL: R5b: session-start read-from-disk harness happy path (missing: gate=session-start source=plugin-root-token verified=true)
+  PASS: R5b: session-start reached its dispatch via the variable
+R5c. Step 0.5 Devin CLI cache arm, behaviourally
+  FAIL: R5c: Step 0.5 resolves from the Devin CLI cache (missing: gate=cloud-detect source=devin-cache verified=true)
+  FAIL: R5c: the real cloud-detect.sh ran from the cache root (missing: not-local:no-devin-env)
+R6/R6b/R6c. identity preflight and the payload-absent state
+  FAIL: R6: readiness refuses a non-Soleur manifest (missing: gate=readiness source=plugin-root-token verified=false)
+  PASS: R6: readiness emits its skip marker on the decoy
+  PASS: R6: readiness executed nothing under the decoy root
+  FAIL: R6b: a manifest CLAIMING soleur is accepted (known limitation) (missing: gate=readiness source=plugin-root-token verified=true)
+  FAIL: R6b: and its payload executes (the preflight is not authentication) (missing: DECOY_EXECUTED)
+  FAIL: R6c: readiness verifies the root (missing: gate=readiness source=plugin-root-token verified=true)
+  FAIL: R6c: readiness reports the absent payload distinctly (missing: SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=absent-from-verified-root)
+  PASS: R6c: readiness dispatched nothing
+  FAIL: R6: cloud-detect refuses a non-Soleur manifest (missing: gate=cloud-detect source=plugin-root-token verified=false)
+  PASS: R6: cloud-detect emits its skip marker on the decoy
+  PASS: R6: cloud-detect executed nothing under the decoy root
+  FAIL: R6b: a manifest CLAIMING soleur is accepted (known limitation) (missing: gate=cloud-detect source=plugin-root-token verified=true)
+  FAIL: R6b: and its payload executes (the preflight is not authentication) (missing: DECOY_EXECUTED)
+  FAIL: R6c: cloud-detect verifies the root (missing: gate=cloud-detect source=plugin-root-token verified=true)
+  PASS: R6c: cloud-detect reports the absent payload distinctly
+  PASS: R6c: cloud-detect dispatched nothing
+  FAIL: R6: session-start refuses a non-Soleur manifest (missing: gate=session-start source=plugin-root-token verified=false)
+  PASS: R6: session-start emits its skip marker on the decoy
+  PASS: R6: session-start executed nothing under the decoy root
+  FAIL: R6b: a manifest CLAIMING soleur is accepted (known limitation) (missing: gate=session-start source=plugin-root-token verified=true)
+  FAIL: R6b: and its payload executes (the preflight is not authentication) (missing: DECOY_EXECUTED)
+  FAIL: R6c: session-start verifies the root (missing: gate=session-start source=plugin-root-token verified=true)
+  FAIL: R6c: session-start reports the absent payload distinctly (missing: SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root)
+  PASS: R6c: session-start dispatched nothing
+R7. ambient decoys never win against a delivered token (the A10 control)
+  FAIL: R7: readiness ignores ambient roots (missing: gate=readiness source=plugin-root-token verified=true)
+  FAIL: R7: readiness executed nothing under an ambient decoy (present: DECOY_EXECUTED)
+  FAIL: R7: cloud-detect ignores ambient roots (missing: gate=cloud-detect source=plugin-root-token verified=true)
+  FAIL: R7: cloud-detect executed nothing under an ambient decoy (present: DECOY_EXECUTED)
+  FAIL: R7: session-start ignores ambient roots (missing: gate=session-start source=plugin-root-token verified=true)
+  FAIL: R7: session-start executed nothing under an ambient decoy (present: DECOY_EXECUTED)
+H1. deliver() self-test, pinned to an artifact this diff did not produce
+  PASS: H1: the Arm 5 probe and its capture are both committed
+  PASS: H1: extracted the probe's undelivered body
+  PASS: H1: deliver() reproduces the real loader's capture byte-for-byte
+  PASS: H1: the :- form survives delivery unchanged
+  PASS: H1: the unbraced form survives delivery unchanged
+H2. must-PASS: a non-canonical but compliant go.md variant
+  PASS: H2: variant synthesized
+  FAIL: H2: a resolver snippet is EMPTY (0=0 1=0 2=0 bytes)
+  PASS: H2: readiness == cloud-detect
+  PASS: H2: cloud-detect == session-start
+  FAIL: H2: readiness snippet holds the loader token exactly once (got '0', want '1')
+  FAIL: H2: cloud-detect snippet holds the loader token exactly once (got '0', want '1')
+  FAIL: H2: session-start snippet holds the loader token exactly once (got '0', want '1')
+  PASS: H2: readiness fence enables no set -e/-u/-o pipefail
+  PASS: H2: readiness carries no Devin cache path
+  FAIL: H2: readiness emits no SOLEUR_PLUGIN_ROOT_RESOLVE line
+  PASS: H2: cloud-detect fence enables no set -e/-u/-o pipefail
+  FAIL: H2: Step 0.5 is missing a Devin cache path (found 1)
+  FAIL: H2: cloud-detect emits no SOLEUR_PLUGIN_ROOT_RESOLVE line
+  PASS: H2: session-start fence enables no set -e/-u/-o pipefail
+  PASS: H2: session-start carries no Devin cache path
+  FAIL: H2: session-start emits no SOLEUR_PLUGIN_ROOT_RESOLVE line
+  FAIL: H2: banned form '$CLAUDE_PLUGIN_ROOT' in fence code
+  PASS: H2: no '${CLAUDE_PLUGIN_ROOT:' in fence code
+  PASS: H2: no ':-./plugins/soleur' in fence code
+  PASS: H2: no ':-plugins/soleur' in fence code
+  PASS: H2: no 'xargs -r' in fence code
+  PASS: H2: no 'readlink -f' in fence code
+  PASS: H2: no 'stat -c' in fence code
+  PASS: H2: no 'sed -i' in fence code
+  PASS: H2: no 'timeout ' in fence code
+H3. real-harness contact (the one row the simulator does not mediate)
+  PASS: H3: SKIP-DECLARED reason=opt-in-not-set (set SOLEUR_GO_GATES_H3=1; AC12 carries the mandatory pre-merge run)
+L. verdict accounting
+  FAIL: SELF-TEST (expected; retracted immediately)
+  PASS: fail() moves fails and only fails, and appends exactly one ledger row
+
+go-session-gates.test.sh: 72 passed, 60 failed, 132 assertion(s) executed (floor 110)

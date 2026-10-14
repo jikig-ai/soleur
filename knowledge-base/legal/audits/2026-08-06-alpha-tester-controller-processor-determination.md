@@ -13,7 +13,7 @@ related:
   - knowledge-base/legal/article-30-2-register.md
   - knowledge-base/legal/legitimate-interest-assessments/2026-08-06-alpha-tester-repo-observation-lia.md
   - knowledge-base/legal/2026-08-06-alpha-tester-processing-annex.md
-  - knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md
   - knowledge-base/legal/data-processing-agreements/anthropic.md
   - knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md
   - knowledge-base/legal/article-30-register.md
@@ -38,7 +38,7 @@ re_evaluation_triggers:
 formal external legal advice — external counsel re-review reserved for the frontmatter
 `re_evaluation_triggers`) · **Subject:** the alpha tester `2my8r9ry2t-wq/Skouer`, a French
 venture-exploration database business, referred to throughout by repository slug only ·
-**Evidence:** `knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`
+**Evidence:** `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`
 
 ---
 
@@ -254,7 +254,7 @@ limb therefore cannot be dismissed as out of scope; at most it is low-volume.
 
 ## 7. What actually happened on 2026-08-06
 
-Per `knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`,
+Per `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`,
 which reconstructed the session's data scope from the single Claude Code transcript for the tester's
 repository on the operator's machine using **count-only or shape-only probes** (no record content, no
 address local-parts, no file bodies extracted):
@@ -383,6 +383,7 @@ between the BYOK path and the Jikigai-keyed path. **Not a retraction** (§4). Ou
 
 **C5 scope is WIDER than §2.1 alone — an earlier draft of this condition named only that section.**
 The sweep must also reach:
+
 - **`docs/legal/data-protection-disclosure.md` §4.1 "Plugin Sub-processors"**, which states there are
   *"no Plugin-level Sub-processors to disclose under Article 28(2)"*. That is the sharpest
   contradiction in the corpus: §5.1 of the annex asks the tester to **authorise Anthropic PBC as a

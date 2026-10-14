@@ -25,6 +25,22 @@
 #      (1)'s "Sentry blip does not red-flag the probe" behavior.
 #   3. `set -u` for unset-variable safety on the secret-guard branch.
 #
+# A fourth property, added 2026-09-18: the curl prints one `sentry-heartbeat:` line carrying
+# the HTTP status code (via curl's `-w` write-out), so the step log evidences delivery on
+# success as well as failure. Sentry answers a check-in with 202 and no body, and `-fSs`
+# prints nothing on success — without this line a green step and a delivered check-in were
+# indistinguishable from a green step that delivered nothing. The line never prints a URL or
+# header variable: the URL carries the public key, and runner masking is substring-only.
+#
+# HOW CALLERS REFERENCE THIS ACTION. A job that runs `actions/checkout` references it as
+# `./.github/actions/sentry-heartbeat` (13 steps across 12 workflow files —
+# scheduled-terraform-drift.yml carries two). A job WITHOUT a checkout must use GitHub's
+# self-repository form `$/.github/actions/sentry-heartbeat`: a `./` action resolves from the
+# runner's workspace, which a checkout-free job never populates, so the runner prints
+# "Can't find 'action.yml' … Did you forget to run actions/checkout" and the caller's
+# `continue-on-error: true` greens the step — scheduled-marketplace-drift.yml checked in
+# nothing for 37 days that way. `scripts/lint-workflow-local-action-checkout.py` guards it.
+#
 # Reference precedent: PR #3964 (commit c04ffd33) introduced the inline
 # heartbeat shape for scheduled-oauth-probe; PR #3971 extracted to this
 # composite action when rolling out to 7 sister workflows (Closes #3968).
@@ -68,4 +84,5 @@ runs:
           exit 0
         fi
         curl --max-time 10 -fSs -X POST \
+          -w '\nsentry-heartbeat: http_code=%{http_code}\n' \
           "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/?status=${STATUS}"

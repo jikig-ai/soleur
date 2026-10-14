@@ -23,6 +23,7 @@ import {
   shouldRouteToSetupKey,
   isInviteReturnTarget,
 } from "@/lib/onboarding/setup-key-gate";
+import { boundedAuthGetUser } from "@/server/request-auth";
 
 // Matches both the canonical verifier cookie and the hypothetical chunked
 // variant (`@supabase/ssr` chunks `sb-<ref>-auth-token` once it exceeds ~4KB;
@@ -220,9 +221,8 @@ export async function GET(request: NextRequest) {
     }
 
     if (!error) {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const userData = await boundedAuthGetUser(supabase);
+      const user = userData?.user;
 
       if (!user) {
         // Exchange succeeded but getUser returned null — distinct failure

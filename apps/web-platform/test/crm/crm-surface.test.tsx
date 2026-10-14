@@ -10,7 +10,7 @@ vi.mock("next/navigation", () => ({
     new URLSearchParams(mockContact ? `contact=${mockContact}` : ""),
 }));
 
-import { CrmSurface } from "@/components/crm/crm-surface";
+import { CrmSurface, newLeadHref } from "@/components/crm/crm-surface";
 import { SwrTestProvider } from "../helpers/swr-wrapper";
 import type { CrmContact } from "@/components/crm/pipeline-column";
 
@@ -49,6 +49,16 @@ function Wrapped() {
       <CrmSurface />
     </SwrTestProvider>
   );
+}
+
+// URLSearchParams encodes spaces as "+"; decode before matching the seed sentence.
+function expectNewLeadHref(href: string | null) {
+  expect(href).toContain("/dashboard/chat/new");
+  expect(href).toContain("leader=cro");
+  expect(href).toContain("mode=crm-lead");
+  const decoded = decodeURIComponent((href ?? "").replace(/\+/g, " "));
+  expect(decoded).toContain("I want to enter a new CRM lead.");
+  expect(href).toBe(newLeadHref());
 }
 
 beforeEach(() => {
@@ -145,5 +155,34 @@ describe("CrmSurface board", () => {
     // Toggle is still interactive: switch back to Board.
     fireEvent.click(screen.getByRole("tab", { name: "board" }));
     await waitFor(() => expect(screen.getByRole("button", { name: /Open Northwind Labs detail/ })).toBeTruthy());
+  });
+
+  it("populated board links New lead to the CRO crm-lead chat", async () => {
+    global.fetch = routeFetch({
+      "/api/crm/contacts": { body: { contacts: [contact({ id: "c1", stage: "qualified" })] } },
+    }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /Open Northwind Labs detail/ })).toBeTruthy());
+
+    const link = screen.getByRole("link", { name: "New lead" });
+    expectNewLeadHref(link.getAttribute("href"));
+  });
+
+  it("empty board links New lead and does not say there is nothing to enter", async () => {
+    global.fetch = routeFetch({
+      "/api/crm/contacts": { body: { contacts: [] } },
+    }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText(/The CRO chat is how a lead is entered/)).toBeTruthy());
+    expect(screen.getByText(/This board is read-only/)).toBeTruthy();
+    expect(screen.queryByText(/nothing to enter/)).toBeNull();
+
+    const links = screen.getAllByRole("link", { name: "New lead" });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expectNewLeadHref(link.getAttribute("href"));
+    }
   });
 });

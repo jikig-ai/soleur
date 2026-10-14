@@ -34,25 +34,25 @@
 // Source: extracted from .github/workflows/scheduled-daily-triage.yml
 // (deleted in the same commit).
 
-import { spawn } from "node:child_process";
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
 import {
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   mintInstallationToken,
   postSentryHeartbeat,
+  CLAUDE_BUDGET_STOP_SUBTYPE,
   REPO_OWNER,
   REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
-  resolveClaudeBin,
+  spawnClaudeEval,
   type SpawnResult,
-  KILL_ESCALATION_MS,
 } from "./_cron-claude-eval-substrate";
 // Re-export for test parity (cron-daily-triage.test.ts imports via this module).
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import { sweepableRunReports } from "./_cron-run-reports";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // Inlined verbatim from .github/workflows/scheduled-daily-triage.yml lines
 // 86-140, with one diff at step 3d: prompt enforces IDEMPOTENT search-before-
@@ -61,15 +61,30 @@ import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 // Editing this prompt and the --allowedTools / --max-turns flags below MUST
 // happen together — they form a single agent contract (a permissive tool
 // list with a restrictive prompt is silent agent failure).
+// The triage exclusion is keyed on the SWEEPABLE run-report labels (rows whose
+// reports the 12:00Z sweeper retires), derived from the leaf so a new
+// run-reporter joins the exclusion by existing. Rendered as a JSON array
+// literal inside the jq filter.
+const RUN_REPORT_TRIAGE_EXCLUDED_LABELS_JSON = JSON.stringify(
+  sweepableRunReports().map((r) => r.label),
+);
+
 const DAILY_TRIAGE_PROMPT = String.raw`You are an issue triage agent. Your job is to classify open GitHub issues
 and apply labels. You must NOT write code, create PRs, or modify any files.
 
 ## Instructions
 
-1. List open issues: ${"`"}gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select((.labels | map(.name) | index("ux-audit") | not) and (.labels | map(.name) | any(startswith("agent:")) | not)))'${"`"}
+1. List open issues: ${"`"}gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select((.labels | map(.name) | index("ux-audit") | not) and (.labels | map(.name) | any(startswith("agent:")) | not) and ((.labels | map(.name)) as $n | ($n - ${RUN_REPORT_TRIAGE_EXCLUDED_LABELS_JSON} | length) == ($n | length))))'${"`"}
    The --jq filter excludes agent-authored issues (stream tag
-   "ux-audit" and any "agent:*" label).
-   Clause source: plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md.
+   "ux-audit" and any "agent:*" label) and scheduled run-reports (the eight
+   sweepable run-report labels from _cron-run-reports.ts — NOT every
+   "scheduled-*" label: legal-audit files findings and campaign-calendar files
+   action-required items, and both still want a priority): a run-report is a
+   liveness token and audit trail, not a bug — triage labelled 21 daily
+   digests priority/p1-high and hid the one FAILED report among them
+   (#8027, #8076).
+   Clause source: plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md
+   (the run-report clause is triage-specific and lives here only).
    Governance rationale: plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md.
 2. Filter: skip any issue that already has a label starting with "priority/".
    These have already been triaged.
@@ -141,13 +156,8 @@ DOMAIN (pick one — aligned with Soleur department leaders):
 // can assert `--strict-mcp-config` membership + position structurally, rather
 // than via brittle source-text matching.
 export const CLAUDE_CODE_FLAGS = [
-  // #5691 — defensive: this cron passes NO `--plugin-dir`, so it never loads
-  // the plugin-bundled remote MCP servers and makes no MCP dial; the
-  // load-bearing fix here is the telemetry env in buildSpawnEnv. `--strict-mcp-config`
-  // is belt-and-suspenders (guards a future `--plugin-dir` addition / project
-  // `.mcp.json` auto-discovery). Prepended before `--print` (position-safe vs
-  // the trailing `--`). Mirrors spawnClaudeEval; this cron does not route through it.
-  "--strict-mcp-config",
+  // #5691/#8611 — `--strict-mcp-config` is NOT listed here: this cron now routes through
+  // spawnClaudeEval, which prepends it (before `--print`, position-safe vs the trailing `--`).
   "--print",
   "--model", EXECUTION_MODEL,
   "--max-turns", "80",
@@ -213,6 +223,8 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronDailyTriageHandler({
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs): Promise<{
   exitCode: number | null;
   durationMs: number;
@@ -237,95 +249,23 @@ export async function cronDailyTriageHandler({
     }),
   );
 
-  const result = await step.run("claude-eval", async (): Promise<SpawnResult> => {
-    const claudeBin = resolveClaudeBin();
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);
-    const startedAt = Date.now();
-    let abortedByTimeout = false;
-    let exited = false;
-    let escalationTimer: NodeJS.Timeout | null = null;
-
-    try {
-      return await new Promise<SpawnResult>((resolve) => {
-        const child = spawn(
-          claudeBin,
-          [...CLAUDE_CODE_FLAGS, DAILY_TRIAGE_PROMPT],
-          {
-            detached: true, // own process group so SIGTERM propagates to grandchildren
-            stdio: ["ignore", "inherit", "inherit"],
-            env: buildSpawnEnv(installationToken),
-          },
-        );
-
-        const finish = (r: SpawnResult) => {
-          exited = true;
-          if (escalationTimer) clearTimeout(escalationTimer);
-          resolve(r);
-        };
-
-        // Single merged abort handler (was two listeners — code-simplifier
-        // collapse): flip the timeout flag AND issue SIGTERM in one block,
-        // then schedule the SIGKILL escalation. SIGKILL is gated on local
-        // `exited` (set by finish()) instead of `child.killed`: the latter
-        // only flips when `ChildProcess.prototype.kill()` is invoked on the
-        // object, NOT when external `process.kill(pid, ...)` delivers the
-        // signal OR when the child exits naturally — so the original
-        // `!child.killed` guard would have fired SIGKILL against a recycled
-        // PID 5 s after a clean exit. The exit/error paths clear the
-        // escalation timer so a clean exit cannot trail a stray SIGKILL.
-        ac.signal.addEventListener(
-          "abort",
-          () => {
-            abortedByTimeout = true;
-            if (!child.pid) return;
-            const pid = child.pid;
-            try {
-              process.kill(-pid, "SIGTERM");
-            } catch {
-              // Process group already gone — fine.
-            }
-            escalationTimer = setTimeout(() => {
-              if (exited) return;
-              try {
-                process.kill(-pid, "SIGKILL");
-              } catch {
-                // Already exited between SIGTERM and the 5 s escalation.
-              }
-            }, KILL_ESCALATION_MS);
-          },
-          { once: true },
-        );
-
-        child.on("exit", (exitCode, signal) => {
-          finish({
-            ok: exitCode === 0,
-            exitCode,
-            signal,
-            abortedByTimeout,
-            durationMs: Date.now() - startedAt,
-          });
-        });
-        child.on("error", (err) => {
-          reportSilentFallback(err, {
-            feature: "cron-claude-eval",
-            op: "child_process.spawn",
-            message: "claude-code spawn failed",
-            extra: { fn: "cron-daily-triage" },
-          });
-          finish({
-            ok: false,
-            exitCode: -1,
-            signal: null,
-            abortedByTimeout,
-            durationMs: Date.now() - startedAt,
-          });
-        });
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-  });
+  // #8611 — routed through spawnClaudeEval (was an inline spawn): inherits the single-flight
+  // guard, the cost marker, --strict-mcp-config and the telemetry env from the one chokepoint.
+  // No ephemeral workspace: the child runs in the server process cwd, exactly as the inline spawn did.
+  const result = await step.run("claude-eval", (): Promise<SpawnResult> =>
+    spawnClaudeEval({
+      spawnCwd: process.cwd(),
+      installationToken,
+      flags: CLAUDE_CODE_FLAGS,
+      prompt: DAILY_TRIAGE_PROMPT,
+      maxTurnDurationMs: MAX_TURN_DURATION_MS,
+      cronName: "cron-daily-triage",
+      buildSpawnEnv,
+      logger,
+      runId,
+      attempt,
+    }),
+  );
 
   // Sentry heartbeat — single end-of-job POST per
   // 2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md. Sentry slug
@@ -333,7 +273,8 @@ export async function cronDailyTriageHandler({
   // GHA → Inngest migration).
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
-      ok: result.ok,
+      // #8611: a run stopped at its --max-budget-usd cap did not finish, even on exit 0.
+      ok: result.ok && result.subtype !== CLAUDE_BUDGET_STOP_SUBTYPE,
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-daily-triage",
       logger,
@@ -360,6 +301,7 @@ export const cronDailyTriage = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 4 * * *" },

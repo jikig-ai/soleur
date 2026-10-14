@@ -44,11 +44,23 @@ assert "issues: write (posts the digest issue)" '^[[:space:]]*issues:[[:space:]]
 refute "show_full_output: true is NOT set" 'show_full_output:[[:space:]]*true'
 
 # --- Cross-repo checkout of PUBLIC soleur, no persisted creds ---
-assert "checks out jikig-ai/soleur as the data source" 'repository:[[:space:]]+jikig-ai/soleur'
+# Anchored on a repo-name BOUNDARY. `jikig-ai/soleur` as a bare prefix also matches
+# `jikig-ai/soleur-marketplace`, so the unanchored form passed identically whether or not
+# the data source was the one intended — the vacuous-assertion class this repo has caught
+# twice before (#7471).
+assert "checks out jikig-ai/soleur as the data source" 'repository:[[:space:]]+jikig-ai/soleur[[:space:]]*$'
 assert "persist-credentials: false on checkout" 'persist-credentials:[[:space:]]+false'
 
-# --- plugin_marketplaces pinned to soleur (not the running private repo) ---
-assert "plugin_marketplaces pinned to jikig-ai/soleur" 'plugin_marketplaces:.*jikig-ai/soleur'
+# --- plugin_marketplaces pinned to the DISTRIBUTION marketplace, not the monorepo ---
+# Full URL, anchored at both ends. The previous form (`plugin_marketplaces:.*jikig-ai/soleur`)
+# was satisfied by any `jikig-ai/soleur*` repo, so it could not tell the monorepo from the
+# marketplace and would have reported PASS across the very migration it exists to police.
+# The distinction is load-bearing: the monorepo source clones ~181 MiB on every scheduled
+# run and exceeds the CLI's default clone timeout (measurements.md §1.6/2B.6).
+assert "plugin_marketplaces pinned to the soleur-marketplace repo" \
+  "plugin_marketplaces:[[:space:]]*'https://github\.com/jikig-ai/soleur-marketplace\.git'[[:space:]]*\$"
+assert "plugins id targets the soleur-marketplace entry" \
+  "plugins:[[:space:]]*'soleur@soleur-marketplace'[[:space:]]*\$"
 
 # --- Comment-stripped view of the asset. The YAML carries a documentation header that
 # replicates every load-bearing token (`gh issue create`, `digest-scrub.sh`, …), so a
@@ -57,14 +69,14 @@ assert "plugin_marketplaces pinned to jikig-ai/soleur" 'plugin_marketplaces:.*ji
 CODE="$(grep -vE '^[[:space:]]*#' "$WF")"
 
 # Agent allowlist grants Write (the agent writes digest.md).
-if printf '%s\n' "$CODE" | grep -E 'allowedTools' | grep -qE '\bWrite\b'; then pass=$((pass+1)); else
+if printf '%s\n' "$CODE" | grep -E 'allowedTools' | grep -cE >/dev/null '\bWrite\b'; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: --allowedTools must contain Write" >&2; fi
 
 # The agent must NOT be granted a post capability. claude_args is a YAML folded block (>-) that
 # can span multiple physical lines, so a single-line grep misses a `Bash(gh issue create:*)`
 # continuation. Refute `gh issue create` across the WHOLE claude_args region (claude_args: → prompt:).
 ARGS_REGION="$(awk '/claude_args:/{f=1} /^[[:space:]]*prompt:[[:space:]]*\|?[[:space:]]*$/{if(f) f=0} f' "$WF")"
-if printf '%s\n' "$ARGS_REGION" | grep -qE 'gh issue create'; then
+if printf '%s\n' "$ARGS_REGION" | grep -cE >/dev/null 'gh issue create'; then
   fail=$((fail+1)); echo "FAIL: agent allowlist/args must NOT grant 'gh issue create' (prompt-injection bypass)" >&2
 else pass=$((pass+1)); fi
 
@@ -74,15 +86,15 @@ else pass=$((pass+1)); fi
 create_lines="$(printf '%s\n' "$CODE" | grep -nE 'gh issue create' || true)"
 if [[ -z "$create_lines" ]]; then
   fail=$((fail+1)); echo "FAIL: no 'gh issue create' post-step found in executable YAML" >&2
-elif printf '%s\n' "$create_lines" | grep -qvE ':[[:space:]]+gh issue create -R '; then
+elif printf '%s\n' "$create_lines" | grep -cvE >/dev/null ':[[:space:]]+gh issue create -R '; then
   fail=$((fail+1)); echo "FAIL: a 'gh issue create' appears outside a run-step command line (post bypass):" >&2
   printf '%s\n' "$create_lines" | grep -vE ':[[:space:]]+gh issue create -R ' >&2
 else pass=$((pass+1)); fi
 
 # Scrub gate invoked as a post-step OUTSIDE the action — anchored to the functional invocation
 # (the SCRUB var + the `bash "$SCRUB"` call), NOT the doc-header mention.
-if printf '%s\n' "$CODE" | grep -qE 'bash[[:space:]]+"\$SCRUB"' && \
-   printf '%s\n' "$CODE" | grep -qE 'SCRUB=.*digest-scrub\.sh'; then pass=$((pass+1)); else
+if printf '%s\n' "$CODE" | grep -cE >/dev/null 'bash[[:space:]]+"\$SCRUB"' && \
+   printf '%s\n' "$CODE" | grep -cE >/dev/null 'SCRUB=.*digest-scrub\.sh'; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: digest-scrub.sh must be invoked as a post-step (bash \"\$SCRUB\")" >&2; fi
 
 # --- No durable plaintext copy: rm digest.md after posting ---

@@ -165,6 +165,74 @@ export function classifySandboxStartupError(
   return { sandboxKind: "other", errorCode: "unclassified", sdkVersion, stderr };
 }
 
+/** A sandbox denial found in a Bash `tool_result`'s output (#10032 follow-up). */
+export interface BashSandboxFailure {
+  errorCode: "proc_mount_eperm" | "bwrap_eperm";
+  /** ONLY the matched line, scrubbed and capped — never the surrounding tool output. */
+  matchedLine: string;
+  sdkVersion: string | null;
+}
+
+/** Longest matched line forwarded to Sentry. */
+const BASH_MATCHED_LINE_CAP = 300;
+/**
+ * Lines are bounded BEFORE any regex runs: a naive path-scrub regex is quadratic on a long slash-heavy line (measured
+ * 17 s at 100k chars), and this runs on the event loop shared by every tenant. A real bwrap denial is one short line.
+ */
+const BASH_LINE_SCAN_CAP = 2000;
+const BASH_BWRAP_TOKEN = /\b(?:bwrap|bubblewrap)\b/i;
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+// EVERY absolute path token (a solo workspace's id IS the user id, and /home, /var/lib, /tmp paths are tenant-adjacent
+// too) except bwrap's own `/newroot/{proc,dev,sys,tmp}` targets, which carry the diagnostic. Linear: it only starts at
+// a `/` and consumes a maximal run, so a long slash-heavy line cannot backtrack.
+const ABS_PATH_RE = /(?<![\w./-])\/(?!newroot\/(?:proc|dev|sys|tmp)\b)[^\s:'"]+/g;
+// Opaque long tokens (API keys, hashes, base64) that share the line with the denial.
+const OPAQUE_TOKEN_RE = /[A-Za-z0-9_+=-]{32,}/g;
+// Control characters and line/paragraph separators, so a forwarded line cannot forge log rows.
+const CONTROL_RE = /[\p{Cc}\u2028\u2029]/gu;
+
+/**
+ * Classify a Bash `tool_result` output as a sandbox denial.
+ *
+ * Why this exists: `classifySandboxStartupError` only sees errors THROWN out of the SDK iterator. A sandbox
+ * spawn that the SDK returns to the model as a tool_result — the shape a bwrap refusal takes mid-session —
+ * reached Sentry as nothing, so a fleet-wide sandbox outage with no thrown error was invisible (#10032 left
+ * tenant impact unobservable).
+ *
+ * Data minimisation (Art. 5(1)(c)): a tool_result is ARBITRARY command output, which can carry tenant file
+ * contents next to the bwrap line. The result carries ONLY the single matched line — scrubbed of paths, uuids,
+ * opaque tokens and control characters, capped at 300 chars — never the surrounding output and never the command.
+ *
+ * A line matches only when ONE line carries both a sandbox namespace token and a denial (`Operation not
+ * permitted` / `EPERM`): a command that merely prints "bwrap", or an unrelated EPERM, never matches.
+ */
+export function classifyBashSandboxFailure(
+  output: string,
+  sdkVersion: string | null = resolveSdkVersion(),
+): BashSandboxFailure | null {
+  if (output.length === 0) return null;
+  for (const full of output.split(/\r?\n/)) {
+    const raw = full.slice(0, BASH_LINE_SCAN_CAP);
+    // `bwrap`/`bubblewrap` only: a bare `unshare` or `seccomp` line is what an agent's OWN `unshare -U` under the
+    // sandbox prints (the canary expects that EPERM), not a sandbox failure.
+    if (!BASH_BWRAP_TOKEN.test(raw)) continue;
+    if (!OPERATION_NOT_PERMITTED.test(raw)) continue;
+    const matchedLine = raw
+      .replace(CONTROL_RE, " ")
+      .replace(UUID_RE, "<uuid>")
+      .replace(ABS_PATH_RE, "<path>")
+      .replace(OPAQUE_TOKEN_RE, "<token>")
+      .trim()
+      .slice(0, BASH_MATCHED_LINE_CAP);
+    return {
+      errorCode: /can't mount proc/i.test(raw) ? "proc_mount_eperm" : "bwrap_eperm",
+      matchedLine,
+      sdkVersion,
+    };
+  }
+  return null;
+}
+
 // NOTE (CTO ruling, ADR-079): there is deliberately NO stream-phase gate here.
 // A caught session error is tagged `feature:"agent-sandbox"` at both catch sites
 // IFF `classifySandboxStartupError(err).sandboxKind !== "other"`. The signature

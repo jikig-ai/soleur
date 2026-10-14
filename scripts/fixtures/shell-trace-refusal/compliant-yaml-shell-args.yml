@@ -1,0 +1,13 @@
+# MUST PASS (rc 0). `shell: python {0}` is the documented spelling with the command template; the
+# interpreter is its FIRST WORD. Comparing the whole string to SKIP_SHELLS would scan this step as
+# bash. The curl text is only text for a python step.
+name: fixture-shell-args
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: python with a command template
+        shell: python {0}
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

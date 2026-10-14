@@ -62,5 +62,5 @@ The compound skill's Phase 1.5 Step 8 surfaces these in the standard `[ADVISORY]
 ## Related
 
 - Lineage: #3681 → #3808 → #3837 → #3839 → #3834 (this audit + B_ALWAYS shrink).
-- Plan: `knowledge-base/project/plans/2026-05-15-chore-agents-core-md-rule-cap-audit-plan.md`.
-- Brainstorm (structural shrink, deferred): `knowledge-base/project/brainstorms/2026-04-23-agents-md-budget-revisit-brainstorm.md` — Approach D (discoverability litmus + retired-rule-ids allowlist).
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-chore-agents-core-md-rule-cap-audit-plan.md`.
+- Brainstorm (structural shrink, deferred): `knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-23-agents-md-budget-revisit-brainstorm.md` — Approach D (discoverability litmus + retired-rule-ids allowlist).

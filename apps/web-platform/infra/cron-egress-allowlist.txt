@@ -27,7 +27,7 @@ api.linkedin.com
 # social writes + BYOK validation (token-validators.ts:54)
 bsky.social
 # Hacker News search API (hn-community.sh:15) — cron-community-monitor HN reads
-# (community-router.sh `hn mentions`/`hn trending`, #5199 restore)
+# (community-router.sh `hn mentions`, #5199 restore)
 hn.algolia.com
 # community webhooks (discord notify; weekly-analytics POST;
 # cron-weekly-release-digest.ts #releases digest via postDiscordWebhook)
@@ -64,6 +64,124 @@ api.soleur.ai
 # day the token lands in the runtime env; allowlisted so that flip cannot
 # silently break the auth-boundary canary (lib/supabase/service.ts:66).
 api.supabase.com
+# npm registry — metadata + tarballs for `npm/npx install`. Needed by agent
+# sessions in this container that regenerate package-lock.json via
+# `npx npm@11` (lockfile-sync gate pins npm@11 — see AGENTS rule
+# cq-before-pushing-package-json-changes). Cloudflare-fronted LB: the
+# resolver's SEEN_DIR grace window accumulates its rotation pool (same class
+# as hn.algolia.com / discord.com).
+registry.npmjs.org
+#
+# GitHub Actions log + artifact downloads (agent sessions in the web-platform
+# container; GITHUB_ACTIONS_LOG_ACCOUNTS in server/agent-runner-sandbox-config.ts
+# mirrors this fleet in the sandbox domain filter — keep the two in sync).
+# api.github.com 302s /actions/{runs,jobs}/.../logs and artifact zips to signed
+# per-account Azure Blob URLs. These are the exact GitHub-owned accounts:
+# productionresultssa0..99 resolve today EXCEPT sa22 (NXDOMAIN), verified
+# 2026-10-05 — sa100+ does not exist yet. Every account here is a dedicated
+# blob.<cluster>prdstrz<NN>.trafficmanager.net VIP, so hostname enumeration is
+# required (no shared frontend to allowlist once). Maintenance: if a signed URL
+# host fails closed at nftables, resolve it and append; if GitHub deletes an
+# account, its NXDOMAIN pages via the resolver failcount — remove the line.
+productionresultssa0.blob.core.windows.net
+productionresultssa1.blob.core.windows.net
+productionresultssa2.blob.core.windows.net
+productionresultssa3.blob.core.windows.net
+productionresultssa4.blob.core.windows.net
+productionresultssa5.blob.core.windows.net
+productionresultssa6.blob.core.windows.net
+productionresultssa7.blob.core.windows.net
+productionresultssa8.blob.core.windows.net
+productionresultssa9.blob.core.windows.net
+productionresultssa10.blob.core.windows.net
+productionresultssa11.blob.core.windows.net
+productionresultssa12.blob.core.windows.net
+productionresultssa13.blob.core.windows.net
+productionresultssa14.blob.core.windows.net
+productionresultssa15.blob.core.windows.net
+productionresultssa16.blob.core.windows.net
+productionresultssa17.blob.core.windows.net
+productionresultssa18.blob.core.windows.net
+productionresultssa19.blob.core.windows.net
+productionresultssa20.blob.core.windows.net
+productionresultssa21.blob.core.windows.net
+productionresultssa23.blob.core.windows.net
+productionresultssa24.blob.core.windows.net
+productionresultssa25.blob.core.windows.net
+productionresultssa26.blob.core.windows.net
+productionresultssa27.blob.core.windows.net
+productionresultssa28.blob.core.windows.net
+productionresultssa29.blob.core.windows.net
+productionresultssa30.blob.core.windows.net
+productionresultssa31.blob.core.windows.net
+productionresultssa32.blob.core.windows.net
+productionresultssa33.blob.core.windows.net
+productionresultssa34.blob.core.windows.net
+productionresultssa35.blob.core.windows.net
+productionresultssa36.blob.core.windows.net
+productionresultssa37.blob.core.windows.net
+productionresultssa38.blob.core.windows.net
+productionresultssa39.blob.core.windows.net
+productionresultssa40.blob.core.windows.net
+productionresultssa41.blob.core.windows.net
+productionresultssa42.blob.core.windows.net
+productionresultssa43.blob.core.windows.net
+productionresultssa44.blob.core.windows.net
+productionresultssa45.blob.core.windows.net
+productionresultssa46.blob.core.windows.net
+productionresultssa47.blob.core.windows.net
+productionresultssa48.blob.core.windows.net
+productionresultssa49.blob.core.windows.net
+productionresultssa50.blob.core.windows.net
+productionresultssa51.blob.core.windows.net
+productionresultssa52.blob.core.windows.net
+productionresultssa53.blob.core.windows.net
+productionresultssa54.blob.core.windows.net
+productionresultssa55.blob.core.windows.net
+productionresultssa56.blob.core.windows.net
+productionresultssa57.blob.core.windows.net
+productionresultssa58.blob.core.windows.net
+productionresultssa59.blob.core.windows.net
+productionresultssa60.blob.core.windows.net
+productionresultssa61.blob.core.windows.net
+productionresultssa62.blob.core.windows.net
+productionresultssa63.blob.core.windows.net
+productionresultssa64.blob.core.windows.net
+productionresultssa65.blob.core.windows.net
+productionresultssa66.blob.core.windows.net
+productionresultssa67.blob.core.windows.net
+productionresultssa68.blob.core.windows.net
+productionresultssa69.blob.core.windows.net
+productionresultssa70.blob.core.windows.net
+productionresultssa71.blob.core.windows.net
+productionresultssa72.blob.core.windows.net
+productionresultssa73.blob.core.windows.net
+productionresultssa74.blob.core.windows.net
+productionresultssa75.blob.core.windows.net
+productionresultssa76.blob.core.windows.net
+productionresultssa77.blob.core.windows.net
+productionresultssa78.blob.core.windows.net
+productionresultssa79.blob.core.windows.net
+productionresultssa80.blob.core.windows.net
+productionresultssa81.blob.core.windows.net
+productionresultssa82.blob.core.windows.net
+productionresultssa83.blob.core.windows.net
+productionresultssa84.blob.core.windows.net
+productionresultssa85.blob.core.windows.net
+productionresultssa86.blob.core.windows.net
+productionresultssa87.blob.core.windows.net
+productionresultssa88.blob.core.windows.net
+productionresultssa89.blob.core.windows.net
+productionresultssa90.blob.core.windows.net
+productionresultssa91.blob.core.windows.net
+productionresultssa92.blob.core.windows.net
+productionresultssa93.blob.core.windows.net
+productionresultssa94.blob.core.windows.net
+productionresultssa95.blob.core.windows.net
+productionresultssa96.blob.core.windows.net
+productionresultssa97.blob.core.windows.net
+productionresultssa98.blob.core.windows.net
+productionresultssa99.blob.core.windows.net
 #
 # Dynamic hosts (resolved from the doppler-provided environment at timer run,
 # NOT listed here): SENTRY_INGEST_DOMAIN, the NEXT_PUBLIC_SUPABASE_URL host,

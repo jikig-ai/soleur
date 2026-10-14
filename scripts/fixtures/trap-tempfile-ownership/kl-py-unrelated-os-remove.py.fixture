@@ -1,0 +1,8 @@
+import os
+import tempfile
+
+
+def build(cfg_path):
+    work = tempfile.mkdtemp(prefix="demo-")
+    os.remove(cfg_path)
+    return work

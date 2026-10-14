@@ -12,12 +12,20 @@ const {
   mockMessagesInsert,
   mockUpdateConversationFor,
   mockMirrorP0Deduped,
+  mockPersistAttachments,
 } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockFetchUserWorkspacePath: vi.fn(),
   mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
   mockUpdateConversationFor: vi.fn().mockResolvedValue({ ok: true }),
   mockMirrorP0Deduped: vi.fn(),
+  mockPersistAttachments: vi.fn(),
+}));
+
+// The shared attachment pipeline has its own suite (cc-attachment-pipeline);
+// here only the dispatcher's handling of its result is under test.
+vi.mock("@/server/attachment-pipeline", () => ({
+  persistAndDownloadAttachments: (...args: unknown[]) => mockPersistAttachments(...args),
 }));
 
 vi.mock("@/server/conversation-writer", async () => {
@@ -95,6 +103,15 @@ vi.mock("@/server/cc-reprovision", () => ({
   reprovisionWorkspaceOnDispatch: vi.fn().mockResolvedValue("ok"),
 }));
 
+// #9558 — resolveC4Eligible resolves installations + can MINT a token and
+// probe api.github.com: it must never fire on a support dispatch. Stubbed
+// false here (its factory-side consumers aren't exercised in this file) so
+// the not-called pin below can observe it.
+vi.mock("@/server/resolve-c4-eligible", () => ({
+  resolveC4FlagEnabled: vi.fn(async () => false),
+  resolveC4Eligible: vi.fn(async () => false),
+}));
+
 import {
   getPendingPromptRegistry,
   getCcStartSessionRateLimiter,
@@ -105,6 +122,8 @@ import {
   CC_OP_SLUGS,
 } from "@/server/cc-dispatcher";
 import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
+import { resolveC4Eligible } from "@/server/resolve-c4-eligible";
+import { ERR_ATTACHMENT_NOT_FOUND } from "@/server/error-messages";
 import {
   WORKSPACE_RECLAIMED_MESSAGE,
   WORKFLOW_END_USER_MESSAGES,
@@ -434,6 +453,50 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(errs.some((e) => e.message === WORKFLOW_END_USER_MESSAGES.worktree_enter_failed)).toBe(true);
     expect(errs.some((e) => e.message === WORKSPACE_RECLAIMED_MESSAGE)).toBe(false);
   });
+
+  // -------------------------------------------------------------------------
+  // #9558 — support persona must never touch the repo-lifecycle reprovision:
+  // reprovisionWorkspaceOnDispatch resolves installations and (on a missing /
+  // corrupt .git) mints a GitHub installation token + clones into the user's
+  // workspace. BOTH the awaited warm arm and the fire-and-forget cold publish
+  // arm are skipped — a regression that only gated the warm arm left the cold
+  // else firing on every support dispatch.
+  // -------------------------------------------------------------------------
+  for (const warm of [true, false]) {
+    it(`support persona never runs reprovisionWorkspaceOnDispatch (warm=${warm})`, async () => {
+      const sendToClient = vi.fn().mockReturnValue(true);
+      vi.mocked(reprovisionWorkspaceOnDispatch).mockClear();
+      vi.mocked(resolveC4Eligible).mockClear();
+      const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+      __setCcRunnerForTests({
+        dispatch: vi.fn(async () => {}),
+        hasActiveQuery: () => warm,
+        activeQueriesSize: () => (warm ? 1 : 0),
+        reapIdle: () => 0,
+        closeConversation: () => {},
+        respondToToolUse: () => false,
+        notifyAwaitingUser: () => {},
+        // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      } as any);
+
+      await dispatchSoleurGo({
+        persona: "support",
+        userId: "u1",
+        conversationId: "conv-support-reprov",
+        userMessage: "how do I invite a teammate?",
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient: sendToClient as unknown as (userId: string, message: WSMessage) => boolean,
+        persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+      });
+      // Let the fire-and-forget arm settle if a regression re-enabled it.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(vi.mocked(reprovisionWorkspaceOnDispatch)).not.toHaveBeenCalled();
+      // resolveC4Eligible mints + probes api.github.com — must not run either.
+      expect(vi.mocked(resolveC4Eligible)).not.toHaveBeenCalled();
+    });
+  }
 
   it("T19: dispatchSoleurGo surfaces errorCode=key_invalid when runner throws KeyInvalidError", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
@@ -1130,7 +1193,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // back to FALLBACK_LABELS.Read. Defense-in-depth against echoing
     // host-shaped paths to clients during a Supabase incident.
     expect(frame.label).not.toBe("Read");
-    expect(frame.label).toBe("Reading file...");
+    expect(frame.label).toBe("Reading file…");
     expect(frame.label).not.toContain(absolutePath);
   });
 
@@ -1325,6 +1388,56 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(userInsertCalls(mockMessagesInsert)).toHaveLength(0);
     // The read failure was mirrored to Sentry.
     expect(mockReportSilentFallback).toHaveBeenCalled();
+  });
+
+  describe("empty-turn guard (attachments-only message, every download failed)", () => {
+    const refs = [
+      {
+        storagePath: "u-att/conv-att/0f0e0d0c-0b0a-4908-8706-050403020100.md",
+        filename: "notes.md",
+        contentType: "text/markdown",
+        sizeBytes: 12,
+      },
+    ];
+
+    async function run(userMessage: string) {
+      const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+      const runner = makeAssistantPersistenceStubRunner({ onDispatch: () => {} });
+      __setCcRunnerForTests(runner);
+      const p = dispatchSoleurGo({
+        persona: "command_center",
+        userId: "u-att",
+        conversationId: "conv-att",
+        userMessage,
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient: vi.fn().mockReturnValue(true),
+        persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+        attachments: refs,
+      });
+      return { runner, p };
+    }
+
+    it("empty message + no attachmentContext rejects with ERR_ATTACHMENT_NOT_FOUND and never dispatches", async () => {
+      mockPersistAttachments.mockResolvedValue({ attachmentContext: undefined });
+      const { runner, p } = await run("   ");
+      await expect(p).rejects.toThrow(ERR_ATTACHMENT_NOT_FOUND);
+      expect(runner.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("control: empty message + an attachmentContext dispatches", async () => {
+      mockPersistAttachments.mockResolvedValue({ attachmentContext: "CTX-BLOCK" });
+      const { runner, p } = await run("");
+      await p;
+      expect(runner.dispatch).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(runner.dispatch.mock.calls[0]![0])).toContain("CTX-BLOCK");
+    });
+
+    it("control: non-empty message + no attachmentContext still dispatches (partial success)", async () => {
+      mockPersistAttachments.mockResolvedValue({ attachmentContext: undefined });
+      const { runner, p } = await run("please read this");
+      await p;
+      expect(runner.dispatch).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("T1: persists assistant message via supabase().from('messages').insert when onTextTurnEnd fires", async () => {

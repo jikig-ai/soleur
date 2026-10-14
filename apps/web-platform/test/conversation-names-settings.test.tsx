@@ -2,15 +2,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConversationNamesSettingsContent } from "@/components/settings/conversation-names-settings";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 function renderTeamSettings() {
+  // #9178 — the provider's GET is SWR-keyed and post-FCP-deferred by default.
+  // This page is where names are primary content (the real page passes
+  // defer={false}); the fresh per-render cache keeps one test's payload out
+  // of the next.
   return render(
-    <TeamNamesProvider>
-      <ConversationNamesSettingsContent />
-    </TeamNamesProvider>,
+    <SwrTestProvider>
+      <TeamNamesProvider defer={false}>
+        <ConversationNamesSettingsContent />
+      </TeamNamesProvider>
+    </SwrTestProvider>,
   );
 }
 
@@ -155,6 +162,26 @@ describe("ConversationNamesSettingsContent", () => {
     await waitFor(() => {
       const resetButtons = screen.getAllByLabelText(/reset.*icon/i);
       expect(resetButtons.length).toBe(1);
+    });
+  });
+});
+
+// Demoted from e2e/team-membership.e2e.ts (#9855) — the e2e asserted
+// GET /dashboard/settings/conversation-names is not 404 (route reachability
+// after the Phase 5.1 rename). At this layer the equivalent is the route's
+// page module existing and rendering its real tree.
+import ConversationNamesSettingsPage from "@/app/(dashboard)/dashboard/settings/conversation-names/page";
+
+describe("ConversationNamesSettingsPage (route reachability, demoted from e2e)", () => {
+  it("the /dashboard/settings/conversation-names page module renders", async () => {
+    render(
+      <SwrTestProvider>
+        <ConversationNamesSettingsPage />
+      </SwrTestProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("textbox").length).toBeGreaterThan(0);
     });
   });
 });

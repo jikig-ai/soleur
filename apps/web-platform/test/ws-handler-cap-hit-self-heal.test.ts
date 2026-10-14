@@ -1,7 +1,7 @@
 /**
  * Phase 4 (#stuck-active fix) — self-healing cap_hit ledger-divergence recovery.
  *
- * Plan: knowledge-base/project/plans/2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
  *
  * When `acquireSlot` returns `cap_hit` and the user's *visible* active
  * conversations (status in active/waiting_for_user, archived_at IS NULL)
@@ -116,6 +116,20 @@ vi.mock("../server/observability", () => ({
 }));
 
 import { tryLedgerDivergenceRecovery, sessions } from "../server/ws-handler";
+import {
+  registerLiveLoopProbe,
+  registerSession,
+  unregisterSession,
+} from "../server/agent-session-registry";
+
+// #9270 — the AC14 loop-protection predicate moved into the shared registry
+// (agent-session-registry.hasLiveAgentLoop), which consults the REAL
+// activeSessions map plus REGISTERED probes — a vi.mock on the cc-dispatcher
+// module export no longer reaches it. Mirror production's registration
+// (cc-dispatcher registers the real hasActiveCcQuery at module load) by
+// registering the MOCK as the probe: Set-deduped, so module scope is fine,
+// and each test's mockImplementation still steers the branch per-conv.
+registerLiveLoopProbe(mockHasActiveCcQuery);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -125,8 +139,8 @@ import { tryLedgerDivergenceRecovery, sessions } from "../server/ws-handler";
  * Captures runtime values the mock observes so tests can assert on the
  * production code's filter arguments (e.g. the stale-heartbeat cutoff
  * timestamp). Without this, the mock would silently accept any cutoff
- * value and a constant-value regression (e.g. `120` instead of
- * `120_000`) would not fail the test.
+ * value and a constant-value regression (e.g. `240` instead of
+ * `240_000`) would not fail the test.
  */
 interface MockCapture {
   /** Last `last_heartbeat_at` cutoff passed to `.lt(...)` on the
@@ -138,7 +152,7 @@ function setupSupabaseMock(args: {
   visibleConversations: Array<{ id: string }>;
   slotRows: Array<{ conversation_id: string }>;
   /**
-   * Slots whose `last_heartbeat_at < now() - STALE_HEARTBEAT_THRESHOLD_SECONDS`.
+   * Slots whose `last_heartbeat_at < now() - SLOT_STALENESS_THRESHOLD_SECONDS`.
    * A separate SELECT on `user_concurrency_slots` with an `.lt(...)` clause
    * must resolve to these rows. The first SELECT (orphan path, no `.lt()`)
    * resolves to `slotRows`. Defaults to `[]` so existing tests are
@@ -211,6 +225,11 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
     mockForEachSession.mockReset();
     mockHasActiveCcQuery.mockReset();
     mockHasActiveCcQuery.mockReturnValue(false);
+    // The REAL registry maps persist across tests too — unregister every
+    // live-loop injection below so a prior test's registerSession cannot
+    // leak a "live" flag into a sibling.
+    unregisterSession("user-1", "conv-real-1");
+    unregisterSession("user-1", "conv-live-1");
     // The module `sessions` map is real + shared across tests in this file;
     // clear it so a prior test's focused-session injection cannot leak into a
     // dead-socket test that assumes no focused conversation.
@@ -250,13 +269,11 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
   it("all slots reference visible conversations WITH a live loop → no recovery, didRecover: false", async () => {
     // Genuine cap_hit: every slot maps to a visible-active conversation that is
     // genuinely LIVE (has an agent loop). Post-AC14, "healthy" requires a live
-    // loop (or focus) — so mark conv-real-1 live. No divergence — recovery is a
+    // loop (or focus) — so mark conv-real-1 live via the REAL registry (the
+    // shared predicate reads the real map; mockForEachSession only steers
+    // ws-handler's own call sites now). No divergence — recovery is a
     // no-op and the caller should fall through to the existing close path.
-    mockForEachSession.mockImplementation(
-      (_u: string, convId: string, fn: (k: string, s: unknown) => unknown) => {
-        if (convId === "conv-real-1") fn("user-1:conv-real-1", {});
-      },
-    );
+    registerSession("user-1", "conv-real-1", {} as never);
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-real-1" }],
       slotRows: [{ conversation_id: "conv-real-1" }],
@@ -274,11 +291,7 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
   it("multiple orphan slots → releases each, reports orphanCount", async () => {
     // Two orphan slots + one real-visible slot with a live loop. Recovery must
     // release BOTH orphans and leave the real (live-loop-protected) slot alone.
-    mockForEachSession.mockImplementation(
-      (_u: string, convId: string, fn: (k: string, s: unknown) => unknown) => {
-        if (convId === "conv-real-1") fn("user-1:conv-real-1", {});
-      },
-    );
+    registerSession("user-1", "conv-real-1", {} as never);
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-real-1" }],
       slotRows: [
@@ -327,10 +340,10 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
 // 2026-05-06-fix-one-shot-conversation-limit-stuck-executing-plan.md)
 //
 // `tryLedgerDivergenceRecovery` widened to also reap slots whose
-// `last_heartbeat_at` lapsed past STUCK_ACTIVE_THRESHOLD_SECONDS even when
+// `last_heartbeat_at` lapsed past SLOT_STALENESS_THRESHOLD_SECONDS even when
 // the conversation row IS still visible (status='active', archived_at IS
-// NULL). This closes the 0-180s dead-end window between an old WS
-// supersession and the next reaper tick.
+// NULL). This closes the dead-end window between an old WS supersession and
+// the next reaper tick (240 s staleness + up to one 300 s poll ≈ ~9 min).
 // ---------------------------------------------------------------------------
 
 describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
@@ -342,6 +355,11 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     mockForEachSession.mockReset();
     mockHasActiveCcQuery.mockReset();
     mockHasActiveCcQuery.mockReturnValue(false);
+    // The REAL registry maps persist across tests too — unregister every
+    // live-loop injection below so a prior test's registerSession cannot
+    // leak a "live" flag into a sibling.
+    unregisterSession("user-1", "conv-real-1");
+    unregisterSession("user-1", "conv-live-1");
     // The module `sessions` map is real + shared across tests in this file;
     // clear it so a prior test's focused-session injection cannot leak into a
     // dead-socket test that assumes no focused conversation.
@@ -352,7 +370,7 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     // Reproduction of the May-6 dead-end: dashboard's stuck-Executing
     // conversation IS visible (status='active', archived_at NULL), so the
     // orphan check returns []. The widened helper must additionally
-    // detect that the slot's heartbeat is stale (>120s) and reap it.
+    // detect that the slot's heartbeat is stale (>240s) and reap it.
     const before = Date.now();
     const capture = setupSupabaseMock({
       visibleConversations: [{ id: "conv-stuck-active" }],
@@ -422,12 +440,9 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     // The load-bearing safety property (CTO ruling): a backgrounded-but-live
     // loop (e.g. after crash+reconnect, or paused on a review gate) has a live
     // registry entry and MUST NOT be reaped even though it is not the focused
-    // socket conversation. Simulate a live legacy loop for conv-live-1.
-    mockForEachSession.mockImplementation(
-      (_userId: string, _convId: string, fn: (k: string, s: unknown) => unknown) => {
-        fn("user-1:conv-live-1", {}); // one live session entry → hasLiveAgentLoop true
-      },
-    );
+    // socket conversation. Simulate a live legacy loop for conv-live-1 via the
+    // REAL registry — the shared predicate reads the real map.
+    registerSession("user-1", "conv-live-1", {} as never);
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-live-1" }],
       slotRows: [{ conversation_id: "conv-live-1" }],

@@ -28,6 +28,7 @@ Check if `knowledge-base/marketing/brand-guide.md` exists.
 **If it exists:** Read the document, present a brief summary of each section, and use the **AskUserQuestion tool** to ask: "Which section would you like to update?" with options for each `##` section plus "Full refresh" and "Done."
 
 For the selected section:
+
 1. Display current content
 2. Ask what should change
 3. Collect the updated content
@@ -70,6 +71,7 @@ Use the **AskUserQuestion tool** to offer the visual direction step:
 "Would you like to define visual direction (color palette, typography, style)?"
 
 Options:
+
 - **Yes, with AI exploration** -- Generate visual concepts using gemini-imagegen (requires GEMINI_API_KEY)
 - **Yes, text only** -- Describe visual direction without generating images
 - **Skip for now** -- Add placeholder text: "Not yet defined. Run brand architect to add visual direction."

@@ -109,8 +109,8 @@ Generalizes: when a constant must be replicated for performance/distribution rea
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-05-10-feat-gdpr-gate-skill-plan.md`
-- Spec: `knowledge-base/project/specs/feat-compliance-skills-eval/spec.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-10-feat-gdpr-gate-skill-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-compliance-skills-eval/spec.md`
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-026-pii-gate-as-plan-work-phase-skill-with-diff-hook.md`
 - Review fix commit: `a0d0b015`
 - Related learnings:

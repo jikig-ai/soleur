@@ -5,6 +5,7 @@ audit-log
 automation
 billing
 board
+browsing
 chat
 close
 command-palette

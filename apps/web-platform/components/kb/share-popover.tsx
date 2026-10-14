@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface SharePopoverProps {
   documentPath: string;
@@ -154,10 +156,15 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
       // Silently fail — user can retry.
     }
   }, [state.token]);
+  // feat-ui-action-feedback: pending contract on the destructive confirm —
+  // pendingRef closes the double-click window between click and first render.
+  const revokeAction = usePendingAction(revokeLink);
+  const generateAction = usePendingAction(generateLink);
 
   return (
     <div className="relative" ref={popoverRef}>
-      <button
+      <Button
+        variant="outlined"
         type="button"
         onClick={() => setOpen(!open)}
         className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary"
@@ -168,7 +175,7 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
           <line x1="12" y1="2" x2="12" y2="15" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         Share
-      </button>
+      </Button>
 
       {open && (
         <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-4 shadow-xl">
@@ -181,26 +188,32 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
               <p className="mb-3 text-sm text-soleur-text-secondary">
                 Generate a public link to share this document with anyone.
               </p>
-              <button
+              <Button
+                variant="gold"
                 type="button"
-                onClick={generateLink}
+                onClick={() => generateAction.run()}
+                loading={generateAction.pending}
+                loadingLabel="Generating"
                 className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-amber-400"
               >
                 Generate link
-              </button>
+              </Button>
             </div>
           )}
 
           {state.status === "error" && (
             <div>
-              <p className="mb-3 text-sm text-red-300">{SHARE_ERROR_MESSAGE}</p>
-              <button
+              <p role="alert" className="mb-3 text-sm text-red-300">{SHARE_ERROR_MESSAGE}</p>
+              <Button
+                variant="gold"
                 type="button"
-                onClick={generateLink}
+                onClick={() => generateAction.run()}
+                loading={generateAction.pending}
+                loadingLabel="Generating"
                 className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-amber-400"
               >
                 Try again
-              </button>
+              </Button>
             </div>
           )}
 
@@ -214,17 +227,19 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
                   value={state.url}
                   className="min-w-0 flex-1 truncate rounded border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5 text-xs text-soleur-text-primary"
                 />
-                <button
+                <Button
+                  variant="outlined"
                   type="button"
                   onClick={copyLink}
                   className="shrink-0 rounded border border-soleur-border-default px-3 py-1.5 text-xs text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary"
                 >
                   {state.copied ? "Copied!" : "Copy"}
-                </button>
+                </Button>
               </div>
               {!state.confirmRevoke ? (
                 <button
                   type="button"
+                  data-button-exempt="subtle destructive text-link — no Button variant covers text-only red styling"
                   onClick={() => setState((s) => ({ ...s, confirmRevoke: true }))}
                   className="text-xs text-red-400 hover:text-red-300"
                 >
@@ -236,20 +251,24 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
                     Anyone with this link will lose access. This cannot be undone.
                   </p>
                   <div className="flex gap-2">
-                    <button
+                    <Button
+                      variant="danger"
                       type="button"
-                      onClick={revokeLink}
+                      onClick={() => revokeAction.run()}
+                      loading={revokeAction.pending}
+                      loadingLabel="Revoking"
                       className="rounded bg-red-600 px-3 py-1 text-xs text-soleur-text-on-accent hover:bg-red-500"
                     >
                       Revoke
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="outlined"
                       type="button"
                       onClick={() => setState((s) => ({ ...s, confirmRevoke: false }))}
                       className="rounded border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-secondary hover:border-soleur-border-emphasized"
                     >
                       Cancel
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}

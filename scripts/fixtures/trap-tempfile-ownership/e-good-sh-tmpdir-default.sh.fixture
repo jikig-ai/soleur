@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+work="$(mktemp -d "${TMPDIR:-/tmp}/demo.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+base="$(mktemp -d)"
+rm -rf "$base"
+echo "mktemp -d /tmp/x.XXXXXX is only text here"

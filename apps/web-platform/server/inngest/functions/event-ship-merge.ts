@@ -34,6 +34,7 @@ import {
 import { inngest } from "@/server/inngest/client";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { reportSilentFallback } from "@/server/observability";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 const FUNCTION_NAME = "event-ship-merge";
 
@@ -187,6 +188,43 @@ export async function eventShipMergeHandler({
           `gh pr checkout ${prNumber} failed (exit ${checkoutResult.exitCode})`,
         );
       }
+
+      const gitEnv = {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        NODE_ENV: process.env.NODE_ENV,
+        GH_TOKEN: installationToken,
+      };
+      const unshallow = await spawnSimple(
+        "git",
+        ["fetch", "--unshallow", "--no-tags", "origin"],
+        { cwd: workspace.spawnCwd, env: gitEnv },
+      );
+      if (unshallow.exitCode !== 0) {
+        const complete = unshallow.stderr.includes(
+          "fatal: --unshallow on a complete repository does not make sense",
+        );
+        if (!complete) {
+          throw new Error(
+            `git fetch --unshallow origin failed (exit ${unshallow.exitCode}): ${redactToken(unshallow.stderr, installationToken)}`,
+          );
+        }
+      }
+
+      const mergeBase = await spawnSimple(
+        "git",
+        ["merge-base", "origin/main", "HEAD"],
+        { cwd: workspace.spawnCwd, env: gitEnv },
+      );
+      if (mergeBase.exitCode !== 0) {
+        throw new Error(
+          `no merge-base origin/main HEAD after unshallow (exit ${mergeBase.exitCode}): ${redactToken(mergeBase.stderr, installationToken)}`,
+        );
+      }
+      logger.info(
+        { fn: FUNCTION_NAME, prNumber, mergeBaseOk: true },
+        "ship-merge workspace has origin/main...HEAD merge-base",
+      );
     });
 
     const spawnResult = await step.run(
@@ -324,6 +362,7 @@ export const eventShipMerge = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   { event: "ship-merge.manual-trigger" },
   eventShipMergeHandler as unknown as Parameters<

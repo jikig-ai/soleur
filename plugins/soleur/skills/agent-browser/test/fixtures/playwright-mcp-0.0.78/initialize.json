@@ -1,0 +1,14 @@
+{
+  "result": {
+    "protocolVersion": "2025-06-18",
+    "capabilities": {
+      "tools": {}
+    },
+    "serverInfo": {
+      "name": "Playwright",
+      "version": "1.62.0-alpha-1783623505000"
+    }
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+}

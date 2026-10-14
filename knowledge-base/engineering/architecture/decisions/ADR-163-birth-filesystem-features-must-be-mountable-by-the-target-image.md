@@ -189,6 +189,7 @@ must not be read as "ADR-147 does not bind git-data", which is false for three o
 ## Consequences
 
 **Good.**
+
 - The birth can succeed. This was the only mechanical blocker on the rung-2 rehearsal, which is
   the only route that can produce the evidence the birth gate requires.
 - The invariant is now guarded at two layers with **AP-018's SHAPE, and its defining clause
@@ -205,6 +206,7 @@ must not be read as "ADR-147 does not bind git-data", which is false for three o
   shipping", rather than sailing through a one-entry denylist.
 
 **Bad, and load-bearing.**
+
 - **Selecting (a) is what puts a silent capability loss on the map.** From the *selected* state,
   the plausible "add enforcement later" move is `tune2fs -O quota` — measured to CLEAR `project`
   while also setting the unmountable bit. (c) has no such trap. This is the cost of (a)'s
@@ -219,6 +221,7 @@ must not be read as "ADR-147 does not bind git-data", which is false for three o
   which is an inference about the image, not an observation of it.
 
 **Neutral.**
+
 - The feature allowlist is deliberately **not** a set-equality fingerprint. Measured: the same
   `mkfs -O project` differs by two features (`orphan_file`, `metadata_csum_seed`) across one
   e2fsprogs patch release, and `ubuntu:24.04` is a moving tag. Equality would red on a benign

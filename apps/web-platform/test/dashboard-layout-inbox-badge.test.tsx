@@ -48,9 +48,14 @@ vi.mock("@/lib/supabase/client", () => {
   return {
     createClient: () => ({
       auth: {
+        // Phase 5: the conversations attention-count fetcher reads the user
+        // via getSession() (local cookie read) — return a real session so it
+        // proceeds to the count query.
         getSession: () =>
-          Promise.resolve({ data: { session: null }, error: null }),
-        // A real user id so the conversations count fetcher proceeds.
+          Promise.resolve({
+            data: { session: { user: { id: "user-1" } } },
+            error: null,
+          }),
         getUser: () =>
           Promise.resolve({ data: { user: { id: "user-1" } }, error: null }),
         signOut: vi.fn(() => Promise.resolve({ error: null })),
@@ -174,12 +179,21 @@ afterEach(() => {
 });
 
 async function renderLayout() {
-  const { default: DashboardLayout } = await import("@/app/(dashboard)/layout");
+  // Phase 6: the (dashboard) layout is an async server component feeding the
+  // client DashboardShell — tests render the shell directly with the props
+  // the layout used to resolve via mount effects (admin check + users row).
+  const { DashboardShell } = await import(
+    "@/app/(dashboard)/dashboard-shell"
+  );
   return render(
     <Wrap>
-      <DashboardLayout>
+      <DashboardShell
+        isAdmin={false}
+        userEmail={null}
+        subscriptionStatus={null}
+      >
         <div data-testid="page">page</div>
-      </DashboardLayout>
+      </DashboardShell>
     </Wrap>,
   );
 }

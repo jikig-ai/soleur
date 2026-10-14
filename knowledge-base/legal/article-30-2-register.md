@@ -9,7 +9,7 @@ related:
   - knowledge-base/legal/article-30-register.md
   - knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md
   - knowledge-base/legal/data-processing-agreements/anthropic.md
-  - knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md
 ---
 
 # Article 30(2) Register — Jikigai SARL as processor
@@ -32,7 +32,7 @@ Keeping both in one file would mean one document meaning two things, with two di
 
 | Art. 30(2) limb | Entry |
 |---|---|
-| **(a) Processor identity + contact** | **Processor:** Jikigai SARL, 25 rue de Ponthieu, 75008 Paris, France — RCS Paris 927 585 729. Contact: legal@jikigai.com. Representative (Art. 27): not applicable, established in the Union. DPO: none designated (see the 30(1) register §0 for the threshold analysis). |
+| **(a) Processor identity + contact** | **Processor:** Jikigai SARL, 25 rue de Ponthieu, 75008 Paris, France — RCS Paris 927 585 729. Contact: <legal@jikigai.com>. Representative (Art. 27): not applicable, established in the Union. DPO: none designated (see the 30(1) register §0 for the threshold analysis). |
 | **(a) Controller on whose behalf** | The alpha tester operating the repository `2my8r9ry2t-wq/Skouer` — a French venture-exploration database business. The tester is the controller of the repository content processed in the instructed limb. |
 | **(a) Sub-processor** | **Anthropic PBC** (US). Engaged here as **Jikigai's** sub-processor, because the run egressed under a Jikigai `ANTHROPIC_API_KEY` — the inverse of the ordinary BYOK case, where Anthropic is the *user's* processor and no Jikigai chain exists. **Art. 28(2) is not satisfied:** the controller has given no authorisation for this sub-processor and has received no notice of it. Closing that is condition C3 of the determination. |
 | **(b) Categories of processing** | Reading, analysing, transforming and generating repository content — source, configuration, schema, tests and documentation — during operator-assisted (guided-onboarding) Soleur agent runs performed at the controller's request. On the 2026-08-06 session specifically: repository-structure exploration, test-suite inventory, routing-logic review, and schema/migration design. **No database records were processed** and no data-bearing file (CSV, SQL dump, spreadsheet) was opened — see the reconstruction cited in `related`. **Residual, recorded not concealed:** a fixtures directory listing surfaced a French business-register (RNE) *pouvoirs* sample fixture containing company-officer records (filename not reproduced — the counterparty's repository is private and this one is public); there is no evidence its contents were read, and a read cannot be positively excluded. |
@@ -54,6 +54,18 @@ The instrument now being put in place is effective **forward**. A recital acknow
 - **Review cadence:** on every new operator-assisted engagement, on every new sub-processor, and quarterly alongside the Art. 30(1) register.
 - **Custodian:** Soleur CLO role.
 - **Precondition for tester #2:** re-run the controller/processor determination **before** onboarding a second tester under the same motion, not after. The determination's whole cost is avoided at tester #2 only if it is consulted in advance (determination C9).
+- **`P-2` — RESERVED, not yet open (#7349 B4).** Reserved for the **first arms-length (non-Jikigai)
+  owner of a beta-tester / prospect CRM store**. Until that trigger fires, the beta-CRM activity is
+  recorded as **PA-30 in the Art. 30(1) register**, where Jikigai is the controller: every store
+  owner today is Jikigai personnel, and Art. 30(2)(a) requires naming *"each controller on behalf
+  of which the processor is acting"* — which a Jikigai-only store cannot satisfy without Jikigai
+  naming itself as its own controller. **Do not open `P-2` by moving PA-30 here.** Art. 30(2)
+  carries no purposes, data-subject-category, personal-data-category, retention or DSAR limbs, so
+  the move would silently drop six of PA-30's limbs, and the mirror-drift gate passes a lockstep
+  deletion. When the trigger fires, an **Art. 28(3) instrument is owed before processing begins**;
+  open `P-2` fresh against that instrument and re-characterise PA-30's role sentence rather than
+  relocating it. Trigger already named as a re-evaluation condition in
+  `knowledge-base/legal/audits/2026-07-counsel-review-6172.md`.
 - **Outstanding counsel-review items:**
   1. Confirm that a separate Art. 30(2) file — rather than a section of the 30(1) register — is the right structure for this corpus.
   2. Confirm the Art. 30(5) analysis above (derogation not relied on because operator-assisted onboarding is designed to repeat).

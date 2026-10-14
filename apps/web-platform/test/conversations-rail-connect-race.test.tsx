@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, render, screen, waitFor, act, cleanup } from "@testing-library/react";
 import type { Conversation } from "@/lib/types";
 import { enrichConversationFixtures } from "./helpers/mock-supabase";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 // RED→GREEN regression for plan
 // 2026-06-16-fix-recent-conversations-rail-optimistic-insert.
@@ -80,17 +81,21 @@ const state: {
   messages: { conversation_id: string; role: string; content: string; leader_id: string | null; created_at: string }[];
   channels: ChannelMock[];
   activeRepoCalls: number;
+  rpcCalls: number;
   workspaceIdResponse: string | null;
   repoUrlResponse: string | null;
-  // Gate the FIRST active-repo fetch so workspaceId stays null while we fire an
-  // own-channel INSERT into the connect-race window. Call `releaseActiveRepo()`
-  // to let it resolve (workspaceId → id).
+  // Gate the FIRST active-repo fetch (the SWR entry fetchConversations now
+  // reads) so workspaceId stays null while we fire an own-channel INSERT into
+  // the connect-race window. Call `releaseActiveRepo()` to let it resolve
+  // (workspaceId → id).
   deferFirstActiveRepo: boolean;
   releaseActiveRepo: (() => void) | null;
-  // Gate the SECOND active-repo fetch (the scope-resolve backfill) so we can
-  // observe loading state WHILE the backfill is in flight (AC4b quiet-refetch).
-  deferBackfillActiveRepo: boolean;
-  releaseBackfillActiveRepo: (() => void) | null;
+  // Phase 5: fetchConversations no longer re-fetches /api/workspace/active-repo
+  // per call — it reads the settled SWR entry. To hold a backfill IN FLIGHT
+  // (AC4b quiet-refetch) we instead defer the SECOND list RPC; call
+  // `releaseRpc()` to let it resolve.
+  deferRpcOnCall: number | null;
+  releaseRpc: (() => void) | null;
 } = {
   convResultByCall: [],
   fallbackConvResult: [],
@@ -98,12 +103,13 @@ const state: {
   messages: [],
   channels: [],
   activeRepoCalls: 0,
+  rpcCalls: 0,
   workspaceIdResponse: WS_ID,
   repoUrlResponse: ACTIVE_REPO_URL,
   deferFirstActiveRepo: false,
   releaseActiveRepo: null,
-  deferBackfillActiveRepo: false,
-  releaseBackfillActiveRepo: null,
+  deferRpcOnCall: null,
+  releaseRpc: null,
 };
 
 function buildChannel(name: string): ChannelMock {
@@ -163,6 +169,13 @@ function buildMessagesChain() {
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
+      // Phase 5: the hook's auth read is getSession() (local cookie read).
+      getSession: vi.fn(() =>
+        Promise.resolve({
+          data: { session: { user: { id: "user-1" } } },
+          error: null,
+        }),
+      ),
       getUser: vi.fn(() =>
         Promise.resolve({ data: { user: { id: "user-1" } }, error: null }),
       ),
@@ -171,14 +184,25 @@ vi.mock("@/lib/supabase/client", () => ({
     // 125). Each RPC call consumes the next per-call conversations result
     // (preserving the connect-race call-index semantics) and attaches snippets
     // from state.messages exactly as the old messages-chain fed derivation.
+    // `deferRpcOnCall` holds the Nth call pending until releaseRpc() — the
+    // replacement for the retired "second active-repo fetch" gate (Phase 5:
+    // fetchConversations reads the settled SWR entry, so there IS no second
+    // route fetch to defer; the RPC is the deferrable leg of a backfill).
     rpc: vi.fn((name: string) => {
       if (name !== "list_conversations_enriched") {
         return Promise.resolve({ data: null, error: { message: `unexpected rpc: ${name}` } });
       }
-      return Promise.resolve({
+      state.rpcCalls += 1;
+      const body = () => ({
         data: enrichConversationFixtures(nextConvResult(), state.messages),
         error: null,
       });
+      if (state.deferRpcOnCall === state.rpcCalls) {
+        return new Promise((resolve) => {
+          state.releaseRpc = () => resolve(body());
+        });
+      }
+      return Promise.resolve(body());
     }),
     from: vi.fn((table: string) => {
       if (table === "conversations") return buildConversationsChain();
@@ -234,12 +258,13 @@ beforeEach(() => {
   state.messages = [];
   state.channels = [];
   state.activeRepoCalls = 0;
+  state.rpcCalls = 0;
   state.workspaceIdResponse = WS_ID;
   state.repoUrlResponse = ACTIVE_REPO_URL;
   state.deferFirstActiveRepo = false;
   state.releaseActiveRepo = null;
-  state.deferBackfillActiveRepo = false;
-  state.releaseBackfillActiveRepo = null;
+  state.deferRpcOnCall = null;
+  state.releaseRpc = null;
 
   vi.stubGlobal(
     "fetch",
@@ -257,14 +282,11 @@ beforeEach(() => {
               fellBackToSolo: false,
             }),
         };
+        // The SWR entry fetches once per mount (fresh SwrTestProvider cache);
+        // the FIRST call is the mount-time resolve fetchConversations awaits.
         if (state.activeRepoCalls === 1 && state.deferFirstActiveRepo) {
           return new Promise((resolve) => {
             state.releaseActiveRepo = () => resolve(body);
-          });
-        }
-        if (state.activeRepoCalls === 2 && state.deferBackfillActiveRepo) {
-          return new Promise((resolve) => {
-            state.releaseBackfillActiveRepo = () => resolve(body);
           });
         }
         return Promise.resolve(body);
@@ -277,6 +299,15 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
 });
+
+// Phase 5: the active-repo read rides the shared SWR entry
+// (swrKeys.workspaceActiveRepo) — wrap every render in a FRESH SWR cache so
+// one test's resolved route payload cannot leak into the next through the
+// module-level default cache (a stale ws-A entry would silently defeat the
+// ws-B containment test).
+const swrWrapper = ({ children }: { children: React.ReactNode }) => (
+  <SwrTestProvider>{children}</SwrTestProvider>
+);
 
 describe("useConversations — fresh-mount connect-race (Recent Conversations rail)", () => {
   it("AC1: the new conversation row renders in the REAL rail before completion (connect-race path)", async () => {
@@ -301,7 +332,7 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     ];
 
     const { ConversationsRail } = await import("@/components/chat/conversations-rail");
-    render(<ConversationsRail />);
+    render(<SwrTestProvider><ConversationsRail /></SwrTestProvider>);
 
     // Wait until the own channel exists (userId resolved, subscribed) while
     // active-repo is still deferred → workspaceId is still null.
@@ -334,7 +365,7 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     state.fallbackConvResult = [newRow];
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const view = renderHook(() => useConversations({ limit: 15 }));
+    const view = renderHook(() => useConversations({ limit: 15 }), { wrapper: swrWrapper });
 
     await waitFor(() => expect(state.channels.some((c) => c.name === "command-center-own")).toBe(true));
 
@@ -373,7 +404,7 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     state.fallbackConvResult = [newRow];
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const view = renderHook(() => useConversations({ limit: 15 }));
+    const view = renderHook(() => useConversations({ limit: 15 }), { wrapper: swrWrapper });
 
     await waitFor(() => expect(state.channels.some((c) => c.name === "command-center-own")).toBe(true));
 
@@ -392,17 +423,19 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
 
   it("AC4b: the scope-resolve backfill is a QUIET refetch — loading is never toggled while it is in flight", async () => {
     // The initial fetch returns a row and settles (loading=false). The null→id
-    // transition fires the backfill; defer its active-repo call so it stays in
-    // flight. A QUIET refetch must NOT flip loading back to true (which would
-    // re-enter the rail's !loading-gated empty/error branches and blank/flash
-    // the rail). A non-quiet refetch would flip loading=true → this fails.
+    // transition fires the backfill; defer its list RPC (Phase 5: the backfill
+    // reads the SETTLED SWR active-repo entry — there is no second route fetch
+    // to defer, the RPC is the in-flight leg) so it stays pending. A QUIET
+    // refetch must NOT flip loading back to true (which would re-enter the
+    // rail's !loading-gated empty/error branches and blank/flash the rail). A
+    // non-quiet refetch would flip loading=true → this fails.
     const row = makeRow({ id: "existing-row" });
     state.convResultByCall = [[row] /* initial returns the row */];
     state.fallbackConvResult = [row];
-    state.deferBackfillActiveRepo = true;
+    state.deferRpcOnCall = 2;
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const view = renderHook(() => useConversations({ limit: 15 }));
+    const view = renderHook(() => useConversations({ limit: 15 }), { wrapper: swrWrapper });
 
     // Initial fetch settles: row present, loading false.
     await waitFor(() =>
@@ -410,17 +443,18 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     );
     expect(view.result.current.loading).toBe(false);
 
-    // The backfill (call 2) dispatches via the null→id transition effect. Await
-    // it deterministically (waitFor, not a bare microtask flush — the effect may
-    // need more than one turn to schedule + run), then assert loading stayed
-    // false the whole time it was in flight (quiet). A non-quiet refetch would
-    // have flipped loading=true synchronously before the deferred await.
-    await waitFor(() => expect(state.activeRepoCalls).toBe(2)); // initial + backfill
+    // The backfill (RPC call 2) dispatches via the null→id transition effect.
+    // Await it deterministically (waitFor, not a bare microtask flush — the
+    // effect may need more than one turn to schedule + run), then assert
+    // loading stayed false the whole time it was in flight (quiet). A
+    // non-quiet refetch would have flipped loading=true synchronously before
+    // the deferred await.
+    await waitFor(() => expect(state.rpcCalls).toBe(2)); // initial + backfill
     expect(view.result.current.loading).toBe(false);
 
     // Release the backfill; the row stays and loading is still false.
     await act(async () => {
-      state.releaseBackfillActiveRepo?.();
+      state.releaseRpc?.();
     });
     await waitFor(() => expect(view.result.current.loading).toBe(false));
     expect(view.result.current.conversations.map((c) => c.id)).toContain("existing-row");
@@ -441,7 +475,7 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     state.fallbackConvResult = [existing];
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const view = renderHook(() => useConversations({ limit: 15 }));
+    const view = renderHook(() => useConversations({ limit: 15 }), { wrapper: swrWrapper });
     await waitFor(() =>
       expect(view.result.current.conversations.map((c) => c.id)).toEqual(["conv-existing"]),
     );
@@ -477,7 +511,7 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     const { useConversations, CONVERSATION_CREATED_EVENT } = await import(
       "@/hooks/use-conversations"
     );
-    const view = renderHook(() => useConversations({ limit: 15 }));
+    const view = renderHook(() => useConversations({ limit: 15 }), { wrapper: swrWrapper });
     await waitFor(() =>
       expect(view.result.current.conversations.map((c) => c.id)).toEqual(["conv-existing"]),
     );
@@ -508,7 +542,7 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     state.fallbackConvResult = [newRow];
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const view = renderHook(() => useConversations({ limit: 15 }));
+    const view = renderHook(() => useConversations({ limit: 15 }), { wrapper: swrWrapper });
     await waitFor(() => expect(state.channels.some((c) => c.name === "command-center-own")).toBe(true));
     await act(async () => {
       handlerOn("command-center-own", "INSERT")({ new: newRow, eventType: "INSERT" });
@@ -521,17 +555,21 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
       { timeout: 3000 },
     );
 
-    // active-repo calls so far: initial (1) + recovery backfill (2). A bare
-    // re-render must NOT trigger another backfill (transition-gated). The exact
-    // count is 2 (not 3) because the channel mock never fires the own-channel
+    // List reads so far: initial (1) + recovery backfill (2). A bare re-render
+    // must NOT trigger another backfill (transition-gated). The exact count is
+    // 2 (not 3) because the channel mock never fires the own-channel
     // SUBSCRIBED callback — in production that path adds its own backfill, but
-    // this test isolates the SCOPE-RESOLVE backfill. A third call here would be
-    // a real defect (an un-gated refetch); do not loosen this assertion.
-    const callsAfterRecovery = state.activeRepoCalls;
+    // this test isolates the SCOPE-RESOLVE backfill. Phase 5 note: the counter
+    // is the list_conversations_enriched RPC, not the active-repo route fetch —
+    // fetchConversations re-reads the settled SWR entry on every call, so the
+    // route fetch is 1-per-mount while each fetchConversations still costs one
+    // RPC. A third call here would be a real defect (an un-gated refetch); do
+    // not loosen this assertion.
+    const callsAfterRecovery = state.rpcCalls;
     expect(callsAfterRecovery).toBe(2);
     view.rerender();
     await Promise.resolve();
-    expect(state.activeRepoCalls).toBe(callsAfterRecovery);
+    expect(state.rpcCalls).toBe(callsAfterRecovery);
   });
 
   it("AC4: a second workspace's rail does NOT show this workspace's new conversation (F3 containment)", async () => {
@@ -542,7 +580,7 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
     state.fallbackConvResult = [];
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const view = renderHook(() => useConversations({ limit: 15 }));
+    const view = renderHook(() => useConversations({ limit: 15 }), { wrapper: swrWrapper });
     await waitFor(() => expect(view.result.current.loading).toBe(false));
 
     await act(async () => {
@@ -558,7 +596,7 @@ describe("useConversations — fresh-mount connect-race (Recent Conversations ra
   it("AC5: a completion UPDATE for a row NOT present does not resurrect it (map-only preserved)", async () => {
     state.fallbackConvResult = [];
     const { useConversations } = await import("@/hooks/use-conversations");
-    const view = renderHook(() => useConversations({ limit: 15 }));
+    const view = renderHook(() => useConversations({ limit: 15 }), { wrapper: swrWrapper });
     await waitFor(() => expect(view.result.current.loading).toBe(false));
 
     await act(async () => {

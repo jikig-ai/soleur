@@ -102,6 +102,8 @@ vi.mock("@/server/logger", () => ({
 }));
 
 vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(),
   captureException: vi.fn(),
   captureMessage: vi.fn(),
 }));
@@ -312,7 +314,9 @@ describe("POST /api/kb/upload", () => {
   // 4b. Size validation — 11 MB file succeeds (within 20 MB route limit)
   // Regression: uploads >10 MB were rejected because Next.js middleware
   // truncated the body at the default 10 MB cloneableBody limit, causing
-  // "Failed to parse body as FormData". Fix: experimental.middlewareClientMaxBodySize.
+  // "Failed to parse body as FormData". Fix: experimental.proxyClientMaxBodySize
+  // (renamed from experimental.middlewareClientMaxBodySize in next 16, #7591 — setting
+  // both is a hard error, so the old name is not a fallback).
   test("returns 201 for 11MB file (within 20MB limit)", async () => {
     setupFullMocks();
 
@@ -333,6 +337,39 @@ describe("POST /api/kb/upload", () => {
     const formData = createFormData(makeTestFile(), "../../etc/passwd");
     const res = await POST(createRequest(formData, "https://app.soleur.ai"));
     expect(res.status).toBe(400);
+  });
+
+  // 5b. Traversal the filesystem check cannot see (the mocked check PASSES):
+  // fetch's URL parser resolves `%2e%2e` as `..` and turns `\` into `/`.
+  test.each(["x/%2e%2e/%2e%2e", "x/.%2E", "x/./y", "x//y", "/x", "x/"])(
+    "returns 400 with zero GitHub calls for targetDir %j",
+    async (targetDir) => {
+      setupFullMocks();
+
+      const formData = createFormData(makeTestFile(), targetDir);
+      const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+      expect(res.status).toBe(400);
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    },
+  );
+
+  // 5c. A backslash or URL-meta character is sent as a literal name, never
+  // interpreted as a separator, query or fragment.
+  test("encodes each targetDir segment into the GitHub URL", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile(), "a\\..\\b/c?ref=main#x");
+    await POST(createRequest(formData, "https://app.soleur.ai"));
+    const urls = [
+      ...mockGithubApiGet.mock.calls.map((c) => c[1] as string),
+      ...mockGithubApiPost.mock.calls.map((c) => c[1] as string),
+    ];
+    expect(urls.length).toBeGreaterThan(0);
+    for (const u of urls) {
+      expect(u.startsWith("/repos/test-owner/test-repo/contents/knowledge-base/a%5C..%5Cb/c%3Fref%3Dmain%23x/")).toBe(true);
+      expect(u).not.toMatch(/[?#\\]/);
+    }
   });
 
   // 6. Null byte
@@ -735,6 +772,163 @@ describe("POST /api/kb/upload", () => {
       const formData = createFormData(okPdf, "uploads");
       const res = await POST(createRequest(formData, "https://app.soleur.ai"));
       expect(res.status).toBe(201);
+    });
+  });
+  // .md upload support: an allowlisted extension must survive every KB
+  // guard (lowercased stored name, 1 MB reader cap, reserved instruction
+  // files) — see lib/kb-constants.ts KB_UPLOAD_EXTENSIONS.
+  describe("markdown upload (.md)", () => {
+    const md = (name: string, size = 64, type = "text/markdown") =>
+      new File([new Uint8Array(size).fill(0x61)], name, { type });
+    const upload = (file: File) =>
+      POST(createRequest(createFormData(file, "uploads"), "https://app.soleur.ai"));
+
+    test("accepts onboarding-notes.md and commits it to the KB path", async () => {
+      setupFullMocks();
+      const res = await upload(md("onboarding-notes.md"));
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.path).toBe("knowledge-base/uploads/onboarding-notes.md");
+    });
+
+    test("accepts .md regardless of the browser-reported type (empty / octet-stream)", async () => {
+      for (const type of ["", "application/octet-stream"]) {
+        setupFullMocks();
+        const res = await upload(md("onboarding-notes.md", 64, type));
+        expect(res.status).toBe(201);
+      }
+    });
+
+    test("stores the extension lowercased (NOTES.MD -> NOTES.md)", async () => {
+      setupFullMocks();
+      const res = await upload(md("NOTES.MD"));
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.path).toBe("knowledge-base/uploads/NOTES.md");
+      const [, putPath] = mockGithubApiPost.mock.calls[0];
+      expect(putPath).toMatch(/\/contents\/knowledge-base\/uploads\/NOTES\.md$/);
+      expect(mockGithubApiPost.mock.calls[0][2].message).toBe("Upload NOTES.md via Soleur");
+    });
+
+    test("returns 413 for a .md over the 1 MB reader limit", async () => {
+      setupFullMocks();
+      const res = await upload(md("huge-notes.md", 1024 * 1024 + 1));
+      expect(res.status).toBe(413);
+      const body = await res.json();
+      expect(body.error).toMatch(/1\s?MB/);
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    });
+
+    test("accepts a .md at exactly 1 MB", async () => {
+      setupFullMocks();
+      const res = await upload(md("edge-notes.md", 1024 * 1024));
+      expect(res.status).toBe(201);
+    });
+
+    test("the 1 MB cap is .md-only (a 2 MB .txt still uploads)", async () => {
+      setupFullMocks();
+      const res = await upload(md("big-notes.txt", 2 * 1024 * 1024, "text/plain"));
+      expect(res.status).toBe(201);
+    });
+
+    test.each([
+      "CLAUDE.md",
+      "claude.md",
+      "CLAUDE.local.md",
+      "AGENTS.md",
+      "agents.md",
+      "GEMINI.md",
+      "skill.md",
+      "SKILL.MD",
+      "AGENTS.override.md",
+      "AGENT.md",
+      "QWEN.md",
+      "copilot-instructions.md",
+      "CLAUDE" + String.fromCharCode(0) + ".md",
+    ])("refuses reserved instruction file %j with 400", async (name) => {
+      setupFullMocks();
+      const res = await upload(md(name));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/reserved/i);
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    });
+
+    test("a reserved basename with a different suffix is not reserved (CLAUDE-notes.md)", async () => {
+      setupFullMocks();
+      const res = await upload(md("CLAUDE-notes.md"));
+      expect(res.status).toBe(201);
+    });
+
+    test("rejects a file literally named `md` (no extension) with 415", async () => {
+      setupFullMocks();
+      const res = await upload(md("md"));
+      expect(res.status).toBe(415);
+    });
+
+    test("rejects a file literally named `.md` (no basename) with 400", async () => {
+      setupFullMocks();
+      const res = await upload(md(".md"));
+      expect(res.status).toBe(400);
+    });
+
+    test("does not treat notes.md.exe / notes.md. as markdown", async () => {
+      for (const name of ["notes.md.exe", "notes.md."]) {
+        setupFullMocks();
+        const res = await upload(md(name));
+        expect(res.status).toBe(415);
+      }
+    });
+
+    test("an existing .md is a protected conflict: 409 with NO sha, so no overwrite is offered", async () => {
+      setupFullMocks();
+      mockGithubApiGet.mockResolvedValue({
+        sha: "authored-sha",
+        name: "onboarding-notes.md",
+        path: "knowledge-base/uploads/onboarding-notes.md",
+      });
+      const res = await upload(md("onboarding-notes.md"));
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body).toMatchObject({
+        code: "DUPLICATE_PROTECTED",
+        path: "knowledge-base/uploads/onboarding-notes.md",
+      });
+      expect(body).not.toHaveProperty("sha");
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    });
+
+    test("a .md upload carrying a sha (an overwrite attempt) is refused with 400 before any GitHub call", async () => {
+      setupFullMocks();
+      const fd = createFormData(md("vision.md"), "overview");
+      fd.append("sha", "authored-sha");
+      const res = await POST(createRequest(fd, "https://app.soleur.ai"));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/cannot be replaced/i);
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    });
+
+    test("a duplicate NON-markdown upload still offers the overwrite (409 DUPLICATE with sha)", async () => {
+      setupFullMocks();
+      mockGithubApiGet.mockResolvedValue({ sha: "txt-sha", name: "a.txt", path: "knowledge-base/uploads/a.txt" });
+      const res = await upload(md("a.txt", 8, "text/plain"));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ code: "DUPLICATE", sha: "txt-sha" });
+    });
+
+    test("only a markdown extension is lowercased (Photo.PNG keeps its stored name)", async () => {
+      setupFullMocks();
+      const res = await upload(new File([new Uint8Array(8)], "Photo.PNG", { type: "image/png" }));
+      expect(res.status).toBe(201);
+      expect((await res.json()).path).toBe("knowledge-base/uploads/Photo.PNG");
+    });
+
+    test(".exe still returns 415", async () => {
+      setupFullMocks();
+      const res = await upload(md("virus.exe", 2, "application/x-msdownload"));
+      expect(res.status).toBe(415);
     });
   });
 });

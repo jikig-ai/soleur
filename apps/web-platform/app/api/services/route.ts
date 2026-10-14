@@ -8,6 +8,7 @@ import { SlidingWindowCounter } from "@/server/rate-limiter";
 import type { Provider } from "@/lib/types";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 // Rate limit: 10 token submissions per minute per user
@@ -28,16 +29,13 @@ export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/services", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!tokenLimiter.isAllowed(user.id)) {
+  if (!tokenLimiter.isAllowed(userId)) {
     return NextResponse.json(
       { error: "Too many requests. Please wait before adding another service." },
       { status: 429 },
@@ -80,14 +78,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ valid: false, error: "Token validation failed" });
   }
 
-  const { encrypted, iv, tag } = encryptKey(token, user.id);
+  const { encrypted, iv, tag } = encryptKey(token, userId);
 
   const service = createServiceClient();
   const { error: dbError } = await service
     .from("api_keys")
     .upsert(
       {
-        user_id: user.id,
+        user_id: userId,
         provider,
         encrypted_key: encrypted.toString("base64"),
         iv: iv.toString("base64"),
@@ -102,12 +100,12 @@ export async function POST(request: Request) {
 
   if (dbError) {
     Sentry.withIsolationScope(() => {
-      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
       reportSilentFallback(dbError, {
         feature: "services",
         op: "store",
         message: "Failed to store service token",
-        extra: { userId: user.id, provider },
+        extra: { userId, provider },
       });
     });
     return NextResponse.json(
@@ -119,29 +117,27 @@ export async function POST(request: Request) {
   return NextResponse.json({ valid: true, provider });
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { data, error } = await supabase
     .from("api_keys")
     .select("provider, is_valid, validated_at, updated_at")
-    .eq("user_id", user.id);
+    .eq("user_id", userId);
 
   if (error) {
     Sentry.withIsolationScope(() => {
-      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
       reportSilentFallback(error, {
         feature: "services",
         op: "list",
         message: "Failed to list services",
-        extra: { userId: user.id },
+        extra: { userId },
       });
     });
     return NextResponse.json(
@@ -171,12 +167,9 @@ export async function DELETE(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/services", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -200,17 +193,17 @@ export async function DELETE(request: Request) {
   const { error: dbError } = await service
     .from("api_keys")
     .delete()
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("provider", provider);
 
   if (dbError) {
     Sentry.withIsolationScope(() => {
-      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
       reportSilentFallback(dbError, {
         feature: "services",
         op: "delete",
         message: "Failed to delete service token",
-        extra: { userId: user.id, provider },
+        extra: { userId, provider },
       });
     });
     return NextResponse.json(

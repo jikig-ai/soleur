@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
 import { decryptKey, encryptKey } from "../server/byok";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.BYOK_INTEGRATION_TEST === "1";
 
@@ -145,21 +146,20 @@ describe.skipIf(!INTEGRATION_ENABLED)("BYOK per-tenant isolation (integration)",
       // left user.id pointing at a pre-existing UUID while user.email still
       // held the synthetic string cannot slip through.
       const { data: check } = await service.auth.admin.getUserById(user.id);
-      if (check?.user?.email && check.user.email !== user.email) {
+      // Fail closed: a missing user or a NULL/empty email field must not
+      // skip the binding (NULL email is legal on auth.users rows).
+      if (!check?.user || check.user.email !== user.email) {
         throw new Error(
-          `afterAll: auth.users.email for ${user.id} (${check.user.email}) ` +
-            `does not match synthetic email ${user.email}`,
+          `afterAll: auth.users lookup for ${user.id} ` +
+            `(${check?.user?.email ?? "not found"}) does not match ` +
+            `synthetic email ${user.email}`,
         );
       }
-      // public.users cascades to api_keys; auth.users cascades to public.users.
-      const { error } = await service.auth.admin.deleteUser(user.id);
-      if (error && !/not found/i.test(error.message)) {
-        throw new Error(
-          `afterAll: deleteUser(${user.email}) failed: ${error.message}`,
-        );
-      }
+      // FK-reverse helper: trigger-created workspace_members rows are
+      // ON DELETE RESTRICT, so a raw deleteUser 500s (#9994).
+      await tearDownTenantUser(service, user);
     }
-  }, 30_000);
+  }, 60_000);
 
   test("AC 3.a — user A's seeded ciphertext is visible to the service client", async () => {
     const { data, error } = await service

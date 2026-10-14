@@ -51,9 +51,9 @@ function fullRegistry(): RegistryFunction[] {
 }
 
 describe("cron-inngest-cron-watchdog — manifest", () => {
-  it("manifest is non-empty and includes the two regressed monitors", () => {
+  it("manifest is non-empty and lists the crons these tests exercise", () => {
     expect(EXPECTED_CRON_FUNCTIONS.length).toBeGreaterThan(0);
-    expect(EXPECTED_CRON_FUNCTIONS).toContain("cron-gh-pages-cert-state");
+    expect(EXPECTED_CRON_FUNCTIONS).toContain("cron-oauth-probe");
     expect(EXPECTED_CRON_FUNCTIONS).toContain("cron-community-monitor");
   });
 
@@ -69,8 +69,8 @@ describe("cron-inngest-cron-watchdog — manualTriggerEventFor", () => {
     expect(manualTriggerEventFor("cron-community-monitor")).toBe(
       "cron/community-monitor.manual-trigger",
     );
-    expect(manualTriggerEventFor("cron-gh-pages-cert-state")).toBe(
-      "cron/gh-pages-cert-state.manual-trigger",
+    expect(manualTriggerEventFor("cron-oauth-probe")).toBe(
+      "cron/oauth-probe.manual-trigger",
     );
   });
 });
@@ -84,11 +84,11 @@ describe("cron-inngest-cron-watchdog — classifyRegistry", () => {
 
   it("function slug absent from registry → MISSING / H9a (Scenario 2)", () => {
     const registry = fullRegistry().filter(
-      (f) => !f.slug.endsWith("-cron-gh-pages-cert-state"),
+      (f) => !f.slug.endsWith("-cron-oauth-probe"),
     );
     const results = classifyRegistry(registry);
-    const cert = results.find((r) => r.fnId === "cron-gh-pages-cert-state");
-    expect(cert?.status).toBe("MISSING");
+    const probe = results.find((r) => r.fnId === "cron-oauth-probe");
+    expect(probe?.status).toBe("MISSING");
   });
 
   it("function present but no cron-type trigger → UNPLANNED / H9b (Scenario 3)", () => {
@@ -138,10 +138,10 @@ describe("cron-inngest-cron-watchdog — planHeal", () => {
 
   it("MISSING → recorded as missing, not a manual-trigger", () => {
     const results = classifyRegistry(
-      fullRegistry().filter((f) => !f.slug.endsWith("-cron-gh-pages-cert-state")),
+      fullRegistry().filter((f) => !f.slug.endsWith("-cron-oauth-probe")),
     );
     const plan = planHeal(results);
-    expect(plan.missingFnIds).toEqual(["cron-gh-pages-cert-state"]);
+    expect(plan.missingFnIds).toEqual(["cron-oauth-probe"]);
     expect(plan.manualTriggerEvents).toEqual([]);
     expect(plan.defectCount).toBe(1);
   });
@@ -177,7 +177,7 @@ describe("cron-inngest-cron-watchdog — restart cooldown (AC6, non-thrashing)",
 
   it("two consecutive H9a ticks within cooldown → exactly one restart attempt", () => {
     // Tick 1: no prior restart, a function is MISSING → restart.
-    const missing = ["cron-gh-pages-cert-state"];
+    const missing = ["cron-oauth-probe"];
     const tick1At = NOW;
     expect(shouldRestart(missing, null, tick1At)).toBe(true);
 
@@ -209,8 +209,8 @@ describe("cron-inngest-cron-watchdog — defect-streak backstop (#4652)", () => 
   });
 
   it("nextDefectStreaks: starts a fresh streak at 1 with no prior state", () => {
-    expect(nextDefectStreaks(undefined, ["cron-gh-pages-cert-state"])).toEqual({
-      "cron-gh-pages-cert-state": 1,
+    expect(nextDefectStreaks(undefined, ["cron-oauth-probe"])).toEqual({
+      "cron-oauth-probe": 1,
     });
   });
 
@@ -222,11 +222,11 @@ describe("cron-inngest-cron-watchdog — defect-streak backstop (#4652)", () => 
     // defect = MISSING ∪ UNPLANNED — a MISSING fn accrues a streak exactly like
     // an UNPLANNED one, so neither escalates to restart on the first tick.
     const next = nextDefectStreaks(undefined, [
-      "cron-gh-pages-cert-state", // MISSING (H9a)
+      "cron-oauth-probe", // MISSING (H9a)
       "cron-community-monitor", // UNPLANNED (H9b)
     ]);
     expect(next).toEqual({
-      "cron-gh-pages-cert-state": 1,
+      "cron-oauth-probe": 1,
       "cron-community-monitor": 1,
     });
   });
@@ -242,11 +242,11 @@ describe("cron-inngest-cron-watchdog — defect-streak backstop (#4652)", () => 
   it("MISSING (H9a) does NOT escalate on the first tick — polling gets a grace window", () => {
     // Regression guard for the #4652 demotion: pre-#4652 a MISSING fn went
     // straight to the restart path on tick 1. Now it must accrue a streak first.
-    const s1 = nextDefectStreaks(undefined, ["cron-gh-pages-cert-state"]);
+    const s1 = nextDefectStreaks(undefined, ["cron-oauth-probe"]);
     expect(escalatedDefectFnIds(s1)).toEqual([]);
     // The grace-th consecutive defective tick (threshold=2) escalates to backstop.
-    const s2 = nextDefectStreaks(s1, ["cron-gh-pages-cert-state"]);
-    expect(escalatedDefectFnIds(s2)).toEqual(["cron-gh-pages-cert-state"]);
+    const s2 = nextDefectStreaks(s1, ["cron-oauth-probe"]);
+    expect(escalatedDefectFnIds(s2)).toEqual(["cron-oauth-probe"]);
   });
 
   it("escalation lifecycle: a single defective tick does NOT escalate; the grace-th tick does", () => {
@@ -274,17 +274,23 @@ describe("cron-inngest-cron-watchdog — resolveInngestHost", () => {
     expect(resolveInngestHost("")).toBe("http://10.0.1.40:8288");
   });
 
-  // Parity guard: the fallback host must equal the INNGEST_BASE_URL that
-  // ci-deploy.sh injects into the web-platform container. If that env value
-  // changes (port bump, host form), the dormant fallback would silently point
-  // at the wrong loopback during a partial-env restart.
-  it("INNGEST_HOST_FALLBACK matches the INNGEST_BASE_URL ci-deploy.sh sets", () => {
-    const ciDeploy = readFileSync(
-      resolve(__dirname, "../../../infra/ci-deploy.sh"),
-      "utf8",
-    );
-    const m = ciDeploy.match(/INNGEST_BASE_URL=(http:\/\/[^\s\\]+)/);
-    expect(m).not.toBeNull();
-    expect(resolveInngestHost(undefined)).toBe(m![1]);
+  // Parity guard: the fallback host must equal EVERY INNGEST_BASE_URL the
+  // web-platform container is started with — ci-deploy.sh's canary and prod
+  // `docker run` sites AND cloud-init.yml's first-boot run. Every site is read
+  // (not the first match) and the site count is pinned, so a repoint or revert
+  // that misses one site — or deletes one — goes red and names the file.
+  it("INNGEST_HOST_FALLBACK matches every INNGEST_BASE_URL in ci-deploy.sh and cloud-init.yml", () => {
+    const SITE_RE = /^\s*-e INNGEST_BASE_URL=([^\s\\]+)/gm;
+    const fallback = resolveInngestHost(undefined);
+    for (const [file, count] of [
+      ["ci-deploy.sh", 2],
+      ["cloud-init.yml", 1],
+    ] as const) {
+      const src = readFileSync(resolve(__dirname, "../../../infra", file), "utf8");
+      const values = [...src.matchAll(SITE_RE)].map((m) => m[1]);
+      expect(values, `${file} INNGEST_BASE_URL sites`).toEqual(
+        Array(count).fill(fallback),
+      );
+    }
   });
 });

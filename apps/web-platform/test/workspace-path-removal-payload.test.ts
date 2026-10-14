@@ -56,6 +56,8 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 }));
 
 vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(),
   withIsolationScope: (cb: () => void) => cb(),
   getCurrentScope: () => ({ setUser: () => {} }),
 }));

@@ -65,11 +65,25 @@ export default defineConfig({
     // Server for public page tests (original config — fake unreachable Supabase URL)
     {
       command: `npm run dev`,
-      port: PUBLIC_PORT,
-      timeout: 120_000,
+      // `url:` readiness, not `port:`. A TCP check calls a server "ready" the
+      // moment it listens, so a first compile of app/layout.tsx that 5xx's let
+      // the suite start and fail one test at a time (64 reds, ~14 min). The
+      // URL poll treats a 5xx as not ready and fails here, at the timeout.
+      // The poll triggers the cold compile, hence 180s rather than 120s.
+      // Playwright starts the two entries one after the other, each with its
+      // own deadline, so the worst case for a broken compile is 2 x 180s (the
+      // e2e job allows 20 min). /login renders app/layout.tsx and nothing
+      // behind auth, so this covers the root-layout compile only; a failure
+      // in (dashboard)/ or the auth path still shows up per test.
+      url: `http://localhost:${PUBLIC_PORT}/login`,
+      timeout: 180_000,
       reuseExistingServer: !process.env.CI,
       env: {
         PORT: String(PUBLIC_PORT),
+        // Each dev server needs its own distDir: Next 16 locks `<distDir>/lock`
+        // and refuses a second server that shares it, keyed on the directory and
+        // not the port. Nested under `.next/` so .gitignore still covers it.
+        NEXT_DIST_DIR: ".next/e2e-public",
         NEXT_PUBLIC_SUPABASE_URL: "https://test.supabase.co",
         NEXT_PUBLIC_SUPABASE_ANON_KEY: "test-anon-key",
         SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
@@ -78,11 +92,13 @@ export default defineConfig({
     // Server for authenticated tests (mock Supabase for middleware auth)
     {
       command: `npm run dev`,
-      port: AUTH_PORT,
-      timeout: 120_000,
+      // Same readiness contract as the public server above (url, 180s).
+      url: `http://localhost:${AUTH_PORT}/login`,
+      timeout: 180_000,
       reuseExistingServer: !process.env.CI,
       env: {
         PORT: String(AUTH_PORT),
+        NEXT_DIST_DIR: ".next/e2e-auth",
         NEXT_PUBLIC_SUPABASE_URL: MOCK_SUPABASE_URL,
         NEXT_PUBLIC_SUPABASE_ANON_KEY: "test-anon-key",
         SUPABASE_URL: MOCK_SUPABASE_URL,

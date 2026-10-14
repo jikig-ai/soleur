@@ -1,0 +1,273 @@
+[
+  {
+    "number": 9101,
+    "title": "ready run in flight, draft-era red test",
+    "headRefName": "feat-9101",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T10:00:00Z"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "startedAt": "2026-10-09T10:00:00Z"
+      },
+      {
+        "name": "test-scripts",
+        "status": "IN_PROGRESS",
+        "conclusion": null,
+        "startedAt": "2026-10-09T11:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9102,
+    "title": "readied, no ready run",
+    "headRefName": "feat-9102",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T10:00:00Z"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "startedAt": "2026-10-09T10:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9103,
+    "title": "readied, stalled",
+    "headRefName": "feat-9103",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T10:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9104,
+    "title": "decided: older red test row, newer green test row",
+    "headRefName": "feat-9104",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T10:00:00Z"
+      },
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "startedAt": "2026-10-09T11:00:00Z"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "startedAt": "2026-10-09T11:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9105,
+    "title": "decided: real red test",
+    "headRefName": "feat-9105",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T11:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9106,
+    "title": "fork run awaiting approval",
+    "headRefName": "feat-9106",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T10:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9107,
+    "title": "never a draft, red test",
+    "headRefName": "feat-9107",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T11:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9108,
+    "title": "draft with the red test by design",
+    "headRefName": "feat-9108",
+    "isDraft": true,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T10:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9109,
+    "title": "conflicting and no ready run",
+    "headRefName": "feat-9109",
+    "isDraft": false,
+    "mergeable": "CONFLICTING",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T10:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9110,
+    "title": "deps PR, in flight, plus a real lockfile failure",
+    "headRefName": "feat-9110",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [
+      {
+        "name": "dependencies"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T10:00:00Z"
+      },
+      {
+        "name": "lockfile-sync",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-10-09T10:00:00Z"
+      }
+    ]
+  },
+  {
+    "number": 9111,
+    "title": "all green, no test row failing",
+    "headRefName": "feat-9111",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-10-01T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "startedAt": "2026-10-09T11:00:00Z"
+      }
+    ]
+  }
+]

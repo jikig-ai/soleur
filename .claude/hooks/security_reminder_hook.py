@@ -33,6 +33,25 @@ except ImportError:  # pragma: no cover - platform fallback
 # schema mirror: .claude/hooks/lib/incidents.sh (keep in sync)
 SCHEMA_VERSION = 1
 
+# Devin→Claude tool-kind map (issue #8205). Mirror of
+# lib/hook-tool-kind.sh — keep in sync; hook-tool-kind.test.sh pins the two.
+_TOOL_KIND = {
+    "exec": "Bash",
+    "write": "Write",
+    "edit": "Edit",
+    "multi_edit": "MultiEdit",
+    "notebook_edit": "NotebookEdit",
+    "apply_patch": "Write",
+    "ask_user_question": "AskUserQuestion",
+    "run_subagent": "Agent",
+    "skill": "Skill",
+}
+
+
+def tool_kind(tool_name: str) -> str:
+    """Claude-canonical kind of a wire tool name; unmapped names pass through."""
+    return _TOOL_KIND.get(tool_name, tool_name)
+
 # os.path.realpath canonicalizes through symlinks so the python emitter
 # and the bash emitter (incidents.sh uses `cd -P && pwd -P`) resolve to
 # the SAME inode when `.claude/` is symlinked into the project. `flock`
@@ -194,7 +213,7 @@ def main() -> int:
 
     try:
         tool_name = payload.get("tool_name", "")
-        if tool_name != "Edit":
+        if tool_kind(tool_name) != "Edit":
             return 0
 
         tool_input = payload.get("tool_input") or {}
@@ -223,6 +242,7 @@ def main() -> int:
 
         response = {
             "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": build_advisory(sink, file_path),
             }

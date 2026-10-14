@@ -89,7 +89,7 @@ Order of events (load-bearing: the redaction sentinel scans this table; the Acto
 - **zot** — self-hosted OCI registry (ADR-096); GHCR dark-launch fallback covers serving.
 - **GitHub Actions** — `apply-web-platform-infra.yml` (now carries the `registry-host-replace` dispatch job).
 - **Claude Code (agent)** — diagnosis, fix authoring, review, post-merge redeploy.
-- **Operator (ops@jikigai.com)** — intended alert recipient.
+- **Operator (<ops@jikigai.com>)** — intended alert recipient.
 
 ## Detection (+ MTTD)
 
@@ -120,7 +120,7 @@ Two-part fix shipped in PR #6238:
   `zot-disk-heartbeat.sh` ping cron (arming the heartbeat) and activates the `storage.retention`
   pruning from #6210. It gives the registry host the CI reprovision escape hatch it previously
   lacked (the inngest host already had one).
-- **Fix B — `betteruptime_team_member.ops`.** ops@jikigai.com added as the IaC-managed free-tier
+- **Fix B — `betteruptime_team_member.ops`.** <ops@jikigai.com> added as the IaC-managed free-tier
   alert recipient, so future incidents email the operator instead of only the account owner.
 
 ## Recovery verification
@@ -222,5 +222,5 @@ Every action item and follow-up so this incident cannot recur.
 
 | Issue | Action | Status |
 |---|---|---|
-| #6241 | Operator-only: ops@jikigai.com must ACCEPT the Better Stack team-member invite (a click in ops@'s own inbox; `betteruptime_team_member` is inert until accepted). Re-evaluate after the next Better Stack incident fires — confirm ops@ received the email. | open |
+| #6241 | Operator-only: <ops@jikigai.com> must ACCEPT the Better Stack team-member invite (a click in ops@'s own inbox; `betteruptime_team_member` is inert until accepted). Re-evaluate after the next Better Stack incident fires — confirm ops@ received the email. | open |
 | #6242 | Recurrence-prevention: audit whether other dedicated hosts (git-data) shipped a heartbeat/monitor without a redeploy path — same failure class as this incident. **Done:** audit found 0 hosts in the live bug-class state (only `registry_disk_prd` was, now fixed); the class is now mechanically enforced by `plugins/soleur/test/heartbeat-reprovision-parity.test.ts` (ADR-103), and git-data's missing reprovision path was added (`git-data-host-replace`). | resolved |

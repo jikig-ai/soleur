@@ -1,10 +1,13 @@
 [
   "fix",
   "drain",
+  "drain-prs",
   "clo-attestation",
   "review",
   "legal-threshold",
   "incident",
   "implement",
+  "questionnaire",
+  "glossary",
   "default"
 ]

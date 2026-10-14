@@ -585,20 +585,48 @@ async function notifyOpsEmail(result: ProbeResult, runUrl: string): Promise<void
     `<p><a href="${runUrl}">Run log</a></p>`,
     `<p>Runbook: <a href="${runbookUrl}">oauth-probe-failure.md</a></p>`,
   ].join("\n");
-  await fetch("https://api.resend.com/emails", {
+  // `from` must sit on a Resend-VERIFIED domain. jikigai.com carries neither
+  // `resend._domainkey` nor `send.` records, so a send from it is rejected by
+  // the vendor outright -- this path had been dead since the GHA->Inngest port
+  // silently changed the sender the composite action above uses.
+  const resp = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: "ops@jikigai.com",
+      from: "Soleur Ops <noreply@soleur.ai>",
       to: ["ops@jikigai.com"],
       subject: `[Soleur Ops] OAuth probe failure: ${result.failureMode}`,
       html,
     }),
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
+  if (!resp.ok) {
+    // Discarding this response is what made the dead sender invisible: the
+    // alert channel reported success while the vendor refused every message.
+    //
+    // The BODY carries the reason; the status does not. Resend answers an
+    // unverified sender, a restricted key and a rate limit all in the 4xx
+    // range, and this very workstream already misread a 401 as evidence of an
+    // unverified domain. Truncated because it is vendor-generated text.
+    const detail = await resp.text().catch(() => "");
+    reportSilentFallback(new Error(`Resend POST returned ${resp.status}`), {
+      feature: "cron-oauth-probe",
+      op: "notify-ops-email",
+      message: "Resend email POST failed",
+      // `resend_status` is a TAG, not `extra`: Sentry alert rules can only
+      // filter on tags, and 4xx-permanent vs 5xx-transient is the whole
+      // triage decision. Low cardinality, so the tag budget is safe.
+      tags: { resend_status: String(resp.status) },
+      extra: {
+        fn: "cron-oauth-probe",
+        statusCode: resp.status,
+        detail: detail.slice(0, 512),
+      },
+    });
+  }
 }
 
 export async function cronOauthProbeHandler({
@@ -679,7 +707,7 @@ export async function cronOauthProbeHandler({
         const e = err as Error;
         reportSilentFallback(e, {
           feature: "cron-oauth-probe",
-          op: "notifyOpsEmail",
+          op: "notify-ops-email",
           message: "Resend HTTP POST failed",
           extra: { fn: "cron-oauth-probe", failureMode: result.failureMode },
         });

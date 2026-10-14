@@ -1,0 +1,490 @@
+J0 S7c: base is the port of the guard derivation (S7b state)
+  BASE: 66 pairs, 120 producer triples (the guard prints 66 and 120 at 0aae3f8680)
+  R1: +29 pairs, +42 triples over base; 27 test files; lost vs base: 0
+    by verb: {'curl': 16, 'doppler': 12, 'terraform': 1}
+  R2: +1 pairs, +3 triples over base; 1 test files; lost vs base: 0
+    by verb: {'docker': 1}
+  R3: +47 pairs, +70 triples over base; 42 test files; lost vs base: 0
+    by verb: {'curl': 14, 'doppler': 12, 'logger': 5, 'timeout': 2, 'jq': 2, 'terraform': 1, 'awk': 1, 'tar': 1, 'psql': 1, 'lexer': 1, 'ready': 1, 'bunfig.local.toml': 1}
+  R4a: +18 pairs, +30 triples over base; 16 test files; lost vs base: 0
+    by verb: {'died': 4, 'gh': 4, 'jq': 3, 'curl': 3, 'timeout': 2, 'grep': 1, 'git': 1}
+  R4b: +10 pairs, +12 triples over base; 10 test files; lost vs base: 0
+    by verb: {'died': 4, 'gh': 4, 'grep': 1, 'jq': 1}
+  R4c: +18 pairs, +30 triples over base; 16 test files; lost vs base: 0
+    by verb: {'died': 4, 'gh': 4, 'jq': 3, 'curl': 3, 'timeout': 2, 'grep': 1, 'git': 1}
+  R5a: +2 pairs, +2 triples over base; 1 test files; lost vs base: 0
+    by verb: {'cryptsetup': 1, 'curl': 1}
+  R5b: +6 pairs, +10 triples over base; 4 test files; lost vs base: 0
+    by verb: {'grep': 1, 'sed': 1, 'od': 1, 'openssl': 1, 'sha256sum': 1, 'cryptsetup': 1}
+  R6: +0 pairs, +0 triples over base; 0 test files; lost vs base: 0
+    by verb: {}
+  R7: +7 pairs, +8 triples over base; 7 test files; lost vs base: 0
+    by verb: {'jq': 4, 'awk': 2, 'perl': 1}
+  R8: +0 pairs, +1 triples over base; 0 test files; lost vs base: 0
+    by verb: {}
+  U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8: +57 pairs, +81 triples over base; 48 test files; lost vs base: 0
+    by verb: {'curl': 17, 'doppler': 12, 'jq': 5, 'died': 4, 'gh': 4, 'awk': 3, 'grep': 2, 'docker': 2, 'cryptsetup': 2, 'perl': 1, 'terraform': 1, 'sed': 1}
+  U2 = U1+R3: +90 pairs, +142 triples over base; 66 test files; lost vs base: 0
+    by verb: {'curl': 17, 'doppler': 15, 'jq': 7, 'gh': 5, 'logger': 5, 'python3': 4, 'died': 4, 'awk': 4, 'set': 2, 'grep': 2, 'perl': 2, 'systemctl': 2}
+  ALL: +100 pairs, +166 triples over base; 71 test files; lost vs base: 0
+    by verb: {'curl': 20, 'doppler': 15, 'jq': 9, 'gh': 5, 'logger': 5, 'python3': 4, 'docker': 4, 'died': 4, 'awk': 4, 'set': 2, 'grep': 2, 'perl': 2}
+NEW PAIRS PER ARM (test file<TAB>verb<TAB>producer files)
+R1	new-pair	.github/scripts/test/fixtures-validate-infra-templates.sh	terraform	.github/scripts/validate-infra-templates.sh
+R1	new-pair	apps/web-platform/infra/doppler-download-error-channel.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	apps/web-platform/infra/git-data-cutover-access.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	apps/web-platform/infra/git-data-liveness.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+R1	new-pair	apps/web-platform/infra/git-data-root-key.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-terraform-drift.yml,apps/web-platform/infra/cloud-init-git-data.yml
+R1	new-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	curl	.github/workflows/scheduled-inngest-health.yml
+R1	new-producer-for-listed-pair	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	apps/web-platform/infra/web-probes-token-rotation.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	apps/web-platform/scripts/postgrest-reload-schema.test.sh	curl	apps/web-platform/scripts/postgrest-reload-schema.sh
+R1	new-pair	apps/web-platform/test/infra/ghcr-blocked-alert.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	curl	plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+R1	new-pair	plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+R1	new-pair	scripts/check-cloudflare-token-drift.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+R1	new-pair	scripts/check-cloudflare-token-drift.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	scripts/check-web-host-escrow-config.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	scripts/inngest-probe-heartbeat-feeder.test.sh	curl	scripts/inngest-probe-heartbeat-feeder.sh
+R1	new-pair	scripts/web-host-reboot.test.sh	curl	.github/workflows/inngest-provision-rehearsal.yml,scripts/web2-rebirth.sh
+R1	new-pair	scripts/web2-rebirth-recovery-check.test.sh	curl	scripts/web2-rebirth-recovery-check.sh
+R1	new-pair	scripts/web2-rebirth.test.sh	curl	scripts/web2-rebirth.sh
+R1	new-pair	tests/scripts/test-argv-bearer-sweep.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-inngest-health.yml,.github/workflows/scheduled-terraform-drift.yml,plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+R1	new-pair	tests/scripts/test-argv-bearer-sweep.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-producer-for-listed-pair	tests/scripts/test-argv-bearer-sweep.sh	jq	.github/workflows/rule-audit.yml
+R1	new-pair	tests/scripts/test-destroy-guard-counter-web-platform.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+R1	new-pair	tests/scripts/test-git-data-boot-signal-poll.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R1	new-pair	tests/scripts/test-git-data-rung2-evidence-capture.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+R1	new-pair	tests/scripts/test-sentry-alert-live-fidelity.sh	curl	scripts/sentry-alert-live-fidelity.sh
+R1	new-pair	tests/scripts/test-supabase-advisor-scan.sh	curl	scripts/supabase-advisor-scan.sh
+R2	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+R2	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+R2	new-pair	apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+R3	new-pair	.github/scripts/test/fixtures-validate-infra-templates.sh	terraform	.github/scripts/validate-infra-templates.sh
+R3	new-pair	apps/web-platform/infra/ci-deploy.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+R3	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	tr	apps/web-platform/infra/ci-deploy.sh,apps/web-platform/infra/inngest-inventory.sh
+R3	new-pair	apps/web-platform/infra/cron-egress-firewall.test.sh	timeout	apps/web-platform/infra/cron-egress-resolve.sh
+R3	new-pair	apps/web-platform/infra/cron-egress-self-heal.test.sh	timeout	apps/web-platform/infra/cron-egress-resolve.sh
+R3	new-pair	apps/web-platform/infra/doppler-download-error-channel.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	apps/web-platform/infra/git-data-cutover-access.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	apps/web-platform/infra/git-data-liveness.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+R3	new-pair	apps/web-platform/infra/git-data-root-key.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-terraform-drift.yml,apps/web-platform/infra/cloud-init-git-data.yml,apps/web-platform/infra/rung2-rehearsal/seed-dirty-journal.sh
+R3	new-pair	apps/web-platform/infra/infra-config-apply.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+R3	new-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	curl	.github/workflows/scheduled-inngest-health.yml
+R3	new-pair	apps/web-platform/infra/inngest-inventory.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+R3	new-pair	apps/web-platform/infra/inngest.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+R3	new-producer-for-listed-pair	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	apps/web-platform/infra/web-probes-token-rotation.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	apps/web-platform/infra/webhook-doppler-token-reread.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+R3	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	awk	apps/web-platform/infra/workspaces-luks-provision.sh
+R3	new-producer-for-listed-pair	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh	jq	.github/workflows/infra-validation.yml,.github/workflows/workspaces-luks-verify.yml
+R3	new-pair	apps/web-platform/scripts/lib/in-image-copy-src.test.sh	tar	apps/web-platform/scripts/lib/in-image-copy-src.sh
+R3	new-pair	apps/web-platform/scripts/postgrest-reload-schema.test.sh	curl	apps/web-platform/scripts/postgrest-reload-schema.sh
+R3	new-pair	apps/web-platform/scripts/run-migrations-schema-probe.test.sh	psql	apps/web-platform/scripts/run-migrations.sh
+R3	new-pair	apps/web-platform/test/infra/ghcr-blocked-alert.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	curl	plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+R3	new-pair	plugins/soleur/test/destructive-command-guard-hook.test.sh	lexer	plugins/soleur/hooks/destructive-command-guard.sh
+R3	new-pair	plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+R3	new-producer-for-listed-pair	plugins/soleur/test/operator-9321-stages.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+R3	new-pair	plugins/soleur/test/operator-agent-runnable.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+R3	new-pair	plugins/soleur/test/operator-script.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+R3	new-producer-for-listed-pair	plugins/soleur/test/operator-stage-approval-hook.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+R3	new-pair	scripts/check-cloudflare-token-drift.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+R3	new-pair	scripts/check-cloudflare-token-drift.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	scripts/check-web-host-escrow-config.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	scripts/followthroughs/web2-luks-live-6931.test.sh	ready	scripts/betterstack-query.sh
+R3	new-pair	scripts/inngest-probe-heartbeat-feeder.test.sh	curl	scripts/inngest-probe-heartbeat-feeder.sh
+R3	new-pair	scripts/lint-dual-lockfile.test.sh	bunfig.local.toml	scripts/lint-dual-lockfile.sh
+R3	new-pair	scripts/test-content-publisher.sh	_liquid_redact_secrets	scripts/content-publisher.sh
+R3	new-pair	scripts/test-jaccard-duplicates.sh	AGENTS.md	scripts/rule-audit.sh
+R3	new-pair	scripts/test-jaccard-duplicates.sh	constitution.md	scripts/rule-audit.sh
+R3	new-pair	scripts/web-host-reboot.test.sh	curl	.github/workflows/inngest-provision-rehearsal.yml,scripts/web2-rebirth.sh
+R3	new-pair	scripts/web2-rebirth-recovery-check.test.sh	curl	scripts/web2-rebirth-recovery-check.sh
+R3	new-pair	scripts/web2-rebirth.test.sh	curl	scripts/web2-rebirth.sh
+R3	new-pair	tests/scripts/test-argv-bearer-sweep.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-inngest-health.yml,.github/workflows/scheduled-terraform-drift.yml,plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+R3	new-pair	tests/scripts/test-argv-bearer-sweep.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	tests/scripts/test-argv-bearer-sweep.sh	fatal	apps/web-platform/infra/cloud-init-registry.yml
+R3	new-producer-for-listed-pair	tests/scripts/test-argv-bearer-sweep.sh	jq	.github/workflows/board-status-sync.yml,.github/workflows/git-data-cutover.yml,.github/workflows/rule-audit.yml
+R3	new-pair	tests/scripts/test-argv-bearer-sweep.sh	python3	apps/web-platform/infra/cloud-init-registry.yml
+R3	new-pair	tests/scripts/test-destroy-guard-counter-web-platform.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+R3	new-producer-for-listed-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	grep	apps/web-platform/infra/git-data-bootstrap.sh
+R3	new-pair	tests/scripts/test-git-data-boot-signal-poll.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+R3	new-pair	tests/scripts/test-git-data-rung2-evidence-capture.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+R4a	new-pair	.claude/hooks/agent-token-tee.test.sh	jq	.claude/hooks/agent-token-tee.sh
+R4a	new-pair	.claude/hooks/grep-rewrite.test.sh	grep	.claude/hooks/lib/incidents.sh
+R4a	new-producer-for-listed-pair	.claude/hooks/grep-rewrite.test.sh	jq	.claude/hooks/lib/incidents.sh
+R4a	new-pair	.claude/hooks/skill-invocation-logger.test.sh	jq	.claude/hooks/skill-invocation-logger.sh
+R4a	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4a	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	tr	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4a	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4a	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4a	new-pair	apps/web-platform/infra/cron-egress-enforce-probe.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4a	new-pair	apps/web-platform/infra/cron-egress-firewall.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4a	new-pair	apps/web-platform/infra/cron-egress-firewall.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4a	new-pair	apps/web-platform/infra/doppler-download-error-channel.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4a	new-producer-for-listed-pair	apps/web-platform/infra/fresh-boot-ready.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4a	new-producer-for-listed-pair	apps/web-platform/infra/infra-config-apply.test.sh	sha256sum	apps/web-platform/infra/cloud-init.yml
+R4a	new-producer-for-listed-pair	apps/web-platform/infra/inngest-boot-emitter.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4a	new-producer-for-listed-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	jq	scripts/inngest-liveness-classify.sh
+R4a	new-pair	apps/web-platform/infra/luks-monitor.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4a	new-pair	apps/web-platform/infra/luks-monitor.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4a	new-producer-for-listed-pair	apps/web-platform/infra/web-ghcr-deny.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4a	new-pair	apps/web-platform/infra/workspaces-luks-freeze.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4a	new-pair	apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4a	new-pair	apps/web-platform/infra/workspaces-luks-staging.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4a	new-pair	plugins/soleur/test/operator-9321-stages.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4a	new-pair	plugins/soleur/test/operator-agent-runnable.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4a	new-pair	plugins/soleur/test/operator-script.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4a	new-pair	plugins/soleur/test/operator-stage-approval-hook.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4a	new-pair	plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	git	plugins/soleur/scripts/pipeline-tally.sh
+R4a	new-pair	tests/hooks/test_incidents.sh	jq	.claude/hooks/agent-token-tee.sh,.claude/hooks/lib/incidents.sh
+R4a	new-producer-for-listed-pair	tests/scripts/test-argv-bearer-sweep.sh	jq	apps/web-platform/infra/scripts/fresh-host-boot-trail.sh
+R4b	new-pair	.claude/hooks/grep-rewrite.test.sh	grep	.claude/hooks/lib/incidents.sh
+R4b	new-producer-for-listed-pair	.claude/hooks/grep-rewrite.test.sh	jq	.claude/hooks/lib/incidents.sh
+R4b	new-producer-for-listed-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	jq	scripts/inngest-liveness-classify.sh
+R4b	new-pair	apps/web-platform/infra/luks-monitor.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4b	new-pair	apps/web-platform/infra/workspaces-luks-freeze.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4b	new-pair	apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4b	new-pair	apps/web-platform/infra/workspaces-luks-staging.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4b	new-pair	plugins/soleur/test/operator-9321-stages.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4b	new-pair	plugins/soleur/test/operator-agent-runnable.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4b	new-pair	plugins/soleur/test/operator-script.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4b	new-pair	plugins/soleur/test/operator-stage-approval-hook.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4b	new-pair	tests/hooks/test_incidents.sh	jq	.claude/hooks/lib/incidents.sh
+R4c	new-pair	.claude/hooks/agent-token-tee.test.sh	jq	.claude/hooks/agent-token-tee.sh
+R4c	new-pair	.claude/hooks/grep-rewrite.test.sh	grep	.claude/hooks/lib/incidents.sh
+R4c	new-producer-for-listed-pair	.claude/hooks/grep-rewrite.test.sh	jq	.claude/hooks/lib/incidents.sh
+R4c	new-pair	.claude/hooks/skill-invocation-logger.test.sh	jq	.claude/hooks/skill-invocation-logger.sh
+R4c	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4c	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	tr	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4c	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4c	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4c	new-pair	apps/web-platform/infra/cron-egress-enforce-probe.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4c	new-pair	apps/web-platform/infra/cron-egress-firewall.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4c	new-pair	apps/web-platform/infra/cron-egress-firewall.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4c	new-pair	apps/web-platform/infra/doppler-download-error-channel.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4c	new-producer-for-listed-pair	apps/web-platform/infra/fresh-boot-ready.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4c	new-producer-for-listed-pair	apps/web-platform/infra/infra-config-apply.test.sh	sha256sum	apps/web-platform/infra/cloud-init.yml
+R4c	new-producer-for-listed-pair	apps/web-platform/infra/inngest-boot-emitter.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+R4c	new-producer-for-listed-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	jq	scripts/inngest-liveness-classify.sh
+R4c	new-pair	apps/web-platform/infra/luks-monitor.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4c	new-pair	apps/web-platform/infra/luks-monitor.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4c	new-producer-for-listed-pair	apps/web-platform/infra/web-ghcr-deny.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+R4c	new-pair	apps/web-platform/infra/workspaces-luks-freeze.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4c	new-pair	apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4c	new-pair	apps/web-platform/infra/workspaces-luks-staging.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+R4c	new-pair	plugins/soleur/test/operator-9321-stages.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4c	new-pair	plugins/soleur/test/operator-agent-runnable.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4c	new-pair	plugins/soleur/test/operator-script.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4c	new-pair	plugins/soleur/test/operator-stage-approval-hook.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+R4c	new-pair	plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	git	plugins/soleur/scripts/pipeline-tally.sh
+R4c	new-pair	tests/hooks/test_incidents.sh	jq	.claude/hooks/agent-token-tee.sh,.claude/hooks/lib/incidents.sh
+R4c	new-producer-for-listed-pair	tests/scripts/test-argv-bearer-sweep.sh	jq	apps/web-platform/infra/scripts/fresh-host-boot-trail.sh
+R5a	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	cryptsetup	apps/web-platform/infra/workspaces-luks-provision.sh
+R5a	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	curl	apps/web-platform/infra/workspaces-luks-provision.sh
+R5b	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	grep	.github/workflows/apply-web-platform-infra.yml
+R5b	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	sed	apps/web-platform/infra/workspaces-cutover.sh
+R5b	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	od	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+R5b	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	openssl	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+R5b	new-pair	plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	sha256sum	.github/actions/bot-pr-with-synthetic-checks/action.yml,.github/actions/cf-tunnel-registry-bridge/action.yml,.github/actions/cf-tunnel-ssh-bridge/action.yml,.github/actions/infra-credentials/action.yml,.github/workflows/reusable-release.yml
+R5b	new-pair	tests/scripts/test-workspaces-luks-cutover-gate.sh	cryptsetup	apps/web-platform/infra/workspaces-cutover.sh
+R7	new-pair	.claude/hooks/browser-snapshot-credential-guard.test.sh	jq	plugins/soleur/hooks/browser-snapshot-credential-guard.sh
+R7	new-pair	.claude/hooks/guardrails.test.sh	perl	.claude/hooks/guardrails.sh
+R7	new-pair	apps/web-platform/infra/cron-egress-self-heal.test.sh	jq	plugins/soleur/skills/skill-security-scan/scripts/lib.sh
+R7	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	awk	apps/web-platform/infra/workspaces-luks-reopen.sh
+R7	new-pair	apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh	jq	apps/web-platform/infra/cloud-init-registry.yml
+R7	new-pair	plugins/soleur/test/destructive-command-guard-hook.test.sh	jq	plugins/soleur/hooks/browser-snapshot-credential-guard.sh,plugins/soleur/hooks/destructive-command-guard.sh
+R7	new-pair	scripts/ship-incident-pir-gate-mutation.test.sh	awk	scripts/ship-incident-pir-gate.sh
+R8	new-producer-for-listed-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	grep	.github/workflows/git-data-rung2-rehearsal.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	.claude/hooks/browser-snapshot-credential-guard.test.sh	jq	plugins/soleur/hooks/browser-snapshot-credential-guard.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	.claude/hooks/grep-rewrite.test.sh	grep	.claude/hooks/lib/incidents.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-producer-for-listed-pair	.claude/hooks/grep-rewrite.test.sh	jq	.claude/hooks/lib/incidents.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	.claude/hooks/guardrails.test.sh	perl	.claude/hooks/guardrails.sh,.claude/hooks/lib/incidents.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	.github/scripts/test/fixtures-validate-infra-templates.sh	terraform	.github/scripts/validate-infra-templates.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/cron-egress-self-heal.test.sh	jq	plugins/soleur/skills/skill-security-scan/scripts/lib.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/doppler-download-error-channel.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/git-data-cutover-access.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/git-data-liveness.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/git-data-root-key.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-terraform-drift.yml,apps/web-platform/infra/cloud-init-git-data.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	curl	.github/workflows/scheduled-inngest-health.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-producer-for-listed-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	jq	scripts/inngest-liveness-classify.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/luks-monitor.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-producer-for-listed-pair	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/web-probes-token-rotation.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	awk	apps/web-platform/infra/workspaces-luks-reopen.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	docker	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-luks-freeze.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	grep	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	sed	apps/web-platform/infra/workspaces-cutover.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	cryptsetup	apps/web-platform/infra/workspaces-luks-provision.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	curl	apps/web-platform/infra/workspaces-luks-provision.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/workspaces-luks-staging.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh	jq	apps/web-platform/infra/cloud-init-registry.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/scripts/postgrest-reload-schema.test.sh	curl	apps/web-platform/scripts/postgrest-reload-schema.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	apps/web-platform/test/infra/ghcr-blocked-alert.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	curl	plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	od	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	openssl	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/test/destructive-command-guard-hook.test.sh	jq	plugins/soleur/hooks/browser-snapshot-credential-guard.sh,plugins/soleur/hooks/destructive-command-guard.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/test/operator-9321-stages.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/test/operator-agent-runnable.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/test/operator-script.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/test/operator-stage-approval-hook.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	sha256sum	.github/actions/bot-pr-with-synthetic-checks/action.yml,.github/actions/cf-tunnel-registry-bridge/action.yml,.github/actions/cf-tunnel-ssh-bridge/action.yml,.github/actions/infra-credentials/action.yml,.github/workflows/reusable-release.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	scripts/check-cloudflare-token-drift.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	scripts/check-cloudflare-token-drift.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	scripts/check-web-host-escrow-config.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	scripts/inngest-probe-heartbeat-feeder.test.sh	curl	scripts/inngest-probe-heartbeat-feeder.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	scripts/ship-incident-pir-gate-mutation.test.sh	awk	scripts/ship-incident-pir-gate.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	scripts/web-host-reboot.test.sh	curl	.github/workflows/inngest-provision-rehearsal.yml,scripts/web2-rebirth.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	scripts/web2-rebirth-recovery-check.test.sh	curl	scripts/web2-rebirth-recovery-check.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	scripts/web2-rebirth.test.sh	curl	scripts/web2-rebirth.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/hooks/test_incidents.sh	jq	.claude/hooks/lib/incidents.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-argv-bearer-sweep.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-inngest-health.yml,.github/workflows/scheduled-terraform-drift.yml,plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-argv-bearer-sweep.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-producer-for-listed-pair	tests/scripts/test-argv-bearer-sweep.sh	jq	.github/workflows/rule-audit.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-destroy-guard-counter-web-platform.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-producer-for-listed-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	grep	.github/workflows/git-data-rung2-rehearsal.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-git-data-boot-signal-poll.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-git-data-rung2-evidence-capture.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-sentry-alert-live-fidelity.sh	curl	scripts/sentry-alert-live-fidelity.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-supabase-advisor-scan.sh	curl	scripts/supabase-advisor-scan.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-workspaces-luks-cutover-gate.sh	cryptsetup	apps/web-platform/infra/workspaces-cutover.sh
+U1 = R1+R2+R4b+R5a+R5b+R6+R7+R8	new-pair	tests/scripts/test-zot-log-channel-probe.sh	awk	scripts/lint-followthrough-varq-ban.sh
+U2 = U1+R3	new-pair	.claude/hooks/browser-snapshot-credential-guard.test.sh	jq	plugins/soleur/hooks/browser-snapshot-credential-guard.sh
+U2 = U1+R3	new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	set	apps/web-platform/infra/cloud-init-git-data.yml,apps/web-platform/infra/cloud-init-inngest.yml,apps/web-platform/infra/cloud-init-registry.yml
+U2 = U1+R3	new-pair	.claude/hooks/grep-rewrite.test.sh	grep	.claude/hooks/lib/incidents.sh
+U2 = U1+R3	new-producer-for-listed-pair	.claude/hooks/grep-rewrite.test.sh	jq	.claude/hooks/lib/incidents.sh
+U2 = U1+R3	new-pair	.claude/hooks/guardrails.test.sh	perl	.claude/hooks/guardrails.sh,.claude/hooks/lib/incidents.sh
+U2 = U1+R3	new-pair	.github/scripts/test/fixtures-validate-infra-templates.sh	terraform	.github/scripts/validate-infra-templates.sh
+U2 = U1+R3	new-pair	.github/scripts/test/test-mint-inngest-bootstrap-tag.sh	gh	.github/scripts/mint-inngest-bootstrap-tag.sh
+U2 = U1+R3	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/ci-deploy.test.sh	doppler	scripts/cutover-inngest.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/ci-deploy.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/ci-deploy.test.sh	python3	.github/workflows/web-platform-release.yml,apps/web-platform/infra/ci-deploy.sh,scripts/cutover-inngest.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/ci-deploy.test.sh	systemctl	apps/web-platform/infra/cloud-init-inngest.yml
+U2 = U1+R3	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	tr	apps/web-platform/infra/ci-deploy.sh,apps/web-platform/infra/inngest-inventory.sh
+U2 = U1+R3	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/cron-egress-self-heal.test.sh	jq	plugins/soleur/skills/skill-security-scan/scripts/lib.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/cutover-inngest-workflow.test.sh	doppler	scripts/cutover-inngest.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/doppler-download-error-channel.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/git-data-cutover-access.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml,.github/workflows/git-data-cutover.yml,apps/web-platform/infra/git-data-flag-precheck.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/git-data-flag-precheck.test.sh	doppler	.github/workflows/git-data-cutover.yml,apps/web-platform/infra/git-data-flag-precheck.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/git-data-liveness.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/git-data-root-key.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml,.github/workflows/git-data-cutover.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-terraform-drift.yml,apps/web-platform/infra/cloud-init-git-data.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/infra-config-apply.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	curl	.github/workflows/scheduled-inngest-health.yml
+U2 = U1+R3	new-producer-for-listed-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	jq	scripts/inngest-liveness-classify.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/inngest-inventory.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/inngest.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/inngest.test.sh	systemctl	apps/web-platform/infra/cloud-init-inngest.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/luks-monitor.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+U2 = U1+R3	new-producer-for-listed-pair	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/web-probes-token-rotation.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/webhook-doppler-token-reread.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	awk	apps/web-platform/infra/workspaces-luks-reopen.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	docker	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-luks-freeze.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	grep	.github/workflows/apply-web-platform-infra.yml,apps/web-platform/infra/workspaces-cutover.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	sed	.github/workflows/apply-web-platform-infra.yml,apps/web-platform/infra/workspaces-cutover.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	awk	apps/web-platform/infra/workspaces-luks-provision.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	cryptsetup	apps/web-platform/infra/workspaces-luks-provision.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	curl	apps/web-platform/infra/workspaces-luks-provision.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+U2 = U1+R3	new-pair	apps/web-platform/infra/workspaces-luks-staging.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+U2 = U1+R3	new-producer-for-listed-pair	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh	jq	.github/workflows/infra-validation.yml
+U2 = U1+R3	new-pair	apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh	jq	apps/web-platform/infra/cloud-init-registry.yml
+U2 = U1+R3	new-pair	apps/web-platform/scripts/lib/in-image-copy-src.test.sh	tar	apps/web-platform/scripts/lib/in-image-copy-src.sh
+U2 = U1+R3	new-pair	apps/web-platform/scripts/postgrest-reload-schema.test.sh	curl	apps/web-platform/scripts/postgrest-reload-schema.sh
+U2 = U1+R3	new-pair	apps/web-platform/scripts/run-migrations-schema-probe.test.sh	psql	apps/web-platform/scripts/run-migrations.sh
+U2 = U1+R3	new-pair	apps/web-platform/test/infra/ghcr-blocked-alert.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	base64	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+U2 = U1+R3	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	curl	plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+U2 = U1+R3	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	od	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+U2 = U1+R3	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	openssl	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+U2 = U1+R3	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	tr	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/destructive-command-guard-hook.test.sh	jq	plugins/soleur/hooks/browser-snapshot-credential-guard.sh,plugins/soleur/hooks/destructive-command-guard.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/destructive-command-guard-hook.test.sh	lexer	plugins/soleur/hooks/destructive-command-guard.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/destructive-command-guard-hook.test.sh	perl	plugins/soleur/hooks/destructive-command-guard.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+U2 = U1+R3	new-pair	plugins/soleur/test/operator-9321-stages.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+U2 = U1+R3	new-producer-for-listed-pair	plugins/soleur/test/operator-9321-stages.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/operator-agent-runnable.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/operator-agent-runnable.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/operator-script.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/operator-script.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/operator-stage-approval-hook.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+U2 = U1+R3	new-producer-for-listed-pair	plugins/soleur/test/operator-stage-approval-hook.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+U2 = U1+R3	new-pair	plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	sha256sum	.github/actions/bot-pr-with-synthetic-checks/action.yml,.github/actions/cf-tunnel-registry-bridge/action.yml,.github/actions/cf-tunnel-ssh-bridge/action.yml,.github/actions/infra-credentials/action.yml,.github/workflows/reusable-release.yml
+U2 = U1+R3	new-pair	scripts/check-cloudflare-token-drift.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+U2 = U1+R3	new-pair	scripts/check-cloudflare-token-drift.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml,.github/workflows/git-data-cutover.yml
+U2 = U1+R3	new-pair	scripts/check-deploy-script-parity.test.sh	python3	apps/web-platform/infra/ci-deploy.sh
+U2 = U1+R3	new-pair	scripts/check-web-host-escrow-config.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	scripts/followthroughs/infra-config-activation-7220.test.sh	python3	scripts/followthroughs/infra-config-activation-7220.sh
+U2 = U1+R3	new-pair	scripts/followthroughs/web2-luks-live-6931.test.sh	ready	scripts/betterstack-query.sh
+U2 = U1+R3	new-pair	scripts/inngest-probe-heartbeat-feeder.test.sh	curl	scripts/inngest-probe-heartbeat-feeder.sh
+U2 = U1+R3	new-pair	scripts/lint-dual-lockfile.test.sh	bunfig.local.toml	scripts/lint-dual-lockfile.sh
+U2 = U1+R3	new-pair	scripts/ship-incident-pir-gate-mutation.test.sh	awk	scripts/ship-incident-pir-gate.sh
+U2 = U1+R3	new-pair	scripts/test-content-publisher.sh	_liquid_redact_secrets	scripts/content-publisher.sh
+U2 = U1+R3	new-pair	scripts/test-jaccard-duplicates.sh	AGENTS.md	scripts/rule-audit.sh
+U2 = U1+R3	new-pair	scripts/test-jaccard-duplicates.sh	constitution.md	scripts/rule-audit.sh
+U2 = U1+R3	new-pair	scripts/verify-agent-security-slice1.test.sh	bash	scripts/verify-agent-security-slice1.sh
+U2 = U1+R3	new-pair	scripts/web-host-reboot.test.sh	curl	.github/workflows/inngest-provision-rehearsal.yml,scripts/web2-rebirth.sh
+U2 = U1+R3	new-pair	scripts/web2-rebirth-recovery-check.test.sh	curl	scripts/web2-rebirth-recovery-check.sh
+U2 = U1+R3	new-pair	scripts/web2-rebirth.test.sh	curl	scripts/web2-rebirth.sh
+U2 = U1+R3	new-pair	tests/hooks/test_incidents.sh	jq	.claude/hooks/lib/incidents.sh
+U2 = U1+R3	new-pair	tests/scripts/test-argv-bearer-sweep.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-inngest-health.yml,.github/workflows/scheduled-terraform-drift.yml,plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+U2 = U1+R3	new-pair	tests/scripts/test-argv-bearer-sweep.sh	doppler	.github/workflows/apply-web-platform-infra.yml,.github/workflows/git-data-cutover.yml,scripts/cutover-inngest.sh
+U2 = U1+R3	new-pair	tests/scripts/test-argv-bearer-sweep.sh	fatal	apps/web-platform/infra/cloud-init-registry.yml
+U2 = U1+R3	new-producer-for-listed-pair	tests/scripts/test-argv-bearer-sweep.sh	jq	.github/workflows/board-status-sync.yml,.github/workflows/rule-audit.yml
+U2 = U1+R3	new-pair	tests/scripts/test-argv-bearer-sweep.sh	python3	.github/workflows/deploy-inngest-image.yml,.github/workflows/web-platform-release.yml,apps/web-platform/infra/ci-deploy.sh,apps/web-platform/infra/cloud-init-registry.yml,apps/web-platform/infra/infra-config-verify.sh,apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh,scripts/cutover-inngest.sh,scripts/followthroughs/infra-config-activation-7220.sh
+U2 = U1+R3	new-pair	tests/scripts/test-argv-bearer-sweep.sh	set	apps/web-platform/infra/cloud-init-registry.yml
+U2 = U1+R3	new-pair	tests/scripts/test-destroy-guard-counter-web-platform.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+U2 = U1+R3	new-producer-for-listed-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	grep	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/git-data-bootstrap.sh
+U2 = U1+R3	new-pair	tests/scripts/test-git-data-boot-signal-poll.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+U2 = U1+R3	new-pair	tests/scripts/test-git-data-rung2-evidence-capture.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+U2 = U1+R3	new-pair	tests/scripts/test-sentry-alert-live-fidelity.sh	curl	scripts/sentry-alert-live-fidelity.sh
+U2 = U1+R3	new-pair	tests/scripts/test-supabase-advisor-scan.sh	curl	scripts/supabase-advisor-scan.sh
+U2 = U1+R3	new-pair	tests/scripts/test-workspaces-luks-cutover-gate.sh	cryptsetup	apps/web-platform/infra/workspaces-cutover.sh
+U2 = U1+R3	new-pair	tests/scripts/test-zot-log-channel-probe.sh	awk	scripts/followthroughs/zot-log-channel-7440.sh,scripts/lint-followthrough-varq-ban.sh
+ALL	new-pair	.claude/hooks/agent-token-tee.test.sh	jq	.claude/hooks/agent-token-tee.sh
+ALL	new-pair	.claude/hooks/browser-snapshot-credential-guard.test.sh	jq	plugins/soleur/hooks/browser-snapshot-credential-guard.sh
+ALL	new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	set	apps/web-platform/infra/cloud-init-git-data.yml,apps/web-platform/infra/cloud-init-inngest.yml,apps/web-platform/infra/cloud-init-registry.yml
+ALL	new-pair	.claude/hooks/grep-rewrite.test.sh	grep	.claude/hooks/lib/incidents.sh
+ALL	new-producer-for-listed-pair	.claude/hooks/grep-rewrite.test.sh	jq	.claude/hooks/lib/incidents.sh
+ALL	new-pair	.claude/hooks/guardrails.test.sh	perl	.claude/hooks/guardrails.sh,.claude/hooks/lib/incidents.sh
+ALL	new-pair	.claude/hooks/skill-invocation-logger.test.sh	jq	.claude/hooks/skill-invocation-logger.sh
+ALL	new-pair	.github/scripts/test/fixtures-validate-infra-templates.sh	terraform	.github/scripts/validate-infra-templates.sh
+ALL	new-pair	.github/scripts/test/test-mint-inngest-bootstrap-tag.sh	gh	.github/scripts/mint-inngest-bootstrap-tag.sh
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml
+ALL	new-pair	apps/web-platform/infra/ci-deploy.test.sh	doppler	scripts/cutover-inngest.sh
+ALL	new-pair	apps/web-platform/infra/ci-deploy.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+ALL	new-pair	apps/web-platform/infra/ci-deploy.test.sh	python3	.github/workflows/web-platform-release.yml,apps/web-platform/infra/ci-deploy.sh,scripts/cutover-inngest.sh
+ALL	new-pair	apps/web-platform/infra/ci-deploy.test.sh	systemctl	apps/web-platform/infra/cloud-init-inngest.yml
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/ci-deploy.test.sh	tr	apps/web-platform/infra/ci-deploy.sh,apps/web-platform/infra/inngest-inventory.sh,apps/web-platform/infra/soleur-host-bootstrap.sh
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml,apps/web-platform/infra/cloud-init.yml
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+ALL	new-pair	apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	docker	apps/web-platform/infra/cloud-init-inngest.yml,apps/web-platform/infra/cloud-init.yml
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+ALL	new-pair	apps/web-platform/infra/cron-egress-enforce-probe.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+ALL	new-pair	apps/web-platform/infra/cron-egress-enforce-probe.test.sh	docker	apps/web-platform/infra/cloud-init.yml
+ALL	new-pair	apps/web-platform/infra/cron-egress-firewall.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/cron-egress-firewall.test.sh	docker	apps/web-platform/infra/cloud-init.yml
+ALL	new-pair	apps/web-platform/infra/cron-egress-firewall.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+ALL	new-pair	apps/web-platform/infra/cron-egress-self-heal.test.sh	jq	plugins/soleur/skills/skill-security-scan/scripts/lib.sh
+ALL	new-pair	apps/web-platform/infra/cutover-inngest-workflow.test.sh	doppler	scripts/cutover-inngest.sh
+ALL	new-pair	apps/web-platform/infra/doppler-download-error-channel.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+ALL	new-pair	apps/web-platform/infra/doppler-download-error-channel.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/fresh-boot-ready.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+ALL	new-pair	apps/web-platform/infra/git-data-cutover-access.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml,.github/workflows/git-data-cutover.yml,apps/web-platform/infra/git-data-flag-precheck.sh
+ALL	new-pair	apps/web-platform/infra/git-data-flag-precheck.test.sh	doppler	.github/workflows/git-data-cutover.yml,apps/web-platform/infra/git-data-flag-precheck.sh
+ALL	new-pair	apps/web-platform/infra/git-data-liveness.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+ALL	new-pair	apps/web-platform/infra/git-data-root-key.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml,.github/workflows/git-data-cutover.yml
+ALL	new-pair	apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-terraform-drift.yml,apps/web-platform/infra/cloud-init-git-data.yml
+ALL	new-pair	apps/web-platform/infra/infra-config-apply.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/infra-config-apply.test.sh	sha256sum	apps/web-platform/infra/cloud-init.yml
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/inngest-boot-emitter.test.sh	curl	apps/web-platform/infra/soleur-host-bootstrap.sh
+ALL	new-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	curl	.github/workflows/scheduled-inngest-health.yml
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	jq	scripts/inngest-liveness-classify.sh
+ALL	new-pair	apps/web-platform/infra/inngest-inventory.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+ALL	new-pair	apps/web-platform/infra/inngest.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+ALL	new-pair	apps/web-platform/infra/inngest.test.sh	systemctl	apps/web-platform/infra/cloud-init-inngest.yml
+ALL	new-pair	apps/web-platform/infra/luks-monitor.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+ALL	new-pair	apps/web-platform/infra/luks-monitor.test.sh	docker	apps/web-platform/infra/cloud-init.yml
+ALL	new-pair	apps/web-platform/infra/luks-monitor.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/web-ghcr-deny.test.sh	docker	apps/web-platform/infra/cloud-init.yml
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/web-ghcr-deny.test.sh	timeout	apps/web-platform/infra/cloud-init.yml
+ALL	new-pair	apps/web-platform/infra/web-probes-token-rotation.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+ALL	new-pair	apps/web-platform/infra/webhook-doppler-token-reread.test.sh	logger	apps/web-platform/infra/ci-deploy.sh
+ALL	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	awk	apps/web-platform/infra/workspaces-luks-reopen.sh
+ALL	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	docker	.github/workflows/apply-web-platform-infra.yml
+ALL	new-pair	apps/web-platform/infra/workspaces-boot-unlock.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+ALL	new-pair	apps/web-platform/infra/workspaces-luks-freeze.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+ALL	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+ALL	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	grep	.github/workflows/apply-web-platform-infra.yml,apps/web-platform/infra/workspaces-cutover.sh
+ALL	new-pair	apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	sed	.github/workflows/apply-web-platform-infra.yml,apps/web-platform/infra/workspaces-cutover.sh
+ALL	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	awk	apps/web-platform/infra/workspaces-luks-provision.sh
+ALL	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	cryptsetup	apps/web-platform/infra/workspaces-luks-provision.sh
+ALL	new-pair	apps/web-platform/infra/workspaces-luks-provision.test.sh	curl	apps/web-platform/infra/workspaces-luks-provision.sh
+ALL	new-pair	apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+ALL	new-pair	apps/web-platform/infra/workspaces-luks-staging.test.sh	died	apps/web-platform/infra/workspaces-luks-harness.sh
+ALL	new-producer-for-listed-pair	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh	jq	.github/workflows/infra-validation.yml
+ALL	new-pair	apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh	jq	apps/web-platform/infra/cloud-init-registry.yml
+ALL	new-pair	apps/web-platform/scripts/lib/in-image-copy-src.test.sh	tar	apps/web-platform/scripts/lib/in-image-copy-src.sh
+ALL	new-pair	apps/web-platform/scripts/postgrest-reload-schema.test.sh	curl	apps/web-platform/scripts/postgrest-reload-schema.sh
+ALL	new-pair	apps/web-platform/scripts/run-migrations-schema-probe.test.sh	psql	apps/web-platform/scripts/run-migrations.sh
+ALL	new-pair	apps/web-platform/test/infra/ghcr-blocked-alert.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+ALL	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	base64	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+ALL	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	curl	plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+ALL	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	od	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+ALL	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	openssl	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+ALL	new-pair	plugins/soleur/skills/community/test/community-argv.test.sh	tr	plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh
+ALL	new-pair	plugins/soleur/test/destructive-command-guard-hook.test.sh	jq	plugins/soleur/hooks/browser-snapshot-credential-guard.sh,plugins/soleur/hooks/destructive-command-guard.sh
+ALL	new-pair	plugins/soleur/test/destructive-command-guard-hook.test.sh	lexer	plugins/soleur/hooks/destructive-command-guard.sh
+ALL	new-pair	plugins/soleur/test/destructive-command-guard-hook.test.sh	perl	plugins/soleur/hooks/destructive-command-guard.sh
+ALL	new-pair	plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+ALL	new-pair	plugins/soleur/test/operator-9321-stages.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+ALL	new-producer-for-listed-pair	plugins/soleur/test/operator-9321-stages.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+ALL	new-pair	plugins/soleur/test/operator-agent-runnable.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+ALL	new-pair	plugins/soleur/test/operator-agent-runnable.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+ALL	new-pair	plugins/soleur/test/operator-script.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+ALL	new-pair	plugins/soleur/test/operator-script.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+ALL	new-pair	plugins/soleur/test/operator-stage-approval-hook.test.sh	gh	plugins/soleur/scripts/lib/operator-script.sh
+ALL	new-producer-for-listed-pair	plugins/soleur/test/operator-stage-approval-hook.test.sh	jq	apps/cla-evidence/infra/bootstrap.sh
+ALL	new-pair	plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	sha256sum	.github/actions/bot-pr-with-synthetic-checks/action.yml,.github/actions/cf-tunnel-registry-bridge/action.yml,.github/actions/cf-tunnel-ssh-bridge/action.yml,.github/actions/infra-credentials/action.yml,.github/workflows/reusable-release.yml
+ALL	new-pair	plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	git	plugins/soleur/scripts/pipeline-tally.sh
+ALL	new-pair	scripts/check-cloudflare-token-drift.test.sh	curl	.github/workflows/scheduled-terraform-drift.yml
+ALL	new-pair	scripts/check-cloudflare-token-drift.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml,.github/workflows/git-data-cutover.yml
+ALL	new-pair	scripts/check-deploy-script-parity.test.sh	python3	apps/web-platform/infra/ci-deploy.sh
+ALL	new-pair	scripts/check-web-host-escrow-config.test.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+ALL	new-pair	scripts/followthroughs/infra-config-activation-7220.test.sh	python3	scripts/followthroughs/infra-config-activation-7220.sh
+ALL	new-pair	scripts/followthroughs/web2-luks-live-6931.test.sh	ready	scripts/betterstack-query.sh
+ALL	new-pair	scripts/inngest-probe-heartbeat-feeder.test.sh	curl	scripts/inngest-probe-heartbeat-feeder.sh
+ALL	new-pair	scripts/lint-dual-lockfile.test.sh	bunfig.local.toml	scripts/lint-dual-lockfile.sh
+ALL	new-pair	scripts/ship-incident-pir-gate-mutation.test.sh	awk	scripts/ship-incident-pir-gate.sh
+ALL	new-pair	scripts/test-content-publisher.sh	_liquid_redact_secrets	scripts/content-publisher.sh
+ALL	new-pair	scripts/test-jaccard-duplicates.sh	AGENTS.md	scripts/rule-audit.sh
+ALL	new-pair	scripts/test-jaccard-duplicates.sh	constitution.md	scripts/rule-audit.sh
+ALL	new-pair	scripts/verify-agent-security-slice1.test.sh	bash	scripts/verify-agent-security-slice1.sh
+ALL	new-pair	scripts/web-host-reboot.test.sh	curl	.github/workflows/inngest-provision-rehearsal.yml,scripts/web2-rebirth.sh
+ALL	new-pair	scripts/web2-rebirth-recovery-check.test.sh	curl	scripts/web2-rebirth-recovery-check.sh
+ALL	new-pair	scripts/web2-rebirth.test.sh	curl	scripts/web2-rebirth.sh
+ALL	new-pair	tests/hooks/test_incidents.sh	jq	.claude/hooks/agent-token-tee.sh,.claude/hooks/lib/incidents.sh
+ALL	new-pair	tests/scripts/test-argv-bearer-sweep.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/scheduled-inngest-health.yml,.github/workflows/scheduled-terraform-drift.yml,plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh
+ALL	new-pair	tests/scripts/test-argv-bearer-sweep.sh	doppler	.github/workflows/apply-web-platform-infra.yml,.github/workflows/git-data-cutover.yml,scripts/cutover-inngest.sh
+ALL	new-pair	tests/scripts/test-argv-bearer-sweep.sh	fatal	apps/web-platform/infra/cloud-init-registry.yml
+ALL	new-producer-for-listed-pair	tests/scripts/test-argv-bearer-sweep.sh	jq	.github/workflows/board-status-sync.yml,.github/workflows/rule-audit.yml,apps/web-platform/infra/scripts/fresh-host-boot-trail.sh
+ALL	new-pair	tests/scripts/test-argv-bearer-sweep.sh	python3	.github/workflows/deploy-inngest-image.yml,.github/workflows/web-platform-release.yml,apps/web-platform/infra/ci-deploy.sh,apps/web-platform/infra/cloud-init-registry.yml,apps/web-platform/infra/infra-config-verify.sh,apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh,scripts/cutover-inngest.sh,scripts/followthroughs/infra-config-activation-7220.sh
+ALL	new-pair	tests/scripts/test-argv-bearer-sweep.sh	set	apps/web-platform/infra/cloud-init-registry.yml
+ALL	new-pair	tests/scripts/test-destroy-guard-counter-web-platform.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+ALL	new-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+ALL	new-producer-for-listed-pair	tests/scripts/test-git-data-birth-readiness-gate.sh	grep	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/git-data-bootstrap.sh
+ALL	new-pair	tests/scripts/test-git-data-boot-signal-poll.sh	doppler	.github/workflows/apply-web-platform-infra.yml
+ALL	new-pair	tests/scripts/test-git-data-rung2-evidence-capture.sh	curl	.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml
+ALL	new-pair	tests/scripts/test-sentry-alert-live-fidelity.sh	curl	scripts/sentry-alert-live-fidelity.sh
+ALL	new-pair	tests/scripts/test-supabase-advisor-scan.sh	curl	scripts/supabase-advisor-scan.sh
+ALL	new-pair	tests/scripts/test-workspaces-luks-cutover-gate.sh	cryptsetup	apps/web-platform/infra/workspaces-cutover.sh
+ALL	new-pair	tests/scripts/test-zot-log-channel-probe.sh	awk	scripts/followthroughs/zot-log-channel-7440.sh,scripts/lint-followthrough-varq-ban.sh

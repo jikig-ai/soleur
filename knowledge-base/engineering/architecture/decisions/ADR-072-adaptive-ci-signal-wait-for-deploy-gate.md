@@ -84,6 +84,35 @@ unresolved CI state.
   `head_branch==main && conclusion==success && head_sha` filtering), and loses the current
   `max(build, CI)` parallelism unless build/deploy are restructured. **Deferred** to a tracking
   issue; not required to fix the incident.
+
+  > **ADOPTED 2026-09-09 — see [ADR-217](./ADR-217-the-deploy-fires-on-cis-completion-event-and-the-verdict-never-crosses-as-a-value.md) (#5806).**
+  > Two of the three deferral reasons resolved differently than expected, and the third turned
+  > out not to bind:
+  >
+  > - **The `max(build, CI)` concern does not apply.** It assumed `release` and CI are
+  >   comparable. Measured, `release` beat `await-ci` in **14/14** runs at a median +29.2 min
+  >   lead, so `max(release, CI)` is empirically already `CI`. `release` therefore stays on
+  >   `push` and only the deploy chain moves — no restructuring, no parallelism lost. Fully
+  >   serialising was considered and rejected: it buys nothing and pushes the declared critical
+  >   path from 207 to ~265 min, breaking B9.
+  > - **The filtering is necessary but not sufficient, and this ADR understated it.** The
+  >   `head_branch`/`conclusion`/`head_sha` filter is only half the problem. `workflow_run`
+  >   inherits **neither** path gate — not `on.push.paths` nor `reusable-release.yml`'s
+  >   independent `check_changed` pathspec — so it fires on docs-only pushes that legitimately
+  >   published nothing. The resolver is a five-state machine, and two of those states must
+  >   leave the run **green** or every routine commit reddens the release run.
+  > - **A limitation this ADR could not have known.** The REST jobs API exposes a job's
+  >   `conclusion` but **not** its `outputs`. So the deploy verdict (`release.result`) crosses
+  >   the run boundary intact, while the VALUES need an artifact carrier. Critically, the values
+  >   that cannot cross — `docker_pushed`, `mirror_verified` — were never the gate: this file's
+  >   own FR-A5/FR-A9 notes record them as non-blocking. Substituting either for the conclusion
+  >   read would re-open the fail-open, and ADR-217 carries a mutation row against it.
+  >
+  > **The named fail-open is closed.** The out-of-order risk this option was meant to fix
+  > structurally is *not* fully fixed by `workflow_run` alone — the event carries the correct
+  > SHA, not the latest one — and the per-SHA CI concurrency key that shipped alongside it
+  > REMOVES the serialisation that was providing the ordering. ADR-217 Decision 5 adds a
+  > monotonic-version precondition to close it.
 - **Superseded-SHA guard ("Phase C") on the deploy job.** Designed and **rejected** by
   deepen-plan review: keying on `git rev-parse origin/main` false-skips nearly every deploy
   (origin/main advances on every merge), the `deploy` job performs no `actions/checkout` so any
@@ -91,6 +120,20 @@ unresolved CI state.
   Verify-deploy steps polling for the wrong version (RED run). The out-of-order risk is
   pre-existing (`cancel-in-progress: false` is not newest-wins today) and is fixed structurally
   by option 3.
+
+  > **SCOPE CLARIFIED 2026-09-09 (ADR-217 Decision 5).** This prohibition is on the
+  > **git-ancestry** form, and all three defects named above are properties of that form. It does
+  > NOT cover a version-monotonicity check, which shipped with #5806: it compares two version
+  > strings over a value `deploy` already fetches from the live host, so it needs no
+  > `origin/main`, no git history and no `actions/checkout`, and it refuses by failing the step
+  > rather than by a step-level `exit 0`. Read as covering that too, this bullet would have
+  > blocked the guard that closes the ordering hole option 3 leaves open — so the distinction is
+  > recorded here rather than left to the next reader.
+  >
+  > It is also no longer true that the out-of-order risk is "fixed structurally by option 3".
+  > `workflow_run` guarantees the CORRECT SHA, never the LATEST. What ordered deploys was
+  > `ci.yml`'s single `main` concurrency group making CI completions FIFO, and the per-SHA key
+  > that shipped with #7931 removes it.
 
 ## Consequences
 
@@ -101,6 +144,11 @@ legitimately runs *longer than the ceiling*: any single-shot `needs: await-ci` f
 has a cliff at whatever ceiling is chosen; adaptive **widens and defers** that cliff (≈15m →
 ≈50m, only while CI is provably alive) rather than removing it. Removing it entirely is
 option 3.
+
+> **Corrected in place 2026-09-07 (#7902):** the cliff is now ≈60m — `CEILING_S` was raised
+> 3000s → 3600s. This sentence sits outside the amended Decision item 4, so the append-only
+> amendment below does not reach it; the figure is corrected here rather than in place, per
+> the append-only discipline for dated records.
 
 Load-bearing invariants a future maintainer MUST preserve (each silently reintroduces a bug if
 dropped):
@@ -150,3 +198,67 @@ dropped):
 
 Cross-reference: ADR-078 (raised-ceiling named-trade-off ADR precedent); ADR-011 (the
 fail-closed-gate discipline this extends).
+
+## Amendment — 2026-09-07 (#7902)
+
+**This ADR is AMENDED, not superseded.** Decision items 1-3, 5 and 6 stand unchanged, as do the
+fail-closed posture and every named invariant. Only item 4's *sizing premise* is falsified.
+
+**What was wrong.** Item 4 sized `CEILING_S=3000s` "above the observed p100 CI-under-contention
+duration (~28m, measured 2026-06-30 over the last 50 main ci.yml runs)". That figure is stated in
+**run wall-clock** terms — a quantity this gate does not measure. `await-ci` polls the `test`
+**check-run** and exits 0 the moment it concludes, so the gated quantity is **time-to-`test`**.
+The two happen to coincide today only because `test-scripts` is the tail of the run; they diverge
+precisely when that is fixed. Sizing a gate in a quantity it does not observe is the durable
+lesson here, and it is why the replacement constant is expressed in the gated metric.
+
+**Re-measurement (2026-09-07, last 25 completed push runs on `main`, time-to-`test` = the `test`
+job's `completed_at` minus the run's `created_at`):** p50 35.2m, p90 54.0m, p100 57.4m, with
+4/25 at or above 50m. The 3000s ceiling had been crossed twice in a row on healthy builds
+(elapsed 3005s and 3002s), blocking every web-platform deploy fail-closed.
+
+**What changed.**
+
+- `CEILING_S` 3000 -> **3600** (60m), sized above the p100 of 57.4m measured at plan time.
+
+> **Corrected 2026-09-08 (#7902 QA round 2).** That sizing no longer holds. Re-measured over the
+> 25 most recent completed `main` push runs: p50 35.4m, p90 54.0m, **p100 69.3m**. Run
+> 34214304922 fail-closed a healthy build on 2026-09-08 — CI concluded `success` twelve minutes
+> after the gate gave up — at a duration `CEILING_S=3600` would also have missed. So the raise
+> clears the p50/p90 mass deterministically and does NOT clear the observed tail; the shard is
+> what must, and AC25 measures whether it did. Do not read "sized above the p100" as a standing
+> property: it is a statement about a window, and the window moves.
+
+- `MAX_ATTEMPTS` 300 -> **360**, which item 4 named as "the loop's iteration backstop". This is
+  not cosmetic: the loop runs `seq 1 $((MAX_ATTEMPTS + RECONCILE_ATTEMPTS))` and falls through on
+  exhaustion to a fail-closed error reporting `total_budget * INTERVAL_S`. Left at 300, loop
+  exhaustion would have become the binding bound at ~3060s — the raise would have bought 60
+  seconds instead of 10 minutes while item 4's own "the elapsed ceiling is primary" claim
+  silently became false.
+- `timeout-minutes` 60 -> **72**, preserving item 4's `timeout-minutes >= 1.2 x CEILING_S`
+  invariant exactly (4320 = 1.2 x 3600).
+- `scripts/prod-version-drift-check.sh`'s `DRIFT_SUSTAINED_THRESHOLD_MIN` 195 -> **207**. Its B9
+  assertion is `threshold >= critical path`, so the two must not land in separate commits; they
+  ship together in one, with the threshold ahead of the ceilings in file order.
+
+**Correction to the record on Alternative 1.** This ADR rejected "just raise the ceiling" on the
+grounds that it was a pure deferral. That rejection was made *pre-adaptive-wait* and no longer
+stands on that ground: with the adaptive wait in place a raise is bounded by CI-run liveness
+rather than open-ended. The raise is nonetheless NOT shipped alone here — the same PR shards
+`test-scripts`, which is what stops the new ceiling being spent. A raise alone would have
+repeated a pattern this repo has already lived twice.
+
+**Option 3 (`workflow_run`) remains deferred on #5806, and the reason has changed.** It is no
+longer "not yet needed"; it is that the swap carries a demonstrated **fail-open**: under
+`workflow_run`, `github.sha` resolves to the default-branch tip, so the #3409 `EXPECTED_SHA`
+gate would compare an un-CI'd SHA against itself and pass. It would also permanently `skip`
+`live-verify` (whose `if:` ends `github.event_name == 'push'`). Today's failure is a blocked
+deploy; that one is an unverified deploy reporting success.
+
+**New coupling.** [ADR-212](./ADR-212-deploy-gate-measures-its-own-gated-quantity.md) records that the gated quantity is
+time-to-`test` and that it decomposes into `concurrency queue + critical-path execution` — the
+queue being ci.yml's own serialisation of main pushes, which is usually the larger term. It
+therefore bounds this gate by MEASURING that quantity (a `::warning::` at 0.7 x CEILING_S in the
+loop below) rather than by arithmetic over declared CI job ceilings, which it considered and
+rejected: declared ceilings bound execution only, so such arithmetic is green on configurations
+this gate cannot absorb.

@@ -20,7 +20,8 @@
 // alert is tracked as a `Ref #5674` follow-up.
 //
 // CLASSIFY, do NOT false-page: only a CLASSIFIED fatal body pages.
-//   - body matches /credit balance is too low/i → op=anthropic-credit-exhausted, monitor RED
+//   - body matches /credit balance is too low/i → monitor RED; the shared transport
+//     emits the named marker (#8505), so the probe itself does not report
 //   - 401 / auth marker                         → op=anthropic-key-invalid, monitor RED
 //   - transient/unclassified (429/500/529/net)  → RE-THROW → Inngest retry; the
 //     missed-checkin margin backstops. A 529 overloaded is NOT an empty wallet;
@@ -95,18 +96,11 @@ export async function cronAnthropicCreditProbeHandler({
       } catch (err) {
         if (err instanceof AnthropicApiError) {
           const body = err.bodyExcerpt ?? "";
-          if (ANTHROPIC_CREDIT_EXHAUSTED_RE.test(body)) {
-            reportSilentFallback(
-              new Error("Anthropic credit balance is too low (operator API credit exhausted)"),
-              {
-                feature: CRON_NAME,
-                op: "anthropic-credit-exhausted",
-                message:
-                  "Operator Anthropic API credit is exhausted — the claude-eval fleet cannot do work until topped up",
-                // bodyExcerpt is already redaction-scrubbed by the transport.
-                extra: { fn: CRON_NAME, status: err.status, bodyExcerpt: err.bodyExcerpt },
-              },
-            );
+          if (err.creditExhausted || ANTHROPIC_CREDIT_EXHAUSTED_RE.test(body)) {
+            // No report here (#8505): postAnthropicMessage already emitted the named
+            // marker (feature=anthropic-credit, source=cron:cron-anthropic-credit-probe)
+            // that sentry_alert.anthropic_credit_exhausted routes. A second report
+            // would double-count, and this Error-path shape lost its tags anyway.
             return {
               ok: false,
               errorSummary: "Anthropic credit balance is too low (operator credit exhausted)",
@@ -114,8 +108,10 @@ export async function cronAnthropicCreditProbeHandler({
             };
           }
           if (err.status === 401 || ANTHROPIC_AUTH_FAILURE_RE.test(body)) {
+            // Message path (err = null), not an Error: the Error path loses its
+            // feature/op tags to the pino mirror's pre-capture (#8505, #8629).
             reportSilentFallback(
-              new Error("Anthropic API authentication failure (invalid/revoked operator key)"),
+              null,
               {
                 feature: CRON_NAME,
                 op: "anthropic-key-invalid",

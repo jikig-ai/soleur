@@ -31,7 +31,7 @@ The gate itself is a Soleur-side embodiment. New features touching regulated dat
 Every controller/processor with regular processing of regulated data maintains a RoPA. Schema additions that introduce a new processing purpose surface a RoPA-update reminder (advisory note, not a gated finding in v1).
 
 ### Art. 32 — Security of processing
-Encryption, pseudonymisation, integrity, restoration. See `data-in-transit.md` and `api-layer.md`. Boundary with `security-sentinel`: OWASP/CWE patterns route to security-sentinel; column-level encryption-at-rest gaps route here.
+Encryption, pseudonymisation, integrity, restoration. See `data-in-transit.md` and `api-layer.md`. Boundary with `soleur:engineering:review:security-sentinel`: OWASP/CWE patterns route to `soleur:engineering:review:security-sentinel`; column-level encryption-at-rest gaps route here.
 
 ### Art. 33 — Breach notification (72 hours)
 Plan-time advisory only — the gate cannot enforce an incident-response runbook. Surfaces as a one-line note when `incident`, `breach`, or `notification` keywords appear in plan prose without a corresponding 72h handler.

@@ -46,7 +46,7 @@ run_case() {
     " 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "$expected_string"; then
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -cF "$expected_string" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else

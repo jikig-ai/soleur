@@ -70,4 +70,4 @@ A plan that cites a sibling component as "precedent for the try/catch shape" is 
 - AGENTS.md `cq-grep-lib-before-writing-format-helpers` — same class for format/date helpers
 - `apps/web-platform/lib/safe-session.ts` — the helper this learning prescribes reusing
 - PR #3186 — the originating PR
-- Plan: `knowledge-base/project/plans/2026-05-04-feat-shared-doc-cta-banner-closeable-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-04-feat-shared-doc-cta-banner-closeable-plan.md`

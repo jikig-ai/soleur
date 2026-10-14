@@ -1,0 +1,2182 @@
+{
+  "version": "2.18",
+  "children": [
+    {
+      "type": "frame",
+      "id": "T52B8",
+      "x": 0,
+      "y": 0,
+      "name": "State 1 - off",
+      "layout": "vertical",
+      "gap": 14,
+      "children": [
+        {
+          "type": "text",
+          "id": "B3g8U7",
+          "name": "Frame label 1",
+          "fill": "$text-secondary",
+          "content": "Agent web access - off (default)",
+          "fontFamily": "$font",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "wIMsR",
+          "name": "Agent web access - off (default)",
+          "clip": true,
+          "width": 1280,
+          "height": 800,
+          "fill": "$bg",
+          "children": [
+            {
+              "type": "frame",
+              "id": "U2Mii",
+              "name": "Nav rail",
+              "width": 220,
+              "height": "fill_container",
+              "fill": "$bg",
+              "stroke": "$border",
+              "strokeWidth": {
+                "right": 1
+              },
+              "layout": "vertical",
+              "gap": 34,
+              "padding": [
+                28,
+                0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "LLczg",
+                  "name": "Wordmark",
+                  "padding": [
+                    0,
+                    20
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ar9AW",
+                      "name": "Wordmark text",
+                      "fill": "$text-secondary",
+                      "content": "SOLEUR",
+                      "fontFamily": "$font",
+                      "fontSize": 11,
+                      "fontWeight": "semibold",
+                      "letterSpacing": 2.4
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "K1erMX",
+                  "name": "Nav items",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "gMrrE",
+                      "name": "Nav General",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "LdaHW",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "tyZcH",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "hiS1n",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "LYlTf",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "General",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Bwi4n",
+                      "name": "Nav Domain Leaders",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "Ynv7C",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "vjAhb",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "bgauv",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "D1EjA",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Domain Leaders",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Ccu4w",
+                      "name": "Nav Integrations",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "yyKgu",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "UBvWu",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "n0KWn",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "i7X3jG",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Integrations",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "IrNhD",
+                      "name": "Nav Scope Grants",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "Q3eRpN",
+                          "name": "Indicator",
+                          "fill": "$gold",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "HE6xt",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "NJT1x",
+                              "name": "Dot",
+                              "fill": "$gold",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "H08j1",
+                              "name": "Nav label",
+                              "fill": "$text-primary",
+                              "content": "Scope Grants",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "b0zmu",
+                      "name": "Nav Billing",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "aRIVG",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "d4PD1X",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "ANQ8P",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "KayHP",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Billing",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "HprW7",
+              "name": "Content area",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "padding": [
+                48,
+                60
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "z1YIzg",
+                  "name": "Column",
+                  "width": 760,
+                  "layout": "vertical",
+                  "gap": 28,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "KzOOT",
+                      "name": "Page header",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 10,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "mJAQ8",
+                          "name": "Page title",
+                          "fill": "$text-primary",
+                          "content": "Scope Grants",
+                          "fontFamily": "$font",
+                          "fontSize": 24,
+                          "fontWeight": "medium"
+                        },
+                        {
+                          "type": "text",
+                          "id": "XwP18",
+                          "name": "Page subtitle",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Authorize Soleur to act on your behalf for specific action classes. You decide. Agents execute. Revoke at any time.",
+                          "lineHeight": 1.55,
+                          "fontFamily": "$font",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "sz38a",
+                      "name": "Stub card",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "gap": 24,
+                      "padding": 20,
+                      "justifyContent": "space_between",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "j7DqX",
+                          "name": "Stub text",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 10,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "gY8hs",
+                              "name": "Stub heading",
+                              "fill": "$text-muted",
+                              "content": "CONCIERGE COMMAND EXECUTION",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium",
+                              "letterSpacing": 1.3
+                            },
+                            {
+                              "type": "text",
+                              "id": "PQgis",
+                              "name": "Stub body",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Agents run approved shell commands inside your workspace container on your behalf.",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "liaAN",
+                          "name": "Stub toggle track",
+                          "width": 36,
+                          "height": 20,
+                          "fill": "$track-off",
+                          "cornerRadius": 10,
+                          "padding": 2,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "r7davD",
+                              "name": "Stub toggle thumb",
+                              "fill": "#FFFFFF",
+                              "width": 16,
+                              "height": 16
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "j8EUU",
+                      "name": "Feature card",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 18,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "gQKzq",
+                          "name": "Card intro",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 10,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "sEW3u",
+                              "name": "Card heading",
+                              "fill": "$text-muted",
+                              "content": "AGENT WEB ACCESS",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium",
+                              "letterSpacing": 1.3
+                            },
+                            {
+                              "type": "text",
+                              "id": "leSvz",
+                              "name": "Card body",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Hosted agent sessions run with no network access by default. When enabled, agents in this workspace can fetch documentation, install packages, and call external APIs over HTTPS.",
+                              "lineHeight": 1.55,
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "HScos",
+                          "name": "Toggle row",
+                          "width": "fill_container",
+                          "gap": 24,
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "s4UClL",
+                              "name": "Toggle row text",
+                              "layout": "vertical",
+                              "gap": 5,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "UHxmW",
+                                  "name": "Toggle label",
+                                  "fill": "$text-primary",
+                                  "content": "Agent web access",
+                                  "fontFamily": "$font",
+                                  "fontSize": 14,
+                                  "fontWeight": "semibold"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "vy0a4",
+                                  "name": "Toggle subtext",
+                                  "fill": "$text-muted",
+                                  "content": "HTTPS-only outbound access for agent sessions. Workspace-wide.",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "E1pVqy",
+                              "name": "Toggle track",
+                              "width": 36,
+                              "height": 20,
+                              "fill": "$track-off",
+                              "cornerRadius": 10,
+                              "padding": 2,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "ellipse",
+                                  "id": "ZG3t5",
+                                  "name": "Toggle thumb",
+                                  "fill": "#FFFFFF",
+                                  "width": 16,
+                                  "height": 16
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "D1DGVz",
+                          "name": "Risk callout",
+                          "width": "fill_container",
+                          "fill": "$inset",
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "gap": 10,
+                          "padding": 12,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "LgfAs",
+                              "name": "Glyph wrap",
+                              "padding": [
+                                2,
+                                0,
+                                0,
+                                0
+                              ],
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "vBG1C",
+                                  "name": "Warning glyph",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "triangle-alert",
+                                  "library": "lucide",
+                                  "fill": "$gold"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "p0TOg",
+                              "name": "Callout text",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 5,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "HWtXU",
+                                  "name": "Callout lead",
+                                  "fill": "$text-primary",
+                                  "content": "Widens the security boundary.",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "semibold"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "jkbTh",
+                                  "name": "Callout body",
+                                  "fill": "$text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While enabled, sessions run without stored credentials.",
+                                  "lineHeight": 1.55,
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "JuWTW",
+                          "name": "Card footer",
+                          "width": "fill_container",
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "cQDMK",
+                              "name": "Audit link",
+                              "fill": "$gold",
+                              "content": "View egress audit log",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium"
+                            },
+                            {
+                              "type": "icon",
+                              "id": "PN6kv",
+                              "name": "Link arrow",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "arrow-right",
+                              "library": "lucide",
+                              "fill": "$gold"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "zRxJF",
+      "x": 1400,
+      "y": 0,
+      "name": "State 2 - confirm enable",
+      "layout": "vertical",
+      "gap": 14,
+      "children": [
+        {
+          "type": "text",
+          "id": "rQqUz",
+          "name": "Frame label 1",
+          "fill": "$text-secondary",
+          "content": "Agent web access - confirm enable",
+          "fontFamily": "$font",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "T7CJt",
+          "name": "Agent web access - confirm enable",
+          "clip": true,
+          "width": 1280,
+          "height": 800,
+          "fill": "$bg",
+          "children": [
+            {
+              "type": "frame",
+              "id": "ZfWGP",
+              "name": "Nav rail",
+              "width": 220,
+              "height": "fill_container",
+              "fill": "$bg",
+              "stroke": "$border",
+              "strokeWidth": {
+                "right": 1
+              },
+              "layout": "vertical",
+              "gap": 34,
+              "padding": [
+                28,
+                0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Dlt3e",
+                  "name": "Wordmark",
+                  "padding": [
+                    0,
+                    20
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "BfUb0",
+                      "name": "Wordmark text",
+                      "fill": "$text-secondary",
+                      "content": "SOLEUR",
+                      "fontFamily": "$font",
+                      "fontSize": 11,
+                      "fontWeight": "semibold",
+                      "letterSpacing": 2.4
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Oc2MO",
+                  "name": "Nav items",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "uzDHG",
+                      "name": "Nav General",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "maCYb",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "z8PHy",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "M7mDE",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "Tybs9",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "General",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "x9okTU",
+                      "name": "Nav Domain Leaders",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "V7L7B2",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "VHVWT",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "C2JBT",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "FDTfS",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Domain Leaders",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "NWHAC",
+                      "name": "Nav Integrations",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "DHJiK",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "F6CCju",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "rFb11",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "SHrMd",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Integrations",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "CJihX",
+                      "name": "Nav Scope Grants",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "P6ZREP",
+                          "name": "Indicator",
+                          "fill": "$gold",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "PdUuP",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "tL6po",
+                              "name": "Dot",
+                              "fill": "$gold",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "iEq1O",
+                              "name": "Nav label",
+                              "fill": "$text-primary",
+                              "content": "Scope Grants",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "oSd0E",
+                      "name": "Nav Billing",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "lQPcl",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "w8Nnn",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "SvIKg",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "gMh1O",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Billing",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "KBXz3",
+              "name": "Content area",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "padding": [
+                48,
+                60
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Sp3BB",
+                  "name": "Column",
+                  "width": 760,
+                  "layout": "vertical",
+                  "gap": 28,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "gjbGs",
+                      "name": "Page header",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 10,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "UP8PF",
+                          "name": "Page title",
+                          "fill": "$text-primary",
+                          "content": "Scope Grants",
+                          "fontFamily": "$font",
+                          "fontSize": 24,
+                          "fontWeight": "medium"
+                        },
+                        {
+                          "type": "text",
+                          "id": "g2npWb",
+                          "name": "Page subtitle",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Authorize Soleur to act on your behalf for specific action classes. You decide. Agents execute. Revoke at any time.",
+                          "lineHeight": 1.55,
+                          "fontFamily": "$font",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "a2SX0C",
+                      "name": "Stub card",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "gap": 24,
+                      "padding": 20,
+                      "justifyContent": "space_between",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "TloJ9",
+                          "name": "Stub text",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 10,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "K6RRhD",
+                              "name": "Stub heading",
+                              "fill": "$text-muted",
+                              "content": "CONCIERGE COMMAND EXECUTION",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium",
+                              "letterSpacing": 1.3
+                            },
+                            {
+                              "type": "text",
+                              "id": "ADaNQ",
+                              "name": "Stub body",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Agents run approved shell commands inside your workspace container on your behalf.",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "HPuoj",
+                          "name": "Stub toggle track",
+                          "width": 36,
+                          "height": 20,
+                          "fill": "$track-off",
+                          "cornerRadius": 10,
+                          "padding": 2,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "vt1nM",
+                              "name": "Stub toggle thumb",
+                              "fill": "#FFFFFF",
+                              "width": 16,
+                              "height": 16
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "IYUav",
+                      "name": "Feature card",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 18,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "a8bay",
+                          "name": "Card intro",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 10,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "j75UVy",
+                              "name": "Card heading",
+                              "fill": "$text-muted",
+                              "content": "AGENT WEB ACCESS",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium",
+                              "letterSpacing": 1.3
+                            },
+                            {
+                              "type": "text",
+                              "id": "O4I2k",
+                              "name": "Card body",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Hosted agent sessions run with no network access by default. When enabled, agents in this workspace can fetch documentation, install packages, and call external APIs over HTTPS.",
+                              "lineHeight": 1.55,
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "K94m5p",
+                          "name": "Toggle row",
+                          "width": "fill_container",
+                          "gap": 24,
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "V4sGlz",
+                              "name": "Toggle row text",
+                              "layout": "vertical",
+                              "gap": 5,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "HqGTa",
+                                  "name": "Toggle label",
+                                  "fill": "$text-primary",
+                                  "content": "Agent web access",
+                                  "fontFamily": "$font",
+                                  "fontSize": 14,
+                                  "fontWeight": "semibold"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "ugiar",
+                                  "name": "Toggle subtext",
+                                  "fill": "$text-muted",
+                                  "content": "HTTPS-only outbound access for agent sessions. Workspace-wide.",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "J2vIed",
+                              "name": "Toggle track",
+                              "width": 36,
+                              "height": 20,
+                              "fill": "$track-off",
+                              "cornerRadius": 10,
+                              "padding": 2,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "ellipse",
+                                  "id": "b4TjG",
+                                  "name": "Toggle thumb",
+                                  "fill": "#FFFFFF",
+                                  "width": 16,
+                                  "height": 16
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "XP7rr",
+                          "name": "Confirm panel",
+                          "width": "fill_container",
+                          "stroke": "$gold",
+                          "strokeWidth": 1,
+                          "layout": "vertical",
+                          "gap": 12,
+                          "padding": 16,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "elZBC",
+                              "name": "Confirm title",
+                              "fill": "$text-primary",
+                              "content": "Turn on web access for this workspace?",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "semibold"
+                            },
+                            {
+                              "type": "text",
+                              "id": "xtlJK",
+                              "name": "Confirm body",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Agents will reach the public internet over HTTPS and could send data to external hosts if compromised or prompt-injected. Sessions run without stored credentials while this is on. Every outbound request is recorded in the egress audit log.",
+                              "lineHeight": 1.6,
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "n1F29I",
+                              "name": "Confirm actions",
+                              "width": "fill_container",
+                              "gap": 10,
+                              "justifyContent": "end",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "OwGoM",
+                                  "name": "Cancel button",
+                                  "stroke": "$border",
+                                  "strokeWidth": 1,
+                                  "padding": [
+                                    9,
+                                    16
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "GLGUc",
+                                      "name": "Cancel label",
+                                      "fill": "$text-primary",
+                                      "content": "Cancel",
+                                      "fontFamily": "$font",
+                                      "fontSize": 12,
+                                      "fontWeight": "medium"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "GvOhz",
+                                  "name": "Confirm button",
+                                  "fill": {
+                                    "type": "gradient",
+                                    "gradientType": "linear",
+                                    "enabled": true,
+                                    "rotation": 180,
+                                    "size": {
+                                      "height": 1
+                                    },
+                                    "colors": [
+                                      {
+                                        "color": "#D4B36A",
+                                        "position": 0
+                                      },
+                                      {
+                                        "color": "#B8923E",
+                                        "position": 1
+                                      }
+                                    ]
+                                  },
+                                  "padding": [
+                                    9,
+                                    16
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "sDgcq",
+                                      "name": "Confirm label",
+                                      "fill": "#1A1612",
+                                      "content": "I understand, turn it on",
+                                      "fontFamily": "$font",
+                                      "fontSize": 12,
+                                      "fontWeight": "semibold"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "DaGmL",
+                          "name": "Risk callout",
+                          "width": "fill_container",
+                          "fill": "$inset",
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "gap": 10,
+                          "padding": 12,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Zkmqo",
+                              "name": "Glyph wrap",
+                              "padding": [
+                                2,
+                                0,
+                                0,
+                                0
+                              ],
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "Y40pt",
+                                  "name": "Warning glyph",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "triangle-alert",
+                                  "library": "lucide",
+                                  "fill": "$gold"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "tAVXL",
+                              "name": "Callout text",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 5,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "AdSkh",
+                                  "name": "Callout lead",
+                                  "fill": "$text-primary",
+                                  "content": "Widens the security boundary.",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "semibold"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "LYsBB",
+                                  "name": "Callout body",
+                                  "fill": "$text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While enabled, sessions run without stored credentials.",
+                                  "lineHeight": 1.55,
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "h1c6U",
+                          "name": "Card footer",
+                          "width": "fill_container",
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "iEfGL",
+                              "name": "Audit link",
+                              "fill": "$gold",
+                              "content": "View egress audit log",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium"
+                            },
+                            {
+                              "type": "icon",
+                              "id": "Qtwq7",
+                              "name": "Link arrow",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "arrow-right",
+                              "library": "lucide",
+                              "fill": "$gold"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Cwq2y",
+      "x": 2800,
+      "y": 0,
+      "name": "State 3 - on",
+      "layout": "vertical",
+      "gap": 14,
+      "children": [
+        {
+          "type": "text",
+          "id": "UcVbk",
+          "name": "Frame label 1",
+          "fill": "$text-secondary",
+          "content": "Agent web access - on",
+          "fontFamily": "$font",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "vxhk5",
+          "name": "Agent web access - on",
+          "clip": true,
+          "width": 1280,
+          "height": 800,
+          "fill": "$bg",
+          "children": [
+            {
+              "type": "frame",
+              "id": "AwsA4",
+              "name": "Nav rail",
+              "width": 220,
+              "height": "fill_container",
+              "fill": "$bg",
+              "stroke": "$border",
+              "strokeWidth": {
+                "right": 1
+              },
+              "layout": "vertical",
+              "gap": 34,
+              "padding": [
+                28,
+                0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "t8ssI",
+                  "name": "Wordmark",
+                  "padding": [
+                    0,
+                    20
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "xihXn",
+                      "name": "Wordmark text",
+                      "fill": "$text-secondary",
+                      "content": "SOLEUR",
+                      "fontFamily": "$font",
+                      "fontSize": 11,
+                      "fontWeight": "semibold",
+                      "letterSpacing": 2.4
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ISsO9",
+                  "name": "Nav items",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "X21l2",
+                      "name": "Nav General",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "x8na5",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "EopSB",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "KcqZJ",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t9HTC8",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "General",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "tLpvF",
+                      "name": "Nav Domain Leaders",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "x4eg5Y",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "qhWN1",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "Z9a23",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "IcYUT",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Domain Leaders",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "lQW5z",
+                      "name": "Nav Integrations",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "GhPrT",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "v1uYlR",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "a7Bil",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "XG4Kq",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Integrations",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "E0t7s",
+                      "name": "Nav Scope Grants",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "lxQ72",
+                          "name": "Indicator",
+                          "fill": "$gold",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "t9VXN2",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "Sa5bZ",
+                              "name": "Dot",
+                              "fill": "$gold",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "oRWXl",
+                              "name": "Nav label",
+                              "fill": "$text-primary",
+                              "content": "Scope Grants",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "dodlG",
+                      "name": "Nav Billing",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "C0KafL",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "s7Qxxz",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "f955j",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "RWqMb",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Billing",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "v3mUG",
+              "name": "Content area",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "padding": [
+                48,
+                60
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "U53mMT",
+                  "name": "Column",
+                  "width": 760,
+                  "layout": "vertical",
+                  "gap": 28,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Y4x1BI",
+                      "name": "Page header",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 10,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "SMxJz",
+                          "name": "Page title",
+                          "fill": "$text-primary",
+                          "content": "Scope Grants",
+                          "fontFamily": "$font",
+                          "fontSize": 24,
+                          "fontWeight": "medium"
+                        },
+                        {
+                          "type": "text",
+                          "id": "V7Icw",
+                          "name": "Page subtitle",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Authorize Soleur to act on your behalf for specific action classes. You decide. Agents execute. Revoke at any time.",
+                          "lineHeight": 1.55,
+                          "fontFamily": "$font",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "MDjUC",
+                      "name": "Stub card",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "gap": 24,
+                      "padding": 20,
+                      "justifyContent": "space_between",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "p99h4B",
+                          "name": "Stub text",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 10,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "wrZRX",
+                              "name": "Stub heading",
+                              "fill": "$text-muted",
+                              "content": "CONCIERGE COMMAND EXECUTION",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium",
+                              "letterSpacing": 1.3
+                            },
+                            {
+                              "type": "text",
+                              "id": "GJHrU",
+                              "name": "Stub body",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Agents run approved shell commands inside your workspace container on your behalf.",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "UVuxo",
+                          "name": "Stub toggle track",
+                          "width": 36,
+                          "height": 20,
+                          "fill": "$track-off",
+                          "cornerRadius": 10,
+                          "padding": 2,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "vkPOY",
+                              "name": "Stub toggle thumb",
+                              "fill": "#FFFFFF",
+                              "width": 16,
+                              "height": 16
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "BSqDD",
+                      "name": "Feature card",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 18,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "hPiiK",
+                          "name": "Card intro",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 10,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "RfXVx",
+                              "name": "Card heading",
+                              "fill": "$text-muted",
+                              "content": "AGENT WEB ACCESS",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium",
+                              "letterSpacing": 1.3
+                            },
+                            {
+                              "type": "text",
+                              "id": "lh2ja",
+                              "name": "Card body",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Hosted agent sessions run with no network access by default. When enabled, agents in this workspace can fetch documentation, install packages, and call external APIs over HTTPS.",
+                              "lineHeight": 1.55,
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "LpKdw",
+                          "name": "Toggle block",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 10,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "x4wbGR",
+                              "name": "Toggle row",
+                              "width": "fill_container",
+                              "gap": 24,
+                              "justifyContent": "space_between",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "KvwlZ",
+                                  "name": "Toggle row text",
+                                  "layout": "vertical",
+                                  "gap": 5,
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "w5MRZE",
+                                      "name": "Toggle label",
+                                      "fill": "$text-primary",
+                                      "content": "Agent web access",
+                                      "fontFamily": "$font",
+                                      "fontSize": 14,
+                                      "fontWeight": "semibold"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "u2YYFC",
+                                      "name": "Toggle subtext",
+                                      "fill": "$text-muted",
+                                      "content": "HTTPS-only outbound access for agent sessions. Workspace-wide.",
+                                      "fontFamily": "$font",
+                                      "fontSize": 12,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "Nt8Sx",
+                                  "name": "Toggle track",
+                                  "width": 36,
+                                  "height": 20,
+                                  "fill": "$gold",
+                                  "cornerRadius": 10,
+                                  "padding": 2,
+                                  "justifyContent": "end",
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "ellipse",
+                                      "id": "CJNfo",
+                                      "name": "Toggle thumb",
+                                      "fill": "#FFFFFF",
+                                      "width": 16,
+                                      "height": 16
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "E3TYJg",
+                              "name": "Status line",
+                              "fill": "$text-secondary",
+                              "content": "On. Sessions run without stored credentials.",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "MKWBL",
+                          "name": "Risk callout",
+                          "width": "fill_container",
+                          "fill": "$inset",
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "gap": 10,
+                          "padding": 12,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "t7u8Q",
+                              "name": "Glyph wrap",
+                              "padding": [
+                                2,
+                                0,
+                                0,
+                                0
+                              ],
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "lI1FI",
+                                  "name": "Warning glyph",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "triangle-alert",
+                                  "library": "lucide",
+                                  "fill": "$gold"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "pWCIk",
+                              "name": "Callout text",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 5,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Xw9oc",
+                                  "name": "Callout lead",
+                                  "fill": "$text-primary",
+                                  "content": "Widens the security boundary.",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "semibold"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "Gleok",
+                                  "name": "Callout body",
+                                  "fill": "$text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "A compromised or prompt-injected agent could send workspace data to external hosts. While enabled, sessions run without stored credentials.",
+                                  "lineHeight": 1.55,
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f3p7ll",
+                          "name": "Card footer",
+                          "width": "fill_container",
+                          "gap": 6,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "J9PA3w",
+                              "name": "Audit link",
+                              "fill": "$gold",
+                              "content": "View egress audit log",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium"
+                            },
+                            {
+                              "type": "icon",
+                              "id": "aVjUZ",
+                              "name": "Link arrow",
+                              "width": 12,
+                              "height": 12,
+                              "icon": "arrow-right",
+                              "library": "lucide",
+                              "fill": "$gold"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "bg": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "surface": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "inset": {
+      "type": "color",
+      "value": "#1A1A1A"
+    },
+    "border": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "gold": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "text-primary": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "text-secondary": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "text-muted": {
+      "type": "color",
+      "value": "#6A6A6A"
+    },
+    "track-off": {
+      "type": "color",
+      "value": "#1F1F1F"
+    },
+    "font": {
+      "type": "string",
+      "value": "Inter"
+    }
+  },
+  "fileToken": "f6603984-0f6f-4cbc-a1ef-8b90b688e7ea"
+}
