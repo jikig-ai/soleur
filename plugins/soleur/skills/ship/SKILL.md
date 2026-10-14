@@ -1101,7 +1101,7 @@ WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terr
 CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
 CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
 HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
-# argv shows in /proc/<pid>/cmdline: the headers ride curl's stdin config. Bash only; `bash -x` would print them.
+# headers ride curl's stdin config, not argv
 APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)
 (LC_ALL=C; for n in HMAC CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE; do case "${!n}" in ''|*[!A-Za-z0-9._~+/=-]*) echo "$n unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1;; esac; done) || exit 1
 curl --disable --proto '=https' -m 30 -fsS --config - \
@@ -2947,14 +2947,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block â
 
    **Step 3:** Verify each schema-addition migration is live in production by querying the Supabase REST API:
 
-   ```bash
-   SUPABASE_URL=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)
-   SUPABASE_KEY=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain)
-   # argv shows in /proc/<pid>/cmdline: the key rides curl's stdin config. Bash only; `bash -x` would print the key.
-   (LC_ALL=C; case "$SUPABASE_KEY" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "SUPABASE_KEY unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1; }
-   curl --disable --proto '=https' -m 30 -sS --config - "$SUPABASE_URL/rest/v1/<table>?select=<new_column>&limit=1" \
-     < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SUPABASE_KEY" "$SUPABASE_KEY")
-   ```
+   Run the probe in [supabase-column-probe.md](./references/supabase-column-probe.md) (one Bash call).
 
 - If the query returns data (even `null` values): the column exists. Report "Migration verified: `<column>` exists in `<table>`."
 - If the query returns a 400/404 or `column not found` error: the migration was NOT applied. Report the failure and attempt to apply it using the Supabase CLI or Management API. Do NOT silently proceed â€” the deployed code expects the new schema.
