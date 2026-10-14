@@ -6363,6 +6363,10 @@ if want_scripts; then
   # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
   # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
   run_suite "scripts/test-affected-derive-cache" bash scripts/test-affected-derive-cache.test.sh
+  # #9729 (ADR-276 S4, PR B): the pr-selection driver EXECUTED (real merge-commit fixture repos, a stub test-all.sh replaying
+  # the measured record shapes, a restricted PATH, and a mutant per guard row). Same explicit-registration and LAST-in-block
+  # reasons as above. Declared edge set, not always-on.
+  run_suite "scripts/ci-pr-selection" bash scripts/ci-pr-selection.test.sh
 fi
 
 # Named bun-test entries — bun shard.

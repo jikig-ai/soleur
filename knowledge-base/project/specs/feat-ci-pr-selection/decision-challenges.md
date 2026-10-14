@@ -9,5 +9,6 @@
 | Scope trims inside the operator's list (`mode` output, `pr-affected-active`, G2-3/G2-4, `ci-e2e-classify.sh` in the trigger list) | technical | Ruled by CTO agent, 2026-10-14: all five trims confirmed; keep a source-coverage test for `test-all.sh` - every sourced file is under `scripts/lib/` today |
 | ADR frontmatter direction | technical | Ruled by CTO agent, 2026-10-14: ADR-276 `amends: [ADR-262, ADR-183]`; ADR-262 gains `amended_by:`; ADR-183's existing `amended_by:` list is appended to - the plan text was inverted |
 | Keep `head_sha`/`base_sha`/comma-list `skip_legs` though DHH proposed booleans | operator (scope) | Kept as the operator specified; no cut |
+| Measured yield of PR B under the ruled group-skip rule is zero for a knowledge-base-only diff (webplat and heavy hold plain relevance declines, bun two always-on suites), and a cold selector run exceeds the 90 s stage-2 budget | operator (priority) | Kept the ruled conservative rule and shipped dark; whether PR C proceeds as designed, extends ADR-181/ADR-262 to treat those declines as skippable on a pull_request run, or warms the derive cache from main is decided at the PR C go/no-go (plan Phase 4.0) with the replay escape rate in hand |
 
 CPO sign-off for PR B: APPROVED-WITH-CONDITIONS by the CPO agent, 2026-10-14 (not an operator item); conditions are folded into the plan's PR B contract.

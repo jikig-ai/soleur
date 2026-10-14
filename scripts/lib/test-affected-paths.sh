@@ -1252,6 +1252,19 @@ AFFECTED_SCRIPTS_CI_DRAFT_LIGHT_PATHS=(
   "scripts/required-checks.txt"
 )
 
+# scripts/ci-pr-selection (#9729, ADR-276 S4) — the suite EXECUTES the pr-selection driver against throwaway git fixtures and a stub
+# runner, derives the trigger list from what scripts/test-all.sh sources and the --pr-gated decline labels from its text, and reads
+# the git-fixture env library. Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that
+# drives its floor).
+AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/ci-pr-selection.sh"
+  "scripts/ci-pr-selection.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
 # ci.yml, executes the classifier script, and sweeps every workflow for the falsy-middle ternary shape, so the one corpus it walks
 # is .github/workflows. Declared from the repo paths its suite file names.
