@@ -122,9 +122,9 @@ savings claims like "90%" are scoped to terminal-output tokens, not your bill.</
 
 <ol>
 <li><strong>Check the marker.</strong> Scroll to the session-start system messages (or
-   grep the session log) for <code>SOLEUR_EXT_FILTER</code>. Agents: re-derive it with
-   <code>env -u CODEX_THREAD_ID -u PLUGIN_ROOT CLAUDE_PLUGIN_ROOT=1 \
-     bash &lt;plugin&gt;/hooks/ext-filter-detect.sh --self-test</code>.
+   grep the session log) for <code>SOLEUR_EXT_FILTER</code>. Agents can re-derive it:
+   <code>bash &lt;plugin&gt;/hooks/ext-filter-detect.sh --self-test</code> — the flag
+   bypasses the harness-env gates.
    <code>tool=none</code> means no filter detected — not "no filter exists" (an org-policy
    settings hook, or a PATH the hook process does not inherit, can still hide one). Claude
    Code sessions only —
