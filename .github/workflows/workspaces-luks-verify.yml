@@ -488,7 +488,7 @@ jobs:
           # (#8706) INFORMATIONAL ONLY — the host timer/service unit state, for the runbook's no-SSH
           # decode (`gh run view <id> --log | grep UnitFileState`). A unit stopped before its probe
           # runs (203/EXEC, a disabled timer) logs under SYSLOG_IDENTIFIER=systemd — which Vector
-          # DOES ship: PRIORITY-3 rows from any unit ride Source 1's include_matches.PRIORITY {0..4}
+          # DOES ship: PRIORITY-3 rows from any unit ride Source 1's include_matches.PRIORITY {3,4} (partitioned in #10255 — 0-2 belong to Source 2)
           # arm under OR-over-fields matching (#9963 pins the mechanism in vector.toml). This line
           # stays the daily read because it decodes the timer/service STATE, not just the failure.
           # OUTSIDE the classifier: it touches none of probe_rc/probe_log/ssh_rc/ssh_err/reason and
