@@ -159,7 +159,7 @@ sanctioned flag-removed action, so no schema change is needed.
   ignores deleted rows — verified live 2026-06-15), so a create→delete→recreate
   round-trip works.
 - The management API key is read via `doppler secrets get … -c cli_ops --plain`
-  and passed only to `curl -H Authorization` — never echoed.
+  and passed only on curl's stdin config — never echoed.
 
 ## Cross-references
 
