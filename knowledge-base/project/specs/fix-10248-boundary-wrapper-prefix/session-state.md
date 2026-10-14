@@ -31,3 +31,13 @@
 - Deviations: `rtk-foo gh issue create` negative moved off the issue-create surface — filing gate's word-boundary scan already denies it by design; negative pinned on the stash surface instead.
 - Test evidence: boundary-prefix 51/51, rtk-grammar-parity 15/15, guardrails 364/364, pre-merge-rebase 215/215, parity 17/17, auto-close 49/49, follow-through 25/25, cla-signed 7/7, ship-unpushed 17/17, net-issue-flow 40, soak 26, operator-step 26/26, runbook 26/26, prod-write-defer 222/222, guard-vacuity-floor 23/23. Fixture baselines regenerated (no residue change).
 - Parent PR #10227 MERGED (d3714354a0) mid-work — rebase --onto origin/main now unblocked.
+
+## Review Phase (design-validity pass)
+- Seats: code-simplicity-reviewer + architecture-strategist — both SIGN-OFF-WITH-FINDINGS ("simplest correct shape"; no simpler mechanism exists).
+- Landed in-PR:
+  - P2 (both seats): provision arm — consuming file must source incidents.sh/wrapper-boundary.sh, not just interpolate.
+  - P2 (simplicity): comment-strip asymmetry — consumption check now strips trailing comments identically to candidacy.
+  - P2 (arch): census widened to .claude/hooks/lib/ + scripts/lib/ — incidents.sh detect_bypass (:302-318) entered as justified exemptions (space-boundary class, rtk already caught).
+  - P3: exemption comment refs re-pointed; command-vocab extension note added.
+- Deferred: boundary-alternation canonicalization → filed #10315 (milestone Post-MVP/Later, meta/machinery); `:-` alternation drift = documented debt (benign, fires only when lib absent); doppler fallback verified verbatim pre-PR form.
+- Suite post-fix: boundary-prefix.test.sh 52/52 (census 32 candidates, 20 consuming, 12 exempt).

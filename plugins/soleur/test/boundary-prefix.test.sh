@@ -191,10 +191,13 @@ echo "-- consumption census (derived site set, not a member list) --"
 # Justified exemptions — file:line with a reason. Each entry must still exist on
 # disk AND the exemption is positional (a moved line re-enters the census).
 #   brand-hex-commit-gate.sh:119, git-commit-secret-scan.sh:113,
-#   guardrails.sh:228 — bare-[[:space:]] in the boundary alternation already
+#   guardrails.sh:230 — bare-[[:space:]] in the boundary alternation already
 #     matches `rtk git …` / `rtk rm …` via the space.
-#   guardrails.sh:702 — [^A-Za-z0-9_-] word-boundary class, space before `gh`
+#   guardrails.sh:704 — [^A-Za-z0-9_-] word-boundary class, space before `gh`
 #     already satisfies it.
+#   lib/incidents.sh:302-318 (detect_bypass: --no-verify / -c core.hooksPath= /
+#     -c commit.gpgsign=false / --no-gpg-sign) — same bare-[[:space:]] boundary
+#     class; `rtk git --no-verify` already matches via the space, pre-fragment.
 #   incidents.test.sh:228/234/240 — test-internal assertion literals inside
 #     strip_command_bodies cases (fixture text, not a gate pattern).
 #   resolve-regenerable-conflicts.test.sh:719 — `_PUSH_RE` `[^-[:alnum:]]`
@@ -204,6 +207,10 @@ EXEMPTIONS=(
   ".claude/hooks/git-commit-secret-scan.sh:113"
   ".claude/hooks/guardrails.sh:230"
   ".claude/hooks/guardrails.sh:704"
+  ".claude/hooks/lib/incidents.sh:302"
+  ".claude/hooks/lib/incidents.sh:308"
+  ".claude/hooks/lib/incidents.sh:313"
+  ".claude/hooks/lib/incidents.sh:318"
   ".claude/hooks/incidents.test.sh:228"
   ".claude/hooks/incidents.test.sh:234"
   ".claude/hooks/incidents.test.sh:240"
@@ -220,8 +227,16 @@ is_exempt() {
 # followed by a word-ish edge (space, backslash-escape, paren, bracket, pipe).
 # Deliberately loose: the exemption registry dispositions residue; a tight
 # predicate that misses a site is the worst outcome.
+# NOTE on the command vocabulary: the tail predicate is a closed literal list
+# (gh|git|terraform|tofu|doppler|rm). A new boundary gate on an unlisted command
+# (kubectl, aws, stripe) escapes derivation silently — extend the predicate when
+# a gate on a new command lands; a loose tail that misses sites is the worst
+# outcome for a drift guard.
+# lib/ is in scope: the carrier itself (incidents.sh detect_bypass) holds
+# boundary-anchored git patterns — a census that cannot see its own carrier is
+# the blind spot the review design-pass flagged.
 CANDIDATES="$(
-  for f in "$HOOKS_DIR"/*.sh "$SCRIPTS_DIR"/*.sh; do
+  for f in "$HOOKS_DIR"/*.sh "$HOOKS_DIR"/lib/*.sh "$SCRIPTS_DIR"/*.sh "$SCRIPTS_DIR"/lib/*.sh; do
     [[ -f "$f" ]] || continue
     rel="${f#"$REPO_ROOT"/}"
     awk -v file="$rel" '
@@ -233,13 +248,18 @@ CANDIDATES="$(
 )"
 
 CAND_COUNT=0; CONSUMING=0; UNCOVERED=""
+declare -A CONSUMING_FILES=()
 while IFS= read -r site; do
   [[ -n "$site" ]] || continue
   CAND_COUNT=$((CAND_COUNT + 1))
   file="${site%:*}"; lineno="${site##*:}"
-  line="$(sed -n "${lineno}p" "$REPO_ROOT/$file")"
+  # Strip the trailing comment EXACTLY as the candidacy scan does — a
+  # `${SOLEUR_BOUNDARY_PFX` mentioned only inside a trailing comment must not
+  # count as consumption (review design-pass P2: raw-line vs stripped-line asymmetry).
+  line="$(sed -n "${lineno}p" "$REPO_ROOT/$file" | sed 's/[[:space:]]#.*$//')"
   if [[ "$line" == *'${SOLEUR_BOUNDARY_PFX'* || "$line" == *'$SOLEUR_BOUNDARY_PFX'* ]]; then
     CONSUMING=$((CONSUMING + 1))
+    CONSUMING_FILES["$file"]=1
   elif is_exempt "$site"; then
     :
   else
@@ -249,14 +269,26 @@ done <<<"$CANDIDATES"
 
 echo "  census: $CAND_COUNT candidates, $CONSUMING consuming, ${#EXEMPTIONS[@]} exempt"
 
-# Floor: the derived candidate set must be at least the known 28 (20 consumers +
-# 8 exemptions) — a neutered scan that finds 0 sites reds here.
-MIN_CANDIDATES=28
+# Floor: the derived candidate set must be at least the known 32 (20 consumers +
+# 12 exemptions) — a neutered scan that finds 0 sites reds here.
+MIN_CANDIDATES=32
 if [[ "$CAND_COUNT" -lt "$MIN_CANDIDATES" ]]; then
   printf '[FATAL] census floor: only %s boundary-anchored candidates found, floor is %s — the scan is neutered\n' "$CAND_COUNT" "$MIN_CANDIDATES" >&2
   exit 1
 fi
 assert_eq "" "$UNCOVERED" "every derived boundary-anchored gated-command site consumes \${SOLEUR_BOUNDARY_PFX} or is exempt$( [[ -n "$UNCOVERED" ]] && printf ' — uncovered:\n%s' "$UNCOVERED" )"
+
+# Provision arm (review design-pass P2): interpolation is not provision. A
+# consuming file that never sources the carrier greens the line-level census
+# while running pre-#10248 matching forever — fail-soft makes it never-detected.
+# Every consuming FILE must name a carrier path: incidents.sh (which nested-
+# sources the lib) or wrapper-boundary.sh directly.
+UNPROVISIONED=""
+for file in "${!CONSUMING_FILES[@]}"; do
+  grep -qE 'source.*(incidents\.sh|wrapper-boundary\.sh)' "$REPO_ROOT/$file" \
+    || UNPROVISIONED+="$file"$'\n'
+done
+assert_eq "" "$UNPROVISIONED" "every consuming file sources a carrier (incidents.sh or wrapper-boundary.sh)$( [[ -n "$UNPROVISIONED" ]] && printf ' — unprovisioned:\n%s' "$UNPROVISIONED" )"
 
 # Exemption hygiene: every registry entry names a file that exists and whose
 # cited line still carries the candidate shape (stale exemptions must not
@@ -275,7 +307,7 @@ done
 assert_eq "" "$STALE" "every exemption entry still names a live candidate line$( [[ -n "$STALE" ]] && printf ' — stale:\n%s' "$STALE" )"
 
 # --- assertion floor ---------------------------------------------------------
-MIN_CASES=51
+MIN_CASES=52
 if [[ $((PASS + FAIL)) -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$((PASS + FAIL))" "$MIN_CASES" >&2
   exit 1
