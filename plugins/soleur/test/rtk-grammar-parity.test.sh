@@ -104,8 +104,10 @@ if [[ -f "$WBLIB" ]]; then
   [[ -n "$members" ]] || { echo "FATAL: SOLEUR_RTK_RE extraction yielded no members"; exit 3; }
   # bare-word members are exec subcommands; dash-members are global flags
   # (value-shape suffixes like (=[^[:space:]]+)? normalize to the bare flag).
-  frag_exec="$(grep -E '^[a-z]+$' <<<"$members" | sort | tr '\n' ' ' | sed 's/ $//')"
-  frag_glob="$(grep -E '^-' <<<"$members" | sed 's/(=.*//' | sort | tr '\n' ' ' | sed 's/ $//')"
+  # `|| true`: grep rc1 on an empty arm is a normal answer, not an error —
+  # the [[ -n ]] floor below is the real guard (S1 capture-exit lint).
+  frag_exec="$(grep -E '^[a-z]+$' <<<"$members" | sort | tr '\n' ' ' | sed 's/ $//' || true)"
+  frag_glob="$(grep -E '^-' <<<"$members" | sed 's/(=.*//' | sort | tr '\n' ' ' | sed 's/ $//' || true)"
   [[ -n "$frag_exec" && -n "$frag_glob" ]] \
     || { echo "FATAL: fragment member split yielded an empty arm (exec='$frag_exec' glob='$frag_glob')"; exit 3; }
 

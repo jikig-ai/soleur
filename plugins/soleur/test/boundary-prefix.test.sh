@@ -164,7 +164,9 @@ rm -f /tmp/bp-failsoft.$$
 GUARD="$SCRIPTS_DIR/precommit-guard.sh"
 PG_TMP="$(mktemp -d)"; assert_fixture_dir "$PG_TMP"
 trap 'rm -rf "$PG_TMP"' EXIT
-git -C "$PG_TMP" init -q -b main && git -C "$PG_TMP" commit -q --allow-empty -m init
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" \
+  && git_fixture_env "$PG_TMP" || exit 1
+  git -C "$PG_TMP" init -q -b main && git -C "$PG_TMP" commit -q --allow-empty -m init ) || exit 2
 
 _rc=0; bash "$GUARD" --cwd "$PG_TMP" 'rtk git commit' >/dev/null 2>&1 || _rc=$?
 assert_eq "1" "$_rc" "precommit-guard refuses 'rtk git commit' on main"

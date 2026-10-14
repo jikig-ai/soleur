@@ -58,6 +58,9 @@ plugins/soleur/skills/incident/test/redact-sentinel.test.sh	knowledge-base/engin
 plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	knowledge-base/engineering/security/skill-overrides
 plugins/soleur/test/_base-notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	knowledge-base/project/constitution.md
+plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/engineering/architecture/diagrams
+plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/marketing/brand-guide.md
+plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/product/roadmap.md
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	knowledge-base/product/design
 plugins/soleur/test/ci-classify-step-exec.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base
