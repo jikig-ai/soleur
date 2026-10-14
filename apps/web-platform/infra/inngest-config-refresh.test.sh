@@ -110,6 +110,21 @@ grep -qE 'ReadWritePaths=.*[[:space:]]/usr/local/bin([[:space:]]|$)' <<<"$SVC" \
 grep -qE 'ReadWritePaths=.*-/root/\.docker([[:space:]]|$)' <<<"$SVC" \
   && pass || fail "S2b: /root/.docker must be dash-prefixed in ReadWritePaths"
 
+# S2c: the sandboxing trio is verbatim-pinned (the flip suite pins the same lines —
+# stripping ProtectSystem=strict must RED, not silently widen), plus the relational
+# bound the flip suite pins: worst-case tick (login 60 + pull + verify defaults,
+# extracted from the rendered script) strictly under TimeoutStartSec — a kill
+# mid-gate emits no marker.
+for pin in 'NoNewPrivileges=yes' 'ProtectSystem=strict' 'PrivateTmp=true'; do
+  grep -qF "$pin" <<<"$SVC" && pass || fail "S2c: service missing sandbox pin $pin"
+done
+grep -qF 'PrivateTmp=yes' <<<"$SVC" && fail "S2c: PrivateTmp=yes mis-spelling (want PrivateTmp=true)" || pass
+_ts="$(printf '%s' "$SVC" | grep -oE 'TimeoutStartSec=[0-9]+' | cut -d= -f2)"
+_pto="$(printf '%s' "$SC" | grep -oE 'REFRESH_PULL_TIMEOUT_S:-[0-9]+' | grep -oE '[0-9]+$' | head -1)"
+_vto="$(printf '%s' "$SC" | grep -oE 'REFRESH_VERIFY_TIMEOUT_S:-[0-9]+' | grep -oE '[0-9]+$' | head -1)"
+[ "$((60 + ${_pto:-0} + ${_vto:-0}))" -lt "${_ts:-0}" ] \
+  && pass || fail "S2c: worst-case tick (60+${_pto:-?}+${_vto:-?}) not under TimeoutStartSec=${_ts:-?}"
+
 # S3: timer shape — 60 s cadence, enabled on timers.target, persistent.
 for pin in 'OnBootSec=' 'OnUnitActiveSec=60s' 'Persistent=true' 'WantedBy=timers.target'; do
   grep -qF "$pin" <<<"$TMR" && pass || fail "S3: timer missing $pin"
@@ -163,19 +178,27 @@ while IFS= read -r m; do
   base="/usr/local/bin/$(basename "$m")"
   grep -qF "[\"$base\"]" "$DIR/infra-config-install.sh" || { missing=1; echo "  refresh-set member $base not in DEST_SPEC" >&2; }
 done <<< "$members"
-[ "$missing" -eq 0 ] && pass || fail "S7: refresh-set member(s) absent from DEST_SPEC (AC18 lockstep)"
-# engine exclusion (HARD-1): no engine path may appear in the set or in DEST_SPEC.
+while IFS= read -r m; do
+  base="$(basename "$m")"
+  grep -qF "|/usr/local/bin/$base|" "$DIR/infra-config-apply.sh" || { missing=1; echo "  refresh-set member $base not in FILE_MAP" >&2; }
+done <<< "$members"
+[ "$missing" -eq 0 ] && pass || fail "S7: refresh-set member(s) absent from DEST_SPEC or FILE_MAP (AC18 lockstep)"
+# engine exclusion (HARD-1): no engine path may appear in the set, DEST_SPEC, or FILE_MAP.
 engine_ok=1
 for eng in inngest-config-refresh infra-config-install cosign-trusted-root applied.version \
            inngest-config-refresh.service inngest-config-refresh.timer; do
   grep -q "$eng" "$SET_FILE" 2>/dev/null && { grep -qE '^\s*[^#].*'"$eng" "$SET_FILE" && engine_ok=0; }
   grep -qF "\"/usr/local/bin/$eng" "$DIR/infra-config-install.sh" && engine_ok=0
+  grep -qF "|/usr/local/bin/$eng|" "$DIR/infra-config-apply.sh" && engine_ok=0
 done
-[ "$engine_ok" -eq 1 ] && pass || fail "S7: engine path present in refresh-set or DEST_SPEC (HARD-1)"
+[ "$engine_ok" -eq 1 ] && pass || fail "S7: engine path present in refresh-set, DEST_SPEC, or FILE_MAP (HARD-1)"
 
 # S8: the journald tag is shipped — vector.toml Source 4 allowlist contains it.
-grep -q '"inngest-config-refresh"' "$DIR/vector.toml" \
-  && pass || fail "S8: inngest-config-refresh absent from vector.toml SYSLOG_IDENTIFIER allowlist"
+# Scoped to the [sources.host_scripts_journald] include block — a file-wide grep
+# would pass on a moved/commented entry (the journald-config.test.sh lesson).
+hsj="$(awk '/^\[sources\.host_scripts_journald\]/{f=1} f{print} f&&/^include_matches\.SYSLOG_IDENTIFIER/{l=1} l&&/\]/{exit}' "$DIR/vector.toml")"
+grep -qF '"inngest-config-refresh"' <<<"$hsj" \
+  && pass || fail "S8: inngest-config-refresh absent from vector.toml host_scripts_journald SYSLOG_IDENTIFIER allowlist"
 
 # S8b — D2 (#6780): the phone-home detail sanitizer must let a LABELED `sha256=<64hex>`
 # digest survive while still redacting unlabeled secrets — else the drift comparator can
@@ -325,7 +348,7 @@ run_refresh() {  # env: INNGEST_CONFIG_DIGEST + FX_* fault knobs
 }
 
 reset_fx() { rm -f "$FX/calls.log" "$FX/markers.log" "$FX/nseen"; rm -rf "$FX/state"; mkdir -p "$FX/state"; rm -rf "$FX/dest"; mkdir -p "$FX/dest"; }
-docker_calls() { grep -c '^docker ' "$FX/calls.log" 2>/dev/null || echo 0; }
+docker_calls() { local _n; _n="$(grep -c '^docker ' "$FX/calls.log" 2>/dev/null || true)"; printf '%s' "${_n:-0}"; }
 
 PTR="1111111111111111111111111111111111111111111111111111111111111111"
 PTR2="2222222222222222222222222222222222222222222222222222222222222222"
@@ -478,6 +501,23 @@ grep -q 'SOLEUR_INFRA_PULL_REPAIRED version=9' "$FX/markers.log" \
 grep -q '"bundle_sha256":"'"$PTR2"'"' "$FX/state/applied.json" \
   && pass || fail "F12: ledger not re-pinned to the promoted digest"
 [ -f "$FX/dest/inngest-redis-bootstrap.sh" ] && pass || fail "F12: members not installed on repair"
+
+# F13 — pull failure: VERIFY_FAIL reason=pull, nothing installed, version kept.
+reset_fx
+echo 0 > "$FX/state/applied.version"
+mk_bundle 11 "$FX/members"
+FX_FAIL_PULL=1 INNGEST_CONFIG_DIGEST="$PTR" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F13: pull-fail rc=$rc (want 1)"
+grep -q 'SOLEUR_INFRA_PULL_VERIFY_FAIL reason=pull' "$FX/markers.log" \
+  && pass || fail "F13: no VERIFY_FAIL reason=pull row"
+[ "$(cat "$FX/state/applied.version")" = "0" ] && pass || fail "F13: version advanced on pull failure"
+[ "$(ls "$FX/dest" | wc -l)" -eq 0 ] && pass || fail "F13: files installed despite pull failure"
+
+# Anti-vacuity floor — the inngest.test.sh convention: a deleted block must red,
+# not silently pass fewer assertions. Raise it when adding rows.
+MIN_ASSERTIONS=98
+[ "$passes" -ge "$MIN_ASSERTIONS" ] \
+  || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 
 echo "inngest-config-refresh.test.sh: ${passes} passed, ${fails} failed"
 [ "$fails" -eq 0 ] || exit 1

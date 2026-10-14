@@ -48,7 +48,11 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           # The promoted pointer. EMPTY pre-cutover (the isolated soleur-inngest/prd read token +
           # INNGEST_CONFIG_DIGEST injection are wired at the #6178 cutover). Empty => PENDING.
-          INNGEST_CONFIG_DIGEST: ${{ secrets.INNGEST_CONFIG_DIGEST_READONLY }}
+          # The secret is an isolated soleur-inngest/prd Doppler READ TOKEN (the *_READONLY
+          # convention) — a credential, never the digest itself; the step dereferences the
+          # pointer through it below. Binding it straight to INNGEST_CONFIG_DIGEST would
+          # hand the comparator a dp.* token and alarm DIVERGED forever once activated.
+          INNGEST_CONFIG_DIGEST_READ_TOKEN: ${{ secrets.INNGEST_CONFIG_DIGEST_READONLY }}
         run: |
           set -euo pipefail
 
@@ -89,6 +93,24 @@ jobs:
             echo "note: Better Stack query FAILED — reason: ${QUERY_ERR:-<none>}"
           fi
 
+          # Resolve the promoted pointer through the isolated read token (the *_READONLY
+          # secret is a credential, not the value). A token minted but resolving empty is
+          # an instrument failure — its own verdict class, never a silent empty-pointer.
+          POINTER=""
+          if [[ -n "${INNGEST_CONFIG_DIGEST_READ_TOKEN:-}" ]]; then
+            POINTER="$(DOPPLER_TOKEN="$INNGEST_CONFIG_DIGEST_READ_TOKEN" \
+                       doppler secrets get INNGEST_CONFIG_DIGEST -p soleur-inngest -c prd --plain 2>/dev/null || true)"
+            if [[ -z "$POINTER" ]]; then
+              {
+                echo "## Inngest config drift comparison"
+                echo ""
+                echo "- verdict: \`QUERY_UNAVAILABLE\` (isolated pointer read resolved empty — token/instrument failure, NOT a host failure)"
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::config-refresh drift check could NOT run — the isolated read token resolved no INNGEST_CONFIG_DIGEST (instrument failure, NOT a host failure)"
+              exit 1
+            fi
+          fi
+
           # Display strings are rebuilt from allowlisted tokens — ingest rows (and query
           # stderr) are attacker-influenceable text that would otherwise flow raw into
           # $GITHUB_STEP_SUMMARY markdown and ::error:: annotations (#7980 lesson:
@@ -103,7 +125,7 @@ jobs:
           LATEST_DISP="$(_summ_row "${LATEST_ANY:-}")"
           QUERY_ERR_DISP="$(printf '%s' "${QUERY_ERR:-}" | tr -cd '[:print:]' | cut -c1-160)"
 
-          if [[ -n "$INNGEST_CONFIG_DIGEST" ]]; then echo "pointer: <set>"; else echo "pointer: <empty>"; fi
+          if [[ -n "$POINTER" ]]; then echo "pointer: <set>"; else echo "pointer: <empty>"; fi
           echo "marker : ${MARKER_DISP:-<none>}"
           # Operator context only — a VERIFY_FAIL row here means the channel is ALIVE and
           # rejecting, which is a very different investigation than a dead timer.
@@ -114,7 +136,7 @@ jobs:
           # would send the operator to investigate 10.0.1.40 when the instrument, not the host, is
           # down. Fail CLOSED (we cannot confirm the host is current) but attribute to the query.
           # Pre-cutover (empty pointer) a query failure is benign → fall through to PENDING.
-          if [[ "$QUERY_OK" -eq 0 && -n "$INNGEST_CONFIG_DIGEST" ]]; then
+          if [[ "$QUERY_OK" -eq 0 && -n "$POINTER" ]]; then
             {
               echo "## Inngest config drift comparison"
               echo ""
@@ -127,7 +149,7 @@ jobs:
 
           set +e
           VERDICT="$(bash apps/web-platform/infra/inngest-config-drift-compare.sh \
-                       --pointer "${INNGEST_CONFIG_DIGEST:-}" --marker "${MARKER}")"
+                       --pointer "${POINTER}" --marker "${MARKER}")"
           rc=$?
           set -e
           echo "verdict: ${VERDICT}"

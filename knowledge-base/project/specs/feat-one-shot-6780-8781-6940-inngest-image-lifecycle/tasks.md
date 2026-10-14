@@ -32,7 +32,7 @@ TEST-AUTHORING RULE (detector): no bare `<<`/`<<<` token outside a real heredoc 
 
 - [x] 2.1 `.github/workflows/check-inngest-bootstrap-build.yml`: `pull_request` paths filter (mirroring mint's carrier globs + self + script + test), `permissions: contents: read`, one job running the script
 - [x] 2.2 `.github/scripts/check-inngest-bootstrap-build.sh`: pin-read (same `*.tf` greps) → cli tarball sha256-verify → stage 14 carriers → Dockerfile heredoc → `docker build` with revision label; NO push/sign/mirror/bump
-- [x] 2.3 `infra-validation.yml`: path-map comment entries for the new files (candidate lane + refresh suite)
+- [x] 2.3 `infra-validation.yml` path-map comment entries for the new files — AMENDED at review (code-quality seat): entries not needed. The parity suite runs in `guard-script-fixture-tests` (a required context with no path filter) and the refresh suite rides `apps/*/infra/**`; infra-validation's map names the subjects of ITS jobs, and the candidate lane is a separate workflow, not an infra-validation job subject.
 
 ## Phase 3: Workstream C — #6940 follow-ups
 

@@ -301,7 +301,7 @@
     }
   },
   {
-    "__comment": "#6919 — the op=verify HTTP 500 fix. The cutover arms forward the STARTED_AT window lower bound (from) and an optional functionIDs scope (function_ids) as URL query params so the wide default scan can be cost-cut without a code change. Both are read into the probe's env seams (INNGEST_DOUBLEFIRE_FROM / INNGEST_DOUBLEFIRE_FUNCTION_IDS). from MUST respect the window-superset invariant (FROM <= cutover_instant - 2*max_cron_period ~= 182d); the caller passes cutover-200d. HMAC is over the (empty) GET body, so query params do not affect the signature. Values are injection-safe: the script binds from via jq --arg and splits function_ids via jq -R.",
+    "__comment": "#6919 — the op=verify HTTP 500 fix. The cutover arms forward the STARTED_AT window lower bound (from) and an optional functionIDs scope (function_ids) as URL query params so the wide default scan can be cost-cut without a code change. All three are read into the probe's env seams (INNGEST_DOUBLEFIRE_FROM / INNGEST_DOUBLEFIRE_FUNCTION_IDS / #6940's INNGEST_GQL_PAGE_SIZE — fail-closed 1..1000 in the probe, garbage refuses rather than parses). from MUST respect the window-superset invariant (FROM <= cutover_instant - 2*max_cron_period ~= 182d); the caller passes cutover-200d. HMAC is over the (empty) GET body, so query params do not affect the signature. Values are injection-safe: the script binds from via jq --arg and splits function_ids via jq -R.",
     "id": "inngest-doublefire-probe",
     "execute-command": "/usr/local/bin/inngest-doublefire-probe.sh",
     "command-working-directory": "/",

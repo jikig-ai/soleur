@@ -1829,8 +1829,8 @@ write_files:
       # verify_fail — the named-failure exit. Records the attempt in applied.json WITHOUT
       # advancing the applied pair (best-effort — a dead state dir must not mask the emit),
       # emits the marker under the same fail-open 300 s throttle as NOOP (a reason CHANGE
-      # always emits; a sustained identical failure re-emits once per window — the plan's
-      # transitions-only shape at ~288 rows/day worst case, not ~1,440), and exits 1 EVERY
+      # always emits; a sustained identical failure re-emits once per window — ~288
+      # rows/day per sustained reason, not ~1,440), and exits 1 EVERY
       # tick regardless — the oneshot failure + timer retry is the liveness signal, the row
       # is the reason (the comparator DIVERGES if it is the last thing the host said).
       VF_STAMP="$${STATE_DIR}/.verify-fail-emitted"
@@ -2009,6 +2009,9 @@ write_files:
       member_rows="$(grep -E '^[0-9a-f]{64}  [^[:space:]]+$' "$STAGE/bundle/manifest.txt" || true)"
       [ -n "$member_rows" ] || verify_fail manifest-empty "$VERSION"
       member_names="$(printf '%s\n' "$member_rows" | awk '{print $2}')"
+      # An empty name set must not ride the 0==0 equality below into an APPLIED
+      # with zero files installed (the installs-ALL-files contract is fail-closed).
+      [ -n "$member_names" ] || verify_fail manifest-empty "$VERSION"
       total_members="$(printf '%s\n' "$member_names" | grep -c .)"
       good_members="$(printf '%s\n' "$member_names" | grep -cE '^[A-Za-z0-9._-]+\.sh$' || true)"
       if [ "$good_members" != "$total_members" ]; then

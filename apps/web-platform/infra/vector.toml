@@ -309,7 +309,8 @@ include_matches.SYSLOG_IDENTIFIER = [
   # as absent (the dead-probe-shape the dedicated host cannot afford). The same tag also
   # ships the unit's raw stderr so a fault-classification line reaches Better Stack.
   # Bounded: refresh runs every 60 s but NOOP/FLOOR rows are throttle-stamped, so a
-  # healthy host emits ~1 row/5 min and a rejecting host one failure row per timer fire.
+  # healthy host emits ~1 row/5 min and a rejecting host ~1 failure row/5 min per
+  # distinct reason (the verify_fail throttle).
   "inngest-config-refresh",
   # #6536: inngest-heartbeat.service exited non-zero every 60s for 3 days (3,724 fires) and
   # the stderr proving why never left the host — the unit set no SyslogIdentifier=, so systemd
