@@ -84,6 +84,7 @@
 # unresolved `$` is ignored by construction.
 #
 # Rules 1 and 3 share `exit 1` because both mean the same thing to the author: fix the probe.
+# Rules 1, 3, 4 and 5 walk the PROBE SET (see "THE PROBE SET" above), not a `*.sh` glob.
 # Rule 3 has its OWN counters (`scanned_rule3`, `refs_rule3`, `missing_rule3`) and its OWN two
 # floors, so neither rule's floor vouches for another's walk. The two floors are distinct on
 # purpose: a broken GLOB and a broken REGEX are different vacuity modes, and the messages say
@@ -117,14 +118,37 @@ if [[ "$(resolve "$TARGET_DIR")" == "$(resolve "$DEFAULT_DIR")" ]]; then
   is_production_run="yes"
 fi
 
+# THE PROBE SET (E2). Rules 1, 3, 4 and 5 walk ONE list: every regular file under the target dir, at
+# any depth, that the sweeper could EXECUTE. scripts/sweep-followthroughs.sh runs any path under
+# scripts/followthroughs/ that passes `-x` (it never looks at the name), so a `*.sh` glob at the top
+# level missed a probe with no extension, a probe in a subdirectory, and a probe that is a script by
+# shebang but not by name. A file is a probe when ANY of: its name ends `.sh` (the historical
+# set, kept so this is a strict superset of the old glob), it is executable, or it starts `#!`.
+# A data file (a `.after` sidecar, a fixture, a `.txt`) is none of those and stays out, so a decoy
+# there cannot red rule 5. `*.test.sh` is EXCLUDED from the probe set although the sweeper would run
+# one too: MEASURED on the live tree, 4 of the test files carry the comment-association field as a
+# fixture decoy (rule 5) and 3 read comments and branch on markers because that is what they test
+# (rule 4); including them reds the tree over fixtures, so they stay out (rule 2 still reads them) and
+# the count is reported in the summary. Residual: a tracker that names a `*.test.sh` as its probe
+# is not covered by rules 1/3/4/5 (listed under COVERAGE in the rule-4 section).
+is_probe_file() {  # <path>
+  case "$1" in *.sh) return 0 ;; esac   # probe-pred-name
+  [[ -x "$1" ]] && return 0   # probe-pred-exec
+  [[ "$(head -c 2 -- "$1" 2>/dev/null)" == '#!' ]] && return 0   # probe-pred-shebang
+  return 1
+}
+PROBES=()
+n_tests_excluded=0
+while IFS= read -r -d '' f; do
+  is_probe_file "$f" || continue
+  case "$f" in *.test.sh) n_tests_excluded=$((n_tests_excluded + 1)); continue ;; esac   # probe-test-exclude
+  PROBES+=("$f")
+done < <(find "$TARGET_DIR" -type f -print0 | sort -z)   # probe-walk
+
 violations=0
 scanned=0
 # RULE 1: the banned `${VAR:?}` / `${VAR?}` word-expansion on an executable line.
-for f in "$TARGET_DIR"/*.sh; do
-  [[ -e "$f" ]] || continue
-  case "$f" in
-    *.test.sh) continue ;;
-  esac
+for f in ${PROBES[@]+"${PROBES[@]}"}; do
   scanned=$((scanned + 1))
   # grep -n on the RAW file FIRST (correct line numbers), THEN drop full-line comments.
   while IFS= read -r hit; do
@@ -186,19 +210,29 @@ done <<<"$rule2_hits"
 # bot-authored marker comments and `inngest-watchdog-functions-query-6407.sh` greps issue text
 # for a technical failure signature; neither lets a comment decide a tracker's fate, and a rule
 # that fired on them would be reaching for an author filter that has nothing to filter.
-# THE ANCHOR (`VERDICT_BRANCH`) is `RESULT:` OR an `S<n>-<ACTIVATED|DEACTIVATED|CONFIRMED|
-# EXIT-CENSUS>` soak marker. The `S<n>-...` spelling is a CONVENTION the anchor encodes (the S2
-# and S3 soak probes of ADR-276 use it) and is brittle by nature: a future marker family named
-# otherwise is invisible to it, so a new family must be added to the anchor in the same change.
-# The anchor was widened from `RESULT:` alone in #9818 because a marker probe that read
+# THE ANCHOR (`VERDICT_BRANCH`) is `RESULT:` OR any `S<n>-<UPPERCASE-WORD>` soak marker. The
+# `S<n>-...` spelling is a CONVENTION the anchor encodes (the S2 and S3 soak probes of ADR-276 use it);
+# it was a list of four names until round 4, which a new marker family (`S4-GO`) walked past, so it is
+# now the whole family. The anchor was widened from `RESULT:` alone in #9818 because a marker probe that read
 # `issues/N/comments` directly with NO author filter has no `RESULT:` line and, since it filters on
 # nothing, no `author_association` spelling for rule 5 either -- it passed both rules.
 # A probe that filters inline on `authorAssociation` also reads comments, branches on a verdict
 # and does not call the lib, so it fires here (and, since #9818, on rule 5 as well).
 #
-# COVERAGE LIMIT: a `READS_COMMENTS` route or a marker spelling outside the lists below is NOT
-# covered (deferred, tracked at DEFERRED-TRACKER-PLACEHOLDER; widening them flags probes that are
-# compliant by other means today).
+# COVERAGE (after the round-4 widening; the single home for this statement, other docs point here).
+# COVERED: in every file of the probe set above (any depth, executable or shebang, `*.test.sh`
+# excepted), a read of issue comments by any of these spellings: `gh issue view --json` with
+# `comments` anywhere in the field list (`--json comments`, `--json body,comments`, `--json=comments`),
+# `--comments`, `gh issue view ... -c`, `.comments[]` and `.comments | ...`, the REST routes
+# `issues/N/comments` and `issues/N/timeline`, GraphQL `comments(first:`, and `in:comments`
+# searches; AND a branch on `RESULT:` or ANY `S<n>-<UPPERCASE-WORD>` marker (`S4-GO`, `S2-ARMED:`,
+# not only the four ADR-276 names). NOT COVERED (deferred, tracked at DEFERRED-TRACKER-PLACEHOLDER):
+# comment readers outside scripts/followthroughs/; a `*.test.sh` named as a tracker's probe (outside
+# the probe set, see above); other marker families (`watchdog:restart`,
+# `Verified:`) and lower-case `S<n>-` spellings (`S2-armed:`); a route or field list built at run
+# time (`R=comments; gh api .../issues/$N/$R`); and transitive sources (a probe that sources a helper
+# which reads the comments, or reads a file another script wrote). Widening past this flags probes
+# that are compliant by other means today, which is why it is deferred.
 #
 # Three bypasses, all measured against synthetic probes at ship time (#8389 advisor consult),
 # all of them shapes a compliant-LOOKING probe reaches for:
@@ -217,8 +251,11 @@ done <<<"$rule2_hits"
 #       executable line.
 #       Over-detection is deliberate and cheap: the remedy is "call the lib", which every
 #       legitimate comment-reading probe already does.
-READS_COMMENTS='--json[[:space:]]+comments|--comments|\.comments\[\]|issues/[^[:space:]"]*/comments'
-VERDICT_BRANCH='RESULT:|S[0-9]+-(ACTIVATED|DEACTIVATED|CONFIRMED|EXIT-CENSUS)'
+# One alternative per spelling; `--json[^|#]*comments` is a SINGLE alternative that also covers
+# `--json=comments` (a separate `--json=` alternative would be an equivalent mutant). `[^|#]*` stops
+# at a pipe or a comment so a `--json` on one command cannot pair with `comments` in the next.
+READS_COMMENTS='--json[^|#]*comments|--comments|gh[[:space:]]+issue[[:space:]]+view[^|#]*[[:space:]]-c([[:space:])]|$)|\.comments(\[\]| *\|)|issues/[^[:space:]"]*/(comments|timeline)|comments\(first:|in:comments'
+VERDICT_BRANCH='RESULT:|S[0-9]+-[A-Z][A-Z-]*:?'
 # The CALL, never the `source` line. Sourcing the lib and then reading `.comments[].body`
 # anyway satisfies a source-anchored pattern while leaving the decision exactly as
 # forgeable -- both endpoints pinned, the wire between them unpinned. Measured: the first
@@ -235,11 +272,10 @@ LIB_CALL='trusted_verdict_(bodies|comments)'
 # and trips the floor -- which is the failure this rule's walk can actually have.
 scanned_rule4=0
 rule4_hits=""
-while IFS= read -r f; do
-  [[ -n "$f" ]] || continue
+for f in ${PROBES[@]+"${PROBES[@]}"}; do
   # Comment-stripped: a probe's header explains WHY the lib is mandatory, and every one of
   # those sentences quotes the constructs below (cq-assert-anchor-not-bare-token).
-  code="$(sed -E 's/^[[:space:]]*#.*$//' "$f")"
+  code="$(sed -E 's/^[[:space:]]*#.*$//' "$f")" || { echo "ERROR: rule 4 could not read $f; a probe the rule cannot read must not report clean" >&2; exit 2; }
   # The DENOMINATOR is "consumes issue comments by ANY route" -- a direct read OR the lib --
   # so migrating a probe onto the lib moves it within the corpus instead of out of it. Counting
   # only direct readers would make the floor fall every time the rule succeeds at its job, which
@@ -262,7 +298,7 @@ while IFS= read -r f; do
   # via_lib cannot excuse it. via_lib keeps its OTHER job untouched -- holding a lib-routed probe
   # inside scanned_rule4 so the floor is not lowered by the rule succeeding.
   rule4_hits="${rule4_hits}${f}"$'\n'
-done < <(find "$TARGET_DIR" -type f -name '*.sh' ! -name '*.test.sh' | sort)
+done
 
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
@@ -284,7 +320,7 @@ done <<<"$rule4_hits"
 #     because every probe header explains why the lib is mandatory and quotes the word.
 #   - A TRAILING `# why` mention on an executable line therefore DOES fire. That is a documented
 #     limitation, not an oversight: a quote-aware strip is more mechanism than a spelling ban earns.
-#   - `.test.sh` files are exempt (a fixture legitimately carries the field as a decoy).
+#   - `.test.sh` files are exempt (a fixture legitimately carries the field as a decoy); see THE PROBE SET above.
 #   - There is NO per-line opt-out: an escape hatch is what the next author reaches for.
 #   - KNOWN RESIDUAL: a runtime-built field name (`K=author_association; .[$K]`) or the hyphen
 #     spelling is out of this rule's reach; rule 4 is only a PARTIAL backstop (a literal comments
@@ -297,10 +333,8 @@ done <<<"$rule4_hits"
 RULE5_RE='author_?association'  # rule5-re
 { grep -qiE -- "$RULE5_RE" <<<'.author_association' && grep -qiE -- "$RULE5_RE" <<<'.authorAssociation'; } || { echo "ERROR: rule 5 (author-association ban) regex canary failed -- the pattern no longer matches both '.author_association' and '.authorAssociation'; the rule would report clean over a corpus it cannot see" >&2; exit 2; }  # rule5-canary
 scanned_rule5=0
-while IFS= read -r f; do
-  [[ -n "$f" ]] || continue
-  case "$f" in *.test.sh) continue ;; esac  # rule5-exempt
-  code5="$(sed -E 's/^[[:space:]]*#.*$//' "$f")"  # rule5-strip
+for f in ${PROBES[@]+"${PROBES[@]}"}; do
+  code5="$(sed -E 's/^[[:space:]]*#.*$//' "$f")" || { echo "ERROR: rule 5 could not read $f; a probe the rule cannot read must not report clean" >&2; exit 2; }  # rule5-strip
   hits5="$(grep -niE -- "$RULE5_RE" <<<"$code5" || true)"  # rule5-grep
   scanned_rule5=$((scanned_rule5 + 1))  # rule5-count
   while IFS= read -r hit; do
@@ -308,7 +342,7 @@ while IFS= read -r f; do
     echo "$f:${hit%%:*}: rule 5: names the comment-author-association field on an executable line. A comment's association is computed against the READING token's visibility, so under the sweeper's GITHUB_TOKEN a member with PRIVATE org membership renders as CONTRIBUTOR and their comment is dropped silently (#6617, #8389, #9818). Decide trust from scripts/lib/trusted-verdict.sh (trusted_verdict_bodies / trusted_verdict_comments), which resolves effective repository permission. There is no per-line opt-out." >&2
     violations=$((violations + 1))  # rule5-loop
   done <<<"$hits5"
-done < <(find "$TARGET_DIR" -type f -name '*.sh' | sort)  # rule5-walk
+done
 
 # RULE 3: repo-relative path literals must name something that exists in the checkout.
 # The tracked set is files PLUS every ancestor directory of a tracked file, so a probe that
@@ -391,11 +425,7 @@ TOPDIRS="|$(printf '%s\n' "$tracked_list" | grep / | cut -d/ -f1 | grep -xE '[A-
 scanned_rule3=0
 refs_rule3=0
 missing_rule3=0
-for f in "$TARGET_DIR"/*.sh; do
-  [[ -e "$f" ]] || continue
-  case "$f" in
-    *.test.sh) continue ;;
-  esac
+for f in ${PROBES[@]+"${PROBES[@]}"}; do
   scanned_rule3=$((scanned_rule3 + 1))
   while IFS=$'\t' read -r lineno cand arm; do
     [[ -z "${cand:-}" ]] && continue
@@ -437,14 +467,15 @@ fi
 # and gets the default 10.
 MIN_PROBES="${VARQ_BAN_MIN_PROBES:-10}"
 # Rule 4's own floor, on its OWN measure: probes that consume issue comments by any route.
-# MEASURED 2026-10-13 with this rule's own READS_COMMENTS and LIB_CALL regexes over the comment-
-# stripped probes: EIGHT. Three are DIRECT readers (anthropic-admin-key-6297,
-# inngest-watchdog-functions-query-6407 and watchdog-arm-soak-9237: none branches on a `RESULT:`
-# or `S<n>-` marker, which is why none fires) and five route through the lib (concierge-strand-
-# 754ee124-5733, cpx22-invoice-reconcile-7431, inngest-zot-client-authz-6500 and the S2 and S3
-# soak probes). The floor is for VACUITY, not for pinning the corpus: a broken READS_COMMENTS regex
-# or walk drives the count to zero and the rule would report clean over a corpus it cannot see, so
-# it trips at 3 (well under the measured 8, so retiring a tracker does not red the tree).
+# MEASURED 2026-10-14 with this rule's own READS_COMMENTS and LIB_CALL regexes over the comment-
+# stripped probe set: NINE. Four are DIRECT readers (anthropic-admin-key-6297,
+# inngest-watchdog-functions-query-6407, run-report-exit-first-contact-8076 and watchdog-arm-soak-9237:
+# none branches on a `RESULT:` or `S<n>-` marker, which is why none fires; run-report-exit-first-contact-8076
+# joined the count when `in:comments` searches became a covered route) and five route through
+# the lib (concierge-strand-754ee124-5733, cpx22-invoice-reconcile-7431, inngest-zot-client-authz-6500
+# and the S2 and S3 soak probes). The floor is for VACUITY, not for pinning the corpus: a broken
+# READS_COMMENTS regex or walk drives the count to zero and the rule would report clean over a corpus it
+# cannot see, so it trips at 3 (well under the measured 9, so retiring a tracker does not red the tree).
 # WHICH NUMBERS ARE EXACT. The floors in this file (MIN_PROBES, MIN_REF_FILES, MIN_REFS, this one and
 # MIN_RULE5_FILES) are FLOORS by design: the corpus they walk legitimately grows and shrinks, and a
 # new probe must not have to edit them. The exact counts by design (ADR-193) are the suites'
@@ -470,7 +501,7 @@ fi
 # Rule 5's own floor, on ITS counter (probes whose comment-stripped code the predicate examined):
 # no rule's floor vouches for another's walk, and the regex canary above guards the pattern itself.
 # VARQ_BAN_MIN_RULE5_FILES is a TEST-ONLY override (mirroring VARQ_BAN_MIN_COMMENT_READERS).
-# MEASURED 119 non-test probes (2026-10-13) on the tree this rule was written against; floored just
+# MEASURED 119 probes in the probe set (2026-10-14; unchanged by the any-depth, executable-or-shebang walk, which found no file the old glob missed); floored just
 # under it so retiring a tracker does not red the tree (a floor, see "WHICH NUMBERS ARE EXACT" above).
 MIN_RULE5_FILES="${VARQ_BAN_MIN_RULE5_FILES:-100}"
 if [[ "$is_production_run" == "yes" ]] && (( scanned_rule5 < MIN_RULE5_FILES )); then
@@ -483,5 +514,5 @@ if (( violations > 0 )); then
   exit 1
 fi
 
-echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR; rule 3 walked $scanned_rule3 file(s), extracted $refs_rule3 repo-path ref(s), $missing_rule3 missing; rule 4 (trusted-verdict obligation) checked $scanned_rule4 comment-reading probe(s); rule 5 (author-association ban) examined $scanned_rule5 probe(s))"
+echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR; rule 3 walked $scanned_rule3 file(s), extracted $refs_rule3 repo-path ref(s), $missing_rule3 missing; rule 4 (trusted-verdict obligation) checked $scanned_rule4 comment-reading probe(s); rule 5 (author-association ban) examined $scanned_rule5 probe(s); $n_tests_excluded *.test.sh file(s) outside the probe set)"
 exit 0
