@@ -44,7 +44,17 @@
 #   A literal `cd`/`pushd` earlier in the same command (also behind `command` or `builtin`) moves the
 #   simulated working directory for the later commands (`cd ~ && rm -rf ./*` is a delete of home).
 #   Wrappers are unwrapped with a small option table: sudo doas env command (not -v/-V) nohup time timeout
-#   nice; xargs is NOT unwrapped. `time` is a wrapper as a command word (/usr/bin/time, `command time`, `env
+#   nice rtk; xargs is NOT unwrapped. `rtk` (#10230) is a wrapper on every invocation shape: a filtered
+#   subcommand (`rtk git status` runs git), an exec subcommand (run|err|test|proxy|bypass|summary, matched
+#   case-sensitively — clap rejects `rtk RUN`, which then lands as argv0), or the run_fallback raw exec of
+#   any word not in rtk's meta-command set (`rtk rm -rf ~` runs rm; rtk task/pipeline names that resolve to
+#   TOML-defined commands land as their name, the same unanalyzable-script class every wrapper table
+#   accepts). Globals -v/-vv/-vvv/--verbose and --skip-env (legal before AND after the exec word) are
+#   consumed; any other option word, and -c/--command/--shell or a payload word carrying whitespace or
+#   shell metacharacters (err|test|summary may join it to `sh -c`), asks unparsed-wrapper — never a silent
+#   allow. Grammar verified 2026-10-13 against src/lib.rs + src/core/constants.rs on develop; the exec set
+#   is version-pinned here, so a new rtk subcommand is a one-line checklist edit and an unrecognized word
+#   simply lands as argv0 in the fail-open direction that run_fallback also picks. `time` is a wrapper as a command word (/usr/bin/time, `command time`, `env
 #   time`); as a reserved word it is the lexer's, which drops it, and the first word `-p` then recovers
 #   `time -p rm ...` (a pseudo-wrapper). A short-option cluster whose last letter takes a value shifts one more
 #   word (sudo -nu root, env -iu X, timeout -vk 5 10). The rule table is retried on the words after a `--`,
@@ -334,7 +344,7 @@ redact_word() { # <word> -> RW; RW_NEXT (1 = the word after a credential flag) c
   if (( RW_NEXT )) && [[ "$w" != -* ]]; then
     case "$w" in
       # a command word or a destructive operand is not a credential: the person reads the quote to see WHAT was about to run
-      /|'/*'|'~'|'~/'|'~/*'|'$HOME'|'${HOME}'|'$HOME/*'|'${HOME}/*'|rm|git|terraform|tofu|sudo|doas|env|command|nohup|time|timeout|nice|origin|main|master) : ;;
+      /|'/*'|'~'|'~/'|'~/*'|'$HOME'|'${HOME}'|'$HOME/*'|'${HOME}/*'|rm|git|terraform|tofu|sudo|doas|env|command|nohup|time|timeout|nice|rtk|origin|main|master) : ;;
       *) RW="<redacted>"; RW_NEXT=0; return ;;
     esac
   fi
@@ -523,7 +533,7 @@ long_word_judged() {
   shopt -q nocasematch && had=1
   shopt -s nocasematch
   case "$name" in
-    rm|cd|pushd|popd|builtin|sudo|doas|env|command|nohup|time|timeout|nice|-p) hit=0 ;;
+    rm|cd|pushd|popd|builtin|sudo|doas|env|command|nohup|time|timeout|nice|rtk|-p) hit=0 ;;
     git|terraform|tofu) [[ "$w" == -* ]] && hit=0 ;;
   esac
   (( had )) || shopt -u nocasematch
@@ -1161,6 +1171,40 @@ wrap_skip() {
         a="${t[$j]}"; j=$((j + 1))
         case "$a" in --) break ;; -v|-V|-[a-zA-Z]*[vV]*) return 0 ;; esac
       done ;;
+    rtk)  # grammar per the header prose; an ask here is unparsed-wrapper, never a silent allow
+      while (( j < n )) && [[ "${t[$j]}" == -* && "${t[$j]}" != - ]]; do
+        a="${t[$j]}"
+        case "$a" in
+          --) j=$((j + 1)); break ;;
+          -v|-vv|-vvv|--verbose|--skip-env|--skip-env=*) j=$((j + 1)) ;;
+          *) note 1 unparsed-wrapper; return 0 ;;
+        esac
+      done
+      if (( j < n )); then
+        case "${t[$j]}" in
+          run|err|test|proxy|bypass|summary)
+            j=$((j + 1))
+            while (( j < n )) && [[ "${t[$j]}" == -* && "${t[$j]}" != - ]]; do
+              a="${t[$j]}"
+              case "$a" in
+                --) j=$((j + 1)); break ;;
+                # globals are legal post-subcommand too (clap global=true, verified in
+                # lib.rs): -v/-vv/-vvv/--verbose + --skip-env
+                -v|-vv|-vvv|--verbose|--skip-env|--skip-env=*) j=$((j + 1)) ;;
+                *) note 1 unparsed-wrapper; return 0 ;;
+              esac
+            done
+            # any payload word carrying whitespace or a shell metacharacter is a string payload:
+            # err|test|summary may join it to `sh -c` (-c/--command/--shell were already asked on
+            # the -* sweep above, so only word content remains to check)
+            for ((k = j; k < n; k++)); do
+              case "${t[$k]}" in
+                *[[:space:]]*|*\;*|*\|*|*\&*|*\(*|*\)*|*\{*|*\}*|*\$*|*\`*|*"'"*|*'"'*|*\<*|*\>*)
+                  note 1 unparsed-wrapper; return 0 ;;
+              esac
+            done ;;
+        esac
+      fi ;;
     nohup|-p) : ;;  # `-p` is `time -p`: the lexer drops the reserved word `time` and leaves -p as the first word
   esac
   WJ="$j"
@@ -1178,7 +1222,7 @@ fold_name() {
   case "$1" in
     rm) FN="rm" ;; terraform) FN="terraform" ;; tofu) FN="tofu" ;; git) FN="git" ;;
     sudo) FN="sudo" ;; doas) FN="doas" ;; env) FN="env" ;; command) FN="command" ;; nohup) FN="nohup" ;;
-    time) FN="time" ;; timeout) FN="timeout" ;; nice) FN="nice" ;;
+    time) FN="time" ;; timeout) FN="timeout" ;; nice) FN="nice" ;; rtk) FN="rtk" ;;
   esac
   (( had )) || shopt -u nocasematch
 }
@@ -1219,7 +1263,7 @@ decide_walk() {
       rm) rule_rm ;;
       terraform|tofu) rule_tf ;;
       git) rule_git ;;
-      sudo|doas|env|command|nohup|time|timeout|nice|-p)  # `-p`: see wrap_skip
+      sudo|doas|env|command|nohup|time|timeout|nice|rtk|-p)  # `-p`: see wrap_skip
         WCD_SET=0; WCD=""
         wrap_skip "$name" "$i"
         wcd="$WCD"; wcdf="$WCDF"; wset="$WCD_SET"

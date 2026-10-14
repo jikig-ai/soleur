@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1177
-# generated-at=2026-10-13T22:51:47Z
+# default-weight-ms=1180
+# generated-at=2026-10-14T11:19:17Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -307,6 +307,8 @@ scripts/battery-ref-guard	5
 scripts/battery-tag-authorship	2
 scripts/bearer-curl-s4-first-runs-9905	6
 scripts/betterstack-assert-absence	7
+scripts/betterstack-emitter-read	1
+scripts/betterstack-emitter-read-live	1
 scripts/betterstack-ingest-parity	4
 scripts/board/set-board-status	1
 scripts/capture-web-1-host-key	6

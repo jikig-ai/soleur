@@ -5738,11 +5738,12 @@ yaml.safe_dump({"env": d.get("env"), "jobs": {sys.argv[2]: d["jobs"][sys.argv[2]
     || fatal "S5 could not isolate the job '$job' of $S5_WF"
   s4_body "$out.yml" "$sel" "$out" "$@"
 }
-S5_B_HB1="$S4/b-s5-hb1.sh"; S5_B_HB2="$S4/b-s5-hb2.sh"; S5_B_HB3="$S4/b-s5-hb3.sh"; S5_B_PST="$S4/b-s5-pst.sh"
+S5_B_HB1="$S4/b-s5-hb1.sh"; S5_B_HB2="$S4/b-s5-hb2.sh"; S5_B_HB3="$S4/b-s5-hb3.sh"; S5_B_PST="$S4/b-s5-pst.sh"; S5_B_EMP="$S4/b-s5-emp.sh"
 s5_job_body registry_host_replace "Best-effort heartbeat status" "$S5_B_HB1"
 s5_job_body registry_region_migrate "Best-effort heartbeat status" "$S5_B_HB2"
 s5_job_body registry_luks_recut "Best-effort registry disk heartbeat status" "$S5_B_HB3"
 s5_job_body registry_pull_path_gate "Resolve recovery posture" "$S5_B_PST"
+s5_job_body git_data_host_replace "Rotate precondition — served store measured empty" "$S5_B_EMP"
 
 # ---- Guard 1: the apply workflow ----
 S5_LINT_OUT="$(python3 scripts/lint-shell-trace-credential-refusal.py "$S5_WF" 2>&1)"; S5_LINT_RC=$?
@@ -5757,11 +5758,11 @@ s5_order_ok() { # <body file> -> rc 0 when a `source ...bearer-curl.sh` line pre
   [[ -n "$src" && -n "$call" && "$src" -lt "$call" ]]
 }
 S5_ORDER_BAD=""; S5_BCN=0
-for b in "$S5_B_HB1" "$S5_B_HB2" "$S5_B_HB3" "$S5_B_PST"; do
+for b in "$S5_B_HB1" "$S5_B_HB2" "$S5_B_HB3" "$S5_B_PST" "$S5_B_EMP"; do
   s5_order_ok "$b" || S5_ORDER_BAD+=" ${b##*/}"
   S5_BCN=$((S5_BCN + $(grep -v '^[[:space:]]*#' "$b" | grep -c 'bc_curl [a-z-]* ' || true)))
 done
-# The derived population: every step of the workflow that calls the library is one of the four bodies built above (a fifth call site that
+# The derived population: every step of the workflow that calls the library is one of the five bodies built above (a sixth call site that
 # nothing here judges is a defect); BOTH operands of the floor are literals on the lines IMMEDIATELY above the `if`.
 S5_STEPS_WITH_BC="$(python3 -I -c 'import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
@@ -5770,9 +5771,9 @@ for j in d["jobs"].values():
     for s in (j.get("steps") or []):
         if isinstance(s.get("run"), str) and "bc_curl " in s["run"]: n += 1
 print(n)' "$REPO_ROOT/$S5_WF")"
-S5_BC_FLOOR=5
-S5_STEPS_WANT=4
-if [[ -z "$S5_ORDER_BAD" && "$S5_BCN" -ge "$S5_BC_FLOOR" && "$S5_STEPS_WITH_BC" == "$S5_STEPS_WANT" ]]; then row "S5 Guard 1 order: in each of the four steps the library is sourced before its first call ($S5_BCN bc_curl statements, $S5_STEPS_WITH_BC steps derived from the workflow; anti-vacuity floor $S5_BC_FLOOR)" ok
+S5_BC_FLOOR=6
+S5_STEPS_WANT=5
+if [[ -z "$S5_ORDER_BAD" && "$S5_BCN" -ge "$S5_BC_FLOOR" && "$S5_STEPS_WITH_BC" == "$S5_STEPS_WANT" ]]; then row "S5 Guard 1 order: in each of the five steps the library is sourced before its first call ($S5_BCN bc_curl statements, $S5_STEPS_WITH_BC steps derived from the workflow; anti-vacuity floor $S5_BC_FLOOR)" ok
 else row "S5 Guard 1 order: a step calls the library before sourcing it, or the derived population is empty or unjudged" fail "bad='${S5_ORDER_BAD# }' statements=$S5_BCN steps=$S5_STEPS_WITH_BC floor=$S5_BC_FLOOR"; fi
 # Mutation 3 (reorder): move the `source` line below the first call in one step; the order predicate must judge it RED.
 python3 -I -c 'import sys, re
@@ -5895,7 +5896,7 @@ s5_mask_ok() { # <body file> -> rc 0 when a non-comment ::add-mask:: line preced
   [[ -n "$m" && -n "$c" && "$m" -lt "$c" ]]
 }
 S5_MASK_BAD=""
-for b in "$S5_B_HB1" "$S5_B_HB2" "$S5_B_HB3" "$S5_B_PST"; do s5_mask_ok "$b" || S5_MASK_BAD+=" ${b##*/}"; done
+for b in "$S5_B_HB1" "$S5_B_HB2" "$S5_B_HB3" "$S5_B_PST" "$S5_B_EMP"; do s5_mask_ok "$b" || S5_MASK_BAD+=" ${b##*/}"; done
 grep -v 'add-mask' "$S5_B_HB1" > "$S4/b-s5-nomask.sh" || true
 if [[ -z "$S5_MASK_BAD" ]] && ! s5_mask_ok "$S4/b-s5-nomask.sh"; then row "S5 Guard 1 order: every converted step masks its token before its first call, and a step with the mask line deleted is judged RED" ok
 else row "S5 Guard 1 order: a converted step does not mask its token before the call, or the mask predicate is blind" fail "bad='${S5_MASK_BAD# }'"; fi

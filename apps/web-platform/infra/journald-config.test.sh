@@ -601,18 +601,23 @@ assert "R3-4.5f: the --canary-only BRANCH precedes the credential FATAL guards" 
 # capture's inngest_failed_check — depend on `SYSLOG_IDENTIFIER=systemd` journald rows
 # shipping. They DO ship: Vector's journald source spawns `journalctl` with NO match
 # arguments and evaluates contains_match as an OR over all record fields (journald.rs @
-# v0.43.1, the vector.tf:13 pin), so Source 1's `include_matches.PRIORITY = ["0".."4"]`
-# admits a PRIORITY-3 row from ANY unit and ANY identifier. The
+# v0.43.1, the vector.tf:13 pin), so Source 1's `include_matches.PRIORITY = ["3","4"]`
+# (narrowed from {0..4} by the #6551 admission partition) admits a PRIORITY-3 row from
+# ANY unit and ANY identifier. The
 # SOLEUR_SYSTEMD_JOURNALD_CONTROL row is the positive control for that discriminated
 # path: same admission arm, same discriminator field, so its absence can never read as a
 # vacuous clean. Each link fails SILENTLY, so each is pinned here:
 #   - a deleted/renamed emit           -> no control rows -> consumers report unshipping
 #   - `-t` drift (leaves the systemd    -> a '"SYSLOG_IDENTIFIER":"systemd"' field-scoped
 #     discriminator field)                control read can never be satisfied -> unshipping
-#   - `-p` drift (err -> notice)       -> PRIORITY 5 leaves the {0..4} arm -> unshipping
+#   - `-p` drift (err -> notice)       -> PRIORITY 5 leaves the {3,4} arm -> unshipping
 #   - "systemd" added to Source 4      -> ships ALL PID-1 chatter incl. every PRIORITY-6
 #     (the tempting "deliberate" fix)     Started/Stopped line — the quota blow the
 #                                        Source 4 header names. NEVER add it.
+#   - "systemd" added to an EXCLUDE    -> the WORSE direction (#6551): an
+#     array (9963m)                       exclude_matches.SYSLOG_IDENTIFIER member
+#                                        would silence the systemd class entirely —
+#                                        no over-ship, just dark. NEVER add it.
 #
 # Anchored on the EMISSION (the `logger` invocation line inside the probe heredoc), never
 # a bare marker token — the R3-4.5c lesson: a marker named but never emitted is the
@@ -633,7 +638,7 @@ assert "9963b: the probe script EMITS SOLEUR_SYSTEMD_JOURNALD_CONTROL via /usr/b
   "[[ -n \"\$CONTROL_EMIT\" ]]"
 assert "9963c: the control emit carries -t systemd (the discriminator field consumers field-scope on — boundary-anchored: -t systemd-journald or a message-embedded -t systemd must not satisfy it)" \
   "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cE -- '-t[[:space:]]+systemd([^a-zA-Z0-9-]|$)' >/dev/null"
-assert "9963d: the control emit's ARGV is exactly 'logger -t systemd -p err' (PRIORITY 3 — inside Source 1's {0..4} admission arm; -t must be the first flag, -p err the second and immediately before the message quote — a message-embedded pair, -t doppler -p err, a reordered pair, -p errx, or trailing flags like -n/--socket must not satisfy it; equivalent spellings like -p user.err are deliberately flagged — the contract is exactly -t systemd -p err)" \
+assert "9963d: the control emit's ARGV is exactly 'logger -t systemd -p err' (PRIORITY 3 — inside Source 1's {3,4} admission arm post-#6551; -t must be the first flag, -p err the second and immediately before the message quote — a message-embedded pair, -t doppler -p err, a reordered pair, -p errx, or trailing flags like -n/--socket must not satisfy it; equivalent spellings like -p user.err are deliberately flagged — the contract is exactly -t systemd -p err)" \
   "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cE -- '/usr/bin/logger[[:space:]]+-t[[:space:]]+systemd[[:space:]]+-p[[:space:]]+err[[:space:]]+\"[^\"]*\"[[:space:]]*\$' >/dev/null"
 
 # UNCONDITIONALITY, same ADR-117 invariant. A CLOSED-FORM pin, because every window
@@ -744,6 +749,22 @@ SYSLOG_ID_MEMBERS="$(awk '/include_matches\.SYSLOG_IDENTIFIER/{f=1} f{print} f&&
 assert "9963h: NO include_matches.SYSLOG_IDENTIFIER array in vector.toml carries a 'systemd' member (tokenized, all sources, all layout variants)" \
   "! printf '%s\n' \"$SYSLOG_ID_MEMBERS\" | grep -cx 'systemd' >/dev/null"
 
+# The EXCLUDE direction of the same never-add class (#6551). The admission partition
+# added exclude_matches.SYSLOG_IDENTIFIER mirrors to Sources 1/2 — and a 'systemd'
+# member of either array does NOT over-ship, it SILENCES the PID-1 class (excludes
+# win over includes in filter_matches), taking the SOLEUR_SYSTEMD_JOURNALD_CONTROL
+# path and every 'Failed to start' row dark. Silence is the worse direction, so the
+# pin is symmetric with 9963h's tokenizer, over every exclude array in the file.
+SYSLOG_ID_EXCL_MEMBERS="$(awk '/exclude_matches\.SYSLOG_IDENTIFIER/{f=1} f{print} f&&/\]/{f=0}' "$SCRIPT_DIR/vector.toml" | sed 's/#.*$//' | grep -oE '"[a-zA-Z0-9._-]+"|'"'"'[a-zA-Z0-9._-]+'"'"'' | tr -d '"'"'"'"'"'" | sort -u || true)"
+assert "9963m: NO exclude_matches.SYSLOG_IDENTIFIER array in vector.toml carries a 'systemd' member (tokenized, all layout variants — an exclude SILENCES the class rather than over-shipping it; the worse direction)" \
+  "! printf '%s\n' \"$SYSLOG_ID_EXCL_MEMBERS\" | grep -cx 'systemd' >/dev/null"
+# Non-vacuity for the pin above: deleting BOTH exclusion arrays (or the partition
+# itself) would leave SYSLOG_ID_EXCL_MEMBERS empty and 9963m vacuously green. The
+# arrays must exist AND tokenize non-empty — vector-admission.test.sh separately
+# asserts they equal Source 4's tag set verbatim, so this asserts only presence.
+assert "9963m-bis: the exclude_matches.SYSLOG_IDENTIFIER arrays EXIST and tokenize non-empty (else 9963m is vacuous — a removed partition would pass silently)" \
+  "[[ \$(printf '%s\n' \"$SYSLOG_ID_EXCL_MEMBERS\" | grep -c .) -ge 1 ]]"
+
 
 # Alternate TOML key spellings (P1-C1 fix-round): `include_matches.SYSLOG_IDENTIFIER`
 # can be written with whitespace (`include_matches . SYSLOG_IDENTIFIER`), a quoted
@@ -751,10 +772,10 @@ assert "9963h: NO include_matches.SYSLOG_IDENTIFIER array in vector.toml carries
 # (`include_matches = { SYSLOG_IDENTIFIER = ["systemd"] }`) — semantically identical
 # to the dotted form but invisible to the array-body tokenizer above. Pin all
 # spelling variants absent by refusing ANY non-canonical reference form.
-assert "9963i: EVERY SYSLOG_IDENTIFIER occurrence in comment-stripped vector.toml lives on a canonical include_matches.SYSLOG_IDENTIFIER line (covers asymmetric whitespace, quoted keys, single/multiline inline-table members, [sources.*.include_matches] sub-table bodies, VRL assignments, and merge-literal forges)" \
-  "! sed 's/#.*$//' \"$SCRIPT_DIR/vector.toml\" | grep -E 'SYSLOG_IDENTIFIER' | grep -cvE 'include_matches\.SYSLOG_IDENTIFIER' >/dev/null"
-assert "9963i-bis: no BARE include_matches table exists (a bare include_matches = { or a [sources.*.include_matches] sub-table header opens member lines the canonical-form pin would flag, but refuse the container itself too — drift must fail loud, not route around)" \
-  "! sed 's/#.*$//' \"$SCRIPT_DIR/vector.toml\" | grep -cE 'include_matches[[:space:]]*=[[:space:]]*\{|^\[[^]]*include_matches[^]]*\]' >/dev/null"
+assert "9963i: EVERY SYSLOG_IDENTIFIER occurrence in comment-stripped vector.toml lives on a canonical include_matches.SYSLOG_IDENTIFIER or exclude_matches.SYSLOG_IDENTIFIER line (the #6551 partition added the EXCLUDE spelling — Sources 1/2 mirror Source 4's tag set; covers asymmetric whitespace, quoted keys, single/multiline inline-table members, [sources.*.(include|exclude)_matches] sub-table bodies, VRL assignments, and merge-literal forges)" \
+  "! sed 's/#.*$//' \"$SCRIPT_DIR/vector.toml\" | grep -E 'SYSLOG_IDENTIFIER' | grep -cvE '(include|exclude)_matches\.SYSLOG_IDENTIFIER' >/dev/null"
+assert "9963i-bis: no BARE include_matches/exclude_matches table exists (a bare *_matches = { or a [sources.*.*_matches] sub-table header opens member lines the canonical-form pin would flag, but refuse the container itself too — drift must fail loud, not route around)" \
+  "! sed 's/#.*$//' \"$SCRIPT_DIR/vector.toml\" | grep -cE '(include|exclude)_matches[[:space:]]*=[[:space:]]*\{|^\[[^]]*(include|exclude)_matches[^]]*\]' >/dev/null"
 
 assert "9963j: NO VRL transform assigns .SYSLOG_IDENTIFIER (a stamped tag would forge the own-field read; quoted-segment spellings and single-line VRL bodies covered — the check is unanchored over comment-stripped text)" \
   "! sed 's/#.*$//' \"$SCRIPT_DIR/vector.toml\" | grep -cE '(^|[^a-zA-Z_])\.[^a-zA-Z_]?SYSLOG_IDENTIFIER[^a-zA-Z_]?[[:space:]]*=' >/dev/null"
@@ -778,9 +799,9 @@ echo ""
 
 # Anti-vacuity floor (ADR-193): a stranded run must never report clean. Floor, not
 # equality — developer-incremented. Reports directly, never through assert/pass/fail.
-# #7596: 101 -> 111, re-measured from a green run (the CF-4e..g restage lockstep
-# added 3 rows; 7 other rows had landed above the 101 floor unmeasured).
-MIN_TOTAL=111
+# Ratcheted 101 -> 110 by #6551 (the 9963m/9963m-bis exclude-direction pins);
+# -> 113 here (the #7596 CF-4e..g restage lockstep adds 3 rows over 110).
+MIN_TOTAL=113
 if (( TOTAL < MIN_TOTAL )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_TOTAL" >&2
   exit 1

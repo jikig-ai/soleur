@@ -16,7 +16,7 @@
 import { tmpdir } from "os";
 import { mkdtempSync, existsSync, readlinkSync, readdirSync } from "fs";
 import { join } from "path";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 
 // Set env BEFORE importing the module under test — workspace.ts reads these
 // at call time, not load time, but the GIT_* hygiene must happen before any
@@ -36,14 +36,17 @@ import {
   removeWorkspaceDir,
 } from "../server/workspace";
 import { isPathInWorkspace } from "../server/sandbox";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 // Synthetic-identifier allowlist for MU1. Per
 // cq-destructive-prod-tests-allowlist — any destructive cleanup must refuse
-// to touch an identifier that does not match this regex. Pinned to the v4
-// UUID shape (8-4-4-4-12 hex) rather than a permissive hex-blob prefix so
-// the same regex can safely drive the runbook's sweep one-liner.
-const SYNTH_EMAIL_RE =
-  /^mu1-integration-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@soleur-test\.invalid$/i;
+// to touch an identifier that does not match this regex. Pinned to the
+// canonical helper shape (`mu1-integration-` is in SYNTHETIC_PREFIXES) —
+// a permissive hex-blob prefix would let the same regex match fixture
+// leftovers (PR #2597 incident class). The pre-#9995 shape
+// (mu1-integration-<uuid>@soleur-test.invalid) is still swept by
+// infra/mu1-cleanup-guard.mjs for already-leaked users.
+const SYNTH_EMAIL_RE = /^mu1-integration-[a-f0-9]{16}@soleur\.test$/i;
 
 function assertSyntheticEmail(email: string): void {
   if (!SYNTH_EMAIL_RE.test(email)) {
@@ -141,7 +144,7 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
         "../server/workspace-resolver"
       );
       const client = createServiceClient();
-      const email = `mu1-integration-${randomUUID()}@soleur-test.invalid`;
+      const email = `mu1-integration-${randomBytes(8).toString("hex")}@soleur.test`;
       assertSyntheticEmail(email);
 
       let userId: string | undefined;
@@ -159,7 +162,7 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
         }
         // Defense-in-depth: the allowlist passed on the email we requested;
         // re-assert the server-returned user has the same synthetic email
-        // before we'll ever call deleteUser on its id.
+        // before teardown will ever act on its id.
         expect(created.user.email?.toLowerCase()).toBe(email.toLowerCase());
         userId = created.user.id;
 
@@ -178,10 +181,12 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
           `${process.env.WORKSPACES_ROOT || "/workspaces"}/${userId}`,
         );
       } finally {
-        if (userId) {
-          assertSyntheticEmail(email);
-          await client.auth.admin.deleteUser(userId);
-        }
+        // Route through the canonical helper: a raw deleteUser 500s on the
+        // trigger-created workspace_members RESTRICT FK (the #9994 class)
+        // and a swallowed {error} leaks the user silently. The helper runs
+        // the anonymise-first sequence, verifies the id↔email binding,
+        // and re-asserts the synthetic-email boundary itself.
+        await tearDownTenantUser(client, { id: userId, email });
       }
     }, 30_000);
   },

@@ -14,6 +14,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   SYNTHETIC_PREFIXES,
   tearDownTenantUser,
+  tearDownTenantUsers,
 } from "./tenant-isolation-teardown";
 
 const SYNTHETIC_EMAIL = "tenant-isolation-0123456789abcdef@soleur.test";
@@ -205,6 +206,7 @@ describe("synthetic prefix allowlist (#9994)", () => {
     "dsar-cross-tenant-",
     "workspace-fixture-",
     "workspace-backfill-parity-",
+    "mu1-integration-",
   ];
 
   test("allowlist census: SYNTHETIC_PREFIXES === the reviewed prefix set", () => {
@@ -273,4 +275,120 @@ describe("synthetic prefix allowlist (#9994)", () => {
       expect(deleteUser).not.toHaveBeenCalled();
     });
   }
+});
+
+describe("tearDownTenantUsers (plural, #10249)", () => {
+  const EMAIL_A = "tenant-isolation-aaaaaaaaaaaaaaaa@soleur.test";
+  const EMAIL_B = "tenant-isolation-bbbbbbbbbbbbbbbb@soleur.test";
+
+  /**
+   * Per-user mock: getUserById resolves the auth email by id so each
+   * user binds to its own synthetic address (the shared mockService
+   * returns one email for every id, which would trip the id↔email
+   * binding for user B).
+   */
+  function mockServicePerUser(opts: {
+    failDeleteForId?: string;
+    emails?: Record<string, string>;
+  }) {
+    // Failure message is deliberately NOT retryable ("Database error
+    // deleting user" / rate-limit shapes would make withGoTrueRetry burn
+    // its 5-attempt backoff against the real setTimeout).
+    const deleteUser = vi.fn(async (id: string) => ({
+      error:
+        opts.failDeleteForId === id
+          ? { message: "permanent delete failure" }
+          : null,
+    }));
+    const rpc = vi.fn(async () => ({ error: null }));
+    const getUserById = vi.fn(async (id: string) => ({
+      data: {
+        user: { email: opts.emails?.[id] ?? "unknown@soleur.test" },
+      },
+      error: null,
+    }));
+    const service = {
+      rpc,
+      auth: { admin: { deleteUser, getUserById } },
+    } as unknown as Parameters<typeof tearDownTenantUser>[0];
+    return { service, rpc, deleteUser, getUserById };
+  }
+
+  const USERS = [
+    { id: "user-a", email: EMAIL_A },
+    { id: "user-b", email: EMAIL_B },
+  ];
+  const EMAILS = { "user-a": EMAIL_A, "user-b": EMAIL_B };
+
+  test("all-clean batch deletes every user and resolves", async () => {
+    const { service, deleteUser } = mockServicePerUser({ emails: EMAILS });
+    await expect(tearDownTenantUsers(service, USERS)).resolves.toBeUndefined();
+    expect(deleteUser).toHaveBeenCalledTimes(2);
+    expect(deleteUser.mock.calls.map((c) => c[0])).toEqual([
+      "user-a",
+      "user-b",
+    ]);
+  });
+
+  test("first user's failure does NOT abandon the second — both attempted, then throws", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { service, deleteUser } = mockServicePerUser({
+      emails: EMAILS,
+      failDeleteForId: "user-a",
+    });
+    await expect(tearDownTenantUsers(service, USERS)).rejects.toThrow(
+      /1 of 2 teardown\(s\) failed/,
+    );
+    // The whole point of #10249: user-b is still torn down after
+    // user-a's deleteUser failure.
+    expect(deleteUser.mock.calls.map((c) => c[0])).toEqual([
+      "user-a",
+      "user-b",
+    ]);
+    err.mockRestore();
+  });
+
+  test("non-synthetic email mid-batch still attempts the rest, then throws", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { service, deleteUser } = mockServicePerUser({ emails: EMAILS });
+    await expect(
+      tearDownTenantUsers(service, [
+        { id: "user-a", email: "real@example.com" },
+        USERS[1],
+      ]),
+    ).rejects.toThrow(/refusing non-synthetic email/);
+    expect(deleteUser).toHaveBeenCalledTimes(1);
+    expect(deleteUser).toHaveBeenCalledWith("user-b");
+    err.mockRestore();
+  });
+
+  test("tolerate predicate suppresses only confirmed failures", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { service, deleteUser } = mockServicePerUser({
+      emails: EMAILS,
+      failDeleteForId: "user-a",
+    });
+    // Predicate confirms user-a's failure → tolerated; user-b clean.
+    await expect(
+      tearDownTenantUsers(service, USERS, {
+        tolerate: (_e, u) => u.id === "user-a",
+      }),
+    ).resolves.toBeUndefined();
+    expect(deleteUser).toHaveBeenCalledTimes(2);
+
+    // Predicate rejects the failure → aggregates and throws.
+    await expect(
+      tearDownTenantUsers(service, USERS, { tolerate: () => false }),
+    ).rejects.toThrow(/1 of 2 teardown\(s\) failed/);
+    warn.mockRestore();
+    err.mockRestore();
+  });
+
+  test("empty batch resolves without touching the service", async () => {
+    const { service, deleteUser, rpc } = mockServicePerUser({});
+    await expect(tearDownTenantUsers(service, [])).resolves.toBeUndefined();
+    expect(rpc).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
+  });
 });
