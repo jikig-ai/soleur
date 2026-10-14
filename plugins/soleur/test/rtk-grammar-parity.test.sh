@@ -73,6 +73,19 @@ assert_eq "$want" "$got" "proc.sh walk exec set matches canonical (code arm, not
 if [[ -f "$DOC" ]]; then
   got="$(grep -oE "exec subcommands:  run($SET)" "$DOC" | head -1 | sed 's/.*run/run/' | norm || true)"
   assert_eq "$want" "$got" "known-external-tools.md exec set matches canonical"
+
+  # Doc flag lines pin the same way (integrity F5 — exec-only extraction left
+  # the globals/string-payload rows unpinned). Dash-token extraction with the
+  # same normalization: --skip-env keeps its hyphenated body; bare `--` (the
+  # end-of-options member) needs its own arm.
+  want_glob="$(awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $2 == "flag-global" { print $1 }' "$CANON" | sort | tr '\n' ' ' | sed 's/ $//')"
+  # Dash tokens must START at a word edge — `(^|[[:space:]])` prefix — or
+  # `unparsed-wrapper`/`end-of-options` hyphen fragments leak into the set.
+  got_glob="$(grep -E "^globals:" "$DOC" | tr ',/()' ' ' | grep -oE '(^|[[:space:]])-{1,2}[A-Za-z-]+|(^|[[:space:]])--([[:space:]]|$)' | tr -d ' ' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  assert_eq "$want_glob" "$got_glob" "known-external-tools.md globals line matches canonical flag-global rows"
+  want_str="$(awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $2 == "flag-string" { print $1 }' "$CANON" | sort | tr '\n' ' ' | sed 's/ $//')"
+  got_str="$(grep -E "^string payloads:" "$DOC" | tr '|' ' ' | grep -oE '(^|[[:space:]])-{1,2}[A-Za-z-]+' | tr -d ' ' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  assert_eq "$want_str" "$got_str" "known-external-tools.md string-payloads line matches canonical flag-string rows"
 else
   echo "NOTE: known-external-tools.md absent — doc parity skipped (lands in the docs phase)"
 fi

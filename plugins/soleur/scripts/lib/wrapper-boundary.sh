@@ -5,9 +5,10 @@
 # boundary (`(^|&&|\|\||;|\s--\s)` and siblings). That anchor is blind to
 # command wrappers: `rtk gh pr merge`, `sudo git commit`, `X=1 gh pr merge`
 # all sit between the boundary and the gated command. ONE shared fragment —
-# interpolated by every site — replaces ~18 per-site prefix lists so the
-# wrapper set cannot silently drift (#10248; same argv-prefix class as PR
-# #3689's `with_lock` bypass, learnings
+# interpolated by every site — gives ~20 boundary-anchored gates a common
+# wrapper-prefix grammar (only ~4 sites had any prefix list before; the rest
+# had none — that absence was the defect) so the wrapper set cannot silently
+# drift (#10248; same argv-prefix class as PR #3689's `with_lock` bypass, learnings
 # 2026-05-12-cross-session-lock-lease-bash-primitives.md SE1).
 #
 # Consumption idiom — insert between the boundary alternation and the gated

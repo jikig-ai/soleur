@@ -2,9 +2,13 @@
 # boundary-prefix.test.sh — the #10248 shared wrapper-boundary fragment.
 #
 # Guard 2 (consumption census): every boundary-anchored gated-command regex in
-#   .claude/hooks/*.sh + plugins/soleur/scripts/*.sh interpolates
-#   ${SOLEUR_BOUNDARY_PFX — or sits in the justified-exemption registry below.
+#   .claude/hooks/{,lib/}*.sh + plugins/soleur/scripts/{,lib/}*.sh interpolates
+#   ${SOLEUR_BOUNDARY_PFX — or, for variable-composed patterns, names a shared
+#   atom (SOLEUR_BOUNDARY_PFX|SOLEUR_RTK_RE) at file level — or sits in the
+#   justified-exemption registry below.
 #   The site set is DERIVED by grep each run, never a member list.
+#   Out of scope: plugins/soleur/hooks/, plugins/soleur/skills/*/scripts/ — a
+#   future boundary gate there is invisible until the glob widens.
 #
 # Guard 3 (fragment semantics): the both-directions behavioral matrix —
 #   `boundary + (atom space)* + gated-cmd` matches iff every interposed word is a
@@ -197,11 +201,11 @@ echo "-- consumption census (derived site set, not a member list) --"
 # Justified exemptions — file:line with a reason. Each entry must still exist on
 # disk AND the exemption is positional (a moved line re-enters the census).
 #   brand-hex-commit-gate.sh:119, git-commit-secret-scan.sh:113,
-#   guardrails.sh:230 — bare-[[:space:]] in the boundary alternation already
+#   guardrails.sh:231 — bare-[[:space:]] in the boundary alternation already
 #     matches `rtk git …` / `rtk rm …` via the space.
-#   guardrails.sh:704 — [^A-Za-z0-9_-] word-boundary class, space before `gh`
+#   guardrails.sh:705 — [^A-Za-z0-9_-] word-boundary class, space before `gh`
 #     already satisfies it.
-#   lib/incidents.sh:302-318 (detect_bypass: --no-verify / -c core.hooksPath= /
+#   lib/incidents.sh:305-321 (detect_bypass: --no-verify / -c core.hooksPath= /
 #     -c commit.gpgsign=false / --no-gpg-sign) — same bare-[[:space:]] boundary
 #     class; `rtk git --no-verify` already matches via the space, pre-fragment.
 #   incidents.test.sh:228/234/240 — test-internal assertion literals inside
@@ -211,12 +215,12 @@ echo "-- consumption census (derived site set, not a member list) --"
 EXEMPTIONS=(
   ".claude/hooks/brand-hex-commit-gate.sh:119"
   ".claude/hooks/git-commit-secret-scan.sh:113"
-  ".claude/hooks/guardrails.sh:230"
-  ".claude/hooks/guardrails.sh:704"
-  ".claude/hooks/lib/incidents.sh:302"
-  ".claude/hooks/lib/incidents.sh:308"
-  ".claude/hooks/lib/incidents.sh:313"
-  ".claude/hooks/lib/incidents.sh:318"
+  ".claude/hooks/guardrails.sh:231"
+  ".claude/hooks/guardrails.sh:705"
+  ".claude/hooks/lib/incidents.sh:305"
+  ".claude/hooks/lib/incidents.sh:311"
+  ".claude/hooks/lib/incidents.sh:316"
+  ".claude/hooks/lib/incidents.sh:321"
   ".claude/hooks/incidents.test.sh:228"
   ".claude/hooks/incidents.test.sh:234"
   ".claude/hooks/incidents.test.sh:240"

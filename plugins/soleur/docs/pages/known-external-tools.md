@@ -112,7 +112,7 @@ canonical set lives in <code>plugins/soleur/scripts/lib/ext-filter-grammar.tsv</
 
 <pre>exec subcommands:  run|err|test|proxy|bypass|summary
 string payloads:   -c | --command | --shell  →  unparsed-wrapper ask, never silent allow
-globals:           -v/-vv/-vvv/--verbose, --skip-env (either position — clap global=true)</pre>
+globals:           -v/-vv/-vvv/--verbose, --skip-env, -- (either position — clap global=true; -- is end-of-options)</pre>
 
 <p><strong>Coverage caveat:</strong> rtk's rewrite hook only intercepts <em>Bash</em> tool
 calls. <code>Read</code>, <code>Grep</code>, and <code>Glob</code> results are not filtered —

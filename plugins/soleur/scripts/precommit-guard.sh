@@ -59,13 +59,14 @@ if [[ -f "$_PC_GUARD_DIR/lib/wrapper-boundary.sh" ]]; then
   source "$_PC_GUARD_DIR/lib/wrapper-boundary.sh" 2>/dev/null || true
 fi
 if [[ "${SOLEUR_BOUNDARY_PFX_LOADED:-0}" != 1 ]]; then
+  unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX
   echo "precommit-guard.sh: wrapper-boundary.sh unavailable at $_PC_GUARD_DIR/lib — commit gate runs pre-#10248 matching" >&2
 fi
 unset _PC_GUARD_DIR
 # #10248: the shared fragment replaces the inline env-asn/launcher alternation —
 # one canonical atom set for every boundary-anchored gate. The :- fallback is
-# the PRE-FIX alternation (env + launcher), so an absent lib degrades to exactly
-# this file's prior matching, not to zero prefix tolerance.
+# the PRE-FIX atom set (env + launcher) — a superset of this file's prior
+# env*/launcher?/env* sandwich, which is the safe direction for a deny gate.
 COMMIT_RE='^[[:space:]]*('"${SOLEUR_BOUNDARY_PFX:-([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+|sudo|command|nice|env|xargs)}"'[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit([[:space:]]|$)'
 
 last_cd=""

@@ -136,8 +136,9 @@ fi
 # those arms unreachable on the hook path.
 # #10248 landed: ${SOLEUR_BOUNDARY_PFX:-…} carries env-assignment, launcher and
 # rtk atoms from the shared wrapper-boundary fragment (sourced via
-# lib/incidents.sh); its :- fallback restates the pre-#10248 alternation so a
-# missing lib degrades to exactly the old matching.
+# lib/incidents.sh); its :- fallback restates the pre-#10248 atom set — a
+# superset of the old env*/launcher?/env* sandwich (launchers may now repeat),
+# which is the safe direction for a deny gate.
 # Scans $COMMAND (NOT $SCAN): this gates the REAL commit, so a message body
 # mentioning "git commit" still IS a commit — no false-positive class here.
 # The canonical check lives in plugins/soleur/scripts/precommit-guard.sh —

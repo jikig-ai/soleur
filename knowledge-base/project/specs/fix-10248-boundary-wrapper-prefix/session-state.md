@@ -49,3 +49,14 @@
 - Landed fixes from all seats: `--` end-of-options member (rtk F4 — clap inert anywhere in the wrapper span, TSV flag-global row added); fail-soft rows unescaped (real unset-var expansion now exercised); comment-strip symmetry in consumption AND provision AND composed checks; awk one-pass replacing `grep -v | grep -q` (pipefail SIGPIPE trap); provision arm file-level check; partition-completeness arm in parity (16/16); unset-first in 3 direct-lib test fixtures; doc third-residual disclosure (launcher arg-grammars + boundary-shape #10315).
 - Deferred/lows accepted: `:-` fallback drift (documented debt, degraded-path only); doppler fallback = verbatim pre-PR form; doc flag-row extraction pin (F5 low); `^`-shape candidacy assumption now commented.
 - Suite state: boundary-prefix 54/54 (census 36/24/12), parity 16/16, kb-archive 97/97.
+
+## Review Phase (panel residual batch)
+- Second batch landed after seats 5-9 reported:
+  - security-sentinel: comment-strip provision grep (shared LOW with pattern+integrity seats — landed); inherited-env on carrier-missing path accepted as documented debt (requires env control; the :` fallback keeps the degraded path fail-soft not silent).
+  - pattern-recognition: composed-site blind spot closed by the composed-pass (landed); "exactly the old matching" comment overclaims reworded to superset wording at guardrails.sh:137-141 + precommit-guard.sh:66-68; lib header "~18 per-site lists" corrected (~4 had lists, ~15 had none); line-pin citations repointed to content anchors (hook-input-contract.test.sh:845, hooks/README.md:415); doppler :- fallback marked verbatim pre-fix literal.
+  - agent-native: partial-source warn now unsets fragment vars so state and message agree (incidents.sh:40-42, precommit-guard.sh:62); doc globals line gains `--`; doc residual classes now three (launcher arg-grammars disclosed + boundary-shape #10315).
+  - integrity: partition-completeness arm (parity 18/18); `(^|`-shape candidacy assumption commented; doc flag-row extraction pins added (globals + string-payloads arms).
+  - performance: SIGN-OFF clean — lazy-DFA consumption everywhere, no =~ interpolation, deterministic grammar.
+- Census hygiene: line-shifted exemptions re-pinned (incidents.sh:305-321, guardrails.sh:231/705).
+- Suite state: boundary-prefix 54/54 (36/24/12), parity 18/18, kb-archive 97/97, guardrails 364/364, incidents helper 9/9, operator-step 26/26, runbook 26/26, pmr-parity 17/17.
+- Open: full test-all scripts battery still queued behind sibling worktrees; tasks 4.1 pending its result.

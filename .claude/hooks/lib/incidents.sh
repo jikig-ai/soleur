@@ -37,6 +37,9 @@ if [[ -f "$_incidents_wb" ]]; then
   source "$_incidents_wb" 2>/dev/null || true
 fi
 if [[ "${SOLEUR_BOUNDARY_PFX_LOADED:-0}" != 1 ]]; then
+  # A lib that died partway through can leave fragment vars live — drop them so
+  # the warn's "pre-#10248 matching" claim and the actual expansion agree.
+  unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX
   headless_or_stderr warn "wrapper-boundary.sh unavailable at $_incidents_wb — boundary gates run pre-#10248 matching (no rtk-prefix tolerance)"
 fi
 unset _incidents_wb
