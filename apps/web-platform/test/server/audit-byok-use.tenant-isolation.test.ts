@@ -27,7 +27,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { type MintedJwt, type UserId } from "@/lib/supabase/tenant";
 import { installSharedMintCache } from "@/test/helpers/mint-once";
-import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
+import { tearDownTenantUsers } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -123,11 +123,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // is resolved natively: the audit row stays with founder_id NULL
       // (audit-anonymised) and the user cascade succeeds. tearDownTenantUser
       // also runs the FK-reverse anonymise sequence for completeness.
-      for (const user of [userA, userB]) {
-        if (!user.id) continue;
-        assertSynthetic(user.email);
-        await tearDownTenantUser(service, user);
-      }
+      await tearDownTenantUsers(service, [userA, userB]);
     });
 
     test("UPDATE on audit_byok_use raises P0001 (service-role)", async () => {
