@@ -158,7 +158,7 @@ _fault_rows() {
 EVAL11=(
   cla-signed-author-gate context-reviewed-gate follow-through-directive-gate
   guardrails pre-ask-technical-fork-gate prod-write-defer-gate
-  ship-net-issue-flow-gate ship-operator-step-gate ship-runbook-ssh-gate
+  ship-kb-archive-gate ship-net-issue-flow-gate ship-operator-step-gate ship-runbook-ssh-gate
   ship-soak-followthrough-gate ship-unpushed-commits-gate
 )
 SIBLING8=(

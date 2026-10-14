@@ -17,6 +17,10 @@ import { withGoTrueRetry } from "./gotrue-retry";
  * fixture's leftovers match (the PR #2597 permissive-regex incident class).
  * mu1.integration.test.ts uses a different domain (@soleur-test.invalid)
  * and is deliberately NOT listed — its teardown is #9995's scope.
+ *
+ * `workspace-backfill-parity-` was added for #10096's drain of
+ * workspace-backfill-trigger-parity.test.ts — the lone drain file whose
+ * generator deviates from the `tenant-isolation-` shape.
  */
 export const SYNTHETIC_PREFIXES = [
   "tenant-isolation-",
@@ -26,6 +30,7 @@ export const SYNTHETIC_PREFIXES = [
   "conv-rail-cross-tenant-",
   "dsar-cross-tenant-",
   "workspace-fixture-",
+  "workspace-backfill-parity-",
 ] as const;
 
 const escapeRegExp = (s: string): string =>
@@ -238,4 +243,36 @@ export async function tearDownTenantUser(
       `tearDownTenantUser: deleteUser(${user.email}) failed: ${error.message}`,
     );
   }
+}
+
+/**
+ * #10254 tolerated-residue probe. `action_sends.message_id` is
+ * `NOT NULL REFERENCES public.messages(id)` (NO ACTION, migration 051) and
+ * action_sends rows are WORM — `anonymise_action_sends` zeroes user_id but the
+ * row still anchors its message, and `messages.user_id → users` ON DELETE
+ * CASCADE then cannot delete the message: `deleteUser` 500s on
+ * `action_sends_message_id_fkey` for ANY user who ever had an action_sends
+ * row (a production erasure gap, not just test residue).
+ *
+ * Call sites that know they seeded action_sends may tolerate a deleteUser
+ * failure ONLY when this probe confirms the anchor — every other failure
+ * stays loud.
+ */
+export async function hasUndeletableActionSendsAnchor(
+  service: SupabaseClient,
+  userId: string,
+): Promise<boolean> {
+  const { data: msgs, error } = await service
+    .from("messages")
+    .select("id")
+    .eq("user_id", userId);
+  if (error || !msgs?.length) return false;
+  const { count, error: anchorErr } = await service
+    .from("action_sends")
+    .select("id", { count: "exact", head: true })
+    .in(
+      "message_id",
+      msgs.map((m: { id: string }) => m.id),
+    );
+  return !anchorErr && (count ?? 0) > 0;
 }
