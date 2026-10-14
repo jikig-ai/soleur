@@ -43,6 +43,9 @@ Plan: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wirin
     - [x] Independently verify the preparation delta; retain all runtime observation and fresh approval blockers.
     - [x] Prepare source-bound profile/builder specifications, nonexecutable adapter requirements and retained ownership/quiescence consistency checks; actual Configs, adapters and observations remain pending.
     - [x] Implement callable builder/namespace/session/retained adapters over injected transports after the October 13 scope expansion; synthetic verification passes. Concrete production wiring, independently reviewed transports/profiles and authenticated runtime evidence remain pending; see `controller-adapter-implementation-2026-10-13.md`.
+    - [x] RED(unit/integration): write synthetic namespace HTTP transport cases before implementation; initial run refuses the absent source module. See `transport-interface.md` for the October 14 source-only authorization.
+    - [x] GREEN: implement the explicit Unix JSON transport with bounded framing and one socket deadline; depends on the preceding RED task. All 17 contract tests and the complete offline wrapper pass; focused review is separately pending.
+    - [ ] Verify focused transport source independently, refresh source pairing/file-only export, and retain pending builder/session/retained wiring, actual profiles/observations and exact-action approval.
 - [x] 4.2 Update `workspace-default-engine.pen` for the engine dropdown, owner confirmation and member history-transfer acknowledgment; native Pencil screenshot QA is complete for all four settings/confirmation frames. These are design captures, not rendered implementation screenshots.
 
 ## Phase 5: Synthetic qualification and disposition
