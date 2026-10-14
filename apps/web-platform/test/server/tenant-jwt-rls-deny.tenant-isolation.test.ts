@@ -32,7 +32,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { type MintedJwt, type UserId } from "@/lib/supabase/tenant";
 import { installSharedMintCache } from "@/test/helpers/mint-once";
-import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
+import { tearDownTenantUsers } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -110,11 +110,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         if (!user.id) continue;
         await service.from("denied_jti").delete().eq("founder_id", user.id);
       }
-      for (const user of [userA, userB]) {
-        if (!user.id) continue;
-        assertSynthetic(user.email);
-        await tearDownTenantUser(service, user);
-      }
+      await tearDownTenantUsers(service, [userA, userB]);
     });
 
     test("revoke_jti is service-role-only (authenticated → 42501)", async () => {

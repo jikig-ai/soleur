@@ -26,7 +26,7 @@ import {
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
 import { registerSharedMintCache } from "@/test/helpers/mint-once";
-import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
+import { tearDownTenantUsers } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -144,21 +144,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
     afterAll(async () => {
       if (!service) return;
-      for (const user of [userA, userB]) {
-        if (!user.id) continue;
-        assertSynthetic(user.email);
-        const { data: check } = await service.auth.admin.getUserById(user.id);
-        if (check?.user?.email && check.user.email !== user.email) {
-          throw new Error(
-            `afterAll: auth.users.email for ${user.id} (${check.user.email}) ` +
-              `does not match synthetic email ${user.email}`,
-          );
-        }
-        // mig 053 trigger creates org/workspace/workspace_members on signup;
-        // raw deleteUser cascade is blocked by their RESTRICT FKs. The helper
-        // runs the FK-reverse anonymise sequence first, then the auth delete.
-        await tearDownTenantUser(service, user);
-      }
+      await tearDownTenantUsers(service, [userA, userB]);
     }, 30_000);
 
     test("baseline: A reads own conversation row (mirrors `:55` site)", async () => {

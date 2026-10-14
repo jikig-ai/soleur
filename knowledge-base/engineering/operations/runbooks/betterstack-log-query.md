@@ -227,7 +227,38 @@ not):
 The query creds are a ClickHouse HTTP *connection* — a username/password pair
 Basic-auth'd against a regional ClickHouse endpoint, separate from both tokens.
 
-## Connection details (provisioned 2026-06-01)
+## Connection details (re-provisioned 2026-09-09)
+
+> **A SQL API CONNECTION DOES NOT SEE SOURCES CREATED AFTER IT — and the error looks exactly
+> like a missing table. This cost five days (#7855, #7867); read it before diagnosing any
+> "the source is not storing" symptom.**
+>
+> The connection provisioned 2026-06-01 could not see source `2734275`, created 2026-09-03.
+> Every read against the newer source returned:
+>
+> ```
+> Code: 701. DB::Exception: Requested cluster 't520508_soleur_git_data_prd_logs' not found. (CLUSTER_DOESNT_EXIST)
+> ```
+>
+> **That message says `cluster`, not `table`.** It means *this connection does not know that
+> cluster*. It was read instead as "Better Stack creates a table lazily on the first stored row,
+> so nothing has ever been stored" — which is a coherent reading, is wrong, and is
+> indistinguishable from the real thing without a second connection to compare against.
+>
+> Everything downstream of that misreading was self-consistent and false: writes were being
+> acknowledged with `202` and **were being stored**; a disposable `platform=vector` test source
+> read as empty for the same connection-scope reason; and a rung-2 rehearsal that had actually
+> PASSED reported `TRANSIENT` twenty times. The control source kept querying fine throughout —
+> because it predated the connection — which made the failure look source-specific.
+>
+> **Rule: adding a Better Stack source is not complete until the SQL API connection is
+> re-provisioned.** Create the new connection FIRST and verify the new table reads, then rotate
+> the Doppler values — additively, so working queries never break (`POST /api/v1/connections`
+> is non-destructive; deleting the old one first is not).
+>
+> **Diagnostic that separates the two states in one call:** query the NEW table and a KNOWN-OLD
+> table through the same connection. If the old one answers and the new one raises
+> `CLUSTER_DOESNT_EXIST`, the connection is stale — not the source.
 
 - Source: `soleur-inngest-vector-prd` — id **2457081**, team **520508**, table_name `soleur_inngest_vector_prd_3`, `data_region` `eu-central-1a`, **90-day log retention**.
   **(#7772) CORRECTED 2026-09-04 — this line read `region eu-fsn-3, 3-day log retention` and both halves were wrong.** The region is a vendor RENAME, not a move (see the naming note below). The retention was a FREE-TIER value that predates the 2026-08-16 move to a paid plan; measured twice on two endpoint shapes (`GET /api/v2/sources` and `GET /api/v2/sources/<id>`), this source reports `logs_retention=90` and `metrics_retention=90`. The stale figure had propagated into the Art. 30 register and both published legal documents, all corrected in the same change. `logs_retention` is a PER-SOURCE attribute, not a billing field — so read it here rather than inferring it from the account tier, which genuinely cannot be pulled (`/sources/<id>/usage`, `/usage`, `/billing` all 404).
@@ -235,6 +266,8 @@ Basic-auth'd against a regional ClickHouse endpoint, separate from both tokens.
 - **Region naming, so nobody re-derives it:** `eu-fsn-3` and `eu-central-1a` are the SAME cluster — the former is the vendor's earlier name, CNAMEs to the latter, and both resolve to an identical five-address A set (`195.63.225.49/.50/.53/.70/.72`, measured 2026-09-04). Query creds are region-scoped, not source-scoped, so ONE connection reaches BOTH sources.
 - Query host: `eu-central-1a-connect.betterstackdata.com` (region-scoped — creds fail against other clusters).
   **(#7898) CORRECTED 2026-09-09 — this line named the stale `eu-fsn-3` connect hostname, with an explicit `:443`.** (The dead string is not reproduced here: a grep for it is an acceptance criterion, and a corrective note that keeps the token alive defeats the check.) Pulled read-only from the config the workflows actually inject (`doppler secrets get BETTERSTACK_QUERY_HOST -p soleur -c prd_terraform --plain`), the live value is `eu-central-1a-connect.betterstackdata.com`, with no explicit `:443`. This is a stale NAME, not a wrong cluster — per the naming note above, `eu-fsn-3` and `eu-central-1a` are the same cluster and the old name still resolves. Both values share the `betterstackdata.com` apex, which is what `scripts/betterstack-query.sh`'s allowlist pins.
+  **(#7867) The connection itself was re-provisioned the same day** (id `424104`, `client_type=clickhouse`, `team_ids=[520508]`) so it covers source `2734275`, and `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` in `soleur/prd_terraform` were rotated to it. The previous connection was left in place rather than deleted, so any consumer still holding the previous credentials keeps working against the sources it could already see.
+- **Hot vs archive.** Rows age out of `remote(<table>)` into the S3 archive quickly — measured 2026-09-09, a row posted seconds earlier is in `remote()` within ~75 s, while rows five days old are readable ONLY via `s3Cluster(primary, <table>_s3)`. Any query over historical data must `UNION ALL` both arms; `git-data-rung2-evidence-capture.sh` already does.
 - `remote()` table identifier: **`t<TEAM_ID>_<table_name>_logs`** → `t520508_soleur_inngest_vector_prd_3_logs`. The docs' `t123456_...` placeholder is the **team id**, not the source id. (Suffixes: `_logs`, `_metrics`, `_spans`.)
 
 ## Re-minting the query connection (if creds are lost/rotated)
@@ -1129,3 +1162,14 @@ Swap `load%` for the `name` filter (and `maxIf(v,n='load15')`) to read sustained
 CPU pressure. After web-2 is born, re-run with `tags.host='soleur-web-2'` to
 confirm it emits metrics and to drive the resize-or-keep-`cx23` decision
 (ADR-143 D1). Serves `hr-no-dashboard-eyeball-pull-data-yourself`.
+
+## `op:"untrusted-classify"` (WebFetch injection scan, ADR-287 / #4671)
+
+One WARN line per WebFetch result in sessions with web egress and the `untrusted-content-classify` flag on. The pino payload sits under
+`.message` in the stored row (see the extraction note above), with fields `op`, `source`, `score`, `flagged`, `reasonCodes`,
+`contentLength`, `truncated`, `unscored`, `unscoredReason`, `scorerMs`, `mode`, `rewriteEmitted`, `workspaceIdHash`, `sessionId`. Never
+content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it.
+
+Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-classify`
+(counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero
+lines is the expected state. The alerts themselves are tracked on #10195.

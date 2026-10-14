@@ -118,6 +118,8 @@ SCAN=$(strip_command_bodies "$CMD")
 # Word boundary (\s|$) prevents false positives on hypothetical merge-* subcommands.
 # Chain operator pattern from guardrails.sh catches chained commands.
 # Runs against $SCAN (quote-stripped), not $CMD, per the #4600 fix above.
+# #10248: `rtk gh pr merge` still bypasses this anchor — prefix-tolerance is the
+# boundary-anchor follow-up; do NOT extend per-site, the issue mandates a shared fragment.
 if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
   exit 0
 fi

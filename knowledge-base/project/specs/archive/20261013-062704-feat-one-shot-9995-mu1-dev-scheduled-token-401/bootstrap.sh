@@ -64,10 +64,10 @@ set -f
 # founder, with no `|` in them. Replace the two examples.
 #
 # SOLEUR-STAGE preflight|read|Nothing changes: this only checks tools, GitHub and Doppler access, and the current dev_scheduled credential fingerprints.|None needed.
-# SOLEUR-STAGE create-app|write|Opens a page that registers the private GitHub App "Soleur CI Fixture" on jikig-ai (contents:read and metadata:read only, no webhook); you click Create GitHub App, then Generate a private key, and keep the downloaded .pem file.|Delete the App at https://github.com/organizations/jikig-ai/settings/apps/soleur-ci-fixture (the .pem it gave you stops working when you do).
-# SOLEUR-STAGE record-key|read|Nothing changes at a vendor: this only locates the downloaded .pem, checks it is a private key, and records its path and fingerprint in a gitignored .env beside this script.|Delete the recorded lines with --reset FIXTURE_PEM_PATH and --reset FIXTURE_PEM_FP.
+# SOLEUR-STAGE create-app|write|Opens a page that registers the private GitHub App "Soleur CI Fixture" on jikig-ai (contents:read and metadata:read only, no webhook); you click Create GitHub App, then the one-time code in the redirect URL is exchanged for the App and its private key, which you keep as a 0600 .pem file on tmpfs.|Delete the App at https://github.com/organizations/jikig-ai/settings/apps/soleur-ci-fixture (the .pem it gave you stops working when you do).
+# SOLEUR-STAGE record-key|read|Nothing changes at a vendor: this only locates the .pem, checks it is a private key, and records its path and fingerprint in a gitignored .env beside this script.|Delete the recorded lines with --reset FIXTURE_PEM_PATH and --reset FIXTURE_PEM_FP.
 # SOLEUR-STAGE install-app|write|Opens the Soleur CI Fixture install page; you select Only select repositories > jikig-ai/mu1-fixture and click Install.|On the App page choose Uninstall (or re-run Install to widen it later); the App itself is untouched.
-# SOLEUR-STAGE write-doppler|write|Writes GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY and MU1_FIXTURE_INSTALLATION_ID in the soleur/dev_scheduled Doppler config, then deletes the downloaded .pem file after a read-back proves the write.|In the Doppler dashboard restore each name to its previous value (the private key's old value is a dead key that no longer mints).
+# SOLEUR-STAGE write-doppler|write|Writes GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY and MU1_FIXTURE_INSTALLATION_ID in the soleur/dev_scheduled Doppler config, then deletes the .pem file after a read-back proves the write.|In the Doppler dashboard restore each name to its previous value (the private key's old value is a dead key that no longer mints).
 # SOLEUR-STAGE verify|read|Nothing changes: this runs the live mint probe against GitHub under the new dev_scheduled values and prints verdicts only.|None needed.
 
 # `--list` is a STATIC read of the table above: no library, no credentials, no
@@ -400,7 +400,7 @@ plan_create_app() {
   fi
   if [[ -n "$(env_get APP_CREATE_ATTEMPTED)" ]]; then
     soleur_op_precondition_failed create-app record-key \
-      "A previous run already opened the registration page. If the App exists, run stage record-key with SOLEUR_BOOTSTRAP_PEM_PATH set to the downloaded .pem; if the click never landed, run: bash ${SCRIPT_PATH} --reset APP_CREATE_ATTEMPTED"
+      "A previous run already opened the registration page. If the App exists, run stage record-key with SOLEUR_BOOTSTRAP_PEM_PATH set to its .pem; if the click never landed or the code was never exchanged, run: bash ${SCRIPT_PATH} --reset APP_CREATE_ATTEMPTED"
   fi
   [[ -f "$MANIFEST_PAGE" ]] \
     || soleur_op_precondition_failed create-app preflight "the manifest launcher page ${MANIFEST_PAGE} is missing"
@@ -408,13 +408,22 @@ plan_create_app() {
   soleur_op_plan_op generate-private-key "${ORG}/${APP_SLUG}"
 }
 
+# The printed command lines carry literal $ and <code> on purpose (SC2016).
+# shellcheck disable=SC2016
 apply_create_app() {
   mark_changed "the registration page was opened; the App may have been created"
   soleur_op_env_upsert "$ENV_FILE" APP_CREATE_ATTEMPTED "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   printf '  A page will POST the manifest and open GitHub'"'"'s prefilled registration form.\n'
-  printf '  1. Click "Create GitHub App".\n'
-  printf '  2. On the new App page click "Generate a private key" — a .pem downloads.\n'
-  printf '  3. Give the agent the .pem path (or move it under $XDG_RUNTIME_DIR first).\n'
+  printf '  1. Click "Create GitHub App". GitHub redirects to the App settings page (a 404 until step 2)\n'
+  printf '     with a one-time ?code= in the URL (single-use, ~1h): do not share it.\n'
+  printf '  2. The App only exists once that code is exchanged (measured on #10058): POST\n'
+  printf '     https://api.github.com/app-manifests/<code>/conversions returns its credentials, including\n'
+  printf '     client_secret and webhook_secret. Keep the response off stdout: umask 077, write it to a file\n'
+  printf '     under $XDG_RUNTIME_DIR, extract only .pem with jq into a 0600 file, then shred the response.\n'
+  printf '  3. Give the agent the .pem path (record-key accepts any file on tmpfs).\n'
+  printf '  A browser that blocks file:// can serve a COPY of the page (never this directory: it holds .env):\n'
+  printf '    d=$(mktemp -d) && cp "%s" "$d" && python3 -m http.server --bind 127.0.0.1 -d "$d"\n' "$MANIFEST_PAGE"
+  printf '  then open http://127.0.0.1:8000/app-manifest-post.html\n'
   soleur_op_open_url "file://${MANIFEST_PAGE}"
 }
 
@@ -428,7 +437,7 @@ read_record_key() {
     return 0
   fi
   local pem_path=""
-  soleur_op_value SOLEUR_BOOTSTRAP_PEM_PATH "  Path of the downloaded .pem (move it under \$XDG_RUNTIME_DIR first): " pem_path
+  soleur_op_value SOLEUR_BOOTSTRAP_PEM_PATH "  Path of the .pem (downloaded, or written from the code exchange; keep it under \$XDG_RUNTIME_DIR): " pem_path
   [[ -f "$pem_path" ]] || { soleur_op_red "  no file at ${pem_path}"; return 1; }
   # `stat -f -c %T` is GNU-only; refuse non-Linux by name rather than misreading
   # a stat error as "not tmpfs".
@@ -551,7 +560,23 @@ read_verify() {
     soleur_op_red "  the write-doppler stage has not completed — run it first"
     return 1
   fi
-  local repo_root; repo_root="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+  # git, not a fixed ../ count: this script moves one level deeper when its spec dir is archived.
+  # Inherited GIT_* variables would redirect `git -C`, so every git call below runs without them.
+  local probe=scripts/probe-github-app-mint.sh
+  local -a nogit=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR
+    -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES git)
+  local repo_root; repo_root="$("${nogit[@]}" -C "$SCRIPT_DIR" rev-parse --show-toplevel)" \
+    || { soleur_op_red "  cannot resolve the repo root from ${SCRIPT_DIR}"; return 1; }
+  # The probe runs under `doppler run` with live credentials: refuse a root whose probe is not a
+  # tracked, unmodified, non-symlink file (a copy of this script inside an unrelated repo, or an
+  # edited probe, would otherwise run under the dev_scheduled credentials).
+  if [[ -L "${repo_root}/${probe}" ]] \
+    || ! "${nogit[@]}" -C "$repo_root" ls-files --error-unmatch "$probe" >/dev/null 2>&1 \
+    || [[ "$("${nogit[@]}" -C "$repo_root" hash-object -- "$probe" 2>/dev/null)" \
+          != "$("${nogit[@]}" -C "$repo_root" rev-parse "HEAD:${probe}" 2>/dev/null)" ]]; then
+    soleur_op_red "  ${repo_root} does not hold ${probe} as a tracked, unmodified file — wrong repo root"
+    return 1
+  fi
   local out rc=0
   out="$(cd "$repo_root" && doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
     bash scripts/probe-github-app-mint.sh 2>&1)" || rc=$?
@@ -619,7 +644,7 @@ dispatch_stage() {
 }
 
 main() {
-  soleur_op_require_bins grep mktemp printenv sed date od id stat cut tr awk find gh doppler openssl jq
+  soleur_op_require_bins grep mktemp printenv sed date od id stat cut tr awk find gh doppler openssl jq git
   soleur_op_ledger_init 1 "bootstrap.sh"
   dispatch_stage "$STAGE"
 }

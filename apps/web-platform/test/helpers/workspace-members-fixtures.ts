@@ -22,7 +22,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { tearDownTenantUser } from "./tenant-isolation-teardown";
+import { tearDownTenantUsers } from "./tenant-isolation-teardown";
 import { withGoTrueRetry } from "./gotrue-retry";
 
 export const WORKSPACE_FIXTURE_EMAIL_RE =
@@ -162,10 +162,12 @@ export async function tearDownSharedWorkspace(
 
   // 1. Members — anonymise-first teardown deletes their workspace_members
   //    rows without firing the audit writer, scrubs RESTRICT references,
-  //    then deletes the auth user. Fail-loud by design.
-  for (const m of fixture.members) {
-    await tearDownTenantUser(service, { id: m.userId, email: m.email });
-  }
+  //    then deletes the auth user. Fail-loud by design; plural helper per
+  //    #10249 so one member's failure cannot abandon the rest.
+  await tearDownTenantUsers(
+    service,
+    fixture.members.map((m) => ({ id: m.userId, email: m.email })),
+  );
 
   // 2. Workspace + organization — best-effort, production-tolerant:
   //    residual RESTRICT workspace_id children (attestations,

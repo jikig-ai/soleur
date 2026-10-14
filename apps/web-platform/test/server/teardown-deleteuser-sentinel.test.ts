@@ -56,17 +56,16 @@ const CANONICAL_HELPERS = new Set([
  * working today. Migration to the helper is allowed future cleanup, not
  * required by this guard.
  *
- * mu1.integration.test.ts is allowlisted provisionally: it uses a
- * different synthetic domain (@soleur-test.invalid) outside the helper's
- * prefix allowlist. Its raw deleteUser hits the same RESTRICT class once
- * its #9995 credential blocker clears — revisit with that issue's owner.
+ * mu1.integration.test.ts was allowlisted provisionally (#9995) for its
+ * divergent @soleur-test.invalid domain; it has since converged onto
+ * tearDownTenantUser (mu1-integration- is now a SYNTHETIC_PREFIXES entry)
+ * and is no longer a carrier.
  */
 const MANUAL_TEARDOWN_ALLOWLIST = new Set([
   "test/concurrency-acquire-slot-workspace-id.integration.test.ts",
   "test/conversation-archive-release-slot.integration.test.ts",
   "test/workspace-binding-restart-survival.integration.test.ts",
   "test/worktree-write-lease.integration.test.ts",
-  "test/mu1.integration.test.ts", // #9995 revisit — different synthetic domain
 ]);
 
 /**
@@ -92,7 +91,6 @@ const EXPECTED_CALL_COUNTS: Readonly<Record<string, number>> = {
   "test/conversation-archive-release-slot.integration.test.ts": 1,
   "test/workspace-binding-restart-survival.integration.test.ts": 1,
   "test/worktree-write-lease.integration.test.ts": 1,
-  "test/mu1.integration.test.ts": 1,
 };
 
 /**
