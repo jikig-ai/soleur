@@ -9,7 +9,7 @@ last_updated: 2026-10-14
 
 # GitHub Code Quality baseline, 2026-10-14
 
-Snapshot of the open findings GitHub Code Quality reports for `jikig-ai/soleur` on `main` at `30407a8597`, taken after the feature was re-enabled on 2026-10-14 (about 22:10Z) and its "CodeQL Setup" scan completed. Tracker: #10331. Cost context: ADR-276 Decision 6 and the S5 cost lever (#9730).
+Snapshot of the open findings GitHub Code Quality reports for `jikig-ai/soleur` on `main` at `30407a8597`, taken after the feature was re-enabled on 2026-10-14 (about 22:10Z) and its "CodeQL Setup" scan completed. Tracker: #10331. Scope authority: ADR-276 Decision 6 (CodeQL code scanning and Code Quality are separate features). Cost lever: the S5 row of ADR-276 (#9730).
 
 ## Method and limits
 
@@ -130,4 +130,4 @@ Class key: P = product code (`apps/web-platform` app, server and components), S 
 ## Cost context (not part of the baseline)
 
 - Enabling Code Quality bills $10 per active committer per month plus AI credits and Action minutes (GitHub's confirm dialog, 2026-10-14).
-- Runner cost measured by `scripts/ci-demand-census.sh` over 2026-10-14 10:00-12:00Z (the job was already running then, before the re-enable above): the `dynamic/github-code-quality/codeql` job was 141.1 of 3,234.6 job-min (4.4%).
+- Runner cost measured by `scripts/ci-demand-census.sh` over 2026-10-14 10:00-12:00Z (the job was already running then, before the re-enable above): the `dynamic/github-code-quality/codeql` job was 141.1 of 3,234.6 job-min (4.4%). The raw census output was not saved; re-run the script to reproduce.
