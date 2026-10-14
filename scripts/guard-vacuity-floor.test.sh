@@ -125,9 +125,17 @@ counters_of() { # <file>
 # `cat > x <<'STUB'` contributes both a counter and a floor candidate, and the slice runs
 # 1200+ lines of another suite's setup (measured on prod-version-drift-check.test.sh).
 heredoc_lines_of() { # <file> -> one line number per line inside a heredoc body
+  # The opener must not match inside `<<<`/here-strings (#10099): the match lands on the SECOND
+  # `<` of `<<< 'word`, reads `'word` as a tag that never terminates, and blanks every later line
+  # — a phantom span that hid a suite's own floor (#10051). Rejection is on the PREDECESSOR char:
+  # a `<` can never be a tag-start char, so a match preceded by `<` is exactly the `<<<` (or
+  # `<<<<`-run) mis-scan. Rejected lines are skipped outright — no corpus line mixes a `<<<`
+  # trigger with a real `<<TAG` (measured over `git ls-files '*.test.sh'`), and a future line that
+  # does fails loud (spurious candidate), never quiet (hidden floor).
   awk '
     /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?/ && !inhd {
       if (match($0, /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*/)) {
+        if (RSTART > 1 && substr($0, RSTART-1, 1) == "<") next
         tag = substr($0, RSTART, RLENGTH)
         gsub(/^<<-?[[:space:]]*['"'"'"]?/, "", tag)
         inhd = 1; next
@@ -1289,7 +1297,7 @@ else
   fail "PROMOTED_FILES entries drifted:$promoted_problems. A promoted file whose floor was DELETED leaves the covered set entirely and every aggregate arm still balances, so this per-file pin is the only thing that sees it."
 fi
 
-MIN_FIRING_SUITES=52  # +1 (closing-prose technical-fork gate): pre-closing-technical-fork-gate (promoted). +4 (#6604 PR B): luks-monitor, workspaces-luks-rollback-refusal, workspaces-luks-freeze, workspaces-luks-staging (promoted; the three harness suites became derivable through the sourced-harness counter widening). +5 (#8289): lint-questionnaire-identity, ticket-triage-mirror-parity (RETIRED 2026-09-23 by #8306/ADR-245 with the hand-ported mirror it guarded, and SUCCEEDED the same day by `plugins/soleur/test/ticket-triage-clauses.test.sh`, which keeps the clause-presence half the identity assertion never covered; the floor is NOT lowered because it is an absolute hand-ratchet and the live population measured 181 against it, so no re-ratchet is owed), lint-rejected-register, go-routing-table-parity, pre-ask-technical-fork-gate (promoted). +1 (#8159): cloud-mode-postmerge-evidence-8159. +1 (#8159): precommit-guard via COVERED_DIRS widening. +1 (#8175): lint-migrated-rule-ids. +1 (#8149): pr-fanout-ledger. +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
+MIN_FIRING_SUITES=54  # +2 (#10099): deploy-arm, resolve-regenerable-conflicts — floors newly visible after the `<<<` opener rejection un-hid them (the defect's own damage shape; #6604 precedent: a derivation widening ratchets the gain in the same commit). +1 (closing-prose technical-fork gate): pre-closing-technical-fork-gate (promoted). +4 (#6604 PR B): luks-monitor, workspaces-luks-rollback-refusal, workspaces-luks-freeze, workspaces-luks-staging (promoted; the three harness suites became derivable through the sourced-harness counter widening). +5 (#8289): lint-questionnaire-identity, ticket-triage-mirror-parity (RETIRED 2026-09-23 by #8306/ADR-245 with the hand-ported mirror it guarded, and SUCCEEDED the same day by `plugins/soleur/test/ticket-triage-clauses.test.sh`, which keeps the clause-presence half the identity assertion never covered; the floor is NOT lowered because it is an absolute hand-ratchet and the live population measured 181 against it, so no re-ratchet is owed), lint-rejected-register, go-routing-table-parity, pre-ask-technical-fork-gate (promoted). +1 (#8159): cloud-mode-postmerge-evidence-8159. +1 (#8159): precommit-guard via COVERED_DIRS widening. +1 (#8175): lint-migrated-rule-ids. +1 (#8149): pr-fanout-ledger. +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
 cases=$((cases + 1))
 if [[ "$n_fires" -ge "$MIN_FIRING_SUITES" ]]; then
   pass "firing-floor population at or above the ratchet ($n_fires >= $MIN_FIRING_SUITES)"
@@ -1453,6 +1461,58 @@ else
   fail "permissiveness bound: generic diagnostic prose scored FIRES — the sentinel vocabulary is broad enough to match any failing mutant, so n_fires is inflated and the ratchets move the permissive way"
 fi
 
+# --- ARM 8c: `<<<` HERE-STRINGS NEVER OPEN A HEREDOC SPAN (#10099) ------------------------
+# A here-string's second `<` used to satisfy the opener regex — `'word` was read as a tag that
+# never terminates, blanking every later line (the phantom that hid
+# lint-shell-trace-credential-refusal's MIN_ASSERTIONS floor on #10051's merge-queue attempt).
+# Two pins, both against a synthesized suite: (a) a `<<< 'literal'` line must not hide the
+# floor below it — the defect's exact damage shape; (b) a REAL heredoc must still blank its
+# body — the fix must not stop legitimate extraction. The decoy uses a DIFFERENT tag than the
+# here-string's would-be opener so a leak is detectable, and the span terminates cleanly
+# before the real floor.
+hs_fx="$SUITE_TMP/here-string-fixture.sh"
+# The decoy heredoc opener is ASSEMBLED (`_hs_lt`), never literal: a bare `<<` token here would
+# open a real span in the FIXTURE the moment it were written with the token inline — and keeps
+# this file consistent with the de-tokenization convention the same defect forced on the
+# loopback suite in #10228.
+_hs_lt='<'
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'cases=0'
+  printf '%s\n' "grep -qE 'pat' <<< 'literal'"
+  printf '%s\n' 'cases=$((cases + 1))'
+  printf '%s\n' "cat ${_hs_lt}${_hs_lt}'HSD'"
+  printf '%s\n' 'if [ "$cases" -lt 999 ]; then :; fi'
+  printf '%s\n' 'HSD'
+  # Multi-line if/fi: build_mutant slices to a standalone `fi` and cannot reconstruct a one-line
+  # `if … fi` floor (the mutant would die as a construction failure rather than score FIRES).
+  printf '%s\n' 'if [ "$cases" -lt 5 ]; then'
+  printf '%s\n' '  printf "FAIL - ANTI-VACUITY: only %s assertions ran\n" "$cases" >&2'
+  printf '%s\n' '  exit 1'
+  printf '%s\n' 'fi'
+} > "$hs_fx"
+
+cases=$((cases + 1))
+_hs_floors="$(floor_lines_of "$hs_fx")"
+# `<<<` here-string feeds, not `producer | grep -q` — under pipefail a producer failure would
+# read as a miss (grep-q-pipe-guard #9217). This file is the detector's own home: a `<<<` in
+# ITS source is now safe precisely because of the fix under test (predecessor-`<` rejection).
+if grep -qE ':[[:space:]]*if \[ "\$cases" -lt 5 \]' <<< "$_hs_floors" && \
+   ! grep -q 'lt 999' <<< "$_hs_floors"; then
+  pass "here-string fixture: floor after a \`<<<\` line is detected, and a real-heredoc decoy floor stays excluded"
+else
+  fail "here-string fixture misclassified — \`<<<\` hid the tail floor OR a heredoc-body line leaked into candidates"
+fi
+
+# The same fixture through the mutant oracle end-to-end: the floor FIRES (it can reach its
+# own exit), which is the property the phantom-span defect silently removed.
+cases=$((cases + 1))
+if [[ "$(classify_suite "$hs_fx")" == "FIRES" ]]; then
+  pass "here-string fixture's floor scores FIRES under neutered machinery"
+else
+  fail "here-string fixture scored $(classify_suite "$hs_fx") — the post-\`<<<\` floor cannot fire under a neutered assertion machinery"
+fi
+
 # --- ARM 9: SYNTHESIZED OUT-OF-POPULATION MUST-PASS CONTROL -------------------------------
 # Counter and helper names that appear nowhere else in the repo, and NOT named `*.test.sh`
 # so it sits outside the derived population by construction. A control that is also a
@@ -1518,7 +1578,7 @@ n_conserving=$(wc -l < "$CONSERVING")
 # carrying conservation checks; a shrink-only ratchet left un-raised silently fails to capture
 # the gain it exists to lock in. Raised 32 -> 33 when fanout-suite-scope.test.sh gained one
 # (#7553): its floor read PASS+FAIL, the counter a neutered verdict helper keeps moving.
-MIN_CONSERVING=33
+MIN_CONSERVING=34  # +1 (#10099): deploy-arm's `[FATAL] accounting` check becomes visible once its floor is derivable.
 cases=$((cases + 1))
 if [[ "$n_conserving" -ge "$MIN_CONSERVING" ]]; then
   pass "suites carrying an accounting-conservation check: $n_conserving (>= $MIN_CONSERVING)"
