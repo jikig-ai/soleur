@@ -73,7 +73,7 @@ HOSTNAMEV="soleur-inngest-prd"
 # reports on a real host -- a KERNEL device name -- because a synthesized by-id string here was
 # exactly what let the unreachable comparison look tested (cq-assert-anchor-not-bare-token).
 DEV="/dev/sdb"
-DEVID="scsi-0HC_Volume_${VOLID}"       # the pin G14 now compares (#8017)
+DEVID="scsi-0HC_Volume_${VOLID}"       # the volume pin the retired gate's G14 compared (#8017); kept as a fixture field
 DEVBASE="sdb"
 
 # ── Fixture builders ──────────────────────────────────────────────────────────────
@@ -123,14 +123,14 @@ declare -A PD=(
   [uptime_s]=98765 [boot_id]=b0000000-0000-4000-8000-000000000001 [image_ref]=ghcr.io/example@sha256:aaa
   [instance_id]=162809678 [cli_version]=v1.19.4 [cutover_flag]=rolled-back [probe_schema]=8
   [host_role]=dedicated [flush_latched]=false [redis_keys]=0
-  # __NONE__ is the COHERENT partner of redis_keys=0 (G14). A default of __UNREADABLE__ here
-  # would make every unrelated case fail on the coherence guard instead of its own predicate.
+  # __NONE__ is the COHERENT partner of redis_keys=0 (the retired gate's G14). The execute gate never
+  # reads it; a default of __UNREADABLE__ here would only make the fixture incoherent.
   [redis_key_patterns]=__NONE__
   # Coherent with redis_keys=0: an empty store has nothing carrying a TTL either.
   [redis_expires]=0
   [data_mount_src]="__DEV__" [data_bytes]=4096
   # #8017: the DEFAULT must be the PASSING identity, so every unrelated case exercises its own
-  # predicate rather than collapsing on G14 -- the same reasoning the redis_key_patterns default
+  # predicate rather than collapsing on the retired gate's G14 -- the same reasoning the redis_key_patterns default
   # above records. registry_fns defaults non-zero for the same reason (a 0 is the diagnostic-boot
   # signature and would make unrelated rows fail #8015's discriminator instead of their own).
   [data_mount_base]="__DEVBASE__" [data_mount_devid]="__DEVID__" [registry_fns]=7
@@ -289,7 +289,7 @@ else
     done <<< "$EMITTED"
     B12_ERG_MSG="$_real_msg_erg"
     # The EMITTER's schema literal and the LIB's constant are one number, cross-pinned here: a bump
-    # that lands in inngest-bootstrap.sh alone would make BOTH gates refuse `stale_schema` on every
+    # that lands in inngest-bootstrap.sh alone would make the execute gate refuse `stale_schema` on every
     # dispatch until someone ran one — the #8054 fail-closed-and-unnoticed class.
     _emit_schema="$(grep -oE '^probe_schema=[0-9]+' "$BOOTSTRAP" | head -1 | cut -d= -f2)"
     _lib_schema="$(grep -oE '^_IHDG_EXPECTED_SCHEMA="[0-9]+"' "$GATE" | grep -oE '[0-9]+')"
@@ -419,8 +419,7 @@ mutate() {
     *) fail "B10[$gn]: the MUTANT did not produce a lib token (got '${got:0:80}' rc=$rc) — it crashed or returned mute, so the row is inconclusive; rewrite the sed to WEAKEN the check" "$rc" "$out"; return ;;
   esac
   [[ "$rc" -eq 0 || "$rc" -eq 1 ]] || { fail "B10[$gn]: the MUTANT exited rc=$rc (not a lib rc) — inconclusive" "$rc" "$out"; return; }
-  # TOKEN *OR* RC. `_ihdg_verdict` is the one place a token becomes an exit code for both entry
-  # points; a mutation that leaves every token intact and returns 0 for all of them (matrix row 11)
+  # TOKEN *OR* RC. `_ihdg_verdict` is the one place a token becomes an exit code for the gate; a mutation that leaves every token intact and returns 0 for all of them (matrix row 11)
   # changes no `tail -1` and was invisible to a token-only comparison. The kill CLASS is recorded:
   # `open` (the mutant graded `dark` — the check was the last thing between the fixture and a pass)
   # or `diag` (the mutant refused with a different token — the check chose the diagnosis). Rows
@@ -846,13 +845,13 @@ else
   fi
 fi
 
-# ══ 6.3 HELPER-LEVEL CONTRACTS — independent of either consumer ═══════════════════
+# ══ 6.3 HELPER-LEVEL CONTRACTS — independent of the gate's own rows ═══════════════════
 _rc=0; _ihdg_field "a=1 b=2" c >/dev/null || _rc=$?;            [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_field on an ABSENT field must rc 1"
 _rc=0; _ihdg_field "a=1 a=2" a >/dev/null || _rc=$?;            [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_field on a DUPLICATED field must rc 1"
 _rc=0; _ihdg_field $'a=1\nb=2' a >/dev/null || _rc=$?;          [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_field on a message carrying a NEWLINE must rc 1"
 [[ "$(_ihdg_tied_newest "$TMP/erg-tie-same.json" "$HOSTV" "$HOSTNAMEV")" == "1" ]] && pass || fail "[helper] _ihdg_tied_newest must echo 1 on an identical duplicate"
 [[ "$(_ihdg_tied_newest "$TMP/erg-tie.json" "$HOSTV" "$HOSTNAMEV")" == "0" ]] && pass || fail "[helper] _ihdg_tied_newest must echo 0 on a disagreement"
-[[ "$(_ihdg_epoch_from_dt '2026-09-03 10:00:00')" == "1788429600" ]] && pass || fail "[helper] _ihdg_epoch_from_dt must render the G3 shape as UTC epoch"
+[[ "$(_ihdg_epoch_from_dt '2026-09-03 10:00:00')" == "1788429600" ]] && pass || fail "[helper] _ihdg_epoch_from_dt must render the E5 dt shape as UTC epoch"
 [[ "$(_ihdg_epoch_from_dt '2026-09-03 10:00:00.123456')" == "1788429600" ]] && pass || fail "[helper] _ihdg_epoch_from_dt must accept the fractional-second shape"
 _rc=0; _ihdg_epoch_from_dt 'yesterday' >/dev/null || _rc=$?;    [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_epoch_from_dt must refuse a shape date(1) would coerce"
 _rc=0; _ihdg_epoch_from_dt '' >/dev/null || _rc=$?;             [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_epoch_from_dt must refuse the empty string"
@@ -881,8 +880,8 @@ if [[ -z "$_leaks" ]]; then pass; else fail "[helper] these shared helpers call 
 # `_ihdg_row_count` carried (measured at plan time) is gone.
 _sel_inline="$(grep -c 'select(\$d.host == \$h and \$d.host_name == \$hn)' "$GATE")"
 [[ "$_sel_inline" -eq 1 ]] && pass || fail "[helper] the host conjunction appears ${_sel_inline}x in the lib; it must appear exactly once, inside _IHDG_IDENT"
-# The expected schema is ONE constant: a bump that reaches one entry point and not the other would
-# make the two gates disagree about the same row forever.
+# The expected schema is ONE constant: a bump that reaches the lib and not the emitter (or the
+# reverse) would make the gate and the probe disagree about the same row forever.
 [[ "$(grep -c '^_IHDG_EXPECTED_SCHEMA=' "$GATE")" -eq 1 && "$(grep -v '^[[:space:]]*#' "$GATE" | grep -c 'expected_schema="[0-9]')" -eq 0 ]] && pass || fail "[helper] the expected schema must be defined once as _IHDG_EXPECTED_SCHEMA and never as a per-entry-point literal"
 # (The E11/E13 arm set's SET-EQUALITY to the P1-5 allowlist is asserted in the wiring suite, AC16,
 # which derives both sides from source; a second copy of that derivation here would be the very
@@ -954,7 +953,7 @@ mk_rows "$TMP/erg-foreign-fresh.json" \
 mutate_shared ERG-M9  's|select(\$d.host == \$h and \$d.host_name == \$hn)|select(true)|' "$TMP/erg-foreign-fresh.json" stale_row
 mutate_shared ERG-M10 's|^  \[\[ "\$chosen_boot" =~ \^\[0-9a-f\]{8}-.*|  :|'           "$TMP/erg-e7b.json" unreadable
 mutate_shared ERG-M11 's|^  \[\[ "\$1" == "dark" \]\]$|  true|'                          "$TMP/erg-e9.json" host_serving
-# Row 12 — the tie check itself, neutered in the shared helper: a disagreeing tie must refuse in both.
+# Row 12 — the tie check itself, neutered in the shared helper: a disagreeing tie must refuse.
 mutate_shared ERG-M12 's|^  if \[\[ "\$(_ihdg_tied_newest "\$rows_file" "\$host" "\$host_name")" != "1" \]\]; then$|  if false; then|' "$TMP/erg-tie.json" unreadable
 # …and in the OTHER file order, where the neutered tie check grades the dark half: `sort_by` is
 # stable, so which row "wins" a tie is the caller's row order, and a fixture that only ever puts the
@@ -1049,11 +1048,23 @@ if [[ "$(printf '%s\n' "$_out" | tail -1)" == "dark" && "${_rc:-1}" -eq 0 ]]; th
 erows old "$(date -u -d '2 hours ago' '+%Y-%m-%d %H:%M:%S')" "$(emsg)"
 _out="$(inngest_execute_registry_gate --rows-file "$TMP/erg-old.json" --query-rc 0 --hb-file "$TMP/erg-hb-now.json" --hb-rc 0 2>&1)" && _rc=0 || _rc=$?
 if [[ "$(printf '%s\n' "$_out" | tail -1)" == "stale_row" ]]; then pass; else fail "Row 8b: a 2h-old row cleared under the real clock (got '$_out')"; fi
+# ...and the SAME default clock reached through the helper directly. `inngest_execute_registry_gate`
+# always hands `_ihdg_graded_row` a resolved `now_epoch`, so the helper's own `date -u +%s` fallback is
+# unreachable through the gate; an empty sixth operand is the only way to drive it. Without these two
+# rows the fallback line is deletable at full green (the differential run measured it surviving).
+_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-now.json" 0 "$HOSTV" "$HOSTNAMEV" 8 "" 5400)" || _rc=$?
+if [[ "$_rc" -eq 0 && "$(printf '%s\n' "$_out" | wc -l)" -eq 2 ]]; then pass; else fail "[helper] _ihdg_graded_row with an EMPTY now_epoch must grade a just-stamped row on the real clock" "$_rc" "$_out"; fi
+_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-old.json" 0 "$HOSTV" "$HOSTNAMEV" 8 "" 5400)" || _rc=$?
+if [[ "$_rc" -eq 1 && "$_out" == "stale_row" ]]; then pass; else fail "[helper] _ihdg_graded_row with an EMPTY now_epoch must refuse a 2h-old row as stale_row on the real clock" "$_rc" "$_out"; fi
+# The lib defines exactly ONE entry point. The workflow-test census keys on the `inngest_*_gate` name
+# family, so a second entry point under another name would be invisible to it; this pins the count.
+_entry_n="$(grep -cE '^inngest_[a-z0-9_]+\(\) *\{' "$GATE")"
+[[ "$_entry_n" -eq 1 ]] && pass || fail "[helper] the lib defines ${_entry_n} inngest_* entry point(s); it must define exactly one (inngest_execute_registry_gate)"
 
 # ── Ports: kills the retired battery held and this one did not ───────────────────
 # The differential mutation run (#8316) found six shared-helper lines whose ONLY killing case lived
 # in the retired entry point's rows. Each is re-expressed here against the execute gate's own
-# pre-arm fixture (`emsg`), so the helper is still graded by something after the sibling is gone.
+# pre-arm fixture (`emsg`), so the helper is still graded by something after the retired entry point is gone.
 # [ERG-port] ids are not predicates: they do not count toward `_PRED_FLOOR`.
 #
 # A malformed PROBE line must not swallow the valid row after it (`-R` + `fromjson?` in
@@ -1079,10 +1090,11 @@ expect "[ERG-port] a FORGED doppler row from the WEB host only => silent (never 
 # A BARE `*`: under `toks=($msg)` it globs the CWD and injects `server_active=active`. The gate runs
 # in the subshell and the verdict is asserted in the parent (a `( … ) && pass` form cannot fail).
 mkdir -p "$TMP/globcwd" && : > "$TMP/globcwd/server_active=active"
+[[ -e "$TMP/globcwd/server_active=active" ]] && pass || fail "[ERG-port] the glob row's precondition: the decoy file the bare * would expand to does not exist"
 mk_rows "$TMP/erg-glob.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg -server_active) *" inngest-server-probe "$EBID")"
-_m5_out="$( cd "$TMP/globcwd" && inngest_execute_registry_gate --rows-file "$TMP/erg-glob.json" --query-rc 0 \
-  --hb-file "$HB" --hb-rc 0 --now-epoch "$NOW" 2>&1 )" && _m5_rc=0 || _m5_rc=$?
-if [[ "$(printf '%s\n' "$_m5_out" | tail -1)" == "unreadable" && "${_m5_rc:-0}" -ne 0 ]]; then pass; else fail "[ERG-port] an absent field is NOT supplied by globbing the CWD" "${_m5_rc:-0}" "$_m5_out"; fi
+_glob_out="$( cd "$TMP/globcwd" && inngest_execute_registry_gate --rows-file "$TMP/erg-glob.json" --query-rc 0 \
+  --hb-file "$HB" --hb-rc 0 --now-epoch "$NOW" 2>&1 )" && _glob_rc=0 || _glob_rc=$?
+if [[ "$(printf '%s\n' "$_glob_out" | tail -1)" == "unreadable" && "${_glob_rc:-0}" -ne 0 ]]; then pass; else fail "[ERG-port] an absent field is NOT supplied by globbing the CWD" "${_glob_rc:-0}" "$_glob_out"; fi
 
 unset GATE_FN
 
@@ -1152,8 +1164,8 @@ if [[ "$_sel_out" == "dark" && "$_sel_rc" -eq 0 ]]; then pass; else fail "[#8846
 # against a gate that never loads the selector at all.
 _sel_out="$(env -u INNGEST_PROBE_ROW_LIB bash -c "set -uo pipefail; source '$TMP/canary-gate.sh'; inngest_execute_registry_gate $(printf '%q ' --rows-file "$EROWS" --query-rc 0 --hb-file "$HB" --hb-rc 0 --now-epoch "$NOW")" 2>/dev/null)" && _sel_rc=0 || _sel_rc=$?
 if [[ "$_sel_out" == "unreadable" && "$_sel_rc" -eq 1 ]]; then pass; else fail "[#8846-canary] a copy under \$TMP with NO override still graded — the gate is not loading the selector from its own location" "$_sel_rc" "$_sel_out"; fi
-# The DEFAULT path — resolved from the gate's own location, which is how both production callers
-# (the apply workflow and scripts/cutover-inngest.sh) load it — must find the real lib.
+# The DEFAULT path — resolved from the gate's own location, which is how the production caller
+# (scripts/cutover-inngest.sh) loads it — must find the real lib.
 _sel_out="$(env -u INNGEST_PROBE_ROW_LIB bash -c "set -uo pipefail; source '$GATE'; inngest_execute_registry_gate $(printf '%q ' --rows-file "$EROWS" --query-rc 0 --hb-file "$HB" --hb-rc 0 --now-epoch "$NOW")" 2>&1)" && _sel_rc=0 || _sel_rc=$?
 if [[ "$_sel_out" == "dark" && "$_sel_rc" -eq 0 ]]; then pass; else fail "[#8846-lib] with no override the gate must resolve scripts/lib/inngest-probe-row.sh from its own location" "$_sel_rc" "$_sel_out"; fi
 
@@ -1194,11 +1206,12 @@ for _tok in $_T; do
   case " ${_seen_tokens} " in *" ${_tok} "*) _T_hit=$((_T_hit + 1)) ;; *) _T_miss="${_T_miss} ${_tok}" ;; esac
 done
 _dark_n=0; for _tok in $_seen_tokens; do [[ "$_tok" == "dark" ]] && _dark_n=$((_dark_n + 1)); done
-if [[ "$_T_n" -eq 11 && "$_T_hit" -eq "$_T_n" && "$_dark_n" -eq "$_DARK_FLOOR" ]]; then
+_T_EXPECT=11   # the execute gate's tokens; read by the test below and by its failure message
+if [[ "$_T_n" -eq "$_T_EXPECT" && "$_T_hit" -eq "$_T_n" && "$_dark_n" -eq "$_DARK_FLOOR" ]]; then
   printf '  ok   token coverage: %s/%s tokens asserted (dark asserted exactly %sx)\n' "$_T_hit" "$_T_n" "$_dark_n"
 else
   fails=$((fails + 1))
-  printf '  FAIL TOKEN COVERAGE: %s/%s lib tokens asserted (want 11/11), dark %sx (want exactly %s); never asserted:%s\n' "$_T_hit" "$_T_n" "$_dark_n" "$_DARK_FLOOR" "${_T_miss:- none}" >&2
+  printf '  FAIL TOKEN COVERAGE: %s/%s lib tokens asserted (want %s/%s), dark %sx (want exactly %s); never asserted:%s\n' "$_T_hit" "$_T_n" "$_T_EXPECT" "$_T_EXPECT" "$_dark_n" "$_DARK_FLOOR" "${_T_miss:- none}" >&2
 fi
 
 # The assertion floor is self-contained — bash builtins and this suite's own counters only. A floor
@@ -1212,14 +1225,14 @@ fi
 # legitimate addition — and the failure text below dictates the number, so the bump is mechanical.
 #
 # History, ending at this change: 309 with #8285 PR A (the recut job's wiring rows died, three rows
-# pinned the surviving consumer); 180 with #8316, measured — the retired entry point's drop-one
+# pinned the surviving consumer); 180 with #8316, measured, then 184 at its review round (+1 glob-row precondition, +2 helper default-clock rows, +1 single-entry-point pin). The retired entry point's drop-one
 # battery, plan-matrix rows, field-injection and review-found fail-open rows, H-rows, B13, the B10
 # rows for G4-G20, the operand rows, every `-sib` half and the recut-gate selector rows died with it;
 # the execute gate's own rows are unchanged, four section-7 rows were rebound to it rather than
 # deleted, and the default-clock rows (Row 8/8b) were rebound to it as well. The base and branch
 # assertion LABEL lists were diffed so the count cannot hide an accidental deletion. Six `[ERG-port]`
 # rows (section 6.6) re-express kills that only the retired battery held (see the differential run).
-_FLOOR=180
+_FLOOR=184
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

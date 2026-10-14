@@ -2304,9 +2304,10 @@ ADR-100, amendment 2026-09-14.
      (the latch count stays unscoped: a predecessor's `flip-complete` is still valid evidence). It is a **pre-filter, not the authority** — the on-host latch is what actually
      prevents a second `FLUSHALL`, and this gate can only ever ADD a refusal.
      **Remediation:** there is none while the latch stands, and `op=resume` is not it (its G1 accepts
-     `done` only). The latch clears only when the store is measured empty AND the host's `/mnt/data`
-     volume is **recut** (`apply_target=inngest-volume-recut`, ADR-199 Guard 2) — never by SSH, and
-     **not** by an `inngest-host-replace`.
+     `done` only). The latch yields only to the authorized flush `op=reflush` (#7777), which appends a
+     `cleared_at` record to the latch ledger — never by SSH, and **not** by an `inngest-host-replace`.
+     (The recut route this line used to name, `apply_target=inngest-volume-recut`, was retired by #8285;
+     see the ADR-199 addendum of 2026-10-14.)
 
      > **Corrected 2026-08-25 (#7674).** This previously said the recut happens "via the
      > `inngest-host-replace` maintenance window". It does not. A replace destroys and recreates the

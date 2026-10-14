@@ -17,15 +17,15 @@
 #   git show b6d745fe78:tests/scripts/lib/inngest-host-dark-gate.sh   (header and function)
 # and the retirement is recorded in the 2026-10-14 addendum of ADR-199.
 #
-# G-NUMBERS THAT REMAIN. G1-G7 were the retired gate's names for what are now E1-E7 of the execute
-# gate (the same shared prelude, plus the boot_id shape check); they survive as names inside the
-# kept helpers' comments and are NOT edited, because those helpers are byte-identical on purpose.
-# G8-G20 have no executable form any more. Dangling mentions of the retired names, listed so none
-# is silent: the comment above `_ihdg_graded_row` and the G-numbered comments inside the helpers
-# and the execute gate's body (G0-G6, "the recut gate", "the sibling", "shared with
-# inngest_host_dark_gate" on its E1..E7 line), the "inlined in `inngest_host_dark_gate`" sentence above
-# `_ihdg_graded_row`, the "Born as G10's" note on `_ihdg_decoded_rows`, and the `_erg_flag_class`
-# comment ("G20 in this file").
+# G-NUMBERS THAT REMAIN. The retired gate's G1-G6 plus the boot_id shape check are what are now E1-E7
+# of the execute gate (the shared prelude); G7 is E8, G9 is E9 and G8 is E10 (the surviving form of the
+# `server_active` predicate, #8078). G10-G20 have no executable form any more. The G-numbers survive
+# as names inside the kept helpers' and the execute gate's comments and are NOT edited, because those
+# functions are byte-identical to base on purpose. Read every such comment as history: besides the
+# G-numbers (G0-G6, "G20 in this file", "Born as G10's"), the kept function bodies and the
+# comments around them still say "both entry points", "the sibling", "shared with
+# inngest_host_dark_gate", "the recut gate", "Guard 2" and "Row 7 of the suite". The list is
+# illustrative, not exhaustive: a rewrite of the kept bodies is deliberately out of scope.
 #
 # ── WHY THIS IS NOT scripts/inngest-dedicated-host-classify.sh ──────────────────────────────────
 #
@@ -81,7 +81,7 @@
 #
 # RESOLVED FROM THIS FILE'S OWN LOCATION, with an override for test sandboxes that run a COPY of
 # this lib from a temp dir (INNGEST_PROBE_ROW_LIB). A failed load is NOT silence: it sets
-# `_IHDG_PROBE_LIB_OK=0`, and both entry points refuse `unreadable` on that before anything else.
+# `_IHDG_PROBE_LIB_OK=0`, and the execute gate refuses `unreadable` on that before anything else.
 # The `|| true` keeps a failed `cd` from aborting a `set -e` caller at the assignment — the path is
 # then `/scripts/lib/…`, the source fails, and the flag carries the refusal instead.
 #
@@ -120,11 +120,11 @@ _IHDG_IDENT='
 _IHDG_PROBE='| select($d | inngest_probe_row)'
 _IHDG_SELECT="$_IHDG_IDENT$_IHDG_PROBE"
 
-# THE EXPECTED PROBE SCHEMA, DEFINED ONCE. Both entry points default `--expected-schema` to this
-# and the execute gate's caller interpolates it into the `stale_schema` remedy. The emitter's
-# schema has bumped 3 -> 4 -> 7 -> 8 and a bump that lands on one consumer and not the other would
-# make the two gates disagree about the same row forever (the suite asserts the literal appears
-# here and nowhere else in this file).
+# THE EXPECTED PROBE SCHEMA, DEFINED ONCE. The execute gate defaults `--expected-schema` to this
+# and its caller interpolates it into the `stale_schema` remedy. The emitter's schema has bumped
+# 3 -> 4 -> 7 -> 8 and a bump that lands on one consumer and not the other would make the gate and
+# its caller disagree about the same row forever (the suite asserts the literal appears here and
+# nowhere else in this file).
 _IHDG_EXPECTED_SCHEMA="8"
 
 # _ihdg_field <message> <field-name>

@@ -2604,6 +2604,11 @@ _CENSUS="$(_gate_census "$BODY_SH")" && _census_ok=1 || _census_ok=0
 assert "#8079 gate consumer census: 1 in execute, 1 in registry-probe, 0 in every other arm, >= 12 arms enumerated ($_CENSUS)" "[[ '$_census_ok' -eq 1 ]]"
 assert "#8079 gate consumer whole-file total is exactly 2 OCCURRENCES (a call outside every arm, or a second on the same line, cannot hide), got $(_gate_total "$BODY_SH")" \
   "[[ \$(_gate_total '$BODY_SH') -eq 2 ]]"
+# SCOPE, stated plainly: this census reads the NON-COMMENT lines of scripts/cutover-inngest.sh for
+# LITERAL spellings of the gate family. It does not see the workflow YAML, the other scripts that
+# file sources or runs, a name assembled at run time (`"${p}_gate"`, quote-splitting), or a heredoc
+# body line that begins with `#`. The name space it matches is bounded from the other side by the
+# dark-gate suite, which pins that the lib defines exactly ONE `inngest_*` entry point.
 # The lib exports ONE entry point (inngest_execute_registry_gate) plus the _ihdg_* / _erg_* helpers;
 # a consumer reaching a verdict through a helper, or through any other `inngest_*_gate` name (the
 # retired inngest_host_dark_gate included), would sit outside this census's name. The script calls
@@ -2625,7 +2630,7 @@ assert "#8079 the script reaches no OTHER lib entry point (any other inngest_*_g
 assert "#8316 the census scans a non-empty script (an empty scan would make the absence assertion above pass vacuously)" \
   "check_gate_scan_nonvacuous '$BODY_SH'"
 # The family must cover EVERY _erg_* helper the lib defines, or a new helper would escape the census.
-_erg_uncovered="$(grep -oE '^_erg_[a-z_]+\(\)' "$GATE_LIB" | tr -d '()' | grep -vE '^_erg_(emit|hb_newest|flag_class|[a-z_]*verdict)$' || true)"
+_erg_uncovered="$(grep -oE '^_erg_[a-z_]+\(\)' "$GATE_LIB" | tr -d '()' | grep -vxE "($_GATE_OTHER_RE)" || true)"
 assert "#8316 the census family covers every _erg_* helper the lib defines (uncovered: ${_erg_uncovered:-none})" "[[ -z '$_erg_uncovered' ]]"
 
 # ── Every token the lib can emit has a case arm; the *) arm exits 1 ─────────────
@@ -3409,6 +3414,17 @@ assert "#8316 positive control: a script whose only mention of a retired name is
   "check_gate_surface '$_PC' && check_gate_scan_nonvacuous '$_PC'"
 printf '%s\n' 'inngest_execute_registry_gate' > "$_PC"
 assert "#8316 positive control: the allowed name alone on a line passes" "check_gate_surface '$_PC'"
+# The strip must not over-reach: a name that merely CONTAINS the allowed one is a different name.
+printf '%s\n' 'x=$(inngest_execute_registry_gate_extra)' > "$_PC"
+assert "#8316 the word-bounded strip does not eat a longer name that ends the allowed one's text (suffix)" "! check_gate_surface '$_PC'"
+printf '%s\n' 'x=$(my_inngest_execute_registry_gate)' > "$_PC"
+assert "#8316 the word-bounded strip does not eat a longer name that begins with other word characters (prefix)" "! check_gate_surface '$_PC'"
+# The reworded `latched` operator text is a claim about what exists: pin that it no longer says the recut
+# apply target exists, and that it names the retirement.
+assert "#8316 the G3.7 latched ::error:: text no longer claims inngest-volume-recut exists" \
+  "! grep -qE 'volume-recut.{0,40}DOES exist' '$BODY_SH'"
+assert "#8316 the G3.7 latched ::error:: text names the recut target as retired by #8285" \
+  "grep -qF 'inngest-volume-recut was retired by #8285' '$BODY_SH'"
 # Row H — M1.2: the probe arm's call renamed. Property: the census (registry-probe=1) reds.
 check_rpg_census() { _gate_census "$1" >/dev/null; }
 mutate_file "rpg gate call renamed (census M1.2)" "$BODY_SH" "${_RPG_RANGE}"'s|^      RPG_VERDICT="\$(inngest_execute_registry_gate |      RPG_VERDICT="$(inngest_executeX_registry_gate |' check_rpg_census
@@ -4798,7 +4814,9 @@ _DISPATCHED=$((PASS + FAIL))
 #   strip, widened `inngest_*_gate` family; net 0), plus the non-vacuity row, the every-_erg_*-helper-covered row (+2), the three
 #   mutation rows (retired entry point, helper called directly, allowed name + helper on ONE line) (+3), the old-form-passes-row-3
 #   row (+1), the empty-scan row (+1), and the two positive controls (+2).
-_EXACT_FLOOR=1110
+# 1110 -> 1114 (+4) at the #8316 review round, measured: the strip's suffix and prefix over-reach rows (+2) and the two pins on
+#   the reworded G3.7 `latched` ::error:: text (+2); the every-_erg_*-helper row now derives from `_GATE_OTHER_RE` (net 0).
+_EXACT_FLOOR=1114
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
