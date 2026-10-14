@@ -37,6 +37,7 @@ body below is not the thing to run:
 
 In every case the AUTHORITY is `commands/go.md`; the harness shims differ only in how they
 address the operator and which tool names they use.
+The authority's first Sharp Edge covers a brief: its "ask the operator" / "OPEN DECISION" wording on a technical fork is the trigger to spawn the CTO, never a reason to ask ([technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md)).
 
 # /soleur:go (Devin CLI entry point)
 

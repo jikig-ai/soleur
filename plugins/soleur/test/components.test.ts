@@ -614,9 +614,21 @@ describe("Technical-ruling delegation wiring", () => {
     const start = oneShot.indexOf("TECHNICAL RULINGS (inline copy");
     expect(start, "one-shot lost its inline technical-rulings copy").toBeGreaterThan(-1);
     const copy = oneShot.slice(start, start + 1400);
-    for (const token of ["soleur:engineering:cto", "Ruled by CTO agent", "surface it"]) {
+    for (const token of ["soleur:engineering:cto", "Ruled by CTO agent", "surface it", "OPEN DECISION"]) {
       expect(copy.includes(token), `one-shot inline copy lost "${token}"`).toBe(true);
     }
+  });
+
+  test("a brief's own wording is the CTO trigger: the reference, the go Sharp Edge and the scope-routing rule say so", () => {
+    // Whitespace-normalized content anchors, not line numbers: a re-wrap must not break the pin.
+    const flat = (rel: string) => read(rel).replace(/\s+/g, " ");
+    const ref = flat(REF_REL);
+    const override = ref.slice(ref.indexOf("## 5. Override clause"));
+    expect(override.includes("OPEN DECISION") && override.includes("ask the operator"), "reference section 5 lost the brief-wording trigger").toBe(true);
+    expect(ref.includes("routing or ownership of an already-identified gap"), "reference lost the scope-routing classification").toBe(true);
+    const go = flat("commands/go.md");
+    const edge = go.slice(go.indexOf("A technical ruling is never the operator's to make"));
+    expect(edge.slice(0, 900).includes("OPEN DECISION"), "the first go Sharp Edge lost the OPEN DECISION trigger").toBe(true);
   });
 });
 
