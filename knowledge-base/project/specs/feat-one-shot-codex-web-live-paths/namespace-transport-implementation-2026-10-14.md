@@ -109,3 +109,41 @@ is requested or authorized here. Existing service-image observation would still
 leave the separately approved current-source image build, resource/dependency
 enforcement, session births/lock evidence, complete writers/quiescence and
 authentication pending. Every hold remains.
+
+# Pushed correction reverification
+
+Test design independently reverified pushed
+`8db5c652a77e55fc9a3c78e08e6153239b166f78`, passed all 23 tests with actual
+process exit zero, and closed all four findings with no new actionable issue.
+Its score is 8.9/10, Grade B; component integration with unit cases passes the
+pyramid check. The production transport bytes are identical to the preceding
+security/integrity-reviewed source. The complete corrected wrapper also passed
+after main inclusion under inherited optimization, with explicit
+`CORRECTED_OFFLINE_RC=0`. This closes the focused source slice only.
+
+Main is included through `755dfdc6a33e42eb292fe3c7700a93d4e55205de`.
+The moving remote ref advanced beyond the two initially inspected commits;
+`MERGE_HEAD` identified the actual three-commit union before conflict resolution.
+The version-checkout change amended three canonical legal documents and their
+mirrors. The sole conflict in generated legal hashes was resolved from the
+merged raw document bytes, retaining both branches' prose. The nine-document
+hash guard passed. The mirror-drift ratchet passed with its existing 80-line
+baseline warning and past September 30 target; Ref #7465 was freshly verified
+OPEN. No legal disposition or deadline was changed. Two trailing spaces in
+incoming evidence comments were removed without changing their data fields;
+staged whitespace and secret scanning passed. No incoming operational command
+or version-check network action ran.
+
+The re-paired source binds 5,063 runtime/plugin inputs, all 188 migrations,
+49 preparation components and 6,785 source export leaves. Runtime manifest is
+`e6a5fdd2a5a8a68a681286139d40d221414426613fc41ce1325921a17f370e84`;
+schema remains `baeb4ee9428e8187d98743d6fe84dd84a20c98162a5440f140df9891edc9f172`;
+components are `677a32323a0667e12cfbdc0be840bbd1e0013d5e7396d1adc9010fb730e2675f`.
+Final evidence-only source pairing, file-only export and exact-head CI/description
+receipts remain separately attributable in the PR description and ignored logs.
+
+An operator interruption occurred after the correction push and before its CI
+watch started. Resumption verified a clean worktree, exact remote head and no
+existing monitor process before arming the bounded watch. The new unrestricted
+sandbox profile changes no task authorization. Every runtime, credential,
+provider/account, shared-write and promotion hold persists.

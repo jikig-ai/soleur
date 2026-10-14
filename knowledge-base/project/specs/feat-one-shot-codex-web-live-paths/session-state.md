@@ -1576,3 +1576,14 @@
   → eligible routine/permitted Web/CLO matrices → full review/QA/preflight and
   promotion. The GET-only observation collector/action manifest is the next
   source boundary; no operational approval is ready to consume.
+
+- Pushed correction `8db5c652a77e55fc9a3c78e08e6153239b166f78` independently
+  closes all four test-design findings, with 23 cases, process exit zero and
+  8.9/10 Grade B. Transport bytes are unchanged from the security/integrity
+  review. Corrected complete wrapper passes after main `755dfdc6a3`, with its
+  own `CORRECTED_OFFLINE_RC=0`. Generated legal hashes resolve the combined
+  prose and pass; the existing Ref #7465 drift warning remains OPEN. Runtime
+  fingerprints changed with incoming plugin/infrastructure inputs; the record
+  owns them. The final evidence-only commit needs fresh pairing/export and
+  exact-head/description receipts. No full panel, SAST/C.9, profile, recovery,
+  screenshot, Web/CLO or promotion clearance is implied.
