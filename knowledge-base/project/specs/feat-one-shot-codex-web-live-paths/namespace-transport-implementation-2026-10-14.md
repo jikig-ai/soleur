@@ -66,3 +66,46 @@ staging preceded the measured scan. No daemon/build/SQL/provider/auth operation
 ran. The test worker corrected an invalid bytes literal before execution and
 an accept-side socket wrapping race before the passing run; neither produced
 an observed behavior verdict.
+
+# Focused review and oracle corrections
+
+Three independent seats reviewed pushed
+`9c24ddc76c0caa9fbcb55bdce1d4c7740123ea69`. Security and protocol integrity
+reported no blocking source finding; each repeated 17 tests with an explicit
+successful process receipt after synthetic socket escalation. Test design scored
+8.1/10, Grade B, and classified the suite as component integration with unit
+cases. It found three P2 oracle gaps and a P3 failed-setup cleanup gap. The
+[learning](../../learnings/test-failures/2026-10-14-sanitized-errors-hide-before-io-test-calls.md)
+owns their causes and corrections. The corrected 23-test suite passed with
+explicit `CORRECTED_TRANSPORT_RC=0`; independent correction review remains owed.
+Implementation bytes are unchanged. No full panel, SAST or runtime clearance
+is claimed.
+
+The static census passed 681 covered / zero orphans after its exact sandbox
+retry. The failed enumerator's derivative orphan diagnostics were discarded.
+Fixture relative/directory ratchets passed 63/71 assertions, with the latter's
+required temporary-directory escalation. The vacuity meta-guard's initial
+120-second timeout had no output; a bounded 240-second retry passed all 25
+assertions. Existing draft checks settled at 69 pass / eleven skipped / only
+required `test` red; its executed aggregate verdict remains separately owed.
+The first source push was rejected without detail; remote reobservation showed
+the original head unchanged, and a second source push succeeded. Two moderate
+default-branch dependency advisories remain unresolved and are not clearance.
+
+Fresh pairing and file-only export at `9c24ddc76c` passed: 5,062 production/plugin
+inputs, 188 forward migrations, 49 preparation components and 6,784 exported
+leaves. These receipts confer no build or runtime authority and become historical
+when the test/reviewer/main inputs change. Later exact-head evidence belongs to
+the PR description and ignored local receipts.
+
+Ruled by CTO agent: namespace source alone does not make recovery approval-ready.
+The next meaningful source boundary is a finite GET-only image observation
+collector and file-only action manifest, followed by remaining builder/session/
+retained transport controls. Empty or unresolved image slots must refuse; no
+historical renderer or fixture image may fill a current-source slot. One eventual
+fresh observation approval must bind actual source/probe/manifest digests,
+endpoint, fixed requests, deadline and owned outputs. No such operational action
+is requested or authorized here. Existing service-image observation would still
+leave the separately approved current-source image build, resource/dependency
+enforcement, session births/lock evidence, complete writers/quiescence and
+authentication pending. Every hold remains.

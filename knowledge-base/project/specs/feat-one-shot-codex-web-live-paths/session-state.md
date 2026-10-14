@@ -1552,3 +1552,27 @@
   reviewed real transports/profiles/observations and fresh exact-action approval,
   current-source full-production recovery, authenticated screenshots, eligible
   routine, permitted Web/CLO matrices, full review/QA/preflight and promotion.
+
+### Dormant real namespace transport — 2026-10-14
+
+- The user explicitly authorized expanded source implementation and independent
+  review, with synthetic tests only. The [transport record](namespace-transport-implementation-2026-10-14.md)
+  owns the CTO direction, committed interface, Unix HTTP source, first focused
+  review, oracle corrections and local receipts. This supersedes injected-only
+  source scope; every operational hold remains. No build/recovery/retry, daemon
+  or SQL observation, credential/provider/browser/account/shared write,
+  deployment/flag/cohort action is authorized or performed.
+- Source security and integrity reported no blocking finding at pushed
+  `9c24ddc76c0caa9fbcb55bdce1d4c7740123ea69`. The corrected synthetic suite
+  passes 23 cases; independent correction review remains pending. This is a
+  focused source panel, not full PR review/SAST/runtime qualification. Actual
+  profiles/observations and builder/session/retained wiring remain pending.
+- Keep draft/disarmed/default-off/customer-blocked. Build authorization consumed;
+  never execute the withdrawn command. Hosted auth BLOCKED in both modes;
+  alternative API route PENDING. SAST VOID; Ref #10082 OPEN; Ref #9791 OPEN/
+  unverified; no latest-source C.9. Sharing/retention/regions remain unknown.
+  Remaining AC: complete reviewed transports/profiles/observations and fresh
+  exact-action approval → current-source full-production recovery/screenshots
+  → eligible routine/permitted Web/CLO matrices → full review/QA/preflight and
+  promotion. The GET-only observation collector/action manifest is the next
+  source boundary; no operational approval is ready to consume.

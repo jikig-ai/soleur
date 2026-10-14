@@ -181,3 +181,18 @@ controls, actual immutable Config observations/reobservations, authenticated
 provenance, concrete profile/transport review and fresh exact execution approval
 remain prerequisites. No build, SQL, login, provider or recovery operation ran.
 See the [implementation record](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/controller-adapter-implementation-2026-10-13.md).
+
+`controller_transports.py` supplies a dormant Unix JSON HTTP client after the
+October 14 source-only authorization. Its endpoint is explicit, construction
+opens no socket, and no CLI, discovery or production activation is provided.
+One nonblocking connection uses an absolute deadline for validation, connect,
+send, headers, framed body and EOF; framing, JSON, nesting and chunk counts are
+bounded. Failures close the socket without retries and expose fixed messages.
+Python parsing has bounded inputs and before/after deadline checks; it is not
+preempted. The namespace adapter continues to own Policy admission and resource
+registration. Socket deadlines establish no daemon/network/resource enforcement,
+profile, image, ownership, quiescence, issuer authentication or execution approval.
+Synthetic peers and deterministic mocks supply the test evidence only. Builder,
+SQL-session and retained-resource transports, actual image Configs/profiles and
+the exact observation-acquisition action remain pending. See the
+[transport record](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/namespace-transport-implementation-2026-10-14.md).

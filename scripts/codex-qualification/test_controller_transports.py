@@ -37,6 +37,13 @@ def fixed(body=b'{"ok":true}', status=200, headers=()):
     return b'\r\n'.join(lines + list(headers)) + b'\r\n\r\n' + body
 
 
+def chunked(chunks):
+    return (b'HTTP/1.1 200 Synthetic\r\nTransfer-Encoding: chunked\r\n'
+            b'Content-Type: application/json\r\n\r\n' +
+            b''.join(format(len(body), 'x').encode() + b'\r\n' + body + b'\r\n'
+                     for body in chunks) + b'0\r\n\r\n')
+
+
 class Clock:
     def __init__(self, now=100):
         self.now = now
@@ -58,13 +65,24 @@ class Peer:
         self.errors = []
         self.connections = 0
         self.directory = tempfile.TemporaryDirectory(prefix='cq9051-peer-', dir='/tmp')
-        self.endpoint = str(Path(self.directory.name) / 'peer.sock')
-        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.listener.settimeout(2)
-        self.listener.bind(self.endpoint)
-        self.listener.listen(1)
-        self.thread = threading.Thread(target=self.serve, daemon=True)
-        self.thread.start()
+        self.listener = None
+        initialized = False
+        try:
+            self.endpoint = str(Path(self.directory.name) / 'peer.sock')
+            self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.listener.settimeout(2)
+            self.listener.bind(self.endpoint)
+            self.listener.listen(1)
+            self.thread = threading.Thread(target=self.serve, daemon=True)
+            self.thread.start()
+            initialized = True
+        finally:
+            if not initialized:
+                try:
+                    if self.listener is not None:
+                        self.listener.close()
+                finally:
+                    self.directory.cleanup()
 
     def serve(self):
         try:
@@ -115,7 +133,7 @@ class FakeSocket:
     """Public socket behavior; select waits advance the injected clock deterministically."""
     def __init__(self, clock, response, stalled=None, error=None):
         self.clock = clock
-        self.response = bytearray(response)
+        self.response = memoryview(response)
         self.header_remaining = response.find(b'\r\n\r\n') + 4
         self.stalled = stalled
         self.error = error
@@ -125,6 +143,9 @@ class FakeSocket:
         self.blocking = None
         self.connect_calls = 0
         self.waits = []
+        self.waited_stages = []
+        self.would_block = set()
+        self.write_sizes = []
 
     def setblocking(self, blocking):
         self.blocking = blocking
@@ -148,8 +169,13 @@ class FakeSocket:
             raise OSError(SENTINEL)
         if self.stalled == 'send':
             raise BlockingIOError(errno.EAGAIN, 'synthetic send stall')
-        self.sent += bytes(data)
-        return len(data)
+        if 'send' not in self.would_block:
+            self.would_block.add('send')
+            raise BlockingIOError(errno.EAGAIN, 'synthetic send readiness')
+        size = min(len(data), 13)
+        self.sent += bytes(data[:size])
+        self.write_sizes.append(size)
+        return size
 
     def recv(self, size):
         self.stage = ('header' if self.header_remaining > 0 else
@@ -158,10 +184,13 @@ class FakeSocket:
             raise OSError(SENTINEL)
         if self.stalled == self.stage:
             raise BlockingIOError(errno.EAGAIN, 'synthetic read stall')
+        if self.stage not in self.would_block:
+            self.would_block.add(self.stage)
+            raise BlockingIOError(errno.EAGAIN, 'synthetic read readiness')
         if self.stage == 'header':
             size = min(size, self.header_remaining)
         data = bytes(self.response[:size])
-        del self.response[:size]
+        self.response = self.response[size:]
         if self.stage == 'header':
             self.header_remaining -= len(data)
         return data
@@ -180,8 +209,7 @@ class FakeSocket:
 
     def readiness(self, readers, writers, exceptional, timeout=None):
         self.waits.append(timeout)
-        if self.stage == 'connect' and self.stalled != 'connect':
-            self.stage = 'send'
+        self.waited_stages.append(self.stage)
         if self.stage == self.stalled:
             self.clock.now += timeout
             return [], [], []
@@ -246,19 +274,24 @@ class TransportTests(unittest.TestCase):
     def test_constructor_has_no_socket_or_endpoint_operations_and_copies_contract(self):
         endpoint = '/tmp/nonexistent-synthetic.sock'
         clock = Mock(side_effect=AssertionError('constructor clock operation'))
+        endpoint_calls = []
         def local_source_only(original):
             def guarded(path, *args, **kwargs):
                 if not isinstance(path, int):
-                    self.assertNotEqual(os.fspath(path), endpoint, 'constructor endpoint I/O')
+                    if os.fspath(path) == endpoint:
+                        endpoint_calls.append(original.__name__)
+                        raise OSError('synthetic endpoint I/O')
                 return original(path, *args, **kwargs)
             return guarded
+        factory = Mock(side_effect=AssertionError('constructor socket I/O'))
         with ExitStack() as stack:
-            stack.enter_context(patch.object(transports.socket, 'socket',
-                                             side_effect=AssertionError('constructor socket I/O')))
+            stack.enter_context(patch.object(transports.socket, 'socket', factory))
             for module, name in ((os, 'stat'), (os, 'lstat'), (os, 'open'), (io, 'open')):
                 original = getattr(module, name)
                 stack.enter_context(patch.object(module, name, side_effect=local_source_only(original)))
             transport = transports.UnixJsonTransport(self.value, endpoint, clock=clock)
+        factory.assert_not_called()
+        self.assertEqual(endpoint_calls, [])
         self.assertEqual(clock.call_count, 0)
         self.pending(transport.snapshot())
         before = copy.deepcopy(transport.snapshot())
@@ -269,10 +302,13 @@ class TransportTests(unittest.TestCase):
     def test_invalid_endpoint_and_source_substitution_refuse_without_socket(self):
         endpoints = ('', 'relative.sock', '\x00/tmp/x', '/tmp/../x', '/tmp/./x', '/tmp//x',
                      '/tmp/x\n', '/tmp/é', '/' + 'x' * 100, '@abstract', b'/tmp/x', None)
-        with patch.object(transports.socket, 'socket', side_effect=AssertionError('invalid constructor I/O')):
+        with patch.object(transports.socket, 'socket',
+                          side_effect=AssertionError('invalid constructor I/O')) as factory:
             for endpoint in endpoints:
-                with self.subTest(endpoint=endpoint), self.assertRaises(Refused):
-                    transports.UnixJsonTransport(self.value, endpoint)
+                with self.subTest(endpoint=endpoint):
+                    with self.assertRaises(Refused):
+                        transports.UnixJsonTransport(self.value, endpoint)
+                    factory.assert_not_called()
             for change in ('missing', 'stale', 'tampered'):
                 value = copy.deepcopy(self.value)
                 reference = 'scripts/codex-qualification/controller_transports.py'
@@ -284,8 +320,10 @@ class TransportTests(unittest.TestCase):
                     seal(value)
                 else:
                     value['identity']['source_sha'] = 'b' * 40
-                with self.subTest(change=change), self.assertRaises(Refused):
-                    transports.UnixJsonTransport(value, '/tmp/synthetic.sock')
+                with self.subTest(change=change):
+                    with self.assertRaises(Refused):
+                        transports.UnixJsonTransport(value, '/tmp/synthetic.sock')
+                    factory.assert_not_called()
 
     def test_exact_request_bytes_and_fragmented_fixed_json(self):
         payload = '{ "synthetic": "é" }'.encode('utf-8')
@@ -330,10 +368,13 @@ class TransportTests(unittest.TestCase):
         for timeout in (0, -1, True, float('inf'), float('nan'), None,
                         operational.BUDGET['work_seconds'] + 1):
             cases.append(('GET', '/', b'', timeout))
-        with patch.object(transports.socket, 'socket', side_effect=AssertionError('invalid request I/O')):
+        with patch.object(transports.socket, 'socket',
+                          side_effect=AssertionError('invalid request I/O')) as factory:
             for method, path, payload, timeout in cases:
-                with self.subTest(method=method, path=str(path)[:20], timeout=timeout), self.assertRaises(Refused):
-                    transport.request(method, path, payload, timeout=timeout)
+                with self.subTest(method=method, path=str(path)[:20], timeout=timeout):
+                    with self.assertRaises(Refused):
+                        transport.request(method, path, payload, timeout=timeout)
+                    factory.assert_not_called()
 
     def test_strict_json_duplicates_nonfinite_arrays_deep_and_invalid_utf8(self):
         bodies = [b'{"x":1,"x":2}', b'{"nested":{"x":1,"x":2}}', b'{"x":NaN}',
@@ -343,8 +384,69 @@ class TransportTests(unittest.TestCase):
             with self.subTest(body=body[:40]):
                 self.refused_response(fixed(body))
 
+    def test_array_payload_refuses_before_socket(self):
+        transport = transports.UnixJsonTransport(self.value, '/tmp/synthetic.sock')
+        with patch.object(transports.socket, 'socket',
+                          side_effect=AssertionError('invalid array payload I/O')) as factory:
+            with self.assertRaises(Refused):
+                transport.request('POST', '/', b'[]', timeout=1)
+            factory.assert_not_called()
+
     def test_duplicate_json_response_is_refused(self):
         self.refused_response(fixed(b'{"x":1,"x":2}'))
+
+    def test_parseable_json_nesting_boundary(self):
+        allowed = b'{"x":' * 128 + b'0' + b'}' * 128
+        result, _ = self.mock_request(response=fixed(allowed))
+        self.assertEqual(result[0], 200)
+        nested = result[1]
+        for _ in range(128):
+            self.assertEqual(set(nested), {'x'})
+            nested = nested['x']
+        self.assertEqual(nested, 0)
+        refused = b'{"x":' * 129 + b'0' + b'}' * 129
+        with self.assertRaisesRegex(Refused, 'JSON nesting bound exceeded'):
+            self.mock_request(response=fixed(refused))
+
+    def test_parseable_chunk_count_boundary(self):
+        response = chunked([b' '] * 4095 + [b'{}'])
+        result, _ = self.mock_request(response=response)
+        self.assertEqual(result, (200, {}))
+        response = chunked([b' '] * 4096 + [b'{}'])
+        with self.assertRaisesRegex(Refused, 'HTTP chunk count bound exceeded'):
+            self.mock_request(response=response)
+
+    def test_complete_valid_fixed_and_chunked_decoded_body_boundary(self):
+        for size in (LIMIT, LIMIT + 1):
+            body = b' ' * (size - 2) + b'{}'
+            for encoding in ('fixed', 'chunked'):
+                # Split the oversize chunked body at the bound: each individual
+                # chunk is admissible and only their cumulative size exceeds it.
+                response = fixed(body) if encoding == 'fixed' else chunked(
+                    [body] if size == LIMIT else [body[:LIMIT], body[LIMIT:]])
+                with self.subTest(size=size, encoding=encoding):
+                    if size == LIMIT:
+                        result, _ = self.mock_request(response=response)
+                        self.assertEqual(result, (200, {}))
+                    else:
+                        with self.assertRaisesRegex(Refused, 'Unix JSON transport body bound exceeded'):
+                            self.mock_request(response=response)
+
+    def test_peer_initialization_failures_close_socket_and_cleanup_directory(self):
+        for phase in ('bind', 'listen', 'start'):
+            listener = Mock()
+            directory = Mock(name='synthetic-directory')
+            directory.name = '/tmp/synthetic-cq9051-peer'
+            thread = Mock()
+            getattr(listener if phase != 'start' else thread, phase).side_effect = OSError(SENTINEL)
+            with patch.object(socket, 'socket', return_value=listener), \
+                 patch.object(tempfile, 'TemporaryDirectory', return_value=directory), \
+                 patch.object(threading, 'Thread', return_value=thread):
+                with self.subTest(phase=phase):
+                    with self.assertRaises(OSError):
+                        Peer([fixed()])
+                    listener.close.assert_called_once_with()
+                    directory.cleanup.assert_called_once_with()
 
     def test_status_headers_and_framing_refusals(self):
         responses = [b'HTTP/1.0 200 Synthetic\r\nContent-Length: 0\r\n\r\n',
@@ -417,9 +519,15 @@ class TransportTests(unittest.TestCase):
     def test_readiness_uses_remaining_budget_and_no_retry(self):
         result, fake = self.mock_request()
         self.assertEqual(result, (200, {'ok': True}))
-        self.assertTrue(fake.waits)
+        self.assertGreaterEqual(len(fake.waits), 5)
+        self.assertEqual(set(fake.waited_stages), {'connect', 'send', 'header', 'body', 'eof'})
         self.assertTrue(all(0 < wait <= 0.1 for wait in fake.waits))
-        self.assertTrue(all(after <= before for before, after in zip(fake.waits, fake.waits[1:])))
+        self.assertTrue(all(after < before for before, after in zip(fake.waits, fake.waits[1:])))
+        self.assertGreater(len(fake.write_sizes), 1)
+        self.assertTrue(all(0 < size <= 13 for size in fake.write_sizes))
+        self.assertEqual(fake.sent, b'GET /synthetic HTTP/1.1\r\nHost: localhost\r\n'
+                         b'Connection: close\r\nContent-Type: application/json\r\n'
+                         b'Content-Length: 0\r\n\r\n')
 
     def test_finite_zero_clock_is_a_valid_monotonic_origin(self):
         result, _ = self.mock_request(clock=Clock(0))
@@ -440,9 +548,12 @@ class TransportTests(unittest.TestCase):
             clock = Clock()
             transport = transports.UnixJsonTransport(self.value, '/tmp/synthetic.sock', clock=clock)
             clock.script = [100, value]
-            with patch.object(transports.socket, 'socket', side_effect=AssertionError('invalid clock I/O')):
-                with self.subTest(value=value), self.assertRaises(Refused):
-                    transport.request('POST', '/', b'{}', timeout=1)
+            with patch.object(transports.socket, 'socket',
+                              side_effect=AssertionError('invalid clock I/O')) as factory:
+                with self.subTest(value=value):
+                    with self.assertRaises(Refused):
+                        transport.request('POST', '/', b'{}', timeout=1)
+                    factory.assert_not_called()
 
     def test_validation_and_response_json_parse_have_after_deadline_checks(self):
         original = json.loads
@@ -477,6 +588,19 @@ class TransportTests(unittest.TestCase):
 
 
 class GuardDiscriminator(unittest.TestCase):
+    def test_array_normalization_causes_before_socket_behavioral_assertion_failure(self):
+        original = json.loads
+        def normalize_array(*args, **kwargs):
+            result = original(*args, **kwargs)
+            return {} if isinstance(result, list) else result
+        result = unittest.TestResult()
+        with patch.object(transports.json, 'loads', side_effect=normalize_array):
+            TransportTests('test_array_payload_refuses_before_socket').run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(len(result.errors), 0)
+        self.assertEqual(len(result.failures), 1)
+        self.assertIn("Expected 'socket' to not have been called", result.failures[0][1])
+
     def test_duplicate_key_guard_removal_causes_behavioral_assertion_failure(self):
         original = json.loads
         def no_duplicate_guard(*args, **kwargs):
