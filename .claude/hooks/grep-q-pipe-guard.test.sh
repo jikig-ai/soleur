@@ -1201,7 +1201,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=261   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=262   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -1316,6 +1316,7 @@ PRODUCER_JOIN=(
   'plugins/soleur/test/operator-stage-approval-hook.test.sh | gh | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/12s; hits 0 (stdin-flag))'
   'plugins/soleur/test/operator-stage-approval-hook.test.sh | jq | exempt | text-only no piped call observed (rc0 12s); stub-world jq is a pass-through exec'
   'plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh | sha256sum | drains | 1 | -c -'
+  'plugins/soleur/test/inngest-config-bundle-mirror.test.sh | sha256sum | drains | 1 | *'
   'plugins/soleur/test/ship-followthrough-directive.test.sh | parse_directive | exempt | not-a-command shell function in scripts/sweep-followthroughs.sh'
   'scripts/check-cloudflare-token-drift.test.sh | curl | exempt | arm-drain all-arms-keyed: def 237 drains `_stdin_cfg=$(cat)` in the `--config -` arm at opener+10, before any decision or exit (reach T1; t1:rc0/90s; hits 299 (stdin-flag))'
   'scripts/check-cloudflare-token-drift.test.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (2 non-test producers) (reach T1; t1:rc0/90s; hits 0 (stdin-flag))'
