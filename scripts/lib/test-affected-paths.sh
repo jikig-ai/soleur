@@ -108,6 +108,9 @@ ALWAYS_ON_SUITES=(
   "apps/web-platform/scripts/seed-live-verify-user.test.sh"
   "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh"
   "scripts/assert-dependabot-drain-live"
+  # #8875: the emitter-selection census walks the whole tracked tree — repo-global by
+  # construction (git ls-files + per-file comment-stripped invocation discovery).
+  "scripts/betterstack-emitter-read-live"
   "scripts/followthrough-varq-ban-live"
   "scripts/inngest-liveness-classify"
   "scripts/lint-agents-compound-sync-live"
@@ -1975,7 +1978,9 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # would narrow coverage the suite already had (the #9945 precedent). Residual: a
 # dir-less `x.test.sh` at repo root is corpus yet inexpressible in this `dir/`
 # grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
-# re-derives the live root set to catch NEW top-level dirs.
+# re-derives the live root set to catch NEW top-level dirs, and its th8 row
+# (#10117) REDs the battery on any dir-less corpus member — grammar extension
+# deferred to #10198.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
 
   "apps/"
@@ -2021,7 +2026,9 @@ AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
 # *.test.sh corpus needed glob: coverage for the 13 roots without a declared prefix.
 # Residual: a dir-less `x.test.sh` at repo root is corpus yet inexpressible in this
 # `dir/` grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
-# re-derives the live root set to catch NEW top-level dirs.
+# re-derives the live root set to catch NEW top-level dirs, and its th8 row
+# (#10117) REDs the battery on any dir-less corpus member — grammar extension
+# deferred to #10198.
 AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
 
   "apps/"
@@ -2215,7 +2222,9 @@ AFFECTED_SCRIPTS_AUDIT_DEV_SCHEDULED_SHAPES_PATHS=(
 # prefix over a doc-heavy root would over-select on non-.sh churn, and there is no
 # legacy prefix set to preserve. Residual: a dir-less `x.sh` at repo root is
 # inexpressible in this `dir/` grammar (no head to mint); the th6 row in
-# scripts/test-all-affected.test.sh re-derives the live root set for NEW dirs.
+# scripts/test-all-affected.test.sh re-derives the live root set for NEW dirs,
+# and its th8 row (#10117) REDs the battery on any dir-less corpus member —
+# grammar extension deferred to #10198.
 AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
   "glob:.agents/**.sh"
   "glob:.claude/**.sh"
@@ -2241,4 +2250,16 @@ AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
   "scripts/lib/repo-write-boundary.sh"
   "scripts/lib/repo-write-boundary.test.sh"
   "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/betterstack-emitter-read — the #8875 census mutation battery. It drives the guard
+# over git-init'd fixture trees, not the repo corpus; the `git ls-files` text that tripped
+# the corpus-walk arm is a comment naming the GUARD's producer. Declared from the repo paths
+# its suite file names.
+AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
+  "scripts/lib/bs-emitter-row.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-betterstack-emitter-read.sh"
+  "scripts/lint-betterstack-emitter-read.test.sh"
+  "scripts/test-all.sh"
 )

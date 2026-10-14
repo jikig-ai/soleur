@@ -1658,7 +1658,12 @@ X
   mutate "MR-2 the emit level downgraded from fatal" 1 WBU_REPORTER "$RU" "s.replace('WL_LEVEL=fatal', 'WL_LEVEL=warning', 1)"
   mutate "MTI-1 OnUnitActiveSec dropped (the standing retry is gone)" 1 WBU_TIMER "$TI" "re.sub(r'(?m)^OnUnitActiveSec=15min\n', '', s, 1)"
   mutate "MWF-1 the -target line dropped from the workflow" 1 WBU_WF "$W" "re.sub(r'(?m)^\\s*-target=terraform_data\\.workspaces_boot_unlock_install[^\\n]*\\n', '', s, 1)"
-  mutate "MV-1 the workspaces-luks-reopen tag dropped from vector.toml" 1 WBU_VECTOR "$V" "s.replace('  \"workspaces-luks-reopen\",\n', '', 1)"
+  # MV-1 targets the OWNING occurrence: #6551's partition repeats the tag set on
+  # Sources 1/2's exclude_matches AND names the section in a line-103 comment, so
+  # an unanchored index or first-match replace lands upstream of the real section
+  # and the include would survive — an invisible escape. The \n anchor requires
+  # the section header at column 0.
+  mutate "MV-1 the workspaces-luks-reopen tag dropped from vector.toml" 1 WBU_VECTOR "$V" "s[:s.index('\n[sources.host_scripts_journald]')] + s[s.index('\n[sources.host_scripts_journald]'):].replace('  \"workspaces-luks-reopen\",\n', '', 1)"
 
   # ── print mutations ──
   mutate "MP-1 an unguarded substitution in the before-print" 1 WBU_LUKS_TF "$T" "$(cat <<'X'

@@ -91,6 +91,10 @@ plugins/soleur/test/lane-frontmatter.test.sh	knowledge-base/project/specs/archiv
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/2026-09-20-accountant-prepaid-hosting-contract.md
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/README.md
 plugins/soleur/test/notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
+plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/brainstorms
+plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/plans
+plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/specs
+plugins/soleur/test/operator-script.test.sh	knowledge-base/project/specs
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/plans
@@ -109,6 +113,8 @@ plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	knowledge-base
 plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	knowledge-base/product/design
 plugins/soleur/test/vendor-pin-integrity.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 scripts/battery-tag-authorship	knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/inngest-server.md
 scripts/ci-draft-light	knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md
 scripts/ci-push-dedupe	knowledge-base
 scripts/ci-push-dedupe	knowledge-base/project/specs
@@ -135,10 +141,13 @@ scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/be
 scripts/followthrough-varq-ban	knowledge-base/project
 scripts/followthrough-varq-ban	knowledge-base/project/specs
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
+scripts/guard-vacuity-floor	knowledge-base
 scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/model.c4
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
+scripts/guard-vacuity-floor	knowledge-base/engineering/security/skill-overrides
 scripts/guard-vacuity-floor	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
+scripts/guard-vacuity-floor	knowledge-base/project/specs/archive
 scripts/inngest-probe-heartbeat-feeder	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/lib/incidents-roots.test.sh	knowledge-base/project
 scripts/lib/inngest-probe-row.test.sh	knowledge-base
@@ -148,9 +157,12 @@ scripts/lint-agents-compound-sync-unit	knowledge-base/engineering/operations/run
 scripts/lint-agents-compound-sync-unit	knowledge-base/project
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/learnings
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/promotion-config.yml
+scripts/lint-orphan-test-suites	knowledge-base
+scripts/lint-orphan-test-suites	knowledge-base/engineering/architecture/diagrams
 scripts/lint-orphan-test-suites	knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/article-30-2-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/article-30-register.md
+scripts/lint-orphan-test-suites	knowledge-base/legal/audits
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-05-12-gdpr-gate-plan-phase-2-7-outcome.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-06-counsel-review-5103.md
@@ -185,6 +197,8 @@ scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-10-counsel-revi
 scripts/lint-orphan-test-suites	knowledge-base/legal/breach-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/ccla-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/compliance-posture.md
+scripts/lint-orphan-test-suites	knowledge-base/project
+scripts/lint-orphan-test-suites	knowledge-base/project/learnings
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
 scripts/pre-push-ratchet-lane	knowledge-base
