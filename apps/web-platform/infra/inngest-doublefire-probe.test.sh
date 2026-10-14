@@ -779,7 +779,7 @@ test_df_page_size_gate() {
   for v in "${badvals[@]}"; do
     local rc=0 out
     out=$(INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir" INNGEST_GQL_PAGE_SIZE="$v" bash "$TARGET" 2>&1 >/dev/null) || rc=$?
-    if [[ "$rc" -eq 1 ]] && printf '%s' "$out" | grep -q 'FATAL INNGEST_GQL_PAGE_SIZE'; then
+    if [[ "$rc" -eq 1 ]] && grep -q 'FATAL INNGEST_GQL_PAGE_SIZE' <<<"$out"; then
       PASS=$((PASS+1)); echo "  PASS: page_size '$v' refused FATAL (rc=1)"
     else
       FAIL=$((FAIL+1)); echo "  FAIL: page_size '$v' rc=$rc out='$out' (want FATAL rc=1)"

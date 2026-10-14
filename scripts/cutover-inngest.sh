@@ -1249,8 +1249,9 @@ missed_tick_report() {
   local RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-server.md § Bounded-outage note"
 
   if [[ "$1" != "true" ]]; then
-    # OFF (the default): the window is echoed but never parsed, so a malformed CUTOVER_WINDOW_*
-    # cannot redden a run whose verdict above was clean.
+    # OFF (the default): the window is echoed but never parsed, so a malformed
+    # CUTOVER_WINDOW_FROM or CUTOVER_WINDOW_UNTIL cannot redden a run whose
+    # verdict above was clean.
     echo "::notice::missed-tick candidates NOT EMITTED (default, #6939). A per-bucket list cannot tell a tick that was due from one that was never due, and re-firing a never-due tick double-fires that cron. Gap window as configured: [$SHOW_FROM, $SHOW_UNTIL]. A tick skipped in the gap is the accepted ADR-100 residual. Recover one ONLY via $RUNBOOK. Unverified per-bucket candidates: re-dispatch op=verify with missed_tick_candidates=true. Proper fix: #6940."
     return 0
   fi
