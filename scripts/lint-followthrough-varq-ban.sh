@@ -207,9 +207,10 @@ done <<<"$rule2_hits"
 # The obligation: a probe that reads issue COMMENTS and BRANCHES on an anchored verdict or
 # marker must route that decision through scripts/lib/trusted-verdict.sh. Both conjuncts are
 # load-bearing. Reading comments alone is not a verdict -- `anthropic-admin-key-6297.sh` counts
-# bot-authored marker comments and `inngest-watchdog-functions-query-6407.sh` greps issue text
-# for a technical failure signature; neither lets a comment decide a tracker's fate, and a rule
-# that fired on them would be reaching for an author filter that has nothing to filter.
+# bot-authored marker comments (filtered to the bot login, so a user comment cannot move it) and
+# `inngest-watchdog-functions-query-6407.sh` greps issue text for a technical failure signature. The
+# second one CAN let an unfiltered comment decide a tracker's fate (exit 1 reopens a closed tracker);
+# it is not caught here because it branches on no `RESULT:`/`S<n>-` marker, and it is tracked at #10302.
 # THE ANCHOR (`VERDICT_BRANCH`) is `RESULT:` OR any `S<n>-<UPPERCASE-WORD>` soak marker. The
 # `S<n>-...` spelling is a CONVENTION the anchor encodes (the S2 and S3 soak probes of ADR-276 use it);
 # it was a list of four names until round 4, which a new marker family (`S4-GO`) walked past, so it is
@@ -226,7 +227,7 @@ done <<<"$rule2_hits"
 # `--comments`, `gh issue view ... -c`, `.comments[]` and `.comments | ...`, the REST routes
 # `issues/N/comments` and `issues/N/timeline`, GraphQL `comments(first:`, and `in:comments`
 # searches; AND a branch on `RESULT:` or ANY `S<n>-<UPPERCASE-WORD>` marker (`S4-GO`, `S2-ARMED:`,
-# not only the four ADR-276 names). NOT COVERED (deferred, tracked at DEFERRED-TRACKER-PLACEHOLDER):
+# not only the four ADR-276 names). NOT COVERED (deferred, tracked at #10302 and #10303):
 # comment readers outside scripts/followthroughs/; a `*.test.sh` named as a tracker's probe (outside
 # the probe set, see above); other marker families (`watchdog:restart`,
 # `Verified:`) and lower-case `S<n>-` spellings (`S2-armed:`); a route or field list built at run
