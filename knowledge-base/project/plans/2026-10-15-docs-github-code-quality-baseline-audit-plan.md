@@ -12,6 +12,17 @@ lane: single-domain
 
 Add the finished GitHub Code Quality baseline audit (22 rules, 169 open findings on `main` at `30407a8597`) to the knowledge base as one new markdown file. Docs-only. The draft is already written; this plan copies it verbatim and gates it through the repo's markdown and KB checks. PR body references the tracker as `Ref #10331` only, with no close keyword for any issue (the tracker stays open for the triage and linter-wiring work it describes). PR title: `docs(audit): GitHub Code Quality baseline on main 30407a8597`. Label `semver:patch`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-15 (proportionate pass; no agent fan-out, per the minimal-detail scope hint)
+**Gates run:** User-Brand Impact (present, threshold `none`, no sensitive path), PAT-shaped variable sweep (no hits), Scope Check (one compliant section), Observability (pure-docs, skipped), Encryption Posture, Guard Contract, UI-wireframe, Downtime and ADR/C4 (not triggered: one new markdown file).
+
+### Key Findings
+
+- The draft already passes the pinned markdown lint: `markdownlint-cli2 --config .markdownlint.json <draft>` reported `0 issues in 0 files`, so a clean verbatim copy is the expected outcome and Phase 2 should be a verification, not an edit.
+- Frontmatter keys in the draft (`title, date, type, issue, status, last_updated`) match the sibling `2026-07-20-cron-liveness-cohort-audit.md`; the draft omits the optional `adr:` key, which the sibling uses only when an ADR exists.
+- The repo's own entry point for the lint is `scripts/markdown-lint.sh` (pinned binary, scope from `.markdownlintignore`); run that, not an unpinned `npx`.
+
 ## Research Insights
 
 - **Premise validation.** #10331 is OPEN, no closing PR; commit `30407a8597` exists locally; draft file present (133 lines, 10756 bytes); sibling audits live in `knowledge-base/engineering/audits/` (latest: `2026-07-20-cron-liveness-cohort-audit.md`) with frontmatter keys `title, date, type: audit, issue, status, last_updated`, which the draft already carries. No external premises beyond these.
