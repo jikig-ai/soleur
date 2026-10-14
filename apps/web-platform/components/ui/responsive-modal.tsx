@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { Button } from "@/components/ui/button";
 
 // Responsive dialog shell (mobile Phase 3). Below `md` the dialog anchors to the
 // bottom edge as a sheet (rounded top, drag-handle affordance, safe-area bottom
@@ -34,6 +35,23 @@ export interface ResponsiveModalProps {
   closeOnBackdrop?: boolean;
   /** Desktop max-width utility (mobile is always full-width). Default max-w-md. */
   desktopMaxWidth?: string;
+  /**
+   * #7222 — below `md`, take the WHOLE viewport instead of anchoring a 90vh
+   * bottom sheet: `inset-0`, full height, square corners, own safe-top, and no
+   * drag handle (a full takeover has nothing to drag toward).
+   *
+   * Extends this primitive rather than `ui/sheet.tsx` deliberately: Sheet's
+   * mobile branch is `aria-modal="false"` with no backdrop and no focus trap,
+   * which is wrong for a surface that hides the document behind it. Everything
+   * a takeover needs — portal to <body>, backdrop, focus trap, focus restore,
+   * Escape — already lives here, so the variant is a class swap, not a second
+   * dialog implementation.
+   *
+   * The consumer owns the header in this mode (the shell renders no drag
+   * handle and no Close), so it can put the close affordance and the "what am I
+   * looking at" context in one 56px bar.
+   */
+  mobileFullScreen?: boolean;
   /** Extra classes appended to the panel. */
   panelClassName?: string;
   "aria-label"?: string;
@@ -47,6 +65,7 @@ export function ResponsiveModal({
   onClose,
   closeOnBackdrop = true,
   desktopMaxWidth = "max-w-md",
+  mobileFullScreen = false,
   panelClassName = "",
   children,
   "aria-label": ariaLabel,
@@ -119,13 +138,26 @@ export function ResponsiveModal({
     }
   }
 
+  // Three cells, not two: desktop dialog, mobile bottom sheet, mobile full
+  // takeover. `fullScreen` is mobile-only by construction — `md`+ keeps the
+  // centered dialog whatever the consumer asked for, so a page cannot
+  // accidentally ship a full-viewport modal to a laptop.
+  const fullScreen = mobileFullScreen && !isDesktop;
+
   const backdropClasses = isDesktop
     ? "fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-    : "fixed inset-0 z-50 flex items-end justify-center bg-black/50";
+    : fullScreen
+      ? "fixed inset-0 z-50 flex"
+      : "fixed inset-0 z-50 flex items-end justify-center bg-black/50";
 
   const panelClasses = isDesktop
     ? `w-full ${desktopMaxWidth} rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-6 shadow-xl`
-    : "relative max-h-[90vh] w-full overflow-y-auto rounded-t-2xl border-t border-soleur-border-default bg-soleur-bg-surface-1 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl";
+    : fullScreen
+      ? // No backdrop tint and no rounding: the panel IS the viewport. It owns
+        // safe-top itself (decision 4) because it covers the mobile top bar,
+        // which is what used to hold that inset back off the notch.
+        "relative flex h-full w-full min-h-0 flex-col overflow-hidden bg-soleur-bg-base pt-[env(safe-area-inset-top)]"
+      : "relative max-h-[90vh] w-full overflow-y-auto rounded-t-2xl border-t border-soleur-border-default bg-soleur-bg-surface-1 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl";
 
   const node = (
     <div
@@ -150,7 +182,7 @@ export function ResponsiveModal({
         onKeyDown={onPanelKeyDown}
         className={`${panelClasses} ${panelClassName} focus:outline-none`.trim()}
       >
-        {!isDesktop && (
+        {!isDesktop && !fullScreen && (
           // Sticky sheet header: drag-handle affordance + an always-reachable
           // Close button (pinned as the sheet scrolls). Without this a sheet
           // with `closeOnBackdrop={false}` and no in-body X (e.g. new-issue) is
@@ -161,11 +193,12 @@ export function ResponsiveModal({
               className="h-1.5 w-10 rounded-full bg-soleur-bg-surface-2"
             />
             {onClose && (
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 onClick={onClose}
                 aria-label="Close"
-                className="absolute right-1 top-0 inline-flex h-11 w-11 items-center justify-center rounded-full text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
+                className="absolute right-1 top-0 h-11 w-11 hover:text-soleur-text-primary"
               >
                 <svg
                   width="20"
@@ -181,7 +214,7 @@ export function ResponsiveModal({
                   <line x1="18" y1="6" x2="6" y2="18" />
                   <line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
-              </button>
+              </Button>
             )}
           </div>
         )}

@@ -8,7 +8,7 @@
 # secrets required (sweeper runs it under `env -i`).
 #
 # Spec (single source of truth):
-#   knowledge-base/project/specs/feat-compound-consolidate/spec.md
+#   knowledge-base/project/specs/archive/20261013-032858-feat-compound-consolidate/spec.md
 #   §Re-Evaluation Criteria — clause 1 (redundancy material) is deterministic
 #   and evaluated here; clause 2 (a named founder/agent outcome) is human
 #   judgment and is escalated via the stay-open path below.

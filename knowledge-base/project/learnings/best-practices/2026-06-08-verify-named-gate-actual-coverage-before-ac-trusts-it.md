@@ -60,7 +60,7 @@ plan-quality gaps caught and folded at plan-review, not execution errors.
 
 ## Cross-references
 
-- `knowledge-base/project/plans/2026-06-08-feat-shortform-feature-tweets-plan.md` — the plan (findings folded into Research Reconciliation + Sharp Edges).
+- `knowledge-base/project/plans/archive/20261013-032858-2026-06-08-feat-shortform-feature-tweets-plan.md` — the plan (findings folded into Research Reconciliation + Sharp Edges).
 - `scripts/lint-distribution-content.sh` — the Liquid-only linter the AC over-trusted.
 - `scripts/content-publisher.sh:800-808` — the stale-sweep that only touches `scheduled`.
 - AGENTS.md `hr-verify-repo-capability-claim-before-assert` — the cross-cutting parent rule.

@@ -69,7 +69,7 @@ if [[ -n "$DOWN_JSON" && "$DOWN_JSON" != "[]" ]]; then
     [[ -z "$num" ]] && continue
     body="$(gh issue view "$num" --repo "$GH_REPO" --json body,comments \
       --jq '.body + " " + ([.comments[].body] | join(" "))' 2>/dev/null || echo "")"
-    if printf '%s' "$body" | grep -qiE '__FETCH_FAILED__|/v0/gql functions|functions[- ]query'; then
+    if grep -qiE '__FETCH_FAILED__|/v0/gql functions|functions[- ]query' <<<"$body"; then
       REGRESSION_ISSUES="$REGRESSION_ISSUES #$num"
     fi
   done < <(printf '%s' "$DOWN_JSON" | jq -r '.[].number')

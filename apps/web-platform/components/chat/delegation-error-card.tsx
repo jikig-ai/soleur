@@ -1,5 +1,7 @@
 "use client";
 
+import { NavLink } from "@/components/ui/nav-link";
+
 const ERROR_MESSAGES: Record<string, { title: string; body: string; cta: string }> = {
   delegation_revoked_post_grace: {
     title: "Access revoked",
@@ -41,12 +43,12 @@ export function DelegationErrorCard({ errorCode, message }: DelegationErrorCardP
     <div className="mx-auto my-4 max-w-md rounded-lg border border-red-400/30 bg-red-400/5 p-4">
       <h3 className="text-sm font-semibold text-red-400">{info.title}</h3>
       <p className="mt-1 text-sm text-soleur-text-secondary">{message || info.body}</p>
-      <a
+      <NavLink
         href="/dashboard/settings/team"
         className="mt-3 inline-block rounded-md bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-medium text-white hover:bg-soleur-accent-gold-fg/90"
       >
         {info.cta}
-      </a>
+      </NavLink>
     </div>
   );
 }

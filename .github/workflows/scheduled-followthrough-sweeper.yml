@@ -2,7 +2,8 @@
 # `<!-- soleur:followthrough script=... earliest=... secrets=... -->`
 # directive in each open issue body and runs the referenced script with
 # only the secrets it declared. Closes with PASS comment on exit 0,
-# comments FAIL on exit 1, comments TRANSIENT on any other exit.
+# comments FAIL on exit 1; exit 2 = NOT YET, 3 = CANNOT ESTABLISH,
+# 5 = ACTION REQUIRED, any other = TRANSIENT (all leave open + comment).
 #
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 #
@@ -43,13 +44,62 @@ concurrency:
 permissions:
   contents: read
   issues: write
+  # (#8450) the actions-queue-tail probe reads Actions run/job data via `gh api`
+  # — under an explicit permissions block an unlisted scope is `none`, which is
+  # a silent 403 for that probe.
+  actions: read
 
 jobs:
   sweep:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # 10 -> 15. `fetch-depth: 0` below costs a measured +20-60s against a worst
+    # recent run of 3m51s; raising the ceiling in the same edit keeps the change
+    # from surfacing later as an unexplained timeout.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # FULL HISTORY, for scripts/followthroughs/ccla-representative-icla-7922.sh.
+          # That probe derives the coverage-map notice epoch with
+          # `git log --first-parent -S<anchor>`, and on the default shallow
+          # checkout the pickaxe finds the GRAFT commit instead of the commit
+          # that introduced the notice. Measured on a --depth=1 clone: the
+          # derivation returned HEAD's own commit date rather than the notice
+          # commit's, and `rev-parse <graft>^` failed. The probe refuses in that
+          # state rather than reporting a plausible wrong epoch, so without this
+          # it would post CANNOT ESTABLISH every day forever.
+          #
+          # No other probe reads git history — grepped: the only git usage
+          # across the other 79 files is `rev-parse --show-toplevel` — so
+          # nothing else changes behaviourally.
+          fetch-depth: 0
+          # `actions/checkout` otherwise writes an `http.<host>.extraheader`
+          # carrying this workflow's token into `.git/config`, which `env -i`
+          # does NOT remove. It removes the AMBIENT credential — the one a probe
+          # could recover without declaring it. It does NOT, and must not, take
+          # the token away from probes that DO declare `secrets=GH_TOKEN`: those
+          # are deliberately handed an `issues:write` token by the `env:` block
+          # below, which is the whole mechanism by which a probe reads or writes
+          # GitHub state. The distinction is the point of the flag: declared and
+          # auditable, never ambient. (#7490 took the declared set from 24 to 28,
+          # by adding the clause to four probes that call `gh` and had omitted it
+          # — they were running unauthenticated and could never have closed. Same
+          # change took the HONOURED-directive population from 25 to 31, by
+          # unfencing six directives the sweeper had been skipping. Both numbers
+          # measured through the shipped `parse_directive`, 2026-09-18, over the
+          # 56 open trackers — counting `secrets=` with grep instead gives a
+          # different and wrong answer, because prose mentions it too.)
+          #
+          # The credential `closed_precheck` treats as unforgeable is the comment
+          # AUTHOR identity, and an ambient token is what would let an arbitrary
+          # probe forge it.
+          #
+          # Measured before flipping it: the sweeper itself runs no git command
+          # at all (it resolves `script=` against the checked-out HEAD), and the
+          # one probe that does fetch reads a PUBLIC branch, which succeeds
+          # anonymously (verified: `git fetch https://github.com/jikig-ai/soleur
+          # '+refs/heads/cla-signatures:...'` with no credential, rc=0).
+          persist-credentials: false
 
       - name: Run sweeper
         env:
@@ -59,25 +109,50 @@ jobs:
           # Secrets that one or more verification scripts may declare via
           # the `secrets=` directive clause. Add new ones here when a new
           # follow-through ships needing them.
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          # #7946 — the Sentry read for every followthrough: the org-level Internal
+          # Integration `actions-read-prd` (ADR-031; Issue & Event / Organization /
+          # Project = Read, nothing else). One store, this repo secret, deliberately
+          # NOT mirrored to Doppler — the name is chosen so that no `doppler run`
+          # config can satisfy it by accident (the canonical vendor env-var name
+          # bound a personal, human-account-scoped token under `-c prd_terraform`).
+          # A directive that names a secret absent from this block is commented on
+          # by the sweeper and reds the run; that is the intended reading, not noise.
+          SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
           # #5875 canary-promotion-5875.sh — GETs /hooks/deploy-status (HMAC + CF-Access).
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           # #5934 chardevice-wedge-nonrecurrence-5934.sh (and #5110 betterstack-
-          # quota-verdict) — Better Stack Telemetry read creds for scripts/
+          # quota-verdict, and #6931 web2-luks-live-6931.sh) — Better Stack Telemetry read creds for scripts/
           # betterstack-query.sh (mirror Doppler soleur/prd_terraform). If these GH
-          # secrets are not yet provisioned they resolve to "", and the probes are
-          # fail-safe TRANSIENT (never a false PASS/close) until they are set.
+          # secrets are not provisioned they resolve to "" -- and since #7946 the sweeper's
+          # Guard 3 refuses an EMPTY binding: the tracker gets a REQUIRED SECRET MISSING
+          # comment and the run goes red, rather than the probe running and TRANSIENTing.
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
           # #6438 l3-probe-armed-6438.sh — Better Stack heartbeats API (uptime.betterstack.com
           # /api/v2/heartbeats) read for the web-1 private-net probe soak (mirror Doppler
           # soleur/prd_terraform BETTERSTACK_API_TOKEN). Distinct from the QUERY_* Logs creds
-          # above (ClickHouse); this is the account-wide uptime API token. Fail-safe TRANSIENT
-          # (never a false PASS/close) if unset.
+          # above (ClickHouse); this is the account-wide uptime API token. If unset it resolves
+          # to "" and Guard 3 refuses it (comment + red run, #7946) before the probe runs.
           BETTERSTACK_API_TOKEN: ${{ secrets.BETTERSTACK_API_TOKEN }}
+          # #7855 betterstack-roundtrip-latency-7855.sh — the INGEST (write) credential for the
+          # git-data source (2734275). That probe writes a marker and reads it back, which is the
+          # only way to tell an ACKNOWLEDGEMENT from STORAGE. Distinct from both sets above — QUERY_* are ClickHouse
+          # read creds and API_TOKEN is the uptime API; this is a write token scoped to a source.
+          #
+          # ONLY the git-data token is wired, and the SHARED source's BETTERSTACK_LOGS_TOKEN is
+          # deliberately absent. NOT because nothing reads it — `git-data-rung2-evidence-capture.sh`
+          # reads it as a fallback — but because withholding it makes Rule 2 hold by CAPABILITY
+          # here rather than only by a string comparison: a job that does not hold the shared
+          # source's write credential cannot land a marker there whatever its code says, and a
+          # marker there would manufacture the very liveness the rung-2 capture consults as its
+          # control, at the gate authorising a host's birth.
+          #
+          # Unset resolves to "" and Guard 3 refuses to forward it (comment + red run, #7946), so
+          # the probe's own ROUNDTRIP_UNKNOWN (exit 3) arm is reached only on a genuine vendor miss.
+          GIT_DATA_BETTERSTACK_LOGS_TOKEN: ${{ secrets.GIT_DATA_BETTERSTACK_LOGS_TOKEN }}
           # #6168 autovacuum-thrash-6168.sh — read-only pg_stat_all_tables query
           # against prod via the Supabase Management API (soak gate for PR #6164).
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

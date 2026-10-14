@@ -64,8 +64,8 @@ The brainstorm output reshaped #3698's scope substantially:
 
 Documented in:
 
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-12-pino-userid-formatters-log-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-pino-userid-redaction-3698/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-12-pino-userid-formatters-log-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-pino-userid-redaction-3698/spec.md`
 - Issue #3698 body updated with Artifacts section (`gh issue edit 3698`)
 
 ## Key Insight

@@ -10,6 +10,7 @@ Present the user with teammate count, task assignments, and cost context:
 This spawns persistent teammates that can coordinate via messaging (~7x token cost).
 
 Proposed assignments:
+
 - Teammate 1: [tasks]
 - Teammate 2: [tasks]
 ...
@@ -79,7 +80,7 @@ that task sequentially. Other teammates continue unaffected.
 
 When all tasks complete:
 
-- Run the full test suite to verify integration
+- Run the touched-file suites to verify integration — **full suite instead if the project has no CI-enforced full-suite gate on the merge branch; see **Full-suite fallback** in `work/SKILL.md` Phase 2 §9, and take that branch when in doubt**
 - If tests pass: create incremental commits for the batch
 - If tests fail: fix integration issues, then commit
 - Send `requestShutdown` to all teammates

@@ -5,9 +5,9 @@ date: 2026-07-15
 amends: none
 supersedes: none
 issue: 6415
-amended_by: [6497]
+amended_by: [6497, 8539, 8562]
 related: [6400, 6405, 6288, 6122, 6242, 6497]
-related_adrs: [ADR-096, ADR-100, ADR-103, ADR-068, ADR-082]
+related_adrs: [ADR-096, ADR-100, ADR-103, ADR-068, ADR-082, ADR-114]
 brand_survival_threshold: single-user incident
 ---
 
@@ -17,6 +17,30 @@ brand_survival_threshold: single-user incident
 
 **Accepted — for the REGISTRY host only.** Explicitly **not** class-wide: see the normative
 blockers below. Extending it to git-data or inngest requires clearing them first.
+
+**Amended 2026-09-18 (#8210):** the first normative blocker's git-data exclusion is cleared —
+git-data has a reboot-safe storage unlock (`git-data-luks-reopen.service`, a Doppler-run
+oneshot, proven by the rung-2 reset arm). The reboot primitive is STILL not adopted for
+git-data; see the amendment under the blocker.
+
+**Amended 2026-09-22 (#8539):** the inngest host is given a separate primitive for converging a
+late-attached private NIC — a static networkd fallback, not the reboot. The reboot grant above
+stays registry-only; see the amendment under the blocker.
+
+> **This amendment's converge claim is `adopting`, not accepted.** The code is inert at merge:
+> `runcmd` is once-per-instance and nothing replaces the host on merge, so the primitive reaches
+> production only via an operator-dispatched `apply_target=inngest-host-replace` plus a
+> human-approved `cutover-inngest.yml -f op=resume`. It stays a mechanism-level argument until a
+> boot emits `private_nic_ok … by=99-soleur-private-fallback`; that falsification criterion is
+> restated under §Alternatives and is enrolled as a follow-through on #8539
+> (`scripts/followthroughs/inngest-private-nic-8539.sh`). Until then, read the sentence above as
+> "is designed to converge", not "converges".
+
+The "REGISTRY host only" line at the top of this Status block is about the **reboot** primitive
+and is unchanged by this amendment: the fallback file is a different mechanism, so extending it
+to inngest does not require clearing the normative blockers, which bind the reboot and replace
+primitives only. That distinction is argued under the blocker; it is restated here because the
+top line otherwise reads as forbidding exactly what this amendment does.
 
 **Amended 2026-07-15 (#6497)** to cover boot-baked *credentials* alongside the private NIC —
 also registry-host-scoped, and carrying a **second** normative blocker of its own, because the
@@ -37,14 +61,23 @@ for the entire window.
 Three facts make this a structural problem rather than a one-off:
 
 1. **The race cannot be fixed in Terraform.** `hcloud_server_network` is a **separate, additive
-   ONLINE attach** (`network.tf:9-13`) — an inline `network {}` block on the server would
-   force-replace the host, so the attach is a distinct resource. It needs a *created* server,
-   and a created server is *already booting*. There is no ordering that guarantees the attach
+   ONLINE attach** (`network.tf:9-13`). An inline `network {}` block on the server does not
+   help: it updates in place, and whenever public networking is enabled the provider attaches it
+   only after the server is created and started, so it is a post-boot hot attach too. The
+   attach needs a *created* server, and a created server is *already booting*. There is no ordering that guarantees the attach
    lands before the guest's network stage. The control plane reports "attached" while the guest
    is misconfigured; `registry-host-replace`'s own gate asserts `nic_recreated>=1` from **tfplan**
    (`tests/scripts/lib/registry-host-replace-gate.sh:44-46`), which proves Terraform *planned*
    the attach — never that the guest configured it. This exact symptom on this exact host is
    already documented in `learnings/2026-07-07-immutable-redeploy.md` Sharp edge 2 (#6122).
+
+   > **Corrected 2026-09-22 (#8539).** This point previously read "an inline `network {}` block
+   > on the server would force-replace the host, so the attach is a distinct resource". That is
+   > false at hcloud provider v1.63.0: `network` is a non-`ForceNew` set, and a change to it is
+   > applied in place (`updateServerInlineNetworkAttachments`). The point's conclusion stands on
+   > the other fact: the provider creates and starts the server and only then attaches an inline
+   > network, unless both public IPv4 and IPv6 are disabled. Evidence is in the
+   > [#8539 plan](../../../project/plans/2026-09-22-fix-inngest-private-nic-boot-race-plan.md).
 
 2. **A NIC-less host is invisible to every existing signal.** It retains **public** egress, so
    `registry_disk_prd` keeps pinging green; and the boot readiness poll targets `localhost:5000`
@@ -93,13 +126,13 @@ A dedicated Hetzner host whose function depends on the private network **MUST**:
 <!-- Descriptive, not prescriptive: these bullets explain WHY the self-converge gate has the
      shape it does. "trains the operator to ignore it" is an argument about alarm fatigue, not
      an instruction to anyone. Pre-existing since #6415. -->
-   - **IMDS corroboration** — never reboot on zero evidence. A standing alarm that fires on its
+- **IMDS corroboration** — never reboot on zero evidence. A standing alarm that fires on its
      own probe fault trains the operator to ignore it; a *host* that reboots on its own probe
      fault is the same mistake with teeth.
-   - **`uptime_s>600`** — says "don't reboot a host that just booted" directly. It needs zero
+- **`uptime_s>600`** — says "don't reboot a host that just booted" directly. It needs zero
      persistent state, cannot be corrupted, is already an emit field, and makes the boot
      invocation naturally a no-op for the reboot arm.
-   - **Counter on the ROOT disk**, keyed by instance-id, **literal cap 2**, written **before**
+- **Counter on the ROOT disk**, keyed by instance-id, **literal cap 2**, written **before**
      the reboot. A cap of 2 makes a storm *definitionally* impossible, so no cooldown is needed.
      A host replace gives a new root disk ⇒ a fresh budget, for free.
 <!-- lint-infra-ignore end -->
@@ -128,6 +161,7 @@ entire existence while the fleet reported green. Extending the decision:
 > below). A class-wide version of this rule needs its own ADR, carrying its own blockers.
 >
 > Two permitted edges — pick by whether silent self-repair is acceptable:
+>
 > 1. **`lifecycle.replace_triggered_by`** on the host, naming the source resource — an
 >    externally-driven immutable redeploy. Correct when the divergence should be *visible and
 >    audited* rather than quietly healed. This is what #6497 shipped for the htpasswd.
@@ -221,6 +255,125 @@ this amendment named the dispatch, and the dispatch cannot fire the edge.
 This blocker lives here rather than in the plan or the tracking issue on purpose: a constraint
 discovered during planning belongs in the durable artifact, because the ADR outlives both.
 
+#### Amendment (2026-09-18, #8210): the blocker is CLEARED for git-data's storage unlock — by a Doppler-run oneshot, not by `crypttab`
+
+> **Superseded 2026-09-18 (#8210):** the "git-data is excluded until that is fixed" clause above.
+> The `luksOpen` in `runcmd` and the `nofail` fstab line are unchanged and still per-instance;
+> what changed is that git-data now HAS the reboot-safe equivalent the blocker demanded.
+
+The equivalent is `git-data-luks-reopen.service` (`apps/web-platform/infra/`): a `Type=oneshot`
+unit after `network-online.target` that runs `git-data-luks-reopen.sh` under
+`doppler run --only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback`,
+opens the mapper if it is closed, asserts its backing device is the pinned volume, and hands
+the mount to PID 1 through the fstab-generated `.mount` unit. Every failure is reported once,
+off-host, at `fatal` by an `OnFailure=` reporter carrying `action=<phase>`. The standing retry is
+`git-data-luks-reopen.timer` at `OnUnitActiveSec=15min`, once the unit's own five-attempt
+`Restart=on-failure` budget is spent.
+
+> **Corrected 2026-09-18 (#8210), before merge.** An earlier revision of this paragraph read
+> "the weekly `git-data-gc.timer` is ordered after it **and pulls it in**, so a failed reopen is
+> retried weekly". That was the first draft's mechanism and it is **not what ships**:
+> `git-data-gc.service` carries `After=git-data-luks-reopen.service` and NO `Wants=` — the
+> `Wants=` was cut at review, because it turned a weekly maintenance timer into an implicit
+> retry driver for a boot-critical unit and bounded recovery at seven days. So the sentence
+> cleared a normative blocker by citing a mechanism this same change had deleted. The
+> replacement is the dedicated timer named above; ADR-198's copy of the claim was corrected in
+> the same sweep and this one was missed.
+The blocker named "`crypttab` or a keyscript" as the shape; neither was adopted, for measured
+reasons recorded in the plan's Cut List: `systemd-cryptsetup` implements no `keyscript=`
+(Debian `crypttab(5)`), and a `crypttab` keyfile on the root disk is the passphrase baked, which
+ADR-198 forbids for THIS credential. A boot unit that fetches the key over TLS from a
+config-scoped, centrally revocable token is the accepted equivalent.
+
+Proof, not assertion: the rung-2 rehearsal (`.github/workflows/git-data-rung2-rehearsal.yml`)
+gained a **reset arm** — after `boot_complete` settles, the throwaway host is hard-reset through
+the Hetzner API and the capture script's `--reboot-since` mode must observe
+`stage:luks_reopen_ok action:reopened` on either channel with no fatal after the reset
+timestamp before the evidence can be uploaded. The first PASS is the live verification of this
+amendment; its run URL is recorded on #8210 once captured.
+
+**Equivalent in OUTCOME, not in ORDERING — and the difference is what #8211 has to buy back.** A
+`crypttab` entry or a keyscript runs inside PID 1's `cryptsetup` → `local-fs.target` ordering; this
+oneshot runs `After=network-online.target`, i.e. *after* the fstab mount job has already skipped on
+`nofail`, which is exactly why `git-data-luks-reopen.sh` has to hand-start the `.mount` unit itself.
+The consequence is that no consumer can be ordered on the store **by construction** — the property
+[ADR-119](ADR-119-luks-at-rest-for-the-live-workspaces-volume.md) §(e) ruled must be structural for
+the identical hazard on web-1. The reopen is therefore correct in what it achieves and weaker in how
+a consumer can depend on it; the residual is carried by #8211 contract clauses (h) and (i)
+(`nofail,noauto,x-systemd.requires=` on the rewritten fstab line, plus `chattr +i` on the unmounted
+mountpoint), not by this ADR.
+
+**The fleet stays bifurcated, deliberately.** inngest's sibling unit (#7695) uses a BAKED keyfile
+with `DefaultDependencies=no` / `Before=local-fs.target`, and its own comment records that a
+`doppler run` wrapper is impossible at that ordering. The two shapes cannot converge: the credential
+posture ADR-198 mandates for THIS passphrase forces the network-online ordering that inngest's
+pre-network position forbids. git-data's shape is the intended target for the web hosts (#6931) —
+their volumes carry no comparable pre-network constraint — and inngest's ordering is the reason the
+fleet keeps two answers rather than a defect to close.
+
+**The split is 2–1, not 1–1, and the majority shape already solves the ordering limb git-data
+does not.** `registry-luks-open.service` (`cloud-init-registry.yml`, #6895/D2) has run the
+network-online oneshot shape since before this change — `After=`/`Wants=network-online.target`,
+`Type=oneshot`, `RemainAfterExit=yes` — and it additionally carries
+`Before=docker.service cron.service`, which orders its consumers on the store BY CONSTRUCTION,
+the property the paragraph above says git-data cannot express. git-data's consumers are the
+fstab `.mount` and `git-data-gc.service` rather than a daemon, so the same limb is bought there
+by contract clauses (h) and (i) instead; but a future consumer that IS a unit should take
+registry's `Before=` rather than re-deriving the problem.
+
+**What the rung-2 gate does and does not check, recorded so the next reader does not over-read it.**
+`git_data_rung2_rehearsal_gate` binds landed evidence to a hash of the payload, and #8210 added the
+`RUNG2_REBOOT_REOPEN` key that a rehearsal's reset arm writes. The gate checks the evidence's SHAPE
+and its binding to the template; it does not assert that the reboot verdict is `PASS`. Today that
+is covered outside the gate — the #8210 follow-through probe reads the key from `origin/main` and
+FAILs on any non-`PASS` — so the property is instrumented but not interlocked. Closing that gap is
+[#8010](https://github.com/jikig-ai/soleur/issues/8010)'s subject (the gate checking assertion shape
+rather than that a rehearsal passed), and it is named here rather than fixed here because widening
+the gate in this change would have shipped an un-rehearsed interlock into the replace route.
+
+What this amendment does NOT do: it does **not** adopt the self-reboot primitive for git-data
+(this ADR still authorizes it for the registry host only), and it does not touch the SECOND
+normative blocker above (replace-on-rotation) — a passphrase rotation is still a full volume
+cutover, and the reopen's device-identity phase refuses a stale pin rather than papering over
+one.
+
+#### Amendment (2026-09-22, #8539): the inngest host converges a late-attached NIC with a static networkd fallback, not a reboot
+
+On 2026-09-22 the inngest host's private NIC was hot-attached after boot, networkd left it
+unmanaged, the zot pull timed out, GHCR returned 401 and the boot aborted (scheduler down
+~59 min). Evidence and the options weighed are in the
+[#8539 plan](../../../project/plans/2026-09-22-fix-inngest-private-nic-boot-race-plan.md). The
+scope of this amendment, stated so the ADR does not contradict itself:
+
+- **Decision §2 ("one primitive: a guarded reboot") now admits a second primitive, for the
+  inngest host only:** a static fallback file, `/etc/systemd/network/99-soleur-private-fallback.network`
+  (DHCP for a virtio link that is not `eth0`), one early `networkctl reload`, and
+  `soleur-inngest-nic-wait`, a bounded (150 s) wait before the zot login that never aborts.
+- **It is not the rejected "netplan drop-in" row.** Nothing re-applies it periodically, nothing
+  runs `netplan apply`, and `eth0` is excluded twice: by `Name=!eth0`, and by lexical precedence
+  (netplan's `10-netplan-*` file matches first, so the `99-` file is inert on the good path).
+- **Neither normative blocker applies.** Both bind the reboot and replace primitives only; this
+  primitive reboots and replaces nothing.
+- **The §Alternatives row "Ship git-data + inngest too" is partly superseded:** for inngest, by
+  this different primitive. git-data is unchanged.
+- **Decision §3 ("emit on every run") is met once per boot on inngest,** which has no cron: one
+  `private_nic_ok` / `private_nic_timeout` / `private_nic_probe_fault` event to Better Stack and
+  Sentry.
+- **The rejected "netplan drop-in" row's third ground — fidelity — is answered, not ignored.**
+  That row was rejected partly because a reboot "gets correct MTU and routes from cloud-init's
+  own renderer". The fallback file carries `UseMTU=yes`, so the MTU comes from the same DHCP
+  lease Hetzner's datasource would have rendered (1450 on this network), and routes come from
+  the same lease. The fidelity argument therefore does not separate the two on this host. The
+  other two grounds (subset trigger, unbudgeted re-apply) are rebutted above.
+- **Status of the converge claim: adopting.** It is a mechanism-level argument until a boot
+  emits `private_nic_ok ... by=99-soleur-private-fallback`. Status's "registry only" line still
+  holds for the REBOOT primitive; this primitive is separate and grants no self-reboot authority.
+- **Provider fact corrected:** Context point 1 (in place). Three rows are added to
+  §Alternatives.
+- **Addendum 2026-09-23 (#8651):** the web host's fresh boot now ships the same fallback file
+  and reload. The scope is recorded in [ADR-123](./ADR-123-web-host-private-nic-self-report-no-self-converge.md)'s
+  amendment of that date. The reboot primitive stays registry-only.
+
 ### Authority note
 
 <!-- lint-infra-ignore start -->
@@ -270,6 +423,29 @@ an empty dir (404s fleet-wide) while `nic_ok=true`.
 | **(#6497) An SSH provisioner that rewrites `/etc/zot/htpasswd` in place** | **Rejected.** `hr-no-ssh-fallback-in-runbooks`, and the host's deny-all firewall makes it impossible anyway. It would also re-introduce the `remote-exec` shape that `zot-registry.tf:19-21` names as a load-bearing condition of the OPERATOR_APPLIED_EXCLUSION contract (cloud-init-only, no `remote-exec` terraform_data — else the SSH-parity guard has no exclusion path). The cure would break the contract that lets these resources exist. |
 | **(#6497) A cron that re-converges the htpasswd from Doppler** (mirroring this ADR's NIC guard — genuinely zero-downtime, no replace) | **Rejected for the credential case.** It would *silently repair* a rotation, destroying the immutable-redeploy audit trail and masking the exact divergence the #6497 probe exists to surface. The NIC case differs on the merits: an unreachable host cannot be fixed any other way, whereas a stale credential has a clean externally-driven edge (`replace_triggered_by`). Availability outranks auditability for the NIC; the reverse holds for a credential. Revisit only if zot moves onto the live pull path AND replace-window downtime becomes unacceptable — at which point blue-green, not silent convergence, is the honest answer. |
 | **An off-host probe as required-for-close** | **Deferred** (#6415 stays open for it). It is greenfield: the web-host delivery site is unresolved (`ignore_changes=[user_data]` ⇒ not cloud-init), its arming is blocked (`ignore_changes=[paused]` makes a source flip a **no-op**), the cadence mismatches (`period=60/grace=30` vs a 60s cron floor ⇒ flapping), and `betterstack_paid_tier=false` ⇒ email-only, no escalation. |
+| **(#8539) An inline `network {}` block on `hcloud_server.inngest`** instead of `hcloud_server_network` | **Rejected.** At hcloud v1.63.0 it is still a post-boot hot attach whenever public networking is enabled (the provider starts the server, then attaches), so it closes nothing. It would also need a `removed {}` block and ripple through the `-target` lists and the inngest replace and shape gates. |
+| **(#8539) A bounded wait only, before the zot login** | **Rejected as sufficient; kept as the reporting half.** A wait converts nothing: cloud-init's hotplug handler runs after `cloud-init.target`, i.e. after `runcmd`, so a wait inside `runcmd` cannot be healed by it and only moves the failure later. #6400's late attach stayed unconfigured for 14 days. |
+| **(#8539) Reboot-for-inngest** (a wait plus this ADR's reboot as fallback) | **Rejected.** inngest's `runcmd` is once-per-instance, so a rebooted host never re-runs the bootstrap pull and comes up with no scheduler, plus a power-cycle. It would also need the self-reboot authority this ADR grants the registry host only. |
+
+> **Addendum — 2026-09-28 (#8562), to the "(#8539) Reboot-for-inngest" row.** Its first ground,
+> "inngest's `runcmd` is once-per-instance, so a rebooted host never re-runs the bootstrap pull",
+> is narrowed in the template by
+> [ADR-257](./ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md). The zot
+> login, isolation check and pull → bootstrap block now run in
+> `soleur-inngest-provision.service`, a unit that retries on the same boot (120 s at first,
+> backing off to 15 minutes) and is started again 90 s after every boot until a latch file,
+> written only after a non-degraded `inngest-bootstrap.sh` success, exists.
+> The once-per-instance premise now holds only for a host that has **provisioned**: a latched
+> host's reboot does not re-provision it. A host born before that change keeps the old behavior
+> until its next replace.
+>
+> What this note does **not** do:
+>
+> - It does not extend this ADR's acceptance to inngest. Status stays **registry-only**.
+> - It grants **no reboot authority** to the inngest host. The row's second ground (the
+>   self-reboot authority this ADR grants the registry host only) still stands, and the row stays
+>   rejected. ADR-257 retries on the same boot; it never reboots.
+> - It changes nothing in the #8539 static networkd fallback amendment above.
 
 ## Observability
 
@@ -299,7 +475,7 @@ The field set discriminates every competing hypothesis in **one** event:
 | `nic_ok = true && reboot_count > 0` | The race is real and the guard healed it — the **advisory** branch. |
 
 `zot_last_err` carries that exact name and is **trailing** because
-`scripts/lib/zot-telemetry-parse.sh:27` strips the **literal** ` zot_last_err=` to bound the
+`scripts/lib/zot-telemetry-parse.sh:27` strips the **literal** ` zot_last_err=` to bound the <!-- markdownlint-disable-line MD038 -->
 trusted region; a `last_err=` would silently never be stripped and the spoof guard would never
 fire. `host` is deliberately absent — the immutable replace reuses the Terraform hostname, so
 `boot_id` is what separates old-host from new-host events.

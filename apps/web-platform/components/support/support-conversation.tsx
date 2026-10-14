@@ -6,6 +6,7 @@
 // new replies).
 
 import { useEffect, useRef } from "react";
+import { Button } from "@/components/ui/button";
 import { SupportAvatar } from "./support-avatar";
 import { SupportMessage } from "./support-message";
 import {
@@ -47,14 +48,15 @@ export function SupportConversation({
           </p>
           <div className="flex flex-col gap-2">
             {SUPPORT_STARTER_CHIPS.map((chip) => (
-              <button
+              <Button
+                variant="outlined"
                 key={chip.key}
                 type="button"
                 onClick={() => onChipSelect(chip.label, chip.key)}
-                className="w-fit max-w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-left text-sm text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary"
+                className="w-fit max-w-full text-left text-soleur-text-secondary hover:border-soleur-border-emphasized hover:text-soleur-text-primary"
               >
                 {chip.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>

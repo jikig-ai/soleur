@@ -1,7 +1,7 @@
 /**
  * #5356 — cc dispatcher close hook `handleCcCloseQuery` (RED).
  *
- * Plan: knowledge-base/project/plans/2026-06-15-feat-cc-soleur-go-checkpoint-parity-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-15-feat-cc-soleur-go-checkpoint-parity-plan.md
  *
  * The `onCloseQuery` hook wired in `getSoleurGoRunner` must:
  *   - ALWAYS drain `_ccBashGates` for the conversation (existing behavior), and

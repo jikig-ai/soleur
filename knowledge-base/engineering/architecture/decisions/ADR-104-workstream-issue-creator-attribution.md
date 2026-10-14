@@ -83,7 +83,7 @@ Two facts shaped the decision:
 ## Consequences
 
 - **Positive:** the board answers "who created this?" at a glance (a creator chip
-  + a "Created by" detail row); the human-vs-Soleur distinction ships now with
+  - a "Created by" detail row); the human-vs-Soleur distinction ships now with
   zero write-path dependency; the marker contract is decided and single-sourced,
   so the Part B follow-up is write-path-only. Fully additive and defensive — a
   missing author renders no chip, a bot slug that fails to resolve degrades to a

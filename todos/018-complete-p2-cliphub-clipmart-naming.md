@@ -25,7 +25,8 @@ The plan file uses "Cliphub" (lines 24, 76, 104) for Paperclip's template market
 ## Technical Details
 
 **Affected files:**
-- `knowledge-base/project/plans/2026-03-12-feat-add-paperclip-competitive-analysis-plan.md` (3 occurrences of "Cliphub")
+
+- `knowledge-base/project/plans/archive/20261012-213508-2026-03-12-feat-add-paperclip-competitive-analysis-plan.md` (3 occurrences of "Cliphub")
 
 ## Acceptance Criteria
 

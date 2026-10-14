@@ -7,6 +7,7 @@ status: draft-requires-counsel-review
 related:
   [
     article-30-register,
+    "knowledge-base/legal/breach-register.md",
     "apps/web-platform/lib/email-triage/statutory-rules.ts",
     "knowledge-base/legal/legitimate-interest-assessments/2026-06-11-operator-inbox-triage-lia.md",
   ]
@@ -74,6 +75,12 @@ convention in the Article 30 register's Cross-Cutting TOMs).
    risk-to-rights to decide between "notify CNIL", "notify CNIL + data
    subjects (Art. 34)", or "document why no notification is required
    (Art. 33(1) unlikely-risk carve-out)".
+   Where the report is an *exposure* whose actual use is unknown — a leaked key,
+   an RLS gap, an over-broad grant — run
+   `knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`
+   before remediating: it establishes the log-retention horizon first and returns
+   one of three verdicts (breach / clean / inconclusive). Reachability alone does
+   not start the Art. 33 clock, and a partial log pull is never a clean result.
 5. CNIL notification template is held by the CLO role (see Article 30 register
    — Incident response TOM).
 6. Acknowledge the inbox item only once the above steps are owned — the T-7d /
@@ -173,6 +180,35 @@ timestamp — never webhook-processing time.
    request arriving through an intake channel the accountless-ex-member
    runbook already lists would have routed to no branch at all, with the
    Art. 12(3) one-month clock running.]**
+   **[Added 2026-08-06 (#7331): a FIFTH class — a person whose data lives in an
+   ALPHA TESTER's repository, not in any Jikigai system. A company officer named
+   in a tester's business-register fixture data, or an author in that
+   repository's commit metadata. The answer is NOT one branch, and the common
+   mistake would be to treat it as "we hold nothing" in every case — that is
+   true for one posture and false for two. Determine which applies from
+   `knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md`
+   before answering anything:
+   **(i) Plugin-local (tester's machine, tester's key, tester's purposes)** →
+   Jikigai holds nothing and is neither controller nor processor. Say so, name
+   the tester as the controller they need, and note that the Art. 12(3) clock is
+   the tester's, not Jikigai's. **Do not confirm or deny whether any particular
+   third party holds their data** — Jikigai's customer relationships are not the
+   requester's to learn through a subject-access request.
+   **(ii) An operator-assisted run occurred (Jikigai machine or Jikigai-held
+   credential)** → Jikigai IS an Art. 28 processor for that limb, so the
+   Art. 28(3)(e) assistance duty DOES apply and the "we hold nothing" answer is
+   wrong. Assist the tester as controller. State plainly that content sent to
+   Anthropic under a Jikigai key sits in a 30-day retention window Jikigai
+   cannot shorten while the zero-retention amendment is unsigned — an erasure
+   request affected by it is partly, not fully, satisfiable. Record it at P-1 in
+   `knowledge-base/legal/article-30-2-register.md`.
+   **(iii) Jikigai read the repository for its own purposes (collaborator
+   access)** → Jikigai is a CONTROLLER (PA-35) and answers directly, on its own
+   clock. The LIA at
+   `knowledge-base/legal/legitimate-interest-assessments/2026-08-06-alpha-tester-repo-observation-lia.md`
+   claims Art. 14(5)(b) disproportionate effort for proactive notice; that claim
+   does NOT extend to a request actually received, which must be answered.
+   Art. 21(1) objection is available immediately in this branch.]**
 4. For erasure requests from involuntary senders: deletion runs through the
    GUC-gated RPC path (see the LIA's Art. 17 section); statutory-evidence rows
    may be retained under Art. 17(3)(b) — document the override if invoked.
@@ -211,8 +247,11 @@ period is confirmed; a mise en demeure may set a materially shorter one).
    sender identity is an unauthenticated claim).
 2. Calendar the letter's stated deadline; replace the one-month default.
 3. Pull the accountability pack: Article 30 register
-   (`knowledge-base/legal/article-30-register.md`), compliance posture
-   (`knowledge-base/legal/compliance-posture.md`), the relevant LIA(s) and
+   (`knowledge-base/legal/article-30-register.md`), the **Art. 33(5) breach
+   register** (`knowledge-base/legal/breach-register.md` — the index of personal-data
+   breach determinations; a supervisory authority asking about an incident asks for
+   this, and it is a different instrument from the Art. 30 register), compliance
+   posture (`knowledge-base/legal/compliance-posture.md`), the relevant LIA(s) and
    DPIA screening memos — these are the documents a DPA asks for first.
 4. Engage external counsel for anything beyond a routine information request.
 5. Do not archive the item; statutory rows are retained for the

@@ -1,3 +1,7 @@
+// pyramid-justified: drives the production reducer through the real
+// useWebSocket hook with WS frames injected via attachWsInjector (page.route
+// `**/ws`) and asserts bubble rendering in the DOM — needs a real browser.
+//
 // PR-A (#2939) Stage 6 — cc-soleur-go bubble regression net.
 //
 // Four per-bubble Playwright assertions against the production reducer
@@ -249,6 +253,31 @@ test.describe("cc-soleur-go bubbles: workflow-lifecycle-bar chip-removal", () =>
 
     await expect(page.locator('[data-tool-chip-id^="cc_router-"]')).toHaveCount(0);
   });
+
+  test("stream + stream_end ends the turn: Stop is replaced by Send and no live narration lingers", async ({
+    page,
+  }) => {
+    const injector = await bootChat(page);
+
+    injector.send({
+      type: "stream",
+      leaderId: "cc_router",
+      content: "To enter the lead I need: lastContact, amount, expectedCloseDate.",
+      partial: true,
+    } satisfies StreamEvent);
+
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toBeVisible();
+
+    injector.send({
+      type: "stream_end",
+      leaderId: "cc_router",
+    } satisfies StreamEvent);
+
+    // The cc path emits no session_ended, so stream_end is the turn boundary.
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+    await expect(page.locator('[data-testid="live-narration"]')).toHaveCount(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -359,10 +388,17 @@ async function measureRoutingChip(page: Page) {
     .first();
   await expect(card).toBeVisible();
   return card.evaluate((cardEl) => {
-    const label = cardEl.querySelector(
+    // #9515 — the consolidated box suppresses the body ToolStatusChip when
+    // the activity trail's live line owns the current step; the label lives
+    // in `live-narration`. Query both so the contract survives either path.
+    // The live line's first span is the amber pulse dot; the label is the
+    // text span (`min-w-0` is the wrap-enabled class on it).
+    const label = (cardEl.querySelector(
+      '[data-testid="live-narration"] span.min-w-0',
+    ) ?? cardEl.querySelector(
       '[data-testid="tool-status-chip"] span',
-    ) as HTMLElement | null;
-    if (!label) throw new Error("routing chip has no tool-status-chip label");
+    )) as HTMLElement | null;
+    if (!label) throw new Error("routing chip has no status label");
     const lineHeight = parseFloat(getComputedStyle(label).lineHeight);
     return {
       overflow: cardEl.scrollWidth - cardEl.clientWidth,

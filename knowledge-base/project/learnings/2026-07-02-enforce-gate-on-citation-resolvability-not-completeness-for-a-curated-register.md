@@ -47,5 +47,5 @@ The 5-agent plan-review panel (DHH + Kieran + code-simplicity + spec-flow) earne
 caught the exit-1-ambiguity and the empty-diff-cache fail-open; Kieran caught the unanchored stale-count
 grep (multiline-capture bug); DHH + code-simplicity independently cut a theatre gate (plan-time flag) and
 the advisory-first apparatus. See plan
-`knowledge-base/project/plans/2026-07-02-feat-domain-model-register-gates-plan.md`; pairs with the
+`knowledge-base/project/plans/archive/20261013-041741-2026-07-02-feat-domain-model-register-gates-plan.md`; pairs with the
 brainstorm-phase learning `2026-07-02-run-the-analyzer-during-brainstorm-before-designing-a-blocking-gate.md`.

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type { ConversationStatus } from "@/lib/types";
 import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 import { makeEnrichedListRpc } from "./helpers/mock-supabase";
 
 // Mock Supabase channel
@@ -71,6 +72,12 @@ vi.mock("@/lib/supabase/client", () => ({
         data: { user: { id: "user-1" } },
         error: null,
       }),
+      // Phase 5: the hook's id read is getSession() (local cookie read), not
+      // getUser(). Keep both — other consumers still read getUser.
+      getSession: vi.fn().mockResolvedValue({
+        data: { session: { user: { id: "user-1" } } },
+        error: null,
+      }),
     },
     // The list read flows through the list_conversations_enriched RPC
     // (migration 125), deriving from the current conversation/message builders.
@@ -131,7 +138,7 @@ describe("useConversations.updateStatus", () => {
 
   it("optimistically updates conversation status in local state", async () => {
     const { useConversations } = await import("@/hooks/use-conversations");
-    const { result } = renderHook(() => useConversations());
+    const { result } = renderHook(() => useConversations(), { wrapper: SwrTestProvider });
 
     // Wait for initial fetch
     await waitFor(() => {
@@ -150,7 +157,7 @@ describe("useConversations.updateStatus", () => {
 
   it("calls Supabase update with correct parameters", async () => {
     const { useConversations } = await import("@/hooks/use-conversations");
-    const { result } = renderHook(() => useConversations());
+    const { result } = renderHook(() => useConversations(), { wrapper: SwrTestProvider });
 
     await waitFor(() => {
       expect(result.current.conversations).toHaveLength(1);
@@ -168,7 +175,7 @@ describe("useConversations.updateStatus", () => {
     updateBuilder = createUpdateObservingBuilder([], { message: "RLS policy violation" });
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const { result } = renderHook(() => useConversations());
+    const { result } = renderHook(() => useConversations(), { wrapper: SwrTestProvider });
 
     await waitFor(() => {
       expect(result.current.conversations).toHaveLength(1);

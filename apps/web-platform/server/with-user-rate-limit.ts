@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
 import * as Sentry from "@sentry/nextjs";
-import { createClient } from "@/lib/supabase/server";
+import { verifiedUserId, type VerifiedUser } from "@/server/request-auth";
 import {
   SlidingWindowCounter,
   startPruneInterval,
@@ -12,9 +11,12 @@ import { hashUserIdValue } from "@/server/userid-pseudonymize";
 // Per-user rate limit wrapper for authenticated GET handlers.
 //
 // Behavior:
-//   - Calls `supabase.auth.getUser()` ONCE per request and passes the
-//     authenticated `user` to the inner handler, so wrapped routes must
-//     not call `getUser()` again.
+//   - Resolves the caller id via `verifiedUserId(req)` — the middleware-
+//     minted `x-soleur-auth-user-id` header on matcher-covered requests
+//     (zero auth RTT), falling back to `auth.getUser()` when the header is
+//     absent (fail-closed: never trusts an unverifiable value). The inner
+//     handler receives `{ id }` only — all 12 consumers read only `user.id`
+//     (verified 2026-09-25), so the auth payload narrows to exactly that.
 //   - Returns 401 at the wrapper for unauthenticated callers — the
 //     inner handler never sees a null user, so an unauth flood cannot
 //     bypass the limiter or force duplicate auth round-trips.
@@ -37,7 +39,7 @@ import { hashUserIdValue } from "@/server/userid-pseudonymize";
 // SlidingWindowCounter + prune interval; invoking per-request would leak
 // both.
 
-type Handler = (req: Request, user: User) => Promise<Response>;
+type Handler = (req: Request, user: VerifiedUser) => Promise<Response>;
 
 export interface WithUserRateLimitOptions {
   /** Per-user request budget per 60-second sliding window. */
@@ -60,14 +62,11 @@ export function withUserRateLimit(
   startPruneInterval(counter);
 
   return async function rateLimited(req: Request): Promise<Response> {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
+    const userId = await verifiedUserId(req);
+    if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const user = { id: userId };
 
     // Sentry symmetric userId pseudonymisation — #3710 PR-B deliverable 1.
     //

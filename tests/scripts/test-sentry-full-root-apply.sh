@@ -23,7 +23,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-WORKFLOW="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
+# Override exists for mutation testing only: point it at a mutated COPY, never edit the
+# tracked workflow in place to prove a guard can go red.
+WORKFLOW="${SENTRY_APPLY_WORKFLOW_OVERRIDE:-$REPO_ROOT/.github/workflows/apply-sentry-infra.yml}"
 SCOPE_GUARD="$REPO_ROOT/tests/scripts/test-destroy-guard-sentry-scope-guard.sh"
 FILTER="$REPO_ROOT/tests/scripts/lib/destroy-guard-filter-sentry.jq"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
@@ -64,6 +66,103 @@ _strip_comments() { grep -vE '^[[:space:]]*#' "$1"; }
 _has_executable_target() {
   local body; body=$(_strip_comments "$1")
   grep -qE -- '-target=' <<<"$body"
+}
+
+# T13 (#7650 review) — INHERITED ERREXIT around a status-bearing command.
+#
+# THE CLASS, not the instance. Actions invokes a bare `run:` as `bash -e {0}`, so
+# errexit is INHERITED and a `set -uo pipefail` line cannot clear it. Any command
+# whose NON-ZERO exit is a normal answer — `grep -q` (1 = no match), `diff` (1 =
+# they differ) — therefore kills the step on its ordinary path unless the block
+# brackets it with `set +e` or consumes the status in a condition.
+#
+# This workflow's header documents the trap twice, and a step added in #7650
+# Phase 2 walked into it anyway: the forensics sweep ran `grep -qE "$sentinel"`
+# followed by `rc=$?`, so on every CLEAN run (no secret, grep returns 1) the step
+# died at that line, silently, before any annotation — skipping the two
+# post-apply probes that assert `byok-art-33-breach` is live, and filing a p1
+# that told the operator to "assume a partial write" after a perfectly clean
+# apply. Measured rc=1 by emulating `bash -e` on the extracted block.
+#
+# So the assertion is structural and general: in every `run:` block of this
+# workflow, a bare `grep -q…` / `diff` line IMMEDIATELY followed by `rc=$?` must
+# sit inside a `set +e` region. Consuming the status in an `if`/`&&`/`||` is the
+# other correct shape and is not flagged, because there the status is handled.
+t_no_unbracketed_status_capture() {
+  local findings
+  findings=$(python3 - "$WORKFLOW" <<'PYEOF'
+import re, sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+bad = []
+for jname, job in (doc.get("jobs") or {}).items():
+    for step in (job.get("steps") or []):
+        run = step.get("run")
+        if not run:
+            continue
+        # Join backslash-continued lines FIRST. Without this the scan is
+        # line-oriented and a multi-line `VAR=$( ... \\\n ... )` never matches
+        # the SHAPE 2 regex, which needs the closing paren on the same line.
+        # Measured on #7866: stripping the rescue from the two-line `declared=$(`
+        # assignment — the one whose death kills the whole derivation — survived
+        # this rule while the four single-line siblings were all caught.
+        joined, buf = [], ""
+        for _raw in run.split("\n"):
+            buf += _raw
+            if buf.rstrip().endswith("\\"):
+                buf = buf.rstrip()[:-1] + " "
+                continue
+            joined.append(buf); buf = ""
+        if buf:
+            joined.append(buf)
+        lines = joined
+        errexit = True          # inherited from `bash -e {0}`
+        for i, raw in enumerate(lines):
+            ln = raw.strip()
+            if re.match(r"^set\s+\+e\b", ln) or re.match(r"^set\s+[-a-z]*\+[a-z]*e\b", ln):
+                errexit = False
+            elif re.match(r"^set\s+-[a-z]*e\b", ln):
+                errexit = True
+            if not errexit:
+                continue
+            # SHAPE 1 — a bare status-bearing command whose exit is then captured.
+            if re.match(r"^(grep|diff|cmp)\b", ln) and not re.search(r"(\|\||&&|;|\bif\b|\bwhile\b|\buntil\b)", ln):
+                nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+                if re.match(r"^\w+=\$\?", nxt):
+                    bad.append(f"{jname} :: {step.get('name','(unnamed)')} :: {ln[:60]}")
+            # SHAPE 2 — `VAR=$(... status-bearing ...)`. Same death, different
+            # spelling: the assignment INHERITS the substitution's status (and
+            # `pipefail` promotes it out of a pipeline), so errexit kills the step
+            # at the assignment. Until #7866 this rule matched only SHAPE 1, so it
+            # was blind to all four such lines in the AC17 step — including the
+            # two its own PR added — and each died silently on its normal path.
+            # A guard whose window is narrower than the class it names reports
+            # clean on the instances it cannot see.
+            m = re.match(r"^\w+=\$\((.*)\)\s*(;.*)?$", ln)
+            if m:
+                inner = m.group(1)
+                if re.search(r"(^|\||\(|\s)(grep|diff|cmp)\b", inner) and not re.search(r"\|\|\s*(true|:)", inner):
+                    bad.append(f"{jname} :: {step.get('name','(unnamed)')} :: {ln[:60]}")
+            # SHAPE 3 — the same command hidden behind a one-line helper
+            # (`_f() { grep ...; }`). This is not hypothetical: the #7866 fix
+            # first routed all four counts through a `_lines()` helper, and the
+            # SHAPE 2 rule above went GREEN with the rescue stripped, because the
+            # `grep` was no longer inside an assignment it inspects. The guard
+            # reported clean because it could not SEE the command, not because
+            # the command was safe. Rescues belong inline at the call site.
+            if re.match(r"^\w+\s*\(\)\s*\{", ln) and re.search(r"\b(grep|diff|cmp)\b", ln) \
+               and not re.search(r"\|\|\s*(true|:)", ln):
+                bad.append(f"{jname} :: {step.get('name','(unnamed)')} :: helper hides a status-bearing command :: {ln[:50]}")
+for b in bad:
+    print(b)
+PYEOF
+)
+  if [[ -z "$findings" ]]; then
+    _report "T13 no run: block captures a status-bearing command's exit while errexit is in force" ok
+  else
+    _report "T13 no unbracketed status capture under inherited errexit" fail \
+      "these die on their NORMAL path (grep -q returns 1 on no-match) before any annotation:
+$findings"
+  fi
 }
 
 t_no_executable_target() {
@@ -340,6 +439,228 @@ t_scope_guard_reads_tf
 t_scope_guard_fails_on_empty
 t_scope_guard_catches_state_only_uncovered_type
 t_filter_counts_removed_block
+# T14 (#8050) — THE APPLY JOB'S FIDELITY WIRING, which no other suite reads.
+# The post-apply probe must (a) read a reference the plan step projected from
+# THE PLAN BEING APPLIED (never the committed copy), (b) pin fixture mode off,
+# (c) run only when the plan step succeeded (and still after a failed apply /
+# red AC17), and the reference gate must have exactly ONE call site — in
+# `plan_pr`, never in `apply`. A dropped env line would silently revert the
+# probe to the committed copy with every other check green.
+t_apply_job_fidelity_wiring() {
+  local out rc=0
+  out=$(python3 - "$WORKFLOW" <<'PYEOF' 2>&1) || rc=$?
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+jobs = d["jobs"]
+apply = jobs["apply"]["steps"]; plan_pr = jobs["plan_pr"]["steps"]
+bad = []
+fid = [s for s in apply if s.get("id") == "fidelity"]
+if len(fid) != 1: sys.exit(f"expected one apply step id=fidelity, found {len(fid)}")
+env = fid[0].get("env") or {}
+if env.get("SENTRY_REFERENCE_FILE") != "${{ runner.temp }}/sentry-alert-reference.json":
+    bad.append(f"fidelity SENTRY_REFERENCE_FILE={env.get('SENTRY_REFERENCE_FILE')!r} (want the runner.temp projection)")
+if env.get("SENTRY_FIXTURE_RULES", None) != "":
+    bad.append(f"fidelity SENTRY_FIXTURE_RULES={env.get('SENTRY_FIXTURE_RULES')!r} (want pinned empty)")
+if " ".join((fid[0].get("if") or "").split()) != "always() && steps.plan.outcome == 'success'":
+    bad.append(f"fidelity if={fid[0].get('if')!r}")
+plan = [s for s in apply if s.get("id") == "plan"]
+if len(plan) != 1: sys.exit("expected one apply step id=plan")
+run = plan[0]["run"]
+proj = [l for l in run.splitlines() if l.lstrip().startswith("jq -S --arg side tf -f") and "/tmp/sentry-apply-plan.json" in l and '"${RUNNER_TEMP}/sentry-alert-reference.json"' in l]
+if len(proj) != 1: bad.append(f"plan step projection line count {len(proj)} (want 1)")
+def gate_calls(steps):
+    return sum(l.lstrip().startswith('bash "${GITHUB_WORKSPACE}/scripts/sentry-alert-reference-gate.sh"') for s in steps for l in (s.get("run") or "").splitlines())
+if gate_calls(plan_pr) != 1: bad.append(f"plan_pr gate calls={gate_calls(plan_pr)} (want 1)")
+if gate_calls(apply) != 0: bad.append(f"apply gate calls={gate_calls(apply)} (want 0 — the apply job projects its own reference)")
+if bad: sys.exit("; ".join(bad))
+PYEOF
+  if [[ "$rc" -eq 0 ]]; then
+    _report "T14 apply job: probe reads the plan-step projection with fixture mode pinned off, runs iff the plan step succeeded; the reference gate has exactly one call site (plan_pr)" ok
+  else
+    _report "T14 apply-job fidelity wiring" fail "$out"
+  fi
+}
+# ── T15-T18 (#8451) — Guard 3: single-attempt 410 handler at both plan sites ──
+# Sentry REMOVED the legacy alert-rule API (a persistent 410, "This API no longer
+# exists"), and after #8451 no `sentry_issue_alert` resource remains, so the old
+# brownout retry ladder was unreachable and was deleted. Both plan sites now run
+# `terraform plan` ONCE; on a 410 the handler names the failing addresses and says
+# only what was measured. Each slice runs from the anchor comment to the next line
+# that is exactly `          set -e`.
+#
+# MUTATION MATRIX (plan §Guard 3), demonstrated against a mutated COPY via
+# SENTRY_APPLY_WORKFLOW_OVERRIDE:
+#   1 `exit $rc` -> `exit 0` at either site                 RED (T16, T18)
+#   2 delete one anchor, or add a third                     RED (T15)
+#   3 apply slice loses its `got status 410` branch         RED (T16, T18)
+#   4 add while/sleep/a second `terraform plan` to a slice  RED (T16)
+#   5 drop `rm -f /tmp/sentry-plan.out` from a slice        RED (T16)
+#   6 the real workflow, unmodified                         PASS
+G3_ANCHOR='          # sentry-plan-410-handler (#8451)'
+
+# Writes slice files slice1, slice2, ... into dir $2; prints the anchor count.
+_g3_slices() {
+  awk -v anchor="$G3_ANCHOR" -v dir="$2" '
+    $0 == anchor { n++; inside = 1; out = dir "/slice" n }
+    inside       { print > out }
+    inside && $0 == "          set -e" { inside = 0; close(out) }
+    END          { print n + 0 }
+  ' "$1"
+}
+
+t_g3_anchor_count() {
+  local d n; d=$(mktemp -d)  # lint-trap-ownership: ok — rm -rf inline below; no exit between alloc and cleanup (#6734, ADR-129)
+  n=$(_g3_slices "$WORKFLOW" "$d")
+  rm -rf "$d"
+  if [[ "$n" == "2" ]]; then
+    _report "T15 exactly 2 sentry-plan-410-handler anchors (plan_pr + apply)" ok
+  else
+    _report "T15 exactly 2 sentry-plan-410-handler anchors" fail "found $n"
+  fi
+}
+
+t_g3_slice_shape() {
+  local d n i f body bad=""; d=$(mktemp -d)  # lint-trap-ownership: ok — rm -rf inline below; no exit between alloc and cleanup (#6734, ADR-129)
+  n=$(_g3_slices "$WORKFLOW" "$d")
+  for (( i = 1; i <= n; i++ )); do
+    f="$d/slice$i"
+    if [[ "$(tail -n 1 "$f")" != "          set -e" ]]; then bad+=" slice$i:unterminated"; continue; fi
+    # Executable lines only: the comments legitimately say "terraform plan" and "retry".
+    body=$(grep -vE '^[[:space:]]*#' "$f" || true)
+    # Invocations only: the `::error::terraform plan failed` echoes name it too.
+    [[ "$(grep -cE '^[[:space:]]*terraform plan([^[:alnum:]_]|$)' <<<"$body" || true)" == "1" ]] || bad+=" slice$i:terraform-plan-count"
+    ! grep -qE '(^|[^[:alnum:]_])(while|until|sleep)([^[:alnum:]_]|$)|plan_backoff' <<<"$body" || bad+=" slice$i:loop-or-sleep"
+    grep -qxE '[[:space:]]*rm -f /tmp/sentry-plan\.out' <<<"$body" || bad+=" slice$i:no-rm-f"
+    grep -qE '(^|[[:space:]])exit \$rc$' <<<"$body" || bad+=" slice$i:no-exit-rc"
+    grep -qF 'got status 410' <<<"$body" || bad+=" slice$i:no-410-branch"
+    grep -qxE '[[:space:]]*set \+e' <<<"$body" || bad+=" slice$i:no-set+e"
+    # rm -f must come BEFORE the plan, or a failed tee leaves a stale 410 for the grep.
+    [[ "$(grep -nE 'rm -f /tmp/sentry-plan\.out|^[[:space:]]*terraform plan' <<<"$body" | head -n 1 || true)" == *"rm -f"* ]] || bad+=" slice$i:rm-after-plan"
+  done
+  rm -rf "$d"
+  if [[ "$n" -ge 1 && -z "$bad" ]]; then
+    _report "T16 each 410-handler slice: one terraform plan, no loop/sleep, rm -f before plan, set +e, a 410 branch, exit \$rc ($n slices)" ok
+  else
+    _report "T16 410-handler slice shape" fail "slices=$n;$bad"
+  fi
+}
+
+t_g3_no_ladder_residue() {
+  local hits
+  hits=$(grep -nE 'plan_backoff|brownout_only|SOLEUR_SENTRY_''BROWNOUT|retries for exactly this' "$WORKFLOW" || true)
+  if [[ -z "$hits" ]]; then
+    _report "T17 no brownout-ladder residue (plan_backoff / brownout_only / markers / 'retries for exactly this')" ok
+  else
+    _report "T17 brownout-ladder residue" fail "$hits"
+  fi
+}
+
+# Executes each slice for real, under the shell Actions uses, with `terraform`
+# stubbed. The fixture is synthesized in the shape of the #8451 run log.
+t_g3_handler_executes() {
+  local d n i f out rc bad=""; d=$(mktemp -d)  # lint-trap-ownership: ok — rm -rf inline below; no exit between alloc and cleanup (#6734, ADR-129)
+  n=$(_g3_slices "$WORKFLOW" "$d")
+  mkdir -p "$d/bin"
+  cat > "$d/bin/terraform" <<'STUB'
+#!/usr/bin/env bash
+case "$G3_MODE" in
+  ok)    echo "No changes."; exit 0 ;;
+  410)   printf 'Error: Unable to read, got status 410: {"detail":"This API no longer exists."}\n\n  with sentry_alert.synthetic_one,\n  on synthetic.tf line 1, in resource "sentry_alert" "synthetic_one":\n\nError: Unable to read, got status 410: {"detail":"This API no longer exists."}\n\n  with sentry_issue_alert.synthetic_two,\n  on synthetic.tf line 9, in resource "sentry_issue_alert" "synthetic_two":\n'; exit 1 ;;
+  mixed) printf 'Error: Unable to read, got status 410: {"detail":"This API no longer exists."}\n\n  with sentry_alert.synthetic_one,\n  on synthetic.tf line 1:\n\nError: Invalid reference\n\n  with sentry_cron_monitor.synthetic_three,\n  on synthetic.tf line 20:\n'; exit 1 ;;
+  boxed) printf '╷\n│ Error: Unable to read, got status 410: {"detail":"This API no longer exists."}\n│ \n│   with sentry_alert.synthetic_one,\n│   on synthetic.tf line 1:\n╵\n'; exit 1 ;;
+  other) printf 'Error: Invalid provider configuration\n\n  with sentry_cron_monitor.synthetic_three,\n'; exit 1 ;;
+  # The provider's usual order: a generic summary, the `with` line, then the 410 in the detail.
+  detail) printf 'Error: Client Error\n\n  with sentry_alert.synthetic_one,\n  on synthetic.tf line 1:\n\nUnable to read, got status 410: {"detail":"This API no longer exists."}\n'; exit 1 ;;
+  # Vendor text shaped like a `with` line (and like a workflow command) must not be taken as an address.
+  spoof) printf 'Error: Unable to read, got status 410:\n  with ::warning::evil, more text\n\n  with sentry_alert.synthetic_one,\n'; exit 1 ;;
+  # A Warning: stanza after a 410 error must not have its `with` credited to the 410.
+  warn) printf 'Error: Unable to read, got status 410: {"detail":"x"}\n\n  on synthetic.tf line 1:\n\nWarning: Deprecated attribute\n\n  with sentry_cron_monitor.synthetic_four,\n'; exit 1 ;;
+esac
+STUB
+  chmod +x "$d/bin/terraform"
+  _g3_run() {  # $1 slice file, $2 mode -> sets out, rc
+    local script="$d/run.sh"
+    { echo 'set -uo pipefail'; sed -e 's/^          //' -e "s#/tmp/sentry-plan\.out#$d/plan.out#g" "$1"; echo 'echo G3_REACHED_END'; } > "$script"
+    rc=0
+    out=$(cd "$d" && G3_MODE="$2" PATH="$d/bin:$PATH" bash --noprofile --norc -eo pipefail "$script" 2>&1) || rc=$?
+  }
+  for (( i = 1; i <= n; i++ )); do
+    f="$d/slice$i"
+    _g3_run "$f" 410
+    [[ "$rc" == "1" ]] || bad+=" slice$i:410:rc=$rc"
+    grep -qF 'sentry_issue_alert.synthetic_two' <<<"$(grep -F '::error::' <<<"$out" | grep -F 'on its only attempt' | grep -F 'sentry_alert.synthetic_one' || true)" || bad+=" slice$i:410:annotation"
+    _g3_run "$f" mixed
+    [[ "$rc" == "1" ]] || bad+=" slice$i:mixed:rc=$rc"
+    # Only the 410 stanza's address may be named as a 410.
+    grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:mixed:annotation"
+    ! grep -qF 'synthetic_three' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:mixed:names-non-410"
+    _g3_run "$f" boxed
+    grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:boxed:annotation"
+    _g3_run "$f" other
+    [[ "$rc" == "1" ]] || bad+=" slice$i:other:rc=$rc"
+    grep -qxF '::error::terraform plan failed (exit 1)' <<<"$out" || bad+=" slice$i:other:annotation"
+    ! grep -qF '410' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:other:claims-410"
+    _g3_run "$f" detail
+    grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:detail:annotation"
+    _g3_run "$f" spoof
+    grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:spoof:annotation"
+    ! grep -qF 'warning' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:spoof:vendor-text-as-address"
+    _g3_run "$f" warn
+    ! grep -qF 'synthetic_four' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:warn:credited-warning"
+    _g3_run "$f" ok
+    [[ "$rc" == "0" ]] && grep -qxF 'G3_REACHED_END' <<<"$out" || bad+=" slice$i:ok:rc=$rc"
+  done
+  rm -rf "$d"
+  if [[ "$n" -ge 1 && -z "$bad" ]]; then
+    _report "T18 each 410-handler slice, executed with a stubbed terraform: 410 -> non-zero + names both addresses; mixed -> names only the 410 address; boxed diagnostics parse; other -> plain error; success -> falls through ($n slices)" ok
+  else
+    _report "T18 410-handler execution" fail "slices=$n;$bad"
+  fi
+}
+
+# T19 — the two handler slices are the SAME code. Each is exercised by T16/T18
+# separately, so without this they could drift apart and both still pass.
+t_g3_slices_identical() {
+  local d n; d=$(mktemp -d)  # lint-trap-ownership: ok — rm -rf inline below; no exit between alloc and cleanup (#6734, ADR-129)
+  n=$(_g3_slices "$WORKFLOW" "$d")
+  local same=0
+  if [[ "$n" == "2" ]] && diff -q <(grep -vE '^[[:space:]]*#' "$d/slice1") <(grep -vE '^[[:space:]]*#' "$d/slice2") >/dev/null; then same=1; fi
+  rm -rf "$d"
+  if [[ "$same" == "1" ]]; then
+    _report "T19 the plan_pr and apply 410-handler slices are identical code" ok
+  else
+    _report "T19 the two 410-handler slices are identical" fail "slices=$n differ (or not 2)"
+  fi
+}
+
+# T20 — only main applies (#8451 review): a workflow_dispatch from another ref
+# would apply that branch's unreviewed .tf with its own copies of the gates.
+t_apply_job_main_only() {
+  local region; region=$(awk '/^  apply:/{on=1} on && /^    steps:/{exit} on' "$WORKFLOW")
+  if grep -qE "^[[:space:]]+&& github\.ref == 'refs/heads/main'$" <<<"$region"; then
+    _report "T20 the apply job's if: requires github.ref == refs/heads/main" ok
+  else
+    _report "T20 apply job is main-only" fail "no github.ref == 'refs/heads/main' conjunct in the apply job's if:"
+  fi
+}
+
+t_no_unbracketed_status_capture
+t_apply_job_fidelity_wiring
+t_g3_anchor_count
+t_g3_slice_shape
+t_g3_no_ladder_residue
+t_g3_handler_executes
+t_g3_slices_identical
+t_apply_job_main_only
 
 echo "=== $pass passed, $fail failed ==="
+# Anti-vacuity floor: a deleted dispatch line must red the suite, not shrink it
+# (#8451 review — T15-T18 were deletable at exit 0). Reported directly, not
+# through _report, which it backstops.
+EXPECTED_TESTS=20
+ran=$((pass + fail))
+if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then
+  printf '[FAIL] harness: ran %s test(s), expected %s\n' "$ran" "$EXPECTED_TESTS" >&2
+  exit 1
+fi
 [[ "$fail" -eq 0 ]]

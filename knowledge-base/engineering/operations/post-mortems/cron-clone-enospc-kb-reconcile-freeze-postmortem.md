@@ -25,7 +25,7 @@ root_cause_corrected: true
 >
 > ```
 > error: Your local changes to the following files would be overwritten by merge:
-> 	.claude/settings.json
+>  .claude/settings.json
 > Please commit your changes or stash them before you merge. Aborting
 > ```
 >

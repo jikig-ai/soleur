@@ -12,7 +12,7 @@ tags: [brainstorm, premise-validation, plan-doc-staleness, repo-research]
 ## Problem
 
 Brainstorming #4712 (KB-sync #4706 follow-ups), the GitHub issue body **and** the cited parent plan
-(`knowledge-base/project/plans/2026-05-31-fix-kb-sync-stale-design-folder-frozen-timestamps-plan.md`)
+(`knowledge-base/project/plans/archive/20261013-014038-2026-05-31-fix-kb-sync-stale-design-folder-frozen-timestamps-plan.md`)
 both stated two concrete, load-bearing technical claims that were **false against `main`**:
 
 1. The reconnect UI lives in a component named **`RepoConnectionCard`** — which exists **nowhere in code**

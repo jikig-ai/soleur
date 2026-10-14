@@ -16,10 +16,20 @@
 
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0
 
-for h in "$HOOK_DIR"/*.sh; do
+# The operator-stage approval hook (ADR-264) ships under plugins/soleur/hooks, not
+# here, and emits a permissionDecision alongside updatedInput: it gets the same
+# decision-needs-hookEventName pairing check as the hooks in this directory.
+for h in "$HOOK_DIR"/*.sh "$HOOK_DIR"/*.py "$HOOK_DIR/../../plugins/soleur/hooks/operator-stage-approval.sh"; do
+  [[ -f "$h" ]] || continue
   base="$(basename "$h")"
   # Skip test scripts themselves.
   [[ "$base" == *.test.sh ]] && continue
@@ -59,7 +69,170 @@ for h in "$HOOK_DIR"/*.sh; do
   fi
 done
 
-if [[ "$fail" -eq 0 ]]; then
+# NB the summary for this first block is deferred to the end of the file: it
+# used to print before the three gates below ran, so a run whose AC13 failed
+# still OPENED with a PASS line.
+pd_hen_ok=$(( fail == 0 ? 1 : 0 ))
+
+# ===========================================================================
+# Registration, exec-bit, and single-rewriter gates (issue #7165, ADR-162)
+# ===========================================================================
+# Folded into this meta-suite rather than a 4th meta-file: all three answer the
+# same question this file already asks — "is the hook actually wired up such
+# that Claude Code will honour it?"
+#
+# The exec-bit and registration gates are a LOAD-BEARING PAIR. Either alone is
+# vacuous in the direction that matters (#7151, one level up):
+#   * exec-bit alone — deleting the settings.json registration leaves the mode
+#     gate green while the hook never runs again.
+#   * registration alone — a hook registered at mode 100644 is registered and
+#     unrunnable.
+REPO_ROOT_DIR="$(cd "$HOOK_DIR/../.." && pwd)"
+SETTINGS="$REPO_ROOT_DIR/.claude/settings.json"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "UNRESOLVED: jq missing — registration/exec-bit/single-rewriter gates not run; install jq"
+  fail=1
+elif [[ ! -f "$SETTINGS" ]]; then
+  echo "FAIL: $SETTINGS not found — cannot derive the registered hook list."
+  fail=1
+else
+  # Entries are QUOTE-PREFIXED (`"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh`), so
+  # the leading double-quote is part of the JSON string value and must be
+  # stripped along with the variable. guardrails.sh appears under more than one
+  # matcher and at least one entry is a .py — hence `sort -u` and no .sh filter.
+  #
+  # THREE SHAPES, not one. The original sed only stripped the prefix when the
+  # command STARTED with it, so it silently mis-derived the other two and handed
+  # the gates below a whole command line where a path belongs:
+  #   (1) `"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh`            — direct exec
+  #   (2) `bash "$CLAUDE_PROJECT_DIR"/scripts/x.sh`             — interpreter prefix
+  #   (3) `bash "$CLAUDE_PROJECT_DIR"/scripts/x.sh --flag`      — and trailing args
+  # An unmatched shape is NOT caught drift: it reads as "hook not tracked" for a
+  # hook that is tracked, which is a false RED, and the inverse (a genuinely
+  # untracked hook in an unmatched shape) would be missed the same way. #8377
+  # added the first (3)-shaped entry and is what surfaced this.
+  _hook_paths() {
+    sed -e 's|^bash  *||' -e 's|^"\$CLAUDE_PROJECT_DIR"/||' -e 's|  *-.*$||' -e 's|  *$||'
+  }
+  reg_all="$(jq -r '.hooks | to_entries[] | .value[]? | .hooks[]? | .command' "$SETTINGS" 2>/dev/null \
+             | _hook_paths | sort -u)"
+  reg_bash="$(jq -r '.hooks.PreToolUse[]? | select(.matcher=="Bash") | .hooks[]?.command' "$SETTINGS" 2>/dev/null \
+              | _hook_paths | sort -u)"
+
+  n_all=$(printf '%s\n' "$reg_all" | grep -c . || true)
+  n_bash=$(printf '%s\n' "$reg_bash" | grep -c . || true)
+
+  # NON-VACUITY FIRST. A derivation that silently yields zero entries makes
+  # every membership assertion below pass by iterating nothing — the exact
+  # shape that lets a dropped registration read as green.
+  if [[ "$n_all" -lt 20 || "$n_bash" -lt 15 ]]; then
+    echo "FAIL: settings-derived hook list looks empty/short (all=$n_all bash=$n_bash)."
+    echo "      The derivation broke; every gate below would pass vacuously."
+    fail=1
+  else
+    echo "PASS: settings-derived hook list is non-empty (all=$n_all, PreToolUse/Bash=$n_bash)."
+
+    # --- AC9: index mode of every REGISTERED hook is exactly 100755 ---------
+    # `git ls-files -s` (the INDEX), not `test -x` (the working tree): a local
+    # chmod does not travel, and a hook committed 100644 is unrunnable on every
+    # other checkout regardless of how it looks here.
+    mode_bad=0
+    while IFS= read -r h; do
+      [[ -z "$h" ]] && continue
+      ls_out="$(git -C "$(dirname "$SETTINGS")/.." ls-files -s "$h" 2>/dev/null)"
+      if [[ -z "$ls_out" ]]; then
+        echo "FAIL: registered hook '$h' is not tracked by git (git ls-files -s is empty)."
+        mode_bad=1; continue
+      fi
+      mode="$(printf '%s' "$ls_out" | awk '{print $1}')"
+      if [[ "$mode" != "100755" ]]; then
+        echo "FAIL: registered hook '$h' has index mode $mode, want 100755 (Claude Code execs it directly)."
+        mode_bad=1
+      fi
+    done <<EOF
+$reg_all
+EOF
+    [[ "$mode_bad" -eq 0 ]] && echo "PASS: all $n_all registered hooks are tracked at index mode 100755." || fail=1
+
+    # --- AC14: grep-rewrite.sh is a MEMBER of the PreToolUse/Bash list ------
+    case "$reg_bash" in
+      *".claude/hooks/grep-rewrite.sh"*)
+        echo "PASS: grep-rewrite.sh is registered on the PreToolUse Bash matcher." ;;
+      *)
+        echo "FAIL: grep-rewrite.sh is NOT in the settings-derived PreToolUse/Bash list."
+        echo "      The ugrep shim is un-neutralized; see ADR-162."
+        fail=1 ;;
+    esac
+
+    # --- AC13: exactly ONE hook source may rewrite tool input ---------------
+    # ADR-162 grants the rewrite authority under a single-rewriter invariant:
+    # two hooks emitting updatedInput for the same call have undefined
+    # precedence, and the loser's rewrite is silently discarded.
+    #
+    # Comment lines are stripped first — this file's own siblings legitimately
+    # DISCUSS updatedInput in prose, and a body-grep sees comments too
+    # (cq-assert-anchor-not-bare-token). Anchored on the JSON field shape
+    # (`updatedInput":` / `updatedInput:`), never the bare word.
+    #
+    # The optional BACKSLASH is load-bearing and was found by mutation, not by
+    # review: a hook that builds its envelope with printf rather than jq emits
+    # `\"updatedInput\":`, and the backslash-free pattern skipped it entirely —
+    # a second rewriter added that way passed this gate. printf is not a
+    # hypothetical spelling here; lib/hook-input.sh emits its ask envelope
+    # exactly that way, precisely because jq may be what is broken.
+    # SCOPE. A `"$HOOK_DIR"/*.sh` glob was the obvious loop and it is too narrow
+    # in two directions that both matter, and one of which this file's own
+    # comment above names:
+    #   * lib/*.sh — where a shared rewrite helper would naturally live, and
+    #     where lib/hook-input.sh (cited above as the printf-envelope precedent)
+    #     actually sits. A second rewriter added there passed the old gate.
+    #   * security_reminder_hook.py — a REGISTERED PreToolUse hook. The
+    #     registration derivation above already notes "at least one is a .py";
+    #     the rewriter scan filtered it out anyway.
+    # Union of the settings-derived registration list and the on-disk hook tree,
+    # so neither an unregistered new file nor a non-.sh registered hook escapes.
+    rewriters=""
+    while IFS= read -r h; do
+      [[ -z "$h" ]] && continue
+      [[ "$h" == *.test.sh ]] && continue
+      f="$REPO_ROOT_DIR/$h"
+      [[ -f "$f" ]] || f="$h"
+      [[ -f "$f" ]] || continue
+      # Dedup on the CANONICAL path, not the basename. A basename key collapses
+      # .claude/hooks/lib/grep-rewrite.sh into the top-level entry of the same
+      # name, so a SECOND registered rewriter passes the gate (measured). But the
+      # two input streams reach the same file by different spellings
+      # (settings-relative vs absolute), so they must be canonicalized or the
+      # single rewriter counts twice.
+      b="$(cd "$(dirname "$f")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "${f##*/}")" || b="$f"
+      c=$(grep -vE '^[[:space:]]*#' "$f" | grep -cE 'updatedInput\\?"?[[:space:]]*:' || true)
+      [[ "$c" -gt 0 ]] && case " $rewriters " in *" $b "*) ;; *) rewriters="$rewriters $b" ;; esac
+    done <<EOF
+$reg_all
+$(find "$HOOK_DIR" -maxdepth 3 \( -name "*.sh" -o -name "*.py" \) 2>/dev/null)
+$(find "$REPO_ROOT_DIR/plugins/soleur/hooks" -maxdepth 3 \( -name "*.sh" -o -name "*.py" \) 2>/dev/null)
+EOF
+    rewriters="${rewriters# }"
+    # ADR-162 as amended 2026-10-01 (ADR-264): exactly TWO NAMED rewriters. The
+    # allowlist is a closed set of canonical paths, never a count: a third
+    # rewriter, or a different file standing in for one of these, goes RED.
+    plugin_hooks_real="$(cd "$REPO_ROOT_DIR/plugins/soleur/hooks" 2>/dev/null && pwd -P)"
+    expected_rewriters="$(printf '%s\n' "$HOOK_DIR/grep-rewrite.sh" "$plugin_hooks_real/operator-stage-approval.sh" | sort | tr '\n' ' ')"
+    actual_rewriters="$(printf '%s\n' $rewriters | sort | tr '\n' ' ')"
+    if [[ "$actual_rewriters" == "$expected_rewriters" ]]; then
+      echo "PASS: exactly two named rewriting hooks (grep-rewrite.sh, operator-stage-approval.sh) — single-rewriter invariant holds."
+    else
+      echo "FAIL: single-rewriter invariant violated. Rewriting hooks: [${rewriters:-none}]"
+      echo "      ADR-162 (amended by ADR-264) permits exactly grep-rewrite.sh and"
+      echo "      plugins/soleur/hooks/operator-stage-approval.sh. Two hooks emitting updatedInput for"
+      echo "      the same call have undefined precedence and one rewrite is silently discarded."
+      fail=1
+    fi
+  fi
+fi
+
+if [[ "$pd_hen_ok" -eq 1 ]]; then
   echo "PASS: all PreToolUse hooks pair permissionDecision with hookEventName."
 fi
 

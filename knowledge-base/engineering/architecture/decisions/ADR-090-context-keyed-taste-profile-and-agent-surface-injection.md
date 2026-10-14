@@ -13,6 +13,7 @@ gstack's `design-shotgun` fans out design variants and learns operator taste, st
 A 7-agent plan-review panel found the first design (single global "aesthetic-direction" axis + numeric 90-day decay + auto-supersede) would **actively mis-learn**: an operator who prefers `minimalist` for a dashboard and `maximalist` for a landing page is expressing *context-conditioned* taste, not a contradiction — a context-blind model thrashes and the learned profile degenerates to "the last thing you designed." Separately, the numeric decay was mislabeled (linear-to-zero at the operator's own cadence) and false precision for a file that holds <10 reinforcements for a long time.
 
 Two mechanism questions had no prior decision:
+
 - **OQ-A:** how is learned taste keyed so it neither thrashes nor over-fits?
 - **OQ-B:** how does the profile reach *both* design surfaces — the `frontend-design` **skill** and the `ux-design-lead` **agent** — given ADR-086's hook only fires for the `Skill` tool?
 
@@ -21,6 +22,7 @@ Two mechanism questions had no prior decision:
 **1. Context-keyed, recency-ordered taste model.** Entries are keyed by `(context, axis) → value`, where `context` ∈ a closed enum (`landing-page | marketing-site | dashboard | app-ui | docs | email | component`) and `axis` ∈ a closed enum (`aesthetic-direction` in v1). Ordering is by **recency** (`last_reinforced`, tie-break `reinforce_count`) — there is **no numeric confidence/decay**. A contradiction fires only when the *same* `(context, axis)` is reinforced with a different value; resolution is supersede, logged to `contradictions[]`. This kills the cross-surface thrash while preserving #5990's "contradiction flag fires" AC (now meaningful).
 
 **2. Agent-surface injection gap → agent reads, orchestrator writes.** ADR-086's `PostToolUse(Skill)` hook is structurally unreachable for Agent-tool invocations, and the `ux-design-lead` agent runs as an isolated Task subagent with **no operator** — it cannot capture a selection. So:
+
 - the `frontend-design` **skill** loads the profile via `context_queries` (FR6) and records the operator's selection in-session;
 - the `ux-design-lead` **agent** loads the profile via an explicit **direct Read** (surface-independent — it also works where FR6 does not, e.g. web Concierge) and **never writes**; the wireframe-approval **orchestrator** gate (`brainstorm` Phase 3.55b / `plan` Phase 2.5 §4b) captures the operator's pick and does the write.
 

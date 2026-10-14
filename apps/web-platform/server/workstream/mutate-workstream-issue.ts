@@ -478,32 +478,8 @@ export async function reopenWorkstreamIssue(
   return toCanonical(res.data, botSlug);
 }
 
-// ---------------------------------------------------------------------------
-// Board-precedence meta — drives the UI drag/affordance gating (AC11/AC14). For
-// the dogfood org repo (owner === SOLEUR_KANBAN_ORG) the Project board Status
-// WINS over labels on read, and the board-status-sync workflow needs
-// `organization_projects:write` (still ungranted) to mirror a label write — so
-// intermediate-column moves would snap back. Gate on the GRANT STATE
-// (SOLEUR_KANBAN_PROJECT_WRITABLE), which lifts the disable automatically once
-// the grant lands. A user's OWN repo never reads the board → fully live.
-// ---------------------------------------------------------------------------
-
-export interface WorkstreamBoardMeta {
-  /** The connected repo is owned by the dogfood Kanban org (board precedence). */
-  onKanbanOrg: boolean;
-  /** The org Project board is writable (organization_projects:write granted). */
-  projectWritable: boolean;
-}
-
-export async function resolveWorkstreamBoardMeta(
-  userId: string,
-): Promise<WorkstreamBoardMeta> {
-  const repoUrl = await getCurrentRepoUrl(userId);
-  const parsed = parseConnectedRepo(repoUrl);
-  const org = process.env.SOLEUR_KANBAN_ORG?.trim().toLowerCase();
-  const onKanbanOrg = Boolean(
-    parsed && org && parsed.owner.toLowerCase() === org,
-  );
-  const projectWritable = process.env.SOLEUR_KANBAN_PROJECT_WRITABLE === "1";
-  return { onKanbanOrg, projectWritable };
-}
+// Board-precedence meta moved to `lib/workstream.ts` › `WorkstreamBoardMeta`
+// and is now computed inside `resolveBoardReadContext` — a pure function of the
+// already-parsed owner + two env vars, so every consumer shares ONE repo
+// resolution (no second getCurrentRepoUrl read, no meta-vs-issues TOCTOU, and
+// the read accessor no longer imports this write module).

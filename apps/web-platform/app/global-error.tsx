@@ -2,6 +2,7 @@
 // <!-- anti-slop:disable MIN-H-SCREEN-CENTERED-HERO reason="Next.js root error boundary; full-viewport centered hero is the canonical pattern for this surface (calibration #4270)" -->
 import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
+import { Button } from "@/components/ui/button";
 
 export default function GlobalError({
   error,
@@ -23,12 +24,13 @@ export default function GlobalError({
           <p className="text-sm text-soleur-text-secondary">
             A critical error occurred. Please try refreshing the page.
           </p>
-          <button
+          <Button
+            variant="outlined"
             onClick={reset}
-            className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary hover:border-soleur-border-default"
+            className="text-soleur-text-secondary"
           >
             Try again
-          </button>
+          </Button>
         </div>
       </body>
     </html>

@@ -9,7 +9,7 @@
 //     - Body: { password: string }
 //     - Re-verifies the active user's password via
 //       supabase.auth.signInWithPassword(email, password). Email is
-//       sourced from supabase.auth.getUser() so the client cannot
+//       sourced from boundedAuthGetUser() so the client cannot
 //       supply an arbitrary identity.
 //     - On success: issue a reauth event with no authTime (password
 //       path doesn't go through an IdP — AC27 is OAuth-only).
@@ -31,6 +31,10 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { issueReauthEvent } from "@/server/dsar-reauth";
+import {
+  boundedAuthGetUser,
+  boundedAuthGetSession,
+} from "@/server/request-auth";
 
 interface AccessTokenClaims {
   sub?: string;
@@ -59,13 +63,13 @@ export async function POST(request: Request) {
   if (!originValid) return rejectCsrf("dashboard/settings/privacy/reauth", origin);
 
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
+  const userData = await boundedAuthGetUser(supabase);
   if (!userData?.user || !userData.user.email) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const user = userData.user as { id: string; email: string };
 
-  const { data: sessionData } = await supabase.auth.getSession();
+  const sessionData = await boundedAuthGetSession(supabase);
   const session = sessionData?.session;
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -88,10 +92,29 @@ export async function POST(request: Request) {
     if (typeof body.password !== "string" || body.password.length === 0) {
       return NextResponse.json({ error: "Missing password" }, { status: 400 });
     }
-    const { error: signinErr } = await supabase.auth.signInWithPassword({
-      email: user.email,
-      password: body.password,
-    });
+    // Bounded remote sign-in — the same GoTrue cold-stall class as
+    // getUser (#8978 sweep; counsel C1: the published ~10s reauth bound
+    // claim must cover this leg). Timeout lands on the SAME 401 arm the
+    // route already has for a failed verification — fail-closed either way.
+    let signinErr: unknown;
+    {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        supabase.auth
+          .signInWithPassword({ email: user.email, password: body.password })
+          .then((r) => ({ kind: "done" as const, error: r.error }))
+          .catch(() => ({ kind: "done" as const, error: { message: "bounded_timeout" } })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timer = setTimeout(
+            () => resolve({ kind: "timeout" }),
+            Math.max(Number(process.env.SOLEUR_AUTH_GETUSER_TIMEOUT_MS) || 10_000, 1),
+          );
+        }),
+      ]);
+      clearTimeout(timer);
+      signinErr =
+        outcome.kind === "timeout" ? { message: "bounded_timeout" } : outcome.error;
+    }
     if (signinErr) {
       return NextResponse.json(
         { error: "Password verification failed" },

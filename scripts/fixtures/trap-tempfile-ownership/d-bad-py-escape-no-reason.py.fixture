@@ -1,0 +1,6 @@
+import tempfile
+
+
+def build():
+    # lint-trap-ownership: ok
+    return tempfile.mkdtemp(prefix="deliverable-")

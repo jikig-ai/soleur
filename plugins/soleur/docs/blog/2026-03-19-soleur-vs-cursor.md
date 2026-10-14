@@ -4,6 +4,7 @@ seoTitle: "Soleur vs. Cursor: Company-as-a-Service vs. AI Coding Tool"
 date: 2026-03-19
 description: "Cursor shipped Automations in March 2026, becoming an agent platform. A direct comparison with Soleur on workflow depth, knowledge architecture, and pricing."
 ogImage: "blog/og-soleur-vs-cursor.png"
+pillar: soleur-comparisons
 tags:
   - comparison
   - cursor

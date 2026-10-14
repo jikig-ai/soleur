@@ -1,0 +1,9 @@
+BEGIN;
+DROP FUNCTION IF EXISTS public.anonymise_agent_engine_data(uuid);
+DROP FUNCTION IF EXISTS public.append_agent_engine_event(uuid, text, integer, jsonb);
+DROP FUNCTION IF EXISTS public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid);
+DROP FUNCTION IF EXISTS public.set_workspace_default_engine(uuid, text, text);
+DROP TABLE IF EXISTS public.agent_engine_events;
+DROP TABLE IF EXISTS public.agent_engine_runs;
+DROP TABLE IF EXISTS public.workspace_engine_settings;
+COMMIT;

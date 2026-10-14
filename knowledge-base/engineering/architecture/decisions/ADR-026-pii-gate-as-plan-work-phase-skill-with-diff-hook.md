@@ -103,7 +103,7 @@ C4Component
         Component(preflight, "/soleur:preflight", "Skill", "Optional Check 7 (Q1, deferred)")
         Component(ship, "/soleur:ship", "Skill", "Phase 5.5 conditional gate verifies acknowledgment")
         Component(gate, "gdpr-gate", "Skill", "Read-only auditor, batched Haiku, advisory-only output")
-        Component(refs, "gdpr-gate references/", "Reference files", "5 lifted (MIT) + rewritten layers")
+        Component(refs, "gdpr-gate references/", "Reference files", "8 lifted (MIT) + 3 Soleur-authored")
     }
 
     Container_Boundary(infra, "Hook + KB infra") {
@@ -136,4 +136,4 @@ Reconciled the NFR Impacts table against the live `knowledge-base/engineering/ar
 - **Auditability/observability** added to the NFR Impacts narrative (between table and §Principle Alignment) as a non-NFR Consequences-class concern.
 - **AP-009 alignment rationale** extended to absorb the never-delete framing originally drafted as NFR-030.
 
-Plan: `knowledge-base/project/plans/2026-05-10-feat-gdpr-gate-skill-plan.md` §Research Reconciliation gaps #2/#3.
+Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-10-feat-gdpr-gate-skill-plan.md` §Research Reconciliation gaps #2/#3.

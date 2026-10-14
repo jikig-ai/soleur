@@ -98,6 +98,8 @@ vi.mock("@/server/observability", () => ({
 }));
 
 vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(),
   withIsolationScope: (fn: () => unknown) => fn(),
   getCurrentScope: () => ({ setUser: vi.fn() }),
   captureException: vi.fn(),

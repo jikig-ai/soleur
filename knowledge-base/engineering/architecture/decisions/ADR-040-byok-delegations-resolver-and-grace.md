@@ -5,7 +5,7 @@ date: 2026-05-22
 related: [4232, 4229, 4225, 4290]
 related_adrs: [ADR-038, ADR-039, ADR-026, ADR-028]
 related_plans:
-  - knowledge-base/project/plans/2026-05-22-feat-byok-delegations-pr-a-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-byok-delegations-pr-a-plan.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -24,6 +24,7 @@ The dogfood trigger is concrete: Jikigai itself runs as a two-person workspace (
 GDPR posture: the delegation row is a joint-controllership artifact between grantor and grantee, lawful-basis Art. 6(1)(b) (contract). DPD §2.3 + AUP §5.6 + the Delegation Consent Side Letter ship in PR-B. The 7y retention reflects the joint-controllership audit trail; the WORM trigger enforces append-only mutation shapes; Art. 17 anonymisation cascades through the existing `account-delete.ts` chain.
 
 Brand-survival threshold: **single-user incident.** Two failure modes carry that weight:
+
 1. Cross-tenant grant — a member of OrgA inserts a `byok_delegations` row naming a user in OrgB as grantor. That stranger leases the grantor's Anthropic key. GDPR Art. 33 territory (72h notification clock).
 2. Revoke-grace leak — Jean clicks "revoke" on Harry's delegation; the resolver's stale read keeps using Jean's key for the next 30 minutes of Harry's runs; Jean's Anthropic invoice shows hundreds of dollars he never authorized.
 
@@ -84,9 +85,9 @@ Down migration preserves `audit_byok_use.invocation_id UNIQUE`; everything else 
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-05-22-feat-byok-delegations-pr-a-plan.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-22-byok-delegations-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-byok-delegations-4232/spec.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-byok-delegations-pr-a-plan.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-22-byok-delegations-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-byok-delegations-4232/spec.md`
 - Migration: `apps/web-platform/supabase/migrations/064_byok_delegations.sql`
 - ADR-038 (team workspace foundation; sibling): `ADR-038-team-workspace-multi-user-organizations-and-workspace-members.md`
 - ADR-039 (workspace_member_removals ledger; precedent for WORM-with-anonymise): `ADR-039-departed-member-removal-ledger.md`

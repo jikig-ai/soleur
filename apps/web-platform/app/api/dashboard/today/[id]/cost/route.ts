@@ -8,7 +8,7 @@
 // Query: `audit_byok_use` rows joined on
 //   agent_role = "agent.spawn.requested:<actionClass>"
 //   founder_id = caller user id
-//   created_at ∈ (action_sends.created_at, action_sends.acknowledged_at OR now()]
+//   created_at ∈ (action_sends.clicked_at, action_sends.acknowledged_at OR now()]
 //
 // `audit_byok_use` has no native `action_send_id` FK (Non-Goal #15);
 // the time-window join + `agent_role` predicate is the linkage. Pre-
@@ -29,6 +29,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getServiceClient } from "@/lib/supabase/service";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,7 @@ interface ActionSendRow {
   message_id: string;
   user_id: string;
   action_class: string;
-  created_at: string;
+  clicked_at: string;
   acknowledged_at: string | null;
   undone_at: string | null;
   failure_reason: string | null;
@@ -51,10 +52,8 @@ export async function GET(
   if (!valid) return rejectCsrf("api/dashboard/today/[id]/cost", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -64,14 +63,14 @@ export async function GET(
     .from("messages")
     .select("id")
     .eq("id", messageId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .maybeSingle();
   if (msgErr) {
     reportSilentFallback(msgErr, {
       feature: "dashboard-cost",
       op: "messages-owner-check",
       message: "messages select failed during cost lookup",
-      extra: { userId: user.id, messageId },
+      extra: { userId, messageId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
@@ -82,12 +81,13 @@ export async function GET(
   const service = getServiceClient();
   // Service-role read on `action_sends` because the WORM-row tenant-RLS
   // SELECT does not extend to all columns we need (action_class +
-  // created_at + acknowledged_at). The tenant-side messages check above
+  // clicked_at + acknowledged_at). The row's insert time is `clicked_at`; the
+  // table has no `created_at` (#8803 review). The tenant-side messages check above
   // already proved ownership; this read is bounded to one row by id.
   const { data: rawSend, error: sendErr } = await service
     .from("action_sends")
     .select(
-      "id,message_id,user_id,action_class,created_at,acknowledged_at,undone_at,failure_reason",
+      "id,message_id,user_id,action_class,clicked_at,acknowledged_at,undone_at,failure_reason",
     )
     .eq("message_id", messageId)
     .maybeSingle();
@@ -97,13 +97,13 @@ export async function GET(
         feature: "dashboard-cost",
         op: "action-sends-read",
         message: "action_sends select failed during cost lookup",
-        extra: { userId: user.id, messageId },
+        extra: { userId, messageId },
       });
     }
     return NextResponse.json({ cumulativeCents: 0, turnCount: 0 });
   }
   const send = rawSend as ActionSendRow;
-  if (send.user_id !== user.id) {
+  if (send.user_id !== userId) {
     // Defense in depth — should be unreachable given the messages owner-
     // check, but a misconfigured RLS migration could let it through.
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -115,7 +115,7 @@ export async function GET(
   // row's cost.
   //   - acknowledged_at  → loop finished happy
   //   - undone_at        → loop finished + operator-undone
-  //   - failure_reason   → loop terminated mid-flight; cap at created_at +
+  //   - failure_reason   → loop terminated mid-flight; cap at clicked_at +
   //                        11 minutes (leader function timeout is 10m per AC7,
   //                        so no audit_byok_use rows from THIS loop can land
   //                        after that — anything later is sibling-spawn noise)
@@ -127,7 +127,7 @@ export async function GET(
   } else if (send.undone_at) {
     upper = send.undone_at;
   } else if (send.failure_reason) {
-    const createdMs = new Date(send.created_at).getTime();
+    const createdMs = new Date(send.clicked_at).getTime();
     upper = new Date(createdMs + LEADER_LOOP_MAX_DURATION_MS).toISOString();
   } else {
     upper = new Date().toISOString();
@@ -137,15 +137,15 @@ export async function GET(
     .from("audit_byok_use")
     .select("unit_cost_cents")
     .eq("agent_role", agentRole)
-    .eq("founder_id", user.id)
-    .gt("created_at", send.created_at)
+    .eq("founder_id", userId)
+    .gt("created_at", send.clicked_at)
     .lte("created_at", upper);
   if (auditErr) {
     reportSilentFallback(auditErr, {
       feature: "dashboard-cost",
       op: "audit-byok-use-sum",
       message: "audit_byok_use sum failed",
-      extra: { userId: user.id, messageId, agentRole },
+      extra: { userId, messageId, agentRole },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }

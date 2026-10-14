@@ -67,6 +67,7 @@ zero findings on a clean tree.
 
 The gate closes four reward-hack / masking classes surfaced at multi-agent review
 (each reproduced end-to-end, then blocked):
+
 - **SECTIONS-oracle narrowing:** the gate parses BOTH base and head sidecars with
   the UNION of base-side and head-side `SECTIONS` (read from
   `scripts/_agents_md_sections.py` in the tree under check). Narrowing `SECTIONS`
@@ -93,7 +94,8 @@ job (#6038). Documented so it is a conscious residual, not a blind spot.
 **3. Owner = a required CI check + the ack (#6038 criterion 3), de-ceremonialized for a
 solo operator.** `rule-body-lint` is an always-run `ci.yml` job wired as the 18th
 required context in `scripts/ci-required-ruleset-canonical-required-status-checks.json`
-+ `infra/github/ruleset-ci-required.tf` (auto-applied on merge by
+
+- `infra/github/ruleset-ci-required.tf` (auto-applied on merge by
 `apply-github-infra.yml`) + `scripts/required-checks.txt` (canonical set-parity) and
 auto-enrolled in the required-check drift-guard cron (which reads the canonical JSON).
 The ack is **tamper-evidence + a required human-review gate, NOT full
@@ -102,7 +104,7 @@ CODEOWNERS-reviewed PR. **Live-enforcement note (verified 2026-07-06):** CODEOWN
 review is NOT currently enforced on `main` (no ruleset requires PR reviews / code-owner
 review; no branch protection — the CODEOWNERS header itself flags this as a pending
 operator follow-up). So the LIVE control today is the required `rule-body-lint` CI check
-+ the deliberate, reasoned, hash-bound ack authoring — not a second-reviewer gate. The
+- the deliberate, reasoned, hash-bound ack authoring — not a second-reviewer gate. The
 CODEOWNERS rows on the gate's load-bearing files become teeth the day branch protection
 is enabled.
 

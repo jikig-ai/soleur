@@ -13,6 +13,7 @@ import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import type { RevocationReason } from "@/lib/messages/trust-tier-copy";
 
 export const dynamic = "force-dynamic";
@@ -42,10 +43,8 @@ export async function POST(req: Request) {
   if (!valid) return rejectCsrf("api/template-authorizations/revoke", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -93,7 +92,7 @@ export async function POST(req: Request) {
       feature: "template-authorizations",
       op: "revoke_template_authorization",
       message: "revoke_template_authorization RPC failed",
-      extra: { userId: user.id, template_hash: templateHash, reason },
+      extra: { userId, template_hash: templateHash, reason },
     });
     return NextResponse.json({ error: "rpc_failed" }, { status: 500 });
   }

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 import { reasonToMessage } from "./invite-reason-messages";
 
 interface Props {
@@ -25,27 +26,83 @@ export function InviteActions({
   isIntendedInvitee,
   signedInEmail,
 }: Props) {
-  const router = useRouter();
-  const [loading, setLoading] = useState<"accept" | "decline" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const router = usePendingRouter();
+
+  // Accept/decline share one logical action-group: while either is in flight
+  // BOTH controls disable (`busy` below) so a decline can never race an
+  // accept on the same invitation.
+  // Accept latches on redirect — success ends in window.location.assign
+  // (cross-workspace boundary) so pending must not release mid-nav. latch()
+  // is explicit: only the nav path is terminal, every earlier path throws.
+  const accept = usePendingAction(
+    async () => {
+      let res: Response;
+      try {
+        res = await fetch("/api/workspace/accept-invite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invitationId }),
+        });
+      } catch {
+        throw new Error("Network error. Please try again.");
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          reasonToMessage(data.error) || "Failed to accept invitation",
+        );
+      }
+      // GAP E/workspace-switch (ADR-067 staleTimes): accept-invite calls
+      // `set_current_workspace_id` server-side, so this is a CROSS-WORKSPACE
+      // boundary for the same principal — the warm Router Cache still holds the
+      // PREVIOUS workspace's RSC. Hard-nav to wipe it (mirrors the workspace
+      // switch in components/dashboard/org-switcher-container.tsx); a soft push
+      // would render the prior workspace's cached content under the new tenant.
+      accept.latch();
+      window.location.assign("/dashboard/settings/team");
+    },
+  );
+
+  const decline = usePendingAction(async () => {
+    let res: Response;
+    try {
+      res = await fetch("/api/workspace/decline-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invitationId }),
+      });
+    } catch {
+      throw new Error("Network error. Please try again.");
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        reasonToMessage(data.error) || "Failed to decline invitation",
+      );
+    }
+    router.push("/dashboard");
+  });
+
+  const busy = accept.pending || decline.pending;
+  const actionError = accept.error ?? decline.error;
 
   if (!isAuthenticated) {
     return (
       <div className="space-y-3">
-        <Link
+        <NavLink
           href={`/signup?redirectTo=/invite/${token}`}
           className="block w-full rounded-md bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-3 text-center font-medium text-soleur-text-on-accent hover:opacity-90 transition-opacity"
         >
           Create an account to join
-        </Link>
+        </NavLink>
         <p className="text-center text-sm text-soleur-text-secondary">
           Already have an account?{" "}
-          <Link
+          <NavLink
             href={`/login?redirectTo=/invite/${token}`}
             className="text-soleur-accent-gold-fg hover:underline"
           >
             Sign in
-          </Link>
+          </NavLink>
         </p>
       </div>
     );
@@ -73,95 +130,52 @@ export function InviteActions({
           ) : null}
           Sign in with the invited account to accept.
         </p>
-        <button
+        <Button
+          variant="gold"
           type="button"
           disabled
           aria-describedby="invite-mismatch-notice"
-          className="w-full rounded-md bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-3 font-medium text-soleur-text-on-accent opacity-50"
+          className="w-full"
         >
           Accept invitation
-        </button>
-        <Link
+        </Button>
+        <NavLink
           href={`/login?redirectTo=/invite/${token}`}
           className="block w-full rounded-md border border-soleur-border-default px-4 py-3 text-center font-medium text-soleur-text-secondary hover:border-soleur-border-emphasized hover:text-soleur-text-primary transition-colors"
         >
           Sign in with a different account
-        </Link>
+        </NavLink>
       </div>
     );
   }
 
-  async function handleAccept() {
-    setLoading("accept");
-    setError(null);
-    try {
-      const res = await fetch("/api/workspace/accept-invite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invitationId }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(reasonToMessage(data.error) || "Failed to accept invitation");
-        return;
-      }
-      // GAP E/workspace-switch (ADR-067 staleTimes): accept-invite calls
-      // `set_current_workspace_id` server-side, so this is a CROSS-WORKSPACE
-      // boundary for the same principal — the warm Router Cache still holds the
-      // PREVIOUS workspace's RSC. Hard-nav to wipe it (mirrors the workspace
-      // switch in components/dashboard/org-switcher-container.tsx); a soft push
-      // would render the prior workspace's cached content under the new tenant.
-      window.location.assign("/dashboard/settings/team");
-    } catch {
-      setError("Network error. Please try again.");
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function handleDecline() {
-    setLoading("decline");
-    setError(null);
-    try {
-      const res = await fetch("/api/workspace/decline-invite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invitationId }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(reasonToMessage(data.error) || "Failed to decline invitation");
-        return;
-      }
-      router.push("/dashboard");
-    } catch {
-      setError("Network error. Please try again.");
-    } finally {
-      setLoading(null);
-    }
-  }
-
   return (
     <div className="space-y-3">
-      {error && (
+      {actionError && (
         <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-400">
-          {error}
+          {actionError.message}
         </p>
       )}
-      <button
-        onClick={handleAccept}
-        disabled={loading !== null}
-        className="w-full rounded-md bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-3 font-medium text-soleur-text-on-accent hover:opacity-90 transition-opacity disabled:opacity-50"
+      <Button
+        variant="gold"
+        onClick={accept.run}
+        loading={accept.pending}
+        loadingLabel="Accepting"
+        disabled={busy}
+        className="w-full"
       >
-        {loading === "accept" ? "Accepting..." : "Accept invitation"}
-      </button>
-      <button
-        onClick={handleDecline}
-        disabled={loading !== null}
-        className="w-full rounded-md border border-soleur-border-default px-4 py-3 font-medium text-soleur-text-secondary hover:border-soleur-border-emphasized hover:text-soleur-text-primary transition-colors disabled:opacity-50"
+        Accept invitation
+      </Button>
+      <Button
+        variant="outlined"
+        onClick={decline.run}
+        loading={decline.pending}
+        loadingLabel="Declining"
+        disabled={busy}
+        className="w-full text-soleur-text-secondary"
       >
-        {loading === "decline" ? "Declining..." : "Decline"}
-      </button>
+        Decline
+      </Button>
     </div>
   );
 }

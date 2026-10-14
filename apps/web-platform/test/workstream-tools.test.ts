@@ -18,9 +18,11 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   ),
 }));
 
-const getWorkstreamIssues = vi.fn();
+const resolveBoardReadContext = vi.fn();
+const collectWorkstreamIssues = vi.fn();
 vi.mock("@/server/workstream/get-workstream-issues", () => ({
-  getWorkstreamIssues: (userId: string) => getWorkstreamIssues(userId),
+  resolveBoardReadContext: (userId: string) => resolveBoardReadContext(userId),
+  collectWorkstreamIssues: (ctx: unknown) => collectWorkstreamIssues(ctx),
 }));
 
 import { buildWorkstreamTools } from "@/server/workstream/workstream-tools";
@@ -57,8 +59,19 @@ const FIXTURE: WorkstreamIssue[] = [
   },
 ];
 
+const OK_CTX = {
+  kind: "ok",
+  userId: "operator-7",
+  owner: "acme",
+  repo: "widgets",
+  installationId: 123,
+  botSlug: "soleur-ai",
+  board: { onKanbanOrg: false, projectWritable: false },
+};
+
 afterEach(() => {
-  getWorkstreamIssues.mockReset();
+  resolveBoardReadContext.mockReset();
+  collectWorkstreamIssues.mockReset();
 });
 
 describe("buildWorkstreamTools", () => {
@@ -76,25 +89,42 @@ describe("buildWorkstreamTools", () => {
     ).toBe(true);
   });
 
-  it("threads userId into the accessor and returns its mapped issues (read parity)", async () => {
-    getWorkstreamIssues.mockResolvedValue(FIXTURE);
+  it("threads userId into the read ctx and returns { issues, board } (read parity)", async () => {
+    resolveBoardReadContext.mockResolvedValue(OK_CTX);
+    collectWorkstreamIssues.mockResolvedValue(FIXTURE);
     const res = await getListTool("operator-7").handler();
     expect(res.isError).toBeUndefined();
-    expect(getWorkstreamIssues).toHaveBeenCalledWith("operator-7");
-    const parsed = JSON.parse(res.content[0].text) as { issues: unknown[] };
+    expect(resolveBoardReadContext).toHaveBeenCalledWith("operator-7");
+    expect(collectWorkstreamIssues).toHaveBeenCalledWith(OK_CTX);
+    const parsed = JSON.parse(res.content[0].text) as {
+      issues: unknown[];
+      board: unknown;
+    };
     expect(parsed.issues).toEqual(FIXTURE);
+    // Board-precedence meta is agent-visible: onKanbanOrg without
+    // projectWritable means label-driven status moves snap back.
+    expect(parsed.board).toEqual({
+      onKanbanOrg: false,
+      projectWritable: false,
+    });
   });
 
   it("serializes an empty board honestly (no repo connected → [])", async () => {
-    getWorkstreamIssues.mockResolvedValue([]);
+    resolveBoardReadContext.mockResolvedValue({
+      kind: "empty",
+      userId: "u1",
+      board: { onKanbanOrg: false, projectWritable: false },
+    });
+    collectWorkstreamIssues.mockResolvedValue([]);
     const res = await getListTool().handler();
     expect(res.isError).toBeUndefined();
     const parsed = JSON.parse(res.content[0].text) as { issues: unknown[] };
     expect(parsed.issues).toEqual([]);
   });
 
-  it("returns isError when the accessor throws (GitHub failure, not empty)", async () => {
-    getWorkstreamIssues.mockRejectedValue(new Error("GitHub API 502"));
+  it("returns isError when the collector throws (GitHub failure, not empty)", async () => {
+    resolveBoardReadContext.mockResolvedValue(OK_CTX);
+    collectWorkstreamIssues.mockRejectedValue(new Error("GitHub API 502"));
     const res = await getListTool().handler();
     expect(res.isError).toBe(true);
     const parsed = JSON.parse(res.content[0].text) as { error: string };
@@ -103,7 +133,7 @@ describe("buildWorkstreamTools", () => {
 
   it("surfaces a degraded read as isError, NOT a misleading empty board (AC6)", async () => {
     const { WorkstreamDegradedError } = await import("@/lib/workstream");
-    getWorkstreamIssues.mockRejectedValue(
+    resolveBoardReadContext.mockRejectedValue(
       new WorkstreamDegradedError("workstream read degraded"),
     );
     const res = await getListTool().handler();

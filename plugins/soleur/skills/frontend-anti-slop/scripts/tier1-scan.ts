@@ -28,7 +28,8 @@
  *       originating rule is `category === "brand" && severity === "high"`).
  *   See `computeExitCode`. Non-brand and brand-below-high findings remain advisory.
  *
- * Per-file rule disable: `<!-- anti-slop:disable RULE_ID reason="..." -->`.
+ * Per-file rule disable: `anti-slop:disable RULE_ID reason="..."` — matched as
+ * a literal substring, so any comment form works (JSX, HTML, CSS block, line).
  */
 
 import {
@@ -342,7 +343,7 @@ function listFilesRecursive(dir: string): string[] {
 
 function disabledRulesInFile(content: string): Set<string> {
   const out = new Set<string>();
-  const re = /<!--\s*anti-slop:disable\s+([A-Z][A-Z0-9-]*)/g;
+  const re = /anti-slop:disable\s+([A-Z][A-Z0-9-]*)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) out.add(m[1]);
   return out;

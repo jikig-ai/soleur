@@ -44,6 +44,7 @@ Ex-colleague from a telco/BSS company. Their team is evaluating AI-driven develo
 ## Insights for Content Strategy
 
 This conversation validates the core thesis of the "Three Eras" blog post:
+
 - Enterprise engineering teams are hitting the ceiling with basic AI tools
 - Knowledge compounding is the specific gap they identify
 - The evaluation is happening NOW (Q1-Q2 2026) — timing is right for the blog post

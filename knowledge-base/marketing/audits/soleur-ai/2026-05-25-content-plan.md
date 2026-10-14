@@ -295,7 +295,7 @@ Each entry includes: piece, content type, target keywords, search intent, search
 - **Target keywords:** install Soleur, Claude Code plugin install
 - **Search intent:** Transactional
 - **Classification:** Searchable
-- **Outline:** Add a 2-line summary paragraph at the top (definitional, quotable: "Soleur is the Company-as-a-Service platform — 60+ AI agents and 60+ skills that install in two commands and run as your AI organization. Open source under Apache 2.0; hosted plans available."). Add 2-3 inline external citations: Apache-2.0 license link, Claude Code docs (https://code.claude.com/docs), MCP spec.
+- **Outline:** Add a 2-line summary paragraph at the top (definitional, quotable: "Soleur is the Company-as-a-Service platform — 60+ AI agents and 60+ skills that install in two commands and run as your AI organization. Open source under Apache 2.0; hosted plans available."). Add 2-3 inline external citations: Apache-2.0 license link, Claude Code docs (<https://code.claude.com/docs>), MCP spec.
 - **AEO lift:** Structure +2, Authority +2 per AEO audit estimate.
 - **Source:** AEO audit recommendation, line 52
 

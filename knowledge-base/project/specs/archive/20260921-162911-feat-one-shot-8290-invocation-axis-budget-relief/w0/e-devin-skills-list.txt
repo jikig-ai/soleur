@@ -1,0 +1,3 @@
+# devin devin 3000.10.31 (b98cc431) — project skills from probe8290 in a scratch repo
+  /flagged [user] (./.devin/skills/flagged) - This skill should be used when the probe needs the FLAGGED sentinel. Probe description FLAGGED-DESC-7731.
+  /open [user,model] (./.devin/skills/open) - This skill should be used when the probe needs the OPEN sentinel. Probe description OPEN-DESC-4419.

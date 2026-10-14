@@ -72,7 +72,7 @@ while IFS=':' read -r line rest; do
     host="${nh%%[/?#]*}"
     host="${host,,}"  # lowercase
     # Detect utm tag
-    if echo "$url" | grep -qE 'utm_(source|medium|campaign|term|content)='; then
+    if grep -qE 'utm_(source|medium|campaign|term|content)=' <<<"$url"; then
       camp="$(echo "$url" | grep -oE 'utm_campaign=[^&[:space:]]+' | head -1 | cut -d'=' -f2)"
       if is_allowlisted_host "$host"; then
         # First-party + allowlisted campaign → LOW-RISK; non-allowlisted campaign on first-party host still REVIEW
@@ -100,7 +100,7 @@ while IFS=':' read -r line rest; do
   [ -z "$line" ] && continue
   # Require the branding phrase to co-occur with a URL or markdown link/image
   # on the same line; bare prose mentions are skipped (FP suppression).
-  if ! echo "$rest" | grep -qE -- "$brand_context_re"; then
+  if ! grep -qE -- "$brand_context_re" <<<"$rest"; then
     continue
   fi
   snippet="${rest:0:200}"

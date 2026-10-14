@@ -14,25 +14,46 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-vi.mock("@/server/agent-env", () => ({
-  // `satisfies typeof …buildAgentEnv` pins the mock to the REAL signature so a
-  // 3rd-arg shape drift (e.g. a `pluginPath` rename) is a compile break here,
-  // not a silently-green AC3 tested on the wrong side of the mock seam.
-  buildAgentEnv: vi.fn(((credential, _tokens, opts) => ({
-    ANTHROPIC_API_KEY: credential.value,
-    // Mirror the real buildAgentEnv contract for the CLAUDE_PLUGIN_ROOT export
-    // so the AC3 integration pin below can assert the value survives
-    // pass-through into the final options.env (catches a downstream drop).
-    ...(opts?.pluginPath ? { CLAUDE_PLUGIN_ROOT: opts.pluginPath } : {}),
-  })) satisfies typeof import("@/server/agent-env").buildAgentEnv),
-}));
+vi.mock("@/server/agent-env", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/server/agent-env")>();
+  return {
+    // feat-open-web-egress (#9534): keep the REAL ALLOWED_SERVICE_ENV_VARS —
+    // the sandbox-config deny census derives from it at module load.
+    ...actual,
+    // `satisfies typeof …buildAgentEnv` pins the mock to the REAL signature so a
+    // 3rd-arg shape drift (e.g. a `pluginPath` rename) is a compile break here,
+    // not a silently-green AC3 tested on the wrong side of the mock seam.
+    buildAgentEnv: vi.fn(((credential, _tokens, opts) => ({
+      ANTHROPIC_API_KEY: credential.value,
+      // Mirror the real buildAgentEnv contract for the CLAUDE_PLUGIN_ROOT export
+      // so the AC3 integration pin below can assert the value survives
+      // pass-through into the final options.env (catches a downstream drop).
+      ...(opts?.pluginPath ? { CLAUDE_PLUGIN_ROOT: opts.pluginPath } : {}),
+    })) satisfies typeof import("@/server/agent-env").buildAgentEnv),
+  };
+});
 
 vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
 }));
 
+// Emit-fork sinks for the outer-wrap boot probe (#5863 T3.4) — same shape as
+// the bwrap-shim probe tests: which surface each verdict branch writes to.
+// Spread the real module so other exports (hashUserId, TtlDedupMap, …)
+// transitive consumers rely on keep working.
+const obs = vi.hoisted(() => ({ warnSilentFallback: vi.fn(), reportSilentFallback: vi.fn() }));
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  warnSilentFallback: obs.warnSilentFallback,
+  reportSilentFallback: obs.reportSilentFallback,
+}));
+const sentry = vi.hoisted(() => ({ captureMessage: vi.fn(), captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => sentry);
+
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
 import { buildAgentEnv } from "@/server/agent-env";
+import { AGENT_AUTH_ENV_VARS } from "@/server/agent-auth-env-vars";
 import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
 const WORKSPACE = "/tmp/test-workspace";
@@ -53,7 +74,7 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
     const opts = buildAgentQueryOptions(minArgs);
 
     expect(opts.cwd).toBe(WORKSPACE);
-    expect(opts.model).toBe("claude-sonnet-5");
+    expect(opts.model).toBe("claude-sonnet-5-5");
     expect(opts.permissionMode).toBe("default");
     expect(opts.settingSources).toEqual([]);
     expect(opts.includePartialMessages).toBe(true);
@@ -69,6 +90,52 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
     expect(opts.hooks!.PreToolUse![0].matcher).toContain("Bash");
     expect(opts.systemPrompt).toBe("you are a router");
     expect(opts.canUseTool).toBe(minArgs.canUseTool);
+  });
+});
+
+// W1 (#9601, ADR-272): the credential deny is only real if the sandbox object
+// the REAL factories hand to `query()` carries it. `agent-sandbox-credential-deny`
+// pins `buildAgentSandboxConfig`; this pins the wire from that builder to the
+// consumer. It drives EVERY combination of the inputs production varies (the cc
+// dispatch passes ghToken + askpass, connected services add serviceTokens, the
+// support persona is read-only, some callers add disallowed tools): a branch that
+// drops the deny for one shape passes any single hand-picked case.
+describe("buildAgentQueryOptions — Anthropic credential deny reaches opts.sandbox (W1)", () => {
+  const TOGGLES: [string, Record<string, unknown>][] = [
+    ["ghToken", { ghToken: "ghs_install_tok" }],
+    ["askpass", { gitAskpassScriptPath: "/tmp/test-workspace/.askpass-xyz.sh" }],
+    ["serviceTokens", { serviceTokens: { PLAUSIBLE_API_KEY: "svc-token" } }],
+    ["extraDisallowedTools", { extraDisallowedTools: ["mcp__example__tool"] }],
+  ];
+  const MODES = ["command_center", "support"] as const;
+
+  const cases: [string, Record<string, unknown>][] = [];
+  for (const mode of MODES) {
+    for (let mask = 0; mask < 1 << TOGGLES.length; mask += 1) {
+      const picked = TOGGLES.filter((_, i) => mask & (1 << i));
+      cases.push([
+        `${mode} + [${picked.map(([n]) => n).join(", ") || "nothing"}]`,
+        { mode: resolveWorkspaceMode(mode), ...Object.assign({}, ...picked.map(([, v]) => v)) },
+      ]);
+    }
+  }
+
+  it("covers every combination (the instrument is not empty)", () => {
+    expect(cases).toHaveLength(MODES.length * (1 << TOGGLES.length));
+  });
+
+  it.each(cases)("%s", (_label, extra) => {
+    vi.mocked(buildAgentEnv).mockClear();
+    const opts = buildAgentQueryOptions({ ...minArgs, ...extra });
+    const entries = (opts.sandbox as { credentials?: { envVars: { name: string; mode: string }[] } })
+      .credentials?.envVars;
+    expect(entries).toBeDefined();
+    expect((entries ?? []).map((e) => e.name).sort()).toEqual([...AGENT_AUTH_ENV_VARS].sort());
+    for (const e of entries ?? []) expect(e.mode).toBe("deny");
+    // The factory hands the CLI exactly what buildAgentEnv built: it adds no
+    // key (an auth variable set from the credential here would bypass the
+    // derived-set test, which reads buildAgentEnv's return).
+    expect(opts.env).toEqual(vi.mocked(buildAgentEnv).mock.results.at(-1)?.value);
   });
 });
 
@@ -175,7 +242,7 @@ describe("buildAgentQueryOptions — per-call overrides (T2/T3)", () => {
     expect(opts.resume).toBeUndefined();
   });
 
-  it("threads model override (cc path uses claude-sonnet-5 too — same default)", () => {
+  it("threads model override (cc path uses claude-sonnet-5-5 too — same default)", () => {
     const opts = buildAgentQueryOptions({
       ...minArgs,
       model: "claude-opus-4-7",
@@ -279,8 +346,16 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
   });
 });
 
+// Expected signed-URL account fleet, generated locally (NOT imported from the
+// source const) so a typo in the source list cannot self-verify: sa0..sa99
+// minus sa22 (NXDOMAIN — see the docblock on GITHUB_ACTIONS_LOG_ACCOUNTS).
+const EXPECTED_SA_ACCOUNTS = Array.from(
+  { length: 100 },
+  (_, i) => `productionresultssa${i}.blob.core.windows.net`,
+).filter((h) => h !== "productionresultssa22.blob.core.windows.net");
+
 describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 follow-up)", () => {
-  it("truthy ghToken → sandbox allowlist carries exactly the two GitHub hosts", () => {
+  it("truthy ghToken → sandbox allowlist carries the GitHub hosts + Actions blob/npm downloads", () => {
     const opts = buildAgentQueryOptions({
       ...minArgs,
       ghToken: "ghs_install_tok",
@@ -290,6 +365,8 @@ describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 f
     expect(opts.sandbox?.network?.allowedDomains).toEqual([
       "github.com",
       "api.github.com",
+      "registry.npmjs.org",
+      ...EXPECTED_SA_ACCOUNTS,
     ]);
   });
 
@@ -387,7 +464,7 @@ describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {
       JSON.stringify(
         {
           cwd: WORKSPACE,
-          model: "claude-sonnet-5",
+          model: "claude-sonnet-5-5",
           permissionMode: "default",
           settingSources: [],
           includePartialMessages: true,
@@ -424,5 +501,114 @@ describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {
     expect(stableShape(legacy as unknown as Record<string, unknown>)).toBe(
       stableShape(cc as unknown as Record<string, unknown>),
     );
+  });
+});
+
+// --- outer-wrap interpose boot probe (#5863 T3.4) -----------------------------
+// The rollout flag dark-launches the wrap; the probe asserts that a flag-on
+// build actually installs `spawnClaudeCodeProcess` — a flag-on-but-unwired
+// build would silently run the CLI unwrapped (file-tool tier exposed).
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  probeOuterWrapInterpose,
+} from "@/server/agent-runner-query-options";
+
+describe("probeOuterWrapInterpose — interpose wiring under the rollout flag", () => {
+  it("flag off → ok, not installed (legal dark-launch posture)", () => {
+    const p = probeOuterWrapInterpose({ AGENT_OUTER_WRAP: "0" });
+    expect(p).toMatchObject({ flagOn: false, installed: false, ok: true });
+  });
+
+  it("flag on → real build installs spawnClaudeCodeProcess", () => {
+    const ws = mkdtempSync(join(tmpdir(), "aow-probe-ws-"));
+    const plugin = mkdtempSync(join(tmpdir(), "aow-probe-plugin-"));
+    const p = probeOuterWrapInterpose(
+      { AGENT_OUTER_WRAP: "1" },
+      { pluginPath: plugin, makeWorkspace: () => ws },
+    );
+    expect(p).toMatchObject({ flagOn: true, installed: true, ok: true });
+  });
+
+  it("flag on + cohort allowlist → probes with an allowlisted workspace id", () => {
+    const ws = mkdtempSync(join(tmpdir(), "aow-probe-ws-"));
+    const plugin = mkdtempSync(join(tmpdir(), "aow-probe-plugin-"));
+    const p = probeOuterWrapInterpose(
+      { AGENT_OUTER_WRAP: "1", AGENT_OUTER_WRAP_WORKSPACES: "ws-cohort-1" },
+      { pluginPath: plugin, makeWorkspace: () => ws },
+    );
+    expect(p).toMatchObject({ flagOn: true, installed: true, ok: true });
+  });
+
+  it("flag on + interpose missing from build output → not ok", () => {
+    const p = probeOuterWrapInterpose(
+      { AGENT_OUTER_WRAP: "1" },
+      { buildOptions: (() => ({})) as never },
+    );
+    expect(p).toMatchObject({ flagOn: true, installed: false, ok: false });
+  });
+
+  it("flag on + build throw → not ok with the error carried", () => {
+    const p = probeOuterWrapInterpose(
+      { AGENT_OUTER_WRAP: "1" },
+      {
+        buildOptions: (() => {
+          throw new Error("argv build boom");
+        }) as never,
+      },
+    );
+    expect(p).toMatchObject({ flagOn: true, installed: false, ok: false });
+    expect(p.error).toContain("argv build boom");
+  });
+});
+
+describe("buildAgentQueryOptions — outer-wrap flag-off pin (#5863)", () => {
+  it("flag OFF → spawnClaudeCodeProcess is ABSENT (an always-install mutation must red)", () => {
+    const env = process.env;
+    const prev = env.AGENT_OUTER_WRAP;
+    const prevAllow = env.AGENT_OUTER_WRAP_WORKSPACES;
+    try {
+      delete env.AGENT_OUTER_WRAP;
+      delete env.AGENT_OUTER_WRAP_WORKSPACES;
+      const opts = buildAgentQueryOptions({
+        ...minArgs,
+        workspacePath: mkdtempSync(join(tmpdir(), "aow-flagoff-ws-")),
+      });
+      expect("spawnClaudeCodeProcess" in opts).toBe(false);
+    } finally {
+      if (prev === undefined) delete env.AGENT_OUTER_WRAP;
+      else env.AGENT_OUTER_WRAP = prev;
+      if (prevAllow === undefined) delete env.AGENT_OUTER_WRAP_WORKSPACES;
+      else env.AGENT_OUTER_WRAP_WORKSPACES = prevAllow;
+    }
+  });
+});
+
+describe("verifyOuterWrapInterpose — emit fork", () => {
+  it("flag-on + installed → info emit (log + Sentry info), no warn", async () => {
+    vi.stubEnv("AGENT_OUTER_WRAP", "1");
+    vi.stubEnv("SOLEUR_PLUGIN_PATH", mkdtempSync(join(tmpdir(), "aow-probe-plugin-")));
+    const { verifyOuterWrapInterpose: run } = await import(
+      "@/server/agent-runner-query-options"
+    );
+    run();
+    expect(obs.warnSilentFallback).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it("flag-on + unwired → warnSilentFallback with the feature/op tags", async () => {
+    vi.stubEnv("AGENT_OUTER_WRAP", "1");
+    vi.stubEnv("SOLEUR_PLUGIN_PATH", "/nonexistent-plugin-root");
+    const { verifyOuterWrapInterpose: run } = await import(
+      "@/server/agent-runner-query-options"
+    );
+    run();
+    expect(obs.warnSilentFallback).toHaveBeenCalledTimes(1);
+    expect(obs.warnSilentFallback.mock.calls[0][1]).toMatchObject({
+      feature: "agent-sandbox",
+      op: "outer-wrap-selfprobe",
+    });
+    vi.unstubAllEnvs();
   });
 });

@@ -72,9 +72,13 @@ echo "--- MU1 bubblewrap UID audit --- container=$CONTAINER"
 # matching architectural change is a regression signal.
 # -----------------------------------------------------------------------------
 
+# No --die-with-parent here: under `docker exec` the process is a child of the short-lived runc
+# exec parent, and the PR_SET_PDEATHSIG(SIGKILL) that flag arms races that parent's exit, so a
+# healthy sandbox is SIGKILLed at startup and reported as a false "CLONE_NEWUSER rejected" (#8016;
+# knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md).
 BWRAP_UID_OUTPUT=$(
   docker exec "$CONTAINER" bwrap \
-    --new-session --die-with-parent \
+    --new-session \
     --unshare-user --unshare-pid \
     --dev /dev --bind / / \
     -- id -u 2>&1
@@ -110,7 +114,7 @@ SECURITY_OPT_ENTRIES=$(
     || true
 )
 
-if printf '%s\n' "$SECURITY_OPT_ENTRIES" | grep -qF "$EXPECTED_APPARMOR"; then
+if printf '%s\n' "$SECURITY_OPT_ENTRIES" | grep -cF "$EXPECTED_APPARMOR" >/dev/null; then
   emit_pass "HostConfig.SecurityOpt includes $EXPECTED_APPARMOR"
 else
   emit_fail "HostConfig.SecurityOpt missing $EXPECTED_APPARMOR (got: $SECURITY_OPT_ENTRIES)"

@@ -1,0 +1,270 @@
+== lint-guard-contract
+lint-guard-contract: scanned 1 plan file(s), 1 with a Guard Contract, 3 guard entries
+RC=0
+== lint-credential-path-literals (bare)
+knowledge-base/engineering/architecture/decisions/ADR-087-cosign-deploy-verify-host-net-ephemeral-verifier-over-private-ghcr.md:99: advisory (remote-host prefix, not gating) `/root/.docker/config.json`.
+knowledge-base/project/learnings/workflow-patterns/2026-07-17-buy-the-datum-then-read-it-with-the-right-telemetry-key.md:34: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-04-fix-cosign-verify-private-ghcr-auth-offline-plan.md:62: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-04-fix-cosign-verify-private-ghcr-auth-offline-plan.md:83: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-04-fix-cosign-verify-private-ghcr-auth-offline-plan.md:104: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-04-fix-cosign-verify-private-ghcr-auth-offline-plan.md:114: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-04-fix-cosign-verify-private-ghcr-auth-offline-plan.md:118: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-04-fix-cosign-verify-private-ghcr-auth-offline-plan.md:144: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-04-fix-cosign-verify-private-ghcr-auth-offline-plan.md:200: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-16-fix-login-gate-unclassified-dead-end-plan.md:101: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-16-fix-login-gate-unclassified-dead-end-plan.md:1067: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-17-chore-credential-persist-home-guard-plan.md:22: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-17-fix-web-platform-docker-login-erofs-cred-path-plan.md:15: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-17-fix-web-platform-docker-login-erofs-cred-path-plan.md:40: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+knowledge-base/project/plans/2026-07-17-fix-web-platform-docker-login-erofs-cred-path-plan.md:63: advisory (remote-host prefix, not gating) `/root/.docker/config.json`.
+knowledge-base/project/plans/2026-07-17-fix-web-platform-docker-login-erofs-cred-path-plan.md:161: advisory (remote-host prefix, not gating) `/root/.docker/config.json`.
+knowledge-base/project/plans/2026-07-17-fix-web-platform-docker-login-erofs-cred-path-plan.md:338: advisory (remote-host prefix, not gating) `/root/.docker/config.json`.
+knowledge-base/project/specs/feat-one-shot-6005-cosign-verify-ghcr-auth-offline/tasks.md:19: advisory (remote-host prefix, not gating) `/home/deploy/.docker/config.json`.
+OK: no resolvable credential-file path literals in 8326 scanned file(s) (18 advisory remote-host mention(s)).
+RC=0
+== lint-infra-no-human-steps --changed
+OK: no human-run infra steps in 7 scanned file(s)
+RC=0
+== guard-vacuity-floor
+=== derived population ===
+  repo-wide floor-bearing : 174
+  covered (mutation-arm)  : 127
+  deferred (declared)     : 47
+  unclassified (must be 0): 0
+  floor fires             : 112
+  floor does NOT fire     : 0
+  mutant not constructible: 15
+  -- deferred scope (#7580) --
+  deferred floor fires      : 32
+  deferred does NOT fire    : 0
+  deferred not constructible: 15
+
+[ok] every covered floor survives a neutered assertion machinery (112 suites)
+[ok] mutant-construction failures within the ratchet (15 <= 15)
+[ok] every DEFERRED floor survives a neutered assertion machinery (32 firing, 15 unconstructible)
+[ok] the deferred classification is exhaustive (32 + 0 + 15 == 47)
+[ok] deferred mutant-construction failures: 15 (<= 18)
+[ok] every PROMOTED_FILES entry is still floor-bearing, covered, and scores FIRES — promotion cannot decay into a silent exemption
+[ok] firing-floor population at or above the ratchet (112 >= 38)
+[ok] closure holds: every floor-bearing suite is covered (127) or declared-deferred (47), total 174
+[ok] no suite is counted in both the covered scope and the deferral ledger
+[ok] the repo-wide sweep reaches outside the covered directories (47 declared-deferred)
+[ok] deferral ledger within its shrink-only ratchet (47 <= 47)
+[ok] negative control: the pre-fix fail()-routed floor DOES exit 0 when neutered (so the arms above discriminate)
+[ok] construction control: an unbound threshold is reported as a construction failure, never as a fired floor
+[ok] permissiveness bound: a non-zero exit with no floor sentinel is NOT scored FIRES (got CONSTRUCTION)
+[ok] synthesized control fixture is present
+[ok] synthesized control fixture runs green unmodified (the guard accepts a compliant shape it did not author)
+[ok] synthesized control sits OUTSIDE the derived population (it is a control, not a subject)
+[ok] synthesized control's floor FIRES under neutering despite third-party counter names (tally/good/bad_n)
+[ok] suites carrying an accounting-conservation check: 49 (>= 33)
+[ok] every conservation check reports directly, never through the suite's own verdict helpers
+[ok] no case-counter increment sits inside a command substitution (a subshell would discard it)
+[ok] no CASE counter is incremented inside a verdict helper (the identity stays non-tautological)
+[ok] conservation EXECUTES: a neutered verdict helper is caught by the accounting identity (exit 1)
+Total: 23 passed, 0 failed (23 assertions)
+RC=0
+== lint-legal-registers
+[ok] (a) no standalone unresolved marker in 5 register file(s)
+[ok] (b) breach-register index is decidable: 6 determination row(s)
+[ok] (b) all 6 canonical-source pointer(s) resolve on disk
+[ok] (b) the out-of-producer-scope determination row is present
+[ok] (d) the 16 waiver(s) agree between NOT_TRANSCRIBED and the register's §Excluded records
+[ok] (c) the indexed and waived sets are disjoint
+[ok] (c) all 21 determination-shaped audits/ file(s) are indexed or waived
+
+[ok] (f) NOT YET EXERCISED: the CCLA register holds 0 counterparty rows, so its Record-ref and Instrument-hash shape checks had nothing to examine. This is not a verified agreement.
+[ok] (f) CCLA register Record refs are unique
+[ok] (f) every CCLA register Instrument hash is 64 lowercase hex (0 row(s))
+[ok] (f) NOT YET EXERCISED: the coverage map holds 0 organisations, so the register/roster join has no rows to compare (register rows: 0). This is not a verified agreement.
+lint-legal-registers: 11 assertion(s), 0 failed (registers=5 rows=6 produced=21 waived=16 waiver-parity=ok)
+=== lint-legal-registers: all assertions passed ===
+RC=0
+== redact-a11y-snapshot suite
+ok   - instrument self-test: ok() increments
+FAIL - instrument self-test: bad() increments (EXPECTED, not a real failure)
+FAIL - helper control: assert_redacted must REJECT a leak (EXPECTED) — sentinel survived in stdout
+FAIL - helper control: assert_preserved must REJECT a loss (EXPECTED) — benign value was redacted (over-aggressive filter)
+ok   - agent-browser -i shape: textbox "Token"
+ok   - playwright-mcp shape: textbox "Enter your password"
+ok   - credential name: "API key"
+ok   - credential name: "Client secret"
+ok   - credential name: "Passphrase"
+ok   - indented node is still redacted
+ok   - must-PASS: "Email address" value survives
+ok   - must-PASS: "Search" value survives
+ok   - must-PASS: "Username" is not a secret
+ok   - must-PASS: heading text is untouched
+ok   - must-PASS: non-credential node name containing "key" as a substring
+ok   - nested StaticText duplicate is redacted too
+ok   - --json shape: data.snapshot is redacted
+ok   - multi-attribute bracket parses
+ok   - multi-bracket: [active] before [ref]
+ok   - multi-bracket: [disabled] (the credential-panel shape)
+ok   - plural: "API Keys"
+ok   - plural: "Tokens"
+ok   - camelCase: "apiKey"
+ok   - one-time-code family: "Verification code"
+ok   - carrier: "Connection string"
+ok   - diff addition line (+ bullet)
+ok   - stderr line ahead of --json still redacts
+ok   - unnamed text-input carrying a value
+ok   - nested credential node: value redacted, name preserved
+ok   - option LABELS survive under a redacted parent
+ok   - must-PASS: an unnamed STRUCTURAL node is untouched
+ok   - role: combobox
+ok   - role: spinbutton
+ok   - role: textarea
+ok   - name: "Bearer"
+ok   - name: "OTP"
+ok   - name: "Mnemonic"
+ok   - name: "Seed phrase"
+ok   - name: "Credential"
+ok   - JSON arm redacts the snapshot and preserves the rest of the envelope
+ok   - JSON: snapshot nested in an array
+ok   - non-UTF-8 input: exit 2, stdout empty
+ok   - truncated envelope before the snapshot key: exit 2, stdout empty
+ok   - over-cap input: exit 2, stdout empty, stderr non-empty and sentinel-free
+ok   - truncated JSON: exit 2, stdout empty, stderr non-empty
+ok   - empty input is a clean no-op (exit 0, empty stdout)
+ok   - env-var casing: SENTRY_AUTH_TOKEN
+ok   - env-var casing: API_KEY
+ok   - env-var casing: DB_PASSWORD
+ok   - 2fa family: "Authenticator code"
+ok   - 2fa family: "TOTP"
+ok   - 2fa family: "2FA code" (acronym must not be camel-split)
+ok   - 2fa family: "Two-factor code"
+ok   - 2fa family: "MFA code"
+ok   - must-PASS: "Session name" is not a credential
+ok   - must-PASS: "Email signature" is not a credential
+ok   - must-PASS: "Cookie name" is not a credential
+ok   - must-PASS: "Search sessions" is not a credential
+ok   - whole-name credential: "Session"
+ok   - whole-name credential: "Cookie"
+ok   - multi-line textarea value does not escape suppression
+ok   - diff shape: "+- textbox" (no space after the marker)
+ok   - diff shape: "+  - textbox" (marker, then indent)
+ok   - diff shape: ANSI SGR wrapping the whole line
+ok   - json shape: tree under data.diff, not data.snapshot
+ok   - provider contract: the four consumer names are exported, __all__ pins them, alias intact
+
+62 passed, 0 failed, 62 cases
+RC=0
+== lint-credential-path-literals suite
+PASS: P1 home-relative Doppler config path FAILS
+PASS: P2 bare Doppler config filename FAILS
+PASS: P3 ssh private key path FAILS
+PASS: P4 $HOME/.netrc path FAILS
+PASS: P5 ~/.aws/credentials path FAILS
+PASS: P6 hard-fail report names the neutralization recipe
+PASS: P7 ${HOME} brace-form ssh key FAILS
+PASS: N1 directory-only ~/.doppler/ PASSES
+PASS: N2 descriptive readable-files list PASSES
+PASS: N3 ~/.ssh/ dir + prose PASSES
+PASS: N4 @<doppler-config> placeholder PASSES
+PASS: B1 ~/.doppler/ dir-only no match
+PASS: B2 id_ed25519.pub public key no match
+PASS: B3 suffixed .bak embedded name no match
+PASS: B4 bare generic credentials filename no match
+PASS: A1 /home/deploy/ docker config is advisory (exit 0, reported)
+PASS: A2 /root/ aws credentials is advisory (exit 0)
+PASS: C1 --changed unresolvable base → exit 2
+PASS: C2 --changed grandfathers unchanged, flags changed
+PASS: C3 archive/ path excluded from full-scan
+PASS: S1 unrouted agent-browser snapshot in a login flow fails
+PASS: S2 unrouted mcp__playwright__browser_snapshot in a login flow fails
+PASS: S3 agents/ arm is wired (synthesized fixture)
+PASS: S4 look-alike redactor name does not satisfy the guard
+PASS: S5 unrouted snapshot fails even with NO auth context (matches the hook)
+PASS: S6 must-PASS: screenshot on a password page is clean
+PASS: S7 must-PASS: routed through the redactor is permitted
+PASS: S8 must-PASS: a knowledge-base record is out of family-2 scope
+PASS: S9 both offending files are cited, not just the first
+PASS: S10 empty full-scan population exits 2 (not a vacuous clean 0)
+PASS: S11 full-scan (RELATIVE paths, the mode CI runs) still enforces the rule
+PASS: S12 full-scan over a COMPLIANT in-scope tree is clean
+PASS: S13 a knowledge-base RECORD under a real kb path is out of scope
+PASS: S14 auth vocabulary: authentication/secret/passphrase/token trigger S2
+PASS: S15 Guard 3: the OLD marker alone FAILS S2 and the report quotes the canonical sentence
+PASS: S16 Guard 3: the NEW marker wrapped across line breaks PASSES
+PASS: S17 Guard 3: a look-alike claim without the proxy filename does not satisfy S2
+PASS: S18 Guard 3: a second non-compliant file after a compliant first FAILS (per-file)
+PASS: S19 FR17: no shipped skill file carries the OLD MCP-gap marker (whitespace-tolerant)
+
+PASS=39 FAIL=0 TOTAL=39
+RC=0
+== c4-count-parity
+=== C4 embedded-count parity (model.c4 prose vs live derivations) ===
+
+  PASS: model.c4 exists
+  PASS: cron-monitors.tf exists
+  PASS: C1 github -> sentry — check-ins from 12 workflows (derived 12)
+  PASS: C2 github -> sentry — 6 GHA-`schedule:`-fired (derived 6)
+  PASS: C3 github -> sentry — and 6 `workflow_dispatch`-only (derived 6)
+  PASS: C4 github -> sentry — Of 57 cron monitors (derived 57)
+  PASS: C5 github -> sentry — 13 check in from here (derived 13)
+  PASS: C6 github -> sentry — and 44 from webapp (derived 44)
+  PASS: C7 github -> resend — one of thirteen Resend emitters under .github/ (derived 13)
+  PASS: C1 (12 files) and C5 (13 slugs) are derived independently, slugs >= files
+=== Results ===
+Passed: 10
+Failed: 0
+
+ALL TESTS PASSED
+RC=0
+== c4-from-components (sh)
+=== C4 producer end-to-end ===
+
+  PASS: producer wrapper exists
+  PASS: AC2 green arm: declared deps render as ok
+  PASS: AC2 green arm: all three edges survive to the model
+  PASS: AC2 red arm: prose-only corpus reports DEGRADED
+  PASS: AC2 red arm: marker carries relationships=0
+  PASS: AC2 red arm: degraded is NOT an empty model — elements still rendered
+  PASS: emits generated-components.c4
+  PASS: emits model.likec4.json (viewer returns MODEL_NOT_BUILT without it)
+  PASS: emits the c4-model.md view page
+  PASS: view page carries a likec4-view fence (the viewer renders nothing without one)
+  PASS: AC3: hand-edited .c4 survives the run byte-for-byte
+  PASS: AC3: the skip is REPORTED in the marker, not silent
+  PASS: two consecutive runs produce a byte-identical .c4
+  PASS: deprecated component is filtered out of the generated model
+=== Results ===
+Passed: 14
+Failed: 0
+
+ALL TESTS PASSED
+RC=0
+== c4-model-freshness
+=== C4 model freshness (model.likec4.json vs .c4 sources) ===
+
+  PASS: regenerate-c4-model.sh exists
+  PASS: committed model.likec4.json exists
+  PASS: committed model.likec4.json is in sync with the .c4 sources
+=== Results ===
+Passed: 3
+Failed: 0
+
+ALL TESTS PASSED
+RC=0
+== c4-from-components (bun)
+bun test v1.3.11 (af24e281)
+
+ 43 pass
+ 0 fail
+ 95 expect() calls
+Ran 43 tests across 1 file. [133.00ms]
+RC=0
+== vitest plugin-root-anchoring + cron-ux-audit
+npm notice run soleur-web-platform@0.0.1 npx
+npm notice run 'vitest' run test/plugin-root-anchoring.test.ts test/server/inngest/cron-ux-audit.test.ts
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/apps/web-platform[39m
+
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m55 passed[39m[22m[90m (55)[39m
+[2m   Start at [22m 17:15:06
+[2m   Duration [22m 3.03s[2m (transform 847ms, setup 85ms, import 3.49s, tests 985ms, environment 1ms)[22m
+
+RC=0

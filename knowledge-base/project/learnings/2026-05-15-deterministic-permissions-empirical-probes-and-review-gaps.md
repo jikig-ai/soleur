@@ -6,7 +6,7 @@ tags: [best-practices, claude-code-hooks, 3789, empirical-probe + multi-agent-po
 module: claude-code-hooks
 brand_survival_threshold: single-user incident
 issue: 3789
-plan: knowledge-base/project/plans/2026-05-15-feat-deterministic-permissions-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-deterministic-permissions-plan.md
 pr: 3787
 ---
 
@@ -98,9 +98,9 @@ All 8 findings fit in fix-inline (≤30 lines, ≤2 files each). Zero scope-out 
 
 ## Related
 
-- Plan: `knowledge-base/project/plans/2026-05-15-feat-deterministic-permissions-plan.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-15-cc-stack-tuning-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-cc-stack-tuning/spec.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-deterministic-permissions-plan.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-cc-stack-tuning-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-cc-stack-tuning/spec.md`
 - Phase 0 artifacts:
   - `.claude/hooks/PERMISSION-DENIED-PAYLOAD-SHAPE.md` — F1 collapse evidence
   - `.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` — DEFER_VALUE + hookEventName findings
@@ -110,6 +110,33 @@ All 8 findings fit in fix-inline (≤30 lines, ≤2 files each). Zero scope-out 
 - Multi-agent review catches bugs tests miss: `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md`
 - F1 roadmap deferral tracker: F1 not separately filed; collapse is recorded in PERMISSION-DENIED-PAYLOAD-SHAPE.md + the plan's AC + tasks.md strikethroughs.
 - Followup #3800: enforce-flip PR (single-line `SOLEUR_DEFER_DRYRUN` default change after 2-week dry-run telemetry).
+
+## Correction — 2026-08-02 (issue #7164)
+
+The `security-sentinel` finding recorded above — *"confirmed jq @sh-escape neutralizes stdin command
+injection"* — **was wrong**, and is left in place above deliberately as the point-in-time record of
+what the review concluded. This section is the correction, not a rewrite.
+
+`@sh` neutralizes injection only when the field is a **string**. `jq @sh` shell-quotes each element
+of an **array** as a separate word, so a `tool_input.command` of `["x","touch","/tmp/PWNED"]` renders
+as `COMMAND='x' 'touch' '/tmp/PWNED'` — an assignment followed by a **command**, which `eval` then
+executed before the permission prompt with the operator's privileges. Reproduced against all ten
+hooks carrying the idiom.
+
+Two things are worth keeping from how this was missed. The probe that produced the finding tested
+adversarial **string** values (quotes, newlines, metacharacters, `$( )`) and never a non-string
+**type** — so it confirmed a real property and the conclusion drawn from it was broader than the
+evidence. And the same type confusion was independently a **guard evasion** that survived the `eval`:
+eight sibling hooks read the same field via `$( )`, never call `eval`, and were defeated by the same
+payload because an array does not match any anchored guard regex. Fixing only the code execution
+would have closed #7164 while leaving most of the gates bypassable.
+
+The boundary is now written down as [ADR-156](../../engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md)
+(hook stdin is model-controlled; a hook must not depend on an invariant it cannot verify) with the
+response posture in [ADR-157](../../engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md).
+Extraction now runs through `.claude/hooks/lib/hook-input.sh`, which performs **no shell evaluation
+of hook input** and asserts each contracted field's type. That is the accurate claim; "input is now
+safe" is not, and should not be written.
 
 ## Tags
 

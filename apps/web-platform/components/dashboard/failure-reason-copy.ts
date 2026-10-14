@@ -3,33 +3,18 @@
 //
 // Mirrors the `DENY_REASON_COPY` pattern in `today-card.tsx`. Source-of-
 // truth for the per-reason strings rendered by the Today card state
-// matrix (AC11). Adding a new failure_reason: extend the
-// `FailureReason` union, add a row to `FAILURE_REASON_COPY`, extend the
-// exhaustive test in `failure-reason-copy.test.ts`. The exhaustive type-
-// level check on `FAILURE_REASON_COPY: Record<FailureReason, ...>`
-// catches a missing row at `tsc` time.
+// matrix (AC11). Adding a new failure_reason: extend the `FailureReason`
+// union in `lib/failure-reason.ts` and add its `PAGES_OPERATOR` row there
+// (when `true`, also the `in` list of sentry_alert.spawn_agent_dead_letter —
+// #8719), then add a row to `FAILURE_REASON_COPY` here and extend the
+// exhaustive test in `failure-reason-copy.test.ts`. Copy that promises the
+// CTO "has been notified" requires `PAGES_OPERATOR` true (contract test).
+// The exhaustive type-level check on `FAILURE_REASON_COPY:
+// Record<FailureReason, ...>` catches a missing row at `tsc` time.
 
-export type FailureReason =
-  // PR-A failure reasons (inherited from agent-on-spawn-requested.ts).
-  | "github_installation_unauthorized"
-  | "github_target_not_found"
-  | "github_api_error"
-  | "malformed_source_ref"
-  | "acknowledgment_persist_failed"
-  // PR-B failure reasons.
-  | "byok_cap_exceeded"
-  | "cost_ceiling_exceeded"
-  | "byok_lease_unavailable"
-  | "anthropic_timeout"
-  | "anthropic_rate_limited"
-  | "leader_max_turns_exceeded"
-  | "leader_response_truncated"
-  | "leader_tool_invalid"
-  | "leader_class_disabled"
-  | "cancelled_by_operator"
-  // feat-l5-runaway-guard PR-A reasons.
-  | "run_paused"
-  | "cap_check_unavailable";
+import type { FailureReason } from "@/lib/failure-reason";
+
+export type { FailureReason };
 
 export interface FailureReasonRow {
   /**
@@ -47,7 +32,10 @@ export interface FailureReasonRow {
    *     of-band (byok_cap_exceeded → raise cap; cost_ceiling_exceeded →
    *     manual review; cancelled_by_operator → user-initiated;
    *     leader_max_turns_exceeded → task refinement;
-   *     leader_tool_invalid → CTO investigates).
+   *     leader_tool_invalid → CTO investigates;
+   *     anthropic_request_rejected → the same request fails the same way;
+   *     leader_refused → the model declined the task;
+   *     leader_internal_error → CTO investigates).
    */
   retryEligible: boolean;
 }
@@ -104,6 +92,15 @@ export const FAILURE_REASON_COPY: Record<FailureReason, FailureReasonRow> = {
     copy: "Anthropic rate-limited. Try again in a minute.",
     retryEligible: false,
   },
+  anthropic_request_rejected: {
+    // A deterministic 4xx (400/404/413/422…): the request Soleur built was
+    // refused, so a retry would be refused too. Key/billing problems
+    // (401/402/403, and the 400s for an exhausted credit balance or the
+    // founder's own spend cap) map to byok_lease_unavailable instead.
+    copy:
+      "Anthropic rejected this request, so retrying won't help. CTO has been notified.",
+    retryEligible: false,
+  },
   leader_max_turns_exceeded: {
     copy: "Agent ran out of turns. Refine the task or contact CTO.",
     retryEligible: false,
@@ -113,6 +110,12 @@ export const FAILURE_REASON_COPY: Record<FailureReason, FailureReasonRow> = {
       "Model response truncated (max_tokens). Retry usually works.",
     retryEligible: true,
   },
+  leader_refused: {
+    // stop_reason=refusal: the model declined the task. Retrying the same
+    // task is refused the same way.
+    copy: "The agent declined this task. CTO has been notified.",
+    retryEligible: false,
+  },
   leader_tool_invalid: {
     copy: "Agent tried an unauthorized action. CTO has been notified.",
     retryEligible: false,
@@ -120,6 +123,12 @@ export const FAILURE_REASON_COPY: Record<FailureReason, FailureReasonRow> = {
   leader_class_disabled: {
     copy:
       "Autonomous agent for this card class is not enabled yet. CTO has been notified.",
+    retryEligible: false,
+  },
+  leader_internal_error: {
+    // #8803: the run ended with no recognised cause (a crash, a timeout, an
+    // Inngest-level cancel). Retry cannot re-fire an archived message (#8840).
+    copy: "Something went wrong on our side and this run stopped. CTO has been notified.",
     retryEligible: false,
   },
   cancelled_by_operator: {

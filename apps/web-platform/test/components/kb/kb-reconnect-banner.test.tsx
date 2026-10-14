@@ -67,6 +67,11 @@ function makeState(): UseKbLayoutStateResult {
     loading: false,
     error: null,
     hasTreeContent: true,
+    // #7186 — `treeHost: "rail"` keeps the mobile arm on the document path
+    // (KbDocShell), which is where the reconnect banner these cases assert on
+    // renders. The browse-host cell is covered in test/kb-mobile-browse.test.tsx.
+    fullWidth: false,
+    treeHost: "rail",
     contextPath: null,
     showChat: false,
     openSidebar: vi.fn(),

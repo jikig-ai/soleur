@@ -1,0 +1,24 @@
+#!/bin/sh
+# FIXTURE DATA, not scanned source (the .txt extension keeps the scan's population patterns off it).
+# A nonce-scoped ancestor walker used by plugins/soleur/scripts/run-in-pid-namespace.test.sh to prove
+# the PID namespace contains an ancestor walk WITHOUT ever running a lethal one for real.
+#
+# NEVER replace the nonce predicate with a catch-all: a catch-all walker is the incident (a mutant of
+# the match walked to the top of a desktop session and ended it). This one signals only a CONTIGUOUS
+# run of ancestors whose argv carries a 32-hex nonce the suite generated for this run, stops at pid 1
+# and at the suite's own PID, and does nothing at all when its preconditions do not hold.
+#
+# Env: WALKER_NONCE (32 hex, required), SOLEUR_TEST_SUITE_PID (numeric, required),
+#      WALKER_KILL (default kill; the suite sets echo to rehearse without signalling).
+N=${WALKER_NONCE:-}
+case "$N" in ''|*[!0-9a-f]*) exit 0 ;; esac
+[ "${#N}" -eq 32 ] || exit 0
+case "${SOLEUR_TEST_SUITE_PID:-}" in ''|*[!0-9]*) exit 0 ;; esac
+p=$PPID; target=""; hops=0
+while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$p" != "$SOLEUR_TEST_SUITE_PID" ] && [ "$hops" -lt 16 ]; do
+  if tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -cF >/dev/null -- "$N"; then target=$p; else break; fi
+  hops=$((hops + 1)); p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null)
+done
+[ -n "$target" ] || exit 0
+${WALKER_KILL:-kill} -TERM "$target"
+exit 0

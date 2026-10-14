@@ -52,16 +52,43 @@ deny() {
   exit 0
 }
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
+# and the hook dies at the call, letting the tool proceed (#7164 defect 2).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
+# The source above is fail-hard, but 12 of the 20 hooks run `set -uo pipefail`
+# WITHOUT -e. There a missing helper makes hook_parse_input return 127, `!`
+# inverts that to true, the response functions are 127 too, and the hook reaches
+# `exit 0` — a clean pass-through with no row and no prompt, which is defect 2
+# reintroduced by a broken deploy. Assert it explicitly instead of relying on -e.
+if ! declare -f hook_parse_input >/dev/null 2>&1; then
+  echo "[iac-plan-write-guard] hook-input helper missing — guards did NOT run for this call" >&2
+  exit 0
+fi
+
 payload="$(cat)"
-tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
-file_path="$(echo "$payload" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
+__HI_RAW="$payload"
+# ADR-156: hook stdin is model-controlled. A non-string field is surfaced,
+# never coerced — this hook never ran eval, but `jq -r` renders an array
+# across lines, which matches none of its guards, so the payload would have
+# slipped every gate below (#7164). ADR-157: it asks instead.
+if ! hook_parse_input "$__HI_RAW"; then
+  hook_input_report "iac-plan-write-guard"
+  hook_input_should_ask && { hook_input_emit_ask "iac-plan-write-guard"; exit 0; }
+  exit 0
+fi
+
+tool_kind="$HOOK_TOOL_KIND"
+file_path="$HOOK_FILE_PATH"
 
 # Only fire on Write/Edit/MultiEdit to plan/spec markdown.
 # MultiEdit was absent until #6992: the matcher in .claude/settings.json and
 # this case both omitted it, so ANY plan written via MultiEdit skipped the
 # guard entirely. Siblings (guardrails.sh, no-memory-write.sh,
 # kb-domain-allowlist-guard.sh) already register Write|Edit|MultiEdit|NotebookEdit.
-case "$tool_name" in
+# Kind-canonical (#8205): Devin's write/edit land here as Write/Edit.
+case "$tool_kind" in
   Write|Edit|MultiEdit) ;;
   *) allow ;;
 esac
@@ -161,7 +188,7 @@ acked() {
   # whole document, so its content is the complete post-write state: consulting
   # the pre-write file there would allow a Write that DELETES the ack while
   # adding a violation, using the very ack it is removing as the justification.
-  case "$tool_name" in
+  case "$tool_kind" in
     Edit|MultiEdit) ;;
     *) return 1 ;;
   esac

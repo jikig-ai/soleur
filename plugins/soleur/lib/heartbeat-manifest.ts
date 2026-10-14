@@ -24,6 +24,10 @@ export type Arming =
  * the arming line is deleted, i.e. prose alone would satisfy the guard built to kill prose.
  * Matching runs against a COMMENT-STRIPPED view for the same reason.
  *
+ * A `cron` row may instead name a WORKFLOW (`.github/workflows/<x>.yml`) and the `bash scripts/<x>.sh`
+ * line that runs the verifier (ADR-117 amendment 2026-10-11): `checkFeeders` then also requires a
+ * `schedule:` trigger or a `WATCHDOG_DISPATCH_TABLE` row, and that the script exists.
+ *
  * `none` is the honest declaration that nothing pings this heartbeat yet. It is not a loophole: it
  * costs a `tracking_issue`, and the guard asserts the heartbeat has no feeder by EITHER delivery
  * route this repo uses (see `feederDeliveryProbes`).
@@ -119,27 +123,36 @@ export const MANIFEST: ManifestEntry[] = [
   },
   {
     name: "workspaces_luks",
-    // #6604 — the daily /workspaces LUKS at-rest probe heartbeat. Its feeder (luks-monitor.timer)
-    // is delivered to web-1 via the CUTOVER CHANNEL (workspaces-cutover.sh, ADR-119 §(e)), NOT
-    // cloud-init boot: web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO
-    // dedicated-host-replace path (re-arming is re-running the cutover channel). Hence
-    // web-host-cron, NOT dedicated-host-boot — the replace_target requirement correctly does not
-    // fire. paused until the operator unpauses at cutover (#6210: verify a real ping first).
+    // #6604 — the daily /workspaces LUKS at-rest probe heartbeat. Two pushers feed it:
+    //   1. luks-monitor.timer on web-1, delivered and armed by terraform_data.luks_monitor_install
+    //      (workspaces-luks.tf) in the per-merge SSH apply (#8706). Until #8706 the only installer
+    //      was the cutover script's tail, which no real cutover reached, so this pusher never ran
+    //      (ADR-119 addendum 2026-09-27; ADR-117 amendment 2026-09-27).
+    //      Terraform is the PRIMARY installer. The cutover tail still installs the same files, so it
+    //      stays a redundant second installer for a future re-cut.
+    //   2. The daily workspaces-luks-verify.yml job, which ships its own copy of luks-monitor.sh.
+    // The shared beat cannot tell them apart. The runtime proof that pusher 1 runs is
+    // logtail_exploration_alert.luks_monitor_host_timer_dark (betterstack-logs-alerts.tf).
+    // web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO host-replace path:
+    // web-host-cron, NOT dedicated-host-boot, and the replace_target requirement does not fire.
     arming: "web-host-cron",
     paused: true,
     feeder: {
       kind: "timer",
       evidence: {
-        file: "apps/web-platform/infra/workspaces-cutover.sh",
+        file: "apps/web-platform/infra/workspaces-luks.tf",
         pattern: "systemctl enable --now luks-monitor.timer",
       },
     },
-    // Deferred arming: the monitor is created paused and armed only at the /workspaces LUKS cutover
-    // (#6604, #6210: verify a real ping first). Until then the live-reconcile must NOT nag on a
-    // fed-but-paused mismatch for this row — it is the ADR-117 FED-but-inert state, owned by #6604.
-    arming_pending: { tracking_issue: 6604 },
+    // No `arming_pending`: it is ARMED. This row carried `arming_pending: { tracking_issue: 6604 }`
+    // while the monitor waited for the cutover's first measured beat. The beat has pushed since
+    // 2026-08-04 (runbook workspaces-luks-cutover-6604.md, "Failure signals"), and a read-only
+    // GET /api/v2/heartbeats/478794 on 2026-09-27 (#8706) read soleur-workspaces-luks-prd
+    // `paused:false status:up`. Removal follows OBSERVED arming, not #6604 closing (the
+    // inngest_consumer precedent), so the live reconcile's `fed-but-paused` alarm is re-armed for
+    // this row: a pause from here on is a real finding. `paused: true` above is SOURCE state only.
     exempt_reason:
-      "web-host-resident feeder (luks-monitor.timer on web-1) delivered + armed by the cutover channel (workspaces-cutover.sh), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path (re-arming is re-running the cutover channel). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+      "web-host-resident feeder (luks-monitor.timer on web-1) delivered and armed by the SSH terraform_data provisioner (terraform_data.luks_monitor_install, #8706) as the PRIMARY installer; the cutover script's tail still installs the same files as a redundant second installer for a future re-cut, and web-1 cloud-init boot is NOT a path — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path. The second pusher is the workspaces-luks-verify.yml job; the runtime proof that the host timer fires is logtail_exploration_alert.luks_monitor_host_timer_dark. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
     name: "git_data_prd",
@@ -201,6 +214,33 @@ export const MANIFEST: ManifestEntry[] = [
       "web-host-resident feeder (web-private-nic-guard.timer on web-1) delivered by the SSH terraform_data provisioner (terraform_data.private_nic_guard_install), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable. No <host>-host-replace path, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
+    name: "inngest_consumer",
+    // #7228 — the inngest CONSUMER-perspective serviceability beat. web-host-cron, not
+    // dedicated-host-boot, and that is the entire point of the design: its feeder runs on web-1
+    // and reads 10.0.1.40:8288 over the private net, so it detects a dark dedicated host WITHOUT
+    // depending on that host's bootstrap having run and WITHOUT a host replace. web-1 is
+    // cx33-unrebuildable and never re-runs cloud-init, so delivery is the SSH terraform_data
+    // provisioner and ADR-103's replace_target requirement correctly does not fire (mirrors
+    // web_zot_consumer / git_data_prd / workspaces_luks).
+    arming: "web-host-cron",
+    paused: true,
+    feeder: {
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/server.tf",
+        pattern: "systemctl enable --now inngest-consumer-probe.timer",
+      },
+    },
+    // No `arming_pending`: it is ARMED. This row carried `arming_pending: { tracking_issue: 7462 }`
+    // while the dedicated inngest host had not bound :8288 (the probe correctly suppressed every
+    // beat), and its removal was to follow OBSERVED arming, not #7462 closing. Observed 2026-09-15
+    // (#7884 review, read-only GET /api/v2/heartbeats): soleur-inngest-consumer-prd id 482259
+    // `paused:false status:up`, with #7462 CLOSED 2026-08-20. So the twice-daily live reconcile's
+    // `fed-but-paused` alarm is re-armed for this row: a pause from here on is a real finding.
+    exempt_reason:
+      "web-host-resident feeder (inngest-consumer-probe.timer on web-1) delivered by the SSH terraform_data provisioner (terraform_data.inngest_consumer_probe_install), NOT cloud-init boot on either host. It monitors the dedicated inngest host from the consumer side precisely so that arming it never requires an inngest-host-replace, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
     name: "inngest_prd",
     arming: "dedicated-host-boot",
     // Source says paused=true; LIVE is paused=false / up (self-pulled from /api/v2/heartbeats).
@@ -236,6 +276,31 @@ export const MANIFEST: ManifestEntry[] = [
     replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },
   },
   {
+    name: "git_data_host_prd",
+    // #9438: the git-data HOST's own recurring liveness beat (git-data-liveness.timer), distinct
+    // from git_data_prd above, which is fed by a web-host cron and proves only that some web host
+    // can open a TCP connection to the port. Armed by the host's OWN cloud-init, so it is
+    // dedicated-host-boot, which makes ADR-103's replace_target requirement fire: cloud-init is
+    // per-instance, so the feeder reaches the host only on a fresh boot (git-data-host-replace).
+    arming: "dedicated-host-boot",
+    // Born paused and stays paused in source; live arming is the owner-authorized, measured
+    // arm step after the replaced host's first beats (ADR-117, ADR-283).
+    paused: true,
+    feeder: {
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/cloud-init-git-data.yml",
+        pattern: "systemctl enable --now git-data-liveness.timer",
+      },
+    },
+    replace_target: { choice: "git-data-host-replace", server: "hcloud_server.git_data" },
+    // No `arming_pending` (record PR for #9438). This row carried `arming_pending: { tracking_issue: 9438 }`
+    // while the monitor was paused-yet-fed between the host replace and the arm. On 2026-10-12 a measured
+    // arm (`arm-heartbeats.sh --arm-one`, #9980) read `up` within 11 s; the verdict and the pre/post
+    // `--status` reads are on #9438. That is a dated record: the live state is read from Better Stack, not
+    // from this file. `paused: true` above stays: it is the source `.tf` state (born paused).
+  },
+  {
     name: "registry_disk_prd",
     arming: "dedicated-host-boot",
     paused: false,
@@ -250,5 +315,28 @@ export const MANIFEST: ManifestEntry[] = [
       },
     },
     replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },
+  },
+  {
+    name: "inngest_server_probe",
+    // #8516 — the dead-probe sibling of logtail_exploration_alert.inngest_luks_wrong_volume:
+    // a pusher beats it only while a fresh host_role=dedicated inngest-server-probe row
+    // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). FED and ARMED.
+    // No `arming_pending` (record PR for #9703). This row carried `arming_pending: { tracking_issue: 9703 }`
+    // while the monitor was paused-yet-fed. On 2026-10-12 the runbook arm block unpaused it; its read-back
+    // was `status=up paused=false`, and the feeder (scripts/inngest-probe-heartbeat-feeder.sh) then reported
+    // `verdict=beat` on runs 38264380002 (forced), 38265381453 and 38267189184 (clock-dispatched). That is a
+    // dated record: the live state is read from Better Stack, not from this file. `paused: true` below stays:
+    // it is the source `.tf` state (born paused).
+    arming: "external-probe",
+    paused: true,
+    feeder: {
+      kind: "cron",
+      evidence: {
+        file: ".github/workflows/scheduled-inngest-probe-heartbeat.yml",
+        pattern: "bash scripts/inngest-probe-heartbeat-feeder.sh",
+      },
+    },
+    exempt_reason:
+      "fed and armed (2026-10-12, #9703) — the feeder is a repo-side verifier workflow, remediation never requires an inngest-host-replace, precisely because a host push cannot see Vector-allowlist or sink failures (#6780). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
 ];

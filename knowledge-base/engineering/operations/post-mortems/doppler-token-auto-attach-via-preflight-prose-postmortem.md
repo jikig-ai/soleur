@@ -76,6 +76,7 @@ system — the harness auto-attach feature acting on a resolvable path literal i
 ## Resolution
 
 Two-part remediation in #6864:
+
 1. **Neutralize the trigger** — replaced every resolvable home-relative credential path literal in `preflight/SKILL.md` Check 10 (and the byte-identical parser mirror + two comments) with non-resolvable forms (directory-only `~/.doppler/`, descriptive names, `<placeholder>` segments), preserving the security prose's meaning. The runtime denylist (`CRED_REJECT_RE` verb regex, `CMD_DEQ`, SSH/`SUBST` rejects) was left byte-identical.
 2. **Durable guard** — `scripts/lint-credential-path-literals.py` (CI-wired, changed-files grandfathering) fails any tracked `*.md` under `plugins/**`/`knowledge-base/**` that reintroduces a resolvable credential path. Non-vacuous test (20 assertions, mutation-verified). The operator rotated the exposed token.
 

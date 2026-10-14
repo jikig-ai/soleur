@@ -59,8 +59,8 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
-          plugins: 'soleur@soleur'
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur-marketplace.git'
+          plugins: 'soleur@soleur-marketplace'
           # The allowlist deliberately OMITS `gh issue create`: the agent CANNOT post.
           # It may read PRs/issues and git log, and write files (digest.md) only.
           claude_args: >-

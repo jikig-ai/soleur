@@ -1,0 +1,6 @@
+import { mkdtempSync } from "node:fs";
+
+export function scratch(): string {
+  let i = 0; i++ / 2; const d = mkdtempSync("demo-"); const q = 4 / 2;
+  return d + String(q + i);
+}

@@ -78,10 +78,15 @@ const nextConfig: NextConfig = {
 
 ## Prevention
 
-- When adding upload routes that pass through Next.js middleware, verify `experimental.middlewareClientMaxBodySize` accommodates the max file size plus multipart overhead.
+- When adding upload routes that pass through Next.js middleware, verify `experimental.proxyClientMaxBodySize` accommodates the max file size plus multipart overhead.
+  - **Renamed 2026-09-03 (#7591):** next 16 deprecated `experimental.middlewareClientMaxBodySize`
+    in favour of `experimental.proxyClientMaxBodySize`, and setting BOTH is a hard error. The
+    dated record above is left as written; only this forward-looking instruction is updated,
+    because it is the line a future reader will act on.
 - Watch for "Unrecognized key(s)" warnings in Next.js startup logs — they indicate config keys at the wrong nesting level being silently ignored.
 - When Next.js body parsing fails with "Failed to parse body as FormData" but the Content-Type is correct, suspect body truncation rather than malformed input.
 - The `DEFAULT_BODY_CLONE_SIZE_LIMIT` (10 MB) is not documented in Next.js user-facing docs — it lives only in `node_modules/next/dist/server/body-streams.js`. The config key `experimental.middlewareClientMaxBodySize` IS documented.
+  - **Renamed 2026-09-03 (#7591):** that key is now `experimental.proxyClientMaxBodySize`; next 16 deprecated the `middleware*` spelling and errors if both are set.
 
 ## Related Issues
 

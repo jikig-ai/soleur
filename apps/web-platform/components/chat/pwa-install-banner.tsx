@@ -1,3 +1,5 @@
+import { Button } from "@/components/ui/button";
+
 function isIosSafari(): boolean {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent;
@@ -29,7 +31,8 @@ export function PwaInstallBanner({ dismissed, onDismiss }: PwaInstallBannerProps
           &ldquo;Add to Home Screen.&rdquo;
         </p>
       </div>
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={onDismiss}
         className="shrink-0 rounded p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
@@ -39,7 +42,7 @@ export function PwaInstallBanner({ dismissed, onDismiss }: PwaInstallBannerProps
           <line x1="18" y1="6" x2="6" y2="18" />
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
-      </button>
+      </Button>
     </div>
   );
 }

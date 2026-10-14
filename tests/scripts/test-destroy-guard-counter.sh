@@ -157,7 +157,33 @@ t_mixed_delete_and_nested() {
   fi
 }
 
+# T8 (#7493) — a `github_repository_file` REPLACEMENT must trip the guard.
+#
+# This is not a generic delete case. `github_repository_file` has no
+# `keep_on_destroy` at provider 6.12.1, so destroying it DELETES the published
+# `.claude-plugin/marketplace.json` and breaks `claude plugin marketplace add`
+# for every new install. `archive_on_destroy` on the repository does NOT cover
+# it — that protects the repo, not a file inside it. A change to `repository`,
+# `file` or `branch` forces replacement, which is delete+create, so the routine
+# -looking edit is the dangerous one.
+#
+# The guard failing closed here is what makes the reconcile dispatch safe: on a
+# `workflow_dispatch` run `github.event.head_commit.message` is empty, so
+# `[ack-destroy]` is UNREACHABLE and a destructive reconcile aborts rather than
+# unpublishing the plugin unattended. (The same emptiness disables the
+# `[skip-github-apply]` kill switch on those runs — the daily cron is the only
+# other brake.)
+t_repository_file_replace_trips() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-github-repository-file-replace.json" "fix: retarget the marketplace manifest branch")
+  if [[ "$out" == "1:0:1:1" ]]; then
+    _report "T8 github_repository_file replacement counts as a destroy (unpublishes the manifest)" ok
+  else
+    _report "T8 github_repository_file replacement counts as a destroy (unpublishes the manifest)" fail "got '$out' want '1:0:1:1'"
+  fi
+}
+
 t_resource_delete_trips
+t_repository_file_replace_trips
 t_nested_removal_trips
 t_no_changes_passes
 t_ack_destroy_allows_nested
@@ -165,5 +191,17 @@ t_real_baseline_zero
 t_ack_destroy_substring_rejected
 t_mixed_delete_and_nested
 
-echo "=== $pass passed, $fail failed ==="
+# ANTI-VACUITY FLOOR (#7493 review). Without it this suite's success condition was `fail == 0`,
+# which an EMPTY suite satisfies: deleting all eight invocations above printed
+# "0 passed, 0 failed" and exited 0. That is the failure mode every guard in this repo is written
+# to refuse, and it was absent from the harness asserting the guard that protects the published
+# manifest from being deleted. The floor is an equality, not a `>=`: a dropped test and a silently
+# skipped one are the same defect, and a `>=` is satisfiable by adding an unrelated row.
+MIN_ASSERTIONS=8
+asserted=$(( pass + fail ))
+if [[ "$asserted" -ne "$MIN_ASSERTIONS" ]]; then
+  _report "anti-vacuity floor" fail "only $asserted assertion(s) ran, expected exactly $MIN_ASSERTIONS"
+fi
+
+echo "=== $pass passed, $fail failed ($asserted assertions) ==="
 [[ "$fail" -eq 0 ]]

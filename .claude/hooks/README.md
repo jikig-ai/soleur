@@ -18,6 +18,305 @@ exit 0
 Claude Code reads that JSON from stdout and blocks the tool call. Any deviation
 from this shape is treated as a pass-through.
 
+### The third disposition: rewrite (ADR-162)
+
+The two sentences above described the contract completely until #7165. A
+PreToolUse hook has a **third** disposition available to it — it may **rewrite
+the tool input** and let the call proceed:
+
+```bash
+jq -c --arg new "$NEW" \
+  '{hookSpecificOutput:{hookEventName:"PreToolUse",updatedInput:(.tool_input | .command = $new)}}'
+exit 0
+```
+
+This is not a pass-through and it is not a decision. It is a third disposition alongside
+allow and deny, and it is deliberately narrow:
+
+- **Exactly one hook in this directory may do it.** Two rewriters for the same
+  call have undefined precedence and one rewrite is silently discarded. Enforced
+  by a one-entry allowlist in `hookeventname-coverage.test.sh`.
+- **A rewriter never emits `permissionDecision`**, at any depth. An `allow`
+  would bypass the permission system for every call it touches.
+- **`updatedInput` REPLACES `tool_input`; it does not merge.** Build it from the
+  whole object. Emitting only the changed key silently drops `timeout`,
+  `run_in_background`, `description` and `sandbox`.
+- **A sibling's `deny` still wins**, and permission rules match the **original**
+  command — so a rewrite can neither dodge a deny rule nor satisfy an allow one.
+
+Today the sole rewriter is `grep-rewrite.sh`. Full clause list and the probe
+evidence: [ADR-162](../../knowledge-base/engineering/architecture/decisions/ADR-162-pretooluse-hooks-may-rewrite-tool-input.md)
+and [UPDATED-INPUT-PAYLOAD-SHAPE.md](./UPDATED-INPUT-PAYLOAD-SHAPE.md).
+
+## Parsing hook input
+
+**That stdin envelope is model-controlled and untrusted** ([ADR-156][adr155]).
+It is assembled from the model's own tool-call output; nothing a hook can see
+validates it. Parse it with the shared extractor — never by hand, and never with
+`eval`:
+
+```bash
+# shellcheck source=lib/hook-input.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"   # FAIL-HARD
+
+INPUT=$(cat)
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "<hook-basename>"
+  hook_input_should_ask && { hook_input_emit_ask "<hook-basename>"; exit 0; }
+  exit 0
+fi
+CMD="$HOOK_CMD"          # also: HOOK_TOOL_NAME HOOK_CWD HOOK_SESSION_ID HOOK_FILE_PATH
+```
+
+`HOOK_CWD` falls back to `DEVIN_PROJECT_DIR` → `CLAUDE_PROJECT_DIR` → `$PWD`
+when the envelope carries no `.cwd` — Devin's PreToolUse envelope omits it
+(envelope-capture §5), and hook processes run with PWD at the project root.
+
+`hook_parse_input` also exports **`HOOK_TOOL_KIND`** — the wire name normalized
+to its Claude kind via `lib/hook-tool-kind.sh` (`exec`→`Bash`, `write`→`Write`,
+`edit`→`Edit`, `ask_user_question`→`AskUserQuestion`, `run_subagent`→`Agent`,
+`skill`→`Skill`; unmapped names pass through). `HOOK_TOOL_NAME` stays byte-exact
+for telemetry. **New hooks that gate on tool identity must test
+`HOOK_TOOL_KIND`, never `HOOK_TOOL_NAME`** — under Devin the wire names are
+lowercase, so a `HOOK_TOOL_NAME == "Bash"` gate is a dead gate (measured;
+issue #8205, ADR-223). Devin dispatch lives in `.devin/config.json`, and every
+registry registration must carry a row in `.claude/hooks/devin-dispositions.tsv`
+— `devin-matcher-parity.test.sh` enforces both.
+
+`hook_parse_input` returns 0 only when the document parses **and** every
+contracted field is a string; the values are then byte-exact. Any other outcome
+returns 1 and classifies via `HOOK_INPUT_REASON`. **The return code is
+normative; the reason is diagnostic.** The enum:
+
+| reason | meaning | whose fault |
+|---|---|---|
+| `empty` | jq exited 0 having emitted nothing — there was no document | nobody's |
+| `baddoc` | jq rejected the document — **rc 5 only**: malformed, truncated, lone surrogate. Also raised when a COMPLETE record is emitted and jq exits 5, i.e. a valid envelope followed by trailing garbage | the payload |
+| `nonobject` | the document parsed but its root is not an object, so no contracted field could exist | the payload |
+| `nonstring` | the root IS an object but a contracted field is not a string — the attack signature | the payload |
+| `separator` | a value carried the record separator and raised the field count | the payload |
+| `multidoc` | two or more concatenated documents. jq is a stream processor, so it ran the program once per document and emitted an exact multiple of 6 slots with rc 0 | the payload |
+| `jq_missing` | `jq` is not on PATH | the environment |
+| `internal:rc<N>` | jq exited non-zero with any code **other than 5** — 3 (our program did not compile), 2 (usage/system error, e.g. a write failure), 128+n (killed by a signal: OOM, SIGSEGV). `N` is the literal code | ours |
+| `internal:count` | our program emitted a partial record with a clean rc | ours |
+| `internal:kind-lib` | `hook_tool_kind` was not defined at call time — `lib/hook-tool-kind.sh` missing or unsourced; every kind-normalized gate would silently disarm without this hard stop (#8205) | ours |
+
+`empty` and `baddoc` were a single `unparseable` until #7275, and `internal:*`
+was a single `internal` whose rc-3 arm was unreachable. Both splits exist so a
+BROKEN HOOK is never reported as the model having sent junk — that collapse is
+how a broken gate hides behind a plausible payload class. The `internal:` prefix
+is deliberate: `hook_input_report` keys telemetry on `${reason%%:*}`, so the
+detail rides along without creating new aggregation keys.
+
+**The polarity is load-bearing.** `baddoc` is reached ONLY on jq rc 5, and every
+other non-zero code defaults to `internal:rc<N>` — not the other way round. A
+first revision of #7275 enumerated *our* faults and let the residue default to
+*theirs*, which reported a usage error, an exec failure and an OOM kill as the
+model having sent junk: the same collapse #7275 exists to close, one code over.
+On a surface where a wrong answer disarms a guard, over-paging an engineer is
+recoverable and a broken gate hiding behind a plausible payload class is not.
+
+**What this enum does NOT cover.** An empty object `{}` reaches five empty
+strings through the `ok` arm and returns 0 — the same observable state as the
+`null` root that `nonobject` catches. That is deliberate, not an oversight:
+`A4` in the contract suite asserts that absence, null and empty are legitimate
+and must still pass, and a minimal Read-shaped payload is all-empty by the same
+measure. A CONCUR gate rejected filing this as a deferred scope-out — one
+envelope serializes one tool call, so `{}` means no command was supplied and
+there is nothing for a guard to match. The full reasoning, including why
+requiring a non-empty `tool_name` was rejected on measured evidence, is at the
+`SCOPE` block in `_HOOK_INPUT_JQ`.
+
+Four rules, each of which was a real defect in #7164:
+
+1. **Source it fail-hard.** No `|| true`, no `|| :`, no `2>/dev/null`. A
+   fail-soft source leaves `hook_parse_input` undefined, the hook dies at the
+   call under `set -e`, prints nothing, exits non-zero — and the tool proceeds.
+2. **The `exit` lives at the call site**, never in the library. A sourced
+   library that exits terminates its caller invisibly, is untestable without a
+   subshell, and silently no-ops inside `$( )` or a pipeline.
+3. **Never coerce a non-string.** Coercion (`tojson`) closes the code execution
+   and leaves every anchored guard evaded — `["git","stash"]` matches no guard
+   regex. Same for scrubbing: a normalized value is a *different* value than the
+   matcher was written against.
+4. **A hook that cannot parse its input asks** ([ADR-157][adr156]). It never
+   continues silently and it never denies.
+
+`guardrails.sh` is the **designated responder**: it emits the `ask`, the other
+19 report and exit 0, so a persistent fault produces one prompt per tool call
+rather than 19. That makes `guardrails.sh` load-bearing for the others, and
+`hook-input-contract.test.sh` asserts against `.claude/settings.json` that every
+tool triggering a migrated hook also triggers `guardrails.sh`.
+
+`SOLEUR_DISABLE_HOOK_INPUT_ASK=1` suppresses **escalation only** — parsing, the
+type assertion and the telemetry still run. It is the in-band escape hatch if
+the posture ever proves noisy.
+
+### Verifying the fault path end to end
+
+One command, no SSH, no dashboard. It proves both halves: the operator is told
+**synchronously** (the `ask`), and the fault reaches the surface a human reads
+**later** (the aggregate counter).
+
+```bash
+R=$(mktemp -d -t soleur-run.$$.XXXXXXXX)  # signed root: reapable if the rm -rf is missed (#10017)
+cp AGENTS.md AGENTS.rules.md "$R/"          # the aggregator resolves rules from this root
+printf 'not-json' | INCIDENTS_REPO_ROOT="$R" bash .claude/hooks/guardrails.sh \
+  | jq -r '.hookSpecificOutput.permissionDecision'          # -> "ask"
+INCIDENTS_REPO_ROOT="$R" bash scripts/rule-metrics-aggregate.sh --dry-run \
+  | jq '.summary.hook_input_fault_count'                    # -> 1
+rm -rf "$R"
+```
+
+The `cp AGENTS.md AGENTS.rules.md` line is load-bearing and was **missing from
+the original plan's version of this probe**: `INCIDENTS_REPO_ROOT` is read by
+*both* the incident emitter (for the ledger path) and the aggregator (for the
+rule corpus), so a bare `mktemp -d` makes the aggregator exit 2 with
+`AGENTS.md not found` and the count comes back empty. The probe reported a
+failure that was its own, not the code's — the same "declared-verifiable but
+never executed" gap that #7164's `@sh`-is-safe comment belongs to. Corrected
+here after running it.
+
+### Scope of the mandate
+
+**Mandatory** for hooks on the `Bash` matcher and for blocking write guards —
+the 21 hooks that can change whether a tool call proceeds:
+
+`guardrails` · `cla-signed-author-gate` · `context-reviewed-gate` ·
+`follow-through-directive-gate` · `prod-write-defer-gate` ·
+`ship-kb-archive-gate` · `ship-net-issue-flow-gate` · `ship-operator-step-gate` · `ship-runbook-ssh-gate` ·
+`ship-soak-followthrough-gate` · `ship-unpushed-commits-gate` ·
+`background-poll-prefer-monitor` · `brand-hex-commit-gate` ·
+`doppler-secrets-delete-redirect` · `git-commit-secret-scan` ·
+`kb-domain-allowlist-guard` · `no-memory-write` · `pre-merge-auto-close-scan` ·
+`pre-merge-rebase` · `worktree-write-guard` · `iac-plan-write-guard`
+
+**Also mandatory, as a separate class** — the *third disposition*
+([ADR-162](../../knowledge-base/engineering/architecture/decisions/ADR-162-pretooluse-hooks-may-rewrite-tool-input.md)):
+
+`grep-rewrite`
+
+A rewriter consumes the same untrusted envelope and is bound by the same trust
+boundary, but two of the twenty-one's properties do not apply to it **by
+construction**, so it is classified rather than folded into the list above:
+
+- It does not call `hook_input_should_ask`. Asking is the designated
+  responder's job, and a rewriter's failed parse costs a missing
+  *optimization*, not a missing safety check — escalating would spend an
+  operator prompt on a non-event.
+- It is **not** silent on stdout. Emitting `updatedInput` is the entire point;
+  the twenty-one are asserted to emit nothing unless they are the responder.
+
+Everything else still binds: fail-hard `source`, a real parse gate, a recorded
+fault, and `exit 0` on every payload class. `hook-input-contract.test.sh`
+asserts the set closure over **both** lists (A18) and holds each rewriter to
+those four properties plus the one that separates the classes — it must
+actually emit `updatedInput` (A18b). Without that last one the classification
+would be an escape hatch: measured, a well-behaved *guard* satisfies the other
+four, so listing one here to silence A18 would otherwise cost nothing.
+
+**Not yet migrated** — 10 hooks, in two groups. All remain bound by ADR-156
+clause 1 (no `eval`), which the contract test enforces repo-wide.
+
+*Genuinely advisory* (6) — they emit no `permissionDecision` at all, so a
+mis-parsed field costs a hint rather than a guard. **A shared "advisory"
+blanket is not a reason**, so each carries its own, and two of them are
+deliberately uncomfortable:
+
+| Hook | Why it stays exempt |
+|---|---|
+| `agent-token-tee` | Reads an entire `.tool_response.*` family the extractor does not model at all. Migrating it is not a slot widening but a second contract. |
+| `docs-cli-verification` | Emits a reminder string only. Every field it reads is used for prose, never for a path test or a decision. |
+| `pencil-collapse-guard` | Advisory in its output, **but it restores a file from git** on a `filePath` it does not type-assert. Eyes open: the write is bounded by `git checkout` semantics on a path that must already be tracked, so a non-string yields a failed checkout rather than an arbitrary write — but this is the weakest of the six and it should migrate first among them. |
+| `phase-surface-hint` | Pure stdout hint keyed on the phase; reads no attacker-influenced path. |
+| `skill-context-queries` | Emits suggested queries; a mis-parsed field produces a worse suggestion, never a different decision. |
+| `skill-invocation-logger` | Appends a log line. Worst case is a malformed log entry, and the line is already treated as untrusted text downstream. |
+
+*Not a bash hook at all* (1) — and absent from both lists until #7173 caught it,
+which is how an exemption list becomes silent residue:
+
+| Hook | Why it stays exempt |
+|---|---|
+| `security_reminder_hook.py` | A **PreToolUse hook on the `Edit` matcher**, so it is inside ADR-156's scope, but it is Python and cannot `source` a bash helper. It reads the same model-controlled envelope and is explicitly fail-open. Note it is also a **second telemetry writer**: its `emit_incident(…, cmd=…)` path has its own truncation and is not covered by the contract suite's no-payload-content assertion. Converging it needs a Python port of the extractor, not a migration. |
+
+*Gating, but deferred* (4) — **these DO decide whether a tool call proceeds** and
+are in ADR-156's binding scope. They are not exempt on principle; they are
+blocked on two concrete things, and they are the priority set in the follow-up:
+
+| Hook | Matcher | Emits |
+|---|---|---|
+| `durable-reminder-prefer-inngest` | `CronCreate` | `deny`, `allow` |
+| `new-scheduled-cron-prefer-inngest` | `Write\|Edit` | `deny`, `allow` |
+| `pencil-open-guard` | `mcp__pencil__open_document` | `deny` |
+| `skill-security-scan-write` | `Write` | `deny`, `ask`, `allow` |
+
+The blockers, **as measured** — two of the three originally written here were
+wrong, and are corrected rather than deleted so the correction is legible:
+
+1. **Every one needs a field the extractor does not publish** — `filePath`
+   (camelCase), `.tool_input.skill`, `.tool_input.content`,
+   `.tool_input.new_string`. `all(type == "string")` is a single shared status
+   token, so publishing these widens the fixed-slot contract. That is exactly
+   what ADR-157 rejected a variadic API to avoid, so it is a design decision,
+   not a paste. **Still true.**
+2. ~~Three of their matchers have no designated responder.~~ **Measured false —
+   it blocks zero of the four.** The contract suite's A9 resolves coverage at
+   the **tool** level, not by matcher-string equality: `Write` and
+   `Write|Edit|MultiEdit|NotebookEdit` are different strings that both fire on a
+   Write. `guardrails.sh`'s covered set is `Bash Edit MultiEdit NotebookEdit
+   Write`, so `skill-security-scan-write` (`Write`) and
+   `new-scheduled-cron-prefer-inngest` (`Write|Edit`) already have a responder.
+   `CronCreate` and `mcp__pencil__open_document` carry **exactly one hook each**,
+   so "election" there is degenerate — a data change, not a mechanism.
+3. ~~`durable-reminder-prefer-inngest`'s booleans block it.~~ **Measured false.**
+   That hook already performs a `has()`-guarded, `//`-avoiding boolean read, with
+   an in-source comment distinguishing *absent* from *present-and-false*. Its
+   booleans are type-safe today; its only unprotected field is
+   `.tool_input.prompt`, a string.
+4. **NEW, and the one that actually blocks the design.** Widening the shared
+   status token into per-slot flags — the obvious fix for (1) — makes an
+   `allow`-vs-`ask` collision reachable **for the first time**. On a Write
+   carrying a non-string `.tool_input.command`, `guardrails.sh` would fail its
+   core group and ask, while `skill-security-scan-write` parses its own slots
+   cleanly and emits its unconditional explicit `allow`. Claude Code's
+   resolution order for two hooks emitting different decisions on one call is
+   **unestablished**, and if `allow` wins it neutralises the responder's ask.
+   Under today's single shared token both hooks fail together and both go
+   silent, so the combination cannot arise. Establishing the order needs a live
+   hook registration and a real permission prompt; per ADR-156 it must not be
+   assumed.
+5. **NEW.** The same decoupling creates a silent fail-open in the other
+   direction: a non-string `.tool_input.content` would leave `guardrails.sh`'s
+   core group clean (no ask) while `skill-security-scan-write` fails its own
+   group and exits 0 — **Write allowed, scanner never ran**. That is ADR-157's
+   explicitly rejected "fail open with a loud incident", and a regression
+   against that hook's own current posture, which already asks rather than
+   allows on both of its cannot-evaluate branches.
+
+`skill-security-scan-write` is the sharpest of the four: it can emit an explicit
+`allow`, which skips the permission prompt outright, and an array
+`.tool_input.content` renders multi-line under `jq -r` so it matches no
+HIGH-RISK pattern. `pencil-open-guard` is the clearest ADR-156 case — an `mcp__*`
+matcher is precisely the "other tool shapes" whose envelope this repo does not
+define — but it is one of the *harder* migrations, not the easiest, because it
+needs the unpublished camelCase `filePath`.
+
+Tracked in **#7173**.
+
+### Reason classes on this side
+
+The payload classes deny, and `jq_missing` plus the `internal:*` classes fail
+**open, loudly**, because the repair for a missing `jq` is itself a tool call
+that a deny would also block.
+
+(A second, hand-ported harness tree once kept its own minimal in-place type
+assertion against a different envelope and a different enum; that tree was
+retired in ADR-245 / #8306, so there is no longer a second vocabulary to
+disambiguate here.)
+
+[adr155]: ../../knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md
+[adr156]: ../../knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md
+
 ## Incident telemetry (ADR-2)
 
 Hooks call `emit_incident` **before** the deny payload to record one JSON line
@@ -40,7 +339,7 @@ emit_incident "<rule_id>" "<event_type>" "<rule_text_prefix>" ["<command_snippet
 
 | Field | Meaning |
 |---|---|
-| `rule_id` | Stable slug from `AGENTS.md` (`hr-*`, `wg-*`, `cq-*`, `rf-*`, `pdr-*`, `cm-*`) or a `guardrails-*` sentinel for constitution-only rules. |
+| `rule_id` | Stable slug from `AGENTS.md` (`hr-*`, `wg-*`, `cq-*`, `rf-*`, `pdr-*`, `cm-*`), a `guardrails-*` sentinel for constitution-only rules, or a hook-local id with no section prefix (`pkill-self-match-guard-readonly`, `context-reviewed-gate`) — counted by the aggregator under `non_corpus_counts`, never an orphan (#7853). |
 | `event_type` | `deny` (hook blocked the action) or `bypass` (user used a skip flag). |
 | `rule_text_prefix` | First ~50 chars of the rule's prose, for forensic context. |
 | `command_snippet` | Optional: the full command (or file path) that triggered the event. |
@@ -69,7 +368,7 @@ same-session deny.
 
 ## Rotation
 
-Three telemetry sinks under `.claude/` rotate via a shared helper at
+Four telemetry sinks under `.claude/` rotate via a shared helper at
 `.claude/hooks/lib/log-rotation.sh`:
 
 | Sink | Owner |
@@ -77,6 +376,7 @@ Three telemetry sinks under `.claude/` rotate via a shared helper at
 | `.claude/.rule-incidents.jsonl` | `lib/incidents.sh::emit_incident` (#2213) |
 | `.claude/.skill-invocations.jsonl` | `skill-invocation-logger.sh` (#3122) |
 | `.claude/.session-tokens.jsonl` | `agent-token-tee.sh` (#3494) |
+| `.claude/.memory-backstop.jsonl` | `memory-backstop.sh` (#7166) |
 
 ### Per-write rotator (primary)
 
@@ -106,7 +406,7 @@ Per-process env overrides:
 | `LOG_ROTATION_SIZE_BYTES` | 5242880 | Size threshold in bytes |
 | `LOG_ROTATION_AGE_DAYS` | 30 | Age threshold in days |
 | `LOG_ROTATION_FLOCK_TIMEOUT_S` | 5 | flock acquire timeout (seconds) |
-| `LOG_ROTATION_DISABLE` | _(unset)_ | Set to `1` to short-circuit all rotation |
+| `LOG_ROTATION_DISABLE` | *(unset)* | Set to `1` to short-circuit all rotation |
 | `LOG_ROTATION_UNIQ_SUFFIX` | `$(date +%H%M%S%N)` | Test-only collision suffix override |
 
 On archive-write failure (disk full, permission denied), the helper preserves
@@ -124,7 +424,7 @@ machines that never trigger a hook between aggregations).
 
 All active and archived files are gitignored under wildcards
 (`.claude/.rule-incidents*`, `.claude/.skill-invocations*`,
-`.claude/.session-tokens*`).
+`.claude/.session-tokens*`, `.claude/.memory-backstop*`).
 
 ### Library API
 
@@ -142,19 +442,52 @@ helper itself errors.
 
 | Hook | Denies | Rule IDs emitted |
 |---|---|---|
-| `guardrails.sh` | 6 | `guardrails-block-commit-on-main`, `guardrails-block-rm-rf-worktrees`, `guardrails-block-delete-branch`, `guardrails-block-conflict-markers`, `guardrails-require-milestone`, `hr-never-git-stash-in-worktrees` |
+| `guardrails.sh` | 7 | `guardrails-block-commit-on-main`, `guardrails-block-rm-rf-worktrees`, `guardrails-block-delete-branch`, `guardrails-block-conflict-markers`, `guardrails-require-milestone`, `guardrails-filing-lexer-failure`, `hr-never-git-stash-in-worktrees` |
 | `pencil-open-guard.sh` | 1 | `cq-before-calling-mcp-pencil-open-document` |
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
+| `pkill-self-match-guard.sh` | 2 | `pkill-self-match-guard-readonly` (the `-f` arm emits none) |
+| `browser-snapshot-credential-guard.sh` — **ships in `plugins/soleur/hooks/`**, not here, because `${CLAUDE_PLUGIN_ROOT}` resolves into the installed plugin and a script under `.claude/` never reaches a customer (#7947). Its suite lives here because `.claude/hooks/*.test.sh` is an auto-globbed suite path. | 1 | — (plain deny) |
+| `destructive-command-guard.sh` — **ships in `plugins/soleur/hooks/`**, not here, for the same reason as the snapshot guard above (W2, #9601, ADR-277). A PreToolUse hook on `^Bash$` that lexes the command (vendored `lib/shell-argv.pl`) and **asks** before `terraform\|tofu destroy` / `apply -destroy` and a force-push or delete of a default branch, and **denies** a recursive `rm` of `/`, an ancestor of home or home itself (an ask for the working directory or an ancestor). Not decided, by design: obfuscation, a plain `terraform apply`, secret writes, SQL, non-Bash tools (Devin `exec`); it is a seatbelt, not a boundary. Hosted sessions disable it through `AGENT_ENV_OVERRIDES`. Its suites (`destructive-command-guard-hook.test.sh`, `destructive-command-guard-mutation.test.sh`, `shell-argv-parity.test.sh`) live in `plugins/soleur/test/`. | 1 | `recursive-delete-home` (deny), `recursive-delete-workdir`, `infra-destroy`, `default-branch-force-push`, `unresolved-cd-before-destructive`, `unparsed-wrapper`, `wrapper-depth` (asks); input the guard cannot check in full asks under `command-not-parsed`, `envelope-unreadable`, `lexer-empty`, `bound`; a missing dependency asks under `guard-degraded-jq-missing`, `guard-degraded-perl-missing`; when `jq` cannot build the output, `guard-output-fallback` keeps the decision (a deny stays a deny) |
+
+### PreToolUse rewriters (no deny semantics)
+
+Emit `updatedInput` and let the call proceed — see §The third disposition above.
+ADR-162 permits exactly one entry in this table.
+
+| Hook | Rewrites | Rule IDs emitted |
+|---|---|---|
+| `grep-rewrite.sh` | Prepends a `grep()` redefinition to Bash commands carrying a `grep` substring, neutralizing the ugrep shim that reached 9.5 GB RSS against a 21 kB file (#7163). The command itself is left byte-identical. Kill-switch: `SOLEUR_DISABLE_GREP_REWRITE=1`. Observe-only: `SOLEUR_GREP_REWRITE_OBSERVE=1`. Issue #7165. | `grep-rewrite-would-rewrite` (observe-only soak), `grep-rewrite-disarm` (`warn`, envelope could not be built) |
 
 ### PostToolUse hooks (no deny semantics)
 
 PostToolUse runs after the tool's write, so these cannot block. Most are telemetry-only; `pencil-collapse-guard.sh` additionally performs a file restore and injects `additionalContext` into the model.
 
+<!-- markdownlint-disable MD038 -->
+<!-- #7927: MD038 on this table is cosmetic. Verified with the repo's own markdown-it:
+     every span here renders with no edge space (CommonMark strips a single leading and
+     trailing space), except one where the leading space is the point -- the cell
+     documents a string that is APPENDED, so its space is content. A disable-line comment
+     cannot be used: GFM discards anything past a row's closing pipe. -->
 | Hook | Sink | Purpose |
 |---|---|---|
 | `skill-invocation-logger.sh` | `.claude/.skill-invocations.jsonl` | Records every Skill tool call (session_id + skill name) for the monthly skill-freshness aggregator. |
 | `agent-token-tee.sh` | `.claude/.session-tokens.jsonl` | Records every Task/Agent invocation envelope (session_id + subagent_type + total_tokens + duration) for compound Phase 1.6 token-efficiency analysis. Kill-switch: `SOLEUR_DISABLE_AGENT_TOKEN_TEE=1`. Issue #3494. |
+| `memory-backstop.sh` | `.claude/.memory-backstop.jsonl` | **SessionStart** (`startup|resume|clear|compact`). Adopts the agent process tree into a memory-capped systemd transient scope `soleur-agent-<pid>.scope` under a shared `soleur-agents.slice` (ADR-162, #7166). Records the scope, the terminal scope it is bound to, the caps written, the caps the slice already had (`slice_*_before`, so a mixed-version fleet flapping the shared slice is visible), and `outcome`/`reason`. Never records the session id. Kill-switch: `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` — **if you set it you are unprotected and nothing will tell you.** |
 | `pencil-collapse-guard.sh` | `.claude/.rule-incidents.jsonl` (`cq-pencil-collapse-auto-recover`, `warn`) | PostToolUse on `mcp__pencil__open_document`: auto-restores a tracked `.pen` collapsed to empty document state from `git HEAD` + emits an `additionalContext` warning. Fail-open, non-destructive. Issue #4859. |
+<!-- markdownlint-enable MD038 -->
+
+## Adding a hook test suite
+
+- **Guard every tool the suite needs** with the canonical line, never a skip:
+  `command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }`.
+  The taxonomy (whole suite 3, repo-owned file missing 1, one arm non-zero) and what the checker can and cannot
+  see live in the header of `hook-suite-dep-unresolved.test.sh`, which runs every guarded suite with the tool removed.
+- **Three registrations only whole-repo gates see.**
+  - Source `lib/test-incident-sandbox.sh` (`incident-sandbox-coverage.test.sh`).
+  - Add an edge or an ALWAYS_ON entry in `scripts/lib/test-affected-paths.sh`, or `lint-orphan-test-suites.sh`
+    reports the suite UNCLASSIFIED.
+  - If the suite carries an anti-vacuity floor, add a `PROMOTED_FILES` entry in `scripts/guard-vacuity-floor.test.sh`.
+    That ratchet reads tracked files, so measure it only after `git add` (#8616).
 
 ## macOS note
 
@@ -227,6 +560,57 @@ path is accepted in exchange for the write guard; the FALLBACK stamp still
 carries a `loaded: N of M` count.
 The directory is gitignored.
 
+### Bare-root HEAD self-heal
+
+In this repo's layout the root has `core.bare=true` and every feature branch lives in a linked
+worktree. After a PR merges and its branch is deleted, the root's `.git/HEAD` can be left as
+`ref: refs/heads/<deleted-branch>`. git does not call that an error, but `git rev-parse HEAD` fails
+there, the `[session-context] branch:` line reads `HEAD`, and `worktree-manager.sh sync-bare-files`
+(`git read-tree HEAD`) cannot refresh the root's on-disk copies.
+
+`session-rules-loader.sh` repairs it by calling `bare-head-self-heal.sh` as a time-boxed child
+process (5 s, where `timeout` exists; stock macOS has none and runs it untimed) just before it reads the branch, so the branch line already reflects the repaired
+HEAD. The helper header lists the exact conditions. In short: `<dir>/.git` is a real directory whose
+config FILE says `core.bare=true` (read from the file, not from `--is-bare-repository`, which
+ADR-173 records as lying under a masked config), HEAD names a branch that does not EXIST, and
+`refs/heads/main` exists. The write runs with hooks and fsmonitor disabled. It costs no model
+tokens and always exits 0.
+
+- **Marker:** exactly one line, `SOLEUR_BARE_HEAD_HEALED from=<old-ref> to=refs/heads/main`,
+  appended as the LAST line of `additionalContext` (after the tmpfs alarm block, so lines 1-5 keep
+  their positions). A healthy session emits nothing, so absence is the healthy state. It is
+  informational: find it by grepping session transcripts for `SOLEUR_BARE_HEAD_HEALED`. No monitor
+  or telemetry allowlist consumes it.
+- **Never touched:** a HEAD that resolves (including a non-main branch), a ref that exists but
+  names a missing object (that is corruption, left for a human), a non-branch ref, a non-bare repo,
+  a linked worktree, a `.git` file that redirects elsewhere, a true-bare repo (a mirror or server
+  repo is not this layout), a detached HEAD, a repo with no `refs/heads/main`. A failed write
+  (`HEAD.lock` held, read-only filesystem) prints no marker, because a marker claims a repair that
+  happened.
+- **Unborn branches:** HEAD naming a branch that does not exist yet (for example `master`, about to
+  be pushed) is repointed to `main` when `main` exists. In this layout the root already holds
+  commits, and the marker discloses it.
+- **Scope of the trigger:** the heal runs when the session's cwd IS the bare root. A session
+  started inside a linked worktree never reaches the root's HEAD, so nothing is repaired until a
+  session starts at the root. The same loader is bound for Devin (`devin-dispositions.tsv`), so it
+  heals there too. Codex binds the loader from `.codex/config.toml` through
+  `git rev-parse --show-toplevel`, which fails at a bare root, so it never reaches the heal there;
+  Grok and Cursor sessions do not run this loader and get no heal.
+- **Fail-open:** the loader takes only the helper's first line and only if it starts with the
+  marker prefix, so a missing, failing, noisy or hung helper cannot inject anything or fail the
+  hook.
+- **Bootstrap order:** the bare root's copies of these files are a synced mirror, and the sync
+  itself needs a resolving HEAD. The first sync after this landed carries the loader and helper
+  to the root; if the root HEAD is already dangling at that moment, heal it once by hand
+  (`git symbolic-ref HEAD refs/heads/main`). From then on drift repairs itself.
+- **Side effect worth knowing:** with HEAD resolving again, `sync-bare-files` runs its forced
+  mirror and prune, which a dangling HEAD had been blocking. That is the point, and it also means
+  local drift in the root's legacy working tree is overwritten on the next sync.
+- **Follow-up trigger:** if the marker shows up repeatedly, something at the bare root keeps
+  moving `HEAD` (a root-level `git checkout`, `git branch -m`, or `gh pr merge --delete-branch`).
+  Only then is a guardrail blocking `git symbolic-ref HEAD` / `git branch -m` at the bare root
+  worth filing. It is deliberately not built now.
+
 ### Sharp Edges (SessionStart hook design)
 
 - **`set -e` between classifier and emit is a `single-user incident` vector.**
@@ -252,15 +636,26 @@ The directory is gitignored.
 
 A PreToolUse(Bash) hook that defers a hardcoded list of prod-write commands
 for explicit operator approval. Position 4 in the PreToolUse(Bash) chain,
-after `ship-unpushed-commits-gate.sh`.
+after `ship-unpushed-commits-gate.sh`. Also registered for the `Monitor` tool
+(#8486): a Monitor script is a shell command in the same `tool_input.command`
+slot, so a write started as a monitor does not bypass the gate.
 
-### Starter manifest (3 entries, telemetry-driven expansion)
+### Manifest (4 entries; the first three telemetry-driven)
 
 | `rule_id` | matches |
 |---|---|
 | `prod-write-defer-git-push-main` | `git push origin {main,master,HEAD:main,HEAD:master}` incl. `-f`, `--force-with-lease`, refspec, env-prefix, wrapped via `-- <cmd>`, chained `&&`/`;` |
 | `prod-write-defer-terraform-apply` | `terraform apply` and `tofu apply` (same anchors) |
+| `prod-write-defer-operator-ack-script` | a write-mode invocation of any operator script that gates its production writes on the operator-script library's TTY ack (#8486, ADR-249): `flag-create`/`flag-delete` (dir-qualified, or bare after `cd` into the skill dir), `flip.sh`, `set-role.sh`, `provision-hetzner.sh`, `audit-sentry-extra-text-references.sh --apply`. Direct execution, interpreter words, `doppler run --`, `bash -c`, and PTY wrappers (`script`, `unbuffer`, `expect`, `pty.spawn`, `yes \|`) all match. Every call in the command is evaluated; `--dry-run` escapes only within that call's own argument tail, never under a PTY wrapper; a reader (`cat`, `grep`, `git`, …) escapes unless the command pipes into a shell. Fails CLOSED on its own error. Population pinned to `plugins/soleur/test/fixtures/operator-ack-arms.tsv` by set identity (Guard 3 in the `.test.sh`). |
 | `prod-write-defer-doppler-secrets-stdout` | `doppler secrets {set,delete} ... --config {prd,prd_terraform,prd_orchestration,dev,ci}` (rejects `prd-staging`, equals-form `--config=prd`, `--help`/`-h`); widened 2026-05-18 via #4029 — `delete` renders the post-deletion surviving-secrets table to stdout, leaking value chunks from sibling secrets; `prd_orchestration` added at PR review since tenant-* runbooks operate against it |
+
+**Expansion gate.** New entries normally land only after 2-week dry-run
+telemetry. `prod-write-defer-operator-ack-script` is the exception: after #8486
+no legitimate agent invocation of those scripts exists in write mode (the
+script itself refuses a write with no TTY, exit 64, before any credential
+fetch), so a false-positive defer costs nothing a correct run would have
+produced. The existing three rules still evaluate their read-only escape
+against the whole command; that pre-existing escape is tracked in #8662.
 
 Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
 `(^|&&|\|\||;|[[:space:]]--[[:space:]])` catches wrapped invocations per
@@ -275,9 +670,11 @@ Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
   PR #3800 after an 18-day dry-run review). Match → emit `kind: "defer_requested"`,
   append `.claude/logs/approvals.jsonl` row, return the wrapped defer
   envelope:
+
   ```json
   {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer","permissionDecisionReason":"..."}}
   ```
+
   CC pauses the session silently; the resume hint
   (`claude --resume <session_id>`) is emitted to stderr so the operator can
   see it. See `DEFER-DECISION-PAYLOAD-SHAPE.md` for the empirical decision
@@ -348,6 +745,22 @@ demand on the terraform-apply and doppler-secrets rules; zero phantom-rule
 noise). Enforce is now the hardcoded default; set `SOLEUR_DEFER_DRYRUN=1` to
 opt back into dry-run telemetry mode.
 
+### Operator stage approval hook (`plugins/soleur/hooks/operator-stage-approval.sh`, ADR-264)
+
+A sibling of this gate that ships in the plugin (`plugins/soleur/hooks/hooks.json`),
+not in this directory, so it reaches a founder's install. It gates the write of a
+staged (v2) generated operator script, `bash <script> --stage <name> --apply
+--plan-digest <d>`, which an agent runs with no terminal. It recognises the script
+by its `SOLEUR-GENERATED-OPERATOR-SCRIPT v2` header line, mints a one-time receipt
+bound to that exact command, rewrites the command to carry the receipt's nonce and
+answers `ask`, so the harness approval prompt on the exact command is the human
+acknowledgement. Headless runs `defer`; `bypassPermissions`, `dontAsk` and auto
+modes `deny`. A command that matches both this gate's rule 4 and that hook resolves
+by the precedence deny > defer > ask > allow. Rule 4 is unchanged and still covers the
+legacy typed-yes scripts. The approval guards against an agent acting on a mistaken
+instruction, not against a compromised one. Decision record:
+[ADR-264](../../knowledge-base/engineering/architecture/decisions/ADR-264-generated-operator-scripts-are-agent-run-in-stages.md).
+
 ### F1 PermissionDenied event hook (deferred)
 
 A complementary kernel-decided-denial telemetry hook was planned but
@@ -389,6 +802,16 @@ A PreToolUse(Bash) hook on `gh pr merge`. GitHub's issue-closing parser reads th
 **PR title, the PR body and the squash commit body**, so a closing keyword in any
 of the three auto-closes on merge. Two checks, evaluated in this order:
 
+**Squash-body override.** On `--squash`, a `--body-file <path>` replaces the
+concatenated branch commit messages, so those never land on `main`. The hook
+scans that file **instead of** the commit bodies — the override is scanned, never
+trusted, so a contaminated one is denied exactly as a contaminated commit body
+is. It must be `--body-file`, not inline `--body`: quoted command bodies are
+blanked before scanning, so an inline override is one the hook cannot read.
+Non-`--squash` merges, and unreadable paths, fall back to the commit bodies.
+Added in #7516, where the hook denied the very remedy its own deny text
+prescribed.
+
 1. **follow-through label gate** — denies a close of any form (standalone or
    prose-embedded) when the target issue is **OPEN** and carries
    `follow-through`. Closing such a tracker makes the daily sweeper skip it — it
@@ -410,7 +833,7 @@ The hook header points here for the authoritative map. In lifecycle order:
 |---|---|---|
 | `follow-through-directive-gate.sh` | `gh issue create --label follow-through` | denies **creating** a tracker without a valid sweeper directive |
 | `/ship` Phase 6 | pre-`gh pr create` | blocks any auto-close match whose issue is outside the PR's intended set — **broader** than this hook's prose arm (it flags standalone closes too) |
-| `pr-auto-close-scanner.yml` | `pull_request` events | **observational only** (always exits 0; its header says so) |
+| `pr-quality-guards.yml` (`auto-close-scan` job, folded #8902) | `pull_request` events | **observational only** (always exits 0; its header says so) |
 | `ship-soak-followthrough-gate.sh` | `gh pr ready` / `merge --auto` | denies when a referenced tracker is **missing** sweeper enrollment |
 | **this hook** | plain `gh pr merge` | denies when a referenced issue **has** the `follow-through` label |
 
@@ -429,7 +852,7 @@ layer covers the merges no PreToolUse hook sees (web UI, admin, CI-queued).
 - **Best-effort, not a boundary.** Bypassed by merging from `main`, the web UI,
   an admin merge, a CI-queued `--auto` merge (title, body and labels can all
   change in the queue window — and `--auto` is the workflow's *mandated* merge
-  form, so this is the common case), the OpenHands harness, and the
+  form, so this is the common case), and the
   `OWNER/REPO#N` / full-issue-URL reference forms the canonical scanner does not
   recognise. `main` **does** carry server-side rulesets with required status
   checks, so a durable backstop can be added there; none covers this class today.
@@ -457,9 +880,162 @@ to silence a narrow false positive is how a guard goes quietly dark.
 | `SOLEUR_SKIP_OPERATOR_STEP_GATE=1` | `ship-operator-step-gate.sh` | The undeferred-operator-step deny. Reserved for the rare attestation case (`wg-block-pr-ready-on-undeferred-operator-steps`). |
 | `SOLEUR_SKIP_RUNBOOK_SSH_GATE=1` | `ship-runbook-ssh-gate.sh` | The `hr-no-ssh-fallback-in-runbooks` deny on runbook edits. |
 | `CLAUDE_HOOK_BYPASS=1` (+ `_REASON`) | `prod-write-defer-gate.sh` | The prod-write defer. Requires a reason and is audit-logged — see the F2 section above. |
+| `SOLEUR_DISABLE_GREP_REWRITE=1` | `grep-rewrite.sh` | The `grep()` prefix rewrite. Not a denial override — it disarms the **rewrite** disposition, restoring the ugrep shim and with it the 9.5 GB blowup (#7163). Listed here because it is the rollback lever for a hook on the hot path of every Bash call, and is read as the hook's first executable statement so it works even when the hook's own dependencies are broken. **Operator-only, and requires a session restart** — a PreToolUse hook is spawned by the `claude` process, so an inline `VAR=1 <cmd>` or an `export` from a Bash call cannot reach it (measured). An agent needing per-call escape uses `command grep`, which bypasses both the shim and this rewrite. |
+| `SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` | `plugins/soleur/hooks/destructive-command-guard.sh` | The whole guard: exits 0 with no output, as the hook's first executable statement (before any dependency probe). Exactly `1` only; empty, `0` and anything else leave it on. **Operator-only, and requires a session restart** — the hook is spawned by the `claude` process, so an inline `VAR=1 <cmd>` or an `export` from a Bash call cannot reach it. Set it in the shell that starts the session, or in a settings-level `env` block (`settings.json` `"env"`), which no Bash guard sees and which an agent that can edit a settings file can also use: this is a seatbelt, not a boundary (ADR-277, D2/D5). Hosted sessions set it through `AGENT_ENV_OVERRIDES`. |
 
 Not denial overrides, documented elsewhere in this file: `SOLEUR_DEFER_DRYRUN`
 (F2 mode switch), `SOLEUR_DISABLE_AGENT_TOKEN_TEE`, `SOLEUR_DISABLE_SKILL_LOGGER`,
 `SOLEUR_DISABLE_CONTEXT_QUERIES`, `SOLEUR_DISABLE_PHASE_HINT` (telemetry
-kill-switches), `SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
+kill-switches), `SOLEUR_GREP_REWRITE_OBSERVE` (grep-rewrite observe-only soak),
+`SOLEUR_DISABLE_MEMORY_BACKSTOP` (memory backstop — see below),
+`SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
 
+## Memory backstop (ADR-162, #7166)
+
+`memory-backstop.sh` is a **SessionStart** hook (matchers
+`startup|resume|clear|compact`). It asks the operator's own systemd manager to
+put this agent session's whole process tree into
+`soleur-agent-<pid>.scope`, capped at `MemoryHigh=6 GiB` / `MemoryMax=7 GiB` /
+`MemorySwapMax=0`, underneath a shared `soleur-agents.slice` capped at
+`16 GiB` / `20 GiB` / swap `0`. It exists because on 2026-08-01 a single runaway
+search reached 9.5 GB RSS, exhausted memory and swap, and took down six
+concurrent agent sessions at once.
+
+It **never blocks a session**: `exit 0` on every path, and every non-applied run
+is logged with a machine-readable `reason` (`disabled`, `no_busctl`, `no_bus`,
+`claude_pid_not_found`, `no_terminal_scope`, `cap_out_of_range`,
+`concurrent_apply`, `adoption_unverified`). On a machine with no per-user systemd
+bus (CI, Docker, macOS) it does nothing at all.
+
+### Resolution order (#9239)
+
+`.claude/settings.json` does **not** exec the hook file directly. It invokes
+`bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/memory-backstop-resolve.sh` — a thin
+resolver shim, `bash`-prefixed for mode-bit immunity (the #7151 `EACCES`
+defect). The shim selects the newest installed copy of `memory-backstop.sh`
+from a fixed candidate set, in precedence order:
+
+1. `<checkout>/.claude/hooks/memory-backstop.sh` — the session's own checkout
+2. `${XDG_DATA_HOME:-~/.local/share}/soleur/hooks/memory-backstop.sh` — the
+   managed path, written by the shim itself (see below)
+3. `~/.claude/plugins/cache/*/*/*/hooks/memory-backstop.sh` — the Claude
+   plugin cache (glob; every installed version)
+4. `~/.local/share/devin/cli/plugins/cache/*/*/hooks/memory-backstop.sh` — the
+   Devin plugin cache (glob)
+
+Plugin-cache candidates must additionally sit under a path component
+containing `soleur` — a *foreign* plugin shipping a namesake
+`hooks/memory-backstop.sh` is ignored no matter what marker it carries
+(disabled-but-cached plugin entries can outlive enablement, so the glob alone
+is wider than the trust model intends).
+
+Each candidate is ordered by its `BACKSTOP_REVISION=<n>` marker, read with
+`grep` — never `source`d, because a candidate's text is unverified code
+(ADR-156 posture applied to hook bodies). The pattern is line-anchored
+(`^[[:space:]]*(readonly )?BACKSTOP_REVISION=<digits>`) so a `#`-commented
+decoy line cannot inflate a candidate's revision. The highest revision wins;
+a missing or non-numeric marker counts as revision 0, and **ties resolve to
+the checkout copy** so a local uncommitted edit wins over an equally-versioned
+installed one. A winner that fails `bash -n` is demoted to the next candidate.
+
+The marker is a **trusted ordering signal, not an authenticity check** — every
+candidate is a same-uid-writable file, so marker forgery is already inside the
+trust model. It does no more than order copies.
+
+**Managed-path trust.** The managed candidate and the publish destination are
+both refused when the `${XDG_DATA_HOME:-$HOME/.local/share}/soleur/` tree is
+owned by another uid; a dir we own gets group/other-writability stripped
+(idempotent `chmod go-w`, never a grant — a deliberately read-only dir stays
+read-only). This is the only path that can escape the same-uid trust model —
+`XDG_DATA_HOME` is env-steerable, so a foreign-writable data home could plant
+the file every session then execs.
+
+**Self-publish.** When the winner is not the managed copy and its revision is
+strictly newer than the managed copy's, the shim atomically installs it to the
+managed path (`install -m 0755` to a `tmp` sibling, then `mv`) **before**
+exec'ing it — a hook that crashes still leaves the upgrade installed, so one
+fresh session upgrades the whole host. Concurrent SessionStarts serialize the
+install under `flock` with an in-lock revision re-check. A `bash -n`-broken
+managed copy counts as revision 0 for the publish comparison, so corruption in
+the managed file starves nothing. `bash
+.claude/hooks/memory-backstop-resolve.sh --print-resolution` reports
+`resolved=<path> revision=<n> managed=<path> managed_rev=<n>` read-only — no
+publish, no exec.
+
+Two publish-side consequences worth knowing:
+
+- **An unmerged experiment self-publishes.** Bumping `BACKSTOP_REVISION` in a
+  local checkout or open PR makes that copy win and install host-wide until a
+  newer marker ships — the same self-heal channel, pointed at unreviewed code.
+  Revert by deleting the managed file (`rm -f
+  "${XDG_DATA_HOME:-~/.local/share}/soleur/hooks/memory-backstop.sh"`), which
+  returns the next session to the remaining candidates.
+- **Rollback is fix-forward only.** A released bad revision self-publishes and
+  keeps winning over older copies everywhere. There is no down-revision path:
+  recovery means shipping a *higher* revision (revert-with-bump) or setting
+  `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` meanwhile.
+
+**Managed-path lifecycle.** `soleur/` under the data home (hook, `lib/`, and
+`.publish.lock`) is permanent host state with no uninstall story — deleting
+the directory returns resolution to checkout+caches harmlessly, and it is
+recreated on the next publish-worthy session.
+
+**Revision-bump contract.** `BACKSTOP_REVISION` is the only ordering signal,
+so every behavioral change to `memory-backstop.sh` must bump it — *strictly
+increase* it: the resolver compares with `>`, so a same-or-lower marker is
+undeliverable. `scripts/check-backstop-revision.sh` enforces the bump as a
+required CI failure and also watches `lib/log-rotation.sh` (part of the
+executed protection tree; it carries no marker of its own, so a lib edit must
+ride a hook bump). The vendored payload copy
+(`plugins/soleur/hooks/memory-backstop.sh` — shipped so `claude plugin
+update` reaches the plugin-cache candidates) is pinned byte-equal to the repo
+hook by `plugins/soleur/test/backstop-parity.test.ts`, which also pins this
+wiring (Guard 3).
+
+**Ledger schema 2.** Ledger lines in `.claude/.memory-backstop.jsonl` carry
+three fields beyond schema 1: `backstop_revision` (the running copy's marker),
+`resolved_from` (the path the resolver selected; empty when the hook was run
+directly), and `repaired` (count from `repair_stale_scopes`). The fields are
+explicit so "a stale copy ran" is evidence, not inference — schema-1 lines
+(missing them) identify a checkout too old to carry the shim.
+
+**Stale-scope repair.** `repair_stale_scopes` runs inside the hook's flock on
+every SessionStart: any `soleur-agent-*.scope` unit whose runtime caps differ
+from the current constants is converged in place via `busctl
+SetUnitProperties ... true` (runtime-only — never persistent config, never
+re-derived `BindsTo`). A scope adopted under old caps is repaired by the next
+SessionStart on the host, no restart required.
+
+Consequence, stated plainly: **repair clamps deliberate operator raises too.**
+A per-session `systemctl --user set-property --runtime soleur-agent-*.scope
+MemoryMax=infinity` (the documented remedy below) survives only until the next
+SessionStart anywhere on the host re-converges that scope. The hook cannot
+today distinguish "stale caps" from "deliberately raised caps" — if you need a
+lasting raise, re-run the set-property after any intervening session start.
+`OOMPolicy` is *not* in the repair set: systemd 261 rejects it on scopes
+(creation-only) and `SetUnitProperties` is all-or-nothing, so including it
+would drop the four caps with it — the re-entry refresh applies the same
+exclusion (#9246).
+
+### If a session gets stopped
+
+Remedies are listed **narrowest first** — the last one is fleet-wide and the
+difference matters:
+
+| Goal | Command |
+|---|---|
+| Stop just this one session | `systemctl --user stop soleur-agent-<pid>.scope` |
+| Raise this one session's limits | `systemctl --user set-property --runtime soleur-agent-<pid>.scope MemoryHigh=infinity MemoryMax=infinity` |
+| Change the limits for good | edit the four `readonly` values at the top of `memory-backstop.sh` |
+| Stop **every** agent session on this machine | `systemctl --user stop soleur.slice` — **this kills them all**, including sessions with uncommitted work |
+
+`--runtime` on the raise path is **mandatory**: without it, `set-property` writes
+a permanent drop-in into `~/.config/systemd/user.control/`, which is exactly the
+persistent mutation of the operator's own systemd configuration this hook is
+designed never to make.
+
+### Turning it off
+
+`SOLEUR_DISABLE_MEMORY_BACKSTOP=1` disables it entirely. **If you set this you
+are unprotected and nothing will tell you** — there is no periodic reminder, and
+the only trace is `"reason":"disabled"` in `.claude/.memory-backstop.jsonl`.

@@ -125,6 +125,42 @@ describe("kb-tree-scroll-resume", () => {
     });
   });
 
+  // #7186 — the same scrollport now also renders in the mobile content column
+  // (host="content"). Scroll resume must not be a rail-only behaviour.
+  it("AC5 holds for the content-column host too (#7186)", async () => {
+    await act(async () => {
+      render(
+        <div style={{ height: 200 }}>
+          <KbSidebarShell host="content" />
+        </div>,
+      );
+    });
+
+    const browse = document.querySelector('[data-testid="kb-browse-tree"]');
+    expect(browse).not.toBeNull();
+
+    const port = document.querySelector(
+      '[data-testid="kb-tree-scrollport"]',
+    ) as HTMLDivElement | null;
+    expect(port).not.toBeNull();
+    Object.defineProperty(port!, "clientHeight", {
+      configurable: true,
+      get: () => 200,
+    });
+    Object.defineProperty(port!, "scrollHeight", {
+      configurable: true,
+      get: () => 2000,
+    });
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    });
+
+    await waitFor(() => {
+      expect(port!.scrollTop).toBe(400);
+    });
+  });
+
   it("persists scrollTop on scroll (rAF-coalesced)", async () => {
     // Start without a restored value so the restore effect does not fight us.
     sessionStorage.removeItem(resumeKey(WS, "kb", "scrollTop"));

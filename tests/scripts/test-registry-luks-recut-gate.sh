@@ -127,8 +127,8 @@ canonical_recut "$TMP/canonical.json"
 check "canonical recut PASS" 0 "registry_luks_recut_gate: PASS" "$TMP/canonical.json"
 
 # --- THE case that proves this issue's purpose --------------------------------------------
-# registry-host-replace PRESERVES the volume. Against a still-plaintext volume that boots
-# cloud-init into the blkid `*)` FATAL arm and DARKS the registry. The gate must ABORT.
+# registry-host-replace PRESERVES the volume, so it is a host replace, not a recut (against a
+# non-LUKS volume it boots cloud-init into the blkid `*)` FATAL arm). The gate must ABORT.
 # NOTE the attachment/NIC shape: this fixture must be a FAITHFUL registry-host-replace plan,
 # because the cross-gate divergence block below asserts the host-replace gate PASSES it. In a
 # real host replace the SERVER is replaced, which forces its volume-attachment and private NIC
@@ -214,6 +214,15 @@ check "before.id as JSON string vs numeric input PASS (tostring)" 0 "volume_id_m
 # --- The lib fail-closes on its OWN argument (D9) ---------------------------------------------
 check "empty \$expected ABORT (fail-closed on own arg)" 1 "expected_registry_store_volume_id" "$TMP/canonical.json" ""
 check "non-numeric \$expected ABORT (fail-closed on own arg)" 1 "expected_registry_store_volume_id" "$TMP/canonical.json" "not-a-number"
+# The ABORT line prints a command a human copy-pastes: it must carry the token on curl's STDIN
+# (--config - fed by a printf process substitution), never as a `-H "Authorization: Bearer ..."` argv.
+check "non-numeric \$expected ABORT prints the stdin-config read command" 1 "curl --disable --noproxy '*' -s --config - 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"\$HCLOUD_TOKEN\")" "$TMP/canonical.json" "not-a-number"
+_abort_out="$(registry_luks_recut_gate "$TMP/canonical.json" "not-a-number" 2>&1 || true)"
+if [[ "$_abort_out" == *'-H \"Authorization'* || "$_abort_out" == *'-H "Authorization'* ]]; then
+  fail "the printed read command must not put the bearer on argv (-H Authorization)" "n/a" "$_abort_out"
+else
+  pass "the printed read command carries no -H Authorization argv form"
+fi
 
 # --- Named-live addresses: the logs secret and the LUKS key ------------------------------------
 plan "$TMP/logs-del.json" \
@@ -406,6 +415,13 @@ GATE="${_PG_DIR}/lib/registry-luks-recut-gate.sh"
 PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${_PG_DIR}/lib/gate-suite-harness.sh"
+
+
+# The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
+# gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
+# them: a bare `pass "$name"` in gate_check left six suites totalling 280 assertions green on ONE
+# edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
+gate_harness_selftest || true
 
 mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces' 'hcloud_volume')]"
 mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces' 'hcloud_volume')]"

@@ -12,7 +12,7 @@ ticket_2_t_plus_14d_expiry: 2026-05-31T19:19Z
 
 ## Purpose
 
-Two separate Sentry support tickets submitted via Sentry's Intercom support widget at `https://help.sentry.io/` per `knowledge-base/project/brainstorms/2026-05-16-sentry-residency-a2-branch-c-brainstorm.md` Decision #9. Submitted as **separate Intercom conversations** (not threaded) — the routing logic at Sentry differs for billing vs forensics, and threading them risks one decision dragging on the other.
+Two separate Sentry support tickets submitted via Sentry's Intercom support widget at `https://help.sentry.io/` per `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-16-sentry-residency-a2-branch-c-brainstorm.md` Decision #9. Submitted as **separate Intercom conversations** (not threaded) — the routing logic at Sentry differs for billing vs forensics, and threading them risks one decision dragging on the other.
 
 Sentry's Intercom channel does NOT return a numeric ticket ID — the conversation ID lives server-side and async follow-up arrives via email at `jean.deruelle@jikigai.com`. The Intercom conversation thread itself IS the canonical ticket; this file records submission timestamp + AI Support Assistant response so the post-merge gate has a verifiable baseline.
 
@@ -105,7 +105,7 @@ jean.deruelle@jikigai.com
 **After submission:**
 
 - Capture ticket ID in PR #3946 body under `AC13 — Sentry support ticket IDs`.
-- Capture submission timestamp — this is the **anchor for T+14d countdown** on PIR Phase 8 Gate 3 (`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`).
+- Capture submission timestamp — this is the **anchor for T+14d countdown** on PIR Phase 8 Gate 3 (`knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`).
 - T+14d resolution branch (3a/3b/3c/3d) is selected at countdown expiry and recorded in-place in the PIR.
 
 ---
@@ -119,7 +119,7 @@ jean.deruelle@jikigai.com
 
 ## Human-response capture (post-async)
 
-> **[2026-05-19 UPDATE: Gate 3 resolved as 3b on 2026-05-19 — twelve days before T+14d expiry — via two unsolicited Sentry support replies (billing + Rodolfo forensics). 2026-05-21 follow-up: Sentry support canceled the duplicate `jikigai` org and transferred $29 credit to `jikigai-eu`. The capture flow below describes options that were never selected; it is preserved for audit-trail integrity. The load-bearing record now lives at PIR §Phase 9 Gate-3b Correction (`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`) and Article 30 PA8 §(d) UPDATE block.]**
+> **[2026-05-19 UPDATE: Gate 3 resolved as 3b on 2026-05-19 — twelve days before T+14d expiry — via two unsolicited Sentry support replies (billing + Rodolfo forensics). 2026-05-21 follow-up: Sentry support canceled the duplicate `jikigai` org and transferred $29 credit to `jikigai-eu`. The capture flow below describes options that were never selected; it is preserved for audit-trail integrity. The load-bearing record now lives at PIR §Phase 9 Gate-3b Correction (`knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`) and Article 30 PA8 §(d) UPDATE block.]**
 
 When Sentry's Foundations team responds (via email to `jean.deruelle@jikigai.com`), update the PIR `## Phase 8 — Recovery Completeness` section in-place with the following steps in order:
 

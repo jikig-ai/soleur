@@ -302,8 +302,8 @@ assert "call site carries NO 'exit 1'"    "[[ '$NIC_CALL' != *'exit 1'* ]]"
 # AC5, which is the established single home for this gate's render assertions.
 echo ""
 echo "--- AC1: soleur-wait-nic precedes cloudflared service install ---"
-NIC_LINE=$( { grep -nE '^[[:space:]]*-[[:space:]]+soleur-wait-nic ' "$CI" | head -1 | cut -d: -f1; } || true)
-INSTALL_LINE=$( { grep -nF -- 'cloudflared service install' "$CI" | head -1 | cut -d: -f1; } || true)
+NIC_LINE=$( { grep -nE '^[[:space:]]*-[[:space:]]+soleur-wait-nic ' "$CI" | sed -n '1p' | cut -d: -f1; } || true)
+INSTALL_LINE=$( { grep -nF -- 'cloudflared service install' "$CI" | sed -n '1p' | cut -d: -f1; } || true)
 assert "both the NIC wait and the cloudflared install are present" \
   "[[ -n '$NIC_LINE' && -n '$INSTALL_LINE' ]]"
 assert "NIC wait ($NIC_LINE) precedes cloudflared service install ($INSTALL_LINE)" \
@@ -517,7 +517,17 @@ for stage in private_nic_timeout private_nic_probe_fault; do
   # Anchor on the HCL attribute construct, not the bare stage name: these names also appear in
   # this file's own explanatory comment, so a bare grep would match the prose that describes the
   # rule rather than the rule, and would keep passing after the filter was deleted.
-  n=$(grep -cE "^[[:space:]]*value[[:space:]]*=[[:space:]]*\"${stage}\"[[:space:]]*$" "$ALERTS" || true)
+  #
+  # REBOUND for #7650 Phase 2. These rules are now `sentry_alert`, where a tag filter is an
+  # inline object inside `action_filters[].conditions[]`:
+  #     { tagged_event = { key = "stage", match = "eq", value = "private_nic_timeout" } },
+  # rather than the old `filters_v2` block's standalone `value = "..."` line. The previous
+  # anchor required `value` to START its line and END it, so it matched ZERO after the
+  # migration and reported the routing deleted when it was intact — a false alarm on the
+  # loudest possible subject. The new anchor keeps the same discipline: it requires the
+  # `tagged_event` CONSTRUCT, so this file's own prose still cannot satisfy it, and it pins
+  # `key = "stage"` too, because a filter on the right value under the wrong key routes nothing.
+  n=$(grep -cE "tagged_event[[:space:]]*=[[:space:]]*\{[^}]*key[[:space:]]*=[[:space:]]*\"stage\"[^}]*value[[:space:]]*=[[:space:]]*\"${stage}\"" "$ALERTS" || true)
   assert "stage '$stage' is a live tagged_event filter value, not just prose (found $n)" \
     "[[ '$n' -ge 1 ]]"
   # And the emitter must actually emit it — a filter naming a stage nothing emits is a dark rule.

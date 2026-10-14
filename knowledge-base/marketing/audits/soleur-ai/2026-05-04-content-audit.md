@@ -33,22 +33,26 @@ owner: CMO
 **Meta description:** Not detected in fetched HTML (flag for SEO-AEO analyst).
 
 **Detected target keywords:**
+
 - "AI agents for solo founders" (title)
 - "company-as-a-service platform" (H1 sub, H2)
 - "stop hiring start delegating" (H1, repeats in lower CTA)
 - "AI organization" (H2)
 
 **Keyword alignment assessment:**
+
 - The title hits the highest-value head term ("AI agents for solo founders") — good.
 - Hero H1 is the brand pain-point framing ("Stop hiring. Start delegating.") which matches brand guide §Value Proposition Framings (primary). On-brand, but the phrase has near-zero existing search volume; it is a positioning line, not a keyword target. The H1 sub-line "The Company-as-a-Service platform for solo founders" recovers the keyword target, so the dual-headline pattern works.
 - "AI organization" is owned-brand language and consistent across the page.
 - Missed opportunities: "AI for solo founders," "AI tools for solopreneurs," "delegate to AI agents," and "AI assistant for founders" do not appear in any H2/H3 even though competitors rank for them.
 
 **Search-intent match:**
+
 - Hero serves informational/commercial-investigation users; primary CTA is transactional ("Join the Waitlist") and works for high-intent visitors.
 - Gap: the secondary CTA "Or try the open-source version →" addresses transactional self-serve, but there is no commercial-investigation bridge (no "Compare," "How it works in 3 minutes," or "See an example day"). Visitors who arrived from informational queries have nowhere to convert before being asked for an email.
 
 **Readability assessment:**
+
 - Strong. Sentences are short. Department blocks follow a consistent micro-pattern (label → outcome). Aligns with brand guide voice rules (declarative, no hedging, "Trust the reader's intelligence").
 
 **Issues found:**

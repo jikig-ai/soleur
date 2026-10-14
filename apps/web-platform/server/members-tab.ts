@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { boundedAuthGetUser } from "@/server/request-auth";
 import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 import {
   resolveCurrentOrganizationId,
@@ -28,9 +29,8 @@ export interface SettingsTab {
  */
 export async function resolveMembersTab(): Promise<SettingsTab | null> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userData = await boundedAuthGetUser(supabase);
+  const user = userData?.user;
   if (!user) return null;
 
   const orgId = await resolveCurrentOrganizationId(user.id, supabase);
@@ -52,7 +52,7 @@ export async function resolveMembersTab(): Promise<SettingsTab | null> {
     return null;
   }
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId };
+  const identity: Identity = { userId: user.id, role: "prd", orgId, email: null, subscriptionStatus: null };
   if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) return null;
   return { href: "/dashboard/settings/team", label: "Members" };
 }

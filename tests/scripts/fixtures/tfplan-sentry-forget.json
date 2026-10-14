@@ -1,0 +1,64 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "type": "sentry_issue_alert",
+      "address": "sentry_issue_alert.example_adopted",
+      "mode": "managed",
+      "change": {
+        "actions": [
+          "forget"
+        ],
+        "before": {
+          "conditions_v2": [
+            {
+              "body": "x"
+            }
+          ],
+          "filters_v2": [
+            {
+              "key": "a"
+            },
+            {
+              "key": "b"
+            }
+          ],
+          "actions_v2": [
+            {
+              "notify_email": {}
+            }
+          ]
+        },
+        "after": null
+      }
+    },
+    {
+      "type": "sentry_alert",
+      "address": "sentry_alert.example_adopted",
+      "mode": "managed",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {},
+        "after": {},
+        "importing": {
+          "id": "example-org/999001"
+        }
+      }
+    },
+    {
+      "type": "sentry_cron_monitor",
+      "address": "sentry_cron_monitor.example_untouched",
+      "mode": "managed",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {},
+        "after": {}
+      }
+    }
+  ]
+}

@@ -78,14 +78,14 @@ import {
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   mintInstallationToken,
   postSentryHeartbeat,
+  CLAUDE_BUDGET_STOP_SUBTYPE,
   REPO_OWNER,
   REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
-  resolveClaudeBin,
+  spawnClaudeEval,
   type SpawnResult,
-  KILL_ESCALATION_MS,
 } from "./_cron-claude-eval-substrate";
 import {
   validateAndExecutePredicates,
@@ -95,6 +95,7 @@ import {
 // Re-export for test parity (cron-follow-through-monitor.test.ts imports via this module).
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
 // 73-145, with three idempotency guards (A/B/C) added for Inngest replay
@@ -113,7 +114,33 @@ predicates and SLA status.
 ## Instructions
 
 1. List open follow-through issues:
-   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author --jq '.'${"`"}
+   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author${"`"}
+
+   An issue whose body carries a ${"`"}soleur:followthrough${"`"} directive is
+   SWEEPER-OWNED: ${"`"}scripts/sweep-followthroughs.sh${"`"} polls it daily on its own
+   cadence, with its own body format and its own close semantics. Mark those
+   issues as you list them — step 3 treats them differently.
+
+   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author --jq '[.[] | . + {sweeperOwned: (((.body // "") | test("soleur:followthrough")))}]'${"`"}
+
+   WHAT SWEEPER-OWNED CHANGES, AND WHAT IT DOES NOT. It removes exactly the two
+   CLOSING transitions and nothing else. The conflict between the two systems is
+   about closing, and only about closing: this monitor's Guard C closes as
+   ${"`"}not planned${"`"} after 30 business days, and ${"`"}sweep-followthroughs.sh${"`"}
+   filters NOT_PLANNED out of its closed set — so a sweeper-owned tracker closed
+   here becomes invisible to BOTH systems while it is still legitimately waiting,
+   and that is not undoable by either poller.
+
+   Guard B is not part of that conflict. It applies a label and posts one comment;
+   it closes nothing, and the sweeper has no SLA notion of its own. An earlier
+   draft of this rule dropped sweeper-owned issues from the LISTING altogether,
+   which removed Guard B along with Guard C and left a long-running legal tracker
+   with a single observer. Excluding the whole issue was over-broad for the defect
+   it was fixing.
+
+   Note that ${"`"}sla_business_days${"`"} does not reach Guard C — that 30-day bound is
+   a constant in this prompt — so a ${"`"}## Verification${"`"} block cannot substitute
+   for the sweeper-owned rule below.
 
 2. If zero issues are found, output "No open follow-through issues." and stop.
 
@@ -135,6 +162,11 @@ predicates and SLA status.
         "Pre-Validated Predicate Results" section below for the results.
         Do NOT re-execute any network requests. Use the pre-computed
         PASSED/FAILED/BLOCKED status directly.
+
+   c2. IF the issue is SWEEPER-OWNED (step 1), then Guard A and Guard C are
+      FORBIDDEN for it: never close it, and never post a "Verified:" or a
+      give-up comment on it. Guard B still applies in full. The sweeper closes
+      its own trackers, or a human does.
 
    d. Take action based on result. ONLY comment on STATE TRANSITIONS
       (do NOT add daily "still pending" comments). For EACH state transition,
@@ -261,13 +293,8 @@ predicates and SLA status.
 // can assert `--strict-mcp-config` membership + position structurally, rather
 // than via brittle source-text matching.
 export const CLAUDE_CODE_FLAGS = [
-  // #5691 — defensive: this cron passes NO `--plugin-dir`, so it never loads
-  // the plugin-bundled remote MCP servers and makes no MCP dial; the
-  // load-bearing fix here is the telemetry env in buildSpawnEnv. `--strict-mcp-config`
-  // is belt-and-suspenders (guards a future `--plugin-dir` addition / project
-  // `.mcp.json` auto-discovery). Prepended before `--print` (position-safe vs
-  // the trailing `--`). Mirrors spawnClaudeEval; this cron does not route through it.
-  "--strict-mcp-config",
+  // #5691/#8611 — `--strict-mcp-config` is NOT listed here: this cron now routes through
+  // spawnClaudeEval, which prepends it (before `--print`, position-safe vs the trailing `--`).
   "--print",
   "--model", EXECUTION_MODEL,
   "--max-turns", "30",
@@ -326,6 +353,8 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronFollowThroughMonitorHandler({
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs): Promise<{
   exitCode: number | null;
   durationMs: number;
@@ -516,93 +545,31 @@ export async function cronFollowThroughMonitorHandler({
   // Inject pre-validated predicate results into the prompt so the agent
   // uses server-side results instead of executing network requests.
   const promptWithPredicates = FOLLOW_THROUGH_PROMPT + "\n\n" + predicateResultsMarkdown;
-  const result = await step.run("claude-eval", async (): Promise<SpawnResult> => {
-    const claudeBin = resolveClaudeBin();
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);
-    const startedAt = Date.now();
-    let abortedByTimeout = false;
-    let exited = false;
-    let escalationTimer: NodeJS.Timeout | null = null;
-
-    try {
-      return await new Promise<SpawnResult>((resolve) => {
-        const child = spawn(
-          claudeBin,
-          [...CLAUDE_CODE_FLAGS, promptWithPredicates],
-          {
-            detached: true, // own process group so SIGTERM propagates to grandchildren
-            stdio: ["ignore", "inherit", "inherit"],
-            env: buildSpawnEnv(installationToken),
-          },
-        );
-
-        const finish = (r: SpawnResult) => {
-          exited = true;
-          if (escalationTimer) clearTimeout(escalationTimer);
-          resolve(r);
-        };
-
-        // Single merged abort handler — same shape as PR-1.
-        ac.signal.addEventListener(
-          "abort",
-          () => {
-            abortedByTimeout = true;
-            if (!child.pid) return;
-            const pid = child.pid;
-            try {
-              process.kill(-pid, "SIGTERM");
-            } catch {
-              // Process group already gone — fine.
-            }
-            escalationTimer = setTimeout(() => {
-              if (exited) return;
-              try {
-                process.kill(-pid, "SIGKILL");
-              } catch {
-                // Already exited between SIGTERM and the 5 s escalation.
-              }
-            }, KILL_ESCALATION_MS);
-          },
-          { once: true },
-        );
-
-        child.on("exit", (exitCode, signal) => {
-          finish({
-            ok: exitCode === 0,
-            exitCode,
-            signal,
-            abortedByTimeout,
-            durationMs: Date.now() - startedAt,
-          });
-        });
-        child.on("error", (err) => {
-          reportSilentFallback(err, {
-            feature: "cron-claude-eval",
-            op: "child_process.spawn",
-            message: "claude-code spawn failed",
-            extra: { fn: "cron-follow-through-monitor" },
-          });
-          finish({
-            ok: false,
-            exitCode: -1,
-            signal: null,
-            abortedByTimeout,
-            durationMs: Date.now() - startedAt,
-          });
-        });
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-  });
+  // #8611 — routed through spawnClaudeEval (was an inline spawn): inherits the single-flight
+  // guard, the cost marker, --strict-mcp-config and the telemetry env from the one chokepoint.
+  // No ephemeral workspace: the child runs in the server process cwd, exactly as the inline spawn did.
+  const result = await step.run("claude-eval", (): Promise<SpawnResult> =>
+    spawnClaudeEval({
+      spawnCwd: process.cwd(),
+      installationToken,
+      flags: CLAUDE_CODE_FLAGS,
+      prompt: promptWithPredicates,
+      maxTurnDurationMs: MAX_TURN_DURATION_MS,
+      cronName: "cron-follow-through-monitor",
+      buildSpawnEnv,
+      logger,
+      runId,
+      attempt,
+    }),
+  );
 
   // Step 4: sentry-heartbeat — single end-of-job POST per
   // 2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md. Sentry slug
   // matches the new monitor resource (Phase 4).
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
-      ok: result.ok,
+      // #8611: a run stopped at its --max-budget-usd cap did not finish, even on exit 0.
+      ok: result.ok && result.subtype !== CLAUDE_BUDGET_STOP_SUBTYPE,
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-follow-through-monitor",
       logger,
@@ -629,6 +596,7 @@ export const cronFollowThroughMonitor = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 9 * * 1-5" },

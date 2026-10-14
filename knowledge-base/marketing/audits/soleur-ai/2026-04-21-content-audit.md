@@ -250,7 +250,7 @@ Full sample of the committed Eleventy source (`plugins/soleur/docs/`). Live site
 
 | Element | Current | Suggested | Rationale |
 |---------|---------|-----------|-----------|
-| Intro paragraph lead | `<a href="https://x.com/karpathy/...">Agentic engineering</a> treats AI agents as specialist team members...` | "Agentic engineering is a development approach where AI agents act as specialist team members, not generic assistants. <a href=\"https://x.com/karpathy/...\">Andrej Karpathy</a> coined the term in..." | Inline definition before the link. GEO + AEO win. |
+| Intro paragraph lead | `<a href="https://x.com/karpathy/...">Agentic engineering</a> treats AI agents as specialist team members...` | "Agentic engineering is a development approach where AI agents act as specialist team members, not generic assistants. <a href=\"<https://x.com/karpathy/...\">Andrej> Karpathy</a> coined the term in..." | Inline definition before the link. GEO + AEO win. |
 
 ---
 

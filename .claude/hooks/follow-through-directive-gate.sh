@@ -37,8 +37,36 @@ set -eo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input
+# undefined, the hook dies at the call under `set -e`, prints nothing, exits
+# non-zero, and the tool proceeds — defect 2 of #7164, reintroduced one line
+# above where every test points.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
+# The source above is fail-hard, but 12 of the 20 hooks run `set -uo pipefail`
+# WITHOUT -e. There a missing helper makes hook_parse_input return 127, `!`
+# inverts that to true, the response functions are 127 too, and the hook reaches
+# `exit 0` — a clean pass-through with no row and no prompt, which is defect 2
+# reintroduced by a broken deploy. Assert it explicitly instead of relying on -e.
+if ! declare -f hook_parse_input >/dev/null 2>&1; then
+  echo "[follow-through-directive-gate] hook-input helper missing — guards did NOT run for this call" >&2
+  exit 0
+fi
+
 INPUT=$(cat)
-eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(.cwd // "")"' 2>/dev/null || echo 'CMD="" WORK_DIR=""')"
+# Parse hook stdin WITHOUT shell evaluation (ADR-156: stdin is
+# model-controlled and untrusted). A non-string field is surfaced, never
+# coerced — coercion closes the RCE and leaves the guards evaded (#7164).
+# ADR-157: a hook that cannot fully parse its input asks. The exit lives
+# HERE, at the call site, not inside the library.
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "follow-through-directive-gate"
+  hook_input_should_ask && { hook_input_emit_ask "follow-through-directive-gate"; exit 0; }
+  exit 0
+fi
+CMD="$HOOK_CMD"
+WORK_DIR="$HOOK_CWD"
 : "${CMD:=}"
 : "${WORK_DIR:=}"
 
@@ -77,7 +105,7 @@ if [[ -z "$BODY_FILE" ]]; then
   # --body "<string>" or --body '<string>' or --body $'<string>'. Pull
   # everything after --body that's quoted; bash's word-splitting in the
   # caller's shell has already collapsed whitespace, so we work with the
-  # exact bytes the hook received from jq @sh.
+  # exact bytes the hook received from the jq extractor.
   # Use perl for greedy regex; sed -E can't do non-greedy across newlines.
   BODY_INLINE=$(echo "$CMD" | perl -0777 -ne 'if (/--body[[:space:]]+(["'"'"'])(.+?)(?<!\\)\1/s) { print $2; }' || true)
 fi
@@ -134,16 +162,46 @@ if ! grep -qE -- '-->' <<<"$PARSED_BODY"; then
 fi
 
 # Extract script= and earliest= using the same awk parser the sweeper uses.
-# Inlined here so the hook is self-contained (no source dependency on a
-# repo file that may move). If you change the parser, mirror BOTH places.
+# Inlined here so the hook is self-contained (no source dependency on a repo file that may
+# move). If you change the parser, mirror BOTH places.
+#
+# THIS PARSER MUST BE BYTE-EQUIVALENT TO `parse_directive` IN scripts/sweep-followthroughs.sh,
+# because the sweeper is the authority: it is what actually runs the probe. A gate that is
+# LOOSER than the authority green-lights a tracker the sweeper will never honour — which is
+# the exact defect #7490 closed, arriving through the gate built to prevent it. Measured
+# before this was fixed, three body shapes passed the gate and were skipped or red-verdicted
+# by the sweeper: a `~~~`-fenced directive, a 3-space-indented ```` ``` ```` fence, and an
+# unfenced directive indented by two spaces. The first two came from widening the sweeper's
+# predicate without widening this one; the third predates that and is the original bug class.
+#
+# Three properties, all load-bearing and all previously divergent:
+#   * the fence predicate covers `~~~` and up to three leading spaces (CommonMark);
+#   * fence LENGTH is tracked, so a four-backtick block quoting a three-backtick example does
+#     not invert every classification below it;
+#   * the directive anchor is COLUMN 0. Widening it here would make a body the sweeper skips
+#     look enrolled, which is how an indented directive enrols in name only.
 PARSED=$(printf '%s' "$PARSED_BODY" | awk '
-  BEGIN { in_dir = 0; closing = 0; fence = 0 }
-  /^```/ { fence = !fence; next }
+  BEGIN { in_dir = 0; closing = 0; fence = 0; fence_ch = ""; fence_len = 0 }
+  { sub(/\r$/, "") }
+  # A fence cannot OPEN inside an unterminated directive -- `<!-- -->` is an HTML comment, so
+  # its continuation lines are directive content, not markdown. Mirrors the authority
+  # (scripts/sweep-followthroughs.sh). Without it, a stray ``` between `script=` and
+  # `earliest=` in the canonical MULTI-LINE body swallows `earliest=` and the closing `-->`,
+  # and this gate then DENIES a body the sweeper honours -- the divergence the parity oracle
+  # exists to catch, in the direction that blocks a correct author.
+  in_dir && /^[ ]?[ ]?[ ]?(```|~~~)/ { next }
+  /^[ ]?[ ]?[ ]?(```|~~~)/ {
+    fl = $0; sub(/^[ ]+/, "", fl); fc = substr(fl, 1, 1); fn = 0
+    while (substr(fl, fn + 1, 1) == fc) fn++
+    if (!fence) { fence = 1; fence_ch = fc; fence_len = fn; next }
+    if (fc == fence_ch && fn >= fence_len) { fence = 0; fence_ch = ""; fence_len = 0; next }
+    next
+  }
   fence { next }
-  /^[[:space:]]*<!-- *soleur:followthrough/ { in_dir = 1 }
+  /^<!-- *soleur:followthrough/ { in_dir = 1 }
   /-->/ && in_dir { closing = 1 }
   in_dir {
-    gsub(/^[[:space:]]*<!-- *soleur:followthrough/, "")
+    gsub(/^<!-- *soleur:followthrough/, "")
     gsub(/-->/, "")
     for (i = 1; i <= NF; i++) {
       if ($i ~ /^script=/)   { sub(/^script=/, "", $i);   print "script "   $i }
@@ -157,6 +215,56 @@ SCRIPT_REL=$(printf '%s\n' "$PARSED" | awk '/^script /{print $2; exit}')
 EARLIEST=$(printf '%s\n' "$PARSED" | awk '/^earliest /{print $2; exit}')
 
 if [[ -z "$SCRIPT_REL" ]]; then
+  # THREE WAYS TO ARRIVE HERE, AND THEY NEED DIFFERENT ADVICE (#7490). The presence check
+  # above greps the RAW body, so a directive that is merely UNPARSEABLE satisfies it; the awk
+  # parser skips fences and anchors at column 0, so SCRIPT_REL comes back empty for a fenced
+  # directive, for an indented one, AND for one genuinely missing `script=`. The generic
+  # "script= is empty" message sends the first two authors looking for a token that is right
+  # there in front of them — which is how the fenced form survived as the ship template's
+  # default and killed six trackers.
+  #
+  # The fence predicate below is spelled to MATCH the parser above: same alternation, same
+  # three-space tolerance. It is `grep -E` rather than awk, so `[ ]?[ ]?[ ]?` and `{0,3}` are
+  # equivalent here — the awk interval ban is a dialect concern that does not apply to grep —
+  # but it is written the same way so a reader comparing the two sees one predicate, not two.
+  _ft_fenced=0
+  # The backticks are NOT backslash-escaped. Inside a single-quoted shell word a backtick is
+  # already literal, and `\\`` in an ERE is a backslash-escaped non-special character whose
+  # meaning is undefined — measured here, the group degenerated and the pattern matched EVERY
+  # line, so this branch fired on any body that reached it and the indented-directive arm below
+  # was unreachable. Caught by T17g (the arm whose deny reason never appeared), not by reading.
+  if grep -qE '^[ ]?[ ]?[ ]?(```|~~~)' <<<"$PARSED_BODY" \
+     && grep -qE 'script=scripts/followthroughs/' <<<"$PARSED_BODY"; then
+    _ft_fenced=1
+  fi
+  # An INDENTED but unfenced directive: the marker is present, it is not in a fence, and the
+  # column-0 anchor still rejects it. This is the quietest of the three — the sweeper reports
+  # it as no-directive-at-all, so the tracker rots with its directive plainly visible.
+  if [[ "$_ft_fenced" == "0" ]] \
+     && grep -qE '^[[:space:]]+<!-- *soleur:followthrough' <<<"$PARSED_BODY"; then
+    emit_incident "wg-pm-class-followthrough-for-operator-dogfood" deny \
+      "Follow-through directive is INDENTED, not at column 0" "$CMD"
+    jq -n '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "BLOCKED: the `soleur:followthrough` directive is INDENTED. The daily sweeper anchors the opening `<!--` at COLUMN 0, so an indented directive parses as no directive at all and the issue would rot open with the directive plainly visible in the body. Move the `<!-- soleur:followthrough ... -->` line flush to the left margin."
+      }
+    }'
+    exit 0
+  fi
+  if [[ "$_ft_fenced" == "1" ]]; then
+    emit_incident "wg-pm-class-followthrough-for-operator-dogfood" deny \
+      "Follow-through directive is INSIDE a code fence" "$CMD"
+    jq -n '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "BLOCKED: the `soleur:followthrough` directive is inside a CODE FENCE. The daily sweeper deliberately skips fenced blocks (a fenced directive is an example, not an enrolment), so this issue would rot open with the directive visibly present. Remove the fence delimiters and leave the `<!-- soleur:followthrough ... -->` line at column 0."
+      }
+    }'
+    exit 0
+  fi
   emit_incident "wg-pm-class-followthrough-for-operator-dogfood" deny \
     "Follow-through directive MUST set script=<path>" "$CMD"
   jq -n '{

@@ -4,10 +4,11 @@
 // construction. Closes #2298.
 
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import { createShare, listShares } from "@/server/kb-share";
 
 /** POST — generate a share link for a KB document. */
@@ -15,11 +16,8 @@ export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/kb/share", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -39,7 +37,7 @@ export async function POST(request: Request) {
   // divergent failure surface that dead-ended "Generate link". createShare
   // still takes the service-role client (kb_share_links writer is allowlisted).
   const serviceClient = createServiceClient();
-  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
   if (!access.ok) {
     // Workstream A: mirror the resolver-error response so the failing branch is
     // observable (status now in scope — the legacy resolver returned an opaque
@@ -49,7 +47,7 @@ export async function POST(request: Request) {
       op: "resolve",
       message: "share resolver failed (active workspace KB root)",
       extra: {
-        userId: user.id,
+        userId,
         documentPath: body.documentPath,
         reason: access.status,
       },
@@ -73,7 +71,7 @@ export async function POST(request: Request) {
   // test/kb-share-allowed-paths.test.ts "forwards the resolver's active id").
   const result = await createShare(
     serviceClient,
-    user.id,
+    userId,
     access.activeWorkspaceId,
     access.kbRoot,
     body.documentPath,
@@ -94,11 +92,8 @@ export async function POST(request: Request) {
 
 /** GET — list share links for the authenticated user, optionally filtered by documentPath. */
 export async function GET(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -108,7 +103,7 @@ export async function GET(request: Request) {
   const serviceClient = createServiceClient();
   const result = await listShares(
     serviceClient,
-    user.id,
+    userId,
     documentPath ? { documentPath } : undefined,
   );
   if (!result.ok) {

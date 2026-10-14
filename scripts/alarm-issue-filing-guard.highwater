@@ -1,0 +1,9 @@
+11 # Issue-filing steps that cannot report the verdict they exist for (#7242).
+   # RATCHETS DOWN ONLY. Do not raise this to make a build pass.
+   #
+   # These 11 are PRE-EXISTING, found the moment this guard stopped walking two hardcoded
+   # workflows and started walking all 71. They are in other alarms (post-merge-monitor,
+   # scheduled-realtime-probe, scheduled-expenses-verify-by, scheduled-cron-artifact-age,
+   # scheduled-domain-model-drift, scheduled-terraform-drift) and are carried as a baseline
+   # rather than fixed here, because each needs its own producer-liveness judgement and this
+   # PR is not the place to make six of them at once. Everything #7242 touches is at 0.

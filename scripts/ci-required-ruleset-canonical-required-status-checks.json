@@ -12,10 +12,6 @@
     "integration_id": 15368
   },
   {
-    "context": "CodeQL",
-    "integration_id": 57789
-  },
-  {
     "context": "skill-security-scan PR gate",
     "integration_id": 15368
   },
@@ -81,6 +77,18 @@
   },
   {
     "context": "credential-path-guard",
+    "integration_id": 15368
+  },
+  {
+    "context": "marketplace-manifest-guard",
+    "integration_id": 15368
+  },
+  {
+    "context": "markdown-lint",
+    "integration_id": 15368
+  },
+  {
+    "context": "vendor-pin-required",
     "integration_id": 15368
   }
 ]

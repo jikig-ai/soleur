@@ -91,6 +91,16 @@ ACTOR_RES = tuple(
         r"\bfounder\b",                       # the founder
         # ssh into / onto / to / `ssh -i` — a human opening a remote shell.
         r"\bssh(?:\s+into|\s+onto|\s+to|\s+-i)\b",
+        # #7286 — THE FORM RUNBOOKS ACTUALLY USE, and the one this linter could not see.
+        # The prose alternation above matches "you ssh into the host" but NEVER the literal
+        # command a runbook pastes: `ssh root@<host> '...'`. Measured before this line existed:
+        # `lint-infra-no-human-steps.py knowledge-base/.../runbooks/inngest-server.md` returned
+        # "OK: no human-run infra steps", exit 0, with SEVEN `ssh root@` instructions present —
+        # including the one telling an operator to read inngest-server's journal by logging into
+        # the box, which is exactly the procedure #7286 needed and could not use.
+        # So the gate that exists to enforce hr-no-ssh-fallback-in-runbooks was, for the
+        # user@host form, incapable of failing.
+        r"\bssh\s+\S*@",
         r"\blog into\b.*?\bconsole\b",        # log into … console
         r"\bby hand\b",                       # by hand
         r"\bmanually\b",                      # manually
@@ -159,7 +169,53 @@ STRONG_ACTOR_RE = re.compile(
     r"|\byourself\b"
     r"|\byour laptop\b"
     r"|\bssh(?:\s+into|\s+onto|\s+to|\s+-i)\b"
+    # #7286 — mirrored from ACTOR_RES. `ssh user@host` is an UNAMBIGUOUS human-agency signal:
+    # nothing in this repo's automated paths shells out to a literal `ssh root@<host>` from a
+    # runbook, so unlike bare `operator`/`you` this cannot re-open the #6771 filename false
+    # positive. It must be in the STRONG set too, or a line whose only other imperative lives
+    # inside a filename gets neutralized and the ssh instruction goes silent.
+    r"|\bssh\s+\S*@"
     r"|\b(?:founder|operator|admin|maintainer|sysadmin|engineer)\s+runs?\b",
+    re.IGNORECASE,
+)
+
+# #7286 — a literal remote-shell command (`ssh root@<host> '...'`). This is the ONLY signal
+# permitted to survive the fence skip in scan_text, because it is the form runbooks actually
+# use and the form this linter was structurally blind to. Kept separate from ACTOR_RES/
+# STRONG_ACTOR_RE so the fence exception can never widen by accident: adding a pattern there
+# does not add it here.
+#
+# FLAG TOKENS ARE SKIPPED, and that is not cosmetic. The first draft required `user@` to follow
+# `ssh` IMMEDIATELY, so any flag defeated it — measured, `ssh root@web-1 '…'` was caught (exit 1)
+# while `ssh -i ~/.ssh/prod_key root@web-1 '…'` passed (exit 0). That made the fence exception
+# NARROWER than the prose rules it mirrors, since `ssh -i` is enumerated by name in both
+# ACTOR_RES and STRONG_ACTOR_RE — and narrower in exactly the place (inside fences) where
+# runbooks actually paste the command.
+#
+# Skips intervening tokens, still requiring a literal `user@`, so this cannot widen into
+# matching `ssh` alone. `ssh://git@github.com` stays unmatched because a literal space after
+# `ssh` is still required.
+#
+# THE ALTERNATION FORM WAS A ReDoS, and CodeQL (py/redos, high) caught it on the PR that
+# introduced it. The first draft was
+#   (?:-[^\s]+\s+|[A-Za-z0-9._/~$-][^\s@]*\s+)*?
+# whose two branches OVERLAP — `-` is inside the second branch's class too — so a token
+# starting with `-` matches both, and the engine explores an exponential number of
+# partitionings before failing. Measured on `ssh ` + `-a ` * n + `x`: 12 tokens 0.001s,
+# 14 0.005s, 16 0.019s, 18 0.076s — ~4x per two tokens, i.e. minutes by ~30. That is a
+# denial of the SECURITY GATE itself: this linter runs in CI over repo markdown, so one
+# runbook line with a long flag list hangs the check that enforces
+# hr-no-ssh-fallback-in-runbooks.
+#
+# The replacement is unambiguous by construction and bounded:
+#   * `[^\s@]+` and `\s+` are DISJOINT character classes, so each iteration has exactly one
+#     possible split — there is nothing to backtrack over;
+#   * `{0,10}` is a bounded quantifier, so the worst case is linear regardless. Ten
+#     intervening tokens is far beyond any real `ssh` invocation (`-i <key> -p <port>
+#     -o <opt>` is six).
+# Excluding `@` from the skipped tokens is what keeps `user@host` itself from being eaten.
+HOST_LOGIN_RE = re.compile(
+    r"\bssh\s+(?:[^\s@]+\s+){0,10}[A-Za-z0-9._%+-]+@",
     re.IGNORECASE,
 )
 
@@ -172,18 +228,44 @@ IGNORE_START_RE = re.compile(r"<!--\s*lint-infra-ignore\s+start\b", re.IGNORECAS
 IGNORE_END_RE = re.compile(r"<!--\s*lint-infra-ignore\s+end\b", re.IGNORECASE)
 
 
+# The ONE literal for the sanctioned SSH-class section that
+# `hr-no-ssh-fallback-in-runbooks` names. Both `_is_carve_heading` and
+# `_is_last_resort_heading` derive from this constant rather than restating it
+# (#7874 task 0.7): the two predicates must agree by construction, because
+# nothing else in the repo compares them. Prefix-anchored with a trailing `\b`
+# so a suffixed title (`Last-resort diagnosis — read-only`) still matches while
+# `Last resort diagnosis` (no hyphen) does not.
+LAST_RESORT_HEADING_RE = re.compile(r"Last-resort diagnosis\b", re.IGNORECASE)
+
+# `Resolved` at start, followed by end-of-title OR a non-word separator
+# (space+`(`, `—`, `:`, `-`) — but NOT another word like "questions".
+RESOLVED_HEADING_RE = re.compile(r"Resolved(?=$|\s*[^\w\s])", re.IGNORECASE)
+
+
+def _strip_heading_decoration(title: str) -> str:
+    """Drop leading decoration (emoji, ✅, whitespace) before the first letter."""
+    return re.sub(r"^[^A-Za-z]+", "", title)
+
+
+def _is_last_resort_heading(title: str) -> bool:
+    """True ONLY for a `Last-resort diagnosis` heading.
+
+    This is the narrow predicate the in-fence host-login exception consults.
+    It must never match the `Resolved` arm: `Resolved` carves ordinary prose,
+    but suppressing a fenced host-login command is a much stronger claim and is
+    reserved for the one section name the hard rule sanctions. Guard 1 row 2
+    (fixture F24) pins that separation.
+    """
+    return bool(LAST_RESORT_HEADING_RE.match(_strip_heading_decoration(title)))
+
+
 def _is_carve_heading(title: str) -> bool:
     """True for an exact `Resolved`/`Resolved (…)`/`Resolved — …` or a
     `Last-resort diagnosis` heading — NOT for `Resolved questions` etc."""
-    # Strip leading decoration (emoji, ✅, whitespace) before the first letter.
-    t = re.sub(r"^[^A-Za-z]+", "", title)
-    # `Resolved` at start, followed by end-of-title OR a non-word separator
-    # (space+`(`, `—`, `:`, `-`) — but NOT another word like "questions".
-    if re.match(r"Resolved(?=$|\s*[^\w\s])", t, re.IGNORECASE):
+    t = _strip_heading_decoration(title)
+    if RESOLVED_HEADING_RE.match(t):
         return True
-    if re.match(r"Last-resort diagnosis\b", t, re.IGNORECASE):
-        return True
-    return False
+    return _is_last_resort_heading(title)
 
 
 def _neutralize_filenames(text: str) -> str:
@@ -231,6 +313,9 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
     ignore_start_line = 0
     carve = False
     carve_level = 0
+    # #7874. Narrower than `carve`: true only inside a `Last-resort diagnosis`
+    # region, which is the only place a FENCED host-login command is suppressed.
+    carve_last_resort = False
 
     for i, raw in enumerate(lines):
         # 1. Inside an ignore region: only the terminating end marker matters.
@@ -249,6 +334,47 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
                 in_fence = False
             continue
         if in_fence:
+            # #7286 — ONE exception to the wholesale fence skip, and the reason
+            # hr-no-ssh-fallback-in-runbooks was unenforceable for its canonical form.
+            #
+            # Runbooks do not write "you ssh into the host" — they PASTE THE COMMAND, inside a
+            # fence, which is the one place this scanner never looked:
+            #
+            #     2. **Check the service:**
+            #        ```
+            #        ssh root@<host> 'systemctl status inngest-server.service'
+            #        ```
+            #
+            # Measured on origin/main before this branch: the inngest-server runbook carried
+            # SEVEN such instructions and `lint-infra-no-human-steps.py` returned
+            # "OK: no human-run infra steps", exit 0. Extending ACTOR_RES with `ssh \S*@` (done
+            # above, and still correct for prose) changed NOTHING, because the lines were never
+            # reachable. The regex was the visible half of the defect; this skip was the half
+            # that actually mattered.
+            #
+            # SCOPED DELIBERATELY NARROW. Only a literal host-login command survives the skip —
+            # not actors, not imperatives, not ignore markers. A fenced `ssh user@host` in a
+            # runbook is a PRESCRIBED STEP, never illustrative: verified by scanning the whole
+            # production corpus, where the only hits are genuine host-login instructions. The
+            # blanket skip stays for everything else, so the #6771 example-code false-positive
+            # class is untouched.
+            #
+            # Sets BOTH actor and imperative: the line is self-contained (a human opening a
+            # remote shell AND running a command), so it flags on same-line co-occurrence and
+            # does not depend on an adjacent prose line that a fence would have hidden anyway.
+            #
+            # #7874 — the carve reaches this arm. Before this gate the exception
+            # fired under EVERY heading, so the `Last-resort diagnosis` section
+            # that `hr-no-ssh-fallback-in-runbooks` sanctions was unreachable for
+            # the only form these findings take (a fenced `ssh user@host`): this
+            # branch `continue`s before the heading/carve check below. The rule
+            # forbids `ssh` as a PRIMARY debug action and directs SSH-class steps
+            # into a last-resort section; that section is now the contract, and a
+            # runbook satisfies the rule by FRAMING the probe rather than by
+            # deleting the diagnostic it needs.
+            if HOST_LOGIN_RE.search(raw) and not carve_last_resort:
+                actor[i] = True
+                imper[i] = True
             continue
 
         # 3. Ignore-region markers (HTML-comment shape, outside fences only).
@@ -269,8 +395,16 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
             if _is_carve_heading(title):
                 carve = True
                 carve_level = level
+                # ASSIGN, never `|=`. An adjacent `## Last-resort diagnosis` ->
+                # `## Resolved` pair takes THIS branch, skipping the `elif` that
+                # clears the state — so an OR would leave the last-resort carve
+                # standing under `## Resolved` and silently suppress a fenced
+                # host-login there. Fixture F27 is the only case that separates
+                # the two forms; F24 passes under both.
+                carve_last_resort = _is_last_resort_heading(title)
             elif carve and level <= carve_level:
                 carve = False
+                carve_last_resort = False
             # Heading lines never carry a prescribed step.
             continue
         if carve:
@@ -446,6 +580,25 @@ def main(argv: list[str]) -> int:
         files = picked
     else:
         files = full_scan_files()
+        # #7874 task 0.8 — full-scan mode is FAIL-CLOSED on an empty file set.
+        # `full_scan_files()` silently skips a SCAN_DIRS entry that is not a
+        # directory, so a renamed/moved knowledge-base root (or a run from the
+        # wrong CWD) collected zero files and printed
+        # `OK: no human-run infra steps in 0 scanned file(s)` at exit 0 — a
+        # clean bill of health from a scan that examined nothing. That is the
+        # vacuous-pass shape this repo has documented repeatedly, and it is the
+        # durable form of Guard 1's dispatch row, which cannot be reached
+        # through `run_case` (every case passes an explicit positional path, and
+        # the `if args.paths:` branch short-circuits before here).
+        if not files:
+            print(
+                "ERROR: full-scan mode collected 0 files under "
+                f"{', '.join(SCAN_DIRS)}. Expected at least one *.md — a scan "
+                "that examines nothing must not report OK. Check the CWD is the "
+                "repo root and that the scan dirs exist. Fail-closed.",
+                file=sys.stderr,
+            )
+            return 2
 
     errors: list[str] = []
     for f in files:

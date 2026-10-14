@@ -238,7 +238,7 @@ defect lives in the seam between the two.
 
 ## Cross-References
 
-- Plan: `knowledge-base/project/plans/2026-05-07-feat-chapter-chunking-pdf-resolver-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-07-feat-chapter-chunking-pdf-resolver-plan.md`
 - Issue: #3436 (parent feature), #3440 (this PR), #3472 (Phase 3.B
   follow-up with atomic-delivery invariant)
 - Peer learning: `2026-04-15-multi-agent-review-catches-bugs-tests-miss.md`

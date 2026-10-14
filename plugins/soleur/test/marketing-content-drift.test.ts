@@ -13,6 +13,10 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import {
+  bulkRedirectPairs,
+  missingEdge301Flags,
+} from "./lib/bulk-redirect-pairs";
 
 const TEST_DIR = import.meta.dir;
 const REPO_ROOT = join(TEST_DIR, "..", "..", "..");
@@ -296,19 +300,34 @@ describe("marketing-content-drift", () => {
     const pillarHtml = readFileSync(pillarPath, "utf8");
     expect(/<h1[^>]*>[\s\S]*Company-as-a-Service[\s\S]*<\/h1>/i.test(pillarHtml)).toBe(true);
 
-    const redirectPath = join(SITE_ROOT, "blog", "what-is-company-as-a-service", "index.html");
-    expect(existsSync(redirectPath)).toBe(true);
-    const redirectHtml = readFileSync(redirectPath, "utf8");
-    expect(/<meta\s+http-equiv=["']refresh["']\s+content=["']0;\s*url=\/company-as-a-service\/["']/i.test(redirectHtml)).toBe(true);
-
-    // Canonical must point FORWARD to the new pillar, never back to the deleted blog URL
-    // (Search Engine Journal 2026: Google ignores declared canonicals when they conflict
-    // with the redirect target). Positive assertion catches template regressions that
-    // either drop the tag or flip it backward; a bare negative-space check would be
-    // tautological here (the template emits `{{ redirect.to }}`, so a back-canonical
-    // cannot occur without an unrelated template edit).
-    const forwardCanonical = /<link\s+rel=["']canonical["']\s+href=["']\/company-as-a-service\/?["']/i;
-    expect(forwardCanonical.test(redirectHtml)).toBe(true);
+    // The meta-refresh stub at _site/blog/what-is-company-as-a-service/ was
+    // deleted in #3328 PR-B — the redirect is now a Cloudflare edge 301 in the
+    // bulk list (all 3 URL shapes, verified live 2026-09-18). Pin the tf source
+    // so the coverage property the stub provided survives as a CI assertion.
+    // Assert per item {} block: the three shapes share the target, so a
+    // file-wide target_url match could mask a dropped target on one item.
+    // Flags are pinned on the same block — a 301->302 flip or dropped
+    // include_subdomains changes redirect semantics without touching the pair.
+    const tf = readFileSync(
+      join(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
+      "utf8",
+    );
+    const pairs = bulkRedirectPairs(tf);
+    expect(pairs.size, "no redirect items parsed from seo-bulk-redirects.tf").toBeGreaterThan(0);
+    for (const src of [
+      "soleur.ai/blog/what-is-company-as-a-service/",
+      "soleur.ai/blog/what-is-company-as-a-service/index.html",
+      "soleur.ai/blog/what-is-company-as-a-service",
+    ]) {
+      const item = pairs.get(src);
+      expect(item?.target, `${src} must 301 to the CaaS pillar`).toBe(
+        "https://soleur.ai/company-as-a-service/",
+      );
+      expect(
+        item ? missingEdge301Flags(item.block) : ["<item missing>"],
+        `${src} must carry the edge-301 flags`,
+      ).toEqual([]);
+    }
   });
 
   test("Test 5: /pricing/ footnote has >=2 external citations + a YYYY-MM-DD date", () => {

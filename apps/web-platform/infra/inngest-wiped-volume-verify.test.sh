@@ -50,11 +50,15 @@ setup() {
   cat > "${MOCKBIN}/curl" <<MOCK
 #!/usr/bin/env bash
 url="\${!#}"
-body=""; prev=""; outfile=""
+body=""; prev=""; outfile=""; cfg=0
 for a in "\$@"; do
-  case "\$prev" in --data-binary|-d) body="\$a" ;; -o) outfile="\$a" ;; esac
+  case "\$prev" in --data-binary|-d) body="\$a" ;; -o) outfile="\$a" ;; --config) [[ "\$a" == - ]] && cfg=1 ;; esac
   prev="\$a"
 done
+# The Bearer travels on the stdin config channel (--config -), never argv: consume + record it,
+# otherwise the process-substitution writer is never read. ARGV is recorded separately.
+if [[ "\$cfg" == 1 ]]; then cat >> "${MOCKBIN}/curl_stdin"; fi
+echo "ARGV: \$*" >> "${MOCKBIN}/curl_argv.log"
 case "\$url" in
   *schedule-reminder*) [[ -n "\$body" ]] && echo "ARM_BODY: \$body" >> "$ARM_LOG"; printf '202' ;;
   *health*)    [[ -n "\$outfile" ]] && printf '{"status":200,"message":"OK"}' > "\$outfile"; printf '200' ;;
@@ -62,16 +66,22 @@ case "\$url" in
   # (Explicit if, not \${:-default}: a brace-heavy JSON default terminates the
   # parameter expansion at its first '}'.)
   *v0/gql*)      if [[ -n "\${WVV_FUNCTIONS_BODY:-}" ]]; then printf '%s' "\$WVV_FUNCTIONS_BODY"; else printf '%s' '{"data":{"functions":[{"slug":"cron-x"}]}}'; fi ;;
-  # /v1/functions is an UNREGISTERED 404 route in v1.19.4 (#5517).
+  # /v1/functions is an UNREGISTERED 404 route in inngest v1.45.1 (#5517).
   *v1/functions*) printf '404 page not found' ;;
   *) printf '200' ;;
 esac
 MOCK
   chmod +x "${MOCKBIN}/curl"
-  # mock systemctl: record verb order to a file
+  # mock systemctl: record verb order to a file. The two read-only unit-shape queries answer
+  # like systemd (stdout is the state; is-active rc 3 when not active, is-enabled rc 1 on
+  # disabled) from WVV_UNIT_ACTIVE / WVV_UNIT_ENABLED — default active+enabled (a serving unit).
   cat > "${MOCKBIN}/systemctl" <<MOCK
 #!/usr/bin/env bash
 echo "\$*" >> "${MOCKBIN}/systemctl.log"
+case "\$1" in
+  is-active)  s="\${WVV_UNIT_ACTIVE:-active}"; echo "\$s"; [[ "\$s" == active ]] || exit 3 ;;
+  is-enabled) s="\${WVV_UNIT_ENABLED:-enabled}"; echo "\$s"; [[ "\$s" == enabled ]] || exit 1 ;;
+esac
 exit 0
 MOCK
   chmod +x "${MOCKBIN}/systemctl"
@@ -94,6 +104,22 @@ MOCK
   chmod +x "$ENUM_STUB"
 }
 
+# Stub enumerate that FAILS (exit 1, no output) and records that it ran.
+make_failing_enum_stub() {
+  ENUM_STUB="${MOCKBIN}/enum-stub.sh"
+  cat > "$ENUM_STUB" <<MOCK
+#!/usr/bin/env bash
+echo ran >> "${MOCKBIN}/enum.log"
+exit 1
+MOCK
+  chmod +x "$ENUM_STUB"
+}
+
+# Count unit-changing systemctl verbs; prints 0 (not "") when systemctl was never invoked.
+count_unit_verbs() {
+  if [[ -f "${MOCKBIN}/systemctl.log" ]]; then grep -cE '^(stop|start|restart) ' "${MOCKBIN}/systemctl.log" || true; else echo 0; fi
+}
+
 run_verify() {
   local data_dir execstart
   data_dir="${MOCKBIN}/inngest-data"; mkdir -p "$data_dir"; echo "sqlite" > "$data_dir/main.db"
@@ -104,7 +130,7 @@ run_verify() {
     INNGEST_VERIFY_EXECSTART="$execstart" \
     INNGEST_VERIFY_MARKER_ID="${INNGEST_VERIFY_MARKER_ID:-}" \
     INNGEST_VERIFY_STATE="${MOCKBIN}/verify.state" \
-    INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
+    INNGEST_MANUAL_TRIGGER_SECRET="${WVV_SECRET_OVERRIDE-test-secret}" \
     INNGEST_VERIFY_SETTLE_SECS=0 \
     WVV_FUNCTIONS_BODY="${WVV_FUNCTIONS_BODY:-}" \
     bash "$TARGET" 2>&1
@@ -123,7 +149,9 @@ test_abort_on_real_reminder() {
   assert_contains "abort message names the armed-reminder safety gate" "$out" "armed reminder"
   # The data dir must be untouched (no wipe), and systemctl never stopped inngest.
   assert_eq "data dir NOT wiped on abort" "sqlite" "$(cat "${MOCKBIN}/inngest-data/main.db")"
-  assert_eq "systemctl never invoked on abort" "0" "$([[ -f "${MOCKBIN}/systemctl.log" ]] && wc -l < "${MOCKBIN}/systemctl.log" || echo 0)"
+  # The quiesce gate runs FIRST (read-only is-active/is-enabled), so systemctl IS queried — but no
+  # verb that changes the unit may appear.
+  assert_eq "no stop/start/restart verb on abort" "0" "$(count_unit_verbs)"
   teardown
 }
 
@@ -150,6 +178,42 @@ test_throwaway_posts_no_comment() {
   assert_not_contains "throwaway is NOT an issue-comment (no real-issue post)" "$body" '"type":"issue-comment"'
   assert_contains "throwaway uses the sentinel unregistered check" "$body" "cutover-verify-noop"
   teardown
+}
+
+# --- Test 3b: the Bearer is on curl's stdin config channel, never on argv ---
+test_bearer_on_stdin_not_argv() {
+  setup
+  make_enum_stub '[]'
+  run_verify >/dev/null 2>&1 || true
+  assert_eq "Bearer secret is NOT on any curl argv" "0" "$(grep -cF 'test-secret' "${MOCKBIN}/curl_argv.log" || true)"
+  assert_contains "arm curl reads its config from stdin" "$(grep 'schedule-reminder' "${MOCKBIN}/curl_argv.log" | head -1)" "--config -"
+  assert_eq "Authorization Bearer header delivered on stdin" "1" "$(grep -cxF 'header = "Authorization: Bearer test-secret"' "${MOCKBIN}/curl_stdin" || true)"
+  teardown
+}
+
+# --- Test 3c (DESTRUCTIVE script): a secret outside the token charset is refused at the read,
+# BEFORE the arm curl and before any stop/wipe/start — through the existing abort path. ---
+test_unusable_shape_secret_refused_before_wipe() {
+  local label val
+  for label in newline quote space; do
+    case "$label" in
+      newline) val=$'synthetic-fixture-token-0001\nheader = "X-Injected: 1"' ;;
+      quote) val='synthetic-fixture-token"0001' ;;
+      space) val='synthetic fixture-token-0001' ;;
+    esac
+    setup
+    make_enum_stub '[]'
+    local out rc=0
+    out=$(WVV_SECRET_OVERRIDE="$val" run_verify) || rc=$?
+    assert_eq "unusable-shape secret ($label): exits 1" "1" "$rc"
+    assert_eq "unusable-shape secret ($label): reason secret_shape via abort()" "secret_shape" "$(jq -r .reason "${MOCKBIN}/verify.state" 2>/dev/null || echo "<no state>")"
+    assert_contains "unusable-shape secret ($label): refusal is reported" "$out" "unusable shape"
+    assert_eq "unusable-shape secret ($label): no stop/start/restart verb" "0" "$(count_unit_verbs)"
+    assert_eq "unusable-shape secret ($label): data dir NOT wiped" "sqlite" "$(cat "${MOCKBIN}/inngest-data/main.db")"
+    assert_eq "unusable-shape secret ($label): arm curl never invoked" "0" "$(if [[ -f "${MOCKBIN}/curl_argv.log" ]]; then grep -c 'schedule-reminder' "${MOCKBIN}/curl_argv.log" || true; else echo 0; fi)"
+    assert_eq "unusable-shape secret ($label): marker NOT armed" "0" "$(grep -c '^ARM_BODY:' "$ARM_LOG" || true)"
+    teardown
+  done
 }
 
 # --- Test 4: clean gate → stop precedes wipe precedes start; data dir wiped ---
@@ -201,7 +265,7 @@ test_abort_on_spoofed_prefix_real_reminder() {
 }
 
 # --- Test 6 (#5517): post-restart functions probe reads /v0/gql, aborts on 0 ---
-# GET /v1/functions is a 404 in v1.19.4 (would always read 0 → false no_functions
+# GET /v1/functions is a 404 in inngest v1.45.1 (would always read 0 → false no_functions
 # abort after a healthy restart). The probe must read the GraphQL functions query;
 # an empty functions array (no SDK re-sync yet) still aborts loud (durability gate).
 test_no_functions_aborts_loud() {
@@ -214,14 +278,105 @@ test_no_functions_aborts_loud() {
   teardown
 }
 
+# --- Test 7 (#6921/#8077): the web unit is QUIESCED by op=quiesce-web → refuse ---
+# `is-active ∈ {inactive, failed}` AND `is-enabled == disabled` is the shape only op=quiesce-web
+# writes; this script's `start` would re-arm the scheduler the cutover deliberately stopped. The gate
+# runs BEFORE Gate 1 (enumeration): a quiesced host has no serving inngest, so the enumeration FAILS
+# there, and a gate after it would report enumerate_failed — hiding the real reason. The stub
+# enumeration below fails, and the reason must still be quiesced_refused, with the enumeration
+# never run and no stop/start.
+test_abort_when_quiesced() {
+  local active
+  for active in inactive failed; do
+    setup
+    make_failing_enum_stub
+    local out rc=0
+    out=$(WVV_UNIT_ACTIVE="$active" WVV_UNIT_ENABLED=disabled run_verify) || rc=$?
+    assert_eq "quiesced ($active+disabled) exits non-zero" "1" "$rc"
+    assert_eq "quiesced ($active+disabled) + failing enumeration → reason quiesced_refused (not enumerate_failed)" "quiesced_refused" \
+      "$(jq -r .reason "${MOCKBIN}/verify.state" 2>/dev/null || echo "<no state>")"
+    assert_eq "quiesced ($active+disabled) the enumeration never ran (gate precedes Gate 1)" "0" \
+      "$(if [[ -f "${MOCKBIN}/enum.log" ]]; then grep -c '^ran$' "${MOCKBIN}/enum.log" || true; else echo 0; fi)"
+    assert_contains "quiesced ($active+disabled) abort names op=rollback" "$out" "op=rollback"
+    local sclog; sclog=$(cat "${MOCKBIN}/systemctl.log" 2>/dev/null || echo "")
+    assert_contains "quiesced ($active+disabled) the unit shape was actually queried (non-vacuity)" "$sclog" "is-enabled inngest-server.service"
+    assert_eq "quiesced ($active+disabled) no stop/start in the systemctl log" "0" \
+      "$(count_unit_verbs)"
+    assert_eq "quiesced ($active+disabled) data dir NOT wiped" "sqlite" "$(cat "${MOCKBIN}/inngest-data/main.db")"
+    assert_eq "quiesced ($active+disabled) throwaway marker NOT armed" "0" "$(grep -c '^ARM_BODY:' "$ARM_LOG" || true)"
+    teardown
+  done
+  # Non-vacuity for the rows above: NOT quiesced + the same failing enumeration → enumerate_failed.
+  setup
+  make_failing_enum_stub
+  local rc3=0
+  run_verify >/dev/null 2>&1 || rc3=$?
+  assert_eq "not quiesced + failing enumeration → exits 1" "1" "$rc3"
+  assert_eq "not quiesced + failing enumeration → reason enumerate_failed (the stub does fail)" "enumerate_failed" \
+    "$(jq -r .reason "${MOCKBIN}/verify.state" 2>/dev/null || echo "<no state>")"
+  assert_eq "not quiesced + failing enumeration → the enumeration stub ran (enum.log is the real signal)" "1" \
+    "$(if [[ -f "${MOCKBIN}/enum.log" ]]; then grep -c '^ran$' "${MOCKBIN}/enum.log" || true; else echo 0; fi)"
+  teardown
+  # Re-assert before the first unit verb: op=quiesce-web lands WHILE the enumeration and the marker
+  # arm run (the first shape read says serving, every later read says quiesced) → still refused,
+  # after the enumeration, with no stop/start.
+  setup
+  make_enum_stub '[]'
+  cat > "${MOCKBIN}/systemctl" <<MOCK
+#!/usr/bin/env bash
+echo "\$*" >> "${MOCKBIN}/systemctl.log"
+n=\$(grep -c "^\$1 " "${MOCKBIN}/systemctl.log")
+case "\$1" in
+  is-active)  if [[ \$n -le 1 ]]; then echo active; exit 0; fi; echo inactive; exit 3 ;;
+  is-enabled) if [[ \$n -le 1 ]]; then echo enabled; exit 0; fi; echo disabled; exit 1 ;;
+esac
+exit 0
+MOCK
+  chmod +x "${MOCKBIN}/systemctl"
+  local rc5=0
+  run_verify >/dev/null 2>&1 || rc5=$?
+  assert_eq "quiesced mid-run (after Gate 0) → exits 1" "1" "$rc5"
+  assert_eq "quiesced mid-run → reason quiesced_refused (the pre-stop re-assert)" "quiesced_refused" \
+    "$(jq -r .reason "${MOCKBIN}/verify.state" 2>/dev/null || echo "<no state>")"
+  assert_eq "quiesced mid-run → no stop/start in the systemctl log" "0" "$(count_unit_verbs)"
+  assert_eq "quiesced mid-run → data dir NOT wiped" "sqlite" "$(cat "${MOCKBIN}/inngest-data/main.db")"
+  teardown
+  # Must-PASS: inactive but ENABLED (a crashed/stopped armed unit) is not quiesced → proceeds.
+  setup
+  make_enum_stub '[]'
+  local rc2=0
+  WVV_UNIT_ACTIVE=inactive WVV_UNIT_ENABLED=enabled run_verify >/dev/null 2>&1 || rc2=$?
+  assert_eq "inactive+ENABLED is not quiesced → verify proceeds (exit 0)" "0" "$rc2"
+  teardown
+  # Must-PASS: ACTIVE but disabled (someone ran `systemctl disable` on a serving unit) is not the
+  # quiesced shape — `disabled` alone is never sufficient → proceeds, not refused.
+  setup
+  make_enum_stub '[]'
+  local rc4=0
+  WVV_UNIT_ACTIVE=active WVV_UNIT_ENABLED=disabled run_verify >/dev/null 2>&1 || rc4=$?
+  assert_eq "active+DISABLED is not quiesced → verify proceeds (exit 0)" "0" "$rc4"
+  assert_eq "active+DISABLED terminal reason is verify_passed (not quiesced_refused)" "verify_passed" \
+    "$(jq -r .reason "${MOCKBIN}/verify.state" 2>/dev/null || echo "<no state>")"
+  teardown
+}
+
 test_abort_on_real_reminder
 test_abort_on_spoofed_prefix_real_reminder
+test_abort_when_quiesced
 test_abort_on_non_durable_backend
 test_throwaway_posts_no_comment
+test_bearer_on_stdin_not_argv
+test_unusable_shape_secret_refused_before_wipe
 test_happy_wipe_order
 test_no_functions_aborts_loud
 test_marker_unique
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+# Exact assertion floor: a deleted, skipped or early-returning row changes the dispatched count.
+readonly EXPECTED_ASSERTIONS=73
+if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
+  printf '  FAIL: dispatched %s assertions, expected exactly %s — a row was added, removed or skipped\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS"
+  exit 1
+fi
 [[ "$FAIL" -gt 0 ]] && exit 1 || exit 0

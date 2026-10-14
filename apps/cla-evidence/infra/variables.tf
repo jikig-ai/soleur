@@ -13,6 +13,27 @@ variable "cf_admin_token" {
   type        = string
   sensitive   = true
   description = "Bootstrap-only Cloudflare admin token with R2:Edit + API Tokens:Edit scopes. Used by the null_resource provisioner to PUT the bucket lock rule via the CF native REST API. Same value as cf_api_token at bootstrap time; the split exists to localize the future deletion when FW1 swaps the null_resource shim for a native TF resource. Admin tokens are ephemeral one-hour creds (see bootstrap.sh header), so triggers.token_hash guarantees a re-fire on every bootstrap rather than detecting drift; the CF Lock Rules PUT is idempotent so re-fires are no-ops state-wise."
+
+  # Empty default so a credential-less `terraform plan` does not abort, mirroring the
+  # r2_admin_* siblings below. Required because this token is minted ephemerally by
+  # bootstrap.sh (one-hour cred, exported as TF_VAR_cf_admin_token at bootstrap.sh:124)
+  # and therefore has no standing value in Doppler prd_terraform — verified absent
+  # 2026-08-20. Without a default, infra-validation.yml's `plan` matrix job aborts with
+  # "No value for required variable" for EVERY change under apps/cla-evidence/infra/**,
+  # including docs-only ones. That job is path-filtered, so it had never run to
+  # completion and the breakage was latent until #7624 touched this directory.
+  #
+  # SAFE BECAUSE infra-validation.yml IS PLAN-ONLY for this root: it has no
+  # `terraform apply` step (verified — its three "apply"-named steps are
+  # deploy-script-tests suites that TEST apply scripts). A real bootstrap always
+  # supplies the value, so the default is never the applied one. If an apply step is
+  # ever added here, this default must be revisited: an empty token would reach the
+  # provisioner rather than failing fast.
+  #
+  # A plan run will show object_lock.tf's null_resource re-firing (triggers.token_hash
+  # = sha256(var.cf_admin_token)). That is the documented steady state per the
+  # description above — it re-fires on every bootstrap by design — not a new signal.
+  default = ""
 }
 
 variable "r2_s3_endpoint" {

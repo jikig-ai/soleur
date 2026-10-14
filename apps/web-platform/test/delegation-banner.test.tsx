@@ -122,6 +122,17 @@ describe("DelegationBanner — active (alreadyAccepted) variant", () => {
     ).toBeInTheDocument();
   });
 
+  // #7829: a failed spend read arrives as `todaySpentCents: null`. Rendering it
+  // through the numeric path yields "$0.00 of $20 today" — a confident claim
+  // that the grantee has spent nothing, on a billing surface where the truth is
+  // unknown. The degraded copy must say unknown, and must NOT show "$0.00".
+  it("todaySpentCents null renders the unavailable copy, never $0.00", () => {
+    render(<DelegationBanner {...activeProps} todaySpentCents={null} />);
+    expect(screen.getByText(/spend is unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/unknown, not \$0\.00/i)).toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.00 of/)).toBeNull();
+  });
+
   it("Manage opens the modal in withdraw variant; withdraw success unmounts + refresh", async () => {
     render(<DelegationBanner {...activeProps} />);
     await userEvent.click(screen.getByRole("button", { name: /manage/i }));

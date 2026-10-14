@@ -1,0 +1,236 @@
+# ADR-159 — Delivery is not activation: a config channel must reconcile the units it configures
+
+- **Status:** Accepted
+- **Date:** 2026-08-02
+- **PR:** #7146
+- **Issue:** #7103 (residuals R1–R5 of #7095); soak enrolled on #7170
+- **Related:** [ADR-154](./ADR-154-repair-the-credential-channel-not-the-host.md) (the credential
+  channel this builds on, and the SSH handler-bootstrap leg that can be dead on a host with no
+  replacement path), [ADR-148](./ADR-148-web-host-replacement-is-a-distinct-gated-dispatch.md)
+  (why `-replace` is unavailable here),
+  `apps/web-platform/infra/infra-config-apply.sh` (the handler that now reconciles),
+  `apps/web-platform/infra/infra-config-install.sh` (the shape gate that had to ship first),
+  `scripts/betterstack-assert-absence.sh` (the absence assertion that refuses to guess)
+
+> **Ordinal.** Renumbered 155 -> 158 -> 159 at `/ship` time — TWICE, which is the point worth
+> recording. Sibling PRs landed ADR-155 (cross-gate exemption markers), ADR-156 and ADR-157 on
+> `origin/main` while this pipeline was open; the branch was renumbered to 158 and re-verified
+> green. Then a further sibling (#7189) landed its own ADR-158 during the BEHIND auto-sync that
+> immediately preceded merge, and the gate reddened again.
+>
+> Both collisions were invisible on the un-rebased branch — `check-adr-ordinals.sh` sees only the
+> local tree, so it stayed green here and would have gone red on `main` post-squash [correction,
+> #7941: `adr-ordinals` was already a required check when this was written (IaC row since #6050), so
+> the collision would have blocked the merge on the PR, never landed on `main`; the re-check's value
+> is catching it a CI cycle earlier]. The `/work`-time
+> note this replaces called the ordinal provisional and named the re-check; the re-check is what
+> caught it, both times. The generalisation: an ordinal is not claimed until the branch is merged,
+> so re-run the check after EVERY sync, not once at ship entry — a single re-check is a snapshot of
+> a moving target.
+
+## Context
+
+#7095 restored production by delivering a re-deliverable Doppler credential to `web-1`, plus systemd
+drop-ins re-pointing `vector.service` and `inngest-heartbeat.service` at it. The delivery worked. The
+files landed with the right bytes, the gate verified them, and the apply reported success.
+
+The units kept running the environment they had been started with.
+
+systemd reads a drop-in when the unit is (re)started, and nothing restarted them. So the channel
+built to repair the credential reported that it had, while the processes it exists to repair carried
+on with the revoked one. Nothing in the system was lying; nothing in it was checking either.
+
+Four of the five residuals on #7103 share one shape, and it is worth stating plainly because it is
+the thing this ADR is about:
+
+> **The system repeatedly reported a state it had not established.**
+
+A credential landed on disk and was called active. A telemetry query returned zero and was called
+clean. A digest of the empty string was called ACTIVE. A test suite that skipped a red runner was
+called green.
+
+Each of those is a different subsystem. The common factor is not a bug in any of them; it is that in
+each case *the absence of evidence was recorded as evidence of success*.
+
+## Decision
+
+**Three propositions.**
+
+### 1. A channel that delivers configuration must reconcile the units that consume it, and must
+
+report per-unit whether it succeeded.
+
+`infra-config-apply.sh` now restarts the units whose drop-ins it delivers, and emits a verdict for
+each into its status JSON (`schema_version: 2`, a `restarts` array). The CI gate adjudicates that
+array; a delivered-but-unactivated unit fails it.
+
+> **AMENDED by #7220.** As written this proposition was aspirational, not descriptive: the
+> reconciliation it promises ran *after* a `systemctl daemon-reload` that was itself ungranted and
+> therefore fatal, so on a real host the handler died at activation and the `restarts` array was
+> never reached. A per-unit verdict array is only as good as the privileged verbs it is built on.
+>
+> Proposition 1 is therefore extended: **a channel that reconciles units must also prove it HOLDS
+> the privileges reconciliation requires.** Delivery is not activation, and neither is an
+> activation step the channel is not permitted to perform. Enforcement now lives in three places —
+> the AC6 handler→grant lint (every non-READ `systemctl`/`systemd-run` verb must be sudo-prefixed
+> and granted in both sudoers sources), a `sudo -n -l -U deploy` policy probe in the bootstrap
+> provisioner (the sudoers text landing is not the same as sudo granting it), and a `DropInPaths`
+> assertion on the two drop-in-only units — the units this channel delivers drop-ins for and
+> never restarts, so the reload is the only activation step IT performs for them.
+>
+> **CORRECTION, same review.** An earlier phrasing said those two units are in "neither
+> RESTART_MAP nor the grant set" and that the reload is their *entire* activation story. Both
+> overstate it. `inngest-server` IS in the grant set
+> (`INNGEST_RESTART`/`START`/`STOP`/`QUIESCE`/`ENABLE`), and `ci-deploy.sh`'s `case inngest)` runs
+> `inngest-bootstrap.sh` as root, which performs its own `daemon-reload` and restarts both units —
+> a second, co-located reconciliation channel. The claim that survives is still damning and is the
+> one this ADR needs: activation **via the config channel** never happened, and the channel had no
+> way to know whether anything else had covered it. Unknown coverage is not proven staleness, and
+> a channel that cannot tell the difference is the defect Proposition 1 is about.
+
+Reconciliation is folded into the handler rather than exposed as a separate `restart-unit` webhook.
+The event requiring the restart *is* the delivery, so coupling them means the decision is made where
+the delivery outcome is already known. A separate remote-triggerable restart primitive on the one
+host that cannot be replaced buys nothing and widens the attack surface.
+
+### 2. Activation is graded on effect, never on exit code.
+
+`systemctl try-restart` exits 0 on a unit that is `failed` — it is defined as a no-op there — and on
+a `Type=simple` unit a 0 means *forked*, not *running*. So the handler re-reads `ActiveState` and
+`ExecMainStartTimestamp` after a settle, and calls the restart successful only when the unit is
+active **and** its start timestamp advanced.
+
+The staleness predicate is a single clause:
+
+```
+stale(unit) := ExecMainStartTimestamp(unit) < max(mtime(drop-in), mtime(credential))
+```
+
+which also heals a credential rotation predating the code. Its failure modes get *distinct* enum
+values — `unit_inactive`, `unit_absent`, `noop_not_active`, `restart_did_not_advance`,
+`sudo_denied`, `restart_invocation_failed`, `timestamp_absent`, `timestamp_unparseable`,
+`probe_unavailable`. A denied `sudo` is a provisioning defect and must never share an enum with a
+property of the unit; #5934 is the case where a swallowed denial became a silent no-op nobody
+noticed until the next incident. By the same rule `restart_invocation_failed` is split from
+`sudo_denied` (`try-restart` returns non-zero when the restart JOB fails, not only when sudo
+refuses), and `probe_unavailable` is split from `unit_inactive` — an instrument that could not
+answer is not a unit that is not running, and folding the two let a failed `systemctl show`
+certify an apply as green.
+
+**And the adjudicator denies rather than allows.** An enum list is open by construction: it grows
+whenever a new fault is named. The gate therefore hard-fails on any `action` outside its known set
+and on any `skipped` reason it does not recognise, rather than enumerating the failures it knows
+about. The first version allow-listed three reason strings and never keyed on `action` at all, so
+`action=failed` with any unrecognised reason returned rc=0 with no output — the proposition-1
+defect surviving inside the gate that exists to catch it.
+
+### 3. An absence assertion must prove its own channel is alive, or report that it cannot.
+
+"Zero rows", "the query could not answer", and "this host stopped shipping logs" are the same empty
+stdout. `scripts/betterstack-assert-absence.sh` therefore has four outcomes — `clean`, `present`,
+`unshipping`, `unknown` — and `clean` is reachable only with a host-scoped positive control read back
+**through the sink**. The control is emitted outside the `doppler run` wrapper, because a control
+gated behind the credential whose failure it certifies is not a control.
+
+## Consequences
+
+**A restart capability now exists on the host, so the config it activates must be validated.** This
+is the ordering constraint that governs the change: `infra-config-install.sh` validates
+`*.service.d/*.conf` content against a permitted-directive whitelist, and that gate ships *before*
+the `DROPIN_TRY_RESTART` sudoers grant. systemd merges drop-ins after the unit body, and
+`vector.service` runs `User=deploy`, so an unvalidated drop-in could set `User=root` or replace
+`ExecStart=`. Granting a root restart of a unit whose configuration can be written without validation
+converts a delivery capability into an execution capability. Delivery-then-activation is not a
+refactor of the same privilege; it is a new one.
+
+**Writes stay unconditional; only `changed` is derived.** Making the write content-conditional would
+drop the per-apply re-assertion of `640 root:deploy` on the credential — a dest whose DAC drifted
+still matches on content, so it would be skipped and reported `ok` while the one channel able to
+repair it stopped repairing it. `changed` exists to preserve mtime on an identical rewrite, without
+which the predicate over-fires on every apply forever.
+
+**The gate's activation contract is staged.** A handler predating it emits no `schema_version`, and
+the only route to replacing that handler is the SSH bootstrap leg that ADR-154 records can be dead.
+Failing on absence would red the adjudication step, which skips the `if: success()`-gated redeploy —
+so files would land and activation would never happen. It warns and passes; the hard-on-absent flip
+is a follow-up, recorded on #7103.
+
+**One deliberate narrowing.** The gate does *not* fail on a unit that is merely inactive and was
+never restarted. Every case where the handler acted and the restart did not take is already covered
+by the failure enums. A unit created by `inngest-bootstrap.sh` is co-location dependent, so failing
+on its absence would permanently red the deploy gate on a correct host — a worse outcome than the
+one guarded against. "Is this unit actually shipping?" is proposition 3's question, answered at the
+sink where "not running" and "not supposed to be running" are distinguishable.
+
+**`RESTART_MAP` holds `vector.service` alone, and the shape of that decision generalises.**
+`inngest-heartbeat.service` was in it when this ADR was first written, and the review that preceded
+merge removed it. It is a `Type=oneshot` with no `RemainAfterExit`, driven by a 60s timer around a
+sub-second `ExecStart`, so it reads `inactive` on essentially every apply: the entry graded
+`skipped/unit_inactive` *forever*, which made the narrowing above the STEADY STATE on a correct
+host rather than the edge case it is described as — precisely the alert fatigue #7103 B3 names. The
+grant bought nothing either, because a timer-driven oneshot re-reads its drop-in on its next tick
+after the `daemon-reload` the handler already performs.
+
+> **AMENDED by #7220 — the premise in the preceding sentence was FALSE when written.** The handler
+> did not "already perform" a `daemon-reload`. It invoked one, but as `User=deploy` with no sudoers
+> grant: the call returned `Interactive authentication required` and `set -e` aborted the handler
+> AFTER all 19 files were written and BEFORE any unit was reconciled. That had been true since
+> roughly 2026-05; #7146 did not break it, it moved the call above the state write and so converted
+> a silent failure into a loud one.
+>
+> The *conclusion* below survives — a timer-driven oneshot genuinely does not need a restart grant —
+> but it survived by luck, not by the argument given. `inngest-heartbeat.service` re-reads its
+> drop-in on the next tick after a reload **that was not happening**, so from #7095 until #7220 it
+> ran the revoked credential exactly as if the grant had been withheld deliberately. The reasoning
+> was sound about restart grants and wrong about the state of the world it assumed.
+>
+> The corrected general rule is stronger than the one below: **before arguing that a unit needs no
+> restart primitive because `daemon-reload` activates it, establish that the reload itself is
+> granted and observed.** An activation argument that rests on an unverified privileged verb is an
+> assumption wearing the costume of a decision. #7220 adds the grant, an AC6 handler→grant lint that
+> fails any privileged verb the handler invokes without a matching `Cmnd_Alias` in both sudoers
+> sources, and a `DropInPaths` post-write assertion on both drop-in-only units — so the premise is
+> now enforced rather than asserted.
+
+Proposition 1 says a channel must reconcile
+the units that consume its configuration; it does not say every consumer needs a restart primitive,
+and the same argument that rejects a `restart-unit` webhook rejects a standing root-restart grant
+that activates nothing. The general rule: **before granting a restart, establish that a restart is
+what activates the unit** — for some unit types, `daemon-reload` plus the next scheduled start is
+the activation, and a grant is pure surface.
+
+**AC12 cannot be verified pre-merge.** Its measurement path runs through the component this repairs,
+so it is enrolled as a post-apply soak on its own issue (#7170) rather than on #7103 — the sweeper
+closes issues on PASS, and closing #7103 with B1–B7 still open is the outcome its exit gate exists
+to prevent.
+
+## Alternatives considered
+
+| Option | Why not |
+|---|---|
+| A `restart-unit` webhook hook | Adds a remote-triggerable restart primitive to the one host with no replacement path, decouples the restart from the event requiring it, and falsifies the `tunnel -> hetzner` C4 description. |
+| Accept it; units refresh on host recreate | The host cannot be recreated (cx33, orderable in 0 of 6 datacentres — ADR-154 and the plan both record 6/6, and this ADR halved its own evidence). The telemetry plane ages out silently and proposition 3 has no live channel to assert against. |
+| Reconcile inside `infra-config-install.sh`, which is already root | Genuinely attractive — zero new sudoers alias, one fewer file on the SSH leg. Rejected on the real reason: the installer is reachable through a **bare-command** grant that permits any arguments, and its own header records that the security boundary is therefore the helper, not sudoers. Adding a unit-restart capability there widens that boundary from *write these dests* to *write these dests and restart units*. It is also per-file and stateless, while the decision is per-unit and needs the whole delivery outcome. |
+| Fail the gate on any `active != active` | Would red the deploy gate permanently on a host where a co-location-dependent unit legitimately does not run. See the narrowing above. |
+
+## Addendum — 2026-09-13 (PR #8135, Ref #8054/#7095)
+
+**The re-deliverable credential has two consumer mechanisms, and the inventory belongs here rather
+than in a drop-in's comment.** `/etc/default/soleur-doppler-token` (delivered by `infra-config-apply.sh`,
+rendered from `server.tf`'s `webhook_doppler_token_env`) is consumed by:
+
+| mechanism | consumers | activation |
+|---|---|---|
+| systemd later-wins (`EnvironmentFile=-/etc/default/soleur-doppler-token` in a drop-in or unit body) | `vector`, `inngest-heartbeat`, `inngest-server`, `inngest-redis` (drop-ins); `container-restart-monitor`, `cron-egress-*` (unit bodies) | `daemon-reload` + the unit's next start (this ADR's Decision) |
+| in-script parsed re-read (`IFS='=' read -r`, never sourced; empty value skipped; DOPPLER_TOKEN later-wins over the unit export) | `ci-deploy.sh` (4 keys, `CRED_FILE_STATE`); `inngest-rearm-reminders.sh` and `inngest-wiped-volume-verify.sh` (`soleur_refresh_doppler_token`, 4 keys, byte-identical, pinned by `webhook-doppler-token-reread.test.sh` §A/§I) | the next hook invocation — no restart |
+
+The webhook-executed scripts are the second mechanism BY DECISION, not by omission. The #7095 plan
+proposed a second `EnvironmentFile=-` line on `webhook.service`; it was not adopted then and is not
+adopted now, because (a) `EnvironmentFile=-` tolerates an EMPTY value, so a bare `DOPPLER_TOKEN=`
+would blank the working export for every hook at once — the in-script `-n "$v"` guard is the only
+layer that holds that line for the webhook process; (b) `webhook.service` is sha256-pinned by
+`infra-config-install.sh` and rides the root SSH bootstrap leg (ADR-154), so a unit edit touches the
+sole remediation channel's own definition; (c) the in-script read activates on the next hook call
+with no restart of the listener that executes it. Recurrence record: this is the third consumer the
+#7095 sweep missed (`inngest-server` at #7095 review, `inngest-redis` at #7286, these two at #8135) —
+hence §I of the new suite derives the consumer set from `hooks.json.tmpl` instead of naming files.

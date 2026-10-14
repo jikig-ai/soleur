@@ -114,6 +114,7 @@ export function Sheet({
           type="button"
           aria-label="Resize panel"
           title="Drag to close"
+          data-button-exempt="pointer-gesture drag handle — resizes/closes the sheet via pointer capture (pointerdown/move/up), not a click action; the Button label-row chrome does not apply to a 6px grab strip"
           className="mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full bg-soleur-bg-surface-2 touch-none"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}

@@ -223,9 +223,12 @@
 # The ruleset ID is hardcoded while the zone is a variable. That coupling is
 # deliberate — the ID is valid only for this zone — and it fails CLOSED: a
 # repointed `cf_zone_id`, or an entrypoint recreated in the dashboard, makes the
-# import read fail rather than clobber. Note the blast radius, though: import
-# targets are validated BEFORE `-target` pruning, so that failure aborts the
-# whole ~70-target apply, not just this resource.
+# import read fail rather than clobber. Note the blast radius, though, measured
+# on Terraform 1.10.5 (2026-09-15, #7884): a plan whose `-target` set excludes
+# this import's `to` address skips the import silently, while an untargeted plan
+# or one that targets the address aborts on the failed read. The per-merge apply
+# targets cloudflare_ruleset.seo_config_settings and the scheduled drift plan is
+# untargeted, so both would abort for the whole root, not just this resource.
 import {
   for_each = var.adopt_seo_config_entrypoint ? toset(["adopt"]) : toset([])
   provider = cloudflare.rulesets
@@ -281,7 +284,8 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   # this into the rejected zone-wide option.
   #
   # test/seo-config-rules.test.ts pins this expression by EXACT EQUALITY, and
-  # pins the ruleset to exactly two rules. Both are deliberate: a deny-list of
+  # pins the ruleset's rule count (three since #7584 added the ssl mitigation
+  #  below; seo-config-rules.test.ts asserts the exact length). All are deliberate: a deny-list of
   # forbidden hostnames constrains spelling rather than scope, and review
   # produced several mutants that name no forbidden host yet widen the rule to
   # the whole zone (`or ends_with(http.host, ".soleur.ai")`, a `zone_name`
@@ -298,6 +302,120 @@ resource "cloudflare_ruleset" "seo_config_settings" {
     expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"})"
     action_parameters {
       email_obfuscation = false
+    }
+  }
+
+  # ── 2026-08-16 APEX OUTAGE MITIGATION — REMOVE WHEN THE PAGES CERT IS VALID ──
+  #
+  # WHY THIS EXISTS. The GitHub Pages origin cert for soleur.ai expired
+  # 2026-08-16 13:53:34Z. The zone default is Full (STRICT), which VALIDATES the
+  # origin certificate, so Cloudflare refused the expired cert and served
+  # HTTP 526 on apex+www for ~7.5 hours. `full` (non-strict) still encrypts the
+  # CF→origin leg but does not validate the certificate, so the site serves again.
+  #
+  # WHY NOT THE ZONE TOGGLE. Flipping the zone-level SSL mode would drop EVERY
+  # proxied host off strict at once. This rule is scoped to the same two
+  # marketing hosts as the rule above; `app.soleur.ai` is untouched (it carries
+  # its own `flexible` rule, first block in this ruleset) and the zone default
+  # stays `strict` for `deploy.`/`ssh.`/`registry.` and anything added later.
+  #
+  # WHY THIS IS AN ACCEPTABLE RISK HERE, AND WOULD NOT BE ELSEWHERE. The origin
+  # is GitHub Pages serving a PUBLIC STATIC site — no auth, no cookies, no PII,
+  # no secrets, and nothing a tampered response could escalate into. Visitors
+  # keep a valid Cloudflare EDGE certificate either way, so browser-facing TLS is
+  # unchanged. The residual exposure is an unauthenticated CF→GitHub leg for
+  # public marketing/docs content. Do NOT copy this rule to a host that serves
+  # authenticated or user-submitted data.
+  #
+  # WHY IT IS NOT MERELY WAITING FOR RENEWAL — CORRECTED 2026-08-19.
+  #
+  # ‼️ An earlier revision of this comment claimed the ACME authorization was
+  # "wedged server-side at GitHub" and that clearing it "needs GitHub Support".
+  # That was WRONG and is corrected here rather than quietly deleted, because the
+  # wrong version was load-bearing: it argued this rule could never be retired,
+  # which would have made a temporary mitigation look permanent.
+  #
+  # The authoritative signal is `GET /repos/{owner}/{repo}/pages/health`, which
+  # was never called during the incident. It reports, identically for BOTH hosts:
+  #
+  #   is_https_eligible              false   <- the actual blocker
+  #   is_proxied                     true
+  #   is_cloudflare_ip               true
+  #   is_pointed_to_github_pages_ip  false
+  #   caa_error                      null    <- CAA ruled out by GitHub itself
+  #   reason                         null    <- nothing else is misconfigured
+  #
+  # Nothing is stuck. GitHub simply REFUSES to order a certificate while the
+  # hostname resolves to Cloudflare's proxy instead of GitHub's anycast IPs. That
+  # is deterministic, not a fault, and no support ticket can change it.
+  #
+  # The 2026-08-16 hand-run of the remediation (DNS-only flip verified propagated
+  # on 1.1.1.1 and 8.8.8.8, cname toggled, `bad_authz` returned within seconds
+  # across both a 50-second and a 7-minute teardown) did NOT falsify the
+  # DNS-window hypothesis, as that revision claimed. The flip restores
+  # eligibility, but GitHub's cert-provisioning job runs on its own BACKGROUND
+  # SCHEDULE — the `bad_authz` read back instantly was stale state, not a fresh
+  # rejection. The window was too short by hours, not by minutes.
+  #
+  # THE 90-DAY TRAP THIS CREATES. Renewal needs the same eligibility as issuance,
+  # so behind the proxy the cert can never renew and expires every 90 days by
+  # construction. The escape is timing, not tooling: run the DNS-only window
+  # while the CURRENT cert is still VALID (~day 60) and GitHub Pages serves that
+  # valid cert directly for the duration — zero downtime — then re-proxy. Run it
+  # only AFTER expiry, as happened here, and DNS-only means broken TLS. Same
+  # mechanism, opposite user impact, purely from when it is run.
+  #
+  # REMOVAL CONDITION (corrected #7749 — the previous one could never be met).
+  #
+  # This block used to say: delete it once `gh api repos/jikig-ai/soleur/pages`
+  # reports `https_certificate.state` in {approved, issued} with a future
+  # `expires_at`. Under ADR-194 that can NEVER happen. The cutover ABANDONS the
+  # Pages certificate rather than renewing it, and the cert cannot renew while
+  # these records are proxied — it expired 2026-08-16 13:53:34Z and has stayed
+  # expired since. So the old condition left a reader with no exit: the test it
+  # names never passes, and deleting the block anyway takes the HSTS-preloaded
+  # apex straight back to HTTP 526.
+  #
+  # This is therefore NOT a stopgap buying time against an approaching expiry.
+  # The expiry already happened, with zero user impact, because this rule was in
+  # place. It is load-bearing production infrastructure for the whole
+  # pre-cutover interval.
+  #
+  # Two measurable exits, EITHER of which is sufficient:
+  #
+  #   1. THE CUTOVER LANDED — apex and www no longer resolve to GitHub Pages.
+  #      The expired origin leaves the serving path, so validation can be
+  #      restored. This is the real exit.
+  #   2. ROLLBACK — ADR-194 is reverted and the Pages cert is valid again.
+  #
+  # Exit 1 is ENFORCED, not remembered: `ssl-full-mitigation.test.sh` resolves
+  # the stage from `dns.tf` and requires this block for as long as the apex
+  # still carries the GitHub Pages anycast records. Delete it before then and
+  # that guard fails in CI. Exit 2 is not statically observable from the repo,
+  # but taking it means editing `dns.tf`, which moves the same guard's stage.
+  #
+  # Ordering is load-bearing too, and also guarded. `set_config` is a
+  # NON-TERMINATING action, and Cloudflare's ruleset engine documents that for
+  # those "the last change made by rules in the same phase will win (later rules
+  # can overwrite changes done by previous rules)". So an `ssl` rule added BELOW
+  # this one for the same hosts overwrites it — this block would still read
+  # `full` and the site would still be down.
+  #
+  # Note this is the OPPOSITE of the first-match-wins rule that governs the
+  # redirect ruleset in seo-bulk-redirects.tf. Redirects are TERMINATING, so
+  # there the first match wins; here the last one does. Do not carry the
+  # reasoning from one file to the other.
+  #
+  # The guard sidesteps the direction entirely by asserting that exactly ONE
+  # `ssl` rule targets these hosts, which is position-agnostic and catches a
+  # second rule inserted on either side.
+  rules {
+    action      = "set_config"
+    description = "TEMPORARY (2026-08-16 outage): accept the expired GitHub Pages origin cert on soleur.ai + www.soleur.ai — remove when the Pages cert is valid again"
+    enabled     = true
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"})"
+    action_parameters {
+      ssl = "full"
     }
   }
 }

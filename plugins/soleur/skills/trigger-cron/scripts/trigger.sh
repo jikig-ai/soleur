@@ -12,6 +12,33 @@
 
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# INNGEST_MANUAL_TRIGGER_SECRET is acquired by `doppler secrets get` BELOW this
+# point, so a conditional arm would test an empty variable at guard time, open,
+# and then trace the acquisition itself.
+#
+# STREAM CONTRACT: this script's stdout is a DATA channel — it prints `HTTP <code>`
+# then the response body, and SKILL.md's preflight block grep-parses
+# `SOLEUR_TRIGGER_CRON_HALT reason=…` markers on stdout. So the refusal is emitted
+# in that documented marker shape rather than as a bare `[FATAL] …` line, which the
+# preflight consumer would read as a data row. Stdout, not stderr, because agent
+# runtimes surface stdout and swallow stderr (constitution.md > Code Style).
+case "$-" in
+  *x*)
+    printf 'SOLEUR_TRIGGER_CRON_HALT reason=xtrace-credential-bound issue=7797\n'
+    printf 'trigger-cron: refusing to run under xtrace — this script handles a live credential and -x would print it. No event has been fired and no secret has been read.\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of the manual-trigger secret works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 ROUTE_URL="https://app.soleur.ai/api/internal/trigger-cron"
 SECRET_NAME="INNGEST_MANUAL_TRIGGER_SECRET"
 DOPPLER_PROJECT="soleur"
@@ -101,7 +128,7 @@ esac
 # Validate the event against the manifest-derived allowlist (fail fast before
 # minting a Doppler read or hitting the route). The `--` stops grep from
 # interpreting an event string that begins with `-` as an option.
-if ! list_events "$MANIFEST" | grep -qxF -- "$EVENT"; then
+if ! grep -qxF -- "$EVENT" < <(list_events "$MANIFEST"); then
   echo "trigger.sh: '$EVENT' is not an allowlisted manual-trigger event." >&2
   echo "Run 'trigger.sh --list' to see valid events." >&2
   exit 2
@@ -121,18 +148,32 @@ fi
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '%s\n' "# dry-run (config=$CONFIG): would POST to $ROUTE_URL"
   printf '%s\n' "TOKEN=\$(doppler secrets get $SECRET_NAME -p $DOPPLER_PROJECT -c $CONFIG --plain)"
-  printf '%s\n' "curl -sS -X POST $ROUTE_URL \\"
-  printf '%s\n' "  -H \"Authorization: Bearer \$TOKEN\" -H 'content-type: application/json' \\"
-  printf '%s\n' "  -d '$BODY' -w '\\n%{http_code}\\n'"
+  # The printed recipe carries a live bearer, so it must TEACH the confined form:
+  # `--disable` literally first (it aborts ~/.curlrc parsing, and later is too
+  # late) and `--noproxy '*'` (#7873), with the bearer on curl's stdin config
+  # channel so a copy-paste never puts the token on argv (#7843).
+  printf '%s\n' "curl --disable --noproxy '*' -sS -X POST $ROUTE_URL \\"
+  printf '%s\n' "  -H 'content-type: application/json' \\"
+  printf '%s\n' "  -d '$BODY' -w '\\n%{http_code}\\n' \\"
+  printf '%s\n' "  --config - < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"\$TOKEN\")"
   exit 0
 fi
 
-# Read the secret read-only and fire. The token is piped straight into the curl
-# header via a process-substitution-free env var that is unset immediately; it
-# is never echoed.
+# Read the secret read-only and fire. The token reaches curl on its stdin config
+# channel (never its argument list), is unset right after the call, and is never
+# echoed.
 TOKEN="$(doppler secrets get "$SECRET_NAME" -p "$DOPPLER_PROJECT" -c "$CONFIG" --plain)"
 if [[ -z "$TOKEN" ]]; then
   echo "trigger.sh: $SECRET_NAME is empty in Doppler $DOPPLER_PROJECT/$CONFIG" >&2
+  exit 2
+fi
+
+# Token-shape guard (never echoes the value): the token is written into curl's stdin
+# config below, so a quote or newline in it would inject a config directive. An unusable
+# token makes zero curl calls and exits 2, the same code as an empty secret, never 0.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$TOKEN"; then
+  echo "trigger.sh: $SECRET_NAME in Doppler $DOPPLER_PROJECT/$CONFIG has an unexpected shape; nothing was sent" >&2
   exit 2
 fi
 
@@ -141,11 +182,12 @@ fi
 # See ADR-009 Amendment.
 RESP=$(mktemp -t trigger-cron-resp.XXXXXXXX)
 trap 'rm -f "$RESP"' EXIT INT TERM
-HTTP_CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \
+HTTP_CODE=$(curl --disable --noproxy '*' -sS -o "$RESP" -w '%{http_code}' \
   -X POST "$ROUTE_URL" \
-  -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
-  -d "$BODY")
+  -d "$BODY" \
+  --config - \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"))
 unset TOKEN
 
 echo "HTTP $HTTP_CODE"

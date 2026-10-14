@@ -116,53 +116,56 @@ def run(sb):
 
 def main():
     sb = tempfile.mkdtemp(prefix="mutbat2.")
-    for rel in (BOOT, CI, WF, SUITE):
-        dst = os.path.join(sb, rel)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy(os.path.join(REPO, rel), dst)
-    # the suite reads sibling infra files via $DIR
-    for extra in ("sentry/issue-alerts.tf",):
-        src = os.path.join(REPO, "apps/web-platform/infra", extra)
-        dst = os.path.join(sb, "apps/web-platform/infra", extra)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy(src, dst)
-
-    base = run(sb)
-    if base:
-        print("CONTROL NOT GREEN — every result below would be noise:")
-        for f in base:
-            print("   ", f)
-        sys.exit(1)
-    print(f"control: GREEN  ({len(MUTATIONS)} mutants)\n")
-
-    survived = []
-    for name, rel, old, new in MUTATIONS:
-        src, dst = os.path.join(REPO, rel), os.path.join(sb, rel)
-        shutil.copy(src, dst)
-        s = open(dst).read()
-        n = s.count(old)
-        if n != 1:
-            print(f"{name:34s} ANCHOR n={n} (need exactly 1)  <-- fix the harness")
-            survived.append(f"{name} (anchor n={n})")
+    # try/finally: the surviving-mutant sys.exit(1) path (and any setup error) must still remove
+    # the sandbox copy, or every failing run leaks a full copy of the infra files.
+    try:
+        for rel in (BOOT, CI, WF, SUITE):
+            dst = os.path.join(sb, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy(os.path.join(REPO, rel), dst)
+        # the suite reads sibling infra files via $DIR
+        for extra in ("sentry/issue-alerts.tf",):
+            src = os.path.join(REPO, "apps/web-platform/infra", extra)
+            dst = os.path.join(sb, "apps/web-platform/infra", extra)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy(src, dst)
-            continue
-        open(dst, "w").write(s.replace(old, new, 1))
-        fails = run(sb)
-        shutil.copy(src, dst)
-        if fails:
-            print(f"{name:34s} RED ({len(fails):2d})  {fails[0][:78]}")
-        else:
-            print(f"{name:34s} SURVIVED  <-- assertion cannot fail")
-            survived.append(name)
 
-    print()
-    if survived:
-        print("SURVIVING / UNVERIFIED:")
-        for s_ in survived:
-            print("   ", s_)
-        sys.exit(1)
-    print(f"all {len(MUTATIONS)} mutations detected")
-    shutil.rmtree(sb)
+        base = run(sb)
+        if base:
+            print("CONTROL NOT GREEN — every result below would be noise:")
+            for f in base:
+                print("   ", f)
+            sys.exit(1)
+        print(f"control: GREEN  ({len(MUTATIONS)} mutants)\n")
 
+        survived = []
+        for name, rel, old, new in MUTATIONS:
+            src, dst = os.path.join(REPO, rel), os.path.join(sb, rel)
+            shutil.copy(src, dst)
+            s = open(dst).read()
+            n = s.count(old)
+            if n != 1:
+                print(f"{name:34s} ANCHOR n={n} (need exactly 1)  <-- fix the harness")
+                survived.append(f"{name} (anchor n={n})")
+                shutil.copy(src, dst)
+                continue
+            open(dst, "w").write(s.replace(old, new, 1))
+            fails = run(sb)
+            shutil.copy(src, dst)
+            if fails:
+                print(f"{name:34s} RED ({len(fails):2d})  {fails[0][:78]}")
+            else:
+                print(f"{name:34s} SURVIVED  <-- assertion cannot fail")
+                survived.append(name)
+
+        print()
+        if survived:
+            print("SURVIVING / UNVERIFIED:")
+            for s_ in survived:
+                print("   ", s_)
+            sys.exit(1)
+        print(f"all {len(MUTATIONS)} mutations detected")
+    finally:
+        shutil.rmtree(sb, ignore_errors=True)
 
 main()

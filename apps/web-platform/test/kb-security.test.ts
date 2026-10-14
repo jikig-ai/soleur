@@ -82,8 +82,14 @@ describe("KB API security", () => {
       // {ok: false} result must trigger an early return, per #2245), or
       // (c) wrapping the handler with `withUserRateLimit` (#2510 — the
       // wrapper performs `supabase.auth.getUser()` and 401s unauthenticated
-      // callers before the inner handler runs).
-      const hasInlineAuth = content.includes("supabase.auth.getUser");
+      // callers before the inner handler runs), or (d) `verifiedUserId` —
+      // the #8926 middleware-verified identity read; it is stronger than an
+      // inline getUser (consumes the minted x-soleur-auth-user-id header and
+      // fails closed to a getUser() re-verify when absent), and callers must
+      // still check the result for null.
+      const hasInlineAuth =
+        content.includes("supabase.auth.getUser") ||
+        /verifiedUserId\s*\(/.test(content);
       const invokesHelper =
         /const\s+\w+\s*=\s*await\s+authenticateAndResolveKbPath\s*\(/.test(
           content,

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { TeamNamesProvider, useTeamNames } from "@/hooks/use-team-names";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -23,10 +24,16 @@ function TestConsumer() {
 }
 
 function renderWithProvider() {
+  // #9178 — the provider's GET is SWR-keyed and post-FCP-deferred in
+  // production. These tests exercise the hook's name/icon/error contract, so
+  // defer is pinned off and each render gets a fresh cache (the global one
+  // would leak names between tests).
   return render(
-    <TeamNamesProvider>
-      <TestConsumer />
-    </TeamNamesProvider>,
+    <SwrTestProvider>
+      <TeamNamesProvider defer={false}>
+        <TestConsumer />
+      </TeamNamesProvider>
+    </SwrTestProvider>,
   );
 }
 

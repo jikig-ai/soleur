@@ -141,4 +141,59 @@ RC=$(run_classify_in "$TMPREPO" "$NEW_SHA" "$OLD_SHA" < "$FIX/upstream-fields-ar
 assert_eq "10" "$RC" "exit 10 (not 15) when new commit is descendant of pinned"
 echo ""
 
+# --- The shape cron-content-vendor-drift.ts ACTUALLY emits (#7710) -----------
+#
+# This is the binding test for the wiring, and it exists because the one that
+# shipped first was a source-grep — `expect(src).toMatch(/aggDiffParts\.push\(/)`
+# — whose NAME was "populates aggDiffParts: the classifier must receive the
+# diff" and which could not witness a single word of that claim. It passed
+# against a `path\told\tnew` triple, which begins with a path and therefore
+# matches NEITHER the license anchor `^(\+\+\+|---) [ab]/…LICENSE` NOR the
+# security anchors `^\+`. Exits 10, 11 and 15 were structurally unreachable and
+# every drift fell to check 5's bare non-empty test — exit 13, the auto-PR route
+# with `mergeMode: "direct"`, which is restricted to 13 precisely to keep
+# attacker-controlled upstream bytes from landing via the weekly bot.
+#
+# So: drive the REAL script with the REAL shape, and assert the exit code.
+
+emitted_fragment() {
+  # Mirrors the handler: `--- a/<path>`, `+++ b/<path>`, every body line `+`.
+  local path="$1"; shift
+  printf -- '--- a/%s\n+++ b/%s\n' "$path" "$path"
+  local line
+  for line in "$@"; do printf -- '+%s\n' "$line"; done
+}
+
+RC=$(emitted_fragment "pii-detector/layers/frontend.md" \
+      "Some ordinary prose line." \
+      "Controllers MUST record the Art. 9 basis." | run_classify)
+assert_eq "10" "$RC" "emitted shape: an Art. 9 line in the body reaches the SECURITY exit"
+
+RC=$(emitted_fragment "LICENSE" "MIT License" | run_classify)
+assert_eq "11" "$RC" "emitted shape: a LICENSE path reaches the LICENSE exit"
+
+# NOT a `layers/` path: the security regex's last alternative is
+# `^\+\+\+ b/.*/layers/`, so the HEADER alone makes any file under a `layers/`
+# directory security-relevant regardless of body. Six of the eight registered
+# upstream files live there (`notice-frontmatter.sh upstream-files`), so under
+# the corrected shape most corpus drift now routes to the GUARDED exit 10
+# rather than the auto-PR exit 13. That is a real behavioural change and it is
+# the safe direction; the two non-`layers/` files are what keep 13 reachable.
+RC=$(emitted_fragment "pii-detector/patterns/fields.md" \
+      "a purely cosmetic wording change" | run_classify)
+assert_eq "13" "$RC" "emitted shape: ordinary prose outside layers/ still batches"
+
+RC=$(emitted_fragment "pii-detector/layers/frontend.md" \
+      "a purely cosmetic wording change" | run_classify)
+assert_eq "10" "$RC" "emitted shape: a layers/ path is security-relevant by header alone"
+
+# The regression control. The superseded TSV must NOT reach a guarded exit —
+# if this ever returns 10 or 11 the anchors have changed and the comment above
+# is stale.
+RC=$(printf 'pii-detector/layers/frontend.md\tabc123\tdef456\n' | run_classify)
+assert_eq "13" "$RC" "control: the superseded TSV shape falls through to batched (why it was unsafe)"
+
+RC=$(printf -- '--- a/x.md\n+++ b/x.md\n+[CRITICAL] drifted content unreadable — classify conservatively\n' | run_classify)
+assert_eq "10" "$RC" "unreadable-body marker forces the guarded route, never the auto-PR one"
+
 print_results

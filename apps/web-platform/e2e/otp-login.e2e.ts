@@ -1,6 +1,19 @@
-import { test, expect } from "@playwright/test";
+// pyramid-justified: intercepts `**/auth/v1/otp*` via page.route and drives
+// the real rendered OTP form (banners, inputs, submit) — needs a real
+// browser.
+import { test, expect, type Page } from "@playwright/test";
 import { EMAIL_OTP_LENGTH } from "../lib/auth/constants";
 import { SIGNUP_REASON_NO_ACCOUNT } from "../lib/auth/error-messages";
+
+/**
+ * The /signup "no account" banner. The nav-pending island also renders
+ * role="status" while the /login -> /signup navigation settles, so an
+ * unfiltered getByRole("status") hits two elements and toContainText fails at
+ * once with a strict-mode violation instead of polling (#9170). Select the
+ * banner by its text instead.
+ */
+const noAccountBanner = (page: Page) =>
+  page.getByRole("status").filter({ hasText: /no Soleur account found/i });
 
 // ---------- OTP Login Flow Tests ----------
 // These test the email OTP sign-in flow end-to-end.
@@ -102,26 +115,11 @@ test.describe("OTP callback error handling", () => {
     ).toBeVisible({ timeout: 10_000 });
   });
 
-  test("/callback without code redirects to /login with error", async ({
-    request,
-  }) => {
-    const response = await request.get("/callback", {
-      maxRedirects: 0,
-    });
-    expect(response.status()).toBe(307);
-    expect(response.headers()["location"]).toContain("/login");
-  });
-
-  test("/callback with invalid code redirects to /login with error", async ({
-    request,
-  }) => {
-    const response = await request.get("/callback?code=invalid-code", {
-      maxRedirects: 0,
-    });
-    expect(response.status()).toBe(307);
-    expect(response.headers()["location"]).toContain("/login");
-  });
 });
+
+// Request-only /callback redirect cases live at the unit layer:
+// test/app/auth/callback-route-branches.test.ts covers bare-?code and
+// invalid-code exchange failures with branch-precision assertions.
 
 test.describe("Login no-account redirect", () => {
   test("submitting unknown email on /login redirects to /signup with prefill + banner", async ({
@@ -170,15 +168,25 @@ test.describe("Login no-account redirect", () => {
     });
     await expect(emailInput).toHaveValue(email);
 
+    // Deterministic stand-in for the nav-pending island: a second
+    // role="status" element that is NOT the banner. An unfiltered locator
+    // would hit both and fail strict mode, which is the #9170 flake.
+    await page.evaluate(() => {
+      const decoy = document.createElement("div");
+      decoy.setAttribute("role", "status");
+      decoy.textContent = "Loading";
+      document.body.appendChild(decoy);
+    });
+
     // Banner is visible
-    await expect(page.getByRole("status")).toContainText(
+    await expect(noAccountBanner(page)).toContainText(
       /no Soleur account found/i,
     );
-    await expect(page.getByRole("status")).toContainText(email);
+    await expect(noAccountBanner(page)).toContainText(email);
 
     // Banner dismisses on edit (derived from `email !== initialEmail`)
     await emailInput.fill(`${email}-edit`);
-    await expect(page.getByRole("status")).toHaveCount(0);
+    await expect(noAccountBanner(page)).toHaveCount(0);
   });
 
   test("/signup with unknown reason value does NOT show the banner", async ({

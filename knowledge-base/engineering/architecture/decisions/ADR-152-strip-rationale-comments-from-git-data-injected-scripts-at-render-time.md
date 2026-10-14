@@ -1,4 +1,8 @@
-# ADR-152 — Strip rationale comments from the git-data injected scripts at render time
+# ADR-152 — Strip rationale comments from rendered `user_data` at render time
+
+- **Scope:** git-data's injected scripts (2026-07-29) and the registry's cloud-init template
+  (2026-08-04, #7278). The technique is shared; the EXPRESSION is deliberately not — see the
+  amendment. Filename kept at its original slug so cross-references do not churn.
 
 - **Status:** Accepted
 - **Date:** 2026-07-29
@@ -20,7 +24,7 @@ The payload is `cloud-init-git-data.yml` plus nine `file()`-injected scripts and
 `git-data-pre-receive-placeholder.sh`, `git-data-gc.service`,
 `git-data-gc-failure.service`, `git-data-gc.timer`).
 
-#6982 landed two user-facing fixes that ship inside that payload — `receive.unpackLimit=1`
+PR #6982 landed two user-facing fixes that ship inside that payload — `receive.unpackLimit=1`
 plus inode telemetry (a silent ENOSPC-on-inodes path), and `EnvironmentFile=-` on both gc
 units (the failure reporter died on the failure it exists to report). With both applied the
 payload measured **33,028 B — 260 B over the cap**, with B7, B11 and B12 still queued and also
@@ -71,10 +75,12 @@ git_data_rationale_strip = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
 `cloud-init-git-data.yml` itself is **not** stripped. The repo keeps its full rationale;
 `user_data` stops paying for it.
 
-    before: 33,028 B stored (over cap by 260 B)
-    after:  19,588 B stored (13,180 B headroom) at the moment of the strip
-    now:    20,456 B stored (12,312 B headroom) with B7/B11/B12 and the review
-            fixes added back on top
+```text
+before: 33,028 B stored (over cap by 260 B)
+after:  19,588 B stored (13,180 B headroom) at the moment of the strip
+now:    20,456 B stored (12,312 B headroom) with B7/B11/B12 and the review
+        fixes added back on top
+```
 
 The expression is **anchored at line start** and **preserves `#!` by construction**.
 
@@ -130,6 +136,13 @@ carve-out MORE load-bearing, not less.
    pass `bash -n`, with a floor of 6 so "found nothing to check" cannot read as "everything
    passed", plus verify-the-verifier arms proving the strip is not a no-op and does not touch
    mid-line or trailing `#`.
+
+   > **Scoped 2026-08-20 (#7613):** that last clause is a property of **the render's** strip
+   > expression, and it is true of it. It was read as a property of the whole pipeline, which
+   > it is not — the *test suite* runs a SECOND, independent strip when it derives its
+   > `.code.sh` corpora. Until #7613 that one was whole-line-only and left trailing `#`
+   > standing; #7613 extends it to blank ` # ` tails as well. Either way the clause above is a
+   > property of the RENDER's expression, not of the pipeline. See the amendment at the end.
 
 `git-data-runcmd-rehearsal.test.sh`'s B1 byte-identity check now compares against the
 **stripped** source, reading the expression out of `git-data.tf` rather than restating it — a
@@ -201,3 +214,273 @@ This ADR covers the render-time transformation only. The birth dispatch and the 
 rehearsal remain out of scope for #6982 and are carried by #7025; the DO-NOT-DISPATCH banner
 stays up, and #6982 additionally re-arms the birth interlock mechanically
 (`git_data_rung2_rehearsal_gate`) so that hold is no longer prose alone.
+
+## Amendment (2026-08-04, #7278) — extended to the registry host, with a DIFFERENT expression
+
+`hcloud_server.registry` was measured at **34,628 B** against the same 32,768 B cap — over it,
+and therefore unprovisionable, before anyone tried to add to it. Because ADR-096 makes the
+registry host cloud-init-only, a provisioning event is its only channel for host-side change,
+so the cap breach silently disabled EVERY path that creates this host —
+`registry-host-replace`, `registry-luks-recut` AND `registry-region-migrate`
+(apply-web-platform-infra.yml) — independently of their own gates. The region-migrate omission
+is the one that matters most in practice: that is the lever an operator reaches for when the
+REGION is the problem, i.e. exactly when they are least likely to suspect a byte cap. This ADR's technique is what brought it
+back under (34,628 → 9,072 B).
+
+**The expression is deliberately not shared, and must not be.** The rule above
+(`/(?m)^[ \t]*#([^!\n][^\n]*)?\n/`) preserves `#!` and nothing else. That is correct for the
+artifacts this ADR was written about — the nine INJECTED SCRIPTS — and it is wrong for a
+cloud-init template, because it deletes `#cloud-config`. Deleting it does not fail: the apply
+succeeds, the host boots, and cloud-init never recognises the payload, so none of it runs.
+That is the dark-host indistinguishability ADR-149 names, reached through the mechanism this
+ADR introduced.
+
+The registry uses `/(?m)^[ \t]*#([ \t][^\n]*)?\n/` (`local.registry_rationale_strip` in
+`zot-registry.tf`): a `#` line is rationale only when followed by a **space/tab**, or when
+**bare**. This preserves `#cloud-config` and `#!` by construction rather than by enumeration.
+
+**The generalizable rule, for the next host:**
+
+| What is being stripped | Safe expression | Why |
+|---|---|---|
+| Injected scripts (both hosts) | preserve `#!` only | scripts have no `#`-directive but a shebang |
+| The cloud-init template itself (registry) | preserve `#!` **and** any `#`-directive without a separator | `#cloud-config` is load-bearing and is a comment by syntax |
+| A **test suite's** `.code.sh` corpus, derived from an already-stripped render (#7613) | preserve `#!`, `${var#pat}`, `$#` and a URL fragment — strip only ` # ` tails. **Python `re`, so `[ \t]+#([ \t].*)?$`, NOT `[[:space:]]`** | the input is shell that has ALREADY been through the render strip, so what survives is mid-line and trailing `#`, which is exactly what the other two expressions are not built to touch |
+
+Do not port an expression between these two cases. Verify the divergence the same way #7278
+did: assert the first line survives, assert every shebang survives, and assert the strip is
+not a no-op — a strip that matched nothing satisfies both preservation checks while leaving
+the payload over the cap.
+
+**One copy per expression — and know what that does NOT buy.** git-data's is hand-mirrored into
+`git-data-userdata-budget.sh` and kept equal by `git-data-render-strip-parity.test.sh`. The
+registry's is instead **extracted** from `zot-registry.tf` by
+`plugins/soleur/test/cloud-init-user-data-size.test.ts`. Prefer extraction for a future host: a
+model that strips differently than production measures a payload production never boots, and
+measures it green.
+
+But extraction removes only EXPRESSION divergence. It does not replace git-data's
+`git-data-userdata-budget.sh`, which exists for a reason extraction cannot satisfy — it renders
+through terraform's OWN `base64gzip` from an empty scratch dir with no `terraform init`, i.e. a
+byte-exact measurement. The TS model is explicitly not that (node zlib vs Go zlib; it asserts a
+BUDGET, never equality), so the registry has no byte-exact CI measurement today. At 9,072 B
+against 32,768 that is acceptable on margin; it is a gap, not a solved problem.
+
+> **CLOSED 2026-08-06 (#7299).** `apps/web-platform/infra/registry-userdata-budget.sh` is now
+> that byte-exact measurement for the registry, and it runs in CI. Read the paragraph above as
+> history. Note how the gap closed, because it is the cautionary half: the script shipped in
+> #7283 measuring the render WITHOUT the strip, reported a phantom 3,636 B breach, and #7299 was
+> filed against that reading as an outage. Its first fix then reproduced the defect named in the
+> paragraph below — it asserted the expression was DECLARED and not that it was APPLIED, which
+> review caught before merge. Current measurement: 9,408 B stored, 23,360 B of headroom.
+
+Extraction also does not prove the strip is APPLIED. Reading the expression out of the `.tf`
+says nothing about whether `user_data` wraps `templatefile()` in it — measured: unwiring the
+`replace()` and leaving the local orphaned kept the whole suite green while the render returned
+to 34,628 B, and so did keeping `replace()` with an inline boot-bricking literal. git-data hit
+the identical class (`git-data-render-strip-parity.test.sh`: "nothing checked that the budget
+harness actually APPLIES it"). Assert on the RENDER EXPRESSION, not on a string in a file.
+
+**Coverage gap this closed, and the one it did not.** `cloud-init-user-data-size.test.ts`
+guarded the web and git-data hosts and had no registry arm at all, which is why a 1,860 B breach
+sat undetected. Any host whose `user_data` is rendered against the cap needs an arm there at
+birth, not after a breach.
+
+**The sweep is OUTSTANDING, not done.** After #7278 two further hosts still render
+`base64gzip(templatefile(...))` with no arm in that suite: `hcloud_server.inngest`
+(`inngest-host.tf`) and the grok-dogfood host (`grok-dogfood.tf`). Both are under cap today and
+neither is this PR's scope — but they are on the same unguarded trajectory the registry was on,
+and this paragraph is the record that the gap is known rather than closed.
+
+> **CLOSED 2026-09-08 (#7695) — but not before the predicted failure happened.** See the
+> amendment at the end of this file. `hcloud_server.inngest` went over cap on 2026-09-04 and a
+> replace dispatch destroyed the host four days later. This paragraph named that host, named the
+> trajectory, and was correct — and it changed nothing, because a paragraph is not a gate.
+
+## Amendment (2026-08-11, #7264) — git-data's own cloud-init template is now stripped too
+
+This ADR's original scope stripped the **nine injected payloads** and explicitly left
+git-data's `cloud-init-git-data.yml` alone; the 2026-08-04 amendment then extended the
+technique to the registry host with a deliberately **different** expression, and recorded the
+generalizable rule as a two-row table for "the next host". git-data is that next host, and it
+now occupies **both** rows of its own table.
+
+**What changed.** `modules/git-data-userdata/main.tf` declares a second local,
+`git_data_template_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"` — byte-identical to
+the registry's `registry_rationale_strip` — and the render is wrapped
+`replace(templatefile(…), local.git_data_template_rationale_strip, "")`, mirroring
+`zot-registry.tf`. The payload expression is **unchanged**.
+
+**Measured** (terraform's own `base64gzip`, via `git-data-userdata-budget.sh`):
+
+| | raw | stripped | stored | headroom |
+|---|---|---|---|---|
+| before | 67,479 B | — | **30,376 B** | 2,392 B |
+| after | 67,479 B | 36,805 B | **12,588 B** | **20,180 B** |
+
+Recovery is **17,788 stored bytes**, and headroom goes from 7% of the cap to 62%.
+
+**Why two expressions and not one.** This amendment does not relax the rule above it — it
+applies it. The payload form preserves `#!` and nothing else, which is correct for scripts
+that have a shebang and no `#`-directive, and *wrong* for a cloud-init body, where
+`#cloud-config` is a directive that is a comment by syntax. That was verified rather than
+assumed: applying the payload expression to the git-data render produces a document whose
+first line is `package_update`, and `cloud-init schema -c` rejects it with *"Expected first
+line to be one of: #!, ## template: jinja, #cloud-boothook, #cloud-config, …"*. A collapse of
+the two expressions is therefore a dark-host defect, and it is one line away at all times —
+so `git-data-render-strip-parity.test.sh` now asserts they are **distinct**, in addition to
+mirroring each independently.
+
+### The verification triad, and the gate that was blind to it
+
+This ADR prescribes three arms — first line survives, every shebang survives, the strip is not
+a no-op. All three now run for git-data, in `git-data-template-strip.test.sh` (registered in
+`infra-validation.yml`), alongside two that the triad does not cover:
+
+- **Per-entry byte diff.** Top-level keys and `runcmd`/`write_files` entry *counts* are
+  invariant under corruption *inside* a `write_files` content string or the `LUKSEOF` heredoc
+  body, so a shape comparison passes over a deleted data line. The arm asserts each entry
+  differs from its unstripped twin **only** by lines the expression matches.
+- **Interpolation reachability.** The strip runs over the *rendered* output, so it sees
+  interpolated values. Nine interpolation sites sit at the start of a line
+  (`${indent(6, git_data_bootstrap)}` and its siblings) and six of those payloads begin with
+  `#!/usr/bin/env bash`; they survive only because `!` is not `[ \t]`. That was true by
+  accident and is now asserted.
+
+**A gate was validating the wrong document.** `.github/scripts/validate-infra-templates.sh`
+renders the **bare** `templatefile()` and runs `cloud-init schema -c` on it. Once a call site
+wraps the render in `replace(...)`, that gate validates a document no host is ever given — and
+worse, the *one shape that cannot fail*, because the unstripped body still carries its header.
+The script now resolves the call site's strip local and applies it before validating. This
+affected the registry host too — from **#7280** (`d0295964f`), the commit that actually
+shipped the registry's `replace()` wrap, not #7278 where this amendment was written.
+Mutation-proven in both directions.
+
+**Still outstanding**, unchanged from the amendment above: `hcloud_server.inngest` and the
+grok-dogfood host still render `base64gzip(templatefile(...))` with no arm in
+`cloud-init-user-data-size.test.ts`. Under cap today; on the same unguarded trajectory.
+
+> **CLOSED 2026-09-08 (#7695).** Both hosts now have arms; see the final amendment. "Under cap
+> today" had a shelf life of 24 days for inngest.
+
+---
+
+## Amendment — 2026-08-20 (#7613): a THIRD strip exists, in the test suite, and it is not this one
+
+### What was inconsistent
+
+The Decision above says the render's strip "does not touch mid-line or trailing `#`". That is
+true, and it is a property of the RENDER. It was read one scope too wide.
+
+`git-data-runcmd-rehearsal.test.sh` derives two `.code.sh` corpora from the already-stripped
+render, using its own independent expression — `^\s*#`, whole-line-only. So the pipeline has
+**two** strips in series, and the second one is the only thing standing between a trailing
+comment and the R3 family's predicates. Nothing in this ADR said so, and a reader checking
+"can a predicate be satisfied by a comment?" against this file alone would have concluded no.
+
+### The rule-table row, and why the expression differs
+
+The new row above is not a third dialect for its own sake. Its INPUT is different: it receives
+shell that has already been through the render strip, so whole-line comments are gone by
+construction and what remains is precisely the mid-line and trailing `#` the other two
+expressions are not built to touch. `[ \t]+#([ \t].*)?$` — written for Python `re`, which has no POSIX classes, so
+`[[:space:]]` there is the literal set `{[,:,s,p,a,c,e,]}` and strips nothing — requires whitespace
+before the `#` and either end-of-line or whitespace after it, which is what preserves
+`${var#pat}`, `$#`, `#!` and `#` inside a URL fragment.
+
+**Do not reuse `_b2_strip` for this.** The suite already contains `sed -e 's/[[:space:]]*#.*$//'`
+under that name, and #7613's issue body proposed it as the ready-made fix. Measured against a
+synthesized fixture, its zero-width prefix (`*`, not `+`) destroys all four:
+
+| input | `_b2_strip` | the new expression |
+|---|---|---|
+| `base=${path#/prefix/}` | `base=${path` | `base=${path#/prefix/}` |
+| `argc=$#` | `argc=$` | `argc=$#` |
+| `url="…/#anchor"` | `url="…/` | `url="…/#anchor"` |
+| `#!/bin/sh` | *(empty)* | `#!/bin/sh` |
+
+### What the change is worth, stated honestly
+
+**It is a measured no-op today, and ships as prophylaxis.** Re-measured against a fresh render
+on 2026-08-20, independently of the plan that proposed it:
+
+- `luks-stage`: 55 lines → 55, **0** lines containing `#` after the current whole-line strip.
+- `runcmd-all`: 170 lines → 170, **1** such line —
+  `STAGE=volume_mount # (#6982) name the stage for the top-armed on_err fatal`.
+- `volume_mount` is matched by **zero** predicates in the suite, so the one survivor is on a
+  line nothing reads.
+- **0** at-risk tokens (`${var#pat}`, `$#`, `#`-in-string) in either artifact.
+
+So it changes one line in one artifact and no arm's verdict. It is retained because the
+property it buys — a predicate cannot be satisfied by the commentary that explains it — is one
+the suite asserts elsewhere and should not depend on the render's strip continuing to be
+exhaustive. The suite's own comment says this in the same words, rather than implying the
+change fixed something live.
+
+**Known false positive, and it is a LATENT BREAK rather than a bound.** The expression strips
+`msg="value # not a comment"` to `msg="value`. There are zero such lines in either artifact
+today — measured — but an earlier revision of this paragraph claimed "the suite asserts that
+count", and it does not: no assertion anywhere measures surviving trailing comments or at-risk
+tokens in the real corpora. Those numbers live only in prose. Worse, this particular shape is
+undetectable by the guard that does exist, because `_b2_strip` corrupts it identically, so a
+parity check stays green. Asserting an assertion is the same defect class this ADR's amendment
+is about, so it is stated as what it is: if such a line is ever introduced upstream, nothing
+here will catch it.
+
+**And the rule-table row above states a guarantee the expression lacks.** It says the expression
+preserves "`#` inside strings". It preserves a URL fragment (`#` with no preceding whitespace)
+and does NOT preserve a ` # ` sequence inside a quoted string. The table is the normative artifact
+this ADR tells the next host to port from, so the row names the narrower, true property.
+
+---
+
+## Amendment — 2026-09-08 (#7695): the outstanding sweep closed, four days after it came due
+
+### What happened
+
+Two passages above name `hcloud_server.inngest` and the grok-dogfood host as rendering
+`base64gzip(templatefile(...))` with no arm in `cloud-init-user-data-size.test.ts`, call them
+"under cap today", and describe them as "on the same unguarded trajectory the registry was on".
+Both passages were accurate. Neither prevented anything.
+
+On **2026-09-04**, `000fa471` (#7778) grew `cloud-init-inngest.yml` past the cap. Nothing
+observed it: the merge apply of `apply-web-platform-infra.yml` is an explicit `-target=`
+allow-list containing no `hcloud_server.*`, so terraform never planned the resource and never
+submitted the payload to Hetzner — which is the only thing that validates it. On **2026-09-08**
+an `inngest-host-replace` dispatch destroyed the host and Hetzner refused the create:
+`invalid input in field 'user_data' [Length must be between 0 and 32768]`. The destroy-guard and
+the stock preflight both passed, correctly: they grade the plan's SHAPE and the datacenter's
+STOCK, and neither weighs the payload.
+
+### The lesson, which is about this ADR and not about the host
+
+**This document predicted the failure by name and did not prevent it.** Three hosts have now each
+acquired a byte gate in response to their own incident — git-data (#5927), registry
+(#7282/#7299), inngest (#7695). Three instances of one class, closed three times, never once as a
+class. The "outstanding sweep" note was written twice, a month apart, and its function turned out
+to be *absolution*: it made the gap feel tracked, which is what let it stay open. A known gap
+recorded in prose and a known gap recorded in a failing test are not the same artifact, and only
+one of them stops a destroy.
+
+### What #7695 changed, so the next host cannot repeat it
+
+1. **`inngest-host.tf`** wraps the render in the same three-stage chain
+   (`base64gzip(replace(templatefile(...), local.inngest_rationale_strip, ""))`), hoisted into
+   locals so a `lifecycle.precondition` can weigh the exact stored value at plan time — a
+   precondition cannot reference `self`. That precondition refuses the plan on the
+   `workflow_dispatch` path, where no CI job is watching.
+2. **`apps/web-platform/infra/inngest-userdata-budget.sh`** is the sibling of the two existing
+   budget scripts, rendering through terraform's OWN `base64gzip` (never `gzip -9`) and measuring
+   BYTES (never `length()`, which counts graphemes and errs optimistic). Wired into
+   `infra-validation.yml` as its own job and into the main-branch failure notification. Measured:
+   raw 91,997 B → stripped 30,614 B → stored 10,892 B, 21,876 B of headroom.
+3. **A WALKER arm** in `cloud-init-user-data-size.test.ts` derives the host set from the `.tf`
+   sources: every `hcloud_server` whose `user_data` is base64gzip'd must have a committed byte
+   measurement — a `<host>-userdata-budget.sh` or a modeled arm. This is the part that closes the
+   CLASS. On its first run it immediately failed on `grok_dogfood`, the fourth base64gzip'd host,
+   which had no measurement of any kind and which the passages above had named a month earlier.
+   A fourth host added without coverage now fails at the moment it is added, not at its first
+   replace.
+
+The walker is the artifact this ADR should have produced in #7278. The prose was the substitute
+for it, and the substitute cost a production host.

@@ -14,6 +14,12 @@
 # `stub-argv-fidelity.test.sh` now enforces argv dispatch for every hook stub.
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/pre-merge-auto-close-scan.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -34,9 +40,9 @@ _cleanup_tmp() {
 }
 trap _cleanup_tmp EXIT
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
-[[ -f "$SCANNER" ]] || { echo "SKIP: auto-close-scan.sh not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
+[[ -f "$SCANNER" ]] || { echo "FAIL: $SCANNER not found — the scanner under test is repo-owned, so its absence is a defect"; exit 1; }
 
 # Per-case options. Set immediately before a run_case call; run_case clears them
 # afterwards so they never leak into the next case.
@@ -64,6 +70,7 @@ OPT_REASON=""     # newline-separated substrings the deny reason must ALL contai
 make_work_dir() {
   local body="$1" pr_body="$2" tmp
   tmp="$(mktemp -d)"
+  : "${tmp:?fixture dir is empty; git -C <empty> would retarget this write}"
   git -C "$tmp" init -q -b feat-x
   git -C "$tmp" config user.email t@t; git -C "$tmp" config user.name t
   git -C "$tmp" commit -q --allow-empty -m "base"
@@ -323,6 +330,21 @@ run_case "GH-N form on follow-through → deny" deny \
 run_case "GH-N form on non-follow-through → allow" allow \
   "gh pr merge 1 --squash" $'fix: thing\n\nCloses GH-6295' ""
 
+# Split matches reach the hook through the scanner's joined record. X1 is the
+# #8514 commit body verbatim in shape; X2/X3 are CRLF bodies (what the GitHub web
+# editor stores). Before the scanner stripped CRs, X2's record was
+# `Closes\r #6617`: DIRECTIVE's [[:space:]]+ took it as a standalone close while
+# the label arm's [ \t]+ extracted no number, so BOTH arms passed it.
+OPT_REASON=$'prose-embedded\na commit message' \
+run_case "X1 commit prose close split across lines → deny" deny \
+  "gh pr merge 1 --squash" $'fix: thing\n\nA probe that can exit 0 would auto-close\n#8285, so it is notify-only.' ""
+OPT_FT="6617" OPT_REASON=$'follow-through\n#6617 — referenced from the PR body' \
+run_case "X2 CRLF body, standalone Closes split across lines, follow-through → deny" deny \
+  "gh pr merge 1 --squash" "fix: thing" $'Summary.\r\n\r\nCloses\r\n#6617\r\n'
+OPT_REASON=$'prose-embedded\nthe PR body' \
+run_case "X3 CRLF body, prose close split across lines → deny" deny \
+  "gh pr merge 1 --squash" "fix: thing" $'This would close\r\n#5955 early.\r\n'
+
 # Keyword-branch coverage. The close vocabulary is a 9-member set spanning three
 # alternation branches (close[sd]?, fix(es|ed)?, resolve[sd]?). Exercising only
 # `Closes` leaves the fix/resolve branches — and `closed`/`fixed`/`resolved` —
@@ -431,6 +453,77 @@ run_case "T23 explicit PR number is the ref gh is asked about → allow" allow \
   "gh pr merge 4321 --squash" "fix: thing" "clean body"
 
 # ---------------------------------------------------------------------------
+# T24-T27 — squash-body override (--body-file).
+#
+# On a SQUASH merge, --body-file replaces the concatenated branch commit
+# messages, so those messages never land on main and cannot auto-close anything.
+# Before #7516 the hook scanned them regardless, which denied the exact remedy
+# its own deny text prescribes: the only contaminated surface was one commit
+# whose message paired a NEGATED close-keyword with a tracker number, and the
+# merge already carried a clean --body-file. The parser is negation-blind, so it
+# reads such a line as a close regardless.
+#
+# The literal is described rather than pasted in THIS comment, but the fixtures
+# below paste contaminated strings freely — that is not an inconsistency. File
+# contents are safe (GitHub parses commit messages and PR bodies, not diffs), so
+# the fixtures must carry real contaminated text to test anything. The prose is
+# the part that gets copied INTO a PR body while someone explains the guard, and
+# there it would be live.
+#
+# The override is SCANNED, never trusted. T25-T27 are the three ways a weaker
+# implementation would fail open, and each is a real reachable state, not a
+# hypothetical: a contaminated override, a non-squash merge where the commit
+# bodies ARE the live surface, and an override this hook cannot read.
+# ---------------------------------------------------------------------------
+OVR_DIR="$(mktemp -d)"; _TMP_ARTIFACTS+=("$OVR_DIR")
+printf 'fix: thing\n\nRef #6617 — stays open.\n' > "$OVR_DIR/clean.txt"
+printf 'fix: thing\n\nCloses #6617\n' > "$OVR_DIR/dirty.txt"
+
+OPT_FT="6617" \
+run_case "T24 squash + clean --body-file overrides a contaminated commit → allow" allow \
+  "gh pr merge 1 --squash --body-file $OVR_DIR/clean.txt" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+OPT_FT="6617" \
+run_case "T25 squash + CONTAMINATED --body-file → deny (override is scanned, not trusted)" deny \
+  "gh pr merge 1 --squash --body-file $OVR_DIR/dirty.txt" \
+  $'fix: thing\n\nclean commit body' ""
+
+# NOT a squash: a merge commit puts the branch commits on main verbatim, so the
+# override does not exist there and the commit bodies remain the live surface.
+OPT_FT="6617" \
+run_case "T26 --body-file WITHOUT --squash does not excuse the commit bodies → deny" deny \
+  "gh pr merge 1 --merge --body-file $OVR_DIR/clean.txt" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+# An override this hook cannot READ is an override it cannot clear.
+OPT_FT="6617" \
+run_case "T27 unreadable --body-file path falls back to commit bodies → deny" deny \
+  "gh pr merge 1 --squash --body-file $OVR_DIR/does-not-exist.txt" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+# T28-T30 — SHORT FLAGS. `gh pr merge` spells these -s/--squash, -F/--body-file, -b/--body, and a
+# hand-typed merge reaches for the short forms. Matching only the long spellings falls back to the
+# commit bodies and denies a legitimate merge — fail-closed, but that IS the defect this block
+# removes, in a different spelling. Found by re-reading the diff, not by the first pass.
+OPT_FT="6617" \
+run_case "T28 short flags -s -F behave as --squash --body-file → allow" allow \
+  "gh pr merge 1 -s -F $OVR_DIR/clean.txt" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+OPT_FT="6617" \
+run_case "T29 short flags do not weaken the scan: contaminated -F → deny" deny \
+  "gh pr merge 1 -s -F $OVR_DIR/dirty.txt" \
+  $'fix: thing\n\nclean commit body' ""
+
+# `-F -` reads the body from stdin, which this hook has already consumed. Treating it as readable
+# would hand the scanner an EMPTY corpus, which clears every surface and fails OPEN.
+OPT_FT="6617" \
+run_case "T30 --body-file - (stdin) is unreadable, not an empty corpus → deny" deny \
+  "gh pr merge 1 --squash --body-file -" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+# ---------------------------------------------------------------------------
 # Gate scoping.
 # ---------------------------------------------------------------------------
 
@@ -520,7 +613,8 @@ extract_between() {   # <file> <closer-ere> -> alternation text, or ""
 }
 TOTAL=$((TOTAL+1))
 hook_tmp=$(mktemp); printf '%s\n' "$HOOK_CODE" > "$hook_tmp"
-canon_kw=$(extract_between "$SCANNER"  '\[\[:space:\]\]')
+# The scanner states its keyword set once, as the single-quoted `KW='…'` literal.
+canon_kw=$(sed -n "s/^KW='\(.*\)'\$/\1/p" "$SCANNER" | head -1)
 hook_kw1=$(extract_between "$hook_tmp" '\[\[:space:\]\]')   # DIRECTIVE copy
 hook_kw2=$(extract_between "$hook_tmp" '\[ \\t\]')          # awk extraction copy
 rm -f "$hook_tmp"

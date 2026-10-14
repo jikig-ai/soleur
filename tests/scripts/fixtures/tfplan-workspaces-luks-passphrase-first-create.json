@@ -1,0 +1,36 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "random_password.workspaces_luks_web",
+      "mode": "managed",
+      "type": "random_password",
+      "name": "workspaces_luks_web",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "length": 40
+        }
+      }
+    },
+    {
+      "address": "doppler_secret.workspaces_luks_web_key",
+      "mode": "managed",
+      "type": "doppler_secret",
+      "name": "workspaces_luks_web_key",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "WORKSPACES_LUKS_KEY"
+        }
+      }
+    }
+  ]
+}

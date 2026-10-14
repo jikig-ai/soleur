@@ -30,7 +30,7 @@ repository secrets and OIDC trust relationships.
 
 ---
 
-### Step 0 — Tenant DPA signed + counter-signed
+## Step 0 — Tenant DPA signed + counter-signed
 
 **Action**: Sign + counter-sign the tenant's Data Processing Agreement.
 The DPA names Hetzner + Cloudflare + Doppler + GitHub as authorized
@@ -44,15 +44,19 @@ If the tenant has not signed: **STOP here**. Do not proceed to Step 1.
 Counsel review may be required for any tenant whose DPA negotiation
 deviates from the template.
 
-**Verify:** `test -s knowledge-base/legal/tenant-dpa-register.md && grep -c '^|' knowledge-base/legal/tenant-dpa-register.md | xargs -I{} test {} -ge 3` — file exists with at least one signed row (header row + separator row + ≥1 data row = ≥3 pipe-lines).
+**Verify:** `bash scripts/tenant-dpa-register-guard.sh assert-signed` — exits 0 only once the register holds a row whose Status is exactly `dpa-signed`, and exits 1 otherwise.
 
-**Teardown (if a later step fails)**: no teardown required at Step 0 itself; the DPA remains valid. Document the aborted onboarding in `knowledge-base/legal/tenant-dpa-register.md` with status `aborted-provisioning` so the next attempt knows what state was reached.
+> Use `assert-signed`, NOT `assert-populated`. Step 0 asks whether a SIGNED DPA is recorded; `assert-populated` only asks whether the register is non-empty. The register is append-only, so once any row is ever written — including a row for a tenant that has since been offboarded — a row-count gate is permanently green for every future tenant. That is the same vacuous-gate shape this guard replaced, one layer up, and it was found in review of #7349 before the second tenant existed to be harmed by it.
+
+> The earlier form of this gate counted table lines and required at least three, reasoning "header + separator + ≥1 data row". The empty register has exactly three such lines, because the `| _(none yet)_ |` placeholder is itself one — so the gate was vacuously true on the empty set and would have kept passing until the first real tenant. Fixed under #7349; the guard now excludes the placeholder and fails closed. The assertion that the old predicate has not returned lives in `scripts/tenant-dpa-register-guard.test.sh`, which is why this note describes it rather than quoting it.
+
+**Teardown (if a later step fails)**: no teardown required at Step 0 itself; the DPA remains valid. Document the aborted onboarding in `knowledge-base/legal/tenant-dpa-register.md` with status `aborted-provisioning-at-step-N` (the canonical vocabulary in that register's Status values section — record the step number reached) so the next attempt knows what state was reached.
 
 ---
 
 ### Step 1 — Create Hetzner sub-project
 
-> **Skill:** `soleur:provision-hetzner <slug> [--dry-run]` — guided Console flow + write-class smoke-test. No Terraform (Console-only).
+> **Operator types:** `/soleur:provision-hetzner <slug> [--dry-run]` — guided Console flow + write-class smoke-test. No Terraform (Console-only).
 
 **Action**: Log in to the tenant's Hetzner Cloud master account (the
 tenant org-owner has separately accepted Hetzner's Customer terms per the
@@ -65,6 +69,7 @@ token with a known-write op (create + delete a dummy resource) per
 gives a false-positive ALLOWED signal.
 
 **Verify:** run (per the token-quarantine discipline below — use `read -s`
+
 + subshell, never inline literals that leak into shell history):
 
 ```bash
@@ -90,17 +95,17 @@ manually delete the dummy resources first.
 
 ### Step 2 — Create Cloudflare scoped account-API token
 
-> **Skill:** `soleur:provision-cloudflare <slug> <zone-id> <account-id> [--dry-run]` — Terraform `cloudflare_api_token` with least-privilege permissions.
+> **Operator types:** `/soleur:provision-cloudflare <slug> <zone-id> <account-id> [--dry-run]` — Terraform `cloudflare_api_token` with least-privilege permissions.
 
 **Action**: Log in to the tenant's Cloudflare account (the tenant has
 separately accepted CF Self-Serve Subscription Agreement per the
 ToS-research artifact). Create a scoped account-API token with **only**
 the following permissions:
 
-- `Workers Scripts:Edit` (zone: All zones on the tenant account)
-- `Workers Routes:Edit` (zone: the tenant's specific zone)
-- `Account:Cloudflare Pages:Edit` (account: the tenant's account)
-- `Zone:DNS:Edit` (zone: the tenant's specific zone)
++ `Workers Scripts:Edit` (zone: All zones on the tenant account)
++ `Workers Routes:Edit` (zone: the tenant's specific zone)
++ `Account:Cloudflare Pages:Edit` (account: the tenant's account)
++ `Zone:DNS:Edit` (zone: the tenant's specific zone)
 
 **Do NOT** grant `User Details:Read` or `Account:Account Settings:Read`
 — those are broader than the deploy use case and violate the
@@ -127,7 +132,7 @@ the tenant org owner.)
 
 ### Step 3 — Create Doppler project + OIDC service-account identity
 
-> **Skill:** `soleur:provision-doppler <slug> <org> <repo> [--dry-run]` — Terraform `doppler_project` + `doppler_config`, then OIDC service-account via Doppler API.
+> **Operator types:** `/soleur:provision-doppler <slug> <org> <repo> [--dry-run]` — Terraform `doppler_project` + `doppler_config`, then OIDC service-account via Doppler API.
 
 **Action**: Log in to the tenant's Doppler account (separate Customer
 acceptance per the ToS-research artifact). Create a project named after
@@ -161,14 +166,14 @@ tenant's project context.
 
 ### Step 4 — Create GitHub repo + install Soleur GitHub App
 
-> **Skill:** `soleur:provision-github <slug> <org> <reviewer> [--dry-run]` — Terraform `github_repository` + `github_repository_environment`, then human consent gate for App install.
+> **Operator types:** `/soleur:provision-github <slug> <org> <reviewer> [--dry-run]` — Terraform `github_repository` + `github_repository_environment`, then human consent gate for App install.
 
 **Action**: In the tenant's GitHub organization, create a new repository for
 the tenant's project. Install the Soleur GitHub App (`app/soleur`) on
 **this single repository** with the following permissions:
 
-- `actions: write`
-- `metadata: read`
++ `actions: write`
++ `metadata: read`
 
 **Do NOT** install org-wide. Repo-pinned is the hard ceiling on blast
 radius per plan §R1.
@@ -269,13 +274,13 @@ permissions:
 
 Per-provider OIDC configuration:
 
-- **Hetzner** (no native OIDC): use `hetznercloud/tps-action@<sha-pin>`
++ **Hetzner** (no native OIDC): use `hetznercloud/tps-action@<sha-pin>`
   to mint a short-lived per-job project token from the long-lived
   `HCLOUD_TOKEN` repo secret. The long-lived token lives in the
   **tenant's** GitHub repo secrets — never in Soleur's Doppler.
-- **Cloudflare** (no native OIDC): consume the scoped account-API token
++ **Cloudflare** (no native OIDC): consume the scoped account-API token
   from Step 2 via the tenant repo's `CLOUDFLARE_API_TOKEN` secret.
-- **Doppler** (native OIDC): use `dopplerhq/cli-action` with the OIDC
++ **Doppler** (native OIDC): use `dopplerhq/cli-action` with the OIDC
   flow against the Service Account Identity from Step 3.
 
 **Pre-deploy authentication probes** (per spec-flow P2 #10): add a
@@ -311,18 +316,18 @@ tenant repo's working tree. No external state changes.
 
 ### Step 7 — Configure GitHub Environment `production` on tenant repo
 
-> **Skill:** `soleur:provision-github` (same skill as Step 4) — creates the `production` Environment + required reviewers + deployment branch policy as part of the TF apply.
+> **Operator types:** `/soleur:provision-github` (same skill as Step 4) — creates the `production` Environment + required reviewers + deployment branch policy as part of the TF apply.
 
 **Action**: Create a GitHub Environment named `production` on the
 tenant repo. Configure:
 
-- **Required reviewers**: the tenant org owner (and Jean for v1
++ **Required reviewers**: the tenant org owner (and Jean for v1
   Soleur-as-tenant-zero only). At least one reviewer must approve
   every workflow run that targets the `production` environment.
-- **Deployment branch policy**: pinned to `main` only. No deploys from
++ **Deployment branch policy**: pinned to `main` only. No deploys from
   feature branches or PR head refs.
-- **Wait timer**: 0 minutes (no artificial delay).
-- **Environment secrets**: hold provider-specific secrets here, NOT in
++ **Wait timer**: 0 minutes (no artificial delay).
++ **Environment secrets**: hold provider-specific secrets here, NOT in
   repo-level secrets (Environment scoping is tighter; environment
   secrets are only accessible to workflows targeting that environment).
 
@@ -340,9 +345,10 @@ gh api /repos/<tenant-org>/<tenant-repo>/environments/production
 ```
 
 Output must show:
-- `protection_rules` containing a `required_reviewers` entry with the
+
++ `protection_rules` containing a `required_reviewers` entry with the
   expected user list.
-- `deployment_branch_policy.protected_branches: true` and
++ `deployment_branch_policy.protected_branches: true` and
   `custom_branch_policies: false` (or a `custom_branch_policies` rule
   pinning to `main` only).
 
@@ -482,9 +488,10 @@ psql "${DATABASE_URL_POOLER/:6543/:5432}" -c "
 ```
 
 Expect all three:
-- two procs (`runtime_jwt_mint_hook` + `precheck_jwt_mint`)
-- `intent_table_exists = t`
-- `hook_has_intent_gate = t`
+
++ two procs (`runtime_jwt_mint_hook` + `precheck_jwt_mint`)
++ `intent_table_exists = t`
++ `hook_has_intent_gate = t`
 
 **10.c — Register the Custom Access Token Hook via the Mgmt API.**
 Operator-acknowledged write (per `hr-menu-option-ack-not-prod-write-auth`).
@@ -510,18 +517,18 @@ Expected response: `enabled: true`, `uri: "pg-functions://postgres/public/runtim
 them, so they're documented here for drift detection rather than
 codified. Tracked in the rate-limit-empirical-probe follow-up issue.
 
-- `JWT_EXP = 3600` (Supabase default; the hook overrides exp in the
++ `JWT_EXP = 3600` (Supabase default; the hook overrides exp in the
   JWT to honor `mintFounderJwt`'s `ttlSec` — see migration 047)
-- `EXTERNAL_EMAIL_ENABLED = true` (required for `generateLink` to
++ `EXTERNAL_EMAIL_ENABLED = true` (required for `generateLink` to
   produce a hashed_token; no email is sent because tenant.ts reads
   `hashed_token` directly server-side)
-- `RATE_LIMIT_TOKEN_REFRESH` — Supabase default 10/IP/hour. Not
++ `RATE_LIMIT_TOKEN_REFRESH` — Supabase default 10/IP/hour. Not
   Terraform-managed. If founder concurrency at scale trips it, request
   a per-project bump via Supabase support
   (`hr-menu-option-ack-not-prod-write-auth` applies).
-- `RATE_LIMIT_EMAIL_SENT` — Supabase default 10/hour. Bypassed by our
++ `RATE_LIMIT_EMAIL_SENT` — Supabase default 10/hour. Bypassed by our
   `generateLink` path (no email sent).
-- `RATE_LIMIT_VERIFY` — undocumented in public docs; precheck_jwt_mint's
++ `RATE_LIMIT_VERIFY` — undocumented in public docs; precheck_jwt_mint's
   60/hour/founder is the durable canary.
 
 **10.e — Smoke-test the substrate** (one synthesized fixture):
@@ -557,24 +564,24 @@ credential." During Steps 1-3 (Hetzner, Cloudflare, Doppler), the
 operator's laptop is a transient quarantine zone between tenant-provider
 and tenant-GitHub-repo-secret. To preserve the quarantine:
 
-- **Do NOT `export TOKEN=...`** at any shell level — exported env vars
++ **Do NOT `export TOKEN=...`** at any shell level — exported env vars
   leak into every subprocess and persist for the shell session lifetime.
-- **Do NOT prefix commands with the token literal**
++ **Do NOT prefix commands with the token literal**
   (`HCLOUD_TOKEN=xxx hcloud ...`) — `bash` records the entire command
   (token included) in `~/.bash_history`. Use either `read -s TOKEN` (no
   echo, no history) followed by a one-shot subshell
   `( HCLOUD_TOKEN="$TOKEN" hcloud server create ... )`, or pipe the token
   in via `<<<` heredoc into a wrapper script.
-- **Do NOT `echo $TOKEN`** at any point — terminal scrollback may persist
++ **Do NOT `echo $TOKEN`** at any point — terminal scrollback may persist
   beyond your session.
-- **Do NOT paste tokens into Soleur Doppler, Soleur env files, or any
++ **Do NOT paste tokens into Soleur Doppler, Soleur env files, or any
   Soleur-side store en route to Step 6.** The transit path is
   tenant-provider → operator subshell → tenant-GitHub-repo-secret. The
   installation_id in Step 8 is the only token-shaped value that may land
   in Soleur Doppler, because it is an App-mint-context identifier
   (1-hour TTL minting capability bounded by App permissions), not a
   tenant cloud credential.
-- After Step 6 stores the token in the tenant's GitHub repo Secrets,
++ After Step 6 stores the token in the tenant's GitHub repo Secrets,
   clear it from the operator subshell with `unset TOKEN` (or just exit
   the subshell) before proceeding.
 
@@ -595,20 +602,20 @@ If Step N fails:
 
 ## Outstanding deferrals (filed as follow-up issues per Phase 3)
 
-- Automated Hetzner sub-project provisioning skill — re-evaluation trigger: 2nd non-Soleur project.
-- Automated Cloudflare provisioning skill — same.
-- Automated Doppler project + OIDC identity provisioning skill — same.
-- Automated GitHub repo + App install + Environment configuration skill — same.
-- Deploy-failure UI surface in Soleur (Art. 13 in-product transparency) — re-evaluation trigger: tenant complaint about lack of in-product visibility.
++ Automated Hetzner sub-project provisioning skill — re-evaluation trigger: 2nd non-Soleur project.
++ Automated Cloudflare provisioning skill — same.
++ Automated Doppler project + OIDC identity provisioning skill — same.
++ Automated GitHub repo + App install + Environment configuration skill — same.
++ Deploy-failure UI surface in Soleur (Art. 13 in-product transparency) — re-evaluation trigger: tenant complaint about lack of in-product visibility.
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-05-14-feat-soleur-managed-deploy-substrate-v1-scaffolding-plan.md`
-- ADR-030: `knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md`
-- ToS research: `knowledge-base/legal/tos-research/2026-05-14-tenant-account-provisioning-tos-research.md`
-- LIA: `knowledge-base/legal/legitimate-interest-assessments/2026-05-14-tenant-deploy-substrate-lia.md`
-- Prior decision #749: `apps/web-platform/infra/firewall.tf:15` + `apps/web-platform/infra/tunnel.tf:1-4`.
-- Hetzner tps-action: `https://github.com/hetznercloud/tps-action`
-- Doppler OIDC examples: `https://docs.doppler.com/docs/github-oidc-examples`
-- Cloudflare CI/CD: `https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/`
-- GitHub Environments: `https://docs.github.com/actions/managing-workflow-runs/reviewing-deployments`
++ Plan: `knowledge-base/project/plans/2026-05-14-feat-soleur-managed-deploy-substrate-v1-scaffolding-plan.md`
++ ADR-030: `knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md`
++ ToS research: `knowledge-base/legal/tos-research/2026-05-14-tenant-account-provisioning-tos-research.md`
++ LIA: `knowledge-base/legal/legitimate-interest-assessments/2026-05-14-tenant-deploy-substrate-lia.md`
++ Prior decision #749: `apps/web-platform/infra/firewall.tf:15` + `apps/web-platform/infra/tunnel.tf:1-4`.
++ Hetzner tps-action: `https://github.com/hetznercloud/tps-action`
++ Doppler OIDC examples: `https://docs.doppler.com/docs/github-oidc-examples`
++ Cloudflare CI/CD: `https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/`
++ GitHub Environments: `https://docs.github.com/actions/managing-workflow-runs/reviewing-deployments`

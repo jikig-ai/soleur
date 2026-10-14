@@ -1,0 +1,9 @@
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+
+// Reading the env var, or spelling its name, is not owning what is allocated.
+const SOLEUR_SCRATCH_SESSION_ROOT = process.env.SOLEUR_SCRATCH_SESSION_ROOT ?? "";
+
+export function scratch(): string {
+  return mkdtempSync(join(SOLEUR_SCRATCH_SESSION_ROOT, "demo-"));
+}

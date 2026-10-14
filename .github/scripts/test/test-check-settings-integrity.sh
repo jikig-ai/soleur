@@ -9,8 +9,22 @@
 set -uo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 SUT="$SCRIPT_DIR/check-settings-integrity.sh"
 [[ -x "$SUT" ]] || { echo "FAIL: $SUT not executable"; exit 1; }
+
+# The shell fixture chokepoint (#7849). This directory's `test-*.sh` glob feeds
+# `guard-script-fixture-tests`, a REQUIRED, merge_group-triggered, path-filter-free check on a
+# bare ubuntu-latest runner, so the #6454 contract holds: BASH-ONLY, no terraform, no
+# cloud-init, no apt. A `source` of a bash file already in the checkout adds no tool and no
+# package-mirror dependency to the merge-queue critical path.
+#
+# Sourcing ARMS the fail-loud git-location tripwire. This suite composes synthetic refs in a
+# temp repo with a bare `git init` under `pushd`, with no -C and no scrub of any kind: an
+# inherited GIT_DIR would have put every fixture commit -- including `git add .` -- on the
+# caller's live branch.
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
 
 PASS=0
 FAIL=0
@@ -19,6 +33,10 @@ run_case() {
   local name="$1" base_json="$2" head_json="$3" expect_exit="$4" expect_grep="$5"
   local tmp
   tmp=$(mktemp -d)
+  git_fixture_env "$tmp" || {
+    echo "FATAL: test-check-settings-integrity: git_fixture_env refused fixture $tmp for case $name" >&2
+    exit 1
+  }
   pushd "$tmp" >/dev/null
   git init -q
   git config user.email "test@test.com"

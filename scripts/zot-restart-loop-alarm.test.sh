@@ -63,6 +63,13 @@ chmod +x "$STUB"
 BOOT_NEW="aaaaaaaa-0000-0000-0000-000000000002"
 BOOT_OLD="bbbbbbbb-0000-0000-0000-000000000001"
 
+# TIER TAG: these fixtures deliberately omit zot_last_err_src (#7500). That is not an
+# oversight -- it is the LEGACY-ROW population, and keeping it here is what keeps that path
+# covered. A row with no tier tag is a third state: the checker shows the tail and declares
+# "PROVENANCE UNKNOWN" rather than framing it as a cause (fail-open, the ADR-166 defect) or
+# discarding it (fail-closed, losing the only evidence a pre-#7247 host can offer). The
+# tag-bearing population is covered in scripts/zot-restart-loop-alarm-scrub.test.sh.
+#
 # zline <dt> <boot> <restarts> <exit_code> <oom5m> <oomkilled> <lasterr>
 # Emits one JSONEachRow-shaped SOLEUR_ZOT_DISK row (dt-prefixed for lexical sort). zot_last_err
 # is LAST (free-text), matching the real emit so the trusted-region strip is exercised.
@@ -136,7 +143,7 @@ assert_nic_cause_contains() {
   CASES=$((CASES + 1))
   out="$(ZOT_BQ_OVERRIDE="$STUB" bash "$CHECKER" 2>&1)" || true
   cause="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_CAUSE=//p' | head -1)"
-  if printf '%s\n' "$cause" | grep -qiF "$needle"; then
+  if printf '%s\n' "$cause" | grep -ciF >/dev/null "$needle"; then
     PASS=$((PASS + 1)); printf 'ok   - %s (nic cause ~ "%s")\n' "$name" "$needle"
   else
     FAIL=$((FAIL + 1)); printf 'FAIL - %s: nic cause did not contain "%s" (got: %s)\n' "$name" "$needle" "$cause"
@@ -158,7 +165,7 @@ assert_cause_contains() {
   CASES=$((CASES + 1))
   out="$(ZOT_BQ_OVERRIDE="$STUB" bash "$CHECKER" 2>&1)" || true
   cause="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_CAUSE=//p' | head -1)"
-  if printf '%s\n' "$cause" | grep -qiF "$needle"; then
+  if printf '%s\n' "$cause" | grep -ciF >/dev/null "$needle"; then
     PASS=$((PASS + 1)); printf 'ok   - %s (cause ~ "%s")\n' "$name" "$needle"
   else
     FAIL=$((FAIL + 1)); printf 'FAIL - %s: cause did not contain "%s" (got: %s)\n' "$name" "$needle" "$cause"
@@ -261,10 +268,61 @@ reset_fix
 export ZOT_FIX_MAIN="$TMP/s8.json"
 assert_case "S8 all -1 sentinel restarts" 2 TRANSIENT
 
-# --- Scenario 9: empty window + control empty → TRANSIENT(2) (never a recurrence page) ----
+# --- Scenario 9: empty window + control ANSWERED empty → INGEST_DARK(4) ------------------
+# CONTRACT CHANGE (#7569), deliberate. This case previously asserted TRANSIENT(2), which
+# encoded the defect: control_rc is 0 here, so the query SUCCEEDED and reported that the
+# warehouse holds no row of any kind. That is not a probe fault. It is the exact state
+# production was in from 2026-08-14 19:06:58Z, when Better Stack began 402'ing every ingest
+# POST while the read path kept answering 200 — and this arm reported the non-alarming
+# TRANSIENT every 30 minutes for two days. A test that pins a non-alarming verdict on the
+# outage state is a test that certifies the bug, so it moves with the fix.
 reset_fix
-export ZOT_FIX_MAIN="" ZOT_FIX_CONTROL=""   # both empty; control_rc 0
-assert_case "S9 empty window + empty control" 2 TRANSIENT
+export ZOT_FIX_MAIN="" ZOT_FIX_CONTROL=""   # both empty; control_rc 0 → the query ANSWERED
+assert_case "S9 empty window + control answered empty → ingest dark" 4 INGEST_DARK
+
+# --- S9-NIC: the NIC leg's new arms, which shipped with zero cases -------------------------
+# Review proved both `evaluate_nic` arms added by #7569 (INGEST_DARK and TRANSPORT_FAIL) were
+# deletable, and invertible, with the whole suite green. The zot leg's twin was covered by S9;
+# its NIC counterpart — the leg where the SAME `||` collapse lived — was not. The workflow
+# consumes NIC_ALARM_VERDICT at its `case` arm, so an inverted verdict reaches the operator.
+reset_fix
+export NIC_FIX_MAIN="" ZOT_FIX_CONTROL=""      # warehouse answered with nothing
+assert_nic_case "S9-NIC control answered empty → NIC reads ingest dark" INGEST_DARK
+
+# The must-PASS twin: a FAILED control read is a probe fault on the NIC leg too, not darkness.
+# Without it the arm above is satisfiable by reporting INGEST_DARK for every empty control.
+reset_fix
+export NIC_FIX_MAIN="" ZOT_FIX_CONTROL="" ZOT_FIX_CONTROL_RC=6
+assert_nic_case "S9-NIC control read errored (rc=6) → probe fault, not darkness" TRANSIENT
+
+# --- Scenario 9d (F15): a CONTAMINATED row must not suppress the dark verdict --------------
+# The plan's F15. `--grep SOLEUR_ZOT_DISK` is an unanchored `raw LIKE '%SOLEUR_ZOT_DISK%'`, so a
+# row that merely QUOTES the marker — the measured 2026-07-15 GitHub-webhook shape, which is why
+# the NIC leg already anchors — satisfies it. Before the envelope anchor, one such row made
+# $MAIN non-empty and skipped the whole block holding the PRODUCER_SILENT and INGEST_DARK
+# branches: a suppression primitive available to anyone who can land one line on this shared
+# source. Reproduced before fixing: this case returned TRANSIENT(2) instead of INGEST_DARK(4).
+reset_fix
+printf '{"dt":"2026-07-10 09:59:00","raw":"{\\"PRIORITY\\":\\"6\\",\\"CONTAINER_NAME\\":\\"soleur-web-platform\\",\\"message\\":\\"webhook body quoting SOLEUR_ZOT_DISK verbatim\\"}"}\n' > "$TMP/s9d.json"
+export ZOT_FIX_MAIN="$TMP/s9d.json"   # non-empty RAW, but zero ANCHORED producer rows
+export ZOT_FIX_CONTROL=""             # warehouse answered with nothing
+assert_case "S9d contaminated non-producer row cannot mask ingest darkness" 4 INGEST_DARK
+
+# The inverse must-PASS: a GENUINE producer row still passes the anchor and reaches the normal
+# evaluation path. Without this, S9d is satisfiable by an anchor that rejects everything.
+reset_fix
+{ zline "2026-07-10 10:00:00" "$BOOT_NEW" 5 0 0 false none
+  zline "2026-07-10 10:05:00" "$BOOT_NEW" 5 0 0 false none
+  zline "2026-07-10 10:10:00" "$BOOT_NEW" 5 0 0 false none; } > "$TMP/s9e.json"
+export ZOT_FIX_MAIN="$TMP/s9e.json"
+assert_case "S9e genuine producer rows still pass the envelope anchor" 0 GREEN
+
+# --- Scenario 9c: the discriminator's other side — control read FAILS → TRANSIENT(2) ------
+# The must-PASS twin of S9. Without it, S9 is satisfiable by an implementation that calls
+# every empty control INGEST_DARK, which would page the operator on every probe fault.
+reset_fix
+export ZOT_FIX_MAIN="" ZOT_FIX_CONTROL="" ZOT_FIX_CONTROL_RC=6
+assert_case "S9c empty window + control read errored (rc=6)" 2 TRANSIENT
 
 # --- Scenario 9b: main query FAILS (rc!=0) → TRANSIENT ------------------------------------
 reset_fix
@@ -347,6 +405,45 @@ export NIC_FIX_MAIN="$TMP/n5.json"
 assert_nic_case           "N5 self-healed (nic_ok=true, reboot_count=1) → advisory not green" ADVISORY
 assert_nic_cause_contains "N5 advisory confirms H2 empirically" "H2 confirmed"
 
+# --- N20 (#7242 REGRESSION): an OLD reboot must not read as a recent one -------------------
+# reboot_count is CUMULATIVE and persisted on the root disk, so it survives every boot. The
+# advisory is re-emitted verbatim on every poll, which meant a convergence from weeks ago
+# still read as news. Measured 2026-08-03: reboot_count=1 alongside uptime_s=1570434 (18.2
+# DAYS) and an unchanged boot_id -- read as "the registry host rebooted at 17:13", which
+# became two of #7242's hypotheses and consumed the investigation that refuted them.
+#
+# The claim itself stays (the guard really did reboot this host, producing this boot); what
+# it gains is a DATE and an explicit denial of recency.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" true already 0 1 1 1570434 "enp7s0:10.0.1.30/32"; } > "$TMP/n20.json"
+export NIC_FIX_MAIN="$TMP/n20.json"
+assert_nic_case           "N20 reboot_count=1 with 18d uptime → still advisory" ADVISORY
+assert_nic_cause_contains "N20 dates the reboot instead of implying it just happened" "18d ago"
+assert_nic_cause_contains "N20 states outright that the reboot was NOT recent" "NOT RECENT"
+# The H2 finding is preserved -- this is a dating fix, not a suppression.
+assert_nic_cause_contains "N20 still confirms H2 (the fix dates the claim, it does not drop it)" "H2 confirmed"
+
+# --- N21 (#7242): a reboot INSIDE the window is still reported as recent -------------------
+# The complement of N20, and the half that proves the gate is not simply always-false: a
+# genuinely recent convergence must still say so.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" true already 0 1 1 1800 "enp7s0:10.0.1.30/32"; } > "$TMP/n21.json"
+export NIC_FIX_MAIN="$TMP/n21.json"
+assert_nic_case           "N21 reboot_count=1 with 30m uptime → advisory" ADVISORY
+assert_nic_cause_contains "N21 reports a genuinely recent reboot as recent" "30m ago"
+assert_nic_cause_contains "N21 says this one IS recent" "IS recent"
+
+# --- N22 (#7242): no usable uptime_s → the boot cannot be dated, so claim no recency -------
+# Fail toward no claim. An undatable boot must not inherit the recent reading by default.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" true already 0 1 1 "unknown" "enp7s0:10.0.1.30/32"; } > "$TMP/n22.json"
+export NIC_FIX_MAIN="$TMP/n22.json"
+assert_nic_case           "N22 unusable uptime_s → advisory" ADVISORY
+assert_nic_cause_contains "N22 says WHEN is unknown rather than implying recency" "WHEN is unknown"
+
 # --- N6 (AC7 REGRESSION): NIC guard silent WHILE SOLEUR_ZOT_DISK still flows → SILENT ------
 # The zot PRODUCER_SILENT branch is computed ONLY when the zot window is empty. Here it is NOT
 # empty (the disk heartbeat is alive), so that branch never evaluates. A NIC absence check that
@@ -362,8 +459,9 @@ assert_nic_case "N6 NIC silent while SOLEUR_ZOT_DISK flows (AC7 regression)" SIL
 
 # --- N7 (AC8 REGRESSION): a zot early-exit must NOT skip the NIC check ---------------------
 # All-'-1' zot sentinels → the zero-evidence leg → exit 2, which terminates BEFORE anything
-# appended. The NIC verdict must still be present and correct, and the exit code must stay
-# within the {0,1,2,3} contract (no exit 4 — the workflow maps anything else to a Sentry error).
+# appended. The NIC verdict must still be present and correct, and the zero-evidence leg must
+# keep exiting 2 — NOT the new INGEST_DARK 4 (#7569). Zero VALID evidence (all-'-1' sentinels)
+# and zero ROWS are different states: rows arrived here, they just carried no usable sample.
 reset_fix
 {
   zline "2026-07-10 10:00:00" "$BOOT_NEW" -1 0 0 false none
@@ -372,7 +470,7 @@ reset_fix
 export ZOT_FIX_MAIN="$TMP/n7zot.json"
 { nline "2026-07-10 10:05:00" "$BOOT_NEW" false none 0 1 0 99999 "eth0:203.0.113.10/32"; } > "$TMP/n7.json"
 export NIC_FIX_MAIN="$TMP/n7.json"
-assert_case     "N7 zot zero-evidence still exits 2 (contract unchanged, no exit 4)" 2 TRANSIENT
+assert_case     "N7 zot zero-evidence still exits 2 (rows present, none valid — not INGEST_DARK)" 2 TRANSIENT
 assert_nic_case "N7 NIC still evaluated despite the zot early-exit (AC8 regression)" FIRE
 
 # --- N8: newest-boot scoping — an old failed boot must not page after a healthy replace ----
@@ -509,7 +607,10 @@ export NIC_FIX_MAIN="" NIC_FIX_LOOKBACK=""
 assert_nic_case "N19 both producers silent → transient (not a NIC-specific page)" TRANSIENT
 
 # --- Minimum-cardinality guard -----------------------------------------------------------
-EXPECTED_MIN=45
+# Derived from a green run, not from a remembered figure. This was 45 while 57 assertions ran —
+# twelve cases of slack, i.e. S9 and S9c among a dozen that were silently deletable. Ratchet it
+# in lockstep whenever cases are added.
+EXPECTED_MIN=59
 echo "----"
 printf 'cases=%s pass=%s fail=%s\n' "$CASES" "$PASS" "$FAIL"
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then

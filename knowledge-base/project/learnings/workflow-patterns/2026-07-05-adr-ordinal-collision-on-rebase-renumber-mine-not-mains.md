@@ -45,6 +45,12 @@ rebase auto-merged the file.
    saying "…authored ADR-086…" fails the very gate the renumber turns green. Write `086 → 093`,
    not `ADR-086`. See [[2026-07-06-adr-renumber-provenance-note-must-use-bare-ordinals]] (#6054).
 
+See also: [2026-08-03-blanket-renumber-rewrote-other-work-and-a-count-certified-it.md](../workflow-issues/2026-08-03-blanket-renumber-rewrote-other-work-and-a-count-certified-it.md)
+— #7162 hit THREE collisions on one branch and proved the blanket-replace hazard in item 3 twice
+over: a negative lookahead on the sibling ADR's *filename* does not protect *bare* citations of
+that ordinal, and the residual-zero count in item 6 is structurally blind to a wrong-but-present
+replacement. Scope the sweep to `git diff --name-only origin/main...HEAD` and assert the sentence.
+
 ## Machine-quirk footnote
 
 On this operator's laptop, **bash heredocs (`cat >> f <<'EOF'`) truncate silently** under the

@@ -87,7 +87,7 @@ the operator-handoff cost while preserving the operator's audit trail
 ## Session Errors
 
 1. **Planning subagent hit Anthropic session limit mid-Session-Summary emission.**
-   Recovery: detected the partial plan artifact on disk (`knowledge-base/project/plans/2026-05-20-fix-apply-web-platform-infra-secrets-write-installation-grant-4173-plan.md`)
+   Recovery: detected the partial plan artifact on disk (`knowledge-base/project/plans/archive/20261013-014038-2026-05-20-fix-apply-web-platform-infra-secrets-write-installation-grant-4173-plan.md`)
    and reconstructed `session-state.md` from on-disk content per the one-shot
    partial-artifact recovery pattern.
    Prevention: already documented — `2026-05-15-subagent-crash-recovery-via-on-disk-artifacts.md`.

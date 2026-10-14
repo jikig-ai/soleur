@@ -1,8 +1,8 @@
 // One-time Inngest oneshot (#4654): autonomous bookkeeping close of #4650.
 //
 // On/after 2026-05-31 09:00 UTC, reads the Inngest /v1/functions registry and
-// classifies the 3 cron functions whose Sentry monitors #4650 tracks. If all 3
-// are re-planned (H9a/H9b cleared per the watchdog's taxonomy) AND #4650 is
+// classifies the cron functions whose Sentry monitors #4650 tracks (TARGET_FN_IDS).
+// If all of them are re-planned (H9a/H9b cleared per the watchdog's taxonomy) AND #4650 is
 // still OPEN, closes it with an explanatory comment via the GitHub App token.
 //
 // Self-armed from server/index.ts boot block (deploy-and-forget) — no manual
@@ -50,12 +50,13 @@ const TARGET_ISSUE = 4650;
 
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
-// The 3 cron functions backing #4650's Sentry monitors (1:1 with the monitor
-// slugs scheduled-{gh-pages-cert-state,community-monitor,inngest-cron-watchdog}).
+// The 2 surviving cron functions of the 3 that backed #4650's Sentry monitors
+// (1:1 with the monitor slugs scheduled-{community-monitor,inngest-cron-watchdog}).
+// The third, cron-gh-pages-cert-state, was deleted with the abandoned GitHub Pages
+// origin cert (ADR-194); a healthy registry no longer needs it.
 // Exported so a unit test can assert TARGET_FN_IDS ⊂ EXPECTED_CRON_FUNCTIONS
 // (guards against this subset silently drifting from the watchdog manifest).
 export const TARGET_FN_IDS = [
-  "cron-gh-pages-cert-state",
   "cron-community-monitor",
   "cron-inngest-cron-watchdog",
 ];
@@ -156,7 +157,7 @@ export async function oneshot4650MonitorCloseHandler({
     return (res.data as { state?: string }).state ?? "open";
   });
 
-  // --- Step 2: classify the 3 target cron functions ------------------------
+  // --- Step 2: classify the target cron functions --------------------------
   const classify = await step.run("classify-registry", async () => {
     try {
       const host = resolveInngestHost(process.env.INNGEST_BASE_URL);
@@ -228,7 +229,7 @@ export async function oneshot4650MonitorCloseHandler({
     return { ok: false, reason: "not-all-healthy" };
   }
 
-  // --- Open + all 3 re-planned → close #4650 -------------------------------
+  // --- Open + all targets re-planned → close #4650 -------------------------------
   const closed = await step.run("close-issue", async () => {
     const token = await mintInstallationToken({
       tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
@@ -236,9 +237,9 @@ export async function oneshot4650MonitorCloseHandler({
     const { Octokit } = await import("@octokit/core");
     const octokit = new Octokit({ auth: token });
     const body = [
-      `## Autonomous close — all 3 cron triggers re-planned`,
+      `## Autonomous close — all cron triggers re-planned`,
       "",
-      `The Inngest \`/v1/functions\` registry shows all 3 cron functions behind`,
+      `The Inngest \`/v1/functions\` registry shows all the surviving cron functions behind`,
       `this issue's monitors are present and cron-planned (H9a/H9b cleared):`,
       "",
       ...TARGET_FN_IDS.map((f) => `- \`${f}\` — OK`),

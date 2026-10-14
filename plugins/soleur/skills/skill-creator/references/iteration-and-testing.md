@@ -1,5 +1,5 @@
 <overview>
-Skills improve through iteration and testing. This reference covers evaluation-driven development, Claude A/B testing patterns, and XML structure validation during testing.
+Skills improve through iteration and testing. This reference covers evaluation-driven development, Claude A/B testing patterns, and heading-structure validation during testing.
 </overview>
 
 <evaluation_driven_development>
@@ -30,6 +30,7 @@ Create evaluations BEFORE writing extensive documentation. This ensures your ski
 </workflow>
 
 <evaluation_structure>
+
 ```json
 {
   "skills": ["pdf-processing"],
@@ -42,9 +43,11 @@ Create evaluations BEFORE writing extensive documentation. This ensures your ski
   ]
 }
 ```
+
 </evaluation_structure>
 
 <why_evaluations_first>
+
 - Prevents documenting imagined problems
 - Forces clarity about what success looks like
 - Provides objective measurement of skill effectiveness
@@ -118,6 +121,7 @@ Claude models understand skill format natively. Simply ask Claude to create a sk
 </workflow>
 
 <what_to_watch_for>
+
 - **Unexpected exploration paths**: Structure might not be intuitive
 - **Missed connections**: Links might need to be more explicit
 - **Overreliance on sections**: Consider moving frequently-read content to main SKILL.md
@@ -136,12 +140,14 @@ Test with all models you plan to use. Different models have different strengths 
 **Claude Haiku** (fast, economical)
 
 Questions to ask:
+
 - Does the skill provide enough guidance?
 - Are examples clear and complete?
 - Do implicit assumptions become explicit?
 - Does Haiku need more structure?
 
 Haiku benefits from:
+
 - More explicit instructions
 - Complete examples (no partial code)
 - Clear success criteria
@@ -152,14 +158,16 @@ Haiku benefits from:
 **Claude Sonnet** (balanced)
 
 Questions to ask:
+
 - Is the skill clear and efficient?
 - Does it avoid over-explanation?
 - Are workflows well-structured?
 - Does progressive disclosure work?
 
 Sonnet benefits from:
+
 - Balanced detail level
-- XML structure for clarity
+- Clear heading structure
 - Progressive disclosure
 - Concise but complete guidance
 </sonnet_testing>
@@ -168,12 +176,14 @@ Sonnet benefits from:
 **Claude Opus** (powerful reasoning)
 
 Questions to ask:
+
 - Does the skill avoid over-explaining?
 - Can Opus infer obvious steps?
 - Are constraints clear?
 - Is context minimal but sufficient?
 
 Opus benefits from:
+
 - Concise instructions
 - Principles over procedures
 - High degrees of freedom
@@ -187,56 +197,60 @@ See [core-principles.md](core-principles.md) for model testing examples.
 </balancing_across_models>
 </model_testing>
 
-<xml_structure_validation>
+<heading_structure_validation>
 <principle>
-During testing, validate that your skill's XML structure is correct and complete.
+During testing, validate that your skill's heading structure is correct and complete. Markdown headings structure a skill body; XML tags are optional semantic wrappers inside a section and never replace headings.
 </principle>
 
 <validation_checklist>
 After updating a skill, verify:
 
-<required_tags_present>
-- ✅ `<objective>` tag exists and defines what skill does
-- ✅ `<quick_start>` tag exists with immediate guidance
-- ✅ `<success_criteria>` or `<when_successful>` tag exists
-</required_tags_present>
+<required_sections_present>
 
-<no_markdown_headings>
-- ✅ No `#`, `##`, or `###` headings in skill body
-- ✅ All sections use XML tags instead
-- ✅ Markdown formatting within tags is preserved (bold, italic, lists, code blocks)
-</no_markdown_headings>
+- ✅ A `#` title followed by what the skill does
+- ✅ A `## Quick start` (or first numbered phase) with immediate guidance
+- ✅ A completion criterion (`## Success criteria` or a per-phase exit condition)
+</required_sections_present>
 
-<proper_xml_nesting>
-- ✅ All XML tags properly closed
-- ✅ Nested tags have correct hierarchy
-- ✅ No unclosed tags
-</proper_xml_nesting>
+<heading_hierarchy>
 
-<conditional_tags_appropriate>
-- ✅ Conditional tags match skill complexity
-- ✅ Simple skills use required tags only
-- ✅ Complex skills add appropriate conditional tags
+- ✅ Body sections are `#` / `##` / `###` headings, in a sensible hierarchy
+- ✅ No top-level tag stands in for a section
+- ✅ Markdown formatting within sections is preserved (bold, italic, lists, code blocks)
+</heading_hierarchy>
+
+<optional_wrappers>
+
+- ✅ Any XML wrapper sits inside a section and bounds one block
+- ✅ Every wrapper is closed
+</optional_wrappers>
+
+<conditional_sections_appropriate>
+
+- ✅ Conditional sections match skill complexity
+- ✅ Simple skills use required sections only
+- ✅ Complex skills add appropriate conditional sections
 - ✅ No over-engineering or under-specifying
-</conditional_tags_appropriate>
+</conditional_sections_appropriate>
 
 <reference_files_check>
-- ✅ Reference files also use pure XML structure
+
+- ✅ Reference files are also structured with markdown headings
 - ✅ Links to reference files are correct
 - ✅ References are one level deep from SKILL.md
 </reference_files_check>
 </validation_checklist>
 
-<testing_xml_during_iteration>
+<testing_structure_during_iteration>
 When iterating on a skill:
 
-1. Make changes to XML structure
-2. **Validate XML structure** (check tags, nesting, completeness)
+1. Make changes to the section structure
+2. **Validate heading structure** (hierarchy, required sections, closed wrappers)
 3. Test with Claude on representative tasks
-4. Observe if XML structure aids or hinders Claude's understanding
+4. Observe whether the structure aids or hinders Claude's understanding
 5. Iterate structure based on actual performance
-</testing_xml_during_iteration>
-</xml_structure_validation>
+</testing_structure_during_iteration>
+</heading_structure_validation>
 
 <observation_based_iteration>
 <principle>
@@ -246,6 +260,7 @@ Iterate based on what you observe, not what you assume. Real usage reveals issue
 <observation_categories>
 <what_claude_reads>
 Which sections does Claude actually read? Which are ignored? This reveals:
+
 - Relevance of content
 - Effectiveness of progressive disclosure
 - Whether section names are clear
@@ -253,6 +268,7 @@ Which sections does Claude actually read? Which are ignored? This reveals:
 
 <where_claude_struggles>
 Which tasks cause confusion or errors? This reveals:
+
 - Missing context
 - Unclear instructions
 - Insufficient examples
@@ -261,6 +277,7 @@ Which tasks cause confusion or errors? This reveals:
 
 <where_claude_succeeds>
 Which tasks go smoothly? This reveals:
+
 - Effective patterns
 - Good examples
 - Clear instructions
@@ -269,6 +286,7 @@ Which tasks go smoothly? This reveals:
 
 <unexpected_behaviors>
 What does Claude do that surprises you? This reveals:
+
 - Unstated assumptions
 - Ambiguous phrasing
 - Missing constraints
@@ -277,6 +295,7 @@ What does Claude do that surprises you? This reveals:
 </observation_categories>
 
 <iteration_pattern>
+
 1. **Observe**: Run Claude on real tasks with current skill
 2. **Document**: Note specific issues, not general feelings
 3. **Hypothesize**: Why did this issue occur?
@@ -294,12 +313,14 @@ Skills don't need to be perfect initially. Start minimal, observe usage, add wha
 
 <initial_version>
 Start with:
+
 - Valid YAML frontmatter
-- Required XML tags: objective, quick_start, success_criteria
+- Required sections: title + purpose, quick start, completion criterion
 - Minimal working example
 - Basic success criteria
 
 Skip initially:
+
 - Extensive examples
 - Edge case documentation
 - Advanced features
@@ -308,6 +329,7 @@ Skip initially:
 
 <iteration_additions>
 Add through iteration:
+
 - Examples when patterns aren't clear from description
 - Edge cases when observed in real usage
 - Advanced features when users need them
@@ -341,6 +363,7 @@ Test if Claude loads your skill when it should:
 
 <description_quality>
 If skill isn't discovered:
+
 - Check description includes trigger keywords
 - Verify description is specific, not vague
 - Ensure description explains when to use skill
@@ -356,6 +379,7 @@ The description is Claude's primary discovery mechanism.
 **Observation**: Skill works but uses lots of tokens
 
 **Fix**:
+
 - Remove obvious explanations
 - Assume Claude knows common concepts
 - Use examples instead of lengthy descriptions
@@ -366,6 +390,7 @@ The description is Claude's primary discovery mechanism.
 **Observation**: Claude makes incorrect assumptions or misses steps
 
 **Fix**:
+
 - Add explicit instructions where assumptions fail
 - Provide complete working examples
 - Define edge cases
@@ -376,6 +401,7 @@ The description is Claude's primary discovery mechanism.
 **Observation**: Skill exists but Claude doesn't load it when needed
 
 **Fix**:
+
 - Improve description with specific triggers
 - Add relevant keywords
 - Test description against actual user queries
@@ -386,7 +412,8 @@ The description is Claude's primary discovery mechanism.
 **Observation**: Claude reads wrong sections or misses relevant content
 
 **Fix**:
-- Use clearer XML tag names
+
+- Use clearer section headings
 - Reorganize content hierarchy
 - Move frequently-needed content earlier
 - Add explicit links to relevant sections
@@ -396,11 +423,13 @@ The description is Claude's primary discovery mechanism.
 **Observation**: Claude produces outputs that don't match expected pattern
 
 **Fix**:
+
 - Add more examples showing pattern
 - Make examples more complete
 - Show edge cases in examples
 - Add anti-pattern examples (what not to do)
 </pattern>
+
 </common_iteration_patterns>
 
 <iteration_velocity>
@@ -410,6 +439,7 @@ Small, frequent iterations beat large, infrequent rewrites.
 
 <fast_iteration>
 **Good approach**:
+
 1. Make one targeted change
 2. Test on specific scenario
 3. Verify improvement
@@ -423,6 +453,7 @@ Learning rate: High
 
 <slow_iteration>
 **Problematic approach**:
+
 1. Accumulate many issues
 2. Make large refactor
 3. Test everything at once
@@ -435,6 +466,7 @@ Learning rate: Low
 </slow_iteration>
 
 <benefits_of_fast_iteration>
+
 - Isolate cause and effect
 - Build pattern recognition faster
 - Less wasted work from wrong directions
@@ -449,6 +481,7 @@ Define how you'll measure if the skill is working. Quantify success.
 </principle>
 
 <objective_metrics>
+
 - **Success rate**: Percentage of tasks completed correctly
 - **Token usage**: Average tokens consumed per task
 - **Iteration count**: How many tries to get correct output
@@ -457,6 +490,7 @@ Define how you'll measure if the skill is working. Quantify success.
 </objective_metrics>
 
 <subjective_metrics>
+
 - **Output quality**: Does output meet requirements?
 - **Appropriate detail**: Too verbose or too minimal?
 - **Claude confidence**: Does Claude seem uncertain?
@@ -465,6 +499,7 @@ Define how you'll measure if the skill is working. Quantify success.
 
 <tracking_improvement>
 Compare metrics before and after changes:
+
 - Baseline: Measure without skill
 - Initial: Measure with first version
 - Iteration N: Measure after each change

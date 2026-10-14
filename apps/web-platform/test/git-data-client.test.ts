@@ -7,6 +7,9 @@
 // fails CLOSED. The whole boundary is inert at flag-off (dark until the 3.D flip).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
+
+const TEST_PIN = makeEd25519Pin();
 
 const gitTransport = vi.fn().mockResolvedValue(Buffer.from("")); // push + fetch
 const sshProvision = vi.fn().mockResolvedValue(Buffer.from(""));
@@ -56,6 +59,8 @@ beforeEach(() => {
   vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
   vi.stubEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY", "transport-key");
   vi.stubEnv("GIT_PROVISION_SSH_PRIVATE_KEY", "provision-key");
+  // #7226: a valid generated pin, so the store-enabled paths resolve one (never a real key).
+  vi.stubEnv("GIT_DATA_SSH_HOST_KEY", TEST_PIN);
 });
 
 afterEach(() => {

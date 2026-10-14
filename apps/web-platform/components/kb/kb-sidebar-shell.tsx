@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { Button } from "@/components/ui/button";
 import { FileTree } from "@/components/kb/file-tree";
 import { SearchOverlay } from "@/components/kb/search-overlay";
 import { useKb } from "@/components/kb/kb-context";
 import { KbSyncStatus } from "@/components/kb/kb-sync-status";
 import { RailEmptyState } from "@/components/dashboard/rail-empty-state";
+import { KbErrorBoundary } from "@/components/kb/kb-error-boundary";
 import { useRailCollapsed, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { useNavResume } from "@/hooks/use-nav-resume";
 
@@ -23,8 +25,18 @@ import { useNavResume } from "@/hooks/use-nav-resume";
  * `useKb()` context — no new server route or prop plumbing.
  *
  * #4826: tree scrollport persists/restores scrollTop via useNavResume.
+ *
+ * #7186: this is the app's ONE browse surface, and it can be hosted in two
+ * places — the nav rail (default) or, on a mobile populated landing render, the
+ * content column (`host="content"`). The host is chosen by the single `treeHost`
+ * value in `useKbLayoutState`; this component only reacts to it.
  */
-export function KbSidebarShell() {
+export function KbSidebarShell({
+  host = "rail",
+}: {
+  /** Where this shell is mounted. See `treeHost` in `useKbLayoutState`. */
+  host?: "rail" | "content";
+}) {
   const { tree, loading, lastSync, refreshTree } = useKb();
   // RQ5 / AC6: never a blank KB rail. Once loaded with no docs, show a labeled
   // CTA in place of the (null-rendering) empty FileTree.
@@ -39,9 +51,18 @@ export function KbSidebarShell() {
   // + "Refresh" (refetch the tree) — so the collapsed KB rail is meaningful, not
   // blank. NOTE: this is a tree REFRESH, not the repo "Sync now" (POST
   // /api/kb/sync) — that richer action with its in-flight + error states lives in
-  // the expanded rail's KbSyncStatus, reachable once expanded. The stable
-  // `kb-rail-tree` wrapper always renders to anchor present/absent assertions.
-  const collapsed = useRailCollapsed();
+  // the expanded rail's KbSyncStatus, reachable once expanded. #7186: the
+  // wrapper testid is now host-dependent (`kb-rail-tree` / `kb-browse-tree`),
+  // so host assertions are made by CONTAINMENT of the tree's role="navigation"
+  // node; `data-kb-tree-host` below is the stable, host-invariant handle.
+  // #7186: collapse is a RAIL concept only. `RailCollapsedProvider` wraps
+  // <main> in app/(dashboard)/layout.tsx — not just the rail — so a
+  // content-column host reads the SAME context; without this guard a user who
+  // collapsed the desktop rail and then opens the KB on a phone would get the
+  // 56px two-icon strip as their entire browse view. The provider cannot be
+  // narrowed instead: the portaled shell reads context through the REACT tree,
+  // so narrowing it to the rail subtree would break ADR-047 Decision 2.
+  const collapsed = useRailCollapsed() && host === "rail";
   const { workspaceId, readScrollTop, writeScrollTop } = useNavResume();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const restoredRef = useRef(false);
@@ -104,10 +125,23 @@ export function KbSidebarShell() {
   }, []);
 
   return (
-    <div data-testid="kb-rail-tree" data-tour-id="action:kb-tree" className="flex h-full flex-col">
+    <div
+      data-testid={host === "content" ? "kb-browse-tree" : "kb-rail-tree"}
+      /* Stable across hosts, unlike the testid above: anything keying on the
+         shell itself (an agent, a runbook, a DOM-driving script) should use
+         this rather than a name that vanishes when the tree relocates. */
+      data-kb-tree-host={host}
+      data-tour-id="action:kb-tree"
+      className="flex h-full flex-col"
+    >
+      {/* #7186: the boundary lives INSIDE the shell so BOTH hosts inherit it —
+          previously only the doc column was guarded, so a throwing FileTree in
+          the content-column host would have taken the page down. */}
+      <KbErrorBoundary>
       {collapsed ? (
         <div className="flex flex-col items-center gap-1 px-1 py-3">
-          <button
+          <Button
+            variant="ghost"
             type="button"
             data-testid="kb-rail-collapsed-expand"
             aria-label="Browse files"
@@ -116,8 +150,9 @@ export function KbSidebarShell() {
             className="flex min-h-[44px] w-full items-center justify-center rounded-lg text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
           >
             <FilesIcon className="h-4 w-4 shrink-0" />
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
             type="button"
             data-testid="kb-rail-collapsed-refresh"
             aria-label="Refresh file tree"
@@ -126,12 +161,12 @@ export function KbSidebarShell() {
             className="flex min-h-[44px] w-full items-center justify-center rounded-lg text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
           >
             <SyncIcon className="h-4 w-4 shrink-0" />
-          </button>
+          </Button>
         </div>
       ) : (
         <>
           <div className="shrink-0 px-3 pb-3 pt-3">
-            <SearchOverlay />
+            <SearchOverlay restoreQuery={host === "content"} />
           </div>
           <div
             ref={scrollRef}
@@ -161,6 +196,7 @@ export function KbSidebarShell() {
           </div>
         </>
       )}
+      </KbErrorBoundary>
     </div>
   );
 }

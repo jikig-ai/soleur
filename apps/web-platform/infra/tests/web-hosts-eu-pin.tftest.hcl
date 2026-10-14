@@ -26,11 +26,26 @@ mock_provider "hcloud" {
   # meaningful here rather than disabling it: flip the default to a `cax*` type and
   # this file goes red, which is the correct signal.
   #
-  # zot-registry.tf reads the same data source but consumes only `.memory`, which a
-  # synthesized number satisfies harmlessly — git-data is the first assertion in this
-  # root on a mocked STRING attribute, which is why no prior test needed this.
+  # (STALE AS OF #7309 — corrected below.) This used to read: "zot-registry.tf reads
+  # the same data source but consumes only `.memory`, which a synthesized number
+  # satisfies harmlessly — git-data is the first assertion in this root on a mocked
+  # STRING attribute, which is why no prior test needed this."
+  #
+  # #7309 back-filled the ADR-068 D7 wrong-arch precondition onto hcloud_server.registry
+  # (it was the only host in this root without one, on the sole pull path). That makes
+  # zot-registry.tf the SECOND assertion on a mocked STRING attribute, so it needs the
+  # same override for the same reason — and CI proved it by failing with
+  # "Hetzner reports architecture=5xqx4f82", the misdirecting text this comment warns
+  # about, on the very run that introduced the precondition.
   override_data {
     target = data.hcloud_server_type.git_data
+    values = {
+      architecture = "x86"
+    }
+  }
+
+  override_data {
+    target = data.hcloud_server_type.registry
     values = {
       architecture = "x86"
     }
@@ -39,8 +54,32 @@ mock_provider "hcloud" {
 mock_provider "random" {}
 mock_provider "doppler" {}
 mock_provider "betteruptime" {}
-mock_provider "github" {}
+mock_provider "github" {
+  # #8754: web-host-birth-environment.tf adopts the live deployment policy with an
+  # unconditional `import` block. That import goes through this MOCKED default provider,
+  # and Terraform refuses it ("Invalid import request: Cannot import resources from mock
+  # providers", measured on 1.9.8), failing every run block here. The seo_config import
+  # below behaves differently only because it names the unmocked `cloudflare.rulesets`
+  # alias, which reads the real API. Overriding the import target keeps this file
+  # credential-free. Remove with the import (#9060).
+  override_resource {
+    target = github_repository_environment_deployment_policy.web_platform_infra_apply_main_adopted
+  }
+}
 mock_provider "tls" {}
+mock_provider "supabase" {
+  # #9168: supabase-project.tf adopts the live prd project with an unconditional
+  # `import` block — the same shape as the github adoption above. `mock_provider`
+  # does NOT mock `import` blocks, and leaving the provider unmocked would run the
+  # import read against the real Management API with the dummy
+  # supabase_access_token below, failing every run block on a credential error in
+  # a credential-free suite. Overriding the import target keeps the file
+  # credential-free. Remove with the import (the #9168 follow-up PR deletes the
+  # one-time import block post-apply).
+  override_resource {
+    target = supabase_project.prd
+  }
+}
 
 # Dummy values for the module's required (no-default) variables — terraform test
 # requires every required variable be set before it evaluates var.web_hosts's
@@ -62,32 +101,41 @@ variables {
   # this test opts out. seo-config-rules.tf explains what the adoption is for,
   # and test/seo-config-rules.test.ts pins that the default is `true` — because
   # flipping it to `false` silently restores the whole-list clobber (#6767).
-  adopt_seo_config_entrypoint  = false
-  betterstack_api_token        = "dummy"
-  betterstack_logs_token       = "dummy"
-  cf_access_client_id          = "0123456789012345678901234567890123456789.access"
-  cf_access_client_secret      = "0123456789012345678901234567890123456789012345678901234567890123"
-  cf_account_id                = "0123456789abcdef0123456789abcdef"
-  cf_api_token                 = "0123456789012345678901234567890123456789"
-  cf_api_token_bot_management  = "0123456789012345678901234567890123456789"
-  cf_api_token_dns_edit        = "0123456789012345678901234567890123456789"
-  cf_api_token_r2              = "0123456789012345678901234567890123456789"
-  cf_api_token_rulesets        = "0123456789012345678901234567890123456789"
-  cf_api_token_zone_settings   = "0123456789012345678901234567890123456789"
-  cf_notification_email        = "ops@example.com"
-  cf_zone_id                   = "0123456789abcdef0123456789abcdef"
-  doppler_token                = "dp.st.prd.testdummy" # #7095: must satisfy the shape precondition
-  doppler_token_tf             = "dummy"
-  github_app_id                = "12345"
-  github_app_private_key       = "dummy"
-  ghcr_read_user               = "dummy"
-  ghcr_read_token              = "dummy"
-  hcloud_token                 = "dummy"
-  kb_drift_operator_founder_id = "00000000-0000-0000-0000-000000000000"
-  resend_api_key               = "dummy"
-  resend_receiving_api_key     = "dummy"
-  supabase_access_token        = "dummy"
-  webhook_deploy_secret        = "dummy"
+  adopt_seo_config_entrypoint = false
+  betterstack_api_token       = "dummy"
+  # Length-bearing, not "dummy": modules/git-data-userdata/variables.tf validates this is a
+  # real ingest token, because an empty or stub value renders `BETTERSTACK_LOGS_TOKEN=` and
+  # darkens eight of the nine git-data boot stages on a HASH-VALID boot (#7460).
+  betterstack_logs_token = "stub-NOT-A-REAL-TOKEN-000000000000"
+  # (#7772) git-data's own source token. Same length-bearing rationale as the shared sibling
+  # directly above — it feeds the SAME module validation. It needs a value here for a reason
+  # `terraform validate` cannot surface: a run block resolves EVERY root variable before it
+  # evaluates anything, so a new no-default variable fails all three run blocks with
+  # "No value for required variable" while validate stays green. Measured on this branch.
+  git_data_betterstack_logs_token = "stub-NOT-A-REAL-GIT-DATA-TOKEN-000"
+  cf_access_client_id             = "0123456789012345678901234567890123456789.access"
+  cf_access_client_secret         = "0123456789012345678901234567890123456789012345678901234567890123"
+  cf_account_id                   = "0123456789abcdef0123456789abcdef"
+  cf_api_token                    = "0123456789012345678901234567890123456789"
+  cf_api_token_bot_management     = "0123456789012345678901234567890123456789"
+  cf_api_token_dns_edit           = "0123456789012345678901234567890123456789"
+  cf_api_token_r2                 = "0123456789012345678901234567890123456789"
+  cf_api_token_pages              = "0123456789012345678901234567890123456789"
+  cf_api_token_rulesets           = "0123456789012345678901234567890123456789"
+  cf_api_token_zone_settings      = "0123456789012345678901234567890123456789"
+  cf_notification_email           = "ops@example.com"
+  cf_zone_id                      = "0123456789abcdef0123456789abcdef"
+  doppler_token                   = "dp.st.prd.testdummy" # #7095: must satisfy the shape precondition
+  doppler_token_tf                = "dummy"
+  github_app_id                   = "12345"
+  github_app_private_key          = "dummy"
+  hcloud_token                    = "dummy"
+  kb_drift_operator_founder_id    = "00000000-0000-0000-0000-000000000000"
+  resend_api_key                  = "dummy"
+  resend_receiving_api_key        = "dummy"
+  supabase_access_token           = "dummy"
+  anthropic_api_key_ci            = "sk-ant-test-ci-dummy" # #8505: must satisfy the sk-ant- validation
+  webhook_deploy_secret           = "dummy"
   # command=plan evaluates file(var.ssh_key_path) (hcloud_ssh_key.default). The
   # default ~/.ssh/id_ed25519.pub does not exist in CI, so point at a committed
   # fixture (content is irrelevant — the hcloud provider is mocked). Path is
@@ -128,4 +176,13 @@ run "reject_mixed_eu_and_non_eu" {
     }
   }
   expect_failures = [var.web_hosts]
+}
+
+# #8505: the CI key's shape is validated before any resource is planned.
+run "reject_non_sk_ant_ci_key" {
+  command = plan
+  variables {
+    anthropic_api_key_ci = "not-an-anthropic-key"
+  }
+  expect_failures = [var.anthropic_api_key_ci]
 }

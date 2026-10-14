@@ -20,6 +20,7 @@ dependencies: []
 ## Proposed Solutions
 
 ### Option A: Environment-aware config (Recommended)
+
 ```typescript
 serverActions: {
   allowedOrigins: process.env.NODE_ENV === "development"
@@ -27,6 +28,7 @@ serverActions: {
     : ["app.soleur.ai"],
 },
 ```
+
 - **Effort:** Small
 - **Risk:** Low
 

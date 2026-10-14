@@ -4,8 +4,8 @@ import { useState } from "react";
 
 import { LockIcon, GlobeIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
-import { GoldButton } from "@/components/ui/gold-button";
-import { OutlinedButton } from "@/components/ui/outlined-button";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface CreateProjectStateProps {
   onBack: () => void;
@@ -15,7 +15,6 @@ interface CreateProjectStateProps {
 export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps) {
   const [projectName, setProjectName] = useState("");
   const [isPrivate, setIsPrivate] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   const slug = projectName
@@ -24,17 +23,27 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!slug) return;
-    setSubmitting(true);
+  // Canonical latch() site (#9053): onSubmit is the parent's fire-and-forget
+  // async handler — every success path ends in a setState that unmounts this
+  // component, so `pending` must NOT release on resolution; the unmount is
+  // the reset. A thrown onSubmit resolves unlatched → releases with the local
+  // error. A latch whose teardown never arrives still Sentry-reports at 30s
+  // (pending-watchdog-latch-held).
+  const { run, pending: submitting, latch } = usePendingAction(async () => {
     setError("");
     try {
       onSubmit(slug, isPrivate);
     } catch {
       setError("Something went wrong. Please try again.");
-      setSubmitting(false);
+      return;
     }
+    latch();
+  });
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!slug) return;
+    run();
   }
 
   return (
@@ -86,6 +95,7 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
             <button
               type="button"
               onClick={() => setIsPrivate(true)}
+              data-button-exempt="segmented private/public toggle — paired selected/unselected styling inside a shared border; a per-button variant would break the joined chrome"
               className={`flex flex-1 items-center justify-center gap-2 px-4 py-2.5 text-sm transition-colors ${
                 isPrivate
                   ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
@@ -98,6 +108,7 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
             <button
               type="button"
               onClick={() => setIsPrivate(false)}
+              data-button-exempt="segmented private/public toggle — paired selected/unselected styling inside a shared border; a per-button variant would break the joined chrome"
               className={`flex flex-1 items-center justify-center gap-2 border-l border-soleur-border-default px-4 py-2.5 text-sm transition-colors ${
                 !isPrivate
                   ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
@@ -113,10 +124,16 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
         {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
         <div className="flex items-center gap-3">
-          <GoldButton type="submit" disabled={!slug || submitting}>
-            {submitting ? "Creating..." : "Create Project"}
-          </GoldButton>
-          <OutlinedButton onClick={onBack}>Back</OutlinedButton>
+          <Button
+            variant="gold"
+            type="submit"
+            disabled={!slug}
+            loading={submitting}
+            loadingLabel="Creating"
+          >
+            Create Project
+          </Button>
+          <Button variant="outlined" type="button" onClick={onBack}>Back</Button>
         </div>
       </form>
     </div>

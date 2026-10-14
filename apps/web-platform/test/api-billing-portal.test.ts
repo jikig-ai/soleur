@@ -50,6 +50,8 @@ vi.mock("@/server/logger", () => ({
 vi.mock("@sentry/nextjs", () => ({
   captureException: mockCaptureException,
   captureMessage: mockCaptureMessage,
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------

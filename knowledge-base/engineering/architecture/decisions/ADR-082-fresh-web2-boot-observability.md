@@ -118,6 +118,7 @@ terminal block), and **fail-closed poweroffs** a host whose container egress is 
 enforcing.
 
 **Why this shape:**
+
 - The web-1 SSH provisioner (`cron-egress-postapply-assert.sh`) **skips** the container
   probes on a fresh host (no container yet) and defers proof to "the next apply after
   deploy". On the cloud-init-only web-2 path there is no SSH re-apply, so that proof never
@@ -285,6 +286,7 @@ the CI trusted-root staleness gate (`cosign-trusted-root-staleness.test.sh`).
 
 Reviewed all three model files (`model.c4`, `views.c4`, `spec.c4`). **No C4 change for the
 shipped item (Item 3):**
+
 - **External human actors:** none added (a boot-time internal correctness control).
 - **External systems / vendors:** none added — the Hetzner compute container and its GHCR
   image-pull relationship are already modeled (`model.c4:164-166`, `:240`, `:300`); the probe

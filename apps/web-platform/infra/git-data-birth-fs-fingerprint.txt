@@ -1,0 +1,87 @@
+# git-data birth filesystem — CLASSIFIED FEATURE ALLOWLIST (R1's fixture)
+#
+# WHAT THIS PINS, and why it is a table rather than a feature-set equality check.
+#
+# The invariant is NOT "the birth filesystem has exactly these features". It is:
+#
+#     the birth filesystem's MOUNT depends on no kernel module that is absent
+#     from the target image.
+#
+# #7204: the birth ran `mkfs.ext4 -q -O quota,project`, which sets the ext4 `quota`
+# RO_COMPAT bit. On EVERY mount `ext4_fill_super` then calls `ext4_enable_quotas()`
+# (fs/ext4/super.c v6.8:5567 — gated on `ext4_has_feature_quota(sb)` ALONE, never on
+# the mount options), which reaches `find_quota_format(QFMT_VFS_V1)`. Ubuntu builds
+# that format as a MODULE (`CONFIG_QFMT_V2=m`), and `quota_v2.ko.zst` ships only in
+# `linux-modules-extra-*-generic`, which the Ubuntu 24.04 server cloud image does not
+# install. `find_quota_format` returns NULL, `dquot_load_quota_sb` returns -ESRCH,
+# `mount(8)` prints "No such process" and exits 32, and the host boots dark.
+#
+# WHY AN ALLOWLIST AND NOT SET-EQUALITY. Measured 2026-08-03: the same
+# `mkfs.ext4 -O project` produces DIFFERENT feature sets across one e2fsprogs patch
+# release — 1.47.2 (this host) emits `orphan_file` and `metadata_csum_seed`; 1.47.0
+# (ubuntu:24.04, and the image's own e2fsprogs 1.47.0-2.4~exp1ubuntu4.1) does not.
+# `ubuntu:24.04` is a moving tag, so an equality fingerprint reds on a benign bump and
+# the remedy an author reaches for is "refresh the fixture" — training exactly the
+# rubber-stamping this guard exists to prevent. Neither differing feature can trigger
+# a `request_module`, so equality would be pinning the wrong thing.
+#
+# The allowlist is still FAIL-CLOSED: an observed feature that is not in this table
+# fails R1 with "unclassified — classify it before shipping", whose remedy is a
+# one-line classification with a rationale, not a refresh.
+#
+# PROVENANCE — this table is derived from the MEASURED-GOOD SIBLING BASELINE, never
+# from the post-fix template's own output. Deriving it from the thing under test would
+# make R1 a change-detector instead of an invariant, and the TDD claim ceremonial.
+#
+# source: the two production LUKS stores that mount successfully on this same image —
+#         apps/web-platform/infra/cloud-init-registry.yml (mkfs.ext4 -q, the zot store)
+#         apps/web-platform/infra/workspaces-cutover.sh   (/workspaces) — its actual line is
+#           `mkfs.ext4 -q -E lazy_itable_init=0,lazy_journal_init=0`; `-E` sets EXTENDED
+#           OPTIONS, not features, so the resulting feature set is identical to plain
+#           `mkfs.ext4 -q` (measured). Quoted precisely because a paraphrased citation is
+#           how a provenance claim rots without anyone noticing.
+#         measured under e2fsprogs 1.47.0 in ubuntu:24.04:
+#           has_journal ext_attr resize_inode dir_index filetype extent 64bit flex_bg
+#           sparse_super large_file huge_file dir_nlink extra_isize metadata_csum
+# fetched: 2026-08-03
+# expires_on: 2026-12-31
+#
+# `expires_on` is NOT part of R1's pass/fail semantics (D8). A CI failure triggered by
+# a wall-clock date is unrepeatable and its message says nothing about the filesystem,
+# and a stale date can mask or merge with real feature drift. It is asserted by its own
+# labelled arm whose remediation is tied to the birth: re-measure the sibling baseline
+# when the git-data host is actually born, because that is the first moment the real
+# image's e2fsprogs output can be observed rather than inferred.
+#
+# CONTEXT FOR FAILURE MESSAGES ONLY — not asserted:
+#   mke2fs_measured: 1.47.0 (5-Feb-2023)   [ubuntu:24.04]
+#   mke2fs_host:     1.47.2 (1-Jan-2025)
+#   image_kernel:    6.8.0-136-generic
+#   image_manifest:  ubuntu-24.04-server-cloudimg-amd64.manifest, 664 pkgs, fetched
+#                    2026-08-03T10:39:33Z; linux-modules-extra ABSENT; quota ABSENT
+#
+# FORMAT: <feature>\t<class>\t<mechanism>
+#   in-tree    — ext4 handles it without loading a separate kernel module, so it cannot
+#                reproduce the #7204 failure mode.
+#   module-dep — mounting a filesystem carrying this feature makes ext4 request a
+#                kernel module. On an image that lacks the module, the mount FAILS.
+#                R1 fails if the birth filesystem carries any feature of this class.
+
+has_journal	in-tree	jbd2 is built into the ext4 image on Ubuntu generic (CONFIG_JBD2=y); no request_module on mount
+ext_attr	in-tree	extended-attribute support, compiled into ext4
+resize_inode	in-tree	online-resize bookkeeping inode; no module
+dir_index	in-tree	htree directory indexing; no module
+filetype	in-tree	dirent file-type field; no module
+extent	in-tree	extent-mapped inodes; core ext4
+64bit	in-tree	64-bit block numbers; core ext4
+flex_bg	in-tree	flexible block groups; core ext4
+sparse_super	in-tree	sparse superblock backups; core ext4
+large_file	in-tree	>2GB file support; core ext4
+huge_file	in-tree	>2TB file support; core ext4
+dir_nlink	in-tree	unlimited subdirectory count; core ext4
+extra_isize	in-tree	expanded inode size; core ext4
+metadata_csum	in-tree	crc32c metadata checksums; CONFIG_CRYPTO_CRC32C is built in and ext4 selects it
+metadata_csum_seed	in-tree	stores the csum seed in the superblock; emitted by e2fsprogs >=1.47.1, no module
+orphan_file	in-tree	orphan-inode file; emitted by e2fsprogs >=1.47.1, handled in-tree by ext4
+project	in-tree	project-ID inode field only. ext4_enable_quotas() is gated on the QUOTA feature bit, NOT on this one (v6.8 super.c:5567), so `project` alone loads no module. NOTE: the only project-related mount refusal (super.c:3645) sits under `#if !IS_ENABLED(CONFIG_QUOTA) || !IS_ENABLED(CONFIG_QFMT_V2)`; IS_ENABLED is true for =m and Ubuntu ships CONFIG_QFMT_V2=m, so that block is compiled out on the target.
+quota	module-dep	THE #7204 DEFECT. Sets RO_COMPAT_QUOTA, so ext4_fill_super unconditionally calls ext4_enable_quotas() -> find_quota_format(QFMT_VFS_V1) -> request_module("quota_v2"). Ubuntu builds it =m and ships quota_v2.ko only in linux-modules-extra-*, absent from the cloud image => -ESRCH, mount(8) rc=32, dark boot.

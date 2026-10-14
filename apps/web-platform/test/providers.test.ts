@@ -6,8 +6,8 @@ import {
 } from "../server/providers";
 
 describe("PROVIDER_CONFIG", () => {
-  test("has 14 providers", () => {
-    expect(Object.keys(PROVIDER_CONFIG).length).toBe(14);
+  test("has 15 providers", () => {
+    expect(Object.keys(PROVIDER_CONFIG).length).toBe(15);
   });
 
   test("every provider has envVar, category, and label", () => {
@@ -43,8 +43,8 @@ describe("EXCLUDED_FROM_SERVICES_UI", () => {
 });
 
 describe("SERVICE_PROVIDERS", () => {
-  test("has 12 providers (14 minus bedrock and vertex)", () => {
-    expect(SERVICE_PROVIDERS.length).toBe(12);
+  test("has 13 providers (15 minus bedrock and vertex)", () => {
+    expect(SERVICE_PROVIDERS.length).toBe(13);
   });
 
   test("does not include bedrock or vertex", () => {

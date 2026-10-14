@@ -98,7 +98,7 @@ checked-out CI runner to the no-checkout Inngest container.
 
 ## Resolution
 
-Added `GH_REPO: \`${REPO_OWNER}/${REPO_NAME}\`` (→ `jikig-ai/soleur`) to
+Added `` GH_REPO: `${REPO_OWNER}/${REPO_NAME}` `` (→ `jikig-ai/soleur`) to
 `buildSpawnEnv` in both crons (imported from `./_cron-shared`). One env field
 fixes the `execFileSync` prefetch and every agent-spawned `gh` call. Behavioral
 tests assert `GH_REPO` on every spawn env + an ambient-override positive control.

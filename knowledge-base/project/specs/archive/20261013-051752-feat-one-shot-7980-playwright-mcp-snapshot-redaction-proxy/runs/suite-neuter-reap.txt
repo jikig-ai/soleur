@@ -1,0 +1,305 @@
+ok   - instrument self-test: ok() increments
+FAIL - instrument self-test: bad() increments (EXPECTED, not a real failure)
+FAIL - helper control: assert_redacted_result must REJECT a leak (EXPECTED) — sentinel survived (2 occurrences)
+FAIL - helper control: assert_withheld must REJECT a raw forwarded result (EXPECTED) — not withheld (isError=false)
+FAIL - helper control: assert_byte_identical must REJECT a differing line (EXPECTED) — bytes differ from the stub's line
+FAIL - helper control: assert_refused_start must REJECT a started proxy (EXPECTED) — exit 0, expected 2
+FAIL - helper control: assert_stderr_marker must REJECT a wrong count (EXPECTED) — 'child pgid' appears 1 time(s), expected 7
+FAIL - helper control: assert_group_empty must REJECT a missing pgid (EXPECTED) — proxy never logged the child pgid
+FAIL - helper control: assert_rc must REJECT a wrong exit (EXPECTED) — exit 2, expected 9
+FAIL - helper control: assert_true must REJECT false (EXPECTED)
+FAIL - helper control: red must REJECT an unobservable defect (EXPECTED) — mutant survived
+FAIL - helper control: leaks must be FALSE on a redacted response (EXPECTED)
+FAIL - helper control: leaks must be TRUE on the passthrough (EXPECTED)
+FAIL - helper control: started must be FALSE on a refused start (EXPECTED)
+FAIL - helper control: delivered_ok must be FALSE on a missing id (EXPECTED)
+FAIL - mutant hc-nonunique-EXPECTED did NOT land: make-proxy-mutant: <old> occurs 109 times, need exactly 1: 'self' 
+ok   - instrument: stub WRITES the raw tree for a filename call
+ok   - instrument: the written file carries the sentinel
+ok   - instrument: stub request log records the call
+ok   - instrument: stub records its argv
+ok   - instrument: passthrough forwards the raw tree (known negative)
+ok   - instrument: the stub refuses to run without FAKE_PW_FIXTURE_DIR
+ok   - instrument: FAKE_PW_NOTIFY / FAKE_PW_SERVER_REQUEST put a tree on the wire (known negative)
+ok   - instrument: FAKE_PW_CANCEL puts a tree in a relayed-set reason, _meta and requestId (known negative)
+ok   - instrument: FAKE_PW_HOLD keeps the group alive past stdin EOF (passthrough does no teardown)
+ok   - instrument: FAKE_PW_GRANDCHILD — the SIGTERM-ignoring grandchild holds the group past stdin EOF
+ok   - FR1/FR11: initialize result forwarded byte-identical
+FAIL - FR2: bare browser_snapshot — password/Token redacted, Notes intact (P3) — sentinel survived (2 occurrences)
+FAIL - FR2: <redacted> marker present on the credential rows
+ok   - FR2: Email address survives in clear (must-PASS)
+FAIL - FR2b/P7: browser_find result redacted by SHAPE (no tool-name allowlist) — sentinel survived (2 occurrences)
+FAIL - FR10b: tree-carrying result ends with the trailer block
+FAIL - FR10b: browser_find result ends with the trailer block
+ok   - FR10b: browser_navigate (no tree) carries NO trailer
+ok   - FR11/P1: browser_navigate forwarded byte-identical
+ok   - FR11/P2: browser_evaluate object result forwarded byte-identical
+ok   - FR11/P4: screenshot (text + image) forwarded byte-identical
+ok   - FR11/P5: browser_close result (no isClose on the wire) forwarded
+FAIL - FR10: tools/list — browser_snapshot description ends with the marker
+ok   - FR10: other tool descriptions untouched
+FAIL - B7: initialize logs what was wrapped — 'wrapping Playwright' appears 0 time(s), expected 1
+ok   - B4: child pgid logged once
+FAIL - B10: teardown line on stdin EOF — 'child exited rc=0' appears 0 time(s), expected 1
+ok   - FR14: stdin EOF → child group empty
+ok   - FR14: clean child exit → proxy exit 0
+ok   - NFR2: every stdout line of a full session is a JSON-RPC object
+ok   - FR11/P5: roots/list server request forwarded (with a COLLIDING id)
+FAIL - FR11b: colliding roots/list id — result still redacted and delivered — sentinel survived (2 occurrences)
+FAIL - FR3: browser_snapshot + filename refused (id type int preserved) — not withheld (isError=false)
+FAIL - FR3: browser_snapshot + filename:"" refused on KEY presence (id type str preserved) — not withheld (isError=false)
+FAIL - FR3: tools/call with arguments._meta refused — not withheld (isError=false)
+FAIL - FR3: _meta refused on ANY tool, not only browser_snapshot — not withheld (isError=false)
+FAIL - FR3: refusal text carries the proxy-unique token (the S2 signal)
+FAIL - FR3: the refused calls never reached the stub, which did receive the session
+FAIL - FR3: no raw file was written
+FAIL - FR3: the bare call after the refusals is still served — sentinel survived (2 occurrences)
+FAIL - FR7b: one pinned stderr line per refusal — 'refused tool=' appears 0 time(s), expected 4
+FAIL - FR7b/B9: stderr refusal lines never quote the input path
+FAIL - FR4: child argv ends with --snapshot-mode none
+FAIL - FR5: proxy beside no redactor refuses to start — exit 0, expected 2
+FAIL - FR5: --save-session in the wrapped argv refuses to start — exit 0, expected 2
+FAIL - FR5: config saveSession (via --config) refuses to start — exit 0, expected 2
+FAIL - FR5: config saveSession (via $PLAYWRIGHT_MCP_CONFIG) refuses to start — exit 0, expected 2
+FAIL - FR5: a config the proxy cannot parse as JSON (the server reads INI) refuses to start — exit 0, expected 2
+FAIL - FR5: a --config that does not exist refuses to start with a named reason — exit 0, expected 2
+FAIL - FR5: config saveVideo refuses to start — exit 0, expected 2
+FAIL - FR5: config capabilities other than vision refuses to start — exit 0, expected 2
+FAIL - FR5: config server.port refuses to start — exit 0, expected 2
+FAIL - FR5: --port (HTTP transport around the relay) refuses to start — exit 0, expected 2
+FAIL - FR5: PLAYWRIGHT_MCP_PORT refuses to start — exit 0, expected 2
+FAIL - FR5: --host refuses to start — exit 0, expected 2
+FAIL - FR5: --caps with devtools refuses to start — exit 0, expected 2
+FAIL - FR5: PLAYWRIGHT_MCP_CAPS=storage refuses to start — exit 0, expected 2
+FAIL - FR5: --output-mode file refuses to start — exit 0, expected 2
+FAIL - FR5 companion: a benign JSON --config=<file> and --caps vision start and serve — sentinel survived (2 occurrences)
+FAIL - FR5: DEBUG='pw:mcp:server:response' (enables a pw:* logger) refuses to start — exit 0, expected 2
+FAIL - FR5: DEBUG='*' (enables a pw:* logger) refuses to start — exit 0, expected 2
+FAIL - FR5: DEBUG='pw:*' (enables a pw:* logger) refuses to start — exit 0, expected 2
+FAIL - FR5: DEBUG='pw:api *' (enables a pw:* logger) refuses to start — exit 0, expected 2
+FAIL - FR5: DEBUG='*:response' (enables a pw:* logger) refuses to start — exit 0, expected 2
+FAIL - FR5: DEBUG='express:router, *' (enables a pw:* logger) refuses to start — exit 0, expected 2
+FAIL - FR5: DEBUG='p*' (enables a pw:* logger) refuses to start — exit 0, expected 2
+FAIL - FR5: the DEBUG reason never quotes the value
+FAIL - FR5: DEBUG_FILE refuses to start — exit 0, expected 2
+FAIL - FR5 companion: an unrelated DEBUG namespace (plus a pw exclusion) starts and serves — sentinel survived (2 occurrences)
+FAIL - B1: empty server argv → exit 2, usage on stderr, nothing on stdout
+FAIL - B1: missing -- separator → exit 2 (the server argv is never guessed)
+FAIL - FR6: a redactor returning its input unchanged → refuse to start — exit 0, expected 2
+FAIL - FR6/row 9 input: a redactor appending <redacted> without removing the value → refuse — exit 0, expected 2
+FAIL - FR6/row 29 input: constant-False looks_like_a11y_tree → refuse — exit 0, expected 2
+FAIL - FR7: redact_text raising → withheld, no sentinel, session continues — not withheld (isError=false)
+FAIL - FR7: the withhold says the action may already have run
+FAIL - FR7b: one withheld line for the raise — 'withheld tool=browser_snapshot' appears 0 time(s), expected 1
+ok   - FR7: the session ended cleanly after the withhold
+FAIL - B2: a redactor missing one of the four names → refuse (not a per-result withhold) — exit 0, expected 2
+FAIL - FR13 behavioural: every delivered text block passed through redact_text (spy)
+FAIL - row 2 input: two text blocks both redacted (second-member) — sentinel survived (4 occurrences)
+FAIL - FR9: a - [Snapshot]( file link is replaced by the do-not-read notice, result delivered
+FAIL - FR9: the server-emitted path is echoed nowhere (stdout, stderr)
+FAIL - FR9: a page-controlled dialog line shaped like the link cannot withhold the result — sentinel survived (1 occurrences)
+FAIL - FR11b: structuredContent → withheld — not withheld (isError=false)
+FAIL - FR11b: resource block → withheld — not withheld (isError=false)
+FAIL - FR11b: _meta in the result → withheld — not withheld (isError=false)
+FAIL - FR11b: result AND method → withheld — not withheld (isError=false)
+FAIL - FR11b: no content key → withheld — not withheld (isError=false)
+FAIL - FR11b: result is a string → withheld — not withheld (isError=none)
+ok   - edge: content: [] forwarded unchanged
+FAIL - row 31: error with structured data → withheld — not withheld (isError=none)
+FAIL - row 31: an error frame that also carries a result → withheld — not withheld (isError=false)
+FAIL - row 31: a non-object error → withheld — not withheld (isError=none)
+FAIL - row 46: an error message carrying tree rows → withheld — not withheld (isError=none)
+ok   - row 31 companion: a data-less prose error forwarded byte-identical
+FAIL - row 49: a JSON-escaped tree (browser_run_code_unsafe shape) → withheld — not withheld (isError=false)
+FAIL - row 49: a tree inside a pretty-printed JSON object → withheld — not withheld (isError=false)
+FAIL - quoted YAML key ("API Key #1") redacted through the proxy; "Notes #2" intact — sentinel survived (1 occurrences)
+FAIL - row 36: a VALUE containing the link substring outside ### Snapshot is redacted, not replaced
+FAIL - P6 canary: a value containing { is delivered redacted (no envelope sniff) — sentinel survived (1 occurrences)
+FAIL - row 18: a tree with no credential-named field still gets the trailer
+FAIL - row 14: one invalid UTF-8 byte in the text → decoded with replacement, still redacted — sentinel survived (1 occurrences)
+FAIL - edge: unparsable server line dropped with a stderr line; session continues
+FAIL - row 21: list-shaped server line — first pending id answered by error_result — no response for id 3 (a dropped result is as RED as a raw one)
+FAIL - row 21: list-shaped server line — second pending id answered — no response for id 4 (a dropped result is as RED as a raw one)
+FAIL - row 21: the list line itself was not forwarded
+ok   - FR10/row 25: tools/list without a tools key forwarded unchanged (fail-safe)
+FAIL - FR10/row 25: annotate failure noted on stderr — 'annotate failed' appears 0 time(s), expected 1
+FAIL - FR10/row 25: the session continues after the annotate failure — sentinel survived (2 occurrences)
+FAIL - row 48: a content-bearing result answering initialize is rewritten (routed by shape) — sentinel survived (2 occurrences)
+FAIL - row 23: an unprompted result (id never sent) is dropped; no sentinel anywhere on stdout
+FAIL - row 23: dropped unknown-id response noted — 'dropped unknown-id response' appears 0 time(s), expected 1
+FAIL - row 44: a notifications/message carrying a tree is dropped; the result still redacted
+FAIL - row 45: a sampling/createMessage server request is dropped, never reaching the client
+FAIL - row 45: the dropped server request is answered with an error on the server side
+FAIL - row 54: relayed-set notifications are rebuilt — method and plain requestId arrive, reason/_meta/tree requestId do not
+FAIL - FR8: text over MAX_INPUT_BYTES → withheld — not withheld (isError=false)
+FAIL - FR8: withheld line on stderr — 'withheld tool=browser_snapshot' appears 0 time(s), expected 1
+FAIL - row 30: id 2 (tools/list) and id "2" (tools/call) are classified by their own requests
+FAIL - row 47: a request reusing a pending id is refused; the original result is still redacted
+FAIL - row 47: the reuse refusal is noted — 'refused a request reusing a pending id' appears 0 time(s), expected 1
+ok   - edge: a list-shaped id is keyed and answered, and the next request is served
+FAIL - row 26: two unparsable client lines (text; an integer past the digit limit) dropped with a note — 'dropped unparsable client line' appears 0 time(s), expected 2
+ok   - row 26: neither reached the stub, which did receive the session; no raw file
+FAIL - row 26: the next request is still relayed — sentinel survived (2 occurrences)
+FAIL - row 38: client list line dropped with a stderr note — 'dropped list line from client' appears 0 time(s), expected 1
+FAIL - row 38: the bare call after the dropped list line is still served — sentinel survived (2 occurrences)
+FAIL - row 37: a line over MAX_LINE_BYTES is discarded and the pending call answered oversize — not withheld (isError=false)
+FAIL - row 37: discard noted with the byte count only — 'discarding oversize server line' appears 0 time(s), expected 1
+FAIL - FR14/row 12: stdin EOF with a holding child → group empty (SIGKILL after grace) — group 3663995 still has 2 member(s)
+FAIL - FR14: SIGKILL-after-grace line — 'survived SIGTERM; SIGKILL sent' appears 0 time(s), expected 1
+FAIL - FR14/row 50: direct child exits, a SIGTERM-ignoring grandchild holds → group still emptied — group 3671623 still has 1 member(s)
+FAIL - FR14/row 50: the grandchild needed the SIGKILL — 'survived SIGTERM; SIGKILL sent' appears 0 time(s), expected 1
+FAIL - FR14/row 27: SIGTERM to the proxy → group empty — group 3680461 still has 2 member(s)
+FAIL - FR14/row 28: stub exit 3 → proxy exit 3 — exit TIMEOUT, expected 3
+FAIL - FR14: child exit logged — 'child exited rc=3' appears 0 time(s), expected 1
+FAIL - FR14/row 28: stub group killed by SIGTERM → proxy exit 143 (clamped), never 241 or 0 — exit TIMEOUT, expected 143
+FAIL - FR14: the signal is named on stderr — 'child exited rc=-15 signal=15' appears 0 time(s), expected 1
+FAIL - FR13: no re.* call, no def redact_text, exactly one spec_from_file_location
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+StopIteration
+FAIL - FR13: the only credential-shaped literal is the self-test sentinel row
+ok   - NFR1/NFR3: stdlib-only imports, no threading
+FAIL - P6 parity: proxy output differs from the CLI on find (2 = no trailer, 3 = CLI failed)
+FAIL - P6 parity: proxy output differs from the CLI on snapshot (2 = no trailer, 3 = CLI failed)
+FAIL - P6 parity: proxy output differs from the CLI on snapshot-meta-raw (2 = no trailer, 3 = CLI failed)
+FAIL - P6 parity: proxy output differs from the CLI on meta-in-result (2 = no trailer, 3 = CLI failed)
+FAIL - P6 parity: proxy output differs from the CLI on quoted-key (2 = no trailer, 3 = CLI failed)
+FAIL - P6 parity: proxy output differs from the CLI on result-and-method (2 = no trailer, 3 = CLI failed)
+FAIL - P6 parity: proxy output differs from the CLI on two-text-blocks (2 = no trailer, 3 = CLI failed)
+FAIL - P6 parity: proxy output differs from the CLI on value-contains-brace (2 = no trailer, 3 = CLI failed)
+FAIL - P6 parity: proxy output differs from the CLI on value-contains-link-substring (2 = no trailer, 3 = CLI failed)
+ok   - P6 parity population floor: 9 sentinel-bearing tree fixtures (>= 5)
+ok   - mutant 01-no-redact landed inside rewrite_result
+ok   - row 1: redaction skipped → sentinel in stdout
+ok   - mutant 02-first-block-only landed inside rewrite_result
+ok   - row 2: only content[0] processed → second block leaks
+ok   - mutant 03-dispatch landed inside pump_client_to_server
+ok   - row 3: dispatch broken → the redacted result is never delivered (own-dispatch)
+ok   - mutant 05-swallow-load landed inside load_redactor
+ok   - row 5: load error swallowed → proxy starts and answers initialize
+ok   - mutant 06-no-flag landed inside __init__
+ok   - row 6: flag not appended → the stub ran and its argv lacks it
+ok   - mutant 07-forward-filename landed inside refuse_request
+ok   - row 7: filename forwarded → stub writes the raw file and logs the call
+ok   - mutant 08-no-link-arm landed inside rewrite_result
+ok   - row 8: link arm removed → the raw-file path reaches the client
+ok   - mutant 09-weak-selftest landed inside self_test
+ok   - row 9: self-test checks only <redacted> present → append-only redactor starts the proxy
+ok   - mutant 10-own-predicate landed inside rewrite_result
+ok   - row 10: a proxy-side predicate skips some text → the spy tag is missing
+ok   - mutant 11-no-annotate landed inside pump_server_to_client
+ok   - row 11: annotate skipped → tools/list lacks the marker
+ok   - mutant 12-no-eof-teardown landed inside run
+ok   - row 12: EOF teardown removed → holding child survives
+ok   - mutant 13-classify-pending-only landed inside pump_server_to_client
+ok   - row 13: responses keyed on pending alone → a colliding roots/list breaks delivery
+ok   - mutant 14-strict-decoder landed inside pump_server_to_client
+ok   - row 14: strict decoder → the invalid byte drops or leaks the result
+ok   - mutant 15-no-refuse-argv landed inside refuse_argv_and_env
+ok   - row 15: --save-session check removed → proxy starts
+ok   - mutant 16-wide-whitelist landed inside rewrite_result
+ok   - row 16: whitelist widened → structuredContent tree leaks
+ok   - mutant 17-resource-ignored landed inside rewrite_result
+ok   - row 17: resource block ignored → leaks
+ok   - mutant 18-trailer-on-change landed inside rewrite_result
+ok   - row 18: trailer only on change → credential-free tree lacks it
+ok   - mutant 19-filename-truthy landed inside refuse_request
+ok   - row 19: filename keyed on truthiness → filename:"" reaches the stub
+ok   - mutant 20-no-meta-check landed inside refuse_request
+ok   - row 20: _meta not refused → the undocumented hook reaches the server
+ok   - mutant 21-list-unhandled landed inside pump_server_to_client
+ok   - row 21: list line unhandled → pending ids left hanging
+ok   - mutant 22a-handbuilt-refusal landed inside refuse_request
+ok   - row 22a: a refusal arm bypassing error_result → no isError, no proxy token
+ok   - mutant 22b-error-result-field landed inside error_result
+ok   - row 22b: a field dropped from error_result → every withhold row reds at once
+ok   - mutant 23-forward-unknown landed inside pump_server_to_client
+ok   - row 23: unknown-id response forwarded raw → sentinel leaks
+ok   - mutant 24-result-and-method landed inside pump_server_to_client
+ok   - row 24: result+method treated as a normal result → not withheld
+ok   - mutant 25-annotate-unwrapped landed inside annotate_tools_list
+ok   - row 25: annotate not fail-safe → tools/list result lost
+ok   - mutant 26-forward-unparsable-client landed inside pump_client_to_server
+ok   - row 26: unparsable client line forwarded → no drop note, and the server answered it
+ok   - mutant 27-no-sigterm-handler landed inside __init__
+ok   - row 27: SIGTERM handler removed → holding child survives
+ok   - mutant 28-no-clamp landed inside teardown
+ok   - row 28: clamp removed → proxy exits 241 (raw -15) instead of 143
+ok   - mutant 29-weak-tree-selftest landed inside self_test
+ok   - row 29: tree self-test dropped → constant-False redactor starts and never appends the trailer
+ok   - mutant 30-bare-id landed inside id_key
+ok   - row 30: ids keyed by their string form → 2 and "2" collide
+ok   - mutant 31-error-shape-forwarded landed inside vet_error
+ok   - row 31: error data forwarded raw → sentinel leaks
+ok   - mutant 32-no-cap landed inside rewrite_result
+ok   - row 32: size cap removed → oversized text forwarded (not withheld)
+ok   - mutant 33-quotes-input landed inside rewrite_result
+ok   - row 33: reason quotes the input → sentinel in the isError text or stderr
+ok   - mutant 34-no-except-arm landed inside rewrite_result
+ok   - row 34: except arm forwards raw → raising redactor leaks
+ok   - mutant 35-ignore-debug landed inside refuse_argv_and_env
+ok   - row 35: DEBUG ignored → proxy starts under the response logger
+ok   - mutant 36-substring-drift landed inside rewrite_result
+ok   - row 36: drift arm keyed on substring → a page value rewrites the credential row away
+ok   - mutant 37-no-line-cap landed inside run
+ok   - row 37: line cap removed → the 65 MiB line is buffered whole (no discard, reason lacks oversize)
+ok   - mutant 38-forward-client-list landed inside pump_client_to_server
+ok   - row 38: the client list arm removed → the drop note disappears
+ok   - mutant 39-name-allowlist landed inside rewrite_result
+ok   - row 39: tool-name allowlist → browser_find leaks (Q1 by shape)
+ok   - mutant 40-debug-wildcard landed inside debug_pattern_enables_pw
+ok   - row 40: debug wildcard not modelled → DEBUG=*:response starts
+ok   - mutant 41-ini-config-skipped landed inside refuse_argv_and_env
+ok   - row 41: a non-JSON config skipped → an INI saveSession starts
+ok   - mutant 42-port landed inside refuse_argv_and_env
+ok   - row 42: --port check removed → proxy starts
+ok   - mutant 43-caps landed inside refuse_argv_and_env
+ok   - row 43: --caps check removed → devtools starts
+ok   - mutant 44-relay-notifications landed inside relay_server_message
+ok   - row 44: every notification relayed → a notifications/message reaches the client
+ok   - mutant 45-relay-requests landed inside relay_server_message
+ok   - row 45: every server request relayed → a sampling/createMessage reaches the client
+ok   - mutant 46-error-message-unchecked landed inside vet_error
+ok   - row 46: error message not vetted → tree row leaks
+ok   - mutant 47-reuse-overwrites landed inside pump_client_to_server
+ok   - row 47: reuse not refused → no refusal, one answer for two requests
+ok   - mutant 48-route-by-method-only landed inside pump_server_to_client
+ok   - row 48: routed by method only → a tree answering initialize leaks
+ok   - mutant 49-no-escaped-check landed inside rewrite_result
+ok   - row 49: escaped-tree check removed → the escaped tree leaks
+ok   - mutant 50-kill-only-live-child landed inside teardown
+ok   - row 50: escalation keyed on the direct child → the grandchild survives
+ok   - mutant 51-save-video landed inside refuse_argv_and_env
+ok   - row 51: saveVideo check removed → proxy starts
+ok   - mutant 52-output-mode landed inside refuse_argv_and_env
+ok   - row 52: --output-mode check removed → proxy starts
+ok   - mutant 53-config-server landed inside refuse_argv_and_env
+ok   - row 53: config server.port check removed → proxy starts
+ok   - mutant 54-relay-verbatim landed inside relay_server_message
+ok   - row 54: relayed notifications not rebuilt → the reason/_meta tree reaches the client
+ok   - mutant 55-any-id-plain landed inside plain_id
+ok   - row 55: requestId not vetted → a tree row rides a cancellation to the client
+ok   - Guard 2: .mcp.json playwright command is bash -c <string>
+ok   - Guard 2: the .mcp.json string itself carries no --snapshot-mode (only the proxy may append it)
+ok   - Guard 2: one-call
+ok   - Guard 2: parent-is-shipped-proxy
+ok   - Guard 2: pin-once
+ok   - Guard 2: profile-once
+ok   - Guard 2: config-once
+ok   - Guard 2: flag-appended-once
+ok   - Guard 2 mutant 1: proxy removed → the parent is not the shipped proxy
+ok   - Guard 2 mutant 2: proxy AFTER the server → the parent is not the shipped proxy
+ok   - Guard 2 mutant 3: --config dropped → argv lacks it
+ok   - Guard 2 mutant 4: version bumped in .mcp.json alone → argv no longer carries @playwright/mcp@0.0.78
+ok   - Guard 2 mutant 6: a passthrough saved under the proxy's filename → not the shipped proxy
+ok   - Guard 2 mutant 7: an unwrapped npx run before the wrapped one → two calls
+ok   - Guard 2 mutant 8: a second --config later in the args → config not once
+ok   - Guard 2 mutant 9: a second --user-data-dir → profile not once
+ok   - Guard 2 mutant 10: --snapshot-mode full in the args → flag not appended once
+ok   - Guard 2 mutant 5: renaming the server key fails the lookup loudly
+ok   - reaper: the proxy pkill pattern is ordered BEFORE the child pkill in .mcp.json
+ok   - reaper: neither pkill pattern matches the wrapper's own literal $prof line
+FAIL - hygiene: sessions recorded their child groups, and none still holding a stub outlives the reap
+
+161 passed, 122 failed, 283 cases (55 mutants, 55 mutation rows)
+RC=1

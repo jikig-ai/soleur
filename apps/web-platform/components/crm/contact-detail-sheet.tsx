@@ -10,8 +10,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
 import useSWR from "swr";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { swrKeys } from "@/lib/swr-config";
 import { ErrorCard } from "@/components/ui/error-card";
 import { LockIcon } from "@/components/icons";
@@ -196,7 +197,8 @@ function Header({
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {c ? <StagePill stage={c.stage} /> : null}
-        <button
+        <Button
+          variant="ghost"
           ref={closeBtnRef}
           type="button"
           onClick={onClose}
@@ -207,7 +209,7 @@ function Header({
             <line x1="6" y1="6" x2="18" y2="18" />
             <line x1="18" y1="6" x2="6" y2="18" />
           </svg>
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -251,9 +253,9 @@ function LoadedBody({ detail }: { detail: Detail }) {
         <LockIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <p>
           Read-only. Update this contact by mentioning it in a chat with your{" "}
-          <Link href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
+          <NavLink href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
             CRO or CPO agent
-          </Link>
+          </NavLink>
           .
         </p>
       </div>
@@ -359,13 +361,14 @@ function NotFoundBody({ onClose }: { onClose: () => void }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
       <p className="text-sm text-soleur-text-secondary">This contact isn&apos;t available.</p>
-      <button
+      <Button
+        variant="outlined"
         type="button"
         onClick={onClose}
         className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-primary hover:bg-soleur-bg-surface-2/40"
       >
         Back to board
-      </button>
+      </Button>
     </div>
   );
 }

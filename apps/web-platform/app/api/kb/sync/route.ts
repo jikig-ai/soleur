@@ -9,7 +9,7 @@
 // Even if the request body carries a `workspace_path` field, it's ignored.
 
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { syncWorkspace } from "@/server/kb-route-helpers";
 import { appendKbSyncRow } from "@/server/session-sync";
@@ -18,31 +18,29 @@ import {
   resolveActiveWorkspaceRepoMeta,
 } from "@/server/workspace-resolver";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import logger from "@/server/logger";
 
 export async function POST(request: Request): Promise<Response> {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/kb/sync", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    return await handleSync(user.id);
+    return await handleSync(userId);
   } catch (err) {
     logger.error(
-      { err, userId: user.id },
+      { err, userId },
       "kb/sync: unexpected error",
     );
     reportSilentFallback(err, {
       feature: "kb-route-helpers",
       op: "kb-sync.unexpected",
-      extra: { userId: user.id },
+      extra: { userId },
       message: "kb/sync: unexpected error",
     });
     return NextResponse.json(

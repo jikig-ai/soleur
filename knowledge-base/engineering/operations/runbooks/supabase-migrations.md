@@ -28,6 +28,13 @@ cd apps/web-platform
 doppler run -p soleur -c dev -- bash scripts/run-migrations.sh
 ```
 
+The post-apply PostgREST reload is a no-op in dev (no dev config carries
+`SUPABASE_ACCESS_TOKEN` by design — #8028 DC-1), so a freshly-added table can
+`PGRST205` for up to ~10 min. To force the reload, run
+`postgrest-reload-schema.sh` with the token read from `prd_terraform` — the
+`--help` text carries the exact one-liner; see `apps/web-platform/docs/migration-rollback.md`
+§PostgREST reload.
+
 Verify with the REST probe in §1 below against
 `doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c dev --plain`
 — a 200 confirms the migration applied to the dev project.
@@ -41,6 +48,19 @@ step is the production rollout.
 If `dev` and `prd` resolve to the same Supabase project ref, preflight
 Check 4 (`Environment Isolation`) blocks `/ship`. Do not bypass it —
 the rule exists to prevent silent single-DB exposure (#2887).
+
+**Once a migration file has been applied to ANY database (dev included), it is
+immutable — byte-for-byte, comments included — for the life of that PR.**
+`tenant-integration` CI applies any migration a PR touches to the shared dev
+project automatically on push; a later commit that edits that same file
+(even a comments-only fix during review) makes the tree's blob diverge from
+what the dev ledger recorded, and the next `tenant-integration` run fails
+"Assert unmerged migrations match the dev ledger" — the guard compares byte
+identity, not semantic DDL equivalence. If a migration needs a post-apply
+correction, route it to a non-frozen artifact (an ADR, the plan, a genuinely
+new follow-up migration for real DDL changes) rather than editing the applied
+file. **Why:** #8486/PR #8650 — see
+`knowledge-base/project/learnings/2026-09-24-editing-an-already-applied-migration-during-review-breaks-the-dev-ledger.md`.
 
 ### First-time provisioning: skip bootstrap
 
@@ -125,9 +145,11 @@ column-addition class.
 Run all four (no SSH, no dashboard):
 
 1. **Audit script** — flags inline insert/upsert omissions hard (exit 1):
+
    ```bash
    doppler run -p soleur -c prd -- bash apps/web-platform/scripts/audit-not-null-column-insert-coverage.sh
    ```
+
 2. **Resolve every `REVIEW (helper-indirected)` line by hand** — the script
    cannot follow `const t = client.from("x"); … t.insert({…})` (the createShare
    blind spot). Open each named file and confirm the column is set.
@@ -291,6 +313,13 @@ The verify file must emit exactly two columns per row:
 Any row where `bad > 0` fails the run. `UNION ALL` multiple SELECTs
 into one file to bundle sentinels with idempotence probes (see 031 for
 the pattern).
+
+String literals in a verify file must be single-quoted (double any inner
+`'`), and verify files may not use quoted identifiers at all: in Postgres a
+double-quoted token is an identifier, so `LIKE "x"` parses and fails only at
+bind time. `verify-sql-string-literals.test.ts`
+rejects double quotes, backslashes and non-ASCII characters in code
+position at PR time.
 
 CI executes every verify file via the `verify-migrations` job in
 `web-platform-release.yml` after `migrate` succeeds. A verify failure

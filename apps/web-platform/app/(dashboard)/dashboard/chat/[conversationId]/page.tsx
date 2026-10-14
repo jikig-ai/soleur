@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 import { ChatSurface } from "@/components/chat/chat-surface";
 import type { ConversationContext } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
@@ -13,7 +14,9 @@ import { useNavResume } from "@/hooks/use-nav-resume";
  * that requests KB content be fetched and passed as `initialContext`.
  * The KB sidebar path ignores this URL param (it passes `initialContext`
  * directly); only this full-route caller reads it — so the fetch belongs
- * here, not inside `ChatSurface`.
+ * here, not inside `ChatSurface`. `mode=crm-lead` with no `context` sets
+ * `{ type: "crm-lead" }` on the first render and does not fetch KB. A
+ * `context` query wins and `mode` is ignored.
  *
  * #4826 AC10: if a resumeable conversation id is not found (deleted /
  * wrong workspace), clear the sticky chat key and soft-replace to `/new`
@@ -22,13 +25,16 @@ import { useNavResume } from "@/hooks/use-nav-resume";
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
   const searchParams = useSearchParams();
-  const router = useRouter();
+  const router = usePendingRouter();
   const { clearChatId } = useNavResume();
   const contextParam = searchParams.get("context");
   const conversationId = params.conversationId;
+  // First-render only. `context` present → KB fetch; otherwise crm-lead is
+  // synchronous and contextPending stays false.
+  const crmLeadOnOpen = !contextParam && searchParams.get("mode") === "crm-lead";
 
   const [initialContext, setInitialContext] = useState<ConversationContext | undefined>(
-    undefined,
+    crmLeadOnOpen ? { type: "crm-lead" } : undefined,
   );
   const [contextLoading, setContextLoading] = useState<boolean>(!!contextParam);
 

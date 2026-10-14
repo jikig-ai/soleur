@@ -3,7 +3,7 @@
 - **Status:** adopting (feat-wire-concierge-support-chat — scoping core + discriminant + migration landed; repo-gate/sandbox wiring, ws-handler support-conversation creation, front-end streaming, product-help corpus, and live QA are sequenced within the same atomic feature branch)
 - **Date:** 2026-07-10
 - **Deciders:** Operator (CPO sign-off at plan time — single-user-incident threshold; chose full plan + B2 persistence + curate-corpus-now); **CTO agent (binding ruling on the repo-gate mechanism — this ADR supersedes the plan's Phase 1)**. Domain: Engineering (CTO), Product (CPO).
-- **Related:** ADR-070 (two-tier fail-open / deny-with-message-not-silent-removal — reconciled below), ADR-093 (`getPluginPath()` boot-validated read-only cwd chokepoint), ADR-086/#6046 (`context_queries` web port), ADR-044 (active-workspace resolver), `agent-runner-query-options.ts` (the typed-field/derivation idiom this follows), `routine-authoring-directive.ts` (the trusted system-prompt-append precedent), plan `knowledge-base/project/plans/2026-07-10-feat-wire-concierge-support-chat-plan.md`.
+- **Related:** ADR-070 (two-tier fail-open / deny-with-message-not-silent-removal — reconciled below), ADR-093 (`getPluginPath()` boot-validated read-only cwd chokepoint), ADR-086/#6046 (`context_queries` web port), ADR-044 (active-workspace resolver), `agent-runner-query-options.ts` (the typed-field/derivation idiom this follows), `routine-authoring-directive.ts` (the trusted system-prompt-append precedent), plan `knowledge-base/project/plans/archive/20261013-041741-2026-07-10-feat-wire-concierge-support-chat-plan.md`.
 
 > **Ordinal.** Resolved to **113** at merge-time (2026-07-15): while this branch sat, `origin/main` claimed 109 (workstream-issue-writes), 110, 111, and 112, so the original provisional 109 was renumbered to the next-free 113 (highest on `origin/main` = ADR-112). Re-verify against `origin/main` if the merge is deferred again.
 
@@ -28,7 +28,7 @@ Run the Concierge under a **required `persona` discriminant** (`"command_center"
 
 4. **`cwd` + sandbox write-set derived from `mode`.** `cwd = getPluginPath()` for support (the boot-validated read-only platform docs root, ADR-093); `allowWrite = []` for support (**P1 fix** — otherwise `cwd = getPluginPath()` with the default `allowWrite:[workspacePath]` would grant WRITE to the shared platform plugin root, a supply-chain read-only-escape).
 
-5. **Skill/tool scope (three layers).** (a) SDK-native `Options.skills = ["kb-search"]` (PRIMARY — hides every other skill from the model's context); (b) `createCanUseTool` default-deny for `persona:"support"` — a `Skill` ∉ `{kb-search}` (bare↔`soleur:`-FQN normalized) denies with a user-relayable message; (c) `disallowedTools ⊇ {Edit,Write,MultiEdit,NotebookEdit,Task,Agent}` (Bash KEPT — kb-search shells out behind the read-only safe-bash gate).
+5. **Skill/tool scope (three layers).** (a) SDK-native `Options.skills = ["kb-search"]` (PRIMARY — hides every other skill from the model's context); (b) `createCanUseTool` default-deny for `persona:"support"` — a `Skill` ∉ `{kb-search}` (bare↔`soleur:`-FQN normalized) denies with a user-relayable message; (c) `disallowedTools ⊇ {Edit,Write,MultiEdit,NotebookEdit,Task,Agent}` (Bash KEPT — kb-search shells out behind the read-only safe-bash gate). *[Premise falsified 2026-10-06 — the allowlist never admitted those commands; see the premise correction under `## ADR-070 reconciliation`. Bash stays kept, now as the deny+escalate tripwire only.]*
 
 6. **Support prompt.** `buildSoleurGoSystemPrompt` short-circuits to the Soleur Support prompt when `persona:"support"` — it does NOT emit the Command Center `/soleur:go` routing line (a downstream append cannot un-say it) and ignores artifact/sticky-workflow scoping.
 
@@ -37,6 +37,8 @@ Run the Concierge under a **required `persona` discriminant** (`"command_center"
 ## ADR-070 reconciliation
 
 The support scope uses two mechanisms ADR-070 governs: (a) the `createCanUseTool` default-deny returns a **graceful `{behavior:"deny", message}` the model relays** — NOT the silent phase-scope deny ADR-070 forbids; (b) the `disallowedTools` removal of Edit/Write/MultiEdit/NotebookEdit/Task/Agent is a silent removal, but is acceptable — and NOT the additive-hint-only violation ADR-070 forbids — because those are tools a support user NEVER legitimately needs, so their removal breaks no valid flow. A one-paragraph amendment to ADR-070 records this carve-out.
+
+**Premise correction (2026-10-06, #9559).** Decision item 5(c) recorded "Bash KEPT — kb-search shells out behind the read-only safe-bash gate". The premise was false: the safe-bash allowlist never admitted kb-search's documented commands (`git grep`, `grep -Fxq`, `bash <script>` — `git grep` is not an allowlisted git verb, `grep`/arg-bearing `bash` are deliberately excluded, and `$`/quoting trips the metachar denylist before any pattern runs), and the deployed plugin root is not a git worktree so `git grep` cannot run there regardless. The support kb-search path is therefore Read/Grep/Glob-only over the committed corpus (`plugins/soleur/knowledge-base/`), auto-approved read tools under `cwd = getPluginPath()`. Bash stays OUT of `SUPPORT_EXTRA_DISALLOWED_TOOLS` — unchanged — but its role is now only the deny+escalation tripwire for engineering-shaped attempts, not a kb-search transport.
 
 ## Rejected alternatives
 
@@ -110,3 +112,142 @@ gating precondition, not code alone. A curated product-help corpus at the suppor
 - Command Center path is byte-neutral (the `command_center` branch preserves gate order, `cwd=workspacePath`, `allowWrite=[workspacePath]`).
 - A dropped persona hop is a compile error; a garbage value throws; a support turn cannot gain repo write (sandbox `allowWrite:[]`) nor the 95-skill surface (SDK `skills` + canUseTool default-deny).
 - Minimum test set (CTO): `resolveWorkspaceMode` unit (impossible-state + never-throw), support repo-gate-bypass, **support sandbox write-set empty**, CC non-regression characterization, end-to-end persona threading into `CanUseToolDeps`, skill-allowlist deny (bare+FQN), `disallowedTools` membership, and the ws-handler honest-degrade wire boundary.
+
+## Decision addendum (2026-10-05, #9539): deny → handoff escalation channel
+
+A write-requiring task dispatched into a support turn used to dead-end: the deny
+message relayed "file writes are disabled" with no path to a write-capable
+session. The boundary stays — `sandboxWrite:"none"`, `allowWrite:[]`,
+`cwdSource:"plugin"` are unchanged — but every *engineering-intent deny* now
+records a per-conversation escalation, and the support route emits a
+`support_handoff` SSE frame (`{task, conversationId, repoConnected?}`, task
+server-derived from the POSTed message, ≤500 code points) immediately BEFORE
+the terminal frame. `repoConnected?` is recorded at deny time, sourced from the
+`repoUrl` resolution `realSdkQueryFactory` already performs
+(`readCurrentRepoUrlResult`, zero extra reads — `degraded` emits `undefined`
+rather than a false "not connected"); it stays optional so dep-less deny
+contexts (unit tests and any future unwired deps path) keep the
+pre-widening frame shape — the legacy `agent-runner.ts` deps construction
+never sets `persona: "support"`, so it cannot reach a support deny at all
+and is NOT such a producer.
+The client stores it in a separate `handoffMarkdown` state field so
+`stream`-replace and error-fallback cannot discard it, and renders an
+"Ask an agent →" deep link to `/dashboard/chat/new?msg=<task>`.
+
+Mechanism:
+
+- `server/support-escalation.ts` — bounded FIFO registry +
+  `denySupport` (structured `deny-support-{skill,bash,tool}` log + permission-decision
+  log + record + user-relayable deny, one authoring point). Escalation sources:
+  `skill` (non-allowlisted Skill), `bash` (blocklist or non-safe command),
+  `tool` (every other denied engineering surface).
+- `permission-callback.ts` — deny-with-record covers ALL engineering-intent
+  surfaces: Skill-deny, BOTH Bash deny sites (blocklist, plus a short-circuit
+  after the safe-allowlist + near-miss telemetry and BEFORE
+  `bashAutonomous`/cache/review-gate), write-class file tools (`Write`/`Edit`/
+  `MultiEdit`/`NotebookEdit`), outside-workspace file denies, `Agent`, platform
+  tools, and deny-by-default. The Bash short-circuit also closes two latent
+  leaks: on an acked autonomous workspace a non-safe command was silently
+  auto-ALLOWED, and on an un-acked owner path a WS-bound `autonomous_disclosure`
+  hold could be cross-surface-acked. `AskUserQuestion`/`TodoWrite`/
+  `ExitPlanMode` get persona-deny belts WITHOUT an escalation record (a UX
+  signal is not an engineering attempt) and join
+  `SUPPORT_EXTRA_DISALLOWED_TOOLS`.
+- `soleur-go-runner.ts` — `bridgeInteractivePromptIfApplicable` returns early
+  for `persona === "support"`: the bridge fires on tool_use *sighting* (before
+  `canUseTool`), so it is the chokepoint belt keeping `interactive_prompt`
+  frames + answerable `pendingPrompts` entries off the WS sink even if a model
+  emits a schema-removed tool.
+- `cc-dispatcher.ts` — support dispatches filter `allowedTools` against
+  `SUPPORT_EXTRA_DISALLOWED_TOOLS` (auto-approve bypasses `canUseTool`, so the
+  overlap would defeat both schema removal and the belts), and the entire C4
+  surface — `edit_c4_diagram` registration, `platformToolNames` entry, and
+  `c4PromptAddendum` — is gated off support (the tool commits to the user's
+  repo via the installation token, a real write outside `allowWrite:[]`).
+- `app/api/support/route.ts` — consume-on-read at the terminal boundary
+  (exactly-once, never unconditional), `clearSupportEscalation` at stream open
+  (zombie-turn stale flag) and teardown, a per-conversation busy guard (409 to
+  a second POST while a turn is in-flight — the sticky conversation + warm
+  Query rebind would otherwise cross-attribute the escalation flag), and
+  `support-handoff-emitted` / `support-handoff-cleared-unconsumed` /
+  `support-handoff-emit-failed` / `support-escalation-evicted` markers for the
+  deny→emit join.
+- `lib/support-handoff.ts` — canonical label/href/encoded-link builder +
+  `SUPPORT_AGENT_SESSION_HINT` (the plain-text pointer all deny messages
+  compose from — model-relayed prose and the rendered link cannot drift).
+- The handoff frame is a support-local `SupportSseMessage` member, NOT a
+  `WSMessage` member — the bidirectional `_SchemaCovers` drift pin makes a bare
+  member a compile error, and the frame can never legitimately arrive on the WS.
+  `lib/types.ts` / `ws-zod-schemas.ts` are untouched; the CC dispatch path is
+  byte-neutral.
+
+Known residuals (tracked, not silently accepted): the GH-token
+mint/askpass/egress surface is not persona-gated (#9558); a zombie turn
+recording a deny *during* a successor turn's window is the remaining
+flag-attribution edge after the busy guard (a per-dispatch key cannot reach
+the per-Query `canUseTool` ctx without new plumbing). Resolved by this
+addendum's follow-up PR: the `git branch` write-forms auto-approve hole
+(#9555 — allowlist tightened to read-only arms) and the kb-search shell-out
+false-positive handoff (#9559 — support path is Read/Grep/Glob-only; see the
+premise correction under `## ADR-070 reconciliation`).
+
+## Alternatives Considered (this addendum)
+
+- **Silent intent re-routing** (server sniffs the task for engineering intent and
+  re-routes the turn to the command_center dispatch). Rejected: a prompt-phrasing
+  privilege axis on a security boundary — a crafted "engineering-sounding"
+  support message would gain the repo-write surface the persona exists to deny;
+  and repo-less support users would dead-end in a different place (the CC
+  dispatch requires a connected repo).
+- **Opt-in support write grant** (e.g. let the support session write to the
+  user's workspace on request). Rejected for this change: it re-opens the
+  plugin-root write-escape class the `allowWrite:[]` pin exists to close, and
+  needs a consent/ack substrate that does not exist on the SSE surface. The
+  handoff link is the honest interim path to a session that already has the
+  write surface wired.
+- **`WSMessage` union member + shared reducer.** Rejected by the drift guard and
+  by transport semantics — see above.
+
+## Decision addendum (2026-10-08, #9558): the repo-credential surface joins the gated set
+
+**Status: `accepted`.** The persona gate previously covered the clone self-heal, readiness gates,
+worktree lease, C4 write tool, and sandbox write-set — but the GitHub credential surface was still
+dispatched unconditionally: `resolveInstallationId`, `resolveEffectiveInstallationId`, the
+`generateInstallationToken` mint, the `.soleur-askpass.sh` write into the user's `.git/`, and the
+token-derived `ENTITLED_EGRESS_DOMAINS` open all ran on a support turn against a workspace the
+persona never touches.
+
+What changed in `cc-dispatcher.ts`:
+
+- `resolveInstallationId` in the Promise.all and `resolveEffectiveInstallationId` are gated on
+  `mode.runRepoLifecycle` — support resolves `effectiveInstallationId` to `null`, which closes the
+  mint, the C4 tool, and every clone arm downstream by construction.
+- The mint carries a second belt — `mode.sandboxWrite !== "none"` — so the issue's literal
+  invariant (a read-only dispatch must never mint a write-capable credential) survives a future
+  caller that reaches the mint with an installation id.
+- The askpass write (`writeAskpassScriptTo` under `.git/`) is gated on the same predicate; the
+  dispatch-level `reprovisionWorkspaceOnDispatch` (installation resolve + `ensureWorkspaceRepoCloned`
+  mint path) is skipped entirely for `persona === "support"`.
+- The egress posture `log.info` now carries `persona`, so a support dispatch that ever opened
+  egress is attributable in Sentry.
+
+**serviceTokens decision (plan FR3, was flagged inferred):** `getUserServiceTokens` is NOT gated
+as a fetch, but the **github provider entry is stripped post-fetch** when `sandboxWrite === "none"`
+(`cc-dispatcher.ts`: `const serviceTokens = { ...serviceTokensRaw }; if (mode.sandboxWrite ===
+"none") delete serviceTokens.GITHUB_TOKEN;`). The stored `GITHUB_TOKEN` is the user's own GitHub
+credential — squarely inside the surface #9558 names — and an env-visible, transcript-echoable
+credential in a session whose every GitHub egress domain is closed. Every OTHER provider key stays
+injected: they are the user's own third-party credentials, the egress-closed sandbox cannot
+exfiltrate them to the network, and stripping them would cut the support-persona capability of
+service lookups in answers. Review note: a sandboxed command can still ECHO its env into the
+conversation transcript (the model API + transcript logs are a real, if narrower, exposure path
+for the user's own Connected-Services keys) — accepted deliberately for the non-GitHub keys: the
+transcript stays in the user's own session. Recorded here so the choice is deliberate, not an
+omission; revisit if support transcripts ever fan out beyond the session owner. Residual: the
+fetch still decrypts the github key (and can fire the lazy v1→v2 key-version migration write) on
+a support dispatch — env-leak is closed; the wasted decrypt/migration is documented, not gated.
+
+**Token-channel sweep (4.3):** `ghToken`/`gitInstallationToken` (the askpass token) are the only
+agent-env credential channels fed by the dispatch (`buildAgentEnv` opts); `GIT_INSTALLATION_TOKEN`
+rides that env var alone — never the askpass body, never a remote URL. With `ghToken` forced
+`undefined` under support, every channel closes.

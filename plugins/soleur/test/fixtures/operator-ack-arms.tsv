@@ -1,0 +1,22 @@
+# Operator-ack arm table (#8486, ADR-249). One row per write arm and per read-only mode of every
+# script that calls soleur_op_ack_or_die. Read by plugins/soleur/test/operator-ack-guard.test.sh
+# (Guard 2, set identity both ways against the grep-derived ack callers), by
+# .claude/hooks/prod-write-defer-gate.test.sh (Guard 3) and by operator-script.test.sh Guard 9
+# (a consumer with writes outside the ack window must have a write row here).
+# Columns (TAB-separated): script  mode(write|readonly)  argv(space-separated; "-" = none)  stub_profile
+# stub_profile external:<suite> = driven behaviourally by that suite, not here.
+plugins/soleur/skills/flag-set-role/scripts/flip.sh	write	codex-engine prd on	flag
+plugins/soleur/skills/flag-set-role/scripts/flip.sh	write	codex-engine dev on	flag
+plugins/soleur/skills/flag-set-role/scripts/flip.sh	write	codex-engine prd on --org 70a70ab0-0000-4000-8000-000000000001 --control-org 1a8045bf-0000-4000-8000-000000000002	flag
+plugins/soleur/skills/flag-set-role/scripts/flip.sh	write	codex-engine prd on --detach-shared --org 70a70ab0-0000-4000-8000-000000000001 --control-org 1a8045bf-0000-4000-8000-000000000002	flag
+plugins/soleur/skills/flag-set-role/scripts/flip.sh	readonly	codex-engine prd on --dry-run	flag
+plugins/soleur/skills/flag-set-role/scripts/flip.sh	readonly	--dry-run codex-engine prd on	flag
+plugins/soleur/skills/flag-create/scripts/create.sh	write	probe-new-flag	flag
+plugins/soleur/skills/flag-create/scripts/create.sh	readonly	probe-new-flag --dry-run	flag
+plugins/soleur/skills/flag-delete/scripts/delete.sh	write	codex-engine	flag
+plugins/soleur/skills/flag-delete/scripts/delete.sh	readonly	codex-engine --dry-run	flag
+plugins/soleur/skills/user-set-role/scripts/set-role.sh	write	3b1f4c2a-0000-4000-8000-00000000000a dev	flag
+plugins/soleur/skills/user-set-role/scripts/set-role.sh	readonly	3b1f4c2a-0000-4000-8000-00000000000a dev --dry-run	flag
+apps/web-platform/scripts/audit-sentry-extra-text-references.sh	write	--apply	sentry
+apps/web-platform/scripts/audit-sentry-extra-text-references.sh	readonly	-	sentry
+plugins/soleur/skills/provision-hetzner/scripts/provision-hetzner.sh	write	-	external:operator-script.test.sh

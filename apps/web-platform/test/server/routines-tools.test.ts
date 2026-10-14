@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockRunRoutine, mockListRoutines, mockListRuns } = vi.hoisted(() => ({
+const { mockRunRoutine, mockListRoutines, mockListRuns, mockTenant, mockRepoBind, mockWorkspace } = vi.hoisted(() => ({
   mockRunRoutine: vi.fn(),
   mockListRoutines: vi.fn(),
   mockListRuns: vi.fn(),
+  mockTenant: vi.fn(),
+  mockRepoBind: vi.fn(),
+  mockWorkspace: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/service", () => ({ getServiceClient: () => ({}) }));
@@ -11,6 +14,13 @@ vi.mock("@/server/routines/run-routine", () => ({ runRoutine: mockRunRoutine }))
 vi.mock("@/server/routines/list-routines", () => ({
   listRoutinesWithLastRun: mockListRoutines,
   listRecentRuns: mockListRuns,
+}));
+vi.mock("@/lib/supabase/tenant", () => ({ getFreshTenantClient: mockTenant }));
+vi.mock("@/server/workspace-resolver", () => ({ readWorkspaceIdFromDb: mockWorkspace }));
+vi.mock("@/server/agent-engine-persistence", () => ({
+  AgentEnginePersistenceRepository: class {
+    bind = mockRepoBind;
+  },
 }));
 
 import { buildRoutineTools } from "@/server/routines-tools";
@@ -29,6 +39,12 @@ beforeEach(() => {
   mockRunRoutine.mockReset();
   mockListRoutines.mockReset();
   mockListRuns.mockReset();
+  mockTenant.mockReset();
+  mockRepoBind.mockReset();
+  mockWorkspace.mockReset();
+  mockTenant.mockResolvedValue({});
+  mockWorkspace.mockResolvedValue("ws-1");
+  mockRepoBind.mockResolvedValue({ id: "engine-run-1" });
 });
 
 describe("routine tool tiers", () => {
@@ -64,10 +80,21 @@ describe("buildRoutineTools", () => {
         actorClass: "agent",
         confirmed: true,
         delegatingPrincipal: "op-1",
+        workspaceId: "ws-1",
+        bindRun: expect.any(Function),
       }),
     );
     expect(res.isError).toBeUndefined();
     expect(res.content[0].text).toContain("dispatched");
+  });
+
+  it("fails closed when the agent user's workspace is unbound", async () => {
+    mockWorkspace.mockResolvedValue(null);
+    const tool = getTool("routine_run");
+    const res = await tool.handler({ fnId: "cron-daily-triage" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain("workspace_unbound");
+    expect(mockRunRoutine).not.toHaveBeenCalled();
   });
 
   it("routine_run surfaces unknown_routine as an error", async () => {

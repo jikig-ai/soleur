@@ -2,7 +2,7 @@
 title: "ADR-031 — cc-dispatcher extraction: cc-workflow-end-messages"
 status: accepted
 date: 2026-05-15
-plan: knowledge-base/project/plans/2026-05-15-refactor-extract-cc-workflow-end-messages-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-refactor-extract-cc-workflow-end-messages-plan.md
 issue: 3243
 supersedes: none
 related: [ADR-022-sdk-as-router]
@@ -37,11 +37,13 @@ Prior extractions establish the cadence: PR #3608 (`mirrorWithDebounce` → `obs
 ## Consequences
 
 **Positive.**
+
 - Diff is maximally reviewable: the new module is data-only, the dispatcher edit is a -36-line block delete plus a single named import.
 - The exhaustiveness rail now lives next to the data it constrains; future readers see the copy-authoring obligation in the same file.
 - Re-establishes the per-extraction cadence after the multi-file drain in PR #3802.
 
 **Negative / out of scope.**
+
 - The `cc-dispatcher.ts:212` local re-derive (`export type WorkflowEndStatus = WorkflowEnd["status"]`) stays — still consumed by `TERMINAL_WORKFLOW_END_STATUSES`, `ABORT_FLUSH_STATUSES`, and `AbortFlushStatus`. Removing it would touch the abort-flush logic, which carries actual behavior risk; that's a separate ADR.
 - The `lib/types.ts` vs. runner enum drift (9 wire-protocol values vs. 7 emitted) is real and pre-existing. This PR does not reconcile it; a follow-up `code-review`-labeled issue captures the choice (extend the runner to emit the missing two, or narrow the wire enum).
 
@@ -57,7 +59,7 @@ Prior extractions establish the cadence: PR #3608 (`mirrorWithDebounce` → `obs
 - Status comment (`apps/web-platform/scripts/3243-status-comment.md`) — recommends this extraction by name at line 31.
 - ADR-022 — SDK-as-router context for the cc-soleur-go cluster.
 - Sibling-extraction precedents: PR #3608 (`mirrorWithDebounce`), PR #3670 (cluster drain), PR #3802 (deferred-scope-out drain).
-- Plan: `knowledge-base/project/plans/2026-05-15-refactor-extract-cc-workflow-end-messages-plan.md` — Research Reconciliation table verifies issue-body claims against current code; Enhancement Summary documents the type-source pivot caught at deepen time.
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-refactor-extract-cc-workflow-end-messages-plan.md` — Research Reconciliation table verifies issue-body claims against current code; Enhancement Summary documents the type-source pivot caught at deepen time.
 - Learning: `knowledge-base/project/learnings/2026-05-15-drain-plan-must-revalidate-issue-state-against-codebase.md` — applied here (file is 1927 LoC, not 937 as the issue body claimed).
 
 ## Amendment — 2026-05-15 (#3827)

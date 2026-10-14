@@ -6,22 +6,42 @@
 #
 # On success: pushes the Better Stack heartbeat (a DEAD probe therefore FAILS the heartbeat — P1-4)
 # and logs one OK line under SyslogIdentifier=luks-monitor (Vector ships it to Better Stack).
-# On ANY failed assert: exports the nine WL_* discriminating fields and calls workspaces-luks-emit.sh
+# On ANY failed assert: exports the WL_* discriminating fields and calls workspaces-luks-emit.sh
 # (a direct-curl Sentry envelope carrying feature=workspaces-luks / op=workspaces-luks-drift so the
-# sentry_issue_alert pages — DP-8), then exits non-zero. The probe is read-only; it mutates nothing.
+# sentry_issue_alert pages — DP-8), then exits non-zero. The probe is read-only on every persistent
+# object; the covered-inode check mounts a transient non-recursive bind of / under /run and removes it
+# in the same run.
 #
 # The passphrase is read ONLY via the pinned form `doppler secrets get WORKSPACES_LUKS_KEY --plain
-# --config prd_workspaces_luks` (R9 / workspaces-luks.tf:112) — NEVER `doppler run`/`download
+# --config "$KEY_CONFIG"` (R9 / workspaces-luks.tf:112; KEY_CONFIG is prd_workspaces_luks on web-1 and
+# prd_workspaces_luks_web on a fresh web host, from the boot env file, #9377) — NEVER `doppler run`/`download
 # --config prd_workspaces_luks`, which drag the root's ~116 prd secrets into env (the CWE-522 hole
-# the dedicated config exists to close). DOPPLER_TOKEN (the scoped workspaces-luks-boot service
-# token) + SOLEUR_SENTRY_DSN arrive via the unit's EnvironmentFile=/etc/default/luks-monitor,
-# provisioned via the cutover channel (ADR-119 §(e)).
+# the dedicated config exists to close). DOPPLER_TOKEN (the config-scoped service token) +
+# SOLEUR_SENTRY_DSN arrive via the unit's EnvironmentFile=/etc/default/luks-monitor; the token line
+# is owned by terraform_data.luks_monitor_token_install after the cutover's first write (ADR-119).
 set -uo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 # LOG_TAG is a REAL assignment (never an inline `logger -t` literal) — the drift-fixture contract
 # at inngest-heartbeat.sh: a heredoc-blind fixture derives the SYSLOG_IDENTIFIER set from
 # `^\s*(readonly\s+)?LOG_TAG="..."`. Must equal the vector.toml include_matches tag.
 LOG_TAG="luks-monitor"
+
+# (#6931) PROFILE. `standby` (written to /etc/default/luks-monitor by cloud-init on a FRESH host, never on
+# web-1) skips the shared Better Stack heartbeat push at the end: that heartbeat is web-1's dead-probe
+# switch, so a second pusher would mask a dead web-1 probe (the #8706 failure mode, one host over). A
+# standby's dead probe is caught by the daily verify leg instead, which fails on a stale or missing row.
+# Only the exact word `standby` changes anything: any other value (a typo, an empty string) keeps the
+# push, so a mis-set profile fails TOWARD the heartbeat, never away from it.
+PROFILE="${LUKS_MONITOR_PROFILE:-primary}"
+# The kernel's per-boot id, DIAGNOSTIC only: the probe row is per boot, the SOLEUR_FRESH_BOOT_READY row is
+# per INSTANCE (cloud-init runcmd), so the verify join is instance-level (probe newer than the green
+# readiness row), never boot_id equality (ADR-263). Lower-cased and charset-bound. The stderr redirect
+# precedes the `<` so a missing file stays silent (a redirect after the `<` is applied too late).
+BOOT_ID="$(tr 'A-F' 'a-f' 2>/dev/null < "${LUKS_MONITOR_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" | tr -cd '0-9a-f-' | head -c 36 || true)"
+[ -n "$BOOT_ID" ] || BOOT_ID=unknown
 
 MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"
 MAPPER_NAME="${WORKSPACES_MAPPER_NAME:-workspaces}"
@@ -73,8 +93,9 @@ export WL_DEVICE_TYPE WL_MOUNT_SOURCE WL_MAPPER_PRESENT WL_LUKS_OPEN_RESULT WL_H
 emit_and_die() {
   WL_REASON="$1"
   export WL_DEVICE_TYPE WL_MOUNT_SOURCE WL_MAPPER_PRESENT WL_LUKS_OPEN_RESULT WL_HEADER_UUID_MATCH \
-    WL_CRYPTSETUP_UNIT_RESULT WL_DOPPLER_REACHABLE WL_MOUNTPOINT_OK WL_REASON
-  log "FAIL ($WL_REASON): device_type=$WL_DEVICE_TYPE mount_source=$WL_MOUNT_SOURCE mapper_present=$WL_MAPPER_PRESENT luks_open_result=$WL_LUKS_OPEN_RESULT header_uuid_match=$WL_HEADER_UUID_MATCH cryptsetup_unit_result=$WL_CRYPTSETUP_UNIT_RESULT doppler_reachable=$WL_DOPPLER_REACHABLE mountpoint_ok=$WL_MOUNTPOINT_OK"
+    WL_CRYPTSETUP_UNIT_RESULT WL_DOPPLER_REACHABLE WL_MOUNTPOINT_OK \
+    WL_FSTAB_MNT_DATA_LINES WL_FSTAB_MAPPER_LINE WL_COVERED_INODE_IMMUTABLE WL_REASON
+  log "FAIL ($WL_REASON): device_type=$WL_DEVICE_TYPE mount_source=$WL_MOUNT_SOURCE mapper_present=$WL_MAPPER_PRESENT luks_open_result=$WL_LUKS_OPEN_RESULT header_uuid_match=$WL_HEADER_UUID_MATCH cryptsetup_unit_result=$WL_CRYPTSETUP_UNIT_RESULT doppler_reachable=$WL_DOPPLER_REACHABLE mountpoint_ok=$WL_MOUNTPOINT_OK fstab_mnt_data_lines=${WL_FSTAB_MNT_DATA_LINES:-unknown} fstab_mapper_line=${WL_FSTAB_MAPPER_LINE:-unknown} covered_inode_immutable=${WL_COVERED_INODE_IMMUTABLE:-unknown}"
   if command -v workspaces_luks_emit >/dev/null 2>&1; then
     WL_LEVEL=fatal workspaces_luks_emit
   else
@@ -165,8 +186,41 @@ WL_DEVICE_TYPE="${dev_type:-none}"
 [ "$dev_type" = "crypto_LUKS" ] || emit_and_die device_not_luks
 
 # 4. Escrow re-test: read the passphrase via the PINNED scoped-config form (R9), never doppler run.
-key="$(doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks 2>/dev/null || true)"
-if [ -n "$key" ]; then WL_DOPPLER_REACHABLE=true; else WL_DOPPLER_REACHABLE=false; emit_and_die doppler_unreachable; fi
+# (#9377) WHICH config: the one the boot env file names. A web-class host's cloud-init writes
+# WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web there; web-1's SSH installer writes prd_workspaces_luks. The file is
+# PARSED, never sourced (the provisioner's `_one` shape: exactly one ^KEY= line, then sed; the reopen script's
+# ^[a-z0-9_]+$ shape check), and the value must be in the closed set below. An absent file, an absent or ambiguous
+# line, or a value outside the set falls back to prd_workspaces_luks, so web-1 is unchanged and the boot file stays the
+# single source (no new env var in /etc/default/luks-monitor). A web-class host that falls back reads with a token
+# scoped to the web config, so the read fails and takes the doppler_unreachable branch below (Sentry
+# workspaces-luks-drift): loud, never silent. Only THIS read moves; the heartbeat read below stays on
+# prd_workspaces_luks because the standby profile web-2 runs skips it.
+BOOT_ENV_FILE="/etc/default/workspaces-luks-boot"
+[ "${LUKS_MONITOR_TEST_SEAM:-0}" = "1" ] && BOOT_ENV_FILE="${LUKS_MONITOR_BOOT_ENV_FILE:-$BOOT_ENV_FILE}"
+KEY_CONFIG=prd_workspaces_luks
+KEY_CONFIG_SRC=fallback-no-boot-file
+if [ -r "$BOOT_ENV_FILE" ]; then
+  KEY_CONFIG_SRC=fallback-no-config-line
+  if [ "$(grep -c '^WORKSPACES_DOPPLER_CONFIG=' "$BOOT_ENV_FILE" 2>/dev/null || true)" = 1 ]; then
+    KEY_CONFIG_SRC=fallback-bad-value
+    _kc="$(sed -n 's/^WORKSPACES_DOPPLER_CONFIG=//p' "$BOOT_ENV_FILE")"
+    if [[ "$_kc" =~ ^[a-z0-9_]+$ ]]; then
+      case "$_kc" in
+        prd_workspaces_luks|prd_workspaces_luks_web) KEY_CONFIG="$_kc"; KEY_CONFIG_SRC=boot-file ;;
+      esac
+    fi
+  fi
+fi
+key="$(doppler secrets get WORKSPACES_LUKS_KEY --plain --config "$KEY_CONFIG" 2>/dev/null || true)"
+if [ -n "$key" ]; then
+  WL_DOPPLER_REACHABLE=true
+else
+  WL_DOPPLER_REACHABLE=false
+  # A web-scoped token whose boot file fell back to prd_workspaces_luks fails here exactly like a Doppler outage; the line says which
+  # config was asked for and why, so the two are distinguishable from journald alone (observability review P2-4). Names only, no value.
+  log "key read failed: config=$KEY_CONFIG source=$KEY_CONFIG_SRC"
+  emit_and_die doppler_unreachable
+fi
 if printf '%s' "$key" | cryptsetup luksOpen --test-passphrase --key-file - "$real_dev" >/dev/null 2>&1; then
   WL_LUKS_OPEN_RESULT=ok
 else
@@ -188,6 +242,70 @@ fi
 : "${map_uuid:-}"  # informational; the device-header read above is the terminal-limb check
 
 # ---------------------------------------------------------------------------
+# 5b. #9123 review — DELIVERED-STATE asserts (cheap, host-side, every run)
+# ---------------------------------------------------------------------------
+# Steps 1-5 prove the LIVE mount state (mapper open, mounted, keyed). These
+# three prove the DELIVERY state the boot-unlock installer left behind has not
+# regressed — a re-image, a host-side edit, or a partial apply surfaces on the
+# daily probe long before a reboot does. They ride the same drift emit: a
+# regression here IS workspaces-luks-drift, not a new op.
+# The fstab target file and the peek attrs are seam-overridable ONLY under
+# LUKS_MONITOR_TEST_SEAM (same discipline as WORKSPACES_MAPPER_PATH): nothing in
+# prod sets the seam, and outside it both fall back to the real paths — a stray
+# env var cannot weaken the assert on the live host.
+WL_FSTAB_FILE=/etc/fstab
+WL_PEEK_ATTRS=""
+WL_PEEK_FAIL=0
+if [ "${LUKS_MONITOR_TEST_SEAM:-0}" = "1" ]; then
+  WL_FSTAB_FILE="${WL_FSTAB_FILE_OVERRIDE:-/etc/fstab}"
+  WL_PEEK_ATTRS="${WL_PEEK_ATTRS_OVERRIDE:-}"
+  WL_PEEK_FAIL="${WL_PEEK_FAIL_OVERRIDE:-0}"
+fi
+WL_FSTAB_MNT_DATA_LINES="$(awk '{ m=$2; sub(/\/+$/,"",m); if ($1 !~ /^#/ && m == "/mnt/data") n++ } END { print n+0 }' "$WL_FSTAB_FILE" 2>/dev/null || true)"
+WL_FSTAB_MNT_DATA_LINES="${WL_FSTAB_MNT_DATA_LINES:-unknown}"
+WL_FSTAB_MAPPER_LINE="$(awk '$1 == "/dev/mapper/workspaces" { f=1 } END { print f+0 }' "$WL_FSTAB_FILE" 2>/dev/null || true)"
+WL_FSTAB_MAPPER_LINE="${WL_FSTAB_MAPPER_LINE:-unknown}"
+export WL_FSTAB_MNT_DATA_LINES WL_FSTAB_MAPPER_LINE
+# The mount-point match normalizes trailing slashes on a COPY of $2 — the
+# installer's fstab writer shape; a `… /mnt/data/ …` line is the same mount.
+[ "$WL_FSTAB_MNT_DATA_LINES" = 1 ] || emit_and_die fstab_mnt_data_lines
+[ "$WL_FSTAB_MAPPER_LINE" = 1 ] || emit_and_die fstab_mapper_line_missing
+
+# The §(e) gate's covered-inode assert, via the SAME non-recursive `mount
+# --bind /` peek shape the installer's gate_writer uses — the mapper is mounted
+# on web-1, so `lsattr -d /mnt/data` would see the MAPPER's root inode, not the
+# covered root-disk one.
+if [ -n "$WL_PEEK_ATTRS" ] || [ "$WL_PEEK_FAIL" = "1" ]; then
+  # Test seam: the harness models the peek as an attrs string (or a bind
+  # failure); production never reaches this arm.
+  if [ "$WL_PEEK_FAIL" = "1" ]; then
+    WL_COVERED_INODE_IMMUTABLE=unknown
+  else
+    case "$WL_PEEK_ATTRS" in
+      *i*) WL_COVERED_INODE_IMMUTABLE=1 ;;
+      *)   WL_COVERED_INODE_IMMUTABLE=0 ;;
+    esac
+  fi
+else
+  WL_COVERED_INODE_IMMUTABLE=unknown
+  _lm_peek=/run/luks-monitor-peek
+  mkdir -p "$_lm_peek" 2>/dev/null || true
+  if mount --bind / "$_lm_peek" 2>/dev/null; then
+    case "$(lsattr -d "$_lm_peek/mnt/data" 2>/dev/null | awk '{print $1}')" in
+      *i*) WL_COVERED_INODE_IMMUTABLE=1 ;;
+      *)   WL_COVERED_INODE_IMMUTABLE=0 ;;
+    esac
+    while mountpoint -q "$_lm_peek" 2>/dev/null; do umount "$_lm_peek" 2>/dev/null || break; done
+    rmdir "$_lm_peek" 2>/dev/null || true
+  fi
+fi
+export WL_COVERED_INODE_IMMUTABLE
+if [ "$WL_COVERED_INODE_IMMUTABLE" = unknown ]; then
+  emit_and_die covered_inode_peek_failed
+fi
+[ "$WL_COVERED_INODE_IMMUTABLE" = 1 ] || emit_and_die covered_inode_not_immutable
+
+# ---------------------------------------------------------------------------
 # 6. #6807 — APPLICATION READINESS + WORKSPACE INVENTORY (flag-gated, default OFF)
 # ---------------------------------------------------------------------------
 # Steps 1-5 prove the volume is a correct LUKS container. They do NOT prove the application can
@@ -195,12 +313,11 @@ fi
 # unconditionally and never touches $MOUNT (server/index.ts), so it is the one endpoint in the
 # codebase GUARANTEED not to reflect the repointed volume.
 #
-# DEFAULT OFF, set to 1 only by workspaces-luks-verify.yml. The reason is NOT "it is slow": it is
-# that luks-monitor.service:5 carries `RequiresMountsFor=/mnt/data`, which makes the DAILY unit
-# structurally INERT in the reboot hazard (no mount => the unit does not run at all). Default-ON
-# therefore buys zero coverage in exactly the scenario it would be argued for, while adding a retry
-# budget to time-to-page on a real outage. The verify workflow's bare-file path has no such
-# RequiresMountsFor and CAN run in that state, which is why the flag lives there.
+# DEFAULT OFF, set to 1 only by workspaces-luks-verify.yml. The reason is NOT "it is slow": in the
+# reboot hazard (no mount) the daily unit dies earlier, at the not_mounted assert above, so
+# Default-ON buys no coverage in exactly the scenario it would be argued for, while adding a retry
+# budget to time-to-page on a real outage. (Until #8706 the unit carried RequiresMountsFor=/mnt/data
+# and did not run at all without the mount; it is now ordering-only — see luks-monitor.service.)
 #
 # ORDERING IS LOAD-BEARING: this runs BEFORE the heartbeat push below, so a host that is
 # LUKS-correct but cannot serve does not push a healthy beat.
@@ -246,16 +363,25 @@ if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
   # `0` is rejected as missing: a zero baseline makes `count -lt 0` false for EVERY count, so it is a
   # missing baseline wearing a number — an absorbing green a total wipe would pass. A real host never
   # has zero workspaces at a cutover, and wl_count_workspace_dirs already refuses to persist 0.
+  # The WIDTH bound is the third way this operand can defeat the comparison, and it is the one a
+  # character-class check cannot see: POSIX `[` exits 2 ("integer expected") above INT64_MAX, and
+  # inside an `if` under `set -uo pipefail` with no `-e` that reads as "not less than" — silently
+  # SKIPPING the comparison and falling through to the green verdict. Measured:
+  # `[ 0 -lt 99999999999999999999 ]` exits 2, so a total wipe reports PASS against a wide
+  # baseline. The comment below used to claim "BOTH operands guarded" while guarding only the
+  # character class of this one. 9 digits is far beyond any real inventory.
   case "${WL_WORKSPACE_COUNT_EXPECTED:-}" in
-    ''|0|*[!0-9]*) emit_readiness_and_die workspace_count_baseline_missing ;;
+    ''|0|*[!0-9]*|??????????*) emit_readiness_and_die workspace_count_baseline_missing ;;
   esac
-  # BOTH operands guarded. The baseline is validated above; validate the OBSERVED count too, because
+  # BOTH operands guarded, on BOTH axes (character class AND width — see the baseline case above,
+  # where a width-only escape silently skipped this comparison). Validate the OBSERVED count too,
+  # because
   # `[ <non-numeric> -lt N ]` exits 2 ("integer expected") and — inside an `if` under `set -uo
   # pipefail` with no `-e` — is read as "not less than", SILENTLY SKIPPING the comparison and falling
   # through to the green verdict. A fail-OPEN shape next to a fail-CLOSED one on the same assertion is
   # exactly the asymmetry this change removes. Latent today (the counter always prints an integer).
   case "${WL_WORKSPACE_COUNT:-}" in
-    ''|*[!0-9]*) emit_readiness_and_die workspace_count_unreadable ;;
+    ''|*[!0-9]*|??????????*) emit_readiness_and_die workspace_count_unreadable ;;
   esac
   # `-lt`, not `-ne`: users create workspaces between cutovers, so a GROWN inventory is healthy.
   # Only a SHRINK is the sole-copy data-loss signal.
@@ -272,14 +398,66 @@ if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
 fi
 
 # All asserts passed — push the heartbeat so a dead probe FAILS it (P1-4).
-hb_url="$(doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL --plain --config prd_workspaces_luks 2>/dev/null || true)"
-if [ -n "$hb_url" ]; then
-  # -g (--globoff): the URL is a bearer capability; without -g a URL with [ ]/{ } prints the full
-  # URL in curl's glob-parse error, which SyslogIdentifier would ship to Better Stack.
-  curl -gfsS --max-time 10 "$hb_url" >/dev/null 2>&1 || log "WARN: heartbeat push failed (URL present)"
+#
+# #6808 AC3 — BOTH arms below are FATAL, not WARN. Until the 2026-08-04 apply, an absent URL logged
+# a WARN and exited 0, so a never-configured probe and a dead probe were indistinguishable and
+# NEITHER paged: "a check that cannot report is indistinguishable from one that passed". The old
+# text ("operator wires it at cutover") described a deferred manual step that no longer exists —
+# the URL is provisioned by terraform as a REFERENCE to betteruptime_heartbeat.workspaces_luks.url
+# (doppler_secret.workspaces_luks_heartbeat_url, uptime-alerts.tf). Its absence is therefore a real
+# regression — a deleted secret, or a boot token that lost its prd_workspaces_luks scope — and
+# never the expected steady state.
+#
+# exit 3 (emit_readiness_and_die), NOT exit 1 (emit_and_die): this is a PROBE-INTEGRITY fault. By
+# the time control reaches here every at-rest assert above has PASSED, so the at-rest exit would
+# classify a broken ALERTING path as plaintext-at-rest — the p0 type/security verdict whose issue
+# body asserts the published Article 32 claim is false. Both reasons are registered in the
+# workflow's is_probe_integrity() + rc=3 headline branch and in the runbook triage table;
+# workspaces-luks-verify-workflow.test.sh (M)/(N) fail loudly if that drifts.
+#
+# NOTE ON WORDING: never write the at-rest helper's name followed by a bare lowercase word anywhere
+# in this file, comments included. The (M)/(N) parity gates derive the producible-reason set by
+# regex over the whole file, so `<helper> would classify ...` registers "would" as an emittable
+# reason and reds the gate. Existing prose uses the possessive form for exactly this reason.
+if [ "$PROFILE" = standby ]; then
+  log "standby profile: the shared heartbeat push is skipped (the daily verify leg is this host's dead-probe alarm)"
 else
-  log "WARN: WORKSPACES_LUKS_HEARTBEAT_URL absent — heartbeat not pushed (operator wires it at cutover)"
+hb_url="$(doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL --plain --config prd_workspaces_luks 2>/dev/null || true)"
+[ -n "$hb_url" ] || emit_readiness_and_die heartbeat_url_absent
+# -g (--globoff): the URL is a bearer capability; without -g a URL with [ ]/{ } prints the full
+# URL in curl's glob-parse error, which SyslogIdentifier would ship to Better Stack.
+#
+# RETRIED before it is fatal, unlike the absent-URL arm above. An absent secret is a config fault
+# that no retry can fix, but a push is one outbound HTTPS call: making a single transient egress
+# blip red the daily probe and file an issue would trade a silent gap for a noisy one. Three
+# attempts, each capped at 10s, 2s apart: ~36s worst case, well inside the unit's runtime. An
+# EXHAUSTED push is the same "cannot report" state as an absent URL, so it ends the same way.
+#
+# The URL's PATH is the credential (Better Stack heartbeat), so it must not ride curl's argument list
+# (readable by every local user in /proc/<pid>/cmdline; ADR-280, #9757): it reaches curl on the stdin
+# config (`--config -`); `--disable` (first, so no ~/.curlrc is read as root) and `--noproxy '*'` confine the transport (lint Rule D). This host
+# has no checkout, so this is the inline form of the library. The value is judged BEFORE the retry loop
+# and with no trimming: a scheme other than https://, an empty rest, or any byte outside
+# [A-Za-z0-9._~:/?&=%+-] (a quote, backslash or newline would add directives to the config grammar,
+# a control byte or space is no URL) is refused. A refusal prints one value-free marker, makes zero
+# requests and sleeps zero times, and ends as an exhausted push does (the same cannot-report state).
+hb_url_ok() {
+  local LC_ALL=C
+  case "$1" in https://*) ;; *) return 1 ;; esac
+  case "${1#https://}" in ''|*[!A-Za-z0-9._~:/?\&=%+-]*) return 1 ;; esac
+}
+if ! hb_url_ok "$hb_url"; then
+  case "$hb_url" in *[[:cntrl:]]*) hb_reason=control_char ;; *) hb_reason=token_shape ;; esac
+  log "SOLEUR_CREDENTIAL_REFUSED script=luks-monitor reason=$hb_reason var=WORKSPACES_LUKS_HEARTBEAT_URL"
+  emit_readiness_and_die heartbeat_push_failed
+fi
+hb_pushed=false
+for _ in 1 2 3; do
+  if curl --disable --noproxy '*' -gfsS --max-time 10 --config - >/dev/null 2>&1 < <(printf 'url = "%s"\n' "$hb_url"); then hb_pushed=true; break; fi
+  sleep 2
+done
+[ "$hb_pushed" = true ] || emit_readiness_and_die heartbeat_push_failed
 fi
 
-log "OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=$MAPPER escrow=ok header=readable)"
+log "OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=$MAPPER escrow=ok header=readable boot_id=$BOOT_ID)"
 exit 0

@@ -60,6 +60,15 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // Account profile (Art. 15: identification data).
   users: { ownerField: "id", article: "15" },
 
+  // Engine workspace defaults and immutable run records (migration 138).
+  workspace_engine_settings: { ownerField: "updated_by", article: "15" },
+  agent_engine_runs: { ownerField: "created_by", article: "15+20" },
+  agent_engine_events: {
+    ownerField: "run_id",
+    article: "15",
+    joinVia: { parentTable: "agent_engine_runs", parentJoinColumn: "run_id" },
+  },
+
   // BYOK encrypted credentials (Art. 15: encrypted ciphertext returned
   // base64-encoded; the user provided the underlying key, hence 15+20).
   api_keys: { ownerField: "user_id", article: "15+20" },
@@ -381,7 +390,8 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "(account-delete.ts), not Art. 15 export. The user-readable jobs " +
     "row in dsar_export_jobs already covers their own request history.",
 
-  // Operational state (no personal data).
+  // Operational state (no personal data) — covers the two entries immediately
+  // below; denied_jti after them IS personal data, on a different ground.
   user_concurrency_slots:
     "Operational concurrency-slot bookkeeping. Transient runtime state, " +
     "not personal data. Cleared on session end.",
@@ -390,35 +400,65 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "auto-deleted on 410 Gone. Per spec FR8 not enumerated as Art. 15 " +
     "personal data. The user can revoke via browser permissions.",
   denied_jti:
-    "Runtime-JWT revocation list (security telemetry). The jti is a " +
-    "random-ID per token, not user-provided content; rows index a " +
-    "user only as a side-effect of the mint event. Per spec FR8 not " +
-    "enumerated as Art. 15 personal data.",
+    "Runtime-JWT revocation list (security telemetry). Excluded from the " +
+    "bulk export — but NOT on the ground that the table holds no personal " +
+    "data. The `reason` column is an operator-authored statement about an " +
+    "identified account holder, recorded as a category at Article 30 " +
+    "register PA-1 (c). The subject-facing read path is a dedicated RPC " +
+    "rather than this export: my_revocation_status() returns denied_at " +
+    "and reason for the caller's most recent revocation, withholding jti " +
+    "as an enumeration-oracle mitigation. The jti itself is a random " +
+    "per-token ID, not user-provided content, and is deliberately not " +
+    "exported. KNOWN GAP: that RPC returns the latest revocation only, so " +
+    "earlier reason values are not self-serve reachable; Article 15 " +
+    "requests for full revocation history route manually to " +
+    "legal@jikigai.com.",
   mint_rate_window:
     "Per-founder JWT-mint rate-limit counter (security telemetry). " +
-    "Rolling 60/hour bucket; no user-provided content. Per spec FR8 " +
-    "not enumerated as Art. 15 personal data.",
+    "Rolling 60/hour bucket; no user-provided content. Excluded on that " +
+    "ground, not on an impersonality ground — the counter is keyed to the " +
+    "account, and docs/legal/data-protection-disclosure.md says so.",
   runtime_mint_intent:
     "Runtime-JWT mint marker (Phase-4 hook discriminator, ADR-033 §0.7). " +
     "≤10-second lifetime row written by tenant.ts before generateLink " +
     "and atomically DELETEd by the Custom Access Token Hook. " +
     "Ephemeral by design — no row survives past the mint flow. ON DELETE " +
     "CASCADE from auth.users handles any edge-case orphan on user delete. " +
-    "No user-provided content; user_id is the only column and is already " +
-    "in the DSAR's auth.users export. Per spec FR8 not enumerated as " +
-    "Art. 15 personal data.",
+    "No user-provided content; user_id is the only column. NOTE (#7487): " +
+    "this reason previously said that column is 'already in the DSAR's " +
+    "auth.users export' -- there is no auth.users export in the bundle. " +
+    "The ground is ephemerality (no row survives the mint flow), not " +
+    "duplication, and not impersonality — the row is keyed to the account " +
+    "while it exists; see docs/legal/data-protection-disclosure.md.",
   // feat-team-workspace-multi-user — `user_session_state` remains
   // excluded after Phase 7 promotion of organizations + workspaces +
   // workspace_members + workspace_member_attestations. The single row's
-  // `current_organization_id` is duplicated into the JWT custom claim
-  // `app_metadata.current_organization_id` which is already part of the
-  // auth.users export. No user-provided content; transient UX
-  // preference. ON DELETE CASCADE from auth.users handles Art. 17.
+  // `current_organization_id` is injected into the minted token's claims by
+  // migration 060's access-token hook, which READS it from this table. It is
+  // not persisted on auth.users, and there is no auth.users export in the
+  // bundle -- see #7487. No user-provided content; transient UX preference.
+  // ON DELETE CASCADE from auth.users handles Art. 17.
   user_session_state:
-    "Per-user UX preference (current_organization_id) duplicated in JWT " +
-    "custom claim app_metadata.current_organization_id which is already " +
-    "part of the auth.users export. No user-provided content. ON DELETE " +
-    "CASCADE from auth.users handles Art. 17 erasure.",
+    "Per-user UX preference (current_organization_id). NOTE (#7487): the " +
+    "previous reason here claimed this value is 'already part of the " +
+    "auth.users export'. There is NO auth.users export in the bundle, and " +
+    "the value is not on the auth record either -- migration 060's access- " +
+    "token hook reads it from THIS table and injects it into the claims of " +
+    "the token being minted. Do not restate the old ground; it was lifted " +
+    "into published legal text once already. No user-provided content. " +
+    "ON DELETE CASCADE from auth.users handles Art. 17 erasure.",
+
+  email_inbox_routes:
+    "Inbound email routing configuration (migration 155, ADR-269, #9458): " +
+    "recipient address -> (workspace_id, owner_user_id). User-linked " +
+    "service configuration with no message or correspondent content; only " +
+    "operator-workspace rows are honoured today (the resolver refuses any " +
+    "other) and the table ships empty. REVISIT AND REMOVE THIS EXCLUSION " +
+    "before any non-operator route is enabled (#9459): owner_user_id is a " +
+    "user identifier and a per-user address could be derived from a " +
+    "personal name. Art. 17 handled by the composite FK to " +
+    "workspace_members ON DELETE CASCADE (a route never blocks account or " +
+    "workspace deletion).",
 
   tenant_deploy_audit:
     "Multi-tenant deploy substrate orchestration-plane meta-audit log " +
@@ -469,6 +509,23 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "executions, not user-profile data. Promote to DSAR_TABLE_ALLOWLIST " +
     "(actor_id, Art. 15) when a non-Soleur tenant exists or the " +
     "dsar-export.ts chain is wired.",
+
+  // #8918 (migration 144): pending-checkout claim row — one row per
+  // in-flight POST /api/checkout keyed by user_id. Columns are Stripe
+  // session_id + the tier the user selected (an enumerated value, not
+  // free-form content) + created_at — operational bookkeeping for an
+  // in-progress purchase. Transient by design: DELETEd on
+  // checkout.session.completed / checkout.session.expired, on route
+  // reclaim paths (terminal session, stale null marker past
+  // STALE_NULL_MARKER_MS, different-tier expire), and by a daily 24h
+  // retention sweep. The durable subscription record the row gates lives
+  // on `users` (exported) and at Stripe (processor of record).
+  pending_checkout_sessions:
+    "Transient pending-checkout claim (migration 144). Operational " +
+    "bookkeeping for an in-flight purchase — Stripe session_id + " +
+    "user-selected tier (enumerated) + timestamp; deleted on " +
+    "completion/expiry/reclaim plus a daily 24h sweep. Art. 17 " +
+    "satisfied by ON DELETE CASCADE from public.users.",
 
   // #5274 (Phase 2, ADR-068 §2): per-worktree write-lease coordination state.
   // workspace_id is the only user-transitive FK; the remaining columns

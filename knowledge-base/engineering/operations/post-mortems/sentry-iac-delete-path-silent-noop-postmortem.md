@@ -31,6 +31,7 @@ art_33_deadline: "n/a — availability/observability/cost incident with zero per
 The failure was **latent and self-concealing**: adding a monitor worked (block + target line), removing one silently no-op'd, and the workflow's own comment documented a prior instance of the leak that nobody re-checked.
 
 **Consequences:**
+
 - Monitor count grew **8 → 49 in two months and never once decreased** — because nothing could make it.
 - `sentry_cron_monitor.scheduled_ghcr_token_minter` was orphaned by #6074 (which removed its block AND its target line together — the intuitive edit) and has been live + unreclaimable at $0.78/mo since, carrying a 12-day unresolved incident on the resource it monitored.
 - `sentry_issue_alert.kb_tenant_mint_silent_fallback` was orphaned by #4929 (superseded, never destroy-applied).
@@ -61,6 +62,7 @@ The secondary cause is that the leak was **documented in prose and never re-chec
 5. **Ledger + cost model corrected** against a live read.
 
 The learnings capturing the mechanism in depth are already committed:
+
 - `2026-07-17-target-scoped-terraform-apply-makes-resource-deletion-a-silent-noop.md` — the root-cause mechanism.
 - `2026-07-17-a-detector-placed-before-the-cure-blocks-it.md` — Class D deadlock (a fail-closed detector firing for the wrong reason).
 - `2026-07-17-a-copy-adapted-gate-drifted-in-the-half-i-did-not-parity-pin.md` — the PR-time gate shipped permanently-red via a dropped line.
@@ -75,7 +77,7 @@ Nothing watched the live↔IaC direction. `sentry-monitors-audit.sh` checked A/B
 | Issue | Item | Status |
 |---|---|---|
 | #6606 | Import the unmanaged live uptime monitor `1422253` (`app.soleur.ai`) into Terraform — it is the only Sentry uptime coverage of the app and was nearly deleted as a "dead orphan" (the same not-in-Terraform ≠ dead confusion this incident is about, in mirror image). | open |
-| #6612 | Add `apps/web-platform/infra/sentry` to `scheduled-terraform-drift` so "declared ≡ applied" has a monitor — closes the detection gap that let this incident run latent. Needs raw-`SENTRY_AUTH_TOKEN` plumbing. | open |
+| #6612 | Add `apps/web-platform/infra/sentry` to `scheduled-terraform-drift` so "declared ≡ applied" has a monitor — closes the detection gap that let this incident run latent. Needs raw-`SENTRY_AUTH_TOKEN` plumbing. | closed by PR #8679 |
 | #6602 | ~$84/mo of COGS on unverified estimates whose verify-by dates passed — the same "estimate that outlives its verify-by date" class that let the Sentry line sit 78% wrong for five weeks. | open |
 
 ## Prevention

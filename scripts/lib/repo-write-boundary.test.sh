@@ -1,0 +1,1573 @@
+#!/usr/bin/env bash
+# Guard 2, unit arm — tests for scripts/lib/repo-write-boundary.sh (#7652).
+#
+# WHAT THIS FILE IS FOR. `scripts/test-all.sh` claims, in capitals, that "A SUITE WROTE TO THE
+# LIVE REPOSITORY" — while inspecting only `git rev-parse HEAD` and `git status --porcelain`.
+# Those two are structurally blind to the write that motivated the claim: on 2026-08-20 a fixture
+# put `commit.gpgsign=false` into the SHARED bare-repo config, which touches neither HEAD nor the
+# porcelain, and six commits were then created unsigned across every worktree on the machine. A
+# message that names a cause its check cannot observe is an ADR-166 violation; the fix is to widen
+# the check and RENDER the claim from what was actually measured, never from a literal list.
+#
+# So the properties under test here are not "does it hash things". They are:
+#   (a) each dimension actually SEES its own write class (config, refs, HEAD, worktree, shallow);
+#   (b) the carve-outs remove ONLY tooling churn, and specifically do NOT remove `branch.*.remote`
+#       / `.merge`, which `git push -u` and `checkout -b --track` write and which are therefore the
+#       one config trace a `git -C "" checkout -b` escape leaves behind;
+#   (c) no config VALUE ever reaches the output — the digest is not an optimisation, it is what
+#       keeps `credential.*` and `http.*.extraheader` out of a log that gets pasted into issues;
+#   (d) the manifest is the single source of truth for the rendered claim, so a narrowed check
+#       narrows the claim with it.
+set -uo pipefail
+# repo-write-boundary-sandbox: tests-refusal arms 23/24 deliberately build sandboxes WITHOUT the
+# lib (and with a stale one) to prove the runner refuses. This file must never be read as a
+# relocator that forgot to copy it.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB="$SCRIPT_DIR/repo-write-boundary.sh"
+
+TMP_ROOT=$(mktemp -d -t repowriteboundary.XXXXXXXX) || { echo "FATAL: cannot create scratch root" >&2; exit 2; }
+: "${TMP_ROOT:?}"
+[[ "$TMP_ROOT" == /* && -d "$TMP_ROOT" ]] || { echo "FATAL: bad scratch root '$TMP_ROOT'" >&2; exit 2; }
+readonly TMP_ROOT
+trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
+
+passes=0; fails=0; asserted=0
+pass() { echo "  PASS: $1"; passes=$((passes + 1)); }
+fail() { echo "  FAIL: $1"; fails=$((fails + 1)); }
+# Incremented at the CALL SITE, never inside pass()/fail(): the conservation check at the bottom
+# exists to detect a neutered verdict helper, and a counter living inside the helper it polices
+# cannot do that (ADR-193).
+ck() { asserted=$((asserted + 1)); }
+
+# INSTRUMENT SELF-TEST (#7795 review). Both anti-vacuity backstops below key on `passes`, and the
+# edit a person silencing a red would actually make -- `fail() { echo "  PASS: $1"; passes=$((passes
+# + 1)); }` -- INFLATES that counter. Measured: with a real classifier defect present it reported
+# `52 passed, 0 failed`, exit 0, byte-identical to a clean run, while the control reported
+# `48 passed, 4 failed`, exit 1. Conservation did not see it either, because the verdict WAS
+# recorded, just to the wrong counter.
+#
+# So drive both helpers once and require each to move its OWN counter. Reported with `printf` +
+# `exit 1` rather than through `fail()`, for the same reason as the floor: a check dispatched
+# through the helper it backstops cannot witness that helper.
+# Output suppressed with a BRACE GROUP, never `$( )`: a command substitution runs in a subshell,
+# which would discard the very counter updates being measured -- this file's own defect class.
+_it_p=$passes; _it_f=$fails; _it_a=$asserted
+{ pass "instrument self-test"; fail "instrument self-test"; } >/dev/null
+if (( passes != _it_p + 1 || fails != _it_f + 1 )); then
+  printf '\n[FATAL] instrument self-test: pass()/fail() did not each move their OWN counter\n' >&2
+  printf '        (passes %d->%d, expected %d; fails %d->%d, expected %d).\n' \
+    "$_it_p" "$passes" "$((_it_p + 1))" "$_it_f" "$fails" "$((_it_f + 1))" >&2
+  printf '        A verdict helper that records the wrong outcome silences every arm below.\n' >&2
+  exit 1
+fi
+passes=$_it_p; fails=$_it_f; asserted=$_it_a
+unset _it_p _it_f _it_a
+
+[[ -f "$LIB" ]] || { echo "FATAL: missing $LIB" >&2; exit 2; }
+
+# A probe repository, standing in for "the caller's live repo". Every case operates on a FRESH
+# one: a case that inherits the previous case's writes measures the wrong delta.
+new_probe() { # new_probe <name> -> prints an absolute path
+  # Two statements, not one `local a=.. b=$a`: bash expands every word of a `local` before it
+  # performs any of its assignments, so the second would read an unbound `$name` under `set -u`.
+  local name="${1:?probe name required}"
+  local d="$TMP_ROOT/$name"
+  mkdir -p "$d" || return 1
+  git -C "$d" init -q -b main || return 1
+  git -C "$d" config user.email t@t.dev || return 1
+  git -C "$d" config user.name t || return 1
+  git -C "$d" commit -q --allow-empty -m seed || return 1
+  printf '%s\n' "$d"
+}
+
+# Fixture git, run with GLOBAL and SYSTEM config pinned empty — the same hermeticity `state()` and
+# `classify_in()` already give the MEASUREMENT, extended to the fixture MUTATIONS that produce what
+# is measured. Without it the operator's global gitconfig leaks in: it forces signed/annotated tags
+# here (which is why arm 36 carries `-c tag.gpgSign=false` inline), and a machine with global commit
+# signing would break the arms below that create a commit. Copying `-c` flags into each arm is the
+# alternative; this is one seam instead.
+#
+# SCOPE, stated because the first draft of this comment overclaimed it (#7795 review): `pgit` covers
+# the MUTATIONS the new arms make, not the fixture SEED. `new_probe` and `sibling_probe` still run
+# plain `git init` / `config` / `commit` / `worktree add` under the operator's global config, as they
+# did before this change. Widening them is a separate, whole-suite change: `new_probe` deliberately
+# does NOT pin `commit.gpgsign`, because arm 4 writes exactly that key as its fixture.
+#
+# `--local` config is untouched here on purpose (see the arm-4 note above).
+pgit() { env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git "$@"; }
+
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires
+# the verbatim body; see plugins/soleur/test/test-helpers.sh).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+# A tag fixture that cannot CONTAIN the thing an arm looks for is not a test, so its failure is a
+# loud FIXTURE error rather than a phantom SUT one (arm 36 established this shape at its own
+# precondition check). Every new tag-writing arm routes through here.
+require_tag() { # require_tag <probe-dir> <tag-name> <what-this-arm-measures>
+  local d="${1:?}" t="${2:?}" what="${3:?}"
+  if ! pgit -C "$d" show-ref --tags --quiet -- "refs/tags/$t"; then
+    printf '[FATAL] fixture setup failed: could not create refs/tags/%s in %s.\n' "$t" "$d" >&2
+    printf '        This arm cannot measure %s without it.\n' "$what" >&2
+    exit 1
+  fi
+}
+
+# Snapshot the probe by running the lib with the probe as CWD. `state` sets STATE_OUT / STATE_RC
+# in the CALLER's scope rather than returning through `$( )`: a subshell would discard them, which
+# is the very defect class this branch exists to close.
+state() { # state <dir> [extra env assignments...]
+  local dir="${1:?dir required}"; shift
+  # GLOBAL/SYSTEM config pinned empty. Without this, "the config dimension reads --local" was
+  # killed only by this machine happening to have a populated ~/.gitconfig — on a bare CI image
+  # dropping `--local` would have survived, and the arm would have been measuring the environment.
+  STATE_OUT=$(cd "$dir" && env REPO_BOUNDARY_SALT=fixed-test-salt \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null "$@" \
+    bash -c 'source "'"$LIB"'"; _repo_state' 2>"$TMP_ROOT/err")
+  STATE_RC=$?
+}
+
+echo "repo-write-boundary.test.sh"
+
+# --- 1. The named function set is defined ------------------------------------------------
+# Mirrors the _TC_LIB shape: `test -f` proves a file exists, never that it defines what the
+# caller will call. A STALE lib must be named, not silently narrow the gate.
+ck
+missing=""
+for fn in _repo_state repo_boundary_manifest \
+          repo_boundary_render_inspected repo_boundary_render_not_inspected \
+          repo_boundary_classify; do
+  bash -c 'source "'"$LIB"'"; declare -F '"$fn"' >/dev/null' || missing="$missing $fn"
+done
+if [[ -z "$missing" ]]; then pass "every named function is defined"
+else fail "lib is missing:$missing"; fi
+
+# --- 2. The manifest names every dimension -----------------------------------------------
+ck
+p=$(new_probe manifest) || { echo "FATAL: probe setup failed" >&2; exit 2; }
+man=$(cd "$p" && bash -c 'source "'"$LIB"'"; _repo_state >/dev/null; repo_boundary_manifest')
+# `wt` is a classification INPUT (it decides refs FATAL vs REPORT), and a classification input
+# outside the manifest is the exact thing this design exists to prevent. `shallow` is the #7924
+# dimension: `.git/shallow` lives in the COMMON dir, invisible to `git status`, and a depth-bounded
+# fetch into the live repo moved it under every suite until this row existed.
+if [[ "$(printf '%s\n' "$man" | awk '{print $1}' | sort | tr '\n' ' ')" == "config head refs shallow worktree wt " ]]; then
+  pass "manifest enumerates head, worktree, config, refs, shallow, wt"
+else
+  fail "manifest dimensions wrong: $(printf '%s' "$man" | tr '\n' '|')"
+fi
+
+# --- 3. A clean re-read is stable ----------------------------------------------------------
+ck
+p=$(new_probe stable) || exit 2
+state "$p"; a="$STATE_OUT"; arc=$STATE_RC
+state "$p"; b="$STATE_OUT"
+if [[ $arc -eq 0 && "$a" == "$b" && -n "$a" ]]; then pass "two reads of an unchanged repo are identical"
+else fail "unstable snapshot (rc=$arc)"; fi
+
+# --- 4. ROW 1 — a shared-config write is SEEN ----------------------------------------------
+# The instance-1 regression. This is the write the narrow form cannot see, and the entire reason
+# this lib exists.
+ck
+p=$(new_probe cfgwrite) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local commit.gpgsign false
+state "$p"; after="$STATE_OUT"
+if [[ "$before" != "$after" ]]; then pass "a git config --local write changes the snapshot"
+else fail "config write invisible — this is the #7652 instance-1 regression"; fi
+
+# --- 5. ROW 1 control — the NARROW form does NOT see it -------------------------------------
+# AC2's control arm. Without this, "the widened form reports it" is a claim with no contrast.
+ck
+p=$(new_probe cfgnarrow) || exit 2
+narrow() { (cd "$1" && git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | sha256sum); }
+nb=$(narrow "$p")
+git -C "$p" config --local commit.gpgsign false
+na=$(narrow "$p")
+if [[ "$nb" == "$na" ]]; then pass "control: the pre-#7652 narrow snapshot is blind to a config write"
+else fail "control invalid — the narrow form saw the config write"; fi
+
+# --- 6. ROW 10 / AC7 — no config VALUE reaches the output -----------------------------------
+# Asserted against BOTH key families that carry a credential in the wild: `credential.*` (local
+# dev) and `http.*.extraheader` (the CI vector — this is how Actions injects its token).
+ck
+p=$(new_probe secrets) || exit 2
+git -C "$p" config --local credential.helper 'store --file=/tmp/SECRET-HELPER-VALUE'
+git -C "$p" config --local http.https://example.invalid/.extraheader 'Authorization: basic SECRET-CI-TOKEN'
+state "$p"
+leaked=""
+grep -qF 'SECRET-HELPER-VALUE' <<<"$STATE_OUT" && leaked="$leaked credential.helper"
+grep -qF 'SECRET-CI-TOKEN'    <<<"$STATE_OUT" && leaked="$leaked http.extraheader"
+if [[ -z "$leaked" ]]; then pass "no config value reaches the output (credential.* and http.*.extraheader)"
+else fail "config VALUE leaked into boundary output:$leaked"; fi
+
+# --- 7. ... but the KEY NAME is kept, and a value CHANGE is still detected -------------------
+# Digesting must not degrade into discarding: a snapshot that drops values entirely would go blind
+# to `commit.gpgsign` flipping true->false, which is instance 1 with an extra step.
+ck
+p=$(new_probe valuechange) || exit 2
+git -C "$p" config --local commit.gpgsign true
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local commit.gpgsign false
+state "$p"; after="$STATE_OUT"
+if [[ "$before" != "$after" ]] && grep -q 'commit.gpgsign' <<<"$after"; then
+  pass "a value CHANGE is detected and the key name is retained"
+else
+  fail "value change undetected or key name dropped"
+fi
+
+# --- 8. Must-PASS — branch.*.vscode-merge-base is carved out ---------------------------------
+ck
+p=$(new_probe vscode) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local branch.main.vscode-merge-base origin/main
+state "$p"; after="$STATE_OUT"
+if [[ "$before" == "$after" ]]; then pass "branch.*.vscode-merge-base is tooling churn and is carved out"
+else fail "vscode-merge-base churn is not carved out"; fi
+
+# --- 9. ROW 12 (config half) — branch.*.remote / .merge are NOT carved out --------------------
+# The composition row. A blanket `branch.*` cut is individually defensible and, composed with a
+# refs REPORT class, makes `git -C "" checkout -b probe origin/main` invisible in BOTH dimensions
+# at once. `git push -u` writes exactly these two keys, so they are the trace an escape leaves.
+ck
+p=$(new_probe branchtrack) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local branch.probe.remote origin
+git -C "$p" config --local branch.probe.merge refs/heads/probe
+state "$p"; after="$STATE_OUT"
+if [[ "$before" != "$after" ]]; then pass "branch.*.remote/.merge remain inspected (composition hole closed)"
+else fail "branch.*.remote/.merge were carved out — the composition hole is open"; fi
+
+# --- 10. ROW 4 — a commit (HEAD move) is seen ------------------------------------------------
+ck
+p=$(new_probe headmove) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" commit -q --allow-empty -m second
+state "$p"; after="$STATE_OUT"
+if [[ "$before" != "$after" ]]; then pass "a commit moves HEAD and is seen"
+else fail "HEAD move invisible"; fi
+
+# --- 11. ROW 2 — a ref moving while HEAD stays put is seen ------------------------------------
+# The 2026-08-20 shape: a fixture moved a branch ref that was not the checked-out one.
+ck
+p=$(new_probe refmove) || exit 2
+git -C "$p" branch other
+state "$p"; before="$STATE_OUT"
+git -C "$p" commit -q --allow-empty -m tip
+git -C "$p" update-ref refs/heads/other "$(git -C "$p" rev-parse HEAD)"
+git -C "$p" reset -q --hard HEAD~1
+state "$p"; after="$STATE_OUT"
+if [[ "$before" != "$after" ]]; then pass "a non-checked-out ref moving is seen"
+else fail "ref move invisible"; fi
+
+# --- 12. ROW 3 — deleting every local ref is FATAL, not not-measured --------------------------
+# `git show-ref` exits 1 on NO REFS. Treating that as a capture failure would fail OPEN on the
+# most destructive outcome the dimension has.
+ck
+p=$(new_probe refdel) || exit 2
+git -C "$p" branch doomed
+state "$p"; mid="$STATE_OUT"
+git -C "$p" branch -D doomed -q 2>/dev/null
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$mid" "$after")
+if [[ "$mid" != "$after" ]] && grep -q 'FATAL' <<<"$verdict"; then
+  pass "a ref DELETION classifies FATAL (show-ref rc=1 is not read as unmeasured)"
+else
+  fail "ref deletion not FATAL: verdict='$(printf '%s' "$verdict" | tr '\n' '|')'"
+fi
+
+# --- 13. Must-PASS — a remote-tracking ref update does not fire --------------------------------
+ck
+p=$(new_probe remoteref) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" update-ref refs/remotes/origin/main "$(git -C "$p" rev-parse HEAD)"
+state "$p"; after="$STATE_OUT"
+if [[ "$before" == "$after" ]]; then pass "refs/remotes/** is excluded"
+else fail "a remote-tracking ref update fired the boundary"; fi
+
+# --- 14. Must-PASS — a .git/hooks change does not fire -----------------------------------------
+# Hooks are named in the not-inspected list; `lefthook install` must not red the gate.
+ck
+p=$(new_probe hooks) || exit 2
+state "$p"; before="$STATE_OUT"
+printf '#!/bin/sh\nexit 0\n' > "$p/.git/hooks/pre-commit"; chmod +x "$p/.git/hooks/pre-commit"
+state "$p"; after="$STATE_OUT"
+if [[ "$before" == "$after" ]]; then pass ".git/hooks is not a dimension and does not fire"
+else fail "a hook install fired the boundary"; fi
+
+# --- 15. Must-PASS — an already-dirty tree that stays equally dirty does not fire ---------------
+ck
+p=$(new_probe dirty) || exit 2
+echo dirt > "$p/dirt.txt"
+state "$p"; before="$STATE_OUT"
+state "$p"; after="$STATE_OUT"
+if [[ "$before" == "$after" ]]; then pass "a stably-dirty tree is not a delta"
+else fail "a stably-dirty tree reported a delta"; fi
+
+# --- 16. ROW 5 — the guard's own dispatch: an unreadable HEAD returns non-zero ------------------
+# Whole-function degrade-OPEN. The runner must be able to print an honest not-measured NOTE
+# rather than a silent clean claim.
+ck
+notrepo="$TMP_ROOT/notrepo"; mkdir -p "$notrepo"
+state "$notrepo" "GIT_CEILING_DIRECTORIES=$TMP_ROOT"
+if [[ $STATE_RC -ne 0 ]]; then pass "outside a repository _repo_state returns non-zero (degrade open)"
+else fail "_repo_state returned 0 outside a repository — a clean claim with no measurement"; fi
+
+# --- 17. ROW 14/15 — the rendered claim comes from the MANIFEST, not a literal -------------------
+# A stale lib measuring three dimensions beside a four-dimension claim is #7652 one layer up.
+# Drop a dimension from the manifest and the inspected list must shrink with it.
+ck
+p=$(new_probe manifestrender) || exit 2
+# Driven through a real SNAPSHOT rather than by stubbing repo_boundary_manifest, because that is
+# how the runner calls it: `before="$(_repo_state)"` is a command substitution, so a stubbed
+# global would not survive to the render anyway. Stripping the config manifest row is what a
+# STALE lib measuring three dimensions actually produces.
+full=$(cd "$p" && bash -c 'source "'"$LIB"'"; s="$(_repo_state)"; repo_boundary_render_inspected "$s"')
+narrowed=$(cd "$p" && bash -c 'source "'"$LIB"'"
+  s="$(_repo_state | grep -v "^manifest	config	")"
+  repo_boundary_render_inspected "$s"')
+if grep -qi 'config' <<<"$full" && ! grep -qi 'config' <<<"$narrowed"; then
+  pass "the inspected list renders from the manifest and shrinks with it"
+else
+  fail "inspected list is a literal, not a manifest render"
+fi
+
+# --- 18. The not-inspected list names the classes a reader will otherwise assume covered ---------
+ck
+ni=$(cd "$p" && bash -c 'source "'"$LIB"'"; s="$(_repo_state)"; repo_boundary_render_not_inspected "$s"')
+miss=""
+for anchor in 'push to a remote' 'objects' 'hooks' 'vscode-merge-base' 'remote-tracking' 'reflog' 'did not start' 'info/grafts'; do
+  grep -qi -- "$anchor" <<<"$ni" || miss="$miss [$anchor]"
+done
+if [[ -z "$miss" ]]; then pass "the not-inspected list names every class a reader would assume covered"
+else fail "not-inspected list is missing:$miss"; fi
+
+# --- 19. Harm class — this worktree's own checked-out branch moving is FATAL ----------------------
+ck
+p=$(new_probe ownbranch) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" commit -q --allow-empty -m advance
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -q 'FATAL' <<<"$verdict"; then pass "moving this worktree's checked-out branch is FATAL"
+else fail "own-branch move not FATAL: '$(printf '%s' "$verdict" | tr '\n' '|')'"; fi
+
+# --- 20. Harm class — a branch checked out in ANOTHER worktree is REPORT, not FATAL ---------------
+# Measured from `git worktree list`, so it is a read of the ref store rather than a concurrency
+# sniff — which is what disqualified the ${CI:-} severity tier.
+ck
+p=$(new_probe siblingwt) || exit 2
+git -C "$p" branch sibling
+git -C "$p" worktree add -q "$TMP_ROOT/siblingwt-checkout" sibling 2>/dev/null
+state "$p"; before="$STATE_OUT"
+git -C "$p" update-ref refs/heads/sibling "$(git -C "$p" rev-parse HEAD)" 2>/dev/null
+git -C "$p" commit -q --allow-empty -m advance-for-sibling
+git -C "$p" update-ref refs/heads/sibling "$(git -C "$p" rev-parse HEAD)"
+git -C "$p" reset -q --hard HEAD~1
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -q 'REPORT' <<<"$verdict" && ! grep -q 'FATAL' <<<"$verdict"; then
+  pass "a branch checked out in another worktree classifies REPORT, not FATAL"
+else
+  fail "sibling-worktree branch harm class wrong: '$(printf '%s' "$verdict" | tr '\n' '|')'"
+fi
+
+# ==============================================================================================
+# RUNNER INTEGRATION. The lib being correct is half the property; the other half is that
+# `scripts/test-all.sh` actually calls it, calls it in the right WINDOW, and cannot print a claim
+# the lib did not produce. These arms drive the real runner as SUT.
+# ==============================================================================================
+
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+RUNNER="$REPO_ROOT/scripts/test-all.sh"
+
+# --- 21. The lib is sourced, and sourced ABOVE tc_acquire ---------------------------------------
+# Placement is load-bearing, not style: both SUT-sandbox suites splice out everything between
+# `tc_acquire "test-all"` and `tc_epilogue`, and the end block runs under `set -u`. A source line
+# or a boundary variable below the anchor is deleted in those sandboxes, and the failure surfaces
+# as two unrelated red suites rather than as this one.
+ck
+# Anchored on the SOURCE STATEMENT, not the lib's filename. The filename first matches the
+# `_RWB_LIB=` assignment — so moving `source` below tc_acquire while leaving the assignment in
+# place kept this green, which is the exact failure the arm exists to prevent. Its second match is
+# a `# shellcheck source=` COMMENT.
+src_ln=$(grep -nE '^[[:space:]]*source "\$_RWB_LIB"' "$RUNNER" | head -n1 | cut -d: -f1)
+acq_ln=$(grep -n '^tc_acquire "test-all"' "$RUNNER" | head -n1 | cut -d: -f1)
+if [[ -n "$src_ln" && -n "$acq_ln" ]] && (( src_ln < acq_ln )); then
+  pass "the boundary lib is sourced above tc_acquire (line $src_ln < $acq_ln)"
+else
+  fail "boundary lib source placement wrong (src=${src_ln:-none} acquire=${acq_ln:-none})"
+fi
+
+# --- 22. Exactly two _repo_state call sites in the runner ------------------------------------------
+# The window has to span the whole suite list. One call site means a boundary that never closes;
+# three means a window whose extent is no longer obvious from reading.
+ck
+calls=$(grep -cE '^[[:space:]]*(if )?_repo_state_(before|after)="\$\(_repo_state\)"' "$RUNNER" || true)
+if [[ "$calls" == "2" ]]; then pass "_repo_state has exactly two call sites in the runner"
+else fail "_repo_state call sites in runner: $calls (want 2)"; fi
+
+# --- 23. ROW 13 — a missing lib exits 2 and does NOT blame git --------------------------------------
+# The `|| true` contract would leave `_repo_state` undefined, return 127 inside the `if`, and make
+# the run print "the repo-write boundary was not measured (git unavailable at run start)" — an
+# AP-021 violation manufactured by this very fix. A lib that decides whether the gate means
+# anything is a hard failure when missing (the _REL_LIB class).
+ck
+sb="$TMP_ROOT/nolib"; mkdir -p "$sb/lib"
+cp "$RUNNER" "$sb/test-all.sh"
+cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$sb/lib/" 2>/dev/null
+cp "$REPO_ROOT/scripts/lib/test-contention.sh" "$sb/lib/" 2>/dev/null
+# deliberately do NOT copy repo-write-boundary.sh
+# rc captured from the RUNNER, not from a `| head` pipeline (which is what `$?` after a pipe
+# reports, and which is always 0). TC_LOCK_TIMEOUT is pinned low: if the above-tc_acquire
+# placement invariant ever regresses, this sandbox reaches the lock the PARENT run holds and
+# burns the full timeout, turning a precise red into a slow one.
+nolib_raw="$TMP_ROOT/nolib.out"
+( cd "$REPO_ROOT" && TC_LOCK_TIMEOUT=5 timeout 60 bash "$sb/test-all.sh" >"$nolib_raw" 2>&1 </dev/null )
+nolib_rc=$?
+nolib_out=$(head -20 "$nolib_raw")
+if [[ "$nolib_rc" -eq 2 ]] && grep -q 'repo-write-boundary' <<<"$nolib_out" \
+   && ! grep -qi 'boundary was not measured' <<<"$nolib_out"; then
+  pass "a missing boundary lib exits 2, names the lib, and does not blame git"
+else
+  fail "missing-lib contract wrong (rc=$nolib_rc): '$(printf '%s' "$nolib_out" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 24. ROW 14 — a STALE lib narrows the CLAIM, not just the check -----------------------------
+# `test -f` proves a file exists, never that it defines what the caller calls. A lib that defines
+# a narrower _repo_state beside a full-dimension claim is #7652 one layer up, across this new
+# module seam — so the runner checks the named function SET, in the _TC_LIB shape.
+ck
+stale="$TMP_ROOT/stalelib"; mkdir -p "$stale/lib"
+cp "$RUNNER" "$stale/test-all.sh"
+for f in test-relevance-paths.sh test-contention.sh; do cp "$REPO_ROOT/scripts/lib/$f" "$stale/lib/" 2>/dev/null; done
+printf '%s\n' '#!/usr/bin/env bash' '_repo_state() { git rev-parse HEAD; }' > "$stale/lib/repo-write-boundary.sh"
+stale_raw="$TMP_ROOT/stale.out"
+( cd "$REPO_ROOT" && TC_LOCK_TIMEOUT=5 timeout 60 bash "$stale/test-all.sh" >"$stale_raw" 2>&1 </dev/null )
+stale_rc=$?
+stale_out=$(head -20 "$stale_raw")
+if [[ "$stale_rc" -eq 2 ]] && grep -qiE 'repo_boundary_(manifest|classify|dimensions|render)' <<<"$stale_out"; then
+  pass "a stale lib exits 2 and is NAMED by the missing-function check, not silently narrowed"
+else
+  fail "stale-lib contract wrong: '$(printf '%s' "$stale_out" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 25. AC8 — the message renders inspected / not-inspected / per-dimension next action ----------
+# Asserted by CONTENT ANCHOR on the runner's own rendering path, driven with a synthetic delta, so
+# the assertion cannot be satisfied by prose sitting in a comment.
+ck
+render=$(cd "$REPO_ROOT" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c '
+  source "'"$LIB"'"
+  b="$(_repo_state)"
+  printf "INSPECTED\n%s\nNOTINSPECTED\n%s\nNEXT\n" "$(repo_boundary_render_inspected "$b")" "$(repo_boundary_render_not_inspected "$b")"
+  for d in head worktree config refs shallow; do printf "%s: %s\n" "$d" "$(repo_boundary_next_action "$d")"; done')
+missing_anchor=""
+for a in 'HEAD' 'tree and index' 'local (shared) config' 'harm class' 'shallow state' \
+         'push to a remote' 'did not start' \
+         'git reflog' 'git config --local --unset' 'git show-ref' 'unshallow'; do
+  grep -qF -- "$a" <<<"$render" || missing_anchor="$missing_anchor [$a]"
+done
+if [[ -z "$missing_anchor" ]]; then
+  pass "the rendered message carries inspected, not-inspected and a per-dimension next action"
+else
+  fail "rendered message missing anchors:$missing_anchor"
+fi
+
+# --- 26. AC9 / ROW 11 — a run killed before the end boundary emits the not-measured NOTE -----------
+# A run has no `trap ... EXIT` today, so a kill emits NOTHING — and the escape most likely to kill a
+# run is exactly the one that suppresses the verdict. "No FATAL line" must never read as clean.
+ck
+if grep -qE "trap .*_repo_boundary_exit_note|_repo_boundary_exit_note.*EXIT" "$RUNNER"; then
+  pass "the runner arms an EXIT trap so a killed run cannot read as a clean boundary"
+else
+  fail "no EXIT-trap not-measured NOTE in the runner"
+fi
+
+# --- 27. The EXIT CONTRACT documents the REPORT class ----------------------------------------------
+# A new result class that increments nothing and changes no exit code is a state the runner's own
+# contract does not describe — which is the same claim/check drift being fixed here.
+ck
+# Anchored on the CLASS DESCRIPTION, not the bare word "REPORT": `sed -n 1,60p` of this runner
+# already contains that word in unrelated prose, so a bare-token check passed before the contract
+# was written (cq-assert-anchor-not-bare-token — this branch's own subject).
+contract=$(sed -n '1,60p' "$RUNNER")
+if grep -qi 'REPORT.*increments nothing' <<<"$contract" \
+   || grep -qi 'REPORT class' <<<"$contract"; then
+  pass "the EXIT CONTRACT block describes the REPORT class"
+else
+  fail "EXIT CONTRACT does not mention the REPORT class"
+fi
+
+# --- 28. EVERY sandbox that relocates the runner carries the lib, or says why not ---------------
+# The finding that produced this arm named ONE file; the fix is scoped to the CLASS. The runner
+# sources this lib fail-closed, so any suite that copies `scripts/test-all.sh` into a sandbox and
+# executes it exits 2 before its first arm — and the failure surfaces as that suite's own arms all
+# going red for unrelated-looking reasons, not as a missing file. Two of the three relocators were
+# named in the plan; the third (`fanout-suite-scope.test.sh`) was found only by a red shard, after
+# the first two had been fixed and read as complete.
+#
+# So the population is ENUMERATED from the tree rather than remembered, and a relocator that
+# genuinely does not need the lib must SAY SO — a silent exemption is how this class regrows.
+ck
+relocators=""; unlisted=""
+while IFS= read -r f; do
+  # `git show <ref>:scripts/test-all.sh > "$dst"` is a LIVE relocation form in this tree
+  # (test-all-killed-classification.test.sh builds its origin/main baseline that way) and carries
+  # no `cp` token — it was enumerated only incidentally, because that file also does `cp "$TARGET"`.
+  # `install`/`rsync`/`cat >`/`tar` are added for the same reason: the detector must not be a list
+  # of the spellings that happen to be in the tree today.
+  grep -qE '^[[:space:]]*(cp|install|rsync)\b.*test-all\.sh|^[[:space:]]*cp "\$(TARGET|MAIN_TARGET|RUNNER)"|^[[:space:]]*git .*show [^|]*:scripts/test-all\.sh[[:space:]]*>|^[[:space:]]*cat[[:space:]]+[^|]*test-all\.sh[[:space:]]*>' "$f" || continue
+  relocators="$relocators $f"
+  # Anchored on the COPY, never on the lib's name. The previous form was `grep -q
+  # 'repo-write-boundary'`, which any file mentioning the lib satisfies — including THIS file,
+  # which names it eight times and was therefore counted as compliant while deliberately building
+  # sandboxes without it. A guard satisfied by prose about the guard is this branch's own subject.
+  # Anchored at line start so a COMMENT cannot satisfy it. `grep -qE 'cp .*repo-write-boundary'`
+  # was cleared by prose like `# we do not cp repo-write-boundary.sh here` — the same
+  # satisfied-by-prose defect one token over from the one this arm was written to fix.
+  grep -qE '^[[:space:]]*cp\b.*repo-write-boundary\.sh' "$f" && continue
+  # Markers anchored to a COMMENT at line start, so the arm's own regex literals (which appear in
+  # this file) cannot self-exempt it.
+  grep -qE '^#[[:space:]]*repo-write-boundary-sandbox: (not-needed|tests-refusal)' "$f" && continue
+  unlisted="$unlisted
+    $(realpath --relative-to="$REPO_ROOT" "$f")"
+done < <(git -C "$REPO_ROOT" ls-files '*.sh' | sed "s#^#$REPO_ROOT/#" | xargs grep -l 'test-all\.sh' 2>/dev/null)
+n_reloc=$(printf '%s' "$relocators" | wc -w)
+if [[ "$n_reloc" -lt 3 ]]; then
+  # Anti-vacuity, reported directly: an enumeration that finds nothing passes trivially, and this
+  # arm's whole value is that the population is derived rather than remembered.
+  printf '[FATAL] only %s runner-relocating suite(s) enumerated (expected >=3) — the derivation is broken, not the tree.\n' "$n_reloc" >&2
+  exit 1
+fi
+if [[ -z "$unlisted" ]]; then
+  pass "all $n_reloc runner-relocating sandbox(es) copy the lib or declare not-needed"
+else
+  fail "sandbox(es) that relocate test-all.sh without the boundary lib and without a declaration:$unlisted"
+fi
+
+# --- 29. ROWS 6 & 7 — the WINDOW, not just the call count -------------------------------------------
+# Arm 22 counts the call sites; it cannot see a window that shrank. Two orderings carry the whole
+# meaning of the measurement and a delete-only battery is blind to both:
+#   row 7 — the START snapshot must sit AFTER `tc_acquire`. A run that queued behind a sibling can
+#           wait up to TC_LOCK_TIMEOUT (3600 s), so a reading taken before the wait describes a
+#           machine state up to an hour stale and the delta means nothing.
+#   row 6 — the END snapshot must sit AFTER the last `run_suite`. Moved above it, the window stops
+#           spanning the suite list and the boundary reports clean about suites it never covered.
+ck
+acq=$(grep -n '^tc_acquire "test-all"' "$RUNNER" | head -n1 | cut -d: -f1)
+# Anchored on the STATEMENT, not the bare token: the runner's own explanatory comment above the
+# lib-source block QUOTES `if _repo_state_before="$(_repo_state)"` to explain why the contract is
+# fail-closed, and an unanchored grep matched that comment at line 331 instead of the code at 1008.
+# That is cq-assert-anchor-not-bare-token firing inside the arm written to check ordering.
+start_snap=$(grep -nE '^[[:space:]]*if _repo_state_before="\$\(_repo_state\)"' "$RUNNER" \
+  | grep -v ':[[:space:]]*#' | head -n1 | cut -d: -f1)
+end_snap=$(grep -nE '^[[:space:]]*if _repo_state_after="\$\(_repo_state\)"' "$RUNNER" \
+  | grep -v ':[[:space:]]*#' | head -n1 | cut -d: -f1)
+last_suite=$(grep -n '^\s*run_suite ' "$RUNNER" | tail -n1 | cut -d: -f1)
+first_suite=$(grep -n '^\s*run_suite ' "$RUNNER" | head -n1 | cut -d: -f1)
+if [[ -n "$acq" && -n "$start_snap" && -n "$end_snap" && -n "$last_suite" ]] \
+   && [[ -n "$first_suite" ]] \
+   && (( start_snap > acq )) && (( start_snap < first_suite )) && (( end_snap > last_suite )); then
+  pass "the window spans the suite list: acquire($acq) < start($start_snap) < first suite($first_suite), last suite($last_suite) < end($end_snap)"
+else
+  fail "window ordering wrong: acquire=$acq start=$start_snap first_suite=${first_suite:-?} last_suite=$last_suite end=$end_snap"
+fi
+
+# --- 30. THE CONFIG HARM PARTITION — a sibling `git push -u` must NOT red the gate ------------
+# The refs partition exists because "a sibling worktree's branch advancing" and "this run corrupted
+# the repo" are not the same event. `--local` in a linked worktree reads the SHARED config, so the
+# config dimension carries the SAME sibling side effect via branch.<n>.remote/.merge — and before
+# this arm existed it was unconditionally FATAL. Measured on this repo: 22 worktrees, branch.*
+# entries moving 46 -> 48 within one session. That is a false RED on the ordinary workflow.
+ck
+p=$(new_probe cfgpartition) || exit 2
+git -C "$p" branch sibling-br
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local branch.sibling-br.remote origin
+git -C "$p" config --local branch.sibling-br.merge refs/heads/sibling-br
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -q '^REPORT' <<<"$verdict" && ! grep -q '^FATAL' <<<"$verdict" \
+   && grep -q 'branch.sibling-br.remote' <<<"$verdict"; then
+  pass "a \`git push -u\`-shaped config add is REPORT, not FATAL, and NAMES the key"
+else
+  fail "config partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 31. ... and the INCIDENT key must stay FATAL, and be named --------------------------------
+# The property that must not regress under the partition above. This is the exact key from
+# 2026-08-20, and the whole reason the config dimension exists.
+ck
+p=$(new_probe cfgincident) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local commit.gpgsign false
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -q '^FATAL' <<<"$verdict" && grep -q 'commit.gpgsign' <<<"$verdict"; then
+  pass "the 2026-08-20 incident key stays FATAL and is NAMED in the detail"
+else
+  fail "incident key not FATAL/named: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 32. A key DELETION, and a tracking add on OUR OWN branch, both stay FATAL -----------------
+# The two fail-closed edges of the partition. Nothing routine deletes a shared key; and our own
+# branch gaining tracking config mid-run is ambiguous, so it takes the harsher class.
+ck
+p=$(new_probe cfgedges) || exit 2
+git -C "$p" config --local core.somekey somevalue
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local --unset core.somekey
+state "$p"; after="$STATE_OUT"
+v1=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+own=$(git -C "$p" symbolic-ref --short HEAD)
+state "$p"; before2="$STATE_OUT"
+git -C "$p" config --local "branch.${own}.remote" origin
+state "$p"; after2="$STATE_OUT"
+v2=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before2" "$after2")
+if grep -q 'DELETED' <<<"$v1" && grep -q '^FATAL' <<<"$v1" && grep -q '^FATAL' <<<"$v2"; then
+  pass "a config DELETION and an own-branch tracking add both stay FATAL (fail closed)"
+else
+  fail "edges wrong: del='$(printf '%s' "$v1" | tr '\n' '|')' own='$(printf '%s' "$v2" | tr '\n' '|')'"
+fi
+
+# --- 33. MANIFEST PAIRING — a dimension measured at one boundary only is UNMEASURABLE ----------
+# Reachable, not theoretical: `git status --porcelain` refreshes the index and fails under
+# index.lock contention, which parallel worktrees produce routinely. Without pairing, the body
+# diff sees a delta and emits FATAL naming a dimension the INSPECTED list does not claim.
+ck
+p=$(new_probe pairing) || exit 2
+state "$p"; before="$STATE_OUT"
+# A stale/narrower lib: the worktree dimension vanishes from the after snapshot entirely.
+after_narrow=$(printf '%s' "$STATE_OUT" | grep -v '^manifest	worktree	' | grep -v '^worktree	')
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after_narrow")
+inspected=$(cd "$p" && bash -c 'source "'"$LIB"'"; repo_boundary_render_inspected "$1" "$2"' _ "$before" "$after_narrow")
+if grep -q '^UNMEASURABLE' <<<"$verdict" && ! grep -qE '^FATAL[[:space:]]+worktree' <<<"$verdict" \
+   && ! grep -qi 'tree and index' <<<"$inspected"; then
+  pass "a dimension measured at one boundary only is UNMEASURABLE, and drops out of INSPECTED"
+else
+  fail "manifest pairing wrong: verdict='$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)' inspected='$(printf '%s' "$inspected" | tr '\n' '|')'"
+fi
+
+# --- 34. FIXTURE DIRECTION: the worktree dimension must SEE its own write class ----------------
+# Every existing worktree arm dirties the tree BEFORE the first snapshot, i.e. asserts must-NOT-
+# fire. So the dimension could be replaced by a constant and the suite stayed 33/33 green. A suite
+# whose fixtures all point one way cannot see the other way.
+ck
+p=$(new_probe wtdirection) || exit 2
+state "$p"; before="$STATE_OUT"
+echo "written between the snapshots" > "$p/new-file.txt"
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c 'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+worktree' <<<"$verdict"; then
+  pass "a working-tree write BETWEEN the snapshots is FATAL (the dimension is not a constant)"
+else
+  fail "worktree dimension blind to its own write class: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)'"
+fi
+
+# --- 35. FIXTURE SHAPE: a branch registered MID-WINDOW must not launder itself ------------------
+# The anti-laundering rule reads `elsewhere` from the BEFORE snapshot. Every existing arm registers
+# the sibling worktree before BOTH snapshots, so both sides carry it and reading from `$after`
+# instead was fully green. The escape the lib's own comment names is `git -C "" worktree add -b
+# probe` DURING the window.
+ck
+p=$(new_probe midwindow) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" worktree add -q "$TMP_ROOT/midwindow-co" -b probe-mid 2>/dev/null
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c 'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+refs.*probe-mid' <<<"$verdict"; then
+  pass "a branch whose worktree appeared MID-WINDOW cannot launder itself into REPORT"
+else
+  fail "mid-window laundering not caught: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 36. POPULATION: the tags half of the refs dimension is live -------------------------------
+# No arm created or moved a tag, so `--tags` was deletable at 33/33 green and the classifier's
+# `refs/tags/*` branch was unreachable from the suite. `git -C "" tag -f v1.0` retargets a release
+# tag, and `tag` is in the sibling scanner's own write-verb list.
+ck
+p=$(new_probe tagdim) || exit 2
+state "$p"; before="$STATE_OUT"
+# `-c tag.gpgSign=false` and an explicit precondition check: the operator's GLOBAL gitconfig forces
+# signed/annotated tags here, so a bare `git tag` fails with "no tag message?" and the arm would be
+# measuring a broken fixture rather than the dimension. A fixture that cannot CONTAIN the thing the
+# arm looks for is not a test — so its failure is made a loud FIXTURE error, not a phantom SUT one.
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+git -C "$p" -c tag.gpgSign=false -c tag.forceSignAnnotated=false tag probe-tag 2>/dev/null
+if ! git -C "$p" show-ref --tags --quiet -- refs/tags/probe-tag; then
+  printf '[FATAL] fixture setup failed: could not create refs/tags/probe-tag in the probe repo.\n' >&2
+  printf '        This arm cannot measure the tags dimension without it.\n' >&2
+  exit 1
+fi
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c 'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+# TIGHTENED (#7795), not duplicated: this arm already runs on a `new_probe`, i.e. a checkout with NO
+# sibling worktree, so it is exactly the fail-closed control the tag partition needs — a twin arm
+# would have measured the same fixture twice. Presence-only (`grep -q 'probe-tag'`) is severity-
+# agnostic and stays green under a mutation that softens creates unconditionally; the severity and
+# the end anchor are what make it a control. The `$` is load-bearing in the other direction too:
+# `was created` alone prefix-matches the pre-#7795 detail string `was created or moved`.
+if grep -qE '^FATAL[[:space:]]+refs.*refs/tags/probe-tag \(tag\) was created$' <<<"$verdict"; then
+  pass "a tag CREATE with no sibling worktree is FATAL and named (the fail-closed CI path)"
+else
+  fail "no-sibling tag create not FATAL: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)'"
+fi
+
+# --- 37. EXTRACTOR UNIQUENESS: the next-action MAPPING, per dimension ---------------------------
+# Arm 25 concatenates every next-action into one blob and greps substrings, so the MAPPING is
+# unasserted — permuting the strings across the dimensions was fully green. The defect
+# this function exists to fix is precisely a wrong mapping (the old text offered `git reflog` for
+# every outcome).
+ck
+map_bad=""
+declare -A _want=( [head]='reflog' [worktree]='status' [config]='--unset' [refs]='show-ref' [shallow]='unshallow' )
+for d in head worktree config refs shallow; do
+  got=$(bash -c 'source "'"$LIB"'"; repo_boundary_next_action "$1"' _ "$d")
+  grep -qF -- "${_want[$d]}" <<<"$got" || map_bad="$map_bad [$d wanted '${_want[$d]}' got '${got:0:40}']"
+done
+if [[ -z "$map_bad" ]]; then
+  pass "each dimension's next action names ITS OWN remedy (the mapping, not just the strings)"
+else
+  fail "next-action mapping wrong:$map_bad"
+fi
+
+# --- 38. The runner's declared function contract equals what it actually CALLS ----------------
+# This set lived in three places in three different spellings: six names in the runner's
+# `declare -F` loop, five in this suite's arm 1, and a four-alternative regex in arm 24. Deleting a
+# function the runner calls but arm 1 omits left arm 1 green while the gate exited 2 with no arm
+# naming why. Derived from the runner's own call sites so there is one source of truth.
+ck
+# `\b_?repo_boundary_…` so a PRIVATE `_repo_boundary_exit_note` is not counted by matching the
+# public-looking suffix of its own name, and LC_ALL=C so `sort` and `comm` agree on byte order
+# (they disagreed on the leading underscore under the ambient locale, which reported `_repo_state`
+# as present in BOTH "declared only" and "called only" at once).
+# TOKENISED first, then matched WHOLE-LINE. A `grep -oE` with surrounding-character groups
+# consumes the delimiter, so in `_repo_state repo_boundary_manifest` the second name loses its
+# leading boundary and is skipped — the extraction silently reported half the list. `-x` also makes
+# `_repo_state` immune to matching inside `_repo_state_before`, and the `-v` drops private
+# `_repo_boundary_*` helpers, which would otherwise be counted via their public-looking suffix.
+_rwb_names() { tr -cs 'A-Za-z0-9_' '\n' < "$1" \
+  | grep -xE '_repo_boundary_[a-z_]+|repo_boundary_[a-z_]+|_repo_state' \
+  | grep -vE '^_repo_boundary_' | LC_ALL=C sort -u; }
+declared=$(sed -n '/^for _rwb_fn in/,/^done$/p' "$RUNNER" > "$TMP_ROOT/decl.txt"; _rwb_names "$TMP_ROOT/decl.txt")
+# Call sites, from the whole file MINUS the declaration loop itself (otherwise the loop's own list
+# is counted as calls and the comparison is a tautology). `$(_repo_state)` puts a CLOSING paren
+# after the name, so an `[("]` lookahead misses the runner's only two invocations of its most
+# public function — the first version of this arm did exactly that.
+called=$(sed '/^for _rwb_fn in/,/^done$/d' "$RUNNER" > "$TMP_ROOT/called.txt"; _rwb_names "$TMP_ROOT/called.txt")
+# `repo_boundary_manifest` is called by the lib internally and by this suite, not by the runner —
+# it is legitimately declared-but-not-called, so it is excluded from the comparison rather than
+# silently tolerated.
+called="$(printf '%s\nrepo_boundary_manifest\n' "$called" | grep -v '^$' | LC_ALL=C sort -u)"
+if [[ "$declared" == "$called" ]]; then
+  pass "the runner's declare -F contract equals the functions it calls ($(printf '%s' "$declared" | wc -l | tr -d ' ') names)"
+else
+  fail "declared-vs-called drift:
+    declared only: $(LC_ALL=C comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$called") | tr '\n' ' ')
+    called only:   $(LC_ALL=C comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$called") | tr '\n' ' ')"
+fi
+
+# --- Accounting, FIRST CHECKPOINT (arms 1-38 only). Emitted DIRECTLY, never through pass()/fail():
+# a conservation check routed through the verdict helper it exists to police cannot report the
+# fault that corrupted it.
+#
+# This runs HERE, mid-file, so it quantifies over the arms above it and no others. That was
+# invisible until #7795's review measured it: dropping arm 52's `ck` printed
+# `52 passed, 0 failed, 51 assertion(s)` and exited 0, while dropping an arm-38 `ck` exited 1.
+# The whole-suite checkpoint at the bottom is the one that covers arms 39-52; this one is kept
+# because a mid-file failure names a much smaller haystack.
+if [[ $((passes + fails)) -ne $asserted ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != asserted (%d).\n' "$((passes + fails))" "$asserted" >&2
+  if [[ $((passes + fails)) -lt $asserted ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded without a counted case — a call site is missing its increment.\n' >&2
+  fi
+  exit 1
+fi
+
+# Derived from a green run, then ratcheted upward: 38 arms execute today, so a deleted or
+# neutered arm cannot hide behind slack. Raise it in lockstep when adding arms; never lower it.
+# --- 39-43. THE REFS HARM PARTITION ------------------------------------------------------------
+# Arms 39-41 are the false-RED fix; 42-43 are the non-vacuity guards that make it safe. Measured
+# 2026-09-02: a 73-minute `scripts` shard passed all 342 suites and still exited 1, because SIX
+# sibling ref moves (a `git push -u`, a `cleanup-merged` deletion, a `git fetch` on main) were each
+# unconditionally FATAL. The config dimension classified the SAME sibling `git push -u` as REPORT,
+# so the two dimensions contradicted each other about one event.
+#
+# The partition keys on ATTRIBUTION: refs other than our own live in the SHARED bare repo, so when
+# sibling worktrees exist there is no attributable author. Sibling presence is read from the BEFORE
+# snapshot, so 35's mid-window escape still cannot manufacture its own softener -- and 42/43 pin
+# the property that sibling presence must never disarm the incident class itself.
+sibling_probe() { # sibling_probe <name> [branch-to-checkout] -> prints path, with a sibling worktree
+  local n="${1:?}"; local co="${2-}"
+  local d; d=$(new_probe "$n") || return 1
+  [[ -n "$co" ]] && { git -C "$d" checkout -q -b "$co" || return 1; }
+  git -C "$d" worktree add -q "$TMP_ROOT/$n-sib" -b "$n-sibbr" 2>/dev/null || return 1
+  printf '%s' "$d"
+}
+classify_in() { # classify_in <dir> <before> <after>
+  (cd "$1" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_SYSTEM=/dev/null bash -c 'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$2" "$3")
+}
+
+# --- 39. a branch CREATED by a sibling is REPORT when sibling worktrees exist -------------------
+ck
+p=$(sibling_probe refscreate) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" branch newbr
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^REPORT[[:space:]]+refs.*newbr' <<<"$verdict" && ! grep -qE '^FATAL[[:space:]]+refs' <<<"$verdict"; then
+  pass "with siblings present, a branch CREATE is REPORT and is NAMED"
+else
+  fail "refs create partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 40. a branch DELETION (the cleanup-merged shape) is REPORT when siblings exist -------------
+ck
+p=$(sibling_probe refsdelete) || exit 2
+git -C "$p" branch doomed
+state "$p"; before="$STATE_OUT"
+git -C "$p" branch -D doomed >/dev/null
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^REPORT[[:space:]]+refs.*doomed.*DELETED' <<<"$verdict" && ! grep -qE '^FATAL[[:space:]]+refs' <<<"$verdict"; then
+  pass "with siblings present, a branch DELETION is REPORT and is NAMED"
+else
+  fail "refs delete partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 41. the DEFAULT branch moving (the `git pull` shape) is REPORT when siblings exist ---------
+ck
+p=$(sibling_probe refsdefault feat-x) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" commit -q --allow-empty -m advance
+git -C "$p" update-ref refs/heads/main "$(git -C "$p" rev-parse HEAD)"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^REPORT[[:space:]]+refs.*refs/heads/main.*default branch' <<<"$verdict"; then
+  pass "with siblings present, the DEFAULT branch moving is REPORT (the \`git pull\` shape)"
+else
+  fail "default-branch partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 42. NON-VACUITY: sibling presence must NOT launder OUR OWN branch ---------------------------
+# The property the whole partition rests on. If sibling worktrees existing softened our own branch
+# too, the partition would disarm the exact incident it was filed for (#7553/#7652) on precisely
+# the machine where that incident happened. This arm fails if 39-41's softening is over-broad.
+ck
+p=$(sibling_probe refsown feat-own) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" commit -q --allow-empty -m ours
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+refs.*feat-own.*checked-out branch' <<<"$verdict"; then
+  pass "sibling presence does NOT launder OUR OWN branch: still FATAL (incident class intact)"
+else
+  fail "own branch laundered by sibling presence: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 43. NON-VACUITY: sibling presence must NOT launder a TAG ------------------------------------
+# `git -C "" tag -f v1.0` retargets a release tag and is in the sibling scanner's write-verb list.
+# Sibling worktrees do not routinely move tags, so tags stay attributable and stay FATAL.
+ck
+p=$(sibling_probe refstag) || exit 2
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+git -C "$p" -c tag.gpgSign=false tag probe-tag
+state "$p"; before="$STATE_OUT"
+git -C "$p" commit -q --allow-empty -m retarget
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+git -C "$p" -c tag.gpgSign=false tag -f probe-tag >/dev/null 2>&1
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+refs.*probe-tag.*tag' <<<"$verdict"; then
+  pass "sibling presence does NOT launder a TAG move: still FATAL"
+else
+  fail "tag laundered by sibling presence: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 44. THE SOFTENING IS GATED ON A MEASUREMENT, AND WITHHELD WITHOUT ONE --------------------
+# Arms 39-41 soften a class based on `wt`. A softening keyed on a measurement must fail CLOSED when
+# that measurement is absent, or a snapshot pair that simply failed to capture `wt` -- an older lib
+# across a swap, or `git worktree list` erroring -- silently buys the soft class for every ref. That
+# is the shape three reviewers independently found in the ORIGINAL `elsewhere` fallback, one design
+# iteration earlier; this arm is what stops it coming back through the new gate.
+ck
+p=$(sibling_probe wtwithheld) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" branch withheld-br
+state "$p"; after="$STATE_OUT"
+# Same delta, twice: once as measured, once with the `wt` family stripped and its manifest row
+# demoted on BOTH sides (so the pairing check sees no mismatch and refs is still classified).
+strip_wt() { printf '%s' "$1" | grep -v $'^wt\t' | sed 's/^manifest\twt\tmeasured$/manifest\twt\tnot-measured/'; }
+v_measured=$(classify_in "$p" "$before" "$after")
+v_blind=$(classify_in "$p" "$(strip_wt "$before")" "$(strip_wt "$after")")
+if grep -qE '^REPORT[[:space:]]+refs.*withheld-br' <<<"$v_measured" \
+   && grep -qE '^FATAL[[:space:]]+refs.*withheld-br' <<<"$v_blind"; then
+  pass "the refs softening is WITHHELD when sibling presence was not measured (fails closed)"
+else
+  fail "softening not gated on the measurement: measured='$(printf '%s' "$v_measured" | grep withheld-br | tr '\n' '|')' blind='$(printf '%s' "$v_blind" | grep withheld-br | tr '\n' '|')'"
+fi
+
+
+# --- 45. sibling + a tag CREATED is REPORT (the fetched-release-tag shape) -----------------------
+# The arm that motivates #7795. A `git fetch` auto-follows tags, so a sibling's fetch — and
+# `worktree-manager.sh cleanup_merged_worktrees` runs one at the START of every session — writes a
+# release tag into the shared bare-repo ref store mid-window. That is creation, and only creation:
+# a fetch cannot MOVE a local tag, and `--prune` without `--prune-tags` cannot delete one.
+#
+# The `$` anchor is what makes this a real RED rather than a fake one: the pre-#7795 detail string
+# was `(tag) was created or moved`, which `was created` prefix-matches. Presence of the REPORT line
+# is asserted, never merely the absence of FATAL — an absence-only assertion passes on an empty
+# verdict, which is the shape a neutered fixture produces.
+ck
+p=$(sibling_probe tagcreate) || exit 2
+state "$p"; before="$STATE_OUT"
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+pgit -C "$p" tag v9.9.9
+require_tag "$p" v9.9.9 "the created-tag partition under a shared ref store"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+n_rep=$({ grep -cE '^REPORT[[:space:]]+refs.*refs/tags/v9\.9\.9 \(tag\) was created$' <<<"$verdict" || true; })
+if [[ "$n_rep" == 1 ]] && ! grep -qE '^FATAL[[:space:]]+refs' <<<"$verdict"; then
+  pass "with siblings present, a tag CREATE is REPORT and is NAMED (the fetched-release-tag shape)"
+else
+  fail "tag create partition wrong (report_lines=$n_rep): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 46. sibling presence must NOT launder a tag DELETION ---------------------------------------
+# No arm exercised tag deletion at all before #7795 (`grep` for `tag -d` / `--delete` → 0 hits), so
+# routing tags through the deleted loop's soft branch was a free mutation. A sibling does not delete
+# release tags in passing: `git fetch --prune` prunes remote-tracking refs only, and pruning tags
+# needs `--prune-tags`, which no call site in this repo passes.
+#
+# Arm 40's anchor shape, not a bare `^FATAL[[:space:]]+refs`: the sibling worktree's own branch line
+# is also a refs line, so a bare pattern would pass vacuously. The count pins that the tag is the
+# ONLY FATAL.
+ck
+p=$(sibling_probe tagdelete) || exit 2
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+pgit -C "$p" tag doomed-tag
+require_tag "$p" doomed-tag "the deleted-tag partition"
+state "$p"; before="$STATE_OUT"
+pgit -C "$p" tag -d doomed-tag >/dev/null
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+n_fat=$({ grep -cE '^FATAL[[:space:]]+refs' <<<"$verdict" || true; })
+if [[ "$n_fat" == 1 ]] && grep -qE '^FATAL[[:space:]]+refs.*refs/tags/doomed-tag was DELETED$' <<<"$verdict"; then
+  pass "sibling presence does NOT launder a tag DELETION: still FATAL and named"
+else
+  fail "tag delete partition wrong (fatal_refs_lines=$n_fat): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 47. SECOND MEMBER: the partition is per-ref and cannot stop at the first --------------------
+# One created tag and one moved tag in the SAME window must produce one REPORT and one FATAL, each
+# naming its own tag. A `break` after the first classified ref passes every single-delta arm above.
+# Both tag deltas are produced WITHOUT moving HEAD or any branch (the moving tag is retargeted onto
+# a commit made before the BEFORE snapshot), so the refs delta is exactly two tags and the FATAL
+# count is unambiguous.
+ck
+p=$(sibling_probe tagmix) || exit 2
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+pgit -C "$p" tag moved-tag
+require_tag "$p" moved-tag "the per-ref partition"
+pgit -C "$p" commit -q --allow-empty -m second
+mix_c2=$(pgit -C "$p" rev-parse HEAD)
+state "$p"; before="$STATE_OUT"
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+pgit -C "$p" tag -f moved-tag "$mix_c2" >/dev/null 2>&1
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+pgit -C "$p" tag fresh-tag
+require_tag "$p" fresh-tag "the per-ref partition"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+n_rep=$({ grep -cE '^REPORT[[:space:]]+refs.*refs/tags/fresh-tag \(tag\) was created$' <<<"$verdict" || true; })
+n_fat=$({ grep -cE '^FATAL[[:space:]]+refs' <<<"$verdict" || true; })
+if [[ "$n_rep" == 1 && "$n_fat" == 1 ]] \
+   && grep -qE '^FATAL[[:space:]]+refs.*refs/tags/moved-tag \(tag\) was moved$' <<<"$verdict"; then
+  pass "two tag deltas in one window are classified per-ref: one REPORT (create), one FATAL (move)"
+else
+  fail "per-ref tag partition wrong (report=$n_rep fatal_refs=$n_fat): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-260)'"
+fi
+
+# --- 48. THE MEASURED INCIDENT SHAPE: a tag created AND the default branch moved -----------------
+# #7795's report is not a tags-only event. The bot merge that published `refs/tags/v3.258.3` also
+# moved `refs/heads/main`, and arms 45-47 are tags-only — so without this arm the actual reported
+# scenario is never exercised end to end, and a classifier that only reaches its tag arm when the
+# refs delta contains nothing else passes all of them.
+# The probe is checked out on its own branch and advanced BEFORE the BEFORE snapshot, so neither
+# HEAD nor our own branch is part of the delta and `zero FATAL` is a statement about the partition
+# rather than about fixture noise. The negative is scoped to `^FATAL[[:space:]]+refs` so an
+# unrelated dimension cannot flip it.
+ck
+p=$(sibling_probe tagincident feat-inc) || exit 2
+pgit -C "$p" commit -q --allow-empty -m advance
+inc_head=$(pgit -C "$p" rev-parse HEAD)
+state "$p"; before="$STATE_OUT"
+pgit -C "$p" update-ref refs/heads/main "$inc_head"
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+pgit -C "$p" tag v3.258.3
+require_tag "$p" v3.258.3 "the measured incident shape (tag created + default branch moved)"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+n_rep=$({ grep -cE '^REPORT[[:space:]]+refs' <<<"$verdict" || true; })
+if [[ "$n_rep" == 2 ]] \
+   && grep -qE '^REPORT[[:space:]]+refs.*refs/tags/v3\.258\.3 \(tag\) was created$' <<<"$verdict" \
+   && grep -qE '^REPORT[[:space:]]+refs.*refs/heads/main is the default branch and it moved' <<<"$verdict" \
+   && ! grep -qE '^FATAL[[:space:]]+refs' <<<"$verdict"; then
+  pass "the measured incident shape (tag created + default branch moved) is two REPORTs, no FATAL"
+else
+  fail "incident shape wrong (report_refs=$n_rep): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-300)'"
+fi
+
+# --- 49. THE COLLISION GUARD: a created tag that SHADOWS an existing name stays FATAL ----------
+# A tag CREATION alone reaches move-grade harm without moving anything, because gitrevisions
+# resolves `refs/tags/<n>` AHEAD of `refs/heads/<n>`, `refs/remotes/<n>` and
+# `refs/remotes/<n>/HEAD`. Verified live: with a tag named `origin/main` planted and the real
+# remote-tracking ref untouched, `git rev-parse origin/main` returns the TAG (exit 0, warning
+# only). `scripts/test-all.sh` and the `/work`, `/qa` and `/ship` gates all scope against the bare
+# name `origin/main...HEAD`, so softening such a creation would silently rescope every later gate
+# with the exit code unchanged.
+#
+# ONE ARM PER SHADOW CLASS, each fixture built so that ONLY its own conjunct can catch it —
+# otherwise dropping a conjunct still reds via a neighbour and the mutation row is a tautology.
+# The first draft of this arm collapsed all of these into a single `ck` over an `elsewhere`-only
+# test, which is why classes (c) and (d) were reachable at REPORT (#7795 review): `elsewhere`
+# holds branches a SIBLING WORKTREE has checked out, and the harm is shadowing ANY local branch.
+# Measured on this repo at the time: 54 local branches, 34 checked out, 18 shadowable names left
+# softenable — including the operator's own `backup-pre-*` recovery branches.
+_collide() { # _collide <probe> <checkout|-> <tag> <label> [extra-setup-fn]
+  local n="$1" co="$2" t="$3" lbl="$4" setup="${5-}" d v
+  ck
+  if [[ "$co" == "-" ]]; then d=$(sibling_probe "$n") || exit 2
+  else d=$(sibling_probe "$n" "$co") || exit 2; fi
+  [[ -n "$setup" ]] && "$setup" "$d"
+  state "$d"; local b="$STATE_OUT"
+  # repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+  pgit -C "$d" tag "$t"
+  require_tag "$d" "$t" "the collision guard ($lbl)"
+  state "$d"; local a="$STATE_OUT"
+  v=$(classify_in "$d" "$b" "$a")
+  if grep -qE "^FATAL[[:space:]]+refs.*refs/tags/${t//./\\.}" <<<"$v" \
+     && ! grep -qE "^REPORT[[:space:]]+refs.*refs/tags/${t//./\\.}" <<<"$v"; then
+    pass "a created tag stays FATAL when its name $lbl"
+  else
+    fail "collision class '$lbl' not FATAL: $(printf '%s' "$v" | tr '\n' '|' | cut -c1-160)"
+  fi
+}
+# (a) contains a slash — shadows refs/remotes/<remote>/<branch>. No local head is named this.
+_collide tagcol1 -       'origin/main' 'contains a slash (shadows the remote-tracking ref)'
+# (b) looks like an abbreviated object name — shadows that SHA prefix. Not a branch, not a remote.
+_collide tagcol2 -       'deadbeef'    'is a bare hex string (shadows an abbreviated object name)'
+# (c) equals a LOCAL BRANCH THAT NO WORKTREE HAS CHECKED OUT. This is the class an
+#     `elsewhere`-only guard admitted: `dormant-br` is absent from every `wt` row, so only the
+#     snapshot-derived head set catches it.
+_c49_dormant() { pgit -C "$1" branch dormant-br; }
+_collide tagcol3 feat-c3 'dormant-br'  'equals a local branch no worktree has checked out' _c49_dormant
+# (d) equals a REMOTE NAME — shadows `refs/remotes/origin/HEAD`. Not a branch, no slash, not hex.
+_c49_remote() { pgit -C "$1" remote add origin https://example.invalid/x.git; }
+_collide tagcol4 feat-c4 'origin'      'equals a remote name (shadows refs/remotes/<name>/HEAD)' _c49_remote
+# (e) equals the DEFAULT BRANCH when that branch has no local ref — the one case the snapshot head
+#     set cannot see, so it isolates the `$default_branch` fallback conjunct.
+_c49_nomain() { pgit -C "$1" branch -D main >/dev/null 2>&1 || true; }
+_collide tagcol5 feat-c5 'main'        'equals the default branch (which has no local ref here)' _c49_nomain
+# (f) equals a branch a SIBLING worktree has checked out — the original class, still covered.
+_collide tagcol6 feat-c6 'tagcol6-sibbr' 'equals a branch checked out in a sibling worktree'
+#
+# NOT isolated, and said so rather than implied: the `$own_short` conjunct is now reachable only
+# for an UNBORN branch (HEAD points at a branch with no commits, so no `refs/heads/` row exists to
+# derive). Every born branch — including our own — is in the snapshot head set, and on a detached
+# HEAD `own_short` is empty and the conjunct is inert. It is kept as a fallback, not as a class
+# with its own fixture.
+
+# --- 50. THE EXIT-CODE WIRING: REPORT changes no exit code, FATAL drives exit 1 -----------------
+# Every arm above asserts `repo_boundary_classify` STDOUT. Property P1 is about the RUN'S EXIT
+# CODE, and the Guard Contract's Assembly quantifies over the runner's FATAL branch and its
+# `exit 1` — coverage no stdout arm buys. A mutation making the epilogue count REPORT lines into
+# `failed` leaves arms 45-49 green while P1 is false, and arm 27 asserts only that the EXIT
+# CONTRACT *documents* the REPORT class, never that it behaves that way.
+#
+# Driving the whole runner twice is not available here: a full battery is ~45 minutes and holds the
+# repo-global advisory lock, and arms 23/24 only reach the runner's early refusal path. So the two
+# regions of the REAL runner that carry the chain are extracted BY CONTENT ANCHOR — not by line
+# number, and not retyped — and executed verbatim under the runner's own `set -euo pipefail`. The
+# extraction hard-fails if either anchor is missing, so a refactor that moves the chain reports a
+# FIXTURE error rather than silently testing nothing.
+ck
+epi_src="$TMP_ROOT/epilogue-chain.sh"
+{
+  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+  printf 'source %q\n' "$LIB"
+  printf '%s\n' \
+    'suites=1; failed=0; killed=0; skipped=0; _ceiling_declined=0; _relevance_declined=0; _affected_declined=0' \
+    '_repo_observations=0; _repo_unmeasured_dims=0; _repo_last_suite=fixture-suite' \
+    '_infra_ran=0; _infra_skip_reason=not_in_diff; _infra_in_diff=0; TEST_GROUP=scripts' \
+    '_repo_state_before="$(_repo_state)"' \
+    '_repo_state_after="$_repo_state_before"' \
+    '_repo_verdict="${1:?verdict fixture required}"'
+  awk '
+    /^    if \[\[ -n "\$_repo_verdict" \]\]; then$/ { ina=1 }
+    ina { print; if ($0 == "    fi") { ina=0; a=1 }; next }
+    /^_repo_boundary_reported=1$/ { inb=1 }
+    inb { print; b=1 }
+    END { if (!a || !b) { printf "EXTRACT_FAILED a=%s b=%s\n", a, b > "/dev/stderr"; exit 3 } }
+  ' "$RUNNER"
+} > "$epi_src"
+epi_extract_rc=$?
+p=$(new_probe epiwiring) || exit 2
+if (( epi_extract_rc != 0 )); then
+  printf '[FATAL] fixture setup failed: could not extract the boundary epilogue from %s.\n' "$RUNNER" >&2
+  printf '        Anchors: the line `if [[ -n "$_repo_verdict" ]]; then` and `_repo_boundary_reported=1`.\n' >&2
+  printf '        This arm cannot measure the FATAL -> failed -> exit 1 chain without them.\n' >&2
+  exit 1
+fi
+epi_run() { ( cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_SYSTEM=/dev/null bash "$epi_src" "$1" >"$TMP_ROOT/epi.out" 2>&1 ); }
+epi_run "$(printf 'REPORT\trefs\trefs/tags/v9.9.9 (tag) was created')"; epi_rep_rc=$?
+epi_rep_out=$(cat "$TMP_ROOT/epi.out")
+epi_run "$(printf 'FATAL\trefs\trefs/tags/v9.9.9 (tag) was created')"; epi_fat_rc=$?
+epi_fat_out=$(cat "$TMP_ROOT/epi.out")
+if (( epi_rep_rc == 0 && epi_fat_rc == 1 )) \
+   && grep -q 'repo observation(s)' <<<"$epi_rep_out" \
+   && grep -q 'A SUITE WROTE TO THE LIVE REPOSITORY' <<<"$epi_fat_out"; then
+  pass "the epilogue wires FATAL to exit 1 and leaves a REPORT-only run at exit 0 (counted, not silent)"
+else
+  fail "exit-code wiring wrong (report_rc=$epi_rep_rc fatal_rc=$epi_fat_rc): rep='$(printf '%s' "$epi_rep_out" | tr '\n' '|' | cut -c1-160)' fat='$(printf '%s' "$epi_fat_out" | tr '\n' '|' | cut -c1-160)'"
+fi
+
+# --- 51. FAIL-CLOSED INPUT: an unreadable toplevel must not MANUFACTURE sibling presence ---------
+# `_repo_boundary_branches_elsewhere` reads `git rev-parse --show-toplevel` to exclude OUR OWN
+# worktree from the sibling set. Before #7795 an unreadable toplevel degraded to `here=""`, and the
+# loop's `[[ -n "$here" && ... ]] ||` then emitted EVERY branch — our own included — as `elsewhere`,
+# setting `shared_store=1`. That is fail-OPEN inside the library, saved only by a caller-side
+# bare-repo guard 900 lines away in the runner, and this change adds a new consumer of
+# `shared_store`. It now returns non-zero, which `_repo_state` already routes to `wt: not-measured`
+# — the withheld-softening path arm 44 pins.
+ck
+bare="$TMP_ROOT/barelib.git"
+git init -q --bare "$bare" || { printf '[FATAL] fixture setup failed: could not init a bare repo.\n' >&2; exit 1; }
+elsewhere_rc=0
+( cd "$bare" && env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    bash -c 'source "'"$LIB"'"; _repo_boundary_branches_elsewhere' >/dev/null 2>&1 ) || elsewhere_rc=$?
+state "$bare"
+if (( elsewhere_rc != 0 )) && grep -qE '^manifest'$'\t''wt'$'\t''not-measured$' <<<"$STATE_OUT"; then
+  pass "an unreadable toplevel fails CLOSED: no sibling set is manufactured, wt is not-measured"
+else
+  fail "elsewhere fails open (rc=$elsewhere_rc): wt row='$(grep -E '^manifest'$'\t''wt' <<<"$STATE_OUT" | tr '\n' '|')'"
+fi
+# --- 52. MUST-PASS: the partition does not depend on TAG OBJECT TYPE ----------------------------
+# The Guard Contract's must-PASS row. Arms 45-49 all create LIGHTWEIGHT tags, so a classifier that
+# somehow keyed on object type would pass every one of them. An annotated tag is a real git object
+# with its own sha, and `show-ref --tags` reports THAT sha rather than the commit's — so it is a
+# different value flowing through the same `bsha`/`asha` compare, and a severity partition must not
+# turn on it. Release tooling produces annotated tags routinely, which is the population this whole
+# softening exists for.
+#
+# `-m` makes it annotated; `pgit` pins GLOBAL/SYSTEM config empty so the operator's
+# `tag.forceSignAnnotated` cannot turn this into a signing failure that reads as a SUT regression.
+ck
+p=$(sibling_probe tagannot) || exit 2
+state "$p"; before="$STATE_OUT"
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
+pgit -C "$p" tag -a v9.9.7 -m 'annotated release'
+require_tag "$p" v9.9.7 "the object-type independence of the created-tag partition"
+if [[ "$(pgit -C "$p" cat-file -t "$(pgit -C "$p" rev-parse refs/tags/v9.9.7)")" != "tag" ]]; then
+  printf '[FATAL] fixture setup failed: refs/tags/v9.9.7 is not an annotated tag object.\n' >&2
+  printf '        This arm measures nothing unless the tag is annotated rather than lightweight.\n' >&2
+  exit 1
+fi
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^REPORT[[:space:]]+refs.*refs/tags/v9\.9\.7 \(tag\) was created$' <<<"$verdict" \
+   && ! grep -qE '^FATAL[[:space:]]+refs' <<<"$verdict"; then
+  pass "an ANNOTATED tag created under a sibling is REPORT too (the partition is object-type blind)"
+else
+  fail "annotated-tag partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# ==============================================================================================
+# ARMS 53-61: THE `shallow` DIMENSION (#7924). `.git/shallow` lives in the repository's COMMON dir
+# — shared by every linked worktree — and `git status` cannot see it, so a `--depth`/`--shallow`
+# operation into the live repo rewrote history availability under every sampled dimension. The
+# fixture writes below land inside probe repos under $TMP_ROOT, never the suite's own repo.
+# ==============================================================================================
+
+# The common dir for a probe, resolved the same way the dimension must resolve it — and asserted
+# as a DIRECTORY before any fixture write, so a pathological git reports a FIXTURE error (the
+# require_tag shape) instead of a phantom SUT pass.
+probe_common() { # probe_common <probe-dir> -> prints the absolute common dir
+  local d="${1:?probe dir required}" c
+  c="$(pgit -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    || { printf '[FATAL] fixture setup failed: --git-common-dir unresolvable in %s.\n' "$d" >&2; exit 1; }
+  [[ -d "$c" ]] \
+    || { printf '[FATAL] fixture setup failed: common dir %s is not a directory.\n' "$c" >&2; exit 1; }
+  printf '%s' "$c"
+}
+
+# --- 53. absent -> absent is a MEASURED clean state -------------------------------------------
+# `absent` is a verdict, not a fallback: the snapshot must CARRY the `shallow` body line so a
+# dimension that silently stopped emitting cannot launder through an empty delta.
+ck
+p=$(new_probe shallowstable) || exit 2
+state "$p"; before="$STATE_OUT"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^shallow'$'\t''absent$' <<<"$before" \
+   && grep -qE '^manifest'$'\t''shallow'$'\t''measured$' <<<"$before" \
+   && ! grep -qE '^(FATAL|REPORT|UNMEASURABLE)[[:space:]]+shallow' <<<"$verdict"; then
+  pass "no shallow file is a measured 'absent', and an unchanged one emits no verdict line"
+else
+  fail "absent-stable wrong: verdict='$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)'"
+fi
+
+# --- 54. absent -> present is FATAL and names CREATED (positive observation, count == 1) --------
+# An absence-only assertion passes on an empty verdict — the harness-honesty row. The arm asserts
+# the `FATAL\tshallow` line was OBSERVED, exactly once, naming the transition.
+ck
+p=$(new_probe shallowcreate) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$p"; before="$STATE_OUT"
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+n_fat=$({ grep -cE '^FATAL[[:space:]]+shallow' <<<"$verdict" || true; })
+if [[ "$n_fat" == 1 ]] && grep -qE '^FATAL[[:space:]]+shallow.*CREATED' <<<"$verdict"; then
+  pass "a .git/shallow CREATED mid-window is FATAL and names the transition"
+else
+  fail "shallow create not FATAL (fatal_shallow=$n_fat): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 55. LINKED WORKTREE: the dimension reads the COMMON dir, not the per-worktree git dir ------
+# The arm that dies if the sampler ever resolves `--git-dir`: inside a linked worktree that path is
+# `.git/worktrees/<n>`, which never carries `shallow`. The state is taken INSIDE the linked
+# checkout; the file is written to the MAIN repo's common dir mid-window.
+ck
+p=$(new_probe shallowlinked) || exit 2
+git -C "$p" worktree add -q "$TMP_ROOT/shallowlinked-co" -b shallowlinked-br 2>/dev/null \
+  || { printf '[FATAL] fixture setup failed: could not add a linked worktree.\n' >&2; exit 1; }
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$TMP_ROOT/shallowlinked-co"; before="$STATE_OUT"
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$TMP_ROOT/shallowlinked-co"; after="$STATE_OUT"
+verdict=$(classify_in "$TMP_ROOT/shallowlinked-co" "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+shallow.*CREATED' <<<"$verdict"; then
+  pass "a shallow write to the shared common dir is seen from INSIDE a linked worktree"
+else
+  fail "linked-worktree resolution wrong (dimension may be reading --git-dir): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 56. present -> present, graft set CHANGED, is FATAL ----------------------------------------
+# A depth-bounded fetch on an ALREADY-shallow repo REPLACES the boundary SHA set — presence and
+# line count are unchanged, so a presence-only or `wc -l`/`stat`-keyed dimension could never see
+# it. The write is a same-cardinality swap (one SHA overwritten by another), not an append:
+# the content digest is what this arm pins.
+ck
+p=$(new_probe shallowchange) || exit 2
+# Both SHAs are committed BEFORE the window: a commit inside it would move head/refs and the delta
+# would no longer isolate the graft file.
+pgit -C "$p" commit -q --allow-empty -m deepen
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+pgit -C "$p" rev-parse 'HEAD~1' > "$common/shallow"
+state "$p"; before="$STATE_OUT"
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+n_fat=$({ grep -cE '^FATAL' <<<"$verdict" || true; })
+if [[ "$n_fat" == 1 ]] && grep -qE '^FATAL[[:space:]]+shallow.*CHANGED' <<<"$verdict"; then
+  pass "a graft-set change on an already-shallow repo is FATAL (content, not just presence)"
+else
+  fail "graft change not FATAL (fatal_lines=$n_fat): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 57. present -> absent is FATAL (the `git fetch --unshallow` shape) -------------------------
+# Symmetric arm: an `absent->present`-only classifier is the asymmetric-arm mutation row.
+ck
+p=$(new_probe shallowremove) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$p"; before="$STATE_OUT"
+rm -f "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+shallow.*REMOVED' <<<"$verdict"; then
+  pass "a .git/shallow REMOVED mid-window is FATAL (the --unshallow shape)"
+else
+  fail "shallow removal not FATAL: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 58. sibling worktrees present — STILL FATAL, no shared_store softening --------------------
+# The no-softening decision IS the contract: a shallow flip mid-window changes what `git log`
+# answers for every suite still to run, so the harm lands on THIS run's evidence — unlike a
+# sibling ref move there is no attribution gap to excuse a REPORT.
+ck
+p=$(sibling_probe shallowprop) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$p"; before="$STATE_OUT"
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+# The premise must be witnessed, not assumed: if the `wt` family failed to capture the sibling
+# this arm would be exercising the no-sibling path while claiming the softened regime.
+if ! grep -qE '^wt'$'\t' <<<"$before"; then
+  printf '[FATAL] fixture setup failed: the sibling worktree never reached the before-snapshot.\n' >&2
+  printf '        This arm cannot measure no-softening under siblings without it.\n' >&2
+  exit 1
+fi
+if grep -qE '^FATAL[[:space:]]+shallow.*CREATED' <<<"$verdict" \
+   && ! grep -qE '^REPORT[[:space:]]+shallow' <<<"$verdict"; then
+  pass "sibling presence does NOT soften a shallow delta: still FATAL"
+else
+  fail "shallow softened by siblings: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 59. common dir unresolvable -> not-measured, UNMEASURABLE, never a manufactured absent -----
+# `absent` is a legitimate measured state; conflating it with capture failure manufactures a clean
+# baseline on a broken read. Fixture: a PATH shim whose `git` fails ONLY --git-common-dir.
+ck
+p=$(new_probe shallowdeg) || exit 2
+stubbin="$TMP_ROOT/shallowdeg-bin"; mkdir -p "$stubbin"
+real_git="$(command -v git)"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'for a in "$@"; do [[ "$a" == "--git-common-dir" ]] && exit 1; done' \
+  "exec $(printf '%q' "$real_git") \"\$@\"" > "$stubbin/git"
+chmod +x "$stubbin/git"
+state "$p"; before="$STATE_OUT"
+state "$p" "PATH=$stubbin:$PATH"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^manifest'$'\t''shallow'$'\t''not-measured$' <<<"$after" \
+   && grep -qE '^UNMEASURABLE[[:space:]]+shallow' <<<"$verdict" \
+   && ! grep -qE '^FATAL[[:space:]]+shallow' <<<"$verdict"; then
+  pass "an unresolvable common dir is not-measured -> UNMEASURABLE, not a manufactured absent"
+else
+  fail "degrade collapse: verdict='$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)' after-manifest='$(grep -E '^manifest.*shallow' <<<"$after" | tr '\n' '|')'"
+fi
+
+# --- 60. MUST-PASS: a shallow write in a DIFFERENT repo's common dir does not fire --------------
+# The dimension reads THIS snapshot repo's common dir — a shallow flip anywhere else on the
+# machine is not this run's delta.
+ck
+p=$(new_probe shallowhome) || exit 2
+other=$(new_probe shallowforeign) || exit 2
+other_common=$(probe_common "$other")
+assert_fixture_dir "$other_common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$p"; before="$STATE_OUT"
+pgit -C "$other" rev-parse HEAD > "$other_common/shallow"
+# The positive half of the vacuity pair: a must-PASS arm that never verifies its fixture write
+# landed is green under ANY dimension regression — including "reads nothing". Witness the write
+# through the dimension's own read of the OTHER repo before asserting silence here.
+state "$other"; ostate="$STATE_OUT"
+if ! grep -qE '^shallow'$'\t''present'$'\t' <<<"$ostate"; then
+  printf '[FATAL] fixture setup failed: the foreign-repo shallow write never measured present.\n' >&2
+  printf '        This arm cannot distinguish "correctly scoped" from "scoped to nothing".\n' >&2
+  exit 1
+fi
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if ! grep -qE '^FATAL' <<<"$verdict"; then
+  pass "a shallow write in a foreign repo's common dir does not fire here"
+else
+  fail "foreign shallow write fired: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 61. The rendered claim names the shallow dimension's OWN surface ---------------------------
+# `_repo_boundary_dim_prose`'s default arm prints the bare token `shallow`; a FATAL whose rendered
+# claim names nothing the operator can find is the claim-outruns-content defect this lib exists to
+# close. Asserted on the RENDERED list (the runner's own path), not the function alone.
+ck
+p=$(new_probe shallowprose) || exit 2
+rendered=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c \
+  'source "'"$LIB"'"; s="$(_repo_state)"; repo_boundary_render_inspected "$s"')
+if grep -qF '.git/shallow' <<<"$rendered"; then
+  pass "the inspected list renders the shallow dimension's real surface (.git/shallow)"
+else
+  fail "shallow prose missing from the rendered claim: '$(printf '%s' "$rendered" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 62. present -> present, STABLE, is clean -----------------------------------------------------
+# The must-PASS half of the grafts property: every arm until now either started absent or changed
+# the file, so a mutant that FATALs on ANY `present` endpoint — or that hashes nothing and always
+# reports the same digest — is green under 53-61. A stable measured file must produce NO verdict.
+ck
+p=$(new_probe shallowstable) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$p"; before="$STATE_OUT"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if ! grep -qE '^(FATAL|REPORT)[[:space:]]+shallow' <<<"$verdict"; then
+  pass "an unchanged .git/shallow produces no verdict (present->present is clean)"
+else
+  fail "stable shallow flagged: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 63. A non-regular node at the path is MEASURED, and the snapshot does not block --------------
+# The `-e && cat` shape had two failure modes a FIFO exposes at once: `cat` on a FIFO with no
+# writer blocks FOREVER (the after-snapshot would hang the whole battery), and a return-1 probe
+# would launder the node into `not-measured` — UNMEASURABLE, non-blocking — for what git itself
+# reads as "not shallow". The `unreadable` state exists so the node is measured and the
+# transition stays FATAL. `timeout` bounds the read: a regression to `cat` hangs for 15s, not the
+# suite's lifetime.
+ck
+p=$(new_probe shallowfifo) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$p"; before="$STATE_OUT"
+mkfifo "$common/shallow"
+# The bounded read is scoped to the DIMENSION, not `_repo_state`: git itself
+# opens .git/shallow the first time it parses a commit, so `git status` in the
+# snapshot would block on a FIFO no matter what the dimension does — no
+# dimension can promise a hang-free snapshot in the presence of one. What the
+# dimension must promise is that it adds NO block of its own: it never opens a
+# non-regular node, so it returns `unreadable` immediately.
+dim=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt \
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null timeout 15 bash -c \
+  'source "'"$LIB"'"; _repo_boundary_dim_shallow' </dev/null)
+rc=$?
+if [[ $rc -eq 124 ]]; then
+  fail "the shallow dimension BLOCKED on a FIFO at .git/shallow (a return-to-cat regression)"
+elif [[ "$dim" != "unreadable" ]]; then
+  fail "a FIFO at .git/shallow measured '$dim' instead of the unreadable state"
+else
+  # Classify a fabricated after-snapshot carrying the measured state — the
+  # real snapshot cannot be taken while the FIFO sits at the path (see above).
+  # classify's own live reads (symbolic-ref, remote, ref resolution) parse no
+  # commits, so they do not touch the node.
+  after="$(printf '%s\n' "$before" | sed 's/^shallow\tabsent$/shallow\tunreadable/')"
+  verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null timeout 15 bash -c \
+    'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+  if grep -qE '^FATAL[[:space:]]+shallow' <<<"$verdict"; then
+    pass "a non-regular node at .git/shallow is measured 'unreadable' and transitions FATAL without blocking"
+  else
+    fail "non-regular node did not classify FATAL: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)'"
+  fi
+fi
+
+# --- 64. A dangling symlink is an existing node, not absence --------------------------------------
+# `[[ -e ]]` follows links, so a symlink to nothing tests FALSE and the sampler reports `absent` —
+# the file-check family then sees "nothing there" where a node exists, and a
+# dangling->present swap reads as an ordinary CREATED instead of node-replacement. `-L` catches
+# the dangling case; a non-readable/non-regular symlink target is `unreadable` either way.
+ck
+p=$(new_probe shallowdangling) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$p"; before="$STATE_OUT"
+ln -s "$common/does-not-exist" "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -q $'^shallow\tunreadable$' <<<"$after" \
+   && grep -qE '^FATAL[[:space:]]+shallow' <<<"$verdict"; then
+  pass "a dangling symlink at .git/shallow measures 'unreadable' (node exists), FATAL"
+else
+  fail "dangling symlink conflated with absence: '$(printf '%s' "$after" | grep '^shallow' | cut -c1-120)'"
+fi
+
+# --- 65. The shallow remedy is TRANSITION-AWARE ---------------------------------------------------
+# `git fetch --unshallow` on a complete repository exits 128 ("does not make sense") — prescribing
+# it for a REMOVED verdict hands the operator a command that cannot run exactly when the state is
+# worst (a file deleted WITHOUT --unshallow leaves missing objects). The classifier's detail
+# carries the transition keyword; next_action dispatches on it.
+ck
+removed_next=$(bash -c 'source "'"$LIB"'"; repo_boundary_next_action shallow "$1"' _ \
+  '.git/shallow was REMOVED — the `git fetch --unshallow` shape, or the file was deleted outright')
+created_next=$(bash -c 'source "'"$LIB"'"; repo_boundary_next_action shallow "$1"' _ \
+  '.git/shallow was CREATED — the whole repository, every worktree, is now shallow')
+changed_next=$(bash -c 'source "'"$LIB"'"; repo_boundary_next_action shallow "$1"' _ \
+  'graft set CHANGED — a depth-bounded fetch on an already-shallow repo moved the boundary')
+# The REMOVED diagnostic itself names "--unshallow" in prose ("rather than via
+# --unshallow"), so the negative arm asserts the ABSENCE OF A FETCH COMMAND,
+# not the absence of the word.
+if ! grep -q 'git fetch' <<<"$removed_next" \
+   && grep -q 'fetch --unshallow' <<<"$created_next" && grep -q 'fetch --unshallow' <<<"$changed_next" \
+   && grep -qF 'is-shallow-repository' <<<"$removed_next"; then
+  pass "shallow next-action dispatches on the transition (diagnose on REMOVED, --unshallow on CREATED/CHANGED)"
+else
+  fail "shallow remedy is transition-blind or backwards: removed='$removed_next' created='$created_next'"
+fi
+
+# --- 66. An after-ONLY manifest dimension is UNMEASURABLE, once ----------------------------------
+# The pairing loop used to iterate the BEFORE manifest only: a dimension that existed in `after`
+# but not `before` fell through to the family comparators with an empty before-value, and for
+# `shallow` that empty-vs-present diff fabricated a `REMOVED`-shaped FATAL against a row the
+# older snapshot never promised to measure. The union walk must emit UNMEASURABLE — exactly once,
+# not once per pass.
+ck
+p=$(new_probe afteronly) || exit 2
+before=$'manifest\thead\tmeasured\nhead\tabc123\nmanifest\tworktree\tmeasured\nworktree\tdeadbeef'
+after=$'manifest\thead\tmeasured\nhead\tabc123\nmanifest\tworktree\tmeasured\nworktree\tdeadbeef\nmanifest\tshallow\tmeasured\nshallow\tabsent'
+verdict=$(classify_in "$p" "$before" "$after")
+n_unm=$({ grep -cE '^UNMEASURABLE[[:space:]]+shallow' <<<"$verdict" || true; })
+if [[ "$n_unm" == 1 ]] && ! grep -qE '^FATAL' <<<"$verdict"; then
+  pass "an after-only dimension renders UNMEASURABLE exactly once (no fabricated transition)"
+else
+  fail "after-only dimension misclassified: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 67. The rendered claim names the `wt` classification input -----------------------------------
+# `wt` rides the manifest (the sibling set decides refs FATAL vs REPORT) but had no `dim_prose`
+# arm — its rendered name was the bare token `wt`, unexplained, in the operator-facing list.
+ck
+p=$(new_probe wtprose) || exit 2
+rendered=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c \
+  'source "'"$LIB"'"; s="$(_repo_state)"; repo_boundary_render_inspected "$s"')
+if grep -qF 'sibling worktrees' <<<"$rendered"; then
+  pass "the inspected list renders the wt input in words, not the bare token"
+else
+  fail "wt prose missing from the rendered claim: '$(printf '%s' "$rendered" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- Accounting, WHOLE-SUITE checkpoint. The mid-file one above stops at arm 38.
+if [[ $((passes + fails)) -ne $asserted ]]; then
+  printf '\n[FATAL] accounting (whole suite): passes+fails (%d) != asserted (%d).\n' "$((passes + fails))" "$asserted" >&2
+  printf '  An arm was counted without recording a verdict, or recorded one without being counted.\n' >&2
+  exit 1
+fi
+
+# ANTI-VACUITY FLOOR. Gated on assertions EXECUTED (passes + fails), not on `passes` alone.
+# Keyed on `passes`, a suite with four genuinely FAILING arms reported
+# "only 48 assertion(s) PASSED ... arms were deleted or neutered" (#7795 review) -- the first line
+# an operator reads, misattributing a real classifier defect to suite tampering. Worse, the same
+# counter is the one a neutered `fail()` INFLATES, so the floor moved in the wrong direction
+# exactly when it mattered; the instrument self-test at the top of this file is what catches that.
+MIN_ASSERTIONS=72
+if [[ $((passes + fails)) -lt $MIN_ASSERTIONS ]]; then
+  echo "[FAIL] only $((passes + fails)) assertion(s) EXECUTED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
+  exit 1
+fi
+if [[ $fails -gt 0 ]]; then
+  echo "[FAIL] ${fails} arm(s) FAILED (all ${MIN_ASSERTIONS}+ executed, so nothing was deleted — this is a real defect, not suite tampering)" >&2
+fi
+
+echo
+echo "repo-write-boundary.test.sh: ${passes} passed, ${fails} failed, ${asserted} assertion(s) executed (floor ${MIN_ASSERTIONS})"
+[[ $fails -eq 0 ]] || exit 1

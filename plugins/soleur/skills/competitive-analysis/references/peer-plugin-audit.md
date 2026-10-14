@@ -74,7 +74,7 @@ Use the raw output as the mapping target. Do not assume prior catalog counts —
 
 ## Step 5 — Semantic mapping via Task delegation
 
-Spawn the `competitive-intelligence` agent with the extended prompt template below. The skill (not the agent) invokes Task directly — one hop.
+Spawn the `soleur:product:competitive-intelligence` agent with the extended prompt template below. The skill (not the agent) invokes Task directly — one hop.
 
 ### Task prompt template
 
@@ -103,9 +103,11 @@ Commands (<K>): <ls output>
 
 # Discipline
 - SEMANTIC MATCHING, not name matching. Examples:
-  - Their senior-architect → Soleur architecture-strategist + ddd-architect + cto
-  - Their financial-analyst → Soleur revenue-analyst + financial-reporter
-  - Their content-creator → Soleur copywriter + content-writer
+  - Their senior-architect → soleur:engineering:review:architecture-strategist +
+    soleur:engineering:design:ddd-architect + soleur:engineering:cto
+  - Their financial-analyst → soleur:finance:revenue-analyst +
+    soleur:finance:financial-reporter
+  - Their content-creator → soleur:marketing:copywriter + content-writer
   Report these as overlap, not as gaps.
 - CPO gate: every port recommendation MUST name the specific founder outcome
   it unblocks. If unspecified, the recommendation auto-converts to
@@ -203,6 +205,7 @@ When porting concrete SKILL.md text, the Soleur target file MUST include:
 - If the audited repo does not fit any existing tier, **flag this in the report** and request taxonomy guidance from the CI team. Do not invent new tiers in this sub-mode — tier taxonomy is a CI-team decision, not a per-audit one.
 - Update the file's frontmatter: `last_updated: <today>`, `last_reviewed: <today>`.
 - Do NOT write a parallel file under `knowledge-base/product/research/peer-plugin-audits/`. Single destination prevents stale copies.
+- When a later founder decision disposes of an audit item (declined, bundled, superseded), write the disposition against the audit's OWN statement of the item, not the decision's shorthand: re-read the audit row the item came from before claiming it "already shipped". Record declines in the audit record, not in `knowledge-base/project/rejected/` (ADR-234 holds refused product concepts). **Why:** #8648 — a decline said the writing trio's one idea (leading words) had shipped, while the audit's §2 names leading words AND grounding; only the first shipped.
 
 ## Non-audit outcome
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Button } from "@/components/ui/button";
 import type { AttachmentRef } from "@/lib/types";
 import { reportSilentFallback } from "@/lib/client-observability";
 
@@ -17,6 +18,7 @@ interface AttachmentUrlState {
 
 function useAttachmentUrl(
   storagePath: string,
+  filename?: string,
 ): AttachmentUrlState & { retry: () => void } {
   const [state, setState] = useState<AttachmentUrlState>(() => {
     const cached = urlCache.get(storagePath);
@@ -41,7 +43,8 @@ function useAttachmentUrl(
     fetch("/api/attachments/url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storagePath }),
+      // `filename` names the download for non-image chips (Content-Disposition).
+      body: JSON.stringify({ storagePath, filename }),
     })
       .then((r) => r.json())
       .then((data) => {
@@ -75,7 +78,7 @@ function useAttachmentUrl(
     return () => {
       cancelled = true;
     };
-  }, [storagePath, retryNonce]);
+  }, [storagePath, filename, retryNonce]);
 
   const retry = () => {
     urlCache.delete(storagePath);
@@ -121,13 +124,14 @@ function PreviewUnavailable({
         Preview unavailable
         <span className="sr-only"> for {filename}</span>
       </p>
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={onRetry}
         className="mt-1 text-soleur-text-accent underline"
       >
         Retry
-      </button>
+      </Button>
     </div>
   );
 }
@@ -150,6 +154,7 @@ function ImageAttachment({ attachment }: { attachment: AttachmentRef }) {
     <>
       <button
         type="button"
+        data-button-exempt="composite image-thumbnail wrapper — primitive padding/text styles would distort the thumbnail"
         onClick={() => setExpanded(true)}
         className="overflow-hidden rounded-lg border border-soleur-border-default transition-opacity hover:opacity-80"
       >
@@ -180,9 +185,16 @@ function ImageAttachment({ attachment }: { attachment: AttachmentRef }) {
 }
 
 function FileAttachment({ attachment }: { attachment: AttachmentRef }) {
-  const { url, loadFailed, retry } = useAttachmentUrl(attachment.storagePath);
+  const { url, loadFailed, retry } = useAttachmentUrl(
+    attachment.storagePath,
+    attachment.filename,
+  );
 
-  const sizeKb = Math.round(attachment.sizeBytes / 1_024);
+  // A short note is well under 1 KB; "0 KB" reads as an empty file.
+  const sizeLabel =
+    attachment.sizeBytes < 1_024
+      ? "<1 KB"
+      : `${Math.round(attachment.sizeBytes / 1_024)} KB`;
 
   if (loadFailed) {
     return <PreviewUnavailable filename={attachment.filename} onRetry={retry} />;
@@ -213,7 +225,7 @@ function FileAttachment({ attachment }: { attachment: AttachmentRef }) {
       </svg>
       <div className="flex flex-col">
         <span className="max-w-[200px] truncate text-soleur-text-primary">{attachment.filename}</span>
-        <span className="text-xs text-soleur-text-muted">{sizeKb} KB</span>
+        <span className="text-xs text-soleur-text-muted">{sizeLabel}</span>
       </div>
     </a>
   );

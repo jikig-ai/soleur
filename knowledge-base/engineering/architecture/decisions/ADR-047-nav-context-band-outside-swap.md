@@ -2,12 +2,12 @@
 title: Workspace context band + switcher render outside the single-rail swap region; secondary navs lift in via a portal slot
 status: active
 date: 2026-06-02
-related_adrs: [ADR-044]
+related_adrs: [ADR-044, ADR-158]
 related: [4813, 4810, 4826, 5632]
 related_plans:
-  - knowledge-base/project/plans/2026-06-02-feat-single-nav-rail-drill-in-plan.md
+  - knowledge-base/project/plans/archive/20261013-032858-2026-06-02-feat-single-nav-rail-drill-in-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-single-nav-rail/spec.md
+  - knowledge-base/project/specs/archive/20261013-032858-feat-single-nav-rail/spec.md
 brand_survival_threshold: single-user incident
 principles: [AP-011]
 ---
@@ -124,3 +124,108 @@ single mounted container is again the sole source of workspace identity in both 
 across a collapse→expand toggle), since happy-dom presence assertions cannot observe a
 remount. Status stays `active` — this amendment describes the current (now-correct) target
 state.
+
+## Amendment 2026-08-03 (#7186): Decision 2's portal is scoped, not unconditional
+
+Decision 2 says drilled sections lift their secondary nav into the rail via a portal. That
+remains the rule. It is now stated with its one scoped exception, because the KB read as
+unconditional and that produced a surface with no mobile navigation model.
+
+**Scoped exception.** The KB file tree still has exactly ONE mount and the rail is still
+its default host. On a phone (`< 768px`) with a populated tree, at the KB landing route
+only, that single mount relocates to the content column — the rail portal then renders
+nothing, so no second tree exists at any breakpoint. Every other cell is unchanged:
+desktop anything, the mobile document route, and all mobile `fullWidth` states (loading /
+503 / 404 / unknown / empty) keep the tree portaled into the drawer, which is what keeps
+the empty-tree "Connect a repo or add docs" CTA and the "Sync now" self-recovery valve
+exactly as reachable as before.
+
+Note the breakpoint is NOT the discriminator on its own — the portal is live *below* `md`
+in every non-populated state — so this must not be written down as an "`md+` only" rule.
+The discriminator is the derived `treeHost` value in `useKbLayoutState`.
+
+See [ADR-158](./ADR-158-kb-file-tree-host-is-a-derived-value.md) for the derivation, the two
+safety facts that make it safe — one CONDITIONAL (no viewport-derived value reaches the hydration
+render, which holds only while the KB tree's SWR key is never seeded pre-hydration) and one
+structural (`RailSlotPortal` is null until its ref callback fires) — and the rejected alternatives. The
+rejected-alternatives table above is unchanged — CSS dual-render is still rejected, and
+ADR-158 rejects it again on the same grounds.
+
+## Amendment 2026-08-04 (#7222): collapse is defined only at `md`+, and the provider owns that
+
+The "One collapse key" decision above says the unified rail owns collapse via a single ⌘B
+handler. It never said at which *breakpoints* collapse means anything, and the omission
+shipped a bug.
+
+Below `md` the `aside` is not a rail at all — it is the full-width hamburger drawer
+(`w-64`, never `md:w-14`). There is nothing to collapse there. But
+`soleur:sidebar.main.collapsed` is a persisted preference with no viewport term, so a user
+who collapsed their desktop rail got a drawer that rendered as if it were a 56px icon
+strip: the Settings sub-nav dropped its labels, the theme control degraded from the
+three-segment selector to the icon-only cycle button, the Conversations rail hid its list,
+and the drawer footer lost the signed-in email. Every one of those consumers branches in
+**JS**, on `useRailCollapsed()` or a `collapsed` prop. The layout's own collapse styling is
+written with `md:`-prefixed classNames, which are viewport-scoped by construction and were
+therefore never wrong — which is exactly why the defect was invisible on desktop and why no
+existing rail test caught it (happy-dom's default 1024px is the cell where the old
+behaviour is correct).
+
+**Amendment — the contract, in full:**
+
+1. **Collapse is defined only at `md`+.** Below the breakpoint the drawer is always
+   expanded, whatever the stored preference says.
+2. **`RailCollapsedProvider`'s value is viewport-aware.** `(dashboard)/layout.tsx` — the
+   sole collapse owner — publishes `collapsePref && !isMobile`, not the raw preference.
+3. **No consumer may re-derive the viewport term.** A consumer that ANDs in its own
+   `useMediaQuery`/`useIsMobile` creates a second authority that can disagree with the
+   first; that is the same class of defect ADR-158 exists to prevent for the tree host.
+   Read the published value and nothing else.
+4. **The stored preference is not rewritten by a mobile session.** The gate applies to the
+   derived value only, so a phone visit never silently expands the user's desktop rail.
+5. **The provider spans `<main>`, not just the rail** (unchanged, and load-bearing — the
+   portaled secondary nav reads it through the REACT tree). Because its reach is wider than
+   the rail's DOM, gating at the provider is the only place that covers every reader; this
+   is stated here rather than left implied, since (3) makes the provider the single term.
+
+Fixed once at the provider rather than at the four known consumers deliberately: the fifth
+consumer has not been written yet, and a per-consumer fix is a rule you have to remember
+instead of an invariant you cannot violate. `test/mobile-rail-collapse-leak.test.tsx` pins
+it by probing the published value from inside the rail slot — asserting one consumer's
+rendered output would leave the other three unguarded.
+
+---
+
+## Amendment 2026-08-06 (#7326): the layout's window-event inbox
+
+`(dashboard)/layout.tsx` is the sole owner of both rail-collapse and drawer state, which
+means every component that needs either has to ask for it across a window event rather than
+reach in. There are now three such events, and the amendment above (which named the *owner*
+but not the *protocol*) left no record of how they differ. All three live here so a fourth
+is written against a contract rather than by copying whichever one was found first.
+
+| Event | Direction | Payload | Honoured at |
+|---|---|---|---|
+| `RAIL_EXPAND_EVENT` | expand-only | none (bare `Event`) | un-collapses at `md`+; opens the drawer below `md` |
+| `CHAT_OVERLAY_OPEN_EVENT` | close-only | none (bare `Event`) | every width |
+| `NAV_DRAWER_REVEAL_EVENT` | two-way | `{ open: boolean }` | OPEN below `md` only; CLOSE at every width |
+
+Three properties hold across all of them, and a fourth event must preserve them:
+
+1. **An OPEN is viewport-gated; a CLOSE never is.** `drawerOpen` also drives `<main inert>`
+   and the body scroll lock, neither of which is viewport-scoped — so honouring an open at
+   `md`+ freezes the content pane behind a drawer that is not rendered as one. Refusing a
+   *close* has no such symmetry: it can only strand state.
+2. **Expand-only events carry no payload, and must not learn one.** `RAIL_EXPAND_EVENT`'s
+   existing dispatchers send a bare `Event`; teaching it to read `detail.open` would make
+   every one of them mean "close" by omission. #7326 added a separate two-way event rather
+   than widen it — the cheaper-looking change was the breaking one.
+3. **A reveal that must survive a route change says so explicitly.** `NAV_DRAWER_REVEAL_EVENT`
+   is dispatched by guided-tour steps that ALSO carry a `route`, and `TourProvider` pushes
+   the route first — so the drawer would be shut by the layout's own auto-close-on-pathname
+   one render after it opened. The layout holds a `navRevealed` flag, read through a ref, that
+   suppresses that single auto-close. Every path that force-closes the drawer (the chat
+   takeover, the `md`-crossing handler) must clear the flag, or it strands and suppresses the
+   auto-close for the rest of the session.
+
+Pinned by `test/mobile-rail-collapse-leak.test.tsx` (`#7326 — the guided tour reveals the
+nav drawer it talks about`), including the desktop no-op and the strand cases.

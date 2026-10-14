@@ -3,7 +3,7 @@
  * bot-signin.ts — signs in as the ux-audit bot and writes a Playwright-compatible
  * storageState JSON containing the Supabase SSR auth cookie.
  *
- * Usage: bun plugins/soleur/skills/ux-audit/scripts/bot-signin.ts
+ * Usage: bun "${CLAUDE_PLUGIN_ROOT}/skills/ux-audit/scripts/bot-signin.ts"
  *
  * Env:
  *   SUPABASE_URL                    prd

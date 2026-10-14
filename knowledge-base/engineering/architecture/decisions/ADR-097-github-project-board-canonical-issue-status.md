@@ -56,7 +56,7 @@ processing Status. Concretely:
 - Cards advance as issues are processed, and the Workstream tab mirrors exactly
   what the operator sees on the board — closing the two-kanban divergence.
 - A single new operator prerequisite (the App permission grant) gates the write
-  + read paths; both surfaces degrade honestly until it lands.
+  - read paths; both surfaces degrade honestly until it lands.
 - Two GraphQL surfaces touch the board (a CI writer, a web-app reader). Accepted:
   the CI writer keeps production-server write-code out of the request path. The
   webhook-ingress alternative (below) would collapse them but adds a prod write

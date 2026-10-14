@@ -7,7 +7,7 @@ date: 2026-05-12
 # DSAR Export — Oversize Account Fallback
 
 **Issue:** #3637
-**Plan:** `knowledge-base/project/plans/2026-05-12-feat-dsar-art15-export-endpoint-plan.md`
+**Plan:** `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-dsar-art15-export-endpoint-plan.md`
 **Related:** `dsar-export-failed-job.md`, `dsar-export-oversize.sh`
 **Compliance:** GDPR Art. 12(3) — 30-day response window with one possible 60-day extension
 

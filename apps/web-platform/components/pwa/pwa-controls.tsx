@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
-  watchForUpdate,
   postSkipWaiting,
   reloadOnControllerChange,
+  watchForUpdate,
+  watchUpdateAcceptance,
 } from "@/lib/pwa/sw-update";
 import {
   isStandalone,
@@ -91,7 +93,11 @@ export function PwaControls() {
   }
 
   function handleReload() {
-    if (waiting) postSkipWaiting(waiting);
+    if (!waiting) return;
+    // Watch BEFORE posting: skipWaiting can complete fast enough that a listener
+    // attached afterwards misses the controllerchange and reports a false timeout.
+    watchUpdateAcceptance();
+    postSkipWaiting(waiting);
   }
 
   function dismissIosCard() {
@@ -111,37 +117,44 @@ export function PwaControls() {
       {showUpdate && (
         <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-2 shadow-lg">
           <span className="text-sm text-soleur-text-primary">Update available</span>
-          <button
+          <Button
+            variant="gold"
             type="button"
             onClick={handleReload}
-            className="min-h-11 rounded-md bg-soleur-accent-gold-fill px-3 py-1 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
+            className="min-h-11"
           >
             Reload
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
             type="button"
             aria-label="Dismiss update notice"
             onClick={() => setUpdateDismissed(true)}
-            className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-soleur-text-muted hover:text-soleur-text-primary"
+            className="min-h-11 min-w-11"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M18 6 6 18M6 6l12 12" />
             </svg>
-          </button>
+          </Button>
         </div>
       )}
 
       {showInstall && (
-        <button
+        <Button
+          variant="outlined"
           type="button"
           onClick={handleInstall}
-          className="pointer-events-auto flex min-h-11 items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2 text-sm text-soleur-text-primary shadow-lg hover:bg-soleur-bg-surface-2"
+          // The pill floats over page content — the surface-1 fill must be
+          // real, so it rides `style` (a bg-* class loses to the variant's
+          // bg-transparent under Tailwind emission order).
+          style={{ background: "var(--color-soleur-bg-surface-1)" }}
+          className="pointer-events-auto min-h-11 shadow-lg"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
           </svg>
           Install app
-        </button>
+        </Button>
       )}
 
       {showIosCard && (
@@ -150,16 +163,17 @@ export function PwaControls() {
             <span className="font-medium text-soleur-text-primary">Install Soleur:</span> tap the
             Share icon, then <span className="font-medium text-soleur-text-primary">Add to Home Screen</span>.
           </p>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             aria-label="Dismiss install guidance"
             onClick={dismissIosCard}
-            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-soleur-text-muted hover:text-soleur-text-primary"
+            className="min-h-11 min-w-11 shrink-0 hover:text-soleur-text-primary"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M18 6 6 18M6 6l12 12" />
             </svg>
-          </button>
+          </Button>
         </div>
       )}
     </div>

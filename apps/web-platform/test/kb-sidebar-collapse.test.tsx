@@ -41,9 +41,16 @@ vi.mock("@/components/kb/get-ancestor-paths", () => ({
   getAncestorPaths: () => [],
 }));
 
-// Force mobile layout for sidebar collapse tests (desktop uses PanelGroup)
+// #7186: this suite asserts the RAIL contracts (ADR-047), so it runs on the
+// DESKTOP arm. It previously forced mobile purely to dodge the desktop
+// PanelGroup — which was incidental, and became load-bearing in the wrong
+// direction once a mobile populated landing render started hosting the tree in
+// the content column instead of the rail. The mobile arm (empty tree → still
+// portals into the rail) is asserted at the bottom of this file; the mobile
+// populated-landing cell is covered in test/kb-mobile-browse.test.tsx.
+let mockIsDesktop = true;
 vi.mock("@/hooks/use-media-query", () => ({
-  useMediaQuery: () => false,
+  useMediaQuery: () => mockIsDesktop,
 }));
 
 import KbLayout from "@/app/(dashboard)/dashboard/kb/layout";
@@ -51,6 +58,7 @@ import KbLayout from "@/app/(dashboard)/dashboard/kb/layout";
 describe("KB file tree lifts into the single nav rail slot (ADR-047)", () => {
   beforeEach(() => {
     mockPathname = "/dashboard/kb";
+    mockIsDesktop = true;
     localStorage.clear();
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       if (url === "/api/kb/tree") {
@@ -206,5 +214,56 @@ describe("KB file tree lifts into the single nav rail slot (ADR-047)", () => {
     const wrapper = await screen.findByTestId("kb-rail-tree");
     expect(await within(wrapper).findByTestId("file-tree")).toBeInTheDocument();
     expect(within(wrapper).getByTestId("search-overlay")).toBeInTheDocument();
+  });
+
+  // #7186 mobile arm — the rail portal is NOT abandoned below `md`. Every
+  // mobile cell except "populated + landing" still portals into the drawer, so
+  // the empty-tree self-recovery path (the "Connect a repo or add docs" CTA and
+  // the "Sync now" valve) stays exactly as reachable as it is today.
+  it("mobile + EMPTY tree still portals the shell into the rail (self-recovery path preserved)", async () => {
+    mockIsDesktop = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url === "/api/kb/tree") {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({ tree: { name: "root", children: [] } }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({}),
+        });
+      }),
+    );
+    render(
+      <RailSlotHarness>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
+    );
+    const slot = await screen.findByTestId("rail-slot-harness");
+    expect(await within(slot).findByTestId("kb-rail-empty")).toBeInTheDocument();
+    expect(screen.queryByTestId("kb-browse-tree")).not.toBeInTheDocument();
+  });
+
+  it("mobile + populated DOCUMENT route still portals the tree into the rail", async () => {
+    mockIsDesktop = false;
+    mockPathname = "/dashboard/kb/file.md";
+    render(
+      <RailSlotHarness>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
+    );
+    const slot = await screen.findByTestId("rail-slot-harness");
+    expect(await within(slot).findByTestId("file-tree")).toBeInTheDocument();
+    expect(screen.queryByTestId("kb-browse-tree")).not.toBeInTheDocument();
   });
 });

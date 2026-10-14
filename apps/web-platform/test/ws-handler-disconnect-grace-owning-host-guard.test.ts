@@ -1,7 +1,7 @@
 /**
  * TR2 host-local owning-host guard — multi-host /workspaces epic #5274 Phase 1.
  *
- * Plan: knowledge-base/project/plans/2026-06-30-feat-multi-host-workspaces-phase-1-host-local-correctness-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-30-feat-multi-host-workspaces-phase-1-host-local-correctness-plan.md
  * ADR-068 §5.
  *
  * `runDisconnectGraceAbort(uid, convId)` must NOT abort when a live local OPEN

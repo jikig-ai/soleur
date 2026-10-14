@@ -3,7 +3,7 @@ title: "Sidebar grip goes gold on grab + double-click to collapse"
 type: feature-launch
 publish_date: 2026-08-04
 channels: x, bluesky
-status: scheduled
+status: stale
 pr_reference: "#5522"
 ---
 

@@ -1,0 +1,12 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// TODO: rmSync(dir, { recursive: true }) once the caller owns it
+/* rm(dir) and unlinkSync(dir) belong here eventually */
+const NOTE = "remember rmSync(dir) and rimraf(dir)";
+const TEMPLATE = `then call rm(${NOTE}) or unlink(x)`;
+
+export function scratch(): string {
+  return mkdtempSync(join(tmpdir(), "demo-"));
+}

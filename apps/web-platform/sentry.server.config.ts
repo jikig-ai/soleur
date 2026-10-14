@@ -21,9 +21,21 @@ Sentry.init({
   environment: process.env.NODE_ENV,
   release: sentryRelease,
   debug: process.env.SENTRY_DEBUG === "1",
-  // Error capture only — no performance tracing at current scale.
-  // Enable tracesSampleRate when investigating specific performance issues.
-  tracesSampleRate: 0,
+  // Header-scoped tracing (#8978 Phase 0): the committed perf probe sends
+  // `x-perf-probe: 1` on every request and samples at 1.0, so cold-path
+  // server spans are observable without a Doppler/env change. All other
+  // traffic pays a 0.02 floor for baseline coverage. The header is not a
+  // secret — worst case is extra transaction volume on traffic the caller
+  // already generates (Sentry quota spend only).
+  tracesSampler: (samplingContext) => {
+    const headers = samplingContext.normalizedRequest?.headers;
+    if (headers) {
+      for (const [key, value] of Object.entries(headers)) {
+        if (key.toLowerCase() === "x-perf-probe" && value === "1") return 1;
+      }
+    }
+    return 0.02;
+  },
   // #5417 — drop the auto OnUncaughtException / OnUnhandledRejection
   // integrations. server/crash-handlers.ts installs MANUAL handlers for both
   // (so unhandledRejection deterministically exits — Sentry's default only
@@ -36,6 +48,11 @@ Sentry.init({
         i.name !== "OnUncaughtException" && i.name !== "OnUnhandledRejection",
     ),
   beforeSend(event) {
+    return scrubSentryEvent(event);
+  },
+  // Transaction envelopes bypass `beforeSend` — with tracing armed by the
+  // sampler above they must route through the same scrub walk (#3829 gate).
+  beforeSendTransaction(event) {
     return scrubSentryEvent(event);
   },
   beforeBreadcrumb(breadcrumb) {

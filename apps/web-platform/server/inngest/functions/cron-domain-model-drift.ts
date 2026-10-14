@@ -6,7 +6,7 @@
  * schedule (weekly, Mon 08:00 UTC) and triggers the EXISTING
  * `.github/workflows/scheduled-domain-model-drift.yml` workflow via a
  * `workflow_dispatch` API call. The GHA workflow remains the EXECUTOR — it
- * still runs the deterministic `scripts/domain-model-drift.sh drift` analyzer
+ * still runs the deterministic `plugins/soleur/scripts/domain-model-drift.sh drift` analyzer
  * in an ephemeral runner, parses the stale-citation sub-count, and files an
  * idempotent GitHub issue only when the register cites an unresolvable source
  * (stale > 0).

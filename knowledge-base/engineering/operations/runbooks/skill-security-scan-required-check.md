@@ -15,6 +15,15 @@ The mutation is destructive (full-payload `PUT`); an incomplete payload silently
 strips `bypass_actors` or `conditions`. The accompanying script preserves both
 verbatim and asserts no drift post-apply.
 
+> **Superseded in part (#9454):** the expected check lists below (the "5 entries"
+> and the "Must print 5 lines" outputs, which name `CodeQL`) record the state at
+> the time of the original apply. CodeQL has since been REMOVED from the required
+> set (advisory; it cannot report on `merge_group`, so it cannot coexist with the
+> merge queue). The ruleset now also carries a `merge_queue` rule, so the
+> required-status-checks rule must be selected by type
+> (`select(.type=="required_status_checks")`), never `.rules[0]`. Treat the
+> `CodeQL` entries in those lists as historical.
+
 ## Pre-mutation gates
 
 1. **Phase 2 has merged to main.** Verify:
@@ -119,7 +128,7 @@ Within ~2 min:
 - The "Squash and merge" button is greyed out with "Required statuses must pass".
 - Even admin override is gated by the ruleset's `bypass_actors`.
 
-After verifying the new ruleset check, run [`scripts/audit-bot-codeql-coverage.sh`](../../../../scripts/audit-bot-codeql-coverage.sh) (#3545) to confirm bot-PR coverage of the pre-existing `CodeQL` required check is preserved. See [`codeql-bot-coverage.md`](./codeql-bot-coverage.md).
+After verifying the new ruleset check, run [`scripts/audit-bot-codeql-coverage.sh`](../../../../scripts/audit-bot-codeql-coverage.sh) (#3545) to confirm bot-PR CodeQL coverage (CodeQL was a required check when this runbook was written; since #9454 it is advisory, so the audit is a coverage signal, not a merge gate). See [`codeql-bot-coverage.md`](./codeql-bot-coverage.md).
 
 ## Close
 
@@ -143,7 +152,7 @@ If the smoke test reveals the gate misbehaves (typo'd check name, wrong
 # the payload by hand.
 #
 # Re-issue the PUT with the previous required_status_checks set
-# (4 contexts: CodeQL, dependency-review, e2e, test):
+# (the abridged skeleton below; CodeQL is deliberately NOT restored, see the Superseded note after it):
 gh api --method PUT "repos/jikig-ai/soleur/rulesets/14145388" --input - <<'JSON'
 {
   "name": "CI Required",
@@ -160,8 +169,7 @@ gh api --method PUT "repos/jikig-ai/soleur/rulesets/14145388" --input - <<'JSON'
         "required_status_checks": [
           {"context": "test", "integration_id": 15368},
           {"context": "dependency-review", "integration_id": 15368},
-          {"context": "e2e", "integration_id": 15368},
-          {"context": "CodeQL", "integration_id": 57789}
+          {"context": "e2e", "integration_id": 15368}
         ]
       }
     }
@@ -172,6 +180,13 @@ JSON
 
 Retain the pre-mutation snapshot (the `$before` tempfile in the script) for
 24h after apply as the canonical rollback artifact.
+
+> **Superseded (#9454):** the skeleton above previously listed a fourth row,
+> `{"context": "CodeQL", "integration_id": 57789}`. CodeQL is advisory and is no
+> longer a required status check (it cannot report on `merge_group`, so it is
+> mutually exclusive with the merge queue); the example now shows the post-change
+> shape. The skeleton is abridged: the live `required_status_checks` array is the
+> source of truth and carries the full context set.
 
 ## Operational notes
 

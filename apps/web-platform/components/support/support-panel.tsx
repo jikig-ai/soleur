@@ -5,7 +5,8 @@
 // Reduced-motion aware. Mobile: full-width bottom-anchored sheet.
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 import { SupportComposer } from "./support-composer";
 import { SupportConversation } from "./support-conversation";
 import {
@@ -37,7 +38,7 @@ export function SupportPanel({
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
-  const router = useRouter();
+  const router = usePendingRouter();
   const [entered, setEntered] = useState(false);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -142,12 +143,13 @@ export function SupportPanel({
             {/* Start a fresh thread — only live (canned mode holds no server
                 conversation) and only once there's history to clear/escape. */}
             {live && onReset && messages.length > 0 && (
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 onClick={onReset}
                 aria-label="New conversation"
                 title="New conversation"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+                className="h-8 w-8 hover:text-soleur-text-primary"
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -162,13 +164,14 @@ export function SupportPanel({
                   <path d="M12 20h9" />
                   <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
                 </svg>
-              </button>
+              </Button>
             )}
-            <button
+            <Button
+              variant="ghost"
               type="button"
               onClick={onClose}
               aria-label="Close support"
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+              className="h-8 w-8 hover:text-soleur-text-primary"
             >
               <svg
                 viewBox="0 0 24 24"
@@ -183,7 +186,7 @@ export function SupportPanel({
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
-            </button>
+            </Button>
           </div>
         </header>
 
@@ -194,6 +197,7 @@ export function SupportPanel({
           <button
             type="button"
             onClick={onStartTour}
+            data-button-exempt="full-bleed accent-surface row (border-b + bg-soleur-bg-accent-surface + text-soleur-accent-gold-text) — not button-shaped; gold-on-surface colors cannot reduce to a Button variant via className"
             className="flex shrink-0 items-center gap-2 border-b border-soleur-border-default bg-soleur-bg-accent-surface px-4 py-2.5 text-left text-sm text-soleur-accent-gold-text transition-colors hover:bg-soleur-bg-surface-2"
           >
             <svg

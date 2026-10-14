@@ -14,7 +14,8 @@
 // the draft backend is a tracked follow-up; the manual quick-add above is live.
 
 import { useEffect, useRef, useState } from "react";
-import { GoldButton } from "@/components/ui/gold-button";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { CONCIERGE_ONLINE } from "./concierge-flag";
 import type { CreateIssueBody } from "./workstream-writes";
@@ -30,47 +31,44 @@ export function NewIssueDialog({
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  // Synchronous single-flight guard — state flips are async, so a second submit
-  // in the same tick would still fire without this ref.
-  const inFlight = useRef(false);
+
+  // feat-ui-action-feedback: the bespoke inFlight-ref + submitting pair is
+  // exactly the contract usePendingAction owns (single-flight ref gate,
+  // watchdog, focus restore) — two mechanisms for one guarantee.
+  const { run: runSubmit, pending: submitting } = usePendingAction(
+    async () => {
+      if (title.trim().length === 0) return;
+      setError(null);
+      try {
+        await onSubmit({
+          title: title.trim(),
+          ...(description.trim() ? { body: description.trim() } : {}),
+        });
+        onClose();
+      } catch {
+        // Board already rolled back the optimistic card + toasted; keep the
+        // form values so the user can retry without re-typing.
+        setError("Couldn't create the issue. Please try again.");
+      }
+    },
+  );
 
   useEffect(() => {
     if (open) {
       setTitle("");
       setDescription("");
-      setSubmitting(false);
       setError(null);
-      inFlight.current = false;
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
 
   const canSubmit = title.trim().length > 0 && !submitting;
 
-  async function handleSubmit(e?: React.FormEvent) {
+  function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
-    if (inFlight.current) return; // single-flight: block the double-fire
-    if (title.trim().length === 0) return;
-    inFlight.current = true;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await onSubmit({
-        title: title.trim(),
-        ...(description.trim() ? { body: description.trim() } : {}),
-      });
-      onClose();
-    } catch {
-      // Board already rolled back the optimistic card + toasted; keep the form
-      // values so the user can retry without re-typing.
-      setError("Couldn't create the issue. Please try again.");
-    } finally {
-      inFlight.current = false;
-      setSubmitting(false);
-    }
+    runSubmit();
   }
 
   return (
@@ -79,7 +77,7 @@ export function NewIssueDialog({
       // Preserve the pre-refactor single-flight guard: don't let Escape dismiss
       // while a create is in flight (backdrop is already disabled below).
       onClose={() => {
-        if (!inFlight.current) onClose();
+        if (!submitting) onClose();
       }}
       closeOnBackdrop={true}
       desktopMaxWidth="max-w-md"
@@ -159,13 +157,14 @@ export function NewIssueDialog({
               aria-label="Describe the issue for Concierge"
               className="mb-2 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-base text-soleur-text-primary placeholder:text-soleur-text-tertiary disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none md:text-sm"
             />
-            <button
+            <Button
+              variant="outlined"
               type="button"
               disabled={!CONCIERGE_ONLINE}
               className="rounded-md border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary disabled:cursor-not-allowed disabled:opacity-60"
             >
               Create with Concierge
-            </button>
+            </Button>
             <p
               id="concierge-offline-note"
               className="mt-2 flex items-center gap-1.5 text-xs text-soleur-text-tertiary"
@@ -179,17 +178,25 @@ export function NewIssueDialog({
           </fieldset>
 
           <div className="flex flex-wrap justify-end gap-2">
-            <button
+            <Button
+              variant="outlined"
               type="button"
               onClick={onClose}
               disabled={submitting}
               className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-2 text-sm font-medium text-soleur-text-primary disabled:opacity-60"
             >
               Cancel
-            </button>
-            <GoldButton type="submit" disabled={!canSubmit}>
-              {submitting ? "Creating…" : "Create issue"}
-            </GoldButton>
+            </Button>
+            <Button
+              variant="gold"
+              type="submit"
+              disabled={!canSubmit}
+              loading={submitting}
+              loadingLabel="Creating"
+              modal
+            >
+              Create issue
+            </Button>
           </div>
       </form>
     </ResponsiveModal>

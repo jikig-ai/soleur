@@ -1,0 +1,55 @@
+# Shared egress deny set — SINGLE SOURCE for the Squid `dst` ACL AND the
+# nftables SOLEUR-EGRESS-GW drop (#9534 / feat-open-web-egress).
+#
+# The gateway's CONNECT targets must never reach private/reserved space:
+# container bridges (docker0's 172.17.0.0/16 lives inside 172.16/12), the
+# cluster-private network (10.0.1.0/24 — inside 10/8), and the instance
+# metadata endpoint 169.254.169.254 (cloud-init user_data carries a Doppler
+# read token, #9378).
+#
+# Format: one CIDR per line, `#` comments allowed on their OWN lines ONLY.
+# The nftables loader strips "<space>#..." and does NOT trim trailing
+# whitespace, so a trailing comment leaves "<cidr><spaces>" which fails
+# strict CIDR validation and wedges the loader (reject-whole-file) — the
+# 2026-10-10 post-merge incident. Both consumers read the bare-CIDR form:
+# Squid's `dst` ACL parses v4 and v6 natively; the nftables loader
+# (table ip filter) skips lines containing `:`. Parity is enforced by
+# egress-gateway.test.sh.
+#
+# IPv4 — RFC1918 (incl. cluster-private 10.0.1.0/24 + docker0/soleur-egress0):
+10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+# CGNAT:
+100.64.0.0/10
+# Link-local (instance metadata, #9378):
+169.254.0.0/16
+# Loopback / "this host" / multicast / reserved:
+127.0.0.0/8
+0.0.0.0/8
+224.0.0.0/4
+240.0.0.0/4
+# IANA protocol assignments + TEST-NET documentation ranges:
+192.0.0.0/24
+192.0.2.0/24
+198.51.100.0/24
+203.0.113.0/24
+# Benchmarking (RFC2544), 6to4 relay anycast (deprecated), AS112 sinkhole:
+198.18.0.0/15
+192.88.99.0/24
+192.175.48.0/24
+#
+# IPv6 — skipped by the nftables loader (`:` lines), enforced via Squid only:
+fc00::/7
+fe80::/10
+::1/128
+::/128
+::ffff:0:0/96
+64:ff9b::/96
+64:ff9b:1::/48
+2002::/16
+2001::/32
+ff00::/8
+fec0::/10
+2001:db8::/32
+100::/64

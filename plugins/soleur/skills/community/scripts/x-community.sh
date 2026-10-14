@@ -26,7 +26,151 @@
 
 set -euo pipefail
 
-X_API="https://api.x.com"
+# (#7797) Xtrace refusal -- the FIRST thing after `set …`, so nothing above it is
+# traced. This script ships to installed Soleur CLIs: the terminal it runs in
+# belongs to the founder, and `bash -x` would print their live X
+# credentials. The `:+x` form tests non-emptiness WITHOUT expanding the value, so
+# the guard cannot leak the thing it is refusing over. CONDITIONAL, and that is
+# measured rather than inherited: every credential this file handles is bound
+# BEFORE the prologue runs (this script's own credential check reads them from
+# the environment, it never acquires one at runtime), so the guard can never be
+# empty while a credential is live -- and a founder tracing with none set keeps
+# full tracing.
+# Refusal goes to STDOUT, not stderr: agent runtimes surface stdout and swallow
+# stderr (constitution.md > Code Style > Always), and a swallowed security refusal
+# leaves the user with a bare `exit 78` and no text at all.
+case "$-" in
+  *x*)
+    if [ -n "${X_ACCESS_TOKEN:+x}${X_ACCESS_TOKEN_SECRET:+x}${X_API_KEY:+x}${X_API_SECRET:+x}" ]; then
+      printf 'Refusing to run under `bash -x`: X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET, X_API_KEY, X_API_SECRET are set, and tracing would print them to your terminal. To trace safely, unset all of them and re-run.\n'
+      exit 78
+    fi
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy
+# variables, but NEITHER touches the trust store or the TLS session-key log. On an
+# installed CLI the environment belongs to someone who is not us, so
+# a substituted `CURL_CA_BUNDLE` is a clean MITM of the founder's platform
+# token with every other guard fully intact, and `SSLKEYLOGFILE` is passive
+# decryption with no MITM at all. Matches the line in scripts/betterstack-query.sh.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
+# --- Transport-confinement diagnostics (#7873) --------------------------------
+# Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
+# curl's own stderr (which can carry the URL). A failed request then has four
+# competing causes the founder cannot tell apart: the xtrace refusal, the proxy
+# this script deliberately bypassed, a ~/.curlrc that `--disable` dropped, or an
+# ordinary network failure. So each failure emits ONE structured marker carrying
+# all four discriminators, beside a human line that names the bypass instead of
+# blaming the founder's connectivity.
+SOLEUR_TRANSPORT_SCRIPT="x-community.sh"
+SOLEUR_TRANSPORT_PLATFORM="X"
+
+# The request helpers below run inside `$(...)`, where fd 1 is the capture pipe.
+# Save the script's real stdout so the marker reaches the founder's terminal (and
+# the always-on PostToolUse Bash extractor) instead of being swallowed into a
+# variable. The marker is on stdout BY DESIGN -- the call sites' `2>/dev/null` is
+# what keeps curl's URL-carrying stderr out of the transcript, and it must not be
+# able to suppress the diagnostic too.
+exec 3>&1
+
+# Which proxy variables are non-empty, or `none`.
+proxy_env_names() {
+  local names="" n
+  for n in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
+    if [[ -n "${!n-}" ]]; then
+      names="${names},${n}"
+    fi
+  done
+  if [[ -z "$names" ]]; then
+    printf 'none'
+  else
+    printf '%s' "${names#,}"
+  fi
+}
+
+# True when a proxy this script deliberately bypasses is configured. NO_PROXY
+# alone is not one -- it only ever narrows proxying, so it cannot be the cause.
+proxy_bypassed() {
+  [[ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}${http_proxy:-}${https_proxy:-}${all_proxy:-}" ]]
+}
+
+# One line, eight fields, on the saved stdout.
+#
+# Two fields were literals in the first cut and are now MEASURED (#7898 review):
+# `noproxy_applied` was the constant "true", which ASSERTS the property instead of
+# observing it -- dropping --noproxy from a call site left the diagnostic still
+# claiming it was applied. It now reports whether a proxy was actually configured
+# for this request to bypass, which is the fact a reader needs. `refusal` was the
+# constant "none" at every call site, so the cause it exists to discriminate could
+# never appear; it now carries `env-rebind-refused` and `xtrace-credential-bound`.
+#
+# `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
+# which is correct against an attacker and BREAKS a founder whose corporate CA
+# arrives that way -- curl then exits 60 and, without this field, the event is
+# indistinguishable from an ordinary network failure.
+emit_transport_diag() {
+  local curl_exit="$1" refusal="$2" surface="installed-cli" curlrc="false" noproxy="false"
+  # The hosted sandbox always sets this (agent-env.ts > AGENT_ENV_OVERRIDES); an
+  # installed CLI does not. A label on the event, not a gate on behaviour.
+  if [[ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ]]; then
+    surface="in-sandbox"
+  fi
+  if [[ -f "${HOME:-}/.curlrc" ]]; then
+    curlrc="true"
+  fi
+  if proxy_bypassed; then
+    noproxy="true"
+  fi
+  printf 'SOLEUR_TRANSPORT_DIAG surface=%s script=%s curl_exit=%s refusal=%s proxy_env=%s curlrc_present=%s noproxy_applied=%s tls_env_cleared=%s\n' \
+    "$surface" "$SOLEUR_TRANSPORT_SCRIPT" "$curl_exit" "$refusal" \
+    "$(proxy_env_names)" "$curlrc" "$noproxy" "true" >&3
+}
+
+# Replaces the bare "Check your network connection and try again." on a
+# credentialed-curl failure. With a proxy set, that line blames the founder for a
+# bypass this script chose.
+report_transport_failure() {
+  local curl_exit="${1:-unknown}"
+  local detail="${2:-Failed to connect to the ${SOLEUR_TRANSPORT_PLATFORM} API.}"
+  emit_transport_diag "$curl_exit" "none"
+  echo "Error: ${detail}" >&2
+  # Ordered by how specific the evidence is. Each arm names something THIS script
+  # did, so the founder is never told to go debug their own network for a choice
+  # made here. The bare "check your connection" line is the LAST resort, not the
+  # default -- it was the default in the first cut, which meant a founder whose
+  # corporate CA or curlrc we had just discarded was blamed for it (#7898 review).
+  if [[ "$curl_exit" == "60" || "$curl_exit" == "35" || "$curl_exit" == "77" ]]; then
+    # 60 peer-certificate, 35 TLS handshake, 77 CA-bundle unreadable.
+    echo "This looks like a TLS trust failure. This script deliberately clears CURL_CA_BUNDLE, SSL_CERT_FILE, SSL_CERT_DIR and SSLKEYLOGFILE before the request, because those variables can redirect or expose a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} credential." >&2
+    echo "If your machine needs a corporate CA to reach ${SOLEUR_TRANSPORT_PLATFORM}, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif proxy_bypassed; then
+    echo "This request deliberately bypasses your proxy ($(proxy_env_names)), because a proxy can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token." >&2
+    echo "If you need Soleur to reach ${SOLEUR_TRANSPORT_PLATFORM} through your proxy, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif [[ -f "${HOME:-}/.curlrc" ]]; then
+    echo "You have a ~/.curlrc, and this request deliberately ignores it (--disable), because a curlrc can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token. If it configures a proxy or a CA bundle you need, that is why this failed." >&2
+    echo "That is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  else
+    echo "Check your network connection and try again." >&2
+  fi
+}
+
+# readonly (#7898 review): `cmd_verify` and friends run `set -a; source "$env_file"; set +a`
+# BELOW this line, so a plain assignment here is rebindable by the repo's .env --
+# which retargets the credentialed request while every transport flag stays intact.
+# That is the "--disable and --noproxy are intact and irrelevant" shape this change
+# exists to close, one layer up. readonly makes the destination non-rebindable.
+readonly X_API="https://api.x.com"
+
+# (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
+# The helper library is sourced LAZILY, inside oauth_sign at each signature, not here: it
+# refuses `bash -x` unconditionally at load time (it names its key indirectly, so it has no
+# literal credential name to test), and loading it up here would make `bash -x x-community.sh`
+# with no credentials set exit 78 instead of printing usage -- the case this file's conditional
+# prologue above promises to keep working.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Dependency checks ---
 
@@ -71,15 +215,29 @@ require_credentials() {
     echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
     echo "  2. Create or select a project and app" >&2
     echo "  3. Generate API Key, API Secret, Access Token, and Access Token Secret" >&2
-    echo "  4. Export them as environment variables" >&2
+    echo "  4. Export them as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three" >&2
     exit 1
   fi
 }
 
+# (#9597) The OAuth 1.0a Authorization header carries the signature and the access
+# token, so it rides curl's stdin config channel (`--config -`), never its argument
+# list (readable by every local user in /proc/<pid>/cmdline). The channel is
+# line-oriented: a CR/LF or other control character in the header would end the
+# `header = "..."` directive and let the following bytes act as a new one, so a header
+# holding one is refused BEFORE it is formatted into the stream. The header's own
+# quotes (`oauth_token="..."`) are legitimate and are escaped by `_cfg_q`. The consumer
+# secret and token secret never reach curl at all: they only key the HMAC in oauth_sign.
+_hdr_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+_cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; }
+
 # --- OAuth 1.0a signing ---
 
-# URL-encode a string per RFC 3986
+# URL-encode a string per RFC 3986 (RFC 5849 3.6 for OAuth). Byte-wise: under LC_ALL=C each byte
+# is one character, so a multi-byte UTF-8 character encodes as its bytes (%C3%A9), not as a
+# code point (the `printf '%02X' "'é"` form gives E9 in a UTF-8 locale, which is not the encoding).
 urlencode() {
+  local LC_ALL=C
   local string="$1"
   local encoded=""
   local i c o
@@ -141,12 +299,33 @@ oauth_sign() {
   # Build signature base string
   local base_string="${method}&$(urlencode "$url")&$(urlencode "$param_string")"
 
-  # Build signing key
+  # Build signing key (read BY NAME inside the HMAC function below)
+  # shellcheck disable=SC2034
   local signing_key="$(urlencode "${X_API_SECRET}")&$(urlencode "${X_ACCESS_TOKEN_SECRET}")"
 
-  # Generate HMAC-SHA1 signature
+  # Generate HMAC-SHA1 signature (#9597). The signing key is handed to the function by NAME and
+  # lives only in bash builtins and pipes: it is on no process's argument list. A failed
+  # computation yields no signature and the request is never sent unsigned.
+  # oauth_sign runs inside `$(...)`, so the load's stdout (the library's xtrace refusal text) goes
+  # to the saved real stdout (fd 3), where the founder sees it, not into the captured header.
+  # The load happens at EACH signature, not once: this function body is a command-substitution
+  # subshell, so a function defined here dies with it and nothing is cached for the next call (the
+  # library is one small file). Any function of this name inherited from the environment (an
+  # exported bash function) is dropped first, so an inherited function named hmac_sha1_b64 cannot
+  # stand in for the library's. That is all this closes: the key stays readable by any other
+  # exported function (one named od, tr, openssl, base64 or cat still receives it on its stdin),
+  # which is the same exposure as the exported secret variables themselves.
+  unset -f hmac_sha1_b64 2>/dev/null || true
+  source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {
+    echo "Error: could not load the OAuth signing helper; refusing to send an unsigned request." >&2
+    return 1
+  }
   local signature
-  signature=$(printf '%s' "$base_string" | openssl dgst -sha1 -hmac "$signing_key" -binary | base64)
+  signature=$(printf '%s' "$base_string" | hmac_sha1_b64 signing_key) || signature=""
+  if [[ -z "$signature" ]]; then
+    echo "Error: could not compute the OAuth signature; refusing to send an unsigned request." >&2
+    return 1
+  fi
 
   # Build Authorization header
   local auth_header="OAuth "
@@ -253,11 +432,14 @@ post_request() {
 
   local url="${X_API}${endpoint}"
   local auth_header
-  auth_header=$(oauth_sign "POST" "$url")
+  # `|| exit 1`: a failed signature (it has already said why) stops here. These helpers run inside
+  # `$(...)`, where errexit does not apply, so without it the empty header would fall through to the
+  # shape check below and print a second, misleading "unexpected shape" line.
+  auth_header=$(oauth_sign "POST" "$url") || exit 1
 
   local -a curl_args=(
     -s -w "\n%{http_code}"
-    -H "Authorization: ${auth_header}"
+    --config -
     -H "Content-Type: application/json"
   )
 
@@ -265,11 +447,19 @@ post_request() {
     curl_args+=(-X POST -d "$json_body")
   fi
 
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+
   local response http_code body
-  # Suppress stderr to prevent credential leakage
-  if ! response=$(curl "${curl_args[@]}" "$url" 2>/dev/null); then
-    echo "Error: Failed to connect to X API." >&2
-    echo "Check your network connection and try again." >&2
+  # Suppress stderr to prevent credential leakage. The signed header rides curl's stdin
+  # config channel, never its argument list.
+  local __curl_rc=0
+  response=$(curl --disable --noproxy '*' "${curl_args[@]}" "$url" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to connect to X API."
     exit 1
   fi
 
@@ -307,9 +497,9 @@ get_request() {
     while IFS= read -r param; do
       [[ -n "$param" ]] && param_args+=("$param")
     done <<< "${query_params//&/$'\n'}"
-    auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}")
+    auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}") || exit 1
   else
-    auth_header=$(oauth_sign "GET" "$url")
+    auth_header=$(oauth_sign "GET" "$url") || exit 1
   fi
 
   # Build request URL with query string
@@ -319,11 +509,17 @@ get_request() {
   fi
 
   local response http_code body
-  if ! response=$(curl -s -w "\n%{http_code}" \
-    -H "Authorization: ${auth_header}" \
-    "$request_url" 2>/dev/null); then
-    echo "Error: Failed to connect to X API." >&2
-    echo "Check your network connection and try again." >&2
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+  local __curl_rc=0
+  # The signed header rides curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+    "$request_url" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to connect to X API."
     exit 1
   fi
 
@@ -438,11 +634,11 @@ cmd_fetch_mentions() {
           exit 1
         fi
         if ! [[ "$mr_val" =~ ^[0-9]+$ ]]; then
-          echo "Error: --max-results must be a numeric value, got '${mr_val}'." >&2
+          echo "Error: --max-results must be a numeric value." >&2
           exit 1
         fi
         if (( mr_val < 5 || mr_val > 100 )); then
-          echo "Error: --max-results must be between 5 and 100, got ${mr_val}." >&2
+          echo "Error: --max-results must be between 5 and 100." >&2
           exit 1
         fi
         max_results="$mr_val"
@@ -455,14 +651,14 @@ cmd_fetch_mentions() {
           exit 1
         fi
         if ! [[ "$si_val" =~ ^[0-9]+$ ]]; then
-          echo "Error: --since-id must be a numeric value, got '${si_val}'." >&2
+          echo "Error: --since-id must be a numeric value." >&2
           exit 1
         fi
         since_id="$si_val"
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '${1:-}'" >&2
+        echo "Error: Unknown option." >&2
         echo "Usage: x-community.sh fetch-mentions [--max-results N] [--since-id ID]" >&2
         exit 1
         ;;
@@ -530,7 +726,7 @@ cmd_fetch_timeline() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -538,7 +734,7 @@ cmd_fetch_timeline() {
 
   # Validate --max is a positive integer (prevents query param injection)
   if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
-    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    echo "Error: --max must be a positive integer." >&2
     exit 1
   fi
 
@@ -569,7 +765,7 @@ cmd_fetch_user_timeline() {
 
   # Validate user_id is a positive integer (prevents path traversal)
   if [[ ! "$user_id" =~ ^[0-9]+$ ]]; then
-    echo "Error: user_id must be a positive integer, got '${user_id}'." >&2
+    echo "Error: user_id must be a positive integer." >&2
     exit 1
   fi
 
@@ -582,7 +778,7 @@ cmd_fetch_user_timeline() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -590,7 +786,7 @@ cmd_fetch_user_timeline() {
 
   # Validate --max is a positive integer
   if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
-    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    echo "Error: --max must be a positive integer." >&2
     exit 1
   fi
 
@@ -625,7 +821,7 @@ cmd_post_tweet() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -681,7 +877,7 @@ main() {
     fetch-user-timeline) cmd_fetch_user_timeline "$@" ;;
     post-tweet)          cmd_post_tweet "$@" ;;
     *)
-      echo "Error: Unknown command '${command}'" >&2
+      echo "Error: Unknown command." >&2
       echo "Run 'x-community.sh' without arguments for usage." >&2
       exit 1
       ;;

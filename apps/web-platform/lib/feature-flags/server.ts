@@ -43,10 +43,13 @@ const RUNTIME_FLAGS = {
   // Gates the interactive LikeC4 C4-model visualizer in the KB viewer
   // (replaces static Mermaid C4 rendering). Per-user rollout via role/segment.
   "c4-visualizer": "FLAG_C4_VISUALIZER",
-  // feat-debug-mode-stream — availability flag for the internal dev-cohort
-  // harness instruction stream. Read ONLY through `isDebugModeAvailable`,
-  // which hard-gates `role === "dev"` BEFORE this flag so the role-blind
-  // env-fallback cannot open the stream to `prd` on a Flagsmith outage.
+  // feat-debug-mode-stream — availability flag for the workspace debug
+  // stream panel. Read ONLY through `isDebugModeAvailable`. Open to ALL
+  // roles during beta (the P0-8 `dev`-cohort hard-gate was retired so users
+  // can send harness logs for debugging); this flag remains the kill
+  // switch. Note the env fallback `FLAG_DEBUG_MODE=1` is role-blind — on a
+  // Flagsmith outage it opens the stream to everyone; emission still also
+  // requires the owner-set per-workspace `debug_mode` toggle.
   "debug-mode": "FLAG_DEBUG_MODE",
   // feat-c4-viewer-remove-code-panel-gate-edit — gates ONLY the user-direct
   // C4 edit surface (PUT /api/kb/c4 + the Code panel UI). Default OFF for all
@@ -76,6 +79,10 @@ const RUNTIME_FLAGS = {
   // OFF for all roles until rollout. Fail-closed: FLAG_GUIDED_TOUR=0 mirror (the
   // env fallback is role-blind, so keep it 0 until the Flagsmith feature is created).
   "guided-tour": "FLAG_GUIDED_TOUR",
+  // feat-pluggable-web-agent-engines — gates Codex rollout independently of
+  // registry capability, authorization, and qualification checks. Keep the
+  // env mirror default-off because it is role-blind during a Flagsmith outage.
+  "codex-engine": "FLAG_CODEX_ENGINE",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
@@ -88,9 +95,21 @@ export type Identity = {
   userId: string | null;
   role: Role;
   orgId: string | null;
+  // Additive fields for the dashboard chrome server-render (Phase 6,
+  // perf-dashboard-section-load-latency): email comes free from
+  // userData.user.email; subscriptionStatus rides the widened users select.
+  // ANON_IDENTITY keeps literal null for both (no widening of the anon shape).
+  email: string | null;
+  subscriptionStatus: string | null;
 };
 
-export const ANON_IDENTITY: Identity = { userId: null, role: "prd", orgId: null };
+export const ANON_IDENTITY: Identity = {
+  userId: null,
+  role: "prd",
+  orgId: null,
+  email: null,
+  subscriptionStatus: null,
+};
 
 function envIsOn(name: string): boolean {
   return process.env[name] === "1";
@@ -150,8 +169,9 @@ async function fetchRuntimeFlagsFromFlagsmith(
     // The page degrades gracefully via runtimeEnvFallback() below — this is a
     // recovered path, not a user-facing failure. Report at WARNING level and
     // debounce per-segment so a Flagsmith edge slowdown cannot burst Sentry.
-    // (The error-level, undebounced burst is what tripped the unrelated
-    // alert rule `auth-callback-no-code-burst`; Sentry ID
+    // (The error-level, undebounced burst fired `auth-callback-no-code-burst`,
+    // whose filters were empty 2026-05-17..06-02 so it matched every issue
+    // (#4781); Sentry ID
     // ac2d712121d94ad9ab154a16f6178fa7 / #4571.) Dedup key is the snapshot
     // cache key shape (role:orgId), never a userId — in-process, never emitted.
     mirrorWarnWithDebounce(
@@ -206,19 +226,57 @@ export async function isByokDelegationsEnabled(orgId: string | null | undefined,
 }
 
 /**
- * feat-debug-mode-stream (P0-8) — availability of the internal harness
- * instruction stream for `identity`.
+ * Engine rollout mapping. A null entry means the reviewed engine is always
+ * available once registry capability checks pass; a runtime flag keeps an
+ * engine dark until its qualification and cohort gates are complete. Engines
+ * are deliberately fail-closed until they are registered here.
+ */
+const ENGINE_ROLLOUT_FLAGS: Readonly<Record<string, RuntimeFlagName | null>> = {
+  "claude-code": null,
+  codex: "codex-engine",
+};
+
+export async function isEngineRolloutEnabled(
+  engineId: string,
+  orgId: string | null | undefined,
+  identity: Identity,
+): Promise<boolean> {
+  const rolloutFlag = ENGINE_ROLLOUT_FLAGS[engineId];
+  if (rolloutFlag === undefined) return false;
+  if (rolloutFlag === null) return true;
+  if (!orgId || identity.orgId !== orgId) return false;
+  return getRuntimeFlag(rolloutFlag, identity);
+}
+
+/**
+ * feat-pluggable-web-agent-engines — internal Codex rollout gate.
  *
- * INTENTIONALLY NOT cloned from `isTeamWorkspaceInviteEnabled`: that helper is
- * fail-OPEN on a Flagsmith outage (the env-fallback `FLAG_*` is role-blind, so
- * a `prd` identity would resolve `true` from `FLAG_DEBUG_MODE=1`). The debug
- * stream is a scoped exception to the #2138 raw-tool-input invariant and must
- * stay dev-cohort-only, so the `role !== "dev"` hard-gate runs BEFORE the flag
- * is ever consulted — a Flagsmith outage can only ever make this MORE
- * restrictive, never open the stream to `prd`.
+ * A workspace is required so anonymous or unbound requests cannot enter the
+ * rollout cohort. Dispatch still must resolve the persisted binding through
+ * the engine registry; this flag only controls cohort exposure.
+ */
+export async function isCodexEngineEnabled(
+  orgId: string | null | undefined,
+  identity: Identity,
+): Promise<boolean> {
+  return isEngineRolloutEnabled("codex", orgId, identity);
+}
+
+/**
+ * feat-debug-mode-stream — availability of the harness instruction stream for
+ * `identity`. Open to ALL roles during beta so users can capture and send
+ * harness logs for debugging; the `debug-mode` flag is the sole cohort gate
+ * and remains the kill switch.
+ *
+ * The original P0-8 `role !== "dev"` hard-gate is retired: the stream stays a
+ * scoped exception to the #2138 raw-tool-input invariant, but every frame is
+ * redacted/probe-gated at the emit boundary (server/debug-event.ts) and
+ * emission additionally requires the owner-set per-workspace `debug_mode`
+ * toggle — neither control is role-dependent. The Flagsmith identity still
+ * carries the real role so the flag can be re-segmented if beta needs a
+ * partial rollback.
  */
 export async function isDebugModeAvailable(identity: Identity): Promise<boolean> {
-  if (identity.role !== "dev") return false;
   return getRuntimeFlag("debug-mode", identity);
 }
 

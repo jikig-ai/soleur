@@ -47,6 +47,8 @@ for pair in "agents:$AGENTS" "skills:$SKILLS" "commands:$COMMANDS"; do
   label="${pair%%:*}"
   count="${pair#*:}"
   if [[ "$count" -eq 0 ]]; then
+    # MEASURED-BY: $count, the directory tally this condition just tested. Both messages below
+    # hedge ("may be") precisely because the count is measured and the reason for it is not.
     echo "ERROR: $label count is 0 — directory may be empty or misconfigured: $PLUGIN_DIR/$label" >&2
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
       echo "::error::$label count is 0 — directory may be empty or misconfigured"

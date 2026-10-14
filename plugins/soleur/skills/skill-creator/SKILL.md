@@ -4,6 +4,10 @@ description: "This skill should be used when creating, refining, or auditing Cla
 license: Complete terms in LICENSE.txt
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Skill Creator
 
 This skill provides guidance for creating effective skills.
@@ -87,6 +91,8 @@ Skills use a three-level loading system to manage context efficiently:
 
 ## Skill Creation Process
 
+Before creating a new skill, agent, or user-facing capability, run its domain assessment (brainstorm Phase 0.5, or plan Phase 2.5 on a pipeline run) with CPO and CMO in the room (CTO when architectural); CMO may be omitted with a one-line rationale for operator-facing-only capabilities, CPO never. The rule's canonical text is `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` under `## New-capability leader mandate`.
+
 To create a skill, follow the "Skill Creation Process" in order, skipping steps only if there is a clear reason why they are not applicable.
 
 ### Step 1: Understanding the Skill with Concrete Examples
@@ -141,7 +147,7 @@ When creating a new skill from scratch, always run the `init_skill.py` script. T
 Usage:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/init_skill.py <skill-name> --path <output-directory>
+"${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/init_skill.py" <skill-name> --path <output-directory>
 ```
 
 The script:
@@ -153,7 +159,7 @@ The script:
 
 After initialization, customize or remove the generated SKILL.md and example files as needed.
 
-- Before writing a new skill description, run `bun test plugins/soleur/test/components.test.ts` to check the current word budget (1800 limit). Target 12-15 words for new skill descriptions — the budget is at 99% capacity as of 2026-04-05.
+- Before writing a new skill description, run `bun test plugins/soleur/test/components.test.ts` to check the current word budget; the cap is `SKILL_DESCRIPTION_WORD_BUDGET` in that file, which is the enforcing gate and the only authority on the number. Target 12-15 words for new skill descriptions, and assume **zero headroom until measured** — the budget has run at or near capacity for most of its life, and the cap itself has been raised several times, so any figure quoted from memory or from an older document is stale by default.
 - After creating a new skill, manually add it to `plugins/soleur/docs/_data/skills.js` in the `SKILL_CATEGORIES` map -- skills are NOT auto-discovered, and missing this step silently removes the skill from the docs site with no build error.
 - New agent files created mid-session cannot be invoked via `subagent_type` because the plugin registry is stale at session start; for live testing, use `general-purpose` agent type and embed the full instructions in the task prompt.
 
@@ -182,13 +188,13 @@ To complete SKILL.md, answer the following questions:
 Once the skill is ready, it should be packaged into a distributable zip file that gets shared with the user. The packaging process automatically validates the skill first to ensure it meets all requirements:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/package_skill.py <path/to/skill-folder>
+"${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/package_skill.py" <path/to/skill-folder>
 ```
 
 Optional output directory specification:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/package_skill.py <path/to/skill-folder> ./dist
+"${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/package_skill.py" <path/to/skill-folder> ./dist
 ```
 
 The packaging script will:
@@ -210,12 +216,14 @@ distributed, invoke the `skill-security-scan` advisory gate against the
 newly-scaffolded SKILL.md:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh < <skill-folder>/SKILL.md
+bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh" < <skill-folder>/SKILL.md
 ```
 
 Operator handling:
 
 - **`LOW-RISK`** — proceed with packaging.
+- **No verdict line** (a crash, or `No such file or directory` on an unresolved plugin root) — treat as
+  **`REVIEW`**, never `LOW-RISK`.
 - **`REVIEW`** — present findings as informational; ask operator to confirm
   before packaging.
 - **`HIGH-RISK`** — present findings + override instructions referencing
@@ -240,6 +248,8 @@ After testing the skill, users may request improvements. Often this happens righ
 
 ### Sharp Edges
 
+- **Name a skill or command as `soleur:<name>` and an agent by its registry id, nothing else** — no slash, dollar or at-sign prefix, no bare agent leaf — the adapter renders the harness form (`formatSkillInvocation` / `spawnAgent`, `plugins/soleur/lib/harness.ts`); a doc that writes one harness's form names a component the other three cannot resolve (ADR-226). If a shell variable or glob collides with a skill name, brace or rename it (`"${work}"`) — never widen the gate's boundary set. `plugins/soleur/test/harness-parity-tree.test.ts` is the gate; `bun plugins/soleur/scripts/harness-parity-census.ts --fix` repairs the mechanical shapes.
+
 - When a SKILL.md prose fence documents shell-active patterns by design (e.g., `bash -c "$VAR"`, process substitution, an eval-style invocation), label the fence ` ```text ` instead of ` ```bash ` and document the load-bearing mitigations (timeout, reject-regex, env scrub, trust source) in a per-skill Sharp Edges section. Otherwise the `skill-security-scan` calibration suite fails the first-party SKILL.md with HIGH-RISK on `code-execution` — there is no per-finding override mechanism for first-party legitimate uses. The fence is documentation; the orchestrator still dispatches via the Bash tool when it reads the prose, so runtime behavior is unchanged. See `knowledge-base/project/learnings/2026-05-20-skill-md-shell-active-prose-calibration-carve-out.md`.
 
 ## Auditing Existing Skills
@@ -253,6 +263,7 @@ For detailed guidance on skill authoring, see:
 - [official-spec.md](./references/official-spec.md) - Anthropic's official skill specification
 - [best-practices.md](./references/best-practices.md) - Skill authoring best practices
 - [core-principles.md](./references/core-principles.md) - Core principles for skill design
+- [authoring-levers.md](./references/authoring-levers.md) - Leading words, the two loads and the invocation choice, co-location, criterion demand
 - [skill-structure.md](./references/skill-structure.md) - Skill structure and organization
 - [recommended-structure.md](./references/recommended-structure.md) - Recommended file structure
 - [common-patterns.md](./references/common-patterns.md) - Common skill patterns (template, workflow, conditional)

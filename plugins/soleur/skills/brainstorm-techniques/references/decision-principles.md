@@ -59,18 +59,21 @@ compliance consequence — they are never Mechanical:
 Blast-radius / bias-to-action **never** override these four — a small, in-radius
 scope cut of operator-requested work is still a Taste/User-Challenge surface.
 
-### Precedence — engineering/architecture forks go to the CTO, not the operator
+### Precedence — technical rulings go to the CTO, not the operator
 
-Architectural-fork decisions (schema/audit substrate, data model, technology
-choice, security model, which load-bearing module to disturb) route to the
-`soleur:engineering:cto` agent per `work` Phase 1 (the CTO HARD GATE), in **both**
-modes. They are **not** User-Challenges even when user-visible. This taxonomy
-governs **product / scope / preference** decisions only — never *how* to build.
+A technical ruling (schema/audit substrate, data model, technology choice, security model, which load-bearing module to
+disturb, a threshold or evidence bar, which of two designs, whether evidence suffices, a status flip) routes to the
+`soleur:engineering:cto` agent (legal posture: `soleur:legal:clo`) in **both** modes and is recorded `Ruled by CTO agent`.
+It is not a User-Challenge even when user-visible or consequential. The four NEVER-Mechanical classes above decide
+whether the session model may **auto-decide**; they never decide **who rules**. This taxonomy governs product / scope /
+preference decisions only, never *how* to build. The closed operator-only list, the delegation step, the recording
+format and the override for a "surface it" brief live in
+[technical-ruling-delegation.md](./technical-ruling-delegation.md).
 
 ## Mode-branched resolution (keyed on execution context, not skill name)
 
 **Mode = execution context.** *Operator-attached* means a real operator TTY is
-present: a direct `/soleur:brainstorm` or `/soleur:plan` run, `HEADLESS_MODE`
+present: a direct `soleur:brainstorm` or `soleur:plan` run, `HEADLESS_MODE`
 unset, not invoked with a plan-file argument, and **not inside a Task subagent**.
 Any Task-subagent context (a `plan` consult, all of `one-shot`) is **headless**
 regardless of the parent skill — a subagent gets prompt text only and cannot call
@@ -97,10 +100,18 @@ paused on. The producer (`work`, or `plan` Step 4.5 in a subagent) appends to
 2. Opens **one** idempotent GitHub issue labelled `action-required` +
    `decision-challenge`, plain-language title linking the PR — because
    `operator-digest` harvests `action-required` *issues* (Section 4), never PR
-   bodies. This is the surface the non-technical operator actually sees.
+   bodies. This is the surface the non-technical operator actually sees. The
+   issue covers **operator-class rows only**; technical rows render in the PR body
+   with their `Ruled by` lines and never reach the operator.
 
 The PR-body block is the durable record; the `action-required` issue is the
-legible surface. Both are required for a headless challenge.
+legible surface for operator-class items. Both are required for a headless
+operator-class challenge.
+
+**The artifact carries a `## Decision Classes` table** (columns `Item | Class | Ruling`, one row per persisted decision,
+whatever shape the free-form body uses; `Class` is `technical`, `taste` or `operator (<category>)`). The schema, the closed
+category list and a canonical example are in [technical-ruling-delegation.md](./technical-ruling-delegation.md)
+(section 6); `ship`'s Technical-Ruling Gate scans every such table (plus a file-wide placeholder and label lint).
 
 ### User-Challenge 5-line frame
 
@@ -112,6 +123,8 @@ When surfacing (attached) or persisting (headless) a User-Challenge, use:
 - **What context we might be missing:** explicit blind-spot acknowledgment.
 - **If we're wrong, the cost is:** what happens if the operator's original
   direction was right and we changed it.
+
+**A premise that is a universal negative must ship with the enumeration that produced it, not just the conclusion.** When a challenge's framing rests on "there is no X in state S" (no reachable affordance, no existing caller, no other writer), specific verified facts about *particular* members — `this variable is dead`, `that flag is unconditional` — cannot establish a claim quantified over the *category*, however many you list. Put the command and its result in the challenge (`git grep -n 'aria-label="Back' -- <scope>` → N renderers, each classified), because the operator is being asked for taste and reasonably assumes the facts framing the choice were established; an approval laundered through a false premise acquires human authority while remaining an unverified engineering claim, and every downstream artifact — wireframe, plan, challenges file, code comment, and the test that "guards" it — inherits it. If the premise is later falsified, correct it **where the approval lives** (a dated `CORRECTION` block in `decision-challenges.md` saying what it does and does not change), never silently in code. **Why:** #7186 — DC1 was approved on "the mobile KB landing has no reachable in-page back at all today"; review found a fourth renderer in a file the enumeration never opened, so the shipped state has two links sharing one accessible name.
 
 ## "Both signals" — scope, disagreement, and the security exception
 

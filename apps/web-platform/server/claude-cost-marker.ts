@@ -46,7 +46,11 @@ export type CaptureStatus =
   | "ok"
   | "no-result-event"
   | "parse-error"
-  | "timeout";
+  | "timeout"
+  // #9648 B-0 — the turn ran and billed the key, but the cost could not be
+  // priced (model absent from the pricing map). Distinct from "ok"+0 so
+  // Better Stack sums do not read an unpriced turn as a free one.
+  | "unpriced";
 
 export interface ClaudeCostMarker {
   source: ClaudeCostSource;
@@ -59,6 +63,17 @@ export interface ClaudeCostMarker {
   // Correlation id — `conversationId` for sessions, `runId ?? cronName` for crons.
   id: string;
   capture_status: CaptureStatus;
+  // #8611 — cron claude-eval runs only (optional; other emitters omit them). Whether the run
+  // FAILED and the CLI's reason token (e.g. `error_max_budget_usd`), plus its turn count. All
+  // three are closed-shape values validated at parse time — no result or error TEXT.
+  is_error?: boolean | null;
+  subtype?: string | null;
+  num_turns?: number | null;
+  // #8611 — leader-loop (founder BYOK) turns only: the turn index and the Inngest attempt of the
+  // `turn-${n}-claude` step. `attempt > 0`, or two markers for one (id, turn), means the step
+  // re-ran after it billed the founder's key — the double-bill the 72h rollback trigger watches.
+  turn?: number | null;
+  attempt?: number | null;
 }
 
 /**

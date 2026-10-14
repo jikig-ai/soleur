@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# REAL-DEVICE evidence for workspaces-cutover.sh :: prepare_staging_target (#6588 / epic #6604).
+# REAL-DEVICE evidence for workspaces-cutover.sh :: prepare_staging_target (#6588 / epic #6604), and
+# for Guard 5's physical witness (Session G5, #6604 step 7; it replaced Session W, the retired
+# CONFIRM_WIPE zero + read-back).
 #
 # Every other workspaces-luks suite stubs the block layer. This one does NOT: it builds a real
 # loopback device, runs a real `cryptsetup luksFormat` + `luksOpen`, and drives the REAL
@@ -72,6 +74,30 @@ for b in losetup cryptsetup mkfs.ext4 mount umount findmnt blkid mountpoint rsyn
 done
 [ -f "$CUTOVER" ] || unavailable "cutover script not found at $CUTOVER"
 
+# --- The shell fixture chokepoint (#7849), resolved defensively --------------------------------
+# By the time control reaches here this process is ROOT (it self-elevated above), so `source
+# <path>` is a code-execution primitive holding full privilege. The path is therefore computed
+# ONCE from BASH_SOURCE and asserted before it is used: an EMPTY repo root makes the statement
+# `source "/plugins/…"` or, worse, a bare relative word that bash resolves against $PWD and $PATH,
+# and a root of "/" means the `cd` collapsed and the file being sourced is not the one intended.
+# Both are refused, loudly, via the suite's own fail-closed exit rather than a skip.
+#
+# Sourcing ARMS the fail-loud git-location tripwire for the whole suite. That is the protection
+# that matters here: every mk_repo below is a bare `git init` with no scrub, and this process can
+# write anywhere on the host.
+LUKS_REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." 2>/dev/null && pwd)" || LUKS_REPO_ROOT=""
+case "$LUKS_REPO_ROOT" in
+  "")  unavailable "repo root resolved EMPTY from $SCRIPT_DIR — refusing to source the fixture-env helper as root" ;;
+  /)   unavailable "repo root resolved to '/' — refusing to source the fixture-env helper as root" ;;
+  /*)  : ;;
+  *)   unavailable "repo root '$LUKS_REPO_ROOT' is not absolute — refusing to source the fixture-env helper as root" ;;
+esac
+GIT_FIXTURE_ENV_LIB="$LUKS_REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+[ -f "$GIT_FIXTURE_ENV_LIB" ] && [ -r "$GIT_FIXTURE_ENV_LIB" ] \
+  || unavailable "fixture-env helper missing or unreadable at $GIT_FIXTURE_ENV_LIB"
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$GIT_FIXTURE_ENV_LIB"
+
 # --- Teardown ----------------------------------------------------------------
 CLEAN_MOUNTS=()
 CLEAN_MAPPERS=()
@@ -96,6 +122,8 @@ teardown() {
   for ((i = ${#CLEAN_LOOPS[@]} - 1; i >= 0; i--)); do
     losetup -d "${CLEAN_LOOPS[$i]}" >/dev/null 2>&1
   done
+  # #9045 L7 backstop: the throwaway systemd units, if that case got as far as creating them.
+  if [ -n "${L7_UNIT:-}" ] && declare -F l7_clear >/dev/null; then l7_clear; fi
   [ -n "$TMPROOT" ] && rm -rf "$TMPROOT" >/dev/null 2>&1
   return 0
 }
@@ -312,7 +340,7 @@ echo "  findmnt -no SOURCE '$STAGING_DIR' => '$L4_SOURCE'"
 echo "  form                              => $L4_FORM"
 echo "  readlink -f of that               => $(readlink -f -- "${L4_SOURCE:-/nonexistent}" 2>/dev/null || echo '<unresolvable>')"
 echo "  readlink -f of \$MAPPER            => $MAPPER_REAL"
-echo "  kernel: $(uname -r 2>/dev/null)   util-linux findmnt: $(findmnt --version 2>/dev/null | head -1)"
+echo "  kernel: $(uname -r 2>/dev/null)   util-linux findmnt: $(findmnt --version 2>/dev/null | sed -n '1p')"
 echo "  => _same_dev canonicalizes both sides, so it is correct under EITHER form. A raw-string"
 echo "     comparison against \$MAPPER would be correct ONLY under the mapper-name form."
 echo "=================================================================================="
@@ -490,13 +518,34 @@ D_SRC="$SRC_DIR"
 D_DST="$STAGING_DIR"
 
 # mk_repo — a real git repo with one commit, then handed to uid 1001 (production ownership).
+#
+# The constructed fixture environment is CONFINED TO A SUBSHELL, and that is a deliberate
+# narrowing rather than an oversight. `git_fixture_env` exports GIT_CONFIG_NOSYSTEM=1 and
+# GIT_CONFIG_GLOBAL=/dev/null; leaking those into the rest of this file would silently rewrite
+# what several cases MEASURE. L6k-CAP reports the AMBIENT `safe.directory` (`git config
+# --show-origin --get-all`) as its diagnostic and would print `<none>` on a runner that ships
+# `safe.directory = *`, and L6k/L6k-CAP/L6m set GIT_CONFIG_SYSTEM/GLOBAL themselves, per command,
+# precisely because which probe runs neutralized is the thing under test. Every git call that
+# WRITES the fixture is inside the subshell; every later read is ambient on purpose.
+#
+# Exit 64 is the guard's own code, distinguishable from a git failure inside the subshell (which
+# surfaces as the commit's rc), so a refused ceiling cannot be misread as a broken fixture.
 mk_repo() {
-  local d="$1"
+  local d="$1" rc
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
   mkdir -p "$d"
-  git init -q "$d" >/dev/null 2>&1
-  printf 'content\n' > "$d/f.txt"
-  git -C "$d" -c user.email=t@t -c user.name=t add -A >/dev/null 2>&1
-  git -C "$d" -c user.email=t@t -c user.name=t commit -q -m init >/dev/null 2>&1
+  (
+    git_fixture_env "$d" || exit 64
+    git init -q "$d" >/dev/null 2>&1
+    printf 'content\n' > "$d/f.txt"
+    git -C "$d" -c user.email=t@t -c user.name=t add -A >/dev/null 2>&1
+    git -C "$d" -c user.email=t@t -c user.name=t commit -q -m init >/dev/null 2>&1
+  )
+  rc=$?
+  if [ "$rc" -eq 64 ]; then
+    echo "FATAL: workspaces-luks-loopback: git_fixture_env refused fixture $d" >&2
+    exit 1
+  fi
   chown -R 1001:1001 "$d" 2>/dev/null || true
 }
 
@@ -506,7 +555,7 @@ mk_repo() {
 # MEASURED (git 2.53.0) the shapes differ materially and select DIFFERENT classifier branches —
 #   commit/tree -> rc 128 + `fatal: loose object <sha> … is corrupt`  (matches _FSCK_CONTENT_FATAL_RE)
 #   blob        -> rc 3   + `missing blob <sha>` on STDOUT, ZERO fatal lines
-# `find | head -n1` picked by readdir order, which on ext4 is a per-filesystem hash of the object
+# `find | sed -n '1p'` picked by readdir order, which on ext4 is a per-filesystem hash of the object
 # name, so the branch under test was a coin flip per run and nothing asserted which one ran.
 corrupt_loose() {
   local repo="$1" kind="${2:-commit}" sha f
@@ -954,7 +1003,7 @@ if grep -qE 'detected dubious ownership' "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/n
     ok "L6k-CAP: this host CAN produce H1, and real git's refusal still matches _FSCK_SETUP_FATAL_RE — the synthesized arm (i) is faithful to git's actual wording"
   else
     no "L6k-CAP: real git refused but _FSCK_SETUP_FATAL_RE did NOT match it — the regex has drifted from git's wording, so every real H1 now demotes to unclassified and arm (i) is testing a string git no longer emits"
-    note "real refusal: $(head -n1 "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/null | grep -m1 fatal:)"
+    note "real refusal: $(grep -m1 fatal: < <(head -n1 "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/null))"
   fi
 else
   note "L6k-CAP: this host CANNOT produce H1 — arm (ii) (safe.directory is load-bearing) is UNPROVEN in CI, and the regex-vs-reality check above is vacuous here"
@@ -1260,6 +1309,326 @@ else
   no "L6j: advisory probe misbehaved (partial_rc=$L6J_PARTIAL_RC all_rc=$L6J_ALL_RC)"
   note "partial marker: $(grep -m2 SOLEUR "$L6J_MARKER" 2>/dev/null)"
   note "all out:        $(tail -n 5 "$L6J_ALL_OUT" 2>/dev/null)"
+fi
+
+# ===========================================================================
+# L7 — #9045 REAL SYSTEMD: the dead-man arm's one load-bearing assumption
+# ===========================================================================
+# arm_dead_man now pre-clears a stale unit (stop the timer, reset-failed BOTH units) and runs an
+# UN-swallowed systemd-run, because the working hypothesis for the 2026-07-23 cutover (#9045 H1) is
+# that a loaded FAILED transient service — left by the 2026-07-20 fire — made the same-name
+# systemd-run refuse, into `2>/dev/null || true`. Every other suite FAKES systemd; this case
+# measures it, on this runner's systemd, with a THROWAWAY unit name and plain systemd-run (never
+# arm_dead_man, never workspaces-luks-deadman). It also records, as measurements for the fakes, what
+# an elapsed transient timer looks like (systemd.timer(5) says RemainAfterElapse=yes keeps it
+# loaded; web-1's apply-log print read it inactive/dead — measured on systemd 261 --user: the timer
+# is collected, so it reads not-found => inactive/dead).
+#
+# #9098 I — four tightenings:
+#   * the pre-clear is EXTRACTED from arm_dead_man (its `systemctl stop|reset-failed
+#     workspaces-luks-deadman.*` lines, unit name substituted), never hand-copied, so a drift in the
+#     script's clear-out turns this case red instead of leaving it green on a stale copy;
+#   * the re-arm must succeed on the FIRST systemd-run (rearm_attempts=1): production calls it ONCE
+#     and dies arm_failed on a refusal, so a retry that "eventually" arms proves nothing;
+#   * L7d: a loaded, never-fired timer's LastTriggerUSec must read EMPTY — the fact that made
+#     disarm_dead_man's old `!= n/a` clause dead (check (a) is now "any non-empty value");
+#   * L7e: a RUNNING transient simple service (/bin/sleep, the dead-man fire's service type) must read
+#     ActiveState=active — the value the fire-in-progress fixtures and _deadman_fire_live pin.
+#
+# NO SILENT SKIP: without a usable system manager the case reports SYSTEMD_UNAVAILABLE and FAILS.
+# The measurement body runs in a subshell whose EXIT trap stops and resets the throwaway units; the
+# parent then asserts that nothing was left loaded. teardown() clears them too, as a backstop.
+L7_UNIT="wl-luks-deadman-probe-$$"
+L7_RUN_UNIT="${L7_UNIT}-run"
+l7_clear() {
+  systemctl stop "$L7_UNIT.timer" "$L7_UNIT.service" "$L7_RUN_UNIT.service" >/dev/null 2>&1
+  systemctl reset-failed "$L7_UNIT.timer" "$L7_UNIT.service" "$L7_RUN_UNIT.service" >/dev/null 2>&1
+  return 0
+}
+l7_prop() { systemctl show "$1" -p "$2" --value 2>/dev/null || true; }
+l7_val() { sed -n "s/^$1=//p" "$L7_OUT" | sed -n '1p'; }
+L7_OUT="$TMPROOT/l7.out"; : > "$L7_OUT"
+# The script's OWN pre-clear, extracted from arm_dead_man (comment-stripped), unit renamed.
+L7_PRECLEAR="$(awk '/^arm_dead_man\(\) \{/{f=1} f{print} f && /^}/{exit}' "$CUTOVER" \
+  | grep -vE '^[[:space:]]*#' | grep -E '^[[:space:]]*systemctl (stop|reset-failed) workspaces-luks-deadman\.' \
+  | sed -E "s/workspaces-luks-deadman\\./${L7_UNIT}./g")"
+L7_PRECLEAR_N="$(grep -c . <<<"$L7_PRECLEAR" || true)"
+if [ "$L7_PRECLEAR_N" -ne 2 ] || ! grep -qE "systemctl stop ${L7_UNIT}\.timer" <<<"$L7_PRECLEAR" \
+  || ! grep -qE "systemctl reset-failed ${L7_UNIT}\.timer ${L7_UNIT}\.service" <<<"$L7_PRECLEAR"; then
+  no "L7: could not extract arm_dead_man's pre-clear (got $L7_PRECLEAR_N line(s): [$(tr '\n' '|' <<<"$L7_PRECLEAR")]) — the clear-out under test would be a hand copy; treat L7b as UN-RUN"
+fi
+if [ ! -d /run/systemd/system ] || ! command -v systemd-run >/dev/null 2>&1 \
+  || [ -z "$(systemctl show -p Version --value 2>/dev/null)" ]; then
+  no "L7: SYSTEMD_UNAVAILABLE — no usable system manager (/run/systemd/system, systemd-run, systemctl show); the #9045 real-systemd evidence was NOT collected (a failure, never a skip)"
+else
+  (
+    trap l7_clear EXIT
+    # 1. A transient timer+service pair whose service FAILS: the 2026-07-20 fire's end state.
+    systemd-run --unit="$L7_UNIT" --on-active=1s --description="wl-luks #9045 probe" /bin/sh -c 'exit 3' >/dev/null 2>&1
+    echo "create_rc=$?"
+    i=0; st=""
+    while [ "$i" -lt 20 ]; do
+      i=$((i + 1)); st="$(l7_prop "$L7_UNIT.service" ActiveState)"
+      [ "$st" = failed ] && break
+      sleep 1
+    done
+    echo "svc_after_fire=$st"
+    echo "measure_timer=LoadState:$(l7_prop "$L7_UNIT.timer" LoadState) ActiveState:$(l7_prop "$L7_UNIT.timer" ActiveState) SubState:$(l7_prop "$L7_UNIT.timer" SubState) LastTriggerUSec:[$(l7_prop "$L7_UNIT.timer" LastTriggerUSec)]"
+    echo "measure_service=LoadState:$(l7_prop "$L7_UNIT.service" LoadState) ActiveState:$(l7_prop "$L7_UNIT.service" ActiveState) Result:$(l7_prop "$L7_UNIT.service" Result)"
+    # 2. H1: a same-name systemd-run must REFUSE while the failed service is loaded, AND its stderr
+    #    must name the collision — a bare non-zero could be a bus or permission error.
+    err="$(systemd-run --unit="$L7_UNIT" --on-active=30min --description="wl-luks #9045 probe" /bin/true 2>&1 >/dev/null)"; rc=$?
+    echo "h1_rc=$rc"
+    echo "h1_err=$(printf '%s\n' "$err" | head -n1 | cut -c1-200)"
+    # 3. The script's OWN clear-out (extracted above, arm_dead_man step 2), then ONE same-name
+    #    systemd-run, as production issues exactly one. Up to 5 attempts are still MEASURED (so a
+    #    late success is visible in the note), but only attempts=1 passes L7b.
+    eval "$L7_PRECLEAR"; echo "clear_rc=$?"
+    n=0; rc=1
+    while [ "$n" -lt 5 ]; do
+      n=$((n + 1))
+      systemd-run --unit="$L7_UNIT" --on-active=30min --description="wl-luks #9045 probe" /bin/true >/dev/null 2>&1; rc=$?
+      [ "$rc" -eq 0 ] && break
+      sleep 1
+    done
+    echo "rearm_rc=$rc"; echo "rearm_attempts=$n"
+    n=0; st=""
+    while [ "$n" -lt 5 ]; do
+      n=$((n + 1)); st="$(l7_prop "$L7_UNIT.timer" SubState)"
+      [ "$st" = waiting ] && break
+      sleep 1
+    done
+    echo "rearm_substate=$st"
+    # 4. L7d — the re-armed timer is LOADED and has NEVER fired: its LastTriggerUSec, read exactly as
+    #    disarm_dead_man reads it (`-p LastTriggerUSec --value`), in brackets so empty is visible.
+    echo "neverfired_loadstate=$(l7_prop "$L7_UNIT.timer" LoadState)"
+    echo "neverfired_lasttrigger=[$(l7_prop "$L7_UNIT.timer" LastTriggerUSec)]"
+    # 5. L7e — a RUNNING transient simple service: the fire's own service type (no --service-type).
+    systemd-run --unit="$L7_RUN_UNIT" --description="wl-luks #9098 running-fire probe" /bin/sleep 5 >/dev/null 2>&1
+    echo "run_rc=$?"
+    n=0; st=""
+    while [ "$n" -lt 5 ]; do
+      n=$((n + 1)); st="$(l7_prop "$L7_RUN_UNIT.service" ActiveState)"
+      [ "$st" = active ] && break
+      sleep 1
+    done
+    echo "running_activestate=$st"
+    echo "running_job=[$(l7_prop "$L7_RUN_UNIT.service" Job)]"
+  ) > "$L7_OUT" 2>&1
+  # 6. After the subshell's EXIT trap: nothing throwaway is left loaded (collection is asynchronous,
+  #    so bounded by attempts).
+  n=0; l7_t=""; l7_s=""; l7_r=""
+  while [ "$n" -lt 10 ]; do
+    n=$((n + 1)); l7_t="$(l7_prop "$L7_UNIT.timer" LoadState)"; l7_s="$(l7_prop "$L7_UNIT.service" LoadState)"
+    l7_r="$(l7_prop "$L7_RUN_UNIT.service" LoadState)"
+    [ "$l7_t" = not-found ] && [ "$l7_s" = not-found ] && [ "$l7_r" = not-found ] && break
+    sleep 1
+  done
+  note "L7 systemd=$(systemctl show -p Version --value 2>/dev/null) after an elapsed fire: $(l7_val measure_timer)"
+  note "L7 failed service: $(l7_val measure_service)"
+  note "L7 H1 same-name refusal: rc=$(l7_val h1_rc) stderr=[$(l7_val h1_err)]"
+  note "L7 clear-out (extracted: $(tr '\n' ';' <<<"$L7_PRECLEAR")) rc=$(l7_val clear_rc); re-arm rc=$(l7_val rearm_rc) after $(l7_val rearm_attempts) attempt(s), SubState=$(l7_val rearm_substate)"
+  note "L7 never-fired loaded timer: LoadState=$(l7_val neverfired_loadstate) LastTriggerUSec=$(l7_val neverfired_lasttrigger)"
+  note "L7 running transient simple service: ActiveState=$(l7_val running_activestate) Job=$(l7_val running_job)"
+  if [ "$(l7_val create_rc)" = 0 ] && [ "$(l7_val svc_after_fire)" = failed ] && [ -n "$(l7_val h1_rc)" ] \
+    && [ "$(l7_val h1_rc)" != 0 ] && grep -qE '^h1_err=.*(already loaded|fragment)' "$L7_OUT"; then
+    ok "L7a: H1 reproduced — while a FAILED transient service is loaded, a same-name systemd-run exits non-zero and its stderr names the collision"
+  else
+    no "L7a: H1 NOT reproduced on this systemd (create=$(l7_val create_rc) svc=$(l7_val svc_after_fire) rc=$(l7_val h1_rc) err=[$(l7_val h1_err)])"
+    note "out: $(tr '\n' '|' < "$L7_OUT")"
+  fi
+  if [ "$L7_PRECLEAR_N" -eq 2 ] && [ "$(l7_val rearm_rc)" = 0 ] && [ "$(l7_val rearm_attempts)" = 1 ] && [ "$(l7_val rearm_substate)" = waiting ]; then
+    ok "L7b: after the script's OWN extracted clear-out (stop timer, reset-failed both), the FIRST same-name systemd-run succeeds and reads SubState=waiting"
+  else
+    no "L7b: the clear-out did not make the unit armable on the single attempt production makes (extracted=$L7_PRECLEAR_N rearm rc=$(l7_val rearm_rc) attempts=$(l7_val rearm_attempts) substate=$(l7_val rearm_substate))"
+  fi
+  if [ "$(l7_val neverfired_loadstate)" = loaded ] && [ "$(l7_val neverfired_lasttrigger)" = "[]" ]; then
+    ok "L7d: a LOADED never-fired timer reads LastTriggerUSec EMPTY — disarm check (a) = 'any non-empty value' is exact (the dropped n/a clause was dead)"
+  else
+    no "L7d: a loaded never-fired timer read LoadState=$(l7_val neverfired_loadstate) LastTriggerUSec=$(l7_val neverfired_lasttrigger) — if non-empty, disarm check (a) would fail EVERY door on this systemd"
+  fi
+  if [ "$(l7_val run_rc)" = 0 ] && [ "$(l7_val running_activestate)" = active ]; then
+    ok "L7e: a RUNNING transient simple service reads ActiveState=active (the fire-in-progress value _deadman_fire_live must match)"
+  else
+    no "L7e: a running transient simple service read ActiveState=$(l7_val running_activestate) (run rc=$(l7_val run_rc)) — the fire-in-progress fixtures model the wrong value"
+  fi
+  if [ "$l7_t" = not-found ] && [ "$l7_s" = not-found ] && [ "$l7_r" = not-found ]; then
+    ok "L7c: the EXIT trap left no throwaway unit loaded (timer + service + running probe all not-found)"
+  else
+    no "L7c: a throwaway unit outlived the EXIT trap (timer=$l7_t service=$l7_s run=$l7_r)"
+  fi
+fi
+
+# ===========================================================================
+# Session G5 — the real Guard-5 witness (#6604 step 7; was Session W)
+# ===========================================================================
+# Session W proved the retired CONFIRM_WIPE zero + read-back on real devices (LW1..LW8; the procedure as
+# run is in git history at 59abf6a76c). What outlives it is Guard 5: once the recorded plaintext is gone,
+# no ROLLBACK, cleanup() rollback or dead-man fire may unmount the mapper, the ONLY copy. The stubbed
+# workspaces-luks-rollback-refusal.test.sh proves the rc plumbing and every refusal through a seam; only a
+# real kernel and the real blkid can prove the physical witness itself (the REAL _plaintext_gone, with
+# /mnt/data on a real dm-crypt mapper and the recorded PLAINTEXT_DEV a real loop):
+#   LW-P2  the recorded plaintext is an intact ext4 → NOT gone (a rollback stays possible).
+#   LW-P3  the recorded plaintext's first MiB zeroed by `dd` on the loop DEVICE (real blkid -p finds no
+#          signature) and no marker → gone, why=plaintext_dev_gone status=none.
+#   LW-P4  a record naming the mapper's own dm-N node (a real ext4) → gone, status=is_mapper.
+# A missing binary is a FAILURE, never a skip.
+for b in dd od; do
+  command -v "$b" >/dev/null 2>&1 || unavailable "session G5: required binary '$b' not found on PATH"
+done
+
+WP_SIZE=$((64 * 1024 * 1024))
+new_session g5
+WL_MAPPER_NAME="$MAPPER_NAME"; WL_STAGING="$STAGING_DIR"
+mkfs.ext4 -q "$MAPPER" >/dev/null 2>&1 || unavailable "session G5: mkfs.ext4 on the mapper failed"
+WL_MOUNT="$(mktemp -d "$TMPROOT/g5mount.XXXXXX")"
+mount "$MAPPER" "$WL_MOUNT" || unavailable "session G5: could not mount the mapper"
+CLEAN_MOUNTS+=("$WL_MOUNT")
+WL_STATE="$(mktemp -d "$TMPROOT/g5state.XXXXXX")"
+
+# new_plain <tag> — a fresh plaintext loop with a real, UNLABELLED ext4 and real data on it: the shape of
+# web-1's retained plaintext (no artifact ever labelled it — the 2026-09-30 rehearsal read label=none).
+new_plain() {
+  local tag="$1" backing m
+  backing="$TMPROOT/plain-${tag}.img"
+  truncate -s "$WP_SIZE" "$backing" || unavailable "truncate $backing failed"
+  WP_DEV="$(losetup --find --show "$backing" 2>/dev/null)" || unavailable "losetup of $backing failed"
+  [ -b "$WP_DEV" ] || unavailable "$WP_DEV is not a block device"
+  CLEAN_LOOPS+=("$WP_DEV")
+  mkfs.ext4 -q "$WP_DEV" >/dev/null 2>&1 || unavailable "mkfs.ext4 on $WP_DEV failed"
+  m="$(mktemp -d "$TMPROOT/pmnt.XXXXXX")"
+  mount "$WP_DEV" "$m" || unavailable "could not mount $WP_DEV"
+  mkdir -p "$m/workspaces/ws1"; head -c 2097152 /dev/urandom > "$m/workspaces/ws1/blob.bin" 2>/dev/null
+  umount "$m" || unavailable "could not unmount $m"
+  udevadm settle >/dev/null 2>&1 || true
+}
+# seed_state [line] — the persisted run state: the plaintext mount source the cutover recorded
+# (PLAINTEXT_DEV=$WP_DEV, what Guard 5's physical witness probes), then the caller's line (last wins).
+seed_state() {
+  printf 'PLAINTEXT_DEV=%s\n' "$WP_DEV" > "$WL_STATE/state"
+  [ -n "${1:-}" ] && printf '%s\n' "$1" >> "$WL_STATE/state"
+  return 0
+}
+
+# run_g5_real <invocation> [env...] — the REAL Guard-5 functions in a fresh subshell (functions only:
+# the sourced-detection guard stops before the main body). Sets CASE_RC, CASE_OUT (file), MARKER_LOG.
+run_g5_real() {
+  local inv="$1"; shift
+  CASE_N=$((CASE_N + 1))
+  CASE_OUT="$TMPROOT/g5out.$CASE_N"; MARKER_LOG="$TMPROOT/g5marker.$CASE_N"
+  : > "$CASE_OUT"; : > "$MARKER_LOG"
+  env WORKSPACES_MOUNT="$WL_MOUNT" WORKSPACES_STAGING="$WL_STAGING" WORKSPACES_MAPPER_NAME="$WL_MAPPER_NAME" \
+    WORKSPACES_STATE_DIR="$WL_STATE" \
+    "$@" CUTOVER="$CUTOVER" MARKER_LOG="$MARKER_LOG" INVOCATION="$inv" \
+    bash -c '
+      source "$CUTOVER"
+      logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+      emit_drift() { echo "EMIT_DRIFT: $1"; }
+      die()        { echo "DIE: $*"; exit 1; }
+      eval "$INVOCATION"
+    ' > "$CASE_OUT" 2>&1
+  CASE_RC=$?
+}
+dev_magic() { dd if="$1" iflag=direct bs=4096 count=1 status=none 2>/dev/null | od -An -tx1 -j1080 -N2 | tr -d ' \n'; }
+
+new_plain g5
+note "session G5: mapper=$WL_MAPPER_NAME plain=$WP_DEV size=$WP_SIZE"
+LW_GONE='_plaintext_gone; echo "gone_rc=$? why=$PLAINTEXT_GONE_WHY status=$PLAINTEXT_RECORD_STATUS"'
+
+# --- LW-P2: the REAL _plaintext_gone (real blkid, real mapper) reads an intact recorded plaintext ------
+seed_state
+run_g5_real "$LW_GONE"
+if grep -qE '^gone_rc=1 why= status=ok$' "$CASE_OUT"; then
+  ok "LW-P2 real devices: mapper mounted + the recorded plaintext loop intact (real blkid TYPE=ext4) → NOT gone (rollback stays possible)"
+else
+  no "LW-P2 the real witness misread an intact recorded plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+
+# --- LW-P3: the recorded device's first MiB zeroed → no filesystem → gone (no marker needed) -----------
+# Re-seeded with `dd` on the loop DEVICE (never the backing file, so blkid -p reads no stale cache), and
+# only after proving the target is this suite's own loop: this process is ROOT, so `of=` must name a loop
+# whose backing file lives under $TMPROOT. The ext4 magic is read before, the dd rc and an independent
+# real `blkid -p` (rc 2 = no signature) after; each is a precondition of the row, never assumed.
+lwp3_back="$(losetup -nO BACK-FILE "$WP_DEV" 2>/dev/null | head -1)"
+lwp3_back="${lwp3_back%"${lwp3_back##*[![:space:]]}"}"
+lwp3_magic="$(dev_magic "$WP_DEV")"; lwp3_dd=x; lwp3_blkid=x
+case "$lwp3_back" in
+  "$TMPROOT"/*|"$(readlink -f "$TMPROOT")"/*)
+    if [ "$lwp3_magic" = 53ef ]; then
+      lwp3_dd=0; dd if=/dev/zero of="$WP_DEV" bs=1M count=1 oflag=direct conv=fsync status=none 2>/dev/null || lwp3_dd=$?
+      lwp3_blkid=0; blkid -p "$WP_DEV" >/dev/null 2>&1 || lwp3_blkid=$?
+    fi ;;
+esac
+seed_state
+run_g5_real "$LW_GONE"
+if [ "$lwp3_magic" = 53ef ] && [ "$lwp3_dd" = 0 ] && [ "$lwp3_blkid" = 2 ] \
+  && grep -qE '^gone_rc=0 why=plaintext_dev_gone status=none$' "$CASE_OUT"; then
+  ok "LW-P3 real devices: the recorded plaintext's first MiB zeroed (magic 53ef before, dd rc 0, real blkid -p rc 2 after), no marker → gone, why=plaintext_dev_gone"
+else
+  no "LW-P3 the real witness did not read a zeroed recorded plaintext as gone (back=[${lwp3_back}] under=[$TMPROOT] magic=$lwp3_magic dd=$lwp3_dd blkid=$lwp3_blkid): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+# --- LW-P4: a record naming the mapper's REAL dm-N node (it reads ext4!) is the live copy → gone ---------
+LWP4_DM="$(readlink -f "$MAPPER")"
+seed_state "PLAINTEXT_DEV=$LWP4_DM"
+run_g5_real "$LW_GONE"
+if [ "$LWP4_DM" != "$MAPPER" ] && grep -qE '^gone_rc=0 why=plaintext_dev_gone status=is_mapper$' "$CASE_OUT"; then
+  ok "LW-P4 real devices: a record naming the mapper's own node ($LWP4_DM, a real ext4) is refused by the mapper-identity clause, not trusted as an intact plaintext"
+else
+  no "LW-P4 a record naming the live mapper node ($LWP4_DM) was read as an intact plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+
+# --- LW8 (#9356, CPO): HEADER-RESTORE DRILL — a destroyed LUKS header is recoverable from the escrowed backup ---
+# The whole at-rest posture rests on one claim: the escrowed header backup (luksHeaderBackup, shipped to R2 by
+# the provisioner) plus the passphrase brings the data back if the on-disk header is lost. Nothing proved it
+# against a real device. Format a loop, put a SENTINEL filesystem on the mapper, back the header up, ZERO the
+# whole header region, prove the volume is then genuinely unopenable (the anti-vacuity half: a drill whose
+# "destruction" did nothing proves nothing), restore, reopen with the same passphrase, read the sentinel back.
+LW8_SENTINEL="lw8-sentinel-$$-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+new_session lw8
+LW8_BK="$TMPROOT/lw8-header.bak"
+LW8_MNT="$(mktemp -d "$TMPROOT/lw8mnt.XXXXXX")"; CLEAN_MOUNTS+=("$LW8_MNT")
+lw8_ok=1
+mkfs.ext4 -q "$MAPPER" >/dev/null 2>&1 || { lw8_ok=0; no "LW8 mkfs.ext4 on the mapper failed — the drill has no filesystem to carry the sentinel"; }
+if [ "$lw8_ok" -eq 1 ]; then
+  mount "$MAPPER" "$LW8_MNT" && printf '%s\n' "$LW8_SENTINEL" > "$LW8_MNT/sentinel.txt" && sync && umount "$LW8_MNT" \
+    || { lw8_ok=0; no "LW8 could not write the sentinel through the mapper"; }
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  cryptsetup close "$MAPPER_NAME" >/dev/null 2>&1 || { lw8_ok=0; no "LW8 could not close the mapper before the header is destroyed"; }
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  LW8_UUID_BEFORE="$(cryptsetup luksUUID "$LOOP_DEV" 2>/dev/null)"
+  rm -f "$LW8_BK"
+  cryptsetup luksHeaderBackup --batch-mode "$LOOP_DEV" --header-backup-file "$LW8_BK" >/dev/null 2>&1 || lw8_ok=0
+  LW8_HDR_BYTES="$(stat -c %s "$LW8_BK" 2>/dev/null || echo 0)"
+  # The backup file is exactly the header area (binary headers + keyslots area), so its size is the span to destroy.
+  if [ "$lw8_ok" -eq 0 ] || [ "${LW8_HDR_BYTES:-0}" -lt 4096 ] || [ -z "$LW8_UUID_BEFORE" ]; then
+    lw8_ok=0; no "LW8 luksHeaderBackup produced no usable backup (bytes=${LW8_HDR_BYTES:-0} uuid='${LW8_UUID_BEFORE:-}')"
+  fi
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  dd if=/dev/zero of="$LOOP_DEV" bs=4096 count=$((LW8_HDR_BYTES / 4096)) oflag=direct conv=fsync status=none 2>/dev/null
+  lw8_open_rc=0; cryptsetup luksOpen --key-file "$KEYFILE" "$LOOP_DEV" "$MAPPER_NAME" >/dev/null 2>&1 || lw8_open_rc=$?
+  lw8_uuid_rc=0; cryptsetup luksUUID "$LOOP_DEV" >/dev/null 2>&1 || lw8_uuid_rc=$?
+  if [ "$lw8_open_rc" -ne 0 ] && [ "$lw8_uuid_rc" -ne 0 ] && [ ! -b "$MAPPER" ]; then
+    ok "LW8a with the whole header region zeroed the volume is genuinely unopenable (luksOpen rc=$lw8_open_rc, luksUUID rc=$lw8_uuid_rc) — the drill destroys something real"
+  else
+    lw8_ok=0; no "LW8a the zeroed header did not make the volume unopenable (open rc=$lw8_open_rc uuid rc=$lw8_uuid_rc) — the drill would be vacuous"
+  fi
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  lw8_rs_rc=0; cryptsetup luksHeaderRestore --batch-mode "$LOOP_DEV" --header-backup-file "$LW8_BK" >/dev/null 2>&1 || lw8_rs_rc=$?
+  lw8_ro_rc=0; cryptsetup luksOpen --key-file "$KEYFILE" "$LOOP_DEV" "$MAPPER_NAME" >/dev/null 2>&1 || lw8_ro_rc=$?
+  lw8_read=""
+  if [ "$lw8_rs_rc" -eq 0 ] && [ "$lw8_ro_rc" -eq 0 ] && [ -b "$MAPPER" ] && mount "$MAPPER" "$LW8_MNT" 2>/dev/null; then
+    lw8_read="$(cat "$LW8_MNT/sentinel.txt" 2>/dev/null)"
+    umount "$LW8_MNT" 2>/dev/null || true
+  fi
+  if [ "$lw8_read" = "$LW8_SENTINEL" ] && [ "$(cryptsetup luksUUID "$LOOP_DEV" 2>/dev/null)" = "$LW8_UUID_BEFORE" ]; then
+    ok "LW8b luksHeaderRestore from the escrowed backup + the same passphrase reopens the volume and the sentinel reads back; the header UUID is the one backed up"
+  else
+    no "LW8b the header restore did not bring the data back (restore rc=$lw8_rs_rc open rc=$lw8_ro_rc sentinel='${lw8_read:-}')"
+  fi
 fi
 
 # ===========================================================================

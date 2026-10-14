@@ -80,23 +80,41 @@ timestamp: <ISO-8601>
    ```
 
 5. Operator commits the artifact in the same PR as the skill install.
-6. CI pre-merge gate (`skill-security-scan-pr-trailer.yml`) and the PreToolUse
+6. CI pre-merge gate (job `skill-security-scan` in `pr-quality-guards.yml`) and the PreToolUse
    hook on Write run `parse-override.sh` to validate. Valid artifact → install
    accepted.
 
-### PII safety — path-form mandate
+### PII safety — findings provenance
 
-The `findings_json` field MUST be a **path to the persisted, redacted
-`.scan-meta.json`** — not an inline JSON copy of findings. Reason: scanner
-stdout (which the operator sees during review) is intentionally unredacted
-for in-terminal inspection; the persisted `.scan-meta.json` runs through
-`redact_pii()` (email, IPv4, IBAN, JWT, Anthropic/OpenAI keys, GitHub
+The `findings_json` field MUST carry **redacted bytes from the persisted
+`.scan-meta.json`** — never an inline copy typed from scanner stdout. Reason:
+scanner stdout (which the operator sees during review) is intentionally
+unredacted for in-terminal inspection; the persisted `.scan-meta.json` runs
+through `redact_pii()` (email, IPv4, IBAN, JWT, Anthropic/OpenAI keys, GitHub
 PAT/OAuth, GitLab PAT, Doppler tokens, Slack tokens, AWS keys). Copy-pasting
 from terminal scrollback lands raw PII / secrets in a permanent git artifact
-retained "for repository lifetime" per Art. 32 evidence retention.
+retained "for repository lifetime" per Art. 32 evidence retention. The
+path form is the default because it cannot be mis-pasted.
 
 `parse-override.sh` enforces this: artifacts whose body contains a raw email
 pattern outside the `approver:` field are rejected with `invalid_schema`.
+
+The path form is valid only inside the retention window: the scanner's startup
+reap removes `skill-security-scan-*` dirs older than `SKILL_SCAN_META_REAP_MIN`
+minutes (default 10080 = 7 days), and `$XDG_RUNTIME_DIR` is cleared on logout
+regardless (#6789, #6760). For a reference that must outlive the window, embed
+the findings inline — the schema's `oneOf` admits an object form — copied from
+the **redacted `.scan-meta.json`**, never from scanner stdout (the mandate
+above is about where the bytes come from, not the YAML shape). Two mechanics
+matter: the presence check (#10167) counts `findings_json` present iff the
+`findings_json:` key line carries non-whitespace, non-null content OR a
+following *indented* line does before the block ends — so both the inline
+`findings_json: {…}` form and the block mapping (`findings_json:` then
+indented `key: value` lines) are accepted, while `findings_json:` bare,
+whitespace-only, `null`/`~`, a same-line comment (`findings_json: # …`,
+reads as null), or `findings_json:{…}` (no separation space — YAML reads that
+as a scalar, not a mapping) still report missing. And the
+source bytes must still be the redacted file.
 
 ## Multiple overrides per PR
 
@@ -125,28 +143,28 @@ The override mechanism is the LAST gate. Earlier gates:
 
 1. **PreToolUse hook on Write** (`.claude/hooks/skill-security-scan-write.sh`)
    — load-bearing tool-layer block on `HIGH-RISK without override artifact`.
-2. **Cooperative-fast-path in agent-finder §4b.5** — surfaces findings to
+2. **Cooperative-fast-path in soleur:engineering:discovery:agent-finder §4b.5** — surfaces findings to
    operator before the Write attempt.
 3. **Cooperative-fast-path in skill-creator Step 5** — same as above for
    scaffold workflows.
 4. **Lefthook commit-time advisory** (`.claude/hooks/skill-security-scan.sh`)
    — belt-and-suspenders for IDE / manual `git commit` paths.
-5. **CI pre-merge required check** (`skill-security-scan-pr-trailer.yml`) —
+5. **CI pre-merge required check** (job `skill-security-scan` in `pr-quality-guards.yml`) —
    Layer C: blocks merge if any new HIGH-RISK skill install lacks a valid
    override artifact.
 6. **CI post-merge audit** (`skill-security-scan-postmerge.yml`) — Layer D:
    re-validates on push to main. Auto-files `compliance/critical` issue if
    pre-merge gate was bypassed via admin merge or force-push.
-7. **Branch protection** — `main` requires `skill-security-scan-pr-trailer`
+7. **Branch protection** — `main` requires the `skill-security-scan PR gate` check (job `skill-security-scan` in `pr-quality-guards.yml`)
    pre-merge status check. Bypassing requires explicit admin action that
    auto-files a compliance issue.
 
 ## Future extensions (NOT implemented in v1)
 
-The original brainstorm and CTO Decision 12 contemplated a `/plan`-aware
+The original brainstorm and CTO Decision 12 contemplated a `soleur:plan`-aware
 skip-and-warn mode for the scanner. Phase 6 of the plan removed this for v1
-because `/soleur:plan` does not scaffold or fetch skills — those code paths
-live in `skill-creator` and `agent-finder` only. If a future plan-time
+because `soleur:plan` does not scaffold or fetch skills — those code paths
+live in `skill-creator` and `soleur:engineering:discovery:agent-finder` only. If a future plan-time
 scaffolding workflow emerges, re-evaluate this design with a tracking issue.
 The `SKILL_SECURITY_SCAN_PLAN_MODE` env-flag idea is preserved here as
 documented future-extension guidance only; it is not implemented in this v1

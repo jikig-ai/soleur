@@ -77,6 +77,9 @@ there receives `EPIPE` instead of dying — with a perfectly good GNU grep. Meas
 | default | 141 | **INVERTS** (defect live) |
 | inherited `SIG_IGN` | 0 | **CORRECT** (defect absent) |
 
+> **Superseded 2026-10-05 (#9217):** the `inherited SIG_IGN` row holds for an external writer only; a builtin
+> `printf`/`echo` writer returns 1 there and the defect is live on the runner. See the addendum at the end of this note.
+
 Two causes produce the same non-141 and mean **opposite** things — the instrument is blind (grep
 drained), or **the defect cannot occur here at all**. The probe collapsed them into one and named the
 wrong one, confidently, in the script whose subject is confident claims nobody measured. It now
@@ -334,3 +337,21 @@ bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh --pathspec <s
 `infra-validation.yml`; registration asserted cross-file by `scan-workflow.test.sh`).*
 *Attestation: `sigpipe-triage-feasibility.test.sh`.*
 *All counts regenerated 2026-07-17 on GNU grep 3.12 with the shell function unset.*
+
+## Addendum — 2026-10-05 (#9217): the "defect absent" row holds for an external writer only
+
+> **Superseded 2026-10-05 (#9217, #7376):** the row `inherited SIG_IGN | 0 | CORRECT (defect absent)` in the
+> SIGPIPE-disposition table above is true only when the writer is an external process that dies or returns 0 on a closed
+> pipe. A shell builtin writer (`printf`, `echo`) under an ignored SIGPIPE gets EPIPE and returns **1**, and `pipefail`
+> promotes that to the pipeline status, so the defect is **live on the Actions runner** for the dominant site shape
+> (`printf '%s' "$V" | grep -q P`). Three suites flipped on the runner on 2026-10-05 for exactly that reason (PR #9525).
+
+| SIGPIPE disposition | writer | writer rc | `if producer \| grep -q M` |
+|---|---|---|---|
+| default | any | 141 | **INVERTS** (defect live) |
+| inherited `SIG_IGN` | external process | 0 | correct |
+| inherited `SIG_IGN` | builtin `printf`/`echo` | **1** (EPIPE) | **INVERTS** (defect live) |
+
+So a green CI run is evidence for the external-writer sites only. The site counts in this note are unchanged, but they
+cover `apps/web-platform/infra/`; repo-wide on 2026-10-05 the guard's own derivation gave 1,107 code lines in 1,644 files (see the learning
+`2026-10-05-the-pipefail-sweep-was-seven-times-the-tracker-figure-and-the-audits-absent-in-ci-row-was-wrong.md`).

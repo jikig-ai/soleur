@@ -56,6 +56,15 @@ export interface UseKbLayoutStateResult {
   loading: boolean;
   error: KbContextValue["error"];
   hasTreeContent: boolean;
+  /** Loading / error / empty — the chromeless states that take the whole column. */
+  fullWidth: boolean;
+  /**
+   * #7186 — where the ONE `KbSidebarShell` mounts. Derived ONCE here and
+   * consumed by both the rail portal (kb/layout.tsx) and the mobile content
+   * column (kb-mobile-layout.tsx). Two independent conditions that merely agree
+   * is how a second tree gets mounted; this value makes single-host structural.
+   */
+  treeHost: "rail" | "content";
   // Chat state
   contextPath: string | null;
   showChat: boolean;
@@ -217,6 +226,19 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = !!(tree?.children && tree.children.length > 0);
 
+  // Lifted from kb/layout.tsx (#7186 D5) so `treeHost` below can be derived
+  // from the same value the layout branches on — not from a copy.
+  const fullWidth = loading || !!error || !hasTreeContent;
+
+  // The ONE tree lives in the content column only on a mobile, populated,
+  // landing render. Every other cell — desktop anything, any fullWidth state,
+  // and the mobile document route — keeps it in the rail's drawer, exactly as
+  // today. `loading` starts true so `fullWidth` short-circuits before
+  // `isDesktop` is consulted, which is why no viewport-derived value can reach
+  // a first-paint render (D1 reason 1).
+  const treeHost: "rail" | "content" =
+    !isDesktop && !fullWidth && !isContentView ? "content" : "rail";
+
   // Document 404 clear lives in kb/[...path]/page.tsx (tree-level not-found
   // is workspace/repo missing, not a single doc path).
 
@@ -254,9 +276,23 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const [suppressSidebar, setSuppressSidebar] = useState(false);
   // Reveal state for an embedded Concierge (C4 workspace). DISTINCT from
   // sidebarOpen so the header trigger drives the C4 diagram-side panel without
-  // re-mounting a second side-panel Concierge. Defaults open (parity with the
-  // pre-lift local conciergeCollapsed=false initial state).
-  const [embeddedConciergeOpen, setEmbeddedConciergeOpen] = useState(true);
+  // re-mounting a second side-panel Concierge.
+  //
+  // #7222 — the default is VIEWPORT-DERIVED, not a constant `true`. On desktop
+  // it stays open (parity with the pre-lift conciergeCollapsed=false initial
+  // state): there is room for a diagram + chat split. On a phone that same
+  // default splits ~390px into two ~190px columns and neither the diagram nor
+  // the thread is usable, so the Concierge starts CLOSED and the diagram owns
+  // the viewport; the top-bar trigger (KbChatTrigger, visible on mobile via the
+  // #7186 header) opens it as a full-screen overlay — see c4-workspace.tsx.
+  //
+  // Safe to seed from `isDesktop` despite `useMediaQuery` reading real
+  // matchMedia on the first client render: NOTHING renders off this value
+  // server-side. Its only consumers are C4Workspace (`ssr: false`, so it has no
+  // server HTML to mismatch) and KbChatTrigger, which reads it exclusively
+  // inside a focus-restore effect. React re-runs the initializer on the client,
+  // so the server's `false` never sticks on desktop.
+  const [embeddedConciergeOpen, setEmbeddedConciergeOpen] = useState(isDesktop);
   const revealEmbeddedConcierge = useCallback(
     () => setEmbeddedConciergeOpen(true),
     [],
@@ -266,11 +302,19 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     [],
   );
 
-  // Restore sidebarOpen from sessionStorage on mount (per-tab persistence)
+  // Restore sidebarOpen from sessionStorage on mount (per-tab persistence).
+  //
+  // #7222 — DESKTOP ONLY. On desktop the restored panel is a side column beside
+  // a still-visible document, so re-opening it is a convenience. On mobile it is
+  // now a full-screen takeover, and silently restoring it would put every KB
+  // entry behind a conversation the user has to dismiss before they can read
+  // anything. The key is still WRITTEN on mobile, so a session that started on a
+  // phone and continues on a laptop keeps its place.
   useEffect(() => {
     if (!kbChatFlag) return;
+    if (!isDesktop) return;
     if (safeSession(KB_SIDEBAR_OPEN_KEY) === "1") setSidebarOpen(true);
-  }, [kbChatFlag]);
+  }, [kbChatFlag, isDesktop]);
 
   const openSidebar = useCallback(() => {
     setSidebarOpen(true);
@@ -292,10 +336,14 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     if (prevContextPathRef.current === contextPath) return;
     prevContextPathRef.current = contextPath;
     closeSidebar();
-    // Re-open the embedded Concierge default for the new doc (mirrors the side
-    // panel close-on-navigate; a fresh doc shows its Concierge by default).
-    setEmbeddedConciergeOpen(true);
-  }, [contextPath, closeSidebar]);
+    // Restore the embedded Concierge DEFAULT for the new doc (mirrors the side
+    // panel close-on-navigate). #7222: the default is `isDesktop`, not `true` —
+    // re-opening it on every phone navigation would reinstate the compressed
+    // split this fix removes. `isDesktop` is in the dep array only because the
+    // effect reads it; the same-path early-return above makes a viewport flip a
+    // no-op, so a rotation never re-opens a Concierge the user closed.
+    setEmbeddedConciergeOpen(isDesktop);
+  }, [contextPath, closeSidebar, isDesktop]);
 
   // Prefetch message count for the current document so the toolbar trigger
   // shows "Continue thread" vs "Ask about this document" accurately even while
@@ -373,6 +421,8 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     loading,
     error,
     hasTreeContent,
+    fullWidth,
+    treeHost,
     contextPath,
     showChat,
     openSidebar,

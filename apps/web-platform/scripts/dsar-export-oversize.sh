@@ -18,6 +18,17 @@
 
 set -euo pipefail
 
+# Refuse to run under xtrace (#7797): -x prints a command after expansion, so the service-role
+# key would be printed the moment it is used. `${VAR:+x}` tests non-emptiness without expanding it.
+case "$-" in
+  *x*)
+    if [ -n "${SUPABASE_SERVICE_ROLE_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 <user-id> <out-dir>" >&2
   exit 64
@@ -30,6 +41,33 @@ if [[ -z "${SUPABASE_URL:-}" || -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
   echo "error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set (run under doppler)" >&2
   exit 78
 fi
+
+# Destination pin: the service-role key travels to $SUPABASE_URL, which is env-derived, so an
+# override must not redirect it. This is the PRD DSAR fallback (doppler -c prd): accept only the
+# live prd Supabase project, by its custom domain or its own ref host (same literals as
+# seed-live-verify-user.sh). The dev project is a distinct project and is NOT accepted.
+case "$SUPABASE_URL" in
+  https://api.soleur.ai|https://ifsccnjhymdmidffkzhl.supabase.co) ;;
+  *) echo "error: SUPABASE_URL is not the prd Supabase project host; refusing" >&2; exit 78 ;;
+esac
+
+# One wrapper owns the transport flags, the key-shape guard and BOTH credential headers
+# (apikey + Authorization carry the same service-role key), so the key travels on curl's stdin
+# config channel and never on its argument list (/proc/<pid>/cmdline, ps, a traced parent). A
+# newline in the key would inject a curl config directive and an empty one would send the request
+# unauthenticated, so it is refused before any curl runs; the value is never echoed. The
+# non-secret Accept / Content-Type headers stay on argv. Service-role keys are JWTs (or
+# sb_secret_ tokens): `.`, `_`, `-` are inside the allowlist already.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$SUPABASE_SERVICE_ROLE_KEY"; then
+  echo "error: SUPABASE_SERVICE_ROLE_KEY has an unexpected shape; refusing" >&2
+  exit 78
+fi
+supabase_curl() {
+  _bearer_ok "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo "supabase_curl: SUPABASE_SERVICE_ROLE_KEY unusable" >&2; return 78; }
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY")
+}
 
 # Refuse to operate on a non-UUID user id — defense against typo'd
 # CLI args dumping ALL users via missing WHERE clauses below.
@@ -47,9 +85,7 @@ read_table() {
   local table="$1"
   local owner_field="$2"
   local outfile="$OUT_DIR/tables/${table}.json"
-  curl -sf \
-    -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-    -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+  supabase_curl -sf \
     -H "Accept: application/json" \
     "${SUPABASE_URL}/rest/v1/${table}?${owner_field}=eq.${USER_ID}&select=*" \
     > "$outfile"
@@ -70,9 +106,7 @@ read_table audit_byok_use      founder_id
 CONV_IDS=$(jq -r '[.[].id] | join(",")' "$OUT_DIR/tables/conversations.json")
 if [[ -n "$CONV_IDS" ]]; then
   echo "  · messages: scoping via conversations…"
-  curl -sf \
-    -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-    -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+  supabase_curl -sf \
     -H "Accept: application/json" \
     "${SUPABASE_URL}/rest/v1/messages?conversation_id=in.(${CONV_IDS})&select=*" \
     > "$OUT_DIR/tables/messages.json"
@@ -81,9 +115,7 @@ if [[ -n "$CONV_IDS" ]]; then
   MSG_IDS=$(jq -r '[.[].id] | join(",")' "$OUT_DIR/tables/messages.json")
   if [[ -n "$MSG_IDS" ]]; then
     echo "  · message_attachments: scoping via messages…"
-    curl -sf \
-      -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-      -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+    supabase_curl -sf \
       -H "Accept: application/json" \
       "${SUPABASE_URL}/rest/v1/message_attachments?message_id=in.(${MSG_IDS})&select=*" \
       > "$OUT_DIR/tables/message_attachments.json"
@@ -95,9 +127,7 @@ echo "[2/4] Downloading chat-attachments/${USER_ID}/…"
 # List folders, then list per-folder files, then download each.
 # This is the operator-side mirror of enumerateChatAttachments in
 # dsar-export.ts; the path-prefix guard below is the AC26 equivalent.
-LIST=$(curl -sf \
-  -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-  -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+LIST=$(supabase_curl -sf \
   -H "Content-Type: application/json" \
   -X POST \
   -d "{\"prefix\":\"${USER_ID}/\",\"limit\":1000}" \
@@ -107,9 +137,7 @@ echo "$LIST" | jq -r '.[] | .name' | while read -r name; do
     echo "  · REFUSING (path-traversal in name): $name" >&2
     exit 1
   fi
-  curl -sf \
-    -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-    -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+  supabase_curl -sf \
     -o "$OUT_DIR/attachments/${name##*/}" \
     "${SUPABASE_URL}/storage/v1/object/chat-attachments/${USER_ID}/${name}"
   echo "  · downloaded ${name}"

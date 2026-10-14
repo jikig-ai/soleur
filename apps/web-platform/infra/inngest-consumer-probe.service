@@ -1,0 +1,40 @@
+[Unit]
+Description=inngest consumer-perspective serviceability probe (web host, #7228 Phase 1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# HOME=/root: the ExecStart runs `doppler run` as ROOT (no User=). The Doppler CLI's
+# os.UserHomeDir() init dies "Doppler Error: $HOME is not defined" for a root systemd service
+# (which gets no $HOME) BEFORE it can exec the probe — the reason every working root-doppler unit
+# on the fleet (container-restart-monitor, cron-egress-*, inngest-cutover-flip, and both sibling
+# web probes) sets this. With HOME=/root doppler uses /root/.doppler; the prd DOPPLER_TOKEN
+# arrives via the EnvironmentFile below (written by the *_install provisioner from
+# doppler_service_token.web_probes). No DOPPLER_CONFIG_DIR → never /tmp/.doppler (#6536).
+Environment=HOME=/root
+# SyslogIdentifier retags the unit's journal output away from the ExecStart basename `bash`
+# (systemd default) to a diagnostic-critical identifier shipped by vector.toml Source 4
+# (host_scripts_journald) — so the probe's fault classification ("UNREACHABLE — no TCP listener",
+# "EMPTY REGISTRY", "WEDGED") reaches Better Stack off-box rather than SSH-only
+# (hr-no-ssh-fallback-in-runbooks; the #6556 inngest-heartbeat lesson). Mirrored in vector.toml —
+# Source 4 is sd_journal_add_match EXACT-VALUE equality, so this literal and that entry are ONE
+# change in two files; either alone is a permanently-dead no-op that reads like coverage.
+#
+# This is the half that makes the probe diagnostic rather than merely binary. The heartbeat's
+# absence says "something is wrong with the dedicated inngest host"; only this channel says which
+# of unreachable / empty-registry / wedged it is — and #7228 is precisely a twelve-day outage in
+# which the binary signal was green and no channel carried the WHY.
+SyslogIdentifier=inngest-consumer-probe
+# /etc/default/inngest-consumer-probe (baked by the *_install provisioner in server.tf) carries
+# INNGEST_REMOTE_GQL_URL and INNGEST_CONSUMER_URL_KEY (the Doppler var name holding this probe's
+# heartbeat URL). There is ONE dedicated inngest host, so unlike the per-host zot/NIC beats this
+# is a single shared beat and the mapping is an identity — the git-data probe precedent (C3:
+# "single-host makes masking moot"). The indirection is kept anyway so all three web probes read
+# identically. `doppler run` injects INNGEST_CONSUMER_URL; bash indirect expansion resolves it
+# under the generic name the script reads. `$$` is the SYSTEMD escape for a literal `$` (systemd
+# expands `$VAR`/`${VAR}` in ExecStart), so bash receives `${!INNGEST_CONSUMER_URL_KEY}`.
+# Shipped as a FILE rather than a heredoc so this nested-quoted doppler ExecStart survives intact
+# (the container-restart-monitor precedent in server.tf).
+EnvironmentFile=/etc/default/inngest-consumer-probe
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export INNGEST_CONSUMER_URL="$${!INNGEST_CONSUMER_URL_KEY}"; exec /usr/local/bin/inngest-consumer-probe.sh'\'''

@@ -69,9 +69,9 @@ This pattern is already documented in the brainstorm skill's Phase 3.6 step 1 ("
 
 ## References
 
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-13-unified-ci-deploy-stall-hardening-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-unified-ci-deploy-stall-hardening/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-13-unified-ci-deploy-stall-hardening-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-unified-ci-deploy-stall-hardening/spec.md`
 - Compliance learning (cross-product): `knowledge-base/project/learnings/compliance/2026-05-13-pipeline-reliability-as-gdpr-art32-control.md`
-- #3706 plan (the deepen-pass that rejected systemd-run): `knowledge-base/project/plans/2026-05-12-fix-harden-web-platform-release-pipeline-3704-plan.md`
+- #3706 plan (the deepen-pass that rejected systemd-run): `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-fix-harden-web-platform-release-pipeline-3704-plan.md`
 - Issues bundled: #3712, #3704, #2207
 - Follow-up: #3723 (Hetzner self-hosted runner)

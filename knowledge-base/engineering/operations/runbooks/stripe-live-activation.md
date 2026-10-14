@@ -535,5 +535,5 @@ preserved for re-activation.
   never pass `--yes`), `cq-docs-cli-verification` (all external
   URLs in this runbook are `<!-- verified: 2026-04-23 source: ... -->`
   annotated; re-verify at next edit).
-- Activation plan: `knowledge-base/project/plans/2026-04-23-feat-stripe-live-activation-plan.md`
+- Activation plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-stripe-live-activation-plan.md`
 - Enforcing issue: Issue #1444.

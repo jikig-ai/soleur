@@ -28,6 +28,7 @@ re_evaluation_triggers: "First arms-length / non-Soleur tenant (any data subject
 > `LAWFUL_BASIS` annotations, no Art. 9 column), `server/crm/crm-tools.ts` (the
 > Anthropic agent-read path, the untrusted-content Art. 9-avoidance envelope,
 > PII-safe synthetic-error handling, the write RPC shape), `server/tool-tiers.ts`
+>
 > + `server/agent-runner.ts` (the human-gated write tiers + gate messages),
 > `server/dsar-export-allowlist.ts` + `server/dsar-export.ts` (the article tags +
 > export chain), and the third-party erasure runbook — resolved the six named
@@ -138,7 +139,7 @@ activity where the operator is the CONTROLLER and Jikigai is the PROCESSOR**
 
 ## Non-blocking observations
 
-- **A. "cro/cpo agents" vs the actual tool registration surface.** All five doc
++ **A. "cro/cpo agents" vs the actual tool registration surface.** All five doc
   surfaces describe the store as read/written by "the platform's `cro`/`cpo`
   agents." In `server/agent-runner.ts` (~line 1832) `buildCrmTools({ userId })` is
   registered **unconditionally on the leader agent surface**, not role-gated to
@@ -153,7 +154,7 @@ activity where the operator is the CONTROLLER and Jikigai is the PROCESSOR**
   characterization). Named here for the record; revisit if a future agent role is
   given a materially different purpose over the store.
 
-- **B. Eleventy mirror §6 divergence.** The canonical `docs/legal/gdpr-policy.md`
++ **B. Eleventy mirror §6 divergence.** The canonical `docs/legal/gdpr-policy.md`
   §6 Anthropic row now appends the beta-CRM Chapter V sentence; the Eleventy mirror
   `plugins/soleur/docs/pages/legal/gdpr-policy.md` §6 row does **not**. This is **not a
   published-site disclosure gap** — the mirror's own §3.13 discloses the Chapter V
@@ -183,6 +184,7 @@ activity where the operator is the CONTROLLER and Jikigai is the PROCESSOR**
 migration-126 implementation across all six resolution axes (lawful basis, Art. 14
 posture, 24-month retention, Anthropic Chapter V, DSAR/erasure, no-Art.9). No prose
 misstates the code, the Art. 6(1)(f) basis is documented and adequate (dedicated LIA
+
 + per-column annotations), and no required disclosure is missing. The two observations
 are non-blocking and no in-PR prose correction is required to ship. The three
 pending items are external-counsel confirmations correctly recorded as the named

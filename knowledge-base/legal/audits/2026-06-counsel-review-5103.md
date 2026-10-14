@@ -64,7 +64,7 @@ parameterless `purge_email_triage_items`).
   escalation + read-only summarization + synthetic probe), data subjects
   (involuntary senders / persons mentioned / operator, with the Art. 14(5)(b)
   posture stated at the limb), data categories (exhaustive at-rest column list
-  + in-transit surfaces), special categories (named residual, not denied),
+  - in-transit surfaces), special categories (named residual, not denied),
   lawful basis (Art. 6(1)(f) + LIA pointer), recipients (Resend, Anthropic,
   Supabase, plus the self-hosted Inngest event store framed correctly as a
   PII *surface*, not a recipient), transfers (DPF + SCCs per vendor),

@@ -1,0 +1,516 @@
+__run_boundary_start__	0	bytes_tmp=116830208	bytes_tmpdir=61151248384
+tests/hooks/incidents	698	tmp_delta=0
+tests/hooks/emissions	1963	tmp_delta=1
+tests/hooks/openhands-guardrails	623	tmp_delta=0
+tests/scripts/lint-rule-ids	1259	tmp_delta=1
+scripts/lint-rule-ids-live	50	tmp_delta=0
+tests/scripts/lint-rule-bodies	5769	tmp_delta=-2
+scripts/lint-rule-bodies-live	76	tmp_delta=0
+scripts/lint-agents-rule-budget-live	57	tmp_delta=0
+scripts/lint-agents-rule-budget-unit	534	tmp_delta=0
+scripts/lint-agents-compound-sync-live	159	tmp_delta=0
+scripts/lint-agents-compound-sync-unit	2937	tmp_delta=0
+scripts/lint-agents-enforcement-tags-live	57	tmp_delta=0
+scripts/lint-agents-enforcement-tags-unit	1546	tmp_delta=0
+scripts/lint-migrated-rule-ids-live	772	tmp_delta=0
+scripts/lint-migrated-rule-ids-unit	5270	tmp_delta=0
+scripts/lint-infra-no-human-steps	3588	tmp_delta=1
+scripts/lint-supabase-deprecated-endpoints-unit	7950	tmp_delta=2
+tests/scripts/supabase-logs-query	15246	tmp_delta=1
+scripts/lint-credential-path-literals	2749	tmp_delta=1
+scripts/lint-workflow-step-env-refs	2275	tmp_delta=-1
+scripts/lint-workflow-step-env-refs-live	913	tmp_delta=0
+scripts/lint-workflow-errexit-capture	4923	tmp_delta=0
+scripts/lint-workflow-errexit-capture-live	976	tmp_delta=0
+scripts/lint-workflow-run-body-syntax	3693	tmp_delta=0
+scripts/lint-dual-lockfile	1363	tmp_delta=0
+scripts/lint-dual-lockfile-live	328	tmp_delta=0
+scripts/lint-workflow-install-sites	16983	tmp_delta=0
+scripts/lint-workflow-install-sites-live	1868	tmp_delta=0
+scripts/verify-lockfile-guards	120	tmp_delta=0
+scripts/assert-dependabot-drain-live	32	tmp_delta=0
+scripts/assert-dependabot-drain-unit	1220	tmp_delta=0
+scripts/lint-shell-capture-exit	1269	tmp_delta=0
+scripts/lint-shell-capture-exit-live	754	tmp_delta=0
+scripts/marketplace-drift-check	3158	tmp_delta=0
+scripts/plugin-legacy-resolver-probe	1706	tmp_delta=0
+scripts/plugin-delivery-canary	9842	tmp_delta=0
+scripts/guard-vacuity-floor	36576	tmp_delta=0
+scripts/marketplace-manifest-validate	1228	tmp_delta=0
+scripts/verify-marketplace-ruleset	2509	tmp_delta=0
+scripts/lint-encryption-posture	3349	tmp_delta=0
+scripts/check-tom4-rls-posture	2789	tmp_delta=0
+scripts/check-tom4-rls-posture-live	243	tmp_delta=0
+scripts/lint-guard-contract	1670	tmp_delta=0
+scripts/lint-guard-contract-live	326	tmp_delta=0
+scripts/lint-window-closure-assertion	1297	tmp_delta=1
+scripts/lint-window-closure-assertion-live	1211	tmp_delta=-1
+scripts/rename-guard	5281	tmp_delta=0
+scripts/extract-api-spend	92	tmp_delta=0
+scripts/domain-model-drift	1796	tmp_delta=0
+scripts/expenses-verify-by-check	434	tmp_delta=0
+scripts/sentry-issue	373	tmp_delta=0
+scripts/sentry-issue-discover	327	tmp_delta=0
+scripts/content-publisher	25664	tmp_delta=0
+scripts/content-publisher-residue	107	tmp_delta=0
+scripts/skill-freshness-aggregate	620	tmp_delta=0
+scripts/compound-promote	293	tmp_delta=0
+scripts/lint-trap-tempfile-ownership	4438	tmp_delta=0
+scripts/lint-shell-trace-credential-refusal	10537	tmp_delta=1
+scripts/betterstack-ingest-parity	107	tmp_delta=1
+scripts/lint-shell-trace-credential-refusal-repo	1735	tmp_delta=-1
+scripts/check-cloudflare-token-drift	27685	tmp_delta=0
+scripts/test-contention	12030	tmp_delta=0
+slowfixture	2004	tmp_delta=1
+after1	2	tmp_delta=0
+slowfixture	2004	tmp_delta=0
+after1	0	skip=runtime-ceiling
+slowfixture	2004	tmp_delta=0
+after1	0	skip=runtime-ceiling
+after2	0	skip=runtime-ceiling
+slowfixture	2004	tmp_delta=0
+after1	2	tmp_delta=0
+slowfixture	2004	tmp_delta=0
+after1	2	tmp_delta=0
+slowfixture	2004	tmp_delta=0
+after1	3	tmp_delta=0
+slowfixture	2004	tmp_delta=0
+infrarunner	0	skip=runtime-ceiling
+slowfixture	2004	tmp_delta=0
+infrarunner	2	tmp_delta=0
+slowfixture	2003	tmp_delta=0
+after1	2	tmp_delta=0
+slowfixture	2004	tmp_delta=0
+after1	2	tmp_delta=0
+slowfixture	2004	tmp_delta=0
+after1	0	skip=runtime-ceiling
+slowfixture	2005	tmp_delta=0
+after1	0	skip=runtime-ceiling
+slowfixture	2004	tmp_delta=0
+after1	0	skip=runtime-ceiling
+slowfixture	2005	tmp_delta=0
+infrarunner	0	skip=runtime-ceiling
+scripts/test-all-runtime-ceiling	34176	tmp_delta=0
+scripts/tmpfs-guard	5500	tmp_delta=1
+scripts/orphan-process-reaper	11899	tmp_delta=-1
+scripts/orphan-process-reaper-mutations	111901	tmp_delta=0
+scripts/ship-incident-pir-gate-mutations	968	tmp_delta=0
+scripts/raise-tmp-tmpfs-ceiling	2116	tmp_delta=0
+scripts/rules-loader-stamp-probe	203	tmp_delta=0
+scripts/lint-orphan-test-suites	414	tmp_delta=0
+scripts/lint-orphan-test-suites-mutations	13015	tmp_delta=0
+scripts/lint-legal-scope-block-placement-unit	9971	FAIL	tmp_delta=1
+scripts/lint-legal-scope-block-placement-live	26	tmp_delta=0
+scripts/lint-legal-mirror-drift-baseline-unit	11229	tmp_delta=-1
+scripts/lint-legal-mirror-drift-baseline-live	733	tmp_delta=0
+scripts/tenant-dpa-register-guard-unit	519	tmp_delta=0
+scripts/tenant-dpa-register-guard-live	17	tmp_delta=0
+scripts/lint-legal-registers-unit	14036	tmp_delta=0
+scripts/probe-legal-corpus-truth-live	120	tmp_delta=0
+scripts/lint-legal-registers-live	299	tmp_delta=0
+scripts/check-pa-22-unit	1400	tmp_delta=0
+scripts/check-pa-22-live	29	tmp_delta=0
+scripts/cron-artifact-age	207	tmp_delta=0
+scripts/watch-live-verify-pass	202	tmp_delta=0
+scripts/review-reminder-liveness	164	tmp_delta=0
+scripts/zot-restart-loop-alarm	9629	tmp_delta=0
+scripts/zot-restart-loop-alarm-scrub	2453	tmp_delta=0
+scripts/followthrough-exec-bit	12	tmp_delta=0
+scripts/followthrough-varq-ban-live	150	tmp_delta=0
+scripts/followthrough-varq-ban	726	tmp_delta=0
+scripts/follow-through-closure-guard	593	tmp_delta=0
+scripts/sweep-followthroughs	4711	tmp_delta=0
+scripts/zot-soak-6122-arms	1492	tmp_delta=0
+scripts/hostname-mislabel-web1-6616	224	tmp_delta=0
+scripts/ci-deploy-sentry-post-fail-6475	133	tmp_delta=0
+scripts/bwrap-probe-selfreport-8016	227	tmp_delta=0
+scripts/send-failed-alert-probe-8097	2298	tmp_delta=0
+scripts/run-report-exit-first-contact-8076	1411	tmp_delta=0
+scripts/anthropic-admin-key-6297	2464	tmp_delta=0
+scripts/infra-config-activation-7220	1250	tmp_delta=0
+scripts/zot-fill-rate-7341	3979	tmp_delta=0
+scripts/inngest-cutover-flip-rollout-7761	2296	tmp_delta=0
+scripts/inngest-host-not-serving-7674	377	tmp_delta=0
+scripts/cpx22-invoice-reconcile-7431	752	tmp_delta=0
+scripts/inngest-zot-boot-7462	650	tmp_delta=0
+scripts/inngest-zot-client-authz-6500	184	tmp_delta=0
+scripts/cloud-mode-postmerge-evidence-8159	151	tmp_delta=0
+scripts/inngest-liveness-classify	311	tmp_delta=0
+scripts/inngest-restart-age-gate	38	tmp_delta=0
+scripts/inngest-restart-poll-classify	194	tmp_delta=0
+scripts/tunnel-connector-census	231	tmp_delta=0
+scripts/seccomp-unenforced-alert	154	tmp_delta=0
+scripts/infra-config-red-alert	1137	tmp_delta=0
+scripts/prod-version-drift-check	25856	tmp_delta=0
+scripts/zot-mirror-diagnosis	432	tmp_delta=0
+scripts/derive-app-domain-base	417	tmp_delta=0
+scripts/rotate-supabase-db-credential	532	tmp_delta=0
+scripts/alarm-issue-filing-guard	1102	tmp_delta=1
+scripts/lint-workflow-issue-write-scope	567	tmp_delta=-1
+scripts/lint-workflow-issue-write-scope-live	174	tmp_delta=0
+scripts/lint-diagnosis-claims	1562	tmp_delta=0
+scripts/dogfood/grok-gpu-bootstrap	51	tmp_delta=0
+scripts/dogfood/grok-measure	55	tmp_delta=0
+tests/scripts/stock-preflight-gate	637	tmp_delta=0
+tests/scripts/plan-gate-preamble	280	tmp_delta=0
+tests/scripts/git-data-host-birth-gate	30559	tmp_delta=0
+tests/scripts/git-data-birth-readiness-gate	16737	tmp_delta=0
+tests/scripts/git-data-rung2-evidence-capture	3828	tmp_delta=0
+tests/scripts/supabase-advisor-scan	1729	tmp_delta=0
+tests/scripts/eu-location-allowset-parity	29	tmp_delta=0
+tests/scripts/betterstack-query-archive	181	tmp_delta=0
+tests/scripts/betterstack-absence-classifier	113	tmp_delta=0
+tests/scripts/betterstack-ingest-probe	197	tmp_delta=0
+tests/scripts/betterstack-roundtrip-latency	165660	tmp_delta=0
+tests/scripts/rule-id-regex-parity	119	tmp_delta=0
+tests/scripts/rule-metrics-aggregate	2766	tmp_delta=0
+scripts/rule-metrics-aggregate	4164	tmp_delta=0
+tests/scripts/weakness-miner	621	tmp_delta=0
+tests/scripts/audit-ruleset-bypass	1363	tmp_delta=0
+tests/scripts/audit-bot-codeql-coverage	801	tmp_delta=0
+tests/commands/sync-rule-prune	1283	tmp_delta=0
+tests/commands/sync-domain-model	120	tmp_delta=0
+tests/commands/sync-producer-reachability	551	tmp_delta=0
+tests/scripts/kb-drift-walker	130	tmp_delta=0
+tests/scripts/destroy-guard-counter-github	121	tmp_delta=0
+tests/scripts/destroy-guard-counter-sentry	577	tmp_delta=0
+tests/scripts/destroy-guard-counter-web-platform	2681	tmp_delta=1
+tests/scripts/preapply-entrypoint-gate	2924	tmp_delta=0
+tests/scripts/host-image-coherence-preflight	109	tmp_delta=0
+tests/scripts/inngest-host-replace-gate	508	tmp_delta=0
+tests/scripts/inngest-volume-recut-gate	3963	tmp_delta=0
+tests/scripts/inngest-host-dark-gate	20294	tmp_delta=0
+tests/scripts/registry-host-replace-gate	848	tmp_delta=0
+tests/scripts/vector-redeliver-gate	1213	tmp_delta=0
+tests/scripts/vector-redeliver-wiring	412	tmp_delta=0
+tests/scripts/registry-region-migrate-gate	858	tmp_delta=0
+tests/scripts/registry-luks-recut-gate	2582	tmp_delta=0
+tests/scripts/registry-pull-path-health	4032	tmp_delta=0
+tests/scripts/registry-replace-preflight	5822	tmp_delta=0
+tests/scripts/registry-gate-mutation-battery	0	skip=relevance
+tests/scripts/registry-restore-from-ghcr	20410	tmp_delta=0
+tests/scripts/registry-d10-workflow-wiring	446	tmp_delta=0
+tests/scripts/registry-heartbeat-poll	464	tmp_delta=0
+tests/scripts/zot-inventory	14133	tmp_delta=0
+tests/scripts/zot-inventory-assert-marker	2493	tmp_delta=3
+tests/scripts/zot-disk-sample	596	tmp_delta=1
+tests/scripts/zot-log-channel-probe	5069	tmp_delta=-4
+tests/scripts/git-data-host-replace-gate	2356	tmp_delta=0
+tests/scripts/git-data-root-key-arm	6612	tmp_delta=0
+tests/scripts/git-data-root-token-census	11187	tmp_delta=0
+tests/scripts/workspaces-luks-cutover-gate	1644	tmp_delta=0
+tests/scripts/workspaces-luks-recut-gate	1517	tmp_delta=0
+tests/scripts/web-host-birth-gate	1891	tmp_delta=0
+tests/scripts/web-host-replace-gate	4262	tmp_delta=0
+tests/scripts/destroy-guard-regex-parity	55	tmp_delta=0
+tests/scripts/destroy-guard-sentry-scope-guard	27	tmp_delta=0
+tests/scripts/tenant-integration-gate-verdict	96	tmp_delta=0
+tests/scripts/vendor-pin-gate-verdict	79	tmp_delta=0
+tests/scripts/sentry-destroy-counts	269	tmp_delta=0
+tests/scripts/sentry-full-root-apply	627	tmp_delta=2
+tests/scripts/sentry-destroy-gate-verdict	41	tmp_delta=0
+tests/scripts/sentry-squash-ack-detect	103	tmp_delta=0
+tests/scripts/sentry-create-gate	106	tmp_delta=0
+tests/scripts/sentry-alert-adoption-guards	2294	tmp_delta=-3
+tests/scripts/sentry-ac17-derived-counts	478	tmp_delta=0
+tests/scripts/sentry-alert-live-fidelity	61914	tmp_delta=0
+tests/scripts/sentry-alert-reference-gate	1493	tmp_delta=0
+tests/scripts/sentry-alert-drift-workflow	4469	tmp_delta=0
+tests/scripts/sentry-monitors-audit-class-d	1114	tmp_delta=0
+scripts/md-to-mrkdwn	195	tmp_delta=0
+apps/web-platform/test/parse-gitleaks-allowlists	371	tmp_delta=0
+scripts/board/set-board-status	1034	tmp_delta=0
+scripts/skill-security-scan-step-body	1264	tmp_delta=0
+scripts/followthroughs/t5-skip-persistence-bound-7510	8356	tmp_delta=0
+test/content-publisher	31	FAIL	tmp_delta=0
+test/x-community	14	FAIL	tmp_delta=0
+test/linkedin-community	12	FAIL	tmp_delta=0
+test/pre-merge-rebase	12	FAIL	tmp_delta=0
+apps/web-platform [repo-wide+component]	81554	FAIL	tmp_delta=0
+apps/web-platform [unit]	0	skip=relevance
+apps/cla-evidence/test/ccla-add.test.sh	11666	tmp_delta=0
+scripts/followthroughs/ccla-representative-icla-7922	10852	tmp_delta=0
+plugins/soleur	14	FAIL	tmp_delta=0
+blog-link-validation	3844	tmp_delta=0
+scripts/frontmatter-strip-parity	217	FAIL	tmp_delta=0
+scripts/betterstack-assert-absence	705	tmp_delta=0
+scripts/digest-oracle-guard	545	tmp_delta=0
+scripts/cf-tunnel-liveness-gate-mutations	0	skip=relevance
+scripts/test-all-infra-coverage-notice	178336	tmp_delta=1
+scripts/test-all-webplat-gate	148	tmp_delta=0
+scripts/test-all-killed-classification	9574	FAIL	tmp_delta=0
+scripts/test-all-capacity-signal	6611	tmp_delta=0
+scripts/suite-exit-class-parity	84	tmp_delta=0
+__run_boundary_start__	0	bytes_tmp=141705216	bytes_tmpdir=61235339264
+__run_boundary_start__	0	bytes_tmp=141705216	bytes_tmpdir=61235339264
+scripts/battery-tag-authorship	24730	tmp_delta=0
+scripts/test-all-enumerate-toolchain	12452	tmp_delta=0
+scripts/battery-ref-guard	186	tmp_delta=0
+__run_boundary_start__	0	bytes_tmp=141717504	bytes_tmpdir=61236781056
+__run_boundary_start__	0	bytes_tmp=141721600	bytes_tmpdir=61236781056
+__run_boundary_start__	0	bytes_tmp=141717504	bytes_tmpdir=61259243520
+__run_boundary_start__	0	bytes_tmp=141717504	bytes_tmpdir=61259243520
+__run_boundary_start__	0	bytes_tmp=141721600	bytes_tmpdir=61259243520
+__run_boundary_start__	0	bytes_tmp=141721600	bytes_tmpdir=61259243520
+__run_boundary_start__	0	bytes_tmp=141721600	bytes_tmpdir=61252694016
+__run_boundary_start__	0	bytes_tmp=141721600	bytes_tmpdir=61252694016
+__run_boundary_start__	0	bytes_tmp=141729792	bytes_tmpdir=61259337728
+__run_boundary_start__	0	bytes_tmp=141729792	bytes_tmpdir=61262376960
+__run_boundary_start__	0	bytes_tmp=141725696	bytes_tmpdir=61271650304
+__run_boundary_start__	0	bytes_tmp=141725696	bytes_tmpdir=61271650304
+__run_boundary_start__	0	bytes_tmp=141742080	bytes_tmpdir=61265575936
+__run_boundary_start__	0	bytes_tmp=141737984	bytes_tmpdir=61265575936
+__run_boundary_start__	0	bytes_tmp=141746176	bytes_tmpdir=61265575936
+__run_boundary_start__	0	bytes_tmp=141742080	bytes_tmpdir=61265575936
+__run_boundary_start__	0	bytes_tmp=141737984	bytes_tmpdir=61270462464
+__run_boundary_start__	0	bytes_tmp=141737984	bytes_tmpdir=61270462464
+__run_boundary_start__	0	bytes_tmp=141991936	bytes_tmpdir=61269479424
+__run_boundary_start__	0	bytes_tmp=141991936	bytes_tmpdir=61275959296
+__run_boundary_start__	0	bytes_tmp=141991936	bytes_tmpdir=61276422144
+__run_boundary_start__	0	bytes_tmp=141991936	bytes_tmpdir=61276422144
+__run_boundary_start__	0	bytes_tmp=141991936	bytes_tmpdir=61279203328
+__run_boundary_start__	0	bytes_tmp=141991936	bytes_tmpdir=61279203328
+__run_boundary_start__	0	bytes_tmp=141991936	bytes_tmpdir=61280690176
+__run_boundary_start__	0	bytes_tmp=141996032	bytes_tmpdir=61280690176
+__run_boundary_start__	0	bytes_tmp=141996032	bytes_tmpdir=61314420736
+__run_boundary_start__	0	bytes_tmp=142000128	bytes_tmpdir=61314420736
+__run_boundary_start__	0	bytes_tmp=142008320	bytes_tmpdir=61304471552
+__run_boundary_start__	0	bytes_tmp=142008320	bytes_tmpdir=61304471552
+__run_boundary_start__	0	bytes_tmp=142004224	bytes_tmpdir=61309140992
+__run_boundary_start__	0	bytes_tmp=142004224	bytes_tmpdir=61309140992
+__run_boundary_start__	0	bytes_tmp=142004224	bytes_tmpdir=61309140992
+__run_boundary_start__	0	bytes_tmp=142004224	bytes_tmpdir=61307555840
+__run_boundary_start__	0	bytes_tmp=142004224	bytes_tmpdir=61307555840
+__run_boundary_start__	0	bytes_tmp=142004224	bytes_tmpdir=61307555840
+scripts/battery-tag-authorship-mutations	434912	tmp_delta=1
+plugins/soleur/test/audit-flag-flip.test.sh	156	tmp_delta=0
+plugins/soleur/test/auto-close-scanner.test.sh	144	tmp_delta=0
+plugins/soleur/test/_base-notice-frontmatter.test.sh	286	FAIL	tmp_delta=1
+plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	27	tmp_delta=0
+plugins/soleur/test/c4-count-parity.test.sh	540	tmp_delta=0
+plugins/soleur/test/c4-from-components.test.sh	0	skip=relevance
+plugins/soleur/test/c4-model-freshness.test.sh	2637	tmp_delta=0
+plugins/soleur/test/cf-token-scope.test.sh	1614	tmp_delta=0
+plugins/soleur/test/check-deps-adapter-drift.test.sh	1826	tmp_delta=0
+plugins/soleur/test/ci-concurrency-key.test.sh	1359	tmp_delta=0
+plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	408	tmp_delta=0
+plugins/soleur/test/concurrent-ship.test.sh	2530	tmp_delta=0
+plugins/soleur/test/digest-scrub.test.sh	584	tmp_delta=2
+plugins/soleur/test/domain-model-headless-append.test.sh	568	tmp_delta=-2
+plugins/soleur/test/domain-model-init.test.sh	206	tmp_delta=0
+plugins/soleur/test/drain-labeled-backlog.test.sh	379	tmp_delta=0
+plugins/soleur/test/drain-prs.test.sh	145	tmp_delta=0
+plugins/soleur/test/fanout-suite-scope.test.sh	17191	tmp_delta=0
+plugins/soleur/test/fixture-cd-containment.test.sh	1132	tmp_delta=0
+plugins/soleur/test/fixture-dir-operand-assert.test.sh	7381	tmp_delta=0
+plugins/soleur/test/fixture-env-adoption.test.sh	14277	tmp_delta=0
+plugins/soleur/test/fixture-relative-assert.test.sh	6051	FAIL	tmp_delta=1
+plugins/soleur/test/flag-detach-shared.test.sh	1705	tmp_delta=0
+plugins/soleur/test/flag-org-scoping-pr2.test.sh	3285	tmp_delta=0
+plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	11	tmp_delta=0
+plugins/soleur/test/gdpr-gate-self-test.test.sh	533	tmp_delta=0
+plugins/soleur/test/generate-kb-index.test.sh	856	tmp_delta=0
+plugins/soleur/test/git-env-list-parity.test.sh	68	tmp_delta=0
+plugins/soleur/test/git-fixture-containment.test.sh	2069	tmp_delta=1
+plugins/soleur/test/git-fixture-env-shell.test.sh	644	tmp_delta=0
+plugins/soleur/test/gitleaks-merge-commit.test.sh	10	FAIL	tmp_delta=0
+plugins/soleur/test/gitleaks-rules.test.sh	56	tmp_delta=0
+plugins/soleur/test/git-tripwire.test.sh	996	FAIL	tmp_delta=0
+plugins/soleur/test/harvest-debt.test.sh	199	tmp_delta=0
+plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	6634	tmp_delta=0
+plugins/soleur/test/hook-git-env-coverage.test.sh	167	tmp_delta=0
+plugins/soleur/test/hook-git-env-receipt.test.sh	216	tmp_delta=0
+plugins/soleur/test/hook-input-classification-mutation.test.sh	125061	tmp_delta=13
+plugins/soleur/test/infra-validation-detect.test.sh	72	tmp_delta=0
+plugins/soleur/test/issue-flow-measure.test.sh	169	tmp_delta=0
+plugins/soleur/test/kb-index-check-guard-mutation.test.sh	18190	tmp_delta=2
+plugins/soleur/test/kb-index-merge-driver-registration.test.sh	4145	tmp_delta=23
+plugins/soleur/test/kb-index-merge-driver.test.sh	11573	FAIL	tmp_delta=13
+plugins/soleur/test/kb-search-lockstep.test.sh	15	tmp_delta=0
+plugins/soleur/test/lane-frontmatter.test.sh	69	tmp_delta=-4
+plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh	103	tmp_delta=0
+plugins/soleur/test/lint-bot-synthetic-completeness.test.sh	1081	tmp_delta=0
+plugins/soleur/test/lint-bot-synthetic-statuses.test.sh	355	tmp_delta=0
+plugins/soleur/test/lint-distribution-content.test.sh	182	tmp_delta=8
+plugins/soleur/test/machinery-drain-floor.test.sh	49	tmp_delta=-8
+plugins/soleur/test/main-health-monitor-workflow.test.sh	1315	tmp_delta=0
+plugins/soleur/test/merge-kb-index-driver-mutation.test.sh	19489	tmp_delta=1
+plugins/soleur/test/monitor-pr-checks.test.sh	103016	tmp_delta=34
+plugins/soleur/test/net-issue-flow.test.sh	12752	tmp_delta=0
+plugins/soleur/test/notice-frontmatter.test.sh	364	FAIL	tmp_delta=1
+plugins/soleur/test/operator-digest-provision.test.sh	68	tmp_delta=0
+plugins/soleur/test/operator-digest-skill.test.sh	134	tmp_delta=0
+plugins/soleur/test/operator-digest-workflow.test.sh	66	tmp_delta=0
+plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	76	tmp_delta=0
+plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	22	tmp_delta=0
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	425	FAIL	tmp_delta=0
+plugins/soleur/test/pr-fanout-ledger.test.sh	34343	tmp_delta=0
+plugins/soleur/test/proc.test.sh	4885	tmp_delta=0
+plugins/soleur/test/ralph-loop.test.sh	5133	tmp_delta=0
+plugins/soleur/test/redact-class-parity.test.sh	96	tmp_delta=0
+plugins/soleur/test/required-checks-canonical-parity.test.sh	151	tmp_delta=0
+plugins/soleur/test/resolve-debt.test.sh	1332	tmp_delta=0
+plugins/soleur/test/resolve-git-root.test.sh	313	tmp_delta=0
+plugins/soleur/test/resolve-target-decision.test.sh	16674	tmp_delta=0
+plugins/soleur/test/reusable-release-caller-permissions.test.sh	57	tmp_delta=0
+plugins/soleur/test/reusable-release-degraded-pointer.test.sh	260	tmp_delta=0
+plugins/soleur/test/reusable-release-idempotency.test.sh	249	tmp_delta=0
+plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	1284	tmp_delta=0
+plugins/soleur/test/roadmap-reconcile.test.sh	873	tmp_delta=0
+plugins/soleur/test/schedule-skill-once.test.sh	127	tmp_delta=0
+plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	951	tmp_delta=0
+__run_boundary_start__	0	bytes_tmp=176328704	bytes_tmpdir=61397610496
+__run_boundary_start__	0	bytes_tmp=176328704	bytes_tmpdir=61397610496
+__run_boundary_start__	0	bytes_tmp=176328704	bytes_tmpdir=61397610496
+__run_boundary_start__	0	bytes_tmp=176328704	bytes_tmpdir=61397610496
+__run_boundary_start__	0	bytes_tmp=176328704	bytes_tmpdir=61397610496
+__run_boundary_start__	0	bytes_tmp=176328704	bytes_tmpdir=61397610496
+__run_boundary_start__	0	bytes_tmp=176328704	bytes_tmpdir=61397610496
+__run_boundary_start__	0	bytes_tmp=176328704	bytes_tmpdir=61397610496
+__run_boundary_start__	0	bytes_tmp=176336896	bytes_tmpdir=61397610496
+__run_boundary_start__	0	bytes_tmp=176336896	bytes_tmpdir=61397544960
+__run_boundary_start__	0	bytes_tmp=176340992	bytes_tmpdir=61397544960
+__run_boundary_start__	0	bytes_tmp=176340992	bytes_tmpdir=61397544960
+plugins/soleur/test/scripts-shard-totality.test.sh	15526	tmp_delta=0
+plugins/soleur/test/session-state.test.sh	10693	tmp_delta=0
+plugins/soleur/test/ship-followthrough-directive.test.sh	29	tmp_delta=0
+plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	514	tmp_delta=0
+plugins/soleur/test/ship-pir-action-items-gate.test.sh	2445	tmp_delta=0
+plugins/soleur/test/terraform-drift-step-order.test.sh	73	tmp_delta=0
+plugins/soleur/test/token-drift-workflow-causes.test.sh	5517	tmp_delta=3
+plugins/soleur/test/unkept-promise-hook.test.sh	1316	tmp_delta=1
+plugins/soleur/test/ux-design-lead-open-document-snapshot-guard.test.sh	29	tmp_delta=0
+plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	31	tmp_delta=0
+plugins/soleur/test/vendor-bundle-coverage.test.sh	265	tmp_delta=0
+plugins/soleur/test/vendor-drift-classify.test.sh	358	tmp_delta=0
+plugins/soleur/test/vendor-drift-workflow.test.sh	415	tmp_delta=0
+plugins/soleur/test/vendor-pin-integrity.test.sh	1463	tmp_delta=1
+plugins/soleur/test/workflow-run-deploy-invariants.test.sh	4023	tmp_delta=0
+plugins/soleur/test/worktree-manager-atomic-config.test.sh	955	tmp_delta=0
+plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh	1749	tmp_delta=0
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	198	tmp_delta=0
+plugins/soleur/test/worktree-manager-feature-spec-dir.test.sh	401	tmp_delta=0
+plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh	12313	tmp_delta=0
+plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh	2162	tmp_delta=0
+plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh	3635	tmp_delta=0
+plugins/soleur/test/worktree-manager-sandbox-tmp-sweep.test.sh	141	tmp_delta=0
+plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh	676	tmp_delta=0
+plugins/soleur/test/zot-http-deadlines-required.test.sh	277	tmp_delta=0
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	153520	tmp_delta=3
+plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot.test.sh	3336	tmp_delta=0
+plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	36	FAIL	tmp_delta=0
+plugins/soleur/skills/community/test/github-community.test.sh	2021	tmp_delta=0
+plugins/soleur/skills/compound/test/phase-16.test.sh	3438	tmp_delta=0
+plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh	8564	tmp_delta=0
+plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	375	tmp_delta=0
+plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	207	tmp_delta=0
+plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	73	tmp_delta=0
+plugins/soleur/skills/drain-prs/test/argv-ceiling.test.sh	213	tmp_delta=1
+plugins/soleur/skills/eval-harness/test/eval-gate.test.sh	1309	tmp_delta=0
+plugins/soleur/skills/eval-harness/test/extract-block.test.sh	264	tmp_delta=0
+plugins/soleur/skills/eval-harness/test/gate-classification.test.sh	484	tmp_delta=0
+plugins/soleur/skills/eval-harness/test/gen-models.test.sh	169	tmp_delta=0
+plugins/soleur/skills/eval-harness/test/measure-classification.test.sh	1211	tmp_delta=0
+plugins/soleur/skills/eval-harness/test/parse-label.test.sh	1931	tmp_delta=0
+plugins/soleur/skills/eval-harness/test/registry-completeness.test.sh	339	tmp_delta=0
+plugins/soleur/skills/eval-harness/test/verdict.test.sh	58	tmp_delta=0
+plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	1580	tmp_delta=0
+plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	9245	tmp_delta=0
+plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	513	tmp_delta=0
+plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	750	tmp_delta=0
+plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	511	tmp_delta=0
+plugins/soleur/skills/incident/test/redact-sentinel.test.sh	8556	tmp_delta=0
+plugins/soleur/skills/linear-fetch/test/assert-no-linear-telemetry.test.sh	208	tmp_delta=0
+plugins/soleur/skills/linear-fetch/test/parity.test.sh	17	tmp_delta=0
+plugins/soleur/skills/linear-fetch/test/persist-safe-integration.test.sh	85	tmp_delta=0
+plugins/soleur/skills/linear-fetch/test/redact-linear-urls.test.sh	379	tmp_delta=0
+plugins/soleur/skills/review/test/emit-review-trailer.test.sh	2501	tmp_delta=1
+plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	1004	tmp_delta=0
+plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	1793	tmp_delta=0
+plugins/soleur/scripts/precommit-guard.test.sh	1599	tmp_delta=0
+plugins/soleur/scripts/taste-profile-update.test.sh	702	tmp_delta=0
+.claude/hooks/agent-token-tee.test.sh	6551	tmp_delta=1
+.claude/hooks/background-poll-prefer-monitor.test.sh	1266	tmp_delta=0
+.claude/hooks/brand-hex-commit-gate.test.sh	4066	tmp_delta=0
+.claude/hooks/browser-snapshot-credential-guard.test.sh	688	tmp_delta=0
+.claude/hooks/cla-signed-author-gate.test.sh	1814	tmp_delta=0
+.claude/hooks/context-reviewed-gate.test.sh	2157	tmp_delta=0
+.claude/hooks/devin-matcher-parity.test.sh	6087	tmp_delta=0
+.claude/hooks/docs-cli-verification.test.sh	436	tmp_delta=0
+.claude/hooks/doppler-secrets-delete-redirect.test.sh	344	tmp_delta=0
+.claude/hooks/durable-reminder-prefer-inngest.test.sh	346	tmp_delta=0
+.claude/hooks/follow-through-directive-gate.test.sh	1401	tmp_delta=0
+.claude/hooks/git-commit-secret-scan.test.sh	803	FAIL	tmp_delta=0
+.claude/hooks/grep-q-pipe-guard.test.sh	36	tmp_delta=0
+.claude/hooks/grep-rewrite.test.sh	4517	tmp_delta=0
+.claude/hooks/guardrails.test.sh	14930	FAIL	tmp_delta=0
+.claude/hooks/hookeventname-coverage.test.sh	1217	tmp_delta=0
+.claude/hooks/hook-input-contract.test.sh	8100	tmp_delta=0
+.claude/hooks/hook-tool-kind.test.sh	399	tmp_delta=0
+.claude/hooks/iac-plan-write-guard.test.sh	48094	tmp_delta=0
+.claude/hooks/incident-sandbox-coverage.test.sh	677	tmp_delta=0
+.claude/hooks/incidents.test.sh	267	tmp_delta=0
+.claude/hooks/kb-domain-allowlist-guard.test.sh	1241	tmp_delta=0
+.claude/hooks/log-rotation.test.sh	1194	tmp_delta=0
+.claude/hooks/memory-backstop.test.sh	2504	tmp_delta=1
+.claude/hooks/monitor-supersede-guard.test.sh	5405	tmp_delta=-1
+.claude/hooks/new-scheduled-cron-prefer-inngest.test.sh	809	tmp_delta=0
+.claude/hooks/no-memory-write.test.sh	676	tmp_delta=0
+.claude/hooks/pencil-collapse-guard.test.sh	1039	tmp_delta=0
+.claude/hooks/phase-surface-hint.test.sh	304	tmp_delta=0
+.claude/hooks/pkill-self-match-guard.test.sh	307	tmp_delta=0
+.claude/hooks/post-dispatch-watch-gate.test.sh	1895	tmp_delta=0
+.claude/hooks/pre-ask-technical-fork-gate.test.sh	484	tmp_delta=0
+.claude/hooks/pre-merge-auto-close-scan.test.sh	11391	tmp_delta=0
+.claude/hooks/pre-merge-rebase-headless.test.sh	402	tmp_delta=0
+.claude/hooks/pre-merge-rebase-parity.test.sh	10971	tmp_delta=0
+.claude/hooks/pre-merge-rebase.test.sh	13961	tmp_delta=0
+.claude/hooks/prod-write-defer-gate.test.sh	4303	tmp_delta=0
+.claude/hooks/rule-incident-marker-capture.test.sh	1849	tmp_delta=0
+.claude/hooks/security_reminder_hook.test.sh	595	tmp_delta=0
+.claude/hooks/session-rules-loader-headless.test.sh	71	tmp_delta=0
+.claude/hooks/session-rules-loader.test.sh	6600	tmp_delta=0
+.claude/hooks/settings-hook-exec-bit.test.sh	296	tmp_delta=0
+.claude/hooks/ship-net-issue-flow-gate.test.sh	14540	tmp_delta=-1
+.claude/hooks/ship-operator-step-gate.test.sh	172	tmp_delta=0
+.claude/hooks/ship-runbook-ssh-gate.test.sh	151	tmp_delta=0
+.claude/hooks/ship-soak-followthrough-gate.test.sh	2860	tmp_delta=0
+.claude/hooks/ship-unpushed-commits-gate.test.sh	4667	tmp_delta=0
+.claude/hooks/skill-context-queries.test.sh	642	tmp_delta=0
+.claude/hooks/skill-invocation-logger.test.sh	685	tmp_delta=1
+.claude/hooks/skill-security-scan-write.test.sh	132	tmp_delta=0
+.claude/hooks/stub-argv-fidelity.test.sh	278	tmp_delta=0
+.claude/hooks/lib/freeze-lock.test.sh	163	tmp_delta=0
+apps/cla-evidence/scripts/_cf-admin-token.test.sh	73	tmp_delta=0
+apps/cla-evidence/scripts/gdpr-override.test.sh	1062	tmp_delta=0
+apps/cla-evidence/scripts/inspect.test.sh	230	tmp_delta=0
+apps/cla-evidence/scripts/_r2-endpoint.test.sh	42	tmp_delta=0
+apps/cla-evidence/scripts/sentinel-pr.test.sh	27	tmp_delta=0
+apps/cla-evidence/scripts/timestamp.test.sh	83	tmp_delta=0
+apps/cla-evidence/scripts/upload-bypass.test.sh	1134	tmp_delta=0
+apps/cla-evidence/scripts/upload-evidence.test.sh	1220	tmp_delta=0
+apps/web-platform/scripts/assert-byok-rules-exist.test.sh	567	tmp_delta=0
+apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh	138	tmp_delta=0
+apps/web-platform/scripts/postgrest-reload-schema.test.sh	458	tmp_delta=0
+apps/web-platform/scripts/preflight-worm-cascade-contradiction.test.sh	81	tmp_delta=0
+apps/web-platform/scripts/run-migrations-schema-probe.test.sh	7708	tmp_delta=2
+apps/web-platform/scripts/sandbox-canary-regression.test.sh	85	tmp_delta=-2
+apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	895	tmp_delta=0
+apps/web-platform/scripts/seed-live-verify-user.test.sh	238	tmp_delta=0
+apps/web-platform/scripts/sentry-monitors-audit.test.sh	11428	tmp_delta=0
+apps/web-platform/scripts/supabase-local.test.sh	610	tmp_delta=0
+apps/web-platform/scripts/lib/in-image-copy-src.test.sh	254	tmp_delta=0
+apps/web-platform/scripts/lib/no-cross-context-import.test.sh	3979	tmp_delta=0
+apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh	48	tmp_delta=0
+scripts/lib/frontmatter-strip.test.sh	200	FAIL	tmp_delta=0
+scripts/lib/legal-base-ref.test.sh	480	tmp_delta=0
+scripts/lib/legal-normalise.test.sh	256	tmp_delta=0
+scripts/lib/repo-write-boundary.test.sh	14799	tmp_delta=0
+scripts/lib/rule-line-regex-parity.test.sh	15	tmp_delta=0
+scripts/lib/scratch-root.test.sh	113	FAIL	tmp_delta=0
+scripts/lib/supabase-logs-verdict.test.sh	169	tmp_delta=0
+scripts/lib/tweet-eligibility.test.sh	999	tmp_delta=0
+scripts/lib/validate-tweet-draft.test.sh	344	tmp_delta=0
+apps/web-platform/infra/run-registered-suites.sh	0	skip=not_in_diff
+.github/scripts/test/run-all.sh	0	skip=relevance
+__run_boundary_end__	0	bytes_tmp=182992896	bytes_tmpdir=61604556800

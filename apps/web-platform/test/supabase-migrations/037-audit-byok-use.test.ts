@@ -22,7 +22,7 @@ import path from "node:path";
 //   7. cq-supabase-migration-no-concurrently: NO CREATE INDEX
 //      CONCURRENTLY (Supabase wraps each migration in a transaction).
 //
-// Plan: knowledge-base/project/plans/2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md §1.2/§1.3/§1.4
+// Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md §1.2/§1.3/§1.4
 
 const MIGRATION_PATH = path.join(
   __dirname,

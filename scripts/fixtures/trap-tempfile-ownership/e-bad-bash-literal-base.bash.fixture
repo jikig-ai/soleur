@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+work="$(mktemp -d /var/tmp/demo.XXXXXX)"
+trap 'rm -rf "$work"' EXIT

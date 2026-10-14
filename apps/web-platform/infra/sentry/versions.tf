@@ -9,18 +9,73 @@
 # (This durability differentiator is changelog-sourced, not plan-measured:
 # the 410 was transient — beta2 plans clean again now, so a terraform plan
 # cannot observe it — but the bump future-proofs against the endpoint's
-# eventual permanent retirement, per the standing deprecation warning.) The `sentry_alert` migration remains deferred: the resource
+# eventual permanent retirement, per the standing deprecation warning.)
+#
+# ^^ RETRACTED — see the 2026-08-20 correction below before believing the
+#    paragraph above. The changelog datum it rests on is measured FALSE:
+#    v0.15.4 still reads the deprecated path.
+#
+# The `sentry_alert` migration remains deferred: the resource
 # is deprecated-but-functional and a faithful migration still requires
 # monitor_ids binding — see ADR-031 §Amendment 2026-07-17. Provider
 # source rationale + escape-hatch documented in
 # knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md.
+#
+# Superseded 2026-08-19 (#7590): "the 410 was transient" above is the
+# 2026-07-17 reading, kept as the dated measurement it was — the re-probe
+# genuinely did come back clean. It was not transient. Sentry deprecated this
+# API family on 2026-05-14 and serves it under scheduled BROWNOUTS: 410 for a
+# window on a recurring schedule, 200 the rest of the time. A follow-up probe
+# minutes later cannot distinguish "restored" from "outside the next window",
+# which is exactly the inference recorded here.
+#
+# Corrected again 2026-08-20 (#7590): an earlier version of this note said "the
+# bump remains the right fix for THIS root". That is retracted too. The
+# durability rationale (v0.15.3 #885 moved sentry_issue_alert reads off the
+# legacy endpoint) was changelog-sourced and never plan-measured. CI measured it
+# with v0.15.4 installed: run 32362401543 (2026-08-20T11:09:07Z) took 410 on
+# 29 of 29 sentry_issue_alert reads and failed terraform plan, while run
+# 32362320701 one minute earlier passed. This pin is stable-over-beta and worth
+# keeping, but it does NOT clear the 410 and this root still wedges on every
+# brownout window.
+# > **Superseded 2026-09-21 (#8451):** the family is REMOVED (persistent 410) and
+# > no resource reads it any more: the last two rules are frozen `sentry_alert`
+# > blocks. The root no longer wedges on it.
+# Read ADR-031 §Amendment 2026-08-19 (#7590) before acting on the paragraph
+# above.
 terraform {
-  required_version = ">= 1.6"
+  # Raised 1.6 -> 1.9 by #7650 Phase 2, when `issue-alerts.tf` USED `removed`
+  # blocks carrying `lifecycle { destroy = false }`. #7826 deleted those blocks on
+  # 2026-09-06, so the original reason no longer applies to anything in this root.
+  # The floor STAYS anyway — see the CONSERVATIVE OVER-STRICTNESS note below; do
+  # not lower it on the grounds that no `removed` block remains.
+  #
+  # CORRECTED at review time. An earlier version of this comment said that on a
+  # Terraform without that option "a `removed` block plans a DESTROY" of 27 live
+  # paging rules. That is NOT a state Terraform can reach: it does not silently
+  # reinterpret unrecognised syntax. A CLI predating `removed` blocks fails to
+  # PARSE ("Blocks of type \"removed\" are not expected here"); one that accepts
+  # `removed` but not the lifecycle argument fails to parse too ("Unsupported
+  # argument"). There is no version in which `lifecycle { destroy = false }` is
+  # accepted-and-ignored, which is what that catastrophe required.
+  #
+  # So this floor is CONSERVATIVE OVER-STRICTNESS, not a safety boundary, and
+  # the honest reason to keep it is that the parse error an old CLI produces is
+  # a worse diagnostic than a version-constraint error. Recording the correction
+  # rather than quietly deleting the claim: a future reader who lowers the floor
+  # and finds nothing bad happens would otherwise conclude the comment was wrong
+  # and trust the rest of this block less.
+  #
+  # Provenance: `destroy = false` is documented by HashiCorp as arriving in 1.9
+  # and `removed` blocks in 1.7. The only version VERIFIED here is 1.10.5 --
+  # what CI pins (apply-sentry-infra.yml) and what every measurement in
+  # phase2-measurements-2026-09-04.md was taken on.
+  required_version = ">= 1.9"
 
   required_providers {
     sentry = {
       source  = "jianyuan/sentry"
-      version = "0.15.4"
+      version = "0.15.7"
     }
   }
 }

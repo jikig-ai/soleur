@@ -1,0 +1,105 @@
+{
+  "_scenario": "truncation-unresolved",
+  "_synthesized": "EVERY ROW BODY IN THIS FILE IS SYNTHESIZED. Only the ENVELOPE and the field names are taken from the live API. This repository is PUBLIC and the real rows are production log lines from the exposure window of an active GDPR determination (event payloads, step I/O, tenant identifiers, event_user, worker_ip). Committing them would be a disclosure and git makes it permanent, and NO existing gate catches it: the synthesized-fixtures enforcement regex in .github/workflows/secret-scan.yml covers apps/web-platform/test/(fixtures|__synthesized__|__goldens__)/, **/__goldens__/, *.snap and learnings/*.md -- tests/scripts/fixtures/** is OUT OF SCOPE. 'PAT-free by construction' is not the relevant test. Counts, timestamps, ids and messages below are invented and deliberately do NOT restate the measured numbers, which live only in knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md.",
+  "_ref": "ifsccnjhymdmidffkzhl",
+  "_note": "The TRUNCATION_UNRESOLVED branch, the other dead one: reachable only when auto-narrowing would need MORE slices than the helper will issue unattended (MAX_SLICES=32). A 452-day window truncates (900 single-shot vs 5210 in its own last-7d sub-window), every bisect probe comes back BELOW the probe count so the cap never widens past the 168h floor, and ceil(10848h / 168h) = 65 slices. The helper must then refuse to auto-narrow and print the exact slice invocations rather than a bare failure -- the difference between a dead end and a recovery. Without this fixture the branch rewrites to FULLY_COVERED, exit 0, suite green.",
+  "_call_keys": [
+    "identity",
+    "instrumentation",
+    "window",
+    "probe",
+    "bisect (repeats)"
+  ],
+  "_expect": [
+    {
+      "argv": [
+        "--ref",
+        "ifsccnjhymdmidffkzhl",
+        "--source",
+        "postgres_logs",
+        "--since",
+        "2025-06-01T00:00:00Z",
+        "--until",
+        "2026-08-27T00:00:00Z"
+      ],
+      "exit": 3,
+      "verdict": "INCONCLUSIVE",
+      "reason": "TRUNCATION_UNRESOLVED",
+      "require": [
+        "rows=UNAVAILABLE",
+        "would need 65 slices",
+        "more than the 32 this helper will issue unattended",
+        "Re-run these exact slices and sum them: --since 2025-06-01T00:00:00Z"
+      ],
+      "calls": [
+        "identity",
+        "instrumentation",
+        "window",
+        "probe",
+        "bisect",
+        "bisect",
+        "bisect",
+        "bisect",
+        "bisect"
+      ],
+      "stdout_lines": 1
+    }
+  ],
+  "identity": {
+    "code": 200,
+    "body": {
+      "id": "ifsccnjhymdmidffkzhl",
+      "name": "soleur-synthetic-app",
+      "region": "eu-central-1",
+      "status": "ACTIVE_HEALTHY"
+    }
+  },
+  "instrumentation": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "source": "postgres_logs",
+          "instrumentation_c": 2044
+        }
+      ],
+      "error": null
+    }
+  },
+  "window": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "source": "postgres_logs",
+          "window_source_c": 900,
+          "window_lo": "2026-08-01T00:11:02.000000",
+          "window_hi": "2026-08-26T23:41:19.000000"
+        }
+      ],
+      "error": null
+    }
+  },
+  "probe": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "probe_c": 5210
+        }
+      ],
+      "error": null
+    }
+  },
+  "bisect": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "bisect_c": 0
+        }
+      ],
+      "error": null
+    }
+  }
+}

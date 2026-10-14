@@ -1,6 +1,7 @@
 "use client";
 
 import { type RefObject } from "react";
+import { Button } from "@/components/ui/button";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 
 /**
@@ -65,32 +66,39 @@ export function OtpCodeStep({
 
           {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
-          <button
+          <Button
+            variant="gold"
             type="submit"
             disabled={loading || otp.length !== EMAIL_OTP_LENGTH}
-            className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
+            loading={loading}
+            loadingLabel="Verifying"
+            className="w-full"
           >
-            {loading ? "Verifying..." : submitLabel}
-          </button>
+            {submitLabel}
+          </Button>
         </form>
 
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={onResend}
           disabled={loading || cooldownActive}
-          className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary disabled:opacity-50 disabled:hover:text-soleur-text-muted"
+          loading={loading}
+          loadingLabel="Sending"
+          className="w-full text-soleur-text-muted hover:text-soleur-text-secondary"
         >
           {cooldownActive
             ? `You can request a new code in ${cooldownSeconds}s`
             : "Resend code"}
-        </button>
+        </Button>
 
-        <button
+        <Button
+          variant="ghost"
           onClick={onTryDifferentEmail}
-          className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary"
+          className="w-full text-soleur-text-muted hover:text-soleur-text-secondary"
         >
           Try a different email
-        </button>
+        </Button>
       </div>
     </main>
   );

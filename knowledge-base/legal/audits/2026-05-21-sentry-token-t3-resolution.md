@@ -4,7 +4,7 @@ date: 2026-05-21
 parent_issue: 3861
 related_issues: [3849, 3958, 3962]
 related_pr: 4209
-related_plan: knowledge-base/project/plans/2026-05-19-feat-sentry-residency-reframe-pr1-plan.md
+related_plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-sentry-residency-reframe-pr1-plan.md
 supersedes_status: knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md
 gate: 3b
 status: resolved
@@ -206,7 +206,8 @@ third-party org" framing was incorrect at every layer.
 
 This audit + the 2026-05-19 probe-divergence audit
 (`knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`)
-+ the Article 30 PA8 §(d) UPDATE block + the PIR Phase 9 Gate-3b Correction
+
+- the Article 30 PA8 §(d) UPDATE block + the PIR Phase 9 Gate-3b Correction
 section together constitute the §5(2) accountability evidence for the
 2026-05-17 disclosure correction. The substantive story (T0 falsification,
 operator ownership confirmed across both orgs, no third-party recipient

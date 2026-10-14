@@ -12,7 +12,7 @@
 // critical-tier finding. Closed-preview cohort routes through
 // legal@jikigai.com email; the inbox + outbound reply is the audit trail.
 
-import Link from "next/link";
+import { NavLink } from "../ui/nav-link";
 import { useEffect, useState } from "react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { humanTitle } from "@/lib/messages/action-class-copy";
@@ -23,6 +23,17 @@ export interface ByokRow {
   agent_role: string;
   token_count: number;
   unit_cost_cents: number;
+  /**
+   * Non-null on a REFUSED delegated turn (migration 137, #7829). Those rows are
+   * attributed to the grantee and, without this, are indistinguishable here
+   * from an ordinary charge the user chose to incur.
+   */
+  attribution_shift_reason?: string | null;
+}
+
+/** Human-readable marker for a refused turn; empty for an ordinary charge. */
+export function refusalMarker(r: ByokRow): string {
+  return r.attribution_shift_reason ? ` (refused: ${r.attribution_shift_reason})` : "";
 }
 
 export interface InngestRunRow {
@@ -116,6 +127,7 @@ function ByokSection({ rows }: { rows: ByokRow[] }) {
                   <p className="text-xs text-soleur-text-muted">Cost (¢)</p>
                   <p className="mt-0.5 text-sm text-soleur-text-primary">
                     {r.unit_cost_cents}
+                    {refusalMarker(r)}
                   </p>
                 </div>
               </div>
@@ -147,6 +159,7 @@ function ByokSection({ rows }: { rows: ByokRow[] }) {
                 </td>
                 <td className="px-5 py-2 text-soleur-text-secondary">
                   {r.unit_cost_cents}
+                    {refusalMarker(r)}
                 </td>
               </tr>
             ))}
@@ -253,12 +266,12 @@ function InngestSection({ initialRows }: { initialRows?: InngestRunRow[] }) {
                 >
                   Request human review →
                 </a>
-                <Link
+                <NavLink
                   href="/dashboard/settings/scope-grants"
                   className="text-soleur-text-secondary hover:text-soleur-text-primary hover:underline"
                 >
                   Change authorization →
-                </Link>
+                </NavLink>
               </div>
             </li>
           ))}

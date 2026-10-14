@@ -9,14 +9,20 @@
 #
 # Two assertions:
 #
-#   1. PARITY — bun.lock and package-lock.json MUST agree on the resolved version of
-#      BOTH @anthropic-ai/claude-agent-sdk AND @anthropic-ai/claude-code. package-lock
-#      is deploy-authoritative (the prod image builds via `npm ci` in the Dockerfile,
-#      NOT bun.lock which only feeds CI bun test/typecheck), and there is no other
-#      cross-parity check, so the two can silently drift. A drift here means the thing
-#      CI tests (bun) differs from the thing prod ships (npm) — the exact blind spot
-#      that let the gate below be evadable. Kieran P1 correction: key on package-lock,
-#      assert bun parity.
+#   1. PRESENCE — BOTH @anthropic-ai/claude-agent-sdk AND @anthropic-ai/claude-code
+#      MUST resolve in package-lock.json.
+#
+#      This was PARITY (package-lock vs bun.lock) until ADR-191 made npm the single
+#      lockfile of record; with bun.lock deleted there is no second lockfile to compare
+#      against, so the cross-lockfile half is retired.
+#
+#      The remaining arm is NOT vestigial and must not be deleted with the other half.
+#      Section 2's bump detection is `[[ -n "$base_v" && -n "$head_v" && … ]]`, which
+#      SHORT-CIRCUITS TO GREEN on an empty `head_v` — an SDK package that vanishes from
+#      the lockfile silently satisfies the gate. The `[[ -z "$pv" ]]` arm below is the
+#      only thing that catches that, so retiring it would reopen the #5849 "a routine
+#      SDK bump shipped green because nothing forced a look" class this gate exists to
+#      close. lint-dual-lockfile.test.sh row 8 asserts the arm is still here.
 #
 #   2. BUMP DETECTION + ACK (ADR-079 guardrail 2 — "no silent green on a detected
 #      bump"). When either SDK package's resolved version in package-lock.json changes
@@ -31,15 +37,21 @@
 # Env overrides (for apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh — the
 # gate is otherwise zero-config against the real repo):
 #   SDK_GATE_PKG_LOCK       path to head package-lock.json      (default: apps/web-platform/package-lock.json)
-#   SDK_GATE_BUN_LOCK       path to head bun.lock               (default: apps/web-platform/bun.lock)
 #   SDK_GATE_BASE_REF       git ref for the merge base          (default: origin/main)
 #   SDK_GATE_BASE_PKG_LOCK  path to base package-lock.json      (default: `git show $BASE_REF:...`)
 #   SDK_GATE_ACK_TEXT       commit-message text to scan for ack (default: `git log $BASE_REF..HEAD --format=%B`)
 
 set -euo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${ACK_TOKEN:+x}${ANTHROPIC_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 PKG_LOCK="${SDK_GATE_PKG_LOCK:-apps/web-platform/package-lock.json}"
-BUN_LOCK="${SDK_GATE_BUN_LOCK:-apps/web-platform/bun.lock}"
 BASE_REF="${SDK_GATE_BASE_REF:-origin/main}"
 ACK_TOKEN="sdk-bump-verified"
 FOLLOWUP="the ADR-079 deferral-B follow-up (creds-gated real-argv capture)"
@@ -55,7 +67,9 @@ SDK_PACKAGES=("@anthropic-ai/claude-agent-sdk" "@anthropic-ai/claude-code")
 # base..HEAD` exits 128 "unknown revision". Fail loudly and name the cause.
 read_branch_messages() {
   local out rc
-  out="$(git log "${BASE_REF}..HEAD" --format=%B 2>/dev/null)"; rc=$?
+  # `if` (not `; rc=$?`): under `set -e` a failed `git log` aborts before the
+  # read -- the error arm below would never name the shallow-fetch cause.
+  if out="$(git log "${BASE_REF}..HEAD" --format=%B 2>/dev/null)"; then rc=0; else rc=$?; fi
   if (( rc != 0 )); then
     echo "::error::sdk-bump-gate: could not read the commit range '${BASE_REF}..HEAD' (git exit ${rc})." >&2
     echo "::error::This is NOT a missing acknowledgement — the range is unreadable, usually because '${BASE_REF}' was fetched shallow so there is no merge base. Deepen the fetch (drop --depth on the 'git fetch origin main'), or pass SDK_GATE_ACK_TEXT." >&2
@@ -71,39 +85,17 @@ pkglock_version() { # $1=lockfile $2=pkg
   jq -r --arg k "node_modules/$2" '.packages[$k].version // ""' "$1" 2>/dev/null || printf ''
 }
 
-# Resolved version from a bun.lock (JSONC — jq cannot parse it). The packages map has
-# an entry `"<pkg>": ["<pkg>@<version>", …]`; the leading exact-pkg token carries the
-# resolved version. Anchored on the exact `"<pkg>": ["<pkg>@` prefix so the platform
-# sub-packages (…-linux-x64@…) never match. Prints "" when absent.
-bunlock_version() { # $1=lockfile $2=pkg
-  [[ -f "$1" ]] || { printf ''; return 0; }
-  local esc; esc="$(printf '%s' "$2" | sed 's/[.[\*^$()+?{|]/\\&/g')"
-  grep -oE "\"${esc}\": \[\"${esc}@[^\"]+\"" "$1" 2>/dev/null | head -1 \
-    | sed -E "s/.*@([^\"]+)\"$/\1/" || printf ''
-}
-
 fail=0
 
-# --- 1. PARITY -------------------------------------------------------------------
+# --- 1. PRESENCE -----------------------------------------------------------------
 for pkg in "${SDK_PACKAGES[@]}"; do
   pv="$(pkglock_version "$PKG_LOCK" "$pkg")"
-  bv="$(bunlock_version "$BUN_LOCK" "$pkg")"
   if [[ -z "$pv" ]]; then
-    echo "::error::sdk-bump-gate: ${pkg} not found in ${PKG_LOCK} (deploy-authoritative lockfile)."
+    echo "::error::sdk-bump-gate: ${pkg} not found in ${PKG_LOCK} (deploy-authoritative lockfile). Section 2's bump detection short-circuits to green on an empty resolved version, so this arm is what stops a vanished SDK package from passing silently (#5849)."
     fail=1
     continue
   fi
-  if [[ -z "$bv" ]]; then
-    echo "::error::sdk-bump-gate: ${pkg} not found in ${BUN_LOCK}."
-    fail=1
-    continue
-  fi
-  if [[ "$pv" != "$bv" ]]; then
-    echo "::error::sdk-bump-gate: LOCKFILE PARITY MISMATCH for ${pkg}: package-lock.json=${pv} (deploy) vs bun.lock=${bv} (CI). The image ships the npm version; a drift means CI tests a different SDK than prod runs. Re-sync both lockfiles (npm ci / bun install) so they agree."
-    fail=1
-  else
-    echo "sdk-bump-gate: parity OK — ${pkg} @ ${pv} (package-lock == bun.lock)."
-  fi
+  echo "sdk-bump-gate: presence OK — ${pkg} @ ${pv} (package-lock.json, deploy-authoritative)."
 done
 
 # --- 2. BUMP DETECTION + ACK -----------------------------------------------------
@@ -135,7 +127,7 @@ if [[ -n "$BASE_TMP" ]]; then
   done
   rm -f "$BASE_TMP"
 else
-  echo "::warning::sdk-bump-gate: could not resolve the base package-lock.json (ref='${BASE_REF}'); skipping bump-vs-base detection. Parity is still enforced above. (In CI, ensure origin/main is fetched.)"
+  echo "::warning::sdk-bump-gate: could not resolve the base package-lock.json (ref='${BASE_REF}'); skipping bump-vs-base detection. Presence is still enforced above. (In CI, ensure origin/main is fetched.)"
 fi
 
 if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
@@ -145,7 +137,7 @@ if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
   else
     ack_text="$(read_branch_messages)" || exit 1
   fi
-  if printf '%s' "$ack_text" | grep -qiE "\b${ACK_TOKEN}\b"; then
+  if grep -qiE "\b${ACK_TOKEN}\b" < <(printf '%s' "$ack_text"); then
     echo "sdk-bump-gate: SDK bump acknowledged (\`${ACK_TOKEN}\` present) — a maintainer attests the committed seccomp profile was validated against the new SDK. Proceeding."
   else
     echo "::error::sdk-bump-gate: an SDK version bump was detected (${bumped_pkgs[*]}) but NO \`${ACK_TOKEN}:\` acknowledgement is present in the branch commit messages."
@@ -157,7 +149,7 @@ fi
 # --- 3. CAPTURE GATE (ADR-079 deferral B / #5913) --------------------------------
 # Only runs where explicitly enabled (SANDBOX_CANARY_GATE_ENABLED=1) — a dedicated
 # creds-bearing CI job (bun + npm ci + ANTHROPIC_API_KEY). The always-run
-# `lockfile-sync` gate leaves this OFF so sections 1+2 (parity + bump-ack) run on
+# `lockfile-sync` gate leaves this OFF so sections 1+2 (presence + bump-ack) run on
 # every PR (incl. forks) WITHOUT the paid capture turn, and a routine edit to the
 # canary script never trips a false ack-fallback. Fork PRs get no secrets → the
 # capture job is skipped. TRUST-BOUNDARY NOTE (security review #5913 L1): a fork's
@@ -188,7 +180,17 @@ capture_trigger=0
 # so on a SAME-REPO PR (creds present) force a re-verify, else fail closed to the
 # ack. NOTE: this only runs when the flag is set (same-repo capture job) — a fork's
 # fixture-only edit reaches neither; see the trust-boundary note above.
-if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+# grep exits 0 on a match, 1 on none, above 1 when it could not run (a bad pattern): only a CLEAN miss may skip the gate. A
+# failed here-string redirect also returns 1, so this routing does not cover a redirect failure.
+ct_rc=0
+# The #5863 outer-wrap mechanism joins the trigger set — argv builder,
+# fixture, canary script, and (enumeration-seat) the files that define WHAT
+# the gate measures: the in-image verify script that executes it, the shared
+# isolation payload that defines `pass`, the interpose installer, and the
+# Dockerfile that establishes the file-cap posture. A change to any of those
+# silently retunes the mechanism without tripping the gate.
+grep -qE 'apps/web-platform/(Dockerfile|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|server/agent-outer-wrap\.ts|server/agent-runner-query-options\.ts|scripts/sandbox-canary\.mjs|scripts/sandbox-canary-verify-in-image\.sh|scripts/tenant-isolation-inner-probe\.sh|infra/sandbox-canary-argv\.json|infra/agent-outer-wrap-argv\.json)' <<<"$CHANGED" || ct_rc=$?
+if (( ct_rc != 1 )); then
   capture_trigger=1
 fi
 
@@ -211,6 +213,13 @@ if [[ "$capture_trigger" -eq 1 ]]; then
     if [[ "$v_reason" == "argv_drift" ]]; then
       echo "::error::sdk-bump-gate: sandbox-canary-argv.json is STALE vs a fresh SDK capture (argv_drift). Re-run --capture and commit the refreshed canonical argv."
       fail=1
+    elif [[ "$v_verdict" == "smoke_fail" ]]; then
+      # #5863 T3.6: the vendored CLI failed to launch inside the real outer
+      # wrap mount table — a bump (or our own table drift) added a path the
+      # derived binds miss. Blocking: this is exactly the class the smoke
+      # exists to catch; the deploy replay is the authoritative EPERM arm.
+      echo "::error::sdk-bump-gate: outer-wrap CLI smoke FAILED (${v_reason}) — the vendored CLI cannot launch inside the #5863 outer mount table. Diff the bump's fs needs against server/agent-outer-wrap.ts bind set and the infra/agent-outer-wrap-argv.json fixture."
+      fail=1
     elif [[ "$v_verdict" == "verify_ok" ]]; then
       echo "sdk-bump-gate: capture --verify OK — committed canonical fixture matches a fresh capture."
     else
@@ -229,7 +238,7 @@ if [[ "$require_capture_ack" -eq 1 ]]; then
   else
     ack_text="$(read_branch_messages)" || exit 1
   fi
-  if printf '%s' "$ack_text" | grep -qiE "\b${ACK_TOKEN}\b"; then
+  if grep -qiE "\b${ACK_TOKEN}\b" < <(printf '%s' "$ack_text"); then
     echo "sdk-bump-gate: capture-gate ack present (\`${ACK_TOKEN}\`) — proceeding on the maintainer attestation."
   else
     echo "::error::sdk-bump-gate: the canary capture could not be verified automatically (see warning above) AND no \`${ACK_TOKEN}:\` ack is present. A maintainer must validate the committed profile against the SDK's real argv and add the ack trailer."

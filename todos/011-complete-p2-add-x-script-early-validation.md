@@ -19,6 +19,7 @@ The script references `x-community.sh` via `$X_SCRIPT` (line 24) but doesn't val
 ## Proposed Solutions
 
 ### Solution A: Add file-existence check in main() before platform posting
+
 ```bash
 if [[ -n "${X_API_KEY:-}" ]] && [[ ! -f "$X_SCRIPT" ]]; then
   echo "Error: x-community.sh not found at $X_SCRIPT" >&2

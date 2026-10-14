@@ -1,3 +1,4 @@
+import { NavLink } from "@/components/ui/nav-link";
 import { KeyRotationForm } from "./key-rotation-form";
 import { DeleteAccountDialog } from "./delete-account-dialog";
 import { ProjectSetupCard, type RepoStatus } from "./project-setup-card";
@@ -5,6 +6,7 @@ import { RenameWorkspaceAction } from "./rename-workspace-action";
 import { WorkspaceLogoSettings } from "./workspace-logo-settings";
 import { KeyboardShortcutsToggle } from "./keyboard-shortcuts-toggle";
 import type { WorkspaceIdentity } from "@/server/workspace-identity-resolver";
+import { AgentEngineSettings } from "./agent-engine-settings";
 
 interface SettingsContentProps {
   userEmail: string;
@@ -64,6 +66,8 @@ export function SettingsContent({
           />
         </section>
       )}
+
+      <AgentEngineSettings isOwner={workspaceIdentity?.isOwner ?? true} />
 
       {/* Account Section */}
       <section>
@@ -137,12 +141,12 @@ export function SettingsContent({
             Request a copy of your data, view your export history, or contact
             legal@jikigai.com for manual fulfilment of GDPR rights.
           </p>
-          <a
+          <NavLink
             href="/dashboard/settings/privacy"
             className="inline-block rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2"
           >
             Manage privacy
-          </a>
+          </NavLink>
         </div>
       </section>
 

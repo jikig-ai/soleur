@@ -8,7 +8,7 @@
 # PreToolUse hook. The deterministic analyzer runs HERE in the ephemeral runner
 # (the Inngest fn only dispatches).
 #
-# What it does: runs `scripts/domain-model-drift.sh drift` (100% deterministic
+# What it does: runs `plugins/soleur/scripts/domain-model-drift.sh drift` (100% deterministic
 # bash — the LLM is NEVER in the drift-detection path, ADR-076 §1), parses the
 # STALE-CITATION sub-count using the preflight Check 11 parser verbatim, and —
 # only when the register cites a source that no longer resolves (stale > 0) —
@@ -53,7 +53,7 @@ jobs:
           # with stale>0, suppressing a real drift issue. Guard every substitution
           # with `|| var=""` (mirrors scheduled-realtime-probe.yml's pattern).
           set +e +o pipefail
-          bash scripts/domain-model-drift.sh drift --repo . \
+          bash plugins/soleur/scripts/domain-model-drift.sh drift --repo . \
             --register knowledge-base/engineering/architecture/domain-model.md \
             > "$RUNNER_TEMP/dm-drift.txt" 2>&1
           rc=$?

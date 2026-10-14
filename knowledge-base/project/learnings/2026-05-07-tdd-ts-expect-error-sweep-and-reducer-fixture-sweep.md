@@ -133,7 +133,7 @@ These surfaced during the PR2 work session beyond the main implementation
 investigation:
 
 1. **Bare repo path resolution miss** — Initial `Read` on the spec file at
-   `/home/jean/git-repositories/jikig-ai/soleur/knowledge-base/project/specs/feat-abort-conversation-web/tasks.md`
+   `/home/jean/git-repositories/jikig-ai/soleur/knowledge-base/project/specs/archive/20261013-014038-feat-abort-conversation-web/tasks.md`
    returned "File does not exist" because that path is the bare-repo root,
    which has no working tree. Recovered by switching to the worktree path
    (`/home/jean/.../feat-abort-conversation-web-pr2/knowledge-base/...`).

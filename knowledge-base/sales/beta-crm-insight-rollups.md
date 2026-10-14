@@ -23,6 +23,7 @@ synthesize. This file is the canonical boundary note for **both** this directory
 ## The boundary (hard rule)
 
 **Safe to write here (git):** aggregate, no-identifiable-person signal.
+
 - Stage-distribution and velocity trends ("N contacts advanced past `qualified`
   this month"; median days `contacted` → `evaluating`).
 - Recurring objection / feature-request **themes** stated abstractly ("several
@@ -31,6 +32,7 @@ synthesize. This file is the canonical boundary note for **both** this directory
 - Counts, rates, and directional pipeline signal by `amount_basis`.
 
 **NEVER write here (DB-only):** any raw PII or re-identifiable content.
+
 - No `name`, `company`, `role`, `source`, contact ids, or verbatim `body` text.
 - No single-subject rollups where the group is small enough to re-identify
   (k-anonymity: do not publish a "theme" derived from one prospect).

@@ -37,7 +37,9 @@ import {
 } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { SDK_STALE_RESUME_SESSION_ID } from "./claude-error-signatures";
 import {
+  ERR_ATTACHMENT_NOT_FOUND,
   ERR_WORKSPACE_NOT_PROVISIONED,
   ERR_CONVERSATION_NOT_FOUND,
   ERR_NO_ACTIVE_SESSION,
@@ -98,6 +100,7 @@ import { updateConversationFor } from "./conversation-writer";
 import { releaseSlot, SLOT_STALENESS_THRESHOLD_SECONDS } from "./concurrency";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
+  CREDENTIALS_PROMPT_DIRECTIVE,
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
   buildPdfGatedDirective,
   buildPdfUnreadableDirective,
@@ -140,6 +143,7 @@ function resolveSessionErrorCode(
 }
 
 import { buildToolLabel, buildToolUseWSMessage } from "./tool-labels";
+import { summarizeOutboundEmailInput } from "./tool-tiers";
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
@@ -210,6 +214,7 @@ import {
   unregisterSession,
   getSession,
   forEachSessionForConversation,
+  hasLiveAgentLoop,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
 import { classifySandboxStartupError } from "./sandbox-startup-classifier";
@@ -434,7 +439,11 @@ const SUMMARIZE_OUTPUT_CAP = 200;
  *  memory before the slice — pathological MCP tool inputs (large file
  *  contents, full-document attachments) otherwise spike heap on every
  *  tool call regardless of the final output cap. */
-function summarizeToolPayload(input: unknown): string {
+function summarizeToolPayload(input: unknown, toolName?: string): string {
+  // An aborted turn persists this summary to `messages.usage.completed_actions`;
+  // outbound-email inputs are withheld (see summarizeOutboundEmailInput).
+  const withheld = toolName === undefined ? null : summarizeOutboundEmailInput(toolName, input);
+  if (withheld !== null) return withheld;
   if (input === undefined || input === null) return "";
   if (typeof input === "string") {
     return input.length > SUMMARIZE_OUTPUT_CAP
@@ -833,6 +842,23 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
     // per-row, not cross-row.
     await Promise.allSettled(
       candidates.map(async (conv) => {
+        // #9270 review P1 — live-loop guard BEFORE the status flip. The
+        // RPC's `s.id IS NULL` arm selects rows with NO slot row — but a
+        // resume/follow-up turn is slotless BY DESIGN (`acquireSlot` runs
+        // on start_session only; `touchSlot` is UPDATE-only), so a live
+        // resumed/follow-up turn is a guaranteed false-positive candidate
+        // once status='active' — and for the legacy lineage this path
+        // abortSession()s a running turn mid-flight. SQL cannot see
+        // in-process liveness; hasLiveAgentLoop (cc runner probe +
+        // legacy activeSessions) is the no-false-reap discriminator
+        // ws-handler's dead-socket reap already uses.
+        if (hasLiveAgentLoop(conv.user_id, conv.id)) {
+          log.info(
+            { userId: conv.user_id, conversationId: conv.id },
+            "stuck-active reap skipped: live agent loop",
+          );
+          return;
+        }
         // #3463: race-window guard. The candidate set was computed
         // ≤300s ago (the reaper poll cadence); the candidate's session may have completed cleanly
         // (result branch wrote `waiting_for_user`) in the interval
@@ -1478,6 +1504,12 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
       systemPrompt += `\n\n## Connected Services\n${serviceList}`;
     }
 
+    // W1 (#9601, ADR-272): shared with the Concierge baseline prompt, since the
+    // deny applies on both paths. Unconditional (with or without connected
+    // services); its own heading keeps the Connected Services absence
+    // assertions true.
+    systemPrompt += `\n\n${CREDENTIALS_PROMPT_DIRECTIVE}`;
+
     // Announce KB share capability (closes #2315). Without this block the
     // agent cannot discover kb_share_* from natural-language requests like
     // "share the Q1 report."
@@ -2047,7 +2079,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
 
     // Thread-shape guard for #3250 — drop `resume:` when the persisted
     // SDK session ends on `assistant`. Domain leaders default to
-    // `claude-sonnet-5`, which 400s on assistant-terminated threads.
+    // `claude-sonnet-5-5`, which 400s on assistant-terminated threads.
     // Helper-shared with the cc-soleur-go path (`cc-dispatcher.ts`).
     const {
       safeResumeSessionId,
@@ -2082,6 +2114,11 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       prompt,
       options: buildAgentQueryOptions({
         workspacePath,
+        // Outer-wrap cohort + log-correlation fields (#5863) — same identity
+        // pair cc-dispatcher passes; the flag's workspace allowlist keys off
+        // the workspaceId (basename fallback is coincidence, not contract).
+        workspaceId: activeWorkspaceId,
+        sessionId: conversationId,
         pluginPath,
         // Legacy domain-leader runner is always Command Center execution:
         // workspace cwd + workspace write (byte-identical to the prior default).
@@ -2271,7 +2308,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               // uses) so the marker matches what the user already saw
               // in the streaming chip during the live turn — the raw
               // SDK tool name is an internal implementation detail.
-              const inputSummary = summarizeToolPayload(toolBlock.input);
+              const inputSummary = summarizeToolPayload(toolBlock.input, toolBlock.name);
               completedActions.push({
                 tool_name: buildToolLabel(toolBlock.name ?? "unknown", toolBlock.input, workspacePath),
                 input_summary: inputSummary,
@@ -2327,7 +2364,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // Capture cost data from SDK result (per-turn delta). Cache
           // tokens flow through too (NULL-coerced) — schema 041 added
           // the columns; RPC v2 (migration 042) accepts the 5-arg shape.
-          const costDelta = message.total_cost_usd ?? 0;
+          // #9648 B-0 — absent/non-finite SDK cost rides NaN into the
+          // cost-writer (which fails closed + alerts) instead of a silent 0.
+          const costDelta = message.total_cost_usd ?? Number.NaN;
           const inputDelta = message.usage?.input_tokens ?? 0;
           const outputDelta = message.usage?.output_tokens ?? 0;
           const cacheReadDelta = message.usage?.cache_read_input_tokens ?? 0;
@@ -2337,11 +2376,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // accumulator. The SDK can yield multiple `result` events
           // in a single session (multi-turn agents), and the abort
           // marker should reflect the cumulative cost the user paid
-          // for, not just the last turn's delta.
+          // for, not just the last turn's delta. An unpriced delta
+          // contributes nothing to the sum — its signal is the NaN
+          // that reaches the cost-writer below, not this accumulator.
           accumulatedUsage = {
             input_tokens: accumulatedUsage.input_tokens + inputDelta,
             output_tokens: accumulatedUsage.output_tokens + outputDelta,
-            cost_usd: accumulatedUsage.cost_usd + costDelta,
+            cost_usd:
+              accumulatedUsage.cost_usd +
+              (Number.isFinite(costDelta) ? costDelta : 0),
           };
 
           // Delegate to the shared cost-writer helper so both this
@@ -2467,6 +2510,10 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               conversationId,
               workspaceId: activeWorkspaceId,
               title: `${leader.title} finished`,
+              // feat-session-completion-inline — emits the inline card frame;
+              // sendToClient injects so notifications.ts never imports the
+              // ws-handler graph (cycle).
+              emit: sendToClient,
             });
           }
 
@@ -2713,7 +2760,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     } else if (
       resumeSessionId &&
       err instanceof Error &&
-      err.message.includes("No conversation found with session ID")
+      err.message.includes(SDK_STALE_RESUME_SESSION_ID)
     ) {
       // Resume-specific error: clean up the typing indicator and re-throw
       // so the caller's .catch() fallback can fire (clear stale session_id,
@@ -2985,7 +3032,34 @@ export async function sendUserMessage(
       attachments,
     });
     attachmentContext = result.attachmentContext;
+    if (!attachmentContext && !content.trim()) {
+      // Attachments-only turn where every download failed: nothing to send.
+      throw new Error(ERR_ATTACHMENT_NOT_FOUND);
+    }
   }
+
+  // Turn-start status flip (rail-live-status fix, PR #9270): a follow-up
+  // `chat` message on an existing `completed`/`waiting_for_user`/`failed`
+  // conversation IS new activity, but nothing upstream flipped the row back
+  // to `active` — the conversations rail rendered the stale terminal badge
+  // for the whole run. The flip is invoked at each dispatch boundary below —
+  // after `loadConversationHistory`, the last awaited throw-eligible step —
+  // so a persistence/mint failure leaves the row at its previous honest value
+  // (same narrow-window contract as dispatchSoleurGo's flip; a stale-active
+  // row here would idle in the rail for the reaper window). `expectMatch:
+  // true` mirrors the probe→update deletion race to Sentry without aborting
+  // the turn — status is display-only, the session must proceed regardless.
+  const markTurnStarted = () =>
+    updateConversationFor(
+      userId,
+      conversationId,
+      { status: "active", last_active: new Date().toISOString() },
+      {
+        feature: "agent-runner",
+        op: "turn-start-active",
+        expectMatch: true,
+      },
+    );
 
   // Check for an in-memory session with a captured session_id
   const activeSession = getSession(userId, conversationId);
@@ -3051,6 +3125,10 @@ export async function sendUserMessage(
   // routeMessage hits Anthropic with the plaintext apiKey; the lease
   // bounds the in-process heap window for that call too.
   if (!conv.domain_leader) {
+    // Turn-start flip BEFORE the routing try so the branch's own
+    // `handleSessionError` catch reverts it (guarded `failed` via
+    // updateConversationStatusIfActive) on any lease/route failure.
+    await markTurnStarted();
     try {
       // Sentinel sweep site #2 (#4232 PR-A). Routing-side BYOK fetch;
       // workspace resolved against the caller's ACTIVE workspace inside
@@ -3094,6 +3172,7 @@ export async function sendUserMessage(
 
   // Legacy single-leader flow (conversation has explicit domain_leader)
   if (resumeSessionId) {
+    await markTurnStarted();
     // Try SDK resume first; fall back to message replay if it fails
     startAgentSession(
       userId,
@@ -3129,8 +3208,12 @@ export async function sendUserMessage(
       ).catch(handleSessionError);
     });
   } else {
-    // No session to resume — first turn or history-only replay
+    // No session to resume — first turn or history-only replay. The flip is
+    // AFTER loadConversationHistory (the last awaited throw-eligible step in
+    // this branch) — a mint/history failure leaves status untouched instead
+    // of falsely `active`.
     const history = await loadConversationHistory(userId, conversationId);
+    await markTurnStarted();
     const prompt = history.length > 0
       ? buildReplayPrompt(history, augmentedContent)
       : augmentedContent;

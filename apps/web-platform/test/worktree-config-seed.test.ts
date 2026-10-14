@@ -7,17 +7,26 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { seedWorktreeConfig } from "../server/worktree-config-seed";
+// #7849: obtain the fixture environment from the shared helper rather than spelling it here. The
+// runtime tripwire stops git being POINTED elsewhere; it does not stop git WALKING UP into an
+// enclosing repository from the fixture, neutralise the developer own config, or supply an
+// identity. Those three are what this builder adds.
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 const made: string[] = [];
 function freshRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "seed-test-"));
   made.push(dir);
-  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: "pipe" });
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: "pipe", env: gitFixtureEnv(dir) });
   return dir;
 }
 function cfg(dir: string, key: string): string | null {
   try {
-    return execFileSync("git", ["config", "--get", key], { cwd: dir, stdio: "pipe" })
+    return execFileSync("git", ["config", "--get", key], {
+      cwd: dir,
+      stdio: "pipe",
+      env: gitFixtureEnv(dir),
+    })
       .toString()
       .trim();
   } catch {
@@ -39,8 +48,16 @@ describe("seedWorktreeConfig (heal)", () => {
   test("removes the harmful extensions.worktreeConfig a prior seed wrote", () => {
     const dir = freshRepo();
     // Simulate a workspace broken by the old seed.
-    execFileSync("git", ["config", "extensions.worktreeConfig", "true"], { cwd: dir, stdio: "pipe" });
-    execFileSync("git", ["config", "core.repositoryformatversion", "1"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["config", "extensions.worktreeConfig", "true"], {
+      cwd: dir,
+      stdio: "pipe",
+      env: gitFixtureEnv(dir),
+    });
+    execFileSync("git", ["config", "core.repositoryformatversion", "1"], {
+      cwd: dir,
+      stdio: "pipe",
+      env: gitFixtureEnv(dir),
+    });
     seedWorktreeConfig(dir);
     expect(cfg(dir, "extensions.worktreeConfig")).toBeNull(); // unset → in-sandbox git works
     expect(cfg(dir, "core.repositoryformatversion")).toBe("0"); // reset to plain-repo default
@@ -55,7 +72,11 @@ describe("seedWorktreeConfig (heal)", () => {
 
   test("is idempotent — a second run does not throw and keeps it healed", () => {
     const dir = freshRepo();
-    execFileSync("git", ["config", "extensions.worktreeConfig", "true"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["config", "extensions.worktreeConfig", "true"], {
+      cwd: dir,
+      stdio: "pipe",
+      env: gitFixtureEnv(dir),
+    });
     seedWorktreeConfig(dir);
     expect(() => seedWorktreeConfig(dir)).not.toThrow();
     expect(cfg(dir, "extensions.worktreeConfig")).toBeNull();

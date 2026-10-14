@@ -10,7 +10,7 @@ dependencies: []
 
 ## Problem Statement
 
-The plan document (`knowledge-base/project/plans/2026-03-19-chore-cla-ruleset-integration-id-plan.md`) still describes adding `github-actions` (15368) as a bypass actor in its prose sections, even though this was rejected by the GitHub API (422 error). The tasks file correctly marks it as "NOT FEASIBLE" but the plan body was not updated, creating conflicting information for future readers.
+The plan document (`knowledge-base/project/plans/archive/20261012-213508-2026-03-19-chore-cla-ruleset-integration-id-plan.md`) still describes adding `github-actions` (15368) as a bypass actor in its prose sections, even though this was rejected by the GitHub API (422 error). The tasks file correctly marks it as "NOT FEASIBLE" but the plan body was not updated, creating conflicting information for future readers.
 
 ## Findings
 
@@ -26,14 +26,18 @@ Both architecture-strategist and security-sentinel flagged this independently.
 ## Proposed Solutions
 
 ### Option A: Add "Execution Notes" section at top (Recommended)
+
 Add a prominent section below the Enhancement Summary stating what was actually applied vs. planned. Annotate stale sections with strikethrough.
+
 - Pros: Preserves original planning context, clearly distinguishes intent from outcome
 - Cons: Longer document
 - Effort: Small
 - Risk: None
 
 ### Option B: Rewrite affected sections
+
 Replace bypass actor content with explanation of why it wasn't feasible.
+
 - Pros: Cleaner for new readers
 - Cons: Loses planning context
 - Effort: Medium
@@ -45,7 +49,7 @@ Option A
 
 ## Technical Details
 
-- **Affected files:** `knowledge-base/project/plans/2026-03-19-chore-cla-ruleset-integration-id-plan.md`
+- **Affected files:** `knowledge-base/project/plans/archive/20261012-213508-2026-03-19-chore-cla-ruleset-integration-id-plan.md`
 - **Lines:** 29, 109, 129-143, 189-196, 310-317, 326
 
 ## Acceptance Criteria

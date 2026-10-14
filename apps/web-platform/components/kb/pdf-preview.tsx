@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
+import { Button } from "@/components/ui/button";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -170,23 +171,25 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
 
       {numPages > 1 && (
         <div className="flex items-center justify-center gap-3">
-          <button
+          <Button
+            variant="outlined"
             onClick={() => setPageNumber((p) => Math.max(p - 1, 1))}
             disabled={pageNumber <= 1}
             className="rounded-md border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-secondary hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Previous
-          </button>
+          </Button>
           <span className="text-xs text-soleur-text-secondary">
             Page {pageNumber} of {numPages}
           </span>
-          <button
+          <Button
+            variant="outlined"
             onClick={() => setPageNumber((p) => Math.min(p + 1, numPages))}
             disabled={pageNumber >= numPages}
             className="rounded-md border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-secondary hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Next
-          </button>
+          </Button>
         </div>
       )}
     </div>

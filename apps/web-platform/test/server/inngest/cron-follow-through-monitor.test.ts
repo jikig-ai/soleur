@@ -47,6 +47,16 @@ vi.mock("@/server/inngest/functions/_predicate-validator", () => ({
 }));
 
 const reportSilentFallbackSpy = vi.fn();
+// #8611 — the claude-eval step now runs through spawnClaudeEval, which records the run in
+// routine_run_progress when given a runId. No database here: stub the two writers.
+vi.mock("@/server/inngest/routine-run-progress", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/inngest/routine-run-progress")>()),
+  upsertRoutineRunProgress: vi.fn(async () => {}),
+  heartbeatRoutineRunProgress: vi.fn(async () => {}),
+}));
+// A well-formed Inngest run id, so the single-flight guard engages (a missing one is reported).
+const RUN_ID = "01M37EZCXEGGSDCC428M9N8MYX";
+
 vi.mock("@/server/observability", () => ({
   mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
@@ -128,7 +138,10 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
   else process.env[key] = ORIGINAL_ENV[key];
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // #8611 — the single-flight map keeps settled results for SETTLED_TTL_MS; start every test empty.
+  // Dynamic: a static import would load the substrate before the child_process mock is ready.
+  (await import("@/server/inngest/functions/_cron-claude-eval-substrate")).__resetClaudeEvalSingleFlightForTests();
   vi.resetModules();
   spawnSpy.mockReset();
   execFileSyncSpy.mockReset();
@@ -193,7 +206,7 @@ describe("cron-follow-through-monitor — T1 happy path", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // 3 ensure-labels gh calls + 1 claude call = 4 total spawn invocations.
     // (validate-predicates uses execFileSync, not spawn)
@@ -260,7 +273,7 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // (a) the mint step ran, and ran FIRST.
     expect(generateInstallationTokenSpy).toHaveBeenCalledTimes(1);
@@ -305,7 +318,7 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // (a) the server-side `gh issue list` (execFileSync) env pins the repo.
     const execCall = execFileSyncSpy.mock.calls[0] as unknown as unknown[];
@@ -354,7 +367,7 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
 
       const handler = await importHandler();
       const step = makeStep();
-      await handler({ step, logger });
+      await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
       // the 60-min lifetime floor propagates to generateInstallationToken
       // (installation id 12345 from the createProbeOctokit mock), AND the
@@ -397,7 +410,7 @@ describe("cron-follow-through-monitor — T2 spawn error (ENOENT)", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(result.exitCode).toBe(-1);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -433,7 +446,7 @@ describe("cron-follow-through-monitor — T3 AbortSignal SIGTERM→SIGKILL escal
 
       const handler = await importHandler();
       const step = makeStep();
-      const promise = handler({ step, logger });
+      const promise = handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
       // Advance past AbortSignal ceiling → SIGTERM should fire.
       await vi.advanceTimersByTimeAsync(MAX_TURN_DURATION_MS + 10);
@@ -474,7 +487,7 @@ describe("cron-follow-through-monitor — T4 Sentry env vars missing", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(result.exitCode).toBe(0);
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
@@ -520,7 +533,7 @@ describe("cron-follow-through-monitor — T6 SSRF hardening (#4068)", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // validate-predicates MUST come before claude-eval in step order
     const stepNames = step.calls.map((c) => c.name);
@@ -549,7 +562,7 @@ describe("cron-follow-through-monitor — T6 SSRF hardening (#4068)", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // Find the claude spawn call (not gh)
     const claudeCalls = spawnSpy.mock.calls.filter((c) => c[0] !== "gh");
@@ -667,5 +680,75 @@ describe("cron-follow-through-monitor — T9 Guard C not-planned close semantics
       "WITHIN SLA, NO STATE CHANGE",
     );
     expect(guardC).toContain(cmd);
+  });
+});
+
+describe("cron-follow-through-monitor — T10 sweeper-owned trackers keep their SLA observer but are never closed here (#7910)", () => {
+  // An issue carrying a `soleur:followthrough` directive is owned by
+  // scripts/sweep-followthroughs.sh, which polls it daily with its own close
+  // semantics. This monitor's Guard C closes as `not planned` at 30 business
+  // days, and the sweeper filters NOT_PLANNED out of its closed set — so a
+  // sweeper-owned tracker closed here goes invisible to BOTH systems while it
+  // is still legitimately waiting. #7922 is a legal tracker whose wait is
+  // comfortably longer than 30 business days, so this is the difference between
+  // it surviving and it silently disappearing.
+  //
+  // Asserted on the prompt text, which is the strongest guard available: the
+  // agent cannot be executed in-suite.
+
+  const listingStep = (prompt: string) => {
+    const from = prompt.indexOf("1. List open follow-through issues");
+    const to = prompt.indexOf("2. If zero issues are found");
+    // Both anchors must resolve to a real, ordered span. `slice` silently
+    // accepts -1 and returns the whole prompt, which would make every
+    // containment assertion below true of some OTHER step.
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    return prompt.slice(from, to);
+  };
+
+  it("T10a: the listing step TAGS sweeper-owned issues rather than dropping them", async () => {
+    const { FOLLOW_THROUGH_PROMPT } = await import(
+      "@/server/inngest/functions/cron-follow-through-monitor"
+    );
+    const listing = listingStep(FOLLOW_THROUGH_PROMPT);
+    // Known-positive control: the slice really is the listing step.
+    expect(listing).toContain("gh issue list --label follow-through --state open");
+    expect(listing).toContain("soleur:followthrough");
+    // The tag is what step 3 branches on.
+    expect(listing).toContain("sweeperOwned");
+    // THE REGRESSION DIRECTION, asserted as an absence. The first version of
+    // this rule filtered the issues out of the listing entirely (`| not)`),
+    // which removed Guard B's SLA observation along with Guard C's close and
+    // left a long-running legal tracker with one observer.
+    expect(listing).not.toContain("| not)");
+  });
+
+  it("T10b: the rationale scopes the rule to CLOSING, and says Guard B survives", async () => {
+    const { FOLLOW_THROUGH_PROMPT } = await import(
+      "@/server/inngest/functions/cron-follow-through-monitor"
+    );
+    const listing = listingStep(FOLLOW_THROUGH_PROMPT);
+    expect(listing).toContain("not planned");
+    expect(listing).toContain("Guard B is not part of that conflict");
+    // sla_business_days reaches Guard B only; Guard C's 30 days is a constant in
+    // this prompt. A future reader who believes otherwise would delete the rule
+    // as redundant.
+    expect(listing).toContain("does not reach Guard C");
+  });
+
+  it("T10c: step 3 forbids BOTH close paths for a sweeper-owned issue, and only those", async () => {
+    const { FOLLOW_THROUGH_PROMPT } = await import(
+      "@/server/inngest/functions/cron-follow-through-monitor"
+    );
+    const from = FOLLOW_THROUGH_PROMPT.indexOf("   c2. IF the issue is SWEEPER-OWNED");
+    const to = FOLLOW_THROUGH_PROMPT.indexOf("   d. Take action based on result");
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const rule = FOLLOW_THROUGH_PROMPT.slice(from, to);
+    expect(rule).toContain("Guard A and Guard C are");
+    expect(rule).toContain("FORBIDDEN");
+    expect(rule).toContain("never close it");
+    expect(rule).toContain("Guard B still applies");
   });
 });

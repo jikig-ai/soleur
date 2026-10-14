@@ -51,3 +51,31 @@ resolve_effective_failure_mode() {
     echo "functions_query_degraded"
   fi
 }
+
+# restart_recently_dispatched — #8495 restart dedup. The watchdog now runs every 15 min from the
+# web-server dispatch clock (ADR-248), and a slot can hold a second, queued run of the same
+# outage (a host collision or a late fallback `schedule:` tick). That second run must not
+# dispatch a second restart while the first is still queued/running (its verify poll takes up
+# to 600 s) or just finished — a restart of a just-recovered inngest drops its cron schedules
+# until they re-arm. Pure: the caller does the ONE `gh run list` read outside the seam.
+#   $1 = JSON from `gh run list --workflow restart-inngest-server.yml --json event,status,createdAt`
+#   $2 = now epoch seconds
+#   $3 = window minutes
+# echoes "true" (skip — a dispatched restart is active or younger than the window) or "false".
+# Only workflow_dispatch runs count (the workflow's push-trigger run is a registration no-op).
+# FAIL-OPEN: an empty/unparseable read, or an unparseable createdAt, reads as "false" (dispatch)
+# so a broken read never strands a genuinely-down inngest without its restart.
+restart_recently_dispatched() {
+  local json="$1" now_epoch="$2" window_min="$3" out=""
+  if [[ -z "$json" ]]; then echo "false"; return 0; fi
+  out=$(jq -r --argjson now "$now_epoch" --argjson w "$window_min" '
+    [ .[]
+      | select(.event == "workflow_dispatch")
+      | select(
+          (.status != "completed")
+          or ((try (.createdAt | fromdateiso8601) catch null) as $c
+              | $c != null and (($now - $c) / 60) < $w)
+        )
+    ] | if length > 0 then "true" else "false" end' <<<"$json" 2>/dev/null) || out=""
+  if [[ "$out" == "true" ]]; then echo "true"; else echo "false"; fi
+}

@@ -10,15 +10,14 @@ import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
 import { computeFunnel, type ContactRow, type TransitionRow } from "./compute";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -36,7 +35,7 @@ export async function GET() {
         contactsRes.error?.code ?? transitionsRes.error?.code ?? "unknown";
       Sentry.captureException(new Error(`crm-funnel:${code}`), {
         tags: { surface: "crm-funnel" },
-        extra: { op: "funnel", userId: user.id, code },
+        extra: { op: "funnel", userId, code },
       });
       return NextResponse.json({ error: "funnel_query_error" }, { status: 502 });
     }
@@ -53,7 +52,7 @@ export async function GET() {
         tags: { surface: "crm-funnel" },
         extra: {
           op: "funnel",
-          userId: user.id,
+          userId,
           code: (e as { code?: string })?.code ?? null,
         },
       },

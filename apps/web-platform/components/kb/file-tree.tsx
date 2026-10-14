@@ -1,17 +1,24 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { usePathname } from "next/navigation";
 import { useKb } from "./kb-context";
 import { UploadProgress } from "./upload-progress";
 import type { TreeNode } from "@/server/kb-reader";
 import { classifyByExtension } from "@/lib/kb-file-kind";
+import { fileExtension } from "@/lib/attachment-constants";
+import {
+  KB_MAX_FILE_SIZE,
+  KB_UPLOAD_EXTENSIONS,
+  isReservedKbUploadFilename,
+} from "@/lib/kb-constants";
 
-const ALLOWED_ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.pdf,.csv,.txt,.docx";
-const ALLOWED_EXTENSIONS = new Set([
-  "png", "jpg", "jpeg", "gif", "webp", "pdf", "csv", "txt", "docx",
-]);
+// Derived from the shared allowlist so the picker, the client check and the
+// upload route cannot drift apart.
+const ALLOWED_ACCEPT = KB_UPLOAD_EXTENSIONS.map((e) => `.${e}`).join(",");
+const ALLOWED_EXTENSIONS = new Set<string>(KB_UPLOAD_EXTENSIONS);
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
 function xhrUpload(
@@ -143,6 +150,9 @@ function TreeItem({
           ? (body as { sha: string }).sha : undefined;
         if (sha409) {
           setUploadState({ status: "duplicate", filename: file.name, sha: sha409, file, targetDir });
+        } else if (typeof body === "object" && body && (body as { code?: string }).code === "DUPLICATE_PROTECTED") {
+          // Markdown is never replaced through upload: show the server's reason.
+          setUploadState({ status: "error", message: (body as { error?: string }).error || "A markdown file with this name already exists" });
         } else {
           setUploadState({ status: "error", message: "File already exists but server response was malformed" });
         }
@@ -173,9 +183,22 @@ function TreeItem({
     e.target.value = "";
 
     // Client-side validation
-    const ext = file.name.split(".").pop()?.toLowerCase();
+    const ext = fileExtension(file.name);
     if (!ext || !ALLOWED_EXTENSIONS.has(ext)) {
       setUploadState({ status: "error", message: `Unsupported file type: .${ext || "unknown"}` });
+      return;
+    }
+
+    if (isReservedKbUploadFilename(file.name)) {
+      setUploadState({ status: "error", message: "Reserved filename" });
+      return;
+    }
+
+    if (ext === "md" && file.size > KB_MAX_FILE_SIZE) {
+      setUploadState({
+        status: "error",
+        message: `Markdown files cannot exceed ${KB_MAX_FILE_SIZE / 1024 / 1024}MB`,
+      });
       return;
     }
 
@@ -196,6 +219,7 @@ function TreeItem({
     <li>
       <div className="group relative">
         <button
+          data-button-exempt="composite tree row — chevron/upload-progress slot + icon + name + timestamp, dynamic indent style, aria-expanded, isBusy tint"
           onClick={() => onToggle(dirKey)}
           className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 ${
             isBusy ? "bg-amber-500/10" : ""
@@ -229,7 +253,8 @@ function TreeItem({
           )}
         </button>
         {!isBusy && (
-          <button
+          <Button
+            variant="ghost"
             onClick={(e) => {
               e.stopPropagation();
               fileInputRef.current?.click();
@@ -239,7 +264,7 @@ function TreeItem({
             aria-label={`Upload file to ${node.name}`}
           >
             <UploadIcon />
-          </button>
+          </Button>
         )}
         <input
           ref={fileInputRef}
@@ -253,7 +278,7 @@ function TreeItem({
       {uploadState.status === "error" && (
         <div className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
           <span className="flex-1">{uploadState.message}</span>
-          <button onClick={() => setUploadState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</button>
+          <Button variant="ghost" onClick={() => setUploadState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</Button>
         </div>
       )}
       {uploadState.status === "duplicate" && (
@@ -261,6 +286,7 @@ function TreeItem({
           <p className="mb-1.5">&ldquo;{uploadState.filename}&rdquo; already exists. Replace?</p>
           <div className="flex gap-2">
             <button
+              data-button-exempt="amber warning-tinted confirm chip — overwrite caution cue has no variant equivalent"
               onClick={() => {
                 const { file, targetDir, sha } = uploadState;
                 uploadFile(file, targetDir, sha);
@@ -269,12 +295,13 @@ function TreeItem({
             >
               Replace
             </button>
-            <button
+            <Button
+              variant="ghost"
               onClick={() => setUploadState({ status: "idle" })}
               className="rounded px-2 py-0.5 text-soleur-text-secondary hover:text-soleur-text-primary"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -417,7 +444,7 @@ function FileNode({
             <span className="shrink-0 text-sm text-soleur-text-muted">{ext}</span>
           </div>
         ) : (
-          <Link
+          <NavLink
             href={filePath}
             aria-current={isActive ? "page" : undefined}
             className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
@@ -452,11 +479,12 @@ function FileNode({
                 Renaming...
               </span>
             )}
-          </Link>
+          </NavLink>
         )}
         {isAttachment && deleteState.status === "idle" && renameState.status === "idle" && (
           <div className="kb-tree-actions absolute right-1 top-1/2 flex -translate-y-1/2 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-            <button
+            <Button
+              variant="ghost"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -468,8 +496,9 @@ function FileNode({
               aria-label={`Rename ${node.name}`}
             >
               <PencilIcon />
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -480,7 +509,7 @@ function FileNode({
               aria-label={`Delete ${node.name}`}
             >
               <TrashIcon />
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -488,31 +517,35 @@ function FileNode({
         <div className="mx-2 mt-1 rounded bg-red-500/10 px-2 py-1.5 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
           <p className="mb-1.5">Delete &ldquo;{node.name}&rdquo;?</p>
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="danger"
               onClick={() => node.path && deleteFile(node.path)}
+              loading={isDeleting}
+              loadingLabel="Deleting"
               className="rounded bg-red-500/20 px-2 py-0.5 text-red-300 hover:bg-red-500/30"
             >
               Delete
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
               onClick={() => setDeleteState({ status: "idle" })}
               className="rounded px-2 py-0.5 text-soleur-text-secondary hover:text-soleur-text-primary"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
       {deleteState.status === "error" && (
         <div className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
           <span className="flex-1">{deleteState.message}</span>
-          <button onClick={() => setDeleteState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</button>
+          <Button variant="ghost" onClick={() => setDeleteState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</Button>
         </div>
       )}
       {renameState.status === "error" && (
         <div className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
           <span className="flex-1">{renameState.message}</span>
-          <button onClick={() => setRenameState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</button>
+          <Button variant="ghost" onClick={() => setRenameState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</Button>
         </div>
       )}
     </li>

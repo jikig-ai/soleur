@@ -209,6 +209,7 @@ export function SelectionToolbar({
   const pillEl = (
     <button
       ref={pillRef}
+      data-button-exempt="floating selection pill — inline-style positioned, composite children (icon + kbd chip), conditional accent/disabled treatments"
       type="button"
       disabled={disabled}
       title={title}

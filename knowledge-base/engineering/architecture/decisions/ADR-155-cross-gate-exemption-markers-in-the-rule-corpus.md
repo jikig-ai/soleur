@@ -1,0 +1,315 @@
+# ADR-155 — Cross-gate exemption markers in the always-loaded rule corpus
+
+- **Status:** Accepted
+- **Date:** 2026-08-02
+- **PR:** #7161
+- **Issue:** none (surfaced while shipping the token-drift coverage PR, merged as `b5871b9f6`; the
+  mandated filing that triggered the conflict is #7159)
+- **Related:** [ADR-092](./ADR-092-additive-only-auto-edit-boundary-and-hard-rule-body-weakening-gate.md) (the ack gate that makes the
+  marker human-controlled), [ADR-151](./ADR-151-agents-rule-corpus-is-unconditionally-loaded.md) (the corpus split
+  that put rule bodies in `AGENTS.rules.md`), [ADR-131](./ADR-131-gate-moratorium-and-meta-work-budget.md)
+  (the moratorium this must not be read as circumventing),
+  [ADR-084](./ADR-084-decision-classification-taxonomy-for-autonomous-question-surfacing.md) (why two reviewer
+  challenges were recorded rather than applied), `plugins/soleur/skills/ship/scripts/net-issue-flow.sh`
+  (the reader), `scripts/lint-rule-bodies.py` (`SECURITY_TAG_MARKERS`)
+
+> **Ordinal.** ADR-155 is the next free ordinal against a freshly fetched `origin/main` (highest
+> existing is ADR-154), verified at `/work` time. Provisional until `/ship` re-checks at merge.
+
+## Context
+
+Two repo gates were in genuine, unresolvable-by-design conflict.
+
+`wg-block-pr-ready-on-undeferred-operator-steps` **requires** a tracking issue for a bare operator
+action before `gh pr ready`. `net-issue-flow.sh` **blocks** any PR whose `NET = FILED - CLOSING` is
+`> 0`. On 2026-08-02, shipping the token-drift coverage PR, obeying the first forced a violation of
+the second.
+
+Neither documented exit applied:
+
+- **"Fix inline"** is a **size** test (`<=100` lines AND `<=4` files). The blocker was **authority**:
+  an operator-only production credential decision. No diff size makes an agent able to take it.
+- **"Close something"** requires the filed issue to supersede an open one. A mandated tracker
+  supersedes nothing — it exists precisely because the work is *not* done.
+
+That left one exit: the blanket `<!-- gate-override: net-issue-flow -->` marker, whose own help text
+described itself as a *"legitimate architectural-pivot deferral"*. This was not an architectural
+pivot. Taking the documented exit required mis-describing the escape.
+
+**That is the failure mode, and it is worse than a gap.** A gate whose only escape hatch demands a
+false justification trains the reflex of reaching for the hatch without reading it. The override
+stops being a decision on the record and becomes a keystroke. The net-issue-flow surface already
+learned this once — it ran advisory for three months and was skipped, because advisory output is
+free to ignore. An override that everyone reaches for reflexively is advisory with extra steps.
+
+## Decision
+
+Introduce `[mandates-filing]`, a marker in `AGENTS.rules.md` rule bodies. An issue whose body carries
+`Mandated-By: <rule-id>` is subtracted from `NET` when **all four** conditions hold:
+
+1. the ISSUE body carries `Mandated-By: <rule-id>` on a line of its own,
+2. `<rule-id>` carries `[mandates-filing]` in the **merge-base** copy of `AGENTS.rules.md`,
+3. the issue is **OPEN**, and
+4. the PR body carries a `Tracks #<issue>` / `Refs #<issue>` companion.
+
+Every condition fails **closed**. Initially tagged: `wg-block-pr-ready-on-undeferred-operator-steps`
+and `wg-when-deferring-a-capability-create-a`.
+
+> **Amended 2026-08-03 (#7174).** The tagged set is now **one rule**:
+> `wg-block-pr-ready-on-undeferred-operator-steps`. The operator untagged
+> `wg-when-deferring-a-capability-create-a`, reversing the original "at
+> minimum these two" direction and siding with the three reviewers recorded in
+> DC-1. The deciding evidence was **not** that the gate would become advisory
+> — a 30-day measurement refuted that (of 256 merged PRs with closing-or-filing
+> activity, 138 block at NET>0; tagging both flips 8 (5.8%) to 32 (23.2%)
+> depending on classification strictness, versus 2 (1.4%) to 10 (7.2%) for the
+> first rule alone, so 77–94% of blocked PRs still block either way). The
+> deciding evidence was that **nothing writes the claim**: every writer emits
+> the first rule id literally, and no writer anywhere emits
+> `Mandated-By: wg-when-deferring-a-capability-create-a`, so an agent citing it
+> would be hand-authoring exactly the free-form reason this closed vocabulary
+> exists to prevent. The second design challenge in that issue — replacing the
+> corpus marker with a free-form `reason=` token — was **declined**; the
+> mechanism below stands unchanged.
+>
+> **Revocation is not retroactive — the caveat below is now LIVE.** The gate
+> reads the corpus at `git merge-base origin/main HEAD`, so every branch whose
+> merge-base predates this untag still sees `[mandates-filing]` on
+> `wg-when-deferring-a-capability-create-a` and can still claim the exemption
+> until it rebases. Nothing forces that rebase. The untag's decisive rationale
+> ("nothing writes the claim, so citing it would be hand-authored") does NOT
+> bind on such a branch — a hand-authoring agent is precisely the threat model.
+> Merge-base reading is still correct (it is what stops a PR granting itself an
+> exemption in the same diff); the residue is a bounded lag, recorded here
+> rather than left for the next reader to rediscover.
+
+### The class boundary (what is actually new here)
+
+The corpus already carries `[compliance-tier]`, `[hook-enforced: …]`, `[skill-enforced: …]` and
+`[scanner-enforced: …]`. Every one of those describes **how the rule it sits on is enforced**. They
+are self-referential metadata: a reader of the rule learns where to find its teeth.
+
+`[mandates-filing]` is the first marker that grants a rule **authority over a different gate**. It
+does not describe how `wg-block-pr-ready-…` is enforced; it changes what `net-issue-flow.sh` will
+let through. That is a new category, and it is the reason this needs an ADR rather than a comment.
+
+The consequence to state plainly: the corpus is now an input to a gate that is not its own. Adding a
+marker to a rule body is no longer a purely local edit.
+
+### Why derive the set from the corpus rather than list it in the gate
+
+A list in `net-issue-flow.sh` would be a second pin on the same fact, and the copy that drifts is
+always the one that runs. The corpus is already the single always-loaded source of rule truth
+(ADR-151), it is already human-gated for body changes (ADR-092), and it is already the thing an
+agent reads when deciding what a rule requires.
+
+Rejected alternatives:
+
+- **A hardcoded id list in the gate.** The forbidden second pin.
+- **A prose heuristic** ("does the rule body contain the word *file*"). Measured over-permissive: it
+  matches `wg-when-a-test-runner-crashes-segfault-oom` (a three-way disjunction) and, worse,
+  `wg-defer-only-after-inline-triage`, which *restricts* filing. A heuristic that exempts the rule
+  telling you not to file is not a near-miss, it is an inversion.
+- **A GitHub label** (`mandated-filing`). A bare label anyone can add reproduces the blanket override
+  with extra steps and a false air of process.
+- **A free-form `reason=` token on the existing override marker.** Cheaper (~20 lines) and delivers
+  the same per-gate attribution — this was raised independently by two reviewers and is recorded as
+  DC-2. It was not taken because it is self-serve: an agent invents the string. The corpus tag makes
+  the set of valid claims a **closed, human-gated vocabulary**. That is a difference in kind, not
+  degree, even though it is not tamper-evidence (below).
+
+### Scope restricted to `^(hr|wg)-`
+
+Extraction ignores any id outside those prefixes, so the derived set is **by construction** a subset
+of the ADR-092 ack gate's coverage (`GATED_PREFIX_RE`). Without this, a `cq-*` rule could carry the
+marker and grant exemption authority with no ack required — measured, **27 of 101** ids sit outside
+that gate. `[mandates-filing]` is also added to `SECURITY_TAG_MARKERS` so both adding and (more
+importantly) **dropping** it are loud; a silent drop would just stop the exemption matching, with no
+symptom beyond a `Mandating rules:` count nobody is watching.
+
+### Merge-base, never the worktree, never a bare `:path`
+
+The corpus is read at `git merge-base origin/main HEAD`, behind an explicit SHA guard.
+
+- The **worktree** is author-controlled: a PR could tag a rule and exempt itself in the same diff.
+- A bare `git show ":AGENTS.rules.md"` reads the author's **staged index** — also author-controlled.
+  This is the dangerous one: measured, it returns `rc=0` and a full 101-id list, so the read
+  *succeeds* and no empty-set warning fires. A fail-open in the one shape nothing downstream can
+  notice. (`.claude/hooks/brand-hex-commit-gate.sh` uses `git show ":$f"` **deliberately**, for the
+  opposite reason — so an unstaged worktree edit cannot whitelist a colour. The two are not in
+  tension; they want different things from the same primitive, which is exactly why the distinction
+  needs writing down.)
+
+## Consequences
+
+### (a) It is NOT unforgeable, and must not be described as such
+
+This gate runs as a local `PreToolUse` hook, in a process the claimant fully controls.
+`SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1` is an unconditional bypass roughly seventy lines above where the
+exemption logic sits. You cannot build tamper-evidence inside a process the claimant owns.
+
+What the mechanism actually buys is (i) a **closed vocabulary** — an agent must name one of N
+human-blessed rules rather than invent a reason — and (ii) **per-rule attribution** in telemetry.
+Both are real. Neither is unforgeability. Any future document describing this as a security control
+is wrong.
+
+### (b) The attribution claim required building the readout it assumed
+
+The justification in (a)(ii) was, when first written, **false**. `rule-metrics-aggregate.sh` builds
+`rules[]` from `AGENTS.md` ids only and filters `net-issue-flow*` out of `orphan_rule_ids`, so those
+counts reached `rule-metrics.json` **nowhere**; `operator-digest` never reads that file; and
+`.claude/.rule-incidents*` is gitignored and worktree-scoped, so it dies with `clean_gone`.
+
+Shipping the framing without the readout was the one outcome to avoid, so this PR adds five keys to Stage C: `summary.gate_exemptions` (per-rule bypass
+counts), `gate_override_count`, `gate_timeout_warn_count`,
+`gate_failopen_warn_count`, plus — added at review, after they were found to be
+write-only — `gate_corpus_unreadable_warn_count` and `gate_zero_tagged_warn_count`. The emitter was also corrected: the per-rule id rides
+in the **structured `rule_id`** (`net-issue-flow-mandated-filing--<rule-id>`), not in
+`rule_text_prefix`, which nothing parses. The signal worth watching is the **comparison**: exemptions
+rising while overrides fall is the intended effect; both rising means the gate is being routed
+around rather than satisfied.
+
+### (c) Most filing sites can never use this, by construction
+
+The corpus sweep covered *rules*. Most issues are filed from **SKILL.md phase mandates that carry no
+rule id at all**: the CMO content-opportunity and website-framing gates (which file automatically,
+headless), the ADR-084 decision-challenge issue, and the review-finding gate. There is nothing to
+tag, so every one of those remains a **permanent blanket-override case**.
+
+This is why the override is left working and unchanged, and why its help text was rewritten to
+describe several legitimate uses rather than one. The exemption does **not** generalize, and reading
+it as "the principled replacement for the override" would be a mistake.
+
+### (d) A PR that adds a tag cannot use it — and revocation is not retroactive
+
+**Merge-base is a convenience anchor, not a trust anchor.** `origin/main` is a
+local remote-tracking ref and `git update-ref` is unprivileged, so this collapses
+into the already-conceded "runs in a process the claimant controls" — it is not
+an independent guarantee, and §Merge-base above should not be read as claiming
+one. What it does buy is that the honest path cannot self-grant by accident.
+
+Revocation has the asymmetry worth stating: because the read is bounded to an
+ancestor of `origin/main`, a branch cannot forge a NEWER corpus, but it can sit
+on an OLDER one. `git rebase --onto <commit-before-the-untag>` — or simply
+branching from an older main — restores a marker that has since been removed.
+So DC-1's "untagging is a one-line corpus edit under this same gate" is true of
+`main` and does NOT bind any open branch whose merge-base predates the untag,
+and nothing forces a rebase. Not exploitable while both rules stay tagged; it
+becomes live the first time a tag is dropped.
+
+Because the corpus is read at the merge-base, the exemption does not work on the PR that introduces a
+tag — including this one, which therefore must carry the blanket override, with a
+justification per filed issue, when `/ship` writes the final PR body. Branches open
+when this merges will report `Mandating rules: 0` until rebased. Both are correct behaviour and
+routine noise, not faults; the report distinguishes "read failed" from "read OK, zero tagged" and
+gives each its own telemetry id so the two are never confused.
+
+### (e) AP-017 deviation
+
+AP-017 designates "add a new rule (new id)" as the always-safe additive lane. That lane now has an
+exit into gate-exemption authority: a **new** rule id carrying `[mandates-filing]` is additive, so it
+takes no ack. `SECURITY_TAG_MARKERS` makes it *annotate* loudly, and `^(hr|wg)-` keeps it inside the
+ack gate's prefix scope, but the additive-new-rule path remains the widest door and should be treated
+as such in review.
+
+### (f) Cheaper unattributed bypasses still exist
+
+The instrument measures only agents who take the honest path. Two cheaper routes are invisible to it:
+
+- **File the issue BEFORE the PR exists.** The `createdAt` filter excludes it from `FILED` entirely —
+  a free `NET 0` with no telemetry at all.
+- **Write `Closes #N` without closing anything.** `CLOSING` is parsed from the PR body, not verified.
+
+Both are cheaper than complying. So the exemption currently makes the *honest* path strictly harder
+than the dishonest one, and the `gate_exemptions` numbers must be read as a floor on honest use, never
+as a measure of total bypass. Closing those two is separate work and is not attempted here.
+
+### (g) Relationship to the ADR-131 moratorium
+
+ADR-131 (`status: proposed`) restricts *new* gates while permitting that existing ones "may be fixed,
+tightened, merged, or deleted". This adds no new gate: it narrows an existing gate's escape hatch from
+"blanket override, reflexively taken" to "blanket override, plus a narrow corpus-derived path for the
+one case the repo's own rules force". Whether that counts as a *fix* is a judgement, and it is
+recorded here rather than assumed.
+
+## Recorded challenges (not applied)
+
+Per ADR-084, two reviewer challenges contradict explicit operator direction and are recorded rather
+than applied, with the operator's direction kept as the default. Both are in
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-net-issue-flow-mandated-filing-exemption/decision-challenges.md`:
+
+- **DC-2** — three reviewers argue the corpus mechanism is disproportionate versus a `reason=` token
+  or an OPEN + `deferred-automation` label check. Addressed under "Rejected alternatives" above: both
+  are self-serve, which the operator's constraint excluded explicitly.
+- **DC-1** — three reviewers argue `wg-when-deferring-a-capability-create-a` should not be tagged,
+  because its **default** is documenting in-place and its filing branch is conditional on a triple
+  test the gate cannot observe. The counter is that the conditional branch is a genuine mandate, and
+  the operator's direction said "at minimum" both rules. Untagging is a one-line corpus edit under
+  the same ack gate. The decisive measurement — what fraction of recently filed issues would satisfy
+  `Mandated-By` + `Refs` + OPEN — was never taken; the query is recorded in DC-1.
+
+## Amendment — 2026-09-07 (#7759)
+
+**The exemption recorded above was INERT from the day it shipped, and this amendment records the
+measurement, the revival, and one consequence that is now different.** Appended rather than
+edited: the original reasoning stands as written, and what changed is a fact about the world it
+assumed.
+
+**Measured — and the first attempt was wrong.** Applying the gate's own whole-line predicate —
+`^[ \t\r]*[Mm]andated-[Bb]y:` — across the issue corpus yields **33** issues. That count holds.
+
+The first attempt then classified every `#N` they cite as issue-vs-PR **by range membership** and
+reported **0 of 33 citing any PR**, concluding the mechanism was "dead on arrival". Both the
+method and the number are wrong. Range membership cannot discriminate here: GitHub issues and
+pull requests **share one number space** in this repository, which is directly visible in this
+very work (issue #7759, PR #7896). The only sound discriminator is `.pull_request` presence on
+the API object.
+
+**Re-measured 2026-09-07 (#7896 review), classifying on `.pull_request`:**
+
+| quantity | value |
+| --- | --- |
+| whole-line `Mandated-By:` issues | 33 |
+| of those, citing at least one `#N` | 33 |
+| distinct cited numbers | 66 |
+| of those, that are pull requests | **21** |
+| issues citing at least one PR | **20 of 33** |
+| (issue, cited-PR) pairs | 29 |
+
+One of those pairs is **#7710 citing #7702** — the case #7759 was filed about. So the exemption
+had real FILED candidates before #7759, and the strong claims the first attempt derived from the
+bad number — "never evaluated on a real issue", "had never fired", "dead on arrival" — are
+**withdrawn**. What the corrected data supports is narrower and still worth recording: the
+exemption was reachable only for filings that cite the PR in their own body, which is the minority
+shape, so it was under-reached rather than inert.
+
+**DC-1's status is likewise narrower than the first attempt claimed.** It notes the decisive
+measurement "was never taken"; this is that measurement, but it does not settle DC-1 in the
+direction the first attempt asserted.
+
+**Revived by ADR-206.** The declared-filing arm admits an issue whose number appears on the PR's
+`Filed:`/`Tracks:`/`Refs:` line regardless of what the issue body cites, so `Mandated-By:` issues
+now become FILED candidates and the four conditions are evaluated for the first time.
+
+**One conjunct collapses for ONE admission route, and it is priced rather than ignored.** A
+`Filed: #N` declaration now BOTH admits the row into `FILED` and satisfies condition 4 (the
+companion), so for rows admitted that way condition 4 is implied by the admission.
+
+An earlier revision of this paragraph said `Tracks #N` did this "for every row admitted via that
+route". That was false in both halves and was measured false during the #7896 review. `Tracks`
+and `Refs` are no longer admission keywords at all — they are pre-existing vocabulary here (this
+rule's own companion convention, and script-header provenance citations), and admitting them
+over-attributed a sibling PR's filings; a real line on `main`, `Refs: #6588, #6897, #6604, #6570.
+Prior decision: #6918`, admitted five issues. And the colon forms (`Filed:`, `Tracks:`, `Refs:`)
+admitted a row while the companion predicate rejected them, so a mandated filing declared exactly
+as `/ship` Phase 6 instructs was admitted to `FILED` and then denied the exemption, with the
+rejection printing "PR body has no Tracks/Refs #N companion" over a body that declared #N
+verbatim. Rows admitted via the issue-cites-PR arm still require a separate companion, so the
+collapse is scoped rather than total. Condition 2 — the human-gated `[mandates-filing]` corpus edit under the ADR-092 ack gate —
+still bounds the blast radius, and it remains the conjunct that makes the vocabulary closed. The
+"not unforgeable" caveat in the original text is unchanged and still applies.
+
+**DC-1 is unaffected as a decision** but its framing shifts: the question of whether
+`wg-when-deferring-a-capability-create-a` should carry the marker was previously argued against a
+mechanism that could not fire. It can now, so the argument is live for the first time. No corpus
+edit is made here.

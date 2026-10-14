@@ -1,0 +1,8 @@
+# Synthesized fixture (not a real workflow). Bare-string form of `on:`.
+name: fixture string form
+on: merge_group
+jobs:
+  fx-string:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo fixture

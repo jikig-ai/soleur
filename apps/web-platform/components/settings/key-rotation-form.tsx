@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface KeyRotationFormProps {
   hasExistingKey: boolean;
@@ -25,17 +27,15 @@ export function KeyRotationForm({
   const router = useRouter();
   const [apiKey, setApiKey] = useState("");
   const [credentialType, setCredentialType] = useState<CredentialType>("api_key");
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
   const isOauth = canUseOauthCredential && credentialType === "oauth_token";
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  // asyncFn never throws: failures land on the local `error` surface.
+  const { run, pending: isSubmitting } = usePendingAction(async () => {
     if (!apiKey.trim()) return;
 
-    setIsSubmitting(true);
     setError(null);
     setSuccess(false);
 
@@ -54,24 +54,25 @@ export function KeyRotationForm({
 
       if (!res.ok) {
         setError(data.error || "Failed to save key");
-        setIsSubmitting(false);
         return;
       }
 
       if (!data.valid) {
         setError("Invalid API key. Please check and try again.");
-        setIsSubmitting(false);
         return;
       }
 
       setSuccess(true);
       setApiKey("");
-      setIsSubmitting(false);
       router.refresh();
     } catch {
       setError("Network error. Please try again.");
-      setIsSubmitting(false);
     }
+  });
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    run();
   }
 
   return (
@@ -87,6 +88,7 @@ export function KeyRotationForm({
               role="radio"
               aria-checked={credentialType === "api_key"}
               onClick={() => setCredentialType("api_key")}
+              data-button-exempt="role=radio option in a radiogroup — checked/unchecked state styling (border-emphasized + bg-surface-2) cannot reduce to a Button variant"
               className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
                 credentialType === "api_key"
                   ? "border-soleur-border-emphasized bg-soleur-bg-surface-2 text-soleur-text-primary"
@@ -100,6 +102,7 @@ export function KeyRotationForm({
               role="radio"
               aria-checked={credentialType === "oauth_token"}
               onClick={() => setCredentialType("oauth_token")}
+              data-button-exempt="role=radio option in a radiogroup — checked/unchecked state styling (border-emphasized + bg-surface-2) cannot reduce to a Button variant"
               className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
                 credentialType === "oauth_token"
                   ? "border-soleur-border-emphasized bg-soleur-bg-surface-2 text-soleur-text-primary"
@@ -144,17 +147,15 @@ export function KeyRotationForm({
         <p className="text-sm text-green-400">Key saved successfully.</p>
       )}
 
-      <button
+      <Button
+        variant="gold"
         type="submit"
         disabled={!apiKey.trim() || isSubmitting}
-        className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        loading={isSubmitting}
+        loadingLabel="Validating"
       >
-        {isSubmitting
-          ? "Validating..."
-          : hasExistingKey
-            ? "Rotate Key"
-            : "Save Key"}
-      </button>
+        {hasExistingKey ? "Rotate Key" : "Save Key"}
+      </Button>
     </form>
   );
 }

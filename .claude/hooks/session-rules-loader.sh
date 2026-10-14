@@ -5,7 +5,8 @@
 # Matchers: startup|resume|clear|compact
 # Reads the envelope JSON on stdin and emits hookSpecificOutput.additionalContext
 # containing the whole rule corpus (AGENTS.rules.md) plus an operator-readable
-# stamp, the session-context snapshot, and the tmpfs-guard alarm block.
+# stamp, the session-context snapshot, the tmpfs-guard alarm block, and (only after a repair)
+# the bare-root HEAD heal marker.
 #
 # ADR-151 retired the CHANGE-CLASS CLASSIFIER, not this hook. The corpus is now
 # injected in full on every session, so there is no class to compute, no
@@ -27,6 +28,11 @@
 #      grep finds NO live consumer outside this file's own tests, so the comment
 #      below claiming "downstream hooks read this" is currently unsupported —
 #      wire it or retire it, but do not delete it by accident.
+#  10. the bare-root HEAD self-heal: a child-process call to bare-head-self-heal.sh,
+#      made BEFORE the branch read so the `[session-context]` branch line reflects the
+#      repaired HEAD. It repairs a dangling `.git/HEAD` at a bare repo root and emits one
+#      SOLEUR_BARE_HEAD_HEALED line (appended last, after the tmpfs alarm block), and
+#      nothing on a healthy session. See .claude/hooks/README.md "Bare-root HEAD self-heal".
 #
 # WHAT MUST NOT BE "SIMPLIFIED": do not merge AGENTS.rules.md into AGENTS.md.
 # The index is re-rendered every turn and the corpus is injected once per
@@ -165,7 +171,11 @@ fi
 # manifest writes to arbitrary writable locations. See review on PR #3496.
 REPO_ROOT=""
 if [[ -n "$CWD" && -d "$CWD" ]]; then
-  REPO_ROOT="$CWD"
+  # The envelope cwd may be a subdirectory (#8611); resolve its worktree root.
+  # --show-toplevel only returns a worktree root, so the refusal below still holds;
+  # the $CWD fallback keeps bare-root / non-repo cwds on their existing paths.
+  REPO_ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)"
+  REPO_ROOT="${REPO_ROOT:-$CWD}"
 elif command -v git >/dev/null 2>&1; then
   # `git-common-dir` resolves to `<bare>/.git` or `<bare>/.git/worktrees/<name>`.
   # `--show-toplevel` is the working-tree we want; only use common-dir as a
@@ -294,6 +304,19 @@ STAMP="[rules-loader] loaded: ${RULE_COUNT} of ${TOTAL_RULES} rules${FAIL_SAFE_N
 # Dropping a `|| …` guard here on the strength of the old claim would route the
 # session onto the FALLBACK path — the one with the least operator visibility.
 # Keep every external call inside a command-sub with a `|| …` fallback.
+
+# Bare-root HEAD self-heal (job 10 in the header). A CHILD process, so a failing or noisy helper
+# cannot reach this shell: `|| true` keeps the ERR trap quiet, and the prefix test below accepts
+# only the helper's first line, so nothing else it prints can enter context. Pure bash on purpose
+# (no `| grep -m1`): grep-q-pipe-guard.test.sh sweeps this directory for an early-exit grep in a
+# pipe. A missing helper (a stale bare-root copy of this file) is the same fail-open path. The
+# call is time-boxed (`timeout`, when available): a hung git at the repo root must cost a few
+# seconds, not the whole rules corpus. SOLEUR_BARE_HEAL_TIMEOUT_S exists for the test.
+BARE_HEAL_TO=()
+if command -v timeout >/dev/null 2>&1; then BARE_HEAL_TO=(timeout -k 1 "${SOLEUR_BARE_HEAL_TIMEOUT_S:-5}"); fi
+BARE_HEAL_OUT=$("${BARE_HEAL_TO[@]+"${BARE_HEAL_TO[@]}"}" bash "$(dirname "${BASH_SOURCE[0]}")/bare-head-self-heal.sh" "$REPO_ROOT" 2>/dev/null || true)
+BARE_HEAL_MARKER="${BARE_HEAL_OUT%%$'\n'*}"
+[[ "$BARE_HEAL_MARKER" == "SOLEUR_BARE_HEAD_HEALED "* ]] || BARE_HEAL_MARKER=""
 WS_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(unknown)")
 # Guard git's non-zero exit INSIDE the pipe, not after it. `… | wc -l || echo 0`
 # is a double-output bug under pipefail: when git fails, `wc -l` already emits
@@ -303,7 +326,9 @@ WS_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo 
 WS_DIRTY=$( { git -C "$REPO_ROOT" status --porcelain --ignore-submodules=all 2>/dev/null || true; } | wc -l | tr -d ' ')
 
 # Committed-config MCP roster = .mcp.json ∪ plugins/soleur/.claude-plugin/plugin.json
-# mcpServers. Label is MCP(committed-config) — NOT MCP(static) — because servers
+# mcpServers ∪ plugins/soleur/.mcp.json mcpServers (the plugin-root
+# registration added at #8156 — its `playwright` key IS a committed-config
+# server on any harness that discovers the file). Label is MCP(committed-config) — NOT MCP(static) — because servers
 # declared in .claude/settings.json or registered dynamically (pencil via
 # pencil-setup, supabase via plugin) are also "static" but out of this read's
 # scope. The label names the SOURCE honestly rather than over-claiming the live set.
@@ -317,6 +342,7 @@ MCP_SERVERS=$(
   {
     jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
     jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/plugins/soleur/.mcp.json" 2>/dev/null || true
   } | sort -u | paste -sd, - || true
 )
 [[ -z "$MCP_SERVERS" ]] && MCP_SERVERS="(none)"
@@ -437,7 +463,7 @@ fi
 # operator-glanceable header (STAMP/manifest, lines 1-2) and before the rule
 # bodies. It was lines 4-6 until ADR-151 removed the HINT line; the loader tests
 # assert these offsets positionally, so any future line added to the header must
-# move them again in the same commit. The alarm block trails everything.
-OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}"
+# move them again in the same commit. The alarm block, then the heal marker, trail everything.
+OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}${BARE_HEAL_MARKER:+$'\n'$BARE_HEAL_MARKER}"
 jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $out } }'
 exit 0

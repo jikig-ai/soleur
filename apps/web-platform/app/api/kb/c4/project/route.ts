@@ -1,18 +1,26 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import {
   resolveActiveWorkspaceKbRoot,
   resolveActiveWorkspaceRepoMeta,
 } from "@/server/workspace-resolver";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import { githubApiGet, GitHubApiError } from "@/server/github-api";
-import { reportSilentFallback } from "@/server/observability";
+import { kbGithubUrlPath } from "@/server/kb-github-path";
+import { mirrorWarnWithDebounce, reportSilentFallback } from "@/server/observability";
+import { deriveDiagramStale } from "@/server/c4-staleness";
+import { verifiedUserId } from "@/server/request-auth";
 import {
   C4_DIAGRAMS_DIR,
   C4_SOURCE_EXT,
   C4_MODEL_JSON,
   MAX_C4_BYTES,
 } from "@/lib/c4-constants";
+import {
+  c4ModelCounts,
+  MODEL_LEVEL_LINE,
+  type Diagnostic,
+} from "@/lib/c4-model-shape";
 import logger from "@/server/logger";
 
 export const runtime = "nodejs";
@@ -24,6 +32,43 @@ type GitBlob = { content: string; encoding: string; size?: number };
  * GitHub-read failure so the caller can map it to a 413 (model) or skip it
  * (best-effort source) rather than a 503. */
 class BlobTooLargeError extends Error {}
+
+/** Longest `dir` accepted. Real KB folders are a few segments deep. */
+const MAX_DIR_LENGTH = 256;
+/** Characters that re-enter URL syntax: `%` (a pre-encoded `%2e%2e` is
+ *  resolved as `..` by the URL parser), `\\`, `?` and `#`. Defence in depth:
+ *  the per-segment encoding in `kbGithubUrlPath` already neutralises each,
+ *  so this only refuses early (at the cost of folder names containing `%`). */
+const DIR_URL_META = /[%\\?#]/;
+
+/** The `dir` query value as the GitHub path under `knowledge-base/`, or null
+ *  when it is not a plain KB-relative folder. The shared per-segment guard
+ *  (`kbGithubUrlPath`: dot/empty segments, control characters, per-segment
+ *  encoding) plus a stricter refusal of URL-meta characters and a shorter
+ *  length cap for a folder name. A blocklist rather than an allowlist so
+ *  folders with spaces or non-ASCII names keep working. */
+function toGithubDir(requestedDir: string): string | null {
+  if (DIR_URL_META.test(requestedDir)) return null;
+  return kbGithubUrlPath(requestedDir, MAX_DIR_LENGTH);
+}
+
+// #8740: a committed model with elements but no views renders as "View `index`
+// not found in the model." with no explanation. Zero views means the layout
+// step failed, never that the source caused it (ADR-050: a successful layout
+// always emits `index`); the source itself is not validated here, so the copy
+// claims only that. Inside the Concierge-writable folder a Concierge re-render
+// (a `.c4` edit) fixes it; elsewhere the Concierge cannot write, so the copy
+// points at the export. "re-render this diagram" is the phrase the Concierge
+// prompt addendum keys on. #8739: the open editor reloads itself when a
+// Concierge save lands (c4_diagram_saved), so the canonical copy no longer
+// asks the user to reload; OTHER_DIR keeps its reload instruction because an
+// out-of-app `likec4 export` + push emits no event the page can hear.
+const ZERO_VIEW_PREFIX =
+  "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, ";
+const ZERO_VIEW_DIAGNOSTIC =
+  ZERO_VIEW_PREFIX + "ask the Concierge to re-render this diagram.";
+const ZERO_VIEW_DIAGNOSTIC_OTHER_DIR =
+  ZERO_VIEW_PREFIX + "re-run the diagram export for this folder in your repository, then reload the page.";
 
 function isGitHub404(err: unknown): boolean {
   return err instanceof GitHubApiError && err.statusCode === 404;
@@ -90,11 +135,8 @@ async function fetchBlobUtf8(
  * is covered by the existing Layer-1 honest-stale banner (#4963/#4976).
  */
 export async function GET(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -103,7 +145,7 @@ export async function GET(request: Request) {
   // workspace has an empty solo row. Resolve the active workspace once (kbRoot +
   // readiness gate), then resolve its repo coordinates for the SAME id.
   const serviceClient = createServiceClient();
-  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
   if (!access.ok) {
     return access.status === 404
       ? NextResponse.json({ error: "Workspace not found" }, { status: 404 })
@@ -117,17 +159,9 @@ export async function GET(request: Request) {
   // longer reads the on-disk clone, so we must NOT gate on clone filesystem
   // state (`isPathInWorkspace` against `kbRoot`) — a legitimately-shared dir can
   // be absent from a stale/empty local clone and would false-negative 400. A
-  // pure-string guard is both sufficient and correct: reject traversal (`..`),
-  // NUL, backslash, a leading slash, and the URL-meta chars (`?`/`#`) that would
-  // otherwise inject GitHub query params (e.g. `?ref=`) or truncate the path.
-  if (
-    requestedDir.includes("\0") ||
-    requestedDir.includes("..") ||
-    requestedDir.includes("\\") ||
-    requestedDir.includes("?") ||
-    requestedDir.includes("#") ||
-    requestedDir.startsWith("/")
-  ) {
+  // pure-string guard is both sufficient and correct (see `toGithubDir`).
+  const githubDir = toGithubDir(requestedDir);
+  if (githubDir === null) {
     return NextResponse.json({ error: "Invalid dir" }, { status: 400 });
   }
 
@@ -135,7 +169,7 @@ export async function GET(request: Request) {
   // reusing the membership-scoped resolver already wired in sync/upload). Pass
   // the pre-resolved active id so kbRoot + repo key to ONE membership decision.
   const repoMeta = await resolveActiveWorkspaceRepoMeta(
-    user.id,
+    userId,
     serviceClient,
     activeWorkspaceId,
   );
@@ -153,8 +187,7 @@ export async function GET(request: Request) {
   }
 
   const installationId = repoMeta.githubInstallationId;
-  const githubDir = `knowledge-base/${requestedDir}`;
-  const userLog = renameUserIdToHash({ userId: user.id });
+  const userLog = renameUserIdToHash({ userId });
 
   try {
     // 1. List the diagrams dir (one call) for per-file blob shas. A 404 here
@@ -202,21 +235,57 @@ export async function GET(request: Request) {
     } catch (err) {
       // The committed model is corrupt JSON — distinct from a GitHub-read
       // failure so the Sentry slug attributes the cause correctly.
-      reportSilentFallback(err, {
+      // Report a fixed Error, not `err`: V8's SyntaxError message quotes a slice
+      // of the input, i.e. of the customer's model, and would ship it to Sentry.
+      reportSilentFallback(new Error("model.likec4.json parse failed"), {
         feature: "c4-project-read",
         op: "model-parse-failed",
-        extra: { ...userLog, dir: requestedDir },
+        extra: { ...userLog, dir: requestedDir, errName: err instanceof Error ? err.name : "unknown" },
       });
       return NextResponse.json(
         { error: "Diagram model is corrupt — re-render to regenerate it." },
         { status: 502 },
       );
     }
-    const views = (dump as { views?: unknown }).views;
+    const views =
+      dump && typeof dump === "object"
+        ? (dump as { views?: unknown }).views
+        : undefined;
     const viewIds =
       views && typeof views === "object" && !Array.isArray(views)
         ? Object.keys(views)
         : [];
+
+    // Count elements only when there are no views: the common, healthy model
+    // skips the `Object.keys(elements)` pass.
+    const elementCount = viewIds.length === 0 ? c4ModelCounts(dump).elements : 0;
+    let diagnostics: Diagnostic[] = [];
+    if (elementCount > 0) {
+      diagnostics = [
+        {
+          message:
+            requestedDir === C4_DIAGRAMS_DIR
+              ? ZERO_VIEW_DIAGNOSTIC
+              : ZERO_VIEW_DIAGNOSTIC_OTHER_DIR,
+          line: MODEL_LEVEL_LINE,
+          sourceFsPath: C4_MODEL_JSON,
+        },
+      ];
+      // Debounced per workspace + model: every page load re-reads the model.
+      // `err = null` keeps the tags (#8629). The key is GitHub's canonical
+      // path, so `dir` spellings cannot fan out past the debounce.
+      mirrorWarnWithDebounce(
+        null,
+        {
+          feature: "c4-project-read",
+          op: "zero-view-model",
+          message: "c4 project read: committed model has elements but no views",
+          extra: { ...userLog, dir: requestedDir, modelPath: modelEntry.path, elementCount },
+        },
+        `${activeWorkspaceId}:${modelEntry.path}`,
+        "c4-project-read:zero-view-model",
+      );
+    }
 
     // 3. Raw `.c4` editor sources PLUS the directory index README (exact
     //    `README.md` match — NOT a blanket `.md` — so the `c4-model.md`
@@ -231,8 +300,16 @@ export async function GET(request: Request) {
           (e.name.endsWith(C4_SOURCE_EXT) || e.name === "README.md"),
       )
       .sort((a, b) => a.name.localeCompare(b.name));
-    const fetched = await Promise.all(
-      sourceEntries.map(async (entry) => {
+    // #8966: the stale banner is a RECOMPUTED fact, not a losable event. The
+    // newest model.likec4.json commit's dir subtree is content-diffed against
+    // the listing already in hand — survives dropped c4_diagram_saved frames,
+    // remounts, and out-of-band source pushes. `undefined` means "no verdict"
+    // (derivation failure, no model commit, or the in-flight save window) and
+    // is reported + omitted, NEVER normalized to false. Runs concurrent with
+    // the source fetch — both read `entries`, neither needs the other.
+    const [fetched, stale] = await Promise.all([
+      Promise.all(
+        sourceEntries.map(async (entry) => {
         try {
           const body = await fetchBlobUtf8(installationId, owner, repo, entry.sha);
           return [entry.name, body] as const;
@@ -246,13 +323,31 @@ export async function GET(request: Request) {
           );
           return null;
         }
+        }),
+      ),
+      deriveDiagramStale({
+        get: githubApiGet,
+        installationId,
+        owner,
+        repo,
+        githubDir,
+        currentEntries: entries,
       }),
-    );
+    ]);
     const sources: Record<string, string> = {};
     for (const kv of fetched) if (kv) sources[kv[0]] = kv[1];
 
     return NextResponse.json(
-      { dir: requestedDir, sources, dump, viewIds, diagnostics: [] },
+      {
+        dir: requestedDir,
+        sources,
+        dump,
+        viewIds,
+        diagnostics,
+        // Present only on a produced verdict — absent is "no information", and
+        // the client's frame/outcome state governs then (see c4-staleness.ts).
+        ...(stale !== undefined ? { stale } : {}),
+      },
       { status: 200, headers: { "Cache-Control": "private, no-cache" } },
     );
   } catch (error) {

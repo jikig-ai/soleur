@@ -43,6 +43,7 @@ Extend the Flagsmith identity model with an `orgId` trait, resolved from `worksp
 ### Segment Design
 
 One `org-targeted` segment (not N per-org segments):
+
 - Rule: `orgId IN [org-id-1, org-id-2, ...]`
 - Features attached to this segment evaluate to `true` only for identities whose `orgId` trait matches
 - Adding/removing an org = updating the segment rule via `/soleur:flag-set-role --target org`
@@ -50,6 +51,7 @@ One `org-targeted` segment (not N per-org segments):
 ### Cache Key Widening
 
 Replace the `Map<Role, ...>` (max 2 entries) with an LRU cache keyed on `${role}:${orgId}`:
+
 - Max entries: `parseInt(process.env.FLAGSMITH_CACHE_MAX_ENTRIES || '1000')`
 - TTL: 30s (unchanged from current)
 - Eviction: LRU by last-access timestamp

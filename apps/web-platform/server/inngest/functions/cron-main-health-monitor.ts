@@ -21,14 +21,23 @@
  * in the ephemeral GHA runner. This function ONLY dispatches; it holds nothing
  * but a short-lived, `actions: write`-scoped GitHub App installation token.
  *
- * Liveness (Design A — no own Sentry monitor):
+ * Liveness (Design A, SUPERSEDED 2026-08-09 by #7307 — the executor now has its
+ * own Sentry monitor; see `sentry_cron_monitor.main_health_monitor` in
+ * apps/web-platform/infra/sentry/cron-monitors.tf for the full reasoning):
  *  - Scheduler liveness: `cron-inngest-cron-watchdog` + the parity-guarded
  *    `EXPECTED_CRON_FUNCTIONS` manifest keep this cron in the watchdog's purview
  *    (NEW for this workflow — it had no scheduler-liveness alerting under raw
- *    GHA `schedule:`).
- *  - End-to-end liveness: if the dispatch never reaches the runner, the suite
- *    does not run and a broken `main` goes un-issued — the existing
- *    operator-visible absence signal this workflow already relies on.
+ *    GHA `schedule:`). UNCHANGED by #7307 — this arm was and remains correct.
+ *  - End-to-end liveness: Design A rested this on "a broken `main` goes
+ *    un-issued — the existing operator-visible absence signal". #7307 is that
+ *    argument's counterexample: absence-of-an-issue is only a signal if the
+ *    executor reliably FILES one when main breaks, and for four months it did
+ *    not (a job timeout is recorded `cancelled`, never `failure`, and `| tee`
+ *    under the default `bash -e {0}` shell discarded the suite's exit code).
+ *    "No issue appeared" was therefore indistinguishable from "main is healthy".
+ *    The executor workflow now posts a terminal Sentry heartbeat, so a run that
+ *    never happens — dropped dispatch, disabled workflow, unavailable runner —
+ *    pages on the missed check-in instead of passing for silence.
  *  - Dispatch error path: a token-mint / Octokit failure is reported loudly to
  *    the Sentry issues stream via `reportSilentFallback` (token redacted).
  */

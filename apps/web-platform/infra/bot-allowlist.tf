@@ -17,7 +17,7 @@
 # enums the v4.52.7 Terraform provider validates against). Casing matters:
 #
 #   - bic             Browser Integrity Check (PRIMARY blocker — heuristic
-#                     refuses AI-crawler-style UAs on Free plan)
+#                     refuses AI-crawler-style UAs)
 #   - securityLevel   IP-reputation based challenge/block (camelCase
 #                     intentional per CF's enum)
 #   - uaBlock         Any future User-Agent Blocking rules (camelCase per
@@ -36,10 +36,12 @@
 #      blocker on this zone; if enabled later, remediation is zone-wide
 #      disablement, not extension of this rule.
 #
-#   2. Super Bot Fight Mode phase `http_request_sbfm`. Pro+ plan only (this
-#      zone is Free) AND the phase literal is NOT in the v4.52.7 provider's
-#      `RulesetPhaseValues()` enum — adding it would fail `terraform
-#      validate`. Revisit on provider-v5 upgrade.
+#   2. Super Bot Fight Mode phase `http_request_sbfm`. The zone is on Pro
+#      (measured plan.legacy_id = "pro", 2026-09-27, #8754), so SBFM is live
+#      and its zone settings are declared in bot-management.tf. The phase
+#      literal is NOT in the v4.52.7 provider's `RulesetPhaseValues()` enum —
+#      adding it would fail `terraform validate`. Revisit on provider-v5
+#      upgrade.
 #
 #   3. (HISTORIC, now SKIPPED — see below.) Originally excluded because
 #      `waf=off` + assumed Managed Ruleset no-op. Post-apply probe showed
@@ -83,12 +85,12 @@ resource "cloudflare_ruleset" "allowlist_ai_crawlers" {
       "(lower(http.user_agent) contains \"perplexity-user\")",
       # `ccbot` would ideally use a word-boundary regex to avoid colliding
       # with UAs like `MyCCBot` / `RogueCCBot`, but the `matches` operator
-      # requires a CF Business plan or WAF Advanced (this zone is Free —
-      # apply fails with "not entitled"). Accept the plain-substring
+      # requires a CF Business plan or WAF Advanced (this zone is Pro, not
+      # Business — apply fails with "not entitled"). Accept the plain-substring
       # trade-off: allowlists real CCBot plus any `*ccbot*` spoof. Cost of
       # the false-positive: a spoofed scraper gets BIC/securityLevel
       # bypass it was already reaching the origin for. Retighten to the
-      # `(^|[^a-z])ccbot([^a-z]|$)` regex once the zone upgrades past Free.
+      # `(^|[^a-z])ccbot([^a-z]|$)` regex once the zone reaches Business.
       "(lower(http.user_agent) contains \"ccbot\")",
       "(lower(http.user_agent) contains \"google-extended\")",
       "(lower(http.user_agent) contains \"googleother\")",

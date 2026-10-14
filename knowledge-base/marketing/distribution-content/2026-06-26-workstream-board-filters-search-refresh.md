@@ -3,7 +3,7 @@ title: "Filter, search, and refresh your Workstream board"
 type: feature-launch
 publish_date: 2026-08-06
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#5661"
 ---
 

@@ -1,0 +1,12 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Page\n- Page URL: http://127.0.0.1:33567/page.html\n- Page Title: probe 7980\n### Snapshot\n- [Snapshot](./explicit-snap.yml)"
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 5
+}

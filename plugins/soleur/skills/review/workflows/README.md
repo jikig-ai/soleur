@@ -5,6 +5,14 @@ re-implementation of the core engine of the `soleur:review` skill. It is a
 **prototype for A/B comparison** against the prose-driven SKILL.md — not a
 replacement. Both can coexist.
 
+> **Known divergence:** `SKILL.md` §"Change Classification Gate" step 4 adds a
+> **`design-risk`** signal — a mechanism-introducing PR gets a design-validity
+> pass (simplicity + architecture, plus economics only on a cost claim) *before*
+> the full panel, with mandatory dedup of lenses that already ran. This port does
+> not implement it: its classify agent returns the four classes and the `triggers`
+> object only. A run driven from this script therefore skips the design-validity
+> ordering. The prose skill remains the default and the authority.
+
 ## What it does
 
 ```
@@ -44,7 +52,7 @@ Classify ──▶ Review ──▶ Verify ──▶ Synthesize ──▶ File
    **Untrusted-input hardening:** finding titles derive from the diff under
    review — potentially attacker-controlled PR content. The title is passed to
    `gh` as a shell argv, so it runs through `safeTitle()` (strips control chars
-   + shell metacharacters, caps length) and a constant `review: ` prefix
+   + shell metacharacters, caps length) and a constant `review: ` prefix <!-- markdownlint-disable-line MD038 -->
    (no leading `-` → no argv flag-smuggling); the body always goes via
    `--body-file` so it is never shell-parsed. The agent writes both to temp
    files with its Write tool rather than receiving an interpolated command.
@@ -78,6 +86,7 @@ resume an interrupted run, add `resumeFromRunId: "<runId>"` — unchanged
 |---|---|---|
 | Class → fan-out decision | Model interprets a bash decision tree each run | Deterministic JS lookup (`CLASS_DIMENSIONS` + `conditionalDimensions`) |
 | Conditional agents | Prose "if PR contains X, spawn agent Y" | `triggers` flags → deterministic dimension list |
+| Risk-tier panel scaling | SKILL delegates to `references/risk-tier-and-fix-rounds.md` | `resolveTier` (fail-closed sensitive-path clamp) + `scaleAlwaysOn` trigger-gate {data-integrity, agent-native, performance} at `none` tier (ADR-267) |
 | Per-finding verification | None — CONCUR fires only on scope-out *filings* | Every finding adversarially refuted (1–3 skeptics) before surfacing |
 | Review→verify scheduling | Implicit barrier (waits for all reviewers) | No-barrier `pipeline()` — verify starts per-dimension |
 | Disposition (fix vs file) | Prose cost-of-filing gate, model-applied | `disposition()` — code, auditable, identical every run |
@@ -88,23 +97,24 @@ resume an interrupted run, add `resumeFromRunId: "<runId>"` — unchanged
 
 ## Ported so far
 
-- always-on dimension agents (class-gated 2/4/8 fan-out)
-- conditional dimensions (Rails ×2, migration ×2, test-design, semgrep-SAST,
++ always-on dimension agents (class-gated 2/4/8 fan-out)
++ conditional dimensions (Rails ×2, migration ×2, test-design, semgrep-SAST,
   shellcheck (bash), real `gdpr-gate` skill, anti-slop Tier-1, user-impact)
   from deterministic `triggers`
-- deterministic-tool findings auto-confirmed (skip adversarial verify)
-- 1–3 skeptic adversarial verification, no-barrier pipeline
-- provenance-driven deterministic disposition
-- CONCUR-gated `deferred-scope-out` filing (dry-run by default; `{ file: true }`
++ deterministic-tool findings auto-confirmed (skip adversarial verify)
++ 1–3 skeptic adversarial verification, no-barrier pipeline
++ provenance-driven deterministic disposition
++ CONCUR-gated `deferred-scope-out` filing (dry-run by default; `{ file: true }`
   to create issues)
-- `budget` floor on the verify fan-out with logged UNVERIFIED coverage
++ `budget` floor on the verify fan-out with logged UNVERIFIED coverage
 
 ### Deterministic vs. judgment findings
 
 Dimensions split into two kinds:
-- **LLM-judgment** (the reviewer agents) → every finding is adversarially
+
++ **LLM-judgment** (the reviewer agents) → every finding is adversarially
   verified (refute-by-default) before it surfaces.
-- **Deterministic tools/skills** (`semgrep`, `shellcheck`, `anti-slop`, the real
++ **Deterministic tools/skills** (`semgrep`, `shellcheck`, `anti-slop`, the real
   `gdpr-gate`) → findings are **auto-confirmed as ground truth**, skipping the
   verify stage. Refuting an `SC2086` or a `BRAND-RAW-HEX` hit would be both wrong
   and wasteful; the tool is authoritative. These carry `deterministic: true`.
@@ -115,14 +125,19 @@ tree-sitter bash parser is vacuous — SKILL.md note). `anti-slop` high-severity
 
 ## Still NOT ported (next increments)
 
-- **Follow-through auto-wiring** — filed scope-outs don't yet scaffold the
++ **Follow-through auto-wiring** — filed scope-outs don't yet scaffold the
   `<!-- soleur:followthrough -->` directive + verification script + `chmod`.
-- **semgrep `ensure-semgrep.sh` exit-code handling** — the `semgrep` dimension
++ **semgrep `ensure-semgrep.sh` exit-code handling** — the `semgrep` dimension
   prompts the bootstrap but doesn't hard-abort the run on a non-zero installer
   exit (the SKILL does).
-- **Pipeline-mode compact-marker output** for `one-shot` / `work` callers (the
++ **Pipeline-mode compact-marker output** for `one-shot` / `work` callers (the
   workflow returns structured JSON instead, which an orchestrator consumes
   directly — arguably moot in workflow form).
++ **Fix-commit targeted rounds (ADR-267)** — `--fix-round`/`--since` arg
+  handling, `PANEL_SHA` snapshotting, and the `structural-enumeration` seat
+  (the `aggregate pattern` row's guard-shaped structural pass, a SKILL-only
+  `general-purpose` spawn) exist only in the prose skill; the workflow port
+  resolves the tier and gates the none-tier panel but does not run fix rounds.
 
 ## Validation
 

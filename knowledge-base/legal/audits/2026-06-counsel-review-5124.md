@@ -25,6 +25,7 @@ This audit file is the load-bearing evidence for the counsel-review gate on PR #
 **Scope of review:** the 2026-06-10 amendment banner and the Page URL/slug substitutions. The Art. 6(1)(f) three-part test (purpose / necessity / balancing) is asserted to apply identically to the new Page identity — the data-subject population definition ("members who follow or engage with the Page") is Page-relative and carries over without re-derivation.
 
 **Particular attention requested on:**
+
 1. Whether a Page-identity change requires a fresh balancing analysis (assessed: no — the processing, audience, and data categories are identical; the new Page starts at zero followers so the initial population is empty).
 2. Whether the Jikigai Page's continued existence as a separate, non-publication surface creates a second processing activity (assessed: no — no Soleur-pipeline processing occurs against it; any future Jikigai-page activity would be a new PA).
 

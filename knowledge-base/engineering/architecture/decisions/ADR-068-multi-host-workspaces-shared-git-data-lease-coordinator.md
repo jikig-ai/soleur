@@ -2,7 +2,7 @@
 
 - **Status:** adopting — flips to `accepted` when the GA phase (Phase 3) lands in prod. The `replicas = 1` invariant ADR-027 codified remains operationally in force until then; this ADR is the governance gate ADR-027 required for raising it.
 - **Date:** 2026-06-30
-- **Issue:** #5274 (the explicit re-evaluation trigger); epic plan `knowledge-base/project/plans/2026-06-29-feat-multi-host-workspaces-layer-plan.md` (PR #5710). Related: #5240, #5273, #5275, #5338, #5546, #5547, #5723.
+- **Issue:** #5274 (the explicit re-evaluation trigger); epic plan `knowledge-base/project/plans/archive/20261013-032858-2026-06-29-feat-multi-host-workspaces-layer-plan.md` (PR #5710). Related: #5240, #5273, #5275, #5338, #5546, #5547, #5723.
 - **Supersedes:** **ADR-027** (`ADR-027-process-local-state-for-runners.md` — `superseded-by: ADR-068`). ADR-027 self-mandates supersession for any multi-replica diff; this ADR is that diff and carries the Bucket-A migration.
 - **Re-opens:** **ADR-059** (`ADR-059-stream-since-disconnect-replay-buffer.md`) — it rejected Redis because "no multi-instance requirement exists." This ADR creates that requirement; the replay buffer migrates to Redis in Phase 4a.
 - **Lineage:** AP-013 "Process-local state for runner sessions" → ADR-027 (the governing tier principle this ADR supersedes); ADR-059 (in-process replay buffer); ADR-033 (credential-heavy real-stack execution — the pure-TS Inngest cron substrate for lease reclaim); ADR-038 (team workspaces / workspace-as-grain); ADR-044 (workspace-as-source-of-truth owner-gate, `is_workspace_member`); ADR-030 (self-hosted Inngest Redis — the AOF + `--requirepass` precedent the **distinct** session-Redis reuses). Migration precedents: `029_plan_tier_and_concurrency_slots.sql` / `093_*` (`acquire_conversation_slot` fenced-upsert shape), #5338 (`user_session_state.current_workspace_id` lazy rehydrate).
@@ -63,7 +63,7 @@ serialization problem — it is a routing problem.**
 - **Option C — Ceph / Kubernetes / shared-NFS for the live working tree.**
   Rejected — shared POSIX storage under a live git index still corrupts on
   concurrent writers (the git-index property above); k8s/Ceph buys an orchestration
-  + storage substrate whose operational cost dwarfs the need. The "light path" (no
+  - storage substrate whose operational cost dwarfs the need. The "light path" (no
   Ceph/k8s) was an explicit operator + COO constraint to bound operational burden.
 - **Option D — Cloudflare sticky-cookie / Load-Balancer affinity.** Rejected as the
   routing authority — sticky cookies pin to a **dead** host on crash and are not
@@ -171,7 +171,10 @@ fixes for every per-step plan:
 > through the transport key). **Resolution: a dedicated, separately-keyed SSH
 > forced-command provisioning path.** A SECOND ED25519 key on the git-data host —
 > distinct from the git-shell transport key, same `git` OS user (repo root is
-> `git:git 0750`; per-key `command=` overrides the login shell) — carries a FIXED
+> `git:git 0750`; per-key `command=` is RUN BY the login shell as `<shell> -c "<command>"`, so
+> the login shell must be a real shell — git-shell refuses it with `fatal: unrecognized
+> command`, rc=128, measured in the pinned image and corrected by #8043 to `/bin/sh`; the
+> confinement is the forced-command map, never the shell) — carries a FIXED
 > forced command `command="/usr/local/bin/git-data-provision.sh"`. The wrapper
 > reads `workspace_id` from `SSH_ORIGINAL_COMMAND` as an OPAQUE argument (validated,
 > NEVER `eval`'d), enforces `^[A-Za-z0-9._-]+$` and rejects `.`/`..`/slash
@@ -225,7 +228,8 @@ fixes for every per-step plan:
    (IaC option (c)), which proxies to the lease-holder over the private net.
 
 6. **Cross-tenant isolation is per-`workspace_id`, enforced at every new boundary.**
-   The bwrap `denyRead` guard (`agent-runner-sandbox-config.ts:106`, per-sibling since ADR-075)
+   The bwrap `denyRead` guard (`agent-runner-sandbox-config.ts`, constant parent deny since the
+   2026-10-07 ADR-075 addendum / #5862)
    does **not** cover remote git-data — the bare-repo fetch runs in the Node process,
    outside the sandbox. Network access to git-data MUST carry a per-`workspace_id`
    credential / mTLS (reuse the `resolve_workspace_installation_id` membership-RPC
@@ -233,7 +237,7 @@ fixes for every per-step plan:
    cred**; encryption-at-rest on the git-data volume. The session-Redis replay frames
    carry **user content** (assistant output / tool results / file content), so they
    require TLS + per-`workspace_id` key namespacing + an app-layer scope-check on read
-   + TTL ≤ conversation retention. Coordinator↔host is mTLS and the **owning host
+   - TTL ≤ conversation retention. Coordinator↔host is mTLS and the **owning host
    re-verifies** the requester owns the target conversation/lease before honoring any
    forwarded op (defense-in-depth, never trust-the-coordinator).
 
@@ -519,6 +523,8 @@ fixes for every per-step plan:
    GA-blocking path. The residual shared-git-data-host SPOF at the Phase-3 GA line is
    accepted with honest reconnect; #5723 (Garage) closes it post-GA (OQ1).
 
+   > **Ledger at birth (2026-10-12).** The session-Redis PR must add an `encryption-posture-ledger.json` row for the new store in the same change. A ledger row for it existed before the store did and was removed as describing nothing; see `encryption-posture-audit-2026-07-23.md` §`redis.session_store — designed, not provisioned`. For an IaC volume `lint-encryption-posture.py` already refuses an unledgered `hcloud_volume`; for the Redis client it refuses a Redis dependency with no `redis.*` ledger row.
+
 **Staged delivery (each phase is its own `/soleur:plan` + spec + PR):** Phase 0
 (this ADR + C4) → Phase 1 (host-local correctness, no new infra, still `replicas=1`)
 → Phase 2 (split git-data/worktrees + lease + fencing) → **Phase 3 (2nd host +
@@ -540,7 +546,8 @@ Phase 4b (continuous checkpoint).
 > operator maintenance-window cutover, **never** as a routine per-PR `-target=`
 > allow-list edit — adding `hcloud_server.web` to the unattended per-PR target set
 > forces a power-off reboot of the running prod host (it carries `placement_group_id`
-> + `for_each`; see `server.tf`) and the Cloudflare-scoped, `delete`-only destroy-guard
+>
+> - `for_each`; see `server.tf`) and the Cloudflare-scoped, `delete`-only destroy-guard
 > is blind to that in-place reboot. After that maintenance-window apply consumes the moves, no
 > pending moves remain and the targeted CI plan self-heals with zero workflow change.
 > A recurrence guard lives in `plugins/soleur/test/terraform-target-parity.test.ts`
@@ -599,7 +606,7 @@ Phase 4b (continuous checkpoint).
 > serves purely locally on its own `/workspaces` volume, so any live request round-robined
 > to web-2 hits an empty workspace — a single-user (workspace-gone) incident. A truly
 > zero-downtime web-1 reboot therefore requires (b)+(c), i.e. it IS the GA line (§8), not
-> a prerequisite. Plan: `knowledge-base/project/plans/2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md`.
+> a prerequisite. Plan: `knowledge-base/project/plans/archive/20261013-041741-2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md`.
 
 > **Amendment (2026-07-03, #5966 — deep-readiness endpoint / Sharp Edge C1).** The blue-green
 > amendment above (b) fixes the LB monitor as reachability-only on `/health` — correct, but it
@@ -660,7 +667,7 @@ Phase 4b (continuous checkpoint).
 > - **Necessary-but-not-sufficient.** `/internal/readyz` is an ADDITIONAL pre-pool gate layered on
 >   top of the unchanged hard invariant (c) (relay active AND git-data cut over). Shipping it does
 >   NOT relax (c) or by itself unlock pooling. Plan:
->   `knowledge-base/project/plans/2026-07-03-feat-deep-readiness-endpoint-workspaces-mount-plan.md`.
+>   `knowledge-base/project/plans/archive/20261013-041741-2026-07-03-feat-deep-readiness-endpoint-workspaces-mount-plan.md`.
 
 > **Amendment (2026-07-05, #6055 — web-2 must boot post-#6055 cloud-init before pooling).** A new
 > pre-pool gate, layered on the §(c) hard invariant above (necessary, not sufficient — does NOT
@@ -754,7 +761,8 @@ Phase 4b (continuous checkpoint).
 > over injected env (owner-side relay: `SOLEUR_PROXY_BIND` + `SOLEUR_PROXY_PEER_ALLOWLIST` +
 > `SOLEUR_HOST_ROSTER` with web-2 in-roster and allowlist ⊆ roster, parser-parity with
 > `parseProxyPeerAllowlist`/`loadHostRoster`; git-data cut-over: `GIT_DATA_STORE_ENABLED=="true"`
-> + a LUKS-cutover soak marker). On success it prints **`requires_runtime_bind_probe=true`** and a
+>
+> - a LUKS-cutover soak marker). On success it prints **`requires_runtime_bind_probe=true`** and a
 > SHAPE-ONLY banner, so no consumer — CI or the orchestrator — can mistake exit 0 for weight-flip
 > authorization. It **defines the `GIT_DATA_LUKS_CUTOVER_AT` soak-marker contract**: a Doppler
 > `prd` ISO-8601 key written by the deferred cutover, satisfied only when
@@ -799,7 +807,7 @@ Phase 4b (continuous checkpoint).
 > **Status:** UNCHANGED — this ADR stays `adopting`; the warm-standby + gate are inert-additive
 > (no LB weight, no reboot, no ingress change on merge), and the flip to `accepted` still gates on
 > the Phase-3 GA soak (AC11). Plan:
-> `knowledge-base/project/plans/2026-07-04-feat-autonomous-multihost-ga-warm-standby-and-gate-plan.md`.
+> `knowledge-base/project/plans/archive/20261013-041741-2026-07-04-feat-autonomous-multihost-ga-warm-standby-and-gate-plan.md`.
 
 > **Amendment (2026-07-05, #5887 — autonomous no-SSH web-2 host bootstrap via scoped
 > `-replace`).** The first live warm-standby dispatch (2026-07-05) attached web-2's private-net
@@ -851,7 +859,7 @@ Phase 4b (continuous checkpoint).
 > the recreate/boot pins an `@sha256` digest (not `:latest`) — see the `## C4 impact` refinement
 > below. **Status:** UNCHANGED — this stays additive/inert on merge (the recreate is a post-merge
 > menu-ack dispatch, never runs pre-merge). Plan:
-> `knowledge-base/project/plans/2026-07-05-feat-web-2-recreate-bootstrap-plan.md`.
+> `knowledge-base/project/plans/archive/20261013-041741-2026-07-05-feat-web-2-recreate-bootstrap-plan.md`.
 
 > **Amendment (2026-07-05, #6051/#6040 — off-host verify auto-retries the fresh-boot degraded
 > window; warm_standby de-duplicated onto the shared script).** The first live `web-2-recreate`
@@ -899,7 +907,7 @@ Phase 4b (continuous checkpoint).
 > **C4 impact:** none — internal CI verify control-flow only; no new actor/system/container/edge
 > (verified against `model.c4`/`views.c4`/`spec.c4`). **Status:** UNCHANGED — additive/inert on merge
 > (both dispatches are operator-gated, never run pre-merge). `Ref #6051`, `Ref #6040`. Plan:
-> `knowledge-base/project/plans/2026-07-05-fix-web2-recreate-fanout-verify-retry-and-warm-standby-dedup-plan.md`.
+> `knowledge-base/project/plans/archive/20261013-041741-2026-07-05-fix-web2-recreate-fanout-verify-retry-and-warm-standby-dedup-plan.md`.
 >
 > **Amendment (2026-07-05, #6060 item (c) — cross-pipeline web-1-swap serialization).** Closes
 > FINDING 1 from #6051's review: the frequent push-release `deploy` job
@@ -958,7 +966,7 @@ Phase 4b (continuous checkpoint).
 > concurrency metadata, additive/inert on merge; **amend, not a reversal** (no prior decision
 > changes). Items (a) truly-zero-downtime swap / web-2-only path and (b) private-net web-2
 > post-accept health probe remain OPEN on #6060 (GA-cutover / owner-side-relay scoped). `Ref #6060`.
-> Plan: `knowledge-base/project/plans/2026-07-05-fix-cross-pipeline-web-1-swap-serialization-plan.md`.
+> Plan: `knowledge-base/project/plans/archive/20261013-041741-2026-07-05-fix-cross-pipeline-web-1-swap-serialization-plan.md`.
 
 > **Amendment (2026-07-15, #6425 — the tunnel carries ONE connector, and this ADR assumed otherwise).**
 > This ADR's Phase-3 verification design rests on a premise about the shared Cloudflare Tunnel
@@ -1011,7 +1019,7 @@ Phase 4b (continuous checkpoint).
 > (`tunnel.tf:4`), which does not traverse the tunnel being constrained.
 >
 > **Status:** AMEND, not a reversal — Option B stands, and no prior decision changes. `Ref #6425`.
-> Plan: `knowledge-base/project/plans/2026-07-15-fix-web2-tunnel-depool-host-id-plan.md`.
+> Plan: `knowledge-base/project/plans/archive/20261013-041741-2026-07-15-fix-web2-tunnel-depool-host-id-plan.md`.
 
 > **Amendment (operator decision, 2026-07-17, #6538/#6463 — the warm standby is retired).**
 > `web-2` (`fsn1`, `10.0.1.11`) — the ADR-068 Phase 3 warm standby, provisioned in the
@@ -1034,6 +1042,7 @@ Phase 4b (continuous checkpoint).
 > `isGitDataStoreEnabled()` prerequisite), so #6459 cannot start until #6570 lands.
 >
 > **Alternatives considered (both rejected).**
+>
 > 1. **Keep web-2 as-is (a non-rebuildable cross-DC standby).** Rejected: `cx33` — web-2's
 >    type — is orderable in **exactly one datacenter (`hel1-dc2`)** and on 2026-07-15 was
 >    orderable in **zero** (#6463). A `-replace` of web-2 would destroy it and fail to
@@ -1052,7 +1061,7 @@ Phase 4b (continuous checkpoint).
 >
 > **Status:** AMEND, not a reversal — Option A / Approach A stand; the GA end-state
 > (§8) is unchanged. `Ref #6538`, `Ref #6463`. Plan:
-> `knowledge-base/project/plans/2026-07-16-chore-retire-web-2-fsn1-orphan-plan.md`.
+> `knowledge-base/project/plans/archive/20261013-041741-2026-07-16-chore-retire-web-2-fsn1-orphan-plan.md`.
 
 > **Amendment (2026-07-20, #6718 — factual status: both web-2 dispatch jobs are now unrunnable,
 > and the warm-standby apply cannot birth a host).** No decision is reversed here; this records
@@ -1271,6 +1280,39 @@ wrong-arch binary. That is why this was a real code change and not a var flip.
 | **D9** | **This ADR authorizes no birth.** The repin changes declared state only. |
 | **D10** | **Born-on-LUKS rejected** — keep the additive cutover topology (plaintext source volume + fresh LUKS target, flipped by `git-data-cutover.sh`). Revisiting it would rewrite a cutover path that is already built and tested for a host that does not exist yet. |
 
+**Addendum — 2026-09-15 (#6680).** The access path and root credential for this cutover, and for every
+rotation cutover D10 keeps on the same route, are decided in
+[ADR-220](./ADR-220-git-data-root-access-via-web-1-jump-and-a-dedicated-terraform-minted-key.md):
+a jump through web-1's existing `ssh.` ingress, and a dedicated Terraform-minted root key provisioned
+by #8189. Rotation cutovers inherit ADR-220's rule that the read credential is scoped to the window,
+and they need **no host replace per rotation**. Only the first key delivery rides a git-data replace.
+Rotations against a populated store stay gated on #7226 (host-key pinning), per ADR-220 D4.
+
+> **Superseded 2026-09-15 (#8189), as to the window-scoped read credential:** the read token has no
+> window and does not expire, and the root key persists across replaces. Rotation cutovers still need no
+> replace for access. The real cutover route itself is being rebuilt under #8211, and the first real
+> cutover needs a fresh replace plus a `GIT_DATA_LUKS_KEY` rotation. See ADR-220, "Amendment log".
+>
+> **Amended 2026-09-21 (#7226, PR #8511):** host-key pinning is decided in
+> [ADR-237](./ADR-237-ssh-host-keys-are-pinned.md); this gate is discharged when ADR-237 reaches
+> `accepted` (its post-merge step 4), and every git-data replace now also rotates the host key.
+>
+> **Superseded 2026-09-23 (#8211, PR #8564), as to D10 in full:** born-on-LUKS is **adopted**, in
+> [ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md). D10's stated ground — that revisiting
+> it "would rewrite a cutover path that is already built and tested" — is false today: #8189 deleted
+> that path, and it had never run (ADR-220, Context). The git-data render now always mounts
+> `/dev/mapper/git-data` at `/mnt/git-data`, there is no plaintext/LUKS selector and no additive
+> cutover topology, and the serving change rides ADR-237's post-merge step 3 `git_data_host_replace`
+> while the store is empty and `GIT_DATA_STORE_ENABLED` is off. The plaintext volume
+> `hcloud_volume.git_data` is retained, read once per instance read-only to prove it holds no
+> repository, and never mounted after boot. Read ADR-239 for the rationale, the consequences (there
+> is no rollback to plaintext, and copy mode is deferred to #8571) and the alternatives; this marker
+> records only that D10 no longer governs.
+
+**Correction — 2026-09-15 (#6680).** The "Inngest-dispatches-GHA" claim in the 2026-07-02 Phase 3 GA
+amendment, item (b), is false for the git-data cutover: `git-data-cutover.yml` is dispatched by hand
+only, and no dispatcher exists.
+
 ### Why D7 is mandatory
 
 Terraform **prunes an unreferenced data source under `-target=`** (probed against the pinned
@@ -1363,8 +1405,13 @@ from one never written, and its failure mode is an OOM weeks later on the push p
 **Not upsized to `ccx13`** (+$304.56/yr, and it would consume 2 of 8 dedicated vCPUs):
 over-provisions against no measurement.
 
-**`cx23`/`cx33`/`cax11` are not candidates** — all out of stock in all three EU DCs at the
+**`cx23`/`cx33`/`cax11` were not candidates** — all out of stock in all three EU DCs at the
 live 2026-07-27 probe. A host cannot be born on a type nobody will sell.
+> **Re-probed 2026-08-06 (#7309):** `cx23` is ✓ in all three EU DCs and `cx33` is ✓ in
+> `nbg1-dc3`/`fsn1-dc14` (✗ in `hel1-dc2`); `cax11` remains ✗ everywhere. The `cpx22`
+> DECISION is unaffected — it was made on stock DURABILITY, not on a single reading, and
+> availability has since flipped in both directions. Recorded so the ✗ marks above are
+> not re-cited as current.
 
 ### The claim this addendum retires
 
@@ -1389,3 +1436,12 @@ plaintext git object data paged out from under the LUKS posture the whole `git_d
 apparatus exists to establish. Encrypted swap (random-key dm-crypt) would work but adds a
 second crypt device to a host already barred from ADR-115's reboot primitive. **Bound memory
 instead** — which is what `MemoryMax=`/`MemorySwapMax=0` on the gc unit do.
+
+## Amendment — 2026-09-23 (#8611, ADR-243)
+
+Adding a second host that serves `/api/inngest` step calls reopens ADR-243 §2 (the process-local
+single-flight guard that stops duplicate paid Claude sessions assumes one step-executing host).
+
+## Addendum — 2026-10-02 (#9358)
+
+`apps/web-platform/infra/lb-weight-gate-with-marker.sh` is the Phase-6 sourcing entry for the workspaces cutover marker; `lb-weight-gate.sh` stays env-only. See the ADR-263 addendum of the same date.

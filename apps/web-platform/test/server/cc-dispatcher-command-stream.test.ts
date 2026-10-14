@@ -49,7 +49,7 @@ function makeAssistant(
     message: {
       id: "msg_1",
       role: "assistant",
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-5-5",
       stop_reason: null,
       stop_sequence: null,
       type: "message",
@@ -134,7 +134,7 @@ function createMockQuery() {
   const q: Mutable<Partial<Query>> = {
     ...(iter as unknown as Query),
     close: () => finish(),
-    interrupt: vi.fn(async () => {}),
+    interrupt: vi.fn(async () => undefined),
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     setMaxThinkingTokens: vi.fn(async () => {}),

@@ -13,6 +13,7 @@
 // authenticating with Supabase.
 
 import { getFlag } from "@/lib/feature-flags/server";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 const SLOTS: ReadonlyArray<1 | 2 | 3> = [1, 2, 3];
@@ -38,12 +39,13 @@ export function DevSignInPanel() {
             method="post"
           >
             <input type="hidden" name="slot" value={slot} />
-            <button
+            <Button
+              variant="outlined"
               type="submit"
-              className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2 text-sm text-soleur-text-secondary hover:border-soleur-border-emphasized hover:text-soleur-text-primary"
+              className="w-full text-soleur-text-secondary hover:border-soleur-border-emphasized hover:text-soleur-text-primary"
             >
               Sign in as dev-{slot}
-            </button>
+            </Button>
           </form>
         ))}
       </div>

@@ -3,6 +3,10 @@ name: harvest-debt
 description: "This skill should be used when harvesting inline SOLEUR-DEBT: markers from the codebase into a ledger grouped by file, flagging markers with no upgrade trigger."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Harvest Inline Deferral Markers
 
 Read-only harvester for inline `SOLEUR-DEBT:` deferral markers. It makes the
@@ -11,8 +15,8 @@ become permanent. It complements — never duplicates — the reactive
 [technical-debt ledger](../../../../knowledge-base/project/learnings/technical-debt/README.md):
 
 - **harvest-debt (this skill)** — SURFACE inline markers where they live, in code.
-- [/soleur:compound](../compound-capture/SKILL.md) — PROMOTE a worth-tracking marker into a ledger entry.
-- [/soleur:resolve-debt](../resolve-debt/SKILL.md) — CLOSE a ledger entry with a linked GitHub issue.
+- [soleur:compound](../compound-capture/SKILL.md) — PROMOTE a worth-tracking marker into a ledger entry.
+- [soleur:resolve-debt](../resolve-debt/SKILL.md) — CLOSE a ledger entry with a linked GitHub issue.
 
 It writes nothing and closes nothing; promotion and closure stay deliberate acts.
 
@@ -41,7 +45,7 @@ converting every shortcut into phantom backlog.
 ## Run
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/harvest-debt/scripts/harvest-debt.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/harvest-debt/scripts/harvest-debt.sh"
 ```
 
 Run from the repo root. The harvester ([harvest-debt.sh](./scripts/harvest-debt.sh)):
@@ -58,8 +62,8 @@ Run from the repo root. The harvester ([harvest-debt.sh](./scripts/harvest-debt.
 
 For each surfaced marker, decide:
 
-- **Worth tracking** → run [/soleur:compound](../compound-capture/SKILL.md) to promote it
-  into a `technical-debt/` ledger entry, then [/soleur:resolve-debt](../resolve-debt/SKILL.md)
+- **Worth tracking** → run [soleur:compound](../compound-capture/SKILL.md) to promote it
+  into a `technical-debt/` ledger entry, then [soleur:resolve-debt](../resolve-debt/SKILL.md)
   to close it with a linked issue once the upgrade trigger fires.
 - **`no-trigger`** → add the missing upgrade trigger to the comment, or delete the
   marker if the shortcut is now permanent and accepted.

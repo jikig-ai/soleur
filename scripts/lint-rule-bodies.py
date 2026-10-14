@@ -104,12 +104,29 @@ POINTER_LINE_RE = re.compile(r"^- \[id: [a-z0-9-]+\](?:\s+\[[^\]]+\])*\s*$")
 GATED_PREFIX_RE = re.compile(r"^(hr|wg)-")
 # Enforcement tags whose presence escalates a changed body to a louder
 # mandatory-human-review annotation (the ack is required regardless).
-SECURITY_TAG_MARKERS = ("[compliance-tier]", "[hook-enforced", "[skill-enforced")
+#
+# `[mandates-filing]` is not an enforcement tag like its siblings — it does not
+# describe how THIS rule is enforced. It grants the rule's filings an exemption
+# from a DIFFERENT gate (net-issue-flow), so adding or dropping it changes what
+# that gate will let through. Dropping it is the dangerous direction and is
+# silent otherwise: the exemption simply stops matching and the only visible
+# symptom is a `Mandating rules: N` count nobody is watching. Listing it here
+# makes both directions loud. See ADR-155.
+SECURITY_TAG_MARKERS = (
+    "[compliance-tier]",
+    "[hook-enforced",
+    "[skill-enforced",
+    "[mandates-filing]",
+)
 DELETED_TOKEN = "DELETED"
 
 
 def _normalize(line: str) -> str:
-    """Collapse all whitespace runs to single spaces and strip the ends."""
+    """Collapse all whitespace runs to single spaces and strip the ends.
+
+    scripts/lint-migrated-rule-ids.sh `hash_text` must agree with this on every body it accepts
+    (it refuses non-ASCII whitespace, the one class where `tr` and `str.split()` differ).
+    """
     return " ".join(line.split())
 
 
@@ -245,6 +262,149 @@ def load_acks(path: Path) -> dict[str, set[str]]:
     if not path.exists():
         return {}
     return parse_acks(path.read_text(encoding="utf-8-sig"))
+
+
+# MIGRATED BODIES (#8030). A rule migrated out of AGENTS.rules.md leaves this
+# file's reach (SIDECARS), so its body hash rides in column 5 of the migrated
+# registry instead. scripts/lint-migrated-rule-ids.sh proves the row matches the
+# home NOW; only this gate can prove the row did not move WITH a weakening, because
+# only this gate diffs against the merge-base. Grammar mirrors that guard's ROW_RE
+# (it owns grammar and placement; a row this regex cannot read is its finding).
+MIGRATED_REL = Path("scripts") / "migrated-rule-ids.txt"
+MIGRATED_ROW_RE = re.compile(
+    r"^([a-z0-9][a-z0-9-]{2,79})\s*\|\s*\d{4}-\d{2}-\d{2}\s*\|\s*#\d+\s*\|"
+    r"\s*(.+ :: #{1,6} .+?)\s*\|\s*([0-9a-f]{64})\s*$"
+)
+# Pre-#8175 rows carried no hash column; such a base row is an id with no anchor.
+MIGRATED_LEGACY_ROW_RE = re.compile(r"^([a-z0-9][a-z0-9-]{2,79})\s*\|")
+# A distinct token: every migrated id already holds a historical `DELETED` ack
+# from its migration, and acks are sets, so a second `DELETED` row could never
+# read as NEW in this diff.
+MIGRATED_ROW_DELETED_TOKEN = "MIGRATED-ROW-DELETED"
+
+
+def parse_migrated_rows(text: str) -> tuple[dict[str, tuple[str, str]], set[str]]:
+    """Return ({id: (body_sha256, "path :: heading")} for hashed rows, {every id with a row})."""
+    hashed: dict[str, tuple[str, str]] = {}
+    ids: set[str] = set()
+    for line in text.splitlines():
+        line = line.rstrip("\r")
+        if not line or line.startswith("#"):
+            continue
+        m = MIGRATED_ROW_RE.match(line)
+        if m:
+            hashed[m.group(1)] = (m.group(3), " ".join(m.group(2).split()))
+            ids.add(m.group(1))
+            continue
+        legacy = MIGRATED_LEGACY_ROW_RE.match(line)
+        if legacy:
+            ids.add(legacy.group(1))
+    return hashed, ids
+
+
+def migrated_body_hash(corpus_line: str) -> str:
+    """Hash a corpus body line the way the registry records it: without `- `."""
+    return _sha256(_normalize(corpus_line[2:]))
+
+
+def any_body_line(text: str, rid: str) -> str | None:
+    """First body line for `rid` in any section and with any prefix.
+
+    Not `parse_bodies`: migrated ids include `cq-*`/`rf-*`, which the gated
+    parse deliberately never admits.
+    """
+    needle = f"[id: {rid}]"
+    for line in text.splitlines():
+        if line.startswith("- ") and needle in line and not POINTER_LINE_RE.match(line):
+            return line
+    return None
+
+
+def check_migrated_rows(
+    root: Path,
+    base_commit: str,
+    base_corpus: str,
+    new_acks,
+    pr_ref: str,
+) -> list[str]:
+    errors: list[str] = []
+    head_path = root / MIGRATED_REL
+    head_text = head_path.read_text(encoding="utf-8") if head_path.exists() else ""
+    base_text = _git_show(root, base_commit, str(MIGRATED_REL)) or ""
+    head_rows, head_ids = parse_migrated_rows(head_text)
+    base_rows, base_ids = parse_migrated_rows(base_text)
+
+    def review(rid: str, what: str) -> None:
+        print(
+            f"::error::rule-body-lint: migrated rule {rid} {what} — mandatory-human-review.",
+            file=sys.stderr,
+        )
+
+    # Every HEAD row carries a hash. The legacy carve-out below is for BASE rows only; a HEAD
+    # row demoted to four fields would otherwise be neither changed nor removed here.
+    for rid in sorted(head_ids - set(head_rows)):
+        errors.append(
+            f"::error::rule-body-lint: migrated row {rid} in {MIGRATED_REL} has no body-sha256 "
+            "column. Every row carries one; print it with "
+            f"`bash scripts/lint-migrated-rule-ids.sh --print-hash {rid}`."
+        )
+
+    for rid, (head_hash, head_loc) in head_rows.items():
+        if rid in base_rows:
+            base_hash, base_loc = base_rows[rid]
+            if base_loc != head_loc:
+                # Moving a body away from the skill that enforces it breaks the premise the
+                # migration was accepted on, with the body hash unchanged. The token names the
+                # destination so a later, different move needs its own ack.
+                token = "RELOCATED-" + _sha256(head_loc)[:16]
+                review(rid, f"moved home ({base_loc} -> {head_loc})")
+                if token not in new_acks(rid):
+                    errors.append(
+                        f"::error::rule-body-lint: migrated rule {rid} moved home "
+                        f"({base_loc} -> {head_loc}) without an ack. Add "
+                        f"`{rid}|{token}|<date>|{pr_ref}|<reason>` to {ACKS_REL}."
+                    )
+            if base_hash != head_hash:
+                review(rid, "body changed at its home")
+                if head_hash not in new_acks(rid):
+                    errors.append(
+                        f"::error::rule-body-lint: migrated rule {rid} body hash changed "
+                        f"({base_hash} -> {head_hash}) without an ack. A migrated body "
+                        "is governed exactly like an AGENTS.rules.md body: add "
+                        f"`{rid}|{head_hash}|<date>|{pr_ref}|<reason>` to {ACKS_REL} in THIS diff."
+                    )
+            continue
+        if rid in base_ids:
+            # Base row predates the hash column (#8175 backfill): no anchor to
+            # diff against. Closed after one merge — every row then carries one.
+            continue
+        base_line = any_body_line(base_corpus, rid)
+        if base_line is None:
+            errors.append(
+                f"::error::rule-body-lint: migrated row {rid} names no body in "
+                "AGENTS.rules.md at the merge-base. A migration MOVES a live body out "
+                "in the same diff; a row for an id that was never there (or that left "
+                "in an earlier PR) is not a migration."
+            )
+            continue
+        if migrated_body_hash(base_line) != head_hash:
+            review(rid, "was not moved verbatim")
+            if head_hash not in new_acks(rid):
+                errors.append(
+                    f"::error::rule-body-lint: migrated row {rid} records hash {head_hash}, "
+                    f"but the body it moved out hashed {migrated_body_hash(base_line)}. "
+                    "Move the body verbatim, or ack the rewrite with "
+                    f"`{rid}|{head_hash}|<date>|{pr_ref}|<reason>` in {ACKS_REL}."
+                )
+
+    for rid in sorted(base_ids - head_ids):
+        review(rid, "lost its registry row")
+        if MIGRATED_ROW_DELETED_TOKEN not in new_acks(rid):
+            errors.append(
+                f"::error::rule-body-lint: migrated row {rid} was removed without an ack. "
+                f"Add `{rid}|{MIGRATED_ROW_DELETED_TOKEN}|<date>|{pr_ref}|<reason>` to {ACKS_REL}."
+            )
+    return errors
 
 
 _MANIFEST_SCHEMA_RE = re.compile(r"schema[= ](\d+)")
@@ -509,7 +669,7 @@ def cmd_check(
             if _has_security_tag(base_raw) or _has_security_tag(head_bodies[rid]):
                 print(
                     f"::error::rule-body-lint: {rid} is a security-tagged rule "
-                    "([compliance-tier]/[hook-enforced]/[skill-enforced]) being "
+                    "([compliance-tier]/[hook-enforced]/[skill-enforced]/[mandates-filing]) being "
                     "changed — mandatory-human-review.",
                     file=sys.stderr,
                 )
@@ -522,13 +682,40 @@ def cmd_check(
                 )
 
     # New security-tagged rule (additive) → loud annotation, NOT a block (AC5).
+    #
+    # EXCEPT `[mandates-filing]`, which is blocked. The other three markers only
+    # DESCRIBE how their own rule is enforced, so a new rule carrying one grants
+    # nothing. `[mandates-filing]` grants cross-gate exemption authority over
+    # net-issue-flow the moment it merges — and AP-017's additive-new-rule lane
+    # takes no ack, so without this it would arrive on a CI warning nobody is
+    # required to read. That is the widest door into the exemption, and it is the
+    # one an author reaches for precisely BECAUSE adding a rule is the sanctioned
+    # safe primitive. Requiring the ack here closes it without touching AP-017's
+    # general lane. See ADR-155 §(e).
     for rid, raw in head_bodies.items():
         if rid not in base_bodies and _has_security_tag(raw):
+            if "[mandates-filing]" in raw:
+                if head_hashes[rid] not in new_acks(rid):
+                    errors.append(
+                        f"::error::rule-body-lint: {rid} is a NEW rule carrying "
+                        "[mandates-filing], which grants it exemption authority over the "
+                        "net-issue-flow gate. Additive rules are normally ack-free, but "
+                        "this marker is not descriptive — it changes what another gate "
+                        f"lets through. Add `{rid}|{head_hashes[rid]}|<date>|{pr_ref}|<reason>` "
+                        f"to {ACKS_REL}. See ADR-155."
+                    )
+                continue
             print(
                 f"::warning::rule-body-lint: {rid} is a NEW security-tagged rule "
                 "([compliance-tier]/[hook-enforced]/[skill-enforced]) — "
                 "mandatory-human-review that it is not a toothless control.",
             )
+
+    errors.extend(
+        check_migrated_rows(
+            root, base_commit, "\n".join(base_texts.values()), new_acks, pr_ref
+        )
+    )
 
     if errors:
         for err in errors:
@@ -548,6 +735,12 @@ def main() -> int:
         help="Emit `<sha256>  <id>` for EVERY rule body (ignores the hr/wg gate). "
              "Migration-proof helper; defaults to AGENTS.rules.md.",
     )
+    parser.add_argument(
+        "--emit-mandating-ids",
+        action="store_true",
+        help="Read a corpus on STDIN and print the ids of gated bodies carrying "
+             "[mandates-filing], one per line. Consumed by net-issue-flow.sh.",
+    )
     parser.add_argument("--check", action="store_true", help="Run the CI gate.")
     parser.add_argument("--base", default=None, help="Base git ref for --check (merge-base).")
     parser.add_argument("--root", type=Path, default=None, help="Repo root (default: script parent's parent).")
@@ -557,6 +750,35 @@ def main() -> int:
     root = (args.root or Path(__file__).resolve().parents[1]).resolve()
     manifest_path = root / MANIFEST_REL
     acks_path = root / ACKS_REL
+
+    # `--emit-mandating-ids` is a read-only reporter over STDIN, checked before
+    # the write/check XOR so it composes with neither.
+    #
+    # It exists so net-issue-flow.sh does not carry a SECOND parser for this
+    # file. A shell `grep -F '[mandates-filing]' | grep -oE '\[id: (hr|wg)-…\]'`
+    # enforces only the prefix conjunct, while `parse_bodies` enforces four:
+    # under a gated `## SECTION`, `line.startswith("- ")` at column 0, not
+    # pointer-shaped, and the prefix. The shell form is therefore a strict
+    # SUPERSET along the line-shape axis, and the gap is a silent self-grant:
+    # an INDENTED sub-bullet or a plain prose line carrying the marker plus an
+    # `[id: …]` is invisible to this gate, to SECURITY_TAG_MARKERS, to the hash
+    # manifest and to lint-rule-ids.py — but visible to grep. Measured on this
+    # corpus: the shell form derived 4 ids where parse_bodies sees 2.
+    # One parser, one predicate. See ADR-155.
+    if args.emit_mandating_ids:
+        if args.write or args.check or args.snapshot_all is not None:
+            print(
+                "ERROR: --emit-mandating-ids does not combine with other modes",
+                file=sys.stderr,
+            )
+            return 2
+        text = sys.stdin.read()
+        bodies = parse_bodies(text, SECTIONS)
+        for rid in sorted(
+            rid for rid, line in bodies.items() if "[mandates-filing]" in line
+        ):
+            print(rid)
+        return 0
 
     # `--snapshot-all` is a read-only reporter, not a mode of the gate: it is
     # checked before the write/check XOR so it composes with neither.

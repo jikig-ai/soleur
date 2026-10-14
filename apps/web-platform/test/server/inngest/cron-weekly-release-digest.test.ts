@@ -131,7 +131,7 @@ const discordPosts: { url: string; body: Record<string, unknown> }[] = [];
 function validAnthropicResponse(highlights: unknown) {
   return new Response(
     JSON.stringify({
-      content: [{ text: JSON.stringify({ highlights }) }],
+      content: [{ type: "text", text: JSON.stringify({ highlights }) }],
       stop_reason: "end_turn",
     }),
     { status: 200 },
@@ -432,6 +432,26 @@ describe("curate step (via handler)", () => {
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
+  it("#8505: a credit-exhausted curate call emits the named marker tagged with this cron", async () => {
+    fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
+    fetchBehavior.anthropic = async () =>
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." },
+        }),
+        { status: 400 },
+      );
+    await runHandler().catch(() => undefined);
+    const credit = reportSilentFallbackSpy.mock.calls.filter(
+      ([, ctx]) => (ctx as { op?: string }).op === "anthropic-credit-exhausted",
+    );
+    expect(credit).toHaveLength(1);
+    expect((credit[0][1] as { tags: Record<string, string> }).tags.source).toBe(
+      "cron:cron-weekly-release-digest",
+    );
+  });
+
   it("dedupes repeated valid tags from the LLM (one bullet per release)", async () => {
     fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
     fetchBehavior.anthropic = async () =>
@@ -457,6 +477,7 @@ describe("curate step (via handler)", () => {
         JSON.stringify({
           content: [
             {
+              type: "text",
               text: '{"highlights":[{"tag":"v3.154.0","title":"t","why":"Schema-valid JSON."}]}',
             },
           ],
@@ -484,7 +505,7 @@ describe("curate step (via handler)", () => {
     fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
     fetchBehavior.anthropic = async () =>
       new Response(
-        JSON.stringify({ content: [{ text: "{}" }], stop_reason: "max_tokens" }),
+        JSON.stringify({ content: [{ type: "text", text: "{}" }], stop_reason: "max_tokens" }),
         { status: 200 },
       );
     const { result } = await runHandler();

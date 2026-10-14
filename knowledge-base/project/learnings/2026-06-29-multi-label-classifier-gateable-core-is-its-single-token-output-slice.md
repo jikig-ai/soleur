@@ -7,7 +7,7 @@ module: eval-harness, brainstorm, classifiers
 related-issues: [#5704, #5722, #5702, #5701]
 related-learnings:
   - knowledge-base/project/learnings/2026-05-15-classifier-prose-table-row-ordering-collision.md
-related-brainstorm: knowledge-base/project/brainstorms/2026-06-29-expand-gated-skill-catalog-brainstorm.md
+related-brainstorm: knowledge-base/project/brainstorms/archive/20261013-032858-2026-06-29-expand-gated-skill-catalog-brainstorm.md
 ---
 
 # Learning: A multi-label classifier's gateable core is its single-token output slice

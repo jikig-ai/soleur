@@ -19,7 +19,7 @@ ownership rules are enforced by a lint.
 
 ### The argv ceiling
 
-`scripts/domain-model-drift.sh` died with `Argument list too long` after its
+`plugins/soleur/scripts/domain-model-drift.sh` died with `Argument list too long` after its
 accumulators outgrew a `jq --argjson` binding (#6720, following a live HTTP 500
 in #5523).
 
@@ -65,7 +65,7 @@ bindings — those whose size is pinned by a hard cap such as `--limit 100`, an
 explicit `.[0:20]`, or a `group_by` collapse — are left alone and carry a
 load-bearing comment naming what bounds them. Converting them would be churn.
 
-Reference implementation: `scripts/domain-model-drift.sh`. Fixture-adequacy
+Reference implementation: `plugins/soleur/scripts/domain-model-drift.sh`. Fixture-adequacy
 self-check: `domain-model-drift.test.sh` T20, which asserts the fixture actually
 exceeds `MAX_ARG_STRLEN` so the test cannot silently degrade to vacuous.
 

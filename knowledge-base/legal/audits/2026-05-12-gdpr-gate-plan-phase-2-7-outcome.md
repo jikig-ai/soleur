@@ -2,7 +2,7 @@
 title: "GDPR-gate plan Phase 2.7 outcome — PR-C of #3603"
 type: gdpr-gate-outcome
 phase: plan-2.7
-plan: knowledge-base/project/plans/2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md
 issue: 3603
 pr: 3662
 invoked_at: 2026-05-12
@@ -20,13 +20,13 @@ operator_ack_required: false
 
 ## Scope and trigger
 
-- **Audited:** `knowledge-base/project/plans/2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md`
+- **Audited:** `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md`
 - **Diff at plan time:** empty (plan is prose); the gate audits the plan's prescribed FR/TR sections against the regulated-data canonical regex.
 - **Canonical regex match:** **NO**. The regex `^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)` matches no PR-C file. PR-C touches only:
-    - `docs/legal/*.md` (4 files)
-    - `plugins/soleur/docs/pages/legal/*.md` (4 files)
-    - `knowledge-base/legal/compliance-posture.md`
-    - `knowledge-base/legal/audits/*.md` (3-5 new evidence files)
+  - `docs/legal/*.md` (4 files)
+  - `plugins/soleur/docs/pages/legal/*.md` (4 files)
+  - `knowledge-base/legal/compliance-posture.md`
+  - `knowledge-base/legal/audits/*.md` (3-5 new evidence files)
 - **Extended trigger:** clause **(b)** of `hr-gdpr-gate-on-regulated-data-surfaces` — plan declares `brand-survival threshold: single-user incident`. Mandatory invocation per the rule's extension to cover cross-controller data-movement surfaces.
 
 ## v1 5-check results
@@ -103,7 +103,7 @@ The remaining v1 Suggestions (PLAN-Art-30, PLAN-Art-9, PLAN-Art-35) are unaffect
 
 ## Cross-references
 
-- Plan v2: `knowledge-base/project/plans/2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md`
+- Plan v2: `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md`
 - AGENTS.md rule: `hr-gdpr-gate-on-regulated-data-surfaces`
 - CLO advisory: integrated inline in plan §Domain Review (Q2-Q4 + R1-R7 from v1; Q1 reframed in v2 per Research Reconciliation row 3).
 - Worktree: `.worktrees/feat-cc-transcript-hardening-prc-3603`

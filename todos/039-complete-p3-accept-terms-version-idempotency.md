@@ -24,6 +24,7 @@ Found during security review of PR #952 (T&C version tracking).
 
 **Option A: Skip write if already on current version**
 Add a pre-check: if `tc_accepted_version === TC_VERSION`, return success without updating.
+
 - Pros: Preserves timestamp integrity, saves a DB write
 - Cons: Adds one read before the write
 - Effort: Small

@@ -53,7 +53,7 @@ export function makeAssistant(
     message: {
       id: partial.uuid ?? "msg_1",
       role: "assistant",
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-5-5",
       stop_reason: null,
       stop_sequence: null,
       type: "message",
@@ -153,7 +153,7 @@ export function makeUserToolResult(
  * (`type: 'tool_progress'`, carrying `tool_use_id`/`tool_name`/
  * `elapsed_time_seconds`). It flows into `consumeStream` because
  * `includePartialMessages: true` is set in the shared options builder
- * (`agent-runner-query-options.ts:156`). The soleur-go runner re-arms
+ * (`agent-runner-query-options.ts` › `buildAgentQueryOptions`). The soleur-go runner re-arms
  * `state.runaway` off this message (reads no fields — pure re-arm).
  */
 export function makeToolProgress(
@@ -199,7 +199,7 @@ function queryControlStubs(): Omit<
   "close" | typeof Symbol.asyncIterator | "next" | "return" | "throw"
 > {
   return {
-    interrupt: vi.fn(async () => {}),
+    interrupt: vi.fn(async () => undefined),
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     setMaxThinkingTokens: vi.fn(async () => {}),

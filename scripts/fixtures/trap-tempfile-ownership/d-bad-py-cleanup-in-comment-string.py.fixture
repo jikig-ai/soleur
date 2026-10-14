@@ -1,0 +1,9 @@
+import tempfile
+
+# TODO: call shutil.rmtree(work) once the caller owns it, and atexit.register it.
+NOTE = "remember shutil.rmtree(work); os.remove(path); TemporaryDirectory()"
+
+
+def build():
+    """Docstring also says rmtree and unlink, which must not count either."""
+    return tempfile.mkdtemp()

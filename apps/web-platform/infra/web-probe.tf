@@ -7,19 +7,47 @@
 #                a dedicated liveness beat every healthy run (detect + emit + alarm, NO reboot).
 #   #6548     — git-data reachability arms the EXISTING git_data_prd (git-data.tf).
 #
-# for_each = var.web_hosts: single live beat today (web-1), anti-masking preserved BY CONSTRUCTION
-# for future active-active-N (#6459) — each host gets its OWN heartbeat, so a healthy host can never
-# mask a broken sibling. No hardcoded web-2 resource (it retired 2026-07-17, #6538; a dead feeder
-# would red heartbeat-reprovision-parity.test.ts). free-tier heartbeats are unconditionally
+# for_each = var.web_hosts: one beat per host in that map (web-1 and, since 2026-07-24, web-2; see
+# variables.tf), anti-masking preserved BY CONSTRUCTION for active-active-N (#6459) — each host gets its
+# OWN heartbeat, so a healthy host can never mask a broken sibling. No hardcoded per-host resource (a dead
+# feeder would red heartbeat-reprovision-parity.test.ts). free-tier heartbeats are unconditionally
 # creatable (only betteruptime_policy/_monitor are count-gated); email-only escalation
 # (betterstack_paid_tier stays false; paid-tier escalation is #6549 item 1).
 
 locals {
-  # The zot repository path the consumer probe HEADs (tag-INDEPENDENT `/v2/<repo>/tags/list`, so it
-  # never goes stale across deploys). Derived from var.image_name: strip the ghcr.io host, then keep
-  # the path before any `:tag` or `@sha256:` — e.g. ghcr.io/jikig-ai/soleur-web-platform:latest →
-  # jikig-ai/soleur-web-platform. zot mirrors GHCR under the identical repository path.
-  zot_probe_repo = regex("^[^:@]+", replace(var.image_name, "ghcr.io/", ""))
+  # The zot repository paths the consumer probe HEADs (tag-INDEPENDENT `/v2/<repo>/tags/list`, so it
+  # never goes stale across deploys). The web repo is derived from var.image_name: strip the ghcr.io
+  # host, then keep the path before any `:tag` or `@sha256:` — e.g.
+  # ghcr.io/jikig-ai/soleur-web-platform:latest → jikig-ai/soleur-web-platform. zot mirrors GHCR under
+  # the identical repository path.
+  zot_probe_repo_web = regex("^[^:@]+", replace(var.image_name, "ghcr.io/", ""))
+
+  # The second repository a fresh host pulls at first boot (#7258): the repository path of the ZIREF
+  # pins in cloud-init.yml and cloud-init-inngest.yml. A literal here, NOT a root variable:
+  # variables.tf is a registry-host-replace trigger path (and server.tf a deploy-pipeline-fix one), so
+  # a new variable would wake the registry-replace gate (a no-op unless a render input changes) for a
+  # one-line probe change. The suite (web-zot-consumer-probe.test.sh, T7) derives the expected path
+  # from those pins and fails if this constant drifts from them.
+  zot_probe_repo_inngest_bootstrap = "jikig-ai/soleur-inngest-bootstrap"
+
+  # The comma-separated list the probe takes. The local KEEPS its name and stays BARE, so every consumer
+  # (the cloud-init templatefile var, hence the env file a host writes once at birth) is unchanged. The probe
+  # pings its heartbeat only when EVERY repository in the list serves.
+  zot_probe_repo = join(",", [local.zot_probe_repo_web, local.zot_probe_repo_inngest_bootstrap])
+
+  # The digest a fresh host pulls for the bootstrap image (#10004), READ from the ZIREF line it must equal and
+  # never restated here, so every pin bump moves it. The pattern is anchored on `ZIREF="`: a comment in that
+  # file mentions the pin and must not match. A regex with one capture group returns a LIST, hence the [0].
+  # A pin line that stops matching fails the plan loudly, which is the intended direction.
+  zot_probe_digest_inngest_bootstrap = regex("(?m)^\\s*ZIREF=\"[^\"/]*/${local.zot_probe_repo_inngest_bootstrap}:v[0-9]+\\.[0-9]+\\.[0-9]+@(sha256:[0-9a-f]{64})\"", file("${path.module}/cloud-init-inngest.yml"))[0]
+
+  # The list web-1's probe is handed (server.tf: the triggers_replace entry and the env-file printf of
+  # terraform_data.zot_consumer_probe_install, the only path that re-delivers web-1's env file). The bootstrap
+  # element carries its pin so the probe HEADs the manifest hosts actually pull. The web element stays bare:
+  # the web image has no committed digest (#10044). Born hosts keep the BARE local above: a pin baked into an
+  # env file at birth could never be updated (their user_data is ignore_changes) and would false-red once
+  # five newer v.* tags evicted it. The pin is a registry-wide property, so checking it from web-1 suffices.
+  zot_probe_repo_pinned = join(",", [local.zot_probe_repo_web, "${local.zot_probe_repo_inngest_bootstrap}@${local.zot_probe_digest_inngest_bootstrap}"])
 }
 
 # §1 — zot consumer-perspective serviceability heartbeat (per host).

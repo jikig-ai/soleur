@@ -26,4 +26,13 @@ SyslogIdentifier=web-zot-consumer-probe
 # the unit as a FILE (not a heredoc) keeps this nested-quoted doppler ExecStart intact — the
 # container-restart-monitor precedent (server.tf).
 EnvironmentFile=/etc/default/web-zot-consumer-probe
+# #7103 R3 — the Source-4 positive control is emitted HERE, outside the doppler wrapper below.
+# Inside it, a dead prd token makes `doppler run` exit before the probe ever execs, so the
+# canary that certifies "vector is shipping" is gated behind the very credential whose failure
+# it is used to rule out — and its absence then reads as a dead vector agent rather than a dead
+# token. It carries the same /run marker rate-limit as the in-probe call, so this does not
+# double the emit rate; whichever runs first claims the window.
+#
+# `-` prefix: a failure to emit the beacon must never prevent the probe itself from running.
+ExecStartPre=-/usr/local/bin/web-zot-consumer-probe.sh --canary-only
 ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export WEB_ZOT_CONSUMER_URL="$${!WEB_ZOT_CONSUMER_URL_KEY}"; exec /usr/local/bin/web-zot-consumer-probe.sh'\'''

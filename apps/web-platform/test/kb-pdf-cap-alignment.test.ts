@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
+import { stripComments } from "./helpers/strip-comments";
 
 describe("kb-pdf cap alignment drift guard", () => {
   it("MAX_AGENT_READABLE_PDF_SIZE is 24 MB (the source of truth #3337 ratified)", () => {
@@ -40,9 +41,7 @@ describe("kb-pdf cap alignment drift guard", () => {
     // assertion; this catches the entire shape. We strip line/block
     // comments first so historical references in JSDoc do not trip the
     // gate.
-    const sourceWithoutComments = src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/(^|\s)\/\/[^\n]*/g, "$1");
+    const sourceWithoutComments = stripComments(src);
     expect(sourceWithoutComments).not.toMatch(/\d+\s*\*\s*1024\s*\*\s*1024/);
 
     // No revival of the prior `INPUT_BUFFER_CAP_BYTES` shadow constant.
