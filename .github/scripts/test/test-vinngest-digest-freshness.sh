@@ -108,6 +108,9 @@ new_fixture_repo() {
 }
 
 fixture_commit() { git -C "$F_REPO" add -A && git -C "$F_REPO" commit -qm "$1"; }
+# Fixture tags are authored inside the mktemp repo this battery creates
+# (git_fixture_env-pinned) — never the caller's repo. Ref #7596 (the ledger entry's open-issue anchor).
+# repo-boundary-tag-exempt: .github/scripts/test/test-vinngest-digest-freshness.sh
 seed_tag() { git -C "$F_REPO" tag "$1"; }
 crane_serve() { printf '%s\t%s\n' "$1" "$2" >> "$MOCK_CRANE_MAP"; }
 
