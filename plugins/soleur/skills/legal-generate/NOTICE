@@ -1,8 +1,8 @@
 ---
 upstream: github.com/General-Legal/legal-templates
 license: CC0-1.0
-pinned-commit: 0f7c7bfabf1be77a2bf52eef80815e24c93a190a
-last-verified: 2026-09-13
+pinned-commit: 6d6805425eabd41bed86fc1e2ec51612760f716c
+last-verified: 2026-09-28
 registry: knowledge-base/engineering/policies/content-vendoring.md
 lifted-files:
   # Each entry pins TWO blob SHAs:
@@ -49,8 +49,8 @@ lifted-files:
     status: active-verbatim
   - path: references/templates/mutual-nda/template.md
     upstream-path: templates/mutual-nda/template.md
-    upstream-blob-sha: 4ad55af5d3da9a3fd08b38e49ea4ec12e6a0e8b9
-    local-blob-sha: 83d29a6851484249e8c36826eeaa517c3d30d261
+    upstream-blob-sha: 321ae7f4baeae2a5b002ce18e5fb534fe58cdf35
+    local-blob-sha: 37d495045817a184e39c615483b99ff91ff70371
     status: active-verbatim
   - path: references/templates/one-way-nda/template.md
     upstream-path: templates/one-way-nda/template.md

@@ -204,6 +204,7 @@ describe("synthetic prefix allowlist (#9994)", () => {
     "conv-rail-cross-tenant-",
     "dsar-cross-tenant-",
     "workspace-fixture-",
+    "workspace-backfill-parity-",
   ];
 
   test("allowlist census: SYNTHETIC_PREFIXES === the reviewed prefix set", () => {

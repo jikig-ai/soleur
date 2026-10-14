@@ -189,9 +189,12 @@ SBX_A="$TMP/sbx-a"
 build_sandbox "$SBX_A" fail || { echo "FATAL: sandbox build failed"; exit 2; }
 out="$TMP/out-a.log"
 rc=0
-# env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE: under an agent-run gate the refusal guard would
-# bounce the sandbox run to exit 4 before any suite executes.
-env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_A/test-all.sh" >"$out" 2>&1 || rc=$?
+# env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL: under an agent-run gate the refusal guard would
+# bounce the sandbox run to exit 4 before any suite executes. TEST_GROUP/MODE/
+# SCRIPTS_SHARD/SOLEUR_TEST_FORCE_ALL are the outer run's selection state — an
+# inherited TEST_GROUP=affected narrows the sandbox's own selection to zero
+# suites and the run exits 0 without ever executing the fixture.
+env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_A/test-all.sh" >"$out" 2>&1 || rc=$?
 
 if [[ "$rc" != "0" ]]; then
   pass "failing-suite run exits non-zero (rc=$rc)"
@@ -231,7 +234,7 @@ DURABLE_B="$TMP/durable-b"
 SBX_B="$TMP/sbx-b"
 build_sandbox "$SBX_B" sleep || { echo "FATAL: sandbox build failed"; exit 2; }
 out="$TMP/out-b.log"
-env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_B" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_B/test-all.sh" >"$out" 2>&1 &
+env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_B" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_B/test-all.sh" >"$out" 2>&1 &
 RUNNER_PID=$!
 deadline=$(( SECONDS + 15 ))
 while ! grep -q 'MARKER-SLEEP-FX' "$out" 2>/dev/null && (( SECONDS < deadline )); do
@@ -265,7 +268,7 @@ SBX_C="$TMP/sbx-c"
 build_sandbox "$SBX_C" clean || { echo "FATAL: sandbox build failed"; exit 2; }
 out="$TMP/out-c.log"
 rc=0
-env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_C" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C/test-all.sh" >"$out" 2>&1 || rc=$?
+env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_C" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C/test-all.sh" >"$out" 2>&1 || rc=$?
 if [[ "$rc" == "0" ]]; then
   pass "clean run exits 0"
 else
@@ -293,7 +296,7 @@ out="$TMP/out-d.log"
 # parent-death path would never be exercised (measured: the runner died and
 # the watchdog never printed, because it had been disarmed by the runner's
 # own EXIT trap).
-( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_D" SOLEUR_TEST_ALL_WD_POLL_S=1 SOLEUR_TEST_ALL_WD_FAILS_N=1 bash "$SBX_D/test-all.sh" >"$out" 2>&1; wait ) &
+( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_D" SOLEUR_TEST_ALL_WD_POLL_S=1 SOLEUR_TEST_ALL_WD_FAILS_N=1 bash "$SBX_D/test-all.sh" >"$out" 2>&1; wait ) &
 WRAP_PID=$!
 deadline=$(( SECONDS + 15 ))
 while ! grep -q 'MARKER-SLEEP-FX' "$out" 2>/dev/null && (( SECONDS < deadline )); do
@@ -343,7 +346,7 @@ SBX_E="$TMP/sbx-e"
 build_sandbox "$SBX_E" clean || { echo "FATAL: sandbox build failed"; exit 2; }
 out="$TMP/out-e.log"
 rc=0
-env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-e" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_E/test-all.sh" >"$out" 2>&1 || rc=$?
+env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-e" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_E/test-all.sh" >"$out" 2>&1 || rc=$?
 # Pin the WATCHDOG's reap line (`orphaned test-all run ...`), never the bare
 # word 'orphaned' — the orphan-process-reaper epilogue's `look orphaned`
 # report (unrelated subsystem, fires whenever the box carries stale
@@ -358,7 +361,7 @@ fi
 # make "fired" and "never armed" indistinguishable.
 out="$TMP/out-e2.log"
 rc=0
-env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-e2" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_E/test-all.sh" >"$out" 2>&1 || rc=$?
+env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-e2" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_E/test-all.sh" >"$out" 2>&1 || rc=$?
 if grep -q 'SOLEUR_TEST_ALL_ORPHAN_WATCHDOG_DISABLED' "$out"; then
   pass "opt-out emits the named DISABLED banner"
 else
@@ -496,7 +499,7 @@ DURABLE_C2="$TMP/durable-c2"
 SBX_C2="$TMP/sbx-c2"
 build_sandbox "$SBX_C2" sleep || { echo "FATAL: sandbox build failed"; exit 2; }
 out="$TMP/out-c2.log"
-( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_C2" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C2/test-all.sh" >"$out" 2>&1; wait ) &
+( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_C2" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C2/test-all.sh" >"$out" 2>&1; wait ) &
 WRAP_PID=$!
 deadline=$(( SECONDS + 15 ))
 while ! grep -q 'MARKER-SLEEP-FX' "$out" 2>/dev/null && (( SECONDS < deadline )); do
@@ -593,7 +596,7 @@ shim_nap() {
   assert_fixture_dir "$out"
   mkdir -p "$sdir"
   ( bash -c 'printf "%s" "$PPID" > "$1"' _ "$sdir/parent.pid"
-    env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE \
+    env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL \
       PATH="$SHIMBIN:$PATH" WD_SHIM_MODE="$mode" WD_SHIM_DIR="$sdir" \
       WD_SHIM_PIDFILE="$sdir/parent.pid" WD_SHIM_REAL_PS="$REAL_PS" \
       TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-$mode" SOLEUR_TEST_ALL_WD_POLL_S=1 \
@@ -683,7 +686,7 @@ build_sandbox "$SBX_C7" sleep || { echo "FATAL: sandbox build failed"; exit 2; }
 sdir_c7="$TMP/shim-zstat-all"; mkdir -p "$sdir_c7"
 out="$TMP/out-c7.log"
 ( bash -c 'printf "%s" "$PPID" > "$1"' _ "$sdir_c7/parent.pid"
-  env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE \
+  env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL \
     PATH="$SHIMBIN:$PATH" WD_SHIM_MODE=zstat-all WD_SHIM_DIR="$sdir_c7" \
     WD_SHIM_PIDFILE="$sdir_c7/parent.pid" WD_SHIM_REAL_PS="$REAL_PS" \
     TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-c7" SOLEUR_TEST_ALL_WD_POLL_S=1 \
@@ -751,7 +754,7 @@ if [[ "$?" != "0" ]]; then
   exit 2
 fi
 c9_fail_before=$FAIL
-( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-c9" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C9/test-all.sh" >"$out" 2>&1; wait ) &
+( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL TEST_TIMING_LOG=/dev/null SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-c9" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C9/test-all.sh" >"$out" 2>&1; wait ) &
 WRAP_PID=$!
 deadline=$(( SECONDS + 15 ))
 while ! grep -q 'MARKER-SLEEP-FX' "$out" 2>/dev/null && (( SECONDS < deadline )); do

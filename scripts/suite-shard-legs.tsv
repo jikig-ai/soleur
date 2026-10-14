@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1180
-# generated-at=2026-10-13T10:37:45Z
+# default-weight-ms=1177
+# generated-at=2026-10-13T22:51:47Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -55,6 +55,7 @@
 .claude/hooks/session-rules-loader-headless.test.sh	6
 .claude/hooks/session-rules-loader.test.sh	3
 .claude/hooks/settings-hook-exec-bit.test.sh	1
+.claude/hooks/ship-kb-archive-gate.test.sh	1
 .claude/hooks/ship-net-issue-flow-gate.test.sh	2
 .claude/hooks/ship-operator-step-gate.test.sh	5
 .claude/hooks/ship-runbook-ssh-gate.test.sh	7
@@ -384,6 +385,7 @@ scripts/inngest-zot-client-authz-6500	3
 scripts/learning-retrieval-bench	7
 scripts/lib/bearer-curl.test.sh	8
 scripts/lib/frontmatter-strip.test.sh	1
+scripts/lib/git-data-rotate-stamp.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/inngest-probe-row.test.sh	6
 scripts/lib/legal-base-ref.test.sh	7
