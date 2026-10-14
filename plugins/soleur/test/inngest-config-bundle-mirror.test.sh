@@ -126,6 +126,8 @@ between = steps[di[0] + 1:mi] if di and di[0] < mi else []
 v(all(s.get("continue-on-error") is True for s in between),
   "every step between docker_build and the mirror is continue-on-error: true")
 v(mirror.get("shell") in (None, "bash"), "the mirror step shell is absent or bash")
+tm = mirror.get("timeout-minutes")
+v(isinstance(tm, int) and 0 < tm <= 30, "the mirror step has a timeout-minutes bound of at most 30")
 body = mirror.get("run", "")
 v(len(re.findall(r"^\s*degraded\(\)\s*\{", body, re.M)) == 1, "degraded() is defined exactly once")
 open(body_out, "w").write(body)
@@ -140,11 +142,11 @@ mkdir -p "$STUBS"
 cat > "$STUBS/curl" <<'STUB'
 #!/usr/bin/env bash
 echo "curl $*" >> "$STUB_LOG"
-if [[ "$#" -ne 4 || "$1" != "-fsSL" || "$2" != "-o" || "$3" != "$RUNNER_TEMP/crane.tgz" || "$4" != "$EXPECT_URL" ]]; then
+if [[ "$#" -ne 6 || "$1" != "-fsSL" || "$2" != "--max-time" || ! "$3" =~ ^[0-9]+$ || "$4" != "-o" || "$5" != "$RUNNER_TEMP/crane.tgz" || "$6" != "$EXPECT_URL" ]]; then
   echo "REFUSE curl $*" >> "$STUB_LOG"
   exit 64
 fi
-[[ "${STUB_CURL_RC:-0}" == "0" ]] && : > "$3"
+[[ "${STUB_CURL_RC:-0}" == "0" ]] && : > "$5"
 exit "${STUB_CURL_RC:-0}"
 STUB
 cat > "$STUBS/sha256sum" <<'STUB'
@@ -173,19 +175,36 @@ cat > "$STUBS/sleep" <<'STUB'
 echo "sleep $*" >> "$STUB_LOG"
 exit 0
 STUB
+cat > "$STUBS/timeout" <<'STUB'
+#!/usr/bin/env bash
+echo "timeout $*" >> "$STUB_LOG"
+if [[ "$#" -lt 2 || ! "$1" =~ ^[0-9]+$ ]]; then
+  echo "REFUSE timeout $*" >> "$STUB_LOG"
+  exit 64
+fi
+shift
+exec "$@"
+STUB
 cat > "$STUBS/crane" <<'STUB'
 #!/usr/bin/env bash
 echo "crane $*" >> "$STUB_LOG"
-if [[ "${1:-}" != "copy" || "$#" -ne 3 ]]; then
-  echo "REFUSE crane $*" >> "$STUB_LOG"
-  exit 64
-fi
-n=0
-[[ -f "$STUB_COPY_COUNT" ]] && n=$(cat "$STUB_COPY_COUNT")
-n=$((n + 1))
-echo "$n" > "$STUB_COPY_COUNT"
-[[ "$n" -le "${STUB_CRANE_COPY_FAIL_N:-0}" ]] && exit "${STUB_CRANE_COPY_RC:-1}"
-exit 0
+case "${1:-}" in
+  copy)
+    if [[ "$#" -ne 3 ]]; then echo "REFUSE crane $*" >> "$STUB_LOG"; exit 64; fi
+    n=0
+    [[ -f "$STUB_COPY_COUNT" ]] && n=$(cat "$STUB_COPY_COUNT")
+    n=$((n + 1))
+    echo "$n" > "$STUB_COPY_COUNT"
+    [[ "$n" -le "${STUB_CRANE_COPY_FAIL_N:-0}" ]] && exit "${STUB_CRANE_COPY_RC:-1}"
+    exit 0 ;;
+  digest)
+    if [[ "$#" -ne 2 || "$2" != "$EXPECT_DST" ]]; then echo "REFUSE crane $*" >> "$STUB_LOG"; exit 64; fi
+    [[ "${STUB_DIGEST_RC:-0}" == "0" ]] || exit "$STUB_DIGEST_RC"
+    printf '%s\n' "${STUB_ZOT_DIGEST-$GOOD_DIGEST}"
+    exit 0 ;;
+  *)
+    echo "REFUSE crane $*" >> "$STUB_LOG"; exit 64 ;;
+esac
 STUB
 chmod +x "$STUBS"/*
 
@@ -193,13 +212,15 @@ REAL_PATH="$PATH"
 # Hermeticity: every network or privileged external the body calls must resolve inside the stub directory,
 # or a stub-path mistake would run a real download or a real sudo (rm and echo run for real, scoped by
 # RUNNER_TEMP to the arm directory).
-for _c in curl sha256sum sudo crane sleep; do
+for _c in curl sha256sum sudo crane sleep timeout; do
   _r=$(PATH="$STUBS:$REAL_PATH" command -v "$_c" 2>/dev/null) || _r=""
   if [[ "$_r" != "$STUBS/$_c" ]]; then
     printf 'FATAL: %s does not resolve to the stub (got %s)\n' "$_c" "${_r:-nothing}" >&2
     exit 2
   fi
 done
+GOOD_DIGEST=$(printf 'sha256:%064d' 0 | tr '0' 'a')
+OTHER_DIGEST=$(printf 'sha256:%064d' 0 | tr '0' 'b')
 EXPECT_SRC="ghcr.io/jikig-ai/soleur-inngest-config:v7"
 EXPECT_DST="127.0.0.1:5000/jikig-ai/soleur-inngest-config:v7"
 
@@ -220,7 +241,7 @@ run_arm() {
   if [[ "$bridge" == "__unset__" ]]; then benv=(-u BRIDGE_OUTCOME); else benv=("BRIDGE_OUTCOME=$bridge"); fi
   local rc=0
   (
-    env "${benv[@]}" "$@" IMAGE="ghcr.io/jikig-ai/soleur-inngest-config" VERSION="7" DIGEST="sha256:abc123" \
+    env "${benv[@]}" "$@" IMAGE="ghcr.io/jikig-ai/soleur-inngest-config" VERSION="7" DIGEST="$GOOD_DIGEST" GOOD_DIGEST="$GOOD_DIGEST" EXPECT_DST="$EXPECT_DST" \
       GITHUB_OUTPUT="$d/gho" GITHUB_STEP_SUMMARY="$d/sum" STUB_LOG="$d/log" STUB_COPY_COUNT="$d/copycount" \
       RUNNER_TEMP="$d" PIN_SHA="$PIN_SHA" EXPECT_URL="$EXPECT_URL" PATH="$STUBS:$REAL_PATH" \
       bash --noprofile --norc -eo pipefail -c 'source "$1"; echo SENTINEL_REACHED' _ "$BODY_FILE" > "$d/stdout" 2>&1
@@ -327,7 +348,10 @@ evaluate() {
   [[ "$(count_pfx "::" "$d/ok/stdout")" == "0" ]] || ok=0
   [[ "$(copies "$d/ok")" == "1" ]] || ok=0
   [[ "$(count_eq "crane copy $EXPECT_SRC $EXPECT_DST" "$d/ok/log")" == "1" ]] || ok=0
-  chk "$ok" "bridge success: only mirror_status=ok, no workflow command or summary line, one crane copy of the expected source and destination"
+  [[ "$(count_eq "timeout 180 crane copy $EXPECT_SRC $EXPECT_DST" "$d/ok/log")" == "1" ]] || ok=0
+  [[ "$(count_eq "timeout 60 crane digest $EXPECT_DST" "$d/ok/log")" == "1" ]] || ok=0
+  [[ "$(count_eq "crane digest $EXPECT_DST" "$d/ok/log")" == "1" ]] || ok=0
+  chk "$ok" "bridge success: only mirror_status=ok, no workflow command or summary line, one bounded crane copy of the expected source and destination, one bounded digest lookup"
   chk "$([[ "$(count_has "REFUSE" "$d/ok/log")" == "0" ]] && echo 1 || echo 0)" \
     "stub contracts: no stub refused its argv or pinned-value contract (bridge success)"
   chk "$([[ ! -e "$d/ok/crane.tgz" ]] && echo 1 || echo 0)" "archive removed after the step (bridge success)"
@@ -349,6 +373,19 @@ evaluate() {
   degraded_ok "$d/copyfail" "crane copy failing every time" copy 42 3 any
   chk "$([[ "$(count_eq "sleep 3" "$d/copyfail/log")" == "1" && "$(count_eq "sleep 6" "$d/copyfail/log")" == "1" ]] && echo 1 || echo 0)" \
     "crane copy failing every time: backoff sleeps 3 then 6 between the three attempts"
+  fi
+
+  if want digestbad; then
+  run_arm "$d/digestbad" success STUB_ZOT_DIGEST="$OTHER_DIGEST"
+  degraded_ok "$d/digestbad" "digest mismatch after the copy" digest_mismatch 1 1 any
+  fi
+  if want digestfail; then
+  run_arm "$d/digestfail" success STUB_DIGEST_RC=7
+  degraded_ok "$d/digestfail" "crane digest lookup failing" digest_lookup 7 1 any
+  fi
+  if want digestshape; then
+  run_arm "$d/digestshape" success STUB_ZOT_DIGEST="not-a-digest"
+  degraded_ok "$d/digestshape" "crane digest returning garbage" digest_lookup 1 1 any
   fi
 
   if [[ "$mode" != "full" ]]; then return 0; fi
@@ -433,7 +470,7 @@ elif name == "degraded-returns":
 elif name == "degraded-exit-1":
     s = must_sub(r"(degraded\(\) \{.*?)exit 0", r"\1exit 1", s)
 elif name == "drop-copy-route":
-    s = must_sub(r"(retry crane copy [^\n]*?) \|\| degraded copy [^\n]*\n", r"\1\n", s)
+    s = must_sub(r"(retry timeout 180 crane copy [^\n]*?) \|\| degraded copy [^\n]*\n", r"\1\n", s)
 elif name == "rc-lost":
     s = must_sub(r'degraded copy "\$\?"', "degraded copy 0", s)
 elif name == "install-before-branch":
@@ -441,13 +478,13 @@ elif name == "install-before-branch":
     if not m:
         sys.exit(3)
     s = s.replace(m.group(0), "", 1)
-    s = insert_before("          # crane copy of a tag is expected", m.group(0), s)
+    s = insert_before("          # Each attempt is bounded", m.group(0), s)
 elif name == "ok-publishes-degraded":
     s = must_sub(r'(echo "mirror_status=ok" >> "\$GITHUB_OUTPUT"\n)', r'\1          echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"\n', s)
 elif name == "checksum-flag-dropped":
     s = must_sub(r"\| sha256sum -c -", "| sha256sum -", s)
 elif name == "curl-flag-dropped":
-    s = must_sub(r"curl -fsSL -o", "curl -sSL -o", s)
+    s = must_sub(r"curl -fsSL --max-time", "curl -sSL --max-time", s)
 elif name == "extract-dir-moved":
     s = must_sub(r"-C /usr/local/bin crane", "-C /tmp crane", s)
 elif name == "crane-sha-changed":
@@ -457,13 +494,27 @@ elif name == "crane-version-changed":
 elif name == "crane-arch-changed":
     s = must_sub(r"Linux_x86_64", "Linux_arm64", s)
 elif name == "download-path-decoupled":
-    s = must_sub(r'curl -fsSL -o "\$CRANE_TGZ"', 'curl -fsSL -o "$RUNNER_TEMP/other.tgz"', s)
+    s = must_sub(r'-o "\$CRANE_TGZ"', '-o "$RUNNER_TEMP/other.tgz"', s)
 elif name == "backoff-removed":
     s = must_sub(r"sleep \$\(\(n \* 3\)\)", "true", s)
 elif name == "retry-returns-1":
     s = must_sub(r'return "\$rc"; sleep', "return 1; sleep", s)
 elif name == "drop-cleanup":
     s = must_sub(r"          trap 'rm -f \"\$CRANE_TGZ\"' EXIT\n", "", s)
+elif name == "drop-step-timeout":
+    s = must_sub(r"        timeout-minutes: 20\n", "", s)
+elif name == "digest-check-dropped":
+    s = must_sub(r'          \[\[ "\$ZOT_DIGEST" == "\$\{DIGEST:-\}" \]\] \|\| degraded digest_mismatch[^\n]*\n', "", s)
+elif name == "digest-lookup-unrouted":
+    s = must_sub(r' \|\| degraded digest_lookup "\$\?" "crane digest lookup failed after the copy"', "", s)
+elif name == "digest-shape-unchecked":
+    s = must_sub(r'          \[\[ "\$ZOT_DIGEST" =~ \^sha256[^\n]*\n', "", s)
+elif name == "curl-timeout-dropped":
+    s = must_sub(r"curl -fsSL --max-time 120 -o", "curl -fsSL -o", s)
+elif name == "copy-timeout-dropped":
+    s = must_sub(r"retry timeout 180 crane copy", "retry crane copy", s)
+elif name == "digest-timeout-dropped":
+    s = must_sub(r'"\$\(timeout 60 crane digest', '"$(crane digest', s)
 elif name == "variant-no-if":
     s = must_sub(r"(id: zot_mirror\n)\s+if: [^\n]*\n", r"\1", s)
 elif name == "variant-reworded":
@@ -531,6 +582,7 @@ else
     "hard-step-between|struct|between docker_build"
     "rename-docker-build-id|struct|share the mirror's job"
     "shell-sh|struct|shell is absent or bash"
+    "drop-step-timeout|struct|timeout-minutes bound"
     "delete-bridge-branch|failure|bridge failure"
     "degraded-returns|failure|bridge failure"
     "degraded-exit-1|failure|bridge failure"
@@ -548,6 +600,12 @@ else
     "crane-arch-changed|ok|stub contracts"
     "download-path-decoupled|ok|stub contracts"
     "drop-cleanup|ok|archive removed"
+    "curl-timeout-dropped|ok|stub contracts"
+    "copy-timeout-dropped|ok|bridge success"
+    "digest-timeout-dropped|ok|bridge success"
+    "digest-check-dropped|digestbad|digest mismatch after the copy"
+    "digest-lookup-unrouted|digestfail|crane digest lookup failing"
+    "digest-shape-unchecked|digestshape|crane digest returning garbage"
   )
   for row in "${ROWS[@]}"; do
     IFS='|' read -r m kind expect <<< "$row"
@@ -602,7 +660,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=67
+MIN_ASSERTIONS=78
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1

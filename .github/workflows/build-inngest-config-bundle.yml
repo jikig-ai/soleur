@@ -137,12 +137,13 @@ jobs:
       # implicit success().
       # SOLEUR-DEBT: exit 0 while no host consumer reads this bundle (HARD-11, runbook inngest-config-refresh); go
       # blocking like reusable-release.yml once the consumer reads zot only, and reconcile ADR-135 (still says
-      # GHCR-direct) with ADR-096's AP-016 lapse (no host holds a GHCR credential). Tracked in the issue filed at ship.
+      # GHCR-direct) with ADR-096's AP-016 lapse (no host holds a GHCR credential; see the ADR-135 addendum).
       # Guard: plugins/soleur/test/inngest-config-bundle-mirror.test.sh.
       - name: Mirror bundle GHCR->zot (crane, digest-preserving)
         id: zot_mirror
         if: steps.docker_build.outcome == 'success'
         continue-on-error: true
+        timeout-minutes: 20
         env:
           DIGEST: ${{ steps.docker_build.outputs.digest }}
           BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}
@@ -170,16 +171,20 @@ jobs:
           # One simple command per stage, each routed with || degraded: a checksum mismatch (a
           # supply-chain signal) gets its own reason instead of reading as a network blip, and
           # sha256sum's stderr stays unredirected so the mismatch is in the step log.
-          curl -fsSL -o "$CRANE_TGZ" \
+          curl -fsSL --max-time 120 -o "$CRANE_TGZ" \
             "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
             || degraded crane_download "$?" "crane fetch failed on the runner"
           echo "${CRANE_SHA256}  ${CRANE_TGZ}" | sha256sum -c - \
             || { rc=$?; degraded crane_checksum "$rc" "crane checksum mismatch or sha256sum failure; the archive was not extracted"; }
           sudo tar -xzf "$CRANE_TGZ" -C /usr/local/bin crane \
             || degraded crane_extract "$?" "crane extract failed on the runner"
-          # crane copy of a tag is expected to keep the digest, so the pointer's @sha256 would resolve on
-          # both registries; this step does not verify that (DIGEST is plumbed but unused today).
-          retry crane copy "${IMAGE}:v${VERSION}" "${ZOT_DST}" || degraded copy "$?" "crane copy failed after 3 attempts"
+          # Each attempt is bounded (timeout 180), so three attempts plus backoff stay well inside the step timeout.
+          retry timeout 180 crane copy "${IMAGE}:v${VERSION}" "${ZOT_DST}" || degraded copy "$?" "crane copy failed after 3 attempts"
+          # The pointer's @sha256 must resolve on both registries, so confirm the copy kept the built digest.
+          # The looked-up value is shape-checked and never interpolated into the annotation.
+          ZOT_DIGEST="$(timeout 60 crane digest "${ZOT_DST}")" || degraded digest_lookup "$?" "crane digest lookup failed after the copy"
+          [[ "$ZOT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || degraded digest_lookup 1 "crane digest returned an unexpected shape"
+          [[ "$ZOT_DIGEST" == "${DIGEST:-}" ]] || degraded digest_mismatch 1 "the zot digest differs from the built digest"
           echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
 
       - name: Tear down cloudflared registry bridge
