@@ -331,6 +331,16 @@ No Product/UX gate (no user-facing UI surface; published legal prose only). No C
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** a wrong transport-security sentence in a published policy misleads every reader at once, but no single reader's account, data or money is put at new risk by this edit, so `single-user incident` (CPO sign-off) is not warranted; `none` is rejected because the PR edits a published Art. 13 disclosure.
 
+## Observability
+
+No server-side code, route, job or failure path is added; the only file under a sensitive path is the SHA-pin constants file `apps/web-platform/lib/legal/legal-doc-shas.ts`, whose drift is caught by the CI `tc-document-sha-guard` and the vitest guard, not by runtime telemetry. Observability layer: none new (published static prose). The probe below needs no SSH and no credentials.
+
+```yaml
+discoverability_test:
+  command: grep -c "We do not claim TLS for server-to-server traffic" docs/legal/privacy-policy.md
+  expected_output: "1"
+```
+
 ## Test Scenarios
 
 No application code changes, so no new unit test (`cq-write-failing-tests-before` governs code). The verification is the existing gates plus a diff-level check of the exact new strings:
