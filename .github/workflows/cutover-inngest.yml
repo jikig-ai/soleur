@@ -201,9 +201,10 @@ jobs:
           # recut. It is NOT. A replace destroys and recreates the SERVER and RE-ATTACHES the same
           # hcloud volume — /mnt/data and the latch survive it (measured: volume 106261946 created
           # 2026-07-07, attached to a host created 2026-08-20, latch intact). No apply_target
-          # recuts /mnt/data today; the design for one is tracked in #7695. Until it exists there
-          # is no in-repo path that legitimately clears the latch, so narrowing this window on the
-          # belief that a replace cleared it would be narrowing it on a false premise.
+          # recuts /mnt/data (inngest-volume-recut, #7695, was converted by #8285 and deleted
+          # with it). The only in-repo way to authorize a second flush is op=reflush (#7777), which
+          # appends a cleared_at record rather than erasing the latch, so narrowing this window on
+          # the belief that a replace cleared the latch would be narrowing it on a false premise.
           FLUSH_LATCH_SINCE: ${{ vars.FLUSH_LATCH_SINCE }}
           # The quiesce→register window (ISO-8601), OPTIONAL operator repo/env vars, mapped here
           # so the shell actually sees them (GitHub does not export repo vars to the step unless

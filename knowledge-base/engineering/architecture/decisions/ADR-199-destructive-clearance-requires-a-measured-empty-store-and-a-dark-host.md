@@ -357,3 +357,55 @@ store is provably healthy. The dark-host gate library
 ADR-142 addendum of 2026-10-08 and 2026-10-09.
 
 **Appended 2026-10-09 (#8285 PR B).** `apply_target=inngest-backstop-retire` and `tests/scripts/lib/inngest-backstop-retire-gate.sh`, named above, were deleted by PR B after the dispatch ran to completion (volume 106261946 answered 404 at 2026-10-09T16:21:26Z). The invariant of this ADR is unchanged and still enforced by `tests/scripts/lib/inngest-host-dark-gate.sh` for `scripts/cutover-inngest.sh`. See the ADR-142 addendum of 2026-10-09.
+
+## Addendum — 2026-10-14 (#8316)
+
+Appended; nothing above is changed. The gate this ADR's guards were written for is retired. #8316 asked
+whether the dormant recut target should be retired or kept; its inputs resolved (the ADR-142 additive
+path landed in #8248, `inngest-volume-recut` was converted by #8285 PR A (#9784) and deleted by PR B
+(#9877), and #7777, #8078 and #7695 are closed). **Retired:** `inngest_host_dark_gate`, the entry
+point with no production caller since PR A, and `_ihdg_finished_count`, the one helper only it used,
+were deleted from `tests/scripts/lib/inngest-host-dark-gate.sh`, together with the sections of
+`tests/scripts/test-inngest-host-dark-gate.sh` that exercised them. The library stays for
+`scripts/cutover-inngest.sh`: `inngest_execute_registry_gate` and the shared `_ihdg_*` helpers are
+byte-identical. The retired code is recoverable at `b6d745fe78`
+(`git show b6d745fe78:tests/scripts/lib/inngest-host-dark-gate.sh`).
+
+**Superseded by this addendum, by name:**
+
+- the Status paragraph's claim that `apply_target=inngest-volume-recut` "cannot reach `terraform plan`
+  without `inngest_host_dark_gate` returning the literal `dark`" — the target does not exist, and
+  neither does the function;
+- Decision commitment 1 ("Twenty predicates ... G1..G20"): the library now carries the execute gate's
+  fourteen predicates, E1..E14; G1-G7 are the historical names of what are now E1-E7 (the shared
+  `_ihdg_graded_row` prelude);
+- the Consequences bullet "Until the host is replaced, every dispatch verdicts `stale_schema`": it
+  was written for the pre-cutover dark host, and on a `done` host the common path was G19, not a
+  replace; there is now no dispatch to verdict;
+- the Consequences cost bullet "Twenty predicates plus two batteries": there is one gate, one
+  battery of drop-one cases and one guard-mutation harness;
+- the 2026-10-09 sentence "The invariant of this ADR is unchanged and still enforced by
+  `tests/scripts/lib/inngest-host-dark-gate.sh` for `scripts/cutover-inngest.sh`". That overclaimed:
+  the surviving gate grades only "the host is positively dark" (E1-E14), not the invariant below.
+
+**What the survivor does not reproduce.** The store-empty predicates (G11-G13: `redis_active`,
+`redis_keys` numeric, `redis_keys == 0`), the mount-devid pin (G14), the live Hetzner volume-id pin
+(G17), the #7674 followthrough (G18), the cutover-flag allowlist at dispatch time (G19) and the
+diagnostic-boot refusal (G20) have no executable form in the repository after this change. The
+probe still emits the fields they read; only their consumer is gone.
+
+**The invariant is now a requirement on any future target, not an enforced property.** A destructive
+clearance of the live store needs a measured-empty store and a dark host, and any destructive
+clearing target written after this addendum must reintroduce a gate with that conjunction before it
+may plan a destroy. The reason this does not leave the sole copy unguarded today is the plan-time
+wall in `apps/web-platform/infra/inngest-redis-luks.tf`: `hcloud_volume.inngest_redis_luks` (the sole
+copy since 2026-10-09) carries `delete_protection = true` and `prevent_destroy = true` (#9879). That
+protection is conditional on ADR-282, whose status is `adopting` as read when this was written, so it
+is not yet a settled property of the repository. Lifting it is the deliberate two-step route recorded
+in that file (lift delete protection in its own reviewed change, let it apply, then remove
+`prevent_destroy`); the gate requirement above attaches to that lift. The loss is therefore bounded
+to "a future destroy target written after protection is lifted", not to the live volume today.
+
+**Historical, not edited:** ADR-100 section 7 and its "Where the code is" paragraph, and the
+ADR-142 and ADR-225 path mentions, describe the gate as it was; they stay as written. `status:` stays
+`accepted` and no front matter changes. #8316 stays open for the operator to close.

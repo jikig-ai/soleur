@@ -2558,7 +2558,7 @@ assert "#6178 op=doublefire-probe arm surfaces the dropped count (arm-scoped)" "
 # #8054 — op=execute 2.0 DARK ARM. Until #8054 the non-200 branch was `exit 1`, which made 2.0
 # unrunnable in the very sequence it guards (P1-5 keeps the dedicated host dark until op=arm, which
 # runs AFTER execute). The arm now grades darkness positively through
-# tests/scripts/lib/inngest-host-dark-gate.sh's second entry point. These rows pin the WIRING —
+# tests/scripts/lib/inngest-host-dark-gate.sh's one entry point. These rows pin the WIRING —
 # the gate's own predicates are the dark-gate suite's job.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 GATE_LIB="$REPO_ROOT/tests/scripts/lib/inngest-host-dark-gate.sh"
@@ -2604,19 +2604,37 @@ _CENSUS="$(_gate_census "$BODY_SH")" && _census_ok=1 || _census_ok=0
 assert "#8079 gate consumer census: 1 in execute, 1 in registry-probe, 0 in every other arm, >= 12 arms enumerated ($_CENSUS)" "[[ '$_census_ok' -eq 1 ]]"
 assert "#8079 gate consumer whole-file total is exactly 2 OCCURRENCES (a call outside every arm, or a second on the same line, cannot hide), got $(_gate_total "$BODY_SH")" \
   "[[ \$(_gate_total '$BODY_SH') -eq 2 ]]"
-# The lib exports a second verdict-producing entry point (inngest_host_dark_gate, the recut gate)
-# and the _ihdg_* helpers; a consumer reaching a verdict through those would sit outside this
-# census's name. The script calls none of them.
-assert "#8079 the script reaches no OTHER lib entry point (inngest_host_dark_gate / _ihdg_* / _erg_*) — the census's one name is the whole consumer surface" \
-  "! grep -v '^[[:space:]]*#' '$BODY_SH' | grep -E 'inngest_host_dark_gate|_ihdg_[a-z_]+|_erg_(emit|hb_newest|flag_class|[a-z_]*verdict)' | grep -v 'inngest_execute_registry_gate' >/dev/null"
+# The lib exports ONE entry point (inngest_execute_registry_gate) plus the _ihdg_* / _erg_* helpers;
+# a consumer reaching a verdict through a helper, or through any other `inngest_*_gate` name (the
+# retired inngest_host_dark_gate included), would sit outside this census's name. The script calls
+# none of them. The allowed name is STRIPPED (word-bounded) from each non-comment line BEFORE the
+# forbidden family is matched: the earlier form dropped WHOLE LINES that mentioned the allowed name
+# (`grep -v`), so a line holding the allowed name AND a forbidden helper escaped.
+_GATE_OTHER_RE='inngest_[a-z_]*_gate|_ihdg_[a-z_]+|_erg_(emit|hb_newest|flag_class|[a-z_]*verdict)'
+_gate_scan_lines() { grep -vc '^[[:space:]]*#' "$1" || true; }   # non-comment lines the census scans
+_gate_other_surface() {   # $1 = script → stdout: occurrences of the forbidden family outside comments
+  grep -v '^[[:space:]]*#' "$1" | sed 's/\binngest_execute_registry_gate\b//g' | grep -oE "$_GATE_OTHER_RE" | wc -l
+}
+_gate_other_surface_old() {   # the pre-#8316 form, kept ONLY so the strengthening below is shown to be real
+  ! grep -v '^[[:space:]]*#' "$1" | grep -E 'inngest_host_dark_gate|_ihdg_[a-z_]+|_erg_(emit|hb_newest|flag_class|[a-z_]*verdict)' | grep -v 'inngest_execute_registry_gate' >/dev/null
+}
+check_gate_surface() { [[ "$(_gate_other_surface "$1")" -eq 0 ]]; }
+check_gate_scan_nonvacuous() { [[ "$(_gate_scan_lines "$1")" -gt 0 ]]; }
+assert "#8079 the script reaches no OTHER lib entry point (any other inngest_*_gate / _ihdg_* / _erg_* name) — the census's one name is the whole consumer surface" \
+  "check_gate_surface '$BODY_SH'"
+assert "#8316 the census scans a non-empty script (an empty scan would make the absence assertion above pass vacuously)" \
+  "check_gate_scan_nonvacuous '$BODY_SH'"
+# The family must cover EVERY _erg_* helper the lib defines, or a new helper would escape the census.
+_erg_uncovered="$(grep -oE '^_erg_[a-z_]+\(\)' "$GATE_LIB" | tr -d '()' | grep -vE '^_erg_(emit|hb_newest|flag_class|[a-z_]*verdict)$' || true)"
+assert "#8316 the census family covers every _erg_* helper the lib defines (uncovered: ${_erg_uncovered:-none})" "[[ -z '$_erg_uncovered' ]]"
 
 # ── Every token the lib can emit has a case arm; the *) arm exits 1 ─────────────
 LIB_TOKENS=$(grep -v '^[[:space:]]*#' "$GATE_LIB" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u || true)
 LIB_TOKEN_N=$(printf '%s\n' "$LIB_TOKENS" | grep -c . || true)
 assert "#8054 the lib emits a non-trivial token set (>= 11, got $LIB_TOKEN_N)" "[[ '$LIB_TOKEN_N' -ge 11 ]]"
-# The recut gate's own tokens (redis_down, store_populated, …) are not reachable from the execute
-# gate; the case must cover every token the EXECUTE gate can return. Derive that set from the
-# execute gate's function body + the shared helpers' whitelist in it.
+# The lib's token set IS the execute gate's token set now (the retired gate's own tokens —
+# redis_down, store_populated, … — died with it); the case must cover every token the EXECUTE gate
+# can return. Derive that set from the execute gate's function body + the shared helpers' whitelist in it.
 ERG_FN_FILE="$(mktemp)"; SCRATCH+=("$ERG_FN_FILE")
 awk '/^inngest_execute_registry_gate\(\) \{$/,/^\}$/' "$GATE_LIB" > "$ERG_FN_FILE"
 ERG_TOKENS=$(grep -v '^[[:space:]]*#' "$ERG_FN_FILE" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u || true)
@@ -3370,6 +3388,27 @@ check_rpg_done_not_2_0_remedy() {
   ! grep -qE 'the cutover already completed|op=verify|restart-inngest-server' <<<"$(awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$(_rpg_region_of "$1")" | grep -v '^[[:space:]]*#')" 
 }
 mutate_file "rpg done branch reverts to 2.0 remedy" "$BODY_SH" "${_RPG_RANGE}"'s|^\(              echo "::error::registry-probe REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag reads .done.\.\) Since cutover step 2\.4 this host owns production cron scheduling, so scheduling may be DOWN — the numbered registry-probe: next steps are in this step.s log\."$|\1 done => the cutover already completed: dispatch op=verify."|' check_rpg_done_not_2_0_remedy
+# #8316 census-strengthening rows. mutate_file refuses an append (zero `<` lines), so each mutation
+# REPLACES one existing line. (1) a non-comment call to the retired entry point; (2) a shared helper
+# called directly; (3) a same-line combo of the ALLOWED name and a forbidden helper — whole-line
+# dropping (the old form) lets it through, the word-bounded strip does not.
+mutate_file "census: retired entry point called (#8316 row 1)" "$BODY_SH" 's|^    # op=rollback — the AUTHORED reverse of the cutover (P1-13)\. As of #6369 it has TWO$|    _x="$(inngest_host_dark_gate --rows-file /dev/null)" \|\| true|' check_gate_surface
+mutate_file "census: shared helper called directly (#8316 row 2)" "$BODY_SH" 's|^    # op=rollback — the AUTHORED reverse of the cutover (P1-13)\. As of #6369 it has TWO$|    _x="$(_ihdg_field "$m" boot_id)" \|\| true|' check_gate_surface
+_R3_EXPR='s|^\(      RPG_VERDICT="\$(inngest_execute_registry_gate .*\) \|\| RPG_RC=\$?$|\1 \|\| RPG_RC=$?; _y="$(inngest_execute_registry_gate --x)" \&\& _ihdg_graded_row|'
+mutate_file "census: allowed name and a forbidden helper on ONE line (#8316 row 3)" "$BODY_SH" "${_RPG_RANGE}${_R3_EXPR}" check_gate_surface
+_R3_COPY="$(mktemp)"; SCRATCH+=("$_R3_COPY")
+sed "${_RPG_RANGE}${_R3_EXPR}" "$BODY_SH" > "$_R3_COPY"
+assert "#8316 the pre-strengthening form PASSED row 3 (it dropped the whole line): the new form is strictly stronger, not a rewording" \
+  "_gate_other_surface_old '$_R3_COPY' && ! check_gate_surface '$_R3_COPY'"
+# Row 4 — the dedicated non-vacuity row reddens on an EMPTY scan (the absence assertion alone would pass there).
+assert "#8316 row 4: the non-vacuity row reddens when the scanned script is empty" "! check_gate_scan_nonvacuous /dev/null"
+# Positive controls: a script whose only mention is a comment, and one with the allowed name alone on a line.
+_PC="$(mktemp)"; SCRATCH+=("$_PC")
+printf '%s\n' '# inngest_host_dark_gate was retired under #8316' 'x=1' > "$_PC"
+assert "#8316 positive control: a script whose only mention of a retired name is a comment passes, and is scanned" \
+  "check_gate_surface '$_PC' && check_gate_scan_nonvacuous '$_PC'"
+printf '%s\n' 'inngest_execute_registry_gate' > "$_PC"
+assert "#8316 positive control: the allowed name alone on a line passes" "check_gate_surface '$_PC'"
 # Row H — M1.2: the probe arm's call renamed. Property: the census (registry-probe=1) reds.
 check_rpg_census() { _gate_census "$1" >/dev/null; }
 mutate_file "rpg gate call renamed (census M1.2)" "$BODY_SH" "${_RPG_RANGE}"'s|^      RPG_VERDICT="\$(inngest_execute_registry_gate |      RPG_VERDICT="$(inngest_executeX_registry_gate |' check_rpg_census
@@ -4755,7 +4794,11 @@ _DISPATCHED=$((PASS + FAIL))
 # 1090 -> 1101 (+11) at #9757 (argv-bearer sweep, held-back HMAC arms): Guard 1 of the canonical-HMAC allowance, measured on the tree: the
 #   exactly-one-canonical-line-per-arm row and the allowance-removes-exactly-two row (+2), the mutation matrix (rows 1 x2, 2, 3, 4, 5, +6) and the
 #   delete-the-filter row 3b (+1), and the two must-pass row 6 variants (+2).
-_EXACT_FLOOR=1101
+# 1101 -> 1110 (+9) at #8316 (retire the suite-only dark-gate entry point), measured: the census assertion was rewritten (word-bounded
+#   strip, widened `inngest_*_gate` family; net 0), plus the non-vacuity row, the every-_erg_*-helper-covered row (+2), the three
+#   mutation rows (retired entry point, helper called directly, allowed name + helper on ONE line) (+3), the old-form-passes-row-3
+#   row (+1), the empty-scan row (+1), and the two positive controls (+2).
+_EXACT_FLOOR=1110
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

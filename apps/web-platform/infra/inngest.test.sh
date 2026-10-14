@@ -873,9 +873,11 @@ assert "A4 probe emits the marker under the resolved inngest-server-probe tag (l
 assert "A4 a failed curl degrades http_code to the literal 000, not to an empty field" \
   "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
 
-# --- #7695: the /mnt/data store facts Guard 2 decides on ---------------------------------
-# Guard 2 (the recut dispatch gate) clears a DESTRUCTIVE apply only on a measured-empty store.
-# Every field below is one it reads, and each carries two distinct not-a-measurement tokens:
+# --- #7695: the /mnt/data store facts the retired Guard 2 decided on ---------------------
+# Guard 2 (the recut dispatch gate) was retired under #8316; these fields are still emitted and
+# pinned here, and their only consumer is gone (pruning them is tracked for the next probe_schema
+# bump). While it existed it cleared a DESTRUCTIVE apply only on a measured-empty store.
+# Every field below is one it read, and each carries two distinct not-a-measurement tokens:
 # `n/a` = the question does not apply on this host, `__UNREADABLE__` = it applied and could not
 # be answered. Neither may ever degrade to `0`, because `0` IS the clearance condition — a
 # degradation that renders as `0` would authorize the destroy it was meant to withhold.

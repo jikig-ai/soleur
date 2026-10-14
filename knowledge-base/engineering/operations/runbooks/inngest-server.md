@@ -1478,9 +1478,9 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    ready to land.
 
    **A stale-schema row is not a sick host.** `scheduled-inngest-health.yml` grades liveness and
-   will keep reporting the host HEALTHY on a row the recut gate refuses as `stale_schema` — the
+   will keep reporting the host HEALTHY on a row the execute gate refuses as `stale_schema` — the
    two ask different questions, and that divergence is by design, not a monitoring gap. A host
-   running an older image is serving fine and simply cannot answer the recut gate's question.
+   running an older image is serving fine and simply cannot answer the execute gate's question.
 3. **Dispatch the deploy** (workflow_dispatch-only; the build never chains into it):
 
    ```
@@ -2370,6 +2370,14 @@ ADR-100, amendment 2026-09-14.
      > `GET /v1/volumes/106261946 -> 404` at 16:21:26Z), so there is no dispatch left that touches it. The
      > dark-gate library stays for `scripts/cutover-inngest.sh`. See `inngest-luks-cutover-6894.md` §5b for the
      > record of the retirement.
+     >
+     > **Update (2026-10-14, #8316).** Appended; nothing above is changed. The dark-gate entry point
+     > `inngest_host_dark_gate` (the recut dispatch's "Guard 2") is retired: it and its one private helper were
+     > deleted from `tests/scripts/lib/inngest-host-dark-gate.sh`, which stays for `scripts/cutover-inngest.sh`
+     > (`inngest_execute_registry_gate` only). So the "recut" remediation named in the latch-refusal text above
+     > has neither a dispatch nor a gate; the latch yields only to the authorized flush `op=reflush` (#7777). The
+     > retired code is recoverable at `b6d745fe78`, and the decision is recorded in the ADR-199 addendum of
+     > 2026-10-14. #8316 stays open for the operator to close.
 
    - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
      set to `armed` (last), each via **stdin** (never argv), exit-gated. The enabled 30s poll
