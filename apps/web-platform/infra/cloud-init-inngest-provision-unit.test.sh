@@ -1272,7 +1272,10 @@ del_line("OnBootSec=90s"); save()'
 row G6-r7 RED "G6: [Unit] StartLimitIntervalSec=0" '
 del_line("StartLimitIntervalSec=0"); w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); ins_after("Type=oneshot", ["StartLimitIntervalSec=0"], after=w); save()'
 row G6-r8 RED "G6: the script refuses xtrace" '
-ls = lines(); j = [k for k, l in enumerate(ls) if l.strip().startswith("case \"$-\" in *x*)")]; assert len(j) == 1; del ls[j[0]]; put(ls); save()'
+ls = lines(); base = one("- path: /usr/local/bin/soleur-inngest-provision")
+nxt = [i for i, l in enumerate(ls) if i > base and l.strip().startswith("- path:")]
+end = nxt[0] if nxt else len(ls)
+j = [k for k, l in enumerate(ls) if base < k < end and l.strip().startswith("case \"$-\" in *x*)")]; assert len(j) == 1; del ls[j[0]]; put(ls); save()'
 row G6-r9 RED "G6: ExecStart is the bare script path" '
 rep_line("ExecStart=/usr/local/bin/soleur-inngest-provision", "ExecStart=/bin/sh -x /usr/local/bin/soleur-inngest-provision"); save()'
 row G6-r10 PASS - '
@@ -1347,7 +1350,10 @@ ins_before("- groupadd -f docker", ["- systemctl add-wants multi-user.target sol
 row G6-r11 RED "G6: no drop-in, shadow copy or runtime edit" '
 ins_before("- path: /etc/systemd/system/soleur-inngest-provision.service", ["- path: /etc/systemd/system/soleur-inngest-provision.service.d/override.conf", "  content: |", "    [Service]", "    Restart=no", "  owner: root:root", "  permissions: \x270644\x27"]); save()'
 row G6-r12 RED "G6: nothing in the script turns xtrace/verbose on" '
-ls = lines(); j = [k for k, l in enumerate(ls) if l.strip().startswith("case \"$-\" in *x*)")]; assert len(j) == 1
+ls = lines(); base = one("- path: /usr/local/bin/soleur-inngest-provision")
+nxt = [i for i, l in enumerate(ls) if i > base and l.strip().startswith("- path:")]
+end = nxt[0] if nxt else len(ls)
+j = [k for k, l in enumerate(ls) if base < k < end and l.strip().startswith("case \"$-\" in *x*)")]; assert len(j) == 1
 ls[j[0] + 1:j[0] + 1] = [ind(j[0]) + "set -x"]; put(ls); save()'
 row G6-r13 RED "G6: the service sets none of the directives" '
 w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); ins_after("Type=oneshot", ["TimeoutSec=infinity"], after=w); save()'
