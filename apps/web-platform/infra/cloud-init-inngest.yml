@@ -1785,7 +1785,6 @@ write_files:
         [ $((now - mtime)) -ge "$NOOP_THROTTLE_S" ]
       }
       noop_emit_due() { emit_due "$NOOP_STAMP"; }
-      seam_emit_due() { emit_due "$SEAM_STAMP"; }
 
       noop() {
         noop_emit_due || return 0
@@ -1814,11 +1813,10 @@ write_files:
         # printf-interpolated raw — `verify_fail pointer-malformed` deliberately carries
         # the REJECTED pointer in $3, and a quote-bearing value would otherwise smuggle a
         # second "bundle_sha256" key that the anchored read-back never asked for.
-        case "$1" in ''|*[!a-z0-9:-]*) _wsv=invalid ;; *) _wsv="$1" ;; esac
-        _wsv2="$${2:-}"
-        case "$_wsv2" in '') ;; *[!0-9]*) _wsv2=invalid ;; esac
-        _wsv3="$${3:-}"
-        case "$_wsv3" in '') ;; *[!0-9a-f]*) _wsv3=invalid ;; *) [ "$${#_wsv3}" -eq 64 ] || _wsv3=invalid ;; esac
+        _wsv="$1" _wsv2="$${2:-}" _wsv3="$${3:-}"
+        case "$_wsv" in ''|*[!a-z0-9:-]*) _wsv=invalid ;; esac
+        case "$_wsv2" in ''|*[!0-9]*) _wsv2=invalid ;; esac
+        case "$_wsv3" in ''|*[!0-9a-f]*) _wsv3=invalid ;; *) [ "$${#_wsv3}" -eq 64 ] || _wsv3=invalid ;; esac
         printf '{"applied_version":%s,"bundle_sha256":"%s","applied_ts":"%s","verify_result":"%s","attempted_version":"%s","attempted_sha256":"%s"}\n' \
           "$applied_version" "$applied_sha" \
           "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
@@ -1834,24 +1832,12 @@ write_files:
       # tick regardless — the oneshot failure + timer retry is the liveness signal, the row
       # is the reason (the comparator DIVERGES if it is the last thing the host said).
       VF_STAMP="$${STATE_DIR}/.verify-fail-emitted"
-      verify_fail_emit_due() {
-        # $1 = reason token. Fails toward EMITTING: absent/unreadable stamp, an
-        # unmeasurable clock, or a reason change all answer "emit" (noop_emit_due's
-        # posture — a broken stamp restores noisy, never manufactures silent).
-        local _vf_now _vf_mtime _vf_prev
-        _vf_prev="$(cat "$VF_STAMP" 2>/dev/null || true)"
-        [ "$_vf_prev" != "$1" ] && return 0
-        _vf_now="$(date +%s 2>/dev/null || true)"
-        case "$_vf_now" in ''|*[!0-9]*) return 0 ;; esac
-        _vf_mtime="$(stat -c %Y "$VF_STAMP" 2>/dev/null || true)"
-        case "$_vf_mtime" in ''|*[!0-9]*) return 0 ;; esac
-        [ $((_vf_now - _vf_mtime)) -ge "$NOOP_THROTTLE_S" ]
-      }
       verify_fail() {
         # $1 = reason token; $2 = manifest VERSION when known (rejver= — never `version=`,
-        # which the comparator would parse as applied state); $3 = extra detail.
+        # which the comparator would parse as applied state); $3 = extra detail. The emit
+        # is reason-change-or-300s-window (emit_due fails toward emitting, never silence).
         write_state "verify-fail:$1" "$${2:-}" "$pointer" || true
-        if verify_fail_emit_due "$1"; then
+        if [ "$(cat "$VF_STAMP" 2>/dev/null || true)" != "$1" ] || emit_due "$VF_STAMP"; then
           emit "SOLEUR_INFRA_PULL_VERIFY_FAIL" "reason=$1 offered=$${pointer:0:12} rejver=$${2:-none}$${3:+ $3}"
           printf '%s' "$1" > "$VF_STAMP" 2>/dev/null || true
         fi
@@ -1863,10 +1849,8 @@ write_files:
       # Deferred SEAM_REFUSED row (recorded at the gate, before STATE_DIR existed):
       # throttled on the same fail-open 300 s window — a persisting seam env emits
       # once per window, not ~1,440 rows/day. Bare logger, the registered shape.
-      if [ "$${SEAM_REFUSED_COUNT:-0}" -gt 0 ] && seam_emit_due; then
-        logger -t inngest-config-refresh \
-          "SOLEUR_INFRA_PULL_SEAM_REFUSED count=$SEAM_REFUSED_COUNT detail=REFRESH_* seam names present without --fixture-seams argv; unset and ignored (#7761)" \
-          2>/dev/null || true
+      if [ "$${SEAM_REFUSED_COUNT:-0}" -gt 0 ] && emit_due "$SEAM_STAMP"; then
+        logger -t inngest-config-refresh "SOLEUR_INFRA_PULL_SEAM_REFUSED count=$SEAM_REFUSED_COUNT detail=REFRESH_* seam names present without --fixture-seams argv; unset and ignored (#7761)" 2>/dev/null || true
         touch "$SEAM_STAMP" 2>/dev/null || true
       fi
 
@@ -1954,8 +1938,8 @@ write_files:
       _tgz_bytes="$(stat -c %s "$STAGE/bundle.tar.gz" 2>/dev/null || echo 0)"
       case "$_tgz_bytes" in ''|*[!0-9]*) _tgz_bytes=0 ;; esac
       [ "$_tgz_bytes" -gt 67108864 ] && verify_fail extract "" "member=oversized"
-      _bad_member="$(tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '$1 !~ /^[-d]/ {print; exit}')"
-      [ -n "$_bad_member" ] && verify_fail extract "" "member=nonregular"
+      tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '$1 !~ /^[-d]/ {found=1; exit} END{exit found?0:1}' \
+        && verify_fail extract "" "member=nonregular" || true
       tar -xzf "$STAGE/bundle.tar.gz" -C "$STAGE/bundle" \
         --no-same-owner --no-same-permissions 2>/dev/null || verify_fail extract
       [ -f "$STAGE/bundle/manifest.txt" ] || verify_fail manifest-absent
@@ -1997,11 +1981,8 @@ write_files:
       # convergence authority, so repair by falling through to install + the dual
       # ledger write; the emit below marks it REPAIRED, distinguishable from APPLIED.
       _repairing=0
-      if [ "$VERSION" = "$applied_version" ] && [ "$pointer" != "$applied_sha" ]; then
-        _repairing=1
-      elif [ "$VERSION" -le "$applied_version" ]; then
-        verify_fail rollback-or-replay "$VERSION"
-      fi
+      if [ "$VERSION" = "$applied_version" ] && [ "$pointer" != "$applied_sha" ]; then _repairing=1
+      elif [ "$VERSION" -le "$applied_version" ]; then verify_fail rollback-or-replay "$VERSION"; fi
 
       # Member names must be bare basenames ending .sh (the refresh set is scripts-only,
       # v1) — anything else would aim the install outside the DEST_SPEC allowlist or at a
@@ -2050,13 +2031,10 @@ write_files:
       applied_sha="$pointer"
       write_state ok "$VERSION" "$pointer" \
         || verify_fail ledger-write "$VERSION"
-      if [ "$_repairing" -eq 1 ]; then
-        # Distinguishable from APPLIED — the next same-digest NOOP converges the
-        # comparator; the REPAIRED row is the audit of the torn-ledger self-heal.
-        emit "SOLEUR_INFRA_PULL_REPAIRED" "version=$VERSION sha256=$pointer verify=ok"
-      else
-        emit "SOLEUR_INFRA_PULL_APPLIED" "version=$VERSION sha256=$pointer verify=ok"
-      fi
+      # REPAIRED (not APPLIED) marks the torn-ledger self-heal — the next same-digest
+      # NOOP converges the comparator; the row is the audit trail.
+      _m=APPLIED; [ "$_repairing" -eq 1 ] && _m=REPAIRED
+      emit "SOLEUR_INFRA_PULL_$_m" "version=$VERSION sha256=$pointer verify=ok"
       exit 0
     owner: root:root
     permissions: '0755'
