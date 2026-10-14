@@ -1422,7 +1422,10 @@ case_capture_census() { # <script>
     !skip' | grep -nE '"\$\{(inv|gdinv)\[@\]\}"|\$\{?GIT_DATA_SSH|\$\{?WEB_HOST_SSH' || true)"
   calls="$(printf '%s\n' "$code" | grep -cE '^[[:space:]]+gd_capture ' || true)"
   CAPTURE_DETAIL="calls=$calls outside=[$(printf '%s' "$outside" | tr '\n' '|' | cut -c1-300)]"
-  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 5 ]
+  # Six: refuse_if_unmounted, the store session, the freeze probe, the fence probe, the freeze gc check
+  # and mode_wipe_assert's one call (#10138: it adds the optional stdin-file and bound parameters, the
+  # single ssh site is unchanged).
+  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 6 ]
 }
 if case_line2; then pass "S8a/G5: a findmnt answer with an injected second line is probe_failed rc=96 and neither line is printed"
 else fail "S8a/G5: a multi-line captured value was accepted or printed" "$(ctx)"; fi
@@ -1432,7 +1435,7 @@ run_case g5big "${KEYED[@]}" SHIM_FINDMNT=big
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=96' "$OUT" && ! grep -q 'aaaaaaaaaa' "$OUT"; then
   pass "G5: a 5005-byte answer that would match once truncated is refused (cap 4096), never printed"
 else fail "G5: an oversized answer was truncated into an accepted value, or printed" "$(ctx)"; fi
-if case_capture_census "$SCRIPT"; then pass "G5 census: exactly five gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
+if case_capture_census "$SCRIPT"; then pass "G5 census: exactly six gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
 else fail "G5 census: a raw capture or a stray invocation exists" "$CAPTURE_DETAIL"; fi
 
 # ── GUARD 7 — real modes are refused before any remote call ───────────────────────────
@@ -2689,7 +2692,7 @@ if mutate g5-no-pattern "$SCRIPT" 4 "s#^    \\*\\\$'\\\\n'\\*\\) return 96 ;;\$#
   CASE_SCRIPT="$MUTANT" mutant_red g5-no-pattern case_line2
 fi
 # G5 row 2 — drop the timeout wrapper.
-if mutate g5-no-timeout "$SCRIPT" 2 's#^  val="\$\(timeout 30 #  val="$(#'; then
+if mutate g5-no-timeout "$SCRIPT" 2 's#^  val="\$\(timeout "\$tmo" #  val="$(#'; then
   CASE_SCRIPT="$MUTANT" mutant_red g5-no-timeout case_hang
 fi
 # G5 row 3 — echo the captured value in the mismatch branch.
