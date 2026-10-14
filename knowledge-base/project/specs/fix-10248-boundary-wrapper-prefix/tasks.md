@@ -26,7 +26,8 @@ Draft PR: #10288.
 ## Phase 2 — Carrier + canonical check
 
 - [ ] 2.1 `.claude/hooks/lib/incidents.sh`: `unset` the exported names, nested `source` of
-      `../../../plugins/soleur/scripts/lib/wrapper-boundary.sh`, WARN-on-failure to stderr.
+      `../../../plugins/soleur/scripts/lib/wrapper-boundary.sh` in the `[[ -f ]] && source … 2>/dev/null || true`
+      idiom (`incidents.sh:18-19`, `:57-63` precedents); load failure routes `headless_or_stderr warn`.
 - [ ] 2.2 `plugins/soleur/scripts/precommit-guard.sh`: source `$(dirname …)/lib/wrapper-boundary.sh`
       (fail-soft), `COMMIT_RE` → `(${SOLEUR_BOUNDARY_PFX:-}[[:space:]]+)*` form, amend the
       "Self-contained by design" header for the one same-dir lib.

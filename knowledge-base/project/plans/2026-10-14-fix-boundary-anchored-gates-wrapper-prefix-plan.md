@@ -21,6 +21,39 @@ lane: cross-domain
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed). (No `specs/<branch>/spec.md` exists on this fix- branch; there is no `lane:` to carry forward.)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-14 (headless `deepen-plan` — sequential inline pass; `Reviewed-Coverage: sequential-fallback`. No agent-spawn capability in the planning subagent, so the fan-out was replaced by direct execution of the skill's mechanical gates + the plan sharp-edges catalogue + targeted greps).
+**Sections enhanced:** Observability (probe command), Guard Contract (scan mechanics), Scope Check (attribution), Proposed Solution (source-hygiene + source idiom), Acceptance Criteria (input-class scoping), Dependencies & Risks (precedent diff).
+
+### Key Improvements
+
+1. `discoverability_test.command` swapped from the suite form (hits Check 10's 15 s-cap suite-shape reject) to a minimal `grep -m1` probe with a literal `expected_output`.
+2. Source idiom pinned to `incidents.sh`'s own two nested-source precedents (`:18-19`, `:57-63`) with `headless_or_stderr warn` as the WARN router — replaces a stale `hook-tool-kind.sh` WARN citation.
+3. Census guard hardened per sharp edges: comment-stripped scan (`grep-rewrite.test.sh:295` + `grep-q-pipe-guard.test.sh` `_strip_comments`), count-form verdicts (never `! grep -q`), exemption registry with justifications.
+4. Source-hygiene clause added: `unset` the exported names before sourcing so an inherited env value cannot masquerade as the loaded fragment; `SOLEUR_BOUNDARY_PFX_LOADED` sentinel for suites.
+5. Scope Check row 6 re-attributed: the both-directions contract is user direction, not issue text — verbatim issue quote retained for the gate-coverage claim.
+
+### New Considerations Discovered
+
+- `incidents.sh` already sources `plugins/soleur/scripts/lib/session-state.sh` across the `.claude`→`plugins` tree boundary — the exact idiom this change reuses, not a novel mechanism.
+- The base branch already plants `#10248` breadcrumb comments at `pre-merge-rebase.sh:121-122` and `precommit-guard.sh:49-50` ("do NOT extend per-site") — the shared-fragment mandate is pre-agreed in-tree.
+- `prod-write-defer-gate.sh`'s three rows include a `\\(` (subshell-open) boundary alternation — the same insertion point covers it; the doppler row already carries a partial env-asn prefix.
+- `rtk` string-payload escalation (`unparsed-wrapper` ask) and launcher arg-grammars recorded in `decision-challenges.md` as technical rows, deferred.
+
+### Halt gates resolved
+
+- 4.6 User-Brand Impact: present, `aggregate pattern` — PASS.
+- 4.7 Observability: present; probe verb `grep` allowlisted, no SSH, sub-15 s, literal expected output — PASS.
+- 4.8 PAT sweep: zero hits — PASS.
+- 4.9 UI wireframe: no UI-surface files — N/A.
+- 4.10 Encryption posture: no store/connection — N/A.
+- 4.11 Guard Contract: `scripts/lint-guard-contract.py` green, 3 guard entries, assemblies structural — PASS.
+- 4.12 Scope Check: single unfenced section, all rows mapped/provenanced — PASS.
+- 4.5 Network-outage deep-dive: trigger words present only as filename/token literals (`ship-runbook-ssh-gate.sh`, `timeout 5`), no connectivity claim — N/A.
+- 4.55 Downtime & Cutover: no infra/deploy/DB-lock surface — N/A.
+- 4.4 Precedent-diff: applied — see "Dependencies & Risks".
+
 ## Overview
 
 Boundary-anchored command gates in `.claude/hooks/` and `plugins/soleur/scripts/` match a gated command
@@ -99,7 +132,7 @@ the cache-context sourcing constraint is real, not hypothetical.
 
 **Repo conventions applied.** `strip_command_bodies` (#5192) is already the quote/heredoc stripper every
 SCAN-based gate uses — quoted occurrences of a gated command are already invisible there; the fragment only
-needs to behave on raw-`$COMMAND` sites (`guardrails.sh:145` deliberately, `precommit-guard.sh` always) where
+needs to behave on raw-`$COMMAND` sites (`guardrails.sh:145` and `:395` deliberately, `precommit-guard.sh` always) where
 the boundary alternation likewise excludes quote-adjacent words. `emit_incident` is the telemetry path;
 `test-helpers.sh` `assert_eq`/`print_results` is the suite idiom; `tmp-classify.sh`'s header documents the
 dual repo/plugin-cache `source` pattern `precommit-guard.sh` needs.
@@ -173,8 +206,12 @@ Semantics that make it anchor-faithful:
 Consumption paths:
 
 - **`.claude/hooks` side:** `lib/incidents.sh` gains one nested `source` resolving
-  `../../../plugins/soleur/scripts/lib/wrapper-boundary.sh` relative to itself, fail-soft with a WARN to
-  stderr (the `hook-tool-kind.sh` WARN pattern). Every affected hook already sources `incidents.sh`, so each
+  `../../../plugins/soleur/scripts/lib/wrapper-boundary.sh` relative to itself, in the exact idiom
+  `incidents.sh` already uses twice: `[[ -f "$_lib" ]] && source "$_lib" 2>/dev/null || true`
+  (`incidents.sh:18-19` sources `plugins/soleur/scripts/lib/session-state.sh` across the same tree boundary;
+  `:57-63` sources `lib/log-rotation.sh`); a load failure routes through `headless_or_stderr warn`
+  (`incidents.sh:20-21, 254` — the canonical WARN router that keeps hook stderr out of Claude Code's
+  verdict capture). Every affected hook already sources `incidents.sh`, so each
   site change is regex-only: insert `(${SOLEUR_BOUNDARY_PFX:-}[[:space:]]+)*` between the boundary group and
   the gated command. The `:-` default is load-bearing — several hooks run `set -u`; an unset fragment
   degrades to pre-fix matching (status quo), never a hard error and never a new hole.
@@ -365,9 +402,14 @@ logs:
   where: "incident log via lib/incidents.sh emit_incident (gate verdicts); suite output in CI logs"
   retention: "CI log retention; incident log rotation via lib/log-rotation.sh"
 discoverability_test:
-  command: "bash plugins/soleur/test/rtk-grammar-parity.test.sh"
-  expected_output: "ALL TESTS PASSED"
+  command: "grep -m1 SOLEUR_BOUNDARY_PFX plugins/soleur/scripts/lib/wrapper-boundary.sh"
+  expected_output: "SOLEUR_BOUNDARY_PFX"
 ```
+
+<!-- deepen-note: the suite form `bash plugins/soleur/test/rtk-grammar-parity.test.sh` completes in <1 s
+locally (measured this session: 11/11 green) but matches the Check 10 15 s-cap's suite-shape reject
+regex (`.test.` path); the minimal probe above prints the same "substrate present" signal. The suites
+remain the full verification — this field only feeds the discoverability probe. -->
 
 ## Architecture Decision (ADR/C4)
 
@@ -417,8 +459,9 @@ chain-boundary-anchored gated-command literals (`(gh\s+pr|git\s+|terraform|tofu|
 is exactly one definition of the fragment, so "consumes it" is a literal substring check; the exemption
 registry is the second chokepoint and each entry requires a justification comment. Two mechanics the
 sharp-edges catalogue forces on the scan: comment lines are stripped before scanning
-(`awk '!/^[[:space:]]*#'` — the `grep-rewrite.test.sh:296` precedent — so a comment reproducing the gated
-pattern cannot false-hit or fake a match), and verdict reads use count comparisons (`grep -c` /
+(`awk '!/^[[:space:]]*#'` — the `.claude/hooks/grep-rewrite.test.sh:295` precedent, and the
+`_strip_comments` helper idiom in `.claude/hooks/grep-q-pipe-guard.test.sh:205` — so a comment reproducing
+the gated pattern cannot false-hit or fake a match), and verdict reads use count comparisons (`grep -c` /
 `[[ rc -eq 1 ]]`), never `! grep -q` — a negated grep folds a pattern-compile rc 2 into "no match" and
 silences the typo the census exists to catch.
 
@@ -462,7 +505,7 @@ see a site that forgot to interpolate — Guard 2 covers presence, this covers b
 | 3 | "Remaining ~9 boundary-anchored sites — re-enumerate by grepping the boundary-anchor pattern itself … across `.claude/hooks/` + `plugins/soleur/scripts/`, never from a remembered list" [issue #10248] | Site Inventory table (grep-derived, 18 sites) + census guard | mapped |
 | 4 | "land a shared wrapper-boundary fragment … consumed by every boundary-anchored gate" [issue #10248] | `wrapper-boundary.sh` + `${SOLEUR_BOUNDARY_PFX}` interpolation at all 18 sites + Guard 2 | mapped |
 | 5 | "The shared fragment MUST reference the canonical grammar table … so the two copies cannot diverge" [issue #10248] | Guard 1 parity arms (+ optional TSV flag rows) | mapped |
-| 6 | "match `rtk gh pr merge` / `rtk git commit` WITHOUT letting `echo "gh pr merge"` or string-payload forms (`rtk run -c 'gh pr merge'`, `rtk summary 'git commit'`) trip the gate … Enumerate both directions in the plan's test matrix" [issue #10248] | Test Matrix section + Guard 3 | mapped |
+| 6 | "users running rtk's auto-rewrite (or typing `rtk`-prefixed commands) can bypass the `gh pr merge` evidence gate and the `git commit` guard" [issue #10248, User-Impact line]; plus the user direction "Test both directions: Positive: `rtk gh pr merge`, `rtk git commit`. Negative: `echo "gh pr merge"`, `rtk run -c 'gh pr merge'`, `rtk summary 'git commit'`" [pipeline prompt] | Test Matrix section + Guard 3 | mapped |
 
 ### Plan-Item Provenance
 
@@ -553,7 +596,7 @@ see a site that forgot to interpolate — Guard 2 covers presence, this covers b
 - [ ] `rtk git commit` is refused by the commit-on-main gate in `guardrails.sh` AND by `bash plugins/soleur/scripts/precommit-guard.sh 'rtk git commit'` (exit 1) — including from a plugin-cache-shaped location (script + lib sibling, no `.claude` tree).
 - [ ] All 18 production regex sites + 2 test-fixture restatements interpolate `${SOLEUR_BOUNDARY_PFX:-}` — census arm asserts zero un-exempted boundary-anchored gated-command regexes in the two dirs, with a site-count floor.
 - [ ] `rtk-grammar-parity.test.sh` asserts set-equality between `SOLEUR_RTK_RE`'s exec-subcommand set, its global-flag set, and the canonical TSV — drift on either side reds.
-- [ ] Must-NOT-match rows hold at fragment AND site level: `echo "gh pr merge"`, commit-body text on `$SCAN`, `rtk run -c 'gh pr merge'`, `rtk summary 'git commit'`, `rtk unknown gh pr merge`, `rtk-foo gh pr merge`, `artk gh pr merge`.
+- [ ] Must-NOT-match rows hold at fragment AND site level (per each site's own input class — `$SCAN` or raw `$COMMAND`): `echo "gh pr merge"`, commit-body text on `$SCAN`, `rtk run -c 'gh pr merge'`, `rtk summary 'git commit'`, `rtk unknown gh pr merge`, `rtk-foo gh pr merge`, `artk gh pr merge`. (A boundary INSIDE quoted text — `echo "; rtk gh pr merge"` — remains the pre-existing raw-`$COMMAND` limitation, unchanged by this fix.)
 - [ ] `_merge_args` returns `" 5"` for `X=g rtk gh pr merge 5` (Design Note A) and identical output to today for bare/`&&`-chained spellings.
 - [ ] Missing/corrupt lib → `${SOLEUR_BOUNDARY_PFX:-}` empty → identical pre-fix matching + one stderr WARN; `set -u` hooks unaffected.
 - [ ] All pre-existing hook/plugin suites pass unmodified except fixtures intentionally updated for the fragment.
@@ -606,6 +649,15 @@ override does not fire; tier NONE.
   nesting over open classes. The hook suites' existing timing guards cover regressions.
 - **Risk — base rebase:** #10227 merging first may move cited line numbers; all plan citations use content
   anchors.
+- **Precedent diff (deepen 4.4).** Three pattern-bound behaviors, all with sibling precedents verified this
+  pass: (a) nested-source of a plugin-scripts lib from `incidents.sh` — precedent `incidents.sh:18-19`
+  (`session-state.sh`, same tree boundary, `2>/dev/null || true`) and `:57-63` (`log-rotation.sh`,
+  `[[ -f ]]` guard + `shellcheck source=/dev/null`); the new block copies this shape verbatim plus the
+  `unset`-before-source hygiene the catalogued `#8846`/PR #8873 sharp edge adds on top. (b) parity-by-extraction —
+  precedent `rtk-grammar-parity.test.sh` (parent's own suite, extended, not paralleled). (c) grep-census
+  guard — precedents `.claude/hooks/grep-rewrite.test.sh:295` (`awk '!/^[[:space:]]*#'` comment strip)
+  and `grep-q-pipe-guard.test.sh:205` (`_strip_comments` helper + positive-control decoy). Deviation from
+  precedent: none intentional — the census is the same scan shape over a different pattern set.
 
 ## Non-Goals
 
