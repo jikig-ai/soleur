@@ -439,6 +439,11 @@ export function infoSilentFallback(
  *   read-side detector for a committed model with elements but no views, from
  *   any writer; see #8740, #8861).
  *
+ * - `untrusted-content` family (#4671, ADR-287): `untrusted-content-scorer-error`,
+ *   `untrusted-content-shape`, `untrusted-content-hook-error` (dedup key is the
+ *   `workspaceId` (or "unknown"), an in-process token, NOT a userId; metadata-only
+ *   `extra`), and `untrusted-content-flag-unresolved` (dedup key is the userId).
+ *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.
  */

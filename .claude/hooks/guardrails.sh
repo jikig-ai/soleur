@@ -134,6 +134,8 @@ fi
 # and git options between `git` and `commit` (-C dir, -c k=v, --git-dir=d) —
 # the same width precommit-guard.sh detects; a narrower gate here would make
 # those arms unreachable on the hook path.
+# #10248: `rtk git commit` still bypasses — prefix-tolerance lands via the
+# boundary-anchor follow-up's shared fragment, not a per-site edit.
 # Scans $COMMAND (NOT $SCAN): this gates the REAL commit, so a message body
 # mentioning "git commit" still IS a commit — no false-positive class here.
 # The canonical check lives in plugins/soleur/scripts/precommit-guard.sh —
