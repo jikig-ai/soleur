@@ -967,11 +967,12 @@ soleur_op_stage_gate() {
 # ---------------------------------------------------------------------------
 #
 # Revision R41: exact-key is the MAJORITY precedent, not a correction to one.
-# Three of the four community setup scripts already chain `grep -v '^KEY='`
-# filters (x-setup.sh, bsky-setup.sh, discord-setup.sh); only linkedin-setup.sh
-# spells the PREFIX form `grep -v '^LINKEDIN_'`, which is correct only for a
-# fixed block of keys sharing that prefix. Drop the `=` and upserting `X_API_KEY`
-# silently removes `X_API_KEY_SECRET`.
+# The four community setup scripts now write `.env` through `_wenv_write <env>
+# <remove-ERE> <KEY=VALUE>...` with an exact-key ERE (`^(KEY_A|KEY_B)=`); a PREFIX
+# ERE such as `^LINKEDIN_` is correct only for a fixed block of keys sharing that
+# prefix and also removes unrelated keys. Drop the `=` here and upserting
+# `X_API_KEY` silently removes `X_API_KEY_SECRET`. This library takes no lock
+# (tracked in #10204); the community helper's lock is a separate mechanism.
 #
 # No precedent fsyncs, and none handles a concurrent writer. This library
 # inherits that limitation: acceptable for a single-operator script on the

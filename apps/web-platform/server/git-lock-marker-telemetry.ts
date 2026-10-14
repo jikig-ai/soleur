@@ -145,7 +145,11 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // bsky-community.sh, bsky-setup.sh, x-setup.sh, linkedin-setup.sh) when a credential fails its
 // shape guard BEFORE it reaches curl's stdin config stream (a quote/newline could append a
 // `url =` directive). The setup scripts' write-env refusals carry the shape
-// `var=<NAME> phase=write-env`. Every host-side emitter outside
+// `var=<NAME> phase=write-env`. Two reason classes share the marker: `token_shape|control_char`
+// (a malformed credential) and `env_*` with `var=ENV_FILE` (an operational write-env fault: lock
+// timeout, unreadable, unresolvable, dangling or non-regular `.env`, unwritable directory, failed
+// write). Consumers branch on the reason prefix; both are mirrored here and neither is paged.
+// Every host-side emitter outside
 // plugins/soleur/skills/community/scripts (the registry host scripts, luks-monitor,
 // web-git-data-probe, the heartbeat probes, the inngest bootstrap, infra-config-verify) never
 // reaches this extractor: it only runs on agent Bash output. The line is value-free by

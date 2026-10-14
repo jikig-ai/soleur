@@ -681,7 +681,7 @@ then assert_red genv_check "genv-rF newline in value injects a second line" "$SB
 # is untouched, and the marker NEVER carries the value. The class is evaluated
 # under `local LC_ALL=C`, so the verdict is the same in every caller locale, and
 # U+0085 / U+2028 / U+2029 (UTF-8 multibyte, not line ends to any consumer of this
-# file) are written, not refused. The sink is arbitrary operator credentials, so
+# file that the rows below grep: the library and the operator-bootstrap template) are written, not refused. The sink is arbitrary operator credentials, so
 # `$ " ' space ! # ?` must still write. The allow-list the community setup
 # scripts use is a DIFFERENT sink's check and is not ported.
 #

@@ -868,7 +868,14 @@ mut_make() {
   local name="$1" text out="$MUT/skills/community/scripts/$1"; shift
   text="$(cat "$HERE/$name"; printf x)"; text="${text%x}"
   while (( $# >= 2 )); do
-    if [[ "$text" != *"$1"* ]]; then echo "FATAL: mutation did not land in $name: '${1:0:50}...'" >&2; exit 2; fi
+    # A mutation that does not land must FAIL the suite: this runs inside `$(...)` at every call site, where a bare
+    # `exit` only ends the substitution and the caller would carry on with an empty path (a vacuous pass), so it
+    # signals the suite's own shell (the EXIT trap still removes the sandbox) and then ends the substitution.
+    if [[ "$text" != *"$1"* ]]; then
+      echo "FATAL: mutation did not land in $name: '${1:0:50}...'" >&2
+      kill -s TERM "$$" 2>/dev/null
+      exit 2
+    fi
     text="${text/"$1"/"$2"}"
     shift 2
   done
@@ -1977,35 +1984,48 @@ check "wenv drift: a one-character edit to the human line of x-setup.sh's copy i
 
 # --- Guard 4 (#10091): _wenv_write is one helper, byte-identical, atomic, serialized, mode 600 from birth -------
 echo "== write-env commit helper _wenv_write: four copies byte-identical =="
-wenvw_block() { # <file>: from `_wenv_unlock() {` through the closing brace of `_wenv_write`
-  awk '/^_wenv_unlock\(\) \{/{f=1} f{print} f&&/^_wenv_write\(\) \{/{v=1} v&&/^}$/{exit}' "$1"
+wenvw_block() { # <file>: from the block's FIRST comment line (so the preamble, the constants and the state-variable initialisation are inside the pin) through the closing brace of `_wenv_write`
+  awk '/^# \(#10091\) write-env commit: ONE helper/{f=1} f{print} f&&/^_wenv_write\(\) \{/{v=1} v&&/^}$/{exit}' "$1"
 }
 wenvw_sane() { # <block-file>: non-empty, whole, long enough not to be a truncated extraction, anchors present
-  [[ -s "$1" ]] && [[ "$(wc -l < "$1")" -ge 70 ]] && grep -qxF '_wenv_write() {' "$1" && grep -q '^_wenv_unlock() {' "$1" \
+  [[ -s "$1" ]] && [[ "$(wc -l < "$1")" -ge 90 ]] && grep -qxF '_wenv_write() {' "$1" && grep -q '^_wenv_unlock() {' "$1" \
+    && grep -qxF '_WENV_LOCK="" _WENV_TMP="" _WENV_REC=""' "$1" && grep -q '^_WENV_TICKS_MAX=' "$1" \
     && grep -qF 'readlink -f' "$1" && grep -qF 'mkdir -- "$_wl"' "$1" && grep -qF 'mv -f --' "$1" \
     && grep -qF 'LC_ALL=C grep -a -v -E' "$1" && grep -qF 'umask 077' "$1" && grep -qF 'trap - EXIT INT TERM HUP' "$1"
 }
 for w_ in bsky-setup.sh discord-setup.sh x-setup.sh linkedin-setup.sh; do
   wenvw_block "$HERE/$w_" > "$WBLK/$w_.wblk"
-  check "wenv_write drift: the $w_ _wenv_write block extracted whole (non-empty, at least 70 lines, every anchor present)" wenvw_sane "$WBLK/$w_.wblk"
+  check "wenv_write drift: the $w_ _wenv_write block extracted whole (non-empty, at least 90 lines, starts at the first comment line, every anchor present incl. the state-variable init line)" wenvw_sane "$WBLK/$w_.wblk"
 done
 check "wenv_write drift: discord-setup.sh's _wenv_write block is byte-identical to bsky-setup.sh's" cmp -s "$WBLK/bsky-setup.sh.wblk" "$WBLK/discord-setup.sh.wblk"
 check "wenv_write drift: x-setup.sh's _wenv_write block is byte-identical to bsky-setup.sh's" cmp -s "$WBLK/bsky-setup.sh.wblk" "$WBLK/x-setup.sh.wblk"
 check "wenv_write drift: linkedin-setup.sh's _wenv_write block is byte-identical to bsky-setup.sh's" cmp -s "$WBLK/bsky-setup.sh.wblk" "$WBLK/linkedin-setup.sh.wblk"
-wenvw_after_validate() { # <file>: _wenv_unlock follows _wenv_validate's closing brace and precedes cmd_write_env
-  local v u c
+wenvw_after_validate() { # <file>: the helper (its first comment line, then _wenv_unlock) follows _wenv_validate's closing brace and precedes cmd_write_env
+  local v b u c
   v="$(grep -n '^_wenv_validate() {' "$1" | head -1 | cut -d: -f1)"; u="$(grep -n '^_wenv_unlock() {' "$1" | head -1 | cut -d: -f1)"
+  b="$(grep -n '^# (#10091) write-env commit: ONE helper' "$1" | head -1 | cut -d: -f1)"
   c="$(grep -n '^cmd_write_env() {' "$1" | head -1 | cut -d: -f1)"
-  [[ -n "$v" && -n "$u" && -n "$c" ]] && (( v < u && u < c )) && [[ "$(sed -n "$((v + 1)),$((u - 1))p" "$1" | grep -c '^[A-Za-z_]*() {')" == 0 ]]
+  [[ -n "$v" && -n "$b" && -n "$u" && -n "$c" ]] && (( v < b && b < u && u < c )) && [[ "$(sed -n "$((v + 1)),$((u - 1))p" "$1" | grep -c '^[A-Za-z_]*() {')" == 0 ]]
 }
 for w_ in bsky-setup.sh discord-setup.sh x-setup.sh linkedin-setup.sh; do
   check "wenv_write drift: $w_ places the helper after _wenv_validate and before cmd_write_env, with no other function between" wenvw_after_validate "$HERE/$w_"
 done
-M="$(mut_make x-setup.sh '[[ "$_wt" =~ ^[0-9]{1,4}$ ]] || _wt=100' '[[ "$_wt" =~ ^[0-9]{1,5}$ ]] || _wt=100')"
+M="$(mut_make x-setup.sh '_WENV_TICKS_MAX=1000' '_WENV_TICKS_MAX=10000')"
 wenvw_block "$M" > "$WBLK/x-wmut.blk"
-check "wenv_write drift: the widening mutation landed in the x-setup.sh sandbox copy" not cmp -s "$HERE/x-setup.sh" "$M"
+check "wenv_write drift: the widening mutation landed in the x-setup.sh sandbox copy" bash -c '[[ -s "$2" ]] && ! cmp -s "$1" "$2"' _ "$HERE/x-setup.sh" "$M"
 check "wenv_write drift: the widened copy's extraction is still whole (so the RED below is the drift, not a broken extraction)" wenvw_sane "$WBLK/x-wmut.blk"
 check "wenv_write drift: a copy widened in ONE place is RED against the others" not cmp -s "$WBLK/bsky-setup.sh.wblk" "$WBLK/x-wmut.blk"
+# The state-variable initialisation line sits above `_wenv_unlock() {`: deleting it from ONE copy must be RED (it was outside
+# the pin: the helper then died on an unbound variable in its EXIT trap on every early failure path).
+M="$(mut_make x-setup.sh '_WENV_LOCK="" _WENV_TMP="" _WENV_REC=""' '')"
+wenvw_block "$M" > "$WBLK/x-initmut.blk"
+check "wenv_write drift: the init-line deletion landed in the x-setup.sh sandbox copy" bash -c '[[ -s "$2" ]] && ! cmp -s "$1" "$2"' _ "$HERE/x-setup.sh" "$M"
+check "wenv_write drift: a copy that LOST the state-variable init line is RED against the others (byte pin)" not cmp -s "$WBLK/bsky-setup.sh.wblk" "$WBLK/x-initmut.blk"
+check "wenv_write drift: a copy that LOST the state-variable init line fails the extraction-sanity anchors" not wenvw_sane "$WBLK/x-initmut.blk"
+M="$(mut_make x-setup.sh 'byte-identical in the four setup scripts (a drift row pins' 'byte-identical in the four setup scripts (a drift row pin')"
+wenvw_block "$M" > "$WBLK/x-hdrmut.blk"
+check "wenv_write drift: an edit to the block's FIRST comment line is RED against the others (the pin starts at the comment, not at the function)" \
+  bash -c '[[ -s "$2" ]] && ! cmp -s "$1" "$2"' _ "$WBLK/bsky-setup.sh.wblk" "$WBLK/x-hdrmut.blk"
 check "wenv_write drift: an empty extraction is not accepted as sane (the four-way compare cannot go trivially green)" not wenvw_sane /dev/null
 check "no flock: no executable line of the _wenv_write block names flock or opens a descriptor on the lock (one mkdir mechanism on every platform)" \
   bash -c '! grep -qE "flock|exec [{0-9]" < <(grep -v "^[[:space:]]*#" "$1")' _ "$WBLK/bsky-setup.sh.wblk"
@@ -2021,6 +2041,7 @@ cat > "$WED/shim/grep" <<'SHIM'
 [[ -n "${WE_GREP_RC:-}" ]] && exit "$WE_GREP_RC"
 [[ -n "${WE_LOG:-}" ]] && printf 'S %s\n' "${WE_TAG:-?}" >> "$WE_LOG"
 [[ -n "${WE_BIRTH_LOG:-}" ]] && printf 'G %s\n' "$(stat -L -c %a /proc/self/fd/1 2>/dev/null)" >> "$WE_BIRTH_LOG"
+[[ -n "${WE_LCLOG:-}" ]] && printf '%s\n' "${LC_ALL-unset}" >> "$WE_LCLOG"
 [[ -n "${WE_GREP_SLEEP:-}" ]] && "@SLEEP@" "$WE_GREP_SLEEP"
 "@GREP@" "$@"; rc=$?
 [[ -n "${WE_LOG:-}" ]] && printf 'E %s\n' "${WE_TAG:-?}" >> "$WE_LOG"
@@ -2032,13 +2053,19 @@ args=("$@"); n=${#args[@]}; src="${args[n-2]}"; dst="${args[n-1]}"
 if [[ -n "${WE_MV_LOG:-}" && "$src" != *.lock.d* && "$dst" != *.lock.d* ]]; then
   printf 'M %s %s %s\n' "$(dirname "$src")" "$(dirname "$dst")" "$(stat -c %a "$src" 2>/dev/null)" >> "$WE_MV_LOG"
 fi
-if [[ -n "${WE_MV_DELAY:-}" && "$src" == *.lock.d && ! -e "$WE_MV_DELAY_FLAG" ]]; then : > "$WE_MV_DELAY_FLAG"; "@SLEEP@" "$WE_MV_DELAY"; fi
+# The FINAL rename (the temp onto the .env): stall inside it, then log its completion in the interval log ("F <tag>").
+if [[ -n "${WE_FINMV_DELAY:-}" && "$src" == *.wenv.* && "$dst" != *.wenv.* ]]; then
+  : > "$WE_FINMV_FLAG"; "@SLEEP@" "$WE_FINMV_DELAY"
+  "@MV@" "$@"; rc=$?
+  [[ -n "${WE_LOG:-}" ]] && printf 'F %s\n' "${WE_TAG:-?}" >> "$WE_LOG"
+  exit "$rc"
+fi
 exec "@MV@" "$@"
 SHIM
 cat > "$WED/shim/rm" <<'SHIM'
 #!/bin/bash
 for a in "$@"; do
-  if [[ -n "${WE_MV_DELAY:-}" && "$a" == *.lock.d && ! -e "$WE_MV_DELAY_FLAG" ]]; then : > "$WE_MV_DELAY_FLAG"; "@SLEEP@" "$WE_MV_DELAY"; fi
+  if [[ -n "${WE_RM_DELAY:-}" && "$a" == *.lock.d && ! -e "$WE_RM_DELAY_FLAG" ]]; then : > "$WE_RM_DELAY_FLAG"; "@SLEEP@" "$WE_RM_DELAY"; fi
 done
 exec "@RM@" "$@"
 SHIM
@@ -2051,9 +2078,18 @@ printf '%s\n' "$p"
 SHIM
 cat > "$WED/shim/mkdir" <<'SHIM'
 #!/bin/bash
+# Stall the FIRST attempt to take the recovery mutex (`<.env>.lock.d.recover`) when asked: the waiter has judged the lock
+# stale from its own snapshot and is held right before it would act on it.
+for a in "$@"; do
+  if [[ -n "${WE_MKDIR_DELAY:-}" && "$a" == *.lock.d.recover && ! -e "$WE_MKDIR_DELAY_FLAG" ]]; then : > "$WE_MKDIR_DELAY_FLAG"; "@SLEEP@" "$WE_MKDIR_DELAY"; fi
+done
 "@MKDIR@" "$@"; rc=$?
 if [[ "$rc" -eq 0 && -n "${WE_BIRTH_LOG:-}" ]]; then
   for a in "$@"; do [[ "$a" == *.lock.d ]] && printf 'D %s\n' "$(stat -c %a "$a" 2>/dev/null)" >> "$WE_BIRTH_LOG"; done
+fi
+# A FAILED attempt on the lock directory itself is contention: recorded per writer ("W <tag>").
+if [[ "$rc" -ne 0 && -n "${WE_CONTEND_LOG:-}" ]]; then
+  for a in "$@"; do [[ "$a" == *.lock.d ]] && printf 'W %s\n' "${WE_TAG:-?}" >> "$WE_CONTEND_LOG"; done
 fi
 exit "$rc"
 SHIM
@@ -2062,6 +2098,10 @@ for s_ in grep mv rm mktemp mkdir; do
     -e "s|@MKDIR@|$G4_REAL_MKDIR|" -e "s|@RM@|$G4_REAL_RM|" -e "s|@SLEEP@|$G4_REAL_SLEEP|" "$WED/shim/$s_"
   chmod +x "$WED/shim/$s_"
 done
+# A `sleep` that only COUNTS its calls (one byte each into $WE_SLEEPLOG) and returns at once: the wait-bound rows measure
+# the number of ticks the helper takes instead of waiting them out.
+mkdir -p "$WED/sleepshim"
+printf '#!/bin/sh\nprintf x >> "${WE_SLEEPLOG:-/dev/null}"\nexit 0\n' > "$WED/sleepshim/sleep"; chmod +x "$WED/sleepshim/sleep"
 we_and() { local c; for c in "$@"; do eval "$c" || return 1; done; }
 we_owner_is() { local o=""; { read -r o < "$1/.env.lock.d/owner"; } 2>/dev/null; [[ "$o" == "$2" ]]; }
 G4_GUILD=123456789012345678
@@ -2081,12 +2121,12 @@ we_w_cfg() { # <bsky|x|linkedin|discord> -> WE_S (script), WE_E (env), WE_A (pos
 }
 G4_SEED=$'KEEP_ME=1\nBSKY_HANDLE=old\nBSKY_APP_PASSWORD=old\nX_API_KEY=old\nX_API_SECRET=old\nX_ACCESS_TOKEN=old\nX_ACCESS_TOKEN_SECRET=old\nLINKEDIN_CLIENT_ID=old\nLINKEDIN_CLIENT_SECRET=old\nLINKEDIN_ACCESS_TOKEN=old\nLINKEDIN_PERSON_URN=old\nDISCORD_BOT_TOKEN=old\nDISCORD_GUILD_ID=1\nDISCORD_WEBHOOK_URL=old\nOTHER=2'
 we_reset() { # <seed | @none>: a clean scratch checkout state and empty logs
-  "$G4_REAL_RM" -rf "$GITWORK/.env" "$GITWORK"/.env.tmp.* "$GITWORK"/.env.lock.d* "$WED/real" "$WED"/*.log "$WED"/flag.* "$WED"/rc.*
+  "$G4_REAL_RM" -rf "$GITWORK/.env" "$GITWORK"/.env.tmp.* "$GITWORK"/.env.wenv.* "$GITWORK"/.env.lock.d* "$WED/real" "$WED"/*.log "$WED"/flag.* "$WED"/rc.*
   if [[ "$1" != @none ]]; then
     printf '%s\n' "$1" > "$GITWORK/.env"; chmod 600 "$GITWORK/.env"; cp "$GITWORK/.env" "$SANDBOX/env.before"
   fi
 }
-we_no_artifacts() { local f; for f in "$GITWORK"/.env.tmp.* "$GITWORK"/.env.lock.d*; do [[ -e "$f" || -L "$f" ]] && return 1; done; return 0; }
+we_no_artifacts() { local f; for f in "$GITWORK"/.env.tmp.* "$GITWORK"/.env.wenv.* "$GITWORK"/.env.lock.d*; do [[ -e "$f" || -L "$f" ]] && return 1; done; return 0; }
 we_identical() { cmp -s "$SANDBOX/env.before" "$GITWORK/.env"; }
 we_keys_once() { # <KEY=VALUE>...: each pair is in .env exactly once, byte for byte
   local p
@@ -2126,7 +2166,7 @@ check "parallel: the critical sections never overlapped (the recorded intervals 
 we_all_keys() { local w; for w in "${G4_WRITERS[@]}"; do we_w_cfg "$w"; we_keys_once "${WE_K[@]}" || return 1; done; }
 check "parallel: no lost update - all fourteen managed keys present once each" we_all_keys
 check "parallel: the unrelated KEEP_ME and OTHER lines survived" bash -c '[[ "$(grep -c "^KEEP_ME=1$" "$1/.env")" == 1 && "$(grep -c "^OTHER=2$" "$1/.env")" == 1 ]]' _ "$GITWORK"
-check "parallel: no .env.tmp.* or .env.lock.d* is left behind" we_no_artifacts
+check "parallel: no .env.wenv.* or .env.lock.d* is left behind" we_no_artifacts
 check "parallel: the final .env is mode 600" we_mode_600
 # Harness controls: the same run with the lock acquisition made a no-op in all four copies MUST show the overlap and the lost update.
 NL_DIR="$MUT/skills/community/scripts"
@@ -2200,16 +2240,16 @@ check "unreadable .env: exactly one human Error line, on stdout" bash -c '[[ "$(
 for w_ in "${G4_WRITERS[@]}"; do
   we_reset "$G4_SEED"; we_w_cfg "$w_"
   RUN_CWD="$GITWORK" run_sut - "" "${WE_E[@]}" -- bash "$WE_S" write-env "${WE_A[@]}"
-  check "$w_-setup write-env, normal run: exit 0, no .env.tmp.* or .env.lock.d* left, keys written once" we_and 'test "$RC" -eq 0' 'we_no_artifacts' 'we_keys_once "${WE_K[@]}"'
+  check "$w_-setup write-env, normal run: exit 0, no .env.wenv.* or .env.lock.d* left, keys written once" we_and 'test "$RC" -eq 0' 'we_no_artifacts' 'we_keys_once "${WE_K[@]}"'
 done
 for sig_ in TERM HUP; do
   we_reset "$G4_SEED"
   we_spawn bsky - - WE_GREP_SLEEP=2; pid_=$WE_PID
   we_wait_for "$WED/iv.log"; "$G4_REAL_SLEEP" 0.3
-  check "$sig_: the run was inside its critical section (lock held, temp present) when the signal arrived" bash -c '[[ -d "$1/.env.lock.d" && -n "$(ls "$1"/.env.tmp.* 2>/dev/null)" ]]' _ "$GITWORK"
+  check "$sig_: the run was inside its critical section (lock held, temp present) when the signal arrived" bash -c '[[ -d "$1/.env.lock.d" && -n "$(ls "$1"/.env.wenv.* 2>/dev/null)" ]]' _ "$GITWORK"
   kill -s "$sig_" "$pid_" 2>/dev/null; wait "$pid_" 2>/dev/null; rc_=$?
   check "$sig_: the run exits non-zero (128 + signal)" test "$rc_" -gt 128
-  check "$sig_: .env is byte-identical and no .env.tmp.* or .env.lock.d* is left behind" we_and 'we_identical' 'we_no_artifacts'
+  check "$sig_: .env is byte-identical and no .env.wenv.* or .env.lock.d* is left behind" we_and 'we_identical' 'we_no_artifacts'
 done
 
 # --- (vi) a SIGKILLed run: .env intact, the stale lock is recovered by the next run -------------------------------
@@ -2220,7 +2260,7 @@ kill -9 "$pid_" 2>/dev/null; wait "$pid_" 2>/dev/null
 "$G4_REAL_SLEEP" 1.8  # the orphaned stalled grep (a child the kill could not reach) finishes before the next scenario's log starts
 check "SIGKILL: the killed run left its lock directory with a DEAD owner pid (the precondition is real)" \
   bash -c 'read -r o < "$1/.env.lock.d/owner" && ! kill -0 "$o" 2>/dev/null' _ "$GITWORK"
-check "SIGKILL: the killed run also left its temp file (the next run has something to sweep)" bash -c 'ls "$1"/.env.tmp.* >/dev/null 2>&1' _ "$GITWORK"
+check "SIGKILL: the killed run also left its temp file (the next run has something to sweep)" bash -c 'ls "$1"/.env.wenv.* >/dev/null 2>&1' _ "$GITWORK"
 check "SIGKILL: .env is byte-identical after the kill" we_identical
 we_w_cfg x
 RUN_CWD="$GITWORK" run_sut - "" "${WE_E[@]}" -- bash "$WE_S" write-env
@@ -2228,24 +2268,26 @@ check "SIGKILL: the next run recovers the stale lock and writes (exit 0, keys on
 check "SIGKILL: the next run also swept the killed run's temp, and no .env.lock.d* remains" we_no_artifacts
 
 # --- (ii) stale-lock recovery race between two waiters ----------------------------------------------------------------
-# A dead owner pid. Waiter 1 judges the lock stale and is STALLED right before its claiming rename; waiter 2 recovers
-# the lock, takes it and sits in its critical section. When waiter 1 resumes, a naive claim would take waiter 2's LIVE lock.
+# A dead owner pid. Waiter 1 judges the lock stale from its OWN snapshot and is STALLED right before it takes the recovery
+# mutex; waiter 2 recovers the lock, takes it and sits in its critical section. When waiter 1 resumes it holds the mutex
+# with a stale snapshot: acting on that snapshot would delete waiter 2's LIVE lock. It must RE-READ the owner under the
+# mutex (the compare-and-swap) and leave the live lock alone.
 we_dead_pid() { ( : ) & local p=$!; wait "$p"; printf '%s' "$p"; }
-we_steal_scenario() { # <script-dir or -> ; waiter 1 = bsky (stalled claim), waiter 2 = x (long critical section)
+we_steal_scenario() { # <script-dir or -> ; waiter 1 = bsky (stalled at the recovery mutex), waiter 2 = x (long critical section)
   local s1=- s2=- w1 w2
   we_reset "$G4_SEED"
   "$G4_REAL_MKDIR" "$GITWORK/.env.lock.d"; we_dead_pid > "$GITWORK/.env.lock.d/owner"
   if [[ "${1:--}" != - ]]; then s1="$1/bsky-setup.sh"; s2="$1/x-setup.sh"; fi
-  we_spawn bsky "$s1" - WE_MV_DELAY=1.5 WE_MV_DELAY_FLAG="$WED/flag.stall" WE_GREP_SLEEP=0.2; w1=$WE_PID
+  we_spawn bsky "$s1" - WE_MKDIR_DELAY=1.5 WE_MKDIR_DELAY_FLAG="$WED/flag.stall" WE_GREP_SLEEP=0.2; w1=$WE_PID
   "$G4_REAL_SLEEP" 0.4
   we_spawn x "$s2" - WE_GREP_SLEEP=2; w2=$WE_PID
   wait "$w1"; STEAL_RC1=$?; wait "$w2"; STEAL_RC2=$?
 }
 we_steal_scenario -
-check "stale-lock race: waiter 1 WAS stalled at its claim (the delay fired) and waiter 2 entered its critical section first" \
+check "stale-lock race: waiter 1 WAS stalled at the recovery mutex (the delay fired) and waiter 2 entered its critical section first" \
   bash -c '[[ -e "$1/flag.stall" && "$(head -1 "$1/iv.log")" == "S x" ]]' _ "$WED"
 check "stale-lock race: both waiters finish with exit 0" test "$STEAL_RC1$STEAL_RC2" = "00"
-check "stale-lock race: exactly one waiter was in its critical section at a time (nobody deleted a live lock)" we_alternates "$WED/iv.log"
+check "stale-lock race: exactly one waiter was in its critical section at a time (the stale snapshot was re-read under the mutex, nobody deleted a live lock)" we_alternates "$WED/iv.log"
 check "stale-lock race: both waiters' keys landed exactly once and no lock or temp is left" we_and 'we_w_cfg bsky' 'we_keys_once "${WE_K[@]}"' 'we_w_cfg x' 'we_keys_once "${WE_K[@]}"' 'we_no_artifacts'
 for it_ in 1 2 3; do
   we_reset "$G4_SEED"; "$G4_REAL_RM" -f "$WED/go"
@@ -2255,6 +2297,220 @@ for it_ in 1 2 3; do
   : > "$WED/go"; wait "$p1_"; r1_=$?; wait "$p2_"; r2_=$?
   check "stale-lock race, released together (round $it_): both exit 0, the intervals alternate, both key sets once, no artifacts" we_and "test $r1_$r2_ = 00" 'we_alternates "$WED/iv.log"' 'we_exercised "$WED/iv.log" 2' 'we_w_cfg bsky' 'we_keys_once "${WE_K[@]}"' 'we_w_cfg discord' 'we_keys_once "${WE_K[@]}"' 'we_no_artifacts'
 done
+
+# --- (ii-b) stale-lock recovery with THREE and EIGHT waiters (review D1: two writers held the lock, keys lost, every writer exited 0) ---
+# N writers, each upserting ONE distinct key through the extracted helper, released together against a lock whose owner pid is
+# dead. Each round is judged on: every writer exits 0, every key is in .env exactly once, no writer exits 0 with its key missing,
+# the critical sections never overlap (interval log) and CONTENTION was exercised (at least two distinct writers failed on the
+# lock directory in that round; one writer alone cannot race anything). A harness control runs the same rounds with the lock a
+# no-op and requires the verdicts to go RED.
+WE_DRV="$WED/drv.sh"
+cat > "$WE_DRV" <<'DRV'
+set -euo pipefail
+SOLEUR_TRANSPORT_SCRIPT=drv
+# shellcheck disable=SC1090
+. "$1"
+_wenv_write "$2" "^($3)=" "$3=v-$3"
+DRV
+we_drv_spawn() { # <i> <gate> <block-file> [NAME=value env...]: one background writer of key K<i>; sets WE_PID
+  local i="$1" gate="$2" blk="$3"; shift 3
+  ( while [[ ! -e "$gate" ]]; do :; done
+    exec env -i PATH="$WED/shim:$SYS_PATH" HOME="$SANDBOX/home" WE_TAG="k$i" WE_LOG="$WED/iv.log" WE_CONTEND_LOG="$WED/contend.log" WE_GREP_SLEEP=0.03 "$@" \
+      bash "$WE_DRV" "$blk" "$GITWORK/.env" "K$i" ) > /dev/null 2> "$WED/err.k$i" &
+  WE_PID=$!
+}
+we_stale_round() { # <n> <block-file>: n writers released together against a dead-owner lock -> WE_RCS
+  local n="$1" blk="$2" i pids=() go="$WED/go"
+  we_reset $'KEEP_ME=1'; "$G4_REAL_RM" -f "$go"
+  "$G4_REAL_MKDIR" "$GITWORK/.env.lock.d"; we_dead_pid > "$GITWORK/.env.lock.d/owner"
+  for (( i = 1; i <= n; i++ )); do we_drv_spawn "$i" "$go" "$blk"; pids+=("$WE_PID"); done
+  : > "$go"
+  WE_RCS=""; for i in "${pids[@]}"; do wait "$i"; WE_RCS+="$? "; done
+}
+we_stale_verdict() { # <n>: tally the round that just finished into the WSR_* counters
+  local n="$1" i rc present k
+  local -a rcs=()
+  read -r -a rcs <<< "$WE_RCS"
+  for (( i = 1; i <= n; i++ )); do
+    k="K$i=v-K$i"; present=0
+    if [[ "$("$G4_REAL_GREP" -cxF -- "$k" "$GITWORK/.env")" == 1 && "$("$G4_REAL_GREP" -c "^K$i=" "$GITWORK/.env")" == 1 ]]; then present=1; fi
+    rc="${rcs[i-1]:-x}"
+    if (( present == 0 )); then WSR_LOST=$((WSR_LOST + 1)); fi
+    if [[ "$rc" != 0 ]]; then WSR_NONZERO=$((WSR_NONZERO + 1)); fi
+    if [[ "$rc" == 0 && "$present" == 0 ]]; then WSR_SILENT=$((WSR_SILENT + 1)); fi
+  done
+  we_alternates "$WED/iv.log" || WSR_OVERLAP=$((WSR_OVERLAP + 1))
+  [[ "$(sort -u "$WED/contend.log" 2> /dev/null | wc -l)" -ge 2 ]] || WSR_QUIET=$((WSR_QUIET + 1))
+  we_no_artifacts || WSR_ARTIF=$((WSR_ARTIF + 1))
+  [[ "$("$G4_REAL_GREP" -c '^KEEP_ME=1$' "$GITWORK/.env")" == 1 ]] || WSR_LOST=$((WSR_LOST + 1))
+}
+we_stale_rounds() { # <n> <rounds> <block-file>
+  local n="$1" r="$2" blk="$3" it
+  WSR_LOST=0 WSR_NONZERO=0 WSR_SILENT=0 WSR_OVERLAP=0 WSR_QUIET=0 WSR_ARTIF=0 WSR_ROUNDS=0
+  for (( it = 1; it <= r; it++ )); do we_stale_round "$n" "$blk"; we_stale_verdict "$n"; WSR_ROUNDS=$((WSR_ROUNDS + 1)); done
+}
+wenvw_block "$HERE/bsky-setup.sh" > "$WED/blk.cur"
+for cfg_ in "3 40" "8 25"; do
+  read -r n_ r_ <<< "$cfg_"
+  we_stale_rounds "$n_" "$r_" "$WED/blk.cur"
+  check "stale-lock recovery, $n_ waiters x $r_ rounds released together on a dead-owner lock: every writer exits 0 and every key is in .env exactly once" test "$WSR_NONZERO:$WSR_LOST" = 0:0
+  check "stale-lock recovery, $n_ waiters x $r_ rounds: no writer exits 0 with its key missing (no silent lost update)" test "$WSR_SILENT" -eq 0
+  check "stale-lock recovery, $n_ waiters x $r_ rounds: the critical sections never overlapped in any round (never two holders)" test "$WSR_OVERLAP" -eq 0
+  check "stale-lock recovery, $n_ waiters x $r_ rounds: contention WAS exercised in every round (>= 2 distinct writers failed on the lock) and nothing was left behind" \
+    we_and "test $WSR_QUIET -eq 0" "test $WSR_ARTIF -eq 0" "test $WSR_ROUNDS -eq $r_"
+done
+M="$(mut_make bsky-setup.sh 'if mkdir -- "$_wl" 2>/dev/null; then' 'if { mkdir -p -- "$_wl"; true; }; then')"
+wenvw_block "$M" > "$WED/blk.nl"
+we_stale_rounds 8 4 "$WED/blk.nl"
+check "harness control: with the lock a no-op the eight-waiter rounds OVERLAP and LOSE keys (the verdicts can go RED)" we_and "test $WSR_OVERLAP -ge 1" "test $WSR_LOST -ge 1"
+we_stale_rounds 1 1 "$WED/blk.cur"
+check "harness control: a round with ONE writer is not accepted as contention (the exercised check can go RED)" test "$WSR_QUIET" -eq 1
+
+# --- recovery mutex: a signal leaves nothing, a SIGKILLed recovery fails closed ---------------------------------------------
+we_reset "$G4_SEED"
+"$G4_REAL_MKDIR" "$GITWORK/.env.lock.d"; we_dead_pid > "$GITWORK/.env.lock.d/owner"
+we_spawn bsky - - WE_RM_DELAY=1.5 WE_RM_DELAY_FLAG="$WED/flag.rmstall"; pid_=$WE_PID
+we_wait_for "$WED/flag.rmstall"
+check "TERM mid-recovery: the run WAS inside the recovery (the mutex directory exists, the stale lock not yet removed)" bash -c '[[ -d "$1/.env.lock.d.recover" && -d "$1/.env.lock.d" ]]' _ "$GITWORK"
+kill -s TERM "$pid_" 2>/dev/null; wait "$pid_" 2>/dev/null; rc_=$?
+check "TERM mid-recovery: the run exits non-zero (128 + signal)" test "$rc_" -gt 128
+check "TERM mid-recovery: .env is byte-identical and neither the recovery mutex nor any other artifact is left" we_and 'we_identical' 'we_no_artifacts'
+we_reset "$G4_SEED"
+"$G4_REAL_MKDIR" "$GITWORK/.env.lock.d" "$GITWORK/.env.lock.d.recover"; we_dead_pid > "$GITWORK/.env.lock.d/owner"
+we_w_cfg bsky; t0_=$SECONDS
+RUN_CWD="$GITWORK" run_sut - "" SOLEUR_WENV_LOCK_TICKS=15 "${WE_E[@]}" -- bash "$WE_S" write-env
+t1_=$SECONDS
+check "SIGKILLed recovery (a leftover recovery mutex): the run fails closed (exit 1) within the bound instead of hanging" we_and 'test "$RC" -eq 1' "test $((t1_ - t0_)) -le 8"
+check "SIGKILLed recovery: marker reason=env_lock_timeout once, value-free; the message names the .recover directory and says to remove it" \
+  bash -c '[[ "$(grep -c "^SOLEUR_CREDENTIAL_REFUSED script=bsky-setup.sh reason=env_lock_timeout var=ENV_FILE phase=write-env$" <<<"$1")" == 1 && "$2" == *".env.lock.d.recover"* && "$2" == *"remove that directory"* && "$1$2" != *g4aa-g4bb* ]]' _ "$ERR" "$OUT"
+check "SIGKILLed recovery: .env is byte-identical and both directories were left exactly as found" we_and 'we_identical' '[[ -d "$GITWORK/.env.lock.d.recover" && -d "$GITWORK/.env.lock.d" ]]'
+rm -rf "$GITWORK/.env.lock.d" "$GITWORK/.env.lock.d.recover"
+
+# --- an ownerless lock directory and a lock whose owner file is not a pid are recovered (waited on, then re-read under the mutex) ---
+for own_ in absent garbage; do
+  we_reset "$G4_SEED"; "$G4_REAL_MKDIR" "$GITWORK/.env.lock.d"
+  if [[ "$own_" == garbage ]]; then printf -- '-1\n' > "$GITWORK/.env.lock.d/owner"; fi
+  we_w_cfg bsky; t0_=$SECONDS
+  RUN_CWD="$GITWORK" run_sut - "" "${WE_E[@]}" -- bash "$WE_S" write-env
+  t1_=$SECONDS
+  check "lock directory with $own_ owner: recovered after a wait, not at once (exit 0, keys written once, no artifacts left)" \
+    we_and 'test "$RC" -eq 0' 'we_keys_once "${WE_K[@]}"' 'we_no_artifacts' "test $((t1_ - t0_)) -ge 2"
+done
+
+# --- _wenv_unlock releases the lock ONLY when its owner file reads exactly this process; the owner-write failure path removes it explicitly ---
+we_unlock_probe() { # <script> <empty|foreign|own|mutex-tmp>: runs the helper's _wenv_unlock in a clean bash; prints kept|removed
+  wenvw_block "$1" > "$WED/blk.probe"
+  bash -c 'set -euo pipefail; SOLEUR_TRANSPORT_SCRIPT=probe; . "$1"; d="$2"; mkdir -- "$d"
+    case "$3" in
+      own) printf "%s\n" "$$" > "$d/owner" ;;
+      foreign) printf "%s\n" "$4" > "$d/owner" ;;
+      mutex-tmp) printf "%s\n" "$$" > "$d/owner"; mkdir -- "$d.recover"; : > "$d.tmp"; _WENV_REC="$d.recover"; _WENV_TMP="$d.tmp" ;;
+    esac
+    _WENV_LOCK="$d"; _wenv_unlock
+    if [[ "$3" == mutex-tmp ]]; then [[ ! -e "$d" && ! -e "$d.recover" && ! -e "$d.tmp" ]] && echo removed || echo kept
+    else [[ -d "$d" ]] && echo kept || echo removed; fi' _ "$WED/blk.probe" "$WED/probe.lock.d" "$2" "$$"
+  rm -rf "$WED/probe.lock.d" "$WED/probe.lock.d.recover" "$WED/probe.lock.d.tmp"
+}
+check "_wenv_unlock: a lock whose owner file is ABSENT or empty is NOT ours and is kept" test "$(we_unlock_probe "$HERE/bsky-setup.sh" empty)" = kept
+check "_wenv_unlock: a lock owned by ANOTHER pid is kept" test "$(we_unlock_probe "$HERE/bsky-setup.sh" foreign)" = kept
+check "_wenv_unlock: a lock whose owner file reads exactly this process is removed" test "$(we_unlock_probe "$HERE/bsky-setup.sh" own)" = removed
+check "_wenv_unlock: the recovery mutex and the temp are released together with our lock" test "$(we_unlock_probe "$HERE/bsky-setup.sh" mutex-tmp)" = removed
+we_reset "$G4_SEED"; we_w_cfg bsky
+RUN_CWD="$GITWORK" run_sut - "" "${WE_E[@]}" -- bash -c 'ulimit -f 0; trap "" XFSZ; exec bash "$0" "$@"' "$WE_S" write-env
+check "owner file cannot be written (file-size limit 0): the run fails (exit 1) and the lock it just created is removed explicitly (it holds no owner, so the unlock would keep it)" \
+  we_and 'test "$RC" -eq 1' 'we_identical' 'we_no_artifacts'
+
+# --- the helper's temp has its OWN namespace: .env.wenv.XXXXXX; user files and the operator library's temps are never swept ---
+for w_ in "${G4_WRITERS[@]}"; do
+  we_reset "$G4_SEED"; we_w_cfg "$w_"
+  printf 'user backup\n' > "$GITWORK/.env.tmp.backup"; printf 'lib in flight\n' > "$GITWORK/.env.tmp.AbC123"; printf 'killed run leftover\n' > "$GITWORK/.env.wenv.ZZ9999"
+  RUN_CWD="$GITWORK" run_sut - "" "${WE_E[@]}" -- bash "$WE_S" write-env "${WE_A[@]}"
+  check "$w_-setup write-env: a user file .env.tmp.backup and a library-style .env.tmp.AbC123 survive the write untouched; the helper's own leftover .env.wenv.* is swept; no lock remains" \
+    we_and 'test "$RC" -eq 0' '[[ "$(cat "$GITWORK/.env.tmp.backup")" == "user backup" ]]' '[[ "$(cat "$GITWORK/.env.tmp.AbC123")" == "lib in flight" ]]' \
+      '[[ ! -e "$GITWORK/.env.wenv.ZZ9999" ]]' '[[ ! -e "$GITWORK/.env.lock.d" ]]' 'we_keys_once "${WE_K[@]}"'
+done
+we_reset "$G4_SEED"; we_w_cfg bsky
+RUN_CWD="$GITWORK" run_sut "$WED/shim" "" WE_TMP_LOG="$WED/tmp.log" "${WE_E[@]}" -- bash "$WE_S" write-env
+check "the helper's temp is named <.env>.wenv.XXXXXX (its own namespace, never .env.tmp.*)" bash -c '[[ "$(wc -l < "$1")" == 1 ]] && read -r t < "$1" && [[ "$t" =~ ^$2/\.env\.wenv\.[A-Za-z0-9]{6}$ ]]' _ "$WED/tmp.log" "$GITWORK"
+
+# --- LC_ALL=C grep -a: a UTF-8 caller, an invalid-UTF-8 line and a NUL line must all survive byte for byte ---------------------
+G4_UTF8=""
+for l_ in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+  if [[ "$(LC_ALL=$l_ locale charmap 2> /dev/null)" == UTF-8 ]]; then G4_UTF8="$l_"; break; fi
+done
+[[ -n "$G4_UTF8" ]] || echo "  note - no UTF-8 locale on this host: the UTF-8 caller row degrades to the LC_ALL shim row"
+we_locale_run() { # -> the .env after a bsky write by a UTF-8 caller whose .env holds an invalid-UTF-8 line and a NUL line
+  we_reset @none; we_w_cfg bsky
+  printf 'KEEP_HIGH=caf\xe9\nKEEP_NUL=a\0b\nBSKY_HANDLE=old\nKEEP_ME=1\n' > "$GITWORK/.env"; chmod 600 "$GITWORK/.env"
+  printf 'KEEP_HIGH=caf\xe9\nKEEP_NUL=a\0b\nKEEP_ME=1\nBSKY_HANDLE=guard4.bsky.social\nBSKY_APP_PASSWORD=g4aa-g4bb-g4cc-g4dd\n' > "$WED/locale.want"
+  RUN_CWD="$GITWORK" run_sut "$WED/shim" "" WE_LCLOG="$WED/lc.log" "LC_ALL=${G4_UTF8:-C}" "LANG=${G4_UTF8:-C}" "${WE_E[@]}" -- bash "$WE_S" write-env
+}
+we_locale_run
+check "UTF-8 caller: exit 0, and the invalid-UTF-8 line and the NUL line survive byte for byte (the file equals the expected bytes)" we_and 'test "$RC" -eq 0' 'cmp -s "$WED/locale.want" "$GITWORK/.env"'
+check "the filter grep runs under LC_ALL=C whatever the caller's locale (recorded by the grep shim)" bash -c '[[ "$(cat "$1")" == C ]]' _ "$WED/lc.log"
+
+# --- SOLEUR_WENV_LOCK_TICKS: validated (digits only, at most 1000, else the default 100); a hostile value is never evaluated ---
+( exec "$G4_REAL_SLEEP" 120 ) & tk_holder=$!
+we_ticks_run() { # <ticks|-> : bsky write-env against a LIVE holder with the counting sleep -> TK_N = number of ticks slept
+  we_reset "$G4_SEED"; "$G4_REAL_MKDIR" "$GITWORK/.env.lock.d"; printf '%s\n' "$tk_holder" > "$GITWORK/.env.lock.d/owner"
+  : > "$WED/sleep.log"; rm -f "$WED/pwned"; we_w_cfg bsky
+  local -a t=(); [[ "$1" != - ]] && t=("SOLEUR_WENV_LOCK_TICKS=$1")
+  RUN_CWD="$GITWORK" run_sut "$WED/sleepshim" "" WE_SLEEPLOG="$WED/sleep.log" "${t[@]}" "${WE_E[@]}" -- timeout 60 bash "$WE_S" write-env
+  TK_N="$(wc -c < "$WED/sleep.log")"
+}
+we_ticks_run 5
+check "TICKS=5 against a live holder: 4 ticks slept, gave up with reason=env_lock_timeout (the counter measures the bound)" we_and 'test "$TK_N" -eq 4' 'test "$RC" -eq 1' '[[ "$ERR" == *"reason=env_lock_timeout "* ]]'
+check "a LIVE holder: the give-up text names the holder case and the directory to remove" bash -c '[[ "$1" == *"Another write-env run holds the lock at "*".env.lock.d; waited and gave up. If no other run is active, remove that directory."* ]]' _ "$OUT"
+we_ticks_run -
+check "TICKS unset: the default bound of 100 ticks (99 slept)" test "$TK_N" -eq 99
+we_ticks_run "HOME[\$(touch $WED/pwned)]"
+check "TICKS='HOME[\$(touch X)]' (arithmetic-injection shape): the command is NEVER run and the default bound applies" we_and 'test "$TK_N" -eq 99' '[[ ! -e "$WED/pwned" ]]'
+we_ticks_run 5000
+check "TICKS=5000 (above the cap): rejected, the default bound applies (the wait is not extended)" test "$TK_N" -eq 99
+we_ticks_run 1000
+check "TICKS=1000 (the cap itself): honoured, 999 ticks slept in ONE bound (no second counter ends it early or late)" we_and 'test "$TK_N" -eq 999' '[[ "$ERR" == *"reason=env_lock_timeout "* ]]'
+kill "$tk_holder" 2>/dev/null; wait "$tk_holder" 2>/dev/null; rm -rf "$GITWORK/.env.lock.d"
+
+# --- a lock path that is not a directory fails AT ONCE (distinct reason); a persistent mkdir failure sleeps every pass --------------
+we_reset "$G4_SEED"; : > "$WED/sleep.log"; we_w_cfg bsky
+printf 'not a directory\n' > "$GITWORK/.env.lock.d"
+RUN_CWD="$GITWORK" run_sut "$WED/sleepshim" "" WE_SLEEPLOG="$WED/sleep.log" "${WE_E[@]}" -- bash "$WE_S" write-env
+check "lock path is a regular file: exit 1 at once (no tick slept) with reason=env_lock_not_dir, not the live-holder text" \
+  bash -c '[[ "$1" -eq 1 && "$(wc -c < "$2")" -eq 0 && "$3" == *"reason=env_lock_not_dir "* && "$4" != *"holds the lock"* && "$4" == *".env.lock.d"* ]]' _ "$RC" "$WED/sleep.log" "$ERR" "$OUT"
+check "lock path is a regular file: the file and .env are left exactly as found" we_and 'we_identical' '[[ "$(cat "$GITWORK/.env.lock.d")" == "not a directory" ]]'
+rm -f "$GITWORK/.env.lock.d"; ln -s "$WED/nowhere" "$GITWORK/.env.lock.d"
+RUN_CWD="$GITWORK" run_sut "$WED/sleepshim" "" WE_SLEEPLOG="$WED/sleep.log" "${WE_E[@]}" -- bash "$WE_S" write-env
+check "lock path is a dangling symbolic link: exit 1 at once with reason=env_lock_not_dir, the link untouched" bash -c '[[ "$1" -eq 1 && "$2" == *"reason=env_lock_not_dir "* && -L "$3/.env.lock.d" ]]' _ "$RC" "$ERR" "$GITWORK"
+rm -f "$GITWORK/.env.lock.d"
+LONG_="$(printf 'a%.0s' $(seq 1 250))"
+: > "$WED/sleep.log"
+( cd "$GITWORK" && env -i PATH="$WED/sleepshim:$SYS_PATH" HOME="$SANDBOX/home" WE_SLEEPLOG="$WED/sleep.log" SOLEUR_WENV_LOCK_TICKS=5 bash "$WE_DRV" "$WED/blk.cur" "$GITWORK/$LONG_" K1 ) > "$WED/long.out" 2> "$WED/long.err"; rc_=$?
+check "mkdir fails persistently (file name so long that <name>.lock.d is ENAMETOOLONG): every pass sleeps (4 ticks for TICKS=5), then exit 1 with reason=env_lock_timeout and NOT the live-holder text" \
+  bash -c '[[ "$1" -eq 1 && "$(wc -c < "$2")" -eq 4 && "$(cat "$3")" == *"reason=env_lock_timeout "* && "$(cat "$4")" != *"Another write-env run holds"* ]]' _ "$rc_" "$WED/sleep.log" "$WED/long.err" "$WED/long.out"
+
+# --- linkedin write-env removes ONLY the four keys it writes (LINKEDIN_ORG_* / ALLOW_POST / POST_MAX_LENGTH are read by linkedin-community.sh) ---
+we_reset $'KEEP_ME=1\nLINKEDIN_ORG_ACCESS_TOKEN=orgtok\nLINKEDIN_ORG_ID=123\nLINKEDIN_ALLOW_POST=true\nLINKEDIN_POST_MAX_LENGTH=3000\nLINKEDIN_CLIENT_ID=old\nLINKEDIN_CLIENT_SECRET=old\nLINKEDIN_ACCESS_TOKEN=old\nLINKEDIN_PERSON_URN=old'
+we_w_cfg linkedin
+RUN_CWD="$GITWORK" run_sut - "" "${WE_E[@]}" -- bash "$WE_S" write-env
+check "linkedin write-env: LINKEDIN_ORG_ACCESS_TOKEN, LINKEDIN_ORG_ID, LINKEDIN_ALLOW_POST and LINKEDIN_POST_MAX_LENGTH in an existing .env survive; the four written keys appear once at their new values" \
+  we_and 'test "$RC" -eq 0' '[[ "$("$G4_REAL_GREP" -cxF -e LINKEDIN_ORG_ACCESS_TOKEN=orgtok -e LINKEDIN_ORG_ID=123 -e LINKEDIN_ALLOW_POST=true -e LINKEDIN_POST_MAX_LENGTH=3000 -e KEEP_ME=1 "$GITWORK/.env")" == 5 ]]' 'we_keys_once "${WE_K[@]}"' '[[ "$("$G4_REAL_GREP" -c "=old$" "$GITWORK/.env")" == 0 ]]'
+
+# --- the lock is held through the FINAL rename (deterministic: stall the temp's rename, a second writer must not enter before it ends) ---
+we_reset "$G4_SEED"
+we_spawn bsky - - WE_FINMV_DELAY=1.5 WE_FINMV_FLAG="$WED/flag.fin"; wa_=$WE_PID
+we_wait_for "$WED/flag.fin"
+we_spawn x - -; wb_=$WE_PID
+wait "$wa_"; ra_=$?; wait "$wb_"; rb_=$?
+we_line_of() { "$G4_REAL_GREP" -n -x -m1 -- "$1" "$WED/iv.log" | cut -d: -f1; }
+check "release after the rename: writer A WAS inside its final rename (the stall fired) when writer B started" test -e "$WED/flag.fin"
+check "release after the rename: writer B entered its critical section only AFTER writer A's final rename finished, both exit 0, both key sets once, nothing left" \
+  we_and "test $ra_$rb_ = 00" '[[ -n "$(we_line_of "F bsky")" && -n "$(we_line_of "S x")" && "$(we_line_of "F bsky")" -lt "$(we_line_of "S x")" ]]' 'we_alternates "$WED/iv.log"' 'we_w_cfg bsky' 'we_keys_once "${WE_K[@]}"' 'we_w_cfg x' 'we_keys_once "${WE_K[@]}"' 'we_no_artifacts'
+
+# --- .gitignore covers the lock directory, the recovery mutex and both temp namespaces ---
+GI="$SANDBOX/gi"; mkdir -p "$GI"; env -i PATH="$SYS_PATH" HOME="$SANDBOX/home" git init -q -- "$GI"; cp "$HERE/../../../../../.gitignore" "$GI/.gitignore"
+gi_all_ignored() { local n; for n in "$@"; do ( cd "$GI" && env -i PATH="$SYS_PATH" HOME="$SANDBOX/home" git check-ignore --no-index -q -- "$n" ) || return 1; done; }
+check "gitignore: .env, .env.lock.d, the recovery mutex .env.lock.d.recover, the helper's .env.wenv.XXXXXX and the library's .env.tmp.XXXXXX are all ignored" \
+  gi_all_ignored .env .env.lock.d .env.lock.d/owner .env.lock.d.recover .env.wenv.AbC123 .env.tmp.AbC123
 
 # --- bounded wait: a LIVE holder makes the second run fail closed -------------------------------------------------------
 we_reset "$G4_SEED"
@@ -2284,12 +2540,12 @@ we_reset @none; mkdir -p "$WED/real"; ln -s "$WED/real/absent.env" "$GITWORK/.en
 RUN_CWD="$GITWORK" run_sut - "" "${WE_E[@]}" -- bash "$WE_S" write-env
 check "dangling .env link: refused (exit 1) with reason=env_dangling_link" bash -c '[[ "$1" -eq 1 && "$(grep -c "reason=env_dangling_link var=ENV_FILE phase=write-env$" <<<"$2")" == 1 ]]' _ "$RC" "$ERR"
 check "dangling .env link: the link is still a link, its target was not created and nothing was left behind" bash -c '[[ -L "$1/.env" && ! -e "$2/real/absent.env" ]]' _ "$GITWORK" "$WED" 
-check "dangling .env link: no .env.tmp.* or .env.lock.d* anywhere beside the link" we_no_artifacts
+check "dangling .env link: no .env.wenv.* or .env.lock.d* anywhere beside the link" we_no_artifacts
 we_reset @none; mkdir "$GITWORK/.env"
 RUN_CWD="$GITWORK" run_sut - "" "${WE_E[@]}" -- bash "$WE_S" write-env
 check "directory .env: refused (exit 1) with reason=env_not_regular" bash -c '[[ "$1" -eq 1 && "$(grep -c "reason=env_not_regular var=ENV_FILE phase=write-env$" <<<"$2")" == 1 ]]' _ "$RC" "$ERR"
 check "directory .env: it is still an empty directory and nothing was left behind" bash -c '[[ -d "$1/.env" && -z "$(ls -A "$1/.env")" ]]' _ "$GITWORK"
-check "directory .env: no .env.tmp.* or .env.lock.d* beside it" we_no_artifacts
+check "directory .env: no .env.wenv.* or .env.lock.d* beside it" we_no_artifacts
 rm -rf "$GITWORK/.env"
 
 # --- (vii) must-PASS: a different, legitimate value set into an .env full of unrelated odd-but-legal lines -------------------
@@ -2575,7 +2831,7 @@ IMG_OUT="" IMG_RC=0
 BASH32_IMAGE="bash:3.2"
 B32_OUT="" B32_RC=0
 # The same opt-in run also executes the write-env LOCK PATH (the mkdir owner-pid lock, the stale-owner
-# recovery by rename and four writers released together) under the real bash 3.2.57: it is the platform the
+# recovery under the recovery mutex and four writers released together) under the real bash 3.2.57: it is the platform the
 # lock was written to (no flock, no `exec {fd}<`, no `local -n`). Opt-in like the rows above, not a gate;
 # a failure is reported as a failing row, a pass as a note.
 B32L_OUT="" B32L_RC=0
@@ -2597,7 +2853,7 @@ for f in rc.*; do [ "$(cat "$f")" = 0 ] || { echo "B32LOCK rc $f=$(cat "$f")"; b
 for k in KEEP_ME BSKY_HANDLE BSKY_APP_PASSWORD X_API_KEY X_API_SECRET X_ACCESS_TOKEN X_ACCESS_TOKEN_SECRET LINKEDIN_CLIENT_ID LINKEDIN_PERSON_URN; do
   [ "$(grep -c "^$k=" .env)" = 1 ] || { echo "B32LOCK key $k count=$(grep -c "^$k=" .env)"; bad=1; }
 done
-ls -A | grep -E '^\.env\.(tmp|lock)' && { echo "B32LOCK artifacts left"; bad=1; }
+ls -A | grep -E '^\.env\.(tmp|wenv|lock)' && { echo "B32LOCK artifacts left"; bad=1; }
 [ "$(stat -c %a .env)" = 600 ] || { echo "B32LOCK mode"; bad=1; }
 echo "B32LOCK bash=$BASH_VERSION bad=$bad"
 B32LOCK_EOF
@@ -2657,8 +2913,8 @@ echo "community-argv.test.sh: $PASS passed, $FAIL failed"
 # Exact count, in the pre-existing guard-invisible form: a lower-case `-lt` floor would make this
 # `plugins/soleur/skills/*/test/` suite floor-bearing, which grows the DEFERRED ledger in
 # scripts/guard-vacuity-floor.test.sh (47 -> 48) until the file is promoted there.
-if [[ "$((PASS + FAIL))" -ne 1547 ]]; then
-  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1547\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 1595 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1595\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]
