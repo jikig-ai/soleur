@@ -2403,6 +2403,37 @@ if grep -qF 'last_suite=alpha' <<<"$out" \
 else
   fail "H2: stamp did not land; got: $out"
 fi
+cases=$((cases + 1))
+# Shape pin: every marker line is key=value. The missing-shift regression
+# wrote the lock NAME as a bare line — greps for the named kvs stayed green.
+_nonkv="$(grep -cvE '^[a-z_]+=' <<<"$out" || true)"
+if [[ "$_nonkv" == "0" ]]; then
+  pass "H2b: every marker line is key=value (no stray bare lines)"
+else
+  fail "H2b: marker carried a non-kv line; got: $out"
+fi
+cases=$((cases + 1))
+# The stamp must advance progress_epoch — a stamp that rewrites kvs but
+# keeps the mint's progress stamp fabricates the frozen-age wedge signal
+# on a healthy holder. Stamp twice across a second boundary and compare.
+out="$(env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" bash -c "
+  source '$SS_LIB'
+  acquire_lock hm2b 5 || exit 1
+  stamp_lock_holder hm2b
+  e1=\$(awk -F= '/^progress_epoch=/{print \$2; exit}' '$SS_ROOT/locks/hm2b.holder')
+  sleep 1.1
+  stamp_lock_holder hm2b
+  e2=\$(awk -F= '/^progress_epoch=/{print \$2; exit}' '$SS_ROOT/locks/hm2b.holder')
+  echo first=\$e1 second=\$e2
+  release_lock hm2b
+" 2>&1 || true)"
+_e1="$(grep -oE 'first=[0-9]+' <<<"$out" | cut -d= -f2 || true)"
+_e2="$(grep -oE 'second=[0-9]+' <<<"$out" | cut -d= -f2 || true)"
+if [[ -n "$_e1" && -n "$_e2" && "$_e2" -gt "$_e1" ]]; then
+  pass "H2c: a stamp advances progress_epoch ($_e1 -> $_e2 — a healthy holder looks live)"
+else
+  fail "H2c: stamp did not advance progress_epoch; got: $out"
+fi
 
 # --- H3: the stamp NEVER mints — a non-holder's stamp is a no-op ------------
 out="$(env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" bash -c "
@@ -2506,7 +2537,7 @@ fi
 # than wait for an operator to notice silent heartbeats mid-incident.
 rs_body="$(awk '/^run_suite\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$REPO_ROOT/scripts/test-all.sh")"
 cases=$((cases + 1))
-if [[ "$(grep -cE 'stamp_lock_holder' <<<"$rs_body" || true)" -ge 1 ]] \
+if [[ "$(grep -cE 'stamp_lock_holder test-all' <<<"$rs_body" || true)" -ge 1 ]] \
    && grep -q 'suites_done=' <<<"$rs_body" \
    && grep -q 'last_suite=' <<<"$rs_body"; then
   pass "H8: run_suite stamps the test-all holder marker (last_suite + suites_done)"
@@ -2514,7 +2545,7 @@ else
   fail "H8: no holder stamp inside run_suite — waiters cannot see holder progress"
 fi
 
-MIN_CASES=170
+MIN_CASES=172
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2

@@ -23,10 +23,10 @@
 # degrades to the pre-queue direct-acquire path. Every function is safe to call
 # under `set -euo pipefail`.
 #
-# The live-wedged-holder class (#7697) is handled by two instruments, both
-# still observe-only: the lock wait itself is exec-bounded in
-# session-state.sh (`timeout -k` around `flock -w`, because an inherited
-# blocked SIGALRM mask defeats the in-process expiry), and each heartbeat
+# The live-wedged-holder class (#7697) is handled by two instruments: the
+# lock wait itself is exec-bounded in session-state.sh (`timeout -k` around
+# `flock -w`, because an inherited blocked SIGALRM mask defeats the in-process
+# expiry — the bound signals only our own flock child), and each heartbeat
 # reads the acquirer-minted $LOCK_DIR/<name>.holder marker so a wedged holder
 # shows a frozen holder_progress_age while a corpse reads holder_alive=0.
 # Neither path ever aborts or signals the holder.
@@ -946,23 +946,26 @@ _tc_ms_since() {
 
 # Announce, on a real clock, that a blocked run is QUEUED rather than hung.
 #
-# WHAT THIS DELIBERATELY DOES NOT DO: identify the lock holder. The first draft
-# printed `holder pid=… worktree=…` from `head -1` of a /proc walk — whichever
-# sibling the glob enumerated first, with NO relationship to lock ownership.
-# Measured during review: the reported pid CHANGED ON EVERY BEAT and was
-# `unknown` on 2 of 9 beats, and on the six-run pileup this exists for, five of
-# six candidates are fellow WAITERS — so it named a waiter ~83% of the time
-# while work/SKILL.md told the operator to read it before killing something.
-# Killing the named process would not have released the lock.
+# WHAT THIS DELIBERATELY DOES NOT DO: guess the holder from /proc. The first
+# draft printed `holder pid=… worktree=…` from `head -1` of a _tc_scan_procs
+# walk — whichever sibling the glob enumerated first, with NO relationship to
+# lock ownership. Measured during review: the reported pid CHANGED ON EVERY
+# BEAT and was `unknown` on 2 of 9 beats, and on the six-run pileup this
+# exists for, five of six candidates are fellow WAITERS — so it named a
+# waiter ~83% of the time while work/SKILL.md told the operator to read it
+# before killing something. Killing the named process would not have released
+# the lock.
 #
-# It also cost what it was diagnosing: a full _tc_scan_procs per beat is ~6 s and
-# ~2,850 forks, so a 3600 s wait burned ~313 CPU-seconds and ~154,000 process
-# creations PER WAITER. On a box whose failure mode is fork/exec starvation, that
-# diagnostic participates in the incident.
+# It also cost what it was diagnosing: a full _tc_scan_procs per beat is ~6 s
+# and ~2,850 forks, so a 3600 s wait burned ~313 CPU-seconds and ~154,000
+# process creations PER WAITER. On a box whose failure mode is fork/exec
+# starvation, that diagnostic participates in the incident.
 #
-# So a beat carries the two facts it can actually know — which lock, and how long
-# THIS run has waited — and points at `--capacity` for who is holding it. Cost
-# per beat is now one printf.
+# So a beat carries the facts it can actually know — which lock, how long
+# THIS run has waited, and (since the #7697 marker landed below) what the
+# holder itself wrote down — and points at `--capacity` for a /proc census.
+# Cost per beat: two awk field reads + one kill -0 (plus the queue-position
+# fork when a ticket is held).
 #
 # ELAPSED IS MEASURED, NOT ACCUMULATED. Summing the nominal interval ignored the
 # work each beat did: 14 beats reported `waited=840s` across a 941 s wait (~11%
@@ -981,7 +984,13 @@ _tc_ms_since() {
 # "holder is a corpse" (holder_alive=0). Read-and-report only — the beat never
 # aborts on it and never signals the holder. holder=none means the holder went
 # through plain flock (or pre-marker code); holder=unreadable means the marker
-# existed but did not parse — neither is an error.
+# existed but did not parse — neither is an error. Caveats: holder_alive is
+# `kill -0` liveness — EPERM on a foreign-uid holder reads as 0 (a false
+# corpse in the shared-/tmp fallback case), and a recycled pid reads as 1
+# (the lease layer closes this with a stat starttime, the marker's
+# acquired_epoch is only a wall-clock hint); holder_progress_age is computed
+# only when progress_epoch reads as a positive epoch — a bash<5 holder stamps
+# 0, which renders as `?`, never a bogus number.
 _tc_wait_heartbeat() {
   local interval="${1:-60}" overrun_s="${2:-3600}" budget="${3:-0}" name="${4:-}"
   local qdir="${5:-}" serial="${6:-}"
@@ -1025,7 +1034,9 @@ _tc_wait_heartbeat() {
         _hprog="$(awk -F= '/^progress_epoch=/{print $2; exit}' "$_hf" 2>/dev/null || true)"
         if [[ "$_hpid" =~ ^[0-9]+$ ]]; then
           kill -0 "$_hpid" 2>/dev/null && _halive=1
-          [[ "$_hprog" =~ ^[0-9]+$ ]] && _hage=$(( "${EPOCHSECONDS:-0}" - _hprog ))
+          # A non-positive epoch (bash<5 holder stamped 0, or a zeroed
+          # marker) is not a timestamp — report `?` rather than a bogus age.
+          [[ "$_hprog" =~ ^[1-9][0-9]*$ ]] && _hage=$(( "${EPOCHSECONDS:-0}" - _hprog ))
           _hfield=" holder_pid=$_hpid holder_alive=$_halive holder_progress_age=${_hage}s"
         else
           _hfield=" holder=unreadable"

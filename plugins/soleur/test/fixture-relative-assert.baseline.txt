@@ -285,7 +285,7 @@
 4	plugins/soleur/scripts/domain-model-drift.sh
 2	plugins/soleur/scripts/emit-decision.sh
 9	plugins/soleur/scripts/lib/operator-script.sh
-6	plugins/soleur/scripts/lib/session-state.sh
+8	plugins/soleur/scripts/lib/session-state.sh
 3	plugins/soleur/scripts/lib/tmp-classify.sh
 1	plugins/soleur/scripts/pipeline-tally.sh
 5	plugins/soleur/scripts/pipeline-tally.test.sh

@@ -130,30 +130,34 @@ trap cleanup EXIT
 
 # --- Sibling-contention sampling for the ceiling verdict (#8163) ------------
 # The wall-clock ceiling at the end is only a honest assertion when the box
-# was actually uncontended. This battery ran 241 s against a 240 s ceiling
-# while three sibling full-gate runs shared the box — a red caused by the
-# environment, not the code under test. Sample the sibling-run count at
-# battery start and end through test-contention's fixtureable TC_PROC_ROOT
-# seam; an over-ceiling result with measured siblings downgrades to a
-# [note] — reported, never silently green — while a solo over-ceiling still
-# fails, and an absent lib falls back to the unconditional assertion.
+# was actually uncontended. This battery asserted `wall-clock 429523ms
+# EXCEEDS the 240000ms ceiling` while three sibling full-gate runs shared
+# the box (isolated re-run: 179 s, green) — a red caused by the environment,
+# not the code under test. Sample the sibling-run count at battery start
+# and end through test-contention's fixtureable TC_PROC_ROOT seam; an
+# over-ceiling result with measured siblings downgrades to a [note] —
+# reported, never silently green — while a solo over-ceiling still fails,
+# and an absent lib falls back to the unconditional assertion.
 _TC_LIB="$REPO_ROOT/scripts/lib/test-contention.sh"
 if [[ -f "$_TC_LIB" ]]; then
   # shellcheck source=scripts/lib/test-contention.sh
   source "$_TC_LIB"
 fi
 
-# Prints the sibling-run count. rc=1 means the procfs walk itself was
-# unmeasurable (empty/absent TC_PROC_ROOT) — which the verdict treats as
-# CONTENDED, the fail-safe direction (a procfs we cannot read may hide a
-# sibling it would have found). An ABSENT lib is different: it returns a
-# measured 0 so the ceiling stays an unconditional assertion.
+# Prints the sibling-run count (deduped by worktree dir — tc_siblings can
+# surface a wrapper+script pair for one run). rc=1 means the procfs itself
+# was unmeasurable (absent or unreadable TC_PROC_ROOT) — which the verdict
+# treats as CONTENDED, the fail-safe direction (a procfs we cannot read may
+# hide a sibling it would have found). A READABLE procfs with no numeric
+# entries is a measured ZERO — real /proc always has pid dirs, so an empty
+# one reads as solitude and keeps the assertion. An ABSENT lib is different
+# again: it returns a measured 0 so the ceiling stays unconditional.
 _mut_sibling_count() {
   declare -F tc_siblings >/dev/null 2>&1 || { printf '0\n'; return 0; }
   local proc="${TC_PROC_ROOT:-/proc}"
-  [[ -d "$proc" ]] && compgen -G "$proc/[0-9]*" >/dev/null 2>&1 || return 1
+  [[ -d "$proc" && -r "$proc" ]] || return 1
   local n
-  n=$(tc_siblings 2>/dev/null | wc -l | tr -d ' ')
+  n=$(tc_siblings 2>/dev/null | cut -f2 | sort -u | wc -l | tr -d ' ')
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   printf '%s\n' "$n"
 }
@@ -544,17 +548,35 @@ if [[ "$_got" =~ ^[0-9]+$ ]] && (( _got >= 1 )); then
 else
   fail "sibling sampler did not count the fixture proc: $_got"
 fi
-# An empty/unreadable procfs is UNMEASURABLE — and the verdict treats that as
-# contended rather than asserting against a number nobody measured.
+# A READABLE procfs with no pid entries is a measured zero (real /proc never
+# is one) — solitude keeps the ceiling asserted. An absent procfs is
+# UNMEASURABLE — and the verdict treats that as contended rather than
+# asserting against a number nobody measured.
 cases=$((cases + 1))
 _EMPTY_PROC="$WORK/fake-proc-empty"; mkdir -p "$_EMPTY_PROC"
-if TC_PROC_ROOT="$_EMPTY_PROC" _mut_sibling_count >/dev/null 2>&1; then
-  fail "empty procfs returned a measured count — an over-ceiling battery would assert against nothing"
+_empty_count="$(TC_PROC_ROOT="$_EMPTY_PROC" _mut_sibling_count 2>/dev/null || echo unmeasurable)"
+if [[ "$_empty_count" == "0" ]]; then
+  pass "readable-but-empty procfs measures zero (the ceiling still asserts)"
 else
-  pass "empty procfs reads unmeasurable (verdict counts it as contended)"
+  fail "readable-but-empty procfs should measure 0, got: $_empty_count"
+fi
+cases=$((cases + 1))
+if TC_PROC_ROOT="$WORK/no-such-proc" _mut_sibling_count >/dev/null 2>&1; then
+  fail "absent procfs returned a measured count — an over-ceiling battery would assert against nothing"
+else
+  pass "absent procfs reads unmeasurable (verdict counts it as contended)"
+fi
+# The verdict's contended input is _mut_sib_max OR _mut_sib_unmeasurable —
+# pin the conjunct so a dropped `||` term turns an unmeasurable read into a
+# solo assertion again.
+cases=$((cases + 1))
+if grep -q '_mut_sib_unmeasurable > 0' "$REPO_ROOT/scripts/orphan-process-reaper-mutation.test.sh"; then
+  pass "unmeasurable-procfs feeds the contended conjunct (fail-safe direction pinned)"
+else
+  fail "unmeasurable-procfs conjunct missing — the unmeasurable read no longer reaches the verdict"
 fi
 
-MIN_CASES=46
+MIN_CASES=48
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] assertion floor: %d assertions ran, expected at least %d.\n' "$cases" "$MIN_CASES" >&2
   echo "=== orphan-process-reaper-mutation: $pass_n passed, $fails failed ($cases assertions) ==="

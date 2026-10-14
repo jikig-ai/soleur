@@ -411,8 +411,10 @@ else
   fail "B4 — subagent full-gate refusal broken (rc=$SUBG_ALL_RC)"; dump "$SUBG_ALL_OUT"
 fi
 
+# The count alone drives the refusal — the splice re-arms the PID stamp
+# inside the runner unconditionally, so passing a PID here is dead env.
 SIB_OUT=$(cd "$FX" && env $SIB_SCRUB SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
-          TC_SIBLING_RUN_COUNT=2 TC_SIBLING_RUN_COUNT_PID=$$ \
+          TC_SIBLING_RUN_COUNT=2 \
           TEST_GROUP=affected timeout 120 bash "$TMP/runner-b1-none.sh" 2>&1)
 SIB_RC=$?
 if [[ "$SIB_RC" == "0" ]] && grep -qE '^=== 7/9' <<<"$SIB_OUT"; then
@@ -422,7 +424,7 @@ else
 fi
 
 SIB_ALL_OUT=$(cd "$FX" && env $SIB_SCRUB SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
-              TC_SIBLING_RUN_COUNT=2 TC_SIBLING_RUN_COUNT_PID=$$ \
+              TC_SIBLING_RUN_COUNT=2 \
               TEST_GROUP=all timeout 120 bash "$TMP/runner-b1-none.sh" 2>&1)
 SIB_ALL_RC=$?
 if [[ "$SIB_ALL_RC" == "4" ]]; then

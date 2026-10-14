@@ -911,6 +911,11 @@ else
   SOLEUR_LOCK_BOUND_SLACK_S=2 python3 "$MASKWRAP/maskwrap.py" block "
     export SOLEUR_SESSION_STATE_ROOT='$ROOT'
     source '$HELPER'
+    # The fixture's load-bearing precondition: verify the blocked mask
+    # actually propagated across exec (SIGALRM=14 -> bit 13 -> 0x2000),
+    # else this arm silently degrades into an unmasked wait.
+    sigblk=\$(awk '/^SigBlk/{print \$2}' /proc/self/status)
+    if (( 16#\$sigblk & 0x2000 )); then echo mask_verified; else echo mask_MISSING_\$sigblk; fi
     acquire_lock t20 2
     echo acquire_rc=\$?
   " > "$ROOT/t20.out" 2>&1
@@ -922,7 +927,8 @@ else
   # SIGALRM returns rc=1 at 3 s), so the inner expiry itself fires and rc=124
   # is reserved for a flock that cannot return at all — that path is
   # fixtured separately in T20b below.
-  if (( T20_ELAPSED < 10 )) && grep -q 'acquire_rc=99' "$ROOT/t20.out"; then
+  if grep -q 'mask_verified' "$ROOT/t20.out" \
+     && (( T20_ELAPSED < 10 )) && grep -q 'acquire_rc=99' "$ROOT/t20.out"; then
     pass "T20: blocked-SIGALRM waiter returns 99 in ${T20_ELAPSED}s inside the declared bound"
   else
     fail "T20: blocked-SIGALRM waiter: elapsed=${T20_ELAPSED}s out=$(tail -3 "$ROOT/t20.out")"
@@ -940,7 +946,9 @@ else
   printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$STUB_BIN/flock"
   chmod +x "$STUB_BIN/flock"
   T20B_START=$(date +%s)
-  PATH="$STUB_BIN" SOLEUR_LOCK_BOUND_SLACK_S=2 bash -c "
+  # The stub sleeps an hour; an outer bound keeps a regressed wrapper
+  # failing here instead of stalling the suite.
+  timeout 60 env PATH="$STUB_BIN" SOLEUR_LOCK_BOUND_SLACK_S=2 bash -c "
     export SOLEUR_SESSION_STATE_ROOT='$ROOT'
     source '$HELPER'
     acquire_lock t20b 2
@@ -1057,7 +1065,12 @@ PATH="$SANDBOX_BIN2" bash -c "
   echo acquire_rc=\$?
 " > "$ROOT/t23.out" 2>&1
 T23_ELAPSED=$(( $(date +%s) - T23_START ))
-if grep -q 'acquire_rc=99' "$ROOT/t23.out" && (( T23_ELAPSED < 10 )); then
+# The degrade path's own observable: the [note] naming that the bound is
+# now only flock's -w — a bare rc=99+elapsed would also match a fallback
+# where `timeout` was invoked unconditionally and errored rc=127.
+if grep -q 'acquire_rc=99' "$ROOT/t23.out" \
+   && grep -q 'timeout(1) absent' "$ROOT/t23.out" \
+   && (( T23_ELAPSED < 10 )); then
   pass "T23: no-timeout host still bounds the wait at flock's own -w (${T23_ELAPSED}s)"
 else
   fail "T23: degrade path did not return the contended rc: elapsed=${T23_ELAPSED}s out=$(tail -3 "$ROOT/t23.out")"

@@ -529,7 +529,12 @@ else
   printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$STUB_DIR/git"
   chmod +x "$STUB_DIR/gitleaks" "$STUB_DIR/git"
   _t8_start=$(date +%s)
-  PATH="$STUB_DIR:$PATH" gl_run 3 gitleaks git --config "$CONFIG" --log-opts="HEAD" >/dev/null 2>&1
+  # The stubs sleep an hour; an outer bound keeps a regressed gl_run failing
+  # here instead of stalling the suite.
+  timeout 60 env PATH="$STUB_DIR:$PATH" bash -c \
+    'source "$0"; gl_run 3 gitleaks git --config "$1" --log-opts="HEAD"' \
+    "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/gitleaks-probe.sh" \
+    "$CONFIG" >/dev/null 2>&1
   _t8_rc=$?
   _t8_elapsed=$(( $(date +%s) - _t8_start ))
   if [[ "$_t8_rc" == "124" ]] && (( _t8_elapsed < 15 )); then
@@ -538,7 +543,10 @@ else
     fail "wedged gitleaks not bounded: rc=$_t8_rc elapsed=${_t8_elapsed}s"
   fi
   _t8_start=$(date +%s)
-  PATH="$STUB_DIR:$PATH" gl_run 3 git log -p -1 HEAD >/dev/null 2>&1
+  timeout 60 env PATH="$STUB_DIR:$PATH" bash -c \
+    'source "$0"; gl_run 3 git log -p -1 HEAD' \
+    "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/gitleaks-probe.sh" \
+    >/dev/null 2>&1
   _t8_rc=$?
   _t8_elapsed=$(( $(date +%s) - _t8_start ))
   if [[ "$_t8_rc" == "124" ]] && (( _t8_elapsed < 15 )); then

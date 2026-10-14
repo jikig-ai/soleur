@@ -608,10 +608,10 @@ hypothesis unproven. It is now measured and closed:
 
 | Fixture | Result |
 |---|---|
-| `flock -w 3` on a held lock, `SIGALRM` inherited **blocked** (`sigprocmask(SIG_BLOCK)` before exec) | still waiting at 6 s — the wedge shape; the 4.6-day hold came from this |
+| `flock -w 3` on a held lock, `SIGALRM` inherited **blocked** (`sigprocmask(SIG_BLOCK)` before exec) | still waiting at 6 s — the waiter's unbounded park (the 4.6-day *hold* was the holder's `anon_pipe_read` wedge; this row is what made the *wait* indefinite) |
 | same under `SIG_IGN` disposition | returns at 3 s — only the *blocked mask* defeats `-w`, ignore is harmless |
 | `timeout 4 flock -w 60`, blocked mask | rc=124 at 4 s — the exec boundary does not depend on the child's mask |
-| `timeout 6 flock -w 3`, blocked mask | rc=1 at **3 s** — GNU `timeout` unblocks the child's mask, so the inner expiry fires again anyway |
+| `timeout 6 flock -w 3`, blocked mask | rc=1 at **3 s** — recent GNU `timeout` (~coreutils 9.5+) unblocks the child's mask, so the inner expiry fires again anyway |
 
 The wait in `_acquire_lock_impl` is now wrapped in
 `timeout -k <grace> <timeout_s+slack>` (`gtimeout` ladder; a host with neither
@@ -642,6 +642,8 @@ the waiter.
 queue still releases in ticket order, and nothing in this addendum aborts a
 run or kills a holder. The `--capacity` banner and admission semantics are
 untouched. The addendum's 2026-09-23 caveat — "a waiter parked 4.6 days in
-`locks_lock_inode_wait`" — is now unreachable by construction: a live-wedged
-holder bounds the wait at `timeout_s + slack` and the heartbeat names the
-holder state for whoever comes looking.
+`locks_lock_inode_wait`" — is now unreachable on hosts with `timeout`/`gtimeout`:
+a live-wedged holder bounds the wait at `timeout_s + slack` and the heartbeat
+names the holder state for whoever comes looking. On the no-timeout fallback
+the bound remains only `flock -w` and the blocked-mask defeat stays reachable —
+the `[note]` emitted there names that residual risk.

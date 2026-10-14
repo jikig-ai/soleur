@@ -61,8 +61,7 @@ gl_probe() {
     return 0
   fi
   local _probe_err _probe_rc=0 TO=()
-  if command -v timeout >/dev/null 2>&1; then TO=(timeout 10)
-  elif command -v gtimeout >/dev/null 2>&1; then TO=(gtimeout 10); fi
+  if ((${#_GL_TIMEOUT_CMD[@]})); then TO=("${_GL_TIMEOUT_CMD[@]}" 10); fi
   # stderr captured inline, not via mktemp: a tempfile here would need an owning
   # trap (ADR-129, lint-trap-tempfile-ownership rule c) that a sourced library
   # cannot register without stealing the caller's EXIT trap. Same shape as the
