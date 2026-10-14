@@ -396,17 +396,17 @@ The workflow is dispatch-only and has never run, so there is no runtime state to
 
 ## Acceptance Criteria
 
-- [ ] The mirror step has `id: zot_mirror`, `if: steps.docker_build.outcome == 'success'`, `continue-on-error: true`, and no `if:` anywhere in the workflow reads `steps.zot_bridge`.
-- [ ] `BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}` is in the step env and the script degrades on any value other than `success` (`failure`, `skipped`, empty, unset).
-- [ ] On every degrade the step writes `mirror_status=degraded`, `mirror_reason=<stage>`, one `::warning::` and one summary line, and exits 0; on success it writes `mirror_status=ok`. The crane install group and the copy are each `|| degraded`-routed.
-- [ ] The warning text contains neither `mirror_only` nor a re-dispatch instruction (checked by reading the diff, not by a suite arm).
-- [ ] `plugins/soleur/test/inngest-config-bundle-mirror.test.sh` extracts the step body from the workflow by name, runs it under `bash -eo pipefail` with stubs, arms 1-7 pass, its mutation battery reports every matrix row RED (each mutant asserted different from canonical) and both must-pass variants GREEN.
+- [x] The mirror step has `id: zot_mirror`, `if: steps.docker_build.outcome == 'success'`, `continue-on-error: true`, and no `if:` anywhere in the workflow reads `steps.zot_bridge`.
+- [x] `BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}` is in the step env and the script degrades on any value other than `success` (`failure`, `skipped`, empty, unset).
+- [x] On every degrade the step writes `mirror_status=degraded`, `mirror_reason=<stage>`, one `::warning::` and one summary line, and exits 0; on success it writes `mirror_status=ok`. The crane install group and the copy are each `|| degraded`-routed.
+- [x] The warning text contains neither `mirror_only` nor a re-dispatch instruction (checked by reading the diff, not by a suite arm).
+- [x] `plugins/soleur/test/inngest-config-bundle-mirror.test.sh` extracts the step body from the workflow by name, runs it under `bash -eo pipefail` with stubs, arms 1-7 pass, its mutation battery reports every matrix row RED (each mutant asserted different from canonical) and both must-pass variants GREEN.
 - [ ] The PR body contains the suite run against the unfixed workflow showing the expected failures (pre-fix RED evidence).
-- [ ] `scripts/lint-orphan-test-suites.sh` passes with the suite tracked; with only the bundle workflow staged, `scripts/test-all.sh --affected --affected-scope=staged` selects the suite; both manifests carry one new row each and no other suite's row changed (`git diff origin/main...HEAD -- scripts/suite-durations.tsv scripts/suite-shard-legs.tsv` shows additions of that suite only).
-- [ ] `reusable-release-zot-mirror-retry.test.sh` and `inngest-bootstrap-mirror-only.test.sh` still pass; the `CRANE_SHA256=` assignment in the bundle workflow is unchanged.
-- [ ] Phase 4 hook suites and lints are green for the new `*.test.sh`; `BASELINE_DECLARED_PROBES` re-checked against `origin/main` and unchanged unless a merged plan moved it.
-- [ ] `grep -cF mirror_status=degraded .github/workflows/build-inngest-config-bundle.yml` prints `1` on the post-change tree.
-- [ ] `git diff --name-only origin/main...HEAD` lists no `.tf`, no `cloud-init-registry.yml`, no path under `apps/web-platform/`, and no `infra-validation.yml`; its only files outside `knowledge-base/` are the bundle workflow, the new suite, `scripts/lib/test-affected-paths.sh` (if needed) and the two manifests (files the pipeline itself writes, such as the generated KB index and session state, are in the allowed set).
+- [x] `scripts/lint-orphan-test-suites.sh` passes with the suite tracked; with only the bundle workflow staged, `scripts/test-all.sh --affected --affected-scope=staged` selects the suite; both manifests carry one new row each and no other suite's row changed (`git diff origin/main...HEAD -- scripts/suite-durations.tsv scripts/suite-shard-legs.tsv` shows additions of that suite only).
+- [x] `reusable-release-zot-mirror-retry.test.sh` and `inngest-bootstrap-mirror-only.test.sh` still pass; the `CRANE_SHA256=` assignment in the bundle workflow is unchanged.
+- [x] Phase 4 hook suites and lints are green for the new `*.test.sh`; `BASELINE_DECLARED_PROBES` re-checked against `origin/main` and unchanged unless a merged plan moved it.
+- [x] `grep -cF mirror_status=degraded .github/workflows/build-inngest-config-bundle.yml` prints `1` on the post-change tree.
+- [ ] `git diff --name-only origin/main...HEAD` lists no `.tf`, no `cloud-init-registry.yml`, no path under `apps/web-platform/`, and no `infra-validation.yml`; its only files outside `knowledge-base/` are the bundle workflow, the new suite, `scripts/lib/test-affected-paths.sh` (if needed) and the two manifests (files the pipeline itself writes, such as the generated KB index and session state, are in the allowed set). (Implementation note: `.claude/hooks/grep-q-pipe-guard.test.sh` also changed, one PRODUCER_JOIN row plus `PJ_TRIPLES` 261->262, because that census pins every suite that stubs `sha256sum`; unavoidable for any new suite with this stub.)
 - [ ] PR body: first line states merging alone does not mutate production, `Ref #7243`, `## Changelog`, plan cited by archived path once archived. After merge the `deploy-arm.sh find --wait` / `served` verdicts are recorded, the tracking issue exists, and the #7243 checkbox in #10205 is ticked and re-read.
 
 ## Domain Review
