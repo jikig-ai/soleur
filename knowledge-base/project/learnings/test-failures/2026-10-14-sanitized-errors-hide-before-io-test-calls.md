@@ -134,3 +134,8 @@ reported BEHIND, because CI-only polling must stop until the branch is synced.
 This is a cancelled watch, not a CI failure. The exact `origin/main` SHA was
 fetched and the canonical sync script merged/pushed it; the replacement watch
 must bind to the new head.
+
+The first follow-up sync invocation guessed `scripts/lib/sync-pr-behind.sh`, a
+path that does not exist in this checkout. It made no changes. `rg --files`
+located the canonical script at `plugins/soleur/scripts/sync-pr-behind.sh`; use
+discovery before copying a path from another workflow layout.

@@ -1665,3 +1665,21 @@
   provider/credential/browser/account operations, recovery/retry, deployment,
   flags/cohort changes or any other existing hold. Build authorization is
   consumed; the withdrawn command remains unavailable.
+
+### Second bounded watch and main resync — 2026-10-14
+
+- The first six-poll watch timed out with 19/73 passing, 54 pending, 3 skipped
+  and no failures. A second watch advanced to 41/75 with no failures, then
+  reported BEHIND. It was stopped at the stale head; one in-flight poll printed
+  afterward, also with zero failures. The monitor timeout is pending CI, not a
+  failed check.
+- Current main was `9e0518c07ccf08109aeb7586e9f65e8e51016b82`, a single inert
+  feature-tweet draft addition under marketing content. The canonical
+  `plugins/soleur/scripts/sync-pr-behind.sh 9051 --step` merged and pushed it as
+  `d139016d8879cf4cf1be2f0cccc56ed9e28c4407`. No qualification, application,
+  migration or operational source changed.
+- PR #9051 remains open, draft, disarmed and customer-blocked. This merge makes
+  the prior exact-source pairing/export and PR description historical; the
+  replacement documentation commit, pairing/export, description and check
+  watch must bind to the new final head. All authorization and operational holds
+  persist, including consumed build approval and the withdrawn command.

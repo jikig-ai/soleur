@@ -251,3 +251,14 @@ checks, source pairing/export and checks are refreshing. The last exact-head PR
 check watch was interrupted to stop polling after BEHIND, with no source change
 or CI rerun. PR remains open, draft and disarmed. No full runtime qualification,
 SAST/C.9, live tenant retry, build, recovery or promotion is claimed.
+
+## Subsequent main sync
+
+After the first documentation push, the bounded PR watch observed BEHIND while
+main was `9e0518c07ccf08109aeb7586e9f65e8e51016b82`. The incoming commit adds
+one inert marketing draft only. The canonical sync script merged and pushed it
+as `d139016d8879cf4cf1be2f0cccc56ed9e28c4407`; no runtime, app, qualification,
+migration or operational bytes changed. The prior file-only export and PR body
+are now historical. Fresh exact-head pairing/export, PR description and a new
+bounded check watch remain pending. PR stays draft and disarmed; all holds
+persist.
