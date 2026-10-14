@@ -9,7 +9,9 @@
 #              no-ops, the ONLY admitted changes are:
 #                - a replace (delete+create, in either order) of exactly hcloud_server.rehearsal,
 #                  hcloud_volume_attachment.rehearsal, hcloud_volume_attachment.rehearsal_luks,
-#                  and tls_private_key.rehearsal_host_ssh (the replace arm's host-key rotation);
+#                  tls_private_key.rehearsal_host_ssh (the replace arm's host-key rotation), and
+#                  the two terraform_data late-attachment delays of the payload boot
+#                  (terraform_data.rehearsal_attach_delay_luks / _pt; exact addresses, no index);
 #                - an update of hcloud_firewall_attachment.rehearsal.
 #              The three host replaces MUST be present. Any change to either volume is refused: a
 #              fresh plaintext volume makes the seed vacuous, and a fresh LUKS volume skips the
@@ -77,6 +79,7 @@ else
           hcloud_volume_attachment.rehearsal) seen_att=1 ;;
           hcloud_volume_attachment.rehearsal_luks) seen_att_luks=1 ;;
           tls_private_key.rehearsal_host_ssh) ;;
+          terraform_data.rehearsal_attach_delay_luks|terraform_data.rehearsal_attach_delay_pt) ;;
           *) echo "::error::plan-shape (host-only): a replace of ${addr} is not admitted"; bad=1 ;;
         esac ;;
       update)

@@ -117,3 +117,14 @@ variable "rehearsal_phase" {
     error_message = "rehearsal_phase must be `seed` or `payload`."
   }
 }
+
+variable "rehearsal_attach_delay_s" {
+  description = "(#10138) Seconds the PAYLOAD-phase plaintext attachment is held back after server create (LUKS waits half, rounded down), so the paid rehearsal exercises the bootstrap's bounded attach wait. 0 (default) is the old behaviour; the seed phase sleeps 0. Capped at 240 so a typo cannot burn a paid rehearsal."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.rehearsal_attach_delay_s >= 0 && var.rehearsal_attach_delay_s <= 240
+    error_message = "rehearsal_attach_delay_s must be between 0 and 240 seconds."
+  }
+}

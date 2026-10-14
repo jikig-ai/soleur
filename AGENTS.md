@@ -60,6 +60,7 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: wg-never-bump-version-files-in-feature]
 - [id: wg-after-marking-a-pr-ready-run-gh-pr-merge]
 - [id: wg-ship-push-before-merge]
+- [id: wg-kb-artifacts-archived-in-pr]
 - [id: wg-cla-signed-author-before-merge]
 - [id: wg-after-a-pr-merges-to-main-verify-all]
 - [id: wg-dark-launch-deploy-gates]
