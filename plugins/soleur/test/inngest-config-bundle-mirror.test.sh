@@ -10,11 +10,12 @@
 # BRIDGE_OUTCOME env var and degrades loudly (outputs + ::warning:: + summary line, exit 0)
 # when the bridge did not succeed or the crane download / checksum / extract / copy fails. The
 # step keeps continue-on-error: this workflow has no mirror-only mode and no host reads the zot
-# copy yet (interim contract, see the comment above the step).
+# copy yet (an interim contract, marked SOLEUR-DEBT in the comment above the step).
 #
 # This suite parses the workflow as YAML (structural leg), extracts the REAL `run:` body by step
 # name and executes it under `bash -eo pipefail` with argv-validating PATH stubs (behavioural
-# leg; the body sets its own options, so the runner's default `bash -e` makes no difference),
+# leg; the harness passes `-eo pipefail`, so the body's own `set -euo pipefail` line is NOT pinned
+# here),
 # then proves the guard itself is not vacuous by running the same evaluator over mutated copies
 # of the workflow (mutation battery). Each mutant must fail the check it is named for, not just
 # any check. Run via: bash plugins/soleur/test/inngest-config-bundle-mirror.test.sh
@@ -132,7 +133,7 @@ PY
 
 # ---------------------------------------------------------------------------
 # Deterministic stubs. They VALIDATE argv (exit 64 + a REFUSE log line on a contract violation,
-# which every arm asserts is absent) and log every call to $STUB_LOG, never stdout.
+# which the arms assert is absent) and log every call to $STUB_LOG, never stdout.
 # ---------------------------------------------------------------------------
 STUBS="$TMP/bin"
 mkdir -p "$STUBS"
@@ -239,7 +240,8 @@ count_has() { # lines containing the string
   echo "${n:-0}"
 }
 count_pfx() { # lines STARTING with the string (a mid-line occurrence is not a workflow command)
-  awk -v p="$1" 'index($0, p) == 1 { n++ } END { print n + 0 }' "$2" 2>/dev/null || echo 0
+  [[ -n "$1" ]] || { echo 0; return; }
+  P="$1" awk 'index($0, ENVIRON["P"]) == 1 { n++ } END { print n + 0 }' "$2" 2>/dev/null || echo 0
 }
 copies() {
   if [[ -f "$1/copycount" ]]; then cat "$1/copycount"; else echo 0; fi
@@ -250,13 +252,14 @@ copies() {
 bad_count() {
   local n
   [[ -s "$1" ]] || { echo 1; return; }
-  n=$(grep -vc '^OK' "$1" 2>/dev/null) || true
+  n=$(grep -vc "^OK"$'\t' "$1" 2>/dev/null) || true
   echo "${n:-0}"
 }
 # bad_has <verdicts-file> <label-substring> -> 0 if some BAD line carries the label
 bad_has() {
   local bads
-  bads=$(grep '^BAD' "$1" 2>/dev/null) || true
+  [[ -n "$2" ]] || return 1
+  bads=$(grep "^BAD"$'\t' "$1" 2>/dev/null | cut -f2-) || true
   [[ "$bads" == *"$2"* ]]
 }
 
@@ -357,6 +360,7 @@ evaluate() {
   [[ ! -s "$d/copyflaky/sum" ]] || ok=0
   [[ "$(count_pfx "::" "$d/copyflaky/stdout")" == "0" ]] || ok=0
   [[ "$(copies "$d/copyflaky")" == "3" ]] || ok=0
+  [[ "$(count_has "REFUSE" "$d/copyflaky/log")" == "0" ]] || ok=0
   chk "$ok" "crane copy failing twice then succeeding: mirror_status=ok after 3 attempts, no warning or summary line"
 
   run_arm "$d/shabad" success STUB_SHA_RC=3
@@ -487,6 +491,11 @@ if bad_has "$TMP/v-bad" "no such label"; then fail "bad_has: matched an absent l
 if bad_has "$TMP/v-bad" "x"; then fail "bad_has: matched a label that only an OK line carries"; else pass "bad_has: ignores OK lines"; fi
 printf 'prefix ::warning::mid-line\n::warning::at start\n' > "$TMP/v-pfx"
 [[ "$(count_pfx "::" "$TMP/v-pfx")" == "1" ]] && pass "count_pfx: only a line-start workflow command counts" || fail "count_pfx: counted a mid-line occurrence"
+[[ "$(count_pfx "" "$TMP/v-pfx")" == "0" ]] && pass "count_pfx: an empty prefix counts nothing" || fail "count_pfx: an empty prefix matched lines"
+printf 'OK\tx\n\nOKAY\tz\n' > "$TMP/v-odd"
+[[ "$(bad_count "$TMP/v-odd")" == "2" ]] && pass "bad_count: a blank line and a non-OK verb both count as bad" || fail "bad_count: a blank line or OKAY read as clean"
+if bad_has "$TMP/v-bad" ""; then fail "bad_has: an empty label matched"; else pass "bad_has: rejects an empty label"; fi
+if bad_has "$TMP/v-bad" "BAD"; then fail "bad_has: matched the verdict word instead of the label"; else pass "bad_has: matches the label field only"; fi
 
 # ---------------------------------------------------------------------------
 # Canonical evaluation
@@ -504,7 +513,8 @@ done < "$TMP/canon/verdicts"
 # runs (a pattern that stopped matching would otherwise become a silent no-op that scores as
 # "the guard held"), then the SAME evaluator must report a BAD check carrying the label the
 # mutation is named for (a mutant that merely breaks the YAML scores nothing).
-# row: <name>|<struct|full>|<expected BAD label substring>
+# row: <name>|<struct|ok|failure|copyfail>|<expected BAD label substring(s), ';'-separated>
+# (the kind is the one behavioural arm that carries the label; struct stops after the structural leg)
 # ---------------------------------------------------------------------------
 echo "T2: mutation battery (each mutant must differ from canonical and fail the check it is named for)"
 if [[ "$CANON_RED" -ne 0 ]]; then
@@ -592,7 +602,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=63
+MIN_ASSERTIONS=67
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1
