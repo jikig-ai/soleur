@@ -6823,7 +6823,7 @@ echo "=== stage S6-HB: Guard 2 rows (heartbeat URL off curl argv: derived popula
 #   - a second stdin consumer spelled `-F f=@-`, `--form`, `-d @/dev/stdin`, `-T /dev/stdin`, `--data-ascii @-`, `-K-`;
 #   - files that are not markdown (scripts are Guards 1 and 2; Rule E covers them), and markdown the scan does not walk: plugins/soleur/docs/, EVERY
 #     knowledge-base/ tree (including knowledge-base/engineering/operations/runbooks/*.md, which agents DO read and which hold argv-bearer lines),
-#     .github/PULL_REQUEST_TEMPLATE.md and apps/web-platform/infra/sentry/README.md (both converted by hand, but unscanned), apps/web-platform/infra/egress-gw-image.provenance.md;
+#     .github/PULL_REQUEST_TEMPLATE.md (converted by hand, but unscanned), apps/web-platform/infra/sentry/README.md (NOT converted: a path under apps/web-platform/infra/ fires the infra apply workflows on merge, so it waits for a PR that already owns an apply), apps/web-platform/infra/egress-gw-image.provenance.md;
 #   - credential text echoed by workflows (`.github/workflows/scheduled-terraform-drift.yml` prints runbook commands).
 # =====================================================================================
 S7_ALLOW_CEIL=1; S7_HIT_FLOOR=5

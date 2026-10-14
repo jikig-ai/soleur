@@ -149,8 +149,7 @@ from the Terraform provider directly, not from an audit report:
 
 ```bash
 doppler run --project soleur --config prd --command '
-  printf "header = \"Authorization: Bearer %s\"\n" "$SENTRY_IAC_AUTH_TOKEN" \
-  | curl --disable -s --config - \
+  curl -s -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" \
     "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/" \
   | jq -r ".[] | \"\(.id)\t\(.name)\""'
 ```
@@ -233,8 +232,7 @@ Read the live route (read-only; confirms the binding and when it last fired):
 
 ```bash
 doppler run --project soleur --config prd --command '
-  printf "header = \"Authorization: Bearer %s\"\n" "$SENTRY_IAC_AUTH_TOKEN" \
-  | curl --disable -s --config - \
+  curl -s -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" \
     "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/" \
   | jq ".[] | select(.name==\"cron-monitor-failure\") | {id, enabled, lastTriggered, detectors: (.detectorIds | length)}"'
 ```
