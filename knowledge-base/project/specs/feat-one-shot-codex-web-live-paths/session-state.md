@@ -1595,3 +1595,30 @@
   are unchanged; incoming static Vector/emitter checks pass 42/34 cases. Their
   inclusion changes complete runtime fingerprints and requires fresh final-head
   pairing/export/watches. All source/runtime/legal/approval holds above remain.
+
+### Finite image observation source — 2026-10-14
+
+- Added `image_observations.py`: source-bound, one-pass image Config collection
+  using only deduplicated GETs for explicit immutable IDs, one shrinking deadline,
+  bounded complete Config checks and no retry. The exclusive mode-0600 file
+  manifest binds exact GET paths to pairing/operational hashes and carries no
+  endpoint or Config data. It has no execution path and grants no
+  profile/issuer/ownership/quiescence/review authority.
+- Nine synthetic image-observation cases plus 23 namespace transport cases
+  pass (32/32). Operational and callable adapter suites pass 66/66. Full
+  registered offline wrapper passes with `IMAGE_OFFLINE_RC=0`; current-source
+  census/export and independent review remain pending. No real image, daemon or
+  profile was observed.
+- Exact-head CI at `4d19eff759f2a0da75de2d207ad867baff7fd11f` settled non-pass:
+  tenant integration failed during fixture teardown when the dev anonymization
+  RPC returned Cloudflare 502; its summary was 6,532 passed, eleven skipped,
+  one todo, with one suite failed. No live retry was issued. Deploy shard 3
+  failed `cutover-inngest-workflow.test.sh`; the job log named its leg artifact,
+  but the uploaded artifact lacked that suite transcript, so the assertion is
+  unknown. CI also reported the PR behind main. These gates remain unresolved.
+- PR #9051 remains draft with auto-merge disabled. Source-only permission allows
+  synthetic implementation/review; it does not authorize CI live retries,
+  database changes, build/recovery, provider, browser/account/shared writes,
+  deployment, flags or cohort operations. Build authorization is consumed;
+  never run the withdrawn command. All prior holds, legal/SAST/C.9 dispositions
+  and customer block remain unchanged.

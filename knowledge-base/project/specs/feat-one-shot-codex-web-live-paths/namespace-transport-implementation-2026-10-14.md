@@ -178,3 +178,33 @@ refusal counted as log evidence. An initial attempt to read newly incoming test
 files before merging found them absent locally; the merged exact-source files
 were read before their static verification. Discovery alone proves no local
 checkout file exists. Every existing hold persists.
+
+# Finite image Config source preparation — 2026-10-14
+
+The source-only authorization also covered executable profile preparation with
+synthetic tests. `image_observations.py` binds its executing source digest to
+the operational contract and accepts a complete explicit role-to-immutable-image
+map. Construction performs no transport request. A single collection pass
+issues only deduplicated `GET /images/<sha256>/json` calls, checks the returned
+image IDs, complete required Config fields and one shrinking monotonic deadline,
+then emits Config hashes while keeping profile admission, issuer verification,
+independent review, ownership, quiescence and execution false. A pass cannot be
+repeated through the same collector.
+
+The file-only manifest binds pairing and operational hashes and enumerates the
+exact GET paths, empty-body payload markers, role mappings and approval
+requirement. It contains no endpoint or image Config. Its exclusive writer
+creates one mode-0600 file and refuses overwrite/symlink targets. It does not
+execute the manifest. Nine synthetic image-observation cases and 23 namespace
+transport cases pass (32 focused cases). Operational/adapter tests pass 66
+cases, and the registered complete offline wrapper passes with
+`IMAGE_OFFLINE_RC=0`. Current-source census/export and pushed-source independent
+review remain pending.
+
+No real image Config, endpoint, profile or observation was read. Supplied image
+IDs and structural responses are not authenticated inventory. Builder, session
+and retained-resource transports, enforced network/resource limits, complete
+writer/quiescence evidence, authenticated provenance, independent profile review
+and a fresh exact-action approval remain outstanding. Build authorization is
+consumed; the withdrawn command remains unavailable. Every existing hold
+persists.

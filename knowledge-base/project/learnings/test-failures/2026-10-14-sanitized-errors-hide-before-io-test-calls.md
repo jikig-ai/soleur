@@ -70,3 +70,14 @@ workflow was active. Its job-log API required an explicit escape-output flag;
 redirect raw bytes privately and sanitize before emitting metadata. Failed or
 empty reads are not evidence. These refusals and source synchronization renewed
 no runtime permission and did not clear any hold.
+
+The resumed image-observation test was first invoked from the repository root,
+where its sibling-module import was unavailable; run it from
+`scripts/codex-qualification`, as the wrapper does. A follow-up edit reused the
+root-relative path from that module directory and failed without changing files;
+use the worktree root for repository-relative edits. A synthetic clock fixture
+then exhausted its sequence across repeated refusal cases, and a test assertion
+referenced a local from another method. Both were corrected before the passing
+32-case run. CI also recorded a dev anonymization RPC HTTP 502 during tenant
+fixture teardown and an infra cutover shell-suite failure; no live retry was
+issued, and the latter artifact omitted its named suite transcript.
