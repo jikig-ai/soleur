@@ -1201,7 +1201,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=261   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=264   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -1301,6 +1301,7 @@ PRODUCER_JOIN=(
   'plugins/soleur/test/flag-detach-shared.test.sh | doppler | exempt | unverified suite fails at base under the isolated run (rc1 at 21s); stub set arm never reads'
   'plugins/soleur/test/flag-org-scoping-pr2.test.sh | doppler | exempt | unverified suite fails at base under the isolated run (rc1 at 15s); stub set arm never reads'
   'plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh | curl | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/29s; hits 0 (stdin-flag))'
+  'plugins/soleur/test/inngest-config-bundle-mirror.test.sh | sha256sum | drains | 1 | *'
   'plugins/soleur/test/operator-9321-stages.test.sh | doppler | exempt | text-only the derived producer apps/cla-evidence/infra/bootstrap.sh matches by basename only; the suite names the generated operator script under knowledge-base/project/specs (also called bootstrap.sh), not the cla-evidence one'
   'plugins/soleur/test/operator-9321-stages.test.sh | gh | exempt | arm-drain all-arms-keyed: stub-world def (lib/operator-stub-world:155) `secret set` arm `cat >/dev/null` at opener+8, first statement of the arm (reach T1; t1:rc2/0s red:rc0/258s; hits 24 (stdin-flag))'
   'plugins/soleur/test/operator-9321-stages.test.sh | jq | exempt | pass-through shim in lib/operator-stub-world.sh: logs then execs the real jq'
@@ -1322,6 +1323,7 @@ PRODUCER_JOIN=(
   'scripts/check-deploy-script-parity.test.sh | python3 | exempt | deliberate-fault some-arms: def 234 `[[ $1 == -I ]] && exit 1` (fails ONLY the HMAC call), else execs the real python3 (reach T2; t2:rc0/3s; hits 2)'
   'scripts/check-web-host-escrow-config.test.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc124/301s; hits 0 (stdin-flag))'
   'scripts/ci-demand-census.test.sh | jq | exempt | text-only no piped jq in scripts/ci-demand-census.sh (every jq reads a file operand); the ci.yml sites in sites.txt are fixture names, not exercised'
+  'scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh | tr | exempt | deliberate-fault never: `printf #!/usr/bin/env bash\nexit 5\n` at 334 (failing tr, "a failing CR strip is never read as no marker")'
   'scripts/followthroughs/infra-config-activation-7220.test.sh | python3 | exempt | deliberate-fault never: `printf #!/usr/bin/env bash\nexit 1\n` at 305 (failing python3, "uncomputable signature refused") (reach T2; t2:rc0/6s; hits 1)'
   'scripts/followthroughs/inngest-soak-6178.test.sh | python3 | exempt | deliberate-fault python3 stubs exit 1 or print a non-digest to drive the refused-signature rows, and the producer is printf with an empty write (no EPIPE possible) of the followthrough script (reach: not probed, found by the final configuration, read by hand)'
   'scripts/followthroughs/web2-luks-live-6931.test.sh | ready | exempt | not-a-command a word in a usage comment of betterstack-query:110; the suite stubs a ready function and no non-test pipe feeds it (reach T2; t2:rc0/169s; hits 324)'
@@ -1876,7 +1878,7 @@ if (( pj_rc_rc == 3 )); then printf '%s\n' "$pj_rc_out"; exit 3; fi
 pj_rc="$(grep -v '^ROWS-CHECKED ' <<<"$pj_rc_out" || true)"
 [[ -z "$pj_rc" ]] || { PJ_FAIL=1; printf '%s\n' "$pj_rc"; }
 read -r _ pj_chk_rows pj_chk_drains < <(grep '^ROWS-CHECKED ' <<<"$pj_rc_out") || true   # the outer || true is load-bearing (no count line: read returns 1 and the count check below says why); the process substitution's own status is never seen
-PJ_FLOOR_DRAINS=21   # the floor on drains rows the checker verified, pinned by value in the wiring check; ratchet it with the table
+PJ_FLOOR_DRAINS=22   # the floor on drains rows the checker verified, pinned by value in the wiring check; ratchet it with the table
 (( pj_drain_n >= PJ_FLOOR_DRAINS )) || { PJ_FAIL=1; echo "FAIL: the checker verified $pj_drain_n drains rows, the floor is $PJ_FLOOR_DRAINS — a drains row was flipped to exempt, deleted, gone stale (its pair no longer derives) or malformed (the lines above name which), which silences its stub check; restore it, or lower the floor in the same edit with the reason"; }
 pj_cc="$(pj_check_counts "${pj_chk_rows-}" "${#PRODUCER_JOIN[@]}" "${pj_chk_drains-}" "$pj_drain_n")"
 [[ -z "$pj_cc" ]] || { PJ_FAIL=1; printf '%s\n' "$pj_cc"; }
@@ -2513,7 +2515,7 @@ done
 wire_flr_n=$(grep -cE '^pj_floor [a-z-]+ [0-9]+ ' <<<"$_code" || true)
 wire_flr_fn=$(grep -cE '^pj_floor\(\) \{[[:space:]]*$' <<<"$_code" || true)
 wire_pjf=$(grep -cE '^\(\( pj_drain_n >= PJ_FLOOR_DRAINS \)\) \|\| \{ PJ_FAIL=1; echo .*\$PJ_FLOOR_DRAINS' <<<"$_code" || true)
-wire_pjfv=$(grep -cE '^PJ_FLOOR_DRAINS=21([[:space:]]|$)' <<<"$_code" || true)
+wire_pjfv=$(grep -cE '^PJ_FLOOR_DRAINS=22([[:space:]]|$)' <<<"$_code" || true)
 wire_pjq=$(grep -cE '^read -r _ pj_chk_rows pj_chk_drains < <\(grep .\^ROWS-CHECKED . <<<"\$pj_rc_out"\) \|\| true([[:space:]]|$)' <<<"$_code" || true)
 wire_neg=$(grep -cE '^  \|\| \{ printf .%s\\n. "FAIL: producer-join-negative-controls' <<<"$_code" || true)
 [[ "$wire_pjn" == 1 && "$wire_pjj" == 1 && "$wire_pjr" == 1 && "$wire_pjrr" == 1 && "$wire_pjrs" == 1 && "$wire_pjc" == 1 && "$wire_pjcc" == 1 && "$wire_pjt" == 1 && "$wire_pjtt" == 1 && "$wire_pjg" == 1 \

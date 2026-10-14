@@ -471,6 +471,66 @@ DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CL
 assert "both soleur-inngest-bootstrap pin refs (IREF + ZIREF) present and share one tag (found $PIN_REF_COUNT refs, $DISTINCT_PINS distinct)" \
   "(( PIN_REF_COUNT == 2 && DISTINCT_PINS == 1 ))"
 
+# --- AC6d: the scheduled published-digest reconciler's wiring (#4699) ---
+# AC6 above asserts pin == semver-max tag NAME; it cannot see a tag's GHCR
+# *content* move — a non-`mirror_only` workflow_dispatch re-publish of an
+# existing tag (the designed CVE rebuild hatch) moves the tag's digest while
+# "tag exists" stays true everywhere, and GuardA's own commentary names that
+# residual. The scheduled reconciler —
+# .github/workflows/scheduled-vinngest-digest-freshness.yml driving
+# .github/scripts/vinngest-digest-freshness.sh — closes it: per merged tag,
+# live `crane digest` vs the digest the pin history recorded. These are WIRING
+# pins ("the check exists and is dispatched, the script carries the
+# derivation + the selector"): the live resolution itself cannot run here —
+# crane is not provisioned in this job (GuardA's commentary records why adding
+# it would red every PR), so the behavioral half is
+# .github/scripts/test/test-vinngest-digest-freshness.sh, which is
+# merge-blocking via run-all.sh's `test-*.sh` glob while this suite stays
+# advisory.
+echo ""
+echo "--- AC6d: scheduled published-digest reconciler — wiring pins (#4699) ---"
+AC6D_WF="$SCRIPT_DIR/../../../.github/workflows/scheduled-vinngest-digest-freshness.yml"
+AC6D_SH="$SCRIPT_DIR/../../../.github/scripts/vinngest-digest-freshness.sh"
+assert "AC6d: the reconciler workflow is readable" "[[ -r '$AC6D_WF' ]]"
+assert "AC6d: the workflow is scheduled AND dispatchable (a deleted schedule is a silent dead check)" \
+  "grep -qE '^  schedule:' '$AC6D_WF' && grep -qF 'cron:' '$AC6D_WF' && grep -qF 'workflow_dispatch' '$AC6D_WF'"
+assert "AC6d: the workflow invokes the comparator script" \
+  "grep -qF 'vinngest-digest-freshness.sh' '$AC6D_WF'"
+# The recorded digest is derived from git pin HISTORY — a shallow or tagless
+# checkout silently empties it, so the fetch wiring is part of the contract.
+assert "AC6d: the workflow checks out full history AND tags (fetch-depth: 0 + fetch-tags: true)" \
+  "grep -qF 'fetch-depth: 0' '$AC6D_WF' && grep -qF 'fetch-tags: true' '$AC6D_WF'"
+# crane reads GHCR through the docker login the bump job's recipe provisions;
+# packages: read + docker/login-action are the auth the manifest HEADs need.
+assert "AC6d: the workflow logs into GHCR with packages: read" \
+  "grep -qF 'packages: read' '$AC6D_WF' && grep -qF 'docker/login-action' '$AC6D_WF'"
+assert "AC6d: the comparator script is readable" "[[ -r '$AC6D_SH' ]]"
+assert "AC6d: the script derives the recorded digest from git pin history (git log -G over the pin files)" \
+  "grep -qE 'git .*log .*-G ' '$AC6D_SH' && grep -qF 'cloud-init' '$AC6D_SH'"
+assert "AC6d: the script resolves the live digest through the crane seam" \
+  "grep -qF 'VDF_CRANE' '$AC6D_SH' && grep -qE 'digest ' '$AC6D_SH'"
+
+# Selector byte-equality, modulo the ONE intended delta: AC6 keeps `| tail -1`
+# (semver-MAX only — the blind spot this whole check exists to close), the
+# reconciler drops it so ALL merged tags are classified. Extract both blocks by
+# structure (a `NAME=$(git -C ... tag --merged` START line that is a
+# continuation — NOT a self-contained `|| true)` one-liner — through the line
+# ending `|| true)`), normalize the variable name + dir operand, strip the
+# tail -1 from the AC6 side, and require byte equality — a selector that
+# re-imported the max-only truncation, or any other drift, differs here and
+# reds. The variable names are deliberately NOT spelled below: the bump
+# battery's `checker-one-write` pin counts LATEST_TAG writes in this file.
+ac6d_slice() { # <file> — print the file's tag-selector block's lines
+  awk '$0 ~ /^[A-Za-z_]+=\$\(git -C .*tag --merged HEAD --list/ && $0 !~ /\|\| true\)/ {on=1} on {print} on && /\|\| true\)[[:space:]]*$/ {exit}' "$1"
+}
+AC6D_SEL_A="$(ac6d_slice "${BASH_SOURCE[0]}" \
+  | sed -e 's/^[A-Za-z_]*=/SEL=/' -e 's/"\$SCRIPT_DIR"/"$DIR"/' -e 's/ | tail -1//' -e 's/^[[:space:]]*//')"
+AC6D_SEL_B="$(ac6d_slice "$AC6D_SH" \
+  | sed -e 's/^[A-Za-z_]*=/SEL=/' -e 's/"\$REPO_DIR"/"$DIR"/' -e 's/^[[:space:]]*//')"
+if [[ -n "$AC6D_SEL_A" && "$AC6D_SEL_A" == "$AC6D_SEL_B" ]]; then AC6D_SEL_EQ=1; else AC6D_SEL_EQ=0; fi
+assert "AC6d: the reconciler's tag selector is AC6's selector MINUS the tail -1 (all merged tags, not semver-max only)" \
+  "(( AC6D_SEL_EQ == 1 ))"
+
 # --- AC7: web_colocate_inngest gate (#6178) — structural smoke ---
 # The "Bootstrap Inngest server on first boot" runcmd item is wrapped in a col-0
 # templatefile `%{ if web_colocate_inngest ~}` / `%{ endif ~}` directive pair so a
@@ -1541,6 +1601,55 @@ assert "GuardA2 anti-vacuity: the section ran its full inventory (expected 9, ra
 rm -rf "$GA2_TMP"
 
 # =========================================================================================
+# Guard A3 (#7596) — the pinned image provably carries the boot-trace allowlist
+# =========================================================================================
+# Guard A byte-compares every baked carrier at the pinned tag, so the image's
+# vector.toml IS HEAD's — but that is a structural binding, not the content
+# claim #7596 needs. This block names it: the image the NEXT
+# inngest-host-replace boots carries BOTH #7457 Source-4 identifiers,
+# `inngest-boot-phone-home` and `inngest-bs-token-restage`, in the baked
+# vector.toml. Asserted at the PINNED TAG's tree — HEAD's vector.toml is not
+# the image, the pinned tag's tree is — and again at HEAD, so a HEAD-side
+# removal reds too. A future pin to a tag lacking either entry reds HERE,
+# before the bake, instead of shipping the allowlist-shaped silence #7596
+# records. Green-guard today: vinngest-v1.1.52's tree carries both
+# (journald-config.test.sh CF-4 covers the HEAD-side lockstep semantics).
+#
+# Own counted span, own floor — never folded into the GuardA `expected 11`
+# inventory (a block inside that span is fungible against it; measured).
+GUARDA3_BEFORE="$TOTAL"
+GA3_VEC_TAG=""
+GA3_HSJ_TAG=""
+if (( GA_TAG_OK == 1 )); then
+  GA3_VEC_TAG="$(git -C "$SCRIPT_DIR" show "$GA_TAG_REF:apps/web-platform/infra/vector.toml" 2>/dev/null || true)"
+  # Same extractor shape as journald-config.test.sh's HSJ — scope membership to
+  # Source 4's block, not the whole file.
+  GA3_HSJ_TAG="$(awk '/^\[sources\.host_scripts_journald\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' <<<"$GA3_VEC_TAG")"
+fi
+# An unresolvable pinned tag (or a vector.toml absent from its tree) yields an
+# EMPTY blob — the named FAIL verdict below, never "nothing to compare, pass".
+assert "GuardA3: vector.toml resolves at the pinned tag $GA_TAG_REF (non-empty blob)" \
+  "[[ -n \"\$GA3_VEC_TAG\" ]]"
+assert "GuardA3: the pinned tag's vector.toml carries the Source-4 (host_scripts_journald) block" \
+  "[[ -n \"\$GA3_HSJ_TAG\" ]] && grep -qF 'include_matches.SYSLOG_IDENTIFIER' <<<\"\$GA3_HSJ_TAG\""
+assert "GuardA3: the pinned tag allowlists \"inngest-boot-phone-home\"" \
+  "grep -qE '^[[:space:]]*\"inngest-boot-phone-home\",\$' <<<\"\$GA3_HSJ_TAG\""
+assert "GuardA3: the pinned tag allowlists \"inngest-bs-token-restage\"" \
+  "grep -qE '^[[:space:]]*\"inngest-bs-token-restage\",\$' <<<\"\$GA3_HSJ_TAG\""
+
+GA3_HSJ_HEAD="$(awk '/^\[sources\.host_scripts_journald\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' "$SCRIPT_DIR/vector.toml")"
+assert "GuardA3: HEAD's vector.toml carries the Source-4 block" \
+  "[[ -n \"\$GA3_HSJ_HEAD\" ]] && grep -qF 'include_matches.SYSLOG_IDENTIFIER' <<<\"\$GA3_HSJ_HEAD\""
+assert "GuardA3: HEAD allowlists \"inngest-boot-phone-home\"" \
+  "grep -qE '^[[:space:]]*\"inngest-boot-phone-home\",\$' <<<\"\$GA3_HSJ_HEAD\""
+assert "GuardA3: HEAD allowlists \"inngest-bs-token-restage\"" \
+  "grep -qE '^[[:space:]]*\"inngest-bs-token-restage\",\$' <<<\"\$GA3_HSJ_HEAD\""
+
+GUARDA3_ASSERTIONS=$(( TOTAL - GUARDA3_BEFORE ))
+assert "GuardA3 anti-vacuity: the section ran its full inventory (expected 7, ran $GUARDA3_ASSERTIONS)" \
+  "(( GUARDA3_ASSERTIONS == 7 ))"
+
+# =========================================================================================
 # Guard D (#7695) — quoted delimiters on generated artifacts
 # =========================================================================================
 # PROPERTY. Every heredoc that writes a generated host artifact uses a NON-EXPANDING
@@ -2281,8 +2390,10 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # rows are terraform-gated and counted in COND_ASSERTIONS, like the rendered NIC-G1 rows).
 # #9082: 153 -> 163, re-measured from a green run (Guard A2 added 10 unconditional rows).
 # #10045: 163 -> 173 (the KDENY_KERNEL_STREAM argv-lockstep block added 10 unconditional rows in AC5).
+# #4699/#7596: 173 -> 190, re-measured from a green run (AC6d wiring pins added 9
+# unconditional rows; the GuardA3 identifiers-at-the-pinned-tag block added 8).
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=173
+BOOTSTRAP_MIN_ASSERTIONS=190
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

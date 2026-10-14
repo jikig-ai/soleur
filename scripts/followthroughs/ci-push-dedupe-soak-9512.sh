@@ -18,16 +18,19 @@
 #   than 20% of the sampled push runs (and at least 5 sampled) is a FAIL. The job is `continue-on-error`, so a
 #   failing job leaves a red check on a GREEN run and pages nobody: this is the detection path, up to one sweep
 #   (a day) late. A failed dedupe costs a full battery, never a skipped one, so safety is unaffected.
-#   (d) an `S2-EXIT-CENSUS: https://...` comment on the tracker from a repository owner, member or collaborator:
+#   (d) an `S2-EXIT-CENSUS: https://...` comment on the tracker from a repository admin, maintainer or writer:
 #       the sweeper closes the tracker itself on exit 0, so a pass without the exit census attached would close
 #       the stage without its evidence.
-# ACTIVATION is read from the tracker, not from the repository variable: the sweeper's GITHUB_TOKEN cannot read
-# Actions variables (the sibling watchdog-arm-soak-9237.sh documents the same 403), and a probe that depends on
-# that read would sit at CANNOT ESTABLISH forever. The activating agent comments `S2-ACTIVATED: <UTC ISO time>`
-# (the variable's updated_at) on the tracker; `S2-DEACTIVATED: <UTC ISO time>` ends it. Only comments by an
-# OWNER, MEMBER or COLLABORATOR count, so a drive-by commenter on a public repo can neither activate nor close.
-# Post each marker as a plain line under the operator's own identity: a marker posted by a bot (github-actions) has
-# no such association and is ignored (an activation nobody recorded then fails loud through the early-elision FAIL).
+# ACTIVATION is read from the tracker, not from the repository variable: the sweeper's GITHUB_TOKEN cannot read Actions
+# variables (the sibling watchdog-arm-soak-9237.sh documents the same 403), and a probe that depends on that read would sit
+# at CANNOT ESTABLISH forever. The activating agent comments `S2-ACTIVATED: <UTC ISO time>` (the variable's updated_at) on the
+# tracker; `S2-DEACTIVATED: <UTC ISO time>` ends it. Only a comment by an author whose repository permission is admin, maintain
+# or write counts, so a drive-by commenter on a public repo can neither activate nor close; the trust model (and why it is not
+# the comment's author association) is the header of scripts/lib/trusted-verdict.sh. This probe orders markers by their own
+# timestamps and never needs a comment's created time, so it reads the BODIES view. A marker inside a fenced block (a
+# CommonMark-style fence) never counts, and a bot-posted marker is ignored (the sweeper's own github-actions bot has no
+# permission: measured 404), so post each marker as a plain line under the operator's own identity (an activation nobody
+# recorded then fails loud through the early-elision FAIL).
 # The marker's own timestamp orders markers, not the comment's created_at.
 # With no activation on record, an elided run is a FAIL (an org-level variable, or a flip nobody recorded).
 # More than DEADLINE_DAYS (30) days after the S2 PR merged with no activation is exit 1: activate, or revert.
@@ -42,7 +45,9 @@
 #   0 = PASS    1 = FAIL (a wrong elision, a failing push-dedupe job, the mean over target, a deadline, or a
 #               deregistered proof suite)
 #   2 = NOT YET (not activated, too few elided runs or days, or the exit census marker is missing)
-#   3 = CANNOT ESTABLISH (gh/jq/GH_TOKEN missing, or a GitHub API read failed: the sweeper retries)
+#   3 = CANNOT ESTABLISH (a tool, gh/GH_TOKEN or the trust lib missing, a GitHub API read failed, including the tracker's comment
+#               read and a permission lookup, the causes being the rc 2 list in the header of scripts/lib/trusted-verdict.sh, or a marker
+#               read (grep/sed/sort/tail over the trusted text) failed: the sweeper retries)
 #   78 = refused to run under xtrace while GH_TOKEN is set (#7797)
 #
 # RETIREMENT: when #9512's tracker closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
@@ -70,21 +75,31 @@ IDLE_RUNS=10         # while nothing is activated only a wrong elision matters: 
 MEAN_LIMIT_HUNDREDTHS_MIN=2908
 MEAN_LIMIT_TEXT="29.08"
 PD_MIN_SAMPLE=5      # push-dedupe failures are judged only over at least this many sampled runs, and fail above 20%
+# every external command this probe and the trust lib run by name, builtins aside (a missing one is exit 3, never a silent "no marker"; the row
+# r_needcomplete runs the probe to PASS on a PATH holding exactly these, so a command added without a name here fails that row)
+for need in gh jq base64 awk mktemp sort grep sed tr tail head date rm dirname; do
+  command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
+done
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test seams (the sweeper runs this under env -i, so they are inert in production)
 ADR_FILE_OVERRIDE="${SOAK_ADR_FILE:-}"
 ADR_DIR="$HERE/../../knowledge-base/engineering/architecture/decisions"
 TEST_ALL="${SOAK_TEST_ALL:-$HERE/../test-all.sh}"
 
-for need in gh jq; do
-  command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
-done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
+# shellcheck source=../lib/trusted-verdict.sh
+if ! source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh" \
+   || ! declare -F trusted_verdict_bodies >/dev/null; then
+  echo "CANNOT ESTABLISH: trusted-verdict lib unavailable (missing, unsourceable, or without trusted_verdict_bodies)"; exit 3
+fi
 
 NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
 [[ "$NOW" =~ ^[1-9][0-9]*$ ]] || { echo "CANNOT ESTABLISH: SOAK_NOW_EPOCH is not an epoch"; exit 3; }
 
 fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }
+fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 3; }
+fail_projection() { echo "CANNOT ESTABLISH: comment projection failed (local tool) ($1)"; exit 3; }
+fail_marker() { echo "CANNOT ESTABLISH: marker read failed ($1)"; exit 3; }
 api() { gh api "$@" 2>/dev/null; }
 
 # --- the S2 PR merge time ----------------------------------------------------------------------------------
@@ -97,14 +112,28 @@ issues="$(api "repos/$REPO/issues?labels=follow-through&state=open&per_page=100"
           --jq "[.[] | select((.body // \"\") | contains(\"script=$DIRECTIVE_SCRIPT\")) | .number]")" || fail_api "follow-through issues"
 tracker="$(jq -r '.[0] // empty' <<<"$issues" 2>/dev/null)" || fail_api "tracker lookup"
 [ -n "$tracker" ] || { echo "NOT YET: the tracker issue carrying the $DIRECTIVE_SCRIPT directive was not found among open follow-through issues"; exit 2; }
-trusted="$(api --paginate "repos/$REPO/issues/$tracker/comments?per_page=100" \
-           --jq '[.[] | select((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) | (.body // "")] | join("\n")')" \
-  || fail_api "tracker $tracker comments"
-trusted="$(printf '%s' "$trusted" | tr -d '\r')"
+trusted_raw="$(trusted_verdict_bodies "$tracker" "$REPO")" || fail_comments "tracker $tracker comments (trusted-author resolution)"
+trusted="$(printf '%s\n' "$trusted_raw" | tr -d '\r')" || fail_projection "tracker $tracker comments (CR strip)"
 TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
-last_on="$(printf '%s\n' "$trusted" | grep -oE "^S2-ACTIVATED: $TS_RE\$" | sed 's/^S2-ACTIVATED: //' | sort | tail -n 1)"
-last_off="$(printf '%s\n' "$trusted" | grep -oE "^S2-DEACTIVATED: $TS_RE\$" | sed 's/^S2-DEACTIVATED: //' | sort | tail -n 1)"
-census_marked="$(printf '%s\n' "$trusted" | grep -cE '^S2-EXIT-CENSUS: https://github\.com/[^ ]+$')"
+# The marker reads. A marker is read through a grep | sed | sort | tail chain, and a bare `x="$(chain)"` drops the status of every stage: a failing
+# sed/sort/tail, or a grep error (rc >= 2), read as "no marker", and a dropped DEACTIVATED marker turns a verdict that should be FAIL into a PASS at rc 0.
+# So each chain's whole status array is taken in ONE assignment (inside the substitution, right after the pipeline) and checked: grep rc 1 (no match)
+# is an answer, every other non-zero status anywhere in the chain is CANNOT ESTABLISH naming the read.
+marker_stamp() {   # <marker name>: sets MARKER_VAL to the LATEST `<name>: <ISO>` stamp ("" = no such marker)
+  local name="$1" r st
+  r="$(printf '%s\n' "$trusted" | grep -oE "^$name: $TS_RE\$" | sed "s/^$name: //" | sort | tail -n 1; printf '#%s' "${PIPESTATUS[*]}")"
+  st="${r##*#}"; MARKER_VAL="${r%#*}"; MARKER_VAL="${MARKER_VAL%$'\n'}"
+  case "$st" in "0 0 0 0 0"|"0 1 0 0 0") : ;; *) fail_marker "$name" ;; esac
+}
+marker_count() {   # <marker name> <ERE>: sets MARKER_VAL to the number of trusted lines matching the ERE
+  local name="$1" r st
+  r="$(printf '%s\n' "$trusted" | grep -cE "$2"; printf '#%s' "${PIPESTATUS[*]}")"
+  st="${r##*#}"; MARKER_VAL="${r%#*}"; MARKER_VAL="${MARKER_VAL%$'\n'}"
+  case "$st" in "0 0"|"0 1") [[ "$MARKER_VAL" =~ ^[0-9]+$ ]] || fail_marker "$name" ;; *) fail_marker "$name" ;; esac
+}
+marker_stamp S2-ACTIVATED; last_on="$MARKER_VAL"
+marker_stamp S2-DEACTIVATED; last_off="$MARKER_VAL"
+marker_count S2-EXIT-CENSUS '^S2-EXIT-CENSUS: https://github\.com/[^ ]+$'; census_marked="$MARKER_VAL"
 act_epoch=""; active=0
 if [ -n "$last_on" ]; then
   on_epoch="$(date -u -d "$last_on" +%s 2>/dev/null)" || fail_api "activation time $last_on"
@@ -234,7 +263,7 @@ fi
 
 # --- (d) the exit census marker, from a trusted author --------------------------------------------------------------------
 if (( census_marked == 0 )); then
-  echo "NOT YET: criteria (a)-(c) hold ($elided elided, $age_days days, mean $mean) but tracker #$tracker has no 'S2-EXIT-CENSUS: https://github.com/...' comment from an owner, member or collaborator; attach the exit census (plan PM-4)"
+  echo "NOT YET: criteria (a)-(c) hold ($elided elided, $age_days days, mean $mean) but tracker #$tracker has no 'S2-EXIT-CENSUS: https://github.com/...' comment from a repository admin, maintainer or writer; attach the exit census (plan PM-4)"
   exit 2
 fi
 echo "PASS: $elided elided push run(s) among the trailing $n sampled over $age_days days, each vouched by a green merge_group run, mean $mean job-min per push run (limit $MEAN_LIMIT_TEXT), exit census attached on #$tracker"

@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1180
-# generated-at=2026-10-14T14:31:30Z
+# generated-at=2026-10-14T14:51:03Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -203,6 +203,7 @@ plugins/soleur/test/hook-git-env-receipt.test.sh	8
 plugins/soleur/test/hook-input-classification-mutation.test.sh	5
 plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh	8
 plugins/soleur/test/infra-validation-detect.test.sh	1
+plugins/soleur/test/inngest-config-bundle-mirror.test.sh	1
 plugins/soleur/test/issue-flow-measure.test.sh	7
 plugins/soleur/test/kb-caches-untracked.test.sh	4
 plugins/soleur/test/kb-search-lockstep.test.sh	4
