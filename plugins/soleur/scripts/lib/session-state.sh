@@ -175,6 +175,7 @@ _acquire_lock_impl() {
   # Shared (-s) holders have no single holder identity, so they mint none.
   if [[ "$mode" != "s" ]]; then
     local _hf_tmp
+    # lint-trap-ownership: ok sourced library — an EXIT trap would clobber the consumer's; every path removes _hf_tmp and the SIGKILL-window residual is one ~150B file
     _hf_tmp=$(mktemp "$LOCK_DIR/.holder.XXXXXXXX" 2>/dev/null) && {
       {
         printf 'pid=%s\n' "$$"
@@ -236,6 +237,7 @@ stamp_lock_holder() {
   # marker we minted is left alone.
   [[ -f "$hf" && ! -L "$hf" ]] || return 0
   local _hf_tmp
+  # lint-trap-ownership: ok sourced library — same as the mint above; every path removes _hf_tmp, SIGKILL-window residual is a single file
   _hf_tmp=$(mktemp "$LOCK_DIR/.holder.XXXXXXXX" 2>/dev/null) || return 0
   {
     printf 'pid=%s\n' "$$"
