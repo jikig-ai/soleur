@@ -160,3 +160,54 @@ directory and failed. Exact discovered paths replaced them before editing.
 Broad index reads were truncated; only bounded receipt reads count as evidence.
 Prevention: discover the named artifact within the feature directory before
 constructing its path, and inspect bounded sections with explicit producer status.
+
+## Addendum — 2026-10-14: focused source completion
+
+Security and integrity independently reverified pushed
+`c68e85afc97335bc5c8e04788a2ce3ef6c99897e`. Both repeated the residual Kong
+reproduction and observed exactly one checked receipt. Security closed S1/S2
+and the residual, with 78 targeted cases and explicit RC=0. Integrity closed
+D1/D2, including repeated ambiguous cleanup, with 104 cases and explicit RC=0.
+Test-design T1/T2/T3 remain closed at their preceding reviewed source; the
+additional receipt regression is coordinator-verified. No full PR panel,
+independent mutation, SAST or runtime clearance is claimed.
+
+The corrected complete offline wrapper passed under inherited optimization.
+Main advanced another ten commits to
+`b6d745fe787251a2d16e39e7a7dcbc37edc236c5`; inspection found no changes to the
+qualification components, application server, forward migrations or Dockerfile.
+It changes vendor/plugin, infrastructure, test and documentation inputs. Its
+merge conflicted only at the C.9 fixture invocation: resolution preserves the
+feature's watchdog tracing and main's four environment removals. Shell syntax
+and whitespace passed. No latest-source C.9 run or clearance is established.
+The complete offline wrapper after inclusion passed with its own explicit
+`MERGED_OFFLINE_RC=0`. Qualification bytes are identical to reviewed `c68e85af`.
+
+Ratchet receipts passed 63 relative / 71 directory / 120 temporary-file /
+41 plan assertions. The updated main vacuity suite passed 25 assertions.
+Current registration passed 681 covered / zero orphans. ShellCheck and explicit
+staged secret scanning passed. Hooks remain configured to `/dev/null`.
+
+Exact-head CI `38461145713` on `c68e85af` reports the expected draft-only
+aggregate red; its executed log shows DRAFT_LIGHT=true and all heavy legs skipped.
+Tenant run `38461146001` also failed: four teardown timeouts, account deletion
+timeout with two dependent owner-retention assertions, and a BYOK timeout.
+Independent source inspection found the six test files and their direct server/
+workflow/configuration dependencies identical to inspected main and unchanged by
+the adapter continuation. This does not prove a pre-existing runtime failure or
+its cause. Tenant red remains unresolved; no live retry or assertion relaxation
+ran. Existing remote CI's dev database operations are distinct from these local
+offline checks; no agent-issued database, credential or operational command ran.
+
+Fresh GitHub reads confirm Ref #10082 and Ref #9791 OPEN; SAST remains VOID and
+C.9 unverified. Both moderate default-branch dependency alerts remain advisory
+pending source/security disposition. All runtime, legal, authorization and
+promotion holds persist. Source implementation and focused verification are
+complete; final evidence-only head pairing, file-only export and draft CI/
+description receipts belong to the PR description and ignored local artifacts.
+Never execute a generated build recipe or the withdrawn command. Build approval
+is consumed; no recovery/rebuild/retry is authorized.
+
+Additional errors: a GitHub read refused sandbox network access and succeeded
+only on its exact approved retry; the merge conflict above required the explicit
+union resolution. Neither refusal nor unresolved conflict counted as a pass.

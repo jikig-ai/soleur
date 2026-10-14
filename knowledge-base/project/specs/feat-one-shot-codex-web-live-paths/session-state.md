@@ -1524,3 +1524,31 @@
   default-off/customer-blocked. No operational build/recovery or withdrawn-command
   action is authorized or executed. Independent review and final exact-head
   pairing/export/CI receipts remain separately owed after committing this source.
+
+### Focused adapter completion — 2026-10-14
+
+- [Implementation record](controller-adapter-implementation-2026-10-13.md#addendum--2026-10-14-focused-source-completion)
+  owns the corrected findings, exact reviewed sources, current main inclusion,
+  test receipts and unresolved tenant CI diagnosis. The injected adapters are
+  implemented and independently reviewed in the focused scope. Production
+  transports, profiles, authenticated observations and runtime admission remain
+  pending; no execution authorization changed.
+- Security and integrity closed all their source findings at pushed
+  `c68e85afc97335bc5c8e04788a2ce3ef6c99897e`, passing 78/104 targeted cases.
+  Test-design gaps closed at preceding `d4c10055`; independent mutations remain
+  unverified. All 53 adapter tests and the complete offline wrapper passed,
+  including the wrapper after main `b6d745fe787251a2d16e39e7a7dcbc37edc236c5`
+  inclusion. Current census: 681 covered / zero orphans.
+- Draft CI's full battery remains owed. The reviewed head also has unresolved
+  tenant teardown/deletion timeouts; identical test source on main does not prove
+  their cause. No live rerun, SQL, credential discovery, Docker/build/recovery,
+  provider/browser-auth/account, shared operational write, deployment/flag/cohort
+  operation or withdrawn-command execution was issued by the agent.
+- Keep draft/disarmed/default-off/customer-blocked and every existing hold.
+  SAST VOID; Ref #10082 OPEN; Ref #9791 OPEN/unverified; hosted auth BLOCKED in
+  both modes; alternative API route PENDING; sharing/retention/regions unknown.
+  Build approval is consumed. Source-only continuation permission does not
+  authorize recovery/rebuild/retry or an operational transport. Remaining AC:
+  reviewed real transports/profiles/observations and fresh exact-action approval,
+  current-source full-production recovery, authenticated screenshots, eligible
+  routine, permitted Web/CLO matrices, full review/QA/preflight and promotion.
