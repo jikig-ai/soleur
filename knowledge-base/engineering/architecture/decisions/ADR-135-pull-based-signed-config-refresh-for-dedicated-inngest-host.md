@@ -256,6 +256,7 @@ deferred operator apply (#9060). Three reality corrections against the original 
 
 Deferred operators unchanged: no host replace, no first promotion, no drift-executor secret
 wiring, no monitor wiring in this PR.
+
 ## Addendum - 2026-10-14 (#7243): the GHCR-direct host pull no longer holds
 
 The record above says the host pulls the config bundle GHCR-direct by digest on a baked GHCR read
