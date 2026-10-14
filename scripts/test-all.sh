@@ -3737,7 +3737,8 @@ _aff_runner_banner() {
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
-_MIN_ALWAYS_ON_DECLARED=108
+# #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
+_MIN_ALWAYS_ON_DECLARED=109
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
