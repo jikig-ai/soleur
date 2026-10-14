@@ -17,3 +17,9 @@
 
 ### Components Invoked
 - soleur:plan (inline), soleur:deepen-plan (inline), archive-kb.sh, markdownlint-cli2, gh probes, merge-base diff
+
+## Review Phase
+- PR: #10335 (draft)
+- Classification: non-code; tier none (plan); design-risk no
+- Panel: 4 seats (git-history-analyzer, pattern-recognition-specialist, security-sentinel, code-quality-analyst); PANEL_SHA=9505a0a171
+- Conditional seats: none apply
