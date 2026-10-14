@@ -1329,7 +1329,7 @@ jobs:
             # when the read did not answer (ssh transport, timeout, a malformed argument) and exits 3 when the access
             # gate refuses: neither is that claim. phase=detached already reads as VOLUME_DETACHED with the finish
             # command, and the finish repeats this same read before any delete.
-            if [[ "$rc" -eq 5 ]] && ! grep -qF " verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi
+            if [[ "$rc" -eq 5 ]] && ! grep -qE "^\[git-data-cutover\] STORE probe=[a-z-]+ verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi
             exit "$rc"
           fi'
 

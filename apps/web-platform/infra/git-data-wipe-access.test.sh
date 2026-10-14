@@ -931,7 +931,7 @@ class Census:
         tdn = code_text((by.get("wipe_teardown") or {}).get("run") or "")
         c("G10-store-not-serving-rc5: W10 captures the host verb's stdout (wipe-w10.out, printed, shredded by the teardown) and publishes refusal=store_not_serving only when the verb exited 5 AND the output carries no ' verdict=probe_failed' (a read that did not answer is not a store verdict); the access gate's 3 and every other exit fail the step without that claim",
           'bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-cutover.sh" > "$out" || rc=$?' in h10 and 'out="$RUNNER_TEMP/wipe-w10.out"' in h10 and "cat \"$out\"" in h10
-          and 'if [[ "$rc" -eq 5 ]] && ! grep -qF " verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi' in h10
+          and 'if [[ "$rc" -eq 5 ]] && ! grep -qE "^\\[git-data-cutover\\] STORE probe=[a-z-]+ verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi' in h10
           and h10.count("refusal=store_not_serving") == 1 and '"$RUNNER_TEMP/wipe-w10.out"' in tdn, "")
         wr_lim = re.search(r'WIPE_RUNS_LIST_LIMIT:-(\d+)\}', code_text((by.get("wipe_flag_precheck") or {}).get("run") or ""))
         lib_lim = re.search(r"^readonly WIPE_RUNS_LIST_LIMIT=(\d+)$", libtext, re.M)
@@ -1746,8 +1746,8 @@ MUTANTS = {
     "a5-listing-skip": [S("wipe_host_assert", "WIPE_LISTING: ${{ steps.wipe_confirm.outputs.mode == 'wipe' && 'run' || 'skip' }}", "WIPE_LISTING: skip")],
     "a5-row-dt-empty": [S("wipe_host_assert", 'WIPE_ROW_DT="$WIPE_ROW_EPOCH"', 'WIPE_ROW_DT=""')],
     "a5-server-from-luks": [S("wipe_host_assert", "WIPE_SERVER_ID=\"$(sed -n 's/^server_id=//p' \"$rec\")\"", "WIPE_SERVER_ID=\"$(sed -n 's/^luks_id=//p' \"$rec\")\"")],
-    "w10-rc-any": [S("wipe_post_detach_read", 'if [[ "$rc" -eq 5 ]] && ! grep -qF " verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi', 'echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"')],
-    "w10-probe-excl": [S("wipe_post_detach_read", ' && ! grep -qF " verdict=probe_failed" "$out"', "")],
+    "w10-rc-any": [S("wipe_post_detach_read", 'if [[ "$rc" -eq 5 ]] && ! grep -qE "^\\[git-data-cutover\\] STORE probe=[a-z-]+ verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi', 'echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"')],
+    "w10-probe-excl": [S("wipe_post_detach_read", ' && ! grep -qE "^\\[git-data-cutover\\] STORE probe=[a-z-]+ verdict=probe_failed" "$out"', "")],
     "nv-already-here": [J("notify", "finish with: ${finish_cmd_origin}, replacing", "finish with: ${finish_cmd_here}, replacing")],
     "w12-always-deleted": [S("wipe_readback", 'if [[ "$DELETE_PHASE" == "delete_sent" ]]; then', "if true; then")],
     "w12-standing-dropped": [S("wipe_readback", "This run does not address provider-side", "This run addresses provider-side")],
