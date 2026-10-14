@@ -18,7 +18,7 @@
 #
 # WHY IT RENDERS OFFLINE. templatefile()/base64gzip()/replace() are terraform BUILTINS, so an
 # EMPTY scratch dir needs no providers, no S3 backend and no credentials, and never touches
-# state. The real root's map consumes hcloud_volume.inngest_redis.id,
+# state. The real root's map consumes hcloud_volume.inngest_redis_luks.id,
 # doppler_service_token.inngest.key and random_password.zot_pull.result — measuring on it would
 # require Doppler prd_terraform and would be unrunnable on a fork PR. Stub LENGTHS are what a
 # size check needs, and each stub below is a length UPPER BOUND on its real value.
@@ -109,11 +109,11 @@ esac
 # LINE-ANCHORED MULTILINE is what makes the strip safe on a production boot document — it cannot
 # touch a substituted single-line scalar. That safety needs BOTH the `(?m)` flag and the `^`
 # anchor, so check both.
-printf '%s' "$STRIP_EXPR" | grep -q '(?m)' || {
+printf '%s' "$STRIP_EXPR" | grep -c '(?m)' >/dev/null || {
   echo "inngest-userdata-budget: local.inngest_rationale_strip is not multiline-anchored ((?m)): ${STRIP_EXPR}" >&2
   exit 2
 }
-printf '%s' "$STRIP_EXPR" | grep -qF '^' || {
+printf '%s' "$STRIP_EXPR" | grep -cF '^' >/dev/null || {
   echo "inngest-userdata-budget: local.inngest_rationale_strip has no ^ line anchor, so it could match mid-line inside a substituted scalar: ${STRIP_EXPR}" >&2
   exit 2
 }
@@ -133,7 +133,7 @@ printf '%s' "$STRIP_EXPR" | grep -qF '^' || {
 # fail-closed half.
 TF_JOINED="$(tr '\n' ' ' < "$DIR/inngest-host.tf")"
 chain_link() {
-  printf '%s' "$TF_JOINED" | grep -qE "$1" || {
+  printf '%s' "$TF_JOINED" | grep -cE "$1" >/dev/null || {
     echo "inngest-userdata-budget: the render chain is UNWIRED — $2. The comment strip is not applied to what Hetzner stores, so this measurement would not describe production" >&2
     exit 2
   }
@@ -144,7 +144,7 @@ chain_link 'inngest_user_data_b64gz[[:space:]]*=[[:space:]]*base64gzip\([[:space
   'local.inngest_user_data_b64gz is not base64gzip(local.inngest_user_data_plain)'
 chain_link 'user_data[[:space:]]*=[[:space:]]*local\.inngest_user_data_b64gz' \
   'hcloud_server.inngest.user_data does not read local.inngest_user_data_b64gz'
-printf '%s' "$TF_JOINED" | grep -qF 'local.inngest_rationale_strip' || {
+printf '%s' "$TF_JOINED" | grep -cF 'local.inngest_rationale_strip' >/dev/null || {
   echo "inngest-userdata-budget: inngest-host.tf never REFERENCES local.inngest_rationale_strip — it is declared but unused, so the stored payload is unstripped" >&2
   exit 2
 }
@@ -153,7 +153,7 @@ printf '%s' "$TF_JOINED" | grep -qF 'local.inngest_rationale_strip' || {
 # hcloud_server.inngest is what refuses the DESTROY on the dispatch path itself, where no CI job
 # is watching. They cover different moments and neither substitutes for the other, so removing
 # the precondition must not leave a green gate behind.
-printf '%s' "$TF_JOINED" | grep -qE 'precondition[[:space:]]*\{[[:space:]]*condition[[:space:]]*=[[:space:]]*length\([[:space:]]*local\.inngest_user_data_b64gz[[:space:]]*\)' || {
+printf '%s' "$TF_JOINED" | grep -cE 'precondition[[:space:]]*\{[[:space:]]*condition[[:space:]]*=[[:space:]]*length\([[:space:]]*local\.inngest_user_data_b64gz[[:space:]]*\)' >/dev/null || {
   echo "inngest-userdata-budget: hcloud_server.inngest has lost its user_data lifecycle.precondition. That is the only check standing between an over-cap payload and a destroy-then-fail-to-create on the workflow_dispatch path, where this script does not run." >&2
   exit 2
 }
@@ -170,6 +170,7 @@ locals {
     inngest_luks_volume_id = "100000005"
     inngest_expect_luks    = "false"
     doppler_token          = join(".", ["dp", "st", "prd", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
+    inngest_doppler_config = "prd"
     sdk_url                = "http://10.0.1.10:3000/api/inngest"
     inngest_cli_arch       = "amd64"
     inngest_cli_sha256     = "52c07d837088a6712acd15b8edd4191f961b69884541f468a3c1b9bb4348a4e5"
@@ -204,7 +205,7 @@ console() { printf '%s\n' "$1" | terraform -chdir="$TFDIR" console 2>>"$TFDIR/er
 stripped_out=$(console 'local.stripped')
 # A render FAILURE still prints a warning banner and "(known after apply)" on stdout, so
 # emptiness is not the tell — look for the diagnostic explicitly.
-if [ -s "$TFDIR/err" ] || printf '%s' "$stripped_out" | grep -q 'known after apply'; then
+if [ -s "$TFDIR/err" ] || printf '%s' "$stripped_out" | grep -c 'known after apply' >/dev/null; then
   echo "inngest-userdata-budget: RENDER FAILED" >&2
   sed 's/\x1b\[[0-9;]*m//g' "$TFDIR/err" >&2
   exit 2
@@ -252,7 +253,7 @@ fi
 # space or tab (or end of line), and `#cloud-config` has neither. That one line is what makes
 # cloud-init execute the file at all, so assert it survived rather than trusting the
 # construction: a dark host is the failure mode with no signal of its own.
-head -1 "$rendered" | grep -qx '#cloud-config' || {
+head -1 "$rendered" | grep -cx '#cloud-config' >/dev/null || {
   echo "inngest-userdata-budget: the stripped render does not begin with '#cloud-config' — cloud-init would not execute it, and the host would boot dark" >&2
   exit 2
 }

@@ -315,11 +315,30 @@ STUB_TS=$(date -u -d '99 days ago' +%Y-%m-%dT00:00:00Z)
 make_gh_stub "$STUB_DIR_2" "$STUB_TS"
 OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_2:$PATH" bash "$PARSER" cron-run-stale)
 assert_eq "99" "$OUT" "cron-run-stale prints exact days (99) for fixture timestamp"
+
+# --- TS-cron-argv: the probe's query shape is pinned (#7255) ---
+# The binding once died silently when the job moved substrates (GHA workflow →
+# Inngest cron): the query kept hitting `gh run list`, matched nothing, and the
+# parser's safe default (999) meant nobody noticed. The stub above recorded its
+# argv; assert the live query asks `pr list` for the attestation-PR head-branch
+# prefix — if a future migration changes the artifact the probe reads, this
+# goes red instead of quietly reverting to 999.
+# argv.log is one-argv-per-line; the first two lines are the subcommand.
+if [[ -f "$STUB_DIR_2/argv.log" ]]   && [[ "$(sed -n '1p;2p' "$STUB_DIR_2/argv.log" | tr '\n' ' ')" == "pr list " ]] \
+  && grep -qxF 'head:ci/vendor-attest' "$STUB_DIR_2/argv.log" \
+  && ! grep -qx 'run' "$STUB_DIR_2/argv.log"; then
+  echo "  PASS: cron-run-stale queries gh pr list for head:ci/vendor-attest"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: cron-run-stale query shape drifted (argv below)"
+  cat "$STUB_DIR_2/argv.log" 2>/dev/null || true
+  FAIL=$((FAIL + 1))
+fi
 rm -rf "$STUB_DIR_2"
 echo ""
 
 # --- TS-cron-3: cron-run-stale with stub gh emitting literal 'null' → 999 ---
-# Matches `gh run list ... --jq '.[0].updatedAt'` on an empty result array.
+# Matches `gh pr list ... --jq` on an empty result set collapsing to null.
 # The parser's `// empty` jq filter + strict-ISO regex must both guard this.
 echo "TS-cron-3: cron-run-stale with stub gh emitting 'null' returns 999"
 STUB_DIR_3="$(mktemp -d)"
@@ -339,10 +358,10 @@ rm -rf "$STUB_DIR_4"
 echo ""
 
 # --- TS-cron-empty: cron-run-stale with stub gh emitting empty stdout → 999 ---
-# Models the workflow-renamed / workflow-deleted case where
-# `gh run list --workflow=<missing>` exits 0 with an empty array, which
-# `jq '.[0].updatedAt // empty'` collapses to empty string. The strict-ISO
-# regex must reject empty input (architecture-strategist finding on #3541).
+# Models the no-attestation-PR / source-moved case where `gh pr list` exits 0
+# with an empty result and `jq '[.[].createdAt] | max // empty'` collapses to
+# empty string. The strict-ISO regex must reject empty input
+# (architecture-strategist finding on #3541).
 echo "TS-cron-empty: cron-run-stale with stub gh emitting empty stdout returns 999"
 STUB_DIR_EMPTY="$(mktemp -d)"
 make_gh_stub "$STUB_DIR_EMPTY" ""

@@ -33,7 +33,7 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
 MUT_ROWS_EXPECTED=37 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=58 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+INNER_ASSERTIONS=60 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -73,11 +73,13 @@ STUBS="$SCRATCH/stubs"; mkdir -p "$STUBS"
 # DOCKER-USER chains and the set elements in $FX/st so a second run (and `list chain`) sees the first one's state.
 cat > "$STUBS/nft" <<'EOF'
 #!/bin/bash
+# drains stdin first (the producer's writer must not take SIGPIPE); plain cat, because this suite runs the stub under env -i PATH=$FX/bin, which has no timeout
+body_in=""; case " $* " in *" -f "*) [ -t 0 ] || body_in=$(cat) ;; esac
 st="$FX/st"
 [ -n "${CEN_STUB_NOLOG:-}" ] || printf 'nft %s\n' "$*" >> "$FX/log"
 case "$1" in
   -f)
-    body=$(cat)
+    body=$body_in
     n=$(( $(cat "$st/txn.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$st/txn.n"
     if [ -z "${CEN_STUB_NOLOG:-}" ]; then printf '%s\n' "$body" > "$FX/txn.$n"; printf '<<< txn %s\n%s\n>>>\n' "$n" "$body" >> "$FX/log"; fi
     while IFS= read -r l; do
@@ -98,7 +100,11 @@ case "$1" in
     nm="$6"; el=""
     while IFS= read -r x; do [ -z "$x" ] || el="${el:+$el,}\"$x\""; done < "$st/set.$nm" 2>/dev/null
     printf '{"nftables":[{"set":{"family":"ip","name":"%s","elem":[%s]}}]}\n' "$nm" "$el" ;;
-  insert) case "$*" in *"jump SOLEUR-EGRESS"*) printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' >> "$st/chain.DOCKER-USER" ;; esac ;;
+  insert|add) case "$*" in
+      *"established,related"*) printf 'iifname "soleur-egress0" oifname "docker0" ct state established,related accept comment "soleur-egress: gw reply traffic (#9534)"\n' >> "$st/chain.DOCKER-USER" ;;
+      *"non-docker0 direct-routing"*) printf 'oifname "soleur-egress0" iifname != "docker0" ct state new counter drop comment "soleur-egress: non-docker0 direct-routing drop (#9534)"\n' >> "$st/chain.DOCKER-USER" ;;
+      *"jump SOLEUR-EGRESS-GW"*) printf 'iifname "soleur-egress0" counter jump SOLEUR-EGRESS-GW comment "soleur-egress: egress0 jump"\n' >> "$st/chain.DOCKER-USER" ;;
+      *"jump SOLEUR-EGRESS"*) printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' >> "$st/chain.DOCKER-USER" ;; esac ;;
   list) if [ "$5" = DOCKER-USER ] && [ -f "$st/listfail" ] && [ "$(cat "$st/listfail")" -gt 0 ]; then
           echo $(( $(cat "$st/listfail") - 1 )) > "$st/listfail"; echo "netlink: Resource busy" >&2; exit 1
         fi
@@ -149,17 +155,18 @@ new_fx() { # builds a fixture; sets FX (a scratch PATH: the stubs plus grep and 
   cp "$STUBS/nft" "$STUBS/ip" "$STUBS/docker" "$STUBS/getent" "$STUBS/curl" "$STUBS/journalctl" "$FX/bin/"; cp "$STUBS/resolve.sh" "$FX/resolve.sh"
   ln -s "$(command -v grep)" "$FX/bin/grep"; ln -s "$(command -v cat)" "$FX/bin/cat"; ln -s "$(command -v sleep)" "$FX/bin/sleep"
   : > "$FX/cidr.txt"
+  printf '# test fixture\n10.0.0.0/8\n' > "$FX/deny.txt"
 }
 run_loader() { # runs the loader in $FX; sets RC
   RC=0
   env -i PATH="$FX/bin" FX="$FX" CEN_STUB_NOLOG="${CEN_STUB_NOLOG:-}" NFT_RETRY_SLEEP="${NFT_RETRY_SLEEP:-1}" CEN_V6="${CEN_V6:-false}" CEN_RESOLVE_RC="${CEN_RESOLVE_RC:-0}" \
-    CIDR_FILE="$FX/cidr.txt" RESOLVE_SCRIPT="$FX/resolve.sh" "$BASH" "${1:-$SUT}" > "$FX/out" 2>&1 < /dev/null || RC=$?
+    CIDR_FILE="$FX/cidr.txt" DENY_CIDR_FILE="$FX/deny.txt" RESOLVE_SCRIPT="$FX/resolve.sh" "$BASH" "${1:-$SUT}" > "$FX/out" 2>&1 < /dev/null || RC=$?
 }
 
 # ── handles on what the loader rendered ───────────────────────────────────────────────────────
 LL_DROP_RE='^add rule ip filter SOLEUR-EGRESS ip daddr 169\.254\.0\.0/16 counter drop( comment "[^"]*")?$'
 LL_LOG_RE='^add rule ip filter SOLEUR-EGRESS ip daddr 169\.254\.0\.0/16 limit rate [0-9]+/minute( burst [0-9]+ packets)? log prefix "egress-blocked: "( level notice)?( comment "[^"]*")?$'
-rules_txn() { grep -l '^flush chain ip filter SOLEUR-EGRESS' "$1"/txn.* 2>/dev/null | head -1; } # the Phase 3 transaction of fixture dir $1
+rules_txn() { grep -l '^flush chain ip filter SOLEUR-EGRESS$' "$1"/txn.* 2>/dev/null | head -1; } # the Phase 3 transaction of fixture dir $1 — the $ anchor keeps SOLEUR-EGRESS-GW's flush (#9534 Phase 3.5) out
 chain() { cat "$FX/st/chain.SOLEUR-EGRESS" 2>/dev/null; } # the SOLEUR-EGRESS chain as the stub holds it
 ridx() { chain | grep -nE -- "$1" | head -1 | cut -d: -f1; } # 1-based index of the first rule matching an ERE
 calls() { grep -c -E -- "$1" "$FX/log" || true; }
@@ -189,24 +196,26 @@ HAPPY="$FX"
 r_llog=$(ridx '^ip daddr 169\.254\.0\.0/16 limit rate .* log prefix "egress-blocked: "'); r_ll=$(ridx '^ip daddr 169\.254\.0\.0/16 counter drop')
 r_ret=$(ridx 'ct state established,related accept'); r_dns=$(ridx '@soleur_egress_dns accept')
 r_log=$(ridx 'log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"'); r_last=$(chain | grep -c .)
-expect "happy: rc 0 and the stub recorded the run (a loader that never ran must not pass vacuously)" all 'test "$RC" -eq 0' 'test -s "$FX/log"' 'test "$(calls "^nft -f -$")" -eq 3'
+expect "happy: rc 0 and the stub recorded the run (a loader that never ran must not pass vacuously)" all 'test "$RC" -eq 0' 'test -s "$FX/log"' 'test "$(calls "^nft -f -$")" -eq 5'
 expect "happy: transaction order: the CIDR elements, then the resolver, then the Phase 3 rules, then the DOCKER-USER probe" all 'test "$(grep -n "add element" "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^resolver " "$FX/log" | head -1 | cut -d: -f1)"' 'test "$(grep -n "^resolver " "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^flush chain ip filter SOLEUR-EGRESS" "$FX/log" | head -1 | cut -d: -f1)"' 'test "$(grep -n "^flush chain ip filter SOLEUR-EGRESS" "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^nft list chain ip filter DOCKER-USER" "$FX/log" | head -1 | cut -d: -f1)"'
 expect "happy: the resolver ran under the loader guard (CRON_EGRESS_FROM_LOADER=1), so loader -> resolver -> loader cannot recurse" grep -qx 'resolver from_loader=1' "$FX/log"
 expect "happy: the Phase 3 chain starts with the link-local log then the link-local drop, then return traffic, then the pinned DNS accept" all 'test "$r_llog" = 1' 'test "$r_ll" = 2' 'test "$r_ret" = 3' 'test -n "$r_dns" -a "$r_dns" -gt "$r_ret"'
-expect "happy: the default-drop log then the default drop are the LAST two rules" all 'test -n "$r_log"' 'test "$r_log" -eq "$((r_last - 1))"' 'chain | tail -n 1 | grep -q "^counter drop comment \"soleur-egress: default drop\"$"'
+expect "happy: the default-drop log then the default drop are the LAST two rules" all 'test -n "$r_log"' 'test "$r_log" -eq "$((r_last - 1))"' 'chain | tail -n 1 | grep -c >/dev/null "^counter drop comment \"soleur-egress: default drop\"$"'
 expect "happy: the CIDR elements reached nft as one flush+add transaction before the rules" all 'test "$(elems | grep -c "^add element ip filter soleur_egress_allow_cidr { 203.0.113.0/24,198.51.100.7/32 }$")" -eq 1' 'grep -q "^flush set ip filter soleur_egress_allow_cidr$" "$HAPPY"/txn.2'
 expect "happy: census: exactly one DROP names 169.254 (before every accept) and exactly one LOG names it, immediately before that drop" ll_clean "$HAPPY"
 expect "happy: no add-element payload names a link-local address" test "$(elems | grep -c '169\.254')" -eq 0
 # exactly one DOCKER-USER jump insert across TWO loader runs (the stub's list chain keeps the first run's jump)
 run_loader
-expect "happy: a second loader run on the same state re-asserts the chain but inserts NO second jump (exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(chain | grep -c "^counter drop comment \"soleur-egress: default drop\"$")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS" "$FX/st/chain.DOCKER-USER")" -eq 1'
+expect "happy: a second loader run on the same state re-asserts the chain but inserts NO second jump (exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 1' 'test "$(chain | grep -c "^counter drop comment \"soleur-egress: default drop\"$")" -eq 1' 'test "$(grep -cE "jump SOLEUR-EGRESS([[:space:]]|\$)" "$FX/st/chain.DOCKER-USER")" -eq 1' 'test "$(grep -c "established,related accept" "$FX/st/chain.DOCKER-USER")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS-GW" "$FX/st/chain.DOCKER-USER")" -eq 1' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 4'
+expect "happy: the gw reply accept and the egress0 jump are likewise idempotent across a re-run" all 'test "$(grep -c "established,related accept" "$FX/st/chain.DOCKER-USER")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS-GW" "$FX/st/chain.DOCKER-USER")" -eq 1'
+expect "happy: the non-docker0 direct-routing drop is likewise idempotent across a re-run" all 'test "$(grep -c "non-docker0 direct-routing" "$FX/st/chain.DOCKER-USER")" -eq 1'
 # #9392: a failed DOCKER-USER read must never read as "no jump" (that inserted a DUPLICATE jump on every self-heal)
 echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=0
 run_loader
-expect "jump read: ONE failed DOCKER-USER read is retried and does not insert a duplicate jump (still exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(cat "$FX/st/listfail")" -eq 0'
+expect "jump read: ONE failed DOCKER-USER read is retried and does not insert a duplicate jump (still exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 1' 'test "$(cat "$FX/st/listfail")" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 4'
 echo 9 > "$FX/st/listfail"
 run_loader
-expect "jump read: a PERSISTENTLY unreadable DOCKER-USER chain fails toward enforcement (rc 0, WARN naming the cause, the jump IS inserted)" all 'test "$RC" -eq 0' 'grep -q "cannot read the DOCKER-USER chain" "$FX/out"' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 2'
+expect "jump read: a PERSISTENTLY unreadable DOCKER-USER chain fails toward enforcement (rc 0, WARN naming the cause, the jump IS inserted)" all 'test "$RC" -eq 0' 'grep -q "cannot read the DOCKER-USER chain" "$FX/out"' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 2' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 8'
 rm -f "$FX/st/listfail"
 # the retry-sleep seam is clamped to one digit: a non-numeric value must not abort the loader at the fail-open site
 bad=abc
@@ -214,7 +223,7 @@ new_fx
 printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' > "$FX/st/chain.DOCKER-USER"
 echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=$bad
 run_loader
-expect "jump read: NFT_RETRY_SLEEP=$bad is clamped (one failed read still retries, rc 0, no second jump)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 0' 'test "$(cat "$FX/st/listfail")" -eq 0'
+expect "jump read: NFT_RETRY_SLEEP=$bad is clamped (one failed read still retries, rc 0, no second jump)" all 'test "$RC" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 0' 'test "$(cat "$FX/st/listfail")" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 3'
 NFT_RETRY_SLEEP=0
 # a two-digit value is oversized: clamped to 1 s (a regex relaxed to `+` would sleep it out)
 new_fx
@@ -226,7 +235,7 @@ expect "jump read: NFT_RETRY_SLEEP=12 (two digits) is clamped to 1 s, not slept 
 new_fx
 printf 'iifname "docker0" counter jump SOLEUR-EGRESS-OLD\n' > "$FX/st/chain.DOCKER-USER"
 run_loader
-expect "jump read: a jump to SOLEUR-EGRESS-OLD is NOT our jump (the real jump is still inserted)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1'
+expect "jump read: a jump to SOLEUR-EGRESS-OLD is NOT our jump (the real jump is still inserted)" all 'test "$RC" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 1' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 4'
 
 # ── 2. the CIDR gate: any range that overlaps 169.254.0.0/16 refuses the WHOLE file before nft is touched ──
 # Host-bits-set spellings (169.255.0.0/15, 169.255.255.255/9) are REFUSED: nft masks host bits when it stores an
@@ -242,7 +251,7 @@ for c in 169.254.0.0/16 169.254.169.254/32 169.0.0.0/8 0.0.0.0/0 128.0.0.0/1 160
 done
 cidr_accepted() { # <cidr>
   new_fx; printf '%s\n' "$1" > "$FX/cidr.txt"; run_loader
-  [ "$RC" -eq 0 ] && elems | grep -qF -- "{ $1 }" && ll_clean "$FX"
+  [ "$RC" -eq 0 ] && elems | grep -cF >/dev/null -- "{ $1 }" && ll_clean "$FX"
 }
 for c in 169.253.255.255/32 169.255.0.0/16 203.0.113.0/24 168.0.0.0/8 169.255.255.255/16 168.255.255.255/8; do
   expect "gate: must-pass: $c does not overlap 169.254.0.0/16 and installs normally (rc 0, element rendered, census clean)" cidr_accepted "$c"
@@ -286,13 +295,13 @@ no_ll_added() { [ -z "$(adds soleur_egress_allow | grep '^169\.254\.')" ] && [ -
 ticked() { [ "$RC" -eq 0 ] && grep -q 'OK: allow=' "$FX/out"; } # the tick completed (so an empty add-list is not a crash)
 
 new_rfx; run_resolver
-expect "resolver: must-pass: an ordinary tick installs the answer 203.0.113.7, prunes the stale element, and posts no link-local event" all 'ticked' 'adds soleur_egress_allow | grep -qx 203.0.113.7' 'dels soleur_egress_allow | grep -qx 198.51.100.250' 'no_ll_added' 'test "$(ll_events)" -eq 0'
+expect "resolver: must-pass: an ordinary tick installs the answer 203.0.113.7, prunes the stale element, and posts no link-local event" all 'ticked' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.7' 'dels soleur_egress_allow | grep -cx >/dev/null 198.51.100.250' 'no_ll_added' 'test "$(ll_events)" -eq 0'
 new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: a host whose ONLY answer is 169.254.169.254: nothing link-local is added, the tick counts it as a failure (additive-only: the stale element is NOT pruned), one Sentry event" all 'ticked' 'no_ll_added' '! dels soleur_egress_allow | grep -q .' 'grep -q "every record was link-local" "$FX/out"' 'grep -q "ADDITIVE-ONLY" "$FX/out"' 'test "$(ll_events)" -eq 1'
+expect "resolver: a host whose ONLY answer is 169.254.169.254: nothing link-local is added, the tick counts it as a failure (additive-only: the stale element is NOT pruned), one Sentry event" all 'ticked' 'no_ll_added' '! dels soleur_egress_allow | grep -c >/dev/null .' 'grep -q "every record was link-local" "$FX/out"' 'grep -q "ADDITIVE-ONLY" "$FX/out"' 'test "$(ll_events)" -eq 1'
 cp "$FX/out" "$FX/out.tick1"; run_resolver
 expect "resolver: the Sentry event is posted once per source, not once per tick (a second identical tick adds none)" test "$(ll_events)" -eq 1
 printf '203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: once the host answers clean the marker clears: the next tick prunes again and the next link-local answer would post again" all 'ticked' 'test ! -e "$FX/fc/.ll-a.example.test"' 'dels soleur_egress_allow | grep -qx 198.51.100.250'
+expect "resolver: once the host answers clean the marker clears: the next tick prunes again and the next link-local answer would post again" all 'ticked' 'test ! -e "$FX/fc/.ll-a.example.test"' 'dels soleur_egress_allow | grep -cx >/dev/null 198.51.100.250'
 # (#9377 review) The once-per-source marker is written only AFTER a successful POST: the Sentry event is the ONLY no-SSH
 # signal (the stdout line is journal-only), so one transient POST failure, or an unset Sentry env, must not suppress it.
 new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_STUB_CURL_RC=7 run_resolver
@@ -304,19 +313,19 @@ expect "resolver: after the successful POST no further event is posted for that 
 new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_R_PROJECT='' run_resolver
 expect "resolver: an unset Sentry env posts nothing and leaves no marker (the event is retried on the next tick)" all 'ticked' '! grep -q resolve_link_local "$FX/curl.log" 2>/dev/null' 'grep -q "Sentry env unset or refused" "$FX/out"' 'test ! -e "$FX/fc/.ll-a.example.test"'
 new_rfx; printf '169.254.169.254\n203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: a host with one link-local and one good record keeps the good one, drops the other, and is NOT a failure (the stale element is pruned)" all 'ticked' 'adds soleur_egress_allow | grep -qx 203.0.113.7' 'no_ll_added' 'dels soleur_egress_allow | grep -qx 198.51.100.250' 'test "$(ll_events)" -eq 1'
+expect "resolver: a host with one link-local and one good record keeps the good one, drops the other, and is NOT a failure (the stale element is pruned)" all 'ticked' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.7' 'no_ll_added' 'dels soleur_egress_allow | grep -cx >/dev/null 198.51.100.250' 'test "$(ll_events)" -eq 1'
 new_rfx; printf '169.254.0.7\n169.254.255.254\n203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: the whole /16 is refused, not just the metadata address (169.254.0.7 and 169.254.255.254)" all 'ticked' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.7'
+expect "resolver: the whole /16 is refused, not just the metadata address (169.254.0.7 and 169.254.255.254)" all 'ticked' 'no_ll_added' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.7'
 new_rfx; printf '::ffff:169.254.169.254\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: the v4-mapped spelling ::ffff:169.254.169.254 is link-local too: nothing added, counted as a failure (additive-only), one event" all 'ticked' 'no_ll_added' '! dels soleur_egress_allow | grep -q .' 'test "$(ll_events)" -eq 1'
+expect "resolver: the v4-mapped spelling ::ffff:169.254.169.254 is link-local too: nothing added, counted as a failure (additive-only), one event" all 'ticked' 'no_ll_added' '! dels soleur_egress_allow | grep -c >/dev/null .' 'test "$(ll_events)" -eq 1'
 new_rfx; printf '%s %s\n' 169.254.169.254 x > /dev/null; now=$(date +%s); printf '%s\n' "$now" > "$FX/seen/169.254.169.254"; printf '%s\n' "$now" > "$FX/seen/203.0.113.50"; run_resolver
-expect "resolver: a planted seen/169.254.169.254 (inside the 24 h grace window) is PURGED, never re-added; a legitimate seen entry is still retained" all 'ticked' 'test ! -e "$FX/seen/169.254.169.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
+expect "resolver: a planted seen/169.254.169.254 (inside the 24 h grace window) is PURGED, never re-added; a legitimate seen entry is still retained" all 'ticked' 'test ! -e "$FX/seen/169.254.169.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
 new_rfx; now=$(date +%s); for a in 169.254.0.7 169.254.255.254; do printf '%s\n' "$now" > "$FX/seen/$a"; done; printf '%s\n' "$now" > "$FX/seen/203.0.113.50"; run_resolver
-expect "resolver: planted seen/169.254.0.7 and seen/169.254.255.254 (link-local /16 addresses that are NOT the metadata address, inside the grace window) are PURGED and never re-added; a legitimate entry is retained" all 'ticked' 'test ! -e "$FX/seen/169.254.0.7"' 'test ! -e "$FX/seen/169.254.255.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
+expect "resolver: planted seen/169.254.0.7 and seen/169.254.255.254 (link-local /16 addresses that are NOT the metadata address, inside the grace window) are PURGED and never re-added; a legitimate entry is retained" all 'ticked' 'test ! -e "$FX/seen/169.254.0.7"' 'test ! -e "$FX/seen/169.254.255.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
 new_rfx; : > "$FX/container.up"; printf '169.254.169.254\n203.0.113.77\n' > "$FX/cview"; run_resolver
-expect "resolver: the container's own getent view is a feeder too: its link-local answer is dropped and never recorded, its good answer is added, one event" all 'ticked' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.77' 'test ! -e "$FX/seen/169.254.169.254"' 'test "$(ll_events)" -eq 1'
+expect "resolver: the container's own getent view is a feeder too: its link-local answer is dropped and never recorded, its good answer is added, one event" all 'ticked' 'no_ll_added' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.77' 'test ! -e "$FX/seen/169.254.169.254"' 'test "$(ll_events)" -eq 1'
 new_rfx; : > "$FX/container.up"; printf 'nameserver 169.254.169.253\nnameserver 203.0.113.53\n' > "$FX/resolv.conf"; run_resolver
-expect "resolver: a link-local nameserver in the container's resolv.conf never reaches the DNS pin set (203.0.113.53 and Docker's 8.8.8.8 do)" all 'ticked' 'no_ll_added' 'adds soleur_egress_dns | grep -qx 203.0.113.53' 'adds soleur_egress_dns | grep -qx 8.8.8.8'
+expect "resolver: a link-local nameserver in the container's resolv.conf never reaches the DNS pin set (203.0.113.53 and Docker's 8.8.8.8 do)" all 'ticked' 'no_ll_added' 'adds soleur_egress_dns | grep -cx >/dev/null 203.0.113.53' 'adds soleur_egress_dns | grep -cx >/dev/null 8.8.8.8'
 
 # ── 5. harness rows: the instrument must be able to fail ──────────────────────────────────────
 SEED="$SCRATCH/seeded"; mkdir -p "$SEED"

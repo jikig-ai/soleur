@@ -22,7 +22,10 @@ systemctl --user enable --now tmpfs-guard.timer
 systemctl --user list-timers tmpfs-guard.timer   # verify
 ```
 
-The shipped unit assumes the checkout is `~/soleur`. If it lives elsewhere:
+The shipped unit assumes the checkout is `~/soleur`. If it lives elsewhere
+(for example `/data/git-repositories/<org>/soleur`, a checkout outside `~`),
+point the drop-in at the **main checkout**, never at a `.worktrees/` entry — a
+worktree is removed when its branch merges and the unit would then fail:
 
 ```bash
 systemctl --user edit tmpfs-guard.service
@@ -54,6 +57,84 @@ not, which is exactly how the original guard silently never ran.
 session start, before the repo lock and the fetch gate. It covers the Reaper 3
 surface (dead `soleur-run.*`/marker dirs + a bounded worktree batch) but NOT
 Reaper 2's large-entry reap — the timer/cron remains the only trigger for that.
+
+By default the sweep only **quarantines** marker-only dirs on a disk base; it
+does not delete them. To have the session-start sweep also drain quarantine
+entries past their TTL on a host that cannot or does not install the timer,
+set `SOLEUR_QUARANTINE_DRAIN=1` in the session environment (ADR-250 Amendment
+2, #9677). It is opt-in because it is a terminal delete on a machine Soleur
+does not own. Tunables, all with safe defaults: `SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN`
+(10080), `SOLEUR_SWEEP_QUAR_WT_TTL_MIN` (43200), `SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN`
+(1440, a floor under both TTLs), `SOLEUR_SWEEP_DRAIN_TIMEBOX_S` (5) and
+`SOLEUR_SWEEP_DRAIN_MAX_ENTRIES` (200). The sweep line then reports `drained=`
+and `drained_bytes=`. With the timer installed (Option 1) the variable is not
+needed: the timer drains every run. The full variable table (including
+`SOLEUR_DOCKER_PRUNE`, the opt-in Docker build-cache prune, and its
+`SOLEUR_DOCKER_PRUNE` skip reasons) is in `plugins/soleur/skills/git-worktree/SKILL.md`;
+the sweep line also reports `map_s=`, the one-time liveness-map build in seconds.
+
+`cleanup-merged` also prints a `SOLEUR_CLEANUP_SPACE` line: the bytes it
+logically drained next to the measured `df` delta of `/var/tmp`, and a note
+when the filesystem is btrfs with a snapper `root` config — freed blocks stay
+pinned by snapshots until they rotate out, and Soleur never deletes snapshots.
+`bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh space-report`
+prints the current state without running any cleanup.
+
+## Optional: `soleur-tmp-purge` timer (residual reaper, #10017)
+
+`tmpfs-guard` reaps oversized/stale scratch; `scripts/soleur-tmp-purge.sh
+--apply` is the **count-shaped** counterpart — it quarantines the
+*certain-attribution* classes that fill `/tmp`'s top level (marker/schema dead
+owners, proven-unregistered worktrees, signed prefix classes such as
+`rung2-archive.*` left by pre-fix gate runs, allowlisted file shapes, reapable
+empty dirs). Bare `tmp.*` stays protected — an unattributed bare name is not
+ours to delete; producer-side cleanup owns that class.
+
+The repo ships `scripts/soleur-tmp-purge.service` and
+`scripts/soleur-tmp-purge.timer` (daily cadence — this pass does real
+classification + quarantine moves + TTL drain, unlike the guard's cheap
+count check):
+
+```bash
+mkdir -p ~/.config/systemd/user
+ln -sf "$PWD/scripts/soleur-tmp-purge.service" ~/.config/systemd/user/
+ln -sf "$PWD/scripts/soleur-tmp-purge.timer"  ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now soleur-tmp-purge.timer
+systemctl --user list-timers soleur-tmp-purge.timer   # verify
+```
+
+Same `~/soleur` assumption and drop-in override as Option 1 above; same linger
+note for headless hosts. Where the systemd **user bus is unavailable**
+(containers, `sudo -u`, SSH without `XDG_RUNTIME_DIR`) `systemctl --user`
+cannot connect at all — the fallback is a cron line or a manual cadence:
+
+```cron
+37 4 * * * /path/to/soleur/scripts/soleur-tmp-purge.sh --apply ; /path/to/soleur/scripts/soleur-tmp-purge.sh --drain
+```
+
+`--apply` **moves** entries into
+`<base>/soleur-quarantine.<uid>/<class>/` and drains them past their class TTL
+— space recovers on drain, not on quarantine (see "Quarantine drain &
+restore"). Run `bash scripts/soleur-tmp-purge.sh --dry-run` once first to see
+what a pass would move.
+
+### Why not a systemd-tmpfiles rule instead
+
+Evaluated and rejected for this leak (#10017; CTO ruling in
+`knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-10017-mktemp-tmp-leak/decision-challenges.md`):
+
+- `e`-/`d`-type rules age a directory's *contents* — they do not remove the
+  matching top-level entry shells themselves. `rung2-archive.*/` directories
+  are exactly the case tmpfiles cannot express: the directory shell is the
+  leaked entry count, and the rule would only empty it.
+- A blanket age rule over bare `/tmp` top-level entries would false-positive
+  on other tools' and sessions' files — #6991 measured thousands of candidate
+  entries that are NOT ours. The purge instead quarantines only entries whose
+  attribution the classifier can prove, and `tmp.*` is deliberately protected.
+- `soleur-tmp-purge` also *attributes* before it moves: the ledger records
+  every move and `--restore` can undo it — a tmpfiles delete has neither
+  property.
 
 ## Verification
 

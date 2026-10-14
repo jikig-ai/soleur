@@ -6,8 +6,8 @@
 #
 # Written from the BINDING CONTRACT, not the implementation (the SUT is built
 # concurrently by a sibling agent — do not import its internals here):
-#   knowledge-base/project/specs/feat-one-shot-9403-cost-tally/interface-contract.md
-#   knowledge-base/project/plans/2026-10-01-feat-pipeline-cost-tally-plan.md
+#   knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9403-cost-tally/interface-contract.md
+#   knowledge-base/project/plans/archive/20261013-062704-2026-10-01-feat-pipeline-cost-tally-plan.md
 #
 # AC map: AC1 selfcheck purity · AC2 init/incr/show counts · AC3+AC7 cap latch,
 # --reset, and auto-reset (capped / >24h stale) · AC8 missing-file UNKNOWN ·

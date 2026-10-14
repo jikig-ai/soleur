@@ -177,7 +177,11 @@ const HETZNER_CAP = 32_768;
 // took the local render to 23,584 B, 4 B over. Same derivation as the lower above: CI ~= local + 32
 // = ~23,616; 23,800 restores ~184 B of headroom and stays ~9.0 KB below HETZNER_CAP. If CI reds,
 // re-derive from its failure line.
-const WEB_GZIP_BUDGET = 23_800;
+// #9534: +300 B modest re-baseline (23,800 → 24,100). Measured 23,908 B local for the
+// egress-gateway runcmd call-site, the SOLEUR_EGRESS_REAPER env flag and the token-dir mount
+// on the web container — boot-time call-sites (the bootstrap script body is baked, #5921
+// pattern), so irreducibly inline. Comments trimmed first. ~8.7 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 24_100;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -263,7 +267,14 @@ const GIT_DATA_FLOOR = 3_000;
 // (#7270, ADR-185 addendum 2026-09-28) the zot liveness feeder's per-boot counters and five
 // liveness_* fields on SOLEUR_ZOT_DISK fit without raising the constant: measured 20,932 B stored,
 // so the slack above is now 68 B. The next registry-host addition needs a structural shrink.
-const REGISTRY_GZIP_BUDGET = 21_000;
+// (#9373, 2026-10-10) 21_000 -> 21_600. Classifying the zot upload error line on the parsed `func`
+// field (one jq field, one read variable, a tri-state is_cap_exempt and its call-site restructure)
+// measures 21,012 B stored by registry-userdata-budget.sh (was 20,944 B; +68 B), which sits over the
+// old constant. 600 B of slack, the #8714 precedent; ~11.7 KB remains below HETZNER_CAP and the
+// 8,000 B headroom POLICY (24,767 B ceiling) is unchanged. This node-zlib model can differ from
+// terraform's base64gzip by a few hundred bytes, so the figure above is the authority and CI's
+// registry-userdata-budget job is the check.
+const REGISTRY_GZIP_BUDGET = 21_600;
 const REGISTRY_GZIP_FLOOR = 4_000;
 const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
 const GROK_DOGFOOD_GZIP_FLOOR = 500;
@@ -273,7 +284,16 @@ const GROK_DOGFOOD_GZIP_FLOOR = 500;
 // 14,372 B headroom under the 32,768 B cap (inngest-userdata-budget.sh, the CI gate). This is the
 // early-warning bracket, not the cap: it keeps ~1.6 KB of warning margin, the same margin the
 // 18_000 bracket left over the pre-#8562 16,400 B, and matches REGISTRY_GZIP_BUDGET.
-const INNGEST_GZIP_BUDGET = 20_000;
+// #10217 (2026-10-13): +2,500 B modest re-baseline (20,000 -> 22,500). Modeled ~19.9 KB -> 21,132
+// (+~1.3 KB) for the attach-race fix's irreducibly-inline code: the reopen script's new
+// ensure_mount (atomic fstab install + kernel-served-layer pop loop + named fail classes),
+// wait_dev's timeout-wrapped probes and post-settle re-probe in BOTH readers, the
+// reopen_pointer_lost evidence refusal, and the backing_is noop check. The mechanism itself, not
+// prose — the reopened script ships in user_data because it exists to heal a first-boot-aborted
+// host, so nothing it contains can come from the store it mounts. 22,500 keeps ~1.4 KB warning
+// margin over the model and stays ~10.2 KB below HETZNER_CAP; byte-authoritative terraform
+// measures 21,520 B stored (inngest-userdata-budget.sh, the CI gate).
+const INNGEST_GZIP_BUDGET = 22_500;
 const INNGEST_GZIP_FLOOR = 4_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";
@@ -1636,7 +1656,7 @@ describe("baked bootstrap installer contract (AC4/AC5/AC6/AC8/AC9)", () => {
     // fail-closed presence + kernel-load asserts (run before the sentinel write)
     expect(bootstrap).toMatch(/test -f \/etc\/docker\/seccomp-profiles\/soleur-bwrap\.json/);
     expect(bootstrap).toMatch(/test -f \/etc\/apparmor\.d\/soleur-bwrap/);
-    expect(bootstrap).toMatch(/aa-status[^\n]*grep -qE '\^\[\[:space:\]\]\+soleur-bwrap\$'/);
+    expect(bootstrap).toMatch(/aa-status[^\n]*grep -cE '\^\[\[:space:\]\]\+soleur-bwrap\$' >\/dev\/null/);
   });
 });
 
@@ -1724,7 +1744,7 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2-part-1 + 10 Phase-2.2-part-2 fresh-boot-parity files + 4 inngest consumer-probe files + 9 guest-side fresh-boot LUKS files", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2-part-1 + 10 Phase-2.2-part-2 fresh-boot-parity files + 4 inngest consumer-probe files + 9 guest-side fresh-boot LUKS files + 5 egress-gateway files", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
@@ -1763,7 +1783,10 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // (workspaces-luks-reopen.{sh,service,timer} + -failure.service) and the daily probe
     // (luks-monitor.{sh,service,timer} + workspaces-luks-emit.sh). A fresh host never receives web-1's SSH
     // installers, so without baking them a born web-2 mounts a plaintext volume and cannot survive a reboot.
-    expect(serverTfBakedSet().length).toBe(58);
+    // +5 (=63): egress gateway (#9534) — squid.conf + auth-helper + shared deny
+    // set + bootstrap, installed by soleur-host-bootstrap.sh and mounted :ro into
+    // soleur-egress-gw; the forwarder rides the image for the PR-B dispatcher.
+    expect(serverTfBakedSet().length).toBe(63);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over

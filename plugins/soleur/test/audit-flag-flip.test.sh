@@ -40,21 +40,26 @@ cat > "$STUB_DIR/curl" <<'STUB'
 #!/usr/bin/env bash
 prev=""; for a in "$@"; do [[ "$prev" == "-d" ]] && printf '%s' "$a" > "${BODY_LOG:-/dev/null}"; prev="$a"; done
 printf 'called\n' >> "${CALL_LOG:-/dev/null}"
+# Record the argv (NUL-delimited) and whatever arrives on stdin, so the credential-channel
+# assertions below read what curl was actually handed (the key must be on stdin, never argv).
+printf '%s\0' "$@" > "${ARGV_LOG:-/dev/null}"
+cat > "${STDIN_LOG:-/dev/null}" 2>/dev/null || true
 printf '%s\n%s' "${FAKE_BODY:-}" "${FAKE_CODE:-200}"
 STUB
 chmod +x "$STUB_DIR/curl"
 BODY_LOG="$STUB_DIR/body.json"; CALL_LOG="$STUB_DIR/calls.log"
+ARGV_LOG="$STUB_DIR/argv.bin"; STDIN_LOG="$STUB_DIR/stdin.txt"
 
 # $1=body $2=code [$3=ACKED state: "tty-ack" (default) | "" unset]. The helper
 # sends p_approval_method only when the class-2 ack has set SOLEUR_OP_ACKED in
 # this process (#8486, ADR-249); without it, it refuses before any request.
 run_helper() { # -> echoes id, returns helper's rc
   local acked="${3-tty-ack}"
-  FAKE_BODY="$1" FAKE_CODE="$2" BODY_LOG="$BODY_LOG" CALL_LOG="$CALL_LOG" PATH="$STUB_DIR:$PATH" ACKED="$acked" bash -c '
+  FAKE_BODY="$1" FAKE_CODE="$2" BODY_LOG="$BODY_LOG" CALL_LOG="$CALL_LOG" ARGV_LOG="$ARGV_LOG" STDIN_LOG="$STDIN_LOG" PATH="$STUB_DIR:$PATH" ACKED="$acked" bash -c '
     set -euo pipefail
     source "'"$HELPER"'"
     if [[ -n "$ACKED" ]]; then SOLEUR_OP_ACKED="$ACKED"; fi
-    audit_flag_flip_rpc "https://x.supabase.co" "srk" "f" "dev" "global" "create" null null "a@b.co"
+    audit_flag_flip_rpc "https://x.supabase.co" "${SRK_VALUE-srk}" "f" "dev" "global" "create" null null "a@b.co"
   '
 }
 
@@ -103,6 +108,39 @@ fi
 if run_helper '"11111111-1111-1111-1111-111111111111"' 200 "yes" >/dev/null 2>&1; then
   echo "audit-flag-flip: FAIL — SOLEUR_OP_ACKED=yes must not pass as an ack" >&2; fail=1
 fi
+
+# 4g. the service-role key rides curl's STDIN config channel, never argv (#7843): both the
+#     apikey and Authorization headers arrive on stdin, the key is absent from every argv
+#     word, and the call is transport-confined (--disable first, --noproxy '*').
+SYNTH_SRK="synthetic-srk-9f3a.k_ey-1"
+: > "$ARGV_LOG"; : > "$STDIN_LOG"
+if SRK_VALUE="$SYNTH_SRK" run_helper '"11111111-1111-1111-1111-111111111111"' 200 >/dev/null 2>&1; then
+  grep -aqF -- "$SYNTH_SRK" "$ARGV_LOG" \
+    && { echo "audit-flag-flip: FAIL — the key reached curl's argv" >&2; fail=1; }
+  grep -aqiE -- 'apikey:|authorization: *bearer' "$ARGV_LOG" \
+    && { echo "audit-flag-flip: FAIL — a credential header is on curl's argv" >&2; fail=1; }
+  grep -qxF "header = \"apikey: $SYNTH_SRK\"" "$STDIN_LOG" \
+    || { echo "audit-flag-flip: FAIL — apikey header missing from curl's stdin config" >&2; fail=1; }
+  grep -qxF "header = \"Authorization: Bearer $SYNTH_SRK\"" "$STDIN_LOG" \
+    || { echo "audit-flag-flip: FAIL — Authorization header missing from curl's stdin config" >&2; fail=1; }
+  [[ "$(tr '\0' '\n' < "$ARGV_LOG" | head -n1)" == "--disable" ]] \
+    || { echo "audit-flag-flip: FAIL — --disable is not curl's first argument" >&2; fail=1; }
+  tr '\0' '\n' < "$ARGV_LOG" | grep -cxF -- '--config' >/dev/null \
+    || { echo "audit-flag-flip: FAIL — curl is not given --config -" >&2; fail=1; }
+else
+  echo "audit-flag-flip: FAIL — synthetic-key append should return 0" >&2; fail=1
+fi
+
+# 4h. an unusable key (empty, quote, newline+url directive) -> rc 4 and ZERO curl calls
+for bad in "" 'ab"cd' $'abc"\nurl = "http://evil.invalid"'; do
+  : > "$CALL_LOG"
+  if SRK_VALUE="$bad" run_helper '"11111111-1111-1111-1111-111111111111"' 200 >/dev/null 2>&1; then
+    echo "audit-flag-flip: FAIL — an unusable key must return 4" >&2; fail=1
+  else
+    rc=$?; [[ "$rc" == "4" ]] || { echo "audit-flag-flip: FAIL — unusable-key rc=$rc (expected 4)" >&2; fail=1; }
+  fi
+  [[ ! -s "$CALL_LOG" ]] || { echo "audit-flag-flip: FAIL — an unusable key still called curl" >&2; fail=1; }
+done
 
 # --- 5. Forbidden-token guard: no psql/DATABASE_URL_POOLER/5432/6543 --------
 # Strip comments (everything from the first '#') before grepping so doc-mentions

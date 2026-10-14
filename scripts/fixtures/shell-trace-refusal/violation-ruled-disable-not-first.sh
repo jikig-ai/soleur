@@ -12,4 +12,4 @@ esac
 
 # Rule D: BOTH flags present, but --disable is not first -- so curl has already
 # parsed ~/.curlrc by the time it is read. A presence-only check passes this.
-curl -sS --disable --noproxy '*' -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true
+curl -sS --disable --noproxy '*' --config - https://example.invalid/ < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true

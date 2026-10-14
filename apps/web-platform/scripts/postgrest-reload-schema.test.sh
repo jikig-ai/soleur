@@ -71,7 +71,7 @@ out=$(env -i PATH="$PATH" HOME="$HOME" \
         bash "$SCRIPT" 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qi 'SUPABASE_ACCESS_TOKEN'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -ci >/dev/null 'SUPABASE_ACCESS_TOKEN'; then
   pass "exit 2 (auth) with token-name in stderr"
 else
   fail "rc=$rc out=$out"
@@ -89,7 +89,7 @@ out=$(env -i PATH="$PATH" HOME="$HOME" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q '::notice::' && ! printf '%s' "$out" | grep -q '::warning'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null '::notice::' && ! printf '%s' "$out" | grep -c >/dev/null '::warning'; then
   pass "exit 0 with a ::notice:: (absence is informational, never a warning)"
 else
   fail "rc=$rc out=$out"
@@ -105,7 +105,7 @@ out=$(env -i PATH="$PATH" HOME="$HOME" \
         bash "$SCRIPT" 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -qi 'NEXT_PUBLIC_SUPABASE_URL\|project ref'; then
+if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -ci >/dev/null 'NEXT_PUBLIC_SUPABASE_URL\|project ref'; then
   pass "non-zero exit with URL/ref message"
 else
   fail "rc=$rc out=$out"
@@ -225,8 +225,8 @@ out_soft=$(env -i PATH="$PATH" HOME="$HOME" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc_soft=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qi 'project ref\|supabase\.co' \
-   && [[ "$rc_soft" == "2" ]] && printf '%s' "$out_soft" | grep -q '::error::'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -ci >/dev/null 'project ref\|supabase\.co' \
+   && [[ "$rc_soft" == "2" ]] && printf '%s' "$out_soft" | grep -c >/dev/null '::error::'; then
   pass "exit 2 both modes, message references ref/supabase.co"
 else
   fail "rc=$rc out=$out rc_soft=$rc_soft out_soft=$out_soft"
@@ -249,7 +249,7 @@ out=$(PATH="$TMP:$PATH" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q '::warning' && ! printf '%s' "$out" | grep -q '::notice::'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null '::warning' && ! printf '%s' "$out" | grep -c >/dev/null '::notice::'; then
   pass "exit 0 with a ::warning:: under best-effort (transience, not absence)"
 else
   fail "rc=$rc out=$out"
@@ -265,10 +265,10 @@ out=$(env -i PATH="$PATH" HOME="$HOME" bash "$SCRIPT" --help 2>&1 </dev/null)
 rc=$?
 set -e
 if [[ "$rc" == "0" ]] \
-   && printf '%s' "$out" | grep -q '^Usage:' \
-   && printf '%s' "$out" | grep -q 'SUPABASE_ACCESS_TOKEN' \
-   && printf '%s' "$out" | grep -qF -- '--only-secrets SUPABASE_ACCESS_TOKEN' \
-   && printf '%s' "$out" | grep -q 'Exit codes'; then
+   && printf '%s' "$out" | grep -c >/dev/null '^Usage:' \
+   && printf '%s' "$out" | grep -c >/dev/null 'SUPABASE_ACCESS_TOKEN' \
+   && printf '%s' "$out" | grep -cF >/dev/null -- '--only-secrets SUPABASE_ACCESS_TOKEN' \
+   && printf '%s' "$out" | grep -c >/dev/null 'Exit codes'; then
   pass "exit 0; renders Usage, SUPABASE_ACCESS_TOKEN, the prd_terraform --only-secrets one-liner, Exit codes"
 else
   fail "rc=$rc out=$out"
@@ -282,7 +282,7 @@ set +e
 out=$(env -i PATH="$PATH" HOME="$HOME" bash "$SCRIPT" --not-a-flag 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qi 'unknown'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -ci >/dev/null 'unknown'; then
   pass "exit 2 with unknown-arg message"
 else
   fail "rc=$rc out=$out"
@@ -305,8 +305,8 @@ out=$(PATH="$TMP:$PATH" \
 rc=$?
 set -e
 if [[ "$rc" == "1" ]] \
-   && printf '%s' "$out" | grep -q 'curl failed' \
-   && ! printf '%s' "$out" | grep -q 'sbp_must_not_leak'; then
+   && printf '%s' "$out" | grep -c >/dev/null 'curl failed' \
+   && ! printf '%s' "$out" | grep -c >/dev/null 'sbp_must_not_leak'; then
   pass "exit 1; token not echoed in error path"
 else
   fail "rc=$rc out=$out"
@@ -330,7 +330,7 @@ out=$(PATH="$TMP:$PATH" \
         bash "$SCRIPT" 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'client error (HTTP 404)' && ! printf '%s' "$out" | grep -q 'Supabase rejected'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'client error (HTTP 404)' && ! printf '%s' "$out" | grep -c >/dev/null 'Supabase rejected'; then
   pass "exit 2 on 404, attributed to config (never to the credential)"
 else
   fail "rc=$rc out=$out"
@@ -354,7 +354,7 @@ out=$(PATH="$TMP:$PATH" \
         bash "$SCRIPT" 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -qi 'unexpected'; then
+if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -ci >/dev/null 'unexpected'; then
   pass "exit 1 on HTTP 000 (proxy disconnect)"
 else
   fail "rc=$rc out=$out"
@@ -457,11 +457,11 @@ out=$(PATH="$TMP:$PATH" \
 rc=$?
 set -e
 if [[ "$rc" == "2" ]] \
-   && printf '%s' "$out" | grep -q '::error::' \
-   && printf '%s' "$out" | grep -q 'Supabase rejected SUPABASE_ACCESS_TOKEN' \
-   && printf '%s' "$out" | grep -q 'sbp_REDACTED' \
-   && ! printf '%s' "$out" | grep -q "$DEAD_FIXTURE" \
-   && ! printf '%s' "$out" | grep -qi 'skipping'; then
+   && printf '%s' "$out" | grep -c >/dev/null '::error::' \
+   && printf '%s' "$out" | grep -c >/dev/null 'Supabase rejected SUPABASE_ACCESS_TOKEN' \
+   && printf '%s' "$out" | grep -c >/dev/null 'sbp_REDACTED' \
+   && ! printf '%s' "$out" | grep -c >/dev/null "$DEAD_FIXTURE" \
+   && ! printf '%s' "$out" | grep -ci >/dev/null 'skipping'; then
   pass "exit 2, ::error::, names the token, fixture scrubbed, no skip"
 else
   fail "rc=$rc out=$out"
@@ -485,7 +485,7 @@ out=$(PATH="$TMP:$PATH" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'Supabase rejected SUPABASE_ACCESS_TOKEN'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'Supabase rejected SUPABASE_ACCESS_TOKEN'; then
   pass "exit 2 on 403 + JSON under best-effort"
 else
   fail "rc=$rc out=$out"
@@ -520,9 +520,9 @@ out_soft=$(PATH="$TMP:$PATH" \
 rc_soft=$?
 set -e
 if [[ "$rc_strict" == "1" ]] \
-   && printf '%s' "$out_strict" | grep -q 'without an API JSON body' \
+   && printf '%s' "$out_strict" | grep -c >/dev/null 'without an API JSON body' \
    && [[ "$rc_soft" == "0" ]] \
-   && printf '%s' "$out_soft" | grep -q '::warning'; then
+   && printf '%s' "$out_soft" | grep -c >/dev/null '::warning'; then
   pass "strict exit 1 (no JSON body — braces inside HTML do not count); best-effort exit 0 with ::warning::"
 else
   fail "rc_strict=$rc_strict out_strict=$out_strict rc_soft=$rc_soft out_soft=$out_soft"
@@ -547,7 +547,7 @@ out=$(PATH="$TMP:$PATH" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'client error (HTTP 404)' && ! printf '%s' "$out" | grep -q 'Supabase rejected' && ! printf '%s' "$out" | grep -qi 'skipping'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'client error (HTTP 404)' && ! printf '%s' "$out" | grep -c >/dev/null 'Supabase rejected' && ! printf '%s' "$out" | grep -ci >/dev/null 'skipping'; then
   pass "exit 2 on 404 under best-effort, attributed to config (never to the credential)"
 else
   fail "rc=$rc out=$out"
@@ -565,7 +565,7 @@ out=$(env -i PATH="$PATH" HOME="$HOME" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'NEXT_PUBLIC_SUPABASE_URL'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'NEXT_PUBLIC_SUPABASE_URL'; then
   pass "exit 2: URL unset is not soaked when a token is present"
 else
   fail "rc=$rc out=$out"
@@ -589,8 +589,8 @@ out_soft=$(PATH="$TMP:$PATH" CURL_ARGS_FILE="$TMP/args" CURL_HTTP_CODE=401 CURL_
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc_soft=$?
 set -e
-if [[ "$rc_strict" == "1" ]] && printf '%s' "$out_strict" | grep -q 'without an API JSON body' \
-   && [[ "$rc_soft" == "0" ]] && printf '%s' "$out_soft" | grep -q '::warning'; then
+if [[ "$rc_strict" == "1" ]] && printf '%s' "$out_strict" | grep -c >/dev/null 'without an API JSON body' \
+   && [[ "$rc_soft" == "0" ]] && printf '%s' "$out_soft" | grep -c >/dev/null '::warning'; then
   pass "strict exit 1; best-effort exit 0 with ::warning::"
 else
   fail "rc_strict=$rc_strict out_strict=$out_strict rc_soft=$rc_soft out_soft=$out_soft"
@@ -618,8 +618,8 @@ set -e
 err_lines=$(printf '%s\n' "$out" | grep -c '^::error::postgrest-reload-schema:' || true)
 err_len=$(printf '%s\n' "$out" | { grep '^::error::postgrest-reload-schema:' || true; } | head -1 | wc -c)
 if [[ "$rc" == "2" ]] && [[ "$err_lines" == "1" ]] \
-   && ! printf '%s\n' "$out" | grep -qE '^::(stop-commands|error::injected)' \
-   && ! printf '%s' "$out" | grep -q 'sbp_straddle' \
+   && ! printf '%s\n' "$out" | grep -cE >/dev/null '^::(stop-commands|error::injected)' \
+   && ! printf '%s' "$out" | grep -c >/dev/null 'sbp_straddle' \
    && [[ "$err_len" -le 600 ]]; then
   pass "one ::error:: line (<=600 bytes), smuggled directives neutralised, straddling token redacted"
 else
@@ -645,7 +645,7 @@ out=$(env -i PATH="$TMP/bin" HOME="$HOME" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'curl not found'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'curl not found'; then
   pass "exit 2: missing curl is not soaked when a token is present"
 else
   fail "rc=$rc out=$out"
@@ -670,8 +670,8 @@ out_strict=$(PATH="$TMP:$PATH" CURL_ARGS_FILE="$TMP/args" CURL_HTTP_CODE=429 CUR
         bash "$SCRIPT" 2>&1 </dev/null)
 rc_strict=$?
 set -e
-if [[ "$rc_soft" == "0" ]] && printf '%s' "$out_soft" | grep -q '::warning' \
-   && [[ "$rc_strict" == "1" ]] && printf '%s' "$out_strict" | grep -q 'rate-limited'; then
+if [[ "$rc_soft" == "0" ]] && printf '%s' "$out_soft" | grep -c >/dev/null '::warning' \
+   && [[ "$rc_strict" == "1" ]] && printf '%s' "$out_strict" | grep -c >/dev/null 'rate-limited'; then
   pass "429 soaked as transient under best-effort; exit 1 strict"
 else
   fail "rc_soft=$rc_soft out_soft=$out_soft rc_strict=$rc_strict out_strict=$out_strict"

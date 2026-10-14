@@ -24,7 +24,7 @@ if grep -qF 'stop-commands' "$WF"; then
   echo "PASS: the drift workflow wraps the probe output in ::stop-commands::"
   exit 0
 fi
-if grep -E "^SAFE_JQ=" "$PROBE" | grep -qF '##\\['; then
+if grep -qF '##\\[' < <(grep -E "^SAFE_JQ=" "$PROBE"); then
   echo "PASS: the probe's safe() rewrites legacy ##[ runner commands"
   exit 0
 fi

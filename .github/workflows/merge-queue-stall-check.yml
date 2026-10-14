@@ -20,7 +20,7 @@ name: Merge queue stall check
 # here — it needs Administration:Read (app token), which would defeat the
 # no-app-secrets property above. (CTO ruling, #5780.)
 #
-# TIMING (#9454): the ruleset's check_response_timeout_minutes is 60. The queue
+# TIMING (#9454): the ruleset's check_response_timeout_minutes is 75. The queue
 # ejects a candidate whose required checks have not all reported by then, and does
 # so silently (an ejected entry leaves `mergeQueue.entries`, so a later probe sees
 # nothing), so this probe must report a stuck entry BEFORE that. The threshold
@@ -35,7 +35,7 @@ name: Merge queue stall check
 # gap about 275 min, max about 479 min; scheduled-actions-queue-health.yml `*/30`:
 # gaps of 2.7 to 6 h; see the header of
 # apps/web-platform/server/inngest/functions/cron-actions-queue-health-dispatch.ts).
-# Against a 15-minute window [threshold, timeout] a probe that fires every few
+# Against a 30-minute window [threshold, timeout] a probe that fires every few
 # hours will usually MISS a stuck entry before the queue ejects it. Treat this
 # probe as BEST-EFFORT in BOTH directions: no issue is NOT proof of a healthy
 # queue, and a filed issue is a SUSPECTED stall that needs verification (it can be
@@ -45,19 +45,35 @@ name: Merge queue stall check
 # (every 10 minutes), which POSTs workflow_dispatch to this workflow; the runner
 # stays the EXECUTOR with the default GITHUB_TOKEN. The `schedule:` below is now
 # the FALLBACK clock, kept byte-identical. That function's header is the single
-# authority for the timing story: detection latency, the margin against the 60
-# minute timeout (thin, and negative at the measured p90 runner wait), and why a
-# dispatch whose run is delayed on the runner pool is not detected, so the probe
-# stays BEST-EFFORT. The 60-minute timeout may count from the merge_group build
+# authority for the timing story: detection latency, the margin against the 75
+# minute timeout (about zero at the measured p90 runner wait), and why a
+# dispatch whose run is delayed on the runner pool is detected ONE TICK LATE —
+# since #9513 the dispatcher reads the previous run's status/conclusion through
+# the `actions:write` token it already holds and reports a red or stuck run as
+# an error-status check-in, keeping the executor secretless — so the probe
+# stays BEST-EFFORT. The 75-minute timeout may count from the merge_group build
 # start rather than `enqueuedAt`, which would widen the real window (unverified).
+#
+# DRAIN (#9513): the "Drain stale stall issues" step self-closes open
+# `merge-queue-stall` issues whose filed `PR #N` is no longer OPEN (merged or
+# closed). It runs `if: always()` — an aborted detect run must not skip the
+# drain — inside the same job and grant: `gh issue view <pr>` answers
+# OPEN/CLOSED/MERGED for a PR number under the existing `issues: write`
+# permission, so no `pull-requests` scope is added. The sweep mirrors the
+# queue-health self-close conventions: a label-scoped enumeration (the search
+# index lags a just-labelled issue), a `-L 50` bound with a cap notice,
+# standalone-jq filtering (the `gh --jq` embedded jq does not forward `--arg`,
+# #9533), and fail-open behaviour — a failed enumeration or an unreadable
+# target state keeps the issue and retries next sweep; closing is the only
+# mutation and it needs a positively-read non-OPEN state.
 #
 # FALSE POSITIVES ARE POSSIBLE, BY CONSTRUCTION. The age is measured from `enqueuedAt`,
 # which is when the PR joined the queue, NOT when its own merge_group build started. An
 # entry that waited behind others and was promoted to position 2 or 1 can already be
 # older than the threshold with a build that has barely begun, and the threshold itself
-# (STALL_THRESHOLD_MINUTES, 45) sits BELOW the measured merge_group CI maximum (about 50
-# minutes, plugins/soleur/skills/ship/SKILL.md Phase 7 fence). It cannot be raised past
-# that maximum without leaving no room under the 60-minute queue timeout, so the issue is
+# (STALL_THRESHOLD_MINUTES, 45) sits BELOW the measured merge_group CI maximum (the longest
+# success was 60.5 minutes, #9454 canary item 5). It cannot be raised past
+# that maximum without leaving only about 15 minutes under the 75-minute queue timeout, so the issue is
 # worded as a SUSPECTED stall: the title says so, the body says the entry may be a healthy
 # slow build, and it lists the agent-runnable triage (live queue read, the entry's
 # merge_group runs) first so the false positive is closed in one read. The position filter
@@ -105,11 +121,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      # Keep BELOW the ruleset's check_response_timeout_minutes (60, #9454) so a
+      # Keep BELOW the ruleset's check_response_timeout_minutes (75, #9454) so a
       # stuck entry is reported before the queue ejects it silently. An entry
       # pending longer than this is a SUSPECTED stall (a required check not
       # reporting on merge_group), not a proven one: a healthy slow build can reach
-      # it too (measured merge_group CI maximum about 50 minutes), see the header.
+      # it too (longest merge_group CI success about 60 minutes), see the header.
       STALL_THRESHOLD_MINUTES: '45'
       # Mirror of max_entries_to_build in infra/github/ruleset-ci-required.tf: only
       # entries at position <= this can be building, so only they are aged (see
@@ -193,7 +209,7 @@ jobs:
           tmpl="$(cat <<'TMPL'
           SUSPECTED merge-queue stall (needs verification): PR #@PR@ was enqueued about @AGE@ minutes ago (threshold @THR@m, queue state @STATE@): @URL@
 
-          This may be a healthy slow build, not a stall. The age is counted from when the PR joined the queue, not from when its own merge_group build started, and the threshold (@THR@m) sits below the measured merge_group CI maximum (about 50 minutes). Close this issue as a false positive if step 2 shows the entry's merge_group runs are in progress.
+          This may be a healthy slow build, not a stall. The age is counted from when the PR joined the queue, not from when its own merge_group build started, and the threshold (@THR@m) sits below the measured merge_group CI maximum (about 60 minutes). Close this issue as a false positive if step 2 shows the entry's merge_group runs are in progress.
 
           Triage (every step is agent-runnable; do 1 and 2 first):
           1. Read the live queue: `gh api graphql -f query='{repository(owner:"@OWNER@",name:"@NAME@"){mergeQueue(branch:"main"){entries(first:50){nodes{position state enqueuedAt pullRequest{number}}}}}}'`
@@ -236,3 +252,56 @@ jobs:
               --body "$body"
             echo "Filed stall issue for PR #${pr}."
           done <<<"$stalled"
+
+      - name: Drain stale stall issues
+        # always(): an aborted detect run must not skip the drain — the sweep
+        # is independent of the queue read (see DRAIN in the header).
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Self-close drain (#9513): a filed stall issue outlives its target.
+          # The probe only re-files while the entry's PR is OPEN, so an open
+          # `merge-queue-stall` issue whose target PR has left OPEN (merged or
+          # closed) is stale and self-closes here. Queue-health sweep shape:
+          # label-scoped enumeration (the search index lags), a bounded -L 50
+          # read with a cap notice, fail-open on every read (see DRAIN).
+          DRAIN_ERR="$(mktemp)"
+          if ! DRAIN_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
+            --json number,title --label merge-queue-stall 2>"$DRAIN_ERR")"; then
+            echo "::error::stall-issue drain enumeration failed (gh issue list: $(LC_ALL=C tr -cd '\40-\176' <"$DRAIN_ERR" | head -c 300)) — skipping the drain this run; the next sweep retries."
+            exit 0
+          fi
+          # One `<issue>\t<pr>` pair per filed-shape title. The capture's
+          # ` pending` suffix keeps PR #1 from matching inside PR #12's title
+          # (the detect step's dedupe anchor documents the same trap). Titles
+          # without the anchor — hand-filed or renamed — yield an empty pr
+          # field and are skipped below, never closed. `gh --jq` does not
+          # forward --arg (#9533), so extraction runs in standalone jq.
+          pairs="$(printf '%s' "$DRAIN_LIST" | jq -r '.[] | [.number, (try (.title | capture("PR #(?<pr>[0-9]+) pending") | .pr) catch "")] | @tsv' 2>/dev/null || true)"
+          pair_count="$(printf '%s\n' "$pairs" | grep -c . || true)"
+          if [[ "$pair_count" -ge 50 ]]; then
+            echo "::notice::stall-issue drain hit the -L 50 enumeration cap; oldest matching issues stay open until the next sweep"
+          fi
+          while IFS=$'\t' read -r issue_no pr_no; do
+            [[ -n "$issue_no" && -n "$pr_no" ]] || continue
+            # `gh issue view` on a PR number returns its issue-projection —
+            # OPEN / CLOSED / MERGED — under this job's issues:write grant, so
+            # the drain needs no pull-requests scope widening. Only a
+            # positively-read non-OPEN state closes; anything else is kept.
+            VIEW_ERR="$(mktemp)"
+            state="$(gh issue view "$pr_no" --repo "$GH_REPO" --json state 2>"$VIEW_ERR" \
+              | jq -r '.state // empty' 2>/dev/null || true)"
+            if [[ -z "$state" ]]; then
+              echo "::warning::could not read PR #${pr_no} for stall issue #${issue_no} (gh issue view: $(LC_ALL=C tr -cd '\40-\176' <"$VIEW_ERR" | head -c 200)) — keeping the issue open."
+              continue
+            fi
+            [[ "$state" != "OPEN" ]] || continue
+            if gh issue close "$issue_no" --repo "$GH_REPO" \
+              --comment "Target PR #${pr_no} is now ${state} — the suspected stall it tracked is moot. Auto-closed by ${RUN_URL}"; then
+              echo "Drained stale stall issue #${issue_no} (PR #${pr_no} is ${state})."
+            else
+              echo "::warning::drain close failed for issue #${issue_no}; the next sweep retries."
+            fi
+          done <<<"$pairs"

@@ -266,8 +266,8 @@ documents, and no open blockers remain for the Stripe live-mode flip.
 
 ## Cross-references
 
-- Brainstorm: `knowledge-base/project/brainstorms/2026-04-23-stripe-live-mode-activation-brainstorm.md`
-- Plan: `knowledge-base/project/plans/2026-04-23-feat-stripe-live-activation-plan.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-23-stripe-live-mode-activation-brainstorm.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-stripe-live-activation-plan.md`
 - Related learning: `knowledge-base/project/learnings/2026-02-25-stripe-atlas-legal-benchmark-mismatch.md`
 - Related closed issue (vendor DPA, Stripe covered): `#670`
 - Activation runbook that gates on this sign-off: `stripe-live-activation.md`

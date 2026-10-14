@@ -125,7 +125,7 @@ if [[ "$rdelta" -gt "$PLATEAU_TOL" ]]; then
 fi
 
 # (2) any OOM exit.
-if printf '%s\n' "$SCOPED" | grep -qE 'exit_code=137'; then
+if grep -qE 'exit_code=137' <<<"$SCOPED"; then
   FAILS+=("exit_code=137 seen — an OOM exit; the host is still starving zot")
 fi
 
@@ -166,7 +166,7 @@ threshold=$(( effective_cap - ANON_HEADROOM_MB ))
 # unreachable, so it passes. Uncapped-on-a-small-host IS #6288's root condition; a gate that
 # cannot see it is the gate this issue needed and did not have. Any `false` on the newest boot
 # fails: the cap either binds or it does not.
-if printf '%s\n' "$SCOPED" | grep -qF 'zot_memory_capped=false'; then
+if grep -qF 'zot_memory_capped=false' <<<"$SCOPED"; then
   FAILS+=("zot is running UNCAPPED (zot_memory_capped=false) — docker started it with no --memory limit, so the cgroup cannot contain a large-store scan and the host OOM-killer is the only backstop. This is #6288's root condition.")
 fi
 maxanon="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_anon_mb | sort -n | tail -1)"

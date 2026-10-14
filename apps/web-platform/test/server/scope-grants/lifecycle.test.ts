@@ -13,7 +13,7 @@
  *   7. anonymise_scope_grants bypasses the trigger via the GUC gate and
  *      zeros founder_id for every row owned by p_user_id.
  *
- * Plan: knowledge-base/project/plans/2026-05-18-feat-pr-g-cohort-onboarding-plan.md (TR4).
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-18-feat-pr-g-cohort-onboarding-plan.md (TR4).
  *
  * Opt-in via TENANT_INTEGRATION_TEST=1. Requires `doppler run -p soleur -c dev`.
  *
@@ -34,6 +34,7 @@ import {
 import { randomBytes } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -99,18 +100,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     afterAll(async () => {
-      // anonymise_scope_grants (step 7) zeros founder_id for every row
-      // owned by userA. The `users.id` FK is ON DELETE RESTRICT, but with
-      // founder_id = NULL there are no dependent rows blocking the
-      // auth.admin.deleteUser cascade — so the synthetic auth user can be
-      // reaped cleanly. If step 7 didn't run (e.g. earlier failure), the
-      // delete may fail; we tolerate that here so the failure surface is
-      // the original assertion, not the teardown.
+      // The `users.id` FK is ON DELETE RESTRICT — the helper runs
+      // anonymise_scope_grants itself (plus the rest of the production
+      // FK-reverse sequence), so userA is reaped cleanly even when the
+      // lifecycle test fails before its own step-7 anonymise. Fail-loud
+      // per #10096: a teardown failure reds the suite rather than leaking
+      // the synthetic user.
       if (userA.id) {
         assertSynthetic(userA.email);
-        await service.auth.admin.deleteUser(userA.id);
+        await tearDownTenantUser(service, userA);
       }
-    });
+    }, 60_000);
 
     test("lifecycle: grant → tier change → revoke → re-grant", async () => {
       // ── 1. Grant fresh ────────────────────────────────────────────────

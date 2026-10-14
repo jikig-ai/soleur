@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The re-cut #9321 bootstrap, driven stage by stage against STUBBED vendors (ADR-264).
 #
-# knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh gives the two
+# knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh gives the two
 # App-token release jobs a Doppler credential that reads only the two soleur-infra App values: copy
 # the values into the soleur-infra-app container, prove the copy is the live App with a real RS256
 # JWT, mint the read-only service token scoped to that container, store it as the infra-privileged
@@ -45,7 +45,7 @@ PLUGIN_ROOT="$(cd "${SUITE_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${PLUGIN_ROOT}/../.." && pwd)"
 LIB="${PLUGIN_ROOT}/scripts/lib/operator-script.sh"
 HOOK="${PLUGIN_ROOT}/hooks/operator-stage-approval.sh"
-S="${REPO_ROOT}/knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+S="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -218,7 +218,7 @@ mkdir -p "$STUB_ROOT/doppler/tokens"; printf 'slug99|release-app-mint\n' >> "$ST
 OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash -c "$newc" </dev/null 2>&1)"; RC=$?
 [[ "$RC" -eq 75 && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PLAN_DRIFT stage=mint-and-store-token' <<<"$OUT"
 check "a vendor change after the approval: PLAN_DRIFT, exit 75, zero writes" $?
-ls "$XDG_STATE_HOME/soleur/approvals" | grep -qv '\.consumed$' && fail "the receipt is still live after plan drift" || pass "the receipt was burned on plan drift"
+ls "$XDG_STATE_HOME/soleur/approvals" | grep -cv >/dev/null '\.consumed$' && fail "the receipt is still live after plan drift" || pass "the receipt was burned on plan drift"
 
 echo "== failure paths keep their safety =="
 world vfail
@@ -297,8 +297,9 @@ OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" BASH_ENV="$SB/xtrace-env.sh" 
 
 echo "== the environment-secret census (G7d) still accepts the re-cut script =="
 census_out="$(cd "$REPO_ROOT" && bash tests/scripts/test-infra-privileged-tier-census.sh 2>&1)"; census_rc=$?
-# The census has many checks and some compare against the base ref (G4c reds on a branch that is merely
-# BEHIND main), so this row asserts the ONE check that reads this script line by line (G7d), by its own
+# The census has many checks and some compare against the base ref (G4c resolves the merge-base
+# since #10053 — a merely-BEHIND branch greens; only deletions relative to the fork point red), so
+# this row asserts the ONE check that reads this script line by line (G7d), by its own
 # verdict line, never the census's overall exit status.
 if grep -qE '^[[:space:]]*ok[[:space:]]+G7d' <<<"$census_out" && ! grep -qE '^[[:space:]]*FAIL[[:space:]]+G7d' <<<"$census_out"; then
   pass "census G7d (tests/scripts/test-infra-privileged-tier-census.sh) accepts the re-cut script: the store is only gh secret set --env infra-privileged"
@@ -306,7 +307,7 @@ else
   fail "census G7d did not report ok for the re-cut script (census rc ${census_rc}): $(grep -E 'G7d' <<<"$census_out" | head -2 | tr '\n' ' ')"
 fi
 grep -qE '^GH_ENVIRONMENT="infra-privileged"$' "$S"; check "GH_ENVIRONMENT=\"infra-privileged\" stays pinned on its own line, top-level" $?
-! grep -vE '^[[:space:]]*#' "$S" | grep -qE 'soleur_op_gh_secret_set|gh variable set'; check "no other store path exists in the script (no soleur_op_gh_secret_set, no gh variable set)" $?
+! grep -vE '^[[:space:]]*#' "$S" | grep -cE >/dev/null 'soleur_op_gh_secret_set|gh variable set'; check "no other store path exists in the script (no soleur_op_gh_secret_set, no gh variable set)" $?
 
 echo "== the approved flow: no child inherits the nonce, no secret on argv, the approval binds the script bytes =="
 world flow
@@ -326,7 +327,7 @@ printf '\n# edited after the plan\n' >> "$EDITED"
 OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash -c "$newc" </dev/null 2>&1)"; RC=$?
 [[ -n "$newc" && "$RC" -eq 75 && "$(mut)" -eq 0 ]]
 check "a script edited AFTER its plan and approval no longer matches (exit 75, zero writes): the approval binds the bytes (rc ${RC})" $?
-ls "$XDG_STATE_HOME/soleur/approvals" | grep -qv '\.consumed$' && fail "the receipt is still live after the edit was refused" || pass "the receipt was burned when the edited script was refused"
+ls "$XDG_STATE_HOME/soleur/approvals" | grep -cv >/dev/null '\.consumed$' && fail "the receipt is still live after the edit was refused" || pass "the receipt was burned when the edited script was refused"
 
 echo "== the live-App proof is a real JWT check, not a 200 that ignores the request =="
 world jwt

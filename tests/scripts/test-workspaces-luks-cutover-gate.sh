@@ -6,9 +6,13 @@
 # EXACTLY the scoped workspaces-luks FIRST PROVISION: a pure `+create` of the five #6593-authored
 # resources (random_password.workspaces_luks, doppler_secret.workspaces_luks_key,
 # doppler_service_token.workspaces_luks, hcloud_volume.workspaces_luks,
-# hcloud_volume_attachment.workspaces_luks), with the LIVE plaintext /mnt/data volume + its
-# attachment + the web-1 server PRESERVED (untouched — the old volume has NO prevent_destroy,
-# #6593 deliberately omitted it), no passphrase re-mint, no destroy, and nothing out of scope.
+# hcloud_volume_attachment.workspaces_luks), with web-1's then-serving plaintext /mnt/data
+# volume + its attachment + the web-1 server PRESERVED (untouched — #6593 shipped that volume
+# without prevent_destroy), no passphrase re-mint, no destroy, and nothing out of scope.
+#
+# HISTORICAL since #6604 step 7: web-1's plaintext volume is wiped, deleted and out of state, and
+# the LUKS volume carries prevent_destroy + delete_protection. The fixtures below still model the
+# first-provision plan shape; they pin the gate's decision logic, not today's topology.
 #
 # ⚠️ DP-1 non-vacuity note: this is a first provision, NOT a host -replace. The passphrase +
 # doppler_secret + service_token do not yet exist in state, so the create plan is a `+create` of

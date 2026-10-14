@@ -180,6 +180,34 @@ describe("plan skeleton checkpoint — the completion predicate matches the temp
     expect(has(secs[minimal], /^## Overview$/m)).toBe(false);
   });
 
+  // Founder-stated check (#9578). The block lives UNDER `## Acceptance Criteria`, so the content
+  // predicate must still read a plan that carries one as a finished plan, and the templates must
+  // not seed an empty stub (a stub on every plan would read as a block with no freeze commit and
+  // FAIL every plan that does not use the feature).
+  test("a plan carrying a founder_check block under Acceptance Criteria still satisfies the completion predicate", () => {
+    const plan = [
+      "---", "title: fixture", "---", "", "## Overview", "", "x", "",
+      "## Acceptance Criteria", "", "- [ ] one", "",
+      "```yaml", "founder_check:", "  kind: judgement", '  text: "looks right"', "```", "",
+      "## Test Scenarios", "", "- none", "",
+    ].join("\n");
+    expect(/^## Acceptance Criteria$/m.test(plan)).toBe(true);
+    const section = plan.split(/^## Acceptance Criteria$/m)[1].split(/^## /m)[0];
+    expect(section.includes("founder_check:")).toBe(true);
+  });
+
+  test("every detail level points at the founder-check reference and seeds NO founder_check stub", () => {
+    for (const lvl of detailLevels) {
+      expect(has(secs[lvl], "founder-stated check: see plan-founder-check.md")).toBe(true);
+      expect(has(secs[lvl], "founder_check:")).toBe(false);
+    }
+  });
+
+  test("plan/SKILL.md links the founder-check reference, which exists", () => {
+    expect(has(read(PLAN_SKILL), "[plan-founder-check.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-founder-check.md)")).toBe(true);
+    expect(read(resolve(SKILLS, "plan/references/plan-founder-check.md")).length).toBeGreaterThan(500);
+  });
+
   test("one-shot's predicate names Acceptance Criteria and does NOT conjoin Overview", () => {
     expect(has(oneShot, "## Acceptance Criteria")).toBe(true);
     expect(has(oneShot, "frontmatter + Overview + Acceptance Criteria")).toBe(false);

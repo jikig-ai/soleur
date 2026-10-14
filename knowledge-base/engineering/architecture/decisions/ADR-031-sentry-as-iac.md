@@ -2,9 +2,9 @@
 title: "ADR-031 — Sentry alert and cron monitor configuration as IaC"
 status: accepted
 date: 2026-05-15
-plan: knowledge-base/project/plans/2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
-spec: knowledge-base/project/specs/feat-sentry-monitors-alerts-adapt/spec.md
-brainstorm: knowledge-base/project/brainstorms/2026-05-15-sentry-monitors-alerts-adaptation-brainstorm.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
+spec: knowledge-base/project/specs/archive/20261013-014038-feat-sentry-monitors-alerts-adapt/spec.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-sentry-monitors-alerts-adaptation-brainstorm.md
 issue: 3814
 supersedes: none
 related:
@@ -1116,7 +1116,7 @@ now has a monitor.**
   is the workflow's `detectorIds`, and `sentry_cron_monitor.id` is the detector id. The evidence
   (schema, provider source at the tag, the vendor's own example, and the getsentry paths for
   hop 2 and the throttle) is M1-M12 in
-  `knowledge-base/project/plans/2026-09-24-feat-route-cron-monitor-failures-to-email-alert-plan.md`.
+  `knowledge-base/project/plans/archive/20261013-051752-2026-09-24-feat-route-cron-monitor-failures-to-email-alert-plan.md`.
   Hop 2 was also confirmed on a live event (the #8630 measurement comment).
 - **Design.** One `sentry_alert.cron_monitor_failure`, in its own file `cron-monitor-alerts.tf`,
   binds every declared cron monitor inline. It fires on `first_seen_event`, `reappeared_event`
@@ -1143,6 +1143,12 @@ now has a monitor.**
   routing-graph passage). That equality described the pre-#8630 org, in which no cron detector
   routed. The healthy state is now `class_a_count == 0`; a non-zero count lists each unrouted slug
   (a pending two-PR route or live drift) and emits a `::warning::` on the apply run.
+  - **Amended 2026-10-08.** The healthy state is `class_a_count == 0` over *undeclared* unrouted
+    detectors. A detector whose monitor is a key of `local.cron_monitor_alert_unrouted` in the same
+    Terraform root is declared pending: listed in the report, not counted, not warned. A stale key
+    is inert. Rejected: warning for declared-pending too (permanent noise on a route that is
+    pending on purpose, which trains the reader to skip the line that also carries real drift).
+    The check proves consistency with the declared record, not integrity of the record.
 - **The monitor-binding gate becomes address-aware.** `scripts/sentry-monitor-binding-gate.sh`
   still requires every other `sentry_alert` to bind exactly the issue-stream detector. The
   cron-bound address set is a literal in the gate: `sentry_alert.cron_monitor_failure` must bind a

@@ -1,7 +1,7 @@
 /**
  * #5356 — shared checkpoint helper `checkpointInflightWorkForConversation` (RED).
  *
- * Plan: knowledge-base/project/plans/2026-06-15-feat-cc-soleur-go-checkpoint-parity-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-15-feat-cc-soleur-go-checkpoint-parity-plan.md
  *
  * Extracts the conversation-bound resolve + checkpoint + Sentry-mirror block
  * (currently inline in `agent-runner.ts`'s disconnect branch) into one helper

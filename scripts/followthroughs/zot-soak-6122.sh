@@ -187,8 +187,11 @@ set -uo pipefail
 # that word-expansion aborts with status 1, which this contract reads as FAIL ("criteria not
 # met") when the truth is "the probe could not run". An unprovisioned env must never be able
 # to report a verdict on an irreversible retirement. See followthrough-convention.md.
-if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
-  echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is unset or empty — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
+# Token-shape guard: a newline in the token would inject a curl config directive on the stdin
+# channel sentry_count uses, and an empty one would send the request headerless. Never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then
+  echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is unset, empty or malformed — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
   exit 2
 fi
 
@@ -269,7 +272,8 @@ sentry_count() {
   enc=$(printf '%s' "$q" | jq -sRr @uri)
   url="${API}/organizations/${ORG}/events/?query=${enc}&start=${START}&end=${END}&per_page=100&field=title&field=timestamp"
   resp=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
-    -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" -H "Accept: application/json" "$url" 2>/dev/null)
+    -H "Accept: application/json" --config - "$url" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN"))
   status=$(printf '%s' "$resp" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
   body=$(printf '%s' "$resp" | sed '$d')
   if [[ "$status" != "200" ]]; then echo "TRANSIENT"; return; fi

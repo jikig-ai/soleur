@@ -198,6 +198,8 @@ ok "reporter accounting is wired to the suite's own counters (fail-open guard)"
 [ "$passes" -eq "$((_acct_before + 1))" ] || { echo "[FAIL] reporter accounting is NOT wired — the exit gate cannot see behavioural failures" >&2; exit 1; }
 
 seed_count() { printf 'WORKSPACES_COUNT=%s\n' "$1" >> "$STATE/state"; }
+# One heartbeat push attempt = one recorded stdin-config `url = "` line (the URL never rides argv, #9757).
+hbcnt() { cnt '^hbcfg url = "https://uptime\.betterstack\.test/'; }
 
 # (k) THE SEAM ITSELF. Sourcing must define the functions and run NOTHING — if this regresses,
 # every behavioural case below silently tests a script that already ran to completion on import.
@@ -349,7 +351,7 @@ fi
 # serve never pushes a healthy beat.
 run_monitor_case "$PROBE" LUKS_MONITOR_ASSERT_READYZ=1 \
   MON_READYZ_CODE=503 MON_READYZ_BODY='{"ready":false,"checks":{"workspaces_writable":false,"workspaces_populated":true}}'
-if [ "$MON_RC" -eq 3 ] && monOut 'readyz_not_ready' && nhas 'curl .*HEARTBEAT|curl -gfsS'; then
+if [ "$MON_RC" -eq 3 ] && monOut 'readyz_not_ready' && nhas '^hbcfg |curl .*--config -'; then
   ok "readyz ready=false exits 3 and no heartbeat is pushed (assert ordered before the beat)"
 else
   no "not-ready arm wrong or a healthy beat was pushed anyway (rc=$MON_RC): ${MON_OUT:0:300}"
@@ -486,9 +488,10 @@ for pat in \
   "result=disarm_failed reason=rollback_engaged check=fire_stuck" \
   "result=not_armed reason=rollback_engaged prior=" \
   "result=already_disarmed reason=rollback_engaged" \
-  'result=cutover_aborted outcome=${outcome}${mode}${abnormal}${fields}${detail}' \
+  'result=cutover_aborted outcome=${outcome}${abnormal}${fields}${detail}' \
   'result=cutover_aborted outcome=${outcome} mode=rollback' \
-  'result=cutover_aborted outcome=${2} mode=rollback'; do
+  'result=cutover_aborted outcome=${2} mode=rollback' \
+  'result=cutover_aborted outcome=wipe_retired"'; do
   if grep -qF "_deadman_row \"$pat" <<<"$DM_SRC"; then
     ok "dead-man emits marker: $pat"
   else
@@ -497,8 +500,11 @@ for pat in \
 done
 # The closed OUTCOME vocabulary of cleanup() (#9098 B): each value is assigned somewhere, and the
 # abnormal-exit field exists. A renamed outcome would silently orphan the runbook's triage row.
+# (#6604 PR B: `wipe_aborted` left with the retired CONFIRM_WIPE mode; the tombstone's literal
+# `outcome=wipe_retired` row is pinned in the marker list above and behaviourally in
+# workspaces-luks-rollback-refusal.test.sh's Guard B1 rows.)
 for o in rolled_back rollback_stacked rollback_remount_failed post_canary_luks_retained post_canary_restart_failed \
-         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run wipe_aborted refused_plaintext_wiped \
+         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run refused_plaintext_wiped \
          refused_plaintext_record_gone; do
   if grep -qE "(^|[;[:space:]])outcome=${o}([;[:space:]]|\$)" <<<"$DM_SRC"; then
     ok "cleanup() outcome vocabulary carries outcome=$o"
@@ -566,10 +572,20 @@ fi
 # would both pass against a build that removed the push entirely.
 mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
 mon_run LUKS_MONITOR_ASSERT_READYZ=1
-if [ "$MON_RC" -eq 0 ] && has 'curl .*betterstack.test'; then
+if [ "$MON_RC" -eq 0 ] && [ "$(hbcnt)" -eq 1 ]; then
   ok "healthy probe PUSHES the heartbeat and exits 0 (positive control for the two fatal arms)"
 else
-  no "healthy probe did not push the heartbeat (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:200}"
+  no "healthy probe did not push the heartbeat exactly once (rc=$MON_RC, pushes=$(hbcnt)): ${MON_OUT:0:200}"
+fi
+# (t1a) #9757 — the URL is a path secret: it reaches curl ONLY on the stdin config, never on argv. The
+# recorded argv line carries the transport flags (-q ignores ~/.curlrc, -g globoff, --config -) and no
+# URL; the recorded stdin `url = "` line carries it. (Both halves: an argv-form push would red the
+# first, a push that dropped the config would red the stub itself, rc 97, and the push count above.)
+if [ "$(cnt '^curl .*betterstack')" -eq 0 ] && [ "$(cnt '^curl --disable --noproxy \* -gfsS --max-time 10 --config -$')" -eq 1 ] \
+   && [ "$(cnt '^hbcfg-MISSING')" -eq 0 ]; then
+  ok "heartbeat push: URL absent from curl argv, argv is exactly the --disable --noproxy * -gfsS --config - form, stdin config recorded"
+else
+  no "heartbeat argv/stdin contract broken (argv_with_url=$(cnt '^curl .*betterstack') argv_ok=$(cnt '^curl --disable --noproxy \* -gfsS --max-time 10 --config -$') missing=$(cnt '^hbcfg-MISSING'))"
 fi
 
 # (t1b) WIRE assert (#9245) — the argv log proves cryptsetup was ASKED; this proves the
@@ -597,10 +613,10 @@ fi
 # while turning one transient egress blip into a red daily probe.
 mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
 mon_run LUKS_MONITOR_ASSERT_READYZ=1 MON_HB_PUSH_RC=7
-if [ "$MON_RC" -eq 3 ] && monOut 'heartbeat_push_failed' && [ "$(cnt 'curl .*betterstack.test')" -eq 3 ]; then
-  ok "an exhausted heartbeat push is FATAL (rc=3 heartbeat_push_failed) and is retried 3x first"
+if [ "$MON_RC" -eq 3 ] && monOut 'heartbeat_push_failed' && [ "$(hbcnt)" -eq 3 ] && [ "$(cnt '^sleep 2$')" -eq 3 ]; then
+  ok "an exhausted heartbeat push is FATAL (rc=3 heartbeat_push_failed) and is retried 3x first (one config read per attempt)"
 else
-  no "failing heartbeat push wrong (rc=$MON_RC, attempts=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:300}"
+  no "failing heartbeat push wrong (rc=$MON_RC, attempts=$(hbcnt), sleeps=$(cnt '^sleep 2$')): ${MON_OUT:0:300}"
 fi
 
 # (t4) The absent-URL arm must NOT be classified as at-rest drift. It exits 3, not 1 — an alerting
@@ -615,10 +631,10 @@ fi
 # push is web-1's dead-probe switch; a second pusher would mask a dead web-1 probe.
 mon_prepare "$PROBE"
 mon_run LUKS_MONITOR_PROFILE=standby
-if [ "$MON_RC" -eq 0 ] && ! has 'curl .*betterstack.test' && monOut 'standby profile'; then
+if [ "$MON_RC" -eq 0 ] && [ "$(hbcnt)" -eq 0 ] && nhas '^curl .*--config -' && monOut 'standby profile'; then
   ok "standby profile: rc 0, NO heartbeat push, and the skip is logged"
 else
-  no "standby profile wrong (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:300}"
+  no "standby profile wrong (rc=$MON_RC, pushes=$(hbcnt)): ${MON_OUT:0:300}"
 fi
 mon_prepare "$PROBE"
 mon_run LUKS_MONITOR_PROFILE=standby MON_HB_URL=
@@ -631,12 +647,62 @@ fi
 for _prof in standbyx STANDBY ''; do
   mon_prepare "$PROBE"
   mon_run "LUKS_MONITOR_PROFILE=$_prof"
-  if [ "$MON_RC" -eq 0 ] && has 'curl .*betterstack.test'; then
+  if [ "$MON_RC" -eq 0 ] && [ "$(hbcnt)" -eq 1 ]; then
     ok "profile '${_prof:-<empty>}' keeps the heartbeat push (a mis-set profile fails toward the beat)"
   else
     no "profile '${_prof:-<empty>}' skipped the heartbeat (rc=$MON_RC)"
   fi
 done
+
+# (t5c) #9757 — the heartbeat URL SHAPE GUARD. The value is judged once, before the retry loop, with no
+# trimming. A hostile or malformed value makes ZERO curl calls and ZERO sleeps, prints the value-free
+# SOLEUR_CREDENTIAL_REFUSED marker exactly once, and ends as an exhausted push does (rc 3,
+# heartbeat_push_failed). A POSITIVE-pattern guard (`https://[...]*`, which constrains only the first
+# character) passes every row below that carries a quote, a backslash or a newline mid-value; the
+# marker count and the zero-request count are the discriminators. Every value is synthesized (.test).
+_hb_refuse_row() {  # <label> <value> <expected reason>
+  mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
+  mon_run LUKS_MONITOR_ASSERT_READYZ=1 "MON_HB_URL=$2"
+  _mk="$(grep -cF 'SOLEUR_CREDENTIAL_REFUSED script=luks-monitor reason='"$3"' var=WORKSPACES_LUKS_HEARTBEAT_URL' "$MARKER_LOG" || true)"
+  _mk_any="$(grep -cF SOLEUR_CREDENTIAL_REFUSED "$MARKER_LOG" || true)"
+  if [ "$MON_RC" -eq 3 ] && monOut 'heartbeat_push_failed' && [ "$_mk" -eq 1 ] && [ "$_mk_any" -eq 1 ] \
+     && [ "$(cnt '^curl .*--config -')" -eq 0 ] && [ "$(cnt '^hbcfg')" -eq 0 ] && [ "$(cnt '^sleep ')" -eq 0 ]; then
+    ok "heartbeat URL guard refuses $1: rc 3, one marker (reason=$3), zero curl calls, zero sleeps"
+  else
+    no "heartbeat URL guard wrong for $1 (rc=$MON_RC marker=$_mk any=$_mk_any curl=$(cnt '^curl .*--config -') sleeps=$(cnt '^sleep ')): ${MON_OUT:0:200}"
+  fi
+  # the value never reaches the marker log or the probe's own output
+  if [ "$(grep -cF 'betterstack.test' "$MARKER_LOG" || true)" -eq 0 ] && ! monOut 'betterstack.test'; then
+    ok "heartbeat URL guard ($1): the refused value is not echoed"
+  else
+    no "heartbeat URL guard ($1): the refused value reached the log or output"
+  fi
+}
+_HB_BASE='https://uptime.betterstack.test/api/v1/heartbeat/stub-token'
+_hb_refuse_row 'an embedded double quote' "${_HB_BASE}\"" token_shape
+_hb_refuse_row 'a quote then an injected directive (newline)' "${_HB_BASE}
+proxy = \"http://203.0.113.1:3128\"" control_char
+_hb_refuse_row 'a mid-value newline' "${_HB_BASE}
+x" control_char
+_hb_refuse_row 'a backslash' "${_HB_BASE}\\x" token_shape
+_hb_refuse_row 'an embedded space' "${_HB_BASE} x" token_shape
+_hb_refuse_row 'a tab' "${_HB_BASE}	x" control_char
+_hb_refuse_row 'a hash (comment)' "${_HB_BASE}#x" token_shape
+_hb_refuse_row 'userinfo (@)' "https://u@uptime.betterstack.test/x" token_shape
+_hb_refuse_row 'a scheme other than https' "http://uptime.betterstack.test/x" token_shape
+_hb_refuse_row 'no scheme' "uptime.betterstack.test/x" token_shape
+_hb_refuse_row 'a bare scheme (empty rest)' "https://" token_shape
+_hb_refuse_row 'a leading space' " ${_HB_BASE}" token_shape
+# must-PASS: a different well-formed token (every allowed punctuation class present) pushes once, and
+# its URL is the recorded stdin line, not an argv word.
+mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
+mon_run LUKS_MONITOR_ASSERT_READYZ=1 'MON_HB_URL=https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q'
+if [ "$MON_RC" -eq 0 ] && [ "$(cnt '^hbcfg url = "https://uptime\.betterstack\.test/api/v1/heartbeat/A\.b_c~d:9\?x=1&y=%2B\+z-Q"$')" -eq 1 ] \
+   && [ "$(cnt '^curl .*A\.b_c')" -eq 0 ]; then
+  ok "a well-formed heartbeat URL (different token, all allowed punctuation) pushes once, on stdin only"
+else
+  no "a well-formed heartbeat URL was refused or sent on argv (rc=$MON_RC pushes=$(hbcnt)): ${MON_OUT:0:200}"
+fi
 
 # (t6) #6931 — the OK row carries the kernel boot id (lower-cased, charset-bound), `unknown` when unreadable.
 mon_prepare "$PROBE"; assert_fixture_dir "$MON_DIR"; printf 'ABCDEF01-2345-6789-ABCD-EF0123456789\n' > "$MON_DIR/boot_id"
@@ -868,7 +934,7 @@ if have '^\[ "\$\{LUKS_MONITOR_TEST_SEAM:-0\}" = "1" \] && BOOT_ENV_FILE="\$\{LU
 else
   no "K11b the boot env file override is not gated on the test seam"
 fi
-if ! grep -vE '^[[:space:]]*#' "$PROBE" | grep -qE '(^|[[:space:];&|(])(source|\.)[[:space:]]+"?\$\{?BOOT_ENV_FILE'; then
+if ! grep -vE '^[[:space:]]*#' "$PROBE" | grep -cE >/dev/null '(^|[[:space:];&|(])(source|\.)[[:space:]]+"?\$\{?BOOT_ENV_FILE'; then
   ok "K11c the monitor never sources the boot env file"
 else
   no "K11c the monitor sources the boot env file"
@@ -899,10 +965,20 @@ kc_mut "HARMLESS: a trailing comment on the fallback line" 'KEY_CONFIG=prd_works
 # Anti-vacuity: an EXACT assertion count (deleting a block of cases, e.g. (t5)/(t6), must not leave the suite
 # green; adding one means moving the number). A host with a readable /etc/default/luks-monitor reports the
 # three emit-skip cases as one skip line, hence the adjustment.
-EXPECTED_PASSES=129
+EXPECTED_PASSES=155
 [ -r /etc/default/luks-monitor ] && EXPECTED_PASSES=$((EXPECTED_PASSES - 2))
 if [ "$passes" -ne "$EXPECTED_PASSES" ]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of cases was deleted or added without moving the number"; fi
 
 echo ""
 echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="
+# PASS FLOOR, pinned at the EXACT measured count (`-lt`, so only an exact pin makes a dropped row bite).
+# `fails -eq 0` alone is satisfied by a suite whose cases stopped dispatching or whose no() stopped
+# counting. It reports through printf + exit 1, never through no() (ADR-193), and its bound is the
+# literal on the line directly above the `if`, so guard-vacuity-floor can mutation-test it. Raise it
+# when adding rows.
+LUKS_MONITOR_MIN_PASS=89
+if [ "$passes" -lt "$LUKS_MONITOR_MIN_PASS" ]; then
+  printf '[FATAL] luks-monitor.test.sh: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$passes" "$LUKS_MONITOR_MIN_PASS" >&2
+  exit 1
+fi
 [ "$fails" -eq 0 ] || exit 1

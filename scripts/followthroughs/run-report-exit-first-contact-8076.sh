@@ -129,7 +129,7 @@ for label in scheduled-architecture-diagram-sync scheduled-roadmap-review; do
     # No report yet. Denied-and-did-not-comply looks the same from GitHub
     # alone; the deny rows (read above) say which it is.
     fn="cron-${label#scheduled-}"
-    if printf '%s\n' "$deny_all" | grep -qxF "$fn"; then
+    if grep -qxF "$fn" <<<"$deny_all"; then
       echo "FAIL: no ${label} issue since ${MERGE_FLOOR} AND a SOLEUR_CRON_FILING_DENY row for ${fn} in the window — denied and did not comply"
       fail=1; continue
     fi

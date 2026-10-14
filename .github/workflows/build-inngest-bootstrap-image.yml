@@ -814,7 +814,7 @@ jobs:
           rm -f /tmp/crane.tgz
 
           # Full org namespace (jikig-ai/…) to match the ci-deploy.sh pull path
-          # (zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") + zot-entry-gate.sh. A bare
+          # (zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") and the host probe. A bare
           # `soleur-inngest-bootstrap` is an orphan repo nothing reads (#6122 namespace fix).
           ZOT="127.0.0.1:5000/${IMAGE#ghcr.io/}"
           # Registry -> registry, so this reads the PUBLISHED GHCR manifest and needs no
@@ -926,10 +926,11 @@ jobs:
           # It asserts the manifest and blobs are in zot AND readable by the PUSH credential
           # over the CF-tunnel bridge from a GitHub runner. It does NOT prove the HOST can
           # pull: the host uses ZOT_PULL_* over the private NIC, and zot's accessControl can
-          # grant push-read without pull-read. There is currently no live probe of
-          # jikig-ai/soleur-inngest-bootstrap from the host side (web-probe.tf scopes to the
-          # web image; zot-entry-gate.sh is SUPERSEDED/UNWIRED), so a green run here is NOT
-          # sufficient evidence to write an @sha256 pin into cloud-init.yml.
+          # grant push-read without pull-read. The host probe (web-zot-consumer-probe.sh, repo
+          # list in web-probe.tf) reads this repo's tags/list with the pull credential on web-1 and
+          # HEADs the digest already pinned on main (the ZIREF line), not the digest this build
+          # produced; other hosts keep the bare list and never HEAD the pin. A green run here is
+          # therefore NOT sufficient evidence to write an @sha256 pin into cloud-init.yml.
           #
           # Retention is the second gap: cloud-init-registry.yml keeps only the 5
           # most-recently-pushed v* tags per repo with deleteUntagged + hourly gc, and its own
@@ -938,9 +939,10 @@ jobs:
           {
             echo ""
             echo "> **This does not license a pin.** Green here means zot serves the digest to"
-            echo "> the PUSH credential over the tunnel. Host-side pull (\`ZOT_PULL_*\`, private"
-            echo "> NIC) is unverified for this repo, and zot retention keeps only the 5 most"
-            echo "> recent \`v*\` tags. See the #7203 review findings."
+            echo "> the PUSH credential over the tunnel. The host probe (\`ZOT_PULL_*\`, private NIC)"
+            echo "> HEADs only the digest already pinned on main, from web-1, not the digest this build"
+            echo "> produced, and zot retention keeps only the 5 most recent \`v*\` tags. See the #7203"
+            echo "> review findings."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tear down cloudflared registry bridge
@@ -969,14 +971,12 @@ jobs:
         # A failed step's outputs ARE still readable, so mirror_status/mirror_reason resolve
         # normally here.
         #
-        # This workflow is AHEAD of reusable-release.yml here, NOT in parity with it — do not
-        # go looking to "port the correction back". Measured: `cancelled()` occurs ZERO times
-        # in that file. Its `Post to Slack (release)` carries a plain-expression `if:`, and
-        # its own comment states the consequence outright ("this Slack step does not run at
-        # all"). Its failure-path signal is a DIFFERENT step — `Email notification (release
-        # FAILED)`, `if: failure()`, reading mirror_reason — so a blocking mirror failure
-        # there yields no Slack. Tracked separately (#7256); fixing it inline here would
-        # collide with the in-flight #7242 work on that same file.
+        # This step keeps `!cancelled() &&` for the reason stated just above. reusable-release.yml
+        # now has a failure-gated sibling, `Post to Slack (release BLOCKED)`
+        # (`!cancelled() && failure()` plus a changed-and-(released-or-draft-exists) condition,
+        # #7256), so once a draft exists a blocking mirror failure reaches Slack in both
+        # workflows; its `Post to Slack (release)` step keeps a plain-expression `if:` and
+        # does not run on a blocked release, by design.
         if: ${{ !cancelled() && steps.zot_mirror.outputs.mirror_status == 'degraded' }}
         continue-on-error: true
         env:

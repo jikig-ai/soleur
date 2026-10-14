@@ -92,6 +92,11 @@ const REVIEWED_DEFAULT_EFFORT: Record<string, string> = {
   // 5→5.5 swap (bundle-verified 2026-09-29, claude-code 2.1.284). Execution
   // crons deliberately ride the CLI default (ADR-053 amendment #8603) — noted
   // as drift, not pinned back.
+  //
+  // Re-checked 2026-10-08 against claude-code 2.1.293 (the first release whose
+  // bundle knows claude-haiku-5-5): this guard passes with both rows still at
+  // `medium`. The Haiku id never reaches the cron CLI, so it has no row here;
+  // the id-set guard below is what covers it.
   [EXECUTION_MODEL]: "medium",
 };
 
@@ -553,7 +558,7 @@ describe.skipIf(!HAVE_BIN && !MUST_RUN)(
         `the installed ${label} bundle does not know: ${absent.join(", ")}. ` +
           "An unknown id silently halves max_tokens (#6934) — bump the CLI pin to a version whose bundle carries them.",
       ).toEqual([]);
-    });
+    }, 60_000);
 
     it("each CLI-reaching tier's default_effort matches the reviewed value, and the audit model supports effort", () => {
       const { defaults, auditSupportsEffort } = tierRows(BIN);
@@ -566,10 +571,10 @@ describe.skipIf(!HAVE_BIN && !MUST_RUN)(
         "a CLI bump moved a tier's default_effort — re-decide AUDIT_EFFORT for the audit tier, " +
           "accept the execution tier's new default, then update REVIEWED_DEFAULT_EFFORT (checklist step 2)",
       ).toEqual(REVIEWED_DEFAULT_EFFORT);
-    });
+    }, 60_000);
 
     it("real-bundle negative control: a made-up id is absent", () => {
       expect(bundleHasId(BIN, "claude-zz-not-a-model-0")).toBe(false);
-    });
+    }, 60_000);
   },
 );

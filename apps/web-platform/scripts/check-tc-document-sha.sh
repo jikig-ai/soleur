@@ -152,7 +152,7 @@ for doc in "${CANONICAL_DOCS[@]}"; do
   fi
 
   # Step 1: normalized body equivalence vs Eleventy mirror (opt-in per BODY_EQUIVALENCE_DOCS).
-  if printf '%s\n' "${BODY_EQUIVALENCE_DOCS[@]}" | grep -Fxq "$doc"; then
+  if grep -Fxq "$doc" < <(printf '%s\n' "${BODY_EQUIVALENCE_DOCS[@]}"); then
     canon_body_sha=$(normalize_canonical "$canonical_path" | collapse | sha256sum | awk '{print $1}')
     mirror_body_sha=$(normalize_plugin "$mirror_path" | collapse | sha256sum | awk '{print $1}')
 
@@ -207,8 +207,8 @@ for doc in "${CANONICAL_DOCS[@]}"; do
       bypass_base="${MERGE_GROUP_BASE_SHA}"
     fi
     if [ -n "$bypass_base" ]; then
-      if git diff --no-color --no-ext-diff --unified=0 "${bypass_base}...HEAD" -- "$LITERAL_FILE_TC" \
-           | grep -qE '^[+-]export const TC_VERSION'; then
+      if grep -qE '^[+-]export const TC_VERSION' \
+           < <(git diff --no-color --no-ext-diff --unified=0 "${bypass_base}...HEAD" -- "$LITERAL_FILE_TC"); then
         echo "T&C document SHA changed AND TC_VERSION was bumped — accepted." >&2
         continue
       fi

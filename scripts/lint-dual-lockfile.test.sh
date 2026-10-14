@@ -115,7 +115,7 @@ expect_pass "$CLEAN" "CONTROL clean repo (4 package-lock dirs, no bun.lock)"
 # H3 must-PASS: the clean state reports a NON-ZERO scanned count, so it is distinguishable
 # from a broken enumeration.
 asserted=$((asserted + 1))
-if guard_out "$CLEAN" | grep -qE '4 package-lock\.json director'; then
+if guard_out "$CLEAN" | grep -cE >/dev/null '4 package-lock\.json director'; then
   pass "H3 clean tree reports a non-zero scanned count"
 else
   fail "H3 clean tree did not report its scanned count"

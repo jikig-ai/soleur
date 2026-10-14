@@ -64,6 +64,9 @@ cat > "$STUB_DIR/curl" <<'STUB'
 # them bare. It deliberately does NOT apply `${VAR:-default}` fallbacks: `:-`
 # also fires on an EMPTY value, which would silently substitute a well-formed
 # body for the empty-body fixture and make that test vacuous.
+# The scan pipes `Authorization: Bearer <PAT>` into `curl --header @-`, so this stub reads its stdin FIRST, exactly when argv carries that flag and
+# stdin is not a terminal: a stub that exits unread makes the scan's printf take SIGPIPE under its pipefail (#9217). The bytes are kept for the wire assert.
+case " $* " in *" --header @- "*) [ -t 0 ] || timeout 2 cat > "${0%/*}/header.stdin" ;; esac
 args="$*"
 data=""
 prev=""
@@ -118,7 +121,7 @@ expect_fail_mode() {
     fail "$label" "expected non-zero exit, got 0 — THIS IS THE FAIL-OPEN CLASS. out: $(printf '%s' "$OUT" | tr '\n' ' ' | head -c 200)"
     return
   fi
-  if ! printf '%s' "$OUT" | grep -qF "fail_mode=$want"; then
+  if ! printf '%s' "$OUT" | grep -cF >/dev/null "fail_mode=$want"; then
     # Quote both operands with %q: a comparison that fails while printing two
     # identical-looking strings is hiding the difference in whitespace, a CR,
     # or an unflushed partial write. %q makes any such artifact visible instead
@@ -210,9 +213,19 @@ export STUB_CAT_BODY='[{"wrong_column":"public.x"}]'
 run_scan
 expect_fail_mode "catalog rows without a string identity fail loud" catalog_malformed
 
+rm -f "$STUB_DIR/header.stdin"
 reset_stub
 run_scan
 expect_clean "genuine clean scan passes"
+# Wire assert (#9217): the PAT reached the curl stub on stdin, in the form the scan pipes. ${KNOB:-default}: an exported-empty knob must not
+# compare "" with "".
+_hdr_want="${ADVSCAN_WANT_HEADER_LINE:-Authorization: Bearer sbp_synthetic0000000000000000000000000000}"
+_hdr_got="$(cat "$STUB_DIR/header.stdin" 2>/dev/null)"
+if [[ "$_hdr_got" == "$_hdr_want" ]]; then
+  pass "the curl stub received the Authorization header on stdin (--header @- drained)"
+else
+  fail "curl stub stdin" "got '$_hdr_got', want '$_hdr_want'"
+fi
 
 echo "== AC7b: decision quadrants (fail-open in the DECISION logic) =="
 
@@ -240,7 +253,7 @@ advisor_fires
 export STUB_OBJ_BODY='[{"relrowsecurity":true}]'
 run_scan
 expect_clean "advisor fires + catalog clean + named table now RLS-on -> WARN, pass (benign self-heal)"
-if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep -qF 'stale_advisor'; then
+if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep -cF >/dev/null 'stale_advisor'; then
   pass "  ...and the WARN is actually emitted as stale_advisor"
 else
   fail "stale_advisor WARN emitted" "expected a stale_advisor warning in output"
@@ -309,7 +322,7 @@ expect_fail_mode "advisor DEAD + catalog DIRTY -> still pages as a VIOLATION (cl
 
 # And the violation detail must name the table — an operator paged at p1 for a
 # data exposure cannot act on a bare count.
-if printf '%s' "$OUT" | grep -qF 'public.leaky_a'; then
+if printf '%s' "$OUT" | grep -cF >/dev/null 'public.leaky_a'; then
   pass "  ...and the violation names the offending table (actionable without the dashboard)"
 else
   fail "violation names the table" "expected 'public.leaky_a' in the output; a bare count sends the operator to the Supabase dashboard"

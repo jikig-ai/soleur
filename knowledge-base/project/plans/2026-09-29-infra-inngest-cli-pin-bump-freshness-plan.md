@@ -247,7 +247,7 @@ items were probed against the actual binaries, not inferred:
   `inngest-inventory.sh`, `inngest-server-flip-guard.sh`,
   `inngest-wiped-volume-verify.sh`, `cloud-init-inngest.yml`, `ci-deploy.sh`, and
   `inngest.test.sh`.
-- Precedent of record: `knowledge-base/project/plans/2026-08-04-chore-zot-image-pin-bump-and-freshness-cadence-plan.md`
+- Precedent of record: `knowledge-base/project/plans/archive/20261013-051752-2026-08-04-chore-zot-image-pin-bump-and-freshness-cadence-plan.md`
   (the same change shape — pin bump + freshness owner — already adjudicated through
   review) and its artifacts: `zot-image.provenance.md`,
   `zot-image-staleness.test.sh`, `zot-image-staleness-mutation.test.sh`,
@@ -437,7 +437,7 @@ constraint only forbids production mutations):
 7. New-in-v1.4x gRPC listeners (`--connect-*-grpc-*`): confirm loopback binding /
    firewall posture unchanged.
 8. Record everything in
-   `knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md`
+   `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md`
    and cite the re-verified-vs-corrected verdict per claim in the sidecar.
 
 ## Technical Considerations
@@ -799,7 +799,7 @@ issue whose body names `apps/web-platform/infra/inngest.tf`,
 | `apps/web-platform/infra/inngest-cli-staleness.test.sh` | The offline enforcement gate (rc 0/10/2 contract; anti-vacuity floor + positive control; arch-keyed coherence; age gate). Cloned shape from `zot-image-staleness.test.sh`. Auto-registered by filesystem glob. |
 | `apps/web-platform/infra/inngest-cli-staleness-mutation.test.sh` | The mutation battery driving Guard 1's matrix. |
 | `apps/web-platform/infra/inngest-cli-pin-probe.sh` | The sub-second discoverability probe: reads `inngest.tf`'s version local + the sidecar's capture date offline and prints `PINNED=<v>` `CAPTURE_DATE=<d>` `VERDICT=fresh|stale|unverifiable` — deliberately NOT the full suite (Check 10's 15s cap rejects suite-shaped commands; the probe is the smallest command that emits the liveness signal). |
-| `knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md` | The re-spike record vs the pinned new version (mirrors `phase0-empirical-spike.md`). |
+| `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md` | The re-spike record vs the pinned new version (mirrors `phase0-empirical-spike.md`). |
 
 ## Files to Edit
 
@@ -1061,7 +1061,7 @@ Layers, cheapest first:
   `--dry-run`), `.github/workflows/build-inngest-bootstrap-image.yml`
   (`bump-cloud-init-pin` job).
 - Plan precedent:
-  `knowledge-base/project/plans/2026-08-04-chore-zot-image-pin-bump-and-freshness-cadence-plan.md`.
+  `knowledge-base/project/plans/archive/20261013-051752-2026-08-04-chore-zot-image-pin-bump-and-freshness-cadence-plan.md`.
 - Spike methodology: `knowledge-base/project/specs/feat-inngest-dedicated-host/phase0-empirical-spike.md`.
 - Gate/sidecar exemplars: `apps/web-platform/infra/zot-image.provenance.md`,
   `zot-image-staleness.test.sh`, `zot-image-staleness-mutation.test.sh`,

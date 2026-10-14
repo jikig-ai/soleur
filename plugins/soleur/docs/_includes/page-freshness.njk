@@ -10,12 +10,18 @@
                          variant (#3169 wants Technical register on Vision/Agents);
                          anything else (or unset) → the general register. Both variants
                          are built from live stats.* so the proof points never go stale.
+     - summaryCounts   : optional "computed" to render the live stats.* agent and skill
+                         counts instead of the soft floor. Opt-in, homepage only: pricing,
+                         about, vision, agents and skills stay on the floor their drift guards
+                         pin. Do not flip the default.
      - pageSummary     : optional literal override (plain text, NO {{ }} template syntax —
                          frontmatter strings are not re-rendered). Wins over the variants.
 
    Reads site.author.name only (present in the fixture stub) for the byline. #}
 {% if pageSummary %}
   {% set _summary = pageSummary %}
+{% elif summaryCounts == "computed" %}
+  {% set _summary = "Soleur is the Company-as-a-Service platform: " + stats.agents + " AI agents and " + stats.skills + " skills across " + stats.departments + " departments — engineering, marketing, legal, finance, operations, product, sales, and support — source-available (BSL 1.1), built on Claude Code and the Model Context Protocol." %}
 {% elif summaryRegister == "technical" %}
   {% set _summary = "Soleur is a model-agnostic Company-as-a-Service orchestration engine: 60+ specialist AI agents and 60+ workflow skills across " + stats.departments + " departments, coordinated through one shared compounding knowledge base. Source-available (BSL 1.1), built on Claude Code and the Model Context Protocol (MCP)." %}
 {% else %}

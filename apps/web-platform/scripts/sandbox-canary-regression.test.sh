@@ -184,7 +184,7 @@ else
     committed_out="$(run_under "$COMMITTED_PROFILE")"; committed_rc=$?
     pre_out="$(run_under "$PRE5874_PROFILE")"; pre_rc=$?
     pre_eperm=no
-    if [[ "$pre_rc" -ne 0 ]] && printf '%s' "$pre_out" | grep -qi 'operation not permitted'; then
+    if [[ "$pre_rc" -ne 0 ]] && printf '%s' "$pre_out" | grep -ci >/dev/null 'operation not permitted'; then
       pre_eperm=yes
     fi
 
@@ -214,7 +214,7 @@ for f in "$MJS" "$CI_DEPLOY" "$REPLAY_FIXTURE"; do
 done
 
 # C1 — the replay path emits the version under the camelCase key `sdkVersion`.
-if grep -qE 'emitVerdict\(\{ \.\.\.verdict, sdkVersion:' "$MJS"; then
+if grep -qE 'emitVerdict\(\{ \.\.\.(verdict|final), sdkVersion:' "$MJS"; then
   pass "C1 mjs runReplay emits key sdkVersion"
 else
   fail "C1 mjs runReplay no longer emits 'sdkVersion' in its verdict — update the ci-deploy.sh reader key in lockstep"
@@ -239,6 +239,48 @@ else
   else
     skip "C3 fixture is uncaptured — sdkVersion not required yet"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# D. #8752 — the replay MUST run the three derived hardening probes when the
+# main replay passes (structural probe-presence assertions; the classifiers are
+# unit-tested in test/sandbox-canary.test.ts).
+# ---------------------------------------------------------------------------
+echo "D: #8752 hardening-probe wiring in --replay"
+# Anchor on the CALL SHAPE (definition sites would survive a dead call).
+if grep -qE 'verdict\.verdict === "pass"' "$MJS" && grep -q 'runHardeningProbes(replayFixture' "$MJS"; then
+  pass "D1 runReplay gates probes on main verdict pass"
+else
+  fail "D1 runReplay does not call runHardeningProbes on pass — probes never run"
+fi
+for reason in userns_filter_bypass userns_filter_overbroad fd_hygiene_bypass args_fd_closed bwrap_shim_refused proc_mask_defeated; do
+  if grep -q "$reason" "$MJS"; then
+    pass "D2 mjs emits verdict reason $reason"
+  else
+    fail "D2 mjs missing verdict reason $reason"
+  fi
+done
+# The fd census is dup-test based (procfs-free by construction); proc_mask
+# asserts no /proc/<pid> entries at all (any real procfs = defeated).
+if grep -qF '(: <&$fd)' "$MJS" && grep -q 'unshare", "-U"' "$MJS" && grep -qF '/proc/[0-9]' "$MJS"; then
+  pass "D3 probe payloads present (fd dup-test census + unshare -U + proc_mask)"
+else
+  fail "D3 probe payloads missing from sandbox-canary.mjs"
+fi
+
+# D4 — the shim's fd-option preserve-set and the canary's census vocabulary
+# MUST name the same options (divergence direction matters both ways: a shim-
+# only entry widens the census bound past reality; a canary-only entry lets a
+# preserved fd look like a leak). Extract both lists mechanically and diff.
+SHIM_FILE="$SCRIPT_DIR/../infra/bwrap-shim/bwrap"
+# The fd-valued case arms are the opt_kind rows assigning OPT_KIND=fd1/fd2;
+# cut at `)` so the trailing action never pollutes the token stream.
+shim_set=$(grep -E 'OPT_KIND=fd[12]' "$SHIM_FILE" | sed 's/).*//' | tr '| ' '\n' | grep '^--' | sort -u)
+mjs_set=$(sed -n '/BWRAP_FD_VALUED_OPTS = new Set/,/\]/p' "$MJS" | grep -oE '"--[a-z0-9-]+"' | tr -d '"' | sort -u)
+if [ -n "$shim_set" ] && [ "$shim_set" = "$mjs_set" ]; then
+  pass "D4 shim preserve-set == canary BWRAP_FD_VALUED_OPTS ($(echo "$mjs_set" | wc -l) opts)"
+else
+  fail "D4 fd-option vocab drift: shim={$(echo "$shim_set" | tr '\n' ' ')} canary={$(echo "$mjs_set" | tr '\n' ' ')}"
 fi
 
 echo ""

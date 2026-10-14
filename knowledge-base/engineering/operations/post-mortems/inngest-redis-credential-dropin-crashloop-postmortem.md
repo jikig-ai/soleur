@@ -152,7 +152,7 @@ freshness owner for the vendored pin (#7308).
 
 - Incident issue: #7286
 - PR-1: #7301
-- Plan: `knowledge-base/project/plans/2026-08-06-fix-inngest-redis-crash-loop-dark-error-channel-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-08-06-fix-inngest-redis-crash-loop-dark-error-channel-plan.md`
 - Learning: `knowledge-base/project/learnings/2026-08-06-my-class-closing-invariant-closed-a-subset-and-my-battery-had-a-red-control.md`
 - Prior sweep that established the invariant: #7095
 - Suspected trigger: #7241

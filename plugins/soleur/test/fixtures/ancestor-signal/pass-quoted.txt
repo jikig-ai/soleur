@@ -1,0 +1,7 @@
+# fixture data, never executed: signal verbs only inside quoted spans; no finding
+echo 'kill -TERM "$PPID"'
+printf "%s\n" "pkill -f x"
+grep -c 'kill -9 0' "$f"
+run_case 'a case' 'pkill -f y' deny
+echo 'done; kill -TERM "$PPID"'
+printf "%s\n" "x && pkill -g 1"

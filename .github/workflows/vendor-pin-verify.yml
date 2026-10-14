@@ -86,7 +86,7 @@ jobs:
             # verify-upstream-blobs green on the byte-identical tree. Every
             # ambiguity fails open to vendor=true.
             if [[ "$EVENT_NAME" == "push" ]] && \
-               bash scripts/main-push-duplicate-skip.sh vendor-pin-verify.yml "${MERGE_SHA}" verify-upstream-blobs | grep -qx 'duplicate=true'; then
+               bash scripts/main-push-duplicate-skip.sh vendor-pin-verify.yml "${MERGE_SHA}" verify-upstream-blobs | grep -cx 'duplicate=true' >/dev/null; then
               echo "::notice::push run is a proven duplicate of the merged PR's green run; suite skipped"
               printf 'vendor=false\n' >> "$GITHUB_OUTPUT"
             else

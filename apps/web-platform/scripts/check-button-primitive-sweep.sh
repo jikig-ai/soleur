@@ -29,10 +29,12 @@ cd "$APP_ROOT"
 
 PRIMITIVE_PATH="components/ui/button.tsx"
 
-# may only decrease; regenerate via the grep below. Post-sweep corpus is 51
-# exempt-marked native sites — the baseline must equal the SHIPPED count, not
-# the pre-migration corpus, or the ratchet can never fire.
-NATIVE_BUTTON_BASELINE="${BUTTON_SWEEP_BASELINE:-51}"
+# may only decrease; regenerate via the grep below. Post-sweep corpus is 52
+# exempt-marked native sites (51 + the #9534 web-egress role=switch, whose
+# track/thumb composite cannot reduce to Button geometry) — the baseline must
+# equal the SHIPPED count, not the pre-migration corpus, or the ratchet can
+# never fire.
+NATIVE_BUTTON_BASELINE="${BUTTON_SWEEP_BASELINE:-52}"
 
 # Space-separated git pathspecs relative to apps/web-platform; overridable
 # for scratch-fixture verification (BUTTON_SWEEP_PATHS="sweep-fixture/*.tsx").

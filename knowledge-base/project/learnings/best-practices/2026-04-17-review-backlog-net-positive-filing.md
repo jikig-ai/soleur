@@ -90,8 +90,8 @@ Errors encountered during implementation that informed the final shape:
 
 ## References
 
-- **Parent brainstorm:** `knowledge-base/project/brainstorms/2026-04-15-review-workflow-hardening-brainstorm.md`
-- **Plan:** `knowledge-base/project/plans/2026-04-17-feat-review-backlog-workflow-improvements-plan.md`
+- **Parent brainstorm:** `knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-15-review-workflow-hardening-brainstorm.md`
+- **Plan:** `knowledge-base/project/plans/archive/20261013-003106-2026-04-17-feat-review-backlog-workflow-improvements-plan.md`
 - **AGENTS.md rule preserved:** `rf-review-finding-default-fix-inline`
 - **Related learning:** `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` — justifies the second-reviewer confirmation gate.
 - **Related rule:** `cq-rule-ids-are-immutable` — why the fix is execution-level, not a new AGENTS.md rule.

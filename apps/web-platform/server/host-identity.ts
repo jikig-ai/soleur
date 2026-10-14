@@ -2,7 +2,7 @@
 // ADR-068 §2). The lease's host_id MUST be stable across container
 // recreate-deploys (docker stop + docker run) on the SAME Hetzner host, so a
 // redeploy re-acquires its own lease immediately via migration-116's acquire
-// OR-carve-out (host_id = excluded.host_id) — never the 120s lockout. It is
+// OR-carve-out (host_id = excluded.host_id) — never the 240s lockout. It is
 // sourced from the Hetzner server id injected at deploy into SOLEUR_HOST_ID
 // (ci-deploy.sh), NEVER the per-container hostname (a fresh random id every
 // `docker run` — the forbidden per-container value, Kieran P1-2), and NEVER an
@@ -23,7 +23,7 @@ const UUID_RE =
  * FAIL-LOUD in production when unset: silently falling back to the container
  * hostname would give every `docker run` a fresh id, so a recreate-deploy would
  * never hit the same-host carve-out and would self-lock out of its own worktree
- * for up to 120s (the exact "commit silently failing to persist" User-Brand
+ * for up to 240s (the exact "commit silently failing to persist" User-Brand
  * failure). In non-prod (dev/test) returns a stable sentinel so local runs don't
  * need the env — still NEVER a per-container value.
  */
@@ -35,7 +35,7 @@ export function resolveHostId(): string {
       "SOLEUR_HOST_ID is unset in production — the worktree write-lease requires " +
         "a host-stable infra id (the Hetzner server id injected at deploy). " +
         "Refusing to fall back to a per-container hostname: that would self-lock " +
-        "each recreate-deploy out of its own worktree for up to 120s.",
+        "each recreate-deploy out of its own worktree for up to 240s.",
     );
   }
   return "dev-local"; // stable non-prod sentinel; never a per-container value

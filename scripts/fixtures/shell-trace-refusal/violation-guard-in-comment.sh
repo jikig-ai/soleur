@@ -13,5 +13,5 @@ case "$-" in
     ;;
 esac
 
-curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" https://example.invalid/ || true
-curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${BETTERSTACK_API_TOKEN}" https://example.invalid/ || true
+curl --disable --noproxy '*' -sS --config - https://example.invalid/ < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") || true
+curl --disable --noproxy '*' -sS --config - https://example.invalid/ < <(printf 'header = "Authorization: Bearer %s"\n' "$BETTERSTACK_API_TOKEN") || true

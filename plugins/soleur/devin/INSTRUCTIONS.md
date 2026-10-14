@@ -251,7 +251,7 @@ claim that an independent review occurred when it did not.
 
 Review and trust the plugin hooks through `/hooks` before relying on them.
 Installation does not grant hook trust. Measured hook semantics under Devin
-(envelope capture: `knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md`):
+(envelope capture: `knowledge-base/project/specs/archive/20261013-051752-feat-settings-matcher-devin-audit/envelope-capture.md`):
 
 - **Wire names are lowercase**: `exec`, `write`, `edit`, `ask_user_question`,
   `run_subagent`, `skill`. Claude-style matchers (`Bash`, `Write|Edit`, …)
@@ -303,7 +303,7 @@ Devin's model pricing in harness-specific billing disclosures. Soleur disclaims
 warranty for runtime cost.
 
 For asynchronous CI and merge work, own the wait, report changes, resolve
-`BEHIND`, and finish the prescribed postmerge checks before claiming success.
+`BEHIND` (not when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`): GitHub then enqueues it), and finish the prescribed postmerge checks before claiming success.
 Arm the watch as a background `run_subagent` exit-coded loop (see **Polling /
 watches** below) rather than burning foreground turns on `sleep`-and-poll
 cycles.
@@ -313,7 +313,7 @@ and retain incomplete status instead of silently skipping it.
 ## Devin-specific considerations
 
 - **Skill invocation**: Devin exposes Soleur skills as slash commands (`/soleur:<skill>`). The `/soleur:go`, `/soleur:sync`, and `/soleur:help` commands are also slash commands.
-- **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool. `subagent_explore` has NO exec/git tool — review-panel agents that must run `git diff` or execute test suites spawn as `subagent_general` with an explicit report-only contract (no worktree writes; scratch in `mktemp -d`), or they reconstruct diffs by file comparison at degraded fidelity (#8471).
+- **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool. `subagent_explore` has NO exec/git tool — review-panel agents that must run `git diff` or execute test suites spawn as `subagent_general` with an explicit report-only contract (no worktree writes; scratch in `mktemp -d -t soleur-run.$$.XXXXXXXX`), or they reconstruct diffs by file comparison at degraded fidelity (#8471).
 - **Polling / watches**: Devin has no Monitor tool (measured absent — envelope-capture §7). `get_output` only *reads* a backgrounded shell; nothing wakes the agent on output. For wait-until-actionable watches — CI settling, a PR reaching merged/`BEHIND`/`DIRTY`, a check failure — spawn a background `run_subagent` running an exit-coded poll loop: one distinct exit code per actionable transition, observe-and-report only. Give it bounded exits too — a deadline exit and a probe-error exit — because an unbounded loop can never report. The subagent-completion notification is the only wake primitive, so the loop must exit to report; mutations (`gh pr update-branch`, merge) stay with the parent in the foreground where they are visible and approvable.
 
   **How much of this is measured, stated exactly.** Measured 2026-09-23 on Devin CLI 3000.11.1, authenticated, `devin -p` in a scratch repo: `run_subagent` DOES arm a background subagent and the parent continues ("Subagent `<id>` is running in the background"). What is NOT yet measured end to end is the parent being WOKEN by that subagent's completion — the probe's foreground step hit headless mode's confirmation gate, and finishing it needs `--permission-mode dangerous`, which auto-approves every tool on the operator's account and is theirs to authorise. The claim this replaced — that `get_output` cannot wait on an event — is fully measured (§Polling, envelope-capture §7) and is not in doubt. **Consequence for a session:** set a deadline when you arm the watch. If no completion notification has arrived by it, do not keep waiting — fall back to foreground `exec` `gh` probes on your own cadence and disclose in the deliverable that the wait ran foreground. Never report a merge or deploy you did not observe.

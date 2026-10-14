@@ -46,8 +46,11 @@ case "$-" in
     ;;
 esac
 
-if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
-  echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is unset or empty — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
+# Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+# curl config directive on the stdin channel below). Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then
+  echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN unusable (unset, empty or malformed) — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
   exit 2
 fi
 
@@ -99,8 +102,10 @@ sentry_count() {
   q="$1"
   enc=$(printf '%s' "$q" | jq -sRr @uri)
   url="${API}/organizations/${ORG}/events/?query=${enc}&start=${START}&end=${END}&per_page=100&field=title&field=timestamp"
+  # The bearer rides curl's stdin config channel, never its argument list.
   resp=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
-    -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" -H "Accept: application/json" "$url" 2>/dev/null)
+    -H "Accept: application/json" --config - "$url" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN"))
   status=$(printf '%s' "$resp" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
   body=$(printf '%s' "$resp" | sed '$d')
   if [[ "$status" != "200" ]]; then echo "TRANSIENT"; return; fi

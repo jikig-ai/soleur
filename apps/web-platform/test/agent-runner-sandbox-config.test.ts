@@ -77,7 +77,7 @@ vi.mock("../server/tool-path-checker", () => ({
   isFileTool: vi.fn(() => false),
   isSafeTool: vi.fn(() => false),
 }));
-vi.mock("../server/agent-env", () => ({ buildAgentEnv: vi.fn(() => ({})) }));
+vi.mock("../server/agent-env", () => ({ buildAgentEnv: vi.fn(() => ({})), ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]) }));
 vi.mock("../server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => vi.fn()),
 }));
@@ -149,7 +149,7 @@ describe("agent-runner sandbox hardening (#2634)", () => {
     // toBeDefined check above.
     expect(options.sandbox.enabled).toBe(true);
     expect(options.sandbox.allowUnsandboxedCommands).toBe(false);
-    expect(options.sandbox.autoAllowBashIfSandboxed).toBe(true);
+    expect(options.sandbox.autoAllowBashIfSandboxed).toBe(false);
     expect(options.sandbox.network.allowManagedDomainsOnly).toBe(true);
   });
 

@@ -1,0 +1,13 @@
+# Rule E must fire ONCE. The offending step is an INLINE double-quoted `run:` whose header
+# quotes are YAML-escaped (\"): the escapes are gone only after YAML decoding.
+name: fixture-inline-escaped
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: compliant first
+        run: |
+          curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+      - name: offending inline double-quoted escaped
+        run: "curl --disable --noproxy '*' -sS -H \"Authorization: Bearer ${FIXTURE_TOKEN}\" \"$SINK_URL\""

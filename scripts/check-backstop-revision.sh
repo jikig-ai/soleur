@@ -11,7 +11,7 @@
 # so the fix merges on main while stale-checkout sessions keep running the old
 # protection. This gate makes a missing bump a required-check failure.
 #
-# Contract (knowledge-base/project/plans/2026-09-29-fix-backstop-hook-version-resolution-plan.md,
+# Contract (knowledge-base/project/plans/archive/20261013-051752-2026-09-29-fix-backstop-hook-version-resolution-plan.md,
 # Guard 1): when the merge-base diff touches the hook, the BACKSTOP_REVISION
 # value must STRICTLY INCREASE vs merge-base. A re-set to the same value fails
 # and so does a DECREASE — the resolver orders installed copies by `>`, so a
@@ -92,8 +92,7 @@ git diff "${mb}...HEAD" -- "$HOOK_PATH" > "$DIFF_TMP"
 # line cannot satisfy this gate while failing the resolver. Comparing VALUES,
 # not line presence, is what makes a same-value re-set RED.
 rev_at() { # <rev>:<path> -> first BACKSTOP_REVISION value; empty when absent
-  git show "$1" 2>/dev/null \
-    | grep -oEm1 '^[[:space:]]*(readonly[[:space:]]+)?BACKSTOP_REVISION=[0-9]+' \
+  grep -oEm1 '^[[:space:]]*(readonly[[:space:]]+)?BACKSTOP_REVISION=[0-9]+' < <(git show "$1" 2>/dev/null) \
     | cut -d= -f2 || true
 }
 old_rev=$(rev_at "${mb}:${HOOK_PATH}")

@@ -98,14 +98,19 @@ setup_mock_curl() {
 body=""
 prev=""
 hdr=""
+cfg=0
 for a in "\$@"; do
   case "\$prev" in
+    --config) [[ "\$a" == - ]] && cfg=1 ;;
     --data-binary|-d) body="\$a" ;;
     -o) : > "\$a" 2>/dev/null || true ;;
     -D) hdr="\$a" ;;
   esac
   prev="\$a"
 done
+# The Bearer travels on the stdin config channel (--config -), never argv: consume + record it,
+# otherwise the process-substitution writer is never read.
+if [[ "\$cfg" == 1 ]]; then cat >> "${MOCKBIN}/curl_stdin"; fi
 { echo "ARGS: \$*"; echo "BODY: \$body"; } >> "$REQ_LOG"
 if [[ -n "\$hdr" ]]; then
   { printf 'HTTP/1.1 %s\r\n' "${http_code}"
@@ -190,7 +195,11 @@ test_happy_rearm() {
   assert_contains "body carries actor:platform (route 400s without it)" "$bodies" '"actor":"platform"'
   assert_contains "body carries the action object" "$bodies" '"named-check"'
   local args; args=$(grep '^ARGS:' "$REQ_LOG" | head -1)
-  assert_contains "Authorization Bearer header sent" "$args" "Authorization: Bearer test-secret"
+  assert_eq "Bearer secret is NOT on curl's argv" "0" "$(grep -cF 'test-secret' <<<"$args" || true)"
+  assert_contains "Bearer travels on the stdin config channel" "$args" "--config -"
+  local cfg_in; cfg_in=$(cat "${MOCKBIN}/curl_stdin")
+  assert_contains "Authorization Bearer header sent on stdin" "$cfg_in" 'header = "Authorization: Bearer test-secret"'
+  assert_eq "each POST gets its own stdin config (2 records -> 2 header lines)" "2" "$(grep -cF 'header = "Authorization: Bearer test-secret"' "${MOCKBIN}/curl_stdin" || true)"
   teardown_mock_curl
 }
 
@@ -236,6 +245,26 @@ test_missing_secret_fails_closed() {
     INNGEST_MANUAL_TRIGGER_SECRET="" INNGEST_REARM_SKIP_DOPPLER=1 bash "$TARGET" >/dev/null 2>&1 || rc=$?
   assert_eq "fails closed when secret unavailable" "1" "$rc"
   teardown_mock_curl
+}
+
+# --- Test 5b: a secret outside the token charset is refused before any curl (stdin-config injection) ---
+test_unusable_shape_secret_refused() {
+  local label val
+  for label in newline quote space; do
+    case "$label" in
+      newline) val=$'synthetic-fixture-token-0001\nheader = "X-Injected: 1"' ;;
+      quote) val='synthetic-fixture-token"0001' ;;
+      space) val='synthetic fixture-token-0001' ;;
+    esac
+    setup_mock_curl 202
+    local out rc=0
+    out=$(printf '%s' "$REC" | PATH="${MOCKBIN}:$PATH" SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/x" \
+      INNGEST_REARM_STDIN=1 INNGEST_MANUAL_TRIGGER_SECRET="$val" bash "$TARGET" 2>&1) || rc=$?
+    assert_eq "unusable-shape secret ($label): exits 1 like an unavailable secret" "1" "$rc"
+    assert_contains "unusable-shape secret ($label): refusal is reported" "$out" "unusable shape"
+    assert_eq "unusable-shape secret ($label): curl never invoked" "0" "$(grep -c '^ARGS:' "$REQ_LOG" 2>/dev/null || true)"
+    teardown_mock_curl
+  done
 }
 
 # --- Test 6: webhook path (no stdin) self-enumerates via INNGEST_ENUMERATE_CMD ---
@@ -801,6 +830,7 @@ test_503_aborts_loud
 test_other_failure
 test_empty_noop
 test_missing_secret_fails_closed
+test_unusable_shape_secret_refused
 test_self_enumerate_default
 test_capture_mode_persists
 test_rearm_consumes_capture_file
@@ -838,7 +868,7 @@ echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Exact assertion-count floor (ADR-193): reported via printf + exit, never through
 # pass()/fail(), so a neutered helper or a vanished test function cannot read green.
-EXPECTED_ASSERTIONS=176
+EXPECTED_ASSERTIONS=188
 if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
   printf 'ASSERTION FLOOR: executed %d assertion(s), expected exactly %d\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS" >&2
   exit 1

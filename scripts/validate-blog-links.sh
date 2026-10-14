@@ -94,7 +94,7 @@ if ! grep -qF '"permalink": "blog/{{ page.fileSlug }}/index.html"' "$BLOG_JSON";
 fi
 for slug in "${file_slugs[@]}"; do
   fm_body="$(awk '/^---$/{c++; if(c==2) exit; next} c==1' "$BLOG_DIR/${file_paths[$slug]}")"
-  if printf '%s\n' "$fm_body" | grep -qiE '^permalink\s*:'; then
+  if grep -qiE '^permalink\s*:' <<<"$fm_body"; then
     fail "parity: $slug.md sets permalink: — canonical slug is no longer filename-derived; update its redirect target manually"
   fi
 done

@@ -116,7 +116,7 @@ proves the wrong invariant.
 
 ## Related
 
-- Plan: `knowledge-base/project/plans/2026-05-21-feat-scope-grant-action-class-human-copy-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-21-feat-scope-grant-action-class-human-copy-plan.md`
 - PR: #4214 (human-readable action-class titles)
 - Verified issue: #4067 (closed in same session)
 - Original fix: PR #4059 (#4048 — router.refresh on scope-grant rows)

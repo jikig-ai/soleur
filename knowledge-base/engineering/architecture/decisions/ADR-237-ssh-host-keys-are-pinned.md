@@ -354,7 +354,7 @@ the LUKS cutover runbook). Earlier text in this ADR is not edited.
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md`
 - Decision challenges: `knowledge-base/project/specs/feat-one-shot-7226-5914-host-key-pinning/decision-challenges.md`
 - Runbook: `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`
 - ADR-220 (git-data root access; D4's first residual is closed by this ADR at post-merge step 4),

@@ -192,6 +192,111 @@ fi
 echo "-- apply workflow SSH -target --"
 assert_grep "workflow -targets cron_egress_firewall" 'target=terraform_data\.cron_egress_firewall' "$WORKFLOW"
 
+echo "-- deploy_pipeline_fix_web2 cron-egress delivery parity (#9393) --"
+# A RUNNING web-2 receives host-script content only through the SSH sibling
+# terraform_data.deploy_pipeline_fix_web2: the web-1 provisioners never dial it
+# (parity guard's premise), and cloud-init/image-bake covers fresh hosts only.
+# The issue's three artifacts — the carved CIDR file, the resolver, and the
+# post-apply probe — must therefore ride that sibling with the SAME destinations
+# the web-1 resource uses, each hashed in triggers_replace (an artifact edit
+# re-fires delivery), each byte-asserted after scp (a truncated transfer fails
+# the provisioner rather than latching silent drift), and the assert script
+# EXECUTED last (delivering the probe without running it runs no probe).
+#
+# Anchored on the delivery constructs inside the resource's own block — never a
+# bare filename grep, which a comment or a same-named file in ANOTHER resource
+# would satisfy (the 2026-06-02 drift-guard learning this file already encodes).
+WEB2_BLOCK="$(awk '/resource "terraform_data" "deploy_pipeline_fix_web2"/,/^}/' "$SERVER_TF")"
+w2_assert() { # w2_assert <description> <ERE pattern>
+  # Herestring, NOT `echo | grep -q`: `grep -q` exits on first match, the writer
+  # dies on SIGPIPE mid-block, and `set -o pipefail` then reports the WON match
+  # as a FAIL — a measured 1-in-N flake (rc=1 on the destination row in CI).
+  # grep -c below is exempt (it reads all input; no early exit).
+  if grep -qE -- "$2" <<<"$WEB2_BLOCK"; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1 (pattern not found in deploy_pipeline_fix_web2 block: $2)"
+  fi
+}
+# Non-vacuity floor on the slice itself: a renamed or restructured resource must
+# red here, not pass over an empty block.
+if echo "$WEB2_BLOCK" | grep -c 'provisioner "file"' >/dev/null; then
+  PASS=$((PASS + 1)); echo "  PASS: deploy_pipeline_fix_web2 block extracted (non-empty slice)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: deploy_pipeline_fix_web2 block not found in server.tf"
+fi
+for spec in \
+  "cron-egress-allowlist-cidr.txt /etc/soleur/cron-egress-allowlist-cidr.txt" \
+  "cron-egress-resolve.sh /usr/local/bin/cron-egress-resolve.sh" \
+  "cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-postapply-assert.sh" \
+  "cron-egress-nftables.sh /usr/local/bin/cron-egress-nftables.sh"; do
+  f="${spec%% *}"
+  dest="${spec##* }"
+  w2_assert "web2 delivers $f (source=)" "source += +\"\\\$\\{path\\.module\\}/$f\""
+  w2_assert "web2 delivers $f to $dest (destination=)" "destination += +\"$(printf '%s' "$dest" | sed 's/[.[\*^$/]/\\&/g')\""
+  w2_assert "web2 trigger folds $f hash" "file\\(\"\\\$\\{path\\.module\\}/$f\"\\)"
+  w2_assert "web2 remote-exec byte-asserts $f" "filesha256\\(\"\\\$\\{path\\.module\\}/$f\"\\)"
+  # Cross-block destination parity: the web-1 resource and the web-2 sibling must
+  # write the SAME absolute path for the same artifact — a destination typo puts
+  # the file where no consumer reads it, with every delivery row still green.
+  W1_DEST="$(grep -A1 "source *= *\"\\\${path.module}/$f\"" <<<"$SERVER_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+  W2_DEST="$(grep -A1 "source *= *\"\\\${path.module}/$f\"" <<<"$WEB2_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+  if [[ -n "$W1_DEST" && "$W1_DEST" == "$W2_DEST" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $f destination parity web-1 == web-2 ($W2_DEST)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $f destination drift: web-1='$W1_DEST' web-2='$W2_DEST' (expected identical, and web-1's extraction must be non-empty)"
+  fi
+done
+w2_assert "web2 creates /etc/soleur before file provisioners (scp does not mkdir)" 'mkdir -p [^"]*/etc/soleur'
+w2_assert "web2 marks cron-egress-resolve.sh executable" 'chmod 0755 [^"]*cron-egress-resolve\.sh'
+w2_assert "web2 marks cron-egress-postapply-assert.sh executable" 'chmod 0755 [^"]*cron-egress-postapply-assert\.sh'
+w2_assert "web2 marks cron-egress-nftables.sh executable" 'chmod 0755 [^"]*cron-egress-nftables\.sh'
+w2_assert "web2 lands the carved CIDR file at mode 0644" 'chmod 0644 [^"]*cron-egress-allowlist-cidr\.txt'
+# #9534 — the loader's hard deny-file precondition (dies at :151 without it) is
+# co-delivered on this channel so an apply ordering where this resource runs
+# first cannot strand the loader in a die-loop. Its web-1 home is the
+# egress_gateway resource, not cron_egress_firewall — hence standalone rows
+# rather than the parity loop above; the destination is pinned against the
+# loader's own DENY_CIDR_FILE default instead.
+w2_assert "web2 delivers egress-deny-cidrs.txt (source=)" 'source += +"\$\{path\.module\}/egress-deny-cidrs\.txt"'
+w2_assert "web2 delivers egress-deny-cidrs.txt to /etc/soleur (destination=)" 'destination += +"/etc/soleur/egress-deny-cidrs\.txt"'
+w2_assert "web2 trigger folds egress-deny-cidrs.txt hash" 'file\("\$\{path\.module\}/egress-deny-cidrs\.txt"\)'
+w2_assert "web2 remote-exec byte-asserts egress-deny-cidrs.txt" 'filesha256\("\$\{path\.module\}/egress-deny-cidrs\.txt"\)'
+w2_assert "web2 lands the gw deny file at mode 0644" 'chmod 0644 [^"]*egress-deny-cidrs\.txt'
+w2_assert "web2 asserts root ownership of egress-deny-cidrs.txt" 'chown root:root [^"]*egress-deny-cidrs\.txt'
+# Destination parity pins to the loader's own DENY_CIDR_FILE default — a
+# destination typo delivers the file where nothing reads it, and the loader's
+# die then fails the apply loud.
+W2_DENY_DEST="$(grep -A1 'source *= *"\${path.module}/egress-deny-cidrs\.txt"' <<<"$WEB2_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+LOADER_DENY_DEFAULT="$(grep -oE '\$\{DENY_CIDR_FILE:-[^}]+\}' "$LOADER" | head -1 | sed 's/.*:-//;s/}$//')"
+if [[ -n "$W2_DENY_DEST" && -n "$LOADER_DENY_DEFAULT" && "$W2_DENY_DEST" == "$LOADER_DENY_DEFAULT" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: web2 deny-file destination == loader DENY_CIDR_FILE default ($W2_DENY_DEST)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: web2 deny-file destination '$W2_DENY_DEST' != loader default '$LOADER_DENY_DEFAULT' (both must extract non-empty)"
+fi
+w2_assert "web2 asserts root ownership of cron-egress-resolve.sh" 'chown root:root [^"]*cron-egress-resolve\.sh'
+w2_assert "web2 asserts root ownership of cron-egress-postapply-assert.sh" 'chown root:root [^"]*cron-egress-postapply-assert\.sh'
+w2_assert "web2 asserts root ownership of cron-egress-nftables.sh" 'chown root:root [^"]*cron-egress-nftables\.sh'
+w2_assert "web2 asserts root ownership of cron-egress-allowlist-cidr.txt" 'chown root:root [^"]*cron-egress-allowlist-cidr\.txt'
+# The probe is the point of the issue — a delivered-but-never-run assert script
+# leaves web-2 with the carve on disk and no proof of enforcement.
+w2_assert "web2 EXECUTES the post-apply assert (the probe)" 'bash /usr/local/bin/cron-egress-postapply-assert\.sh'
+# The web-1 resource's assert run is its provisioner's terminal step; on web-2 it
+# must likewise run AFTER the deliveries+asserts, inside the same remote-exec
+# script (provisioner ordering is declaration order — the ghcr deny block stays
+# last either way).
+W2_EXEC_LN="$(echo "$WEB2_BLOCK" | grep -nE 'bash /usr/local/bin/cron-egress-postapply-assert\.sh' | cut -d: -f1 | tail -1)"
+W2_SHA_LN="$(echo "$WEB2_BLOCK" | grep -nE 'filesha256\("\$\{path\.module\}/cron-egress-postapply-assert\.sh"\)' | cut -d: -f1 | tail -1)"
+if [[ -n "$W2_EXEC_LN" && -n "$W2_SHA_LN" && "$W2_EXEC_LN" -gt "$W2_SHA_LN" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: assert-execution ordered after the content assertions (line $W2_EXEC_LN > $W2_SHA_LN)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: assert-execution must come after the sha256 content assertions (exec=$W2_EXEC_LN sha=$W2_SHA_LN)"
+fi
+# The trigger sentinel must still exist (the lockstep rule requires a bump with
+# any inline edit; pin PRESENCE not a version — a future legitimate bump must not
+# red this guard).
+w2_assert "web2 inline sentinel present (bumped in lockstep with the inline edit)" 'dpf-web2-remote-exec-v[0-9]+'
+
 echo "-- loader safety invariants --"
 # Availability ordering: the resolve (set population) line must precede the
 # default-drop install (flush chain + add rules) — proven by line order.
@@ -509,8 +614,14 @@ assert_grep "container-view resolution unioned (resolver-divergence guard)" 'CON
 assert_grep "self-heal: re-runs loader when enforcement rules missing" 'enforcement rules missing' "$RESOLVER"
 assert_grep "self-heal recursion guard (loader sets the env)" 'CRON_EGRESS_FROM_LOADER=1' "$LOADER"
 assert_grep "concurrent runs serialized via flock" 'flock -w 120' "$RESOLVER"
-assert_grep "BOTH drop prefixes counted toward the Sentry event" "egress-.blocked.dns-exfil.: " "$RESOLVER"
+assert_grep "ALL drop prefixes counted toward the Sentry event (blocked + dns-exfil + gw-deny)" "egress-.blocked.dns-exfil.gw-deny.: " "$RESOLVER"
 assert_grep "single atomic nft -f batch apply" 'nft -f -' "$RESOLVER"
+assert_grep "tick budget: env-overridable constant (default 90 < TimeoutStartSec 120)" 'RESOLVE_TICK_BUDGET_SECS="\$\{RESOLVE_TICK_BUDGET_SECS:-90\}"' "$RESOLVER"
+assert_grep "tick budget: loop gate reads elapsed SECONDS before each getent" 'SECONDS >= RESOLVE_TICK_BUDGET_SECS' "$RESOLVER"
+assert_grep "tick budget: starved names count FAILED without touching the try-and-fail counter" 'DNS_SKIPPED=\$\(\(DNS_SKIPPED \+ 1\)\)' "$RESOLVER"
+assert_grep "tick budget: container-view exec shrinks to the remaining budget" 'CV_CAP=\$\(\( RESOLVE_TICK_BUDGET_SECS - SECONDS' "$RESOLVER"
+assert_grep "tick budget: dedupe marker cleared on a within-budget tick" 'rm -f "\$FAILCOUNT_DIR/\.budget-skip"' "$RESOLVER"
+assert_grep "tick budget: dedicated Sentry op for the starved-tick class" 'resolve_tick_budget' "$RESOLVER"
 assert_grep "Sentry Crons ok check-in (dead-timer detection)" 'sentry_checkin ok' "$RESOLVER"
 assert_grep "Sentry Crons error check-in on failure" 'sentry_checkin error' "$RESOLVER"
 
@@ -803,8 +914,8 @@ SLUG_VAL="$(echo "$SLUG_RESOLVE" | sed -E 's/SENTRY_SLUG="([^"]+)"/\1/')"
 assert_grep "Sentry monitor name matches the scripts' slug" "name += +\"$SLUG_VAL\"" "$SCRIPT_DIR/sentry/cron-monitors.tf"
 # Drop-prefix parity: the resolver's journal grep must match the loader's
 # nft log prefixes, else drops keep happening while the alert goes dark.
-for prefix in 'egress-blocked: ' 'egress-dns-exfil: '; do
-  if grep -qF "$prefix" "$LOADER" && grep -qE "egress-.blocked.dns-exfil.: " "$RESOLVER"; then
+for prefix in 'egress-blocked: ' 'egress-dns-exfil: ' 'egress-gw-deny: '; do
+  if grep -qF "$prefix" "$LOADER" && grep -qE "egress-.blocked.dns-exfil.gw-deny.: " "$RESOLVER"; then
     PASS=$((PASS + 1)); echo "  PASS: drop prefix '$prefix' present in loader and covered by resolver grep"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: drop prefix '$prefix' parity broken between loader and resolver"
@@ -854,8 +965,10 @@ run_alarm() {
   mkdir -p "$d/bin"
   cat > "$d/bin/curl" << MOCK
 #!/bin/bash
-vendor=""; scheme_http=0; has_proto=0
+vendor=""; scheme_http=0; has_proto=0; cfg_stdin=0; prev=""
 for arg in "\$@"; do
+  [[ "\$prev" == "--config" && "\$arg" == "-" ]] && cfg_stdin=1
+  prev="\$arg"
   case "\$arg" in
     *api.resend.com*) vendor="api.resend.com" ;;
     *.sentry.io*) vendor="sentry.io" ;;
@@ -877,6 +990,8 @@ if [[ -n "\$vendor" ]]; then
   if [[ -n "\${SSLKEYLOGFILE:-}\${CURL_CA_BUNDLE:-}" ]]; then echo "TLS_ENV_LEAK" >> "$d/curl_violations"; fi
 fi
 if [[ "\$scheme_http" -eq 1 && "\$has_proto" -eq 1 ]]; then echo "PROTO_ON_HTTP" >> "$d/curl_violations"; fi
+# \`--config -\`: consume (and record) the stdin config so the writer is read
+if [[ "\$cfg_stdin" -eq 1 ]]; then cat >> "$d/curl_stdin"; fi
 # one line per INVOCATION (the -d payload is multi-line JSON)
 echo "\$*" | tr '\\n' ' ' >> "$d/curl_args"; echo >> "$d/curl_args"
 if [[ -n "\${ALARM_MOCK_CURL_EXIT:-}" ]]; then echo "000"; exit "\$ALARM_MOCK_CURL_EXIT"; fi
@@ -1050,6 +1165,44 @@ grep -qF "reason=cooldown unit=invalid-unit-name" "$ALARM_D/logger_args" 2>/dev/
 grep -qF "../evil" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
 alarm_row "alarm exec: a %n outside the unit-name charset reads unit=invalid-unit-name in every marker" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
 rm -rf "$ALARM_D"
+
+# Rows 9-10 (argv-bearer sweep): the Resend key rides curl's stdin config
+# channel, never argv; a key that fails the token-shape guard takes the existing
+# SEND_SKIPPED arm (reason=token_shape) with NO call to api.resend.com.
+# Row 9: valid synthetic key -> argv clean, stdin exact, no violations, exit 0.
+ALARM_D="$(mktemp -d -t alarm-bearer.XXXXXXXX)"
+ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+grep -qF "re_test_fake_key_123" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+grep -qF "Authorization" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+grep -qF -- "--config -" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+[[ "$(cat "$ALARM_D/curl_stdin" 2>/dev/null)" == 'header = "Authorization: Bearer re_test_fake_key_123"' ]] || ALARM_OK=0
+[[ ! -f "$ALARM_D/curl_violations" ]] || ALARM_OK=0
+[[ -e "$ALARM_D/last-email" ]] || ALARM_OK=0
+alarm_row "alarm exec: Resend key absent from curl argv, exact 'header = \"Authorization: Bearer <key>\"' on the --config - stdin, 2xx stamps cooldown" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 10: malformed keys (space, double quote, embedded newline) -> never reach
+# curl; SEND_SKIPPED channel=resend reason=token_shape; Sentry channel still
+# posts; exit 0 as for every other skip; the key never appears in output/logger.
+for ALARM_BAD in "re_test fake key" 're_test"fake' $'re_test\nheader = "x"'; do
+  ALARM_D="$(mktemp -d -t alarm-bearer.XXXXXXXX)"
+  ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" "RESEND_API_KEY=$ALARM_BAD" 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+  ALARM_OK=1
+  [[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+  grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+  [[ ! -e "$ALARM_D/curl_stdin" ]] || ALARM_OK=0
+  [[ ! -e "$ALARM_D/last-email" ]] || ALARM_OK=0
+  grep -qF "sentry.io" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+  grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_SKIPPED channel=resend reason=token_shape unit=cron-egress-resolve.service" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+  grep -cF "SOLEUR_CRON_EGRESS_ALARM_SEND_SKIPPED channel=resend reason=token_shape" >/dev/null <<<"$ALARM_OUT" || ALARM_OK=0
+  grep -qF "_SEND_FAILED" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+  grep -qF "fake" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+  alarm_row "alarm exec: malformed Resend key ($(printf '%q' "$ALARM_BAD" | cut -c1-12)...) -> no Resend curl, SEND_SKIPPED reason=token_shape, exit 0" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+  rm -rf "$ALARM_D"
+done
 
 # Parity rows. (a) The predicate-only `sentry-dest-pin` region must be BYTE-
 # IDENTICAL in the alarm (inside sentry_checkin()) and container-restart-
@@ -1483,6 +1636,105 @@ fi
 # URL-through-substitution-end tail, not a bare `head -c`.
 assert_grep "post-apply assert: probe output is capped (head -c N) and the producer's exit is re-raised via PIPESTATUS[0] (rc not masked by the pipe)" \
   'https://ghcr[.]io/ 2>/dev/null [|] head -c [0-9]+; exit "[$][{]PIPESTATUS\[0\][}]"[)]"' "$ASSERT_CODE"
+# --- egress gateway wiring (open-web egress, #9534 / feat-open-web-egress) ------
+# Three rules, three placements (design: plan §Proposed Solution):
+#   1. FORWARD leg — docker0→gw accept inside SOLEUR-EGRESS before the
+#      default-drop (gw IP derived from the soleur-egress0 network, never
+#      hardcoded: the bootstrap may re-number on subnet collision).
+#   2. REPLY leg — DOCKER-USER `iifname $EGRESS_BRIDGE_IF oifname docker0 ct
+#      state established,related accept` BEFORE DOCKER-ISOLATION-STAGE-2
+#      (Docker's FORWARD order: DOCKER-USER → ISOLATION — a rule only inside
+#      SOLEUR-EGRESS would never see iifname egress0 packets, and
+#      conntrack does not rescue replies the isolation chain drops).
+#   3. DENY leg — SOLEUR-EGRESS-GW chain jumped from DOCKER-USER on
+#      iifname egress0; every deny is `ct state new`-scoped (the same packet
+#      stream carries replies destined for docker0, whose 172.17.0.0/16 IS
+#      RFC1918 — an unscoped drop would sever the tunnel).
+# One-way invariant: a NEW gw→docker0 connection (gw dialing INTO the app
+# container) must still be denied — the deny set's RFC1918 ranges cover
+# docker0's subnet, and ct-state-new means established replies pass while
+# cold dials die.
+assert_grep "egress-deny-cidrs.txt artifact exists" '^[0-9]' "$SCRIPT_DIR/egress-deny-cidrs.txt"
+assert_grep "loader declares SOLEUR-EGRESS-GW chain" 'chain SOLEUR-EGRESS-GW' "$LOADER"
+assert_grep "loader declares gw-deny interval set" 'set soleur_egress_gw_deny' "$LOADER"
+assert_grep "loader reads the shared deny-cidr file" 'egress-deny-cidrs\.txt' "$LOADER"
+assert_grep "gw-deny rules are ct-state-new scoped (reply traffic must pass)" \
+  'add rule ip filter SOLEUR-EGRESS-GW ct state new' "$LOADER"
+assert_grep "gw-deny drop is logged (not silent)" 'egress-gw-deny' "$LOADER"
+assert_grep "gateway ip derived, not hardcoded" 'docker inspect soleur-egress-gw' "$LOADER"
+assert_grep "docker0→gw accept inside SOLEUR-EGRESS (IP baked, never a literal" \
+  'ip daddr \${EGRESS_GW_IP} tcp dport 8443 accept' "$LOADER"
+assert_not_grep "no literal \$EGRESS_GW_IP inside the nft -f script (unknown-identifier abort)" \
+  'daddr \$EGRESS_GW_IP' "$LOADER"
+assert_grep "reply leg: established/related accept at DOCKER-USER" \
+  'iifname "\$EGRESS_BRIDGE_IF" oifname "\$BRIDGE_IF" ct state established,related accept' "$LOADER"
+assert_grep "deny leg: egress0 jump at DOCKER-USER" \
+  'iifname "\$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW' "$LOADER"
+# nat-unprotected drops docker's raw-PREROUTING guard for ALL interfaces; the
+# oifname drop re-closes it for non-docker0 ingress at the designed layer.
+assert_grep "direct-routing drop: non-docker0 NEW packets to egress0 die (nat-unprotected boundary)" \
+  'oifname "\$EGRESS_BRIDGE_IF" iifname != "\$BRIDGE_IF" ct state new counter drop' "$LOADER"
+REPLY_LINE="$(grep -n 'iifname "\$EGRESS_BRIDGE_IF" oifname "\$BRIDGE_IF" ct state established,related accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+GWJUMP_LINE="$(grep -n 'iifname "\$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+# `nft insert` is LIFO: the jump must be installed FIRST so the reply-accept
+# (inserted after it) lands ABOVE it — the chain-order invariant "reply
+# precedes jump" is preserved while the source order inverts.
+if [[ -n "$REPLY_LINE" && -n "$GWJUMP_LINE" && "$REPLY_LINE" -gt "$GWJUMP_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: egress0 jump is installed before the reply accept so insert-order lands reply first (jump=$GWJUMP_LINE reply=$REPLY_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: with insert-LIFO the egress0 jump must be installed BEFORE the reply accept (jump=$GWJUMP_LINE reply=$REPLY_LINE)"
+fi
+GWACCEPT_LINE="$(grep -n 'ip daddr \${EGRESS_GW_IP} tcp dport 8443 accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+if [[ -n "$GWACCEPT_LINE" && -n "$DROP_RULE_LINE" && "$GWACCEPT_LINE" -lt "$DROP_RULE_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: docker0→gw accept precedes the default drop (line $GWACCEPT_LINE < $DROP_RULE_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: docker0→gw accept must precede the default drop (accept=$GWACCEPT_LINE drop=$DROP_RULE_LINE)"
+fi
+# Self-heal needle extension: a flushed SOLEUR-EGRESS-GW chain or a missing
+# egress0 jump must re-run the loader, never coast silent.
+assert_grep "resolver self-heal probes the egress0 GW jump" 'SOLEUR-EGRESS-GW' "$RESOLVER"
+assert_grep "resolver self-heal probes the reply accept" 'established,related' "$RESOLVER"
+# Boot probe: fresh-host gw bring-up is asserted (gw container + a real
+# CONNECT pair through it), not assumed.
+assert_grep "boot probe asserts the gateway container" 'soleur-egress-gw' "$SCRIPT_DIR/cron-egress-enforce-probe.sh"
+# Resolver carries the recurring synthetic CONNECT probe (heartbeat + live
+# allow/deny verification on the real path — the deny line is the proof the
+# policy still holds mid-life).
+assert_grep "resolver carries the synthetic CONNECT pair probe" 'egress_gw_probe' "$RESOLVER"
+# Every per-cycle verdict must go through probe_emit (log + logger -t
+# egress-gw-probe). A `log "egress_gw_probe result=` call site ships under the
+# unit's ExecStart basename — not in Vector's Source-4 allowlist — so a
+# skip-only probe reads as dead silence in Better Stack and the skip reason is
+# undiagnosable off-box.
+assert_grep "probe_emit helper exists (verdict ships on the allowlisted tag)" 'probe_emit()' "$RESOLVER"
+assert_grep "probe_emit writes the tagged row" 'logger -t egress-gw-probe' "$RESOLVER"
+assert_not_grep "no result= line bypasses probe_emit (journald-only row)" \
+  'log "egress_gw_probe result=' "$RESOLVER"
+N_PROBE_TAGGED="$(grep -c 'logger -t egress-gw-probe' "$RESOLVER" || true)"
+if [[ "$N_PROBE_TAGGED" == "1" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: exactly one tagged emit site (probe_emit) — a second logger -t would ship outside the helper's contract"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected exactly 1 'logger -t egress-gw-probe' site, found $N_PROBE_TAGGED"
+fi
+# The auth helper binds the CONNECT username to the token FILE CONTENT
+# ($user == $(<tokenfile)): the probe's mint must write "probe", an empty
+# file reads as a forged username and every allow-leg CONNECT is denied
+# (measured on web-1 2026-10-12: TCP_DENIED ERR_CACHE_ACCESS_DENIED,
+# allow_rc=56).
+assert_grep "probe token file carries 'probe' as its content (helper binds user==content)" \
+  "printf 'probe' >" "$RESOLVER"
+assert_not_grep "probe token is never minted empty (empty content always fails the helper)" \
+  ': > "\$EGRESS_GW_TOKEN_DIR/\$tok"' "$RESOLVER"
+# Scope-marker self-heal (#9534 heal-loop fix): the six presence markers cannot
+# see a ruleset baked while the gw was absent (unscoped member drop kills every
+# upstream dial; the docker0→gw accept missing). The heal check must therefore
+# probe BOTH scope markers, conditioned on the gw running (asserting them while
+# the gw is down would heal-loop — the unscoped drop IS the correct posture then).
+assert_grep "resolver heal checks the docker0->gw accept marker" 'ENF_GWACCEPT' "$RESOLVER"
+assert_grep "resolver heal checks the scoped member-drop marker" 'ENF_GWMEMBER' "$RESOLVER"
+assert_grep "resolver scope check is gated on the gw container running" 'grep -qx soleur-egress-gw' "$RESOLVER"
+assert_grep "resolver member-scope needle is saddr !=" "saddr != " "$RESOLVER"
+
 # --- GHCR carve post-apply assertions: BEHAVIOUR (#9275 Phase 4) -----------------------------
 # The static greps above only prove the sentinels EXIST. These rows EXECUTE the delivered script
 # under `bash` with `nft`/`docker`/`systemctl`/`curl` shims first on PATH and a fixture CIDR file
@@ -1491,6 +1743,55 @@ assert_grep "post-apply assert: probe output is capped (head -c N) and the produ
 # answers from a set file via python3 `ipaddress` (independent oracle), exactly like the real
 # interval set: found when the address is inside any listed prefix, rc 1 otherwise (including a
 # missing set). Real nft semantics were verified in a user namespace on nftables 1.1.7.
+echo "-- resolver DNS tick budget behavioral (mass-flap boundedness) --"
+# The 2026-10-08 incident this bounds: ~100 productionresultsa*
+# CNAMEs flapping at Traffic Manager each burn the 10s per-host cap in a
+# serial loop -> the tick exceeds TimeoutStartSec=120 and systemd SIGKILLs it
+# BEFORE the nft -f apply (40+ min of zero completions on both web hosts).
+# Here one fast host + fourteen 8s-slow hosts run under
+# RESOLVE_TICK_BUDGET_SECS=20: without the gate this takes ~115s; with it the
+# loop stops at ~25s and the starved names ride the additive-only path.
+RB="$SUITE_SCRATCH/resolve-budget"
+assert_fixture_dir "$RB"
+mkdir -p "$RB/stubs" "$RB/fc" "$RB/seen" "$RB/etc"
+printf '%s\n' fast.example slow01.example slow02.example slow03.example slow04.example \
+  slow05.example slow06.example slow07.example slow08.example slow09.example \
+  slow10.example slow11.example slow12.example slow13.example slow14.example > "$RB/etc/allowlist.txt"
+: > "$RB/etc/cidrs.txt"
+RB_CALLS="$RB/calls"; : > "$RB_CALLS"
+rbmk() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$RB/stubs/$1"; chmod +x "$RB/stubs/$1"; }
+rbmk getent 'case "$2" in *fast*) printf "93.184.216.34\n" ;; *) sleep 8 ;; esac'
+rbmk docker 'exit 0'   # ps prints nothing -> container + gw both absent; probes self-skip
+rbmk nft 'if [ "$1" = "-f" ]; then cat >/dev/null; exit 0; fi
+printf "%s\n" "  jump SOLEUR-EGRESS" "  jump SOLEUR-EGRESS-GW" "  ct state established,related accept" \
+  "  comment \"soleur-egress: default drop\"" "  comment \"soleur-egress: default drop log\"" \
+  "  comment \"soleur-egress-gw: deny drop\""'
+rbmk systemctl 'exit 0'
+rbmk journalctl 'exit 0'
+rbmk logger 'exit 0'
+rbmk curl 'echo "curl $*" >> "$RB_CALLS"; exit 0'
+rbmk doppler 'exit 1'
+RB_T0="$(date +%s)"
+RB_OUT="$(env PATH="$RB/stubs:$PATH" \
+  ALLOWLIST_FILE="$RB/etc/allowlist.txt" CIDR_FILE="$RB/etc/cidrs.txt" \
+  FAILCOUNT_DIR="$RB/fc" SEEN_DIR="$RB/seen" \
+  CRON_EGRESS_LOCK_FILE="$RB/lock" LOADER=/bin/true \
+  EGRESS_GW_TOKEN_DIR="$RB/seen" \
+  RESOLVE_TICK_BUDGET_SECS=20 \
+  SENTRY_INGEST_DOMAIN=o0.ingest.us.sentry.io SENTRY_PROJECT_ID=42 \
+  SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef \
+  RB_CALLS="$RB_CALLS" \
+  timeout 120 bash "$RESOLVER" 2>&1)"; RB_RC=$?
+RB_ELAPSED=$(( $(date +%s) - RB_T0 ))
+if [[ "$RB_RC" -eq 0 ]]; then PASS=$((PASS + 1)); echo "  PASS: flap tick completes (rc 0)"; else FAIL=$((FAIL + 1)); echo "  FAIL: flap tick rc=$RB_RC"; fi
+if [[ "$RB_ELAPSED" -lt 60 ]]; then PASS=$((PASS + 1)); echo "  PASS: tick bounded (${RB_ELAPSED}s < 60s; unbounded loop would be ~115s)"; else FAIL=$((FAIL + 1)); echo "  FAIL: tick ran ${RB_ELAPSED}s — budget gate ineffective"; fi
+if grep -qF "DNS tick budget" <<<"$RB_OUT"; then PASS=$((PASS + 1)); echo "  PASS: budget-exhaustion WARN emitted"; else FAIL=$((FAIL + 1)); echo "  FAIL: no budget WARN in output"; fi
+if grep -qF "ADDITIVE-ONLY" <<<"$RB_OUT"; then PASS=$((PASS + 1)); echo "  PASS: starved hosts ride additive-only"; else FAIL=$((FAIL + 1)); echo "  FAIL: no additive-only line in output"; fi
+if [[ -e "$RB/fc/.budget-skip" ]]; then PASS=$((PASS + 1)); echo "  PASS: dedupe marker written after the event POSTed"; else FAIL=$((FAIL + 1)); echo "  FAIL: .budget-skip marker absent (event not sent or marker ordering broken)"; fi
+if [[ "$(grep -c '^curl' "$RB_CALLS")" =~ ^[1-9][0-9]*$ ]]; then PASS=$((PASS + 1)); echo "  PASS: starved-tick Sentry event POSTed via curl"; else FAIL=$((FAIL + 1)); echo "  FAIL: no curl POST recorded"; fi
+if [[ ! -e "$RB/fc/slow14.example" ]]; then PASS=$((PASS + 1)); echo "  PASS: a starved host carries no try-and-fail counter"; else FAIL=$((FAIL + 1)); echo "  FAIL: slow14.example failcount file exists — skipped hosts must not escalate"; fi
+if [[ "$(cat "$RB/fc/slow01.example" 2>/dev/null)" == "1" ]]; then PASS=$((PASS + 1)); echo "  PASS: an attempted-and-failed host carries failcount=1"; else FAIL=$((FAIL + 1)); echo "  FAIL: slow01.example failcount missing/wrong (got: $(cat "$RB/fc/slow01.example" 2>/dev/null || echo absent))"; fi
+
 GA_ROOT="$(mktemp -d)"
 assert_fixture_dir "$GA_ROOT"
 ga_setup() {   # ga_setup <name> -> prints the scenario dir; creates shims
@@ -1890,8 +2191,8 @@ echo "RESULT: $PASS passed, $FAIL failed"
 # Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
 # deleted row would vanish green. Reported directly, never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ $((PASS + FAIL)) -lt 301 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 301. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 352 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 352. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

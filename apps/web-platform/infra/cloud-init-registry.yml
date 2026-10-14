@@ -72,8 +72,8 @@ write_files:
   # retention.delay 24h->2h so a filling store is reclaimed within ~1h, not once per 24h. gcDelay
   # stays 1h (the dangling-blob SAFETY window that protects a blob just uploaded but not yet
   # manifest-referenced during an in-flight push — shortening it risks reclaiming an in-progress
-  # layer). NO on-boot gc trigger is issued: zot v2.1.20 exposes no sanctioned on-demand gc HTTP
-  # endpoint — MEASURED 2026-08-05 (#7282) by probing the pinned image locally: /v2/_zot/gc,
+  # layer). NO on-boot gc trigger is issued: zot v2.1.22 exposes no sanctioned on-demand gc HTTP
+  # endpoint — MEASURED 2026-10-08 (#9252) by probing the pinned image locally: /v2/_zot/gc,
   # /v2/_catalog/gc, /_zot/gc and /v2/_zot/ext/gc all answer 404, and the release's BinaryType
   # excludes mgmt/scrub/search entirely (hr-verify-repo-capability-claim — no fabricated admin
   # call). Re-measure on every bump, never re-word. So the tightened
@@ -85,12 +85,12 @@ write_files:
   # plain `docker build` → docker-schema2, so it needs this; the web image is OCI (buildx) and
   # does not. (project-zot pkg/compat/compat.go DockerManifestV2SchemaV2 = "docker2s2".)
   #
-  # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-190): zot v2.1.20 supplies BOTH
+  # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-190): zot v2.1.22 supplies BOTH
   # deadlines as 60000000000 ns (60.000 s) when the "http" block omits them — read off the
-  # PINNED digest's own boot config, not from docs. At 60 s a 703_724_542 B layer must sustain
-  # 11.73 MB/s, and three concurrent layers ~280 Mbit/s through one tunnel; when it does not,
-  # zot closes mid-PATCH and the runner reports `connection reset by peer`. MEASURED 2026-08-13
-  # off-box against the pinned digest over a docker bridge with NO tunnel and NO Cloudflare
+  # PINNED digest's own boot config, not from docs (re-read 2026-10-08, #9252). At 60 s a
+  # 703_724_542 B layer must sustain 11.73 MB/s, and three concurrent layers ~280 Mbit/s through
+  # one tunnel; when it does not, zot closes mid-PATCH and the runner reports `connection reset by peer`. MEASURED 2026-08-13
+  # off-box against the then-pinned v2.1.20 digest over a docker bridge with NO tunnel and NO Cloudflare
   # edge, by dribbling a 4 MB blob over 100 s: same message, same routes.go:2078, same
   # statusCode:500, same latency:1m0s. So the tunnel is exonerated and this is a TIME wall, not
   # a size wall — the 272_236_549 B layer died at the same deadline (< 4.54 MB/s effective).
@@ -326,7 +326,7 @@ write_files:
       # reaches web-1, not the registry — #7278), so without it "did the bump land?" is
       # unanswerable by any means available to this project. That matters most in the EXPECTED
       # steady state: the pin merges but stays staged (zot-registry.tf is an
-      # OPERATOR_APPLIED_EXCLUSION), so the repo pins a newer zot v2.1.20 while the live host still
+      # OPERATOR_APPLIED_EXCLUSION), so the repo pins a newer zot v2.1.22 while the live host still
       # runs its older one, and that divergence is the norm until
       # the host-replace path unblocks, and today that divergence is invisible.
       #
@@ -1011,11 +1011,25 @@ write_files:
       # keep the token while removing the gate.
       LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST zot_image_fetch=$ZOT_IMAGE_FETCH zot_image_fetch_rc=$ZOT_IMAGE_FETCH_RC ghcr_blocked=$GHCR_BLOCKED htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM liveness_miss_cum=$_m liveness_ping_fail_cum=$_f liveness_ok_cum=$_o liveness_late_ok_cum=$_l liveness_last_miss_code=$_c store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS luks_open_arm=$LUKS_OPEN_ARM store_escrow=$STORE_ESCROW store_escrow_age_s=$STORE_ESCROW_AGE_S host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
-      if [ -n "$TOKEN" ]; then
+      # The ingest token reaches curl on its stdin config, never on its argument list (argv is readable by every local user in
+      # /proc/<pid>/cmdline; ADR-280, lint Rule E). Trailing whitespace is trimmed first, as scripts/lib/bearer-curl.sh does (a stored
+      # value with a trailing newline worked on the old argv form, and curl sent the trimmed header). The trimmed value is then judged
+      # BEFORE any request: a value outside [A-Za-z0-9._~+/=-] (a quote, a backslash or an interior newline would add directives to the
+      # config grammar) is refused, prints the value-free SOLEUR_CREDENTIAL_REFUSED line and takes the not-shipped branch, never the
+      # egress-FAILED branch, and never changes this script's exit status. The host has no checkout, so this is the inline form of
+      # the library (without its environment scrub or xtrace refusal); the sweep battery pins the four copies of the judge, the trim
+      # and the marker byte-equal. The marker cannot be read from Better Stack on this host (cron has no MTA, and the shipper reads
+      # only the zot container), so a refused token shows as the ABSENCE of these rows.
+      TOKEN="$${TOKEN%"$${TOKEN##*[![:space:]]}"}"
+      _bs_ok() { local LC_ALL=C; case "$${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+      if [ -n "$TOKEN" ] && _bs_ok "$TOKEN"; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
         # the payload so an egress failure is itself observable in the NEXT successful post.
-        post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+        post() { curl --disable --noproxy '*' -fsS -m 10 -H 'Content-Type: application/json' --config - "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") >/dev/null 2>&1; }
         post || post || echo "[zot] SOLEUR_ZOT_DISK egress to Better Stack Logs FAILED: $LINE" >&2
+      elif [ -n "$TOKEN" ]; then
+        printf 'SOLEUR_CREDENTIAL_REFUSED script=zot-disk-heartbeat reason=%s\n' "$(case "$TOKEN" in *[[:cntrl:]]*) echo control_char ;; *) echo token_shape ;; esac)" >&2
+        echo "[zot] WARN: BETTERSTACK_LOGS_TOKEN refused (outside the token alphabet) — SOLEUR_ZOT_DISK not shipped: $LINE" >&2
       else
         echo "[zot] WARN: BETTERSTACK_LOGS_TOKEN unset (run under 'doppler run --project soleur-registry --config prd') — SOLEUR_ZOT_DISK not shipped: $LINE" >&2
       fi
@@ -1281,6 +1295,16 @@ write_files:
       STATE_FILE="$STATE_DIR/state"
       STATE_TMP="$STATE_DIR/state.new"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
+      # Stdin-config post, trim, judge and refusal marker: the same inline form as in zot-disk-heartbeat.sh (see the comment there).
+      TOKEN="$${TOKEN%"$${TOKEN##*[![:space:]]}"}"
+      _bs_ok() { local LC_ALL=C; case "$${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+      # Judged ONCE per run, before the batch loop, so a refusal is one marker per five-minute run and not one per row. A refused
+      # token is dropped here and ship() takes its existing not-shipped branch (the one an unset token takes).
+      TOKEN_REFUSED=""
+      if [ -n "$TOKEN" ] && ! _bs_ok "$TOKEN"; then
+        printf 'SOLEUR_CREDENTIAL_REFUSED script=zot-log-shipper reason=%s\n' "$(case "$TOKEN" in *[[:cntrl:]]*) echo control_char ;; *) echo token_shape ;; esac)" >&2
+        TOKEN_REFUSED=1; TOKEN=""
+      fi
       HOST_NAME_V="$(hostname)"
       BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'unknown')"
       POST_FAIL=0; LAST_OK_EPOCH=0; SHIPPED_CUM=0; DROPPED_CUM=0; DROP_SEQ=0
@@ -1329,8 +1353,8 @@ write_files:
         printf '%s' "$1" > "$CURSOR_TMP" 2>/dev/null && mv -f "$CURSOR_TMP" "$CURSOR_FILE" 2>/dev/null || true
       }
       post_body() {
-        curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-          "${betterstack_ingest_url}" --data-raw "$1" >/dev/null 2>&1
+        curl --disable --noproxy '*' -fsS -m 10 -H 'Content-Type: application/json' --config - \
+          "${betterstack_ingest_url}" --data-raw "$1" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") >/dev/null 2>&1
       }
       # POST ONCE. The disk reporter retries (`post || post || echo`) because ITS value is not
       # replayable — a missed heartbeat sample is gone. Every shipper row is replayable from the
@@ -1342,7 +1366,11 @@ write_files:
         local line="$1" body
         body="{\"message\":\"$line\"}"
         if [ -z "$TOKEN" ]; then
-          echo "[zot-log-shipper] WARN: BETTERSTACK_LOGS_TOKEN unset; not shipped: $line" >&2
+          if [ -n "$TOKEN_REFUSED" ]; then
+            echo "[zot-log-shipper] WARN: BETTERSTACK_LOGS_TOKEN refused (see the refusal line above); not shipped: $line" >&2
+          else
+            echo "[zot-log-shipper] WARN: BETTERSTACK_LOGS_TOKEN unset; not shipped: $line" >&2
+          fi
           return 1
         fi
         post_body "$body" && return 0
@@ -1462,29 +1490,46 @@ write_files:
         printf '%s' "$${s:0:_max}"
       }
       CONFIG_LINE_MAXLEN=2600
-      # The four measured evidence classes are CAP-EXEMPT. Without this the cap drops the
+      # The measured evidence classes (gc x3, crash, boot config, and the func-keyed upload error
+      # line) are CAP-EXEMPT. Without this the cap drops the
       # diagnostic evidence preferentially during exactly the flood (crash-loop / pull storm) that
       # accompanies disk growth. `executing gc` is the DENOMINATOR the downstream gc-completion
       # question needs: a stalled gc emits a start with no completion, so admitting only
       # completion lines would make "gc never ran", "gc ran fine" and "the shipper filtered it"
       # indistinguishable — the lower-bound defect reproduced one layer up.
       #
-      # MATCHED ON THE PARSED `message` FIELD, never the whole line (#7444 F-5). The parse now
-      # happens once per tick inside JQ_TICK (the $z field), not in a per-line helper — the
-      # standalone zerolog_message() the single-jq rewrite orphaned has been deleted. Measured, zot
-      # emits {"level":"info","message":"executing gc","component":"gc","caller":"…"} and
-      # {"level":"error","message":"PatchBlobUpload i/o timeout","caller":"…"}, so all four classes
+      # MATCHED ON PARSED FIELDS, never the whole line (#7444 F-5). The parse happens once per tick
+      # inside JQ_TICK, not in a per-line helper. Measured, zot emits
+      # {"level":"info","message":"executing gc","component":"gc","caller":"…"}, so the gc classes
       # are message-field prefixes. A whole-line substring test instead lets any private-net client
       # send `User-Agent: executing gc` and make EVERY one of its request lines cap-exempt — those
       # lines carry message "HTTP API", so field-anchoring closes the bypass by construction.
+      #
+      # THE UPLOAD ERROR LINE IS CLASSIFIED ON THE PARSED `func` FIELD, not on its message (#9373).
+      # Measured against 7 days of shipped rows and the live heartbeat echo, the real line is
+      # {"level":"error","message":"unexpected error, removing .uploads/ files","error":"unexpected
+      # EOF","caller":"…/routes.go:2190","func":"…/pkg/api.(*RouteHandler).PatchBlobUpload"}: the
+      # message is NOT a PatchBlobUpload prefix, and the earlier message-prefix arm matched zero
+      # rows, so the line was rate-capped while the suite stayed green over a dead arm. `func` is set
+      # by zot on every line, so the arm matches the handler VALUE, suffix-anchored so a module-path
+      # bump still matches. It returns 2, not 0: the line is admitted through the upload sub-quota
+      # (see the call site), because a failing push may burst one error line per chunk (the #7555
+      # review reproduced a multi-layer push filling the lane) and sharing the 17-slot lane would
+      # starve a panic (the #7444 R12 inversion). $2 is zot's own parsed top-level field: zerolog
+      # JSON-escapes request-derived values into string fields and journald fragments do not
+      # parse, so client bytes cannot spell a top-level `func` (pinned by T21 S6, S7 and S9).
+      #
+      # RETURNS: 0 = shared exempt lane, 2 = upload sub-quota, 1 = ordinary. The message arms are
+      # tested FIRST so a crash-class message keeps the shared lane even when it is logged from
+      # inside the upload handler; the func arm only claims what no message arm claimed (T21 S10).
       is_cap_exempt() {
+        local func="$2"
         case "$1" in
           "executing gc"*)              return 0 ;;
           "gc successfully completed"*) return 0 ;;
           "garbage collected blobs"*)   return 0 ;;
-          PatchBlobUpload*)             return 0 ;;
-          # CRASH evidence, not just GROWTH evidence (#7444 R12). The four classes above are all
-          # gc/blob-upload — so under a crash loop, which is BOTH the flood the exemption was
+          # CRASH evidence, not just GROWTH evidence (#7444 R12). The classes above are all
+          # gc — so under a crash loop, which is BOTH the flood the exemption was
           # sized against AND the incident class that motivated this whole change, the rows the
           # cap dropped were the panic traces and the rows it kept were the gc lines. A Go panic
           # is 30-60 journald entries against a 17/tick ordinary cap. The sibling disk reporter
@@ -1500,10 +1545,13 @@ write_files:
           # most likely to be dropped.
           "configuration settings"*)    return 0 ;;
         esac
+        case "$func" in
+          *"(*RouteHandler).PatchBlobUpload") return 2 ;;
+        esac
         return 1
       }
       # The HTTP-API HALF of an upload-failure PAIRING is cap-exempt too (#7555). zot reports a
-      # failed blob upload as TWO rows: the `PatchBlobUpload` error line (already exempt above)
+      # failed blob upload as TWO rows: the `PatchBlobUpload` error line (exempt above, keyed on func)
       # and an ordinary HTTP-API row carrying `statusCode`, `latency` and `Content-Length`. Only
       # the pairing carries the numbers that distinguish a DEADLINE from an origin fault, and
       # only the first half was surviving the cap. Measured in the 2026-08-13 failure tick:
@@ -1538,6 +1586,11 @@ write_files:
       # concurrent panic trace was dropped -- REPRODUCED, and it is the #7444 R12 priority
       # inversion one layer down, inside the change that claims to bound against it. Capping the
       # upload class below the lane's size reserves the remainder for is_cap_exempt (gc + crash).
+      # The func-keyed PatchBlobUpload ERROR row (#9373) draws from this same sub-quota (rc 2 at the
+      # call site), so both halves of a failed upload share the 8 slots and neither can starve a panic.
+      # The two halves can crowd EACH OTHER: one failed upload costs two slots, so about 4 failed
+      # uploads in a tick exhaust the quota and the overflow is accounted as reason=exempt_cap, which
+      # the #7556 probe reads as TRANSIENT (never PASS) for the window. T21 S3b pins the sharing.
       CAP_UPLOAD_EVIDENCE_PER_INTERVAL="$${ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL:-8}"
       WIN_UPLOAD_EVIDENCE=0
       WIN_COUNT=0
@@ -1646,9 +1699,11 @@ write_files:
       #
       # statusCode and path are appended AFTER zmsg so existing positional reads keep their
       # meaning; the `read -r` arity below is widened IN THE SAME EDIT, because a field list and
-      # an arity that disagree is exactly the corruption described above.
-      JQ_TICK='def s: if (. == null or . == "") then "-" else (. | tostring) end; (.MESSAGE // "") as $m | (($m | fromjson?) // {}) as $j | [((.__CURSOR // null) | s), (($m // null) | s), ((($j.message?) // null) | s), ((($j.statusCode?) // null) | s), ((($j.path?) // null) | s)] | @tsv'
-      while IFS=$'\t' read -r cur msg zmsg zstatus zpath; do
+      # an arity that disagree is exactly the corruption described above. `func` (#9373) is the
+      # sixth field, appended the same way: zot sets it on EVERY line, so is_cap_exempt matches its
+      # VALUE (the handler), never its presence.
+      JQ_TICK='def s: if (. == null or . == "") then "-" else (. | tostring) end; (.MESSAGE // "") as $m | (($m | fromjson?) // {}) as $j | [((.__CURSOR // null) | s), (($m // null) | s), ((($j.message?) // null) | s), ((($j.statusCode?) // null) | s), ((($j.path?) // null) | s), ((($j.func?) // null) | s)] | @tsv'
+      while IFS=$'\t' read -r cur msg zmsg zstatus zpath zfunc; do
         # Translate sentinels back to the empty string the downstream code expects. Done here,
         # once, so no consumer has to know about the wire representation.
         [ "$cur" = "-" ] && cur=""
@@ -1704,10 +1759,14 @@ write_files:
             panic:*|"fatal error"*|"runtime error"*|\[signal*) _zclass="$msg" ;;
           esac
         fi
+        # zfunc arrives sentinelled (`-` when absent), which matches no arm. is_cap_exempt is
+        # TRI-STATE: 0 = shared exempt lane, 2 = the func-keyed upload error line (sub-quota),
+        # 1 = ordinary. rc 2 is FALSE inside a bare `if`, so its status is read explicitly.
         _upload_only=0
-        if is_cap_exempt "$_zclass"; then
+        is_cap_exempt "$_zclass" "$zfunc"; _cx=$?
+        if [ "$_cx" = "0" ]; then
           _exempt=1
-        elif is_upload_failure_evidence "$zstatus" "$zpath"; then
+        elif [ "$_cx" = "2" ] || is_upload_failure_evidence "$zstatus" "$zpath"; then
           _exempt=1; _upload_only=1
         else
           _exempt=0
@@ -2284,9 +2343,15 @@ write_files:
       NIC_ADDRS=$(ip -4 -o addr show 2>/dev/null | awk '{print $2":"$4}' | tr '\n' ' ' | tail -c 200 | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); [ -n "$NIC_ADDRS" ] || NIC_ADDRS=none
       LINE="SOLEUR_PRIVATE_NIC nic_ok=$NIC_OK converged_by=$CONVERGED_BY imds_rc=$IMDS_RC imds_nets=$IMDS_NETS reboot_count=$REBOOT_COUNT zot_store_mounted=$ZOT_STORE_MOUNTED zot_start_action=$ZOT_START_ACTION uptime_s=$UPTIME_S boot_id=$BOOT_ID zot_last_err=$NIC_ADDRS"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
-      if [ -n "$TOKEN" ]; then
-        post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+      # Stdin-config post, trim, judge and refusal marker: the same inline form as in zot-disk-heartbeat.sh (see the comment there).
+      TOKEN="$${TOKEN%"$${TOKEN##*[![:space:]]}"}"
+      _bs_ok() { local LC_ALL=C; case "$${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+      if [ -n "$TOKEN" ] && _bs_ok "$TOKEN"; then
+        post() { curl --disable --noproxy '*' -fsS -m 10 -H 'Content-Type: application/json' --config - "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") >/dev/null 2>&1; }
         post || post || echo "[nic] SOLEUR_PRIVATE_NIC egress to Better Stack Logs FAILED: $LINE" >&2
+      elif [ -n "$TOKEN" ]; then
+        printf 'SOLEUR_CREDENTIAL_REFUSED script=soleur-private-nic-guard reason=%s\n' "$(case "$TOKEN" in *[[:cntrl:]]*) echo control_char ;; *) echo token_shape ;; esac)" >&2
+        echo "[nic] WARN: BETTERSTACK_LOGS_TOKEN refused (outside the token alphabet) — SOLEUR_PRIVATE_NIC not shipped: $LINE" >&2
       else
         echo "[nic] WARN: BETTERSTACK_LOGS_TOKEN unset (run under 'doppler run --project soleur-registry --config prd') — SOLEUR_PRIVATE_NIC not shipped: $LINE" >&2
       fi
@@ -2335,7 +2400,7 @@ runcmd:
   - |
     for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
       [ -f "$f" ] || continue
-      for h in ghcr.io pkg-containers.githubusercontent.com; do
+      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
         grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
       done
     done
@@ -2634,9 +2699,16 @@ runcmd:
     JOURNALD_STORAGE=volatile; [ -d /var/log/journal ] && JOURNALD_STORAGE=persistent
     LINE="SOLEUR_ZOT_LOG_BOOT boot_id=$BOOT_ID host=$(hostname) shipper_cron=$SHIPPER_CRON journald_storage=$JOURNALD_STORAGE"
     TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
-    if [ -n "$TOKEN" ]; then
-      post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+    # Stdin-config post, trim, judge and refusal marker: the same inline form as in zot-disk-heartbeat.sh (see the comment there).
+    TOKEN="$${TOKEN%"$${TOKEN##*[![:space:]]}"}"
+    _bs_ok() { local LC_ALL=C; case "$${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+    if [ -n "$TOKEN" ] && _bs_ok "$TOKEN"; then
+      # The redirect below is PER COMMAND: this block is fed to `bash -s` on stdin, so a bare `--config -` would read the rest of the script.
+      post() { curl --disable --noproxy '*' -fsS -m 10 -H 'Content-Type: application/json' --config - "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") >/dev/null 2>&1; }
       post || post || echo "[zot-log-shipper] SOLEUR_ZOT_LOG_BOOT egress FAILED: $LINE" >&2
+    elif [ -n "$TOKEN" ]; then
+      printf 'SOLEUR_CREDENTIAL_REFUSED script=zot-log-boot reason=%s\n' "$(case "$TOKEN" in *[[:cntrl:]]*) echo control_char ;; *) echo token_shape ;; esac)" >&2
+      echo "[zot-log-shipper] WARN: BETTERSTACK_LOGS_TOKEN refused (outside the token alphabet) — SOLEUR_ZOT_LOG_BOOT not shipped: $LINE" >&2
     else
       echo "[zot-log-shipper] WARN: BETTERSTACK_LOGS_TOKEN unset — SOLEUR_ZOT_LOG_BOOT not shipped: $LINE" >&2
     fi

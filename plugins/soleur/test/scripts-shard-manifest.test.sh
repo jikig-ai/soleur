@@ -145,7 +145,7 @@ fi
 # fallback, and an all-fallback leg is the n-mismatch degrade wearing a disguise.
 if [[ "$N_HDR" =~ ^[0123456789]+$ && -n "$DATA" ]]; then
   for leg in $(seq 1 "$(( 10#$N_HDR ))"); do
-    if printf '%s\n' "$DATA" | cut -f2 | grep -qx "$leg"; then
+    if printf '%s\n' "$DATA" | cut -f2 | grep -cx >/dev/null "$leg"; then
       check pass "leg $leg has at least one pinned label"
     else
       check fail "leg $leg has ZERO pinned labels — it would run on hash fallback alone"
@@ -158,8 +158,8 @@ fi
 # the runner's own enumerate, unsharded.
 env -u SCRIPTS_SHARD TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
   bash "$RUNNER" --enumerate scripts 2>/dev/null | grep '^SUITE_REGISTRATION' | cut -f2 \
-  | sort -u > "${TMPDIR:-/tmp}/ssm-registered.$$"
-printf '%s\n' "$DATA" | cut -f1 | sort -u > "${TMPDIR:-/tmp}/ssm-manifest.$$"
+  | LC_ALL=C sort -u > "${TMPDIR:-/tmp}/ssm-registered.$$"
+printf '%s\n' "$DATA" | cut -f1 | LC_ALL=C sort -u > "${TMPDIR:-/tmp}/ssm-manifest.$$"
 trap 'rm -f "${TMPDIR:-/tmp}/ssm-registered.$$" "${TMPDIR:-/tmp}/ssm-manifest.$$"' EXIT
 
 REF_N="$(wc -l < "${TMPDIR:-/tmp}/ssm-registered.$$")"
@@ -169,7 +169,7 @@ else
   check fail "registered reference derived only $REF_N labels — the enumerate extraction is broken, every ⊆ assertion below is ungrounded"
 fi
 
-PHANTOMS="$(comm -23 "${TMPDIR:-/tmp}/ssm-manifest.$$" "${TMPDIR:-/tmp}/ssm-registered.$$" | tr '\n' ' ')"
+PHANTOMS="$(LC_ALL=C comm -23 "${TMPDIR:-/tmp}/ssm-manifest.$$" "${TMPDIR:-/tmp}/ssm-registered.$$" | tr '\n' ' ')"
 if [[ -z "$PHANTOMS" ]]; then
   check pass "every manifest label is a registered scripts suite"
 else
@@ -250,7 +250,7 @@ else
   fi
   if [[ "$N_HDR_H" =~ ^[0123456789]+$ && -n "$DATA_H" ]]; then
     for leg in $(seq 1 "$(( 10#$N_HDR_H ))"); do
-      if printf '%s\n' "$DATA_H" | cut -f2 | grep -qx "$leg"; then
+      if printf '%s\n' "$DATA_H" | cut -f2 | grep -cx >/dev/null "$leg"; then
         check pass "heavy leg $leg has at least one pinned label"
       else
         check fail "heavy leg $leg has ZERO pinned labels — it would run on hash fallback alone"
@@ -259,8 +259,8 @@ else
   fi
   env -u SCRIPTS_SHARD TEST_GROUP=scripts-heavy SOLEUR_DISABLE_SESSION_STATE=1 \
     bash "$RUNNER" --enumerate scripts-heavy 2>/dev/null | grep '^SUITE_REGISTRATION' | cut -f2 \
-    | sort -u > "${TMPDIR:-/tmp}/ssm-registered-heavy.$$"
-  printf '%s\n' "$DATA_H" | cut -f1 | sort -u > "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$"
+    | LC_ALL=C sort -u > "${TMPDIR:-/tmp}/ssm-registered-heavy.$$"
+  printf '%s\n' "$DATA_H" | cut -f1 | LC_ALL=C sort -u > "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$"
   trap 'rm -f "${TMPDIR:-/tmp}/ssm-registered.$$" "${TMPDIR:-/tmp}/ssm-manifest.$$" "${TMPDIR:-/tmp}/ssm-registered-heavy.$$" "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$"' EXIT
   REF_N_H="$(wc -l < "${TMPDIR:-/tmp}/ssm-registered-heavy.$$")"
   if (( REF_N_H >= 1 )); then
@@ -268,7 +268,7 @@ else
   else
     check fail "heavy registered reference derived 0 labels — every ⊆ assertion below is ungrounded"
   fi
-  PHANTOMS_H="$(comm -23 "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$" "${TMPDIR:-/tmp}/ssm-registered-heavy.$$" | tr '\n' ' ')"
+  PHANTOMS_H="$(LC_ALL=C comm -23 "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$" "${TMPDIR:-/tmp}/ssm-registered-heavy.$$" | tr '\n' ' ')"
   if [[ -z "$PHANTOMS_H" ]]; then
     check pass "every heavy manifest label is a registered scripts-heavy suite"
   else
@@ -319,15 +319,15 @@ check_durations() {
   if (( bad == 0 )); then
     check pass "every $name durations row is 'label<TAB>ms<TAB>src' with src in the enum"
   fi
-  dlabels="$(printf '%s\n' "$data" | cut -f1 | sort -u)"
-  mlabels="$(grep -vE '^[[:space:]]*(#|$)' "$mf" | cut -f1 | sort -u || true)"
-  if [[ "$(comm -3 <(printf '%s\n' "$dlabels") <(printf '%s\n' "$mlabels") | tr '\n' ' ')" == "" ]]; then
+  dlabels="$(printf '%s\n' "$data" | cut -f1 | LC_ALL=C sort -u)"
+  mlabels="$(grep -vE '^[[:space:]]*(#|$)' "$mf" | cut -f1 | LC_ALL=C sort -u || true)"
+  if [[ "$(LC_ALL=C comm -3 <(printf '%s\n' "$dlabels") <(printf '%s\n' "$mlabels") | tr '\n' ' ')" == "" ]]; then
     check pass "$name durations keys == manifest keys — the two consumers see the same label set"
   else
     check fail "$name durations/manifest label sets diverge — a label has weight in one and no placement in the other. Regenerate: $REGEN"
   fi
   local phantoms
-  phantoms="$(comm -23 <(printf '%s\n' "$dlabels") "$ref" | tr '\n' ' ')"
+  phantoms="$(LC_ALL=C comm -23 <(printf '%s\n' "$dlabels") "$ref" | tr '\n' ' ')"
   if [[ -z "$phantoms" ]]; then
     check pass "every $name durations label is a registered suite"
   else

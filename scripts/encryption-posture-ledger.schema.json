@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "encryption-posture-ledger.schema.json",
   "title": "Encryption Posture Ledger",
-  "description": "SSOT for every persistent store and cross-component connection Soleur operates. Layer A (scripts/lint-encryption-posture.py) resolves every citation in this file against real code on every CI run; Layer B reconciles the live_verification: available rows against actual provider/host state. See ADR-140 and knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md (Plan Review Revisions R1-R11).",
+  "description": "SSOT for every persistent store and cross-component connection Soleur operates. Layer A (scripts/lint-encryption-posture.py) resolves every citation in this file against real code on every CI run; Layer B reconciles the live_verification: available rows against actual provider/host state. See ADR-140 and knowledge-base/project/plans/archive/20261013-041741-2026-07-23-feat-encryption-posture-design-time-default-plan.md (Plan Review Revisions R1-R11).",
   "type": "object",
   "required": ["schema_version", "store_classes", "non_store_types", "non_iac_stores", "stores", "connections"],
   "additionalProperties": false,
@@ -36,7 +36,7 @@
       "items": { "type": "string" }
     },
     "non_iac_stores": {
-      "description": "R8: stores with NO *.tf anchor (Supabase, Doppler, Better Stack, the R2 state backend, session Redis). The expected-count floor counts these explicitly so deleting a row cannot silently lower the floor.",
+      "description": "R8: stores with NO *.tf anchor (Supabase, Doppler, Better Stack, the R2 state backend). The expected-count floor counts these explicitly so deleting a row cannot silently lower the floor.",
       "type": "array",
       "items": { "type": "string" }
     },
@@ -60,9 +60,26 @@
           "required": ["volume", "attachment", "mapper"],
           "additionalProperties": false,
           "properties": {
-            "volume": { "type": "string" },
-            "attachment": { "type": "string" },
-            "mapper": { "type": "string", "description": "The resolved /dev/mapper/<name> name; must match the luksOpen operand (after one level of ${VAR:-default} resolution) AND the mount/gate." }
+            "volume": { "type": "string", "minLength": 1 },
+            "attachment": { "type": "string", "minLength": 1 },
+            "mapper": { "type": "string", "minLength": 1, "description": "The resolved /dev/mapper/<name> name; must match the luksOpen operand (after one level of ${VAR:-default} resolution) AND the mount/gate." },
+            "apparatus": {
+              "description": "#9372/#9572: the repo-relative file under apps/*/infra/ that holds THIS volume's cryptsetup luksFormat and luksOpen. Only for an indexed ([each.key]) binding, where it is REQUIRED (resolving the mapper by name would reach a sibling volume's apparatus); a singleton row may not carry it. At most one row may pin a given file.",
+              "type": "string",
+              "minLength": 1
+            },
+            "key_chain": {
+              "description": "#9372/#9572: passphrase custody for a host that reads the key through a fresh-boot token. Only for an indexed binding, where it is REQUIRED; a singleton row may not carry it. It replaces the same-file random_password+doppler_secret pair check for that row.",
+              "type": "object",
+              "required": ["consumer", "token", "secret", "password"],
+              "additionalProperties": false,
+              "properties": {
+                "consumer": { "type": "string", "minLength": 1, "description": "The hcloud_server whose user_data carries the volume id and the token." },
+                "token": { "type": "string", "minLength": 1, "description": "The doppler_service_token the host reads the key with; its config must equal the secret's." },
+                "secret": { "type": "string", "minLength": 1, "description": "The doppler_secret holding the passphrase; its value must be <password>.result." },
+                "password": { "type": "string", "minLength": 1, "pattern": "^random_password\\.", "description": "The random_password this row claims; no password may be claimed by two luks rows." }
+              }
+            }
           }
         },
         "at_rest": {

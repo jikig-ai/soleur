@@ -2,13 +2,13 @@ import { describe, test, expect } from "vitest";
 import { sanitizeProps } from "@/app/api/analytics/track/sanitize";
 
 // Phase 1 RED tests for #2462 — server-side PII scrub of the `path` prop.
-// See knowledge-base/project/plans/2026-04-17-fix-analytics-track-path-pii-plan.md
+// See knowledge-base/project/plans/archive/20261013-003106-2026-04-17-fix-analytics-track-path-pii-plan.md
 // §"Phase 1" for the full 17-case-group rationale. Each test asserts all
 // three return fields (clean, dropped, scrubbed) since the return type is
 // being extended additively with `scrubbed: string[]`.
 
 describe("sanitizeProps — path PII scrub", () => {
-  // Spec cases 1-10 (knowledge-base/project/specs/feat-fix-analytics-track-path-pii/spec.md).
+  // Spec cases 1-10 (knowledge-base/project/specs/archive/20261013-003106-feat-fix-analytics-track-path-pii/spec.md).
 
   test("case 1 — email in path → [email] sentinel", () => {
     const out = sanitizeProps({ path: "/users/alice@example.com/settings" });

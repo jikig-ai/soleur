@@ -157,7 +157,7 @@ def web2_retire_allow: [
 # trailing instance index stripped (luks_passphrase_base below): a for_each/count rebirth (#9372) re-addresses
 # random_password.workspaces_luks_web as random_password.workspaces_luks_web["web-2"], and that is the same secret.
 # The set may only GROW. Per-address rows (T64e/T64f) exist in tests/scripts/test-destroy-guard-counter-web-platform.sh
-# for the FOUR workspaces addresses only; the inngest pair is pinned by the T60 fixtures. The three dispatch gates that
+# for the FOUR workspaces addresses only; the inngest pair is pinned by the T60 fixtures and the T64o create-list rows. The three dispatch gates that
 # name the workspaces members carry removal rows of their own, and need no index normalization: an indexed or
 # module-prefixed address is not in their exact-match allow-set, so it lands in out_of_scope and aborts.
 def luks_passphrase_addrs: [
@@ -167,6 +167,23 @@ def luks_passphrase_addrs: [
   "doppler_secret.workspaces_luks_key",
   "random_password.workspaces_luks_web",
   "doppler_secret.workspaces_luks_web_key"
+];
+
+# The two addresses where a CREATE also halts: the web-class passphrase (the retirement change for #9372) and the
+# inngest passphrase (#9879). Only a create of a random_password can mint a new passphrase over a live header, and no
+# route creates either one any more (the web escrow-create workflow is retired, and so is the inngest recut route,
+# #8285), so a planned create means state lost the entry. State losing BOTH pair members plans create+create, and
+# applying it would mint a new passphrase over the live Doppler key while the header is cut from the old one. A create
+# of the Doppler copy alone (doppler_secret.workspaces_luks_web_key, doppler_secret.inngest_redis_luks_key) re-derives
+# the same state-held value and stays legal, because without the password in the same plan it restores the live
+# passphrase rather than replacing it (hosts read the key from Doppler at boot, so a missing copy is itself an
+# incident and must stay repairable). The set is deliberately NARROWER than luks_passphrase_addrs: a create at the
+# other four stays legal (web-1's pair already exists with no creation flow). Widening it is a tracked follow-up
+# (#9572), not an edit to make here. Matched through luks_passphrase_base like the six-address list, so a
+# for_each-indexed address counts too. One address per line, exact-equality membership.
+def luks_passphrase_create_halt_addrs: [
+  "random_password.workspaces_luks_web",
+  "random_password.inngest_redis_luks"
 ];
 
 # The resource address with a leading module path and a trailing instance index removed, so
@@ -423,8 +440,9 @@ def destroyed_at($addr):
   # that re-links it cannot rotate it silently. `[ack-destroy]` cannot discriminate a passphrase replace from any
   # other delete in the same merge, so the workspaces members get the same non-ackable treatment as the inngest
   # pair, and for the same reason: a rotated value leaves the LUKS header cut from the old one, no copy of the old
-  # value survives (Terraform state keeps only the latest), and the host has no console. A first CREATE of the
-  # web-class pair stays legal (no web-class volume is formatted yet). Rotating a populated volume is a header
+  # value survives (Terraform state keeps only the latest), and the host has no console. A CREATE of the
+  # web-class and inngest passphrase halts as well; why those two addresses only is written once, at
+  # luks_passphrase_create_halt_addrs above. Rotating a populated volume is a header
   # re-key (`cryptsetup luksChangeKey`) followed by an intentional state change under review, never a Terraform
   # replace; the apply job's HALT text says so.
   #
@@ -432,7 +450,8 @@ def destroyed_at($addr):
   # the per-merge `-target=` allow-list, so a routine merge apply reaches them. A delete/replace
   # there mints a new passphrase while the LUKS header on the live volume is still cut from the
   # OLD one — the store is then unopenable, on a host with no SSH and no console, and the AOF it
-  # holds is user prompts and agent output. There is no recovery: the header key is the only copy.
+  # holds is user prompts and agent output. There is no recovery: the OLD value is not
+  # recoverable once state is overwritten (the state copy is the second copy).
   #
   # WHY IT NEEDS ITS OWN COUNTER RATHER THAN resource_deletes. A replace trips resource_deletes,
   # and the destroy gate then prints "Add [ack-destroy] to acknowledge" — so an author acking a
@@ -451,10 +470,11 @@ def destroyed_at($addr):
   #     {"resource_deletes":0,"luks_passphrase_rotations":0}
   # That address is in the per-merge `-target=` list, so an unattended merge apply reaches it. The
   # result is a Doppler passphrase the live LUKS header was never cut from: the store is
-  # unopenable on the next boot, on a host with no SSH and no console, and the header key is the
-  # only copy. The parity claim below is now true rather than aspirational. A first CREATE is legal and expected
-  # — this volume is being cut to LUKS for the first time, and inngest_volume_recut_gate makes the
-  # same three-verb exclusion for the same reason. `forget` IS counted: a Terraform 1.7+ state-drop
+  # unopenable on the next boot, on a host with no SSH and no console, and the OLD value is not
+  # recoverable once state is overwritten (the state copy is the second copy). The parity claim below is now true rather than aspirational. A CREATE of the inngest passphrase HALTS
+  # (#9879): the volume is already cut to LUKS and the recut route that made a first create legal is retired (#8285),
+  # so a planned create means state lost the entry; a create of the Doppler copy alone stays legal (see
+  # luks_passphrase_create_halt_addrs). `forget` IS counted: a Terraform 1.7+ state-drop
   # of the passphrase leaves the header cut from a value nothing records any more, which is the
   # stranding hazard wearing a different hat (the same note the retire counters carry at T49).
   # 11th surface (#7695 review F1): AN ENTRY WHOSE VERB SET CANNOT BE READ, AT ANY ADDRESS.
@@ -504,12 +524,18 @@ def destroyed_at($addr):
           # gate scripts via plan-gate-preamble.sh, which does not run on this workflow path.
           #
           # An entry AT THESE ADDRESSES whose verb set cannot be read is not evidence of safety, so
-          # it counts. `["no-op"]` and `["create"]` are decidable and legitimately score 0 — no-op
-          # is the routine merge reading, and a first create is this volume being cut to LUKS for
-          # the first time.
+          # it counts. `["no-op"]` is decidable and legitimately scores 0 — it is the routine merge
+          # reading — and so is a `["create"]` at any address NOT in luks_passphrase_create_halt_addrs (the
+          # inngest and web-class Doppler copies, web-1's pair). A create of the web-class or inngest passphrase counts
+          # (rationale at that list). The base address goes through luks_passphrase_base like the
+          # membership test above, so an indexed or module-prefixed spelling counts too.
           ((.change.actions | type) != "array")
           or ((.change.actions | length) == 0)
           or (.change.actions | any(. == "update" or . == "delete" or . == "forget"))
+          or (
+            (.change.actions | any(. == "create"))
+            and IN(.address | strings | luks_passphrase_base; luks_passphrase_create_halt_addrs[])
+          )
         ) ]
     | length
   ),

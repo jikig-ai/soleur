@@ -12,8 +12,10 @@
 # THE STUB ASSERTS ITS ARGV AND ANSWERS BY WHAT WAS ASKED. A `curl` that answers regardless of
 # arguments cannot notice the probe sending the wrong method, dropping the HMAC header, widening a
 # slice past the page cap, or drifting the `from=` anchor — every one of those would stay green
-# forever. The stub refuses (exit 64) unless the request carries `-X GET`, `X-Signature-256:
-# sha256=`, both CF-Access headers, and — for slices — the pinned URL prefix with
+# forever. (#9597, S2) The credentials now travel on STDIN as `header = "..."` config lines, so the stub
+# RECORDS stdin (curl.stdin.log) and refuses (exit 64) a credential header on argv. It refuses unless the
+# request carries `-X GET`, `X-Signature-256: sha256=<64 hex>` and both CF-Access headers (on stdin), and —
+# for slices — the pinned URL prefix with
 # `from=2026-09-15T12:40:00Z` and at most 8 ids; and it serves the fixture for the slice that
 # HOLDS the first requested id (not the Nth fixture for the Nth call), so a re-dealt probe is
 # answered with the wrong function set and P-C reds. H2 proves the refusal is live.
@@ -58,7 +60,7 @@ cat > "$WORK/bin/curl" <<'STUB'
 set -uo pipefail
 cfg="$(dirname "$0")/.."
 printf '%s\n' "$*" >> "$cfg/calls.log"
-out=""; url=""; want_code=0; method=""; hdr_sig=0; hdr_id=0; hdr_sec=0
+out=""; url=""; want_code=0; method=""; hdr_sig=0; hdr_id=0; hdr_sec=0; cfg_stdin=0
 args=("$@")
 for (( i = 0; i < ${#args[@]}; i++ )); do
   case "${args[$i]}" in
@@ -66,19 +68,31 @@ for (( i = 0; i < ${#args[@]}; i++ )); do
     -w) want_code=1; i=$((i+1)) ;;
     -X) method="${args[$((i+1))]}"; i=$((i+1)) ;;
     -H)
+      # a credential header on ARGV is refused: the three travel on the stdin config channel only.
       h="${args[$((i+1))]}"; i=$((i+1))
       case "$h" in
-        "X-Signature-256: sha256="*) hdr_sig=1 ;;
-        "CF-Access-Client-Id: "*) hdr_id=1 ;;
-        "CF-Access-Client-Secret: "*) hdr_sec=1 ;;
+        "X-Signature-256: "*|"CF-Access-Client-Id: "*|"CF-Access-Client-Secret: "*) echo "stub: credential header on argv" >&2; exit 64 ;;
       esac ;;
+    --config) [[ "${args[$((i+1))]}" == "-" ]] && cfg_stdin=1; i=$((i+1)) ;;
     --max-time|--connect-timeout|--proto|--noproxy) i=$((i+1)) ;;
     https://*) url="${args[$i]}" ;;
   esac
 done
+# stdin is RECORDED (curl.stdin.log, calls separated by --END--) and judged line by line: the signature line must carry a
+# 64-hex digest, and both Cloudflare Access lines must be bare `header = "..."` directives.
+if [[ "$cfg_stdin" == 1 ]]; then
+  stdin_data="$(cat)"
+  { printf '%s\n' "$stdin_data"; printf -- '--END--\n'; } >> "$cfg/curl.stdin.log"
+  re_sig='^header = "X-Signature-256: sha256=[0-9a-f]{64}"$'
+  while IFS= read -r line; do
+    if [[ "$line" =~ $re_sig ]]; then hdr_sig=1
+    elif [[ "$line" == 'header = "CF-Access-Client-Id: '*'"' ]]; then hdr_id=1
+    elif [[ "$line" == 'header = "CF-Access-Client-Secret: '*'"' ]]; then hdr_sec=1; fi
+  done <<< "$stdin_data"
+fi
 [[ "$method" == "GET" ]] || { echo "stub: not -X GET" >&2; exit 64; }
-[[ "$hdr_sig" == 1 ]] || { echo "stub: missing X-Signature-256: sha256= header" >&2; exit 64; }
-[[ "$hdr_id" == 1 && "$hdr_sec" == 1 ]] || { echo "stub: missing CF-Access header pair" >&2; exit 64; }
+[[ "$hdr_sig" == 1 ]] || { echo "stub: missing X-Signature-256: sha256=<64 hex> header line on stdin" >&2; exit 64; }
+[[ "$hdr_id" == 1 && "$hdr_sec" == 1 ]] || { echo "stub: missing CF-Access header pair on stdin" >&2; exit 64; }
 rc_file="$cfg/curl.rc"
 if [[ -f "$rc_file" ]]; then rc="$(<"$rc_file")"; if [[ "$rc" != "0" ]]; then [[ "$want_code" == 1 ]] && printf '000'; exit "$rc"; fi; fi
 case "$url" in
@@ -154,7 +168,7 @@ default_fixtures() {
 RUN_ENV=(WEBHOOK_DEPLOY_SECRET=p-secret CF_ACCESS_CLIENT_ID=cf-id CF_ACCESS_CLIENT_SECRET=cf-secret)
 run() {
   local name="$1"; shift
-  : > "$WORK/calls.log"; : > "$WORK/slice-ids.log"
+  : > "$WORK/calls.log"; : > "$WORK/slice-ids.log"; : > "$WORK/curl.stdin.log"
   OUT="$(env "${RUN_ENV[@]}" INNGEST_SOAK_NOW_EPOCH="${NOW:-1790000000}" \
         ${POPFILE:+INNGEST_SOAK_POPULATION_FILE="$POPFILE"} \
         PATH="$WORK/bin:$PATH" bash "$@" "${PROBE_OVERRIDE:-$PROBE}" 2>&1)"
@@ -217,13 +231,19 @@ else
   exit 1
 fi
 
-# ── H2 the stub refuses argv without the signature header ────────────────────────────────────
+# ── H2 the stub refuses a request without the signature header line on stdin, and a credential header on argv ──────
 : > "$WORK/calls.log"
-_argv_out="$(PATH="$WORK/bin:$PATH" curl -X GET -H 'CF-Access-Client-Id: a' -H 'CF-Access-Client-Secret: b' 'https://deploy.soleur.ai/hooks/inngest-registry-probe' 2>&1; echo "rc=$?")"
+_argv_out="$(PATH="$WORK/bin:$PATH" curl -X GET --config - 'https://deploy.soleur.ai/hooks/inngest-registry-probe' < <(printf 'header = "CF-Access-Client-Id: a"\nheader = "CF-Access-Client-Secret: b"\n') 2>&1; echo "rc=$?")"
 if grep -q 'rc=64' <<<"$_argv_out"; then
-  pass "INSTRUMENT: the stub exits 64 without the X-Signature-256 header (argv is asserted)"
+  pass "INSTRUMENT: the stub exits 64 without the X-Signature-256 header line on stdin (stdin is asserted)"
 else
-  fail "INSTRUMENT: the stub accepted a request with no HMAC header — every argv assertion is vacuous"
+  fail "INSTRUMENT: the stub accepted a request with no HMAC header — every stdin assertion is vacuous"
+fi
+_argv_out="$(PATH="$WORK/bin:$PATH" curl -X GET -H 'CF-Access-Client-Id: a' --config - 'https://deploy.soleur.ai/hooks/inngest-registry-probe' < <(printf 'header = "X-Signature-256: sha256=%064d"\nheader = "CF-Access-Client-Id: a"\nheader = "CF-Access-Client-Secret: b"\n' 0) 2>&1; echo "rc=$?")"
+if grep -q 'rc=64' <<<"$_argv_out"; then
+  pass "INSTRUMENT: the stub exits 64 when a credential header is on argv, even with the full set on stdin"
+else
+  fail "INSTRUMENT: the stub accepted a credential header on argv"
 fi
 
 # ── H3 the never-close invariant helper itself fires ─────────────────────────────────────────
@@ -558,6 +578,47 @@ default_fixtures; POPFILE="$POP" PROBE_OVERRIDE="$WORK/probe-abort.sh" NOW=$SOAK
 expect "P-D a set -u abort at the clean exit site is rewritten to 3 by the trap (never the raw rc 1)" 3 "reason=unmapped_exit rc=1"
 unset PROBE_OVERRIDE
 
+# ── C26 the credential transport (#9597, S2): the RECORDED stdin, request by request ───────────────────────────
+# Every request (the registry GET and the 7 slice GETs) must carry EXACTLY the three header lines on stdin: a 64-hex digest equal to
+# the independent openssl oracle over the empty body, then the Cloudflare Access id, then the secret. No credential and no -H is on
+# argv, and --disable --noproxy '*' come first. A stub that ignored stdin could not tell this probe from one that sends no credential.
+command -v openssl >/dev/null 2>&1 || { echo "FATAL: openssl is the independent oracle for the signature" >&2; exit 1; }
+SIG_WANT="$(printf '' | openssl dgst -sha256 -hmac p-secret | sed 's/.*= //')"
+default_fixtures; run C26
+expect "C26 a clean run still reads (rc 2) with the new transport" 2 "NOT YET: interim reading at day"
+_blocks="$(awk -v want="header = \"X-Signature-256: sha256=$SIG_WANT\"" -v id='header = "CF-Access-Client-Id: cf-id"' -v sec='header = "CF-Access-Client-Secret: cf-secret"' '
+  /^--END--$/ { if (n == 3 && l1 == want && l2 == id && l3 == sec) ok++; else bad++; n = 0; next }
+  NF { n++; if (n == 1) l1 = $0; else if (n == 2) l2 = $0; else if (n == 3) l3 = $0 }
+  END { print ok + 0, bad + 0 }' "$WORK/curl.stdin.log")"
+[[ "$_blocks" == "8 0" ]] && pass "C26 all 8 requests carry exactly the three header lines on stdin (digest equal to the openssl oracle, the id, the secret)" || fail "C26 recorded stdin blocks (ok bad) = '$_blocks', want '8 0'"
+[[ "$(grep -cE -e 'p-secret|cf-id|cf-secret|(^| )-H ' "$WORK/calls.log" || true)" == 0 ]] && pass "C26 no credential value and no -H header is on any request's argv" || fail "C26 a credential or -H header reached curl's argv"
+[[ "$(grep -vc -e '^--disable --noproxy \* ' "$WORK/calls.log" || true)" == 0 ]] && pass "C26 every request starts --disable --noproxy '*' (curl honours --disable only as the first option)" || fail "C26 a request does not start with --disable --noproxy '*'"
+expect_absent "C26 the credential values never appear in the probe's output" "p-secret"
+expect_absent "C26 ...nor the Cloudflare Access pair" "cf-secret"
+
+# A malformed Cloudflare Access value is refused BEFORE curl: CANNOT ESTABLISH (3: this probe reserves 2 for a reading and never takes 0 or 1),
+# one value-free marker, nothing echoed.
+_saved_env=("${RUN_ENV[@]}")
+for spec in "id|CF_ACCESS_CLIENT_ID|SYNTHMARK1\"x" "secret|CF_ACCESS_CLIENT_SECRET|SYNTHMARK2"$'\n'"url = \"http://evil.example.test/second" "space|CF_ACCESS_CLIENT_SECRET|SYNTHMARK3 x" "nonascii|CF_ACCESS_CLIENT_ID|SYNTHMARK4"$'\xc3\xa9'; do
+  IFS='|' read -r _l _v _x <<< "$spec"; _val="${spec#*|*|}"
+  RUN_ENV=(WEBHOOK_DEPLOY_SECRET=p-secret CF_ACCESS_CLIENT_ID=cf-id CF_ACCESS_CLIENT_SECRET=cf-secret "$_v=$_val")
+  default_fixtures; run "C27-$_l"
+  expect "C27 a hostile Cloudflare Access $_l value is refused before curl (3, the marker)" 3 "SOLEUR_CREDENTIAL_REFUSED script=inngest-soak-6178 reason=token_shape"
+  [[ "$(grep -cxF 'SOLEUR_CREDENTIAL_REFUSED script=inngest-soak-6178 reason=token_shape' <<<"$OUT")" == 1 && ! -s "$WORK/calls.log" ]] && pass "C27 ...the marker once and zero requests ($_l)" || fail "C27 marker count or request count wrong ($_l)"
+  expect_absent "C27 ...the value is not echoed ($_l)" "SYNTHMARK"
+done
+RUN_ENV=("${_saved_env[@]}")
+
+# A signature that cannot be computed (python3 fails, or prints a non-digest) is refused before curl, never sent unsigned.
+for _py in "fails|exit 1" "garbage|printf 'not-a-digest'"; do
+  _pl="${_py%%|*}"; _pb="${_py#*|}"
+  printf '#!/usr/bin/env bash\n%s\n' "$_pb" > "$WORK/bin/python3"; chmod +x "$WORK/bin/python3"
+  default_fixtures; run "C28-$_pl"
+  rm -f "$WORK/bin/python3"
+  expect "C28 python3 $_pl → refused before curl (3, the marker)" 3 "SOLEUR_CREDENTIAL_REFUSED script=inngest-soak-6178 reason=token_shape"
+  [[ ! -s "$WORK/calls.log" ]] && pass "C28 ...and no request was sent unsigned ($_pl)" || fail "C28 a request was made after the signature failed ($_pl)"
+done
+
 # ── summary first, then the anti-vacuity floor and conservation ───────────────────────────────
 # The summary precedes the floor so a genuine failure is never reported as "cases were deleted".
 printf '\ninngest-soak-6178: %s passed, %s failed\n' "$passes" "$fails"
@@ -569,7 +630,7 @@ fi
 # FLOOR is bound IMMEDIATELY above the floor it feeds: guard-vacuity-floor.test.sh slices the
 # floor block backward over contiguous simple assignments only, so a non-assignment line between
 # the binding and the `if` leaves the mutant unbound and the floor scored "not constructible".
-FLOOR=155
+FLOOR=178
 if [[ "$passes" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s — cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
   exit 1

@@ -5,7 +5,7 @@ date: 2026-08-03
 related_adrs: [ADR-047]
 related: [7186, 6917, 6874, 4810]
 related_plans:
-  - knowledge-base/project/plans/2026-08-03-fix-kb-mobile-drill-in-navigation-plan.md
+  - knowledge-base/project/plans/archive/20261013-051752-2026-08-03-fix-kb-mobile-drill-in-navigation-plan.md
 brand_survival_threshold: single-user incident
 ---
 

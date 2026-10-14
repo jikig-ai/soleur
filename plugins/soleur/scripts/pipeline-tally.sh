@@ -288,14 +288,14 @@ _tally_field() {
 _tally_ledger_ok() {
   [[ -f "$1" && -r "$1" ]] || return 1
   grep -q '^seats=' "$1" 2>/dev/null || return 1
-  if grep -E '^(seats|ci_cycles|fix_rounds|agent_rounds|cap_[a-z_]+|warned_[a-z_]+)=' "$1" 2>/dev/null \
-     | grep -qvE '=[0-9]{1,18}$'; then
+  if grep -qvE '=[0-9]{1,18}$' \
+     < <(grep -E '^(seats|ci_cycles|fix_rounds|agent_rounds|cap_[a-z_]+|warned_[a-z_]+)=' "$1" 2>/dev/null); then
     return 1
   fi
   # EVERY capped= line must carry the dim vocabulary or be empty — a duplicate
   # corrupt line after a clean one must not slip past a first-line read.
-  if grep -E '^capped=' "$1" 2>/dev/null \
-     | grep -qvE '^capped=(|seats|ci_cycles|fix_rounds|agent_rounds)$'; then
+  if grep -qvE '^capped=(|seats|ci_cycles|fix_rounds|agent_rounds)$' \
+     < <(grep -E '^capped=' "$1" 2>/dev/null); then
     return 1
   fi
   return 0

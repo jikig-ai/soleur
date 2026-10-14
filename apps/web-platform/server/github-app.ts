@@ -168,19 +168,30 @@ function createAppJwt(): string {
 
 let cachedSlug: string | null = null;
 
+const APP_SLUG_FETCH_TIMEOUT_MS = 5_000;
+// GitHub app slugs: lowercase alphanumerics and single hyphens, no leading or
+// trailing hyphen. Also guards the open-redirect-via-path-traversal use of the slug.
+const APP_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
 /**
- * Fetch the GitHub App slug from the API (GET /app), caching the result.
- * Falls back to NEXT_PUBLIC_GITHUB_APP_SLUG if credentials are not set.
+ * Fetch the GitHub App slug from the API (GET /app).
+ *
+ * ONLY a slug validated from a 2xx GET /app response is cached for the process
+ * lifetime. Every fallback (credentials unset, non-2xx, malformed slug) returns
+ * NEXT_PUBLIC_GITHUB_APP_SLUG WITHOUT caching, so one transient 5xx/401 cannot pin
+ * a wrong slug until restart (the community monitor uses this slug as its
+ * PATCH-author gate; a pinned wrong value would duplicate the digest issue daily).
+ * The fetch is bounded by AbortSignal.timeout so a hung GitHub call cannot stall
+ * the caller.
  */
 export async function getAppSlug(): Promise<string> {
   if (cachedSlug) return cachedSlug;
 
+  const fallback = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
   const appId = process.env.GITHUB_APP_ID;
   const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
   if (!appId || !privateKey) {
-    const fallback = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
     log.warn("GITHUB_APP_ID not set — using env var fallback for app slug");
-    cachedSlug = fallback;
     return fallback;
   }
 
@@ -191,21 +202,18 @@ export async function getAppSlug(): Promise<string> {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
     },
+    signal: AbortSignal.timeout(APP_SLUG_FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {
-    const fallback = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
-    log.error({ status: response.status }, "Failed to fetch app slug from GitHub API — using fallback");
-    cachedSlug = fallback;
+    log.error({ status: response.status }, "Failed to fetch app slug from GitHub API — using fallback (not cached)");
     return fallback;
   }
 
-  const data = (await response.json()) as { slug: string };
+  const data = (await response.json()) as { slug?: unknown };
   // Validate slug format to prevent open redirect via path traversal
-  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(data.slug)) {
-    const fallback = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
-    log.error({ slug: data.slug }, "Invalid slug format from GitHub API — using fallback");
-    cachedSlug = fallback;
+  if (typeof data.slug !== "string" || !APP_SLUG_RE.test(data.slug)) {
+    log.error({ slugType: typeof data.slug }, "Invalid slug format from GitHub API — using fallback (not cached)");
     return fallback;
   }
   cachedSlug = data.slug;

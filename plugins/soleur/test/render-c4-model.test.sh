@@ -55,7 +55,7 @@ echo "=== render-c4-model (plugin-owned renderer) ==="
 
 # ── The discoverability probe the plan's Observability block names. No likec4 needed. ──────
 CASES_RUN=$((CASES_RUN + 1))
-if bash "$RENDERER" --help 2>/dev/null | grep -q -- '--root'; then
+if bash "$RENDERER" --help 2>/dev/null | grep -c >/dev/null -- '--root'; then
   pass "--help documents --root (the flag the resolver passes)"
 else
   fail "--help does not document --root"
@@ -67,7 +67,7 @@ _rc=0; bash "$RENDERER" --root "$SANDBOX/no-such-dir" >/dev/null 2>&1 || _rc=$?
 
 # This repo's wrapper forwards to the plugin renderer (lefthook and the docs still call it).
 CASES_RUN=$((CASES_RUN + 1))
-if bash "$SCRIPT_DIR/../../../scripts/regenerate-c4-model.sh" --help 2>/dev/null | grep -q -- '--root'; then
+if bash "$SCRIPT_DIR/../../../scripts/regenerate-c4-model.sh" --help 2>/dev/null | grep -c >/dev/null -- '--root'; then
   pass "scripts/regenerate-c4-model.sh forwards to the plugin renderer"
 else
   fail "the scripts/regenerate-c4-model.sh wrapper does not reach the plugin renderer"

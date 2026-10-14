@@ -73,7 +73,7 @@ verdict, not a connection error) — proved api.github.com WAS reachable
 > signal's SHAPE is verified against the failure mode it is claimed to rule
 > out (a transport denial and an HTTP 401 render differently in gh output —
 > `Post "...": <status-text>` vs `HTTP 401: <message>`). See
-> `knowledge-base/project/plans/2026-06-09-fix-concierge-sandbox-github-egress-gh-forbidden-plan.md`
+> `knowledge-base/project/plans/archive/20261013-032858-2026-06-09-fix-concierge-sandbox-github-egress-gh-forbidden-plan.md`
 > §SDK semantics; the post-merge AC9 live e2e is the definitive arbiter.
 
 ## Session Errors

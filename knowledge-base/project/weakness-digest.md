@@ -3,25 +3,25 @@
 _Read-only recurring-failure signal from learnings added in the last 7d (#6037).
 Triage clusters into `/compound`; this file never edits the harness._
 
-Learnings in window: 117
+Learnings in window: 174
 
 ## Recurring failure patterns
 
 _Clusters of learnings sharing >= 2 tags, ranked by size (>= 3 members)._
 
-### mutation-testing + review — 4 learnings
-- 2026-09-28-an-ssh-drop-without-a-pty-is-sigpipe-and-my-cleanup-trap-read-it-as-success.md
-- 2026-09-28-every-guard-was-narrower-than-its-name-and-my-battery-mutated-only-whole-chokepoints.md
-- 2026-09-29-a-source-census-that-checks-the-arguments-name-not-its-binding-and-a-closed-file-list-both-let-guarded-egress-through.md
-- 2026-10-04-a-new-suite-is-invisible-to-repo-ratchets-until-tracked-and-my-fix-moved-the-event-behind-a-hang.md
+### bwrap + sandbox — 4 learnings
+- 2026-10-08-file-tool-tier-outside-bwrap-isolation-boundary-is-the-cli-process.md
+- 2026-10-09-mount-source-indirection-is-the-wraps-own-attack-surface.md
+- bwrap-args-payload-outer-resume-proc-mask-20261009.md
+- bwrap-masked-proc-drop-not-cover-shim-20261011.md
 
-### mutation-testing + test-design — 3 learnings
-- 2026-09-28-a-replace-gate-on-one-route-and-an-isolation-that-shared-one-shell.md
-- 2026-09-28-a-retrying-unit-must-latch-only-full-success-and-undo-what-it-paused.md
-- 2026-09-30-a-fleet-wide-counter-cannot-prove-who-did-the-work.md
+### sandbox + tenant-isolation — 3 learnings
+- 2026-10-08-file-tool-tier-outside-bwrap-isolation-boundary-is-the-cli-process.md
+- 2026-10-09-mount-source-indirection-is-the-wraps-own-attack-surface.md
+- deny-then-restore-vendored-builder-argv-ordering-20261007.md
 
-### mutation-testing + systemd — 3 learnings
-- 2026-09-28-a-retrying-unit-must-latch-only-full-success-and-undo-what-it-paused.md
-- 2026-09-28-an-ssh-drop-without-a-pty-is-sigpipe-and-my-cleanup-trap-read-it-as-success.md
-- 2026-09-30-a-fleet-wide-counter-cannot-prove-who-did-the-work.md
+### mutation-testing + review — 3 learnings
+- 2026-10-06-an-evidence-gate-read-paths-no-stored-row-had-because-its-fixtures-were-aggregates.md
+- 2026-10-11-a-control-that-fails-early-proves-nothing-about-the-checks-after-it.md
+- merge-queue-ejections-two-causes-and-fix-pr-guard-survivors-20261005.md
 

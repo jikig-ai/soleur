@@ -133,6 +133,16 @@ export interface CommunityDigestFileMarker {
   digest_path: string;
   /** 1 when the file exists in the spawn workspace, 0 otherwise. */
   present: 0 | 1;
+  /**
+   * #7122: the handler validates the agent's draft and WRITES the digest itself,
+   * so `present` alone no longer separates "the agent never produced a draft" from
+   * "the draft was rejected". `ok`: validated and rendered; `rejected`: the draft
+   * failed validation (no digest written); `skipped-timeout`: the run was killed at
+   * the ceiling and validation never ran.
+   */
+  verdict: "ok" | "rejected" | "skipped-timeout";
+  /** Who authored the committed bytes. Always the handler since #7122 (it was the agent before). */
+  writer: "handler";
 }
 
 /** Emit one `SOLEUR_COMMUNITY_DIGEST_FILE` WARN marker. NEVER throws. */

@@ -104,7 +104,7 @@ awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug) foun
 
 # --- Idempotency check ---
 
-if doppler projects 2>/dev/null | grep -q "$SLUG"; then
+if grep -q "$SLUG" < <(doppler projects 2>/dev/null); then
   echo "WARNING: Doppler project '$SLUG' already exists."
   echo "  Continuing will regenerate TF config. Existing project is unchanged until 'terraform apply'."
   echo ""
@@ -184,14 +184,14 @@ if $DRY_RUN; then
   # form: `--disable` literally first (it aborts ~/.curlrc parsing, and later is
   # too late) and `--noproxy '*'` (#7873).
   echo "curl --disable --noproxy '*' -sS -X POST 'https://api.doppler.com/v3/workplace/service_accounts' \\"
-  echo "  -H 'Authorization: Bearer \$DOPPLER_TOKEN' \\"
   echo "  -H 'Content-Type: application/json' \\"
-  echo "  -d '{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}'"
+  echo "  -d '{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}' \\"
+  echo "  --config - < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"\$DOPPLER_TOKEN\")"
   echo ""
   echo "# Then configure OIDC trust with two-claim binding + grant project access"
   echo ""
   echo "--- Smoke-test ---"
-  echo "curl --disable --noproxy '*' -sS -H 'Authorization: Bearer \$DOPPLER_TOKEN' 'https://api.doppler.com/v3/workplace/service_accounts' | jq '.service_accounts[] | select(.name == \"${SLUG}-deploy\")'"
+  echo "curl --disable --noproxy '*' -sS --config - 'https://api.doppler.com/v3/workplace/service_accounts' < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"\$DOPPLER_TOKEN\") | jq '.service_accounts[] | select(.name == \"${SLUG}-deploy\")'"
   echo ""
   echo "--- Teardown ---"
   echo "  doppler projects delete '${SLUG}' --yes"
@@ -248,6 +248,23 @@ echo ""
 (
   export DOPPLER_TOKEN
 
+  # Token-shape guard (never echoes the value): the token is written into curl's stdin
+  # config below, so a quote or newline in it would inject a config directive. An unusable
+  # token makes zero curl calls and aborts the run non-zero, never a green provisioning.
+  _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+  if ! _bearer_ok "$DOPPLER_TOKEN"; then
+    echo "Error: the Doppler personal token is missing or has an unexpected shape; no request was sent." >&2
+    exit 1
+  fi
+
+  # ONE wrapper owns the transport flags (`--disable` first, `--noproxy '*'`), the guard
+  # and the header: the bearer rides curl's stdin config channel, never its argument list.
+  doppler_api() {
+    _bearer_ok "$DOPPLER_TOKEN" || return 1
+    curl --disable --noproxy '*' -sS "$@" --config - \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$DOPPLER_TOKEN")
+  }
+
   # Payloads are HOISTED into variables rather than written inline. Each curl here
   # sends a credential, and a multi-line `-d "{…}"` literal makes the invocation
   # multi-shaped, which is what the destination-confinement linter mis-parses as an
@@ -257,8 +274,7 @@ echo ""
   SA_PAYLOAD="{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}"
 
   SA_RESPONSE=$(
-    curl --disable --noproxy '*' -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts" \
-      -H "Authorization: Bearer $DOPPLER_TOKEN" \
+    doppler_api -X POST "https://api.doppler.com/v3/workplace/service_accounts" \
       -H "Content-Type: application/json" \
       -d "$SA_PAYLOAD"
   )
@@ -284,13 +300,12 @@ echo ""
   TRUST_PAYLOAD="${TRUST_PAYLOAD}\"environment\": \"production\"}}}"
 
   TRUST_RESPONSE=$(
-    curl --disable --noproxy '*' -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/identity" \
-      -H "Authorization: Bearer $DOPPLER_TOKEN" \
+    doppler_api -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/identity" \
       -H "Content-Type: application/json" \
       -d "$TRUST_PAYLOAD"
   )
 
-  if echo "$TRUST_RESPONSE" | grep -q '"success"'; then
+  if grep -q '"success"' <<<"$TRUST_RESPONSE"; then
     echo "Configured OIDC trust: repository=${TENANT_ORG}/${TENANT_REPO}, environment=production"
   else
     echo "Warning: OIDC trust binding response:" >&2
@@ -303,13 +318,12 @@ echo ""
   GRANT_PAYLOAD="{\"project\": \"${SLUG}\", \"role\": \"viewer\"}"
 
   GRANT_RESPONSE=$(
-    curl --disable --noproxy '*' -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/projects" \
-      -H "Authorization: Bearer $DOPPLER_TOKEN" \
+    doppler_api -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/projects" \
       -H "Content-Type: application/json" \
       -d "$GRANT_PAYLOAD"
   )
 
-  if echo "$GRANT_RESPONSE" | grep -q '"success"'; then
+  if grep -q '"success"' <<<"$GRANT_RESPONSE"; then
     echo "Granted service account access to project '${SLUG}'"
   else
     echo "Warning: Project grant response:" >&2
@@ -322,8 +336,7 @@ echo ""
   echo "--- Smoke-test ---"
 
   SA_CHECK=$(
-    curl --disable --noproxy '*' -sS -H "Authorization: Bearer $DOPPLER_TOKEN" \
-      "https://api.doppler.com/v3/workplace/service_accounts" \
+    doppler_api "https://api.doppler.com/v3/workplace/service_accounts" \
     | grep -o "\"name\":\"${SLUG}-deploy\""
   )
 

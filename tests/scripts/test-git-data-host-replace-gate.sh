@@ -20,6 +20,10 @@
 # -replace plan shape (server/network/both-attachments=delete+create,
 # firewall_attachment=update, volumes/passphrase=no-op/absent). No captured real plan file.
 #
+# This suite also covers the POST-apply backstop git_data_host_post_apply_assert (#10137): rows PA1-PA8
+# grade the saved plan per mode (replace: both volumes preserved; rotate: plaintext only), and PM1-PM7
+# neuter each of its arms on a copy of the lib (see the section before the anti-vacuity floor).
+#
 # Run: bash tests/scripts/test-git-data-host-replace-gate.sh
 
 set -uo pipefail
@@ -537,6 +541,166 @@ else
   pass "R9 rotate-oos: out_of_scope still binds in rotate mode"
 fi
 
+# ── POST-APPLY BACKSTOP (#10137) ───────────────────────────────────────────────────────
+# git_data_host_post_apply_assert re-reads the SAVED plan after `terraform apply` (the apply step
+# in job git_data_host_replace sources it). The old inline loop asserted BOTH data volumes
+# preserved in both modes, so the rotate dispatch (which replaces hcloud_volume.git_data_luks on
+# purpose) failed its own job after a successful apply. The preserved-volume set is now per mode:
+# replace = plaintext + LUKS, rotate = plaintext only. Everything else (private NIC create, both
+# store-attachment creates, readable/classifiable plan, fail-closed mode) holds in both modes.
+PA_NIC="$(rc_obj 'hcloud_server_network.git_data' '"delete","create"')"
+PA_ATT="$(rc_obj 'hcloud_volume_attachment.git_data' '"delete","create"')"
+PA_ATT_LUKS="$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"delete","create"')"
+PA_PLAIN_DEL="$(rc_obj 'hcloud_volume.git_data' '"delete"')"
+PA_LUKS_DEL="$(rc_obj 'hcloud_volume.git_data_luks' '"delete"')"
+
+# PA1 (must-PASS): replace, volumes preserved by omission (the canonical shape).
+write_plan "${PASS_SET}"
+gate_check "PA1 replace + both volumes absent -> PASS" git_data_host_post_apply_assert 0 "both data volumes preserved" "$TMP/plan.json" replace
+# PA1b (must-PASS, non-canonical): the volumes explicitly present as no-op.
+write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.git_data' '"no-op"'),$(rc_obj 'hcloud_volume.git_data_luks' '"no-op"')"
+gate_check "PA1b replace + both volumes explicit no-op -> PASS" git_data_host_post_apply_assert 0 "both data volumes preserved" "$TMP/plan.json" replace
+# PA2 (must-PASS, the #10137 repro): rotate legitimately replaces the LUKS volume.
+write_plan "${ROT_PASS_SET}"
+gate_check "PA2 rotate + LUKS volume delete+create (the #10137 repro) -> PASS" git_data_host_post_apply_assert 0 "LUKS volume replaced as intended" "$TMP/plan.json" rotate
+# PA3 (issue row 1): rotate + plaintext delete -> ABORT naming the plaintext volume.
+write_plan "${ROT_PASS_SET},${PA_PLAIN_DEL}"
+gate_check "PA3 rotate + plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.git_data' '"forget"')"
+gate_check "PA3b rotate + plaintext volume forget -> ABORT (forget counts as delete)" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+# PA4 (issue row 2): plain replace + LUKS delete -> ABORT naming the LUKS volume.
+write_plan "${PASS_SET},${PA_LUKS_DEL}"
+gate_check "PA4 replace + LUKS volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data_luks shows 1 delete/forget" "$TMP/plan.json" replace
+write_plan "${PASS_SET},${PA_PLAIN_DEL}"
+gate_check "PA4b replace + plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" replace
+# PA4c: a rotate plan graded as replace is refused (the mode, not the plan, decides).
+write_plan "${ROT_PASS_SET}"
+gate_check "PA4c rotate plan graded as replace -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data_luks shows 1 delete/forget" "$TMP/plan.json" replace
+
+# PA5 (issue row 3): empty resource_changes must not pass, in both modes. The readable and
+# classifiable arms pass {"resource_changes":[]}, so presence comes from the positive creates.
+write_plan ""
+gate_check "PA5 replace + empty resource_changes -> ABORT naming the missing NIC create" git_data_host_post_apply_assert 1 "hcloud_server_network.git_data shows no create" "$TMP/plan.json" replace
+gate_check "PA5 rotate + empty resource_changes -> ABORT naming the missing NIC create" git_data_host_post_apply_assert 1 "hcloud_server_network.git_data shows no create" "$TMP/plan.json" rotate
+printf '{"resource_changes":null}' > "$TMP/plan.json"
+gate_check "PA5 resource_changes null -> ABORT (readable arm)" git_data_host_post_apply_assert 1 "no resource_changes array" "$TMP/plan.json" rotate
+printf '{}' > "$TMP/plan.json"
+gate_check "PA5 resource_changes absent -> ABORT (readable arm)" git_data_host_post_apply_assert 1 "no resource_changes array" "$TMP/plan.json" replace
+write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.workspaces' '')"
+gate_check "PA5 entry with an empty actions array -> ABORT (classifiable arm)" git_data_host_post_apply_assert 1 "unclassifiable plan entry" "$TMP/plan.json" replace
+
+# PA6: each positive create is load-bearing, in isolation.
+write_plan "${SERVER_REPLACE},${PA_ATT},${PA_ATT_LUKS}"
+gate_check "PA6 NIC create missing -> ABORT" git_data_host_post_apply_assert 1 "hcloud_server_network.git_data shows no create" "$TMP/plan.json" replace
+write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT_LUKS}"
+gate_check "PA6 plaintext attachment create missing -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume_attachment.git_data shows no create" "$TMP/plan.json" replace
+write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT}"
+gate_check "PA6 LUKS attachment create missing -> ABORT (second member, first compliant)" git_data_host_post_apply_assert 1 "hcloud_volume_attachment.git_data_luks shows no create" "$TMP/plan.json" replace
+write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT},$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"update"')"
+gate_check "PA6 LUKS attachment present but not created -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume_attachment.git_data_luks shows no create" "$TMP/plan.json" rotate
+
+# PA6b: the NIC create must be a CREATE — a delete-only or update-only NIC entry is not re-attached.
+write_plan "${SERVER_REPLACE},${PA_ATT},${PA_ATT_LUKS},$(rc_obj 'hcloud_server_network.git_data' '"delete"')"
+gate_check "PA6b NIC present with delete only -> ABORT" git_data_host_post_apply_assert 1 "hcloud_server_network.git_data shows no create" "$TMP/plan.json" replace
+write_plan "${SERVER_REPLACE},${PA_ATT},${PA_ATT_LUKS},$(rc_obj 'hcloud_server_network.git_data' '"update"')"
+gate_check "PA6b NIC present with update only -> ABORT" git_data_host_post_apply_assert 1 "hcloud_server_network.git_data shows no create" "$TMP/plan.json" rotate
+
+# PA2b (must-PASS, documents the ruling): rotate asserts nothing positive about the LUKS volume
+# after the apply — the pre-apply gate owns luks_volume_rotated. A rotate-graded plan with the LUKS
+# volume absent therefore passes this backstop.
+write_plan "${PASS_SET}"
+gate_check "PA2b rotate + LUKS volume absent -> PASS (the pre-apply gate owns the rotation proof)" git_data_host_post_apply_assert 0 "LUKS volume replaced as intended" "$TMP/plan.json" rotate
+
+# PA3c: volume addresses are matched by SHAPE — an indexed or module-prefixed address, or a
+# create-before-destroy ordering, must not count zero and pass.
+write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.git_data[0]' '"delete"')"
+gate_check "PA3c rotate + indexed plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+# Module-prefixed shapes carry the plan's native type/name (a real plan always does); the module
+# instance key holds a dot and the index key a ], which an address pattern would mis-parse.
+_pa_native() { printf '{"address":"%s","type":"hcloud_volume","name":"%s","change":{"actions":["delete"]}}' "$1" "$2"; }
+write_plan "${ROT_PASS_SET},$(_pa_native 'module.store.hcloud_volume.git_data[\"a\"]' git_data)"
+gate_check "PA3c rotate + module-prefixed plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+write_plan "${ROT_PASS_SET},$(_pa_native 'module.store[\"a.b\"].hcloud_volume.git_data' git_data)"
+gate_check "PA3c rotate + module instance key with a dot, plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.git_data[\"a]b\"]' '"delete"')"
+gate_check "PA3c rotate + index key containing ] on the plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+write_plan "${PASS_SET},$(_pa_native 'module.store.hcloud_volume.git_data_luks' git_data_luks)"
+gate_check "PA3c replace + module-prefixed LUKS volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data_luks shows 1 delete/forget" "$TMP/plan.json" replace
+write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.git_data' '"create","delete"')"
+gate_check "PA3c rotate + plaintext volume create-before-destroy -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.git_data_luks[1]' '"delete"')"
+gate_check "PA3c replace + indexed LUKS volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data_luks shows 1 delete/forget" "$TMP/plan.json" replace
+# The native name boundary: an entry whose plan-native .name is git_data_luks must not be read as the
+# plaintext volume under rotate (it is the volume rotate replaces on purpose), but must be refused
+# under replace.
+write_plan "${PASS_SET},$(_pa_native 'module.store.hcloud_volume.git_data_luks' git_data_luks)"
+gate_check "PA3c rotate + native LUKS volume delete does not trip the plaintext arm" git_data_host_post_apply_assert 0 "LUKS volume replaced as intended" "$TMP/plan.json" rotate
+# The name boundary: a LUKS-volume delete must not be read as the plaintext volume (anchored match).
+write_plan "${ROT_PASS_SET}"
+gate_check "PA3c rotate + LUKS volume delete+create does not trip the plaintext arm" git_data_host_post_apply_assert 0 "LUKS volume replaced as intended" "$TMP/plan.json" rotate
+
+# PA7: the mode is a wiring input (the plan step's gate_mode output). Unknown, empty or absent
+# refuses with a distinct message, never a permissive default, and never reads the plan as a pass.
+write_plan "${ROT_PASS_SET}"
+gate_check "PA7 empty mode -> ABORT as a wiring fault" git_data_host_post_apply_assert 1 "unknown mode '' — wiring fault" "$TMP/plan.json" ""
+gate_check "PA7 bogus mode -> ABORT as a wiring fault" git_data_host_post_apply_assert 1 "unknown mode 'bogus' — wiring fault" "$TMP/plan.json" bogus
+gate_check "PA7 upper-case REPLACE -> ABORT (exact match only)" git_data_host_post_apply_assert 1 "unknown mode 'REPLACE' — wiring fault" "$TMP/plan.json" REPLACE
+gate_check "PA7 near-miss mode rotat -> ABORT (no glob or prefix match)" git_data_host_post_apply_assert 1 "unknown mode 'rotat' — wiring fault" "$TMP/plan.json" rotat
+gate_check "PA7 near-miss mode replace-x -> ABORT (no glob or prefix match)" git_data_host_post_apply_assert 1 "unknown mode 'replace-x' — wiring fault" "$TMP/plan.json" replace-x
+# The echoed mode is sanitized and capped: a newline-bearing value cannot inject a line-leading
+# annotation (the fixture is short enough to survive the 16-char cap, so dropping the sanitization
+# is visible), and a long value is truncated.
+_pa7_inj="$(git_data_host_post_apply_assert "$TMP/plan.json" $'\n::error::x' 2>&1 || true)"
+if [[ "$_pa7_inj" == *$'\n::error::'* || "$_pa7_inj" != *"unknown mode '???error??x' — wiring fault"* ]]; then fail "PA7 a newline in the mode was not neutralized in the echoed message"; else pass; fi
+_pa7_long="$(git_data_host_post_apply_assert "$TMP/plan.json" "$(printf 'x%.0s' {1..40})" 2>&1 || true)"
+if [[ "$_pa7_long" != *"unknown mode 'xxxxxxxxxxxxxxxx' — wiring fault"* ]]; then fail "PA7 a 40-character mode was not truncated to 16 in the echoed message"; else pass; fi
+
+# PA8: output discipline — the function prints addresses and counts, never .change.before/after.
+# One sentinel per refusal arm (volume, NIC, attachment); a leak in any arm is a leak.
+write_plan "${ROT_PASS_SET},$(printf '{"address":"hcloud_volume.git_data","change":{"actions":["delete"],"before":{"user_data":"PA8-SENTINEL-OLD-USER-DATA"}}}')"
+_pa8="$(git_data_host_post_apply_assert "$TMP/plan.json" rotate 2>&1 || true)"
+if [[ "$_pa8" == *"PA8-SENTINEL-OLD-USER-DATA"* || "$_pa8" != *"hcloud_volume.git_data shows 1"* ]]; then fail "PA8 volume arm leaked a .change.before value (or did not refuse)"; else pass; fi
+write_plan "${SERVER_REPLACE},${PA_ATT},${PA_ATT_LUKS},$(printf '{"address":"hcloud_server_network.git_data","change":{"actions":["delete"],"before":{"user_data":"PA8-SENTINEL-OLD-USER-DATA"}}}')"
+_pa8="$(git_data_host_post_apply_assert "$TMP/plan.json" replace 2>&1 || true)"
+if [[ "$_pa8" == *"PA8-SENTINEL-OLD-USER-DATA"* || "$_pa8" != *"hcloud_server_network.git_data shows no create"* ]]; then fail "PA8 NIC arm leaked a .change.before value (or did not refuse)"; else pass; fi
+write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT},$(printf '{"address":"hcloud_volume_attachment.git_data_luks","change":{"actions":["delete"],"before":{"user_data":"PA8-SENTINEL-OLD-USER-DATA"}}}')"
+_pa8="$(git_data_host_post_apply_assert "$TMP/plan.json" replace 2>&1 || true)"
+if [[ "$_pa8" == *"PA8-SENTINEL-OLD-USER-DATA"* || "$_pa8" != *"hcloud_volume_attachment.git_data_luks shows no create"* ]]; then fail "PA8 attachment arm leaked a .change.before value (or did not refuse)"; else pass; fi
+
+# PM1-PM6 (sole-guard) and PM7 (layered), Guard Contract #10137: neuter each arm of the post-apply
+# backstop on a COPY of the lib and prove the fixture that exercises it is then let through. Each row's sed must change the
+# copy (gate_mutate_and_check refuses a byte-identical mutant, so a drifted expression cannot pass
+# vacuously). Fixtures are single-defect: every other requirement is satisfied.
+write_plan "${ROT_PASS_SET},${PA_PLAIN_DEL}"; cp "$TMP/plan.json" "$TMP/pm1.json"
+gate_mutate_and_check "PM1 rotate preserved set (plaintext volume dropped from it)" \
+  's/^    rotate)  vols=(git_data) ;;/    rotate)  vols=() ;;/' \
+  git_data_host_post_apply_assert "$TMP/pm1.json" rotate
+write_plan "${PASS_SET},${PA_LUKS_DEL}"; cp "$TMP/plan.json" "$TMP/pm2.json"
+gate_mutate_and_check "PM2 replace preserved set (LUKS volume dropped from it)" \
+  's/^    replace) vols=(git_data git_data_luks) ;;/    replace) vols=(git_data) ;;/' \
+  git_data_host_post_apply_assert "$TMP/pm2.json" replace
+write_plan "${SERVER_REPLACE},${PA_ATT},${PA_ATT_LUKS}"; cp "$TMP/plan.json" "$TMP/pm3.json"
+gate_mutate_and_check "PM3 private NIC create assertion (the empty-plan guard's first member)" \
+  's/^  if \[\[ ! "\$nic_creates" =~ \^\[1-9\]\[0-9\]\*\$ \]\]; then/  if false; then/' \
+  git_data_host_post_apply_assert "$TMP/pm3.json" replace
+write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT}"; cp "$TMP/plan.json" "$TMP/pm4.json"
+gate_mutate_and_check "PM4 store-attachment create assertion (second member, first compliant)" \
+  's/^    if \[\[ ! "\$att_creates" =~ \^\[1-9\]\[0-9\]\*\$ \]\]; then/    if false; then/' \
+  git_data_host_post_apply_assert "$TMP/pm4.json" replace
+write_plan "${ROT_PASS_SET}"; cp "$TMP/plan.json" "$TMP/pm5.json"
+gate_mutate_and_check "PM5 unknown-mode arm (turned into a permissive default)" \
+  's/^      return 1 ;;$/      vols=() ;;/' \
+  git_data_host_post_apply_assert "$TMP/pm5.json" bogus
+write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.workspaces' '')"; cp "$TMP/plan.json" "$TMP/pm6.json"
+gate_mutate_and_check "PM6 classifiability call in the post-apply assert (sole guard on an empty-actions entry)" \
+  's/^  plan_gate_assert_classifiable "git_data_host_post_apply_assert".*/  :/' \
+  git_data_host_post_apply_assert "$TMP/pm6.json" replace
+printf '{"resource_changes":null}' > "$TMP/pm7.json"
+gate_mutate_layered "PM7 readable call in the post-apply assert (hands off to the classifiable arm, never to PASS)" \
+  's/^  plan_gate_assert_readable     "git_data_host_post_apply_assert".*/  :/' \
+  "no resource_changes array" "unclassifiable plan entry" \
+  git_data_host_post_apply_assert "$TMP/pm7.json" replace
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -554,11 +718,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 55 ]]; then
+if [[ "$_ran" -lt 101 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 101 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 101)\n' "$_ran"
 fi
 
 echo ""

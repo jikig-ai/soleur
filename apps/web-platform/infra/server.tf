@@ -193,6 +193,15 @@ locals {
     "cron-egress-resolve.timer",
     "cron-egress-alarm@.service",
     "cron-egress-postapply-assert.sh",
+    # Egress gateway artifacts (#9534): Squid conf + token auth helper + the
+    # shared deny set + bring-up script, installed by soleur-host-bootstrap.sh
+    # and mounted :ro into soleur-egress-gw. The forwarder rides the app image
+    # (same COPY set) — it executes in-container, not on the host.
+    "egress-gateway-squid.conf",
+    "egress-auth-helper.sh",
+    "egress-deny-cidrs.txt",
+    "egress-gateway-bootstrap.sh",
+    "egress-forwarder.mjs",
     # Fresh-host POST-CONTAINER egress-enforcement probe (#5933 item 3). The SSH
     # provisioner's cron-egress-postapply-assert.sh SKIPS the container probes on a
     # fresh host (no container yet); this baked script runs them at boot AFTER the app
@@ -522,7 +531,7 @@ resource "hcloud_server" "web" {
     #   web_host_key     — each.key ("web-1"/"web-2"); the env-writer upper-cases it to name the
     #     per-host Better Stack heartbeat URL var (WEB_NIC_GUARD_URL_WEB_2, …), matching the SSH
     #     provisioner's upper(replace(each.key,"-","_")).
-    #   zot_probe_repo   — local.zot_probe_repo (web-probe.tf:22), the ZOT_PROBE_REPO env value.
+    #   zot_probe_repo   — the BARE local.zot_probe_repo (web-probe.tf), the ZOT_PROBE_REPO a host writes at birth; web-1's SSH provisioner re-delivers the pinned variant.
     # betterstack_ingest_url + registry_endpoint are already in this map (reused, not re-added).
     web_probes_token = doppler_service_token.web_probes.key
     expected_ip      = var.web_hosts[each.key].private_ip
@@ -533,7 +542,12 @@ resource "hcloud_server" "web" {
     # glob: once the LUKS volume attaches, the glob matches TWO devices and the "which is LUKS"
     # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
     # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
-    workspaces_volume_id = hcloud_volume.workspaces[each.key].id
+    # #6604 step 7 — web-1 no longer owns a plaintext workspaces volume (wiped, deleted, forgotten
+    # from state), so web-1 renders the literal "retired-6604": a rebuilt web-1 finds no such
+    # by-id device and cloud-init emits `workspaces_mount fatal` (fails loud). Unreachable while
+    # user_data is ignore_changes and the replace path refuses web-1. NOT the LUKS volume's id:
+    # that would couple this plaintext mount line to the sole copy. Guard B4 (workspaces-luks.test.sh).
+    workspaces_volume_id = contains(keys(local.plaintext_workspaces_hosts), each.key) ? hcloud_volume.workspaces[each.key].id : "retired-6604"
     # (#6931, ADR-263; #9377) The fresh-host scoped READ token for the WEB-CLASS config prd_workspaces_luks_web
     # (workspaces-luks-fresh-boot.tf), NOT web-1's prd_workspaces_luks: a fresh host's token must not resolve
     # web-1's escrow credential pair. cloud-init writes it to /etc/default/luks-monitor so the baked
@@ -962,15 +976,15 @@ locals {
   ghcr_deny_sh        = <<-EOT
     for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
       [ -f "$f" ] || continue
-      for h in ghcr.io pkg-containers.githubusercontent.com; do
+      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
         grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
       done
     done
   EOT
   ghcr_deny_assert_sh = <<-EOT
-    for h in ghcr.io pkg-containers.githubusercontent.com; do
+    for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
       a=$(timeout 10 getent ahosts "$h" | awk '{print $1}' | sort -u)
-      if [ -z "$a" ] || printf '%s\n' "$a" | grep -qvxE '0\.0\.0\.0|::'; then
+      if [ -z "$a" ] || printf '%s\n' "$a" | grep -cvxE '0\.0\.0\.0|::' >/dev/null; then
         echo "FATAL: $h does not resolve ONLY to the sinkhole after the deny (#9169). Route back: the resource is now tainted, so push a fix commit or gh workflow run the owning apply workflow; never gh run rerun --failed." >&2
         exit 1
       fi
@@ -989,7 +1003,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
     file("${path.module}/web-zot-consumer-probe.service"),
     file("${path.module}/web-zot-consumer-probe.timer"),
     local.registry_endpoint,
-    local.zot_probe_repo,
+    local.zot_probe_repo_pinned,
     # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
     local.ghcr_deny_sh,
@@ -1027,7 +1041,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
       # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
       # fix — see the web-private-nic-guard install above. #6438 §1.
       # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
-      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
+      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo_pinned}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
       "chmod 600 /etc/default/web-zot-consumer-probe",
       "systemctl daemon-reload",
       "systemctl enable --now web-zot-consumer-probe.timer",
@@ -1380,7 +1394,7 @@ resource "terraform_data" "journald_persistent" {
       "test -d /var/log/journal",
       # --header lists active journal files with their paths; a persistent journal
       # has files under /var/log/journal. Volatile-only journals list /run paths.
-      "journalctl --header | grep -q '/var/log/journal'",
+      "journalctl --header | grep -c '/var/log/journal' >/dev/null",
       "test \"$(systemctl is-active systemd-journald)\" = 'active'",
       # --- #6438/#6548: re-deliver vector.toml + reload the Vector agent on the running web-1 ------
       # Render the @@HOST_NAME@@ sentinel to THIS host's TF-derived Better Stack host_name (the SAME
@@ -1473,6 +1487,102 @@ resource "terraform_data" "journald_persistent" {
       # the restore.
       "NOW_N=$(systemctl show -p NRestarts --value vector.service 2>/dev/null || echo 0)",
       "if ! systemctl is-active --quiet vector.service || [ \"$NOW_N\" != \"$PREV_N\" ]; then if [ -f /etc/vector/vector.toml.prev ]; then install -m 0644 /etc/vector/vector.toml.prev /etc/vector/vector.toml; systemctl restart vector.service || true; sleep 10; if systemctl is-active --quiet vector.service; then echo 'FATAL: vector rejected the new config. The previous config was restored and vector IS RUNNING.' >&2; else echo 'FATAL: vector rejected the new config AND the restore also failed. VECTOR IS DOWN on web-1 — all host observability is dark.' >&2; fi; else echo 'FATAL: vector rejected the new config and NO known-good backup existed. VECTOR IS DOWN on web-1 — all host observability is dark.' >&2; fi; exit 1; fi",
+      "test \"$(systemctl is-active vector.service)\" = 'active'",
+      "rm -f /etc/vector/vector.toml.prev",
+    ]
+  }
+}
+
+# Same delivery to the RUNNING web-2 (fleet-parity fix for the #9534 review gap).
+# web-2's /etc/vector/vector.toml is otherwise frozen at whatever its last
+# birth/one-off delivery rendered: journald_persistent dials web-1 only, the
+# infra-config push targets web-1's deploy endpoint only, and web-2's cloud-init
+# never re-runs. Measured 2026-10-12: web-2's copy dated Oct-07 predated the
+# `egress-gw-probe` Source-4 tag, so its resolver emitted `egress_gw_probe
+# result=ok` to the journal every 5 min while Better Stack saw nothing — a live
+# host whose gateway probe reported to no one. Any Source-4 tag added later is
+# dark on web-2 by the same mechanism, so the twin is the whole-class fix, not a
+# one-tag patch. web-host-provisioner-parity.test.sh's W2_ALLOWED admits it.
+resource "terraform_data" "journald_persistent_web2" {
+  # Same trigger set as the web-1 twin: a journald-soleur.conf or vector.toml
+  # edit re-delivers + reloads Vector on web-2 the same merge it lands on web-1.
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/journald-soleur.conf"),
+    file("${path.module}/vector.toml"),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-journald-persistent-web2-%RAND%.sh"
+    timeout     = "5m"
+  }
+
+  # The drop-in dir does NOT exist by default on Ubuntu — see the web-1 twin for
+  # why this mkdir is load-bearing (file provisioner creates no parents).
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/systemd/journald.conf.d",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/journald-soleur.conf"
+    destination = "/etc/systemd/journald.conf.d/00-soleur.conf"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/vector.toml"
+    destination = "/tmp/soleur-vector.toml.staged"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /etc/systemd/journald.conf.d/00-soleur.conf",
+      "chmod 0644 /etc/systemd/journald.conf.d/00-soleur.conf",
+      "mkdir -p /var/log/journal",
+      "systemd-tmpfiles --create --prefix /var/log/journal",
+      "systemctl restart systemd-journald",
+      "journalctl --flush",
+      "systemd-analyze cat-config systemd/journald.conf | grep -E '^(Storage|SystemMaxUse|SystemKeepFree|RuntimeMaxUse)=' || true",
+      "test -d /var/log/journal",
+      "journalctl --header | grep -c '/var/log/journal' >/dev/null",
+      "test \"$(systemctl is-active systemd-journald)\" = 'active'",
+      # Render @@HOST_NAME@@ to web-2's server name (`soleur-web-2` — the value
+      # its running Vector already reports as `host_name`, verified in Better
+      # Stack 2026-10-12). Same render contract as the web-1 twin.
+      "install -d -m 0755 /etc/vector /opt/soleur",
+      "sed 's|@@HOST_NAME@@|${hcloud_server.web["web-2"].name}|g' /tmp/soleur-vector.toml.staged > /opt/soleur/vector.toml",
+      "test -s /opt/soleur/vector.toml",
+      "! grep -q '@@HOST_NAME@@' /opt/soleur/vector.toml",
+      "grep -q '\\[sinks.betterstack\\]' /opt/soleur/vector.toml",
+      "grep -q 'web-zot-consumer-probe' /opt/soleur/vector.toml",
+      "if [ ! -x /usr/local/bin/vector ]; then echo 'FATAL: /usr/local/bin/vector absent; cannot validate the rendered config' >&2; exit 1; fi",
+      "VECTOR_STRICT_ENV_VARS=false BETTERSTACK_LOGS_TOKEN=dummy SENTRY_USERID_PEPPER=dummy /usr/local/bin/vector validate --no-environment --config-toml /opt/soleur/vector.toml",
+      "if systemctl is-active --quiet vector.service && [ -f /etc/vector/vector.toml ]; then cp -a /etc/vector/vector.toml /etc/vector/vector.toml.prev; else rm -f /etc/vector/vector.toml.prev; fi",
+      "PREV_N=$(systemctl show -p NRestarts --value vector.service 2>/dev/null || echo 0)",
+      "install -m 0644 /opt/soleur/vector.toml /etc/vector/vector.toml",
+      "rm -f /tmp/soleur-vector.toml.staged",
+      "systemctl restart vector.service || true",
+      "sleep 20",
+      "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
+      "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
+      "grep -q 'web-nic-guard' /etc/vector/vector.toml",
+      "grep -q 'inngest-consumer-probe' /etc/vector/vector.toml",
+      # This twin's reason to exist (#9534): the egress-gw-probe Source-4 tag must
+      # land in the file the agent reads, or web-2's probe rows keep dying at the
+      # allowlist — delivery proven, not assumed.
+      "grep -q 'egress-gw-probe' /etc/vector/vector.toml",
+      "NOW_N=$(systemctl show -p NRestarts --value vector.service 2>/dev/null || echo 0)",
+      "if ! systemctl is-active --quiet vector.service || [ \"$NOW_N\" != \"$PREV_N\" ]; then if [ -f /etc/vector/vector.toml.prev ]; then install -m 0644 /etc/vector/vector.toml.prev /etc/vector/vector.toml; systemctl restart vector.service || true; sleep 10; if systemctl is-active --quiet vector.service; then echo 'FATAL: vector rejected the new config. The previous config was restored and vector IS RUNNING.' >&2; else echo 'FATAL: vector rejected the new config AND the restore also failed. VECTOR IS DOWN on web-2 — all host observability is dark.' >&2; fi; else echo 'FATAL: vector rejected the new config and NO known-good backup existed. VECTOR IS DOWN on web-2 — all host observability is dark.' >&2; fi; exit 1; fi",
       "test \"$(systemctl is-active vector.service)\" = 'active'",
       "rm -f /etc/vector/vector.toml.prev",
     ]
@@ -1602,9 +1712,9 @@ resource "terraform_data" "registry_insecure_config" {
       "systemctl reload docker",
       # Assert dockerd now honors the private-net zot registry as insecure (fail loud if
       # the reload silently did not pick it up). Endpoint DERIVED from local.registry_endpoint
-      # (#6448) so this probe follows a subnet renumber automatically; -qF = fixed-string so
+      # (#6448) so this probe follows a subnet renumber automatically; -cF = fixed-string so
       # the '.'/':' are literal.
-      "docker info 2>/dev/null | grep -qF '${local.registry_endpoint}'",
+      "docker info 2>/dev/null | grep -cF '${local.registry_endpoint}' >/dev/null",
     ]
   }
 }
@@ -1760,10 +1870,10 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 
   # #4827 — the sudoers grant (with the new INFRA_CONFIG_INSTALL alias). Staged to
   # a temp path then visudo-validated + installed below; writing it directly would
-  # risk a half-written file in /etc/sudoers.d. The handler ALSO carries this file
-  # in its FILE_MAP, but the webhook self-heal of the sudoers is circular on the
-  # first apply (escalating its write needs the alias this file adds), so root SSH
-  # bootstraps it.
+  # risk a half-written file in /etc/sudoers.d. This file is deliberately NOT in
+  # the handler's FILE_MAP (#4827: a deploy-writable path to a sudoers file is an
+  # unbounded privilege escalation — visudo validates syntax, not policy), so
+  # root SSH is its only running-host channel.
   provisioner "file" {
     source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
     destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
@@ -1814,6 +1924,9 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # #7220 — the daemon-reload grant landed. Without it the handler writes all 19 files and
       # then dies at activation, which is the incident this whole PR exists to close.
       "grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #10045 — the kdeny kernel-stream grant landed; without it the DIAG row
+      # falls back to src=none on every emitted bundle.
+      "grep -q KDENY_KERNEL_STREAM /etc/sudoers.d/deploy-inngest-bootstrap",
       # #7220 AC4 — POLICY PROBE, not another text grep. Every assertion above proves the BYTES
       # landed; none proves sudo actually grants the command. A file that parses but whose
       # User_Spec is missing, or whose alias never reaches `deploy`, passes every grep here and
@@ -1833,6 +1946,9 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # performs the reload the DropInPaths assertions below depend on, which nothing else in
       # this provisioner does.
       "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
+      # #10045 — same effective-not-present assertion class for the kdeny grant: an
+      # idempotent read-only execute probe of the exact pinned argv.
+      "runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat >/dev/null || { echo 'FATAL: deploy cannot run the kdeny kernel-stream journalctl argv — KDENY_KERNEL_STREAM landed as text but does not resolve (#10045).' >&2; exit 1; }",
       # systemd-run cannot be safely executed here (it would schedule a real webhook restart
       # mid-provisioner), so this one stays list-mode, behind the availability probe above.
       "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
@@ -1859,8 +1975,8 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # One explicit line per unit rather than a loop: each is independently greppable, so the
       # drift guard can pin the units by name instead of trusting a loop variable to have
       # covered them.
-      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
-      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
       # hooks.json re-registers the status hook + maps the state-reporter key (the
       # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
       "grep -q infra-config-status /etc/webhook/hooks.json",
@@ -2124,14 +2240,28 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # web-2 replacement (cattle), re-delivering the full set post-boot.
 #
 # Scope boundary (named so it does not read as an omission): this resource covers the
-# deploy-pipeline FILE_MAP set, plus ONE non-file duty: the #9169 ghcr.io hosts-file
+# deploy-pipeline FILE_MAP set, plus TWO non-FILE_MAP duties: the #9169 ghcr.io hosts-file
 # deny (local.ghcr_deny_sh + its assertion, in the last, secret-free block;
-# web-ghcr-deny.test.sh). docker_seccomp_config and apparmor_bwrap_profile stay
-# web-1-only — a seccomp-bwrap.json/apparmor profile merge still leaves web-2 birth-frozen
-# on those files until #7103's wider pass. Same for the CI ssh pubkey: a
-# DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf but not web-2's
-# birth-frozen authorized_keys (recovery: operator ADMIN_IPS append or a web-2 replace —
-# ADR-237 consequence note).
+# web-ghcr-deny.test.sh) and, since #9393, the cron-egress artifacts a RUNNING
+# web-2 otherwise gets only at birth (a replace) — the carved CIDR allow list, the resolver,
+# the post-apply probe script, and (since #9534) the loader plus the gateway
+# deny-CIDR file it dies without, delivered then EXECUTED exactly as
+# terraform_data.cron_egress_firewall's terminal step does on web-1. The alarm
+# and systemd units stay birth-frozen (the #9372 rebirth workflow that was to
+# refresh them is retired, so the next refresh is a web-2 replace) — EXCEPT the loader, lifted from the
+# freeze here: #9534's resolver tick asserts eight enforcement markers including the
+# egress-gateway DOCKER-USER legs, which only the post-#9529 loader installs. A
+# birth-frozen loader cannot satisfy them, so the resolver self-heals every minute
+# forever (measured: enforcement_missing on soleur-web-2 since the #9393 resolver
+# update landed — the file provisioner below exists because that loop is live).
+# The alarm and the systemd units still stay birth-frozen: the unit already runs
+# this same script path, so only the script body needed re-delivery.
+# docker_seccomp_config and
+# apparmor_bwrap_profile stay web-1-only — a seccomp-bwrap.json/apparmor profile merge
+# still leaves web-2 birth-frozen on those files until #7103's wider pass. Same for
+# the CI ssh pubkey: a DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf
+# but not web-2's birth-frozen authorized_keys (recovery: operator ADMIN_IPS append or
+# a web-2 replace — ADR-237 consequence note).
 resource "terraform_data" "deploy_pipeline_fix_web2" {
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
@@ -2156,11 +2286,24 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     file("${path.module}/10-inngest-heartbeat-doppler-token.conf"),
     file("${path.module}/10-inngest-server-doppler-token.conf"),
     file("${path.module}/10-inngest-redis-doppler-token.conf"),
+    # #9393 — the three cron-egress artifacts a running web-2 gets nowhere else:
+    # the carved CIDR allow list, the resolver, and the post-apply probe.
+    file("${path.module}/cron-egress-allowlist-cidr.txt"),
+    file("${path.module}/cron-egress-resolve.sh"),
+    file("${path.module}/cron-egress-postapply-assert.sh"),
+    # #9534 — the loader too: the resolver's eight-marker heal check fails forever
+    # against a pre-#9529 (birth-frozen) loader that cannot install the gw legs.
+    # Its deny-file precondition (die at :151 when the file is missing) is
+    # co-delivered here so the delivered loader is self-sufficient on this
+    # channel — egress_gateway_web2 ships the same bytes, but an apply ordering
+    # where this resource runs first must not strand the loader in a die-loop.
+    file("${path.module}/cron-egress-nftables.sh"),
+    file("${path.module}/egress-deny-cidrs.txt"),
     hcloud_server.web["web-2"].id,
     local.ghcr_deny_sh,
     local.ghcr_deny_assert_sh,
     file("${path.module}/web-2-ssh-host-key.pub"),
-    "dpf-web2-remote-exec-v1",
+    "dpf-web2-remote-exec-v3",
   ]))
 
   connection {
@@ -2177,11 +2320,13 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
   }
 
   # The four drop-in parents may not exist on web-2 (they are running-host deliveries with
-  # no cloud-init writer); a file provisioner cannot create parent directories.
+  # no cloud-init writer); a file provisioner cannot create parent directories. /etc/soleur
+  # exists from birth (the bootstrap installs the allowlists there) — the mkdir is
+  # idempotent and mirrors the web-1 resource's own first step.
   provisioner "remote-exec" {
     inline = [
       "set -e",
-      "mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d",
+      "mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d",
     ]
   }
 
@@ -2275,6 +2420,35 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
   }
 
+  # ── #9393 cron-egress artifacts — the carved CIDR allow list, the resolver, and the ──
+  # ── post-apply probe. Same destinations the web-1 resource (cron_egress_firewall)    ──
+  # ── writes; the remote-exec below byte-asserts each and runs the probe — the          ──
+  # ── restart+live-probe is the point of the delivery.                                  ──
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-allowlist-cidr.txt"
+    destination = "/etc/soleur/cron-egress-allowlist-cidr.txt"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-resolve.sh"
+    destination = "/usr/local/bin/cron-egress-resolve.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-postapply-assert.sh"
+    destination = "/usr/local/bin/cron-egress-postapply-assert.sh"
+  }
+  # #9534 — the loader itself; the resolver's eight-marker heal check is unsatisfiable
+  # without it (a birth-frozen loader has no Phase-4.5 egress-gateway legs). Its
+  # hard deny-file precondition rides the same channel (loader :151 dies without
+  # it — co-delivering makes the pair atomic on this resource).
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-nftables.sh"
+    destination = "/usr/local/bin/cron-egress-nftables.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/egress-deny-cidrs.txt"
+    destination = "/etc/soleur/egress-deny-cidrs.txt"
+  }
+
   provisioner "remote-exec" {
     inline = [
       "set -e",
@@ -2289,6 +2463,11 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "chmod 0644 /etc/systemd/system/webhook.service /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf /etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf /etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf /etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf",
       "chown root:deploy /etc/webhook/hooks.json",
       "chmod 0640 /etc/webhook/hooks.json",
+      # #9393 — the five cron-egress artifacts land root:root; the three scripts get
+      # the same 0755 the web-1 resource gives them, the two data files 0644.
+      "chown root:root /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-nftables.sh /etc/soleur/cron-egress-allowlist-cidr.txt /etc/soleur/egress-deny-cidrs.txt",
+      "chmod 0755 /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-nftables.sh",
+      "chmod 0644 /etc/soleur/cron-egress-allowlist-cidr.txt /etc/soleur/egress-deny-cidrs.txt",
       "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged",
       "install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
       "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
@@ -2317,20 +2496,29 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "[ \"$(sha256sum /usr/local/bin/infra-config-install | cut -d' ' -f1)\" = \"${filesha256("${path.module}/infra-config-install.sh")}\" ]",
       "[ \"$(sha256sum /etc/webhook/hooks.json | cut -d' ' -f1)\" = \"${sha256(local.hooks_json)}\" ]",
       "[ \"$(sha256sum /etc/sudoers.d/deploy-inngest-bootstrap | cut -d' ' -f1)\" = \"${filesha256("${path.module}/deploy-inngest-bootstrap.sudoers")}\" ]",
-      # The sudoers grant landed and parses — same four alias assertions as the web-1 bridge.
+      "[ \"$(sha256sum /etc/soleur/cron-egress-allowlist-cidr.txt | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-allowlist-cidr.txt")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cron-egress-resolve.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-resolve.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cron-egress-postapply-assert.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-postapply-assert.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cron-egress-nftables.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-nftables.sh")}\" ]",
+      "[ \"$(sha256sum /etc/soleur/egress-deny-cidrs.txt | cut -d' ' -f1)\" = \"${filesha256("${path.module}/egress-deny-cidrs.txt")}\" ]",
+      # The sudoers grant landed and parses — same five alias assertions as the web-1 bridge.
       "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q DROPIN_TRY_RESTART /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #10045 — the kdeny kernel-stream grant landed (same content-assert class).
+      "grep -q KDENY_KERNEL_STREAM /etc/sudoers.d/deploy-inngest-bootstrap",
       # #7220 AC4 shape — resolve the REAL policy for deploy, not just the text.
       "sudo -n -l -U deploy >/dev/null 2>&1 || { echo 'FATAL: sudo -l -U list mode is unavailable on this host (sudo-rs?) — the policy probe cannot run. This is NOT a denial; the grant may be fine.' >&2; exit 1; }",
       "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
+      # #10045 — effective-not-present execute probe of the exact pinned argv (read-only, idempotent).
+      "runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat >/dev/null || { echo 'FATAL: deploy cannot run the kdeny kernel-stream journalctl argv — KDENY_KERNEL_STREAM landed as text but does not resolve (#10045).' >&2; exit 1; }",
       "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
       # Drop-in adoption: LoadState-guarded, one explicit line per unit.
-      "if [ \"$(systemctl show -p LoadState --value vector.service)\" = loaded ]; then systemctl show -p DropInPaths vector.service | grep -q 'doppler-token.conf' || { echo 'FATAL: vector.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
-      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
-      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
-      "if [ \"$(systemctl show -p LoadState --value inngest-redis.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-redis.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-redis.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value vector.service)\" = loaded ]; then systemctl show -p DropInPaths vector.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: vector.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-redis.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-redis.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-redis.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
       # hooks.json re-registers the status hook + the state-reporter key.
       "grep -q infra-config-status /etc/webhook/hooks.json",
       "grep -q cat_infra_config_state_sh_b64 /etc/webhook/hooks.json",
@@ -2340,6 +2528,19 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       # running webhook is sub-second; the assert catches a dead one).
       "systemctl try-restart webhook",
       "test \"$(systemctl is-active webhook)\" = 'active'",
+    ]
+  }
+  # #9393 — run the delivered cron-egress probe: restarts cron-egress-firewall.service
+  # so the newly delivered carved CIDR file is loaded into the live nft set, enables the
+  # resolver timer, asserts the nft structure, and runs the GHCR-carve +
+  # positive/negative container probes. Same duty as the web-1 resource's terminal
+  # inline. Its OWN block, before ghcr-deny and secret-free for the same reason
+  # ghcr-deny is: the delivery block interpolates local.hooks_json's sensitive webhook
+  # secret, which would suppress the assert's FAIL/FATAL lines from apply output.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "bash /usr/local/bin/cron-egress-postapply-assert.sh",
     ]
   }
   # #9169 ghcr.io deny: LAST and secret-free (the block above references local.hooks_json, whose
@@ -2614,13 +2815,178 @@ resource "terraform_data" "cron_egress_firewall" {
   }
 }
 
+# Egress gateway delivery to the RUNNING web-1 (#9534). Fresh hosts get the
+# gateway via the baked set + cloud-init runcmd; web-1's cloud-init is frozen
+# (ignore_changes = [user_data]), so this provisioner is the sanctioned path.
+# Shape mirrors terraform_data.cron_egress_firewall: config_hash folds every
+# delivered artifact, server_id re-provisions a replaced VM.
+resource "terraform_data" "egress_gateway" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/egress-gateway-squid.conf"),
+      file("${path.module}/egress-auth-helper.sh"),
+      file("${path.module}/egress-deny-cidrs.txt"),
+      file("${path.module}/egress-gateway-bootstrap.sh"),
+    ]))
+    server_id = hcloud_server.web["web-1"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur /var/lib/soleur/egress-tokens",
+      "chown 1001:1001 /var/lib/soleur/egress-tokens && chmod 0711 /var/lib/soleur/egress-tokens",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-squid.conf"
+    destination = "/usr/local/bin/egress-gateway-squid.conf"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-auth-helper.sh"
+    destination = "/usr/local/bin/egress-auth-helper.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-deny-cidrs.txt"
+    destination = "/etc/soleur/egress-deny-cidrs.txt"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-bootstrap.sh"
+    destination = "/usr/local/bin/egress-gateway-bootstrap.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/egress-gateway-bootstrap.sh /usr/local/bin/egress-auth-helper.sh",
+      "bash /usr/local/bin/egress-gateway-bootstrap.sh",
+      # Re-run the nftables loader so the three gateway legs (forward accept,
+      # reply accept, SOLEUR-EGRESS-GW deny chain) install on the live host.
+      "systemctl restart cron-egress-firewall.service",
+    ]
+  }
+}
+
+# Same delivery to the RUNNING web-2 (#9534). Without this a running web-2
+# waits for its next -replace for the baked set, and an entitled session
+# landing there fails closed — safe, but silently dark on half the fleet.
+# Identical artifact set + order; only the host identity differs (web-2's
+# host key local is the #9393 deploy_pipeline_fix_web2 one).
+#
+# RUNNING-WEB-2 DELIVERY CENSUS (frozen cloud-init → these are the only
+# hot-delivery channels today; update when adding one):
+#   terraform_data.deploy_pipeline_fix_web2 — the full deploy-pipeline set
+#     (ci-deploy, webhook.service, infra-config, inngest-*, service drop-ins)
+#     + the five cron-egress artifacts (resolver, allowlist-cidr, post-apply
+#     assert, loader, gw deny-CIDRs) (#9151, #9393, #9534)
+#   terraform_data.egress_gateway_web2    — four gateway artifacts
+#     (squid.conf, auth helper, deny CIDRs, bootstrap) (#9534)
+#   terraform_data.journald_persistent_web2 — journald-soleur.conf + vector.toml
+#     (the Source-4 tag allowlist; without it a running web-2 ships only the
+#     tags its birth config knew — measured 2026-10-12: egress-gw-probe emitted
+#     to the journal every 5 min and dropped at the Vector filter for days)
+# Everything else reaches a running web-2 only via -replace (birth set) or
+# not at all by role. web-host-provisioner-parity.test.sh forces every new
+# web-1 SSH provisioner through this classification — add the twin here or
+# record the W1_ONLY_JUSTIFIED reason.
+resource "terraform_data" "egress_gateway_web2" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/egress-gateway-squid.conf"),
+      file("${path.module}/egress-auth-helper.sh"),
+      file("${path.module}/egress-deny-cidrs.txt"),
+      file("${path.module}/egress-gateway-bootstrap.sh"),
+    ]))
+    server_id = hcloud_server.web["web-2"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-egress-gateway-web2-%RAND%.sh"
+    # web-2's SSH route is slow (~70s per dial — 4 file uploads alone burn ~4m40s
+    # before remote-exec + docker pull start; the 2026-10-11 apply died at 5m03s).
+    timeout = "15m"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur /var/lib/soleur/egress-tokens",
+      "chown 1001:1001 /var/lib/soleur/egress-tokens && chmod 0711 /var/lib/soleur/egress-tokens",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-squid.conf"
+    destination = "/usr/local/bin/egress-gateway-squid.conf"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-auth-helper.sh"
+    destination = "/usr/local/bin/egress-auth-helper.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-deny-cidrs.txt"
+    destination = "/etc/soleur/egress-deny-cidrs.txt"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-bootstrap.sh"
+    destination = "/usr/local/bin/egress-gateway-bootstrap.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/egress-gateway-bootstrap.sh /usr/local/bin/egress-auth-helper.sh",
+      "bash /usr/local/bin/egress-gateway-bootstrap.sh",
+      # Re-run the nftables loader so the three gateway legs (forward accept,
+      # reply accept, SOLEUR-EGRESS-GW deny chain) install on the live host.
+      "systemctl restart cron-egress-firewall.service",
+    ]
+  }
+}
+
+locals {
+  # #6604 step 7 — web-1's plaintext workspaces volume (105149570) was zeroed, read back,
+  # detached and deleted, and its two addresses were forgotten from state (ADR-119 addendum;
+  # knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md). Only the hosts
+  # listed here own a per-host keyed volume (web-2: born raw and formatted LUKS by the guest
+  # provisioner at first boot, ADR-263); the local's name is historical and is pinned by the ledger
+  # evidence anchor and Guard B4, so it is not renamed. web-1's /workspaces lives solely on
+  # hcloud_volume.workspaces_luks (workspaces-luks.tf). Guard B4 (workspaces-luks.test.sh).
+  plaintext_workspaces_hosts = { for k, v in var.web_hosts : k => v if k != "web-1" }
+}
+
 # Per-host local worktree volume (multi-host /workspaces, #5274 Phase 3). Each web
 # host has its OWN /workspaces block volume (per-user worktrees live host-local on
-# NVMe — ADR-068 §1). web-1 keeps its exact current name/location so the `moved`
-# migration below is 0-destroy (a volume location change would force-replace and
-# drop the live data).
+# NVMe — ADR-068 §1). web-1 kept its exact name/location so the `moved` migration
+# (placement-group.tf) was 0-destroy. Since #6604 step 7 web-1 is excluded from
+# for_each (local.plaintext_workspaces_hosts); the name expression's web-1 arm is
+# historical and left byte-identical so web-2's name never diffs.
 resource "hcloud_volume" "workspaces" {
-  for_each = var.web_hosts
+  for_each = local.plaintext_workspaces_hosts
   name     = each.key == "web-1" ? "soleur-web-platform-data" : "soleur-web-platform-data-${each.key}"
   size     = var.volume_size
   location = each.value.location
@@ -2634,17 +3000,21 @@ resource "hcloud_volume" "workspaces" {
   }
 
   # (ADR-143 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
-  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. web-1's LIVE
-  # sole-copy data is on the additive LUKS singleton hcloud_volume.workspaces_luks
-  # (workspaces-luks.tf, ADR-119); this keyed volume is web-1's superseded plaintext backstop and
-  # the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
+  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
+  # per-host keyed volume (web-2 only, since #6604 step 7); web-1's sole-copy data is on the
+  # additive LUKS singleton hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119), which
+  # since #6604 step 7 carries its own prevent_destroy AND delete_protection (the
+  # `apply_target=workspaces-luks-recut` `-replace` escape hatch is retired with it). The keyed volume
+  # is the store web-2 formats LUKS at first boot (born raw 2026-10-06; the single-use rebirth workflow that
+  # created it retired 2026-10-12; ADR-263, #9372).
+  # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
   #
   # `ignore_changes = [format]` is CREATION-ONLY and load-bearing; it is pinned together with the absent
   # `format` above by fresh-boot-parity.test.sh section 19. MEASURED on hcloud 1.63.0 (offline plan, 2026-10-01):
   # `format` is NOT ForceNew, dropping it without the ignore plans an in-place `ext4 -> null` on a
   # user-data volume, and WITH the ignore the plan is "No changes", so the merge is a no-op for the live
-  # (ext4) volumes. The live web-2 volume is converted by the gated rebirth, never by this block
-  # (ADR-263). Do NOT delete the ignore. The volume is reached by the push-apply -target set only
+  # (ext4) volumes. A volume's filesystem is decided by the guest provisioner at first boot, never by this
+  # block (ADR-263). Do NOT delete the ignore. The volume is reached by the push-apply -target set only
   # transitively (hcloud_server.web -> user_data -> workspaces_volume_id), which is why it matters.
   lifecycle {
     prevent_destroy = true
@@ -2653,7 +3023,7 @@ resource "hcloud_volume" "workspaces" {
 }
 
 resource "hcloud_volume_attachment" "workspaces" {
-  for_each  = var.web_hosts
+  for_each  = local.plaintext_workspaces_hosts
   volume_id = hcloud_volume.workspaces[each.key].id
   server_id = hcloud_server.web[each.key].id
 }

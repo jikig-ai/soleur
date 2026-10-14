@@ -832,7 +832,10 @@ variable "grok_dogfood_private_ip" {
 #   `format` governs what a CREATE produces — it matters exactly once, on the recut apply.
 #   `inngest_expect_luks` governs what every BOOT refuses — it matters on every boot after it flips.
 #
-# The delivery order is four dispatches (ADR-199 addendum, 2026-09-03):
+# The delivery order is four dispatches (ADR-199 addendum, 2026-09-03). HISTORICAL: all four have
+# run or been superseded; the `inngest-volume-recut` dispatch named below no longer exists (the
+# 2026-09-20 additive cutover, ADR-142, replaced it, and the plaintext volume was retired on 2026-10-09
+# through the since-removed `inngest-backstop-retire` dispatch, #8285).
 #
 #   1. merge                    `format` gone; expect_luks STILL false
 #   2. inngest-host-replace     first boot; the volume is STILL the old ext4 one, so ARM 1 mounts

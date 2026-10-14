@@ -123,6 +123,45 @@ assert_decision "Write new scheduled (.yaml extension) denies" "deny" \
 assert_decision "(g) malformed JSON stdin allows (fail-open)" "allow" 'not json{'
 assert_decision "(h) empty stdin allows (fail-open)" "allow" ''
 
+# --- (j)/(k) linked-worktree Edit regression (#8480) -----------------------
+# BUG SHAPE: file_path = <repo>/.worktrees/<branch>/.github/workflows/<f>.yml
+# with CLAUDE_PROJECT_DIR=<repo>. The `"$PROJECT_DIR"/*` normalization arm used
+# to run first, stripping the path to `.worktrees/<branch>/.github/workflows/…`;
+# the `git cat-file -e origin/main:` existence check then failed on a file that
+# IS on origin/main, and a routine edit to an existing scheduled workflow was
+# denied as if it were new. The basename arm (`/*/.github/workflows/*`) must
+# win. PROJECT_DIR is set explicitly rather than relying on CWD so the case
+# reproduces the configured-project-dir trigger, not just the PWD fallback.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
+if [ -n "$EXISTING_PATH" ]; then
+  WT_EXISTING="$REPO_ROOT/.worktrees/feat-8480-regression/$EXISTING_PATH"
+  WT_NEW="$REPO_ROOT/.worktrees/feat-8480-regression/.github/workflows/scheduled-not-on-main-8480.yml"
+
+  TOTAL=$((TOTAL + 1))
+  out="$(echo "$(mk_edit_payload "$WT_EXISTING" "  schedule:\n    - cron: '0 7 * * *'")" \
+    | CLAUDE_PROJECT_DIR="$REPO_ROOT" bash "$HOOK" 2>/dev/null)"
+  decision="$(echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<missing>"' 2>/dev/null || echo "<jq-fail>")"
+  if [[ "$decision" == "allow" ]]; then
+    PASS=$((PASS + 1)); echo "PASS: (j) worktree edit of existing scheduled workflow allows"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL: (j) worktree edit of existing scheduled workflow"
+    echo "  want: allow"; echo "  got:  $decision"; echo "  raw:  $out"
+  fi
+
+  TOTAL=$((TOTAL + 1))
+  out="$(echo "$(mk_write_payload "$WT_NEW" "name: x\non:\n  schedule:\n    - cron: '0 7 * * *'")" \
+    | CLAUDE_PROJECT_DIR="$REPO_ROOT" bash "$HOOK" 2>/dev/null)"
+  decision="$(echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<missing>"' 2>/dev/null || echo "<jq-fail>")"
+  if [[ "$decision" == "deny" ]]; then
+    PASS=$((PASS + 1)); echo "PASS: (k) worktree write of NEW scheduled workflow still denies"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL: (k) worktree write of new scheduled workflow"
+    echo "  want: deny"; echo "  got:  $decision"; echo "  raw:  $out"
+  fi
+else
+  echo "SKIP: (j)/(k) worktree regression — no scheduled-*.yml on origin/main"
+fi
+
 # Exit-code guard: the hook must exit 0 even on malformed input.
 TOTAL=$((TOTAL + 1))
 ec=0

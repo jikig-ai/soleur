@@ -48,7 +48,16 @@ esac
 _TMPFILES=()
 trap 'rm -f "${_TMPFILES[@]:-}"' EXIT
 
-if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
+# Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+# curl config directive on the stdin channel below). Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN unusable" >&2; exit 2; fi
+# Sole credentialed-curl wrapper: owns the flags and the bearer. The bearer rides curl's stdin
+# config channel, never its argument list. Callers pass the remaining flags and the URL.
+_sentry_get() {
+  curl --disable --noproxy '*' -sS "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN")
+}
 if ! command -v gh >/dev/null 2>&1; then echo "TRANSIENT: gh CLI not installed" >&2; exit 2; fi
 
 readonly ORG_PINNED="jikigai-eu"
@@ -76,8 +85,12 @@ FAILURES=0
 QUERY='feature:"cron-community-monitor" "scheduled-output-missing"'
 QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 URL="https://${API_HOST}/api/0/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=${WINDOW_DAYS}d&per_page=10&field=title&field=timestamp"
-RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
+# Rule D pin (ADR-202): the bearer goes only to the pinned Sentry org on the pinned host.
+case "$URL" in
+  "https://de.sentry.io/api/0/organizations/jikigai-eu/"*) ;;
+  *) echo "TRANSIENT: refusing a credentialed call to an unpinned URL" >&2; exit 2 ;;
+esac
+RESP=$(_sentry_get -w '\nHTTP_STATUS:%{http_code}' \
   -H "Accept: application/json" \
   "$URL")
 HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
@@ -123,8 +136,13 @@ BODY="[]"
 for page in 1 2 3 4 5; do
   HDR=$(mktemp)
   _TMPFILES+=("$HDR")
-  RESP=$(curl --disable --noproxy '*' -sS -D "$HDR" -w '\nHTTP_STATUS:%{http_code}' \
-    -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
+  # Re-checked every page: $URL is replaced below by a Link-header value taken from the response,
+  # and the bearer must never follow a pagination link off the pinned org.
+  case "$URL" in
+    "https://de.sentry.io/api/0/organizations/jikigai-eu/"*) ;;
+    *) rm -f "$HDR"; echo "TRANSIENT: refusing a credentialed call to an unpinned URL (page $page)" >&2; exit 2 ;;
+  esac
+  RESP=$(_sentry_get -D "$HDR" -w '\nHTTP_STATUS:%{http_code}' \
     -H "Accept: application/json" \
     "$URL")
   HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')

@@ -12,7 +12,7 @@ re_evaluation_triggers: "First Page Insights API call OR first non-Soleur tenant
 
 # Counsel review audit — #4051 (LIA + Privacy Policy + DPD)
 
-This audit file is the load-bearing evidence under acceptance criterion **AC-Legal-1** of plan `knowledge-base/project/plans/2026-05-19-feat-legal-linkedin-page-4051-plan.md`. The three primary artifacts below must each be reviewed by legal counsel (Soleur policy: no merge of a legal-track PR without counsel sign-off). Each row below is to be filled in by counsel — date, identifier (name or firm + matter number), channel (email / PandaDoc / verbal-confirmed-followup-email), and substantive comments if any.
+This audit file is the load-bearing evidence under acceptance criterion **AC-Legal-1** of plan `knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-legal-linkedin-page-4051-plan.md`. The three primary artifacts below must each be reviewed by legal counsel (Soleur policy: no merge of a legal-track PR without counsel sign-off). Each row below is to be filled in by counsel — date, identifier (name or firm + matter number), channel (email / PandaDoc / verbal-confirmed-followup-email), and substantive comments if any.
 
 The PR is held in draft state until all three rows below are signed off.
 

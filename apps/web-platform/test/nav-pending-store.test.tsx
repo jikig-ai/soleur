@@ -239,4 +239,14 @@ describe("last-location tracking", () => {
     noteNavLocation();
     expect(getNavLastLocation()).toBe("/b");
   });
+
+  it("noteNavLocation reports whether the location moved since the last note", () => {
+    setLocation("/a?x=1");
+    window.history.pushState({}, "", "/b");
+    expect(noteNavLocation()).toBe(true);
+    expect(noteNavLocation()).toBe(false);
+    // hash-only change is not a move
+    window.history.pushState({}, "", "/b#frag");
+    expect(noteNavLocation()).toBe(false);
+  });
 });

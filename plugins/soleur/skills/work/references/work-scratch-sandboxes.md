@@ -55,6 +55,30 @@ git ls-files -z --cached --others --exclude-standard | tar --null -T - -cf - | t
 rm -rf "$SBX"                                         # before the seat returns, on the failure path too
 ```
 
+## Mutating a signalling or file-removing helper
+
+**Plugin root in this file:** this file is Read, not delivered by the skill loader, so the plugin root is not filled in for you. The root (`<plugin-root>` below) is ONLY the prefix of the path you read this file from, cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a directory inside the checked-out repository. If you cannot name it (the path you read this file from starts with `/skills/` or is relative), stop and hand the step to the operator, and write the absolute root into any subagent prompt. Never repair a missing root with a CWD-relative plugin path, which runs the checked-out repository's copy. Only the `--list` scan and the no-allocator branch below need the root: `run-isolated` finds its helper from the allocator's own location.
+
+A sandbox copy bounds file removal, not signals. A mutant of a line inside a helper that signals "the outermost ancestor whose argv matches" can match every ancestor, so the walk reaches the top of the user's desktop session: an inverted match ended it four times in one evening (`knowledge-base/project/learnings/test-failures/2026-10-09-an-inverted-match-mutant-of-an-ancestor-walking-helper-ended-the-desktop-session-four-times.md`). Before running any mutant of such a line, ask what its predicate is protecting, and run the mutant where nothing outside the scratch is reachable.
+
+- **Recognise the class.** `grep -nE 'kill|pkill|killall|PPID|rm -r|unlink|-delete|os\.kill|killpg|process\.kill|systemctl --user|loginctl|tmux kill|hyprctl'` over the block under mutation and every helper it calls or sources. A signal verb in a sourced or non-suite helper, a script that is not a tracked `*.test.sh` or `test-*.sh`, `kill $(...)`, `xargs kill`, a function wrapper or a continued line is a blind spot of the scan below: assume the lethal class and use the verb.
+- **List the sites in a suite.** `python3 "<plugin-root>/scripts/scan-ancestor-signal-helpers.py" --list <suite-path>` prints every signalling site in that file as `class TAB bounded TAB path TAB text` (no line number). Without `--baseline` it only lists, so `0 findings` or `skipped > 0` is not a safety signal; with no `python3`, skip the listing and say so. Class L (`pkill`, `killall`, a targeted group signal) is listed but never gated, and a mutant of its pattern reaches the user's processes the same way, so a listed L site still takes the verb.
+- **The seat brief** (the full statement; other surfaces carry only the trigger, the command and the refusal rule). Two branches, because the allocator exists only in this repo:
+
+  > If a mutation touches a line inside a helper that sends signals (`kill`, `pkill`, a `$PPID` walk), run every mutant ONLY inside a PID namespace, bounded by `timeout -k` (use 120 seconds unless the row needs more), with stderr captured apart from the exit code so the first line can be read (the recipe is the code block after this paragraph; read the whole error file before the `rm` if the mutant's own diagnostics matter). `<form>` is, in a checkout that has `$ROOT/scripts/soleur-sandbox.sh` (`ROOT` is the live checkout, `git rev-parse --show-toplevel` run from the live checkout, never from inside `$SBX`, which has no `.git`; `SBX` is your allocated sandbox path): `bash "$ROOT/scripts/soleur-sandbox.sh" run-isolated "$SBX" -- <command>`; in a repo without the allocator: `cd "$SBX" && bash "<plugin-root>/scripts/run-in-pid-namespace.sh" -- <command>` (the `cd` is part of the form, so the mutant never runs with the live checkout as its working directory; `<plugin-root>` is written into this brief by the lead). Exit 125 with `RUN_IN_PID_NAMESPACE_REFUSED` as the first stderr line means no namespace is available. Any other outcome where the command did not start (a missing script or verb, exit 127, a verb refusal with exit 2) means the same: do not run the mutant, report the row as `UNVERIFIED-NO-NAMESPACE` with the first stderr line quoted (the lead reads it as neither green nor a survivor), still remove your sandbox, and never retry on the host. A timeout (exit 124 or 137) is inconclusive, not a kill. If neither form can be resolved, do not run the mutant. For a helper that only removes files (`rm -r`, `unlink`) the sandbox copy is the bound: run it in the sandbox, with the namespace as extra containment when available. The namespace bounds signals, not writes, network, desktop IPC or the session manager.
+  >
+  > ```bash
+  > E=$(mktemp /var/tmp/ns-err.XXXXXX); timeout -k 5 120 <form> 2>"$E"; rc=$?; echo "rc=$rc"; head -n 1 "$E"; rm -f "$E"
+  > ```
+
+- **`UNVERIFIED-NO-NAMESPACE`.** The lead either accepts the row as unproven or runs that mutant on a Linux host that allows unprivileged user namespaces. A host without util-linux (stock macOS) has no way to run it, so the row stays unproven; Ubuntu 24.04 restricts unprivileged user namespaces by default, so every seat there refuses until the work moves to a disposable VM or container (the refusal text says why; relaxing the sysctl on a workstation weakens it). A command that exits 125 without the marker line is that command's own exit; the marker line is the disambiguator.
+- **Cleanup on the refusal path too.** Remove the sandbox with the allocator's `rm` verb before returning. A mutant that deletes `.soleur-owned` makes `rm` refuse (it requires a valid marker), and `run-isolated` refuses the same shape; do not work around either with `rm -rf`, report the `SBX` path to the lead.
+- **`timeout -k`, never a plain `timeout`.** The wrapped command is PID 1 of its namespace: a signal it sends to itself is ignored (measured: a command signalling PID 1 with SIGKILL from inside exited 0), and SIGTERM from the outside does not stop one without a handler (measured: `timeout 1` around a 4 s sleep returned after 4 s with rc 124, `timeout -k 1 1` after 2 s with rc 137). The kill-after grace is what bounds the run.
+- **What the namespace does not bound.** Only signals. File writes pass through (the sandbox copy bounds those), and so do network, IPC, the D-Bus session bus (measured: a connect to the host's session-bus socket succeeded from inside) and path-based sockets under `XDG_RUNTIME_DIR` (the Hyprland, tmux and sway/i3 IPC). A mutant that calls `loginctl terminate-session`, `systemctl --user`, `hyprctl dispatch exit` or `tmux kill-server` is therefore not contained by the namespace; treat that class as unsafe to run at all. The existing example is `.claude/hooks/memory-backstop-mutation-battery.sh`, which stops `soleur-agent-*.scope` units with `systemctl --user` and is run by hand: do not run its signalling rows on a desktop host.
+- **The environment differs inside.** The caller is uid 0 there (`id -u` printed 0) and `/proc` shows only the namespace, so a suite with a not-root guard, an EACCES row or a host `pgrep` expectation behaves differently. Run the UNMUTATED control inside the namespace first, and read a red control there as an environment difference, not as a kill.
+- **Coverage is prose, plus a listing.** Nothing forces a lead or a seat to call the verb, and the scan covers tracked suites and mutation-run scripts only (class L, the signalling programs it does not know, helpers in libs and hooks and non-shell signal calls are listed or missed, never gated). The CI suites prove the refusal branch everywhere and the real-namespace rows only where the runner allows user namespaces.
+- **Tests that must contain a walker.** Scope the match predicate to a nonce you control (a random value in the process argv, checked to be non-empty), never a catch-all, and rehearse with `kill` replaced by `echo` before any real signal.
+
 ## What the copy contains (by design)
 
 - The DIRTY working tree: `git ls-files --cached --others --exclude-standard`, so uncommitted fixes the seat is
@@ -68,6 +92,10 @@ rm -rf "$SBX"                                         # before the seat returns,
   `md5sum` before/after per mutation.
 - Run `TEST_GROUP=affected` (and any gate runner) from the LIVE tree only, never from inside the sandbox: it has
   no `.git`, so the affected-set selection has no diff to read.
+- Measure an assertion floor (`CI_DEPLOY_ASSERT_FLOOR` and its siblings) on the LIVE tree, never in the sandbox. Rows that
+  `git grep` or `git ls-files` fail with `git-grep-rc=128` here, and rows that read `knowledge-base/` change what runs, so the
+  sandbox TOTAL differs from CI's (measured 605 with one failure in a sandbox, 608/608 live, for the same tree). Use the sandbox
+  for mutants and the trimmed D-block harness, and the live tree for the number that becomes the floor.
 - NO `knowledge-base/` (the bulk of non-code bytes; seats mutate code, not docs). A suite that reads
   `knowledge-base/` will SKIP or find nothing in the sandbox and can print GREEN without exercising anything:
   prove the unmutated control non-vacuous (the suite's executed count is above zero, and one deliberately broken
@@ -113,7 +141,43 @@ of another session's disk usage. Litmus: three runs of an UNCHANGED tree giving 
 harness defect, never a re-run to repeat. A harness whose setup (`cp`/`mkdir`/`mktemp`) fails must `exit 2`, not
 continue into a confident wrong result.
 
-- **A NEW `.test.sh`'s fixture dir arms two repo-global ratchets that a targeted run cannot see:** `mktemp` with no owning `trap` (`lint-trap-tempfile-ownership` rule (c); a second `EXIT` trap would replace `test-helpers.sh`'s composed one, #8659) and an operand not provably absolute (`fixture-relative-assert`). Use `"$INCIDENTS_REPO_ROOT/<name>-$$"`, `assert_fixture_dir "$DIR"` before the `mkdir`/redirects AND again right before `rm -rf` (the scanner's guard window stops at the nearest function head), and run both suites by name before pushing. Never regenerate the baseline.
+- **A NEW `.test.sh`'s fixture dir arms two repo-global ratchets that a targeted run cannot see:** `mktemp` with no owning `trap` (`lint-trap-tempfile-ownership` rule (c); a second `EXIT` trap would replace `test-helpers.sh`'s composed one, #8659) and an operand not provably absolute (`fixture-relative-assert`). Use `"$INCIDENTS_REPO_ROOT/<name>-$$"`, `assert_fixture_dir "$DIR"` before the `mkdir`/redirects AND again right before `rm -rf` (the scanner's guard window stops at the nearest function head), and run both suites by name before pushing. Never regenerate the baseline. When adding a suite-owned `SUITE_TMP` root to an EXISTING suite, also grep the suite for `source`/`."` of a file that installs its OWN non-composing `trap … EXIT` — a sourced SUT replaces the suite's trap silently (`test-content-publisher.sh` leaked its root this way until the residue leaf caught it, #10017); the fix is a combined handler re-armed after the `source` line, never a second EXIT trap.
+
+## Ad-hoc agent scratch — the attributable default (#10017)
+
+When a skill step needs a throwaway file or dir that is *not* a tree copy —
+an issue body, a fetched response, a log capture — allocate it **inside a
+signed run root**, never as a bare `mktemp` top-level entry:
+
+```bash
+d=$(mktemp -d -t soleur-run.$$.XXXXXXXX)   # $$ = this shell's pid
+f=$(mktemp -p "$d")                       # or f="$d/<name>"
+# ... use "$f", then at the consumption point:
+rm -f "$f"; rmdir "$d"                    # (rm -rf "$d" if several artifacts)
+```
+
+Why the shape is load-bearing, not cosmetic: `tmp.*` top-level entries are a
+*protected* class in `tmp-classify.sh` — an unattributed bare name in a shared
+`/tmp` is not ours to delete (#6991 measured ~1.5k false-positive candidates),
+so a leaked bare `mktemp` can NEVER be reaped and only the count alarm sees it.
+A `soleur-run.<pid>.*` dir instead carries `schema:<pid>` attribution —
+dir contents inherit it — so a missed `rm` is still quarantined by
+`soleur-tmp-purge` once the owning pid is dead and the age floor passes. The
+`rm` at the consumption point is still the primary cleanup; the root is what
+makes a miss recoverable. Named `-t <name>.XXXXXXXX` *files* do not get this:
+a signed filename is still `unattributable` in the classifier — the signature
+must be on the DIRECTORY.
+
+Two boundary notes: (i) **portability** — the `-t soleur-run.$$.XXXXXXXX`
+template form is GNU; on BSD/macOS `-t` is a literal *prefix* and appends its
+own suffix (`soleur-run.<pid>.XXXXXXXX.<rand>`), which fails the classifier's
+name regex and reads `unattributable`. If you ever port the pattern, the
+BSD-safe form is `mktemp -d "$TMPDIR/soleur-run.$$.XXXXXXXX"`. (ii) **nested
+`.git` flips retention** — a git repo at depth ≥2 under the root (e.g.
+`git clone … "$d/sub"`) trips the nested-git conjunct and the dir is RETAINED
+by design; `git init` AT the root (depth 1, e.g. the hook-test main-CWD
+recipe in `work/SKILL.md`) stays reapable. Deliberate: the classifier refuses
+to reap under a second tree's live refs.
 
 ## Rejected shapes (do not reintroduce)
 
@@ -132,6 +196,15 @@ A report-only seat that copies the tree while the lead edits underneath it repor
 The allocator copies the DIRTY tree at allocation time, so the lead either holds edits until every seat has
 allocated, or has the seat compare against the SHA's content with `git show <sha>:<path>` read from the LIVE tree.
 It does not need a worktree.
+
+## Verifying a new shell suite in the runner's userland
+
+A suite green on the dev host (bash 5.3, curl 8.22) can be red on the CI runner (ubuntu-24.04: bash 5.2, curl 8.5). Before
+the first push of a NEW or heavily changed bash suite, run it once in `docker run --rm -v "$PWD":/w -w /w ubuntu:24.04`
+(install `git jq python3 curl openssl`), log to a file under `/var/tmp`, and require the same row count as the host. State
+tool-dependent floors as invariants over named sets, never as the total one tool build happens to produce. **Why:** #9753 -
+a real-curl oracle and a `<(` inside a `${v//p/r}` replacement were both green locally and red on the runner. See
+`knowledge-base/project/learnings/2026-10-08-a-pipe-tail-swapped-for-a-command-substitution-aborts-mute-and-the-green-suite-ran-on-a-newer-toolchain-than-ci.md`.
 
 ## Operator-side
 

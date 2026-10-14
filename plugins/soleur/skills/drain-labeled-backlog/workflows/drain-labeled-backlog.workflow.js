@@ -178,10 +178,10 @@ Milestone: "${safeMilestone}"   (this is a TITLE, never a numeric id)
 
 Steps (fail fast, fail readable):
 1. Validate the milestone TITLE exists among OPEN milestones:
-   gh api "repos/:owner/:repo/milestones?state=open&per_page=100" --jq '.[].title' | grep -Fxq "${safeMilestone}"
+   gh api "repos/:owner/:repo/milestones?state=open&per_page=100" --jq '.[].title' | grep -Fxc "${safeMilestone}" >/dev/null
    If absent → milestoneValid=false, set error, return (do NOT query issues).
 2. Validate the label exists (first column of \`gh label list\`):
-   gh label list --limit 200 | awk -F'\\t' '{print $1}' | grep -Fxq "${safeLabel}"
+   gh label list --limit 200 | awk -F'\\t' '{print $1}' | grep -Fxc "${safeLabel}" >/dev/null
    If absent → labelValid=false, set error, return.
 3. Query open issues (two-stage piping — gh --json … | jq; never \`gh --jq\` with --arg):
    gh issue list --label "${safeLabel}" --state open --milestone "${safeMilestone}" --json number,title,body,labels --limit 200

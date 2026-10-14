@@ -3,7 +3,7 @@
 # extension, #3684).
 #
 # Covers Phase 1 of the parity plan
-# (knowledge-base/project/plans/2026-05-12-chore-agents-md-pre-commit-rule-budget-plan.md):
+# (knowledge-base/project/plans/archive/20261013-014038-2026-05-12-chore-agents-md-pre-commit-rule-budget-plan.md):
 #   T1: current tree -> all 14 existing skill-enforced tag pairs resolve, exit 0
 #   T2: tag with nonexistent anchor -> exit 1 + `anchor not resolvable`
 #   T3: tolerant matcher (Phase 1.4 -> ### 1.4 normalization)

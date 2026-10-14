@@ -694,12 +694,14 @@ else fail "web-platform-release.yml missing"; fi
 # ---------------------------------------------------------------------------
 # Accounting.
 # ---------------------------------------------------------------------------
-MIN_CASES=79
 echo
 printf '%d passed, %d failed, %d cases\n' "$passes" "$fails" "$cases"
 if [[ $((passes + fails)) -ne "$cases" ]]; then
   printf '[FATAL] accounting: passes+fails=%d != cases=%d\n' "$((passes + fails))" "$cases"; exit 1
 fi
+# MIN_CASES stays adjacent to the floor `if`: build_mutant's backward slice only accepts
+# contiguous bare assignments, so a separated binding makes the mutant unconstructible (#10099).
+MIN_CASES=79
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] only %d assertions ran (floor %d)\n' "$cases" "$MIN_CASES"; exit 1
 fi

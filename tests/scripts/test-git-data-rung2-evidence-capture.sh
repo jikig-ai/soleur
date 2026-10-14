@@ -159,7 +159,7 @@ _sql_since="\$(printf '%s\n' "\$sql" | sed -n "s/.*dt > parseDateTimeBestEffort(
 # subshell, and the stub would then answer rc 0 with an empty set — a harness that cannot fail.
 _require_bound() {  # \$1 = which query, for the refusal
   [[ -z "\$_since" ]] && return 0
-  if ! printf '%s' "\$sql" | grep -qF "dt > parseDateTimeBestEffort('\${_since}')"; then
+  if ! printf '%s' "\$sql" | grep -cF >/dev/null "dt > parseDateTimeBestEffort('\${_since}')"; then
     echo "STUB: an append-mode window was passed but \$1 carries no matching dt> bound (the window is not server-side)" >&2
     exit 4
   fi
@@ -171,17 +171,17 @@ _windowed() {  # \$1 = rows file; filtered to dt > the bound the SQL itself carr
     cat "\$1"
   fi
 }
-if printf '%s' "\$sql" | grep -q '__ANCHOR__'; then
+if printf '%s' "\$sql" | grep -c >/dev/null '__ANCHOR__'; then
   cat "$2"
-elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
+elif printf '%s' "\$sql" | grep -c >/dev/null '__FATALROWS__'; then
   # SEMANTIC DISPATCH, not marker dispatch. Keying only on the marker comment left EVERY clause
   # of FATAL_SQL unreachable by any fixture: the query could be reverted to be semantically
   # identical to HOST_SQL -- level filter dropped, ORDER BY DESC, LIMIT 50 -- and ARM 24 still
   # passed, i.e. the whole §5.0 fix was silently revertible. The marker was one I added myself,
   # so the arm was asserting the presence of my own comment. Measured, five separate ways.
-  if printf '%s' "\$sql" | grep -q "level') = 'fatal'" \
-     && printf '%s' "\$sql" | grep -q "host_name') = '" \
-     && printf '%s' "\$sql" | grep -qE 'LIMIT (1000|[0-9]{4,})'; then
+  if printf '%s' "\$sql" | grep -c >/dev/null "level') = 'fatal'" \
+     && printf '%s' "\$sql" | grep -c >/dev/null "host_name') = '" \
+     && printf '%s' "\$sql" | grep -cE >/dev/null 'LIMIT (1000|[0-9]{4,})'; then
     # (#8210) FATAL_SQL shares HOST_SQL's _BS_SCOPE, so under an append mode it too is bounded
     # server-side. Model that here or the birth boot's own fatal reaches the reboot verdict and
     # every healthy reset reads as a failure — which is a fixture defect, not a SUT one.
@@ -191,19 +191,19 @@ elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
     echo "STUB: the FATAL query lost a load-bearing clause (level filter / host filter / LIMIT >= 1000)" >&2
     exit 4
   fi
-elif printf '%s' "\$sql" | grep -q '__BOOTCOMPLETEROWS__'; then
+elif printf '%s' "\$sql" | grep -c >/dev/null '__BOOTCOMPLETEROWS__'; then
   # (#5274) SEMANTIC DISPATCH again: the stage filter, the host filter and the >= 1000 bound are
   # each load-bearing, so a revert of BC_SQL to HOST_SQL's shape cannot answer from this branch.
-  if printf '%s' "\$sql" | grep -q "stage') = 'boot_complete'" \
-     && printf '%s' "\$sql" | grep -q "host_name') = '" \
-     && printf '%s' "\$sql" | grep -qE 'LIMIT (1000|[0-9]{4,})'; then
+  if printf '%s' "\$sql" | grep -c >/dev/null "stage') = 'boot_complete'" \
+     && printf '%s' "\$sql" | grep -c >/dev/null "host_name') = '" \
+     && printf '%s' "\$sql" | grep -cE >/dev/null 'LIMIT (1000|[0-9]{4,})'; then
     _require_bound BC_SQL
     _windowed "$_bc" | _project
   else
     echo "STUB: the BOOT_COMPLETE query lost a load-bearing clause (stage filter / host filter / LIMIT >= 1000)" >&2
     exit 4
   fi
-elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
+elif printf '%s' "\$sql" | grep -c >/dev/null '__HOSTROWS__'; then
   _require_bound HOST_SQL
   _windowed "$3" | _project
 else
@@ -298,7 +298,7 @@ printf '%s\n' "$*" >> "$SENTRY_ARGV_FILE"
 # it wrote recorded a degrade. The DEFAULT is a live source (a positive `count()`), because
 # that is the ordinary production state; STUB_LIVENESS_BODY overrides it for the dark-source
 # arms.
-if printf '%s' "$*" | grep -q -- '--liveness '; then
+if printf '%s' "$*" | grep -c >/dev/null -- '--liveness '; then
   # The default is held in a variable rather than written inline in `${VAR:-...}`: the
   # liveness body NESTS a brace, and an unescaped inner `}` closes the parameter expansion
   # early — measured here, it emitted `{"data":[{"count()":7]}}`, which jq reads as empty, so
@@ -307,7 +307,7 @@ if printf '%s' "$*" | grep -q -- '--liveness '; then
   printf '%s\n' "${STUB_LIVENESS_BODY:-$_live_default}"
   exit 0
 fi
-if printf '%s' "$*" | grep -q -- '--stage '; then
+if printf '%s' "$*" | grep -c >/dev/null -- '--stage '; then
   printf '%s\n' "${STUB_STAGE_BODY:-{\"data\":[]\}}"
   exit 0
 fi
@@ -931,7 +931,7 @@ _hn_probe() {  # $1 = host name under test; echoes "rc=<n> <first line of stderr
         BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
         bash "$SUT" --host-name "$1" --evidence-url "$URL" --divergence "$DIVERGENCE" \
           --cloud-init "$FIX/cloud-init-git-data.yml" --out "$TMP/evidence-hn.env" 2>&1)"; _r=$?
-  printf 'rc=%s %s' "$_r" "$(printf '%s' "$_o" | grep -m1 'refusing: --host-name' || true)"
+  printf 'rc=%s %s' "$_r" "$(grep -m1 'refusing: --host-name' <<<"$_o" || true)"
 }
 
 _hn="$(_hn_probe 'soleur-git-data')"
@@ -1084,7 +1084,7 @@ row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=y
 cat > "$TMP/bs-record.sh" <<RECSTUB
 #!/usr/bin/env bash
 printf '%s' "\$1" > "${_seen}/\$(date +%s%N)-\$\$.sql"
-if printf '%s' "\$1" | grep -q '__ANCHOR__'; then cat "$ANCHOR_LIVE"; else cat "$_adm_rows"; fi
+if printf '%s' "\$1" | grep -c >/dev/null '__ANCHOR__'; then cat "$ANCHOR_LIVE"; else cat "$_adm_rows"; fi
 RECSTUB
 chmod +x "$TMP/bs-record.sh"
 BETTERSTACK_QUERY_SH="$TMP/bs-record.sh" BETTERSTACK_QUERY_HOST=stub \
@@ -1277,7 +1277,7 @@ _tuple_n=0
 for _n in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD \
           SENTRY_ISSUE_RO_TOKEN SENTRY_ISSUE_RW_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
           DOPPLER_TOKEN HCLOUD_TOKEN BETTERSTACK_LOGS_TOKEN GIT_DATA_LUKS_KEY; do
-  if printf '%s\n' "$_tuple_block" | grep -qF "\"${_n}\""; then
+  if printf '%s\n' "$_tuple_block" | grep -cF >/dev/null "\"${_n}\""; then
     _tuple_n=$((_tuple_n + 1))
   else
     _tuple_missing="${_tuple_missing} ${_n}"
@@ -1715,16 +1715,16 @@ make_exc_stub() {  # $1=which marker answers with an HTTP-200-carrying-an-error
   cat > "$STUB" <<EXCSTUB
 #!/usr/bin/env bash
 sql="\$1"
-if printf '%s' "\$sql" | grep -q '$1'; then
+if printf '%s' "\$sql" | grep -c >/dev/null '$1'; then
   echo "$CH_EXC"
   exit 0
-elif printf '%s' "\$sql" | grep -q '__ANCHOR__'; then
+elif printf '%s' "\$sql" | grep -c >/dev/null '__ANCHOR__'; then
   cat "$ANCHOR_LIVE"
-elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
+elif printf '%s' "\$sql" | grep -c >/dev/null '__FATALROWS__'; then
   : > /dev/null
-elif printf '%s' "\$sql" | grep -q '__BOOTCOMPLETEROWS__'; then
+elif printf '%s' "\$sql" | grep -c >/dev/null '__BOOTCOMPLETEROWS__'; then
   cat "$HOSTROWS"
-elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
+elif printf '%s' "\$sql" | grep -c >/dev/null '__HOSTROWS__'; then
   cat "$HOSTROWS"
 else
   echo "STUB: unrecognised query shape" >&2; exit 3
@@ -2113,7 +2113,7 @@ else
 fi
 # THE OTHER DIRECTION, on the same argv log: decoupling the anchor must not widen the FATAL
 # read, which is the one whose window is the verdict.
-if grep -- '--host-events' "$SENTRY_ARGV" | grep -q -- '--start 2026-09-02T10:00:00'; then
+if grep -- '--host-events' "$SENTRY_ARGV" | grep -c >/dev/null -- '--start 2026-09-02T10:00:00'; then
   pass "C3: the --host-events fatal read stays pinned to --since"
 else
   fail "C3: the --host-events fatal read stays pinned to --since" "$rc" "$(cat "$SENTRY_ARGV" 2>/dev/null)"

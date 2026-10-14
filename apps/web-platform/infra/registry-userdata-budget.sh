@@ -155,11 +155,11 @@ esac
 # single-line scalar. That safety needs BOTH the `(?m)` flag and the `^` anchor, so check both:
 # checking only `(?m)` (as this did until #7299's review) left the comment above asserting a
 # property the code did not enforce, which is this PR's own defect class.
-printf '%s' "$STRIP_EXPR" | grep -q '(?m)' || {
+printf '%s' "$STRIP_EXPR" | grep -c '(?m)' >/dev/null || {
   echo "registry-userdata-budget: local.registry_rationale_strip is not multiline-anchored ((?m)): ${STRIP_EXPR}" >&2
   exit 2
 }
-printf '%s' "$STRIP_EXPR" | grep -qF '^' || {
+printf '%s' "$STRIP_EXPR" | grep -cF '^' >/dev/null || {
   echo "registry-userdata-budget: local.registry_rationale_strip has no ^ line anchor, so it could match mid-line inside a substituted scalar: ${STRIP_EXPR}" >&2
   exit 2
 }
@@ -179,11 +179,11 @@ printf '%s' "$STRIP_EXPR" | grep -qF '^' || {
 # form lives in plugins/soleur/test/cloud-init-user-data-size.test.ts (registryStripIsApplied),
 # which runs in the REQUIRED `test` context; this is the cheap fail-closed half.
 TF_JOINED="$(tr '\n' ' ' < "$DIR/zot-registry.tf")"
-printf '%s' "$TF_JOINED" | grep -qE 'user_data[[:space:]]*=[[:space:]]*base64gzip\([[:space:]]*replace\([[:space:]]*templatefile\(' || {
+printf '%s' "$TF_JOINED" | grep -cE 'user_data[[:space:]]*=[[:space:]]*base64gzip\([[:space:]]*replace\([[:space:]]*templatefile\(' >/dev/null || {
   echo "registry-userdata-budget: hcloud_server.registry.user_data is not base64gzip(replace(templatefile(...))) — the comment strip is NOT applied to what Hetzner stores, so this measurement would not describe production" >&2
   exit 2
 }
-printf '%s' "$TF_JOINED" | grep -qF 'local.registry_rationale_strip' || {
+printf '%s' "$TF_JOINED" | grep -cF 'local.registry_rationale_strip' >/dev/null || {
   echo "registry-userdata-budget: zot-registry.tf never REFERENCES local.registry_rationale_strip — it is declared but unused, so the stored payload is unstripped" >&2
   exit 2
 }
@@ -269,7 +269,7 @@ stripped_out=$(console 'local.stripped')
 # A render FAILURE still prints a warning banner and "(known after apply)" on stdout, so
 # emptiness is not the tell — look for the diagnostic explicitly. Fail-closed: an
 # unmeasurable template must never read as one that fits.
-if [ -s "$TFDIR/err" ] || printf '%s' "$stripped_out" | grep -q 'known after apply'; then
+if [ -s "$TFDIR/err" ] || printf '%s' "$stripped_out" | grep -c 'known after apply' >/dev/null; then
   echo "registry-userdata-budget: RENDER FAILED" >&2
   sed 's/\x1b\[[0-9;]*m//g' "$TFDIR/err" >&2
   exit 2
@@ -324,7 +324,7 @@ fi
 # The strip preserves `#cloud-config` by construction (no space after `#`), and that one line is
 # what makes cloud-init execute the file at all. Assert it survived rather than trusting the
 # construction — a dark host is the failure mode with no signal of its own.
-head -1 "$rendered" | grep -qx '#cloud-config' || {
+head -1 "$rendered" | grep -cx '#cloud-config' >/dev/null || {
   echo "registry-userdata-budget: the stripped render does not begin with '#cloud-config' — cloud-init would not execute it, and the host would boot dark" >&2
   exit 2
 }

@@ -30,7 +30,7 @@
 # before, and five in-repo consumers classify "not present yet" as TRANSIENT rather than as a
 # result. The poll budget is stated as a MULTIPLE of that measured floor and printed in the
 # verdict line, and a budget below the floor forces `unknown` rather than an absence.
-# # MEASURED-BY: knowledge-base/project/specs/feat-one-shot-7278-registry-restart-lever/session-state.md §"Phase 0 — preconditions MEASURED" task 0.8
+# # MEASURED-BY: knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7278-registry-restart-lever/session-state.md §"Phase 0 — preconditions MEASURED" task 0.8
 #
 # WINDOW: `--no-archive --since 15m`. The hot window is ~40 minutes, so a seconds-old row is
 # always inside it, and betterstack-query.sh errors the WHOLE query if its archive arm errors

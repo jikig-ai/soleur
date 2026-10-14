@@ -69,8 +69,8 @@ jobs:
             --jq '.[].filename, .[].previous_filename'); then emit true; exit 0; fi
           if [ "$EVENT_NAME" != "pull_request" ] || [ -z "$files" ]; then emit true; exit 0; fi
           # Self/dependency triggers: a change to the checking machinery runs every gate.
-          if printf '%s\n' "$files" | grep -qE '^\.github/workflows/pr-quality-guards\.yml$|^\.github/scripts/'; then emit true; exit 0; fi
-          hit() { printf '%s\n' "$files" | grep -qE "$1" && echo true || echo false; }
+          if printf '%s\n' "$files" | grep -cE '^\.github/workflows/pr-quality-guards\.yml$|^\.github/scripts/' >/dev/null; then emit true; exit 0; fi
+          hit() { printf '%s\n' "$files" | grep -cE "$1" >/dev/null && echo true || echo false; }
           { # Superset of the gate's `apps/web-platform/(server|app)/` surface — wider is safe.
             echo "settings_json=$(hit '^\.claude/settings\.json$')"
             echo "worktrees=$(hit '^\.claude/worktrees/')"
@@ -84,7 +84,7 @@ jobs:
             | jq -r '.sibling_sets[].trigger[]' 2>/dev/null || true)
           # Triggers are literal paths today; a future glob trigger can't be
           # literal-escaped safely, so treat it as unresolvable → run.
-          if [ -z "$enc" ] || printf '%s\n' "$enc" | grep -qE '[*?\[\{\\\]]'; then
+          if [ -z "$enc" ] || printf '%s\n' "$enc" | grep -cE '[*?\[\{\\\]]' >/dev/null; then
             echo "sweep=true" >> "$GITHUB_OUTPUT"
           else
             extra=$(printf '%s\n' "$enc" | sed 's/[.[\*^$()+?{}|]/\\&/g' | paste -sd'|' -)
@@ -532,8 +532,8 @@ jobs:
           # dependency-graph deps — a vuln action added to another workflow
           # must not skip the gate).
           re='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pnpm-workspace\.yaml|bun\.lock|bun\.lockb|deno\.lock|deno\.jsonc?|uv\.lock|requirements[^/]*\.txt|requirements/[^/]+\.txt|pyproject\.toml|poetry\.lock|Pipfile[^/]*|setup\.py|setup\.cfg|go\.mod|go\.sum|go\.work[^/]*|Cargo\.toml|Cargo\.lock|Gemfile[^/]*|gems\.(rb|locked)|[^/]*\.gemspec|composer\.(json|lock)|pom\.xml|[^/]*\.gradle(\.kts)?|gradle\.lockfile|gradle/libs\.versions\.toml|[^/]*\.(csproj|fsproj|vbproj|vcxproj|sln|nuspec|podspec)|packages\.(config|lock\.json)|Directory\.(Packages|Build)\.props|pubspec\.(yaml|lock)|Package\.(swift|resolved)|Podfile[^/]*|mix\.(exs|lock)|environment\.ya?ml|conda-lock\.yml)$'
-          if printf '%s\n' "$files" | grep -qE "$re" \
-             || printf '%s\n' "$files" | grep -qE '^\.github/workflows/' \
+          if printf '%s\n' "$files" | grep -cE "$re" >/dev/null \
+             || printf '%s\n' "$files" | grep -cE '^\.github/workflows/' >/dev/null \
              || [ -z "$files" ]; then
             echo "deps=true" >> "$GITHUB_OUTPUT"
           else
@@ -647,7 +647,7 @@ jobs:
 
           surface_hit=false
           for pat in "${surface_patterns[@]}"; do
-            if echo "$changed_files" | grep -Eq "$pat"; then
+            if echo "$changed_files" | grep -Ec "$pat" >/dev/null; then
               surface_hit=true
               break
             fi
@@ -661,7 +661,7 @@ jobs:
           echo "DSAR surface file detected; verifying all required legal docs are updated…"
           missing=()
           for legal in "${required_legal_files[@]}"; do
-            if ! echo "$changed_files" | grep -Fxq "$legal"; then
+            if ! echo "$changed_files" | grep -Fxc "$legal" >/dev/null; then
               missing+=("$legal")
             fi
           done
@@ -757,7 +757,7 @@ jobs:
           # the `^plugins/...` filter below and a weaponised agent skipped this gate. Even with
           # it, git still quotes a path containing a tab, newline, `"` or `\`; refuse those
           # rather than let them fall out of the scan set.
-          if printf '%s\n' "$raw" | grep -qE '^"(plugins/soleur/(skills|agents)/|\.claude/(skills|agents)/)'; then
+          if printf '%s\n' "$raw" | grep -cE '^"(plugins/soleur/(skills|agents)/|\.claude/(skills|agents)/)' >/dev/null; then
             echo "::error::skill-security-scan: a quoted path (tab, newline, quote or backslash in the name) under a scanned skill/agent directory cannot be scanned safely; rename it."
             printf '%s\n' "$raw" | grep -E '^"' >&2 || true
             exit 1
@@ -891,7 +891,7 @@ jobs:
               if [ -z "$slug" ]; then
                 echo "::error file=$path::HIGH-RISK on path with un-derivable slug"
                 fail=1
-              elif ! echo "$matched_skills" | grep -qFx -- "$slug"; then
+              elif ! echo "$matched_skills" | grep -cFx -- "$slug" >/dev/null; then
                 echo "::error file=$path::HIGH-RISK without matching override artifact (expected skill=$slug under knowledge-base/engineering/security/skill-overrides/)"
                 fail=1
               fi
@@ -927,7 +927,8 @@ jobs:
           # making the three-dot diff fail under `set -e` and redden every
           # non-target PR. checkout already used fetch-depth: 0 (full history).
           git fetch --no-tags origin "$BASE_REF"
-          if git diff --name-only "origin/${BASE_REF}...HEAD" | grep -qE '^apps/web-platform/'; then
+          changed_files=$(git -c core.quotePath=false diff --name-only "origin/${BASE_REF}...HEAD")
+          if grep -qE '^apps/web-platform/' <<<"$changed_files"; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -973,7 +974,7 @@ jobs:
           set -uo pipefail
 
           # Honor explicit operator opt-out marker.
-          if printf '%s\n' "$PR_BODY" | grep -qF '<!-- auto-close-scanner: confirm -->'; then
+          if printf '%s\n' "$PR_BODY" | grep -cF '<!-- auto-close-scanner: confirm -->' >/dev/null; then
             echo "::notice::PR body contains <!-- auto-close-scanner: confirm --> — scanner skipped per author opt-in."
             exit 0
           fi

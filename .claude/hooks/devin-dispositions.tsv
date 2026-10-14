@@ -54,6 +54,7 @@ claude-settings	.claude/hooks/ship-operator-step-gate.sh	PreToolUse	Bash	bind	de
 claude-settings	.claude/hooks/ship-runbook-ssh-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-soak-followthrough-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-unpushed-commits-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
+claude-settings	.claude/hooks/ship-kb-archive-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	Bash	covered-by-plugin	hooks.json binds ^(Bash|exec)$ (#8155 merged)	runtime trace 2026-09-17 (AC12/AC13): deny+allow arms PASS on Devin local exec — EC§9; body gate normalized to kind
 #
 # --- .claude/settings.json — PreToolUse AskUserQuestion ----------------------
@@ -112,11 +113,15 @@ claude-settings	.claude/hooks/memory-backstop-resolve.sh	SessionStart	startup|re
 claude-settings	.claude/hooks/supabase-loopback-warn.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
 claude-settings	scripts/ensure-kb-index.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
 #
+# --- .claude/settings.json — Stop ---------------------------------------------
+claude-settings	.claude/hooks/pre-closing-technical-fork-gate.sh	Stop	(none)	already-fires	dispatch measured (EC§3); blocking under Devin UNMEASURED - Stop payload fields not captured, hook fails open when absent	EC§3
+#
 # --- plugins/soleur/hooks/hooks.json -----------------------------------------
 soleur-plugin	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	^(Bash|exec)$	covered-by-plugin	#8155 merged; exec bound directly	runtime trace 2026-09-17 (AC12/AC13): deny+allow arms PASS on Devin local exec — EC§9
 soleur-plugin	plugins/soleur/hooks/codex-session-start.sh	SessionStart	startup|resume|clear|compact	n/a	codex-surface; dead under Devin is correct	EC§3
 soleur-plugin	plugins/soleur/hooks/devin-session-start.sh	SessionStart	""	already-fires	hooks.json matcher "" fires under Devin with CLAUDE_PLUGIN_ROOT set	EC§3; plugin-source binding required — .devin dispatch writes hook_source:repo sentinels, flipping cloud-detect to not-local:non-plugin-source on local sessions
 soleur-plugin	plugins/soleur/hooks/welcome-hook.sh	SessionStart	startup	skip	claude-plugin-surface	welcome banner is a Claude-plugin nicety; Devin coverage not claimed
+soleur-plugin	plugins/soleur/hooks/version-banner.sh	SessionStart	startup	skip	claude-plugin-surface	version banner is a Claude-plugin nicety (systemMessage is a Claude Code output channel); Devin coverage not claimed
 soleur-plugin	plugins/soleur/hooks/stop-hook.sh	Stop	(none)	already-fires	Stop fires under Devin with empty matcher	EC§3
 soleur-plugin	plugins/soleur/hooks/unkept-promise-hook.sh	Stop	(none)	already-fires	Stop fires under Devin	EC§3
 #
@@ -173,3 +178,4 @@ devin-permissions	deny	Read(~/.ssh/**)	permission	already-fires	ported verbatim 
 soleur-plugin	plugins/soleur/hooks/compaction-state.sh	SessionStart	startup|resume|clear|compact	n/a	matcher-dead + no-compaction-lifecycle	compaction is a Claude Code API; Devin emits no compact source, so the compact arm is unreachable and the reset arm would only truncate a ledger nothing writes. Plugin SessionStart hooks also never fire in cloud (ADR-221). Documented as honest degradation in devin/INSTRUCTIONS.md. #8323, ADR-227
 soleur-plugin	plugins/soleur/hooks/compaction-state.sh	PreCompact	manual|auto	n/a	no-devin-wire-name	PreCompact is a Claude Code lifecycle event with no Devin wire-name equivalent; there is no matcher to anchor. #8323, ADR-227
 soleur-plugin	plugins/soleur/hooks/operator-stage-approval.sh	PreToolUse	^(Bash|Monitor|Write|Edit|MultiEdit|NotebookEdit)$	skip	Devin cloud has no approval-prompt adapter for staged operator scripts; the script exits 75 and writes nothing there (ADR-264, per-harness adapters tracked as an open follow-up)	ADR-264 per-surface coverage table; no Devin run was possible for this change
+soleur-plugin	plugins/soleur/hooks/destructive-command-guard.sh	PreToolUse	^Bash$	skip	Devin ask unmeasured and Devin envelopes carry no cwd; follow-up	plugins/soleur/test/destructive-command-guard-hook.test.sh (Devin exec is not decided: the raw tool_name must be Bash; row "Devins exec is not decided (D2)"); W2 plan D9, ADR-277

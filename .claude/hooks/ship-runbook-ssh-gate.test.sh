@@ -24,7 +24,7 @@ t() {
   TOTAL=$((TOTAL + 1))
   local label="$1" pattern="$2" input="$3" expected="$4"
   local got="no-match"
-  if echo "$input" | grep -qE "$pattern"; then got="match"; fi
+  if echo "$input" | grep -cE >/dev/null "$pattern"; then got="match"; fi
   if [[ "$got" == "$expected" ]]; then
     PASS=$((PASS + 1)); echo "PASS: $label"
   else

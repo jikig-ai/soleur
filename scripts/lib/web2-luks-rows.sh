@@ -31,10 +31,10 @@
 # The `key=value` tokens are parsed as a MAP, not a fixed sequence: an unknown extra key is ignored (an
 # emitter may grow a field), while a duplicated key, a missing required key or an unequal one is RED.
 # `boot_id` is printed (uuid, else `unknown`) and is NOT part of the age join, because the readiness row is
-# per-instance and the probe row per-boot, so the two legitimately differ after any reboot. Since #9372 it is,
-# however, REQUIRED to DIFFER (both known) by w2l_reboot_seen: the marker-absent decision in w2l_judge and the
-# follow-through need a probe row from a boot other than the one that emitted the readiness row, which is the
-# only evidence that the volume REOPENS after a reboot.
+# per-instance and the probe row per-boot, so the two legitimately differ after any reboot. It is also not part of
+# the verdict: no reboot is required (owner decision 2026-10-07, ADR-263 addendum 2026-10-08). What the marker-absent decision
+# in w2l_judge and the follow-through need instead is w2l_ready_arm: the newest readiness row must say the boot
+# FORMATTED or OPENED the volume.
 #
 # THE JOIN IS INSTANCE-LEVEL. A probe row certifies the instance that wrote a green readiness row when it is
 # NOT OLDER than that row (probe age_s <= readiness age_s): older, and it may belong to the host this one
@@ -44,12 +44,15 @@
 #   GREEN boot_id=<uuid|unknown> age_s=<n>   a POSITIVE count: >=1 probe row, shape-checked, every required
 #                                       field present and equal, probe age <= W2L_MAX_AGE_S; and, when EARNING
 #                                       the marker, a green readiness row that the probe row is not older than
+#                                       and whose luks_arm is formatted|opened (`RED reason=ready_luks_arm`;
+#                                       w2l_ready_verdict alone also tolerates noop, which only the marker refuses)
 #   RED reason=<token>                  negative evidence, OR an empty / unparseable body (zero counted rows)
 # GREEN is decided from the positive count and never from "no culprit named". A QUERY FAILURE (transport,
 # 5xx, 429, timeout, credentials absent) is NEITHER: w2l_query returns non-zero, no judge is ever called, and
 # the caller must leave the marker exactly as it is (a vendor blip must not reset a 3-day soak).
 #
-# EARNING vs KEEPING. With the marker ABSENT both rows are required. With it PRESENT the newest probe row alone
+# EARNING vs KEEPING. With the marker ABSENT both rows are required, the readiness row with a formatted|opened arm
+# (a noop or arm-less boot never heals by waiting: only replacing the host does). With it PRESENT the newest probe row alone
 # keeps it (the readiness row's W2L_READY_LOOKBACK_D lookback expires on a host that never reboots); a
 # readiness row NEWER than that probe row is a rebirth and still turns it RED.
 
@@ -255,16 +258,23 @@ w2l_ready_newest_age() {
     [ .[] | classify_ready | select(.kind == "row" and (.f.host // "") == $host) ] | sort_by(.age) | (.[0].age // empty)' "$1" 2>/dev/null || true
 }
 
-# w2l_reboot_seen <probe_verdict> <ready_verdict> — the rebirth's reboot proof, from the boot_id tokens the two GREEN
-# verdicts already print (no second row parse). True only when both ids are KNOWN (an `unknown` id is a row that
-# did not report one, so nothing is evidenced) and they DIFFER: the newest probe row then belongs to a boot other
-# than the one that emitted the once-per-instance readiness row, which is exactly "the host rebooted and the
-# volume reopened". Equal ids are the pre-reboot probe row; fail closed on anything else (#9372, CPO condition 6).
-w2l_reboot_seen() {
-  local pb rb
-  pb="$(sed -nE 's/^GREEN boot_id=([^ ]+) .*/\1/p' <<<"${1:-}")"
-  rb="$(sed -nE 's/^GREEN boot_id=([^ ]+) .*/\1/p' <<<"${2:-}")"
-  [[ -n "$pb" && -n "$rb" && "$pb" != "unknown" && "$rb" != "unknown" && "$pb" != "$rb" ]]
+# w2l_ready_arm <ready.jsonl> — the luks_arm of the NEWEST readiness row (the row w2l_ready_verdict judges: a newer
+# malformed or foreign row hides an older good one); rc 0 only for `formatted` or `opened`. This is the one definition
+# of the rule that replaced the reboot proof (owner decision 2026-10-07, ADR-263 addendum 2026-10-08): the boot that
+# wrote the readiness row must have FORMATTED a raw volume or OPENED an existing LUKS container. `noop` (which
+# w2l_ready_verdict still tolerates) is NOT accepted, nor is a row with no arm. Prints the arm when it is a known
+# value so a caller can name it; fails closed (rc 1) on an unparseable body, no row, or a row that is not this host's.
+# Two rows with the same age_s are resolved by input order (the verdict does the same); the row is written once per instance.
+w2l_ready_arm() {
+  local arm
+  _w2l_body_ok "$1" || return 1
+  arm="$(jq -r -s --arg host "$W2L_HOST_NAME" "${_W2L_JQ_DEFS}"'
+    [ .[] | classify_ready ] | sort_by(.age) | .[0] // empty
+    | select(.kind == "row" and (.f.host // "") == $host)
+    | (.f.luks_arm // "") | select(. == "formatted" or . == "opened" or . == "noop")' "$1" 2>/dev/null)" || return 1
+  [[ -n "$arm" ]] || return 1
+  printf '%s\n' "$arm"
+  [[ "$arm" == formatted || "$arm" == opened ]]
 }
 
 # w2l_judge <probe.jsonl> <ready.jsonl> [absent|present] — the combined verdict; the third argument is the
@@ -272,7 +282,8 @@ w2l_reboot_seen() {
 # ones an operator can act on). Then:
 #   marker present  the probe row keeps it, unless a readiness row is NEWER than the probe row (a rebirth: the
 #                   probe belongs to the host that was replaced) -> RED probe_predates_ready
-#   marker absent   the newest readiness row must be GREEN too, and the probe row must not be older than it
+#   marker absent   the newest readiness row must be GREEN too, its luks_arm must be formatted|opened (w2l_ready_arm),
+#                   and the probe row must not be older than it. No reboot is required (ADR-263 addendum 2026-10-08).
 w2l_judge() {
   local pv rv pa ra marker="${3:-absent}"
   pv="$(w2l_probe_verdict "$1")"
@@ -288,8 +299,8 @@ w2l_judge() {
     [[ "$ra" =~ ^[0-9]+$ ]] || { printf 'RED reason=ready_judge_error\n'; return 0; }
   fi
   if [[ "$ra" =~ ^[0-9]+$ ]] && (( pa > ra )); then printf 'RED reason=probe_predates_ready\n'; return 0; fi
-  # Marker absent: the marker (and with it any weight) needs the reboot proof, not the readiness row alone.
-  if [[ "$marker" != present ]] && ! w2l_reboot_seen "$pv" "$rv"; then printf 'RED reason=reboot_not_seen\n'; return 0; fi
+  # Marker absent: the readiness row must say the boot formatted or opened the volume (the one shared definition).
+  if [[ "$marker" != present ]] && ! w2l_ready_arm "$2" >/dev/null; then printf 'RED reason=ready_luks_arm\n'; return 0; fi
   printf '%s\n' "$pv"
 }
 

@@ -166,7 +166,7 @@ done
 # The real light users list must be non-empty and include the renderer suite: an empty or
 # renamed list would turn the likec4 row above into a SKIP-shaped pass.
 LIGHT_LIKEC4_USERS="$(users_of likec4 "$REAL_USERS_DIR")"
-if printf '%s\n' "$LIGHT_LIKEC4_USERS" | grep -qx 'render-c4-model.test.sh'; then
+if printf '%s\n' "$LIGHT_LIKEC4_USERS" | grep -cx >/dev/null 'render-c4-model.test.sh'; then
   echo "  PASS: the real light users list is non-empty and includes render-c4-model.test.sh"
   PASS=$((PASS + 1))
 else
@@ -177,7 +177,7 @@ fi
 # Mutation-proof the central assertion: with the setup step removed from the block,
 # the bun check MUST fail. A guard nobody has seen red is not a guard.
 MUTATED="$(printf '%s\n' "$BLOCK" | grep -v 'oven-sh/setup-bun')"
-if printf '%s\n' "$MUTATED" | grep -qE 'oven-sh/setup-bun'; then
+if printf '%s\n' "$MUTATED" | grep -cE >/dev/null 'oven-sh/setup-bun'; then
   echo "  FAIL: self-check — could not remove the setup-bun line to prove non-vacuity"
   FAIL=$((FAIL + 1))
 else

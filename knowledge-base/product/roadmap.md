@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-05
+last_updated: 2026-10-09
 last_reviewed: 2026-07-06
 review_cadence: weekly
 owner: CPO
@@ -46,7 +46,7 @@ MCP is a first-class integration tier alongside REST APIs. Services that publish
 
 The desktop native app earns its existence specifically because browser automation is impossible on PWA, iOS, or Android. This is not "wrapping the web app" — it provides a capability no other surface can.
 
-Full brainstorm: `knowledge-base/project/brainstorms/2026-03-23-browser-automation-cloud-platform-brainstorm.md`
+Full brainstorm: `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-23-browser-automation-cloud-platform-brainstorm.md`
 
 ---
 
@@ -319,7 +319,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | MU1 | Signup provisions a workspace (git clone + plugin install per user) | [#1448](https://github.com/jikig-ai/soleur/issues/1448) Done |
 | MU2 | BYOK encryption works per-tenant (each user's API key isolated) | [#1449](https://github.com/jikig-ai/soleur/issues/1449) Done |
 | MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | [#1450](https://github.com/jikig-ai/soleur/issues/1450) Done |
-| MU4 | Team workspaces — multi-user invite/remove + workspace co-membership + JWT-claim org switching + Art 15/17/20 DSAR over workspace tables + WORM attestations + workspace-scoped sandbox + BYOK split | [#4229](https://github.com/jikig-ai/soleur/issues/4229) Done (PR [#4225](https://github.com/jikig-ai/soleur/pull/4225), closed 2026-05-21) — `FLAG_TEAM_WORKSPACE_INVITE=1` flip still gated on parallel legal-PR (`feat-team-workspace-legal-scaffolding`). Rollback: `knowledge-base/project/specs/feat-team-workspace-multi-user/rollback.md`. |
+| MU4 | Team workspaces — multi-user invite/remove + workspace co-membership + JWT-claim org switching + Art 15/17/20 DSAR over workspace tables + WORM attestations + workspace-scoped sandbox + BYOK split | [#4229](https://github.com/jikig-ai/soleur/issues/4229) Done (PR [#4225](https://github.com/jikig-ai/soleur/pull/4225), closed 2026-05-21) — `FLAG_TEAM_WORKSPACE_INVITE=1` flip still gated on parallel legal-PR (`feat-team-workspace-legal-scaffolding`). Rollback: `knowledge-base/project/specs/archive/20261013-014038-feat-team-workspace-multi-user/rollback.md`. |
 | MU4.1 | BYOK delegations — owner-funded co-member runs + UI surfaces + legal docs + consent gate | [#4232](https://github.com/jikig-ai/soleur/issues/4232) PR-A merged ([#4290](https://github.com/jikig-ai/soleur/pull/4290)); PR-B ([#4508](https://github.com/jikig-ai/soleur/pull/4508)) merged. Gated by `BYOK_DELEGATIONS_ENABLED` (default OFF). Flag flip after Side Letter signed. |
 
 **Gate:** All three must pass before any recruitment outreach.
@@ -345,6 +345,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | [#1444](https://github.com/jikig-ai/soleur/issues/1444) Done |
 | 4.11 | Skill security scan (LOW-RISK\|REVIEW\|HIGH-RISK advisory gate for skill-creator + agent-finder; brand-survival precondition for external skill-install UX) | P1 | Before guided onboarding (4.3) exposes third-party skill-install surface | [#2719](https://github.com/jikig-ai/soleur/issues/2719) Brainstormed |
 | 4.12 | Alpha-tester terms + controller/processor posture (Art. 28(3) instrument for operator-assisted runs; LIA + Art. 30 records for repo observation) | P1 | Before tester #2 is onboarded — the determination is a **precondition** of the next onboarding, not a reaction to it | [#7331](https://github.com/jikig-ai/soleur/issues/7331) Determined 2026-08-06 |
+| 4.13 | Evaluate the homepage hero CTA rollout (self-hosted install as the primary button, hosted waitlist kept visible; metrics and decision rule in the issue) | P2 | 14 to 28 days after the #9579 hero change ships (review date 2026-11-03) | [#9588](https://github.com/jikig-ai/soleur/issues/9588) Not started |
 
 **Recruitment channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, X/Twitter solopreneur network, direct network.
 
@@ -434,6 +435,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L28 | Reconcile /ai-cmo/ cost figure ($240K title vs $290K meta vs ~$294K table) — growth audit 2026-10-05 | P2 | [#9499](https://github.com/jikig-ai/soleur/issues/9499) | Not started |
 | L29 | One model-support claim across homepage, pricing, getting-started and vision (Claude-only vs Grok Build vs "model-agnostic") — growth audit 2026-10-05 | P2 | [#9500](https://github.com/jikig-ai/soleur/issues/9500) | Not started |
 | L30 | One canonical Company-as-a-Service origin line across glossary, pillar and vision; replace weak glossary citation — growth audit 2026-10-05 | P2 | [#9501](https://github.com/jikig-ai/soleur/issues/9501) | Not started |
+| L31 | Retire the plaintext Redis AOF backstop volume `hcloud_volume.inngest_redis` (encryption at rest, #6894 / ADR-142) before its non-extendable ledger exception expires 2026-10-22: detach, zero with read-back, destroy via a reviewer-gated dispatch; records converge only after the Hetzner API shows the volume gone | P2 | [#8285](https://github.com/jikig-ai/soleur/issues/8285), [#6894](https://github.com/jikig-ai/soleur/issues/6894) | Done — volume destroyed 2026-10-09 (PR A [#9784](https://github.com/jikig-ai/soleur/pull/9784), PR B [#9877](https://github.com/jikig-ai/soleur/pull/9877)) |
 
 #### Competitive-Parity Bets (vs Viktor)
 

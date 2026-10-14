@@ -409,6 +409,66 @@ the timer then fires. That proof is a runtime signal keyed on the host unit alon
 unchanged: no static check can prove a monitor is armed; it can only prove a feeder exists. This
 amendment adds that "exists" must mean "on a path that runs".
 
+### Amendment (2026-10-11, #9980): a named-monitor entry to the same gate
+
+The arm gate has a second, operator-invoked entry: `arm-heartbeats.sh --arm-one <name> [--id <id>]`, with
+`--status <name>` as its read-only twin. It runs the same `arm_one` as the per-merge path (op/state gate,
+unpause, poll to `up`, rollback with one retry, sweep books), reaching it through a fourth optional
+positional id parameter, so the six `arm_one` call lines (five per-merge arms and the inngest block) are
+unchanged. The per-merge amendment of 2026-07-18 moved arming out of a hand-run procedure and into the apply
+workflow; this entry does not reverse that for any monitor in the per-merge list. It exists for the one
+monitor ADR-283 deliberately keeps OUT of that list, whose arm is a per-step owner authorization taken after
+a measured soak.
+
+What differs from the per-merge path: the monitor is resolved by EXACT name over the whole paginated list
+(exactly one match required; the owner's `--id`, read in a separate step, is the independent anchor, and an
+empty `--id` refuses); the deadline is a fixed 150 s, a deliberate departure from the per-monitor formula
+default of the 2026-08-20 amendment, bounded by the monitor's own `period + grace - 40` and refused when
+exceeded; the books file is a private `mktemp` (or a caller path that must be absent or a readable regular
+file, not a symlink, checked BEFORE the first PATCH) whose path and `--sweep` recovery command are printed
+first, and the monitor's id is written to it BEFORE the unpause request, so a request that applies with its
+reply lost, or a killed process, cannot leave a live monitor on nobody's books; an unpause that answers an
+error is read back and rolled back, because the reply can be lost after the change applied; and rc 0 means armed or already
+`up`, never "live in some other state" (`down`, `pending` exit 1), with a machine verdict line
+`arm-one-result` last. The credential is the same account-wide Better Stack write token
+(`BETTERSTACK_API_TOKEN`) the apply path uses, read through the operator's own Doppler login and injected by
+`doppler run` into one child process, instead of the CI-scoped `DOPPLER_TOKEN_WEB_ARM` handle that reads it in
+the apply workflow. Nothing here narrows its scope. The first user is the
+git-data host liveness heartbeat ([ADR-283](./ADR-283-git-data-host-originated-liveness-heartbeat.md)).
+
+### Amendment (2026-10-11, #9703): a clock-dispatched workflow is a third feeder evidence class
+
+The two legal feeder shapes were an on-host timer enabled by a `systemctl enable --now` construct, and a
+`/etc/cron.d` drop-in, both under `apps/web-platform/infra/`. `betteruptime_heartbeat.inngest_server_probe`
+cannot use either: its property is "a fresh `host_role=dedicated` probe row is confirmed in the Logs
+warehouse", and a host-side push inside the probe cannot see a Vector journald-allowlist regression or a
+sink outage. Its feeder is a repo-side verifier run by a GitHub Actions workflow.
+
+A heartbeat's feeder may therefore be a **clock-dispatched workflow**: `kind: "cron"` with
+`evidence.file` a workflow under `.github/workflows/` and `evidence.pattern` the `bash scripts/<x>.sh`
+run line. This is a third evidence class, not a relaxed regex: the evidence-shape assertion in
+`heartbeat-reprovision-parity.test.ts` is a two-arm alternation, each arm bound on both file and
+pattern, and the new arm admits only a workflow path and a `bash scripts/<name>.sh` pattern. `checkFeeders` also requires, for the workflow arm, that the workflow carry a `schedule:` trigger or a
+`WATCHDOG_DISPATCH_TABLE` row and that the script it names exist, so a workflow that nothing starts cannot
+be declared a feeder. The
+verifier's harness binds the claim to the heartbeat (the verifier's heartbeat name equals the `.tf`
+`name`, the pattern sits on a parsed `run:` line, the Sentry status expression reads the verifier's exit
+code), and the workflow must be a `WATCHDOG_DISPATCH_TABLE` row (ADR-248) or carry a `schedule:`
+trigger.
+
+**"Fed" is not "armed".** This verifier deliberately beats nothing while the heartbeat is paused (it
+reports `fresh_heartbeat_paused` and exits 0): the response to a beat sent to a paused heartbeat is
+undocumented, and `updated_at` does not move on a beat while paused. So the row ships with
+`arming_pending` and the arming is a separately authorized, trap-rolled-back unpause described in
+`knowledge-base/engineering/operations/runbooks/inngest-server.md`. As of this amendment (2026-10-11),
+nothing in this record stated that the heartbeat was armed; see the 2026-10-12 record below. Dropping
+`arming_pending` after the arm's read-back re-arms the nightly
+reconcile's `fed-but-paused` class, which is the net for a re-pause (the feeder itself exits 0 on a
+paused heartbeat and would not alert). 2026-10-12 record (#9703): the heartbeat was armed through the
+runbook block (read-back `status=up paused=false`; the feeder reported `verdict=beat` on three runs, ids in the
+runbook section "Arming the probe heartbeat (#9703)") and `arming_pending` is dropped from the manifest row by the
+Stage 3a record PR, so from its merge the reconcile's `fed-but-paused` class covers it. The live state is read from Better Stack, not from this record.
+
 ## Consequences
 
 - `registry_prd` reclassifies `web-host-cron` → `dedicated-host-boot`, so ADR-103's `replace_target`

@@ -111,6 +111,8 @@ expect_verdict "subdir .md is NOT root-md safe"         true  pull_request $'M\t
 expect_verdict "workflow edit itself runs"              true  pull_request $'M\t.github/workflows/ci.yml\n'
 expect_verdict "bare path (no status) treated as M"     false pull_request $'knowledge-base/a.md\nREADME.md\n'
 expect_verdict "unmerged status runs"                   true  pull_request $'U\tknowledge-base/a.md\n'
+# Single-slash markdown outside the tree: the inner root-md guard must treat ANY slash as non-root (a `*/*/*` edit would not).
+expect_verdict "single-slash .md is NOT root-md safe"    true  pull_request $'M\tapps/README.md\n'
 
 echo "── Guard 1: hostile-input + self-evaluation axes"
 # Copy status is the same unsafe class as rename: a copied-in app file must run.
@@ -171,7 +173,7 @@ e2e_section="$(awk '/^  e2e:/{f=1} f && !/^  e2e:/ && /^  [a-zA-Z0-9_-]+:/{exit}
 
 anchor_in_e2e() { # <desc> <fixed-string> — must appear INSIDE the e2e job.
   local desc="$1" needle="$2"
-  if printf '%s\n' "$e2e_section" | grep -qF -e "$needle"; then
+  if printf '%s\n' "$e2e_section" | grep -cF >/dev/null -e "$needle"; then
     PASS=$((PASS + 1)); echo "ok   $desc"
   else
     FAIL=$((FAIL + 1)); echo "FAIL $desc (missing in e2e job section: $needle)"
@@ -181,7 +183,7 @@ anchor_in_e2e() { # <desc> <fixed-string> — must appear INSIDE the e2e job.
 # Boundary-anchored, not substring: `id: detector` must NOT satisfy this —
 # `steps.detect.outputs.applicable` would resolve empty and e2e green-skips
 # on every PR with every assertion green (demonstrated in review).
-if printf '%s\n' "$e2e_section" | grep -qE '^[[:space:]]+id: detect[[:space:]]*$'; then
+if printf '%s\n' "$e2e_section" | grep -cE >/dev/null '^[[:space:]]+id: detect[[:space:]]*$'; then
   PASS=$((PASS + 1)); echo "ok   e2e classify step id: detect (line-anchored)"
 else
   FAIL=$((FAIL + 1)); echo "FAIL e2e classify step id: detect missing/renamed"
@@ -190,7 +192,19 @@ anchor_in_e2e "classifier invoked from workflow"        "scripts/ci-e2e-classify
 # The classifier the PR is judged by is the BASE ref's copy — losing this line
 # re-opens the self-evaluation hole (a PR shipping `emit false` for itself).
 anchor_in_e2e "base-ref classifier judged, not the PR's" 'git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh"'
-anchor_in_e2e "full-history checkout for PR diff"       "github.event_name == 'pull_request' && 0 || 1"
+# The `0` is a quoted STRING: `A && 0 || 1` evaluates to 1 in an Actions expression (0 is falsy), which made this
+# checkout depth-1 on every PR and sent every PR down the enum-failed fallback (#9729). The unquoted spelling this
+# row used to pin certified the bug; plugins/soleur/test/ci-shard-totality-skip.test.sh sweeps every workflow for it.
+anchor_in_e2e "full-history checkout for PR diff"       "github.event_name == 'pull_request' && '0' || '1'"
+anchor_absent "no falsy-zero checkout ternary (&& 0 ||)" "&& 0 || 1 }}"
+# git's stderr is kept so a fallback names its cause; a line that sends it to /dev/null re-opens the invisible-cause hole.
+if grep -qE '2> *(/dev/null|&-)|&>' < <(grep -E 'git (diff|show)' <<<"$e2e_section"); then
+  FAIL=$((FAIL + 1)); echo "FAIL a git diff/show in the e2e classify step discards stderr"
+else
+  PASS=$((PASS + 1)); echo "ok   no git diff/show line in the e2e classify step discards stderr"
+fi
+anchor_in_e2e "classify fallback prints the git stderr"  'git stderr: ['
+
 # The diff range is load-bearing: a narrowed spec (HEAD~1, fixed base) hides
 # app changes in earlier commits of a multi-commit PR.
 anchor_in_e2e "diff range is the PR merge-base"         'git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD"'
@@ -204,7 +218,9 @@ anchor_in_e2e "verdict whitelisted true|false"          'case "$APPLICABLE" in'
 # `== 'true'` gate is false and e2e green-skips on every PR.
 anchor_in_e2e "verdict emitted to GITHUB_OUTPUT"        'applicable=$APPLICABLE" >> "$GITHUB_OUTPUT'
 anchor_in_e2e "skip verdict surfaced"                   "e2e skipped"
-anchor_in_e2e "enum-failure fallback wired"             "--enum-failed"
+# The fallback is a LITERAL true: running the PR's own checked-out classifier with --enum-failed would let a PR that edits that
+# script turn the fallback into `false` (review of #10098).
+anchor_in_e2e "enum-failure fallback is a literal true"  'APPLICABLE=true'
 anchor_absent "no trigger-level paths: on e2e/CI"       "paths-ignore"
 
 # A job-level `if:`/`needs:` on `e2e` makes the required check conclude
@@ -212,8 +228,16 @@ anchor_absent "no trigger-level paths: on e2e/CI"       "paths-ignore"
 # rejected. And an `if:` on the classify STEP is worse: `applicable` resolves
 # empty, every gate and the verdict step evaluate false, job greens doing
 # nothing. Neither is pinned by presence anchors — assert absence.
-if printf '%s\n' "$e2e_section" | awk '/^    steps:/{exit} /^    (if|needs):/{bad=1} END{exit bad}'; then
-  PASS=$((PASS + 1)); echo "ok   e2e job carries no job-level if:/needs:"
+# ONE carve-out (ADR-276 S2, #9512): the push-dedupe elision. `e2e` may carry exactly `needs: [push-dedupe]` and
+# exactly the canonical condition below, nothing else. That is not the #5585 shape: push-dedupe cannot needs-skip
+# `e2e` by failing (the condition opens with the status function !cancelled(), so a failed or skipped need still runs
+# the job), it is skipped off the push event, and the elision needs a green identical-SHA merge_group run (whether a
+# required context is evaluated on a direct push to main is not settled from the repo, so the defense rests on the
+# proof, not on that premise). scripts/ci-push-dedupe.test.sh evaluates the condition over the event x output truth table.
+E2E_ELIDE_NEEDS="needs: [push-dedupe]"
+E2E_ELIDE_IF="if: \${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
+if printf '%s\n' "$e2e_section" | awk -v en="    $E2E_ELIDE_NEEDS" -v ei="    $E2E_ELIDE_IF" '/^    steps:/{exit} /^    (if|needs):/{ if ($0 != en && $0 != ei) bad=1 } END{exit bad}'; then
+  PASS=$((PASS + 1)); echo "ok   e2e job carries no job-level if:/needs: other than the push-dedupe elision pair"
 else
   FAIL=$((FAIL + 1)); echo "FAIL e2e job has a job-level if:/needs: (skipped required check posts green)"
 fi
@@ -221,7 +245,7 @@ detect_step="$(printf '%s\n' "$e2e_section" | awk '
   /^      - name: Classify e2e applicability/{f=1}
   f && /^      - / && !/Classify e2e applicability/{exit}
   f{print}')"
-if [ -n "$detect_step" ] && ! printf '%s\n' "$detect_step" | grep -qE '^\s+if:'; then
+if [ -n "$detect_step" ] && ! printf '%s\n' "$detect_step" | grep -cE >/dev/null '^\s+if:'; then
   PASS=$((PASS + 1)); echo "ok   classify step carries no if: (verdict always populated)"
 else
   FAIL=$((FAIL + 1)); echo "FAIL classify step is conditional or not found (empty verdict green-skips the job)"
@@ -266,8 +290,8 @@ fi
 # (ADR-193): a floor routed through fail()/FAIL++ is disarmed by the same
 # neutered machinery it exists to catch.
 total=$((PASS + FAIL))
-if [ "$total" -lt 40 ]; then
-  echo "[FATAL] assertion floor: only $total assertions ran, want >=40" >&2
+if [ "$total" -lt 51 ]; then
+  echo "[FATAL] assertion floor: only $total assertions ran, want >=51" >&2
   exit 1
 fi
 

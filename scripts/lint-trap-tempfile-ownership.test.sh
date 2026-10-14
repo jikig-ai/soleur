@@ -217,7 +217,7 @@ add_commit() {
   cp "$FIX/$fx" "$REPO/$rel"
   g add -- "$rel"
   g commit -q -m "add $rel"
-  g diff --name-only main...HEAD | grep -qxF -- "$rel" || { echo "builder: $rel is NOT an added path" >&2; return 1; }
+  g diff --name-only main...HEAD | grep -cxF >/dev/null -- "$rel" || { echo "builder: $rel is NOT an added path" >&2; return 1; }
 }
 
 # lint_in_repo [args...] : rc and stderr of the lint run from inside the fixture repo.
@@ -322,7 +322,7 @@ for fx in d-bad-py-mkdtemp-no-cleanup.py.fixture d-bad-ts-mkdtemp-no-rm.ts.fixtu
   cmt="#"; [[ "$fx" == *.ts.fixture ]] && cmt="//"
   printf '\n%s touched by an unrelated edit\n' "$cmt" >> "$REPO/src/${fx%.fixture}"
   g commit -q -am "touch"
-  g diff --name-only main...HEAD | grep -qxF -- "src/${fx%.fixture}" || no "touch control: $fx is not in the diff"
+  g diff --name-only main...HEAD | grep -cxF >/dev/null -- "src/${fx%.fixture}" || no "touch control: $fx is not in the diff"
   lint_in_repo
   if [[ "$LRC" == "0" ]]; then
     ok "touched-not-added control: an unrelated edit to $fx does not make its old allocation an entrant"
@@ -416,6 +416,47 @@ else
   no "--census contract changed (rc=$LRC out='${LERR:0:80}')"
 fi
 
+# --- `--census-files`: the population LISTING, printed by the same census_all pass that
+# counts it (#10017). Fixture tree: two class-b members (bad-mktemp-no-trap, plus the
+# escape-annotated good-escape-hatch -- the census deliberately counts escapes), one
+# rule-e-only member (e-bad-sh-literal-base carries an EXIT trap, so rule-e but not
+# class-b), and two non-members (good-mktemp-with-trap, good-return-trap -- RETURN is
+# ownership per TRAP_EXIT). Output shape: `<class>\t<path>` per line.
+mkrepo "census-files" 0 0 0 "$CLEAN_SH" "$CLEAN_PY" "$CLEAN_TS" \
+  "bad-mktemp-no-trap.sh.fixture" "good-escape-hatch.sh.fixture" \
+  "e-bad-sh-literal-base.sh.fixture" "good-return-trap.sh.fixture"
+lint_in_repo_out --census-files
+cf_out="$LERR"; cf_rc=$LRC
+cf_shell_n="$(grep -c $'^shell\t' <<< "$cf_out" || true)"
+lint_in_repo_out --census
+if [[ "$cf_rc" == "0" && "$cf_shell_n" == "$LERR" && "$LERR" == "2" ]]; then
+  ok "--census-files: shell member lines == --census count (2; an empty list beside a non-zero count is RED by this arm)"
+else
+  no "--census-files count divergence (shell lines=$cf_shell_n, --census='$LERR', rc=$cf_rc: ${cf_out:0:160})"
+fi
+if grep -qF $'shell\tsrc/bad-mktemp-no-trap.sh' <<< "$cf_out"; then
+  ok "--census-files lists the untrapped-mktemp member"
+else
+  no "--census-files missing src/bad-mktemp-no-trap.sh: ${cf_out:0:200}"
+fi
+if grep -qF $'shell\tsrc/good-escape-hatch.sh' <<< "$cf_out"; then
+  ok "--census-files lists an escape-annotated member (the census counts escapes)"
+else
+  no "--census-files dropped the escape-annotated member: ${cf_out:0:200}"
+fi
+if grep -qF $'rule-e\tsrc/e-bad-sh-literal-base.sh' <<< "$cf_out" \
+   && [[ "$(grep -c $'^rule-e\t' <<< "$cf_out" || true)" == "1" ]]; then
+  ok "--census-files lists the rule-e member under its own class (trapped file: rule-e only, not class-b)"
+else
+  no "--census-files rule-e listing wrong (want exactly 'rule-e src/e-bad-sh-literal-base.sh'): ${cf_out:0:200}"
+fi
+if ! grep -qF 'good-mktemp-with-trap' <<< "$cf_out" \
+   && ! grep -qF 'good-return-trap' <<< "$cf_out"; then
+  ok "--census-files excludes trap-owning files (EXIT and RETURN both)"
+else
+  no "--census-files listed a trap-owning file: ${cf_out:0:200}"
+fi
+
 # --- Row 5: the file walk returns zero files. "Nothing checked" must be RED in every mode
 # that walks the tree. A `git` that lists nothing and exits 0 is the strictly harder case
 # than one that errors -- it is the failure that reads as clean.
@@ -427,7 +468,7 @@ exec "$REAL_GIT" "$@"
 SHIM
 chmod +x "$T/shim-empty/git"
 mkrepo "row5" 0 0 0 "$CLEAN_SH" "$CLEAN_PY" "$CLEAN_TS"
-for mode in "" "--census" "--census-detail" "--check-highwater"; do
+for mode in "" "--census" "--census-detail" "--census-files" "--check-highwater"; do
   r5=0
   r5_err="$(cd "$REPO" && PATH="$T/shim-empty:$PATH" "${GENV[@]}" python3 scripts/lint-trap-tempfile-ownership.py $mode 2>&1 >/dev/null)" || r5=$?
   if [[ "$r5" == "2" ]] && grep -qF "returned 0" <<< "$r5_err"; then
@@ -606,7 +647,7 @@ PYADV
 # --- Case floor, reported WITHOUT the pass/fail helpers. Deleting arms (the d/e RED rows,
 # or the whole batch) must not read as a green suite: the count is pinned exactly. Raise it
 # in lockstep when an arm is added on purpose.
-EXPECTED_CASES=114
+EXPECTED_CASES=120
 echo ""
 echo "Total: $((PASS + FAIL))  Pass: $PASS  Fail: $FAIL"
 if (( PASS + FAIL != EXPECTED_CASES )); then

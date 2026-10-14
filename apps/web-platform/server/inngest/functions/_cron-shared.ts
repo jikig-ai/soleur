@@ -325,6 +325,21 @@ export const ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS: Record<string, string> = {
   issues: "write",
 };
 
+// #7122 — the community monitor's SPAWN credential: all-read. The agent's env
+// and the workspace `.git/config` carry this token for the whole run, so a
+// prompt-injected run holds no write primitive at the token layer. The matching
+// WRITE token (DEFAULT_CRON_TOKEN_PERMISSIONS) is minted only after the child
+// has exited, for the handler's own issue upsert and safeCommitAndPr. Read is
+// enough for the collectors (github-community.sh reads issues, comments, pulls,
+// commits, repo metadata and stargazers); the GitHub App's install-time manifest
+// (infra/github-app-manifest.json) grants all three at write, so a read narrowing
+// is mintable. Paired with `repositories: [REPO_NAME]` at the mint call site.
+export const COMMUNITY_SPAWN_TOKEN_PERMISSIONS: Record<string, string> = {
+  contents: "read",
+  issues: "read",
+  pull_requests: "read",
+};
+
 export async function mintInstallationToken(opts: {
   tokenMinLifetimeMs: number;
   // Optional least-privilege scope. Omitted → full installation grant (the
@@ -1750,6 +1765,15 @@ export async function ensureScheduledAuditIssue(args: {
   >;
   installationToken?: string;
   octokit?: Octokit;
+  /**
+   * #7122 — when true, BOTH tail rows render a fixed sentinel instead of the
+   * (redacted) spawn tails. For a cron whose model output is attacker-influenced
+   * and whose audit issue is PUBLIC: the tail would be a free-text channel to a
+   * public surface. The redacted tail still reaches Sentry via
+   * resolveOutputAwareOk / reportSilentFallback, so triage is unaffected.
+   * Default false keeps every other caller's body byte-identical.
+   */
+  withholdModelOutput?: boolean;
 }): Promise<{ created: boolean }> {
   const {
     label,
@@ -1759,6 +1783,7 @@ export async function ensureScheduledAuditIssue(args: {
     spawnResult,
     installationToken,
     octokit,
+    withholdModelOutput = false,
   } = args;
 
   // Replay-stable UTC date anchor (NOT `new Date()`, which would drift across
@@ -1803,6 +1828,14 @@ export async function ensureScheduledAuditIssue(args: {
     return { created: false };
   }
 
+  const WITHHELD_TAIL = "(withheld - model output is not published; see Sentry)";
+  const stdoutCell = withholdModelOutput
+    ? WITHHELD_TAIL
+    : formatTailForIssue(spawnResult.stdoutTail);
+  const stderrCell = withholdModelOutput
+    ? WITHHELD_TAIL
+    : formatTailForIssue(spawnResult.stderrTail);
+
   // Self-diagnosing body — the cron's own redacted spawn tail + timing, so the
   // failure is triageable without SSH (app stdout is not shipped to Better
   // Stack). The tails are already token-redacted by the eval substrate.
@@ -1820,8 +1853,8 @@ export async function ensureScheduledAuditIssue(args: {
     `| signal | \`${spawnResult.signal}\` |\n` +
     `| abortedByTimeout | \`${spawnResult.abortedByTimeout}\` |\n` +
     `| durationMs | \`${spawnResult.durationMs}\` |\n` +
-    `| stdoutTail | \`${formatTailForIssue(spawnResult.stdoutTail)}\` |\n` +
-    `| stderrTail | \`${formatTailForIssue(spawnResult.stderrTail)}\` |\n\n` +
+    `| stdoutTail | \`${stdoutCell}\` |\n` +
+    `| stderrTail | \`${stderrCell}\` |\n\n` +
     `Triage: \`knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md\` (H2).`;
 
   await client.request("POST /repos/{owner}/{repo}/issues", {

@@ -232,10 +232,10 @@ fi
 
 n_entries=$(grep -cE '^[[:space:]]+git_data_[a-z_]+[[:space:]]*=[[:space:]]*replace\(file\(' "$TF")
 CASES=$((CASES + 1))
-if [[ "$n_entries" -eq 13 ]]; then
-  pass "all 13 stripped map entries are each on ONE physical line"
+if [[ "$n_entries" -eq 16 ]]; then
+  pass "all 16 stripped map entries are each on ONE physical line"
 else
-  fail "expected 13 single-line stripped map entries in the render module, found ${n_entries}" \
+  fail "expected 16 single-line stripped map entries in the render module, found ${n_entries}" \
     "a wrapped entry defeats the line-based var parser in cloud-init-user-data-size.test.ts"
 fi
 
@@ -271,7 +271,7 @@ fi
 # maintainers comments are now free, which is exactly the belief that trips it.
 # THE FILE LIST IS DERIVED FROM THE RENDER MODULE, NOT HAND-TYPED. The first revision listed ten
 # files by name and the four #8210 payloads joined the strip map (9 -> 13 entries, asserted
-# just above) without joining this list — so the one unit whose ExecStart is a ten-line
+# just above; 13 -> 16 with the #9438 liveness feeder) without joining this list — so the one unit whose ExecStart is a ten-line
 # `\`-continued `sh -c` body (the reopen reporter, the sole emitter for every reopen failure)
 # sat outside the guard that exists for exactly that shape. Every `replace(file("…"))` operand
 # in the module, plus the template itself, is what the strip is applied to; read them.

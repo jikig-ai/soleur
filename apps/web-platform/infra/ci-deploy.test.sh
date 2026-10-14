@@ -68,9 +68,20 @@ trap 'rm -f "$MOCK_SLEEP_CAP_MARKER"' EXIT
 create_mock_logger() {
   cat > "$1/logger" << 'MOCK'
 #!/bin/bash
+# #9217: real logger reads its stdin when no message operand follows the options, and ci-deploy.sh pipes a command's output into it
+# (`... | logger -t TAG [-p PRIO]`). A mock that exits unread lets that writer take SIGPIPE, so it reads FIRST, only in that form
+# and only when stdin is not a terminal. MOCK_LOGGER_STDIN_FILE (optional) keeps the bytes for a wire assert.
+_lg_msg=0; _lg_prev=""
+for _a in "$@"; do case "$_lg_prev" in -t|-p) _lg_prev=""; continue ;; esac; case "$_a" in -t|-p) _lg_prev="$_a" ;; -*) ;; *) _lg_msg=1 ;; esac; done
+[[ "$_lg_msg" == 0 ]] && { [ -t 0 ] || timeout 2 cat >> "${MOCK_LOGGER_STDIN_FILE:-/dev/null}"; }
 if [[ -n "${MOCK_LOGGER_CAPTURE_FILE:-}" ]]; then
   printf '%s\n' "$*" >> "$MOCK_LOGGER_CAPTURE_FILE"
 fi
+# #9871: MOCK_LOGGER_FAIL_MATCH=<substring> makes journald fail for lines CONTAINING it, after capture,
+# so a row can prove the diag bundle's own logger call can never change the deploy's exit code or state.
+# (A blanket failure is not usable: other bare `logger` calls earlier in the script abort a deploy under
+# `set -e` long before the probe, which is existing behaviour and not what the row is about.)
+if [[ -n "${MOCK_LOGGER_FAIL_MATCH:-}" && "$*" == *"$MOCK_LOGGER_FAIL_MATCH"* ]]; then exit 1; fi
 exit 0
 MOCK
   chmod +x "$1/logger"
@@ -95,10 +106,107 @@ MOCK
   chmod +x "$1/getent"
 }
 
+# #9860: ONE mock installed as BOTH `journalctl` and `dmesg` (it switches on basename $0), so the
+# `kdeny` DIAG row is hermetic: without it the rows would run the RUNNER's real binaries and their
+# verdict would depend on the host's kernel log and on dmesg_restrict.
+#   MOCK_KLOG_LOG        one line per invocation: "<name> <argv>" (the recorder; D10a asserts it is non-empty)
+#   MOCK_KLOG_<J|D>_OUT  stdout (unset => a few benign synthesized kernel lines; set-but-empty => the SILENT-EMPTY
+#                        shape measured on systemd 261: rc 0, no hint, no lines)
+#   MOCK_KLOG_<J|D>_RC   exit code (127 models "binary absent"); _SLEEP seconds via /bin/sleep (the PATH sleep is a
+#                        no-op); _BIG=1 prepends 40000 benign lines (~4 MB) BEFORE the OUT text; _PAD=<n> sets the
+#                        benign line length (default ~100 bytes); _REP=<n> repeats OUT n times; _ERR=1 writes OUT to
+#                        STDERR instead (real journalctl/dmesg print their hint and error text there, so a read that
+#                        drops its `2>&1` must fail the hint rows)
+# PROVENANCE: the hint and silent-empty bodies are modelled on systemd 255's documented hint block and on journalctl
+# 261's measured silent-empty output (a dev host, kernel 7.2.5), NOT on the production host (6.8.0-90); the first real
+# `kdeny` row is what grounds them. An awk-dialect check ran the function under mawk (prod) and gawk (dev): identical.
+# The journalctl arm answers only an argv that carries -k AND -n 400 (exit 64 otherwise): a fake that answers
+# every request would let a rung that dropped its own bound still read as green.
+create_mock_kernlog() {
+  cat > "$1/journalctl" << 'MOCK'
+#!/bin/bash
+name=$(basename "$0")
+printf '%s %s\n' "$name" "$*" >> "${MOCK_KLOG_LOG:-/dev/null}"
+if [[ "$name" == journalctl ]]; then
+  [[ " $* " == *" -k "* && " $* " == *" -n 400 "* ]] || { echo "journalctl mock: refusing argv without -k and -n 400: $*" >&2; exit 64; }
+  p=J
+else
+  p=D
+fi
+sleep_v="MOCK_KLOG_${p}_SLEEP"; out_v="MOCK_KLOG_${p}_OUT"; rc_v="MOCK_KLOG_${p}_RC"; big_v="MOCK_KLOG_${p}_BIG"; rep_v="MOCK_KLOG_${p}_REP"; pad_v="MOCK_KLOG_${p}_PAD"; err_v="MOCK_KLOG_${p}_ERR"
+if [[ -n "${!sleep_v:-}" ]]; then /bin/sleep "${!sleep_v}"; fi
+if [[ "${!big_v:-}" == "1" ]]; then
+  if [[ -n "${!pad_v:-}" ]]; then
+    pad_line="kernel: $(head -c "${!pad_v}" /dev/zero | tr '\0' 'p')"
+  else
+    pad_line='kernel: benign synthesized line padding padding padding padding padding padding padding padding pad'
+  fi
+  yes "$pad_line" | head -n 40000
+fi
+if [[ -n "${!out_v+x}" ]]; then
+  reps="${!rep_v:-1}"
+  for ((i = 0; i < reps; i++)); do
+    if [[ "${!err_v:-}" == "1" ]]; then printf '%s\n' "${!out_v}" >&2; else printf '%s\n' "${!out_v}"; fi
+  done
+else
+  printf '%s\n' 'kernel: docker0: port 1(veth0) entered forwarding state' 'kernel: eth0: link up' 'kernel: EXT4-fs (sda1): mounted filesystem'
+fi
+exit "${!rc_v:-0}"
+MOCK
+  chmod +x "$1/journalctl"
+  cp "$1/journalctl" "$1/dmesg"
+}
+
+# #10045: sudo models the KDENY_KERNEL_STREAM fixed-argv grant. sudo matches the resolved
+# command PLUS its argument list literally, so the mock does too — a journalctl invocation
+# must be exactly `-n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat`, and any
+# drift IS a denial on a real host. The refusal is rc 64 mock-named (never `sudo:`-shaped, so
+# a drifted argv cannot pass as a grant-absent host). Other argv resolve through the generic
+# flag-strip/PATH-exec path below (the fleet's other NOPASSWD grants are unaffected).
+#   MOCK_SUDO_LOG     one line per invocation (the full raw argv) — the evidence channel for
+#                     "the privileged arm ran". klog alone cannot discriminate: a journalctl
+#                     line lands there whether it was exec'd through sudo or read unprivileged.
+#   MOCK_SUDO_DENY    the grant is absent: a journalctl invocation is refused on STDERR (rc 1)
+#                     and never exec'd; a `DENY` marker lands in MOCK_SUDO_LOG so a fixture can
+#                     count accepted vs refused attempts and prove "zero unprivileged
+#                     journalctl runs" arithmetically. Two denial bodies, both pinned to
+#                     REAL shapes (see PROVENANCE): `rs` = the sudo-rs denial recorded live
+#                     against this fleet (`sudo: deploy : command not allowed`, the 2026-05-20
+#                     learning's observed emission); `gnu` = GNU sudo's policy denial,
+#                     `Sorry, user deploy is not allowed to execute ...`, the same body
+#                     infra-config-apply.test.sh:842 models and infra-config-apply.sh:742's
+#                     matcher enumerates.
+#   MOCK_SUDO_WARN=1  an ACCEPTED run also emits a `sudo:`-prefixed WARNING on stderr (the
+#                     `sudo: unable to resolve host` class, real on minimal cloud images) —
+#                     merged into the reader's 2>&1 capture to exercise the post-check strip:
+#                     a warning must never count as a journal line (`empty` misread as `ok`),
+#                     and must never masquerade as a denial (it carries no denial PHRASE).
 create_mock_sudo() {
   cat > "$1/sudo" << 'MOCK'
 #!/bin/bash
-# Skip sudo flags (--preserve-env=..., -E, etc.)
+if [[ -n "${MOCK_SUDO_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_SUDO_LOG"; fi
+if [[ " $* " == *" journalctl "* || " $* " == *"/journalctl "* ]]; then
+  if [[ -n "${MOCK_SUDO_DENY:-}" ]]; then
+    if [[ -n "${MOCK_SUDO_LOG:-}" ]]; then printf 'DENY\n' >> "$MOCK_SUDO_LOG"; fi
+    case "$MOCK_SUDO_DENY" in
+      rs)  echo 'sudo: deploy : command not allowed' >&2 ;;
+      gnu) echo "Sorry, user deploy is not allowed to execute '/usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat' as root on soleur-web-platform." >&2 ;;
+      *)   echo "sudo mock: unrecognized MOCK_SUDO_DENY value '$MOCK_SUDO_DENY' — the knob set is {rs, gnu}; an unrecognized value must be LOUD, not silently grant-present" >&2; exit 70 ;;
+    esac
+    exit 1
+  fi
+  if [[ "$*" != "-n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat" ]]; then
+    echo "sudo mock: refusing a journalctl argv that is not the pinned KDENY_KERNEL_STREAM grant: $*" >&2
+    exit 64
+  fi
+  # Accepted run: MOCK_SUDO_WARN emits sudo's own warning on stderr — real warnx class, no
+  # denial phrase (it must never satisfy the fallback signature, and the post-check strip
+  # must keep it out of the counted stream).
+  if [[ "${MOCK_SUDO_WARN:-}" == "1" ]]; then
+    echo 'sudo: unable to resolve host soleur-web-platform: Temporary failure in name resolution' >&2
+  fi
+fi
+# Skip sudo flags (-n, --preserve-env=..., -E, etc.)
 while [[ "${1:-}" == -* ]]; do shift; done
 cmd="$1"; shift
 # Resolve absolute paths via PATH so mocks shadow system binaries.
@@ -382,7 +490,99 @@ MOCK
 create_docker_mock() {
   cat > "$1/docker" << 'MOCK'
 #!/bin/bash
+_ltok_in=""; case " $* " in *" --password-stdin "*) [ -t 0 ] || _ltok_in="$(timeout 2 cat)" ;; esac
 mode="${MOCK_DOCKER_MODE:-default}"
+
+# #9871 canary DIAG bundle. The bundle is ONE `docker exec ... /bin/sh -c <script> soleur-canary-diag`;
+# the trailing literal is `$0` inside the script and is the token this arm keys on. It sits BEFORE the
+# Guard-2 argv recorder and the bwrap-substring arms on purpose: the script text itself names bwrap, so
+# any later arm would record it as a second probe exec and break Guard 2's "exactly one bwrap exec".
+#   MOCK_CANARY_SEQ_LOG   every diag exec / docker stop / docker rm appends its verb (ORDER rows)
+#   MOCK_CANARY_DIAG_LOG  the raw argv of each diag exec (COUNT rows)
+#   MOCK_CANARY_DIAG_OUT  stdout (default: a benign eleven-section body, the REAL script's section names); _RC exit code; _SLEEP seconds
+#                         (/bin/sleep directly -- the PATH sleep is a no-op); _BIG=1 prepends 4 MB.
+if [[ "${1:-}" == "exec" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == "soleur-canary-diag" ]]; then
+      printf 'diag\n' >> "${MOCK_CANARY_SEQ_LOG:-/dev/null}"
+      printf '%s\n' "$*" >> "${MOCK_CANARY_DIAG_LOG:-/dev/null}"
+      if [[ -n "${MOCK_CANARY_DIAG_SLEEP:-}" ]]; then /bin/sleep "$MOCK_CANARY_DIAG_SLEEP"; fi
+      if [[ "${MOCK_CANARY_DIAG_BIG:-}" == "1" ]]; then head -c 4194304 /dev/zero | tr '\0' 'x'; echo; fi
+      if [[ -n "${MOCK_CANARY_DIAG_OUT+x}" ]]; then
+        printf '%s' "$MOCK_CANARY_DIAG_OUT"
+      else
+        printf '%s\n' 'id uid=1001 gid=1001' \
+          'proc CapInh=0000000000000000 CapPrm=0000000000000000 CapEff=0000000000000000 CapBnd=00000000a80425fb CapAmb=0000000000000000 NoNewPrivs=0 Seccomp=2 ' \
+          'lsm soleur-bwrap (enforce)' \
+          'files bwrap=755/root/51584 shim=755/root/9000 which=/usr/local/bin/bwrap real=/usr/bin/bwrap' \
+          'caps bwrap=none' \
+          'prov sha=0123456789abcdef ver=0.334.1' \
+          'direct_version rc=0 bubblewrap 0.8.0' \
+          'direct_probe rc=1 bwrap: No permissions to create new namespace' \
+          "sdk_probe rc=1 bwrap: Can't mount proc on /newroot/proc: Operation not permitted" \
+          'sdk_noproc rc=0 ' \
+          'kernel_ns restrict=0 clone=n/a max=63000'
+      fi
+      exit "${MOCK_CANARY_DIAG_RC-0}"
+    fi
+  done
+fi
+# The faithful / outer-wrap replays (`node sandbox-canary.mjs --replay|--replay-outer`) answer from env so a
+# row can drive a sandbox_broken verdict through run_canary_replay. Unset => fall through (old behaviour).
+if [[ "${1:-}" == "exec" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == "--replay" && -n "${MOCK_CANARY_REPLAY_OUT:-}" ]]; then printf '%s' "$MOCK_CANARY_REPLAY_OUT"; exit 0; fi
+    if [[ "$_a" == "--replay-outer" && -n "${MOCK_CANARY_REPLAY_OUTER_OUT:-}" ]]; then printf '%s' "$MOCK_CANARY_REPLAY_OUTER_OUT"; exit 0; fi
+  done
+fi
+# Teardown order: stop/rm append to the same sequence log, then fall through to the mode arms.
+if [[ "${1:-}" == "stop" || "${1:-}" == "rm" ]]; then printf '%s\n' "$1" >> "${MOCK_CANARY_SEQ_LOG:-/dev/null}"; fi
+# The host-side bundle sections read the canary's HostConfig through `docker inspect -f`. The mock models
+# what REAL docker prints (#9871 review): a bare {{.HostConfig.SecurityOpt}} renders the WHOLE ~12 KB
+# seccomp profile inline (the CLI reads the --security-opt seccomp=<file> at `docker run` time). The mock
+# PARSES the template: every {{field}} must be one the bundle is allowed to read (an unknown one -- a
+# `{{json .Config}}`, a comment-wrapped printf -- is a template error, as it would be a leak or a no-op in
+# production), and the SecurityOpt range cuts each entry at the WIDTH the template names. The output is
+# composed from the fields the template names, so a template that bundles posture with a bare SecurityOpt
+# loses its tail exactly as it does on real docker.
+#   MOCK_INSPECT_SLEEP=<s>         the host-side inspect hangs (/bin/sleep directly)
+#   MOCK_DOCKER_VERSION_SLEEP=<s>  `docker version` hangs
+if [[ "${1:-}" == "version" && -n "${MOCK_DOCKER_VERSION_SLEEP:-}" ]]; then /bin/sleep "$MOCK_DOCKER_VERSION_SLEEP"; fi
+if [[ "${1:-}" == "inspect" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == *HostConfig.CapAdd* || "$_a" == *HostConfig.SecurityOpt* ]]; then
+      if [[ -n "${MOCK_INSPECT_SLEEP:-}" ]]; then /bin/sleep "$MOCK_INSPECT_SLEEP"; fi
+      _re='^\{\{range \.HostConfig\.SecurityOpt\}\}\{\{printf "%\.([0-9]+)s" \.\}\} \{\{end\}\}$'
+      if [[ "$_a" == *printf* && ! "$_a" =~ $_re ]]; then echo "template parsing error: printf outside the SecurityOpt range form" >&2; exit 1; fi
+      _rest="$_a"
+      while [[ "$_rest" =~ \{\{([^}]*)\}\} ]]; do
+        _f="${BASH_REMATCH[1]}"
+        case "$_f" in
+          .HostConfig.CapAdd|.HostConfig.CapDrop|.HostConfig.Privileged|.AppArmorProfile|.HostConfig.SecurityOpt|'range .HostConfig.SecurityOpt'|end) ;;
+          'printf "%.'[0-9]*'s" .') ;;
+          *) echo "template parsing error: unknown field {{$_f}}" >&2; exit 1 ;;
+        esac
+        _rest="${_rest#*"${BASH_REMATCH[0]}"}"
+      done
+      _out=""
+      [[ "$_a" == *HostConfig.CapAdd* ]] && _out+="capadd=[] "
+      [[ "$_a" == *HostConfig.CapDrop* ]] && _out+="capdrop=[ALL] "
+      if [[ "$_a" == *HostConfig.SecurityOpt* ]]; then
+        _prof="{\"defaultAction\":\"SCMP_ACT_ERRNO\",\"syscalls\":[{\"names\":[\"$(head -c 12000 /dev/zero | tr '\0' 'x')\"]}]}"
+        if [[ "$_a" =~ $_re ]]; then
+          _w="${BASH_REMATCH[1]}"; _e1="apparmor=soleur-bwrap"; _e2="seccomp=$_prof"
+          _out+="${_e1:0:_w} ${_e2:0:_w} "
+        else
+          _out+="secopt=[apparmor=soleur-bwrap seccomp=$_prof] "
+        fi
+      fi
+      [[ "$_a" == *HostConfig.Privileged* ]] && _out+="priv=false "
+      [[ "$_a" == *AppArmorProfile* ]] && _out+="aa=soleur-bwrap"
+      printf '%s\n' "$_out"
+      exit 0
+    fi
+  done
+fi
 
 # #5669 cron-drain in-flight probe: `docker exec soleur-web-platform pgrep -f
 # claude`. Handled BEFORE the mode case so every swap-reaching test (trace AND
@@ -442,14 +642,14 @@ if [[ -n "${MOCK_GAK_LOG:-}" && "${1:-}" == "run" ]]; then
   done
   if [[ -n "$_gn" ]]; then
     _gtok=0
-    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
     printf 'run:%s env_token=%s\n' "$_gn" "$_gtok" >> "$MOCK_GAK_LOG"
     if [[ -n "$_gef" && -f "$_gef" ]]; then cp "$_gef" "$(dirname "$MOCK_GAK_LOG")/envfile.$_gn"; fi
   fi
 fi
 if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   _gtok=0; _gkey=0; _giso=0
-  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
   if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
   # shellcheck disable=SC2016
   if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
@@ -461,6 +661,35 @@ if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
     printf 'github_app_key_probe=ok\n'
   fi
   exit "${MOCK_GAK_PROBE_RC:-0}"
+fi
+
+# #2640 Guard 1 (workspace-isolation canary probe), BEFORE the mode case so it
+# works in every mode and its output-captured exec emits no DOCKER_TRACE line —
+# same reason the github-app-key-probe arm sits here (the probe's stdout is
+# captured by ci-deploy.sh, so a trace marker would be swallowed anyway, but
+# answering here keeps the argv/rc/stdout contract under the test's control).
+# Matches the probe argv by the `vitest.canary.config.ts` token, records the raw
+# argv (space-joined, like the #8016 Guard 2 recorder) to MOCK_CWI_LOG, answers
+# MOCK_CWI_PROBE_OUT on stdout (default: a vitest pass summary) and MOCK_CWI_PROBE_ERR
+# on stderr (default for rc 127: the docker "no such file" exec error the reason
+# fold-in reads), and exits MOCK_CWI_PROBE_RC (default 0). The deploy-gate
+# contract's dedicated arm, MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST=1, forces rc 1
+# (a vitest FAIL); rc 124/127 arm the host-timeout and vitest-absent verdicts.
+if [[ "${1:-}" == "exec" && "$*" == *vitest.canary.config.ts* ]]; then
+  if [[ -n "${MOCK_CWI_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_CWI_LOG"; fi
+  _cwi_rc="${MOCK_CWI_PROBE_RC:-0}"
+  if [[ "${MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST:-}" == "1" ]]; then _cwi_rc=1; fi
+  if [[ -n "${MOCK_CWI_PROBE_ERR+x}" ]]; then
+    printf '%s\n' "$MOCK_CWI_PROBE_ERR" >&2
+  elif [[ "$_cwi_rc" == "127" ]]; then
+    printf 'docker: Error response from daemon: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: exec: "/usr/local/bin/vitest": stat /usr/local/bin/vitest: no such file or directory: unknown\n' >&2
+  fi
+  if [[ -n "${MOCK_CWI_PROBE_OUT+x}" ]]; then
+    printf '%s' "$MOCK_CWI_PROBE_OUT"
+  else
+    printf ' Test Files  1 passed (1)\n      Tests  6 passed (6)\n'
+  fi
+  exit "$_cwi_rc"
 fi
 
 # #5933 Item 4 image-verify handlers, BEFORE the mode case so they work in every
@@ -594,7 +823,7 @@ if [[ "${1:-}" == "login" ]]; then
     [[ "$_prev" == "-u" ]] && _luser="$_a"
     _prev="$_a"
   done
-  _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
+  _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$_ltok_in"
   # RECORD THE REGISTRY, not only the user. The user alone cannot answer "did this deploy log in
   # to ghcr.io?", which is the single property #8036 1c exists to guarantee. Recorded as
   # `LOGIN:<registry>\tuser=<user>` so a row can anchor on `^LOGIN:ghcr\.io\t` exactly.
@@ -1238,6 +1467,7 @@ create_base_mocks() {
   fi
   create_mock_logger "$mock_dir"
   create_mock_getent "$mock_dir"
+  create_mock_kernlog "$mock_dir"
   create_docker_mock "$mock_dir"
   create_curl_mock "$mock_dir"
   create_mock_sudo "$mock_dir"
@@ -1731,6 +1961,28 @@ assert_canary_layered_rollback \
 assert_canary_layered_rollback \
   "layered canary: Layer 3 JWT-claims check fails → rollback" \
   "MOCK_LAYER3_FAIL"
+
+# Wire assert (#9217): the Layer 3 failure output reaches the logger mock on stdin (`$CANARY_LAYER_3_SCRIPT ... 2>&1 | logger -t TAG -p
+# user.warning`), so the mock's first-statement drain really ran. ${KNOB:-default}: an exported-empty knob must not compare "" with "".
+assert_layer3_logger_stdin() {
+  TOTAL=$((TOTAL + 1))
+  local d got want="${MOCK_LAYER3_LINE:-canary-bundle-claim-check: simulated bad JWT}"
+  d=$(mktemp -d)
+  ( export MOCK_LAYER3_FAIL=1 MOCK_LOGGER_STDIN_FILE="$d/logger.stdin"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
+  got="$(cat "$d/logger.stdin" 2>/dev/null || true)"
+  if [[ "$got" == *"$want"* ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: layered canary: the logger mock received the Layer 3 failure output on stdin (drained first)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: layered canary: the logger mock received the Layer 3 failure output on stdin (drained first)"
+    echo "        want to contain: $want"
+    echo "        got:             $got"
+  fi
+  rm -rf "$d"
+}
+assert_layer3_logger_stdin
 
 # Docker pull failure: no canary started
 assert_pull_failure() {
@@ -3003,6 +3255,327 @@ assert_bwrap_flag_guard() {
 assert_bwrap_flag_guard
 
 echo ""
+echo "--- #2640 Guard 1: cross-workspace isolation canary probe (report-only dark-launch) ---"
+
+# run_cwi_deploy [extra_env]: one web-platform deploy with every probe-
+# observation channel pinned under a fresh dir the function creates itself —
+# mktemp-rooted INSIDE the function so every artifact path is provably absolute
+# for the fixture-relative ratchet (a param-passed dir is not). The dir is
+# reported on the LAST stdout line as `CWI_ARTIFACT_DIR=<path>` for the caller to
+# parse out; it survives the run's ephemeral MOCK_DIR. extra_env is eval'd
+# inside the subshell AFTER the default exports (so a row can re-pin
+# WORKSPACE_ISOLATION_STATE_FILE for multi-run soak rows, or arm
+# MOCK_CWI_PROBE_RC / MOCK_CWI_PROBE_OUT / MOCK_CWI_PROBE_ERR /
+# MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST). The SENTRY_* triple is armed so the page
+# arm is reachable; on a healthy deploy nothing else POSTs to /store/.
+run_cwi_deploy() {
+  local extra_env="${1:-}"
+  local d src
+  d=$(mktemp -d)
+  (
+    export WORKSPACE_ISOLATION_STATE_FILE="$d/wi-state.json"
+    # Redirects run on the LITERAL path, never through the *_LOG/_CAPTURE_FILE
+    # vars: MOCK_LOGGER_CAPTURE_FILE is bound elsewhere in this file to roots the
+    # fixture-relative ratchet cannot prove absolute, so a redirect through the
+    # var would inherit that taint. $d is mktemp-rooted in this function.
+    export MOCK_CWI_LOG="$d/cwi-argv.log"; : > "$d/cwi-argv.log"
+    export MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"; : > "$d/logger.txt"
+    export MOCK_SENTRY_CAPTURE_FILE="$d/sentry.txt"; : > "$d/sentry.txt"
+    export SENTRY_INGEST_DOMAIN="sentry.invalid" SENTRY_PROJECT_ID="1" SENTRY_PUBLIC_KEY="cwi-mock-key"
+    eval "$extra_env"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && src=0 || src=$?
+  printf 'CWI_ARTIFACT_DIR=%s\n' "$d"
+  # Return the SUBSHELL's rc — the deploy's real exit code — not printf's. A
+  # caller's `&& rc=0 || rc=$?` must measure whether the DEPLOY succeeded; an
+  # unconditional-0 return would make every rc assertion in the CWI rows
+  # vacuous (the CWI-4 report-only claim especially).
+  return "$src"
+}
+
+# The probe is report-only (wg-dark-launch-deploy-gates): it execs the direct
+# tier of test/sandbox-isolation.test.ts inside the canary between
+# run_faithful_sandbox_canary and the prod swap, classifies the docker-exec rc
+# (0 → pass; 124 host-timeout → workspace_isolation_timeout; 125/126/127 infra →
+# canary_infra_error; other non-zero → workspace_isolation_failed), persists the
+# verdict + soak accumulators to WORKSPACE_ISOLATION_STATE_FILE, logs one
+# WORKSPACE_ISOLATION: journald line per run, and pages Sentry ONLY on the two
+# red verdicts — while `|| true` keeps it from ever rolling back a deploy.
+assert_cross_workspace_isolation() {
+  local d out rc
+  out=$(run_cwi_deploy "") && rc=0 || rc=$?
+  d=$(printf '%s\n' "$out" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+
+  # CWI-1: the vitest exec reaches the canary exactly once, with the pinned argv.
+  # EXACT match on exactly ONE recorded line, deliberately — the #8016 Guard 2
+  # convention: a token-presence check passes dropped flags AND injected ones, so
+  # any intended argv change is a conscious edit of EXPECTED here.
+  TOTAL=$((TOTAL + 1))
+  local expected log_contents n_lines
+  expected="exec -w /app soleur-web-platform-canary /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 /usr/local/bin/vitest run --config test/vitest.canary.config.ts --no-color"
+  log_contents=$(cat "$d/cwi-argv.log" 2>/dev/null || true)
+  n_lines=$(printf '%s\n' "$log_contents" | grep -c . || true)
+  if [[ "$rc" -eq 0 && "$n_lines" -eq 1 && "$log_contents" == "$expected" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-1 the vitest exec reaches the canary once with the pinned argv"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-1 the vitest exec record (rc=$rc, lines=$n_lines)"
+    echo "        expected: $expected"
+    echo "        argv log: $log_contents"
+    echo "        deploy output (tail):"; printf '%s\n' "$out" | tail -n 20 | sed 's/^/          /'
+  fi
+
+  # CWI-2: ordering — the probe's echo precedes the swap echo in deploy output
+  # (the call site sits inside CANARY_HEALTHY, before github_app_key_canary_check
+  # and the prod swap; a probe moved after `docker run ... soleur-web-platform`
+  # re-orders these lines).
+  TOTAL=$((TOTAL + 1))
+  local probe_line swap_line
+  probe_line=$(printf '%s\n' "$out" | { grep -n "Workspace isolation probe" || true; } | sed -n '1p' | cut -d: -f1)
+  swap_line=$(printf '%s\n' "$out" | { grep -n "Canary passed, swapping to production" || true; } | sed -n '1p' | cut -d: -f1)
+  if [[ -n "$probe_line" && -n "$swap_line" && "$probe_line" -lt "$swap_line" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-2 the probe runs between the faithful canary and the prod swap"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-2 probe/swap ordering (probe_line=$probe_line swap_line=$swap_line)"
+    echo "        deploy output (tail):"; printf '%s\n' "$out" | tail -n 25 | sed 's/^/          /'
+  fi
+
+  # CWI-3: the green path — verdict=pass, the soak accumulators start
+  # (consecutive_pass=1, first_pass_at set), one WORKSPACE_ISOLATION journald
+  # line, and NO Sentry page (a green probe never pages). NOTE: sentry.txt is
+  # never literally empty — the zot pull posts an unrelated info event — so the
+  # no-page check is a zero COUNT of the probe's own event, not an empty file.
+  TOTAL=$((TOTAL + 1))
+  local v3 cp3 fp3 jrnl3 s3
+  v3=$(jq -r '.verdict // ""' "$d/wi-state.json" 2>/dev/null || echo "")
+  cp3=$(jq -r '.consecutive_pass // -1' "$d/wi-state.json" 2>/dev/null || echo -1)
+  fp3=$(jq -r '.first_pass_at // 0' "$d/wi-state.json" 2>/dev/null || echo 0)
+  jrnl3=$(grep -cF 'WORKSPACE_ISOLATION: verdict=pass' "$d/logger.txt" || true)
+  s3=$(grep -ci 'workspace.isolation' "$d/sentry.txt" || true)
+  if [[ "$rc" -eq 0 && "$v3" == "pass" && "$cp3" == "1" && "$fp3" =~ ^[0-9]+$ && "$fp3" -gt 0 && "$jrnl3" -ge 1 && "$s3" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-3 pass records verdict=pass, starts the soak (consecutive_pass=1, first_pass_at set), logs WORKSPACE_ISOLATION, pages nothing"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-3 green path (rc=$rc verdict=$v3 cp=$cp3 fp=$fp3 journald_lines=$jrnl3 wi_sentry_events=$s3)"
+    echo "        state file:"; { cat "$d/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+    echo "        sentry:"; sed 's/^/          /' "$d/sentry.txt"
+  fi
+
+  # CWI-4/5: MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST=1 (the deploy-gate contract's
+  # vitest-FAIL arm) — the deploy STILL exits 0 (the `|| true` is load-bearing —
+  # this probe must never gate during dark-launch), the verdict reads
+  # workspace_isolation_failed, and a Sentry event fires (op=workspace-isolation).
+  local d2 out2 rc2 v2 s2 jrnl2
+  out2=$(run_cwi_deploy "export MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST=1") && rc2=0 || rc2=$?
+  d2=$(printf '%s\n' "$out2" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v2=$(jq -r '.verdict // ""' "$d2/wi-state.json" 2>/dev/null || echo "")
+  jrnl2=$(grep -cF 'WORKSPACE_ISOLATION_FAIL: verdict=workspace_isolation_failed' "$d2/logger.txt" || true)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc2" -eq 0 && "$v2" == "workspace_isolation_failed" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-4 a vitest FAIL still exits 0 (report-only) and records workspace_isolation_failed"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-4 vitest FAIL must not abort the deploy (rc=$rc2 verdict=$v2)"
+    echo "        deploy output (tail):"; printf '%s\n' "$out2" | tail -n 20 | sed 's/^/          /'
+  fi
+
+  TOTAL=$((TOTAL + 1))
+  s2=$(grep -ci 'workspace.isolation' "$d2/sentry.txt" || true)
+  # The page TEXT is the operator-facing contract, not just its firing: it must
+  # carry the report-only qualifier — a workspace_isolation_failed page means
+  # "the suspect image IS live; nothing auto-rolled back" and an operator woken
+  # at 3am must read that from the alert itself (review finding: the qualifier
+  # previously lived only on the journald line, which does not page).
+  local s2_ro
+  s2_ro=$(grep -c 'report-only canary; deploy NOT rolled back' "$d2/sentry.txt" || true)
+  if [[ "$s2" -ge 1 && "$jrnl2" -ge 1 && "$s2_ro" -ge 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-5 a failed verdict pages Sentry (op=workspace-isolation), logs WORKSPACE_ISOLATION_FAIL, and the page text says report-only/NOT-rolled-back"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-5 red verdict must page with the report-only qualifier (sentry_hits=$s2 fail_lines=$jrnl2 qualifier_lines=$s2_ro)"
+    echo "        sentry:"; sed 's/^/          /' "$d2/sentry.txt"
+    echo "        journald capture:"; sed 's/^/          /' "$d2/logger.txt"
+  fi
+
+  # CWI-6: rc 127 (a canary image predating the vitest tooling) — infra, never a
+  # verdict: canary_infra_error is recorded and NOTHING pages. This is the
+  # deploy-order coupling window the classification exists for.
+  local d3 out3 rc3 v6 s6
+  out3=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=127") && rc3=0 || rc3=$?
+  d3=$(printf '%s\n' "$out3" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v6=$(jq -r '.verdict // ""' "$d3/wi-state.json" 2>/dev/null || echo "")
+  s6=$(grep -ci 'workspace.isolation' "$d3/sentry.txt" || true)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc3" -eq 0 && "$v6" == "canary_infra_error" && "$s6" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-6 rc 127 (vitest absent) records canary_infra_error and pages nothing"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-6 rc-127 arm (rc=$rc3 verdict=$v6 wi_sentry_events=$s6)"
+    echo "        state file:"; { cat "$d3/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+    echo "        sentry:"; sed 's/^/          /' "$d3/sentry.txt"
+    echo "        deploy output (tail):"; printf '%s\n' "$out3" | tail -n 20 | sed 's/^/          /'
+  fi
+
+  # CWI-7: rc 124 — the host `timeout` cap fired on a wedged suite. A RED verdict
+  # (workspace_isolation_timeout) that DOES page, distinguished from infra.
+  local d4 out4 rc4 v7 s7
+  out4=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=124") && rc4=0 || rc4=$?
+  d4=$(printf '%s\n' "$out4" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v7=$(jq -r '.verdict // ""' "$d4/wi-state.json" 2>/dev/null || echo "")
+  s7=$(grep -ci 'workspace.isolation' "$d4/sentry.txt" || true)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc4" -eq 0 && "$v7" == "workspace_isolation_timeout" && "$s7" -gt 0 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-7 rc 124 (host timeout) records workspace_isolation_timeout and pages"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-7 rc-124 arm (rc=$rc4 verdict=$v7 wi_sentry_events=$s7)"
+    echo "        state file:"; { cat "$d4/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+    echo "        sentry:"; sed 's/^/          /' "$d4/sentry.txt"
+    echo "        deploy output (tail):"; printf '%s\n' "$out4" | tail -n 20 | sed 's/^/          /'
+  fi
+
+  # CWI-8: the on-host soak accumulation (the promotion follow-through is a
+  # stateless GET keyed on these counters — mirroring write_sandbox_canary_state):
+  # pass,pass → consecutive_pass=2; canary_infra_error → HOLD (a hiccup is a
+  # non-signal); a red verdict → reset both accumulators to 0. The state file is
+  # re-pinned OUTSIDE the per-run artifact dir via extra_env so all four deploys
+  # accumulate onto one file.
+  local d5 cp8 fp8 cp8r fp8r fp8_first
+  d5=$(mktemp -d)
+  run_cwi_deploy "export WORKSPACE_ISOLATION_STATE_FILE=\"$d5/wi-state.json\"" >/dev/null 2>&1 || true
+  fp8_first=$(jq -r '.first_pass_at // 0' "$d5/wi-state.json" 2>/dev/null || echo 0)
+  run_cwi_deploy "export WORKSPACE_ISOLATION_STATE_FILE=\"$d5/wi-state.json\"" >/dev/null 2>&1 || true
+  run_cwi_deploy "export WORKSPACE_ISOLATION_STATE_FILE=\"$d5/wi-state.json\"; export MOCK_CWI_PROBE_RC=127" >/dev/null 2>&1 || true
+  cp8=$(jq -r '.consecutive_pass // -1' "$d5/wi-state.json" 2>/dev/null || echo -1)
+  fp8=$(jq -r '.first_pass_at // 0' "$d5/wi-state.json" 2>/dev/null || echo 0)
+  run_cwi_deploy "export WORKSPACE_ISOLATION_STATE_FILE=\"$d5/wi-state.json\"; export MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST=1" >/dev/null 2>&1 || true
+  cp8r=$(jq -r '.consecutive_pass // -1' "$d5/wi-state.json" 2>/dev/null || echo -1)
+  fp8r=$(jq -r '.first_pass_at // -1' "$d5/wi-state.json" 2>/dev/null || echo -1)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$fp8_first" =~ ^[0-9]+$ && "$fp8_first" -gt 0 && "$cp8" == "2" && "$fp8" == "$fp8_first" && "$cp8r" == "0" && "$fp8r" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-8 the soak accumulator increments on pass, HOLDS on canary_infra_error, resets on a red verdict"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-8 soak accumulation (after 2x pass + infra: cp=$cp8 fp=$fp8 first_fp=$fp8_first; after red: cp=$cp8r fp=$fp8r)"
+    echo "        state file:"; { cat "$d5/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # CWI-9: ledger-aliasing guard (mirrors OUTER_LEDGER_ALIAS) — pointing
+  # WORKSPACE_ISOLATION_STATE_FILE at the sandbox-canary ledger skips the probe
+  # entirely: zero vitest execs, the alias warn logged, deploy still succeeds.
+  local d6 out6 rc6 n9 w9
+  out6=$(run_cwi_deploy "export SANDBOX_CANARY_STATE_FILE=\"\$d/wi-state.json\"") && rc6=0 || rc6=$?
+  d6=$(printf '%s\n' "$out6" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  n9=$(grep -c . "$d6/cwi-argv.log" 2>/dev/null || true)
+  w9=$(grep -c 'WORKSPACE_ISOLATION_STATE_FILE aliases' "$d6/logger.txt" 2>/dev/null || true)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc6" -eq 0 && "$n9" == "0" && "$w9" -ge 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-9 an aliased WORKSPACE_ISOLATION_STATE_FILE skips the probe (no exec, warn logged)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-9 alias guard (rc=$rc6 exec_lines=$n9 warn_lines=$w9)"
+    echo "        argv log:"; { cat "$d6/cwi-argv.log" 2>/dev/null || true; } | sed 's/^/          /'
+    echo "        journald capture:"; { cat "$d6/logger.txt" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # The reverse direction of the same aliasing class (detected but the probe's
+  # skip alone used to be the whole mitigation): the canary writer still ran
+  # first and wrote ITS verdict into the aliased file — the `ledger` stamp is
+  # what makes the foreign content detectable (cat-deploy-state's reader
+  # refuses a present-but-foreign stamp, so this pollution can never inflate
+  # the workspace_isolation soak).
+  local l9
+  l9=$(jq -r '.ledger // ""' "$d6/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$l9" == "sandbox-canary" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-9b the foreign writer's verdict into the aliased file carries its own ledger stamp"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-9b aliased file must carry the FOREIGN ledger stamp (ledger=$l9)"
+    echo "        state file:"; { cat "$d6/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # CWI-10: vacuous-green guard — vitest rc 0 with NO nonzero-passed marker in
+  # stdout (a future skip-knob/tier regression running zero tests) is a RED
+  # verdict, not a pass. rc-only classification would promote a suite that
+  # measured nothing.
+  local d7 out7 rc7 v10 r10
+  # ($'...' quoting so \n lands as a real newline — the mock's `printf '%s'`
+  # does not interpret escapes, and a single-line blob would test nothing.)
+  out7=$(run_cwi_deploy "export MOCK_CWI_PROBE_OUT=\$' Test Files  1 skipped (1)\n      Tests  0 passed (0)'") && rc7=0 || rc7=$?
+  d7=$(printf '%s\n' "$out7" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v10=$(jq -r '.verdict // ""' "$d7/wi-state.json" 2>/dev/null || echo "")
+  r10=$(jq -r '.reason // ""' "$d7/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc7" -eq 0 && "$v10" == "workspace_isolation_failed" && "$r10" == "vacuous_green_no_tests_passed" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-10 an rc-0 run with no nonzero-passed marker records vacuous_green, not pass"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-10 vacuous green must be RED (rc=$rc7 verdict=$v10 reason=$r10)"
+    echo "        state file:"; { cat "$d7/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # CWI-10b: ANSI-resilience — vitest colors its summary even under env -i +
+  # CI=true, and the escapes interleave BETWEEN "Tests" and the count
+  # (`Tests  \e[1m\e[32m13 passed`). --no-color (argv, pinned by CWI-1) is the
+  # source fix; the sed strip inside the function is the belt that must keep a
+  # colored pass green — a passing suite may never read vacuous (#9860, the
+  # first deploy carrying a loadable config reported exactly that).
+  local d7b out7b rc7b v10b r10b
+  out7b=$(run_cwi_deploy "export MOCK_CWI_PROBE_OUT=\$' Test Files  1 passed (1)\n      Tests  \e[1m\e[32m13 passed\e[39m\e[2m | \e[22m\e[33m4 skipped\e[39m\e[90m (17)\e[39m'") && rc7b=0 || rc7b=$?
+  d7b=$(printf '%s\n' "$out7b" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v10b=$(jq -r '.verdict // ""' "$d7b/wi-state.json" 2>/dev/null || echo "")
+  r10b=$(jq -r '.reason // ""' "$d7b/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc7b" -eq 0 && "$v10b" == "pass" && "$r10b" == "ok" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-10b an ANSI-colored pass summary still reads pass, not vacuous_green"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-10b ANSI-colored pass must be pass (rc=$rc7b verdict=$v10b reason=$r10b)"
+    echo "        state file:"; { cat "$d7b/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # CWI-11: the reason channel is load-bearing diagnostics, not a formatter —
+  # on a red verdict it carries vitest's first FAIL line from STDOUT (where the
+  # reporter writes detail); with no FAIL-shaped stdout line it falls back to
+  # the exec's first stderr line. Both arms sanitize through _cred_err_tail.
+  local d8 out8 rc8 r11a
+  out8=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=1; export MOCK_CWI_PROBE_OUT=\$'Test Files  1 failed (1)\n FAIL  test/sandbox-isolation.test.ts > FR3 sibling read crossed workspaces\n      Tests  5 passed | 1 failed (6)'") && rc8=0 || rc8=$?
+  d8=$(printf '%s\n' "$out8" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  r11a=$(jq -r '.reason // ""' "$d8/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc8" -eq 0 && "$r11a" == *"FR3 sibling read crossed workspaces"* ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-11a a red verdict's reason carries the vitest FAIL line from stdout"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-11a reason must carry the stdout FAIL line (reason=$r11a)"
+  fi
+
+  local d9 out9 rc9 r11b
+  out9=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=1; export MOCK_CWI_PROBE_OUT=''; export MOCK_CWI_PROBE_ERR='OCI runtime exec failed: marker-stderr-cause'") && rc9=0 || rc9=$?
+  d9=$(printf '%s\n' "$out9" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  r11b=$(jq -r '.reason // ""' "$d9/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc9" -eq 0 && "$r11b" == *"marker-stderr-cause"* ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-11b with no FAIL-shaped stdout the reason falls back to docker's first stderr line"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-11b reason must carry the stderr fallback line (reason=$r11b)"
+  fi
+
+  # CWI-12: the host-side `timeout` cap wraps the exec in SOURCE — it cannot be
+  # exercised through the mock (timeout wraps `docker`, never enters the
+  # recorded argv), so it is pinned statically like the suite's other
+  # real-tree greps. Dropping the wrapper is the exact regression it exists to
+  # prevent (a wedged in-container vitest hanging the deploy).
+  TOTAL=$((TOTAL + 1))
+  if grep -qF 'timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app' "$DEPLOY_SCRIPT"; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-12 the host-side timeout wraps the probe's docker exec (static source pin)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-12 timeout wrapper absent from the probe's docker exec"
+  fi
+
+  # No rm -rf on the parsed artifact dirs: they are sed-parsed paths (a
+  # call-unresolved root the fixture-relative ratchet cannot prove), and each is
+  # a mktemp dir under the runner's /tmp lifecycle anyway. $d5 is provable.
+  rm -rf "$d5"
+}
+
+assert_cross_workspace_isolation
+
+echo ""
 echo "--- Bwrap userns sysctl drift detector (non-blocking) ---"
 
 assert_bwrap_userns_drift_detector_nonblocking() {
@@ -3481,6 +4054,615 @@ assert_probe_helper_positive_control() {
   fi
 }
 assert_probe_helper_positive_control
+
+# -- #9871 / #9860: a failed canary must self-diagnose --------------------------------------
+# Two production failures (v0.334.0: `bwrap: Unexpected capabilities`, then rc=126 `Operation not
+# permitted`) were read off a 200-char stderr tail and cost hours of inference, because nothing recorded
+# the container's capability sets, the binary's file caps, or the posture it ran under. On a sandbox
+# failure ci-deploy.sh now runs ONE bounded read-only bundle inside the still-running canary and emits it
+# as SOLEUR_CANARY_SANDBOX_DIAG lines (free text last, quote-bounded, credential-scrubbed) BEFORE the
+# teardown. The bundle must never change the deploy's verdict: every row below that perturbs it
+# (failing, hanging, flooding, journald down) re-asserts exit code, state reason and the unchanged
+# rollback line against a baseline run.
+DIAG_DEPLOY_CMD="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+DIAG_LINE_RE='^-t ci-deploy SOLEUR_CANARY_SANDBOX_DIAG: image=[^ ]+ trigger=(legacy|faithful) section=[a-z_0-9]+ val="[^"]*"$'
+
+# run_diag_case <dir> [VAR=value ...]: one deploy in bwrap-fail mode. Sets DC_OUT DC_RC DC_REASON DC_EXIT and
+# leaves $dir/{logger,seq,diaglog,klog,sudolog,ci-deploy.state}. Exports live in the subshell only.
+run_diag_case() {
+  local dc_dir="$1"; shift
+  assert_fixture_dir "$dc_dir"
+  : > "$dc_dir/logger"; : > "$dc_dir/seq"; : > "$dc_dir/diaglog"; : > "$dc_dir/klog"; : > "$dc_dir/sudolog"; rm -f "$dc_dir/ci-deploy.state"
+  DC_OUT=$(
+    export CI_DEPLOY_STATE="$dc_dir/ci-deploy.state" MOCK_DOCKER_MODE=bwrap-fail MOCK_LOGGER_CAPTURE_FILE="$dc_dir/logger" \
+           MOCK_CANARY_SEQ_LOG="$dc_dir/seq" MOCK_CANARY_DIAG_LOG="$dc_dir/diaglog" MOCK_KLOG_LOG="$dc_dir/klog" \
+           MOCK_SUDO_LOG="$dc_dir/sudolog"
+    # shellcheck disable=SC2163  # each argument is a NAME=value pair; export "NAME=value" is valid
+    for _kv in "$@"; do export "$_kv"; done
+    run_deploy "$DIAG_DEPLOY_CMD" 2>&1
+  ) && DC_RC=0 || DC_RC=$?
+  DC_REASON=""; DC_EXIT=""
+  if [[ -f "$dc_dir/ci-deploy.state" ]]; then read_state_reason_and_exit "$dc_dir/ci-deploy.state" DC_REASON DC_EXIT; fi
+}
+
+# diag_check <description> <status-of-the-condition> [detail]: one counted assertion.
+diag_check() {
+  TOTAL=$((TOTAL + 1))
+  if [[ "$2" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1"
+    if [[ -n "${3:-}" ]]; then printf '%s\n' "$3" | sed 's/^/        /'; fi
+  fi
+}
+
+# The ONE rollback line with its timing field removed (ms varies run to run; every other field is stable).
+diag_rollback_line() { { grep -F 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$1" || true; } | sed -E 's/ ms=[0-9]+//'; }
+diag_line_count() { { grep -cF 'SOLEUR_CANARY_SANDBOX_DIAG:' "$1" || true; }; }
+# has_f / has_e <pattern> <haystack>: grep -q over a here-string, never `producer | grep -q` (pipefail + early exit).
+has_f() { grep -qF -- "$1" <<<"$2"; }
+has_e() { grep -qE -- "$1" <<<"$2"; }
+# The DIAG section names in emission order, space-joined. The in-container list is the ONE constant both
+# the mock's default body (D1c) and the REAL extracted script (D9) are pinned to, so the mock cannot drift.
+D_SECTIONS="id proc lsm files caps prov direct_version direct_probe sdk_probe sdk_noproc kernel_ns"
+# The emitter-minted rows, in emission order (#9860 added kdeny between kernel and done).
+D_HOST_TAIL="host hostsec kernel kdeny done"
+diag_sections() { { grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$1" || true; } | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^section=/) { sub(/^section=/, "", $i); printf "%s ", $i; break }}' | sed 's/ $//'; }
+# One `diag` entry per bundle exec in the sequence log (the exec argv spans many lines, so wc -l of diaglog is not a count).
+diag_exec_count() { { grep -c '^diag$' "$1/seq" || true; }; }
+
+# D8 -- INSTRUMENT CONTROL, run first: the line-shape regex must accept a well-formed line and reject two
+# malformed ones, or every D1/D3/D4 shape assertion below is vacuous.
+_d8_good='-t ci-deploy SOLEUR_CANARY_SANDBOX_DIAG: image=r/i:v1 trigger=legacy section=proc val="CapEff=0 Seccomp=2"'
+_d8_bad1='-t ci-deploy SOLEUR_CANARY_SANDBOX_DIAG: image=r/i:v1 trigger=legacy section=proc val="a" tail=1'
+_d8_bad2='-t ci-deploy SOLEUR_CANARY_SANDBOX_DIAG: image=r/i:v1 trigger=legacy section=proc val="a"b"'
+_d8_ok=0
+if has_e "$DIAG_LINE_RE" "$_d8_good" \
+   && ! has_e "$DIAG_LINE_RE" "$_d8_bad1" \
+   && ! has_e "$DIAG_LINE_RE" "$_d8_bad2"; then _d8_ok=1; fi
+diag_check "#9871 D8 instrument control: the DIAG line-shape regex accepts a good line and rejects two malformed ones" "$((1 - _d8_ok))"
+unset _d8_good _d8_bad1 _d8_bad2 _d8_ok
+
+DIAGD=$(mktemp -d); assert_fixture_dir "$DIAGD"
+
+# D1 -- a sandbox failure emits the bundle once, in order, in shape.
+run_diag_case "$DIAGD"
+D1_N=$(diag_line_count "$DIAGD/logger")
+diag_check "#9871 D1a: a failed blocking probe still rolls back (exit 1, reason=canary_sandbox_failed)" \
+  "$([[ "$DC_RC" == 1 && "$DC_REASON" == canary_sandbox_failed && "$DC_EXIT" == 1 ]] && echo 0 || echo 1)" "rc=$DC_RC reason=$DC_REASON exit=$DC_EXIT"
+diag_check "#9871 D1b: exactly one diag exec is made (the log is non-empty first: no vacuous pass)" \
+  "$([[ -s "$DIAGD/diaglog" && "$(diag_exec_count "$DIAGD")" == 1 ]] && echo 0 || echo 1)" "diag execs: $(diag_exec_count "$DIAGD")"
+diag_check "#9871 D1c: the DIAG sections are exactly the eleven in-container names, then host, hostsec, kernel, kdeny, done, in order" \
+  "$([[ "$(diag_sections "$DIAGD/logger")" == "$D_SECTIONS $D_HOST_TAIL" ]] && echo 0 || echo 1)" "sections: $(diag_sections "$DIAGD/logger") (lines: $D1_N)"
+D1_BAD=$({ grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" || true; } | { grep -vE -- "$DIAG_LINE_RE" || true; })
+diag_check "#9871 D1d: every DIAG line is shaped section=<name> val=\"...\" with the free text last and quote-bounded" \
+  "$([[ -z "$D1_BAD" && "$D1_N" -ge 1 ]] && echo 0 || echo 1)" "$D1_BAD"
+D1_RB=$({ grep -nF 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$DIAGD/logger" || true; } | head -n 1 | cut -d: -f1)
+D1_FD=$({ grep -nF 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" || true; } | head -n 1 | cut -d: -f1)
+diag_check "#9871 D1e: the bundle is emitted AFTER the DEPLOY_ROLLBACK line" \
+  "$([[ -n "$D1_RB" && -n "$D1_FD" && "$D1_RB" -lt "$D1_FD" ]] && echo 0 || echo 1)" "rollback line $D1_RB, first diag line $D1_FD"
+diag_check "#9871 D1f: the bundle runs BEFORE the canary is stopped and removed" \
+  "$(awk '/^diag$/{d=1} /^stop$/&&d{s=1} /^rm$/&&d&&s{r=1} END{exit !(d&&s&&r)}' "$DIAGD/seq" && echo 0 || echo 1)" "$(tr '\n' ' ' < "$DIAGD/seq")"
+# D1g runs against the mock that models real docker: a template that bundles the posture with a bare
+# SecurityOpt gets the ~12 KB inline profile, `head -c` + the 200-char tail then keep only profile JSON and
+# capadd/capdrop/priv/aa are GONE (the #9871 review P1). Split rows keep each field readable.
+diag_check "#9871 D1g: the host row carries cap-add, cap-drop, privileged and the AppArmor profile; hostsec carries the AppArmor entry and a cut seccomp entry, not the inlined profile" \
+  "$(grep -qE 'section=host val="capadd=\[\] capdrop=\[ALL\] priv=false aa=soleur-bwrap"$' "$DIAGD/logger" \
+     && grep -qE "section=hostsec val=\"apparmor=soleur-bwrap seccomp=\{'defaultAction':'SCMP_ACT_ERRNO \"\$" "$DIAGD/logger" && echo 0 || echo 1)" \
+  "$(grep -E 'section=(host|hostsec) ' "$DIAGD/logger" | cut -c1-260)"
+diag_check "#9871 D1h: the diag exec targets exactly the canary container and carries no --privileged/-u/--user/-e/--env before the shell" \
+  "$([[ "$(head -n 1 "$DIAGD/diaglog" | sed 's| /bin/sh -c.*||')" == "exec soleur-web-platform-canary" ]] && echo 0 || echo 1)" "$(head -n 1 "$DIAGD/diaglog" | cut -c1-120)"
+diag_check "#9871 D1i: the bundle ends with a done row carrying the exec's exit status and line count" \
+  "$(grep -qE 'section=done val="exec_rc=0 lines=11 capped=0 bytes=[0-9]+"$' "$DIAGD/logger" && echo 0 || echo 1)" "$(grep -F 'section=done' "$DIAGD/logger" | cut -c1-200)"
+D1_BASE_RB=$(diag_rollback_line "$DIAGD/logger")
+
+# D2 -- no failure, no bundle: neither a clean probe nor one that merely wrote to stderr.
+for d2_mode in "clean|" "chatter|bwrap: warning namespace fallback engaged"; do
+  d2_label="${d2_mode%%|*}"; d2_stderr="${d2_mode#*|}"
+  run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 "MOCK_BWRAP_FAIL_STDERR=$d2_stderr"
+  diag_check "#9871 D2 ($d2_label): a passing probe makes no diag exec and emits no DIAG line, and the deploy did not roll back" \
+    "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 && "$(diag_exec_count "$DIAGD")" == 0 && "$DC_REASON" != canary_sandbox_failed ]] && echo 0 || echo 1)" \
+    "diaglog bytes=$(wc -c < "$DIAGD/diaglog" | tr -d ' ') diag lines=$(diag_line_count "$DIAGD/logger") execs=$(diag_exec_count "$DIAGD") reason=$DC_REASON"
+done
+unset d2_mode d2_label d2_stderr
+# D2c -- the other failure direction: a canary that fails its /health check rolls back for a NON-sandbox reason and
+# never reaches the bwrap probe, so no bundle may run. The rollback is asserted (a deploy that simply succeeded
+# would also have no diag).
+run_diag_case "$DIAGD" MOCK_CURL_CANARY_FAIL=1
+diag_check "#9871 D2c: a canary /health failure rolls back without a diag exec or DIAG line" \
+  "$([[ "$DC_RC" != 0 && "$DC_REASON" != canary_sandbox_failed && ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 && "$(diag_exec_count "$DIAGD")" == 0 ]] && echo 0 || echo 1)" \
+  "rc=$DC_RC reason=$DC_REASON execs=$(diag_exec_count "$DIAGD") lines=$(diag_line_count "$DIAGD/logger")"
+
+# D3 -- the bundle can never change the deploy's verdict.
+diag_inert() {  # <description> [VAR=value ...]
+  local desc="$1"; shift
+  local t0=$SECONDS
+  run_diag_case "$DIAGD" "$@"
+  local took=$(( SECONDS - t0 ))
+  diag_check "$desc" \
+    "$([[ "$DC_RC" == 1 && "$DC_REASON" == canary_sandbox_failed && "$DC_EXIT" == 1 \
+        && "$(diag_rollback_line "$DIAGD/logger")" == "$D1_BASE_RB" \
+        && "$(awk '/^diag$/{d=1} /^stop$/&&d{s=1} /^rm$/&&d&&s{r=1} END{exit !(d&&s&&r)}' "$DIAGD/seq"; echo $?)" == 0 \
+        && "$took" -lt 20 ]] && echo 0 || echo 1)" \
+    "rc=$DC_RC reason=$DC_REASON exit=$DC_EXIT took=${took}s seq=$(tr '\n' ' ' < "$DIAGD/seq")"
+}
+diag_inert "#9871 D3a: a failing diag exec (rc=1) leaves exit code, state reason, rollback line and teardown unchanged" MOCK_CANARY_DIAG_RC=1
+diag_inert "#9871 D3b: a hanging diag exec is cut at CANARY_DIAG_TIMEOUT and changes nothing else" MOCK_CANARY_DIAG_SLEEP=60 CANARY_DIAG_TIMEOUT=1
+diag_inert "#9871 D3c: a 4 MB diag output is bounded and changes nothing else" MOCK_CANARY_DIAG_BIG=1
+run_diag_case "$DIAGD" MOCK_CANARY_DIAG_BIG=1
+diag_check "#9871 D3c2: a 4 MB diag output yields at most 16 in-container DIAG lines (plus host, hostsec, kernel, kdeny, done)" \
+  "$([[ "$(diag_line_count "$DIAGD/logger")" -le 21 ]] && echo 0 || echo 1)" "lines: $(diag_line_count "$DIAGD/logger")"
+D3C3_OUT=$(for _i in $(seq 1 40); do printf 'id n=%s\n' "$_i"; done)
+run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=$D3C3_OUT"
+D3C3_SECS=$(diag_sections "$DIAGD/logger")
+D3C3_EXP="$(printf 'id %.0s' $(seq 1 16))$D_HOST_TAIL"
+diag_check "#9871 D3c3: 40 in-container lines are capped at exactly 16 rows and the done row reports lines=16 capped=1" \
+  "$([[ "$D3C3_SECS" == "$D3C3_EXP" ]] && grep -qE 'section=done val="exec_rc=0 lines=16 capped=1 ' "$DIAGD/logger" && echo 0 || echo 1)" "sections: $D3C3_SECS"
+unset D3C3_OUT D3C3_SECS D3C3_EXP _i
+diag_inert "#9871 D3d: journald failing for the DIAG lines leaves exit code, state reason, rollback line and teardown unchanged" MOCK_LOGGER_FAIL_MATCH=SOLEUR_CANARY_SANDBOX_DIAG
+diag_inert "#9871 D3e: a non-numeric CANARY_DIAG_TIMEOUT falls back to the default and changes nothing else" CANARY_DIAG_TIMEOUT=abc
+diag_inert "#9871 D3f: a hung host-side docker inspect is cut at 3 s and changes nothing else" MOCK_INSPECT_SLEEP=60
+diag_inert "#9871 D3g: a hung docker version is cut at 3 s and changes nothing else" MOCK_DOCKER_VERSION_SLEEP=60
+run_diag_case "$DIAGD" MOCK_CANARY_DIAG_SLEEP=60 CANARY_DIAG_TIMEOUT=1
+D3H_TO=$(grep -F 'section=done' "$DIAGD/logger" || true)
+run_diag_case "$DIAGD" MOCK_CANARY_DIAG_RC=1
+D3H_RC=$(grep -F 'section=done' "$DIAGD/logger" || true)
+diag_check "#9871 D3h: the done row tells a timed-out exec (exec_rc=124) from a failing one (exec_rc=1) from a clean one" \
+  "$([[ "$D3H_TO" == *'val="exec_rc=124 '* && "$D3H_RC" == *'val="exec_rc=1 '* ]] && echo 0 || echo 1)" "timeout: $D3H_TO | failing: $D3H_RC"
+unset D3H_TO D3H_RC
+
+# D4 -- the bundle is a credential sink: shapes are scrubbed from both egress paths.
+D4_DP='dp.st.''prd.Fx9aQ2mZ7vTbL4nKc8RdYw3Hs5Jp'
+D4_SK='sk_''live_Fx9aQ2mZ7vTbL4nKc8RdYw'
+D4_GH='gh''p_Fx9aQ2mZ7vTbL4nKc8RdYw3Hs5JpQr1'
+D4_JWT='ey''Jhbgcioijiuzi1nirx9.eyJzdWIiOiJmaXh0dXJlIn0.Fx9aQ2mZ7vTbL4nKc8RdYw'
+D4_OUT=$(printf '%s\n' "proc tok=$D4_DP" "files k=$D4_SK" "caps g=$D4_GH" "prov j=$D4_JWT" 'lsm a" injected="1')
+run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=$D4_OUT"
+D4_LEAK=0
+for _f in "$D4_DP" "$D4_SK" "$D4_GH" "$D4_JWT"; do
+  if grep -qF -- "$_f" "$DIAGD/logger" || has_f "$_f" "$DC_OUT"; then D4_LEAK=1; fi
+done
+diag_check "#9871 D4a: no credential-shaped fixture reaches the journald capture or the deploy stdout" "$D4_LEAK"
+diag_check "#9871 D4b: the scrub left a REDACTED marker (it ran, rather than the fixtures never arriving)" \
+  "$(has_f 'REDACTED' "$(grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" || true)" && echo 0 || echo 1)"
+D4_BAD=$({ grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" || true; } | { grep -vE -- "$DIAG_LINE_RE" || true; })
+diag_check "#9871 D4c: a doubled-quote injection in a section value cannot break the line shape" \
+  "$([[ -z "$D4_BAD" && "$(diag_line_count "$DIAGD/logger")" -ge 4 ]] && echo 0 || echo 1)" "$D4_BAD"
+# A token that straddles the 8192-byte read cut: nothing usable of it may survive on either sink.
+D4_PAD=$(printf '%*s' 8169 '' | tr ' ' a)
+D4_STRAD='dp.st.''prd.Zk3pQ8mWv2TbL9nKc4RdYw7Hs1JpXe'
+run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=proc ${D4_PAD}${D4_STRAD}"
+diag_check "#9871 D4d: a token cut mid-way by the 8192-byte read leaves none of its secret part on either sink" \
+  "$({ grep -qF -- 'Zk3pQ8mW' "$DIAGD/logger" || has_f 'Zk3pQ8mW' "$DC_OUT"; } && echo 1 || echo 0)"
+unset D4_DP D4_SK D4_GH D4_JWT D4_OUT D4_LEAK D4_BAD D4_PAD D4_STRAD _f
+# D4e -- the RETENTION direction: a scrubber that over-redacts destroys the very diagnostics (a missing shared
+# object, a digest, a registry endpoint) the bundle exists to carry. Each is shaped like the risk.
+D4E_OUT=$(printf '%s\n' 'files so=/usr/lib/x86_64-linux-gnu/libkeyring.so.1 bak=/etc/keystore.p12.bak' \
+  'prov dig=sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 reg=registry:5000')
+run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=$D4E_OUT"
+D4E_MISS=""
+for _f in '/usr/lib/x86_64-linux-gnu/libkeyring.so.1' '/etc/keystore.p12.bak' 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' 'registry:5000'; do
+  grep -qF -- "$_f" "$DIAGD/logger" || D4E_MISS="$D4E_MISS $_f"
+done
+diag_check "#9871 D4e: a path, a library name, a sha256 digest and a host:port survive the scrub verbatim" \
+  "$([[ -z "$D4E_MISS" ]] && echo 0 || echo 1)" "missing:$D4E_MISS"
+# D4f -- the env-value arm: a bare secret that matches NO shape rule is redacted only because it is in the deploy's
+# env file. The control run (env file unarmed) must show it verbatim, or the armed run proves nothing.
+D4F_VAL='Qm7xK2pV9dLw4TnR8sYb3HcZ'
+D4F_BODY=$(mktemp "$DIAGD/envbody.XXXXXX")
+printf 'GITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\nDIAG_PROBE_SECRET=%s\n' "$D4F_VAL" > "$D4F_BODY"
+run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=proc leaked=$D4F_VAL"
+diag_check "#9871 D4f control: with the env file unarmed the bare value is NOT redacted (so the armed row below is a real measurement)" \
+  "$(grep -qF -- "$D4F_VAL" "$DIAGD/logger" && echo 0 || echo 1)"
+run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=proc leaked=$D4F_VAL" "MOCK_GAK_PRD_BODY=$D4F_BODY"
+diag_check "#9871 D4f: with the value in the deploy env file it reaches neither the journald capture nor the deploy stdout" \
+  "$({ grep -qF -- "$D4F_VAL" "$DIAGD/logger" || has_f "$D4F_VAL" "$DC_OUT"; } && echo 1 || echo 0)"
+unset D4E_OUT D4E_MISS D4F_VAL D4F_BODY _f
+# D4g -- container output cannot mint a host-side row: only the emitter writes host/hostsec/kernel/kdeny/done, so a
+# forged first word (or an exec error line) is demoted to section=raw instead of becoming a trusted-looking row.
+D4G_OUT=$(printf '%s\n' 'host forged=1' 'hostsec forged=1' 'kernel forged=1' 'kdeny forged=1' 'done exec_rc=0 forged=1' 'kernel_nsX forged=1' 'unable to find user soleur')
+run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=$D4G_OUT"
+D4G_SECS=$(diag_sections "$DIAGD/logger")
+diag_check "#9871 D4g: forged host/hostsec/kernel/kdeny/done first words, a prefix of an allowed name and an exec error line all become section=raw; the real emitter rows stay unique" \
+  "$([[ "$D4G_SECS" == "raw raw raw raw raw raw raw $D_HOST_TAIL" ]] && echo 0 || echo 1)" "sections: $D4G_SECS"
+unset D4G_OUT D4G_SECS
+
+# D5 -- source census over the bundle region.
+D5_SRC=$(sed -n '/^# CANARY_DIAG_BEGIN/,/^# CANARY_DIAG_END/p' "$DEPLOY_SCRIPT")
+diag_check "#9871 D5a: the census region is found and holds the three functions and the script (positive control)" \
+  "$(has_e '^CANARY_DIAG_SCRIPT=' "$D5_SRC" && has_e '^_canary_diag_emit\(\)' "$D5_SRC" && has_e '^emit_canary_sandbox_diag\(\)' "$D5_SRC" && has_e '^_canary_kdeny_read\(\)' "$D5_SRC" && echo 0 || echo 1)"
+D5_BAD=$(printf '%s\n' "$D5_SRC" | grep -vE '^[[:space:]]*#' | grep -nE '(^|[^A-Za-z0-9_.-])env([[:space:]]|$)|environ|export[[:space:]]|\.Config|\{\{[[:space:]]*json|die-with-parent|^[[:space:]]*set[[:space:]]|cmdline|compgen|declare[[:space:]]|printenv[[:space:]]+[^B[:space:]]' || true)
+# Allowlist, not only a denylist: the printenv calls are EXACTLY the two literal names.
+D5_PE=$(printf '%s\n' "$D5_SRC" | grep -vE '^[[:space:]]*#' | grep -oE 'printenv [A-Za-z_]+' | sort | tr '\n' ' ') || true
+diag_check "#9871 D5b: the bundle never dumps the environment (no bare env, environ, cmdline, export -p, declare, .Config.Env), printenv names exactly BUILD_SHA and BUILD_VERSION, and it never sets shell options" \
+  "$([[ -z "$D5_BAD" && "$D5_PE" == 'printenv BUILD_SHA printenv BUILD_VERSION ' && "$(printf '%s\n' "$D5_SRC" | grep -vE '^[[:space:]]*#' | grep -o 'printenv' | grep -c .)" == 2 ]] && echo 0 || echo 1)" "$D5_BAD | printenv: $D5_PE"
+D5_LOGGERS=$(grep -c 'logger -t .*SOLEUR_CANARY_SANDBOX_DIAG' "$DEPLOY_SCRIPT" || true)
+diag_check "#9871 D5c: the marker is emitted from exactly one logger call (inside _canary_diag_emit, which scrubs first)" \
+  "$([[ "$D5_LOGGERS" == 1 ]] && has_f 'SOLEUR_CANARY_SANDBOX_DIAG' "$(grep -A8 '^_canary_diag_emit()' <<<"$D5_SRC")" && echo 0 || echo 1)" "logger calls: $D5_LOGGERS"
+D5_CALLS=$(grep -nE '^[[:space:]]*(if .*; then )?emit_canary_sandbox_diag (legacy|faithful)' "$DEPLOY_SCRIPT" || true)
+D5_CALLS_BAD=$(printf '%s\n' "$D5_CALLS" | grep -v '|| true' | grep -v '^$' || true)
+diag_check "#9871 D5d: both call sites exist and each ends in '|| true' (a diag failure can never abort the deploy)" \
+  "$([[ "$(printf '%s\n' "$D5_CALLS" | grep -c .)" == 2 && -z "$D5_CALLS_BAD" ]] && echo 0 || echo 1)" "calls: $D5_CALLS"
+# D5e -- every docker call in the region is bounded: the three host-side ones by `timeout 3`, the exec by
+# `timeout -k 3 "$CANARY_DIAG_TIMEOUT"`. The positive count keeps the census from passing over a region it cannot read.
+D5_CODE=$(printf '%s\n' "$D5_SRC" | grep -vE '^[[:space:]]*#') || true
+D5_HOST_UNB=$(printf '%s\n' "$D5_CODE" | grep -E 'docker (inspect|version)' | grep -vE 'timeout 3 docker (inspect|version)' || true)
+D5_EXEC_UNB=$(printf '%s\n' "$D5_CODE" | grep -E 'docker exec' | grep -vF 'timeout -k 3 "$CANARY_DIAG_TIMEOUT" docker exec soleur-web-platform-canary ' || true)
+D5_HOST_N=$(printf '%s\n' "$D5_CODE" | grep -cE 'timeout 3 docker (inspect|version)' || true)
+diag_check "#9871 D5e: every docker call in the bundle is bounded (3 host-side timeout-3 calls, exec under timeout -k 3) and the exec read is capped at 8192 bytes" \
+  "$([[ -z "$D5_HOST_UNB" && -z "$D5_EXEC_UNB" && "$D5_HOST_N" == 3 ]] && has_f '| head -c 8192; exit "${PIPESTATUS[0]}")"' "$D5_CODE" && echo 0 || echo 1)" "unbounded: $D5_HOST_UNB $D5_EXEC_UNB (host-side bounded: $D5_HOST_N)"
+diag_check "#9871 D5f: CANARY_DIAG_TIMEOUT is length-bounded and clamped to 60 s with a 30 s fallback (no 64-bit wraparound), and the container shell reads its OWN /proc/\$\$/status, not the sed child's" \
+  "$(has_f 'CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-30}"' "$D5_SRC" && has_f '(( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=30' "$D5_SRC" && has_f '=~ ^[1-9][0-9]?$ ]]' "$D5_SRC" && has_f '/proc/$$/status' "$D5_SRC" && ! has_f '/proc/self/status' "$D5_SRC" && echo 0 || echo 1)"
+unset D5_SRC D5_BAD D5_PE D5_LOGGERS D5_CALLS D5_CALLS_BAD D5_CODE D5_HOST_UNB D5_EXEC_UNB D5_HOST_N
+
+# D6 -- the faithful canary's sandbox_broken verdict emits the same bundle (the two triggers are mutually exclusive in one run), never gating.
+D6_BROKEN='{"verdict":"sandbox_broken","reason":"bwrap_operation_not_permitted","sdkVersion":"0.3.284"}'
+run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= "MOCK_CANARY_REPLAY_OUT=$D6_BROKEN"
+diag_check "#9871 D6a: a faithful sandbox_broken verdict (legacy probe green) emits the bundle once with trigger=faithful and does not roll back" \
+  "$([[ "$(diag_exec_count "$DIAGD")" == 1 && "$(diag_sections "$DIAGD/logger")" == "$D_SECTIONS $D_HOST_TAIL" \
+      && "$(grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" | grep -vc 'trigger=faithful' || true)" == 0 \
+      && "$DC_REASON" != canary_sandbox_failed ]] && echo 0 || echo 1)" \
+  "diag execs=$(diag_exec_count "$DIAGD") lines=$(diag_line_count "$DIAGD/logger") reason=$DC_REASON"
+run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= 'MOCK_CANARY_REPLAY_OUT={"verdict":"ok","reason":"ok","sdkVersion":"0.3.284"}'
+diag_check "#9871 D6b: a faithful ok verdict emits no bundle" \
+  "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 ]] && echo 0 || echo 1)"
+run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= 'MOCK_CANARY_REPLAY_OUT={"verdict":"canary_infra_error","reason":"x"}'
+diag_check "#9871 D6c: a faithful canary_infra_error verdict emits no bundle (no exec into a container that may not exist)" \
+  "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 ]] && echo 0 || echo 1)"
+run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= 'MOCK_CANARY_REPLAY_OUT={"verdict":"ok","reason":"ok"}' "MOCK_CANARY_REPLAY_OUTER_OUT=$D6_BROKEN"
+diag_check "#9871 D6d: an outer-wrap sandbox_broken verdict (the expected report-only state) emits no bundle, and the verdict WAS processed (positive control)" \
+  "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 ]] && has_f 'Outer-wrap canary (report-only): verdict=sandbox_broken' "$DC_OUT" && echo 0 || echo 1)" \
+  "$(printf '%s' "$DC_OUT" | grep -aE 'canary.*verdict=' | head -n 4)"
+# D6e -- the faithful bundle runs AFTER the Sentry page, so a slow bundle never delays it.
+_d6_pg=$(grep -nF 'sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true' "$DEPLOY_SCRIPT" | cut -d: -f1) || true
+_d6_dg=$(grep -nE '^[[:space:]]*emit_canary_sandbox_diag faithful' "$DEPLOY_SCRIPT" | cut -d: -f1) || true
+diag_check "#9871 D6e: the faithful bundle is emitted after the Sentry page, not before it" \
+  "$([[ "$(printf '%s\n' "$_d6_pg" | grep -c .)" == 1 && "$(printf '%s\n' "$_d6_dg" | grep -c .)" == 1 && "$_d6_pg" -lt "$_d6_dg" ]] && echo 0 || echo 1)" "page line(s): $_d6_pg; diag line(s): $_d6_dg"
+unset _d6_pg _d6_dg
+# D10 -- #9860: the `kdeny` row. One bounded, scrubbed read of the HOST kernel stream (journal first, dmesg second),
+# emitted after `kernel` and before `done`. It states which rung could read at all, because "could not read" and
+# "read it, nothing there" are different facts and only the second is evidence. Synthesized fixtures only
+# (cq-test-fixtures-synthesized-only); credential shapes are built by concatenation.
+d10_row() { { grep -F 'section=kdeny' "$1/logger" || true; } | head -n 1; }
+d10_val() { sed -E 's/^.*section=kdeny val="(.*)"$/\1/' <<<"$1"; }
+# The verdict the row must never move: same exit, reason and rollback line as the D1 baseline run.
+d10_verdict_ok() { [[ "$DC_RC" == 1 && "$DC_REASON" == canary_sandbox_failed && "$DC_EXIT" == 1 && "$(diag_rollback_line "$DIAGD/logger")" == "$D1_BASE_RB" ]]; }
+D10_DENY_MOUNT='audit: type=1400 audit(1760000000.123:456): apparmor="DENIED" operation="mount" class="mount" info="failed flags match" error=-13 profile="soleur-bwrap" name="/newroot/proc/" pid=4242 comm="bwrap" fstype="proc" srcname="proc" flags="rw, nosuid, nodev, noexec"'
+D10_DENY_OPEN='audit: type=1400 audit(1760000001.456:457): apparmor="DENIED" operation="open" class="file" profile="soleur-bwrap" name="/etc/tenant-secret-name.txt" pid=4243 comm="cat" requested_mask="r" denied_mask="r" fsuid=1001 ouid=0'
+D10_HINT_J=$'Hint: You are currently not seeing messages from other users and the system.\n      Users in groups \'adm\', \'systemd-journal\' can see all messages.\n      Pass -q to turn off this notice.\nNo journal files were opened due to insufficient permissions.'
+D10_HINT_D='dmesg: read kernel buffer failed: Operation not permitted'
+
+run_diag_case "$DIAGD"
+D10_ROW=$(d10_row "$DIAGD"); D10_VAL=$(d10_val "$D10_ROW")
+diag_check "#9860 D10a: kdeny is emitted exactly once, between kernel and done, in shape, begins src=, and the MOCK readers (not the runner's own journalctl/dmesg) answered" \
+  "$([[ "$(diag_sections "$DIAGD/logger")" == "$D_SECTIONS $D_HOST_TAIL" && "$(grep -cF 'section=kdeny' "$DIAGD/logger" || true)" == 1 \
+      && "$D10_VAL" == src=* && -s "$DIAGD/klog" ]] && has_e "$DIAG_LINE_RE" "$D10_ROW" && has_f 'journalctl -k -n 400' "$(cat "$DIAGD/klog")" && echo 0 || echo 1)" \
+  "row: $D10_ROW | klog: $(head -n 3 "$DIAGD/klog" | tr '\n' '|')"
+
+run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT"
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#9860 D10b: a realistic AppArmor mount denial in a READABLE stream reads j=ok (the line says DENIED, which must not read as unreadable), counts hits=1 mproc=1, and the fields are a closed key set: no name, comm, pid, srcname or timestamp" \
+  "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total=1 hits=1 mproc=1 '* ]] && has_f "operation='mount'" "$D10_VAL" && has_f "profile='soleur-bwrap'" "$D10_VAL" && has_f "fstype='proc'" "$D10_VAL" \
+      && has_f 'error=-13' "$D10_VAL" && ! has_e '(^| )(name|comm|pid|srcname|flags)=|audit\(|/newroot' "$D10_VAL" && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
+
+d10c() {  # <label> <anchored-regex-for-the-row-value> [VAR=value ...]
+  local label="$1" re="$2"; shift 2
+  run_diag_case "$DIAGD" "$@"
+  local v; v=$(d10_val "$(d10_row "$DIAGD")")
+  diag_check "#9860 D10c ($label): the ladder reports it and the deploy verdict is unchanged" \
+    "$(has_e "$re" "$v" && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $v | rc=$DC_RC reason=$DC_REASON"
+}
+d10c "readable, nothing denied" '^src=journal j=ok d''=skip total=[1-9][0-9]* hits=0 mproc=0$'
+d10c "journal hint-only, dmesg answers" '^src=dmesg j=noaccess d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1
+d10c "journal SILENT-EMPTY (rc 0, no hint, no lines: the systemd 261 shape), dmesg answers" '^src=dmesg j=empty d''=ok total=[1-9][0-9]* hits=0 mproc=0$' MOCK_KLOG_J_OUT=
+d10c "both rungs hint-only, the hint text arriving on STDERR as the real tools print it" '^src=none j=noaccess d''=noaccess total=0 hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1 "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1
+d10c "journalctl's own '-- No entries --' banner is not a kernel line: the journal reads empty, not ok" '^src=dmesg j=empty d''=ok total=[1-9][0-9]* hits=0 mproc=0$' 'MOCK_KLOG_J_OUT=-- No entries --'
+d10c "a mount denial for a NON-procfs filesystem is a hit but not a procfs-mount denial" \
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' fstype='tmpfs' error=-13\$" \
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000004.1:460): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="tmpfs"'
+d10c "a seccomp audit record (type 1326) counts as a hit, with only its allowlisted syscall field" \
+  '^src=journal j=ok d''=skip total=1 hits=1 mproc=0 syscall=165$' \
+  'MOCK_KLOG_J_OUT=audit: type=1326 audit(1760000002.1:458): auid=4294967295 uid=1001 pid=4244 comm="bwrap" exe="/usr/bin/bwrap" sig=0 arch=c000003e syscall=165 compat=0 ip=0x7f code=0x50000'
+d10c "a complain-mode ALLOWED record (type 1400) is not a denial: it must not count as a hit" \
+  '^src=journal j=ok d''=skip total=1 hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000003.1:459): apparmor="ALLOWED" operation="mount" profile="soleur-bwrap" fstype="proc"'
+d10c "a flood of 12000 two-byte lines is capped at total=9999 so the counts can never grow the status head" \
+  '^src=journal j=ok d''=skip total=9999 hits=0 mproc=0$' MOCK_KLOG_J_OUT=k MOCK_KLOG_J_REP=12000
+d10c "a printk line that merely ECHOES tenant text carrying the markers is not an audit record: no hit, no fields" \
+  '^src=journal j=ok d''=skip total=1 hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=bwrap[4242]: segfault at 0 ip 0 sp 0 error 4 in x apparmor="DENIED" operation="mount" info="TENANT TEXT" fstype="proc"'
+d10c "an audit-looking line that is not at the start of the record (prefixed text) is not a hit either" \
+  '^src=journal j=ok d''=skip total=1 hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=kernel: audit: type=1400 audit(1760000005.1:461): apparmor="DENIED" operation="mount" fstype="proc"'
+d10c "a journal that prints error text and exits non-zero reads error (not ok), and the dmesg rung is still tried" \
+  '^src=dmesg j=error d''=ok total=[1-9][0-9]* hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=Failed to add match: Invalid argument' MOCK_KLOG_J_RC=1
+d10c "a tenant-chosen fstype that is not a short token is dropped from the fields (the rest of the record still reads)" \
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' error=-13\$" \
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000006.1:462): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="/srv/tenants/acme"'
+d10c "journal silent-empty and dmesg refused" '^src=none j=empty d''=noaccess total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1
+d10c "both binaries absent (rc 127)" '^src=none j=absent d''=absent total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=127 MOCK_KLOG_D_OUT= MOCK_KLOG_D_RC=127
+d10c "an unrelated profile denial is a hit but NOT a procfs-mount denial, and the tenant file name stays out" \
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=0 operation='open' profile='soleur-bwrap' requested_mask='r' denied_mask='r'\$" "MOCK_KLOG_J_OUT=$D10_DENY_OPEN"
+
+d10c "a journal that fails (rc 1) with NO hint and NO lines reads error, not empty, and the dmesg rung answers" \
+  '^src=dmesg j=error d''=ok total=[1-9][0-9]* hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=1
+d10c "a journal that exits non-zero AFTER printing an anchored denial still reports the denial (the line is a real record)" \
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=1 operation='mount' profile='soleur-bwrap' fstype='proc' error=-13 info='failed flags match'\$" \
+  "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT" MOCK_KLOG_J_RC=1
+d10c "a mount denial whose fstype has an UNBALANCED quote is a hit but not a procfs-mount denial, and the fstype field is dropped" \
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' error=-13\$" \
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000013.1:474): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="proc'
+d10c "a complain-mode ALLOWED record whose free text contains 'type=1326 audit(' is still not a hit" \
+  '^src=journal j=ok d''=skip total=1 hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000014.1:475): apparmor="ALLOWED" operation="mount" info="x type=1326 audit(1.2:3) y" profile="soleur-bwrap"'
+# Newest-first selection: the stream is chronological (oldest first); tac makes the NEWEST line first and the fields come from it.
+D10M_OLD_MNT='audit: type=1400 audit(1760000010.1:470): apparmor="DENIED" operation="mount" error=-13 profile="old-prof" fstype="proc"'
+D10M_NEW_MNT='audit: type=1400 audit(1760000011.1:471): apparmor="DENIED" operation="mount" error=-13 profile="new-prof" fstype="proc"'
+D10M_OLD_OPN='audit: type=1400 audit(1760000012.1:472): apparmor="DENIED" operation="open" profile="old-open" requested_mask="r"'
+D10M_NEW_OPN='audit: type=1400 audit(1760000013.1:473): apparmor="DENIED" operation="open" profile="new-open" requested_mask="r"'
+d10c "two mount denials: both count, and the reported fields come from the NEWEST" \
+  "^src=journal j=ok d""=skip total=2 hits=2 mproc=2 operation='mount' profile='new-prof' fstype='proc' error=-13\$" \
+  "MOCK_KLOG_J_OUT=$D10M_OLD_MNT"$'\n'"$D10M_NEW_MNT"
+d10c "two non-mount denials: both count, mproc stays 0, and the fields come from the NEWEST" \
+  "^src=journal j=ok d""=skip total=2 hits=2 mproc=0 operation='open' profile='new-open' requested_mask='r'\$" \
+  "MOCK_KLOG_J_OUT=$D10M_OLD_OPN"$'\n'"$D10M_NEW_OPN"
+d10c "an older mount denial beats a NEWER non-mount denial for the fields (the procfs-mount record is the evidence asked for)" \
+  "^src=journal j=ok d""=skip total=2 hits=2 mproc=1 operation='mount' profile='old-prof' fstype='proc' error=-13\$" \
+  "MOCK_KLOG_J_OUT=$D10M_OLD_MNT"$'\n'"$D10M_NEW_OPN"
+unset D10M_OLD_MNT D10M_NEW_MNT D10M_OLD_OPN D10M_NEW_OPN
+
+diag_inert "#9860 D10d: both kernel rungs hanging are each cut at 3 s and change nothing else (exit, reason, rollback line, teardown order, wall time)" MOCK_KLOG_J_SLEEP=60 MOCK_KLOG_D_SLEEP=60
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#9860 D10d2: the row states the hang: src=none j=timeout d""=timeout" "$([[ "$D10_VAL" == 'src=none j=timeout d''=timeout total=0 hits=0 mproc=0' ]] && echo 0 || echo 1)" "kdeny: $D10_VAL"
+
+diag_inert "#9860 D10e: a 4 MB journal stream ending in ONE denial is bounded and changes nothing else" MOCK_KLOG_J_BIG=1 "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT"
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")"); D10_TOTAL=$(sed -nE 's/^.* total=([0-9]+) .*$/\1/p' <<<"$D10_VAL")
+diag_check "#9860 D10e2: the final denial still counts (newest lines are kept, not the oldest) and the stream was cut to the 64 KiB cap" \
+  "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total='* && "$D10_VAL" == *' hits=1 mproc=1 '* && "${D10_TOTAL:-99999}" -le 700 ]] && echo 0 || echo 1)" "kdeny: $D10_VAL"
+run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_D_BIG=1 "MOCK_KLOG_D_OUT=$D10_DENY_MOUNT"
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#9860 D10e3: a 4 MB dmesg stream is cut to its newest 400 lines: src=dmesg total=400 and the final denial still counts" \
+  "$([[ "$D10_VAL" == 'src=dmesg j=noaccess d''=ok total=400 hits=1 mproc=1 '* ]] && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
+
+run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_D_BIG=1 MOCK_KLOG_D_PAD=400 "MOCK_KLOG_D_OUT=$D10_DENY_MOUNT"
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")"); D10_TOTAL=$(sed -nE 's/^.* total=([0-9]+) .*$/\1/p' <<<"$D10_VAL")
+diag_check "#9860 D10e4: when the newest 400 dmesg lines exceed the 64 KiB cap the cut keeps the NEWEST (the final denial still counts) rather than the oldest" \
+  "$([[ "$D10_VAL" == 'src=dmesg j=noaccess d''=ok total='* && "$D10_VAL" == *' hits=1 mproc=1 '* && "${D10_TOTAL:-0}" -ge 100 && "${D10_TOTAL:-0}" -lt 400 ]] && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
+
+D10F_DP='dp.st.''prd.Fx9aQ2mZ7vTbL4nKc8RdYw3Hs5Jp'
+D10F_SK='sk_''live_Fx9aQ2mZ7vTbL4nKc8RdYw'
+D10F_JWT='ey''Jhbgcioijiuzi1nirx9.eyJzdWIiOiJmaXh0dXJlIn0.Fx9aQ2mZ7vTbL4nKc8RdYw'
+D10F_LINE="audit: type=1400 audit(1760000007.1:463): apparmor=\"DENIED\" operation=\"mount\" info=\"$D10F_DP $D10F_SK\" error=-13 profile=\"$D10F_JWT\" fstype=\"proc\""
+run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10F_LINE"
+D10F_LEAK=0
+for _f in "$D10F_DP" "$D10F_SK" "$D10F_JWT"; do
+  if grep -qF -- "$_f" "$DIAGD/logger" || has_f "$_f" "$DC_OUT"; then D10F_LEAK=1; fi
+done
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#9860 D10f: credential shapes inside the kernel line's extracted fields reach neither the journald capture nor the deploy stdout, and REDACTED is on the kdeny row itself (the fixture arrived and was scrubbed)" \
+  "$([[ "$D10F_LEAK" == 0 && "$D10_VAL" == *REDACTED* && "$D10_VAL" == *' hits=1 mproc=1 '* ]] && echo 0 || echo 1)" "kdeny: $D10_VAL"
+run_diag_case "$DIAGD" 'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000008.1:464): apparmor="DENIED" operation="mount" info="plain words here" error=-13 profile="soleur-bwrap" fstype="proc"'
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#9860 D10f control: the same line with a benign info value arrives verbatim (so the REDACTED assertion above measures the scrub, not an extraction that drops the field)" \
+  "$(has_f "info='plain words here'" "$D10_VAL" && echo 0 || echo 1)" "kdeny: $D10_VAL"
+unset D10F_DP D10F_SK D10F_JWT D10F_LINE D10F_LEAK _f
+
+# D10g -- source census over the kernel reads. Positive controls first: the predicate must flag every sudo shape OTHER
+# THAN the one pinned grant, an unbounded -w read, a /var/log read and an unbounded dmesg, and must NOT flag either
+# compliant shape — the unprivileged rung or the single pinned privileged read — or a clean verdict on the real
+# region proves nothing. #10045 changed the compliant shape: the journal rung FIRST tries the KDENY_KERNEL_STREAM
+# grant (`timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat`, timeout OUTSIDE sudo)
+# and falls back to the unprivileged read only on sudo's own denial signature (`sudo:`- or
+# `Sorry,`-prefixed — the sudo-rs and GNU-sudo denial bodies).
+D10G_PRIV='timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat'
+# BRE-escaped twin for the sed-strip rules — escapes every non-word non-space character (the
+# argv carries no BRE metachars today; over-escaping keeps the strip honest if it ever gains one).
+D10G_PRIV_RE=$(printf '%s' "$D10G_PRIV" | sed 's/[^[:alnum:] ]/\\&/g')
+d10g_flags() {  # <region-text>: prints every violation, nothing when clean
+  local code stripped kern out=""
+  code=$(printf '%s\n' "$1" | grep -vE '^[[:space:]]*#') || true
+  # strip the ONE pinned privileged read FIRST — per-occurrence, not per-line: a second kernel
+  # read smuggled onto the pinned read's own line survives into `stripped` and is censused below.
+  stripped=$(sed "s|$D10G_PRIV_RE||g" <<<"$code")
+  # every remaining kernel-read token — the boundaries exclude only word-characters (plus `)`
+  # and `|` on the trailing side so `$(dmesg)` and `dmesg|x` are reads too), so a
+  # path-qualified `/usr/bin/journalctl` read or one smuggled next to the stripped literal is
+  # counted. `;` is deliberately NOT a trailing boundary: `for rung in journal dmesg; do`
+  # would false-flag.
+  kern=$(grep -E '(^|[^A-Za-z0-9_])(journalctl|dmesg)([[:space:]()|]|$)' <<<"$stripped" || true)
+  # every kernel read is timeout -k 1 3-bounded: the unprivileged rungs or the ONE pinned privileged read
+  out+=$(grep -vE 'timeout -k 1 3 (journalctl|dmesg)([[:space:]]|$)' <<<"$kern" | grep -v '^$' || true)
+  out+=$(grep -E '(^|[[:space:]])-[fwW]([[:space:]]|$)|--follow' <<<"$kern" || true)
+  # a follow flag inside ANY journalctl-bearing line — covers a drift that appends `-f` to the
+  # granted argv (the suffix check below catches that drift shape as well)
+  out+=$(grep -F 'journalctl' <<<"$code" | grep -E '(^|[[:space:]])-[fwW]([[:space:]]|$)|--follow' || true)
+  # every sudo in the region must be exactly the pinned argv: after the strip, flag any
+  # invocation-shaped `sudo` that remains (`sudo timeout`, `sudo dmesg`, a drifted argv).
+  # `sudo:`-prefixed text is the denial signature the fallback discriminator reads, not an
+  # invocation (trailing `:` is not [[:space:]] or end-of-line).
+  out+=$(grep -E 'sudo([[:space:]]|$)|/var/log|audit\.log|ausearch' <<<"$stripped" || true)
+  # the pinned literal must terminate the granted argv: whatever follows it on its own line is
+  # the ` 2>&1` capture and nothing else — an appended flag (`-u sshd`, `-f`) or a second
+  # command smuggled behind it leaves a non-conforming residual.
+  out+=$(grep -F "$D10G_PRIV" <<<"$code" | sed "s|.*$D10G_PRIV_RE||" | grep -vE '^ 2>&1([[:space:]]|$)' || true)
+  printf '%s' "$out"
+}
+D10G_CLEAN='  r="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")"'
+D10G_CLEAN_PRIV='  r="$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")"'
+# Each fixture is compliant on EVERY rule except the one it exists to prove, so deleting any single ban leaves exactly
+# one fixture unflagged: a fixture that trips two rules would let the ban under test be removed unnoticed. The
+# multi-rule fixtures below prove the pinned-argv gate discriminates: a sudo'd dmesg or a mid-argv drift is caught
+# BOTH as an unrecognized kernel read AND as an unpinned sudo (the stripped kern census sees /usr/bin/-qualified
+# binaries); a smuggled sibling read survives the strip into kern; a trailing drift survives into the suffix check.
+D10G_NOSUDO='  x=$(sudo timeout -k 1 3 journalctl -k -n 400 --since=-5min)'
+D10G_SUDODRIFT='  x=$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-10min --no-pager -o cat)'
+D10G_SUDODMESG='  x=$(timeout -k 1 3 sudo -n /usr/bin/dmesg | tail -n 400)'
+D10G_PRIVFOLLOW='  x=$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat -f | head -c 9)'
+D10G_SMUGGLE='  x=$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1); y=$(dmesg)'
+D10G_SUFFIX='  x=$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat -u sshd 2>&1 | head -c 9)'
+# journalctl-helper is a substring collision: `-` is not a kern trailing boundary, so the name
+# is invisible to rules 1/2 and invisible to the sudo and suffix rules — it is the lone fixture
+# proving the follow-flag-on-any-journalctl-line ban on its own (PRIVFOLLOW trips two rules).
+D10G_HELPERF='  x=$(journalctl-helper -f | head -c 9)'
+D10G_NOFOLLOW='  x=$(timeout -k 1 3 dmesg -w | head -c 9)'
+D10G_NOVARLOG='  x=$(timeout -k 1 3 cat /var/log/audit/audit.log | head -c 9)'
+D10G_NOTIMEOUT='  x=$(dmesg | tail -n 400)'
+diag_check "#9860 D10g control: the census predicate flags a sudo'd read OUTSIDE the pinned grant, a drifted grant argv, a sudo'd dmesg, a follow flag inside the granted argv, a second read smuggled onto the pinned line, a trailing argv drift, a -w read, a /var/log read and an unbounded dmesg, and passes BOTH compliant shapes" \
+  "$([[ -n "$(d10g_flags "$D10G_NOSUDO")" && -n "$(d10g_flags "$D10G_SUDODRIFT")" && -n "$(d10g_flags "$D10G_SUDODMESG")" && -n "$(d10g_flags "$D10G_PRIVFOLLOW")" && -n "$(d10g_flags "$D10G_SMUGGLE")" && -n "$(d10g_flags "$D10G_SUFFIX")" && -n "$(d10g_flags "$D10G_NOFOLLOW")" && -n "$(d10g_flags "$D10G_NOVARLOG")" && -n "$(d10g_flags "$D10G_NOTIMEOUT")" \
+      && -n "$(d10g_flags "$D10G_HELPERF")" \
+      && -z "$(d10g_flags "$D10G_CLEAN")" && -z "$(d10g_flags "$D10G_CLEAN_PRIV")" ]] && echo 0 || echo 1)"
+unset D10G_NOSUDO D10G_SUDODRIFT D10G_SUDODMESG D10G_PRIVFOLLOW D10G_SMUGGLE D10G_SUFFIX D10G_HELPERF D10G_NOFOLLOW D10G_NOVARLOG D10G_NOTIMEOUT
+D10G_SRC=$(sed -n '/^# CANARY_DIAG_BEGIN/,/^# CANARY_DIAG_END/p' "$DEPLOY_SCRIPT")
+D10G_CODE=$(printf '%s\n' "$D10G_SRC" | grep -vE '^[[:space:]]*#') || true
+D10G_JLINE=$(grep -E 'timeout -k 1 3 journalctl' <<<"$D10G_CODE" || true)
+D10G_PLINE=$(grep -F "$D10G_PRIV" <<<"$D10G_CODE" || true)
+D10G_DLINE=$(grep -E 'timeout -k 1 3 dmesg' <<<"$D10G_CODE" || true)
+diag_check "#9860 D10g: the region has exactly three kernel reads, each bounded by timeout -k 1 3 — the pinned privileged journal attempt (#10045), the unprivileged journal fallback and dmesg; the privileged argv is the KDENY_KERNEL_STREAM grant verbatim with 2>&1 capture and newest-first bounds; the unprivileged journal carries -n 400 --since=-5min --no-pager -o cat newest-first; dmesg takes tail -n 400 BEFORE head -c 65536; no sudo beyond the pinned argv, /var/log, audit log, -f/-w/--follow" \
+  "$([[ -z "$(d10g_flags "$D10G_SRC")" && "$(grep -c . <<<"$D10G_JLINE" || true)" == 1 && "$(grep -c . <<<"$D10G_PLINE" || true)" == 1 && "$(grep -c . <<<"$D10G_DLINE" || true)" == 1 \
+      && "$D10G_JLINE" == *'journalctl -k -n 400 --since=-5min --no-pager -o cat '* && "$D10G_JLINE" == *'head -c 65536'* \
+      && "$D10G_PLINE" == *'2>&1'* && "$D10G_PLINE" == *'head -c 65536'* \
+      && "$(awk '{ a = index($0, "tail -n 400"); b = index($0, "head -c 65536"); print (a > 0 && b > a) ? 1 : 0 }' <<<"$D10G_DLINE")" == 1 ]] && echo 0 || echo 1)" \
+  "violations: $(d10g_flags "$D10G_SRC") | journal: $D10G_JLINE | priv: $D10G_PLINE | dmesg: $D10G_DLINE"
+diag_check "#9860 D10g2: kdeny is emitted from exactly one _canary_diag_emit call, through the single scrubbing emitter, and kdeny is not in the in-container allowlist" \
+  "$([[ "$(grep -cF '_canary_diag_emit "$trigger" kdeny "$(_canary_kdeny_read)"' <<<"$D10G_CODE" || true)" == 1 && "$(grep -cE '_canary_diag_emit "\$trigger" kdeny' <<<"$D10G_CODE" || true)" == 1 ]] \
+      && ! has_e '\^\(id\|[^)]*kdeny' "$D10G_CODE" && echo 0 || echo 1)"
+# The closed key list is a claim made in THREE places (the awk, the runbook, and what the rows above exercise). Pin the code
+# literal to the expected set AND to the runbook's spelling, so appending a key (a path-valued one, say) is a visible edit.
+D10G_KEYS=$(sed -nE 's/.*split\("([a-z_ ]+)", K, " "\).*/\1/p' <<<"$D10G_CODE")
+D10G_RB="$SCRIPT_DIR/../../../knowledge-base/engineering/operations/runbooks/canary-probe-set.md"
+diag_check "#9860 D10g3: the kdeny field-key allowlist is exactly the documented closed set, spelled identically in the runbook" \
+  "$([[ "$D10G_KEYS" == 'operation profile fstype error info requested_mask denied_mask syscall' && -f "$D10G_RB" ]] && has_f "(\`$D10G_KEYS\`)" "$(cat "$D10G_RB")" && echo 0 || echo 1)" "code keys: $D10G_KEYS"
+unset D10G_CLEAN D10G_CLEAN_PRIV D10G_PRIV D10G_PRIV_RE D10G_SRC D10G_CODE D10G_JLINE D10G_PLINE D10G_DLINE D10G_KEYS D10G_RB
+
+# D10h -- boundary: the status head must survive _cred_err_tail's 200-character tail even when the counts are
+# multi-digit and every allowlisted field is at its longest.
+D10H_LINE='audit: type=1400 audit(1760000009.1:465): apparmor="DENIED" operation="mount" info="'"$(printf 'i%.0s' $(seq 1 100))"'" error=-13 profile="'"$(printf 'p%.0s' $(seq 1 60))"'" fstype="proc" requested_mask="rw" denied_mask="rw" syscall=165'
+run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10H_LINE" MOCK_KLOG_J_REP=400
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+D10_TOTAL=$(sed -nE 's/^.* total=([0-9]+) .*$/\1/p' <<<"$D10_VAL"); D10_HITS=$(sed -nE 's/^.* hits=([0-9]+) .*$/\1/p' <<<"$D10_VAL"); D10_MPROC=$(sed -nE 's/^.* mproc=([0-9]+)( .*)?$/\1/p' <<<"$D10_VAL")
+diag_check "#9860 D10h: with 3-digit counts (every repeated denial counted: hits == total >= 100, mproc within one of it because head -c cuts the OLDEST line mid-record) and every field at its longest the row still begins src= (the 200-char tail does not eat the status head) and never exceeds 200 characters" \
+  "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total='* && "${#D10_VAL}" -le 200 && "${D10_TOTAL:-0}" -ge 100 && "${D10_HITS:-x}" == "${D10_TOTAL:-y}" && "${D10_MPROC:-0}" -ge $(( ${D10_TOTAL:-1} - 1 )) ]] && echo 0 || echo 1)" "len=${#D10_VAL} kdeny: $D10_VAL"
+D10_FIELDS=$(sed -nE 's/^src=[a-z]+ j=[a-z]+ d''=[a-z]+ total=[0-9]+ hits=[0-9]+ mproc=[0-9]+ (.*)$/\1/p' <<<"$D10_VAL")
+diag_check "#9860 D10h2: the extracted fields are cut at exactly 130 characters (the worst case 61 + 130 stays under the 200-char tail)" \
+  "$([[ "${#D10_FIELDS}" -eq 130 && "$D10_FIELDS" == operation=* ]] && echo 0 || echo 1)" "fields(${#D10_FIELDS}): $D10_FIELDS"
+# D10k -- #10045: the privileged journal read (KDENY_KERNEL_STREAM) and the denial fallback. The journal rung FIRST
+# attempts `timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat`; on a sudo-denial
+# signature (non-zero rc + every non-blank captured line `sudo:`- or `Sorry,`-prefixed) it falls back to the
+# pre-grant unprivileged read, so a grant-less host keeps today's verdicts instead of a new failure class. The
+# sudolog/klog pair discriminates the arms arithmetically: a `journalctl` line in klog can come from EITHER path
+# (both resolve to the same mock with the same argv), so  accepted privileged runs = (journalctl lines in sudolog)
+# - (DENY markers)  and  unprivileged runs = (journalctl lines in klog) - accepted.
+d10k_counts() {  # sets SJ (sudo journalctl attempts) SD (sudo denials) KJ (all journalctl runs) KD (dmesg runs)
+  SJ=$(grep -c '/usr/bin/journalctl' "$DIAGD/sudolog" || true)
+  SD=$(grep -c '^DENY$' "$DIAGD/sudolog" || true)
+  KJ=$(grep -c '^journalctl ' "$DIAGD/klog" || true)
+  KD=$(grep -c '^dmesg' "$DIAGD/klog" || true)
+}
+
+# grant present + a readable stream: the privileged arm answers, the unprivileged read never runs, dmesg stays skipped.
+run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT"; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k1: the grant is exercised FIRST — exactly one sudo journalctl attempt, none denied, the only journalctl run is the privileged exec (zero unprivileged reads), dmesg stays skipped — and the stream reads src=journal j=ok" \
+  "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total=1 hits=1 mproc=1 '* && "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" == 0 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# grant present + the systemd-261 silent-empty shape: the privileged run classifies rc-0-no-lines as empty (not ok)
+# and the dmesg rung proceeds — UNPRIVILEGED, it is never wrapped in sudo.
+run_diag_case "$DIAGD" MOCK_KLOG_J_OUT=; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k2: grant present + journal silent-empty reads j=empty (not ok), the dmesg rung proceeds and is never elevated (zero dmesg in the sudo log)" \
+  "$(has_e '^src=dmesg j=empty d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "$D10_VAL" && [[ "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" == 1 && -z "$(grep 'dmesg' "$DIAGD/sudolog" || true)" ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# grant absent under BOTH recorded denial bodies — sudo-rs' `sudo: deploy : command not allowed` and GNU sudo's
+# unprefixed `Sorry, user deploy is not allowed to execute ...` — each on STDERR (rc 1, journalctl never exec'd):
+# the fallback fires for either signature, and permission-denied unprivileged rungs then read the PRE-GRANT
+# contract — src=none j=noaccess d=noaccess — not a new error class.
+for DENY_SHAPE in rs gnu; do
+  run_diag_case "$DIAGD" MOCK_SUDO_DENY=$DENY_SHAPE "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1 "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1; d10k_counts
+  D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+  diag_check "#10045 D10k3/$DENY_SHAPE: grant absent (denial on stderr, rc 1, journalctl never exec'd) + permission-denied unprivileged rungs reads the pre-grant src=none j=noaccess d=noaccess — the sole journalctl run was the unprivileged fallback" \
+    "$([[ "$D10_VAL" == 'src=none j=noaccess d''=noaccess total=0 hits=0 mproc=0' && "$SJ" == 1 && "$SD" == 1 && "$KJ" == 1 && "$KD" == 1 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+    "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+done
+
+# grant absent but the unprivileged journal is READABLE (e.g. a host without dmesg_restrict): the denial falls back
+# and the fallback reaches a working read — src=journal j=ok through the SAME stream the pre-grant reader used.
+# Both denial bodies select the same arm — the denial is an arm selector, not a verdict.
+for DENY_SHAPE in rs gnu; do
+  run_diag_case "$DIAGD" MOCK_SUDO_DENY=$DENY_SHAPE "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT"; d10k_counts
+  D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+  diag_check "#10045 D10k4/$DENY_SHAPE: grant denied but the unprivileged journal is readable: the fallback still reaches src=journal j=ok — the denial is an arm selector, not a verdict" \
+    "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total=1 hits=1 mproc=1 '* && "$SJ" == 1 && "$SD" == 1 && "$KJ" == 1 && "$KD" == 0 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+    "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+done
+unset DENY_SHAPE
+
+# sudo ACCEPTED the pinned argv but journalctl-under-root failed (rc 1, no lines, no hint): a denial is the ONLY
+# fallback trigger, so this classifies j=error through the normal ladder with ZERO unprivileged journalctl runs
+# (KJ - accepted-sudo-journalctl = 1 - (1 - 0) = 0) — never a re-read.
+run_diag_case "$DIAGD" MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=1; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k5: sudo accepted the argv but journalctl-under-root exits rc 1 with no lines and no hint — j=error and NO unprivileged re-run (denial-vs-tool-failure discrimination)" \
+  "$(has_e '^src=dmesg j=error d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "$D10_VAL" && [[ "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" == 1 && $(( KJ - SJ + SD )) -eq 0 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# grant present + a `sudo:`-prefixed WARNING on the accepted run (stderr, merged by 2>&1):
+# the warning is stripped before classification — it must NOT count as a journal line, so
+# the silent-empty stream still reads j=empty (never phantom-ok) and dmesg proceeds.
+run_diag_case "$DIAGD" MOCK_SUDO_WARN=1 MOCK_KLOG_J_OUT=; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k6: an accepted run's `sudo:` warning is stripped before counting — silent-empty still reads j=empty (the warning is not a journal line), dmesg proceeds unprivileged" \
+  "$(has_e '^src=dmesg j=empty d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "$D10_VAL" && [[ "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" == 1 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# grant present + warning + journalctl-under-root fails silently (rc 1, no lines): the warning
+# alone is NOT a denial (no recognized denial phrase), so there is NO spurious fallback —
+# the run classifies j=error through the normal ladder.
+run_diag_case "$DIAGD" MOCK_SUDO_WARN=1 MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=1; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k7: a `sudo:` warning plus a silent journalctl-under-root failure does NOT masquerade as a denial — j=error and zero unprivileged re-runs (the phrase requirement kills the warning-only fallback edge)" \
+  "$(has_e '^src=dmesg j=error d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "$D10_VAL" && [[ "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" == 1 && $(( KJ - SJ + SD )) -eq 0 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+unset -f d10k_counts; unset SJ SD KJ KD
+
+unset D10H_LINE D10_ROW D10_VAL D10_TOTAL D10_HITS D10_MPROC D10_FIELDS D10_DENY_MOUNT D10_DENY_OPEN D10_HINT_J D10_HINT_D
+unset -f d10_row d10_val d10_verdict_ok d10c d10g_flags
+
+# D9 -- the REAL in-container script, EXECUTED (the mock never runs it): under sh and under bash it must print
+# exactly the eleven pinned sections, one well-formed `name value` line each. D9c is the control for the checker.
+D9_BODY=$(sed -n "/^CANARY_DIAG_SCRIPT='/,/'\$/p" "$DEPLOY_SCRIPT")
+D9_SCRIPT=$(bash -c "$D9_BODY"'; printf "%s" "$CANARY_DIAG_SCRIPT"')
+d9_names() { awk '{ if ($0 ~ /^[a-z_0-9]+ ./) printf "%s ", $1; else printf "BAD(%s) ", $0 }' | sed 's/ $//'; }
+D9_SH=$(sh -c "$D9_SCRIPT" soleur-canary-diag 2>/dev/null | d9_names)
+D9_BASH=$(bash -c "$D9_SCRIPT" soleur-canary-diag 2>/dev/null | d9_names)
+D9_GUT=$(sh -c 'echo gutted' soleur-canary-diag 2>/dev/null | d9_names)
+diag_check "#9871 D9a: the real container script, run under sh, prints exactly the eleven pinned sections, each well-formed" \
+  "$([[ -n "$D9_SCRIPT" && "$D9_SH" == "$D_SECTIONS" ]] && echo 0 || echo 1)" "got: $D9_SH"
+diag_check "#9871 D9b: the real container script, run under bash, prints exactly the eleven pinned sections" \
+  "$([[ -n "$D9_SCRIPT" && "$D9_BASH" == "$D_SECTIONS" ]] && echo 0 || echo 1)" "got: $D9_BASH"
+D9_PROC=$(grep -m1 '^proc ' < <(sh -c "$D9_SCRIPT" soleur-canary-diag 2>/dev/null) || true)
+diag_check "#9871 D9d: the real script's sdk_probe carries the SDK flags and its proc row reports NoNewPrivs and Seccomp" \
+  "$(has_f '--unshare-pid --proc /proc' "$(grep '^v=.*--unshare-user' <<<"$D9_SCRIPT" || true)" && has_f 'NoNewPrivs=' "$D9_PROC" && has_f 'Seccomp=' "$D9_PROC" && echo 0 || echo 1)" "proc: $D9_PROC"
+# D11 -- #9860: sdk_noproc is sdk_probe WITHOUT --proc. If it carried --proc it would repeat sdk_probe and decide nothing.
+D11_LINES=$(grep -E '^v=.*--unshare-user' <<<"$D9_SCRIPT" || true)
+D11_NOPROC=$(grep -vF -- '--proc' <<<"$D11_LINES" || true)
+D11_PROBE=$(grep -F -- '--proc /proc' <<<"$D11_LINES" || true)
+# It must be a CONTROL: the same argv minus exactly ` --proc /proc`, with its own real exit code printed. Any second difference
+# would confound the H6-H8 reading. The five `timeout 5` probes are what the CANARY_DIAG_TIMEOUT default (30) is sized against.
+diag_check "#9860 D11: the real script's sdk_noproc argv is sdk_probe's argv minus exactly the ' --proc /proc' pair (so it carries --unshare-user --unshare-pid and no --proc), prints its own rc, and the script runs five timeout-5 probes" \
+  "$([[ "$(grep -c . <<<"$D11_NOPROC" || true)" == 1 && "$(grep -c . <<<"$D11_PROBE" || true)" == 1 && "${D11_PROBE// --proc \/proc/}" == "$D11_NOPROC" \
+      && "$(grep -vE '^[[:space:]]*#' <<<"$D9_SCRIPT" | grep -cE '=\$\(timeout 5 ' || true)" == 5 ]] && has_f '--unshare-user --unshare-pid' "$D11_NOPROC" \
+      && has_f 'p sdk_noproc "rc=$r ' "$(grep -A1 -xF -- "$D11_NOPROC" <<<"$D9_SCRIPT" | tail -n 1)" && echo 0 || echo 1)" \
+  "noproc: $D11_NOPROC | probe: $D11_PROBE"
+unset D11_LINES D11_NOPROC D11_PROBE
+diag_check "#9871 D9c control: a gutted script does NOT satisfy the D9 check (so D9a/D9b can fail)" \
+  "$([[ "$D9_GUT" != "$D_SECTIONS" ]] && echo 0 || echo 1)"
+unset D9_BODY D9_SCRIPT D9_SH D9_BASH D9_GUT D9_PROC
+unset -f d9_names
+unset D6_BROKEN D1_N D1_BAD D1_RB D1_FD D1_BASE_RB
+rm -rf "$DIAGD"; unset DIAGD
 
 # Scenario 1 -- SPOKEN: the probe failed and said why. The message must ride the line.
 MOCK_BWRAP_CSTATE=running assert_blocking_probe_line \
@@ -5838,12 +7020,15 @@ fi
 # DEPLOY_DOCKER_CONFIG_DIR; and NO `--config` passed a PATH-like arg anywhere. The ONLY
 # legitimate --config in this file is doppler's env-name form (`doppler … --config prd`), whose
 # argument starts with a LETTER; a docker `--config` always takes a path (/, ., ~, $, or a quote
-# wrapping one). Comment-stripped and NOT single-line-scoped, so a `--config <path>` on a
+# wrapping one). The one exemption is the `fan_out_to_peers` body: its curl takes the HMAC header on
+# the stdin config (`--config -`, #9795; pinned by T-9795-1), which is not a docker flag. The exemption
+# removes that FUNCTION from the scan, so a docker `--config -` elsewhere is still flagged.
+# Comment-stripped and NOT single-line-scoped, so a `--config <path>` on a
 # `docker run` CONTINUATION line is caught (a per-line docker-scoped negative missed it).
 TOTAL=$((TOTAL + 1))
 if grep -qE '^[[:space:]]*readonly[[:space:]]+GHCR_DOCKER_CONFIG="\$\{DOCKER_CONFIG\}/config\.json"' "$DEPLOY_SCRIPT" \
    && grep -qE '^[[:space:]]*export[[:space:]]+DOCKER_CONFIG="\$DEPLOY_DOCKER_CONFIG_DIR"' "$DEPLOY_SCRIPT" \
-   && ! printf '%s\n' "$DOCKERCFG_CODE" | grep -cE -- >/dev/null '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
+   && ! printf '%s\n' "$DOCKERCFG_CODE" | awk '/^fan_out_to_peers\(\) \{$/{s=1} !s{print} s&&/^}$/{s=0}' | grep -cE -- >/dev/null '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
   PASS=$((PASS + 1)); echo "  PASS: GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG; no --config path override (login-write == cosign-mount by construction)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: GHCR_DOCKER_CONFIG not single-sourced, or a --config path override can split login-write from cosign-mount"
@@ -6217,8 +7402,8 @@ assert_zot_login_class() {
   rm -f "$sf"
 }
 
-# The 401 fixture is byte-accurate — reproduced against the pinned zot v2.1.20 with this
-# repo's exact accessControl. Measured there: GET /v2/ (the ONLY request docker login makes)
+# The 401 fixture is byte-accurate — reproduced against the pinned zot v2.1.22 (2026-10-08, #9252)
+# with this repo's exact accessControl. Measured there: GET /v2/ (the ONLY request docker login makes)
 # answers 200 or 401 and NEVER 403, even for a user with zero accessControl policies.
 echo "--- #6497 T-5B-1..5: docker login stderr classifies into the login_class enum ---"
 assert_zot_login_class "401 stale htpasswd (H3 — the live defect)" \
@@ -7534,7 +8719,7 @@ if (( ${#T3_PAY} > 200 )); then
   T3_BAD="${T3_BAD}\n    err payload is ${#T3_PAY} bytes, bound is 200"
 fi
 # NEGATIVE 2 — no control characters anywhere in the payload (TAB and BEL were both injected).
-if printf '%s' "$T3_PAY" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+if printf '%s' "$T3_PAY" | LC_ALL=C grep -c >/dev/null '[[:cntrl:]]'; then
   T3_BAD="${T3_BAD}\n    err payload still carries control characters"
 fi
 # NEGATIVE 3 — the dp.st. secret is redacted, checked against the WHOLE sink and not just the
@@ -9077,10 +10262,11 @@ gak_run_boot() {
   create_mock_doppler "$d/bin"; create_mock_logger "$d/bin"
   cat > "$d/bin/docker" <<'MOCK'
 #!/bin/bash
+case " $* " in *" --password-stdin "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac
 if [[ "${1:-}" == "inspect" ]]; then echo "${MOCK_BOOT_RUNNING:-true}"; exit 0; fi
 if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   _gtok=0; _gkey=0; _giso=0
-  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
   if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
   # shellcheck disable=SC2016
   if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
@@ -9094,14 +10280,14 @@ MOCK
   cat > "$d/bin/soleur-boot-emit" <<'MOCK'
 #!/bin/bash
 _t=0
-if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
 printf 'emit:%s env_token=%s\n' "$1" "$_t" >> "$MOCK_GAK_LOG"
 printf '%s %s %s\n' "$1" "$2" "$(cat "$SOLEUR_STAGE_DETAIL_DIR/$1" 2>/dev/null)" >> "$MOCK_BOOT_EMITS"
 MOCK
   cat > "$d/bin/systemd-run" <<'MOCK'
 #!/bin/bash
 _t=0
-if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
 if [[ "${MOCK_SYSTEMD_RUN_FAIL:-}" == "1" ]]; then printf 'systemd-run-failed env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"; exit 1; fi
 printf 'systemd-run env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"
 exit 0
@@ -9590,7 +10776,7 @@ _gak_static() {  # <ci-file> <boot-file>
   # The emitter must be CALLED from code, not merely named in a comment (test-design F14): comment
   # lines are stripped and the call shape (a classification and a level) is required.
   if ! grep -qx 'overlay_github_app_key() {' "$b1" || ! grep -qx 'github_app_key_present() {' "$b1" \
-     || ! grep -v '^[[:space:]]*#' "$b1" | grep -qE '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
+     || ! grep -v '^[[:space:]]*#' "$b1" | grep -cE >/dev/null '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
     GAK_WHY="the ci-deploy block does not define the overlay/presence functions or never calls the emitter"; rm -f "$b1" "$b2"; return 1
   fi
   if ! cmp -s "$b1" "$b2"; then GAK_WHY="the two blocks differ ($(cmp "$b1" "$b2" 2>&1 | head -1))"; rm -f "$b1" "$b2"; return 1; fi
@@ -9698,7 +10884,7 @@ gak_row 7.14 "token present, image unverified (bare tag): the signed-image gate 
 gak_row 7.14b "WARN-mode cosign FAILURE (digest ref, rc 3) is treated as verified" cosignfail ci \
   'if (( VERIFY_RC == 0 )); then' 'if (( VERIFY_RC == 0 || VERIFY_RC == 3 )); then'
 gak_row 7.14c "the digest-shape gate accepts any non-empty ref again (a matching tag ref gets the key)" tagref boot \
-  "*) if printf '%s\\n' \"\$2\" | grep -qxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}'; then _gak_ref_ok=1; fi ;;" "*) _gak_ref_ok=1 ;;"
+  "*) if printf '%s\\n' \"\$2\" | grep -cxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}' >/dev/null; then _gak_ref_ok=1; fi ;;" "*) _gak_ref_ok=1 ;;"
 
 # (b) the key decision's signing identity: main of jikig-ai/soleur only (verifier-side pin).
 gak_row 7.b1 "the workflow-REF pin is dropped: a branch run calling reusable-release.yml@main gets the key" sigbranch ci \
@@ -9928,6 +11114,207 @@ fi
 rm -rf "$GAK_FIX"
 unset GAK_PRD_KEY GAK_ISO_KEY GAK_RETIRED_KEY GAK_ISO_MARK GAK_PRD_MARK
 
+# #9795 (lint Rule E, #9597) -- fan_out_to_peers must feed the HMAC signature header on curl's
+# STDIN config, never its argv (/proc/<pid>/cmdline and `ps` are readable by every local user).
+# Executes the real function with a curl stub that APPENDS its argv and its stdin to separate
+# files, then pins the request shape (URL, body, content type, one call) and the CORRECT signature.
+FO_FIX="$(mktemp -d)"
+FO_ARGV="$FO_FIX/argv"; FO_STDIN="$FO_FIX/stdin"; : > "$FO_ARGV"; : > "$FO_STDIN"
+printf '%s\n' '[{"id":"deploy-peer","trigger-rule":{"match":{"secret":"fixture-fanout-secret"}}}]' > "$FO_FIX/hooks.json"
+awk '/^fan_out_to_peers\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT" > "$FO_FIX/fn.sh"
+FO_PAYLOAD='{"command":"deploy fixture"}'
+FO_WANT_SIG="$(printf '%s' "$FO_PAYLOAD" | openssl dgst -sha256 -hmac fixture-fanout-secret | sed 's/.*= //')"
+FO_RC=0
+(
+  set -uo pipefail
+  export LOG_TAG=fanout-test SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="$FO_FIX/hooks.json"
+  SSH_ORIGINAL_COMMAND="deploy fixture"; ip() { return 0; }; logger() { :; }
+  # A bounded read: a mutant that stops feeding stdin must fail the rows, not hang the suite on the runner's stdin.
+  curl() { printf '%s\n' "$*" >> "$FO_ARGV"; timeout 2 cat >> "$FO_STDIN" || true; printf 202; }
+  # shellcheck disable=SC1091
+  source "$FO_FIX/fn.sh"
+  fan_out_to_peers
+) > /dev/null 2>&1 < /dev/null || FO_RC=$?
+TOTAL=$((TOTAL + 1))
+if [[ -s "$FO_FIX/fn.sh" && "$FO_RC" -eq 0 && "$(wc -l < "$FO_ARGV")" -eq 1 && "${#FO_WANT_SIG}" -eq 64 ]] \
+   && ! /usr/bin/grep -qiE 'x-signature|sha256=|[0-9a-f]{64}' "$FO_ARGV" \
+   && /usr/bin/grep -qE -- '(^| )--config -( |$)' "$FO_ARGV" \
+   && /usr/bin/grep -qE -- '^--disable --noproxy \* ' "$FO_ARGV" \
+   && /usr/bin/grep -qF -- '-X POST http://10.9.9.9:9000/hooks/deploy-peer' "$FO_ARGV" \
+   && /usr/bin/grep -qF -- "-H Content-Type: application/json" "$FO_ARGV" \
+   && /usr/bin/grep -qF -- "--data-binary $FO_PAYLOAD" "$FO_ARGV"; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9795-1 fan-out: one curl to the peer hook with the JSON body and content type, no signature or 64-hex run in argv, --config - present, transport confined (--disable --noproxy)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9795-1 fan-out argv carries the signature or a 64-hex run, lacks --config -, is not transport-confined, or the request shape is wrong (rc=$FO_RC argv: $(cut -c1-240 "$FO_ARGV" 2>/dev/null))"
+fi
+TOTAL=$((TOTAL + 1))
+if [[ "$(cat "$FO_STDIN")" == "header = \"X-Signature-256: sha256=${FO_WANT_SIG}\"" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9795-2 fan-out: the stdin config is exactly the HMAC-SHA256 of the payload under the hook secret"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9795-2 fan-out stdin config is not the expected X-Signature-256 header for this payload and secret (stdin: $(cut -c1-140 "$FO_STDIN" 2>/dev/null))"
+fi
+rm -rf "$FO_FIX"; unset FO_FIX FO_ARGV FO_STDIN FO_RC FO_PAYLOAD FO_WANT_SIG
+
+# #9799 item 3 -- the hook SECRET itself must not ride argv either. T-9795 moved the signature
+# header onto curl's stdin config; the key was still `openssl dgst -hmac "$secret"`, readable in
+# /proc/<pid>/cmdline by every local user. The signer is now python3 with the key in that one
+# child's ENVIRONMENT (owner-only /proc/<pid>/environ). These rows execute the REAL function.
+# fo99_run <secret> <ssh-original-command> <real|missing|garbage> [rec]: one fan_out_to_peers call
+# in a fresh $FO99/run. `rec` also records every `openssl` invocation (then delegates to it).
+# Leaves: curl.argv curl.stdin curl.n curl.keyenv py.argv py.keyenv ossl.argv log rc payload.
+FO99="$(mktemp -d)"
+assert_fixture_dir "$FO99"
+awk '/^fan_out_to_peers\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT" > "$FO99/fn.sh"
+fo99_run() {
+  local secret="$1" cmd="$2" pymode="$3" rec="${4:-}" d="$FO99/run"
+  assert_fixture_dir "$d"
+  rm -rf "$d"; mkdir -p "$d"
+  local f
+  for f in curl.argv curl.stdin curl.n curl.keyenv py.argv py.keyenv ossl.argv log; do : > "$d/$f"; done
+  jq -n --arg s "$secret" '[{id:"deploy-peer","trigger-rule":{match:{secret:$s}}}]' > "$d/hooks.json"
+  jq -cn --arg cmd "$cmd" '{command:$cmd}' > "$d/payload"
+  local rc=0
+  (
+    set -uo pipefail
+    export LOG_TAG=fanout-test SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="$d/hooks.json"
+    SSH_ORIGINAL_COMMAND="$cmd"; ip() { return 0; }
+    logger() { printf '%s\n' "$*" >> "$d/log"; }
+    curl() {
+      printf '%s\n' "$*" >> "$d/curl.argv"; printf 'x\n' >> "$d/curl.n"
+      # ANY variable carrying the secret into curl's environment is a leak, whatever it is named.
+      _fo99_env="$(env)"; [[ "$_fo99_env" == *"$secret"* ]] && echo leak >> "$d/curl.keyenv"
+      timeout 2 cat >> "$d/curl.stdin" || true; printf 202
+    }
+    case "$pymode" in
+      real) python3() { printf '%s\n' "$*" >> "$d/py.argv"; printf '%s\n' "${HMAC_KEY:+set}" >> "$d/py.keyenv"; command python3 "$@"; } ;;
+      missing) python3() { printf '%s\n' "$*" >> "$d/py.argv"; return 127; } ;;
+      garbage) python3() { printf '%s\n' "$*" >> "$d/py.argv"; cat > /dev/null; printf 'not-a-signature'; } ;;
+      # 64 hex then a newline and junk: only an end-anchored 64-hex guard refuses it
+      garbagenl) python3() { printf '%s\n' "$*" >> "$d/py.argv"; cat > /dev/null; printf '%064d\njunk' 0 | tr 0 a; } ;;
+      short63) python3() { printf '%s\n' "$*" >> "$d/py.argv"; cat > /dev/null; printf '%063d' 0 | tr 0 a; } ;;
+      long65) python3() { printf '%s\n' "$*" >> "$d/py.argv"; cat > /dev/null; printf '%065d' 0 | tr 0 a; } ;;
+    esac
+    if [[ "$rec" == "rec" ]]; then
+      openssl() { printf '%s\n' "$*" >> "$d/ossl.argv"; command openssl "$@"; }
+    fi
+    # shellcheck disable=SC1091
+    source "$FO99/fn.sh"
+    fan_out_to_peers
+  ) > /dev/null 2>&1 < /dev/null || rc=$?
+  printf '%s\n' "$rc" > "$d/rc"
+}
+fo99_oracle() {  # <secret> <payload-file>: the OLD signer, as an independent reference
+  printf '%s' "$(cat "$2")" | openssl dgst -sha256 -hmac "$1" | sed 's/.*= //'
+}
+FO99_SECRETS=("fixture-fanout-secret"
+  "$(printf 'abcdefghij%.0s' {1..7} | cut -c1-63)" "$(printf 'abcdefghij%.0s' {1..7} | cut -c1-64)"
+  "$(printf 'abcdefghij%.0s' {1..7} | cut -c1-65)" "$(printf 'abcdefghij%.0s' {1..21} | cut -c1-200)"
+  "a\"b\\c \$d 'e;f|g&h"
+  " lead-and-trail " "é-ünï-ключ" $'multi\nline' "-dash" 'trailing-backslash\')
+FO99_CMDS=("deploy fixture" "deploy \"q\" \\ 'x' é ü" "deploy $(printf 'z%.0s' {1..300})")
+FO99_LONG="${FO99_SECRETS[4]}"
+FO99_RAN=0; FO99_BAD=0; FO99_BADMSG=""
+for _s in "${FO99_SECRETS[@]}"; do
+  for _c in "${FO99_CMDS[@]}"; do
+    fo99_run "$_s" "$_c" real
+    FO99_RAN=$((FO99_RAN + 1))
+    _got="$(sed -n 's/^header = "X-Signature-256: sha256=\(.*\)"$/\1/p' "$FO99/run/curl.stdin")"
+    _want="$(fo99_oracle "$_s" "$FO99/run/payload")"
+    if [[ ! "$_got" =~ ^[0-9a-f]{64}$ || "$_got" != "$_want" || "$(cat "$FO99/run/rc")" != "0" ]]; then
+      FO99_BAD=$((FO99_BAD + 1)); FO99_BADMSG+=" [${#_s}B/${#_c}c rc=$(cat "$FO99/run/rc") got=${_got:0:12}]"
+    fi
+  done
+done
+TOTAL=$((TOTAL + 1))
+if [[ "$FO99_RAN" -eq 33 && "$FO99_BAD" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-1 fan-out: 33 (11 secrets x 3 commands) signatures are 64-hex and byte-identical to openssl dgst -sha256 -hmac, incl. 63/64/65/200-byte, shell-hostile, space-padded, non-ASCII and multi-line keys"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-1 fan-out signature matrix: ran=$FO99_RAN (want 33) mismatches=$FO99_BAD:$FO99_BADMSG"
+fi
+
+FO99_ARGV_OK=1; FO99_ARGV_MSG=""; FO99_ARGV_N=0
+for _s in "fixture-fanout-secret" "$FO99_LONG"; do
+  fo99_run "$_s" "deploy fixture" real rec
+  FO99_ARGV_N=$((FO99_ARGV_N + 1))
+  if /usr/bin/grep -qF -- "$_s" "$FO99/run/curl.argv" "$FO99/run/py.argv" "$FO99/run/ossl.argv" "$FO99/run/log" "$FO99/run/curl.stdin" 2>/dev/null \
+     || [[ -s "$FO99/run/ossl.argv" || "$(wc -l < "$FO99/run/curl.n")" -ne 1 || "$(wc -l < "$FO99/run/py.argv")" -ne 1 ]] \
+     || ! /usr/bin/grep -qE '^-I -c ' "$FO99/run/py.argv"; then
+    FO99_ARGV_OK=0; FO99_ARGV_MSG+=" [${#_s}B: ossl=$(wc -c < "$FO99/run/ossl.argv")B py=$(cut -c1-60 "$FO99/run/py.argv")]"
+  fi
+done
+TOTAL=$((TOTAL + 1))
+if [[ "$FO99_ARGV_OK" -eq 1 && "$FO99_ARGV_N" -eq 2 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-2 fan-out: the hook secret appears on no argv (curl, python3, openssl), in no log line and not in curl's stdin config; openssl is never invoked; python3 runs once as -I -c"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-2 fan-out leaks the secret (argv, log or stdin config) or still shells out to openssl$([[ "$FO99_ARGV_N" -eq 2 ]] || echo "; the loop ran ${FO99_ARGV_N}x (want 2)"):$FO99_ARGV_MSG"
+fi
+
+fo99_run "fixture-fanout-secret" "deploy fixture" real
+TOTAL=$((TOTAL + 1))
+if [[ "$(cat "$FO99/run/py.keyenv")" == "set" && "$(cat "$FO99/run/curl.keyenv")" == "" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-3 fan-out: the key is in the python3 call's environment as HMAC_KEY, and the secret is in NO variable of curl's environment under any name"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-3 key environment channel wrong (python3 saw HMAC_KEY='$(cat "$FO99/run/py.keyenv")', curl env carries the secret='$(cat "$FO99/run/curl.keyenv")')"
+fi
+
+FO99_REFUSE_OK=1; FO99_REFUSE_MSG=""; FO99_REFUSE_N=0
+for _case in "empty||real|webhook secret unavailable" "null|null|real|webhook secret unavailable" \
+             "py127|fixture-fanout-secret|missing|could not compute the request signature" \
+             "garbage|fixture-fanout-secret|garbage|could not compute the request signature" \
+             "hexplusjunk|fixture-fanout-secret|garbagenl|could not compute the request signature" \
+             "short63|fixture-fanout-secret|short63|could not compute the request signature" \
+             "long65|fixture-fanout-secret|long65|could not compute the request signature"; do
+  FO99_REFUSE_N=$((FO99_REFUSE_N + 1))
+  IFS='|' read -r _label _sec _mode _logmsg <<< "$_case"
+  fo99_run "$_sec" "deploy fixture" "$_mode"
+  if [[ "$(cat "$FO99/run/rc")" != "1" || -s "$FO99/run/curl.n" || -s "$FO99/run/curl.stdin" ]] \
+     || ! /usr/bin/grep -qF -- "FANOUT: $_logmsg" "$FO99/run/log"; then
+    FO99_REFUSE_OK=0; FO99_REFUSE_MSG+=" [$_label rc=$(cat "$FO99/run/rc") curl_calls=$(wc -l < "$FO99/run/curl.n") log=$(cut -c1-80 "$FO99/run/log" | head -1)]"
+  fi
+done
+TOTAL=$((TOTAL + 1))
+if [[ "$FO99_REFUSE_OK" -eq 1 && "$FO99_REFUSE_N" -eq 7 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-4 fan-out fails closed: empty secret, the string null, python3 unavailable (127), a non-hex signature, 64 hex plus a trailing line, 63 hex and 65 hex each return 1, log a FANOUT line and never call curl"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-4 fan-out did not fail closed (cases run: ${FO99_REFUSE_N}, want 7):$FO99_REFUSE_MSG"
+fi
+
+TOTAL=$((TOTAL + 1))
+FO99_SNIP_N="$(/usr/bin/grep -cF 'HMAC_KEY="$secret" python3 -I -c' "$DEPLOY_SCRIPT" || true)"
+if ! /usr/bin/grep -qE 'openssl[[:space:]]+(dgst|mac)' "$DEPLOY_SCRIPT" && [[ "$FO99_SNIP_N" -eq 1 ]] \
+   && ! /usr/bin/grep -qE '(^|[^A-Za-z_])export[[:space:]]+HMAC_KEY' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-5 ci-deploy.sh has no openssl dgst/mac signing site, one per-command HMAC_KEY python3 signer, and HMAC_KEY is never exported"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-5 source census: openssl dgst/mac present, signer count=$FO99_SNIP_N (want 1), or HMAC_KEY exported"
+fi
+# The production script runs under `set -euo pipefail`. Today every caller of fan_out_to_peers sits
+# in an `if` condition (errexit is off for the whole function there), so the `|| sig=""` guard is
+# defence for a future BARE call, where an unguarded failing `sig=$(...)` would abort the deploy
+# script instead of returning 1. The rows above run without errexit, so this one drives the real
+# function as a bare call under `bash -euo pipefail` with python3 absent and requires the FANOUT
+# line to be logged: the line is written only if the guard let execution reach the shape check.
+FO99_E="$FO99/errexit"; assert_fixture_dir "$FO99_E"; mkdir -p "$FO99_E"; : > "$FO99_E/log"; : > "$FO99_E/curl"
+jq -n --arg s "fixture-fanout-secret" '[{id:"deploy-peer","trigger-rule":{match:{secret:$s}}}]' > "$FO99_E/hooks.json"
+FO99_E_RC=0
+FO99_E="$FO99_E" FO99_FN="$FO99/fn.sh" bash --noprofile --norc -c '
+  set -euo pipefail
+  export LOG_TAG=fanout-test SOLEUR_DEPLOY_PEERS=10.9.9.9 SOLEUR_HOOKS_JSON="$FO99_E/hooks.json"
+  SSH_ORIGINAL_COMMAND="deploy fixture"; ip() { return 0; }
+  logger() { printf "%s\n" "$*" >> "$FO99_E/log"; }
+  curl() { printf x >> "$FO99_E/curl"; printf 202; }
+  python3() { return 127; }
+  source "$FO99_FN"
+  fan_out_to_peers
+' > /dev/null 2>&1 < /dev/null || FO99_E_RC=$?
+TOTAL=$((TOTAL + 1))
+if [[ "$FO99_E_RC" -ne 0 && ! -s "$FO99_E/curl" ]] && /usr/bin/grep -qF 'FANOUT: could not compute the request signature' "$FO99_E/log"; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-6 fan-out under set -euo pipefail with python3 absent: the failure is LOGGED and returned (not a silent abort of the deploy script), and curl is never called"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-6 fan-out under errexit with python3 absent (rc=$FO99_E_RC curl_bytes=$(wc -c < "$FO99_E/curl") log=$(cut -c1-90 "$FO99_E/log" | head -1)) — the signing failure aborted before the FANOUT line or a request was forwarded"
+fi
+rm -rf "$FO99"; unset FO99 FO99_E FO99_E_RC FO99_ARGV_N FO99_REFUSE_N _s _c _got _want _case _label _sec _mode _logmsg FO99_SECRETS FO99_CMDS FO99_LONG FO99_RAN FO99_BAD FO99_BADMSG FO99_ARGV_OK FO99_ARGV_MSG \
+  FO99_REFUSE_OK FO99_REFUSE_MSG FO99_SNIP_N; unset -f fo99_run fo99_oracle
+
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 # Assertion-count floor (#8077 review): a suite that silently narrows (a block skipped, a loop that
@@ -9950,7 +11337,35 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #6129: raised 485 -> 490 with the ENFORCE-default rows (4 #6129 verify rows + the T-1a-4 enforce arm).
 # #8016: raised 490 -> 500 with the 10 PDEATHSIG rows (Guard 2: 2 recorded-argv rows; Guard 1: the
 # real-tree scan, 4 must-flag fixtures, 3 must-pass inputs). Measured: 500 ran.
-CI_DEPLOY_ASSERT_FLOOR=500
+# #9795: raised 500 -> 502 with T-9795-1/-2 (the fan-out HMAC header on curl's stdin, not argv).
+# #9799: raised 502 -> 508 with T-9799-1..6 (the fan-out HMAC key off argv: 33-comparison byte-identity
+# matrix, no secret on any argv, log or stdin config, key in the python3 environment only, seven
+# fail-closed arms, source census, and the errexit arm that pins the `|| sig=""` guard).
+# #9871: raised 522 -> 568 with the 46 canary DIAG-bundle rows (D8; D1a-i; D2 x2 + D2c; D3a-h incl. D3c2 and D3c3; D4a-g incl. the
+# D4f control; D5a-f; D6a-e; D9a-d).
+# #2640: raised 508 -> 522 with the 13 CWI rows (9 pre-panel + 9b/10/11a/11b/12
+# review-round additions: foreign-ledger stamp, vacuous-green, reason channel,
+# timeout source pin). (Guard 1: recorded-argv + ordering +
+#   green/no-page + FAIL/infra/timeout classification + soak accumulate-hold-reset
+#   + ledger-alias skip).
+# #9860 (2026-10-10): raised 568 -> 595 (measured on the live tree) with the 27 kernel-denial rows: D10a (placement, shape,
+# recorder), D10b (a realistic AppArmor mount denial, closed key set), D10c x12 (ladder states: readable, journal hint,
+# silent-empty, both hint-only, empty + refused, both absent, unrelated denial, banner, non-procfs mount, seccomp 1326,
+# ALLOWED not a hit, 9999 cap), D10d/d2 (both rungs hang), D10e/e2/e3/e4 (4 MB streams, newest kept), D10f + control
+# (credential scrub), D10g control + census + D10g2, D10h (200-char tail boundary) and D11 (sdk_noproc argv).
+# #9860 review (2026-10-11): raised 595 -> 600 with the five review-round rows: D10c x4 (printk echo is not an audit record, an
+# unanchored audit-looking prefix, a non-zero rc with lines reads error, a path-shaped fstype is dropped) and D10g3 (the field-key
+# allowlist spelled identically in code and runbook).
+# #9860 fix round (2026-10-11): raised 600 -> 608 (measured 608/608 on the live tree) with eight rows: D10c x7 (rc 1 with no hint and
+# no lines reads error, a non-zero exit after an anchored denial still reports it, an unbalanced fstype quote, an ALLOWED record
+# containing `type=1326 audit(`, and three multi-denial newest-first selections) and D10h2 (the 130-character field cut).
+# #9860 main sync (2026-10-11): raised 608 -> 609 (measured 609/609 live) for the one CWI-1 row merged from main (vitest --no-color pin).
+# #10045 (2026-10-11): raised 609 -> 618 (measured on the live tree) with the nine kdeny-grant rows: D10k1 (privileged arm
+# answers first, zero unprivileged reads), D10k2 (silent-empty under the grant reads j=empty), D10k3/rs+gnu (grant-absent
+# fallback under BOTH recorded denial bodies), D10k4/rs+gnu (denied + readable unprivileged still reaches j=ok), D10k5
+# (accepted-but-failed reads j=error, no re-run), D10k6 (accepted-run sudo: warning stripped, empty stays empty),
+# D10k7 (warning + silent failure is no masquerading denial).
+CI_DEPLOY_ASSERT_FLOOR=618
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

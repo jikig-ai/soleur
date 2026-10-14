@@ -319,7 +319,7 @@ evaluate_nic() {
   max_rb="$(printf '%s\n' "$scoped" | grep -oE 'reboot_count=[0-9]+' | cut -d= -f2 | sort -n | tail -1)"
   [[ -n "$max_rb" ]] || max_rb=0
   any_false=false
-  printf '%s\n' "$scoped" | grep -qE 'nic_ok=false' && any_false=true
+  grep -qE 'nic_ok=false' <<<"$scoped" && any_false=true
 
   # (1) The guard could not READ its own instrument. Zero evidence — never decode it as an H1/H2
   # NIC absence, and never let it look like a converge decision. This is the guard's own doctrine
@@ -422,7 +422,7 @@ evaluate_nic() {
     recent_boot=true
   fi
 
-  if [[ "$max_rb" -gt 0 ]] || [[ "$any_false" == true ]] || printf '%s\n' "$scoped" | grep -qE 'converged_by=reboot'; then
+  if [[ "$max_rb" -gt 0 ]] || [[ "$any_false" == true ]] || grep -qE 'converged_by=reboot' <<<"$scoped"; then
     NIC_VERDICT="ADVISORY"
     if [[ "$max_rb" -gt 0 ]] && [[ -z "$age" ]]; then
       # No usable uptime_s: the boot cannot be placed in time at all. Report the counter as
@@ -533,7 +533,7 @@ SCOPED="$(printf '%s\n' "$TRUSTED" | zot_scope_to_boot "$NEWEST_BOOT")"
 # --- Evidence extraction (newest boot only) ----------------------------------------------
 # Condition A — any OOM exit.
 has_137=false
-if printf '%s\n' "$SCOPED" | grep -qE 'exit_code=137'; then has_137=true; fi
+if grep -qE 'exit_code=137' <<<"$SCOPED"; then has_137=true; fi
 
 # Condition C — journald kernel-OOM window backstop peak.
 max_oom5m="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values oom_kills_5m | sort -n | tail -1)"
@@ -541,7 +541,7 @@ max_oom5m="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values oom_kills_5m | sor
 
 # oom_killed=true on any newest-boot row (cgroup-cap-contained OOM, for cause attribution).
 oom_killed_true=false
-if printf '%s\n' "$SCOPED" | grep -qE 'oom_killed=true'; then oom_killed_true=true; fi
+if grep -qE 'oom_killed=true' <<<"$SCOPED"; then oom_killed_true=true; fi
 
 # zot_restarts non-sentinel samples, in chronological (row) order — the climb evidence.
 restarts="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_restarts)"

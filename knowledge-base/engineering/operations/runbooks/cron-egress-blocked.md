@@ -641,7 +641,7 @@ re-asserts a deny only when that resource's `triggers_replace` has moved; there 
 |---|---|---|
 | Registry (`host=soleur-registry`) | cloud-init only | A host replace through `registry-host-replace-dispatch.yml` after `scripts/registry-replace-preflight.sh` is clean. It is an outage window on the fleet's sole pull path ([registry-host-replace-dispatch.md](./registry-host-replace-dispatch.md)) and it dispatches `apply-web-platform-infra.yml`, so it needs that workflow enabled and the operator's approval. For an accident-guard loss, weigh whether the window is proportionate. |
 | web-1 | `terraform_data.zot_consumer_probe_install` (targeted by `apply-web-platform-infra.yml`) | No workflow lever without a trigger change: change `ghcr_deny_sh` or the probe files it hashes in a PR, or ask the operator to dispatch the owning workflow. A resource tainted by a failed deny assertion is re-applied the same way (server.tf's FATAL text names it). |
-| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow: bump the `dpf-web2-remote-exec-v1` trigger sentinel in server.tf or dispatch it after a taint. No plain `web-host-replace` until the #9372 rebirth (see the web-2 residual below). |
+| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow: bump the `dpf-web2-remote-exec-vN` trigger sentinel in server.tf or dispatch it after a taint. No plain `web-host-replace` until the #9372 rebirth (see the web-2 residual below). **[Superseded 2026-10-12 (#9372): the rebirth ran on 2026-10-06 and is retired; see the 2026-10-11 marker in web-host-replace.md and the update below the web-2 residual.]** |
 
 Whether an apply workflow can run right now is operator-owned state: read it live (the dated
 note under "Known residual: web-1 until the apply workflow runs" below records one observation).
@@ -667,6 +667,18 @@ makes the verdict inconclusive (a `ghcr_deny_probe_blind` after about an hour).
 
 ### Known residual: running web-2
 
+*Superseded 2026-10-07 (#9393, delivery mechanism merged): the "rebirth is the delivery
+event" decision below was superseded by the issue's own code arm — the three artifacts it
+names (the carved `cron-egress-allowlist-cidr.txt`, `cron-egress-resolve.sh`, and
+`cron-egress-postapply-assert.sh`) now ride `deploy_pipeline_fix_web2`'s
+`triggers_replace`, file provisioners and a dedicated secret-free remote-exec that runs
+the assert (the probe), targeted by `apply-deploy-pipeline-fix.yml` and re-fired on every
+artifact edit and web-2 replacement. What rebirth still owns is the part OUTSIDE the
+issue's three-artifact scope: the loader (`cron-egress-nftables.sh`), the alarm, and the
+systemd units stay birth-frozen until the #9372 rebirth — along with every other
+web-2 file that has no running-host channel. The text below is the pre-delivery record,
+kept unedited.*
+
 *As of 2026-10-03; this section's removal trigger is the #9372 rebirth run (#9393 also needs the web-1 apply to close).* `terraform_data.cron_egress_firewall`
 is web-1-only, so the running web-2 keeps the old allow list and resolver, and has no
 probe, until it is **reborn** by the single-use gated volume rebirth (#9372, ADR-263). A
@@ -685,6 +697,8 @@ is the #9372 rebirth run.
 ([run 37209725107](https://github.com/jikig-ai/soleur/actions/runs/37209725107), see the
 superseding note under "Known residual: web-1 until the apply workflow runs"); the #9372
 rebirth is the remaining closing event for #9393.*
+
+*Updated 2026-10-12 (#9372): the rebirth ran on 2026-10-06 and its workflow is retired, so "the #9372 rebirth" above is no longer a pending event. #9393 is CLOSED. The loader, alarm and systemd units this section calls birth-frozen reach a running web-2 only through a host replace, which web-host-replace.md (2026-10-11 marker) no longer holds back for the ext4 volume.*
 
 ### Known residual: web-1 until the apply workflow runs
 
@@ -709,7 +723,7 @@ list", and the closing instruction to re-evaluate on 2026-10-17 and ask for the 
 (the approval was granted and used). Still true, and only while the workflow reads
 `disabled_manually`: the conditional statements that a merge triggers no apply and that a
 registry-render-input merge leaves a pending replace that nothing re-fires. Web-2 is unchanged
-and waits for the #9372 rebirth (#9393 stays open, no plain `web-host-replace`). In the "Hosts-file
+and waits for the #9372 rebirth (#9393 stays open, no plain `web-host-replace`). **[Superseded 2026-10-12 (#9372): the rebirth ran on 2026-10-06 and is retired, #9393 is CLOSED, and the web-2 half of the next sentence is no longer outstanding.]** In the "Hosts-file
 deny lost" section above, the clause "until the #9275 carve is delivered, #9393" is satisfied on
 web-1, outstanding on web-2, and not applicable to the registry host.
 
@@ -770,8 +784,8 @@ approval again.
   loader. The loader runs first, under `timeout -k 2 60` (egress is open until it does), then
   the event posts, then the tick fails if the re-run failed: a failed or timed-out re-run
   (`loader_rc` 124) still reports, and only a loader that is killed with the whole unit at 120 s
-  could lose the event (the alarm email still fires). The event now says which cause class fired (a resolver delivered after #9392; an older resolver, web-2
-  until its rebirth, sends the old shape with no `host`):
+  could lose the event (the alarm email still fires). The event now says which cause class fired (a resolver delivered after #9392; an older resolver — web-2
+  until the next `apply-deploy-pipeline-fix.yml` apply re-delivers `cron-egress-resolve.sh` via `deploy_pipeline_fix_web2` (#9393) — sends the old shape with no `host`):
 
   | `extra` field | Reads as |
   |---|---|
@@ -781,7 +795,8 @@ approval again.
   | `log_present=absent` with both other rules `present` | only the default-drop LOG rule is gone: the drop still holds, but the `egress_blocked` page loses its feed, so the heal still runs |
   | `read_retried=true` | the first read failed and a retry was needed; `rc_*` are the LAST attempt's statuses, so `read_retried=true` with both `rc_*` 0 means the first read failed and the second succeeded |
   | `loader_rc` | the loader re-run's exit status: 0 ok, 124 timed out (a wedged loader, usually the same netlink contention), 137 killed after ignoring the TERM (the `-k 2` grace), anything else is the loader's own failure |
-  | `host` | the host that emitted the event (web-1 or web-2); an older resolver (web-2 until its rebirth) sends no `host` and no new fields |
+  | `host` | the host that emitted the event (web-1 or web-2); an older resolver (web-2 until its next `deploy_pipeline_fix_web2` apply, #9393) sends no `host` and no new fields |
+  | `gw_accept`, `gw_member_scoped` | `present`, `absent`, `unreadable` or `skip` — the two scope markers (#9534) the presence checks cannot see: `gw_accept` is the `SOLEUR-EGRESS` docker0→gateway `:8443` accept, `gw_member_scoped` the member drop's `saddr != <gw>` scoping — both matched against the gateway's **live** inspect-derived IP, so a ruleset baked against a stale address reads `absent`, not `present`. They are probed only while the gateway is running *and* yields a single IPv4 (`skip` otherwise — gw down, IP-less inspect, or docker unreachable; disambiguate via `docker_since` and missed `cron-egress-resolve` check-ins — `skip` is the gw-down posture where the unscoped drop is CORRECT and asserting it would heal-loop). `unreadable` = the backing `nft` read failed (a read problem, never reported as `absent`). An `absent` with the gw running means the ruleset was baked in a gw-down/IP-less window (or against a stale IP) and is silently killing every upstream dial — the `egress_gw_probe` `allow_rc=28` stream. **Recurring `gw_*=absent` with `loader_rc=0` ⇒ the host's loader predates the scoped form** (web-2's birth-frozen loader): the heal re-runs but re-bakes unscoped every tick — re-deliver via an `apply-deploy-pipeline-fix.yml` apply (the `#9534` merge channel; `deploy_pipeline_fix_web2` carries the loader + deny file). Title caveat: the event message still reads `(jump/drop absent)` on a scope-only heal — trust the fields, not the title |
   | `docker_since` just before the tick | Docker restarted and reprogrammed `DOCKER-USER` |
   | `loader_since` just before the tick | a loader run finished shortly before the tick (the stamp is when the loader unit last became active, not an overlap detector) |
   | both rules `absent` (statuses 0, or 1 with the ENOENT text), `read_retried=false`, nothing recent | a real external flush |
@@ -853,3 +868,136 @@ SSH:
    resolver could not confirm the jump or default-drop rule and re-ran the loader;
    the event's `extra` names the cause class (decode table under "Related signals"),
    so the live ruleset state is observable without logging in.
+
+### Egress gateway (Better Stack alerts)
+
+Three Terraform-managed native alerts over the Vector Logs source
+(`apps/web-platform/infra/betterstack-logs-alerts.tf`, `egress_gw_*`):
+
+#### `soleur-egress-gw-deny-spike-prd` (higher_than 20 / 300 s)
+
+**What it means.** Squid logged `TCP_DENIED` on `CONTAINER_NAME=soleur-egress-gw`
+more than 20 times in 5 minutes. During the PR-A dark launch the only legitimate
+deny traffic is the resolver's synthetic probe (~1 row per 5 min), so any
+sustained burst means a session (or a compromised forwarder) is attempting
+CONNECT to denied destination classes — metadata `169.254.0.0/16`, RFC1918,
+CGNAT, ULA, NAT64, 6to4.
+
+**Decode (no SSH).** Better Stack Logs query on the `prd` Logs source:
+
+```
+CONTAINER_NAME:soleur-egress-gw AND message:TCP_DENIED
+```
+
+Each row is the `soleur_json` logformat object: `requested_host`,
+`resolved_ip`, `workspace` (the `%un` attribution = workspaceId), `decision`,
+`decision_reason`. Group by `workspace` to name the offending tenant.
+
+**Revocation.** Session tokens are files under
+`/var/lib/soleur/egress-tokens/<token>` on the web host, mirrored into the app
+container (rw) and the gateway (ro). Deleting the token file revokes that
+session's gateway auth at the next CONNECT (instant for new connections).
+Revocation is a workspace-owner action — the app-side entitlement toggle
+deletes the file; if the spike names a workspace, the owner (or ops acting for
+them) flips **Settings → Agent web access** off.
+
+**What it is silent about.** Allowed-traffic abuse (volume/exfil over
+*permitted* CONNECTs — documented gap, spec open questions), and
+domain-fronting/SNI drift (Squid sees the CONNECT line only; the tunnel is
+opaque). Both are named residuals in the ADR.
+
+#### `soleur-egress-gw-probe-silent-prd` (lower_than fleet size / 900 s)
+
+**What it means.** Fewer DISTINCT `host_name`s emitted an `egress_gw_probe` row
+under `SYSLOG_IDENTIFIER=egress-gw-probe` than `var.web_hosts` over the last 15
+minutes — one host's beats can no longer mask the other's silence (pre-2026-10-12
+this alert counted ROWS, so web-1 emitting kept a dead web-2 pipeline green).
+The heartbeat is emitted by `run_egress_gw_probe` in `cron-egress-resolve.sh`
+every 5 minutes per host. A host's absence means its resolver timer stopped, its
+journal→Vector pipeline broke (a stale, birth-frozen `vector.toml` Source-4
+allowlist on that host is a measured failure mode — the tag must exist in the
+config the agent reads), or the probe function errored — that host's gateway
+allow/deny verification is dark.
+
+**Decode ladder:**
+
+1. Find WHICH host went quiet — the row count is fleet-wide but each row carries
+   `host_name`: Better Stack Logs query
+   `SYSLOG_IDENTIFIER:egress-gw-probe`, grouped by `host_name`, over the last
+   hour. The missing host is the fault domain.
+2. Sentry: look for a missed `cron-egress-resolve` check-in on that host (the
+   resolver's own dead-timer detector) — if that also went dark, the timer is
+   dead, not just the probe.
+3. Sentry `op=egress_gw_probe_fail` events — if the probe was emitting
+   `result=fail` before going dark, the silence is the resolver, not the
+   gateway; decode the fail itself in the `result=fail` stream ladder below.
+4. If neither, check that host's `/etc/vector/vector.toml` carry the
+   `egress-gw-probe` Source-4 entry — a config older than the tag's
+   introduction drops the rows at the filter while the probe runs (the
+   `journald_persistent` / `journald_persistent_web2` provisioners re-deliver
+   and restart Vector on every infra apply; verify the apply actually ran for
+   that host).
+
+**Repair.** The resolver is self-healing for *ruleset* drift only; a dead timer
+restores via `systemctl` on the next boot or the next `cron-egress-firewall`
+provisioner run — the repair path is the same as any dead resolver tick (see
+the `enforcement_missing` decode table above). A gateway container that is down
+is re-created by `egress-gateway-bootstrap.sh`, re-delivered by the
+`terraform_data.egress_gateway` provisioner on the next infra apply.
+
+#### `soleur-egress-gw-probe-fail-prd` (higher_than 0 / 900 s)
+
+**What it means.** Any `egress-gw-probe` row in 15 min carrying `result=fail`
+(allow leg refused, or deny leg BYPASSED — Squid accepted a denied destination:
+the private-CIDR policy is not in force) or `reason=gw_absent` (the probe found
+the gateway container missing). This is the paging row the Sentry op
+`egress_gw_probe_fail` never had — a `deny_bypassed` verdict is
+security-critical on first sight.
+
+**Decode.** Query `SYSLOG_IDENTIFIER:egress-gw-probe AND result=fail` (or
+`reason=gw_absent`) on the `prd` source and read the row's `host_name` — the
+offending host is on the row. The `reason` field names the verdict:
+`allow_rc=<n> code=<http>` (the allow-leg CONNECT through the gateway failed —
+decode below), `deny_bypassed` (the metadata-IP CONNECT SUCCEEDED — the deny
+policy is not in force; treat as an incident), `gw_absent` (no
+`soleur-egress-gw` container or the token dir missing — the
+`egress-gateway-bootstrap.sh` / `terraform_data.egress_gateway*` delivery path
+is the repair).
+
+#### `egress_gw_probe` `result=fail` stream
+
+**Decode ladder for `allow_rc=28`** (the allow-leg CONNECT times out):
+
+1. **Docker >= 28 direct-routing protection (measured live 2026-10-11, web-1).**
+   Docker installs a raw-PREROUTING drop for packets addressed to the gw's
+   bridge subnet arriving via any interface other than the bridge — so the
+   app container's SYN to `<gw>:8443` dies BEFORE conntrack and `DOCKER-USER`.
+   Signature (all remote-readable): every `enforcement_missing` marker green
+   (or no events at all), Squid's access log silent — the CONNECT never
+   arrives (`--grep soleur-egress-gw` on the Better Stack `prd` source shows
+   nothing but periodic `netdb.state` writes). Host-side confirms:
+   `nft list ruleset | grep -B2 -A2 daddr` in docker's `raw`/PREROUTING rules
+   shows `ip daddr <gw-ip>` (or `<subnet>` on daemons with moby #52224's
+   per-subnet form) `iifname != "soleur-egress0" ... drop` with a climbing
+   counter, and host→gw `curl` succeeds while container→gw times out.
+   Fix: the bridge must carry
+   `com.docker.network.bridge.gateway_mode_ipv4=nat-unprotected` (masquerade
+   kept, protection dropped — `SOLEUR-EGRESS`/`SOLEUR-EGRESS-GW` plus the
+   loader's oifname-scoped drop are the boundary).
+   `egress-gateway-bootstrap.sh` inspects the mode and rebuilds a wrong-mode
+   bridge; the `terraform_data.egress_gateway` (web-1) / `egress_gateway_web2`
+   (web-2) applies re-fire it via `config_hash`.
+2. **Scope-poisoned ruleset** (ruleset baked while the gw was down): the
+   member drop reads `ct state new ... counter drop` with NO `saddr !=`
+   scoping and the docker0→gw accept is absent — readable host-side via
+   `nft list chain ip filter SOLEUR-EGRESS-GW` / `SOLEUR-EGRESS`, or
+   remote-side once #10060 lands (its `gw_accept`/`gw_member_scoped`
+   `enforcement_missing` markers name it exactly). Repair: any loader run
+   with the gw up rebakes scoped — `systemctl restart
+   cron-egress-firewall.service`, or the same provisioner tail the
+   `egress_gateway` apply already runs.
+3. **Squid/upstream leg** — Squid's access log shows the CONNECT arriving
+   but no upstream completes (AND no `gw_member_scoped=absent` marker — the
+   scope-poisoned shape shows the same symptom from the inside): the hang is
+   Squid-side — auth helper, `dst` ACL, or the gw's own egress via the
+   host's NAT.

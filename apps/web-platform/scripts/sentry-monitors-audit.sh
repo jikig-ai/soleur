@@ -89,7 +89,7 @@
 #     uploads the resulting report as a per-release GitHub release
 #     asset. Avoids commit-storm + write-to-main authorization surface.
 #
-# Plan: knowledge-base/project/plans/2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
+# Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
 # Phase: 1 (script) + 2.1 (operator run) + 2.2 (CI re-run on release)
 
 
@@ -111,6 +111,18 @@ set -euo pipefail
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
+
+# Token-shape guard, BEFORE any curl. The bearer rides curl's stdin config channel
+# (`--config -`, never argv), so a newline in the token would inject a curl config directive and
+# an empty one would send the request headerless. An unusable token is a hard stop with zero
+# requests made -- never a success. The value is never echoed.
+# Sentry tokens (sntrys_/sntryu_ and internal-integration tokens) are base64-ish with `_`:
+# every character is already inside the allowlist, so it is not widened.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$SENTRY_AUTH_TOKEN"; then
+  echo "ERROR: SENTRY_AUTH_TOKEN has an unexpected shape; refusing to send it" >&2
+  exit 1
+fi
 
 # ── HOST PIN — NO ENV OVERRIDE (#7997) ────────────────────────────────────
 # SENTRY_API_HOST, SENTRY_ORG and CURL_BIN are all caller-settable and all land
@@ -180,6 +192,14 @@ esac
 
 readonly SENTRY_ORG
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
+# The bearer also travels to `projects/${SENTRY_ORG}/${SENTRY_PROJECT}/` (Gate 2), so the
+# project is pinned like the org: empty (Gate 2 skipped) or a live slug of the Web Platform
+# project (infra/sentry/variables.tf default `web-platform`; `soleur-web-platform` is the
+# pre-DE slug configure-sentry-alerts.sh also accepts). Same rc=2 refusal contract as the org.
+case "$SENTRY_PROJECT" in
+  ''|web-platform|soleur-web-platform) ;;
+  *) printf 'ERROR: refusing project %s\n' "$(_safe "$SENTRY_PROJECT")" >&2; exit 2 ;;
+esac
 
 # Transport seam. Tests override this (or shadow `curl` on PATH) to script a
 # status sequence, response headers and a body — see the header's CURL_BIN note.
@@ -395,7 +415,11 @@ curl_retry() {
 
   while (( attempt <= max_attempts )); do
     : > "$hdr"
-    if result=$("$CURL_BIN" --disable --noproxy '*' --proto '=https' -g -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
+    # The bearer is fed on curl's stdin as a config directive -- never on argv, where every local
+    # user could read it in /proc/<pid>/cmdline. Callers pass no Authorization header of their own.
+    # printf is the builtin; the process substitution is re-created per attempt.
+    if result=$("$CURL_BIN" --disable --noproxy '*' --proto '=https' -g -D "$hdr" "$@" --config - 2>/dev/null \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN")); then rc=0; else rc=$?; fi
     # Parse the LAST `HTTP/` line — a redirect chain emits several. A transport
     # failure produces no status line at all; normalise that to `000` rather
     # than the empty string, so it renders the same way `-w '%{http_code}'`
@@ -528,8 +552,8 @@ api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
   for candidate in "${SENTRY_HOST_CANDIDATES[@]}"; do
     http=$(curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -o /dev/null -w '%{http_code}' \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-      "https://${candidate}/api/0/users/me/" 2>/dev/null || echo 000)
+      --config - "https://${candidate}/api/0/users/me/" 2>/dev/null \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || echo 000)
     if [[ "$http" == "200" ]]; then
       api_host="$candidate"
       break
@@ -574,7 +598,6 @@ readonly api_host
 if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # Gate 1: audit_destination_admin_controllable (org GET returns 200)
   gate1_body=$(curl_retry -s --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/")
   if ! jq -e '.id' <<<"$gate1_body" >/dev/null 2>&1; then
     echo "ERROR: Gate 1 (audit_destination_admin_controllable) failed — org ${SENTRY_ORG} not reachable at ${api_host}. Token may lack org:read scope, OR the host rewrites slugs ending in '-eu' (use the org-subdomain ${SENTRY_ORG}.sentry.io as SENTRY_API_HOST instead — see learning 2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md). Refs #3861." >&2
@@ -584,7 +607,6 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # Gate 2: audit_project_scope (project GET returns 200) — skipped if no project set
   if [[ -n "$SENTRY_PROJECT" ]]; then
     gate2_http=$(curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/")
     if [[ "$gate2_http" != "200" ]]; then
       echo "ERROR: Gate 2 (audit_project_scope) failed — project ${SENTRY_ORG}/${SENTRY_PROJECT} returned HTTP ${gate2_http}. Token may lack project:read scope. Refs #3861." >&2
@@ -599,7 +621,6 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # the idempotency block in curl_retry.
   gate3_http=$(CURL_RETRY_UNSAFE=1 curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
     -X POST \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"version\":\"${probe_ver}\",\"projects\":[\"${SENTRY_PROJECT:-web-platform}\"]}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/")
@@ -608,9 +629,9 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
     exit 1
   fi
   curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -X DELETE \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
-    -o /dev/null 2>/dev/null || true
+    --config - "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
+    -o /dev/null 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true
 
   # Gate 4: audit_dsn_org_id_matches_token_org_id — extract `o<id>` from DSN
   # (e.g. `o4523123` from `https://k@o4523123.ingest.de.sentry.io/789`) and
@@ -733,8 +754,7 @@ sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
   local base="https://${api_host}/api/0/${path}?per_page=100"
   while :; do
     url="${base}${qs}"
-    body=$(curl_retry -s --max-time 10 \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" "$url")
+    body=$(curl_retry -s --max-time 10 "$url")
     # Snapshot the shared last-header file under this label. Without the copy
     # the shape check below would read whichever fetch ran LAST, and would
     # report the wrong endpoint's deprecation headers against a failure.
@@ -1132,7 +1152,7 @@ if (( detectors_evaluated == 1 )); then
       echo "::warning::cron detector binding '$(warn_sanitize "$ref")' is not slug-shaped; Class B cannot be evaluated for it (a UI rename produces exactly this)." >&2
       continue
     fi
-    if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
+    if ! grep -qFx -- "$ref" <<<"$monitor_slug_set"; then
       orphan_alerts+=("$ref")
     fi
   done <<<"$cron_detector_names"
@@ -1183,16 +1203,19 @@ done < "$class_c_out"
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
 # fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
 #
-# Addendum 2026-09-17 (extended 2026-09-30, 2026-10-01 and 2026-10-04): the tf root now declares
-# 62 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
+# Addendum 2026-09-17 (extended 2026-09-30, 2026-10-01, 2026-10-04 and 2026-10-11): the tf root now declares
+# 65 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
 # one on 2026-09-10, the disposable #8160 devin-docs-drift watcher another, the
 # #8450 scheduled-actions-queue-health probe a third, the #9168
 # scheduled-supabase-watchdog monitor a fourth, and the #9274
 # scheduled-bot-pr-reaper monitor a fifth, and the #9482 follow-up (a)
-# scheduled-merge-queue-stall-dispatch monitor a sixth; #9304 deleted the
+# scheduled-merge-queue-stall-dispatch monitor a sixth, and the W3 (#9826)
+# image-cve-scan monitor a seventh, and the #9855 scheduled-integration-suites
+# monitor an eighth, and the #9703 scheduled-inngest-probe-heartbeat feeder
+# monitor a ninth; #9304 deleted the
 # retired scheduled-gh-pages-cert-state monitor. This list names the additions
 # made since the 2026-08-19 live figure and is not a complete ledger, so the
-# declared count above (62) is the figure of record.
+# declared count above (65) is the figure of record.
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
@@ -1224,6 +1247,7 @@ monitor_created() {
   ' <<<"$monitors_json"
 }
 
+pending_slugs=""; class_a_pending_labels=()  # Class A pending; slugs set only with a coherent tf half
 orphan_live_monitors=()   # Class D — live, undeclared, AND not in state (unreclaimable)
 class_d_unresolved=()     # live + undeclared, but state unknown -> cannot classify
 class_d_state_unknown=0
@@ -1255,6 +1279,24 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
       if (match($0, /"[^"]*"/)) { print substr($0, RSTART+1, RLENGTH-2); in_block=0 }
     }
     in_block && /^}/ { in_block=0 }
+  ' "$tf_dir"/*.tf | sort -u)
+
+  # Declared-pending slugs: each `cron_monitor_alert_unrouted` key resolved through its
+  # resource label. A `#` line never matches a key; an unresolvable key stays drift.
+  pending_slugs=$(awk '
+    /^[[:space:]]*\/\*/ { cm=1 }
+    cm { if (/\*\//) cm=0; next }
+    /^[[:space:]]*cron_monitor_alert_unrouted[[:space:]]*=[[:space:]]*\{[[:space:]]*(#.*)?$/ { in_map=1; next }
+    in_map && /^[[:space:]]*\}/ { in_map=0; next }
+    in_map && /^[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*"/ {
+      k=$0; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k); keys[k]=1; next
+    }
+    /^resource[[:space:]]+"sentry_cron_monitor"[[:space:]]/ { lbl=$3; gsub(/"/, "", lbl); in_block=1; next }
+    in_block && /^[[:space:]]*name[[:space:]]*=[[:space:]]*"/ {
+      if (match($0, /"[^"]*"/)) { names[lbl]=substr($0, RSTART+1, RLENGTH-2); in_block=0 }
+    }
+    in_block && /^}/ { in_block=0 }
+    END { for (k in keys) if (k in names) print names[k] }
   ' "$tf_dir"/*.tf | sort -u)
 
   # Zero declarations parsed against a non-empty live org means the anchor broke
@@ -1315,20 +1357,35 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
   class_d_candidates=()
   while IFS= read -r slug; do
     [[ -z "$slug" ]] && continue
-    printf '%s\n' "$declared_slugs" | grep -qFx -- "$slug" && continue
+    grep -qFx -- "$slug" <<<"$declared_slugs" && continue
     class_d_candidates+=("$slug")
   done <<<"$monitor_slugs"
 
   if (( state_known == 1 )); then
     for slug in ${class_d_candidates[@]+"${class_d_candidates[@]}"}; do
       # In state => Terraform WILL reclaim it on the next apply => not Class D.
-      printf '%s\n' "$state_slugs" | grep -qFx -- "$slug" && continue
+      grep -qFx -- "$slug" <<<"$state_slugs" && continue
       orphan_live_monitors+=("$slug")
     done
   else
     class_d_state_unknown=1
     class_d_unresolved=( ${class_d_candidates[@]+"${class_d_candidates[@]}"} )
   fi
+fi
+
+# Class A partition: declared-pending detectors are listed, not counted; everything
+# else (placeholders included, never slugs) stays drift and keeps warning.
+if [[ -n "$pending_slugs" ]] && (( ${#class_a_unrouted_labels[@]} > 0 )); then
+  class_a_drift_labels=()
+  for label in "${class_a_unrouted_labels[@]}"; do
+    if grep -qFx -- "$label" <<<"$pending_slugs"; then
+      class_a_pending_labels+=("$label")
+    else
+      class_a_drift_labels+=("$label")
+    fi
+  done
+  class_a_unrouted_labels=( ${class_a_drift_labels[@]+"${class_a_drift_labels[@]}"} )
+  class_a_count=${#class_a_unrouted_labels[@]}
 fi
 
 # --- Resolve report path --------------------------------------------------
@@ -1461,11 +1518,17 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
 
   if (( detectors_evaluated == 1 )); then
     printf '_Class A (cron detector with no routing workflow):_\n\n'
-    printf -- '- **%s** of **%s** cron detectors have an empty `workflowIds`.\n' \
+    printf -- '- **%s** of **%s** cron detectors have an empty `workflowIds` and are not declared pending.\n' \
       "$class_a_count" "$cron_detector_count"
-    printf -- '- Healthy state: **0** unrouted (every cron detector bound to a workflow).\n'
+    printf -- '- Healthy state: **0** unrouted (every cron detector bound to a workflow, or declared pending below).\n'
+    if (( ${#class_a_pending_labels[@]} > 0 )); then
+      printf -- '- **%s** more declared pending in `cron_monitor_alert_unrouted` (two-PR rule; not drift, not warned):\n' "${#class_a_pending_labels[@]}"
+      for label in "${class_a_pending_labels[@]}"; do
+        printf -- '- `%s` — declared pending; no cron-monitor-failure workflow routes this monitor yet.\n' "$label"
+      done
+    fi
     if (( class_a_count > 0 )); then
-      printf -- '- A non-zero count means a cron detector is bound to no workflow: either a pending route under the two-PR rule, listed in `cron_monitor_alert_unrouted` in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf`, or live drift.\n\n'
+      printf -- '- A non-zero count means a cron detector is bound to no workflow and is not declared in `cron_monitor_alert_unrouted` (`apps/web-platform/infra/sentry/cron-monitor-alerts.tf`): live drift, or a pending route not yet declared there.\n\n'
       printf '_Unrouted cron detectors (by monitor slug):_\n\n'
       for label in "${class_a_unrouted_labels[@]}"; do
         printf -- '- `%s` — bound to no workflow; a check-in failure for this monitor notifies no one.\n' "$label"
@@ -1560,7 +1623,7 @@ echo "[ok] Wrote audit report: $out_file"
 # is muted, disabled, or unknown.
 routing_warn_parts=()
 if (( class_a_count > 0 )); then
-  routing_warn_parts+=("${class_a_count} cron detector(s) bound to no workflow (healthy state is 0, so this is a pending route under the two-PR rule or live drift): ${class_a_unrouted_labels[*]}")
+  routing_warn_parts+=("${class_a_count} cron detector(s) bound to no workflow (healthy state is 0: bind it to a workflow or declare it pending in cron_monitor_alert_unrouted): ${class_a_unrouted_labels[*]}")
 fi
 if (( muted_unknown == 1 )); then
   routing_warn_parts+=("muted monitors unknown (no monitor in the payload carries isMuted)")

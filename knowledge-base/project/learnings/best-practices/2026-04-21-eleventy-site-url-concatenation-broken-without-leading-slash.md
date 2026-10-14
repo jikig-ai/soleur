@@ -81,7 +81,7 @@ sibling file in a follow-up.
 ## Related
 
 - PR #2705 (caught + fixed during multi-agent review)
-- Plan: `knowledge-base/project/plans/2026-04-21-refactor-marketing-site-aeo-content-drain-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-21-refactor-marketing-site-aeo-content-drain-plan.md`
 - Sibling pattern: `cq-code-comments-symbol-anchors-not-line-numbers` —
   same family of "looks fine in source, breaks at runtime/render."
 

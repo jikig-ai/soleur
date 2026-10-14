@@ -38,7 +38,7 @@ set +e
 out=$(env -i PATH="$PATH" HOME="$HOME" bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
-if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -qi 'SENTRY_AUTH_TOKEN'; then
+if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -ci >/dev/null 'SENTRY_AUTH_TOKEN'; then
   pass "non-zero exit with token-name in stderr"
 else
   fail "rc=$rc out=$out"
@@ -387,7 +387,7 @@ rc=$?
 set -e
 n_reports=$(ls "$TMP13"/sentry-migration-audit-*.md 2>/dev/null | wc -l)
 if [[ "$rc" == "2" ]] \
-   && printf '%s' "$out" | grep -qE 'residency mismatch — probed=sentry\.io DSN cluster=de' \
+   && printf '%s' "$out" | grep -cE >/dev/null 'residency mismatch — probed=sentry\.io DSN cluster=de' \
    && [[ "$n_reports" == "0" ]]; then
   pass "exit 2, stderr names both sides, no artifact written"
 else
@@ -488,12 +488,24 @@ if [[ -f "$STUB_DIR/require_disable" ]]; then
   # later re-opens this", so scan the WHOLE argv for the values that must never
   # appear -- and require the two overridable flags to occur exactly once, since
   # a second --noproxy/--proto silently supersedes the first.
-  _np=0; _pr=0
+  _np=0; _pr=0; _cf=0; _pa=""
   for _a in "$@"; do
+    # The bearer must reach curl on STDIN: exactly one `--config -`, and no credential header
+    # of any spelling on argv. The secret is never accepted in either place (#7843).
+    if [[ "$_pa" == "--config" ]]; then
+      [[ "$_a" == "-" ]] && _cf=$((_cf + 1)) || printf 'STUB_ARGV_REOPEN config_arg=[%s]\n' "$_a" >> "$STUB_DIR/violations.txt"
+    fi
+    case "$_a" in
+      --config=*) printf 'STUB_ARGV_REOPEN token=[%s]\n' "$_a" >> "$STUB_DIR/violations.txt" ;;
+    esac
+    case "${_a,,}" in
+      *authorization*|*bearer*|*apikey*) printf 'STUB_ARGV_SECRET credential-header-on-argv\n' >> "$STUB_DIR/violations.txt" ;;
+    esac
+    _pa="$_a"
     case "$_a" in
       -x|--proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5 \
         |--socks5-hostname|--socks5-basic|--socks5-gssapi \
-        |-K|--config \
+        |-K \
         |--proto-default|--proto-redir \
         |--resolve|--connect-to|--unix-socket|--abstract-unix-socket|--url \
         |-k|--insecure|--proxy-insecure|--ssl-no-revoke|--cacert|--capath \
@@ -506,7 +518,16 @@ if [[ -f "$STUB_DIR/require_disable" ]]; then
   done
   [[ "$_np" -eq 1 ]] || printf 'STUB_ARGV_REOPEN noproxy_count=[%s]\n' "$_np" >> "$STUB_DIR/violations.txt"
   [[ "$_pr" -eq 1 ]] || printf 'STUB_ARGV_REOPEN proto_count=[%s]\n' "$_pr" >> "$STUB_DIR/violations.txt"
+  [[ "$_cf" -eq 1 ]] || printf 'STUB_ARGV_REOPEN config_stdin_count=[%s]\n' "$_cf" >> "$STUB_DIR/violations.txt"
 fi
+# Capture the stdin config the SUT feeds (only when it asked for `--config -`; a bare probe
+# reads nothing). Recorded per call so a test can assert the header travelled there.
+_cfg_in=""
+_pa=""
+for _a in "$@"; do
+  [[ "$_pa" == "--config" && "$_a" == "-" ]] && { _cfg_in=$(cat); break; }
+  _pa="$_a"
+done
 hdr=""; url=""; out=""; prev=""; method="GET"; wants_w=0
 for a in "$@"; do
   [[ "$prev" == "-D" ]] && hdr="$a"
@@ -518,6 +539,13 @@ for a in "$@"; do
 done
 n=$(cat "$STUB_DIR/count" 2>/dev/null || echo 0); n=$((n+1)); printf '%s' "$n" > "$STUB_DIR/count"
 printf '%s %s\n' "$method" "$url" >> "$STUB_DIR/requests.txt"
+printf '%s\n' "$_cfg_in" > "$STUB_DIR/stdin.$n"
+: > "$STUB_DIR/argv.$n"; for _a in "$@"; do printf '%s\0' "$_a" >> "$STUB_DIR/argv.$n"; done
+if [[ -f "$STUB_DIR/require_disable" ]]; then
+  # Exactly one line, exactly the bearer directive: anything else is a config-injection shape.
+  [[ "$_cfg_in" =~ ^header\ =\ \"Authorization:\ Bearer\ [A-Za-z0-9._~+/=-]+\"$ ]] \
+    || printf 'STUB_STDIN_SHAPE call=%s\n' "$n" >> "$STUB_DIR/violations.txt"
+fi
 printf '%s\n' "${SSLKEYLOGFILE-<unset>} ${CURL_CA_BUNDLE-<unset>} ${LD_PRELOAD-<unset>} ${OPENSSL_CONF-<unset>}" > "$STUB_DIR/env.txt"
 spec=$(URL="$url" METHOD="$method" N="$n" bash "$STUB_DIR/respond.sh")
 status=$(printf '%s' "$spec" | cut -f1)
@@ -809,7 +837,7 @@ if [[ "$N" -eq 1 ]]; then printf '500\t-\t-\n'; else printf '200\t-\t%s\n' "$d/b
 STUB
 chmod +x "$TMP18/respond.sh"
 printf '0' > "$TMP18/count"
-got=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+got=$(cd "$TMP18" && SENTRY_AUTH_TOKEN=fake SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
 n_calls=$(wc -l < "$TMP18/requests.txt")
 if [[ "$got" == '[{"id":"1"}]' ]] && [[ "$n_calls" == "2" ]]; then
   pass "T18a: 5xx on a safe GET is retried and the final body is returned"
@@ -824,7 +852,7 @@ printf '410\t-\t-\n'
 STUB
 chmod +x "$TMP18/respond.sh"
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"
-(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' >/dev/null 2>&1)
+(cd "$TMP18" && SENTRY_AUTH_TOKEN=fake SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' >/dev/null 2>&1)
 n_calls=$(wc -l < "$TMP18/requests.txt")
 if [[ "$n_calls" == "1" ]]; then
   pass "T18b: 410 is not retried (retrying would mask a sunset as a flake)"
@@ -841,7 +869,7 @@ if [[ "$N" -eq 1 ]]; then printf '500\t-\t-\n'; else printf '208\t-\t-\n'; fi
 STUB
 chmod +x "$TMP18/respond.sh"
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"
-(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -X POST "https://de.sentry.io/api/0/x/releases/"' >/dev/null 2>&1)
+(cd "$TMP18" && SENTRY_AUTH_TOKEN=fake SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -X POST "https://de.sentry.io/api/0/x/releases/"' >/dev/null 2>&1)
 n_calls=$(wc -l < "$TMP18/requests.txt")
 if [[ "$n_calls" == "1" ]]; then
   pass "T18c: a write probe is not status-retried (208-after-retry cannot arise)"
@@ -859,10 +887,10 @@ printf '200\t-\t%s\n' "$d/body.json"
 STUB
 chmod +x "$TMP18/respond.sh"
 printf '0' > "$TMP18/count"
-body_wrapped=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+body_wrapped=$(cd "$TMP18" && SENTRY_AUTH_TOKEN=fake SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
 rm -f "$TMP18/require_disable"   # bare probe is exempt BY DESIGN (argv has no flags)
 body_bare=$("$TMP18/curl" -s "https://de.sentry.io/api/0/x/" 2>/dev/null)
-status_wrapped=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+status_wrapped=$(cd "$TMP18" && SENTRY_AUTH_TOKEN=fake SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/"' 2>/dev/null)
 status_bare=$("$TMP18/curl" -s -o /dev/null -w '%{http_code}' "https://de.sentry.io/api/0/x/" 2>/dev/null)
 if [[ "$body_wrapped" == "$body_bare" ]] && [[ "$body_wrapped" == '[{"id":"1"}]' ]] \
    && [[ "$status_wrapped" == "$status_bare" ]] && [[ "$status_wrapped" == "200" ]]; then
@@ -908,7 +936,7 @@ chmod +x "$TMP18/respond.sh"
 # --- (e) transport failure on a safe GET: 3 attempts, backoff 5 then 10 ---
 echo "T18e: transport failure on a safe GET is retried to the ceiling"
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
-got=$(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c \
+got=$(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUTH_TOKEN=fake SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c \
   'set -euo pipefail; source ./lib.sh; rc=0; o=$(curl_retry -s --max-time 10 "https://de.sentry.io/api/0/x/") || rc=$?; printf "%s|rc=%s" "$o" "$rc"' 2>/dev/null)
 n_calls=$(wc -l < "$TMP18/requests.txt")
 sleeps=$(tr '\n' ' ' < "$TMP18/sleeps.txt" | sed 's/ *$//')
@@ -925,13 +953,13 @@ fi
 echo "T18f: transport failure on a write is not retried, by either unsafe signal"
 # (f1) DECLARED unsafe, argv otherwise indistinguishable from a safe GET.
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
-(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" CURL_RETRY_UNSAFE=1 bash -c \
+(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUTH_TOKEN=fake SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" CURL_RETRY_UNSAFE=1 bash -c \
   'set -euo pipefail; source ./lib.sh; o=$(curl_retry -s --max-time 10 -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/releases/") || true' >/dev/null 2>&1)
 f1_calls=$(wc -l < "$TMP18/requests.txt"); f1_sleeps=$(wc -l < "$TMP18/sleeps.txt")
 # (f2) INFERRED unsafe from argv alone, no declaration — the backstop that
 # catches a future author who adds a write and forgets the prefix.
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
-(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c \
+(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUTH_TOKEN=fake SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c \
   'set -euo pipefail; source ./lib.sh; o=$(curl_retry -s --max-time 10 -X POST -d "{\"v\":1}" "https://de.sentry.io/api/0/x/releases/") || true' >/dev/null 2>&1)
 f2_calls=$(wc -l < "$TMP18/requests.txt"); f2_sleeps=$(wc -l < "$TMP18/sleeps.txt")
 if [[ "$f1_calls" == "1" ]] && [[ "$f1_sleeps" == "0" ]] \
@@ -1410,6 +1438,105 @@ else
   cat "$TMP19N/stderr.txt" >&2 || true
 fi
 rm -rf "$TMP19N"
+
+# T19p — a cron detector with no workflow whose monitor is a key of
+# `cron_monitor_alert_unrouted` in the SAME tf root is declared pending (two-PR
+# rule): listed in the report, not warned. Any other unrouted detector warns.
+# Labels differ from names (m_one -> m-one; x_job -> m-two-b) so a key resolves
+# via its resource block, and m-two is a prefix of m-two-b to pin whole-line matching.
+T19P_DET='[{"id":"1","name":"m-one","type":"monitor_check_in_failure","workflowIds":[]},{"id":"2","name":"m-two","type":"monitor_check_in_failure","workflowIds":[]},{"id":"3","name":"m-three","type":"monitor_check_in_failure","workflowIds":["9001"]}]'
+# $1 dir, $2 = body lines inside the map; T19P_ALERTS / T19P_DET_X override the file / detectors.
+t19p() {
+  mkdir -p "$1/tf"; local r m
+  for r in m_one:m-one m_two:m-two m_three:m-three x_job:m-two-b; do printf 'resource "sentry_cron_monitor" "%s" {\n  name = "%s"\n}\n' "${r%%:*}" "${r#*:}"; done > "$1/tf/monitors.tf"
+  if [[ -n "${T19P_ALERTS:-}" ]]; then printf '%s\n' "$T19P_ALERTS"; else printf 'locals {\n  cron_monitor_alert_unrouted = {\n%s\n  }\n}\n' "$2"; fi > "$1/tf/alerts.tf"
+  m=; for r in m-one m-two m-three m-two-b; do m+="{\"slug\":\"$r\",\"name\":\"M\",\"type\":\"cron_job\",\"config\":{\"schedule\":\"0 * * * *\"}},"; done
+  printf '[%s]' "${m%,}" > "$1/monitors.json"; printf '%s' "${T19P_DET_X:-$T19P_DET}" > "$1/detectors.json"
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform SENTRY_API_HOST=de.sentry.io \
+    SENTRY_FIXTURE_MONITORS="$1/monitors.json" SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" \
+    SENTRY_FIXTURE_DETECTORS="$1/detectors.json" SENTRY_TF_DIR="$1/tf" AUDIT_OUT_DIR="$1" bash "$SCRIPT" >/dev/null 2>"$1/stderr.txt"
+  report=$(ls "$1"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+}
+
+echo "T19p: pending m-one (tab/space-mangled key, trailing comment) is reported not warned; m-two warns alone"
+TMP19P=$(mktemp -d); t19p "$TMP19P" $'\t\tm_one\t=   "pending (#1)"   # why'; w19p=$(t19_warning "$TMP19P")
+if grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-two' <<<"$w19p" && ! grep -qw 'm-one' <<<"$w19p" \
+   && grep -qE '\*\*1\*\* of \*\*3\*\* cron detectors' "$report" \
+   && grep -qE '\*\*1\*\* more declared pending in `cron_monitor_alert_unrouted`' "$report" \
+   && grep -qE '^- `m-one` — declared pending' "$report" && grep -qE '^- `m-two` — bound to no workflow' "$report" \
+   && grep -qF 'and are not declared pending' "$report" && grep -qF 'declare it pending in cron_monitor_alert_unrouted' <<<"$w19p"; then
+  pass "warning names m-two only; report lists m-one as declared pending"
+else fail "partition wrong: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+echo "T19p2: both declared pending -> no unrouted warning part and the clean verdict stands"
+TMP19P=$(mktemp -d); t19p "$TMP19P" $'    m_one = "p (#1)"\n    m_two = "p (#2)"'; w19p=$(t19_warning "$TMP19P")
+if ! grep -q 'bound to no workflow' <<<"$w19p" && grep -qE '\*\*0\*\* of \*\*3\*\*' "$report" \
+   && grep -qE '\*\*2\*\* more declared pending' "$report" && grep -q 'No orphans detected' "$report"; then
+  pass "all-pending: no unrouted warning, 2 pending reported, no orphans"
+else fail "all-pending run warned or lost its pending line: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+echo "T19p3: x_job resolves to m-two-b (pending); its prefix m-two and an unresolved detector still warn"
+TMP19P=$(mktemp -d)
+T19P_DET_X='[{"id":"2","name":"m-two","type":"monitor_check_in_failure","workflowIds":[]},{"id":"4","name":"m-two-b","type":"monitor_check_in_failure","workflowIds":[]},{"id":"9","name":null,"type":"monitor_check_in_failure","workflowIds":[]}]' t19p "$TMP19P" '    x_job = "p (#1)"'
+w19p=$(t19_warning "$TMP19P")
+if grep -qE '2 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qF '<unresolved detector id=9>' <<<"$w19p" \
+   && grep -qw 'm-two' <<<"$w19p" && ! grep -qF 'm-two-b' <<<"$w19p" && grep -qE '^- `m-two-b` — declared pending' "$report"; then
+  pass "label->name join and whole-line match hold; a placeholder warns beside a pending key"
+else fail "x_job/m-two-b partition wrong: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+# Fail toward noise: each leaves m-one UNDECLARED, so both detectors warn and nothing is reported pending.
+for v in '    # m_one = "p (#1)"' '    m_won = "p (#1)"' '' $'    /*\n    m_one = "p (#1)"\n    */'; do
+  echo "T19p4: [${v//$'\n'/ }] leaves m-one undeclared"
+  TMP19P=$(mktemp -d); t19p "$TMP19P" "$v"; w19p=$(t19_warning "$TMP19P")
+  if grep -qE '2 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-one' <<<"$w19p" && ! grep -q 'more declared pending' "$report"; then pass "m-one and m-two both warn"
+  else fail "suppressed a warning: [${w19p}]"; fi
+  rm -rf "$TMP19P"
+done
+
+# Parser shapes (alerts.tf | expected warning count | slug that must NOT be warned): an opener with a trailing
+# comment, a commented-out opener, a populated map before a sibling map, a multi-line header comment.
+for e in $'locals {\n  cron_monitor_alert_unrouted = { # note\n    m_one = "p (#1)"\n  }\n}|1|m-one' \
+         $'locals {\n  # cron_monitor_alert_unrouted = {\n  m_one = "p (#1)"\n}|2|m-three' \
+         $'locals {\n  cron_monitor_alert_unrouted = {\n    m_two = "p (#2)"\n  }\n  other = {\n    m_one = "x"\n  }\n}|1|m-two' \
+         $'/*\n header\n*/\nlocals {\n  cron_monitor_alert_unrouted = {\n    m_one = "p (#1)"\n  }\n}|1|m-one'; do
+  ab=${e##*|}; rest=${e%|*}; n=${rest##*|}; al=${rest%|*}
+  echo "T19p4b: parser shape expecting $n warning(s), $ab not warned"
+  TMP19P=$(mktemp -d); T19P_ALERTS="$al" t19p "$TMP19P" ''; w19p=$(t19_warning "$TMP19P")
+  if grep -qE "^::warning::.* $n cron detector\\(s\\) bound to no workflow" <<<"$w19p" && ! grep -qw -- "$ab" <<<"$w19p"; then pass "parser shape holds"
+  else fail "parser shape wrong (want $n, $ab not warned): [${w19p}]"; fi
+  rm -rf "$TMP19P"
+done
+
+echo "T19p5: an empty one-line map does not leak into a sibling map"
+TMP19P=$(mktemp -d); T19P_ALERTS=$'locals {\n  cron_monitor_alert_unrouted = {}\n  other = {\n    m_one = "x"\n  }\n}' t19p "$TMP19P" ''; w19p=$(t19_warning "$TMP19P")
+if grep -qE '2 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-one' <<<"$w19p"; then pass "sibling map key m_one is not read as pending"
+else fail "empty map leaked into a sibling: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+echo "T19p6: without SENTRY_TF_DIR the real map is NOT consulted (fixture run stays all-drift)"
+TMP19P=$(mktemp -d)
+printf '%s' '[{"slug":"scheduled-bot-pr-reaper","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}}]' > "$TMP19P/monitors.json"
+printf '%s' '[{"id":"1","name":"scheduled-bot-pr-reaper","type":"monitor_check_in_failure","workflowIds":[]}]' > "$TMP19P/detectors.json"
+t19_run "$TMP19P"; w19p=$(t19_warning "$TMP19P")
+# Precondition: the real map still holds this key; once it is routed, repoint this row at another declared key.
+if grep -q '^[[:space:]]*scheduled_bot_pr_reaper[[:space:]]*=' "$SCRIPT_DIR/../infra/sentry/cron-monitor-alerts.tf" \
+   && grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -q 'scheduled-bot-pr-reaper' <<<"$w19p"; then pass "no coherent tf half: partition skipped"
+else fail "partition ran without a coherent tf half, or the real map lost scheduled_bot_pr_reaper: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+echo "T19p7: the REAL infra/sentry tree resolves both declared-pending monitors (a /* inside a # comment must not open a block)"
+TMP19P=$(mktemp -d)
+printf '%s' '[{"slug":"scheduled-bot-pr-reaper","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}},{"slug":"workspaces-luks-verify-web2","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}}]' > "$TMP19P/monitors.json"
+printf '%s' '[{"id":"1","name":"scheduled-bot-pr-reaper","type":"monitor_check_in_failure","workflowIds":[]},{"id":"2","name":"workspaces-luks-verify-web2","type":"monitor_check_in_failure","workflowIds":[]}]' > "$TMP19P/detectors.json"
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform SENTRY_API_HOST=de.sentry.io SENTRY_FIXTURE_MONITORS="$TMP19P/monitors.json" \
+  SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" SENTRY_FIXTURE_DETECTORS="$TMP19P/detectors.json" SENTRY_TF_DIR="$SCRIPT_DIR/../infra/sentry" AUDIT_OUT_DIR="$TMP19P" bash "$SCRIPT" >/dev/null 2>"$TMP19P/stderr.txt"
+report=$(ls "$TMP19P"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if ! grep -q 'bound to no workflow' <(t19_warning "$TMP19P") && grep -qE '\*\*2\*\* more declared pending' "$report"; then pass "real tree: both monitors declared pending, no routing warning"
+else fail "real tree did not resolve the declared-pending monitors: [$(t19_warning "$TMP19P")]"; fi
+rm -rf "$TMP19P"
 rm -f "$T19_WORKFLOWS"
 
 # ------------------------------------------------------------------------
@@ -2337,6 +2464,65 @@ else
 fi
 
 # ------------------------------------------------------------------------
+# T41 — #7843: the bearer reaches curl on STDIN, never on argv.
+#
+# A distinctive sentinel token (not `fake`, which any URL or flag could contain) is driven
+# through BOTH the probe loop (a bare curl) and the curl_retry chokepoint, and the stub's
+# per-call argv/stdin ledger is read back: the sentinel must be on every call's stdin and on NO
+# call's argv. The secret is never accepted in either place at once -- a stub that tolerated
+# argv would let the leak regress green.
+# ------------------------------------------------------------------------
+echo "T41: the bearer is fed on stdin and is absent from every argv (probe loop + chokepoint)"
+SENT41='SNTRYsentinel.A_b-9~+/=zz'
+T41=$(mktemp -d); mk_curl_stub "$T41" >/dev/null; mk_default_respond "$T41"; mkdir -p "$T41/tf"
+set +e
+run_sut_stubbed "$T41" SENTRY_AUTH_TOKEN="$SENT41" SENTRY_API_HOST= >/dev/null 2>&1
+set -e
+r41=$(wc -l < "$T41/requests.txt" 2>/dev/null || echo 0)
+v41=$(wc -l < "$T41/violations.txt" 2>/dev/null || echo 0)
+argv_hits41=0; stdin_miss41=0
+for ((i = 1; i <= r41; i++)); do
+  grep -aqF -- "$SENT41" "$T41/argv.$i" 2>/dev/null && argv_hits41=$((argv_hits41 + 1))
+  grep -qxF -- "header = \"Authorization: Bearer ${SENT41}\"" "$T41/stdin.$i" 2>/dev/null || stdin_miss41=$((stdin_miss41 + 1))
+done
+probe41=$(grep -c 'users/me/' "$T41/requests.txt" 2>/dev/null || true)
+if [[ "$r41" -ge 5 && "$argv_hits41" -eq 0 && "$stdin_miss41" -eq 0 && "$v41" -eq 0 && "$probe41" -ge 1 ]]; then
+  pass "T41 $r41 request(s) incl. the region probe: bearer on stdin for all, in argv for none, 0 violations"
+else
+  fail "T41 requests=$r41 argv_hits=$argv_hits41 stdin_missing=$stdin_miss41 violations=$v41 probe=$probe41 :: $(head -c 200 "$T41/violations.txt")"
+fi
+
+echo "T42: an unusable token makes zero requests and is never a success"
+t42_bad=0; t42_detail=""
+for tok in $'abc\nheader = "x: y"' 'has space' 'semi;colon' "quote'x" 'dq"x'; do
+  T42=$(mktemp -d); mk_curl_stub "$T42" >/dev/null; mk_default_respond "$T42"; mkdir -p "$T42/tf"
+  set +e
+  o42=$(run_sut_stubbed "$T42" SENTRY_AUTH_TOKEN="$tok" 2>&1); r42=$?
+  set -e
+  n42=$(wc -l < "$T42/requests.txt" 2>/dev/null || echo 0)
+  if [[ "$r42" -eq 0 || "$n42" -ne 0 ]] || grep -qF -- "$tok" <<<"$o42"; then
+    t42_bad=$((t42_bad + 1)); t42_detail+=" [rc=$r42 requests=$n42]"
+  fi
+done
+if [[ "$t42_bad" -eq 0 ]]; then
+  pass "T42 5 unusable tokens (newline, space, ;, ', \") refused non-zero, zero requests, value not echoed"
+else
+  fail "T42 $t42_bad of 5 unusable tokens were accepted, sent, or echoed:$t42_detail"
+fi
+
+echo "T43: SENTRY_PROJECT is pinned like the org"
+T43=$(mktemp -d); mk_curl_stub "$T43" >/dev/null; mk_default_respond "$T43"; mkdir -p "$T43/tf"
+set +e
+o43=$(run_sut_stubbed "$T43" SENTRY_PROJECT='evil/../x' 2>&1); r43=$?
+set -e
+n43=$(wc -l < "$T43/requests.txt" 2>/dev/null || echo 0)
+if [[ "$r43" -eq 2 ]] && grep -q '^ERROR: refusing project ' <<<"$o43" && [[ "$n43" -eq 0 ]]; then
+  pass "T43 hostile project refused, exit 2, zero requests"
+else
+  fail "T43 expected exit 2 + zero requests, got rc=$r43 requests=$n43 :: $(head -c 200 <<<"$o43")"
+fi
+
+# ------------------------------------------------------------------------
 # HARNESS SELF-TEST + FLOOR. Measured: neutering pass()/fail() to `:` made this
 # suite print "Results: 0 passed, 0 failed" and exit 0 -- green having asserted
 # nothing. The trailing note below argued a floor adds little because `set -eu`
@@ -2354,8 +2540,8 @@ if [[ "$PASS" -ne $((_h_p + 1)) || "$FAIL" -ne $((_h_f + 1)) ]]; then
   exit 1
 fi
 PASS=$_h_p; FAIL=$_h_f
-if [[ $((PASS + FAIL)) -lt 65 ]]; then
-  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 65.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 82 ]]; then
+  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 82.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 

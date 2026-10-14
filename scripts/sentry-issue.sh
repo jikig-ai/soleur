@@ -215,9 +215,31 @@ else
   echo "ERROR: no Sentry read token. Set SENTRY_ISSUE_RO_TOKEN in Doppler soleur/prd (see runbook)." >&2
   exit 1
 fi
+# Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+# curl config directive on the stdin channel below). Never echoes the value. Unusable => no curl.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$TOKEN"; then
+  echo "ERROR: the resolved Sentry read token is unusable (empty or contains a character outside [A-Za-z0-9._~+/=-]); no request was made." >&2
+  exit 1
+fi
 
 # URL allowlist — read endpoints only, both event:read, built from the fixed method
 # GET with no request body. The discover modes use the PINNED org, never $ORG.
+# The issue / latest-event modes interpolate HOST and ORG into a Bearer-carrying request, and both
+# are env-overridable (and `prd_terraform` exports SENTRY_API_HOST). Pin each against the live
+# literal and refuse anything else BEFORE any curl runs: a redirected HOST sends the credential to
+# an attacker-chosen origin. The discover modes use PINNED_* and ignore HOST/ORG, so an env
+# override there stays harmless and is NOT refused (scripts/sentry-issue-discover.test.sh pins that).
+if [[ "$MODE" == "issue" || "$MODE" == "latest-event" ]]; then
+  case "$HOST" in
+    jikigai-eu.sentry.io) : ;;
+    *) echo "refusing SENTRY_API_HOST: not the pinned Sentry host (jikigai-eu.sentry.io)" >&2; exit 64 ;;
+  esac
+  case "$ORG" in
+    jikigai-eu) : ;;
+    *) echo "refusing SENTRY_ORG: not the pinned Sentry org (jikigai-eu)" >&2; exit 64 ;;
+  esac
+fi
 case "$MODE" in
   issue)              PATH_PART="/api/0/organizations/${ORG}/issues/${ISSUE_ID}/" ;;
   latest-event)       PATH_PART="/api/0/organizations/${ORG}/issues/${ISSUE_ID}/events/latest/" ;;
@@ -292,10 +314,11 @@ if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
   # `--disable` FIRST (it aborts ~/.curlrc parsing; later is too late) and `--noproxy '*'`
   # (ALL_PROXY/HTTPS_PROXY would redirect this Bearer-carrying request with the destination
   # pin intact). Model: scripts/supabase-logs-query.sh.
+  # The bearer rides curl's stdin config channel, never its argument list.
   CODE="$(curl --disable --noproxy '*' -sS --max-time 30 -G -o "$_body_f" -w '%{http_code}' \
-    -H "Authorization: Bearer ${TOKEN}" \
     -H 'Accept: application/json' \
-    "${QARGS[@]}" "$URL" 2>"$_err_f")" || CODE="000"
+    "${QARGS[@]}" --config - "$URL" 2>"$_err_f" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"))" || CODE="000"
   BODY="$(cat "$_body_f" 2>/dev/null || echo '')"
   ERRTXT="$(cat "$_err_f" 2>/dev/null || echo '')"
   rm -f "$_body_f" "$_err_f"
@@ -343,10 +366,11 @@ echo "NOTE: Sentry event bodies may contain residual user PII (message/breadcrum
 
 # GET-only. -w appends the HTTP status on its own trailing line so we can map
 # 401/403 without --fail-with-body (which would swallow the parse).
+# The bearer rides curl's stdin config channel, never its argument list.
 RESP="$(curl --disable --noproxy '*' -sS --max-time 30 -X GET \
-  -H "Authorization: Bearer ${TOKEN}" \
   -H 'Accept: application/json' \
-  -w $'\n%{http_code}' "$URL")"
+  -w $'\n%{http_code}' --config - "$URL" \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"))"
 CODE="$(printf '%s' "$RESP" | tail -n1)"
 BODY="$(printf '%s' "$RESP" | sed '$d')"
 

@@ -80,4 +80,49 @@ describe("reduceSupportFrame (client state machine)", () => {
     expect(s.text).toBe("x");
     expect(s.status).toBe("streaming");
   });
+
+  // #9556 / FR-4 client half — the support_handoff arm passes
+  // `msg.repoConnected` through to the copy builder (tri-state pins).
+  it("support_handoff with repoConnected:false renders the connect-repo copy", () => {
+    const s = run([
+      {
+        type: "support_handoff",
+        task: "fix it",
+        conversationId: "c",
+        repoConnected: false,
+      } as unknown as WSMessage,
+    ]);
+    expect(s.handoffMarkdown).toBe(
+      "[Connect a repository to hand this task to an agent →](</connect-repo>)",
+    );
+  });
+
+  it("support_handoff with repoConnected:true renders the clean ?msg= link", () => {
+    const s = run([
+      {
+        type: "support_handoff",
+        task: "fix it",
+        conversationId: "c",
+        repoConnected: true,
+      } as unknown as WSMessage,
+    ]);
+    expect(s.handoffMarkdown).toBe(
+      "[Ask an agent to do this →](</dashboard/chat/new?msg=fix%20it>)",
+    );
+  });
+
+  it("support_handoff WITHOUT repoConnected keeps the legacy copy byte-identical", () => {
+    // Frames from dep-unwired emitters (or pre-resolution denies) carry no
+    // flag — the copy must not degrade for them.
+    const s = run([
+      {
+        type: "support_handoff",
+        task: "fix it",
+        conversationId: "c",
+      } as unknown as WSMessage,
+    ]);
+    expect(s.handoffMarkdown).toBe(
+      "[Ask an agent to do this (needs a connected repo) →](</dashboard/chat/new?msg=fix%20it>)",
+    );
+  });
 });

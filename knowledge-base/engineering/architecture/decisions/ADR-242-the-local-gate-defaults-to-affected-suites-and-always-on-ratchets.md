@@ -5,10 +5,14 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "#9552 (2026-10-05) — decision 20: a registration-only runner diff takes the bounded selection under branch scope (closed grammar, fail closed); the 2026-09-29 option-d rejection is reversed in part; see ## Amendment — 2026-10-05 (#9552)"
   - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
   - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
   - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
+  - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
+  - "#9814 (2026-10-11) — the local weight-drift detector: TEST_TIMING_LOG defaults on affected-shaped local runs and the epilogue emits advisory WEIGHT_DRIFT lines against committed weights; see ## Amendment — 2026-10-11 (#9814)"
+  - "#10117 (2026-10-13) — decision 27: the root-anchored `glob:` grammar residual is detected, not extended; the extension triggers only on a live dir-less corpus file (#10198); see ## Amendment — 2026-10-13 (#10117)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -186,7 +190,8 @@ Decisions added by this amendment:
    timeout, so one knob bounds both of tc_acquire's wait stages and on expiry
    it proceeds with the `LOCK_CONTENDED_PROCEEDING` banner rather than
    aborting.
-10. **`runner-changed` is scope-aware.** Under `staged` the ladder arm is
+10. **`runner-changed` is scope-aware.** *(Closing sentence superseded in part, and its "unconditional always-on runner-SUT battery" premise corrected,
+    by decision 20: a registration-only diff now takes the bounded selection under branch scope too.)* Under `staged` the ladder arm is
     gated off and the staged runner/index path is detected *inside* the
     bounded-selection walk — the paths are in the staged set by construction,
     so their declared self-edges plus the unconditional always-on runner-SUT
@@ -220,7 +225,7 @@ Alternatives added by this amendment:
 |---|---|
 | `TEST_GROUP=commit-scope` + a `SOLEUR_ALLOW_*`-style provenance env (#9173 option b) | Duplicates the existing narrow selector with new `want_*` plumbing for the same property; an env var's presence is not ownership and it inherits into the nested enumerate self-call. A flag buys the property outright. |
 | `runner-changed` → runner suites + staged set under branch scope (option c alone) | Still needs the staged plumbing; keeps branch-diff over-selection on every commit of a runner-touching branch; keeps the use-the-suspect-selector trust hole without the per-commit semantics that bound it. Its bounded-degradation half was adopted *inside* staged scope. |
-| `runner-changed` distinguishes selection-logic vs registration-data edits (option d) | A pathname trigger cannot see edit kind without fragile diff-content inspection, and the dangerous narrowing edit is data-shaped — already covered by self-inclusion edges, the always-on census, and unclassified-selects-anyway. |
+| `runner-changed` distinguishes selection-logic vs registration-data edits (option d) | A pathname trigger cannot see edit kind without fragile diff-content inspection, and the dangerous narrowing edit is data-shaped — already covered by self-inclusion edges, the always-on census, and unclassified-selects-anyway. **Superseded in part by decision 20 (2026-10-05, #9552):** a CLOSED whole-line grammar over added lines, with zero tolerance for removed lines, is not the fragile inspection this row rejected, and the data-shaped narrowing edit is answered by the label-binding rule. |
 | Pass lefthook `{staged_files}` argv to the runner | Space-separated argv fragility; the in-runner index derivation is authoritative and seam-testable. |
 | `no_stash` on the hook (sibling symptom in #8045) | Out of scope for this amendment — `git diff --cached` is stash-agnostic, and the false-RED/stash question belongs to #8045. |
 
@@ -239,7 +244,7 @@ decisions 1-3 above and do not change the CI contract.
     could never match, which would turn a select-everything edge into a select-nothing one). Evidence: over 30
     real diffs the new matcher selected 0 suites the old one did not and dropped 84 selections belonging to 7
     suites, every one a demonstrated false positive (a directory token matched inside a longer path); the
-    record is `knowledge-base/project/specs/feat-affected-parallel-test-gate/edge-anchoring-corpus.md`.
+    record is `knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/edge-anchoring-corpus.md`.
     **The direction flips.** A substring over-matched toward RUNNING, the safe side decisions 3 and 8 rely on;
     an anchored edge errs toward NOT running whenever the diff text does not present a path as its own line.
     The diff blob therefore has to: `--name-status -M` rename rows (`R100<TAB>old<TAB>new`) are split on TABs
@@ -354,7 +359,7 @@ identity-preserving and is a separate decision (decision 18, with the `REPO_ROOT
 
 Context: decision 15's evidence was one run of session-scratch scripts, and decision 16 named the further route to a cheaper pre-pass
 (stop following what the runner's text merely names) as a separate decision. This amendment records both. Numbers follow landing order.
-The measured figures live in `knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md` (Rounds 2 and 3); they are not restated here.
+The measured figures live in `knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md` (Rounds 2 and 3); they are not restated here.
 
 17. **The always-on evidence is a committed recorder with one verdict function, and a recording that is not complete is never evidence for a
     demotion.** `scripts/audit-suite-reads.sh` (with `scripts/lib/inotify-open-recorder.py`) re-issues decision 15's audit as "Round 2" and
@@ -479,4 +484,287 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     suite's edge array: re-record that suite then, or put it back in `ALWAYS_ON_SUITES`. **Revisit** the hedge when always-on suite time passes 1,500 s or when the suite
     becomes incremental, so "keep" does not become permanent by default; row f1 holds the census slack at 5 and this change leaves it at 0, so the next
     always-on addition raises the floor (in `scripts/test-all.sh` and in f1's pin), which is the review point. The measurements, costs and final table live in the audit doc's 2026-10-04 addendum
-    (`knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`), not here.
+    (`knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md`), not here.
+
+## Amendment — 2026-10-05 (#9552)
+
+20. **A registration-only runner diff takes the bounded selection under branch scope; every other runner edit keeps `runner-changed`.** Registering a
+    new suite is itself an edit to `scripts/test-all.sh`, so every suite-adding PR paid the whole battery (a recent one was stopped after 2 h 13 m of
+    contended run), and the run read as a hang. `_aff_classify_runner_diff` judges the diff `git merge-base origin/main HEAD` to the working tree for
+    both runner-critical files against a closed grammar, and the pre-pass takes the bounded walk (`AFFECTED_RUNNER_IN_SCOPE reason=registration-only`,
+    `AFFECTED_SUMMARY ... fallback=none`) only when EVERY changed line fits: **G0** headers only (a mode, rename, delete, binary or no-newline marker is
+    semantic); **G1** zero removed lines (an edited line is a removal plus an addition); **G2** every line added to the runner is a blank line, a `#`
+    comment, or one single-line `  run_suite "<label>" <argv0> <args>` in a closed charset (argv0 in `bash|python3|bun|node`; a plain repo-relative first <!-- markdownlint-disable-line MD038 -->
+    path argument that is not option-shaped, has no leading `/` and no `..` segment; `python3 -m` only `unittest|pytest`; no quote, substitution, redirect,
+    `;`, `&` or `|`), and an **anchor rule** binds every added line (the nearest preceding post-image line that is not blank or a comment must itself be a
+    complete single-line registration, which keeps added lines out of continuations, heredocs and multi-line strings; every added line must also equal the
+    working-tree line it claims to be); **G3** the only admitted additions to `scripts/lib/test-affected-paths.sh` are one contiguous
+    `AFFECTED_<MAP(label)>_PATHS=( ... )` block per added suite (opener directly below another array's closing `)` or entry, entries in a closed charset,
+    closer a lone `)`, all in one hunk) and entries of `ALWAYS_ON_SUITES`, each bound (**G5**) to a label ADDED in the same diff, with the array defined exactly once and not named by any
+    `AFFECTED_CONSUMED_EDGES` pair, because the label-to-array map is not injective; **G4** `bash -n` passes on both post-images. The pre-pass then requires every
+    added label to occur exactly once in the live `--enumerate-commands` stream, every anchor label at least once, no added label to inherit an
+    already-declared array, and no OTHER live label to map to a declared array name, because loops and globs produce about half of the live registrations
+    and their labels never appear as literals; any other count degrades to the full fallback through the same print block (never a new ladder arm, which
+    repeated the #9197 defect). That check runs after the 70-80 s walk and against the `all`-group stream, an accepted cost of deciding on the live stream.
+    Anything the classifier cannot decide (no merge-base, a git error, an empty diff text, a diff that registers nothing) is `undecidable` and behaves as
+    semantic; under `--paths` the classifier is not computed at all. It is also not computed under `--affected-scope=staged`, which stays byte-identical.
+    The verdict covers only the two trigger files: a registration that rides along with an edit to a third runner-sourced file
+    (`scripts/lib/test-relevance-paths.sh`, `scripts/lib/test-contention.sh`, ...) gets that file's ordinary edge-based selection, exactly as editing it
+    alone does today.
+    The full-fallback banner states the cause, the manifest-weight cost (`about N min`, or "duration unknown"), the first offending `<file>:<line>
+    [rule-code]` and a fixed sentence per code; it never prints diff text, because agents read this output (the only free-form token is an added label, restricted to
+    the registration charset, with spaces shown as `_` and cut at 64 characters).
+    **This SUPERSEDES decision 10's closing sentence** ("Branch scope keeps the full-corpus fallback byte-identical") for registration-only diffs, and
+    **CORRECTS a stale premise in decision 10**: it cites an "unconditional always-on runner-SUT battery (which includes `scripts/test-all-affected`)", but
+    ADR-262 withdrew that suite from `ALWAYS_ON_SUITES`; it still runs on every runner-touching diff because the runner is in its declared edge set and the
+    diff names it, and the residual argument rests on that edge. **Why this reverses the 2026-09-29 option-d rejection in part:** that row feared "fragile
+    diff-content inspection" and said the dangerous narrowing edit is data-shaped. A closed allowlist of whole-line shapes models none of bash's syntax and
+    every miss falls toward the full battery, so it is not fragile in the way that matters; and the only data edit that can narrow (a new
+    `AFFECTED_*_PATHS` array on an existing unclassified label turns "always runs" into "runs only when its edge is touched") is refused because every
+    declaration must bind to a label the same diff registers. **Measured** (2026-10-05, over 226 non-merge commits touching either runner file since 2026-06-01; 230 on 2026-10-06): 152 (67%) fit the
+    grammar including the anchor rule and 139 of those add a registration; the full battery is 91.4 min at manifest weights against 58.6 min for a bounded selection (a 36% saving, not minutes: 13.6 min of the
+    43 edge suites are heavy batteries that are not runner-SUT, and narrowing those is a separate, deferred concept). **Accepted residual**, the same class
+    as decision 10's with a larger window (the whole branch, not one commit's index): the classifier lives in the file it judges, so a PR that edits it is
+    semantic by G1/G2 and goes full. The real residual is a latent gap in the already-merged grammar that wrongly admits a FUTURE diff (for example, the
+    anchor check is by label, so it relies on every two-space `run_suite "` literal in the runner being a live call site). It is defended by the closed,
+    default-deny grammar, the live-stream checks and `bash -n`, by the rows in `scripts/test-all-affected.test.sh` (selected by every runner-touching run), and
+    by CI's full sharded battery on the PR head, which stays the merge gate. The `PR_GATE_MACHINERY_PATHS` arming of ADR-262 is unchanged: the name list a registration-only run reads still contains both paths.
+
+    Alternatives considered: (b) registrations in a data file (about 560 registrations interleaved with relevance-gated blocks and ordinal-indexed shard
+    selection; the data file would become a third runner-critical path needing its own grammar, which is mechanism (a) relocated); (c) banner only (does not
+    deliver the narrowing; its banner half is kept for the fail-closed arm); a selection-equivalence oracle (sees selection metadata only, costs two walks);
+    a classifier in a third file (an edit to it would not match the two-file trigger); admitting deletions or edits (a removed `run_suite` is a narrowing
+    edit by definition); `SUITE_GLOBS` auto-discovery of root `scripts/*.test.sh` (162 explicit registrations make it a mass conversion, and "registration
+    is a reviewed act" is a property worth keeping). Index declarations (G3/G5) ship in their own commit and are separable: dropping them changes no
+    runner-only line. They serve about 3.5% of the measured demand (5 of the commits that fit the grammar touched the index at all: 4 array blocks, 1 entry) and
+    were kept because the operator named "a new AFFECTED_*_PATHS array" as registration-only.
+
+## Amendment — 2026-10-09 (#9812)
+
+21. **The derive's per-registration classification is a cacheable pure function; verdicts are not.** The
+    `_aff_stream` walk paid one fresh `_affected_classify` per registration on every local run (~150 s CPU
+    measured on a contended host — the dominant cost of the local fast tier, #9763 arc). A classify is a pure
+    function of (label, argv, the derive code, the environment channels that reach it, and the file contents +
+    existence probes it consults), so `scripts/lib/test-affected-derive-cache.sh` caches its OUTPUT — class,
+    ordered edge set, suite file — as one record per registration under
+    `.soleur/cache/affected-derive/v<schema>/`, keyed on schema + derive-code hash (the EXTRACTED derive span,
+    not the whole runner — an unrelated `test-all.sh` edit no longer flushes every record; both anchor legs
+    must extract non-empty or the whole file hashes, a flush never a stale serve) + environment fingerprint
+    (BASH_VERSION, the locale set, glob/case shell options, IFS — a record minted under one semantics cannot
+    replay under another) + label + length-prefixed argv, and validates a hit by re-hashing every recorded read
+    (`git hash-object --no-filters --stdin-paths`, one batched fork per record) and re-running every recorded
+    `-e`/`-f`/`-d` probe. Any drift, a malformed or corrupted record (an `end` trailer plus a `sum` cksum over
+    the body — a cut file can never serve a partial edge set and an in-body bit-flip cannot ride structure
+    checks alone), a schema or worktree or cwd mismatch, an unwritable cache dir, or a missing git re-derives
+    that record only — the cache is advisory and can never narrow a selection.
+    `SOLEUR_AFFECTED_DERIVE_CACHE=0` is the kill switch. The runner instruments the derive span
+    (`_affected_probe`, `_affected_rec_read`, inside the extraction anchors so the derive suite carries them)
+    rather than duplicating the algorithm, so the recorded input set is the real one; the `[[ -d "$PWD" ]]`
+    `_wt_missing_die` liveness probe is named-exempt, and the `-c` payload word-split is `set -f` so glob
+    tokens can never pathname-expand into an unrecordable directory listing. The `_FE_FILES` memo carries a
+    parallel `_FE_PROBESETS` slice so a memo consumer's record inherits the extractor's probes — without it a
+    created-at-recorded-miss path inside a shared helper invalidated only the extractor (review P1). What is
+    cached is selection METADATA only — `_diff_touches` still runs fresh per record and suite verdicts are
+    never memoised (the twice-rejected suite-result shape, #7454 / #9804 Proposal 2). The walk emits
+    `AFFECTED_DERIVE_CACHE state=/hits=/misses=/derived=` on stderr (stdout is the bench's machine-compared
+    surface) so a dead cache is visible rather than silent. Identity gate: `affected-prepass-bench
+    --added-edges` exits 0 with byte-identical `AFFECTED_SELECTED` cold AND warm (the bench's own second probe
+    serves the warm arm); measured warm derive ~11–20 s CPU vs ~88–126 s base (6.3–7.8x) on probe 2, ~9 s wall
+    vs ~2 min locally, cold arm ~27–71 s slower once per record per tree-state under contention. Per-record
+    files (not one JSON) keep a single corrupt record's blast radius at one registration; `.soleur/`
+    (gitignored, per-worktree) over XDG because a record is meaningless outside its worktree and the
+    `worktree`+`cwd` fields refuse a moved checkout or a subdirectory invocation. The input-site census row in
+    `scripts/test-affected-derive-cache.test.sh` fails on any future probe, file read, or out-of-span
+    derive-family helper added to the derive span without recording — the standing guard against a silent
+    invalidation weakening. Residual accepted and documented: a file edited mid-walk can mint a torn record
+    (edges of content v1 keyed to hash v2, sticky until the next change) — hashing at read time would cost the
+    per-file forks the design exists to avoid.
+
+## Amendment — 2026-10-10 (#9813)
+
+22. **The declared-edge grammar has a third kind, `glob:<literal-head>/<glob-tail>`, for corpus
+    walkers whose read set is narrower than a directory.** Six `*.sh` corpus walkers declared
+    `knowledge-base/` — honest at prefix granularity (generated operator scripts ship under
+    `knowledge-base/project/specs/`) but over-broad in practice: a `.md`-only kb diff could never
+    move their verdict yet selected all six for ~264 committed seconds (the issue's ~331 s figure
+    counted `test-affected-kb-consumers` too, which still selects on any kb path by design; the
+    five extension-bounded walkers that took the glob account for ~248 s of it). A
+    `glob:` entry mints `^glob:<pattern>`; a diff line under the literal head matching the tail
+    under bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers both `x.sh`
+    and `a/b/c.sh`) selects the suite. The degrade ladder always fails toward coverage: a missing
+    head dir mints `^<head>/` (the dir-prefix edge the entry replaced), a malformed entry mints
+    `^glob:<entry verbatim>` — an always-match shape, since a bare `^` would evaluate `*\n\n*` and
+    narrow — and a `glob:` with no metachar recurses as a literal path entry. `glob:` is
+    declaration-array-only by intent: the token extractors never emit it on purpose (a
+    `glob:`-spelled literal in scanned content still hits the same mint arm — widen-only), and the
+    relevance arrays stay verbatim substring edges. The malformed-shape doctrine — a closed
+    charset (`[-A-Za-z0-9_./]` plus `*` in the tail) and a repo-relative head (a `..`/`/`/`//`
+    head can pass a `-d` probe while matching no diff line ever — review B1) — is pinned
+    identical at five sites: the mint arm in `_affected_add_edge`, the in-flight revalidation in
+    `_diff_edge_hit`, the census arm in `scripts/lint-orphan-test-suites.sh` (a static RED, since
+    a bad entry widens every diff's selection), the `covers()` oracle in
+    `scripts/test-affected-kb-consumers.test.sh`, and the `GLOBENT` shape in the
+    registration-only classifier, which admits the shape as registration-only; every other added
+    line stays semantic. The real `.md` read under kb the consumer ratchet surfaced —
+    the provision-script `DPA_FILE` closure for `operator-ack-guard` — is a literal file edge:
+    the issue's `.md`-only-decline contract holds for the corpus scan, not for reads a suite
+    actually has. `lint-trap-tempfile-ownership` carries the wider seven-entry set its
+    `ALL_EXT` corpus (.sh .bash .py .ts .mjs .js + bunfig.toml) reads, so an extension the
+    issue's `*.sh` framing never named is not silently under-covered. Two suites keep
+    `knowledge-base/` because their corpora are NOT extension-bounded:
+    `scripts/test-affected-kb-consumers` (any kb file can be a consumer) and
+    `plugins/soleur/test/operator-agent-runnable` — its Guard-1 discovery is `git grep
+    --untracked` for the generated-script marker on ANY extension, a content-keyed read the
+    review surfaced (a kb `.md` quoting the marker is in its corpus; `**.sh` would
+    under-cover, ~16 committed seconds is the price of honesty).
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Per-suffix literal edges (one `^`-anchored file edge per corpus member) | A new `.sh` file under kb would silently under-cover until the arrays were re-edited — the exact drift class the glob tail exists to absorb. |
+| Keep `knowledge-base/` and accept the over-selection | The measured cost is ~331 committed seconds per kb-markdown diff — the entire motivation for the ticket. |
+| A regex edge kind instead of the bash-pattern glob | Bash `[[ == ]]` patterns are already the runner's grammar (`*.test.sh` glob registration, anchored edge matching); a second matcher family adds a semantics to keep consistent at the mint/hit/census sites for zero measured need. |
+| Malformed `glob:` mints a bare `^` | A bare `^` evaluates `*\n\n*` against the normalized blob — it matches only diffs containing an EMPTY line, which narrows instead of widening. `^glob:<verbatim>` is the always-match shape the hit arm recognizes by rule. |
+
+## Amendment — 2026-10-11 (#9814)
+
+A local run reports local-vs-committed weight drift as an advisory line, never
+a gate. `scripts/test-all.sh` defaults `TEST_TIMING_LOG` to
+`$_durable_log_dir/suite-timings.tsv` on local affected-shaped runs
+(`CI` unset, `TEST_TIMING_LOG` unset, `TEST_GROUP=affected` or
+`_AFFECTED==1` on the all-group default — the two selectors stay disjoint by
+design, and enumerate/print paths decline before paying a `mkdir`), guarded
+by a `mkdir -p` + `[[ -w && -O ]]` probe — `-w` degrades an unwritable target
+to "no timing log" instead of a `>>`-under-`set -e` mid-run abort, and `-O`
+declines a co-tenant-owned pre-created leaf (the `basename-$$-EPOCHSECONDS`
+name is predictable), followed by `: >` truncation so a bash-3.2 PID-reused
+dir never serves stale rows, and an armed `[note]` naming the log path.
+The assignment is IN-SHELL, never `export`: every consumer (`run_suite`'s
+`>>`, `_emit_bytes_probe`, the epilogue emit) reads it in the runner's own
+process, and an exported var would leak this run's log path into every
+nested copy of the runner that runner-SUT suites spawn — phantom
+`committed=unmeasured` lines on exactly the runner-touching diffs this
+feature is for. (Corollary: every runner-SUT sandbox inherits the arm —
+sibling fixtures opt out with `TEST_TIMING_LOG=/dev/null`.) The epilogue then calls
+`weight_drift_report` (`scripts/lib/test-weight-drift.sh`, one `LC_ALL=C awk`
+pass, bash-3.2-safe, always returns 0) over `"$_scriptdir"/suite-durations*.tsv`
+— the glob, not two literals, so a future manifest joins the comparison
+instead of mis-reporting `unmeasured`. The emit sits in the post-marker NOTE
+region: `=== N/N suites passed ===` stays the last `===`-shaped line and a
+monitor exiting on the marker never sees the lines, which is accepted — they
+live in run output and the durable TSV. The predicate is strict
+`local > 2*committed AND local > 10000` (`WEIGHT_DRIFT_FLOOR_MS`, value-pinned
+beside `LOCAL_FAST_CAP_MS`'s convention); ran rows with no committed row emit
+`committed=unmeasured` (absence is visible, never silent), `floor`-class
+anchors add `basis=floor`, and a log whose ran rows all show `elapsed_ms=0`
+emits `WEIGHT_DRIFT_UNAVAILABLE` once — the bash-3.2 vacuity is named, not
+read as clean. Lines dual-emit to stdout and stderr: a line that only reaches
+stderr is invisible to the invoking agent's stdout capture. The new suite
+registers as `ALWAYS_ON_SUITES` + an `AFFECTED_*_PATHS` block whose manifest
+edge is `glob:scripts/*.tsv` — not `suite-durations*`: the #9813 grammar
+requires a /-terminated literal head, so a file-prefix glob cannot be declared
+and covering the manifest class is the honest widening — and its committed
+weight row is
+written only by `regenerate-shard-manifest.py --incremental --write`
+(ADR-240: generated, never hand-edited).
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Gate on drift (fail the run) | A contended host inflates every ratio (7.6x and 6.0x measured on the 2026-10-09 spot-check); a gate would flake every local run on a loaded machine. The issue's own posture is warn-only. |
+| Opt-in only (no default; require TEST_TIMING_LOG set) | An opt-in instrument is invisible by default — the exact shape that let the 185s-vs-8.5s suite slip through #9763 unnoticed. |
+| Local-median baseline file | Needs a local timing corpus that does not exist; committed rows are the only baseline, and they are what the fast-tier ratchet is charged against, so drift-from-committed is the meaningful signal. |
+| Compare against `_suite_budget_ms` declared budgets | That predicate compares per-suite DECLARED budgets, not committed CI weights; a suite with no declared budget is invisible — the same unaccountability class this amendment closes. |
+
+## Amendment — 2026-10-11 (#9815)
+
+Context: decision 3's affected-selection doctrine ("the diff that makes a suite relevant is the diff that
+selects it") stopped at suite granularity — the two webplat vitest legs always ran their whole projects on any
+app diff (~82 s `unit`, ~80 s `repo-wide+component`, measured in #9763). This amendment extends the doctrine one
+level down, to intra-suite narrowing, and records the mechanism and its bounds.
+
+23. **Intra-suite narrowing follows the same eligibility doctrine as suite-level selection: narrow only inside
+    a positively-armed affected-shaped local run, and every decline lands on the full shape.** When the local
+    gate is armed (`TEST_GROUP=affected`, or the default `_AFFECTED` path with no `_aff_fallback` degradation),
+    `CI` unset, `SOLEUR_TEST_FORCE_ALL != 1`, and the diff decidable (`_diff_detect_ok`/`_diff_head_ok`), the
+    runner computes the diff's app-relative changed files and hands them to the suite command as
+    `WEBPLAT_RELATED` — an `env` prefix on the registration, never exported, so a nested runner child cannot
+    inherit a parent's list. The `repo-wide` project can never be narrowed (its subject is the repository) and
+    runs full inside every shape; `unit` and `component` narrow-or-fall-back. Zero resolves are a coverage
+    verdict, never a green: the wrapper greps vitest's own `No test files found` phrase — a version-pinned
+    string, so a vitest bump that rewords it reds the suite's real-binary arm on the bump diff — and re-runs
+    the full project. A nonzero `related` rc propagates WITHOUT a fallback re-run (a red is a verdict, not a
+    coverage gap). CI legs are untouched by construction: the `CI` conjunct leaves `WEBPLAT_RELATED` empty and
+    the empty path IS today's exact `npm run test:ci` invocation, shard forward included.
+
+24. **The run-semantics set (`WEBPLAT_RELATED_META`) is a measured enumeration, not a heuristic.** Fourteen
+    entries derived from the actual tree: every file that changes *what the run means* — both vitest configs,
+    the project-membership file, the containment guard (the doctrine anchor), every `setupFiles:`/`globalSetup:`
+    entry the config names (verified invisible to `related`'s import graph — a setup diff would otherwise
+    narrow out the very tests that exercise it), the package manifest pair, `tsconfig.json`, `.npmrc`,
+    `.nvmrc`, the wrapper itself (the narrowing mechanism never narrows its own diff), and the predicate lib.
+    `test/helpers`, mocks and fixtures are deliberately NOT meta: they are ordinary import-graph members and
+    `related` resolves their importers correctly — the issue's "shared helpers" prompt is satisfied by the
+    graph, not the list. Every member must exist on disk (the suite's A9d arm pins the derivation).
+
+25. **The degraded-full verdict is the boundary below which no narrowing may hide.** `_aff_fallback` non-empty
+    (runner-changed, index-missing, undecidable-diff, force-all degradation) is the runner's own statement
+    "this affected run degraded to the full battery" — a run carrying that verdict must not run a narrower
+    shape inside itself, so the same flag gates the computation. Enumerate passes compute `""` deterministically
+    (the command record is stable across enumerate and execute).
+
+26. **The runner-side vocabulary is `vitest related <files> --run`, not `vitest run --related`** — the issue
+    text's spelling does not exist at the pinned vitest (4.1.11): `related` is a distinct subcommand that takes
+    the project flag. The wrapper keeps `--run` (the docs-prescribed non-watch form); the measured uncertainty —
+    at 4.1.11 a `related` call over positional files exits clean without it — is recorded rather than asserted:
+    the pin is static (the flag's presence is asserted, and removing it reds the pin), the behavioural necessity
+    is not claimed. Dynamic `import(var)` is invisible to `related`'s static graph (3 sites in
+    `cron-ux-audit.ts`; the meta set and the zero-resolution fail-safe bound the residual: a change that
+    exercises behaviour ONLY through a dynamic import narrows to zero tests and falls back to full).
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Narrow at the registration edge instead of inside the suite | The registration's `if _diff_touches` gate already answers "app diff or not"; the narrowing question is WHICH test files inside an app diff — an argv-level answer the runner can compute but only the vitest import graph can resolve. Putting resolution inside the suite keeps the runner's job to eligibility + the file list. |
+| `vitest run --related` (issue text's spelling) | Does not exist at vitest 4.1.11 — `CACError: Unknown option`. `vitest related <files> --run` is the real form. |
+| Export `WEBPLAT_RELATED` | The #9814 learning's env-scrub class: an exported var leaks into every suite child (a nested runner would inherit the parent's list). `env` per registration is the bounded channel. |
+| Meta-hit = subset of diff under the app | Two meta entries live outside the app (`scripts/lib/test-affected-paths.sh`'s sibling, `test-relevance-paths.sh`) — membership is checked against the whole diff, not only app paths. |
+| Decline the whole feature because `related` misses dynamic imports | The residual is bounded: zero-resolution falls back to full, the meta set covers run-semantics files, and a dynamic-import-only change is already the class of diff a reviewer flags. Accepting a bounded coverage gap buys the measured ~40-60 s per app diff. |
+
+## Amendment — 2026-10-13 (#10117)
+
+Context: decision 22's `glob:<literal-head>/<glob-tail>` edge kind covered every corpus member
+under a directory but stopped at the grammar boundary — a dir-less corpus file at the repository
+root (`x.test.sh`, `x.sh`) has no `<dir>/` head to mint, so no declared edge can cover it and its
+diff would select no corpus suite: a silent hole. The same fix round's review identified two
+further residuals on different surfaces: `--paths` elements were diff-name stand-ins that never
+matched a git path line (`./x` silently selected nothing — a misleading diagnostic), and the th6
+root-coverage census certified a `glob:<root>/` edge by *suffix shape* rather than *matchability*
+(a `sub/*.test.sh` tail ends in `.test.sh` yet reaches only that subtree — it under-covers the
+root the corpus scan enumerates).
+
+27. **The root-anchored `glob:` grammar stays unrepresentable; detection, not extension, is the
+    durable posture.** A dir-less corpus file is detected loudly — the th8 row in
+    `scripts/test-all-affected.test.sh` re-derives the single-component complement of
+    `git ls-files` (`.test.sh` and `.sh`-but-not-`.test.sh` as disjoint classes, with a
+    producer-liveness floor and `_TH_REPO` fixture confinement) and REDs the first battery run
+    carrying one — while the grammar extension is deferred to #10198 and activates only when a
+    live member exists. The row stays RED on existence alone: a literal edge or an ALWAYS_ON
+    entry covers the file's *selection* in the interim but does not clear it — the durable exits
+    are moving the file under a covered root or landing the #10198 extension (at which point the
+    row's expectation revisits what the new grammar expresses). The decision is *detect now,
+    extend on evidence* — the grammar grows for a member that exists, never for one that might.
+    Companion hardening in the same change: `--paths` elements normalize a leading `./` run to
+    fixpoint at the parse arm and refuse unclean spellings (empty elements, absolute, `..` or
+    `/.` or `//` segments, a trailing `/`, control bytes) with a named rc-2 error — a print-only
+    diagnostic that silently selects nothing is a lie; and the th6 census predicate now certifies
+    a root only via the forms the mint arm can actually act on — a `<root>/` (or slash-less
+    `<root>`) dir member whose target exists on disk, or a `glob:<root>/` edge whose tail is a
+    bare `*<ext>` or `**<ext>` — so only an edge that can actually match the corpus class
+    certifies it. Note for readers of
+    `scripts/audit-suite-reads.sh`: its `UNCOVERED_AWK` compares an edge by literal equality or
+    `<dir>/` prefix only, so a read covered solely by a `glob:` member reports as uncovered —
+    over-report, the safe direction; those rows are not oracle disagreements.

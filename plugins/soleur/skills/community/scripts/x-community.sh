@@ -164,6 +164,14 @@ report_transport_failure() {
 # exists to close, one layer up. readonly makes the destination non-rebindable.
 readonly X_API="https://api.x.com"
 
+# (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
+# The helper library is sourced LAZILY, inside oauth_sign at each signature, not here: it
+# refuses `bash -x` unconditionally at load time (it names its key indirectly, so it has no
+# literal credential name to test), and loading it up here would make `bash -x x-community.sh`
+# with no credentials set exit 78 instead of printing usage -- the case this file's conditional
+# prologue above promises to keep working.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # --- Dependency checks ---
 
 require_openssl() {
@@ -207,15 +215,29 @@ require_credentials() {
     echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
     echo "  2. Create or select a project and app" >&2
     echo "  3. Generate API Key, API Secret, Access Token, and Access Token Secret" >&2
-    echo "  4. Export them as environment variables" >&2
+    echo "  4. Export them as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three" >&2
     exit 1
   fi
 }
 
+# (#9597) The OAuth 1.0a Authorization header carries the signature and the access
+# token, so it rides curl's stdin config channel (`--config -`), never its argument
+# list (readable by every local user in /proc/<pid>/cmdline). The channel is
+# line-oriented: a CR/LF or other control character in the header would end the
+# `header = "..."` directive and let the following bytes act as a new one, so a header
+# holding one is refused BEFORE it is formatted into the stream. The header's own
+# quotes (`oauth_token="..."`) are legitimate and are escaped by `_cfg_q`. The consumer
+# secret and token secret never reach curl at all: they only key the HMAC in oauth_sign.
+_hdr_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+_cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; }
+
 # --- OAuth 1.0a signing ---
 
-# URL-encode a string per RFC 3986
+# URL-encode a string per RFC 3986 (RFC 5849 3.6 for OAuth). Byte-wise: under LC_ALL=C each byte
+# is one character, so a multi-byte UTF-8 character encodes as its bytes (%C3%A9), not as a
+# code point (the `printf '%02X' "'é"` form gives E9 in a UTF-8 locale, which is not the encoding).
 urlencode() {
+  local LC_ALL=C
   local string="$1"
   local encoded=""
   local i c o
@@ -277,12 +299,33 @@ oauth_sign() {
   # Build signature base string
   local base_string="${method}&$(urlencode "$url")&$(urlencode "$param_string")"
 
-  # Build signing key
+  # Build signing key (read BY NAME inside the HMAC function below)
+  # shellcheck disable=SC2034
   local signing_key="$(urlencode "${X_API_SECRET}")&$(urlencode "${X_ACCESS_TOKEN_SECRET}")"
 
-  # Generate HMAC-SHA1 signature
+  # Generate HMAC-SHA1 signature (#9597). The signing key is handed to the function by NAME and
+  # lives only in bash builtins and pipes: it is on no process's argument list. A failed
+  # computation yields no signature and the request is never sent unsigned.
+  # oauth_sign runs inside `$(...)`, so the load's stdout (the library's xtrace refusal text) goes
+  # to the saved real stdout (fd 3), where the founder sees it, not into the captured header.
+  # The load happens at EACH signature, not once: this function body is a command-substitution
+  # subshell, so a function defined here dies with it and nothing is cached for the next call (the
+  # library is one small file). Any function of this name inherited from the environment (an
+  # exported bash function) is dropped first, so an inherited function named hmac_sha1_b64 cannot
+  # stand in for the library's. That is all this closes: the key stays readable by any other
+  # exported function (one named od, tr, openssl, base64 or cat still receives it on its stdin),
+  # which is the same exposure as the exported secret variables themselves.
+  unset -f hmac_sha1_b64 2>/dev/null || true
+  source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {
+    echo "Error: could not load the OAuth signing helper; refusing to send an unsigned request." >&2
+    return 1
+  }
   local signature
-  signature=$(printf '%s' "$base_string" | openssl dgst -sha1 -hmac "$signing_key" -binary | base64)
+  signature=$(printf '%s' "$base_string" | hmac_sha1_b64 signing_key) || signature=""
+  if [[ -z "$signature" ]]; then
+    echo "Error: could not compute the OAuth signature; refusing to send an unsigned request." >&2
+    return 1
+  fi
 
   # Build Authorization header
   local auth_header="OAuth "
@@ -389,14 +432,14 @@ post_request() {
 
   local url="${X_API}${endpoint}"
   local auth_header
-  auth_header=$(oauth_sign "POST" "$url")
+  # `|| exit 1`: a failed signature (it has already said why) stops here. These helpers run inside
+  # `$(...)`, where errexit does not apply, so without it the empty header would fall through to the
+  # shape check below and print a second, misleading "unexpected shape" line.
+  auth_header=$(oauth_sign "POST" "$url") || exit 1
 
   local -a curl_args=(
-    # `--disable` first (position is load-bearing) and `--noproxy '*'`: the array
-    # is expanded as `curl "${curl_args[@]}"`, so element 0 is curl's first arg.
-    --disable --noproxy '*'
     -s -w "\n%{http_code}"
-    -H "Authorization: ${auth_header}"
+    --config -
     -H "Content-Type: application/json"
   )
 
@@ -404,10 +447,17 @@ post_request() {
     curl_args+=(-X POST -d "$json_body")
   fi
 
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+
   local response http_code body
-  # Suppress stderr to prevent credential leakage
+  # Suppress stderr to prevent credential leakage. The signed header rides curl's stdin
+  # config channel, never its argument list.
   local __curl_rc=0
-  response=$(curl "${curl_args[@]}" "$url" 2>/dev/null) || __curl_rc=$?
+  response=$(curl --disable --noproxy '*' "${curl_args[@]}" "$url" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to X API."
     exit 1
@@ -447,9 +497,9 @@ get_request() {
     while IFS= read -r param; do
       [[ -n "$param" ]] && param_args+=("$param")
     done <<< "${query_params//&/$'\n'}"
-    auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}")
+    auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}") || exit 1
   else
-    auth_header=$(oauth_sign "GET" "$url")
+    auth_header=$(oauth_sign "GET" "$url") || exit 1
   fi
 
   # Build request URL with query string
@@ -459,10 +509,15 @@ get_request() {
   fi
 
   local response http_code body
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-    -H "Authorization: ${auth_header}" \
-    "$request_url" 2>/dev/null) || __curl_rc=$?
+  # The signed header rides curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+    "$request_url" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to X API."
     exit 1
@@ -579,11 +634,11 @@ cmd_fetch_mentions() {
           exit 1
         fi
         if ! [[ "$mr_val" =~ ^[0-9]+$ ]]; then
-          echo "Error: --max-results must be a numeric value, got '${mr_val}'." >&2
+          echo "Error: --max-results must be a numeric value." >&2
           exit 1
         fi
         if (( mr_val < 5 || mr_val > 100 )); then
-          echo "Error: --max-results must be between 5 and 100, got ${mr_val}." >&2
+          echo "Error: --max-results must be between 5 and 100." >&2
           exit 1
         fi
         max_results="$mr_val"
@@ -596,14 +651,14 @@ cmd_fetch_mentions() {
           exit 1
         fi
         if ! [[ "$si_val" =~ ^[0-9]+$ ]]; then
-          echo "Error: --since-id must be a numeric value, got '${si_val}'." >&2
+          echo "Error: --since-id must be a numeric value." >&2
           exit 1
         fi
         since_id="$si_val"
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '${1:-}'" >&2
+        echo "Error: Unknown option." >&2
         echo "Usage: x-community.sh fetch-mentions [--max-results N] [--since-id ID]" >&2
         exit 1
         ;;
@@ -671,7 +726,7 @@ cmd_fetch_timeline() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -679,7 +734,7 @@ cmd_fetch_timeline() {
 
   # Validate --max is a positive integer (prevents query param injection)
   if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
-    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    echo "Error: --max must be a positive integer." >&2
     exit 1
   fi
 
@@ -710,7 +765,7 @@ cmd_fetch_user_timeline() {
 
   # Validate user_id is a positive integer (prevents path traversal)
   if [[ ! "$user_id" =~ ^[0-9]+$ ]]; then
-    echo "Error: user_id must be a positive integer, got '${user_id}'." >&2
+    echo "Error: user_id must be a positive integer." >&2
     exit 1
   fi
 
@@ -723,7 +778,7 @@ cmd_fetch_user_timeline() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -731,7 +786,7 @@ cmd_fetch_user_timeline() {
 
   # Validate --max is a positive integer
   if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
-    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    echo "Error: --max must be a positive integer." >&2
     exit 1
   fi
 
@@ -766,7 +821,7 @@ cmd_post_tweet() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -822,7 +877,7 @@ main() {
     fetch-user-timeline) cmd_fetch_user_timeline "$@" ;;
     post-tweet)          cmd_post_tweet "$@" ;;
     *)
-      echo "Error: Unknown command '${command}'" >&2
+      echo "Error: Unknown command." >&2
       echo "Run 'x-community.sh' without arguments for usage." >&2
       exit 1
       ;;

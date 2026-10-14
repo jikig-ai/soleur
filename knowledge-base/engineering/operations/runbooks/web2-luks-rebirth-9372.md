@@ -1,7 +1,13 @@
 # Runbook — the web-2 LUKS rebirth (#9372, single-use)
 
+> **RETIRED 2026-10-12 (#9372).** The workflow this runbook dispatches (`web2-luks-rebirth.yml`) and the reboot workflow (`web-host-reboot.yml`) are deleted, so every `gh workflow run` command below returns 404. This file is history only: it records how the single-use rebirth ran on 2026-10-06 and how its evidence was graded. The current state is the ADR-263 addendum of 2026-10-12; a volume re-birth, a passphrase-loss recovery or an escrow redo would need a new workflow in a new reviewed change.
+
 **Status:** the workflow is merged and **inert** until dispatched; nothing here has been run. Written 2026-10-05 (ADR-263 addendum).
 **Applies to:** the live `web-2` standby only. `web-1` is refused by name at every layer.
+
+**Status correction, 2026-10-07 (append-only; the status line above is left as written).** It is stale: the workflow has been dispatched. `gh run view` (read-only, 2026-10-07) shows runs 37508997529 and 37516716515 (`workflow_dispatch`, 2026-10-06, SHA `ed6083309f`) concluded `success`. In each, the Terraform apply, the readiness wait, the birth-time recovery check and the hcloud reboot-issue step are `success` (the second run skipped the `pre` plan). That records that the steps ran; the reboot step only **issues** the request, and the graded evidence is still pending: web-2 is *provisioned, proof pending* at weight 0 until `scripts/followthroughs/web2-luks-live-6931.sh` reports PASS. The workflows `web2-luks-rebirth.yml`, `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` read `active` on 2026-10-07, and #9372, #6931, #9669 and #9572 read OPEN.
+
+**Amendment, 2026-10-08 (append-only; owner decision 2026-10-07, ADR-263 addendum of 2026-10-08, which owns the rule): no reboot is required for the evidence.** A host is replaced, not rebooted. This supersedes every statement below that makes a probe row on a different `boot_id` (a reboot) part of the proof, in particular the paragraph after "After the apply:", the section "The reboot and its evidence: a separate workflow", closing rows 2 and 6, and the "Go/no-go" date arithmetic in closing row 4 (the directive's `earliest` was re-set on 2026-10-07 to 2026-10-10T20:10:00Z; row 4's 2026-10-18 figure is the older plan). web-2 was replaced on 2026-10-07 (server 169271252) after the previous instance did not come back from a soft reboot. A `noop` or arm-less readiness row cannot be repaired by waiting or rebooting: only replacing the host produces a new one. Nothing here is a claim about the volume's encryption or rebirth: that waits for the grader's PASS over real rows.
 
 web-2 holds no user data and takes no traffic (weight 0, no soak marker). Its volume was created ext4, so the guest-side
 provisioner refuses to format it. This workflow deletes that **empty** volume through the Hetzner API, forgets it from
@@ -14,12 +20,39 @@ the authorization. Do not dispatch from a menu answer or a "continue".
 1. The **retirement change** is merged: it deletes `apply-web-escrow-create.yml` and flips the rotation HALT's `create`
    exemption in `tests/scripts/lib/destroy-guard-filter-web-platform.jq`. An apply dispatch refuses until it is (the
    `flip-precondition` step prints `NOT met`; a `plan_only` run prints `PENDING`).
-2. Both push-apply workflows are paused and idle. Check both, nothing may be queued or running:
+
+   **Landed from the merge of the retirement change (PR #9569, #9372).** That change deletes the escrow-create workflow and makes the
+   rotation HALT count a `create` of the web-class passphrase, so the flip precondition can read met. Verify it against the merged
+   tree before the first dispatch (run it with `GITHUB_OUTPUT` unset); the output must contain `flip precondition: MET`:
 
    ```bash
-   gh api repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml --jq .state      # disabled_manually
-   gh api repos/jikig-ai/soleur/actions/workflows/apply-deploy-pipeline-fix.yml --jq .state     # disabled_manually
+   bash scripts/web2-rebirth.sh flip-precondition yes
    ```
+
+2. Pause both push-apply workflows and confirm they are idle. Both were `active` (not paused) on 2026-10-06, and the merge of the
+   retirement change fires a routine push-apply (no Terraform diff is expected). Order:
+
+   1. Wait for the push-apply run on the merge SHA to finish green with a plan of "No changes". A different plan is a
+      finding to read, not noise.
+   2. Only then pause both:
+
+      ```bash
+      gh workflow disable apply-web-platform-infra.yml
+      gh workflow disable apply-deploy-pipeline-fix.yml
+      ```
+
+   3. Check both, nothing may be queued or running, then dispatch:
+
+      ```bash
+      gh api repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml --jq .state      # disabled_manually
+      gh api repos/jikig-ai/soleur/actions/workflows/apply-deploy-pipeline-fix.yml --jq .state     # disabled_manually
+      ```
+
+   After the rebirth, re-enable them only once closing-checklist row 3 (the host-key pin re-capture) is done, with
+   `gh workflow enable apply-web-platform-infra.yml` and `gh workflow enable apply-deploy-pipeline-fix.yml`. Neither this
+   runbook nor the apply workflows document a catch-up for a diff merged while they were paused (a push-apply fires on a push
+   that touches its path filters, and `workflow_dispatch` is its documented manual escape hatch for ad-hoc applies), so the
+   owner decides how such a diff is applied.
 
 3. `image_tag` is a published web-platform release that carries the fresh-boot provisioner: take the newest tag at or after the
    merge commit of the PR that added this workflow (`gh release list --limit 5`). Either `v3.1.2` or `3.1.2` is accepted. The
@@ -40,10 +73,29 @@ gh run watch <databaseId> --exit-status          # confirm the run actually star
                                                  # running and one pending run, and a queued run can displace an older pending one
 ```
 
+A plan-only run is also held at the `web-platform-infra-apply` environment approval before any step runs, so `gh run watch` shows it
+waiting until the owner approves.
+
 Read the run log's `verdict:` line, the printed `pinned volume:` line, the emptiness verdict (it prints the minimum, maximum,
-spread and ceiling) and the dispatch summary. **The 1 GiB ceiling is a coarse bound, not proof of emptiness:** the owner reads the
-printed used-bytes values before approving the apply, and the first live run is also the first measurement of the real empty
-baseline. In the `heal:detach_done` window the freshness bound is dropped and coverage falls to 24 h (a detached device stops reporting); the zero
+spread and ceiling) and the dispatch summary.
+
+**Reading an emptiness RED.** `RED reason=used_bytes_absent_or_host_dark` means no row for the used series survived the query: a dark host, a changed
+stored row shape, more than one distinct device reporting `/mnt/data` in the window, or a missing, empty or non-string `tags.device` on
+some row (the one-device clause drops that metric's whole group, so the same fault on the total series reads `total_bytes_absent`).
+The other reasons name the FIRST rule that failed, in this order: `used_bytes_malformed`, `coverage_gap`, `stale`,
+`used_bytes_zero_or_missing`, `not_empty`, `not_flat`, `total_bytes_absent`, `total_bytes_malformed`, `not_the_20gb_volume`; `emptiness_body_unparseable` and
+`emptiness_judge_error` mean the answer could not be read, and exit code 2 means the read did not answer at all (no verdict). To re-run the read-only
+control without a dispatch: `doppler run -p soleur -c prd_terraform -- bash scripts/web2-rebirth-emptiness.sh` (prints `PASS ...` with
+hours, newest age, min, max and spread, or the RED reason); to see which devices report, run the same WHERE with a
+`GROUP BY JSONExtractString(raw,'tags','device')` through `scripts/betterstack-query.sh`. The control uses the Doppler read
+credentials and the workflow uses the repo secrets `BETTERSTACK_QUERY_*`, so the first plan-only dispatch is the credential-parity check.
+
+**The 1 GiB ceiling is a coarse bound, not proof of emptiness:** the owner reads the
+printed used-bytes values from the plan-only run before authorizing the apply dispatch: the `web-platform-infra-apply` environment
+approval is a job-level gate, so it comes BEFORE the evidence step, and an apply dispatch's PASS flows into the delete in the same
+approved job. The Better Stack paths were confirmed 2026-10-06 and the observed level is about 16 MB (min 15.6 MB, max 16.0 MB over
+169 h; the header of `scripts/web2-rebirth-emptiness.sh` carries the control). That is the volume's own reading, not an independent
+empty reference: an ext4 volume is never byte-empty, and neither the 1 GiB ceiling nor the 64 MiB spread proves emptiness. In the `heal:detach_done` window the freshness bound is dropped and coverage falls to 24 h (a detached device stops reporting); the zero
 floor, the ceiling, the spread and the size window still apply. Only after the owner approves **that** apply, dispatch with `-f plan_only=false` and approve the
 `web-platform-infra-apply` environment gate. The classifier verdict is also a job output (`verdict`).
 
@@ -86,14 +138,16 @@ freshness, a non-zero minimum because a missing value path reads as 0, the 1 GiB
 writes is not "idle", and a 15 to 21.5 GB total so a mis-mounted root disk cannot pass), the soak marker absent by exact-name
 membership over secret **names** (a list shape the reader cannot interpret is a refusal, never "absent"), the Hetzner volume still
 ext4 with the pinned id, name and labels. **Not measured by this run:** web-2's serving weight (no weight orchestrator exists in the
-repo at this SHA; the marker is the only seam and the dispatch is only from `main` where the anti-pooling CI suite `lb-weight-gate.test.sh` has run). The Better Stack JSON paths and the `dm-*` exclusion in `vector.toml` are **unconfirmed until the first live query**; an
-absent field fails closed.
+repo at this SHA; the marker is the only seam and the dispatch is only from `main` where the anti-pooling CI suite `lb-weight-gate.test.sh` has run). The Better Stack JSON paths were confirmed on 2026-10-06 (`tags.host`, `namespace`, `tags.mountpoint`, `name`, `gauge.value`); the
+`dm-*` exclusion in `vector.toml` (whether it drops the LUKS mapper device) is still **unconfirmed**; an absent field fails closed.
 
 After the apply: a `SOLEUR_FRESH_BOOT_READY` row newer than web-2's own Hetzner creation time with `luks=1 luks_arm=formatted
 escrow=ok`; a read-only birth-time consistency check of the escrowed header and the two passphrase copies (`restore NOT exercised;
-open until #7992 and a restore drill`); then an hcloud reboot is **issued**. The run never claims the volume reopens: the proof is a
-later luks-monitor probe row on a `boot_id` other than the readiness row's, `crypto_LUKS` on `/dev/mapper/workspaces`, graded by
-`scripts/followthroughs/web2-luks-live-6931.sh` and required by the soak marker. Until then web-2 is *provisioned, proof pending*, at
+open until #7992 and a restore drill`); then an hcloud reboot is **issued**. The run never makes a LUKS-backed claim: since
+2026-10-08 the proof is the instance's readiness row (`luks_arm` `formatted` or `opened`) plus luks-monitor probe rows,
+`crypto_LUKS` on `/dev/mapper/workspaces`, green on three distinct days, graded by
+`scripts/followthroughs/web2-luks-live-6931.sh`; the soak marker needs the readiness arm and one fresh green probe row. No reboot is required (see the amendment at the top).
+Until then web-2 is *provisioned, proof pending*, at
 weight 0, holding no workspace data. The dispatch summary (also printed to the run log) lists the evidence: reason, commit,
 dispatcher and approver(s), timestamps, the old volume's id/name/size/labels, emptiness and never-pooled verdicts, image and hash
 equality, the delete and forget results, the readiness row, the escrow object facts and the new server id and location. It makes the
@@ -105,18 +159,46 @@ detects a lost update only after the fact; the Doppler and Terraform-state copie
 web-2 is being replaced, web-1 carries the watchdog dispatch clock alone and web-2's own heartbeat alert may fire: that is expected
 for the window, not a fault.
 
+## The reboot and its evidence: a separate workflow (2026-10-07)
+
+> **Superseded 2026-10-08 (#9372):** no reboot is part of the evidence rule; see the amendment at the top.
+
+> **Retired 2026-10-12 (#9372):** `web-host-reboot.yml` is deleted; [web-host-reboot.md](./web-host-reboot.md) is kept with a RETIRED banner as history.
+
+The graded reboot evidence is gathered by a separate dispatch-only workflow, `web-host-reboot.yml`, run by the dispatching agent with the owner's environment approval as the only gate. It soft-reboots one allow-listed host (web-2) and reports Better Stack rows only, as PASS (row presence only), FAIL or NOT YET; it makes no statement about the volume. Dispatch inputs, the read-only id lookup, how to read each verdict and `next:` line, the re-grade command, the FAIL branch and the dark-host path (`web_host_replace` with a bare `image_tag`, #9669) are in [web-host-reboot.md](./web-host-reboot.md). It does not replace the follow-through on #6931, which grades the soak, and it is retired together with this workflow (closing row 5).
+
 ## Closing checklist (a separate change; none of it ships with the workflow)
+
+In this checklist "the closing change" is the later change made after the rebirth has run. The change that retired the escrow-create workflow and flipped the HALT (PR #9569) is called the retirement change.
 
 | # | Step | Who |
 |---|---|---|
 | 1 | Copy the dispatch summary (run id, SHA, dispatcher, approver, timestamps) into the closing change: run logs expire | the engineer or agent landing the change |
-| 2 | Flip the `hcloud_volume.workspaces` ledger row to `luks` (`live_verification: available`, `live_coverage_floor` 2 to 3), and supersede the Article 30 and compliance-posture sentences conditioned on this event with dated markers (the two cells stay byte-equal after bold removal). **No cell says "LUKS-backed at boot" before the graded reboot proof.** | the CLO agent drafts, the owner holds a veto |
-| 3 | Re-capture web-2's SSH host-key pin (`scripts/capture-web-2-host-key.sh`, which needs the new IP printed in the summary); `apply-deploy-pipeline-fix` fails closed until then. Re-enable the push-apply workflows only after that | the engineer, then the owner re-enables |
-| 4 | UPDATE the existing follow-through directive on #6931 (`earliest=` to rebirth + 3 days, printed in the summary); do not add a second | the engineer |
-| 5 | Delete `web2-luks-rebirth.yml`, `scripts/web2-rebirth*.sh` and their tests, `tests/scripts/lib/web-host-rebirth-gate.sh`, `tests/scripts/lib/web2-rebirth-classify.sh`, the fixtures, the suite registrations and the `MAIN_ROOT_TF_WORKFLOWS` entry (census 5 to 4), and record the use in ADR-263. Also correct the CONSUMERS comment on `DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER` in `workspaces-luks-fresh-boot.tf` (it names only the verify workflow and the sweeper) in that change | the engineer |
-| 6 | Decision date **2026-10-15**: the dispatch has run and the ledger flip is in review, or the encryption-posture exception on `hcloud_volume.workspaces` (expires 2026-10-22) is extended citing #6931 | the owner |
+| 2 | Flip the `hcloud_volume.workspaces` ledger row to `luks` (`live_verification: available`, `live_coverage_floor` 2 to 3), and supersede the Article 30 and compliance-posture sentences conditioned on this event with dated markers (the two cells stay byte-equal after bold removal). **No cell says "LUKS-backed" before the graded #6931 PASS, and after it none says "at boot" or "survives a reboot": the rule no longer evidences a reopen.** The flip has prerequisites that the retirement change (#9372) records and does not perform: split the `hcloud_volume.workspaces` ledger row per host (it also covers web-1's plaintext backstop), make `scripts/lint-encryption-posture.py` accept `[each.key]` bindings and a sibling-file secret pair, supersede Article 30 and the compliance-posture record, and raise `live_coverage_floor` from 2 to 3. **None of this is done before the dispatch: the row flip stays after the graded #6931 PASS.** **[Done 2026-10-11 (#9372, the ledger-flip change):** the row reads `luks` with `live_verification: available` and `live_coverage_floor` 3, and the Article 30 and compliance-posture cells carry dated supersession markers (record: `knowledge-base/legal/audits/2026-10-counsel-review-9372.md`). The linter prerequisites were met by #9941 (an indexed-binding arm with a key-chain and apparatus pin); the per-host row split was not needed because the row covers web-2 alone since #9348. The markers are no longer byte-equal across the cells, because the CLO review added a lead-in naming the superseded present-tense sentence in two of them; the evidence sentence is identical.]** | the CLO agent drafts, the owner holds a veto |
+| 3 | Re-capture web-2's SSH host-key pin (`scripts/capture-web-2-host-key.sh`, which needs the new IP printed in the summary); `apply-deploy-pipeline-fix` fails closed until then. Re-enable the push-apply workflows only after that **[Done 2026-10-12 (#9372): the pin was re-captured by #9665 (2026-10-06) and #9733 (2026-10-07), both push-apply workflows read `active`, and the last three `apply-deploy-pipeline-fix` runs on main were `success` (newest 2026-10-11T22:55Z).]** | the engineer, then the owner re-enables |
+| 4 | UPDATE the existing follow-through directive on #6931 (`earliest=` to rebirth + 3 days, printed in the summary); do not add a second. The retirement change's post-merge step sets `earliest=2026-10-18T00:00:00Z` (decision date 2026-10-15 plus 3 days). **Go/no-go:** dispatch by 2026-10-15, so the 3-day soak fits the window that closes 2026-10-22. A later dispatch re-sets `earliest` from the actual rebirth time as a mandatory step of that dispatch; otherwise the exception on `hcloud_volume.workspaces` is extended citing #6931 **[Done 2026-10-12 (#9372): the directive's `earliest` was set to 2026-10-10T20:10:00Z, the grader reported PASS on 2026-10-10 (sweeper run 38083925201) and was read again on 2026-10-12, and #6931 is closed.]** | the engineer |
+| 5 | Delete `web2-luks-rebirth.yml`, `scripts/web2-rebirth*.sh` and their tests, `tests/scripts/lib/web-host-rebirth-gate.sh`, `tests/scripts/lib/web2-rebirth-classify.sh`, the fixtures, the suite registrations and the `MAIN_ROOT_TF_WORKFLOWS` entry (census 4 to 3; it was 5 before the retirement change, 4 after), and record the use in ADR-263. The `scripts/web2-rebirth.test.sh` rows the retirement change adds go with it: a real-tree `flip-precondition yes` row that reads `MET`, and a sandbox `real absent` flip case. Also correct two comments the retirement change leaves stale, in that later change: the CONSUMERS comment on `DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER` in `workspaces-luks-fresh-boot.tf` (it names only the verify workflow and the sweeper), and the comment in `apps/web-platform/infra/workspaces-luks-header-web.tf` that says the rotation HALT "lets a first create through". **Also, see the deletion list added 2026-10-07 directly under this table (the later reboot workflow).** **[Done 2026-10-12 (#9372): the deletion list below landed in the cleanup change (PR #10083): 24 files, their registrations and baselines, with the `MAIN_ROOT_TF_WORKFLOWS` census moving from 4 to 3 (re-derived by the suite). Deviations, ruled by the CTO agent on 2026-10-12: `web-host-reboot.md` is kept with a RETIRED banner instead of deleted (three documents link to it), the section "The reboot and its evidence: a separate workflow" is kept (append-only) with a Retired marker instead of deleted, and the retirement is recorded in a tail addendum of ADR-263 dated 2026-10-12 and in a new ADR-241 entry rather than inside the 2026-10-07 addendum.]** | the engineer |
+| 6 | Decision date **2026-10-15**: the dispatch has run and the web-2 host is provisioned with the proof pending, or the encryption-posture exception on `hcloud_volume.workspaces` (expires 2026-10-22) is extended citing #6931. The ledger flip cannot be in review by then: it follows the graded #6931 PASS, which cannot pass before the directive's `earliest`, 2026-10-10T20:10:00Z, and then needs the three daily buckets. The engineer prepares the extension by 2026-10-14, so the owner can decide on the day; if the exception is extended instead, re-set `earliest` on the #6931 directive in the same step, or the follow-through reports FAIL when its window closes on 2026-10-22 | the owner decides; the engineer prepares the extension |
+
+**Row 5 addendum, 2026-10-07 (the later reboot workflow): a literal deletion list.** Sequenced AFTER the graded #6931 PASS (the evidence read the workflow exists for must have been taken first), the agent landing the closing change deletes, in addition to the files in row 5:
+
+- `.github/workflows/web-host-reboot.yml`
+- `scripts/web-host-reboot.sh`, `scripts/web-host-reboot-evidence.sh` and `scripts/web-host-reboot.test.sh`
+- `apps/web-platform/infra/web-host-reboot-workflow.test.sh`
+- the runbook `web-host-reboot.md` (or mark it superseded)
+- the `run_suite "scripts/web-host-reboot"` line in `scripts/test-all.sh`
+- the `scripts/web-host-reboot` rows and the `web-host-reboot-workflow.test.sh` rows in `scripts/suite-shard-legs.tsv`, `scripts/suite-durations.tsv`, `apps/web-platform/infra/suite-shard-legs.tsv` and `apps/web-platform/infra/suite-durations.tsv` (regenerate them incrementally with `scripts/regenerate-shard-manifest.py`, never edit them directly)
+- `AFFECTED_SCRIPTS_WEB_HOST_REBOOT_PATHS` in `scripts/lib/test-affected-paths.sh`
+- the `web-host-reboot-workflow.test.sh` entry in `PROMOTED_FILES` in `scripts/guard-vacuity-floor.test.sh`
+- the `"scripts/web-host-reboot-evidence.sh"` entry in `READERS` in `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh`
+- the two `web-host-reboot.yml` rows in `infra-credential-tiers-8209.md` (mark them retired) and the matching half-sentences in the `github -> hetzner` and `github -> betterstack` edge prose of `model.c4` (then `bash scripts/regenerate-c4-model.sh`)
+- a dated line in the ADR-263 addendum of 2026-10-07 recording the retirement
+- a dated line under the ADR-241 section "2026-10-07 (#9372): `web-host-reboot.yml::reboot` is a new Tier-B consumer" recording that the consumer is retired (append; never rewrite the dated body)
+- the section "The reboot and its evidence: a separate workflow (2026-10-07)" in this runbook (the pointer to `web-host-reboot.md`)
+
+`BASELINE_DECLARED_PROBES` stays (the declaring plan stays). **Retire versus keep: RETIRE.** The workflow depends on `scripts/web2-rebirth-never-pooled.sh` and shares helper bodies with `scripts/web2-rebirth.sh`, both deleted by row 5, and a tombstone row in its suite fails CI on a half retirement. Keeping it needs a recorded owner decision naming a new home for the never-pooled gate, made in the closing change, and the same change must edit the tombstone rows in both suites (A5 and A5b in `apps/web-platform/infra/web-host-reboot-workflow.test.sh`, and the TOMBSTONE row in `scripts/web-host-reboot.test.sh`): they are hard red once the rebirth scripts are gone, so a kept workflow with unedited tombstone rows fails CI by design.
 
 ## References
 
 ADR-263 (addendum 2026-10-05), `.github/workflows/web2-luks-rebirth.yml`, `scripts/web2-rebirth.sh`, `tests/scripts/lib/web-host-rebirth-gate.sh`,
-[web-host-replace.md](./web-host-replace.md), [web-host-birth.md](./web-host-birth.md), `knowledge-base/project/plans/2026-10-05-feat-web2-luks-rebirth-workflow-plan.md`.
+[web-host-replace.md](./web-host-replace.md), [web-host-birth.md](./web-host-birth.md), `knowledge-base/project/plans/archive/20261013-062704-2026-10-05-feat-web2-luks-rebirth-workflow-plan.md`.

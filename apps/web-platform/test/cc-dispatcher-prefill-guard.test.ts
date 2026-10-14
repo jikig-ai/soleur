@@ -61,9 +61,17 @@ vi.mock("@/server/agent-runner-sandbox-config", () => ({
   buildAgentSandboxConfig: mockBuildAgentSandboxConfig,
 }));
 
-vi.mock("@/server/agent-env", () => ({
-  buildAgentEnv: mockBuildAgentEnv,
-}));
+vi.mock("@/server/agent-env", async () => {
+  // feat-open-web-egress (#9534): keep the REAL exports —
+  // agent-runner-sandbox-config derives the web-egress deny census from
+  // ALLOWED_SERVICE_ENV_VARS at module init; a bare stub drops it and
+  // crashes every transitive importer.
+  const actual =
+    await vi.importActual<typeof import("@/server/agent-env")>(
+      "@/server/agent-env",
+    );
+  return { ...actual, buildAgentEnv: mockBuildAgentEnv };
+});
 
 vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
@@ -89,6 +97,20 @@ vi.mock("@/server/git-auth", () => ({
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: vi.fn(async () => false),
 }));
+
+// feat-open-web-egress (#9534): entitlement read + forwarder spawn default
+// off — these factory tests never exercise the egress path.
+vi.mock("@/server/resolve-web-egress", () => ({
+  resolveWebEgress: vi.fn(async () => false),
+  resolveWebEgressStrict: vi.fn(async () => false),
+}));
+vi.mock("@/server/egress-forwarder", () => ({
+  spawnEgressForwarder: vi.fn(),
+  teardownEgressForwarder: vi.fn(),
+  reapOrphanEgressForwarders: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
+}));
 // feat-bash-autonomous-default-on — soft-gate inputs default to un-acked /
 // non-owner so the prefill-guard factory-shape tests dispatch unaffected.
 vi.mock("@/server/resolve-autonomous-ack", () => ({
@@ -99,14 +121,23 @@ vi.mock("@/server/resolve-workspace-owner", () => ({
 }));
 
 // Session-start ensure-repo self-heal (cold-path deps) — default no-op.
-vi.mock("@/server/current-repo-url", () => ({
-  getCurrentRepoUrl: vi.fn(async () => null),
-  // #5394 — gate reads repo readiness; default ready so dispatch is not blocked.
-  getCurrentRepoStatus: vi.fn(async () => ({
-    repoStatus: "ready",
-    repoError: null,
-  })),
-}));
+vi.mock("@/server/current-repo-url", () => {
+  // One shared impl keeps the two views of the same read from diverging
+  // (#9556 — the SUT calls the degrade-aware variant).
+  const nullRepoUrl = async () => null;
+  return {
+    getCurrentRepoUrl: vi.fn(nullRepoUrl),
+    readCurrentRepoUrlResult: vi.fn(async () => ({
+      url: await nullRepoUrl(),
+      degraded: false,
+    })),
+    // #5394 — gate reads repo readiness; default ready so dispatch is not blocked.
+    getCurrentRepoStatus: vi.fn(async () => ({
+      repoStatus: "ready",
+      repoError: null,
+    })),
+  };
+});
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
   ensureWorkspaceDirExists: vi.fn(async () => undefined),
@@ -287,7 +318,7 @@ describe("realSdkQueryFactory — prefill-guard integration (#3250)", () => {
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },
@@ -381,7 +412,7 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },

@@ -66,8 +66,8 @@ AGENTS.md at 106 rules / 36566 bytes / longest 582 bytes. Rule count exceeded so
 
 ## Related
 
-- `knowledge-base/project/brainstorms/2026-04-21-claude-skills-audit-brainstorm.md`
-- `knowledge-base/project/specs/feat-claude-skills-audit/spec.md`
+- `knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-21-claude-skills-audit-brainstorm.md`
+- `knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md`
 - Parent audit issue #2718
 - Sub-mode productization issue #2722
 - External repo (MIT): `https://github.com/alirezarezvani/claude-skills`

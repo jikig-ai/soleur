@@ -88,7 +88,7 @@ Post-documentation verification: this file will be read back immediately after w
 - Epic: #6320 Grok Build fidelity — /go routes to Soleur workflows without improvisation
 - Feature: #6323 (Phase C)
 - PR: #6329 (feat-one-shot-6323-grok-phase-c)
-- Plan artifact: knowledge-base/project/plans/2026-07-11-feat-grok-phase-c-go-md-eval-harness-plan.md (self-referential, includes landed scope)
+- Plan artifact: knowledge-base/project/plans/archive/20261013-041741-2026-07-11-feat-grok-phase-c-go-md-eval-harness-plan.md (self-referential, includes landed scope)
 - Code: plugins/soleur/commands/go.md (harness table + self-ref + eval-gate block), plugins/soleur/lib/harness.ts (detect / invoke / spawn / routingInstructions), plugins/soleur/skills/eval-harness/SKILL.md + promptfooconfig.go-routing.yaml + gated-skills.json + scripts/
 - Bootstrap: scripts/grok-fidelity-bootstrap.sh
 - Compound: plugins/soleur/skills/compound/SKILL.md (this run), AGENTS.md (hr-*, wg-*, cq-* especially worktree, bare, paths, observability, verify-repo-capability)

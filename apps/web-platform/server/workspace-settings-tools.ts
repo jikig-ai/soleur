@@ -55,9 +55,11 @@ export function buildWorkspaceSettingsTools(
       tool(
         "workspace_get_autonomous",
         "Read whether the active workspace's Concierge 'autonomous mode' is ON. " +
-          "When ON, the Concierge auto-approves every non-blocked Bash command " +
+          "When ON, the Concierge auto-approves non-blocked Bash commands " +
           "(skips the per-command Approve/Deny gate; the command blocklist still " +
-          "applies). Read-only. Returns { autonomous: boolean }. Defaults to false " +
+          "applies, and Soleur pauses to ask before common forms of a default-branch " +
+          "force-push or deletion, terraform destroy, and gh ref or repository delete; " +
+          "it does not recognise every spelling). Read-only. Returns { autonomous: boolean }. Defaults to false " +
           "(fail-closed) on any error or for non-members.",
         {},
         async () => {
@@ -79,9 +81,10 @@ export function buildWorkspaceSettingsTools(
         "workspace_set_autonomous",
         "Set the active workspace's Concierge 'autonomous mode'. " +
           "RISK: enabling this is an approval-bypass on a code-executing surface — " +
-          "the Concierge will run any non-blocked command without asking, so a " +
-          "prompt-injected agent (malicious issue body / repo file) could delete " +
-          "files or leak data with no approval step. Only enable for fully trusted " +
+          "the Concierge will run non-blocked commands without asking, apart from " +
+          "the common destroy forms Soleur recognises, so a prompt-injected agent " +
+          "(malicious issue body / repo file) could still delete files or leak data " +
+          "with no approval step. Only enable for fully trusted " +
           "repos and workspaces. OWNER-ONLY: a non-owner caller is rejected. " +
           "Returns { autonomous: boolean }. Error codes: 403 not_authorized_or_failed.",
         {

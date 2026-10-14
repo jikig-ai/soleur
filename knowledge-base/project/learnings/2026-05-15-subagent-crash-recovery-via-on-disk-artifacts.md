@@ -27,7 +27,7 @@ The one-shot skill's fallback path:
 
 Read literally, the fallback re-runs the entire plan phase inline. On a 30-minute plan run, that's ~30k+ tokens of duplicated work.
 
-But the crashed subagent had already written a 305-line plan file to `knowledge-base/project/plans/2026-05-15-fix-workflow-end-status-enum-drift-plan.md` before the usage limit hit. It had completed plan generation; only the Session Summary return-contract emission failed.
+But the crashed subagent had already written a 305-line plan file to `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-fix-workflow-end-status-enum-drift-plan.md` before the usage limit hit. It had completed plan generation; only the Session Summary return-contract emission failed.
 
 The parent skill, following the fallback contract literally, would have re-run `/soleur:plan` and either:
 1. Created a duplicate plan file at the same path (overwriting the crashed subagent's work — wasted compute either way), OR

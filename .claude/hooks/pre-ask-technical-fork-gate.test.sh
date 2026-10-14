@@ -20,7 +20,19 @@ set -uo pipefail
 . "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pre-ask-technical-fork-gate.sh"
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/technical-fork-cues.sh"
 PASS=0; FAIL=0; TOTAL=0
+# The CANONICAL copy, asserted byte-for-byte against every other copy by plugins/soleur/test/fixture-dir-operand-assert.test.sh.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 [[ -x "$HOOK" ]] || { echo "FATAL: hook not executable at $HOOK" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
@@ -405,7 +417,7 @@ else
     [[ -n "$v3_m" ]] || continue
     v3_n=$((v3_n+1))
     v3_bare="${v3_m//\\b/}"
-    printf '%s\n' "$v3_authority" | tr '|' '\n' | sed 's/\\b//g' | grep -qxF -- "$v3_bare" \
+    printf '%s\n' "$v3_authority" | tr '|' '\n' | sed 's/\\b//g' | grep -cxF >/dev/null -- "$v3_bare" \
       || v3_missing="$v3_missing $v3_m"
   done <<< "$(printf '%s\n' "$v3_authz" | tr '|' '\n')"
   # Non-vacuity: a split that yielded nothing would report perfect containment.
@@ -422,9 +434,545 @@ else
   fi
 fi
 
+# --- TECHNICAL-RULING ARM (R1-R10, Z1-Z4, V4, V5) ----------------------------------------------------
+# A technical RULING (how strict the evidence bar is, which of two designs, whether a status flips, which
+# threshold) is the CTO agent's call, not the operator's. The arm denies it with a reason naming
+# soleur:engineering:cto and the shared reference, and it is evaluated AHEAD of the authority
+# short-circuit (R1/R3 carry "dispatched", "deleted" and a money word, so they only deny if the order holds).
+# The arm judges EACH question separately; the exemption reads that question's TEXT only.
+#
+# The existing payload() emits ONE question. These builders emit several.
+qobj() { # <question> [label1 desc1 label2 desc2] -> one question object
+  jq -nc --arg q "$1" --arg l1 "${2:-Yes}" --arg d1 "${3:-go ahead as described}" --arg l2 "${4:-No}" --arg d2 "${5:-leave it as it stands}" \
+    '{question:$q, options:[{label:$l1,description:$d1},{label:$l2,description:$d2}]}'
+}
+mq_payload() { # question objects on stdin, one per line -> one AskUserQuestion payload
+  jq -sc '{tool_name:"AskUserQuestion", cwd:".", session_id:"t", tool_input:{questions:.}}'
+}
+RULING_HIT_NAMES=""
+# ruling_check <label> <expect allow|deny> <mode ruling|invest|none> <payload-json>; 0 = satisfied.
+ruling_check() {
+  local label="$1" expect="$2" mode="$3" json="$4" out dec reason
+  out=$(printf '%s' "$json" | "$HOOK" 2>/dev/null)
+  dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${out:-{\}}" 2>/dev/null || echo allow)
+  reason=$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"${out:-{\}}" 2>/dev/null || echo "")
+  if [[ "$dec" != "$expect" ]]; then
+    printf '  FAIL: %s — got %s want %s\n' "$label" "$dec" "$expect" >&2; return 1
+  fi
+  if [[ "$expect" == "deny" && "$mode" == "ruling" ]]; then
+    if ! grep -qF 'soleur:engineering:cto' <<<"$reason" \
+       || ! grep -qF 'technical-ruling-delegation.md' <<<"$reason" \
+       || ! grep -qF 'split the item; ask the operator only the authorization' <<<"$reason" \
+       || ! grep -qF 'May I' <<<"$reason" \
+       || grep -qF 'SOLEUR_ACK_TECHNICAL_FORK' <<<"$reason"; then
+      printf '  FAIL: %s — denied, but the reason does not name soleur:engineering:cto, technical-ruling-delegation.md, the split instruction and the permission-ask reword, or it still suggests an env var a tool call cannot set\n' "$label" >&2; return 1
+    fi
+    RULING_HIT_NAMES="$RULING_HIT_NAMES $label"
+  elif [[ "$expect" == "deny" && "$mode" == "invest" ]]; then
+    if ! grep -qF 'TECHNICAL INVESTIGATION' <<<"$reason" || grep -qF 'soleur:engineering:cto' <<<"$reason"; then
+      printf '  FAIL: %s — denied, but not with the investigation reason (the ruling arm must not claim a non-ruling question)\n' "$label" >&2; return 1
+    fi
+  fi
+  return 0
+}
+run_ruling() { # <name> <expect> <mode> <payload-json>
+  TOTAL=$((TOTAL+1))
+  if ruling_check "${1%% *}" "$2" "$3" "$4"; then printf '  PASS: %s (%s)\n' "$1" "$2"; PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+}
+
+R1_Q="How strict must the emptiness evidence be before the volume rebirth is dispatched and the plaintext volume deleted?"
+run_ruling "R1 evidence-strictness ruling (carries dispatched + deleted)" deny ruling \
+  "$(qobj "$R1_Q" "Tighten the ceiling" "require two independent proofs" "Keep the thresholds" "retain the current bar" | mq_payload)"
+run_ruling "R2 ADR status flip from adopting to accepted" deny ruling \
+  "$(qobj "Should the ADR status move from adopting to accepted now that the grader passes?" "Move it" "record the new status" "Hold" "keep the current status" | mq_payload)"
+# R2 reason: a flip whose criterion the ADR states is mechanical, otherwise the CTO rules.
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 19 ]]; then echo "  PASS: V1 full inventory ran (19 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 19 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+r2_reason=$(qobj "Should the ADR status move from adopting to accepted now that the grader passes?" | mq_payload | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+if grep -qF 'run the grader, cite it, flip' <<<"$r2_reason" && grep -qF 'the CTO rules' <<<"$r2_reason"; then
+  echo "  PASS: R2b the reason says a stated-criterion flip is mechanical and otherwise the CTO rules"; PASS=$((PASS+1))
+else echo "  FAIL: R2b the ruling reason lacks the mechanical-flip / CTO-rules guidance" >&2; FAIL=$((FAIL+1)); fi
+# L1 — all three deny reasons name the CLOSED list of what is the operator's call, not the old four-word list.
+TOTAL=$((TOTAL+1))
+l1_list='money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand'
+l1_fail=""
+l1_rul=$(qobj "$R1_Q" | mq_payload | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+l1_inv=$(qobj "How should I resolve the cutover path?" "Read the runbook properly first" "find the documented order" "Ask whoever owns the cutover section" "the plan deferred it" | mq_payload | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+l1_exp=$(qobj "Can you ask my accountant whether this is deductible?" | mq_payload | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+grep -qF "$l1_list" <<<"$l1_rul" || l1_fail="$l1_fail ruling"
+grep -qF "$l1_list" <<<"$l1_inv" || l1_fail="$l1_fail investigation"
+grep -qF "$l1_list" <<<"$l1_exp" || l1_fail="$l1_fail expert"
+if [[ -z "$l1_fail" ]]; then echo "  PASS: L1 the ruling, investigation and expert reasons all carry the closed operator-only list"; PASS=$((PASS+1))
+else printf '  FAIL: L1 the closed operator-only list is missing from the reason(s):%s\n' "$l1_fail" >&2; FAIL=$((FAIL+1)); fi
+run_ruling "R3 R1 plus a money word in an option description (arm is ahead of the authority short-circuit)" deny ruling \
+  "$(qobj "$R1_Q" "Tighten the ceiling" "costs one more run" "Keep the thresholds" "retain the current bar" | mq_payload)"
+
+# R4 — per-question evaluation. Question 1 is a compliant authorization; question 2 is R1's ruling.
+TOTAL=$((TOTAL+1))
+r4_fail=0
+r4_auth="$(qobj "Approve the merge of PR 9628?")"
+r4_rule="$(qobj "$R1_Q" "Tighten the ceiling" "require two independent proofs" "Keep the thresholds" "retain the current bar")"
+ruling_check "R4a" deny ruling "$(printf '%s\n%s\n' "$r4_auth" "$r4_rule" | mq_payload)" || r4_fail=$((r4_fail+1))
+ruling_check "R4b" allow none "$(printf '%s\n' "$r4_auth" | mq_payload)" || r4_fail=$((r4_fail+1))
+ruling_check "R4c" deny ruling "$(printf '%s\n%s\n' "$r4_rule" "$r4_auth" | mq_payload)" || r4_fail=$((r4_fail+1))
+if [[ "$r4_fail" -eq 0 ]]; then
+  echo "  PASS: R4 each question is judged alone: an Approve in question 1 does not exempt a ruling in question 2 (and the lone authorization allows)"; PASS=$((PASS+1))
+else FAIL=$((FAIL+1)); fi
+
+run_ruling "R5 a permission ask naming dispatch, no ruling cue" allow none \
+  "$(qobj "May I dispatch the rebirth now?" | mq_payload)"
+run_ruling "R6 stated residual: appending an Approve ask exempts the question" allow none \
+  "$(qobj "How strict should the evidence bar be? Approve the stricter threshold?" | mq_payload)"
+run_ruling "R7 a button labelled Approve never exempts" deny ruling \
+  "$(qobj "$R1_Q" "Approve" "require two independent proofs" "Keep the thresholds" "retain the current bar" | mq_payload)"
+
+TOTAL=$((TOTAL+1))
+r8_fail=0
+ruling_check "R8a" allow none "$(qobj "Is it ok to go ahead and flip the flag?" | mq_payload)" || r8_fail=$((r8_fail+1))
+ruling_check "R8b" allow none "$(qobj "What is the budget for the second host?" | mq_payload)" || r8_fail=$((r8_fail+1))
+if [[ "$r8_fail" -eq 0 ]]; then echo "  PASS: R8 cue-free permission and budget asks allow"; PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+
+run_ruling "R9 a brand choice is not a technical ruling" allow none \
+  "$(qobj "Which of the two logo designs should the landing page use?" "The rounded one" "friendlier" "The sharp one" "more technical" | mq_payload)"
+run_ruling "R10 the 2026-08-19 investigation fixture keeps the investigation reason" deny invest \
+  "$(qobj "How should I resolve the cutover path?" \
+     "Read the runbook properly first" "Find the documented order for a cold host rather than reasoning it out from guard comments." \
+     "Ask whoever owns the cutover section" "The plan deferred the cutover window to numbered steps I have not read." | mq_payload)"
+
+run_ruling "Z1 a permission ask that DOES carry a ruling cue (witnesses the exemption)" allow none \
+  "$(qobj "May I tighten the evidence threshold to 64 MiB?" | mq_payload)"
+run_ruling "Z2 approach A or approach B (should is not an exemption)" deny ruling \
+  "$(qobj "Should I use approach A or approach B for the retry design?" "Approach A" "queue it" "Approach B" "retry inline" | mq_payload)"
+run_ruling "Z3 evidence sufficiency" deny ruling \
+  "$(qobj "Is the evidence sufficient to retire the guard?" "Sufficient" "retire it" "Not yet" "keep it" | mq_payload)"
+run_ruling "Z4 an Approve ask over a threshold" allow none \
+  "$(qobj "Approve the stricter evidence bar?" | mq_payload)"
+run_ruling "R11 a money threshold question is not a ruling" allow none \
+  "$(qobj "What revenue threshold should trigger the second paid host?" | mq_payload)"
+
+# --- NARROWED CUE (W, C, E, F, O, S, B, T rows) ------------------------------------------------------
+# The arm's WORSE failure mode is wrongly denying a genuine operator-class question (money, scope,
+# priority/schedule, irreversible or production authorization, legal risk, brand). Review measured the W
+# rows below as wrong denies against a cue that matched a bare "stricter" or "A or B"; origin/main allowed
+# every one. A weak cue now needs a TECHNICAL CO-SIGNAL (an evidence noun, an ADR word, a technical noun),
+# and the A/B cue reads the QUESTION TEXT only, never an option label.
+
+# W — operator-class questions that carry a cue word but no technical co-signal. All must allow.
+run_ruling "W1 pricing plan A or B" allow none \
+  "$(qobj "Which pricing plan do you want to launch, A or B?" | mq_payload)"
+run_ruling "W2 scope variant A or variant B" allow none \
+  "$(qobj "Scope: ship variant A (basic export) or variant B (full export)?" | mq_payload)"
+run_ruling "W3 launch date A or B" allow none \
+  "$(qobj "Which launch date: A or B?" | mq_payload)"
+run_ruling "W4 spend cap stricter (money, no evidence noun)" allow none \
+  "$(qobj "Should the monthly spend cap be stricter?" | mq_payload)"
+run_ruling "W5 logo variant A (brand)" allow none \
+  "$(qobj "Which logo variant A do you prefer?" | mq_payload)"
+run_ruling "W6 the brainstorm skill's own prompt shape (approach letters only in options)" allow none \
+  "$(qobj "Which approach do you prefer?" "Approach A: hosted checkout" "" "Approach B: embedded form" "" | mq_payload)"
+run_ruling "W7 pricing page layout with Variant A/B options" allow none \
+  "$(qobj "Which pricing page layout do you prefer?" "Variant A" "" "Variant B" "" | mq_payload)"
+run_ruling "W8 ship variant A to prod (authorization)" allow none \
+  "$(qobj "Ship variant A to prod?" | mq_payload)"
+run_ruling "W9 roll out the stricter CSP to production (authorization)" allow none \
+  "$(qobj "Roll out the stricter CSP to production now?" | mq_payload)"
+run_ruling "W10 merge ask whose DECLARATIVE second sentence names a stricter evidence gate" allow none \
+  "$(qobj "Merge PR 9628 now? It adds the stricter evidence gate." | mq_payload)"
+run_ruling "W11 close an issue (a status change that is not an ADR flip)" allow none \
+  "$(qobj "Close issue 123 (status change to done)?" | mq_payload)"
+run_ruling "W12 scope/schedule approach A vs approach B" allow none \
+  "$(qobj "Approach A: ship the pricing page this week. Approach B: delay it a month. Which?" | mq_payload)"
+run_ruling "W13 priority A or B first" allow none \
+  "$(qobj "Should we do A or B first: onboarding or billing?" | mq_payload)"
+run_ruling "W14 stricter rule vs delaying a merge (schedule)" allow none \
+  "$(qobj "Is a stricter rule worth delaying the merge of PR 9628 by a week?" | mq_payload)"
+run_ruling "W15 hero copy variant A or variant B (brand)" allow none \
+  "$(qobj "Which variant A or variant B of the hero copy reads better?" | mq_payload)"
+
+# Q — measured wrong denies of the second review: operator-class asks (brand, schedule, money, merge/ship/release,
+# legal-risk vocabulary) that carry a cue word. Weak cues (C1 C2 C6 C7) need an interrogative sentence AND no
+# operator vocabulary in the question; the technical-noun list is engineering nouns only (design, api, index,
+# library, migration, implementation and cache are pricing/brand/schedule words as often as technical ones).
+run_ruling "Q1 logo A or B, 'design' is not a technical noun" allow none \
+  "$(qobj "Which logo, A or B? The new design reads cleaner." | mq_payload)"
+run_ruling "Q2 run the migration in window A or B (schedule)" allow none \
+  "$(qobj "Run the migration in window A or B?" | mq_payload)"
+run_ruling "Q3 API plan A or B for the budget" allow none \
+  "$(qobj "Which API plan, A or B, for the budget?" | mq_payload)"
+run_ruling "Q4 pay for index plan A or B" allow none \
+  "$(qobj "Pay for index plan A or B?" | mq_payload)"
+run_ruling "Q5 budget for a stricter check of invoices (C2 vetoed)" allow none \
+  "$(qobj "Raise the budget for a stricter check of invoices?" | mq_payload)"
+run_ruling "Q6 merge ask, no question mark, weak cues only" allow none \
+  "$(qobj "Merge PR 9628 now. It adds the stricter evidence gate" | mq_payload)"
+run_ruling "Q7 should we merge the release (cue only in an option description)" allow none \
+  "$(qobj "Should we merge the release?" "Merge" "stricter gate on the CI check" "Hold" "wait" | mq_payload)"
+run_ruling "Q8 pricing tier for the new API plan, A or B" allow none \
+  "$(qobj "Which pricing tier should the new API plan use, A or B?" | mq_payload)"
+run_ruling "Q9 library migration shipping this sprint, option A or option B for the timeline" allow none \
+  "$(qobj "Should the new library migration ship this sprint, option A or option B for the timeline?" | mq_payload)"
+run_ruling "Q10 close the ADR 12 issue (adr alone is not an ADR word)" allow none \
+  "$(qobj "Close the ADR 12 issue now (status change)?" | mq_payload)"
+run_ruling "Q11 evidence enough to start charging (C4 money veto)" allow none \
+  "$(qobj "Is the evidence enough to start charging for the beta?" | mq_payload)"
+run_ruling "Q12 C1 vetoed by launch and date" allow none \
+  "$(qobj "How strict should the check on launch dates be?" | mq_payload)"
+run_ruling "Q13 C6 vetoed by launch" allow none \
+  "$(qobj "Should the decision record status change before the launch?" | mq_payload)"
+run_ruling "Q14 how strict guard, but a statement with no question mark" allow none \
+  "$(qobj "Decide how strict the guard should be." | mq_payload)"
+run_ruling "Q15 option A or B for a queue, but a statement with no question mark" allow none \
+  "$(qobj "Use option A or option B for the queue." | mq_payload)"
+run_ruling "Q16 C4 money veto, a vendor contract" allow none \
+  "$(qobj "Is the proof adequate to sign the vendor contract?" | mq_payload)"
+run_ruling "Q17 a cue in a declarative sentence before an unrelated question" allow none \
+  "$(qobj "We made the gate stricter last week. Which issue first?" | mq_payload)"
+
+# S1 — the strictness cue needs an evidence noun: "how strict" about a budget is a money ask.
+run_ruling "S1 how strict should the monthly budget be (no evidence noun)" allow none \
+  "$(qobj "How strict should the monthly budget be?" | mq_payload)"
+
+# C — one deny witness per strong cue, each in a DIFFERENT vocabulary and firing exactly one cue, so
+# dropping that cue reds exactly that case by name. All must reach the ruling arm's own reason.
+run_ruling "C1 how strict + an evidence noun (guard)" deny ruling \
+  "$(qobj "How strict should the guard be about leftover volumes?" | mq_payload)"
+run_ruling "C2 stricter + an evidence noun (verification)" deny ruling \
+  "$(qobj "Should the verification step on rebirth be stricter?" | mq_payload)"
+run_ruling "C3 an emptiness floor" deny ruling \
+  "$(qobj "Is the emptiness floor right for the rebirth?" | mq_payload)"
+run_ruling "C4 proof adequate" deny ruling \
+  "$(qobj "Is the proof adequate to retire the old lock?" | mq_payload)"
+run_ruling "C5 adopting to accepted without any status word" deny ruling \
+  "$(qobj "Should we move the record from adopting to accepted?" | mq_payload)"
+run_ruling "C6 status flip + decision record (ADR word)" deny ruling \
+  "$(qobj "Should the decision record status flip once the grader passes?" | mq_payload)"
+run_ruling "C7 variant A or variant B for a schema" deny ruling \
+  "$(qobj "Should the schema follow variant A or variant B?" | mq_payload)"
+run_ruling "C7b A vs B for a queue layout" deny ruling \
+  "$(qobj "Pick the queue layout: A vs B?" | mq_payload)"
+
+# K — one deny witness per remaining CUE MEMBER, each in its own vocabulary and carrying exactly one member of
+# the list it witnesses, so deleting that member reds that row by name.
+run_ruling "K1 strictness (noun: evidence)" deny ruling \
+  "$(qobj "What strictness should the evidence for a rebirth carry?" | mq_payload)"
+run_ruling "K2 how stringent (noun: evidence)" deny ruling \
+  "$(qobj "How stringent should the evidence be before retiring the old lock?" | mq_payload)"
+run_ruling "K3 how rigorous (noun: evidence)" deny ruling \
+  "$(qobj "How rigorous does the evidence need to be for the rebirth?" | mq_payload)"
+run_ruling "K4 bar word ceiling" deny ruling \
+  "$(qobj "Is the emptiness ceiling too loose for old volumes?" | mq_payload)"
+run_ruling "K5 bar word standard, left word proof" deny ruling \
+  "$(qobj "Does the proof standard need to change for retired locks?" | mq_payload)"
+run_ruling "K6 bar word bar, no question mark (strong cues need none)" deny ruling \
+  "$(qobj "Decide the evidence bar for the rebirth" | mq_payload)"
+run_ruling "K7 enough" deny ruling \
+  "$(qobj "Is the evidence enough to retire the old lock?" | mq_payload)"
+run_ruling "K8 status move + accepted" deny ruling \
+  "$(qobj "Does the status move to accepted after the grader passes?" | mq_payload)"
+run_ruling "K9 status change + adopting" deny ruling \
+  "$(qobj "Should the status change before we start adopting the new scheme?" | mq_payload)"
+run_ruling "K10 are + proof (the plural copula member of the sufficiency cue)" deny ruling \
+  "$(qobj "Are the proof adequate for retiring the old lock?" | mq_payload)"
+
+# N — one deny witness per EVIDENCE NOUN (C1/C2 co-signal), exactly one noun per row.
+run_ruling "N1 noun proof" deny ruling \
+  "$(qobj "How strict should the proof of leftover volume emptiness be?" | mq_payload)"
+run_ruling "N2 noun check" deny ruling \
+  "$(qobj "How strict should the post-rebirth check be?" | mq_payload)"
+run_ruling "N3 noun gate" deny ruling \
+  "$(qobj "Should the rebirth gate be stricter?" | mq_payload)"
+run_ruling "N4 noun validation" deny ruling \
+  "$(qobj "How strict should validation of the exported rows be?" | mq_payload)"
+run_ruling "N5 noun criteria" deny ruling \
+  "$(qobj "Should the criteria for retiring a lock be stricter?" | mq_payload)"
+run_ruling "N6 noun assertion" deny ruling \
+  "$(qobj "Is a stricter assertion warranted on the replay count?" | mq_payload)"
+run_ruling "N7 noun test" deny ruling \
+  "$(qobj "How strict should the smoke test be for the volume rebirth?" | mq_payload)"
+run_ruling "N8 noun lint" deny ruling \
+  "$(qobj "Should the lint rule on shell scripts be stricter?" | mq_payload)"
+
+# M — one deny witness per TECHNICAL NOUN (C7 co-signal), exactly one noun per row, varying the A/B spelling.
+run_ruling "M1 noun architecture, approach" deny ruling \
+  "$(qobj "Should we take approach A or approach B for the architecture?" | mq_payload)"
+run_ruling "M2 noun algorithm, a or b" deny ruling \
+  "$(qobj "Which algorithm, A or B, handles the tie-break?" | mq_payload)"
+run_ruling "M3 noun substrate, option" deny ruling \
+  "$(qobj "Pick option A or option B for the substrate?" | mq_payload)"
+run_ruling "M4 noun data model, a vs. b" deny ruling \
+  "$(qobj "Should the data model follow A vs. B?" | mq_payload)"
+run_ruling "M5 noun queue, option" deny ruling \
+  "$(qobj "Should the worker use option A or option B for the queue?" | mq_payload)"
+run_ruling "M6 noun refactor, option" deny ruling \
+  "$(qobj "Refactor path: option A or option B?" | mq_payload)"
+
+# E — one allow witness per KEPT exemption member, each carrying a cue, so deleting any member reds a case.
+# (Z1 witnesses `may i`; Z4 witnesses `approve`.) `is it ok to` is subsumed by `ok(ay)? to` and is not a member.
+run_ruling "E1 is it fine to (exemption member)" allow none \
+  "$(qobj "Is it fine to tighten the evidence bar?" | mq_payload)"
+run_ruling "E2 is it ok to (exemption member ok(ay)? to)" allow none \
+  "$(qobj "Is it ok to tighten the evidence bar?" | mq_payload)"
+run_ruling "E3 OK to (exemption member ok(ay)? to)" allow none \
+  "$(qobj "OK to relax the evidence standard?" | mq_payload)"
+run_ruling "E4 go-ahead (exemption member)" allow none \
+  "$(qobj "Go-ahead to raise the evidence floor?" | mq_payload)"
+run_ruling "E5 authorize (exemption member)" allow none \
+  "$(qobj "Authorize raising the evidence threshold?" | mq_payload)"
+run_ruling "E7 okay to, spelled out (exemption member ok(ay)? to)" allow none \
+  "$(qobj "Okay to tighten the evidence bar?" | mq_payload)"
+run_ruling "E8 authorise, British spelling (exemption member authori[sz]e)" allow none \
+  "$(qobj "Authorise raising the evidence threshold?" | mq_payload)"
+run_ruling "E9 approved is an approve form" allow none \
+  "$(qobj "Approved to raise the evidence floor?" | mq_payload)"
+run_ruling "E6 ack-destroy (exemption member)" allow none \
+  "$(qobj "ack-destroy: is the evidence bar enough?" | mq_payload)"
+
+# F — `can we`, `can i`, `may we` and `should we` are RULING shapes, not permission shapes: a question
+# carrying a cue is denied however it is phrased.
+run_ruling "F1 can we is not an exemption" deny ruling \
+  "$(qobj "Can we tighten the evidence threshold to 64 MiB?" | mq_payload)"
+run_ruling "F2 can i is not an exemption" deny ruling \
+  "$(qobj "Can I relax the evidence bar for the rebirth?" | mq_payload)"
+run_ruling "F3 may we is not an exemption" deny ruling \
+  "$(qobj "May we decide how strict the evidence bar should be?" | mq_payload)"
+run_ruling "F4 should we is not an exemption" deny ruling \
+  "$(qobj "Should we tighten the evidence bar?" | mq_payload)"
+
+run_ruling "F5 approver is not an approve form (the exemption is approve[ds]? with a right anchor)" deny ruling \
+  "$(qobj "Should the approver need a stricter evidence bar?" | mq_payload)"
+
+# O1 — the A/B cue reads the QUESTION TEXT only. The question names a technical noun but no letter; the
+# letters live only in the option labels. A cue read over options would deny this.
+run_ruling "O1 approach letters only in option labels" allow none \
+  "$(qobj "Which approach do you prefer for the retry design?" "Approach A" "hosted" "Approach B" "embedded" | mq_payload)"
+
+# P1 — a ruling that lives ONLY in an option label is not read: every cue reads the QUESTION TEXT. An option
+# label is a button; the operator is not being asked to rule on it. (Flipped from deny on the second review.)
+run_ruling "P1 a ruling carried only by an option label is not read" allow none \
+  "$(qobj "Which do you want?" "Tighten the evidence bar" "require two independent proofs" "Keep it" "retain the current bar" | mq_payload)"
+run_ruling "P2 a strict cue carried only by an option description is not read" allow none \
+  "$(qobj "Should we merge the release?" "Merge" "stricter gate on the CI check" "Hold" "wait" | mq_payload)"
+run_ruling "P3 a bar cue carried only by an option description is not read" allow none \
+  "$(qobj "Dispatch the rebirth now?" "Dispatch" "after the emptiness evidence threshold is tightened" "Hold" "wait" | mq_payload)"
+
+run_ruling "P4 a strictness cue carried only by option text (interrogative question, no cue)" allow none \
+  "$(qobj "Which do you want?" "Make the check stricter" "tighten the guard" "Keep it" "leave as is" | mq_payload)"
+run_ruling "P5 a status flip plus ADR word carried only by option text" allow none \
+  "$(qobj "Which do you want?" "Status flip" "decision record accepted" "Keep it" "leave as is" | mq_payload)"
+run_ruling "P6 an evidence-sufficiency phrase carried only by option text" allow none \
+  "$(qobj "Which do you want?" "Is the evidence sufficient?" "then retire it" "Keep it" "leave as is" | mq_payload)"
+
+# X — the dropped technical nouns each stay NON-cues: "approach A or approach B for the <noun>" is an ordinary
+# product/schedule/brand sentence as often as an engineering one. One row per noun so re-adding any one reds it by name.
+for x_n in design api index library migration implementation cache; do
+  run_ruling "X-$x_n approach A or approach B for the $x_n is not a technical-noun co-signal" allow none \
+    "$(qobj "Should I use approach A or approach B for the $x_n?" | mq_payload)"
+done
+
+# B — shapes that must not crash and must allow.
+run_ruling "B1 an empty question with cue words only in its options" allow none \
+  "$(jq -nc '{tool_name:"AskUserQuestion",cwd:".",session_id:"t",tool_input:{questions:[{question:"",options:[{label:"How strict is the evidence bar?",description:"approach A or B"}]}]}}')"
+run_ruling "B3 a cue only in the header" allow none \
+  "$(jq -nc '{tool_name:"AskUserQuestion",cwd:".",session_id:"t",tool_input:{questions:[{header:"How strict is the evidence bar?",question:"Pick one?",options:[{label:"Yes",description:"go"},{label:"No",description:"stop"}]}]}}')"
+# B2 — a non-string question is skipped, announced on stderr, and allowed.
+TOTAL=$((TOTAL+1))
+b2_json="$(jq -nc '{tool_name:"AskUserQuestion",cwd:".",session_id:"t",tool_input:{questions:[{question:42,options:[{label:"How strict is the evidence bar?",description:"approach A or B"}]}]}}')"
+b2_out="$(printf '%s' "$b2_json" | "$HOOK" 2>/dev/null)"
+b2_err="$(printf '%s' "$b2_json" | "$HOOK" 2>&1 >/dev/null)"
+b2_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${b2_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$b2_dec" == "allow" ]] && grep -qF 'skipped' <<<"$b2_err"; then
+  echo "  PASS: B2 a non-string question is skipped, announced on stderr, and allowed"; PASS=$((PASS+1))
+else printf '  FAIL: B2 non-string question — decision %s, stderr announced skip: %s\n' "$b2_dec" "$(grep -qF 'skipped' <<<"$b2_err" && echo yes || echo no)" >&2; FAIL=$((FAIL+1)); fi
+
+# T1 — a ~64 KB question with the cue absent and plenty of whitespace runs must finish quickly. The
+# extraction once collapsed whitespace with a jq regex gsub that was quadratic (a 32 KB question took 9.5 s).
+TOTAL=$((TOTAL+1))
+t1_q="$(printf 'lorem ipsum dolor sit amet \n\t  consectetur %.0s' $(seq 1 1600))?"
+t1_json="$(qobj "$t1_q" | mq_payload)"
+t1_start=$(date +%s%N)
+t1_out="$(printf '%s' "$t1_json" | timeout 10 "$HOOK" 2>/dev/null)"; t1_rc=$?
+t1_ms=$(( ( $(date +%s%N) - t1_start ) / 1000000 ))
+t1_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${t1_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$t1_rc" -eq 0 && "$t1_dec" == "allow" && "$t1_ms" -lt 3000 && "${#t1_q}" -gt 60000 ]]; then
+  echo "  PASS: T1 a ${#t1_q}-char question with the cue absent allowed in ${t1_ms} ms (< 3000)"; PASS=$((PASS+1))
+else printf '  FAIL: T1 timing guard — rc=%s decision=%s took %s ms (limit 3000) on %s chars\n' "$t1_rc" "$t1_dec" "$t1_ms" "${#t1_q}" >&2; FAIL=$((FAIL+1)); fi
+
+# T2/T3/T4 — the interrogative-sentence extraction must be LINEAR. A regex with a nested quantifier
+# (`([^.!?]|\.[^ ?!])*\?`) cost ~13 s on a 32 KB question with a strictness cue, one `?` and a long tail
+# (2.6 s at 16 KB, 60 s at 64 KB). The cost is only visible through a pipe or command substitution: a
+# standalone `grep >/dev/null` stops at the first match and hides it, so the whole hook is timed here.
+timed_deny() { # <name> <expect> <question>
+  TOTAL=$((TOTAL+1))
+  local json out rc ms dec start
+  json="$(qobj "$3" | mq_payload)"
+  start=$(date +%s%N)
+  out="$(printf '%s' "$json" | timeout 10 "$HOOK" 2>/dev/null)"; rc=$?
+  ms=$(( ( $(date +%s%N) - start ) / 1000000 ))
+  dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${out:-{\}}" 2>/dev/null || echo allow)
+  if [[ "$rc" -eq 0 && "$dec" == "$2" && "$ms" -lt 3000 && "${#3}" -gt "${TIMED_MIN:-0}" ]]; then
+    printf '  PASS: %s a %s-char question: %s in %s ms (< 3000)\n' "$1" "${#3}" "$dec" "$ms"; PASS=$((PASS+1))
+  else printf '  FAIL: %s timing guard — rc=%s decision=%s (want %s) took %s ms (limit 3000) on %s chars\n' "$1" "$rc" "$dec" "$2" "$ms" "${#3}" >&2; FAIL=$((FAIL+1)); fi
+}
+t_tail32="$(printf 'lorem ipsum dolor sit amet consectetur %.0s' $(seq 1 820))"
+t_tail64="${t_tail32}${t_tail32}"
+TIMED_MIN=30000 timed_deny "T2" deny "How strict the evidence gate? ${t_tail32}"
+TIMED_MIN=60000 timed_deny "T3" deny "How strict the evidence gate? ${t_tail64}"
+# Many `?` and many sentence boundaries, so an extraction that is linear per `?` but quadratic in their number is also caught.
+t_many="$(printf 'ok. fine! how strict the evidence gate? %.0s' $(seq 1 1500))"
+TIMED_MIN=55000 timed_deny "T4" deny "$t_many"
+
+# V6 — every member of the operator-vocabulary VETO is witnessed. One weak-cue (C1) question per member; each must
+# allow. The list is spelled here, not read out of the hook, so deleting a member from the hook reds this case.
+TOTAL=$((TOTAL+1))
+v6_bad=""
+for v6_w in price prices pricing plan plans tier tiers launch launches date dates deadline deadlines license licenses licence licences vendor vendors logo logos copy landing budget budgets cost costs spend revenue invoice invoices refund refunds schedule schedules priority priorities brand hero merge deploy ship release releases delete prod production; do
+  v6_out=$(qobj "How strict should the check on the $v6_w be?" | mq_payload | "$HOOK" 2>/dev/null)
+  v6_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${v6_out:-{\}}" 2>/dev/null || echo allow)
+  [[ "$v6_dec" == "allow" ]] || v6_bad="$v6_bad $v6_w"
+done
+# Non-vacuity: the same question with a neutral noun must DENY, or the loop above passes over a dead arm.
+v6_ctl=$(qobj "How strict should the check on the volume be?" | mq_payload | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
+if [[ -z "$v6_bad" && "$v6_ctl" == "deny" ]]; then echo "  PASS: V6 every operator-vocabulary veto member silences a weak cue (control denies)"; PASS=$((PASS+1))
+else printf '  FAIL: V6 veto members that did not veto:%s (control decision %s)\n' "$v6_bad" "$v6_ctl" >&2; FAIL=$((FAIL+1)); fi
+
+# V7 — every member of the C4 MONEY veto is witnessed, against a control that denies.
+TOTAL=$((TOTAL+1))
+v7_bad=""
+for v7_w in charging paying refund refunds invoice invoices price pricing cost costs spend revenue contract vendor vendors; do
+  v7_out=$(qobj "Is the evidence enough to start on the $v7_w?" | mq_payload | "$HOOK" 2>/dev/null)
+  v7_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${v7_out:-{\}}" 2>/dev/null || echo allow)
+  [[ "$v7_dec" == "allow" ]] || v7_bad="$v7_bad $v7_w"
+done
+v7_ctl=$(qobj "Is the evidence enough to start on the rebirth?" | mq_payload | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
+if [[ -z "$v7_bad" && "$v7_ctl" == "deny" ]]; then echo "  PASS: V7 every money-veto member silences the sufficiency cue (control denies)"; PASS=$((PASS+1))
+else printf '  FAIL: V7 money members that did not veto:%s (control decision %s)\n' "$v7_bad" "$v7_ctl" >&2; FAIL=$((FAIL+1)); fi
+
+# V8 — the shared lib's RULING_OPVOCAB_RE (the BUSINESS|ACTION concatenation) is byte-equal to the literal this
+# hook carried before the cues moved. A dropped or added member would change what the weak cues are vetoed by; V6
+# checks each member behaviourally, this pins the whole string, and a BUSINESS word added for a closing-only reason
+# would change it and silence THIS hook too (the lib header names that as never the fix).
+TOTAL=$((TOTAL+1))
+v8_pinned='\b(prices?|pricing|plans?|tiers?|launch(es)?|dates?|deadlines?|licen[sc]es?|vendors?|logos?|copy|landing|budgets?|costs?|spend|revenue|invoices?|refunds?|schedules?|priorit(y|ies)|brand|hero|merge|deploy|ship|releases?|delete|prod|production)\b'
+# shellcheck disable=SC1090  # the lib path is a variable by design; the value is read by sourcing
+v8_live="$( ( . "$LIB" 2>/dev/null; printf '%s' "${RULING_OPVOCAB_RE:-}" ) )"
+if [[ -n "$v8_live" && "$v8_live" == "$v8_pinned" ]]; then echo "  PASS: V8 the lib's RULING_OPVOCAB_RE is byte-equal to the pinned pre-move literal"; PASS=$((PASS+1))
+else printf '  FAIL: V8 RULING_OPVOCAB_RE in the lib differs from the pinned literal (live: %s)\n' "$v8_live" >&2; FAIL=$((FAIL+1)); fi
+
+# L2 — one definition site. This hook sources the lib and defines no RULING_*_RE cue itself; the lib defines them.
+TOTAL=$((TOTAL+1))
+if grep -qE '^[[:space:]]*(source|\.)[[:space:]].*TFC_LIB' "$HOOK" && ! grep -qE '^RULING_[A-Z_]*_RE=' "$HOOK" && grep -qE '^RULING_PERM_RE=' "$LIB"; then
+  echo "  PASS: L2 the hook sources the shared lib and carries no RULING_*_RE definition of its own"; PASS=$((PASS+1))
+else echo "  FAIL: L2 the hook must source TFC_LIB and define no RULING_*_RE cue (one definition site: the lib)" >&2; FAIL=$((FAIL+1)); fi
+
+# NR1 — the pre-ask hook is NOT widened. The five sentences the plan measured against the pre-ask cues (the three
+# closing-message questions that must block there, and two that must pass) still ALLOW through an AskUserQuestion:
+# the closing group's cues are reachable only from the closing hook. A lib that ignored its group argument, or a
+# hook that asked for `shared+closing`, would deny the first three.
+TOTAL=$((TOTAL+1))
+nr1_fail=0
+nr1_i=0
+for nr1_q in \
+  "is the existing census enough to close the G2 issue, given a personal CLI token not listed and a branch-nameable write token on another config?" \
+  "what is the right design for moving the three deploy-channel credentials out of branch-nameable storage?" \
+  "should the two credentials be rotated now, and in what order?" \
+  "Do you authorize rotating HCLOUD_TOKEN now?" \
+  "which option do you want for the landing page headline?"; do
+  nr1_i=$((nr1_i+1))
+  ruling_check "NR1.$nr1_i" allow none "$(qobj "$nr1_q" | mq_payload)" || nr1_fail=$((nr1_fail+1))
+done
+if [[ "$nr1_fail" -eq 0 ]]; then echo "  PASS: NR1 the five closing-message sentences still ALLOW through AskUserQuestion (pre-ask is not widened)"; PASS=$((PASS+1))
+else FAIL=$((FAIL+1)); fi
+
+# NR2 — closing-only phrasings that the pre-ask hook must not deny, and a control that still does. The first two
+# are CL2 shapes; the control is a SHARED cue, which both hooks judge.
+TOTAL=$((TOTAL+1))
+nr2_fail=0
+ruling_check "NR2a" allow none "$(qobj "what is the right design for the retry queue?" | mq_payload)" || nr2_fail=$((nr2_fail+1))
+ruling_check "NR2b" allow none "$(qobj "do you want a migration design?" | mq_payload)" || nr2_fail=$((nr2_fail+1))
+ruling_check "NR2c" deny ruling "$(qobj "how strict should the evidence bar be?" | mq_payload)" || nr2_fail=$((nr2_fail+1))
+if [[ "$nr2_fail" -eq 0 ]]; then echo "  PASS: NR2 closing-only phrasings allow, the shared cue still denies (group argument honoured)"; PASS=$((PASS+1))
+else FAIL=$((FAIL+1)); fi
+
+# ML1 — a missing lib is parse doubt, never a blanket deny. The hook is copied beside a lib directory that lacks the
+# cue file; the ruling arm is skipped with a stderr line and the R1 ruling question is ALLOWED. A control run against
+# a copy that HAS the lib must still deny, or the row would pass over a hook that never reaches the arm at all.
+TOTAL=$((TOTAL+1))
+m1_root="${SOLEUR_TEST_INCIDENT_ROOT:?sandbox root unset}/m1-missing-lib"
+m1_fail=0
+assert_fixture_dir "$m1_root"
+mkdir -p "$m1_root/with/lib" "$m1_root/without/lib" || m1_fail=1
+if [[ "$m1_fail" -eq 0 ]]; then
+  for m1_f in "$(dirname "$HOOK")"/lib/*.sh; do
+    cp "$m1_f" "$m1_root/with/lib/" || m1_fail=1
+    [[ "${m1_f##*/}" == "technical-fork-cues.sh" ]] || cp "$m1_f" "$m1_root/without/lib/" || m1_fail=1
+  done
+  cp "$HOOK" "$m1_root/with/pre-ask-technical-fork-gate.sh" || m1_fail=1
+  cp "$HOOK" "$m1_root/without/pre-ask-technical-fork-gate.sh" || m1_fail=1
+fi
+m1_json="$(qobj "$R1_Q" | mq_payload)"
+m1_ctl=$(printf '%s' "$m1_json" | bash "$m1_root/with/pre-ask-technical-fork-gate.sh" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
+m1_err_file="$m1_root/without.stderr"
+m1_out=$(printf '%s' "$m1_json" | bash "$m1_root/without/pre-ask-technical-fork-gate.sh" 2>"$m1_err_file")
+m1_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${m1_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$m1_fail" -eq 0 && "$m1_ctl" == "deny" && "$m1_dec" == "allow" ]] && grep -qF 'cue lib missing or incomplete' "$m1_err_file"; then
+  echo "  PASS: ML1 a missing cue lib allows with a stderr line (control with the lib still denies)"; PASS=$((PASS+1))
+else printf '  FAIL: ML1 missing-lib: setup_fail=%s control=%s without_lib=%s (want 0/deny/allow plus the stderr line)\n' "$m1_fail" "$m1_ctl" "$m1_dec" >&2; FAIL=$((FAIL+1)); fi
+
+# V4— the ruling arm's EXEMPTION must stay a permission-shape vocabulary. Structural, like V3: extract
+# the regex from the hook source, require a non-vacuous member count, and refuse any bare action verb. A
+# bare verb here would exempt every ruling that merely MENTIONS the action ("...before the rebirth is
+# dispatched and the volume deleted") and turn the arm off for the sentences it exists to catch.
+TOTAL=$((TOTAL+1))
+# The cue regexes live in the shared lib (technical-fork-cues.sh). Read the VALUE by sourcing the lib in a
+# subshell, never by sed over its source text: the lib builds RULING_OPVOCAB_RE by concatenation, so a text
+# read would see the assignment expression, not the regex.
+# shellcheck disable=SC1090  # the lib path is a variable by design; the value is read by sourcing
+v4_re="$( ( . "$LIB" 2>/dev/null; printf '%s' "${RULING_PERM_RE:-}" ) )"
+v4_re="${v4_re#(}"; v4_re="${v4_re%)}"
+if [[ -z "$v4_re" ]]; then
+  printf '  FAIL: V4 could not extract RULING_PERM_RE from the hook — the member checks below would pass over an empty set\n' >&2
+  FAIL=$((FAIL+1))
+else
+  v4_n=0; v4_bad=""
+  while IFS= read -r v4_m; do
+    [[ -n "$v4_m" ]] || continue
+    v4_n=$((v4_n+1))
+    v4_bare="${v4_m//\\b/}"
+    case "$v4_bare" in
+      delete|dispatch|deploy|merge|rotate|revoke|replace|destroy|flip|apply|arm|rollout|"roll out"|"roll ?out"|force-push|"should i"|"should we") v4_bad="$v4_bad $v4_m" ;;
+    esac
+  done <<< "$(printf '%s\n' "$v4_re" | tr '|' '\n')"
+  if [[ "$v4_n" -lt 6 ]]; then
+    printf '  FAIL: V4 the exemption split yielded only %s member(s) (floor 6) — a near-empty set proves nothing\n' "$v4_n" >&2
+    FAIL=$((FAIL+1))
+  elif [[ -n "$v4_bad" ]]; then
+    printf '  FAIL: V4 RULING_PERM_RE carries a bare action verb:%s — it would exempt any ruling that merely mentions the action\n' "$v4_bad" >&2
+    FAIL=$((FAIL+1))
+  else
+    printf '  PASS: V4 the ruling exemption has %s permission-shape members and no bare action verb\n' "$v4_n"; PASS=$((PASS+1))
+  fi
+fi
+
+# V5 — dispatch non-vacuity. Every distinct-vocabulary DENY row (R1 R2 Z2 Z3, the strong-cue witnesses C1-C7b, and one
+# witness per cue member K1-K9, evidence noun N1-N8, technical noun M1-M6) must have been denied with THIS arm's reason.
+# An emptied or mis-ordered cue makes every row read allow or fall to another arm, and a suite that only checks the
+# decision would not say the arm never ran.
+TOTAL=$((TOTAL+1))
+v5_n=0; v5_missing=""
+v5_rows="R1 R2 Z2 Z3 C1 C2 C3 C4 C5 C6 C7 C7b K1 K2 K3 K4 K5 K6 K7 K8 K9 K10 N1 N2 N3 N4 N5 N6 N7 N8 M1 M2 M3 M4 M5 M6"
+v5_want=0
+for v5_r in $v5_rows; do
+  v5_want=$((v5_want+1))
+  if [[ " $RULING_HIT_NAMES " == *" $v5_r "* ]]; then v5_n=$((v5_n+1)); else v5_missing="$v5_missing $v5_r"; fi
+done
+if [[ "$v5_n" -eq "$v5_want" && "$v5_want" -ge 36 ]]; then
+  echo "  PASS: V5 all $v5_want distinct-vocabulary deny rows reached the ruling arm's reason"; PASS=$((PASS+1))
+else
+  printf '  FAIL: V5 only %s of %s distinct-vocabulary rows reached the ruling reason; missing:%s\n' "$v5_n" "$v5_want" "$v5_missing" >&2; FAIL=$((FAIL+1))
+fi
+
+TOTAL=$((TOTAL+1))
+if [[ "$TOTAL" -eq 145 ]]; then echo "  PASS: V1 full inventory ran (145 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 145 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
 #
@@ -455,6 +1003,37 @@ if [[ "$v2_ok" != "1/0" || "$v2_bad" != "0/1" ]]; then
   exit 1
 fi
 
+# --- V2b: DECIDER SELF-TEST — ruling_check must pass what it should and fail what it should ---------
+#
+# V2 proves `run_case` routes verdicts to the right bucket. It says nothing about `ruling_check`, which every
+# R/Z/W/C/K/N/M/Q row goes through. Measured: neutering its decision comparator, or its reason-content branch, left
+# the suite green. A ruling row that expects `deny` therefore passed against an allow, and one that expects the
+# ruling reason passed against the investigation reason. Only driving the decider with KNOWN-good and KNOWN-bad
+# inputs catches a decider that always says yes: the expectation, not the hook, is what differs.
+#
+# Each control runs `run_ruling` in a subshell with its own counters against the real hook. Reported with printf and
+# `exit 1`, never through the helper under test (ADR-193): a check routed through the machinery it backstops is
+# disarmed by the same edit it exists to catch.
+v2b_probe() { # <expect> <mode> <payload-json> -> "PASS/FAIL" from one isolated run_ruling
+  ( PASS=0; FAIL=0; TOTAL=0
+    run_ruling "v2b instrument self-test" "$1" "$2" "$3" >/dev/null 2>&1
+    printf '%s/%s' "$PASS" "$FAIL" )
+}
+v2b_allow_json="$(qobj "Approve the merge of PR 9628?" | mq_payload)"
+v2b_rule_json="$(qobj "$R1_Q" | mq_payload)"
+v2b_invest_json="$(qobj "How should I resolve the cutover path?" "Read the runbook properly first" "find the documented order" "Ask whoever owns the cutover section" "the plan deferred it" | mq_payload)"
+v2b_i="$(v2b_probe deny ruling "$v2b_allow_json")"      # an allow payload expected to deny      -> must FAIL
+v2b_ii="$(v2b_probe deny ruling "$v2b_rule_json")"      # a ruling deny expected to deny ruling   -> must PASS
+v2b_iii="$(v2b_probe deny ruling "$v2b_invest_json")"   # an investigation deny expected ruling   -> must FAIL
+v2b_iv="$(v2b_probe allow none "$v2b_rule_json")"       # a deny payload expected to allow        -> must FAIL
+v2b_v="$(v2b_probe deny invest "$v2b_rule_json")"       # a ruling deny expected investigation    -> must FAIL
+v2b_vi="$(v2b_probe deny invest "$v2b_invest_json")"    # an investigation deny expected the same -> must PASS
+if [[ "$v2b_i" != "0/1" || "$v2b_ii" != "1/0" || "$v2b_iii" != "0/1" || "$v2b_iv" != "0/1" || "$v2b_v" != "0/1" || "$v2b_vi" != "1/0" ]]; then
+  printf '\nFATAL: instrument: ruling_check does not discriminate — pass/fail for (allow-as-deny, ruling, invest-as-ruling, deny-as-allow, ruling-as-invest, invest) was %s %s %s %s %s %s (want 0/1 1/0 0/1 0/1 0/1 1/0). The ruling decider is neutered, so every ruling row above is unproven.\n' \
+    "$v2b_i" "$v2b_ii" "$v2b_iii" "$v2b_iv" "$v2b_v" "$v2b_vi" >&2
+  exit 1
+fi
+
 # --- ACCOUNTING CONSERVATION + ASSERTION FLOOR ----------------------------------------------------
 # Measured on this file: paying `PASS=$((PASS+1))` from the FAIL branch reported `17/17 passed` and
 # exited 0 while every `FAIL:` line still printed — to stderr, where the footer's own claim
@@ -473,7 +1052,7 @@ fi
 # The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
 # added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
 # paying anything, cannot satisfy it.
-MIN_CASES=19
+MIN_CASES=145
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

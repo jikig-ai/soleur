@@ -101,6 +101,14 @@ for _v in BETTERSTACK_API_TOKEN BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAM
     exit 3
   fi
 done
+# Token-shape guard: a newline in the token would inject a curl config directive on the stdin
+# channel paged_get uses, and an empty one would send the request headerless. Never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${BETTERSTACK_API_TOKEN:-}"; then
+  transient "BETTERSTACK_API_TOKEN is unusable (unexpected shape); nothing is known about the chain"
+  emit unknown "BETTERSTACK_API_TOKEN-unusable"
+  exit 3
+fi
 if [[ ! -f "$BQ" ]]; then
   transient "betterstack-query.sh not found at ${BQ}"
   emit unknown "query-script-absent"
@@ -165,7 +173,8 @@ paged_get() { # <host> <path> [stop-epoch]
     # -g: no URL globbing (a `{a,b}` in pagination.next must not fan out); --max-redirs 0 for
     # explicitness (curl never follows without -L anyway).
     code="$(curl --disable --noproxy '*' -g -sS -m 20 --proto '=https' --max-redirs 0 -o "$body" -w '%{http_code}' \
-      -H "Authorization: Bearer ${BETTERSTACK_API_TOKEN}" -H 'Accept: application/json' "$url")" || rc=$?
+      -H 'Accept: application/json' --config - "$url" \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$BETTERSTACK_API_TOKEN"))" || rc=$?
     if [[ "$rc" -ne 0 ]]; then printf 'curl exited %s on GET %s\n' "$rc" "${url%%\?*}" >&2; return 1; fi
     case "$code" in 2*) ;; *) printf 'HTTP %s on GET %s\n' "$code" "${url%%\?*}" >&2; return 1 ;; esac
     if ! jq -e '.data | type == "array"' "$body" >/dev/null 2>&1; then printf 'no data array in GET %s\n' "${url%%\?*}" >&2; return 1; fi

@@ -58,7 +58,17 @@ cat > "$BIN/curl" <<'CURL'
 #!/usr/bin/env bash
 argv="$*"
 prev=""
-[[ "$argv" == *"Authorization: Bearer"* ]] || { echo "stub-curl: no Authorization header" >&2; exit 64; }
+# The bearer must travel on STDIN as a curl config line (`--config -`), never on argv (#7797:
+# argv is world-readable via /proc/<pid>/cmdline). Read stdin FIRST, then assert on both
+# channels: the header is PRESENT on stdin carrying the exact token, and the token and any
+# Authorization header are ABSENT from argv. Never loosen this to accept either channel.
+_cfg="$(cat)"
+_tok="${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-}"
+[[ -n "$_tok" ]] || { echo "stub-curl: no token in the probe environment" >&2; exit 64; }
+[[ "$_cfg" == *"header = \"Authorization: Bearer ${_tok}\""* ]] || { echo "stub-curl: no Authorization header on stdin" >&2; exit 64; }
+[[ "$argv" != *"$_tok"* ]] || { echo "stub-curl: bearer token present on argv" >&2; exit 67; }
+[[ "$argv" != *"Authorization: Bearer"* ]] || { echo "stub-curl: Authorization header present on argv" >&2; exit 67; }
+[[ "$argv" == *"--config -"* ]] || { echo "stub-curl: --config - missing" >&2; exit 64; }
 [[ "$argv" == *"--proto =https"* ]] || { echo "stub-curl: --proto '=https' missing" >&2; exit 64; }
 [[ "$argv" == *"%{http_code}"* ]] || { echo "stub-curl: -w %{http_code} missing" >&2; exit 64; }
 # A redirect-following probe would forward the bearer credential off-vendor.

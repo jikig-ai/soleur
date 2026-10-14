@@ -44,20 +44,20 @@ else
 fi
 
 # Pattern 1: Linear issue identifier shape.
-if printf '%s' "$input" | grep -oE '\b[A-Z]{2,}-[0-9]+\b' | head -n 1 | grep -q .; then
+if grep -qE '\b[A-Z]{2,}-[0-9]+\b' <<<"$input"; then
   match=$(printf '%s' "$input" | grep -oE '\b[A-Z]{2,}-[0-9]+\b' | head -n 1)
   echo "FAIL: telemetry payload contains Linear identifier shape: $match" >&2
   exit 1
 fi
 
 # Pattern 2: Linear CDN hostname (any form, signed-URL fragments included).
-if printf '%s' "$input" | grep -qiE 'uploads\.linear\.app'; then
+if grep -qiE 'uploads\.linear\.app' <<<"$input"; then
   echo "FAIL: telemetry payload contains uploads.linear.app reference" >&2
   exit 1
 fi
 
 # Pattern 3: UUID-style ID (Linear's internal issue UUIDs).
-if printf '%s' "$input" | grep -oE '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b' | head -n 1 | grep -q .; then
+if grep -qE '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b' <<<"$input"; then
   match=$(printf '%s' "$input" | grep -oE '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b' | head -n 1)
   echo "FAIL: telemetry payload contains UUID-style identifier: $match" >&2
   exit 1

@@ -489,14 +489,14 @@ grep -qF -- "ro-token" "$LOADER_DIR/github_env" \
 # exists to close. The heredoc-delimiter form contains it.
 STUB_HCLOUD_RO="$(printf 'tok\nBASH_ENV=/tmp/pwn')" STUB_HCLOUD_RW="" \
   run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
-if env_keys | grep -qx 'BASH_ENV'; then
+if env_keys | grep -cx >/dev/null 'BASH_ENV'; then
   fail "row1f: a newline in the Tier-A value DEFINED a second GITHUB_ENV key (BASH_ENV) — branch-to-main code execution"
 else
   pass "row1f: a newline in the Tier-A value defines no second GITHUB_ENV key"
 fi
 # Non-vacuity: the parser must be able to SEE a key, or the assertion above passes because
 # it found nothing at all rather than because nothing was injected.
-env_keys | grep -qx 'HCLOUD_TOKEN' \
+env_keys | grep -cx >/dev/null 'HCLOUD_TOKEN' \
   && pass "row1f: the env parser resolves the real key (the check is not vacuous)" \
   || fail "row1f: env parser found no keys — the injection assertion above proved nothing"
 env_has "HCLOUD_TOKEN" && pass "row1f: the value is still exported (contained, not dropped)" \

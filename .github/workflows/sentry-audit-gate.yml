@@ -127,9 +127,13 @@ jobs:
             echo "::error::Refusing to send a credentialed request: SENTRY_API_HOST is '${SENTRY_API_HOST}', not the org-subdomain '${SENTRY_ORG}.sentry.io'. This endpoint is org-scoped, and the regional hosts rewrite slugs ending in '-eu' (ADR-031). Reconcile the secret before merging."
             exit 2
           fi
-          http=$(curl --disable --noproxy '*' --proto '=https' -g -s --max-time 15 -o /dev/null -w '%{http_code}' \
-            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/")
+          # The token reaches curl on its stdin config (ADR-280); the library supplies --disable and
+          # --noproxy first, the pin and -g stay with the caller. A refusal reads as http=000 below, so
+          # the step stays red with the marker visible.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+          http=$(bc_curl sentry-audit-gate 'Authorization:Bearer :SENTRY_AUTH_TOKEN' -- \
+            --proto '=https' -g -s --max-time 15 -o /dev/null -w '%{http_code}' \
+            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/") || http=000
           if [[ "$http" != "200" ]]; then
             echo "::error::SENTRY_AUTH_TOKEN scope check failed (HTTP $http on /api/0/organizations/${SENTRY_ORG}/ at ${SENTRY_API_HOST}). Token may lack org:read scope, OR SENTRY_API_HOST rewrites slugs ending in '-eu' (set to the org-subdomain ${SENTRY_ORG}.sentry.io instead). Reconcile before merging."
             exit 1

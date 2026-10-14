@@ -197,7 +197,7 @@ locate_body() {
   # Non-ASCII whitespace (NBSP, U+2000-200A, U+2028/9, U+202F, U+205F, U+3000, U+0085, U+1680)
   # and the ASCII separators U+001C-001F: Python's str.split() collapses them, `tr` in the C
   # locale does not, so a body carrying one hashes differently in the two gates.
-  if printf '%s' "$BODY" | LC_ALL=C grep -qE $'\xc2[\x85\xa0]|\xe1\x9a\x80|\xe2\x80[\x80-\x8a\xa8\xa9\xaf]|\xe2\x81\x9f|\xe3\x80\x80|[\x1c-\x1f]'; then
+  if LC_ALL=C grep -qE $'\xc2[\x85\xa0]|\xe1\x9a\x80|\xe2\x80[\x80-\x8a\xa8\xa9\xaf]|\xe2\x81\x9f|\xe3\x80\x80|[\x1c-\x1f]' <<<"$BODY"; then
     LOC_ERR="non-ASCII whitespace in the body of $id at $rel — replace it with a plain space"
   fi
 }
@@ -326,7 +326,7 @@ done < <(scan_md -F "$CANON")
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
   split_hit "$hit" || continue
-  printf '%s' "$HIT_TEXT" | grep -qE '^ {0,3}> \*\*Rule `[a-z0-9][a-z0-9-]*` — migrated out of' && continue
+  grep -qE '^ {0,3}> \*\*Rule `[a-z0-9][a-z0-9-]*` — migrated out of' <<<"$HIT_TEXT" && continue
   lid="$(printf '%s' "$HIT_TEXT" | sed -n 's/.*\*\*Rule `\([a-z0-9][a-z0-9-]*\)` — migrated out of `AGENTS\.rules\.md` on.*/\1/p')"
   [[ -z "$lid" ]] && continue
   finding "migration banner for $lid at $HIT_FILE:$HIT_LINE is not a top-level blockquote line (\`> **Rule\`) — no check can read it"

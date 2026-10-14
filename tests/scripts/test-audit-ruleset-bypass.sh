@@ -244,7 +244,7 @@ t_log_injection_strip() {
   # anywhere in the output file.
   local detail_line; detail_line=$(grep -E '^failure_detail=' "$tmp/output" || true)
   local has_cr=0 has_u2028=0
-  if printf '%s' "$detail_line" | grep -qP '\r'; then has_cr=1; fi
+  if printf '%s' "$detail_line" | grep -cP >/dev/null '\r'; then has_cr=1; fi
   if grep -qP '\xe2\x80\xa8' "$tmp/output"; then has_u2028=1; fi
   if [[ "$has_cr" == "0" && "$has_u2028" == "0" ]]; then
     _report "T9 CRLF + U+2028 stripped from failure_detail" ok
@@ -845,7 +845,7 @@ _mq_stall_threshold() {
 # is why an unparseable skeleton or any leftover token keeps the 0-params floor RED.
 _mq_queue_absent() {
   local tf="$1" dr="$2" readme="$3" skel
-  if _mq_strip_hcl "$tf" | grep -q 'merge_queue'; then return 1; fi
+  if _mq_strip_hcl "$tf" | grep -c >/dev/null 'merge_queue'; then return 1; fi
   skel=$(sed -n "/cat > \"\$skeleton\" << 'EOF'/,/^EOF\$/p" "$dr" | sed '1d;$d')
   jq -e '(.rules | type == "array") and all(.rules[]; ((.type // "") | test("merge_queue") | not))' <<<"$skel" >/dev/null 2>&1 || return 1
   if awk -v want="$MQ_PARAMS" '
@@ -901,7 +901,7 @@ _mq_guard2() {
   fi
   # CodeQL-absent invariant. tf: comment-stripped (line AND block) `context = "CodeQL"`; DR: any context in the
   # skeleton JSON; canonical: any row.
-  if _mq_strip_hcl "$tf" | grep -qE 'context[[:space:]]*=[[:space:]]*"CodeQL"'; then
+  if _mq_strip_hcl "$tf" | grep -cE >/dev/null 'context[[:space:]]*=[[:space:]]*"CodeQL"'; then
     MQ_REASON="CodeQL required_check present in tf alongside a merge_queue block"; return 1
   fi
   local dr_codeql
@@ -983,14 +983,14 @@ _mq_mutation() {
 
 
 # Mutation helper for T-mq-1.m8: put a /* ... */ commented COPY of the pristine merge_queue block ahead of
-# the real block and change a real value (timeout 60 -> 30) in the real block only. A parser that matches the
+# the real block and change a real value (the real timeout -> 30) in the real block only. A parser that matches the
 # commented copy first compares the stale values and goes green over the real drift.
 _mq_mut_commented_old_block() {
   awk '
     /^[[:space:]]*merge_queue[[:space:]]*\{/ && !done { inblk=1; buf=$0 "\n"; mod=$0 "\n"; next }
     inblk {
       buf = buf $0 "\n"; l=$0
-      if (l ~ /check_response_timeout_minutes/) sub(/=[[:space:]]*60/, "= 30", l)
+      if (l ~ /check_response_timeout_minutes/) sub(/=[[:space:]]*[0-9]+/, "= 30", l)
       mod = mod l "\n"
       if ($0 ~ /^[[:space:]]*\}/) { printf "/*\n%s*/\n%s", buf, mod; inblk=0; done=1 }
       next
@@ -1031,7 +1031,7 @@ t_mq_mutations() {
     's/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`)[0-9]+/\199/'
   # 8 — a /* */ block-comment copy of the OLD merge_queue block ahead of the real one, real timeout
   # changed in the .tf only: the stale commented values must not mask the real drift (the DR/README
-  # still say 60, so the guard must go RED on parity against the REAL value).
+  # still carry the unmutated value, so the guard must go RED on parity against the REAL value).
   _mq_mutation "T-mq-1.m8 /* */ commented stale block ahead of a drifted real block -> RED" \
     'DR skeleton params != tf' tf \
     'FN:_mq_mut_commented_old_block'
@@ -1043,15 +1043,15 @@ t_mq_mutations() {
   _mq_mutation "T-mq-1.m10 merge_method SQUASH -> MERGE in tf+DR+README (parity holds) -> RED on the safety value" \
     'merge_method' tf,dr,readme \
     's/(merge_method[[:space:]]*=[[:space:]]*")SQUASH/\1MERGE/; s/("merge_method":[[:space:]]*")SQUASH/\1MERGE/; s/^(\|[[:space:]]*`merge_method`[[:space:]]*\|[[:space:]]*`)SQUASH/\1MERGE/'
-  _mq_mutation "T-mq-1.m11 check_response_timeout_minutes 60 -> 30 in tf+DR+README (parity holds, below the stall threshold) -> RED" \
+  _mq_mutation "T-mq-1.m11 check_response_timeout_minutes -> 5 in tf+DR+README (parity holds, below the stall threshold) -> RED" \
     'must exceed STALL_THRESHOLD_MINUTES' tf,dr,readme \
-    's/(check_response_timeout_minutes[[:space:]]*=[[:space:]]*)60/\130/; s/("check_response_timeout_minutes":[[:space:]]*)60/\130/; s/^(\|[[:space:]]*`check_response_timeout_minutes`[[:space:]]*\|[[:space:]]*`)60/\130/'
-  _mq_mutation "T-mq-1.m12 stall workflow threshold raised to 60 (>= timeout) -> RED" \
+    's/(check_response_timeout_minutes[[:space:]]*=[[:space:]]*)[0-9]+/\15/; s/("check_response_timeout_minutes":[[:space:]]*)[0-9]+/\15/; s/^(\|[[:space:]]*`check_response_timeout_minutes`[[:space:]]*\|[[:space:]]*`)[0-9]+/\15/'
+  _mq_mutation "T-mq-1.m12 stall workflow threshold raised past the timeout -> RED" \
     'must exceed STALL_THRESHOLD_MINUTES' wf \
-    "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')45'/\160'/"
+    "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')[0-9]+'/\1999'/"
   _mq_mutation "T-mq-1.m13 stall workflow threshold made non-numeric (underivable) -> RED" \
     'stall threshold not derivable' wf \
-    "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')45'/\1soon'/"
+    "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')[0-9]+'/\1soon'/"
 }
 
 # ---- queue-OFF (rollback) state, #9454 L5 ----
@@ -1271,7 +1271,7 @@ t_mq_controls() {
     _mq_with_guard_stub green t_mq_queue_off
   # 6-7. The two queue-off evidence arms are PINNED: removing either from _mq_queue_absent must red the queue-off battery.
   _mq_drive_must_fail "T-mq-ctl6 queue-off battery reds when _mq_queue_absent loses its tf merge_queue token arm" "" \
-    _mq_with_absent_mutated "s/^  if _mq_strip_hcl \"\\\$tf\" \\| grep -q 'merge_queue'; then return 1; fi\$/  :/" t_mq_queue_off
+    _mq_with_absent_mutated "s/^  if _mq_strip_hcl \"\\\$tf\" \\| grep -c >\/dev\/null 'merge_queue'; then return 1; fi\$/  :/" t_mq_queue_off
   _mq_drive_must_fail "T-mq-ctl7 queue-off battery reds when _mq_queue_absent loses its README arm" "" \
     _mq_with_absent_mutated 's/exit found \? 0 : 1/exit 1/' t_mq_queue_off
 }

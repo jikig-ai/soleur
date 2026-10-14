@@ -1,0 +1,344 @@
+{
+  "version": "2.18",
+  "children": [
+    {
+      "type": "frame",
+      "id": "aH91x",
+      "x": 0,
+      "y": 0,
+      "name": "support_handoff repoConnected states",
+      "clip": true,
+      "width": 760,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 24,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "tTle1",
+          "name": "title",
+          "fill": "#C9A962",
+          "content": "SUPPORT HANDOFF — repoConnected COPY STATES (#9556)",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "type": "frame",
+          "id": "rConn",
+          "name": "repoConnected: true",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "frame",
+              "id": "bUbble1",
+              "name": "support bubble",
+              "width": "fill_container",
+              "fill": "#141414",
+              "padding": [12, 14],
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "mTxt1",
+                  "name": "reply",
+                  "fill": "#E5E5E5",
+                  "content": "I can't edit files from this chat — this is app-help only.",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "lnk1",
+                  "name": "handoff link",
+                  "fill": "#064E3B",
+                  "padding": [6, 10],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "lTxt1",
+                      "name": "link copy",
+                      "fill": "#6EE7B7",
+                      "content": "Ask an agent to do this →",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "nTxt1",
+              "name": "annotation",
+              "fill": "#8B8B8B",
+              "content": "repo-connected user — clean link to /dashboard/chat/new?msg=<task>; caveat drops (precondition verified)",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "rNone",
+          "name": "repoConnected: false",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "frame",
+              "id": "bUbble2",
+              "name": "support bubble",
+              "width": "fill_container",
+              "fill": "#141414",
+              "padding": [12, 14],
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "mTxt2",
+                  "name": "reply",
+                  "fill": "#E5E5E5",
+                  "content": "I can't edit files from this chat — this is app-help only.",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "lnk2",
+                  "name": "handoff link",
+                  "fill": "#3B2F0B",
+                  "padding": [6, 10],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "lTxt2",
+                      "name": "link copy",
+                      "fill": "#FCD34D",
+                      "content": "Connect a repository to hand this task to an agent →",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "nTxt2",
+              "name": "annotation",
+              "fill": "#8B8B8B",
+              "content": "repo-less user — honest degrade: copy names the precondition, link points at /connect-repo instead of the repo-gated chat",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "rUnk",
+          "name": "repoConnected: undefined",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "frame",
+              "id": "bUbble3",
+              "name": "support bubble",
+              "width": "fill_container",
+              "fill": "#141414",
+              "padding": [12, 14],
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "mTxt3",
+                  "name": "reply",
+                  "fill": "#E5E5E5",
+                  "content": "I can't edit files from this chat — this is app-help only.",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "lnk3",
+                  "name": "handoff link",
+                  "fill": "#1F2937",
+                  "padding": [6, 10],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "lTxt3",
+                      "name": "link copy",
+                      "fill": "#93C5FD",
+                      "content": "Ask an agent to do this (needs a connected repo) →",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "nTxt3",
+              "name": "annotation",
+              "fill": "#8B8B8B",
+              "content": "flag absent (dep-less deny path / older frame) — current copy preserved verbatim; never a regression arm",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "pQ42z",
+      "x": 0,
+      "y": 420,
+      "name": "command-palette ?q= prefill",
+      "clip": true,
+      "width": 760,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 24,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "tTle2",
+          "name": "title",
+          "fill": "#C9A962",
+          "content": "COMMAND PALETTE → /dashboard/chat/new?q=<q> — PREFILL, NEVER AUTO-SEND (#9557)",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "type": "frame",
+          "id": "pAlSrc",
+          "name": "palette row",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "frame",
+              "id": "pAlRow",
+              "name": "cmd-ask-agent row",
+              "width": "fill_container",
+              "height": 44,
+              "fill": "#141414",
+              "padding": [0, 14],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pAlTxt",
+                  "name": "row label",
+                  "fill": "#E5E5E5",
+                  "content": "Ask an agent about “refund policy”",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "nTxt4",
+              "name": "annotation",
+              "fill": "#8B8B8B",
+              "content": "producer already ships: router.push(/dashboard/chat/new?q=refund%20policy)",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "cHatNew",
+          "name": "chat/new composer",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "frame",
+              "id": "cOmposer",
+              "name": "composer",
+              "width": "fill_container",
+              "height": 56,
+              "fill": "#141414",
+              "padding": [12, 14],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "dRaft",
+                  "name": "prefilled draft",
+                  "fill": "#E5E5E5",
+                  "content": "refund policy▌",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "sEnd",
+                  "name": "send button (idle)",
+                  "fill": "#064E3B",
+                  "padding": [6, 12],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "sEndTxt",
+                      "name": "send label",
+                      "fill": "#6EE7B7",
+                      "content": "Send",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "nTxt5",
+              "name": "annotation",
+              "fill": "#8B8B8B",
+              "content": "consumer seeds the composer + strips ?q= — Send stays user-initiated; ?msg= keeps the auto-send contract",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

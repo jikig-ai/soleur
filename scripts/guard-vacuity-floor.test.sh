@@ -72,10 +72,36 @@ trap cleanup_suite EXIT
 # corpus: `X=$((X + 1))` and `((X++))`. `grep -a` because one tracked suite carries bytes
 # grep classifies as binary, and a "binary file matches" line would otherwise be parsed as
 # a counter name.
-counters_of() { # <file>
+#
+# ONE derivation widening (#6604 PR B): a suite that SOURCES a sibling `*-harness.sh` by a literal
+# `. "$DIR/<name>-harness.sh"` (or `source …`) increments its counters THROUGH that harness's ok()/no(),
+# so the harness's increments count as the suite's own. Without it, the workspaces-luks suites, whose
+# `pass` lives in workspaces-luks-harness.sh, could write a literal floor on an `if` and still be absent
+# from the population. Deliberately narrow: only the `-harness.sh` suffix, only the suite's OWN
+# directory, never a symlink. The general case (every sourced helper, e.g. the ~50 suites on
+# test-helpers.sh) is NOT followed: it would move the population by an unmeasured amount.
+increments_of() { # <file> -> counter names incremented in THIS file
   {
     { grep -aoE '\b[A-Za-z_][A-Za-z0-9_]*=\$\(\( *[A-Za-z_][A-Za-z0-9_]* *\+ *1 *\)\)' "$1" || true; } | cut -d= -f1
     { grep -aoE '\(\( *[A-Za-z_][A-Za-z0-9_]*\+\+ *\)\)' "$1" || true; } | tr -d '()+ '
+  }
+}
+harnesses_of() { # <file> -> the sibling *-harness.sh files it sources, one path per line
+  local d h
+  d="$(dirname "$1")"
+  { grep -aoE '^[[:space:]]*(\.|source)[[:space:]]+"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/[A-Za-z0-9_.-]+-harness\.sh"' "$1" || true; } \
+    | sed -E 's|.*/([A-Za-z0-9_.-]+-harness\.sh)"$|\1|' | sort -u \
+    | while IFS= read -r h; do
+        if [[ -n "$h" && -f "$d/$h" && ! -L "$d/$h" ]]; then printf '%s\n' "$d/$h"; fi
+      done
+}
+counters_of() { # <file>
+  local h
+  {
+    increments_of "$1"
+    while IFS= read -r h; do
+      if [[ -n "$h" ]]; then increments_of "$h"; fi
+    done < <(harnesses_of "$1")
   } | sort -u | grep -v '^$' || true
 }
 
@@ -99,9 +125,17 @@ counters_of() { # <file>
 # `cat > x <<'STUB'` contributes both a counter and a floor candidate, and the slice runs
 # 1200+ lines of another suite's setup (measured on prod-version-drift-check.test.sh).
 heredoc_lines_of() { # <file> -> one line number per line inside a heredoc body
+  # The opener must not match inside `<<<`/here-strings (#10099): the match lands on the SECOND
+  # `<` of `<<< 'word`, reads `'word` as a tag that never terminates, and blanks every later line
+  # — a phantom span that hid a suite's own floor (#10051). Rejection is on the PREDECESSOR char:
+  # a `<` can never be a tag-start char, so a match preceded by `<` is exactly the `<<<` (or
+  # `<<<<`-run) mis-scan. Rejected lines are skipped outright — no corpus line mixes a `<<<`
+  # trigger with a real `<<TAG` (measured over `git ls-files '*.test.sh'`), and a future line that
+  # does fails loud (spurious candidate), never quiet (hidden floor).
   awk '
     /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?/ && !inhd {
       if (match($0, /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*/)) {
+        if (RSTART > 1 && substr($0, RSTART-1, 1) == "<") next
         tag = substr($0, RSTART, RLENGTH)
         gsub(/^<<-?[[:space:]]*['"'"'"]?/, "", tag)
         inhd = 1; next
@@ -395,6 +429,14 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # is `-lt` over the `pass` count the suite accumulates, emitted by `printf` + `exit 1` (ADR-193);
 # (b) it drives ok()/no() once each before any assertion and exits 2 unless both counters moved;
 # (c) MIN_ASSERTIONS is a literal on the line directly above its `if`.
+# `apps/web-platform/infra/web-zot-consumer-probe.test.sh` gained an assertion floor in #7258 (the list contract,
+# Guards 1-2), which grew the ledger 47 -> 48 and reddened ARM 5c. PROMOTED as a FILE, not deferred, and not by
+# raising MAX_DEFERRED (the ledger is shrink-only; the gate's own FAIL message says "do NOT raise this number").
+# It qualifies on all three counts: (a) the floor is `-lt` over `PASS + FAIL`, emitted by `printf` + `exit 1`
+# (ADR-193), so a neutered assert() that stops counting fires it; (b) an instrument self-test drives assert()
+# with a condition that must FAIL and exits 1 unless the FAIL counter moved, so an always-passing assert() never
+# reaches the count; (c) MIN_ASSERTS is a literal on the line directly above its `if`. Measured by the #7258
+# mutation batteries: assert() disarmed two ways, both exit 1 with no FAIL rows (the self-test and the floor).
 # `apps/web-platform/infra/web-probes-token-rotation.test.sh` added by #8705 — Guards 1-3 of the
 # web_probes token rotation (consumer census, create_before_destroy, the rotation verifier).
 # PROMOTED as a FILE, not deferred, and not by raising MAX_DEFERRED (the ledger is shrink-only). It
@@ -656,6 +698,12 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # directory (ledger 47 -> 48, ARM 5c red). PROMOTED on the same grounds: the floor
 # `(( PASS + FAIL < 17 ))` is emitted by `printf` + `exit 1`, never through pass()/fail(), with an
 # ADR-193 helper self-test ahead of any row and a literal bound in the `if` itself. The floor was
+# `inngest-provision-rehearsal.test.sh` added by #9175 — the rehearsal sentinel under a
+# deferred directory. Its floor is `if (( cases < MIN ))` over a `cases=$((cases + 1))`
+# counter with MIN a literal assignment the walk-back carries — mutant-CONSTRUCTIBLE and
+# measured FIRES (the slice exits 1 with the [FATAL] sentinel when the machinery is
+# neutered). Promoted per-file rather than raising MAX_DEFERRED: the ledger shrinks and
+# the floor is mutation-tested like any covered suite.
 # a one-line `if …; fi` at first, which build_mutant cannot slice (it needs a standalone `fi`),
 # so it scored CONSTRUCTION until split across lines.
 # `apps/web-platform/infra/git-data-plaintext-snapshot-loopback.test.sh` (#5274 Phase 3) — the
@@ -718,7 +766,31 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # CALL SITE by `row()` and never inside pass()/fail(), with a `pass + fail == checked` conservation check beside
 # it; both are emitted by `printf` + `exit 1` and never routed through the helpers they backstop (ADR-193); and
 # an instrument self-test drives both helpers once and exits 1 before any real row if a counter fails to move.
-PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh)$'
+# `apps/web-platform/infra/git-data-liveness.test.sh` added by #9438 — the git-data host's liveness
+# feeder suite, a NEW floor-bearing file in a deferred directory, which grew the ledger 47 -> 48 and
+# reddened ARM 5c. PROMOTED, not deferred, and not by raising MAX_DEFERRED, for the reason every
+# sibling entry gives (the FAIL message: "cover it … do NOT raise this number"; the ledger is
+# shrink-only). It qualifies on the covered-bar shape: the floor is `-lt` over `$cases`, a counter
+# bumped at the assertion call site and independent of the pass/fail split, emitted by `printf` +
+# `exit 1` and never routed through the pass()/fail() it backstops (ADR-193), preceded by the
+# call-site/verdict conservation check and an instrument canary; and the bound (`MIN_ASSERTIONS`)
+# is a literal on the line above the `total=` binding that sits directly above the `if`, so the
+# mutant is CONSTRUCTIBLE (the shape git-data-luks-reopen.test.sh already proves).
+# `apps/web-platform/test/vitest-related.test.sh` added by #9815 — the related-narrowing
+# wrapper's suite, first floor-bearing file under `apps/web-platform/test/` (a directory in
+# neither COVERED nor DEFERRED scope — `apps/web-platform/test/infra/` is the only scoped
+# subtree). PROMOTED per-file: a directory move is the wrong granularity (the dir holds
+# non-floor-bearing suites and needs the per-scope ratchet in #7585 first). Grounds: floor is
+# `total < MIN_ASSERTIONS` over PASS+FAIL so a neutered machinery drives it to 0 and FIRES;
+# reported by `echo ... >&2` + `exit 2` never through the pass()/fail() it backstops; bound is a
+# literal on the adjacent line so the mutant is CONSTRUCTIBLE.
+# `apps/web-platform/infra/docker-run-tuple.test.sh` added by #10065 — the unit and mutation battery for the closed-world
+# docker run tuple parser (lib/docker-run-tuple.py): a mutation matrix over scratch copies of ci-deploy.sh and cloud-init.yml,
+# must-PASS rows, and helper-copy stub rows (H1). PROMOTED as a FILE, not deferred, and not by raising MAX_DEFERRED (the ledger is
+# shrink-only). Its floor is `-lt` over `ROWS`, a counter incremented at every row call site and never inside ok()/bad(), with
+# the bound `MIN_ROWS` a literal on the line directly above the `if`, reported by printf + exit 1 (ADR-193), beside a
+# `passes + fails == rows` identity reported the same way; an ok()/bad() self-test exits 2 before any verdict.
+PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-liveness\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh|apps/web-platform/test/vitest-related\.test\.sh)$'
 # `apps/web-platform/infra/cron-egress-ghcr-probe.test.sh` born floor-bearing in #9275 — the probe
 # verdict/sampler table suite. PROMOTED, not deferred, and not by raising MAX_DEFERRED: the floor is
 # `$((PASS + FAIL)) -lt 146` with the literal on the `if` itself, reported by `printf` + `exit 1`
@@ -731,7 +803,7 @@ PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/ho
 # `printf '[FATAL] anti-vacuity floor: ...' >&2` + `exit 1` and never through the suite's
 # ok()/no() pair, and a `pass+fail != cases` conservation check sits adjacent — all three
 # covered-bar grounds hold. The ledger returns to its ratchet.
-PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/web-2-host-key-local\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh)$'
+PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-liveness\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/web-2-host-key-local\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh|apps/web-platform/test/vitest-related\.test\.sh)$'
 # `apps/web-platform/infra/rule-audit-inngest-pin-workflow-guard.test.sh` added by #7463 PR-B —
 # the parity guard for the rule-audit.yml `Detect inngest CLI pin drift` step, under a deferred
 # directory. Promoted, not deferred, on the covered bar: (a) its floor is `(( TOTAL < MIN_FLOOR ))`
@@ -739,7 +811,7 @@ PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/ho
 # carries a positive control that drives assert() through a real pass and a real (reversed) fail
 # before any row; (c) the floor exits via a direct `echo >&2` + `exit 2`, never through the
 # machinery it backstops (ADR-193). Ledger returns to its ratchet rather than growing.
-PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/web-2-host-key-local\.test\.sh|apps/web-platform/infra/rule-audit-inngest-pin-workflow-guard\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh)$'
+PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-liveness\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/web-2-host-key-local\.test\.sh|apps/web-platform/infra/rule-audit-inngest-pin-workflow-guard\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh|apps/web-platform/test/vitest-related\.test\.sh)$'
 # `apps/web-platform/infra/workspaces-plaintext-forget-workflow.test.sh` added by #6604 step 7 — Guard 4
 # of the plaintext wipe (the single-use state-forget workflow; PR B deletes it with the workflow). A NEW
 # floor-bearing file in a deferred directory grew the ledger 47 -> 48 and reddened ARM 5c. PROMOTED as a
@@ -796,7 +868,128 @@ PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/ho
 # mutant / mutation-row count beside it), the literal bound sits on the line directly above the `if`,
 # both are reported by `printf` + `exit 1` and never through ok()/bad() (ADR-193), and an instrument
 # self-test plus a helper control exit 1 before any real row if a counter fails to move.
-PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/web-2-host-key-local\.test\.sh|apps/web-platform/infra/rule-audit-inngest-pin-workflow-guard\.test\.sh|apps/web-platform/infra/workspaces-plaintext-forget-workflow\.test\.sh|apps/web-platform/infra/workspaces-luks-provision\.test\.sh|apps/web-platform/infra/workspaces-luks-fresh-boot\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh|apps/web-platform/infra/apt-bounded\.test\.sh|plugins/soleur/skills/review/test/fix-round-seats\.test\.sh|apps/web-platform/infra/lb-weight-gate-with-marker\.test\.sh|apps/web-platform/infra/workspaces-luks-header-web\.test\.sh|apps/web-platform/infra/workspaces-luks-t2-rehearsal\.test\.sh|apps/web-platform/infra/cron-egress-self-heal\.test\.sh|apps/web-platform/infra/web-escrow-create-workflow\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime\.test\.sh)$'
+# `apps/web-platform/infra/egress-gateway.test.sh` and
+# `apps/web-platform/infra/egress-gw-image-staleness.test.sh` added by #9534 (PR-A) — the
+# Guard 1 contract suite for the Squid gateway bootstrap and the digest-staleness gate for the
+# pinned image. Two NEW floor-bearing suites in the deferred `apps/web-platform/infra/` directory,
+# which grew the ledger 47 -> 49 and reddened ARM 5c. PROMOTED as FILES, not deferred, and not by
+# raising MAX_DEFERRED (the ledger is shrink-only), for the reason every sibling entry gives. Each
+# qualifies: the floor is `-lt` over an independent verdict count (`$((PASS + FAIL))` /
+# `$((PASS + FAIL + DRIFT))`, counters incremented inside the helpers the floor backstops), emitted
+# by `printf`/`echo >&2` + `exit 1`/`exit 2` and never routed through a verdict it backstops
+# (ADR-193), and the bound (egress-gateway `118` since the poll suite landed, staleness `3`) is a literal inside the `if`, so the mutant is
+# CONSTRUCTIBLE and a neutered verdict machinery drives the count to 0 and FIRES.
+# `web-private-nic-guard.test.sh` and `cron-egress-enforce-probe.test.sh` gained their first anti-vacuity
+# floors in the #9632 review (credential hardening of the NIC guard and the egress probe). PROMOTED, not
+# deferred, and the ratchet deliberately not raised. Each carries the full bar: a case counter moved by the
+# assert WRAPPERS (assert/check/assert_grep/assert_cmd), never inside the `_pass`/`_fail` verdict helpers; the
+# `[FATAL] accounting identity` check (`PASS + FAIL != CASES`) and a `-lt` floor reported by `printf` + `exit 1`,
+# with the bound a literal on the line immediately above the `if`; and an instrument self-test that drives the
+# wrappers once on a false and once on a true condition. Measured: neutering the assert helpers to no-ops now
+# trips the floor instead of printing `0 passed, 0 failed` at exit 0.
+# `apps/web-platform/infra/luks-monitor.test.sh`, `workspaces-luks-rollback-refusal.test.sh`,
+# `workspaces-luks-freeze.test.sh` and `workspaces-luks-staging.test.sh` added by #6604 PR B. The three
+# workspaces-luks suites had exact-count floors, but behind a `harness_floor "$X_MIN_PASS"` CALL into
+# workspaces-luks-harness.sh, and their `pass` counter is incremented there too, so `floor_lines_of`
+# returned nothing for them and they were in neither scope; luks-monitor.test.sh had no floor at all.
+# Each now writes `if [ "$pass" -lt "$X" ]` (luks-monitor: `$passes`) after its summary, with the bound
+# a literal (or an arithmetic-only binding) directly above the `if`, reported by printf + exit 1, never
+# through no() (ADR-193); and `counters_of` follows a sourced sibling `*-harness.sh` (see its header),
+# which is what makes `pass` visible. PROMOTED as FILES, not deferred, and not by raising MAX_DEFERRED
+# (the ledger is shrink-only): all four meet the covered bar, each scores FIRES under this guard's own
+# mutant construction, and the three harness suites (all but luks-monitor) run harness_selftest and exit 2 on a neutered
+# ok()/no() or case predicate before the floor is reached. `apps/web-platform/infra/` stays deferred.
+# `apps/web-platform/infra/workspaces-plaintext-forget-workflow.test.sh` (promoted above by #6604 step 7) is
+# REMOVED from this set by PR B (#9348): the single-use state-forget workflow and its suite are deleted with
+# the convergence, so the file no longer exists to be promoted.
+# `apps/web-platform/infra/inngest-backstop-wipe.test.sh` (promoted by #8285 PR A) is REMOVED from this set by #8285 PR B:
+# the throwaway-wipe-host apparatus it guarded is deleted, so the file no longer exists to be promoted.
+# `apps/web-platform/infra/inngest-luks-sole-copy.test.sh` born floor-bearing in #9879 (Guard 1: the inngest
+# sole-copy HCL pins, a mutation matrix over scratch copies of the root plus must-PASS rows and two
+# lexer-neutering harness rows): a NEW floor-bearing suite in a deferred directory would grow the shrink-only
+# ledger 47 -> 48, so it is PROMOTED as a FILE (never by raising MAX_DEFERRED), the same move as its siblings
+# above. Its floor is `-lt` over `$cases`, a counter incremented at every assert call site and never inside
+# pass()/fail(), with the bound a literal on the line directly above the `if`, reported by `printf` + `exit 1`
+# (ADR-193), beside a `passes + fails == cases` identity reported the same way; a pass()/fail() self-test
+# exits 2 before any verdict. The per-file pin below measures that it FIRES on every run.
+#
+# `plugins/soleur/skills/skill-security-scan/test/redact-pii-ghs-shape.test.sh` born floor-bearing in #10051
+# (the rotated-`ghs_` redaction shape suite, under a deferred skills directory): it grew the shrink-only
+# ledger 47 -> 48, so it is PROMOTED as a FILE (never by raising MAX_DEFERRED), the same move as its
+# siblings. Its floor is `$((PASS + FAIL)) -lt 15` — a literal bound on the `if` itself — reported by a
+# direct `printf >&2` + `exit 1` and never routed through the ok()/bad() helpers it backstops (ADR-193),
+# so a neutered assertion machinery drives the count to 0 and the floor FIRES. The ledger returns to
+# its ratchet.
+# #9756: the four apps/cla-evidence suites that carry a floor are PROMOTED as files, not deferred (the ledger
+# stays at its ratchet). _r2-sigv4-curl and bootstrap-r2-probe floor REAL_PASSES on a literal MIN_CASES directly above
+# the if; upload-evidence and upload-bypass floor a wire_rows counter on a literal MIN_WIRE_ROWS. All four end in
+# printf + exit 1 and score FIRES (a pre-existing floor-bearing suite in the same directory, ccla-add, was already promoted).
+# `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh` added by #10043 (Ref #9860) — the production-posture
+# regression for the sandbox /proc mask. PROMOTED as a FILE, not deferred, and not by raising MAX_DEFERRED (the ledger is
+# shrink-only; the gate's own FAIL message says "do NOT raise this number"). It qualifies on all three counts: (a) the floor
+# is `-lt` over `PASS + FAIL`, so a neutered pass()/fail() drives the count to 0 and the floor FIRES, emitted by `echo` +
+# `exit 1` rather than through the helper it backstops (ADR-193); (b) every unusable-environment path is a literal-token
+# `die`, and the suite is driven RED by seven seams (splice shim, shim bypass, covering shim, PATH-reordered container, unmasked control,
+# late sleeper, stub replay); (c) MIN_ASSERTIONS is a literal on the line directly above its `if`.
+# `.claude/hooks/pre-closing-technical-fork-gate.test.sh` born floor-bearing in the closing-prose technical-fork gate PR (the
+# Stop hook that reads a closing message, plus its mutation battery). PROMOTED as a FILE, not deferred, and not by raising
+# MAX_DEFERRED (the ledger is shrink-only; the gate's own FAIL message says "do NOT raise this number"), the same move as
+# its sibling pre-ask-technical-fork-gate.test.sh above. It qualifies on all three counts: the floor is `(( TOTAL < MIN_CASES ))`
+# with the literal on the line directly above the `if`, reported by `printf` + `exit 1` rather than through the helper it
+# backstops (ADR-193); the pass/fail helper is driven once each by an instrument self-test (H3) before any row; and the
+# accounting identity `PASS + FAIL == TOTAL` is reported the same way. MIN_FIRING_SUITES is raised by exactly one.
+# `die`, and the suite is driven RED by five mutations (splice shim, shim bypass, unmasked control, late sleeper, stub
+# replay); (c) MIN_ASSERTIONS is a literal on the line directly above its `if`.
+# `apps/web-platform/infra/htpasswd-stdin.test.sh` born floor-bearing in #9757 (the real-binary proof of the htpasswd
+# password-on-stdin form): a NEW floor-bearing suite in a deferred directory grew the shrink-only ledger 47 -> 48 and reddened
+# ARM 5c, so it is PROMOTED as a FILE (never by raising MAX_DEFERRED), the same move as its siblings. It qualifies on the
+# covered bar: (a) its floor is `-lt 22` with the literal on the `if` itself over `_ran=$((passes + fails + SKIPPED))`, the
+# one-line arithmetic binding directly above it, so a neutered pass()/fail() drives the count to 0 and the floor FIRES;
+# (b) it is a multi-line `if ...; then` / `printf` / `exit 1` / `fi` block reported by `printf` + `exit 1` and never through the
+# pass()/fail() it backstops (ADR-193), preceded by a declared-vs-literal row-count check, a ledger-mirror check
+# (FAILURES vs fails), and an instrument self-test that drives pass() and fail() once each and exits 2 before any row if a
+# counter fails to move; (c) the declared rows count toward the floor when an arm skips, so a docker-less host reads
+# "skipped", never a vacuous green. The per-file PROMOTED_FILES membership pin keeps it honest: floor-bearing, covered, FIRES.
+# `plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh` born floor-bearing in #10189
+# (review fix round — the presence-gate fixture suite): a NEW floor-bearing suite under
+# `plugins/soleur/skills/[^/]+/test/` (deferred scope) grew the shrink-only ledger 47 -> 48 and
+# reddened ARM 5c, so it is PROMOTED as a FILE, not deferred, and not by raising MAX_DEFERRED —
+# the same move as sibling `redact-pii-ghs-shape.test.sh`. Covered-bar grounds: the floor is
+# `(( PASS < 18 ))` with the literal on the `if` (the arithmetic-form the sweep recognizes),
+# reported by `echo` + `exit 1` and never through the ok()/bad() pair it backstops (ADR-193);
+# an instrument self-test drives both counters once each and exits 2 before any arm if either
+# fails to move; and the floor runs only after the FAIL>0 gate, so a real failure is never
+# mislabeled vacuity. The per-file PROMOTED_FILES membership pin keeps it honest: floor-bearing,
+# covered, FIRES.
+# `apps/web-platform/infra/inngest-redis-luks-loopback.test.sh` carried a literal
+# `if [ "$executed" -lt N ]` floor on main, but the sweep never counted it: the file's needle
+# strings contained bare heredoc openers (`<<` in awk needles/comments), which `heredoc_lines_of`
+# blanked to EOF — the floor line was invisible, not absent. The #10228 attach-race fix moved those
+# extents and surfaced it: ledger GREW 47 -> 48 as a classification correction on a floor that
+# always existed. PROMOTED, not deferred, and not by raising MAX_DEFERRED, for the reason every
+# sibling entry gives (the FAIL message: "cover it, or promote its directory"; the per-scope
+# ratchet in #7585 does not exist yet). Covered-bar grounds, all of which had to be made true for
+# this promotion: the floor is a literal `-lt` on the `if` over `executed`, reported by printf +
+# `exit 1` inside the `if` and never through ok()/no() (the exit was added — a floor that relies
+# on a later `[ "$fail" -eq 0 ]` reads NO_FIRE under the mutant slice); the same ANTI-VACUITY
+# sentinel fires on the LOOPBACK_UNAVAILABLE early-exit (an unavailable run measured nothing); and
+# the file's needle/comment `<<` tokens were removed so the floor stays scannable — pins: the
+# assembled `bash -s <assembled>` W4 needle, the `<<`-free GUARDEOF awk needle, and the CAUTION note
+# at the W1 settle assert.
+# `ship-kb-archive-gate.test.sh` added by kb-archive-gate — the KB merge-time artifact gate's
+# suite under a deferred directory. PROMOTED as a FILE, not deferred, and not by raising
+# MAX_DEFERRED (the ledger is shrink-only). Its floor is `[[ $TOTAL -lt $MIN_ASSERTIONS ]]` over a
+# counter incremented at every assert call site, reported by printf + exit 1 (never through the
+# assert machinery it backstops, ADR-193), with a `PASS+FAIL == TOTAL` conservation check reported
+# the same way — the three covered-bar grounds every sibling entry gives.
+# `apps/web-platform/test/infra/vector-admission.test.sh` born floor-bearing in #10255 —
+# the tomllib admission-partition emulator for the vector.toml #6551 fix, under the deferred
+# `apps/web-platform/test/` scope. PROMOTED, not deferred, and not by raising MAX_DEFERRED (the
+# ledger is shrink-only): the floor is `[[ "$cases" -lt 42 ]]` with the bound literal on the
+# `if`, `exit 1` inside the block, reported by printf + exit and never through ok()/no() — a
+# neutered arm set drives cases under the bound and the floor FIRES; the suite carries a
+# conservation identity and an instrument self-test beside it. Measured at promotion: 42/42.
+PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-liveness\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/web-zot-consumer-probe\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/web-2-host-key-local\.test\.sh|apps/web-platform/infra/rule-audit-inngest-pin-workflow-guard\.test\.sh|apps/web-platform/infra/workspaces-luks-provision\.test\.sh|apps/web-platform/infra/workspaces-luks-fresh-boot\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh|apps/web-platform/infra/apt-bounded\.test\.sh|plugins/soleur/skills/review/test/fix-round-seats\.test\.sh|apps/web-platform/infra/lb-weight-gate-with-marker\.test\.sh|apps/web-platform/infra/workspaces-luks-header-web\.test\.sh|apps/web-platform/infra/workspaces-luks-t2-rehearsal\.test\.sh|apps/web-platform/infra/cron-egress-self-heal\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime\.test\.sh|apps/web-platform/infra/web-private-nic-guard\.test\.sh|apps/web-platform/infra/cron-egress-enforce-probe\.test\.sh|apps/web-platform/infra/luks-monitor\.test\.sh|apps/web-platform/infra/workspaces-luks-rollback-refusal\.test\.sh|apps/web-platform/infra/workspaces-luks-freeze\.test\.sh|apps/web-platform/infra/workspaces-luks-staging\.test\.sh|apps/web-platform/infra/inngest-provision-rehearsal\.test\.sh|apps/web-platform/infra/egress-gateway\.test\.sh|apps/web-platform/infra/egress-gw-image-staleness\.test\.sh|apps/web-platform/test/destroy-ask-mutation\.test\.sh|apps/web-platform/infra/inngest-luks-sole-copy\.test\.sh|apps/cla-evidence/scripts/_r2-sigv4-curl\.test\.sh|apps/cla-evidence/scripts/bootstrap-r2-probe\.test\.sh|apps/cla-evidence/scripts/upload-evidence\.test\.sh|apps/cla-evidence/scripts/upload-bypass\.test\.sh|apps/web-platform/test/vitest-related\.test\.sh|apps/web-platform/infra/sandbox-masked-proc-docker\.test\.sh|plugins/soleur/skills/skill-security-scan/test/redact-pii-ghs-shape\.test\.sh|apps/web-platform/infra/docker-run-tuple\.test\.sh|\.claude/hooks/pre-closing-technical-fork-gate\.test\.sh|apps/web-platform/infra/htpasswd-stdin\.test\.sh|plugins/soleur/skills/skill-security-scan/test/parse-override\.test\.sh|apps/web-platform/infra/inngest-redis-luks-loopback\.test\.sh|\.claude/hooks/ship-kb-archive-gate\.test\.sh|apps/web-platform/test/infra/vector-admission\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
@@ -852,8 +1045,8 @@ build_mutant() { # <suite> <floor-lineno> <out>
     # both, so a floor preceded by `total=$((passes + fails))` lost its threshold binding and
     # the mutant died unbound — reported as a construction failure for a fully compliant
     # floor. Same `$((` vs `$(` distinction the conservation arm makes.
-    if printf '%s' "$t" | grep -qE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[^;]*$' \
-       && ! printf '%s' "$t" | grep -qE '\$\([^(]'; then
+    if printf '%s' "$t" | grep -cE >/dev/null '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[^;]*$' \
+       && ! printf '%s' "$t" | grep -cE >/dev/null '\$\([^(]'; then
       start="$prev"
     else
       break
@@ -1111,7 +1304,7 @@ else
   fail "PROMOTED_FILES entries drifted:$promoted_problems. A promoted file whose floor was DELETED leaves the covered set entirely and every aggregate arm still balances, so this per-file pin is the only thing that sees it."
 fi
 
-MIN_FIRING_SUITES=47  # +5 (#8289): lint-questionnaire-identity, ticket-triage-mirror-parity (RETIRED 2026-09-23 by #8306/ADR-245 with the hand-ported mirror it guarded, and SUCCEEDED the same day by `plugins/soleur/test/ticket-triage-clauses.test.sh`, which keeps the clause-presence half the identity assertion never covered; the floor is NOT lowered because it is an absolute hand-ratchet and the live population measured 181 against it, so no re-ratchet is owed), lint-rejected-register, go-routing-table-parity, pre-ask-technical-fork-gate (promoted). +1 (#8159): cloud-mode-postmerge-evidence-8159. +1 (#8159): precommit-guard via COVERED_DIRS widening. +1 (#8175): lint-migrated-rule-ids. +1 (#8149): pr-fanout-ledger. +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
+MIN_FIRING_SUITES=54  # +2 (#10099): deploy-arm, resolve-regenerable-conflicts — floors newly visible after the `<<<` opener rejection un-hid them (the defect's own damage shape; #6604 precedent: a derivation widening ratchets the gain in the same commit). +1 (closing-prose technical-fork gate): pre-closing-technical-fork-gate (promoted). +4 (#6604 PR B): luks-monitor, workspaces-luks-rollback-refusal, workspaces-luks-freeze, workspaces-luks-staging (promoted; the three harness suites became derivable through the sourced-harness counter widening). +5 (#8289): lint-questionnaire-identity, ticket-triage-mirror-parity (RETIRED 2026-09-23 by #8306/ADR-245 with the hand-ported mirror it guarded, and SUCCEEDED the same day by `plugins/soleur/test/ticket-triage-clauses.test.sh`, which keeps the clause-presence half the identity assertion never covered; the floor is NOT lowered because it is an absolute hand-ratchet and the live population measured 181 against it, so no re-ratchet is owed), lint-rejected-register, go-routing-table-parity, pre-ask-technical-fork-gate (promoted). +1 (#8159): cloud-mode-postmerge-evidence-8159. +1 (#8159): precommit-guard via COVERED_DIRS widening. +1 (#8175): lint-migrated-rule-ids. +1 (#8149): pr-fanout-ledger. +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
 cases=$((cases + 1))
 if [[ "$n_fires" -ge "$MIN_FIRING_SUITES" ]]; then
   pass "firing-floor population at or above the ratchet ($n_fires >= $MIN_FIRING_SUITES)"
@@ -1275,6 +1468,58 @@ else
   fail "permissiveness bound: generic diagnostic prose scored FIRES — the sentinel vocabulary is broad enough to match any failing mutant, so n_fires is inflated and the ratchets move the permissive way"
 fi
 
+# --- ARM 8c: `<<<` HERE-STRINGS NEVER OPEN A HEREDOC SPAN (#10099) ------------------------
+# A here-string's second `<` used to satisfy the opener regex — `'word` was read as a tag that
+# never terminates, blanking every later line (the phantom that hid
+# lint-shell-trace-credential-refusal's MIN_ASSERTIONS floor on #10051's merge-queue attempt).
+# Two pins, both against a synthesized suite: (a) a `<<< 'literal'` line must not hide the
+# floor below it — the defect's exact damage shape; (b) a REAL heredoc must still blank its
+# body — the fix must not stop legitimate extraction. The decoy uses a DIFFERENT tag than the
+# here-string's would-be opener so a leak is detectable, and the span terminates cleanly
+# before the real floor.
+hs_fx="$SUITE_TMP/here-string-fixture.sh"
+# The decoy heredoc opener is ASSEMBLED (`_hs_lt`), never literal: a bare `<<` token here would
+# open a real span in the FIXTURE the moment it were written with the token inline — and keeps
+# this file consistent with the de-tokenization convention the same defect forced on the
+# loopback suite in #10228.
+_hs_lt='<'
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'cases=0'
+  printf '%s\n' "grep -qE 'pat' <<< 'literal'"
+  printf '%s\n' 'cases=$((cases + 1))'
+  printf '%s\n' "cat ${_hs_lt}${_hs_lt}'HSD'"
+  printf '%s\n' 'if [ "$cases" -lt 999 ]; then :; fi'
+  printf '%s\n' 'HSD'
+  # Multi-line if/fi: build_mutant slices to a standalone `fi` and cannot reconstruct a one-line
+  # `if … fi` floor (the mutant would die as a construction failure rather than score FIRES).
+  printf '%s\n' 'if [ "$cases" -lt 5 ]; then'
+  printf '%s\n' '  printf "FAIL - ANTI-VACUITY: only %s assertions ran\n" "$cases" >&2'
+  printf '%s\n' '  exit 1'
+  printf '%s\n' 'fi'
+} > "$hs_fx"
+
+cases=$((cases + 1))
+_hs_floors="$(floor_lines_of "$hs_fx")"
+# `<<<` here-string feeds, not `producer | grep -q` — under pipefail a producer failure would
+# read as a miss (grep-q-pipe-guard #9217). This file is the detector's own home: a `<<<` in
+# ITS source is now safe precisely because of the fix under test (predecessor-`<` rejection).
+if grep -qE ':[[:space:]]*if \[ "\$cases" -lt 5 \]' <<< "$_hs_floors" && \
+   ! grep -q 'lt 999' <<< "$_hs_floors"; then
+  pass "here-string fixture: floor after a \`<<<\` line is detected, and a real-heredoc decoy floor stays excluded"
+else
+  fail "here-string fixture misclassified — \`<<<\` hid the tail floor OR a heredoc-body line leaked into candidates"
+fi
+
+# The same fixture through the mutant oracle end-to-end: the floor FIRES (it can reach its
+# own exit), which is the property the phantom-span defect silently removed.
+cases=$((cases + 1))
+if [[ "$(classify_suite "$hs_fx")" == "FIRES" ]]; then
+  pass "here-string fixture's floor scores FIRES under neutered machinery"
+else
+  fail "here-string fixture scored $(classify_suite "$hs_fx") — the post-\`<<<\` floor cannot fire under a neutered assertion machinery"
+fi
+
 # --- ARM 9: SYNTHESIZED OUT-OF-POPULATION MUST-PASS CONTROL -------------------------------
 # Counter and helper names that appear nowhere else in the repo, and NOT named `*.test.sh`
 # so it sits outside the derived population by construction. A control that is also a
@@ -1340,7 +1585,7 @@ n_conserving=$(wc -l < "$CONSERVING")
 # carrying conservation checks; a shrink-only ratchet left un-raised silently fails to capture
 # the gain it exists to lock in. Raised 32 -> 33 when fanout-suite-scope.test.sh gained one
 # (#7553): its floor read PASS+FAIL, the counter a neutered verdict helper keeps moving.
-MIN_CONSERVING=33
+MIN_CONSERVING=34  # +1 (#10099): deploy-arm's `[FATAL] accounting` check becomes visible once its floor is derivable.
 cases=$((cases + 1))
 if [[ "$n_conserving" -ge "$MIN_CONSERVING" ]]; then
   pass "suites carrying an accounting-conservation check: $n_conserving (>= $MIN_CONSERVING)"
