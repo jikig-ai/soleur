@@ -1105,7 +1105,7 @@ printf '%s refs/heads/main\n' "$SHA_X" > "$T/.git/packed-refs"; co_expect co-loo
 T="$(co_clone "café" "$SHA_M" 'feat/café')"
 ENVS=(LC_ALL=C); co_expect co-nonascii-names-under-C-locale "$T" "$SHA_M"
 co_expect co-nonascii-names-under-ambient-locale "$T" "$SHA_M"
-UTF8LOC="$(locale -a 2>/dev/null | grep -i -m1 -E '^(en_US|C)\.utf-?8$' || true)"
+UTF8LOC="$(grep -i -m1 -E '^(en_US|C)\.utf-?8$' < <(locale -a 2>/dev/null) || true)"
 if [[ -n "$UTF8LOC" ]]; then ENVS=("LC_ALL=$UTF8LOC"); co_expect co-nonascii-names-under-utf8-locale "$T" "$SHA_M"
 else skip_case co-nonascii-names-under-utf8-locale "no UTF-8 locale installed"; skip_case co-nonascii-names-under-utf8-locale-exact-output "no UTF-8 locale installed"
      skip_case co-nonascii-names-under-utf8-locale-rc-and-no-git "no UTF-8 locale installed"; SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1)); fi
