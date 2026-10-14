@@ -61,7 +61,9 @@ __pycache__/
 .env.lock.d*
 # Generated bootstrap.sh run ledger — names-never-values local state written
 # beside the script in a TRACKED spec dir; committing it conflicts with every
-# branch that re-runs the bootstrap.
+# branch that re-runs the bootstrap. A finished run's ledger is kept by copying
+# it to bootstrap-runs-<issue>.jsonl beside the archived script; that name is
+# deliberately not matched here, so the record is tracked and live ledgers are not.
 bootstrap-runs.jsonl
 _site/
 _site_test/
