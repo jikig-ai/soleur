@@ -171,6 +171,20 @@ run_guard "$T" "$ALLOWF"
 (( GUARD_RC == 1 )); check $? "RED-STALE dead allowlist entry -> exit 1" "RED-STALE expected exit 1, got $GUARD_RC: $GUARD_OUT"
 contains 'STALE scripts/gone-reader.sh'; check $? "RED-STALE names the entry" "RED-STALE did not name the entry: $GUARD_OUT"
 
+# --- RED-CONTINUATION: a \\-continued invocation must still be discovered (#10255 review) ---
+# The flag lives on the next physical line; a name-only adjacency scan would miss it entirely.
+T="$(mk_tree red_continuation)"
+mkdir -p "$T/scripts"
+cat > "$T/scripts/continued.sh" <<'EOF'
+#!/usr/bin/env bash
+rows="$(bash scripts/betterstack-query.sh \
+  --since 1h --grep MARKER | grep -c .)"
+EOF
+seed "$T"
+run_guard "$T"
+(( GUARD_RC == 1 )); check $? "RED-CONTINUATION split invocation -> exit 1" "RED-CONTINUATION expected exit 1, got $GUARD_RC: $GUARD_OUT"
+contains 'UNCLASSIFIED scripts/continued.sh'; check $? "RED-CONTINUATION names the offender" "RED-CONTINUATION missed the \-continued invocation: $GUARD_OUT"
+
 # --- RED-STALE-COMMENT: an allowlisted file whose only reference is now a comment --------
 T="$(mk_tree red_stale_comment)"
 mkdir -p "$T/scripts"
@@ -242,9 +256,9 @@ contains 'clean (2 file(s) walked, 0 discovered'; check $? "COMMENT-ONLY reports
 MUT="$SANDBOX/guard-no-needle.sh"
 # Assemble the sed expression without a literal doubled-angle token (the guard-vacuity-floor
 # blanker treats it as a heredoc opener even in comments/strings).
-sed 's|grep -E -- "\$INV_NAME" "\$WORK/code"|true|' "$GUARD" > "$MUT"
+sed 's|name_lines="\$(awk .*"\$WORK/code" || true)"|name_lines=""|' "$GUARD" > "$MUT"
 if cmp -s "$GUARD" "$MUT"; then
-  check 1 "" "DISPATCH-DISC mutation did NOT land (the discovery-grep line changed?) — the row would be vacuous"
+  check 1 "" "DISPATCH-DISC mutation did NOT land (the name_lines production changed?) — the row would be vacuous"
 else
   run_guard "$SANDBOX/red_raw" "$EMPTY_ALLOW" "$MUT"
   (( GUARD_RC == 0 )); check $? "DISPATCH-DISC neutered discovery -> exit 0 over an unclassified fixture (the grep is the mechanism)" "DISPATCH-DISC expected exit 0 on the mutant, got $GUARD_RC: $GUARD_OUT"

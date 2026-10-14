@@ -269,7 +269,10 @@ while IFS= read -r rel; do
   # reason), while a bare path listing or prose line does not. `=~` rather than a second grep:
   # the grep -n line-number prefix would un-anchor `^VAR=` assignment lines (`45:QUERY=` has a
   # colon, not a space, before the name — measured: it dropped every line-start assignment).
-  name_lines="$(grep -E -- "$INV_NAME" "$WORK/code" || true)"
+  # Adjacency sees CONTINUATION-joined name lines: an idiomatic `script \` + `--flag` on the
+  # next physical line would otherwise escape discovery entirely (the flag line never contains
+  # the name). awk getline walks the continuation chain; INV_NAME on a bare line still joins.
+  name_lines="$(awk -v re="$INV_NAME" '$0 ~ re { l=$0; while (l ~ /\\[[:space:]]*$/ && (getline nxt) > 0) { sub(/\\[[:space:]]*$/, "", l); l=l " " nxt } print l }' "$WORK/code" || true)"
   inv_hit=0
   [[ "$name_lines" =~ $INV_SHAPE ]] && inv_hit=1
   seam_hit="$(grep -cE -- "$SEAM_RE" "$WORK/code" || true)"

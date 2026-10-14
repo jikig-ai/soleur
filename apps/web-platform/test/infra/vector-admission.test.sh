@@ -331,8 +331,12 @@ emit("no extra_args on any journald source (would re-introduce journalctl-side m
 # source fails LOUD — the model must grow, not silently mis-evaluate. The listed
 # keys are journald-source options that do not affect per-record admission
 # (stream position / output shaping), plus the admission keys the model covers.
+# `remap_priority` is DELIBERATELY absent from MODELED: decode_record applies it BEFORE
+# filter_matches (journald.rs:569→579), rewriting PRIORITY values to text ("ERR"/"WARNING")
+# — on a PRIORITY-filtered source that silently darkens the whole arm while every literal
+# pin stays green. A future `remap_priority` must fail LOUD here until the model covers it.
 MODELED = {"journal_directory", "journal_namespace", "batch_size",
-           "current_boot_only", "since_now", "since_boot", "remap_priority"}
+           "current_boot_only", "since_now", "since_boot"}
 unmodeled = {n: [k for k in s["other_keys"] if k not in MODELED]
              for n, s in JOURNALD.items()}
 unmodeled = {n: ks for n, ks in unmodeled.items() if ks}
