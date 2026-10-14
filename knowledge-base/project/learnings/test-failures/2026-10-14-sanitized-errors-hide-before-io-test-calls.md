@@ -106,6 +106,13 @@ shell before the commit steps. The staged scan itself passed and no commit was
 attempted by that command. Confirm staged state, then put the guarded follow-up
 commands on a separate tool call without a terminal `exit`.
 
+The first file-only export summary expected `build_recipe` in the returned
+metadata and compared the preview hash with assembly built for a different
+destination. Assembly itself completed; the receipt intentionally excludes the
+recipe body, which lives in `build-recipe.json`, and its hash binds the output
+path. Re-run preview and assembly against one fresh identical destination, then
+compare matching receipt fields and inspect the separate recipe file.
+
 A grouped focused command invoked sibling-module unittest names from the
 worktree root and failed import before running those two suites. Re-run them
 from `scripts/codex-qualification`, their supported module context, and record
