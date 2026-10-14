@@ -11,6 +11,22 @@ brand_survival_threshold: none
 requires_cpo_signoff: false
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-14
+**Sections enhanced:** Research Insights (deepen findings), Risks and Sharp Edges
+**Research and verification used:** the real hook driven in a scratch copy (fixture verdicts, 30 KB input timing); the deepen halt gates 4.6, 4.8, 4.11 and 4.12 run mechanically; rule-id, issue and path citation sweeps; the CTO agent (two rulings) and a four-seat plan review (DHH, Kieran, simplicity, CTO devex) already folded in.
+
+### Key Improvements
+
+1. The final cue design was re-measured end to end after plan review (inside the weak block on `$asked`, no ownership arm, no money conjunct) before it was written down.
+2. A linear-time check on the new regexes with a 30 KB question (0.2 s) closes the "regex over model-controlled text" concern.
+3. Every cited rule id, issue and path was checked live.
+
+### New Considerations Discovered
+
+- The two-sentence split ("Run these as a new pipeline now. Or record them as not fixed?") misses the cue because the halves land in different sentences; stated as residual in the hook header.
+
 ## Overview
 
 A resume brief told the agent to ask the operator once and then act on a scope and ownership question about
@@ -116,6 +132,14 @@ closing suite the G2-2 row FAILS (the hook now asks for `shared+ask`, so its mut
 longer widens it) and V6 reports 23 killed against its floor of 24. P1/C1/C3 failures in the scratch run were
 layout artifacts of running outside the repo tree; the unmodified baseline in-tree is 130/130.
 
+**Deepen findings (2026-10-14).**
+
+- Halt gates: 4.6 User-Brand Impact present with a valid threshold (`none`, and no sensitive path: `.claude/hooks/**` and `plugins/**` do not match `SENSITIVE_PATH_RE`); 4.7 not applicable (the Phase 2.9 code-class path set is not touched; stated in Domain Review); 4.8 no PAT-shaped variable; 4.9 and 4.10 not triggered; 4.11 `lint-guard-contract.py` passes with one entry; 4.12 exactly one unfenced `## Scope Check`, no `status: BLOCKED`.
+- Citation sweeps: rule ids `cq-write-failing-tests-before`, `cq-test-fixtures-synthesized-only` are active in `AGENTS.md`; `wg-architecture-decision-is-a-plan-deliverable` is a migrated-but-active id (`scripts/migrated-rule-ids.txt`), canonical home `plan` Phase 2.10. `#9217` and `#8593` are OPEN; the closing-hook work is merged as #10104 and the delegation reference as #10049 (`git log --grep`).
+- Linear-time check: the final lib patched into a scratch copy, a 30 KB question made of the routing and record phrases returned in about 0.2 s (the regexes use bounded gaps and no nested quantifier).
+- Verify-the-negative: the plan's negative claims were checked against the code. "The cue is unreachable from the closing hook" holds (`shared+closing` never sets `ask`; mutant row 3 pins it). "`scope` stays in `AUTHORITY_RE`" holds (the plan does not edit that line). "The permission exemption runs after every cue" holds (`tfc_is_fork` evaluates it after the hit is set).
+- `go-routing` block projection hash measured equal on the unedited tree, so AC5's compare is a real before/after check.
+
 **Code-review overlap (Phase 1.7.5).** #8593 mentions `plugins/soleur/test/components.test.ts` in passing.
 Disposition: **Acknowledge** (a different concern, a preflight probe gate; needs its own cycle).
 
@@ -145,7 +169,7 @@ Disposition: **Acknowledge** (a different concern, a preflight probe gate; needs
 | `plugins/soleur/skills/go/SKILL.md` pointer sentence | "soleur:go (plugins/soleur/skills/go/SKILL.md, outside the eval-gated go-routing block)" | asked (ask 1) |
 | `plugins/soleur/skills/one-shot/SKILL.md` inline copy (one clause) | — | inferred — justification: the inline copy is the only part of the rule a headless Task subagent receives (`components.test.ts` "one-shot inline copy") and it says only "surface it, do not decide it"; ~90 bytes against 1235 bytes of headroom, no ceiling edit |
 | `plugins/soleur/test/components.test.ts` (three content anchors) | — | inferred — justification: without a pin the next prose edit silently drops the trigger sentence; the file already pins the sibling sentences |
-| `knowledge-base/engineering/architecture/decisions/ADR-084-...md` (corrected sentence plus short addendum) | — | inferred — justification: the 2026-10-12 addendum says the pre-ask hook "calls the same function with group `shared`, so its behaviour is unchanged"; this change falsifies it, and `wg-architecture-decision-is-a-plan-deliverable` makes the correction part of this PR |
+| `knowledge-base/engineering/architecture/decisions/ADR-084-decision-classification-taxonomy-for-autonomous-question-surfacing.md` (corrected sentence plus short addendum) | — | inferred — justification: the 2026-10-12 addendum says the pre-ask hook "calls the same function with group `shared`, so its behaviour is unchanged"; this change falsifies it, and `wg-architecture-decision-is-a-plan-deliverable` makes the correction part of this PR |
 | learning file under `knowledge-base/project/learnings/workflow-patterns/` | "add a learning" | asked (ask 3) |
 | `knowledge-base/project/specs/feat-one-shot-technical-ruling-brief-override/decision-challenges.md` + `tasks.md` | "Persist every decision as a row of the `| Item | Class | Ruling |` table in knowledge-base/project/specs/<branch>/decision-challenges.md" | asked (inline rulings block of the brief) |
 
