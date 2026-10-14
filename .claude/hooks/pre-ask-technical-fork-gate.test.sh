@@ -863,7 +863,63 @@ if grep -qE '^[[:space:]]*(source|\.)[[:space:]].*TFC_LIB' "$HOOK" && ! grep -qE
   echo "  PASS: L2 the hook sources the shared lib and carries no RULING_*_RE definition of its own"; PASS=$((PASS+1))
 else echo "  FAIL: L2 the hook must source TFC_LIB and define no RULING_*_RE cue (one definition site: the lib)" >&2; FAIL=$((FAIL+1)); fi
 
-# NR1 — the pre-ask hook is NOT widened. The five sentences the plan measured against the pre-ask cues (the three
+# AK / AL — the `ask` cue (group `shared+ask`, reachable from this hook only). A brief that says "ask the operator"
+# about how leftover items are DISPOSED OF (run them as a new pipeline vs record them as not fixed) is a technical
+# routing call, not a scope ask. AK1-AK5 are synthesized from a description of the 2026-10-14 incident, not its text.
+# AL1-AL8 are genuine operator asks and near-misses that must stay allowed; AL9-AL11 are the STATED RESIDUAL
+# (ownership-only and scope-limited phrasings) pinned as allow so a later session cannot claim they are covered.
+run_ruling "AK1 ownership plus disposition of named roadmap items" deny ruling \
+  "$(qobj "Roadmap items 3 and 4 were listed in the brief but the fix only covers item 1. Who owns items 3 and 4 - should they be run as a new pipeline, or recorded as not fixed?" | mq_payload)"
+run_ruling "AK2 handle here, run as a new pipeline, or record as not fixed" deny ruling \
+  "$(qobj "Should the remaining roadmap items be handled in this PR, run as a new pipeline, or recorded as not fixed?" | mq_payload)"
+run_ruling "AK3 two-option disposition with letters" deny ruling \
+  "$(qobj "These remaining items are outside the original fix. Run them as a new pipeline now (a), or record them as not fixed (b)?" | mq_payload)"
+run_ruling "AK4 start a new pipeline or leave not fixed" deny ruling \
+  "$(qobj "Should I start a new pipeline for the leftover items or leave them not fixed?" | mq_payload)"
+run_ruling "AK5 lowercased, differently punctuated" deny ruling \
+  "$(qobj "who owns the leftover items? run them as a separate pipeline, or note them as unfixed?" | mq_payload)"
+run_ruling "AL1 drop an item from a release (a genuine scope ask)" allow none \
+  "$(qobj "Drop item 3 from this release?" | mq_payload)"
+run_ruling "AL2 defer a change to next quarter (a genuine schedule ask)" allow none \
+  "$(qobj "Should I defer the billing change to next quarter?" | mq_payload)"
+run_ruling "AL3 an authorization to run the new pipeline" allow none \
+  "$(qobj "Approve running the new pipeline for items 3 and 4?" | mq_payload)"
+run_ruling "AL4 an assignment ask between two people" allow none \
+  "$(qobj "Who should own the remaining items, Alice or Bob?" | mq_payload)"
+run_ruling "AL5 the route half only" allow none \
+  "$(qobj "Do you want the remaining items run as a new pipeline, or should I drop them?" | mq_payload)"
+run_ruling "AL6 the record half only" allow none \
+  "$(qobj "Should I record the migration as not fixed and tell the customers?" | mq_payload)"
+run_ruling "AL7 both halves, but a permission shape exempts it" allow none \
+  "$(qobj "Is it okay to run items 3 and 4 as a new pipeline instead of recording them as not fixed?" | mq_payload)"
+run_ruling "AL8 both halves, vetoed by operator vocabulary (launch)" allow none \
+  "$(qobj "Should I move the launch of items 3 and 4 into a new pipeline or mark them not fixed?" | mq_payload)"
+run_ruling "AL9 stated residual: ownership wording only, no disposition pair" allow none \
+  "$(qobj "Which of the two roadmap items does this PR own? Option A: both. Option B: only the first." | mq_payload)"
+run_ruling "AL10 stated residual: a bare ownership question" allow none \
+  "$(qobj "Who owns the remaining roadmap items?" | mq_payload)"
+run_ruling "AL11 stated residual: a scope-limited question" allow none \
+  "$(qobj "Is the scope of this fix limited to item 1, or does it include roadmap items 3 and 4? Ask once then act." | mq_payload)"
+# AK1 reason: the ask lead replaces the generic ruling lead, and every later paragraph survives.
+TOTAL=$((TOTAL+1))
+ak_reason=$(qobj "Roadmap items 3 and 4 were listed in the brief but the fix only covers item 1. Who owns items 3 and 4 - should they be run as a new pipeline, or recorded as not fixed?" | mq_payload | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+if grep -qF 'items the brief already named' <<<"$ak_reason" && grep -qF 'soleur:engineering:cto' <<<"$ak_reason" && grep -qF 'DROP, DEFER or ADD' <<<"$ak_reason"; then
+  echo "  PASS: AK1b the ask cue denies with the ask lead (items the brief already named), not only the generic ruling reason"; PASS=$((PASS+1))
+else echo "  FAIL: AK1b the denial lacks the ask lead or the DROP/DEFER/ADD reword hint" >&2; FAIL=$((FAIL+1)); fi
+# NR3 — the group argument is honoured by the lib itself: `shared` and `shared+closing` never reach the ask cue, only
+# `shared+ask` does, and it reports the cue name. A lib that ignored the group (or set ask=1 for every group) fails here.
+TOTAL=$((TOTAL+1))
+nr3_unit="these remaining items are outside the original fix. run them as a new pipeline now (a), or record them as not fixed (b)?"
+# shellcheck disable=SC1090  # the lib path is a variable by design
+nr3_out="$( ( . "$LIB" 2>/dev/null
+  tfc_is_fork "$nr3_unit" shared; a=$?
+  tfc_is_fork "$nr3_unit" shared+closing; b=$?
+  tfc_is_fork "$nr3_unit" shared+ask; c=$?
+  printf '%s %s %s %s' "$a" "$b" "$c" "${TFC_HIT:-}" ) )"
+if [[ "$nr3_out" == "1 1 0 ask" ]]; then echo "  PASS: NR3 the lib honours the group: shared and shared+closing pass, shared+ask hits with TFC_HIT=ask"; PASS=$((PASS+1))
+else printf '  FAIL: NR3 got "%s", want "1 1 0 ask"\n' "$nr3_out" >&2; FAIL=$((FAIL+1)); fi
+
+# NR1 — the pre-ask hook is NOT widened for the CLOSING cues (it asks for `shared+ask`, which adds only the ask cue). The five sentences the plan measured against the pre-ask cues (the three
 # closing-message questions that must block there, and two that must pass) still ALLOW through an AskUserQuestion:
 # the closing group's cues are reachable only from the closing hook. A lib that ignored its group argument, or a
 # hook that asked for `shared+closing`, would deny the first three.
@@ -958,21 +1014,21 @@ fi
 # decision would not say the arm never ran.
 TOTAL=$((TOTAL+1))
 v5_n=0; v5_missing=""
-v5_rows="R1 R2 Z2 Z3 C1 C2 C3 C4 C5 C6 C7 C7b K1 K2 K3 K4 K5 K6 K7 K8 K9 K10 N1 N2 N3 N4 N5 N6 N7 N8 M1 M2 M3 M4 M5 M6"
+v5_rows="R1 R2 Z2 Z3 AK1 AK2 AK3 AK4 AK5 C1 C2 C3 C4 C5 C6 C7 C7b K1 K2 K3 K4 K5 K6 K7 K8 K9 K10 N1 N2 N3 N4 N5 N6 N7 N8 M1 M2 M3 M4 M5 M6"
 v5_want=0
 for v5_r in $v5_rows; do
   v5_want=$((v5_want+1))
   if [[ " $RULING_HIT_NAMES " == *" $v5_r "* ]]; then v5_n=$((v5_n+1)); else v5_missing="$v5_missing $v5_r"; fi
 done
-if [[ "$v5_n" -eq "$v5_want" && "$v5_want" -ge 36 ]]; then
+if [[ "$v5_n" -eq "$v5_want" && "$v5_want" -ge 41 ]]; then
   echo "  PASS: V5 all $v5_want distinct-vocabulary deny rows reached the ruling arm's reason"; PASS=$((PASS+1))
 else
   printf '  FAIL: V5 only %s of %s distinct-vocabulary rows reached the ruling reason; missing:%s\n' "$v5_n" "$v5_want" "$v5_missing" >&2; FAIL=$((FAIL+1))
 fi
 
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 145 ]]; then echo "  PASS: V1 full inventory ran (145 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 145 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 163 ]]; then echo "  PASS: V1 full inventory ran (163 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 163 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
 #
@@ -1052,7 +1108,7 @@ fi
 # The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
 # added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
 # paying anything, cannot satisfy it.
-MIN_CASES=145
+MIN_CASES=163
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

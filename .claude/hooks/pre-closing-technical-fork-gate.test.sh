@@ -29,7 +29,12 @@
 #   G1-12 delete the closing-only permission exemption              Q4a flips pass -> block
 #   G1-13..16 leading-fragment drop, window size, first-12 judging, blank-line reset   W1b / W1d / L12b / E4b
 #   G2-1  re-add a local RULING_PERM_RE to the closing hook         the definition-site census reports two
-#   G2-2  the lib ignores its group argument                        a pre-ask row (NR2a) flips allow -> deny
+#   G2-2  the pre-ask group (`shared+ask`) also sets closing=1       a pre-ask row (NR2a) flips allow -> deny
+#         (retarget: the pre-ask hook asks for `shared+ask`, so a mutant on the `shared)` line no longer widens it;
+#          a pre-ask group change reddens THIS suite, which is why the mutant targets the line the hook now asks for)
+#   G2-4  the lib ignores the `shared+ask` group (ask never set)     the ask-cue deny row flips deny -> allow
+#   G2-5  the pre-ask hook asks for `shared` (arm dispatch is dead)  the ask-cue deny row flips deny -> allow
+#   G2-6  the Stop carrier is widened with the ask cue               a closing allow row flips pass -> block
 #   G2-3  change RULING_OPVOCAB_RE in the lib                       the byte-equality row flips
 # Harness rows: H1 neuters the decider the row helper uses (must-PASS rows redden); H3 drives the row helper
 # through one real pass and one real fail before any row; the neutered-counter and floor mutants are built by
@@ -163,6 +168,10 @@ row "U1 an authorization first, a technical unit second" block "Do you authorize
 
 # --- MUST PASS --------------------------------------------------------------------------------------
 row "A1 an authorization to rotate" pass "$STATUS Do you authorize rotating HCLOUD_TOKEN now?"
+# The ask cue (disposition of named items: run as a new pipeline vs record as not fixed) is reachable from the
+# pre-ask hook only. The same words in a closing message must pass: G2-6 widens the Stop carrier and this row flips.
+AK3_TEXT="These remaining items are outside the original fix. Run them as a new pipeline now (a), or record them as not fixed (b)?"
+row "A1b the pre-ask ask-cue phrasing is not a closing cue" pass "$STATUS $AK3_TEXT"
 row "A2 a brand question" pass "$STATUS which option do you want for the landing page headline?"
 row "A3 a status report with no question" pass "$STATUS Everything is green; nothing is waiting on anyone."
 row "A4 B1 plus a stop escape (OPERATOR-GATE)" pass "$STATUS $B1 <stop>OPERATOR-GATE: this is the accounting call (money).</stop>"
@@ -587,17 +596,43 @@ preask_dec() { # <hook> <json> -> allow | deny
   local o; o="$(printf '%s' "$2" | bash "$1" 2>/dev/null)"
   jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${o:-{\}}" 2>/dev/null || echo allow
 }
-# G2-2: a lib that ignores its group argument must widen the pre-ask hook, which NR2a in the pre-ask suite forbids; the
-# same pre-ask row is driven here against the mutant.
+# G2-2: the pre-ask group must not also widen to the closing cues. The pre-ask hook asks for `shared+ask`, so the mutant
+# sets closing=1 on THAT line; NR2a in the pre-ask suite (a closing-only phrasing must stay allow) is driven here against it.
+# A change to the pre-ask group string reddens this row (the anchor below stops landing): that is intended.
 TOTAL=$((TOTAL+1))
 mk_tree g2_2 || true
 g22_json="$(jq -nc --arg q "what is the right design for the retry queue?" '{tool_name:"AskUserQuestion", cwd:".", session_id:"t", tool_input:{questions:[{question:$q, options:[{label:"Yes",description:"go"},{label:"No",description:"stop"}]}]}}')"
 g22_ctl="$(preask_dec "$TREE/pre-ask-technical-fork-gate.sh" "$g22_json")"
-if apply_mut "$TREE/lib/technical-fork-cues.sh" '    shared) ;;' '    shared) closing=1 ;;'; then
+if apply_mut "$TREE/lib/technical-fork-cues.sh" '    shared+ask) ask=1 ;;' '    shared+ask) ask=1; closing=1 ;;'; then
   g22_mut="$(preask_dec "$TREE/pre-ask-technical-fork-gate.sh" "$g22_json")"
-  if [[ "$g22_ctl" == "allow" && "$g22_mut" == "deny" ]]; then echo "  PASS: G2-2 killed (control allow, a group-ignoring lib denies)"; PASS=$((PASS+1)); KILLED=$((KILLED+1))
+  if [[ "$g22_ctl" == "allow" && "$g22_mut" == "deny" ]]; then echo "  PASS: G2-2 killed (control allow, a pre-ask group that also sets closing denies)"; PASS=$((PASS+1)); KILLED=$((KILLED+1))
   else printf '  FAIL: G2-2 control=%s mutant=%s\n' "$g22_ctl" "$g22_mut" >&2; FAIL=$((FAIL+1)); fi
 else echo "  FAIL: G2-2 the mutation did not land" >&2; FAIL=$((FAIL+1)); fi
+
+# preask_mut_row <label> <hook|lib> <old> <new> <question>: the pre-ask variant of mut_row. The control tree must DENY the
+# question; the mutant must ALLOW it. It keeps mut_row's guards: the mutation must land and parse, the mutant must differ
+# byte-for-byte from the pristine file, a mutant that crashes (a bash diagnostic) is not a kill, and KILLED is bumped.
+preask_mut_row() {
+  local label="$1" which="$2" old="$3" new="$4" q="$5" target pristine json ctl got errf
+  TOTAL=$((TOTAL+1))
+  mk_tree "${label//[^A-Za-z0-9]/_}" || { printf '  FAIL: %s — could not build the tree\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; }
+  case "$which" in hook) target="$TREE/pre-ask-technical-fork-gate.sh"; pristine="$PREASK" ;; lib) target="$TREE/lib/technical-fork-cues.sh"; pristine="$LIB" ;; *) echo "FATAL: bad mutation target" >&2; exit 2 ;; esac
+  json="$(jq -nc --arg q "$q" '{tool_name:"AskUserQuestion", cwd:".", session_id:"t", tool_input:{questions:[{question:$q, options:[{label:"Yes",description:"go"},{label:"No",description:"stop"}]}]}}')"
+  ctl="$(preask_dec "$TREE/pre-ask-technical-fork-gate.sh" "$json")"
+  if ! apply_mut "$target" "$old" "$new"; then printf '  FAIL: %s — the mutation did not land or the mutant does not parse\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
+  if cmp -s "$pristine" "$target"; then printf '  FAIL: %s — the mutant is byte-identical to the pristine file\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
+  errf="$WORK/${label//[^A-Za-z0-9]/_}.stderr"; assert_fixture_dir "$errf"
+  got="$(printf '%s' "$json" | bash "$TREE/pre-ask-technical-fork-gate.sh" 2>"$errf")"
+  got="$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${got:-{\}}" 2>/dev/null || echo allow)"
+  if grep -qE '(^|: )line [0-9]+: ' "$errf"; then printf '  FAIL: %s — the mutant crashed (bash diagnostic), not a behavioural kill\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
+  if [[ "$ctl" == "deny" && "$got" == "allow" ]]; then printf '  PASS: %s killed (control %s, mutant %s)\n' "$label" "$ctl" "$got"; PASS=$((PASS+1)); KILLED=$((KILLED+1))
+  else printf '  FAIL: %s — control=%s mutant=%s want control deny and mutant allow\n' "$label" "$ctl" "$got" >&2; FAIL=$((FAIL+1)); fi
+  return 0
+}
+preask_mut_row "G2-4 the lib ignores the shared+ask group" lib '    shared+ask) ask=1 ;;' '    shared+ask) ;;' "$AK3_TEXT"
+preask_mut_row "G2-5 the pre-ask hook asks for shared (arm dispatch dead)" hook 'tfc_is_fork "$__rq" shared+ask' 'tfc_is_fork "$__rq" shared' "$AK3_TEXT"
+# G2-6: the Stop carrier widened with the ask cue must flip the closing allow row (A1b) pass -> block.
+mut_row "G2-6 the Stop carrier is widened with the ask cue" lib '    shared+closing) closing=1 ;;' '    shared+closing) closing=1; ask=1 ;;' pass "$STATUS $AK3_TEXT"
 
 # G2-3: dropping a BUSINESS member in the lib must break the byte-equality row.
 TOTAL=$((TOTAL+1))
@@ -632,13 +667,13 @@ if [[ -z "$d_missing" && "$RAN" -eq "$SPAWNS" && "$SPAWNS" -ge 70 ]]; then
   printf '  PASS: V5 all %s named must-block rows were blocked by this hook'"'"'s reason; the SUT ran %s of %s spawns\n' "$(wc -w <<<"$D_NAMES" | tr -d ' ')" "$RAN" "$SPAWNS"; PASS=$((PASS+1))
 else printf '  FAIL: V5 missing=[%s] SUT markers=%s harness spawns=%s (want equal and >= 70)\n' "$d_missing" "$RAN" "$SPAWNS" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
-if [[ "$KILLED" -ge 24 ]]; then printf '  PASS: V6 %s mutants killed (floor 24)\n' "$KILLED"; PASS=$((PASS+1))
-else printf '  FAIL: V6 only %s mutants killed (floor 24)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$KILLED" -ge 27 ]]; then printf '  PASS: V6 %s mutants killed (floor 27)\n' "$KILLED"; PASS=$((PASS+1))
+else printf '  FAIL: V6 only %s mutants killed (floor 27)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
 
 # --- inventory, accounting conservation and the assertion floor ---------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 130 ]]; then echo "  PASS: V1 full inventory ran (130 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 130 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 134 ]]; then echo "  PASS: V1 full inventory ran (134 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 134 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # Reported with printf + exit 1, never through a verdict helper: a floor routed through the machinery it backstops
 # is disarmed by the same edit it exists to catch (ADR-193).
@@ -647,7 +682,7 @@ if (( PASS + FAIL != TOTAL )); then
     "$PASS" "$FAIL" "$TOTAL" >&2
   exit 1
 fi
-MIN_CASES=130
+MIN_CASES=134
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

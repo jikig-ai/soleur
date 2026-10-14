@@ -319,8 +319,13 @@ fi
 # primary defence; this arm is the backstop at the moment of asking.
 # The cue regexes (RULING_*_RE) and the verdict function `tfc_is_fork` live in ONE shared lib, which the
 # closing-message Stop hook (pre-closing-technical-fork-gate.sh) also calls, so the two cannot drift. This
-# hook asks for group `shared` only: its behaviour is byte-for-byte what the inline cues did, and the closing
-# group's extra cues never reach an AskUserQuestion. A missing, empty or truncated lib is parse doubt for THIS
+# hook asks for group `shared+ask`: the `shared` cues are byte-for-byte what the inline cues did, the closing
+# group's extra cues never reach an AskUserQuestion, and `ask` (2026-10-14) adds ONE cue: a question that asks the
+# operator to route items the brief already named (run them as a new pipeline vs record them as not fixed). THE
+# RESIDUAL, STATED: ownership-only ("Who owns the remaining items?") and scope-limited ("Is the scope of this fix limited
+# to item 1?") phrasings stay allowed, as does a two-sentence split ("Run these as a new pipeline now. Or record them as
+# not fixed?"), because the halves must sit in one interrogative sentence; the skill text carries those. The recall is
+# fitted to synthesized phrasing, so the miss, cue, fixture loop carries the rest. A missing, empty or truncated lib is parse doubt for THIS
 # arm: an empty cue regex matches every line, so the arm is skipped (announced) instead of judging with it.
 # The other arms of this hook are independent of the lib and keep running.
 TFC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/technical-fork-cues.sh"
@@ -361,10 +366,15 @@ elif [[ -n "$RULING_ROWS" ]]; then
     # The verdict (weak cues over the interrogative sentences, strong cues, the operator-vocabulary veto and the
     # permission exemption, all judged over THIS question's text alone) is the shared lib's `tfc_is_fork`.
     # Exit 1 is a pass and exit 2 (bad arguments) is treated as a pass: this arm can only ever deny on a clear hit.
-    if tfc_is_fork "$__rq" shared; then :; else continue; fi
-    RULING_REASON="BLOCKED: this AskUserQuestion puts a TECHNICAL RULING to the operator.
+    if tfc_is_fork "$__rq" shared+ask; then :; else continue; fi
+    if [[ "${TFC_HIT:-}" == "ask" ]]; then
+      RULING_LEAD="BLOCKED: this AskUserQuestion asks the operator to route items the brief already named (run them as a new pipeline vs record them as not fixed). That is a technical routing call: spawn soleur:engineering:cto first, record \`Ruled by CTO agent\`, and ask the operator only the authorization. If you are asking the operator to DROP, DEFER or ADD something they asked for, reword it as a permission ask (\"Approve dropping ...?\")."
+    else
+      RULING_LEAD="BLOCKED: this AskUserQuestion puts a TECHNICAL RULING to the operator.
 
-How strict an evidence bar must be, whether the evidence is sufficient, whether an ADR status moves, which of two named technical designs or approaches — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses.
+How strict an evidence bar must be, whether the evidence is sufficient, whether an ADR status moves, which of two named technical designs or approaches — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses."
+    fi
+    RULING_REASON="${RULING_LEAD}
 
 Delegate it: spawn soleur:engineering:cto with the question and the facts, and act on its ruling. The procedure and the closed list of rulings that do NOT go to the CTO are in technical-ruling-delegation.md (plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md).
 
