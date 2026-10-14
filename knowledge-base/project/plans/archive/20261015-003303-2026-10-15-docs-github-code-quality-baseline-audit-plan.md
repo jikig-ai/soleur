@@ -93,7 +93,7 @@ No cross-domain implications detected; internal engineering audit document.
 - [x] AC1: `knowledge-base/engineering/audits/2026-10-14-github-code-quality-baseline.md` exists and `diff` against the scratchpad draft is empty, or differs only by formatting fixes listed in the PR body.
 - [x] AC2: `scripts/markdown-lint.sh` reports no errors for the file; frontmatter keys match sibling audits (`title, date, type, issue, status, last_updated`).
 - [x] AC3: `git diff --name-status origin/main...HEAD` shows only the new audit file plus this plan's own artifacts under `knowledge-base/project/{plans,specs}/`; no `ci.yml`, workflow, or Actions-settings change.
-- [ ] AC4: PR title is `docs(audit): GitHub Code Quality baseline on main 30407a8597`, body contains `Ref #10331` and no `Closes`/`Fixes`/`Resolves` keyword, label `semver:patch`.
+- [x] AC4: PR title is `docs(audit): GitHub Code Quality baseline on main 30407a8597`, body contains `Ref #10331` and no `Closes`/`Fixes`/`Resolves` keyword, label `semver:patch`.
 - [x] AC5: The findings (22 rules, 169 findings) are unchanged from the draft.
 
 ## Test Scenarios
