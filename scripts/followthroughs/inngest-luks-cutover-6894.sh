@@ -147,7 +147,7 @@ if [[ "$DONE_N" -ge 1 && "$ON_MAPPER" -ge 1 ]]; then
     exit 1
   fi
   echo "PASS: the FSM completed and the host reports /mnt/data on the canonical mapper with a pinned volume alias (#6894 AC-35)."
-  echo "NEXT (not automatic): the ledger flip landed in #8296. The one remaining step is #8285: destroy the retained plaintext backstop hcloud_volume.inngest_redis by 2026-10-22."
+  echo "NEXT (not automatic): the ledger flip landed in #8296 and the retained plaintext backstop hcloud_volume.inngest_redis was destroyed on 2026-10-09 (#8285). Nothing remains here."
   exit 0
 fi
 echo "not yet: the cutover has not completed on this host, or the store is not yet reported on the canonical mapper"

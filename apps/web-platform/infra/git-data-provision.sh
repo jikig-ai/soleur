@@ -121,8 +121,13 @@ parent_real="$(readlink -f "$(dirname "$repo_path")" 2>/dev/null || echo "")"
 #     Refuse a symlink before opening. It is NEVER unlinked afterwards: unlinking a lock file
 #     while a sibling holds fd 9 on it lets the next opener create a new inode and hold "the
 #     lock" concurrently (measured — provision and remove then race on one path). 0-byte
-#     dotfiles are invisible to git-data-gc.sh, which iterates `*.git` only. ---
-lock_file="${REPO_ROOT}/.${workspace_id}.init.lock"
+#     dotfiles are invisible to git-data-gc.sh, which iterates `*.git` only.
+#     (#9066) ONE constant-name lock, not a per-workspace one: the old `.<id>.init.lock`
+#     wrote the workspace id (= auth.users.id) to disk permanently — an Art. 17 residue the
+#     erasure could not reach. Init/remove serialize on this single lock; both are rare and
+#     their critical sections are short (init --bare + marker writes, or the fenced rm). The
+#     count predicates (`_repo_count`, the proof's find) exclude it by its constant name. ---
+lock_file="${REPO_ROOT}/.init.lock"
 [ ! -L "$lock_file" ] || reject "lock path is a symlink: '$lock_file' (fail-closed)"
 exec 9>"$lock_file"
 flock 9 || reject "could not acquire init lock for '$workspace_id'"

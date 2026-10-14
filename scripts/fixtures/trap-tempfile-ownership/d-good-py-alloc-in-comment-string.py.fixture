@@ -1,0 +1,8 @@
+"""Mentions tempfile.mkdtemp() and NamedTemporaryFile(delete=False) in prose only."""
+
+# tempfile.mkdtemp() would leak here, so we do not call it.
+HINT = "use tempfile.mkdtemp(prefix=x) then mkstemp()"
+
+
+def build():
+    return HINT

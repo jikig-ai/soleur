@@ -134,10 +134,10 @@ export function parseFrontmatter(raw: string): {
 const CONTENT_SEARCHABLE = new Set<string>(
   KB_TEXT_EXTENSIONS.map((e) => `.${e}`),
 );
-const FILENAME_SEARCHABLE = new Set<string>([
-  ".md",
-  ...KB_UPLOAD_EXTENSIONS.map((e) => `.${e}`),
-]);
+// `md` is in KB_UPLOAD_EXTENSIONS, so native markdown is covered by the spread.
+const FILENAME_SEARCHABLE = new Set<string>(
+  KB_UPLOAD_EXTENSIONS.map((e) => `.${e}`),
+);
 
 async function collectSearchableFiles(
   dir: string,

@@ -1,6 +1,6 @@
 // #7226 / #5914 — Guard 5 (the app's git-data transport is always pinned; an absent or
 // malformed pin refuses, whatever the store flag says) and Guard 3 (pin shape), app side.
-// Plans: knowledge-base/project/plans/2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md
+// Plans: knowledge-base/project/plans/archive/20261013-051752-2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md
 // and 2026-09-28-feat-git-data-delete-unpinned-fallback-arm-5914-plan.md (host-key step 6).
 //
 // Every test re-imports the module under vi.resetModules() + vi.unstubAllEnvs(), so no
@@ -686,5 +686,45 @@ describe("startup ssh-client line — git_data_ssh_client=present|absent", () =>
     const { logGitDataHostKeyPinAtStartup } = await load();
     logGitDataHostKeyPinAtStartup();
     expect(sshLines()).toEqual(["git_data_ssh_client=absent"]);
+  });
+});
+
+// #8211 PR2 — the cutover's per-host deploy proof: `git_data_store=enabled|disabled`
+// at warn (Vector ships >=40). web-2 has no SSH ingress, so this line is what the flip
+// asserts per-host via Better Stack — it must exist BEFORE the flag can flip, which is
+// why the emitter landed ahead of the modes that read it.
+describe("startup store line — git_data_store=enabled|disabled", () => {
+  const storeLines = () =>
+    logWarn.mock.calls.map((c) => String(c[c.length - 1])).filter((m) => m.startsWith("git_data_store="));
+
+  it("unset: `git_data_store=disabled` at warn", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(storeLines()).toEqual(["git_data_store=disabled"]);
+  });
+
+  it("GIT_DATA_STORE_ENABLED=true: `git_data_store=enabled`", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(storeLines()).toEqual(["git_data_store=enabled"]);
+  });
+
+  it("any non-'true' value reads disabled (the resolver's strict gate)", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "yes");
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(storeLines()).toEqual(["git_data_store=disabled"]);
+  });
+
+  it("warn level only — never info (Vector ships >=40)", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(logInfo.mock.calls.some((c) => String(c[c.length - 1]).includes("git_data_store="))).toBe(false);
   });
 });

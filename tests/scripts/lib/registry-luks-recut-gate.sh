@@ -128,7 +128,7 @@ registry_luks_recut_gate() {
   # check that distinguishes the authorized physical volume from any other. An id that is not
   # a bare positive integer is a caller bug, not a permission to proceed.
   if [[ ! "$expected" =~ ^[0-9]+$ ]]; then
-    echo "registry_luks_recut_gate: ABORT — expected_registry_store_volume_id must be a numeric Hetzner volume id (got '${expected}'). Read it with: curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+    echo "registry_luks_recut_gate: ABORT — expected_registry_store_volume_id must be a numeric Hetzner volume id (got '${expected}'). Read it with (the token rides curl's stdin, never its argv): curl --disable --noproxy '*' -s --config - 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' < <(printf 'header = \"Authorization: Bearer %s\"\n' \"\$HCLOUD_TOKEN\") | jq -r '.volumes[0].id'"
     return 1
   fi
 

@@ -43,6 +43,10 @@ set +e
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script carries a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
+# TOKEN-SHAPE GUARD for the curl stdin config channel (the argv form is gone: a bearer on curl's
+# argument list is readable by every local user via /proc/<pid>/cmdline). A newline or quote in
+# the token would inject a config directive, an empty one would send the request unauthenticated.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 # Prose-only. Defaulted rather than required so a caller that forgets it degrades to the
 # historical wording instead of printing an empty label into the operator-facing summary.
 DISPATCH_LABEL="${DISPATCH_LABEL:-web-host-create}"
@@ -80,14 +84,16 @@ readonly SENTRY_PROJECT="web-platform"
 # One script-owned tempfile, removed by the EXIT trap: origin_query runs inside $(…), so a
 # per-call mktemp there would leak whenever the subshell died between allocation and its rm.
 ORIGIN_TMP=$(mktemp 2>/dev/null) || ORIGIN_TMP=""
-trap '[[ -z "$ORIGIN_TMP" ]] || rm -f "$ORIGIN_TMP"' EXIT
+EVENTS_TMP=$(mktemp 2>/dev/null) || EVENTS_TMP=""
+trap '[[ -z "$ORIGIN_TMP" ]] || rm -f "$ORIGIN_TMP"; [[ -z "$EVENTS_TMP" ]] || rm -f "$EVENTS_TMP"' EXIT
 origin_query() {  # <query> [since-epoch]
   local enc code tmp="$ORIGIN_TMP"
   [[ -n "$tmp" ]] || { echo "mktemp failed"; return 2; }
+  _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}" || { echo "SENTRY_ACTIONS_RO_TOKEN failed the token-shape check"; return 2; }
   enc=$(printf '%s' "$1" | jq -sRr @uri)
-  code=$(curl --disable --noproxy '*' -s --max-time 20 -o "$tmp" -w '%{http_code}' \
-    -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
-    "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=project%3A${SENTRY_PROJECT}%20${enc}&statsPeriod=14d&per_page=100&sort=-timestamp&field=timestamp&field=stage&field=host_name&field=detail" 2>/dev/null || echo 000)
+  code=$(curl --disable --noproxy '*' -s --max-time 20 -o "$tmp" -w '%{http_code}' --config - \
+    "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=project%3A${SENTRY_PROJECT}%20${enc}&statsPeriod=14d&per_page=100&sort=-timestamp&field=timestamp&field=stage&field=host_name&field=detail" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") || echo 000)
   if [[ "$code" != "200" ]] || ! jq -e '(.data | type) == "array"' "$tmp" >/dev/null 2>&1; then
     echo "HTTP ${code} or no data array"; return 2
   fi
@@ -116,6 +122,7 @@ if [[ "${1:-}" == "--image-origin" ]]; then
   if [[ ! "$IO_HOST" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then echo "TRANSIENT: --image-origin needs a host_name ([a-z0-9-]), got '${IO_HOST}'"; exit 2; fi
   if [[ "$SINCE_OK" != 1 ]]; then echo "TRANSIENT: BOOT_TRAIL_SINCE='${BOOT_TRAIL_SINCE}' is not an epoch"; exit 2; fi
   if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is not bound — the image origin was NOT read (this is not 'nothing found')"; exit 2; fi
+  if ! _bearer_ok "$SENTRY_ACTIONS_RO_TOKEN"; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN failed the token-shape check — the image origin was NOT read (this is not 'nothing found')"; exit 2; fi
   IO=$(origin_query "host_name:${IO_HOST} ${ORIGIN_Q_STAGES}" "${BOOT_TRAIL_SINCE:-0}") || { echo "TRANSIENT: image-origin read failed: ${IO}"; exit 2; }
   SF=$(origin_query "host_name:${IO_HOST} message:\"soleur-hostscript-seed failed\"" "${BOOT_TRAIL_SINCE:-0}") || { echo "TRANSIENT: seed-fatal read failed: ${SF}"; exit 2; }
   echo "image-origin: ${IO}"
@@ -151,6 +158,17 @@ if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
   # a failed job gets a warning (there may be no host to read). Exit 0 either way -- a
   # skipped read is not a proven dark boot, and this step must never fail an apply.
   msg="Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound in this step's env (repo secret absent or workflow env not wired); the auto-read did NOT run. This is NOT a 'host emitted nothing' result."
+  level=warning
+  [[ "${JOB_STATUS}" == "success" ]] && level=error
+  echo "::${level}::${WEB_HOST_KEY:-?}: ${msg}"
+  echo "_${msg}_" | tee -a "$GITHUB_STEP_SUMMARY"
+  exit 0
+fi
+if ! _bearer_ok "$SENTRY_ACTIONS_RO_TOKEN"; then
+  # Bound but unusable (a newline, quote or space would inject a curl config directive). Same
+  # contract as the unbound arm: a skipped read is NAMED on both channels and never fails the
+  # apply, and it is not a 'host emitted nothing' result. The token itself is never echoed.
+  msg="Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN failed the token-shape check (unexpected characters); the auto-read did NOT run. This is NOT a 'host emitted nothing' result."
   level=warning
   [[ "${JOB_STATUS}" == "success" ]] && level=error
   echo "::${level}::${WEB_HOST_KEY:-?}: ${msg}"
@@ -240,13 +258,15 @@ RETRIED=""
 RETRY_DETAIL=""
 TOTAL=0
 while :; do
-  HTTP=$(curl --disable --noproxy '*' -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
-    -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
+  # The events file is the script-owned EVENTS_TMP (mktemp, EXIT-trap removed), not a fixed /tmp
+  # name: a fixed name is a pure function of the script, so concurrent runs share it.
+  HTTP=$(curl --disable --noproxy '*' -s --max-time 20 -G -o "${EVENTS_TMP:-/dev/null}" -w '%{http_code}' --config - \
     --data-urlencode "per_page=100" \
     --data-urlencode "statsPeriod=1h" \
     --data-urlencode "sort=-timestamp" \
-    "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null || echo "000")
-  RESP=$(cat /tmp/sentry-events.json 2>/dev/null || echo "")
+    "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") || echo "000")
+  RESP=$(cat "${EVENTS_TMP:-/dev/null}" 2>/dev/null || echo "")
   if [[ "$HTTP" != "200" ]] || ! echo "$RESP" | jq -e 'type == "array"' >/dev/null 2>&1; then
     echo "::warning::fresh-host Sentry read FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result."
     echo "_Sentry query FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result. $(echo "$RESP" | jq -r '.detail // empty' 2>/dev/null | tr '\n' ' ' | head -c 160)_" | tee -a "$GITHUB_STEP_SUMMARY"

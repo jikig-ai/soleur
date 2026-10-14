@@ -115,7 +115,7 @@ Add a Phase 4.9 (or equivalent slot) that runs `grep -F <prose-named-column> app
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-05-22-feat-dsar-departed-member-legal-doc-lockstep-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-dsar-departed-member-legal-doc-lockstep-plan.md`
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-039-departed-member-removal-ledger.md`
 - PA-19 register: `knowledge-base/legal/article-30-register.md` §"Processing Activity 19"
 - Counsel audit: `knowledge-base/legal/audits/2026-05-counsel-review-4353.md`

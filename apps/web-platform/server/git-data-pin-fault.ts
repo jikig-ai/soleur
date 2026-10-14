@@ -75,7 +75,7 @@ export class GitDataHostKeyPinError extends Error {
             "Refusing to dial the git-data host."
         : `git-data: GIT_DATA_SSH_HOST_KEY is unset (${opts.storeEnabled ? "GIT_DATA_STORE_ENABLED=true" : "GIT_DATA_STORE_ENABLED is not true"}) — ` +
             "refusing unpinned SSH to the git-data host. The replace job publishes it to Doppler prd; " +
-            "if the secret is already there, the container has not loaded it (re-run git-data-pin-redeploy.yml).",
+            "if the secret is already there, the container has not loaded it (dispatch git-data-cutover.yml mode=redeploy to re-load it).",
     );
     this.name = "GitDataHostKeyPinError";
     this.reason = reason;

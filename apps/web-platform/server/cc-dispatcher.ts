@@ -36,7 +36,11 @@ import {
   type Role,
 } from "@/lib/feature-flags/server";
 
-import { applyPrefillGuard } from "./agent-prefill-guard";
+import {
+  applyPrefillGuard,
+  CONTEXT_RESET_NOTICE_GENERIC,
+  CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN,
+} from "./agent-prefill-guard";
 
 import type { WSMessage, Conversation, AttachmentRef } from "@/lib/types";
 import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
@@ -54,10 +58,11 @@ import {
   type SoleurGoRunner,
   type QueryFactory,
   type QueryFactoryArgs,
+  type DispatchArgs,
   type DispatchEvents,
   type WorkflowEnd,
 } from "./soleur-go-runner";
-import { readCcCostCaps } from "./cc-cost-caps";
+import { readCcCostCaps, readCcManagedWarnCap } from "./cc-cost-caps";
 import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
 import {
   WORKFLOW_END_USER_MESSAGES,
@@ -91,7 +96,10 @@ import {
   hashUserId,
   __resetMirrorDebounceForTests,
 } from "./observability";
-import { classifySandboxStartupError } from "./sandbox-startup-classifier";
+import {
+  classifySandboxStartupError,
+  classifyBashSandboxFailure,
+} from "./sandbox-startup-classifier";
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { formatAssistantText } from "@/lib/format-assistant-text";
@@ -110,6 +118,7 @@ import {
 } from "./narrate-tool";
 import { buildCrmTools } from "@/server/crm/crm-tools";
 import { updateConversationFor } from "./conversation-writer";
+import { registerLiveLoopProbe } from "./agent-session-registry";
 import {
   getUserServiceTokens,
   patchWorkspacePermissions,
@@ -125,7 +134,7 @@ import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
-import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
+import { readCurrentRepoUrlResult, getCurrentRepoStatus } from "./current-repo-url";
 import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
@@ -163,7 +172,7 @@ import {
   resolveWorktreeId,
   type WorktreeLeaseHandle,
 } from "./worktree-write-lease";
-import { ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
+import { ERR_ATTACHMENT_NOT_FOUND, ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
 // ADR-044 PR-1 — dispatch-boundary not-ready states (transient db-error +
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
@@ -175,11 +184,23 @@ import {
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
+// feat-open-web-egress (#9534) — workspace "Agent web access" grant (member-
+// checked, fail-closed) + the per-session loopback forwarder lifecycle.
+import {
+  resolveWebEgress,
+  resolveWebEgressStrict,
+} from "./resolve-web-egress";
+import {
+  egressForwarderWorkspaceId,
+  spawnEgressForwarder,
+  teardownEgressForwarder,
+} from "./egress-forwarder";
 import {
   resolveC4Eligible,
   resolveC4FlagEnabled,
 } from "./resolve-c4-eligible";
 import { parseConnectedRepo } from "./github-repo-parse";
+import { createProtectedBranchResolver } from "./resolve-protected-branches";
 import { emitDebugEvent } from "./debug-event";
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
 // the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
@@ -215,8 +236,9 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
-// (the agent's OWN workspace — read+write in the sandbox because it is NOT in
-// the per-sibling `denyRead`; sibling workspaces stay hidden); the token rides
+// (the agent's OWN workspace — read+write in the sandbox: it sits under the
+// parent `denyRead` tmpfs but the vendored builder re-binds it rw after the
+// mask; sibling workspaces stay hidden); the token rides
 // GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
 import { writeAskpassScriptTo } from "./git-auth";
 import {
@@ -324,6 +346,45 @@ export function shouldMirrorUnregisteredPlatformToolUse(
 }
 
 /**
+ * #10032 follow-up — mirror a Bash `tool_result` that carries a sandbox denial to Sentry.
+ * Exported for unit testability. Per-user debounced; the event carries ONLY the scrubbed, capped matched
+ * line (never the tool output, the command, or workspace paths) and the Error message is the classifier's
+ * code, never the output. Detection only: no alert pages on this op until #10052 (blocked on #7985).
+ */
+export function mirrorBashSandboxFailure(
+  output: string,
+  userId: string,
+  conversationId: string,
+): void {
+  const failure = classifyBashSandboxFailure(output);
+  if (!failure) return;
+  // null first arg, never a real Error — the pino mirror captures a passed Error first as
+  // `feature=pino-mirror` with no user and Sentry drops the tagged second capture (#8629). The code lives in
+  // `message` and `extra`. Sibling emitters of this failure: the deploy canary's `SANDBOX_CANARY_FAIL` /
+  // `SOLEUR_CANARY_SANDBOX_DIAG` rows (ci-deploy.sh) cover the container, this covers a live tenant session.
+  mirrorWithDebounce(
+    null,
+    {
+      feature: "agent-sandbox",
+      op: "bash-tool-result",
+      message: `bash sandbox denial: ${failure.errorCode}`,
+      tags: {
+        sandboxKind: "seccomp_or_userns_denial", // same enum value as the sdk-startup emitter; `sandboxErrorCode` refines it
+        sdkVersion: failure.sdkVersion ?? "unknown",
+      },
+      extra: {
+        userId,
+        conversationId,
+        sandboxErrorCode: failure.errorCode,
+        sandboxStderr: failure.matchedLine,
+      },
+    },
+    userId,
+    "agent-sandbox-bash-tool-result",
+  );
+}
+
+/**
  * Registered platform tool names for the cc-router (#2909 FR2 + Phase 2 #3722
  * promotion hook). Phase 1: empty — `mcpServers === {}` via `readCcMcpAllowlist()`.
  * Phase 2: populated from `CC_MCP_ALLOWLIST` allowlist outcome. Module-level
@@ -391,6 +452,20 @@ const GH_NO_NETWORK_PROMPT_ADDENDUM =
   "the platform will not retry them. If the user asks for GitHub " +
   "operations, tell them to connect a repository first (Workspace settings " +
   "→ Connect repository).";
+
+// feat-open-web-egress (#9534) — appended ONLY to an entitled session (the
+// webEgress handle's presence is the entitled+forwarder-verified condition).
+const WEB_EGRESS_PROMPT_ADDENDUM =
+  "## Web access enabled for this session\n" +
+  "Your workspace owner enabled Agent web access. `WebFetch` is available " +
+  "and reaches the public internet through a dedicated, audited gateway — " +
+  "HTTPS only; destinations that resolve to private/link-local/metadata " +
+  "ranges are refused, and every decision is logged with workspace " +
+  "attribution. Sandboxed commands run without stored credentials: in-sandbox " +
+  "`gh` and git network operations will fail at AUTH (not network) — do not " +
+  "retry them and do not promise the user a retry. If `WebFetch` fails with a " +
+  "proxy/connection error mid-session, report it rather than retrying in a " +
+  "loop — the session's web access may have been revoked.";
 
 // feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
 // always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
@@ -479,8 +554,8 @@ export {
 // surfaced to Sentry via `warnSilentFallback`
 // (cq-silent-fallback-must-mirror-to-sentry). Synthesized prefixes only.
 const REDACTION_FALLTHROUGH_PROBES = [
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,}/,
-  /\bgithub_pat_[A-Za-z0-9]{22}_/,
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{20,}/,
+  /\bgithub_pat_[A-Za-z0-9._~+/=-]{22}_/,
   /Authorization\s*:\s*(?:Bearer|Basic|token)\s+\S/i,
   // Finding 3 — connection-string userinfo (`scheme://user:password@host`).
   // A surviving `user:pass@` after redaction means the new userinfo pattern
@@ -957,7 +1032,11 @@ async function emitNarration(opts: {
     const raw = typeof input.message === "string" ? input.message : "";
     const redacted = redactNarrationOrDrop(raw, "message", userId, conversationId);
     if (!redacted) return; // null (dropped) or empty → emit nothing
-    sendToClient(userId, { type: "reasoning_narration", message: redacted });
+    sendToClient(userId, {
+      type: "reasoning_narration",
+      message: redacted,
+      conversationId,
+    });
     return;
   }
 
@@ -1317,11 +1396,18 @@ async function releaseCcWorktreeLease(
 async function replicateAndReleaseCcWorktreeLease(
   userId: string,
   conversationId: string,
+  opts?: { skipRelease?: boolean },
 ): Promise<void> {
   const key = makeWorktreeLeaseKey(userId, conversationId);
   const record = _ccWorktreeLeases.get(key);
   if (!record) return;
-  _ccWorktreeLeases.delete(key);
+  // skipRelease keeps the map record too: the record is the reachability
+  // token for the factory-throw cleanup (`releaseCcWorktreeLease`) — a
+  // retry that dies before re-acquiring must still be able to release
+  // this handle, or its heartbeat pins the row forever.
+  if (!opts?.skipRelease) {
+    _ccWorktreeLeases.delete(key);
+  }
   try {
     if (isGitDataStoreEnabled()) {
       const outcome = await replicateToGitData({
@@ -1352,7 +1438,22 @@ async function replicateAndReleaseCcWorktreeLease(
     // Already reported (feature: worktree_lease) inside replicateToGitData;
     // swallow so a replication failure never wedges the lease release below.
   } finally {
-    await record.handle.release();
+    if (opts?.skipRelease) {
+      // #9538 — the stale-resume arm detaches instead of releasing: the
+      // recovery retry re-acquires same-host keep-gen, so a deferred
+      // release would tombstone (`heartbeat_at = '-infinity'`) the row
+      // out from under the fresh handle (migration-116 release matches
+      // on host_id + generation regardless of recency). The old handle
+      // must NOT keep heartbeating either — `touch_worktree_lease` has
+      // no liveness predicate, so a zombie beat resurrects the tombstone
+      // forever. `detach()` stops the interval + unregisters the SIGTERM
+      // drain entry; the row stays live until the retry's upsert or the
+      // 240s natural expiry, whichever comes first. The map record is
+      // kept (see above) so the factory-throw cleanup can still reach it.
+      record.handle.detach();
+    } else {
+      await record.handle.release();
+    }
   }
 }
 
@@ -1583,9 +1684,14 @@ export function handleCcCloseQuery({
 }: {
   conversationId: string;
   userId: string;
-  reason?: "disconnected";
+  reason?: "disconnected" | "stale-resume";
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
+  // feat-open-web-egress (#9534) — kill the session's loopback forwarder and
+  // delete its token file (the file is the gateway-side validity window).
+  // Fires from EVERY close path (emit/reap/bare close) — the token must die
+  // with the session even when `onWorkflowEnded` does not run. Idempotent.
+  teardownEgressForwarder(conversationId);
   // TR3 (#5843) — flush the aggregated tool-attempt row for this session. Once
   // per ActiveQuery (closeQuery is `state.closed`-guarded at every call site);
   // fire-and-forget + fail-open (never throws, mirrors to Sentry on DB failure).
@@ -1598,7 +1704,9 @@ export function handleCcCloseQuery({
   // mirrored to Sentry inside). No-op when the lease path was gated off / already
   // released. The push-options ride the git-data push ONLY (never the in-sandbox
   // agent's GitHub origin push).
-  void replicateAndReleaseCcWorktreeLease(userId, conversationId);
+  void replicateAndReleaseCcWorktreeLease(userId, conversationId, {
+    skipRelease: reason === "stale-resume",
+  });
   if (reason === "disconnected") {
     void checkpointInflightWorkForConversation(
       userId,
@@ -1723,6 +1831,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
     const credential = await lease.getAgentCredential();
 
+    // feat-cc-cap-raise-resume (#9565) closure-capture: publish the
+    // credential provenance to the runner BEFORE the lease scope closes —
+    // same bridge shape as setDelegationContext above. `oauth_token` =
+    // managed session (per-conversation cap not enforced); `api_key` =
+    // BYOK (cap enforced, resumable). Keys on lease provenance only,
+    // never user-controlled input.
+    args.setAuthScheme?.(credential.scheme);
+
     // ADR-113 — resolve the execution mode ONCE from the required persona. Drives
     // the repo-lifecycle skip (below), the cwd, and the sandbox write-set. A
     // garbage/cast persona throws here (never silently falls through to the repo
@@ -1764,18 +1880,26 @@ export const realSdkQueryFactory: QueryFactory = async (
     // consumers now receive the ONE resolved id (no second divergent resolve).
     const [
       workspacePath,
-      serviceTokens,
+      serviceTokensRaw,
       installationId,
       bashAutonomous,
       autonomousAckAt,
       isWorkspaceOwner,
-      repoUrl,
+      repoUrlResult,
       repoReadinessRow,
+      webEgressEntitled,
     ] =
       await Promise.all([
         fetchUserWorkspacePath(args.userId, activeWorkspaceId),
         getUserServiceTokens(args.userId),
-        resolveInstallationId(args.userId, activeWorkspaceId),
+        // #9558 — support (`runRepoLifecycle:false`) never resolves an
+        // installation: the id's only consumers are the repo-lifecycle
+        // self-heal/clone, the GH_TOKEN mint and the C4 write tool, and none
+        // of them run for a read-only docs session. null keeps every
+        // downstream gate closed by construction.
+        mode.runRepoLifecycle
+          ? resolveInstallationId(args.userId, activeWorkspaceId)
+          : Promise.resolve(null),
         // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
         // when the active workspace owner enabled the autonomous toggle.
         // ADR-044 PR-1: the autonomous-toggle trio (bash-autonomous / ack /
@@ -1798,14 +1922,36 @@ export const realSdkQueryFactory: QueryFactory = async (
         // Per-user connected repo (normalized, membership-checked). Drives the
         // session-start ensure-repo self-heal below. null = not connected.
         // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
-        getCurrentRepoUrl(args.userId, activeWorkspaceId),
+        // The degrade-aware variant is used so the support deny→handoff flag
+        // can distinguish "no repo" from a transient resolve failure.
+        readCurrentRepoUrlResult(args.userId, activeWorkspaceId),
         // #5394 — active workspace repo readiness (repo_status from workspaces,
         // sanitized reason from users.repo_error). Joins the Promise.all so it
         // adds ZERO sequential await on the cold-start hot path. Fail-open
         // internally (a read blip → not_connected, never blocks a ready founder).
         // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
         getCurrentRepoStatus(args.userId, activeWorkspaceId),
+        // feat-open-web-egress (#9534) — the workspace's `web_egress` grant.
+        // Pure read in the Promise.all (zero extra round-trips); the
+        // member-checked RPC returns NULL→false on a non-member claim, so a
+        // resolver blip or membership reset can never over-grant egress.
+        // Keyed on the unified activeWorkspaceId (repoUrl precedent).
+        resolveWebEgress(args.userId, activeWorkspaceId),
       ]);
+
+    // #9558 — a write-closed sandbox must carry NO GitHub credential at all:
+    // the user's stored GITHUB_TOKEN (the `github` Connected-Services
+    // provider) would sit readable in the env — and echoable into the
+    // transcript — while every GitHub egress domain is closed. The rest of
+    // the service-token map stays (ADR-113 records that deliberate choice).
+    const serviceTokens = { ...serviceTokensRaw };
+    if (mode.sandboxWrite === "none") delete serviceTokens.GITHUB_TOKEN;
+
+    // #9556 — every existing consumer below reads the bare url; the support
+    // deny→handoff flag additionally reads `repoUrlResult.degraded` so a
+    // transient resolve failure emits `undefined` (legacy caveat arm) rather
+    // than a false "not connected" verdict.
+    const repoUrl = repoUrlResult.url;
 
     // #5394 Layer A — the single Concierge dispatch readiness gate. Runs AFTER
     // repoUrl/repo_status resolve and BEFORE ensureWorkspaceDirExists /
@@ -1890,11 +2036,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // persistent chip reflects server truth (`bashAutonomous && acked`), NOT a
     // message-presence heuristic. A held (un-acked) disclosure is "Approve each";
     // only an acked autonomous workspace is "Auto-run on". Re-pushed by the
-    // ws-handler on a successful in-session ack-release.
-    defaultSendToClient(args.userId, {
-      type: "autonomous_posture",
-      autonomous: bashAutonomous && autonomousAckAtMs != null,
-    });
+    // ws-handler on a successful in-session ack-release. Gated off support
+    // (#9539): the frame is WS-bound and meaningless to an SSE-only turn.
+    if (args.persona !== "support") {
+      defaultSendToClient(args.userId, {
+        type: "autonomous_posture",
+        autonomous: bashAutonomous && autonomousAckAtMs != null,
+      });
+    }
 
     // Parse the connected repo's owner/repo ONCE from the server-resolved
     // repoUrl (never tool input). Reused by the installation self-heal below
@@ -1936,11 +2085,17 @@ export const realSdkQueryFactory: QueryFactory = async (
     // install and falsely report "workspace reclaimed — couldn't restore" for an
     // org repo a cold turn could recover (#5340 review finding). Best-effort:
     // returns the stored install on any probe failure, never widening access.
-    const effectiveInstallationId = await resolveEffectiveInstallationId({
-      userId: args.userId,
-      installationId,
-      repoUrl,
-    });
+    // #9558 — gated on runRepoLifecycle: the self-heal is repo-lifecycle
+    // machinery (its every consumer — clone, mint, C4 write — is already
+    // mode-gated). Support resolves to null, which also closes the mint +
+    // askpass arms below regardless of env state.
+    const effectiveInstallationId = mode.runRepoLifecycle
+      ? await resolveEffectiveInstallationId({
+          userId: args.userId,
+          installationId,
+          repoUrl,
+        })
+      : null;
 
     // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
     // reprovision-ensure-dir-presandbox). The bwrap sandbox binds `cwd` to THIS
@@ -1998,7 +2153,8 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `.git` FILE at the workspace root passes isValidGitWorkTree (lstat) but
     // strands the agent's IN-BWRAP `git rev-parse` when its `gitdir:` target
     // resolves OUTSIDE the agent's own workspace (sibling workspaces are
-    // per-sibling `denyRead`-hidden; #5848 → per-sibling deny). The prompt-driven
+    // hidden by the parent-root `denyRead` tmpfs; #5848 regression → #5864 per-sibling deny,
+    // #5862 → constant parent deny). The prompt-driven
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
     // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
@@ -2191,41 +2347,48 @@ export const realSdkQueryFactory: QueryFactory = async (
     // flips `repo_status→error` ONLY on the solo/owner path after a post-clone
     // `.git`-absence CAS, and returns `"block"` so the dispatch honest-blocks
     // instead of spawning a doomed agent. NO new clone site; NO service-role read.
-    const dispatchCloneOutcome = await ensureWorkspaceRepoCloned({
-      userId: args.userId,
-      workspacePath,
-      installationId: effectiveInstallationId,
-      repoUrl,
-    });
-    if (
-      (await consumeDispatchCloneOutcome(
-        {
-          outcome: dispatchCloneOutcome,
-          userId: args.userId,
-          activeWorkspaceId,
-          workspacePath,
-        },
-        {
-          // F4 status write via the SECURITY DEFINER RPC on the TENANT client
-          // (cc-dispatcher stays OFF the service-role allowlist). Minted only on
-          // the rare failure path, never on the common success hot path.
-          setRepoStatus: async (status, reason) => {
-            const tenant = await getFreshTenantClient(args.userId);
-            const { error } = await tenant.rpc("set_repo_status", {
-              p_workspace_id: activeWorkspaceId,
-              p_status: status,
-              p_error: reason,
-            });
-            if (error) throw error;
+    // #9558 — the clone is repo-lifecycle machinery (it mints an installation
+    // token via gitWithInstallationAuth to authenticate the clone). Support
+    // never runs it: not "called then early-returns on a null install", but
+    // not called at all — the null-id early return inside
+    // ensureWorkspaceRepoCloned stays as the defense-in-depth floor.
+    if (mode.runRepoLifecycle) {
+      const dispatchCloneOutcome = await ensureWorkspaceRepoCloned({
+        userId: args.userId,
+        workspacePath,
+        installationId: effectiveInstallationId,
+        repoUrl,
+      });
+      if (
+        (await consumeDispatchCloneOutcome(
+          {
+            outcome: dispatchCloneOutcome,
+            userId: args.userId,
+            activeWorkspaceId,
+            workspacePath,
           },
-        },
-      )) === "block"
-    ) {
-      throw new RepoNotReadyError(
-        "error",
-        "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
-        "repo_setup_failed",
-      );
+          {
+            // F4 status write via the SECURITY DEFINER RPC on the TENANT client
+            // (cc-dispatcher stays OFF the service-role allowlist). Minted only on
+            // the rare failure path, never on the common success hot path.
+            setRepoStatus: async (status, reason) => {
+              const tenant = await getFreshTenantClient(args.userId);
+              const { error } = await tenant.rpc("set_repo_status", {
+                p_workspace_id: activeWorkspaceId,
+                p_status: status,
+                p_error: reason,
+              });
+              if (error) throw error;
+            },
+          },
+        )) === "block"
+      ) {
+        throw new RepoNotReadyError(
+          "error",
+          "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
+          "repo_setup_failed",
+        );
+      }
     }
 
     // #5733 deliverable A — the host `git rev-parse` CONFIRM. Runs AFTER the
@@ -2282,8 +2445,12 @@ export const realSdkQueryFactory: QueryFactory = async (
     // token, NEVER a PAT, and the value is NEVER logged. (Sentry
     // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
     // cron-side root cause this mirrors for the interactive path.)
+    // #9558 — the double gate is deliberate: runRepoLifecycle closes the whole
+    // repo-credential surface for support, and sandboxWrite!=="none" is the
+    // issue's literal invariant — a read-only dispatch must never mint a
+    // write-capable credential even if a future caller reaches here with one.
     let ghToken: string | undefined;
-    if (effectiveInstallationId !== null) {
+    if (effectiveInstallationId !== null && mode.sandboxWrite !== "none") {
       try {
         ghToken = await generateInstallationToken(effectiveInstallationId, {
           minRemainingMs: GH_TOKEN_MIN_LIFETIME_MS,
@@ -2303,7 +2470,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     // buildAgentQueryOptions (both-or-nothing). Boolean only — NEVER the
     // token (AC6-class guard from #5041).
     log.info(
-      { userId: args.userId, githubEgress: Boolean(ghToken) },
+      {
+        userId: args.userId,
+        githubEgress: Boolean(ghToken),
+        // #9558 — attribute the posture to the persona so a support dispatch
+        // that ever opened egress is directly queryable in Sentry.
+        persona: args.persona,
+      },
       "Concierge sandbox GitHub egress posture",
     );
 
@@ -2352,7 +2525,14 @@ export const realSdkQueryFactory: QueryFactory = async (
             "c4-visualizer flag resolve failed; Concierge diagram write disabled",
         });
       }
-      if (c4Enabled) {
+      // ADR-113 addendum (#9539): `edit_c4_diagram` commits to the user's repo
+      // via the installation token — a real write that executes in the
+      // dispatch process, entirely outside `allowWrite:[]`. Registering it
+      // (and advertising it via c4PromptAddendum) on a read-only support
+      // dispatch contradicts the persona invariant, so the whole c4 surface
+      // — tool build, platformToolNames entry, prompt addendum — is gated on
+      // a non-support persona at the single assignment point.
+      if (c4Enabled && args.persona !== "support") {
         c4Tools = buildC4ConciergeTools({
           userId: args.userId,
           installationId: effectiveInstallationId,
@@ -2445,6 +2625,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     conversationId: args.conversationId,
     feature: "cc-concierge",
     leaderId: CC_ROUTER_LEADER_ID,
+    // #9538 — `[]` for a known resumeSessionId is the deleted/rotated-file
+    // shape and the cc path has no `messages`-replay primitive, so passing
+    // `resume:` through dies mid-stream in the SDK iterator. Drop it
+    // in-turn instead — the `context_reset` notice + frame below cover the
+    // honesty contract. Legacy `agent-runner` keeps pass-through (its
+    // `.catch` replay restores full `messages` history).
+    dropResumeOnEmptyHistory: true,
   });
   const prefillGuardResult = mode.runRepoLifecycle
     ? (await Promise.all([patchWorkspacePermissions(workspacePath), prefillGuardPromise]))[1]
@@ -2471,6 +2658,15 @@ export const realSdkQueryFactory: QueryFactory = async (
   let effectiveSystemPrompt = contextResetNotice
     ? `${args.systemPrompt}\n\n${contextResetNotice}`
     : args.systemPrompt;
+  // #9538 — dispatcher-driven stale-resume re-dispatch carries its own
+  // notice (the guard did not fire on this invocation — the session died
+  // mid-stream on the PREVIOUS turn), so append it at the same site.
+  // Double-append is unreachable today: the only caller pairs this field
+  // with `sessionId: undefined`, so the guard's own notice path
+  // early-returns above.
+  if (args.contextResetNotice) {
+    effectiveSystemPrompt += `\n\n${args.contextResetNotice}`;
+  }
   // Only advertise edit_c4_diagram when it was actually registered above
   // (flag on + connected repo), mirroring agent-runner's capability-gated
   // prompt sections so the model isn't told about a tool it cannot call.
@@ -2549,9 +2745,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
   // sandbox needs a GIT_ASKPASS helper the sandbox can read+exec. The only
   // sandbox read+writable dir is `workspacePath` — the agent's OWN workspace
-  // is NOT in the per-sibling `denyRead`, so the base `--ro-bind / /` grants
-  // read and `allowWrite:[workspacePath]` grants write (see
-  // `buildAgentSandboxConfig`; #5848 → per-sibling deny — the earlier
+  // sits under the parent `denyRead` tmpfs and the vendored builder's
+  // deny-then-restore ordering re-binds it rw (see `buildAgentSandboxConfig`;
+  // #5848 regression → #5864 per-sibling deny → #5862 constant parent deny — the earlier
   // `allowRead:[workspacePath]` re-bind was read-only and shadowed the write
   // bind, breaking writes) plus `createSandboxHook` realpath-containment;
   // `$HOME`/`/tmp` bwrap-visibility is unverifiable. We write the helper into
@@ -2575,8 +2771,11 @@ export const realSdkQueryFactory: QueryFactory = async (
   // degradation parity with GH_TOKEN. The token rides GIT_INSTALLATION_TOKEN
   // env, NEVER the script body or a remote URL, and is NEVER logged
   // (hr-github-app-auth-not-pat).
+  // #9558 — `ghToken` already can't exist under sandboxWrite==="none", but the
+  // file write is the side effect the issue names (a helper landing in the
+  // user's .git/) — keep the literal predicate as the second gate.
   let gitAskpassScriptPath: string | undefined;
-  if (ghToken) {
+  if (ghToken && mode.sandboxWrite !== "none") {
     // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
     const gitDir = path.join(workspacePath, ".git");
     const askpassDir = existsSync(gitDir) ? gitDir : workspacePath;
@@ -2625,10 +2824,37 @@ export const realSdkQueryFactory: QueryFactory = async (
     // auto-running.
     autonomousAckAt: autonomousAckAtMs,
     isOwner: isWorkspaceOwner,
+    // #9556 — support deny→handoff flag. `repoUrl` was already resolved in the
+    // unconditional Promise.all fan-out above (every dispatch, support persona
+    // included), so recording it on the escalation costs ZERO extra DB reads.
+    // Deliberately `repoUrl !== null`, not repoStatus: `cloning`/`error` still
+    // means a repo IS connected — the destination surface explains its own
+    // state. `degraded` (a transient tenant-mint/query blip, not an honest
+    // "no repo") emits `undefined` → the legacy caveat arm rather than telling
+    // a connected user to connect. Snapshot scope: resolved once at cold
+    // dispatch — a warm-turn Query reuse keeps this value for the Query's
+    // lifetime (bounded by the idle reaper), so mid-conversation connect or
+    // disconnect events are not re-read; both stale arms self-correct at the
+    // destination. The deny() wrapper in permission-callback.ts stamps this
+    // onto the escalation record; the route emits it on the `support_handoff`
+    // frame.
+    repoConnected: repoUrlResult.degraded ? undefined : repoUrl !== null,
     // P1 stale-snapshot — read the LIVE in-session ack posture (flipped by the
     // ws-handler on a successful ack) so command #2 after an ack is friction-free
     // instead of re-holding on the frozen cold-start snapshot.
     resolveAckPosture: () => autonomousAckPosture,
+    // #9776 / ADR-284 — hosted must-ask lane inputs. The resolver reads the connected repo's default
+    // branch with the SELF-HEALED installation id (`effectiveInstallationId`), the repo owner/name that
+    // `parseConnectedRepo` validated from the server-resolved repoUrl, and the user's workspace path (never
+    // `ctx.repoOwner`/`ctx.repoName`, which this dispatcher passes as empty strings). One resolver per session
+    // record: memoised inside, awaited only after a force, delete or mirror push is found.
+    resolveProtectedBranches: createProtectedBranchResolver({
+      owner: connectedOwner,
+      repo: connectedRepo,
+      installationId: effectiveInstallationId,
+      workspacePath,
+    }),
+    connectedRepoSlug: connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "",
     // P1 defense-in-depth — re-read the persisted ack after a disclosure-hold
     // releases, BEFORE allowing the held command. A release that did not
     // actually write the ack (cross-frame attempt, transient ack-write fault)
@@ -2767,6 +2993,53 @@ export const realSdkQueryFactory: QueryFactory = async (
       toolAttemptCollector,
     );
 
+    // feat-open-web-egress (#9534) — spawn the per-session loopback
+    // forwarder ONLY when the workspace grant resolved true for this
+    // dispatch. Scoped to the Command Center persona: the read-only support
+    // session (plugin-corpus cwd) never carries a workspace egress grant —
+    // widening it would expose the platform plugin root's network surface
+    // for no user-facing gain. Spawn runs LAST among the side-effects, just
+    // before sdkQuery: on ANY failure (token write, bind, gateway-side
+    // start) the session degrades to zero-egress (`webEgress` stays
+    // undefined → no proxy env, WebFetch stays disallowed, no credential
+    // census change) + Sentry — a dead forwarder must never produce a
+    // session whose CLI env proxies to a refused listener.
+    let webEgress:
+      | { workspaceId: string; token: string; port: number }
+      | undefined;
+    if (webEgressEntitled && mode.runRepoLifecycle) {
+      try {
+        const fwd = await spawnEgressForwarder(
+          args.conversationId,
+          activeWorkspaceId,
+        );
+        webEgress = {
+          workspaceId: activeWorkspaceId,
+          token: fwd.token,
+          port: fwd.port,
+        };
+        log.info(
+          {
+            feature: "cc-dispatcher",
+            op: "web-egress",
+            conversationId: args.conversationId,
+            workspaceId: activeWorkspaceId,
+            forwarderPort: fwd.port,
+            forwarderPid: fwd.pid,
+          },
+          "cc-dispatcher: web egress forwarder bound",
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "web-egress-forwarder-spawn",
+          extra: { userId: args.userId, workspaceId: activeWorkspaceId },
+          message:
+            "web-egress forwarder spawn failed; session proceeds zero-egress",
+        });
+      }
+    }
+
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
@@ -2777,6 +3050,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         workspacePath: agentWorkspacePath,
         pluginPath,
         mode,
+        // #5863 — outer-wrap rollout cohort key + log correlation.
+        workspaceId: activeWorkspaceId,
+        sessionId: args.sessionId ?? undefined,
         credential,
         serviceTokens,
         // Issue A — minted GH_TOKEN (or undefined when no repo connected).
@@ -2785,15 +3061,43 @@ export const realSdkQueryFactory: QueryFactory = async (
         // undefined when no token was minted). The askpass token IS `ghToken`
         // (threaded as gitInstallationToken inside buildAgentEnv).
         gitAskpassScriptPath,
-        systemPrompt: effectiveSystemPrompt,
+        // feat-open-web-egress (#9534): the honest-capability addendum is
+        // gated on the LIVE forwarder handle, not the resolved entitlement —
+        // a spawn-degraded session keeps WebFetch disallowed and gets no
+        // addendum claiming egress.
+        systemPrompt:
+          effectiveSystemPrompt +
+          (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : ""),
         resumeSessionId: safeResumeSessionId,
+        // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
+        // the entitlement+spawn-verified condition (fail-closed: undefined
+        // when the grant is off or the spawn degraded).
+        webEgress,
         // readCcMcpAllowlist() (Phase 1: {}) plus the flag-gated, single-tool
         // soleur_platform server (edit_c4_diagram) merged in above.
         mcpServers: c4McpServers,
         // #3338 — auto-approve the cc-router's read-only tool surface so they
         // don't pay a canUseTool round-trip per call. This is auto-approve,
         // not restriction — see CC_PATH_ALLOWED_TOOLS doc comment.
-        allowedTools: [...CC_PATH_ALLOWED_TOOLS],
+        // #9539 — the auto-approve list must not undo the support schema
+        // removal: `allowedTools` bypasses `canUseTool` entirely, so a member
+        // of BOTH lists (TodoWrite, ExitPlanMode) would be auto-approved on
+        // support with no persona belt ever seeing the call. Filter the
+        // overlap for support; the read tools support needs (Read/Glob/Grep/
+        // LS/NotebookRead, kb-search's corpus path) stay auto-approved.
+        allowedTools: [
+          ...CC_PATH_ALLOWED_TOOLS.filter(
+            (t) =>
+              args.persona !== "support" ||
+              !SUPPORT_EXTRA_DISALLOWED_TOOLS.includes(t),
+          ),
+          // feat-open-web-egress (#9534): WebFetch leaves disallowedTools
+          // when the forwarder is live, but it is an ask-class tool and
+          // would still die at createCanUseTool's deny-default — entitled
+          // sessions auto-approve it here (the Squid gateway is the policy
+          // boundary, not a per-URL human review).
+          ...(webEgress ? ["WebFetch"] : []),
+        ],
         // #3338 — HARD-BLOCK Edit/Write at the SDK level so the model
         // cannot emit them. Bash is intentionally NOT in this list — it is
         // sandbox-gated (permission-callback Bash gate / safe-bash /
@@ -2804,8 +3108,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         // feat-wire-concierge-support-chat (ADR-113): the support persona pins a
         // WIDER disallowed set (Edit/Write/MultiEdit/NotebookEdit/Task/Agent) so a
         // read-only help chat cannot write under cwd=getPluginPath() nor fan out
-        // into engineering subagents. Bash stays out of the list (kb-search shells
-        // out behind the read-only safe-bash gate).
+        // into engineering subagents. Bash stays out of the list — kb-search
+        // answers through Read/Grep/Glob tools only (#9559), and Bash remains
+        // the deny+escalate tripwire for engineering-shaped support attempts.
         extraDisallowedTools:
           args.persona === "support"
             ? SUPPORT_EXTRA_DISALLOWED_TOOLS
@@ -2876,6 +3181,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     // indefinitely — wedging the workspace for every other host. No-op when the
     // lease path is gated off or the acquire never registered.
     await releaseCcWorktreeLease(args.userId, args.conversationId);
+    // feat-open-web-egress (#9534) — same leak class: a factory throw after
+    // the forwarder spawned must not leave a live token file + listener
+    // bound to a Query that never entered `activeQueries` (the close hook
+    // teardown only fires once registered).
+    teardownEgressForwarder(args.conversationId);
     // TR3 (#5843) — same leak class: the collector was registered just above, but
     // a factory throw means the Query never enters `activeQueries` so
     // `handleCcCloseQuery` never fires. Drop it here (flush is a harmless no-op —
@@ -2955,6 +3265,12 @@ export function hasActiveCcQuery(conversationId: string): boolean {
   if (!_runner) return false;
   return _runner.hasActiveQuery(conversationId);
 }
+
+// Register into the shared cross-lineage liveness predicate
+// (agent-session-registry.ts): the stuck-active reaper and ws-handler's
+// dead-socket reap consult it, and the cc lineage's live Queries are
+// invisible to the legacy `activeSessions` registry without this probe.
+registerLiveLoopProbe(hasActiveCcQuery);
 
 /**
  * #5356 — signal the process-wide cc runner to close a conversation's live
@@ -3041,6 +3357,11 @@ export function getSoleurGoRunner(
     return _runner;
   }
   _runnerSendToClient = sendToClient;
+  // feat-open-web-egress (#9534) — orphan reaper. First runner construction
+  // is the dispatcher's startup boundary: kill any egress-forwarder.mjs
+  // left by a previous process (its ppid watchdog can't fire once
+  // reparented to init) and delete its stale token files. Best-effort —
+  // never throws into runner construction.
   _runner = createSoleurGoRunner({
     queryFactory: realSdkQueryFactory,
     pendingPrompts: getPendingPromptRegistry(),
@@ -3058,6 +3379,9 @@ export function getSoleurGoRunner(
     // `activeQueries.delete`. See `handleCcCloseQuery`.
     onCloseQuery: handleCcCloseQuery,
     defaultCostCaps: readCcCostCaps(),
+    // feat-cc-cap-raise-resume — telemetry-only soft-warn for managed
+    // (oauth_token) sessions; enforcement is skipped for them entirely.
+    managedWarnCapUsd: readCcManagedWarnCap(),
   });
   return _runner;
 }
@@ -3163,6 +3487,20 @@ export interface DispatchSoleurGoArgs {
    * on the stale-clear path.
    */
   onSessionIdPersisted?: (sessionId: string | null) => void;
+  /**
+   * feat-cc-cap-raise-resume (#9565) — persisted per-conversation cap
+   * override read from `conversations.cc_cost_cap_usd` by the ws-handler's
+   * chat-case SELECT. Seeded into `ActiveQuery.costCapOverrideUsd`; takes
+   * precedence over the env-derived workflow/default cap.
+   */
+  costCapOverrideUsd?: number | null;
+  /**
+   * feat-cc-cap-raise-resume — writer for the raise path. The ws-handler
+   * impl UPDATEs `conversations.cc_cost_cap_usd` and refreshes its
+   * session cache so the next turn reads the new value without a
+   * DB round-trip.
+   */
+  persistCostCapOverride?: (usd: number) => Promise<void>;
 }
 
 /**
@@ -3231,6 +3569,231 @@ async function clearCcSessionId(args: {
     );
   }
 }
+
+/**
+ * Shared dispatch-failure boundary — the classification + revert + mirror +
+ * client-frame contract every `runner.dispatch` failure funnels through.
+ * Extracted so the #9538 stale-resume retry honors the SAME taxonomy as the
+ * primary dispatch-time catch (KeyInvalidError → `key_invalid`,
+ * MissingByokKeyError → `byok_key_missing`, `denied_jti` → session_revoked +
+ * session_ended, RepoNotReadyError/WorkspaceNotReadyError → info breadcrumb
+ * with NO error-tier mirror, generic → mirror + router-unavailable frame +
+ * `active`→`failed` revert). Divergence note: callers pass `sessionId:
+ * undefined` when the column was already cleared (the stale-resume retry) —
+ * the generic arm's clear-on-non-KeyInvalid then no-ops.
+ */
+async function reportDispatchSoleurGoError(
+  err: unknown,
+  ctx: {
+    userId: string;
+    conversationId: string;
+    sendToClient: (userId: string, message: WSMessage) => boolean;
+    sessionId: string | null | undefined;
+    onSessionIdPersisted?: ((sessionId: string | null) => void) | undefined;
+    mirrorOp: string;
+    revertOp: string;
+  },
+): Promise<void> {
+  // Turn-start revert: the flip above set the row `active`; this catch is
+  // the single boundary every dispatch failure funnels through, so revert
+  // here — `onlyIfStatusIn: ["active"]` confines the write to rows still
+  // holding the value we set (a concurrent gate-resolve / supersede write
+  // wins and is left untouched). Same shape as the legacy
+  // `updateConversationStatusIfActive` abort/result path (#3463).
+  //
+  // Provenance guard (review P-finding): the status-value guard cannot
+  // distinguish "active we just set" from "active a CONCURRENT live turn
+  // set" — ws-handler fires `chat` per frame without serialization, so a
+  // parallel dispatch on the same conversation is reachable. A live Query
+  // is the authoritative discriminator: when `hasActiveCcQuery` reports a
+  // running loop, THIS throw is a rejected duplicate and the row legitimately
+  // belongs to the other turn — `failed` would both lie on the badge and
+  // drop the row out of the orphan-ledger's live-status set (a live slot
+  // could then be force-released as orphaned). Best-effort: a revert
+  // write/mint failure must not mask the primary dispatch error below.
+  if (!hasActiveCcQuery(ctx.conversationId)) {
+    try {
+      await updateConversationFor(
+        ctx.userId,
+        ctx.conversationId,
+        { status: "failed" },
+        {
+          feature: "cc-dispatcher",
+          op: ctx.revertOp,
+          onlyIfStatusIn: ["active"],
+          expectMatch: false,
+        },
+      );
+    } catch {
+      // Mirror already fired inside updateConversationFor for real errors.
+    }
+  }
+  const errorClass =
+    err instanceof KeyInvalidError
+      ? "KeyInvalidError"
+      : err instanceof Error
+        ? err.constructor.name
+        : "unknown";
+  // #5394 — a `cloning`/`error` repo block is an EXPECTED transient/benign
+  // state, NOT an incident: skip the Sentry mirror (else every cloning-window
+  // turn pages). A structured logger.info breadcrumb keeps the rate
+  // observable in Better Stack without Sentry noise (no alert on `cloning`;
+  // alert on a `code=error` spike). This is the novel pattern — Missing/
+  // KeyInvalidError ARE mirrored because they are real failures.
+  if (err instanceof RepoNotReadyError) {
+    log.info(
+      {
+        feature: "cc-dispatcher",
+        op: "repo-readiness-gate",
+        code: err.code,
+        userIdHash: hashUserId(ctx.userId),
+        conversationId: ctx.conversationId,
+      },
+      "repo-readiness gate: blocked dispatch (repo not ready)",
+    );
+  } else if (err instanceof WorkspaceNotReadyError) {
+    // ADR-044 PR-1 — transient db-error or member-reset-to-empty-solo. Benign
+    // dispatch block, NOT an incident: skip the Sentry mirror (the divergence
+    // breadcrumb already fired, deduped). Info breadcrumb keeps the rate
+    // observable without paging.
+    log.info(
+      {
+        feature: "cc-dispatcher",
+        op: "workspace-not-ready-gate",
+        kind: err.state.kind,
+        userIdHash: hashUserId(ctx.userId),
+        conversationId: ctx.conversationId,
+      },
+      "workspace-not-ready gate: blocked dispatch (workspace not ready)",
+    );
+  } else {
+    mirrorWithDebounce(
+      err,
+      {
+        feature: "cc-dispatcher",
+        op: ctx.mirrorOp,
+        extra: { conversationId: ctx.conversationId, userId: ctx.userId },
+      },
+      ctx.userId,
+      `${ctx.mirrorOp}:${errorClass}`,
+    );
+  }
+  // R10 — KeyInvalidError surfaces with errorCode so the client can
+  // prompt for a fresh BYOK key. Mirrors the KeyInvalidError →
+  // errorCode: "key_invalid" branch in agent-runner.ts
+  // handleSessionError. All other failures fall back to the generic
+  // router-unavailable message without an errorCode.
+  if (
+    err instanceof RuntimeAuthError &&
+    err.cause === "denied_jti"
+  ) {
+    // #4440 follow-up to #4418 — JWT-deny propagation. A persistUserMessage
+    // mint or any other tenant-RPC inside the dispatch surfaced
+    // `RuntimeAuthError("denied_jti")` before the runner emitted its
+    // own WorkflowEnd. Synthesize a `session_revoked` WS frame so
+    // agents/API consumers observing this turn receive the same
+    // terminal discriminator the runner-level catch would have emitted
+    // for a mid-stream throw.
+    //
+    // Routes through `tryEmitRevocationNotice` (server/revocation-emit.ts)
+    // so the lookup+sanitize logic stays shared with agent-runner and
+    // soleur-go-runner. Helper returns the looked-up status if a caller
+    // needs the raw fields; this site only needs the emit side effect.
+    await tryEmitRevocationNotice(ctx.userId, (frame) =>
+      ctx.sendToClient(ctx.userId, frame),
+    );
+    // Pair with the terminal session_ended frame so the client
+    // reducer clears streamState (`clear_streams` in ws-client.ts).
+    // Disambiguator `ctx.conversationId` lets multi-tab clients route
+    // this to the correct tab; matches the pre-existing
+    // session_ended emit-site shape elsewhere in this dispatcher.
+    ctx.sendToClient(ctx.userId, {
+      type: "session_ended",
+      reason: "session_revoked",
+      conversationId: ctx.conversationId,
+    });
+  } else if (err instanceof MissingByokKeyError) {
+    // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
+    // key. Info-level breadcrumb captures workspace context;
+    // `byok_key_missing` errorCode tells the client to render the
+    // configure-banner linking to /dashboard/settings/byok rather
+    // than the key-invalid prompt.
+    reportMissingByokKey(err);
+    ctx.sendToClient(ctx.userId, {
+      type: "error",
+      message:
+        "Configure your BYOK key to run agents in this workspace.",
+      errorCode: "byok_key_missing",
+    });
+  } else if (err instanceof KeyInvalidError) {
+    ctx.sendToClient(ctx.userId, {
+      type: "error",
+      message: "Your API key is invalid — set up a fresh key to continue.",
+      errorCode: "key_invalid",
+    });
+  } else if (err instanceof RepoNotReadyError) {
+    // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
+    // user-facing message (and `repo_setup_failed` errorCode on the error
+    // branch, so the client can render the reconnect CTA). MUST sit ABOVE the
+    // generic `else` so it does NOT hit the `session_id`-clearing path below —
+    // a transient cloning/error block must not nuke a resumable session.
+    ctx.sendToClient(ctx.userId, {
+      type: "error",
+      message: err.message,
+      ...(err.errorCode ? { errorCode: err.errorCode } : {}),
+    });
+  } else if (err instanceof WorkspaceNotReadyError) {
+    // ADR-044 PR-1 (FR2) — db-error → transient copy, NO errorCode (no CTA: a
+    // transient fault must not tell the user to take a structural action).
+    // no-repo-switch → `workspace_switch_required` + `switchToWorkspaceId` so
+    // the client renders the workspace-switcher affordance (carrying the
+    // discarded claim id). MUST sit ABOVE the generic `else` so a benign block
+    // does not nuke a resumable session.
+    ctx.sendToClient(ctx.userId, {
+      type: "error",
+      message: err.message,
+      ...(err.state.kind === "no-repo-switch"
+        ? {
+            errorCode: "workspace_switch_required" as const,
+            switchToWorkspaceId: err.state.targetTeamId,
+          }
+        : {}),
+    });
+  } else {
+    // #3266 R7 — stale-resume cleanup. The dispatch was attempted with
+    // a persisted session_id but the runner rejected for a reason
+    // other than KeyInvalidError. Plan §R7 documents this trade-off:
+    // the predicate is broad ("any non-KeyInvalidError"), which means
+    // a transient backend error (network blip, BYOK fetch failure,
+    // workspace patch failure) will also clear a legitimate session_id
+    // and force a cold-start on the next turn. Acceptable cost: the
+    // SDK rebuilds from the persisted `messages` rows on next dispatch
+    // and the prefill guard's history-probe handles assistant-
+    // terminated threads — at most one turn of degraded latency.
+    // Narrowing to typed SDK error classes is tracked separately and
+    // is out of scope for the activation PR. Fire-and-forget; the
+    // user-facing generic-error message lands either way. Update the
+    // in-process cache alongside the DB write so the next chat-case
+    // warm-cache turn does not forward the now-stale value.
+    if (ctx.sessionId) {
+      ctx.onSessionIdPersisted?.(null);
+      void clearCcSessionId({
+        userId: ctx.userId,
+        conversationId: ctx.conversationId,
+      });
+    }
+    ctx.sendToClient(ctx.userId, {
+      type: "error",
+      message: "Dashboard router is unavailable — try again shortly.",
+    });
+  }
+  // Belt-and-suspenders: drain ccBashGates here too. The runner's
+  // onCloseQuery hook covers normal close paths, but a dispatch-time
+  // throw before the runner takes ownership of the Query may leave
+  // stranded entries (e.g. concurrent register from a prior turn).
+  cleanupCcBashGatesForConversation(ctx.userId, ctx.conversationId);
+}
+
 
 /**
  * One-liner ws-handler wiring for the soleur-go chat path. Builds the
@@ -3394,6 +3957,9 @@ export async function dispatchSoleurGo(
     });
     if (attachmentContext) {
       userMessage = `${rawUserMessage}\n\n${attachmentContext}`;
+    } else if (!rawUserMessage.trim()) {
+      // Attachments-only turn where every download failed: nothing to send.
+      throw new Error(ERR_ATTACHMENT_NOT_FOUND);
     }
   }
 
@@ -3490,6 +4056,49 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // feat-open-web-egress (#9534) — live-revocation on the warm path. The
+  // grant is resolved INSIDE `realSdkQueryFactory` (cold Query
+  // construction); on warm-query reuse the factory does not re-run, so an
+  // owner toggling "Agent web access" OFF mid-conversation would leave the
+  // forwarder + token file alive until session close — contradicting the
+  // toggle copy's "turning off revokes live web access". Re-resolve
+  // per-dispatch (same fire-and-forget pattern as resolveBashAutonomous
+  // above): a `false` result kills the forwarder + deletes the token file
+  // NOW — the CLI subprocess keeps its (dead) proxy env, so in-sandbox
+  // egress fails closed at the refused listener while the gateway-side
+  // token is already gone. A resolver ERROR must not tear down a live
+  // grant (a Supabase blip revoking egress = availability loss under a
+  // flag the owner still holds), so the catch leaves the forwarder be and
+  // mirrors. Enabling mid-session cannot retro-fit the already-spawned
+  // CLI's env — the on-flip applies to the NEXT cold dispatch, matching
+  // the toggle copy ("applies to sessions started after enabling").
+  // Only a conversation WITH a live forwarder has anything to revoke —
+  // skip the read entirely when none is registered (an unentitled cold
+  // dispatch must not pay an RPC it never needed, and a post-teardown
+  // dispatch has no grant to kill). The re-resolve keys on the workspace
+  // the forwarder was MINTED for — not the user's current active
+  // workspace — so a mid-session workspace switch can never kill or
+  // spare the wrong session's egress. `resolveWebEgressStrict` rethrows
+  // read faults: an RPC/Supabase blip must not masquerade as an
+  // off-grant and kill a legitimately-entitled session's forwarder —
+  // there is no mid-session re-spawn path, so a revoked-then-recovered
+  // grant would leave the CLI holding a dead proxy URL with WebFetch
+  // still admitted. Only a DEFINITIVE false tears down.
+  const fwdWorkspaceId = egressForwarderWorkspaceId(conversationId);
+  if (fwdWorkspaceId) {
+    void resolveWebEgressStrict(userId, fwdWorkspaceId)
+      .then((entitled) => {
+        if (!entitled) teardownEgressForwarder(conversationId);
+      })
+      .catch((err) => {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "web-egress-re-resolve",
+          extra: { userId, conversationId, workspaceId: fwdWorkspaceId },
+        });
+      });
+  }
+
   // #5340 / #5240 design item #2 — deterministic workspace re-provision on
   // reconnect. After a sandbox/host reclaim the resolved workspace path can be a
   // fresh filesystem with no repo. The factory-internal self-heal
@@ -3516,7 +4125,12 @@ export async function dispatchSoleurGo(
   // feeds both the validity probe and the clone), so a valid-`.git` warm turn
   // pays only the resolve the LEADER already pays — never the 120s clone.
   let reprovisionOutcome: ReprovisionOutcome | undefined;
-  if (runner.hasActiveQuery(conversationId)) {
+  // #9558 — the reprovision is repo-lifecycle machinery (installation resolve +
+  // ensureWorkspaceRepoCloned, which mints a GitHub installation token to
+  // clone). A support-persona turn has no workspace repo to recover, so BOTH
+  // arms are skipped — the await AND the fire-and-forget publish. A read-only
+  // docs dispatch must never mint or clone into the user's workspace.
+  if (resolveWorkspaceMode(args.persona).runRepoLifecycle && runner.hasActiveQuery(conversationId)) {
     // WARM: the factory did NOT run this turn — gate the agent start on the
     // awaited re-clone. The entire gate is self-contained (it sits BEFORE the
     // `runner.dispatch` try below) so it can NEVER reject out of dispatch.
@@ -3545,10 +4159,11 @@ export async function dispatchSoleurGo(
         extra: { userId, conversationId },
       });
     }
-  } else {
+  } else if (resolveWorkspaceMode(args.persona).runRepoLifecycle) {
     // COLD: the factory owns the await before `query()` construction. Keep the
     // fire-and-forget publish so the honest-message branch can still read the
-    // outcome without delaying the cold dispatch.
+    // outcome without delaying the cold dispatch. Support (runRepoLifecycle:
+    // false) reaches neither arm — #9558.
     void reprovisionWorkspaceOnDispatch(userId)
       .then((outcome) => {
         reprovisionOutcome = outcome;
@@ -3587,9 +4202,19 @@ export async function dispatchSoleurGo(
     ...CC_REGISTERED_PLATFORM_TOOL_NAMES,
     ...crmLeadPermissionToolNames(args.crmLead === true),
   ];
-  void resolveC4Eligible(userId)
+  // #9558 — resolveC4Eligible resolves installations and can MINT an
+  // installation token (cc-effective-installation) + probe api.github.com —
+  // repo-lifecycle machinery a support dispatch must never run.
+  void (resolveWorkspaceMode(args.persona).runRepoLifecycle
+    ? resolveC4Eligible(userId)
+    : Promise.resolve(false)
+  )
     .then((eligible) => {
-      if (eligible) registeredPlatformToolNames.push(C4_TOOL_FQN);
+      // #9539 — support dispatches never register the c4 write tool (gated in
+      // the factory), so the advertise list must not claim it either.
+      if (eligible && args.persona !== "support") {
+        registeredPlatformToolNames.push(C4_TOOL_FQN);
+      }
     })
     .catch((err) => {
       reportSilentFallback(err, {
@@ -3606,11 +4231,11 @@ export async function dispatchSoleurGo(
   // failure leaves the fail-closed `false`):
   //   (1) `debugPosture` — the ACTIVE workspace's `debug_mode` toggle is ON
   //       (`resolveDebugMode`, member-checked RPC, fail-closed false).
-  //   (2) `debugEligible` — the dispatch user is in the `dev` cohort AND the
-  //       `debug-mode` Flagsmith flag is on (`isDebugModeAvailable` hard-gates
-  //       `role !== "dev"` BEFORE the flag — fail-CLOSED on a Flagsmith outage,
-  //       P0-8). Role is read from the SAME `users.role` shape as the
-  //       c4-visualizer gate above.
+  //   (2) `debugEligible` — the `debug-mode` Flagsmith flag is on for the
+  //       dispatch user's segment (`isDebugModeAvailable`; open to all roles
+  //       during beta — the flag is the sole cohort gate / kill switch).
+  //       Role is read from the SAME `users.role` shape as the
+  //       c4-visualizer gate above so Flagsmith can still re-segment.
   // Per-dispatch resolution (not ClientSession-carried) also solves toggle
   // propagation for free: the NEXT turn re-resolves fresh (≤1-turn latency on
   // a mid-turn flip — AC6). The debug stream is a scoped exception to the
@@ -3938,6 +4563,26 @@ export async function dispatchSoleurGo(
         );
       }
 
+      // #10032 follow-up — a sandbox spawn the SDK returns to the model as a tool_result (a bwrap refusal
+      // mid-session) is not a thrown error, so the session-level `classifySandboxStartupError` never saw it
+      // and a fleet-wide sandbox outage reached Sentry as nothing. Posture-independent (before the
+      // autonomous-posture gate), per-user debounced. Data minimisation (Art. 5(1)(c)): the event carries
+      // ONLY the scrubbed, capped matched line — never the tool output, the command, or workspace paths;
+      // the Error message is the classifier's code, never the output. Scope limit: the legacy agent-runner
+      // loop has no tool-result observer; its session-level catch still classifies thrown startup exits.
+      try {
+        mirrorBashSandboxFailure(block.output, userId, conversationId);
+      } catch (err) {
+        reportSilentFallback(
+          err instanceof Error ? err.name : "bash-sandbox-mirror-error",
+          {
+            feature: "cc-dispatcher",
+            op: "bash-sandbox-mirror",
+            extra: { userId, conversationId },
+          },
+        );
+      }
+
       // feat-concierge-stream-commands — stream the Bash command's
       // (truncated, REDACTED) stdout/stderr into the cc_router bubble, then
       // close the block. Autonomous-only (D1). Both the per-chunk and the
@@ -4029,6 +4674,13 @@ export async function dispatchSoleurGo(
           conversationId,
           workspaceId: path.basename(workspacePath),
           title: "Soleur finished your request",
+          // feat-session-completion-inline — emits the inline card frame.
+          // defaultSendToClient (ws-handler's sender) specifically — NOT the
+          // per-call `sendToClient`, which is the support SSE sink on support
+          // turns (ADR-113): the card frame must reach the CC WebSocket so it
+          // ring-stamps (ADR-059) and `delivered` means "OPEN chat socket,"
+          // never "SSE enqueue succeeded."
+          emit: defaultSendToClient,
         });
       }
       // Per-turn boundary → terminal stream event for the cc_router bubble.
@@ -4093,13 +4745,16 @@ export async function dispatchSoleurGo(
         }
       }
       // Architecture-F4: `session_ended` is terminal in `ws-client.ts`
-      // (clears streams, disables input). Emitting it for RECOVERABLE
-      // runner states (cost_ceiling, runner_runaway) would break
-      // "user retries on next turn" UX. Stage 3 adds a dedicated
-      // `workflow_ended` event; until then, route terminal statuses
-      // to `session_ended` and recoverable statuses to a structured
-      // error the client can surface without tearing down the
-      // conversation.
+      // (clears streams, disables input). Recoverable runner states
+      // (cost_ceiling, runner_runaway) route to a structured error the
+      // client can surface without tearing down the conversation.
+      // feat-cc-cap-raise-resume (#9565): on the interactive-prompt
+      // path, `cost_ceiling` no longer reaches this switch at all —
+      // the runner emits an `ask_user` raise prompt and keeps the
+      // Query open instead. This branch remains the fallback when the
+      // prompt machinery is absent (non-WS contexts, registry full).
+      // Stage 3 adds a dedicated `workflow_ended` event; until then,
+      // terminal statuses → `session_ended`, recoverable → error frame.
       if (TERMINAL_WORKFLOW_END_STATUSES.has(end.status)) {
         sendToClient(userId, {
           type: "session_ended",
@@ -4224,205 +4879,195 @@ export async function dispatchSoleurGo(
         sessionId: capturedSessionId,
       });
     },
+    onStaleResume: (info) => {
+      // #9538 — mid-stream stale-resume recovery. The runner's
+      // `consumeStream` catch fired this instead of a terminal
+      // `internal_error` (which would leave `conversations.session_id`
+      // pointing at the dead session and wedge every subsequent send).
+      // The payload's `deadSessionId` (runner-side `state.sessionId` at
+      // throw time) is the authoritative discriminator — it rebinds
+      // mid-stream on an SDK session-id change, so keying on the
+      // dispatch arg would silently drop recovery in the
+      // arg-falsy/state-truthy divergence.
+      // A turn that died mid-`tool_use` gets the re-confirmation copy +
+      // reason — a proposed action the user saw must not silently re-run.
+      const isToolOrphan = info.lastBlockKind === "tool_use";
+      const retry = () => {
+        // A concurrent send that claimed `activeQueries` between the
+        // dying close and now owns the conversation — the user's newer
+        // turn supersedes; re-dispatching would clobber it.
+        if (hasActiveCcQuery(conversationId)) return;
+        void runner
+          .dispatch({
+            ...dispatchArgs,
+            sessionId: undefined,
+            // Strip the recovery listener — a repeat signature on the
+            // retried turn degrades to the normal `internal_error` path,
+            // which is what BOUNDS the recovery to one re-dispatch
+            // (state.sessionId rebinds on the first result, so the arm
+            // would otherwise be armed again for the iterator's lifetime).
+            events: { ...events, onStaleResume: undefined },
+            contextResetNotice: isToolOrphan
+              ? CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN
+              : CONTEXT_RESET_NOTICE_GENERIC,
+          })
+          .catch(async (retryErr) => {
+            // Same taxonomy as the primary dispatch catch — this is the
+            // retry's sole error boundary, so it must discriminate
+            // (key_invalid / byok_key_missing / session_revoked / benign
+            // blocks with no mirror), not collapse to a generic frame.
+            try {
+              await reportDispatchSoleurGoError(retryErr, {
+                userId,
+                conversationId,
+                sendToClient,
+                // Already cleared above — never re-clear for the retry.
+                sessionId: undefined,
+                onSessionIdPersisted,
+                mirrorOp: "stale-resume-retry",
+                revertOp: "stale-resume-retry-revert",
+              });
+            } catch (reportErr) {
+              reportSilentFallback(reportErr, {
+                feature: "cc-dispatcher",
+                op: "stale-resume-retry-report",
+                extra: { conversationId, userId },
+              });
+            }
+          });
+      };
+      // Durable recovery FIRST — a throwing `sendToClient`/cache callback
+      // must not strand the clear+retry (the listener try/catch in the
+      // runner would mirror the throw but leave `session_id` wedged).
+      // `clearCcSessionId` resolves before the retry so its persist can
+      // never lose the ordering race; on its own failure it mirrors
+      // internally and the retry still runs (persist heals the column).
+      // Bounded: a black-holed UPDATE would otherwise stall the
+      // `.then` forever — no retry, no error frame, the same wedge this
+      // path exists to break. 10s keeps ordering for sane latencies;
+      // on timeout the retry still runs (persist heals the column).
+      void Promise.race([
+        clearCcSessionId({ userId, conversationId }),
+        new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, 10_000);
+          t.unref?.();
+        }),
+      ])
+        .then(retry, retry)
+        .catch((retryErr) =>
+          reportSilentFallback(retryErr, {
+            feature: "cc-dispatcher",
+            op: "stale-resume-retry-schedule",
+            extra: { conversationId, userId },
+          }),
+        );
+      // Cosmetic tail LAST and self-contained: `onSessionIdPersisted` is
+      // caller-installed and `sendToClient` can throw on a closing socket —
+      // either escaping would hit the runner's listener-fallback and emit
+      // a lying `internal_error` over the already-armed retry.
+      try {
+        // Drop the dead turn's buffered assistant text — without this a
+        // zero-text retry would persist the partial as a `complete` row.
+        state.setText("");
+        onSessionIdPersisted?.(null);
+        // Honesty frame — the client sees the existing `context_reset`
+        // contract (reusing the prefill-guard/tool-orphan reasons), not
+        // silent amnesia or an `internal_error`.
+        sendToClient(userId, {
+          type: "context_reset",
+          reason: isToolOrphan ? "tool_use_orphan" : "prefill-guard",
+          conversationId,
+        });
+      } catch (tailErr) {
+        reportSilentFallback(tailErr, {
+          feature: "cc-dispatcher",
+          op: "stale-resume-recovery-tail",
+          extra: { conversationId, userId },
+        });
+      }
+    },
+  };
+
+  // Turn-start status flip (rail-live-status fix, PR #9270): a follow-up
+  // `chat` message on an existing `completed`/`waiting_for_user`/`failed`
+  // conversation IS new activity, but nothing upstream flipped the row back
+  // to `active` — the conversations rail rendered the stale terminal badge
+  // for the whole run. This write sits immediately before `runner.dispatch`
+  // — NOT in the earlier ownership/`last_active` write — so a setup throw
+  // above (tenant mint, workspace_id read, messages INSERT) leaves the row
+  // at its previous honest value instead of falsely `active` (a bound
+  // session keeps the slot heartbeat fresh, so `find_stuck_active_…` would
+  // never reap such a row). `expectMatch: false`: a mid-setup-deleted row is
+  // silent-success; real errors still mirror inside the wrapper.
+  await updateConversationFor(
+    userId,
+    conversationId,
+    { status: "active" },
+    {
+      feature: "cc-dispatcher",
+      op: "turn-start-active",
+      expectMatch: false,
+    },
+  );
+
+  // #9538 — hoisted so `events.onStaleResume` can re-dispatch the SAME turn
+  // with `{...dispatchArgs, sessionId: undefined, contextResetNotice}`:
+  // any field added here later rides the retry automatically instead of
+  // silently diverging between two literals. `events.onStaleResume`'s
+  // closure reads this binding — TDZ-safe: it can only fire mid-stream,
+  // after the `await runner.dispatch(dispatchArgs)` below has resolved.
+  const dispatchArgs: DispatchArgs = {
+    conversationId,
+    userId,
+    userMessage,
+    currentRouting,
+    events,
+    persistActiveWorkflow,
+    sessionId: sessionId ?? undefined,
+    routineAuthoring: args.routineAuthoring,
+    crmLead: args.crmLead,
+    // feat-wire-concierge-support-chat — forward the support persona to the
+    // runner → realSdkQueryFactory (repo-gate bypass + skill/tool scope).
+    persona: args.persona,
+    artifactPath,
+    documentKind,
+    documentContent,
+    documentExtractError,
+    documentExtractMeta,
+    // BYOK Delegations PR-A (#4232) closure-capture: bridge the
+    // lease body in realSdkQueryFactory to this dispatchSoleurGo
+    // scope so onResult can read leaseDelegationCtx and route
+    // persistTurnCost through the merged atomic RPC.
+    setDelegationContext,
+    // feat-concierge-stream-commands — bridge the streaming posture (D1)
+    // from realSdkQueryFactory's lease body to this scope so the
+    // command_stream emit gate (onToolUse/onToolResult) knows whether the
+    // workspace is autonomous.
+    setBashAutonomous,
+    // feat-cc-cap-raise-resume — persisted per-conversation cap
+    // override + its write-back sink (the ws-handler reads the column
+    // and writes raises; both land on ActiveQuery).
+    costCapOverrideUsd: args.costCapOverrideUsd,
+    persistCostCapOverride: args.persistCostCapOverride,
+    // 2026-05-06 Bug A1 fix — thread workspacePath through so the
+    // runner builds the system prompt with workspace-absolute Read
+    // instructions. Falls back to the locally-resolved value (set by
+    // the `.then` above) when the caller didn't pre-resolve it.
+    workspacePath: callerWorkspacePath ?? workspacePath,
   };
 
   try {
-    await runner.dispatch({
-      conversationId,
-      userId,
-      userMessage,
-      currentRouting,
-      events,
-      persistActiveWorkflow,
-      sessionId: sessionId ?? undefined,
-      routineAuthoring: args.routineAuthoring,
-      crmLead: args.crmLead,
-      // feat-wire-concierge-support-chat — forward the support persona to the
-      // runner → realSdkQueryFactory (repo-gate bypass + skill/tool scope).
-      persona: args.persona,
-      artifactPath,
-      documentKind,
-      documentContent,
-      documentExtractError,
-      documentExtractMeta,
-      // BYOK Delegations PR-A (#4232) closure-capture: bridge the
-      // lease body in realSdkQueryFactory to this dispatchSoleurGo
-      // scope so onResult can read leaseDelegationCtx and route
-      // persistTurnCost through the merged atomic RPC.
-      setDelegationContext,
-      // feat-concierge-stream-commands — bridge the streaming posture (D1)
-      // from realSdkQueryFactory's lease body to this scope so the
-      // command_stream emit gate (onToolUse/onToolResult) knows whether the
-      // workspace is autonomous.
-      setBashAutonomous,
-      // 2026-05-06 Bug A1 fix — thread workspacePath through so the
-      // runner builds the system prompt with workspace-absolute Read
-      // instructions. Falls back to the locally-resolved value (set by
-      // the `.then` above) when the caller didn't pre-resolve it.
-      workspacePath: callerWorkspacePath ?? workspacePath,
-    });
+    await runner.dispatch(dispatchArgs);
   } catch (err) {
-    const errorClass =
-      err instanceof KeyInvalidError
-        ? "KeyInvalidError"
-        : err instanceof Error
-          ? err.constructor.name
-          : "unknown";
-    // #5394 — a `cloning`/`error` repo block is an EXPECTED transient/benign
-    // state, NOT an incident: skip the Sentry mirror (else every cloning-window
-    // turn pages). A structured logger.info breadcrumb keeps the rate
-    // observable in Better Stack without Sentry noise (no alert on `cloning`;
-    // alert on a `code=error` spike). This is the novel pattern — Missing/
-    // KeyInvalidError ARE mirrored because they are real failures.
-    if (err instanceof RepoNotReadyError) {
-      log.info(
-        {
-          feature: "cc-dispatcher",
-          op: "repo-readiness-gate",
-          code: err.code,
-          userIdHash: hashUserId(userId),
-          conversationId,
-        },
-        "repo-readiness gate: blocked dispatch (repo not ready)",
-      );
-    } else if (err instanceof WorkspaceNotReadyError) {
-      // ADR-044 PR-1 — transient db-error or member-reset-to-empty-solo. Benign
-      // dispatch block, NOT an incident: skip the Sentry mirror (the divergence
-      // breadcrumb already fired, deduped). Info breadcrumb keeps the rate
-      // observable without paging.
-      log.info(
-        {
-          feature: "cc-dispatcher",
-          op: "workspace-not-ready-gate",
-          kind: err.state.kind,
-          userIdHash: hashUserId(userId),
-          conversationId,
-        },
-        "workspace-not-ready gate: blocked dispatch (workspace not ready)",
-      );
-    } else {
-      mirrorWithDebounce(
-        err,
-        {
-          feature: "cc-dispatcher",
-          op: "dispatch",
-          extra: { conversationId, userId },
-        },
-        userId,
-        `dispatch:${errorClass}`,
-      );
-    }
-    // R10 — KeyInvalidError surfaces with errorCode so the client can
-    // prompt for a fresh BYOK key. Mirrors the KeyInvalidError →
-    // errorCode: "key_invalid" branch in agent-runner.ts
-    // handleSessionError. All other failures fall back to the generic
-    // router-unavailable message without an errorCode.
-    if (
-      err instanceof RuntimeAuthError &&
-      err.cause === "denied_jti"
-    ) {
-      // #4440 follow-up to #4418 — JWT-deny propagation. A persistUserMessage
-      // mint or any other tenant-RPC inside the dispatch surfaced
-      // `RuntimeAuthError("denied_jti")` before the runner emitted its
-      // own WorkflowEnd. Synthesize a `session_revoked` WS frame so
-      // agents/API consumers observing this turn receive the same
-      // terminal discriminator the runner-level catch would have emitted
-      // for a mid-stream throw.
-      //
-      // Routes through `tryEmitRevocationNotice` (server/revocation-emit.ts)
-      // so the lookup+sanitize logic stays shared with agent-runner and
-      // soleur-go-runner. Helper returns the looked-up status if a caller
-      // needs the raw fields; this site only needs the emit side effect.
-      await tryEmitRevocationNotice(userId, (frame) =>
-        sendToClient(userId, frame),
-      );
-      // Pair with the terminal session_ended frame so the client
-      // reducer clears streamState (`clear_streams` in ws-client.ts).
-      // Disambiguator `conversationId` lets multi-tab clients route
-      // this to the correct tab; matches the pre-existing
-      // session_ended emit-site shape elsewhere in this dispatcher.
-      sendToClient(userId, {
-        type: "session_ended",
-        reason: "session_revoked",
-        conversationId,
-      });
-    } else if (err instanceof MissingByokKeyError) {
-      // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
-      // key. Info-level breadcrumb captures workspace context;
-      // `byok_key_missing` errorCode tells the client to render the
-      // configure-banner linking to /dashboard/settings/byok rather
-      // than the key-invalid prompt.
-      reportMissingByokKey(err);
-      sendToClient(userId, {
-        type: "error",
-        message:
-          "Configure your BYOK key to run agents in this workspace.",
-        errorCode: "byok_key_missing",
-      });
-    } else if (err instanceof KeyInvalidError) {
-      sendToClient(userId, {
-        type: "error",
-        message: "Your API key is invalid — set up a fresh key to continue.",
-        errorCode: "key_invalid",
-      });
-    } else if (err instanceof RepoNotReadyError) {
-      // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
-      // user-facing message (and `repo_setup_failed` errorCode on the error
-      // branch, so the client can render the reconnect CTA). MUST sit ABOVE the
-      // generic `else` so it does NOT hit the `session_id`-clearing path below —
-      // a transient cloning/error block must not nuke a resumable session.
-      sendToClient(userId, {
-        type: "error",
-        message: err.message,
-        ...(err.errorCode ? { errorCode: err.errorCode } : {}),
-      });
-    } else if (err instanceof WorkspaceNotReadyError) {
-      // ADR-044 PR-1 (FR2) — db-error → transient copy, NO errorCode (no CTA: a
-      // transient fault must not tell the user to take a structural action).
-      // no-repo-switch → `workspace_switch_required` + `switchToWorkspaceId` so
-      // the client renders the workspace-switcher affordance (carrying the
-      // discarded claim id). MUST sit ABOVE the generic `else` so a benign block
-      // does not nuke a resumable session.
-      sendToClient(userId, {
-        type: "error",
-        message: err.message,
-        ...(err.state.kind === "no-repo-switch"
-          ? {
-              errorCode: "workspace_switch_required" as const,
-              switchToWorkspaceId: err.state.targetTeamId,
-            }
-          : {}),
-      });
-    } else {
-      // #3266 R7 — stale-resume cleanup. The dispatch was attempted with
-      // a persisted session_id but the runner rejected for a reason
-      // other than KeyInvalidError. Plan §R7 documents this trade-off:
-      // the predicate is broad ("any non-KeyInvalidError"), which means
-      // a transient backend error (network blip, BYOK fetch failure,
-      // workspace patch failure) will also clear a legitimate session_id
-      // and force a cold-start on the next turn. Acceptable cost: the
-      // SDK rebuilds from the persisted `messages` rows on next dispatch
-      // and the prefill guard's history-probe handles assistant-
-      // terminated threads — at most one turn of degraded latency.
-      // Narrowing to typed SDK error classes is tracked separately and
-      // is out of scope for the activation PR. Fire-and-forget; the
-      // user-facing generic-error message lands either way. Update the
-      // in-process cache alongside the DB write so the next chat-case
-      // warm-cache turn does not forward the now-stale value.
-      if (sessionId) {
-        onSessionIdPersisted?.(null);
-        void clearCcSessionId({ userId, conversationId });
-      }
-      sendToClient(userId, {
-        type: "error",
-        message: "Dashboard router is unavailable — try again shortly.",
-      });
-    }
-    // Belt-and-suspenders: drain ccBashGates here too. The runner's
-    // onCloseQuery hook covers normal close paths, but a dispatch-time
-    // throw before the runner takes ownership of the Query may leave
-    // stranded entries (e.g. concurrent register from a prior turn).
-    cleanupCcBashGatesForConversation(userId, conversationId);
+    await reportDispatchSoleurGoError(err, {
+      userId,
+      conversationId,
+      sendToClient,
+      sessionId,
+      onSessionIdPersisted,
+      mirrorOp: "dispatch",
+      revertOp: "turn-start-revert",
+    });
   }
 }
 
@@ -4447,6 +5092,22 @@ export function handleInteractivePromptResponseCase(args: {
     payload,
     deliverToolResult: ({ conversationId, toolUseId, content }) => {
       runner.respondToToolUse({ conversationId, toolUseId, content });
+    },
+    // feat-cc-cap-raise-resume (#9565) — sentinel `cost-cap:` records
+    // route to the runner's raise/decline path (no SDK tool_use exists).
+    // A false return = stale option / unknown conversation; the record
+    // was already consumed, so tell the user honestly rather than
+    // silently succeeding.
+    deliverCostCapResponse: ({ conversationId, response }) => {
+      const ok = runner.applyCostCapRaise({ conversationId, response });
+      if (!ok) {
+        sendToClient(userId, {
+          type: "error",
+          message:
+            "That cap option is no longer valid — send a message to re-check the current cap.",
+          errorCode: "interactive_prompt_rejected",
+        });
+      }
     },
   });
 
@@ -4490,6 +5151,24 @@ export function handleInteractivePromptResponseCase(args: {
  * without booting the real factory + SDK subprocess. Pairs with
  * `__resetDispatcherForTests` (clears between tests).
  */
+/** Test seam — register a fake held lease so `handleCcCloseQuery`'s
+ *  replicate-and-(skip-)release branch is observable without booting
+ *  the real `acquireAndHoldWorktreeLease` path. Mirrors
+ *  `__setCcRunnerForTests`'s double-underscore convention. */
+export function __registerCcWorktreeLeaseForTests(
+  userId: string,
+  conversationId: string,
+  handle: WorktreeLeaseHandle,
+): void {
+  registerCcWorktreeLease(
+    userId,
+    conversationId,
+    handle,
+    "/tmp/fake-workspace",
+    "ws-fake",
+  );
+}
+
 export function __setCcRunnerForTests(stub: SoleurGoRunner): void {
   _runner = stub;
   // Mark sendToClient sentinel so getSoleurGoRunner's identity check
@@ -4510,6 +5189,9 @@ export function __resetDispatcherForTests(): void {
   _runnerSendToClient = null;
   _ccBashGates.clear();
   _ccAutonomousAckPosture.clear();
+  // Held worktree-lease records registered via the
+  // `__registerCcWorktreeLeaseForTests` seam must not leak across tests.
+  _ccWorktreeLeases.clear();
   __resetMirrorDebounceForTests();
   // The bash batched-approval cache lives in a sibling module
   // (`permission-callback-bash-batch.ts`) and is keyed by

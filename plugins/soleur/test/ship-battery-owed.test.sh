@@ -203,7 +203,7 @@ run_gate_out() {
 assert_reason() {
   local work="$1" stub="$2" needle="$3" label="$4" out
   out="$(run_gate_out "$work" "$stub")"
-  if printf '%s' "$out" | grep -qF "$needle"; then
+  if printf '%s' "$out" | grep -cF >/dev/null "$needle"; then
     assert_eq "ok" "ok" "$label"
   else
     assert_eq "$out" "reason containing: $needle" "$label"
@@ -314,6 +314,9 @@ assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
 # recorded since #6050. An earlier revision of this comment said all 26 were
 # 15368, and every fixture in this file used 15368 or null, so replacing the
 # gate's `$r.integration_id` with the literal 15368 left the suite fully GREEN.
+# (Historical measurement. Since #9454 — merge queue adopted, CodeQL advisory — the live
+# set is uniformly 15368; the `CodeQL`/57789 rows below are a SYNTHETIC stand-in for any
+# context bound to a different app, which a CodeQL re-tighten would make real again.)
 # =============================================================================
 FOREIGN_APP='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":99999}}]'
 make_stub "$STUB" "$PINNED_REQUIRED" "$FOREIGN_APP" "$(head_sha_of "$WORK")"
@@ -592,7 +595,7 @@ fi
 
 while IFS= read -r _p; do
   [[ -z "$_p" ]] && continue
-  if printf '%s\n' "$GATE_RE_LINE" | grep -qF "$_p"; then
+  if printf '%s\n' "$GATE_RE_LINE" | grep -cF >/dev/null "$_p"; then
     assert_eq "ok" "ok" "T11 gate matches test-all.sh infra prefix '$_p'"
   else
     assert_eq "MISSING" "ok" "T11 gate does NOT match test-all.sh infra prefix '$_p' — predicate drift"
@@ -717,7 +720,7 @@ else
 fi
 while IFS= read -r _shard; do
   [[ -z "$_shard" ]] && continue
-  if printf '%s\n' "$AGG_LIST" | grep -qx "$_shard"; then
+  if printf '%s\n' "$AGG_LIST" | grep -cx >/dev/null "$_shard"; then
     assert_eq "ok" "ok" "T13 ci.yml's test aggregator still covers '$_shard'"
   else
     assert_eq "MISSING" "ok" "T13 the gate skips on behalf of '$_shard' but ci.yml no longer aggregates it — premise drift"
@@ -756,8 +759,8 @@ fi
 
 # /ship --full runs the FULL battery unconditionally — before battery-owed.sh
 # is even consulted, so a SKIPPABLE verdict cannot demote an explicit ask.
-if printf '%s\n' "$DISPATCH" | grep -q 'test-all\.sh --full' \
-   && ! printf '%s\n' "$DISPATCH" | grep -q 'battery-owed\.sh.*--full'; then
+if printf '%s\n' "$DISPATCH" | grep -c >/dev/null 'test-all\.sh --full' \
+   && ! printf '%s\n' "$DISPATCH" | grep -c >/dev/null 'battery-owed\.sh.*--full'; then
   assert_eq "ok" "ok" "T16b the FULL_BATTERY arm runs test-all.sh --full unconditionally"
 else
   assert_eq "MISSING" "ok" "T16b the FULL_BATTERY arm does not run --full — operator opt-in demoted"
@@ -766,8 +769,8 @@ fi
 # The OWED arm runs the AFFECTED gate. Extract the else-branch: the lines
 # between the battery-owed verdict check and the closing fi.
 OWED_ARM="$(printf '%s\n' "$DISPATCH" | awk '/battery-owed\.sh/{f=1} f{print}')"
-if printf '%s\n' "$OWED_ARM" | grep -q 'test-all\.sh --affected' \
-   && ! printf '%s\n' "$OWED_ARM" | grep -q 'test-all\.sh --full'; then
+if printf '%s\n' "$OWED_ARM" | grep -c >/dev/null 'test-all\.sh --affected' \
+   && ! printf '%s\n' "$OWED_ARM" | grep -c >/dev/null 'test-all\.sh --full'; then
   assert_eq "ok" "ok" "T16c the OWED arm runs --affected, never --full"
 else
   assert_eq "MISSING" "ok" "T16c the OWED arm does not run --affected — default gate demoted"
@@ -775,13 +778,66 @@ fi
 
 # 42 is still the ONLY skip. The dispatch must keep `rc -eq 42` as the skip
 # branch and run on every other status.
-if printf '%s\n' "$DISPATCH" | grep -q 'rc" -eq 42\|rc -eq 42'; then
+if printf '%s\n' "$DISPATCH" | grep -c >/dev/null 'rc" -eq 42\|rc -eq 42'; then
   assert_eq "ok" "ok" "T16d rc=42 remains the only skip branch — not-42 still runs"
 else
   assert_eq "MISSING" "ok" "T16d the 42-only-skip branch vanished — every failure would now run OR skip wrongly"
 fi
 
+# =============================================================================
+# T17 — ADR-276 S3 (#9728): a draft-era red `test` on a READY head.
+#
+# With CI_DRAFT_LIGHT on, a draft's `test` concludes red BY DESIGN ("draft: full battery owed at ready"). Option R is what
+# keeps this gate correct without a code change: the newest `test` row per name must be completed+success, so a draft's red
+# row is NOT-GREEN and the gate returns OWED. These rows PIN that (no edit to battery-owed.sh) and are each paired with a
+# mutation of a COPY of the gate that must turn them RED, so the rows are shown able to fail:
+#   T17a  draft red test, the ready run never started          -> OWED
+#   T17b  draft red test, then the ready run's row CANCELLED    -> OWED
+#   T17c  draft red test, then a ready-run row still running    -> OWED
+#   T17d  control: draft red test, then the ready run's row GREEN -> SKIPPABLE (newest wins; the pin is not reject-everything)
+# =============================================================================
+DRAFT_RED='{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}'
+READY_CANCELLED='{"name":"test","status":"completed","conclusion":"cancelled","started_at":"2026-01-01T01:00:00Z","app":{"id":15368}}'
+READY_RUNNING='{"name":"test","status":"in_progress","conclusion":null,"started_at":"2026-01-01T01:00:00Z","app":{"id":15368}}'
+READY_GREEN='{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T01:00:00Z","app":{"id":15368}}'
+new_fixture_root R17
+W17="$(build_fixture "$R17")"
+S17="$R17/stub"
+t17() { # <label> <expected-rc> <checks-json>
+  make_stub "$S17" "$PINNED_REQUIRED" "$3" "$(head_sha_of "$W17")"
+  assert_eq "$2" "$(run_gate "$W17" "$S17")" "$1"
+}
+t17 "T17a draft-era red test, ready run never started -> OWED" "$OWED" "[$DRAFT_RED]"
+t17 "T17b draft-era red test then a CANCELLED ready row -> OWED" "$OWED" "[$DRAFT_RED,$READY_CANCELLED]"
+t17 "T17c draft-era red test then a ready row still running -> OWED" "$OWED" "[$DRAFT_RED,$READY_RUNNING]"
+t17 "T17d draft-era red test then a GREEN ready row -> SKIPPABLE (newest row wins)" "$SKIPPABLE" "[$DRAFT_RED,$READY_GREEN]"
+# Mutants of a COPY (the real gate is never touched): each lets a draft-era row read as verified, so the matching row must go RED.
+mut17() { # <id> <python-old> <python-new> <row-label> <expected-rc-of-the-real-gate> <checks-json>
+  local m="$R17/mut-$1.sh" got
+  cp "$GATE" "$m"
+  # <7>/<8> (optional) is a SECOND edit: T17c is guarded twice (the in-flight refusal AND the final success test), so one site
+  # alone cannot redden it.
+  if ! OLD="$2" NEW="$3" OLD2="${7:-}" NEW2="${8:-}" python3 -c '
+import os, sys
+p = sys.argv[1]; s = open(p).read()
+for o, n in ((os.environ["OLD"], os.environ["NEW"]), (os.environ["OLD2"], os.environ["NEW2"])):
+    if not o: continue
+    if s.count(o) != 1: sys.exit(1)
+    s = s.replace(o, n)
+open(p, "w").write(s)' "$m"; then
+    assert_eq "landed" "mutation did not land" "T17 $1 mutation lands exactly once"; return 0
+  fi
+  make_stub "$S17" "$PINNED_REQUIRED" "$6" "$(head_sha_of "$W17")"
+  local saved="$GATE"; GATE="$m"; got="$(run_gate "$W17" "$S17")"; GATE="$saved"
+  if [[ "$got" != "$5" ]]; then assert_eq "red" "red" "T17 $1: $4 goes RED against the mutant (rc $got, the real gate gives $5)"
+  else assert_eq "red" "still-green:$got" "T17 $1: $4 goes RED against the mutant"; fi
+}
+mut17 M17a 'if .conclusion == "success" then "ok" else "NOT-GREEN" end' 'if .conclusion != null then "ok" else "NOT-GREEN" end' "T17a (draft red test)" "$OWED" "[$DRAFT_RED]"
+mut17 M17b 'if .conclusion == "success" then "ok" else "NOT-GREEN" end' 'if (.conclusion == "success" or .conclusion == "cancelled") then "ok" else "NOT-GREEN" end' "T17b (cancelled ready row)" "$OWED" "[$DRAFT_RED,$READY_CANCELLED]"
+mut17 M17c 'elif ($rows | any(.status != "completed")) then "NOT-GREEN"' 'elif false then "NOT-GREEN"' "T17c (ready row still running)" "$OWED" "[$DRAFT_RED,$READY_RUNNING]" \
+  'if .conclusion == "success" then "ok" else "NOT-GREEN" end' 'if .conclusion != "failure" then "ok" else "NOT-GREEN" end'
+
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 55
+print_results 63

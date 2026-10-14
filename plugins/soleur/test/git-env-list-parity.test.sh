@@ -134,11 +134,14 @@ ENTRY_POINTS=(
   "$REPO_ROOT/scripts/test-all.sh"
   "$REPO_ROOT/scripts/hooks/pre-push"
   "$REPO_ROOT/.github/scripts/test/run-all.sh"
+  # #9400 — the pre-push ratchet lane spawns member suites and needs its own
+  # scrub rather than inheriting the hook's (lefthook reaches it directly too).
+  "$REPO_ROOT/scripts/pre-push-ratchet-lane.sh"
 )
 # Floor the COUNT, not just each member. Every assertion below is inside the loop, so deleting an
 # entry point removes its assertions silently and the suite still reports a clean run -- the
 # cardinality is invisible to a per-member check by construction.
-MIN_ENTRY_POINTS=4
+MIN_ENTRY_POINTS=5
 if (( ${#ENTRY_POINTS[@]} >= MIN_ENTRY_POINTS )); then
   ok "entry-point set carries ${#ENTRY_POINTS[@]} members (floor $MIN_ENTRY_POINTS)"
 else

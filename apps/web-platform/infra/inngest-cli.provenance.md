@@ -2,9 +2,9 @@
 
 Analysis of record for the `inngest_cli_version` / `inngest_cli_sha256` /
 `inngest_cli_sha256_arm64` pins in `inngest.tf`. Read by
-`inngest-cli-staleness.test.sh` (CI gate, per-PR) and — **once PR-B lands** — by the
+`inngest-cli-staleness.test.sh` (CI gate, per-PR) and by the
 `Detect inngest CLI pin drift` poll step in `.github/workflows/rule-audit.yml`
-(detection, 1st + 15th; that step does NOT exist yet in this tree). Mirrors the shape
+(detection, 1st + 15th). Mirrors the shape
 of `zot-image.provenance.md` so the sidecars share one parseable format.
 
 **inngest-server is the entire background-job substrate.** A wrong pin here does not
@@ -58,12 +58,13 @@ backup instead of booting v1.19.4 against the new schema.
 
 ## Drift threshold (the poll's trip point — recorded here so the two cannot diverge)
 
-The `rule-audit.yml` poll (**lands in PR-B — absent until then**) files the
+The `rule-audit.yml` poll (`Detect inngest CLI pin drift`, PR-B of #7463) files the
 `inngest-pin-drift` issue when the pinned version is **`>= 5` stable releases behind
 `releases/latest` OR the pinned release's upstream date is `>= 45` days old**.
 inngest ships ~weekly, so an any-delta rule would mint a permanently-open ticket
-within days of every bump. PR-B's implementation MUST read these thresholds from this
-section (or assert parity against them) — they are the record of record. The offline
+within days of every bump. The poll's implementation asserts parity with these
+thresholds (`rule-audit-inngest-pin-workflow-guard.test.sh`) — they are the record
+of record. The offline
 `MAX_AGE_DAYS=60` in `inngest-cli-staleness.test.sh` (and `inngest-cli-pin-probe.sh`)
 is the backstop for the poll's OWN failure — the two mechanisms are different
 failures, not redundancy.
@@ -80,7 +81,7 @@ evidence in `phase0-respike-evidence.md`. These are **measurements**, not infere
 | `--postgres-conn-max-lifetime` unit (not passed; recorded) | **MINUTES** (`devserver.go:203`) |
 | `--postgres-max-open-conns` durable-backend sentinel | **HOLDS**; v1.45.1 adds `>1` and `idle<=open` validation — repo's `5`/`2` pass |
 | `signkey-prod-` strip required | **HOLDS** — prefixed key rejected `must be hex string`, bare hex boots |
-| `inngest pause` drain verb | **ABSENT on BOTH endpoints** — pre-existing dead call (`inngest-bootstrap.sh` `|| warn` path); follow-up issue, not an upgrade regression |
+| `inngest pause` drain verb | **ABSENT on BOTH endpoints** — was a pre-existing dead call (`inngest-bootstrap.sh` `\|\| warn` path), not an upgrade regression; the calls were removed (#9219) and the in-place path is a settle delay with no drain |
 | Route-once fan-out (multi `--sdk-url`, same app id) | **HOLDS** — 4/4 events on last-writer URL, 0 on sibling |
 | `runs(filter: RunsFilterV2!)` + `startedAt`/`queuedAt` | **HOLDS** |
 | `scheduled_tick` absent; `eventName` null | **HOLDS** |
@@ -175,7 +176,7 @@ the staleness gate's failure message points at. Do all of it, in order:
    auto-authored cloud-init pin PR. The LIVE flip is **`inngest-host-replace` only**
    (`deploy inngest` posts to the web host, where the inngest arm is quiesced and
    refuses — the dedicated host has no in-place deploy path; replace is destroy+
-   recreate, minutes of scheduler-dark, and the sleep-drain in inngest-bootstrap.sh
+   recreate, minutes of scheduler-dark, and the settle delay in inngest-bootstrap.sh
    does NOT run on that path): merge the auto-PR, enumerate+sign off the FULL pending
    `user_data` delta in the drift run (the replace applies every accumulated diff,
    not just the pin), take a pre-flip Postgres backup, verify the shared-Postgres
@@ -183,7 +184,7 @@ the staleness gate's failure message points at. Do all of it, in order:
    upstream runs goose migrations on `start` and the delta can contain destructive
    cleanup migrations. Note the gate's own tier: `deploy-script-tests` is an advisory
    signal, not a merge-blocking ruleset context — enforcement of last resort is the
-   poll's rc→issue path (PR-B) plus the bootstrap's fail-closed sha256 verify.
+   poll's rc→issue path plus the bootstrap's fail-closed sha256 verify.
 
 Agent entry point:
 

@@ -58,8 +58,9 @@ readonly LOG_TAG="ci-deploy"
 # runs both. Three of the four values here are interpolated from var.sentry_dsn, whose regex
 # capture classes admit `$`, `(`, `)` and backtick.
 #
-# The loop below assigns only the four keys it recognises and never evaluates the value, so a
-# hostile or malformed line is inert data rather than code. This removes the class; the
+# The loop below assigns only the five keys it recognises (four exported; GITHUB_APP_DOPPLER_TOKEN
+# never, see #8609 below) and never evaluates the value, so a hostile or malformed line is inert
+# data rather than code. This removes the class; the
 # defence-in-depth layers (the terraform plan validation on var.doppler_token and var.sentry_dsn,
 # and the installer's shape rejection) remain, but nothing here depends on them being complete.
 #
@@ -78,11 +79,23 @@ readonly LOG_TAG="ci-deploy"
 # drifted, or webhook.service's ProtectSystem view differs from the delivering context). Those
 # route to different fixes, so collapsing them into one "no credential" value would discard the
 # discriminator at exactly the moment it is needed.
+#
+# #8609 (plan §3.1): GITHUB_APP_DOPPLER_TOKEN, the read token for the isolated soleur-github-app
+# project, is read here too but is NEVER exported — the container and every child process must not
+# see it; only overlay_github_app_key hands it to one `doppler` call. Reset and un-exported first,
+# so an inherited value can neither be used nor leak. The three GITHUB_APP_KEY_* state fields are
+# reset here too: write_state splices them into the state JSON, so an inherited value must never
+# reach it (write_state also enum-checks them).
+GITHUB_APP_DOPPLER_TOKEN=""
+export -n GITHUB_APP_DOPPLER_TOKEN
+GITHUB_APP_KEY_SOURCE=""
+GITHUB_APP_KEY_FETCH=""
+GITHUB_APP_KEY_PROBE=""
 CRED_FILE_STATE=present
 if [ -r /etc/default/soleur-doppler-token ]; then
   while IFS='=' read -r _cred_k _cred_v; do
     case "$_cred_k" in
-      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY)
+      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY|GITHUB_APP_DOPPLER_TOKEN)
         # Skip an empty value rather than blanking a working one. `EnvironmentFile=-` tolerates
         # ABSENT and UNREADABLE but NOT empty-valued, and the installer's shape check accepts a
         # bare `KEY=` (measured), so this is the layer that actually holds that line.
@@ -102,7 +115,7 @@ else
   CRED_FILE_STATE=absent
 fi
 
-# Sentry destination pin (#7873 Rule D drawdown). The eight Sentry POSTs below forward
+# Sentry destination pin (#7873 Rule D drawdown). Every Sentry POST below forwards
 # SENTRY_PUBLIC_KEY to "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/", and both
 # halves are env-settable. A value outside the shape Sentry issues (measured against Doppler prd,
 # 2026-09-15) is dropped, which disables the best-effort Sentry arm (every site is guarded on
@@ -137,18 +150,32 @@ fi
 # image, which is the artifact under verification) with `--offline` so no live
 # Fulcio/Rekor/TUF egress is needed. (`--offline` is deprecated-but-frozen under the
 # pinned cosign SHA — SOLEUR-DEBT below ties migration to the next SHA bump.)
-# Identity is pinned to the reusable release workflow on main/release-tags ONLY — an
-# intra-repo branch/tag signature must NOT verify (a loose `refs/(heads|tags)/.+`
-# would accept attacker-branch RCE).
+# Identity is pinned to the reusable release workflow on main ONLY — an intra-repo branch/tag
+# signature must NOT verify (a loose `refs/(heads|tags)/.+` would accept attacker-branch RCE).
+# #8609 (CTO ruling (b)): rc 0 from this verify is what hands the GitHub App key to an image, so
+# the SAN alone is not enough — it names the REUSABLE workflow's ref, which a branch run satisfies
+# by calling `reusable-release.yml@main`, and the former `refs/tags/v[0-9].+` arm admitted any
+# `v*` tag a branch can push. COSIGN_WORKFLOW_REF / COSIGN_WORKFLOW_REPOSITORY add the verifier-side
+# pin on the CALLER's run: Fulcio's GitHub Workflow Ref (OID 1.3.6.1.4.1.57264.1.6) and Repository
+# (…1.5) extensions, compared exactly by cosign v3.1.1 (`--certificate-github-workflow-ref`,
+# `--certificate-github-workflow-repository`; pkg/cosign/verify.go validateCertExtensions). One
+# verify serves both the deploy and the key decision. Accepted consequence: an image signed only
+# from a tag ref now reads as unverified (rc 3 in WARN: it runs, with NO App key; ENFORCE aborts).
 # SOURCE (#8714 step 5.3b-iii): gcr.io/projectsigstore is the Sigstore project's own registry and
 # serves the SAME manifest digest as the former ghcr.io/sigstore/cosign/cosign ref — same image ID,
 # same bytes (measured 2026-09-28: an anonymous pull under COSIGN_ANON_CONFIG runs v3.1.1 and both
 # refs resolve to one local image). The move retires this host's last ghcr.io pull; the digest pin,
 # not the registry, is the trust anchor. A pull failure from gcr.io classifies as cosign_absent below.
 readonly COSIGN_IMAGE="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
-readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@(refs/heads/main|refs/tags/v[0-9].+)$'
+readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@refs/heads/main$'
+readonly COSIGN_WORKFLOW_REF="refs/heads/main"
+readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/soleur"
 readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
-readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enforce (soak-gated fast-follow)
+IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-enforce}" # enforce (default since #6129, after the #6122 zot soak) | warn (override only)
+# #6129: fail CLOSED on anything but the two known values. The consumers test `== "enforce"`, so a
+# typo such as `ENFORCE` or `enfrce` would otherwise run in warn mode without a word.
+case "$IMAGE_VERIFY_MODE" in enforce|warn) ;; *) IMAGE_VERIFY_MODE=enforce ;; esac
+readonly IMAGE_VERIFY_MODE
 # SOLEUR-DEBT(#6005): cosign `--offline` is deprecated (removed in cosign v4). It is
 # inert under the pinned SHA (v3.1.1). Upgrade trigger: the next COSIGN_IMAGE SHA
 # bump — migrate to the `--bundle`+`--trusted-root` new-bundle-format path (verify
@@ -329,7 +356,12 @@ fan_out_to_peers() {
 
   local payload sig
   payload=$(jq -cn --arg cmd "${SSH_ORIGINAL_COMMAND:-}" '{command:$cmd}')
-  sig=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$secret" | sed 's/.*= //')
+  # The key rides the python3 child's ENVIRONMENT only (owner-only /proc/<pid>/environ), never argv.
+  sig=$(printf '%s' "$payload" | HMAC_KEY="$secret" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || sig=""
+  if [[ ! "$sig" =~ ^[0-9a-f]{64}$ ]]; then
+    logger -t "$LOG_TAG" "FANOUT: could not compute the request signature (python3 unavailable or the signer failed) — not forwarding an unsigned request"
+    return 1
+  fi
 
   local rc=0 peer code _peer_arr
   IFS=',' read -ra _peer_arr <<< "$peers_csv"
@@ -337,11 +369,15 @@ fan_out_to_peers() {
     peer="${peer//[[:space:]]/}"
     [[ -n "$peer" ]] || continue
     [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+    # The HMAC SIGNATURE header goes in on curl's stdin config channel, never its argv
+    # (/proc/<pid>/cmdline and `ps` are readable by every local user; lint Rule E, #9597).
+    # The shared secret is likewise environment-only (see the signer above).
+    code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=${sig}" \
-      --data-binary "$payload" 2>/dev/null || echo "000")
+      --config - \
+      --data-binary "$payload" \
+      < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") 2>/dev/null || echo "000")
     if [[ "$code" == "202" ]]; then
       logger -t "$LOG_TAG" "FANOUT: peer $peer accepted deploy (HTTP $code)"
     else
@@ -387,8 +423,62 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 # durability tier as CRON_DEPLOY_LEASE_FILE. Reader default MUST match
 # cat-deploy-state.sh sandbox_canary_json().
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
+# #5863 arm F: the outer-wrap canary gets its OWN durable soak state — same
+# cross-deploy accumulator shape as the inner canary but a separate ledger so
+# the two arms' soak windows never alias. Report-only at first deploy
+# (wg-dark-launch-deploy-gates); the #5863 follow-through script reads this
+# file via /hooks/deploy-status's outer_wrap_canary field.
+SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
+# Aliasing guard: an env override pointing the outer ledger at the inner file
+# would let the #5863 soak read the #8752 arm's state (wrong mechanism's
+# greens counting toward promotion). Warn AND skip the outer arm entirely —
+# interleaved writes under one file is worse than a missing arm.
+OUTER_LEDGER_ALIAS=0
+if [[ "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
+  OUTER_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "SANDBOX_OUTER_WRAP_CANARY_STATE_FILE == SANDBOX_CANARY_STATE_FILE ($SANDBOX_OUTER_WRAP_CANARY_STATE_FILE) — outer canary SKIPPED: aliasing would let the inner ledger's greens count toward the #5863 soak; fix the env override"
+fi
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
+# Cross-workspace isolation probe verdict (#2640). Written per deploy by
+# write_workspace_isolation_state, surfaced on /hooks/deploy-status by
+# cat-deploy-state.sh (workspace_isolation_json). DURABLE on purpose, same
+# /mnt/data rationale as SANDBOX_CANARY_STATE_FILE directly above: this file
+# alone carries the probe's CROSS-DEPLOY soak accumulator (consecutive_pass +
+# first_pass_at) — a tmpfs wipe would silently reset the promotion soak. Reader
+# default MUST match cat-deploy-state.sh workspace_isolation_json().
+WORKSPACE_ISOLATION_STATE_FILE="${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}"
+# Host-side cap on the probe's `docker exec` (report-only NFR: the probe adds
+# <= ~5 min worst-case to a deploy; the observed direct-tier runtime is seconds
+# to low tens). rc 124 is its own verdict class (workspace_isolation_timeout) —
+# a wedged suite is a RED verdict, not an infra hiccup. Env-overridable pure
+# timing knob (the CRON_DRAIN_TIMEOUT convention), NOT a secret.
+WORKSPACE_ISOLATION_TIMEOUT="${WORKSPACE_ISOLATION_TIMEOUT:-300}"
+# 0/non-numeric would DISABLE the cap (timeout(1) treats 0 as unbounded) —
+# that is the opposite of the knob's contract; fail-safe back to the default.
+[[ "$WORKSPACE_ISOLATION_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || WORKSPACE_ISOLATION_TIMEOUT=300
+# Same aliasing failure class as OUTER_LEDGER_ALIAS above: an env override
+# pointing the #2640 ledger at either canary ledger would interleave verdict
+# vocabularies (sandbox_broken vs workspace_isolation_*) and corrupt both
+# soaks. Warn AND skip the probe entirely — a missing arm beats a wrong file.
+WORKSPACE_ISOLATION_LEDGER_ALIAS=0
+if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" \
+   || "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" ]]; then
+  WORKSPACE_ISOLATION_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_STATE_FILE aliases a canary ledger ($WORKSPACE_ISOLATION_STATE_FILE) — workspace-isolation probe SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
+fi
+# #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
+# /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
+# check and ci-deploy.test.sh Guard 7 (7.w) pin the same path; a drift reads as `probe_absent`.
+GITHUB_APP_KEY_PROBE_MJS="${GITHUB_APP_KEY_PROBE_MJS:-/app/scripts/github-app-key-probe.mjs}"
+# #8609 (c): the last image digest this host verified under the main-pinned cosign identity
+# (verify_image_signature rc 0). The fresh-boot overlay (soleur-host-bootstrap.sh
+# github_app_key_boot_finish) hands the App key to the Terraform-pinned image only when its digest
+# equals this record. On the durable, deploy-owned /mnt/data volume (the SANDBOX_CANARY_STATE_FILE
+# precedent below), written 0600: webhook.service runs ci-deploy as `deploy` under
+# ProtectSystem=strict, so a root-owned /var/lib path is not writable here, and a tmpfs one would
+# never survive to the only boot that reads it (a replaced host re-attaches this volume).
+GITHUB_APP_KEY_VERIFIED_REF_FILE="${GITHUB_APP_KEY_VERIFIED_REF_FILE:-/mnt/data/github-app-key-verified-ref}"
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The host seccomp profile
 # is delivered by terraform_data.docker_seccomp_config; the RUNNING container only
 # loads it at `docker run` (--security-opt seccomp=…). To let apply-deploy-pipeline-fix.yml
@@ -415,6 +505,15 @@ START_TS=$(date +%s)
 COMPONENT=""
 IMAGE=""
 TAG=""
+# #8609: the probe's closed `rejected` sub-reason (github-app-key-probe.mjs REJECT_REASONS, plus
+# no_verdict when the exec produced no verdict line, unspecified for a bare `rejected` line). Reset like the three fields at the top.
+GITHUB_APP_KEY_PROBE_REASON=""
+
+# _gak_enum <value> <a|b|…>: <value> when it is one of the alternatives, else `invalid`. write_state
+# splices these fields into JSON unescaped, so only a closed-enum value may reach it.
+_gak_enum() {
+  if [[ -n "$1" && "|$2|" == *"|$1|"* ]]; then printf '%s' "$1"; else printf 'invalid'; fi
+}
 
 # write_state always returns 0 so a failure inside state-writing (e.g. disk-full)
 # never converts an explicit failure reason into an "unhandled" trap on re-entry.
@@ -428,10 +527,22 @@ write_state() {
     logger -t "$LOG_TAG" "write_state: mktemp failed for STATE_FILE=$STATE_FILE"
     return 0
   }
+  # #8609: the GitHub App key fields ride only a deploy that reached the overlay (an ABSENT key =
+  # never ran, the cat-deploy-state convention). Each is checked against its closed enum here, so
+  # an unexpected value is written as `invalid`, never spliced into the JSON.
+  local gak=""
+  if [[ -n "${GITHUB_APP_KEY_FETCH:-}" ]]; then
+    gak=",\"github_app_key_source\":\"$(_gak_enum "${GITHUB_APP_KEY_SOURCE:-}" 'prd|isolated')\""
+    gak+=",\"github_app_key_fetch\":\"$(_gak_enum "$GITHUB_APP_KEY_FETCH" 'no_token|env_hijack|unverified_image|failed|merge_failed|ok')\""
+    gak+=",\"github_app_key_probe\":\"$(_gak_enum "${GITHUB_APP_KEY_PROBE:-}" 'not_run|missing|ok|rejected|transport|absent')\""
+    if [[ -n "${GITHUB_APP_KEY_PROBE_REASON:-}" ]]; then
+      gak+=",\"github_app_key_probe_reason\":\"$(_gak_enum "$GITHUB_APP_KEY_PROBE_REASON" 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other|unspecified|no_verdict')\""
+    fi
+  fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -576,17 +687,35 @@ write_cron_drain_state() {
 #                       first green (self-pins the soak window strictly after this
 #                       deploy — no operator timestamp to hand-pin).
 #   - `sandbox_broken`→ reset both to 0 (a faithful FAIL restarts the soak).
+#     (reset set is actually $5 reset_re — `sandbox_broken` is just the
+#     default for the faithful/outer-wrap callers; the #2640 probe passes its
+#     own RED classes.)
 #   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
 #                       dark-launch `fixture_uncaptured` state is a non-signal).
+# $6 ledger: an identity stamp naming WHICH mechanism's ledger this write
+# belongs to (the Sentry-op vocabulary: sandbox-canary / sandbox-canary-
+# outer-wrap / workspace-isolation). The readers in cat-deploy-state.sh refuse
+# a file whose stamp is present-but-foreign — closing the env-alias blind spot
+# where an override points a canary ledger AT another ledger's path and foreign
+# `pass` verdicts would otherwise inflate the wrong soak.
 write_sandbox_canary_state() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}" tmp now prior_pass prior_first
+  # $5 reset_re: an ERE alternation naming this ledger's RED verdict classes
+  # (soak-reset). Internal literal from the call sites, never operator input.
+  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" reset_re="${5:-sandbox_broken}" ledger="${6:-sandbox-canary}" tmp now prior_pass prior_first
   now="$(date +%s)"
   prior_pass=0; prior_first=0
-  if [[ -f "$SANDBOX_CANARY_STATE_FILE" ]]; then
-    prior_pass="$(jq -r '.consecutive_pass // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
-    prior_first="$(jq -r '.first_pass_at // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
-    [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
-    [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
+  if [[ -f "$state_file" ]]; then
+    # Foreign-ledger guard: a file carrying another mechanism's `ledger` stamp
+    # (an env-alias misconfig interleaving vocabularies) contributes NO prior
+    # counters — the soak restarts rather than inheriting foreign greens.
+    local prior_ledger
+    prior_ledger="$(jq -r '.ledger // ""' "$state_file" 2>/dev/null || echo "")"
+    if [[ -z "$prior_ledger" || "$prior_ledger" == "$ledger" ]]; then
+      prior_pass="$(jq -r '.consecutive_pass // 0' "$state_file" 2>/dev/null || echo 0)"
+      prior_first="$(jq -r '.first_pass_at // 0' "$state_file" 2>/dev/null || echo 0)"
+      [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
+      [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
+    fi
   fi
   local consecutive_pass first_pass_at
   case "$verdict" in
@@ -594,18 +723,20 @@ write_sandbox_canary_state() {
       consecutive_pass=$((prior_pass + 1))
       if [[ "$prior_first" -gt 0 ]]; then first_pass_at="$prior_first"; else first_pass_at="$now"; fi
       ;;
-    sandbox_broken)
-      consecutive_pass=0; first_pass_at=0 ;;
     *)
-      consecutive_pass="$prior_pass"; first_pass_at="$prior_first" ;;
+      if [[ "$verdict" =~ ^($reset_re)$ ]]; then
+        consecutive_pass=0; first_pass_at=0
+      else
+        consecutive_pass="$prior_pass"; first_pass_at="$prior_first"
+      fi ;;
   esac
-  tmp="$(mktemp "${SANDBOX_CANARY_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
+  tmp="$(mktemp "${state_file}.XXXXXX" 2>/dev/null)" || return 0
   jq -nc \
-    --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --argjson ts "$now" \
+    --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg l "$ledger" --argjson ts "$now" \
     --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
-    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp}' \
+    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp, ledger:$l}' \
     > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
-  mv "$tmp" "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv "$tmp" "$state_file" 2>/dev/null || { rm -f "$tmp"; return 0; }
   return 0
 }
 
@@ -613,14 +744,14 @@ write_sandbox_canary_state() {
 # signal #5873 lacked (hr-no-ssh-fallback-in-runbooks: never journald-only). Best-
 # effort + env-guarded, mirrors report_cron_drain_timeout. Fail-open under set -e.
 sandbox_canary_sentry_event() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}"
-  logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (faithful canary; legacy probe gated the deploy)"
+  local verdict="$1" reason="$2" sdk_version="${3:-}" op="${4:-sandbox-canary}"
+  logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (op=$op; report-only canary, never gated)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" \
-      '{message: ("faithful sandbox canary " + $v + " (" + $r + ") — SDK " + $s),
+    payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg o "$op" \
+      '{message: (($o | sub("^sandbox-canary"; "sandbox canary"; "i")) + " " + $v + " (" + $r + ")" + (if ($s | length) > 0 then " — SDK " + $s else "" end) + " — report-only canary; deploy NOT rolled back"),
         level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: $v},
+        tags: {feature: "agent-sandbox", op: $o, verdict: $v},
         extra: {reason: $r, sdk_version: $s}}' 2>/dev/null)" || return 0
     curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
@@ -629,6 +760,31 @@ sandbox_canary_sentry_event() {
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "SANDBOX_CANARY: Sentry POST failed"
   fi
+}
+
+# write_workspace_isolation_state: persist the workspace-isolation probe verdict
+# for the no-SSH deploy-status surface (#2640) — a thin wrapper over
+# write_sandbox_canary_state (#5875 / ADR-079), which is already parameterized
+# by state file. Deltas: no sdk_version (a vitest run carries none) and a
+# different reset set — `workspace_isolation_failed`/`workspace_isolation_timeout`
+# are this probe's RED classes (its `sandbox_broken` equivalent). Always
+# returns 0: NON-BLOCKING dark-launch (wg-dark-launch-deploy-gates), so a
+# state-write failure must never abort a deploy.
+write_workspace_isolation_state() {
+  write_sandbox_canary_state "$1" "$2" "" "$WORKSPACE_ISOLATION_STATE_FILE" \
+    'workspace_isolation_failed|workspace_isolation_timeout' 'workspace-isolation'
+}
+
+# workspace_isolation_sentry_event: loud, no-SSH page on a RED isolation verdict
+# (#2640) — fires ONLY on workspace_isolation_failed / workspace_isolation_timeout,
+# NEVER on canary_infra_error (expected while pre-tooling canary images still
+# deploy) or pass. Emits its own WORKSPACE_ISOLATION_FAIL marker (the runbook
+# keys on it) and delegates the payload to sandbox_canary_sentry_event with
+# op=workspace-isolation. Best-effort + env-guarded. Fail-open under set -e.
+workspace_isolation_sentry_event() {
+  local verdict="$1" reason="$2"
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_FAIL: verdict=$verdict reason=$reason (report-only canary probe; deploy NOT rolled back)" || true
+  sandbox_canary_sentry_event "$verdict" "$reason" "" "workspace-isolation" || true
 }
 
 # cosign_verify_event: loud, no-SSH page on an image-signature verify failure
@@ -761,7 +917,7 @@ verify_image_freshness() {
 # stderr CONTENT passed as $1, never a file path: the caller must pass
 # `tail -c 400 "$perr"`, not "$perr", or the match silently no-ops (security/P2-E).
 _pull_result_is_auth_denied() {
-  printf '%s' "${1:-}" | grep -qiE 'unauthorized|authentication required|denied|forbidden'
+  printf '%s' "${1:-}" | grep -ciE 'unauthorized|authentication required|denied|forbidden' >/dev/null
 }
 
 # _pull_result_is_transient <stderr-content>: the SINGLE source of truth for "is this docker
@@ -780,7 +936,7 @@ _pull_result_is_auth_denied() {
 # registry-5xx unexpected-status shape, the net/http client cancel-while-waiting shape, and the
 # DNS-resolver misbehaving shape.
 _pull_result_is_transient() {
-  printf '%s' "${1:-}" | grep -qiE 'context deadline exceeded|timeout|timed out|temporary failure|no route|connection refused|connection reset|network is unreachable|no such host|server misbehaving|request canceled while waiting|received unexpected http status: 5|\bEOF\b'
+  printf '%s' "${1:-}" | grep -ciE 'context deadline exceeded|timeout|timed out|temporary failure|no route|connection refused|connection reset|network is unreachable|no such host|server misbehaving|request canceled while waiting|received unexpected http status: 5|\bEOF\b' >/dev/null
 }
 
 # pull_failure_event: loud, no-SSH page on an authenticated PRIVATE-pull denial
@@ -797,7 +953,7 @@ _pull_result_is_transient() {
 pull_failure_event() {
   local ref="$1" detail_raw="${2:-}" recovery_stage="${3:-}" pull_result
   if   _pull_result_is_auth_denied "$detail_raw"; then pull_result="auth_denied"
-  elif printf '%s' "$detail_raw" | grep -qiE 'manifest unknown|not found|no such manifest'; then pull_result="manifest_unknown"
+  elif printf '%s' "$detail_raw" | grep -ciE 'manifest unknown|not found|no such manifest' >/dev/null; then pull_result="manifest_unknown"
   elif _pull_result_is_transient "$detail_raw"; then pull_result="network"   # #6525: shared predicate (was a narrower inline regex); precedence stays auth → manifest → transient. Tag value `network` UNCHANGED (Sentry grouping / zot_mirror_fallback_rate key on it). Widens the `network` set vs pre-#6525 — see the recovery gate + reclassification-safety check.
   else pull_result="pull_failed"
   fi
@@ -1240,8 +1396,10 @@ _docker_login_capture() {
 # send the operator hunting an authz bug that does not exist.
 #
 # --- Per-registry measured behaviour ---------------------------------------------------------
-# zot v2.1.20 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
-# MEASURED 2026-08-05 by running the pinned image locally against this config (#7282):
+# zot, with this repo's exact accessControl. The version, the date and the re-measurement status of
+# the claim below live in zot-image.provenance.md, '## Version-scoped claim register' (row 1), not
+# here: this file feeds triggers_replace, so a version or date in it would make every zot bump edit it.
+# The measurement (#9252) was made by running the pinned image locally against this config:
 #   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
 #   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
 #   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:
@@ -1249,7 +1407,10 @@ _docker_login_capture() {
 #        defensive tripwire there — a 403 must never be silently read as an authn failure.
 #     2. A BROKEN zot accessControl is NOT observable here at all: login SUCCEEDS, ZOT_ACTIVE=1,
 #        and the failure surfaces later at pull time. The login probe is the wrong layer for it;
-#        `zot-entry-gate.sh` is where zot's real 403 lives.
+#        `web-zot-consumer-probe.sh` is the layer meant to see it: a 403 on its `tags/list` read
+#        with the pull credential lands in its unexpected-code arm (`SUPPRESS ping`). Only the
+#        manifest-read 403 is measured (zot-image.provenance.md, claim register row 1); the
+#        `tags/list` 403 is not.
 # ghcr.io: UNMEASURED. Do NOT inherit zot's finding — GHCR can and does answer 403 (SAML/SSO
 #   enforcement, org package policy, IP allow-lists), so for GHCR `authz_denied` is a LIVE arm,
 #   not a tripwire, and consequence 2 above has no GHCR meaning. This paragraph says `unmeasured`
@@ -1298,17 +1459,17 @@ _docker_login_capture() {
 # `_login_kw`, where being wrong is free.
 _docker_login_failure_class() {
   local e="${1:-}"
-  if printf '%s' "$e" | grep -qiE '\b401\b|unauthorized|authentication required|incorrect username or password'; then
+  if printf '%s' "$e" | grep -ciE '\b401\b|unauthorized|authentication required|incorrect username or password' >/dev/null; then
     printf 'authn_rejected'
-  elif printf '%s' "$e" | grep -qiE '\b403\b'; then
+  elif printf '%s' "$e" | grep -ciE '\b403\b' >/dev/null; then
     printf 'authz_denied'
-  elif printf '%s' "$e" | grep -qiE 'server gave HTTP response to HTTPS client|x509:|tls: failed to verify'; then
+  elif printf '%s' "$e" | grep -ciE 'server gave HTTP response to HTTPS client|x509:|tls: failed to verify' >/dev/null; then
     printf 'tls_mismatch'
-  elif printf '%s' "$e" | grep -qiE 'error saving credentials|error storing credentials|error getting credentials'; then
+  elif printf '%s' "$e" | grep -ciE 'error saving credentials|error storing credentials|error getting credentials' >/dev/null; then
     printf 'cred_store'
-  elif printf '%s' "$e" | grep -qiE '\b5[0-9]{2}\b'; then
+  elif printf '%s' "$e" | grep -ciE '\b5[0-9]{2}\b' >/dev/null; then
     printf 'server_error'
-  elif printf '%s' "$e" | grep -qiE 'connection refused|no route to host|network is unreachable|connection reset|broken pipe|: EOF|no such host|temporary failure in name resolution|context deadline exceeded|i/o timeout|timed out|timeout|permission denied'; then
+  elif printf '%s' "$e" | grep -ciE 'connection refused|no route to host|network is unreachable|connection reset|broken pipe|: EOF|no such host|temporary failure in name resolution|context deadline exceeded|i/o timeout|timed out|timeout|permission denied' >/dev/null; then
     printf 'transport'
   else
     printf 'unclassified'
@@ -1463,6 +1624,212 @@ _cred_err_tail() {
   if (( ${#_e} > 200 )); then _e="${_e:$(( ${#_e} - 200 ))}"; fi
   printf '%s' "$_e"
 }
+
+# CANARY_DIAG_BEGIN
+# Canary sandbox self-diagnosis (#9871 / #9860). Two production deploy failures (a file-capped bwrap
+# refusing with "Unexpected capabilities", then execve EPERM once the bounding grant was removed) were
+# diagnosed from a 200-character stderr tail and cost hours, because nothing recorded the container's
+# capability sets, the binary's file caps, its provenance or the posture it ran under. When the blocking
+# probe fails -- or the faithful canary reports sandbox_broken -- this runs ONE bounded read-only bundle
+# inside the still-running canary and emits it as SOLEUR_CANARY_SANDBOX_DIAG journald lines, which ship
+# to Better Stack with the rest of the ci-deploy tag.
+#
+# Contract: it can never change the deploy's verdict. Callers invoke it only as `... || true`; it touches
+# no global, never BWRAP_RC/BWRAP_ERR/CANARY_HEALTHY or the state file; the exec is bounded by
+# CANARY_DIAG_TIMEOUT (+3 s kill-after) and its output by `head -c`, every host-side docker call by
+# `timeout 3` and each host kernel-log read by `timeout -k 1 3` (_canary_kdeny_read; census D10g);
+# and every value passes through _cred_err_tail (shape + env-value redaction, 200-char tail) before
+# it reaches a sink. It prints derived facts only -- no environment dump: the only
+# printenv calls name BUILD_SHA / BUILD_VERSION. Run as the image USER, the same uid and caps the
+# failing probe had. The two call sites are mutually exclusive in one run (a legacy failure exits
+# before the faithful canary runs), so there is no once-per-deploy latch. Rows are short on purpose:
+# _cred_err_tail keeps the LAST 200 characters, so a long value loses its identifying head. The
+# host-side posture is therefore split (`host` = caps + AppArmor, `hostsec` = SecurityOpt entries
+# cut to 40 chars -- docker inlines the whole ~12 KB seccomp profile there) and the bundle ends with
+# a `done` row carrying the exec's own exit status, so "ran and found nothing" is distinguishable
+# from "timed out" (124) or "never ran". Section meanings: runbook canary-probe-set.md, "Canary
+# sandbox DIAG bundle".
+# Default 30: the in-container script runs five `timeout 5` probes (25 s worst case), so a 25 s cap left no margin for the last row.
+CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-30}"
+[[ "$CANARY_DIAG_TIMEOUT" =~ ^[1-9][0-9]?$ ]] && (( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=30
+CANARY_DIAG_SCRIPT='p() { printf "%s %s\n" "$1" "$2"; }
+k() { cat "$1" 2>/dev/null || echo n/a; }
+p id "uid=$(id -u) gid=$(id -g)"
+p proc "$(sed -n "s/^\(Cap[A-Za-z]*\|NoNewPrivs\|Seccomp\):[[:space:]]*/\1=/p" /proc/$$/status | tr "\n" " ")"
+p lsm "$(cat /proc/self/attr/current 2>&1 | cut -c1-100)"
+p files "bwrap=$(stat -c "%a/%U/%s" /usr/bin/bwrap 2>&1) shim=$(stat -c "%a/%U/%s" /usr/local/bin/bwrap 2>&1) which=$(command -v bwrap) real=$(readlink -f /usr/bin/bwrap)"
+if command -v getcap >/dev/null 2>&1; then
+  c=$(timeout 5 getcap /usr/bin/bwrap /usr/local/bin/bwrap 2>&1 | tr "\n" " ")
+  p caps "bwrap=${c:-none}"
+else
+  p caps "getcap=absent"
+fi
+p prov "sha=$(printenv BUILD_SHA) ver=$(printenv BUILD_VERSION)"
+v=$(timeout 5 /usr/bin/bwrap --version 2>&1); r=$?
+p direct_version "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-100)"
+v=$(timeout 5 /usr/bin/bwrap --new-session --dev /dev --unshare-pid --bind / / -- true 2>&1); r=$?
+p direct_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --proc /proc --dev /dev --bind / / -- true 2>&1); r=$?
+p sdk_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --dev /dev --bind / / -- true 2>&1); r=$?
+p sdk_noproc "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+p kernel_ns "restrict=$(k /proc/sys/kernel/apparmor_restrict_unprivileged_userns) clone=$(k /proc/sys/kernel/unprivileged_userns_clone) max=$(k /proc/sys/user/max_user_namespaces)"'
+
+# _canary_diag_emit <trigger> <section> <raw>: the ONLY emitter. Scrubs first, then writes one line with
+# the free text LAST and quote-bounded (ADR-115 trusted region: consumers anchor on val="[^"]*"$). The
+# `||` printf keeps the record on the webhook leg if journald is unavailable.
+_canary_diag_emit() {
+  local val
+  val="$(_cred_err_tail "${3:-}")" || val="<sanitize_failed>"
+  logger -t "$LOG_TAG" "SOLEUR_CANARY_SANDBOX_DIAG: image=$IMAGE:$TAG trigger=$1 section=$2 val=\"${val:-<empty>}\"" \
+    || printf '%s\n' "SOLEUR_CANARY_SANDBOX_DIAG: image=$IMAGE:$TAG trigger=$1 section=$2 val=\"${val:-<empty>}\""
+  return 0
+}
+
+# _canary_kdeny_read: one bounded, scrubbed read of the HOST kernel stream, printed as ONE status line.
+#   src=<journal|dmesg|none> j=<state> d=<skip|state> total=<n> hits=<n> mproc=<n> [fields]
+# Why it exists: the first real bundle (#9860) narrowed the failure to `sdk_probe` ("Can't mount proc ...
+# Operation not permitted") and ruled out the image, file caps, exec and the legacy probe. What is left is
+# a kernel-side refusal, and the only host-side witness would be an AppArmor/audit line. "Could not read the
+# stream" and "read it, nothing there" are DIFFERENT facts and only the second is evidence, so each rung
+# reports its own state: ok (at least one real line and rc 0, or an anchored denial: readable text, NOT proof that audit records
+# reach this stream) | empty (rc 0, no hint, no lines: what journalctl prints on systemd 261 for a user outside
+# adm/systemd-journal) | noaccess (journalctl's or dmesg's own hint line and no real lines) | absent (127) |
+# timeout (124/137) | error (any other rc, unless an anchored denial was read before the non-zero exit: that
+# line is a real record, error text cannot match the anchor).
+# The ladder is journal, then dmesg only when the journal is not ok.
+# The journal rung tries the #10045 fixed-argv grant first (KDENY_KERNEL_STREAM: `sudo -n
+# /usr/bin/journalctl` with the argv pinned below — kernel scope, bounded window, every granted
+# read journal-audited via sudo's COMMAND= record). A grant-less host (rollout window, stale
+# birth) is detected by sudo's OWN denial signature — non-zero rc with every non-blank captured
+# line `sudo:`-prefixed — and falls back to the unprivileged read, so `noaccess`/`empty` stays
+# the EXPECTED outcome there (kernel.dmesg_restrict=1 is the host baseline), never a new class.
+# Counts: a hit is an AUDIT RECORD (the line starts, after dmesg's optional `[ts] `, with `audit: type=1400|1326
+# audit(<ts>:<n>): `) that carries apparmor="DENIED" or is the seccomp type 1326. Anchoring matters: printk
+# lines that merely echo tenant-chosen text (a segfault line naming a mapped file) must not be able to carry the
+# markers. Type 1400 alone is not enough (it also carries complain-mode ALLOWED/AUDIT records); `mproc` = the
+# hits that are a procfs MOUNT denial (operation="mount" AND fstype="proc"). A bare profile name or comm="bwrap"
+# is NOT a hit test: the production container shares the soleur-bwrap profile, so a hit is HOST-wide, and the
+# dmesg rung is not time-bound. `fields` come from a CLOSED key allowlist with no name/comm/pid key and are cut
+# from anchored records only, with `fstype` limited to a short token (mount(2) lets a tenant pick that string).
+# This is the sanctioned exception to git-data-bootstrap.sh's "never raw kernel lines" rule: values of a fixed key
+# set, not lines. Both reads take the NEWEST lines first (tac), so the 64 KiB cap drops the oldest, never the
+# denial that happened seconds ago. No /var/log, no follow flag: every read is `timeout -k 1 3`; the only
+# sudo use is the pinned KDENY_KERNEL_STREAM argv above (`timeout` stays outside sudo).
+# SOLEUR-DEBT: diagnostic row added for the #9860 sandbox failure (cause named H6; the shim-side fix is
+# #10032). The least-privilege kernel-stream read grant (#10045) ships with this change and lands
+# on-host via the delivery bridges' next apply, so the disposition fork resolves to keep: the row is
+# functional evidence while #9860 soaks; demote or remove once #9860's closure makes the row moot.
+_canary_kdeny_read() {
+  local rung raw rc state src=none j=none d=skip total=0 hits=0 mproc=0 fields="" counts first line t h m hint
+  for rung in journal dmesg; do
+    rc=0
+    if [[ "$rung" == journal ]]; then
+      raw="$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+      # Sudo's OWN denial signature — the #10045 grant has not landed on this host: non-zero
+      # rc, at least one RECOGNIZED denial phrase (so a bare `sudo:` warning like
+      # `sudo: unable to resolve host` on an accepted-but-failed run cannot masquerade as a
+      # denial), and NO non-blank line outside the denial class. The class is BOTH fleet
+      # shapes: sudo-rs' `sudo:`-prefixed denial (the recorded `sudo: deploy : command not
+      # allowed`) and GNU sudo's `Sorry, user deploy is not allowed to execute …` (unprefixed —
+      # the shape infra-config-apply.sh:742's matcher already enumerates). Only that exact
+      # shape falls back to the pre-grant unprivileged read; a run sudo ACCEPTED classifies
+      # through the machine below (journalctl-under-root failure is a real error, never a
+      # grant-absence).
+      if (( rc != 0 )) \
+        && grep -qE '^(sudo:|Sorry,)' <<<"$raw" \
+        && grep -qE 'Sorry,|command not allowed|password is required|not allowed to execute|may not run|is not in the sudoers file' <<<"$raw" \
+        && ! grep -qvE '^(sudo:|Sorry,|[[:space:]]*$)' <<<"$raw"; then
+        rc=0
+        raw="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+      fi
+      # sudo's own diagnostics (`sudo: unable to resolve host`, `sudo:`-prefixed warnings on
+      # an ACCEPTED run) merged into `raw` via 2>&1: strip them before classification so a
+      # warning line cannot count as a journal line (`empty` misread as `ok`). A kernel line
+      # cannot carry the `sudo:` prefix. (Denials are not affected — this strip runs after
+      # the signature check, and the denial arm reassigns raw wholesale anyway.)
+      raw="$(printf '%s\n' "$raw" | grep -v '^sudo:' || true)"
+    else
+      raw="$(timeout -k 1 3 dmesg 2>&1 | tail -n 400 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+    fi
+    counts="$(printf '%s\n' "$raw" | awk '
+      /^Hint: You are currently not seeing messages/ || /^No journal files were opened due to insufficient permissions/ || /^dmesg: read kernel buffer failed:/ || /^Failed to .*(Permission denied|Operation not permitted)/ { hint++; next }
+      /^[[:space:]]+(Users in groups .* can see all messages\.|Pass -q to turn off this notice\.)$/ { next }
+      /^-- / || /^[[:space:]]*$/ { next }
+      { total++
+        if ($0 ~ /^(\[[ 0-9.]+\] )?audit: type=(1400|1326) audit\([0-9.]+:[0-9]+\): / && ($0 ~ /apparmor="DENIED"/ || $0 ~ /^(\[[ 0-9.]+\] )?audit: type=1326 audit\(/)) {
+          hits++
+          if ($0 ~ /operation="mount"/ && $0 ~ /fstype="proc"/) { mproc++; if (mline == "") mline = $0 }
+          else if (hline == "") hline = $0
+        }
+      }
+      END { printf "%d %d %d %d\n%s\n", total + 0, hits + 0, mproc + 0, hint + 0, (mline != "" ? mline : hline) }')" || counts=""
+    first="${counts%%$'\n'*}"; line=""
+    if [[ "$counts" == *$'\n'* ]]; then line="${counts#*$'\n'}"; fi
+    IFS=' ' read -r t h m hint <<< "$first" || true
+    [[ "${t:-}" =~ ^[0-9]+$ ]] || t=0
+    [[ "${h:-}" =~ ^[0-9]+$ ]] || h=0
+    [[ "${m:-}" =~ ^[0-9]+$ ]] || m=0
+    [[ "${hint:-}" =~ ^[0-9]+$ ]] || hint=0
+    if (( t > 9999 )); then t=9999; fi
+    if (( h > 9999 )); then h=9999; fi
+    if (( m > 9999 )); then m=9999; fi
+    state=ok
+    if (( rc == 127 )); then state=absent
+    elif (( rc == 124 || rc == 137 )); then state=timeout
+    elif (( t == 0 )); then
+      if (( hint > 0 )); then state=noaccess
+      elif (( rc == 0 )); then state=empty
+      else state=error
+      fi
+    elif (( rc != 0 && h == 0 )); then state=error
+    fi
+    if [[ "$rung" == journal ]]; then j="$state"; else d="$state"; fi
+    if [[ "$state" == ok ]]; then
+      if [[ "$rung" == journal ]]; then src=journal; else src=dmesg; fi
+      total=$t; hits=$h; mproc=$m
+      if [[ -n "$line" ]]; then
+        fields="$(printf '%s\n' "$line" | awk '
+          BEGIN { q = "\""; n = split("operation profile fstype error info requested_mask denied_mask syscall", K, " ") }
+          { for (i = 1; i <= n; i++) {
+              k = K[i]
+              if (match($0, "(^| )" k "=" q "[^" q "]*" q) || match($0, "(^| )" k "=[^ ]+")) {
+                v = substr($0, RSTART, RLENGTH); sub(/^ /, "", v)
+                if (k == "fstype" && v !~ /^fstype=([A-Za-z0-9_.-]+|"[A-Za-z0-9_.-]+")$/) continue
+                out = out v " "
+              } } }
+          END { printf "%s", out }')" || fields=""
+        fields="${fields% }"; fields="${fields:0:130}"
+      fi
+      break
+    fi
+  done
+  printf 'src=%s j=%s d=%s total=%s hits=%s mproc=%s%s' "$src" "$j" "$d" "$total" "$hits" "$mproc" "${fields:+ $fields}"
+  return 0
+}
+
+# emit_canary_sandbox_diag <legacy|faithful>: always returns 0. In-container section names are an
+# allowlist -- anything else the exec prints (a daemon error, a forged first word) is `raw`, so only
+# this function can mint host/hostsec/kernel/kdeny/done.
+emit_canary_sandbox_diag() {
+  local trigger="${1:-legacy}" out line sec rest n=0 capped=0 exec_rc=0
+  out="$(timeout -k 3 "$CANARY_DIAG_TIMEOUT" docker exec soleur-web-platform-canary /bin/sh -c "$CANARY_DIAG_SCRIPT" soleur-canary-diag 2>&1 | head -c 8192; exit "${PIPESTATUS[0]}")" || exec_rc=$?
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    if (( n >= 16 )); then capped=1; break; fi
+    n=$(( n + 1 ))
+    sec="${line%% *}"; rest="${line#* }"
+    if ! [[ "$sec" =~ ^(id|proc|lsm|files|caps|prov|direct_version|direct_probe|sdk_probe|sdk_noproc|kernel_ns)$ && "$line" == *" "* ]]; then sec="raw"; rest="$line"; fi
+    _canary_diag_emit "$trigger" "$sec" "$rest"
+  done <<< "$out"
+  _canary_diag_emit "$trigger" host "$(timeout 3 docker inspect -f 'capadd={{.HostConfig.CapAdd}} capdrop={{.HostConfig.CapDrop}} priv={{.HostConfig.Privileged}} aa={{.AppArmorProfile}}' soleur-web-platform-canary 2>&1 | head -c 400)"
+  _canary_diag_emit "$trigger" hostsec "$(timeout 3 docker inspect -f '{{range .HostConfig.SecurityOpt}}{{printf "%.40s" .}} {{end}}' soleur-web-platform-canary 2>&1 | head -c 400)"
+  _canary_diag_emit "$trigger" kernel "kernel=$(uname -r 2>&1) docker=$(timeout 3 docker version --format '{{.Server.Version}}' 2>&1 | head -c 60)"
+  _canary_diag_emit "$trigger" kdeny "$(_canary_kdeny_read)"
+  _canary_diag_emit "$trigger" "done" "exec_rc=$exec_rc lines=$n capped=$capped bytes=${#out}"
+  return 0
+}
+# CANARY_DIAG_END
 
 # _now_ms: milliseconds since the epoch, from bash's own EPOCHREALTIME.
 #
@@ -2337,10 +2704,12 @@ _cosign_anon_cleanup() {
 # identity-pinned) via the SHA-pinned cosign container. Echoes on stdout the ref
 # the caller should RUN: the verified digest on success (TOCTOU-safe), or the
 # original tag as a fail-open fallback in WARN mode. Emits a discriminating
-# Sentry event on every failure. Return: 0 in WARN mode always (never blocks);
-# in ENFORCE mode, 1 on any verify failure so the caller keeps the OLD container
-# live (downtime-safe). The mode branch is the ONLY behavioural difference — the
-# telemetry fires identically in both.
+# Sentry event on every failure. Return (#8609):
+#   0 = verified: stdout is the verified digest ref (the ONLY rc that may hand the GitHub App key);
+#   3 = WARN fail-open: stdout is runnable but NOT verified — run it, never hand it the key;
+#   1 = ENFORCE failure: the caller keeps the OLD container live (downtime-safe).
+# Never `if ! verify_image_signature …` or `… || true`: both collapse 3 into 0 or 1. The mode branch
+# is the ONLY behavioural difference — the telemetry fires identically in both.
 verify_image_signature() {
   local image_tag="$1" repo_digest err
   err="$(mktemp 2>/dev/null || echo /tmp/cosign-verify.err)"
@@ -2357,20 +2726,20 @@ verify_image_signature() {
     printf '%s' "$image_tag" # fail-open: run the tag (WARN); ENFORCE aborts below
     rm -f "$err" 2>/dev/null || true
     [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
-    return 0
+    return 3 # WARN fail-open: runnable but NOT verified (#8609 — no GitHub App key for it)
   fi
-  # Verify via the pinned cosign container (ADR-087 Design B′). The app image is a
-  # PRIVATE GHCR package (#6005): `--network host` routes the OCI-attached .sig fetch
-  # through the host's unrestricted egress (no ghcr.io in the container allowlist),
-  # and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
+  # Verify via the pinned cosign container (ADR-087 Design B′). Since #8036 1c the image
+  # and its OCI-attached .sig are served by zot on the private net (no host-side GHCR
+  # pull remains): `--network host` routes the .sig fetch through the host network, so
+  # the verifier also resolves names through the host's /etc/hosts (where #9169 denies
+  # ghcr.io), and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
   # zot_gate_and_login) is mounted :ro so cosign can authenticate that fetch.
   # Trust is the locally-pinned trusted_root.json (mounted :ro) with `--offline`, so
   # no live Fulcio/Rekor/TUF egress is needed. `docker pull` of the image does NOT
-  # pull the .sig referrer, so the fetch (host egress) is still required.
+  # pull the .sig referrer, so the .sig fetch from zot is still required.
   # Edge B (#6122): a zot-pulled digest lives on plain-HTTP zot on the private net, so
-  # the .sig referrer fetch needs --allow-insecure-registry. When the pull fell back to
-  # GHCR the digest is a ghcr.io ref and the flag stays off — image+auth+sig move
-  # together. The zot auths entry was written into $GHCR_DOCKER_CONFIG by
+  # the .sig referrer fetch needs --allow-insecure-registry (off for any digest not on zot).
+  # The zot auths entry was written into $GHCR_DOCKER_CONFIG by
   # zot_gate_and_login, so the mounted :ro config authenticates the fetch — PROVIDED cosign
   # reads it. #8037: the pinned image runs as uid 65532 (home /home/nonroot) and sets neither
   # HOME nor DOCKER_CONFIG, so the original `/root/.docker/config.json` mount was never read and
@@ -2437,16 +2806,33 @@ verify_image_signature() {
   # host, and the classifier below reads stderr, so an unrelated verify failure on a first pull
   # would read as `cosign_absent`. Real pull errors still print. `200>&-` closes the FD-200 deploy
   # lock for this child (#5062): its implicit pull can hang like any other.
-  if "${verify_env[@]}" docker run --rm --network host --quiet \
-       --user "$cosign_user" -e "DOCKER_CONFIG=$cosign_cfg_dir" \
-       -v "$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro" \
-       -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
-       "$COSIGN_IMAGE" verify --offline \
-       ${zot_insecure:+--allow-insecure-registry} \
-       --trusted-root=/etc/cosign/trusted_root.json \
-       --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
-       --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
-       "$repo_digest" >/dev/null 2>"$err" 200>&-; then
+  # #6129: under ENFORCE a verify failure fails the release, and `docker image prune -af` removes the
+  # verifier image before every deploy, so each verify re-pulls $COSIGN_IMAGE from gcr.io. A
+  # daemon-side pull failure (the transient network/rate-limit class the cosign_absent classifier
+  # below matches) gets ONE retry. A cosign-side failure (unsigned, wrong identity, bad signature)
+  # is never retried.
+  local _v_attempt _v_ok=0
+  for _v_attempt in 1 2; do
+    if "${verify_env[@]}" docker run --rm --network host --quiet \
+         --user "$cosign_user" -e "DOCKER_CONFIG=$cosign_cfg_dir" \
+         -v "$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro" \
+         -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
+         "$COSIGN_IMAGE" verify --offline \
+         ${zot_insecure:+--allow-insecure-registry} \
+         --trusted-root=/etc/cosign/trusted_root.json \
+         --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
+         --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
+         --certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF" \
+         --certificate-github-workflow-repository="$COSIGN_WORKFLOW_REPOSITORY" \
+         "$repo_digest" >/dev/null 2>"$err" 200>&-; then
+      _v_ok=1; break
+    fi
+    [[ "$_v_attempt" == "1" ]] || break
+    grep -qiE '^docker: Error response from daemon: .*(toomanyrequests|received unexpected HTTP status: 5[0-9][0-9]|no such host|dial tcp|i/o timeout|connection reset by peer|TLS handshake timeout|Client\.Timeout|context deadline exceeded)' "$err" 2>/dev/null || break
+    logger -t "$LOG_TAG" "IMAGE_VERIFY_RETRY: verifier image pull failed; retrying once (#6129)"
+    sleep 5
+  done
+  if [[ "$_v_ok" == "1" ]]; then
     logger -t "$LOG_TAG" "IMAGE_VERIFY: ok ref=$repo_digest"
     printf '%s' "$repo_digest" # run the VERIFIED digest (TOCTOU-safe)
     rm -f "$err" 2>/dev/null || true
@@ -2457,10 +2843,10 @@ verify_image_signature() {
   # best-effort string match on cosign stderr; never load-bearing).
   local result="verify_failed" tail
   tail="$(tail -c 400 "$err" 2>/dev/null || true)"
-  if   printf '%s' "$tail" | grep -qiE 'no matching signatures|no signatures found'; then result="unsigned"
-  elif printf '%s' "$tail" | grep -qiE 'certificate identity|none of the expected identities|subject.*mismatch'; then result="wrong_identity"
-  elif printf '%s' "$tail" | grep -qiE 'rekor|tlog|transparency|tuf'; then result="rekor_unreachable"
-  elif printf '%s' "$tail" | grep -qiE 'Unable to find image|manifest unknown|pull access denied|no such image'; then result="cosign_absent"
+  if   printf '%s' "$tail" | grep -ciE 'no matching signatures|no signatures found' >/dev/null; then result="unsigned"
+  elif printf '%s' "$tail" | grep -ciE 'certificate identity|none of the expected identities|subject.*mismatch|expected GitHub Workflow' >/dev/null; then result="wrong_identity"
+  elif printf '%s' "$tail" | grep -ciE 'rekor|tlog|transparency|tuf' >/dev/null; then result="rekor_unreachable"
+  elif printf '%s' "$tail" | grep -ciE 'Unable to find image|manifest unknown|pull access denied|no such image' >/dev/null; then result="cosign_absent"
   # #8714: a daemon-side PULL failure of the verifier image (gcr.io rate limit or 5xx, DNS, TLS, reset, timeout).
   # Read from the WHOLE stderr file, not $tail: docker's pull error repeats the 64-hex digest twice
   # and runs ~420-450 bytes (measured, docker 29.7.2), so the last 400 bytes cut off its prefix.
@@ -2474,7 +2860,9 @@ verify_image_signature() {
   rm -f "$err" 2>/dev/null || true
   _cosign_anon_cleanup "$anon_dir"
   [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
-  return 0
+  # 3, not 0: the digest is immutable but its signature did NOT verify, so a digest-shaped ref alone
+  # cannot tell the caller "signed" — the #8609 overlay hands the App key only on rc 0.
+  return 3
 }
 
 # run_faithful_sandbox_canary: NON-BLOCKING dark-launch (#5875 / ADR-079). Runs
@@ -2484,8 +2872,13 @@ verify_image_signature() {
 # "faithful FAIL + legacy PASS" disagreement is the alertable promote signal).
 # Exit-code classification: a failed `docker exec` (125/126/127 / ENOENT) is a
 # canary_infra_error, NOT sandbox_broken — the #4941 false-rollback guard.
-run_faithful_sandbox_canary() {
-  local verdict reason sdk_version exec_rc out err_file docker_err
+# run_canary_replay <mode-flag> <state-file> <sentry-op> <label>: the shared
+# canary runner — one copy of the false-rollback guard (docker/exec failures
+# classify canary_infra_error, never sandbox_broken) for both replay arms.
+# Each arm's soak lives in its own state file.
+run_canary_replay() {
+  local mode_flag="$1" state_file="$2" sentry_op="$3" label="$4"
+  local verdict reason sdk_version exec_rc out err_file docker_err detail
   # Capture docker's OWN stderr so a persistent infra_error (rc 126/127: "no such
   # container", "exec format error") carries its CAUSE onto the no-SSH surfaces —
   # the numeric rc alone would otherwise be the only signal (obs review P2).
@@ -2496,7 +2889,7 @@ run_faithful_sandbox_canary() {
   set +o pipefail
   # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed docker exec
   # aborts before the read, leaving the infra classification below unreachable.
-  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>"$err_file")"; then
+  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" "$mode_flag" 2>"$err_file")"; then
     exec_rc=0
   else
     exec_rc=$?
@@ -2510,6 +2903,7 @@ run_faithful_sandbox_canary() {
     verdict="canary_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"; sdk_version=""
   else
     verdict="$(printf '%s' "$out" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
+    verdict="${verdict:-canary_infra_error}" # empty docker-exec stdout → empty jq output, never a silent ""
     reason="$(printf '%s' "$out" | jq -r '.reason // "unparseable"' 2>/dev/null || echo unparseable)"
     # sandbox-canary.mjs emits the SDK version as the camelCase key `sdkVersion`
     # (JS-idiomatic); this deploy-state chain is snake_case, so translate at the
@@ -2517,15 +2911,183 @@ run_faithful_sandbox_canary() {
     # re-blank it. Missing key ⇒ "" (the soak surface's sdk_version was empty
     # before this — the key never matched).
     sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
+    # #10032: the 65-refusal verdict carries the first `bwrap-shim:` line as
+    # `.detail` — ~10 distinct refusal classes share `bwrap_shim_refused`, and
+    # docker exec's stderr is already consumed by classification (agent-native
+    # review W2: a flat reason gives the no-SSH operator nothing to triage).
+    # Fold it into the reason the same way docker_exec_rc folds its stderr.
+    detail="$(printf '%s' "$out" | jq -r '.detail // ""' 2>/dev/null | tr -dc '[:print:]' | cut -c1-200 || echo '')"
+    [[ -n "$detail" ]] && reason="$reason: $detail"
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
-  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version"
-  echo "Faithful sandbox canary (non-blocking): verdict=$verdict reason=$reason"
-  # Page only on a faithful FAIL (sandbox_broken) — the disagreement signal.
-  # canary_infra_error is expected during dark-launch (fixture not yet captured)
-  # and must not page.
+  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$state_file" \
+    "sandbox_broken" "$sentry_op"
+  echo "$label: verdict=$verdict reason=$reason"
+  # Page only on a sandbox_broken verdict — canary_infra_error is expected
+  # during dark-launch (fixture not yet captured) and must not page.
   if [[ "$verdict" == "sandbox_broken" ]]; then
-    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" || true
+    # #9860: this verdict has been recorded since 2026-10-09 with no cause beyond
+    # bwrap_operation_not_permitted. Only the inner faithful canary (sentry_op sandbox-canary) is
+    # diagnosed: the outer-wrap arm's sandbox_broken is the expected report-only state.
+    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true
+    # After the page, so a slow bundle never delays it.
+    if [[ "$sentry_op" == "sandbox-canary" ]]; then
+      emit_canary_sandbox_diag faithful || true
+    fi
+  fi
+  return 0
+}
+
+run_faithful_sandbox_canary() {
+  # Faithful inner canary (#5875 / ADR-079): NON-BLOCKING dark-launch. Runs
+  # the SDK-captured split-unshare argv the legacy probe does not exercise
+  # (that gap is why #5849 shipped green).
+  run_canary_replay "--replay" "$SANDBOX_CANARY_STATE_FILE" "sandbox-canary" \
+    "Faithful sandbox canary (non-blocking)"
+}
+
+# run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
+# Replays the SELF-AUTHORED outer mount-table fixture inside the canary
+# container (the elevation posture the prod wrap depends on)
+# and runs the shared isolation payload in the resulting namespace. Its
+# verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
+# #5863 soak follow-through; promotion to gating is a separate change after
+# a green soak.
+run_outer_wrap_canary() {
+  if [[ "$OUTER_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into the inner ledger
+  fi
+  run_canary_replay "--replay-outer" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" \
+    "sandbox-canary-outer-wrap" "Outer-wrap canary (report-only)"
+}
+
+# run_workspace_isolation_probe: NON-BLOCKING dark-launch (#2640; the
+# run_faithful_sandbox_canary precedent, #5875 / ADR-079). Runs the direct tier
+# of the cross-workspace isolation suite (test/sandbox-isolation.test.ts under
+# the image-baked vitest config test/vitest.canary.config.ts) INSIDE the canary
+# container, records the classified verdict to deploy-state, and pages Sentry on
+# a RED verdict — but NEVER rolls back (report-only per
+# wg-dark-launch-deploy-gates; blocking promotion is a tracked follow-through
+# gated on observed real-deploy passes).
+# Deliberately NOT a run_canary_replay caller (documented divergence, same
+# class cat-deploy-state.sh's SOLEUR-DEBT notes record): the
+# replay helper is bound to the .mjs contract (stdout verdict JSON, any
+# non-zero rc = canary_infra_error, sdk_version). This probe has a different
+# contract end-to-end — vitest argv, a host-side `timeout` cap, and rc-ONLY
+# classification into a 4-verdict taxonomy where 124 is a RED class — so
+# folding would need ~4 behavioral knobs for ~15 shared lines.
+# SOLEUR_ISOLATION_IN_IMAGE=1 is load-bearing: in-image PATH `bwrap` IS the
+# deployed shim and the repo-side shim path is not baked, which makes FR7b
+# structurally un-runnable — the suite self-skips it under this flag
+# (its shim-splice property is pinned by bwrap-shim.test.ts + the faithful
+# canary replay, so nothing is lost).
+# docker-exec exit-code classification (mirrors run_faithful_sandbox_canary):
+#   0             -> pass (the direct tier held inside the canary image)
+#   124           -> workspace_isolation_timeout (the host `timeout` cap fired —
+#                    a wedged suite is a RED verdict, not an infra hiccup)
+#   125/126/127   -> canary_infra_error (daemon trouble / vitest absent from the
+#                    canary image — expected while pre-tooling images deploy,
+#                    never a sandbox verdict: the #4941 false-rollback guard)
+#   other non-zero-> workspace_isolation_failed (the suite ran and FAILED —
+#                    cross-tenant isolation regressed in this exact image)
+run_workspace_isolation_probe() {
+  if [[ "$WORKSPACE_ISOLATION_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into a canary ledger
+  fi
+  local verdict reason exec_rc out err_file docker_err test_detail
+  # Capture docker's OWN stderr so a persistent canary_infra_error (rc 126/127:
+  # vitest absent, exec-format error) or a failed run carries its CAUSE onto the
+  # no-SSH surfaces — the numeric rc alone would otherwise be the only signal
+  # (mirrors the faithful-canary obs review P2).
+  err_file="$(mktemp 2>/dev/null || echo /dev/null)"
+  # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed exec aborts
+  # before the read, leaving the classification below unreachable.
+  # `/usr/bin/env -i` scrubs the exec'd process's environment (the
+  # github_app_key_canary_check precedent): `docker exec` inherits the canary's
+  # Config.Env — the FULL prd env-file — and this suite spawns
+  # adversarially-probed inner sandboxes whose parent env is the exfil channel
+  # under test. Scrubbing means even a REAL isolation break cannot leak
+  # credential material, and the vitest output folded into `reason` below can
+  # never carry it. The SOLEUR_ISOLATION_* knobs ride env -i's own assignments;
+  # docker `-e` flags would be redundant (env -i overrides inheritance anyway).
+  # Side effect: CANARY_NODE_OPTIONS (the heap cap) is scrubbed too — vitest
+  # runs at default heap inside the container's --memory cap; a runaway run
+  # OOMs loud (rc 137 → workspace_isolation_failed), never silently wrong.
+  # --no-color is load-bearing, not cosmetic: vitest 4.x emits ANSI escapes
+  # even under env -i + CI=true (`Tests  \e[1m\e[32m13 passed`), and the
+  # escapes interleave between the summary tokens the vacuous-green =~ below
+  # greps — a passing suite then reports `vacuous_green_no_tests_passed`
+  # (observed on the first deploy carrying a loadable config, #9860). The
+  # flag is pinned by CWI-1.
+  if out="$(timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app \
+      soleur-web-platform-canary /usr/bin/env -i \
+      PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
+      CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 \
+      /usr/local/bin/vitest run \
+      --config test/vitest.canary.config.ts --no-color 2>"$err_file")"; then
+    exec_rc=0
+  else
+    exec_rc=$?
+  fi
+  # Strip any ANSI residue so the marker greps below read plain text — vitest
+  # wraps both the summary counters AND the FAIL/`AssertionError` detail in
+  # escapes. --no-color already prevents them, but if the flag is ever lost
+  # (CWI-1 pins the argv) a colored `Tests  \e[1m\e[32m13 passed` still
+  # matches and a colored FAIL line still reaches `reason`.
+  out="$(printf '%s' "$out" | sed -E 's/\x1b\[[0-9;]*m//g')"
+  if [[ "$exec_rc" -eq 0 ]]; then
+    # rc-0 alone is not proof the suite RAN: a future skip-knob regression (or a
+    # tier-filter bug) can green a zero-test run — vitest exits 0 when every
+    # collected test skips. Require the reporter's nonzero-passed marker;
+    # absent, this is a vacuous green and reads RED (loud, never promoting).
+    # Bash =~, not `grep -q`: under pipefail a `grep -q` early-exit SIGPIPEs the
+    # printf and the pipeline reports 141 even on a match.
+    if [[ "$out" =~ Tests\ +[1-9][0-9]*\ passed ]]; then
+      verdict="pass"; reason="ok"
+    else
+      verdict="workspace_isolation_failed"
+      reason="vacuous_green_no_tests_passed"
+    fi
+  else
+    # Diagnostics, sanitized through _cred_err_tail (the shared
+    # secret-shape/env-value scrubber the blocking bwrap probe uses — a bare
+    # `tr -dc` fold would let a runc-formatted error carry an env value onto
+    # journald/Sentry). Vitest writes failure detail to STDOUT (stderr's first
+    # line is its decorative banner), so prefer the first `FAIL <file>`/
+    # `AssertionError` line of `out`; fall back to docker's own stderr line.
+    # (while-read, not `grep -m1`: an early-exiting grep SIGPIPEs its producer
+    # under pipefail — the grep-q-pipe-guard lint's banned shape, #9217.)
+    test_detail=""
+    while IFS= read -r _line; do
+      if [[ "$_line" =~ FAIL\ +[^[:space:]]|AssertionError ]]; then
+        test_detail="$_line"; break
+      fi
+    done <<< "$out"
+    if [[ -z "$test_detail" ]]; then
+      test_detail="$(head -1 "$err_file" 2>/dev/null)"
+    fi
+    docker_err="$(_cred_err_tail "$test_detail" | cut -c1-120)"
+    case "$exec_rc" in
+      124)
+        verdict="workspace_isolation_timeout"
+        reason="host_timeout_${WORKSPACE_ISOLATION_TIMEOUT}s${docker_err:+: $docker_err}" ;;
+      125|126|127)
+        verdict="canary_infra_error"
+        reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}" ;;
+      *)
+        verdict="workspace_isolation_failed"
+        reason="vitest_rc_${exec_rc}${docker_err:+: $docker_err}" ;;
+    esac
+  fi
+  if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
+  write_workspace_isolation_state "$verdict" "$reason"
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION: verdict=$verdict reason=$reason" || true
+  echo "Workspace isolation probe (non-blocking): verdict=$verdict reason=$reason"
+  # Page only on a RED verdict — canary_infra_error is expected during the
+  # dark-launch window (pre-tooling canary images) and must not page, and a
+  # green probe never pages.
+  if [[ "$verdict" == "workspace_isolation_failed" || "$verdict" == "workspace_isolation_timeout" ]]; then
+    workspace_isolation_sentry_event "$verdict" "$reason" || true
   fi
   return 0
 }
@@ -2608,6 +3170,198 @@ resolve_env_file() {
   echo "$doppler_output" > "$tmpenv"
   echo "$tmpenv"
   return 0
+}
+
+# >>> github-app-key-overlay >>>
+# Byte-identical in ci-deploy.sh and soleur-host-bootstrap.sh (inside soleur-doppler-download);
+# ci-deploy.test.sh Guard 7 compares the two. POSIX sh, because the boot copy runs under dash.
+# Contract (#8609): knowledge-base/project/plans/
+# 2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md §3.2-§3.4, as amended by
+# the CTO ruling on PR #9263 (b)-(e). Each file defines its own emitter (<classification> <level>
+# [detail]); detail is numeric or enum k=v only — never Doppler stderr, key or token bytes.
+#
+# overlay_github_app_key <env-file> <verified-ref>: <verified-ref> is EMPTY unless the caller proved,
+# in this same run, that the image it is about to run passed the main-pinned cosign verify
+# (ci-deploy: verify_image_signature rc 0; boot: the digest matches the last one ci-deploy
+# verified). Anything but an exact `[<repo>@]sha256:<64 hex>` gets no key. Sets
+# GITHUB_APP_KEY_SOURCE and GITHUB_APP_KEY_FETCH. The merge is atomic: a sibling temp file (named
+# in _gak_tmp while it exists, so the caller's cleanup trap covers it) is renamed over <env-file>.
+# Returns 0, or 1 on the runtime-hijack refusal, or 2 when the merge failed (<env-file> is then
+# untouched) — both non-zero returns abort the deploy and the boot.
+#
+# Runtime-hijack refusal: a prd name in one of these classes can run code, or re-route TLS/egress,
+# inside a process that holds the key (node, git, a shell, a TLS stack), so the key is refused to
+# the whole env rather than to one name. The classes, not a name list (#8609 d): NODE_* (except
+# NODE_ENV), LD_*, GLIBC_*, GIT_* (except the app's own GIT_DATA_/GIT_PROVISION_/GIT_REMOVE_/
+# GIT_TRANSPORT_ config, none of which git reads), BASH_*, ENV, PATH, SHELL, HOME, TMPDIR, SSL_*,
+# OPENSSL_*, CURL_*, *_PROXY, *_proxy, npm_config_*, NPM_CONFIG_*, PYTHON*, PERL*. A bare NAME
+# line counts too (docker --env-file then copies the docker CLI's own value).
+overlay_github_app_key() {
+  GITHUB_APP_KEY_SOURCE=prd
+  GITHUB_APP_KEY_FETCH=no_token
+  _gak_tmp=
+  if [ ! -f "$1" ] || [ ! -r "$1" ]; then
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=read"
+    return 2
+  fi
+  _gak_hij=$(grep -E '^[[:space:]]*(NODE_[A-Za-z0-9_]*|LD_[A-Za-z0-9_]*|GLIBC_[A-Za-z0-9_]*|GIT_[A-Za-z0-9_]*|BASH_[A-Za-z0-9_]*|ENV|PATH|SHELL|HOME|TMPDIR|SSL_[A-Za-z0-9_]*|OPENSSL_[A-Za-z0-9_]*|CURL_[A-Za-z0-9_]*|[A-Za-z0-9_]*_PROXY|[A-Za-z0-9_]*_proxy|npm_config_[A-Za-z0-9_]*|NPM_CONFIG_[A-Za-z0-9_]*|PYTHON[A-Za-z0-9_]*|PERL[A-Za-z0-9_]*)[[:space:]]*(=|$)' "$1" \
+    | grep -cvE '^[[:space:]]*(NODE_ENV|GIT_(DATA|PROVISION|REMOVE|TRANSPORT)_[A-Za-z0-9_]*)[[:space:]]*(=|$)') || _gak_hij=0
+  if [ "$_gak_hij" -ne 0 ]; then
+    GITHUB_APP_KEY_FETCH=env_hijack
+    github_app_key_emit env_hijack error "names=$_gak_hij"
+    return 1
+  fi
+  if [ -z "${GITHUB_APP_DOPPLER_TOKEN:-}" ]; then
+    github_app_key_emit no_token info
+    return 0
+  fi
+  _gak_ref_ok=0
+  case "${2:-}" in
+    '' | *[!A-Za-z0-9@:/._-]*) ;;
+    *) if printf '%s\n' "$2" | grep -cxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}' >/dev/null; then _gak_ref_ok=1; fi ;;
+  esac
+  if [ "$_gak_ref_ok" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=unverified_image
+    github_app_key_emit unverified_image error
+    return 0
+  fi
+  # Bounded retry, like the prd download's: a transient Doppler error must not cost the key.
+  # Only a non-zero exit is retried; a wrong key-line count is a deterministic answer.
+  # The two knobs are test seams (digits only; anything else falls back to the default).
+  _gak_max=${GITHUB_APP_KEY_FETCH_ATTEMPTS:-3}
+  _gak_bo=${GITHUB_APP_KEY_FETCH_BACKOFF:-2}
+  case "$_gak_max" in '' | *[!0-9]*) _gak_max=3 ;; esac
+  case "$_gak_bo" in '' | *[!0-9]*) _gak_bo=2 ;; esac
+  _gak_try=1
+  while :; do
+    _gak_rc=0
+    _gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout -k 5 20 doppler secrets download --no-file --format docker --project soleur-github-app --config prd 2>/dev/null) || _gak_rc=$?
+    if [ "$_gak_rc" -eq 0 ] || [ "$_gak_try" -ge "$_gak_max" ]; then break; fi
+    sleep $((_gak_try * _gak_bo))
+    _gak_try=$((_gak_try + 1))
+  done
+  _gak_n=$(printf '%s\n' "$_gak_dl" | grep -cE '^GITHUB_APP_PRIVATE_KEY=.') || _gak_n=0
+  if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=failed
+    github_app_key_emit fetch_failed error "rc=$_gak_rc key_lines=$_gak_n len=${#_gak_dl} attempts=$_gak_try"
+    unset _gak_dl
+    return 0
+  fi
+  _gak_line=$(printf '%s\n' "$_gak_dl" | grep -E '^GITHUB_APP_PRIVATE_KEY=.') || _gak_line=
+  _gak_grc=0
+  _gak_rest=$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' "$1") || _gak_grc=$?
+  # grep -v: rc 1 = every line was a key line (an empty rest is fine); rc 2+ = a read error.
+  if [ "$_gak_grc" -le 1 ] && _gak_tmp=$(mktemp "$1.gak.XXXXXX") \
+    && printf '%s\n%s\n' "$_gak_rest" "$_gak_line" > "$_gak_tmp" && mv -f "$_gak_tmp" "$1"; then
+    _gak_tmp=
+  else
+    if [ -n "$_gak_tmp" ]; then rm -f "$_gak_tmp"; fi
+    _gak_tmp=
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=write grep_rc=$_gak_grc"
+    unset _gak_dl _gak_line _gak_rest
+    return 2
+  fi
+  GITHUB_APP_KEY_SOURCE=isolated
+  GITHUB_APP_KEY_FETCH=ok
+  github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try"
+  unset _gak_dl _gak_line _gak_rest
+  return 0
+}
+
+# github_app_key_present <env-file>: exactly one GITHUB_APP_PRIVATE_KEY line, neither empty nor the
+# eviction sentinel — the no-network half of the key check.
+github_app_key_present() {
+  [ "$(grep -c '^GITHUB_APP_PRIVATE_KEY=' "$1" 2>/dev/null)" = 1 ] || return 1
+  ! grep -qxE 'GITHUB_APP_PRIVATE_KEY=(EVICTED_SEE_ADR_241)?' "$1"
+}
+# <<< github-app-key-overlay <<<
+
+# github_app_key_emit <classification> <level> [detail]: ci-deploy.sh's half of the shared overlay
+# block's emitter contract (the boot path defines its own). journald always; a Sentry event
+# (feature=ci-deploy, op=github-app-key) for warning/error. Best-effort, fail-open under set -e.
+github_app_key_emit() {
+  local cls="$1" level="$2" detail="${3:-}" payload
+  logger -t "$LOG_TAG" "GITHUB_APP_KEY: class=$cls level=$level${detail:+ $detail}" || true
+  [[ "$level" == info ]] && return 0
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    payload="$(jq -nc --arg c "$cls" --arg l "$level" --arg d "$detail" --arg t "${TAG:-}" \
+      '{message: ("github app key " + $c), level: $l, platform: "other", logger: "ci-deploy",
+        tags: {feature: "ci-deploy", op: "github-app-key", classification: $c},
+        extra: {detail: $d, tag: $t}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "GITHUB_APP_KEY: Sentry POST failed" || true
+  fi
+  return 0
+}
+
+# record_github_app_key_verified_ref <digest-ref>: (#8609 c) persist the digest verify_image_signature
+# just verified under the main-pinned identity, for the fresh-boot overlay's equality check (see
+# GITHUB_APP_KEY_VERIFIED_REF_FILE). Atomic (mktemp 0600 beside the target, then mv). Best-effort:
+# a failed write only means a later fresh boot of this host gets no key (loud there), so it never
+# fails the deploy.
+record_github_app_key_verified_ref() {
+  local tmp=""
+  if tmp="$(mktemp "${GITHUB_APP_KEY_VERIFIED_REF_FILE}.XXXXXX" 2>/dev/null)" \
+    && chmod 600 "$tmp" && printf '%s\n' "$1" > "$tmp" && mv -f "$tmp" "$GITHUB_APP_KEY_VERIFIED_REF_FILE"; then
+    return 0
+  fi
+  if [[ -n "$tmp" ]]; then rm -f "$tmp" 2>/dev/null || true; fi
+  github_app_key_emit verified_ref_unrecorded info
+  return 0
+}
+
+# github_app_key_canary_check: the key check before the swap (#8609 plan §3.3), run against the
+# CANARY container. Presence first (no network), then acceptance: the baked probe signs an App JWT
+# from the canary's own env and calls GET /app. Returns 1 with CANARY_FAIL_REASON set to refuse
+# promotion — the existing rollback arm then keeps the running container serving. `transport`
+# (GitHub unreachable or rate-limited) promotes with a warning; a hotfix must not wait on GitHub.
+# `absent` (an image without the probe) promotes too, but at warning: after this PR bakes the probe,
+# a NEW image without it is a build regression that silently disables the acceptance half.
+#
+# The probe runs under `env -i` with absolute paths (#8609 d-2): only GITHUB_APP_ID and
+# GITHUB_APP_PRIVATE_KEY reach node, so no prd-set PATH / NODE_* / LD_* / proxy / CA variable can
+# pick the interpreter or hook the TLS stack. The values are expanded INSIDE the container from its
+# own env (the single-quoted script), never passed on this host's docker argv.
+github_app_key_canary_check() {
+  local out rc=0 ctx="source=${GITHUB_APP_KEY_SOURCE:-} fetch=${GITHUB_APP_KEY_FETCH:-}"
+  GITHUB_APP_KEY_PROBE_REASON=""
+  if ! github_app_key_present "$ENV_FILE"; then
+    GITHUB_APP_KEY_PROBE=missing
+    github_app_key_emit key_missing error "$ctx"
+    CANARY_FAIL_REASON="canary_github_app_key_missing"
+    return 1
+  fi
+  # `[ -f … ] || exit 127`: `node <absent file>` exits 1, the rejected class, and an image older
+  # than the probe must read as absent (127) instead. stderr is discarded, never forwarded.
+  out="$(docker exec soleur-web-platform-canary /bin/sh -c '[ -f "$1" ] || exit 127; exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' \
+    github-app-key-probe "$GITHUB_APP_KEY_PROBE_MJS" 2>/dev/null)" || rc=$?
+  # Anchored over the WHOLE output: exactly one line from the enum (a `rejected` line may carry
+  # the probe's closed reason), or no verdict at all.
+  if [[ "$out" =~ ^github_app_key_probe=(ok|transport)$ ]]; then
+    GITHUB_APP_KEY_PROBE="${BASH_REMATCH[1]}"
+  elif [[ "$out" =~ ^github_app_key_probe=rejected(\ reason=(no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other))?$ ]]; then
+    GITHUB_APP_KEY_PROBE=rejected
+    GITHUB_APP_KEY_PROBE_REASON="${BASH_REMATCH[2]:-unspecified}"
+  elif (( rc == 127 )); then
+    GITHUB_APP_KEY_PROBE=absent
+  else
+    GITHUB_APP_KEY_PROBE=rejected
+    GITHUB_APP_KEY_PROBE_REASON=no_verdict
+  fi
+  case "$GITHUB_APP_KEY_PROBE" in
+    ok)        github_app_key_emit probe_ok info "$ctx rc=$rc"; return 0 ;;
+    transport) github_app_key_emit probe_transport warning "$ctx rc=$rc"; return 0 ;;
+    absent)    github_app_key_emit probe_absent warning "$ctx rc=$rc"; return 0 ;;
+  esac
+  github_app_key_emit probe_rejected error "$ctx rc=$rc reason=$GITHUB_APP_KEY_PROBE_REASON"
+  CANARY_FAIL_REASON="canary_github_app_key_rejected"
+  return 1
 }
 
 # Verify inngest-server is healthy after restart (#4538), with an ADVISORY
@@ -2969,7 +3723,8 @@ fi
 # was an already-revoked GHCR read PAT. Note web-2's text does not match either arm in this file
 # even at HEAD, so it is running a ci-deploy.sh that predates main and will not emit this marker
 # at all; that host's stale-script and unprovisioned-ZOT_REGISTRY_URL state is #7103 B4, filed
-# separately and deliberately not widened into this PR.
+# separately and deliberately not widened into this PR. (#9151 later delivered the current
+# script to web-2 through terraform_data.deploy_pipeline_fix_web2 — the B4 follow-through.)
 #
 # Emitted AFTER the credential-read block and BEFORE the flock, so it reports credential state
 # at the point of USE rather than at parse time. Four fields, deliberately not six: `peers` is
@@ -2983,8 +3738,12 @@ fi
 # up here as cred_file=present doppler_token=absent.
 _ci_deploy_script_sha=unknown
 if [ -r "${BASH_SOURCE[0]:-/nonexistent}" ]; then
-  _sha_out="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -c1-12)" || _sha_out=""
-  if [ -n "$_sha_out" ]; then _ci_deploy_script_sha="$_sha_out"; fi
+  # Compute the full sha256 once — the 12-char script_sha slices it, and the
+  # DEPLOY_SCRIPT_SHA marker below emits it whole.
+  _ci_deploy_script_sha_full="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -d' ' -f1 || true)"
+  if [ -n "$_ci_deploy_script_sha_full" ]; then
+    _ci_deploy_script_sha="$(printf '%s' "$_ci_deploy_script_sha_full" | cut -c1-12)"
+  fi
 fi
 # `if`, never `[ -n … ] && var=…`: as a bare trailing command the latter exits 1 when the test
 # is false, which under this script's `set -e` aborts the deploy. That exact trap is documented
@@ -2992,7 +3751,42 @@ fi
 _dt_state=absent
 if [ -n "${DOPPLER_TOKEN:-}" ]; then _dt_state=present; fi
 logger -t "$LOG_TAG" "SOLEUR_DEPLOY_INVOCATION: hook=${SOLEUR_DEPLOY_HOOK_ID:-unset} script_sha=${_ci_deploy_script_sha} cred_file=${CRED_FILE_STATE} doppler_token=${_dt_state}" 2>/dev/null || true
-unset _sha_out _dt_state _ci_deploy_script_sha
+# #9151 — DEPLOY_SCRIPT_SHA: the full sha256 of THIS script's bytes on THIS host,
+# emitted once per invocation so Better Stack rows prove which ci-deploy.sh each
+# web host actually runs. scripts/check-deploy-script-parity.sh compares the
+# newest row per host_name against the repo sha — the no-SSH parity read. The
+# INVOCATION line keeps its 12-char script_sha (closed format); this marker is
+# the parity anchor, so it is full-length and stable: `DEPLOY_SCRIPT_SHA sha256=<64hex>`
+# or `sha256=unknown` when the source file is unreadable (which also prevents a
+# deploy, making the line unreachable — kept for completeness).
+logger -t "$LOG_TAG" "DEPLOY_SCRIPT_SHA sha256=${_ci_deploy_script_sha_full:-unknown}" 2>/dev/null || true
+unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
+
+# #9169 — GHCR_DENY: is this host's ghcr.io hosts-file deny in force? Same semantics as the
+# registry heartbeat's ghcr_blocked (cloud-init-registry.yml): 1 = ghcr.io resolves ONLY to the
+# sinkhole (0.0.0.0 / ::), 0 = it resolves to any other address, unknown = it does not resolve
+# (or getent is absent/hangs). Probes ghcr.io only, for registry parity; the apply-time assertion
+# in server.tf proves pkg-containers.githubusercontent.com and docker.pkg.github.com too. Fail-open: the probe is bounded by
+# `timeout 5` (this script already needs coreutils timeout; a missing one reads `unknown`) and can
+# never stop a deploy. A separate marker so the DEPLOY_SCRIPT_SHA parser
+# (check-deploy-script-parity.sh) and the IMAGE_VERIFY consumers stay byte-stable.
+_ghcr_blocked_state() {
+  local addrs=""
+  addrs=$(timeout 5 getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u) || addrs=""
+  # A herestring, not `printf | grep -q`: under this script's pipefail an early grep exit could
+  # turn a match into a non-zero pipeline status.
+  if [ -z "$addrs" ]; then
+    echo unknown
+  elif grep -qvxE '0\.0\.0\.0|::' <<<"$addrs"; then
+    echo 0
+  else
+    echo 1
+  fi
+}
+_ghcr_blocked=$(_ghcr_blocked_state 2>/dev/null) || _ghcr_blocked=unknown
+case "$_ghcr_blocked" in 1 | 0 | unknown) ;; *) _ghcr_blocked=unknown ;; esac
+logger -t "$LOG_TAG" "GHCR_DENY ghcr_blocked=$_ghcr_blocked" 2>/dev/null || true
+unset _ghcr_blocked
 
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
@@ -3349,12 +4143,28 @@ case "$COMPONENT" in
     # reused_local_reload cosign breadcrumb (verify_result=reused_local_reload) was already emitted inside
     # pull_image_with_fallback (an intentional amendment to the ADR-087 cosign contract,
     # never the warn-mode fail-open).
+    #
+    # #8609 (plan §3.2 step 2, CTO ruling (e)): GITHUB_APP_KEY_REF is the ref the overlay may hand
+    # the App key to. It has exactly ONE source: the stdout of verify_image_signature in THIS run, on
+    # rc 0 (the main-pinned identity verified). EMPTY on a WARN fail-open (rc 3), whose digest-shaped
+    # ref does not mean "signed", and EMPTY on the local-cache arm: the running image was never
+    # re-verified here and may have been promoted under WARN fail-open, so it gets no key
+    # (`unverified_image`; after R6 the canary then refuses and the running container keeps
+    # serving). Guard 7 row 7.e pins both the single assignment and the cache arm's empty ref.
+    GITHUB_APP_KEY_REF=""
     if [[ -n "${LOCAL_CACHE_VERIFIED_REF:-}" ]]; then
       VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"
-    elif ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
-      logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
-      final_write_state 1 "cosign_verify_failed"
-      exit 1
+    else
+      VERIFY_RC=0
+      VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")" || VERIFY_RC=$?
+      if (( VERIFY_RC == 0 )); then
+        GITHUB_APP_KEY_REF="$VERIFIED_REF"
+        record_github_app_key_verified_ref "$VERIFIED_REF"
+      elif (( VERIFY_RC != 3 )); then
+        logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
+        final_write_state 1 "cosign_verify_failed"
+        exit 1
+      fi
     fi
 
     # #6428: pre-swap freshness — the image about to run must have been BUILT as the requested
@@ -3442,16 +4252,31 @@ case "$COMPONENT" in
     # Chain the env-file cleanup with the existing state-writing EXIT trap.
     # Replacing the trap entirely would lose the "unhandled" reason capture.
     # shellcheck disable=SC2064
-    trap 'rc=$?; rm -f "$ENV_FILE"; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
+    # ${_gak_tmp}: the overlay's merge temp file (the shared block names it there while it exists).
+    trap 'rc=$?; rm -f "$ENV_FILE" ${_gak_tmp:+"$_gak_tmp"}; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
 
-    # Compose NODE_OPTIONS by APPENDING our heap cap to any operator-set value
-    # in the Doppler env-file (#5417 review). `-e NODE_OPTIONS=...` on docker run
-    # overrides `--env-file` for the same key, so a bare `-e` would silently drop
-    # a Doppler-provided NODE_OPTIONS (e.g. --enable-source-maps, --dns-result-order).
-    # Our --max-old-space-size comes LAST so it wins if Doppler also set one.
-    DOPPLER_NODE_OPTIONS=$(grep -E '^NODE_OPTIONS=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)
-    PROD_NODE_OPTIONS="${DOPPLER_NODE_OPTIONS:+$DOPPLER_NODE_OPTIONS }--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB"
-    CANARY_NODE_OPTIONS="${DOPPLER_NODE_OPTIONS:+$DOPPLER_NODE_OPTIONS }--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
+    # #8609 (plan §3.2): overlay the isolated GitHub App key in THIS shell — resolve_env_file runs
+    # in a $(…) subshell, so nothing it set would reach deploy state. After the trap above, so the
+    # cleanup already covers the file the overlay rewrites.
+    GITHUB_APP_KEY_PROBE=not_run
+    GAK_OVERLAY_RC=0
+    overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF" || GAK_OVERLAY_RC=$?
+    if (( GAK_OVERLAY_RC == 1 )); then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the prd env carries a runtime-hijack variable class (GitHub App key overlay refused) — keeping previous version"
+      final_write_state 1 "github_app_key_env_hijack"
+      exit 1
+    elif (( GAK_OVERLAY_RC != 0 )); then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the GitHub App key overlay could not rewrite the env-file — keeping previous version"
+      final_write_state 1 "github_app_key_merge_failed"
+      exit 1
+    fi
+
+    # The container's NODE_OPTIONS is ours alone: the heap cap via `-e NODE_OPTIONS=` below. The
+    # #5417 lever (append the cap to an operator-set NODE_OPTIONS from the Doppler env-file) is
+    # retired under #8609: the overlay above refuses any prd env carrying a NODE_* name other than
+    # NODE_ENV, so such a value can never reach this point. Node flags belong in this composition.
+    PROD_NODE_OPTIONS="--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB"
+    CANARY_NODE_OPTIONS="--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
 
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
@@ -3636,11 +4461,18 @@ case "$COMPONENT" in
       # 128+n = signalled, which is what a process that prints nothing looks like), so losing it
       # would leave the message alone -- and the message was EMPTY both times this fired.
       #
-      # The bwrap argv is deliberately untouched. See the NOTE block above: a prior change added
-      # --unshare-user --proc /proc here and rolled back every web-platform deploy.
+      # The bwrap argv rule, both directions. ADDING flags that diverge from the real SDK argv
+      # (--unshare-user --proc /proc, see the NOTE block above) rolled back every web-platform
+      # deploy. --die-with-parent is deliberately ABSENT: under `docker exec` the process is a
+      # child of the short-lived runc exec parent, and the PR_SET_PDEATHSIG(SIGKILL) that flag
+      # arms races that parent's exit, SIGKILLing a healthy bwrap at startup (rc=137, empty
+      # stderr, container still running -- #8016). The faithful canary keeps the SDK argv,
+      # flag included, from a long-lived node parent. Measurements and the repro loop:
+      # knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md
+      # ci-deploy.test.sh Guard 2 pins the exact probe argv; Guard 1 is a lexical tripwire on the flag.
       BWRAP_RC=0
       BWRAP_T0="$(_now_ms)"
-      BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
+      BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
       BWRAP_T1="$(_now_ms)"
       # Guarded, not `$(( $(_now_ms) - BWRAP_T0 ))`. Two reasons, measured separately:
       #   - a non-numeric operand is NOT fatal here (bash reads `unknown` or `` as a name that
@@ -3659,7 +4491,7 @@ case "$COMPONENT" in
       BWRAP_CSTATE="${BWRAP_CSTATE:-unknown}"
       # Sanitize ONCE, up front: both sinks below egress to Better Stack.
       BWRAP_ERR_SAN="$(_cred_err_tail "$BWRAP_ERR")"
-      # Re-emit on BOTH paths, before the branch. The probe passes ~97.6% of the time, and a
+      # Re-emit on BOTH paths, before the branch. The probe usually passes, and a
       # PASS that still wrote to stderr is the early signal that precedes the next rollback --
       # the old form surfaced that only incidentally, via the same 2>&1 that destroyed it on
       # failure. Moving this into the failure arm would silently swallow it again.
@@ -3686,6 +4518,9 @@ case "$COMPONENT" in
         # webhook leg rather than losing it.
         BWRAP_LINE="DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG rc=$BWRAP_RC ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR} bwrap_err=\"${BWRAP_ERR_SAN:-<empty>}\""
         logger -t "$LOG_TAG" "$BWRAP_LINE" || printf '%s\n' "$BWRAP_LINE"
+        # #9871: record WHY, while the failing container is still up. Bounded, read-only, `|| true`
+        # (see CANARY_DIAG_BEGIN); it cannot alter the rollback below.
+        emit_canary_sandbox_diag legacy || true
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
         # ENV_FILE trap still runs to clean up the secrets file.
@@ -3709,6 +4544,21 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
+      # Outer-wrap canary (#5863) — report-only, same non-blocking posture.
+      run_outer_wrap_canary || true
+
+      # Cross-workspace isolation probe (#2640) — NON-BLOCKING dark-launch
+      # (wg-dark-launch-deploy-gates). Runs the direct tier of the cross-workspace
+      # isolation suite inside the canary via the image-baked vitest, records a
+      # classified verdict + pages Sentry on red, but never gates/rolls back this
+      # deploy. `|| true` is LOAD-BEARING — a probe hiccup must never abort a
+      # deploy under set -e.
+      run_workspace_isolation_probe || true
+    fi
+
+    # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.
+    if [[ "$CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check; then
+      CANARY_HEALTHY=false
     fi
 
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
@@ -3767,7 +4617,7 @@ case "$COMPONENT" in
       # the docker run below would surface a cryptic "name already in use".
       # Here we surface the ADR-027 invariant by name so an operator knows
       # which doc to read.
-      if docker ps --filter "name=^soleur-web-platform$" --format '{{.Names}}' | grep -q .; then
+      if docker ps --filter "name=^soleur-web-platform$" --format '{{.Names}}' | grep -c . >/dev/null; then
         echo "ERROR: soleur-web-platform container is still running after docker stop/rm." >&2
         echo "       Single-replica invariant (ADR-027) violated. See" >&2
         echo "       knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md" >&2

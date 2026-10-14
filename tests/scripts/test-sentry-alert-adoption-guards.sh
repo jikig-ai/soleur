@@ -680,7 +680,7 @@ _issue_alerts() { jq -nc --argjson n "$1" '[range($n) | {addr: "sentry_alert.iss
 _g3_red() {
   local label="$1" f="$2" addr="$3" want="$4" rc msg
   rc=$(_rc bash "$BINDING" "$f"); msg=$(_err bash "$BINDING" "$f")
-  if [[ "$rc" -eq 1 ]] && grep -F -- "$addr " <<<"$msg" | grep -qF -- "$want"; then
+  if [[ "$rc" -eq 1 ]] && grep -F -- "$addr " <<<"$msg" | grep -cF >/dev/null -- "$want"; then
     _report "$label" ok
   else
     _report "$label" fail "rc=$rc (want 1), address '$addr' with reason '$want' not on one stderr line. stderr: $(head -c 600 <<<"$msg")"
@@ -780,7 +780,7 @@ t_g3_6a_newline_id_on_issue_rule_red() {
     "$f" "sentry_alert.a" "expected '1213799'"
   # The id is rendered ESCAPED on the offending line, never as a raw line break.
   msg=$(_err bash "$BINDING" "$f")
-  if grep -F -- "sentry_alert.a " <<<"$msg" | grep -qF -- "'999\\n'"; then
+  if grep -F -- "sentry_alert.a " <<<"$msg" | grep -cF >/dev/null -- "'999\\n'"; then
     _report "G3-6b the newline-bearing id is rendered escaped ('999\\n') on the address's own line" ok
   else
     _report "G3-6b newline-bearing id rendered escaped" fail "stderr: $(head -c 400 <<<"$msg")"
@@ -930,9 +930,19 @@ _la_stub() { # $1=mode -> a PATH dir with a fake gh
   local d="$TMPD/la-$1"; mkdir -p "$d"
   cat > "$d/gh" <<'STUB'
 #!/usr/bin/env bash
-# Refuse anything but `gh api <expected path> --jq <expr>` (exit 64).
-[[ "$1" == api && "$3" == --jq && -n "${4:-}" ]] || { echo "unexpected gh call: $*" >&2; exit 64; }
-path="$2"; expr="$4"
+# Two accepted shapes: `api <path> --jq <expr>` (the bounded runs list, which the
+# script still filters via --jq) and `api --paginate <path>` (the jobs read —
+# --jq under --paginate runs per page, so the script slurps page objects with
+# jq -s instead; this stub emits the raw page and the script's own filter is
+# what the suite exercises). Anything else exits 64.
+[[ "$1" == api ]] || { echo "unexpected gh call: $*" >&2; exit 64; }
+if [[ "$2" == --paginate ]]; then
+  path="$3"; expr=""
+elif [[ "$3" == --jq && -n "${4:-}" ]]; then
+  path="$2"; expr="$4"
+else
+  echo "unexpected gh call: $*" >&2; exit 64
+fi
 step='Terraform apply (cron + uptime monitors)'
 job() { # $1=job name $2=job conclusion $3=apply-step conclusion (or "none")
   if [[ "$3" == none ]]; then printf '{"name":"%s","conclusion":"%s","steps":[]}' "$1" "$2"
@@ -967,7 +977,7 @@ case "$path" in
     json="{\"jobs\":[$(job apply success success)]}" ;;
   *) echo "unexpected gh path: $path" >&2; exit 64 ;;
 esac
-printf '%s' "$json" | jq -r "$expr"
+if [[ -n "$expr" ]]; then printf '%s' "$json" | jq -r "$expr"; else printf '%s\n' "$json"; fi
 STUB
   chmod +x "$d/gh"; echo "$d"
 }

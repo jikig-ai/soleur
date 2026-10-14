@@ -2,11 +2,15 @@ name: bot-pr-with-synthetic-checks
 description: >
   Commit bot-authored changes, open a PR, post synthetic check-runs to satisfy
   the CI Required and CLA Required rulesets on main, and queue auto-merge.
-  PRs created with GITHUB_TOKEN don't re-trigger workflows — we post the
-  required Checks via the API (integration_id 15368 is the GitHub Actions
-  app). Callers pass the paths to add (newline-separated), branch prefix,
-  commit message, PR title prefix, and a short change-summary used in the
-  synthetic check outputs.
+  The synthetic check-runs are posted under the workflow token (gh-token),
+  because the rulesets match integration_id 15368, the GitHub Actions app.
+  The PR itself is authored, pushed and armed for auto-merge under pr-token, a
+  soleur-infra App installation token minted in the caller's job, so its own
+  CI and its merge-queue entry run as real events (#9454 item 4, ADR-285); a
+  PR authored as the workflow token had its runs held for approval and its
+  queue entry received no merge_group runs. Callers pass the paths to add
+  (newline-separated), branch prefix, commit message, PR title prefix, and a
+  short change-summary used in the synthetic check outputs.
 
 inputs:
   add-paths:
@@ -42,8 +46,18 @@ inputs:
       Must fit the GitHub check-run summary 60KB cap.
     required: false
     default: "Bot PR, no code changes"
+  pr-token:
+    description: >
+      soleur-infra App installation token (contents:write + pull_requests:write
+      on this repository), minted in the caller's own job with
+      ./.github/actions/mint-infra-app-token. It authors the PR, pushes the
+      branch and arms auto-merge. Refused when empty, when it is not a bearer
+      token, or when it equals gh-token. See CHANGELOG.md v4.
+    required: true
   gh-token:
-    description: GITHUB_TOKEN with contents/pull-requests/checks=write.
+    description: >
+      The workflow GITHUB_TOKEN with checks=write. Used only to post the
+      synthetic check-runs (the rulesets match integration_id 15368).
     required: true
   draft:
     description: >
@@ -73,7 +87,8 @@ runs:
     - name: Commit, open bot PR, post synthetic checks, queue auto-merge
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.gh-token }}
+        PR_TOKEN: ${{ inputs.pr-token }}
+        GATE_TOKEN: ${{ inputs.gh-token }}
         ADD_PATHS: ${{ inputs.add-paths }}
         BRANCH_PREFIX: ${{ inputs.branch-prefix }}
         COMMIT_MESSAGE: ${{ inputs.commit-message }}
@@ -86,6 +101,51 @@ runs:
         REPO: ${{ github.repository }}
       run: |
         set -eo pipefail
+        # xtrace refusal (#7797): PR_TOKEN is a live installation token. Must be the first
+        # statement after `set` (lint-shell-trace-credential-refusal Rule A).
+        case "$-" in
+          *x*)
+            if [ -n "${PR_TOKEN:+x}${GATE_TOKEN:+x}" ]; then
+              echo "::error::bot-pr-with-synthetic-checks: refusing to trace with a live credential set (see #7797)"
+              exit 78
+            fi
+            ;;
+        esac
+        # git's trace channels print the request, including the push Authorization header.
+        unset GIT_TRACE GIT_TRACE_PACKET GIT_TRACE_PERFORMANCE GIT_TRACE_SETUP \
+          GIT_TRACE_CURL GIT_TRACE_CURL_NO_DATA GIT_TRACE_REDACT GIT_TRACE2 \
+          GIT_TRACE2_PERF GIT_TRACE2_EVENT GIT_CURL_VERBOSE GIT_HTTP_TRACE_AUTH_HEADER
+        # The push header is a shell variable only; an inherited exported one would reach every child.
+        unset _hdr _pr _gate
+        # Identity refusals run BEFORE the no-change exit so a misconfigured caller fails on an
+        # unchanged week too, not only on the week it matters (#9454 item 4). The canonical-body
+        # _bearer_ok copy (alphabet [A-Za-z0-9._~+/=-]) is the credential class bearer-curl.sh judges.
+        _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+        if ! _bearer_ok "${PR_TOKEN:-}"; then
+          echo "::error::bot-pr-with-synthetic-checks: pr-token is empty or not a bearer token (value not shown). Mint it in the caller's job with ./.github/actions/mint-infra-app-token (ADR-285)."
+          exit 1
+        fi
+        if ! _bearer_ok "${GATE_TOKEN:-}"; then
+          echo "::error::bot-pr-with-synthetic-checks: gh-token is empty or not a bearer token (value not shown)."
+          exit 1
+        fi
+        if [[ "$PR_TOKEN" == "$GATE_TOKEN" ]]; then
+          echo "::error::bot-pr-with-synthetic-checks: pr-token must not be the workflow token; a PR authored and armed as the workflow token had held runs and no merge_group runs on 2026-10-11 (#9454 item 4, ADR-285)."
+          exit 1
+        fi
+        # Early copy of the off-main refusal below: a non-main run exits here, before any no-change exit.
+        if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
+          echo "::error::bot-pr-with-synthetic-checks must run from refs/heads/main (got '${GITHUB_REF:-unset}')."
+          exit 1
+        fi
+        # Keep both tokens in unexported shell variables and drop them from the environment, so the
+        # gitleaks download, the repo lint scripts and any git hook never inherit a credential. A bare
+        # gh call has no token and fails; PR writes go through gh_app, check-runs through gh_gate.
+        _pr="$PR_TOKEN"
+        _gate="$GATE_TOKEN"
+        unset PR_TOKEN GATE_TOKEN GH_TOKEN
+        gh_app() { GH_TOKEN="$_pr" gh "$@"; }
+        gh_gate() { GH_TOKEN="$_gate" gh "$@"; }
         # Normalize boolean inputs at the boundary. Composite-action inputs are
         # always strings; lowercase + hard-reject any non-{true,false} value so
         # callers passing 'True'/'1'/'yes' fail loud. (Architecture review #4.)
@@ -177,8 +237,19 @@ runs:
             exit 1
           fi
         done
-        git config user.name "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        # Commit identity is the soleur-infra App's, the same pair the pin-bump script pins
+        # (bump-inngest-bootstrap-pin.sh BOT_NAME/BOT_EMAIL): the PR author, the pusher and the
+        # commit author are then one identity (ADR-285). cla.yml allowlists soleur-infra[bot].
+        git config user.name "soleur-infra[bot]"
+        git config user.email "335404629+soleur-infra[bot]@users.noreply.github.com"
+        # Each staged path must be a regular file: a symlink or directory at an allowlisted
+        # path would stage a tree the string-equality allowlist above never looked at.
+        for p in "${PATHS[@]}"; do
+          if [[ ! -f "$p" || -L "$p" ]]; then
+            echo "::error::add-path '$p' is not a regular file (missing, a directory or a symlink); refusing to stage it."
+            exit 1
+          fi
+        done
         git add -- "${PATHS[@]}"
         if git diff --cached --quiet; then
           echo "No changes to commit"
@@ -261,9 +332,33 @@ runs:
         fi
         DATE_SUFFIX="$(date -u +%Y-%m-%d)"
         BRANCH="${BRANCH_PREFIX}${DATE_SUFFIX}"
+        # The App token reaches git as a per-command extra header (the form actions/checkout
+        # uses, built newline-free), never on an argument list and never in .git/config; the
+        # caller's checkout keeps no credential (persist-credentials: false), so the header
+        # is the only one.
+        _hdr="Authorization: basic $(printf '%s' "x-access-token:${_pr}" | base64 -w0)"
+        git_remote() {
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="$_hdr" git "$@"
+        }
+        # A same-day re-run finds the branch a failed earlier run left behind, and a plain push
+        # would then be rejected as non-fast-forward with only raw git output. Name the recovery.
+        ls_rc=0
+        git_remote ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null 2>&1 || ls_rc=$?
+        case "$ls_rc" in
+          2) : ;;
+          0)
+            echo "::error::branch ${BRANCH} already exists on origin (an earlier run today pushed it). Close its PR if any, then delete it: gh api -X DELETE repos/${REPO}/git/refs/heads/${BRANCH} — or let the next scheduled run take a new date-suffixed branch."
+            exit 1
+            ;;
+          *)
+            echo "::error::could not check origin for branch ${BRANCH} (git ls-remote rc=${ls_rc}); refusing to push blind."
+            exit 1
+            ;;
+        esac
         git checkout -b "$BRANCH"
         git commit -m "$COMMIT_MESSAGE"
-        git push -u origin "$BRANCH"
+        git_remote push -u origin "$BRANCH"
         # Pass PR body via --body-file so multi-line content would round-trip
         # cleanly if the single-line guard is ever relaxed.
         BODY_FILE=$(mktemp)
@@ -279,21 +374,22 @@ runs:
         if [[ "$DRAFT" == "true" ]]; then
           PR_CREATE_ARGS+=(--draft)
         fi
-        gh pr create "${PR_CREATE_ARGS[@]}"
+        gh_app pr create "${PR_CREATE_ARGS[@]}"
         rm -f "$BODY_FILE"
         # Apply labels (no-op when LABELS is empty). Labels must pre-exist —
         # caller's responsibility per CHANGELOG.md v2.
         if [[ -n "$LABELS" ]]; then
           while IFS= read -r label; do
             [[ -z "$label" ]] && continue
-            gh pr edit "$BRANCH" --add-label "$label"
+            gh_app pr edit "$BRANCH" --add-label "$label"
           done <<< "$LABELS"
         fi
         COMMIT_SHA=$(git rev-parse HEAD)
         # Synthetic checks — satisfies CI Required + CLA Required rulesets on
         # main. Use the Checks API (/check-runs), NOT Statuses API; rulesets
-        # require Check Runs from integration_id 15368. PRs created with
-        # GITHUB_TOKEN don't re-trigger CI, so each required check is posted here.
+        # require Check Runs from integration_id 15368. PRs authored as
+        # the workflow token don't re-trigger CI, and the rulesets match integration 15368 (the
+        # workflow token), so each required check is posted here under gh-token.
         #
         # CHECK_NAMES is DERIVED from scripts/required-checks.txt (the SSOT) —
         # NOT hardcoded. #6049 fixed the drift where a hardcoded 6-name array
@@ -301,9 +397,11 @@ runs:
         # PR stalled at mergeState=BLOCKED forever. The file-vs-file parity test
         # (plugins/soleur/test/required-checks-canonical-parity.test.sh) keeps
         # the SSOT ≡ the canonical ruleset JSON, and a composite→SSOT guard in
-        # the same test catches any future re-hardcode here. `CodeQL` (GHAS
-        # 57789) is intentionally omitted from the SSOT — a 15368 synthetic
-        # cannot satisfy a GHAS gate; CodeQL concludes `neutral` for bot PRs.
+        # the same test catches any future re-hardcode here. `CodeQL` is NOT a
+        # required check (advisory since #9454: the merge queue is adopted and
+        # CodeQL cannot report on `merge_group`), so it is in no required set and
+        # not in the SSOT. If it is ever re-tightened (GHAS 57789) it stays out of
+        # the SSOT — a 15368 synthetic cannot satisfy a GHAS-bound gate.
         #
         # Parser: leading-`#`-only comment rule (kept in sync with
         # scripts/lint-bot-synthetic-completeness.sh) — preserves multi-word
@@ -335,7 +433,7 @@ runs:
           case "$check" in
             cla-check)
               OUT_TITLE="CLA pre-approved"
-              OUT_SUMMARY="github-actions[bot] is in CLA allowlist"
+              OUT_SUMMARY="Bot PR author (the soleur-infra App or github-actions[bot]) is in CLA allowlist"
               ;;
             cla-evidence)
               OUT_TITLE="CLA evidence not applicable"
@@ -346,7 +444,7 @@ runs:
               OUT_SUMMARY="${CHANGE_SUMMARY}"
               ;;
           esac
-          gh api "repos/${REPO}/check-runs" \
+          gh_gate api "repos/${REPO}/check-runs" \
             -f name="$check" \
             -f head_sha="$COMMIT_SHA" \
             -f status=completed \
@@ -355,5 +453,5 @@ runs:
             -f "output[summary]=${OUT_SUMMARY}"
         done
         if [[ "$SKIP_AUTO_MERGE" != "true" ]]; then
-          gh pr merge "$BRANCH" --squash --auto
+          gh_app pr merge "$BRANCH" --squash --auto
         fi

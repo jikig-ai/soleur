@@ -61,9 +61,17 @@ vi.mock("@/server/agent-runner-sandbox-config", () => ({
   buildAgentSandboxConfig: mockBuildAgentSandboxConfig,
 }));
 
-vi.mock("@/server/agent-env", () => ({
-  buildAgentEnv: mockBuildAgentEnv,
-}));
+vi.mock("@/server/agent-env", async () => {
+  // feat-open-web-egress (#9534): keep the REAL exports —
+  // agent-runner-sandbox-config derives the web-egress deny census from
+  // ALLOWED_SERVICE_ENV_VARS at module init; a bare stub drops it and
+  // crashes every transitive importer.
+  const actual =
+    await vi.importActual<typeof import("@/server/agent-env")>(
+      "@/server/agent-env",
+    );
+  return { ...actual, buildAgentEnv: mockBuildAgentEnv };
+});
 
 vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
@@ -89,6 +97,20 @@ vi.mock("@/server/git-auth", () => ({
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: vi.fn(async () => false),
 }));
+
+// feat-open-web-egress (#9534): entitlement read + forwarder spawn default
+// off — these factory tests never exercise the egress path.
+vi.mock("@/server/resolve-web-egress", () => ({
+  resolveWebEgress: vi.fn(async () => false),
+  resolveWebEgressStrict: vi.fn(async () => false),
+}));
+vi.mock("@/server/egress-forwarder", () => ({
+  spawnEgressForwarder: vi.fn(),
+  teardownEgressForwarder: vi.fn(),
+  reapOrphanEgressForwarders: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
+}));
 // feat-bash-autonomous-default-on — soft-gate inputs default to un-acked /
 // non-owner so the prefill-guard factory-shape tests dispatch unaffected.
 vi.mock("@/server/resolve-autonomous-ack", () => ({
@@ -99,14 +121,23 @@ vi.mock("@/server/resolve-workspace-owner", () => ({
 }));
 
 // Session-start ensure-repo self-heal (cold-path deps) — default no-op.
-vi.mock("@/server/current-repo-url", () => ({
-  getCurrentRepoUrl: vi.fn(async () => null),
-  // #5394 — gate reads repo readiness; default ready so dispatch is not blocked.
-  getCurrentRepoStatus: vi.fn(async () => ({
-    repoStatus: "ready",
-    repoError: null,
-  })),
-}));
+vi.mock("@/server/current-repo-url", () => {
+  // One shared impl keeps the two views of the same read from diverging
+  // (#9556 — the SUT calls the degrade-aware variant).
+  const nullRepoUrl = async () => null;
+  return {
+    getCurrentRepoUrl: vi.fn(nullRepoUrl),
+    readCurrentRepoUrlResult: vi.fn(async () => ({
+      url: await nullRepoUrl(),
+      degraded: false,
+    })),
+    // #5394 — gate reads repo readiness; default ready so dispatch is not blocked.
+    getCurrentRepoStatus: vi.fn(async () => ({
+      repoStatus: "ready",
+      repoError: null,
+    })),
+  };
+});
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
   ensureWorkspaceDirExists: vi.fn(async () => undefined),
@@ -287,7 +318,7 @@ describe("realSdkQueryFactory — prefill-guard integration (#3250)", () => {
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },
@@ -341,6 +372,19 @@ describe("realSdkQueryFactory — prefill-guard integration (#3250)", () => {
     expect(opts.resume).toBe("s");
   });
 
+  // #9538 — the cc caller opts into `dropResumeOnEmptyHistory`: `[]` for a
+  // known resumeSessionId is the deleted/rotated-file shape and the cc path
+  // has no `messages`-replay primitive, so a crash-and-retry cycle is
+  // strictly worse than a clean cold start with the reset notice.
+  it("passes dropResumeOnEmptyHistory: true on the cc call site", async () => {
+    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
+
+    expect(mockApplyPrefillGuard).toHaveBeenCalledOnce();
+    expect(
+      mockApplyPrefillGuard.mock.calls[0][0].dropResumeOnEmptyHistory,
+    ).toBe(true);
+  });
+
   it("invokes the helper even when resumeSessionId is undefined (helper short-circuits)", async () => {
     await realSdkQueryFactory(makeArgs());
 
@@ -368,7 +412,7 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },
@@ -472,6 +516,24 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
       (call) => call[1]?.type === "context_reset",
     );
     expect(contextResetCalls).toHaveLength(0);
+  });
+
+  // #9538 — the stale-resume retry's own notice channel: the guard's
+  // `contextResetNotice` field only covers the guard-fired case; the
+  // dispatcher-driven re-dispatch carries its notice via
+  // `QueryFactoryArgs.contextResetNotice`, appended at the same site.
+  it("appends args.contextResetNotice to systemPrompt (stale-resume retry notice hop)", async () => {
+    await realSdkQueryFactory(
+      makeArgs({
+        systemPrompt: "BASE",
+        // biome-ignore lint/suspicious/noExplicitAny: QueryFactoryArgs field under test
+        contextResetNotice: "RETRY-RESET-NOTICE",
+      } as any),
+    );
+
+    const opts = mockQuery.mock.calls[0][0].options;
+    expect(opts.systemPrompt).toContain("BASE");
+    expect(opts.systemPrompt).toContain("RETRY-RESET-NOTICE");
   });
 
   it("does NOT carry the notice forward across calls when the guard does not fire on the second call (multi-turn non-accumulation, AC6b)", async () => {

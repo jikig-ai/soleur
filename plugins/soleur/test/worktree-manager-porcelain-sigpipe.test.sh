@@ -285,7 +285,7 @@ assert_eq "true" "$([[ -n "$P_A1" && -n "$B_A1" ]] && echo true || echo false)" 
 # the other while the bug is still faithfully reproduced — measured on CI.
 STUB_RC=0
 ( export PATH="$GIT_STUB_DIR:$PATH"
-  cd "$R_A1" && git worktree list --porcelain | grep -qxF "worktree $P_A1" ) || STUB_RC=$?
+  cd "$R_A1" && git worktree list --porcelain | grep -qxF "worktree $P_A1" ) || STUB_RC=$?  # sigpipe-demo: intentional
 assert_eq "true" "$([[ "$STUB_RC" -ne 0 ]] && echo true || echo false)" \
   "stub git FAILS when a grep -q reader quits early (rc=$STUB_RC; arms are not vacuous)"
 
@@ -366,7 +366,7 @@ echo ""
 #      present and only the exit code lies. Cheaper to block at review than to
 #      re-diagnose from a worktree the script already deleted.
 # ---------------------------------------------------------------------------
-echo "A6: no 'git worktree list … | grep -q' pipeline remains in the script"
+echo "A6: no piped grep -q over 'git worktree list' remains in the script"
 # `^[^#]*` so the helper's own explanatory comment — which quotes the outlawed
 # spelling on purpose — is not counted as a use of it.
 #

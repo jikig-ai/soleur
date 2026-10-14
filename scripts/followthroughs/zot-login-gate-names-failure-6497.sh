@@ -171,13 +171,13 @@ BAD=""
 while IFS= read -r line; do
   [[ -z "$line" ]] && continue
   miss=""
-  printf '%s' "$line" | grep -q 'rc='            || miss="${miss}rc "
-  printf '%s' "$line" | grep -q 'class='         || miss="${miss}class "
-  printf '%s' "$line" | grep -q 'stderr_chars='  || miss="${miss}stderr_chars "
-  printf '%s' "$line" | grep -q 'stdout_chars='  || miss="${miss}stdout_chars "
+  grep -q 'rc=' <<<"$line"            || miss="${miss}rc "
+  grep -q 'class=' <<<"$line"         || miss="${miss}class "
+  grep -q 'stderr_chars=' <<<"$line"  || miss="${miss}stderr_chars "
+  grep -q 'stdout_chars=' <<<"$line"  || miss="${miss}stdout_chars "
   # tok= must populate on unclassified. kw= is deliberately NOT asserted (see header).
-  if printf '%s' "$line" | grep -q 'class=unclassified'; then
-    printf '%s' "$line" | grep -qE 'tok=[A-Za-z]' || miss="${miss}tok(on-unclassified) "
+  if grep -q 'class=unclassified' <<<"$line"; then
+    grep -qE 'tok=[A-Za-z]' <<<"$line" || miss="${miss}tok(on-unclassified) "
   fi
   [[ -n "$miss" ]] && BAD="${BAD}
   missing[ ${miss}]: ${line}"

@@ -67,6 +67,15 @@ cp "$REPO_ROOT/apps/web-platform/infra/suite-shard-legs.tsv" \
   "$SB/apps/web-platform/infra/suite-shard-legs.tsv" || setup_die "cp manifest"
 cp "$SB/apps/web-platform/infra/suite-shard-legs.tsv" "$SB/manifest.pristine" \
   || setup_die "cp manifest pristine"
+# The durations-table arm (#9232) compares the committed suite-durations.tsv
+# against the manifest's label set. Synthesize it FROM the manifest so the
+# sandbox is self-consistent regardless of whether the real table has been
+# regenerated yet — all-floor rows are valid under the src enum.
+awk -F'\t' '!/^#/ && NF >= 1 {print $1 "\t60000\tfloor"}' \
+  "$SB/apps/web-platform/infra/suite-shard-legs.tsv" \
+  > "$SB/apps/web-platform/infra/suite-durations.tsv" || setup_die "synthesize durations"
+cp "$SB/apps/web-platform/infra/suite-durations.tsv" "$SB/durations.pristine" \
+  || setup_die "cp durations pristine"
 
 mapfile -t REAL_SUITES < <(git -C "$REPO_ROOT" ls-files \
   "${INFRA_PREFIX}/*.test.sh" | LC_ALL=C sort -u)
@@ -379,10 +388,45 @@ expect_red "M26 if: false on the aggregate step" "aggregate step" \
 expect_red "M27 SOLEUR_INFRA_DIR in matrix job" "SOLEUR_INFRA_DIR" \
   sed -i 's|^\(          SOLEUR_INFRA_SHARD:.*\)$|\1\n          SOLEUR_INFRA_DIR: apps/web-platform/infra/inngest-rls|' "$SB/$WF_REL"
 
+# Durations-table arm (#9232): the sandbox's suite-durations.tsv is derived from
+# the manifest above, so mutations here must restore it the same way.
+DURATIONS_REL="apps/web-platform/infra/suite-durations.tsv"
+restore_durations() { cp "$SB/durations.pristine" "$SB/$DURATIONS_REL" || setup_die "restore durations"; }
+expect_red_durations() {  # durations-mutating variant of expect_red
+  local label="$1" needle="$2"; shift 2
+  restore_wf; restore_manifest; restore_durations
+  "$@" || setup_die "mutation cmd for $label"
+  local rc; rc=$(run_gate)
+  restore_durations
+  if [[ "$rc" == "0" ]]; then
+    bad "$label: gate stayed GREEN (vacuous arm)"
+  elif grep -qF "$needle" "$SB/out.log"; then
+    ok "$label: rc=$rc and message names the right mode"
+  else
+    bad "$label: rc=$rc but expected message missing ($needle): $(tail -3 "$SB/out.log")"
+  fi
+}
+
+# M28 -- a durations row naming a suite that does not exist is the same
+# phantom class as a stale manifest row.
+expect_red_durations "M28 phantom durations row" "not an executable infra" \
+  sh -c 'printf "%s\t%s\t%s\n" "apps/web-platform/infra/zzz-stale-dur.test.sh" "100" "measured" >> "$1"' _ "$SB/$DURATIONS_REL"
+
+# M29 -- a src value outside {measured,floor} is a malformed row; a typo'd
+# enum must not silently pass as a third class.
+expect_red_durations "M29 durations src outside enum" "malformed" \
+  sh -c 'printf "%s\t%s\t%s\n" "apps/web-platform/infra/ci-deploy.test.sh" "100" "weighed" >> "$1"' _ "$SB/$DURATIONS_REL"
+
+# M30 -- dropping a label from the durations table diverges the two committed
+# key sets: the label has placement in the manifest and no weight in the
+# table.
+expect_red_durations "M30 durations/manifest key divergence" "different label" \
+  sed -i '/^apps\/web-platform\/infra\/ci-deploy\.test\.sh\t/d' "$SB/$DURATIONS_REL"
+
 # ---------------------------------------------------------------------------
 # Assertion floor.
 # ---------------------------------------------------------------------------
-MIN_ASSERTS=28
+MIN_ASSERTS=31
 if (( asserts < MIN_ASSERTS )); then
   echo "[FAIL] assertion floor: only $asserts assertion(s) ran, expected >= $MIN_ASSERTS." >&2
   echo "       Rows were removed or short-circuited. Lower the floor deliberately, with a reason." >&2

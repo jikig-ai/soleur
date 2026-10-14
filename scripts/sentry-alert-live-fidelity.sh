@@ -86,7 +86,7 @@ esac
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECTION="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 REFERENCE="${SENTRY_REFERENCE_FILE:-$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json}"
-FROZEN_CAPTURE="${SENTRY_FROZEN_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json}"
+FROZEN_CAPTURE="${SENTRY_FROZEN_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json}"
 FROZEN_TF_DIR="${SENTRY_FROZEN_TF_DIR:-$REPO_ROOT/apps/web-platform/infra/sentry}"
 VENDOR_DEFAULTS="${SENTRY_VENDOR_DEFAULTS_FILE:-$REPO_ROOT/apps/web-platform/infra/sentry/vendor-default-workflows.json}"
 

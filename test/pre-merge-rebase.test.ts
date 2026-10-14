@@ -250,7 +250,12 @@ esac
     spawnChecked(["git", "config", "user.email", "test@test.com"], { cwd: repoDir });
     spawnChecked(["git", "config", "user.name", "Test"], { cwd: repoDir });
 
-    spawnChecked(["bash", "-c", "echo 'init' > file.txt && git add file.txt && git commit -m 'init'"], {
+    // Eight lines, not one: since #9401 the sync only runs when the incoming
+    // delta overlaps the branch's file set, so fixtures that need a real merge
+    // put the branch's edit on file.txt's head line and main's on its tail —
+    // an overlap that still merges cleanly (the hunks sit past the 3-line
+    // diff context).
+    spawnChecked(["bash", "-c", "printf 'l1\\nl2\\nl3\\nl4\\nl5\\nl6\\nl7\\nl8\\n' > file.txt && git add file.txt && git commit -m 'init'"], {
       cwd: repoDir,
     });
     spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
@@ -390,15 +395,18 @@ esac
   test("branch behind main triggers merge and push", async () => {
     spawnChecked(["git", "checkout", "-b", "test-behind"], { cwd: repoDir });
     spawnChecked(
-      ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
+      ["bash", "-c", "echo 'feature' > feature.txt && sed -i '1s/.*/branch-l1/' file.txt && git add feature.txt file.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
     addReviewEvidence(repoDir);
     spawnChecked(["git", "push", "origin", "test-behind"], { cwd: repoDir });
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    // The incoming delta must OVERLAP the branch's file set or the sync is
+    // skipped entirely (#9401): file.txt's tail append overlaps while the new
+    // file keeps the diff non-trivial.
     spawnChecked(
-      ["bash", "-c", "echo 'new-on-main' > main-change.txt && git add main-change.txt && git commit -m 'main advance'"],
+      ["bash", "-c", "echo 'new-on-main' > main-change.txt && echo 'l9' >> file.txt && git add main-change.txt file.txt && git commit -m 'main advance'"],
       { cwd: repoDir }
     );
     spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
@@ -414,6 +422,48 @@ esac
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.additionalContext).toContain("merged");
     expect(output.hookSpecificOutput.additionalContext).toContain("test-behind");
+  });
+
+  test("disjoint incoming delta skips the sync (#9401)", async () => {
+    spawnChecked(["git", "checkout", "-b", "test-disjoint"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
+      { cwd: repoDir }
+    );
+    addReviewEvidence(repoDir);
+    spawnChecked(["git", "push", "origin", "test-disjoint"], { cwd: repoDir });
+
+    spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'new-on-main' > main-change.txt && git add main-change.txt && git commit -m 'main advance'"],
+      { cwd: repoDir }
+    );
+    spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
+
+    spawnChecked(["git", "checkout", "test-disjoint"], { cwd: repoDir });
+    const headBefore = new TextDecoder()
+      .decode(spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir }).stdout)
+      .trim();
+
+    const result = await runHook(
+      makeInput("gh pr merge 123 --squash --auto", repoDir)
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout, "expected JSON output but got empty stdout").not.toBe("");
+    const output = JSON.parse(result.stdout);
+    // No merge commit, no push: the head SHA a green check suite certified
+    // stays put, and the skip is announced in additionalContext.
+    expect(output.hookSpecificOutput.additionalContext).toContain("delta disjoint");
+    const headAfter = new TextDecoder()
+      .decode(spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir }).stdout)
+      .trim();
+    expect(headAfter).toBe(headBefore);
+    const parents = Bun.spawnSync(
+      ["bash", "-c", "git cat-file -p HEAD | grep -c '^parent '"],
+      { cwd: repoDir, env: GIT_ENV }
+    );
+    expect(new TextDecoder().decode(parents.stdout).trim()).toBe("1");
   });
 
   test("uncommitted changes blocks merge with deny", async () => {
@@ -644,8 +694,10 @@ esac
 
   test("push failure after merge blocks with deny", async () => {
     spawnChecked(["git", "checkout", "-b", "test-pushfail"], { cwd: repoDir });
+    // file.txt edit = the overlap that keeps the sync reachable (#9401);
+    // pushfail.txt keeps the diff non-trivial.
     spawnChecked(
-      ["bash", "-c", "echo 'feature' > pushfail.txt && git add pushfail.txt && git commit -m 'feature'"],
+      ["bash", "-c", "echo 'feature' > pushfail.txt && sed -i '1s/.*/branch-l1/' file.txt && git add pushfail.txt file.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
     addReviewEvidence(repoDir);
@@ -653,7 +705,7 @@ esac
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
     spawnChecked(
-      ["bash", "-c", "echo 'advance' > advance2.txt && git add advance2.txt && git commit -m 'advance'"],
+      ["bash", "-c", "echo 'advance' > advance2.txt && echo 'l9' >> file.txt && git add advance2.txt file.txt && git commit -m 'advance'"],
       { cwd: repoDir }
     );
     spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
@@ -686,7 +738,7 @@ esac
   test("hook is idempotent -- second run after merge shows up-to-date", async () => {
     spawnChecked(["git", "checkout", "-b", "test-idempotent"], { cwd: repoDir });
     spawnChecked(
-      ["bash", "-c", "echo 'feature' > feature2.txt && git add feature2.txt && git commit -m 'feature'"],
+      ["bash", "-c", "echo 'feature' > feature2.txt && sed -i '1s/.*/branch-l1/' file.txt && git add feature2.txt file.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
     addReviewEvidence(repoDir);
@@ -694,7 +746,7 @@ esac
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
     spawnChecked(
-      ["bash", "-c", "echo 'advance' > advance.txt && git add advance.txt && git commit -m 'advance'"],
+      ["bash", "-c", "echo 'advance' > advance.txt && echo 'l9' >> file.txt && git add advance.txt file.txt && git commit -m 'advance'"],
       { cwd: repoDir }
     );
     spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });

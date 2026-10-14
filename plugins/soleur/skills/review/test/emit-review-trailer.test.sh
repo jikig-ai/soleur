@@ -21,6 +21,12 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # to the SUT it would be silent AND green: never run, never red (#3366).
 SUT="$(cd "${DIR}/../scripts" && pwd)/emit-review-trailer.sh"
 
+# assert_fixture_dir — the operand guard for the fixture repos below
+# (fixture-dir-operand-assert.test.sh scans this file).
+# shellcheck source=../../../test/test-helpers.sh
+source "${DIR}/../../../test/test-helpers.sh" || { echo "FATAL: test-helpers.sh" >&2; exit 2; }
+set +e  # the helper sets -e; restore this suite's verdict-counting contract
+
 TMP="$(mktemp -d -t emitrt.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 
@@ -202,6 +208,139 @@ out="$(cd "$d" && bash "$SUT" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
 assert "still skips on main (pre-existing guard intact)" \
   '[[ "$rc" -eq 0 && "$out" == *"nothing to mark, skipping"* ]]' "rc=$rc out=$out"
 
+# ── Guard 2 (ADR-267): --risk-tier emits Reviewed-Risk-Tier from the resolved enum only ──
+tier_of() {  # $1 = repo dir -> the parsed Reviewed-Risk-Tier trailer value
+  git -C "$1" log -1 --format='%(trailers:key=Reviewed-Risk-Tier,valueonly)' | tr -d '\n'
+}
+
+# Every resolved-tier value produces a trailer that PARSES — a value that does not parse is
+# invisible to `git log --format=%(trailers:...)` while looking like evidence to a human.
+for tier in "none" "single-user incident" "aggregate pattern"; do
+  d="$(new_repo "tier$(printf '%s' "$tier" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+  out="$(cd "$d" && bash "$SUT" --risk-tier "$tier" 2>&1)"; rc=$?
+  t="$(tier_of "$d")"
+  assert "--risk-tier '$tier' emits a parseable trailer" \
+    '[[ "$rc" -eq 0 && "$t" == "$tier" ]]' "rc=$rc parsed='$t' out=$out"
+done
+
+# `undeclared` is a classifier parse state, never a resolved tier — rejected like any other
+# invalid value, BEFORE any commit exists to carry it.
+for bad in "bogus" "undeclared" "Full"; do
+  d="$(new_repo "badtier$(printf '%s' "$bad" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+  before="$(git -C "$d" rev-parse HEAD)"
+  out="$(cd "$d" && bash "$SUT" --risk-tier "$bad" 2>&1)"; rc=$?
+  after="$(git -C "$d" rev-parse HEAD)"
+  assert "--risk-tier '$bad' refused, no commit" \
+    '[[ "$rc" -eq 2 && "$before" == "$after" ]]' \
+    "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
+done
+
+# Absent flag → absent field. A fabricated `unknown` literal would be a claim the caller
+# never measured (same honesty rule as Reviewed-Coverage's 'unknown').
+d="$(new_repo notier)"
+(cd "$d" && bash "$SUT" --findings 0 >/dev/null 2>&1)
+t="$(tier_of "$d")"
+assert "no --risk-tier → field absent, not 'unknown'" '[[ -z "$t" ]]' "parsed='$t'"
+
+# Coverage must remain the LAST trailer line — it is the first casualty of a
+# split trailers paragraph, and RISK_TIER_LINE now interpolates above it.
+d="$(new_repo lastline)"
+(cd "$d" && bash "$SUT" --risk-tier none --agents-ran 3 --agents-expected 3 >/dev/null 2>&1)
+last="$(git -C "$d" log -1 --format=%B | git interpret-trailers --parse | tail -1)"
+assert "Reviewed-Coverage stays the last trailer line" \
+  '[[ "$last" == "Reviewed-Coverage:"* ]]' "last='$last'"
+
+# ── Guard 3 (ADR-267): --fix-round emits fix-scoped keys, never Reviewed-Coverage ──
+#
+# The whole point of the separate keys: a targeted round covering `full` over the
+# fix range would misread as branch-level coverage on ship's gate, and the main
+# trailer's idempotence skip would swallow the emission anyway.
+
+# --fix-round requires --since; --since requires --fix-round — an orphaned flag is a
+# scope error, not a default to the whole branch.
+for bad in "--fix-round" "--since HEAD"; do
+  d="$(new_repo "frbad$(printf '%s' "$bad" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+  before="$(git -C "$d" rev-parse HEAD)"
+  out="$(cd "$d" && bash "$SUT" $bad 2>&1)"; rc=$?
+  after="$(git -C "$d" rev-parse HEAD)"
+  assert "refuses '$bad' with no commit" \
+    '[[ "$rc" -eq 2 && "$before" == "$after" ]]' \
+    "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
+done
+
+# --since must resolve to a commit — an unresolvable sha cannot land in a range trailer.
+d="$(new_repo frbadsha)"
+before="$(git -C "$d" rev-parse HEAD)"
+out="$(cd "$d" && bash "$SUT" --fix-round --since 'not-a-sha' 2>&1)"; rc=$?
+after="$(git -C "$d" rev-parse HEAD)"
+assert "--fix-round --since <unresolvable> refused, no commit" \
+  '[[ "$rc" -eq 2 && "$before" == "$after" ]]' "rc=$rc out=$out"
+
+# A resolvable-but-not-ancestor --since (stale post-rebase sha) must refuse —
+# otherwise the recorded range spans unrelated history.
+d="$(new_repo frnonancestor)"
+assert_fixture_dir "$d"
+git -C "$d" checkout -qb sideline main
+git -C "$d" commit -q --allow-empty -m "work not on this branch"
+stale="$(git -C "$d" rev-parse HEAD)"
+git -C "$d" checkout -q feat-x
+before="$(git -C "$d" rev-parse HEAD)"
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$stale" 2>&1)"; rc=$?
+after="$(git -C "$d" rev-parse HEAD)"
+assert "--fix-round --since <non-ancestor> refused, no commit" \
+  '[[ "$rc" -eq 2 && "$out" == *"not an ancestor"* && "$before" == "$after" ]]' "rc=$rc out=$out"
+
+# The load-bearing arm: branch already carries the MAIN trailer (the normal
+# post-panel state) — a fix round must still emit, with the fix keys, WITHOUT a
+# second Reviewed-Coverage claim.
+d="$(new_repo frhappy)"
+base="$(git -C "$d" rev-parse HEAD)"
+(cd "$d" && bash "$SUT" --agents-ran 7 --agents-expected 7 >/dev/null 2>&1)   # main-panel trailer
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 3 --agents-expected 3 \
+        --risk-tier none 2>&1)"; rc=$?
+fr="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Round,valueonly)' | tr -d '\n')"
+rng="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
+cov2="$(coverage_of "$d")"
+by2="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | tr -d '\n')"
+t2="$(tier_of "$d")"
+assert "fix round emits after main trailer (not swallowed by idempotence)" \
+  '[[ "$rc" -eq 0 && "$fr" == *"3/3"* ]]' "rc=$rc fr='$fr' out=$out"
+assert "fix round records the range and carries NO Reviewed-Coverage" \
+  '[[ "$rng" == "$base"..* && -z "$cov2" ]]' "rng='$rng' cov='$cov2'"
+assert "fix round does not re-emit Reviewed-By-Soleur" \
+  '[[ -z "$by2" ]]' "by='$by2'"
+assert "fix round still records the risk tier" \
+  '[[ "$t2" == "none" ]]' "t='$t2'"
+
+# Same range twice → idempotent skip (the range is the dedup key, not the branch).
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 3 --agents-expected 3 2>&1)"; rc=$?
+n_commits="$(git -C "$d" rev-list --count main..feat-x)"
+assert "repeat fix round over the same range skips" \
+  '[[ "$rc" -eq 0 && "$out" == *"already exists"* && "$n_commits" -eq 2 ]]' \
+  "rc=$rc commits=$n_commits out=$out"
+
+# A SECOND round after more fix commits is a different range — the left edge
+# alone must not suppress it (idempotence keys on the full since..head).
+assert_fixture_dir "$d"
+git -C "$d" commit -q --allow-empty -m "fix: second round commit"
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
+fr2="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
+assert "second round over an extended range still emits" \
+  '[[ "$rc" -eq 0 && "$fr2" == "$base"..* ]]' "rc=$rc range='$fr2' out=$out"
+
+# A `review:`-subjected FIX commit is a real fix (SKILL.md's own convention),
+# not an attestation — it must extend the effective range, not be excluded.
+assert_fixture_dir "$d"
+git -C "$d" commit -q --allow-empty -m "review: fix finding (P2)"
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 2 --agents-expected 2 2>&1)"; rc=$?
+fr3="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
+fixsha="$(git -C "$d" rev-parse 'HEAD^')"
+assert "a review:-subjected fix commit extends the range (not excluded)" \
+  '[[ "$rc" -eq 0 && "$fr3" == "$base".."$fixsha" ]]' "rc=$rc range='$fr3' want-end=$fixsha out=$out"
+
 # ── Accounting conservation (ADR-193 #3) ─────────────────────────────────────────
 # Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the verdict counts, so
 # a floor reading them would ALSO trip and would report the misleading "arms were deleted".
@@ -233,7 +372,7 @@ fi
 # A floor, not equality: developer-incremented, so `-eq` would redden the suite on every added
 # arm. Ratchet when adding arms; read a floor failure on an otherwise-green run as "you added
 # assertions, update this number".
-TRAILER_MIN_ASSERTIONS=15
+TRAILER_MIN_ASSERTIONS=34
 if (( CASES < TRAILER_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$TRAILER_MIN_ASSERTIONS" >&2

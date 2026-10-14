@@ -3,7 +3,7 @@ title: "Legitimate Interest Assessment — LinkedIn Company Page publication (Ji
 type: legitimate-interest-assessment
 date: 2026-05-19
 amended: 2026-09-09
-plan: knowledge-base/project/plans/2026-05-19-feat-legal-linkedin-page-4051-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-legal-linkedin-page-4051-plan.md
 issue: 4051
 status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris)"

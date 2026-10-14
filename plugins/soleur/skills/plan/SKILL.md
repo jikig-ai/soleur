@@ -271,10 +271,6 @@ real infrastructure step was reviewed, which would be false here.
 
 ### 1. Local Research (Always Runs - Parallel)
 
-<thinking>
-First, I need to understand the project's conventions, existing patterns, and any documented learnings. This is fast and local - it informs whether external research is needed.
-</thinking>
-
 Run these agents **in parallel** to gather local context:
 
 - Task soleur:engineering:research:repo-research-analyst(feature_description)
@@ -383,7 +379,7 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 2. Query open code-review issues. **Use two-stage piping (`--json` then a standalone `jq --arg`), not single-stage `gh --jq` with `--arg`.** The `gh` CLI does NOT forward `--arg` to its embedded jq; a single-stage form produces `unknown arguments` at runtime. See learning `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
 
     ```bash
-    ISSUES_JSON=$(mktemp -t open-review-issues.XXXXXXXX.json)
+    ISSUES_JSON=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" open-review-issues.XXXXXXXX.json)
     gh issue list --label code-review --state open \
       --json number,title,body --limit 200 > "$ISSUES_JSON"
     echo "ISSUES_JSON=$ISSUES_JSON"
@@ -400,7 +396,8 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
     A later Bash call does not inherit `ISSUES_JSON`, so carry the echoed path forward (or
     re-derive it in the same call). Do not substitute a fixed name: a concurrent `soleur:plan`
-    would overwrite the file between the write and this read.
+    would overwrite the file between the write and this read. When the last `jq` read is done,
+    `rm -f "$ISSUES_JSON"; rmdir "$(dirname "$ISSUES_JSON")" 2>/dev/null` — it is a snapshot, not an artifact (#10017).
 
 4. If any matches are returned, write a `## Open Code-Review Overlap` section to the plan file with a one-line bullet per match and an explicit disposition for each:
 
@@ -426,10 +423,6 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
 ### 2. Issue Planning & Structure
 
-<thinking>
-Think like a product manager - what would make this issue clear and actionable? Consider multiple perspectives
-</thinking>
-
 **Title & Categorization:**
 
 - [ ] Draft clear, searchable issue title using conventional format (e.g., `feat: Add user authentication`, `fix: Cart total calculation`)
@@ -453,6 +446,12 @@ Think like a product manager - what would make this issue clear and actionable? 
 - [ ] When the plan prescribes any path glob (e.g., `apps/foo/**`, `**/doppler*.{yml,yaml,sh}`, `.github/workflows/*foo*.yml`), verify each glob matches ≥1 real file via `git ls-files | grep -E '<translated-glob>'` AND for negative-coverage gates (security gates, denylist filters, sensitive-path detectors) enumerate sibling files at the same architectural depth — globs constructed from a plan miss files the plan never inventoried. See AGENTS.md `hr-when-a-plan-specifies-relative-paths-e-g` and learning `2026-04-28-plan-globs-must-be-verified-against-repo-structure.md`.
 - [ ] **Wrapper-vs-curl check before adopting a workflow wrapper.** Before prescribing `claude-code-action`, `peter-evans/create-pull-request`, or any wrapper that constrains workflow architecture (token-revoking post-steps, hardcoded auto-merge, mandated job ordering), ask: "what does this look like as 5 lines of `curl` + `jq`?" If the answer is "fine," skip the wrapper. The wrapper's value is in agent tool-use loops or PR-creation generality; a single-shot LLM call or single-PR workflow doesn't need it. **Why:** 2026-05-11 #2720 v1 plan adopted `claude-code-action` and contorted into a two-job split + matrix to dodge its post-step token revocation; v2 dropped the wrapper and 4 P0 issues dissolved. See `knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md`.
 - [ ] **Paper-resolution lint.** Every FR/AC added to fold a review finding MUST cite the implementation location — e.g., `<script-file>:<line>`, `<workflow-file>:<section>`, or `prompt:step-N`. Without the pointer, the FR is paper — the planner could not encode the fix in code, only in prose, and the implementer will discover the gap at soleur:work time. **Why:** 2026-05-11 #2720 v1 plan folded 6 spec-flow P0s as FRs/ACs; spec-flow re-validation against the plan caught 4 as "RESOLVED in spec, NOT IMPLEMENTED in code." Same learning file.
+
+### 2.4. Scope Check Gate (Always)
+
+[skill-enforced: plan Phase 2.4 + deepen-plan Phase 4.12]
+
+**Read `plugins/soleur/skills/plan/references/plan-scope-check.md` now** — emit `## Scope Check` (ask mapping, item provenance, split assessment) into the plan; an unmapped ask or unjustified `inferred` item blocks the plan.
 
 ### 2.5. Domain Review Gate
 
@@ -565,7 +564,7 @@ Place after Acceptance Criteria, before Test Scenarios (or before the last major
 
 Every plan MUST include a `## User-Brand Impact` section. This is the framing-time enforcement of AGENTS.md `hr-weigh-every-decision-against-target-user-impact` and the gate that catches the #2887-class blind spot — decisions weighed on technical and convenience axes only, with no question asked about what one user's breach would cost the brand.
 
-**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `plugins/soleur/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. The three required lines:
+**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `plugins/soleur/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. Required lines (template adds a 4th):
 
 - `**If this lands broken, the user experiences:**` — name a concrete, user-facing artifact.
 - `**If this leaks, the user's [data / workflow / money] is exposed via:**` — name a concrete exposure vector.
@@ -579,16 +578,7 @@ Every plan MUST include a `## User-Brand Impact` section. This is the framing-ti
 2. Display: "CPO sign-off required at plan time before `soleur:work` begins. Invoke CPO domain leader if not already covered by Phase 2.5 carry-forward, or confirm CPO has reviewed the brainstorm."
 3. Note in the plan that `soleur:engineering:review:user-impact-reviewer` will be invoked at review-time (handled by `plugins/soleur/skills/review/SKILL.md` conditional-agent block).
 
-**Sign-off lifecycle staging — who participates at which phase:**
-
-The set of mandatory leaders changes by lifecycle phase, and that is by design — different leaders weigh in at different decision points:
-
-- **Brainstorm phase (framing time):** CPO + CLO + CTO are spawned in parallel when `USER_BRAND_CRITICAL=true`. Rationale: the approach has not been chosen yet, so all three lenses (product blast-radius framing, legal/compliance, architectural blast-radius) need to land before the plan exists. See `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` `## User-Brand-Critical Tag Processing`.
-- **Plan phase (this gate):** CPO sign-off only. Rationale: the plan implements the approach already framed by all three brainstorm leaders; the plan-time sign-off is the single product-owner ack on the technical approach. CLO and CTO concerns from brainstorm should be reflected in the plan body (Risks section, Sharp Edges, Domain Review carry-forward) — they do not re-sign here.
-- **Review phase (PR time):** CPO is not re-invoked; instead the `soleur:engineering:review:user-impact-reviewer` agent enumerates failure modes against the diff. Rationale: review-time concerns are diff-shaped, not approach-shaped.
-- **Ship phase (preflight Check 6):** No human sign-off; mechanical gate that the section exists and the threshold is valid.
-
-This tiered model is intentional — re-asking CPO/CLO/CTO at every phase would dilute the framing into ceremony. The framing question is asked once (brainstorm), the answer is locked in (plan), the diff is checked against the answer (review), the gate verifies the answer was given (ship).
+**Sign-off lifecycle staging:** brainstorm CPO+CLO+CTO, plan CPO only, review `soleur:engineering:review:user-impact-reviewer`, ship mechanical check: [plan-signoff-lifecycle.md](./references/plan-signoff-lifecycle.md).
 
 **AI harness:** CTO review comes before blocking launcher/egress/credential work; settings credentials are runtime inputs; CLO disposition is separate.
 
@@ -629,16 +619,17 @@ If the plan introduces infrastructure that needs to live somewhere — a server,
 - `cron`/`crontab -e`, `at <time>`, `journalctl` (when used for state, not diagnosis)
 - new vendor account signups not already routed through `soleur:operations:service-automator` or `soleur:operations:ops-provisioner`
 
-**If detected, invoke `soleur:engineering:infra:terraform-architect` with the plan draft and the detected phrases.** The agent's job is to reshape the affected Implementation Phases so the new resource lives in `apps/<app>/infra/*.tf` (extending the existing root, or creating a new one with the R2 backend per `hr-every-new-terraform-root-must-include-an`), with cloud-init/`runcmd` for first-boot config and an idempotent bootstrap script (e.g. `apps/<app>/infra/<resource>-bootstrap.sh`) for applying the change to already-running hosts without re-provisioning.
+**If detected, invoke `soleur:engineering:infra:terraform-architect` with the plan draft and the detected phrases.** The agent's job is to reshape the affected Implementation Phases so the new resource lives in `apps/<app>/infra/*.tf` (extending the existing root, or creating a new one with the R2 backend per `hr-every-new-terraform-root-must-include-an`), with cloud-init/`runcmd` for first-boot config and, for already-running hosts, a replace per the Apply path below (an idempotent bootstrap script, e.g. `apps/<app>/infra/<resource>-bootstrap.sh`, only when a replace is not viable).
 
 **Required output: `## Infrastructure (IaC)` section in the plan.** Mirror the `## Domain Review` heading contract. Required subsections:
 
-- `### Terraform changes` — listed files (existing TF root + new resources), required providers + version pins, sensitive variable list (`TF_VAR_<name>` plus where the value comes from — Doppler service token, etc.).
-- `### Apply path` — one of: (a) cloud-init-only (acceptable when the resource has not yet been provisioned), (b) cloud-init + idempotent bootstrap script (the default for existing infra), (c) taint + `terraform apply -replace` (only when the resource cannot be patched in place). State the chosen path and the expected downtime/blast-radius.
+- `### Terraform changes` — listed files (existing TF root + new resources), required providers + version pins, sensitive variable list (`TF_VAR_<name>` + value source — Doppler service token.).
+- `### Apply path` — one of: (a) cloud-init-only (not yet provisioned), (b) `terraform apply -replace` (default for a running host with state on a persistent volume, else snapshot first; preconditions in `soleur:engineering:infra:terraform-architect`), (c) cloud-init + idempotent bootstrap script (only when a replace is not viable). State the chosen path and the expected downtime/blast-radius.
+- `### Host fan-out` — `terraform_data` SSH provisioners under `apps/web-platform/infra/` classify fleet siblings per [references/plan-host-fanout.md](./references/plan-host-fanout.md).
 - `### Distinctness / drift safeguards` — `dev != prd` preconditions, `lifecycle.ignore_changes` callouts, state-storage notes (encrypted backend, secret values land in `terraform.tfstate`).
 - `### Vendor-tier reality check` — when the chosen provider has free-tier limits that affect resource creation (e.g., Better Stack free tier rejects `betteruptime_policy`), document the tier gate (`count = var.<provider>_paid_tier ? 1 : 0`) before `apply` time.
 
-**Why:** PR-F (#3940) plan baked in "operator installs inngest-cli + systemd unit via SSH" and "operator sets Doppler keys via CLI" as Phase X items. Both violate `hr-all-infrastructure-provisioning-servers`. The rule existed; no plan-time gate consulted it. The cost was a post-merge realisation that the entire operator checklist had to be redone as Terraform. See `knowledge-base/project/learnings/2026-05-18-plan-baked-in-operator-ssh-violated-iac-rule.md`.
+**Why:** PR-F (#3940) plan baked in "operator installs inngest-cli + systemd unit via SSH" and "operator sets Doppler keys via CLI" as Phase X items. Both violate `hr-all-infrastructure-provisioning-servers`. The rule existed; no plan-time gate consulted it. See `knowledge-base/project/learnings/2026-05-18-plan-baked-in-operator-ssh-violated-iac-rule.md`.
 
 Skip silently if the plan introduces no new infrastructure — a plan that only edits `apps/<app>/src/` or `apps/<app>/server/` files typically skips; one adding a service, secret, vendor, or persistent runtime process does not.
 
@@ -675,7 +666,7 @@ discoverability_test:
 - `discoverability_test.command`'s first token is not on preflight Check 10's `PROBE_VERB_ALLOWLIST` (`curl bash grep rg jq python3 node bun printf git`). There is no path-shaped exemption — a first token containing `/` is subject to the same list. Check 10 executes this command inside a sandbox; the allowlist is schema validation ("can this run at all?"), not a security control, and every entry is an authority grant the sandbox — not the list — bounds. Wrap anything else in a repo-relative script committed in the SAME PR: it runs with `PATH=/usr/local/bin:/usr/bin:/bin`, `HOME` on tmpfs, no credential stores, and the repo read-only.
 - `discoverability_test.credentials_required` is present but placeholder text. The field is **optional**; when a probe verifies a property with no unauthenticated substitute, state the credential scope and the justification (`"<scope> — <why no unauthenticated probe verifies the same property>"`) and Check 10 skips it explicitly (`SKIP-DECLARED`) instead of executing it. A declaration that says nothing waives nothing.
 - `discoverability_test.command` is a whole test suite, a full build, or anything else that cannot finish inside preflight Check 10's **15-second cap**. Check 10 runs the declared command in a bubblewrap sandbox under `timeout 15s`; a longer command is killed at `rc=124` and reported as a FAILED probe (row 9), which is indistinguishable from the endpoint being down. A suite is the right command to TEST the thing and the wrong one to DISCOVER its signal — declare the smallest command that prints the signal `liveness_signal.what` already names. Wrapping in a committed repo-relative script satisfies the VERB allowlist, not this condition — a suite wrapped in a script is still a suite; the wrapper is the remedy for a multi-statement probe that is already fast. **Why:** #8010/PR #8412 — a plan declared its own 236-assertion gate suite here; Check 10 killed it with arms still passing.
-- `discoverability_test.expected_output` is PROSE rather than a matchable literal. Check 10 tokenizes this field and asks whether any token is a substring of the command's stdout (preflight `## Step 10.6` *Expected-output matching semantics*; note the row-11 cell states the direction backwards and is a known defect in that table), so a sentence like `"the suite's final ledger line reports 0 failures"` cannot be relied on to match and the probe FAILS on a healthy system. (Not *never*: the tokenizer splits on `,`, `or`, quotes, brackets and `/`, so a prose value containing those yields fragments, and a long enough fragment that happens to occur in stdout matches by accident — which is worse than a clean FAIL.) State the literal(s) the command actually prints — `"200"`, `"RELEASED or HOLD or ABORT"`, `"ok"` — not a description of what they mean. **Absent** counts as violating this too: an empty `expected_output` parses to `""`, matches nothing, and surfaces at ship time as a row-11 "expectation drift" FAIL — the misdiagnosis this condition exists to prevent.
+- `discoverability_test.expected_output` is PROSE rather than a matchable literal. Check 10 tokenizes this field and asks whether any token is a substring of the command's stdout (preflight `## Step 10.6` *Expected-output matching semantics*; note the row-11 cell states the direction backwards and is a known defect in that table), so a sentence like `"the suite's final ledger line reports 0 failures"` cannot be relied on to match and the probe FAILS on a healthy system. (Not *never*: a long token-bearing fragment can match by accident — which is worse than a clean FAIL.) State the literal(s) the command actually prints — `"200"`, `"RELEASED or HOLD or ABORT"`, `"ok"` — not a description of what they mean. **Absent** counts as violating this too: an empty `expected_output` parses to `""`, matches nothing, and surfaces at ship time as a row-11 "expectation drift" FAIL — the misdiagnosis this condition exists to prevent.
 
 **Scope of the two conditions above (added #8412).** A non-placeholder `credentials_required`
 short-circuits both: preflight row 4 (`SKIP-DECLARED`) precedes rows 9 and 11, so the command is
@@ -778,7 +769,7 @@ exception:        # present ONLY when mechanism is plaintext-exception OR cert_v
 
 **Skip silently** when the plan introduces no persistent store and no new cross-component connection — pure UI/docs/dependency-bump plans, or a change confined to an already-provisioned surface.
 
-**Why:** ADR-140 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11) — a new store or connection shipped with no declared encryption posture is undetectable at review time by name-similarity alone (a plaintext `hcloud_volume.workspaces` reads identically to its LUKS-backed sibling `hcloud_volume.workspaces_luks` until the device-binding chain is actually walked). Codifying the posture as a plan deliverable, resolved against real code by `lint-encryption-posture.py` (repo-root `scripts/`), closes the gap at design time instead of at incident time.
+**Why:** ADR-140 and `knowledge-base/project/plans/archive/20261013-041741-2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11) — a new store or connection shipped with no declared encryption posture is undetectable at review time by name-similarity alone (a plaintext `hcloud_volume.workspaces` reads identically to its LUKS-backed sibling `hcloud_volume.workspaces_luks` until the device-binding chain is actually walked). Codifying the posture as a plan deliverable, resolved against real code by `lint-encryption-posture.py` (repo-root `scripts/`), closes the gap at design time instead of at incident time.
 
 ### 2.12. Guard Contract Gate
 
@@ -810,6 +801,8 @@ If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-ch
 **Why:** the preflight Check 10 execution-boundary work (merged 2026-08-10) absorbed FIVE adversarial review rounds; every round found real defects in the previous round's fixes, and ~20 findings reduced to the one class above. Instances: a mount-set closure assertion scoped to `BWRAP_ARGS=( … )` while `GIT_BIND`, `BWRAP_PROC` and the exec line also injected mounts (three separate one-line edits each re-opened the operator's credential surface with the whole suite green — verified against live bwrap reaching the Doppler token, `~/.ssh` and the gh token store); a parity floor counting ITERATIONS rather than distinct shapes; a suppression grep anchored on `test`/`it`/`describe`, which are rebindable; and an anti-vacuity gate with NO floor on its own dispatch. Those were not five discoveries — they were ONE enumeration nobody performed, found five times by different means, at ~880k subagent tokens and five CI cycles. The root cause was at plan time: that plan specified CONTROLS and 13 Test Scenarios all of the shape "command X -> terminal Y", and ZERO of the shape "mutation M -> guard G reddens". For a change whose deliverable WAS guards, the scenarios tested the thing being guarded. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
 <!-- lint-infra-ignore end -->
 
+**2.13 Founder check (interactive):** [plan-founder-check.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-founder-check.md).
+
 ### 3. SpecFlow Analysis
 
 **If soleur:product:spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**
@@ -838,13 +831,9 @@ Spawn a **Task** subagent via `resolveAdvisorTier()` (semantic tier `advisor`; i
 
 Apply the returned guidance before Step 5. Advisory only — do not block, loop, or re-consult. Skip silently in a resource-constrained run only if the plan is trivially mechanical (single-file, no architecture choice). Rationale + the `resolveAdvisorTier()` / semantic tier `advisor` upgrade-pin justification: ADR-083 (`knowledge-base/engineering/architecture/decisions/ADR-083-scoped-strong-model-consult-at-decision-gates.md`). Harness SKUs: ADR-110 (`plugins/soleur/lib/harness-model-map.ts`).
 
-**When the consult and the session model agree the operator's *stated direction* should change** (drop/merge/split/add scope the operator specified), that is a **User-Challenge** per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084), not guidance to silently apply — the operator's direction is the default. Operator-attached: surface it at the post-`plan-review` confirmation gate with the 5-line frame. Headless (this Step runs inside a Task subagent under one-shot): do NOT ask — persist it to `knowledge-base/project/specs/<branch>/decision-challenges.md` for `ship` to render + file as an `action-required` issue.
+**When the consult and the session model agree the operator's *stated direction* should change** (drop/merge/split/add scope the operator specified), that is a **User-Challenge** per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084); a technical fork the consult surfaces goes to the CTO ([technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md)), not guidance to silently apply — the operator's direction is the default. Operator-attached: surface it at the post-`plan-review` confirmation gate with the 5-line frame. Headless (this Step runs inside a Task subagent under one-shot): do NOT ask — persist it to `knowledge-base/project/specs/<branch>/decision-challenges.md` (one Decision Classes row) for `ship` to render + file as an `action-required` issue.
 
 ### 5. Issue Creation & Formatting
-
-<thinking>
-Apply best practices for clarity and actionability, making the issue easy to scan and understand
-</thinking>
 
 **Content Formatting:**
 
@@ -960,7 +949,7 @@ After writing the plan file, automatically run `/plan_review <plan_file_path>` t
 1. **Mechanical** findings → auto-apply to the plan file (both modes). **Fail-closed default:** auto-apply *only* a decision **explicitly tagged `mechanical`**. Treat any decision that is **unclassified, ambiguous, or sourced from a named-panel (product/market/design/devex) finding** as **Taste** — surface it, never silently auto-apply. (The producer defaults named findings to Taste, but the consumer must not depend on producer-side tagging fidelity: an untagged decision on the prose path routes to surfacing, not to auto-apply.)
 2. **Taste / User-Challenge** findings →
    - *Operator-attached* (real TTY): present at the "Apply these changes?" gate below (Yes / Partially / Skip); a **User-Challenge** uses the 5-line frame (the operator's stated direction is the default).
-   - *Headless* (reuse the mode predicate at [`plan/SKILL.md` §Product/UX Gate step 4b, ":330"] — `HEADLESS_MODE`, no-TTY, `soleur:one-shot`, `--headless`, OR a plan-file-path arg): **do NOT pause.** Persist each Taste / User-Challenge to `knowledge-base/project/specs/<branch>/decision-challenges.md` (append), which `ship` Phase 6 renders into the PR body + files as an `action-required` issue. This converges with the Step 4.5 `decision-challenges.md` wiring (`:574`) onto one artifact.
+   - *Headless* (reuse the mode predicate at §Product/UX Gate step 4b — `HEADLESS_MODE`, no-TTY, `soleur:one-shot`, `--headless`, OR a plan-file-path arg): **do NOT pause.** Persist each Taste / User-Challenge (a technical ruling goes to the CTO instead, never here: [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md)) to `knowledge-base/project/specs/<branch>/decision-challenges.md` (append, one `## Decision Classes` row each), which `ship` Phase 6 renders into the PR body + files as an `action-required` issue. This converges with the Step 4.5 `decision-challenges.md` wiring (`:574`) onto one artifact.
 
 **Operator-attached apply gate** (Mechanical already applied above):
 
@@ -1083,6 +1072,8 @@ After plan review, use the **AskUserQuestion tool** to present these options:
 **Resume prompt (MANDATORY — AGENTS.md Communication):** Before presenting the question, generate a copy-pasteable resume prompt containing: skill to run (`soleur:work`), plan file path, branch name, worktree path, PR number, issue number, and a one-line summary of what was already done. Display it in a fenced code block so the user can paste it into a fresh session after `/clear`. This is the single most important output of the post-generation phase — without it, the user cannot resume in a new session without re-explaining context.
 
 **Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk. What would you like to do next?" — append " Two automatic compactions have occurred, so `/clear` before `soleur:work` is recommended." only when a `SOLEUR_COMPACTION_DIRECTIVE` marker with `recommend=true` is present in this session (#8323). The unconditional "run `/clear` for maximum headroom" this replaces fired identically on a session with zero compactions and on one that had lost state twice, which is the whole defect.
+
+**Closing text:** the summary around these options is a closing message: put no technical question ("Decision for you:", "Your calls") to the operator in it; spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`) and ask only the authorization. [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md).
 
 **Options:**
 

@@ -80,9 +80,15 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          orphan-reaper.sh \
          web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh \
          inngest-consumer-probe.sh inngest-registry-probe.sh \
-         web-probe-envwrite.sh; do
+         web-probe-envwrite.sh \
+         egress-gateway-bootstrap.sh egress-auth-helper.sh \
+         workspaces-luks-provision.sh workspaces-luks-reopen.sh workspaces-luks-emit.sh; do
   FAILED_FILE="$f"; install -D -m 0755 -o root -g root "$SEED/$f" "/usr/local/bin/$f"
 done
+# The daily LUKS probe installs WITHOUT the .sh suffix (luks-monitor.service ExecStart and the
+# web-1 SSH installer both name /usr/local/bin/luks-monitor).
+FAILED_FILE=luks-monitor
+install -D -m 0755 -o root -g root "$SEED/luks-monitor.sh" /usr/local/bin/luks-monitor
 # The pinned root-run escalation helper installs WITHOUT the .sh suffix (its sudoers grant +
 # ci-deploy.sh reference /usr/local/bin/infra-config-install).
 FAILED_FILE=infra-config-install
@@ -94,10 +100,12 @@ for f in container-restart-monitor.service container-restart-monitor.timer \
          web-private-nic-guard.service web-private-nic-guard.timer \
          web-zot-consumer-probe.service web-zot-consumer-probe.timer \
          web-git-data-probe.service web-git-data-probe.timer \
-         inngest-consumer-probe.service inngest-consumer-probe.timer; do
+         inngest-consumer-probe.service inngest-consumer-probe.timer \
+         workspaces-luks-reopen.service workspaces-luks-reopen.timer workspaces-luks-reopen-failure.service \
+         luks-monitor.service luks-monitor.timer; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/systemd/system/$f"
 done
-for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt; do
+for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt egress-deny-cidrs.txt; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/soleur/$f"
 done
 # Pinned cosign trusted root (#6005) — public trust material mounted :ro into the
@@ -105,6 +113,9 @@ done
 # reads the mount source, so deploy-user readability is not required.
 FAILED_FILE=cosign-trusted-root.json
 install -D -m 0644 -o root -g root "$SEED/cosign-trusted-root.json" /etc/soleur/cosign-trusted-root.json
+# Squid gateway config (#9534) — mounted :ro into soleur-egress-gw; the deny
+# list lives at /etc/soleur (loop above) so nftables reads the same copy.
+install -D -m 0644 -o root -g root "$SEED/egress-gateway-squid.conf" /usr/local/bin/egress-gateway-squid.conf
 # journald persistent+bounded drop-in (baked #5921). Installed here (post-extraction) and
 # applied below — before the terminal app container (--log-driver journald) starts. Was
 # previously an inline write_files: base64 blob (2.4 KB), the single biggest remaining
@@ -182,6 +193,10 @@ for f in container-restart-monitor.service container-restart-monitor.timer \
 done
 FAILED_FILE=cron-egress-allowlist.txt; test -f /etc/soleur/cron-egress-allowlist.txt
 FAILED_FILE=cron-egress-allowlist-cidr.txt; test -f /etc/soleur/cron-egress-allowlist-cidr.txt
+FAILED_FILE=egress-deny-cidrs.txt; test -f /etc/soleur/egress-deny-cidrs.txt
+FAILED_FILE=egress-gateway-squid.conf; test -f /usr/local/bin/egress-gateway-squid.conf
+FAILED_FILE=egress-gateway-bootstrap.sh; test -x /usr/local/bin/egress-gateway-bootstrap.sh
+FAILED_FILE=egress-auth-helper.sh; test -x /usr/local/bin/egress-auth-helper.sh
 FAILED_FILE=cosign-trusted-root.json; test -f /etc/soleur/cosign-trusted-root.json
 FAILED_FILE=journald-soleur.conf; test -f /etc/systemd/journald.conf.d/00-soleur.conf
 # (#6629) sandbox profiles present on-host AND the AppArmor profile is kernel-loaded — the
@@ -189,7 +204,7 @@ FAILED_FILE=journald-soleur.conf; test -f /etc/systemd/journald.conf.d/00-soleur
 # if the profile is not loaded, so assert the load here to fail with a NAMED stage instead.
 FAILED_FILE=seccomp-bwrap.json; test -f /etc/docker/seccomp-profiles/soleur-bwrap.json
 FAILED_FILE=apparmor-soleur-bwrap.profile; test -f /etc/apparmor.d/soleur-bwrap
-FAILED_FILE=apparmor-loaded; aa-status 2>/dev/null | grep -qE '^[[:space:]]+soleur-bwrap$'
+FAILED_FILE=apparmor-loaded; aa-status 2>/dev/null | grep -cE '^[[:space:]]+soleur-bwrap$' >/dev/null
 
 STAGE=reload
 systemctl daemon-reload
@@ -266,7 +281,8 @@ cat > /usr/local/bin/soleur-boot-emit <<'EMITEOF'
   ESC=$(printf '\033')
   DETAIL=$(LC_ALL=C sed -e '/^Using /d' -e "s/${ESC}\\[[0-9;]*[a-zA-Z]//g" "$SRC" 2>/dev/null \
     | LC_ALL=C sed -e 's/dp\.\(st\|pt\|sa\|ct\|scim\|audit\)\.[A-Za-z0-9._-]\{10,\}/dp.REDACTED/g' \
-                -e 's/gh[pousr]_[A-Za-z0-9]\{20,\}/REDACTED_GH/g' \
+                -e 's#gh[pousr]_[A-Za-z0-9._~+/=-]\{20,\}#REDACTED_GH#g' \
+                  -e 's#github_pat_[A-Za-z0-9._~+/=-]\{20,\}#REDACTED_GH#g' \
                 -e 's#://[A-Za-z0-9._%+-]\{1,\}:[^@/[:space:]]\{1,\}@#://REDACTED@#g' \
                 -e 's/[Bb]earer[[:space:]]\{1,\}[A-Za-z0-9._~+/=-]\{8,\}/Bearer REDACTED/g' \
                 -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----.*/[PRIVATE KEY REDACTED]/' \
@@ -317,7 +333,7 @@ KIND="$1"; NAME="$2"; STAGE="$3"; n=0
 while :; do
   case "$KIND" in
     service) systemctl is-active --quiet "$NAME" && break ;;
-    port) { ss -ltn 2>/dev/null | grep -q ":$NAME" || curl -s -o /dev/null --max-time 3 "http://localhost:$NAME/" 2>/dev/null; } && break ;;
+    port) { ss -ltn 2>/dev/null | grep -c ":$NAME" >/dev/null || curl -s -o /dev/null --max-time 3 "http://localhost:$NAME/" 2>/dev/null; } && break ;;
   esac
   n=$((n+1)); [ "$n" -ge 30 ] && { soleur-boot-emit "$STAGE" fatal; exit 1; }; sleep 2
 done
@@ -367,6 +383,9 @@ TMO="${SOLEUR_DOPPLER_TIMEOUT:-20}"
 B1="${SOLEUR_DOPPLER_BACKOFF_1:-5}"
 B2="${SOLEUR_DOPPLER_BACKOFF_2:-10}"
 # Worst case: 3 x (20 s + 5 s SIGKILL grace) + 5 s + 10 s backoff + 2 x 12 s bounded emit = 114 s.
+# (#8609) After a successful prd download, the GitHub App key overlay adds at most
+# 3 x (20 s + 5 s) + 2 s + 4 s backoff = 81 s (its isolated fetch retries only on a non-zero exit),
+# plus one 12 s bounded emit if the check cannot be launched: 93 s on the success arm.
 EMIT_TMO="${SOLEUR_DOPPLER_EMIT_TIMEOUT:-12}"
 # Mode at CREATION, not chmod-after: the buffers hold scrubbed, capped process stderr on a
 # root-owned tmpfs, and there is no window in which they should be world-readable. Not
@@ -390,7 +409,177 @@ ERRF=$(mktemp "$ERRDIR/doppler-err.XXXXXX") || {
 chmod 600 "$ERRF" 2>/dev/null || true
 # This helper is a SEPARATE PROCESS from the cloud-init terminal block, so that block's EXIT
 # trap cannot see $ERRF. The helper owns its own cleanup.
-trap 'rm -f "$ERRF"' EXIT INT TERM HUP
+# ${_gak_tmp}: the #8609 overlay's merge temp file beside $OUT (named there while it exists).
+trap 'rm -f "$ERRF" ${_gak_tmp:+"$_gak_tmp"}' EXIT INT TERM HUP
+# (#8609) GitHub App key overlay. The block between the sentinels is byte-identical to
+# ci-deploy.sh's; the emitter and the finish step below it are this file's own.
+# >>> github-app-key-overlay >>>
+# Byte-identical in ci-deploy.sh and soleur-host-bootstrap.sh (inside soleur-doppler-download);
+# ci-deploy.test.sh Guard 7 compares the two. POSIX sh, because the boot copy runs under dash.
+# Contract (#8609): knowledge-base/project/plans/
+# 2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md §3.2-§3.4, as amended by
+# the CTO ruling on PR #9263 (b)-(e). Each file defines its own emitter (<classification> <level>
+# [detail]); detail is numeric or enum k=v only — never Doppler stderr, key or token bytes.
+#
+# overlay_github_app_key <env-file> <verified-ref>: <verified-ref> is EMPTY unless the caller proved,
+# in this same run, that the image it is about to run passed the main-pinned cosign verify
+# (ci-deploy: verify_image_signature rc 0; boot: the digest matches the last one ci-deploy
+# verified). Anything but an exact `[<repo>@]sha256:<64 hex>` gets no key. Sets
+# GITHUB_APP_KEY_SOURCE and GITHUB_APP_KEY_FETCH. The merge is atomic: a sibling temp file (named
+# in _gak_tmp while it exists, so the caller's cleanup trap covers it) is renamed over <env-file>.
+# Returns 0, or 1 on the runtime-hijack refusal, or 2 when the merge failed (<env-file> is then
+# untouched) — both non-zero returns abort the deploy and the boot.
+#
+# Runtime-hijack refusal: a prd name in one of these classes can run code, or re-route TLS/egress,
+# inside a process that holds the key (node, git, a shell, a TLS stack), so the key is refused to
+# the whole env rather than to one name. The classes, not a name list (#8609 d): NODE_* (except
+# NODE_ENV), LD_*, GLIBC_*, GIT_* (except the app's own GIT_DATA_/GIT_PROVISION_/GIT_REMOVE_/
+# GIT_TRANSPORT_ config, none of which git reads), BASH_*, ENV, PATH, SHELL, HOME, TMPDIR, SSL_*,
+# OPENSSL_*, CURL_*, *_PROXY, *_proxy, npm_config_*, NPM_CONFIG_*, PYTHON*, PERL*. A bare NAME
+# line counts too (docker --env-file then copies the docker CLI's own value).
+overlay_github_app_key() {
+  GITHUB_APP_KEY_SOURCE=prd
+  GITHUB_APP_KEY_FETCH=no_token
+  _gak_tmp=
+  if [ ! -f "$1" ] || [ ! -r "$1" ]; then
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=read"
+    return 2
+  fi
+  _gak_hij=$(grep -E '^[[:space:]]*(NODE_[A-Za-z0-9_]*|LD_[A-Za-z0-9_]*|GLIBC_[A-Za-z0-9_]*|GIT_[A-Za-z0-9_]*|BASH_[A-Za-z0-9_]*|ENV|PATH|SHELL|HOME|TMPDIR|SSL_[A-Za-z0-9_]*|OPENSSL_[A-Za-z0-9_]*|CURL_[A-Za-z0-9_]*|[A-Za-z0-9_]*_PROXY|[A-Za-z0-9_]*_proxy|npm_config_[A-Za-z0-9_]*|NPM_CONFIG_[A-Za-z0-9_]*|PYTHON[A-Za-z0-9_]*|PERL[A-Za-z0-9_]*)[[:space:]]*(=|$)' "$1" \
+    | grep -cvE '^[[:space:]]*(NODE_ENV|GIT_(DATA|PROVISION|REMOVE|TRANSPORT)_[A-Za-z0-9_]*)[[:space:]]*(=|$)') || _gak_hij=0
+  if [ "$_gak_hij" -ne 0 ]; then
+    GITHUB_APP_KEY_FETCH=env_hijack
+    github_app_key_emit env_hijack error "names=$_gak_hij"
+    return 1
+  fi
+  if [ -z "${GITHUB_APP_DOPPLER_TOKEN:-}" ]; then
+    github_app_key_emit no_token info
+    return 0
+  fi
+  _gak_ref_ok=0
+  case "${2:-}" in
+    '' | *[!A-Za-z0-9@:/._-]*) ;;
+    *) if printf '%s\n' "$2" | grep -cxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}' >/dev/null; then _gak_ref_ok=1; fi ;;
+  esac
+  if [ "$_gak_ref_ok" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=unverified_image
+    github_app_key_emit unverified_image error
+    return 0
+  fi
+  # Bounded retry, like the prd download's: a transient Doppler error must not cost the key.
+  # Only a non-zero exit is retried; a wrong key-line count is a deterministic answer.
+  # The two knobs are test seams (digits only; anything else falls back to the default).
+  _gak_max=${GITHUB_APP_KEY_FETCH_ATTEMPTS:-3}
+  _gak_bo=${GITHUB_APP_KEY_FETCH_BACKOFF:-2}
+  case "$_gak_max" in '' | *[!0-9]*) _gak_max=3 ;; esac
+  case "$_gak_bo" in '' | *[!0-9]*) _gak_bo=2 ;; esac
+  _gak_try=1
+  while :; do
+    _gak_rc=0
+    _gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout -k 5 20 doppler secrets download --no-file --format docker --project soleur-github-app --config prd 2>/dev/null) || _gak_rc=$?
+    if [ "$_gak_rc" -eq 0 ] || [ "$_gak_try" -ge "$_gak_max" ]; then break; fi
+    sleep $((_gak_try * _gak_bo))
+    _gak_try=$((_gak_try + 1))
+  done
+  _gak_n=$(printf '%s\n' "$_gak_dl" | grep -cE '^GITHUB_APP_PRIVATE_KEY=.') || _gak_n=0
+  if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=failed
+    github_app_key_emit fetch_failed error "rc=$_gak_rc key_lines=$_gak_n len=${#_gak_dl} attempts=$_gak_try"
+    unset _gak_dl
+    return 0
+  fi
+  _gak_line=$(printf '%s\n' "$_gak_dl" | grep -E '^GITHUB_APP_PRIVATE_KEY=.') || _gak_line=
+  _gak_grc=0
+  _gak_rest=$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' "$1") || _gak_grc=$?
+  # grep -v: rc 1 = every line was a key line (an empty rest is fine); rc 2+ = a read error.
+  if [ "$_gak_grc" -le 1 ] && _gak_tmp=$(mktemp "$1.gak.XXXXXX") \
+    && printf '%s\n%s\n' "$_gak_rest" "$_gak_line" > "$_gak_tmp" && mv -f "$_gak_tmp" "$1"; then
+    _gak_tmp=
+  else
+    if [ -n "$_gak_tmp" ]; then rm -f "$_gak_tmp"; fi
+    _gak_tmp=
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=write grep_rc=$_gak_grc"
+    unset _gak_dl _gak_line _gak_rest
+    return 2
+  fi
+  GITHUB_APP_KEY_SOURCE=isolated
+  GITHUB_APP_KEY_FETCH=ok
+  github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try"
+  unset _gak_dl _gak_line _gak_rest
+  return 0
+}
+
+# github_app_key_present <env-file>: exactly one GITHUB_APP_PRIVATE_KEY line, neither empty nor the
+# eviction sentinel — the no-network half of the key check.
+github_app_key_present() {
+  [ "$(grep -c '^GITHUB_APP_PRIVATE_KEY=' "$1" 2>/dev/null)" = 1 ] || return 1
+  ! grep -qxE 'GITHUB_APP_PRIVATE_KEY=(EVICTED_SEE_ADR_241)?' "$1"
+}
+# <<< github-app-key-overlay <<<
+# github_app_key_emit <classification> <level> [detail]: the boot half of the block's emitter
+# contract. journald under the allowlisted `ci-deploy` tag (one Better Stack query covers both
+# assembly sites), never stdout. The Sentry signal is the github_app_key_* stage that
+# soleur-github-app-key-check sends with the state github_app_key_boot_finish records.
+github_app_key_emit() {
+  logger -t ci-deploy "GITHUB_APP_KEY_BOOT: class=$1 level=$2${3:+ $3}" 2>/dev/null || true
+}
+# github_app_key_boot_finish: the prd payload is on disk. Overlay the isolated key BEFORE the
+# caller's `docker run`, record the outcome for the post-run check, launch it, and exit the helper.
+github_app_key_boot_finish() {
+  GITHUB_APP_DOPPLER_TOKEN=
+  CRED="${SOLEUR_DOPPLER_TOKEN_FILE:-/etc/default/soleur-doppler-token}"
+  if [ -r "$CRED" ]; then
+    # PARSED, not sourced (ci-deploy.sh's rule for this file): a value is data, never code.
+    while IFS='=' read -r _k _v || [ -n "$_k" ]; do
+      if [ "$_k" = GITHUB_APP_DOPPLER_TOKEN ] && [ -n "$_v" ]; then GITHUB_APP_DOPPLER_TOKEN=$_v; fi
+    done < "$CRED"
+  fi
+  # (#8609 c) The boot image is the Terraform-pinned digest the seed block resolved, and nothing on
+  # this path cosign-verifies it. It is handed to the overlay as verified ONLY when its digest
+  # equals the last digest ci-deploy.sh verified under the main-pinned identity on this host
+  # (GITHUB_APP_KEY_VERIFIED_REF_FILE there, on the re-attached /mnt/data volume). No record, a
+  # symlink, or another digest: an empty ref, so `unverified_image` — no key, and the post-run check
+  # reports it (ok_fallback before R6, missing after). A registry-side tag swap never yields the key.
+  GAK_REF=$(head -c 512 "${SOLEUR_IMAGE_REF_FILE:-/run/soleur-image-ref}" 2>/dev/null)
+  GAK_REC_FILE="${SOLEUR_GAK_VERIFIED_REF_FILE:-/mnt/data/github-app-key-verified-ref}"
+  GAK_VREF=
+  GAK_VCHK=absent
+  if [ -f "$GAK_REC_FILE" ] && [ ! -L "$GAK_REC_FILE" ]; then
+    GAK_REC=$(head -n 1 "$GAK_REC_FILE" 2>/dev/null | head -c 512)
+    GAK_VCHK=mismatch
+    if [ -n "$GAK_REC" ] && [ -n "$GAK_REF" ] && [ "${GAK_REF##*@}" = "${GAK_REC##*@}" ]; then
+      GAK_VREF=$GAK_REF
+      GAK_VCHK=match
+    fi
+  fi
+  GAK_ORC=0
+  overlay_github_app_key "$OUT" "$GAK_VREF" || GAK_ORC=$?
+  if [ "$GAK_ORC" -ne 0 ]; then
+    if [ "$GAK_ORC" = 1 ]; then GAK_COND=github_app_key_env_hijack; else GAK_COND=github_app_key_merge_failed; fi
+    printf 'doppler_download rc=72 cond=%s attempt=%s/%s' "$GAK_COND" "$n" "$ATTEMPTS" > "$DDIR/doppler_download"
+    exit 72
+  fi
+  GAK_PRESENT=0
+  if github_app_key_present "$OUT"; then GAK_PRESENT=1; fi
+  GAK_STATE="source=$GITHUB_APP_KEY_SOURCE fetch=$GITHUB_APP_KEY_FETCH present=$GAK_PRESENT vref=$GAK_VCHK"
+  printf '%s\n' "$GAK_STATE" > "${SOLEUR_GAK_STATE_FILE:-/run/soleur-github-app-key.state}" 2>/dev/null || true
+  # A transient unit, not a cloud-init line: the check must run AFTER the caller's `docker run`,
+  # and user_data has no headroom for another runcmd line. The unit name is unique per boot and
+  # invocation, so a leftover unit can never swallow the launch; a failed launch is reported here,
+  # synchronously, because the check that would have reported anything never runs.
+  GAK_CHECK="${SOLEUR_GAK_CHECK:-/usr/local/bin/soleur-github-app-key-check}"
+  GAK_UNIT="soleur-github-app-key-check-$(tr -dc '0-9a-f' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)-$$"
+  if [ -x "$GAK_CHECK" ] && command -v systemd-run >/dev/null 2>/dev/null \
+    && systemd-run --no-block --quiet --collect --unit="$GAK_UNIT" "$GAK_CHECK" >/dev/null 2>/dev/null; then
+    exit 0
+  fi
+  printf '%s probe=exec_failed launch=failed rc=0 up=0' "$GAK_STATE" > "$DDIR/github_app_key_exec_failed" 2>/dev/null || true
+  logger -t ci-deploy "GITHUB_APP_KEY_BOOT: stage=github_app_key_exec_failed $GAK_STATE launch=failed" 2>/dev/null || true
+  timeout "$EMIT_TMO" soleur-boot-emit github_app_key_exec_failed error >/dev/null 2>/dev/null || true
+  exit 0
+}
 rc=0
 n=1
 while :; do
@@ -409,7 +598,7 @@ while :; do
     rc=71
     printf 'doppler exited 0 but wrote an EMPTY secret payload\n' > "$ERRF"
   fi
-  [ "$rc" = 0 ] && exit 0
+  [ "$rc" = 0 ] && github_app_key_boot_finish
   # Scrub BEFORE any write. The "stderr does not echo the token" measurement is pinned to CLI
   # v3.75.3 and CLI-version behaviour is itself a live hypothesis, so this is defence in depth.
   # The preamble drop and the cap happen here too: the emitter re-caps at 180, and capping a
@@ -447,6 +636,77 @@ exit "$rc"
 DDLEOF
 chmod 0755 /usr/local/bin/soleur-doppler-download
 
+# (#8609) Boot-side GitHub App key check (plan §3.4). soleur-doppler-download launches it as a
+# transient unit once the overlay has run; it waits for the web container, runs the baked probe
+# INSIDE it (the key is read from the container's own env, under `env -i` with absolute paths, as
+# ci-deploy.sh's canary check does) and sends exactly one soleur-boot-emit stage:
+#   github_app_key_ok           info     the probe accepted the key AND it came from the isolated
+#                                        project (state `source=isolated fetch=ok`)
+#   github_app_key_ok_no_token  info     the probe accepted the PRD key and the host holds no read
+#                                        token (expected before R3; not paged, but never `_ok`)
+#   github_app_key_ok_fallback  warning  the probe accepted the PRD key although a token IS present
+#                                        (isolated fetch failed, image unverified) — paged; R5/R6
+#                                        must not pass on it
+#   github_app_key_transport / _probe_absent  warning
+#   github_app_key_rejected / _missing / _exec_failed  error (the boot is not aborted; the container
+#                                        keeps running, so this is not a fatal)
+# with `source= fetch= present= vref= probe= [reason=] rc= up=` in the per-stage detail file, plus
+# the same line to journald under the allowlisted `ci-deploy` tag. A missing event counts as a
+# failure: the emitter exits silently on an empty DSN.
+STAGE=github_app_key_check_helper; FAILED_FILE=soleur-github-app-key-check
+cat > /usr/local/bin/soleur-github-app-key-check <<'GAKEOF'
+#!/bin/sh
+# usage: soleur-github-app-key-check   (no arguments; reads the state soleur-doppler-download wrote)
+set -u
+DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail.d}"
+STATE=$(head -n 1 "${SOLEUR_GAK_STATE_FILE:-/run/soleur-github-app-key.state}" 2>/dev/null)
+# The probe the image bakes (Dockerfile COPY; ci-deploy.sh GITHUB_APP_KEY_PROBE_MJS is the same path).
+P="${SOLEUR_GAK_PROBE_MJS:-/app/scripts/github-app-key-probe.mjs}"
+C=soleur-web-platform
+n=0; UP=0; RC=0; OUT=; R=
+while [ "$n" -lt "${SOLEUR_GAK_WAIT_POLLS:-90}" ]; do
+  if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" = true ]; then UP=1; break; fi
+  n=$((n+1)); sleep "${SOLEUR_GAK_WAIT_SECS:-2}"
+done
+case "$STATE" in
+  *present=1*)
+    if [ "$UP" = 1 ]; then
+      # `[ -f … ] || exit 127`: an image older than the probe reads as absent, not rejected.
+      OUT=$(docker exec "$C" /bin/sh -c '[ -f "$1" ] || exit 127; exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' \
+        github-app-key-probe "$P" 2>/dev/null) || RC=$?
+    fi
+    # The WHOLE output must be one enum line; anything else is not a verdict.
+    case "$OUT" in
+      github_app_key_probe=ok)
+        case "$STATE" in
+          "source=isolated fetch=ok "*) S=ok; L=info ;;
+          *" fetch=no_token "*) S=ok_no_token; L=info ;;
+          *) S=ok_fallback; L=warning ;;
+        esac
+        ;;
+      github_app_key_probe=transport) S=transport; L=warning ;;
+      github_app_key_probe=rejected) S=rejected; L=error; R=unspecified ;;
+      "github_app_key_probe=rejected reason="*)
+        R=${OUT#github_app_key_probe=rejected reason=}
+        case "$R" in
+          no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other) S=rejected; L=error ;;
+          *) R=; S=exec_failed; L=error ;;
+        esac
+        ;;
+      *) if [ "$UP" = 1 ] && [ "$RC" = 127 ]; then S=probe_absent; L=warning; else S=exec_failed; L=error; fi ;;
+    esac
+    ;;
+  *) S=missing; L=error ;;
+esac
+[ -d "$DDIR" ] || mkdir -m 700 "$DDIR" 2>/dev/null || true
+D=$(printf '%s probe=%s%s rc=%s up=%s' "${STATE:-state=absent}" "$S" "${R:+ reason=$R}" "$RC" "$UP")
+printf '%s' "$D" > "$DDIR/github_app_key_$S" 2>/dev/null || true
+logger -t ci-deploy "GITHUB_APP_KEY_BOOT: stage=github_app_key_$S $D" 2>/dev/null || true
+soleur-boot-emit "github_app_key_$S" "$L"
+exit 0
+GAKEOF
+chmod 0755 /usr/local/bin/soleur-github-app-key-check
+
 # (#6969) Existence assertions for the two HEREDOC-authored helpers. These MUST sit AFTER both
 # heredocs: the `test -x` loop far above covers only SEED-installed files, which are installed
 # before it runs, whereas these two are authored here. An earlier revision of this PR put these
@@ -462,6 +722,8 @@ FAILED_FILE=soleur-boot-emit
 test -x /usr/local/bin/soleur-boot-emit
 FAILED_FILE=soleur-doppler-download
 test -x /usr/local/bin/soleur-doppler-download
+FAILED_FILE=soleur-github-app-key-check
+test -x /usr/local/bin/soleur-github-app-key-check
 
 # Bounded private-NIC wait (#6441, ADR-114 I1) — baked (0 user_data; the call site is the
 # only inline cost). DELIBERATELY fail-OPEN, unlike its fail-CLOSED neighbour
@@ -491,7 +753,7 @@ cat > /usr/local/bin/soleur-wait-nic <<'NICEOF'
 # boot is a blind surface (no SSH, no shell), so an arm that emitted nothing would be
 # indistinguishable from a gate that never shipped.
 EXPECTED="$1"
-# (0) ARGUMENT GUARD — load-bearing, and the direction that matters. `grep -qwF -- ""` matches
+# (0) ARGUMENT GUARD — load-bearing, and the direction that matters. `grep -cwF -- ""` matches
 # EVERY line, so an empty argument would make the first probe succeed and emit
 # private_nic_ready: positive evidence that a check passed which was never performed. That is
 # strictly worse than the fail-open this helper is designed for, and it inverts the #6415
@@ -517,7 +779,7 @@ if [ "$PROBE_OK" != true ]; then
   exit 0
 fi
 # (2) Probe. The probe's EXIT is captured separately from the match result, because a pipeline
-# reports only grep's status: `ip … 2>/dev/null | grep -qwF` makes an `ip` that RUNS AND FAILS
+# reports only grep's status: `ip … 2>/dev/null | grep -cwF` makes an `ip` that RUNS AND FAILS
 # (netlink denied, truncated image) indistinguishable from one that ran and found nothing —
 # reporting "could not measure" as "absent", the #6415 mislabel arriving through a second door.
 # probe_ran records whether the instrument EVER worked; the fault arm fires only if it never did
@@ -529,7 +791,7 @@ nic_ok=false
 probe_ran=false
 if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
   probe_ran=true
-  printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && nic_ok=true
+  printf '%s\n' "$OUT" | grep -cwF -- "$EXPECTED" >/dev/null && nic_ok=true
 fi
 # (3) Bounded wait — 30 x 2 s = 60 s. Spent BEFORE `cloudflared service install`, so this budget
 # is SEQUENTIAL with the downstream cloudflared_ready gate's own ~60 s budget rather than nested
@@ -544,7 +806,7 @@ if [ "$nic_ok" = false ]; then
     sleep 2
     if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
       probe_ran=true
-      printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && { nic_ok=true; break; }
+      printf '%s\n' "$OUT" | grep -cwF -- "$EXPECTED" >/dev/null && { nic_ok=true; break; }
     fi
   done
 fi
@@ -689,47 +951,13 @@ exit 0
 VINEOF
 chmod 0755 /usr/local/bin/soleur-vector-install
 
-# #6604 — bake the STRUCTURAL fail-closed /mnt/data mapper gate for the FUTURE fresh-host path.
-# ACKNOWLEDGED DEAD ON WEB-1 (ADR-119 §(e)): cx33 is unrebuildable in all 3 EU DCs, so web-1 never
-# re-creates and cloud-init never re-runs — the LIVE gate is delivered to web-1 over the cutover
-# channel (workspaces-cutover.sh). This baked helper is the fresh-host analogue: it makes
-# "container running ⇒ /mnt/data is the LUKS mapper" hold BY CONSTRUCTION across the dockerd
-# `--restart unless-stopped` reboot resurrection (C2), where a pre-`docker run` shell gate catches
-# nothing. Kept MINIMAL per DP-10 (crypttab + RequiresMountsFor + chattr +i, no gold-plating); the
-# full fresh-host LUKS provisioning (keyscript wiring, luksFormat-on-birth) is a tracked deferral —
-# it cannot be exercised until a fresh host is actually born, and web-1 never will be.
-STAGE=luks_structural_gate_author; FAILED_FILE=soleur-luks-structural-gate
-cat > /usr/local/bin/soleur-luks-structural-gate <<'LUKSGATEEOF'
-#!/bin/sh
-# Idempotent structural fail-closed gate: /mnt/data MUST be the LUKS mapper before the app
-# container can start. Safe no-op on a host with no LUKS volume attached (today's plaintext
-# fresh host) — it only arms once /dev/mapper/workspaces exists.
-set -eu
-MOUNT=/mnt/data
-MAPPER=/dev/mapper/workspaces
-# 1. crypttab: name the mapper so systemd opens it at boot (keyfile wiring is the deferred half).
-if [ ! -e /etc/crypttab ] || ! grep -q '^workspaces[[:space:]]' /etc/crypttab; then
-  echo 'workspaces  /dev/disk/by-label/workspaces_luks  none  luks,nofail' >> /etc/crypttab
-fi
-# 2. chattr +i the ROOT-DISK mountpoint inode so, if the mapper mount is absent, Docker's implicit
-#    bind-mount mkdir gets EPERM and the container REFUSES to start (an outage, not a silent
-#    plaintext write to the root disk — the #5274 data-stranding mode). Only immutabilize the bare
-#    (unmounted) mountpoint; never the live mapper mount.
-mkdir -p "$MOUNT"
-if ! mountpoint -q "$MOUNT"; then
-  chattr +i "$MOUNT" 2>/dev/null || true
-fi
-# 3. RequiresMountsFor drop-in: the app container unit must order after the /mnt/data mount so it
-#    can never start before the mapper is mounted (survives the --restart resurrection — C2).
-mkdir -p /etc/systemd/system/docker.service.d
-cat > /etc/systemd/system/docker.service.d/10-workspaces-luks-mount.conf <<'DROPIN'
-[Unit]
-RequiresMountsFor=/mnt/data
-DROPIN
-systemctl daemon-reload 2>/dev/null || true
-: "$MAPPER"  # referenced for documentation; the crypttab name is the load-bearing binding
-LUKSGATEEOF
-chmod 0755 /usr/local/bin/soleur-luks-structural-gate
+# (#6931) The former baked STRUCTURAL /mnt/data mapper gate (soleur-luks-structural-gate) is GONE: it
+# was authored here but never invoked by anything, and its crypttab write (a foreign by-label line
+# with `luks,nofail`) would have collided with the canonical line the provisioner writes. Its three
+# properties — the `docker.service.d` RequiresMountsFor drop-in, the immutable covered mountpoint inode
+# and the crypttab declaration — are now owned by /usr/local/bin/workspaces-luks-provision.sh, which
+# cloud-init runs BEFORE anything writes under /mnt/data and which is byte-parity-pinned to the SSH
+# installer's canonical lines (fresh-boot-parity.test.sh).
 
 # ── Fresh-boot readiness marker (#6459 / #6538 dark-host fix) ──────────────────────────────────
 # Author /usr/local/bin/soleur-fresh-boot-ready: a one-shot, Vector-INDEPENDENT readiness marker
@@ -773,21 +1001,36 @@ LUKS_MAPPER="${LUKS_MAPPER:-/dev/mapper/workspaces}"
 if [ -s "$WEBHOOK_ENV_FILE" ] && grep -q '^DOPPLER_TOKEN=..*' "$WEBHOOK_ENV_FILE" 2>/dev/null; then T=1; else T=0; fi
 # vector: the ungated Vector installed AND its unit is active — vector=0 IS the #6538 dark signal.
 if command -v vector >/dev/null 2>&1 && systemctl is-active --quiet vector 2>/dev/null; then V=1; else V=0; fi
-# volume: the workspace volume is mounted; luks=1 iff the LUKS mapper backs it. luks= is REPORTED,
-# not gated — both hosts are plaintext today: web-1 until its per-host ADR-119 cutover, and web-2's
-# for_each volume is KNOWINGLY plaintext-but-empty pre-flip (ADR-143 R3 / workspaces-luks.tf:169-197)
-# — its guest-side fresh-boot LUKS path is DEFERRED to #6931, NOT "LUKS-from-birth". A future Phase
-# tightens luks=1 to gated once #6931 lands.
+# volume: the workspace volume is mounted. luks=1 iff the LUKS mapper IS the /mnt/data source (an
+# existing-but-unmounted mapper is not LUKS-backed), and luks is GATED: a fresh host whose data
+# volume is not on the mapper is not ready (#6931 — the guest-side fresh-boot path,
+# workspaces-luks-provision.sh, makes LUKS-from-birth true; ADR-263). luks_arm/escrow are what that
+# provisioner recorded (formatted|opened|noop, ok|missing) — REPORTED, not gated: a missing off-host
+# header copy pages on its own and is the soak marker's fence, it must not hold an empty standby dark.
+# boot_id is DIAGNOSTIC (the boot this row was written on; the verify join is instance-level, since this
+# row is per INSTANCE and the probe row per boot, ADR-263); host attributes the direct-curl row (it
+# carries no Vector host_name).
 if mountpoint -q "$WORKSPACES_MOUNT" 2>/dev/null; then VOL=1; else VOL=0; fi
-if [ -e "$LUKS_MAPPER" ]; then LUKS=1; else LUKS=0; fi
+if [ "$VOL" = 1 ] && [ "$(findmnt -no SOURCE "$WORKSPACES_MOUNT" 2>/dev/null)" = "$LUKS_MAPPER" ]; then LUKS=1; else LUKS=0; fi
+LUKS_ARM_FILE="${LUKS_ARM_FILE:-/run/soleur/workspaces-luks-arm}"
+ARM=$(sed -n 's/^luks_arm=\(formatted\|opened\|noop\)$/\1/p' "$LUKS_ARM_FILE" 2>/dev/null | head -1); [ -n "$ARM" ] || ARM=none
+ESC=$(sed -n 's/^escrow=\(ok\|missing\)$/\1/p' "$LUKS_ARM_FILE" 2>/dev/null | head -1); [ -n "$ESC" ] || ESC=none
+BOOT_ID=$(tr 'A-F' 'a-f' 2>/dev/null < "${BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" | tr -cd '0-9a-f-' | head -c 36); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
+# The Terraform host name (spliced by the bootstrap, like soleur-boot-emit's): the verify leg joins on it
+# EXACTLY, so an OS hostname that differs from it must not decide the value. Unspliced -> the kernel name.
+HOST='@@SOLEUR_HOST_NAME@@'
+case "$HOST" in @@*) HOST="" ;; esac
+[ -n "$HOST" ] || HOST=$(hostname 2>/dev/null)
+HOST=$(printf '%s' "$HOST" | tr -cd 'A-Za-z0-9.-' | head -c 63); [ -n "$HOST" ] || HOST=unknown
 READY=0; REASON=none
-if [ "$T" = 1 ] && [ "$V" = 1 ] && [ "$VOL" = 1 ]; then
+if [ "$T" = 1 ] && [ "$V" = 1 ] && [ "$VOL" = 1 ] && [ "$LUKS" = 1 ]; then
   READY=1
 elif [ "$T" != 1 ]; then REASON=token
 elif [ "$V" != 1 ]; then REASON=vector
-else REASON=volume
+elif [ "$VOL" != 1 ]; then REASON=volume
+else REASON=luks
 fi
-LINE="SOLEUR_FRESH_BOOT_READY ready=$READY stage=cloud_init_complete token=$T vector=$V volume=$VOL luks=$LUKS reason=$REASON boot_window_s=$SOLEUR_FRESH_BOOT_WINDOW_SECONDS"
+LINE="SOLEUR_FRESH_BOOT_READY ready=$READY stage=cloud_init_complete token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID host=$HOST reason=$REASON boot_window_s=$SOLEUR_FRESH_BOOT_WINDOW_SECONDS"
 # (3) local journald breadcrumb — free, no Better Stack quota (deliberately NOT in the Vector
 # SYSLOG_IDENTIFIER allowlist; Better Stack delivery is the direct curl below, not via Vector).
 logger -t SOLEUR_FRESH_BOOT_READY "$LINE" 2>/dev/null || true
@@ -802,20 +1045,52 @@ INGEST_URL="${BETTERSTACK_INGEST_URL:-}"
 # zot-registry.tf local.betterstack_logs_ingest_url). Any other value skips this channel and keeps
 # Sentry, like an unprovisioned host; the marker must never abort.
 readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
-if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
-  post() { curl --disable --noproxy '*' -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
-  post || post || echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2
+# (#9597) The bearer rides curl's STDIN config channel, never its argument list (readable by every
+# local user via /proc/<pid>/cmdline). A token with a newline, quote or space would inject a config
+# directive, so it is shape-checked first. POSIX sh: no `local`, so the C-locale pin lives in a
+# subshell body, and the pipe form below stands in for the process substitution /bin/sh lacks.
+bearer_ok() ( LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac )
+# A skipped or failed direct POST is NOT silent: this row is one of the soak marker's two inputs, and its
+# absence reads as "not live yet". It raises a distinct WARNING stage whose Sentry detail carries the same
+# joinable fields the row would have (reason, luks_arm, escrow, boot_id); the row grammar is unchanged.
+DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail.d}"
+detail() { # <stage> <text>: the per-stage detail channel soleur-boot-emit reads
+  [ -d "$DDIR" ] || mkdir -m 700 "$DDIR" 2>/dev/null || true
+  printf '%s' "$2" > "$DDIR/$1" 2>/dev/null || true
+}
+BS_WHY=""
+if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ] && bearer_ok "$TOKEN"; then
+  post() { printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | curl --disable --noproxy '*' -fsS -m 10 --config - -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+  post || post || { BS_WHY=post_failed; echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2; }
+elif [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
+  # Pinned destination, but the token failed the shape check: SKIP-AND-REPORT, never fail-stop
+  # (this runs under set -e from cloud-init and sits above the dark-host detector). It is reported
+  # as its own reason, not misread as an unpinned URL.
+  BS_WHY=bad_token_shape
+  echo "[fresh-boot-ready] refusing a Better Stack token that failed the shape check; Sentry only" >&2
 elif [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
+  BS_WHY=unpinned_url
   echo "[fresh-boot-ready] refusing to send the Better Stack token to an unpinned destination; Sentry only" >&2
+elif [ -z "$TOKEN" ]; then BS_WHY=no_token
+else BS_WHY=no_url
 fi
-# (2) Sentry — always. ready -> info breadcrumb; not-ready -> fatal (the stage names the unmet field).
+if [ -n "$BS_WHY" ]; then
+  detail fresh_boot_ready_bs_egress "reason=$BS_WHY luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"
+  soleur-boot-emit fresh_boot_ready_bs_egress warning
+fi
+# (2) Sentry — always. ready -> info breadcrumb; not-ready -> fatal (the stage names the unmet field, the
+# detail carries the whole field set so the page needs no second lookup).
 if [ "$READY" = 1 ]; then
+  detail fresh_boot_ready "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"
   soleur-boot-emit fresh_boot_ready info
 else
+  detail "fresh_boot_not_ready_$REASON" "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"
   soleur-boot-emit "fresh_boot_not_ready_$REASON" fatal
 fi
 exit 0
 FRESHREADYEOF
+# (#6931) splice the Terraform host name into the readiness marker (same non-`/` delimiter idiom as above).
+sed -i "s|@@SOLEUR_HOST_NAME@@|${SOLEUR_HOST_NAME:-}|" /usr/local/bin/soleur-fresh-boot-ready
 chmod 0755 /usr/local/bin/soleur-fresh-boot-ready
 
 # Sentinel LAST: extraction + install proven complete. The terminal `docker run` block gates

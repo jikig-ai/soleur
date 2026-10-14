@@ -174,8 +174,8 @@ case "$(val summary)" in "PR #8272 ($SUBJ1)"*) pass "T1: summary starts PR #8272
 [[ "$(grep -c '' <<<"$(val summary)")" -eq 1 ]] && pass "T1: summary is one line" || fail "T1: summary spans lines"
 grep -q 'compare/' "$TMP/calls" && grep -q -- ' -f path=' "$TMP/calls" && grep -q '/pulls' "$TMP/calls" \
   && pass "T1: call log shows compare, path listing and /pulls" || fail "T1: call log: $(tr '\n' '|' < "$TMP/calls")"
-if grep 'compare/' "$TMP/calls" | grep -qE 'per_page|page='; then fail "T1: the compare call carried a paging param (250-cap contract broken)"; else pass "T1: the compare call carried no paging param"; fi
-if grep -q ' -f path=' "$TMP/calls" && grep ' -f path=' "$TMP/calls" | grep -q 'per_page=100'; then pass "T1: the path listing asks for per_page=100"; else fail "T1: path listing lacks per_page=100"; fi
+if grep 'compare/' "$TMP/calls" | grep -cE >/dev/null 'per_page|page='; then fail "T1: the compare call carried a paging param (250-cap contract broken)"; else pass "T1: the compare call carried no paging param"; fi
+if grep -q ' -f path=' "$TMP/calls" && grep ' -f path=' "$TMP/calls" | grep -c >/dev/null 'per_page=100'; then pass "T1: the path listing asks for per_page=100"; else fail "T1: path listing lacks per_page=100"; fi
 grep -Fq "repos/jikig-ai/soleur/compare/${B}...${A}" "$TMP/calls" && pass "T1: the compare is before...after" || fail "T1: compare range wrong: $(grep compare "$TMP/calls")"
 grep -Fq -- "-X GET repos/jikig-ai/soleur/commits -f sha=${A} -f path=${CFG} -F per_page=100" "$TMP/calls" && pass "T1: the listing is from AFTER, for CFG, via -f/-F fields" || fail "T1: listing argv: $(grep ' -f path=' "$TMP/calls")"
 
@@ -339,7 +339,7 @@ assert_shape T10
 [[ "$(val range)" == "unproven" ]] && pass "T10: range=unproven" || fail "T10: range=$(val range)"
 [[ "$(val range_note)" == *250* ]] && pass "T10: note mentions 250" || fail "T10: note=$(val range_note)"
 [[ "$(val commits)" == "$A" ]] && pass "T10: [after] only" || fail "T10: commits=$(val commits)"
-if grep 'compare/' "$TMP/calls" | grep -qE 'per_page|page='; then fail "T10: compare carried a paging param"; else pass "T10: compare carried no paging param"; fi
+if grep 'compare/' "$TMP/calls" | grep -cE >/dev/null 'per_page|page='; then fail "T10: compare carried a paging param"; else pass "T10: compare carried no paging param"; fi
 
 # ============================================================================================
 echo "T11 proven range, nothing in range touched the path: prs EMPTY, no [after] fallback"

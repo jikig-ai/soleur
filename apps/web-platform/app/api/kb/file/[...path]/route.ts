@@ -119,6 +119,20 @@ export async function DELETE(
       );
     }
 
+    // An egress-guard refusal (server/github-url.ts) is a safety trip, not an
+    // upstream failure — surface its reason instead of an opaque 500.
+    if ((error as { code?: string }).code === "github_api_egress_denied") {
+      logger.error({ err: error, userId: user.id }, "kb/delete: egress refusal");
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error ? error.message : "GitHub API egress denied",
+          code: "EGRESS_REFUSED",
+        },
+        { status: 500 },
+      );
+    }
+
     logger.error(
       { err: error, userId: user.id },
       "kb/delete: unexpected error",

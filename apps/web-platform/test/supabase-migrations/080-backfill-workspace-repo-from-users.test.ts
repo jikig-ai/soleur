@@ -15,7 +15,7 @@ import path from "node:path";
 // describe.skip block (TENANT_INTEGRATION_TEST=1 + DATABASE_URL_POOLER,
 // dedicated dev project per hr-dev-prd-distinct-supabase-projects).
 //
-// Plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan.md §Phase 080
+// Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-28-feat-workspace-repo-ownership-plan.md §Phase 080
 // ADR: knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md
 
 const MIGRATION_PATH = path.resolve(

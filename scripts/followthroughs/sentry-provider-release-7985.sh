@@ -129,7 +129,7 @@ for v in $NEWER; do
     echo "TRANSIENT: compare v${PINNED}...v${v} returned nothing (API unreachable or tag missing)"
     exit 2
   fi
-  if printf '%s' "$CMP" | grep -qi -e "^${FIX_SHA}" -e "$FIX_SUBJECT"; then
+  if grep -qi -e "^${FIX_SHA}" -e "$FIX_SUBJECT" <<<"$CMP"; then
     echo "FAIL: ACTION REQUIRED — unblocked: provider v${v} contains ${FIX_SHA}; bump versions.tf, convert auth_per_user_loop and sandbox_startup_failure to native trigger_conditions, drop legacy_trigger_conditions and ignore_changes = all (the plan must show 0 changes). See #7985's exit checklist."
     exit 1
   fi

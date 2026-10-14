@@ -5,11 +5,13 @@
 # Idempotent. Installs the DURABLE SUBSTRATE for the multi-host /workspaces
 # split's git-data store: the block-volume mount, git + flock, the dedicated
 # `git` transport user's .ssh perms, the bare-repo root, and a FAIL-CLOSED
-# PLACEHOLDER pre-receive hook. The REAL CAS fence (git-data-pre-receive.sh) is
-# delivered by a host replace (cloud-init) or the operator root path the cutover
-# uses — NEVER by a git-uid channel: $HOOKS_DIR is root:git 0750 and the hook root:root
-# (#8043 F9), and the "web-platform deploy pipeline" this header once named was never
-# built (ADR-149, F9 disposition). CI cannot SSH either host.
+# CAS-FENCE pre-receive hook (#8211 PR2 — hook-at-birth): the real
+# git-data-pre-receive.sh ships in this payload and step 5 installs it. It is
+# fail-closed by construction — every push lacking a valid lease-gen/worktree-id
+# pair is rejected — and before the flag flips no transport credential exists to
+# push with, so the placeholder's deny-all posture is preserved in substance.
+# Never installed over a git-uid channel: $HOOKS_DIR is root:git 0750 and the hook
+# root:root (#8043 F9). CI cannot SSH either host.
 #
 # DELIVERY: embedded into cloud-init-git-data.yml via base64encode(file()) and
 # run once from runcmd on first boot (mirrors inngest-redis-bootstrap.sh).
@@ -48,7 +50,7 @@ log() {
 GIT_DATA_ROOT="/mnt/git-data"
 REPO_ROOT="$GIT_DATA_ROOT/repositories" # per-workspace bare repos land here
 HOOKS_DIR="$GIT_DATA_ROOT/hooks"        # core.hooksPath target (on the volume)
-PLACEHOLDER_STAGED="/tmp/git-data-pre-receive-placeholder.sh"
+FENCE_STAGED="/tmp/git-data-pre-receive.sh"
 PRE_RECEIVE="$HOOKS_DIR/pre-receive"
 GIT_USER="git"
 GIT_HOME="/home/$GIT_USER"
@@ -61,6 +63,32 @@ assert_not_symlink() {
     exit 1
   fi
 }
+
+# (#10138) A volume ATTACHMENT can land after first boot has started: Hetzner attaches volumes as
+# separate actions once the server exists (run 38384137515, 2026-10-13: Terraform recorded the
+# plaintext attachment completing about 70 s after the check below). _gd_attach_wait <label>
+# <predicate> re-runs the WHOLE predicate every 10 s for up to 300 s: counted, never the clock, and
+# each pass sleeps the 10 s it charges, so 300 s is a LOWER bound on real time (each pass's probes add
+# to it). It returns 1 after the bound, so the caller keeps its named FATAL. Call it directly, never
+# inside $( ): the predicate's assignments must reach the caller.
+# ---- BEGIN attach-wait helper ----
+readonly _AW_BOUND_S=300
+_gd_attach_wait() {
+  local _aw_label="$1" _aw_pred="$2" _aw_waited=0
+  if "$_aw_pred"; then return 0; fi
+  log "waiting up to ${_AW_BOUND_S}s for ${_aw_label}: the volume attachment is still in flight"
+  while [ "$_aw_waited" -lt "$_AW_BOUND_S" ]; do
+    sleep 10
+    _aw_waited=$((_aw_waited + 10))
+    if "$_aw_pred"; then
+      log "${_aw_label} appeared after ${_aw_waited}s"
+      return 0
+    fi
+  done
+  log "${_aw_label} did not appear within the ${_AW_BOUND_S}s bound"
+  return 1
+}
+# ---- END attach-wait helper ----
 
 # 1. THE STORE IS THE LUKS MAPPER, AT /mnt/git-data (#8211, ADR-239). One section, where there
 #    used to be two: §1 mounted the PLAINTEXT volume here by a raw `scsi-0HC_Volume_*` glob and
@@ -198,9 +226,10 @@ chmod 0750 "$HOOKS_DIR"
 ln -sfn "$REPO_ROOT" "$GIT_HOME/repositories"
 chown -h "$GIT_USER:$GIT_USER" "$GIT_HOME/repositories"
 
-# 5. Install the FAIL-CLOSED placeholder pre-receive. Staged to /tmp by cloud-init
-#    (base64). core.hooksPath (step 6) points every per-workspace bare repo at it,
-#    so a push is rejected until the real fence hook lands by host replace (see header).
+# 5. Install the REAL CAS-fence pre-receive (#8211 PR2 — hook-at-birth). Staged to
+#    /tmp by cloud-init (base64). core.hooksPath (step 6) points every per-workspace
+#    bare repo at it; the hook fail-closed-rejects any push without a valid lease-gen.
+#    Before the flag flips no transport credential exists, so deny-all posture holds.
 #    Re-runnable: skip the staged install only when the hook is already in place.
 #    (#8043 F9) ROOT-OWNED, not git-owned. A root-owned $HOOKS_DIR alone does not close the
 #    property: truncating an existing file needs write permission on the FILE, so a git-owned
@@ -209,15 +238,15 @@ chown -h "$GIT_USER:$GIT_USER" "$GIT_HOME/repositories"
 #    The staged copy must be ROOT'S: /tmp is sticky and world-writable, so on any re-run after
 #    /tmp was cleared a git-uid file at this path would be installed root:root 0755 as the
 #    fence. cloud-init writes it root-owned at first boot; anything else is refused.
-if [[ -f "$PLACEHOLDER_STAGED" ]]; then
-  assert_not_symlink "$PLACEHOLDER_STAGED"
-  [[ "$(stat -c %U "$PLACEHOLDER_STAGED")" == root ]] || {
-    log "FATAL: staged placeholder $PLACEHOLDER_STAGED is owned by $(stat -c %U "$PLACEHOLDER_STAGED"), not root — refusing to install it as the fence"
+if [[ -f "$FENCE_STAGED" ]]; then
+  assert_not_symlink "$FENCE_STAGED"
+  [[ "$(stat -c %U "$FENCE_STAGED")" == root ]] || {
+    log "FATAL: staged fence hook $FENCE_STAGED is owned by $(stat -c %U "$FENCE_STAGED"), not root — refusing to install it as the fence"
     exit 1
   }
-  install -o root -g root -m 0755 "$PLACEHOLDER_STAGED" "$PRE_RECEIVE"
+  install -o root -g root -m 0755 "$FENCE_STAGED" "$PRE_RECEIVE"
 elif [[ ! -f "$PRE_RECEIVE" ]]; then
-  log "FATAL: placeholder hook not staged at $PLACEHOLDER_STAGED and $PRE_RECEIVE absent"
+  log "FATAL: fence hook not staged at $FENCE_STAGED and $PRE_RECEIVE absent"
   exit 1
 fi
 
@@ -347,7 +376,7 @@ done
   log "FATAL: git-data-provision.sh missing/not executable — bare repos cannot be provisioned before first push"
   exit 1
 }
-log "bootstrap substrate ready: LUKS store served at $GIT_DATA_ROOT, git+flock present, bare-repo root $REPO_ROOT, repositories symlink reconciled, provision wrapper present, fail-closed placeholder hook active, push-options advertised"
+log "bootstrap substrate ready: LUKS store served at $GIT_DATA_ROOT, git+flock present, bare-repo root $REPO_ROOT, repositories symlink reconciled, provision wrapper present, CAS-fence hook installed, push-options advertised"
 
 # 7b. STORE VERIFICATION (#8211, ADR-239; Guard 2). The store scripts refuse until the marker
 # written below exists and names this mapper's filesystem UUID (contract C1/C2), so NO store action
@@ -373,7 +402,7 @@ _repo_count() {
   _t="$(find "$1" -mindepth 1 -maxdepth 1 -name repositories -printf '%y' 2>/dev/null)" || return 1
   case "$_t" in
     "") echo 0 ;;
-    d) find "$1/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found -printf x 2>/dev/null | wc -c ;;
+    d) find "$1/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found -printf x 2>/dev/null | wc -c ;;
     *) return 2 ;;
   esac
 }
@@ -417,8 +446,21 @@ if [ -n "$_pt_id" ]; then
   _plaintext_volume=present
   [[ "$_pt_id" =~ ^[0-9]+$ ]] || { log "FATAL: plaintext_unverified reason=source — volume id '$_pt_id' is not numeric"; exit 1; }
   _pt_link="${GIT_DATA_PLAINTEXT_DEV:-/dev/disk/by-id/scsi-0HC_Volume_$_pt_id}"
-  _pt_dev="$(realpath -e "$_pt_link" 2>/dev/null || true)"
-  if [ -z "$_pt_dev" ] || [ "$(stat -L -c %F "$_pt_dev" 2>/dev/null || true)" != "block special file" ]; then
+  _pt_dev=""
+  # (#10138) Wait for a late attachment. The predicate re-resolves the link every pass and hands the
+  # node to the caller through _pt_dev; the FATAL below is the unchanged one, so a timeout can never
+  # read as "no plaintext volume". _pt_state names which check failed last; `timeout -k 2 10` stops
+  # a blocked size probe from stalling a pass (it cannot bound a probe stuck in uninterruptible I/O).
+  _pt_state=""
+  _gd_pt_ready() {
+    _pt_dev="$(realpath -e "$_pt_link" 2>/dev/null || true)"
+    if [ -z "$_pt_dev" ]; then _pt_state="the link does not resolve"; return 1; fi
+    if [ "$(stat -L -c %F "$_pt_dev" 2>/dev/null || true)" != "block special file" ]; then _pt_state="the node is not a block special file"; return 1; fi
+    if ! [ "$(timeout -k 2 10 blockdev --getsize64 "$_pt_dev" 2>/dev/null || echo 0)" -gt 0 ]; then _pt_state="the block device reports size 0 or its size probe failed"; return 1; fi
+    return 0
+  }
+  if ! _gd_attach_wait "plaintext volume $_pt_id" _gd_pt_ready; then
+    log "plaintext volume $_pt_id last state: ${_pt_state:-unprobed}"
     log "FATAL: plaintext_unverified reason=source — $_pt_link does not resolve to a block device"
     exit 1
   fi

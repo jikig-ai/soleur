@@ -69,10 +69,15 @@ inputs:
       object, after which the legacy bucket is refused.
     required: false
     default: ""
-  doppler-cli-version:
-    description: "Pin for the Doppler CLI install."
+  github-app-runtime-token:
+    description: >-
+      #8609 / ADR-241 D10. `"true"` hands this job the REAL value of the Tier-B
+      GITHUB_APP_RUNTIME_DOPPLER_TOKEN (the web host's read token for the isolated
+      soleur-github-app project). Only the jobs that deliver it to a web host opt in:
+      apply-deploy-pipeline-fix.yml's apply and the web-host-create / web-host-replace jobs.
+      Every other job gets the name exported EMPTY, never absent (see the load step).
     required: false
-    default: "latest"
+    default: "false"
 
 outputs:
   source:
@@ -92,10 +97,29 @@ runs:
     # The action installs the CLI itself. That is what lets a Tier-B job REPLACE its
     # `uses: DopplerHQ/cli-action@…` line with this one instead of adding a step, which
     # is the whole byte argument above.
-    - name: Install Doppler CLI
-      uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
-      with:
-        version: ${{ inputs.doppler-cli-version }}
+    #
+    # PINNED, not `DopplerHQ/cli-action`. That action declares NO inputs (its action.yml at
+    # 5351693 has no `inputs:` block) and always runs cli.doppler.com/install.sh, i.e. the
+    # LATEST CLI -- the `version:` this step used to pass was silently ignored, a false pin.
+    # Every Tier-B guarantee rests on `doppler run --preserve-env` semantics (ADR-241 D6, and
+    # #8609's always-exported token name), so the CLI that evaluates it must not move under
+    # us. Same release and sha256 as the web host's own install (cloud-init.yml doppler_dl);
+    # bump both together.
+    - name: Install Doppler CLI (pinned)
+      shell: bash
+      env:
+        DOPPLER_CLI_VERSION: "3.75.3"
+        DOPPLER_CLI_SHA256: "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
+      run: |
+        set -euo pipefail
+        d="${RUNNER_TEMP}/doppler-cli"
+        mkdir -p "$d"
+        curl -fsSL --retry 3 -o "$d/doppler.tar.gz" \
+          "https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_CLI_VERSION}/doppler_${DOPPLER_CLI_VERSION}_linux_amd64.tar.gz"
+        echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -
+        tar xzf "$d/doppler.tar.gz" -C "$d" doppler
+        rm -f "$d/doppler.tar.gz"
+        echo "$d" >> "$GITHUB_PATH"
 
     - name: Load tiered infra credentials
       id: load
@@ -104,6 +128,7 @@ runs:
         DP_INFRA: ${{ inputs.doppler-token-infra-privileged }}
         DP_LEGACY: ${{ inputs.doppler-token-legacy }}
         GIT_DATA_ROOT_STATE_MIGRATED: ${{ inputs.git-data-root-state-migrated }}
+        GITHUB_APP_RUNTIME_OPT_IN: ${{ inputs.github-app-runtime-token }}
       run: |
         set -euo pipefail
 
@@ -115,6 +140,31 @@ runs:
         readonly LEGACY_BUCKET="soleur-terraform-state"
 
         emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+
+        # ---- #8609: the runtime App key's read token, ALWAYS exported ---------
+        #
+        # BEFORE THE ARM SPLIT, so every job -- legacy arm included -- carries the name.
+        # `DOPPLER_TOKEN_WRITE` can write `prd_terraform` until operator step O11, and every
+        # Tier-B `doppler run --preserve-env --name-transformer tf-var` would take a planted
+        # `GITHUB_APP_RUNTIME_DOPPLER_TOKEN` from there as TF_VAR_github_app_runtime_doppler_token
+        # -- a branch-chosen token the web host would then use to fetch "its" App key. An
+        # exported name, even empty, wins under --preserve-env; an ABSENT one does not. The
+        # Tier-B arm below re-exports the real value (later lines win in $GITHUB_ENV) only when
+        # the job opted in. Guard 8 (infra-credentials.test.sh rows 8.1-8.p).
+        readonly GAR_NAME="GITHUB_APP_RUNTIME_DOPPLER_TOKEN"
+        export_gar() {
+          local d; d="SOLEUR_EOF_$(openssl rand -hex 12)"
+          printf '%s<<%s\n%s\n%s\n' "$GAR_NAME" "$d" "$1" "$d" >> "$GITHUB_ENV"
+          printf 'TF_VAR_%s<<%s\n%s\n%s\n' "github_app_runtime_doppler_token" "$d" "$1" "$d" >> "$GITHUB_ENV"
+        }
+        export_gar ""
+        # The NON-secret twin: "is this the delivering job?". server.tf requires a non-empty token
+        # only where this is true (after PR-B), so non-opted-in plans never fail on the isolation
+        # flag. Exported in every job, like the token name, so a prd_terraform plant cannot win.
+        # Keyed on the opt-in alone: an opted-in job whose Tier-B value is absent still says
+        # "true", which is exactly the job whose plan must fail after PR-B. Guard 8 row 8.6.
+        if [[ "${GITHUB_APP_RUNTIME_OPT_IN:-false}" == "true" ]]; then gar_delivered=true; else gar_delivered=false; fi
+        printf 'TF_VAR_github_app_runtime_token_delivered=%s\n' "$gar_delivered" >> "$GITHUB_ENV"
 
         # ---- Arm 1: legacy ---------------------------------------------------
         #
@@ -294,6 +344,8 @@ runs:
         n=0
         while IFS= read -r k; do
           [[ -n "$k" ]] || continue
+          # Exported below, and only on opt-in: the generic loop would hand it to every job.
+          [[ "$k" == "$GAR_NAME" ]] && continue
           v="$(printf '%s' "$payload" | jq -r --arg k "$k" '.[$k]')"
           # A multi-line value (a PEM) needs heredoc delimiter syntax in $GITHUB_ENV;
           # the `printf 'K=V\n'` form silently truncates at the first newline and the
@@ -320,6 +372,20 @@ runs:
         if [[ "$n" -lt "$MIN_EXPORTED" ]]; then
           printf '::error title=infra-privileged::verdict=privileged_empty exported=%s — soleur-infra-privileged/prd returned no usable keys. A Tier-B job that exports nothing silently degrades to the Tier-A values it exists to stop using.\n' "$n"
           exit 1
+        fi
+
+        # The opt-in re-export. Its value is already masked by the per-line loop above; the
+        # log names only the state. `withheld` is the normal state for every job but the two
+        # that deliver the token to a web host (security review P2-5: reach narrowed from all
+        # Tier-B workflows to those two).
+        gar="$(printf '%s' "$payload" | jq -r --arg k "$GAR_NAME" '.[$k] // ""')"
+        if [[ -z "$gar" ]]; then
+          gar_state="absent"
+        elif [[ "${GITHUB_APP_RUNTIME_OPT_IN:-false}" == "true" ]]; then
+          export_gar "$gar"
+          gar_state="delivered"
+        else
+          gar_state="withheld"
         fi
 
         # ---- Alias the Tier-B state key onto the plain backend names ---------
@@ -386,6 +452,6 @@ runs:
           exit 1
         fi
 
-        echo "::notice title=infra-privileged::source=tier_b exported=${n} git_data_root_state=$([[ "$bucket" == "$PRIV_BUCKET" ]] && echo privileged || echo legacy)"
+        echo "::notice title=infra-privileged::source=tier_b exported=${n} git_data_root_state=$([[ "$bucket" == "$PRIV_BUCKET" ]] && echo privileged || echo legacy) github_app_runtime_token=${gar_state}"
         emit source "tier_b"
         emit git_data_root_state_bucket "$bucket"

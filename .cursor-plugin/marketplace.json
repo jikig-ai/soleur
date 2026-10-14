@@ -1,0 +1,12 @@
+{
+  "name": "soleur",
+  "owner": {
+    "name": "jikig-ai"
+  },
+  "plugins": [
+    {
+      "name": "soleur",
+      "source": "plugins/soleur"
+    }
+  ]
+}

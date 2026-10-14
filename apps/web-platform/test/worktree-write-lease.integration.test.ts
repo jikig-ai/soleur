@@ -6,7 +6,7 @@
  *   AC2(a) two distinct hosts → exactly one holder; loser gets zero rows.
  *   AC2(b) same-host re-acquire of its own fresh lease → returns its row, SAME gen
  *          (the self-lockout regression guard).
- *   AC2(c) cross-host re-acquire after the 120s heartbeat expiry → gen+1.
+ *   AC2(c) cross-host re-acquire after the 240s heartbeat expiry (mig 133) → gen+1.
  *   AC2(d) release frees the lease so a fresh acquire succeeds immediately.
  *   AC2(e) touch against a reclaimed/gen-bumped lease returns 0 (fail-loud signal);
  *          touch of a held lease returns 1.
@@ -15,7 +15,7 @@
  *   AC5   deleting a workspace cascade-deletes its lease rows.
  *
  * Expiry is simulated by ageing heartbeat_at via the service client (service_role
- * bypasses RLS) rather than sleeping 120s.
+ * bypasses RLS) rather than sleeping 240s.
  *
  * Opt-in via WORKTREE_LEASE_INTEGRATION_TEST=1. Runs against the real Supabase
  * DEV project (never prod — hr-dev-prd); requires `doppler run -p soleur -c dev`:
@@ -36,6 +36,12 @@ const INTEGRATION_ENABLED =
 // Only synthetic emails matching this pattern may be created or deleted by this
 // test (hr-destructive-prod-tests-allowlist, cq-test-fixtures-synthesized-only).
 const SYNTHETIC_EMAIL_PATTERN = /^worktree-lease-[a-f0-9]{16}@soleur\.test$/;
+
+// 300 s = 240 s mig-133 lease expiry + 60 s DB-vs-runner clock-skew margin.
+// Aged past the threshold acquire_worktree_lease enforces on dev
+// (`heartbeat_at < now() - interval '240 seconds'`); a literal, not a derived
+// import, so a future threshold bump re-reddens the leg — the alarm working.
+const STALE_LEASE_AGE_S = 300;
 
 function syntheticEmail(): string {
   return `worktree-lease-${randomBytes(8).toString("hex")}@soleur.test`;
@@ -219,7 +225,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     test("AC2(c): cross-host re-acquire after expiry bumps gen", async () => {
       const a = await acquire(HOST_A);
       expect(a?.lease_generation).toBe(1);
-      await ageHeartbeat(121);
+      await ageHeartbeat(STALE_LEASE_AGE_S);
       const b = await acquire(HOST_B);
       expect(b?.host_id).toBe(HOST_B);
       expect(b?.lease_generation).toBe(2);
@@ -233,7 +239,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // survives release (CTO ruling 2026-06-30; a reset-to-1 would invert the
       // git-data `gen < max` fence into a write outage).
       expect(await release(HOST_A, a!.lease_generation)).toBe(1);
-      // A different host takes over IMMEDIATELY (no 120s wait — tombstone) and
+      // A different host takes over IMMEDIATELY (no 240s wait — tombstone) and
       // gen climbs to 2, it does NOT reset to the column default 1.
       const reacquired = await acquire(HOST_B);
       expect(reacquired?.host_id).toBe(HOST_B);
@@ -248,7 +254,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     test("AC2(e): touch returns 1 while held, 0 after reclaim", async () => {
       const a = await acquire(HOST_A);
       expect(await touch(HOST_A, a!.lease_generation)).toBe(1);
-      await ageHeartbeat(121);
+      await ageHeartbeat(STALE_LEASE_AGE_S);
       const b = await acquire(HOST_B);
       expect(b?.lease_generation).toBe(2);
       // HOST_A's stale touch (gen=1) finds no matching row → 0 (fail-loud signal).
@@ -257,7 +263,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
     test("AC2(f): release with a stale gen is a no-op (no stomp)", async () => {
       const a = await acquire(HOST_A);
-      await ageHeartbeat(121);
+      await ageHeartbeat(STALE_LEASE_AGE_S);
       const b = await acquire(HOST_B);
       expect(b?.lease_generation).toBe(2);
       // HOST_A tries to release the lease it no longer holds (stale gen=1) → 0.

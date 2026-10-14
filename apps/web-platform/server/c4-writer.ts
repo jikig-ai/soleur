@@ -198,6 +198,17 @@ export async function writeC4Diagram(
       );
       return { ok: false, status: 502, error: error.message, code: "GITHUB_API_ERROR" };
     }
+    // An egress-guard refusal (server/github-url.ts) is a safety trip, not an
+    // upstream failure — surface its reason instead of an opaque 500.
+    if ((error as { code?: string }).code === "github_api_egress_denied") {
+      logger.error({ err: error, ...userLog }, "kb/c4: egress refusal");
+      return {
+        ok: false,
+        status: 500,
+        error: error instanceof Error ? error.message : "GitHub API egress denied",
+        code: "EGRESS_REFUSED",
+      };
+    }
     logger.error({ err: error, ...userLog }, "kb/c4: unexpected write error");
     return { ok: false, status: 500, error: "Internal server error" };
   }

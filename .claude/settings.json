@@ -42,7 +42,7 @@
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-backstop.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-backstop-resolve.sh"
           },
           {
             "type": "command",
@@ -85,6 +85,15 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-unpushed-commits-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-kb-archive-gate.sh"
           }
         ]
       },
@@ -531,6 +540,17 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/monitor-arm-recorder.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-closing-technical-fork-gate.sh",
+            "timeout": 10
           }
         ]
       }

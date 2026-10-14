@@ -2215,7 +2215,7 @@ cases=$((cases + 1))
 OCT_DIR="$SS_ROOT/locks/8579-oct.queue.d"
 mkdir -p "$OCT_DIR"
 : > "$OCT_DIR/00000008"
-if env -u CI bash -c "source '$LIB'; LOCK_DIR='$SS_ROOT/locks' _tc_queue_position '$OCT_DIR' 9" 2>/dev/null | grep -qx '1'; then
+if env -u CI bash -c "source '$LIB'; LOCK_DIR='$SS_ROOT/locks' _tc_queue_position '$OCT_DIR' 9" 2>/dev/null | grep -cx >/dev/null '1'; then
   pass "Q10: position over a leading-zero serial (00000008) computes without an octal error"
 else
   fail "Q10: position over 00000008 failed — a %08d serial reached unguarded arithmetic"

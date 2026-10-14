@@ -1,0 +1,6 @@
+[
+{"number":201,"state":"open","rule":{"id":"js/medium-rule","security_severity_level":"medium"},"most_recent_instance":{"ref":"refs/heads/main"}}
+]
+[
+{"number":202,"state":"open","rule":{"id":"py/command-line-injection","security_severity_level":"critical"},"most_recent_instance":{"ref":"refs/heads/main"}}
+]

@@ -105,3 +105,11 @@ In each case the property was "any early-exit reader, any crash-shaped verdict".
 - #8855 (the sibling scorer sites, with a shared scorer library as the default remedy)
 - #7005 (the repo-wide SIGPIPE class; its 64 KiB framing is refined above)
 - `knowledge-base/project/learnings/test-failures/2026-09-23-my-sigpipe-regression-guard-pinned-the-file-size-not-the-cause.md`
+
+## Addendum 2026-10-05 (#7376, PR #9525)
+
+Three more suites flaked through this mechanism on 2026-10-05, and two points sharpen the account above. The race has a
+**producer-side form** (a test stub that exits without reading the stdin a `printf |` feeds it, so the late writer takes
+SIGPIPE, or EPIPE rc 1 where SIGPIPE is ignored, as on the CI runner) that no line search over the test file can see; and
+a CI log showed `echo: write error: Broken pipe` for a few-KB `echo`, so the producer's size is not a bound. See
+`2026-10-05-a-reader-that-exits-early-flipped-three-suites-and-the-stub-had-to-read-too.md`.

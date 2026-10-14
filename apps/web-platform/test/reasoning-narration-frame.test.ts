@@ -16,7 +16,7 @@ function baseState(over: Partial<ChatState> = {}): ChatState {
     messages: [],
     activeStreams: new Map(),
     workflow: { state: "idle" },
-    spawnIndex: new Map(),
+    spawnIndex: new Set(),
     streamState: "idle",
     connection: { phase: "live" },
     liveNarration: "Looking into your billing settings…",
@@ -79,7 +79,7 @@ describe("ws-client reducer — liveNarration teardown (one arm each)", () => {
     } as unknown as ChatMessage;
     const state = baseState({
       messages: [bubble],
-      activeStreams: new Map([["cpo", 0]]) as ChatState["activeStreams"],
+      activeStreams: new Map([["cpo", "b0"]]) as ChatState["activeStreams"],
       streamState: "streaming",
     });
     const next = chatReducer(state, { type: "timeout", leaderId: "cpo" });

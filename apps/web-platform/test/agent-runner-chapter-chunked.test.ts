@@ -108,7 +108,15 @@ vi.mock("../server/tool-path-checker", () => ({
   isFileTool: vi.fn(() => false),
   isSafeTool: vi.fn(() => false),
 }));
-vi.mock("../server/agent-env", () => ({ buildAgentEnv: vi.fn(() => ({})) }));
+vi.mock("../server/agent-env", async () => {
+  // feat-open-web-egress (#9534): keep the REAL exports —
+  // agent-runner-sandbox-config derives the web-egress deny census
+  // from ALLOWED_SERVICE_ENV_VARS at module init; a bare stub drops
+  // it and crashes every transitive importer.
+  const actual =
+    await vi.importActual<typeof import("../server/agent-env")>("../server/agent-env");
+  return { ...actual, buildAgentEnv: vi.fn(() => ({})) };
+});
 vi.mock("../server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => vi.fn()),
 }));

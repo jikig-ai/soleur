@@ -119,6 +119,20 @@ ok "$((UNIT_LINES < 60))" "X3 the store-verify unit was extracted (got $UNIT_LIN
 ok "$(bash -n "$UNIT" 2>/dev/null; echo $?)" "X4 the extracted unit is syntactically valid bash on its own"
 UNIT_BODY="$SCRATCH/unit.body"; strip "$UNIT" > "$UNIT_BODY"
 
+# The attach-wait helper (#10138) is a separate extraction: the store-verify unit starts at step 2,
+# and the helper is defined above section 1, so the harness prelude prepends it.
+HELPER_BEGIN='# ---- BEGIN attach-wait helper ----'
+HELPER_END='# ---- END attach-wait helper ----'
+HELPER="$SCRATCH/helper.sh"
+awk -v b="$HELPER_BEGIN" -v e="$HELPER_END" '$0==b{f=1;next} $0==e{f=0} f' "$BOOTSTRAP" > "$HELPER"
+n=$(grep -cxF "$HELPER_BEGIN" "$BOOTSTRAP" || true)
+ok "$((n != 1))" "X5 exactly one BEGIN attach-wait helper sentinel in the bootstrap (got $n)"
+n=$(grep -cxF "$HELPER_END" "$BOOTSTRAP" || true)
+ok "$((n != 1))" "X6 exactly one END attach-wait helper sentinel in the bootstrap (got $n)"
+HELPER_LINES=$(grep -c . "$HELPER" || true)
+ok "$((HELPER_LINES < 15))" "X7 the attach-wait helper was extracted (got $HELPER_LINES lines; floor 15)"
+ok "$(bash -n "$HELPER" 2>/dev/null; echo $?)" "X8 the extracted helper is syntactically valid bash on its own"
+
 # =====================================================================================
 # STATIC — the seams, the options, the marker, the probe
 # =====================================================================================
@@ -167,8 +181,8 @@ ok "$(grep -qE '^[[:space:]]*trap _pt_release EXIT$' "$UNIT_BODY"; echo $?)" \
 ok "$(grep -qF 'plaintext_unverified reason=umount' "$UNIT_BODY"; echo $?)" "S8b a failed teardown is FATAL reason=umount"
 n=$(grep -c 'rm -rf' "$UNIT_BODY" || true)
 ok "$((n != 0))" "S8c no rm -rf in the unit — it would walk a still-mounted plaintext tree into stderr (got $n)"
-ok "$(grep -qF "! -name '.*.init.lock' ! -name lost+found -printf x 2>/dev/null" "$UNIT_BODY"; echo $?)" \
-  "S9 the count excludes the .<id>.init.lock dotfiles and lost+found, and discards find's stderr (entry names are workspace ids)"
+ok "$(grep -qF "! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found -printf x 2>/dev/null" "$UNIT_BODY"; echo $?)" \
+  "S9 the count excludes the shared .init.lock (#9066), legacy .<id>.init.lock residue and lost+found, and discards find's stderr (entry names are workspace ids)"
 n=$(grep -c "\-name '\*\.git'" "$UNIT_BODY" || true)
 ok "$((n != 0))" "S9b the count is NOT narrowed to *.git — a partial repositories/x is still user data (got $n)"
 # AC5 — every plaintext FATAL names a reason from the closed vocabulary, or is the residue line.
@@ -430,7 +444,10 @@ STUB
 
   mkstub cryptsetup <<'STUB'
 printf 'cryptsetup|%s\n' "$*" >> "$FXD/calls.log"
-[ "$*" = "isLuks $FXD/dev/vol" ] || { printf 'cryptsetup-stub: unexpected argv: %s\n' "$*" >&2; exit 64; }
+case "$*" in
+  "isLuks $FXD/dev/vol") : ;;
+  *) printf 'cryptsetup-stub: unexpected argv: %s\n' "$*" >&2; exit 64 ;;
+esac
 [ ! -e "$FXD/reattach_after_isluks" ] || echo 8:20 > "$FXD/devnum"
 [ -e "$FXD/pt_is_luks" ]
 STUB
@@ -445,6 +462,7 @@ case "$1" in
   --setrw) rm -f "$FXD/ro_set" ;;
   --getro) if [ -e "$FXD/ro_set" ] && [ ! -e "$FXD/getro_zero" ]; then echo 1; else echo 0; fi ;;
   --getsz) [ -e "$FXD/getsz_bad" ] || echo 20971520 ;;
+  --getsize64) if [ -e "$FXD/size_zero" ]; then echo 0; else echo 10737418240; fi ;;
   *) printf 'blockdev-stub: unexpected argv: %s\n' "$*" >&2; exit 64 ;;
 esac
 STUB
@@ -493,9 +511,29 @@ case "$1" in
 esac
 STUB
 
+  # sleep: never sleeps. It logs, counts its calls, and on the Nth call (late_after_sleep) lets the
+  # late attachment "land": the plaintext by-id link appears.
+  mkstub sleep <<'STUB'
+printf 'sleep|%s\n' "$*" >> "$FXD/calls.log"
+[ "$*" = 10 ] || { printf 'sleep-stub: unexpected argv: %s\n' "$*" >&2; exit 64; }
+_n=$(( $("$REAL_CAT" "$FXD/sleep_n" 2>/dev/null || echo 0) + 1 )); echo "$_n" > "$FXD/sleep_n"
+if [ -s "$FXD/late_after_sleep" ] && [ "$_n" -eq "$("$REAL_CAT" "$FXD/late_after_sleep")" ]; then
+  [ ! -e "$FXD/late_link" ] || ln -sfn "$FXD/dev/vol" "$FXD/dev/by-id"
+fi
+STUB
   mkstub udevadm <<'STUB'
 printf 'udevadm|%s\n' "$*" >> "$FXD/calls.log"
 case "$*" in "settle --timeout="[0-9]*) : ;; *) printf 'udevadm-stub: unexpected argv: %s\n' "$*" >&2; exit 64 ;; esac
+STUB
+
+  # timeout: logs to its OWN file (a calls.log line naming the origin would trip the origin allowlist),
+  # drops the -k grace and the duration, and execs the real command found on the stub PATH. It exists
+  # so a row can assert the size probe really runs under `timeout -k 2 10`, not merely that the text does.
+  mkstub timeout <<'STUB'
+printf '%s\n' "$*" >> "$FXD/timeout.log"
+[ "$1" != -k ] || shift 2
+shift
+exec "$@"
 STUB
 
   # The kernel log (DIAGNOSTIC only): a baseline on the first read, then the baseline plus klog_extra.
@@ -569,9 +607,9 @@ STUB
 printf 'remove|%s\n' "$*" >> "$FXD/calls.log"
 env > "$FXD/probe.env"
 _id="${SSH_ORIGINAL_COMMAND:-noenv}"
-# The real script's 0-byte lock dotfile, so "invisible to the served_repos count" is measured
-# against a file that exists rather than assumed.
-: > "$FXD/store/repositories/.$_id.init.lock"
+# The real script's 0-byte lock dotfile (#9066: the constant-name shared lock), so
+# "invisible to the served_repos count" is measured against a file that exists.
+: > "$FXD/store/repositories/.init.lock"
 if [ -e "$FXD/probe_refuse" ]; then
   printf 'remote: git-data remove: refused\n' >&2
   exit 1
@@ -595,7 +633,7 @@ STUB
     printf 'REPO_ROOT="$GIT_DATA_ROOT/repositories"\n'
     printf 'HOOKS_DIR="$GIT_DATA_ROOT/hooks"\n'
     printf 'PRE_RECEIVE="$HOOKS_DIR/pre-receive"\n'
-  } > "$FX/prelude.sh"
+  } > "$FX/prelude.base.sh"
 
   cat > "$FX/trailer.sh" <<'TRAIL'
 printf 'plaintext_volume=%s\n' "$_plaintext_volume"
@@ -636,7 +674,7 @@ run_unit() {
   if [ -e "$FX/stat_absent" ]; then rm -f "$FX/sys/dev/block/$FX_SYSDEV/stat"
   elif [ -s "$FX/stat_content" ]; then cp "$FX/stat_content" "$FX/sys/dev/block/$FX_SYSDEV/stat"
   else printf '%s\n' "$FX_STAT" > "$FX/sys/dev/block/$FX_SYSDEV/stat"; fi
-  rm -f "$FX/counted" "$FX/cow_size" "$FX/dm_deps"
+  rm -f "$FX/counted" "$FX/cow_size" "$FX/dm_deps" "$FX/sleep_n"
   # Per-RUN artifacts, not per-fixture: the mutation rows drive the pristine unit and then the
   # mutant against the SAME fixture, and a calls.log carried over from the first run makes
   # "the mutant never called the wrapper" true of neither run.
@@ -644,6 +682,7 @@ run_unit() {
   : > "$FX/emit.log"
   rm -f "$FX/probe.env" "$FX/runuser.env" "$FX/mount_opts" "$FX/mount_source" "$FX/etc/git-data/store-verified" \
     "$FX/ro_set" "$FX/loop_up" "$FX/dmesg_calls" "$FX/dev/mapper/git-data-pt-snap"
+  cat "$FX/prelude.base.sh" "${HELPER_USE:-$HELPER}" > "$FX/prelude.sh"
   RC=0
   env -u GIT_DATA_PLAINTEXT_VOLUME_ID \
     PATH="$FX/bin:$PATH" TMPDIR="$FX/tmp" \
@@ -694,7 +733,7 @@ origin_calls_bad() {
   while IFS= read -r _l; do
     _no="${_l%%:*}"; _c="${_l#*:}"
     case "$_c" in
-      "stat|-L -c %F $FX/dev/vol"|"cryptsetup|isLuks $FX/dev/vol") [ "$_no" -lt "$_s" ] || _bad=1 ;;
+      "stat|-L -c %F $FX/dev/vol"|"cryptsetup|isLuks $FX/dev/vol"|"blockdev|--getsize64 $FX/dev/vol") [ "$_no" -lt "$_s" ] || _bad=1 ;;
       "stat|-L -c %t:%T $FX/dev/vol"|"stat|-L -c %t:%T $FX/dev/by-id") : ;;
       "blockdev|--setro $FX/dev/vol"|"blockdev|--getro $FX/dev/vol"|"dumpe2fs|-h $FX/dev/vol"|"blockdev|--getsz $FX/dev/vol") [ "$_no" -ge "$_s" ] || _bad=1 ;;
       "dmsetup|create git-data-pt-snap --table 0 20971520 snapshot $FX/dev/vol /dev/loop77 N 8") [ "$_no" -gt "$_s" ] || _bad=1 ;;
@@ -762,7 +801,7 @@ ok "$(grep -q '^remove|' "$FX/calls.log"; echo $?)" "R1 the erasure probe ran th
 ok "$([ -z "$(cat "$FX/emit.log")" ]; echo $?)" "R1 no fatal was emitted on the all-pass path" "$(cat "$FX/emit.log")"
 # The probe's lock dotfile exists and is invisible to the count — both halves, so the row
 # cannot pass because the file was never created.
-ok "$([ -e "$FX/store/repositories/.boot-probe-0.init.lock" ]; echo $?)" "R1 the probe left its 0-byte lock dotfile"
+ok "$([ -e "$FX/store/repositories/.init.lock" ]; echo $?)" "R1 the probe left its 0-byte shared lock dotfile (.init.lock, #9066)"
 ok "$([ "$(field served_repos)" = 0 ]; echo $?)" "R1 served_repos stays 0 with that dotfile present"
 # The probe's environment: pinned, and carrying nothing of the caller's.
 ok "$(grep -qxF 'SSH_ORIGINAL_COMMAND=boot-probe-0' "$FX/probe.env"; echo $?)" "R1 the probe passed SSH_ORIGINAL_COMMAND=boot-probe-0"
@@ -1115,7 +1154,7 @@ new_fixture m2-count-glob
 mkdir -p "$FX/ptsrc/repositories/x"
 run_unit "$UNIT"
 ok "$(fatal_is 'plaintext_residue count=1')" "M2 instrument: the pristine unit counts a partial repositories/x" "$(cat "$FX/err")"
-mutate m2 "s/! -name '\\.\\*\\.init\\.lock' ! -name lost\\+found/-name '*.git'/"
+mutate m2 "s/! -name '\\.\\*\\.init\\.lock' ! -name '\\.init\\.lock' ! -name lost\\+found/-name '*.git'/"
 ok "$MUT_RC" \
   "M2 the mutation landed (the count narrowed to *.git)"
 run_unit "$MUT"
@@ -1322,6 +1361,160 @@ ok "$(( MUT_RC != 0 || $(grep -qF 'dmsetup create "$_pt_snap" --table "0 $_pt_sz
   "G1-10 ROW 10: the table-literal row (S6d) reds on the mutant — the arm is live"
 
 # =====================================================================================
+# ATTACH-WAIT (#10138) — a volume attachment may land AFTER first boot starts. The plaintext link
+# waits for it under a counted 300 s bound (30 passes of `sleep 10`), fail-closed: after the bound
+# the SAME named FATAL, no marker, and never a skipped verification. The `sleep` stub never sleeps;
+# it counts its calls and lets the late attachment land on the Nth, so no wall time passes. (The
+# bound is a literal, not a seam: tests drive it through the landing pass.)
+# =====================================================================================
+HELPER_USE=""
+late_link() { rm -f "$FX/dev/by-id"; printf '%s\n' "$1" > "$FX/late_after_sleep"; : > "$FX/late_link"; }
+sleeps() { grep -c '^sleep|' "$FX/calls.log" || true; }
+# err_has <text> — 0 when the run's stderr names <text>. A mutation row pairs its "the property broke"
+# assertion with the mutant's OWN reason, so a mutant that merely crashed is not credited as a kill.
+err_has() { grep -qF -- "$1" "$FX/err"; echo $?; }
+# The never-appears property in ONE place: the unchanged FATAL sentence, rc != 0, no marker, the
+# FATAL at stage=bootstrap, and nothing that follows the check (setro, dmsetup, mount) ran. Prints
+# 0 when it HOLDS, 1 when it does not — a mutation row asserts it stops holding.
+never_holds() {
+  [ "$RC" -ne 0 ] && grep -qF "FATAL: plaintext_unverified reason=source — $FX/dev/by-id does not resolve to a block device" "$FX/err" \
+    && [ ! -e "$FX/etc/git-data/store-verified" ] && [ "$(emit_stage_bootstrap)" = 0 ] \
+    && ! grep -qE '^(blockdev\|--setro|dmsetup\||mount\||losetup\|)' "$FX/calls.log"
+  echo $?
+}
+# verdict_line — the R1 terminal booleans, for "the late run's verdict equals the on-time one".
+verdict_line() { printf '%s|%s|%s|%s|%s|%s|%s' "$(field plaintext_volume)" "$(field plaintext_empty)" "$(field served_repos)" \
+  "$(field fence_on_mapper)" "$(field erasure_probe)" "$(field plaintext_journal)" "$(marker)"; }
+
+new_fixture aw0-ontime
+run_unit "$UNIT"
+AW_ONTIME="$(verdict_line)"
+ok "$((RC != 0))" "AW0 the on-time run exits 0 (rc=$RC)" "$(cat "$FX/err")"
+ok "$(( $(sleeps) != 0 ))" "AW0 an on-time link costs no sleep (the first probe answers)"
+ok "$(err_has 'waiting up to' | tr 01 10)" "AW0 and no wait line was logged"
+
+# A. the link appears late -> proceeds with the on-time verdict.
+new_fixture aw1-late-2
+late_link 2
+run_unit "$UNIT"
+ok "$((RC != 0))" "AW1 a link that lands on the 2nd sleep proceeds (rc=$RC)" "$(cat "$FX/err")"
+_aw_late="$(verdict_line)"; _aw_same=1; [ "$_aw_late" != "$AW_ONTIME" ] || _aw_same=0
+ok "$_aw_same" "AW1 the verdict equals the on-time run's" "late=$_aw_late ontime=$AW_ONTIME"
+ok "$(( $(sleeps) != 2 ))" "AW1 exactly two sleeps ran (got $(sleeps))"
+ok "$(grep -q 'appeared after 20s' "$FX/err"; echo $?)" "AW1 the resolution was logged with the elapsed time" "$(cat "$FX/err")"
+ok "$(err_has 'waiting up to 300s for plaintext volume')" "AW1 and a waiting run says so (positive control for the AW0 negative)" "$(cat "$FX/err")"
+ok "$(err_has 'sleep-stub: unexpected argv' | tr 01 10)" "AW1 and the sleep stub never refused an argv (every pass slept exactly 10 s)" "$(cat "$FX/err")"
+ok "$(origin_calls_bad)" "AW1 every call naming the origin is allowlisted and ordered (Guard 1 row 7)" "$(grep -F -e "$FX/dev/vol" -e "$FX/dev/by-id" "$FX/calls.log")"
+
+new_fixture aw1b-late-1
+late_link 1
+run_unit "$UNIT"
+ok "$((RC != 0))" "AW1b a link that lands on the 1st sleep proceeds (rc=$RC)" "$(cat "$FX/err")"
+ok "$(( $(sleeps) != 1 ))" "AW1b exactly one sleep ran (got $(sleeps))"
+
+# The bound BRACKET: the 30th pass (300 s) is the last one that can succeed; a 31st never runs.
+new_fixture aw1g-last-pass
+late_link 30
+run_unit "$UNIT"
+ok "$((RC != 0))" "AW1g a link that lands on the 30th (last) pass proceeds (rc=$RC)" "$(cat "$FX/err")"
+ok "$(( $(sleeps) != 30 ))" "AW1g and it took all 30 passes (got $(sleeps))"
+new_fixture aw1h-one-too-late
+late_link 31
+run_unit "$UNIT"
+ok "$(never_holds)" "AW1h a link that would land on the 31st pass is too late: the unchanged FATAL" "$(cat "$FX/err")"
+ok "$(( $(sleeps) != 30 ))" "AW1h and the wait stopped after exactly 30 passes (got $(sleeps))"
+
+new_fixture aw1f-harness
+rm -f "$FX/dev/by-id"; : > "$FX/late_link"
+run_unit "$UNIT"
+ok "$(never_holds)" "AW1f harness row: with the link never landing, the SAME fixture ends in the FATAL — the late-link row passes because of the stub, not by itself" "$(cat "$FX/err")"
+
+# B. it never appears -> the unchanged FATAL after the bound; nothing past the check runs.
+new_fixture aw2-never
+rm -f "$FX/dev/by-id"
+run_unit "$UNIT"
+ok "$(never_holds)" "AW2 a link that never appears ends in the unchanged FATAL, no marker, stage=bootstrap, nothing after the check ran" "$(cat "$FX/err")"
+ok "$(( $(sleeps) != 30 ))" "AW2 the 300s bound costs exactly 30 sleeps (got $(sleeps))"
+ok "$(( $(grep -c plaintext_volume= "$FX/out" || true) != 0 ))" "AW2 no verdict line was printed"
+ok "$(err_has 'did not appear within the 300s bound')" "AW2 the helper logged that it gave up, with the bound" "$(cat "$FX/err")"
+ok "$(err_has 'last state: the link does not resolve')" "AW2 and the caller logged the MEASURED state (the link never resolved)" "$(cat "$FX/err")"
+ok "$(err_has 'sleep-stub: unexpected argv' | tr 01 10)" "AW2 and the sleep stub never refused an argv (a pass that slept 5 s would be refused, not counted)" "$(cat "$FX/err")"
+
+new_fixture aw2b-zero-size
+: > "$FX/size_zero"
+run_unit "$UNIT"
+ok "$(grep -qF 'does not resolve to a block device' "$FX/err"; echo $?)" "AW2b a zero-size node never satisfies the wait: the unchanged FATAL after the bound" "$(cat "$FX/err")"
+ok "$(marker_absent)" "AW2b and no marker was written"
+ok "$(err_has 'last state: the block device reports size 0')" "AW2b and the measured state names the size-0 device" "$(cat "$FX/err")"
+ok "$(( $(sleeps) != 30 ))" "AW2b the zero-size node was waited on for the whole bound (got $(sleeps) sleeps)"
+
+# F. static pin: the size probe is bounded in time as well as in passes (the counting loop cannot see
+# one blocked probe).
+ok "$(grep -qF 'timeout -k 2 10 blockdev --getsize64 "$_pt_dev"' "$BS_BODY"; echo $?)" "AW6 the plaintext predicate's size probe is written under timeout -k 2 10"
+ok "$(grep -qxF -- "-k 2 10 blockdev --getsize64 $FX/dev/vol" "$FX/timeout.log" 2>/dev/null; echo $?)" "AW6 and RUNS under it: the size probe reached the timeout stub as -k 2 10 blockdev --getsize64 <node>" "$(cat "$FX/timeout.log" 2>/dev/null)"
+
+# G. mutation rows (Guard 1, #10138). Each: landed-check, instrument self-test (the pristine unit
+# gives the right verdict on the same fixture), then the flip, then the mutant's OWN reason so a
+# crash is never credited as a kill.
+mutate_helper() { # <name> <old> <new> — replace exactly one occurrence in the helper
+  HELPER_MUT="$SCRATCH/mut.helper.$1"
+  if python3 - "$HELPER" "$HELPER_MUT" "$2" "$3" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(dst, "w").write(s.replace(old, new))
+PY
+  then if cmp -s "$HELPER" "$HELPER_MUT"; then MUT_RC=1; else MUT_RC=0; fi; else MUT_RC=1; fi
+}
+
+# AM1 — after the bound the helper returns 0 (success on timeout): the fail-open the whole change forbids.
+new_fixture am1
+rm -f "$FX/dev/by-id"
+run_unit "$UNIT"
+ok "$(never_holds)" "AM1 instrument: the pristine helper ends a never-appearing link in the FATAL" "$(cat "$FX/err")"
+mutate_helper am1 $'bound"\n  return 1\n}' $'bound"\n  return 0\n}'
+ok "$MUT_RC" "AM1 the mutation landed (the helper returns 0 after the bound)"
+HELPER_USE="$HELPER_MUT"; run_unit "$UNIT"; HELPER_USE=""
+ok "$(( $(never_holds) == 0 ))" "AM1 ROW 1: a helper that succeeds on timeout breaks the never-appears property — the arm is live" "$(cat "$FX/err")"
+ok "$(( $(sleeps) != 30 ))" "AM1 and the mutant still ran the whole bound before succeeding (not a crash; got $(sleeps) sleeps)"
+ok "$(err_has 'is unreadable')" "AM1 and it died at the caller's NEXT refusal (the unresolved node), not at a crash" "$(cat "$FX/err")"
+
+# AM3 — the helper is never called at the plaintext site (dispatch removed): the central change.
+new_fixture am3
+late_link 2
+run_unit "$UNIT"
+ok "$((RC != 0))" "AM3 instrument: the pristine unit proceeds on a late link" "$(cat "$FX/err")"
+mutate_py am3 'if ! _gd_attach_wait "plaintext volume $_pt_id" _gd_pt_ready; then' 'if ! _gd_pt_ready; then'
+ok "$MUT_RC" "AM3 the mutation landed (the plaintext site no longer waits)"
+rm -f "$FX/dev/by-id"   # the pristine run let the late link land; the mutant starts from the absent state
+run_unit "$MUT"
+ok "$((RC == 0))" "AM3 ROW 3: without the wait a late link FATALs (rc=$RC) — the dispatch is live" "$(cat "$FX/err")"
+ok "$(fatal_is 'plaintext_unverified reason=source')" "AM3 and it is the named plaintext FATAL, not a crash" "$(cat "$FX/err")"
+ok "$(( $(sleeps) != 0 ))" "AM3 and the mutant never slept"
+
+# AM5 — the bound is ignored (a hard-coded large loop).
+new_fixture am5
+rm -f "$FX/dev/by-id"
+run_unit "$UNIT"
+ok "$(( $(sleeps) != 30 ))" "AM5 instrument: the pristine helper sleeps exactly 30 times"
+mutate_helper am5 'while [ "$_aw_waited" -lt "$_AW_BOUND_S" ]; do' 'while [ "$_aw_waited" -lt 3000 ]; do'
+ok "$MUT_RC" "AM5 the mutation landed (the bound is ignored)"
+HELPER_USE="$HELPER_MUT"; run_unit "$UNIT"; HELPER_USE=""
+ok "$(( $(sleeps) != 300 ))" "AM5 ROW 5: a hard-coded loop runs past the 30-pass cap (got $(sleeps) sleeps) — the arm is live"
+
+# AM9 — the site probes once and then only sleeps (the predicate is not re-evaluated each pass).
+new_fixture am9
+late_link 2
+mutate_helper am9 $'    if "$_aw_pred"; then\n      log "${_aw_label} appeared' $'    if false; then\n      log "${_aw_label} appeared'
+ok "$MUT_RC" "AM9 the mutation landed (the predicate is probed once, then only slept on)"
+HELPER_USE="$HELPER_MUT"; run_unit "$UNIT"; HELPER_USE=""
+ok "$((RC == 0))" "AM9 ROW 9: probe-once-then-sleep cannot see a late link (rc=$RC) — the arm is live" "$(cat "$FX/err")"
+ok "$(fatal_is 'plaintext_unverified reason=source')" "AM9 and it is the named plaintext FATAL, not a crash" "$(cat "$FX/err")"
+ok "$(( $(sleeps) != 30 ))" "AM9 and the mutant waited out the whole bound (got $(sleeps) sleeps)"
+
+# =====================================================================================
 # Instrument self-test + floor
 # =====================================================================================
 # Through ok(), not only pass()/fail(): the verdict DISPATCH is what every row relies on, so a
@@ -1346,7 +1539,12 @@ passes=$_can_p0; fails=$_can_f0; cases=$_can_c0
 # cannot see a call site that never reached a verdict. The two bindings sit DIRECTLY above the
 # `if` with no comment between: guard-vacuity-floor builds its mutant from the floor block plus
 # the contiguous simple assignments above it, and a comment breaks the run.
-MIN_ASSERTIONS=412
+# RAISED 412 -> 462 (#10138), ITEMISED: the attach-wait block is AW0, AW1/1b/1g/1h/1f (late link, the
+# 30th/31st-pass bracket, the harness control, the positive 'waiting up to' and no-refused-argv
+# controls), AW2/2b (never appears, zero size: the named FATAL and the measured state), AW6 (the
+# size probe is written AND runs under `timeout -k 2 10`) and mutation rows AM1/AM3/AM5/AM9, each
+# asserting its OWN reason; the floor is the measured total, so slack is zero.
+MIN_ASSERTIONS=462
 total=$((passes + fails))
 if [ "$cases" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: ran only %s assertion call sites (floor %s) — suite did not execute fully\n' "$cases" "$MIN_ASSERTIONS" >&2

@@ -276,3 +276,24 @@ of these tokens. Rationale for the canary itself is ADR-182, Decision 6; this ta
 | `installpath_unresolved` | The install path could not be resolved, so the canary compared **nothing**. Reported as a failure, never as "no differences". | Check whether the install step actually ran; a zero-comparison run is a broken instrument, not a green delivery. |
 | `reference_unreadable` | The reference listing or a reference file came back empty or as a non-conforming body (e.g. an HTML error page). | The comparison had no baseline. Fail closed, re-run, and check GitHub API reachability and rate limits from the runner. |
 | `cli_unavailable` | The pinned Claude Code CLI could not be obtained, so no install was attempted. | An acquisition problem, not a delivery problem. Nothing about the published plugin is established by this run. |
+
+## Reading `claude plugin list` / /soleur:version
+
+What identifies an install today is a **12-character commit hash**, not a semver. The published
+plugin manifest is keyless (no `version` key; ADR-182 Decision 1), so `claude plugin list` shows the
+commit and the plugin cache directory is named after it. The SessionStart banner shows the same
+identity (`Soleur commit <sha12>`, or `Soleur commit <sha12> (local checkout)` for a plugin run in place
+from a local git checkout) with no network call.
+
+On Claude Code, `/soleur:version` (user-started; a model cannot trigger it) prints:
+
+- `Installed:` the commit hash (or a version, for an install whose manifest carries one), `commit <sha12> (local checkout)` for a plugin run in place from a local git checkout (its update steps are the local-folder arm of `/soleur:version`, not the GitHub pair), or `unknown` when the plugin root cannot be identified;
+- `Latest:` the newest release tag, with a reason line when it could not be read (offline, timeout, no `git`, no tags, unreadable cache); a cached value is labelled "(cached, may be out of date)";
+- `Status:` the comparison, and the update commands for the marketplace the install came from.
+
+**`relation=current` ("No release newer than yours (latest tag vX.Y.Z)") means only that no release
+tag newer than the installed commit or version was found. It does not mean "fully up to date".** The
+installed commit can still be behind `main`, because the plugin is delivered unpinned from `main` and
+releases are only tagged points on it. An answer from a stale cache or a failed lookup is reported as
+`relation=unknown` (`reason=stale-cache`), never as current. Only `relation=older` is trusted from a
+cached answer.

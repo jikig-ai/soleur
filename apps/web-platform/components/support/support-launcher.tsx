@@ -49,11 +49,10 @@ export function SupportLauncher() {
           type="button"
           onClick={() => setOpen(true)}
           aria-label="Open support"
-          // rounded-full loses Tailwind emit-order against the Button base
-          // rounded-lg — pin the circular FAB via style. h-12 w-12 + p-0 keep
-          // the 48px circle (Button's px-6 py-3 geometry would pad it out).
-          style={{ borderRadius: "9999px", padding: 0 }}
-          className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] right-5 z-50 h-12 w-12 shadow-lg"
+          // Caller utilities beat the Button base box (@layer components), and
+          // an icon-only Button carries no padding, so rounded-full + h-12 w-12
+          // give the 48px circle without an inline-style pin.
+          className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] right-5 z-50 h-12 w-12 rounded-full shadow-lg"
         >
           <svg
             viewBox="0 0 24 24"

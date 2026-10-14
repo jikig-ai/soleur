@@ -42,9 +42,20 @@ locals {
   # label => "<reason> (#<issue>)". Declared-unrouted cron monitors.
   # Not read by any resource: it is the reviewed record Guard 1 checks against.
   cron_monitor_alert_unrouted = {
-    # Created in the #9168 PR; per the two-PR rule it can only be routed in
-    # monitor_ids after its first apply gives the detector a real id.
-    scheduled_supabase_watchdog = "route after first apply (#9168)"
+    # #9274 — added under the two-PR rule: deliberately not in
+    # monitor_ids; a future PR may route it once the loop is measured. Real
+    # cover meanwhile: a dead reaper lets armed bot PRs sit >48h, which
+    # cron-cloud-task-heartbeat's stale-bot-PR scan (#5138) feeds
+    # sentry_alert.stale_bot_pr (issue-alerts.tf) → email; the unrouted
+    # monitor itself still opens a Sentry issue on failure.
+    scheduled_bot_pr_reaper = "48h stale-bot-PR watchdog (sentry_alert.stale_bot_pr) covers a dead reaper pending a routing decision (#9274)"
+    # #6931 — the web-2 soak-marker job's liveness monitor, added under the two-PR rule: the in-run
+    # ci/luks-verify-web2 GitHub issue is the primary channel; route this after its first measured check-in.
+    workspaces_luks_verify_web2 = "in-run ci/luks-verify-web2 GitHub issue is the primary channel; route after the first measured check-in (#9372)"
+    # W3 (epic #9601) — the advisory runtime-image CVE scan's liveness monitor, added under the two-PR rule (a
+    # monitor cannot be routed in the PR that creates it). Routing it is #9858. Until then a missed or errored
+    # check-in (exit 3 = unmeasured posts error) opens a Sentry issue and emails nobody.
+    image_cve_scan = "advisory scan; the unrouted monitor opens a Sentry issue on a missed or unmeasured run but emails nobody; routing is the second PR of the two-PR rule (#9858)"
   }
 }
 
@@ -81,18 +92,20 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.scheduled_devin_docs_drift.id,
     sentry_cron_monitor.scheduled_domain_model_drift.id,
     sentry_cron_monitor.scheduled_follow_through.id,
-    sentry_cron_monitor.scheduled_gh_pages_cert_state.id,
     sentry_cron_monitor.scheduled_github_app_drift_guard.id,
     sentry_cron_monitor.scheduled_growth_audit.id,
     sentry_cron_monitor.scheduled_growth_execution.id,
     sentry_cron_monitor.scheduled_heartbeat_reconcile.id,
     sentry_cron_monitor.scheduled_inngest_cron_watchdog.id,
     sentry_cron_monitor.scheduled_inngest_health.id,
+    sentry_cron_monitor.scheduled_inngest_probe_heartbeat.id,
+    sentry_cron_monitor.scheduled_integration_suites.id,
     sentry_cron_monitor.scheduled_legal_audit.id,
     sentry_cron_monitor.scheduled_linkedin_token_check.id,
     sentry_cron_monitor.scheduled_machinery_drain.id,
     sentry_cron_monitor.scheduled_marketplace_drift.id,
     sentry_cron_monitor.scheduled_membership_health.id,
+    sentry_cron_monitor.scheduled_merge_queue_stall_dispatch.id,
     sentry_cron_monitor.scheduled_nag_4216_readiness.id,
     sentry_cron_monitor.scheduled_oauth_probe.id,
     sentry_cron_monitor.scheduled_plausible_goals.id,
@@ -108,6 +121,7 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.scheduled_strategy_review.id,
     sentry_cron_monitor.scheduled_supabase_advisor_scan.id,
     sentry_cron_monitor.scheduled_supabase_disk_io.id,
+    sentry_cron_monitor.scheduled_supabase_watchdog.id,
     sentry_cron_monitor.scheduled_terraform_drift.id,
     sentry_cron_monitor.scheduled_ux_audit.id,
     sentry_cron_monitor.scheduled_weekly_analytics.id,

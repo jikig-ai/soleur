@@ -207,7 +207,7 @@ CHANGELOG requires special handling to preserve entries from both sides without 
 Read both sides using git stage numbers (NOT `git show HEAD:` which only gives one side):
 
 ```bash
-ours=$(mktemp -t changelog-ours.XXXXXXXX.md); theirs=$(mktemp -t changelog-theirs.XXXXXXXX.md)
+ours=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" changelog-ours.XXXXXXXX.md); theirs=$(mktemp -p "$(dirname "$ours")" changelog-theirs.XXXXXXXX.md)
 git show :2:plugins/soleur/CHANGELOG.md > "$ours"
 git show :3:plugins/soleur/CHANGELOG.md > "$theirs"
 echo "ours=$ours theirs=$theirs"  # echo the paths: the Read/Write steps below need them, and a separate tool call does not inherit these vars
@@ -232,6 +232,12 @@ wc -l plugins/soleur/CHANGELOG.md
 ```
 
 The line count should be roughly the sum of unique lines from both sides. If the result is suspiciously short (less than 80% of the larger input file), something was truncated -- stop and report.
+
+Then remove both scratch files — they are consumed by the reconstruction and the wc check, and unremoved `mktemp` files are the count-shaped `/tmp` leak (#10017):
+
+```bash
+rm -f "$ours" "$theirs"; rmdir "$(dirname "$ours")" 2>/dev/null
+```
 
 ```bash
 git add plugins/soleur/CHANGELOG.md
@@ -325,6 +331,10 @@ Announce the PR URL.
 
 ### 5.1 Queue Auto-Merge
 
+**A draft PR is readied first, with a user token (`GITHUB_TOKEN` cannot ready a PR), and armed only after its ready run exists (ADR-276 S3):** `K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count <number>) && gh pr ready <number> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run <number> --before-count "$K"`. Run it as one Bash call with `timeout: 420000` and run `gh pr merge --squash --auto` ONLY on exit 0; otherwise report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or an `api-error` needs no undo). The 5.2 poll reads a red `test` through the same resolver (`ready_unarmed` stops it).
+
+**Never arm (enqueue) a cross-repository (fork) PR, or one touching `.github/**`, without explicit operator confirmation.** `merge_group` runs the candidate's workflows in the base-repo context with repo secrets, so a pre-queue-green fork or workflow edit can exfiltrate them before anyone reads a run. Check first: `gh pr view <number> --json isCrossRepository --jq .isCrossRepository` and `gh api repos/{owner}/{repo}/pulls/<number>/files --paginate --jq '.[].filename | select(startswith(".github/"))'` (not `gh pr view --json files`: it stops at 100 files); a `true` or any output means stop and ask.
+
 ```bash
 SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
 if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
@@ -359,7 +369,7 @@ This queues the merge. GitHub waits for all branch protection requirements (CI c
 
 ### 5.2 Poll for Merge
 
-Use the **Monitor tool** with the same state-machine loop as `soleur:ship` Phase 7. The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it on stdout — the Monitor tool streams stdout only), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). Max `MAX_POLL_MIN` iterations × 60s sleep = `MAX_POLL_MIN`-minute wall-clock cap. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
+Use the **Monitor tool** with the same state-machine loop as `soleur:ship` Phase 7. The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it on stdout — the Monitor tool streams stdout only), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured warning at the inflection point; when `main` has a merge queue an armed PR waits for GitHub to enqueue it instead of being synced, falling back to the sync after more than 5 consecutive idle ticks), and **DIRTY** (server-side merge conflict — exit and surface). Max `MAX_POLL_MIN` iterations × 60s sleep = `MAX_POLL_MIN`-minute wall-clock cap. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
 **Mirror invariant:** the block below is a derived mirror of `plugins/soleur/skills/ship/SKILL.md` Phase 7 (the canonical site). If you edit one, edit both — the canonical site carries the full prose rationale for fail-open required-check fetch, BEHIND budget, and DIRTY semantics. The `ship-phase-7-poll-fixtures.test.sh` fixture extracts and executes BOTH blocks: every scenario (clean merge, required-check failure, DIRTY, BEHIND saturation, and the BEHIND sync-arm rows — conflict, refused, in-progress, push failure, fetch failure, success) runs against this mirror too, and a parity token list pins the arm's spelling — so a behavioural fix applied to one block reddens the suite until it lands in the other. Cross-grep both blocks before pushing anyway; the real-git scenario runs on ship's block only.
 
@@ -373,15 +383,11 @@ PR="<number>"  # bare digits: a pasted `#8474` would print a false "pushed" down
 prev=""; i=0; behind_syncs=0; behind_pushes=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 fetch_failures=0  # fetch outages counted separately so behind_exhausted is truthful (#8339)
 # Minutes to poll before giving up (one iteration = one `sleep 60`).
-# DERIVED, not chosen: measured over the last 12 CI runs on main, a full
-# run takes min 22 / median 32 / p90 43 / max 54 minutes, and `test-scripts`
-# alone is a median 28. The previous budget was 15, i.e. BELOW the fastest
-# run ever observed — so it could not succeed, and every ship run reported a
-# spurious timeout on a PR that was merging fine. 60 covers the observed max
-# with headroom. This is a BACKSTOP: the loop already exits early on MERGED,
-# a failed required check, and DIRTY, so a longer budget costs nothing on
-# the healthy paths. Re-derive it if CI wall-clock changes materially.
-MAX_POLL_MIN=60
+# DERIVED, not chosen: a full CI run on main takes min 22 / median 32 / p90 43 /
+# max 54 min. Under the merge queue a healthy merge is PR CI (~32) THEN a merge_group
+# run (up to ~50) plus queue wait, so 60 timed out on merging PRs: 90. A BACKSTOP
+# (early exits: MERGED, a failed required check, DIRTY). Re-derive if CI changes.
+MAX_POLL_MIN=90
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 sync_ok=1
 if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != true ]]; then
@@ -407,11 +413,25 @@ if [[ "$sync_ok" -eq 1 ]]; then
     sync_ok=0
   fi
 fi
+# ADR-276 S3 (#9728): the head-verdict resolver is read independent of sync_ok/SYNC_SNAP (mirror of ship Phase 7).
+VERDICT_OK=0
+if [[ -n "$SYNC_ROOT" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
+  VERDICT_OK=1
+fi
 # REQUIRED_CHECKS is fetched once, fail-open: empty array → no-op scan
 # (see ship/SKILL.md Phase 7 for the full rationale; do NOT harden).
 mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
   --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | .[]' \
   2>/dev/null || true)
+# Merge-queue mode (#9710; see ship/SKILL.md Phase 7): queue rule on main AND auto-merge armed → wait, do
+# not sync. Fail toward today's behaviour: any unreadable answer leaves QUEUE_RULE=0.
+QUEUE_RULE=0; QUEUE_GRACE_TICKS=5; queue_waits=0; qidle=0; qwait_expired=0; queued_reported=0
+if [[ "$sync_ok" -eq 1 && -n "$SYNC_SNAP" ]]; then
+  [[ "$(gh api 'repos/{owner}/{repo}/rules/branches/main' \
+    --jq '[.[] | select(.type == "merge_queue")] | length' 2>/dev/null || true)" =~ ^[1-9][0-9]*$ ]] && QUEUE_RULE=1
+  (( ${#REQUIRED_CHECKS[@]} > 0 )) || QUEUE_RULE=0
+fi
 while true; do
   i=$((i+1))
   s=$(gh pr view "$PR" --json state,mergeStateStatus \
@@ -422,13 +442,33 @@ while true; do
     prev="$s"
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
+  if (( i % 5 == 0 )) && [[ "$s" == OPEN* && -n "$SYNC_SNAP" ]]; then
+    qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
+    [[ "$qs" == dequeued* ]] && { echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break; }
+    [[ "$QUEUE_RULE" -eq 1 && "$qs" == queued* && "$queued_reported" -eq 0 ]] && { queued_reported=1; echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queued] PR $PR is in the merge queue ($qs) — no sync from here (a push would dequeue it); waiting for MERGED or removal"; }
+    [[ "$QUEUE_RULE" -eq 1 && "$qs" == queued* ]] && qidle=0
+  fi
 
   if (( ${#REQUIRED_CHECKS[@]} > 0 )); then
     mapfile -t failed_names < <(gh pr checks "$PR" --json name,bucket \
       --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || true)
     if (( ${#failed_names[@]} > 0 )); then
+      # ADR-276 S3: a ready PR's red `test` may be the DRAFT run's row; ask the resolver.
+      vstate=""
+      for n in "${failed_names[@]}"; do
+        [[ "$n" == test && "$VERDICT_OK" -eq 1 ]] || continue
+        vout="$(bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null)" || vout=""
+        vline="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$vout")" || vline=""
+        vstate="${vline#*state=}"; vstate="${vstate%% *}"; break
+      done
+      case "$vstate" in
+        stalled|awaiting-approval)
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.ready_unarmed] PR $PR was marked ready but its ready run is ${vstate}; the red test row is the draft run's. Start no fix loop. Recovery: ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md"
+          break ;;
+      esac
       required_failed=""
       for n in "${failed_names[@]}"; do
+        [[ "$n" == test && ( "$vstate" == pending-full || "$vstate" == no-run ) ]] && continue
         for r in "${REQUIRED_CHECKS[@]}"; do
           [[ "$n" == "$r" ]] && { required_failed="$n"; break 2; }
         done
@@ -439,6 +479,8 @@ while true; do
       fi
     fi
   fi
+
+  real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1
 
   if [[ "$s" == *DIRTY* ]]; then
     mt_out=""; fetch_rc=0
@@ -465,20 +507,60 @@ while true; do
     fi
   fi
 
-  if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+  qwait=0
+  if (( real_behind == 1 && QUEUE_RULE == 1 && qwait_expired == 0 )) \
+     && [[ "$(gh pr view "$PR" --json autoMergeRequest --jq '.autoMergeRequest != null' 2>/dev/null || true)" == true ]]; then
+    qwait=1
+    pend=0; anypend=0; seen=$'\n'
+    mapfile -t chk_rows < <(gh pr checks "$PR" --json name,bucket \
+      --jq '.[] | "\(.bucket)\t\(.name)"' 2>/dev/null || true)
+    if (( ${#chk_rows[@]} > 0 )); then
+      for row in "${chk_rows[@]}"; do
+        n="${row#*$'\t'}"; seen+="$n"$'\n'
+        [[ "${row%%$'\t'*}" == pending ]] || continue
+        anypend=$((anypend+1))
+        for r in "${REQUIRED_CHECKS[@]}"; do
+          [[ "$n" == "$r" ]] && { pend=$((pend+1)); break; }
+        done
+      done
+    fi
+    # A required check that does not exist yet (the `test` aggregate is created only after its shards finish) is not
+    # settled while any check is still running; with nothing running it will not appear, so it counts as idle.
+    if (( anypend > 0 )); then
+      for r in "${REQUIRED_CHECKS[@]}"; do [[ "$seen" == *$'\n'"$r"$'\n'* ]] || pend=$((pend+1)); done
+    fi
+    if (( pend > 0 )); then qidle=0; else qidle=$((qidle+1)); fi
+    if (( qidle > QUEUE_GRACE_TICKS )); then
+      qwait=0; qwait_expired=1
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queue_wait_expired] PR $PR has been BEHIND with auto-merge armed and no required check pending for ${qidle} ticks and this poll's last queue read did not show it queued. Falling back to the BEHIND auto-sync for the rest of this poll (a PR already in the merge queue is skipped by it, never pushed to). Before changing the ruleset, diagnose: ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md (the strict policy was measured once not to block enqueue)."
+    fi
+  fi
+  (( qwait == 1 )) || qidle=0
+  if [[ "$qwait" -eq 1 ]]; then
+    queue_waits=$((queue_waits+1))
+    (( queue_waits == 1 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queue_wait] PR $PR is BEHIND with auto-merge armed and main has a merge queue: no sync (a push restarts CI and dequeues a queued PR); waiting for GitHub to enqueue it"
+  elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+    # ci_cycles cap gate (#9403): STOP writes the budget-capped artifact to
+    # specs/<branch>/session-state.md and breaks the WHOLE poll.
+    if [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]]; then
+      echo "$(date +%H:%M:%S) auto-sync halted — ci_cycles budget-capped"
+      bash "$SYNC_ROOT/scripts/write-budget-marker.sh" ci_cycles || true
+      break
+    fi
     behind_syncs=$((behind_syncs+1))
     echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
     sync_rc=0; bash "$SYNC_SNAP" "$PR" --step || sync_rc=$?   # errexit-safe (#8339)
     case "$sync_rc" in
       0) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs}/${MAX_BEHIND_SYNCS} pushed"
          behind_pushes=$((behind_pushes+1))
+         bash "$SYNC_ROOT/scripts/pipeline-tally.sh" incr ci_cycles || true
          (( behind_pushes == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs pushed — read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md now; it classifies eligibility (else keep polling)"
          s=$(gh pr view "$PR" --json state,mergeStateStatus \
              --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
            || s="fetch-error: $s"
          echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break ;;
       11) behind_syncs=$((behind_syncs-1))  # no-op: GitHub state lag, not a sync — budget and hatch untouched
-          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] main already merged and pushed; mergeStateStatus lags — not counted, polling on" ;;
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] no sync needed (state lag or queued) — not counted, polling on" ;;
       5) fetch_failures=$((fetch_failures+1))
          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch — skipping this sync attempt" ;;
       *) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] sync-pr-behind.sh exited $sync_rc (see its line above). Stopping the poll."
@@ -499,6 +581,7 @@ while true; do
 
   if [ "$i" -ge "$MAX_POLL_MIN" ]; then
     echo "Merge poll timed out after ${MAX_POLL_MIN} minutes. Last state: $s"
+    [[ -n "$SYNC_SNAP" ]] && echo "Queue: $(bash "$SYNC_SNAP" "$PR" --queue-state 2>&1 | head -1)"
     break
   fi
   sleep 60
@@ -510,7 +593,7 @@ done
 If the loop exits with state `CLOSED` (not `MERGED`), auto-merge was cancelled — check for CI failures:
 
 ```bash
-gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS")'
+gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS" and (.state != "SKIPPED" or (.name | startswith("smoke (") | not)))'
 
 ```
 
@@ -527,7 +610,7 @@ To rollback: git reset --hard <starting-sha> && git push --force-with-lease orig
 
 ```
 
-The state-machine details (`mergeStateStatus` enum coverage, fail-open required-check fetch, fixture at `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`) are documented in `plugins/soleur/skills/ship/SKILL.md` Phase 7. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the settle-then-admin-merge escape hatch (zero-conflict-surface changes only). Any `--admin` merge, whether through this hatch or authorized by the operator, requires `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). When the operator authorizes `--admin` on a BEHIND PR whose prior head was green, the surface classifier is waived but the gate is not: `--green-sha <prior-green-sha>` carries the certification to the new head only if it is GitHub's own verified merge of that sha and the base (see the reference's "was-green carryover" section); UNTRUSTED-CI and DIRTY still refuse. On `[ship.phase7.required_failed]` or `[ship.phase7.dirty]`, follow ship/SKILL.md Phase 7's handling for a poll that exits on a required-check failure or a DIRTY state (`gh pr checks <N>` to inspect; `git merge origin/main` to resolve locally). On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.` (a `kind=fetch` one is informational — the poll continues), do the next action the `[pr-behind-sync] kind=…` line above it names (resolve and push, reconcile a concurrent push, or clear the worktree state), then re-invoke this §5.2 poll — a routine conflict is not an operator handoff. `[ship.phase7.sync_noop]` is GitHub state lag (uncounted; the poll continues); `[ship.phase7.behind_no_sync]` means auto-sync was disabled — run the printed command from the PR worktree, then re-arm the poll.
+The state-machine details (`mergeStateStatus` enum coverage, fail-open required-check fetch, fixture at `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`) are documented in `plugins/soleur/skills/ship/SKILL.md` Phase 7. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the settle-then-admin-merge escape hatch (zero-conflict-surface changes only). Any `--admin` merge, whether through this hatch or authorized by the operator, requires `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). When the operator authorizes `--admin` on a BEHIND PR whose prior head was green, the surface classifier is waived but the gate is not: `--green-sha <prior-green-sha>` carries the certification to the new head only if it is GitHub's own verified merge of that sha and the base (see the reference's "was-green carryover" section); for a hand-made local unsigned merge — the #9401 disjoint-skip leaves the green head itself intact, so it needs no carryover — `--allow-local-merge` admits it only when the added delta is a byte-identical docs-only replay disjoint from the PR's files. UNTRUSTED-CI and DIRTY still refuse. On `[ship.phase7.required_failed]` or `[ship.phase7.dirty]`, follow ship/SKILL.md Phase 7's handling for a poll that exits on a required-check failure or a DIRTY state (`gh pr checks <N>` to inspect; `git merge origin/main` to resolve locally). On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.` (a `kind=fetch` one is informational — the poll continues), do the next action the `[pr-behind-sync] kind=…` line above it names (resolve and push, reconcile a concurrent push, or clear the worktree state), then re-invoke this §5.2 poll — a routine conflict is not an operator handoff. `[ship.phase7.sync_noop]` is GitHub state lag or a PR in the merge queue (uncounted; the poll continues; never push to a queued PR); a `sync_failed` line with `kind=dequeued` means the PR left the queue unmerged: follow the recovery on that line (see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md, also for a poll that times out OPEN and not queued); `[ship.phase7.behind_no_sync]` means auto-sync was disabled — run the printed command from the PR worktree, then re-arm the poll. `[ship.phase7.queue_wait]` is informational: `main` has a merge queue and the PR is armed, so the poll waits for GitHub to enqueue it instead of syncing (a push restarts CI and dequeues a queued PR) — take no action and never sync, update-branch or merge it by hand until `[ship.phase7.queue_wait_expired]`, a push line, MERGED, a dequeue or any poll exit; `[ship.phase7.queued]` prints once, at the first 5th-tick read that finds the PR in the queue; `[ship.phase7.queue_wait_expired]` means no required check is pending and this poll's last queue read did not show the PR queued, so the poll fell back to the BEHIND auto-sync — keep the Monitor running, diagnose (merge-queue-dequeue.md, the PR timeline), record the strict up-to-date question in the final report and do not change the ruleset (ship/SKILL.md Phase 7, "Queue mode").
 
 ## Phase 6: Cleanup and Report
 

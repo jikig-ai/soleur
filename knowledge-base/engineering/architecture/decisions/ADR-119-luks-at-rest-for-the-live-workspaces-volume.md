@@ -1,6 +1,6 @@
 ---
 title: Encrypt the live /workspaces volume additively — never replace the host that cannot be rebuilt
-status: adopting
+status: accepted
 date: 2026-07-17
 amends: none
 supersedes: none
@@ -12,7 +12,7 @@ issue: 6588
 **Ruled by:** `soleur:engineering:cto`, 2026-07-17, per issue #6588's explicit routing mandate
 (*"Do not start with terraform… The design question belongs to `soleur:engineering:cto`"*).
 
-`status: adopting` → flips to `accepted` on soak-pass after the cutover.
+`status: adopting` → flips to `accepted` on soak-pass after the cutover. **Superseded 2026-10-08 (#6604 step 7, PR #9348):** flipped to `accepted` after the destruction record read `status: complete` and the CLO attested at `611051949cbe3539385a68ed8ac5609c699dce13`, each its own commit.
 
 ## Context
 
@@ -254,6 +254,8 @@ web-2-recreate path**, and `moved` wants a singleton source.
 never served (fact 5), and its volume is empty. Encrypting a volume scheduled for deletion is waste.
 **This is a recorded deviation from #6588's "every `var.web_hosts` member" AC.**
 
+> **Reversed - 2026-10-01 (#6931):** a fresh web host now MUST get the reopen unit and web-2's volume is LUKS at boot (true after the live conversion); see [ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md).
+
 ### (e) The fail-closed mount gate reaches web-1 via the CUTOVER channel, not the bake
 
 **Supersedes the original ruling.** It held that LUKS goes in the baked `soleur-host-bootstrap.sh`
@@ -463,7 +465,7 @@ plaintext volume gives a rehearsed rollback that a snapshot never would.
 **Sequencing.** The doc corrections are **coupled** to live verification per the operator's decision
 (2026-07-17): all four — the three permanently-false clauses *and* the LUKS present-tense flip — land
 in a single PR **after** the cutover canary passes, never before. See
-`knowledge-base/project/specs/feat-one-shot-6588-luks-workspaces-volume/decision-challenges.md`.
+`knowledge-base/project/specs/archive/20261013-041741-feat-one-shot-6588-luks-workspaces-volume/decision-challenges.md`.
 
 ## Addendum (2026-07-18): the header-escrow implementation (#6649)
 
@@ -1136,12 +1138,15 @@ The mechanics live in `workspaces-cutover.sh`:
   exit status checked, and resumes writers. It pages through the fatal Sentry drift
   `cutover_aborted_post_canary`. If the mapper re-assert fails, it stops the app and the writers, so
   nothing writes to a mount that is not the mapper. The runbook makes this path fix-forward only.
-- **`ROLLBACK=1` refuses after a successful cutover.** When `/mnt/data` is the mapper and the
-  persisted `CANARY_OK` matches the live volume's LUKS UUID, a rollback dispatch refuses unless the
-  `rollback_ack_luks_writes` input is set. Such a rollback strands every write made since
-  `docker start` on the LUKS volume. It also refuses, with the same override, when the mapper is
-  mounted and `CANARY_OK` is persisted but the live header UUID cannot be read or the persisted
-  UUID is empty: an unmeasurable match fails closed. A refusal records `outcome=pre_freeze`.
+- **`ROLLBACK=1` refuses after a successful cutover.** When the persisted `CANARY_OK` matches the
+  live volume's LUKS UUID, a rollback dispatch refuses unless the `rollback_ack_luks_writes` input
+  is set. Such a rollback strands every write made since `docker start` on the LUKS volume. It also
+  refuses, with the same override, when `CANARY_OK` is persisted but the live header UUID cannot be
+  read (a closed mapper included) or the persisted UUID is empty: an unmeasurable match fails closed.
+  A refusal records `outcome=refused_post_cutover mode=rollback mount_src=<source>`. (Corrected
+  2026-09-30, PR #9286 review: the check no longer requires `/mnt/data` to be on the mapper. Keyed on
+  the mount, an unacked rollback after a failed boot unlock, with `/mnt/data` empty, would have
+  served the stale plaintext.)
 - **An unattended fire pages.** `logtail_exploration_alert.workspaces_luks_deadman_fired` (ADR-218
   semantics) matches `op=workspaces-luks-deadman result=fired` from `soleur-web-platform`. This
   closes the #6812 six-hour silence. The alert auto-resolves after ten quiet minutes; that does not
@@ -1329,6 +1334,225 @@ before this ships — the plan's own instruction when a probe reads ✓.
 is unchanged — one supervised restart, then the read-only verify — and it stays the runbook's
 separate gated step, not a step of this delivery.
 
+## Addendum (2026-09-28): retiring the plaintext backstop (CONFIRM_WIPE, #6604 step 7)
+
+**Status stays `adopting`.** It flips to `accepted` only in PR B, after the dispatch below has run and
+the Art. 5(2) destruction record is complete — the #6604 soak sweeper closes that issue on the string
+`accepted` alone.
+
+The soak passed on 2026-09-24. The last open item of this ADR is §(f)'s "terminal mode": until the
+retained plaintext volume (`105149570`) is gone, it holds every workspace as of the 2026-07-23 cutover,
+including ones users have deleted since, and defeats every Art. 17 erasure made on the live volume.
+
+**Decision.** Build the `CONFIRM_WIPE` slot this ADR reserved as a mode of `workspaces-cutover.sh`
+(`wipe_plaintext()`), reached through a separate, environment-gated `wipe` job in
+`workspaces-luks-cutover.yml`, followed by a single-use `workspaces-plaintext-forget.yml` for the
+Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
+`2026-09-28-feat-workspaces-plaintext-volume-wipe-plan.md`; runbook: Sequence step 7.
+
+- **AP-009 (Never delete user data): Deviation — documented carve-out.** The volume is **a superseded
+  copy frozen at the 2026-07-23 cutover** (run 29995956562), which the live LUKS volume was certified to
+  hold at least the contents of (C1 itemized verify, G3 counts, the git fsck differential),
+  green-verified daily since, soak passed 2026-09-24. It is *not* "a duplicate" (the CLEAN_STRAY basis):
+  it differs from the live volume by every deletion since the cutover, which is exactly why it must go.
+  Retaining it is the exposure #6588 exists to close. The accepted residual is stated, not hidden: after
+  the wipe the LUKS volume holds the **only** copy (tracked by #5274, #8625, #6964). W4/W5 exist so the
+  wipe never runs while that sole copy is unrecoverable.
+- **AP-001 (Terraform-only infrastructure provisioning): Deviation.** The delete is an API act, not a Terraform one: Terraform
+  cannot zero a device, and C5 requires a verified full-device zero to precede the delete. State
+  follows by `terraform state rm`, then config by PR B.
+- **The one property.** `blkdiscard -z` runs on exactly one device, the pinned volume, never the device
+  backing `/dev/mapper/workspaces`. The pin (`expected_plaintext_volume_id`) is bound through preflight's
+  API classification, the host's by-id path (W1), path + major:minor + holders + mount + size +
+  hypervisor `ID_SERIAL` + the cutover's recorded plaintext mount source `PLAINTEXT_DEV` (W6, first wipe only; the label
+  premise was false — no artifact labels the retained plaintext, corrected 2026-09-30), every systemd
+  device unit sharing the
+  target's `SysFSPath` (W6b), the success row the job parses, and the forget's state identity.
+  Recoverability of the sole copy is proven at wipe time: the persisted `CANARY_OK` UUID names the live
+  header (W3), the escrowed passphrase opens it (W4), and the off-host header object downloads, carries
+  that UUID, opens with that passphrase, and is byte-identical to a fresh `luksHeaderBackup` (W5 — a UUID
+  survives `luksAddKey`, so a UUID match alone could certify a stale backup).
+- **The zero is proven, not assumed.** `blkdiscard -z` (util-linux >= 2.36 opens O_EXCL; never `-f`)
+  under a 150 MB/s cgroup `io.max` cap (plain bytes, `150000000` — systemd reads a `150M` suffix in base 1000) (not `ionice`, a no-op under `mq-deadline`/`none`), then a full-device
+  O_DIRECT read-back that `cmp` decides (dd's rc alone never classifies), then no signature, and only
+  then `PLAINTEXT_WIPED`. The cap is **proven in force**, not assumed from `systemd-run`'s rc (0 even
+  when io.max cannot apply): a gate running inside the scope reads that scope's own `io.max` for the
+  device's MAJ:MIN and refuses unless `rbps`/`wbps` carry the cap; the zero and the read-back run behind
+  the same gate. The identity is re-asserted AT the act (the by-id link still resolves to the measured
+  kernel name, which still carries the pin's serial), and W6b re-runs after the zero, before the success
+  row. `PLAINTEXT_WIPE_BEGUN` is persisted first, so an interrupted zero resumes on `arm=re_zero`; a
+  zeroed-and-detached volume reports `arm=detached`. Both markers are written **and read back**; an
+  unwritable state file refuses before the zero (or before the success row).
+- **Provenance and completeness.** A first wipe refuses a plaintext whose superblock `Last write time`
+  is later than the cutover froze it (2026-07-23T09:45:00Z; run 29995956562's host step ended 09:40:41Z):
+  such a volume was remounted read-write since and may hold writes that exist nowhere else. As evidence
+  (never a refusal) the rehearsal lists the workspace names on the unmounted plaintext (read-only
+  `debugfs`) that the live mount lacks (`plaintext_only=`); the approver's ask accounts for each.
+- **Post-wipe rollback is refused permanently**, with or without the ack, on either of two witnesses: a
+  persisted wipe marker (`outcome=refused_plaintext_wiped`, the only proof of a wipe), or `/mnt/data`
+  on the mapper with the recorded `PLAINTEXT_DEV` not an intact restore source: invalid, resolving to
+  the mapper, not a block device, or not ext4 (`outcome=refused_plaintext_record_gone`, its own slug:
+  with no marker it is drift or a detach, never a wipe; a lost record reads as gone: it refuses). One
+  predicate, `_plaintext_record_status`, decides "intact" for this check, the dead-man arm and the
+  rollback remount (corrected 2026-09-30, PR #9286 review). The check is the first
+  line of `rollback()` itself, so every caller is covered, and the dead-man fire string carries its own
+  self-contained copy. Arming a dead-man stays unreachable on a cut-over host: `prepare_staging_target`
+  refuses it first.
+
+**Two PRs, because Terraform will not take one.** Measured on Terraform 1.10.5 against a scratch root:
+a narrowed `for_each` over state still holding `["web-1"]` makes every `-refresh=false` plan fail with
+`Instance cannot be destroyed` (`prevent_destroy`, which web-2 keeps); `moved` + `removed` makes every
+`-target`ed plan fail with `Moved resource instances excluded by targeting` until an untargeted apply
+this root never runs; and `state rm` with the OLD config still in place makes any push apply plan
+`+create` of a fresh plaintext volume through `-target` transitivity (`hcloud_firewall_attachment.web`
+→ `hcloud_server.web` → `user_data` → `hcloud_volume.workspaces[each.key]`), conditional or not. Only
+`state rm` then narrowed config plans `No changes`. So: PR A (the mode, no `.tf` change), the dispatch,
+the forget, PR B the same day.
+
+**The delete→PR-B window is closed by a pause, not a new guard.** Both push-apply workflows
+(`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`) are `gh workflow disable`d before the
+dispatch and re-enabled after PR B, with a `manual-rerun` apply. The `wipe` job and the forget
+workflow refuse unless both read `disabled_manually` with nothing queued. A create-counting surface on
+the shared destroy-guard filter would reverse #6919 (test T55 — volume creates were removed from the
+halt because they fired on valid dispatches) and needs an edit to a file a few hundred bytes under its
+size cap; #6919/T55 stands.
+
+**How the 2026-07-19 operand rule is kept.** "Every destructive mode contributes its own operand to the
+`cutover` job's `environment:` expression" holds by construction: the destructive wipe is not reachable
+from `cutover` at all. That job skips on a real wipe, and on a rehearsal delivers `CONFIRM_WIPE` only as
+`wipe_plaintext && dry_run`. The `wipe` job's environment is unconditional.
+
+**Serialization, and why the forget is its own workflow.** The forget runs in its own workflow on
+`terraform-apply-web-platform-host` (the lockless state's sole serializer). The reasons it is separate
+are **credential separation** — the destructive job (root SSH to web-1 and a Hetzner write token) never
+holds the R2 state credentials or runs `terraform init`, and the forget holds nothing that reaches web-1
+— and **idempotent re-runnability**: a failed forget is re-dispatched on its own (`already_forgotten`
+once state is clean) and never re-enters the wipe. Lock order is not the reason: with both appliers
+proven paused and idle, no apply can hold the host group, so nesting it could not deadlock in the
+window; the host group is belt.
+
+**A known gap, recorded, and the trade-off.** The `wipe` job's SSH delivery block is a **copy** of
+`cutover`'s. Byte-stability of the freeze path is not the reason any more — the freeze already ran and a
+cut-over host refuses it. The copy is kept because the two jobs differ where it matters (the wipe job
+fences all host output, keeps the tunnel alive through a silent zero, and parses a strict success row),
+and extracting a shared composite action would put the 2026-07-23-proven cutover delivery behind a new,
+unexercised abstraction. The cost: the rehearsal rides `cutover`'s copy, so the `wipe` job's copy first
+runs on the host at the real dispatch. It is mitigated, not closed: the remote `bash -c` delivery string
+is byte-identical in both (the workflow suite pins it), both copies' bodies are executed against an ssh
+stub, the host half is the same script, and every failure mode of the copy is fail-closed (a red run,
+never a wrong zero).
+
+## Addendum (2026-10-01): the fresh-host convention is the provisioner, not the baked gate (#6931, ADR-263)
+
+This addendum supersedes the §(e) sentence "The bake (`soleur-luks-structural-gate`) is unchanged and stays
+the fresh-host convention; #6931 owns the fresh-host boot-unlock path", and resolves the crypttab-divergence
+note that said the baked `nofail` line should be reconciled when #6931 lands. The earlier text above is left
+as written.
+
+- **`soleur-luks-structural-gate` is deleted.** On a fresh host its properties moved into the baked
+  `workspaces-luks-provision.sh` (immutable covered inode before the mount, the `RequiresMountsFor` drop-in,
+  the mapper-backed mount) and a hard `poweroff -f` gate in `cloud-init.yml`.
+- **The crypttab, fstab and drop-in lines the provisioner writes are web-1's canonical ones** (`luks,noauto`,
+  by-id), pinned byte-for-byte against `local.workspaces_boot_unlock_*` by `fresh-boot-parity.test.sh`; the
+  by-label `nofail` spelling no longer exists.
+- §(d) is reversed by ADR-263 (a fresh host MUST get the reopen unit). The claim that web-2's volume is LUKS
+  at boot becomes true only after the volume rebirth (#9372); until then it is the empty Hetzner-formatted
+  ext4 volume, kept un-pooled by `lb-weight-gate.sh`.
+  > **Superseded 2026-10-12 (#9372), in part:** the rebirth ran on 2026-10-06 and was graded on 2026-10-10 (formatted/opened
+  > plus green probes only; ADR-263 addendum 2026-10-11 for the claim boundary); its workflow is retired.
+
+## Addendum (2026-10-08): the plaintext backstop is retired (#6604 step 7, PR B)
+
+**Status condition.** This ADR's `status:` reads `accepted` only once the Art. 5(2) destruction record
+(`knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md`) reads `status: complete` and
+the CLO has attested at that commit (`knowledge-base/legal/audits/2026-10-counsel-review-6604.md`); the
+flip is its own commit, after the record's, and the PR B plan's Resume release check verifies that
+order. While either condition is open, `status:` reads `adopting`. PR B (#9348) is the convergence half
+of the 2026-09-28 addendum above, and it merges only after the wipe dispatch D and the state forget
+have run (the plan's §Operator Holds).
+
+**What ran (by reference to the record).** The as-run facts — the dispatch run(s), the `wiped` row, the
+read-back, the detach and delete, the state forget, the approver — live in the destruction record and
+nowhere else; this addendum does not restate them. Dispatch: run 37801674740. Forget:
+run 37803274724. Evidence already in hand: rehearsal run `36769782488` (2026-09-30,
+`result=rehearsal_ok arm=first_wipe volume_id=105149570`, `target=/dev/sdb` ≠ `backing=/dev/sdc`,
+`holders=0 dependents=0`, `plaintext_only=0`) and the same-day baseline run `36770448813`
+(`ready=true workspace_count=9 expected=8`).
+
+- **AP-009 basis.** The volume D deletes is a superseded copy frozen at the 2026-07-23 cutover (run
+  29995956562, 8 workspaces). At the rehearsal, `plaintext_only=0`: no workspace existed only on that
+  copy, so the wipe destroyed nothing the live volume lacked, and D re-read the same count: 0
+  (`plaintext_only=0` on D's host row and on its `field=plaintext_only` evidence row).
+- **The accepted drop to a single copy.** From D's `delete_issued=true`, volume `106443278`
+  (`hcloud_volume.workspaces_luks`) holds the only copy of every workspace. There is no backup and no snapshot of it; escrow (the Doppler
+  passphrase and the off-host header) covers key loss, not data loss. Hardware loss of that volume stays
+  open and is tracked by #5274 and #8625; a web-1 rebirth that strands it is #6964. This is the residual
+  the 2026-09-28 addendum named; it is accepted, not closed.
+- **D1 — the sole copy is protected in Terraform.** Terraform declares `prevent_destroy = true` and
+  `delete_protection = true` on `hcloud_volume.workspaces_luks`, and `prevent_destroy = true` on
+  `hcloud_volume_attachment.workspaces_luks`. `prevent_destroy` makes every plan that would destroy or
+  replace either fail — the `workspaces-luks-recut` dispatch's `-replace`, a ForceNew edit reaching the
+  volume through the SSH stage's `-auto-approve` apply (it is in that stage's `-target` closure through
+  `terraform_data.workspaces_boot_unlock_install`), or a web-1 replace that would force a new
+  attachment. `delete_protection` makes Hetzner refuse a console, API or CLI delete until someone
+  holding a write token lifts it; it is delivered as one in-place update by the first `apply`-job run
+  after the push-apply re-enable (the post-merge `manual-rerun`, or a push), through that run's SSH
+  stage, and is effective only from then. Both are accident guards, not access controls: a reviewed PR
+  can remove them. This **supersedes** #6931's deferral of `prevent_destroy`, which existed only because
+  it collided with the recut `-replace` — whose premise, that the live plaintext keeps serving as the
+  rollback source, is false after step 7. The `workspaces-luks-recut` job is therefore hard-retired: its
+  first step exits 1, and as a second barrier its `-replace` plan-fails with `Instance cannot be
+  destroyed`, which is the guard, not a defect. A recut now requires a new reviewed PR; re-scoping the
+  target is #6931's topology work. **Ordering trap for #6931:** if `prevent_destroy` is removed while
+  `delete_protection` stays on, a destroy apply detaches the mounted volume and then fails the delete —
+  an outage (`terraform-provider-hcloud` v1.63.0, the lockfile's version, `internal/volume/resource.go`
+  `resourceVolumeDelete` detaches a volume that has a server before it deletes, without checking
+  protection first). Lift `delete_protection` first, in its own reviewed apply.
+- **Recovery from a premature merge is a PARTIAL revert.** If PR #9348 merged before D and the forget
+  finished, the only code that can finish them is gone, and recovery is a new PR. A plain `git revert`
+  of the merge is wrong: it would also strip D1's protections, and the next SSH-stage apply
+  (`-auto-approve`, no destroy-guard) would turn Hetzner delete protection off on the sole copy and
+  reopen the recut `-replace`. The recovery PR restores only the wipe mode with its `wipe` job and
+  inputs, `workspaces-plaintext-forget.yml`, and web-1's membership in `server.tf`'s plaintext
+  `for_each`s and its volume id; it keeps `prevent_destroy` and `delete_protection` on
+  `hcloud_volume.workspaces_luks`, `prevent_destroy` on its attachment, and the recut job's retirement.
+- **Terraform converges on web-1 having no plaintext volume.** `hcloud_volume.workspaces` and
+  `hcloud_volume_attachment.workspaces` range over `local.plaintext_workspaces_hosts` (every web host
+  except web-1; web-2 keeps volume `106466179`, still `prevent_destroy`, still a ledgered posture
+  exception, now tracked by #6931). web-1's `workspaces_volume_id` template argument is the literal
+  `"retired-6604"`: a rebuilt web-1 would emit `workspaces_mount fatal` and keep booting on an empty,
+  writable root-disk `/mnt/data` (fails loud, not closed; new writes there would land unencrypted,
+  #6931), unreachable while the replace path refuses web-1 and `user_data` is `ignore_changes`.
+- **The `CONFIRM_WIPE` mode is a tombstone.** The wipe body, `wipe_plaintext()` and its helpers, the
+  `wipe` job and the forget workflow are deleted by PR #9348 (the procedure is in git history at
+  `59abf6a76c`, and it is the procedure as run (the release check's `git diff --quiet` of D's and
+  the forget's head SHAs against it passed on 2026-10-08): D, run 37801674740, at `57cc8494d58626f02c47f35f15e1b7219133c9b7`, and the forget, run 37803274724, at `425ea0fc1fda3624e53c46771d76580c43d36e90`, both with no diff from `59abf6a76c`). Until that merge they exist on `main` only, and D and the forget are dispatched from
+  `main` (the `workspaces-luks-cutover` environment admits `main` only), so D and the forget ran `main`'s copies, and
+  every resume arm stays available until the merge deletes them. `CONFIRM_WIPE` stays declared and counted by `assert_mode_exclusive`; any value other
+  than unset or `0` writes one `result=cutover_aborted outcome=wipe_retired` row, drops the EXIT trap and
+  dies before any mutation, so a stray value can neither wipe nor fall through to the L3 cutover body.
+  The tombstone deliberately calls no `emit_drift`.
+- **Guard 5 is kept, for ever.** The post-wipe rollback refusal — the `PLAINTEXT_WIPE_BEGUN` /
+  `PLAINTEXT_WIPED` marker witness and the physical witness through `_plaintext_record_status` — stays
+  at the first line of `rollback()`, in `assert_rollback_not_post_cutover` and in the dead-man fire's
+  `gone_guard`, with its tests (now `workspaces-luks-rollback-refusal.test.sh` and loopback Session G5).
+  After step 7 there is no plaintext copy to remount, so a rollback that unmounted the mapper would make
+  every workspace unreachable.
+- **The sweeper and the drift window.** The #6604 soak sweeper (`workspaces-luks-soak-6604.sh`) closes
+  #6604 on `accepted` plus a clean 7-day `op:workspaces-luks-drift` window plus a heartbeat span. Its
+  Sentry query has no level filter, so any refused rehearsal or refused dispatch restarts that window
+  (its 2026-09-29/30 FAILs were the refused rehearsal's `wipe_target_label_mismatch` events, run
+  36710773788, fixed by #9286). This addendum does not change the sweeper; the tombstone emits no drift
+  so a stray `CONFIRM_WIPE` cannot restart it.
+- **Gates that name the retired addresses now pass vacuously on those names.** The gates that treat
+  `hcloud_volume.workspaces["web-1"]` / `hcloud_volume_attachment.workspaces["web-1"]` as
+  must-be-untouched (`inngest-volume-recut-gate.sh`, `workspaces-luks-cutover-gate.sh`,
+  `workspaces-luks-recut-gate.sh`, and the post-apply backstop loops in `apply-web-platform-infra.yml`)
+  can no longer meet those addresses in a plan. Safety holds through their `out_of_scope` /
+  `resource_deletes` catch-alls and the loops' `create` verb (after PR B those addresses can only appear
+  as a `create`, which the loops still catch); their stale "live plaintext" comments are corrected (text
+  only), and the web-1 birth gate fails closed on a rebirth.
+
 ## References
 
 - Issue #6588 — the P1 that mandated CTO routing before terraform.
@@ -1341,3 +1565,11 @@ separate gated step, not a step of this delivery.
   hold for signup-provisioned workspaces (fact 3).
 - ADR-080 — the baked-bootstrap convention; and why it has no consumer on web-1 (§(e)).
 - #6538 (web-2 teardown), #6570 (cax11 stock), #6459 (active-active-N), #1439 (beta recruitment).
+
+## Addendum — 2026-10-10 (#9879, pointer to ADR-282)
+
+Appended; nothing above is edited. ADR-282 applies this ADR's D1 pin set (delete protection plus `prevent_destroy` on the
+volume and its passphrase pair) to the Inngest sole-copy volume `hcloud_volume.inngest_redis_luks`, with one deliberate
+difference: its attachment stays unpinned because the sanctioned `inngest-host-replace` replaces it. This ADR's D1 and
+`apps/web-platform/infra/workspaces-luks.tf` remain the source of the web-1 attachment pin. Nothing about web-1 or this
+decision changes. It takes effect on the merge of PR #9925 (adopting until that merge's apply and read-back, per ADR-282).

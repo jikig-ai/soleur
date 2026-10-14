@@ -77,4 +77,4 @@ SENTINEL_FILE="${PROJECT_ROOT}/.claude/soleur-welcomed.local"
 ## Related Issues
 
 - GitHub issue: #1383
-- Related prior fix: `knowledge-base/project/plans/2026-03-18-fix-welcome-hook-error-guard-plan.md` (error guard, different scope)
+- Related prior fix: `knowledge-base/project/plans/archive/20261012-213508-2026-03-18-fix-welcome-hook-error-guard-plan.md` (error guard, different scope)

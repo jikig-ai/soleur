@@ -160,8 +160,37 @@ assert "bootstrap block precedes web-platform start" "(( BOOTSTRAP_LINE < WEBPLA
 # --- AC4: extracted shell snippet is POSIX clean ---
 echo ""
 echo "--- AC4: extracted shell snippet POSIX-portable ---"
+
+# Session scratch root (#7004, ADR-250): bind one owned soleur-run.<pid>.* root
+# under the effective TMPDIR and export TMPDIR at it, so every mktemp below —
+# including strays the growing trap chain does not name — lands inside a root
+# the reapers (tmpfs-guard Reaper 3, session-start sweep) can attribute and
+# reclaim without name heuristics. Mirrors the scripts/test-all.sh adoption
+# block. Opportunistic: an absent lib (e.g. the mutation battery's sandbox,
+# which reproduces only infra/ + .github/) degrades to the pre-#7004 shape and
+# never blocks the suite; under run-registered-suites.sh the parent's exported
+# SOLEUR_SCRATCH_SESSION_ROOT makes begin a no-op. "${TMPDIR:-/tmp}" — not a
+# bare "$TMPDIR" — because `set -u` aborts on the unbound expansion even under
+# `|| true`, and /tmp is mktemp's own default when TMPDIR is unset. The
+# explicit base is load-bearing a second way: an explicit arg is honored
+# as-given (scratch-root.sh only normalizes /tmp-subdir bases it DERIVES), so
+# the residue suite's private measured TMPDIR ($BASE/d.<leaf>) stays private —
+# a no-arg or normalized call would lift the root to real /tmp and make that
+# leaf's delta arm measure the wrong directory.
+_SCRATCH_LIB="$SCRIPT_DIR/../../../scripts/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "${TMPDIR:-/tmp}" || true
+fi
+# Defined unconditionally so every arm of the growing EXIT trap below can name
+# the cleanup (ADR-129: spliced into the existing chain, never a second trap).
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+
 SNIPPET_FILE=$(mktemp -t inngest-runcmd-XXXXXX.sh)
-trap 'rm -f "$SNIPPET_FILE"' EXIT
+trap 'rm -f "$SNIPPET_FILE"; _soleur_scratch_cleanup || true' EXIT
 
 # Extract the runcmd block following the Inngest bootstrap comment.
 # The block ends at the next YAML sibling key (line starting with `  - |`
@@ -232,6 +261,49 @@ assert "deploy-inngest-bootstrap.sudoers exists"         "[[ -s '$SUDOERS_SRC' ]
 assert "cloud-init inline block is non-empty"            "[[ -n \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "sudoers source and cloud-init inline match"      "[[ \"\$SUDOERS_CONTENT_ONLY\" == \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "ci-deploy.sh invokes the sudoers-pinned path"    "grep -qE '/usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh' '$SCRIPT_DIR/ci-deploy.sh'"
+
+# --- #10045: KDENY_KERNEL_STREAM argv lockstep (plan Guard 1) -------------------------------
+# sudo matches the resolved command PLUS argv literally, so four text surfaces must name the
+# SAME byte string or the grant denies (fails closed — never widens): the Cmnd_Alias body in
+# (a) the .sudoers source and (b) its comment-stripped cloud-init mirror, (c) the argv
+# _canary_kdeny_read passes after `sudo -n` in ci-deploy.sh, and (d) the `runuser -u deploy --
+# sudo -n …` execute probes in BOTH server.tf terraform_data bridges. The granted argv is
+# pinned below, byte-exact, per the interface contract — pinning the literal (not just surface
+# equality) also fails the all-surfaces-drift-together shape.
+echo ""
+echo "--- #10045: KDENY_KERNEL_STREAM argv lockstep ---"
+CIDEPLOY="$SCRIPT_DIR/ci-deploy.sh"
+SERVER_TF="$SCRIPT_DIR/server.tf"
+KDENY_ARGV='/usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat'
+# Alias body extraction: split the Cmnd_Alias line on its FIRST `=` only — the argv itself
+# carries `=` inside `--since=-5min`, so `cut -d= -f2` would truncate mid-flag.
+KDENY_ALIAS_SRC=$(sed -nE 's/^Cmnd_Alias KDENY_KERNEL_STREAM[[:space:]]*=[[:space:]]*//p' "$SUDOERS_SRC")
+KDENY_ALIAS_CI=$(sed -nE 's/^Cmnd_Alias KDENY_KERNEL_STREAM[[:space:]]*=[[:space:]]*//p' <<<"$CLOUD_INIT_SUDOERS")
+# Call-site extraction: everything after `sudo -n /usr/bin/journalctl ` up to a shell metachar,
+# with the ` 2>&1` capture tail cut — the runuser probes are extracted the same way, from each
+# `runuser -u deploy -- sudo -n …` line (one per terraform_data bridge).
+KDENY_CALL_ARGV=$(grep -vE '^[[:space:]]*#' "$CIDEPLOY" | grep -oE 'sudo -n /usr/bin/journalctl [^|")]*' | sed -E 's/^sudo -n //; s/ *2>&1 *$//; s/ +$//' | sort -u || true)
+KDENY_PROBE_ARGV=$(grep -vE '^[[:space:]]*#' "$SERVER_TF" | grep -oE 'runuser -u deploy -- sudo -n /usr/bin/journalctl [^"]*' | sed -E 's/^.*sudo -n //; s/ *>.*//; s/ +$//' | sort -u || true)
+assert "KDENY_KERNEL_STREAM alias defined in the sudoers source" \
+  "grep -qE '^Cmnd_Alias KDENY_KERNEL_STREAM = ' '$SUDOERS_SRC'"
+assert "KDENY grant line is the ANCHORED whole line for deploy (no appended commands hide in the substring)" \
+  "grep -qxF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' '$SUDOERS_SRC'"
+assert "exactly ONE non-comment line in the sudoers source names journalctl at all — a direct grant, a space-less alias, an appended command, or an include directive cannot hide a wider argv" \
+  "(( \$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' '$SUDOERS_SRC' | grep -cF journalctl) == 1 ))"
+assert "the sudoers source carries no include directive that could pull a grant from outside the file" \
+  "! grep -qE '^[[:space:]]*[@#]include' '$SUDOERS_SRC'"
+assert "the alias argv (first-= split) is identical across the sudoers source and the cloud-init inline copy, and is the pinned grant argv" \
+  "[[ \"\$KDENY_ALIAS_SRC\" == \"\$KDENY_ARGV\" && \"\$KDENY_ALIAS_CI\" == \"\$KDENY_ARGV\" ]]"
+assert "the cloud-init inline copy carries the ANCHORED grant line for deploy" \
+  "grep -qxF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' <<<\"\$CLOUD_INIT_SUDOERS\""
+assert "ci-deploy.sh attempts the privileged journal read exactly once, timeout-bounded outside sudo" \
+  "(( \$(grep -cF 'timeout -k 1 3 sudo -n /usr/bin/journalctl' '$CIDEPLOY' || true) == 1 ))"
+assert "the ci-deploy.sh call-site argv equals the pinned grant argv (alias<->caller lockstep)" \
+  "[[ \"\$KDENY_CALL_ARGV\" == \"\$KDENY_ARGV\" ]]"
+assert "both terraform_data bridges carry the runuser execute probe for the granted read" \
+  "(( \$(grep -cF 'runuser -u deploy -- sudo -n /usr/bin/journalctl ' '$SERVER_TF' || true) == 2 ))"
+assert "the execute-probe argv in server.tf is one identical string equal to the pinned grant argv" \
+  "[[ \"\$KDENY_PROBE_ARGV\" == \"\$KDENY_ARGV\" ]]"
 _COND_BEFORE=$TOTAL
 if command -v visudo >/dev/null 2>&1; then
   assert "sudoers source parses via visudo -cf"          "visudo -cf '$SUDOERS_SRC' >/dev/null"
@@ -265,8 +337,8 @@ assert "new quiesce/enable alias argv are wildcard-free" "[[ -n \"\$QE_LINES\" ]
 # bootstrap-image release" step — forgotten 10 consecutive times (v1.0.1…v1.1.10)
 # before #4669. The pin MUST equal the semver-max `vinngest-v*` git tag MERGED
 # INTO HEAD: that tag is the authoritative "a new soleur-inngest-bootstrap image
-# was published" signal (build-inngest-bootstrap-image.yml is
-# `on: push: tags: ['vinngest-v*.*.*']`). sort -V (semver), NOT lexicographic —
+# was published" signal (build-inngest-bootstrap-image.yml publishes each tag once,
+# dispatched from main; its `push: tags` trigger was removed in #9262). sort -V (semver), NOT lexicographic —
 # plain `sort` ranks v1.1.9 above v1.1.10, the exact bug class that hid the drift.
 # `--merged HEAD` (#8782): a tag cut on an unmerged branch is never a candidate,
 # so it cannot turn main and every other PR red. The 3-line selector below is
@@ -455,7 +527,7 @@ if command -v terraform >/dev/null 2>&1; then
   # whose assertions fail with a misleading "OMITS" pass (#6425).
   render_ci() {
     local colocate="$1" out="$2" connector="${3:-true}"
-    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="reg", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform", private_ip="10.0.1.10", web_probes_token="t", expected_ip="10.0.1.10", web_host_key="hk", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zp", zot_pull_token="zt" })\n' \
+    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", workspaces_luks_fresh_boot_token="lt", registry_endpoint="reg", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform", private_ip="10.0.1.10", web_probes_token="t", expected_ip="10.0.1.10", web_host_key="hk", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zp", zot_pull_token="zt" })\n' \
       "$CLOUD_INIT" "$colocate" "$connector" | terraform -chdir="$RENDER_SCRATCH" console > "$out"
     # A truncated/empty render makes every `! grep` assertion pass vacuously.
     [[ -s "$out" ]] || { echo "  FATAL: render produced no output (colocate=$colocate connector=$connector)"; return 1; }
@@ -763,7 +835,9 @@ echo "--- Guard 1 (#7462): zot-primary bootstrap pull arm (dedicated host) ---"
 DED_CODE_FILE="$(mktemp -t inngest-ci-code-XXXXXX.yml)"
 DED_BLOCK_FILE="$(mktemp -t inngest-ci-block-XXXXXX.sh)"
 # The existing EXIT trap already removes SNIPPET_FILE; extend it rather than replace it.
-trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE"' EXIT
+# `_soleur_scratch_cleanup` rides every arm of this growing chain — an arm left
+# unspliced would leak the whole session root on a mid-chain failure exit.
+trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE"; _soleur_scratch_cleanup || true' EXIT
 sed -E 's/^[[:space:]]*#.*$//' "$INNGEST_CI_YML" > "$DED_CODE_FILE"
 
 # The bootstrap block, isolated. #8562 MOVED it out of runcmd into the write_files script that
@@ -1133,7 +1207,7 @@ echo "--- Guard 1b (#6500): per-arm Sentry stage emits (dedicated host) ---"
 G1B_BEFORE="$TOTAL"
 ARM_ZOT="$(mktemp -t inngest-arm-zot-XXXXXX)"
 ARM_FB="$(mktemp -t inngest-arm-fb-XXXXXX)"
-trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"' EXIT
+trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; _soleur_scratch_cleanup || true' EXIT
 # DEPTH-AWARE (review P1-2/P2-3): the split happens only at nesting depth 0, and only depth-0
 # statements are emitted into an arm file, because a statement inside a nested block (`if false;
 # then … fi`, a `case`, a loop) is not an unconditional statement of the arm. A nested `else` must
@@ -1369,6 +1443,104 @@ assert "GuardA anti-vacuity: the section ran its full inventory (expected 11, ra
   "(( GUARDA_ASSERTIONS == 11 ))"
 
 # =========================================================================================
+# Guard A2 (#9082) — image-input drift beyond carriers: four pins + Dockerfile recipe
+# =========================================================================================
+# PROPERTY. Guard A binds the pinned tag to HEAD for the carrier FILES only. The mint's
+# decide stage additionally compares the four image pins (inngest_cli_version /
+# inngest_cli_sha256 / vector_version / vector_sha256) and the Dockerfile heredoc recipe.
+# A merge that changes any of those while the mint run is skipped, dropped, or failed
+# leaves the pinned tag behind HEAD and NOTHING reds — this block is that backstop,
+# comparing each input at the pinned tag to HEAD byte-for-byte.
+#
+# EXTRACTOR REUSE. Every extractor below is token-identical to
+# .github/scripts/mint-inngest-bootstrap-tag's extract_side modulo the variable and file
+# operand — the ga2-pin-*/ga2-recipe-awk parity rows in
+# the mint suite's own test battery (`.github/scripts/test/test-mint-inngest-bootstrap-tag`,
+# named without the executable suffix deliberately: a `.sh` path literal would pull that
+# file into `scripts/battery-tag-authorship`'s closure, where its sandbox tag-fixture
+# commands exceed the ADR-207 per-line exemption-ledger ceiling — an ADR-level decision
+# that needs a suite-level class, tracked in #9700) pin that
+# shape, so a
+# same-intent/different-tokens copy reds there.
+#
+# SAME KNOWN CAVEAT AS GUARD A. A PR that legitimately bumps a pin or the recipe reds this
+# section pre-merge — the PR-context exemption is the open #9081, unchanged by this block.
+# On main the red is the intended signal: pinned tag behind HEAD means a mint run was
+# missed.
+GUARDA2_BEFORE="$TOTAL"
+# git-show the three input files at the pinned tag. GA_TAG_OK was already asserted by
+# Guard A row 4; an unresolvable side is a FINDING here, never "nothing to compare, pass".
+GA2_TMP="$(mktemp -d -t guarda2-XXXXXX)"
+GA2_UNRESOLVED=""
+GA2_T_ITF="$GA2_TMP/inngest.tf"; GA2_T_VTF="$GA2_TMP/vector.tf"; GA2_T_WF="$GA2_TMP/wf.yml"
+if (( GA_TAG_OK == 1 )); then
+  git -C "$SCRIPT_DIR" show "$GA_TAG_REF:apps/web-platform/infra/inngest.tf" > "$GA2_T_ITF" 2>/dev/null || GA2_UNRESOLVED="$GA2_UNRESOLVED inngest.tf"
+  git -C "$SCRIPT_DIR" show "$GA_TAG_REF:apps/web-platform/infra/vector.tf" > "$GA2_T_VTF" 2>/dev/null || GA2_UNRESOLVED="$GA2_UNRESOLVED vector.tf"
+  git -C "$SCRIPT_DIR" show "$GA_TAG_REF:.github/workflows/build-inngest-bootstrap-image.yml" > "$GA2_T_WF" 2>/dev/null || GA2_UNRESOLVED="$GA2_UNRESOLVED build-workflow"
+else
+  GA2_UNRESOLVED=" tag($GA_TAG_REF)"
+fi
+assert "GuardA2: all three input files resolve at $GA_TAG_REF (unresolved:${GA2_UNRESOLVED:- none})" \
+  "[[ -z '$GA2_UNRESOLVED' ]]"
+
+# Pin extraction — one line per pin per side, each byte-identical to the mint script's
+# p_* lines modulo the lhs name and file operand (g3_parity ga2-pin-* rows enforce it).
+# An EMPTY pin on either side is a finding: it makes the equality check fail below, so
+# "unparseable at both sides" can never report green.
+t_iv=$(grep -E '^\s*inngest_cli_version\s*=' "$GA2_T_ITF" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+t_is=$(grep -E '^\s*inngest_cli_sha256\s*=' "$GA2_T_ITF" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+t_vv=$(grep -E '^\s*vector_version\s*=' "$GA2_T_VTF" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+t_vs=$(grep -E '^\s*vector_sha256\s*=' "$GA2_T_VTF" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+h_iv=$(grep -E '^\s*inngest_cli_version\s*=' "$SCRIPT_DIR/inngest.tf" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+h_is=$(grep -E '^\s*inngest_cli_sha256\s*=' "$SCRIPT_DIR/inngest.tf" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+h_vv=$(grep -E '^\s*vector_version\s*=' "$SCRIPT_DIR/vector.tf" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+h_vs=$(grep -E '^\s*vector_sha256\s*=' "$SCRIPT_DIR/vector.tf" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+assert "GuardA2: inngest_cli_version identical at $GA_TAG_REF and HEAD (tag='$t_iv' head='$h_iv')" \
+  "[[ -n '$t_iv' && '$t_iv' == '$h_iv' ]]"
+assert "GuardA2: inngest_cli_sha256 identical at $GA_TAG_REF and HEAD (tag='$t_is' head='$h_is')" \
+  "[[ -n '$t_is' && '$t_is' == '$h_is' ]]"
+assert "GuardA2: vector_version identical at $GA_TAG_REF and HEAD (tag='$t_vv' head='$h_vv')" \
+  "[[ -n '$t_vv' && '$t_vv' == '$h_vv' ]]"
+assert "GuardA2: vector_sha256 identical at $GA_TAG_REF and HEAD (tag='$t_vs' head='$h_vs')" \
+  "[[ -n '$t_vs' && '$t_vs' == '$h_vs' ]]"
+
+# Recipe extraction — the mint's own awk, verbatim modulo the out=/operand (the
+# ga2-recipe-awk parity row pins the program lines). recipe.n carries the block count the
+# same way: `unterminated`, or the integer n, and n != 1 makes the comparison meaningless
+# rather than an implicit pass.
+awk -v out="$GA2_TMP/tag-recipe.txt" '
+    /^[[:space:]]*cat > "\$BUILD_DIR\/Dockerfile" <<DOCKERFILE[[:space:]]*$/ { n++; on = 1; next }
+    on && /^[[:space:]]*DOCKERFILE[[:space:]]*$/ { on = 0; closed++; next }
+    on { print > out }
+    END { if (n != closed) print "unterminated"; else print n + 0 }
+  ' "$GA2_T_WF" > "$GA2_TMP/tag-recipe.n"
+awk -v out="$GA2_TMP/head-recipe.txt" '
+    /^[[:space:]]*cat > "\$BUILD_DIR\/Dockerfile" <<DOCKERFILE[[:space:]]*$/ { n++; on = 1; next }
+    on && /^[[:space:]]*DOCKERFILE[[:space:]]*$/ { on = 0; closed++; next }
+    on { print > out }
+    END { if (n != closed) print "unterminated"; else print n + 0 }
+  ' "$GA_WF" > "$GA2_TMP/head-recipe.n"
+[[ -f "$GA2_TMP/tag-recipe.txt" ]] || : > "$GA2_TMP/tag-recipe.txt"
+[[ -f "$GA2_TMP/head-recipe.txt" ]] || : > "$GA2_TMP/head-recipe.txt"
+GA2_T_RECIPE_N="$(cat "$GA2_TMP/tag-recipe.n")"
+GA2_H_RECIPE_N="$(cat "$GA2_TMP/head-recipe.n")"
+assert "GuardA2: the pinned tag's build workflow carries exactly one terminated DOCKERFILE block (n=$GA2_T_RECIPE_N)" \
+  "[[ '$GA2_T_RECIPE_N' == '1' ]]"
+assert "GuardA2: HEAD's build workflow carries exactly one terminated DOCKERFILE block (n=$GA2_H_RECIPE_N)" \
+  "[[ '$GA2_H_RECIPE_N' == '1' ]]"
+# A recipe that extracted EMPTY on both sides compares same while guarding nothing —
+# the body must carry content before the byte-parity row means anything.
+assert "GuardA2: the extracted recipe body is non-empty on both sides" \
+  "[[ -s '$GA2_TMP/tag-recipe.txt' && -s '$GA2_TMP/head-recipe.txt' ]]"
+assert "GuardA2: the DOCKERFILE recipe is byte-identical at $GA_TAG_REF and HEAD" \
+  "[[ '$(ga_cmp "$GA2_TMP/tag-recipe.txt" "$GA2_TMP/head-recipe.txt")' == 'same' ]]"
+
+GUARDA2_ASSERTIONS=$(( TOTAL - GUARDA2_BEFORE ))
+assert "GuardA2 anti-vacuity: the section ran its full inventory (expected 9, ran $GUARDA2_ASSERTIONS)" \
+  "(( GUARDA2_ASSERTIONS == 9 ))"
+rm -rf "$GA2_TMP"
+
+# =========================================================================================
 # Guard D (#7695) — quoted delimiters on generated artifacts
 # =========================================================================================
 # PROPERTY. Every heredoc that writes a generated host artifact uses a NON-EXPANDING
@@ -1570,7 +1742,7 @@ if command -v terraform >/dev/null 2>&1; then
   NG1_DIR="$(mktemp -d -t nicg1-XXXXXX)"
   # Extends the Guard 1b trap rather than replacing it: a bare `rm -rf "$NG1_DIR"` here leaked
   # the five temp files above on every run wherever terraform is installed.
-  trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; rm -rf "$NG1_DIR"' EXIT
+  trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; rm -rf "$NG1_DIR"; _soleur_scratch_cleanup || true' EXIT
   NG1_RENDER="$NG1_DIR/rendered.yml"
   bash "$SCRIPT_DIR/inngest-userdata-budget.sh" "$NG1_RENDER" > "$NG1_DIR/budget.log" 2>&1 || true
   NG1_RENDER_BYTES=$(wc -c < "$NG1_RENDER" 2>/dev/null | tr -cd '0-9' || true)
@@ -2107,8 +2279,10 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # COND_ASSERTIONS). The prior 123 had drifted 11 below the measured count.
 # #8036 1d: 144 -> 153, re-measured from a green run (Guard 1 grew 50 -> 59; the executed Guard 4
 # rows are terraform-gated and counted in COND_ASSERTIONS, like the rendered NIC-G1 rows).
+# #9082: 153 -> 163, re-measured from a green run (Guard A2 added 10 unconditional rows).
+# #10045: 163 -> 173 (the KDENY_KERNEL_STREAM argv-lockstep block added 10 unconditional rows in AC5).
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=153
+BOOTSTRAP_MIN_ASSERTIONS=173
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

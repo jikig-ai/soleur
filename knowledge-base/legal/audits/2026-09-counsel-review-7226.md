@@ -5,7 +5,7 @@ date: 2026-09-22
 issue: 7226
 related_issues: [5914, 8209, 6931]
 pr: 8511
-plan: knowledge-base/project/plans/2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md
+plan: knowledge-base/project/plans/archive/20261013-051752-2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-237-ssh-host-keys-are-pinned.md
 brand_survival_threshold: single-user incident
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)

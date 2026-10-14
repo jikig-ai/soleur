@@ -6,6 +6,16 @@
 
 Accepted.
 
+> **Superseded in part by [ADR-264](./ADR-264-generated-operator-scripts-are-agent-run-in-stages.md) (2026-10-01).**
+> For **generated operator scripts only**, Decision points 2, 3 and 4 are superseded: a v2 generated
+> script is now run by an agent one stage at a time, and the acknowledgement of a production write
+> moves from a typed `yes` at a terminal to a harness-approved, hook-minted receipt on the exact
+> command (a new exit `75` for approval required, invalid or plan drift). What is **not**
+> superseded and remains in force: point 1 (the script sources the library), point 5 (a missing
+> library is a hard exit), point 6 (the ledger records stage names and outcomes, never values),
+> point 7 (least-privilege writes), and the class-1 (ladder value) and class-3 (out-of-band
+> barrier) skip variables. The text below is the dated record and is unchanged.
+
 ## Context
 
 Soleur has two hard rules that mandate a runnable artifact for a multi-step

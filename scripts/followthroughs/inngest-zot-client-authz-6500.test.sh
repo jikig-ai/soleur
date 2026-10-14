@@ -146,7 +146,7 @@ expect "A7 a CRLF verdict still authorizes (web-UI comments carry \\r)" 0 "an op
 
 # --- A8 the banned form -----------------------------------------------------------------------------------
 # Mirrors scripts/lint-followthrough-varq-ban.sh: raw grep for line numbers, then drop full-line comments.
-if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$PROBE" | grep -qvE '^[0-9]+:[[:space:]]*#'; then
+if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$PROBE" | grep -cvE >/dev/null '^[0-9]+:[[:space:]]*#'; then
   fail "A8 probe uses the banned \${VAR:?} form in code"
 else
   pass "A8 probe avoids the banned \${VAR:?} form in code"

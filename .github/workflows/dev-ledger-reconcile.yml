@@ -107,52 +107,17 @@ jobs:
         id: doppler_cli
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
-      # Copied from tenant-integration.yml: the token must resolve to the dev
-      # environment, and dev_scheduled must hold no Management-API token (#8028
-      # DC-1). The writer repeats the environment check in-process. Every jq call
-      # is branched on its exit code: a parse error fails closed, never "absent".
+      # The env=dev + DC-1 (SUPABASE_ACCESS_TOKEN-absence) assertions live in
+      # scripts/assert-dev-doppler-scope.sh — the ONE copy, shared with
+      # tenant-integration.yml and scheduled-integration-suites.yml (this
+      # workflow's inline block was the strongest of the three and is the
+      # version the script preserves, including the jq rc-branching). The
+      # writer repeats the environment check in-process below.
       - name: Assert Doppler config resolves to environment=dev
         id: doppler_dev
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
-        run: |
-          set -uo pipefail
-          if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
-            echo "::error::DOPPLER_TOKEN_DEV_SCHEDULED is not set; this workflow cannot reach dev and refuses to guess another config."
-            exit 1
-          fi
-          cfg_json=$(doppler configs get dev_scheduled -p soleur --json 2>/dev/null) || cfg_json=""
-          jrc=0
-          env_name=$(jq -er '.environment | strings' <<<"$cfg_json" 2>/dev/null) || jrc=$?
-          if [[ "$jrc" != "0" || -z "$env_name" ]]; then
-            echo "::error::doppler configs get dev_scheduled -p soleur returned no parseable environment (jq rc=$jrc). Config does not exist, token lacks read access, or the output is not JSON."
-            exit 1
-          fi
-          if [[ "$env_name" != "dev" ]]; then
-            env_safe=$(printf '%s' "$env_name" | LC_ALL=C tr -d '\000-\037\177' \
-              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g')
-            echo "::error::dev_scheduled config resolves to environment=${env_safe} (expected: dev); refusing to write."
-            exit 1
-          fi
-          echo "Doppler config dev_scheduled -> environment=dev (verified)."
-          names_json=$(doppler secrets --only-names --json -p soleur -c dev_scheduled 2>/dev/null) || names_json=""
-          jrc=0
-          jq -e 'type == "object" and has("SUPABASE_ACCESS_TOKEN")' >/dev/null 2>&1 <<<"$names_json" || jrc=$?
-          case "$jrc" in
-            0)
-              echo "::error::SUPABASE_ACCESS_TOKEN is present in Doppler dev_scheduled — a job running PR-authored SQL must not hold a Management-API token (#8028 DC-1)."
-              exit 1 ;;
-            1)
-              # false or null: only a JSON object that lacks the key is proof of absence.
-              if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$names_json"; then
-                echo "::error::doppler secrets --only-names -p soleur -c dev_scheduled did not return a JSON object; cannot verify the token's absence; failing closed."
-                exit 1
-              fi ;;
-            *)
-              echo "::error::doppler secrets --only-names -p soleur -c dev_scheduled returned unparseable output (jq rc=$jrc); cannot verify the token's absence; failing closed."
-              exit 1 ;;
-          esac
-          echo "Doppler config dev_scheduled carries no SUPABASE_ACCESS_TOKEN (verified)."
+        run: bash scripts/assert-dev-doppler-scope.sh
 
       - name: Reconcile
         id: reconcile

@@ -1,7 +1,7 @@
 {
   "name": "Soleur Infra",
   "url": "https://soleur.ai",
-  "description": "Terraform's Tier-B GitHub identity (#8209, ADR-241). It manages the CI policy substrate, the deployment environments and the Actions secrets of the jikig-ai org's own repositories. It has no runtime surface, no active webhook and no end-user installation.",
+  "description": "Terraform's Tier-B GitHub identity (#8209, ADR-241). It manages the CI policy substrate, the deployment environments and the Actions secrets of the jikig-ai org's own repositories. Since #9262 it also serves two non-Terraform consumers on the main-only infra-privileged environment: the inngest-bootstrap pin bump (opens and auto-merges the pin PR) and the auto-mint build dispatch. It has no runtime surface, no active webhook and no end-user installation.",
   "public": false,
   "redirect_url": "https://${app_domain}/internal/github-app-init",
   "hook_attributes": {
@@ -9,11 +9,12 @@
     "active": false
   },
   "default_permissions": {
-    "actions": "read",
+    "actions": "write",
     "administration": "write",
     "contents": "write",
     "environments": "write",
     "metadata": "read",
+    "pull_requests": "write",
     "secrets": "write"
   },
   "default_events": []

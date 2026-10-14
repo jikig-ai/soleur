@@ -102,6 +102,11 @@ for kv in QUEUE_DEPTH_ALERT QUEUE_STALL_ALERT_S MIN_ASSIGN_PCT MAX_IP_RUNS ZOMBI
     echo "UNKNOWN: $kv='${!kv}' is not a non-negative integer" >&2; exit 2 ;;
   esac
 done
+# GitHub caps per_page at 100 regardless of the requested value; a knob above
+# that would make the full-page conjunct of the truncation guard below
+# unsatisfiable and silently disarm it. Clamp, don't reject — the API behaves
+# the same way.
+if [ "$MAX_IP_RUNS" -gt 100 ]; then MAX_IP_RUNS=100; fi
 if [ -n "$CAP_OVERRIDE" ]; then
   case "$CAP_OVERRIDE" in ''|*[!0-9]*)
     echo "UNKNOWN: CAP_OVERRIDE='$CAP_OVERRIDE' is not a non-negative integer" >&2; exit 2 ;;
@@ -133,11 +138,22 @@ IP_RUNS_JSON="$(gh api "repos/$REPO/actions/runs?status=in_progress&per_page=$MA
 IP_RUN_COUNT="$(printf '%s' "$IP_RUNS_JSON" | jq -r '.workflow_runs | length' 2>/dev/null)" \
   || { echo "UNKNOWN: could not parse in-progress payload" >&2; exit 2; }
 IP_TOTAL="$(printf '%s' "$IP_RUNS_JSON" | jq -r '.total_count // 0' 2>/dev/null)"
+# A non-numeric count is an API anomaly, and every consumer compares it
+# numerically — `[ "x" -gt n ]` errors to false and reads as "not truncated"
+# (or "queue empty" for QUEUED_RUNS): both fail-quiet directions. UNKNOWN.
+for v in QUEUED_RUNS IP_RUN_COUNT IP_TOTAL; do
+  case "${!v}" in ''|*[!0-9]*)
+    echo "UNKNOWN: non-numeric $v (${!v})" >&2; exit 2 ;; esac
+done
 # A truncated in-progress page undercounts delivered concurrency — and a
 # healthy pool delivering >MAX_IP_RUNS runs would read as UNDER_ASSIGNED.
-# Fail UNKNOWN, not silent.
-if [ "${IP_TOTAL:-0}" -gt "$IP_RUN_COUNT" ] 2>/dev/null; then
-  echo "UNKNOWN: in-progress runs truncated ($IP_RUN_COUNT of $IP_TOTAL > MAX_IP_RUNS=$MAX_IP_RUNS)" >&2
+# Fail UNKNOWN, not silent. But total_count is a point-in-time snapshot that
+# disagrees with the page inside the ONE response (the Oct-5 UNKNOWN verdicts
+# were exactly this: "7 of 8", run 37325222325 — no truncation, just a stale
+# count next to a complete partial page). Only a FULL page can be truncated;
+# delivered concurrency below is measured from the page itself either way.
+if [ "$IP_RUN_COUNT" -ge "$MAX_IP_RUNS" ] 2>/dev/null && [ "${IP_TOTAL:-0}" -gt "$IP_RUN_COUNT" ] 2>/dev/null; then
+  echo "UNKNOWN: in-progress runs truncated (page full at MAX_IP_RUNS=$MAX_IP_RUNS, total_count=$IP_TOTAL)" >&2
   exit 2
 fi
 

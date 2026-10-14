@@ -1,7 +1,7 @@
 ---
 title: "Spike report — DSAR streaming upload peak RSS measurement"
 date: 2026-05-12
-plan: knowledge-base/project/plans/2026-05-12-feat-dsar-art15-export-endpoint-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-dsar-art15-export-endpoint-plan.md
 phase: 0
 script: apps/web-platform/scripts/spike/dsar-streaming-upload.ts
 status: complete (with prd validation caveat — see §Outstanding)

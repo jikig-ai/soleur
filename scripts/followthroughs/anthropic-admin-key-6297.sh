@@ -130,8 +130,12 @@ if (( ROWS == 0 )); then
   # Stack shows nothing, the producer is alive and the SHIPPING path is broken
   # — a real fault the Sentry cron monitor cannot see (its check-in succeeded,
   # so it stays GREEN in exactly this mode).
-  if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
-    echo "  Sentry cross-check skipped: SENTRY_ACTIONS_RO_TOKEN not set."
+  # Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+  # curl config directive on the stdin channel below). Never echoes the value. The cross-check is
+  # advisory and the verdict below it is exit 2 either way, so an unusable token skips the call.
+  _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+  if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then
+    echo "  Sentry cross-check skipped: SENTRY_ACTIONS_RO_TOKEN not set or unusable."
   else
     readonly SENTRY_HOST_PINNED="jikigai-eu.sentry.io"
     readonly SENTRY_ORG_PINNED="jikigai-eu"
@@ -146,12 +150,13 @@ if (( ROWS == 0 )); then
     # --fail is load-bearing: without it curl exits 0 on 4xx and jq's
     # `(.data[0]["count()"] // 0)` maps an {"detail":"Invalid token"} body to
     # "0" — so an auth failure would be reported as a substantive zero events.
+    # The bearer rides curl's stdin config channel, never its argument list.
     SC=$(curl --disable --noproxy '*' -sS --fail --max-time 25 -G \
-      -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
       --data-urlencode 'field=count()' \
       --data-urlencode 'query=op:anthropic-admin-key-missing' \
       --data-urlencode 'statsPeriod=48h' \
-      "https://${SENTRY_HOST}/api/0/organizations/${SENTRY_ORG}/events/" 2>/dev/null \
+      --config - "https://${SENTRY_HOST}/api/0/organizations/${SENTRY_ORG}/events/" 2>/dev/null \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") \
       | jq -r '(.data[0]["count()"] // 0) | tostring' 2>/dev/null || echo "")
     if [[ -z "${SC:-}" ]]; then
       echo "  Sentry cross-check inconclusive (query failed)."

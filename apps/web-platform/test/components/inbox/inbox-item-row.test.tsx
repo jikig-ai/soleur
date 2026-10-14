@@ -63,6 +63,22 @@ describe("InboxItemRow", () => {
     expect(screen.getByRole("button", { name: "Mark done" })).toBeTruthy();
   });
 
+  it("keydown on a focused inner control does not navigate (Space bubbles up)", () => {
+    render(<InboxItemRow item={row()} />);
+    // Space on the row itself navigates.
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: /chief legal officer finished/i }),
+      { key: " " },
+    );
+    expect(mockPush).toHaveBeenCalledWith("/dashboard/chat/conv-1");
+    mockPush.mockClear();
+    // Space on an inner action button must NOT bubble-navigate the row.
+    fireEvent.keyDown(screen.getByRole("button", { name: "Archive item" }), {
+      key: " ",
+    });
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
   it("Mark done posts the acted transition and reports the change", async () => {
     const onChanged = vi.fn();
     render(

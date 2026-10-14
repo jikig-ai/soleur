@@ -1050,6 +1050,13 @@ git_data_rung2_token_sets() {
   esac
 }
 
+# _git_data_rung2_bearer_ok <token> — the token-shape allowlist for the stdin config channel.
+# Prefixed (a sourced library shares its caller's namespace). The allowlist is the RFC 6750
+# b64token alphabet [A-Za-z0-9._~+/=-] — the canonical credential class (scripts/lib/bearer-curl.sh,
+# ADR-280), not a vendor's issued format: GitHub's `ghs_` installation tokens now run ~390-520
+# chars over that alphabet, and ghp_… / github_pat_… sit inside it as well.
+_git_data_rung2_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 # _git_data_rung2_fetch <path-suffix>
 #   The ONLY thing the test seam replaces. Prints the body, then the HTTP status on the last
 #   line — body + status only, which is why no caller parses headers.
@@ -1083,13 +1090,23 @@ _git_data_rung2_fetch() {
 
   local _tok="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
   local _attempt=0 _rc _resp _code _err
-  # A BASH ARRAY, never `${_tok:+-H "…"}`: that expansion word-splits WITHOUT quote removal,
-  # so the header arrives as three broken words and is never sent.
+  # TOKEN-SHAPE GUARD, BEFORE ANY REQUEST. The bearer is fed to curl as a `header = "…"` config
+  # line on stdin (below), so a newline or a quote in it would inject a config directive. An
+  # unusable token makes ZERO requests and takes the existing "refused to run" exit (8), which
+  # every caller reads as could-not-measure — never as a release. The value is never echoed.
+  if [[ -n "$_tok" ]] && ! _git_data_rung2_bearer_ok "$_tok"; then
+    eval "$_restore"
+    printf 'the bearer in GH_TOKEN/GITHUB_TOKEN has an unexpected shape, so no request was made. Export a plain token (letters, digits, and _ - . ~ + / =) and re-run\n'
+    return 8
+  fi
+  # A BASH ARRAY HOLDING THE BEARER (zero or one element): "a bearer is in play" is its length,
+  # which is what the retry logic below reads. The header itself is built at the transport, on
+  # curl's STDIN, and never appears in an argument list (/proc/<pid>/cmdline, `ps`).
   local -a _auth=()
-  [[ -n "$_tok" ]] && _auth=(-H "Authorization: Bearer ${_tok}")
+  [[ -n "$_tok" ]] && _auth=("$_tok")
   # Under the seam, a stub cannot observe a header — so "a bearer was in play" is expressed
   # by SOLEUR_RUNG2_STUB_BEARER, and the retry logic below reads the same array either way.
-  [[ -n "$_seam" && -n "${SOLEUR_RUNG2_STUB_BEARER:-}" ]] && _auth=(-H "Authorization: Bearer stub")
+  [[ -n "$_seam" && -n "${SOLEUR_RUNG2_STUB_BEARER:-}" ]] && _auth=("stub")
   local _anon_retried=0
 
   while :; do
@@ -1119,11 +1136,16 @@ _git_data_rung2_fetch() {
       # --disable: the gate also runs on a workstation, where a ~/.curlrc could otherwise add
       # flags this function did not choose. --noproxy '*': the same reasoning for the
       # environment's proxy variables.
+      #
+      # THE BEARER RIDES CURL'S STDIN CONFIG CHANNEL (`--config -`), fed by a process
+      # substitution whose `printf` is the shell builtin, so it is in no process's argument
+      # list. With no bearer in play the substitution emits nothing and the read is anonymous.
       _resp="$(curl --disable --noproxy '*' -sS --max-time 20 -w $'\n%{http_code}' \
         -H 'Accept: application/vnd.github+json' \
         -H 'X-GitHub-Api-Version: 2022-11-28' \
-        "${_auth[@]}" \
-        "${GIT_DATA_RUNG2_API_BASE}/${_suffix}" 2>"$_err")"; _rc=$?
+        --config - \
+        "${GIT_DATA_RUNG2_API_BASE}/${_suffix}" 2>"$_err" \
+        < <(if [[ ${#_auth[@]} -gt 0 ]]; then printf 'header = "Authorization: Bearer %s"\n' "${_auth[0]}"; fi))"; _rc=$?
       rm -f "$_err"
     fi
 
@@ -1410,20 +1432,21 @@ _git_data_rung2_hash_at_sha() {
   # -- ""` is fatal. `<sha>:<dir>` roots the archive at the directory; `<sha>:` covers the root.
   if [[ -z "$_rel_dir" || "$_rel_dir" == "." ]]; then _treeish="${_sha}:"; else _treeish="${_sha}:${_rel_dir}"; fi
   local _tmp
-  # lint-trap-ownership: ok — the library must not install an EXIT trap over its caller's
-  # (ADR-129 rule (c)), and the closest precedent (scripts/lib/git-data-boot-signal-poll.sh)
-  # records that an explicit variable-rooted `rm -rf` was CONSIDERED AND REJECTED: it is an
-  # operand the P1b relative-operand guard cannot prove safe, so it trades a bounded leak for
-  # an unprovable destructive operation. The residual is one directory per gate call.
+  # Owning trap at the allocation site (ADR-129): the extracted tree is consumed
+  # entirely inside this function, so a RETURN trap reaps it on every return path —
+  # including each RUN_HASH_UNCOMPUTABLE early return below — and under the sole
+  # caller's `$( )` (measured: a RETURN trap set in-function fires in the
+  # substitution subshell). The handler SELF-DISARMS first (`trap - RETURN`): a
+  # RETURN trap is not scoped to the function that set it, so a live copy would
+  # re-fire on every later function return in this shell, re-running
+  # `rm -rf "$_tmp"` under a possibly-reassigned name. The `/*/rung2-archive.*`
+  # case is the provably-absolute operand the P1b guard requires before any
+  # `rm -rf`, anchored to the basename this line just allocated so a later
+  # reassignment of `_tmp` cannot redirect the delete; a non-matching result
+  # skips the delete (bounded leak, never an unprovable rm).
   _tmp="$(mktemp -d -t rung2-archive.XXXXXXXX)" || {
     printf 'RUN_HASH_UNCOMPUTABLE|could not create a scratch directory to extract the archived tree. Nothing was measured — check free space and TMPDIR, then re-run.\n'; return 1; }
-  # Declare the owner the tmp reaper can check (#7004): pid= is the session
-  # harness owner when soleur_scratch_session_begin ran, else this process —
-  # the dir deliberately outlives the call (the bounded-leak trade documented
-  # above), so the marker is what lets Reaper 3 reclaim it once the owner dies.
-  printf 'pid=%s\nschema=1\nns=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}" \
-    "$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')" \
-    > "$_tmp/.soleur-owned" 2>/dev/null || true
+  trap 'trap - RETURN; case "${_tmp:-}" in /*/rung2-archive.*) rm -rf "$_tmp" ;; esac' RETURN
   # `core.attributesfile=/dev/null` DISABLES THE GLOBAL/SYSTEM ATTRIBUTES FILE, AND NOTHING
   # MORE — the earlier comment here claimed it stopped a future `export-ignore`/`export-subst`
   # entry from making archived bytes differ from the worktree bytes, and that is false.

@@ -570,6 +570,50 @@ r2check() {
   fi
 }
 
+# ── (#10017) RUNG-2 ARCHIVE RESIDUE ─────────────────────────────────────────────
+#
+# `_git_data_rung2_hash_at_sha` extracts `git archive` into
+# `mktemp -d -t rung2-archive.XXXXXXXX`, consumed entirely inside the function
+# and reaped by a self-disarming RETURN trap. The measured base is a PRIVATE
+# TMPDIR — a `rung2-archive.*` entry surviving either arm is the leak. The calls
+# run under `$( )` because that is the production call shape (step D above), and
+# a RETURN trap that did not fire in the substitution subshell would leak on
+# every single gate run — the exact shape the incident measured at scale.
+_r2res_base="$(mktemp -d -p "$TMP")"
+_r2res_report="$(
+  export TMPDIR="$_r2res_base"
+  o1="$(_git_data_rung2_hash_at_sha "$R2" "" ci.yml "$_R2_C1")"; r1=$?
+  o2="$(_git_data_rung2_hash_at_sha "$R2" "absent-dir" ci.yml "$_R2_C1")"; r2=$?
+  # Disarm visibility: a DIRECT call (no nested substitution) leaves the trap's
+  # armed state inspectable by `trap -p RETURN` in this shell — the `$( )` calls
+  # above run in subshells whose trap tables are invisible here, so this arm is
+  # what actually discriminates a missing `trap - RETURN` self-disarm.
+  _git_data_rung2_hash_at_sha "$R2" "" ci.yml "$_R2_C1" >/dev/null 2>&1
+  printf 'rc1=%s tok1=%s rc2=%s tok2=%s traps=[%s]\n' \
+    "$r1" "${o1%%|*}" "$r2" "${o2%%|*}" "$(trap -p RETURN)"
+)"
+_r2res_n="$(find "$_r2res_base" -mindepth 1 -maxdepth 1 -name 'rung2-archive.*' | wc -l | tr -d ' ')"
+if [[ "$_r2res_report" == *"rc1=0 tok1=OK"* ]]; then
+  pass "rung2 residue: extract+hash at c1 returns OK (success arm)"
+else
+  fail "rung2 residue: success arm" "$_r2res_report"
+fi
+if [[ "$_r2res_report" == *"rc2=1 tok2=RUN_HASH_UNCOMPUTABLE"* ]]; then
+  pass "rung2 residue: absent-dir extract failure returns RUN_HASH_UNCOMPUTABLE (error arm)"
+else
+  fail "rung2 residue: error arm" "$_r2res_report"
+fi
+if [[ "$_r2res_n" == "0" ]]; then
+  pass "rung2 residue: zero rung2-archive.* entries in the private TMPDIR after success+error calls"
+else
+  fail "rung2 residue: rung2-archive.* entries survived" "$_r2res_n" "$_r2res_report"
+fi
+if [[ "$_r2res_report" == *"traps=[]"* ]]; then
+  pass "rung2 residue: RETURN trap self-disarmed (trap -p RETURN empty after the calls)"
+else
+  fail "rung2 residue: RETURN trap still armed after return" "$_r2res_report"
+fi
+
 # A URL that SATISFIES the R8 Actions-run shape, so every arm below tests the refusal it
 # names rather than tripping on the URL check first. Hoisted to one place: it is a
 # precondition of nine fixtures, not a property of any of them.
@@ -2790,12 +2834,14 @@ fi
 _n1_call="$(awk '/_resp="\$\(curl /,/GIT_DATA_RUNG2_API_BASE/' "$GATE" | sed 's/^[[:space:]]*#.*$//')"
 _n1_fail=""
 [[ -n "$_n1_call" ]] || _n1_fail+="EXTRACTION-EMPTY "
-for _need in '--disable' "--noproxy '*'" '--max-time' "${GIT_DATA_RUNG2_API_BASE_EXPECT:-GIT_DATA_RUNG2_API_BASE}"; do
+for _need in '--disable' "--noproxy '*'" '--max-time' '--config -' "${GIT_DATA_RUNG2_API_BASE_EXPECT:-GIT_DATA_RUNG2_API_BASE}"; do
   grep -qF -- "$_need" <<<"$_n1_call" || _n1_fail+="missing:${_need} "
 done
 # The forbid set covers SYNONYMS, not just the spelling that was on my mind: `-k` is
 # `--insecure`, and `--proxy`/`--proxy-insecure` re-open what `--noproxy '*'` closed.
-for _forbid in '--insecure' ' -k ' '--proxy' '-D -' '-v '; do
+# `Authorization` is forbidden on the ARGV lines: the bearer rides curl's stdin config channel
+# (`--config -`), so a header spelled into the argument list is the leak this arm now guards.
+for _forbid in '--insecure' ' -k ' '--proxy' '-D -' '-v ' 'Authorization' '"${_auth['; do
   grep -qF -- "$_forbid" <<<"$_n1_call" && _n1_fail+="present:${_forbid} "
 done
 if [[ -z "$_n1_fail" ]]; then
@@ -2837,6 +2883,53 @@ if [[ "$_n2" != *"ghp_FAKE_TOKEN_FOR_XTRACE_ARM"* ]]; then
   pass "N2: a caller running set -x does not leak the bearer through the gate's trace"
 else
   fail "N2: the bearer appeared in the xtrace of a set -x caller" "n/a" "<redacted: the arm's own needle was found>"
+fi
+
+# N3 — THE BEARER RIDES CURL'S STDIN, NEVER ITS ARGV (#7797). Under the seam the real fetch never
+# runs, and N1 only reads the source, so this drives the REAL transport against a PATH-shimmed
+# `curl` that records what it was handed: its argument list and its stdin. Synthesized token.
+_n3_dir="$TMP/n3"; mkdir -p "$_n3_dir/bin"
+cat > "$_n3_dir/bin/curl" <<'N3EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$N3_DIR/argv"
+cfg=""; prev=""
+for a in "$@"; do [[ "$prev" == "--config" ]] && cfg="$a"; prev="$a"; done
+if [[ "$cfg" == "-" ]]; then cat > "$N3_DIR/stdin"; else : > "$N3_DIR/stdin"; fi
+printf 'x\n' >> "$N3_DIR/calls"
+printf '{"ok":true}\n200'
+N3EOF
+chmod +x "$_n3_dir/bin/curl"
+_n3_run() {  # <token-or-empty> -> rc on stdout line 1 is not needed; files are inspected
+  : > "$_n3_dir/calls"; : > "$_n3_dir/argv"; : > "$_n3_dir/stdin"
+  # The suite exports the fetch seam for every other arm; the REAL transport is the subject here.
+  env -u SOLEUR_RUNG2_RUN_FETCH -u SOLEUR_TEST_MODE -u SOLEUR_RUNG2_STUB_BEARER \
+    N3_DIR="$_n3_dir" PATH="$_n3_dir/bin:$PATH" GH_TOKEN="$1" GITHUB_TOKEN="" \
+    bash -c "source '$GATE'; _git_data_rung2_fetch runs/1" 2>&1
+}
+_n3_tok="ghp_N3SynthTokenNotReal0123456789"
+_n3_out="$(_n3_run "$_n3_tok")"; _n3_rc=$?
+if [[ "$_n3_rc" -eq 0 ]] \
+   && [[ "$(sed -n '1p' "$_n3_dir/argv")" == "--disable" ]] \
+   && grep -qxF -- '--config' "$_n3_dir/argv" \
+   && ! grep -qF -- "$_n3_tok" "$_n3_dir/argv" \
+   && ! grep -qiF -- 'Authorization' "$_n3_dir/argv" \
+   && [[ "$(cat "$_n3_dir/stdin")" == "header = \"Authorization: Bearer ${_n3_tok}\"" ]]; then
+  pass "N3: the bearer reaches curl on stdin (--config -), is absent from argv, and --disable is the first argument"
+else
+  fail "N3: bearer channel wrong — argv=[$(tr '\n' ' ' < "$_n3_dir/argv" | sed "s/${_n3_tok}/<TOKEN>/g")] stdin_shape=[$(sed "s/${_n3_tok}/<TOKEN>/g" "$_n3_dir/stdin")]" "$_n3_rc" "$_n3_out"
+fi
+_n3_out="$(_n3_run "")"; _n3_rc=$?
+if [[ "$_n3_rc" -eq 0 && ! -s "$_n3_dir/stdin" ]] && ! grep -qiF -- 'Authorization' "$_n3_dir/argv"; then
+  pass "N3b: with no bearer in play the read is anonymous — empty stdin config, no Authorization anywhere"
+else
+  fail "N3b: an anonymous read carried a credential or failed" "$_n3_rc" "$_n3_out"
+fi
+_n3_bad=$'N3BADFP\nurl = "https://evil.example/"'
+_n3_out="$(_n3_run "$_n3_bad")"; _n3_rc=$?
+if [[ "$_n3_rc" -eq 8 && ! -s "$_n3_dir/calls" && "$_n3_out" != *"N3BADFP"* ]]; then
+  pass "N3c: a token whose shape could inject a curl config line makes ZERO requests, exits 8, and is never echoed"
+else
+  fail "N3c: an unusable-shape token was sent or echoed (calls=$(grep -c '' "$_n3_dir/calls"))" "$_n3_rc" "<redacted>"
 fi
 
 # W1 — NO WORKFLOW AND NO DOPPLER CONFIG MAY CARRY THE SEAM. The announcement above is the
@@ -2919,10 +3012,10 @@ fi
 _w2c="$TMP/w2-control"; mkdir -p "$_w2c" || _a_setup_fail "could not create the W2-control dir"
 cat > "$_w2c/seeded.sh" <<'SH'
 #!/usr/bin/env bash
-probe1() { if ! printf '%s' "$1" | grep -q 'needle'; then return 1; fi; }
-probe2() { if ! printf '%s' "$1" | grep -E -q 'needle'; then return 1; fi; }
-probe3() { if ! printf '%s' "$1" |& grep -q 'needle'; then return 1; fi; }
-probe4() { if ! printf '%s' "$1" | grep -m1 'needle'; then return 1; fi; }
+probe1() { if ! printf '%s' "$1" | grep -q 'needle'; then return 1; fi; }  # sigpipe-demo: intentional (W2 seeded positive control)
+probe2() { if ! printf '%s' "$1" | grep -E -q 'needle'; then return 1; fi; }  # sigpipe-demo: intentional (W2 seeded positive control)
+probe3() { if ! printf '%s' "$1" |& grep -q 'needle'; then return 1; fi; }  # sigpipe-demo: intentional (W2 seeded positive control)
+probe4() { if ! printf '%s' "$1" | grep -m1 'needle'; then return 1; fi; }  # sigpipe-demo: intentional (W2 seeded positive control)
 SH
 cat > "$_w2c/sanctioned.sh" <<'SH'
 #!/usr/bin/env bash
@@ -3185,7 +3278,16 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #                 the file/herestring/||-idiom forms
 #   ----
 #     4
-_FLOOR=256
+# RAISED 256 -> 259 (#7797 stdin-bearer conversion), ITEMISED:
+#     1  N3       the REAL transport (PATH-shimmed curl): bearer on stdin, absent from argv, --disable first
+#     1  N3b      no bearer in play: anonymous read, empty stdin config
+#     1  N3c      an injection-shaped token makes zero requests, exits 8, is never echoed
+# RAISED 259 -> 263 (#10017 rung2-archive RETURN-trap residue), ITEMISED:
+#     1  RES-ok   extract+hash at c1 returns OK under the `$( )` call shape
+#     1  RES-err  absent-dir extract failure returns RUN_HASH_UNCOMPUTABLE
+#     1  RES-zero  zero rung2-archive.* entries in the private TMPDIR after both calls
+#     1  RES-disarm  RETURN trap self-disarms (trap -p RETURN empty after the calls)
+_FLOOR=263
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

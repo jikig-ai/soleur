@@ -2,7 +2,7 @@
 
 - **Status:** adopting — flips to `accepted` when the GA phase (Phase 3) lands in prod. The `replicas = 1` invariant ADR-027 codified remains operationally in force until then; this ADR is the governance gate ADR-027 required for raising it.
 - **Date:** 2026-06-30
-- **Issue:** #5274 (the explicit re-evaluation trigger); epic plan `knowledge-base/project/plans/2026-06-29-feat-multi-host-workspaces-layer-plan.md` (PR #5710). Related: #5240, #5273, #5275, #5338, #5546, #5547, #5723.
+- **Issue:** #5274 (the explicit re-evaluation trigger); epic plan `knowledge-base/project/plans/archive/20261013-032858-2026-06-29-feat-multi-host-workspaces-layer-plan.md` (PR #5710). Related: #5240, #5273, #5275, #5338, #5546, #5547, #5723.
 - **Supersedes:** **ADR-027** (`ADR-027-process-local-state-for-runners.md` — `superseded-by: ADR-068`). ADR-027 self-mandates supersession for any multi-replica diff; this ADR is that diff and carries the Bucket-A migration.
 - **Re-opens:** **ADR-059** (`ADR-059-stream-since-disconnect-replay-buffer.md`) — it rejected Redis because "no multi-instance requirement exists." This ADR creates that requirement; the replay buffer migrates to Redis in Phase 4a.
 - **Lineage:** AP-013 "Process-local state for runner sessions" → ADR-027 (the governing tier principle this ADR supersedes); ADR-059 (in-process replay buffer); ADR-033 (credential-heavy real-stack execution — the pure-TS Inngest cron substrate for lease reclaim); ADR-038 (team workspaces / workspace-as-grain); ADR-044 (workspace-as-source-of-truth owner-gate, `is_workspace_member`); ADR-030 (self-hosted Inngest Redis — the AOF + `--requirepass` precedent the **distinct** session-Redis reuses). Migration precedents: `029_plan_tier_and_concurrency_slots.sql` / `093_*` (`acquire_conversation_slot` fenced-upsert shape), #5338 (`user_session_state.current_workspace_id` lazy rehydrate).
@@ -228,7 +228,8 @@ fixes for every per-step plan:
    (IaC option (c)), which proxies to the lease-holder over the private net.
 
 6. **Cross-tenant isolation is per-`workspace_id`, enforced at every new boundary.**
-   The bwrap `denyRead` guard (`agent-runner-sandbox-config.ts:106`, per-sibling since ADR-075)
+   The bwrap `denyRead` guard (`agent-runner-sandbox-config.ts`, constant parent deny since the
+   2026-10-07 ADR-075 addendum / #5862)
    does **not** cover remote git-data — the bare-repo fetch runs in the Node process,
    outside the sandbox. Network access to git-data MUST carry a per-`workspace_id`
    credential / mTLS (reuse the `resolve_workspace_installation_id` membership-RPC
@@ -522,6 +523,8 @@ fixes for every per-step plan:
    GA-blocking path. The residual shared-git-data-host SPOF at the Phase-3 GA line is
    accepted with honest reconnect; #5723 (Garage) closes it post-GA (OQ1).
 
+   > **Ledger at birth (2026-10-12).** The session-Redis PR must add an `encryption-posture-ledger.json` row for the new store in the same change. A ledger row for it existed before the store did and was removed as describing nothing; see `encryption-posture-audit-2026-07-23.md` §`redis.session_store — designed, not provisioned`. For an IaC volume `lint-encryption-posture.py` already refuses an unledgered `hcloud_volume`; for the Redis client it refuses a Redis dependency with no `redis.*` ledger row.
+
 **Staged delivery (each phase is its own `/soleur:plan` + spec + PR):** Phase 0
 (this ADR + C4) → Phase 1 (host-local correctness, no new infra, still `replicas=1`)
 → Phase 2 (split git-data/worktrees + lease + fencing) → **Phase 3 (2nd host +
@@ -603,7 +606,7 @@ Phase 4b (continuous checkpoint).
 > serves purely locally on its own `/workspaces` volume, so any live request round-robined
 > to web-2 hits an empty workspace — a single-user (workspace-gone) incident. A truly
 > zero-downtime web-1 reboot therefore requires (b)+(c), i.e. it IS the GA line (§8), not
-> a prerequisite. Plan: `knowledge-base/project/plans/2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md`.
+> a prerequisite. Plan: `knowledge-base/project/plans/archive/20261013-041741-2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md`.
 
 > **Amendment (2026-07-03, #5966 — deep-readiness endpoint / Sharp Edge C1).** The blue-green
 > amendment above (b) fixes the LB monitor as reachability-only on `/health` — correct, but it
@@ -664,7 +667,7 @@ Phase 4b (continuous checkpoint).
 > - **Necessary-but-not-sufficient.** `/internal/readyz` is an ADDITIONAL pre-pool gate layered on
 >   top of the unchanged hard invariant (c) (relay active AND git-data cut over). Shipping it does
 >   NOT relax (c) or by itself unlock pooling. Plan:
->   `knowledge-base/project/plans/2026-07-03-feat-deep-readiness-endpoint-workspaces-mount-plan.md`.
+>   `knowledge-base/project/plans/archive/20261013-041741-2026-07-03-feat-deep-readiness-endpoint-workspaces-mount-plan.md`.
 
 > **Amendment (2026-07-05, #6055 — web-2 must boot post-#6055 cloud-init before pooling).** A new
 > pre-pool gate, layered on the §(c) hard invariant above (necessary, not sufficient — does NOT
@@ -804,7 +807,7 @@ Phase 4b (continuous checkpoint).
 > **Status:** UNCHANGED — this ADR stays `adopting`; the warm-standby + gate are inert-additive
 > (no LB weight, no reboot, no ingress change on merge), and the flip to `accepted` still gates on
 > the Phase-3 GA soak (AC11). Plan:
-> `knowledge-base/project/plans/2026-07-04-feat-autonomous-multihost-ga-warm-standby-and-gate-plan.md`.
+> `knowledge-base/project/plans/archive/20261013-041741-2026-07-04-feat-autonomous-multihost-ga-warm-standby-and-gate-plan.md`.
 
 > **Amendment (2026-07-05, #5887 — autonomous no-SSH web-2 host bootstrap via scoped
 > `-replace`).** The first live warm-standby dispatch (2026-07-05) attached web-2's private-net
@@ -856,7 +859,7 @@ Phase 4b (continuous checkpoint).
 > the recreate/boot pins an `@sha256` digest (not `:latest`) — see the `## C4 impact` refinement
 > below. **Status:** UNCHANGED — this stays additive/inert on merge (the recreate is a post-merge
 > menu-ack dispatch, never runs pre-merge). Plan:
-> `knowledge-base/project/plans/2026-07-05-feat-web-2-recreate-bootstrap-plan.md`.
+> `knowledge-base/project/plans/archive/20261013-041741-2026-07-05-feat-web-2-recreate-bootstrap-plan.md`.
 
 > **Amendment (2026-07-05, #6051/#6040 — off-host verify auto-retries the fresh-boot degraded
 > window; warm_standby de-duplicated onto the shared script).** The first live `web-2-recreate`
@@ -904,7 +907,7 @@ Phase 4b (continuous checkpoint).
 > **C4 impact:** none — internal CI verify control-flow only; no new actor/system/container/edge
 > (verified against `model.c4`/`views.c4`/`spec.c4`). **Status:** UNCHANGED — additive/inert on merge
 > (both dispatches are operator-gated, never run pre-merge). `Ref #6051`, `Ref #6040`. Plan:
-> `knowledge-base/project/plans/2026-07-05-fix-web2-recreate-fanout-verify-retry-and-warm-standby-dedup-plan.md`.
+> `knowledge-base/project/plans/archive/20261013-041741-2026-07-05-fix-web2-recreate-fanout-verify-retry-and-warm-standby-dedup-plan.md`.
 >
 > **Amendment (2026-07-05, #6060 item (c) — cross-pipeline web-1-swap serialization).** Closes
 > FINDING 1 from #6051's review: the frequent push-release `deploy` job
@@ -963,7 +966,7 @@ Phase 4b (continuous checkpoint).
 > concurrency metadata, additive/inert on merge; **amend, not a reversal** (no prior decision
 > changes). Items (a) truly-zero-downtime swap / web-2-only path and (b) private-net web-2
 > post-accept health probe remain OPEN on #6060 (GA-cutover / owner-side-relay scoped). `Ref #6060`.
-> Plan: `knowledge-base/project/plans/2026-07-05-fix-cross-pipeline-web-1-swap-serialization-plan.md`.
+> Plan: `knowledge-base/project/plans/archive/20261013-041741-2026-07-05-fix-cross-pipeline-web-1-swap-serialization-plan.md`.
 
 > **Amendment (2026-07-15, #6425 — the tunnel carries ONE connector, and this ADR assumed otherwise).**
 > This ADR's Phase-3 verification design rests on a premise about the shared Cloudflare Tunnel
@@ -1016,7 +1019,7 @@ Phase 4b (continuous checkpoint).
 > (`tunnel.tf:4`), which does not traverse the tunnel being constrained.
 >
 > **Status:** AMEND, not a reversal — Option B stands, and no prior decision changes. `Ref #6425`.
-> Plan: `knowledge-base/project/plans/2026-07-15-fix-web2-tunnel-depool-host-id-plan.md`.
+> Plan: `knowledge-base/project/plans/archive/20261013-041741-2026-07-15-fix-web2-tunnel-depool-host-id-plan.md`.
 
 > **Amendment (operator decision, 2026-07-17, #6538/#6463 — the warm standby is retired).**
 > `web-2` (`fsn1`, `10.0.1.11`) — the ADR-068 Phase 3 warm standby, provisioned in the
@@ -1058,7 +1061,7 @@ Phase 4b (continuous checkpoint).
 >
 > **Status:** AMEND, not a reversal — Option A / Approach A stand; the GA end-state
 > (§8) is unchanged. `Ref #6538`, `Ref #6463`. Plan:
-> `knowledge-base/project/plans/2026-07-16-chore-retire-web-2-fsn1-orphan-plan.md`.
+> `knowledge-base/project/plans/archive/20261013-041741-2026-07-16-chore-retire-web-2-fsn1-orphan-plan.md`.
 
 > **Amendment (2026-07-20, #6718 — factual status: both web-2 dispatch jobs are now unrunnable,
 > and the warm-standby apply cannot birth a host).** No decision is reversed here; this records
@@ -1438,3 +1441,7 @@ instead** — which is what `MemoryMax=`/`MemorySwapMax=0` on the gc unit do.
 
 Adding a second host that serves `/api/inngest` step calls reopens ADR-243 §2 (the process-local
 single-flight guard that stops duplicate paid Claude sessions assumes one step-executing host).
+
+## Addendum — 2026-10-02 (#9358)
+
+`apps/web-platform/infra/lb-weight-gate-with-marker.sh` is the Phase-6 sourcing entry for the workspaces cutover marker; `lb-weight-gate.sh` stays env-only. See the ADR-263 addendum of the same date.

@@ -1,0 +1,7 @@
+import tempfile
+
+
+def build():
+    with tempfile.TemporaryDirectory() as scratch:
+        extra = tempfile.mkdtemp(dir=scratch)
+        return extra

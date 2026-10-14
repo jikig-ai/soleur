@@ -26,6 +26,8 @@ There is **no point-in-time recovery**: a bad state write is not undoable from t
 
 **One class has none of those three limbs: resources whose value exists only in state.** `apps/web-platform/infra/` declares 27 `tls_private_key` / `random_password` / `random_id` resources (LUKS passphrases, SSH and TLS keys, signing and webhook secrets). Config-revert cannot recover them — the config is a *generator*, not a record of the value — and re-import requires supplying the value the lost state was the record of. For these, the surviving copy is the **Doppler mirror** (`doppler_secret.workspaces_luks_key`, `git_data_luks_key`, `git_transport_ssh_private_key`, and siblings): re-adoption is `terraform import <address> "<value read from Doppler>"`. Anything with no mirror must be regenerated and redistributed to every consumer that trusts it. Establish this before assuming the three limbs cover a state loss on that root.
 
+> **Caveat added 2026-10-06 (#9372), in part:** the re-import route this paragraph names was measured not to hold for `random_password` resources whose configuration differs from the import defaults: importing the live value of `random_password.workspaces_luks_web` plans `special = true -> false`, a forced replacement (with the lock-pinned random provider, in a local-state sandbox). Until an import plus a state-attribute fix is measured to yield a clean plan (tracked on #9572), treat re-import as unverified for this class and do not state it as a procedure.
+
 The durability gap is open and tracked at #7992.
 
 ## Amendment — 2026-09-09 (#7836)

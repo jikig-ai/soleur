@@ -1,0 +1,10 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ensureScratchSession } from "../test/lib/scratch-session";
+
+ensureScratchSession();
+
+export function scratch(): string {
+  return mkdtempSync(join(tmpdir(), "demo-"));
+}

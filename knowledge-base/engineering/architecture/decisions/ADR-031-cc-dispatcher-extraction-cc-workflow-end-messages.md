@@ -2,7 +2,7 @@
 title: "ADR-031 — cc-dispatcher extraction: cc-workflow-end-messages"
 status: accepted
 date: 2026-05-15
-plan: knowledge-base/project/plans/2026-05-15-refactor-extract-cc-workflow-end-messages-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-refactor-extract-cc-workflow-end-messages-plan.md
 issue: 3243
 supersedes: none
 related: [ADR-022-sdk-as-router]
@@ -59,7 +59,7 @@ Prior extractions establish the cadence: PR #3608 (`mirrorWithDebounce` → `obs
 - Status comment (`apps/web-platform/scripts/3243-status-comment.md`) — recommends this extraction by name at line 31.
 - ADR-022 — SDK-as-router context for the cc-soleur-go cluster.
 - Sibling-extraction precedents: PR #3608 (`mirrorWithDebounce`), PR #3670 (cluster drain), PR #3802 (deferred-scope-out drain).
-- Plan: `knowledge-base/project/plans/2026-05-15-refactor-extract-cc-workflow-end-messages-plan.md` — Research Reconciliation table verifies issue-body claims against current code; Enhancement Summary documents the type-source pivot caught at deepen time.
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-refactor-extract-cc-workflow-end-messages-plan.md` — Research Reconciliation table verifies issue-body claims against current code; Enhancement Summary documents the type-source pivot caught at deepen time.
 - Learning: `knowledge-base/project/learnings/2026-05-15-drain-plan-must-revalidate-issue-state-against-codebase.md` — applied here (file is 1927 LoC, not 937 as the issue body claimed).
 
 ## Amendment — 2026-05-15 (#3827)

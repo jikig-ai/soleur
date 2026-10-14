@@ -133,8 +133,16 @@ function invocationLines(region: string): string[] {
 // "at least one invocation actually RUNS the battery" floor while running nothing: measured 11
 // pass / 0 fail. That is the defect this file memorializes, reintroduced by the PR that added the
 // flag. Any future query-mode flag belongs here the moment it is added. `--print-affected-set`
-// (#8322) prints the selection and runs nothing — same shape.
-const QUERY_FLAGS = ["--capacity", "--print-suite-globs", "--enumerate", "--print-affected-set"] as const;
+// (#8322) prints each registration's CLASS (it ignores the diff, so it is NOT a selection) and
+// runs nothing; `--print-selection` (#9307) prints what the current diff selects and runs
+// nothing — both are the same shape.
+const QUERY_FLAGS = [
+  "--capacity",
+  "--print-suite-globs",
+  "--enumerate",
+  "--print-affected-set",
+  "--print-selection",
+] as const;
 function isQueryInvocation(line: string): boolean {
   return QUERY_FLAGS.some((f) => line.includes(f));
 }

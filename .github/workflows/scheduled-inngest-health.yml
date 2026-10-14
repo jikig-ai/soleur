@@ -64,6 +64,7 @@ jobs:
       # workflow bash and under scripts/*.test.sh coverage.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - id: probe
+        name: Probe inngest health
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
@@ -98,15 +99,39 @@ jobs:
           # shellcheck source=/dev/null
           source "$GITHUB_WORKSPACE/scripts/inngest-liveness-classify.sh"
           if [[ -z "$fail_mode" ]]; then
-            SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+            # The webhook signature and the Cloudflare Access pair reach curl on its stdin config (ADR-280),
+            # and the HMAC key reaches a python3 child in its environment: none of the four is on any
+            # argument list. The library is sourced HERE, inside the arm that uses it, so the "secrets
+            # unset" path above (one condition over the three variables) never needs it; a missing
+            # library is a hard, visible failure (never an argv fallback).
+            # shellcheck source=/dev/null
+            source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+            # `|| SIG=""` sends an empty key or a missing python3 to the pre-guard below, not to a mute abort.
+            # shellcheck disable=SC2034  # read by NAME inside bc_ok_var and bc_curl
+            SIG="$(printf '' | bc_hmac_sha256_hex WEBHOOK_SECRET)" || SIG=""
+            # PRE-GUARD (ADR-280 decision 3). A refused credential makes NO request and is the watchdog's own
+            # unusable-secret fault: it is recorded as `secret_unset` (the liveness-probe issue class: NO
+            # restart, but the Sentry heartbeat is `error` and pages, unlike probe_unavailable; never seeds
+            # the [ci/inngest-down] age gate), never as the 000/403 `probe_unavailable`
+            # a transport failure produces and never as `inngest_down`, which would dispatch a restart of a
+            # server nobody measured to be down. The marker is value-free and stays visible on the run log.
+            for _cv in SIG CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+              if ! bc_ok_var "$_cv"; then
+                bc_refuse scheduled-inngest-health "$_cv" || true
+                record_failure "secret_unset" "WEBHOOK_DEPLOY_SECRET / CF_ACCESS_* unusable (empty, malformed, or the request signature could not be computed) — cannot probe the inngest health hook; no request was made."
+              fi
+            done
+          fi
+          if [[ -z "$fail_mode" ]]; then
             last_mode=""; last_detail=""; healthy="no"
             for attempt in 1 2 3; do
               rm -f /tmp/health-body
-              CODE=$(curl -s --max-time 30 -o /tmp/health-body -w '%{http_code}' \
+              CODE=$(bc_curl scheduled-inngest-health \
+                'X-Signature-256:sha256=:SIG' \
+                'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
+                'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
+                -s --max-time 30 -o /tmp/health-body -w '%{http_code}' \
                 -X GET \
-                -H "X-Signature-256: sha256=$SIG" \
-                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
                 "https://deploy.soleur.ai/hooks/inngest-liveness" || echo "000")
               BODY=$(cat /tmp/health-body 2>/dev/null || echo "")
               MODE=$(classify_liveness_mode "$CODE" "$BODY")
@@ -281,7 +306,7 @@ jobs:
             if [[ "$curl_rc" != "0" ]]; then
               fail_mode="pool_probe_unavailable"
               fail_detail="curl failed (rc=${curl_rc}) against Supabase Management API — pool probe degraded."
-            elif printf '%s' "$body" | grep -qF 'EMAXCONNSESSION'; then
+            elif printf '%s' "$body" | grep -cF 'EMAXCONNSESSION' >/dev/null; then
               # The pooler rejected a client connection — already at the cap. This
               # EMAXCONNSESSION 5xx-body check is the reliable cliff detector and is
               # independent of the count metric below.
@@ -468,7 +493,8 @@ jobs:
           #   pool-probe    → [ci/inngest-pool-probe]        the pool probe itself is degraded (401/scope/non-JSON) — NOT pool-hot
           #   liveness-probe→ [ci/inngest-probe-unavailable] the LIVENESS probe path is unavailable (404/000/403 — deploy race /
           #                   CF-Access / webhook.service degrade) OR the watchdog's own secrets are unset (secret_unset).
-          #                   SOFT — NO restart, and a DISTINCT title from [ci/inngest-down] so it never pollutes the
+          #                   NO restart (SOFT for probe_unavailable; secret_unset still pages via the Sentry heartbeat),
+          #                   and a DISTINCT title from [ci/inngest-down] so it never pollutes the
           #                   Defect-3 age gate (#6374). secret_unset routes here (not `down`): the watchdog could not
           #                   probe, so a restart it never dispatched must not be claimed, and this must not seed the age gate.
           #   down          → [ci/inngest-down]              the liveness restart body (down / unhealthy)
@@ -507,7 +533,7 @@ jobs:
               printf '### Not a deliberate quiesce — and NOT restarted\n\n`inngest-server.service` on the web host is stopped and **disabled**, but there is no valid `op=quiesce-web` marker (`/var/lib/inngest/quiesced-by-op`), or the unit started after the marker was written. Nothing attributes this stop, so the web scheduler may be down with no live replacement. No restart is dispatched: a restart would START a disabled unit and bury who disabled it.\n\n'
               printf '### Remediation\n\nDispatch the cutover workflow with **op=rollback** — it retires any stale capture, removes the marker, enables and starts the web unit. If a cutover is genuinely in progress, re-run **op=quiesce-web** afterwards to take a fresh capture and marker. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::inngest-disabled-unattributed: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still disabled with no quiesce marker at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. NO restart dispatched; remedy op=rollback. Run: ${RUN_URL}"
             else
@@ -519,9 +545,11 @@ jobs:
             # before /hooks/inngest-liveness lands, or a CF-Access / webhook.service
             # degrade). SOFT — NO restart dispatched, and a title DISTINCT from
             # [ci/inngest-down] so the Defect-3 age gate is never polluted. p2: the probe
-            # is dark, not a confirmed inngest-down. The Sentry heartbeat stays `ok` for
-            # this mode (see the check-in step) so a transient deploy-race window does not
-            # false-page — this issue is the surviving soft signal.
+            # is dark, not a confirmed inngest-down. For `probe_unavailable` the Sentry heartbeat
+            # stays `ok` (see the check-in step) so a transient deploy-race window does not
+            # false-page — this issue is the surviving soft signal. `secret_unset` shares this
+            # issue class but NOT that treatment: no request is made, the heartbeat is `error`
+            # and the Sentry monitor pages (the check-in `ok` arm names probe_unavailable only).
             ISSUE_TITLE="[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"
             gh label create "ci/inngest-probe-unavailable" --repo "$GH_REPO" \
               --description "External watchdog: the inngest LIVENESS probe path is unavailable (deploy race / CF-Access — NOT a confirmed down)" --color "5319E7" 2>/dev/null || true
@@ -531,10 +559,16 @@ jobs:
               printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
               printf -- '- **Detected at:** %s\n' "$NOW"
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
-              printf '### The probe path is unavailable — this is NOT a confirmed inngest-down\n\nThe `/hooks/inngest-liveness` GET returned a non-200 with no well-formed body (404/000/403). Most common cause: the **deploy-race window** right after the #6374 merge — the repointed workflow is live but the on-host hook has not landed yet (it ships async via the infra-config push). It also fires on a Cloudflare Access or `webhook.service` degrade. NO restart is dispatched (a restart cannot fix a broken probe path), and this does NOT open a `[ci/inngest-down]` issue.\n\n'
-              printf '### Remediation\n\n1. If this is right after the #6374 merge, WAIT one infra-config push cycle — `curl https://deploy.soleur.ai/hooks/inngest-liveness` (HMAC + CF-Access) should return the liveness JSON once the hook lands; the watchdog then auto-closes this issue.\n2. Otherwise check CF-Access / `webhook.service` health per `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
+              # shellcheck disable=SC2016  # literal backticks in the markdown body are intended
+              if [[ "$FAIL_MODE" == "secret_unset" ]]; then
+                printf '### The watchdog could not probe — no request was made\n\nA stored webhook or Cloudflare Access credential (`WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_CLIENT_ID` or `CF_ACCESS_CLIENT_SECRET`) was unset or was refused by the shape guard, so the probe made NO request: nothing was measured about the Inngest server or the hook. Unlike `probe_unavailable`, this mode checks in `error` on the Sentry monitor and pages. NO restart is dispatched and this does NOT open a `[ci/inngest-down]` issue.\n\n'
+                printf '### Remediation\n\n1. Open the probe step log (`Probe inngest health`): the `SOLEUR_CREDENTIAL_REFUSED` line and the adjacent `... unusable` line name the script and the variable (never its value); an unset secret has no refusal line, the Detail above says so.\n2. Re-store that secret (a value with interior whitespace, quotes or a control byte is refused), then re-run the workflow; the watchdog auto-closes this issue once the probe reads healthy.\n'
+              else
+                printf '### The probe path is unavailable — this is NOT a confirmed inngest-down\n\nThe `/hooks/inngest-liveness` GET returned a non-200 with no well-formed body (404/000/403). Most common cause: the **deploy-race window** right after the #6374 merge — the repointed workflow is live but the on-host hook has not landed yet (it ships async via the infra-config push). It also fires on a Cloudflare Access or `webhook.service` degrade. NO restart is dispatched (a restart cannot fix a broken probe path), and this does NOT open a `[ci/inngest-down]` issue.\n\n'
+                printf '### Remediation\n\n1. If this is right after the #6374 merge, WAIT one infra-config push cycle — `curl https://deploy.soleur.ai/hooks/inngest-liveness` (HMAC + CF-Access) should return the liveness JSON once the hook lands; the watchdog then auto-closes this issue.\n2. Otherwise check CF-Access / `webhook.service` health per `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
+              fi
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::inngest-probe-unavailable: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Liveness probe still unavailable at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
             else
@@ -563,7 +597,7 @@ jobs:
               printf '### Persistence-escalation ceiling\n\nIf this degraded state persists for >= ~45 min (3 `*/15` cycles), the watchdog reclassifies it to `inngest_down` (dispatch restart + Sentry page) — a `/health`-ok-but-functions-permanently-wedged residual is not soft-masked forever. First occurrence = soft; sustained = escalates.\n\n'
               printf '### Remediation\n\nUsually self-resolves on the next `*/15` tick (auto-closes on recovery). If it persists, query Better Stack for `SOLEUR_INNGEST_LIVENESS_VERDICT mode=degraded` (tag `inngest-inventory`) and check inngest-server function registration per `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::inngest-functions-degraded: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Functions query still degraded at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. /health=200 (inngest serving); NO restart. Run: ${RUN_URL}"
             else
@@ -583,7 +617,7 @@ jobs:
               printf '### The probe is degraded — the pool is NOT necessarily hot\n\nThe Management-API pool read failed (401/403/scope, non-JSON body, or curl error). This is a dark-probe alert: the watchdog cannot see the session pool, so pool pressure could degrade the durable backend invisibly (the #5558 class). Do NOT restart inngest-server (the pool reading is unknown, not exhausted).\n\n'
               printf '### Remediation\n\n1. Read the printed response body in the **Detail** above / run log — a Supabase Management-API 401 is often a validation/scope signal, not pure auth.\n2. Verify `SUPABASE_ACCESS_TOKEN` is set as a GH Actions secret (TF `github_actions_secret.supabase_access_token`) AND in Doppler `prd`, and that the PAT owner has read access to project `pigsfuxruiopinouvjwy`.\n3. Re-run the read-only probe per the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::inngest-pool-probe: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Probe still unavailable at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
             else
@@ -603,7 +637,7 @@ jobs:
               printf '### Do NOT restart inngest-server\n\nA restart re-opens all of inngest'\''s pooler connections at once, churning MORE session connections and DEEPENING `EMAXCONNSESSION`. This issue is intentionally excluded from the auto-restart gate.\n\n'
               printf '### Remediation (stale-session / client-cap)\n\n1. Read **Detail** above: `pool_pressure` is inngest-attributable client connections vs inngest'\''s worst-case total footprint (INNGEST_CLIENT_CAP = P × per-pool cap 5 ≤ 20); `pool_exhausted` is an actual `EMAXCONNSESSION` from the pooler. The per-backend breakdown is in the run log (`Inngest client backends: …`).\n2. Confirm the cap holds: inngest-server runs with `--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1` (#6258, ADR-105). --postgres-max-open-conns is PER-POOL (not total), so worst-case total is P×5; if inngest-attributable connections approach the cap, inngest is opening more pools than expected — check for a stuck/looping function holding pooled connections.\n3. If sessions are stale (idle/idle-in-transaction climbing), terminate them via the read-only Management API path (`pg_terminate_backend`) — see the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH first).\n4. The leading indicator tracks inngest'\''s worst-case total footprint (P × per-pool cap), NOT the pooler `default_pool_size` (which is Supabase-infra-dominated) — so this alert is decoupled from the #5562 `default_pool_size` 30→15 revert (that revert is SUPERSEDED; default_pool_size stays 30 — ADR-105). Refs #6258 #5558.\n'
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::inngest-pool: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
             if [[ -n "$EXISTING" ]]; then
               gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still hot at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Do NOT restart. Run: ${RUN_URL}"
             else
@@ -630,7 +664,7 @@ jobs:
                 printf '### Auto-recovery\n\nThis run did not dispatch `restart-inngest-server.yml` (restart-dispatch status unavailable; see the run log). If inngest stays down after the restart, the durable backend likely lost its Redis (`inngest-redis.service` missing → crash-loop): the deploy must re-stage the redis assets, OR roll the ExecStart back to SQLite-only. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` + the #5542 incident.\n'
               fi
             } > "$BODY_FILE"
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::inngest-down: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
             if [[ -n "$EXISTING" ]]; then
               # #6374 Defect 3: the comment text must be TRUTHFUL about whether a restart
               # was actually dispatched (the age gate may have suppressed it). When
@@ -779,7 +813,7 @@ jobs:
             printf '### Remediation\n\n'
             printf 'Re-deploy inngest with Redis ready (the deploy re-stages the redis assets → durable ExecStart), or restart `inngest-redis.service`. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` and the #5450 durability epic. This is the continuous between-deploy detector; the deploy-time `ci-deploy.sh` signal fires only at deploy time.\n'
           } > "$BODY_FILE"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::inngest-degraded-durability: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
             # Keep severity accurate across sqlite_only<->degraded transitions so the
             # issue never rots at a stale severity (#5553 review P2-1): add the current
@@ -898,8 +932,24 @@ jobs:
           # that saturates the limit is visible rather than silently truncated.
           PROBE_LIMIT=500
           rc=0
+          # The reader's stderr is no longer discarded (#9757): exit 2 is the reader REFUSING a credential
+          # (marker on stderr), and graded as __UNREADABLE__ with the cause thrown away it read as a silent
+          # host. It is captured and surfaced as ONE ::warning::, best effort: the verdict below is
+          # unchanged by it, and a missing classifier library only drops the warning.
+          BS_ERR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/bs-read-err.$$"
           ROWS="$(bash "$GITHUB_WORKSPACE/scripts/betterstack-query.sh" \
-            --since "$PROBE_WINDOW" --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit "$PROBE_LIMIT" 2>/dev/null)" || rc=$?
+            --since "$PROBE_WINDOW" --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit "$PROBE_LIMIT" 2>"$BS_ERR")" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            # shellcheck source=/dev/null
+            source "$GITHUB_WORKSPACE/scripts/lib/betterstack-read-classify.sh" 2>/dev/null || true
+            # The reader's marker is surfaced whether or not the classifier library loaded, so the run-log grep finds it.
+            grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true
+            if declare -F bs_read_classify >/dev/null 2>&1 && declare -F bs_read_scrub_err1 >/dev/null 2>&1; then
+              printf '%s' "$ROWS" > "$BS_ERR.rows"
+              echo "::warning::#9757 dedicated-host arm: the Better Stack read failed (rc=${rc}, class=$(bs_read_classify "$rc" "$BS_ERR.rows"), first stderr line: $(bs_read_scrub_err1 "$BS_ERR"))"
+            fi
+          fi
+          rm -f "$BS_ERR" "$BS_ERR.rows"
           LINES="$(printf '%s\n' "$ROWS" | grep -c . || true)"
 
           if [[ "$rc" -ne 0 ]]; then
@@ -999,7 +1049,7 @@ jobs:
           # An ::error:: annotation makes the run itself legible (observability layer 6) — the plan
           # named this destination, and without it a not-serving run is green with an empty summary.
           echo "::error::#7674 dedicated inngest host verdict=${VERDICT} — ${DETAIL}"
-          EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[0].number // empty' 2>/dev/null) || { echo "::error::inngest-dedicated-host: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           # Built with printf rather than a multi-line assignment: continuation lines at column 0
           # inside a `run: |` block scalar terminate the block and break the workflow YAML.
           BODY="$(printf '%s\n' \
@@ -1049,7 +1099,7 @@ jobs:
           gh label create "ci/inngest-dedicated-host" --repo "$GH_REPO" --color BFD4F2 2>/dev/null || true
           gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
           TITLE="[ci/inngest-dedicated-host] Dedicated-host probe consumer is broken"
-          EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --limit 100 --json number,title 2>/dev/null | jq -r --arg t "$TITLE" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null || true)"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --limit 100 --json number,title 2>/dev/null | jq -r --arg t "$TITLE" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null) || { echo "::error::inngest-dedicated-host: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           BODY="$(printf '%s\n' \
             "verdict: \`arm-crashed\`" "" \
             "cause: \`${CAUSE}\`" "" \
@@ -1144,7 +1194,7 @@ jobs:
             --description "Web inngest quiesced by op=quiesce-web while the dedicated host is not serving" 2>/dev/null || true
           gh label create "action-required" --repo "$GH_REPO" --color D93F0B \
             --description "Needs an operator decision or action" 2>/dev/null || true
-          EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --json number --jq '.[0].number // empty' 2>/dev/null) || { echo "::error::inngest-no-live-scheduler: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           BODY="$(printf '%s\n' \
             "${DETAIL}" "" \
             "Run: ${RUN_URL}" "" \
@@ -1240,6 +1290,10 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/tunnel-connector-census.sh
+          # The Cloudflare API token reaches curl on its stdin config (ADR-280). A missing library is a hard
+          # failure, never an argv fallback; a refused token reads as census_unavailable below, with the
+          # marker visible on the run log.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
 
           CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN --project soleur --config prd_terraform --plain 2>/dev/null || true)
           CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --project soleur --config prd_terraform --plain 2>/dev/null || true)
@@ -1256,7 +1310,7 @@ jobs:
             exit 0
           fi
 
-          TUNNEL_ID=$(curl -s --max-time 20 -H "Authorization: Bearer $CF_API_TOKEN" \
+          TUNNEL_ID=$(bc_curl scheduled-inngest-health 'Authorization:Bearer :CF_API_TOKEN' -- -s --max-time 20 \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfd_tunnel?name=soleur-web-platform" \
             | jq -r '.result[0].id // empty' 2>/dev/null || true)
           if [[ -z "$TUNNEL_ID" ]]; then
@@ -1267,7 +1321,7 @@ jobs:
             exit 0
           fi
 
-          RESP=$(curl -s --max-time 20 -w '\n%{http_code}' -H "Authorization: Bearer $CF_API_TOKEN" \
+          RESP=$(bc_curl scheduled-inngest-health 'Authorization:Bearer :CF_API_TOKEN' -- -s --max-time 20 -w '\n%{http_code}' \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections" || printf '\n000')
           CODE=$(printf '%s' "$RESP" | tail -1)
           BODY=$(printf '%s' "$RESP" | sed '$d')
@@ -1351,7 +1405,7 @@ jobs:
           # issues carrying it. The sibling ci/inngest-* labels this workflow files are NOT
           # harvested — so without this label the alert would be detected and then discarded
           # into a log nobody reads until the next 16h investigation.
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::tunnel-connector-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
               --body "Still \`${VERDICT}\` (connectors=${COUNT}) at ${NOW}. Run: ${RUN_URL}"

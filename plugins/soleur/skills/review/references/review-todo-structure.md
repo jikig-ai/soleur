@@ -153,3 +153,13 @@ For reviews with 15+ findings, create issues sequentially to avoid GitHub API ra
 ## Sharp Edges
 
 - `gh issue create --milestone <value>` resolves against milestone **title**, not number. `--milestone 6` fails with `could not add to milestone '6': '6' not found` even when milestone 6 exists. Retrieve the title via `gh api /repos/<owner>/<repo>/milestones --jq '.[] | {number, title}'` and pass the title. The `number` field is REST-API-only. **Why:** filing #2272 retried with `--milestone "Post-MVP / Later"` to succeed.
+
+## Cost-of-Filing Gate Rationale (relocated from review/SKILL.md §5)
+
+**Why 100/4 and not 30/2 (raised 2026-07-20).** The old boundary was set when
+filing looked cheap. Measured over the 7 days to 2026-07-20: 269 issues filed
+against 132 merged PRs (2.04 filed per PR) and 125 closed, growing the queue
++144/week — up from +7.2/day over the prior 23 days. A 30-line boundary sends
+most real findings to the queue, and the queue does not drain. Raising to
+≤100 lines AND ≤4 files moves the crossover to where the arithmetic actually
+sits.

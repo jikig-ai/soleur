@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# REAL-DEVICE evidence for workspaces-cutover.sh :: prepare_staging_target (#6588 / epic #6604).
+# REAL-DEVICE evidence for workspaces-cutover.sh :: prepare_staging_target (#6588 / epic #6604), and
+# for Guard 5's physical witness (Session G5, #6604 step 7; it replaced Session W, the retired
+# CONFIRM_WIPE zero + read-back).
 #
 # Every other workspaces-luks suite stubs the block layer. This one does NOT: it builds a real
 # loopback device, runs a real `cryptsetup luksFormat` + `luksOpen`, and drives the REAL
@@ -1001,7 +1003,7 @@ if grep -qE 'detected dubious ownership' "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/n
     ok "L6k-CAP: this host CAN produce H1, and real git's refusal still matches _FSCK_SETUP_FATAL_RE — the synthesized arm (i) is faithful to git's actual wording"
   else
     no "L6k-CAP: real git refused but _FSCK_SETUP_FATAL_RE did NOT match it — the regex has drifted from git's wording, so every real H1 now demotes to unclassified and arm (i) is testing a string git no longer emits"
-    note "real refusal: $(head -n1 "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/null | grep -m1 fatal:)"
+    note "real refusal: $(grep -m1 fatal: < <(head -n1 "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/null))"
   fi
 else
   note "L6k-CAP: this host CANNOT produce H1 — arm (ii) (safe.directory is load-bearing) is UNPROVEN in CI, and the regex-vs-reality check above is vacuous here"
@@ -1454,6 +1456,178 @@ else
     ok "L7c: the EXIT trap left no throwaway unit loaded (timer + service + running probe all not-found)"
   else
     no "L7c: a throwaway unit outlived the EXIT trap (timer=$l7_t service=$l7_s run=$l7_r)"
+  fi
+fi
+
+# ===========================================================================
+# Session G5 — the real Guard-5 witness (#6604 step 7; was Session W)
+# ===========================================================================
+# Session W proved the retired CONFIRM_WIPE zero + read-back on real devices (LW1..LW8; the procedure as
+# run is in git history at 59abf6a76c). What outlives it is Guard 5: once the recorded plaintext is gone,
+# no ROLLBACK, cleanup() rollback or dead-man fire may unmount the mapper, the ONLY copy. The stubbed
+# workspaces-luks-rollback-refusal.test.sh proves the rc plumbing and every refusal through a seam; only a
+# real kernel and the real blkid can prove the physical witness itself (the REAL _plaintext_gone, with
+# /mnt/data on a real dm-crypt mapper and the recorded PLAINTEXT_DEV a real loop):
+#   LW-P2  the recorded plaintext is an intact ext4 → NOT gone (a rollback stays possible).
+#   LW-P3  the recorded plaintext's first MiB zeroed by `dd` on the loop DEVICE (real blkid -p finds no
+#          signature) and no marker → gone, why=plaintext_dev_gone status=none.
+#   LW-P4  a record naming the mapper's own dm-N node (a real ext4) → gone, status=is_mapper.
+# A missing binary is a FAILURE, never a skip.
+for b in dd od; do
+  command -v "$b" >/dev/null 2>&1 || unavailable "session G5: required binary '$b' not found on PATH"
+done
+
+WP_SIZE=$((64 * 1024 * 1024))
+new_session g5
+WL_MAPPER_NAME="$MAPPER_NAME"; WL_STAGING="$STAGING_DIR"
+mkfs.ext4 -q "$MAPPER" >/dev/null 2>&1 || unavailable "session G5: mkfs.ext4 on the mapper failed"
+WL_MOUNT="$(mktemp -d "$TMPROOT/g5mount.XXXXXX")"
+mount "$MAPPER" "$WL_MOUNT" || unavailable "session G5: could not mount the mapper"
+CLEAN_MOUNTS+=("$WL_MOUNT")
+WL_STATE="$(mktemp -d "$TMPROOT/g5state.XXXXXX")"
+
+# new_plain <tag> — a fresh plaintext loop with a real, UNLABELLED ext4 and real data on it: the shape of
+# web-1's retained plaintext (no artifact ever labelled it — the 2026-09-30 rehearsal read label=none).
+new_plain() {
+  local tag="$1" backing m
+  backing="$TMPROOT/plain-${tag}.img"
+  truncate -s "$WP_SIZE" "$backing" || unavailable "truncate $backing failed"
+  WP_DEV="$(losetup --find --show "$backing" 2>/dev/null)" || unavailable "losetup of $backing failed"
+  [ -b "$WP_DEV" ] || unavailable "$WP_DEV is not a block device"
+  CLEAN_LOOPS+=("$WP_DEV")
+  mkfs.ext4 -q "$WP_DEV" >/dev/null 2>&1 || unavailable "mkfs.ext4 on $WP_DEV failed"
+  m="$(mktemp -d "$TMPROOT/pmnt.XXXXXX")"
+  mount "$WP_DEV" "$m" || unavailable "could not mount $WP_DEV"
+  mkdir -p "$m/workspaces/ws1"; head -c 2097152 /dev/urandom > "$m/workspaces/ws1/blob.bin" 2>/dev/null
+  umount "$m" || unavailable "could not unmount $m"
+  udevadm settle >/dev/null 2>&1 || true
+}
+# seed_state [line] — the persisted run state: the plaintext mount source the cutover recorded
+# (PLAINTEXT_DEV=$WP_DEV, what Guard 5's physical witness probes), then the caller's line (last wins).
+seed_state() {
+  printf 'PLAINTEXT_DEV=%s\n' "$WP_DEV" > "$WL_STATE/state"
+  [ -n "${1:-}" ] && printf '%s\n' "$1" >> "$WL_STATE/state"
+  return 0
+}
+
+# run_g5_real <invocation> [env...] — the REAL Guard-5 functions in a fresh subshell (functions only:
+# the sourced-detection guard stops before the main body). Sets CASE_RC, CASE_OUT (file), MARKER_LOG.
+run_g5_real() {
+  local inv="$1"; shift
+  CASE_N=$((CASE_N + 1))
+  CASE_OUT="$TMPROOT/g5out.$CASE_N"; MARKER_LOG="$TMPROOT/g5marker.$CASE_N"
+  : > "$CASE_OUT"; : > "$MARKER_LOG"
+  env WORKSPACES_MOUNT="$WL_MOUNT" WORKSPACES_STAGING="$WL_STAGING" WORKSPACES_MAPPER_NAME="$WL_MAPPER_NAME" \
+    WORKSPACES_STATE_DIR="$WL_STATE" \
+    "$@" CUTOVER="$CUTOVER" MARKER_LOG="$MARKER_LOG" INVOCATION="$inv" \
+    bash -c '
+      source "$CUTOVER"
+      logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+      emit_drift() { echo "EMIT_DRIFT: $1"; }
+      die()        { echo "DIE: $*"; exit 1; }
+      eval "$INVOCATION"
+    ' > "$CASE_OUT" 2>&1
+  CASE_RC=$?
+}
+dev_magic() { dd if="$1" iflag=direct bs=4096 count=1 status=none 2>/dev/null | od -An -tx1 -j1080 -N2 | tr -d ' \n'; }
+
+new_plain g5
+note "session G5: mapper=$WL_MAPPER_NAME plain=$WP_DEV size=$WP_SIZE"
+LW_GONE='_plaintext_gone; echo "gone_rc=$? why=$PLAINTEXT_GONE_WHY status=$PLAINTEXT_RECORD_STATUS"'
+
+# --- LW-P2: the REAL _plaintext_gone (real blkid, real mapper) reads an intact recorded plaintext ------
+seed_state
+run_g5_real "$LW_GONE"
+if grep -qE '^gone_rc=1 why= status=ok$' "$CASE_OUT"; then
+  ok "LW-P2 real devices: mapper mounted + the recorded plaintext loop intact (real blkid TYPE=ext4) → NOT gone (rollback stays possible)"
+else
+  no "LW-P2 the real witness misread an intact recorded plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+
+# --- LW-P3: the recorded device's first MiB zeroed → no filesystem → gone (no marker needed) -----------
+# Re-seeded with `dd` on the loop DEVICE (never the backing file, so blkid -p reads no stale cache), and
+# only after proving the target is this suite's own loop: this process is ROOT, so `of=` must name a loop
+# whose backing file lives under $TMPROOT. The ext4 magic is read before, the dd rc and an independent
+# real `blkid -p` (rc 2 = no signature) after; each is a precondition of the row, never assumed.
+lwp3_back="$(losetup -nO BACK-FILE "$WP_DEV" 2>/dev/null | head -1)"
+lwp3_back="${lwp3_back%"${lwp3_back##*[![:space:]]}"}"
+lwp3_magic="$(dev_magic "$WP_DEV")"; lwp3_dd=x; lwp3_blkid=x
+case "$lwp3_back" in
+  "$TMPROOT"/*|"$(readlink -f "$TMPROOT")"/*)
+    if [ "$lwp3_magic" = 53ef ]; then
+      lwp3_dd=0; dd if=/dev/zero of="$WP_DEV" bs=1M count=1 oflag=direct conv=fsync status=none 2>/dev/null || lwp3_dd=$?
+      lwp3_blkid=0; blkid -p "$WP_DEV" >/dev/null 2>&1 || lwp3_blkid=$?
+    fi ;;
+esac
+seed_state
+run_g5_real "$LW_GONE"
+if [ "$lwp3_magic" = 53ef ] && [ "$lwp3_dd" = 0 ] && [ "$lwp3_blkid" = 2 ] \
+  && grep -qE '^gone_rc=0 why=plaintext_dev_gone status=none$' "$CASE_OUT"; then
+  ok "LW-P3 real devices: the recorded plaintext's first MiB zeroed (magic 53ef before, dd rc 0, real blkid -p rc 2 after), no marker → gone, why=plaintext_dev_gone"
+else
+  no "LW-P3 the real witness did not read a zeroed recorded plaintext as gone (back=[${lwp3_back}] under=[$TMPROOT] magic=$lwp3_magic dd=$lwp3_dd blkid=$lwp3_blkid): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+# --- LW-P4: a record naming the mapper's REAL dm-N node (it reads ext4!) is the live copy → gone ---------
+LWP4_DM="$(readlink -f "$MAPPER")"
+seed_state "PLAINTEXT_DEV=$LWP4_DM"
+run_g5_real "$LW_GONE"
+if [ "$LWP4_DM" != "$MAPPER" ] && grep -qE '^gone_rc=0 why=plaintext_dev_gone status=is_mapper$' "$CASE_OUT"; then
+  ok "LW-P4 real devices: a record naming the mapper's own node ($LWP4_DM, a real ext4) is refused by the mapper-identity clause, not trusted as an intact plaintext"
+else
+  no "LW-P4 a record naming the live mapper node ($LWP4_DM) was read as an intact plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+
+# --- LW8 (#9356, CPO): HEADER-RESTORE DRILL — a destroyed LUKS header is recoverable from the escrowed backup ---
+# The whole at-rest posture rests on one claim: the escrowed header backup (luksHeaderBackup, shipped to R2 by
+# the provisioner) plus the passphrase brings the data back if the on-disk header is lost. Nothing proved it
+# against a real device. Format a loop, put a SENTINEL filesystem on the mapper, back the header up, ZERO the
+# whole header region, prove the volume is then genuinely unopenable (the anti-vacuity half: a drill whose
+# "destruction" did nothing proves nothing), restore, reopen with the same passphrase, read the sentinel back.
+LW8_SENTINEL="lw8-sentinel-$$-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+new_session lw8
+LW8_BK="$TMPROOT/lw8-header.bak"
+LW8_MNT="$(mktemp -d "$TMPROOT/lw8mnt.XXXXXX")"; CLEAN_MOUNTS+=("$LW8_MNT")
+lw8_ok=1
+mkfs.ext4 -q "$MAPPER" >/dev/null 2>&1 || { lw8_ok=0; no "LW8 mkfs.ext4 on the mapper failed — the drill has no filesystem to carry the sentinel"; }
+if [ "$lw8_ok" -eq 1 ]; then
+  mount "$MAPPER" "$LW8_MNT" && printf '%s\n' "$LW8_SENTINEL" > "$LW8_MNT/sentinel.txt" && sync && umount "$LW8_MNT" \
+    || { lw8_ok=0; no "LW8 could not write the sentinel through the mapper"; }
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  cryptsetup close "$MAPPER_NAME" >/dev/null 2>&1 || { lw8_ok=0; no "LW8 could not close the mapper before the header is destroyed"; }
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  LW8_UUID_BEFORE="$(cryptsetup luksUUID "$LOOP_DEV" 2>/dev/null)"
+  rm -f "$LW8_BK"
+  cryptsetup luksHeaderBackup --batch-mode "$LOOP_DEV" --header-backup-file "$LW8_BK" >/dev/null 2>&1 || lw8_ok=0
+  LW8_HDR_BYTES="$(stat -c %s "$LW8_BK" 2>/dev/null || echo 0)"
+  # The backup file is exactly the header area (binary headers + keyslots area), so its size is the span to destroy.
+  if [ "$lw8_ok" -eq 0 ] || [ "${LW8_HDR_BYTES:-0}" -lt 4096 ] || [ -z "$LW8_UUID_BEFORE" ]; then
+    lw8_ok=0; no "LW8 luksHeaderBackup produced no usable backup (bytes=${LW8_HDR_BYTES:-0} uuid='${LW8_UUID_BEFORE:-}')"
+  fi
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  dd if=/dev/zero of="$LOOP_DEV" bs=4096 count=$((LW8_HDR_BYTES / 4096)) oflag=direct conv=fsync status=none 2>/dev/null
+  lw8_open_rc=0; cryptsetup luksOpen --key-file "$KEYFILE" "$LOOP_DEV" "$MAPPER_NAME" >/dev/null 2>&1 || lw8_open_rc=$?
+  lw8_uuid_rc=0; cryptsetup luksUUID "$LOOP_DEV" >/dev/null 2>&1 || lw8_uuid_rc=$?
+  if [ "$lw8_open_rc" -ne 0 ] && [ "$lw8_uuid_rc" -ne 0 ] && [ ! -b "$MAPPER" ]; then
+    ok "LW8a with the whole header region zeroed the volume is genuinely unopenable (luksOpen rc=$lw8_open_rc, luksUUID rc=$lw8_uuid_rc) — the drill destroys something real"
+  else
+    lw8_ok=0; no "LW8a the zeroed header did not make the volume unopenable (open rc=$lw8_open_rc uuid rc=$lw8_uuid_rc) — the drill would be vacuous"
+  fi
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  lw8_rs_rc=0; cryptsetup luksHeaderRestore --batch-mode "$LOOP_DEV" --header-backup-file "$LW8_BK" >/dev/null 2>&1 || lw8_rs_rc=$?
+  lw8_ro_rc=0; cryptsetup luksOpen --key-file "$KEYFILE" "$LOOP_DEV" "$MAPPER_NAME" >/dev/null 2>&1 || lw8_ro_rc=$?
+  lw8_read=""
+  if [ "$lw8_rs_rc" -eq 0 ] && [ "$lw8_ro_rc" -eq 0 ] && [ -b "$MAPPER" ] && mount "$MAPPER" "$LW8_MNT" 2>/dev/null; then
+    lw8_read="$(cat "$LW8_MNT/sentinel.txt" 2>/dev/null)"
+    umount "$LW8_MNT" 2>/dev/null || true
+  fi
+  if [ "$lw8_read" = "$LW8_SENTINEL" ] && [ "$(cryptsetup luksUUID "$LOOP_DEV" 2>/dev/null)" = "$LW8_UUID_BEFORE" ]; then
+    ok "LW8b luksHeaderRestore from the escrowed backup + the same passphrase reopens the volume and the sentinel reads back; the header UUID is the one backed up"
+  else
+    no "LW8b the header restore did not bring the data back (restore rc=$lw8_rs_rc open rc=$lw8_ro_rc sentinel='${lw8_read:-}')"
   fi
 fi
 

@@ -363,7 +363,7 @@ g2_population() { # <root> -> rel paths of scripts that CALL the ack
          # A call is the name as a command word on a non-comment line; a mention
          # in prose or inside an error string is not one.
          grep -vE '^[[:space:]]*#' "$root/$rel" \
-           | grep -qE '(^|[;&|({][[:space:]]*|[[:space:]]\|\|[[:space:]]*|^[[:space:]]+)soleur_op_ack_or_die([[:space:]]|$)' \
+           | grep -cE >/dev/null '(^|[;&|({][[:space:]]*|[[:space:]]\|\|[[:space:]]*|^[[:space:]]+)soleur_op_ack_or_die([[:space:]]|$)' \
            && printf '%s\n' "$rel"
        done
 }
@@ -379,6 +379,7 @@ make_stubs() { # <dir> <logging:1|0>
   assert_fixture_dir "$d"
   cat > "$d/doppler" <<'STUB'
 #!/usr/bin/env bash
+case " $* " in *" secrets set "*) [ -t 0 ] || if command -v timeout >/dev/null 2>&1; then timeout 2 cat >/dev/null; else cat >/dev/null; fi ;; esac
 [[ "${STUB_LOGGING:-1}" == 1 ]] && printf 'doppler %s\n' "$(printf '%q ' "$@")" >> "$STUB_LOG"
 if [[ "${1:-}" == secrets && "${2:-}" == get ]]; then
   case "${3:-}" in
@@ -512,7 +513,7 @@ g2_run() {
     STUB_LOG="$G2_LOG" STUB_LOGGING="$logging" STUB_ABSENT_FLAG=probe-new-flag
     STUB_MEMBER_ORG=70a70ab0-0000-4000-8000-000000000001
     SOLEUR_BOOTSTRAP_LEDGER="$scratch/ledger.jsonl"
-    SENTRY_AUTH_TOKEN=stub-token SENTRY_ORG=stub-org SENTRY_PROJECT=stub-project
+    SENTRY_AUTH_TOKEN=stub-token SENTRY_ORG=jikigai-eu SENTRY_PROJECT=web-platform
     EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=1
   )
   local line
@@ -552,7 +553,7 @@ g2_check() {
   done < <(comm -13 <(printf '%s\n' "$pop") <(printf '%s\n' "$tabled"))
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
-    g2_arm_rows "$arms" | awk -F'\t' -v s="$rel" '$1==s && $2=="write"' | grep -q . \
+    g2_arm_rows "$arms" | awk -F'\t' -v s="$rel" '$1==s && $2=="write"' | grep -c >/dev/null . \
       || { echo "g2: ${rel} has no write row"; v=1; }
   done <<<"$tabled"
 
@@ -615,7 +616,7 @@ g2_check() {
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
     [[ -n "$only" && "$rel" != "$only" ]] && continue
-    g2_arm_rows "$arms" | awk -F'\t' -v s="$rel" '$1==s' | cut -f4 | grep -q '^external:' && continue
+    g2_arm_rows "$arms" | awk -F'\t' -v s="$rel" '$1==s' | cut -f4 | grep -c >/dev/null '^external:' && continue
     while IFS= read -r p; do
       prefix="$(sed -E 's/^[^"]*soleur_op_ack_or_die[[:space:]]+"//; s/[$"].*$//' <<<"$p")"
       if [[ "${#prefix}" -lt 8 ]]; then echo "g2: ${rel}: ack prompt has no static prefix of 8+ chars: ${p}"; v=1; continue; fi
@@ -696,7 +697,7 @@ g2_run_cmd() { # <root-for-hostile-env-rel> <rel> <answer> <cmd> -> G2_OUT, G2_R
     STUB_LOG="$G2_LOG" STUB_LOGGING=1 STUB_ABSENT_FLAG=probe-new-flag
     STUB_MEMBER_ORG=70a70ab0-0000-4000-8000-000000000001
     SOLEUR_BOOTSTRAP_LEDGER="$scratch/ledger.jsonl"
-    SENTRY_AUTH_TOKEN=stub-token SENTRY_ORG=stub-org SENTRY_PROJECT=stub-project
+    SENTRY_AUTH_TOKEN=stub-token SENTRY_ORG=jikigai-eu SENTRY_PROJECT=web-platform
     EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=1
   )
   while IFS= read -r line; do envv+=("$line"); done < <(g2_hostile_env "$root/$rel" "$root/plugins/soleur/scripts/lib/operator-script.sh")
@@ -735,9 +736,9 @@ for skill in flag-create flag-delete flag-set-role user-set-role; do
 done
 
 fsr="$REPO_ROOT/plugins/soleur/skills/flag-set-role/SKILL.md"
-if awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -q 'own terminal' \
-   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -qE "not through Claude Code's .!. prefix|Not through Claude Code's .!." \
-   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -q 'Flagsmith dashboard'; then
+if awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -c >/dev/null 'own terminal' \
+   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -cE >/dev/null "not through Claude Code's .!. prefix|Not through Claude Code's .!." \
+   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -c >/dev/null 'Flagsmith dashboard'; then
   pass "AC15 flag-set-role: incident-rollback block (own terminal, not the ! prefix, dashboard break-glass on exit 4)"
 else
   fail "AC15 flag-set-role: the incident-rollback block is missing or incomplete"

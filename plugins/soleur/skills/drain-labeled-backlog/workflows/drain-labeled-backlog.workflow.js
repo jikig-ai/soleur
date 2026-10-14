@@ -178,10 +178,10 @@ Milestone: "${safeMilestone}"   (this is a TITLE, never a numeric id)
 
 Steps (fail fast, fail readable):
 1. Validate the milestone TITLE exists among OPEN milestones:
-   gh api "repos/:owner/:repo/milestones?state=open&per_page=100" --jq '.[].title' | grep -Fxq "${safeMilestone}"
+   gh api "repos/:owner/:repo/milestones?state=open&per_page=100" --jq '.[].title' | grep -Fxc "${safeMilestone}" >/dev/null
    If absent → milestoneValid=false, set error, return (do NOT query issues).
 2. Validate the label exists (first column of \`gh label list\`):
-   gh label list --limit 200 | awk -F'\\t' '{print $1}' | grep -Fxq "${safeLabel}"
+   gh label list --limit 200 | awk -F'\\t' '{print $1}' | grep -Fxc "${safeLabel}" >/dev/null
    If absent → labelValid=false, set error, return.
 3. Query open issues (two-stage piping — gh --json … | jq; never \`gh --jq\` with --arg):
    gh issue list --label "${safeLabel}" --state open --milestone "${safeMilestone}" --json number,title,body,labels --limit 200
@@ -346,6 +346,7 @@ if (picked.length === 0) {
 // stage 2 hands it to /soleur:one-shot (skipped under --dry-run or budget floor).
 // ---------------------------------------------------------------------------
 phase('Drain')
+let oneShotsDispatched = 0 // #9403: pipeline-tally `counts` surface
 const drainResults = await pipeline(
   picked,
   // Stage 1: scoped brief from issue bodies.
@@ -370,6 +371,7 @@ const drainResults = await pipeline(
         notes: `SKIPPED — token budget floor (${ONE_SHOT_FLOOR}) reached; not enough headroom to run a full one-shot for this cluster.`,
       }
     }
+    oneShotsDispatched++ // #9403: pipeline-tally counts — the invoking prose posts this via `incr agent_rounds`
     return agent(oneShotPrompt(brief), { label: `one-shot:${brief.area}`, phase: 'Drain', schema: ONE_SHOT_RESULT_SCHEMA })
   },
 )
@@ -407,6 +409,10 @@ const summary = {
   },
   picked: picked.map((c) => ({ area: c.area, count: c.count, issues: c.issues.map((i) => i.number) })),
   budget: { total: budget.total, spent: budget.spent(), oneShotFloor: ONE_SHOT_FLOOR, droppedClusters },
+  // #9403: pipeline-tally bridge — the invoking prose posts these via
+  // `pipeline-tally.sh incr <dim> <n>`. agent_rounds counts one-shot dispatches
+  // only (brief/cluster/report agents are mechanical spawns, not counted).
+  counts: { agent_rounds: oneShotsDispatched },
   delegated: dryRun ? 0 : results.filter((r) => r.status === 'merged' || r.status === 'pr-open' || r.status === 'failed').length,
   results,
   backlogDelta: { before, after, closed },

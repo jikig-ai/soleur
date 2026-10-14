@@ -52,5 +52,5 @@ This is the same principle as "don't commit generated files before the source is
 ## Files Affected
 
 - `plugins/soleur/skills/plan/SKILL.md` (sections swapped; "Why" paragraph added)
-- `knowledge-base/project/plans/2026-04-15-feat-ux-audit-skill-plan.md` (first artifact to exercise the corrected ordering)
-- `knowledge-base/project/specs/feat-collapsible-navs-ux-review/tasks.md` (derived from the post-review plan)
+- `knowledge-base/project/plans/archive/20261013-003106-2026-04-15-feat-ux-audit-skill-plan.md` (first artifact to exercise the corrected ordering)
+- `knowledge-base/project/specs/archive/20261013-003106-feat-collapsible-navs-ux-review/tasks.md` (derived from the post-review plan)

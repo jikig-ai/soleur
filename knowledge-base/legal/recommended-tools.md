@@ -1,7 +1,7 @@
 ---
 title: Recommended downstream legal-tooling specialists
 last_updated: 2026-05-15
-related-brainstorm: knowledge-base/project/brainstorms/2026-05-15-claude-for-legal-evaluation-brainstorm.md
+related-brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-claude-for-legal-evaluation-brainstorm.md
 related-issues: ["#3785", "#3786"]
 ---
 

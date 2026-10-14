@@ -10,12 +10,22 @@
 # Scope = the realtime / WebSocket / session-auth / DOM-server-timing class that
 # mock e2e structurally cannot reproduce (the #5391/#5421/#5436 bug class).
 # Pure logic / docs / copy / config changes do NOT match → skip (fail-open is
-# the accepted residual, mitigated by the drift canary in the test suite).
+# the accepted residual, mitigated by the drift canary in the test suite);
+# scripts/live-verify/ itself is the deliberate exception — see below.
 #
 # When adding a new realtime/WS/auth surface, ADD its pattern here — the drift
 # canary test fails if a new top-level dir matching the heuristic is absent.
+#
+# scripts/live-verify/ itself is included (PR #9576 follow-up): a harness
+# change that never executes the harness is a dark ship — running it on its
+# own release both exercises the change against prod auth/latency and, on a
+# false FAIL, attributes the block to the harness rather than to the next
+# triggered release's diff. Harness-internal failures degrade to CANT-RUN
+# (non-blocking); a FAIL on its own run still means a confirmed in-scope row
+# never rendered.
 
 ^apps/web-platform/hooks/
+^apps/web-platform/scripts/live-verify/
 ^apps/web-platform/components/chat/
 ^apps/web-platform/lib/ws-
 ^apps/web-platform/lib/realtime

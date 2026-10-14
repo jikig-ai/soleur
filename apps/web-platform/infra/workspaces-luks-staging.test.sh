@@ -301,15 +301,17 @@ died && ok "T4h ROLLBACK=1 + CLEAN_STRAY=1 refuses" \
 outF 'EMIT_DRIFT: clean_stray_mode_conflict' \
   && ok "T4h-b the reason is clean_stray_mode_conflict" \
   || no "T4h-b no clean_stray_mode_conflict drift emitted"
-# A THIRD mode is already declared (CONFIRM_WIPE) and its block lands in the Phase-5 converge
-# dispatch. A pairwise rollback-vs-clean_stray test would stop covering the invariant the moment
-# that block exists, so the guard counts set modes and this case pins the count form.
+# A THIRD mode is declared (CONFIRM_WIPE, #6604 step 7 — retired since, its block is now a tombstone
+# that refuses, and the guard still counts it). A pairwise rollback-vs-clean_stray test would not cover
+# it, so the guard counts set modes and this case pins the count form — by its own slug, not merely
+# by `died` (a die for any other reason would otherwise pass).
 run_case "$CUTOVER" \
   'assert_mode_exclusive' \
   'assert_mode_exclusive' \
   BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 CONFIRM_WIPE=1
-died && ok "T4h-c CLEAN_STRAY=1 + CONFIRM_WIPE=1 also refuses (the guard counts modes, not one pair)" \
-     || no "T4h-c a non-rollback mode pair slipped past the exclusion guard"
+died && has '^EMIT_DRIFT clean_stray_mode_conflict$' \
+     && ok "T4h-c CLEAN_STRAY=1 + CONFIRM_WIPE=1 also refuses as clean_stray_mode_conflict (the guard counts modes, not one pair)" \
+     || no "T4h-c a non-rollback mode pair slipped past the exclusion guard (or died for another reason)"
 run_case "$CUTOVER" \
   'assert_mode_exclusive; echo SOLE_MODE_OK' \
   'assert_mode_exclusive' \
@@ -882,7 +884,11 @@ script_case() {  # <script> <findmnt-source> [env assignments...]
   done
   printf '#!/usr/bin/env bash\nprintf "findmnt %%s\\n" "$*" >> "$CALLS"\nprintf "%%s\\n" "$FINDMNT_SRC"\n' > "$d/bin/findmnt"
   printf '#!/usr/bin/env bash\nprintf "doppler %%s\\n" "$*" >> "$CALLS"\nprintf "test-passphrase\\n"\n' > "$d/bin/doppler"
-  printf '#!/usr/bin/env bash\nprintf "cryptsetup %%s\\n" "$*" >> "$CALLS"\ncase "$*" in *luksFormat*) exit "${LUKSFORMAT_RC:-0}";; *luksOpen*) exit "${LUKSOPEN_RC:-0}";; esac\nexit 0\n' > "$d/bin/cryptsetup"
+  # cryptsetup: drain stdin iff argv carries `--key-file -` (either spelling) — real
+  # cryptsetup reads stdin exactly then, and a stub that exits unread races the
+  # producer into EPIPE under pipefail (#9245). The captured bytes land in
+  # $CALLS.key-seen so the suite can assert delivery on the wire, not just the ask.
+  printf '#!/usr/bin/env bash\nprintf "cryptsetup %%s\\n" "$*" >> "$CALLS"\ncase " $* " in *" --key-file - "*|*" --key-file=- "*) { [ ! -t 0 ] && cat >"$CALLS.key-seen"; } 2>/dev/null || true;; esac\ncase "$*" in *luksFormat*) exit "${LUKSFORMAT_RC:-0}";; *luksOpen*) exit "${LUKSOPEN_RC:-0}";; esac\nexit 0\n' > "$d/bin/cryptsetup"
   chmod +x "$d/bin"/*
   SCRIPT_OUT="$(
     env "$@" CALLS="$SCRIPT_CALLS" FINDMNT_SRC="$fmsrc" \
@@ -943,6 +949,14 @@ if grep -qE 'cryptsetup luksOpen' "$SCRIPT_CALLS" && ! grep -qF 'staging_mapper_
   ok "Tloc luksOpen ran and the abort is NOT attributed to the absent mapper it caused"
 else
   no "Tloc the failed open is reported one layer downstream — the operator chases the wrong failure"
+fi
+# Tlod — WIRE assert, sibling of luks-monitor's t1b (#9245): the argv grep above proves
+# luksOpen was ASKED; this proves the piped key ARRIVED. The stub captures stdin to
+# $CALLS.key-seen; a stub that exits unread leaves it absent → deterministic RED.
+if [ "$(cat "${SCRIPT_CALLS}.key-seen" 2>/dev/null)" = "test-passphrase" ]; then
+  ok "Tlod the luksOpen passphrase reached cryptsetup on the wire (key-seen == what doppler served)"
+else
+  no "Tlod the piped key never arrived — stdin undrained (captured: $(cat "${SCRIPT_CALLS}.key-seen" 2>/dev/null || echo '<absent>'))"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1477,7 +1491,11 @@ echo "workspaces-luks-staging.test.sh: $pass passed, $fail failed"
 # refusing to pass vacuously must first prove it ran. Raise this floor when adding cases; if it
 # ever exceeds the real count the failure is loud and one line to fix.
 # #9098 D1: set to the MEASURED count (not a round number with headroom), and enforced through
-# harness_floor (printf + exit 1), never through no().
-STAGING_MIN_ASSERTIONS=162
-harness_floor workspaces-luks-staging.test.sh "$STAGING_MIN_ASSERTIONS"
+# printf + exit 1, never through no() (ADR-193). The bound is the literal directly above the `if`, so
+# guard-vacuity-floor can build and mutation-test it.
+STAGING_MIN_ASSERTIONS=163
+if [ "$pass" -lt "$STAGING_MIN_ASSERTIONS" ]; then
+  printf 'FAIL - workspaces-luks-staging.test.sh: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$pass" "$STAGING_MIN_ASSERTIONS" >&2
+  exit 1
+fi
 [ "$fail" -eq 0 ]

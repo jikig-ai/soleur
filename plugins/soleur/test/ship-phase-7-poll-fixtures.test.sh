@@ -33,10 +33,29 @@
 #   14. PR set to `#4387` → refused before the poll (exit 2)
 #   15. fetch fails then a push → the hatch counts pushes, so it does not fire
 #   16. sync no-op (exit 11) → sync_noop line, not counted, never "pushed"
+#   18. merge queue (#9454): queued → polled on (kind=queued, sync_noop, never a push) → MERGED
+#   18b. queued on one tick, out of the queue with auto-merge disarmed on the next → kind=dequeued
+#       rc=13 → the fence's loud stop (`exited 13 … Stopping the poll.`), no timeout burn
+#   19. dequeue visible on NON-BEHIND ticks (E2): while queued the PR reads CLEAN / BLOCKED / UNSTABLE, so the
+#       BEHIND-tick --step read never runs; the fence's every-5th-OPEN-tick `--queue-state` read prints
+#       `[ship.phase7.dequeued]` and stops the poll within 5 ticks of the removal (each mergeStateStatus, plus BEHIND
+#       via --step, plus a removal with no marker); a persistent GraphQL failure is NOT a dequeue and the timeout
+#       line names the queue read (`Queue: …`) so a timeout always says what the queue looked like
+#   18c/18d. a transient GraphQL failure on the queue read is retried inside the script → the sync
+#       proceeds and pushes; a persistent one still stops loudly (exit 4) and never pushes
 #   17b/17c/17d. DELIVERED text (token substituted literally, spaced root) with a
 #       hostile root exported / the variable unset / via the DIRTY regen arm → the
 #       loader's literal wins; the row set is pinned; plus prose pins: the paragraph
 #       above each fence says where the root may come from
+#
+#   Q1..Q12 (#9710) merge-queue mode: a `merge_queue` rule on main + auto-merge armed + a BEHIND reading
+#       the fence itself reported = no sync, one queue_wait line, expiry after more than 5 CONSECUTIVE idle ticks (no
+#       pending REQUIRED check) falling back to today's sync. Rows: Q1/Q1e/Q1m wait (plain, errexit, three-member checks),
+#       Q1n/Q2/Q2e/Q3/Q3b/Q4 queue absent / no required checks / rules error / disarmed = today's behaviour,
+#       Q6/Q6b/Q6c/Q6d/Q6e/Q6f/Q6g/Q6h expiry (grace boundary, latch + budget, consecutive reset, pending-then-settled,
+#       errexit, advisory pending, idle-pending-idle, armed flap), Q7 DIRTY-derived BEHIND still syncs, Q8 dequeue while
+#       waiting, Q9 a queued PR is reported once and never expires, Q9b an unreadable queue read at expiry stops the poll,
+#       Q10 required failure, Q11 sync disabled. (Q5 was folded into Q4's armed-error loop.) The row set is pinned by WANTQ.
 #
 # Every run_scenario row also asserts: no git call fell through to the mock catch-all, and no
 # temp file (the per-poll snapshot) outlived the block. CLAUDE_PLUGIN_ROOT is a
@@ -104,6 +123,12 @@ assert_fixture_dir "$PLUGIN_COPY"
 # The default root carries NO regenerable-conflict resolver, so a DIRTY scenario reaches
 # the DIRTY exit exactly as before ADR-235. Scenario 4r supplies a stub resolver.
 rm -f "$PLUGIN_COPY/scripts/resolve-regenerable-conflicts.sh"
+# The head-verdict resolver (ADR-276 S3) reads GitHub itself: under this harness's `gh` mocks every request is
+# unmodelled. Every row that does not ask about it runs a resolver that cannot answer (exit 3), which is the
+# production shape of an API outage and must keep today's `required_failed` behaviour (V6 pins that). The real
+# resolver has its own suite (plugins/soleur/test/ci-head-verdict.test.sh); the V rows install a stub that answers.
+printf '#!/usr/bin/env bash\nprintf "SOLEUR_CI_HEAD_VERDICT state=error pr=%%s sha=unknown run=none reason=api-error\\n" "$2"\nexit 3\n' > "$PLUGIN_COPY/scripts/ci-head-verdict.sh"
+chmod +x "$PLUGIN_COPY/scripts/ci-head-verdict.sh"
 
 # ---------------------------------------------------------------------------
 # Extract the Phase 7 bash block. Two anchors:
@@ -194,12 +219,35 @@ else
                '11) behind_syncs=$((behind_syncs-1))' '[ship.phase7.behind_no_sync]' \
                'trap '"'"'rm -f "$SYNC_SNAP"'"'"' EXIT' 'ADR-179 identity check' \
                'resolve-regenerable-conflicts.sh" origin/main' \
-               'regen resolved — merge committed locally'; do
+               'regen resolved — merge committed locally' \
+               'pipeline-tally.sh" gate ci_cycles' 'pipeline-tally.sh" incr ci_cycles' \
+               'write-budget-marker.sh" ci_cycles' \
+               'auto-sync halted — ci_cycles budget-capped' 'session-state.md' \
+               '[ship.phase7.dequeued]' 'bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true' \
+               '--queue-state 2>&1 | head -1' \
+               'select(.type == "merge_queue")' 'QUEUE_GRACE_TICKS=5' '.autoMergeRequest != null' \
+               'real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1' \
+               '(( qwait == 1 )) || qidle=0' \
+               '[ship.phase7.queue_wait]' '[ship.phase7.queue_wait_expired]' '[ship.phase7.queued]' \
+               '[ship.phase7.ready_unarmed]' 'VERDICT_OK=1' '"$VERDICT_OK" -eq 1' 'ci-head-verdict.sh" verdict "$PR"' '"$vstate" == pending-full || "$vstate" == no-run'; do
     if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
   done
   [[ "$FAIL" -eq 0 ]] && pass "merge-pr mirror skeleton matches canonical block"
+  # Queue-mode vocabulary (#9710) must exist in BOTH fences: the rows run both blocks, but a one-line revert of a line no
+  # row's observable depends on (a ship-only edit, the required-intersection read) is caught here.
+  for token in 'select(.type == "merge_queue")' 'QUEUE_GRACE_TICKS=5' '.autoMergeRequest != null' \
+               '(( ${#REQUIRED_CHECKS[@]} > 0 )) || QUEUE_RULE=0' '.[] | "\(.bucket)\t\(.name)"' 'seen+="$n"' \
+               '(( qidle > QUEUE_GRACE_TICKS ))' '[[ "$QUEUE_RULE" -eq 1 && "$qs" == queued* ]] && qidle=0' \
+               '(( qwait == 1 )) || qidle=0' 'real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1' \
+               '[ship.phase7.queue_wait]' '[ship.phase7.queue_wait_expired]' '[ship.phase7.queued]'; do
+    for qf in "$BLOCK_FILE" "$MIRROR_FILE"; do
+      if ! grep -qF -- "$token" "$qf"; then
+        fail "queue-mode token missing from $([[ "$qf" == "$BLOCK_FILE" ]] && echo ship || echo merge-pr): $token"
+      fi
+    done
+  done
   if bash -n "$MIRROR_FILE" 2>"$MIRROR_FILE.err"; then
     pass "Phase 7 mirror passes bash -n"
   else
@@ -380,7 +428,10 @@ _git_base() {
     "rev-parse -q") [[ -e "$MOCK_STATE/MERGE_HEAD" ]] ;;
     "rev-parse --is-inside-work-tree") echo true ;;
     "rev-parse --git-dir") echo "$MOCK_STATE" ;;
+    "rev-parse --git-common-dir") echo "$MOCK_STATE" ;;
     "rev-parse --abbrev-ref") echo "test-branch" ;;
+    "branch --show-current") echo "test-branch" ;;
+    "hash-object --stdin") cat >/dev/null; echo "0000000000000000000000000000000000000001" ;;
     "rev-parse HEAD") echo "sha-$(cat "$MOCK_STATE/merges" 2>/dev/null || echo 0)" ;;
     "rev-parse @{u}") echo "sha-$(cat "$MOCK_STATE/upstream" 2>/dev/null || echo 0)" ;;
     "symbolic-ref -q") [[ ! -e "$MOCK_STATE/detached" ]] ;;
@@ -425,6 +476,7 @@ gh() {
   case "$1 $2" in
     "pr view")   echo "MERGED CLEAN" ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) echo "UNEXPECTED gh call: $*" >&2; return 2 ;;
   esac
@@ -452,6 +504,7 @@ gh() {
       esac
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -505,6 +558,7 @@ gh() {
   case "\$1 \$2" in
     "pr view")   echo "OPEN BEHIND" ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -513,12 +567,12 @@ EOF
 ONCE='ship\.phase7\.hatch_check' run_scenario "3-behind-saturation:ship" "$SCEN3" \
   "\[ship\.phase7\.behind_exhausted\] BEHIND budget exhausted after 6 auto-syncs
 fetch_failures=0/6
-\[2/60\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
+\[2/90\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
 moving faster than this PR" \
   "ship.phase7.(required_failed|dirty)|Every attempt failed at git fetch|UNEXPECTED gh call"
 ONCE='ship\.phase7\.hatch_check' run_scenario "3-behind-saturation:merge-pr" "$SCEN3" \
   "auto-sync 6/6 pushed
-\[2/60\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
+\[2/90\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
 \[ship\.phase7\.behind_exhausted\] BEHIND budget exhausted after 6 auto-syncs
 fetch_failures=0/6
 moving faster than this PR" \
@@ -548,6 +602,7 @@ gh() {
       esac
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -580,6 +635,7 @@ gh() {
       fi
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -621,6 +677,7 @@ gh() {
       fi
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -657,6 +714,7 @@ gh() {
       fi
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -761,6 +819,7 @@ gh() {
     "pr view")
       if [[ -e "$MOCK_STATE/pushed" ]]; then echo "MERGED CLEAN"; else echo "OPEN BEHIND"; fi ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "$@" ;;
   esac
@@ -960,12 +1019,12 @@ _TMP_OWNED+=("$SCEN9")
 cat > "$SCEN9" <<EOF
 ${SYNC_MOCKS}
 EOF
-SUCCESS_FORBID='\[2/60\]|auto-sync attempt 2/|ship\.phase7\.behind_exhausted|Merge poll timed out|MOCK: git merge --abort observed|UNEXPECTED gh call'
+SUCCESS_FORBID='\[2/90\]|auto-sync attempt 2/|ship\.phase7\.behind_exhausted|Merge poll timed out|MOCK: git merge --abort observed|UNEXPECTED gh call'
 run_scenario "9-success-path:ship" "$SCEN9" \
-  "\[1/60\] auto-sync 1 pushed — auto-merge will re-evaluate" \
+  "\[1/90\] auto-sync 1 pushed — auto-merge will re-evaluate" \
   "$SUCCESS_FORBID" "$BLOCK_FILE"
 run_scenario "9-success-path:merge-pr" "$SCEN9" \
-  "\[1/60\] auto-sync 1/6 pushed" \
+  "\[1/90\] auto-sync 1/6 pushed" \
   "$SUCCESS_FORBID" "$MIRROR_FILE"
 rm -f "$SCEN9"
 
@@ -1014,10 +1073,10 @@ ${SYNC_MOCKS}
 EOF
 SCEN_ROOT="$SKEW_ROOT" run_scenario_both "13-version-skew" "$SCEN13" \
   "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '[^']*': its --help has no --step
-\[1/60\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND and auto-sync is disabled
+\[1/90\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND and auto-sync is disabled
 sync-pr-behind\.sh\"? 4387 .*re-arm the poll\. Stopping the poll\.
 \[scenario exit rc=0\]" \
-  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|Merge poll timed out|\[2/60\]|UNEXPECTED gh call"
+  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|Merge poll timed out|\[2/90\]|UNEXPECTED gh call"
 rm -f "$SCEN13"
 
 # ---------------------------------------------------------------------------
@@ -1035,6 +1094,7 @@ gh() {
     "pr view")
       if (( i >= 3 )); then echo "MERGED CLEAN"; else echo "OPEN BEHIND"; fi ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -1152,13 +1212,13 @@ run_delivered() { # <label> <scen-root> <expected-env-ERE> <mocks> <must-match> 
 EVIL_ENV="$(ere_escape "$EVIL_ROOT")"
 [[ -n "$EVIL_ENV" ]] || { fail "ere_escape produced nothing for EVIL_ROOT"; exit 1; }
 run_delivered "17b-delivered-decoy:ship" "$EVIL_ROOT" "$EVIL_ENV" "$SCEN17" \
-  "\[1/60\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
+  "\[1/90\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
 run_delivered "17b-delivered-decoy:merge-pr" "$EVIL_ROOT" "$EVIL_ENV" "$SCEN17" \
-  "\[1/60\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
+  "\[1/90\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
 run_delivered "17c-delivered-unset:ship" unset "<unset>" "$SCEN17" \
-  "\[1/60\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
+  "\[1/90\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
 run_delivered "17c-delivered-unset:merge-pr" unset "<unset>" "$SCEN17" \
-  "\[1/60\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
+  "\[1/90\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
 run_delivered "17d-delivered-regen:ship" unset "<unset>" "$SCEN17D" \
   "\[ship\.phase7\.dirty\] regen resolved — merge committed locally
 auto-sync 1 pushed" "$REGEN_FORBID" "$SUBST_BLOCK"
@@ -1274,11 +1334,278 @@ ${SYNC_MOCKS}
 EOF
 run_scenario_both "16-sync-noop" "$SCEN16" \
   "kind=noop rc=11
-\[1/60\] \[ship\.phase7\.sync_noop\] main already merged and pushed
-\[60/60\] \[ship\.phase7\.sync_noop\]
+\[1/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
+\[90/90\] \[ship\.phase7\.sync_noop\]
 Merge poll timed out" \
   "auto-sync [0-9/]+ pushed|ship\.phase7\.(hatch_check|behind_exhausted|sync_failed)|auto-sync attempt 2/|UNEXPECTED gh call"
 rm -f "$SCEN16"
+
+# ---------------------------------------------------------------------------
+# Scenarios 18 — the merge queue (#9454). The mock `gh` serves RAW GraphQL for `api graphql`
+# and runs the --jq program the script passes, so the real verdict program executes inside the
+# real sync-pr-behind.sh --step child. MOCK_GQL_SEQ is the answer per call (last repeats):
+# queued | not_queued (armed) | dequeued (auto-merge disarmed) | removed (a current removal event, still armed) | fail.
+# MOCK_MERGED_AT=N flips `gh pr view` to MERGED from tick N; MOCK_MSS sets the mergeStateStatus (default BEHIND). PR_QUEUE_RETRY_SLEEP=0: the child's retry sleep is real
+# (the parent's `sleep` shadow does not reach it).
+# ---------------------------------------------------------------------------
+GQL_GH="$(cat <<'EOF'
+gh() {
+  case "$1 $2" in
+    "pr view")
+      if [[ -e "$MOCK_STATE/pushed" ]] || { [[ -n "${MOCK_MERGED_AT:-}" ]] && (( i >= MOCK_MERGED_AT )); }; then echo "MERGED CLEAN"; else echo "OPEN ${MOCK_MSS:-BEHIND}"; fi ;;
+    "pr checks") : ;;
+    "api graphql")
+      local n a jqx="" q="" prev="" modes m pr c tops t2 f
+      n=$(( $(cat "$MOCK_STATE/gql-n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$MOCK_STATE/gql-n"
+      for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; [[ "$a" == query=* ]] && q="${a#query=}"; prev="$a"; done
+      IFS=, read -ra modes <<<"$MOCK_GQL_SEQ"
+      m="${modes[$((n-1))]:-${modes[${#modes[@]}-1]}}"
+      c='"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}'
+      case "$m" in
+        queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},'"$c"'}' ;;
+        not_queued) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},'"$c"'}' ;;
+        dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},'"$c"'}' ;;
+        removed)    pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},'"$c"'}' ;;
+        *) echo "gh: HTTP 502 from fixture (graphql)" >&2; return 1 ;;
+      esac
+      # Keep only the TOP-LEVEL fields of the pullRequest selection (nested braces stripped): a query that
+      # drops state / autoMergeRequest / the removal timeline / the head commit date gets an answer without it.
+      tops=" $(printf '%s' "$q" | tr '\n' ' ' | sed -E 's/.*pullRequest\(number: \$number\) *\{//') "
+      while :; do t2="$(sed -E 's/\{[^{}]*\}//g' <<<"$tops")"; [[ "$t2" == "$tops" ]] && break; tops="$t2"; done
+      for f in isInMergeQueue mergeQueueEntry state autoMergeRequest timelineItems commits; do
+        [[ "$tops" =~ (^|[^A-Za-z_])${f}([^A-Za-z_]|$) ]] || pr="$(jq -c "del(.$f)" <<<"$pr")"
+      done
+      printf '{"data":{"repository":{"pullRequest":%s}}}' "$pr" | jq -r "$jqx" ;;
+    "api "*)     : ;;
+    *) _gh_unexpected "$@" ;;
+  esac
+}
+EOF
+)"
+
+# 18 — queued on every tick: each BEHIND tick is a no-op (nothing merged or pushed), the poll goes on, MERGED ends it.
+SCEN18="$(mktemp)"
+_TMP_OWNED+=("$SCEN18")
+cat > "$SCEN18" <<EOF
+MOCK_GQL_SEQ=queued
+MOCK_MERGED_AT=3
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "18-queued-polls-on" "$SCEN18" \
+  "kind=queued rc=11 — PR #4387 is in the merge queue
+\[1/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
+\[2/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
+MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "auto-sync [0-9/]+ pushed|ship\.phase7\.(hatch_check|behind_exhausted|sync_failed)|Merge poll timed out|MOCK: git merge --abort|UNEXPECTED gh call"
+rm -f "$SCEN18"
+
+# 18b — queued on tick 1, then OPEN + out of the queue + auto-merge disarmed on tick 2: the second
+# BEHIND tick runs the script, which reports the dequeue (exit 13) and the fence stops the poll loudly
+# on its `*)` arm — tick 2, not the 90-minute timeout. Nothing is merged or pushed on either tick.
+SCEN18B="$(mktemp)"
+_TMP_OWNED+=("$SCEN18B")
+cat > "$SCEN18B" <<EOF
+MOCK_GQL_SEQ=queued,dequeued
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "18b-dequeue-seen-on-next-behind-tick" "$SCEN18B" \
+  "\[1/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
+kind=dequeued rc=13 — PR #4387 was in the merge queue and is no longer \(OPEN, disarmed, seen in the queue earlier, no removal event read\)
+gh run list --event merge_group --limit 100
+gh pr merge 4387 --squash --auto
+\[2/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 13 \(see its line above\)\. Stopping the poll\.
+\[scenario exit rc=0\]" \
+  "auto-sync [0-9/]+ pushed|\[3/90\]|ship\.phase7\.(hatch_check|behind_exhausted)|Merge poll timed out|MOCK: git merge --abort|UNEXPECTED gh call"
+rm -f "$SCEN18B"
+
+# 18c — one transient GraphQL failure on the queue read: retried inside the script, so the BEHIND
+# sync proceeds and pushes (the fence needs no arm for it) …
+SCEN18C="$(mktemp)"
+_TMP_OWNED+=("$SCEN18C")
+cat > "$SCEN18C" <<EOF
+MOCK_GQL_SEQ=fail,not_queued
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "18c-transient-queue-read-retried" "$SCEN18C" \
+  "auto-sync 1(/6)? pushed
+\[scenario exit rc=0\]" \
+  "kind=gh|ship\.phase7\.sync_failed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN18C"
+
+# … and a read that fails on BOTH attempts stays fail-closed: loud stop, nothing pushed.
+SCEN18D="$(mktemp)"
+_TMP_OWNED+=("$SCEN18D")
+cat > "$SCEN18D" <<EOF
+MOCK_GQL_SEQ=fail
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "18d-persistent-queue-read-failure-stops" "$SCEN18D" \
+  "kind=gh rc=4 — merge queue read failed \(cause=gh_error
+\[1/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 4 \(see its line above\)\. Stopping the poll\." \
+  "auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN18D"
+
+# ---------------------------------------------------------------------------
+# Scenarios 19 — a dequeue is visible on ANY OPEN tick (E2). While a PR is queued its mergeStateStatus is
+# unmeasured (CLEAN / BLOCKED / UNSTABLE / BEHIND are all plausible), and the BEHIND-tick `--step` read never
+# runs on a non-BEHIND tick. The fence therefore asks `--queue-state` on every 5th OPEN tick; the first token
+# `dequeued` (out of the queue, OPEN, a CURRENT removal event or seen queued) stops the poll loudly. Tick-by-tick:
+# the removal event is "present" from the second read on (MOCK_GQL_SEQ=queued,removed → reads at ticks 5 and 10),
+# so the stop must land at tick 10, i.e. within 5 ticks of the removal, with no later tick.
+# ---------------------------------------------------------------------------
+for MSS in CLEAN BLOCKED UNSTABLE; do
+  SCEN19="$(mktemp)"
+  _TMP_OWNED+=("$SCEN19")
+  cat > "$SCEN19" <<EOF
+MOCK_GQL_SEQ=queued,removed
+MOCK_MSS=$MSS
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+  run_scenario_both "19-dequeue-seen-on-$MSS-ticks" "$SCEN19" \
+    "\[1/90\] PR 4387 OPEN $MSS
+\[10/90\] \[ship\.phase7\.dequeued\] PR 4387 left the merge queue unmerged \(dequeued OPEN armed removal=checks_timed_out\)\. Stopping the poll; see .*references/merge-queue-dequeue\.md
+\[scenario exit rc=0\]" \
+    "\[11/90\]|\[[1-9]/90\] \[ship\.phase7\.dequeued\]|ship\.phase7\.sync_failed|Merge poll timed out|auto-sync|UNEXPECTED gh call"
+  rm -f "$SCEN19"
+done
+# 19 BEHIND — queued on tick 1 (the --step read leaves the marker), removed on tick 2: the --step read reports it, tick 2.
+SCEN19B="$(mktemp)"
+_TMP_OWNED+=("$SCEN19B")
+cat > "$SCEN19B" <<EOF
+MOCK_GQL_SEQ=queued,removed
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "19b-dequeue-seen-on-BEHIND-ticks" "$SCEN19B" \
+  "kind=dequeued rc=13 — PR #4387 .*removal reason: checks_timed_out
+\[2/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 13 \(see its line above\)\. Stopping the poll\." \
+  "\[3/90\]|auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN19B"
+# 19 BEHIND with NO marker (never seen queued, e.g. the earlier ticks read CLEAN): the removal event alone is a dequeue on the first --step tick.
+SCEN19C="$(mktemp)"
+_TMP_OWNED+=("$SCEN19C")
+cat > "$SCEN19C" <<EOF
+MOCK_GQL_SEQ=removed
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "19c-removal-event-without-marker-on-BEHIND" "$SCEN19C" \
+  "kind=dequeued rc=13 — PR #4387 .*removal reason: checks_timed_out
+\[1/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 13 \(see its line above\)\. Stopping the poll\." \
+  "\[2/90\]|auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN19C"
+# 19 persistent GraphQL failure on non-BEHIND ticks is NOT a dequeue: the poll runs to the cap, nothing dequeued is printed,
+# and the timeout line carries the queue read's own failure (`Queue: kind=gh …`) instead of a guess.
+SCEN19D="$(mktemp)"
+_TMP_OWNED+=("$SCEN19D")
+cat > "$SCEN19D" <<EOF
+MOCK_GQL_SEQ=fail
+MOCK_MSS=CLEAN
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "19d-persistent-queue-read-failure-is-not-a-dequeue" "$SCEN19D" \
+  "Merge poll timed out after 90 minutes\. Last state: OPEN CLEAN
+Queue: \[pr-behind-sync\] kind=gh rc=4 — merge queue read failed" \
+  "ship\.phase7\.dequeued|kind=dequeued|Stopping the poll|UNEXPECTED gh call"
+rm -f "$SCEN19D"
+# 19 a PR queued the whole time: the timeout line names the queue state; an armed, never-queued PR with no removal event is not a dequeue either.
+for QM in queued not_queued; do
+  SCEN19E="$(mktemp)"
+  _TMP_OWNED+=("$SCEN19E")
+  cat > "$SCEN19E" <<EOF
+MOCK_GQL_SEQ=$QM
+MOCK_MSS=CLEAN
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+  run_scenario_both "19e-$QM-all-ticks-times-out-naming-the-queue" "$SCEN19E" \
+    "Merge poll timed out after 90 minutes\. Last state: OPEN CLEAN
+Queue: $QM OPEN armed removal=none" \
+    "ship\.phase7\.dequeued|kind=dequeued|Stopping the poll|UNEXPECTED gh call"
+  rm -f "$SCEN19E"
+done
+
+# 19f — a PR the agent FIXED and RE-ARMED after a dequeue report must not stop the poll a second time. Two fence launches
+# share ONE mock git dir (the seen-queued marker lives there): launch 1 starts with the marker (the PR was seen queued on
+# an earlier BEHIND tick) and a PR that is OPEN, armed, out of the queue, with no removal event; its tick-5 `--queue-state`
+# prints `dequeued` and stops, and that report consumes the marker. Launch 2 is the poll re-armed after the fix: the same
+# answers (CI still running, not queued yet) must run to the cap, never `dequeued` again. A marker that outlives its
+# first report made every re-launch stop at tick 5 again (the stale-marker loop).
+_relaunch_pass() {  # <mocks_file> <block> <logfile> <errfile> — one fence launch against the CURRENT $MOCK_STATE
+  (
+    set +o pipefail
+    cd "$MOCK_STATE/cwd" || exit 97
+    export GIT_CEILING_DIRECTORIES="$MOCK_STATE"
+    export TMPDIR="$MOCK_STATE/tmp"
+    export CLAUDE_PLUGIN_ROOT="$PLUGIN_COPY"
+    sleep() { return 0; }
+    date() { echo "00:00:00"; }
+    eval "$GIT_BASE_MOCK"
+    git() { _git_base "$@"; }
+    set -a
+    # shellcheck disable=SC1090
+    source "$1"
+    set +a
+    export -f git gh _git_base
+    declare -F _gh_unexpected >/dev/null && export -f _gh_unexpected
+    # shellcheck disable=SC1090
+    source "$2"
+  ) > "$3" 2> "$4"
+  local rc=$?
+  { echo "[scenario exit rc=$rc]"; cat "$4"; } >> "$3"
+}
+run_relaunch() {  # <label> <block-file> <mocks-file>
+  local label="$1" block="$2" mocks="$3" log1 log2 err1 err2 marker
+  log1="$(mktemp)"; err1="$(mktemp)"; log2="$(mktemp)"; err2="$(mktemp)"
+  _TMP_OWNED+=("$log1" "$err1" "$log2" "$err2")
+  MOCK_STATE="$(mktemp -d)"
+  assert_fixture_dir "$MOCK_STATE"
+  _TMP_OWNED+=("$MOCK_STATE")
+  export MOCK_STATE
+  mkdir -p "$MOCK_STATE/cwd" "$MOCK_STATE/tmp"
+  marker="$MOCK_STATE/pr-queue-seen-4387"
+  : > "$marker"
+  _relaunch_pass "$mocks" "$block" "$log1" "$err1"
+  assert_log "$label:launch-1" "$log1" "\[5/90\] \[ship\.phase7\.dequeued\] PR 4387 left the merge queue unmerged \(dequeued OPEN armed removal=none\)
+\[scenario exit rc=0\]" "\[6/90\]|Merge poll timed out|auto-sync|UNEXPECTED gh call"
+  if [[ ! -e "$marker" ]]; then pass "[$label:launch-1] the dequeued report consumed the seen-queued marker"; else fail "[$label:launch-1] the marker survived its own report"; fi
+  rm -f "$MOCK_STATE/gql-n"
+  _relaunch_pass "$mocks" "$block" "$log2" "$err2"
+  assert_log "$label:launch-2-after-rearm" "$log2" "Merge poll timed out after 90 minutes\. Last state: OPEN CLEAN
+Queue: not_queued OPEN armed removal=none" "ship\.phase7\.dequeued|kind=dequeued|Stopping the poll|UNEXPECTED gh call"
+  if [[ ! -e "$marker" ]]; then pass "[$label:launch-2-after-rearm] still no marker after the re-launch"; else fail "[$label:launch-2-after-rearm] a marker reappeared (only a queued BEHIND --step may write one)"; fi
+  assert_no_tag_on_stderr "$label:launch-1" "$err1"
+  assert_no_tag_on_stderr "$label:launch-2" "$err2"
+  rm -rf "$MOCK_STATE"; rm -f "$log1" "$err1" "$log2" "$err2"
+}
+SCEN19F="$(mktemp)"
+_TMP_OWNED+=("$SCEN19F")
+cat > "$SCEN19F" <<EOF
+MOCK_GQL_SEQ=not_queued
+MOCK_MSS=CLEAN
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_relaunch "19f-rearmed-after-dequeue-report:ship" "$BLOCK_FILE" "$SCEN19F"
+run_relaunch "19f-rearmed-after-dequeue-report:merge-pr" "$MIRROR_FILE" "$SCEN19F"
+rm -f "$SCEN19F"
 
 # ---------------------------------------------------------------------------
 # AC1 — one BEHIND implementation (#8383). Neither fence may carry a merge/push
@@ -1324,6 +1651,430 @@ if [[ "$nkeys" -ge 10 && -z "$missing" ]]; then
 else
   fail "sync_step() git calls without a mock arm: ${missing:-none} (calls found: $nkeys, want >= 10)"
 fi
+# ---------------------------------------------------------------------------
+# Scenarios Q — merge-queue mode (#9710). On main with a `merge_queue` rule, an auto-merge-armed PR that
+# reads BEHIND is not pushed to: the queue, not a push, makes it current. QGH layers three arms over GQL_GH
+# (the real sync-pr-behind.sh --step child still answers `api graphql` through it):
+#   rules/branches/main  $MOCK_RULES   queue | queue_nochecks | noqueue | error   (queue = a merge_queue entry in the MIDDLE of the
+#                                      array, behind an unrelated rule and ahead of required_status_checks, so a
+#                                      first-index or last-index reader fails)
+#   pr view autoMergeRequest  $MOCK_ARMED   true | false | error   (serves the JSON the real call asks for and runs
+#                                      the handed --jq through real jq, like the other two arms;
+#                                      MOCK_ARMED_FALSE_AT=N reads disarmed on tick N only)
+#   pr checks  $MOCK_CHECKS   pending | pending_optional | mixed | absent_pending | absent_settled | green | none | required_fail | error
+#                                      (the handed --jq runs through real jq, because the same arm also feeds the
+#                                      required-check failure scan; `mixed` (three members) and `pending_optional` (two) carry several members
+#                                      so a first-element-only reader or a count over non-required checks is visible;
+#                                      MOCK_PENDING_FROM=N / MOCK_PENDING_UNTIL=M bound the ticks on which `pending` is pending)
+# `gh pr view` state: MOCK_MERGED_AT=N merges from tick N; MOCK_BLOCKED_AT=N reads BLOCKED on tick N only;
+# MOCK_NO_MERGE_ON_PUSH=1 keeps the PR OPEN after a push (the saturation shape); MOCK_MSS defaults BEHIND.
+# MOCK_GQL_SEQ defaults to not_queued: the Q rows that do not set it still run the child's queue read.
+# ---------------------------------------------------------------------------
+QGH="$(cat <<'EOF'
+MOCK_GQL_SEQ="${MOCK_GQL_SEQ:-not_queued}"
+eval "$(declare -f gh | sed '1s/^gh/_gql_gh/')"
+export -f _gql_gh
+_q_jqx() { local a prev=""; for a in "$@"; do if [[ "$prev" == --jq ]]; then printf '%s' "$a"; return 0; fi; prev="$a"; done; }
+export -f _q_jqx
+gh() {
+  local data mode armed
+  case "$1 $2" in
+    "pr view")
+      case "$*" in
+        *"--json autoMergeRequest"*)
+          armed="${MOCK_ARMED:-true}"
+          if [[ -n "${MOCK_ARMED_FALSE_AT:-}" ]] && (( i == MOCK_ARMED_FALSE_AT )); then armed=false; fi
+          case "$armed" in
+            true)  data='{"autoMergeRequest":{"enabledAt":"2026-10-07T00:00:00Z","mergeMethod":"SQUASH"}}' ;;
+            false) data='{"autoMergeRequest":null}' ;;
+            *) echo "gh: HTTP 502 from fixture (pr view autoMergeRequest)" >&2; return 1 ;;
+          esac
+          jq -r "$(_q_jqx "$@")" <<<"$data" ;;
+        *)
+          if [[ -n "${MOCK_MERGED_AT:-}" ]] && (( i >= MOCK_MERGED_AT )); then echo "MERGED CLEAN"
+          elif [[ -e "$MOCK_STATE/pushed" && -z "${MOCK_NO_MERGE_ON_PUSH:-}" ]]; then echo "MERGED CLEAN"
+          elif [[ -n "${MOCK_BLOCKED_AT:-}" ]] && (( i == MOCK_BLOCKED_AT )); then echo "OPEN BLOCKED"
+          else echo "OPEN ${MOCK_MSS:-BEHIND}"; fi ;;
+      esac ;;
+    "pr checks")
+      mode="${MOCK_CHECKS:-green}"
+      if [[ "$mode" == pending ]]; then
+        if [[ -n "${MOCK_PENDING_FROM:-}" ]] && (( i < MOCK_PENDING_FROM )); then mode=green; fi
+        if [[ -n "${MOCK_PENDING_UNTIL:-}" ]] && (( i > MOCK_PENDING_UNTIL )); then mode=green; fi
+      fi
+      case "$mode" in
+        pending)          data='[{"name":"test","bucket":"pending"}]' ;;
+        pending_optional) data='[{"name":"test","bucket":"pass"},{"name":"test-e2e","bucket":"pending"}]' ;;
+        mixed)            data='[{"name":"lint","bucket":"pass"},{"name":"test","bucket":"pending"},{"name":"docs","bucket":"pass"}]' ;;
+        absent_pending)   data='[{"name":"lint","bucket":"pass"},{"name":"test-shard","bucket":"pending"}]' ;;
+        absent_settled)   data='[{"name":"lint","bucket":"pass"}]' ;;
+        green)            data='[{"name":"test","bucket":"pass"}]' ;;
+        none)             data='[]' ;;
+        required_fail)    data='[{"name":"test","bucket":"fail"}]' ;;
+        test_e2e_fail)    data='[{"name":"test","bucket":"fail"},{"name":"e2e","bucket":"fail"}]' ;;
+        *) echo "gh: HTTP 502 from fixture (pr checks)" >&2; return 1 ;;
+      esac
+      jq -r "$(_q_jqx "$@")" <<<"$data" ;;
+    "api repos/{owner}/{repo}/rules/branches/main")
+      case "${MOCK_RULES:-noqueue}" in
+        queue)   data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]' ;;
+        queue2)  data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"},{"context":"e2e"}]}}]' ;;
+        queue_nochecks) data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}}]' ;;
+        noqueue) data='[{"type":"deletion"},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]' ;;
+        *) echo "gh: HTTP 502 from fixture (rules)" >&2; return 1 ;;
+      esac
+      jq -r "$(_q_jqx "$@")" <<<"$data" ;;
+    *) _gql_gh "$@" ;;
+  esac
+}
+EOF
+)"
+
+# q_mocks <knob>... — writes a fresh scenario file (knobs, then the shared mocks, then $Q_TAIL) and sets QF. Called
+# directly, never through $( ), so the tempfile is registered with the owning trap in THIS shell.
+Q_TAIL=""
+q_mocks() {
+  QF="$(mktemp)"
+  _TMP_OWNED+=("$QF")
+  { printf '%s\n' "PR_QUEUE_RETRY_SLEEP=0" "$@"; printf '%s\n' "$SYNC_MOCKS" "$GQL_GH" "$QGH" "$Q_TAIL"; } > "$QF"
+}
+# The verdict floor counts verdicts, not which rows produced them: q_both records each Q row so the row set is pinned.
+RANQ=()
+q_both() { RANQ+=("$1"); run_scenario_both "$@"; }
+Q_FORBID='UNEXPECTED gh call'
+Q_SYNCED='auto-sync 1(/6)? pushed'
+
+# Q1 — rule present (mid-array), armed, a check pending, BEHIND on every tick: no sync, one queue_wait line, MERGED ends it.
+# ONCE pins the dispatch: a poll whose wait arm never fires prints zero queue_wait lines and cannot pass.
+# MOCK_MERGED_AT=13 only stops the poll after more than 2x the 5-tick grace has passed without an expiry.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending MOCK_MERGED_AT=13
+ONCE='\[ship\.phase7\.queue_wait\]' q_both "Q1-queue-armed-pending-waits-no-sync" "$QF" \
+  "\[1/90\] \[ship\.phase7\.queue_wait\] PR 4387 is BEHIND with auto-merge armed
+MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "BEHIND detected|auto-sync|Merge made by|MOCK: git merge|queue_wait_expired|Merge poll timed out|$Q_FORBID"
+# … and under an errexit host shell (`set -e`): the same outcome, the shell survives every new line.
+ONCE='\[ship\.phase7\.queue_wait\]' SCENARIO_SET_E=1 q_both "Q1e-queue-wait-under-errexit" "$QF" \
+  "\[1/90\] \[ship\.phase7\.queue_wait\] PR 4387 is BEHIND with auto-merge armed
+MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "BEHIND detected|auto-sync|Merge made by|queue_wait_expired|$Q_FORBID"
+rm -f "$QF"
+
+# Q1m — three members (lint passed, test pending, docs passed): the pending REQUIRED check holds the wait. A reader that
+# looks only at the first or the last element, or at the whole list, reads this as settled and expires on tick 6.
+# MOCK_MERGED_AT=9 ends the poll after the tick (6) on which that mutant would have expired.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=mixed MOCK_MERGED_AT=9
+ONCE='\[ship\.phase7\.queue_wait\]' q_both "Q1m-mixed-members-pending-required-holds-the-wait" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "BEHIND detected|auto-sync|queue_wait_expired|$Q_FORBID"
+rm -f "$QF"
+
+# Q1n — a queue rule but NO required status checks (or that read failed): nothing to wait on, so queue mode stays off and
+# the first BEHIND tick syncs as today (the pend loop would otherwise count any pending check, advisory included).
+q_mocks MOCK_RULES=queue_nochecks MOCK_ARMED=true MOCK_CHECKS=pending
+q_both "Q1n-queue-rule-without-required-checks-syncs-as-today" "$QF" \
+  "BEHIND detected .* auto-sync attempt 1/6
+$Q_SYNCED" \
+  "queue_wait|ship\.phase7\.queued|$Q_FORBID"
+rm -f "$QF"
+
+# Q2 — no merge_queue entry in the rules: exactly today's behaviour (sync on the first BEHIND tick), also under errexit.
+q_mocks MOCK_RULES=noqueue MOCK_ARMED=true MOCK_CHECKS=pending
+q_both "Q2-no-queue-rule-syncs-as-today" "$QF" \
+  "BEHIND detected .* auto-sync attempt 1/6
+$Q_SYNCED" \
+  "queue_wait|ship\.phase7\.queued|$Q_FORBID"
+SCENARIO_SET_E=1 q_both "Q2e-no-queue-rule-under-errexit" "$QF" \
+  "BEHIND detected .* auto-sync attempt 1/6
+$Q_SYNCED" \
+  "queue_wait|ship\.phase7\.queued|$Q_FORBID"
+rm -f "$QF"
+
+# Q3 — the rules API errors: today's behaviour, never "do not sync".
+q_mocks MOCK_RULES=error MOCK_ARMED=true MOCK_CHECKS=pending
+q_both "Q3-rules-api-error-syncs-as-today" "$QF" \
+  "BEHIND detected .* auto-sync attempt 1/6
+$Q_SYNCED" \
+  "queue_wait|ship\.phase7\.queued|$Q_FORBID"
+rm -f "$QF"
+
+# Q3b — the enqueue report is gated on the queue rule: with the rules read failing and the PR actually queued (the child
+# skips it every tick, kind=queued), the 5th-tick read sees `queued` and must still print nothing (Q2/Q3 default to
+# not_queued, so their forbid on the queued line cannot discriminate). MOCK_MERGED_AT=8 ends the poll after the 5th-tick read.
+q_mocks MOCK_RULES=error MOCK_ARMED=true MOCK_CHECKS=pending MOCK_GQL_SEQ=queued MOCK_MERGED_AT=8
+q_both "Q3b-rules-error-with-a-queued-pr-prints-no-queued-line" "$QF" \
+  "kind=queued rc=11
+MERGED CLEAN" \
+  "ship\.phase7\.queued\]|queue_wait|auto-sync [0-9/]+ pushed|$Q_FORBID"
+rm -f "$QF"
+
+# Q4 — a queue repo but auto-merge is disarmed, or the armed read errors: no wait, today's sync.
+for ARM in false error; do
+  q_mocks MOCK_RULES=queue MOCK_ARMED=$ARM MOCK_CHECKS=pending
+  q_both "Q4-queue-but-armed-is-$ARM-syncs-as-today" "$QF" \
+    "BEHIND detected .* auto-sync attempt 1/6
+$Q_SYNCED" \
+    "queue_wait\]|queue_wait_expired|$Q_FORBID"
+  rm -f "$QF"
+done
+
+# Q6 — armed, every required check settled (green | none reported | unreadable): the wait ends on the first tick whose
+# CONSECUTIVE idle count exceeds 5 (tick 6) and that same tick syncs. Exactly one expiry line.
+for CK in green none error; do
+  q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=$CK
+  ONCE='queue_wait_expired\]' q_both "Q6-settled-$CK-expires-and-syncs" "$QF" \
+    "\[6/90\] \[ship\.phase7\.queue_wait_expired\] PR 4387 has been BEHIND with auto-merge armed and no required check pending for 6 ticks
+\[6/90\] $Q_SYNCED" \
+    "\[[1-5]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
+  rm -f "$QF"
+done
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=green
+ONCE='queue_wait_expired\]' SCENARIO_SET_E=1 q_both "Q6e-expiry-under-errexit" "$QF" \
+  "\[6/90\] \[ship\.phase7\.queue_wait_expired\]
+\[6/90\] $Q_SYNCED" \
+  "$Q_FORBID"
+rm -f "$QF"
+
+# Q6b — saturation: every sync leaves the PR BEHIND (MOCK_NO_MERGE_ON_PUSH). The expiry LATCHES, so the wait arm is
+# never re-entered (exactly one expiry line) and the budget then ends in behind_exhausted after 6 syncs. The poll is
+# stopped at tick 14, after the six syncs (ticks 6-11) and the exhaustion line (tick 12).
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=green MOCK_NO_MERGE_ON_PUSH=1 MOCK_MERGED_AT=14
+ONCE='queue_wait_expired\]' q_both "Q6b-expiry-latches-then-budget-exhausts" "$QF" \
+  "queue_wait_expired\] PR 4387
+\[ship\.phase7\.behind_exhausted\] BEHIND budget exhausted after 6 auto-syncs" \
+  "$Q_FORBID"
+rm -f "$QF"
+
+# Q6c — the idle count is CONSECUTIVE: every check settled, BEHIND on ticks 1-3, BLOCKED on tick 4, BEHIND from tick 5.
+# With the reset the streak restarts at tick 5 and crosses the grace on tick 10; without it the count (3 before the
+# BLOCKED tick) would expire on tick 7.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=green MOCK_BLOCKED_AT=4
+q_both "Q6c-idle-count-is-consecutive" "$QF" \
+  "\[10/90\] \[ship\.phase7\.queue_wait_expired\]
+\[10/90\] $Q_SYNCED" \
+  "\[[1-9]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
+rm -f "$QF"
+
+# Q6d — pending, then settled: the pending ticks reset the count and the grace runs from the LAST pending tick (checks
+# pending on ticks 1-4, green from tick 5, so the idle ticks are 5-10 and the expiry is tick 10, not 6 or 9).
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending MOCK_PENDING_UNTIL=4
+q_both "Q6d-pending-then-settled-expires-six-idle-ticks-after-the-last-pending" "$QF" \
+  "\[10/90\] \[ship\.phase7\.queue_wait_expired\]
+\[10/90\] $Q_SYNCED" \
+  "\[[1-9]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
+rm -f "$QF"
+
+# Q6g — idle, then pending, then idle: a pending required check RESETS the count (checks green on ticks 1-2, pending on
+# 3-4, green from 5: the idle ticks are 5-10, expiry on tick 10). A pending check that merely paused the count would
+# expire on tick 8.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending MOCK_PENDING_FROM=3 MOCK_PENDING_UNTIL=4
+q_both "Q6g-idle-then-pending-then-idle-resets-the-count" "$QF" \
+  "\[10/90\] \[ship\.phase7\.queue_wait_expired\]
+\[10/90\] $Q_SYNCED" \
+  "\[[1-9]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
+rm -f "$QF"
+
+# Q6h — the idle count is exactly CONSECUTIVE across an armed-read flap: checks green, a disarmed read on tick 4 (that tick
+# syncs as today and restarts the count), then idle ticks 5-10, expiry on tick 10 with the second sync. A reset keyed on
+# `real_behind` alone would not restart on tick 4 and would expire on tick 7. The PR stays BEHIND after each push.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=green MOCK_ARMED_FALSE_AT=4 MOCK_NO_MERGE_ON_PUSH=1 MOCK_MERGED_AT=12
+ONCE='queue_wait_expired\]' q_both "Q6h-armed-flap-restarts-the-idle-count" "$QF" \
+  "\[4/90\] auto-sync 1(/6)? pushed
+\[10/90\] \[ship\.phase7\.queue_wait_expired\]
+\[10/90\] auto-sync 2(/6)? pushed" \
+  "\[[5-9]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
+rm -f "$QF"
+
+# Q6f — only REQUIRED checks hold the wait: the required `test` check passed and an advisory one (`test-e2e`, whose name
+# starts with the required name) is still pending, so the wait expires on tick 6 instead of waiting out the advisory check.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending_optional
+ONCE='queue_wait_expired\]' q_both "Q6f-pending-advisory-check-does-not-hold-the-wait" "$QF" \
+  "\[6/90\] \[ship\.phase7\.queue_wait_expired\]
+\[6/90\] $Q_SYNCED" \
+  "\[[1-5]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
+rm -f "$QF"
+
+# Q12 — the required `test` aggregate does not EXIST yet while its shard is pending (it is created only after the shards
+# finish): an absent required check is not settled while anything is still running, so the wait holds and never expires.
+# This is the shape that expired PR #9710's own wait mid-CI. MOCK_MERGED_AT=9 ends the poll after tick 6, where a count
+# over present required checks alone would have expired.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=absent_pending MOCK_MERGED_AT=9
+ONCE='\[ship\.phase7\.queue_wait\]' q_both "Q12-absent-required-check-while-a-shard-runs-holds-the-wait" "$QF" \
+  "MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "BEHIND detected|auto-sync|queue_wait_expired|$Q_FORBID"
+rm -f "$QF"
+
+# Q12b — … but when NOTHING is pending and the required check is still absent, it will not appear: that is idle, and the
+# wait expires on tick 6 (fails toward today's sync, so a required check no workflow produces cannot hold the wait).
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=absent_settled
+ONCE='queue_wait_expired\]' q_both "Q12b-absent-required-check-with-nothing-running-expires" "$QF" \
+  "\[6/90\] \[ship\.phase7\.queue_wait_expired\]
+\[6/90\] $Q_SYNCED" \
+  "\[[1-5]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
+rm -f "$QF"
+
+# Q7 — DIRTY with a clean local merge-tree is rewritten to BEHIND by the DIRTY block; that is NOT a GitHub BEHIND
+# reading, so it syncs as today even on a queue repo.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending MOCK_MSS=DIRTY
+q_both "Q7-dirty-derived-behind-still-syncs" "$QF" \
+  "$Q_SYNCED" \
+  "queue_wait\]|ship\.phase7\.dirty\] PR is DIRTY|$Q_FORBID"
+rm -f "$QF"
+
+# Q8 — a dequeue while waiting: the every-5th-OPEN-tick queue read (queued at tick 5, removed at tick 10) stops the
+# poll within 5 ticks of the removal; no sync, no tick 11.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending MOCK_GQL_SEQ=queued,removed
+q_both "Q8-dequeue-while-waiting-stops" "$QF" \
+  "\[10/90\] \[ship\.phase7\.dequeued\] PR 4387 left the merge queue unmerged
+\[scenario exit rc=0\]" \
+  "\[11/90\]|auto-sync|Merge made by|$Q_FORBID"
+rm -f "$QF"
+
+# Q9 — a PR the queue holds while it still reads BEHIND and armed (a defensive state: a queued PR was measured as
+# disarmed): the enqueue is reported exactly once although the queue is read on ticks 5 and 10, and each queued reading
+# restarts the idle count, so the PR never expires (it has no pending PR check) and `--step` is never called.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=green MOCK_GQL_SEQ=queued MOCK_MERGED_AT=12
+ONCE='\[ship\.phase7\.queued\]' q_both "Q9-queued-pr-reported-once-and-never-expired" "$QF" \
+  "\[5/90\] \[ship\.phase7\.queued\] PR 4387 is in the merge queue
+MERGED CLEAN" \
+  "queue_wait_expired|kind=queued|sync_noop|auto-sync|Merge made by|$Q_FORBID"
+rm -f "$QF"
+
+# Q9b — expiry with an UNREADABLE queue read: the queue reads fail (no `queued` sighting resets the count), the idle count
+# expires on tick 6 and the fallback `--step` fails closed on the same unreadable read (kind=gh, exit 4), stopping the poll
+# loudly; nothing is ever pushed.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=green MOCK_GQL_SEQ=fail
+q_both "Q9b-expiry-with-an-unreadable-queue-read-stops-and-never-pushes" "$QF" \
+  "\[6/90\] \[ship\.phase7\.queue_wait_expired\]
+kind=gh rc=4
+\[6/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 4 \(see its line above\)\. Stopping the poll\." \
+  "auto-sync [0-9/]+ pushed|\[7/90\]|$Q_FORBID"
+rm -f "$QF"
+
+# Q10 — a required check failing still exits the poll on its own tick under queue mode.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail
+q_both "Q10-required-check-failure-exits" "$QF" \
+  "\[1/90\] \[ship\.phase7\.required_failed\] check='test'" \
+  "queue_wait\]|auto-sync|$Q_FORBID"
+rm -f "$QF"
+
+# Q11 (not scenario 11 above: this one carries a queue rule) — auto-sync disabled (not inside a worktree): QUEUE_RULE is
+# never read, so the first BEHIND tick is the named behind_no_sync stop exactly as today, not a silent wait.
+Q_TAIL='git() {
+  case "$1 ${2:-}" in
+    "rev-parse --is-inside-work-tree") echo false ;;
+    *) _git_base "$@" ;;
+  esac
+}'
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending
+q_both "Q11-queue-rule-with-sync-disabled-keeps-the-named-stop" "$QF" \
+  "\[1/90\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND" \
+  "queue_wait|BEHIND detected|auto-sync [0-9/]+ pushed|$Q_FORBID"
+rm -f "$QF"
+Q_TAIL=""
+
+# ── V rows — ADR-276 S3 (#9728): a red `test` on a PR that was marked ready ────────────────────────────────────────────
+# With CI_DRAFT_LIGHT on, a draft's `test` is red by design, and after `gh pr ready` that row is the newest `test` row for the
+# 38 to 51 minutes the ready run takes: `gh pr checks` says `fail`, and the intersection scan used to end the poll on it. The block
+# now asks ci-head-verdict.sh (the real script has its own suite; here a STUB root answers from $MOCK_STATE/vstate, and a missing
+# answer exits 3) and ignores the `test` failure while the verdict is pending-full or no-run; stalled and awaiting-approval stop
+# the poll with `[ship.phase7.ready_unarmed]` and the recovery command; full-decided, n/a and an unanswered resolver keep
+# `required_failed`. Another failing required check is never softened. Every row runs against BOTH the ship block and the mirror.
+VROOT="$(mktemp -d)"
+_TMP_OWNED+=("$VROOT")
+assert_fixture_dir "$VROOT"
+cp -R "$PLUGIN_COPY/." "$VROOT/" || { printf 'FATAL: could not copy the plugin copy into %s\n' "$VROOT" >&2; exit 1; }
+cat > "$VROOT/scripts/ci-head-verdict.sh" <<'VSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_STATE/vcalls"
+st="$(cat "$MOCK_STATE/vstate" 2>/dev/null)"
+# The REAL error shape: a state=error marker (outside the six-state set) AND exit 3, as ci-head-verdict.sh prints it.
+[[ -n "$st" ]] || { printf 'SOLEUR_CI_HEAD_VERDICT state=error pr=%s sha=x run=none reason=api-error\n' "$2"; exit 3; }
+printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=%s sha=x run=none reason=stub\n' "$st" "$2"
+VSTUB
+chmod +x "$VROOT/scripts/ci-head-verdict.sh"
+SCEN_ROOT="$VROOT"
+V_FORBID="$Q_FORBID"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail MOCK_MERGED_AT=3 'echo pending-full > "$MOCK_STATE/vstate"'
+run_scenario_both "V1-pending-full-ignores-the-draft-red-test" "$QF" \
+  "MERGED CLEAN" \
+  "required_failed|ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail MOCK_MERGED_AT=3 'echo no-run > "$MOCK_STATE/vstate"'
+run_scenario_both "V2-no-run-keeps-polling-never-required_failed" "$QF" \
+  "MERGED CLEAN" \
+  "required_failed|ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo stalled > "$MOCK_STATE/vstate"'
+run_scenario_both "V3-stalled-stops-with-the-recovery-command" "$QF" \
+  "\[1/90\] \[ship\.phase7\.ready_unarmed\] .*stalled
+Start no fix loop\. Recovery: .*ready-run-wait\.md" \
+  "required_failed|MERGED|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo awaiting-approval > "$MOCK_STATE/vstate"'
+run_scenario_both "V4-awaiting-approval-stops-and-names-it" "$QF" \
+  "\[1/90\] \[ship\.phase7\.ready_unarmed\] .*awaiting-approval" \
+  "required_failed|MERGED|$V_FORBID"
+rm -f "$QF"
+for vs in full-decided n/a; do
+  q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail "echo $vs > \"\$MOCK_STATE/vstate\""
+  run_scenario_both "V5-$vs-keeps-required_failed" "$QF" \
+    "\[1/90\] \[ship\.phase7\.required_failed\] check='test'" \
+    "ready_unarmed|$V_FORBID"
+  rm -f "$QF"
+done
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail
+run_scenario_both "V6-an-unanswered-resolver-keeps-required_failed" "$QF" \
+  "\[1/90\] \[ship\.phase7\.required_failed\] check='test'" \
+  "ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue2 MOCK_ARMED=true MOCK_CHECKS=test_e2e_fail 'echo pending-full > "$MOCK_STATE/vstate"'
+run_scenario_both "V7-pending-full-softens-only-test-another-required-failure-still-exits" "$QF" \
+  "\[1/90\] \[ship\.phase7\.required_failed\] check='e2e'" \
+  "check='test'|ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending 'echo stalled > "$MOCK_STATE/vstate"'
+run_scenario_both "V8-no-test-failure-no-resolver-call" "$QF" \
+  "\[1/90\]" \
+  "ready_unarmed|required_failed"
+rm -f "$QF"
+# V9-V11 — the resolver does not depend on BEHIND auto-sync (#9728 follow-up). With sync disabled (not inside a worktree)
+# the poll has no SYNC_SNAP; the verdict read used to be keyed on it, so a ready PR's draft-run `test` row read as a required
+# failure there. An identity-verified root alone enables the resolver; an unverifiable root keeps the raw reading.
+Q_TAIL='git() {
+  case "$1 ${2:-}" in
+    "rev-parse --is-inside-work-tree") echo false ;;
+    *) _git_base "$@" ;;
+  esac
+}'
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail MOCK_MERGED_AT=3 'echo pending-full > "$MOCK_STATE/vstate"'
+run_scenario_both "V9-sync-disabled-pending-full-still-ignores-the-draft-red-test" "$QF" \
+  "BEHIND auto-sync disabled
+\[1/90\] \[ship\.phase7\.behind_no_sync\]" \
+  "required_failed|ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo stalled > "$MOCK_STATE/vstate"'
+run_scenario_both "V10-sync-disabled-stalled-stops-with-the-recovery-command" "$QF" \
+  "\[1/90\] \[ship\.phase7\.ready_unarmed\] .*stalled" \
+  "required_failed|MERGED|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo pending-full > "$MOCK_STATE/vstate"'
+SCEN_ROOT=unset run_scenario_both "V11-unset-root-keeps-the-raw-required_failed" "$QF" \
+  "\[1/90\] \[ship\.phase7\.required_failed\] check='test'" \
+  "ready_unarmed|$V_FORBID"
+rm -f "$QF"
+Q_TAIL=""
+SCEN_ROOT=""
+
+WANTQ="Q1-queue-armed-pending-waits-no-sync Q1e-queue-wait-under-errexit Q1m-mixed-members-pending-required-holds-the-wait Q1n-queue-rule-without-required-checks-syncs-as-today Q2-no-queue-rule-syncs-as-today Q2e-no-queue-rule-under-errexit Q3-rules-api-error-syncs-as-today Q3b-rules-error-with-a-queued-pr-prints-no-queued-line Q4-queue-but-armed-is-false-syncs-as-today Q4-queue-but-armed-is-error-syncs-as-today Q6-settled-green-expires-and-syncs Q6-settled-none-expires-and-syncs Q6-settled-error-expires-and-syncs Q6e-expiry-under-errexit Q6b-expiry-latches-then-budget-exhausts Q6c-idle-count-is-consecutive Q6d-pending-then-settled-expires-six-idle-ticks-after-the-last-pending Q6g-idle-then-pending-then-idle-resets-the-count Q6h-armed-flap-restarts-the-idle-count Q6f-pending-advisory-check-does-not-hold-the-wait Q12-absent-required-check-while-a-shard-runs-holds-the-wait Q12b-absent-required-check-with-nothing-running-expires Q7-dirty-derived-behind-still-syncs Q8-dequeue-while-waiting-stops Q9-queued-pr-reported-once-and-never-expired Q9b-expiry-with-an-unreadable-queue-read-stops-and-never-pushes Q10-required-check-failure-exits Q11-queue-rule-with-sync-disabled-keeps-the-named-stop"
+if [[ "${RANQ[*]}" == "$WANTQ" ]]; then
+  pass "[Q-rows] merge-queue row set is exactly: ${#RANQ[@]} rows"
+else
+  fail "[Q-rows] merge-queue row set drifted: got '${RANQ[*]}'"
+fi
 
 # ---------------------------------------------------------------------------
 # Scenario 11 — not inside a worktree (`--is-inside-work-tree` prints
@@ -1345,6 +2096,7 @@ gh() {
   case "\$1 \$2" in
     "pr view")   echo "OPEN BEHIND" ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -1352,7 +2104,7 @@ gh() {
 EOF
 run_scenario_both "11-not-a-worktree" "$SCEN11" \
   "\[ship\.phase7\.precondition\] not inside a worktree — BEHIND auto-sync disabled
-\[1/60\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND" \
+\[1/90\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND" \
   "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|ship\.phase7\.behind_exhausted|Merge poll timed out|UNEXPECTED gh call"
 rm -f "$SCEN11"
 
@@ -1418,10 +2170,15 @@ _TMP_OWNED+=("$SCEN10_ERR")
       "pr view")
         if [[ -e "$tmp/tick" ]]; then echo "MERGED CLEAN"; else : > "$tmp/tick"; echo "OPEN BEHIND"; fi ;;
       "pr checks") : ;;
+      "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
       "api "*)     : ;;
       *) echo "UNEXPECTED gh call: $*" >&2; return 2 ;;
     esac
   }
+  # The BEHIND arm's `sync-pr-behind.sh --step` is a CHILD process: its merge-queue read
+  # (`gh api graphql`, #9454) reaches this mock only through an exported function —
+  # without it the child runs the real, unauthenticated gh and fails closed (kind=gh).
+  export -f gh
   # shellcheck disable=SC1090
   arm() { rm -f "$tmp/tick"; echo "=== sub-row $1 ==="; [[ -n "${2:-}" ]] && echo "$2"; source "$BLOCK_FILE"; }
 
@@ -1462,7 +2219,7 @@ _TMP_OWNED+=("$SCEN10_ERR")
   pre_d="$([[ -d "$(git rev-parse --git-dir)/rebase-merge" ]] && echo "PRE-D: rebase=in-progress" || echo "PRE-D: rebase=NOT-STARTED")"
   arm D "$pre_d"
   [[ -d "$(git rev-parse --git-dir)/rebase-merge" ]] && echo "POST-D: rebase=in-progress" || echo "POST-D: rebase=GONE"
-  git status --porcelain | grep -q '^UU f$' && echo "POST-D: unmerged=f" || echo "POST-D: unmerged=NONE"
+  git status --porcelain | grep -c >/dev/null '^UU f$' && echo "POST-D: unmerged=f" || echo "POST-D: unmerged=NONE"
   git rebase --abort >/dev/null 2>&1 || true
 
   # E: detached HEAD.
@@ -1546,6 +2303,13 @@ else
   else
     fail "poll budget DRIFTED: ship=$ship_budget merge-pr=$merge_budget"
   fi
+  # Under the merge queue a healthy merge is PR CI (~32 min) THEN a merge_group run (up to ~50 min) plus
+  # queue wait: 60 is below it, so a PR that is merging fine reports a spurious timeout. 90 is the floor.
+  if [[ "$ship_budget" -ge 90 ]]; then
+    pass "poll budget ($ship_budget min) covers PR CI + a merge_group run + queue wait (floor 90)"
+  else
+    fail "poll budget $ship_budget min is below 90: a healthy queue merge (PR CI ~32 + merge_group up to ~50 + wait) outlasts it"
+  fi
   if [[ "$ship_budget" -ge 45 ]]; then
     pass "poll budget ($ship_budget min) is above the measured CI p90 (43 min)"
   else
@@ -1570,7 +2334,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=451
+MIN_VERDICTS=1093
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

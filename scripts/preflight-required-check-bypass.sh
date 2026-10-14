@@ -146,7 +146,7 @@ if [[ "$MODE" == "surface" ]]; then
     echo "SOLEUR_BYPASS_PREFLIGHT probe=surface state=PASS detail=no-pull-request-target-workflows"
     exit 0
   fi
-  if printf '%s\n' "${PRT[@]}" | grep -q '__UNKNOWN__'; then
+  if grep -q '__UNKNOWN__' < <(printf '%s\n' "${PRT[@]}"); then
     echo "SOLEUR_BYPASS_PREFLIGHT probe=surface state=UNKNOWN reason=workflow-dir-unreadable" >&2
     exit 2
   fi

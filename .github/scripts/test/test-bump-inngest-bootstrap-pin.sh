@@ -59,12 +59,13 @@ assert_fixture_dir() {
 }
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+SRV_PID=""
+trap '[[ -n "${SRV_PID:-}" ]] && kill "$SRV_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
 git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $TMP" >&2; exit 2; }
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=487   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=699   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + bc_ok-parity row net of the removed refuse-dot row — the newshape fixture self-check emits fail-only, zero counted assertions); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -73,7 +74,10 @@ fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
 DIG_OLD="sha256:$(printf 'a%.0s' $(seq 1 64))"
 DIG_NEW="sha256:$(printf 'b%.0s' $(seq 1 64))"
 DIG_NEWER="sha256:$(printf 'c%.0s' $(seq 1 64))"
-BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
+# #9262: the bump authors as the soleur-infra App (bot user id 335404629). The
+# soleur-ai identity it used before is LEGACY: a tip carrying it is not ours.
+BOT_EMAIL='335404629+soleur-infra[bot]@users.noreply.github.com'
+LEGACY_BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
 
 # ---------------------------------------------------------------------------
 # Fixture builders
@@ -218,10 +222,15 @@ chmod +x "$BIN/sleep"
 # gh — records every call to $MOCK_GH_LOG (one line, whitespace flattened) and
 # serves the PR surface the script uses. PR state lives in $MOCK_GH_PRS:
 #   number|headRefName|url|headRefOid|state[|flags]   (state: open|closed;
-#   flags: `fork` => isCrossRepository:true + author.login=fork-user)
+#   flags: `fork` => isCrossRepository:true + author.login=fork-user;
+#          `author=<login>` => that author.login)
+# Without a flag a PR's author lists as `app/soleur-infra` — the form `gh pr list
+# --json author` reports for a GitHub App (measured: {"is_bot":true,"login":
+# "app/soleur-ai"} for the pre-#9262 pin PRs), never `<slug>[bot]` (#9262).
 # `gh api repos/<r>/commits/<sha>` resolves author.login from the commit's
-# author email in $MOCK_ORIGIN (mirrors GitHub's email→login resolution):
-# bot noreply => soleur-ai[bot]; anything else => fixture-human.
+# author email in $MOCK_ORIGIN (mirrors GitHub's email→login resolution): the
+# soleur-infra noreply => soleur-infra[bot]; the legacy soleur-ai noreply =>
+# soleur-ai[bot]; anything else => fixture-human.
 cat > "$BIN/gh" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -229,7 +238,8 @@ printf 'gh %s\n' "$*" | tr '\n' ' ' >> "${MOCK_GH_LOG:?unset}"
 printf '\n' >> "$MOCK_GH_LOG"
 args=("$@")
 sub="${args[0]:-} ${args[1]:-}"
-BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
+BOT_EMAIL='335404629+soleur-infra[bot]@users.noreply.github.com'
+LEGACY_BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
 
 flag() { # flag <name> — value of a --flag arg
   local i
@@ -240,17 +250,23 @@ flag() { # flag <name> — value of a --flag arg
 
 pr_json() { # emit one PR object from a state line
   local n="$1" h="$2" u="$3" o="$4" s="$5" fl="${6:-}"
-  local xr=false al='soleur-ai[bot]'
+  local xr=false al='app/soleur-infra'
   if [[ "$fl" == *fork* ]]; then xr=true; al='fork-user'; fi
+  if [[ "$fl" =~ author=([^,]+) ]]; then al="${BASH_REMATCH[1]}"; fi
+  # |armed flag: auto-merge already enabled on this PR (gh reports autoMergeRequest
+  # as an object when armed, null otherwise).
+  local am=null
+  [[ "$fl" == *armed* ]] && am='{"enabledAt":"2026-09-30T00:00:00Z","mergeMethod":"SQUASH"}'
+
   # |nullhead flag: GitHub emits headRefName:null for PRs whose head repo or
   # branch was deleted — the supersede jq must skip, not throw mid-pipe.
   if [[ "$fl" == *nullhead* ]]; then
-    printf '{"number":%s,"headRefName":null,"url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"}}' \
-      "$n" "$u" "$o" "$s" "$xr" "$al"
+    printf '{"number":%s,"headRefName":null,"url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"},"autoMergeRequest":%s}' \
+      "$n" "$u" "$o" "$s" "$xr" "$al" "$am"
     return
   fi
-  printf '{"number":%s,"headRefName":"%s","url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"}}' \
-    "$n" "$h" "$u" "$o" "$s" "$xr" "$al"
+  printf '{"number":%s,"headRefName":"%s","url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"},"autoMergeRequest":%s}' \
+    "$n" "$h" "$u" "$o" "$s" "$xr" "$al" "$am"
 }
 
 case "$sub" in
@@ -280,6 +296,12 @@ case "$sub" in
     [[ "${MOCK_GH_CREATE_COLLIDE:-0}" == "1" ]] \
       && { echo "a pull request for branch already exists" >&2; exit 1; }
     head="$(flag --head)"; title="$(flag --title)"
+    # GitHub refuses a second OPEN same-repo PR for one head branch; a fork PR with a
+    # colliding branch name does not block (different head repository).
+    while IFS='|' read -r xn xh xu xo xs xfl; do
+      [[ "$xs" == open && "$xh" == "$head" && "$xfl" != *fork* ]] \
+        && { echo "a pull request for branch \"$head\" already exists" >&2; exit 1; }
+    done < "$MOCK_GH_PRS"
     n=$(( $(wc -l < "$MOCK_GH_PRS" 2>/dev/null || echo 0) + 1 ))
     url="https://github.test/mock/pull/$n"
     oid=$(git --git-dir="${MOCK_ORIGIN:?unset}" rev-parse "refs/heads/$head" 2>/dev/null || echo "0")
@@ -287,6 +309,10 @@ case "$sub" in
     printf '%s\n' "$url"
     ;;
   "pr comment"|"pr merge")
+    if [[ "$sub" == "pr merge" && " $* " == *" --disable-auto "* ]]; then
+      [[ "${MOCK_GH_DISABLE_FAIL:-0}" == "1" ]] && { echo "disable auto-merge failed" >&2; exit 1; }
+      exit 0
+    fi
     [[ "$sub" == "pr merge" && "${MOCK_GH_MERGE_FAIL:-0}" == "1" ]] && { echo "merge arm failed" >&2; exit 1; }
     exit 0
     ;;
@@ -303,7 +329,8 @@ case "$sub" in
     if [[ "$ep" =~ commits/([0-9a-f]{40})$ ]]; then
       sha="${BASH_REMATCH[1]}"
       em=$(git --git-dir="$MOCK_ORIGIN" log -1 --format='%ae' "$sha" 2>/dev/null || true)
-      if [[ "$em" == "$BOT_EMAIL" ]]; then login='soleur-ai[bot]'
+      if [[ "$em" == "$BOT_EMAIL" ]]; then login='soleur-infra[bot]'
+      elif [[ "$em" == "$LEGACY_BOT_EMAIL" ]]; then login='soleur-ai[bot]'
       elif [[ -n "$em" ]]; then login='fixture-human'
       else login=''
       fi
@@ -367,8 +394,14 @@ run_bump() {
       || git -C "$F_REPO" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null || true)
     [[ -n "$sc" ]] && pre=(--signed-commit "$sc")
   fi
-  env BUMP_REPO_DIR="$F_REPO" BUMP_PUSH_URL="$F_ORIGIN" \
-      GH_TOKEN="fixture-installation-token" \
+  # RB_PUSH_URL / RB_GH_TOKEN (S4, #9597) let a row take the REAL-remote path:
+  # RB_PUSH_URL="" is an empty BUMP_PUSH_URL (the script treats it as unset),
+  # and RB_GH_TOKEN picks the credential the shape guard judges.
+  # RB_INHERIT_AUTH_HDR puts an EXPORTED AUTH_HDR in the SCRIPT's environment only (not in this harness's own git calls above).
+  local -a inh=()
+  [[ -n "${RB_INHERIT_AUTH_HDR:-}" ]] && inh=(AUTH_HDR="$RB_INHERIT_AUTH_HDR")
+  env "${inh[@]}" BUMP_REPO_DIR="$F_REPO" BUMP_PUSH_URL="${RB_PUSH_URL-$F_ORIGIN}" \
+      GH_TOKEN="${RB_GH_TOKEN-fixture-installation-token}" \
       MOCK_CRANE_MAP="$MOCK_CRANE_MAP" MOCK_CRANE_LOG="$MOCK_CRANE_LOG" \
       MOCK_CRANE_CONFIG="$MOCK_CRANE_CONFIG" \
       MOCK_GH_LOG="$MOCK_GH_LOG" \
@@ -629,6 +662,11 @@ run_bump humantip --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-statu
 assert_rc     'g1.humantip:exit' 0
 assert_result 'g1.humantip:result' skipped
 assert_out_has 'g1.humantip:marker' 'branch-has-manual-commits'
+# The recovery is an action a human can take (#9262) — never "reset the tip to a
+# bot commit", which no human can author.
+assert_out_has 'g1.humantip:recovery' 'dispatch the build once from main with mirror_only=true'
+assert_out_has 'g1.humantip:recovery-delete' 'git push origin --delete soleur/inngest-pin-v1.1.38'
+assert_out_has 'g1.humantip:recovery-held' 'the PR it opens is HELD'
 assert_gh_not_called 'g1.humantip:no-pr' 'gh pr '
 # The human tip must still be the remote tip (not clobbered).
 [[ $(git --git-dir="$F_ORIGIN" log -1 --format='%ae' 'soleur/inngest-pin-v1.1.38') == 'human@example.test' ]] \
@@ -643,7 +681,7 @@ printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
 # Seed sha captured: %ae alone is vacuous here (the seed ALREADY carries the
 # bot email) — the sha must MOVE and the new tip must be the bump commit.
-seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL")
+seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-infra[bot]' "$BOT_EMAIL")
 
 run_bump bottip --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_rc     'g1.bottip:exit' 0
@@ -662,7 +700,7 @@ fixture_commit "pins at v1.1.37"
 seed_tag vinngest-v1.1.38
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
-seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL")
+seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-infra[bot]' "$BOT_EMAIL")
 
 MOCK_GH_UNLINKED=1 run_bump unlinkedbot --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_rc     'g1.unlinkedbot:exit' 0
@@ -734,6 +772,137 @@ assert_gh_called 'g1.collide:relist' 'gh pr list .*--head soleur/inngest-pin-v1.
   || fail 'g1.collide:no-new-pr' "state rows after collision: $(cat "$MOCK_GH_PRS")"
 
 # ---------------------------------------------------------------------------
+# #9262 — the PR-author filter. `gh pr list --json author` reports an App author
+# as `app/<slug>`, so the filter compares against BOT_PR_LOGIN (app/soleur-infra),
+# never BOT_NAME: before #9262 it compared against `soleur-ai[bot]` and the
+# reuse path never matched in production. A same-repo PR for the branch authored
+# by the LEGACY App or by a human is NOT reused (it is not this identity's PR):
+# the run falls through to `gh pr create`, which GitHub refuses for a second open
+# same-repo PR on one head (the stub models that), the filtered re-list finds no
+# soleur-infra PR, and the run dies at stage `pr` — loud, never a hijack of a PR
+# someone else authored.
+# ---------------------------------------------------------------------------
+for who in 'app/soleur-ai:legacy-app' 'fixture-human:human'; do
+  login="${who%%:*}"; lbl="${who##*:}"
+  new_fixture_repo "author-$lbl"
+  write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+  fixture_commit "pins at v1.1.37"
+  seed_tag vinngest-v1.1.38
+  printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+  git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+  printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|author=%s\n' \
+    "$(git -C "$F_REPO" rev-parse HEAD)" "$login" >> "$MOCK_GH_PRS"
+  run_bump "author-$lbl" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+  [[ "$LAST_RC" != 0 ]] && pass "g1.author-$lbl:nonzero" || fail "g1.author-$lbl:nonzero" "a foreign-authored PR on the bot branch was accepted"
+  assert_result  "g1.author-$lbl:result" error
+  assert_out_has "g1.author-$lbl:stage" '::error::pr:'
+  assert_out_has "g1.author-$lbl:names-filter" 'found no same-repo bot PR'
+  assert_gh_called     "g1.author-$lbl:tried-create" 'gh pr create '
+  assert_gh_not_called "g1.author-$lbl:not-reused" 'gh pr (comment|merge) 9 '
+done
+
+# #9262 — a pin branch whose tip is the LEGACY soleur-ai[bot] identity (left over
+# from before the switch) is treated like a human tip: never force-pushed over.
+new_fixture_repo legacytip
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+legacy_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$LEGACY_BOT_EMAIL")
+run_bump legacytip --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc      'g1.legacytip:exit' 0
+assert_result  'g1.legacytip:result' skipped
+assert_out_has 'g1.legacytip:marker' 'branch-has-manual-commits'
+assert_origin_branch 'g1.legacytip:tip-preserved' 'soleur/inngest-pin-v1.1.38' "$legacy_sha"
+
+# ---------------------------------------------------------------------------
+# #9262 — `--mirror-only true` never arms auto-merge. The build's sign step
+# re-resolves the tag and signs whatever it points at, and mirror_only skips the
+# build's ancestry refusal, so a backfill cannot attest provenance: the PR opens
+# HELD and says why, even when every other attestation (mirror ok, signed tag ==
+# target, provenance bound) would have armed it. `false` and '' keep arming.
+# ---------------------------------------------------------------------------
+for mo in 'true:held' 'false:armed' ':armed'; do
+  val="${mo%%:*}"; want="${mo##*:}"; lbl="mirror-only-${val:-empty}"
+  new_fixture_repo "$lbl"
+  write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+  fixture_commit "pins at v1.1.37"
+  seed_tag vinngest-v1.1.38
+  printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+  git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+  run_bump "$lbl" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only "$val"
+  assert_rc     "g1.$lbl:exit" 0
+  assert_result "g1.$lbl:result" opened
+  if [[ "$want" == held ]]; then
+    assert_gh_not_called "g1.$lbl:no-merge" 'gh pr merge '
+    assert_gh_called     "g1.$lbl:body-says-why" 'gh pr create .*mirror_only backfill cannot attest provenance'
+    assert_gh_called     "g1.$lbl:hold-comment" 'gh pr comment .*mirror_only'
+  else
+    assert_gh_called "g1.$lbl:merge-armed" 'gh pr merge '
+  fi
+done
+# The `existing` path re-lists a reusable PR: under mirror_only it is not armed either.
+new_fixture_repo mirror-only-existing
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open\n' "$(git -C "$F_REPO" rev-parse HEAD)" >> "$MOCK_GH_PRS"
+run_bump mirror-only-existing --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only true
+assert_result        'g1.mirror-only-existing:result' existing
+assert_gh_called     'g1.mirror-only-existing:reused' 'gh pr comment 9 '
+assert_gh_not_called 'g1.mirror-only-existing:no-merge' 'gh pr merge '
+assert_gh_called     'g1.mirror-only-existing:hold-comment' 'gh pr comment 9 .*mirror_only backfill'
+# An earlier full build ARMED auto-merge on the reused PR: a mirror_only run must
+# disarm it (GitHub keeps auto-merge across a writer's push), and a failed disarm is
+# fatal — the PR could otherwise merge on a mirror_only commit (#9262 review).
+for arm in 'ok:0' 'fail:1'; do
+  lbl="mirror-only-armed-${arm%%:*}"; dfail="${arm##*:}"
+  new_fixture_repo "$lbl"
+  write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+  fixture_commit "pins at v1.1.37"
+  seed_tag vinngest-v1.1.38
+  printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+  git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+  printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|armed\n' "$(git -C "$F_REPO" rev-parse HEAD)" >> "$MOCK_GH_PRS"
+  MOCK_GH_DISABLE_FAIL="$dfail" run_bump "$lbl" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only true
+  assert_gh_called     "g1.$lbl:disarms" 'gh pr merge 9 --repo [^ ]+ --disable-auto'
+  assert_gh_not_called "g1.$lbl:never-arms" 'gh pr merge .*--auto --squash'
+  if [[ "$dfail" == 0 ]]; then
+    assert_rc     "g1.$lbl:exit" 0
+    assert_result "g1.$lbl:result" existing
+  else
+    [[ "$LAST_RC" != 0 ]] && pass "g1.$lbl:nonzero" || fail "g1.$lbl:nonzero" "a failed disarm was tolerated"
+    assert_result  "g1.$lbl:result" error
+    assert_out_has "g1.$lbl:stage" '::error::pr:'
+  fi
+done
+# The unarmed full-build path does NOT call --disable-auto (the disarm is scoped to
+# mirror_only): a plain re-run of an armed PR keeps its arm.
+new_fixture_repo armed-full-build
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|armed\n' "$(git -C "$F_REPO" rev-parse HEAD)" >> "$MOCK_GH_PRS"
+run_bump armed-full-build --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_result        'g1.armed-full-build:result' existing
+assert_gh_not_called 'g1.armed-full-build:no-disarm' 'disable-auto'
+run_bump mirror-only-bad --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only yes
+[[ "$LAST_RC" != 0 ]] && pass 'g1.mirror-only-bad:nonzero' || fail 'g1.mirror-only-bad:nonzero' "--mirror-only yes accepted"
+assert_out_has 'g1.mirror-only-bad:stage' '::error::args:'
+# A repeated flag is refused, never last-wins (a trailing `--mirror-only false`
+# would otherwise cancel the hold).
+run_bump mirror-only-dup --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only true --mirror-only false
+[[ "$LAST_RC" != 0 ]] && pass 'g1.mirror-only-dup:nonzero' || fail 'g1.mirror-only-dup:nonzero' "a repeated --mirror-only was accepted"
+assert_out_has 'g1.mirror-only-dup:names' 'duplicate argument: --mirror-only'
+assert_result  'g1.mirror-only-dup:result' error
+assert_out_has 'g1.mirror-only-dup:stage' '::error::args:'
+
+# ---------------------------------------------------------------------------
 # AC9 — degraded mirror: PR opens, auto-merge NOT armed, hold comment lands.
 # ---------------------------------------------------------------------------
 new_fixture_repo degraded
@@ -777,7 +946,7 @@ seed_tag vinngest-v1.1.38
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
 # Stale bot PR for the previous target.
-old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.37' 'soleur-ai[bot]' "$BOT_EMAIL")
+old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.37' 'soleur-infra[bot]' "$BOT_EMAIL")
 printf '7|soleur/inngest-pin-v1.1.37|https://github.test/mock/pull/7|%s|open\n' "$old_sha" >> "$MOCK_GH_PRS"
 # A null-headRefName PR (head repo deleted upstream) sits in the same list
 # output — the supersede jq must skip it without aborting the sweep.
@@ -871,7 +1040,7 @@ fixture_commit "pins at v1.1.37"
 seed_tag vinngest-v1.1.38
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
-old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL")
+old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-infra[bot]' "$BOT_EMAIL")
 # A fork PR wearing the same headRefName — real `gh pr list --head` returns it.
 printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|fork\n' "$old_sha" >> "$MOCK_GH_PRS"
 
@@ -978,6 +1147,259 @@ if grep -qE '^(trace:|Run command|run_command)' "$TMP/gittrace.out"; then
 else
   pass 'g1.gittrace:no-trace'
 fi
+
+# ---------------------------------------------------------------------------
+# S4 (#9597, ADR-280): the push credential is NEVER on git's argument list. The
+# real-remote path builds `https://github.com/<repo>.git` (no userinfo) and
+# hands the token to the two remote-touching git calls as a per-command
+# ENVIRONMENT header (GIT_CONFIG_COUNT/KEY_0/VALUE_0, http.<url>.extraheader).
+#
+# Every row below is VALUE-FREE: the `git` shim compares argv and environment
+# against the synthetic token and its base64 itself and logs only verdict words
+# (argv=clean|token|b64, url=ok|userinfo|none, env=header-ok|header-bad|none),
+# so no token or encoding is ever printed, logged or asserted as text.
+#
+# The shim never reaches the network. A remote-touching call (ls-remote, push)
+# whose URL is `https://github.com/...` is pointed at the fixture bare repo
+# (local rows) or at a loopback HTTP server that judges the Authorization header
+# it receives (wire rows); any other http(s)/ssh URL (the old userinfo form)
+# is refused with exit 97 instead of being sent anywhere.
+#
+# Token-shaped fixtures are assembled from pieces at run time: the gitleaks hook
+# scans the staged index, so no contiguous token literal may appear in source.
+# ---------------------------------------------------------------------------
+SYN_TOK="gh""s_$(printf 'k3Zq%.0s' $(seq 1 9))"
+SYN_B64=$(printf '%s' "x-access-token:${SYN_TOK}" | base64 | tr -d '\n')
+# SYN_TOK_V2 models the format GitHub actually issues today (#9972): an
+# installation token in the several-hundred-char range (measured ~390 chars
+# 2026-10-11) whose alphabet is [A-Za-z0-9._~+/=-] — the canonical credential
+# class of scripts/lib/bearer-curl.sh bc_ok — carrying each byte the legacy
+# [A-Za-z0-9_] class lacked ('.' '-' '~' '+' '/' '='). Only the "gh""s_" prefix
+# is split: the staged-index scan keys on the prefix, not the punctuation.
+SYN_TOK_V2="gh""s_$(printf 'k3Zq%.0s' $(seq 1 30)).$(printf 'A9x%.0s' $(seq 1 30))-$(printf 'B7w%.0s' $(seq 1 30))~$(printf 'C4v%.0s' $(seq 1 20))+$(printf 'D2u%.0s' $(seq 1 10))/$(printf 'E5t%.0s' $(seq 1 10))="
+SHIM_DIR="$TMP/gitshim"; mkdir -p "$SHIM_DIR"
+SHIM_REAL_GIT=$(command -v git)   # absolute path, resolved BEFORE any PATH prefix
+[[ "$SHIM_REAL_GIT" == /* ]] || { echo "FATAL: git is not an absolute path ($SHIM_REAL_GIT)" >&2; exit 2; }
+REAL_SLEEP_PATH=/usr/bin:/bin   # `sleep` is stubbed on $BIN; the server wait needs the real one
+cat > "$SHIM_DIR/git" <<'SHIM'
+#!/usr/bin/env bash
+# Records one VERDICT line per call (never a value), then execs the real git.
+set -u
+real="${SHIM_REAL_GIT:?}"
+sub="" skip=0
+for a in "$@"; do
+  if [[ "$skip" == 1 ]]; then skip=0; continue; fi
+  case "$a" in -C|-c) skip=1; continue ;; -*) continue ;; esac
+  sub="$a"; break
+done
+net=0; case "$sub" in ls-remote|push|fetch|clone|pull) net=1 ;; esac
+joined=" $* "
+argv=clean
+[[ -n "${SHIM_B64:-}" && "$joined" == *"$SHIM_B64"* ]] && argv=b64
+[[ -n "${SHIM_TOKEN:-}" && "$joined" == *"$SHIM_TOKEN"* ]] && argv=token
+url=none
+for a in "$@"; do
+  case "$a" in
+    https://*@*|http://*@*) url=userinfo ;;
+    https://github.com/*) [[ "$url" == userinfo ]] || url=ok ;;
+  esac
+done
+env=none
+if [[ -n "${GIT_CONFIG_VALUE_0+x}" && "${GIT_CONFIG_KEY_0:-}" != commit.gpgsign ]]; then
+  dec=$(printf '%s' "${GIT_CONFIG_VALUE_0#Authorization: basic }" | base64 -d 2>/dev/null || true)
+  if [[ "${GIT_CONFIG_COUNT:-}" == 1 && "${GIT_CONFIG_KEY_0:-}" == "http.https://github.com/.extraheader" \
+        && "$GIT_CONFIG_VALUE_0" == "Authorization: basic "* && "$dec" == "x-access-token:${SHIM_TOKEN:-}" \
+        && "$GIT_CONFIG_VALUE_0" == "Authorization: basic ${SHIM_B64:-}" ]]; then
+    # The SHIM_B64 conjunct pins the run_shimmed derivation: a SHIM_B64 reverted
+    # to a sibling token's encoding reds every accept row carrying a DIFFERENT
+    # token instead of silently vacuous on argv=b64 alone (the unpinned-wire
+    # class, #9972 review).
+    env=header-ok
+  else
+    env=header-bad
+  fi
+fi
+printf 'sub=%s net=%s argv=%s url=%s env=%s\n' "${sub:-none}" "$net" "$argv" "$url" "$env" >> "${SHIM_LOG:?}"
+# Whether the script's own AUTH_HDR variable is in the child's ENVIRONMENT (a verdict word, never the value).
+if [[ -n "${AUTH_HDR+x}" ]]; then echo set; else echo unset; fi >> "${SHIM_LOG}.ah"
+args=("$@")
+if [[ "$net" == 1 ]]; then
+  for i in "${!args[@]}"; do
+    case "${args[$i]}" in
+      https://github.com/*)
+        if [[ -n "${SHIM_WIRE_BASE:-}" ]]; then
+          args[i]="${SHIM_WIRE_BASE}${args[i]#https://github.com/}"
+          export GIT_CONFIG_KEY_0="http.${SHIM_WIRE_BASE}.extraheader"
+          export NO_PROXY=127.0.0.1 no_proxy=127.0.0.1
+        elif [[ -n "${SHIM_LOCAL_REMOTE:-}" ]]; then
+          args[i]="$SHIM_LOCAL_REMOTE"
+        fi ;;
+    esac
+  done
+  for a in "${args[@]}"; do
+    case "$a" in
+      https://github.com/*|ssh://*|git@*) exit 97 ;;
+      https://*|http://*) [[ -n "${SHIM_WIRE_BASE:-}" && "$a" == "${SHIM_WIRE_BASE}"* ]] || exit 97 ;;
+    esac
+  done
+fi
+exec "$real" "${args[@]}"
+SHIM
+chmod +x "$SHIM_DIR/git"
+
+# run_shimmed <name> <local|wire|none> <token> -- <run_bump args...>
+# Runs the REAL-remote path (empty BUMP_PUSH_URL) under the recording shim.
+run_shimmed() {
+  local name="$1" mode="$2" tok="$3"; shift 4
+  SHIM_LOG_F="$TMP/shim.$name.log"; : > "$SHIM_LOG_F"
+  (
+    export PATH="$SHIM_DIR:$PATH"
+    export SHIM_REAL_GIT SHIM_LOG="$SHIM_LOG_F" SHIM_TOKEN="$tok"
+    # SHIM_B64 derives from THIS row's token, not the SYN_TOK constant: a fixture
+    # pinned to a sibling value certifies the wrong wire when the row carries a
+    # different credential (the 2026-09-19 unpinned-wire class).
+    export SHIM_B64; SHIM_B64="$(printf '%s' "x-access-token:${tok}" | base64 | tr -d '\n')"
+    [[ "$mode" == local ]] && export SHIM_LOCAL_REMOTE="$F_ORIGIN"
+    [[ "$mode" == wire ]] && export SHIM_WIRE_BASE="$WIRE_BASE"
+    RB_PUSH_URL="" RB_GH_TOKEN="$tok" run_bump "$name" "$@"
+    exit "$LAST_RC"
+  )
+  LAST_RC=$?
+  LAST_OUT="$TMP/$name.out"; LAST_GOUT="$TMP/$name.gout"
+}
+shim_count() { grep -c -- "$1" "$SHIM_LOG_F" 2>/dev/null || true; }   # 0 when no match
+out_lacks() { # name needle-var-value — the needle is compared, never printed
+  if grep -qF -- "$2" "$LAST_OUT"; then fail "$1" "a credential value reached the script's output"
+  else pass "$1"; fi
+}
+
+# --- local rows: real-remote path, remote redirected to the fixture bare repo ---
+# accept_row <name> <tok> — fresh fixture + the full env-header assertion set
+# for a credential the guard MUST admit. (Named accept_row, not *_wire_*: this
+# file reserves "wire" for run_shimmed's loopback-HTTP mode.) The b64 needle
+# derives from the row's own token so the no-b64-in-output check judges the
+# right encoding (run_shimmed does the same for the shim's decode comparison).
+accept_row() {
+  local name="$1" tok="$2" tok_b64
+  tok_b64="$(printf '%s' "x-access-token:${tok}" | base64 | tr -d '\n')"
+  new_fixture_repo "$name"
+  write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+  fixture_commit "pins at v1.1.37"
+  seed_tag vinngest-v1.1.38
+  printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+  git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+  run_shimmed "$name" local "$tok" -- --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+  assert_rc     "g1.$name:exit" 0
+  assert_result "g1.$name:result" opened
+  assert_origin_branch "g1.$name:branch" 'soleur/inngest-pin-v1.1.38' present
+  [[ "$(shim_count 'net=1')" == 2 ]] && pass "g1.$name:two-remote-calls" \
+    || fail "g1.$name:two-remote-calls" "expected exactly ls-remote + push, shim saw $(shim_count 'net=1') remote call(s)"
+  [[ "$(shim_count 'sub=ls-remote net=1')" == 1 && "$(shim_count 'sub=push net=1')" == 1 ]] && pass "g1.$name:calls-are-ls-remote-and-push" \
+    || fail "g1.$name:calls-are-ls-remote-and-push" "remote calls: $(grep 'net=1' "$SHIM_LOG_F" | awk '{print $1}' | tr '\n' ' ')"
+  [[ "$(shim_count 'argv=token')" == 0 ]] && pass "g1.$name:no-token-in-argv" \
+    || fail "g1.$name:no-token-in-argv" "the token is on a git argument list"
+  [[ "$(shim_count 'argv=b64')" == 0 ]] && pass "g1.$name:no-b64-in-argv" \
+    || fail "g1.$name:no-b64-in-argv" "the base64 of the credential is on a git argument list"
+  [[ "$(shim_count 'net=1 argv=clean url=ok')" == 2 ]] && pass "g1.$name:remote-url-has-no-userinfo" \
+    || fail "g1.$name:remote-url-has-no-userinfo" "a remote call did not carry the bare https://github.com/ URL: $(grep 'net=1' "$SHIM_LOG_F" | tr '\n' '|')"
+  [[ "$(shim_count 'net=1 .*env=header-ok')" == 2 ]] && pass "g1.$name:header-in-env-of-remote-calls" \
+    || fail "g1.$name:header-in-env-of-remote-calls" "the remote calls did not both carry the decoded-equal header in their environment: $(grep 'net=1' "$SHIM_LOG_F" | tr '\n' '|')"
+  [[ "$(shim_count 'net=0 .*env=header')" == 0 ]] && pass "g1.$name:header-only-on-remote-calls" \
+    || fail "g1.$name:header-only-on-remote-calls" "a non-remote git call carried the header"
+  out_lacks "g1.$name:no-token-in-output" "$tok"
+  out_lacks "g1.$name:no-b64-in-output"   "$tok_b64"
+}
+
+accept_row argv "$SYN_TOK"
+# AUTH_HDR is a shell variable, never exported: not in any git child's environment.
+# argv-row only by design: the property is token-independent (whether the
+# variable carries the export attribute), so pinning it once is the whole
+# property — newshape re-verifies the same mechanism via env=header-ok.
+[[ "$(wc -l < "$SHIM_LOG_F.ah")" -ge 2 && "$(grep -c '^set$' "$SHIM_LOG_F.ah")" == 0 ]] && pass 'g1.argv:AUTH_HDR-not-in-child-env' \
+  || fail 'g1.argv:AUTH_HDR-not-in-child-env' "git children saw AUTH_HDR=$(sort "$SHIM_LOG_F.ah" | uniq -c | tr '\n' ' ')"
+# ...even when the CALLER's environment already exports a variable of that name: `AUTH_HDR=""` alone would keep the
+# inherited export attribute and hand the base64 to every child, so the script unsets it before assigning it.
+new_fixture_repo inherit
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+RB_INHERIT_AUTH_HDR="inherited-synthetic-value"
+run_shimmed inherit local "$SYN_TOK" -- --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+unset RB_INHERIT_AUTH_HDR
+assert_rc     'g1.inherit:exit' 0
+assert_result 'g1.inherit:result' opened
+[[ "$(shim_count 'net=1 .*env=header-ok')" == 2 ]] && pass 'g1.inherit:header-still-built-for-both-remote-calls' \
+  || fail 'g1.inherit:header-still-built-for-both-remote-calls' "the script did not build its own header: $(grep 'net=1' "$SHIM_LOG_F" | tr '\n' '|')"
+[[ "$(wc -l < "$SHIM_LOG_F.ah")" -ge 2 && "$(grep -c '^set$' "$SHIM_LOG_F.ah")" == 0 ]] && pass 'g1.inherit:inherited-AUTH_HDR-not-passed-to-children' \
+  || fail 'g1.inherit:inherited-AUTH_HDR-not-passed-to-children' "git children saw AUTH_HDR=$(sort "$SHIM_LOG_F.ah" | uniq -c | tr '\n' ' ')"
+
+# --- wire rows: the header is actually SENT, and judged by a loopback server ---
+# A python3 loopback server answers every request 404 and appends one verdict
+# word per request (MATCH|MISMATCH|NOHDR) comparing its Authorization header to
+# the expected value (handed to it by environment). The git shim re-points the
+# script's https://github.com/ remote at it and rewrites the extraheader key's
+# URL prefix the same way, so the script's own header is what crosses the wire.
+cat > "$TMP/hdrsrv.py" <<'PYSRV'
+import http.server, os, sys
+exp = "basic " + os.environ["HDR_EXPECT_B64"]
+log = sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        v = self.headers.get("Authorization")
+        word = "NOHDR" if v is None else ("MATCH" if v == exp else "MISMATCH")
+        with open(log, "a") as f:
+            f.write(word + "\n")
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+    do_POST = do_GET
+    def log_message(self, *a):
+        pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+with open(sys.argv[1] + ".tmp", "w") as f:
+    f.write(str(srv.server_address[1]))
+os.rename(sys.argv[1] + ".tmp", sys.argv[1])
+srv.serve_forever()
+PYSRV
+HDR_LOG="$TMP/hdr.log"; : > "$HDR_LOG"
+HDR_EXPECT_B64="$SYN_B64" python3 -I "$TMP/hdrsrv.py" "$TMP/hdr.port" "$HDR_LOG" >/dev/null 2>&1 &
+SRV_PID=$!
+for _i in $(seq 1 50); do [[ -s "$TMP/hdr.port" ]] && break; PATH="$REAL_SLEEP_PATH" sleep 0.1; done
+if [[ -s "$TMP/hdr.port" ]]; then
+  WIRE_BASE="http://127.0.0.1:$(cat "$TMP/hdr.port")/"
+  pass 'g1.wire:server-up'
+else
+  WIRE_BASE="http://127.0.0.1:1/"
+  fail 'g1.wire:server-up' "loopback header server did not start"
+fi
+new_fixture_repo wire
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+# Every git trace channel on, redaction off: if the script did not scrub them the
+# header (and its base64) would be printed into the captured output.
+# (GIT_TRACE itself is left out: it would also trace the script's OWN `git tag`
+# reads, which the script captures, and die before the remote is ever touched.)
+( export GIT_TRACE_CURL=1 GIT_CURL_VERBOSE=1 GIT_TRACE_REDACT=0
+  run_shimmed wire wire "$SYN_TOK" -- --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok )
+LAST_OUT="$TMP/wire.out"; LAST_GOUT="$TMP/wire.gout"
+[[ "$(wc -l < "$HDR_LOG")" -ge 2 ]] && pass 'g1.wire:server-saw-ls-remote-and-push' \
+  || fail 'g1.wire:server-saw-ls-remote-and-push' "loopback server logged $(wc -l < "$HDR_LOG") request(s), expected at least 2 (ls-remote, push)"
+[[ -s "$HDR_LOG" && -z "$(grep -vx 'MATCH' "$HDR_LOG")" ]] && pass 'g1.wire:header-sent-and-decodes-to-token' \
+  || fail 'g1.wire:header-sent-and-decodes-to-token' "request verdicts: $(sort "$HDR_LOG" | uniq -c | tr '\n' ' ')"
+out_lacks 'g1.wire:trace-no-token' "$SYN_TOK"
+out_lacks 'g1.wire:trace-no-b64'   "$SYN_B64"
+if grep -qE '^(trace:|[0-9:.]+ (git|pkt-line|http))|Run command|run_command|=> Send header|<= Recv header' "$LAST_OUT"; then
+  fail 'g1.wire:no-trace-lines' "git trace lines present — the trace channels were not scrubbed"
+else
+  pass 'g1.wire:no-trace-lines'
+fi
+kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=""
+
 
 echo ""
 echo "=== Guard 1b: merged-into-main selection + history refusals (#8747, #8782) ==="
@@ -1334,6 +1756,8 @@ NO_AUTO_SIGNED_COMMIT=1 run_bump anc-b11-missing --signed-tag v1.1.38 --signed-d
 assert_result  'g1b.B11-missing:result' error
 assert_out_has 'g1b.B11-missing:stage' '::error::args:'
 assert_out_has 'g1b.B11-missing:names-flag' '--signed-commit'
+# #9262: a hand-pushed tag starts nothing, so the recovery is a dispatch from main.
+assert_out_has 'g1b.B11-missing:recovery' 'then dispatch the build once from main'
 run_bump anc-b11-bad --signed-commit 'abc123' --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 [[ "$LAST_RC" != 0 ]] && pass 'g1b.B11-bad:nonzero' || fail 'g1b.B11-bad:nonzero' "malformed --signed-commit accepted"
 assert_out_has 'g1b.B11-bad:stage' '::error::args:'
@@ -1360,6 +1784,7 @@ precond_off_main 'g1b.B12' vinngest-v1.1.39
 run_bump anc-b12 --signed-tag v1.1.25 --signed-digest "$DIG_OLD" --mirror-status ok
 assert_refused 'g1b.B12' 'Refusing to author a downgrade' resolve
 assert_out_has 'g1b.B12:do-not-delete' 'Do NOT delete or re-cut'
+assert_out_has 'g1b.B12:recovery' 'then dispatch the build once from main'
 grep -qF 'git push origin :refs/tags/vinngest-v1.1.39' "$LAST_OUT" \
   && fail 'g1b.B12:no-delete-command' "the refusal prints a command that deletes the live pin" \
   || pass 'g1b.B12:no-delete-command'
@@ -1559,6 +1984,80 @@ assert_out_has 'g1b.B24:stage' '::error::resolve:'
 # never the signed tag: every later publish dies here until it is republished.
 assert_out_has 'g1b.B24:remedy' 'republish vinngest-v1.1.37 (workflow_dispatch)'
 
+# S4 refusal rows live here, not beside the shim above, because they use
+# base_fixture and assert_refused (defined in Guard 1b); the shim, run_shimmed
+# and out_lacks come from the S4 block in Guard 1.
+# --- refused credentials: marker, non-zero, and ZERO git network calls ---------
+# Each value is a shape the guard must refuse BEFORE the header is built: an
+# embedded space, a quote (a config/URL injection), a colon, a newline and a
+# tab (control bytes, reason=control_char), and an empty token.
+# '.' and '-' are IN-CLASS now — the guard's alphabet is the canonical
+# [A-Za-z0-9._~+/=-] of scripts/lib/bearer-curl.sh bc_ok, and GitHub's issued
+# installation tokens carry both (measured 2026-10-11, #9972). The newshape
+# accept row below pins the admission.
+refuse_row() { # <label> <token> <reason>
+  local lbl="$1" tok="$2" reason="$3"
+  base_fixture "refuse-$lbl"
+  printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+  run_shimmed "refuse-$lbl" local "$tok" -- --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+  assert_refused "g1.refuse-$lbl" 'must match [A-Za-z0-9._~+/=-]+' args
+  assert_out_has "g1.refuse-$lbl:marker" "SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin reason=$reason"
+  [[ "$(shim_count 'net=1')" == 0 ]] && pass "g1.refuse-$lbl:no-git-network-call" \
+    || fail "g1.refuse-$lbl:no-git-network-call" "git touched the remote after the credential was refused"
+  [[ -z "$(grep -v 'sub=rev-parse' "$SHIM_LOG_F")" ]] && pass "g1.refuse-$lbl:no-git-after-guard" \
+    || fail "g1.refuse-$lbl:no-git-after-guard" "git calls beyond the pre-guard rev-parse: $(grep -v 'sub=rev-parse' "$SHIM_LOG_F" | head -2 | tr '\n' '|')"
+  # An interior slice that survives intact in every variant (a newline or tab
+  # inside the whole value would split the needle into several patterns).
+  [[ -z "$tok" ]] || out_lacks "g1.refuse-$lbl:no-value-echo" "${SYN_TOK:16}"
+}
+refuse_row space   "${SYN_TOK:0:12} ${SYN_TOK:12}" token_shape
+refuse_row quote   "${SYN_TOK:0:12}\"${SYN_TOK:12}" token_shape
+refuse_row colon   "${SYN_TOK:0:12}:${SYN_TOK:12}" token_shape
+refuse_row newline "${SYN_TOK}"$'\n' control_char
+refuse_row tab     "${SYN_TOK:0:12}"$'\t'"${SYN_TOK:12}" control_char
+refuse_row empty   "" token_shape
+
+# The ACCEPT counterpart to the refuse rows (#9972): a token in the format
+# GitHub actually issues — several hundred chars on the [A-Za-z0-9._~+/=-]
+# alphabet — must pass the guard and drive the same env-header wire the argv
+# row pins. The self-check first pins that the fixture itself is out-of-class
+# for the LEGACY alphabet: a regeneration losing the punctuation would
+# otherwise degenerate newshape into a duplicate of argv with no red row.
+case "$SYN_TOK_V2" in *[!A-Za-z0-9_]*) : ;; *) fail 'fixture:newshape-carries-widened-bytes' "SYN_TOK_V2 carries no byte outside the legacy [A-Za-z0-9_] class" ;; esac
+accept_row newshape "$SYN_TOK_V2"
+
+# bc_ok parity (review r1, user-impact seat): the lint parity row pins every
+# _bearer_ok copy to _CANON_BODY — copy-vs-copy only. If bc_ok's judged class
+# is ever amended, every inline copy silently stays narrow (the #9972 shape
+# again). Compare the case-class span on each file's definition line as text;
+# bc_ok's line also carries *[![:space:]] trims, so take the LAST match. The
+# bump-side pattern is SPLIT — this file is inside the census's pathspec, and
+# a literal `_bearer_ok`+`() {` in its text would itself be swept up as an
+# off-canonical copy (verified: 74/1 red), so nothing here may spell the
+# contiguous form — comment included.
+_bc_src=$(sed -n '/^bc_ok()/p' "$REPO_ROOT/scripts/lib/bearer-curl.sh" | grep -oE '\*\[![^]]+\]' | tail -1)
+_bc_bump_pat='_bearer_''ok() {'
+_bc_bump=$(sed -n "/^${_bc_bump_pat}/p" "$SCRIPT" | grep -oE '\*\[![^]]+\]' | tail -1)
+[[ -n "$_bc_src" && "$_bc_src" == "$_bc_bump" ]] \
+  && pass 'g1.bc-parity:alphabet-match' \
+  || fail 'g1.bc-parity:alphabet-match' "bump guard class '$_bc_bump' diverged from bc_ok's '$_bc_src'"
+
+# xtrace with a live credential is refused first (#7797): exit 78 before any
+# expansion is traced, and nothing git-shaped runs.
+SHIM_LOG_F="$TMP/shim.xtrace.log"; : > "$SHIM_LOG_F"
+LAST_OUT="$TMP/xtrace.out"; LAST_GOUT="$TMP/xtrace.gout"; : > "$LAST_GOUT"
+( export PATH="$SHIM_DIR:$PATH" SHIM_REAL_GIT SHIM_LOG="$SHIM_LOG_F" SHIM_TOKEN="$SYN_TOK" SHIM_B64="$SYN_B64"
+  env GH_TOKEN="$SYN_TOK" BUMP_REPO_DIR="$F_REPO" GITHUB_OUTPUT="$LAST_GOUT" \
+    bash -x "$SCRIPT" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" > "$LAST_OUT" 2>&1 )
+LAST_RC=$?
+assert_rc 'g1.xtrace-refused:exit' 78
+assert_result 'g1.xtrace-refused:result' error
+assert_out_has 'g1.xtrace-refused:wording' 'refusing to trace with a live credential set'
+out_lacks 'g1.xtrace-refused:no-token' "$SYN_TOK"
+out_lacks 'g1.xtrace-refused:no-b64'   "$SYN_B64"
+[[ ! -s "$SHIM_LOG_F" ]] && pass 'g1.xtrace-refused:no-git-call' \
+  || fail 'g1.xtrace-refused:no-git-call' "git ran under a refused trace"
+
 echo ""
 echo "=== Guard 2: workflow shape + selector byte-equality ==="
 
@@ -1608,13 +2107,10 @@ check_block 'g2.bump:contents-read'          'contents: read'
 check_block 'g2.bump:packages-read'          'packages: read'
 check_block 'g2.bump:ghcr-login'             'docker/login-action'
 check_block 'g2.bump:ghcr-registry'          'registry: ghcr.io'
-check_block 'g2.bump:doppler-token-verify'   'DOPPLER_TOKEN'
 # P3 (review): the inline App-JWT recipe is extracted to a composite action —
 # the workflow wires the action, the recipe lives in the action file.
-check_block 'g2.bump:mint-action'            'uses: ./.github/actions/mint-soleur-ai-app-token'
 check_block 'g2.bump:mint-id'                'id: mint'
 check_block 'g2.bump:mint-token-env'         'steps.mint.outputs.token'
-check_block 'g2.bump:installation-id'        '122213433'
 check_block 'g2.bump:script-invoked'         'bump-inngest-bootstrap-pin.sh'
 # Binding-level asserts (not literal presence): a swapped or miswired value —
 # digest into --signed-tag, a different token output — must fail here.
@@ -1626,6 +2122,8 @@ check_block 'g2.bump:invoke-signed-tag'      '--signed-tag "$TAG"'
 check_block 'g2.bump:invoke-signed-digest'   '--signed-digest "$SIGNED_DIGEST"'
 check_block 'g2.bump:invoke-mirror-status'   '--mirror-status "$MIRROR_STATUS"'
 check_block 'g2.bump:invoke-run-url'         '--run-url "$RUN_URL"'
+check_block 'g2.bump:invoke-mirror-only'     '--mirror-only "$MIRROR_ONLY"'
+check_block 'g2.bump:env-mirror-only-binding' 'MIRROR_ONLY: ${{ inputs.mirror_only }}'
 check_block 'g2.bump:failure-slack'          'SLACK_RELEASES_WEBHOOK_URL'
 check_block 'g2.bump:timeout'                'timeout-minutes: 10'
 
@@ -1646,15 +2144,31 @@ fi
 
 # The extracted composite action must carry the JWT recipe verbatim — the same
 # anchors the bump block used to pin when the recipe was inline.
-ACTION="$REPO_ROOT/.github/actions/mint-soleur-ai-app-token/action.yml"
-check_action() { # name needle
-  if [[ -f "$ACTION" ]] && grep -qF -- "$2" "$ACTION"; then pass "$1"
-  else fail "$1" "mint-soleur-ai-app-token action lacks: $2"; fi
+ACTION="$REPO_ROOT/.github/actions/mint-infra-app-token/action.yml"
+check_action() { # name needle [grep flags; default -qF, -qxF anchors the whole line]
+  if [[ -f "$ACTION" ]] && grep "${3:--qF}" -- "$2" "$ACTION"; then pass "$1"
+  else fail "$1" "mint-infra-app-token action lacks: $2"; fi
 }
+# Positive control (review #9453): check_action must be able to FAIL. One needle that is not in the file, in a
+# subshell so the counters roll back; it must record exactly one failure (printf + exit, not through fail()).
+_ca="$( (check_action st-must-reject 'zz-no-such-needle-zz' >/dev/null 2>&1; printf '%s' "$FAIL") )"
+if [[ "$_ca" != "$((FAIL + 1))" ]]; then
+  printf 'FAIL INSTRUMENT: check_action passed a needle that is not in the action (FAIL %s -> %s)\n' "$FAIL" "$_ca" >&2; exit 2
+fi
+# The `-x` (whole-line) mode matters (review #9453, final pass): a decoy COMMENT whose text contains the indented
+# needle satisfies the plain `-qF` probe but not `-qxF`. Drive both on a fixture ACTION whose only occurrence is that
+# comment: the whole-line probe must record exactly one failure, the plain probe none. Subshells roll the counters back.
+_cax="$TMP/check-action-decoy.yml"; printf '#    default: soleur-infra-app\n' > "$_cax"
+_cax_x="$( (ACTION="$_cax"; check_action st-x-mode '    default: soleur-infra-app' -qxF >/dev/null 2>&1; printf '%s' "$FAIL") )"
+_cax_f="$( (ACTION="$_cax"; check_action st-f-mode '    default: soleur-infra-app' >/dev/null 2>&1; printf '%s' "$FAIL") )"
+if [[ "$_cax_x" != "$((FAIL + 1))" || "$_cax_f" != "$FAIL" ]]; then
+  printf 'FAIL INSTRUMENT: check_action ignores its third argument: a comment decoy must fail -qxF and pass -qF (FAIL %s -> x:%s f:%s)\n' "$FAIL" "$_cax_x" "$_cax_f" >&2; exit 2
+fi
 check_action 'g2.action:exists'           "using: 'composite'"
-check_action 'g2.action:doppler-config'   'prd_terraform'
-check_action 'g2.action:app-id'           'GITHUB_APP_ID'
-check_action 'g2.action:app-key'          'GITHUB_APP_PRIVATE_KEY'
+check_action 'g2.action:doppler-config'   '--project "$DOPPLER_SOURCE" --config prd'
+check_action 'g2.action:doppler-default'  '    default: soleur-infra-app' -qxF   # the real line, not a comment
+check_action 'g2.action:app-id'           'doppler secrets get GITHUB_INFRA_APP_ID --plain'
+check_action 'g2.action:app-key'          'doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain'
 check_action 'g2.action:b64url'           "b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\\n'; }"
 check_action 'g2.action:jwt-exchange'     'access_tokens'
 check_action 'g2.action:openssl-sign'     'openssl dgst -sha256 -sign'
@@ -1729,8 +2243,9 @@ RECORD_STEP='Record the built commit (#8747)'
 REFUSE_BODY="$TMP/refuse-step.sh"
 RECORD_BODY="$TMP/record-step.sh"
 SHAPE_OUT="$TMP/shape.out"
-python3 - "$WORKFLOW" "$REFUSE_STEP" "$RECORD_STEP" "$REFUSE_BODY" "$RECORD_BODY" > "$SHAPE_OUT" 2>&1 <<'PY'
-import sys, yaml
+SHAPE_PY="$TMP/shape.py"
+cat > "$SHAPE_PY" <<'PY'
+import re, sys, yaml
 wf, refuse_name, record_name, refuse_out, record_out = sys.argv[1:6]
 doc = yaml.safe_load(open(wf))
 jobs = doc.get("jobs") or {}
@@ -1804,8 +2319,73 @@ bstep2 = next((s for s in bsteps if s.get("name") == "Bump the cloud-init pin"),
 benv = bstep2.get("env") or {}
 emit("S8:bump-env-signed-commit", benv.get("SIGNED_COMMIT") == "${{ needs.build.outputs.commit }}", repr(benv.get("SIGNED_COMMIT")))
 emit("S8:bump-passes-signed-commit", '--signed-commit "$SIGNED_COMMIT"' in str(bstep2.get("run") or ""), "")
+# --- #9321: the bump job holds the main-only environment's NARROW secret ----
+# Read from the PARSED job (a comment cannot satisfy it). Each step is compared to
+# an EXACT dict AND its key set (name/timeout-minutes aside; ANY = present, value
+# not pinned), so an added key, a second token or a widened value is a different
+# step; one_minter/no_tier_a quantify over the whole job, because the step lookup
+# returns the FIRST match and cannot see a second minter after a compliant one.
+ANY = "<any>"
+IGN = {"name", "timeout-minutes"}
+def norm_env(j):
+    e = j.get("environment")
+    return e.get("name") if isinstance(e, dict) else e
+def exact(st, want):
+    got = {k: (ANY if (want[k] == ANY and st.get(k) is not None) else st.get(k)) for k in want}
+    keys = set(st) - IGN
+    return got == want and keys == {k for k, v in want.items() if v is not None}, f"got={got} keys={sorted(keys)}"
+emit("S15:bump-job-parsed", "bump-cloud-init-pin" in jobs and bool(bump), "no bump-cloud-init-pin job in the parsed workflow")
+emit("S16:bump-env-infra-privileged", norm_env(bump) == "infra-privileged", repr(bump.get("environment")))
+vstep = next((s for s in bsteps if s.get("name") == "Verify DOPPLER_TOKEN_INFRA_APP present"), {})
+emit("S17:bump-verify-exact", *exact(vstep, {"env": {"DOPPLER_TOKEN_CHECK": "${{ secrets.DOPPLER_TOKEN_INFRA_APP }}"}, "run": ANY, "if": None, "uses": None}))
+mstep = next((s for s in bsteps if str(s.get("uses", "")).endswith("mint-infra-app-token")), {})
+emit("S18:bump-mint-exact", *exact(mstep, {"id": "mint", "uses": "./.github/actions/mint-infra-app-token", "if": None, "env": None, "run": None,
+     "with": {"doppler-token": "${{ secrets.DOPPLER_TOKEN_INFRA_APP }}", "installation-id": "166065653",
+              "permissions": '{"contents":"write","pull_requests":"write"}', "repositories": "soleur"}}))
+minters = [s for s in bsteps if str(s.get("uses", "")).endswith("mint-infra-app-token")]
+emit("S19:bump-one-minter", len(minters) == 1, f"{len(minters)} mint-infra-app-token step(s)")
+TIER_A_RE = r"secrets(\.DOPPLER_TOKEN|\[\s*['\"]+DOPPLER_TOKEN['\"]+\s*\])(?![A-Za-z0-9_])"
+emit("S20:bump-no-tier-a", not re.search(TIER_A_RE, yaml.safe_dump({"job": bump, "env": doc.get("env"), "defaults": doc.get("defaults")}), re.I), "the bump job (or the workflow-level env/defaults) names the Tier-A secrets.DOPPLER_TOKEN")
+# S25 (#9321): neither the bump job nor the workflow-level env/defaults names the BROAD
+# Tier-B secret, in the dotted, bracket or whitespace spelling and in ANY letter case (secret names
+# and the `secrets` context are case-insensitive in Actions; whole serialised job, so an added
+# step or env key is inside the window).
+BROAD_RE = r"secrets(\s*\.\s*DOPPLER_TOKEN_INFRA_PRIVILEGED|\s*\[\s*['\"]+DOPPLER_TOKEN_INFRA_PRIVILEGED['\"]+\s*\])(?![A-Za-z0-9_])"
+emit("S25:bump-no-broad-tier-b", not re.search(BROAD_RE, yaml.safe_dump({"job": bump, "env": doc.get("env"), "defaults": doc.get("defaults")}), re.I), "the bump job (or the workflow-level env/defaults) names the broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED; it holds only DOPPLER_TOKEN_INFRA_APP")
+on = doc.get("on", doc.get(True))
+if isinstance(on, str): on_keys = {on}
+elif isinstance(on, list): on_keys = set(on)
+elif isinstance(on, dict): on_keys = set(on)
+else: on_keys = set()
+emit("S21:trigger-dispatch-only", on_keys == {"workflow_dispatch"}, f"on keys={sorted(map(str, on_keys))} (a tag-ref run is refused by the main-only environment; ADR-232 A5)")
+# S22 parses the script invocation into an argv (a substring test is satisfied by a
+# comment, and by a trailing `--mirror-only false` that would cancel the hold) and
+# requires every flag exactly once, --mirror-only bound to "$MIRROR_ONLY".
+import shlex
+def bump_argv(run):
+    for line in str(run or "").replace("\\\n", " ").splitlines():
+        line = line.strip()
+        if line.startswith("bash .github/scripts/bump-inngest-bootstrap-pin.sh"):
+            try: return shlex.split(line, comments=True)
+            except ValueError: return None
+    return None
+argv = bump_argv(bstep2.get("run")) or []
+flags = [a for a in argv if a.startswith("--")]
+mo_ok = argv.count("--mirror-only") == 1 and argv[argv.index("--mirror-only") + 1] == "$MIRROR_ONLY"
+emit("S22:bump-passes-mirror-only", benv.get("MIRROR_ONLY") == "${{ inputs.mirror_only }}" and mo_ok and len(flags) == len(set(flags)), f"env={benv.get('MIRROR_ONLY')!r} argv={argv}")
+# S23: the script step's env is EXACT, so no extra credential (the narrow Doppler
+# token, a PAT) can ride in beside the App token.
+want_env = {"GH_TOKEN": "${{ steps.mint.outputs.token }}", "TAG": "${{ needs.build.outputs.tag }}",
+            "SIGNED_DIGEST": "${{ needs.build.outputs.digest }}", "SIGNED_COMMIT": "${{ needs.build.outputs.commit }}",
+            "MIRROR_STATUS": "${{ needs.build.outputs.mirror_status }}", "MIRROR_ONLY": "${{ inputs.mirror_only }}",
+            "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}
+emit("S23:bump-script-env-exact", benv == want_env, f"env keys={sorted(benv)}")
+# S24: exactly the verify and mint steps name the narrow Doppler token.
+tb = sorted(str(s.get("name")) for s in bsteps if "DOPPLER_TOKEN_INFRA_APP" in yaml.safe_dump(s))
+emit("S24:infra-app-token-steps", tb == sorted(["Verify DOPPLER_TOKEN_INFRA_APP present", "Mint soleur-infra App token (contents+pull_requests write on soleur)"]), f"steps={tb}")
 print(f"END|{emitted}")
 PY
+python3 "$SHAPE_PY" "$WORKFLOW" "$REFUSE_STEP" "$RECORD_STEP" "$REFUSE_BODY" "$RECORD_BODY" > "$SHAPE_OUT" 2>&1
 shape_rc=$?
 [[ "$shape_rc" == 0 ]] && pass 'g2b.shape:parser-ran' \
   || fail 'g2b.shape:parser-ran' "rc=$shape_rc — $(tail -3 "$SHAPE_OUT" | tr '\n' '|')"
@@ -1821,6 +2401,80 @@ done < "$SHAPE_OUT"
 # means it died part-way, which must not read as "the rows that ran were green".
 [[ -n "$shape_end" && "$shape_rows" == "$shape_end" ]] && pass 'g2b.shape:row-count' \
   || fail 'g2b.shape:row-count' "parser reported END=${shape_end:-<none>}, parsed $shape_rows rows"
+
+# --- #9262 bump-side mutation harness (plan Guard Contract, Guard 1) ---------
+# Mutate a TEMP copy of the workflow, re-run the SAME shape parser on it, and
+# require the named S-row to report `no`. Instrument control first: the
+# unmodified copy must parse with every S-row ok, or a mutant "caught" on an
+# already-red copy proves nothing.
+SMUT="$TMP/shape-mut"; mkdir -p "$SMUT"
+shape_on() { python3 "$SHAPE_PY" "$1" "$REFUSE_STEP" "$RECORD_STEP" "$SMUT/r.sh" "$SMUT/c.sh" 2>&1 || echo "CRASH|no|parser crashed"; }
+cp "$WORKFLOW" "$SMUT/control.yml"
+ctl=$(shape_on "$SMUT/control.yml")
+if grep -qE '^S[0-9]+[^|]*\|no\||^CRASH' <<<"$ctl" || ! grep -q '^END|' <<<"$ctl"; then
+  fail 'g2m.control:clean' "the unmodified workflow copy is not clean: $(grep -E '\|no\||^CRASH' <<<"$ctl" | cut -d'|' -f1 | paste -sd, -)"
+else pass 'g2m.control:clean'; fi
+shape_mut() { # shape_mut <id> <expected S-key prefix(es), comma list> <old> <new>
+  local id="$1" keys="$2" dst="$SMUT/$1.yml" out k missed=""
+  if ! python3 - "$WORKFLOW" "$dst" "$3" "$4" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(old) != 1: sys.exit(2)
+open(dst, "w").write(s.replace(old, new, 1))
+PY
+  then fail "g2m.$id:landed" "mutation anchor must match exactly once in the workflow"; return; fi
+  pass "g2m.$id:landed"
+  out=$(shape_on "$dst")
+  if grep -q '^CRASH' <<<"$out"; then fail "g2m.$id:caught" "instrument broken: the shape parser crashed on the mutant"; return; fi
+  IFS=',' read -ra want <<<"$keys"
+  for k in "${want[@]}"; do grep -qE "^${k}[^|]*\|no\|" <<<"$out" || missed+="$k "; done
+  [[ -z "$missed" ]] && pass "g2m.$id:caught [$keys]" || fail "g2m.$id:caught" "mutant SURVIVED on: $missed"
+}
+# Positive control (review #9453): shape_mut must be able to FAIL. A comment-only change leaves every S-row ok,
+# so asking it to see an S16 failure must record exactly one failure (the `:caught` verdict); subshell, printf + exit.
+# The control's output is captured and must carry the verdict's own tag, not just one more FAIL (an anchor that
+# drifted records `:landed` instead).
+_smo="$( (shape_mut st-must-reject 'S16' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' 2>&1; printf '\n@@%s' "$FAIL") )"
+_sm="${_smo##*@@}"
+# The `:caught` tag alone is not enough (review #9453, final pass): shape_mut also records it when the parser CRASHES,
+# so a control mutation that breaks the parser would pass. The failure must carry the survivor signature
+# (`mutant SURVIVED`) and must NOT carry the crash signature (`instrument broken`).
+if [[ "$_sm" != "$((FAIL + 1))" ]] || ! grep -qF 'FAIL [g2m.st-must-reject:caught]' <<<"$_smo" \
+   || ! grep -qF 'mutant SURVIVED' <<<"$_smo" || grep -qF 'instrument broken' <<<"$_smo"; then
+  printf 'FAIL INSTRUMENT: shape_mut did not reject a mutant that no S-row sees, for its named reason: a survivor, not a crashed parser (FAIL %s -> %s)\n' "$FAIL" "$_sm" >&2; exit 2
+fi
+shape_mut env-removed 'S16' $'    environment: infra-privileged\n' ''
+shape_mut verify-tier-a 'S17' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}'
+shape_mut perms-widened 'S18' $'permissions: \'{"contents":"write","pull_requests":"write"}\'' $'permissions: \'{"administration":"write","contents":"write","pull_requests":"write"}\''
+shape_mut mint-continue-on-error 'S18' $'        id: mint\n' $'        id: mint\n        continue-on-error: true\n'
+shape_mut tag-trigger-readded 'S21' $'\non:\n' $'\non:\n  push:\n    tags:\n      - \'vinngest-v*.*.*\'\n'
+shape_mut second-minter 'S19,S20' $'          repositories: soleur\n' $'          repositories: soleur\n\n      - name: Second mint\n        id: mint2\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN }}\n          installation-id: "166065653"\n          permissions: \'{"contents":"write"}\'\n          repositories: soleur\n'
+shape_mut workflow-env-tier-a 'S20' $'\npermissions:\n' $'\nenv:\n  LEAK: ${{ secrets.DOPPLER_TOKEN }}\npermissions:\n'
+shape_mut lowercase-tier-a 'S20' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets.doppler_token }}'
+shape_mut bracket-tier-a 'S20' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
+shape_mut mint-broad-tier-b 'S18,S25' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'
+shape_mut verify-broad-tier-b 'S17,S25' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'
+shape_mut lowercase-broad-tier-b 'S25' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets.doppler_token_infra_privileged }}'
+shape_mut bracket-broad-tier-b 'S25' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN_INFRA_PRIVILEGED\'] }}'
+shape_mut mirror-only-cancelled 'S22' '            --mirror-only "$MIRROR_ONLY"' '            --mirror-only "$MIRROR_ONLY" --mirror-only false'
+shape_mut script-env-extra-token 'S23,S24' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n'
+shape_mut mirror-only-dropped 'S22' ' \'$'\n''            --mirror-only "$MIRROR_ONLY"' ''
+# H1: point the job lookup at a name that does not exist — S15 must RED rather
+# than the exact rows passing vacuously on an empty dict.
+shape_mut job-renamed 'S15,S16,S18' $'  bump-cloud-init-pin:\n' $'  bump-cloud-init-pin-renamed:\n'
+# H2 (must-PASS): the {name: ...} mapping form of the environment is the same binding.
+python3 - "$WORKFLOW" "$SMUT/h2.yml" <<'PY'
+import sys
+src, dst = sys.argv[1:3]
+s = open(src).read()
+old = "    environment: infra-privileged\n"
+assert s.count(old) == 1
+open(dst, "w").write(s.replace(old, "    environment:\n      name: infra-privileged\n", 1))
+PY
+h2=$(shape_on "$SMUT/h2.yml")
+if ! cmp -s "$WORKFLOW" "$SMUT/h2.yml" && ! grep -qE '\|no\||^CRASH' <<<"$h2" && grep -q '^END|' <<<"$h2"; then pass 'g2m.h2-env-mapping:passes'
+else fail 'g2m.h2-env-mapping:passes' "mapping-form environment reddened: $(grep -E '\|no\||^CRASH' <<<"$h2" | cut -d'|' -f1 | paste -sd, -)"; fi
 
 # --- behaviour harness ------------------------------------------------------
 REAL_GIT=$(command -v git)
@@ -2118,24 +2772,48 @@ for want in \
     || fail "g2.sel:checker-walk-err:${want:0:12}" "$n whole-line match(es) in AC6 for: $want"
 done
 
-# The script pushes ONLY via x-access-token (the minted installation token) —
-# never a bare https or ssh remote.
-if [[ -f "$SCRIPT" ]] && grep -qF 'x-access-token' "$SCRIPT"; then
+# The script pushes ONLY as x-access-token (the minted installation token) —
+# never a bare https or ssh remote — and (S4, #9597) the credential travels in a
+# per-command environment header, not in the URL: the userinfo form put the token
+# on the argv of git and git-remote-https. Judged on the non-comment lines.
+SCRIPT_CODE=$(grep -v '^[[:space:]]*#' "$SCRIPT" 2>/dev/null || true)
+if grep -qF 'x-access-token' <<<"$SCRIPT_CODE"; then
   pass 'g2.script:x-access-token'
 else
-  fail 'g2.script:x-access-token' "script lacks the x-access-token push remote"
+  fail 'g2.script:x-access-token' "script lacks the x-access-token push credential"
 fi
-# And the push URL must embed the token, not a hardcoded credential.
-if [[ -f "$SCRIPT" ]] && grep -qE 'x-access-token:\$\{?GH_TOKEN' "$SCRIPT"; then
+# The header is built from the GH_TOKEN env (never a hardcoded credential) ...
+if grep -qE 'x-access-token:\$\{GH_TOKEN\}' <<<"$SCRIPT_CODE" && grep -qF 'GIT_CONFIG_VALUE_0=' <<<"$SCRIPT_CODE"; then
   pass 'g2.script:token-from-env'
 else
-  fail 'g2.script:token-from-env' "push URL does not source the token from GH_TOKEN env"
+  fail 'g2.script:token-from-env' "the push header is not built from GH_TOKEN into GIT_CONFIG_VALUE_0"
+fi
+# ... the URL carries no userinfo ...
+if grep -qE 'https://[^[:space:]"]*@|x-access-token:\$\{?GH_TOKEN\}?@' <<<"$SCRIPT_CODE"; then
+  fail 'g2.script:no-userinfo-url' "a credential-bearing URL form is back in the script"
+else
+  pass 'g2.script:no-userinfo-url'
+fi
+# ... and the header is scoped to github.com and applied to ls-remote + push only.
+if grep -qF 'GIT_CONFIG_KEY_0=http.https://github.com/.extraheader' <<<"$SCRIPT_CODE" \
+   && [[ "$(grep -cE '^[[:space:]]*(remote_tip=\$\()?git_remote ' <<<"$SCRIPT_CODE")" == 2 ]]; then
+  pass 'g2.script:extraheader-scoped'
+else
+  fail 'g2.script:extraheader-scoped' "extraheader is not scoped to https://github.com/ or not applied to exactly two git_remote calls"
 fi
 # Script carries the CLA-allowlisted bot identity.
-for lit in 'soleur-ai[bot]' '273333864+soleur-ai[bot]@users.noreply.github.com'; do
+for lit in "BOT_NAME='soleur-infra[bot]'" "BOT_EMAIL='335404629+soleur-infra[bot]@users.noreply.github.com'" "BOT_PR_LOGIN='app/soleur-infra'"; do
   if [[ -f "$SCRIPT" ]] && grep -qF -- "$lit" "$SCRIPT"; then pass "g2.script:$lit"
   else fail "g2.script:$lit" "script lacks identity literal: $lit"; fi
 done
+# The bot identity must be on the CLA allowlist, or every pin PR it authors is stuck on
+# CLA Required: derive BOT_NAME from the script and require it as a MEMBER of cla.yml's
+# allowlist value (two files, one identity, #9262).
+CLA_YML="$REPO_ROOT/.github/workflows/cla.yml"
+bot_name=$(sed -n "s/^BOT_NAME='\\([^']*\\)'\$/\\1/p" "$SCRIPT" | head -1)
+cla_list=$(sed -n 's/^[[:space:]]*allowlist:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$CLA_YML" | head -1)
+if [[ -n "$bot_name" && -n "$cla_list" && ",${cla_list}," == *",${bot_name},"* ]]; then pass 'g2.script:bot-on-cla-allowlist'
+else fail 'g2.script:bot-on-cla-allowlist' "BOT_NAME='${bot_name:-<unparsed>}' is not a member of cla.yml allowlist '${cla_list:-<unparsed>}'"; fi
 
 # Verdict-helper self-test (#8782 review): assert_excluded and assert_refused
 # decide their rows' verdicts, so a neuter inside either (a check replaced by a
@@ -2175,6 +2853,23 @@ st_run 4 excluded-side-effects assert_excluded 'selftest.ex-b' v1.1.99   # crane
 printf 'result=error\n' > "$LAST_GOUT"; LAST_RC=1
 st_run 3 refused-side-effects assert_refused 'selftest.rf-b' 'wording present' resolve   # crane, gh, branch
 pass 'selftest:verdict-helpers-can-fail'
+# The gh/output/result assertion helpers own their verdicts too: drive each once in
+# the direction it must FAIL (delta 1) and once in the direction it must PASS
+# (delta 0), so a helper rewritten to always pass (or always fail) is caught.
+MOCK_GH_LOG="$TMP/selftest.ghlog"; printf 'gh pr create --head x\n' > "$MOCK_GH_LOG"
+LAST_OUT="$TMP/selftest2.out"; printf 'hello needle world\n' > "$LAST_OUT"
+LAST_GOUT="$TMP/selftest2.gout"; printf 'result=opened\n' > "$LAST_GOUT"; LAST_RC=0
+st_run 1 gh-called-miss      assert_gh_called     'selftest.gc-miss' 'gh pr merge '
+st_run 0 gh-called-hit       assert_gh_called     'selftest.gc-hit'  'gh pr create '
+st_run 1 gh-not-called-hit   assert_gh_not_called 'selftest.gn-hit'  'gh pr create '
+st_run 0 gh-not-called-miss  assert_gh_not_called 'selftest.gn-miss' 'gh pr merge '
+st_run 1 out-has-miss        assert_out_has       'selftest.oh-miss' 'absent-token'
+st_run 0 out-has-hit         assert_out_has       'selftest.oh-hit'  'needle'
+st_run 1 result-miss         assert_result        'selftest.r-miss'  existing
+st_run 0 result-hit          assert_result        'selftest.r-hit'   opened
+st_run 1 rc-miss             assert_rc            'selftest.rc-miss' 1
+st_run 0 rc-hit              assert_rc            'selftest.rc-hit'  0
+pass 'selftest:gh-out-result-helpers-both-directions'
 
 # ---------------------------------------------------------------------------
 echo ""

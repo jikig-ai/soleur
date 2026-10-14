@@ -254,6 +254,18 @@ else
   fail "H: expected PASS with 5 post-cutoff runs + 1 boundary run, got rc=$rc: $(tail -3 "$FIXTURE_DIR/out.log")"
 fi
 
+# --- Case I: every /actions/runs/*/jobs list call carries --paginate ----------
+# The stub accepts a dropped flag silently (`--paginate) shift`), so only the
+# argv log sees the regression — call-shape assert, not output. Case H's log is
+# still intact (no setup since).
+jobs_calls="$(grep -c 'actions/runs/.*/jobs' "$FIXTURE_DIR/calls.log" || true)"
+jobs_paginated="$(grep 'actions/runs/.*/jobs' "$FIXTURE_DIR/calls.log" | grep -c -- '--paginate' || true)"
+if [[ "$jobs_calls" -gt 0 && "$jobs_calls" -eq "$jobs_paginated" ]]; then
+  pass "I: every jobs list call carried --paginate ($jobs_paginated/$jobs_calls)"
+else
+  fail "I: jobs list call(s) missing --paginate ($jobs_paginated/$jobs_calls): $(grep 'actions/runs/.*/jobs' "$FIXTURE_DIR/calls.log")"
+fi
+
 # Anti-vacuity floor — counts pass+fail, same idiom as the sibling batteries.
 # Exits DIRECTLY, not through fails++: a floor enforced through the machinery
 # it guards exits 0 when that machinery is neutered (guard-vacuity-floor).

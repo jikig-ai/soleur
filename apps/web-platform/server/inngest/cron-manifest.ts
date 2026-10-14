@@ -28,10 +28,12 @@
 // human-gated routine).
 export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-action-required-sla",
+  "cron-actions-queue-health-dispatch",
   "cron-agent-native-audit",
   "cron-anthropic-cost-report",
   "cron-anthropic-credit-probe",
   "cron-architecture-diagram-sync",
+  "cron-bot-pr-reaper",
   "cron-bug-fixer",
   "cron-campaign-calendar",
   "cron-cloud-task-heartbeat",
@@ -48,7 +50,6 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-expenses-verify-by",
   "cron-follow-through-monitor",
   "cron-gh-pages-cert-reissue",
-  "cron-gh-pages-cert-state",
   "cron-github-app-drift-guard",
   "cron-github-cidr-refresh",
   "cron-growth-audit",
@@ -61,6 +62,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-machinery-drain",
   "cron-main-health-monitor",
   "cron-membership-health",
+  "cron-merge-queue-stall-dispatch",
   "cron-nag-4216-readiness",
   "cron-oauth-probe",
   "cron-plausible-goals",

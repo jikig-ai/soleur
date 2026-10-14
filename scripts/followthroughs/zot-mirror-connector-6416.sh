@@ -119,12 +119,12 @@ while read -r run_id created_at; do
   [[ -n "${run_id:-}" ]] || continue
   [[ "$ok" -lt "$NEED" ]] || break
 
-  # NOTE: `gh api --jq` takes a filter only — it does NOT accept jq's `--arg`, so the
-  # job name is interpolated into the filter rather than bound. (An `--arg` here
-  # silently yields nothing, which this probe's fail-safe would report as TRANSIENT
-  # forever — a probe that can never PASS is as useless as one that always does.)
-  job_id=$(gh api "repos/${GH_REPO}/actions/runs/${run_id}/jobs" \
-    --jq ".jobs[] | select(.name == \"${JOB_NAME}\") | .id" 2>/dev/null | head -1)
+  # --paginate | jq -s, never --jq under --paginate: gh applies --jq PER PAGE, and a
+  # first-page-only read would silently under-sample — a `release / release` job on
+  # page 2 reads as "absent" and inflates skipped_runs (#9245 sweep). jq's --arg
+  # binds the name (gh --jq cannot take --arg at all).
+  job_id=$(gh api --paginate "repos/${GH_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null \
+    | jq -rs --arg jn "$JOB_NAME" '[.[].jobs[] | select(.name == $jn) | .id] | .[0] // empty')
   if [[ -z "${job_id:-}" ]]; then
     skipped_runs=$((skipped_runs + 1))
     continue

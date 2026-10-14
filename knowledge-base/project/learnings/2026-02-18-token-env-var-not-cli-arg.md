@@ -34,3 +34,9 @@ The script validates the env var is set and refuses to accept the token as a pos
 - Suppress `curl` stderr (`2>/dev/null`) during requests with auth headers to prevent debug output leaking the token
 - Write `.env` files with `chmod 600` (set permissions before writing secrets, not after)
 - Never echo the token value in error messages
+
+> **Superseded 2026-10-10 (#9597 S4):** the "Suppress `curl` stderr (`2>/dev/null`) during requests with auth headers" measure above no longer applies to a
+> call made through `scripts/lib/bearer-curl.sh` (`bc_curl`) or its inline wrappers. The argument guard refuses `--verbose` and `--trace*`, so curl cannot
+> echo the request headers, and the refusal marker `SOLEUR_CREDENTIAL_REFUSED` is printed to stderr inside the command substitution, so silencing stderr
+> would discard the only line that tells a refused credential from a transport failure. See the "Curl's stderr is intentionally NOT silenced" section of the
+> 2026-10-10 addendum to `knowledge-base/engineering/architecture/decisions/ADR-280-credentials-reach-curl-on-stdin-config-through-one-shared-library.md`.

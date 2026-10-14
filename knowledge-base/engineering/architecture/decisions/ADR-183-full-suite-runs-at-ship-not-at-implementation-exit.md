@@ -3,6 +3,8 @@ title: The full suite runs at ship, not at the implementation exit
 status: active
 date: 2026-08-12
 related_adrs: [ADR-133, ADR-177, ADR-181]
+amended_by:
+  - "ADR-262 (2026-09-30, #9323) — CI's required `test` context no longer runs five self-test mutation batteries on a pull_request event when the diff misses their subject paths; see ## Amendment — 2026-09-30"
 ---
 
 # ADR-183: The full suite runs at ship, not at the implementation exit
@@ -146,3 +148,12 @@ change inside workflow prose. Tracked separately.
 - ADR-177 — the UNRESOLVED (`rc=3`) taxonomy the reaped-run rule depends on
 - ADR-181 — relevance-gated suites and counted declines, which reduces the cost of each run where
   this ADR reduces the number of runs
+
+## Amendment — 2026-09-30 (#9323, ADR-262)
+
+This record's "no local run is the merge gate" still holds and is not what changed. What changed is the CI
+side of the same sentence: the required `test` context aggregates a sharded full battery on the PR head,
+**except** that five self-test mutation batteries decline on a `pull_request` event when the diff touches none
+of their declared subject paths (ADR-262). A break that slips past that declaration is caught by the
+per-SHA `push` run on `main` and the 6-hourly monitor rather than by the PR, which is the residual ADR-262
+names. Anything above that reads "CI runs the full battery on the PR head" should be read with that exception.

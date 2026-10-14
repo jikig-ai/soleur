@@ -12,11 +12,17 @@ export const KB_MAX_FILE_SIZE = 1024 * 1024; // 1MB
  *
  * Single source of truth for:
  * - apps/web-platform/app/api/kb/upload/route.ts (gates uploads)
+ * - apps/web-platform/components/kb/file-tree.tsx (client allowlist + `accept=`)
  * - apps/web-platform/server/kb-reader.ts (gates filename-search corpus)
  *
- * Native .md files are NOT included — those are authored content, not uploads.
+ * `md` is uploadable: it renders through the existing markdown path
+ * (`classifyByExtension(".md") === "markdown"`). The upload route stores the
+ * extension lowercased (kb-reader is case-sensitive), caps `.md` at
+ * `KB_MAX_FILE_SIZE` (the reader limit) and refuses
+ * `KB_RESERVED_UPLOAD_FILENAMES`. Client-safe: no Node imports.
  */
 export const KB_UPLOAD_EXTENSIONS = [
+  "md",
   "pdf",
   "docx",
   "csv",
@@ -29,8 +35,33 @@ export const KB_UPLOAD_EXTENSIONS = [
 ] as const;
 
 /**
+ * Instruction-file basenames (lowercase) an upload may never create: Claude
+ * Code / other agent CLIs auto-load them, so a co-member dropping one into the
+ * shared KB would inject instructions. Matched case-insensitively against the
+ * whole filename (`CLAUDE-notes.md` is fine).
+ */
+export const KB_RESERVED_UPLOAD_FILENAMES: ReadonlySet<string> = new Set([
+  "claude.md",
+  "claude.local.md",
+  "agents.md",
+  "agents.override.md",
+  "agent.md",
+  "gemini.md",
+  "qwen.md",
+  "crush.md",
+  "warp.md",
+  "skill.md",
+  "copilot-instructions.md",
+]);
+
+export function isReservedKbUploadFilename(name: string): boolean {
+  return KB_RESERVED_UPLOAD_FILENAMES.has(name.toLowerCase());
+}
+
+/**
  * Text-native extensions that searchKb scans byte-by-byte for content matches.
- * Subset of upload extensions plus .md (native KB content).
+ * All of these are also upload extensions (`md` since KB uploads accept
+ * markdown); `md` is native KB content too.
  */
 export const KB_TEXT_EXTENSIONS = ["md", "txt", "csv"] as const;
 

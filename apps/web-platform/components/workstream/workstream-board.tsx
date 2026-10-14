@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import {
   COLUMNS,
   deriveFilterOptions,
@@ -29,7 +29,16 @@ import {
   type WorkstreamIssue,
   type WorkstreamStatus,
 } from "@/lib/workstream";
-import { jsonFetcher, swrKeys } from "@/lib/swr-config";
+import { swrKeys } from "@/lib/swr-config";
+import {
+  clearInflightWriteId,
+  fetchWorkstreamIssuesFeed,
+  markInflightWriteId,
+  markLocallyWrittenIssueId,
+  mergeFinalIssues,
+  mergeStreamedIssues,
+  type WorkstreamIssuesResponse,
+} from "@/lib/workstream-feed";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Button } from "@/components/ui/button";
@@ -52,11 +61,7 @@ import {
   type PatchIssueBody,
 } from "./workstream-writes";
 
-interface BoardMeta {
-  onKanbanOrg: boolean;
-  projectWritable: boolean;
-}
-type IssuesResponse = { issues: WorkstreamIssue[]; board?: BoardMeta };
+
 
 const COLLAPSED_STORAGE_KEY = "workstream:collapsed-columns-v2";
 
@@ -135,9 +140,41 @@ export function WorkstreamBoard() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  const { data, error, mutate, isValidating } = useSWR<IssuesResponse>(
+  const { mutate: scopedMutate } = useSWRConfig();
+  // Late frames from a feed still open across unmount (nav away, workspace
+  // switch) must not write this workspace's issues into the shared cache.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  // Progressive feed: the fetcher negotiates `Accept: text/event-stream` and
+  // commits each streamed batch into THIS cache entry as upstream pages land —
+  // columns fill gradually instead of swapping skeleton→full-board in one shot.
+  // The resolved value is the same `{issues, board}` the bulk JSON arm returns,
+  // so the nav badge (jsonFetcher on the same key) and every write reconciler
+  // are untouched.
+  const { data, error, mutate, isValidating } = useSWR<WorkstreamIssuesResponse>(
     swrKeys.workstreamIssues(),
-    jsonFetcher,
+    (key) =>
+      fetchWorkstreamIssuesFeed(key, (partial, final) => {
+        if (!mountedRef.current) return;
+        // revalidate: false — the open stream IS the revalidation in flight.
+        // Mid-stream commits merge (SOLAA-N* temps + local writes preserved);
+        // the `done` commit is authoritative — SWR's mutation-overlap rule
+        // discards the fetcher's own resolve after any mid-fetch mutate, so
+        // the final committed product must BE the canonical set (ghosts
+        // pruned, locally-pending ids kept).
+        void scopedMutate(
+          key,
+          (cur: WorkstreamIssuesResponse | undefined) =>
+            final
+              ? mergeFinalIssues(cur, partial)
+              : mergeStreamedIssues(cur, partial),
+          { revalidate: false },
+        );
+      }),
   );
   const issues = data?.issues;
   const board = data?.board;
@@ -195,25 +232,28 @@ export function WorkstreamBoard() {
         updatedAt: now,
       };
       void mutate(
-        (cur) => ({ issues: [temp, ...(cur?.issues ?? [])], board: cur?.board }),
+        (cur) => ({ ...cur, issues: [temp, ...(cur?.issues ?? [])] }),
         { revalidate: false },
       );
       try {
         const returned = await createIssueRequest(input);
+        // Real upstream id the feed may not have confirmed yet (its page could
+        // have already passed) — keep it across the authoritative done-commit.
+        markLocallyWrittenIssueId(returned.id);
         void mutate(
           (cur) => ({
+            ...cur,
             issues: (cur?.issues ?? []).map((i) =>
               i.id === tempId ? returned : i,
             ),
-            board: cur?.board,
           }),
           { revalidate: false },
         );
       } catch (e) {
         void mutate(
           (cur) => ({
+            ...cur,
             issues: (cur?.issues ?? []).filter((i) => i.id !== tempId),
-            board: cur?.board,
           }),
           { revalidate: false },
         );
@@ -235,6 +275,9 @@ export function WorkstreamBoard() {
       const number = issueNumberOf(id);
       if (number === null) return; // optimistic temp card — nothing to persist
       const prev = issues?.find((i) => i.id === id);
+      // In-flight write mark: a streamed copy fetched before this PATCH landed
+      // upstream must not snap the optimistic move back mid-feed.
+      markInflightWriteId(id);
       void mutate(
         (cur) =>
           cur
@@ -254,6 +297,9 @@ export function WorkstreamBoard() {
           status,
           ...(stateReason ? { state_reason: stateReason } : {}),
         });
+        // The reconcile writes the canonical copy — the authoritative
+        // done-commit must not overwrite it with a pre-write streamed copy.
+        markLocallyWrittenIssueId(returned.id);
         void mutate(
           (cur) =>
             cur
@@ -280,6 +326,8 @@ export function WorkstreamBoard() {
           );
         }
         surfaceWriteError(e);
+      } finally {
+        clearInflightWriteId(id);
       }
     },
     [issues, mutate, surfaceWriteError],
@@ -291,6 +339,7 @@ export function WorkstreamBoard() {
       const number = issueNumberOf(id);
       if (number === null) return;
       const prev = issues?.find((i) => i.id === id);
+      markInflightWriteId(id);
       void mutate(
         (cur) =>
           cur
@@ -305,6 +354,9 @@ export function WorkstreamBoard() {
       );
       try {
         const returned = await patchIssueRequest(number, { title });
+        // The reconcile writes the canonical copy — the authoritative
+        // done-commit must not overwrite it with a pre-write streamed copy.
+        markLocallyWrittenIssueId(returned.id);
         void mutate(
           (cur) =>
             cur
@@ -332,6 +384,8 @@ export function WorkstreamBoard() {
         }
         surfaceWriteError(e);
         throw e; // let the inline editor keep edit mode for retry
+      } finally {
+        clearInflightWriteId(id);
       }
     },
     [issues, mutate, surfaceWriteError],
@@ -350,6 +404,7 @@ export function WorkstreamBoard() {
       const number = issueNumberOf(id);
       if (number === null) return;
       const prev = issues?.find((i) => i.id === id);
+      markInflightWriteId(id);
       void mutate(
         (cur) =>
           cur
@@ -364,6 +419,9 @@ export function WorkstreamBoard() {
       );
       try {
         const returned = await patchIssueRequest(number, patch);
+        // The reconcile writes the canonical copy — the authoritative
+        // done-commit must not overwrite it with a pre-write streamed copy.
+        markLocallyWrittenIssueId(returned.id);
         void mutate(
           (cur) =>
             cur
@@ -391,6 +449,8 @@ export function WorkstreamBoard() {
         }
         surfaceWriteError(e);
         throw e; // let the inline editor keep edit mode for retry
+      } finally {
+        clearInflightWriteId(id);
       }
     },
     [issues, mutate, surfaceWriteError],
@@ -402,8 +462,12 @@ export function WorkstreamBoard() {
     async (id: string): Promise<void> => {
       const number = issueNumberOf(id);
       if (number === null) return;
+      markInflightWriteId(id);
       try {
         const returned = await patchIssueRequest(number, { reopen: true });
+        // The reconcile writes the canonical copy — the authoritative
+        // done-commit must not overwrite it with a pre-write streamed copy.
+        markLocallyWrittenIssueId(returned.id);
         void mutate(
           (cur) =>
             cur
@@ -422,6 +486,8 @@ export function WorkstreamBoard() {
         // mutate(undefined) here (it would blank the board to the skeleton with
         // no auto-recovery). Just surface the retryable error.
         surfaceWriteError(e);
+      } finally {
+        clearInflightWriteId(id);
       }
     },
     [issues, mutate, surfaceWriteError],
@@ -559,6 +625,11 @@ export function WorkstreamBoard() {
           Couldn&apos;t refresh — showing the last loaded issues.
         </p>
       ) : null}
+      {data?.openTruncated ? (
+        <p className="mb-3 text-xs text-amber-500/90" role="status">
+          Some issues may be missing — the upstream list was truncated.
+        </p>
+      ) : null}
       {readOnly ? (
         <p className="mb-3 text-xs text-amber-500/90" role="status">
           Read-only access — connect a repo whose GitHub App install has issue
@@ -592,7 +663,9 @@ export function WorkstreamBoard() {
         <BoardSkeleton />
       ) : issues && issues.length === 0 ? (
         <EmptyState onNew={() => setNewOpen(true)} disabled={readOnly} />
-      ) : filtered.length === 0 ? (
+      ) : filtered.length === 0 && !isValidating ? (
+        // Suppress "No issues match" while the feed is still streaming — a
+        // false-absence claim against a knowingly-partial set.
         <NoResults onReset={resetFilters} />
       ) : (
         // Desktop (md+): the 7-column horizontal board. Mobile: a
@@ -620,8 +693,27 @@ export function WorkstreamBoard() {
       <IssueDetailSheet
         open={activeId != null}
         issue={selected}
-        loading={activeId != null && issues == null && !error}
-        notFound={activeId != null && issues != null && selected == null}
+        // A deep-linked issue may arrive on a LATE page of the streamed feed —
+        // stay in `loading` while the feed is open (isValidating), never flash
+        // notFound mid-stream; notFound is honest only once `done` landed.
+        loading={
+          activeId != null &&
+          selected == null &&
+          (issues == null || isValidating) &&
+          !error
+        }
+        // A TRUNCATED feed (error frame / EOF without done) must not claim
+        // "Issue not found" — the issue's page may never have streamed.
+        loadFailed={
+          activeId != null && error != null && selected == null && !isValidating
+        }
+        notFound={
+          activeId != null &&
+          !isValidating &&
+          !error &&
+          issues != null &&
+          selected == null
+        }
         readOnly={readOnly}
         boardPrecedence={boardPrecedence}
         onKanbanOrg={Boolean(board?.onKanbanOrg)}

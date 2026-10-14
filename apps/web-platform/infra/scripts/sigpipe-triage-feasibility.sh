@@ -270,7 +270,7 @@ PROD
 
   set +o pipefail
   # shellcheck disable=SC2312  # PIPESTATUS is read on the next line, deliberately
-  /bin/bash "$producer" 2>/dev/null | grep -q SIGPIPE_PROBE_MATCH
+  /bin/bash "$producer" 2>/dev/null | grep -q SIGPIPE_PROBE_MATCH  # sigpipe-demo: intentional
   rc="${PIPESTATUS[0]}"
   set -o pipefail
   rm -f "$producer"
@@ -288,7 +288,7 @@ PROD
     cmd 'grep -i ^SigIgn: /proc/self/status  =>  bit 12 (SIGPIPE) set'
     printf '    The runtime symptom CANNOT occur in this environment: a producer here\n'
     # shellcheck disable=SC2016  # backticks are literal prose, not substitution
-    printf '    receives EPIPE instead of dying, so `if producer | grep -q X` returns the\n'
+    printf '    receives EPIPE instead of dying, so `if producer | grep -q X` returns the\n'  # sigpipe-demo: intentional
     printf '    CORRECT answer (measured). This is normal under a Node-spawned runner.\n'
     printf '    It does NOT mean the corpus is safe — the guards below run on prod hosts,\n'
     printf '    systemd units and cron, where SIGPIPE has its default disposition and the\n'
@@ -322,7 +322,7 @@ EOF
     return 1
   fi
   emit "grep early-exits on match (SIGPIPE observable)" "yes (PIPESTATUS[0]=141)"
-  cmd 'printf MATCH; <40k lines> | grep -q MATCH  =>  PIPESTATUS[0] == 141'
+  cmd 'printf MATCH; <40k lines> | grep -q MATCH  =>  PIPESTATUS[0] == 141'  # sigpipe-demo: intentional
   return 0
 }
 

@@ -1,0 +1,12 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+export async function withScratch(fn: (d: string) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "demo-"));
+  try {
+    await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}

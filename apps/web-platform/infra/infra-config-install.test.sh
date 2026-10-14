@@ -225,7 +225,11 @@ test_all_managed_dests_accepted() {
     # is none of those. Shape-appropriateness is a precondition of THIS test, not its subject.
     case "$d" in
       /etc/default/*)                          payload="KEY_FOR_$(basename "$d" | tr -c '[:alnum:]' '_')=value" ;;
-      /etc/systemd/system/*.service.d/*.conf)  payload=$'[Service]\nEnvironmentFile=-/etc/default/soleur-doppler-token\n' ;;
+      # #8609 — the REAL committed drop-in, never a made-up payload. The made-up one kept this row
+      # green while every shipped drop-in carried a line the gate rejects (install_rejected on the
+      # first post-merge apply, run 36749366792). Fed from the FILE for the same trailing-newline
+      # reason as the *.service arm below.
+      /etc/systemd/system/*.service.d/*.conf)  payload_file="${SCRIPT_DIR}/$(basename "$d")" ;;
       # #7220 AC-B1 — same reasoning again for full units: the content pin refuses anything but
       # the exact committed bytes, so the generic blob would fail for a reason unrelated to the
       # allowlist this test is about. Read the real unit rather than restating it, so this arm
@@ -352,6 +356,41 @@ test_dropin_shape_guard() {
       | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || bad_rc=$?
     assert_eq "drop-in carrying '${forbidden%%=*}=' is rejected" "$RC_REJECTED" "$bad_rc"
   done
+
+  # (c2) #8609 — the ONE UnsetEnvironment= line the gate admits, as an exact literal. Positive
+  # first, then one negative per way a looser match would widen it.
+  rc=0
+  printf '[Service]\nEnvironmentFile=-/etc/default/soleur-doppler-token\nUnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN\n' \
+    | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || rc=$?
+  assert_eq "UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN (the exact literal) is accepted" "$RC_OK" "$rc"
+  local unset_bad unset_desc
+  while IFS='|' read -r unset_desc unset_bad; do
+    bad_rc=0
+    printf '[Service]\n%s\n' "$unset_bad" \
+      | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || bad_rc=$?
+    assert_eq "UnsetEnvironment= $unset_desc is rejected" "$RC_REJECTED" "$bad_rc"
+  done <<'UNSETROWS'
+naming another variable|UnsetEnvironment=DOPPLER_TOKEN
+with a second name|UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN PATH
+with a suffixed name|UnsetEnvironment=GITHUB_APP_DOPPLER_TOKENX
+with no name|UnsetEnvironment=
+ending in a continuation|UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN\
+UNSETROWS
+
+  # (c3) #9314 review (P2, pre-existing): systemd ends a line at a BARE carriage return, so a
+  # permitted prefix line followed by \r smuggled a second directive past this per-line grep.
+  # Any C0 control byte other than tab/newline (and DEL) is now refused outright.
+  local cr_desc cr_payload
+  while IFS='|' read -r cr_desc cr_payload; do
+    bad_rc=0
+    printf "[Service]\n${cr_payload}\n" \
+      | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || bad_rc=$?
+    assert_eq "drop-in with $cr_desc is rejected" "$RC_REJECTED" "$bad_rc"
+  done <<'CRROWS'
+a bare CR smuggling User= after Environment=|Environment=A=1\rUser=root
+a bare CR smuggling ExecStart= after EnvironmentFile=|EnvironmentFile=-/x\rExecStart=/bin/sh
+a vertical tab after the unset literal|UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN\v
+CRROWS
 
   # (d) The rejection names the reason with its count, so a denial is diagnosable from the
   # handler's per-file accounting without SSH.
@@ -683,7 +722,7 @@ fi
 # whole job is to make a silently-shrinking suite loud, switchable off from the environment by
 # the same CI config that would be shrinking it. Matches APPLY_MIN_ASSERTIONS, which is a plain
 # literal for the same reason. Ratchet it here when the suite grows.
-INSTALL_MIN_ASSERTIONS=58
+INSTALL_MIN_ASSERTIONS=67
 if [[ "$PASS" -lt "$INSTALL_MIN_ASSERTIONS" ]]; then
   echo "FAIL: assertion floor — ran $PASS, expected >= $INSTALL_MIN_ASSERTIONS." >&2
   echo "      Arms were deleted or skipped; a green run here would be a coverage loss." >&2

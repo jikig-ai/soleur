@@ -39,6 +39,13 @@ case "$-" in
     ;;
 esac
 
+# The run scratch tree, bound FIRST: harness_selftest below writes its synthetic CALLS/MARKER_LOG
+# under it, so it must exist before any suite calls the self-test.
+RUN_SCRATCH="$(mktemp -d -t wl-harness.XXXXXXXX)"
+CASE_N=0
+cleanup_scratch() { rm -rf "$RUN_SCRATCH"; }
+trap cleanup_scratch EXIT INT TERM HUP
+
 # --- counters + reporters ----------------------------------------------------
 pass=0
 fail=0
@@ -48,27 +55,45 @@ no() { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
 # so prove them first (#9098 D1): one ok() must add exactly one pass and no fail, one no() exactly one
 # fail and no pass. Runs in a SUBSHELL so the real counters are untouched, and reports through
 # printf + exit 2 — never through no(), the very function under suspicion.
+#
+# The case PREDICATES are proven the same way: died, ran, has and nhas (and markerF) each read a
+# synthetic CASE_RC / CASE_OUT / CALLS / MARKER_LOG and must answer BOTH true and false, so a predicate
+# neutered to `return 0` (or `return 1`) cannot hold a row green whatever the case did. Composites such
+# as `died && has X && nhas Y` are only as strong as their weakest predicate, and a neutered one is
+# invisible to every row that uses it. Each answer is one letter (1 = true, 0 = false) in a fixed
+# order; any other string exits 2.
 harness_selftest() {
-  local got
+  local got want
   got="$( pass=0; fail=0; ok selftest-ok >/dev/null; no selftest-no >/dev/null; printf '%s/%s' "$pass" "$fail" )"
   if [ "$got" != "1/1" ]; then
     printf 'INSTRUMENT FAIL - %s: ok()/no() self-test got pass/fail=%s, want 1/1 — every verdict below would be meaningless\n' "$1" "$got"
     exit 2
   fi
-}
-# harness_floor <suite-name> <floor> — the pass FLOOR, enforced by printf + exit 1, never by no(): a
-# neutered no() plus a real failure must still turn the run red (#9098 D1). Call it AFTER the summary.
-harness_floor() {
-  if [ "$pass" -lt "$2" ]; then
-    printf 'FAIL - %s: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$1" "$pass" "$2"
-    exit 1
+  # A subshell, so the synthetic CASE_* / CALLS / MARKER_LOG never reach the suite's first case.
+  got="$(
+    CALLS="$RUN_SCRATCH/selftest.calls"; MARKER_LOG="$RUN_SCRATCH/selftest.marker"
+    printf 'mount /dev/sdz9 /mnt/data\n' > "$CALLS"; printf 'row result=ok\n' > "$MARKER_LOG"
+    _st() { if "$@"; then printf 1; else printf 0; fi; }
+    CASE_OUT=""
+    CASE_RC=1; _st died; _st ran
+    CASE_RC=0; _st died; _st ran
+    # A case that hit an undefined function neither died nor ran, whatever its rc.
+    CASE_OUT="HARNESS_UNDEFINED: x"; CASE_RC=1; _st died; CASE_RC=0; _st ran
+    _st has '^mount '; _st has '^umount '
+    _st nhas '^umount '; _st nhas '^mount '
+    _st markerF 'result=ok'; _st markerF 'result=fail'
+  )"
+  want="10 01 00 10 10 10"
+  want="${want// /}"
+  if [ "$got" != "$want" ]; then
+    printf 'INSTRUMENT FAIL - %s: predicate self-test got %s, want %s (died ran | died ran | undef: died ran | has+ has- | nhas+ nhas- | markerF+ markerF-) — a case predicate is neutered, so every row through it is meaningless\n' "$1" "$got" "$want"
+    exit 2
   fi
 }
-
-RUN_SCRATCH="$(mktemp -d -t wl-harness.XXXXXXXX)"
-CASE_N=0
-cleanup_scratch() { rm -rf "$RUN_SCRATCH"; }
-trap cleanup_scratch EXIT INT TERM HUP
+# The pass FLOOR is NOT defined here. Each consuming suite writes its own `if [ "$pass" -lt <literal> ]`
+# with printf + exit 1 (never no(), #9098 D1) after its summary. It used to be a harness_floor() call,
+# and a floor behind a function call is invisible to scripts/guard-vacuity-floor.test.sh: it derives
+# floors from a conditional opener in the suite file and mutation-tests the literal beside it (#6604 PR B).
 
 # harness_blockdev — a REAL block device path on this host, discovered not assumed.
 #
@@ -172,6 +197,21 @@ harness_blockdev_other() {
 #   CRYPTSETUP_UUID           what `cryptsetup luksUUID` prints (default EMPTY: rc 1, nothing printed)
 #   READLINK_RC=<n>           force `readlink`'s exit status (the naive _same_dev fails OPEN here)
 #   READLINK_EMPTY=1          readlink exits 0 but prints NOTHING (the other fail-open half)
+#   PLAINTEXT_DEV_FSTYPE      what the _plaintext_dev_type seam (the physical probe under
+#                             _plaintext_record_status) reports for the recorded plaintext device:
+#                             default `ext4` = an intact plaintext; `none` (or empty) = no filesystem
+#                             signature; `absent` = not a block device; `crypto_LUKS` = a stale record
+#                             naming the LUKS volume; `blkid_error_<rc>`. The REAL probe's rc mapping is
+#                             exercised by the rollback-refusal suite's F6 row, not here.
+#   PLAINTEXT_DEV_UNSEEDED=1  skip the default record. Every case otherwise starts with
+#                             PLAINTEXT_DEV=/dev/sdz9 in its state file (the cutover's rollback
+#                             rehearsal records the plaintext mount source; reads are last-wins, so an
+#                             invocation's own persist_state PLAINTEXT_DEV overrides it). Device-based:
+#                             no case depends on a /dev/disk/by-label link.
+#   BLKID_BIN_PATH            what the _plaintext_blkid_bin seam prints (default `blkid`); the dead-man
+#                             fire bakes it, so a suite that executes the fire points it at a stub.
+#                             BLKID_ABSENT=1 (above) makes the seam print nothing, and the
+#                             _plaintext_dev_type seam answer `blkid_absent` (as production does).
 #
 # Dead-man unit model (#9045). `systemctl show|stop|reset-failed` and `systemd-run` answer PER UNIT
 # for workspaces-luks-deadman.{timer,service} (a bare `workspaces-luks-deadman` is the service,
@@ -230,6 +270,9 @@ run_case() {
       INVOCATION="$invocation" REQUIRE_FNS="$require" \
     bash -c '
       source "$CUTOVER"                                   # guard => functions only, no main body
+      # The default recorded plaintext device, written BEFORE any stub exists (real mkdir/printf, so it
+      # never lands in $CALLS). See PLAINTEXT_DEV_UNSEEDED above.
+      [ "${PLAINTEXT_DEV_UNSEEDED:-}" = 1 ] || persist_state PLAINTEXT_DEV /dev/sdz9
       rec() { printf "%s\n" "$*" >> "$CALLS"; }
       # --- dead-man unit model (#9045); see the knob list above run_case ---
       # NOTE: no apostrophes in this block — it lives inside a single-quoted bash -c body.
@@ -361,6 +404,13 @@ run_case() {
       }
       cryptsetup() {
         rec "cryptsetup $*"
+        # Drain stdin before any verdict arm when the call feeds the key on a pipe
+        # (--key-file -, either spelling): real cryptsetup reads it, and a stub
+        # that exits unread races the producer into EPIPE under pipefail (#9245).
+        # Gated on the FLAG, not the verb — a piped call without it must EPIPE
+        # exactly as the real binary would. First statement after rec so every
+        # arm drains; [ ! -t 0 ] keeps unpiped stdin untouched.
+        case " $* " in *" --key-file - "*|*" --key-file=- "*) { [ ! -t 0 ] && cat >/dev/null; } 2>/dev/null || true ;; esac
         if [ "${1:-}" = "status" ] && [ -n "${CRYPTSETUP_DEV:-}" ]; then
           printf "  type:    LUKS2\n  device:  %s\n" "$CRYPTSETUP_DEV"
         fi
@@ -612,6 +662,17 @@ run_case() {
         if [ "${1:-}" = "-v" ] && [ -n "${TOOL_ABSENT:-}" ] && [ "${2:-}" = "${TOOL_ABSENT}" ]; then return 1; fi
         builtin command "$@"
       }
+      # #6604 step 7 — the recorded-plaintext seams. Production probes the recorded device ([ -b ], then
+      # a blkid from a fixed root-owned path list); here the seam records its ARGUMENT (so a wrong key or
+      # an empty argument is visible) and answers PLAINTEXT_DEV_FSTYPE (default ext4 = intact). The
+      # composing _plaintext_record_status (validity, the mapper alias check, ok-vs-not) stays REAL.
+      _plaintext_dev_type() {
+        rec "SEAM _plaintext_dev_type ${1:-}"
+        [ -n "${1:-}" ] || { printf absent; return 0; }
+        [ "${BLKID_ABSENT:-}" = "1" ] && { printf blkid_absent; return 0; }
+        printf "%s" "${PLAINTEXT_DEV_FSTYPE-ext4}"
+      }
+      _plaintext_blkid_bin() { [ "${BLKID_ABSENT:-}" = "1" ] && return 0; printf "%s" "${BLKID_BIN_PATH:-blkid}"; }
       for f in ${REQUIRE_FNS:-}; do
         declare -F "$f" >/dev/null || { echo "HARNESS_UNDEFINED:$f"; exit 97; }
       done
@@ -630,6 +691,8 @@ run_case() {
 # functions.
 #
 # Sets: MON_RC, MON_OUT, CALLS (argv log), MNT, WSDIR (the workspaces root, pre-created empty).
+# Stub side-file: ${CALLS}.escrow-stdin captures the bytes a SUT pipes into
+# `cryptsetup ... --key-file -` — the wire assert in luks-monitor.test.sh reads it.
 #
 # Knobs (all optional):
 #   MON_MOUNT_SRC     findmnt -no SOURCE $MOUNT      (default: the fake mapper path — healthy)
@@ -686,6 +749,18 @@ STUB
   cat > "$d/bin/cryptsetup" <<'STUB'
 #!/usr/bin/env bash
 printf 'cryptsetup %s\n' "$*" >> "$CALLS"
+# Drain stdin the way real cryptsetup does — iff argv asks for it via
+# --key-file - (either spelling). Gated on the flag rather than the verb so a
+# future piped verb (luksFormat, open --type luks) is covered, and a piped call
+# WITHOUT the flag EPIPEs exactly as the real binary would. A stub that exits
+# unread races the producer's write (EPIPE under pipefail = a fake
+# escrow_passphrase_mismatch, #9245); the capture file is what the suite's wire
+# assert reads, and [ ! -t 0 ] keeps an unpiped interactive stdin out of the
+# drain.
+case " $* " in
+  *" --key-file - "*|*" --key-file=- "*)
+    { [ ! -t 0 ] && cat >"${CALLS}.escrow-stdin"; } 2>/dev/null || true ;;
+esac
 case "$1" in
   status)  printf '  type:    LUKS2\n  device:  %s\n' "${MON_REAL_DEV-$FAKE_MAPPER}" ;;
   luksUUID) printf '%s\n' "${MON_UUID-3f07b655-31ab-48b9-b02d-013c6b08feba}" ;;
@@ -719,6 +794,20 @@ STUB
   cat > "$d/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >> "$CALLS"
+# The heartbeat URL is a path secret, so the SUT sends it on curl's stdin config (`--config -`), never
+# on argv (#9757). Read that config on EVERY such call and record its `url = "` line as `hbcfg <line>`,
+# once per attempt; a call whose config carries no such line FAILS (rc 97), so a stub that ignored
+# stdin, or a SUT that dropped the config, cannot pass as a healthy push.
+case " $* " in
+  *" --config - "*)
+    hb_line=""
+    while IFS= read -r l || [ -n "$l" ]; do
+      case "$l" in 'url = "'*) hb_line="$l"; break ;; esac
+    done
+    if [ -z "$hb_line" ]; then printf 'hbcfg-MISSING\n' >> "$CALLS"; exit 97; fi
+    printf 'hbcfg %s\n' "$hb_line" >> "$CALLS"
+    exit "${MON_HB_PUSH_RC:-0}" ;;
+esac
 outfile=""; wfmt=""; prev=""
 for a in "$@"; do
   [ "$prev" = "-o" ] && outfile="$a"
@@ -758,6 +847,12 @@ STUB
   cat > "$d/bin/logger" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MARKER_LOG"
+STUB
+  # RECORDING no-op sleep: the only sleep in the SUT is the 2s gap between heartbeat attempts. Recording
+  # it makes "a refusal sleeps zero times" assertable and keeps the exhausted-push row from taking 4s.
+  cat > "$d/bin/sleep" <<'STUB'
+#!/usr/bin/env bash
+printf 'sleep %s\n' "$*" >> "$CALLS"
 STUB
   cat > "$d/bin/df" <<'STUB'
 #!/usr/bin/env bash

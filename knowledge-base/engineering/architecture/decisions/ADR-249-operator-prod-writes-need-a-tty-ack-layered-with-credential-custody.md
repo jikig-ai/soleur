@@ -10,6 +10,18 @@ Issue: #8486 (step 1, this ADR's accepted part). Step 2: #8652 (adopting). Relat
 (generated operator scripts are non-interactive by default; the class-2 ack is the one exception),
 ADR-236 (human-only skills are user-invoked; the invocation axis is not a security control).
 
+> **Superseded in part by [ADR-264](./ADR-264-generated-operator-scripts-are-agent-run-in-stages.md) (2026-10-01).**
+> For **generated operator scripts only**, step 1 point 2 (every write gates on the TTY ack and
+> exits `64` with no TTY) and step 1 point 4 (the skill hands the write command to the operator's
+> own terminal) are superseded: the acknowledgement of a generated script's write becomes the
+> harness approval prompt on the exact command, backed by a hook-minted one-time receipt, and the
+> agent runs the staged commands itself. What is **not** superseded and remains in force: step 1
+> points 1 (the derived guard set), 3 (consumers clear what could stand in for the ack), 5 (the
+> Claude-side defer-gate backstop), and 6 (approval evidence, including the `approval_method`
+> CHECK that allows only `'tty-ack'` or NULL); step 2 (credential custody); and the residual list.
+> `flag-create`, `flag-delete`, `user-set-role`, `flag-set-role`, `provision-hetzner` and
+> `audit-sentry --apply` keep the TTY ack. The text below is the dated record and is unchanged.
+
 ## Context
 
 Soleur's operator scripts write to production: Flagsmith flags and segments, prd user roles in

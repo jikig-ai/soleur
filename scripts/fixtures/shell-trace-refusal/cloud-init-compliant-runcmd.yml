@@ -1,0 +1,14 @@
+#cloud-config
+# MUST PASS (rc 0): `runcmd` list-item shapes that carry no argv credential header: a stdin-fed
+# plain item, a commented-out item, a folded stdin-fed item and a flow-list item that only PRINTS
+# a curl command (neither of the last two is read; they cannot be a false positive).
+runcmd:
+  - echo start
+%{ if enable_probe ~}
+  - printf 'X-API-Key: %s\n' "$FIXTURE_TOKEN" | curl --disable --noproxy '*' -sS -H @- "$SINK_URL"
+  # - curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+  - >-
+    printf 'X-API-Key: %s\n' "$FIXTURE_TOKEN" |
+    curl --disable --noproxy '*' -sS -H @- "$SINK_URL"
+  - [echo, curl, -H, "Authorization: Bearer ${FIXTURE_TOKEN}", "$SINK_URL"]
+%{ endif ~}

@@ -36,7 +36,7 @@ describe("persistTurnCostAwaitable leader-loop marker — #8611", () => {
       "cfo",
       "11111111-1111-4111-8111-111111111111",
       { totalCostUsd: 0.01, usage },
-      { source: "leader-loop", model: "claude-sonnet-5", turn: 3, attempt: 1 },
+      { source: "leader-loop", model: "claude-sonnet-5-5", turn: 3, attempt: 1 },
     );
     expect(markerMock).toHaveBeenCalledTimes(1);
     expect(markerMock.mock.calls[0][0]).toMatchObject({ source: "leader-loop", id: "conv-1", turn: 3, attempt: 1 });
@@ -49,7 +49,7 @@ describe("persistTurnCostAwaitable leader-loop marker — #8611", () => {
       "cfo",
       "11111111-1111-4111-8111-111111111111",
       { totalCostUsd: 0.01, usage },
-      { source: "leader-loop", model: "claude-sonnet-5" },
+      { source: "leader-loop", model: "claude-sonnet-5-5" },
     );
     const marker = markerMock.mock.calls[0][0] as Record<string, unknown>;
     expect("turn" in marker).toBe(false);

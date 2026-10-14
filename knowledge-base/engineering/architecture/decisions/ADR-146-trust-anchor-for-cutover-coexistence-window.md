@@ -234,6 +234,14 @@ All three are tracked by **#6940**; the missed-tick defect found alongside them 
    dissolving the amplification risk. Requires extending `inngest-registry-probe.sh` to emit
    trigger type — ids alone cannot distinguish cron from event-driven functions.
    **Re-eval trigger:** before the next cutover that uses missed-tick enumeration.
+   *[2026-10-07, #6940:]* **Landed** (PR #9698): `inngest-registry-probe.sh` now emits
+   `functions: [{id, slug, triggers: [{type, value}]}]` alongside the legacy fields, and
+   `op=verify` — when `missed_tick_candidates=true` and the gap window is set — derives
+   `registry_cron_ids − observed` via `zero_run_cron_ids()` (cron-only, shape-checked) and
+   issues ONE open-topped doublefire re-probe scoped `function_ids=<zero-run set>` over
+   `CUTOVER_DISCOVERY_LOOKBACK_S` (default 15897600 s ≈ 184 d ≈ 2× the quarterly slowest
+   registered cron), merging the runs into the missed-tick enumeration body. The discovery
+   path degrades to `::warning::` and never affects the exactly-once verdict above it.
 2. **The missed-tick loop emits a command that does not exist**
    (`soleur:trigger-cron --function-id <UUID> --missed-tick <TS>`; the skill accepts
    `--event cron/<name>.manual-trigger`, and no UUID→name mapping exists anywhere). It also

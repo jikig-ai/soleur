@@ -1,0 +1,13 @@
+# Synthesized fixture (not a real workflow). Map form of `on:` with a null
+# merge_group value next to a typed pull_request, and a job guarded by always().
+name: fixture map form
+on:
+  merge_group:
+  pull_request:
+    types: [opened]
+jobs:
+  fx-map:
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo fixture

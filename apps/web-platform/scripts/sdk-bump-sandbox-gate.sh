@@ -137,7 +137,7 @@ if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
   else
     ack_text="$(read_branch_messages)" || exit 1
   fi
-  if printf '%s' "$ack_text" | grep -qiE "\b${ACK_TOKEN}\b"; then
+  if grep -qiE "\b${ACK_TOKEN}\b" < <(printf '%s' "$ack_text"); then
     echo "sdk-bump-gate: SDK bump acknowledged (\`${ACK_TOKEN}\` present) — a maintainer attests the committed seccomp profile was validated against the new SDK. Proceeding."
   else
     echo "::error::sdk-bump-gate: an SDK version bump was detected (${bumped_pkgs[*]}) but NO \`${ACK_TOKEN}:\` acknowledgement is present in the branch commit messages."
@@ -180,7 +180,17 @@ capture_trigger=0
 # so on a SAME-REPO PR (creds present) force a re-verify, else fail closed to the
 # ack. NOTE: this only runs when the flag is set (same-repo capture job) — a fork's
 # fixture-only edit reaches neither; see the trust-boundary note above.
-if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+# grep exits 0 on a match, 1 on none, above 1 when it could not run (a bad pattern): only a CLEAN miss may skip the gate. A
+# failed here-string redirect also returns 1, so this routing does not cover a redirect failure.
+ct_rc=0
+# The #5863 outer-wrap mechanism joins the trigger set — argv builder,
+# fixture, canary script, and (enumeration-seat) the files that define WHAT
+# the gate measures: the in-image verify script that executes it, the shared
+# isolation payload that defines `pass`, the interpose installer, and the
+# Dockerfile that establishes the file-cap posture. A change to any of those
+# silently retunes the mechanism without tripping the gate.
+grep -qE 'apps/web-platform/(Dockerfile|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|server/agent-outer-wrap\.ts|server/agent-runner-query-options\.ts|scripts/sandbox-canary\.mjs|scripts/sandbox-canary-verify-in-image\.sh|scripts/tenant-isolation-inner-probe\.sh|infra/sandbox-canary-argv\.json|infra/agent-outer-wrap-argv\.json)' <<<"$CHANGED" || ct_rc=$?
+if (( ct_rc != 1 )); then
   capture_trigger=1
 fi
 
@@ -203,6 +213,13 @@ if [[ "$capture_trigger" -eq 1 ]]; then
     if [[ "$v_reason" == "argv_drift" ]]; then
       echo "::error::sdk-bump-gate: sandbox-canary-argv.json is STALE vs a fresh SDK capture (argv_drift). Re-run --capture and commit the refreshed canonical argv."
       fail=1
+    elif [[ "$v_verdict" == "smoke_fail" ]]; then
+      # #5863 T3.6: the vendored CLI failed to launch inside the real outer
+      # wrap mount table — a bump (or our own table drift) added a path the
+      # derived binds miss. Blocking: this is exactly the class the smoke
+      # exists to catch; the deploy replay is the authoritative EPERM arm.
+      echo "::error::sdk-bump-gate: outer-wrap CLI smoke FAILED (${v_reason}) — the vendored CLI cannot launch inside the #5863 outer mount table. Diff the bump's fs needs against server/agent-outer-wrap.ts bind set and the infra/agent-outer-wrap-argv.json fixture."
+      fail=1
     elif [[ "$v_verdict" == "verify_ok" ]]; then
       echo "sdk-bump-gate: capture --verify OK — committed canonical fixture matches a fresh capture."
     else
@@ -221,7 +238,7 @@ if [[ "$require_capture_ack" -eq 1 ]]; then
   else
     ack_text="$(read_branch_messages)" || exit 1
   fi
-  if printf '%s' "$ack_text" | grep -qiE "\b${ACK_TOKEN}\b"; then
+  if grep -qiE "\b${ACK_TOKEN}\b" < <(printf '%s' "$ack_text"); then
     echo "sdk-bump-gate: capture-gate ack present (\`${ACK_TOKEN}\`) — proceeding on the maintainer attestation."
   else
     echo "::error::sdk-bump-gate: the canary capture could not be verified automatically (see warning above) AND no \`${ACK_TOKEN}:\` ack is present. A maintainer must validate the committed profile against the SDK's real argv and add the ack trailer."

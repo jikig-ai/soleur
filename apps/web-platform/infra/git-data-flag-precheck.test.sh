@@ -85,7 +85,35 @@ printf '\n=== git-data flag precheck (Guard 1, #8189) ===\n\n'
 cat > "$BIN/doppler" <<'SHIM'
 #!/usr/bin/env bash
 printf 'doppler %s\n' "$*" >> "$DOPPLER_LOG"
-[ "${1:-}" = secrets ] && [ "${2:-}" = get ] || { echo "doppler-shim: unsupported: $*" >&2; exit 64; }
+[ "${1:-}" = secrets ] && { [ "${2:-}" = get ] || [ "${2:-}" = set ]; } || { echo "doppler-shim: unsupported: $*" >&2; exit 64; }
+if [ "${2:-}" = set ]; then
+  # secrets set NAME -p P -c C — value on stdin (the only supported form here; the caller
+  # must never pass a value on argv). SHIM_SET_ERR forces a classified failure;
+  # SHIM_WRITE_STORE redirects the store so the write lands where the case expects.
+  # The value is read FIRST (#9217): the caller pipes it in under pipefail, so an arm that exits on the
+  # missing token or a classified failure before reading would let the writer take SIGPIPE. Not a terminal only.
+  value=""; [ -t 0 ] || value="$(timeout 2 cat)"
+  name="${3:-}"; shift 3
+  proj=""; cfg=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -p|--project) proj="${2:-}"; shift 2 ;;
+      -c|--config) cfg="${2:-}"; shift 2 ;;
+      *) echo "doppler-shim: unknown argument $1" >&2; exit 64 ;;
+    esac
+  done
+  [ -n "${DOPPLER_TOKEN:-}" ] || { echo "Doppler Error: you must provide a token" >&2; exit 1; }
+  case "${SHIM_SET_ERR:-}" in
+    auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
+    network) echo "Doppler Error: dial tcp: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
+  esac
+  d="$DOPPLER_STORE/$proj/$cfg"
+  [ -d "$d" ] || { echo "Doppler Error: Could not find requested config '$cfg'" >&2; exit 1; }
+  printf '%s' "$value" > "$d/$name"
+  # the real CLI prints the whole config on set; the shim prints nothing (the caller
+  # discards stdout anyway — what matters is that nothing the caller needs is on stdout).
+  exit 0
+fi
 name="${3:-}"; shift 3
 plain=0; noexit=0; proj=""; cfg=""
 while [ $# -gt 0 ]; do
@@ -119,6 +147,10 @@ case "$name" in
   DOPPLER_PROJECT) printf '%s' "$proj"; exit 0 ;;
   DOPPLER_CONFIG)  printf '%s' "$cfg"; exit 0 ;;
 esac
+# SHIM_READBACK_DIFFER models a write that "succeeded" but read-back returns another value.
+if [ "$name" = GIT_DATA_STORE_ENABLED ] && [ -n "${SHIM_READBACK_DIFFER:-}" ]; then
+  printf '%s' "$SHIM_READBACK_DIFFER"; exit 0
+fi
 if [ -f "$d/$name" ]; then cat "$d/$name"; exit 0; fi
 # SHIM_IGNORE_FLAG models an argument-blind shim (or a CLI that ignores the flag).
 if [ "$noexit" = 1 ] && [ "${SHIM_IGNORE_FLAG:-0}" != 1 ]; then exit 0; fi
@@ -152,6 +184,21 @@ MIRROR="$T/tree/apps/web-platform"
 mkdir -p "$MIRROR/infra" "$MIRROR/server" || { printf 'FAIL SETUP: mirror\n' >&2; exit 1; }
 cp "$T/git-auth-tofu.ts" "$MIRROR/server/git-auth.ts" || { printf 'FAIL SETUP: mirror git-auth\n' >&2; exit 1; }
 
+# SANDBOX_DENY_ROOTS fixtures (#9725): a source dir carrying both markers
+# (resolver exports workspaceTenantDenyRoots + config calls it), one where the
+# config marker is missing (the pre-fix posture), and a nonexistent dir for
+# `unknown` (files unreadable → never "absent").
+mkdir -p "$T/deny-present" "$T/deny-absent" || { printf 'FAIL SETUP: deny fixtures\n' >&2; exit 1; }
+printf 'export function workspaceTenantDenyRoots() { return [process.env.WORKTREE_ROOT]; }\n' > "$T/deny-present/workspace-resolver.ts"
+printf 'const denyRoots = workspaceTenantDenyRoots();\n' > "$T/deny-present/agent-runner-sandbox-config.ts"
+printf 'export function workspacePathForWorkspaceId() { return ""; }\n' > "$T/deny-absent/workspace-resolver.ts"
+printf 'const denyRead = [];\n' > "$T/deny-absent/agent-runner-sandbox-config.ts"
+mkdir -p "$T/deny-collapsed" || { printf 'FAIL SETUP: deny-collapsed fixture\n' >&2; exit 1; }
+# The #9725 regression shape: helper exists and env read exists FILE-wide
+# (inside getWorkspaceWorktreeRoot) — but NOT inside the deny helper's body.
+printf 'function getWorkspaceWorktreeRoot() { return process.env.WORKTREE_ROOT || "/x"; }\nexport function workspaceTenantDenyRoots() { return [getWorkspaceWorktreeRoot()]; }\n' > "$T/deny-collapsed/workspace-resolver.ts"
+printf 'const denyRoots = workspaceTenantDenyRoots();\n' > "$T/deny-collapsed/agent-runner-sandbox-config.ts"
+
 # run_case <name> <value|ABSENT> [VAR=value ...] — the flag's stored value (printf, no newline
 # unless given), then the script (CASE_SCRIPT, default the real one). Sets OUT, RC, DLOG, CTMP
 # (the case's own TMPDIR, so a leaked tempfile is visible) and RT (its RUNNER_TEMP). A store also
@@ -175,6 +222,7 @@ run_case() {
   [ "${CASE_DEFAULT_GIT_AUTH:-0}" = 1 ] && gat=()
   timeout -k 3 30 env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$CTMP" DOPPLER_STORE="$store" DOPPLER_LOG="$DLOG" \
     RUNNER_TEMP="$RT" "${gat[@]}" \
+    SANDBOX_SRC_DIR="$(dirname "$PRECHECK")/../server" \
     DOPPLER_TOKEN=fixture-prd-read "$@" bash "${CASE_SCRIPT:-$PRECHECK}" > "$OUT" 2>&1
   RC=$?
 }
@@ -188,7 +236,8 @@ refusal() { # <verdict-detail> — the exact two-line output of a refusal
 TOFU_PRESENT='TOFU_ARM present
 ::warning title=git-data-flag-precheck::TOFU_ARM present - the app still carries the unpinned git-data fallback (#5914); it must be deleted before GIT_DATA_STORE_ENABLED is ever set'
 # ok_out <flag-line> — the exact output of a clear run with the default fixtures.
-ok_out() { printf '%s\ngit_data_pin=present fp=%s\n%s' "$TOFU_PRESENT" "$PIN_FP" "$1"; }
+DENY_LINE='SANDBOX_DENY_ROOTS present'
+ok_out() { printf '%s\n%s\ngit_data_pin=present fp=%s\n%s' "$TOFU_PRESENT" "$DENY_LINE" "$PIN_FP" "$1"; }
 detail() { printf 'rc=%s out=[%s]' "$RC" "$(tr '\n' '|' < "$OUT" | sed 's/::/: :/g')"; }
 
 # ── cases (functions, so a mutant re-runs exactly the case its row names) ──────────────
@@ -222,6 +271,52 @@ case_off() { # <label> <value>
   run_case "off$1" "$2"
   [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(ok_out flag=off)" ]
 }
+
+# ── write path + mode-aware read (#8211 PR2) ──────────────────────────────────
+case_write() { # <label> <stored-flag> <write-value> [VAR=value ...]
+  local label="$1" stored="$2" wv="$3"; shift 3
+  run_case "write-$label" "$stored" FLAG_WRITE_VALUE="$wv" "$@"
+}
+if case_write ok ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write \
+  && [ "$(cat "$OUT")" = "flag_write=ok value=true" ] \
+  && [ "$(cat "$DLOG")" = "$(printf 'doppler secrets set GIT_DATA_STORE_ENABLED -p soleur -c prd\ndoppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd')" ] \
+  && [ "$(cat "$T/store-write-ok/soleur/prd/GIT_DATA_STORE_ENABLED")" = "true" ]; then
+  pass "W1: the write path sets the flag through stdin, reads it back with the SAME credential, prints flag_write=ok — and never touches the read probes (exactly 2 doppler calls)"
+else fail "W1: the write path did not write+read-back cleanly" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_write cred-absent ABSENT true \
+  && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_credential_absent' "$OUT" && [ ! -s "$DLOG" ]; then
+  pass "W2: FLAG_WRITE_VALUE without DOPPLER_TOKEN_GIT_DATA_FLAG -> verdict=flag_write_credential_absent, exit 5, doppler never called"
+else fail "W2: a write without the #8573 credential was not refused" "$(detail)"; fi
+if case_write bad-value ABSENT yes DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write \
+  && [ "$RC" = 2 ] && grep -qF 'verdict=flag_write_value_invalid' "$OUT" && [ ! -s "$DLOG" ]; then
+  pass "W3: a value other than true/false -> verdict=flag_write_value_invalid, exit 2, doppler never called"
+else fail "W3: an invalid write value was not refused" "$(detail)"; fi
+if case_write set-fail ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SHIM_SET_ERR=auth \
+  && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_failed reason=auth_invalid' "$OUT" && ! grep -q 'CANARY' "$OUT"; then
+  pass "W4: a failed set -> verdict=flag_write_failed reason=auth_invalid, exit 5, stderr never printed"
+else fail "W4: a failed set was not refused" "$(detail)"; fi
+if case_write readback-differs ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SHIM_READBACK_DIFFER=false \
+  && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_readback_failed reason=value_mismatch' "$OUT"; then
+  pass "W5: a set whose read-back returns another value -> verdict=flag_write_readback_failed reason=value_mismatch, exit 5"
+else fail "W5: a mismatched read-back was not refused" "$(detail)"; fi
+# W6 — the write arm is gated on SANDBOX_DENY_ROOTS too: a `true` write under
+# ANY mode must refuse when the source lacks the #9725 deny coverage (the
+# read-side refuse fires only under flip; the write arm exits before it).
+if case_write deny-absent ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-absent" \
+  && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT" && [ ! -s "$DLOG" ]; then
+  pass "W6: a `true` write without deny coverage -> verdict=sandbox_deny_coverage_absent, exit 5, doppler never called"
+else fail "W6: a true write without deny coverage was not refused" "$(detail)"; fi
+if case_write deny-ok ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-present" \
+  && [ "$(cat "$OUT")" = "flag_write=ok value=true" ]; then
+  pass "W7: a `true` write WITH deny coverage proceeds to the set+readback path"
+else fail "W7: a covered true write did not reach the write path" "$(detail)"; fi
+# W8 — a `false` write must NOT be gated (a rollback needs no deny coverage —
+# it moves toward less exposure, and the served-image side is floored by
+# GIT_DATA_DENY_FLOOR on flip). Pins the `= true` scope of the write gate.
+if case_write deny-absent-false ABSENT false DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-absent" \
+  && [ "$(cat "$OUT")" = "flag_write=ok value=false" ]; then
+  pass "W8: a `false` write proceeds WITHOUT deny coverage (rollback must never be blocked by it)"
+else fail "W8: a false write was incorrectly gated on deny coverage" "$(detail)"; fi
 
 if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly the TOFU_ARM line, the pin fingerprint and flag=unset, exit 0"
 else fail "P1: an absent flag was not flag=unset" "$(detail)"; fi
@@ -262,6 +357,41 @@ if case_off space 'true '; then pass "P5b: 'true ' (trailing space) is not true 
 else fail "P5b: 'true ' was not flag=off" "$(detail)"; fi
 if case_off canary 'off-CANARY-5d1e' && ! grep -q 'CANARY' "$OUT"; then pass "P6: the flag value itself is never printed"
 else fail "P6: the flag value was printed" "out=[$(tr '\n' '|' < "$OUT")]"; fi
+# ── mode-aware read (#8211 PR2) ────────────────────────────────────────────────────
+case_mode() { # <label> <flag-value|ABSENT> <mode> — the flag=true mode branch runs BEFORE TOFU/pin
+  run_case "mode-$1" "$2" FLAG_MODE="$3"
+}
+case_deny() { # <label> <src-dir> <mode> — SANDBOX_DENY_ROOTS arm (#9725): emits SANDBOX_SRC_DIR + FLAG_MODE
+  run_case "deny-$1" false SANDBOX_SRC_DIR="$2" FLAG_MODE="$3"
+}
+case_write_deny_absent_true_refused() { # asserts the WRITE gate refuses a `true` write over absent coverage (mutant row 18)
+  case_write m-write-gate ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-absent" \
+    && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"
+}
+case_deny_absent_flip_refused() { # asserts the flip gate refuses absent coverage (mutant row)
+  case_deny absent-flip "$T/deny-absent" flip
+  [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"
+}
+if case_mode flip-true true flip \
+  && [ "$(cat "$OUT")" = "$(printf 'flag=true resume=arm_b\n%s\n%s\ngit_data_pin=present fp=%s' "$TOFU_PRESENT" "$DENY_LINE" "$PIN_FP")" ] && [ "$RC" = 0 ]; then
+  pass "M-flip-true: flip with flag already true -> flag=true resume=arm_b, exit 0 (NOT a refusal — a prior flip died post-write)"
+else fail "M-flip-true: resume arm B was not reported" "$(detail)"; fi
+if case_mode rollback-true true rollback \
+  && [ "$(cat "$OUT")" = "$(printf 'flag=true mode=rollback\n%s\n%s\ngit_data_pin=present fp=%s' "$TOFU_PRESENT" "$DENY_LINE" "$PIN_FP")" ] && [ "$RC" = 0 ]; then
+  pass "M-rb-true: rollback with flag=true -> the expected entry, exit 0"
+else fail "M-rb-true: flag=true under rollback was not accepted" "$(detail)"; fi
+if case_mode rollback-off false rollback \
+  && [ "$RC" = 0 ] && grep -qF 'verdict=nothing_to_rollback' "$OUT" && grep -qF 'flag=off' "$OUT"; then
+  pass "M-rb-off: rollback with flag off -> verdict=nothing_to_rollback, exit 0 (desired state already holds)"
+else fail "M-rb-off: nothing-to-rollback was not reported" "$(detail)"; fi
+if case_mode unfreeze-true true unfreeze \
+  && [ "$RC" = 0 ] && grep -qF 'flag=true mode=unfreeze' "$OUT"; then
+  pass "M-uf-true: unfreeze with flag=true is ACCEPTED (a died-mid-window flip leaves flag on + freeze held — unfreeze is exactly that recovery)"
+else fail "M-uf-true: unfreeze wrongly refused flag=true" "$(detail)"; fi
+if case_mode bogus false bogus \
+  && [ "$RC" = 2 ] && grep -qF 'verdict=flag_mode_invalid' "$OUT" && [ ! -s "$DLOG" ]; then
+  pass "M-invalid: an unknown FLAG_MODE -> verdict=flag_mode_invalid, exit 2, doppler never called"
+else fail "M-invalid: an unknown mode was not refused" "$(detail)"; fi
 # ── host-key pin (#7226, plan D3) ─────────────────────────────────────────────────────
 case_pin_ok() { # the pin file holds exactly the key line, read-only (0444); only its fingerprint is printed
   run_case pin-ok false
@@ -272,7 +402,7 @@ case_pin_ok() { # the pin file holds exactly the key line, read-only (0444); onl
 case_pin_refused() { # <label> <reason> [VAR=value ...] — CASE_PIN set by the caller
   local label="$1" reason="$2"; shift 2
   run_case "pin-$label" false "$@"
-  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(printf '%s\n%s' "$TOFU_PRESENT" "$(refusal "git_data_host_key_unavailable reason=$reason")")" ] \
+  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(printf '%s\n%s\n%s' "$TOFU_PRESENT" "$DENY_LINE" "$(refusal "git_data_host_key_unavailable reason=$reason")")" ] \
     && [ ! -e "$RT/git-data.pin" ] && ! grep -q 'CANARY' "$OUT"
 }
 case_tofu() { # <label> <git-auth-path> <expected-line>
@@ -357,15 +487,15 @@ steps = ((wf.get("jobs") or {}).get("cutover") or {}).get("steps") or []
 pre = [i for i, s in enumerate(steps) if s.get("id") == "flag_precheck"]
 bridge = [i for i, s in enumerate(steps) if s.get("uses") == "./.github/actions/cf-tunnel-ssh-bridge"]
 key = [i for i, s in enumerate(steps) if s.get("id") == "key_fetch"]
-run = [i for i, s in enumerate(steps) if isinstance(s.get("run"), str) and "git-data-cutover.sh" in s["run"]]
-check("G1-order: exactly one flag precheck step, and it precedes the bridge, the key fetch and the script step",
-      len(pre) == 1 and len(bridge) == 1 and len(key) == 1 and len(run) == 1 and pre[0] < bridge[0] and pre[0] < key[0] and pre[0] < run[0],
+run = [i for i, s in enumerate(steps) if isinstance(s.get("env"), dict) and s["env"].get("MODE") in ("proof", "freeze", "unfreeze", "probe")]
+check("G1-order: exactly one flag precheck step, and it precedes the bridge, the key fetch and every host-side verb step",
+      len(pre) == 1 and len(bridge) == 1 and len(key) == 1 and len(run) == 4 and pre[0] < bridge[0] and pre[0] < key[0] and all(pre[0] < r for r in run),
       (pre, bridge, key, run))
 p = steps[pre[0]] if len(pre) == 1 else {}
-check("G1-step: the precheck step runs the script, with no if: and no continue-on-error",
-      str(p.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-flag-precheck.sh" and "if" not in p and not p.get("continue-on-error"), p)
-check("G1-env: the precheck step binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD}",
-      p.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}"}, p.get("env"))
+check("G1-step: the precheck step runs the script, gated only off redeploy (the mode that never touches git-data), no continue-on-error",
+      "git-data-flag-precheck.sh" in str(p.get("run", "")) and "redeploy" in str(p.get("if")) and not p.get("continue-on-error"), p)
+check("G1-env: the precheck step binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD, FLAG_MODE}",
+      p.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}", "FLAG_MODE": "${{ steps.confirm.outputs.mode }}"}, p.get("env"))
 cfg = [i for i, s in enumerate(steps) if s.get("id") == "ssh_config"]
 pin_users = [s.get("id") or s.get("name") for s in steps if "git-data.pin" in json.dumps(s)]
 check("G1-pin: the pin the precheck writes is read by the ssh_config step, which runs after the precheck and the bridge",
@@ -378,6 +508,12 @@ sites += [("top", k) for k, v in wf.items() if k != "jobs" and "DOPPLER_TOKEN_PR
 sites += [("job", j) for j, b in (wf.get("jobs") or {}).items() if j != "cutover" and "DOPPLER_TOKEN_PRD" in json.dumps(b, default=str)]
 check("G1-census: DOPPLER_TOKEN_PRD is named only by the flag precheck step (%d steps scanned)" % len(steps),
       len(steps) >= 1 and sites == [("step", "flag_precheck")], sites)
+# #9725: the flip must also require the SERVED image to carry the dual-root
+# tenant deny — the GIT_DATA_DENY_FLOOR arm (env bound, refusal emitted).
+fp = [s for s in steps if s.get("id") == "flip_preconditions"]
+check("G1-denyfloor: flip_preconditions binds vars.GIT_DATA_DENY_FLOOR and refuses via sandbox_deny_floor",
+      len(fp) == 1 and "GIT_DATA_DENY_FLOOR" in json.dumps(fp[0].get("env", {}))
+      and "sandbox_deny_floor" in str(fp[0].get("run", "")), fp)
 iv = yaml.safe_load(open(iv_path))
 ivsteps = [s for j in (iv.get("jobs") or {}).values() for s in (j.get("steps") or [])]
 # Since #8736 this suite is registered by PRESENCE (the deploy-script-tests
@@ -399,7 +535,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -ge 7 ] || fail "G1: only $_wf_n workflow verdicts were produced (expected 7) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -ge 8 ] || fail "G1: only $_wf_n workflow verdicts were produced (expected 8) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
 
 # ── mutation matrix (Guard 1) ─────────────────────────────────────────────────────────
 echo; echo "--- mutation matrix (each row must turn its named case RED)"
@@ -455,13 +591,13 @@ be = next(i for i in range(b + 1, len(lines)) if lines[i].startswith("      - ")
 lines[be:be] = chunk
 open(p, "w").write("\n".join(lines))
 PY
-if mutate precheck-after-bridge "$WF" 12 "python:$T/mut/reorder.py"; then
+if mutate precheck-after-bridge "$WF" 28 "python:$T/mut/reorder.py"; then
   python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-order.tsv" 2>&1
   mutant_red precheck-after-bridge wf_row "$T/mut/wf-order.tsv" "G1-order:"
 fi
 # Row 3 — bind DOPPLER_TOKEN_PRD in the script step's env as well.
 # shellcheck disable=SC2016
-if mutate prd-in-script-step "$WF" 1 's#^          GIT_DATA_SSH: ssh -F .*$#&\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}#'; then
+if mutate prd-in-script-step "$WF" 1 's#^          MODE: proof$#&\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}#'; then
   python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census.tsv" 2>&1
   mutant_red prd-in-script-step wf_row "$T/mut/wf-census.tsv" "G1-census:"
 fi
@@ -533,14 +669,48 @@ fi
 if mutate pin-writable "$PRECHECK" 2 's#^chmod 0444 "\$PIN_OUT" \|\| refuse pin_write_failed$#:#'; then
   CASE_SCRIPT="$MUTANT" mutant_red pin-writable case_pin_ok
 fi
+# Row 17 — neuter the SANDBOX_DENY_ROOTS flip gate: an absent-coverage flip
+# must then proceed (the refusal is the arm's whole point).
+if mutate deny-flip-gate "$PRECHECK" 2 's#"\$FLAG_MODE" = flip#"\$FLAG_MODE" = flip_never#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red deny-flip-gate case_deny_absent_flip_refused
+fi
+# Row 18 — neuter the WRITE-arm deny gate: a `true` write over absent coverage
+# then reaches doppler (the write arm is the gate the flip-gate can't cover —
+# it exits before the read probes run).
+if mutate deny-write-gate "$PRECHECK" 2 's#"\$FLAG_WRITE_VALUE" = true#"\$FLAG_WRITE_VALUE" = never#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red deny-write-gate case_write_deny_absent_true_refused
+fi
+
+# ── SANDBOX_DENY_ROOTS arm (#9725) ────────────────────────────────────────────────
+if case_deny absent "$T/deny-absent" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS absent' "$OUT"; then
+  pass "D1: source without the deny-root markers under proof -> SANDBOX_DENY_ROOTS absent, informational only (exit 0)"
+else fail "D1: absent markers were not reported" "$(detail)"; fi
+if case_deny present "$T/deny-present" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS present' "$OUT"; then
+  pass "D2: source carrying the markers -> SANDBOX_DENY_ROOTS present"
+else fail "D2: a present fixture was not reported" "$(detail)"; fi
+if case_deny unknown "$T/no-such-src" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS unknown' "$OUT"; then
+  pass "D3: unreadable source dir -> SANDBOX_DENY_ROOTS unknown (never absent)"
+else fail "D3: an unreadable dir was not unknown" "$(detail)"; fi
+if case_deny absent-flip "$T/deny-absent" flip   && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"; then
+  pass "D4: flip without the deny coverage -> verdict=sandbox_deny_coverage_absent, exit 5 (blocking)"
+else fail "D4: a flip over absent coverage was not refused" "$(detail)"; fi
+if case_deny unknown-flip "$T/no-such-src" flip   && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_unknown' "$OUT"; then
+  pass "D5: flip with unreadable source -> verdict=sandbox_deny_coverage_unknown, exit 5 (fail closed)"
+else fail "D5: a flip over unknown coverage was not refused" "$(detail)"; fi
+if case_deny present-flip "$T/deny-present" flip   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS present' "$OUT" && grep -qF 'flag=off' "$OUT"; then
+  pass "D6: flip WITH the coverage -> SANDBOX_DENY_ROOTS present, proceeds to pin + flag=off"
+else fail "D6: a covered flip was refused or lost the pin" "$(detail)"; fi
+if case_deny collapsed-flip "$T/deny-collapsed" flip   && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"; then
+  pass "D7: the flag-COLLAPSED helper shape (env read outside the deny fn) -> sandbox_deny_coverage_absent — the function-scope needle catches the #9725 form"
+else fail "D7: flag-collapsed helper shape was not detected as absent" "$(detail)"; fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=17  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b)
+MUTANT_FLOOR=19  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 20 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 7 + mutants 17 x 2 = 76 (exact).
-FLOOR=76
+# Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 = 101 (exact).
+FLOOR=101
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

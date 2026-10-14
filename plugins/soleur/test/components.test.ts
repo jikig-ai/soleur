@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { Glob } from "bun";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   discoverAgents,
@@ -304,16 +304,19 @@ describe("references/ files are reachable from their skill", () => {
 // Autonomous-loop skills must disclose API budget (#3819)
 // ---------------------------------------------------------------------------
 
+// Shared by the API-budget and pipeline-tally sentinels — one list, never two
+// (#9403 review: a duplicated list silently diverges on the next loop skill).
+const AUTONOMOUS_LOOP_SKILLS = [
+  "test-fix-loop",
+  "drain-labeled-backlog",
+  "resolve-todo-parallel",
+  "resolve-pr-parallel",
+  "work",
+  "one-shot",
+  "eval-harness",
+];
+
 describe("Autonomous-loop API-budget disclosure", () => {
-  const AUTONOMOUS_LOOP_SKILLS = [
-    "test-fix-loop",
-    "drain-labeled-backlog",
-    "resolve-todo-parallel",
-    "resolve-pr-parallel",
-    "work",
-    "one-shot",
-    "eval-harness",
-  ];
 
   // Sentinel chosen for distinctiveness + verbatim across all 7 disclosures.
   // Tracks the BSL 1.1 disclaimer carried over from `goal-primitive.md`.
@@ -339,6 +342,132 @@ describe("Autonomous-loop API-budget disclosure", () => {
       ).toBe(true);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Autonomous-loop skills must carry the pipeline-tally call-out (#9403)
+// ---------------------------------------------------------------------------
+// Prose-only bookkeeping has ~zero compliance — the tally only exists if every
+// autonomous loop invokes the counter script. This sentinel pins the anchored
+// call forms: each skill must `init`, `gate` (pre-expensive-step), and `incr`
+// via scripts/pipeline-tally.sh. review/ship are instrumented alongside the
+// loop list (review seats; ship ci_cycles + the ## Pipeline Tally render).
+
+describe("Autonomous-loop pipeline-tally call-out (#9403)", () => {
+  // review (seats) and ship (ci_cycles + render) are instrumented alongside the
+  // loop list — the sentinel covers all nine skills.
+  const TALLY_SKILLS = [...AUTONOMOUS_LOOP_SKILLS, "review", "ship"];
+
+  // Loop until stable — a nested `<!-- <!-- --> -->` can splice neighbours into
+  // a fresh comment (CodeQL incomplete-multi-character-sanitization); a
+  // comment-only mention must NOT satisfy the call-form assertions below.
+  const stripHtmlComments = (raw: string) => {
+    let out = raw;
+    let prev: string;
+    do {
+      prev = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prev);
+    return out;
+  };
+
+  // The qualified invocation is the contract — `pipeline-tally.sh` copied
+  // bare resolves to `command not found`, and the fail-open design makes that
+  // a SILENT skip. `[ \t]+` (not `\s+`) keeps the subcommand on the same line.
+  const CALL_FORMS = [
+    /scripts\/pipeline-tally\.sh"?[ \t]+init\b/, // init invocation
+    /scripts\/pipeline-tally\.sh"?[ \t]+gate\b/, // gate before expensive steps
+    /scripts\/pipeline-tally\.sh"?[ \t]+incr\b/, // incr <dim> call form
+  ];
+
+  for (const skillName of TALLY_SKILLS) {
+    test(`${skillName} SKILL.md carries pipeline-tally init/gate/incr call forms`, () => {
+      const raw = stripHtmlComments(
+        readFileSync(
+          resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md"),
+          "utf-8",
+        ),
+      );
+      for (const re of CALL_FORMS) {
+        expect(
+          re.test(raw),
+          `${skillName} is missing tally call form ${re.source} — every autonomous loop must ` +
+            `invoke scripts/pipeline-tally.sh (init at start, gate before expensive steps, ` +
+            `incr per counted op). Removing or renaming the call defeats the running tally (#9403).`,
+        ).toBe(true);
+      }
+    });
+  }
+
+  test("review SKILL.md counts seats via pipeline-tally incr", () => {
+    const raw = stripHtmlComments(readFileSync(resolve(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8"));
+    expect(
+      /scripts\/pipeline-tally\.sh"?[ \t]+incr[ \t]+seats/.test(raw),
+      "review must `incr seats <N>` after spawning its panel (#9403)",
+    ).toBe(true);
+  });
+
+  test("ship SKILL.md renders ## Pipeline Tally in BOTH PR-body templates", () => {
+    // NOT comment-stripped: ship's own regex literals contain an unbalanced
+    // `<!--` (gate-override grep patterns ~L2004), so the fixpoint strip eats
+    // this entire section — a comment-strip here false-negatives the very
+    // templates it checks. The `<tally>`-placeholder scope already excludes
+    // prose mentions.
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    // `## Pipeline Tally` followed by the <tally> placeholder only exists
+    // inside the two PR-body templates — a bare count can't distinguish
+    // template headings from prose mentions (deleting BOTH templates once
+    // left the count at 2 and the assert green on the property it names).
+    const occurrences = (raw.match(/## Pipeline Tally\n\s*<tally>/g) || []).length;
+    expect(
+      occurrences === 2,
+      `ship SKILL.md has ${occurrences} '## Pipeline Tally' template heading(s) — the ` +
+        `\`gh pr edit\` AND \`gh pr create\` fallback templates must each render it (#9403 AC4)`,
+    ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_ABSENT"),
+      "ship must render SOLEUR_TALLY_ABSENT for an instrumented run that wrote no ledger",
+    ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_CAP_IGNORED"),
+      "ship must render SOLEUR_TALLY_CAP_IGNORED for a run that crossed a cap and shipped anyway",
+    ).toBe(true);
+  });
+
+  test("instrumented workflows return a counts field (one-writer bridge)", () => {
+    // Enumerate workflows under instrumented skills, not a hardcoded list —
+    // a new *.workflow.js in a tally-instrumented skill joins this contract
+    // automatically (un-instrumented skills' workflows legitimately carry none).
+    const bridged = readdirSync(resolve(PLUGIN_ROOT, "skills"), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && TALLY_SKILLS.includes(d.name))
+      .flatMap((d) =>
+        existsSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+          ? readdirSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+              .filter((f) => f.endsWith(".workflow.js"))
+              .map(() => d.name)
+          : [],
+      )
+      .sort();
+    expect(
+      bridged.length > 0,
+      "no *.workflow.js found under instrumented skills — the bridge contract lost its population",
+    ).toBe(true);
+    for (const name of bridged) {
+      const wfPath = resolve(
+        PLUGIN_ROOT,
+        "skills",
+        name,
+        "workflows",
+        `${name}.workflow.js`,
+      );
+      const raw = readFileSync(wfPath, "utf-8");
+      expect(
+        /counts:\s*\{/.test(raw),
+        `${name}.workflow.js does not return counts:{…} — the invoking prose posts ` +
+          `it via \`pipeline-tally.sh incr\`; without the field the workflow path tallies nothing (#9403)`,
+      ).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -384,6 +513,109 @@ describe("Decision-principles taxonomy wiring", () => {
         `ship/SKILL.md lost the "${token}" wiring — headless decision challenges would ` +
           `no longer reach the operator (regresses ADR-084's legible surface).`,
       ).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Technical-ruling delegation wiring (hr-technical-fork-is-not-an-operator-question)
+// ---------------------------------------------------------------------------
+// Consumers are DERIVED (every skill whose SKILL.md names the CTO agent must link the
+// reference) plus the seven the brief names; the artifact's writers must link the
+// taxonomy doc, which carries the Decision Classes schema. `go` is wired through its
+// authority file commands/go.md (skills/go/SKILL.md is a harness shim that reads it).
+describe("Technical-ruling delegation wiring", () => {
+  const REF_REL = "skills/brainstorm-techniques/references/technical-ruling-delegation.md";
+  const LINK_RE = /\]\([^)]*technical-ruling-delegation\.md\)/;
+  const NAMED = ["one-shot", "plan", "work", "review", "ship", "brainstorm"];
+  const read = (rel: string) => readFileSync(resolve(PLUGIN_ROOT, rel), "utf-8");
+  const skillDirs = readdirSync(resolve(PLUGIN_ROOT, "skills"), { withFileTypes: true })
+    .filter((d) => d.isDirectory() && existsSync(resolve(PLUGIN_ROOT, "skills", d.name, "SKILL.md")))
+    .map((d) => d.name);
+  const derived = skillDirs.filter((n) => read(`skills/${n}/SKILL.md`).includes("soleur:engineering:cto"));
+  const consumers = Array.from(new Set([...NAMED, ...derived, "plan-review"]));
+
+  test("the reference exists", () => {
+    expect(existsSync(resolve(PLUGIN_ROOT, REF_REL)), `${REF_REL} is missing.`).toBe(true);
+  });
+
+  test("consumer set has a floor of 7 (a zero-file glob must not pass)", () => {
+    // 6 named skills + go (commands/go.md) + plan-review => at least 8 distinct links asserted.
+    expect(consumers.length).toBeGreaterThanOrEqual(7);
+    expect(skillDirs.length).toBeGreaterThanOrEqual(50);
+  });
+
+  for (const name of consumers) {
+    test(`${name} links technical-ruling-delegation.md`, () => {
+      expect(
+        LINK_RE.test(read(`skills/${name}/SKILL.md`)),
+        `${name}/SKILL.md does not link technical-ruling-delegation.md via a markdown link.`,
+      ).toBe(true);
+    });
+  }
+
+  test("go links it through commands/go.md (the authority file)", () => {
+    expect(LINK_RE.test(read("commands/go.md")), "commands/go.md lost the technical-ruling pointer.").toBe(true);
+  });
+
+  for (const name of ["plan", "plan-review", "work", "ship"]) {
+    test(`${name} (an artifact writer) links decision-principles.md`, () => {
+      expect(/\]\([^)]*decision-principles\.md\)/.test(read(`skills/${name}/SKILL.md`))).toBe(true);
+    });
+  }
+
+  test("ship carries the Technical-Ruling Gate heading, names the script and links the render reference", () => {
+    const raw = read("skills/ship/SKILL.md");
+    expect(raw.includes("### Technical-Ruling Gate (mandatory)")).toBe(true);
+    expect(raw.includes("scripts/technical-ruling-gate.sh")).toBe(true);
+    expect(/\]\([^)]*decision-challenges-render\.md\)/.test(raw)).toBe(true);
+    expect(existsSync(resolve(PLUGIN_ROOT, "skills/ship/references/decision-challenges-render.md"))).toBe(true);
+  });
+
+  test("the gate is invoked at all three call sites, through the plugin root, with each exit handled", () => {
+    const GATE = 'skills/ship/scripts/technical-ruling-gate.sh';
+    const oneShot = read("skills/one-shot/SKILL.md");
+    const ship = read("skills/ship/SKILL.md");
+    // one-shot: the plan-phase call, the plugin-root form, and all three exit codes named.
+    const os = oneShot.slice(oneShot.indexOf("**Technical-ruling gate (before `work`)."));
+    expect(os.startsWith("**Technical-ruling gate"), "one-shot lost its gate step").toBe(true);
+    const osStep = os.slice(0, os.indexOf("\n"));
+    expect(osStep.includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && osStep.includes("--branch")).toBe(true);
+    for (const exit of ["**0**", "**1**", "**2**"]) expect(osStep.includes(exit), `one-shot gate step lost ${exit}`).toBe(true);
+    // ship Phase 5.5 (--branch) and Phase 6 step 4.5 (--pr-body), both via the plugin root, never a repo-relative path.
+    // window-assembly: gateSection — everything from the gate heading to the end of ship/SKILL.md, of which only the first 1200 bytes (the gate paragraph) are asserted on
+    const gateSection = ship.slice(ship.indexOf("### Technical-Ruling Gate (mandatory)"));
+    expect(gateSection.slice(0, 1200).includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && gateSection.slice(0, 1200).includes("--branch")).toBe(true);
+    const step45 = ship.slice(ship.indexOf("4.5. **Technical-ruling body check"));
+    expect(step45.slice(0, 700).includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && step45.slice(0, 700).includes("--pr-body")).toBe(true);
+    // Exit handling is part of the contract, not just the invocation.
+    expect(osStep.includes("**2** the gate could not measure"), "one-shot lost its exit-2 handling").toBe(true);
+    expect(gateSection.slice(0, 1200).includes("2 unmeasured: fix"), "ship 5.5 lost its exit-2 handling").toBe(true);
+    expect(step45.slice(0, 700).includes("gate-rc=") && step45.slice(0, 700).includes("never ready past it"), "ship step 4.5 lost its exit handling").toBe(true);
+    const renderDoc = read("skills/ship/references/decision-challenges-render.md");
+    expect(renderDoc.includes('echo "gate-rc=$rc"') && renderDoc.includes("else rc=2; fi"), "the --pr-body recipe lost its fetch-failure exit 2 or its rc print").toBe(true);
+    for (const f of [oneShot, ship, renderDoc]) {
+      expect(/bash\s+"?plugins\/soleur\/skills\/ship\/scripts\/technical-ruling-gate\.sh/.test(f), "a repo-relative gate path breaks end-user installs").toBe(false);
+    }
+  });
+
+  test("the gate script exists and is executable", () => {
+    const f = resolve(PLUGIN_ROOT, "skills/ship/scripts/technical-ruling-gate.sh");
+    expect(existsSync(f)).toBe(true);
+    expect((statSync(f).mode & 0o111) !== 0, "technical-ruling-gate.sh is not executable").toBe(true);
+  });
+
+  test("the rule body names the CTO agent and the one-shot inline copy carries the key tokens", () => {
+    const rules = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.rules.md"), "utf-8");
+    const line = rules.split("\n").find((l) => l.includes("[id: hr-technical-fork-is-not-an-operator-question]")) ?? "";
+    expect(line.includes("soleur:engineering:cto")).toBe(true);
+    // A Task subagent reads prompt text only, so one-shot carries the one deliberate copy.
+    const oneShot = read("skills/one-shot/SKILL.md");
+    const start = oneShot.indexOf("TECHNICAL RULINGS (inline copy");
+    expect(start, "one-shot lost its inline technical-rulings copy").toBeGreaterThan(-1);
+    const copy = oneShot.slice(start, start + 1400);
+    for (const token of ["soleur:engineering:cto", "Ruled by CTO agent", "surface it"]) {
+      expect(copy.includes(token), `one-shot inline copy lost "${token}"`).toBe(true);
     }
   });
 });
@@ -1255,7 +1487,7 @@ describe("plugin slash-name uniqueness", () => {
     // "all manifests", and narrowing the dirent regex to `.claude-plugin` (the
     // one manifest that structurally cannot fail clause (a)) would drop both
     // real rows while a >= 1 floor stayed green.
-    expect(manifestDirs).toEqual([".claude-plugin", ".codex-plugin", ".devin-plugin"]);
+    expect(manifestDirs).toEqual([".claude-plugin", ".codex-plugin", ".cursor-plugin", ".devin-plugin"]);
 
     // Identity, not just count: three WRONG stems satisfy a length floor, and
     // clause (b) would then compare against names no command has.

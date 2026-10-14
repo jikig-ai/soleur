@@ -1,0 +1,11 @@
+# S4 hand edits that are NOT a plain grep -q -> grep -c transform, keyed by BASE-side line (origin/main 01d2b5a0d8; byte-identical to the branch base 71c0bac35f for every file below): path:OLD[-OLD2]:reason
+# Re-derive the line numbers in Phase 0 if origin/main has moved; verify fails on a range that matches no hunk.
+# The 19 one-token stub-heredoc conversions (see data-conversions.txt) are NOT listed here: they are a plain transform, so verify counts them as verified and refuses an entry that is wider than the edit.
+tests/scripts/test-audit-ruleset-bypass.sh:1274:sed expression that must match the converted line 848; the inserted /dev/null slashes are escaped for the s/// delimiter, so it is not a plain token rewrite
+tests/scripts/test-git-data-birth-readiness-gate.sh:2971:seeded W2-control fixture line inside a quoted heredoc that must keep the banned shape; trailing sigpipe-demo marker, no conversion
+tests/scripts/test-git-data-birth-readiness-gate.sh:2972:seeded W2-control fixture line inside a quoted heredoc that must keep the banned shape; trailing sigpipe-demo marker, no conversion
+tests/scripts/test-git-data-birth-readiness-gate.sh:2973:seeded W2-control fixture line inside a quoted heredoc that must keep the banned shape; trailing sigpipe-demo marker, no conversion
+tests/scripts/test-git-data-birth-readiness-gate.sh:2974:seeded W2-control fixture line inside a quoted heredoc that must keep the banned shape (grep -m1 form); trailing sigpipe-demo marker, no conversion
+tests/scripts/test-git-data-rung2-evidence-capture.sh:934:grep -m1 display inside a probe echo: here-string instead of a printf producer, no pipe into an early-exit reader
+tests/scripts/test-tmp-purge.sh:300:grep -qc (quiet and count in one cluster): the codemod refuses the repeated-letter cluster as X; hand-converted to grep -c >/dev/null
+tests/scripts/test-registry-restore-from-ghcr.sh:21-23:header comment that said every predicate greps a FILE directly; reworded to name the drained pipe form (review finding, prose only, no executable change)

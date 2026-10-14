@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useLayoutEffect as reactUseLayoutEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useId, useLayoutEffect as reactUseLayoutEffect } from "react";
 
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? reactUseLayoutEffect : useEffect;
@@ -10,9 +10,17 @@ import { SpinnerIcon } from "@/components/icons";
 import type { AttachmentRef } from "@/lib/types";
 import type { StreamState } from "@/lib/ws-client";
 import { validateFiles } from "@/lib/validate-files";
+import {
+  ATTACHMENT_ACCEPT,
+  attachmentTileLabel,
+} from "@/lib/attachment-constants";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
 import { safeSession } from "@/lib/safe-session";
 import { detectImagePlaceholders } from "@/lib/image-placeholder-detect";
+import { attachmentErrorCopy } from "@/lib/attachment-error-copy";
+
+const ATTACHMENTS_UNAVAILABLE_MESSAGE =
+  "Attachments are available once the conversation starts.";
 
 interface PendingAttachment {
   id: string;
@@ -29,8 +37,12 @@ interface ChatInputProps {
   onAtDismiss: () => void;
   disabled?: boolean;
   placeholder?: string;
-  /** Conversation ID for presigning uploads. */
-  conversationId?: string;
+  /** Conversation ID for presigning uploads. `null` means attachments are
+   *  unavailable (the caller has no usable conversation id yet): the paperclip
+   *  is `aria-disabled` and `validateAndAddFiles` rejects drop/paste/picker
+   *  files, so nothing is ever presigned against a non-id. `undefined` keeps
+   *  the legacy behaviour (attachments enabled, presign sends no id). */
+  conversationId?: string | null;
   /** Insert text at the current cursor position (used by AtMentionDropdown selection). */
   insertRef?: React.MutableRefObject<((text: string, replaceFrom: number) => void) | null>;
   /** Callback ref that invokes insertQuote for the KB selection-toolbar flow. */
@@ -41,6 +53,13 @@ interface ChatInputProps {
    *  and rehydrated on mount. Used by the KB sidebar to preserve drafts
    *  per-document across navigation. */
   draftKey?: string;
+  /** #9557 — optional composer prefill (the command palette's `?q=` param,
+   *  threaded by `<ChatSurface>`). Applied at most once via a latched effect:
+   *  only when `prefill` is non-empty (an empty `?q=` is a no-op, not a latch
+   *  burn) AND the current value is empty — a hydrated `draftKey` draft or
+   *  typed text is never clobbered. Seeds the draft; it NEVER auto-sends
+   *  (auto-send is `?msg=`'s contract). */
+  prefill?: string;
   /** When true, Enter key defers to the @mention dropdown instead of sending. */
   atMentionVisible?: boolean;
   /** Stage 4 (#2886): when true, force-disable the input and show the
@@ -81,6 +100,7 @@ export function ChatInput({
   quoteRef,
   focusRef,
   draftKey,
+  prefill,
   atMentionVisible = false,
   workflowEnded = false,
   streamState = "idle",
@@ -131,6 +151,8 @@ export function ChatInput({
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [flashQuote, setFlashQuote] = useState(false);
+  const attachmentsUnavailable = conversationId === null;
+  const unavailableDescId = useId();
 
   // AC5 per-path drafts: when `draftKey` changes (e.g. KB doc A → doc B),
   // rehydrate the textarea with the new key's stored value. Skip on the
@@ -190,6 +212,29 @@ export function ChatInput({
     };
   }, []);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // #9557 — `?q=` composer prefill. Latched (applied at most once) and keyed
+  // on the prop rather than run mount-only: `useSearchParams` may populate
+  // after mount, so a useState initializer or a []-effect could miss a late
+  // param. An empty prefill is a no-op that does NOT burn the latch — a late
+  // non-empty value can still apply. The latch IS burned on first sight of a
+  // non-empty prefill even when the composer holds text — "consumed"
+  // semantics (FR-8): a hydrated draftKey draft / typed text wins and is
+  // never clobbered, and clearing it later does not resurrect the param. The
+  // functional updater reads the post-queue value so a draftKey rehydrate
+  // committed in the same batch still wins. Focus is unconditional — the
+  // render-scope `value` can lag the same-batch draft rehydrate, and focusing
+  // a composer that kept its draft is benign either way. Once-per-mount:
+  // a second `?q=` navigation to this same pathname does not re-apply (the
+  // latch is burned; matches the first-run once-guard's identical scope).
+  const prefillAppliedRef = useRef(false);
+  useEffect(() => {
+    if (prefillAppliedRef.current || !prefill) return;
+    prefillAppliedRef.current = true;
+    setValue((prev) => (prev === "" ? prefill : prev));
+    textareaRef.current?.focus();
+  }, [prefill]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
   // Timer owned by the insertQuote callback. Tracked via ref so each
@@ -294,6 +339,12 @@ export function ChatInput({
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
+      // Single choke point for picker, drop and paste: nothing may be staged
+      // (and therefore nothing presigned) while attachments are unavailable.
+      if (attachmentsUnavailable) {
+        setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+        return;
+      }
       const { valid, error } = validateFiles(files, attachments.length);
 
       if (error) setAttachError(error);
@@ -309,7 +360,7 @@ export function ChatInput({
         ]);
       }
     },
-    [attachments.length],
+    [attachments.length, attachmentsUnavailable],
   );
 
   const removeAttachment = useCallback((id: string) => {
@@ -380,7 +431,7 @@ export function ChatInput({
         setAttachments((prev) =>
           prev.map((a) =>
             a.id === att.id
-              ? { ...a, error: err instanceof Error ? err.message : "Upload failed" }
+              ? { ...a, error: attachmentErrorCopy(err instanceof Error ? err.message : undefined) }
               : a,
           ),
         );
@@ -395,11 +446,18 @@ export function ChatInput({
           r.status === "fulfilled" && r.value !== null,
       )
       .map((r) => r.value);
-  }, [attachments]);
+  }, [attachments, conversationId]);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
     if (!trimmed && attachments.length === 0) return;
+
+    // Never presign against a null id (e.g. the socket reconnected after the
+    // files were staged): keep them staged and say why.
+    if (attachments.length > 0 && attachmentsUnavailable) {
+      setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+      return;
+    }
 
     let sent = false;
     if (attachments.length > 0) {
@@ -426,7 +484,7 @@ export function ChatInput({
       setValue("");
       onAtDismiss();
     }
-  }, [value, attachments, onSend, onAtDismiss, uploadAttachments]);
+  }, [value, attachments, attachmentsUnavailable, onSend, onAtDismiss, uploadAttachments]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -497,11 +555,14 @@ export function ChatInput({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragOver(false);
+      // Ignore drops while a send is uploading: handleSubmit is uploading the
+      // staged set, so a late file would sit outside that send.
+      if (isUploading) return;
       if (e.dataTransfer.files.length > 0) {
         validateAndAddFiles(e.dataTransfer.files);
       }
     },
-    [validateAndAddFiles],
+    [validateAndAddFiles, isUploading],
   );
 
   // Clipboard paste handler
@@ -510,6 +571,7 @@ export function ChatInput({
       const files = e.clipboardData.files;
       if (files.length > 0) {
         e.preventDefault();
+        if (isUploading) return; // same reason as handleDrop
         validateAndAddFiles(files);
         return;
       }
@@ -531,8 +593,16 @@ export function ChatInput({
         }
       }
     },
-    [validateAndAddFiles],
+    [validateAndAddFiles, isUploading],
   );
+
+  // The textarea is disabled while a send uploads, which drops focus; give it
+  // back when the upload settles so the user can keep typing.
+  const wasUploadingRef = useRef(false);
+  useEffect(() => {
+    if (wasUploadingRef.current && !isUploading) textareaRef.current?.focus();
+    wasUploadingRef.current = isUploading;
+  }, [isUploading]);
 
   return (
     <div
@@ -555,6 +625,7 @@ export function ChatInput({
             <div
               key={att.id}
               data-testid="attachment-preview"
+              title={att.file.name}
               className="relative flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5"
             >
               {att.preview ? (
@@ -565,7 +636,8 @@ export function ChatInput({
                 />
               ) : (
                 <div className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary">
-                  PDF
+                  {/* intake canonicalizes file.type (validateFiles), so this label is the extension of the resolved type */}
+                  {attachmentTileLabel(att.file.type)}
                 </div>
               )}
               <div className="flex flex-col">
@@ -612,7 +684,7 @@ export function ChatInput({
 
       {/* Error toast */}
       {attachError && (
-        <div className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
+        <div role="alert" className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
           {attachError}
         </div>
       )}
@@ -662,21 +734,38 @@ export function ChatInput({
         <Button
           variant="ghost"
           type="button"
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => {
+            if (attachmentsUnavailable) {
+              // aria-disabled (not native disabled) keeps the control focusable
+              // and click-able so touch users, who have no hover/title, still
+              // get the reason.
+              setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+              return;
+            }
+            fileInputRef.current?.click();
+          }}
           disabled={disabled || isUploading}
-          className="flex h-[36px] w-[36px] min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary disabled:opacity-50 md:min-h-0 md:min-w-0"
+          aria-disabled={attachmentsUnavailable ? "true" : undefined}
+          aria-describedby={attachmentsUnavailable ? unavailableDescId : undefined}
+          title={attachmentsUnavailable ? ATTACHMENTS_UNAVAILABLE_MESSAGE : undefined}
+          className="flex h-[36px] w-[36px] min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 md:min-h-0 md:min-w-0"
           aria-label="Attach file"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
           </svg>
         </Button>
+        {attachmentsUnavailable && (
+          <span id={unavailableDescId} className="sr-only">
+            {ATTACHMENTS_UNAVAILABLE_MESSAGE}
+          </span>
+        )}
 
         <input
           ref={fileInputRef}
           type="file"
           multiple
-          accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+          accept={ATTACHMENT_ACCEPT}
           className="hidden"
           onChange={(e) => {
             if (e.target.files) validateAndAddFiles(e.target.files);
@@ -704,7 +793,7 @@ export function ChatInput({
             type="button"
             onClick={handleAtButtonClick}
             disabled={disabled}
-            className="absolute bottom-1 right-0 flex min-h-11 min-w-11 items-center justify-center rounded-md text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
+            className="absolute bottom-1 right-0 flex min-h-11 min-w-11 items-center justify-center rounded-md p-0 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
             aria-label="Mention a leader"
           >
             <span className="text-sm font-medium">@</span>

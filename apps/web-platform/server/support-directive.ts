@@ -13,11 +13,17 @@
 //      a non-loaded skill anyway: a `Skill` call for anything ∉ the allowlist
 //      denies with a user-relayable message (NOT a silent removal — ADR-070).
 //   3. `SUPPORT_EXTRA_DISALLOWED_TOOLS` in `disallowedTools` — hard-remove the
-//      write/fan-out surface (Edit/Write/…/Task/Agent). Bash is KEPT because
-//      kb-search shells out via the read-only safe-bash gate.
+//      write/fan-out surface (Edit/Write/…/Task/Agent). Bash is KEPT — but not
+//      for kb-search, which answers through Read/Grep/Glob tools only (#9559);
+//      Bash remains the deny+escalate tripwire for engineering-shaped attempts.
 //
 // The directive lives ONLY in the trusted system-prompt channel (server append),
 // never in `context.content`. It MUST NOT contain any gate-bypass phrasing.
+
+import {
+  SUPPORT_AGENT_SESSION_HREF,
+  SUPPORT_AGENT_SESSION_LABEL,
+} from "@/lib/support-handoff";
 
 /**
  * The single support-allowed skill set. `help` is deliberately EXCLUDED — it
@@ -43,15 +49,26 @@ export const SUPPORT_SKILLS_OPTION: readonly string[] = Array.from(
  * under the support `cwd = getPluginPath()` a write to a path UNDER the plugin
  * root would pass workspace-containment and be allowed — the "read-only surface
  * that isn't" leak. Task/Agent are removed so a support chat cannot fan out into
- * engineering subagents. Bash is intentionally NOT here: `kb-search` shells out
- * (grep, kb-search-cache.sh) behind the existing read-only safe-bash gate, so
- * removing Bash would disable the only real support capability. WebSearch/
- * WebFetch are already in the canonical disallowed list.
+ * engineering subagents. Bash is intentionally NOT here: `kb-search` runs
+ * through Read/Grep/Glob tools only (#9559 — the "shells out via the safe-bash
+ * gate" premise was falsified; the allowlist never admitted the skill's
+ * commands). Bash stays available so read-shaped commands still pass safe-bash
+ * and engineering-shaped attempts still deny + record a support escalation.
+ * WebSearch/WebFetch are already in the canonical disallowed list.
  *
  * ADR-070 reconciliation: this silent `disallowedTools` removal is acceptable —
  * and NOT the additive-hint-only violation ADR-070 forbids — because Edit/Write/
  * Task/Agent are tools a support user NEVER legitimately needs, so their removal
  * breaks no valid flow.
+ *
+ * #9539 addendum — `AskUserQuestion`/`TodoWrite`/`ExitPlanMode` are removed for
+ * the same never-legitimately-needed reason: each emits a `review_gate` /
+ * `interactive_prompt` frame over `defaultSendToClient` (the WS sink) and
+ * registers a `pendingPrompts` entry a support-panel user can never answer —
+ * the support SSE transport has no prompt surface, so a turn that emits one
+ * stalls until the route cap kills the stream. The `canUseTool`
+ * `AskUserQuestion` persona-deny is defense-in-depth for a model that emits a
+ * schema-removed tool.
  */
 export const SUPPORT_EXTRA_DISALLOWED_TOOLS: readonly string[] = [
   "Edit",
@@ -60,6 +77,9 @@ export const SUPPORT_EXTRA_DISALLOWED_TOOLS: readonly string[] = [
   "NotebookEdit",
   "Task",
   "Agent",
+  "AskUserQuestion",
+  "TodoWrite",
+  "ExitPlanMode",
 ];
 
 /**
@@ -86,8 +106,8 @@ export const SUPPORT_SYSTEM_DIRECTIVE = `## Soleur Support mode
 
 You are **Soleur Support** — an in-app help assistant for an end user of the Soleur web app. Answer "how do I…" and "where is…" questions about using the app, grounded in the product-help knowledge base.
 
-**Answer from the knowledge base.** Use the \`kb-search\` skill to find the relevant product-help article, then answer in plain language and link the user to the right place in the app. If \`kb-search\` returns nothing relevant, say so honestly and point the user to their **Knowledge Base** in the left sidebar — never invent an answer.
+**Answer from the knowledge base.** Use the \`kb-search\` skill to find the relevant product-help article, then answer in plain language and link the user to the right place in the app. kb-search answers through Read/Grep/Glob only — there is no shell in this chat. If \`kb-search\` returns nothing relevant, say so honestly and point the user to their **Knowledge Base** in the left sidebar — never invent an answer.
 
-**Stay in scope.** You are app-help support only. You **never edit code, never run engineering workflows** (plan / work / ship / deploy / one-shot / review / drain), and **never touch a repository**. The only skill available to you is \`kb-search\`. If the user asks you to build, fix, deploy, or change something in their project, explain that this chat is for app help and point them to **"Ask an agent"** (the Command Center) for engineering work.
+**Stay in scope.** You are app-help support only. You **never edit code, never run engineering workflows** (plan / work / ship / deploy / one-shot / review / drain), and **never touch a repository**. The only skill available to you is \`kb-search\`. If the user asks you to build, fix, deploy, or change something in their project, answer in ONE sentence that this chat is app help and include the link [${SUPPORT_AGENT_SESSION_LABEL}](${SUPPORT_AGENT_SESSION_HREF}) — a write-capable agent session can take the task.
 
 **Be honest.** You are an AI assistant and may be wrong. Do not claim to have taken an action you cannot take. Keep answers short and specific to the user's question.`;

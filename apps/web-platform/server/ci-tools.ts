@@ -250,13 +250,20 @@ async function fetchFallbackLog(
   runId: number,
 ): Promise<FallbackLog | null> {
   try {
-    const jobsData = await githubApiGet<JobsResponse>(
-      installationId,
-      `/repos/${owner}/${repo}/actions/runs/${runId}/jobs`,
-    );
+    // Page the jobs list — the unpaginated read returns only page 1 (30 rows)
+    // and a failed job on page 2+ would silently drop the fallback log.
+    const jobs: JobsResponse["jobs"] = [];
+    for (let page = 1; ; page++) {
+      const pageData = await githubApiGet<JobsResponse>(
+        installationId,
+        `/repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=100&page=${page}`,
+      );
+      jobs.push(...pageData.jobs);
+      if (pageData.jobs.length < 100 || jobs.length >= pageData.total_count) break;
+    }
 
     // Find the first failed job
-    const failedJob = jobsData.jobs.find((j) => j.conclusion === "failure");
+    const failedJob = jobs.find((j) => j.conclusion === "failure");
     if (!failedJob) return null;
 
     // Find the first failed step

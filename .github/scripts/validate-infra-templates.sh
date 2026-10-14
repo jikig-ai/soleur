@@ -442,6 +442,60 @@ validate_by_type() { # rendered_path original_basename label
   return 0
 }
 
+# The sorted, de-duplicated key set of the templatefile() var map that opens at $1:$2.
+# One function, two consumers: the multi-call-site check and the render below, so the
+# key set that decides "is this ambiguous" is byte-for-byte the key set that is rendered.
+map_keys_at() { # tf_file tf_line
+  local map_text
+  map_text=$(awk -v start="$2" '
+    BEGIN { state = 0; depth = 0; qseen = 0; instr = 0 }
+    NR < start { next }
+    {
+      line = $0
+      if (state == 0) {
+        i = index(line, "templatefile(")
+        if (i == 0) next
+        line = substr(line, i + 13)
+        state = 1
+      }
+      out = ""
+      n = length(line)
+      for (j = 1; j <= n; j++) {
+        c = substr(line, j, 1)
+        prev = (j > 1) ? substr(line, j - 1, 1) : ""
+        if (state == 1) {
+          # Skip the filename argument. It is "${path.module}/<name>" — which
+          # contains a `{` of its own, so hunting the map brace before the closing
+          # quote latches onto the filename and treats it as the map.
+          if (c == "\"" && prev != "\\") { qseen++; if (qseen == 2) state = 2 }
+          continue
+        }
+        if (state == 2) {
+          if (c == "{") { state = 3; depth = 1 }
+          continue
+        }
+        if (c == "\"" && prev != "\\") { instr = !instr }
+        if (c == "{" && !instr) { depth++ }
+        else if (c == "}" && !instr) {
+          depth--
+          if (depth == 0) { if (length(out)) print out; exit }
+        }
+        out = out c
+      }
+      if (state == 3 && length(out)) print out
+    }' "$1")
+
+  # Keys are `ident =` at the start of a line OR after a `,`/`{` (one-line maps
+  # and nested objects put several on one line). `(?!=)` excludes `==`, so a
+  # comparison never reads as an assignment. Keys harvested from a NESTED object
+  # are phantoms, but templatefile() tolerates unused map keys (verified), so a
+  # phantom is inert — whereas a MISSING key fails loud at exit 2. Bias
+  # permissive.
+  printf '%s\n' "$map_text" \
+    | grep -oP '(?:^|[,{])\s*\K[a-z_][a-zA-Z0-9_]*(?=\s*=(?!=))' \
+    | sort -u
+}
+
 # --- Main loop ------------------------------------------------------------
 
 VALIDATED=0
@@ -530,11 +584,35 @@ for base in "${MEMBERS[@]}"; do
     echo "  A template nobody renders cannot be validated, and will break at apply." >&2
     exit 4
   fi
+  # Several call sites are ambiguous only when their KEY SETS differ. The render below
+  # takes keys from the map and stubs every value from the template body, so two sites
+  # with one key set render byte-identical bytes: validating one validates all. The
+  # values are free to differ (#8609: a keyless render hashed into a trigger, and a
+  # token-bearing render pushed to the host, from one template). Differing key sets
+  # still red, because then the choice of site decides what gets validated.
   if [[ "$n_sites" -gt 1 ]]; then
-    echo "ERROR [$base]: referenced by $n_sites templatefile() call sites — ambiguous var map:" >&2
-    printf '%s\n' "$sites" >&2
-    echo "  Refusing to silently pick one." >&2
-    exit 4
+    first_keys=""
+    seen_first=0
+    same_keys=1
+    while IFS= read -r site; do
+      site_file=${site%%:*}
+      site_rest=${site#*:}
+      site_keys=$(map_keys_at "$site_file" "${site_rest%%:*}" || true)
+      if [[ "$seen_first" -eq 0 ]]; then
+        first_keys="$site_keys"
+        seen_first=1
+      elif [[ "$site_keys" != "$first_keys" ]]; then
+        same_keys=0
+      fi
+    done <<< "$sites"
+    if [[ "$same_keys" -ne 1 ]]; then
+      echo "ERROR [$base]: referenced by $n_sites templatefile() call sites — ambiguous var map (the key sets differ):" >&2
+      printf '%s\n' "$sites" >&2
+      echo "  Refusing to silently pick one." >&2
+      exit 4
+    fi
+    echo "  ..  $base: $n_sites templatefile() call sites share one key set; validating once"
+    sites=$(printf '%s\n' "$sites" | head -n 1)
   fi
 
   tf_file=${sites%%:*}
@@ -567,53 +645,7 @@ for base in "${MEMBERS[@]}"; do
   # Hence an explicit state machine rather than line anchors:
   #   0 find `templatefile(`  ->  1 skip the quoted filename arg (may span lines)
   #                           ->  2 find the map `{`  ->  3 accumulate to its match
-  map_text=$(awk -v start="$tf_line" '
-    BEGIN { state = 0; depth = 0; qseen = 0; instr = 0 }
-    NR < start { next }
-    {
-      line = $0
-      if (state == 0) {
-        i = index(line, "templatefile(")
-        if (i == 0) next
-        line = substr(line, i + 13)
-        state = 1
-      }
-      out = ""
-      n = length(line)
-      for (j = 1; j <= n; j++) {
-        c = substr(line, j, 1)
-        prev = (j > 1) ? substr(line, j - 1, 1) : ""
-        if (state == 1) {
-          # Skip the filename argument. It is "${path.module}/<name>" — which
-          # contains a `{` of its own, so hunting the map brace before the closing
-          # quote latches onto the filename and treats it as the map.
-          if (c == "\"" && prev != "\\") { qseen++; if (qseen == 2) state = 2 }
-          continue
-        }
-        if (state == 2) {
-          if (c == "{") { state = 3; depth = 1 }
-          continue
-        }
-        if (c == "\"" && prev != "\\") { instr = !instr }
-        if (c == "{" && !instr) { depth++ }
-        else if (c == "}" && !instr) {
-          depth--
-          if (depth == 0) { if (length(out)) print out; exit }
-        }
-        out = out c
-      }
-      if (state == 3 && length(out)) print out
-    }' "$tf_file")
-
-  # Keys are `ident =` at the start of a line OR after a `,`/`{` (one-line maps
-  # and nested objects put several on one line). `(?!=)` excludes `==`, so a
-  # comparison never reads as an assignment. Keys harvested from a NESTED object
-  # are phantoms, but templatefile() tolerates unused map keys (verified), so a
-  # phantom is inert — whereas a MISSING key fails loud at exit 2. Bias
-  # permissive.
-  keys=$(printf '%s\n' "$map_text" \
-    | grep -oP '(?:^|[,{])\s*\K[a-z_][a-zA-Z0-9_]*(?=\s*=(?!=))' \
-    | sort -u)
+  keys=$(map_keys_at "$tf_file" "$tf_line")
 
   n_keys=$(printf '%s' "$keys" | grep -c .)
   if [[ "$n_keys" -eq 0 ]]; then

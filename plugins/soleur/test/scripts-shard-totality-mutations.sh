@@ -118,6 +118,7 @@ in_range() {
 }
 
 WORK="$(mktemp -d -t shard-mut.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+[[ "$WORK" == /* ]] || { echo "FATAL: WORK is not absolute (TMPDIR was relative?): $WORK" >&2; exit 2; }
 
 PRISTINE_RUNNER="$WORK/test-all.sh.pristine"
 PRISTINE_GUARD="$WORK/guard.pristine"
@@ -144,11 +145,10 @@ restore_all() {
 # `erow` may not have removed before an abort — the next run's census would report a
 # leftover as an unregistered declarer, so the trap sweeps them (a leak is loud, never
 # silent, and the trap is what keeps it absent).
-trap 'restore_all
-      for _f in "${EPHEMERAL_FILES[@]:-}"; do
-        [[ -n "$_f" ]] && rm -f "$_f" && rmdir "$(dirname "$_f")" 2>/dev/null
-      done
-      rm -rf "$WORK"' EXIT
+# Single-line form is load-bearing: the trap-ownership census predicate is
+# LINE-scoped (TRAP_EXIT), so a multi-line `trap '…' EXIT` reads as UNTRAPPED
+# and the file stays a class-b member despite owning its allocations (#10017).
+trap 'restore_all; for _f in "${EPHEMERAL_FILES[@]:-}"; do [[ -n "$_f" ]] && rm -f "$_f" && rmdir "$(dirname "$_f")" 2>/dev/null; done; rm -rf "$WORK"' EXIT
 
 # REFUSE TO RUN ON A DIRTY TARGET (#7902 review). This battery mutates tracked files in place and
 # restores them from a pristine copy taken at ITS start — so a concurrent edit to any target is
@@ -462,12 +462,12 @@ in_range && SOLEUR_SHARD_MANIFEST=off row "ROW4" "$RUNNER" \
   RED "every leg claims every registration (union right, multiset wrong)"
 
 # --- Row 5: ci.yml leg count disagrees with N -------------------------------------------------
-# Six legs whose values still say /7: leg 7's suites run nowhere and all surviving legs are
+# Seven legs whose values still say /8: leg 8's suites run nowhere and all surviving legs are
 # green. A count-based read of the matrix cannot see this.
 in_range && row "ROW5" "$CI_YML" \
-  '        shard: ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"]' \
-  '        shard: ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7"]' \
-  RED "ci.yml declares 6 legs while the partition computes mod 7"
+  '        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]' \
+  '        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8"]' \
+  RED "ci.yml declares 7 legs while the partition computes mod 8"
 
 # --- Row 5b: the HEAVY job's leg count disagrees with N ----------------------------------------
 # Same defect shape one job down: the test-scripts-heavy matrix is its own literal, and the
@@ -736,7 +736,7 @@ in_range && hfrow "M8" "$WORK/hmanifest-phantom.tsv" GREEN \
 
 # M9: a header-only heavy table engages manifest mode (n matches) but puts
 # NOTHING on the table, so all three labels hash — {3,2,2} — and leg 1 starves.
-# Unlike the light group (~502 labels cannot starve seven legs), at n=3 over 3
+# Unlike the light group (~502 labels cannot starve eight legs), at n=3 over 3
 # labels the zero-assignment refusal is reachable through stale data: the
 # starved leg must fail closed rather than report zero-work green. The guard
 # going RED here is the refusal outranking totality, and it is the property
@@ -766,18 +766,18 @@ in_range && row "MUSTPASS" "$CI_YML" \
 # with a committed POSITIVE control but no committed row mutating a --rows registration
 # end-to-end. These rows drive the extraction chain red through scripts/test-all.sh.
 
-# ROWS-GAP: shrink the -b range so battery row 9 executes in no leg. The tile check
-# reports "range '10-16' starts at 10, expected 9 (gap or overlap)".
+# ROWS-GAP: shrink the -b range so battery row 14 executes in no leg. The tile check
+# reports "range '15-27' starts at 15, expected 14 (gap or overlap)".
 in_range && row "ROWS-GAP" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 10-16' \
-  RED "a gapped --rows range leaves battery row 9 unexecuted in every leg" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 12-20' \
+  RED "a gapped --rows range leaves battery row 14 unexecuted in every leg" \
   'scripts/lint-orphan-test-suites.test.sh: --rows ranges do not tile'
 
 # ROWS-DROP: remove the flag so -b registers UNFLAGGED beside flagged -a — the
 # MIXED-contract arm must fire (a dropped flag double-executes rather than loses coverage).
 in_range && row "ROWS-DROP" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
   RED "a dropped --rows flag yields a MIXED flagged/unflagged contract" \
   'MIXED --rows contract'
@@ -786,12 +786,13 @@ in_range && row "ROWS-DROP" "$RUNNER" \
 # ranges by lo-bound, so swapping the -a/-b lines is a permitted non-canonical input.
 # A guard that reds on this is over-tight; a RED-only matrix cannot see that.
 # The two-line anchor also pins the -a/-b ADJACENCY: a comment inserted between the
-# registration lines misses this anchor (ANCHOR MISSING) while GAP/DROP still land.
+# registration lines misses this anchor (ANCHOR MISSING) while GAP/DROP still land. The second line
+# carries FOUR spaces since ADR-262: both registrations sit inside the --pr-gated `if` block.
 in_range && row "ROWS-SWAP" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
-  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
-  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13' \
   GREEN "swapped registration order tiles identically (ranges sort before the tile check)"
 
 # --- Hardening residual rows (#9035) -------------------------------------------------------------
@@ -887,21 +888,21 @@ in_range && row "ROWS-CI-KEY2-QUOTE" "$CI_YML" \
   'rows: matrix keys'
 
 # ROWS-MALFORMED-SUFFIX: the old extractor matched the `[0-9]+-[0-9]+`
-# PREFIX of the flag argument, so `9-16x` extracted as a clean `9-16` and
+# PREFIX of the flag argument, so `14-27x` extracted as a clean `14-27` and
 # the malformed spec only failed at the battery's own runtime validator —
 # a failure deferred to the surface it was meant to guard. Whole-token
 # capture emits the verbatim token and the malformed-spec arm names it.
 in_range && row "ROWS-MALFORMED-SUFFIX" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16x' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27x' \
   RED "a garbage-suffixed --rows spec normalizes to a clean range instead of failing" \
   'malformed --rows spec'
 
 # ROWS-MALFORMED-TRISEG: same class, three-segment spec — the prefix match
-# extracted `9-16` and discarded `-24`.
+# extracted `14-27` and discarded `-24`.
 in_range && row "ROWS-MALFORMED-TRISEG" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16-24' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27-24' \
   RED "a three-segment --rows spec normalizes to a clean range instead of failing" \
   'malformed --rows spec'
 
@@ -909,8 +910,8 @@ in_range && row "ROWS-MALFORMED-TRISEG" "$RUNNER" \
 # token, so the extractor emits `<unresolved>` and the DECLARED_TOTAL arm
 # fails it — the resolvable-command requirement is the extraction boundary.
 in_range && row "ROWS-UNRESOLVED" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" sh scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" sh scripts/lint-orphan-test-suites.test.sh --rows 1-13' \
   RED "a non-bash command token leaves the --rows contract unresolvable" \
   'for <unresolved>'
 
@@ -919,10 +920,10 @@ in_range && row "ROWS-UNRESOLVED" "$RUNNER" \
 # (distinct from ROWS-DROP's mixed contract). The two-line anchor pins the
 # -a/-b adjacency the same way ROWS-SWAP's does.
 in_range && row "ROWS-ALL-UNFLAGGED" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
-  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh
-  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
   RED "every registration unflagged beside a DECLARED_TOTAL declaration" \
   'carry no --rows'
 
@@ -932,8 +933,8 @@ in_range && row "ROWS-ALL-UNFLAGGED" "$RUNNER" \
 # the want_sig binds the verdict to the census — it names a substring the
 # census arm's FAIL line carries and its PASS line does not.)
 in_range && row "DIR1-MIDLINE" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
-  '  true && run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13' \
+  '  true && run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13' \
   RED "a mid-line run_suite call hides a --rows literal from the extractor" \
   'test-all.sh/scripts/lib but'
 
@@ -949,14 +950,26 @@ in_range && erow "DIR1-LIBSUBDIR" "scripts/lib/zz/x.sh" \
   'test-all.sh/scripts/lib but'
 
 # LEGS-COLOCATE: pin -b onto -a's leg — the committed-TSV read must report
-# both halves on leg 3 (distinct-legs arm; with no manifest override bound the
-# realized-legs read runs too and co-fails — either signature would do, and
-# `pin to legs` names the committed-pin arm directly).
-in_range && row "LEGS-COLOCATE" "$REPO_ROOT/scripts/suite-shard-legs.tsv" \
-  "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t5')" \
-  "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t3')" \
-  RED "both --rows halves pinned to the same leg defeats the split while coverage stays total" \
-  'pin to legs'
+# both halves on the SAME leg (distinct-legs arm; with no manifest override
+# bound the realized-legs read runs too and co-fails — either signature would
+# do, and `pin to legs` names the committed-pin arm directly). The pin reads
+# -a's CURRENT leg from the TSV: a regen may move either half (#9232's
+# duration-aware regen put -a on leg 1 where the hardcoded 3 landed nothing,
+# and the mutant measured GREEN). Anchors verified up front so a renamed
+# label fails loudly instead of producing a no-op mutant.
+_co_a_leg=$(awk -F'\t' '$1=="scripts/lint-orphan-test-suites-mutations-a"{print $2; exit}' \
+  "$REPO_ROOT/scripts/suite-shard-legs.tsv")
+_co_b_row=$(grep -F $'scripts/lint-orphan-test-suites-mutations-b\t' \
+  "$REPO_ROOT/scripts/suite-shard-legs.tsv" || true)
+if [[ -n "$_co_a_leg" && -n "$_co_b_row" ]]; then
+  in_range && row "LEGS-COLOCATE" "$REPO_ROOT/scripts/suite-shard-legs.tsv" \
+    "$_co_b_row" \
+    "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t%s' "$_co_a_leg")" \
+    RED "both --rows halves pinned to the same leg defeats the split while coverage stays total" \
+    'pin to legs'
+else
+  in_range && fail "LEGS-COLOCATE — manifest anchors missing (-a leg='${_co_a_leg:-none}', -b row='${_co_b_row:-none}')"
+fi
 
 # DECL-SCOPE-FOREIGN: an ephemeral battery under apps/ — outside the old
 # two-tree census — declaring DECLARED_TOTAL while no arm reaches it. The
@@ -980,11 +993,11 @@ export DECLARED_TOTAL=2' \
 
 # DECL-PREFIX-READER (must-PASS): the same `export` prefix on the
 # REGISTERED battery — census, per-token reader, and decl-line counter all
-# resolve 16, so the guard must stay GREEN end-to-end. A RED-only matrix
+# resolve 20, so the guard must stay GREEN end-to-end. A RED-only matrix
 # cannot see over-tightness; this is the tolerance proof.
 in_range && row "DECL-PREFIX-READER" "$REPO_ROOT/scripts/lint-orphan-test-suites.test.sh" \
-  'DECLARED_TOTAL=16   # the gated mutation rows M1..M16; C0/R1/R1b are unconditional' \
-  'export DECLARED_TOTAL=16   # the gated mutation rows M1..M16; C0/R1/R1b are unconditional' \
+  'DECLARED_TOTAL=27   # the gated mutation rows M1..M27; C0/R1/R1b are unconditional' \
+  'export DECLARED_TOTAL=27   # the gated mutation rows M1..M27; C0/R1/R1b are unconditional' \
   GREEN "an export-prefixed DECLARED_TOTAL resolves identically on the registered battery"
 
 # --- RANGE ACCOUNTING + ASSERTION FLOOR ----------------------------------------------------------

@@ -7,7 +7,7 @@ module: eval-harness
 related-issues: [#5704, #5701, #5702]
 related-learnings:
   - knowledge-base/project/learnings/2026-06-29-multi-label-classifier-gateable-core-is-its-single-token-output-slice.md
-related-plan: knowledge-base/project/plans/2026-06-29-feat-expand-gated-skill-catalog-plan.md
+related-plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-29-feat-expand-gated-skill-catalog-plan.md
 governing-adr: ADR-069-validation-gated-classifier-skill-edits
 ---
 

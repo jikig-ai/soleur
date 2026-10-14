@@ -488,7 +488,7 @@ g3_population() {
     | grep -vE '\.test\.sh$|(^|/)test/|(^|/)scripts/lib/operator-script\.sh$|(^|/)operator-bootstrap/template\.sh$|^knowledge-base/' \
     | sort | while IFS= read -r rel; do
         grep -vE '^[[:space:]]*#' "$REPO_ROOT_G3/$rel" \
-          | grep -qE '(^|[;&|({][[:space:]]*|[[:space:]]\|\|[[:space:]]*|^[[:space:]]+)soleur_op_ack_or_die([[:space:]]|$)' \
+          | grep -cE >/dev/null '(^|[;&|({][[:space:]]*|[[:space:]]\|\|[[:space:]]*|^[[:space:]]+)soleur_op_ack_or_die([[:space:]]|$)' \
           && printf '%s\n' "$rel"
       done
 }

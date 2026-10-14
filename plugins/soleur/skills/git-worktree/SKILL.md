@@ -118,6 +118,16 @@ Pass `--update-local-main` (as a global flag, before `create`) to additionally f
 bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" --update-local-main create feature-login
 ```
 
+**Dependency install (bounded, skippable):**
+
+After copying `.env` files, `create`/`feature` install dependencies at the root and for each `apps/*/` package (bun/npm/yarn by lockfile). Two guards keep this from hanging a pipeline on a restricted host:
+
+- **Opt-out:** `--no-install` (global flag) or `SOLEUR_WORKTREE_SKIP_INSTALL=1` skips every install arm and prints `SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out`. The worktree is still created and usable; run installs inside it later.
+- **Reachability preflight + timeout:** each arm probes its resolved registry endpoint (`curl`, bounded, on the scheme the registry actually uses — `http://` private registries included) and skips fast with `SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=<host> endpoint=<endpoint>` when unreachable; a stalled install is killed after `SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS` (default 300) and reported as `reason=timeout`. Probe bounds: `SOLEUR_WORKTREE_REGISTRY_PROBE_SECS` (connect, default 5) / `SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS` (total, default 8).
+- **Other non-success arms also mark stdout:** `reason=failed rc=<n>` (ordinary nonzero install), `reason=tool-missing runtime=<rt>` (lockfile present but package manager absent), `reason=no-lockfile` (package.json with no recognized lockfile). When the host lacks `timeout`/`gtimeout`, installs run unbounded and `SOLEUR_WORKTREE_INSTALL_UNBOUNDED` is printed once.
+
+All skips and failures warn-and-continue: worktree creation exits 0 and the worktree stays on disk.
+
 ### `list` or `ls`
 
 Lists all available worktrees with their branches and current status.
@@ -166,6 +176,22 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cle
 3. Removes selected worktrees
 4. Cleans up empty directories
 
+### `cleanup-merged` and `space-report`
+
+`cleanup-merged` runs at every session start: it removes worktrees whose branch merged, sweeps dead-owner scratch under `/tmp` and `/var/tmp` (ADR-250), and prints what it freed. `space-report` prints the same `SOLEUR_CLEANUP_SPACE` state line without running any cleanup (read-only).
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SOLEUR_QUARANTINE_DRAIN=1` | off (only the exact value `1` enables it) | Also delete scratch-quarantine entries past their TTL, inside the sweep's lock. Opt-in: a terminal delete on your machine. |
+| `SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN` / `SOLEUR_SWEEP_QUAR_WT_TTL_MIN` | 10080 (7 d) / 43200 (30 d) | Per-class TTL, minutes. |
+| `SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN` | 1440 | Floor under both TTLs, so an exported `0` cannot empty a fresh quarantine. |
+| `SOLEUR_SWEEP_DRAIN_TIMEBOX_S` / `SOLEUR_SWEEP_DRAIN_MAX_ENTRIES` | 5 / 200 | Checked between entries, per base. One very large entry can overrun them. A non-numeric value falls back to the default; a max of `0` means 200. |
+| `SOLEUR_DOCKER_PRUNE=1` / `apply` | off | After a run that removed a worktree, prune Docker build cache and dangling images older than 24 h (`1` is a dry run, an upper bound). Never `-a`, volumes or containers. Any other value (including `0`) prints `skipped reason=invalid-value`. `SOLEUR_DOCKER_TIMEOUT_S` (60) bounds each call, so `apply` can take about 140 s. |
+
+Markers (stdout): `SOLEUR_TMP_SWEEP` (adds `drained`, `drained_bytes`, `map_s`), `SOLEUR_DOCKER_PRUNE` and `SOLEUR_CLEANUP_SPACE logical_bytes=… df_delta_bytes=… fstype=… docker_prune=… snapshots=…`. A `SOLEUR_DOCKER_PRUNE skipped reason=` names every no-op: `invalid-value`, `no-worktree-removed` (the common one), `docker-missing`, `no-timeout`, `remote-daemon` (a `tcp://` or `ssh://` `DOCKER_HOST` is never pruned), `daemon-unreachable`, `timeout`, `df-failed rc=N` (dry run), `prune-failed rc=N`. Docker's own `Total:` text is embedded verbatim and is opaque. `logical_bytes` counts drained bytes only; `-` means no baseline was taken (`space-report`). `df_delta_bytes` is the signed change in free space on `/var/tmp` and can be smaller, or negative, because other processes write too and, on btrfs with snapper, snapshots keep deleted blocks pinned (`snapshots=snapper`; Soleur never deletes snapshots). `snapshots=none` is reported for any non-btrfs filesystem and for btrfs without a snapper config named `root`, so it also covers a differently named config or Timeshift.
+
+The markers stay on your machine when you run the plugin yourself. On the Soleur web platform the same lines are mirrored to server logs like every other `SOLEUR_*` marker. The sweep needs `flock`, so on stock macOS the sweep and drain skip with `flock-missing`; the Docker step needs `timeout` or `gtimeout` and otherwise prints `skipped reason=no-timeout`, and without `findmnt` the report prints `fstype=unknown snapshots=unknown`. Set `SOLEUR_DOCKER_PRUNE` in your shell profile or the session environment.
+
 ### `sync-bare-files` or `sync`
 
 Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the repo uses `core.bare=true` — on-disk files at the bare root become stale after merges since git never updates them. Auto-called after `cleanup-merged` cleans branches in bare repo context.
@@ -186,6 +212,21 @@ tracked once and are absent from HEAD. The two together are what make the bare
 root equal HEAD exactly. It then re-applies execute bits for the scripts and
 hooks the plugin loader and SessionStart hooks exec.
 
+The prune is locale-independent (every `sed`/`sort`/`comm` stage runs under `LC_ALL=C`; a `comm`
+in the user's locale once deleted tracked files, including `.claude-plugin/marketplace.json`) and
+runs against the **bare root's** HEAD, pinned once, even when `sync` is started from a worktree on
+another branch. Each candidate is checked against that commit right before removal, and a path under
+a symlinked directory, a `.`/`..`/`.git` path, a quoted spelling, and (when the root is the git dir)
+a top-level name git owns are skipped (best effort for that legacy `*.git` layout).
+A candidate that HEAD still tracks aborts the **whole** prune with `ERROR: tracked path in prune set`
+(nothing is removed; the first one found is named). A prune larger than `SOLEUR_SYNC_PRUNE_MAX` (default
+5000, counted on paths about to be removed; a leading zero is read as decimal, an invalid value falls
+back to 5000 with a `WARN`, `0` skips every prune) is skipped with a `WARN`. There are three skip
+paths (tracked hit, ceiling, could not compute the candidate set), all exit 0 so `cleanup-merged`
+completes, and the last line then reads `Synced on-disk files from git HEAD (prune skipped ...)`.
+Nothing was deleted in that case; do not re-run, and report the `ERROR` path if one was printed.
+A deleted file whose name holds a tab, newline, quote or backslash is never pruned (git quotes it).
+
 > **Corrected 2026-08-10 (#7409).** This section previously enumerated a
 > seven-entry list (`AGENTS.md`, `plugins/soleur/hooks/*`, `.claude/hooks/*.sh`,
 > `resolve-git-root.sh`, …) and told readers that "any file Claude Code executes
@@ -203,6 +244,12 @@ hooks the plugin loader and SessionStart hooks exec.
 file executed from the bare root. The mirror is complete, but it is not
 automatic — on-disk files at a `core.bare=true` root are never updated by git
 itself, so a stale copy survives until this runs.
+
+If `sync-bare-files` fails with `checkout-index from HEAD failed` or `the bare root's HEAD does not
+resolve (<ref>)`, check the bare root's `HEAD`: a PR merge that deleted the branch `HEAD` named leaves
+it dangling, and `git -C <bare-root> symbolic-ref HEAD refs/heads/main` repairs it (name the root with
+`-C`: run bare from a worktree it would re-point that worktree). The Claude Code and Devin SessionStart loader does this
+automatically (`.claude/hooks/README.md`, "Bare-root HEAD self-heal"); other harnesses do not.
 
 ## Workflow Examples
 

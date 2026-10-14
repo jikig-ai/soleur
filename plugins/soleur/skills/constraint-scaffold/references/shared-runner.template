@@ -127,7 +127,7 @@ if [[ "$RC" -eq 0 ]]; then
   exit 0
 fi
 
-if printf '%s' "$OUT" | grep -q 'dependency violations'; then
+if grep -q 'dependency violations' <<<"$OUT"; then
   echo "::error::constraint-gates: client->server-secret import-boundary violation(s) detected — a \"use client\" module value-imports the server-only tree (server/**), which would ship a server secret into the browser bundle. To recover, re-run the constraint-scaffold skill (the agent fixes the import or runs --refresh-baseline); auto-recovery (fix-constraints-stage-a/b, ADR-074) opens a follow-up PR when the gate is auto-fixable." >&2
 else
   echo "::error::constraint-gates: dependency-cruiser failed to run (config/binary error, rc=${RC}) — gate fails closed. To recover, re-run the constraint-scaffold skill (the agent fixes the import or runs --refresh-baseline); auto-recovery (fix-constraints-stage-a/b, ADR-074) opens a follow-up PR when the gate is auto-fixable." >&2

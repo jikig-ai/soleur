@@ -181,7 +181,7 @@ existed only as a blockquote in the source plan; it is now
 
 **Sibling records carrying the same addendum:**
 
-- `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
+- `knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
 - `knowledge-base/legal/audits/2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md`
 
 <!-- ADDENDUM-2026-08-26 END -->

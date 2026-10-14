@@ -51,7 +51,7 @@ new_repo() { # $1 = name
 RA="$TMP/no-log"; new_repo no-log >/dev/null
 out="$(cd "$RA" && bash "$SUT")"
 assert "missing log -> SOLEUR_EMIT_ABSENT" "[[ '$out' == *SOLEUR_EMIT_ABSENT* ]]"
-assert "absent never prints a zero count" "! printf '%s' '$out' | grep -q 'records:  *0'"
+assert "absent never prints a zero count" "! printf '%s' '$out' | grep -c >/dev/null 'records:  *0'"
 
 # --- EMPTY: log exists, zero records -----------------------------------------
 
@@ -59,7 +59,7 @@ RB="$TMP/empty-log"; new_repo empty-log >/dev/null
 mkdir -p "$RB/.soleur"; touch "$RB/.soleur/decisions.jsonl"
 out="$(cd "$RB" && bash "$SUT")"
 assert "empty log -> SOLEUR_EMIT_EMPTY" "[[ '$out' == *SOLEUR_EMIT_EMPTY* ]]"
-assert "empty never prints a zero count" "! printf '%s' '$out' | grep -q 'records:  *0'"
+assert "empty never prints a zero count" "! printf '%s' '$out' | grep -c >/dev/null 'records:  *0'"
 
 # --- POPULATED: real emits aggregate -----------------------------------------
 
@@ -70,13 +70,13 @@ RC="$TMP/pop"; new_repo pop >/dev/null
   bash "$EMIT" --event route_decision --label work
   bash "$EMIT" --event tool_invocation --label flag-list --skill flag-list --agent_domain ops )
 out="$(cd "$RC" && bash "$SUT")"
-assert "counts 4 records" "printf '%s' '$out' | grep -q 'records:  *4'"
-assert "per-event count present" "printf '%s' '$out' | grep -A3 'by event:' | grep -q 'route_decision'"
-assert "per-label count shows work=2" "printf '%s' '$out' | grep -A5 'by label:' | grep -qE '^ *2 +work'"
-assert "per-domain count shows ops=1" "printf '%s' '$out' | grep -A4 'by agent_domain:' | grep -q 'ops'"
-assert "per-harness count is non-empty" "printf '%s' '$out' | grep -A3 'by harness:' | grep -qE '^ *[0-9]+ +[a-zA-Z]'"
-assert "first/last timestamps printed" "printf '%s' '$out' | grep -q 'first:' && printf '%s' '$out' | grep -q 'last:'"
-assert "KB-growth instruction printed" "printf '%s' '$out' | grep -q 'git log --since'"
+assert "counts 4 records" "printf '%s' '$out' | grep -c >/dev/null 'records:  *4'"
+assert "per-event count present" "printf '%s' '$out' | grep -A3 'by event:' | grep -c >/dev/null 'route_decision'"
+assert "per-label count shows work=2" "printf '%s' '$out' | grep -A5 'by label:' | grep -cE >/dev/null '^ *2 +work'"
+assert "per-domain count shows ops=1" "printf '%s' '$out' | grep -A4 'by agent_domain:' | grep -c >/dev/null 'ops'"
+assert "per-harness count is non-empty" "printf '%s' '$out' | grep -A3 'by harness:' | grep -cE >/dev/null '^ *[0-9]+ +[a-zA-Z]'"
+assert "first/last timestamps printed" "printf '%s' '$out' | grep -c >/dev/null 'first:' && printf '%s' '$out' | grep -c >/dev/null 'last:'"
+assert "KB-growth instruction printed" "printf '%s' '$out' | grep -c >/dev/null 'git log --since'"
 
 # --- ROTATED: merged read ----------------------------------------------------
 
@@ -84,7 +84,7 @@ RD="$TMP/rot"; new_repo rot >/dev/null
 ( cd "$RD" && bash "$EMIT" --event route_decision --label one )
 printf '{"v":1,"ts":"2026-01-01T00:00:00Z","event":"route_decision","label":"old","skill":"","agent_domain":"","harness":"claude","session_id":"s","plugin_sha":"x","repo_hash":"h"}\n' > "$RD/.soleur/decisions.jsonl.1"
 out="$(cd "$RD" && bash "$SUT")"
-assert "rotated lines merge into the count" "printf '%s' '$out' | grep -q 'records:  *2'"
+assert "rotated lines merge into the count" "printf '%s' '$out' | grep -c >/dev/null 'records:  *2'"
 
 # --- ORDERING: first/last carry VALUES, not just labels ----------------------
 
@@ -95,9 +95,9 @@ printf '%s\n' '{"v":1,"ts":"2026-03-05T00:00:00Z","event":"route_decision","labe
   > "$RE/.soleur/decisions.jsonl"
 out="$(cd "$RE" && bash "$SUT")"
 assert "first: carries the EARLIEST ts (not just the label)" \
-  "printf '%s' '$out' | grep -q 'first:    2026-03-01'"
+  "printf '%s' '$out' | grep -c >/dev/null 'first:    2026-03-01'"
 assert "last: carries the LATEST ts" \
-  "printf '%s' '$out' | grep -q 'last:     2026-03-05'"
+  "printf '%s' '$out' | grep -c >/dev/null 'last:     2026-03-05'"
 
 # --- CORRUPTION: a malformed line is surfaced, not silently counted ----------
 
@@ -108,7 +108,7 @@ printf '%s\n' '{"v":1,"ts":"2026-03-01T00:00:00Z","event":"route_decision","labe
   > "$RF/.soleur/decisions.jsonl"
 out="$(cd "$RF" && bash "$SUT")"
 assert "malformed lines are reported, not silently dropped" \
-  "printf '%s' '$out' | grep -q 'malformed: 1'"
+  "printf '%s' '$out' | grep -c >/dev/null 'malformed: 1'"
 
 printf '\n=== alpha-metrics: %d passed, %d failed (of %d) ===\n' "$passes" "$fails" "$CASES"
 # Anti-vacuity floor (#7408 class): a suite that ran nothing must not exit green.

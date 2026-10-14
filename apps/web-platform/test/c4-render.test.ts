@@ -197,7 +197,7 @@ describe("renderC4Model", () => {
     // bwrap's own env is the allow-list (the child's is --clearenv + --setenv).
     const env = opts.env as Record<string, string>;
     expect(env.HOME).toBe(TMP_DIR);
-    const ALLOWED = new Set(["PATH", "LANG", "LC_ALL", "HOME", "TMPDIR"]);
+    const ALLOWED = new Set(["PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "SOLEUR_BWRAP_SECCOMP_BPF"]);
     expect(Object.keys(env).every((k) => ALLOWED.has(k))).toBe(true);
     expect(env).not.toHaveProperty("SUPABASE_SERVICE_ROLE_KEY");
   });

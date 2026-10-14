@@ -66,7 +66,10 @@ conclusion="$(jq -r '.conclusion' <<<"$completed")"
 # travels as DATA rather than as a failed step — so a run can conclude `success`
 # while the canary reported a mismatch. Asking the job directly is the only read
 # that answers the question this criterion actually poses.
-jobs="$(gh api "repos/${REPO}/actions/runs/${run_id}/jobs" --jq '.jobs' 2>/dev/null)"
+# --paginate | jq -s: the default page is 30 jobs, and a `canary` job on page 2
+# would report a false "canary is not wired" FAIL (#9245 sweep).
+jobs="$(gh api --paginate "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null \
+  | jq -s '[.[].jobs[]]')"
 api_rc=$?
 if [[ "$api_rc" -ne 0 || -z "$jobs" ]]; then
   echo "TRANSIENT: could not read jobs for run ${run_id} (gh exited ${api_rc})" >&2

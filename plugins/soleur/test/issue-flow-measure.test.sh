@@ -193,7 +193,7 @@ else fail "1c query shape wrong: ${_q1c:-<none>}"; fi
 cases=$((cases + 1))
 _q1c_labels="$(printf '%s' "$_q1c" | grep -oE 'label:[^ ]+' | head -1 | sed 's/^label://' | tr ',' '\n' | sed 's/%22//g' | sort -u)"
 _q1c_n="$(printf '%s\n' "$_q1c_labels" | grep -c '^scheduled-' || true)"
-if [[ "$_q1c_n" -ge 2 ]] && ! printf '%s\n' "$_q1c_labels" | grep -qvE '^scheduled-[a-z-]+$'; then
+if [[ "$_q1c_n" -ge 2 ]] && ! printf '%s\n' "$_q1c_labels" | grep -cvE >/dev/null '^scheduled-[a-z-]+$'; then
   pass "1c query OR-joins $_q1c_n scheduled-* labels and nothing else"
 else fail "1c query label list malformed: $(printf '%s' "$_q1c_labels" | paste -sd, -)"; fi
 
@@ -239,7 +239,7 @@ cases=$((cases + 1))
 _missing=""
 while IFS= read -r _l; do
   [[ -n "$_l" ]] || continue
-  printf '%s\n' "$_q1c_labels" | grep -qxF "$_l" || _missing+="${_missing:+,}$_l"
+  printf '%s\n' "$_q1c_labels" | grep -cxF >/dev/null "$_l" || _missing+="${_missing:+,}$_l"
 done <<<"$_script_labels"
 if [[ -n "$_script_labels" && -z "$_missing" ]]; then
   pass "every RUN_REPORT_LABELS entry reaches the 1c query"

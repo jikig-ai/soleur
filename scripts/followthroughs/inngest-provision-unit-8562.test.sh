@@ -248,7 +248,7 @@ expect "C24 FAIL cause= carries this iid's per-stage counts only" 1 \
 
 # --- C19 the banned ${VAR:?} form would turn an unset secret into a daily false-FAIL -----------------
 # Pattern and comment-scoping mirror scripts/lint-followthrough-varq-ban.sh.
-if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$PROBE" | grep -qvE '^[0-9]+:[[:space:]]*#'; then
+if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$PROBE" | grep -cvE >/dev/null '^[0-9]+:[[:space:]]*#'; then
   fail "C19 probe uses the banned \${VAR:?} form in CODE (aborts rc=1 -> reads as FAIL)"
 else
   pass "C19 probe avoids the banned \${VAR:?} form in code"

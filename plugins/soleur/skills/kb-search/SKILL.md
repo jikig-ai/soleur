@@ -43,6 +43,33 @@ If `$ARGUMENTS` is empty, ask: "What would you like to search for in the knowled
 
 ## Execution
 
+**Support-persona path (no Bash).** If you are running as the **Soleur
+Support** persona — your system prompt identifies you as "Soleur Support"
+and `kb-search` is your only loaded skill — do NOT execute any of the
+`bash`/` ```bash ` blocks in the phases below. On the support surface
+every non-safe-bash Bash call is denied AND records a support escalation
+that renders a false "Ask an agent" handoff at turn end. The corpus is
+already on disk under the session cwd: `knowledge-base/INDEX.md`,
+`knowledge-base/kb-tags.txt`, `knowledge-base/kb-categories.txt`, and
+`knowledge-base/project/learnings/*.md` are committed inside the deployed
+plugin root (all `knowledge-base/…` paths in the support section are
+relative to the support session cwd = plugin root, i.e.
+`plugins/soleur/knowledge-base/` at repo root — not the operator KB,
+which `denyReadExtra` obscures) — there is no index generator to run
+there (the `--soft` ensure call is for operator checkouts; skip it
+silently). If a Bash call IS denied with a read-only app-help message, do
+not retry Bash — switch to this path.
+
+| Phase | Tool-path equivalent |
+|---|---|
+| 0 arg parse | unchanged — pure in-context |
+| 1 facet validation | Read `knowledge-base/kb-tags.txt` and/or `kb-categories.txt`; match the flag value case-insensitively as a WHOLE LINE (fixed-string semantics — do not reproduce the `\b` regex, see #8473); on miss emit the same `No matches. Valid values: …` output |
+| 2 facet filter | Glob `knowledge-base/project/learnings/*.md`, then Read each file's frontmatter (the corpus is ~a dozen files) or Grep `^tags:`/`^category:` lines; AND-combine flags as today |
+| 2.5 paraphrase | still runs inline (Option C is agent-inline); SKIP both `kb-search-cache.sh` calls — every non-allowlisted Bash call on this surface denies AND records a support escalation (the cache write would fail in the read-only sandbox anyway) |
+| 3 keyword search | Tier 1: Grep `knowledge-base/INDEX.md` for the keyword, keep only links rooted at `knowledge-base/project/learnings/` (cap 8); Tier 2: Grep content under `knowledge-base/project/learnings/` excluding `archive/` (cap 12). When facet flags were given, restrict BOTH tiers to the Phase-2 surviving file list (same AND semantics as the bash path). Same dedupe-by-path merge |
+| 4 display | unchanged, EXCEPT the zero-result remediation: drop the scripts/ensure-kb-index.sh regenerate suggestion (a shell-out denies + escalates on this surface) — offer the spelling/keyword/tag-file suggestions only |
+| `--clear-cache` | unavailable on the support path (it needs a delete — there is no tool for it); say so instead of attempting it |
+
 ### Phase 0: Parse Arguments
 
 Parse `$ARGUMENTS` into `$TAG`, `$CATEGORY`, and `$KEYWORD`. Track whether each flag was already seen to detect duplicates. On duplicate or unknown flag, emit:
@@ -129,10 +156,10 @@ Stage 2 (#4176) adaptive pre-pass — runs after Phase 3 has produced a baseline
 1. `$KEYWORD` is non-empty (facet-only queries skip).
 2. Phase 3's two-tier grep returned **< 5 unique paths** (combined tier-1 + tier-2 dedupe-by-path count).
 3. `--no-paraphrase` was NOT passed.
-4. `$KEYWORD` does NOT match the sensitive-shape regex below (case-insensitive). The regex blends value-shape anchoring (assignment-blobs, postgres dsn=) and vendor-prefix anchoring (Anthropic, OpenAI, GitHub, AWS, Stripe, Slack, JWT triple-blob) — prefix anchors avoid blocking topic-keyword queries like `"JWT token refresh"` or `"keypress event"` while still catching credential paste-throughs. Source of truth is `SENSITIVE_QUERY_REGEX` in [scripts/learning-retrieval-bench.sh](../../../../scripts/learning-retrieval-bench.sh); [plugins/soleur/test/kb-search-lockstep.test.sh](../../../test/kb-search-lockstep.test.sh) asserts byte-equality across both files.
+4. `$KEYWORD` does NOT match the sensitive-shape regex below (case-insensitive). The regex blends value-shape anchoring (assignment-blobs, postgres dsn=) and vendor-prefix anchoring (Anthropic, OpenAI, GitHub, AWS, Stripe, Slack, JWT triple-blob) — prefix anchors avoid blocking topic-keyword queries like `"JWT token refresh"` or `"keypress event"` while still catching credential paste-throughs. Known false-positive: a `gh<letter>_`-prefixed identifier slug ≥36 in-class chars (e.g. `ghs_token-format-sentinel…`, a feature name this repo's own convention generates) trips the guard — the refusal is recoverable via `--no-paraphrase`. Source of truth is `SENSITIVE_QUERY_REGEX` in [scripts/learning-retrieval-bench.sh](../../../../scripts/learning-retrieval-bench.sh); [plugins/soleur/test/kb-search-lockstep.test.sh](../../../test/kb-search-lockstep.test.sh) asserts byte-equality across both files.
 
    ```text
-   ((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-(ant-)?[a-zA-Z0-9_-]{20,}|sk_live_[a-zA-Z0-9]{20,}|pk_live_[a-zA-Z0-9]{20,}|rk_live_[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{40,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[abprs]-[a-zA-Z0-9-]{10,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.+/=-]{15,}|dsn=)
+   ((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-(ant-)?[a-zA-Z0-9_-]{20,}|sk_live_[a-zA-Z0-9]{20,}|pk_live_[a-zA-Z0-9]{20,}|rk_live_[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9._~+/=-]{36}|gho_[a-zA-Z0-9._~+/=-]{36}|ghs_[a-zA-Z0-9._~+/=-]{36}|ghu_[a-zA-Z0-9._~+/=-]{36}|ghr_[a-zA-Z0-9._~+/=-]{36}|github_pat_[a-zA-Z0-9._~+/=-]{40,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[abprs]-[a-zA-Z0-9-]{10,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.+/=-]{15,}|dsn=)
    ```
 
 If any condition fails, skip Phase 2.5 and return Phase 3's result unchanged.

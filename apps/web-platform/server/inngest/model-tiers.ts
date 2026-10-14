@@ -21,7 +21,10 @@
 // model and effort together by spreading AUDIT_CLI_ARGS — never by naming
 // AUDIT_MODEL / AUDIT_EFFORT directly (model-tiers.test.ts Guard 1). Execution
 // crons deliberately pass no `--effort` and stay on the CLI default (ADR-053
-// amendment 2026-09-23). An unknown --effort VALUE is a silent fallback, not an
+// amendment 2026-09-23) — which the Sonnet 5.5 row moved high → medium at the
+// 5 → 5.5 swap (bundle-verified 2026-09-29; recorded in
+// claude-cli-pin-knows-models.test.ts REVIEWED_DEFAULT_EFFORT). An unknown
+// --effort VALUE is a silent fallback, not an
 // error: claude-cli-pin-knows-models.test.ts probes the pinned CLI with this
 // exact tuple.
 //
@@ -33,11 +36,11 @@
 // digest.ts` self-identifies as never-downgrade-shaped; its sonnet pin is
 // preserved via EXECUTION_MODEL and its rationale comment stays in place.
 //
-// Mixed alias/dated convention (do NOT normalize): `claude-sonnet-5` and
-// `claude-opus-5-5` are aliases (alias == dated, no separate dated ID),
-// while `claude-haiku-4-5-20251001` (imported transitively via constants)
-// is the dated form. A future cleanup must preserve the dated haiku literal
-// byte-for-byte.
+// Alias convention: `claude-sonnet-5-5`, `claude-opus-5-5` and (since 2026-10-08)
+// `claude-haiku-5-5` (imported transitively via constants) are all aliases
+// (alias == dated, no separate dated ID). The earlier mixed convention, where
+// haiku was the dated 2025-10-01 form of the 4.5 model, ended with the Haiku 5.5
+// swap. A future cleanup must keep each id byte-for-byte as the API resolves it.
 //
 // Opus is intentionally absent from `MODEL_PRICING` in
 // functions/agent-on-spawn-requested.ts: `leaderModule.model` is typed

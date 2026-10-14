@@ -16,7 +16,9 @@
 #     right at runtime, and it still must be LOUD somewhere.
 #
 # The regeneration path is printed in every failure so the fix is always named:
-# `python3 scripts/regenerate-shard-manifest.py --run <green-ci-run> --write`.
+# `python3 scripts/regenerate-shard-manifest.py --incremental --write` for a
+# suite add/remove (incumbent rows pin; durations takes only the parity delta),
+# `--run <green-ci-run> --write` for a balance correction (#9402).
 
 set -euo pipefail
 
@@ -25,7 +27,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RUNNER="$REPO_ROOT/scripts/test-all.sh"
 MANIFEST="$REPO_ROOT/scripts/suite-shard-legs.tsv"
 CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
-REGEN="python3 scripts/regenerate-shard-manifest.py --run <green-ci-run> --write"
+REGEN="python3 scripts/regenerate-shard-manifest.py --incremental --write   # add/remove; --run <green-ci-run> --write rebalances"
 
 PASS=0
 FAIL=0
@@ -143,7 +145,7 @@ fi
 # fallback, and an all-fallback leg is the n-mismatch degrade wearing a disguise.
 if [[ "$N_HDR" =~ ^[0123456789]+$ && -n "$DATA" ]]; then
   for leg in $(seq 1 "$(( 10#$N_HDR ))"); do
-    if printf '%s\n' "$DATA" | cut -f2 | grep -qx "$leg"; then
+    if printf '%s\n' "$DATA" | cut -f2 | grep -cx >/dev/null "$leg"; then
       check pass "leg $leg has at least one pinned label"
     else
       check fail "leg $leg has ZERO pinned labels — it would run on hash fallback alone"
@@ -156,8 +158,8 @@ fi
 # the runner's own enumerate, unsharded.
 env -u SCRIPTS_SHARD TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
   bash "$RUNNER" --enumerate scripts 2>/dev/null | grep '^SUITE_REGISTRATION' | cut -f2 \
-  | sort -u > "${TMPDIR:-/tmp}/ssm-registered.$$"
-printf '%s\n' "$DATA" | cut -f1 | sort -u > "${TMPDIR:-/tmp}/ssm-manifest.$$"
+  | LC_ALL=C sort -u > "${TMPDIR:-/tmp}/ssm-registered.$$"
+printf '%s\n' "$DATA" | cut -f1 | LC_ALL=C sort -u > "${TMPDIR:-/tmp}/ssm-manifest.$$"
 trap 'rm -f "${TMPDIR:-/tmp}/ssm-registered.$$" "${TMPDIR:-/tmp}/ssm-manifest.$$"' EXIT
 
 REF_N="$(wc -l < "${TMPDIR:-/tmp}/ssm-registered.$$")"
@@ -167,7 +169,7 @@ else
   check fail "registered reference derived only $REF_N labels — the enumerate extraction is broken, every ⊆ assertion below is ungrounded"
 fi
 
-PHANTOMS="$(comm -23 "${TMPDIR:-/tmp}/ssm-manifest.$$" "${TMPDIR:-/tmp}/ssm-registered.$$" | tr '\n' ' ')"
+PHANTOMS="$(LC_ALL=C comm -23 "${TMPDIR:-/tmp}/ssm-manifest.$$" "${TMPDIR:-/tmp}/ssm-registered.$$" | tr '\n' ' ')"
 if [[ -z "$PHANTOMS" ]]; then
   check pass "every manifest label is a registered scripts suite"
 else
@@ -181,7 +183,7 @@ fi
 # registered set, and floored at >= 1 row — the group has ~3 registrations, so
 # the light table's >=100 density floor would be wrong here.
 MANIFEST_HEAVY="$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv"
-REGEN_HEAVY="python3 scripts/regenerate-shard-manifest.py --group heavy --run <green-ci-run> --write"
+REGEN_HEAVY="python3 scripts/regenerate-shard-manifest.py --group heavy --incremental --write   # add/remove; --group heavy --run <green-ci-run> --write rebalances"
 
 echo ""
 echo "--- heavy manifest ---"
@@ -248,7 +250,7 @@ else
   fi
   if [[ "$N_HDR_H" =~ ^[0123456789]+$ && -n "$DATA_H" ]]; then
     for leg in $(seq 1 "$(( 10#$N_HDR_H ))"); do
-      if printf '%s\n' "$DATA_H" | cut -f2 | grep -qx "$leg"; then
+      if printf '%s\n' "$DATA_H" | cut -f2 | grep -cx >/dev/null "$leg"; then
         check pass "heavy leg $leg has at least one pinned label"
       else
         check fail "heavy leg $leg has ZERO pinned labels — it would run on hash fallback alone"
@@ -257,8 +259,8 @@ else
   fi
   env -u SCRIPTS_SHARD TEST_GROUP=scripts-heavy SOLEUR_DISABLE_SESSION_STATE=1 \
     bash "$RUNNER" --enumerate scripts-heavy 2>/dev/null | grep '^SUITE_REGISTRATION' | cut -f2 \
-    | sort -u > "${TMPDIR:-/tmp}/ssm-registered-heavy.$$"
-  printf '%s\n' "$DATA_H" | cut -f1 | sort -u > "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$"
+    | LC_ALL=C sort -u > "${TMPDIR:-/tmp}/ssm-registered-heavy.$$"
+  printf '%s\n' "$DATA_H" | cut -f1 | LC_ALL=C sort -u > "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$"
   trap 'rm -f "${TMPDIR:-/tmp}/ssm-registered.$$" "${TMPDIR:-/tmp}/ssm-manifest.$$" "${TMPDIR:-/tmp}/ssm-registered-heavy.$$" "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$"' EXIT
   REF_N_H="$(wc -l < "${TMPDIR:-/tmp}/ssm-registered-heavy.$$")"
   if (( REF_N_H >= 1 )); then
@@ -266,12 +268,83 @@ else
   else
     check fail "heavy registered reference derived 0 labels — every ⊆ assertion below is ungrounded"
   fi
-  PHANTOMS_H="$(comm -23 "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$" "${TMPDIR:-/tmp}/ssm-registered-heavy.$$" | tr '\n' ' ')"
+  PHANTOMS_H="$(LC_ALL=C comm -23 "${TMPDIR:-/tmp}/ssm-manifest-heavy.$$" "${TMPDIR:-/tmp}/ssm-registered-heavy.$$" | tr '\n' ' ')"
   if [[ -z "$PHANTOMS_H" ]]; then
     check pass "every heavy manifest label is a registered scripts-heavy suite"
   else
     check fail "phantom heavy label(s) not in the registered set: $PHANTOMS_H. Regenerate: $REGEN_HEAVY"
   fi
+fi
+
+# --- durations tables (suite-durations{,-heavy}.tsv, #9232) -------------------
+#
+# The committed durations tables are the single duration source both consumers
+# read: CI regen writes them on --write, and the #8231 local parallel scheduler
+# re-packs them at an arbitrary worker count with zero gh calls. The contract:
+# rows are `label<TAB>ms<TAB>src` with src ∈ {measured,floor}, label-sorted, the
+# label set EXACTLY equals the sibling manifest's (a label in one and not the
+# other means one consumer sees weight the other cannot place), and every label
+# is registered — a phantom durations row is the same stale-subset drift class
+# the manifest ⊆ lint exists to catch.
+#
+# check_durations <table> <manifest> <registered-sorted-file> <name>
+check_durations() {
+  local dur=$1 mf=$2 ref=$3 name=$4
+  local data dlabels mlabels
+  if [[ ! -f "$dur" ]]; then
+    check fail "$name durations table absent: $dur — #8231's local scheduler has no duration source. Regenerate: $REGEN"
+    return
+  fi
+  check pass "$name durations table exists"
+  for key in group generated-from-runs default-weight-ms; do
+    if grep -q "^# ${key}=" "$dur"; then
+      check pass "$name durations provenance '# ${key}=' present"
+    else
+      check fail "$name durations table missing '# ${key}=' — provenance is what makes a stale table diagnosable. Regenerate: $REGEN"
+    fi
+  done
+  data="$(grep -vE '^[[:space:]]*(#|$)' "$dur" || true)"
+  if [[ -z "$data" ]]; then
+    check fail "$name durations table has zero data rows. Regenerate: $REGEN"
+    return
+  fi
+  local bad=0
+  while IFS=$'\t' read -r _lbl _ms _src _rest; do
+    [[ -z "$_lbl" ]] && continue
+    if [[ -n "$_rest" || ! "$_ms" =~ ^[0123456789]+$ || ( "$_src" != "measured" && "$_src" != "floor" ) ]]; then
+      check fail "$name durations malformed row: '$_lbl' — expected 'label<TAB>ms<TAB>src' with src in {measured,floor}"
+      bad=$(( bad + 1 ))
+    fi
+  done <<< "$data"
+  if (( bad == 0 )); then
+    check pass "every $name durations row is 'label<TAB>ms<TAB>src' with src in the enum"
+  fi
+  dlabels="$(printf '%s\n' "$data" | cut -f1 | LC_ALL=C sort -u)"
+  mlabels="$(grep -vE '^[[:space:]]*(#|$)' "$mf" | cut -f1 | LC_ALL=C sort -u || true)"
+  if [[ "$(LC_ALL=C comm -3 <(printf '%s\n' "$dlabels") <(printf '%s\n' "$mlabels") | tr '\n' ' ')" == "" ]]; then
+    check pass "$name durations keys == manifest keys — the two consumers see the same label set"
+  else
+    check fail "$name durations/manifest label sets diverge — a label has weight in one and no placement in the other. Regenerate: $REGEN"
+  fi
+  local phantoms
+  phantoms="$(LC_ALL=C comm -23 <(printf '%s\n' "$dlabels") "$ref" | tr '\n' ' ')"
+  if [[ -z "$phantoms" ]]; then
+    check pass "every $name durations label is a registered suite"
+  else
+    check fail "phantom $name durations label(s): $phantoms. Regenerate: $REGEN"
+  fi
+  if printf '%s\n' "$data" | cut -f1 | LC_ALL=C sort -c 2>/dev/null; then
+    check pass "$name durations rows are label-sorted"
+  else
+    check fail "$name durations rows are not label-sorted — ADR-235 requires deterministic sorted generated output. Regenerate: $REGEN"
+  fi
+}
+
+check_durations "$REPO_ROOT/scripts/suite-durations.tsv" "$MANIFEST" \
+  "${TMPDIR:-/tmp}/ssm-registered.$$" "light"
+if [[ -f "$MANIFEST_HEAVY" ]]; then
+  check_durations "$REPO_ROOT/scripts/suite-durations-heavy.tsv" "$MANIFEST_HEAVY" \
+    "${TMPDIR:-/tmp}/ssm-registered-heavy.$$" "heavy"
 fi
 
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
@@ -288,7 +361,7 @@ fi
 # printf + exit, NEVER through fail() — the helper this floor backstops is the thing
 # one edit disarms. MIN_CASES sits on the line directly above its `if` so
 # guard-vacuity-floor's backward slice-widening binds it.
-MIN_CASES=25
+MIN_CASES=45
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d check(s) ran, expected >= %d. The suite did not run to completion.\n' "$cases" "$MIN_CASES" >&2
   exit 1

@@ -10,7 +10,16 @@ import { hashUserId } from "@/server/observability";
 //
 // The actor id is hashed (hashUserId) so the audit line carries no raw PII.
 
-export type WorkspaceAction = "invite-member" | "api-key-share" | "scope-grant";
+export type WorkspaceAction =
+  | "invite-member"
+  | "api-key-share"
+  | "scope-grant"
+  // #9534 — distinct family name (the scope-grants grant route already emits
+  // "scope-grant" for template grants) + direction in the action name itself:
+  // the line is Phase A's only durable record of a consent-basis flip, so
+  // grant and revoke must be distinguishable.
+  | "web-egress-grant"
+  | "web-egress-revoke";
 
 export function emitWorkspaceActionContext(params: {
   action: WorkspaceAction;

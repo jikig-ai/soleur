@@ -24,7 +24,7 @@ Brainstorm for #2724 (`mcp-server-builder` skill — OpenAPI → MCP server scaf
 
 **Decision:** Defer entirely. No Soleur-native skill, no companion-pointer doc, close #2724 with three explicit reopen criteria.
 
-Brainstorm artifact: `knowledge-base/project/brainstorms/2026-05-12-mcp-server-builder-brainstorm.md`.
+Brainstorm artifact: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-12-mcp-server-builder-brainstorm.md`.
 PR landing the docs: #3675.
 
 ## Key Insight

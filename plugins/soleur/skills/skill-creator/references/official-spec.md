@@ -31,7 +31,7 @@ Show concrete examples of using this Skill.
 | `description` | Yes | What the Skill does and when to use it (max 1024 characters). Claude uses this to decide when to apply the Skill. |
 | `allowed-tools` | No | Tools Claude can use without asking permission when this Skill is active. Example: `Read, Grep, Glob` |
 | `disallowed-tools` | No | Tools REMOVED from the pool while the skill is active. Restriction clears on the operator's next message (per-turn only). Space/comma-separated string or YAML list. |
-| `model` | No | Specific model to use when this Skill is active (e.g., `claude-sonnet-5`). Defaults to the conversation's model. |
+| `model` | No | Specific model to use when this Skill is active (e.g., `claude-sonnet-5-5`). Defaults to the conversation's model. |
 | `disable-model-invocation` | No | Set to `true` to prevent Claude from loading the Skill automatically; it runs only when the user types `/name`. The description is then not in context. Also prevents preloading into subagents and, as of v2.1.196, running when a scheduled task fires with the Skill as its prompt. Default: `false`. Source: [code.claude.com/docs/en/skills](https://code.claude.com/docs/en/skills). Soleur's decision test for setting it is in [authoring-levers.md](authoring-levers.md). |
 | `user-invocable` | No | Set to `false` when only Claude should invoke the Skill: Claude Code hides it from the `/` menu and does not run it when the user types `/name`. The description stays in context. For background knowledge users should not invoke directly. Default: `true`. Source: [code.claude.com/docs/en/skills](https://code.claude.com/docs/en/skills). |
 

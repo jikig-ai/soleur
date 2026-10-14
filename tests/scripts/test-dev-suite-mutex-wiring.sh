@@ -177,8 +177,30 @@ else
   _report "W8 scheduled cron forwards fail-on-ledger-drift: 'true'" fail "the only cadence-independent detector would stay warning-only"
 fi
 
+# ── W9: the scheduled-integration-suites leg's env HOLD_S > its job timeout ──
+# The same coupling W5 pins for tenant-integration, applied to the second
+# mutex consumer (#9947): its HOLD_S is a workflow ENV override, not the
+# script default, so drift between timeout-minutes and HOLD_S would go
+# silent exactly like W5's comment-coupled budget. Max timeout-minutes is
+# the job ceiling (per-step ceilings are smaller).
+SCHED2="${ROOT}/.github/workflows/scheduled-integration-suites.yml"
+[[ -f "$SCHED2" ]] || { printf 'harness: missing %s\n' "$SCHED2" >&2; exit 2; }
+SCHED2_BODY="$(_strip < "$SCHED2")"
+sched_timeout=$(grep -oE 'timeout-minutes: [0-9]+' <<<"$SCHED2_BODY" | grep -oE '[0-9]+' | sort -rn | head -1)
+sched_hold=$(grep -oE 'DEV_SUITE_MUTEX_HOLD_S: "[0-9]+"' <<<"$SCHED2_BODY" | grep -oE '[0-9]+' | head -1)
+if [[ -n "$sched_timeout" && -n "$sched_hold" ]]; then
+  _report "W9 extracted scheduled-leg timeout-minutes=$sched_timeout HOLD_S=$sched_hold" ok
+else
+  _report "W9 extracted scheduled-leg timeout-minutes/HOLD_S" fail "extraction empty — the coupling check is vacuous without both"
+fi
+if [[ -n "$sched_timeout" && -n "$sched_hold" ]] && (( sched_hold > sched_timeout * 60 )); then
+  _report "W9 scheduled-leg HOLD_S ($sched_hold) exceeds the job timeout (${sched_timeout}min) — holder outlives cancellation" ok
+else
+  _report "W9 scheduled-leg HOLD_S ($sched_hold) exceeds the job timeout (${sched_timeout}min)" fail "holder would die at the pg_sleep ceiling mid-section — silent unserialization"
+fi
+
 # ── Anti-vacuity assertion floor ─────────────────────────────────────────────
-EXPECTED_ASSERTIONS=13
+EXPECTED_ASSERTIONS=15
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
     "$passes" "$EXPECTED_ASSERTIONS"

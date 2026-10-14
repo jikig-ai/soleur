@@ -290,6 +290,16 @@ export function logGitDataHostKeyPinAtStartup(): void {
         message: "git-data ssh client absent at startup",
       });
     }
+    // #8211 PR2 — the cutover's per-host deploy proof. `git_data_store=` is the line the
+    // flip asserts on every web host via Better Stack (`--grep git_data_store=` keyed on
+    // Vector's host_name field): Doppler-says-on is not deploy proof, and web-2 has no
+    // pinned SSH ingress, so this warn-level line is the load-bearing check. Reads the same
+    // single source the workspace resolver branches on; a redeploy that never loaded the
+    // flag emits `disabled` and the flip fails rather than misreporting.
+    log.warn(
+      { gitDataStore: isGitDataStoreEnabled() },
+      `git_data_store=${isGitDataStoreEnabled() ? "enabled" : "disabled"}`,
+    );
   } catch (err) {
     // review: swallowed — observability must never take down startup; leave a trace.
     console.warn("git-data: startup host-key pin inspection failed", err);

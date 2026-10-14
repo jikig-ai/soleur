@@ -46,7 +46,11 @@ export type CaptureStatus =
   | "ok"
   | "no-result-event"
   | "parse-error"
-  | "timeout";
+  | "timeout"
+  // #9648 B-0 — the turn ran and billed the key, but the cost could not be
+  // priced (model absent from the pricing map). Distinct from "ok"+0 so
+  // Better Stack sums do not read an unpriced turn as a free one.
+  | "unpriced";
 
 export interface ClaudeCostMarker {
   source: ClaudeCostSource;

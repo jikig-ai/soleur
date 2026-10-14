@@ -1,0 +1,6 @@
+{"total_count":2,"check_runs":[
+{"id":9001,"name":"Analyze (actions)","status":"completed","conclusion":"success","app":{"slug":"github-actions"}}
+]}
+{"total_count":2,"check_runs":[
+{"id":9002,"name":"Analyze (python)","status":"completed","conclusion":"failure","app":{"slug":"github-actions"}}
+]}

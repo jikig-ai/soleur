@@ -1,0 +1,7 @@
+# fixture data, never executed: the token and an exit on one line but no comparison; bounded=no
+run_helper "$SOLEUR_TEST_SUITE_PID" || exit 0
+p=$1; top=""
+while [ -r "/proc/$p/cmdline" ]; do
+  top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+done
+[ -n "$top" ] && kill -TERM "$top"

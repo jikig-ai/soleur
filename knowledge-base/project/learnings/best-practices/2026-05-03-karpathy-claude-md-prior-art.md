@@ -106,9 +106,9 @@ remains a no-op.
 Cross-links:
 
 - Issue #2727 (parent #2718)
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-15-karpathy-check-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-karpathy-check-2727/spec.md`
-- Plan: `knowledge-base/project/plans/2026-05-15-feat-karpathy-check-extend-simplicity-reviewer-plan.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-karpathy-check-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-karpathy-check-2727/spec.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-karpathy-check-extend-simplicity-reviewer-plan.md`
 - Companion learning (audit-vs-guidance reframe): `knowledge-base/project/learnings/2026-05-15-brainstorm-audit-vs-guidance-direction-reframe.md`
 
 ## Related

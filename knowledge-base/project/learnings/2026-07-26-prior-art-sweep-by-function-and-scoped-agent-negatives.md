@@ -231,7 +231,7 @@ Inward (repo prior art) and outward (vendor facts), it is one rule.
 
 ## Related
 
-- Decision record: `knowledge-base/project/brainstorms/2026-07-26-openship-adoption-eval-brainstorm.md`
+- Decision record: `knowledge-base/project/brainstorms/archive/20261013-041741-2026-07-26-openship-adoption-eval-brainstorm.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md`
 - `knowledge-base/project/learnings/2026-03-25-verify-platform-limits-during-brainstorm.md`
 - `knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md`

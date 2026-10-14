@@ -1,5 +1,8 @@
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { createChildLogger } from "./logger";
+import { reportSilentFallback } from "./observability";
+import { noTextBlockExtra, safeStopReason } from "./anthropic-stop-report";
+import { HAIKU_MODEL } from "./inngest/leader-prompts/constants";
 
 const log = createChildLogger("domain");
 
@@ -132,6 +135,10 @@ async function classifyMessage(
     ? `\nThe user is viewing: ${context.path} (${context.type ?? "unknown"})`
     : "";
 
+  // Hoisted so the catch below can say HOW the turn ended: an end_turn with
+  // unparseable JSON and a truncated or refused turn are different defects.
+  let stopReason = "no-response";
+
   try {
     // NOTE: this inline Anthropic Messages request mirrors the shared
     // `postAnthropicMessage` helper in `inngest/functions/_cron-shared.ts`.
@@ -151,7 +158,9 @@ async function classifyMessage(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
+        // The tier SSOT (leader-prompts/constants.ts imports nothing, so this stays
+        // leaf-light); the pricing table and the CLI-pin guard key on the same constant.
+        model: HAIKU_MODEL,
         max_tokens: 200,
         messages: [
           {
@@ -169,16 +178,33 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
         ],
         // Structured output (#5186): guarantees a schema-valid {leaders:[...]}
         // object so the response needs no fence-stripping.
-        output_config: { format: { type: "json_schema", schema: LEADERS_OUTPUT_SCHEMA } },
+        //
+        // effort "low" (Haiku 5.5): the model runs adaptive thinking by default and
+        // thinking tokens count against max_tokens. At 200 tokens, default-effort probe
+        // requests used 21 to 148 output tokens (some carried a thinking block ahead of
+        // the text); at effort low the same request emitted text only, 17 to 21 tokens,
+        // and effort + json_schema were accepted together (2026-10-08, N=5 per cell, see
+        // specs/feat-one-shot-haiku-5-5-support/probe-results.md). Do NOT add
+        // `thinking: {type: "disabled"}` (its capability flag is unresolved), a
+        // `fallbacks` field (the Haiku docs document no server-side fallback; not
+        // live-probed), or assistant prefill (documented 400; not probed).
+        output_config: {
+          effort: "low",
+          format: { type: "json_schema", schema: LEADERS_OUTPUT_SCHEMA },
+        },
       }),
     });
 
     if (!response.ok) {
+      // So the catch's log says WHY (a 429 or 500 is not "the model returned nothing").
+      stopReason = `http_${response.status}`;
       throw new Error(`Anthropic API error: ${response.status}`);
     }
 
     const data = (await response.json()) as {
       content: Array<{ type: string; text?: string }>;
+      stop_reason?: unknown;
+      stop_details?: unknown;
     };
     // First TEXT block, not a fixed position: a thinking-by-default model puts a
     // thinking block first (#8392). Selection is an ALLOWLIST of `text` — a
@@ -189,6 +215,32 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
     const text = Array.isArray(data.content)
       ? (data.content.find((b) => b.type === "text")?.text ?? "")
       : "";
+    // Make the silent ["cpo"] fallback visible (cq-silent-fallback-must-mirror-to-sentry).
+    // An empty/whitespace answer, or a turn cut at max_tokens or refused (even with some
+    // text), is not a classification. Message path with err = null: an Error argument is
+    // captured by the pino mirror first and the tagged Sentry event is deduplicated away
+    // (#8629). The parse that follows will throw on an unusable answer and the catch's
+    // pino log mirrors that as a second, untagged event: expected, the tagged one is the
+    // one that carries stop_reason/category. `extra` is built by the shared helper from a
+    // closed vocabulary; the user's message, the context and the key never ride along.
+    // Allowlisted: the catch below logs it, and pino mirrors that log to Sentry.
+    stopReason = safeStopReason(data.stop_reason);
+    const noTextExtra = noTextBlockExtra({
+      text,
+      stopReason: data.stop_reason,
+      stopDetails: data.stop_details,
+      model: HAIKU_MODEL,
+    });
+    if (noTextExtra) {
+      reportSilentFallback(null, {
+        feature: "domain-router",
+        op: "no-text-block",
+        // Neutral on purpose: a max_tokens/refusal turn whose JSON is still complete routes
+        // normally, so this must not claim a fallback. extra.stop_reason says which case.
+        message: "domain router classifier turn was empty, cut off or refused (see extra.stop_reason)",
+        extra: noTextExtra,
+      });
+    }
     // Structured output guarantees schema-valid JSON — parse directly, no fence strip.
     const parsed = JSON.parse(text) as { leaders?: unknown };
     const leaders = Array.isArray(parsed.leaders) ? parsed.leaders : [];
@@ -205,7 +257,7 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
 
     return validated.slice(0, MAX_LEADERS_PER_MESSAGE);
   } catch (err) {
-    log.error({ err }, "Classification failed, falling back to CPO");
+    log.error({ err, stop_reason: stopReason }, "Classification failed, falling back to CPO");
     return ["cpo"]; // Fallback on any error
   }
 }

@@ -275,7 +275,8 @@ write_files:
               -e 's/[0-9a-fA-F]\{8\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{12\}/UUID_REDACTED/g' \
               -e 's#/mnt/git-data\(-luks\)\{0,1\}/repositories/[^[:space:]]*#/mnt/git-data/repositories/REDACTED#g' \
               -e 's/dp\.\(st\|pt\|sa\|ct\|scim\|audit\)\.[A-Za-z0-9._-]\{10,\}/dp.REDACTED/g' \
-              -e 's/gh[pousr]_[A-Za-z0-9]\{20,\}/REDACTED_GH/g' \
+              -e 's#gh[pousr]_[A-Za-z0-9._~+/=-]\{20,\}#REDACTED_GH#g' \
+                -e 's#github_pat_[A-Za-z0-9._~+/=-]\{20,\}#REDACTED_GH#g' \
               -e 's#://[A-Za-z0-9._%+-]\{1,\}:[^@/[:space:]]\{1,\}@#://REDACTED@#g' \
               -e 's/[Bb]earer[[:space:]]\{1,\}[A-Za-z0-9._~+/=-]\{8,\}/Bearer REDACTED/g' \
               -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----.*/[PRIVATE KEY REDACTED]/' \
@@ -550,6 +551,27 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # (#9438) The host-originated liveness feeder. A 60 s timer runs the script, which pings a
+  # dedicated Better Stack heartbeat only when the host's own checks pass; the URL is read at
+  # runtime from the scoped Doppler config, never baked here. Armed by the last runcmd item.
+  - path: /usr/local/bin/git-data-liveness.sh
+    content: |
+      ${indent(6, git_data_liveness)}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/git-data-liveness.service
+    content: |
+      ${indent(6, git_data_liveness_service)}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/git-data-liveness.timer
+    content: |
+      ${indent(6, git_data_liveness_timer)}
+    owner: root:root
+    permissions: '0644'
+
   # --- (#7772 item 2) The metadata-endpoint egress closure --------------------------------
   #
   # WHAT IT CLOSES. hcloud_firewall.git_data declares ZERO rules, which under Hetzner semantics
@@ -655,9 +677,10 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # Fail-closed placeholder pre-receive — staged to /tmp; the bootstrap installs it
-  # onto the volume at /mnt/git-data/hooks/pre-receive and wires core.hooksPath.
-  - path: /tmp/git-data-pre-receive-placeholder.sh
+  # The REAL CAS-fence pre-receive (#8211 PR2 — hook-at-birth) — staged to /tmp; the
+  # bootstrap installs it onto the volume at /mnt/git-data/hooks/pre-receive and wires
+  # core.hooksPath. Fail-closed by construction: it rejects every non-CAS-conforming push.
+  - path: /tmp/git-data-pre-receive.sh
     content: |
       ${indent(6, git_data_pre_receive_placeholder)}
     owner: root:root
@@ -1126,11 +1149,18 @@ runcmd:
     # Stderr via SUBSTITUTION, never `2>>`: a failed redirect returns 1 WITHOUT running the
     # probe. `|| _rc=$?` not `; _rc=$?` — the naked form aborts under `set -euo pipefail`.
     # Absolute paths: this file already notes nothing pins a PATH. Enforced by B18.
+    # (#10138) The volume ATTACHMENT lands after first boot starts (run 38384137515: 65 s for this
+    # volume, as Terraform recorded it), so the wait is 300 counted passes of `sleep 1`; absent after
+    # that, the isLuks rc=4 FATAL below still refuses. One settle follows the loop, then a refusal if
+    # the node exists but still reports size 0: the probes below read the node once and gate
+    # luksFormat, so they must not race udev's attach event or run on a half-attached node.
     _i=0
-    while [ "$_i" -lt 30 ]; do
-      [ -b "$DEV" ] && [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
+    while [ "$_i" -lt 300 ]; do
+      [ -b "$DEV" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
       sleep 1; _i=$((_i+1))
     done
+    /usr/bin/udevadm settle --timeout=10 >/dev/null 2>&1 || true
+    { [ ! -b "$DEV" ] || [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ]; } || { echo "[git-data-luks] FATAL: $DEV is a block device of size 0 after the wait — refusing to probe or format a volume that has not finished attaching" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
     _luks_created_now=0
     _isluks_rc=0
     _isluks_err="$(cryptsetup isLuks "$DEV" 2>&1)" || _isluks_rc=$?
@@ -1215,7 +1245,7 @@ runcmd:
   # WHOLE restart ladder (up to 5x300 + 4x60 s), and a blocking `enable --now` would hold
   # cloud-final for all of it. The arm's verdict is "did it ENABLE"; whether it CONVERGED is
   # git-data-bootstrap.sh's measurement, bounded there at 420 s, which is the single bound on
-  # the boot path.
+  # reopen convergence (the attach waits are separate, earlier bounds: #10138).
   - |
     STAGE=gitdata_luks_reopen_arm
     ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
@@ -1343,5 +1373,25 @@ runcmd:
       [ -s "$_gc_detail" ] || _gc_detail="git-data gc timer failed to arm (rc=$_gc_rc): no stderr captured"
       /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC timer failed to arm" "$STAGE" warning \
         "$_gc_detail" "gc_timer=unarmed" || true
+    fi
+
+  # (#9438) Arm the host-originated liveness timer, AFTER the gc_timer item: that item is itself
+  # after the bootstrap stage and boot_complete, so no tick overlaps the store mount at birth.
+  # MUST-TOLERATE, like the gc timer: a feeder that fails to arm is a degraded steady state, not
+  # a reason to abort a boot, and the missing beat is the alert. It is REPORTED, at info: an
+  # unrouted stage, so this adds no Sentry rule and no routed stage. Same substitution-plus-`if`
+  # shape as the gc_timer item above.
+  - |
+    STAGE=liveness_timer
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
+    systemctl daemon-reload || true
+    _lv_rc=0
+    _lv_err="$(systemctl enable --now git-data-liveness.timer 2>&1)" || _lv_rc=$?
+    if [ "$_lv_rc" -ne 0 ]; then
+      _lv_detail=/run/git-data-liveness-timer.err
+      [ -z "$_lv_err" ] || ( umask 077; printf '%s\n' "$_lv_err" > "$_lv_detail" ) 2>/dev/null || true
+      [ -s "$_lv_detail" ] || _lv_detail="git-data liveness timer failed to arm (rc=$_lv_rc): no stderr captured"
+      /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_LIVENESS timer failed to arm" "$STAGE" info \
+        "$_lv_detail" "liveness_timer=unarmed" || true
     fi
 

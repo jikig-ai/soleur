@@ -20,12 +20,18 @@
 #     An empty set is an ERROR, never "nothing required" -- that is the vacuous state. A rule
 #     type this script does not evaluate (e.g. `workflows`, `code_scanning`, `pull_request`,
 #     `required_deployments`) is also an ERROR: `--admin` bypasses it too, so ignoring it would
-#     be a silent pass.
+#     be a silent pass. `merge_queue` (adopted #9454) is a KNOWN type that adds NO required
+#     context: it only re-runs the required set on a `merge_group` temp ref, so the required
+#     contexts it gates are exactly the ones read above. `--admin` skips the queue the same way it
+#     skips the required-status-checks rule (bypass_actors, mode pull_request; the adoption canary
+#     verifies it), and the readiness decision below is unchanged. Every OTHER unlisted type
+#     still errors.
 #   * Every required entry must be pinned to an app (`integration_id`). An unpinned entry could
 #     be satisfied by a legacy commit STATUS, which this script does not read; it is refused.
 #   * Check runs: `commits/<sha>/check-runs?filter=all`, paginated, restricted to
-#     `head_sha == <sha>`, matched by name AND `app.id == integration_id` (a CodeQL-named run
-#     from github-actions is not CodeQL).
+#     `head_sha == <sha>`, matched by name AND `app.id == integration_id` (a run named like a
+#     context but posted by a different app, e.g. a github-actions run named for a GHAS-bound
+#     context, does not satisfy it).
 #   * Latest run per context = max check-run `id`, compared numerically. NOT `started_at`: a
 #     queued re-run has `started_at: null` and would sort as the OLDEST, letting a stale
 #     success mask a pending re-run. This mirrors GitHub, which uses the latest run per name+app.
@@ -45,6 +51,16 @@
 #     (its length must equal the PR's `changedFiles`, and the API caps at 3000), else ERROR.
 #   * Ready is decided POSITIVELY: every required context must be counted green. "No non-green
 #     line was printed" is not readiness -- an empty or unparseable API body would satisfy it.
+#
+#   * The draft-era `test` row (ADR-276 S3, #9728). With CI_DRAFT_LIGHT on, a draft PR's `test` concludes red BY DESIGN,
+#     and after `gh pr ready` that row is the latest `test` row until the ready run's aggregator posts (38 to 51 minutes).
+#     Only when `test` is FAILED at the graded head does this script ask plugins/soleur/scripts/ci-head-verdict.sh, and the
+#     answer can only move `test` from FAILED to PENDING or ABSENT, never to green: pending-full and no-run -> PENDING (a
+#     `--wait` keeps waiting; no-run times out, never READY); stalled -> ABSENT, reason=stalled (terminal); awaiting-approval
+#     -> PENDING, reason=awaiting-approval (terminal); full-decided whose deciding run is not the run the newest `test` row
+#     belongs to (a manual re-run of a pre-ready run) -> FAILED, reason=stale-row (terminal); every other answer, an
+#     unreadable one, and a verdict for another head leave FAILED untouched. The recovery for stalled / stale-row is
+#     `gh pr ready --undo <PR>` then `gh pr ready <PR>` with a user token, never a re-run of the draft run.
 #
 # KNOWN LIMITS (stated, not silent).
 #   (a) A re-run started between this script's read and `gh pr merge` is not seen:
@@ -77,6 +93,32 @@
 #   --match-head-commit <sha>. UNTRUSTED-CI still refuses first: a workflow-editing PR cannot
 #   self-certify on ANY sha.
 #
+# --allow-local-merge (requires --green-sha; #9401).
+#   A SECOND carryover arm for a head that is NOT GitHub-signed -- a hand-made
+#   `git merge origin/<base>` push, which arrives unsigned (carryover-unverified under the
+#   arm above). (The #9401 disjoint-delta skip needs NO carryover: it leaves the green head
+#   untouched, so a plain invocation grades it directly; and a hook-produced sync merge can
+#   never satisfy this arm -- its delta overlaps the PR's files by construction.) The
+#   signature is replaced by
+#   a mechanical proof that the merge added nothing but base-side docs content:
+#     * still a 2-parent commit with parents[0] == <green-sha> -- a non-merge or a merge of a
+#       different head is refused as carryover-not-merge / carryover-first-parent, flag or not;
+#     * parents[1] is an ancestor-or-equal of <base> (same compare as the verified arm);
+#     * compare(<green-sha>...<sha>)'s file list EQUALS
+#       compare(<green-sha>...parents[1])'s as a set of (filename, status, previous_filename,
+#       patch) tuples -- a merge that resolved a conflict or authored an edit diverges from
+#       the base-side patch, a file it added beyond the base delta is smuggled, and a file it
+#       DROPPED (a subset-only check would certify a merge that reverts base content -- e.g.
+#       parents [G, tip] with G's tree) fails the equality;
+#     * every such file sits on the docs surface (knowledge-base/, docs/,
+#       plugins/soleur/skills/, or *.md) -- base-side CODE carried by an unsigned merge is not
+#       certifiable by a gate that cannot replay it;
+#     * none of them appear in the PR's own file list -- an overlap means merge-time
+#       resolution touched content the PR owns.
+#   Success grades <green-sha>'s contexts and reports reason=carryover-local-docs. Refusals
+#   are not-ready (carryover-local-not-clean / -nondocs / -overlap), never errors; a truncated
+#   (>=300-entry) or unparseable compare body is an error, like every other unreadable input.
+#
 # EXIT CODES (the contract every caller branches on).
 #   0  ready      every required context present and green on this head -> merge with
 #                 --match-head-commit <sha>
@@ -104,14 +146,17 @@ readonly MARKER="SOLEUR_ADMIN_MERGE_READY"
 usage() {
   cat <<'EOF'
 usage: admin-merge-ready.sh <PR> <head-sha> [--base BRANCH] [--wait [--timeout SEC]]
-       admin-merge-ready.sh <PR> <head-sha> --green-sha <prior-sha> [--base BRANCH]
+       admin-merge-ready.sh <PR> <head-sha> --green-sha <prior-sha> [--allow-local-merge] [--base BRANCH]
        admin-merge-ready.sh --help
 
 Exits 0 only when every context required by the base branch's rulesets is PRESENT on
 <head-sha> and its latest check run concluded success|skipped|neutral.
 With --green-sha the gate runs against <prior-sha> instead: valid only when <head-sha>
 is GitHub's own verified 2-parent merge of <prior-sha> and an ancestor-or-equal of the
-base tip (was-green carryover; see the header).
+base tip (was-green carryover; see the header). With --allow-local-merge an unsigned
+local merge is also certified, but only when the delta it added over <prior-sha> is a
+byte-identical replay of the base-side delta, docs-only, and disjoint from the PR's
+own file list.
 
 exit 0 ready | 1 not-ready|timeout | 2 usage error | 3 gh/jq/API/ruleset error | 4 stale (head moved / PR not open)
 
@@ -120,7 +165,7 @@ Last stdout line, on every path except --help:
 EOF
 }
 
-PR_OUT="?"; SHA_OUT="?"; BASE="?"; REASON="none"
+PR_OUT="?"; SHA_OUT="?"; BASE="?"; REASON="none"; REASON_OVERRIDE=""
 N_REQ=0; J_ABSENT="[]"; J_PENDING="[]"; J_FAILED="[]"
 
 marker() {
@@ -144,7 +189,7 @@ PR_OUT="$PR"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || usage_error "head-sha must be a full 40-hex SHA"
 SHA_OUT="$SHA"
 shift 2
-WAIT=0; TIMEOUT=3600; WANT_BASE="main"; GREEN_SHA=""
+WAIT=0; TIMEOUT=3600; WANT_BASE="main"; GREEN_SHA=""; ALLOW_LOCAL=0
 while (( $# > 0 )); do
   case "$1" in
     --wait) WAIT=1; shift ;;
@@ -157,11 +202,14 @@ while (( $# > 0 )); do
     --green-sha)
       if ! [[ "${2-}" =~ ^[0-9a-f]{40}$ ]]; then usage_error "--green-sha must be a full 40-hex SHA"; fi
       GREEN_SHA="$2"; shift 2 ;;
+    --allow-local-merge) ALLOW_LOCAL=1; shift ;;
     *) usage_error "unknown argument" ;;
   esac
 done
 [[ -z "$GREEN_SHA" || "$GREEN_SHA" != "$SHA" ]] \
   || usage_error "--green-sha equals <head-sha> -- plain invocation already covers it"
+[[ "$ALLOW_LOCAL" != "1" || -n "$GREEN_SHA" ]] \
+  || usage_error "--allow-local-merge requires --green-sha"
 POLL_SECONDS="${ADMIN_MERGE_READY_POLL_SECONDS:-60}"
 [[ "$POLL_SECONDS" =~ ^[0-9]+$ ]] || usage_error "ADMIN_MERGE_READY_POLL_SECONDS must be ^[0-9]+\$"
 
@@ -178,8 +226,63 @@ trap 'REASON=interrupted; marker error; exit 130' INT TERM HUP
 # Returns 0 ready | 1 not-ready | 4 stale | 3 error.
 fail3() { MSG="ERROR: $1"; REASON="$2"; return 3; }
 
+# resolve_head_verdict: V_STATE / V_RUN from ci-head-verdict.sh for THIS PR at THIS head ($SHA). Returns 1 (and leaves
+# V_STATE empty) when it cannot answer: the caller then keeps today's reading. CI_HEAD_VERDICT_BIN is the test seam.
+V_STATE=""; V_RUN="none"; V_WHY=""
+resolve_head_verdict() {
+  local bin m
+  V_STATE=""; V_RUN="none"; V_WHY=""
+  bin="${CI_HEAD_VERDICT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/ci-head-verdict.sh}"
+  [[ -r "$bin" ]] || return 1
+  m="$(bash "$bin" verdict "$PR" 2>/dev/null)" || true
+  m="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$m")" || return 1
+  [[ "$m" == *" sha=$SHA "* ]] || return 1
+  V_RUN="${m#* run=}"; V_RUN="${V_RUN%% *}"; V_WHY="${m#* reason=}"; V_WHY="${V_WHY%% *}"
+  m="${m#*state=}"; m="${m%% *}"
+  case "$m" in n/a|full-decided|pending-full|no-run|stalled|awaiting-approval) V_STATE="$m" ;; *) return 1 ;; esac
+}
+
+# soften_test_row <classifier-json>: apply the head verdict to a FAILED `test` (see the header). Prints the adjusted JSON;
+# sets REASON_OVERRIDE and MSG when the answer is terminal. Never produces a green context.
+RECOVERY=""
+soften_test_row() {
+  local out="$1" last_run=""
+  RECOVERY="after confirming in the Actions tab that no ready run is still in flight (the undo cancels it): gh pr ready --undo $PR, then gh pr ready $PR with a user token (never GITHUB_TOKEN; a manual re-run of the draft run is NOT a recovery)"
+  case "$V_STATE" in
+    pending-full)
+      jq -c '.failed -= ["test"] | .pending += ["test"]
+             | .lines |= map(if startswith("FAILED  test (") then "PENDING test (draft-era-row-while-ready-run-pending)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
+    no-run)
+      jq -c '.failed -= ["test"] | .pending += ["test"]
+             | .lines |= map(if startswith("FAILED  test (") then "PENDING test (no-ready-run)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
+    awaiting-approval)
+      REASON_OVERRIDE="awaiting-approval"
+      MSG="AWAITING-APPROVAL: the ready run is waiting for a maintainer to approve a fork workflow run; nothing starts until it is approved"
+      jq -c '.failed -= ["test"] | .pending += ["test"]
+             | .lines |= map(if startswith("FAILED  test (") then "PENDING test (awaiting-approval: a maintainer must approve the fork workflow run)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
+    stalled)
+      REASON_OVERRIDE="stalled"
+      MSG="STALLED: this PR was marked ready but no full CI run decided ($V_WHY: the stall window counts from the ready event). Recovery: $RECOVERY"
+      jq -c '.failed -= ["test"] | .absent += ["test"]
+             | .lines |= map(if startswith("FAILED  test (") then "ABSENT  test (stalled: no full CI run decided after the ready event)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
+    full-decided)
+      last_run="$(jq -r --arg sha "$CHECK_SHA" '
+        [.[] | .check_runs[] | select(.head_sha == $sha and .name == "test" and .app.id == 15368)]
+        | if length == 0 then "" else (max_by(.id | tonumber) | (.details_url // "") | (capture("/actions/runs/(?<id>[0-9]+)(/|$)")? // {id: ""}) | .id) end' "$WORK/runs.json" 2>/dev/null)" || last_run=""
+      if [[ -n "$last_run" && "$V_RUN" != none && "$last_run" != "$V_RUN" ]]; then
+        REASON_OVERRIDE="stale-row"
+        MSG="STALE-ROW: the newest test row belongs to run $last_run, not the deciding run $V_RUN (a manual re-run of a pre-ready run). Recovery: $RECOVERY"
+        jq -c --arg l "$last_run" --arg r "$V_RUN" \
+          '.lines |= map(if startswith("FAILED  test (") then "FAILED  test (stale-row: the newest test row belongs to run \($l), not the deciding run \($r))" else . end)' <<<"$out" > "$WORK/soft.json"
+      else
+        printf '%s\n' "$out" > "$WORK/soft.json"
+      fi ;;
+    *) printf '%s\n' "$out" > "$WORK/soft.json" ;;
+  esac
+}
+
 check_once() {
-  LINES=""; MSG=""; REASON="none"; N_REQ=0; J_ABSENT="[]"; J_PENDING="[]"; J_FAILED="[]"
+  LINES=""; MSG=""; REASON="none"; REASON_OVERRIDE=""; N_REQ=0; J_ABSENT="[]"; J_PENDING="[]"; J_FAILED="[]"
   rm -f "$WORK"/*.json
   local state head changed enc
 
@@ -224,7 +327,7 @@ check_once() {
   if [[ -n "$GREEN_SHA" ]]; then
     gh api "repos/{owner}/{repo}/commits/$SHA" > "$WORK/head.json" \
       || { fail3 "reading head commit failed" api-error; return; }
-    local carry
+    local carry p1 cstatus
     carry=$(jq -r --arg green "$GREEN_SHA" '
       (.commit.verification.verified // false) as $v
       | (.parents // []) as $p
@@ -233,11 +336,18 @@ check_once() {
         elif $v != true then "carryover-unverified"
         else "ok " + $p[1].sha end' "$WORK/head.json" 2>/dev/null) \
       || { fail3 "unparseable head commit" api-error; return; }
-    if [[ "$carry" != ok\ * ]]; then
+    # Only carryover-unverified is eligible for the local-merge arm: a head that
+    # is not a merge, or whose first parent is not <green-sha>, is the wrong
+    # SHAPE for carryover and refused the same with or without the flag.
+    if [[ "$carry" == ok\ * ]]; then
+      p1="${carry#ok }"
+    elif [[ "$carry" == "carryover-unverified" && "$ALLOW_LOCAL" == "1" ]]; then
+      p1=$(jq -r '.parents[1].sha // ""' "$WORK/head.json" 2>/dev/null) || p1=""
+      [[ "$p1" =~ ^[0-9a-f]{40}$ ]] || { fail3 "unparseable head commit" api-error; return; }
+    else
       MSG="GREEN-CARRYOVER refused: head $SHA is not a verified GitHub merge of $GREEN_SHA ($carry)"
       REASON="$carry"; return 1
     fi
-    local p1="${carry#ok }" cstatus
     gh api "repos/{owner}/{repo}/compare/$p1...$BASE" > "$WORK/compare.json" \
       || { fail3 "compare of merged parent against $BASE failed" api-error; return; }
     cstatus=$(jq -r '.status // ""' "$WORK/compare.json" 2>/dev/null) \
@@ -246,8 +356,59 @@ check_once() {
       MSG="GREEN-CARRYOVER refused: merged parent $p1 is not an ancestor-or-equal of $BASE (status=$cstatus)"
       REASON="carryover-not-base"; return 1
     fi
-    CHECK_SHA="$GREEN_SHA"
-    MSG="GREEN-CARRYOVER: head $SHA is a verified merge of $GREEN_SHA and $BASE@$p1; grading $GREEN_SHA's required contexts"
+    if [[ "$carry" == ok\ * ]]; then
+      CHECK_SHA="$GREEN_SHA"
+      MSG="GREEN-CARRYOVER: head $SHA is a verified merge of $GREEN_SHA and $BASE@$p1; grading $GREEN_SHA's required contexts"
+    else
+      # --allow-local-merge arm (#9401): the signature is replaced by a diff
+      # proof -- every file the merge added over <green-sha> must be a byte-
+      # identical replay of the base-side delta, docs-only, and disjoint from
+      # the PR's own file list.
+      gh api "repos/{owner}/{repo}/compare/$GREEN_SHA...$SHA" > "$WORK/cmp_added.json" \
+        || { fail3 "compare of the merge's added delta failed" api-error; return; }
+      gh api "repos/{owner}/{repo}/compare/$GREEN_SHA...$p1" > "$WORK/cmp_base.json" \
+        || { fail3 "compare of the merged base tip failed" api-error; return; }
+      local lcl
+      # One jq, one error path: clean-replay, docs-only and PR-disjointness are
+      # a single predicate so a residual jq failure can never half-evaluate.
+      lcl=$(jq -rn --slurpfile added "$WORK/cmp_added.json" --slurpfile base "$WORK/cmp_base.json" \
+                  --slurpfile prf "$WORK/files.json" '
+        # docs surface: sibling enumeration of the zero-conflict-surface
+        # classifier in ship/references/settle-then-admin-merge.md — different
+        # subject (merged delta vs the PR file list) but same surface; a move
+        # of the docs roots must touch both. NO apostrophes in jq comments —
+        # this program is single-quoted.
+        def docs: .filename | test("^(knowledge-base/|docs/|plugins/soleur/skills/)") or test("\\.md$");
+        ($added[0].files // null) as $af | ($base[0].files // null) as $bf
+        | ([$prf[0][][] | .filename, (.previous_filename // empty)] | unique) as $pf
+        | if $af == null or $bf == null then "error:unparseable"
+          # The compare API truncates files[] at 300 entries (docs.github.com
+          # REST compare commits) — at exactly 300 a complete list is
+          # indistinguishable from a truncated one, so fail closed.
+          elif ($af | length) >= 300 or ($bf | length) >= 300 then "error:incomplete"
+          # Bijection, not subset: a merge whose tree DROPPED base-side content
+          # (empty or partial $af) must not certify -- the admin merge would
+          # revert main. The tuple includes previous_filename so a rename source
+          # is bound, and every patch must be a real string.
+          elif any($af[] + $bf[]; (.patch | type) != "string")
+               or ([$af[] | [.filename, .status, (.previous_filename // ""), .patch]] | sort)
+                  != ([$bf[] | [.filename, .status, (.previous_filename // ""), .patch]] | sort)
+          then "not-clean"
+          elif any($af[]; docs | not) then "nondocs"
+          elif any($af[]; [.filename, (.previous_filename // empty)]
+                          | .[] | . as $f | ($pf | index($f)) != null) then "overlap"
+          else "ok" end' 2>/dev/null) || { fail3 "unparseable compare response" api-error; return; }
+      if [[ "$lcl" == error:* ]]; then
+        fail3 "merge-delta compare is unparseable or truncated (${lcl#error:})" incomplete-files; return
+      fi
+      if [[ "$lcl" != "ok" ]]; then
+        MSG="GREEN-CARRYOVER refused: the local merge's added delta is not a clean docs-only replay of the base side, disjoint from the PR's files ($lcl)"
+        REASON="carryover-local-$lcl"; return 1
+      fi
+      CHECK_SHA="$GREEN_SHA"
+      REASON="carryover-local-docs"
+      MSG="GREEN-CARRYOVER: head $SHA is a clean local merge of $GREEN_SHA and $BASE@$p1 (docs-only delta, disjoint from the PR's files; --allow-local-merge); grading $GREEN_SHA's required contexts"
+    fi
   fi
 
   enc=$(jq -rn --arg b "$BASE" '$b|@uri')
@@ -263,7 +424,7 @@ check_once() {
   local out
   out=$(jq -c --slurpfile rules "$WORK/rules.json" --arg sha "$CHECK_SHA" '
     ["deletion","non_fast_forward","creation","update","required_linear_history",
-     "required_signatures","required_status_checks"] as $known
+     "required_signatures","required_status_checks","merge_queue"] as $known
     | ($rules[0] | add // []) as $all
     | ([$all[] | .type | select(. as $t | $known | index($t) | not)] | unique) as $unknown
     | ([$all[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]?]
@@ -316,16 +477,25 @@ check_once() {
   if jq -e 'has("error")' <<<"$out" >/dev/null; then
     MSG="ERROR: $(jq -r '.error' <<<"$out")"; REASON=$(jq -r '.reason' <<<"$out"); return 3
   fi
+  # ADR-276 S3: a FAILED `test` at the graded head may be the draft run's row. Ask the resolver, only then.
+  if [[ "$CHECK_SHA" == "$SHA" ]] && jq -e '.failed | index("test") != null' <<<"$out" >/dev/null 2>&1 && resolve_head_verdict; then
+    soften_test_row "$out"; out="$(cat "$WORK/soft.json" 2>/dev/null)"
+    jq -e 'type == "object" and (.lines | type) == "array"' <<<"$out" >/dev/null 2>&1 \
+      || { fail3 "adjusting the test verdict failed" api-error; return; }
+  fi
   N_REQ=$(jq -r '.req' <<<"$out")
   J_ABSENT=$(jq -c '.absent' <<<"$out")
   J_PENDING=$(jq -c '.pending' <<<"$out")
   J_FAILED=$(jq -c '.failed' <<<"$out")
   LINES=$(jq -r '.lines[]' <<<"$out")
   if jq -e '.req > 0 and .green == .req and (.lines | length) == 0' <<<"$out" >/dev/null; then
-    REASON="all-green"; return 0
+    # A carryover arm that already named itself (carryover-local-docs) keeps its
+    # reason; a plain or verified-carryover ready reads all-green as before.
+    [[ "$REASON" == "none" ]] && REASON="all-green"
+    return 0
   fi
   if [[ -z "$LINES" ]]; then fail3 "classifier counted $(jq -r '.green' <<<"$out") of $N_REQ green but named no culprit" api-error; return; fi
-  REASON="not-green"; return 1
+  REASON="${REASON_OVERRIDE:-not-green}"; return 1
 }
 
 finish() { # <rc> <verdict>

@@ -191,8 +191,8 @@ out10=$(invoke_hook "$T10")
 ctx10=$(printf '%s' "$out10" | jq -r '.hookSpecificOutput.additionalContext')
 # Both halves matter: the operator must see WHY, and the numerator must show 0
 # (a missing corpus that stamped "3 of 3" would be the governance blackout).
-if printf '%s' "$ctx10" | grep -q 'fail-safe: corpus missing' \
-   && printf '%s' "$ctx10" | grep -qE 'loaded: 0 of [0-9]+ rules'; then
+if printf '%s' "$ctx10" | grep -c >/dev/null 'fail-safe: corpus missing' \
+   && printf '%s' "$ctx10" | grep -cE >/dev/null 'loaded: 0 of [0-9]+ rules'; then
   echo "PASS: fail-closed on missing corpus (0-of-N + cause)"
   PASS=$((PASS+1))
 else
@@ -248,7 +248,7 @@ cp "$T13_NONREPO/../"*/AGENTS.rules.md "$T13_NONREPO/AGENTS.rules.md" 2>/dev/nul
 payload13=$(jq -nc --arg cwd "$T13_NONREPO" '{cwd: $cwd, session_id: "test-non-repo"}')
 out13=$(printf '%s' "$payload13" | "$HOOK" 2>/dev/null)
 ctx13=$(printf '%s' "$out13" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-if printf '%s' "$ctx13" | grep -q 'FALLBACK'; then
+if printf '%s' "$ctx13" | grep -c >/dev/null 'FALLBACK'; then
   echo "PASS: cwd outside git worktree → fallback emitted"
   PASS=$((PASS+1))
 else
@@ -265,7 +265,7 @@ rm -f "$T14/AGENTS.rules.md"
 ln -s "/tmp/loader-symlink-target-$$" "$T14/AGENTS.rules.md"
 out14=$(invoke_hook "$T14")
 ctx14=$(printf '%s' "$out14" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-if printf '%s' "$ctx14" | grep -q 'EXFIL_TARGET'; then
+if printf '%s' "$ctx14" | grep -c >/dev/null 'EXFIL_TARGET'; then
   echo "FAIL: symlinked corpus — content from /tmp leaked into context"
   FAIL=$((FAIL+1))
 else
@@ -285,8 +285,8 @@ echo "uncommitted A" > "$T15/dirty-a.txt"
 echo "uncommitted B" > "$T15/dirty-b.txt"
 out15=$(invoke_hook "$T15")
 ctx15=$(printf '%s' "$out15" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-if printf '%s' "$ctx15" | grep -qE '^\[session-context\] branch: main \| dirty: 2 files$' \
-   && printf '%s' "$ctx15" | grep -qF "[session-context] worktree: $T15"; then
+if printf '%s' "$ctx15" | grep -cE >/dev/null '^\[session-context\] branch: main \| dirty: 2 files$' \
+   && printf '%s' "$ctx15" | grep -cF >/dev/null "[session-context] worktree: $T15"; then
   echo "PASS: AC1 workspace fields (branch + dirty: 2 files + worktree)"
   PASS=$((PASS+1))
 else
@@ -300,9 +300,9 @@ T16=$(mktemp -d); setup_repo "$T16" docs both
 out16=$(invoke_hook "$T16")
 ctx16=$(printf '%s' "$out16" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 mcp16=$(printf '%s' "$ctx16" | grep -F '[session-context] MCP(committed-config):' | head -1 || true)
-if printf '%s' "$mcp16" | grep -q 'playwright' \
-   && printf '%s' "$mcp16" | grep -q 'context7' \
-   && printf '%s' "$mcp16" | grep -q 'stripe'; then
+if printf '%s' "$mcp16" | grep -c >/dev/null 'playwright' \
+   && printf '%s' "$mcp16" | grep -c >/dev/null 'context7' \
+   && printf '%s' "$mcp16" | grep -c >/dev/null 'stripe'; then
   echo "PASS: AC2 MCP roster unions .mcp.json + plugin.json ($mcp16)"
   PASS=$((PASS+1))
 else
@@ -317,8 +317,8 @@ out17_rc=0
 out17=$(invoke_hook "$T17") || out17_rc=$?
 ctx17=$(printf '%s' "$out17" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 if (( out17_rc == 0 )) \
-   && printf '%s' "$ctx17" | grep -qF '[session-context] MCP(committed-config): (none)' \
-   && printf '%s' "$ctx17" | grep -qF '[id: hr-test-core]'; then
+   && printf '%s' "$ctx17" | grep -cF >/dev/null '[session-context] MCP(committed-config): (none)' \
+   && printf '%s' "$ctx17" | grep -cF >/dev/null '[id: hr-test-core]'; then
   echo "PASS: AC3 fail-open missing config (roster=(none), exit 0, rule bodies present)"
   PASS=$((PASS+1))
 else
@@ -345,7 +345,7 @@ out18_rc=0
 out18=$(invoke_hook "$T18" "PATH=$GITSHIM:$PATH") || out18_rc=$?
 ctx18=$(printf '%s' "$out18" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 if (( out18_rc == 0 )) \
-   && printf '%s' "$ctx18" | grep -qE '^\[session-context\] branch: \(unknown\) \| dirty: [0-9]+ files$'; then
+   && printf '%s' "$ctx18" | grep -cE >/dev/null '^\[session-context\] branch: \(unknown\) \| dirty: [0-9]+ files$'; then
   echo "PASS: AC4 fail-open on branch-resolution failure (branch: (unknown), exit 0)"
   PASS=$((PASS+1))
 else
@@ -395,10 +395,10 @@ out20=$(invoke_hook "$T20") || out20_rc=$?
 ctx20=$(printf '%s' "$out20" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 mcp20=$(printf '%s' "$ctx20" | grep -F '[session-context] MCP(committed-config):' | head -1 || true)
 if (( out20_rc == 0 )) \
-   && printf '%s' "$mcp20" | grep -q 'context7' \
-   && printf '%s' "$mcp20" | grep -q 'stripe' \
-   && ! printf '%s' "$mcp20" | grep -q 'playwright' \
-   && printf '%s' "$ctx20" | grep -qF '[id: hr-test-core]'; then
+   && printf '%s' "$mcp20" | grep -c >/dev/null 'context7' \
+   && printf '%s' "$mcp20" | grep -c >/dev/null 'stripe' \
+   && ! printf '%s' "$mcp20" | grep -c >/dev/null 'playwright' \
+   && printf '%s' "$ctx20" | grep -cF >/dev/null '[id: hr-test-core]'; then
   echo "PASS: AC10 malformed .mcp.json → plugin.json keys only, exit 0 ($mcp20)"
   PASS=$((PASS+1))
 else
@@ -424,7 +424,7 @@ ctx21=$(printf '%s' "$out21" | jq -r '.hookSpecificOutput.additionalContext' 2>/
 mcp21=$(printf '%s' "$ctx21" | grep -F '[session-context] MCP(committed-config):' | head -1 || true)
 sc_count21=$(printf '%s' "$ctx21" | grep -cF '[session-context]' || true)
 l6_21=$(printf '%s' "$ctx21" | sed -n '6p')
-if printf '%s' "$mcp21" | grep -qE 'MCP\(committed-config\): abinjected$' \
+if printf '%s' "$mcp21" | grep -cE >/dev/null 'MCP\(committed-config\): abinjected$' \
    && [[ "$sc_count21" == "3" ]] \
    && [[ "$l6_21" != '[session-context]'* ]]; then
   echo "PASS: AC11 control-char sanitization (single clean token, 3 session-context lines)"
@@ -460,11 +460,11 @@ T22=$(mktemp -d); setup_repo "$T22" ""
 write_frontmatter_core "$T22"
 out22=$(invoke_hook "$T22")
 ctx22=$(printf '%s' "$out22" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-if printf '%s' "$ctx22" | grep -qF '[id: hr-test-core]' \
-   && printf '%s' "$ctx22" | grep -qF '[id: hr-never-git-stash-in-worktrees]' \
-   && ! printf '%s' "$ctx22" | grep -q 'last_reviewed:' \
-   && ! printf '%s' "$ctx22" | grep -q 'review_cadence:' \
-   && ! printf '%s' "$ctx22" | grep -qE '^\[rules-loader\] loaded:.*over-strip'; then
+if printf '%s' "$ctx22" | grep -cF >/dev/null '[id: hr-test-core]' \
+   && printf '%s' "$ctx22" | grep -cF >/dev/null '[id: hr-never-git-stash-in-worktrees]' \
+   && ! printf '%s' "$ctx22" | grep -c >/dev/null 'last_reviewed:' \
+   && ! printf '%s' "$ctx22" | grep -c >/dev/null 'review_cadence:' \
+   && ! printf '%s' "$ctx22" | grep -cE >/dev/null '^\[rules-loader\] loaded:.*over-strip'; then
   echo "PASS: AC6 main-concat strips frontmatter, keeps rules"
   PASS=$((PASS+1))
 else
@@ -482,10 +482,10 @@ write_frontmatter_core "$T23"
 payload23=$(jq -nc --arg cwd "$T23" '{cwd: $cwd, session_id: "fallback-strip"}')
 out23=$(printf '%s' "$payload23" | "$HOOK" 2>/dev/null)
 ctx23=$(printf '%s' "$out23" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-if printf '%s' "$ctx23" | grep -q 'FALLBACK' \
-   && printf '%s' "$ctx23" | grep -qF '[id: hr-test-core]' \
-   && ! printf '%s' "$ctx23" | grep -q 'last_reviewed:' \
-   && ! printf '%s' "$ctx23" | grep -q 'review_cadence:'; then
+if printf '%s' "$ctx23" | grep -c >/dev/null 'FALLBACK' \
+   && printf '%s' "$ctx23" | grep -cF >/dev/null '[id: hr-test-core]' \
+   && ! printf '%s' "$ctx23" | grep -c >/dev/null 'last_reviewed:' \
+   && ! printf '%s' "$ctx23" | grep -c >/dev/null 'review_cadence:'; then
   echo "PASS: AC6 core-only fallback (:50) strips frontmatter, keeps rules"
   PASS=$((PASS+1))
 else
@@ -514,9 +514,9 @@ review_cadence: monthly
 CORE
 out24=$(invoke_hook "$T24")
 ctx24=$(printf '%s' "$out24" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-if printf '%s' "$ctx24" | grep -qF '[id: hr-test-core]' \
-   && printf '%s' "$ctx24" | grep -qF '[id: hr-never-git-stash-in-worktrees]' \
-   && printf '%s' "$ctx24" | grep -qE '^\[rules-loader\] loaded:.*over-strip'; then
+if printf '%s' "$ctx24" | grep -cF >/dev/null '[id: hr-test-core]' \
+   && printf '%s' "$ctx24" | grep -cF >/dev/null '[id: hr-never-git-stash-in-worktrees]' \
+   && printf '%s' "$ctx24" | grep -cE >/dev/null '^\[rules-loader\] loaded:.*over-strip'; then
   echo "PASS: AC6 malformed frontmatter → over-strip guard injects raw (no rule lost) + loud note"
   PASS=$((PASS+1))
 else
@@ -548,7 +548,7 @@ TOTAL=$((TOTAL+1))
 rm -f "$ALARM_FIX" "$HB_FIX"
 ctx_alarm_none=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
   | jq -r '.hookSpecificOutput.additionalContext')
-if ! printf '%s' "$ctx_alarm_none" | grep -qF '[tmpfs-guard]'; then
+if ! printf '%s' "$ctx_alarm_none" | grep -cF >/dev/null '[tmpfs-guard]'; then
   echo "PASS: AC-T1 no alarm file → nothing injected"
   PASS=$((PASS+1))
 else
@@ -567,7 +567,7 @@ ctx_alarm=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD
 al3=$(printf '%s' "$ctx_alarm" | sed -n '3p')
 al4=$(printf '%s' "$ctx_alarm" | sed -n '4p')
 al5=$(printf '%s' "$ctx_alarm" | sed -n '5p')
-if printf '%s' "$ctx_alarm" | grep -qF '/tmp at 91%' \
+if printf '%s' "$ctx_alarm" | grep -cF >/dev/null '/tmp at 91%' \
    && [[ "$al3" == '[session-context]'* ]] \
    && [[ "$al4" == '[session-context]'* ]] \
    && [[ "$al5" == '[session-context]'* ]]; then
@@ -611,9 +611,9 @@ ctx_fresh=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD
 rm -f "$HB_FIX"
 ctx_absent=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
   | jq -r '.hookSpecificOutput.additionalContext')
-if printf '%s' "$ctx_stale" | grep -qF 'no completed run' \
-   && ! printf '%s' "$ctx_fresh" | grep -qF 'no completed run' \
-   && ! printf '%s' "$ctx_absent" | grep -qF 'no completed run'; then
+if printf '%s' "$ctx_stale" | grep -cF >/dev/null 'no completed run' \
+   && ! printf '%s' "$ctx_fresh" | grep -cF >/dev/null 'no completed run' \
+   && ! printf '%s' "$ctx_absent" | grep -cF >/dev/null 'no completed run'; then
   echo "PASS: AC-T4 stale heartbeat reported; fresh and absent stay silent"
   PASS=$((PASS+1))
 else
@@ -662,8 +662,8 @@ fi
 TOTAL=$((TOTAL+1))
 code26=$(grep -vE '^[[:space:]]*#' "$HOOK")
 bad26=""
-printf '%s' "$code26" | grep -qE 'AGENTS[^"[:space:]]*\*' && bad26="glob spanning the index"
-printf '%s' "$code26" | grep -qE 'TOTAL_RULES=.*\$(CONTEXT|CORPUS)' && bad26="denominator derived from loaded sidecars"
+printf '%s' "$code26" | grep -cE >/dev/null 'AGENTS[^"[:space:]]*\*' && bad26="glob spanning the index"
+printf '%s' "$code26" | grep -cE >/dev/null 'TOTAL_RULES=.*\$(CONTEXT|CORPUS)' && bad26="denominator derived from loaded sidecars"
 if [[ -z "$bad26" ]]; then
   echo "PASS: denominator derives from a fixed expected set"
   PASS=$((PASS+1))
@@ -744,7 +744,7 @@ TOTAL=$((TOTAL+1))
 T29=$(mktemp -d); LATE_TMPDIRS+=("$T29"); setup_repo "$T29" code
 rm -f "$T29/AGENTS.rules.md"; ln -s /dev/null "$T29/AGENTS.rules.md"
 stamp29=$(invoke_hook "$T29" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
-if printf '%s' "$stamp29" | grep -qF 'symlink'; then
+if printf '%s' "$stamp29" | grep -cF >/dev/null 'symlink'; then
   echo "PASS: fail-safe names the symlink rejection, not a phantom missing file"
   PASS=$((PASS+1))
 else
@@ -764,7 +764,7 @@ ctx30=$(printf '%s' "$out30" | jq -r '.hookSpecificOutput.additionalContext' 2>/
 # is too weak: a PARTIAL corpus is 'present', so a 3-of-101 fallback rendered
 # byte-identical to a healthy one. Assert the NUMERATOR shape instead, which
 # also makes the `loaded: N of M` liveness probe total on this path.
-if printf '%s' "$ctx30" | grep -qE 'loaded: 0 of [0-9?]+ rules'; then
+if printf '%s' "$ctx30" | grep -cE >/dev/null 'loaded: 0 of [0-9?]+ rules'; then
   echo "PASS: fallback stamps a 0-of-N numerator when the corpus is unreadable"
   PASS=$((PASS+1))
 else
@@ -779,7 +779,7 @@ T31=$(mktemp -d); LATE_TMPDIRS+=("$T31")   # deliberately NOT a git repo -> fall
 printf '# Index\n## Hard Rules\n- [id: hr-a]\n- [id: hr-b]\n- [id: hr-c]\n' > "$T31/AGENTS.md"
 printf '# R\n## Hard Rules\n- one [id: hr-a].\n' > "$T31/AGENTS.rules.md"
 ctx31=$(printf '{"cwd":"%s"}' "$T31" | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
-if printf '%s' "$ctx31" | grep -qE 'loaded: 1 of 3 rules'; then
+if printf '%s' "$ctx31" | grep -cE >/dev/null 'loaded: 1 of 3 rules'; then
   echo "PASS: fallback distinguishes a partial corpus (1 of 3) from a full load"
   PASS=$((PASS+1))
 else
@@ -831,7 +831,7 @@ mkdir -p "$T33/apps/web"
 ctx33=$(invoke_hook "$T33/apps/web" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 m33=$(printf '%s' "$ctx33" | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1) || true
 n33=$(grep -c '^- \[id: ' "$T33/AGENTS.md") || true
-if printf '%s' "$ctx33" | grep -qE "loaded: ${n33} of ${n33} rules" \
+if printf '%s' "$ctx33" | grep -cE >/dev/null "loaded: ${n33} of ${n33} rules" \
    && [[ -n "$m33" && "$m33" == "$T33/.claude/.session-manifests/"* && -f "$m33" ]] \
    && [[ ! -e "$T33/apps/web/.claude" ]]; then
   echo "PASS: subdirectory cwd loads ${n33} of ${n33} rules and writes the manifest at the worktree root"

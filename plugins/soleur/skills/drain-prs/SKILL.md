@@ -39,7 +39,7 @@ Use `merge-pr` for a single named PR. Use `drain-labeled-backlog` for labeled *i
 
 Optional flags (any subset):
 
-- `--tiers <list>` — comma-separated tiers to drain (e.g., `ready-green,needs-lockfile-fix`). Default: prompt for tier scope at the decision gate. Tiers: `ready-green`, `needs-lockfile-fix`, `needs-conflict-resolution`, `needs-review`, `broken`. Drafts are always excluded.
+- `--tiers <list>` — comma-separated tiers to drain (e.g., `ready-green,needs-lockfile-fix`). Default: prompt for tier scope at the decision gate. Tiers: `ready-green`, `needs-lockfile-fix`, `needs-conflict-resolution`, `needs-review`, `broken`, plus `ready-unarmed` (recover-only, never armed). Drafts are always excluded.
 - `--pr <N,…>` — restrict the whole run to an explicit set of PR numbers (still triaged + still gated).
 - `--dry-run` — print the full tier table and exit with zero merges and zero delegation. More valuable here than in the sibling because this skill *merges*.
 
@@ -57,7 +57,7 @@ Delegate to the helper [triage-prs.sh](./scripts/triage-prs.sh):
 bash "${CLAUDE_PLUGIN_ROOT}/skills/drain-prs/scripts/triage-prs.sh"
 ```
 
-The helper runs `gh pr list --state open --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup` (two-stage `gh --json … | jq`, never `gh --jq` with `--arg` — learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`) and classifies each PR into **six tiers**:
+The helper runs `gh pr list --state open --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup` (two-stage `gh --json … | jq`, never `gh --jq` with `--arg` — learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`) and classifies each PR into **seven tiers**:
 
 | Tier | Signal | Default handling |
 |------|--------|------------------|
@@ -65,6 +65,7 @@ The helper runs `gh pr list --state open --json number,title,headRefName,isDraft
 | `needs-lockfile-fix` | deps PR (`labels` has `dependencies`) failing `lockfile-sync` / `test-webplat` / `e2e` on a frozen-install step | fix-recipe (a) → merge |
 | `needs-conflict-resolution` | `mergeable=CONFLICTING`, few/no other failures | fix-recipe (b) → merge |
 | `needs-review` | `bot-fix/review-required` label, or a feature PR with no review | review (delegate or inline) → merge |
+| `ready-unarmed` | ready PR whose head verdict (`ci-head-verdict.sh`) is `no-run` or `stalled`: no full CI run exists, the red `test` row is the draft run's. `awaiting-approval` is not here: it lands in `needs-review` (the line shows `ci=awaiting-approval`; a maintainer must approve the fork run) | **recover, never arm**, unless another session is still inside `wait-ready-run` for it: `gh pr ready --undo <N>`, then the whole ready block ([ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md)), then re-triage |
 | `drafts` | `isDraft=true` | **skip** — author-owned WIP, never merged |
 | `broken` | `CONFLICTING` **and** many failing checks | surface; fix only if in explicit scope |
 
@@ -76,14 +77,16 @@ Present the tier table via `AskUserQuestion`. The operator selects which tiers t
 
 ### 4. Per in-scope PR — ensure green, then merge
 
-For each selected PR: bring it to green via the fix-recipes below if needed, then:
+For each selected PR: bring it to green via the fix-recipes below if needed, then arm it (under the merge queue this ENQUEUES the PR; it is not yet merged). A `ready-unarmed` PR (readied, but no full CI run exists) is NOT armed: recover it first (`gh pr ready --undo <N>` with a user token, then the whole block below; `GITHUB_TOKEN` cannot ready a PR). A draft the operator authorizes is readied the same way and armed only once `K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count <N>) && gh pr ready <N> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run <N> --before-count "$K"` exits 0 (one Bash call, `timeout: 420000`; reasons and recoveries: [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md)); on non-zero report "readied but unarmed" with the last stdout line and arm nothing:
 
 ```bash
-gh pr merge <N> --squash
+gh pr merge <N> --squash --auto
 ```
 
-- **Merge queue active on `main`** (the current default — adopted via the `merge_queue` Terraform ruleset): `gh pr merge --squash` **enqueues** the PR; the queue handles `update-branch` + serialization + the final merge automatically. Do not hand-roll update/wait loops.
-- **Queue inactive (fallback):** if the merge is rejected for "not up to date", run `gh pr update-branch <N>` — **but never when both sides moved the `knowledge-base/` file count**, which a server-side merge resolves without the `kb-index` driver; merge `origin/main` locally and push instead (see [merge-pr/SKILL.md](../merge-pr/SKILL.md) §"A SERVER-SIDE update cannot run the driver"), then wait for CI to go green using **Claude: Monitor tool** / **Grok: AwaitShell** (`plugins/soleur/lib/harness.ts` `pollInstructions()`) — NEVER a backgrounded poll loop (`hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge. Because every merge re-bases the rest under strict protection, merges serialize one at a time.
+- **Never arm a cross-repository (fork) PR, or one touching `.github/**`, without explicit operator confirmation.** `merge_group` runs the candidate's workflows in the base-repo context with repo secrets, so a pre-queue-green fork or workflow edit can exfiltrate them before anyone reads a run. Check each PR before arming: `gh pr view <N> --json isCrossRepository --jq .isCrossRepository` and `gh api repos/{owner}/{repo}/pulls/<N>/files --paginate --jq '.[].filename | select(startswith(".github/"))'` (not `gh pr view --json files`: it stops at 100 files, so a large PR could hide a workflow edit); `true` or any output means stop and ask (the tier confirmation at the decision gate does not cover it).
+- **Merge queue is active on `main`** (#9454, ADR-270; the `merge_queue` rule lives in `infra/github/ruleset-ci-required.tf`) — `gh pr merge <N> --squash --auto` **enqueues** the PR (a green PR enqueues, so the bullet and the block above agree); the queue handles the up-to-date merge, serialization and the final merge automatically — do not hand-roll update/wait loops, and never push `gh pr update-branch` or a merge of `origin/main` to a PR that is in the queue (a push dequeues it). An admin-bypass merge (only via [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md)) is the last resort, not the drain path. CodeQL is advisory on `main` (it reports no status on `merge_group`); the post-merge `codeql-main-alert-gate.yml` run is the signal. History: a first adoption (#5800) was reverted the same day for exactly that reason (ADR-032 amendment, upstream `github/codeql-action#1537`); #5840 stays open as the upstream tracker.
+- **Dequeue arm — a PR that leaves the queue.** When CI is red on the queue's temp ref `gh-readonly-queue/main/pr-<N>-<sha>`, the failing check-run is on the queue SHA, not the PR head, so `gh pr checks <N>` still reads green. Read the run instead: `gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '.[] | select(.headBranch | startswith("gh-readonly-queue/main/pr-<N>-"))'`, (about 8 runs per queue entry, so a smaller `--limit` can miss the PR on a busy queue), then diagnose the failing job from that run. The dequeue is silent (a `failed_checks` removal is re-queued by GitHub 2 to 3.5 minutes later while auto-merge normally stays armed; a red advisory job does not dequeue, so do not push over it): the PR stays OPEN, so `gh pr view <N> --json state,autoMergeRequest` reads `OPEN` with auto-merge armed (`autoMergeRequest` set) or disarmed (`null`); section 7's wait names it (`LEFT THE MERGE QUEUE UNMERGED`, reason from the queue's removal event). Recipe: [merge-queue-dequeue.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md). On a conflict or lockfile / `kb-index` drift, the local arm is: merge `origin/main` into the PR branch (merge-pr §3.1 "Route conflicts"), push only for a failure that will recur, and re-arm `gh pr merge <N> --squash --auto` only when `autoMergeRequest` is `null` (the recipe's steps 2 and 3 win over any shorter inline recovery text). Cap it at ONE re-enqueue per PR before escalating to the operator.
+- **Armed on a merge-queue repo, not yet enqueued: leave it alone** until `[ship.phase7.queue_wait_expired]` (an armed PR that merely reads BEHIND is waiting for GitHub to enqueue it; the ship Phase 7 poll prints `[ship.phase7.queue_wait]`, and `sync-pr-behind.sh` itself refuses it with `kind=queue_wait`; never `gh pr update-branch` it). **Otherwise, if the PR is not in the queue** (an admin-bypass path, or a rejection that names "not up to date"), run `gh pr update-branch <N>` — **but never when both sides moved the `knowledge-base/` file count**, which a server-side merge resolves without the `kb-index` driver; merge `origin/main` locally and push instead (see [merge-pr/SKILL.md](../merge-pr/SKILL.md) §3.1 "Route conflicts"), then wait for CI to go green using **Claude: Monitor tool** / **Grok: AwaitShell** (`plugins/soleur/lib/harness.ts` `pollInstructions()`) — NEVER a backgrounded poll loop (`hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge.
 
 ### 5. Review delegation
 
@@ -107,11 +110,13 @@ See `knowledge-base/project/learnings/workflow-patterns/2026-06-30-update-branch
 
 ### 7. Cleanup + report
 
+Arming returns at ENQUEUE, not at merge. Run `cleanup-merged` only once the PRs it should reap read `MERGED`. Wait on each enqueued PR with a BOUND (90 polls x 60s, the Phase 7 cap), through the Monitor tool / AwaitShell (never a backgrounded loop): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/monitor-pr-checks.sh" <N> --interval 60 --max-polls 90`. It reads the merge queue (`sync-pr-behind.sh <N> --queue-state`) and ends `MERGED`, or `LEFT THE MERGE QUEUE UNMERGED` with the removal reason (the dequeue arm above: ONE re-enqueue, then report), or a timeout; it never syncs or pushes. An enqueued PR that never reaches `MERGED` is that dequeue arm, not a merged PR:
+
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged
 ```
 
-Report the drain delta: before/after open-PR count and the per-tier outcome (merged / skipped / deferred).
+Report the drain delta: before/after open-PR count and the per-tier outcome (merged / enqueued / skipped / deferred), listing an enqueued PR as enqueued until it reads `MERGED`.
 
 ## Pipeline detection
 
@@ -119,11 +124,11 @@ If `$ARGUMENTS` contains a `RETURN CONTRACT` section (i.e., this skill is being 
 
 ## Sharp edges
 
-- **Drafts are always skipped.** A draft PR is author-owned WIP; merging it would ship incomplete work. No flag overrides this.
-- **`gh pr merge --squash` cannot bypass server-side required checks.** Branch protection enforces `CI Required` server-side, so a mis-triaged red PR fails *loudly* at merge time rather than silently landing — the triage is an optimization, not the safety boundary.
+- **Drafts are skipped unless the operator names one.** A draft PR is author-owned WIP; merging it would ship incomplete work. The only exception is a draft the operator explicitly authorizes in the request (readied and armed through the block above); no flag selects drafts.
+- **`gh pr merge --squash --auto` cannot bypass server-side required checks.** Branch protection enforces `CI Required` and the merge queue re-runs the checks on its own candidate, so a mis-triaged red PR never lands — but under the queue it does not fail at merge time: a red candidate is a SILENT dequeue (the PR stays OPEN, auto-merge disarmed). See it with the dequeue arm in step 4 (`gh run list --event merge_group`, or `gh pr view <N> --json state,autoMergeRequest`); the triage is an optimization, not the safety boundary.
 - **An operator-authorized admin merge removes the server-side check the bullet above relies on.** It goes through [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) step 2 (`"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`, which must exit 0) and that file's merge block, never through a `gh pr checks --required` watch (#8458, #8500). For a PR that is BEHIND with the new head's checks unsettled, "CI was green" is encoded as `--green-sha <prior-green-sha>`: it certifies the current head only when that head is GitHub's own verified merge of the green sha and the base — see the reference's "was-green carryover" section.
 - **The two `2026-06-30-*` learnings and ADR-033 §Registration checklist** referenced in the fix-recipes landed in PR #5808 — they are on `main`. If a future reorg moves them, update the paths here.
-- **Never poll CI from a backgrounded Bash loop.** Use the Monitor tool (Claude) or AwaitShell (Grok) for the queue-inactive CI wait (`hr-monitor-not-run-in-background-for-polling`).
+- **Never poll CI from a backgrounded Bash loop.** Use the Monitor tool (Claude) or AwaitShell (Grok) for the post-`update-branch` CI wait (`hr-monitor-not-run-in-background-for-polling`).
 - **Lockfile drift reads as a *test* failure, not a lockfile error.** A red `test-webplat`/`e2e` shard on a deps PR is usually recipe (a), not a real regression — check the install step before assuming the bump broke something.
 
 ## Test
@@ -134,4 +139,4 @@ Unit tests live at [drain-prs.test.sh](../../test/drain-prs.test.sh). Run them w
 bash plugins/soleur/test/drain-prs.test.sh
 ```
 
-Covers: one synthetic PR per tier (ready-green, lockfile-fail, conflicting, review-required, draft, broken), an empty-list case, and the tier-grouped JSON output shape.
+Covers: one synthetic PR per tier (ready-green, lockfile-fail, conflicting, review-required, draft, broken), the head-verdict rows (`ready-unarmed`, pending-full / decided / awaiting-approval, resolver error), an empty-list case, and the tier-grouped JSON output shape.

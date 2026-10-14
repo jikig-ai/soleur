@@ -9,7 +9,10 @@
 // in that exact shape (cq-test-fixtures-synthesized-only) — no LLM in the
 // assertion path.
 import { describe, it, expect } from "vitest";
-import { classifySandboxStartupError } from "@/server/sandbox-startup-classifier";
+import {
+  classifySandboxStartupError,
+  classifyBashSandboxFailure,
+} from "@/server/sandbox-startup-classifier";
 
 // The #5873 shape: bwrap fails to set up the userns after the split unshare()
 // because the container seccomp profile denied the second unshare() call.
@@ -50,6 +53,17 @@ describe("classifySandboxStartupError — sandboxKind (Phase-0 shape, #5875)", (
     );
     expect(c.sandboxKind).toBe("seccomp_or_userns_denial");
     expect(c.errorCode).toBe("bwrap_error");
+  });
+
+  it("tags the #8752 PATH-shim refusal marker as a sandbox-namespace denial", () => {
+    // The shim fails closed with `bwrap-shim: <cause>` + exit 65 — the
+    // `bwrap` token inside the marker routes it to seccomp_or_userns_denial,
+    // not a generic environment error.
+    const c = classifySandboxStartupError(
+      new Error("Command failed with exit code 65: bwrap-shim: seccomp artifact not readable: /app/infra/bwrap-userns-clone3-deny.bpf"),
+      "0.3.197",
+    );
+    expect(c.sandboxKind).toBe("seccomp_or_userns_denial");
   });
 
   it("does NOT mis-tag a generic model/API error (no sandbox token)", () => {
@@ -113,3 +127,96 @@ describe("classifySandboxStartupError — sandboxKind (Phase-0 shape, #5875)", (
 // covered end-to-end by test/agent-runner-sandbox-config.test.ts (positive:
 // iterator-throw still tags with streamStartSent===true) and
 // test/cc-dispatcher-real-factory.test.ts (T16).
+
+// #10032 (ADR-075 addendum 2026-10-11) — a Bash tool_result whose output carries a bwrap denial. The session-start
+// classifier above only sees errors THROWN out of the SDK iterator; a failed sandbox spawn that the SDK returns to
+// the model as a tool_result (the shape the shim's fresh `--proc /proc` refusal takes under docker's masked /proc)
+// reached Sentry as nothing. Fixtures use bwrap's REAL stderr text, never a paraphrase.
+describe("classifyBashSandboxFailure — Bash tool_result sandbox denial (#10032)", () => {
+  const PROC_MOUNT_EPERM = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
+
+  it("classifies the shim's fresh-procfs refusal as proc_mount_eperm and returns ONLY the matched line", () => {
+    const f = classifyBashSandboxFailure(PROC_MOUNT_EPERM, "0.3.284");
+    expect(f).not.toBeNull();
+    expect(f?.errorCode).toBe("proc_mount_eperm");
+    expect(f?.sdkVersion).toBe("0.3.284");
+    expect(f?.matchedLine).toBe(PROC_MOUNT_EPERM);
+  });
+
+  it("data minimisation: a secret-looking neighbour line never reaches the result (Art. 5(1)(c))", () => {
+    const secretLine = "DATABASE_URL=postgres://user:hunter2@db.internal/prod";
+    const out = `${secretLine}\n${PROC_MOUNT_EPERM}\nsk-ant-api03-notarealkeynotarealkeynotarealkey\n`;
+    const f = classifyBashSandboxFailure(out, "0.3.284");
+    expect(f?.matchedLine).toBe(PROC_MOUNT_EPERM);
+    expect(JSON.stringify(f)).not.toContain("hunter2");
+    expect(JSON.stringify(f)).not.toContain("sk-ant-api03");
+  });
+
+  it("scrubs every absolute path root, opaque tokens and control characters, keeping bwrap's /newroot targets", () => {
+    const line = "bwrap: \u0007Can't mount proc on /newroot/proc: Operation not permitted /home/soleur/.ssh/id_rsa /var/lib/soleur/x " +
+      "sk-ant-api03-notarealkeynotarealkeynotarealkey";
+    const f = classifyBashSandboxFailure(line, null);
+    expect(f?.matchedLine).toContain("/newroot/proc");
+    for (const leaked of ["/home/", "/var/lib/", "sk-ant-api03", "id_rsa", "\u0007"]) {
+      expect(f?.matchedLine).not.toContain(leaked);
+    }
+  });
+
+  it("is linear on a hostile 100k-char slash-heavy line (shared event loop; measured 17s on a quadratic scrub)", () => {
+    for (const hostile of ["/a".repeat(50_000), "/".repeat(100_000), "/a/a/a/a/".repeat(12_000)]) {
+      const t0 = performance.now();
+      const f = classifyBashSandboxFailure(`bwrap EPERM ${hostile}`, null);
+      expect(performance.now() - t0).toBeLessThan(250);
+      expect(f?.matchedLine.length).toBeLessThanOrEqual(300);
+    }
+  });
+
+  it("scrubs workspace paths and uuids out of the matched line", () => {
+    const uuid = "754ee124-706a-4f21-a4f4-e828257b0380";
+    const line = `bwrap: Can't bind mount /workspaces/${uuid}/repo on /newroot/workspaces/${uuid}/repo: Operation not permitted`;
+    const f = classifyBashSandboxFailure(line, null);
+    expect(f).not.toBeNull();
+    expect(f?.matchedLine).not.toContain(uuid);
+    expect(f?.matchedLine).not.toContain("/workspaces/");
+    expect(f?.matchedLine).toContain("Operation not permitted");
+  });
+
+  it("caps the matched line (no unbounded tool output reaches Sentry)", () => {
+    const f = classifyBashSandboxFailure(`bwrap: Operation not permitted ${"x y ".repeat(2000)}`, null);
+    expect(f).not.toBeNull();
+    expect(f!.matchedLine.length).toBeLessThanOrEqual(300);
+  });
+
+  it("classifies a generic bwrap namespace EPERM as bwrap_eperm", () => {
+    const f = classifyBashSandboxFailure("bwrap: Creating new namespace failed: Operation not permitted", null);
+    expect(f?.errorCode).toBe("bwrap_eperm");
+  });
+
+  it("returns null for an ordinary permission error with no sandbox token", () => {
+    expect(classifyBashSandboxFailure("cat: /etc/shadow: Permission denied", null)).toBeNull();
+    expect(classifyBashSandboxFailure("rm: cannot remove 'x': Operation not permitted", null)).toBeNull();
+  });
+
+  it("near-miss negatives: an agent's own unshare/seccomp EPERM, and a denial on a DIFFERENT line than the token", () => {
+    expect(classifyBashSandboxFailure("unshare: unshare failed: Operation not permitted", null)).toBeNull();
+    expect(classifyBashSandboxFailure("seccomp: EPERM", null)).toBeNull();
+    expect(classifyBashSandboxFailure("bwrap: starting\nrm: x: Operation not permitted", null)).toBeNull();
+  });
+
+  it("scrubs a bare uuid and caps at exactly 300", () => {
+    const uuid = "754ee124-706a-4f21-a4f4-e828257b0380";
+    const f = classifyBashSandboxFailure(`bwrap: Operation not permitted for ${uuid} ${"w ".repeat(400)}`, null);
+    expect(f?.matchedLine).toContain("<uuid>");
+    expect(f?.matchedLine).not.toContain(uuid);
+    expect(f?.matchedLine.length).toBe(300);
+  });
+
+  it("returns null when the output merely MENTIONS bwrap without a denial on the same line", () => {
+    expect(classifyBashSandboxFailure("$ which bwrap\n/usr/local/bin/bwrap\n", null)).toBeNull();
+    expect(classifyBashSandboxFailure("bubblewrap 0.8.0", null)).toBeNull();
+  });
+
+  it("returns null for empty input", () => {
+    expect(classifyBashSandboxFailure("", null)).toBeNull();
+  });
+});

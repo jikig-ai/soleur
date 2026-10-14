@@ -250,7 +250,7 @@ expect "passing dataset (fresh, p95<15min) exits 0" 0 "PASS:"
 #     silently under-samples >30-job runs — a downward-biased p95 that can
 #     fabricate a PASS. Assert against the stub's argv log.
 if grep -qE 'runs/[0-9]+/jobs' "$WORK/fix/calls.log" \
-   && ! grep -E 'runs/[0-9]+/jobs' "$WORK/fix/calls.log" | grep -qv -- '--paginate'; then
+   && ! grep -E 'runs/[0-9]+/jobs' "$WORK/fix/calls.log" | grep -cv >/dev/null -- '--paginate'; then
   pass "every jobs call carries --paginate"
 else
   fail "a jobs call was issued without --paginate: $(grep -E 'runs/[0-9]+/jobs' "$WORK/fix/calls.log" | grep -v -- '--paginate' | head -1)"
@@ -403,7 +403,7 @@ write_runs "$WORK/fix/runs.json" \
 for id in 2001 2002 2003 2004 2005; do jobs_fixture "$WORK/fix/jobs-$id.json" 30 60; done
 out="$(env -i PATH="$WORK/bin:/usr/bin:/bin" HOME="$WORK" GH_TOKEN=fake \
       FIXTURE_DIR="$WORK/fix" SOLEUR_FT_EARLIEST="$CUTOFF" bash "$PROBE" 2>&1)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'PASS'; then
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -c >/dev/null 'PASS'; then
   pass "SOLEUR_FT_EARLIEST clock feeds the cutoff"
 else
   fail "SOLEUR_FT_EARLIEST clock (rc=$rc; out: $(printf '%s' "$out" | tail -3))"
@@ -412,7 +412,7 @@ fi
 # 13. Missing clock: no UPGRADE_NOT_BEFORE / SOLEUR_FT_EARLIEST -> NOT YET
 #     (exit 2 + marker — a crash must not satisfy "non-zero").
 out="$(env -i PATH="$WORK/bin:/usr/bin:/bin" HOME="$WORK" GH_TOKEN=fake FIXTURE_DIR="$WORK/fix" bash "$PROBE" 2>&1)"; rc=$?
-if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'NOT YET'; then
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -c >/dev/null 'NOT YET'; then
   pass "missing clock is NOT YET (exit 2)"
 else
   fail "missing clock (want rc=2+NOT YET; got rc=$rc; out: $(printf '%s' "$out" | tail -3))"
@@ -420,7 +420,7 @@ fi
 
 # 14. Unparseable clock -> NOT YET (exit 2), never a crash into sampling.
 out="$(env -i PATH="$WORK/bin:/usr/bin:/bin" HOME="$WORK" GH_TOKEN=fake FIXTURE_DIR="$WORK/fix" UPGRADE_NOT_BEFORE='not a date' bash "$PROBE" 2>&1)"; rc=$?
-if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'NOT YET'; then
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -c >/dev/null 'NOT YET'; then
   pass "unparseable clock is NOT YET (exit 2)"
 else
   fail "unparseable clock (rc=$rc; out: $(printf '%s' "$out" | tail -3))"
@@ -430,7 +430,7 @@ fi
 #      (`now`, `today`, `@epoch`) — `earliest=` is issue-body data and must be
 #      canonical ISO-8601 Z at read time, not merely date-parseable.
 out="$(env -i PATH="$WORK/bin:/usr/bin:/bin" HOME="$WORK" GH_TOKEN=fake FIXTURE_DIR="$WORK/fix" UPGRADE_NOT_BEFORE='now' bash "$PROBE" 2>&1)"; rc=$?
-if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'NOT YET'; then
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -c >/dev/null 'NOT YET'; then
   pass "natural-language clock is NOT YET (exit 2)"
 else
   fail "natural-language clock (want rc=2+NOT YET; got rc=$rc)"

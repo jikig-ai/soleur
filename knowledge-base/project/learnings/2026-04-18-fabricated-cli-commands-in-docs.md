@@ -24,7 +24,7 @@ The command reached three shipped surfaces (site FAQ callout, plugin README, rep
 
 The content flowed through plan → work → review → merge without any step that verified the CLI invocation against reality:
 
-- `soleur:plan` treated the unverified string as authoritative (see `knowledge-base/project/specs/feat-docs-ollama-instructions/session-state.md` — explicitly names the fabricated command as the spec's payload).
+- `soleur:plan` treated the unverified string as authoritative (see `knowledge-base/project/specs/archive/20261013-003106-feat-docs-ollama-instructions/session-state.md` — explicitly names the fabricated command as the spec's payload).
 - `soleur:work` implemented the plan verbatim (correct behavior for planned content).
 - `soleur:review` caught no issue — `pattern-recognition-specialist` checks DOM/markup patterns, not CLI validity; `security-sentinel` checks code-execution paths, not content accuracy.
 - Eleventy build passed (fabricated strings parse as valid HTML/JSON).
@@ -51,4 +51,4 @@ Filed #2566 to add a CLI-verification gate. Until then, when prescribing a CLI i
 
 - #1810 (introducing PR) → #2549 (parent audit) → #2550 (P0 fix ticket) → #2563 (this PR) → #2566 (systemic gate).
 - Precedent: `2026-03-26-case-study-three-location-citation-consistency.md` (same class of three-location sync discipline).
-- Root-cause spec: `knowledge-base/project/specs/feat-docs-ollama-instructions/session-state.md`.
+- Root-cause spec: `knowledge-base/project/specs/archive/20261013-003106-feat-docs-ollama-instructions/session-state.md`.

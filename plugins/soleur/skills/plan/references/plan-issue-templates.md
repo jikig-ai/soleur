@@ -65,6 +65,9 @@ closes: [N]
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -165,7 +168,35 @@ the members must flow through, and if there is more than one, say so.>
 Write the matrix BEFORE the guard. A matrix derived from finished code tests the
 code that exists; one derived from the design tests the property.
 
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
+
 ## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
 
 - [ ] Core requirement 1
 - [ ] Core requirement 2
@@ -176,6 +207,8 @@ Derive from acceptance criteria. Use Given/When/Then format for logic tests, and
 
 - Given [precondition], when [action], then [expected result]
 - Given [edge case], when [action], then [expected handling]
+
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
 
 If the feature touches external services, include verification commands:
 
@@ -265,6 +298,9 @@ List ALL code paths that touch the security surface being fixed:
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -365,7 +401,35 @@ the members must flow through, and if there is more than one, say so.>
 Write the matrix BEFORE the guard. A matrix derived from finished code tests the
 code that exists; one derived from the design tests the property.
 
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
+
 ## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
 
 - [ ] Detailed requirement 1
 - [ ] Detailed requirement 2
@@ -377,6 +441,8 @@ Translate each acceptance criterion into a testable scenario:
 
 - Given [precondition], when [action], then [expected result]
 - Given [error condition], when [action], then [graceful handling]
+
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
 
 Include regression scenarios for any bugs this work addresses.
 
@@ -478,6 +544,9 @@ closes: [N]
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -580,7 +649,35 @@ the members must flow through, and if there is more than one, say so.>
 Write the matrix BEFORE the guard. A matrix derived from finished code tests the
 code that exists; one derived from the design tests the property.
 
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
+
 ## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
 
 ### Functional Requirements
 
@@ -600,6 +697,8 @@ code that exists; one derived from the design tests the property.
 - [ ] Code review approval
 
 ## Test Scenarios
+
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
 
 ### Acceptance Tests (RED phase targets)
 

@@ -217,6 +217,9 @@ derive_deploy() { # derive_deploy <jobsfile>
 classify() {
   local i="$1" id="${C_ID[$1]}" jf="$TMP/jobs.$1" lf="$TMP/log.$1"
   local rt rt_st rt_con rt_done a ok line d rc onmain
+  # --paginate+--jq is safe HERE and only here: GH_JOBS_JQ emits FLAT @tsv rows, so
+  # per-page application concatenates to the same stream. An aggregate filter would
+  # be per-page-wrong — the canonical shape for those is `jq -s` on the raw pages.
   gh_try "$jf" api --paginate "repos/{owner}/{repo}/actions/runs/$id/jobs?per_page=100" --jq "$GH_JOBS_JQ" || return 1
   rt="$(job_field "$jf" resolve-target 2)"; rt_st="$(job_field "$jf" resolve-target 3)"
   rt_con="$(job_field "$jf" resolve-target 4)"; rt_done="$(job_field "$jf" resolve-target 5)"

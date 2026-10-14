@@ -166,8 +166,8 @@ Both defects were caught by parallel review agents (data-integrity-guardian and 
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-05-12-feat-cc-soleur-go-transcript-hardening-pr-a2-plan.md` (rev-2)
-- Tasks: `knowledge-base/project/specs/feat-cc-soleur-go-transcript-hardening-pr-a2-3603/tasks.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-cc-soleur-go-transcript-hardening-pr-a2-plan.md` (rev-2)
+- Tasks: `knowledge-base/project/specs/archive/20261013-014038-feat-cc-soleur-go-transcript-hardening-pr-a2-3603/tasks.md`
 - Predecessor PR: #3602 (W2+W8, merged 2026-05-12)
 - Issue umbrella: #3603 (stays open until PR-B + PR-C ship)
 - Follow-up issues filed: #3638-#3642 (review-finding deferrals)

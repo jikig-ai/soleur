@@ -11,7 +11,7 @@
  * Bump-policy rubric (material / clarifying / cosmetic) lives at
  * knowledge-base/legal/tc-version-bump-policy.md (CLO-signed).
  */
-export const TC_VERSION = "2.5.1";
+export const TC_VERSION = "2.6.0";
 
 /**
  * SHA-256 of `docs/legal/terms-and-conditions.md` at the time of the
@@ -32,7 +32,7 @@ export const TC_VERSION = "2.5.1";
  *      `TC_VERSION` was also bumped.
  */
 export const TC_DOCUMENT_SHA =
-  "8d33c47b143b6690dcd581799baacaf1b4c1c084a356fb0d5383a9c661984007";
+  "1f452cdbd5d4df2e50d46d71d2cfaf832a1d4d1ddfce0577176e0cb5e43694c2";
 
 /**
  * Bump-metadata for the current `TC_VERSION`. Consumed by the Art. 13(3)
@@ -47,7 +47,7 @@ export const TC_DOCUMENT_SHA =
  *   - `fullTermsUrl`: canonical public URL for the full T&C.
  */
 export const TC_BUMP_METADATA = {
-  lastUpdated: "September 13, 2026",
-  substantiveChange: "Plugin definition is harness-neutral: supported AI coding CLIs including Claude Code, Grok Build, Codex, and Devin CLI",
+  lastUpdated: "October 8, 2026",
+  substantiveChange: "Autonomous command execution can force-push over a connected repository's default branch or run infrastructure teardown without asking, and your work is no longer described as backed up in git",
   fullTermsUrl: "https://soleur.ai/pages/legal/terms-and-conditions.html",
 } as const;

@@ -1,0 +1,48 @@
+# Session State
+
+## Plan Phase
+- Plan file: knowledge-base/project/plans/2026-10-07-fix-vendored-sdk-bwrap-argv-reorder-plan.md
+- Status: complete
+
+### Errors
+None blocking. Non-blocking notes: (a) an early candidate-plan selector returned exit 2 while scanning (resolved by deriving a fresh plan path); (b) several searches on the minified/native SDK artifact produced no text match — resolved via `strings`-level inspection of the binary's embedded builder.
+
+### Decisions
+- **Central finding (changes the issue's premise):** the vendored CLI 2.1.284 binary (`node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`, spawned by `@anthropic-ai/claude-agent-sdk@0.3.284`) already implements deny-then-restore ordering — its embedded builder emits `--tmpfs <deny landing>` then rw `--bind` restores of covered `allowWrite` paths (`Re-bound write path wiped by denyRead tmpfs`) and ro restores of `allowWithinDeny` (`allowRead`) paths. Issue scope item 1 (dependency-patch mechanism) is therefore descoped with justification, contingent on the Phase-3 in-image capture audit.
+- **Mechanism:** revert `buildAgentSandboxConfig` to broad `denyRead: [workspacesRoot(), c4StagingRoot, "/proc", ...denyReadExtra]` — the parent tmpfs masks present *and future* siblings, closing the TOCTOU structurally — plus `allowRead: [workspacePath]` for the `readOnly` support persona (which a broad deny would otherwise blind).
+- **Dispatch vs. issue reconciliation:** the dispatch's literal "move sibling deny mounts before the workspace bind" cannot close the TOCTOU under continued enumeration; the plan implements the property-level reading (covering deny tmpfs precedes the workspace's surviving rw bind) and corrects the "token-order-only" fixture-diff expectation to the additive shape (new `--tmpfs` on the deterministic capture root + restore bind + literal `prepDirs` entry).
+- **Brand-survival threshold:** `single-user incident` (cross-tenant read); `requires_cpo_signoff: true`. Guard Contract shipped for a new committed-fixture ordering pin; all deepen-plan halts (4.6–4.12) passed, including `lint-guard-contract.py` green and mechanical Scope-Check verification.
+- **Contingency documented, not planned:** if the capture audit falsifies the vendor ordering (or shows ws-internal mounts — `/dev/null` masks, `.claude` self-binds — shadowed by the restore bind), the fallback is argv rewriting in the production bwrap shim — flagged as a materially different diff requiring re-planning.
+
+### Components Invoked
+- `soleur:plan` (run inline per the skill's harness instructions — no direct skill tool) — full phase sequence: skeleton, premise validation, property/cut lists, research (source + vendored binary + fixture + ADRs), code-review overlap check (88 issues, zero file overlaps), Scope Check, Domain Review, User-Brand Impact, GDPR inline advisory, Observability (with blind-surface probes), ADR-075 amendment deliverable + C4 no-impact enumeration, Guard Contract, SpecFlow-style pass, sharp-edges verification, plan review + `decision-challenges.md`, `tasks.md`, commit + push (commits `a3d1553995`, `dce008a9ca` on `feat-one-shot-5862-bwrap-argv-reorder`).
+- `soleur:deepen-plan` (run inline on the plan path) — mechanical gates verified (User-Brand Impact, Observability, PAT sweep, Scope Check, Guard Contract lint, PAT/label/citation checks, legal-register status-flip sweep); conditional gates (network-outage, downtime, UI wireframe, encryption) correctly unfired; Enhancement Summary + audit broadening applied and propagated to `tasks.md`.
+
+## Work Phase (tally: seats=87→84 used=3; ci_cycles=1 local; agent_rounds=2)
+- **T1 RED**: rewrote `agent-runner-helpers.test.ts` to the constant-deny contract; renamed `agent-sandbox-sibling-deny.test.ts` → `agent-sandbox-tenant-deny.test.ts` and rewrote it; added the committed-fixture ordering pin + 5-row mutation matrix to `sandbox-canary.test.ts`; added the live TOCTOU regression + `spawnSandboxed`/`waitForFile` helper. First run: 16 failures — all the intended RED reasons (enumerated deny shape, exported enumerator, missing `allowRead`, fixture pin pending re-capture); one assertion-scoping bug in the TOCTOU test (`cat` error text contains the sibling name — scoped `ls` output at the `__CAT__` marker) fixed and re-run green.
+- **T2 GREEN**: `buildAgentSandboxConfig` emits the constant parent deny + `allowRead` restore arm; `enumerateSiblingDenyPaths`/`safeRealpath`/`degraded` deleted; log `op:"tenant-deny"`; header + `cc-dispatcher.ts`/`sandbox-canary.mjs` comment sweeps. Config-shape suites green; ordering pin stayed RED pre-capture as designed.
+- **T3 in-image**: `SANDBOX_CANARY_MODE=capture` on `node:22-slim` → `captured` (tokenCount 120, SDK 0.3.284); audit confirmed covering `--tmpfs /tmp/soleur-sandbox-canary` at argv[21] with restores at 23/26 and all `/dev/null` masks + `.cc-writes` bind post-restore; `--verify` → `verify_ok`.
+- **T4**: ADR-075 amended `accepted-with-residual` → `accepted` (addendum 2026-10-07).
+- **T5**: 6 touched suites green (189 pass, 3 skip); `tsc --noEmit` clean.
+- **Phase-2 exit**: GDPR gate — zero canonical-regex hits, no mandatory-check triggers. Affected-test gate queued behind 3 sibling `test-all` runs (advisory lock position 3) at commit time; pending.
+- Commit `466e162f98`; pushed; PR #9709 body finalized (still draft pending gate + review).
+
+## Review round 1 (tally: seats=99, fix_rounds=4)
+12-seat panel on the pushed diff. Adjudication:
+
+- **REJECTED (not a regression):** `.claude` ro-bind shadowing (user-impact P1, data-integrity P2, agent-native P3). The `--ro-bind ${WS}/.claude` at fixture idx 10 was ALREADY dead on main — shadowed by `--bind ${WS} ${WS}` at idx 13 in the old argv. Effective `.claude` protection has always been the `/dev/null` masks + `.cc-writes` ro-bind, all of which land post-restore. Adjudicated per the plan's T3.2 audit criterion ("confirmed intentionally shadowed").
+- **FIXED INLINE:** strengthened `denyBeforeRestoreViolations` — last covering mount op (any op class incl. `--bind`/`--ro-bind`/`--remount-ro`) must be the rw ws bind; strict-ancestor tmpfs required for the deny clause; trailing-slash/`/` normalization; matrix widened to 10 rows with per-row violation-class assertions. Query-tier literal now mirrors the constant parent deny (`denyRead:[pair.parent,"/proc"]`). `spawnSandboxed` honors timeoutMs + error listener + bounded poll. Deleted dead `sortDenyPaths`. Fixed fabricated vendor string (`mounts nothing this wrap can place` is verbatim). Added `workspacesRootExists` + prod `reportSilentFallback` + ws-covers-root throw guard + `workspaceUnderDenyRoot` log field. Comment sweeps (docstring :244, header, allowRead rationale, denyReadExtra contract, /proc tail caveat). Test fixes: sbx-elsewhere leak, coverage precondition, ENOENT full-list, ADR-075 Decision forward-pointer.
+- **DEFERRED (issues filed):** #9723 `/proc` trailing bind undoes tmpfs (pre-existing); #9724 capture-gate dark-launch + readOnly arm uncaptured + shim surface + dropped-member invisibility; #9725 WORKSPACES_ROOT vs WORKTREE_ROOT divergence at git-data cutover.
+
+## Affected-gate result
+`test-all.sh --affected` (175 selected): 6 failures, 1 attributable — `lint-window-closure-assertion-live` flagged the `lsSection` window (fixed with `// window-assembly:` declaration). The other 5 are contention/environmental (orphan-process-reaper sees sibling worktrees' procs; orphan-log-retention live-parent check; sweep-followthroughs T18 probe starved; infra apt budget exhausted in docker; run-migrations-unmerged-gate spawn timeouts at -1 under load). Deferred: #9723, #9724, #9725.
+
+## QA
+Skipped per skill rule — Test Scenarios are Given/When/Then prose only (no Browser:/API verify: steps); coverage is the unit/regression suite + in-image capture/verify. No dashboard/layout diff → Step 2.6 nav-states gate N/A.
+
+## Review round 2 (git-history seat — retried after connection error)
+- P2 fixed: ADR-075 addendum mis-attributed the reorder to the 0.3.284 bump — it was vendored since CLI 2.1.197 / SDK 0.3.197 (#5849), predating ADR-075's merge; the era-pinned 0.2.85 spawned bundled cli.js (2.1.85) so the capability was unreachable. Addendum corrected.
+- P3 fixed: addendum overstated the allowRead arm as load-bearing — now states it's inert today (support workspacePath = pluginPath, outside the deny root) but forward-declared.
+- P3 fixed: ADR-068:231 stale "per-sibling since ADR-075" cross-ref updated.
+- P3 fixed: cc-dispatcher attribution corrected — #5848 (regression) → #5864 (per-sibling deny) → #5862 (constant parent deny).
+- Verified accurate: v0.2.85-era ordering claim; #9636 scope (projection placeholder only); /proc tail pre-existing on main.

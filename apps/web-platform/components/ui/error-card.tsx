@@ -28,7 +28,7 @@ export function ErrorCard({
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss"
-          className="absolute right-3 top-3 hover:text-soleur-text-secondary"
+          className="absolute right-3 top-3 p-1.5 hover:text-soleur-text-secondary"
         >
           <svg
             width="16"

@@ -1,4 +1,33 @@
-79  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+36  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+# 70 -> 36 (2026-10-12, #10017 / tmpfs-guard count-shaped-leak incident): the
+# mktemp census sweep. 34 files left the population — 23 test suites gained a
+# SUITE_TMP root + owning EXIT trap (the #7490 pattern), 4 community setup
+# scripts gained self-disarming RETURN traps, watch-live-verify-pass.sh /
+# grok-measure.sh / audit-bot-codeql-coverage.sh / run-self-test.sh gained
+# owning EXIT traps, tests/scripts/lib/git-data-birth-readiness-gate.sh gained
+# the rung2-archive RETURN trap, scripts-shard-totality-mutations.sh's
+# multi-line trap was flattened to the line-scoped predicate's shape, and
+# rclone check_setup.sh's echo'd `mktemp` (a DATA mention) went single-quoted.
+# The remaining 36 are annotate-bounded (sourced libs where an EXIT trap would
+# clobber the caller's, deliverable dirs) and out-of-enumeration members under
+# apps/, .github/, tests/ — dispositioned in
+# knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-10017-mktemp-tmp-leak/mktemp-census.md.
+# 69 -> 70 (2026-10-11, #9980 / PR #10029): apps/web-platform/infra/arm-heartbeats.sh joins the
+# population by gaining `--arm-one`, whose books file is allocated by `mktemp` and has NO
+# owning `trap ... EXIT` BY DESIGN (Cut List C6, ADR-117 amendment): a trap would delete the
+# books file on the very interruption it exists to survive, and the printed `--sweep`
+# recovery command reads it afterwards. The two mktemp sites are annotated
+# `lint-trap-ownership: ok` with that reason (the census counts the file regardless of the
+# escape). Bounded: the private books file is removed on every clean finish, the
+# `state_remove` scratch file is renamed over the books or removed on every path, and the
+# preflight probe is removed on the same line that creates it.
+# 70th entrant (2026-10-06, #9510 / PR #9634): tests/scripts/lib/stock-preflight-gate.sh —
+# stock_recovery_report allocates a `terraform show -json` dump file under RUNNER_TEMP.
+# The library is SOURCED into the workflow step's shell, so a `trap ... EXIT` here would
+# REPLACE the caller's trap (the same reason the 80th entrant, git-data-boot-signal-poll.sh,
+# carries an annotation). Every return path removes the file explicitly (failure arm on
+# terraform-show error, tail rm on normal exit); the residual leak is a hard kill, which no
+# trap would survive either. Site carries `lint-trap-ownership: ok` with that reason.
 # 79th entrant (2026-09-17, #8160): scripts/file-upstream-ask-8160.sh — its
 # mktemp -d output directory IS the deliverable (email/bug bodies the operator
 # sends after the run), so it must outlive the process by design; annotated
@@ -23,6 +52,9 @@
 # ADDED; the fix was to make the whole file owned rather than annotate the new lines.
 # A third new entrant, plugins/soleur/test/ship-followthrough-directive.test.sh, got its
 # trap in the same commit and never joined the count.
+# 70 -> 69 (2026-10-11, #9756): `lint-trap-tempfile-ownership.py --census` measured 69 on the merged tree.
+# The cause is not identified here: this PR's only mktemp (the bootstrap probe body) carries an owning
+# trap and bootstrap.sh had no mktemp on main, so it cannot be the file that left the population.
 # Derive with: python3 scripts/lint-trap-tempfile-ownership.py --census
 # CI asserts the live count never EXCEEDS this. Lower it freely when the population
 # shrinks; raising it is a deliberate act that needs a reason in the PR body.

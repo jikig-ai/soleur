@@ -43,10 +43,13 @@ const RUNTIME_FLAGS = {
   // Gates the interactive LikeC4 C4-model visualizer in the KB viewer
   // (replaces static Mermaid C4 rendering). Per-user rollout via role/segment.
   "c4-visualizer": "FLAG_C4_VISUALIZER",
-  // feat-debug-mode-stream — availability flag for the internal dev-cohort
-  // harness instruction stream. Read ONLY through `isDebugModeAvailable`,
-  // which hard-gates `role === "dev"` BEFORE this flag so the role-blind
-  // env-fallback cannot open the stream to `prd` on a Flagsmith outage.
+  // feat-debug-mode-stream — availability flag for the workspace debug
+  // stream panel. Read ONLY through `isDebugModeAvailable`. Open to ALL
+  // roles during beta (the P0-8 `dev`-cohort hard-gate was retired so users
+  // can send harness logs for debugging); this flag remains the kill
+  // switch. Note the env fallback `FLAG_DEBUG_MODE=1` is role-blind — on a
+  // Flagsmith outage it opens the stream to everyone; emission still also
+  // requires the owner-set per-workspace `debug_mode` toggle.
   "debug-mode": "FLAG_DEBUG_MODE",
   // feat-c4-viewer-remove-code-panel-gate-edit — gates ONLY the user-direct
   // C4 edit surface (PUT /api/kb/c4 + the Code panel UI). Default OFF for all
@@ -260,19 +263,20 @@ export async function isCodexEngineEnabled(
 }
 
 /**
- * feat-debug-mode-stream (P0-8) — availability of the internal harness
- * instruction stream for `identity`.
+ * feat-debug-mode-stream — availability of the harness instruction stream for
+ * `identity`. Open to ALL roles during beta so users can capture and send
+ * harness logs for debugging; the `debug-mode` flag is the sole cohort gate
+ * and remains the kill switch.
  *
- * INTENTIONALLY NOT cloned from `isTeamWorkspaceInviteEnabled`: that helper is
- * fail-OPEN on a Flagsmith outage (the env-fallback `FLAG_*` is role-blind, so
- * a `prd` identity would resolve `true` from `FLAG_DEBUG_MODE=1`). The debug
- * stream is a scoped exception to the #2138 raw-tool-input invariant and must
- * stay dev-cohort-only, so the `role !== "dev"` hard-gate runs BEFORE the flag
- * is ever consulted — a Flagsmith outage can only ever make this MORE
- * restrictive, never open the stream to `prd`.
+ * The original P0-8 `role !== "dev"` hard-gate is retired: the stream stays a
+ * scoped exception to the #2138 raw-tool-input invariant, but every frame is
+ * redacted/probe-gated at the emit boundary (server/debug-event.ts) and
+ * emission additionally requires the owner-set per-workspace `debug_mode`
+ * toggle — neither control is role-dependent. The Flagsmith identity still
+ * carries the real role so the flag can be re-segmented if beta needs a
+ * partial rollback.
  */
 export async function isDebugModeAvailable(identity: Identity): Promise<boolean> {
-  if (identity.role !== "dev") return false;
   return getRuntimeFlag("debug-mode", identity);
 }
 

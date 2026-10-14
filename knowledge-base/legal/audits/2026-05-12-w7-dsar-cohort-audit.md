@@ -3,7 +3,7 @@ title: "W7 DSAR cohort audit — 2026-05-05 to 2026-05-11"
 type: dsar-cohort-audit
 issue: 3603
 pr: 3662
-plan: knowledge-base/project/plans/2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md
 window_start: 2026-05-05
 window_end: 2026-05-11
 audited_on: 2026-05-12
@@ -74,7 +74,7 @@ This audit file is the standing answer to "did you check?" — its result row st
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md` (AC9, CLO Q4)
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md` (AC9, CLO Q4)
 - Phase 2.7 GDPR-gate outcome: `knowledge-base/legal/audits/2026-05-12-gdpr-gate-plan-phase-2-7-outcome.md`
 - Privacy Policy contact channels: `docs/legal/privacy-policy.md` §8.1, §14
 - GDPR Policy contact channels: `docs/legal/gdpr-policy.md` §14

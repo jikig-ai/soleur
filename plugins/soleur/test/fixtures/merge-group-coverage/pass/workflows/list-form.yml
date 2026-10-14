@@ -1,0 +1,16 @@
+# Synthesized fixture (not a real workflow). List form of `on:`, a job whose
+# context comes from `name:` rather than the job id, and an event-name `if:`
+# that names merge_group explicitly.
+name: fixture list form
+on: [pull_request, merge_group]
+jobs:
+  fx-list-or:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo fixture
+  some-job-id:
+    name: fx-named
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo fixture

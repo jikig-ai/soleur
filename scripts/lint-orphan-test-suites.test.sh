@@ -77,7 +77,7 @@ export LC_ALL=C
 # the two `run_suite … --rows A-B` registrations in scripts/test-all.sh (see ROWS-SPLIT above).
 # One deliberate divergence from the copied loop: a REPEATED --rows exits 2 rather than letting
 # the last flag win — the tiling extractor would then assert a coverage the battery ignores.
-DECLARED_TOTAL=16   # the gated mutation rows M1..M16; C0/R1/R1b are unconditional
+DECLARED_TOTAL=27   # the gated mutation rows M1..M27; C0/R1/R1b are unconditional
 ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared rows
 _seen_rows_flag=0
 while (( $# )); do
@@ -153,9 +153,20 @@ materialise() {
   # `git ls-files --error-unmatch`, which is satisfied by any tracked file BENEATH the path.
   # Writing a file AT that path instead fails with "Is a directory" the moment a sibling entry
   # has already created it — order-dependently, which is the worst way for a fixture to break.
-  local p
+  local p _mp
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
+    case "$p" in
+      glob:*)
+        # Third declared kind (#9813): materialise the head dir only — the census
+        # arm probes [[ -d ]] on it; the pattern tail is not a path.
+        _mp="${p#glob:}"; _mp="${_mp%%[*?[]*}"
+        [[ "$_mp" == */ ]] || continue
+        mkdir -p "$PRISTINE/${_mp%/}" || return 1
+        : > "$PRISTINE/${_mp%/}/.keep" || return 1
+        continue
+        ;;
+    esac
     if [[ -d "$REPO_ROOT/$p" ]]; then
       mkdir -p "$PRISTINE/$p" || return 1
       : > "$PRISTINE/$p/.keep" || return 1
@@ -181,9 +192,12 @@ build_pristine() {
   ( set +u
     # shellcheck source=scripts/lib/test-relevance-paths.sh
     source "$REPO_ROOT/scripts/lib/test-relevance-paths.sh"
-    printf '%s\n' "${REGISTRY_BATTERY_PATHS[@]}" "${CF_TUNNEL_BATTERY_PATHS[@]}" \
-                  "${C4_PRODUCER_PATHS[@]}" "${GITHUB_SCRIPTS_SUITE_PATHS[@]}" \
-                  "${WEBPLAT_APP_PATHS[@]}"
+    # EVERY `*_PATHS` array the relevance lib declares, derived rather than listed: the SUT asserts all
+    # of them tracked, so a hand list of five went stale the day ADR-262 added three more arrays
+    # (and made any new array's non-*.test.sh member red this battery's own control).
+    while IFS= read -r _rarr; do
+      eval "printf '%s\n' \${${_rarr}[@]+\"\${${_rarr}[@]}\"}"
+    done < <(declare -p | LC_ALL=C grep -oE 'declare -[a-zA-Z]* [A-Z0-9_]+_PATHS' | awk '{print $3}')
     # #8322: the SUT's affected-census arm asserts every declared AFFECTED_*_PATHS
     # element resolves — a tracked file, or a directory prefix (trailing /). Same
     # doctrine as the relevance arrays above: missing them reds every row for a
@@ -210,6 +224,14 @@ build_pristine() {
   cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$PRISTINE/scripts/lib/" || return 1
   cp "$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh" "$PRISTINE/apps/web-platform/infra/" || return 1
   cp "$REPO_ROOT"/.github/workflows/*.yml "$PRISTINE/.github/workflows/" || return 1
+  # ADR-262 Guard 2 reads each --pr-gated battery's OWN text for `$REPO_ROOT/<path>` operands, so the
+  # five battery files must be the real bytes, not the empty placeholders materialised above.
+  local _bf
+  for _bf in tests/scripts/test-registry-gate-mutation-battery.sh scripts/cf-tunnel-liveness-gate-mutations.test.sh \
+             scripts/lint-orphan-test-suites.test.sh scripts/battery-tag-authorship-mutations.test.sh \
+             scripts/test-all-affected.test.sh; do
+    cp "$REPO_ROOT/$_bf" "$PRISTINE/$_bf" || return 1
+  done
 
   git -C "$PRISTINE" init -q -b main >/dev/null 2>&1 || return 1
   git -C "$PRISTINE" add -A >/dev/null 2>&1 || return 1
@@ -684,6 +706,211 @@ assert_has "M16 — the exclusion is announced with its reason" "note: tools/now
 assert_lacks "M16 — and the suite is not also reported as an orphan" "tools/nowhere/gamma.test.sh ${ORPHAN_MSG}"
 }
 
+# =============================================================================================
+# M17-M20 — ADR-262 Guard 2 (the --pr-gated subject-set closure check). A battery that is declined on a
+# pull_request run is only as covered as its declared array, and this check is what stops the array
+# falling behind what the battery itself names. It had no row of its own: every other row here is about
+# registration, so the closure check could be deleted, narrowed or blinded with the whole battery green.
+# =============================================================================================
+run_M17() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M17 "Guard 2: a gated battery names a tracked file its array does not contain"
+new_sandbox m17
+# The mutation text is composed from ${_RR} rather than spelled `$REPO_ROOT/...`, because Guard 2 reads THIS
+# file for operands too and these strings are fixtures, not reads (it flagged them on the first run).
+_RR='$REPO_ROOT'
+# scratch-root.sh is tracked in the sandbox already (the runner sources it); assert rather than create it
+git -C "$SB" ls-files --error-unmatch scripts/lib/scratch-root.sh >/dev/null 2>&1 \
+  || harness_die "M17: scripts/lib/scratch-root.sh is not tracked in the sandbox"
+mutate_or_die "$SB/scripts/battery-tag-authorship-mutations.test.sh" \
+  "SUBJECT=\"${_RR}/scripts/battery-tag-authorship.test.sh\"" \
+  "SUBJECT=\"${_RR}/scripts/battery-tag-authorship.test.sh\"
+UNDECLARED_OPERAND=\"${_RR}/scripts/lib/scratch-root.sh\""
+run_lint "$SB"; rc=$?
+assert_red "M17" "$rc"
+assert_has "M17 — names the battery, the operand and the array" \
+  "scripts/battery-tag-authorship-mutations.test.sh names 'scripts/lib/scratch-root.sh', which TAG_AUTHORSHIP_BATTERY_PATHS does not contain"
+}
+
+run_M18() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M18 "Guard 2: a declared path the battery still names is removed from its array"
+new_sandbox m18
+_before=$(grep -c '^  "scripts/battery-tag-authorship.test.sh"' "$SB/scripts/lib/test-relevance-paths.sh")
+sed -i '/^  "scripts\/battery-tag-authorship.test.sh"/d' "$SB/scripts/lib/test-relevance-paths.sh" || harness_die "M18 sed"
+_after=$(grep -c '^  "scripts/battery-tag-authorship.test.sh"' "$SB/scripts/lib/test-relevance-paths.sh")
+[[ "$_before" == 1 && "$_after" == 0 ]] || harness_die "M18: the mutation did not land (before=${_before} after=${_after})"
+pass "M18 precondition: the element was present exactly once and is gone"
+run_lint "$SB"; rc=$?
+assert_red "M18" "$rc"
+assert_has "M18 — names the removed operand and its array" \
+  "names 'scripts/battery-tag-authorship.test.sh', which TAG_AUTHORSHIP_BATTERY_PATHS does not contain"
+}
+
+run_M19() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M19 "Guard 2: the --pr-gated derivation goes dark (every call site loses its flag)"
+new_sandbox m19
+sed -i 's/_diff_touches --pr-gated/_diff_touches/g' "$SB/scripts/test-all.sh" || harness_die "M19 sed"
+if grep -qE '_diff_touches --pr-gated +"' "$SB/scripts/test-all.sh"; then harness_die "M19: a --pr-gated call site survived the mutation"; fi
+pass "M19 precondition: no --pr-gated call site remains in the sandbox runner"
+run_lint "$SB"; rc=$?
+assert_red "M19" "$rc"
+assert_has "M19 — the floor names the empty derivation instead of passing over nothing" "examined 0 --pr-gated array(s)"
+}
+
+run_M20() {
+EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M20 "Guard 2: the corpus allowlist rejects a stale entry and an entry with no written reason"
+new_sandbox m20a
+mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'PR_GATE_CORPUS_ALLOWLIST=(' \
+  'PR_GATE_CORPUS_ALLOWLIST=(
+    "CF_TUNNEL_BATTERY_PATHS|nowhere/stale|a reason that is no longer true"'
+run_lint "$SB"; rc=$?
+assert_red "M20 (stale entry)" "$rc"
+assert_has "M20 — the stale entry is named" "'CF_TUNNEL_BATTERY_PATHS|nowhere/stale' matched no uncovered operand"
+new_sandbox m20b
+mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'PR_GATE_CORPUS_ALLOWLIST=(' \
+  'PR_GATE_CORPUS_ALLOWLIST=(
+    "CF_TUNNEL_BATTERY_PATHS|nowhere/silent| "'
+run_lint "$SB"; rc=$?
+assert_red "M20 (empty reason)" "$rc"
+assert_has "M20 — the unexplained entry is refused" "has no written reason"
+}
+
+# =============================================================================================
+# M21-M27 — Guard 3 (#9813): the declared-member census admits `glob:<head>/<tail>` entries, and
+# a malformed or dead declared glob is a static RED — the mint degrades bad shapes to
+# always-match edges, so a bad DECLARED glob is a silent widening of every diff's selection.
+# =============================================================================================
+# Replace the N-th glob: member of declared array $2 in file $1 with glob:$4...$3 — anchored at
+# the array name, so the six `glob:knowledge-base/**.sh` siblings don't collide the anchor.
+# (Five carriers plus scripts/lib/repo-write-boundary.test.sh's array, added under #9969.)
+mutate_glob_entry() {
+  python3 - "$1" "$2" "$3" "${4:-1}" <<'PY' || harness_die "glob-entry mutator did not land"
+import sys
+path, arr, new, n = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+s = open(path).read()
+i = s.index(arr + "=(")
+pos = i
+for _ in range(n):
+    pos = s.index('"glob:', pos) + 1
+j = pos - 1
+k = s.index('"', j + 1) + 1
+s = s[:j] + '"glob:' + new + '"' + s[k:]
+open(path, "w").write(s)
+PY
+}
+
+# kb literals below are COMPOSED (`${_KB}`), never spelled out: the kb-consumers
+# oracle scans this file for `knowledge-base/<path>` tokens and would charge the
+# fixture strings as real reads. The mutated values land in the sandbox lib
+# byte-identical — composition only changes how the SOURCE spells them.
+_KB='knowledge-base'
+run_M21() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M21 "Guard 3: a declared glob: carrying ? or [ is malformed — static RED"
+new_sandbox m21
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_KB}/x?[y].sh"
+run_lint "$SB"; rc=$?
+assert_red "M21" "$rc"
+assert_has "M21 — names the malformed entry and the grammar reason" \
+  "declares glob: edge 'glob:${_KB}/x?[y].sh', contains ? or ["
+}
+
+run_M22() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M22 "Guard 3: a declared glob: whose head does not end in / is malformed — static RED"
+new_sandbox m22
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'a*/b'
+run_lint "$SB"; rc=$?
+assert_red "M22" "$rc"
+assert_has "M22 — names the malformed entry and the grammar reason" \
+  "declares glob: edge 'glob:a*/b', its head does not end in /"
+}
+
+run_M23() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M23 "Guard 3: a declared glob: with a dead head dir is a dead edge — static RED"
+new_sandbox m23
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'nowhere-xyz/**.sh'
+run_lint "$SB"; rc=$?
+assert_red "M23" "$rc"
+assert_has "M23 — names the entry and the dead head" \
+  "declares glob: edge 'glob:nowhere-xyz/**.sh', its head dir nowhere-xyz/ does not exist"
+}
+
+run_M24() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M24 "Guard 3: a declared glob: with no metachar recurses literal — an untracked target REDs"
+new_sandbox m24
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_KB}/no-such-file.md"
+run_lint "$SB"; rc=$?
+assert_red "M24" "$rc"
+assert_has "M24 — names the entry and the literal-miss reason" \
+  "declares glob: edge 'glob:${_KB}/no-such-file.md', a literal entry that is not a tracked file"
+}
+
+run_M25() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M25 "Guard 3: a bad glob: entry AFTER a compliant first still reds (the walk reaches it)"
+new_sandbox m25
+# lint-trap-tempfile-ownership is the one array carrying several glob: members —
+# mutate its SECOND, leaving the first compliant.
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS' 'nowhere-xyz/**.sh' 2
+run_lint "$SB"; rc=$?
+assert_red "M25" "$rc"
+assert_has "M25 — the second (bad) member is named" \
+  "declares glob: edge 'glob:nowhere-xyz/**.sh', its head dir nowhere-xyz/ does not exist"
+}
+
+run_M26() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M26 "Guard 3: the real glob: declarations pass — and the walk demonstrably reached them"
+new_sandbox m26
+_n=$(grep -c "\"glob:${_KB}/" "$SB/scripts/lib/test-affected-paths.sh")
+(( _n >= 11 )) || harness_die "M26: sandbox lib carries ${_n} glob: kb entries (want >=11 — the walk would be vacuous)"
+pass "M26 precondition: ${_n} declared glob: kb entries are in the walk's domain"
+run_lint "$SB"; rc=$?
+if (( rc == 0 )); then pass "M26 — every declared glob: edge validates (exit 0)"; else
+  fail "M26 — a valid glob: declaration was REJECTED (exit ${rc})"
+  sed 's/^/    /' "$OUT" | head -10
+fi
+}
+
+run_M27() {
+EXPECTED_ASSERTIONS=6   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M27 "Guard 3: a glob: head that is not repo-relative, or a tail that can never match, is malformed — static RED"
+# The head classes the -d probe can resolve while no repo-relative diff line can
+# ever match: a dead edge that narrows while every static guard reads green (B1).
+new_sandbox m27a
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' '../x/*.sh'
+run_lint "$SB"; rc=$?
+assert_red "M27a" "$rc"
+assert_has "M27a — names the non-repo-relative head" \
+  "declares glob: edge 'glob:../x/*.sh', its head is not a repo-relative prefix"
+new_sandbox m27b
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' '/x/*.sh'
+run_lint "$SB"; rc=$?
+assert_red "M27b" "$rc"
+assert_has "M27b — a leading-/ head reds identically" \
+  "declares glob: edge 'glob:/x/*.sh', its head is not a repo-relative prefix"
+new_sandbox m27c
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'x/*/'
+run_lint "$SB"; rc=$?
+assert_red "M27c" "$rc"
+assert_has "M27c — a /-terminated tail is well-formed but unmatchable" \
+  "declares glob: edge 'glob:x/*/', its tail ends in /"
+}
+
 # --- Row dispatch: bounded-parallel -----------------------------------------------------------
 # Every row builds its own sandbox from PRISTINE (read-only once the harness is built) and
 # asserts against its own .lint-out — the matrix is order-free by construction. Serial cost was
@@ -701,7 +928,7 @@ assert_lacks "M16 — and the suite is not also reported as an orphan" "tools/no
 #   * PASS/FAIL/ROWS live in the worker's subshell; each row writes its counters
 #     to $TMP/rows/<id>.rc (PASS FAIL DECLARED ELAPSED) and the parent aggregates them during
 #     the ordered replay below, so the floors and the summary see exactly the serial numbers.
-ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16"
+ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27"
 JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
 # JOBS feeds arithmetic in the pool gate — an unsettable-to-0 or non-numeric value would spin
 # the `running >= JOBS` wait forever, and the arithmetic context must never see a non-digit

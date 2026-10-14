@@ -1,0 +1,12 @@
+import shutil
+import tempfile
+
+ROOT = "/srv/repo"
+
+
+def build():
+    work = tempfile.mkdtemp(dir=f"{ROOT}/tmp/x")
+    try:
+        return work
+    finally:
+        shutil.rmtree(work)

@@ -4,6 +4,9 @@
 # Silent warn-and-continue is what let /ship Phase 5.5 commit empty .pen files.
 
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
@@ -45,7 +48,7 @@ assert_file_exists "$ADAPTER" "adapter exists"
 # within 3 seconds. Must emit an ERROR (not just WARNING) on stderr.
 # Stdin is closed immediately to avoid the adapter blocking on MCP handshake.
 # ---------------------------------------------------------------------------
-tmp_stderr=$(mktemp)
+tmp_stderr=$(mktemp -p "$SUITE_TMP")
 set +e
 timeout 3 env -u PENCIL_CLI_KEY "$NODE_BIN" "$ADAPTER" </dev/null 2>"$tmp_stderr" >/dev/null
 rc=$?

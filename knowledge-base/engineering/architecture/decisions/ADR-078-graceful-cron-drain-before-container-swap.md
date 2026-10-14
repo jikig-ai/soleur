@@ -213,3 +213,11 @@ and a deploy that outlasted the retry read as a setup failure with a red heartbe
   memoized, so the lease is never re-checked). `NonRetriableError` for the handler throw: a subclass
   can keep its name, but a non-retriable throw on handler attempt 0 is never the final attempt to
   `middleware/run-log.ts`, which skips non-final throws, so no `routine_runs` row would be written.
+
+## Amendment 2026-09-30 (#9219) — the cited pause usage no longer exists
+
+The "only existing pause usage (`inngest-bootstrap.sh:85-94`)" cited in the ruling above was a
+dead call: `inngest pause`/`resume` were measured absent on v1.19.4 and v1.45.1 (#7463 re-spike,
+`apps/web-platform/infra/inngest-cli.provenance.md`), and #9219 removed both calls. No pause path
+exists in the codebase; the lease decision stands, and native pause is now unavailable as well
+as unverifiable.

@@ -30,7 +30,7 @@
 #   CURL_BIN — mock `curl` binary path.
 #
 # Sister scripts: scripts/rule-prune.sh (demotion); scripts/rule-metrics-aggregate.sh.
-# Plan: knowledge-base/project/plans/2026-05-11-feat-compound-promotion-loop-plan.md.
+# Plan: knowledge-base/project/plans/archive/20260511-172959-2026-05-11-feat-compound-promotion-loop-plan.md.
 set -euo pipefail
 
 # (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
@@ -62,6 +62,27 @@ WEEK_CAP_DEFAULT=2
 GH_BIN="${GH_BIN:-gh}"
 CURL_BIN="${CURL_BIN:-curl}"
 
+# The key reaches curl on a stdin config (`header = "x-api-key: <key>"`), a quoted
+# line-oriented grammar: a quote or newline inside the key would end the header value and
+# let the rest be read as further directives (a second `url =`, a `proxy =`). So the key
+# must match the token class `[A-Za-z0-9._~+/=-]` or the script refuses, value-free
+# (the marker names the script and a reason, never the key), with exit 1 -- this script's
+# one failure class, which turns its workflow step red -- instead of surfacing later as an
+# empty-content error after a 401. `LC_ALL=C` pins both the range and `[[:cntrl:]]`.
+# An unset or empty key keeps its own refusal at the call site below.
+_cp_refuse_malformed_api_key() {
+  local LC_ALL=C reason=""
+  case "${ANTHROPIC_API_KEY:-}" in
+    '') return 0 ;;
+    *[[:cntrl:]]*) reason=control_char ;;
+    *[!A-Za-z0-9._~+/=-]*) reason=token_shape ;;
+  esac
+  [[ -z "$reason" ]] && return 0
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=compound-promote reason=%s\n' "$reason" >&2
+  printf '::error::ANTHROPIC_API_KEY has characters outside [A-Za-z0-9._~+/=-]; refusing before any API call\n' >&2
+  exit 1
+}
+
 # 1. Opt-in gate ---------------------------------------------------------------
 if [[ ! -f "$CONFIG" ]]; then
   printf '::compound-promote-status::no-config\n'
@@ -92,11 +113,17 @@ printf '::compound-promote-week-cap::%d\n' "$REMAINING"
 # Heuristic PII / credential regex (fails OPEN — any match excludes the file):
 #   - email | IPv4 | IBAN (canonical PII shapes)
 #   - JWT / Anthropic / GitHub / AWS / Stripe / Slack token shapes
+# Known posture: the canonical credential class [A-Za-z0-9._~+/=-] makes the
+# gate slightly over-excluding — a `ghp_/sbp_/…` prefix-enumeration slug or a
+# `ghs_feature-name` identifier in prose scores as a match and drops the file
+# (observable via ::compound-promote-pii-excluded::). Fail-closed toward the
+# DPA-covered model call is the intended direction; do not narrow to prose-
+# shaped tokens without a documented rationale.
 # Cheap, deterministic. Human reviewer at PR time + Anthropic processor DPA
 # are the second and third lines of defense. The runbook acknowledges that
 # novel shapes (phone numbers, customer slugs, prod IDs without prefix) still
 # slip through.
-PII_REGEX='([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|([0-9]{1,3}(\.[0-9]{1,3}){3})|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})|(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(sk-ant-[A-Za-z0-9_-]{20,})|(gh[psr]_[A-Za-z0-9]{20,})|(AKIA[0-9A-Z]{16})|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})|(xox[baprs]-[A-Za-z0-9-]{10,})'
+PII_REGEX='([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|([0-9]{1,3}(\.[0-9]{1,3}){3})|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})|(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(sk-ant-[A-Za-z0-9_-]{20,})|(gh[pousr]_[A-Za-z0-9._~+/=-]{20,})|(github_pat_[A-Za-z0-9._~+/=-]{20,})|(AKIA[0-9A-Z]{16})|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})|(xox[baprs]-[A-Za-z0-9-]{10,})'
 SAFE_FILES=()
 if [[ -d "$LEARNINGS_DIR" ]]; then
   while IFS= read -r -d '' file; do
@@ -151,6 +178,8 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   echo "::error::ANTHROPIC_API_KEY not set" >&2
   exit 1
 fi
+# Shape guard, BEFORE any call and before the corpus work below (see the function).
+_cp_refuse_malformed_api_key
 
 # Build corpus JSON: { path, summary } per file. Summary is head -n 10 of the
 # file body — bounds prompt size on the ~947-file corpus and avoids piping
@@ -228,17 +257,27 @@ EOF
 printf '::compound-promote-byte-budget::%d:%d\n' "$ALWAYS_LOADED_NOW" "$ALWAYS_LOADED_CAP"
 
 REQUEST=$(jq -n \
-  --arg model "claude-sonnet-5" \
+  --arg model "claude-sonnet-5-5" \
   --argjson max_tokens 16384 \
   --arg prompt "$PROMPT" \
   --slurpfile corpus "$CORPUS_NDJSON" \
   '{model: $model, max_tokens: $max_tokens, messages: [{role: "user", content: ($prompt + "\n\nCorpus:\n" + ($corpus | tostring))}]}')
 
-RESPONSE=$("$CURL_BIN" -sS https://api.anthropic.com/v1/messages \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
+# The API key is delivered on a stdin config (`--config -`), never as an argument: an
+# argv header is readable by every local user in /proc/<pid>/cmdline and `ps` for the life
+# of the process (argv-bearer sweep S2, D7). It is fed by a PROCESS SUBSTITUTION, not
+# `printf | curl`: under pipefail a consumer that never reads stdin can make the producer
+# die on SIGPIPE and the pipeline report 141 (when the config outgrows the pipe buffer or the
+# consumer closes first; the compound-promote suite pins it with an oversized key). `--disable` is FIRST (it aborts ~/.curlrc
+# parsing, so a rc file cannot add a proxy or a header) and `--noproxy '*'` keeps an
+# ALL_PROXY/HTTPS_PROXY from redirecting the credentialed request. The body stays
+# `-d "$REQUEST"`: it is non-secret corpus text and the suite captures it from `-d`.
+# The non-secret headers stay arguments.
+RESPONSE=$("$CURL_BIN" --disable --noproxy '*' -sS https://api.anthropic.com/v1/messages \
   -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
-  -d "$REQUEST")
+  -d "$REQUEST" \
+  --config - < <(printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY"))
 
 # Extract the assistant's text reply.
 CLUSTERS_TEXT=$(echo "$RESPONSE" | jq -r 'first(.content[]? | select(.type == "text") | .text | strings) // empty' 2>/dev/null || echo "")

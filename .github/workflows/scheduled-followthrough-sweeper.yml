@@ -123,7 +123,7 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           # #5934 chardevice-wedge-nonrecurrence-5934.sh (and #5110 betterstack-
-          # quota-verdict) — Better Stack Telemetry read creds for scripts/
+          # quota-verdict, and #6931 web2-luks-live-6931.sh) — Better Stack Telemetry read creds for scripts/
           # betterstack-query.sh (mirror Doppler soleur/prd_terraform). If these GH
           # secrets are not provisioned they resolve to "" -- and since #7946 the sweeper's
           # Guard 3 refuses an EMPTY binding: the tracker gets a REQUIRED SECRET MISSING

@@ -31,10 +31,28 @@
 # workflow_dispatch re-publish or mirror_only backfill of an OLDER tag must
 # therefore bump to the max (or noop), never open a downgrade PR.
 #
-# AUTH. All GitHub writes go through the soleur-ai App installation token in
-# GH_TOKEN (minted by the job's mint-soleur-ai-app-token composite step —
-# hr-github-app-auth-not-pat).
-# The push remote is https://x-access-token:${GH_TOKEN}@github.com/<repo>.git —
+# AUTH. All GitHub writes go through the soleur-infra App installation token in
+# GH_TOKEN (minted by the job's mint-infra-app-token composite step from the
+# narrow soleur-infra-app project (ADR-241 D11, #9321), scoped to
+# contents+pull_requests write — #9262,
+# hr-github-app-auth-not-pat). The commit identity is that App's bot user.
+# The push remote is https://github.com/<repo>.git with NO userinfo; the token
+# reaches `git ls-remote` / `git push` as an extra HTTP header carried in those
+# two commands' per-command ENVIRONMENT (GIT_CONFIG_COUNT/KEY_0/VALUE_0 with
+# http.https://github.com/.extraheader, the form actions/checkout uses; git
+# >= 2.31) — never on git's or git-remote-https's argument list (#9597, ADR-280).
+# A child's environment is readable only by the same uid and root, a reduction
+# from the world-readable /proc/<pid>/cmdline the URL form occupied; it is not
+# invisible to code running as the same user. The token passes a shape guard
+# — a canonical-body _bearer_ok copy ([A-Za-z0-9._~+/=-], the alphabet
+# scripts/lib/bearer-curl.sh bc_ok judges and the canonical-body parity row in
+# scripts/lint-shell-trace-credential-refusal.test.sh pins byte-identical across
+# every copy; NOT the legacy ~40-char ghs_ base62 class — GitHub's issued
+# installation tokens now run ~390 chars and carry '.' and '-', measured live
+# 2026-10-11, #9972) — BEFORE the header is built; a refused value
+# prints SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin
+# reason=<token_shape|control_char> and dies at `args`, before any git network
+# call. BUMP_PUSH_URL (the fixture seam) gets no header.
 # GITHUB_TOKEN pushes don't fire pull_request events, so required checks would
 # never run on the bump PR and auto-merge could never release it.
 #
@@ -46,9 +64,14 @@
 #                               predates the binding fails closed at args
 #   --mirror-status <ok|degraded|''>  zot mirror outcome (build mirror_status output)
 #   --run-url <url>             publishing run URL, recorded in the PR body
+#   --mirror-only <true|false|''>  the build's mirror_only input. `true` NEVER
+#                               arms auto-merge: a mirror_only backfill skips the
+#                               build's ancestry refusal and the sign step signs
+#                               whatever the tag resolves to, so it cannot attest
+#                               provenance (#9262). Optional; '' means false.
 #
 # ENV
-#   GH_TOKEN         soleur-ai installation token (required unless BUMP_PUSH_URL set)
+#   GH_TOKEN         soleur-infra installation token (required unless BUMP_PUSH_URL set)
 #   REPO             owner/name (default: $GITHUB_REPOSITORY or jikig-ai/soleur)
 #   BUMP_REPO_DIR    repo to rewrite (default: cwd) — the job checks out main
 #   BUMP_PUSH_URL    push remote override (fixture suites point at a bare repo)
@@ -65,7 +88,7 @@
 set -uo pipefail
 
 # xtrace refusal (#7797): GH_TOKEN is a live installation token — a traced run
-# would print it inside the push URL. Must be the FIRST thing after `set`
+# would print it inside the push Authorization header value. Must be the FIRST thing after `set`
 # (lint-shell-trace-credential-refusal Rule A: nothing traced may precede it,
 # which is why `export LC_ALL=C` sits BELOW this block, not above).
 case "$-" in
@@ -81,16 +104,33 @@ case "$-" in
 esac
 export LC_ALL=C
 
-# Same leak class as the xtrace refusal: git's own trace channels print the
-# credential-bearing push URL to stderr (anonymization covers error messages
-# only — verified: GIT_TRACE=1 echoes the full x-access-token URL). Scrub them
+# Same leak class as the xtrace refusal: git's trace channels print the
+# request to stderr. Measured (synthetic header, loopback server, count-only): GIT_TRACE
+# prints command and remote lines only (the header rides the environment, not
+# argv), GIT_TRACE_CURL redacts the Authorization header unless GIT_TRACE_REDACT=0,
+# and with GIT_TRACE_REDACT=0 it prints the header value in full (formerly the
+# full x-access-token URL appeared on the command lines too). Scrub them
 # unconditionally so a debugging `env:` line cannot land the live token in logs.
 unset GIT_TRACE GIT_TRACE_PACKET GIT_TRACE_PERFORMANCE GIT_TRACE_SETUP \
   GIT_TRACE_CURL GIT_TRACE_CURL_NO_DATA GIT_TRACE_REDACT GIT_TRACE2 \
   GIT_TRACE2_PERF GIT_TRACE2_EVENT GIT_CURL_VERBOSE GIT_HTTP_TRACE_AUTH_HEADER
 
-BOT_NAME='soleur-ai[bot]'
-BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
+# AUTH_HDR (the push credential's header, built below) must be a shell variable only. A plain `AUTH_HDR=""`
+# would KEEP the export attribute of an AUTH_HDR the caller's environment already carries (an assignment does
+# not unexport), and every child (git, gh, crane) would then hold the base64 in its environment. Unset here,
+# before the first child process, so the later assignments create a fresh, unexported variable.
+unset AUTH_HDR
+
+# The soleur-infra App's bot user (id 335404629), switched in place from
+# soleur-ai[bot] in #9262. BOT_NAME/BOT_EMAIL are the commit identity and the
+# form the COMMITS API reports (.author.login / .commit.author.email) for the
+# bot-tip and supersede checks. `gh pr list --json author` reports an App author
+# as `app/<slug>` instead, so the PR-author filters compare against BOT_PR_LOGIN
+# (before #9262 they compared against BOT_NAME and never matched in production).
+# A branch tipped by the old soleur-ai[bot] identity is treated as not-ours.
+BOT_NAME='soleur-infra[bot]'
+BOT_EMAIL='335404629+soleur-infra[bot]@users.noreply.github.com'
+BOT_PR_LOGIN='app/soleur-infra'
 # Pin commit identity at ENV level, not only repo-local config: an ambient
 # GIT_AUTHOR_*/GIT_COMMITTER_* inherited from the caller (hook shells leak
 # these) would otherwise re-author the commit past `git config user.*`.
@@ -136,15 +176,29 @@ die() { # die <stage> <msg...>
   exit 1
 }
 
+# Canonical-body _bearer_ok copy — byte-identical to every inline copy (the
+# alphabet [A-Za-z0-9._~+/=-] is the credential class scripts/lib/bearer-curl.sh
+# bc_ok judges), so the canonical-body parity row in
+# scripts/lint-shell-trace-credential-refusal.test.sh pins it and a future
+# alphabet amendment cannot silently re-narrow this guard (#9972). Top-level
+# definition, the placement most sibling copies share. Bare rc 1: the
+# token_shape vs control_char split lives at the call site.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 # --- args -------------------------------------------------------------------
-SIGNED_TAG="" SIGNED_DIGEST="" SIGNED_COMMIT="" MIRROR_STATUS="" RUN_URL=""
+SIGNED_TAG="" SIGNED_DIGEST="" SIGNED_COMMIT="" MIRROR_STATUS="" RUN_URL="" MIRROR_ONLY=""
+SEEN_FLAGS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --signed-tag|--signed-digest|--signed-commit|--mirror-status|--run-url)
+    --signed-tag|--signed-digest|--signed-commit|--mirror-status|--run-url|--mirror-only)
       # A valueless trailing flag must die, not spin: `shift 2` at $#=1 fails
       # without consuming, and the while loop would re-match $1 forever
       # (no `set -e` here) — burning the job's whole timeout budget.
       [[ $# -ge 2 ]] || die args "missing value for $1"
+      # A repeated flag is refused, never last-wins: `--mirror-only "$X" --mirror-only
+      # false` appended to the workflow's call would otherwise silently cancel the hold.
+      case " ${SEEN_FLAGS:-} " in *" $1 "*) die args "duplicate argument: $1" ;; esac
+      SEEN_FLAGS="${SEEN_FLAGS:-} $1"
       ;;
     *) die args "unknown argument: $1" ;;
   esac
@@ -154,6 +208,7 @@ while [[ $# -gt 0 ]]; do
     --signed-commit) SIGNED_COMMIT="$2"; shift 2 ;;
     --mirror-status) MIRROR_STATUS="$2"; shift 2 ;;
     --run-url)       RUN_URL="$2";       shift 2 ;;
+    --mirror-only)   MIRROR_ONLY="$2";   shift 2 ;;
   esac
 done
 [[ "$SIGNED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
@@ -161,10 +216,15 @@ done
 [[ "$SIGNED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
   || die args "--signed-digest must be sha256:<64 hex> (got '${SIGNED_DIGEST:-<empty>}')"
 [[ "$SIGNED_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
-  || die args "--signed-commit must be a 40-hex commit (got '${SIGNED_COMMIT:-<empty>}'). A workflow copy that predates #8747 does not pass it, which means vinngest-${SIGNED_TAG} was cut on a branch forked before the fix and may be off main. Unless main pins it today, delete it (git push origin :refs/tags/vinngest-${SIGNED_TAG}; git tag -d vinngest-${SIGNED_TAG}), then tag a NEW version on main's squash-merge commit; that tag push runs its own publish and bump."
+  || die args "--signed-commit must be a 40-hex commit (got '${SIGNED_COMMIT:-<empty>}'). Every copy of the workflow since #8747 passes it (and the bump job runs only main's copy), so a missing value means a manual or foreign invocation — or, historically, a tag cut on a branch forked before #8747, which may be off main. Unless main pins it today, delete it (git push origin :refs/tags/vinngest-${SIGNED_TAG}; git tag -d vinngest-${SIGNED_TAG}), then tag a NEW version on main's squash-merge commit, then dispatch the build once from main (gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<new tag>)."
 case "$MIRROR_STATUS" in
   ok|degraded|"") : ;;
   *) die args "--mirror-status must be ok|degraded|'' (got '$MIRROR_STATUS')" ;;
+esac
+case "$MIRROR_ONLY" in
+  true) : ;;
+  false|"") MIRROR_ONLY=false ;;
+  *) die args "--mirror-only must be true|false|'' (got '$MIRROR_ONLY')" ;;
 esac
 command -v jq >/dev/null || die args "jq is required (gh JSON parsing)"
 command -v gh >/dev/null || die args "gh is required (PR operations)"
@@ -180,13 +240,40 @@ REPO_DIR=$(cd "$REPO_DIR" 2>/dev/null && pwd) \
 git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 \
   || die args "BUMP_REPO_DIR '$REPO_DIR' is not a git repository"
 REPO="${REPO:-${GITHUB_REPOSITORY:-jikig-ai/soleur}}"
+AUTH_HDR=""   # a shell variable, never exported and never read from the caller's environment (unset up top, see there)
 if [[ -n "${BUMP_PUSH_URL:-}" ]]; then
   PUSH_URL="$BUMP_PUSH_URL"
 else
-  [[ -n "${GH_TOKEN:-}" ]] \
-    || die args "GH_TOKEN (soleur-ai installation token) is required for the push remote"
-  PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+  # Judge the credential BEFORE the header is built or any git network call.
+  # GitHub's issued installation tokens now carry '.' and '-' — the legacy ghs_
+  # base62 class refused every real token (#9972); the canonical-body
+  # _bearer_ok above admits the canonical alphabet. Empty/unset, or a byte
+  # outside the alphabet, is refused with the value-free marker; the value is
+  # never printed. token_shape vs control_char split lives here, not in
+  # _bearer_ok (which returns bare 1).
+  if ! _bearer_ok "${GH_TOKEN:-}"; then
+    _refuse_reason=token_shape
+    case "${GH_TOKEN:-}" in *[[:cntrl:]]*) _refuse_reason=control_char ;; esac
+    printf 'SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin reason=%s\n' "$_refuse_reason" >&2
+    die args "GH_TOKEN (soleur-infra installation token) is required for the push remote and must match [A-Za-z0-9._~+/=-]+ (value not shown)"
+  fi
+  PUSH_URL="https://github.com/${REPO}.git"
+  # base64 of x-access-token:TOKEN. printf is a builtin and the pipe is stdin, so
+  # the token is on no process's argument list (base64's own argv is empty).
+  AUTH_HDR="Authorization: basic $(printf '%s' "x-access-token:${GH_TOKEN}" | base64 | tr -d '\n')"
 fi
+
+# git_remote <git args...> — `git`, with the push credential as a per-command
+# environment prefix (never argv). Used ONLY for the two calls that talk to the
+# remote. AUTH_HDR is empty on the BUMP_PUSH_URL fixture path: plain git.
+git_remote() {
+  if [[ -n "$AUTH_HDR" ]]; then
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+      GIT_CONFIG_VALUE_0="$AUTH_HDR" git "$@"
+  else
+    git "$@"
+  fi
+}
 
 # --- ancestry (history visibility): refuse a shallow checkout first ----------
 # `git tag --merged HEAD` exits 0 on a shallow checkout and silently drops every
@@ -252,7 +339,7 @@ bind_target_commit
 # be "delete the pinned tag": that breaks AC6, GuardA and the zot backfill, and
 # repeated it walks the pin down.
 if [[ -n "$PIN_TAG" && "$(printf '%s\n%s\n' "$PIN_TAG" "$TARGET" | sort -V | tail -1)" != "$TARGET" ]]; then
-  die resolve "main pins ${PIN_TAG}, which is above every vinngest-v* tag merged into main (semver-max ${TARGET}) — its tag is either off main (a legacy #8747 pin) or was deleted. Refusing to author a downgrade. Do NOT delete or re-cut the pinned tag. Tag a NEW, higher version on main's latest commit (git tag -a vinngest-vX.Y.Z <main-sha> -m '...' && git push origin vinngest-vX.Y.Z); that tag push runs its own publish and bump."
+  die resolve "main pins ${PIN_TAG}, which is above every vinngest-v* tag merged into main (semver-max ${TARGET}) — its tag is either off main (a legacy #8747 pin) or was deleted. Refusing to author a downgrade. Do NOT delete or re-cut the pinned tag. Tag a NEW, higher version on main's latest commit (git tag -a vinngest-vX.Y.Z <main-sha> -m '...' && git push origin vinngest-vX.Y.Z), then dispatch the build once from main (gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-vX.Y.Z)."
 fi
 
 WORK=$(mktemp -d)
@@ -381,7 +468,7 @@ git -C "$REPO_DIR" commit -qm \
   "chore(infra): bump inngest-bootstrap pin ${OLD_TAG} -> ${TARGET} (vinngest-${TARGET})" \
   || die push "git commit failed"
 
-remote_tip=$(git -C "$REPO_DIR" ls-remote "$PUSH_URL" "refs/heads/${BRANCH}" 2>/dev/null | awk '{print $1}')
+remote_tip=$(git_remote -C "$REPO_DIR" ls-remote "$PUSH_URL" "refs/heads/${BRANCH}" 2>/dev/null | awk '{print $1}')
 if [[ -n "$remote_tip" ]]; then
   # Never force-push over HUMAN work on a bot branch (fix-constraints-stage-b
   # rule): a maintainer's review-fix commit must not be clobbered. The commits
@@ -396,16 +483,16 @@ if [[ -n "$remote_tip" ]]; then
     *)  human_tip=1 ;;
   esac
   if [[ "$human_tip" == "1" ]]; then
-    echo "::warning::branch-has-manual-commits: ${BRANCH} remote tip is not bot-authored (login='${tip_author:-<none>}') — push skipped. Reconcile: reset the tip to a soleur-ai[bot] commit or delete the branch, then re-run. Every ${TARGET} run re-skips while a non-bot tip stands; the AC6 drift guard stays red meanwhile (main-health-monitor escalates to a ci/main-broken issue)."
+    echo "::warning::branch-has-manual-commits: ${BRANCH} remote tip is not authored by ${BOT_NAME} (login='${tip_author:-<none>}') — push skipped. Reconcile: close the PR and delete the branch (git push origin --delete ${BRANCH}), then dispatch the build once from main with mirror_only=true (gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-${TARGET} -f mirror_only=true); the PR it opens is HELD (a mirror_only run never arms auto-merge), so review it and merge with gh pr merge <n> --squash. Every ${TARGET} run re-skips while such a tip stands; the AC6 drift guard stays red meanwhile (main-health-monitor escalates to a ci/main-broken issue)."
     emit_result skipped
-    summary "### inngest-bootstrap pin bump"$'\n\n'"**branch-has-manual-commits** — \`${BRANCH}\` carries a non-bot tip; push skipped. Reconcile: reset the tip to a \`soleur-ai[bot]\` commit or delete the branch, then re-run — every \`${TARGET}\` run re-skips while a non-bot tip stands."
+    summary "### inngest-bootstrap pin bump"$'\n\n'"**branch-has-manual-commits** — \`${BRANCH}\` carries a tip not authored by \`${BOT_NAME}\`; push skipped. Reconcile: close the PR and delete the branch (\`git push origin --delete ${BRANCH}\`), then dispatch the build once from main with \`mirror_only=true\`; the PR it opens is held, so review it and merge with \`gh pr merge <n> --squash\` — every \`${TARGET}\` run re-skips while such a tip stands."
     exit 0
   fi
   lease="--force-with-lease=refs/heads/${BRANCH}:${remote_tip}"
 else
   lease="--force-with-lease=refs/heads/${BRANCH}:"
 fi
-git -C "$REPO_DIR" push "$lease" "$PUSH_URL" "HEAD:refs/heads/${BRANCH}" \
+git_remote -C "$REPO_DIR" push "$lease" "$PUSH_URL" "HEAD:refs/heads/${BRANCH}" \
   || die push "git push of ${BRANCH} failed"
 
 # --- pr: create or reuse ------------------------------------------------------
@@ -414,16 +501,21 @@ git -C "$REPO_DIR" push "$lease" "$PUSH_URL" "HEAD:refs/heads/${BRANCH}" \
 # cli/cli#10945), so an unfiltered .[0] could select a fork PR with a colliding
 # branch name and arm `gh pr merge --auto` on it.
 if ! PR_LIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
-    --json url,number,author,isCrossRepository 2>/dev/null); then
+    --json url,number,author,isCrossRepository,autoMergeRequest 2>/dev/null); then
   echo "::warning::gh pr list for ${BRANCH} failed — proceeding as if no open PR exists"
   PR_LIST='[]'
 fi
-PR_URL=$(jq -r --arg bot "$BOT_NAME" \
+PR_URL=$(jq -r --arg bot "$BOT_PR_LOGIN" \
   '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].url // ""' \
   <<<"$PR_LIST" 2>/dev/null || true)
-PR_NUM=$(jq -r --arg bot "$BOT_NAME" \
+PR_NUM=$(jq -r --arg bot "$BOT_PR_LOGIN" \
   '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].number // ""' \
   <<<"$PR_LIST" 2>/dev/null || true)
+# Whether auto-merge is ALREADY armed on the reused PR (an earlier full build armed it).
+# A mirror_only run must not feed an armed PR, so this is read, never assumed (#9262).
+PR_ARMED=$(jq -r --arg bot "$BOT_PR_LOGIN" \
+  '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].autoMergeRequest // null | if . == null then "no" else "yes" end' \
+  <<<"$PR_LIST" 2>/dev/null || echo unknown)
 
 if [[ -n "$PR_URL" && -n "$PR_NUM" ]]; then
   gh pr comment "$PR_NUM" --repo "$REPO" \
@@ -442,6 +534,10 @@ else
     "- publishing run: ${RUN_URL:-n/a}" \
     "- sites: 4 refs across \`apps/web-platform/infra/cloud-init.yml\` and \`apps/web-platform/infra/cloud-init-inngest.yml\`" \
     "- decision record: [ADR-232](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md)")
+  if [[ "$MIRROR_ONLY" == "true" ]]; then
+    body+=$(printf '\n%s\n' "" \
+      "Auto-merge is **not** armed: a mirror_only backfill cannot attest provenance — it skips the build's ancestry refusal and its signature covers whatever the tag resolves to. Confirm \`${RESOLVED}\` was built from commit \`${TARGET_COMMIT}\` before merging.")
+  fi
   if [[ "$SIGNED_TAG" != "$TARGET" || "$MIRROR_STATUS" != "ok" ]]; then
     body+=$(printf '\n%s\n' "" \
       "Auto-merge is **not** armed: this publish's mirror status does not attest the target (signed=${SIGNED_TAG}, mirror_status=${MIRROR_STATUS:-unset}). Verify zot serves \`${RESOLVED}\` before merging — the dedicated inngest host cannot pull from GHCR (AP-016).")
@@ -458,13 +554,16 @@ else
     # once through the SAME same-repo/bot filter before calling it fatal — a
     # hidden collision is recoverable, an unfiltered retry is not.
     PR_LIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
-      --json url,number,author,isCrossRepository 2>/dev/null || echo '[]')
-    PR_URL=$(jq -r --arg bot "$BOT_NAME" \
+      --json url,number,author,isCrossRepository,autoMergeRequest 2>/dev/null || echo '[]')
+    PR_URL=$(jq -r --arg bot "$BOT_PR_LOGIN" \
       '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].url // ""' \
       <<<"$PR_LIST" 2>/dev/null || true)
-    PR_NUM=$(jq -r --arg bot "$BOT_NAME" \
+    PR_NUM=$(jq -r --arg bot "$BOT_PR_LOGIN" \
       '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].number // ""' \
       <<<"$PR_LIST" 2>/dev/null || true)
+    PR_ARMED=$(jq -r --arg bot "$BOT_PR_LOGIN" \
+      '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].autoMergeRequest // null | if . == null then "no" else "yes" end' \
+      <<<"$PR_LIST" 2>/dev/null || echo unknown)
     [[ -n "$PR_URL" && -n "$PR_NUM" ]] \
       || die pr "gh pr create failed for ${BRANCH} and the filtered re-list found no same-repo bot PR"
     RESULT_KIND=existing
@@ -506,11 +605,30 @@ done < <(jq -r --arg b "$BRANCH" \
   '.[] | select(.headRefName != null) | select(.headRefName | startswith("soleur/inngest-pin-")) | select(.headRefName != $b) | "\(.number)|\(.headRefOid)"' \
   <<<"$OPEN_PRS" 2>/dev/null)
 
+# --- mirror_only: never feed an ALREADY-ARMED PR (#9262) ----------------------
+# "Never arms" is not enough on the `existing` path: a PR an earlier full build armed
+# stays armed across this run's push (GitHub keeps auto-merge for a writer's push), so
+# the PR would merge on a commit a mirror_only run produced. Disarm it, and refuse when
+# the armed state cannot be read or the disarm fails: fail-closed, never "probably held".
+if [[ "$MIRROR_ONLY" == "true" && "$RESULT_KIND" == "existing" && -n "$PR_NUM" ]]; then
+  case "${PR_ARMED:-unknown}" in
+    no) : ;;
+    yes)
+      gh pr merge "$PR_NUM" --repo "$REPO" --disable-auto \
+        || die pr "mirror_only run reused PR ${PR_NUM}, which has auto-merge armed, and gh pr merge --disable-auto failed — the PR could merge on a mirror_only commit; disable auto-merge on ${PR_URL} by hand before anything else"
+      echo "disarmed auto-merge on ${PR_URL} (mirror_only run)" ;;
+    *) die pr "mirror_only run reused PR ${PR_NUM} but could not read whether auto-merge is armed (autoMergeRequest unreadable) — refusing rather than risk feeding an armed PR" ;;
+  esac
+  gh pr comment "$PR_NUM" --repo "$REPO" \
+    --body "Auto-merge withheld: this refresh came from a mirror_only backfill, which cannot attest provenance (it skips the build's ancestry refusal, and the signature covers whatever the tag resolves to). Confirm \`${RESOLVED}\` was built from commit \`${TARGET_COMMIT}\`, then merge by hand." \
+    || echo "::warning::mirror_only hold comment on PR ${PR_NUM} failed"
+fi
+
 # --- merge: arm auto-merge iff the zot mirror attests THIS target -------------
 # mirror_status attests the tag THIS run published (SIGNED_TAG). When the run
 # published a non-max tag, `ok` says nothing about the max target's zot copy —
 # arm only when the signed tag IS the target AND its mirror is healthy.
-if [[ "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS" == "ok" && "$PROVENANCE" == "bound" ]]; then
+if [[ "$MIRROR_ONLY" != "true" && "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS" == "ok" && "$PROVENANCE" == "bound" ]]; then
   if [[ -n "$PR_NUM" ]]; then
     gh pr merge "$PR_NUM" --repo "$REPO" --auto --squash \
       || echo "::warning::auto-merge arm failed for ${PR_URL} — PR left open; the next publish's supersede sweep re-reports it"
@@ -521,7 +639,9 @@ elif [[ -n "$PR_NUM" && "$RESULT_KIND" == "opened" ]]; then
   # Hold comment on a NEWLY opened PR only — on the `existing` path the re-run
   # comment already explains the refresh, and a mirror_only backfill series
   # would otherwise repost the identical hold text on every run.
-  if [[ "$PROVENANCE" != "bound" ]]; then
+  if [[ "$MIRROR_ONLY" == "true" ]]; then
+    hold_reason="this is a mirror_only backfill, which cannot attest provenance (it skips the build's ancestry refusal, and the signature covers whatever the tag resolves to); confirm \`${RESOLVED}\` was built from commit \`${TARGET_COMMIT}\`"
+  elif [[ "$PROVENANCE" != "bound" ]]; then
     hold_reason="\`${RESOLVED}\` carries no \`org.opencontainers.image.revision\` label, so nothing ties it to commit \`${TARGET_COMMIT}\` (#8747); confirm its provenance"
   elif [[ "$SIGNED_TAG" != "$TARGET" ]]; then
     hold_reason="this publish signed \`${SIGNED_TAG}\`, which is not the pin target \`${TARGET}\`; the target's zot state is attested by its own publish"
@@ -542,8 +662,8 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     echo "- pin: \`${NEWREF}\`"
     echo "- branch: \`${BRANCH}\`"
     echo "- PR: ${PR_URL}"
-    if [[ "$SIGNED_TAG" != "$TARGET" || "$MIRROR_STATUS" != "ok" || "$PROVENANCE" != "bound" ]]; then
-      echo "- auto-merge: **withheld** (signed=${SIGNED_TAG} target=${TARGET} mirror_status=${MIRROR_STATUS:-unset} provenance=${PROVENANCE})"
+    if [[ "$MIRROR_ONLY" == "true" || "$SIGNED_TAG" != "$TARGET" || "$MIRROR_STATUS" != "ok" || "$PROVENANCE" != "bound" ]]; then
+      echo "- auto-merge: **withheld** (signed=${SIGNED_TAG} target=${TARGET} mirror_status=${MIRROR_STATUS:-unset} provenance=${PROVENANCE} mirror_only=${MIRROR_ONLY})"
     fi
   } >> "$GITHUB_STEP_SUMMARY"
 fi

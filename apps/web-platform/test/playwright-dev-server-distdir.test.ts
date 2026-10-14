@@ -31,15 +31,38 @@ const read = (name: string) => stripComments(readFileSync(join(__dirname, "..", 
 describe("playwright dev servers use distinct dist directories", () => {
   const playwright = read("playwright.config.ts");
   const distDirs = [...playwright.matchAll(/NEXT_DIST_DIR:\s*"([^"]+)"/g)].map((m) => m[1]);
-  // Counted by `port:`, not by the command string. Playwright requires exactly one of
-  // `port`/`url` per webServer entry, so this counts ENTRIES. Counting occurrences of
+  // Counted by readiness key (`port:` or `url:`), not by the command string. Playwright
+  // rejects an entry that sets BOTH and accepts one that sets NEITHER (no readiness
+  // poll), so counting the readiness key alone would miss a keyless entry: the entry
+  // count is cross-checked against `command:` below. Counting occurrences of
   // "command: `npm run dev`" instead would answer "how many entries use that one command"
   // — measured: a third entry spelled `npm run dev:mock` was invisible to it, and its
   // undercount exactly cancelled the missing declaration, leaving the suite green.
   const webServerBlock = playwright.slice(playwright.indexOf("webServer:"));
-  const webServers = (webServerBlock.match(/^\s*port:\s/gm) ?? []).length;
+  // Unanchored on purpose: a single-line entry (`{ command: ..., url: ... }`) must count too.
+  const webServers = (webServerBlock.match(/\b(?:port|url):\s/g) ?? []).length;
+  const webServerCommands = (webServerBlock.match(/\bcommand:\s/g) ?? []).length;
+  // One segment per webServer entry (text after each `command:`), so per-entry properties
+  // are asserted per entry rather than counted across the whole block.
+  const entries = webServerBlock.split(/\bcommand:\s/).slice(1);
+
+  it("polls /login for readiness on both servers, with a budget that covers the cold compile", () => {
+    // `port:` is a TCP check: a server whose first compile 5xx's counts as ready and the
+    // suite then fails one test at a time (64 reds, ~14 min). `url:` treats a 5xx as not
+    // ready. Reverting either entry, or pointing it at a path that is not `/login`
+    // (which renders app/layout.tsx), must turn this red.
+    expect(entries).toHaveLength(2);
+    const [pub, auth] = entries;
+    expect(pub).toMatch(/\burl:\s*`http:\/\/localhost:\$\{PUBLIC_PORT\}\/login`/);
+    expect(auth).toMatch(/\burl:\s*`http:\/\/localhost:\$\{AUTH_PORT\}\/login`/);
+    for (const entry of entries) {
+      expect(entry, "an entry must not fall back to a TCP port check").not.toMatch(/\bport:\s/);
+      expect(entry, "every entry needs the 180s readiness budget").toMatch(/\btimeout:\s*180_000\b/);
+    }
+  });
 
   it("declares one NEXT_DIST_DIR per webServer entry", () => {
+    expect(webServerCommands, "every webServer entry must carry a readiness key").toBe(webServers);
     expect(webServers, "expected the two-dev-server harness").toBe(2);
     expect(
       distDirs.length,

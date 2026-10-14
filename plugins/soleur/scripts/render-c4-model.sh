@@ -25,6 +25,35 @@
 # package.json @likec4/core/@likec4/diagram (guarded by c4-likec4-version-pin.test.ts).
 # A CLI/client version skew silently desyncs the rendered diagram.
 #
+# BUMPING LIKEC4 — the version is half of a pair with LIKEC4_BEFORE. The version pins ONE
+# package; `--before=<date>` resolves its ~190 transitive deps as of that date, so a
+# tarball published minutes ago (which npm's CDN can 404, #9300) is never requested.
+#   1. Pick the new version, then a date that is the day AFTER its publish day and >= 3 days
+#      old (a date-only --before is midnight UTC and EXCLUSIVE: a version published at 17:11Z
+#      on day D is invisible to --before=D and fails with ETARGET; claude-code 2.1.284 is a
+#      live example of that arithmetic, not a likec4 fact):
+#        npm view likec4@<version> time --json
+#   2. Move LIKEC4_VERSION and LIKEC4_BEFORE together in EVERY site in one commit: this
+#      script, plugins/soleur/lib/c4-from-components.ts, the `Install likec4 CLI` steps
+#      in .github/workflows/ci.yml and main-health-monitor.yml, and the `cli-tools` stage
+#      of apps/web-platform/Dockerfile (the date is a literal there). Every one of those
+#      installs must be exactly `npm install -g likec4@<version> --before=<date>
+#      --ignore-scripts` (a Dockerfile one prefixed `RUN `): the tests exercise the binary a
+#      scripts-off install makes, so the shipped one must match. The claude-code install is the
+#      exception (its postinstall places the binary). Sweep with: git grep 'likec4@1\.'
+#      c4-likec4-version-pin.test.ts asserts parity, the age floor, the flag and the exact form.
+#   Deliberately version-only (no --before): package.json (installed by lock-based
+#   `npm ci --ignore-scripts`) and the interactive `validate` recipes in the architecture skill docs,
+#   which also run scripts-on (they are asserted for the version only).
+#   A claude-code bump needs no date (its tree is exact-pinned platform packages with
+#   nothing floating) but claude-cli-pin-knows-models.test.ts must stay green.
+#   Policy: the date moves with a likec4 bump, or sooner if a transitive advisory affects
+#   the CLI; the tree is otherwise frozen on purpose. A version bump that forgets the date
+#   fails the install with ETARGET (the registry knows publish times; the offline guard
+#   does not). A private registry mirror that serves metadata WITHOUT per-version publish
+#   times does not fail: npm silently ignores --before there (measured against
+#   npm-pick-manifest), so the pin is inert on that mirror and the tree floats again.
+#
 # Renders OFF-TREE to a temp path and validates structurally BEFORE publishing:
 # `likec4 export json` exits 0 even on an unresolved-reference / empty model, so
 # an exit-0 check is NOT proof of a good artifact — see learnings
@@ -42,6 +71,7 @@
 set -euo pipefail
 
 LIKEC4_VERSION="1.50.0"
+LIKEC4_BEFORE="2026-09-28"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANONICAL_CLI="$SCRIPT_DIR/../lib/c4-canonical-cli.mjs"
@@ -114,7 +144,7 @@ RENDER_LOG="$TMP/render.log"
 # ANSI-coloured reporter that the anchored DIAG_RE below cannot match, and a syntax error
 # would then publish a truncated model at rc 0 (measured under CI=true). ANSI is also
 # stripped from the log as a second line of defence.
-if ! ( cd "$DIAGRAMS_DIR" && env -u CI -u FORCE_COLOR NO_COLOR=1 npx -y --ignore-scripts "likec4@${LIKEC4_VERSION}" export json --no-use-dot -o "$TMP/model.likec4.json" . ) >"$RENDER_LOG" 2>&1; then
+if ! ( cd "$DIAGRAMS_DIR" && env -u CI -u FORCE_COLOR NO_COLOR=1 npx -y --ignore-scripts --before="${LIKEC4_BEFORE}" "likec4@${LIKEC4_VERSION}" export json --no-use-dot -o "$TMP/model.likec4.json" . ) >"$RENDER_LOG" 2>&1; then
   echo "ERROR: likec4 export exited non-zero — refusing to overwrite $OUT" >&2
   cat "$RENDER_LOG" >&2
   exit 1
