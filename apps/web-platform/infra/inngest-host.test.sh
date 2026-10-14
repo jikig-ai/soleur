@@ -656,16 +656,16 @@ for _p in /usr/local/bin/infra-config-install \
   [ "$(grep -cF "  - path: $_p" "$CLOUD_INIT")" -eq 1 ] \
     && pass || fail "#6780: exactly one write_files entry for $_p"
 done
-grep -A3 -F '  - path: /usr/local/bin/infra-config-install' "$CLOUD_INIT" | grep -qF '${indent(6, infra_config_install_text)}' \
+grep -qF '${indent(6, infra_config_install_text)}' < <(grep -A3 -F '  - path: /usr/local/bin/infra-config-install' "$CLOUD_INIT") \
   && pass || fail "#6780: infra-config-install must embed via \${indent(6, infra_config_install_text)} (single-source, D12)"
-grep -A3 -F '  - path: /etc/soleur/cosign-trusted-root.json' "$CLOUD_INIT" | grep -qF '${indent(6, cosign_trusted_root_text)}' \
+grep -qF '${indent(6, cosign_trusted_root_text)}' < <(grep -A3 -F '  - path: /etc/soleur/cosign-trusted-root.json' "$CLOUD_INIT") \
   && pass || fail "#6780: cosign-trusted-root.json must embed via \${indent(6, cosign_trusted_root_text)} (single-source, D12)"
 _cr_arm="$(grep -n 'enable --now inngest-config-refresh.timer' "$CLOUD_INIT" | head -1 | cut -d: -f1)"
 _cr_env="$(grep -n '> /etc/default/inngest-server' "$CLOUD_INIT" | head -1 | cut -d: -f1)"
 { [ -n "$_cr_arm" ] && [ -n "$_cr_env" ] && [ "$_cr_arm" -gt "$_cr_env" ]; } \
   && pass || fail "#6780: the refresh timer must be armed AFTER /etc/default/inngest-server is written"
 for _eng in 'inngest-config-refresh' 'infra-config-install' 'cosign-trusted-root' 'applied.version'; do
-  ! grep -vE '^[[:space:]]*#' "$DIR/inngest-config-refresh-set.txt" | grep -q "$_eng" \
+  ! grep -q "$_eng" < <(grep -vE '^[[:space:]]*#' "$DIR/inngest-config-refresh-set.txt") \
     && pass || fail "#6780 HARD-1: engine path $_eng appears in inngest-config-refresh-set.txt"
 done
 

@@ -141,7 +141,7 @@ fi
 CHECK_WF_CODE="$(grep -vE '^[[:space:]]*#' "$CHECK_WF" || true)"
 CHECK_SH_CODE="$(grep -vE '^[[:space:]]*#' "$CHECK_SH" || true)"
 for tok in 'docker push' 'cosign' 'crane' 'id-token' 'packages:' 'environment:' 'docker login' 'login-action'; do
-  if printf '%s' "$CHECK_WF_CODE" | grep -qF "$tok" || printf '%s' "$CHECK_SH_CODE" | grep -qF "$tok"; then
+  if grep -qF "$tok" <<<"$CHECK_WF_CODE" || grep -qF "$tok" <<<"$CHECK_SH_CODE"; then
     no "P4: forbidden token '$tok' present in a code line of the check lane"
   else
     ok "P4: no '$tok' token in code"
@@ -184,7 +184,7 @@ done <<< "$CP_CHECK"
 [ "$uncovered" -eq 0 ] && ok "P5: every cp carrier is covered by the paths filter"
 # and the lane's own definition files are covered (a lane edit must re-run the lane).
 for req in '.github/workflows/check-inngest-bootstrap-build.yml' '.github/scripts/check-inngest-bootstrap-build.sh'; do
-  printf '%s\n' "$PATHS" | grep -qxF "$req" \
+  grep -qxF "$req" <<<"$PATHS" \
     && ok "P5: paths filter lists $req" \
     || no "P5: paths filter does not list $req (lane edits would not re-run the lane)"
 done

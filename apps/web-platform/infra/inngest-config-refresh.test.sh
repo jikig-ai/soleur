@@ -81,7 +81,7 @@ SVC="$(cat "$WORK/refresh.service")"; TMR="$(cat "$WORK/refresh.timer")"; SC="$(
 
 # S1: the script lands once, executable, root-owned, bash.
 grep -q '^0755 root:root$' "$WORK/refresh.sh.meta" && pass || fail "S1: refresh.sh not 0755 root:root"
-head -1 "$WORK/refresh.sh" | grep -qx '#!/usr/bin/env bash' && pass || fail "S1: refresh.sh shebang"
+grep -qx '#!/usr/bin/env bash' < <(head -1 "$WORK/refresh.sh") && pass || fail "S1: refresh.sh shebang"
 bash -n "$WORK/refresh.sh" && pass || fail "S1: refresh.sh bash -n"
 bash -n "$WORK/install.sh" && pass || fail "S1: install.sh bash -n"
 
@@ -89,13 +89,13 @@ bash -n "$WORK/install.sh" && pass || fail "S1: install.sh bash -n"
 for pin in 'Type=oneshot' 'TimeoutStartSec=' 'SyslogIdentifier=inngest-config-refresh' \
            'StateDirectory=inngest-config' 'ConditionPathExists=/etc/default/inngest-server' \
            'EnvironmentFile=/etc/default/inngest-server'; do
-  printf '%s' "$SVC" | grep -qF "$pin" && pass || fail "S2: service missing $pin"
+  grep -qF "$pin" <<<"$SVC" && pass || fail "S2: service missing $pin"
 done
-printf '%s' "$SVC" | grep -q 'ExecStart=.*doppler run .*--only-secrets INNGEST_CONFIG_DIGEST' \
+grep -q 'ExecStart=.*doppler run .*--only-secrets INNGEST_CONFIG_DIGEST' <<<"$SVC" \
   && pass || fail "S2: ExecStart lacks --only-secrets INNGEST_CONFIG_DIGEST"
-printf '%s' "$SVC" | grep -q 'ExecStart=.*--only-secrets INNGEST_CONFIG_DIGEST.*-- .*inngest-config-refresh\.sh' \
+grep -q 'ExecStart=.*--only-secrets INNGEST_CONFIG_DIGEST.*-- .*inngest-config-refresh\.sh' <<<"$SVC" \
   && pass || fail "S2: bound must sit before the -- separator"
-printf '%s' "$SVC" | grep -qF -- '--no-exit-on-missing-only-secrets' \
+grep -qF -- '--no-exit-on-missing-only-secrets' <<<"$SVC" \
   && pass || fail "S2: missing --no-exit-on-missing-only-secrets (count-gated pointer must not hard-fail)"
 # The bound admits exactly the ONE pointer — no second secret sneaks in.
 only_n="$(printf '%s' "$SVC" | grep -oE -- '--only-secrets[ =][A-Z_]+' | wc -l)"
@@ -103,7 +103,7 @@ only_n="$(printf '%s' "$SVC" | grep -oE -- '--only-secrets[ =][A-Z_]+' | wc -l)"
 
 # S3: timer shape — 60 s cadence, enabled on timers.target, persistent.
 for pin in 'OnBootSec=' 'OnUnitActiveSec=60s' 'Persistent=true' 'WantedBy=timers.target'; do
-  printf '%s' "$TMR" | grep -qF "$pin" && pass || fail "S3: timer missing $pin"
+  grep -qF "$pin" <<<"$TMR" && pass || fail "S3: timer missing $pin"
 done
 
 # S4: payload byte-parity — baked installer == strip(repo file); trusted root == repo file.
@@ -184,9 +184,9 @@ SED_LINE="$(grep -oE 'sed -E .*REDACTED.*' "$WORK/phone-home.sh" | head -1)"
 [ -n "$SED_LINE" ] || { fail "S8b: could not locate the phone-home detail sanitizer line"; }
 # The sanitizer's three-part shape: uppercase-fold the labeled digest FIRST, run the generic
 # 32+ hex scrub, lowercase-restore LAST. Order is the mechanism — pin it.
-printf '%s' "$SED_LINE" | grep -q 'sha256=\[0-9a-f\]{64}#\\U&' \
+grep -q 'sha256=\[0-9a-f\]{64}#\\U&' <<<"$SED_LINE" \
   && pass || fail "S8b: sanitizer lost the sha256= fold-up leg"
-printf '%s' "$SED_LINE" | grep -q 'SHA256=\[0-9A-F\]{64}#\\L&' \
+grep -q 'SHA256=\[0-9A-F\]{64}#\\L&' <<<"$SED_LINE" \
   && pass || fail "S8b: sanitizer lost the SHA256 restore leg"
 if [ -n "$SED_LINE" ]; then
   # the sed program is single-quoted in the source (it can contain no single quote):
@@ -196,11 +196,11 @@ if [ -n "$SED_LINE" ]; then
     "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111" \
     "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222" \
     | sed -E "$SED_EXPR")"
-  printf '%s' "$probe_out" | grep -q 'sha256=aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111' \
+  grep -q 'sha256=aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111' <<<"$probe_out" \
     && pass || fail "S8b: labeled sha256= digest did NOT survive the sanitizer (D2 broken): $probe_out"
-  ! printf '%s' "$probe_out" | grep -q 'dp.st.AA11BB22CC33DD44EE55' \
+  ! grep -q 'dp.st.AA11BB22CC33DD44EE55' <<<"$probe_out" \
     && pass || fail "S8b: Doppler token survived the sanitizer"
-  ! printf '%s' "$probe_out" | grep -q 'bbbb2222bbbb2222bbbb2222bbbb2222' \
+  ! grep -q 'bbbb2222bbbb2222bbbb2222bbbb2222' <<<"$probe_out" \
     && pass || fail "S8b: bare 64-hex run survived the sanitizer (must still be scrubbed)"
 fi
 
@@ -209,14 +209,14 @@ fi
 for pin in 'verify-blob' '--trusted-root' '--certificate' '--signature' \
            '--certificate-identity-regexp' '--certificate-oidc-issuer' \
            'token.actions.githubusercontent.com' '--network none'; do
-  printf '%s' "$SC" | grep -qF -- "$pin" && pass || fail "S9: verify call missing $pin"
+  grep -qF -- "$pin" <<<"$SC" && pass || fail "S9: verify call missing $pin"
 done
-printf '%s' "$SC" | grep -q 'cosign@sha256:57c0e93a' \
+grep -q 'cosign@sha256:57c0e93a' <<<"$SC" \
   && pass || fail "S9: cosign image not the pinned v3.1.1 digest"
-printf '%s' "$SC" | grep -q 'IDENTITY_REGEXP.*build-inngest-config-bundle' \
+grep -q 'IDENTITY_REGEXP.*build-inngest-config-bundle' <<<"$SC" \
   && pass || fail "S9: identity regexp does not name the bundle workflow"
 # Install goes through the allowlisted root helper, never a direct cp/install.
-printf '%s' "$SC" | grep -q 'INSTALL_CMD.*infra-config-install' \
+grep -q 'INSTALL_CMD.*infra-config-install' <<<"$SC" \
   && pass || fail "S9: install path not infra-config-install"
 
 # ── F-rows: run the extracted script under fixture seams ─────────────────────────────────

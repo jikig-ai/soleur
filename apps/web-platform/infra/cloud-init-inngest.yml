@@ -1853,7 +1853,7 @@ write_files:
         noop "reason=empty-pointer"
         exit 0
       fi
-      if ! printf '%s' "$pointer" | grep -qE '^[0-9a-f]{64}$'; then
+      if ! grep -qE '^[0-9a-f]{64}$' <<<"$pointer"; then
         verify_fail pointer-malformed
       fi
       if [ -n "$applied_sha" ] && [ "$pointer" = "$applied_sha" ]; then
