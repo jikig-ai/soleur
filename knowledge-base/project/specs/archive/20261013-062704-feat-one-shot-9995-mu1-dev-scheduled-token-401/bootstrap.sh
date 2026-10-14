@@ -412,9 +412,15 @@ apply_create_app() {
   mark_changed "the registration page was opened; the App may have been created"
   soleur_op_env_upsert "$ENV_FILE" APP_CREATE_ATTEMPTED "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   printf '  A page will POST the manifest and open GitHub'"'"'s prefilled registration form.\n'
-  printf '  1. Click "Create GitHub App".\n'
+  printf '  1. Click "Create GitHub App". GitHub then redirects to the App settings page with a\n'
+  printf '     one-time ?code= in the URL (single-use, ~1h, not used by this flow: do not share it).\n'
   printf '  2. On the new App page click "Generate a private key" — a .pem downloads.\n'
+  printf '     An agent driving a browser may instead POST that code to\n'
+  printf '     https://api.github.com/app-manifests/<code>/conversions (it creates the App and returns the\n'
+  printf '     key in the response): write the pem to a 0600 file under $XDG_RUNTIME_DIR, never print it.\n'
   printf '  3. Give the agent the .pem path (or move it under $XDG_RUNTIME_DIR first).\n'
+  printf '  A browser that blocks file:// can serve a COPY of the page (never this directory: it holds .env):\n'
+  printf '    d=$(mktemp -d) && cp %s "$d" && python3 -m http.server --bind 127.0.0.1 -d "$d"\n' "$MANIFEST_PAGE"
   soleur_op_open_url "file://${MANIFEST_PAGE}"
 }
 
@@ -428,7 +434,7 @@ read_record_key() {
     return 0
   fi
   local pem_path=""
-  soleur_op_value SOLEUR_BOOTSTRAP_PEM_PATH "  Path of the downloaded .pem (move it under \$XDG_RUNTIME_DIR first): " pem_path
+  soleur_op_value SOLEUR_BOOTSTRAP_PEM_PATH "  Path of the .pem (downloaded, or written from the code exchange; keep it under \$XDG_RUNTIME_DIR): " pem_path
   [[ -f "$pem_path" ]] || { soleur_op_red "  no file at ${pem_path}"; return 1; }
   # `stat -f -c %T` is GNU-only; refuse non-Linux by name rather than misreading
   # a stat error as "not tmpfs".
@@ -554,6 +560,10 @@ read_verify() {
   # git, not a fixed ../ count: this script moves one level deeper when its spec dir is archived.
   local repo_root; repo_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" \
     || { soleur_op_red "  cannot resolve the repo root from ${SCRIPT_DIR}"; return 1; }
+  # The probe runs under `doppler run` with live credentials: refuse a root that does not TRACK it
+  # (a copy of this script sitting inside an unrelated repo would otherwise run that repo's file).
+  git -C "$repo_root" ls-files --error-unmatch scripts/probe-github-app-mint.sh >/dev/null 2>&1 \
+    || { soleur_op_red "  ${repo_root} does not track scripts/probe-github-app-mint.sh — wrong repo root"; return 1; }
   local out rc=0
   out="$(cd "$repo_root" && doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
     bash scripts/probe-github-app-mint.sh 2>&1)" || rc=$?
@@ -621,7 +631,7 @@ dispatch_stage() {
 }
 
 main() {
-  soleur_op_require_bins grep mktemp printenv sed date od id stat cut tr awk find gh doppler openssl jq
+  soleur_op_require_bins grep mktemp printenv sed date od id stat cut tr awk find gh doppler openssl jq git
   soleur_op_ledger_init 1 "bootstrap.sh"
   dispatch_stage "$STAGE"
 }

@@ -319,6 +319,13 @@ tracked, so the script survives `ship` reaping the worktree and is visible to th
 and to review; and a gitignored path (`provisioning/`, `.soleur/` — both are) would leave the
 follow-through issue's `auto_command:` pointing at a file that stops existing at ship Phase 7.
 
+The script does not stay at that depth: `archive-kb` later moves the spec directory one level deeper
+(`specs/archive/<ts>-feat-<name>/`). A repo root computed as a fixed `../` count from `SCRIPT_DIR`
+then points at the wrong directory without any error at generation time. Resolve it with
+`git -C "$SCRIPT_DIR" rev-parse --show-toplevel`, and refuse a root that does not track the file a
+stage is about to run under credentials. **Why:** #10058 — `verify` changed into `knowledge-base/`
+after archival and could not find its probe script.
+
 A tracked home has one consequence the founder must not discover from a pushed token: the `.env`
 beside the script — and the `.env.tmp.XXXXXX` sibling the upsert creates — must be covered by the
 repository's `.gitignore` (a bare `.env` pattern does not cover the sibling; `.env*` covers both).
