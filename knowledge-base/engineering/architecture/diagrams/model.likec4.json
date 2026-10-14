@@ -2732,7 +2732,7 @@
 "id": "bmr70o"
 },
 "5k1tlp": {
-"title": "Keyless-signs the config-refresh bundle manifest (cosign sign-blob, OIDC→Fulcio→Rekor) — the *.sh in-place refresh channel for the sole Inngest scheduler (ADR-136, #6780)",
+"title": "Keyless-signs the config-refresh bundle manifest (cosign sign-blob, OIDC→Fulcio→Rekor) — the *.sh in-place refresh channel for the sole Inngest scheduler (ADR-135, #6780)",
 "technology": "HTTPS (cosign sign-blob)",
 "source": {
 "model": "github"
@@ -2765,7 +2765,7 @@
 "id": "16t2g5e"
 },
 "1ickegb": {
-"title": "Publishes the keyless-signed config-refresh bundle (host-executed *.sh set + per-file sha256 manifest + signed monotonic VERSION) to GHCR (authoritative) + a best-effort zot mirror (continue-on-error, GHCR-direct host pull in v1); a Terraform-promoted INNGEST_CONFIG_DIGEST pointer in soleur-inngest/prd names the digest (ADR-136/ADR-128/ADR-096, #6780)",
+"title": "Publishes the keyless-signed config-refresh bundle (host-executed *.sh set + per-file sha256 manifest + signed monotonic VERSION) to GHCR (authoritative) + a best-effort zot mirror (continue-on-error, zot-direct host pull — the #8036 amendment deleted the GHCR credential); a Terraform-promoted INNGEST_CONFIG_DIGEST pointer in soleur-inngest/prd names the digest (ADR-135/ADR-128/ADR-096, #6780)",
 "technology": "docker buildx push (GHCR) + crane copy (zot mirror, best-effort)",
 "source": {
 "model": "github"
@@ -2776,7 +2776,7 @@
 "id": "1ickegb"
 },
 "18d0u6m": {
-"title": "ADOPTING (rides #6178 cutover, PR #6348): the config-refresh timer resolves INNGEST_CONFIG_DIGEST, pulls the signed bundle @sha256 GHCR-direct, cosign-verify-blob OFFLINE against the baked trusted root + config-workflow identity regexp (ADR-087), checks per-file sha256 + monotonic VERSION, and applies atomically via infra-config-install.sh — no host replace, outbound-only, no new inbound (ADR-136, #6780)",
+"title": "ADOPTING (rides #6178 cutover, PR #6348): the config-refresh timer resolves INNGEST_CONFIG_DIGEST, pulls the signed bundle @sha256 zot-direct, cosign-verify-blob OFFLINE against the baked trusted root + config-workflow identity regexp (ADR-087), checks per-file sha256 + monotonic VERSION, and applies atomically via infra-config-install.sh — no host replace, outbound-only, no new inbound (ADR-135, #6780)",
 "technology": "Docker/GHCR pull + cosign verify-blob (offline)",
 "source": {
 "model": "platform.infra.inngest"

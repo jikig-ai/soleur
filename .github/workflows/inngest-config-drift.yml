@@ -67,8 +67,9 @@ jobs:
           LATEST_ANY=""
           QUERY_OK=1
           QUERY_ERR=""
-          if raw="$(doppler run -p soleur -c prd_terraform -- \
-                     bash scripts/betterstack-query.sh --since 24h --grep 'SOLEUR_INFRA_PULL_' --limit 20 2>"$RUNNER_TEMP/bsq.err")"; then
+          if raw="$(doppler run -p soleur -c prd_terraform \
+                     --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- \
+                     bash scripts/betterstack-query.sh --since 24h --grep 'SOLEUR_INFRA_PULL_' --limit 500 2>"$RUNNER_TEMP/bsq.err")"; then
             # Scope to the PROD host BEFORE the tail -1: rehearsal hosts render the same
             # refresh timer and emit NOOP rows into this source, so a source-wide pick
             # can end on rehearsal state and report DIVERGED no-applied-marker while
@@ -88,11 +89,25 @@ jobs:
             echo "note: Better Stack query FAILED — reason: ${QUERY_ERR:-<none>}"
           fi
 
+          # Display strings are rebuilt from allowlisted tokens — ingest rows (and query
+          # stderr) are attacker-influenceable text that would otherwise flow raw into
+          # $GITHUB_STEP_SUMMARY markdown and ::error:: annotations (#7980 lesson:
+          # allowlist-rebuild, never pass log text through).
+          _summ_row() {
+            local _r="$1" _name _fields
+            _name="$(printf '%s' "$_r" | grep -oE 'SOLEUR_INFRA_PULL_[A-Z_]+' | head -1 || true)"
+            _fields="$(printf '%s' "$_r" | grep -oE '(version|sha256|reason|verify|rejver|offered|count)=[A-Za-z0-9_.:/-]+' | tr '\n' ' ' || true)"
+            printf '%s' "${_name:-<unparsed>} ${_fields}"
+          }
+          MARKER_DISP="$(_summ_row "${MARKER:-}")"
+          LATEST_DISP="$(_summ_row "${LATEST_ANY:-}")"
+          QUERY_ERR_DISP="$(printf '%s' "${QUERY_ERR:-}" | tr -cd '[:print:]' | cut -c1-160)"
+
           if [[ -n "$INNGEST_CONFIG_DIGEST" ]]; then echo "pointer: <set>"; else echo "pointer: <empty>"; fi
-          echo "marker : ${MARKER:-<none>}"
+          echo "marker : ${MARKER_DISP:-<none>}"
           # Operator context only — a VERIFY_FAIL row here means the channel is ALIVE and
           # rejecting, which is a very different investigation than a dead timer.
-          [[ -n "$LATEST_ANY" ]] && echo "latest family row: ${LATEST_ANY}" || true
+          [[ -n "$LATEST_ANY" ]] && echo "latest family row: ${LATEST_DISP}" || true
 
           # COULD-NOT-MEASURE class (HARD-8, observability review #6839): a Better Stack query outage
           # WITH a promoted pointer must NOT collapse into the dead-timer DIVERGED verdict — that
@@ -104,9 +119,9 @@ jobs:
               echo "## Inngest config drift comparison"
               echo ""
               echo "- verdict: \`QUERY_UNAVAILABLE\` (Better Stack query failed; applied digest could not be read — instrument outage, NOT a host failure)"
-              echo "- query error: \`${QUERY_ERR:-<none>}\`"
+              echo "- query error: \`${QUERY_ERR_DISP:-<none>}\`"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::config-refresh drift check could NOT run — Better Stack query unavailable (instrument outage, NOT a host failure): ${QUERY_ERR:-<none>}"
+            echo "::error::config-refresh drift check could NOT run — Better Stack query unavailable (instrument outage, NOT a host failure): ${QUERY_ERR_DISP:-<none>}"
             exit 1
           fi
 
@@ -121,7 +136,7 @@ jobs:
             echo "## Inngest config drift comparison"
             echo ""
             echo "- verdict: \`${VERDICT}\`"
-            echo "- marker: \`${MARKER:-<none>}\`"
+            echo "- marker: \`${MARKER_DISP:-<none>}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [[ $rc -eq 0 ]]; then

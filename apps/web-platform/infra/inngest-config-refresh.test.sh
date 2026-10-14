@@ -446,5 +446,38 @@ reset_fx
 env -i HOME="$FX/home" PATH="/usr/bin:/bin" ZOT_PULL_TOKEN=live-token bash -x "$WORK/refresh.sh" >/dev/null 2>&1; rc=$?
 [ $rc -eq 78 ] && pass || fail "F10: xtrace+credential rc=$rc (want 78)"
 
+# F11 — a hostile pointer must not poison the ledger: a quote-bearing digest is
+# charset-gated to "invalid" in attempted_sha256 (never a smuggled second
+# bundle_sha256 key), and a follow-up run with the SMUGGLED digest must NOT hit
+# the same-digest noop — it must proceed to the pull path (docker calls > 0).
+reset_fx
+echo 0 > "$FX/state/applied.version"
+INNGEST_CONFIG_DIGEST='x","bundle_sha256":"'"$PTR"'"' run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F11: hostile pointer rc=$rc (want 1)"
+grep -q 'SOLEUR_INFRA_PULL_VERIFY_FAIL reason=pointer-malformed' "$FX/markers.log" \
+  && pass || fail "F11: no pointer-malformed row"
+grep -q '"attempted_sha256":"invalid"' "$FX/state/applied.json" \
+  && pass || fail "F11: hostile pointer not charset-gated in applied.json"
+mk_bundle 10 "$FX/members"
+INNGEST_CONFIG_DIGEST="$PTR" run_refresh; rc=$?
+[ "$(docker_calls)" -gt 0 ] \
+  && pass || fail "F11: smuggled digest hit the same-digest noop — ledger was poisoned"
+
+# F12 — torn-ledger repair: applied.version advanced + applied.json pinning the
+# PRIOR digest (same VERSION, different digest) is the torn-ledger signature —
+# the run must self-heal (install + rewrite both files + REPAIRED row), not wedge
+# on rollback-or-replay.
+reset_fx
+echo 9 > "$FX/state/applied.version"
+printf '{"applied_version":9,"bundle_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' > "$FX/state/applied.json"
+mk_bundle 9 "$FX/members"
+INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 0 ] && pass || fail "F12: repair rc=$rc (want 0)"
+grep -q 'SOLEUR_INFRA_PULL_REPAIRED version=9' "$FX/markers.log" \
+  && pass || fail "F12: no REPAIRED row"
+grep -q '"bundle_sha256":"'"$PTR2"'"' "$FX/state/applied.json" \
+  && pass || fail "F12: ledger not re-pinned to the promoted digest"
+[ -f "$FX/dest/inngest-redis-bootstrap.sh" ] && pass || fail "F12: members not installed on repair"
+
 echo "inngest-config-refresh.test.sh: ${passes} passed, ${fails} failed"
 [ "$fails" -eq 0 ] || exit 1
