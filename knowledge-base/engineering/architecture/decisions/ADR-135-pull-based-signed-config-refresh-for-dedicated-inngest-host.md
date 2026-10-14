@@ -223,4 +223,3 @@ interim-soft (it degrades loudly and exits 0, `SOLEUR-DEBT` marker in its commen
 reads the bundle yet, and it must become blocking, as `reusable-release.yml`'s mirror is, when the
 consumer reads zot only. The body of this ADR keeps its original wording as the record of the
 decision at the time; amend it in full when the consumer is built.
-
