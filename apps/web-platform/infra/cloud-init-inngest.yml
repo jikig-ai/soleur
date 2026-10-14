@@ -1698,16 +1698,13 @@ write_files:
 
       set -uo pipefail
 
-      # (#7797) refuse xtrace while the pull credential is bound — a traced login would
-      # print the zot token into the journal (the trace-check pattern every sibling shares).
-      case "$-" in
-        *x*)
-          if [ -n "$${ZOT_PULL_TOKEN:+x}" ]; then
-            printf '[FATAL] refusing to trace with a live credential set (#7797)\n' >&2
-            exit 78
-          fi
-          ;;
-      esac
+      # (#7797) refuse xtrace unconditionally — the check used to gate on
+      # ZOT_PULL_TOKEN being bound, but that var only exists after the env-file
+      # source far below, so the condition was always-false on the production
+      # path while the traced `docker login` leak stayed open. Every attempt
+      # pipes the token to a registry login and this journal is persistent
+      # (soleur-inngest-provision's shape — unconditional for the same reason).
+      case "$-" in *x*) printf '[FATAL] inngest-config-refresh refuses to run under xtrace: the pull pipes the zot token to a registry login and this journal is persistent (#7797)\n' >&2; exit 78 ;; esac
 
       # --- SEAM GATE (#7761) -----------------------------------------------------------
       # A `doppler run` child inherits whatever the config injects; a REFRESH_* name in the
@@ -2013,7 +2010,9 @@ write_files:
 
       [Service]
       Type=oneshot
-      TimeoutStartSec=300
+      # 420 > the worst-case tick (login 60 + PULL_TIMEOUT_S 180 + VERIFY_TIMEOUT_S 120):
+      # a TimeoutStartSec kill lands mid-gate with NO marker — the flip's own value.
+      TimeoutStartSec=420
       Environment=HOME=/root
       Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       EnvironmentFile=/etc/default/inngest-server
