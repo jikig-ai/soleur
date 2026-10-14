@@ -165,7 +165,8 @@ suite_exit_class() {
 # test-check-inngest-bootstrap-build.sh, #8781; 14 on 2026-09-27 with
 # test-mint-inngest-bootstrap-tag.sh, #4326; 13 on 2026-09-24 with
 # test-cancel-superseded-pr-runs.sh; 12 on 2026-09-19; was 11 until
-# test-bump-inngest-bootstrap-pin.sh landed with #8359). Raise it when suites are added; lower
+# test-bump-inngest-bootstrap-pin.sh landed with #8359; 15 with
+# test-vinngest-digest-freshness.sh, #10272). Raise it when suites are added; lower
 # it deliberately, with a reason.
 MIN_SUITES=15
 
