@@ -71,8 +71,12 @@ export async function sweep() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const c = createClient(url, key);
+  // Both shapes stay swept: the pre-#9995 `mu1-integration-<uuid>@soleur-
+  // test.invalid` users any earlier run leaked, and the current helper-
+  // convention `mu1-integration-<16hex>@soleur.test` shape the suite now
+  // emits through tearDownTenantUser.
   const SYNTH =
-    /^mu1-integration-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@soleur-test\.invalid$/i;
+    /^mu1-integration-(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@soleur-test\.invalid|[a-f0-9]{16}@soleur\.test)$/i;
   const { data } = await c.auth.admin.listUsers({ perPage: 200 });
   const synth = (data?.users ?? []).filter((u) => SYNTH.test(u.email || ""));
   for (const u of synth) {

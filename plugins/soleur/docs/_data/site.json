@@ -72,6 +72,7 @@
       "heading": "Resources",
       "links": [
         { "label": "Blog", "url": "/blog/" },
+        { "label": "Known external tools", "url": "/known-external-tools/" },
         { "label": "Glossary", "url": "/glossary/" },
         { "label": "Community", "url": "/community/" },
         { "label": "Vision", "url": "/vision/" },

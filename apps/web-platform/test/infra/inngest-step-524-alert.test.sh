@@ -32,7 +32,7 @@
 #   * A whole-window (no-bucket) query filters on the `dt` column: its `time` alias is a constant,
 #     so `time BETWEEN …` would be always-true and sum the source's entire history.
 #   * vector.toml's inngest_journald source keeps the exact unit + PRIORITY shape the 524 rows were
-#     OBSERVED to ship through (PRIORITY 6 rows ship despite the 0..4 match); any edit reds (V1/V2).
+#     OBSERVED to ship through (PRIORITY 6 rows ship despite the {3,4} match, post-#6551 partition); any edit reds (V1/V2).
 #   * Every exploration and alert in the section is in the apply workflow's -target= allowlist
 #     (#5566: an untargeted resource is never applied, so the alert never exists).
 #
@@ -266,17 +266,19 @@ check("source: `cron:${cronName}`" in substrate_ts,
       "emitter parity: the substrate writes source `cron:${cronName}` (the queries' LIKE 'cron:%')")
 check("runbooks/betterstack-log-query.md" in sec, "the incidents carry a clickable runbook URL")
 # The 524 alert's rows reach Better Stack only through vector.toml's inngest_journald source, and
-# they are PRIORITY 6 while that source lists PRIORITY 0..4: OBSERVED to ship anyway (the unit
+# they are PRIORITY 6 while that source lists PRIORITY {3,4} since the #6551 partition: OBSERVED to ship anyway (the unit
 # match admits them; see the .tf comment and #6551). That observed shape is pinned here, so ANY
 # edit to the source's unit or PRIORITY filter reds this guard and forces a re-probe of the path
 # (scripts/probe-inngest-524-count.sh prints unit_rows) before the alert can be trusted again.
 _vsrc = re.search(r"^\[sources\.inngest_journald\]\n(.*?)(?=^\[|\Z)", vector, re.S | re.M)
 _vbody = _vsrc.group(1) if _vsrc else ""
 check(re.search(r'^include_units = \["inngest-server\.service"\]\s*$', _vbody, re.M) is not None
-      and re.search(r'^include_matches\.PRIORITY = \["0", "1", "2", "3", "4"\]\s*$', _vbody, re.M) is not None
+      and re.search(r'^include_matches\.PRIORITY = \["3", "4"\]\s*$', _vbody, re.M) is not None
+      and re.search(r'^exclude_matches\.SYSLOG_IDENTIFIER = ', _vbody, re.M) is not None
+      and re.search(r'^exclude_matches\.CONTAINER_NAME = \["soleur-web-platform", "soleur-egress-gw"\]\s*$', _vbody, re.M) is not None
       and len(re.findall(r"^include_matches\.", _vbody, re.M)) == 1
       and re.search(r'^inputs = \[[^\]]*"inngest_journald"', vector, re.M) is not None,
-      "vector: the inngest_journald source is exactly the observed shape the 524 rows ship through (unit + PRIORITY 0..4, routed)")
+      "vector: the inngest_journald source is exactly the observed shape the 524 rows ship through (unit + PRIORITY {3,4} + emitter/container excludes, routed)")
 print("\n".join(out))
 PY
 )" || { printf '[FATAL] the structural checker crashed (python rc != 0) — no verdict\n' >&2; exit 2; }
@@ -415,7 +417,7 @@ s = s.replace(old, "")'
   mutate_red "V1: vector's inngest_journald source loses the inngest-server unit" VEC \
     "s = s.replace('include_units = [\"inngest-server.service\"]', 'include_units = [\"inngest-other.service\"]', 1)"
   mutate_red "V2: vector's inngest_journald PRIORITY filter changes" VEC \
-    "s = s.replace('include_matches.PRIORITY = [\"0\", \"1\", \"2\", \"3\", \"4\"]\nj', 'include_matches.PRIORITY = [\"0\", \"1\", \"2\"]\nj', 1)"
+    "s = s.replace('include_matches.PRIORITY = [\"3\", \"4\"]\n', 'include_matches.PRIORITY = [\"3\"]\n', 1)"
 
   # S1 — must stay GREEN: a later section appended below this one (the .tf's own recipe) is out of
   # this guard's scope, so a future alert with a different select shape cannot trip it.

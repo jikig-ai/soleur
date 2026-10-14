@@ -103,6 +103,9 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
   pre-arm soak read (step 6) is not recorded in this PR or on #9438. Procedure and reads:
   [Liveness heartbeat](#liveness-heartbeat-9438). Until #9943 enforces it in the workflow, this item
   and its re-read are the only control.
+- **No post-flip rotate route is accepted, in writing (#10175).** The owner has recorded that from the first flip no
+  workflow dispatch can rotate the LUKS key until #8571 or the "store measured empty" marker lands, and names the
+  [break-glass](#when-a-rotate-is-needed-after-the-flip-10175) as the only route for a key compromise.
 - **#8101** — remaining: the hooks copy, the post-copy fence readback and the wrappers' mapper
   assertion, carried in #8211 ("Carried from #8101"). The wrapper edit is hash-bound, so it follows
   the [two-PR sequence](git-data-rung2-rehearsal.md#changing-the-payload-the-two-pr-sequence). The
@@ -190,6 +193,21 @@ erasure working); the rehearsal is dispatched only on the user's per-step author
 
 ### The D6 rotate (dispatch BEFORE the flip)
 
+**Never dispatch the rotate after the flip, or after any run that executed the flag-write step.** From the first
+`flip` the LUKS volume may hold the only copy of the replicated repositories, and a rotate destroys it. The rule for
+an operator is: dispatch a rotate only if no run of `git-data-cutover.yml` executed the `Write GIT_DATA_STORE_ENABLED`
+step (any conclusion other than skipped, in any attempt). If the guard refuses with `store_dirty`, do not dispatch
+again and escalate on #10175 and #8571; with `cutover_in_flight`, wait for that run and re-dispatch once; with
+`scan_unreadable`, re-dispatch at most once and then stop and escalate. A flip that was
+refused at a precondition, a `mode=proof` run and a rehearsal that never reached the write step leave the store
+clean, and the rotate stays allowed. The apply workflow enforces the rule (#10175): the step `Rotate precondition —
+store never written (cutover run records)` refuses the rotate once any attempt of any `git-data-cutover.yml` run
+executed the flag-write step, whatever that step concluded (a failed or cancelled write may have landed), and a
+rollback does not reopen it:
+rollback is flag-off only and the data stays on the LUKS volume (ADR-239). There is no bypass input. The rule
+reads run records, not the flag and not `GIT_DATA_LUKS_CUTOVER_AT` (the stamp survives a rollback, so it decides
+nothing). See [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175).
+
 `d6_replace_stale` requires a completed `git-data-host-rotate` run — a fresh host PLUS a re-minted
 `GIT_DATA_LUKS_KEY`, volume and Doppler secret together (the passphrase can only rotate with a fresh
 volume). A rotate run counts only when its job succeeded AND it carries the last-step marker
@@ -212,7 +230,92 @@ The rotate's `served_repos=0` precondition reads the latest `stage=boot_complete
 `host_name=soleur-git-data` out of Better Stack — pinned to the git-data source
 (`t520508_soleur_git_data_prd_logs` UNION'd with the `s3` archive; the emit is once-per-boot, and the
 shared inngest source the reader defaults to answers zero rows for this host) — and fails closed when
-the store cannot be read empty.
+the store cannot be read empty. That reading is a once-per-boot observation, **not a live proof of
+emptiness**: a flipped store takes writes without a reboot and the row still says `served_repos=0`. It
+is therefore only a second layer: the step also requires the row to be strictly newer than the single
+`soleur-git-data` server's Hetzner `created` time (so a row from a previous host cannot discharge it), and
+the first layer is the run-record step above. Both steps run before the rung-2 interlock and every plan step.
+
+| Rotate precondition refusal (step annotation) | Meaning | Action |
+|---|---|---|
+| `store_dirty` (names a run id) | That run of `git-data-cutover.yml` executed the flag-write step (any attempt, any conclusion). The store may hold the only copy of replicated repositories. | Do not rotate. Read [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175). There is no bypass input. |
+| `cutover_in_flight` (names a run id) | A cutover run is still running. | Re-dispatch after it finishes. |
+| `scan_unreadable` | A run record could not be read: an API error, a page or count mismatch, an unknown run status, no job named `cutover` or no flag-write step in a run created after the seam landed (a rename), or `scan_unreadable pinned_run_missing`: a pinned run is no longer listed as completed, so the history cannot be proven complete. A named run id (`scan_unreadable <id>`) with no job steps is an old post-seam run whose step list was stripped (see the re-baseline section). | Fail closed: an unreadable history is not a clean one. Re-dispatch at most once and then stop. For `pinned_run_missing`, see [Re-baselining the pinned runs](#re-baselining-the-pinned-runs-10175). Otherwise compare the step name constant in `scripts/lib/git-data-store-dirty-scan.sh` with `git-data-cutover.yml` (the parity test pins them). The name GitHub records is the YAML-parsed one, truncated at the first space-then-hash (`Write GIT_DATA_STORE_ENABLED (via the`). |
+| `stale_boot_complete` | The newest `boot_complete` row is not newer than the current server's creation, so `served_repos=0` describes a previous host. | Wait for the current host's `boot_complete`, or investigate the emit path. |
+| `boot_complete_unreadable` | The `boot_complete` time or the server's creation time could not be read (exactly one server named `soleur-git-data` is required; `HCLOUD_TOKEN` must be loaded). | Fail closed; re-dispatch once the read path is verified. |
+
+The scan reads every attempt of every run (a re-run that skips the write step cannot hide the first attempt's
+write). Runs created before 2026-09-30T02:18:17Z predate the write step and could not write the flag, so an
+absent step there is clean (verified against the recorded runs, not enforced by code). Known residuals, accepted
+by the owner as a floor against the accidental dispatch and not a defence against a hostile owner: a flag set
+outside the workflow (a hand-run `doppler secrets set`, the Doppler API, a resume arm B load) is invisible to the
+scan; a post-pin run record deleted by hand is outside the threat model (repository write access already allows a
+dispatch); and the rotate is gated only by the typed token `ROTATE-GIT-DATA`, this guard and the `main`-only branch
+policy of the `infra-privileged` environment, which has **no required reviewers**, so no human approval stands in
+front of it. A rotate that is refused here has no in-workflow exit (below). A `d6_replace_stale` that fires again
+after a flip attempt (the stamped rotate aged out of the 100-run window) is a deadlock the guard cannot resolve by
+dispatch; the durable rotate stamp is tracked in #10216.
+
+### Re-baselining the pinned runs (#10175)
+
+The scan proves the history is complete by requiring two post-seam runs to still be listed as `completed` and their
+step lists readable (`GDSD_PINNED_RUNS` in `scripts/lib/git-data-store-dirty-scan.sh`: `36685251588` from 2026-09-30
+and `37823216637` from 2026-10-08). Run records can be deleted and `total_count` shrinks with them, so without that
+proof a deleted flip would read clean. Two measured facts set the horizon (2026-10-13, read-only API): run records
+are still listed at 196 days although the artifact-and-log retention setting reads 90 days, so the deletion horizon is
+unknown and not relied on; and GitHub strips a job's step list at about 170 days, after which a step-less post-seam
+job reads `unreadable`. The scan therefore turns closed by about **2027-03-18** at the latest (170 days after the
+oldest pin), earlier if a pin is deleted. It prints a `::warning::` once the oldest pin is more than 120 days old, but
+only while a rotate is dispatched, so the real early warning is the tracker #10216 calendar item for **2026-12-01**.
+To re-baseline: while the old pins are still listed and readable, run
+`GITHUB_REPOSITORY=jikig-ai/soleur bash -c 'source scripts/lib/git-data-store-dirty-scan.sh; git_data_store_dirty_list | git_data_store_dirty_scan'`
+and require `store_clean`; then open a PR that sets `GDSD_PINNED_RUNS` to two newer completed runs of
+`git-data-cutover.yml` (dispatch a `mode=proof` run if none is newer than the seam), and update the two run ids in
+`plugins/soleur/test/terraform-target-parity.test.ts` only if its derived constants moved (they are read from the
+library). **If the window is missed** (the guard already reports `pinned_run_missing`), the history can no longer be
+proven complete from run records: the only exits are an owner attestation PR (owner and CLO reviewing) that moves the
+pins and states, with evidence (the Doppler `GIT_DATA_STORE_ENABLED` value is not `true`, and no `git_data_store=`
+readback of `enabled` in Better Stack since the last pin), that no flip happened in the gap; or the live emptiness
+proof (#10211). After a flip the scan is dirty for good, so the pins can no longer be moved.
+
+Moving the pins is not enough by itself once any other post-seam run record has lost its step list (about 170 days
+after it was created): the scan reads every listed run, so that run reads `scan_unreadable <id>` until its record is
+deleted or the owner attests it in the same PR. Plan the re-baseline PR to cover that too; the standing policy for
+stripped post-seam records (an age-aware verdict plus the attestation) is tracked in #10216.
+
+**Owner action after the #10175 PR merges:** a "Re-run failed jobs" on a rotate run that predates the guard executes
+the OLD workflow, which has no guard. Delete those run records so nothing can be re-run:
+`gh run delete 38140050880`, `gh run delete 38383684022`, `gh run delete 38384137515`. None carries the d6 marker, so
+no stamp is lost, but the deletion DOES change the flip gate's reading: while run 38384137515 (a failed rotate
+attempt) is the newest rotate record, `d6_last_rotate_failed` blocks the flip and an older success cannot override it;
+once it and 38140050880 are deleted the gate reads `d6_replace_stale` (no stamped rotate), and a fresh rotate on the
+never-flipped store is the next step. Deleting only one of the two failed attempts leaves the other blocking.
+
+### When a rotate is needed after the flip (#10175)
+
+The guard is a floor against the accidental dispatch, not a prohibition on ever rotating.
+
+- **No bypass input.** The workflow offers none and the step carries no `continue-on-error`.
+- **A suspected `GIT_DATA_LUKS_KEY` compromise (a Doppler secret exposure included) is an owner-run break-glass,
+  not a workflow dispatch.** Contain first: revoke access to the secret and detach the volume per the host-incident
+  procedure. Git-data is a replica of what the web hosts hold, so it is re-seeded from them (each workspace's next
+  session end force-pushes every head and tag). Then land a reviewed PR that lifts the guard for one dispatch, with
+  the owner and the CLO named as reviewers, then rotate. Containment within hours, re-encryption within days, and
+  Art. 33's 72 hours counted from awareness.
+- **Accepted residue.** An erased repository is unlinked, not overwritten (ADR-239), so the ordinary Art. 17
+  residue stays until a copy mode (#8571) or the "store measured empty" marker (the follow-up below) lands. That
+  acceptance is re-evaluated by **2026-11-12**, the date of the plaintext-volume outer-retention decision; a second
+  slip returns to the CLO (ADR-239 Amendment 2026-10-12).
+- **Escalate** on issue #10175 (the guard) and issue #8571 (copy mode), and to the owner.
+
+Follow-ups, not built here: the mode-unique "store measured empty" marker step in `git-data-cutover.yml`, which is
+the later live proof and the exit from dirty (#10211; blocked on #8571 for a populated store); the pinned-run
+re-baseline, the durable rotate stamp, `delete_protection` on the LUKS volume and required reviewers on
+`infra-privileged` (tracker #10216); #9943 (machine-enforce the
+heartbeat flip precondition, merged design, a different workflow); #6975 (a per-host heartbeat suffix so a healthy
+web-1 probe cannot mask a dead web-2-to-git-data path, a Terraform fan-out). The web-fed `soleur-git-data-prd`
+heartbeat is not a flip precondition, so #6975 does not block the flip: the binding read is the host's own
+`soleur-git-data-host-prd`.
 
 ## What the read-only dispatch does
 
@@ -1020,13 +1123,13 @@ this sequence slips past about 2026-11-05, tell the CLO.
 | **Store session could not be answered** — the store-empty stage | `probe=store-empty verdict=probe_failed rc=3\|4\|7\|8\|9\|96` (exit 5) | Every store-verified fact held, then the count could not be taken. `rc=3`: `repositories` is a dangling symlink or not a directory. `rc=7`: it is missing (the bootstrap always creates it). `rc=8`: its containing mount is not the store root, so a second mount is hiding what lies under it. `rc=9`: `readlink`/`stat` could not resolve it. `rc=4`: `find` failed. `rc=96`: the count answer was malformed. None of these is transient and an empty store produces none of them: open an incident, and discharge nothing. |
 | The store holds repositories | `probe=store-empty verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. Since #8211 PR2 this counts every entry under `repositories/` (the bootstrap's `_repo_count` rule), not only `*.git`. |
 | A probe could not be answered | `probe=store-mounted verdict=probe_failed rc=<n>`, or any probe's `rc=124\|255\|141` (exit 5) | `rc=124`: the 30 s bound expired; re-dispatch. `rc=255`: ssh transport failed; read the heartbeat, then re-dispatch. `rc=141`: the answer was larger than the cap. `rc=96` from store-mounted: the answer did not match the expected pattern; re-dispatch once, then open an incident. No `rc` from store-on-mapper or store-verified: the first probe left nothing to compare; re-dispatch once. |
-| The pre-receive fence is not intact | `probe=fence-shape verdict=fence_not_intact reason=hooks_dir_absent\|hooks_dir_owner\|hook_absent\|hook_owner\|hooks_parent_writable\|hook_not_runnable_by_git\|hooks_path_mismatch\|transport_pin_mismatch\|hooks_wrong_source` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
+| The pre-receive fence is not intact | `probe=fence-shape verdict=fence_not_intact reason=hooks_dir_absent\|hooks_dir_owner\|hook_absent\|hook_owner\|hooks_parent_writable\|hook_not_runnable_by_git\|hooks_path_mismatch\|transport_pin_mismatch\|hooks_wrong_source` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards on a store that has never been flipped (after a flip the rotate is refused, see the D6 section). The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
 | The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
 | A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do — the PR1 variable vocabulary (`DRY_RUN`/`ROLLBACK`/`CONFIRM_WIPE`) is superseded by `MODE`. Dispatch `git-data-cutover.yml` with the `mode` input instead. |
 | Wrong mode/confirm pair, or a `lineage` input on a non-unfreeze mode | the confirm step exits 1 on `confirm token mismatch` / `lineage is only valid with mode=unfreeze` | `confirm` must equal the mode's token exactly; `lineage` is meaningful only under `mode=unfreeze` (it names a stranded sentinel's writer). |
 | Precondition: the #8209 Tier-B seam is not seeded | `verdict=precondition_8209_open` | Set `DOPPLER_TOKEN_INFRA_PRIVILEGED` on the environment (ADR-241 R7), then re-dispatch. |
 | Precondition: the pin-fault Sentry rule is not live | `verdict=pin_fault_paging_absent` | Rule 1310055 unreadable or disabled — the read is live (`SENTRY_ACTIONS_RO_TOKEN`), not inferred. Enable it or fix the token before flipping. |
-| Precondition: no completed `git-data-host-rotate` | `verdict=d6_replace_stale` | Dispatch `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA` off `main` (above). A plain replace cannot discharge D6 — it re-mints no LUKS key. |
+| Precondition: no completed `git-data-host-rotate` | `verdict=d6_replace_stale` | Only if no run of `git-data-cutover.yml` executed the `Write GIT_DATA_STORE_ENABLED` step (store never flipped): dispatch `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA` off `main` ([above](#the-d6-rotate-dispatch-before-the-flip)). Otherwise do NOT dispatch it (the guard refuses and a rotate would destroy the only copy): see [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175). A plain replace cannot discharge D6 — it re-mints no LUKS key. |
 | Precondition: the newest rotate attempt did not complete | `verdict=d6_last_rotate_failed` | The newest `git-data-host-rotate` attempt (the run id is in the remedy line) failed, was cancelled or timed out after its apply began, so host and key state are uncertain, and an older success does not discharge D6. Read it with `gh run view <id> --log-failed` and the sections above, repair, and dispatch a fresh rotate; only a newer successful rotate supersedes it. The block is sticky: its only exits are a newer successful rotate or the failed run aging out of the 100-run window; re-running the failed run is a risky exit, not a safe one (a re-run that completes stamps but re-executes the destructive apply; one refused at the plan gate hides the failure from the gate), and a fresh dispatch refused at its precondition reads `skip` (inferred from the run record shape) and does not supersede it. There is no bypass input and no passphrase-loss recovery path is defined for this host, so a refused re-rotate is read from that run's precondition line, not worked around. |
 | Precondition: a replace or rotate run is still going | `verdict=d6_rotate_in_flight` | A `git-data-host-replace`/`-rotate` run (id in the remedy line) is running, queued or waiting for approval, or is a non-complete run that does not list the job yet, so its target cannot be read. Re-dispatch the flip when it completes. Cancel it only if `gh run view <id> --json status` reads `waiting` (a stale approval request); never cancel an `in_progress` run, since cancelling mid-apply can leave the host destroyed. |
 | Precondition: run state could not be read | `verdict=d6_run_unreadable` | `gh run list`/`gh run view` failed, returned nothing or an unparseable body, or the stamp library could not be loaded from the checkout. Nothing was concluded; run `gh run view <id> --json jobs` for the id in the remedy line to see why, then re-dispatch the flip. A listed run whose `gh run view` keeps failing strands the flip until a newer successful rotate exists; there is no bypass. |

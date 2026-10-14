@@ -231,6 +231,18 @@ add_leaf sh-watch-live-verify   'bash scripts/watch-live-verify-pass.test.sh' sh
 # clone lacks them) — residue is the leaf's probe, and the suite's own CI job
 # runs those assertions under the full fetch.
 add_leaf sh-cloud-init-inngest  'env -u CI -u GITHUB_ACTIONS bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh' sh
+# Verdict-tolerant leaves (#10255): a leaf registered in this table may exit nonzero — its suite
+# carries a BY-DESIGN red arm in the PR context (GuardA/GuardA2 byte-identity redden by design on
+# any carrier-changing PR until the post-merge mint bakes the new pin; the PR-context exemption is
+# open #9081). Tolerance covers THE VERDICT ONLY: the leaf still must execute (readable rc), must
+# leave delta 0, and must still allocate >=1 scratch entry — a leaked or vacuous run still reds.
+# An entry with an empty reason fails shape-check below (tolerated-for-nothing).
+declare -A LEAF_VERDICT_TOLERATED=(
+  [sh-cloud-init-inngest]="GuardA/GuardA2 carrier byte-identity is red by design on a carrier-changing PR until mint+bump lands; verdict coverage for the suite lives in deploy-script-tests (advisory on PRs, #9081)"
+)
+for _tol_n in "${!LEAF_VERDICT_TOLERATED[@]}"; do
+  [[ -n "${LEAF_VERDICT_TOLERATED[$_tol_n]}" ]] || { echo "[FATAL] tolerated leaf $_tol_n has an empty reason" >&2; exit 2; }
+done
 add_leaf py-unittest            'python3 -m unittest tests.scripts.test_lint_rule_ids'
 add_leaf py-pytest-configure    'python3 -c "import tests.conftest as c; c.pytest_configure()"'
 VITEST_BIN="$REPO_ROOT/apps/web-platform/node_modules/.bin/vitest"
@@ -397,8 +409,14 @@ for i in "${!LEAF_NAMES[@]}"; do
   rc="$(cat "$BASE/d.$n.rc" 2>/dev/null || echo 99)"
   new="$(new_since "$BASE/d.$n" "$BASE/d.$n.snap")"; nrc=$?
   nnew=0; [[ -n "$new" ]] && nnew="$(printf '%s\n' "$new" | wc -l | tr -d ' ')"
-  [[ "$rc" == "0" ]] && ran=$((ran + 1))
-  verdict "$([[ "$rc" == "0" ]] && echo 0 || echo 1)" "[$n] direct run exits 0 (rc=$rc)"
+  tol="${LEAF_VERDICT_TOLERATED[$n]:-}"
+  if [[ -n "$tol" ]]; then
+    [[ "$rc" != "99" ]] && ran=$((ran + 1))
+    verdict "$([[ "$rc" != "99" ]] && echo 0 || echo 1)" "[$n] direct run executed (rc=$rc; verdict tolerated: $tol)"
+  else
+    [[ "$rc" == "0" ]] && ran=$((ran + 1))
+    verdict "$([[ "$rc" == "0" ]] && echo 0 || echo 1)" "[$n] direct run exits 0 (rc=$rc)"
+  fi
   verdict "$([[ "$nrc" == "0" && "$nnew" == "0" ]] && echo 0 || echo 1)" "[$n] delta == 0 after a normal exit (left $nnew: $(printf '%s' "$new" | head -3 | tr '\n' ' '))"
 
   parent="$(cat "$BASE/c.$n.parent")"
@@ -411,11 +429,15 @@ for i in "${!LEAF_NAMES[@]}"; do
   else
     made="$(count_created "$BASE/c.$n" "$parent")"
   fi
-  verdict "$([[ "$crc" == "0" && "$made" -ge 1 ]] && echo 0 || echo 1)" "[$n] anti-vacuity: the leaf created >= 1 scratch entry (rc=$crc, created=$made)"
+  if [[ -n "$tol" ]]; then
+    verdict "$([[ "$crc" != "99" && "$made" -ge 1 ]] && echo 0 || echo 1)" "[$n] anti-vacuity: the leaf created >= 1 scratch entry (rc=$crc, created=$made; verdict tolerated)"
+  else
+    verdict "$([[ "$crc" == "0" && "$made" -ge 1 ]] && echo 0 || echo 1)" "[$n] anti-vacuity: the leaf created >= 1 scratch entry (rc=$crc, created=$made)"
+  fi
   verdict "$([[ -d "$parent" ]] && echo 0 || echo 1)" "[$n] nesting: an adopted parent root is never deleted by the leaf"
 done
 # Derived floors: EVERY registered leaf must run and exit 0 (not a typed ">= 8 of 11").
-verdict "$([[ "$N_LEAVES" -ge 1 && "$ran" -eq "$N_LEAVES" ]] && echo 0 || echo 1)" "floor: all $N_LEAVES registered leaves executed and exited 0 (ran=$ran) -- 0 checked is a failure"
+verdict "$([[ "$N_LEAVES" -ge 1 && "$ran" -eq "$N_LEAVES" ]] && echo 0 || echo 1)" "floor: all $N_LEAVES registered leaves executed and exited 0 or tolerated (ran=$ran) -- 0 checked is a failure"
 
 # --- probes: SIGTERM, SIGKILL, nesting validation, marker contract --------------------------------
 cat > "$BASE/probe.ts" <<'EOF'

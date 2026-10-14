@@ -121,9 +121,11 @@ P_NOCURL="$(mkbin nocurl timeout stub:git)"
 P_NOTIMEOUT="$(mkbin notimeout stub:git stub:curl)"
 HAVE_JQ=0; command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 HAVE_TIMEOUT=0; { command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; } && HAVE_TIMEOUT=1
+TIMEOUT_BIN=""; command -v timeout >/dev/null 2>&1 && TIMEOUT_BIN=timeout
+[[ -n "$TIMEOUT_BIN" ]] || { command -v gtimeout >/dev/null 2>&1 && TIMEOUT_BIN=gtimeout; }
 
 # ---- verdict helpers -----------------------------------------------------------
-passes=0; fails=0; CASES=0; RUNS=0; SKIPS=0; QUIET=0
+passes=0; fails=0; CASES=0; RUNS=0; SKIPS=0; QUIET=0; SKIP_RUN_DEFICIT=0
 FAILURES=()   # append-only: the verdict reads THIS, so a redirected counter cannot hide a failure.
 pass() { passes=$((passes + 1)); }
 fail() {
@@ -183,11 +185,14 @@ ENVS=()   # extra NAME=value pairs for the NEXT run only
 
 # run <root|-> <cache-dir|-> args... ; sets OUT and RC.
 #   `-` as root leaves CLAUDE_PLUGIN_ROOT unset; `-` as cache-dir leaves XDG_CACHE_HOME unset.
-#   Per-call knobs (set as prefix assignments): X_CWD X_PATH X_SUT X_HOME LSR STUB_*.
+#   Per-call knobs (set as prefix assignments): X_CWD X_PATH X_SUT X_HOME X_TIMEOUT LSR STUB_*.
 #   ENVS=(A=b ...) is consumed by the next run.
 run() {
   local root="$1" xdg="$2"; shift 2
-  local -a ex=() e=(env -u CLAUDE_PLUGIN_ROOT -u XDG_CACHE_HOME)
+  local -a ex=() tm=() e=(env -u CLAUDE_PLUGIN_ROOT -u XDG_CACHE_HOME)
+  # X_TIMEOUT=<s> bounds ONE run so a regression that blocks (a read on a FIFO, a scan of a
+  # multi-GiB file) turns that row red instead of hanging the whole suite.
+  if [[ -n "${X_TIMEOUT:-}" && -n "$TIMEOUT_BIN" ]]; then tm=("$TIMEOUT_BIN" "$X_TIMEOUT"); fi
   if (( ${#ENVS[@]} )); then ex=("${ENVS[@]}"); fi
   ENVS=()
   [[ "$root" != - ]] && e+=("CLAUDE_PLUGIN_ROOT=$root")
@@ -197,7 +202,7 @@ run() {
     STUB_CALLS="$CALLS" STUB_GITLOG="$GITLOG" STUB_CURLARGS="$CURLARGS" \
     STUB_LSREMOTE="$LSR" STUB_COMPARE_BODY="$CMP" \
     STUB_GIT_RC="${STUB_GIT_RC:-0}" STUB_CURL_RC="${STUB_CURL_RC:-0}" STUB_GIT_SLEEP="${STUB_GIT_SLEEP:-}" \
-    ${ex[@]+"${ex[@]}"} "$REAL_BASH" "${X_SUT:-$SUT}" "$@" 2>&1)"
+    ${ex[@]+"${ex[@]}"} ${tm[@]+"${tm[@]}"} "$REAL_BASH" "${X_SUT:-$SUT}" "$@" 2>&1)"
   RC=$?
 }
 val() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | head -1; }
@@ -357,8 +362,13 @@ X_SUT="$S_HEX" run "$R_STAMPED" "$XDG" --installed
 check fb-env-beats-script-location manifest/3.335.8 "$(val source)/$(val version)"
 X_CWD="$ROOTS/fb/b78d30e919ff/scripts" X_SUT=./plugin-version.sh run - "$XDG" --installed
 check fb-relative-invocation commit/b78d30e919ff "$(val source)/$(val commit)"
-# running the real script from the repo: plugins/soleur is not a commit dir and is keyless
-run - "$XDG" --installed
+# running the script from a keyless plugins/soleur that is not a commit dir and has no .git
+# above it. This was the REAL repo until source=checkout existed: a checkout of this repository
+# (a worktree, CI's detached clone) now resolves as a checkout, so the row runs a sandbox copy.
+S_REPOCOPY="$(mkcopy fb/repocopy/plugins/soleur)"
+mkdir -p "$ROOTS/fb/repocopy/plugins/soleur/.claude-plugin"
+printf '{"name":"soleur"}\n' > "$ROOTS/fb/repocopy/plugins/soleur/.claude-plugin/plugin.json"
+X_SUT="$S_REPOCOPY" run - "$XDG" --installed
 check fb-repo-run-source unknown "$(val source)"; check fb-repo-run-rc 0 "$RC"
 # none: only when the (derived or given) root is not a directory
 run "$SANDBOX/does-not-exist" "$XDG" --installed
@@ -789,6 +799,7 @@ else
   for n in status returns-fast was-called lowspeed-time-follows-env rc cached-current-degrades; do
     skip_case "tmo-hung-git-$n" "no timeout/gtimeout on PATH"
   done
+  SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 2))
 fi
 # invalid values fall back to 8 (0 would disable every bound); a valid one is honoured
 for bad in 0 abc "" -1 1.5 ' '; do
@@ -844,7 +855,7 @@ nj() { # name manifest want(source/version)
     X_PATH="$P_JQ" run "$r" "$XDG" --installed
     check "jq-$1" "$3" "$(val source)/$(val version)"
   else
-    skip_case "jq-$1" "jq not installed"
+    skip_case "jq-$1" "jq not installed"; SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1))
   fi
 }
 new_env nj
@@ -883,22 +894,397 @@ check symread-refused missing "$(val cache)"
 # The command is user-started: the legal text says so, so the flag must stay in the frontmatter.
 check version-md-disable-model-invocation 1 "$(head -8 "$REPO_ROOT/plugins/soleur/commands/version.md" | grep -c '^disable-model-invocation: true$')"
 
+# ---- installed: local checkout identity (source=checkout) --------------------------------
+# An in-place install (a local-Folder marketplace, or --plugin-dir) loads the plugin from
+# <top>/plugins/soleur, which has no manifest `version` and no 12-hex directory name. The
+# identity is then the checkout's HEAD, read by PLAIN FILE READS ONLY: the repository's own
+# config, hooks and attributes are untrusted project input and git is never run against it.
+# Every fixture is hand-written bytes (no git exposure); the git stub records any call, so
+# `ncalls git == 0` is the "never ran git" witness, and a real-git row proves the hostile
+# config below is ARMED (a witness against an unarmed fixture would be vacuous).
+SHA_M=0123456789abcdef0123456789abcdef01234567
+SHA_X=fedcba9876543210fedcba9876543210fedcba98
+SHA_Y=a1b2c3d4e5f60718293a4b5c6d7e8f9012345678
+SHA_Z=00112233445566778899aabbccddeeff00112233
+CO="$ROOTS/co"
+REAL_GIT="$(command -v git 2>/dev/null || true)"
+
+co_top() { # name -> fresh top dir whose plugins/soleur has a keyless manifest (printed)
+  local top="$CO/$1"
+  assert_fixture_dir "$top"; rm -rf "$top"
+  mkdir -p "$top/plugins/soleur/.claude-plugin"
+  printf '{"name":"soleur"}\n' > "$top/plugins/soleur/.claude-plugin/plugin.json"
+  printf '%s' "$top"
+}
+co_clone() { # name sha [branch=main] -> top with a .git DIRECTORY, HEAD -> branch, one loose ref
+  local top b="${3:-main}"; top="$(co_top "$1")"
+  assert_fixture_dir "$top/.git"
+  mkdir -p "$(dirname "$top/.git/refs/heads/$b")"
+  printf 'ref: refs/heads/%s\n' "$b" > "$top/.git/HEAD"
+  printf '%s\n' "$2" > "$top/.git/refs/heads/$b"
+  printf '%s' "$top"
+}
+co_run() { run "$1/plugins/soleur" "$XDG" --installed; }
+co_expect() { # name top sha40|unknown -> source/commit, no extra keys, rc 0, git never called
+  co_run "$2"
+  if [[ "$3" == unknown ]]; then
+    check "$1" "source=unknown" "$OUT"
+  else
+    check "$1" "checkout/${3:0:12}/0/0" "$(val source)/$(val commit)/$(nval version)/$(nval marketplace)"
+    check "$1-exact-output" "source=checkout"$'\n'"commit=${3:0:12}" "$OUT"
+  fi
+  check "$1-rc-and-no-git" "0/0" "$RC/$(ncalls git)"
+}
+
+new_env co
+# --- positive shapes: a clone, a bare layout whose files are mirrored, a worktree, packed refs, detached
+T="$(co_clone clone "$SHA_M")";                      co_expect co-clone "$T" "$SHA_M"
+T="$(co_clone slash-branch "$SHA_X" feat/issue-#12)"; co_expect co-branch-with-slash-and-hash "$T" "$SHA_X"
+T="$(co_clone bare "$SHA_Y")"                         # the maintainer's layout: core.bare=true, files mirrored on disk
+printf '[core]\n\tbare = true\n\trepositoryformatversion = 0\n' > "$T/.git/config"; co_expect co-bare-mirrored "$T" "$SHA_Y"
+T="$(co_top detached)"; mkdir -p "$T/.git"; printf '%s\n' "$SHA_Z" > "$T/.git/HEAD"; co_expect co-detached-head "$T" "$SHA_Z"
+T="$(co_top detached-nonl)"; mkdir -p "$T/.git"; printf '%s' "$SHA_Z" > "$T/.git/HEAD"; co_expect co-detached-head-no-newline "$T" "$SHA_Z"
+T="$(co_top packed)"; mkdir -p "$T/.git"; printf 'ref: refs/heads/main\n' > "$T/.git/HEAD"
+printf '# pack-refs with: peeled fully-peeled sorted \n%s refs/heads/main-decoy\n%s refs/heads/main\n%s refs/tags/v1.0.0\n^%s\n' \
+  "$SHA_X" "$SHA_M" "$SHA_Y" "$SHA_Z" > "$T/.git/packed-refs"
+co_expect co-packed-refs-only "$T" "$SHA_M"
+# a packed entry loses to nothing: with BOTH, the loose ref wins (git's own order)
+T="$(co_top packed-and-loose)"; mkdir -p "$T/.git/refs/heads"; printf 'ref: refs/heads/main\n' > "$T/.git/HEAD"
+printf '%s refs/heads/main\n' "$SHA_X" > "$T/.git/packed-refs"; printf '%s\n' "$SHA_Y" > "$T/.git/refs/heads/main"
+co_expect co-loose-beats-packed "$T" "$SHA_Y"
+# a linked worktree: .git is a FILE with `gitdir:`; per-worktree HEAD, refs from commondir
+T="$(co_top worktree)"; COMMON="$CO/worktree-common.git"; assert_fixture_dir "$COMMON"; rm -rf "$COMMON"
+mkdir -p "$COMMON/worktrees/wt" "$COMMON/refs/heads/feat"
+printf 'ref: refs/heads/main\n' > "$COMMON/HEAD"
+printf 'ref: refs/heads/feat/x\n' > "$COMMON/worktrees/wt/HEAD"
+printf '../..\n' > "$COMMON/worktrees/wt/commondir"
+printf '%s\n' "$SHA_M" > "$COMMON/refs/heads/feat/x"
+printf 'gitdir: %s/worktrees/wt\n' "$COMMON" > "$T/.git"
+co_expect co-worktree-absolute-gitdir "$T" "$SHA_M"
+T="$(co_top worktree-rel)"; WRC="$CO/worktree-rel-common"; assert_fixture_dir "$WRC"; rm -rf "$WRC"
+mkdir -p "$WRC/worktrees/wt" "$WRC/refs/heads"
+printf 'ref: refs/heads/topic\n' > "$WRC/worktrees/wt/HEAD"; printf '../..\n' > "$WRC/worktrees/wt/commondir"
+printf '%s\n' "$SHA_X" > "$WRC/refs/heads/topic"
+printf 'gitdir: ../worktree-rel-common/worktrees/wt\n' > "$T/.git"
+co_expect co-worktree-relative-gitdir "$T" "$SHA_X"
+T="$(co_top worktree-detached)"; WDC="$CO/worktree-detached-common"; assert_fixture_dir "$WDC"; rm -rf "$WDC"
+mkdir -p "$WDC/worktrees/wt"; printf '%s\n' "$SHA_Z" > "$WDC/worktrees/wt/HEAD"
+printf 'gitdir: %s/worktrees/wt\n' "$WDC" > "$T/.git"
+co_expect co-worktree-detached-head "$T" "$SHA_Z"
+# a trailing slash on the root is the same root
+T="$(co_clone slash "$SHA_M")"; run "$T/plugins/soleur/" "$XDG" --installed
+check co-trailing-slash-root "checkout/${SHA_M:0:12}" "$(val source)/$(val commit)"
+# a symlinked HEAD / loose ref still resolves (git itself follows them)
+T="$(co_clone symlink "$SHA_Y")"; printf 'ref: refs/heads/main\n' > "$T/.git/real-head"; rm -f "$T/.git/HEAD"; ln -s real-head "$T/.git/HEAD"
+co_expect co-symlinked-head "$T" "$SHA_Y"
+# a directory name that ends in a newline: the decoy sibling must not be read in its place
+# (command substitution strips trailing newlines, so a dirname/basename implementation reads
+# the OTHER repository). The root below is the one with the newline.
+NLP="$CO/decoy"; assert_fixture_dir "$NLP"; rm -rf "$NLP"
+mkdir -p "$NLP/foo/.git/refs/heads" "$NLP/foo/plugins/soleur/.claude-plugin"
+printf 'ref: refs/heads/main\n' > "$NLP/foo/.git/HEAD"; printf '%s\n' "$SHA_X" > "$NLP/foo/.git/refs/heads/main"
+printf '{"name":"soleur"}\n' > "$NLP/foo/plugins/soleur/.claude-plugin/plugin.json"
+NLD="$NLP/foo"$'\n'; mkdir -p "$NLD/.git/refs/heads" "$NLD/plugins/soleur/.claude-plugin"
+printf 'ref: refs/heads/main\n' > "$NLD/.git/HEAD"; printf '%s\n' "$SHA_Y" > "$NLD/.git/refs/heads/main"
+printf '{"name":"soleur"}\n' > "$NLD/plugins/soleur/.claude-plugin/plugin.json"
+run "$NLD/plugins/soleur" "$XDG" --installed
+check co-newline-dir-reads-its-own-repo "checkout/${SHA_Y:0:12}" "$(val source)/$(val commit)"
+check co-newline-dir-two-lines 2 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
+
+# --- precedence: a manifest version beats a checkout; a checkout never invents a version or marketplace
+T="$(co_clone prec "$SHA_M")"; printf '{"name":"soleur","version":"2.1.0"}\n' > "$T/plugins/soleur/.claude-plugin/plugin.json"
+co_run "$T"; check co-manifest-version-beats-checkout "manifest/2.1.0" "$(val source)/$(val version)"
+check co-manifest-version-no-commit-key 0 "$(nval commit)"
+
+# --- the anchor: only <top>/plugins/soleur with <top>/.git and a plugin.json is a checkout
+T="$(co_clone anchor-other "$SHA_M")"; mkdir -p "$T/plugins/other/.claude-plugin"; printf '{"name":"soleur"}\n' > "$T/plugins/other/.claude-plugin/plugin.json"
+run "$T/plugins/other" "$XDG" --installed; check co-anchor-wrong-basename "source=unknown" "$OUT"
+T="$(co_top anchor-nogit)"; co_expect co-anchor-no-dot-git "$T" unknown
+T="$(co_clone anchor-nomanifest "$SHA_M")"; rm -f "$T/plugins/soleur/.claude-plugin/plugin.json"
+co_expect co-anchor-no-plugin-json "$T" unknown
+# a dotfiles-style repository ABOVE the project must not be adopted: the walk is not free
+DOT="$CO/dot"; assert_fixture_dir "$DOT"; rm -rf "$DOT"
+mkdir -p "$DOT/home/.git/refs/heads" "$DOT/home/work/proj/plugins/soleur/.claude-plugin"
+printf 'ref: refs/heads/main\n' > "$DOT/home/.git/HEAD"; printf '%s\n' "$SHA_X" > "$DOT/home/.git/refs/heads/main"
+printf '{"name":"soleur"}\n' > "$DOT/home/work/proj/plugins/soleur/.claude-plugin/plugin.json"
+run "$DOT/home/work/proj/plugins/soleur" "$XDG" --installed; check co-anchor-ancestor-repo-not-adopted "source=unknown" "$OUT"
+# a directory that is NOT <top>/plugins/soleur but holds its own .git and plugin.json (any other
+# plugin checkout passed to --plugin-dir) is not Soleur's identity: the suffix is the anchor
+T="$(co_clone anchor-foreign "$SHA_M")"; mkdir -p "$T/.claude-plugin"; printf '{"name":"soleur"}\n' > "$T/.claude-plugin/plugin.json"
+run "$T" "$XDG" --installed; check co-anchor-foreign-root-with-own-git "source=unknown" "$OUT"
+# a relative root is never anchored (the cwd decides what it means)
+# (./plugins/soleur ends in /plugins/soleur, so only the absolute-path check can refuse it)
+T="$(co_clone anchor-rel "$SHA_M")"; X_CWD="$T" run "./plugins/soleur" "$XDG" --installed
+check co-anchor-relative-root "source=unknown" "$OUT"
+# a symlinked root is resolved physically: it names the repository it REALLY lives in
+T="$(co_clone anchor-link "$SHA_M")"; ln -sfn "$T/plugins/soleur" "$CO/linkroot"
+run "$CO/linkroot" "$XDG" --installed
+check co-symlinked-root-reads-its-real-repo "checkout/${SHA_M:0:12}" "$(val source)/$(val commit)"
+# ...and never the repository that merely holds the link (an unrelated project with a symlink in it)
+H="$(co_clone symlink-host "$SHA_X")"; assert_fixture_dir "$H/plugins/soleur"; rm -rf "$H/plugins/soleur"; ln -s "$T/plugins/soleur" "$H/plugins/soleur"
+run "$H/plugins/soleur" "$XDG" --installed
+check co-symlink-inside-another-repo-reads-the-target-not-the-host "checkout/${SHA_M:0:12}" "$(val source)/$(val commit)"
+# accepted residual, recorded as a row: a project that vendors plugins/soleur beside its own .git
+# AND a plugin.json is indistinguishable from an in-place checkout (CTO ruling 2026-10-13: only 12
+# hex of a validated line are ever shown, and only under the opt-in sent).
+T="$(co_clone anchor-vendored "$SHA_Y")"; co_expect co-anchor-vendored-project-accepted "$T" "$SHA_Y"
+
+# --- never reports what it did not read: every malformed HEAD / ref shape is `unknown`, silently
+silent_head() { # name kind -> a clone whose HEAD file holds the bytes for <kind>
+  local t f; t="$(co_clone "silent-$1" "$SHA_M")"; f="$t/.git/HEAD"
+  case "$2" in
+    empty)        : > "$f" ;;
+    ref-only)     printf 'ref:\n' > "$f" ;;
+    ref-no-name)  printf 'ref: refs/heads/\n' > "$f" ;;
+    tag-ref)      printf 'ref: refs/tags/main\n' > "$f"; mkdir -p "$t/.git/refs/tags"; printf '%s\n' "$SHA_M" > "$t/.git/refs/tags/main" ;;
+    dotdot)       printf 'ref: refs/heads/../x\n' > "$f" ;;
+    space)        printf 'ref: refs/heads/a b\n' > "$f"; printf '%s\n' "$SHA_M" > "$t/.git/refs/heads/a b" ;;
+    crlf-ref)     printf 'ref: refs/heads/main\r\n' > "$f" ;;
+    crlf-sha)     printf '%s\r\n' "$SHA_M" > "$f" ;;
+    sha39)        printf '%s\n' "${SHA_M:0:39}" > "$f" ;;
+    sha41)        printf '%s\n' "${SHA_M}0" > "$f" ;;
+    upper)        printf '%s\n' "$(printf '%s' "$SHA_M" | tr a-f A-F)" > "$f" ;;
+    non-hex)      printf '%s\n' "${SHA_M:0:39}g" > "$f" ;;
+    gitdir-line)  printf 'gitdir: /somewhere\n' > "$f" ;;
+    unborn)       printf 'ref: refs/heads/nothing-here\n' > "$f" ;;
+    two-lines)    printf '%s\n%s\n' "$SHA_M" "$SHA_X" > "$f" ;;
+    nul-spliced)  printf 'ref: refs/heads/ma\0in\n' > "$f" ;;
+    loose-ref-garbage) printf 'not a sha\n' > "$t/.git/refs/heads/main" ;;
+    loose-ref-upper)   printf '%s\n' "$(printf '%s' "$SHA_M" | tr a-f A-F)" > "$t/.git/refs/heads/main" ;;
+    loose-ref-dir)     rm -f "$t/.git/refs/heads/main"; mkdir -p "$t/.git/refs/heads/main" ;;
+    loose-invalid-no-fallthrough) printf 'not a sha\n' > "$t/.git/refs/heads/main"; printf '%s refs/heads/main\n' "$SHA_X" > "$t/.git/packed-refs" ;;
+    reftable)     printf 'ref: refs/heads/.invalid\n' > "$f"; mkdir -p "$t/.git/reftable" ;;
+    packed-bad-sha) rm -f "$t/.git/refs/heads/main"; printf 'zzzz refs/heads/main\n' > "$t/.git/packed-refs" ;;
+    packed-other-only) rm -f "$t/.git/refs/heads/main"; printf '%s refs/heads/mainx\n%s refs/heads/xmain\n' "$SHA_X" "$SHA_Y" > "$t/.git/packed-refs" ;;
+    gitfile-garbage) rm -rf "$t/.git"; printf 'gitdir:\n' > "$t/.git" ;;
+    gitfile-missing-target) rm -rf "$t/.git"; printf 'gitdir: %s/nowhere\n' "$CO" > "$t/.git" ;;
+  esac
+  printf '%s' "$t"
+}
+for kind in empty ref-only ref-no-name tag-ref dotdot space crlf-ref crlf-sha sha39 sha41 \
+            upper non-hex gitdir-line unborn two-lines nul-spliced loose-ref-garbage \
+            loose-ref-upper loose-ref-dir loose-invalid-no-fallthrough \
+            reftable packed-bad-sha packed-other-only gitfile-garbage \
+            gitfile-missing-target; do
+  T="$(silent_head "$kind" "$kind")"; co_expect "co-silent-$kind" "$T" unknown
+done
+# valid_ref_name deny arms: every row names a ref whose loose file EXISTS and holds a valid sha, so
+# without its arm the resolver would print a commit (a missing target would be refused anyway)
+deny_ref() { # label ref-as-written [file-path-under-refs/heads, default = the ref]
+  local t f; t="$(co_clone "deny-$1" "$SHA_M")"; f="${3:-$2}"
+  mkdir -p "$(dirname "$t/.git/refs/heads/$f")"; printf '%s\n' "$SHA_M" > "$t/.git/refs/heads/$f"
+  printf 'ref: refs/heads/%s\n' "$2" > "$t/.git/HEAD"
+  co_expect "co-deny-ref-$1" "$t" unknown
+}
+deny_ref tilde 'a~b'; deny_ref caret 'a^b'; deny_ref colon 'a:b'; deny_ref qmark 'a?b'; deny_ref star 'a*b'
+deny_ref bracket 'a[b'; deny_ref backslash 'a\b'; deny_ref at-brace 'a@{b'; deny_ref tab $'a\tb'
+deny_ref lock-suffix 'x.lock'; deny_ref trailing-dot 'x.'; deny_ref dot-component 'a/.b'; deny_ref at-alone '@'
+deny_ref double-slash 'a//b' 'a/b'
+deny_ref leading-dot '.x'; deny_ref leading-slash '/x' 'x'; deny_ref dot-dot-inside 'a..b'
+deny_ref lock-dir 'x.lock/y'; deny_ref control-char $'a\x01b'
+# `..` climbing out of refs/heads to a file that exists and holds a valid sha
+T="$(co_clone deny-dotdot-climb "$SHA_M")"; mkdir -p "$T/.git/refs/heads/a"; printf '%s\n' "$SHA_M" > "$T/.git/refs/secretfile"
+printf 'ref: refs/heads/a/../../secretfile\n' > "$T/.git/HEAD"; co_expect co-deny-ref-dotdot-climb "$T" unknown
+# the same ref name accepted when it is NOT hostile (control: the rows above are not just a broken fixture)
+T="$(co_clone deny-control "$SHA_M" 'a-b_c.d/e')"; co_expect co-deny-ref-control-accepts-a-plain-name "$T" "$SHA_M"
+# pointer edge rows: an empty commondir is not a pointer; an absolute one is followed (ruled, bounded to 12 hex)
+T="$(co_top commondir-empty)"; CDE="$CO/commondir-empty-common"; assert_fixture_dir "$CDE"; rm -rf "$CDE"
+mkdir -p "$CDE/worktrees/wt" "$CDE/refs/heads"; printf 'ref: refs/heads/main\n' > "$CDE/worktrees/wt/HEAD"; : > "$CDE/worktrees/wt/commondir"
+printf '%s\n' "$SHA_M" > "$CDE/refs/heads/main"; printf 'gitdir: %s/worktrees/wt\n' "$CDE" > "$T/.git"
+# the fallback directory (the worktree's own gitdir) holds a valid ref too, so ONLY the empty-pointer guard refuses it
+mkdir -p "$CDE/worktrees/wt/refs/heads"; printf '%s\n' "$SHA_X" > "$CDE/worktrees/wt/refs/heads/main"
+co_expect co-commondir-empty-is-unknown "$T" unknown
+T="$(co_top commondir-abs)"; CDA="$CO/commondir-abs-common"; assert_fixture_dir "$CDA"; rm -rf "$CDA"
+mkdir -p "$CDA/worktrees/wt" "$CDA/refs/heads"; printf 'ref: refs/heads/main\n' > "$CDA/worktrees/wt/HEAD"; printf '%s\n' "$CDA" > "$CDA/worktrees/wt/commondir"
+printf '%s\n' "$SHA_X" > "$CDA/refs/heads/main"; printf 'gitdir: %s/worktrees/wt\n' "$CDA" > "$T/.git"
+co_expect co-commondir-absolute-is-followed "$T" "$SHA_X"
+# a loose ref that is a DANGLING symlink exists as a path: it must not fall through to a packed entry
+T="$(co_clone dangling "$SHA_M")"; rm -f "$T/.git/refs/heads/main"; ln -s /nonexistent-soleur-ref "$T/.git/refs/heads/main"
+printf '%s refs/heads/main\n' "$SHA_X" > "$T/.git/packed-refs"; co_expect co-loose-dangling-symlink-no-fallthrough "$T" unknown
+# a non-ASCII branch AND directory name resolve the same in every locale (bytes, not characters)
+T="$(co_clone "café" "$SHA_M" 'feat/café')"
+ENVS=(LC_ALL=C); co_expect co-nonascii-names-under-C-locale "$T" "$SHA_M"
+co_expect co-nonascii-names-under-ambient-locale "$T" "$SHA_M"
+UTF8LOC="$(grep -i -m1 -E '^(en_US|C)\.utf-?8$' < <(locale -a 2>/dev/null) || true)"
+if [[ -n "$UTF8LOC" ]]; then ENVS=("LC_ALL=$UTF8LOC"); co_expect co-nonascii-names-under-utf8-locale "$T" "$SHA_M"
+else skip_case co-nonascii-names-under-utf8-locale "no UTF-8 locale installed"; skip_case co-nonascii-names-under-utf8-locale-exact-output "no UTF-8 locale installed"
+     skip_case co-nonascii-names-under-utf8-locale-rc-and-no-git "no UTF-8 locale installed"; SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1)); fi
+# a non-ASCII SEPARATOR (U+2003) in a ref name resolves identically in every locale: git itself only
+# refuses ASCII space/control characters, and the deny-list classes are evaluated as bytes (LC_ALL=C)
+T="$(co_clone emspace "$SHA_M" $'a\xe2\x80\x83b')"
+ENVS=(LC_ALL=C); co_expect co-emspace-ref-resolves-under-C-locale "$T" "$SHA_M"
+if [[ -n "$UTF8LOC" ]]; then ENVS=("LC_ALL=$UTF8LOC"); co_expect co-emspace-ref-resolves-under-utf8-locale "$T" "$SHA_M"
+else skip_case co-emspace-ref-resolves-under-utf8-locale "no UTF-8 locale installed"; skip_case co-emspace-ref-resolves-under-utf8-locale-exact-output "no UTF-8 locale installed"
+     skip_case co-emspace-ref-resolves-under-utf8-locale-rc-and-no-git "no UTF-8 locale installed"; SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1)); fi
+# boundary rows: "ref: refs/heads/" + a 495-char name + LF is exactly the 512-byte gate; one char more is over it
+mk_long_ref() { # name length -> clone whose HEAD names a ref of <length> chars after "ref: refs/heads/"
+  local t n="$2" f c1 c2 c3 c4; t="$(co_clone "$1" "$SHA_M")"
+  c1="$(printf 'a%.0s' $(seq 1 120))"; c2="$c1"; c3="$c1"
+  c4="$(printf 'a%.0s' $(seq 1 $(( n - 363 ))))"
+  mkdir -p "$t/.git/refs/heads/$c1/$c2/$c3"
+  printf '%s\n' "$SHA_M" > "$t/.git/refs/heads/$c1/$c2/$c3/$c4"
+  printf 'ref: refs/heads/%s/%s/%s/%s\n' "$c1" "$c2" "$c3" "$c4" > "$t/.git/HEAD"
+  printf '%s' "$t"
+}
+T="$(mk_long_ref long-ok 495)"; co_expect co-head-at-512-byte-gate "$T" "$SHA_M"
+T="$(mk_long_ref long-over 496)"; co_expect co-head-over-512-byte-gate "$T" unknown
+# a huge sparse HEAD must be refused by size BEFORE any read (read -n 512 alone took 38 s on 2 GiB of NULs)
+T="$(co_clone sparse "$SHA_M")"; rm -f "$T/.git/HEAD"; dd if=/dev/null of="$T/.git/HEAD" bs=1 seek=2147483648 2>/dev/null
+X_TIMEOUT=10 co_expect co-silent-sparse-2gib-head "$T" unknown
+# the matching entry is the FIRST line, so without the size gate awk would find it and print a commit
+T="$(co_clone bigpacked "$SHA_M")"; rm -f "$T/.git/refs/heads/main"; printf '%s refs/heads/main\n' "$SHA_M" > "$T/.git/packed-refs"
+printf '\0' | dd of="$T/.git/packed-refs" bs=1 seek=5242879 conv=notrunc 2>/dev/null   # sparse hole: the file is now 5 MiB, over the 4 MiB cap
+X_TIMEOUT=10 co_expect co-silent-oversize-packed-refs "$T" unknown
+# a real-sized packed-refs (this repository's own is ~0.5 MB) with the wanted entry LAST must resolve
+T="$(co_clone realsize "$SHA_M")"; rm -f "$T/.git/refs/heads/main"
+seq 1 15000 | awk -v s="$SHA_X" '{ printf "%s refs/heads/b%d\n", s, $1 }' > "$T/.git/packed-refs"; printf '%s refs/heads/main\n' "$SHA_M" >> "$T/.git/packed-refs"
+co_expect co-packed-refs-real-sized-accepts-the-last-entry "$T" "$SHA_M"
+# a packed record over 1 KiB that names the ref is skipped before awk splits it; the later normal one wins
+T="$(co_clone longrec "$SHA_M")"; rm -f "$T/.git/refs/heads/main"
+{ printf '%s refs/heads/main ' "$SHA_X"; head -c 1100 /dev/zero | tr '\0' y; printf '\n%s refs/heads/main\n' "$SHA_M"; } > "$T/.git/packed-refs"
+co_expect co-packed-overlong-record-is-skipped "$T" "$SHA_M"
+# a record whose first field starts with `#` is skipped even if its second field is the ref; the real entry after it wins
+T="$(co_clone hashrec "$SHA_M")"; rm -f "$T/.git/refs/heads/main"
+printf '#x refs/heads/main\n%s refs/heads/main\n' "$SHA_M" > "$T/.git/packed-refs"
+co_expect co-packed-hash-prefixed-record-is-skipped "$T" "$SHA_M"
+# an oversize or non-regular plugin.json is skipped before jq/awk could stall on it
+# (it WOULD parse as version 9.9.9: only the size cap makes it a checkout instead of a manifest install)
+T="$(co_clone bigmanifest "$SHA_M")"
+{ printf '{"name":"soleur","version":"9.9.9","pad":"'; head -c 70000 /dev/zero | tr '\0' x; printf '"}\n'; } > "$T/plugins/soleur/.claude-plugin/plugin.json"
+X_TIMEOUT=10 co_expect co-oversize-manifest-is-skipped-not-parsed "$T" "$SHA_M"
+# a FIFO named HEAD would hang an open(2); [[ -f ]] refuses it before any open
+# (the row needs a timeout binary: without one a regression would hang the suite instead of reddening a row)
+if command -v mkfifo >/dev/null 2>&1 && [[ -n "$TIMEOUT_BIN" ]]; then
+  T="$(co_clone fifo "$SHA_M")"; rm -f "$T/.git/HEAD"; mkfifo "$T/.git/HEAD"
+  X_TIMEOUT=10 co_expect co-silent-fifo-head "$T" unknown
+  T="$(co_clone fifo-manifest "$SHA_M")"; rm -f "$T/plugins/soleur/.claude-plugin/plugin.json"; mkfifo "$T/plugins/soleur/.claude-plugin/plugin.json"
+  X_TIMEOUT=10 co_expect co-silent-fifo-manifest "$T" unknown
+else
+  skip_case co-silent-fifo-head "no mkfifo or timeout"; skip_case co-silent-fifo-head-rc-and-no-git "no mkfifo or timeout"
+  skip_case co-silent-fifo-manifest "no mkfifo or timeout"; skip_case co-silent-fifo-manifest-rc-and-no-git "no mkfifo or timeout"
+  SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 2))
+fi
+
+# --- hostile repository config: it is data, never executed, never even a reason to call git
+SENT="$SANDBOX/hostile.fired"; HK="$SANDBOX/hostile-hooks"; rm -f "$SENT"; rm -rf "$HK"; mkdir -p "$HK"
+printf '#!/bin/sh\necho fired > "%s"\nexit 0\n' "$SENT" > "$HK/pre-commit"; chmod +x "$HK/pre-commit"
+printf '#!/bin/sh\necho fired > "%s"\nexit 0\n' "$SENT" > "$SANDBOX/hostile-prog"; chmod +x "$SANDBOX/hostile-prog"
+hostile_config() { # <git-dir>
+  printf '[core]\n\thooksPath = %s\n\tfsmonitor = %s\n\tsshCommand = %s\n\tpager = %s\n' "$HK" "$SANDBOX/hostile-prog" "$SANDBOX/hostile-prog" "$SANDBOX/hostile-prog" > "$1/config"
+  printf '[include]\n\tpath = %s/never-read.cfg\n[alias]\n\trev-parse = !%s\n[url "https://evil.invalid/"]\n\tinsteadOf = https://github.com/\n' "$SANDBOX" "$SANDBOX/hostile-prog" >> "$1/config"
+}
+T="$(co_clone hostile "$SHA_M")"; hostile_config "$T/.git"; mkdir -p "$T/.git/hooks"; cp "$HK/pre-commit" "$T/.git/hooks/pre-commit"
+co_expect co-hostile-config-read-not-run "$T" "$SHA_M"
+check co-hostile-config-sentinel-absent 0 "$([[ -e "$SENT" ]] && echo 1 || echo 0)"
+# The checkout code names no git command at all (the stub shadows `git` by NAME, so an absolute-path or
+# `command -p` call would bypass it; this is the row that sees those). Comments are stripped first.
+# The region runs from the installed-identity header through resolve_installed and the manifest read.
+CK_SRC="$(awk '/^# ---- installed/ {f=1} /^print_installed\(\)/ {f=0} f' "$SUT" | sed 's/[[:space:]]#.*$//; /^[[:space:]]*#/d')"
+check co-checkout-code-has-a-body 1 "$([[ "$CK_SRC" == *"resolve_checkout_commit()"* && "$CK_SRC" == *"read_manifest_version()"* && "$CK_SRC" == *"resolve_installed()"* ]] && echo 1 || echo 0)"
+check co-checkout-code-names-no-git-command 0 "$(printf '%s\n' "$CK_SRC" | grep -cE "(^|[[:space:];&|(\`\"'\\\\])(/[^[:space:]]*/)?git([[:space:]\"']|$)" || true)"
+if [[ -n "$REAL_GIT" ]]; then
+  # The witness: the SAME config text, in a repository real git understands, fires the hook...
+  WT="$CO/witness"; assert_fixture_dir "$WT"; rm -rf "$WT"; mkdir -p "$WT"
+  ( source "$DIR/lib/git-fixture-env.sh" && git_fixture_env "$WT" \
+      && cd "$WT" && "$REAL_GIT" init -q . && hostile_config "$WT/.git" \
+      && "$REAL_GIT" commit -q --allow-empty -m witness ) >/dev/null 2>&1
+  check co-hostile-config-is-armed-for-real-git 1 "$([[ -e "$SENT" ]] && echo 1 || echo 0)"
+  # ...and the resolver, run on that very repository, reads it without firing anything.
+  rm -f "$SENT"; mkdir -p "$WT/plugins/soleur/.claude-plugin"; printf '{"name":"soleur"}\n' > "$WT/plugins/soleur/.claude-plugin/plugin.json"
+  WREF="$(sed 's/^ref: //' "$WT/.git/HEAD")"; WSHA="$(cat "$WT/.git/$WREF" 2>/dev/null)"
+  co_expect co-hostile-real-repo-read-not-run "$WT" "$WSHA"
+  check co-hostile-real-repo-sentinel-absent 0 "$([[ -e "$SENT" ]] && echo 1 || echo 0)"
+else
+  skip_case co-hostile-config-is-armed-for-real-git "git not installed"
+  skip_case co-hostile-real-repo-read-not-run "git not installed"; skip_case co-hostile-real-repo-read-not-run-exact-output "git not installed"
+  skip_case co-hostile-real-repo-read-not-run-rc-and-no-git "git not installed"; skip_case co-hostile-real-repo-sentinel-absent "git not installed"
+  SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1))
+fi
+# the user-facing prose names the label the hook prints (a dropped `source=checkout` arm must not go unnoticed)
+HOOK_LABEL="$(sed -n 's/.*label="commit \$commit \(([^)]*)\)".*/\1/p' "$REPO_ROOT/plugins/soleur/hooks/version-banner.sh" | head -1)"
+check co-hook-label-is-local-checkout "(local checkout)" "$HOOK_LABEL"
+for doc in commands/version.md commands/help.md README.md; do
+  # (version.md's template extends the label with the HEAD-not-files note, so match its opening)
+  check_has "co-label-in-$doc" "${HOOK_LABEL%)}" "$(cat "$REPO_ROOT/plugins/soleur/$doc")"
+done
+
+# --- parity with real git (gated): the resolver and `git rev-parse HEAD` agree on real layouts
+if [[ -n "$REAL_GIT" ]]; then
+  PR="$CO/parity"; assert_fixture_dir "$PR"; rm -rf "$PR"; mkdir -p "$PR"
+  ( source "$DIR/lib/git-fixture-env.sh" && git_fixture_env "$PR" && cd "$PR" && "$REAL_GIT" init -q -b main . \
+      && mkdir -p plugins/soleur/.claude-plugin && printf '{"name":"soleur"}\n' > plugins/soleur/.claude-plugin/plugin.json \
+      && "$REAL_GIT" add . && "$REAL_GIT" commit -q -m one && "$REAL_GIT" pack-refs --all --prune \
+      && "$REAL_GIT" rev-parse HEAD > "$SANDBOX/parity.head" \
+      && "$REAL_GIT" worktree add -q -b wtbranch "$PR-wt" >/dev/null \
+      && ( cd "$PR-wt" && "$REAL_GIT" commit -q --allow-empty -m two && "$REAL_GIT" rev-parse HEAD > "$SANDBOX/parity.wthead" ) ) >/dev/null 2>&1
+  PH="$(cat "$SANDBOX/parity.head" 2>/dev/null || true)"; PW="$(cat "$SANDBOX/parity.wthead" 2>/dev/null || true)"
+  check co-parity-fixture-has-packed-refs-only 0 "$([[ -e "$PR/.git/refs/heads/main" ]] && echo 1 || echo 0)"
+  run "$PR/plugins/soleur" "$XDG" --installed; check co-parity-packed-refs-matches-rev-parse "checkout/${PH:0:12}" "$(val source)/$(val commit)"
+  run "$PR-wt/plugins/soleur" "$XDG" --installed; check co-parity-linked-worktree-matches-rev-parse "checkout/${PW:0:12}" "$(val source)/$(val commit)"
+else
+  skip_case co-parity-fixture-has-packed-refs-only "git not installed"
+  skip_case co-parity-packed-refs-matches-rev-parse "git not installed"; skip_case co-parity-linked-worktree-matches-rev-parse "git not installed"
+  SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 2))
+fi
+
+# --- relation and cache for a checkout: treated like a commit install
+T="$(co_clone cmp "$SHA_M")"
+new_env co-cmp; printf '%s' "$(body_pretty ahead modified)" > "$CMP"
+run "$T/plugins/soleur" "$XDG" --compare --refresh
+check co-compare-older "older" "$(val relation)"
+check co-compare-one-curl-call 1 "$(ncalls curl)"
+check co-compare-url-carries-only-12-hex 1 "$(grep -c "compare/${SHA_M:0:12}\.\.\.v3.335.10?per_page=1&page=2000" "$CALLS")"
+check co-compare-no-marketplace-key 0 "$(nval marketplace)"
+check co-compare-cache-is-one-stable-file "latest-release.checkout" "$(cd "$XDG/soleur" 2>/dev/null && ls latest-release.* 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+check co-compare-cache-records-the-commit "${SHA_M:0:12}" "$(cval checkout relation_for)"
+# a second commit of the same checkout rewrites the one file rather than adding another
+T2="$(co_clone cmp2 "$SHA_X")"; run "$T2/plugins/soleur" "$XDG" --compare --refresh
+check co-compare-second-commit-reuses-the-file "latest-release.checkout/${SHA_X:0:12}" "$(cd "$XDG/soleur" && ls latest-release.* | tr '\n' ' ' | sed 's/ $//')/$(cval checkout relation_for)"
+co_cmp_case() { # name body curl-rc want-relation want-reason
+  new_env "co-$1"; printf '%s' "$2" > "$CMP"; STUB_CURL_RC="$3" run "$T/plugins/soleur" "$XDG" --compare --refresh
+  check "co-$1" "$4/$5" "$(val relation)/$(val reason)"
+}
+co_cmp_case cmp-diverged "$(body_pretty diverged removed)" 0 unknown diverged
+co_cmp_case cmp-failed '{}' 22 unknown compare-failed
+new_env co-nocurl; X_PATH="$P_NOCURL" run "$T/plugins/soleur" "$XDG" --compare --refresh
+check co-compare-no-curl "unknown/no-curl" "$(val relation)/$(val reason)"
+# HEAD is the commit a release tag points at: current, no compare call at all
+T3="$(co_clone attag "$SHA3")"; new_env co-attag; run "$T3/plugins/soleur" "$XDG" --compare --refresh
+check co-attag-current "current" "$(val relation)"; check co-attag-no-curl 0 "$(ncalls curl)"
+# another commit's cache entry reads as missing (not corrupt) for a checkout, and spawns no claim of corruption
+T="$(co_clone cache "$SHA_M")"; new_env co-cache
+put_cache checkout v3.335.10 "$SHA3" "$(date +%s)" older "" 1 "${SHA_X:0:12}"
+run "$T/plugins/soleur" "$XDG" --cached-latest; check co-cache-other-commit-is-missing missing "$(val cache)"
+put_cache checkout v3.335.10 "$SHA3" "$(date +%s)" older "" 1 "${SHA_M:0:12}"
+run "$T/plugins/soleur" "$XDG" --cached-latest; check co-cache-same-commit-is-fresh "fresh/older" "$(val cache)/$(val relation)"
+# ...while every OTHER source keeps `corrupt` for a mismatched entry (existing behaviour must not move)
+new_env co-cache-ctl; put_cache b78d30e919ff v3.335.10 "$SHA3" "$(date +%s)" older "" 1 aaaaaaaaaaaa
+run "$R_KEYLESS" "$XDG" --cached-latest; check co-cache-commit-install-mismatch-stays-corrupt corrupt "$(val cache)"
+# an unreadable checkout has nothing to key a cache on: nothing persisted
+T="$(silent_head cache-unk empty)"; new_env co-unk; run "$T/plugins/soleur" "$XDG" --compare --refresh
+check co-unknown-checkout-relation "unknown/installed-unknown" "$(val relation)/$(val reason)"
+check co-unknown-checkout-no-curl 0 "$(ncalls curl)"
+check co-unknown-checkout-nothing-persisted "" "$(dirlist "$XDG")"
+
 # ---- accounting and verdict -----------------------------------------------------------
 if (( passes + fails != CASES )) || (( fails != ${#FAILURES[@]} )); then
   printf 'FATAL: verdict accounting broken -- passes(%d) + fails(%d) != CASES(%d), or fails != ledger(%d)\n' \
     "$passes" "$fails" "$CASES" "${#FAILURES[@]}" >&2
   exit 1
 fi
-MIN_CASES=414
+MIN_CASES=641
 if (( CASES != MIN_CASES )); then
   printf 'FATAL: %d cases ran, expected exactly %d -- cases were added or deleted, or the suite aborted early\n' "$CASES" "$MIN_CASES" >&2
   exit 1
 fi
 # The subject must actually have run: a harness that asserts on empty output for every row
 # would still satisfy every "prints nothing" row.
-MIN_RUNS=218
-if (( RUNS != MIN_RUNS )); then
-  printf 'FATAL: subject ran %d times, expected exactly %d -- the harness asserted without driving the resolver\n' "$RUNS" "$MIN_RUNS" >&2
+MIN_RUNS=319
+# Skipped rows (no jq, no timeout, no git, no mkfifo) did not drive the resolver, and skip_case
+# already counted them as cases, so the exact run count is credited by what they would have run.
+EXPECT_RUNS=$(( MIN_RUNS - SKIP_RUN_DEFICIT ))
+if (( RUNS != EXPECT_RUNS )); then
+  printf 'FATAL: subject ran %d times, expected exactly %d -- the harness asserted without driving the resolver\n' "$RUNS" "$EXPECT_RUNS" >&2
   exit 1
 fi
 printf '\n%d passed, %d failed (%d cases, %d subject invocations, %d skipped)\n' "$passes" "$fails" "$CASES" "$RUNS" "$SKIPS"

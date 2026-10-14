@@ -35,7 +35,7 @@ import {
 } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
 import { ensureNodeWebSocketPolyfill } from "./helpers/node-websocket-polyfill";
-import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
+import { tearDownTenantUsers } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED =
   process.env.SUPABASE_DEV_INTEGRATION === "1";
@@ -183,23 +183,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         await service.from("conversations").delete().eq("user_id", user.id);
       }
 
-      for (const user of [userA, userB]) {
-        if (!user.id) continue;
-        assertSynthetic(user.email);
-        const { data: check } = await service.auth.admin.getUserById(user.id);
-        // Fail closed: a missing user or a NULL/empty email field must not
-        // skip the binding (NULL email is legal on auth.users rows).
-        if (!check?.user || check.user.email !== user.email) {
-          throw new Error(
-            `afterAll: auth.users lookup for ${user.id} ` +
-              `(${check?.user?.email ?? "not found"}) does not match ` +
-              `synthetic email ${user.email}`,
-          );
-        }
-        // FK-reverse helper: trigger-created workspace_members rows are
-        // ON DELETE RESTRICT, so a raw deleteUser 500s (#9994).
-        await tearDownTenantUser(service, user);
-      }
+      await tearDownTenantUsers(service, [userA, userB]);
     }, 60_000);
 
     test("user A receives ZERO payloads from user B's INSERT", async () => {

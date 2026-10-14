@@ -1126,7 +1126,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # pipe: a non-test script feeds text into a verb, and a test STUB for that verb exits without reading stdin, so the writer dies
 # (SIGPIPE 141, or EPIPE where CI ignores SIGPIPE). Three guards share one table, PRODUCER_JOIN, whose evidence is
 # knowledge-base/project/specs/archive/20261012-033826-feat-one-shot-grep-q-pipe-guard-s7b-producer-join/evidence.md (S7b) and
-# knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-s7c-derivation-recall/evidence.md (S7c: the per-pair reach table and the arm increments).
+# knowledge-base/project/specs/archive/20261014-132045-feat-one-shot-grep-q-pipe-guard-s7c-derivation-recall/evidence.md (S7c: the per-pair reach table and the arm increments).
 #   1. SET IDENTITY over what the derivation can see. pj_join_pairs derives every (test file, verb) pair where the test file names a non-test
 #      file (.sh .bash .yml .yaml .tf .tftpl .template .service .tmpl, one list) that pipes into the verb under pipefail with its status observed,
 #      and the test file (or one sourced file) stubs that verb. Pipefail is the file's own token, `shell: bash` in a workflow, or, for a library,

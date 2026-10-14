@@ -184,6 +184,12 @@ make_fake_proc "$FAKE_PROC" 1011 "$LINKED/sub" 1  5010 bash scripts/test-all.sh 
 # unmeasured, and a revision that let it match `timeout 600 grep -rn
 # test-all.sh` passed every existing arm including M4.
 make_fake_proc "$FAKE_PROC" 1012 "$WT"       1    5011 timeout 600 grep -rn test-all.sh scripts/ || exit 2
+# rtk-wrapped runs (#10230): argv[0]=rtk must not hide the suite. 1015 is the bare
+# filtered-subcommand shape, 1016 the exec-subcommand shape, 1017 the global-flag
+# + exec-subcommand shape; all three exec `bash scripts/test-all.sh` and must be mine.
+make_fake_proc "$FAKE_PROC" 1015 "$WT"       1    5014 rtk bash scripts/test-all.sh || exit 2
+make_fake_proc "$FAKE_PROC" 1016 "$WT"       1    5015 rtk run bash scripts/test-all.sh || exit 2
+make_fake_proc "$FAKE_PROC" 1017 "$WT"       1    5016 rtk -v run bash scripts/test-all.sh || exit 2
 # An UNTERMINATED cmdline (no trailing NUL). Processes that rewrite argv in
 # place routinely leave it off; a `read -d ''` loop without an EOF fallback
 # discards the final element and the process becomes invisible.
@@ -202,11 +208,11 @@ make_fake_proc "$FAKE_PROC" 0    "$WT"       1    5009 bash scripts/test-all.sh 
 # The one line every mutation must move.
 #   excluded by ancestry: 9997/9998/9999.
 #   would-signal: 1001, 1006 (subdir), 1007 (sh), 1008 (wrapper), 1011
-#     (symlink), 1013 (unterminated cmdline).
+#     (symlink), 1013 (unterminated cmdline), 1015/1016/1017 (rtk wrappers).
 #   refused: 1002 (sibling), 1005 (<unreadable>), 1009 (deleted), 1010 (evil),
 #     1014 (ESC in path).
 #   skipped: 1004 (pgid).  unmatched: 1003, 1012 (wrapper + mention).
-#   rejected before scan: pid 0.  scanned counts the 17 valid pids.
+#   rejected before scan: pid 0.  scanned counts the 20 valid pids.
 #
 # `late_refused` is part of the oracle, not decoration. The signal site
 # RE-VERIFIES ownership before signalling, which is correct defence-in-depth
@@ -215,7 +221,7 @@ make_fake_proc "$FAKE_PROC" 0    "$WT"       1    5009 bash scripts/test-all.sh 
 # fork reads as non-load-bearing. A separate counter keeps the two enforcement
 # points independently pinned — and it is now printed by the TOOL, not derived
 # by this suite, so an operator sees the same split a mutation does.
-BASELINE_COUNTS='killed=0 would_signal=6 failed=0 refused=5 late_refused=0 skipped_same_pgroup=1 scanned=17 mode=dry-run'
+BASELINE_COUNTS='killed=0 would_signal=9 failed=0 refused=5 late_refused=0 skipped_same_pgroup=1 scanned=20 mode=dry-run'
 
 run_fake() {
   local helper="$1"; shift
@@ -316,6 +322,9 @@ check_row 1006 mine    "T-CARD: a SECOND owned process, in a subdirectory, is se
 # trap work/SKILL.md documents for commit messages, one layer down.
 check_row 1007 mine    "T-SH: a run under sh (not just bash) is selected"
 check_row 1008 mine    "T-WRAP: 'timeout 600 bash <suite>' is selected (wrapper argv[0])"
+check_row 1015 mine    "T-WRAP-RTK: 'rtk bash <suite>' is selected (filtered-subcommand argv[0])"
+check_row 1016 mine    "T-WRAP-RTK-RUN: 'rtk run bash <suite>' is selected (exec-subcommand word consumed)"
+check_row 1017 mine    "T-WRAP-RTK-V: 'rtk -v run bash <suite>' is selected (global flag + exec-subcommand)"
 check_row 1011 mine    "T-SYMCWD: a cwd reaching the worktree through a symlink is owned"
 check_row 1013 mine    "T-NONUL: a process with an unterminated cmdline is still matched"
 check_row 1014 foreign "T-ESC: a process whose cwd holds an ESC sequence is refused"
@@ -381,7 +390,7 @@ else
   fail "T-baseline: expected '$BASELINE_COUNTS', got '$got'"
 fi
 if run_fake "$HELPER" kill_mine no-such-pattern-xyz 2>/dev/null \
-   | grep -cE >/dev/null '^killed=0 would_signal=0 failed=0 refused=0 late_refused=0 skipped_same_pgroup=0 scanned=17 mode=dry-run$'; then
+   | grep -cE >/dev/null '^killed=0 would_signal=0 failed=0 refused=0 late_refused=0 skipped_same_pgroup=0 scanned=20 mode=dry-run$'; then
   pass "T-D6: counter line printed even when nothing matched"
 else
   fail "T-D6: counter line missing/wrong on a zero-match run"
