@@ -59,7 +59,8 @@ Draft PR: #10288.
 - [ ] 4.2 `#10248` disclosure comments in the three base-planted files updated to past tense; same
       callout style at newly-fixed sites.
 - [ ] 4.3 `known-external-tools.md` line noting the boundary class is covered (if the parent's doc names
-      the deferred class).
+      the deferred class), and its grammar table gains the `flag-global`/`flag-string` rows when the TSV
+      does (the doc restates the TSV per its header contract — CTO ruling row 4).
 - [ ] 4.4 Re-run the enumeration grep post-change — zero unexempted boundary-anchored gated-command
       regexes without the fragment.
 
