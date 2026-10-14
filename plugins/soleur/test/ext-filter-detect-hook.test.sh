@@ -109,10 +109,13 @@ check "the registration carries timeout 10" "$grp" '"timeout":10'
 check "the command is a quoted bash invocation" "$grp" 'bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ext-filter-detect.sh\"'
 check "devin-dispositions.tsv carries a row" "$(cat "$DISPOSITIONS")" 'plugins/soleur/hooks/ext-filter-detect.sh'
 
+# Anti-vacuity floor (-lt shape so scripts/guard-vacuity-floor.test.sh's mutant slice
+# can construct it): a suite that silently loses assertions must not exit 0.
 MIN_VERDICTS=27
-if (( passes + fails < MIN_VERDICTS )); then
-  printf 'FATAL: verdict floor breached: %d < %d — the suite lost assertions.\n' "$((passes + fails))" "$MIN_VERDICTS" >&2
-  fails=$((fails + 1))
+if [[ "$((passes + fails))" -lt "$MIN_VERDICTS" ]]; then
+  printf '[FATAL] assertion floor: only %d verdicts ran, below floor %d\n' "$((passes + fails))" "$MIN_VERDICTS" >&2
+  exit 1   # the floor's own block must exit non-zero — guard-vacuity-floor scores
+           # the block in isolation (an appended `exit 0` would mask a mere counter bump)
 fi
 printf '\n=== %d verdicts, %d failed ===\n' "$((passes + fails))" "$fails"
 (( fails == 0 ))
