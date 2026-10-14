@@ -731,7 +731,7 @@ if [[ -z "$SRC2_BLOCK" ]]; then
   fail "Source 2 drift (#7898): [sources.system_journald] block not found in vector.toml"
 elif ! grep -qE '^include_matches\.PRIORITY = \["0", "1", "2"\]$' <<<"$SRC2_BLOCK"; then
   fail "Source 2 drift (#7898): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\"] — the host-script crit rows (logger -p user.crit = PRIORITY 2) would stop shipping"
-elif ! grep -qE '^exclude_units = \["inngest-server\.service", "vector\.service"\]$' <<<"$SRC2_BLOCK"; then
+elif ! grep -qE '^exclude_units = \["inngest-server\.service"\]$' <<<"$SRC2_BLOCK"; then
   fail "Source 2 drift (#7898): exclude_units widened/changed — a monitor unit added here would lose its off-box refusal path"
 elif ! grep -qE '^inputs = \[.*"system_journald".*\]' "$VECTOR_TOML"; then
   fail "Source 2 drift (#7898): system_journald is no longer an input of the pii_scrub chain"
@@ -739,22 +739,25 @@ else
   pass "Source 2 (system_journald) admits PRIORITY 0-2 from any unit (two exclusions) and feeds the scrub chain — the #7898 crit-row sink holds"
 fi
 
-# #9963: Source 1 (inngest_journald) is the admission arm the SYSLOG_IDENTIFIER=systemd
-# positive-control row rides. Under OR-over-record-fields contains_match, `include_units`
-# merges into include_matches._SYSTEMD_UNIT, so this source admits
-# `_SYSTEMD_UNIT=inngest-server.service` (ANY priority) OR `PRIORITY ∈ {0..4}` (ANY unit,
-# ANY identifier). Two facts are load-bearing and pinned here, scoped to the
-# [sources.inngest_journald] block so a same-named key elsewhere cannot satisfy them:
-#   - the PRIORITY set: narrow it below "3" and the PRIORITY-3 control row (and every real
-#     systemd 'Failed to start' row) silently leaves the arm → consumers go unshipping;
+# #9963 + #6551 partition: Source 1 (inngest_journald) is the admission arm the
+# SYSLOG_IDENTIFIER=systemd positive-control row rides. Under OR-over-record-fields
+# contains_match, `include_units` merges into include_matches._SYSTEMD_UNIT, so this
+# source admits `_SYSTEMD_UNIT=inngest-server.service` (ANY priority) OR
+# `PRIORITY ∈ {3,4}` minus the exclude_matches sets (the #6551 static partition:
+# untagged PRIORITY 0-2 rows belong to Source 2 alone; S4 tags and container stderr
+# belong to their own arms — double-admission windows closed). Two facts are
+# load-bearing and pinned here, scoped to the [sources.inngest_journald] block so a
+# same-named key elsewhere cannot satisfy them:
+#   - the PRIORITY set: dropping "3" would lose the PRIORITY-3 control row (and every
+#     real systemd 'Failed to start' row) → consumers go unshipping;
 #   - the pii_scrub input: dropping the source from the redaction chain would ship
 #     un-scrubbed host rows, the privacy regression the AC4 boundary guard names.
 SRC1_BLOCK="$(awk '/^\[sources\.inngest_journald\]/{f=1; next} f && /^\[/{exit} f' "$VECTOR_TOML")"
 CASES=$((CASES + 1))
 if [[ -z "$SRC1_BLOCK" ]]; then
   fail "Source 1 drift (#9963): [sources.inngest_journald] block not found in vector.toml"
-elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_matches\.PRIORITY = \["0", "1", "2", "3", "4"\]$' >/dev/null; then
-  fail "Source 1 drift (#9963): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\", \"3\", \"4\"] — the PRIORITY-3 systemd control row (and real 'Failed to start' rows) leaves the admission arm and silently stops shipping"
+elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_matches\.PRIORITY = \["3", "4"\]$' >/dev/null; then
+  fail "Source 1 drift (#9963 + #6551 partition): include_matches.PRIORITY is no longer exactly [\"3\", \"4\"] — the PRIORITY-3 systemd control row (and real 'Failed to start' rows) leaves the admission arm and silently stops shipping; PRIORITY 0-2 moved to Source 2 under the partition (untagged rows)"
 elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service"\]$' >/dev/null; then
   fail "Source 1 drift (#9963): include_units changed — the unit's own rows at every priority stop shipping"
 elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_journald"')" = "0" ]; then
