@@ -1,6 +1,6 @@
 # Tasks: ci: S4 PR affected-only gating, e2e fallback fix, shard-totality gate
 
-Plan: `knowledge-base/project/plans/2026-10-12-feat-ci-pr-affected-only-gating-plan.md`. Issue #9729. Landing order: PR A, then PR B, then PR C. B and C stay dark; activation is locked until PR C removes the sentinel.
+Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-10-12-feat-ci-pr-affected-only-gating-plan.md`. Issue #9729. Landing order: PR A, then PR B, then PR C. B and C stay dark; activation is locked until PR C removes the sentinel.
 
 ## PR A — e2e fallback fix and shard-totality gate (independent, not dark)
 
