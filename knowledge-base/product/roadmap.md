@@ -447,7 +447,7 @@ Surfaced 2026-05-30 from benchmarking against **Viktor** (multi-player enterpris
 
 | # | Bet | Priority | ICP fit | Issue | Status |
 |---|-----|----------|---------|-------|--------|
-| CP1 | Runtime untrusted-data classification (indirect prompt-injection defense) — LLM-classify external content before agents act on it | P1 | Near-term (current ICP) | [#4671](https://github.com/jikig-ai/soleur/issues/4671) | Not started |
+| CP1 | Runtime untrusted-data classification (indirect prompt-injection defense) — heuristic annotation of fetched web content (WebFetch only, ADR-287); not yet a defense: flags off in prd, no out-of-sample numbers; LLM tier conditional on measured recall | P1 | Near-term (current ICP) | [#4671](https://github.com/jikig-ai/soleur/issues/4671) | In progress (WebFetch slice, flags off in prd) |
 | CP2 | Structured human-in-the-loop approval queue for write/send actions (batched, reviewable — better than per-call CLI prompts for non-technical operators) | P2 | Near-term (current ICP) | [#4672](https://github.com/jikig-ai/soleur/issues/4672) | Not started |
 | CP3 | Cross-system scheduled business automations (business-process crons beyond infra/dev) | P2 | Unlocks with CP4 | [#4674](https://github.com/jikig-ai/soleur/issues/4674) | Not started |
 | CP4 | Business-SaaS integration breadth (Slack/Gmail/Asana-class MCP connectors for cross-silo orchestration) | P3 | Strategic (up-market) | [#4673](https://github.com/jikig-ai/soleur/issues/4673) | Not started |

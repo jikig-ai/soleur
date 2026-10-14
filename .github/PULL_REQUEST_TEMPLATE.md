@@ -29,7 +29,7 @@ Closes #
 **Where will this surface in Sentry / Better Stack if it breaks?** Provide a concrete query URL or CLI invocation an operator can run without SSH:
 
 ```
-e.g. curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://de.sentry.io/api/0/organizations/jikigai-eu/issues/?query=feature:<feature-tag>" | jq -r '.[].title'
+e.g. printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN" | curl --disable -sS --config - "https://de.sentry.io/api/0/organizations/jikigai-eu/issues/?query=feature:<feature-tag>" | jq -r '.[].title'
 ```
 
 **Which observability layer covers each new failure mode?** (One per failure mode; see `plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md`.)

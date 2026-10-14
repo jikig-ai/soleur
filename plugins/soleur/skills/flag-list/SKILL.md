@@ -89,7 +89,7 @@ separate heading — they are not runtime/Flagsmith flags.
 
 - **Read-only.** No mutations, no WORM audit append, no `--dry-run` needed.
 - The management API key is read via `doppler secrets get … -c cli_ops --plain`
-  and passed only to `curl -H Authorization` — never echoed.
+  and passed only on curl's stdin config — never echoed.
 - A `doppler_dev`/`doppler_prd` of `unset` means the `FLAG_<X>` key is absent
   from that Doppler config (legitimate for flags wired but not yet mirrored).
 

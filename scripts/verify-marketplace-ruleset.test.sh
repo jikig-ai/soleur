@@ -67,7 +67,7 @@ cat > "$TMP/baseline.json" <<'EOF'
   "bypass_actors": [
     { "actor_id": null, "actor_type": "OrganizationAdmin", "bypass_mode": "always" },
     { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" },
-    { "actor_id": 3261325, "actor_type": "Integration", "bypass_mode": "always" }
+    { "actor_id": 5118911, "actor_type": "Integration", "bypass_mode": "always" }
   ],
   "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
   "rules": [
@@ -158,8 +158,14 @@ expect_mut "G1.2b a bypass actor removed is rejected" \
 # EITHER direction means the live ruleset stopped matching what infra declares.
 expect_mut "G1.2c a bypass_mode narrowed from always to pull_request is rejected" \
   '(.bypass_actors[] | select(.actor_type=="Integration") | .bypass_mode) = "pull_request"' 1
+# 166065653 is the soleur-infra INSTALLATION id; the actor slot takes the APP id (5118911). A
+# typo of one for the other matches no actor, so the verifier must reject it.
 expect_mut "G1.2d a swapped Integration actor_id is rejected" \
-  '(.bypass_actors[] | select(.actor_type=="Integration") | .actor_id) = 122213433' 1
+  '(.bypass_actors[] | select(.actor_type=="Integration") | .actor_id) = 166065653' 1
+# "Swap, not add" (#9361): the former actor (soleur-ai, 3261325) returning as an EXTRA member
+# beside the correct one must redden too; G1.2a's id 99 would not notice that specific id.
+expect_mut "G1.2f the former soleur-ai actor added as a 4th member is rejected" \
+  '.bypass_actors += [{"actor_id": 3261325, "actor_type": "Integration", "bypass_mode": "always"}]' 1
 
 # --- G1.3: the approval count — this feature's own shipped defect -------------------------------
 expect_mut "G1.3a required_approving_review_count 0 is rejected" \
@@ -225,7 +231,7 @@ expect_mut "rule order is irrelevant (selected by .type, never positionally)" \
 # by calling fail() increments the same counter the exit status reads, so neutering fail()
 # silences the rows AND the floor that exists to notice the silence — the suite prints a
 # total and exits 0. A floor enforced through the suspect cannot witness the suspect.
-MIN_ASSERTIONS=27
+MIN_ASSERTIONS=28
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2

@@ -256,3 +256,19 @@ deferred operator apply (#9060). Three reality corrections against the original 
 
 Deferred operators unchanged: no host replace, no first promotion, no drift-executor secret
 wiring, no monitor wiring in this PR.
+## Addendum - 2026-10-14 (#7243): the GHCR-direct host pull no longer holds
+
+The record above says the host pulls the config bundle GHCR-direct by digest on a baked GHCR read
+credential (Option A, the AP-016 line). That premise is superseded in effect by ADR-096: its
+2026-07-30 amendment records AP-016 as lapsed (the GHCR read PAT is revoked, so a GHCR pull answers
+401) and its later amendments deny `ghcr.io` by name on the dedicated host, with zot the only
+boot-time read path (`cloud-init-inngest.yml`: zot is the only pull). A host consumer for this
+bundle, when it lands (HARD-11, with the #6178 cutover), therefore has to resolve the bundle through
+zot, which makes the zot copy written by `build-inngest-config-bundle.yml` load-bearing rather than a
+convenience.
+
+Consequences, stated without editing the sections above: the mirror step in that workflow is
+interim-soft (it degrades loudly and exits 0, `SOLEUR-DEBT` marker in its comment) because no host
+reads the bundle yet, and it must become blocking, as `reusable-release.yml`'s mirror is, when the
+consumer reads zot only. The body of this ADR keeps its original wording as the record of the
+decision at the time; amend it in full when the consumer is built.

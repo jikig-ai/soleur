@@ -1248,9 +1248,9 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # an xfail row in the suite. Two
 # populations carry argv credentials, are not scanned, and are owned by no S2-S5 slice (tracked
 # on the #9597 restatement): `apps/cla-evidence/infra/object_lock.tf` (a `local-exec` curl with
-# an `Authorization` header) and Markdown that agents EXECUTE (`infra-security.md`,
-# `api-security.md`, the postmerge/ship/preflight skill docs; `flag-bootstrap/SETUP.md` was
-# converted by hand and nothing now protects it). Cloud-init folded, flow-list and quoted
+# an `Authorization` header) and Markdown that agents EXECUTE (this linter does not read
+# Markdown; the S7 stage of tests/scripts/test-argv-bearer-sweep.sh guards `plugins/**/*.md`,
+# with `api-security.md` as its one documented allowlist entry). Cloud-init folded, flow-list and quoted
 # `runcmd` items are census-only too (see `_cloud_init_lines`).
 #
 # VOCABULARY GAPS (measured E=0 on a synthesized one-line `curl ... -H "<name>: $TOK" "$URL"`;
