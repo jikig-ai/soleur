@@ -393,6 +393,30 @@ assert "CF-4c: the emitter is SILENT ON SUCCESS (every logger call is inside a f
 assert "CF-4d: no logger row in the emitter carries \$detail (redaction has not run on the early arms)" \
   "! grep -qP '^[[:space:]]*logger -t .*\\\$detail' <<<\"\$PHONE_HOME_BODY\""
 
+# CF-4e..g (#7596): the SAME two-sided lockstep for `inngest-bs-token-restage`.
+# CF-4 covers inngest-boot-phone-home only — deleting the restage allowlist
+# entry passed GREEN until this block: an allowlist entry with no emitting unit
+# is a dead no-op, and a unit whose tag is not allowlisted is silence that
+# reads as health. The tag is DERIVED from the unit's own SyslogIdentifier=
+# (never a restated literal — two hardcoded copies agree while both disagree
+# with reality, the CF-4 rationale), then required on the emitter side AND in
+# the Source 4 include list. Unlike the phone-home emitter this script logs on
+# SUCCESS (SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1, cloud-init-inngest.yml) —
+# which is what makes it the post-replace positive control the inngest-server.md
+# measured-read close condition keys on.
+RESTAGE_UNIT_BLOCK="$(awk '/^  - path: \/etc\/systemd\/system\/inngest-bs-token-restage\.service$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI")"
+RESTAGE_TAG="$(sed -n 's/^[[:space:]]*SyslogIdentifier=\([A-Za-z0-9._-]*\)[[:space:]]*$/\1/p' <<<"$RESTAGE_UNIT_BLOCK" | sed -n '1p')"
+assert "CF-4e: the inngest-bs-token-restage unit exists in cloud-init-inngest.yml and declares exactly one SyslogIdentifier (read: '${RESTAGE_TAG:-<none>}')" \
+  "[[ -n \"\$RESTAGE_TAG\" && \$(grep -c 'SyslogIdentifier=' <<<\"\$RESTAGE_UNIT_BLOCK\") -eq 1 ]]"
+assert "CF-4f: the derived tag ('${RESTAGE_TAG:-<none>}') IS in the Source 4 allowlist (an unallowlisted tag is silence that reads as health)" \
+  "[[ -n \"\$RESTAGE_TAG\" ]] && grep -qE \"^[[:space:]]*\\\"\$RESTAGE_TAG\\\",\\\$\" <<<\"\$HSJ\""
+# The CF-4a inverse: the unit exists AND something emits the tag. The emitter is
+# the write_files script body the unit's ExecStart= runs — an allowlist entry
+# whose unit or script was deleted is a dead no-op.
+RESTAGE_EMIT_BLOCK="$(awk '/^  - path: \/usr\/local\/bin\/inngest-bs-token-restage\.sh$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI")"
+assert "CF-4g: the restage emitter script exists and logs under the unit's own tag (an allowlisted tag with no emitter is a dead no-op)" \
+  "[[ -n \"\$RESTAGE_TAG\" && -n \"\$RESTAGE_EMIT_BLOCK\" ]] && grep -qF \"logger -t \$RESTAGE_TAG\" <<<\"\$RESTAGE_EMIT_BLOCK\""
+
 echo ""
 echo "--- P1-SEC: the inngest-redis channel opened above is a CREDENTIAL path ---"
 # The two assertions above (SyslogIdentifier=inngest-redis + the Source 4 allowlist entry)
@@ -775,8 +799,9 @@ echo ""
 
 # Anti-vacuity floor (ADR-193): a stranded run must never report clean. Floor, not
 # equality — developer-incremented. Reports directly, never through assert/pass/fail.
-# Ratcheted 101 -> 110 by #6551 (the 9963m/9963m-bis exclude-direction pins).
-MIN_TOTAL=110
+# Ratcheted 101 -> 110 by #6551 (the 9963m/9963m-bis exclude-direction pins);
+# -> 113 here (the #7596 CF-4e..g restage lockstep adds 3 rows over 110).
+MIN_TOTAL=113
 if (( TOTAL < MIN_TOTAL )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_TOTAL" >&2
   exit 1

@@ -65,7 +65,7 @@ jobs:
           # verified to exist by the pack script; a missing member is a hard fail-closed exit.
           mapfile -t FILES < <(grep -vE '^\s*(#|$)' apps/web-platform/infra/inngest-config-refresh-set.txt)
           if [[ "${#FILES[@]}" -eq 0 ]]; then
-            echo "::error::refresh-set is empty — membership is finalized at the #6178 cutover; nothing to publish yet"
+            echo "::error::refresh-set is empty — the five committed members must be present; check apps/web-platform/infra/inngest-config-refresh-set.txt"
             exit 1
           fi
           echo "Packing ${#FILES[@]} refresh-set files at VERSION=${VERSION}"

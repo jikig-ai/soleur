@@ -1192,7 +1192,7 @@ ins_after("trap on_exit EXIT", ["cleanup() { docker rm -f soleur-inngest-bootstr
 row G2-r8 RED "TA T2: exits 0" '
 a = one("on_exit() {"); del_line("set +e", after=a); save()'
 row G2-r9 RED "G2: the EXIT trap is installed before the first fallible command" '
-del_line("trap on_exit EXIT"); f = one("ZOT_EP=\"$ZOT_REGISTRY_ENDPOINT\""); ins_after("set -e", ["trap on_exit EXIT"], after=f); save()'
+del_line("trap on_exit EXIT"); f = one("ZOT_EP=\"$ZOT_REGISTRY_ENDPOINT\"", after=one("- path: /usr/local/bin/soleur-inngest-provision")); ins_after("set -e", ["trap on_exit EXIT"], after=f); save()'
 row G2-r10 RED "TA T4: the cutover-FSM quiesce" '
 ls = lines(); a = one(Q_OPEN); b = one(Q_CLOSE); e = one("fi", after=b)
 blk = ls[a:e + 1]; del ls[a:e + 1]; put(ls)
@@ -1234,11 +1234,11 @@ row G4-r3 RED "G4: no doppler call clears or strips its environment" '
 d = [k for k, l in enumerate(lines()) if l.strip().startswith("DIAG_BOOT=")]; assert len(d) == 1
 ls = lines(); ls[d[0] + 1:d[0] + 1] = [ind(d[0]) + "DIAG2=\"$(env -i doppler secrets get INNGEST_DIAGNOSTIC_BOOT --plain 2>/dev/null || true)\""]; put(ls); save()'
 row G4-r4 RED "G4: HOME=/root reaches the unit environment" '
-del_line("Environment=HOME=/root"); raw_rep("printf \x27HOME=/root\\nDOPPLER_TOKEN=", "printf \x27DOPPLER_TOKEN="); save()'
+del_line("Environment=HOME=/root", after=one("- path: /etc/systemd/system/soleur-inngest-provision.service")); raw_rep("printf \x27HOME=/root\\nDOPPLER_TOKEN=", "printf \x27DOPPLER_TOKEN="); save()'
 row G4-r5 RED "G4: the bootstrap env list passes the literal" '
 rep_line("\"DOPPLER_PROJECT=soleur-inngest\" \"DOPPLER_CONFIG=prd\" \\", "\"DOPPLER_PROJECT=soleur\" \"DOPPLER_CONFIG=prd\" \\"); save()'
 row G4-r6 PASS - '
-ins_after("Environment=HOME=/root", ["Environment=DOPPLER_ENABLE_VERSION_CHECK=false"]); save()'
+ins_after("Environment=HOME=/root", ["Environment=DOPPLER_ENABLE_VERSION_CHECK=false"], after=one("- path: /etc/systemd/system/soleur-inngest-provision.service")); save()'
 
 # ---- G5 --------------------------------------------------------------------------------------
 row G5-r1 RED "G5: the NIC wait precedes every item that can start the unit" '
@@ -1272,7 +1272,10 @@ del_line("OnBootSec=90s"); save()'
 row G6-r7 RED "G6: [Unit] StartLimitIntervalSec=0" '
 del_line("StartLimitIntervalSec=0"); w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); ins_after("Type=oneshot", ["StartLimitIntervalSec=0"], after=w); save()'
 row G6-r8 RED "G6: the script refuses xtrace" '
-ls = lines(); j = [k for k, l in enumerate(ls) if l.strip().startswith("case \"$-\" in *x*)")]; assert len(j) == 1; del ls[j[0]]; put(ls); save()'
+ls = lines(); base = one("- path: /usr/local/bin/soleur-inngest-provision")
+nxt = [i for i, l in enumerate(ls) if i > base and l.strip().startswith("- path:")]
+end = nxt[0] if nxt else len(ls)
+j = [k for k, l in enumerate(ls) if base < k < end and l.strip().startswith("case \"$-\" in *x*)")]; assert len(j) == 1; del ls[j[0]]; put(ls); save()'
 row G6-r9 RED "G6: ExecStart is the bare script path" '
 rep_line("ExecStart=/usr/local/bin/soleur-inngest-provision", "ExecStart=/bin/sh -x /usr/local/bin/soleur-inngest-provision"); save()'
 row G6-r10 PASS - '
@@ -1280,7 +1283,7 @@ rep_line("RestartSec=120", "RestartSec=2min"); save()'
 
 # ---- G7 --------------------------------------------------------------------------------------
 row G7-r1 RED "no 'parameter not set' in stderr" '
-ins_before("ZOT_REGISTRY_ENDPOINT=\"\"", ["echo \"$ZOT_EP\" >/dev/null"]); save()'
+ins_before("ZOT_REGISTRY_ENDPOINT=\"\"", ["echo \"$ZOT_EP\" >/dev/null"], after=one("- path: /usr/local/bin/soleur-inngest-provision")); save()'
 row G7-r2 RED "G7 dispatch: -u is in effect" '' nou
 row G7-r3 RED "no 'parameter not set' in stderr" '
 f = one(ISO_PASSED); e = one("fi", after=f)
@@ -1347,7 +1350,10 @@ ins_before("- groupadd -f docker", ["- systemctl add-wants multi-user.target sol
 row G6-r11 RED "G6: no drop-in, shadow copy or runtime edit" '
 ins_before("- path: /etc/systemd/system/soleur-inngest-provision.service", ["- path: /etc/systemd/system/soleur-inngest-provision.service.d/override.conf", "  content: |", "    [Service]", "    Restart=no", "  owner: root:root", "  permissions: \x270644\x27"]); save()'
 row G6-r12 RED "G6: nothing in the script turns xtrace/verbose on" '
-ls = lines(); j = [k for k, l in enumerate(ls) if l.strip().startswith("case \"$-\" in *x*)")]; assert len(j) == 1
+ls = lines(); base = one("- path: /usr/local/bin/soleur-inngest-provision")
+nxt = [i for i, l in enumerate(ls) if i > base and l.strip().startswith("- path:")]
+end = nxt[0] if nxt else len(ls)
+j = [k for k, l in enumerate(ls) if base < k < end and l.strip().startswith("case \"$-\" in *x*)")]; assert len(j) == 1
 ls[j[0] + 1:j[0] + 1] = [ind(j[0]) + "set -x"]; put(ls); save()'
 row G6-r13 RED "G6: the service sets none of the directives" '
 w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); ins_after("Type=oneshot", ["TimeoutSec=infinity"], after=w); save()'

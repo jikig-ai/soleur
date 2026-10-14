@@ -291,6 +291,56 @@ crashed or never ran. Read the `pre-zot-pull` rows with the same query, `--grep 
 and compare timestamps. `zot-login-*` is not a valid reference: the empty-credentials path emits
 `zot-creds-EMPTY` instead.
 
+### Post-replace: the boot-trace allowlist (#7596)
+
+**Run after every `inngest-host-replace`.** The two #7457 Source-4 allowlist
+entries — `inngest-boot-phone-home` and `inngest-bs-token-restage` — reach the
+inngest host **only** inside the baked bootstrap image: this host's
+`vector.toml` is never redelivered (`terraform_data.journald_persistent`
+connects to `hcloud_server.web["web-1"]` and nothing else). A replace is the
+delivery, so the replace is where delivery is measured — and the close
+condition for #7596 is a **measured read**, never "the entries are on main"
+(that is the trap the issue was filed about) and never a web-1 row (the
+entries are live-but-inert there by design).
+
+The positive control is the restage unit, not the phone-home emitter.
+`inngest-bs-token-restage.service` runs once per boot and, on SUCCESS, logs
+`SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1` under
+`SYSLOG_IDENTIFIER=inngest-bs-token-restage` (the write_files pair in
+`cloud-init-inngest.yml`). `inngest-boot-phone-home` is deliberately
+silent-on-success — every `logger` call sits in a failure arm
+(`journald-config.test.sh` CF-4c) — so a healthy replaced host emits **zero**
+phone-home rows, and an absence check there proves nothing. Use the restage
+row:
+
+```
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+  --since <window covering the replace> --grep inngest-bs-token-restage --limit 500 \
+  | jq -R -r 'fromjson? | .raw? | fromjson?
+      | select(.SYSLOG_IDENTIFIER == "inngest-bs-token-restage" and .host == "soleur-inngest")
+      | "\(.dt) \(.message)"'
+```
+
+The double `fromjson?` is load-bearing: Better Stack stores `raw`
+double-encoded (quotes escaped), so a literal `"host":"…"` grep on the outer
+row matches nothing, ever — decode first, field-isolate second. `host` (the
+OS hostname) is required, not just `host_name` — the shared renderer makes a
+stale `host_name` possible on a web-1 row (#6616).
+
+- **One or more `SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1` rows** from
+  `host=soleur-inngest` — the allowlist is live on the host; #7596's close
+  condition is met.
+- **Zero rows** — do NOT read that as "the allowlist is missing" yet. A quiet
+  window and a dead channel read identically (the issue's own methodology
+  note: liveness probe before the identifier probe, and check vendor billing
+  state when a whole channel is dark — that, not a host fault, was the
+  2026-08-14→16 darkness, #7569). Widen `--since` past the replace, confirm the
+  host ships *something* (`--grep inngest- --limit 20`), then re-read.
+- The same read exists as a sweeper probe:
+  `scripts/followthroughs/inngest-bs-token-restage-7596.sh` asserts the
+  positive row and reports TRANSIENT until it arrives — enrolled on #7596 via
+  a `soleur:followthrough` directive (operator step; see the issue).
+
 ## Provision unit (#8562)
 
 [ADR-257](../../architecture/decisions/ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md).
@@ -1304,6 +1354,18 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 (`hr-no-ssh-fallback-in-runbooks`). Full context + gotchas:
 `knowledge-base/project/learnings/workflow-patterns/2026-06-18-inngest-bootstrap-release-tag-then-dispatch-deploy.md`.
 
+> **Refresh-channel cross-ref (#6780, ADR-135).** For the five dedicated-host
+> carriers in `apps/web-platform/infra/inngest-config-refresh-set.txt`
+> (`inngest-redis-bootstrap.sh`, `inngest-cutover-flip.sh`,
+> `inngest-server-flip-guard.sh`, `cat-inngest-cutover-state.sh`,
+> `inngest-luks-cutover.sh`), an image bake + host replace is no longer the only
+> delivery path: once the signed config-refresh channel is live (host rebuilt
+> with this cloud-init + a promoted `INNGEST_CONFIG_DIGEST`), bundle promotion
+> delivers them in place — see
+> [inngest-config-refresh.md](inngest-config-refresh.md). Anything ELSE that
+> rides the image (bootstrap.sh, vector.toml, the cli pin) still needs this
+> 4-step flow.
+
 1. **The tag is minted automatically (#4326, ADR-232 §8).** When a push to `main` changes an
    image input (a `cp`-staged carrier, one of the four baked pins in `inngest.tf` /
    `vector.tf`, or the Dockerfile heredoc), `mint-inngest-bootstrap-tag.yml` cuts the next
@@ -1432,6 +1494,25 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    | R12: a bump PR held with signed ≠ target after two auto-mints in flight | `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max-tag> -f mirror_only=true` (digest-preserving). Since #9262 a `mirror_only` run never arms auto-merge, and disarms one an earlier run armed. On the existing PR it refreshes the branch, disables auto-merge if it was armed (`gh pr merge <n> --disable-auto`; the run dies at stage `pr` if that fails), and posts a hold comment; the PR body keeps its original text. Review the held PR, then merge it: `gh pr merge <n> --squash`. |
    | A later run ends `result=noop` with `::notice::base=<tag>`, but that tag has no build run | An earlier dispatch was lost. Confirm no build run exists for it (above), then run `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` once. |
    | R8: `base=` names a tag that reached `main` through a merge commit and has no image | Delete that tag per ADR-232 §7 (it is off-main content), then re-run the mint. |
+
+   **Digest movement is sanctioned but never silent (#4699).** A non-`mirror_only`
+   `workflow_dispatch` of an EXISTING tag re-runs `docker build` and re-pushes it, so the
+   tag's GHCR digest **moves** — that is the designed CVE-base-image-rebuild escape hatch
+   (the workflow's own header says so), and `mirror_only` is the only dispatch that cannot
+   move a digest because it never builds. The detector is the weekly
+   `scheduled-vinngest-digest-freshness.yml` run
+   (`.github/scripts/vinngest-digest-freshness.sh`): for every `vinngest-v*` tag merged into
+   `main` it compares the live `crane digest` against the digest the pin history recorded.
+   Reading a verdict: `moved` or `unresolvable` on a NON-pinned tag is a warning-class
+   finding — record it, confirm it was a sanctioned re-publish, and move on; the same
+   verdicts on the PINNED tag are error-class, because the pin's `@sha256` is now orphaned
+   (GHCR keeps the manifest untagged; zot's 5-tag retention can evict it — a bounded fuse).
+   **The machinery response to a `moved` verdict on the pinned tag is a NEW tag** — mint a
+   higher version on `main` and let the bump pin it — never a re-pin to the moved digest and
+   never a blind `mirror_only` of the moved content into zot: the whole point of the check
+   is that moved bytes are looked at, not propagated. `never-recorded` means a merged tag
+   was superseded before its bump PR merged — reported, not alarmed. `unmeasurable` means
+   the instrument (crane/auth/history) failed; it is never a content verdict.
 
    **Rolling back** to an older image — including the legacy off-main versions (`v1.1.14`,
    `v1.1.24`, `v1.1.26`–`v1.1.39`) — is a **revert commit on `main`**: merge a PR that restores

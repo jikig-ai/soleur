@@ -1018,25 +1018,24 @@ For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name
 - `apps/web-platform/infra/hooks.json.tmpl`
 - `apps/web-platform/infra/deploy-inngest-bootstrap.sudoers`
 - `apps/web-platform/infra/infra-config-apply.sh`
-- `apps/web-platform/infra/infra-config-install.sh` (#4829 — delivered by the SSH bridge, kept in the hash for drift-guard sync)
+- `apps/web-platform/infra/infra-config-install.sh` (#4829)
 - `apps/web-platform/infra/push-infra-config.sh`
 - `apps/web-platform/infra/cat-infra-config-state.sh`
-- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492 — webhook-delivered cutover script; registered so a body-only edit re-deploys)
+- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492)
 - `apps/web-platform/infra/inngest-rearm-reminders.sh` (#5492)
 - `apps/web-platform/infra/inngest-wiped-volume-verify.sh` (#5492)
 - `apps/web-platform/infra/cat-inngest-verify-state.sh` (#5492)
-- `apps/web-platform/infra/inngest-inventory.sh` (#5509 — cutover full-state inventory op)
-- `apps/web-platform/infra/git-lock-chardevice-sweep.sh` (#5934 — durable char-device config.lock substrate sweep)
-- `apps/web-platform/infra/inngest-registry-probe.sh` (#6178 — web-host 2.0 empty-registry cutover pre-flight)
-- `apps/web-platform/infra/inngest-doublefire-probe.sh` (#6178 — web-host 2.6 exactly-once run-enumeration probe)
+- `apps/web-platform/infra/inngest-inventory.sh` (#5509)
+- `apps/web-platform/infra/git-lock-chardevice-sweep.sh` (#5934)
+- `apps/web-platform/infra/inngest-registry-probe.sh` (#6178)
+- `apps/web-platform/infra/inngest-doublefire-probe.sh` (#6178)
+- `apps/web-platform/infra/{inngest-redis-bootstrap,inngest-cutover-flip,inngest-server-flip-guard,cat-inngest-cutover-state,inngest-luks-cutover}.sh` (#6780 — the five dedicated-host carriers; ADR-135 refresh-set members)
 - `apps/web-platform/infra/soleur-doppler-token.tmpl` (#7095 — re-deliverable web-host Doppler credential; folded in as `local.webhook_doppler_token_env`, i.e. the RENDERED content, so a secret rotation alone changes the hash)
-- `apps/web-platform/infra/10-vector-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `vector.service` at the credential above)
-- `apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-heartbeat.service` at the credential above)
-- `apps/web-platform/infra/10-inngest-server-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-server.service` at the credential above; it runs `doppler run` UNCONDITIONALLY and is restarted on every co-located deploy)
+- `apps/web-platform/infra/10-{vector,inngest-heartbeat,inngest-server}-doppler-token.conf` (#7095 — systemd drop-ins re-pointing the generated units at the credential above)
 
 **Detection:**
 
-The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: a gate's regex, its documentation block, and its fixtures are one unit — changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
 
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
@@ -1059,13 +1058,18 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
   "apps/web-platform/infra/inngest-registry-probe.sh"
   "apps/web-platform/infra/inngest-doublefire-probe.sh"
+  "apps/web-platform/infra/inngest-redis-bootstrap.sh"
+  "apps/web-platform/infra/inngest-cutover-flip.sh"
+  "apps/web-platform/infra/inngest-server-flip-guard.sh"
+  "apps/web-platform/infra/cat-inngest-cutover-state.sh"
+  "apps/web-platform/infra/inngest-luks-cutover.sh"
   "apps/web-platform/infra/soleur-doppler-token.tmpl"
   "apps/web-platform/infra/10-vector-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-server-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-redis-doppler-token.conf"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|inngest-redis-bootstrap\.sh|inngest-cutover-flip\.sh|inngest-server-flip-guard\.sh|cat-inngest-cutover-state\.sh|inngest-luks-cutover\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -2811,9 +2815,9 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
   - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
   - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script reads member-authored comments and branches on the LAST verdict — do **not** inline a one-liner here, copy [cpx22-invoice-reconcile-7431.sh](../../../../scripts/followthroughs/cpx22-invoice-reconcile-7431.sh), which is the reference implementation. A `grep -q '^RESULT: (PASS|FAIL)'` in this section's `… && exit 0 || exit 1` idiom **exits 0 on an explicit FAIL** and closes the tracker on the operator's own rejection; that inversion shipped here once and is why this bullet points at code instead of prose. The operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
 
-     **An author filter is mandatory, and it is [trusted-verdict.sh](../../../../scripts/lib/trusted-verdict.sh), never an inline `authorAssociation` select.** The repo is PUBLIC and a probe's exit code closes the tracker, so an unfiltered `.comments[].body` takes a verdict from anyone (#7448). `source` it, call `trusted_verdict_bodies <issue>`: bodies on rc 0, **rc 2 (TRANSIENT) when a comment or permission read fails**, so absence-of-evidence never reads as a pass.
+     **An author filter is mandatory, and it is [trusted-verdict.sh](../../../../scripts/lib/trusted-verdict.sh), never an inline `authorAssociation` select.** The repo is PUBLIC and a probe's exit code closes the tracker, so an unfiltered `.comments[].body` takes a verdict from anyone (#7448). `source` it, call `trusted_verdict_bodies <issue>` (`trusted_verdict_comments` for created times): output on rc 0, **rc 2 (TRANSIENT) when a read fails**, so absence-of-evidence never reads as a pass.
 
-     **Never re-inline `authorAssociation`:** it is computed against the *reading token's* visibility, so under `GITHUB_TOKEN` a member with PRIVATE membership reads as `CONTRIBUTOR` and their verdict is dropped **silently** (#6617 — two months of nightly FAIL on a recorded verdict). [varq-ban](../../../../scripts/lint-followthrough-varq-ban.sh) rule 4 obliges the lib whenever a probe reads comments AND branches on `RESULT:`. Mechanism, its blind spots and the `\b`/no-echo/hardcoded-tracker rules: [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md).
+     **Never re-inline `authorAssociation` / `author_association`:** it is computed against the *reading token's* visibility, so under `GITHUB_TOKEN` a member with PRIVATE membership reads as `CONTRIBUTOR` and their verdict is dropped **silently** (#6617, #9818). [varq-ban](../../../../scripts/lint-followthrough-varq-ban.sh) rule 5 bans either spelling; rule 4 obliges the lib for comment-read spellings and `RESULT:` / `S<n>-<WORD>` markers (COVERAGE paragraph lists the gaps). Mechanism: [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md).
   - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
   - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
 

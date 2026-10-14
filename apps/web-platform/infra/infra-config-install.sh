@@ -73,6 +73,15 @@ declare -rA DEST_SPEC=(
   ["/usr/local/bin/git-lock-chardevice-sweep.sh"]="755 root:root"
   ["/usr/local/bin/inngest-registry-probe.sh"]="755 root:root"
   ["/usr/local/bin/inngest-doublefire-probe.sh"]="755 root:root"
+  # #6780 — the five dedicated-host carriers: the DEDICATED host's own scripts, which the
+  # signed config-bundle refresh channel (ADR-135) installs through this helper. They are
+  # the refresh-set members — same lockstep rule applies (FILE_MAP + push payload +
+  # TRIGGER_FILES), and on web hosts they are inert dead files at /usr/local/bin.
+  ["/usr/local/bin/inngest-redis-bootstrap.sh"]="755 root:root"
+  ["/usr/local/bin/inngest-cutover-flip.sh"]="755 root:root"
+  ["/usr/local/bin/inngest-server-flip-guard.sh"]="755 root:root"
+  ["/usr/local/bin/cat-inngest-cutover-state.sh"]="755 root:root"
+  ["/usr/local/bin/inngest-luks-cutover.sh"]="755 root:root"
   # #7095 — see the FILE_MAP note in infra-config-apply.sh for why this is 640 root:deploy
   # and not the 600 deploy:deploy of the existing /etc/default/webhook-deploy.
   ["/etc/default/soleur-doppler-token"]="640 root:deploy"

@@ -34,8 +34,9 @@
 # three were added after a security review of PR #7435 found the original version forgeable by a
 # stranger with one HTTP POST:
 #
-#   1. AUTHOR FILTER. Only OWNER / MEMBER / COLLABORATOR comments are read. `.comments[].body`
-#      with no author filter is the whole vulnerability: an anonymous `RESULT: PASS` closed the
+#   1. AUTHOR FILTER. Only comments by an author holding admin, maintain or write on the repository
+#      are read (`trusted_verdict_bodies` in scripts/lib/trusted-verdict.sh, whose header is the
+#      trust model). `.comments[].body` with no author filter is the whole vulnerability: an anonymous `RESULT: PASS` closed the
 #      issue, and the sweeper's own `### Sweeper run: PASS` comment then satisfied its
 #      closed-set reopen guard forever, laundering the forgery into the evidence trail.
 #   2. FIXED ISSUE NUMBER. Self-location by `gh issue list --search <filename>` is hijackable:
@@ -133,8 +134,8 @@ fi
 #
 # Both are fixed here: order by position and take the last, and REDACT the anchor before echoing
 # so nothing this script prints can ever be re-read as a verdict. Chronological order is safe
-# because `.comments[]` returns oldest-first and the author filter above means only members can
-# place a verdict at all — so "the latest member judgement" is exactly the right rule.
+# because `.comments[]` returns oldest-first and the author filter above means only authors with
+# write access can place a verdict at all — so "the latest verdict from an author holding admin, maintain or write" is exactly the right rule.
 verdicts="$(printf '%s\n' "$body" | grep -E '^RESULT: (PASS|FAIL)\b' || true)"
 last="$(printf '%s\n' "$verdicts" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
 
