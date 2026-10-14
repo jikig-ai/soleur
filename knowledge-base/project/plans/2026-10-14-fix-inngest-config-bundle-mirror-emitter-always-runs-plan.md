@@ -436,3 +436,15 @@ No cross-domain implications detected: CI-workflow and test change with no user-
 - Plan checklist lines never use the word that trips the incident-review gate.
 - Draft PR 10257 edits a comment block in the crane copy step of the same file: rebase, do not merge, and re-read the step before the final push.
 - The placement ruling is load-bearing: a file added under `apps/web-platform/infra/` would fire a production infra apply and a release on merge.
+
+
+## Addendum - 2026-10-14 (implementation and review deviations from the plan above)
+
+The plan text above is kept as written; these are the places the shipped code differs, each from a review finding.
+
+- The install group is NOT one `&&`-chained group routed to `crane_install`. It is three simple commands, each routed with `|| degraded`: `crane_download`, `crane_checksum`, `crane_extract` (security seat: a checksum mismatch must not read as a network blip). Test Scenario "bad checksum" therefore asserts `reason=crane_checksum`, not `crane_install`.
+- `retry` returns crane's last exit status, so `rc=` in the degrade line is measured. The archive lives at `${RUNNER_TEMP:-$(mktemp -d)}/crane.tgz` and an EXIT trap removes it on every path.
+- The warning and comments state only what the step measured ("this run did not confirm a zot copy"); the exit-0 contract is marked `SOLEUR-DEBT` as interim until a host consumer reads zot only. ADR-135 (GHCR-direct) versus ADR-096 (AP-016 lapsed) is deferred to the one tracking issue filed at ship.
+- The suite grew past the plan's nine rows: 27 mutation rows with per-mutant expected-label attribution, argv- and value-validating stubs (crane URL and hash pinned from `reusable-release.yml`, an independent file), a refusal log, and self-tests for the verdict decisions. Final count: 67 assertions (`MIN_ASSERTIONS=67`), about 10 s unloaded.
+- Registration also needed one `PRODUCER_JOIN` row, `PJ_TRIPLES` 261 to 263 and `PJ_FLOOR_DRAINS` 21 to 22 in `.claude/hooks/grep-q-pipe-guard.test.sh`, because that census pins every suite that stubs `sha256sum`.
+- The affected-selection run degrades to the full battery on this PR (`INDEX-UNBOUND`: a declaration for a glob-registered suite is not a registration-only edit). Local `--affected` was refused rc=4 under a sibling full run; consumer suites were run instead and CI's full battery is the gate.
