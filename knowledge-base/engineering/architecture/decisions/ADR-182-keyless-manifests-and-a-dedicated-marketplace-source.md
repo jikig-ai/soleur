@@ -345,3 +345,22 @@ harmless-because-inert.
 
 The real rollback is `remove → re-add → reinstall` against the new marketplace — which Phase 2B
 makes cheap: re-adding costs ~39 KB rather than 181 MiB.
+
+## Addendum — 2026-10-13
+
+The commit SHA identity is now also read from a local git checkout's HEAD when the plugin is loaded in
+place (a local-folder marketplace or `--plugin-dir`), where there is neither a manifest `version` nor a
+commit-hash directory name: `plugin-version.sh` reports `source=checkout` and the 12-hex prefix, by plain
+file reads of `<top>/.git` only (never running git against it). Decision 1 (keyless manifests) is
+untouched; this adds a third way the same identity is observed, not a new identity.
+
+Why the lookup is layout-anchored and never runs git: the hook is global (it fires in every project)
+and the repository it reads is project input, so its `.git/config`, hooks and attributes are untrusted.
+The anchor (root ends `/plugins/soleur`, `<top>/.git`, `plugin.json`) and the plain file reads bound what
+repository bytes can influence: only 12 hex of a validated 40-hex commit are ever printed or sent.
+Accepted residuals, recorded here so they are decisions rather than surprises: a plugin folder vendored
+inside another project's repository shows that project's HEAD; in the bare layout HEAD can be ahead of
+the mirrored files between a `fetch` and `sync`; and all checkouts share one `latest-release.checkout`
+cache file, so a checkout on a moving HEAD re-checks once per new commit. Under the opt-in, the hash of a
+local, possibly never-pushed commit goes into the GitHub compare URL; the privacy policy, GDPR policy and
+data-protection disclosure say so.

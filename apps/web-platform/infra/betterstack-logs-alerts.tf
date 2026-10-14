@@ -493,7 +493,7 @@ locals {
   # (1) Field-isolated rather than `raw LIKE '%…524%'`: GitHub webhook payloads (issue and PR
   # bodies) reach this source, and this very incident's issues quote the literal. No PRIORITY
   # filter — the live lines are PRIORITY 6. They ship even though vector.toml's inngest_journald
-  # source lists `include_matches.PRIORITY = 0..4`: OBSERVED (18 rows, 2026-09-16..23), the source's
+  # source listed `include_matches.PRIORITY = 0..4` at OBSERVATION time (18 rows, 2026-09-16..23 — PRIORITY 3 in bounds then and now; the #10255 partition narrowed the arm to {3,4}): the source's
   # `include_units` admits the unit independently of the PRIORITY match (Vector appears to OR the
   # two; the same mechanism is the suspect in #6551). That behaviour is load-bearing for this alert
   # and is pinned by vector-pii-scrub.test.sh; scripts/probe-inngest-524-count.sh prints unit_rows

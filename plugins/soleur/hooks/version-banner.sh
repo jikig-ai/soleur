@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # version-banner.sh — SessionStart (matcher: startup) one-line Soleur version banner.
 #
-# Prints ONE JSON object on stdout: {"systemMessage": "Soleur <vX.Y.Z | commit <sha12>>[ — newer release vA.B.C available]"}
+# Prints ONE JSON object on stdout: {"systemMessage": "Soleur <vX.Y.Z | commit <sha12>[ (local checkout)]>[ — newer release vA.B.C available]"}
+# `commit <sha12> (local checkout)` is an in-place install (a local-Folder marketplace or --plugin-dir):
+# the resolver read the HEAD commit of the git checkout the plugin is loaded from.
 # `systemMessage` is shown to the user and costs zero model tokens (no additionalContext).
 #
 # The banner itself is ON by default and makes NO network call. Only the "newer release"
@@ -97,6 +99,7 @@ main() {
   case "$source" in
     manifest) [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0; label="v$version" ;;
     commit)   [[ "$commit" =~ ^[0-9a-f]{12}$ ]] || return 0; label="commit $commit" ;;
+    checkout) [[ "$commit" =~ ^[0-9a-f]{12}$ ]] || return 0; label="commit $commit (local checkout)" ;;
     *) return 0 ;;
   esac
 

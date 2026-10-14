@@ -64,6 +64,32 @@ assert_not_symlink() {
   fi
 }
 
+# (#10138) A volume ATTACHMENT can land after first boot has started: Hetzner attaches volumes as
+# separate actions once the server exists (run 38384137515, 2026-10-13: Terraform recorded the
+# plaintext attachment completing about 70 s after the check below). _gd_attach_wait <label>
+# <predicate> re-runs the WHOLE predicate every 10 s for up to 300 s: counted, never the clock, and
+# each pass sleeps the 10 s it charges, so 300 s is a LOWER bound on real time (each pass's probes add
+# to it). It returns 1 after the bound, so the caller keeps its named FATAL. Call it directly, never
+# inside $( ): the predicate's assignments must reach the caller.
+# ---- BEGIN attach-wait helper ----
+readonly _AW_BOUND_S=300
+_gd_attach_wait() {
+  local _aw_label="$1" _aw_pred="$2" _aw_waited=0
+  if "$_aw_pred"; then return 0; fi
+  log "waiting up to ${_AW_BOUND_S}s for ${_aw_label}: the volume attachment is still in flight"
+  while [ "$_aw_waited" -lt "$_AW_BOUND_S" ]; do
+    sleep 10
+    _aw_waited=$((_aw_waited + 10))
+    if "$_aw_pred"; then
+      log "${_aw_label} appeared after ${_aw_waited}s"
+      return 0
+    fi
+  done
+  log "${_aw_label} did not appear within the ${_AW_BOUND_S}s bound"
+  return 1
+}
+# ---- END attach-wait helper ----
+
 # 1. THE STORE IS THE LUKS MAPPER, AT /mnt/git-data (#8211, ADR-239). One section, where there
 #    used to be two: §1 mounted the PLAINTEXT volume here by a raw `scsi-0HC_Volume_*` glob and
 #    §1b re-asserted the LUKS mapper at /mnt/git-data-luks, so the served root was plaintext while
@@ -420,8 +446,21 @@ if [ -n "$_pt_id" ]; then
   _plaintext_volume=present
   [[ "$_pt_id" =~ ^[0-9]+$ ]] || { log "FATAL: plaintext_unverified reason=source — volume id '$_pt_id' is not numeric"; exit 1; }
   _pt_link="${GIT_DATA_PLAINTEXT_DEV:-/dev/disk/by-id/scsi-0HC_Volume_$_pt_id}"
-  _pt_dev="$(realpath -e "$_pt_link" 2>/dev/null || true)"
-  if [ -z "$_pt_dev" ] || [ "$(stat -L -c %F "$_pt_dev" 2>/dev/null || true)" != "block special file" ]; then
+  _pt_dev=""
+  # (#10138) Wait for a late attachment. The predicate re-resolves the link every pass and hands the
+  # node to the caller through _pt_dev; the FATAL below is the unchanged one, so a timeout can never
+  # read as "no plaintext volume". _pt_state names which check failed last; `timeout -k 2 10` stops
+  # a blocked size probe from stalling a pass (it cannot bound a probe stuck in uninterruptible I/O).
+  _pt_state=""
+  _gd_pt_ready() {
+    _pt_dev="$(realpath -e "$_pt_link" 2>/dev/null || true)"
+    if [ -z "$_pt_dev" ]; then _pt_state="the link does not resolve"; return 1; fi
+    if [ "$(stat -L -c %F "$_pt_dev" 2>/dev/null || true)" != "block special file" ]; then _pt_state="the node is not a block special file"; return 1; fi
+    if ! [ "$(timeout -k 2 10 blockdev --getsize64 "$_pt_dev" 2>/dev/null || echo 0)" -gt 0 ]; then _pt_state="the block device reports size 0 or its size probe failed"; return 1; fi
+    return 0
+  }
+  if ! _gd_attach_wait "plaintext volume $_pt_id" _gd_pt_ready; then
+    log "plaintext volume $_pt_id last state: ${_pt_state:-unprobed}"
     log "FATAL: plaintext_unverified reason=source — $_pt_link does not resolve to a block device"
     exit 1
   fi

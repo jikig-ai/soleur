@@ -180,11 +180,11 @@ here after running it.
 ### Scope of the mandate
 
 **Mandatory** for hooks on the `Bash` matcher and for blocking write guards —
-the 20 hooks that can change whether a tool call proceeds:
+the 21 hooks that can change whether a tool call proceeds:
 
 `guardrails` · `cla-signed-author-gate` · `context-reviewed-gate` ·
 `follow-through-directive-gate` · `prod-write-defer-gate` ·
-`ship-net-issue-flow-gate` · `ship-operator-step-gate` · `ship-runbook-ssh-gate` ·
+`ship-kb-archive-gate` · `ship-net-issue-flow-gate` · `ship-operator-step-gate` · `ship-runbook-ssh-gate` ·
 `ship-soak-followthrough-gate` · `ship-unpushed-commits-gate` ·
 `background-poll-prefer-monitor` · `brand-hex-commit-gate` ·
 `doppler-secrets-delete-redirect` · `git-commit-secret-scan` ·
@@ -197,7 +197,7 @@ the 20 hooks that can change whether a tool call proceeds:
 `grep-rewrite`
 
 A rewriter consumes the same untrusted envelope and is bound by the same trust
-boundary, but two of the twenty's properties do not apply to it **by
+boundary, but two of the twenty-one's properties do not apply to it **by
 construction**, so it is classified rather than folded into the list above:
 
 - It does not call `hook_input_should_ask`. Asking is the designated
@@ -205,7 +205,7 @@ construction**, so it is classified rather than folded into the list above:
   *optimization*, not a missing safety check — escalating would spend an
   operator prompt on a non-event.
 - It is **not** silent on stdout. Emitting `updatedInput` is the entire point;
-  the twenty are asserted to emit nothing unless they are the responder.
+  the twenty-one are asserted to emit nothing unless they are the responder.
 
 Everything else still binds: fail-hard `source`, a real parse gate, a recorded
 fault, and `exit 0` on every payload class. `hook-input-contract.test.sh`

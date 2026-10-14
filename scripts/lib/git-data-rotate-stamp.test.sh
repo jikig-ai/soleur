@@ -127,6 +127,10 @@ check_verdict "R7 refused at the precondition" skip \
 # R7b — a FAILED PLAIN replace (precondition skipped, apply ran and failed) is not a rotate attempt.
 check_verdict "R7b failed plain replace" skip \
   "$(fx "$JOB" failure "$(steps "$PRE|skipped" "$APPLY|failure" "$MARK|skipped")")"
+# R7c — a rotate refused by the #10175 store-never-written step: every later step is skipped, so it must read
+# `skip` (nothing was mutated) and can never poison an older stamp or block the flip.
+check_verdict "R7c rotate refused at the store-never-written step" skip \
+  "$(fx "$JOB" failure "$(steps "$CONFIRM|success" "Rotate precondition — store never written (cutover run records)|failure" "$PRE|skipped" "$APPLY|skipped" "$MARK|skipped")")"
 # R8 — cancelled before the apply began.
 check_verdict "R8 cancelled during the plan step" skip \
   "$(fx "$JOB" cancelled "$(steps "$PRE|success" "$APPLY|skipped" "$MARK|skipped")")"
@@ -290,7 +294,7 @@ printf '\ngit-data-rotate-stamp.test.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 # asserts PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=57
+MIN_ASSERTIONS=58
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

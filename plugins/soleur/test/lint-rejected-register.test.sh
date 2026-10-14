@@ -1171,8 +1171,8 @@ _declared="$(printf '%s\n' "${MATRIX_IDS[@]}" | LC_ALL=C sort)"
 _emitted="$(awk '$1 ~ /^row/ { print $1 }' "$IDS_FILE" | LC_ALL=C sort -u)"
 if [[ "$_declared" != "$_emitted" ]]; then
   printf '\nFATAL: matrix identity: the emitted case-id set does not equal the declared matrix.\n' >&2
-  printf '  only declared: %s\n' "$(comm -23 <(printf '%s\n' "$_declared") <(printf '%s\n' "$_emitted") | tr '\n' ' ')" >&2
-  printf '  only emitted:  %s\n' "$(comm -13 <(printf '%s\n' "$_declared") <(printf '%s\n' "$_emitted") | tr '\n' ' ')" >&2
+  printf '  only declared: %s\n' "$(LC_ALL=C comm -23 <(printf '%s\n' "$_declared") <(printf '%s\n' "$_emitted") | tr '\n' ' ')" >&2
+  printf '  only emitted:  %s\n' "$(LC_ALL=C comm -13 <(printf '%s\n' "$_declared") <(printf '%s\n' "$_emitted") | tr '\n' ' ')" >&2
   exit 1
 fi
 if [[ "$CHILD" != "1" ]]; then

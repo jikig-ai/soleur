@@ -237,7 +237,9 @@ _PRINT_SELECTION=0
 # --paths=<a,b,...> (#9307): with --print-selection only, select against THESE paths
 # instead of the real diff -- "what would these files select?". Print-only by
 # construction (--print-selection exits before any suite runs), so it can never
-# narrow a real run's diff.
+# narrow a real run's diff. Elements are normalized at the parse arm (#10117):
+# a leading ./ is stripped to fixpoint, and unclean spellings refuse rc 2 — a
+# bad element must never silently select nothing.
 _PRINT_PATHS=""
 _PRINT_PATHS_REQ=0
 # --affected-scope=branch|staged (#9173): which diff the affected axis selects
@@ -305,7 +307,59 @@ while [[ "${1:-}" == --* ]]; do
       _AFFECTED_REQ=1
       ;;
     --paths=*)
-      _PRINT_PATHS="${1#--paths=}"
+      # Per-element normalize+reject (#10117). The comma-joined list stands in
+      # for a diff-name blob downstream; an unclean element never matches a git
+      # path line — `./x` silently selected nothing, which is a lie in a
+      # diagnostic. The rejects run on the RAW element (named error echoing
+      # the element + a valid example, rc 2), then a leading `./` run is
+      # stripped to fixpoint — ordering is load-bearing: every shape the strip
+      # could leave behind (.., //, /., a trailing /) is already present
+      # pre-strip, so normalization can never mint a reject shape that escaped
+      # the case and no post-strip re-check is needed. Rejected shapes: empty
+      # elements (a,,b / a
+      # trailing comma / --paths= — bare `.`/`./` and trailing-`/` elements are
+      # dir refs, not file diff paths, and land in the last case arm),
+      # absolute paths, `..` SEGMENTS (substring `..` is legal name content —
+      # foo..bar.sh passes), `//` or `/.` segments/trails (a/./b; the
+      # doubled-head ././x carries one), and control bytes (the ingestion point
+      # joins on commas and the edge matcher splits on TAB — a C0/DEL byte
+      # mints fake diff lines and is C-quoted by git anyway, so the spelling
+      # can never match a real path line; the C1 range is a deliberate
+      # over-reject margin, matched only under C1-aware locales).
+      # A repeated --paths= is last-wins. Legal
+      # name bytes that simply cannot match (glob metachars, `~`, `\`, a
+      # comma inside one filename) stay admitted — the reject set names the
+      # lie classes, not every unmatchable spelling; a comma is the delimiter
+      # and cannot be expressed inside an element. _affected_normpath is
+      # deliberately NOT called: it is defined ~2500 lines below this top-level
+      # parse loop, and it collapses a/../b where this arm rejects.
+      _PRINT_PATHS=""
+      _pp_rest="${1#--paths=},"
+      while [[ -n "$_pp_rest" ]]; do
+        _pp="${_pp_rest%%,*}"
+        _pp_rest="${_pp_rest#*,}"
+        _pp_orig="$_pp"
+        _pp_why=""
+        # `..` is checked before `/.` — `a/../.` carries both and the traversal
+        # is the reason worth naming.
+        case "$_pp" in
+          "")                  _pp_why="empty element" ;;
+          /*)                  _pp_why="absolute path" ;;
+          *[[:cntrl:]]*)       _pp_why="control byte" ;;
+          *//*)                _pp_why="// segment" ;;
+          ..|../*|*/..|*/../*) _pp_why=".. path segment" ;;
+          */./*|*/.)           _pp_why="/. segment" ;;
+          .|*/)                _pp_why="not a file diff path" ;;
+        esac
+        while [[ "$_pp" == ./* ]]; do _pp="${_pp#./}"; done
+        if [[ -n "$_pp_why" ]]; then
+          # the element is arbitrary operator input — scrub control bytes so
+          # the rejected bytes cannot forge stderr lines
+          echo "ERROR: --paths element '${_pp_orig//[[:cntrl:]]/?}' rejected (${_pp_why}); expected a comma-joined list of clean repo-relative paths, e.g. --paths=scripts/foo.sh,docs/a.md" >&2
+          exit 2
+        fi
+        _PRINT_PATHS+="${_PRINT_PATHS:+,}${_pp}"
+      done
       _PRINT_PATHS_REQ=1
       ;;
     --print-affected-set)
@@ -332,6 +386,9 @@ declines five self-test mutation batteries whose subject the diff does not touch
                         classes and ignores the diff.
   --paths=a,b           with --print-selection: select against these paths instead
                         of the real diff (print-only; never narrows a real run).
+                        Elements normalize (a leading ./ is stripped); unclean
+                        spellings — empty elements, absolute, .. or /. or //
+                        segments, a trailing /, control bytes — refuse rc 2.
   --affected-scope=V    diff source for affected selection: branch (default) or
                         staged (the index — what the pre-commit hook gates on).
                         Selects on the INDEX only: committed edits are not in that
@@ -3737,7 +3794,8 @@ _aff_runner_banner() {
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
-_MIN_ALWAYS_ON_DECLARED=108
+# #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
+_MIN_ALWAYS_ON_DECLARED=109
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5460,6 +5518,12 @@ if want_scripts; then
   # proof (both RED directions) that the guard can catch the banned form.
   run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
   run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
+  # #8875: the emitter-selection census — every tracked betterstack-query.sh reader must
+  # select rows by SYSLOG_IDENTIFIER (or a sourced emitter def) or carry a reasoned allowlist
+  # entry. Same two-line shape as varq-ban: -live runs the guard over the real tree, the
+  # .test.sh is the mutation battery over fixture git trees.
+  run_suite "scripts/betterstack-emitter-read-live" bash scripts/lint-betterstack-emitter-read.sh
+  run_suite "scripts/betterstack-emitter-read" bash scripts/lint-betterstack-emitter-read.test.sh
   # The differential oracle over every executable reader of the directive (#7490). Four copies
   # of the fence predicate cannot share code (two are prose an agent pastes; one is a hook that
   # must not `source` a repo file), so they are held in agreement by a walker instead.

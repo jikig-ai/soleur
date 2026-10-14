@@ -67,7 +67,7 @@ import {
 } from "@supabase/supabase-js";
 import { randomBytes, randomUUID } from "crypto";
 import { __resetMirrorP0DedupForTests } from "@/server/observability";
-import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
+import { tearDownTenantUsers } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED =
   process.env.SUPABASE_DEV_INTEGRATION === "1";
@@ -242,23 +242,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         if (!uid) continue;
         await service.from("conversations").delete().eq("user_id", uid);
       }
-      for (const user of [userA, userB]) {
-        if (!user.id) continue;
-        assertSynthetic(user.email);
-        const { data: check } = await service.auth.admin.getUserById(user.id);
-        // Fail closed: a missing user or a NULL/empty email field must not
-        // skip the binding (NULL email is legal on auth.users rows).
-        if (!check?.user || check.user.email !== user.email) {
-          throw new Error(
-            `afterAll: auth.users lookup for ${user.id} ` +
-              `(${check?.user?.email ?? "not found"}) does not match ` +
-              `synthetic email ${user.email}`,
-          );
-        }
-        // FK-reverse helper: trigger-created workspace_members rows are
-        // ON DELETE RESTRICT, so a raw deleteUser 500s (#9994).
-        await tearDownTenantUser(service, user);
-      }
+      await tearDownTenantUsers(service, [userA, userB]);
     }, 60_000);
 
     test("T-W1-matrix: 4 concurrent assistant INSERTs land in the right conversation; no content cross-contamination", async () => {
