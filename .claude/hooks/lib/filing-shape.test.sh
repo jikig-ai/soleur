@@ -56,6 +56,7 @@ printf '\036' >> "$GHLOG"
 exit 0
 SH
   printf '#!/bin/sh\nexec "$@"\n' > "$DW/bin/sudo"
+  printf '#!/bin/sh\nexec "$@"\n' > "$DW/bin/rtk"
   printf '#!/bin/sh\nwhile [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done\n[ $# -gt 0 ] && shift\nexec "$@"\n' > "$DW/bin/doppler"
   printf '#!/bin/sh\nexit 0\n' > "$DW/bin/git"
   chmod +x "$DW/bin/"*
@@ -89,7 +90,7 @@ SH
       }' "$1"
   }
 
-  # Commands: 12 wrappers x (the corpus's create/api rows + 10 none rows), plus prose.
+  # Commands: 13 wrappers x (the corpus's create/api rows + 10 none rows), plus prose.
   sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
   tok_word() {
     if [[ "$1" == *'$'* || "$1" == *'`'* ]]; then printf '%s' "$1"
@@ -98,7 +99,7 @@ SH
   }
   dq_esc() { local s="${1//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//\$/\\\$}"; s="${s//\`/\\\`}"; printf '%s' "$s"; }
   bt_esc() { local s="${1//\\/\\\\}"; s="${s//\`/\\\`}"; printf '%s' "$s"; }
-  WRAPPERS=(bare subst qsubst backtick bash-c sh-c eval sudo setsid doppler pipe heredoc)
+  WRAPPERS=(bare subst qsubst backtick bash-c sh-c eval sudo setsid doppler rtk pipe heredoc)
   wrap() {
     case "$1" in
       bare)     printf '%s' "$2" ;;
@@ -111,6 +112,7 @@ SH
       sudo)     printf 'sudo %s' "$2" ;;
       setsid)   printf 'setsid -w %s' "$2" ;;
       doppler)  printf 'doppler run -- %s' "$2" ;;
+      rtk)      printf 'rtk %s' "$2" ;;
       pipe)     printf 'printf x | %s' "$2" ;;
       heredoc)  printf 'cat <<EOF\n$(%s)\nEOF' "$2" ;;
     esac
