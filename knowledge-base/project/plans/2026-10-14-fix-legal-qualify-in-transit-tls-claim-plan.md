@@ -362,3 +362,7 @@ No application code changes, so no new unit test (`cq-write-failing-tests-before
 ## Deferral Tracking
 
 Nothing is deferred without a tracker. The TLS remediation itself, the ledger exception expiry (2026-11-12 horizon) and the broader-vs-narrower description of the hop all live on #10136 (open); the overdue mirror-drift remediation is #7465 (pre-existing, untouched). No new issue is needed.
+
+## Review-round amendments (2026-10-14/15)
+
+An 11-seat review of the first implementation (SHA 02e2ebbfcc) returned findings that change this plan's text; the rulings are rows in `decision-challenges.md` (review round). Where this plan and those rows differ, the rows govern: Tier 1 (not Tier 2) with in-place `Corrected <date>` marks and a `tier_classification` attestation file; the status sentence scoped to API-key encryption at rest; `own servers` and `job scheduler` wording changed; `plan to add TLS` replaced by `evaluating`; section references to 4.13 and 2.3(o)/(aa); DPA template item and line ~180 reworded without a TLS 1.3 claim; register pointers shortened and the exclusivity words removed; the signing-key discrepancy recorded. Dates are the day of the correction (October 15, 2026). The edit scripts are not committed; the byte-level check was re-run against the regenerated files.
