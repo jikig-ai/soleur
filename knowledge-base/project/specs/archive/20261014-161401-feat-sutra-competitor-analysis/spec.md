@@ -2,7 +2,7 @@
 title: Sutra competitor entry and Soleur improvement backlog
 lane: cross-domain
 brand_survival_threshold: single-user incident
-brainstorm: knowledge-base/project/brainstorms/2026-10-06-sutra-competitor-analysis-brainstorm.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261014-161401-2026-10-06-sutra-competitor-analysis-brainstorm.md
 ---
 
 # Spec: Sutra competitor entry and improvement backlog
