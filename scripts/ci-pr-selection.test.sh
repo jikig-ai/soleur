@@ -14,10 +14,22 @@
 # (a group with no records or a non-pr-gated decline), G2-13 (the activation lock), G2-14 (a newline or `::` in a path),
 # G2-15 (docs rename/delete, diagrams, fork, >500 files, >64 KB listing, empty diff), and the must-PASS row: a legitimately
 # doc-only knowledge-base diff reaches stage 2 and shows would-skip evidence while skip_legs stays EMPTY (locked).
+# Also pinned here: the mode-aware stage 1 (a symlink or gitlink is `non_doc_mode`, a mode flip on a doc .md stays doc), the
+# narrowed allowlist (`knowledge-base/**/*.md` or a root `*.md`, the NAME ends in `.md`), non-ASCII paths, the selector child
+# never inheriting the step's output files, the notice fields (active, budget, sel_censored, groups) and the reasons
+# affected_degraded / signalled / lever_error, budget sanitation (08, 010, 0, abc, empty, over 6 digits), the remaining-budget
+# path (`rem`; a `timeout 0` can never occur), selection-shape fixtures, an advanced-base merge (the diff is the PR's own
+# paths), the argv cap, and a leak sweep (path token, repo name, raw switch, shas) with an empty stderr on the normal path.
 #
 # EVERY GUARD ROW IS DRIVEN AGAINST A MUTANT. A sandbox copy of the driver has the guard deleted or neutered, the mutation
 # is confirmed LANDED (the copy differs from the pristine bytes), the unmutated CONTROL runs first and must be GREEN, and the
 # mutant must turn the row RED. A surviving mutant is a RESULT and is labelled fixture-gap or equivalent in the report.
+#
+# THE TRIGGER LIST is outcome-redundant with the allowlist today (every trigger path is already outside it). It stays as
+# deliberate defense in depth and becomes load-bearing once the allowlist widens (PR C): one COMBINED behavioural mutant
+# (a widened allowlist AND no trigger check) must reach stage 2 / arm a skip, which is a behavioural kill, not a label kill.
+# Mutants whose ONLY red checks are reason labels are marked EQUIVALENT-LABEL in the battery below (verified with
+# PRSEL_PROBE_VERBOSE=all, which names every check a mutant turned red).
 #
 # THE ACTIVATION LOCK IS TESTED BOTH WAYS: with the lock line present and SWITCH=on, active is false and skip_legs is
 # empty (G2-13); a copy with the lock line removed and SWITCH=on on a doc-only fixture yields active=true for EXACTLY `on`.
@@ -56,6 +68,16 @@ SANDBOX=$(mktemp -d "$TMPDIR/ci-pr-selection-test.XXXXXXXX") || {
   printf 'FAIL: could not create sandbox (mktemp -d failed)\n' >&2; exit 2; }
 # A harness that fails to SET UP must abort: a half-built sandbox yields a confident wrong verdict about the SUT.
 trap 'rm -rf "$SANDBOX"' EXIT
+assert_fixture_dir() {  # every directory this suite writes into must be absolute (an empty or relative one would write into the cwd)
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY\n' >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *) printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 
 echo "=== Guard 2: pr-selection fails closed (#9729, ADR-276 S4) ==="
 
@@ -82,8 +104,8 @@ record() {  # $1=label $2=ok(1|0) $3=detail
   if [ "$PROBE" = 1 ]; then
     if [ "$2" != 1 ]; then
       PROBE_FAILS=$((PROBE_FAILS + 1))
-      # PRSEL_PROBE_VERBOSE=1 names the first check each mutant turned red (for reviewing WHY a mutant died)
-      if [ -n "${PRSEL_PROBE_VERBOSE:-}" ] && [ "$PROBE_FAILS" -eq 1 ]; then printf 'probe-red[mutant %s]: %s: %s\n' "$MUT_N" "$1" "$3" >&3; fi
+      # PRSEL_PROBE_VERBOSE=1 names the first check each mutant turned red, =all names every one (to review WHY a mutant died)
+      if [ -n "${PRSEL_PROBE_VERBOSE:-}" ] && { [ "$PROBE_FAILS" -eq 1 ] || [ "${PRSEL_PROBE_VERBOSE}" = all ]; }; then printf 'probe-red[mutant %s]: %s: %s\n' "$MUT_N" "$1" "$3" >&3; fi
     fi
     return 0
   fi
@@ -243,6 +265,9 @@ fx_op() {  # $1=name $2=op(M|A|D|R|T) $3=path [$4=path2]
     D) git -C "$d" rm -q -- "$3" ;;
     R) mkdir -p "$d/$(dirname -- "$4")"; git -C "$d" mv -- "$3" "$4" ;;
     T) rm -f "$d/$3"; ln -s /etc/hostname "$d/$3"; git -C "$d" add -- "$3" ;;
+    L) mkdir -p "$d/$(dirname -- "$3")"; ln -s /etc/hostname "$d/$3"; git -C "$d" add -- "$3" ;;  # a NEW symlink (A, 120000)
+    G) git -C "$d" update-index --add --cacheinfo "160000,$(git -C "$d" rev-parse HEAD),$3" ;;      # a NEW gitlink (A, 160000)
+    X) chmod +x "$d/$3"; git -C "$d" update-index --chmod=+x -- "$3" ;;                                               # mode flip 100644 -> 100755
   esac
 }
 fx_merge() {  # $1=name: commit the PR branch, then a genuine --no-ff merge commit on main
@@ -286,6 +311,61 @@ fx_case col; fx_op col A "knowledge-base/zzleak::warning.md"; fx_done col
 fx_case com; fx_op com A "knowledge-base/zzleak,b.md"; fx_done com
 # typechange (a file becomes a symlink): status T
 fx_case typ; fx_op typ T "$KB_B"; fx_done typ
+# modes: a new symlink and a new gitlink under knowledge-base, a symlink named *.md at the root, and a MODE-ONLY flip on a doc .md
+fx_case msym; fx_op msym L "knowledge-base/project/zzleak-sym.md"; fx_done msym
+fx_case mgit; fx_op mgit G "knowledge-base/project/zzleak-gl.md"; fx_done mgit
+fx_case mrsym; fx_op mrsym L "zzleak-root-sym.md"; fx_done mrsym
+fx_case mflip; fx_op mflip X "$KB_A"; fx_done mflip
+# DELETING an existing symlink (old mode 120000, new 000000, status D): only the OLD-side mode check can refuse it
+cp -a "$FX_BASE" "$FX/mdsym" && ln -s /etc/hostname "$FX/mdsym/knowledge-base/project/zzleak-oldsym.md" \
+  && git -C "$FX/mdsym" add -A && git -C "$FX/mdsym" commit -q -m sym && git -C "$FX/mdsym" checkout -q -b pr \
+  && git -C "$FX/mdsym" rm -q -- knowledge-base/project/zzleak-oldsym.md || { printf 'FAIL: fixture mdsym\n' >&2; exit 2; }
+fx_done mdsym
+# near-miss paths that are NOT on the allowlist (the NAME must end in .md under knowledge-base/ or at the root)
+NEARMISS=(
+  "knowledge-base-evil/zzleak-evil.md"
+  "zzleak-root.mdx"
+  "zzleak-x.md.sh"
+  "knowledge-base/zzleak-x.md.sh"
+  "knowledge-base/diagrams/zzleak-spec.c4"
+  "knowledge-base/zzleak-x.json"
+  "knowledge-base/zzleak-x.sh"
+  "knowledge-base/zzleak-x.ts"
+  "knowledge-base/zzleak-x.png"
+  "knowledge-base/zzleak-x.pen"
+  "knowledge-base/engineering/architecture/diagrams/zzleak-x.c4"
+)
+for _i in "${!NEARMISS[@]}"; do fx_case "nd$_i"; fx_op "nd$_i" A "${NEARMISS[$_i]}"; fx_done "nd$_i"; done
+unset _i
+# a bare FILE named `knowledge-base` (the directory goes away in the same PR)
+fx_case ndbare
+( cd "$FX/ndbare" && git rm -rq knowledge-base && printf 'x\n' > knowledge-base && git add knowledge-base )
+fx_done ndbare
+# non-ASCII paths: U+2028 (e2 80 a8), a C1 control (c2 85), a plain UTF-8 letter
+fx_case nasc0; fx_op nasc0 A $'knowledge-base/zzleak-ls\xe2\x80\xa8x.md'; fx_done nasc0
+fx_case nasc1; fx_op nasc1 A $'knowledge-base/zzleak-c1\xc2\x85x.md'; fx_done nasc1
+fx_case nasc2; fx_op nasc2 A $'knowledge-base/zzleak-\xc3\xa9.md'; fx_done nasc2
+# an ADVANCED base: main gains a non-doc commit AFTER the branch point; the PR itself is doc-only
+fx_case adv; fx_op adv M "$KB_A"
+git -C "$FX/adv" commit -q -m pr && git -C "$FX/adv" checkout -q main \
+  && printf 'main moved\n' >> "$FX/adv/apps/web-platform/zzleak-app.ts" && git -C "$FX/adv" commit -q -am mainmove \
+  && git -C "$FX/adv" merge -q --no-ff -m merge pr || { printf 'FAIL: fixture adv\n' >&2; exit 2; }
+# a joined --paths list over 100000 bytes (40 files, ~2.8 KB paths: still one valid argument for the kernel) and one just under
+_comp=$(printf 'a%.0s' $(seq 1 200))
+_rel="knowledge-base"
+for _i in $(seq 1 14); do _rel="$_rel/$_comp"; done
+fx_big() {  # $1=fixture name $2=file count: that many doc files under one very deep directory
+  local dir="$FX/$1/$_rel" i=0
+  fx_case "$1"
+  assert_fixture_dir "$dir"
+  mkdir -p "$dir"
+  while [ "$i" -lt "$2" ]; do printf 'x\n' > "$dir/f$i.md"; i=$((i + 1)); done
+  git -C "$FX/$1" add -A
+  fx_done "$1"
+}
+fx_big bigargv 40
+fx_big bigok 33
+unset _comp _rel _i
 # an empty diff: a genuine merge commit whose tree equals the base tree
 fx_case empty; fx_done empty
 # bulk
@@ -333,7 +413,10 @@ n=0; [ -f "$d/count" ] && n=$(<"$d/count")
 n=$((n + 1)); printf '%s' "$n" > "$d/count"
 ci=UNSET; [ -n "${CI+x}" ] && ci=set
 fa=UNSET; [ -n "${SOLEUR_TEST_FORCE_ALL+x}" ] && fa=set
-line="call=$n CI=$ci FORCE=$fa argv="
+w=""
+for v in GITHUB_OUTPUT GITHUB_STEP_SUMMARY GITHUB_ENV GITHUB_PATH GITHUB_STATE; do [ -z "${!v+x}" ] || w="$w$v,"; done
+[ -n "$w" ] || w=none
+line="call=$n CI=$ci FORCE=$fa W=$w argv="
 for a in "$@"; do
   case "$a" in
     --paths=*) printf '%s' "${a#--paths=}" > "$d/paths.$n"; line="$line[--paths=${#a}B]" ;;
@@ -341,6 +424,9 @@ for a in "$@"; do
   esac
 done
 printf '%s\n' "$line" >> "$d/log"
+# a hostile child: try to forge the step's output file (only possible if the driver let it inherit GITHUB_OUTPUT)
+[ -z "${STUB_WRITE_OUT:-}" ] || [ -z "${GITHUB_OUTPUT:-}" ] || printf 'active=true\nskip_legs=test-bun\n' >> "$GITHUB_OUTPUT"
+[ "${STUB_HANG_AT:-0}" = "$n" ] && exec sleep 8
 [ "${STUB_KILL_AT:-0}" = "$n" ] && kill -9 "$(<"$STUB_PIDFILE")"
 [ "${STUB_TERM_AT:-0}" = "$n" ] && kill -TERM "$(<"$STUB_PIDFILE")"
 [ -z "${STUB_SLEEP:-}" ] || exec sleep "$STUB_SLEEP"
@@ -363,7 +449,7 @@ enum_d() { printf 'SUITE_COMMAND_DECLINED\t%s\tbash scripts/zz.test.sh\n' "$1"; 
 SUMMARY_OK='AFFECTED_SUMMARY selected=116 of=619 always_on=114 edge=2 fallback=none'
 
 mk_allskip() {  # $1=dir : every gateable group qualifies (webplat/bun by sel=0 rows, heavy by pr-gated declines + one sel=0 row)
-  local d="$1"; mkdir -p "$d"
+  local d="$1"; assert_fixture_dir "$d"; mkdir -p "$d"
   {
     sel_row "apps/web-platform [repo-wide+component]" 0 edge:consumed "^apps/web-platform/"
     sel_row "apps/cla-evidence/test/ccla-add.test.sh" 0 edge:derived "^apps/cla-evidence/"
@@ -443,7 +529,7 @@ mkdir -p "$SC/real"
 } > "$SC/real/enum-scripts-heavy.out"
 
 variant() {  # $1=name ; copies allskip then applies the named edit
-  local d="$SC/$1"; mkdir -p "$d"; cp "$SC/allskip"/* "$d/"
+  local d="$SC/$1"; assert_fixture_dir "$d"; mkdir -p "$d"; cp "$SC/allskip"/* "$d/"
   case "$1" in
     nosummary)   { grep -v '^AFFECTED_SUMMARY' "$SC/allskip/sel.out"; } > "$d/sel.out" ;;
     empty)       : > "$d/sel.out" ;;
@@ -467,9 +553,21 @@ variant() {  # $1=name ; copies allskip then applies the named edit
     webrc)       printf '2' > "$d/enum-webplat.rc" ;;
     badrecord)   { cat "$SC/allskip/enum-bun.out"; printf 'SUITE_COMMANDX\twhat\n'; } > "$d/enum-bun.out" ;;
     noprefix)    { printf 'garbage line only\n'; } > "$d/enum-bun.out" ;;
+    norows)      # a valid summary but ZERO selection rows, while every group holds only pr-gated declines (would skip all if accepted)
+                 printf '%s\n' "$SUMMARY_OK" > "$d/sel.out"
+                 for _g in webplat bun scripts-heavy; do
+                   { enum_d "scripts/lint-orphan-test-suites-mutations-a"; enum_d "scripts/cf-tunnel-liveness-gate-mutations"; } > "$d/enum-$_g.out"
+                 done ;;
+    twotabs)     { sed '$d' "$SC/allskip/sel.out"; printf 'AFFECTED_SELECTED\tzz/twotabs\t0\n'; printf '%s\n' "$SUMMARY_OK"; } > "$d/sel.out" ;;
+    nocls)       { sed '$d' "$SC/allskip/sel.out"; printf 'AFFECTED_SELECTED\tzz/nocls\t0\t\t^x\n'; printf '%s\n' "$SUMMARY_OK"; } > "$d/sel.out" ;;
+    allnum)      { sed '$d' "$SC/allskip/sel.out"
+                   printf 'AFFECTED_SUMMARY selected=all of=all always_on=all edge=all fallback=none\n'; } > "$d/sel.out" ;;
+    heavydecl)   { enum_d "tests/scripts/registry-gate-mutation-battery"; enum_d "scripts/battery-tag-authorship-mutations"; } > "$d/enum-scripts-heavy.out" ;;
+    heavyzero)   printf 'ORPHAN_SCAN valid=1 stale=0\n' > "$d/enum-scripts-heavy.out" ;;
   esac
 }
-for _v in nosummary empty fb_both fb_summary fb_numeric fb_line unresolved garbage twosummary badsel selrc emptygroup plain missing alwayson selected webrc badrecord noprefix; do
+for _v in nosummary empty fb_both fb_summary fb_numeric fb_line unresolved garbage twosummary badsel selrc emptygroup plain missing alwayson selected webrc badrecord noprefix \
+          norows twotabs nocls allnum heavydecl heavyzero; do
   variant "$_v"
 done
 unset _v
@@ -478,13 +576,16 @@ unset _v
 RUN_N=0
 SCEN="$SC/allskip"
 EXPECT_KILLED=0
+EXPECT_STDERR=0   # 1 only for the row that INJECTS a shell error (its stderr legitimately names the unbound variable)
 LEAK="zzleak"
+REPO_NAME="zzleak-org/zzleak-repo"   # carries the leak token: the repository name must reach no output
 
 drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (later wins)
   local name="$1" drv="$2"; shift 2
   local repo="$FX/$name" head prhead o line
   RUN_N=$((RUN_N + 1))
   o="$SANDBOX/r/$RUN_N"
+  assert_fixture_dir "$o"
   mkdir -p "$o/stub"
   cp "$SCEN"/* "$o/stub/" 2>/dev/null
   : > "$o/gh.out"; : > "$o/sum.out"
@@ -495,13 +596,14 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
     "GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES" "GIT_CONFIG_NOSYSTEM=1" "GIT_CONFIG_GLOBAL=/dev/null"
     "GIT_ATTR_NOSYSTEM=1" "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" "GIT_TERMINAL_PROMPT=0"
     "EVENT_NAME=pull_request" "SWITCH=" "GITHUB_SHA=$head" "PR_HEAD_SHA=$prhead"
-    "HEAD_REPO=o/r" "GH_REPO=o/r" "RUN_ATTEMPT=1"
+    "HEAD_REPO=$REPO_NAME" "GH_REPO=$REPO_NAME" "RUN_ATTEMPT=1"
     "GITHUB_OUTPUT=$o/gh.out" "GITHUB_STEP_SUMMARY=$o/sum.out" "RUNNER_TEMP=$SANDBOX/rt"
+    "GITHUB_ENV=$o/gh.env" "GITHUB_PATH=$o/gh.path" "GITHUB_STATE=$o/gh.state"
     "PR_SELECTION_TEST_ALL=$STUB" "PR_SELECTION_STAGE2_TIMEOUT=30"
     "STUB_DIR=$o/stub" "STUB_PIDFILE=$o/pid" "DRV=$drv"
   )
   # shellcheck disable=SC2016  # the single-quoted body is for the child shell to expand
-  { ( cd "$repo" && env -i "${e[@]}" "$@" bash -c 'printf %s "$$" > "$STUB_PIDFILE"; exec bash "$DRV"' ) > "$o/stdout" 2> "$o/stderr"; } 2> /dev/null
+  { ( cd "$repo" && env -i "${e[@]}" "$@" bash -c 'printf %s "$$" | tee "$STUB_PIDFILE" > /dev/null; exec bash "$DRV"' ) > "$o/stdout" 2> "$o/stderr"; } 2> /dev/null
   RC=$?
   O="$o"
   # outputs: last value per key wins (the GITHUB_OUTPUT rule); the line count tells defaults-only from defaults+final
@@ -523,9 +625,11 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
     case "$line" in '::notice title=ci-pr-selection::SOLEUR_PR_SELECTION '*) NOTICE_N=$((NOTICE_N + 1)); NOTICE="$line" ;; esac
   done < "$o/stdout"
   N_SWITCH=""; N_LOCKED=""; N_ATTEMPT=""; N_FILES=""; N_STAGE=""; N_REASON=""; N_WOULD=""; N_SELS=""
-  if [[ "$NOTICE" =~ ^::notice\ title=ci-pr-selection::SOLEUR_PR_SELECTION\ switch=(unset|on|invalid)\ locked=(true|false)\ attempt=([0-9]+)\ files=([0-9]+)\ stage=([12])\ reason=([a-z_]+)\ would_skip=(none|[a-z,-]+)\ sel_s=([0-9]+)$ ]]; then
+  N_CENS=""; N_BUDGET=""; N_ACTIVE=""; N_GROUPS=""
+  if [[ "$NOTICE" =~ ^::notice\ title=ci-pr-selection::SOLEUR_PR_SELECTION\ switch=(unset|on|invalid)\ locked=(true|false)\ attempt=([0-9]+)\ files=([0-9]+)\ stage=([12])\ reason=([a-z_]+)\ would_skip=(none|[a-z,-]+)\ sel_s=([0-9]+)\ sel_censored=([01])\ budget=([0-9]+)\ active=(true|false)\ groups=(-|webplat:[a-z_]+,bun:[a-z_]+,scripts-heavy:[a-z_]+)$ ]]; then
     N_SWITCH="${BASH_REMATCH[1]}"; N_LOCKED="${BASH_REMATCH[2]}"; N_ATTEMPT="${BASH_REMATCH[3]}"; N_FILES="${BASH_REMATCH[4]}"
     N_STAGE="${BASH_REMATCH[5]}"; N_REASON="${BASH_REMATCH[6]}"; N_WOULD="${BASH_REMATCH[7]}"; N_SELS="${BASH_REMATCH[8]}"
+    N_CENS="${BASH_REMATCH[9]}"; N_BUDGET="${BASH_REMATCH[10]}"; N_ACTIVE="${BASH_REMATCH[11]}"; N_GROUPS="${BASH_REMATCH[12]}"
     NOTICE_OK=1
   else
     NOTICE_OK=0
@@ -552,11 +656,20 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   else
     check_eq "run$RUN_N($name) skip_legs is empty unless active" "$O_SKIP" ""
   fi
-  local f leaked=0
+  local f leaked=0 shaleak=0 base
+  base=$(git -C "$repo" rev-parse 'HEAD^1' 2>/dev/null) || base="$head"
   for f in "$o/gh.out" "$o/stdout" "$o/stderr" "$o/sum.out"; do
     if grep -qF "$LEAK" "$f"; then leaked=1; fi
   done
-  check_eq "run$RUN_N($name) no raw path in any output, annotation or summary" "$leaked" "0"
+  # the two audit shas (and the merge sha) belong in the output FILE only, never in stderr, the notice or the summary
+  for f in "$o/stdout" "$o/stderr" "$o/sum.out"; do
+    if grep -qF -e "$head" -e "$prhead" -e "$base" "$f"; then shaleak=1; fi
+  done
+  check_eq "run$RUN_N($name) no raw path, repo name or switch value in any output, annotation or summary" "$leaked" "0"
+  check_eq "run$RUN_N($name) no sha in stderr, the notice or the summary" "$shaleak" "0"
+  if [ "$EXPECT_KILLED" != 1 ] && [ "$EXPECT_STDERR" != 1 ]; then
+    check_eq "run$RUN_N($name) stderr is empty" "$(head -c 200 "$o/stderr")" ""
+  fi
 }
 
 expect_full() {  # $1=label $2=reason $3=expected stub calls
@@ -564,6 +677,7 @@ expect_full() {  # $1=label $2=reason $3=expected stub calls
   check_eq "$1: active" "$O_ACTIVE" "false"
   check_eq "$1: skip_legs" "$O_SKIP" ""
   check_eq "$1: stub calls" "$STUB_CALLS" "$3"
+  check_eq "$1: notice active" "$N_ACTIVE" "false"
 }
 
 # ═══ THE ROWS ═══════════════════════════════════════════════════════════════
@@ -656,6 +770,9 @@ row_switch() {  # G2-5: the switch is compared EXACTLY (run against the lock-neu
   check_eq "G2-5 SWITCH unset: active" "$O_ACTIVE" "false"
   drive empty "$d" "SWITCH=on"
   check_eq "G2-5 SWITCH=on on a full-battery diff: active stays false" "$O_ACTIVE" "false"
+  drive k1 "$d" "SWITCH=on"
+  check_eq "notice: active=true is reported when the arm fires" "$N_ACTIVE" "true"
+  check_eq "notice: the armed run reports every group" "$N_GROUPS" "webplat:skip,bun:skip,scripts-heavy:skip"
 }
 row_lock() {  # G2-13: the lock is present and SWITCH=on
   local d="$1"
@@ -687,6 +804,55 @@ row_term() {  # a SIGTERM (a cancelled job) still exits 0 and leaves the default
   local d="$1"
   drive k1 "$d" "SWITCH=on" "STUB_TERM_AT=2"
   check_eq "SIGTERM mid stage 2: outputs are the defaults" "$O_TEXT" "$DEFAULTS"
+  check_eq "SIGTERM mid stage 2: the single notice says signalled" "$N_REASON" "signalled"
+  check_eq "SIGTERM mid stage 2: the notice says active=false" "$N_ACTIVE" "false"
+  check_eq "SIGTERM mid stage 2: exactly one notice" "$NOTICE_N" "1"
+  # a hostile stub that appends active=true / skip_legs=test-bun to ITS inherited output file, then the job is cancelled
+  drive k1 "$d" "SWITCH=on" "STUB_TERM_AT=2" "STUB_WRITE_OUT=1"
+  check_eq "SIGTERM mid stage 2 + a stub that tries to write the output file: still EXACTLY the defaults" "$O_TEXT" "$DEFAULTS"
+}
+row_lever_error() {  # an internal abort (here an unbound variable under set -u) is lever_error: one notice, only the defaults, exit 0
+  local d="$1" m="$SANDBOX/lever.$RUN_N.sh"
+  sed 's|^  reason=not_pr$|&\n  : "${zz_unbound_probe}"|' "$d" > "$m"
+  if cmp -s "$m" "$d"; then record "lever_error injection landed" 0 "the injected unbound expansion did not land"; return; fi
+  EXPECT_STDERR=1
+  drive k1 "$m" "SWITCH=on"
+  EXPECT_STDERR=0
+  check_eq "lever_error: the driver still exits 0" "$RC" "0"
+  check_eq "lever_error: reason" "$N_REASON" "lever_error"
+  check_eq "lever_error: outputs are the defaults" "$O_TEXT" "$DEFAULTS"
+  check_eq "lever_error: the notice says active=false" "$N_ACTIVE" "false"
+}
+row_child_env() {  # the selector child must not inherit the step's output files
+  local d="$1" p1 p2 n
+  SCEN="$SC/real"   # nothing skippable: a forged `active=true` would be the only way to arm
+  drive k1 "$d" "STUB_WRITE_OUT=1"
+  p1=$(git -C "$FX/k1" rev-parse 'HEAD^1'); p2=$(git -C "$FX/k1" rev-parse 'HEAD^2')
+  check_eq "child env: all 4 selector calls ran" "$STUB_CALLS" "4"
+  n=$(grep -c 'W=none' "$O/stub/log"); check_eq "child env: every selector call saw NO GITHUB_OUTPUT/STEP_SUMMARY/ENV/PATH/STATE" "$n" "4"
+  check_eq "child env: a stub write attempt leaves the output file at defaults plus ONE final block (8 lines)" "$O_NLINES" "8"
+  check_eq "child env: the output file is exactly the defaults and the final block" "$O_TEXT" "$DEFAULTS"$'\n'"head_sha=$p2"$'\n'"base_sha=$p1"$'\n'"active=false"$'\n'"skip_legs="
+  SCEN="$SC/allskip"
+}
+row_budget() {  # budget sanitation: digits only, <= 6 digits, decimal, >= 1; otherwise the default 120 (never `timeout 0`)
+  local d="$1" v
+  for v in "08:8" "010:10" "0:120" "abc:120" ":120" "1234567:120" "000123:123" "-5:120" "7x:120" "99:99" "000000:120"; do
+    drive k1 "$d" "PR_SELECTION_STAGE2_TIMEOUT=${v%%:*}"
+    check_eq "budget '${v%%:*}': the effective budget" "$N_BUDGET" "${v##*:}"
+    check_eq "budget '${v%%:*}': the run still reaches stage 2" "$N_STAGE" "2"
+  done
+}
+row_hang_first() {  # a hung FIRST enumerate call eats the budget: the remaining groups get rem<1 and are NOT run (never `timeout 0`)
+  local d="$1" t0 t1
+  t0=$SECONDS
+  drive k1 "$d" "STUB_HANG_AT=2" "PR_SELECTION_STAGE2_TIMEOUT=3"
+  t1=$SECONDS
+  check_eq "rem: only the selection and the hung first enumerate ran" "$STUB_CALLS" "2"
+  check_eq "rem: every group is a timeout token" "$N_GROUPS" "webplat:timeout,bun:timeout,scripts-heavy:timeout"
+  check_eq "rem: a timeout is censored" "$N_CENS" "1"
+  check_eq "rem: a degraded enumerate is never the benign 'affected'" "$N_REASON" "affected_degraded"
+  check_eq "rem: nothing would be skipped" "$N_WOULD" "none"
+  check_true "rem: the hung call was cut at the budget, not waited for ($((t1 - t0))s)" "$([ $((t1 - t0)) -lt 8 ]; echo $?)"
 }
 row_rerun() {  # G2-7
   local d="$1" v
@@ -751,7 +917,7 @@ row_diagrams() {  # G2-15: a diagrams edit never lets test-webplat be skipped
 }
 row_fork() {  # G2-15
   local d="$1" v
-  for v in "x/other" "" "O/R"; do
+  for v in "x/other" "" "${REPO_NAME^^}"; do
     drive k1 "$d" "HEAD_REPO=$v"
     expect_full "G2-15 fork head HEAD_REPO='$v'" fork 0
   done
@@ -770,7 +936,7 @@ row_maxfiles() {  # G2-15
 row_bigpaths() {  # G2-15: a listing over 64 KB is classified correctly, not mis-read as non-doc or as a failure
   local d="$1" sz
   drive big "$d"
-  sz=$(wc -c < <(git -C "$FX/big" diff -z --name-status --no-renames HEAD^1 HEAD))
+  sz=$(wc -c < <(git -C "$FX/big" diff -z --raw --no-renames --no-abbrev HEAD^1 HEAD))
   check_true "G2-15 the >64KB fixture really is over 64 KB ($sz bytes)" "$([ "$sz" -gt 65536 ]; echo $?)"
   check_eq "G2-15 a >64KB doc-only listing reaches stage 2" "$N_REASON" "affected"
   check_eq "G2-15 a >64KB doc-only listing: 4 selector calls" "$STUB_CALLS" "4"
@@ -813,22 +979,27 @@ row_selector_timeout() {  # G2-10: a hung selector degrades to full within the b
   t1=$SECONDS
   check_eq "G2-10 a hung selector: reason" "$N_REASON" "selector_timeout"
   check_eq "G2-10 a hung selector: nothing would be skipped" "$N_WOULD" "none"
+  check_eq "G2-10 a hung selector: sel_censored=1 (sel_s is a lower bound)" "$N_CENS" "1"
+  check_eq "G2-10 a hung selector: budget reported" "$N_BUDGET" "1"
   check_true "G2-10 a hung selector is cut off by the budget, not waited for ($((t1 - t0))s)" "$([ $((t1 - t0)) -lt 5 ]; echo $?)"
 }
 row_groups() {  # G2-11: per-group rules
   local d="$1" v
-  for v in emptygroup:test-webplat,test-scripts-heavy:test-bun=no_records \
-           plain:test-webplat,test-scripts-heavy:test-bun=plain_decline \
-           missing:test-webplat,test-scripts-heavy:test-bun=missing_row \
-           alwayson:test-webplat,test-scripts-heavy:test-bun=always_on \
-           selected:test-webplat,test-scripts-heavy:test-bun=selected \
-           badrecord:test-webplat,test-scripts-heavy:test-bun=parse \
-           webrc:test-bun,test-scripts-heavy:test-webplat=bad_rc; do
+  for v in emptygroup:test-webplat,test-scripts-heavy:test-bun=no_records:affected_degraded \
+           plain:test-webplat,test-scripts-heavy:test-bun=plain_decline:affected \
+           missing:test-webplat,test-scripts-heavy:test-bun=missing_row:affected_degraded \
+           alwayson:test-webplat,test-scripts-heavy:test-bun=always_on:affected \
+           selected:test-webplat,test-scripts-heavy:test-bun=selected:affected \
+           badrecord:test-webplat,test-scripts-heavy:test-bun=parse:affected_degraded \
+           webrc:test-bun,test-scripts-heavy:test-webplat=bad_rc:affected_degraded; do
     SCEN="$SC/${v%%:*}"
     drive k1 "$d"
-    IFS=: read -r _ want tok <<< "$v"
+    IFS=: read -r _ want tok rsn <<< "$v"
     check_eq "G2-11 group case '${v%%:*}': would_skip" "$N_WOULD" "$want"
     check_contains "G2-11 group case '${v%%:*}': the summary names the cause" "$SUMTXT" "$tok"
+    check_eq "G2-11 group case '${v%%:*}': reason" "$N_REASON" "$rsn"
+    gt="${tok#test-}"
+    check_contains "G2-11 group case '${v%%:*}': the notice groups field names the cause" "$N_GROUPS" "${gt/=/:}"
   done
   # a stream without any record prefix is no records at all
   SCEN="$SC/noprefix"
@@ -856,14 +1027,109 @@ row_must_pass() {  # the must-PASS row: a legitimate doc-only diff, locked: evid
   check_eq "MUST-PASS doc-only diff, locked: active false" "$O_ACTIVE" "false"
   check_eq "MUST-PASS doc-only diff: one --print-selection and three enumerate calls" "$STUB_CALLS" "4"
   check_contains "MUST-PASS the selector is asked for the diff's own paths" "$(<"$O/stub/paths.1")" "$KB_A"
+  check_eq "MUST-PASS notice: active=false under the lock" "$N_ACTIVE" "false"
+  check_eq "MUST-PASS notice: the effective budget is reported" "$N_BUDGET" "30"
+  check_eq "MUST-PASS notice: not censored" "$N_CENS" "0"
+  check_eq "MUST-PASS notice: every group reported" "$N_GROUPS" "webplat:skip,bun:skip,scripts-heavy:skip"
+  check_eq "MUST-PASS notice: reason affected (no degraded group)" "$N_REASON" "affected"
+  check_contains "MUST-PASS the step summary carries the new fields" "$SUMTXT" "sel_censored=0 budget=30 groups=webplat:skip,bun:skip,scripts-heavy:skip"
+}
+
+row_modes() {  # stage 1 is MODE-aware: only 000000/100644/100755 on both sides; a mode flip on a doc .md is still doc
+  local d="$1" f
+  for f in msym mgit mrsym mdsym; do
+    drive "$f" "$d"
+    expect_full "MODE new symlink/gitlink ($f)" non_doc_mode 0
+  done
+  drive mflip "$d"
+  check_eq "MODE a 100644->100755 flip on a doc .md stays doc-class (reaches stage 2)" "$N_REASON" "affected"
+  check_eq "MODE a mode flip: stage 2 ran" "$STUB_CALLS" "4"
+  check_eq "MODE a mode flip: the selector is asked for the doc path" "$(<"$O/stub/paths.1")" "$KB_A"
+  check_eq "MODE precondition: the flip really is mode-only M 100644->100755" \
+    "$(git -C "$FX/mflip" diff --raw --no-renames HEAD^1 HEAD | cut -c1-14)" ":100644 100755"
+}
+row_allowlist() {  # the allowlist is knowledge-base/**/*.md or a root *.md: the NAME ends in .md
+  local d="$1" i
+  for i in "${!NEARMISS[@]}"; do
+    drive "nd$i" "$d"
+    expect_full "ALLOWLIST near-miss '${NEARMISS[$i]}'" non_doc 0
+  done
+  drive ndbare "$d"
+  expect_full "ALLOWLIST a bare file named 'knowledge-base'" non_doc 0
+}
+row_nonascii() {  # a byte outside printable ASCII (U+2028, a C1 control, a UTF-8 letter) is an odd path
+  local d="$1" f
+  for f in nasc0 nasc1 nasc2; do
+    drive "$f" "$d"
+    expect_full "NON-ASCII path ($f)" odd_path 0
+  done
+}
+row_advanced_base() {  # main moved on after the branch point: the diff is HEAD^1..HEAD (the PR's OWN paths), not HEAD^1..HEAD^2
+  local d="$1"
+  drive adv "$d"
+  check_eq "ADV-BASE a doc-only PR on an advanced base reaches stage 2" "$N_REASON" "affected"
+  check_eq "ADV-BASE stage 2 ran (4 selector calls)" "$STUB_CALLS" "4"
+  check_eq "ADV-BASE the selector receives the PR's own paths ONLY" "$(<"$O/stub/paths.1")" "$KB_A"
+  check_eq "ADV-BASE one changed file" "$N_FILES" "1"
+}
+row_selection_shapes() {  # selection-output shapes beyond the recorded ones
+  local d="$1" v
+  for v in norows:selector_unparsed twotabs:selector_unparsed nocls:selector_unparsed allnum:selector_fallback; do
+    SCEN="$SC/${v%%:*}"
+    drive k1 "$d"
+    check_eq "SHAPE selection '${v%%:*}': reason" "$N_REASON" "${v##*:}"
+    check_eq "SHAPE selection '${v%%:*}': nothing would be skipped" "$N_WOULD" "none"
+    check_eq "SHAPE selection '${v%%:*}': groups not reported" "$N_GROUPS" "-"
+  done
+  # a heavy group made only of pr-gated declines IS skippable (the documented behaviour) ...
+  SCEN="$SC/heavydecl"
+  drive k1 "$d"
+  check_eq "SHAPE heavy group of only pr-gated declines is skippable" "$N_WOULD" "$ALL"
+  check_eq "SHAPE heavy group of only pr-gated declines: token" "$N_GROUPS" "webplat:skip,bun:skip,scripts-heavy:skip"
+  # ... a group with ZERO records is not
+  SCEN="$SC/heavyzero"
+  drive k1 "$d"
+  check_eq "SHAPE heavy group with zero records is NOT skippable" "$N_WOULD" "test-webplat,test-bun"
+  check_eq "SHAPE heavy group with zero records: token" "$N_GROUPS" "webplat:skip,bun:skip,scripts-heavy:no_records"
+  check_eq "SHAPE heavy group with zero records: degraded" "$N_REASON" "affected_degraded"
+  SCEN="$SC/allskip"
+}
+row_argv_cap() {  # the joined --paths list is bounded: over 100000 bytes is full (and never reaches the selector)
+  local d="$1" plen
+  plen=$(git -C "$FX/bigargv" diff --name-only HEAD^1 HEAD | wc -c)
+  check_true "ARGV precondition: the joined list is over 100000 bytes ($plen)" "$([ "$plen" -gt 100001 ]; echo $?)"
+  drive bigargv "$d"
+  expect_full "ARGV a joined --paths list over 100000 bytes" paths_too_long 0
+  plen=$(git -C "$FX/bigok" diff --name-only HEAD^1 HEAD | wc -c)
+  check_true "ARGV precondition: the under-cap list is between 90000 and 100000 bytes ($plen)" "$([ "$plen" -gt 90000 ] && [ "$plen" -le 100000 ]; echo $?)"
+  drive bigok "$d"
+  check_eq "ARGV just under the cap reaches stage 2" "$N_REASON" "affected"
+  check_true "ARGV the stub's recorded --paths= argument is under the cap" "$([ "$(grep -c -E '\[--paths=(9[0-9]{4}|10[0-9]{4})B\]' "$O/stub/log")" -ge 1 ]; echo $?)"
+  check_true "ARGV the recorded paths file is under the cap" "$([ "$(wc -c < "$O/stub/paths.1")" -le 100000 ]; echo $?)"
+}
+row_leak() {  # the raw switch value, the repo name and the shas reach no output but the gh output file's own audit shas
+  local d="$1"
+  drive k1 "$d" "SWITCH=zzleak-raw-switch-value"
+  check_eq "LEAK a raw switch value is reported as 'invalid' only" "$N_SWITCH" "invalid"
+  check_eq "LEAK the run still reaches stage 2" "$N_STAGE" "2"
+}
+row_trigger_active() {  # against the UNLOCKED driver with the switch ON: a trigger path must still never arm a skip
+  local d="$1" i
+  for i in "${!TRIGGERS[@]}"; do
+    drive "trg$i" "$d" "SWITCH=on"
+    check_eq "TRIGGER-ACTIVE '${TRIGGERS[$i]}' with SWITCH=on, unlocked: active" "$O_ACTIVE" "false"
+    check_eq "TRIGGER-ACTIVE '${TRIGGERS[$i]}' with SWITCH=on, unlocked: skip_legs" "$O_SKIP" ""
+  done
 }
 
 # Rows that run against the PRISTINE (locked) driver, and rows that need the lock-neutralized copy.
 PRISTINE_ROWS=(row_not_pr row_shape_ok row_shape_count row_shape_githubsha row_shape_prhead row_shape_shallow row_diff_error
                row_trigger_core row_trigger_sourced row_lock row_skip_gated_on_active row_rerun row_odd_cntrl row_odd_colons
                row_odd_comma row_status row_docs_outside row_docs_inside row_fork row_maxfiles row_bigpaths row_empty
-               row_ci_leak row_selector_unknowns row_selector_timeout row_groups row_real_shape row_must_pass)
-UNLOCKED_ROWS=(row_switch row_diagrams row_defaults_first row_term)
+               row_ci_leak row_selector_unknowns row_selector_timeout row_groups row_real_shape row_must_pass
+               row_modes row_allowlist row_nonascii row_advanced_base row_selection_shapes row_argv_cap row_leak row_budget
+               row_hang_first row_child_env row_lever_error)
+UNLOCKED_ROWS=(row_switch row_diagrams row_defaults_first row_term row_trigger_active)
 
 # ── CONTROL: the unmutated driver must be GREEN before any mutant is read ────
 _c0=$fails
@@ -936,6 +1202,7 @@ mutate() {  # $1=label $2=base driver file $3=sed expression $4...=row functions
     fail "MUTANT NOT WELL-FORMED: $label (a syntax error would kill every row for the wrong reason)"
     return
   fi
+  [ -z "${PRSEL_PROBE_VERBOSE:-}" ] || printf 'probe-mutant %s: %s\n' "$MUT_N" "$label" >&3
   PROBE=1; PROBE_FAILS=0
   for fn in "$@"; do "$fn" "$m" > /dev/null 2>&1; done
   PROBE=0
@@ -953,14 +1220,14 @@ drop_return() { printf 's@[[:space:]]*|| return 0[[:space:]]*# GUARD:%s$@  # MUT
 mutate "G2-1 parent count not checked"            "$PRISTINE" "$(kill_guard G2-1-TWO-PARENTS)"             row_shape_count
 mutate "G2-1 HEAD == GITHUB_SHA not checked"      "$PRISTINE" "$(kill_guard G2-1-HEAD-IS-GITHUB-SHA)"      row_shape_githubsha
 mutate "G2-1 HEAD^2 == PR head not checked"       "$PRISTINE" "$(kill_guard G2-1-PARENT2-IS-PR-HEAD)"      row_shape_prhead
-mutate "G2-1 git diff failure ignored"            "$PRISTINE" "$(drop_return G2-1-DIFF-RC)"                row_diff_error
+mutate "G2-1 git diff failure ignored"            "$PRISTINE" "$(drop_return G2-1-DIFF-RC)"                row_diff_error   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): an empty listing is still full (empty_diff)
 mutate "G2-1 only a pull_request run selects"     "$PRISTINE" "$(kill_guard G2-NOT-PR)"                    row_not_pr
 # G2-2
-mutate "G2-2 trigger list neutered"               "$PRISTINE" "$(kill_guard G2-2-TRIGGER)"                 row_trigger_core row_trigger_sourced
-mutate "G2-2 scripts/lib/** prefix dropped"       "$PRISTINE" '/^    scripts\/lib\/\*) return 0 ;;$/d'     row_trigger_core row_trigger_sourced
-mutate "G2-2 heavy manifest dropped from the list" "$PRISTINE" '/^    scripts\/suite-shard-legs-heavy.tsv) return 0 ;;$/d' row_trigger_core
-mutate "G2-2 scripts/test-all.sh dropped from the list" "$PRISTINE" '/^    scripts\/test-all.sh) return 0 ;;$/d' row_trigger_core
-mutate "G2-2 ci.yml dropped from the list"        "$PRISTINE" '/^    \.github\/workflows\/ci.yml) return 0 ;;$/d' row_trigger_core
+mutate "G2-2 trigger list neutered"               "$PRISTINE" "$(kill_guard G2-2-TRIGGER)"                 row_trigger_core row_trigger_sourced   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): the trigger paths are outside the allowlist, so non_doc is still full
+mutate "G2-2 scripts/lib/** prefix dropped"       "$PRISTINE" '/^    scripts\/lib\/\*) return 0 ;;$/d'     row_trigger_core row_trigger_sourced   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): same: non_doc is still full
+mutate "G2-2 heavy manifest dropped from the list" "$PRISTINE" '/^    scripts\/suite-shard-legs-heavy.tsv) return 0 ;;$/d' row_trigger_core   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): same
+mutate "G2-2 scripts/test-all.sh dropped from the list" "$PRISTINE" '/^    scripts\/test-all.sh) return 0 ;;$/d' row_trigger_core   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): same
+mutate "G2-2 ci.yml dropped from the list"        "$PRISTINE" '/^    \.github\/workflows\/ci.yml) return 0 ;;$/d' row_trigger_core   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): same
 # G2-5 / G2-13 (against the lock-neutralized copy so the switch is what decides)
 mutate "G2-5 switch lowercased and trimmed"       "$UNLOCKED" 's|^\[ -z "\${SWITCH:-}" \] \|\| sw=invalid$|SWITCH="${SWITCH:-}"; SWITCH="${SWITCH//[[:space:]]/}"; SWITCH="${SWITCH,,}"\n&|' row_switch
 mutate "G2-5 switch matched by prefix"            "$UNLOCKED" 's|^\[ "\${SWITCH:-}" = on \] && sw=on  # GUARD:G2-5-SWITCH-EXACT$|[[ "${SWITCH:-}" == on* ]] \&\& sw=on|' row_switch
@@ -973,20 +1240,31 @@ mutate "G2-13 skip_legs written when not active (arm gating AND final validation
 unset _e1 _e2
 # G2-6 / G2-12
 mutate "G2-6 the fail-closed defaults are not written first" "$PRISTINE" "$(kill_guard G2-6-DEFAULTS)"      row_defaults_first
-mutate "G2-12 skip_legs is written progressively, per group" "$UNLOCKED" 's|^\(    if \[ "\$tok" = skip \]; then list=.*\)$|\1\n    printf "skip_legs=%s\\n" "$list" >> "$OUT"|' row_defaults_first
-mutate "G2 the EXIT trap (always exit 0) removed" "$PRISTINE" "$(kill_guard ALWAYS-EXIT-0)"                row_term
+RD='>>'  # a redirect token spelled inside a sed script is TEXT for the mutant, not a redirect of this suite
+mutate "G2-12 skip_legs is written progressively, per group" "$UNLOCKED" 's|^\(    if \[ "\$tok" = skip \]; then list=.*\)$|\1\n    printf "skip_legs=%s\\n" "$list" '"$RD"' "$OUT"|' row_defaults_first
+mutate "G2 the EXIT trap (always exit 0) removed" "$PRISTINE" "$(kill_guard ALWAYS-EXIT-0)"                row_term row_lever_error
+mutate "G2 the HUP/INT/TERM trap removed (a signal is not 'signalled')" "$PRISTINE" "$(kill_guard ALWAYS-EXIT-0-SIGNAL)" row_term
 # G2-7
 mutate "G2-7 a re-run is not full"                "$PRISTINE" "$(kill_guard G2-7-RERUN)"                   row_rerun
 # G2-9
 mutate "G2-9 CI not unset on the --print-selection call" "$PRISTINE" 's|^\(  timeout -k 5 "\$budget" \)env -u CI -u SOLEUR_TEST_FORCE_ALL |\1env |' row_ci_leak
 mutate "G2-9 CI not unset on the --enumerate-commands call" "$PRISTINE" 's|^\(      timeout -k 5 "\$rem" \)env -u CI -u SOLEUR_TEST_FORCE_ALL |\1env |' row_ci_leak
 mutate "G2-9 SOLEUR_TEST_FORCE_ALL not unset"     "$PRISTINE" 's| -u SOLEUR_TEST_FORCE_ALL||g'              row_ci_leak
+mutate "G2-9 GITHUB_OUTPUT inherited by the --print-selection child" "$PRISTINE" 's|^\(  timeout -k 5 "\$budget" env.*\) -u GITHUB_OUTPUT\( .*GUARD:G2-9-CI-UNSET\)$|\1\2|' row_child_env
+mutate "G2-9 GITHUB_OUTPUT inherited by the --enumerate-commands child" "$PRISTINE" 's|^\(      timeout -k 5 "\$rem" env.*\) -u GITHUB_OUTPUT\( .*GUARD:G2-9-CI-UNSET-ENUM\)$|\1\2|' row_child_env
+mutate "G2-9 GITHUB_OUTPUT inherited, SIGTERM mid stage 2 (a forged active=true survives)" "$UNLOCKED" 's| -u GITHUB_OUTPUT||g' row_term
+mutate "G2-9 the other step files (SUMMARY/ENV/PATH/STATE) inherited" "$PRISTINE" 's| -u GITHUB_STEP_SUMMARY -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_STATE||g' row_child_env
 # G2-10
 mutate "G2-10 a summary-less selector output is accepted" "$PRISTINE" "$(kill_guard G2-10-SUMMARY-COUNT)"   row_selector_unknowns
 mutate "G2-10 any AFFECTED_SUMMARY fallback is accepted" "$PRISTINE" 's|\\ fallback=none\$ \]\]|\\ fallback=[a-z-]+$ ]]|' row_selector_unknowns
 mutate "G2-10 AFFECTED_FALLBACK/UNRESOLVED lines ignored" "$PRISTINE" 's|^      AFFECTED_FALLBACK\*\|AFFECTED_UNRESOLVED\*) sel_fallback_seen=1 ;;$|      AFFECTED_FALLBACK*\|AFFECTED_UNRESOLVED*) : ;;|' row_selector_unknowns
 mutate "G2-10 a selector failure rc is ignored"   "$PRISTINE" 's|^  \[ "\$rc" -eq 0 \] \|\| return 0$|  :|' row_selector_unknowns
 mutate "G2-10 the stage-2 budget is not enforced"  "$PRISTINE" 's|timeout -k 5 "\$budget" env|timeout -k 500 3000 env|' row_selector_timeout
+mutate "G2-10 zero selection rows are accepted"   "$PRISTINE" "$(kill_guard G2-10-ZERO-ROWS)"                row_selection_shapes
+mutate "G2-10 a row with fewer than 3 tabs is accepted" "$PRISTINE" "$(kill_guard G2-10-TABS)"              row_selection_shapes
+mutate "G2-10 a row with an empty class is accepted" "$PRISTINE" "$(kill_guard G2-10-CLS)"                  row_selection_shapes
+mutate "G2-10 non-numeric summary fields are accepted" "$PRISTINE" '/GUARD:G2-10-SUMMARY$/ s/\[0-9\]+/[a-z0-9]+/g' row_selection_shapes
+mutate "G2-10 the censor flag is not set on a selector timeout" "$PRISTINE" 's|then sel_censored=1; reason=selector_timeout|then reason=selector_timeout|' row_selector_timeout
 # G2-11
 mutate "G2-11 a non-pr-gated decline is accepted" "$PRISTINE" "$(kill_guard G2-11-PLAIN-DECLINE)"          row_groups row_real_shape
 mutate "G2-11 a record absent from the selection is accepted" "$PRISTINE" "$(kill_guard G2-11-MISSING-ROW)" row_groups
@@ -999,16 +1277,49 @@ mutate "G2-14 control characters accepted in a path" "$PRISTINE" "$(kill_guard G
 mutate "G2-14 '::' accepted in a path"            "$PRISTINE" "$(kill_guard G2-14-COLONS)"                 row_odd_colons
 mutate "G2-14 ',' accepted in a path"             "$PRISTINE" "$(kill_guard G2-14-COMMA)"                  row_odd_comma
 # G2-15
-mutate "G2-15 the allowlist is not enforced"      "$PRISTINE" "$(kill_guard G2-15-ALLOWLIST)"              row_docs_outside
-mutate "G2-15 plugins/soleur/docs is allowlisted" "$PRISTINE" 's|^    knowledge-base/?\*) return 0 ;;$|    plugins/soleur/docs/*) return 0 ;;\n&|' row_docs_outside
+mutate "G2-15 the allowlist is not enforced"      "$PRISTINE" "$(kill_guard G2-15-ALLOWLIST)"              row_docs_outside row_allowlist
+mutate "G2-15 plugins/soleur/docs is allowlisted" "$PRISTINE" 's|^    knowledge-base/?\*\.md) return 0 ;;$|    plugins/soleur/docs/*) return 0 ;;\n&|' row_docs_outside
+mutate "G2-15 the .md suffix is not required under knowledge-base/" "$PRISTINE" 's|^    knowledge-base/?\*\.md) return 0 ;;$|    knowledge-base/?*) return 0 ;;|' row_allowlist
+mutate "G2-15 the .md suffix is not required at the root" "$PRISTINE" 's|^    ?\*\.md) return 0 ;;$|    *) return 0 ;;|' row_docs_outside row_allowlist
+mutate "G2-15 the knowledge-base prefix needs no slash" "$PRISTINE" 's|^    knowledge-base/?\*\.md) return 0 ;;$|    knowledge-base*.md) return 0 ;;|' row_allowlist
+mutate "G2-15 a root file named *.mdx is a markdown file" "$PRISTINE" 's|^    ?\*\.md) return 0 ;;$|    ?*.md*) return 0 ;;|' row_allowlist
+# the trigger list is outcome-redundant with the allowlist today: a widened allowlist AND no trigger check must be a BEHAVIOURAL
+# kill (a trigger path reaches stage 2 and ARMS a skip), proving the list is the load-bearing layer once the allowlist widens (PR C)
+mutate "COMBINED allowlist widened to scripts/** AND the trigger check removed" "$UNLOCKED" "$(kill_guard G2-2-TRIGGER)"$'\n''s|^    knowledge-base/?\*\.md) return 0 ;;$|    scripts/*) return 0 ;;\n&|' row_trigger_core row_trigger_active
+mutate "MODE the symlink/gitlink mode check on the NEW side is removed" "$PRISTINE" "$(kill_guard G2-MODE-NEW)" row_modes
+mutate "MODE the mode check on the OLD side is removed" "$PRISTINE" "$(kill_guard G2-MODE-OLD)" row_modes
+mutate "MODE 100755 is not an accepted mode (a flip on a doc .md must stay doc)" "$PRISTINE" 's#000000|100644|100755#000000|100644#g' row_modes
+mutate "MODE every mode is accepted" "$PRISTINE" 's#000000|100644|100755#*#g' row_modes
+mutate "NON-ASCII only ASCII control characters are rejected" "$PRISTINE" 's#\[\[ "\$p" =~ \[^\\ -~\] \]\]#[[ "$p" == *[[:cntrl:]]* ]]#' row_nonascii
 mutate "G2-15 a nested markdown file counts as root-level" "$PRISTINE" '/^    \*\/\*) return 1 ;;$/d'   row_docs_outside
-mutate "G2-15 any status letter is accepted"      "$PRISTINE" "$(kill_guard G2-STATUS)"                    row_status
+mutate "G2-15 any status letter is accepted"      "$PRISTINE" "$(kill_guard G2-STATUS)"                    row_status   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): a typechange to a symlink is refused by the mode check, still full
 mutate "G2-15 diagrams edits do not block test-webplat" "$PRISTINE" "$(kill_guard G2-15-DIAGRAMS)"         row_diagrams
 mutate "G2-15 the diagrams path is not flagged"   "$PRISTINE" "$(kill_guard G2-15-DIAGRAMS-FLAG)"         row_diagrams
+mutate "G2-1 the diff is taken against the PR head (HEAD^1 HEAD^2), not the merge" "$PRISTINE" 's|HEAD^1 HEAD --|HEAD^1 HEAD^2 --|' row_advanced_base
+mutate "G2-1 the diff is taken HEAD^2..HEAD (main's own movement leaks in)" "$PRISTINE" 's|HEAD^1 HEAD --|HEAD^2 HEAD --|' row_advanced_base
+mutate "G2-15 the joined --paths cap is not enforced" "$PRISTINE" "$(kill_guard G2-15-PATHS-CAP)" row_argv_cap
+mutate "G2-15 the joined --paths cap is 90000" "$PRISTINE" 's|\[ "\${#paths}" -le 100000 \]|[ "${#paths}" -le 90000 ]|' row_argv_cap
 mutate "G2-15 a fork head is not full"            "$PRISTINE" "$(kill_guard G2-FORK)"                      row_fork
 mutate "G2-15 the 500-file cap is not enforced"   "$PRISTINE" "$(kill_guard G2-15-MAX-FILES)"              row_maxfiles
 mutate "G2-15 the cap is 501"                     "$PRISTINE" 's|\[ "\$files" -le 500 \]|[ "$files" -le 501 ]|' row_maxfiles
-mutate "G2-15 an empty diff is not full by its own reason" "$PRISTINE" "$(kill_guard G2-15-EMPTY-DIFF)"    row_empty
+mutate "G2-15 an empty diff is not full by its own reason" "$PRISTINE" "$(kill_guard G2-15-EMPTY-DIFF)"    row_empty   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): an empty listing falls to malformed_diff, still full
+
+# budget sanitation and the remaining-budget path
+mutate "BUDGET a leading zero is read as octal" "$PRISTINE" 's|^budget=\$((10#\$budget))$|budget=$((budget + 0))|' row_budget
+mutate "BUDGET the 6-digit cap is removed" "$PRISTINE" '/^\[ "\${#budget}" -le 6 \] || budget=120$/d' row_budget
+mutate "BUDGET a zero budget (timeout 0 = unlimited) is accepted" "$PRISTINE" '/^\[ "\$budget" -ge 1 \] || budget=120$/d' row_budget
+mutate "BUDGET a non-numeric budget is accepted as is" "$PRISTINE" "s#^case \"\$budget\" in ''|\*\[!0-9\]\*) budget=120 ;; esac\$#:#" row_budget
+mutate "REM an exhausted remaining budget still runs the group (timeout 0 = unlimited)" "$PRISTINE" 's|if \[ "\$rem" -lt 1 \]; then tok=timeout|if false; then tok=timeout|' row_hang_first
+mutate "REM the enumerate call is not bounded by the remaining budget" "$PRISTINE" 's|timeout -k 5 "\$rem" env|timeout -k 500 3000 env|' row_hang_first
+# the notice fields (reason labels: EQUIVALENT-LABEL by design, the reason IS the signal)
+mutate "NOTICE a degraded enumerate reads as plain 'affected'" "$PRISTINE" 's|if \[ "\$degraded" = 1 \]; then reason=affected_degraded; else reason=affected; fi|reason=affected|' row_groups row_hang_first row_selection_shapes
+mutate "NOTICE a timed-out group is not censored" "$PRISTINE" 's|case "\$tok" in timeout) sel_censored=1; degraded=1 ;;|case "$tok" in timeout) degraded=1 ;;|' row_hang_first
+mutate "NOTICE the groups field is never filled" "$PRISTINE" 's|^  groups="\$groups_n"$|  groups=-|' row_groups row_must_pass
+# the leak sweep: each operand must reach no output
+mutate "LEAK the raw switch value reaches the step summary" "$PRISTINE" 's|"\$groups" '"$RD"' "\$SUMMARY"|"$groups" "${SWITCH:-}" '"$RD"' "$SUMMARY"|' row_leak
+mutate "LEAK the repository name reaches the step summary" "$PRISTINE" 's|"\$groups" '"$RD"' "\$SUMMARY"|"$groups" "${HEAD_REPO:-}" '"$RD"' "$SUMMARY"|' row_leak
+mutate "LEAK a sha reaches the step summary" "$PRISTINE" 's|"\$groups" '"$RD"' "\$SUMMARY"|"$groups" "$head_sha" '"$RD"' "$SUMMARY"|' row_leak
+mutate "LEAK the base sha reaches stderr" "$PRISTINE" 's|^finished=1$|printf "%s\\n" "$base_sha" >\&2\n&|' row_leak
 
 # ── Verdict ──────────────────────────────────────────────────────────────────
 TOTAL=$((passes + fails))
@@ -1023,16 +1334,22 @@ fi
 # through pass()/fail() is silenced by the same edit that silences everything else. DERIVED FROM A MEASURED GREEN RUN, not
 # guessed: a floor above the real count is a broken instrument that reds a correct tree, a floor below it is slack in
 # which an undispatched row can hide. Re-derive after adding a row:  bash scripts/ci-pr-selection.test.sh | tail -1
-# Measured green run: 1588 rows (1 instrument self-test + the control rows over the pristine and the lock-neutralized driver,
-# each `drive` adding its 12 invariants, + 47 mutant verdicts + the static rows), with 7 sourced libs derived from
-# scripts/test-all.sh. A change to that sourced set moves the total by about 29 rows per file: re-derive then.
-MIN_ROWS=1588
+# MEASURED green run (2026-10-14): 2765 rows = BASE_ROWS + ROWS_PER_SOURCED_FILE * 7 sourced files, with 84 mutant
+# verdicts counted among them. ROWS_PER_SOURCED_FILE is MEASURED, not estimated: running this suite on a copy of the repo whose
+# scripts/test-all.sh has ONE fewer `source` line moved the total by exactly 18 rows (one `drive` of the file's trigger
+# fixture with its 12 invariants, the 5 expect_full checks, and the 1 "sourced file is under scripts/lib/" row). BASE_ROWS is
+# the remainder. An unrelated `source` edit in scripts/test-all.sh therefore no longer reds the suite; removing rows from the
+# fixed part still does. Re-derive BASE_ROWS after adding or removing a row:
+#   bash scripts/ci-pr-selection.test.sh | tail -1     then   BASE_ROWS = total - ROWS_PER_SOURCED_FILE * sourced_count
+ROWS_PER_SOURCED_FILE=18
+BASE_ROWS=2639
+MIN_ROWS=$((BASE_ROWS + ROWS_PER_SOURCED_FILE * ${#SOURCED[@]}))
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-MIN_MUTANTS=47
+MIN_MUTANTS=84
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor: %d mutants executed, at least %d required.\n' "$MUT_TOTAL" "$MIN_MUTANTS" >&2
   exit 1

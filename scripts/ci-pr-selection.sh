@@ -20,9 +20,11 @@
 #   GITHUB_OUTPUT   where the outputs go                     (unset: /dev/null)
 #   GITHUB_STEP_SUMMARY  optional
 #   RUNNER_TEMP     scratch root for the diff listing        (unset: $TMPDIR, then /tmp)
-# TEST SEAMS (default to the real behaviour; the workflow sets neither):
+# PRODUCTION PARAMETER (the workflow sets it to 90):
+#   PR_SELECTION_STAGE2_TIMEOUT  total stage-2 budget in seconds        (default 120; digits only, at most 6 of them, read as
+#                                decimal so `08` is 8; anything else, and 0, falls back to the default; never `timeout 0`)
+# TEST SEAM (a pure seam: the workflow never sets it):
 #   PR_SELECTION_TEST_ALL        path of the test-all.sh to call        (default scripts/test-all.sh)
-#   PR_SELECTION_STAGE2_TIMEOUT  total stage-2 budget in seconds        (default 120)
 # CWD must be the repo checkout (actions/checkout, fetch-depth 0, of the pull_request MERGE ref).
 #
 # OUTPUTS (grammar pinned by scripts/ci-pr-selection.test.sh):
@@ -32,15 +34,33 @@
 #                                     diff is doc-only, the selector answered cleanly AND something would be skipped
 #   skip_legs  ^([a-z-]+(,[a-z-]+)*)?$  subset of {test-webplat,test-bun,test-scripts-heavy}; written ONLY when active
 # The step also prints ONE `::notice title=ci-pr-selection::SOLEUR_PR_SELECTION ...` line (counts and fixed tokens only:
-# a path, a ref name, a SHA from the diff or the raw switch value is NEVER echoed) and a short step-summary line.
+# a path, a ref name, a SHA from the diff, the repository name or the raw switch value is NEVER echoed) and a short step
+# summary. The notice carries, in this order: switch, locked, attempt, files, stage, reason, would_skip, sel_s, sel_censored,
+# budget, active, groups. `sel_s` is the stage-2 wall time and a LOWER BOUND when `sel_censored=1` (the stage-2 budget or a
+# per-call timeout was hit); the first dark runs on a cold runner are expected to be censored, so they do NOT measure cold wall
+# time. `groups` is webplat:TOK,bun:TOK,scripts-heavy:TOK (`-` when stage 2 did not finish). Reason `affected_degraded`
+# replaces `affected` when any group token is timeout|bad_rc|parse|missing_row|no_records, so a degraded enumerate never reads
+# as the benign `affected would_skip=none`. Reasons `signalled` (HUP/INT/TERM) and `lever_error` (an internal abort or an
+# unbound variable) are the two trap exits; both still exit 0 with only the defaults written.
 #
 # TWO STAGES (the cost shape, decision-challenges.md): STAGE 1 is a pure-bash positive allowlist over
-# `git diff -z --name-status --no-renames HEAD^1 HEAD` (kept in a FILE under RUNNER_TEMP, never in argv or env). Every
-# changed path must sit under knowledge-base/ or be a root-level *.md; any other status letter, any record that does not
-# parse, any path with a control character, `::` or a comma, and any path on the TRIGGER LIST below means full and no
-# selector runs, so a code PR pays no pre-pass. STAGE 2 runs only for a doc-only diff, in dark mode too:
-#   env -u CI -u SOLEUR_TEST_FORCE_ALL bash test-all.sh --print-selection --paths=<list>
-#   env -u CI -u SOLEUR_TEST_FORCE_ALL bash test-all.sh --enumerate-commands --paths=<list> <group>   (per group)
+# `git diff -z --raw --no-renames --no-abbrev HEAD^1 HEAD` (records `:oldmode newmode oldsha newsha STATUS` NUL `path` NUL).
+# The diff LISTING is kept in a FILE under RUNNER_TEMP (never in an env var or an annotation); the comma `--paths=` list the
+# selector receives is derived from it and IS argv (bounded: over 100000 bytes is full, which is also well under the kernel's
+# 128 KiB single-argument limit). The allowlist grammar, ALL of which must hold for every changed path:
+#   * status M, A or D (any other letter, a record that does not parse, or a NUL-parity/count mismatch is full);
+#   * BOTH modes in {000000, 100644, 100755} (a symlink 120000, a gitlink 160000 or any other mode is `non_doc_mode`; a mode
+#     flip 100644 -> 100755 on a doc file stays doc-class);
+#   * the path is `knowledge-base/**/*.md` or a root-level `*.md`: the file NAME must end in `.md` (knowledge-base/x.sh, .ts,
+#     .json, .c4, images, .pen, a root zz.mdx, zz.md.sh, knowledge-base-evil/zz.md or a bare file `knowledge-base` are non_doc);
+#   * every byte of the path is printable ASCII 0x20-0x7e (this also rejects ASCII control characters, U+2028 and C1
+#     controls as `odd_path`), the path has no `::` and no comma;
+#   * the path is not on the TRIGGER LIST below.
+# Nothing else runs in stage 1, so a code PR pays no pre-pass. STAGE 2 runs only for a doc-only diff, in dark mode too:
+#   env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT ... bash test-all.sh --print-selection --paths=<list>
+#   env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT ... bash test-all.sh --enumerate-commands --paths=<list> <group>
+# (the selector child also loses GITHUB_STEP_SUMMARY, GITHUB_ENV, GITHUB_PATH and GITHUB_STATE: it can never write to the
+# step's output files, so it cannot forge the final block or arm a skip from inside a SIGTERM window.)
 # A group joins the would-skip set only if its enumerate stream is non-empty, every runnable record is an
 # AFFECTED_SELECTED row with sel=0 (and not always_on) or a SUITE_COMMAND_DECLINED record whose label is a known
 # `--pr-gated` decline (ADR-262; every other decline is unreachable under CI, ADR-181, so the leg would still run),
@@ -52,7 +72,12 @@
 #   .github/workflows/ci.yml, scripts/ci-pr-selection.sh, scripts/lib/** (prefix), scripts/test-all.sh,
 #   scripts/suite-shard-legs.tsv, scripts/suite-shard-legs-heavy.tsv (the heavy manifest),
 #   scripts/test-affected-kb-consumers.baseline.txt.
-# scripts/ci-pr-selection.test.sh derives every file test-all.sh sources and asserts each matches this list.
+# HONEST NOTE: today the list is outcome-redundant with the allowlist (every trigger path is already outside
+# `knowledge-base/**/*.md` + root `*.md`, so it would be `non_doc` anyway). It is deliberate defense in depth (the operator-
+# specified list stays) that becomes LOAD-BEARING the moment the allowlist is widened (PR C): scripts/ci-pr-selection.test.sh
+# pins that with a combined behavioural mutant (a widened allowlist AND no trigger check reaches stage 2).
+# scripts/ci-pr-selection.test.sh asserts that every file scripts/test-all.sh sources is under scripts/lib/ (covered by the
+# prefix arm), so a new sourced location outside it reds the suite until this list learns it.
 #
 # Verdicts and annotations are literals only; every value that reaches an output is re-validated against its grammar
 # at the final block. No tool beyond bash, git and coreutils (timeout, mktemp, wc, tr, env, rm) is used: the job
@@ -84,27 +109,38 @@ stage=1
 reason=lever_error
 would_skip=none
 sel_s=0
+sel_censored=0
+budget=120
+groups=-
 mode=full
 finished=0
+sig=0
 work=""
 
 emit_notice() {
-  printf '::notice title=ci-pr-selection::SOLEUR_PR_SELECTION switch=%s locked=%s attempt=%s files=%s stage=%s reason=%s would_skip=%s sel_s=%s\n' \
-    "$sw" "$locked" "$attempt" "$files" "$stage" "$reason" "$would_skip" "$sel_s"
+  printf '::notice title=ci-pr-selection::SOLEUR_PR_SELECTION switch=%s locked=%s attempt=%s files=%s stage=%s reason=%s would_skip=%s sel_s=%s sel_censored=%s budget=%s active=%s groups=%s\n' \
+    "$sw" "$locked" "$attempt" "$files" "$stage" "$reason" "$would_skip" "$sel_s" "$sel_censored" "$budget" "$active" "$groups"
 }
 
 # An unexpected abort (an unbound variable, a signal) leaves only the defaults and still exits 0 (SIGKILL cannot be trapped;
-# that case is the defaults by construction).
-# shellcheck disable=SC2329  # invoked through the EXIT/HUP/INT/TERM trap below
+# that case is the defaults by construction). A signal is `signalled`, any other abort is `lever_error`; one notice either way.
+# shellcheck disable=SC2329  # invoked through the EXIT trap below
 on_exit() {
   if [ "$finished" != 1 ]; then
     finished=1
-    reason=lever_error
+    active=false
+    if [ "$sig" = 1 ]; then reason=signalled; else reason=lever_error; fi
     emit_notice
   fi
   exit 0
 }
-trap on_exit EXIT HUP INT TERM  # GUARD:ALWAYS-EXIT-0
+# shellcheck disable=SC2329  # invoked through the HUP/INT/TERM trap below
+on_signal() {
+  sig=1
+  exit 0
+}
+trap on_exit EXIT  # GUARD:ALWAYS-EXIT-0
+trap on_signal HUP INT TERM  # GUARD:ALWAYS-EXIT-0-SIGNAL
 
 # ---- the switch and the lock (pure env, no I/O) ---------------------------------------------------------------------
 [ -z "${SWITCH:-}" ] || sw=invalid
@@ -114,6 +150,13 @@ case "${RUN_ATTEMPT:-}" in
   ''|*[!0-9]*) ;;
   *) [ "${#RUN_ATTEMPT}" -le 6 ] && attempt="$RUN_ATTEMPT" ;;
 esac
+# The stage-2 budget, sanitized once: digits only, at most 6 of them, read as DECIMAL (a leading zero is not octal), and at
+# least 1 (a `timeout 0` would mean UNLIMITED, which must never happen). Anything else is the default.
+budget="${PR_SELECTION_STAGE2_TIMEOUT:-120}"
+case "$budget" in ''|*[!0-9]*) budget=120 ;; esac
+[ "${#budget}" -le 6 ] || budget=120
+budget=$((10#$budget))
+[ "$budget" -ge 1 ] || budget=120
 
 # ---- the trigger list -----------------------------------------------------------------------------------------------
 is_trigger_path() {
@@ -129,12 +172,13 @@ is_trigger_path() {
   return 1
 }
 
-# The positive allowlist: knowledge-base/** or a root-level *.md (a path containing `/` is not root-level).
+# The positive allowlist: knowledge-base/**/*.md or a root-level *.md. The file NAME must END in `.md` (with a non-empty stem
+# at the root and under knowledge-base/), and a root-level file has no `/` in it.
 is_doc_path() {
   case "$1" in
-    knowledge-base/?*) return 0 ;;
+    knowledge-base/?*.md) return 0 ;;
     */*) return 1 ;;
-    *.md) return 0 ;;
+    ?*.md) return 0 ;;
   esac
   return 1
 }
@@ -171,7 +215,7 @@ parse_selection() {  # $1 = file
     case "$line" in
       AFFECTED_SELECTED$'\t'*)
         tabs="${line//[^$'\t']/}"
-        [ "${#tabs}" -ge 3 ] || return 1
+        [ "${#tabs}" -ge 3 ] || return 1  # GUARD:G2-10-TABS
         rest="${line#*$'\t'}"
         label="${rest%%$'\t'*}"
         rest="${rest#*$'\t'}"
@@ -180,7 +224,7 @@ parse_selection() {  # $1 = file
         cls="${rest%%$'\t'*}"
         [ -n "$label" ] || return 1
         case "$sel" in 0|1) ;; *) return 1 ;; esac
-        [ -n "$cls" ] || return 1
+        [ -n "$cls" ] || return 1  # GUARD:G2-10-CLS
         sel_labels+=("$label"); sel_vals+=("$sel"); sel_classes+=("$cls")
         ;;
       AFFECTED_SUMMARY\ *)
@@ -198,7 +242,7 @@ parse_selection() {  # $1 = file
 
 # Prints a fixed token: skip | no_records | selected | always_on | plain_decline | missing_row | parse
 eval_group() {  # $1 = enumerate stream file
-  local line rest label n=0 i found any_sel any_always tabs
+  local line rest label n=0 i found any_sel any_always
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       SUITE_COMMAND_DECLINED$'\t'*)
@@ -233,8 +277,8 @@ eval_group() {  # $1 = enumerate stream file
 
 # ---- the work -------------------------------------------------------------------------------------------------------
 run() {
-  local parts p1 p2 h rl st p n nul size paths t0 budget rem rc g leg tok list diagrams
-  local test_all sel_file enum_file groups_summary
+  local parts p1 p2 h rl st p n nul size paths t0 rem rc g leg tok list diagrams
+  local test_all sel_file enum_file groups_summary groups_n degraded meta om nm
 
   reason=not_pr
   [ "${EVENT_NAME:-}" = pull_request ] || return 0  # GUARD:G2-NOT-PR
@@ -262,7 +306,7 @@ run() {
   # (4) the listing goes to a FILE: never argv, never env, never an annotation.
   reason=diff_error
   work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/pr-selection.XXXXXX" 2>/dev/null)" || return 0
-  git diff -z --name-status --no-renames --no-ext-diff --no-color HEAD^1 HEAD -- > "$work/names.z" 2> "$work/diff.err" || return 0  # GUARD:G2-1-DIFF-RC
+  git diff -z --raw --no-renames --no-abbrev --no-ext-diff --no-color HEAD^1 HEAD -- > "$work/names.z" 2> "$work/diff.err" || return 0  # GUARD:G2-1-DIFF-RC
   size="$(wc -c < "$work/names.z")" || return 0
   [[ "$size" =~ ^[0-9]+$ ]] || return 0
   reason=empty_diff
@@ -281,12 +325,16 @@ run() {
   diagrams=0
   paths=""
   n=0
-  while IFS= read -r -d '' st; do
+  while IFS= read -r -d '' meta; do
     IFS= read -r -d '' p || { reason=malformed_diff; return 0; }
     n=$((n + 1))
     [ -n "$p" ] || { reason=malformed_diff; return 0; }
+    [[ "$meta" =~ ^:([0-7]{6})\ ([0-7]{6})\ ([0-9a-f]{40,64})\ ([0-9a-f]{40,64})\ ([A-Z][0-9]*)$ ]] || { reason=malformed_diff; return 0; }
+    om="${BASH_REMATCH[1]}"; nm="${BASH_REMATCH[2]}"; st="${BASH_REMATCH[5]}"
     case "$st" in M|A|D) ;; *) reason=non_doc_status; return 0 ;; esac  # GUARD:G2-STATUS
-    if [[ "$p" == *[[:cntrl:]]* ]]; then reason=odd_path; return 0; fi  # GUARD:G2-14-CNTRL
+    case "$om" in 000000|100644|100755) ;; *) reason=non_doc_mode; return 0 ;; esac  # GUARD:G2-MODE-OLD
+    case "$nm" in 000000|100644|100755) ;; *) reason=non_doc_mode; return 0 ;; esac  # GUARD:G2-MODE-NEW
+    if [[ "$p" =~ [^\ -~] ]]; then reason=odd_path; return 0; fi  # GUARD:G2-14-CNTRL
     if [[ "$p" == *'::'* ]]; then reason=odd_path; return 0; fi  # GUARD:G2-14-COLONS
     if [[ "$p" == *,* ]]; then reason=odd_path; return 0; fi  # GUARD:G2-14-COMMA
     if is_trigger_path "$p"; then reason=trigger; return 0; fi  # GUARD:G2-2-TRIGGER
@@ -296,38 +344,37 @@ run() {
   done < "$work/names.z"
   [ "$n" -eq "$files" ] || { reason=malformed_diff; return 0; }
   reason=paths_too_long
-  [ "${#paths}" -le 100000 ] || return 0
+  [ "${#paths}" -le 100000 ] || return 0  # GUARD:G2-15-PATHS-CAP
 
   # (6) STAGE 2: a doc-only diff, in dark mode too.
   stage=2
   reason=selector_error
   test_all="${PR_SELECTION_TEST_ALL:-scripts/test-all.sh}"
-  budget="${PR_SELECTION_STAGE2_TIMEOUT:-120}"
-  case "$budget" in ''|*[!0-9]*) budget=120 ;; esac
-  [ "$budget" -ge 1 ] || budget=120
   t0=$SECONDS
   sel_file="$work/selection.out"
 
-  timeout -k 5 "$budget" env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$test_all" --print-selection "--paths=$paths" < /dev/null > "$sel_file" 2> "$work/selection.err"  # GUARD:G2-9-CI-UNSET
+  timeout -k 5 "$budget" env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_STATE bash "$test_all" --print-selection "--paths=$paths" < /dev/null > "$sel_file" 2> "$work/selection.err"  # GUARD:G2-9-CI-UNSET
   rc=$?
   sel_s=$((SECONDS - t0))
-  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then reason=selector_timeout; return 0; fi
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then sel_censored=1; reason=selector_timeout; return 0; fi
   [ "$rc" -eq 0 ] || return 0
   parse_selection "$sel_file" || { reason=selector_unparsed; return 0; }
   if [ "$sel_fallback_seen" = 1 ]; then reason=selector_fallback; return 0; fi
   if [ "$sel_summary_bad" = 1 ]; then reason=selector_fallback; return 0; fi
   if [ "$sel_summary_ok" -ne 1 ]; then reason=selector_unparsed; return 0; fi  # GUARD:G2-10-SUMMARY-COUNT
-  [ "${#sel_labels[@]}" -ge 1 ] || { reason=selector_unparsed; return 0; }
+  [ "${#sel_labels[@]}" -ge 1 ] || { reason=selector_unparsed; return 0; }  # GUARD:G2-10-ZERO-ROWS
 
   list=""
   groups_summary=""
+  groups_n=""
+  degraded=0
   for g in webplat bun scripts-heavy; do
     leg="test-$g"
     enum_file="$work/enum-$g.out"
     rem=$((budget - (SECONDS - t0)))
-    if [ "$rem" -lt 1 ]; then tok=timeout
+    if [ "$rem" -lt 1 ]; then tok=timeout  # GUARD:G2-9-REM
     else
-      timeout -k 5 "$rem" env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$test_all" --enumerate-commands "--paths=$paths" "$g" < /dev/null > "$enum_file" 2> "$work/enum-$g.err"  # GUARD:G2-9-CI-UNSET-ENUM
+      timeout -k 5 "$rem" env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_STATE bash "$test_all" --enumerate-commands "--paths=$paths" "$g" < /dev/null > "$enum_file" 2> "$work/enum-$g.err"  # GUARD:G2-9-CI-UNSET-ENUM
       rc=$?
       if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then tok=timeout
       elif [ "$rc" -ne 0 ]; then tok=bad_rc
@@ -335,12 +382,15 @@ run() {
       fi
     fi
     if [ "$g" = webplat ] && [ "$diagrams" = 1 ] && [ "$tok" = skip ]; then tok=diagrams; fi  # GUARD:G2-15-DIAGRAMS
+    case "$tok" in timeout) sel_censored=1; degraded=1 ;; bad_rc|parse|missing_row|no_records) degraded=1 ;; esac
     groups_summary="${groups_summary:+$groups_summary }$leg=$tok"
+    groups_n="${groups_n:+$groups_n,}$g:$tok"
     if [ "$tok" = skip ]; then list="${list:+$list,}$leg"; fi
   done
   sel_s=$((SECONDS - t0))
   mode=affected
-  reason=affected
+  groups="$groups_n"
+  if [ "$degraded" = 1 ]; then reason=affected_degraded; else reason=affected; fi
   [ -z "$list" ] || would_skip="$list"
   printf 'pr-selection: groups %s\n' "$groups_summary" >> "$SUMMARY"
   return 0
@@ -368,6 +418,7 @@ printf 'head_sha=%s\nbase_sha=%s\nactive=%s\nskip_legs=%s\n' "$head_sha" "$base_
 # ---- (9) the annotation and the summary -----------------------------------------------------------------------------
 finished=1
 emit_notice
-printf 'pr-selection: switch=%s locked=%s reason=%s would_skip=%s active=%s\n' "$sw" "$locked" "$reason" "$would_skip" "$active" >> "$SUMMARY"
+printf 'pr-selection: switch=%s locked=%s reason=%s would_skip=%s active=%s sel_s=%s sel_censored=%s budget=%s groups=%s\n' \
+  "$sw" "$locked" "$reason" "$would_skip" "$active" "$sel_s" "$sel_censored" "$budget" "$groups" >> "$SUMMARY"
 [ -z "$work" ] || rm -rf "$work"
 exit 0

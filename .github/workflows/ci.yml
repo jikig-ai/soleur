@@ -339,7 +339,9 @@ jobs:
   # DARK AND LOCKED: with the repository variable CI_PR_AFFECTED unset the job only annotates `would_skip` (SOLEUR_PR_SELECTION) and
   # every gated job runs. Even with the variable `on`, a literal activation lock inside the driver keeps `active=false` until PR C
   # removes it in its last commit, so this PR alone is not activatable. Activation is a separate, authorized step (ADR-276 S4).
-  # It runs a stage-2 selector pass on doc-only diffs even while dark, so the first real runs measure its wall time (`sel_s`).
+  # It runs a stage-2 selector pass on doc-only diffs even while dark. On a cold runner that pass can hit its budget (the canary run
+  # logged `reason=selector_timeout sel_s=90`), so `sel_s` is a LOWER BOUND whenever `sel_censored=1`; the dark cost is a doc-only PR's
+  # runner minutes, bounded by this job's timeout (ADR-276 S4 amendment).
   #
   # `timeout-minutes` is written alone on its line and there is NO `needs:` on purpose: the release workflow's CI budget awk sums
   # the longest declared `needs:` path (73 today, cap 75), so a 3-minute root beside push-dedupe does not lengthen it, while a serial
@@ -2074,6 +2076,11 @@ jobs:
                 ;;
               skipped)
                 echo "$shard: SKIPPED — the leg did not run" >&2
+                # A re-run (attempt > 1) reuses attempt 1's cached pr-selection outputs, and a non-tolerated skip then reds the check
+                # with no other hint. Name the remedy only when a skip decision exists to be cached (SKIP_LEGS non-empty).
+                if [[ "$ATTEMPT" != "1" && -n "$SKIP_LEGS" ]]; then
+                  echo "$shard: SKIPPED — the pr-selection skip decision is cached from attempt 1; use \"Re-run all jobs\" (or push) to get a full run" >&2
+                fi
                 ;;
               cancelled)
                 cancelled_siblings=0
@@ -2132,7 +2139,9 @@ jobs:
             exit 1
           fi
           if [[ "$tolerated" != "," ]]; then
-            echo "All legs green or PR-AFFECTED-SKIP tolerated (${tolerated#,})."
+            tol_list="${tolerated#,}"
+            tol_list="${tol_list%,}"
+            echo "All legs green or PR-AFFECTED-SKIP tolerated (${tol_list}); skip_legs=${SKIP_LEGS}"
           else
             echo "All six legs green (four shards + web-platform-build + encryption-posture)."
           fi

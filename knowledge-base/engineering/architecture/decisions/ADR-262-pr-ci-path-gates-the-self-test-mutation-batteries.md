@@ -5,7 +5,7 @@ date: 2026-09-30
 amends: ADR-181, ADR-242
 related_adrs: [ADR-181, ADR-183, ADR-188, ADR-217, ADR-242]
 amended_by:
-  - "ADR-276 S4 (2026-10-14, #9729) — the premise R1 'No merge queue is enforced' and the PR-arm admission rule are reversed for the PR arm; see ## Amendment — 2026-10-14"
+  - "ADR-276 S4 (2026-10-14, #9729) — the premise R1 'No merge queue is enforced' and the PR-arm admission rule are reversed for the PR arm once S4 is activated (dark and locked until then); see ## Amendment — 2026-10-14"
 issue: 9323
 ---
 

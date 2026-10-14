@@ -359,7 +359,6 @@
 8	scripts/ci-draft-push-census.sh
 5	scripts/ci-draft-push-census.test.sh
 8	scripts/ci-pr-selection.sh
-7	scripts/ci-pr-selection.test.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh

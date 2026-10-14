@@ -59,8 +59,16 @@ fails=0
 # green run at exit 0. The exit status reads a ledger that can only be silenced
 # by DELETING evidence, not by moving a number.
 FAILURES=()
-pass() { passes=$((passes + 1)); }
-fail() { fails=$((fails + 1)); FAILURES+=("$1"); printf 'FAIL: %s\n' "$1" >&2; }
+# PROBE MODE. While a MUTANT is being driven (PROBE=1) the helper verdicts are about the mutant, not about the tree: a probe
+# verdict counts into PROBE_PASSES / PROBE_FAILS and touches NEITHER `passes`/`fails` NOR the FAILURES ledger, so the row floor
+# counts only rows that ran against the real body (an earlier revision let ~150 probe passes leak into `passes`, inflating the
+# floor). A mutant is KILLED when PROBE_FAILS > 0. PROBE is asserted back at 0 before the verdict.
+PROBE=0; PROBE_PASSES=0; PROBE_FAILS=0
+pass() { if [ "$PROBE" = 1 ]; then PROBE_PASSES=$((PROBE_PASSES + 1)); else passes=$((passes + 1)); fi; }
+fail() {
+  if [ "$PROBE" = 1 ]; then PROBE_FAILS=$((PROBE_FAILS + 1)); return 0; fi
+  fails=$((fails + 1)); FAILURES+=("$1"); printf 'FAIL: %s\n' "$1" >&2
+}
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
@@ -335,13 +343,12 @@ mutate() {  # $1=label $2=sed-expr $3..: probe args (results, event, needle, rc)
     fail "MUTATION DID NOT LAND: $label — sed expression matched nothing, so this row measured the BASELINE"
     return
   fi
-  # Re-run the probe against the mutant; it must now FAIL.
-  local _f=$fails
+  # Re-run the probe against the mutant (PROBE mode: nothing reaches the counters or the ledger); it must now FAIL.
+  PROBE=1; PROBE_FAILS=0
   expect_line "  (mutant probe) $label" "$m" "$@" >/dev/null 2>&1
-  if [ "$fails" -gt "$_f" ]; then
-    # The probe failed as required. Retract its failure — the mutant being
-    # caught is a PASS for the battery, not a failure of the suite.
-    fails=$((fails - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'
+  PROBE=0
+  if [ "$PROBE_FAILS" -gt 0 ]; then
+    # The probe failed as required: the mutant being caught is a PASS for the battery, not a failure of the suite.
     pass; MUT_KILLED=$((MUT_KILLED + 1))
   else
     fail "MUTANT SURVIVED: $label — the guard did not detect this edit"
@@ -465,7 +472,7 @@ else:
 open(dst, "w").write(s)
 PYM
 mutate_arm() {  # $1=label $2=op ; probe: D1/D2/D3/D5/D6 over the mutant
-  local label="$1" op="$2" m="$SANDBOX/mut.arm.$RANDOM" _f
+  local label="$1" op="$2" m="$SANDBOX/mut.arm.$RANDOM"
   MUT_TOTAL=$((MUT_TOTAL + 1))
   if ! python3 "$SANDBOX/armmut.py" "$SANDBOX/body.pristine" "$m" "$op" 2>"$SANDBOX/armmut.err"; then
     fail "MUTATION DID NOT LAND: $label ($(head -c 120 "$SANDBOX/armmut.err"))"; return
@@ -473,14 +480,14 @@ mutate_arm() {  # $1=label $2=op ; probe: D1/D2/D3/D5/D6 over the mutant
   if cmp -s "$m" "$SANDBOX/body.pristine"; then
     fail "MUTATION DID NOT LAND: $label — the mutant is byte-identical, so this row measured the BASELINE"; return
   fi
-  _f=$fails
+  PROBE=1; PROBE_FAILS=0
   draft_must "(mutant probe) $label D1" "$m" pull_request true 1 1 skipped success skipped skipped >/dev/null 2>&1
   draft_must "(mutant probe) $label D2" "$m" pull_request true 1 1 >/dev/null 2>&1
   draft_must "(mutant probe) $label D3" "$m" merge_group true 1 0 success success skipped >/dev/null 2>&1
   draft_must "(mutant probe) $label D5" "$m" pull_request false 0 0 >/dev/null 2>&1
-  if [ "$fails" -gt "$_f" ]; then
-    # retract every probe failure: the mutant being caught is a PASS for the battery
-    while [ "$fails" -gt "$_f" ]; do fails=$((fails - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'; done
+  PROBE=0
+  if [ "$PROBE_FAILS" -gt 0 ]; then
+    # the mutant being caught is a PASS for the battery
     pass; MUT_KILLED=$((MUT_KILLED + 1))
   else
     fail "MUTANT SURVIVED: $label — the draft arm's rows did not detect this edit"
@@ -507,7 +514,7 @@ if [ "$_armpos" = ok ]; then pass; else fail "D8 the draft arm must sit after th
 # ── Guard 1 (ADR-276 S4, #9729 PR B): the PR-AFFECTED-SKIP tolerance ─────────────────────────────────────────────────────────
 # PROPERTY: a `skipped` leg turns the aggregator green ONLY on a pull_request run with ACTIVE exactly `true`, the head bound, attempt 1,
 # a well-formed SKIP_LEGS over the three gateable legs, and the leg named in it by a delimited match. Every other skip reds it, and
-# test-scripts / web-platform-build / encryption-posture can never be tolerated. Rows G1-0..G1-15 execute the extracted body.
+# test-scripts / web-platform-build / encryption-posture can never be tolerated. Rows G1-0..G1-18 execute the extracted body (G1-16 the exact final line, G1-17 the re-run remedy, G1-18 foreign-first lists).
 TOL_MSG="PR-AFFECTED-SKIP"
 ALL3="test-webplat,test-bun,test-scripts-heavy"
 tol() {  # $1=label $2=body $3=event $4=skip_legs $5=active $6=head_ok $7=attempt $8=webplat $9=bun ${10}=scripts ${11}=heavy ${12}=build ${13}=posture ${14}=want_rc ${15}=needle(or "") ${16}=forbid(or "")
@@ -578,6 +585,37 @@ if [ "$RC" -eq 1 ] && grep -qF -- "$DRAFT_MSG" "$OUT"; then pass; else
   fail "G1-15 a tolerated skip on a light draft must still conclude RED with '$DRAFT_MSG' (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
 fi
 
+# G1-16 the final success line with tolerated skips is EXACT: the tolerated legs joined by a comma (no leading or trailing comma, in
+# entries order), then the raw skip_legs. `tol_exact` reads a whole line (grep -x), so a stray trailing comma or a dropped suffix is red.
+REM_TXT='the pr-selection skip decision is cached from attempt 1; use "Re-run all jobs" (or push) to get a full run'
+tol_exact() {  # $1=label $2=body $3=skip_legs $4=webplat $5=bun $6=heavy $7=exact expected line ; pull_request, active, head bound, attempt 1, rc 0
+  run_body "$2" "$4" "$5" success pull_request success "$6" success "" "$3" true true 1
+  if [ "$RC" -eq 0 ] && grep -qxF -- "$7" "$OUT"; then pass; return 0; fi
+  fail "$1 — skip_legs='$3' legs=($4,$5,$6): want rc=0 and the exact line '$7'; got rc=$RC, output: $(tr '\n' '|' <"$OUT" | head -c 300)"
+  return 1
+}
+SIX_LINE="All six legs green (four shards + web-platform-build + encryption-posture)."
+tol_exact "G1-16 one tolerated skip" "$BODY" test-bun $OK $S $OK "All legs green or $TOL_MSG tolerated (test-bun); skip_legs=test-bun"
+tol_exact "G1-16b all three tolerated" "$BODY" "$ALL3" $S $S $S "All legs green or $TOL_MSG tolerated (test-webplat,test-bun,test-scripts-heavy); skip_legs=$ALL3"
+tol_exact "G1-16c two tolerated, list in another order (legs print in entries order, skip_legs verbatim)" "$BODY" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or $TOL_MSG tolerated (test-webplat,test-scripts-heavy); skip_legs=test-scripts-heavy,test-webplat"
+tol_exact "G1-16d a leg listed but ran: the all-six sentence is byte-identical" "$BODY" test-bun $OK $OK $OK "$SIX_LINE"
+# G1-17 the re-run remedy: on attempt > 1 a non-tolerated skip, with a skip decision to be cached (SKIP_LEGS non-empty), names the remedy
+for _at in 2 3 ""; do
+  tol "G1-17 listed skip on ATTEMPT='$_at' names the re-run remedy" "$BODY" pull_request test-bun true true "$_at" $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED — $REM_TXT" "$TOL_MSG"
+done
+tol "G1-17b an unlisted skip on attempt 2 names the remedy too" "$BODY" pull_request test-bun true true 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED — $REM_TXT" ""
+tol "G1-17c the generic SKIPPED line is kept beside the remedy" "$BODY" pull_request test-bun true true 2 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED — the leg did not run" ""
+tol "G1-17d attempt 1, listed skip made non-tolerated by ACTIVE=false: no remedy" "$BODY" pull_request test-bun false true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "cached from attempt 1"
+tol "G1-17e attempt 1, unlisted skip: no remedy" "$BODY" pull_request test-bun true true 1 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" "cached from attempt 1"
+tol "G1-17f attempt 2, EMPTY skip_legs: no skip decision to cache, no remedy" "$BODY" pull_request "" "" "" 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" "cached from attempt 1"
+tol "G1-17g attempt 2, skip_legs set, leg FAILED not skipped: no remedy" "$BODY" pull_request test-bun true true 2 $OK failure $OK $OK $OK $OK 1 "test-bun: FAILED" "cached from attempt 1"
+# G1-18 a list with a foreign or empty member FIRST is invalid as a whole: the valid member after it is not tolerated (the `^` anchor)
+for _l in "test-scripts,test-bun" "encryption-posture,test-bun" ",test-bun"; do
+  tol "G1-18 list '$_l' with test-bun skipped: nothing tolerated" "$BODY" pull_request "$_l" true true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
+done
+tol "G1-18b foreign-first list, the foreign leg itself skipped" "$BODY" pull_request "test-scripts,test-bun" true true 1 $OK $OK $S $OK $OK $OK 1 "test-scripts: SKIPPED" "test-scripts: $TOL_MSG"
+tol "G1-18c foreign-first list (encryption-posture), the foreign leg itself skipped" "$BODY" pull_request "encryption-posture,test-bun" true true 1 $OK $OK $OK $OK $OK $S 1 "encryption-posture: SKIPPED" "encryption-posture: $TOL_MSG"
+
 # G1-H1 (Guard 1 harness): mutate the body under test and require RED. Each named operation edits ONE condition of the tolerance; the
 # row set above must catch it. A mutant that survives is labelled fixture-inadequate or equivalent.
 cat > "$SANDBOX/tolmut.py" <<'PYM'
@@ -621,18 +659,38 @@ elif op == "tolerate-anything-skipped":
     sub('if [[ "$tolerated" == *",$shard,"* ]]; then', 'if [[ "$tolerated" == *",$shard,"* || "$result" == "skipped" ]]; then')
 elif op == "tolerate-failure":
     sub('if [[ "$tolerated" == *",$shard,"* ]]; then', 'if [[ "$tolerated" == *",$shard,"* || "$result" == "failure" ]]; then')
+elif op == "skip-re-no-caret":
+    sub("skip_re='^(", "skip_re='(")
+elif op == "skip-re-no-dollar":
+    sub(")*$'", ")*'")
+elif op == "remedy-removed":
+    sub('if [[ "$ATTEMPT" != "1" && -n "$SKIP_LEGS" ]]; then', 'if false; then')
+elif op == "remedy-at-attempt-1":
+    sub('"$ATTEMPT" != "1" && -n "$SKIP_LEGS"', '-n "$SKIP_LEGS"')
+elif op == "remedy-without-skip-legs":
+    sub('"$ATTEMPT" != "1" && -n "$SKIP_LEGS"', '"$ATTEMPT" != "1"')
+elif op == "remedy-inverted":
+    sub('"$ATTEMPT" != "1" && -n "$SKIP_LEGS"', '"$ATTEMPT" == "1" && -n "$SKIP_LEGS"')
+elif op == "final-trailing-comma":
+    sub('tol_list="${tol_list%,}"', 'tol_list="${tol_list}"')
+elif op == "final-leading-comma":
+    sub('tol_list="${tolerated#,}"', 'tol_list="${tolerated}"')
+elif op == "final-no-skip-legs":
+    sub('; skip_legs=${SKIP_LEGS}"', '"')
+elif op == "six-green-reworded":
+    sub('All six legs green (four shards', 'All six legs green (the four shards')
 else:
     sys.stderr.write("unknown op\n"); sys.exit(2)
 open(dst, "w").write(s)
 PYM
 mutate_tol() {  # $1=label $2=op ; the Guard 1 rows over the mutant: at least one must go RED
-  local label="$1" op="$2" m="$SANDBOX/mut.tol.$RANDOM" _f
+  local label="$1" op="$2" m="$SANDBOX/mut.tol.$RANDOM"
   MUT_TOTAL=$((MUT_TOTAL + 1))
   if ! python3 "$SANDBOX/tolmut.py" "$SANDBOX/body.pristine" "$m" "$op" 2>"$SANDBOX/tolmut.err"; then
     fail "MUTATION DID NOT LAND: $label ($(head -c 120 "$SANDBOX/tolmut.err"))"; return
   fi
   if cmp -s "$m" "$SANDBOX/body.pristine"; then fail "MUTATION DID NOT LAND: $label — byte-identical, so this row measured the BASELINE"; return; fi
-  _f=$fails
+  PROBE=1; PROBE_FAILS=0
   { tol "p0" "$m" pull_request test-bun true true 1 $OK $S $OK $OK $OK $OK 0 "test-bun: $TOL_MSG" "test-bun: SKIPPED"
     tol "p1" "$m" pull_request test-bun true true 1 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" ""
     tol "p2" "$m" merge_group test-bun true true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
@@ -648,9 +706,19 @@ mutate_tol() {  # $1=label $2=op ; the Guard 1 rows over the mutant: at least on
     tol "p10" "$m" pull_request "test-webplat,test-bun" true true 1 $S $S cancelled $OK $OK $OK 1 "STOPPED ALONE" "cause not determined"
     tol "p11" "$m" pull_request test-bun true true 1 failure $S $OK $OK $OK $OK 1 "test-webplat: FAILED" ""
     tol "p12" "$m" pull_request test-bun True true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
+    tol "p13" "$m" pull_request "test-scripts,test-bun" true true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
+    tol "p14" "$m" pull_request ",test-bun" true true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
+    tol "p15" "$m" pull_request "encryption-posture,test-bun" true true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
+    tol "p16" "$m" pull_request "test-bun," true true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
+    tol "p17" "$m" pull_request test-bun true true 2 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED — $REM_TXT" "$TOL_MSG"
+    tol "p18" "$m" pull_request test-bun false true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "cached from attempt 1"
+    tol "p19" "$m" pull_request "" "" "" 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" "cached from attempt 1"
+    tol_exact "p20" "$m" test-bun $OK $S $OK "All legs green or $TOL_MSG tolerated (test-bun); skip_legs=test-bun"
+    tol_exact "p21" "$m" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or $TOL_MSG tolerated (test-webplat,test-scripts-heavy); skip_legs=test-scripts-heavy,test-webplat"
+    tol_exact "p22" "$m" test-bun $OK $OK $OK "$SIX_LINE"
   } >/dev/null 2>&1
-  if [ "$fails" -gt "$_f" ]; then
-    while [ "$fails" -gt "$_f" ]; do fails=$((fails - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'; done
+  PROBE=0
+  if [ "$PROBE_FAILS" -gt 0 ]; then
     pass; MUT_KILLED=$((MUT_KILLED + 1))
   else
     fail "MUTANT SURVIVED: $label — no Guard 1 row detected this edit"
@@ -669,6 +737,19 @@ mutate_tol "G1-H1i a tolerated skip still sets fail=1" tolerate-still-fails
 mutate_tol "G1-H1j tolerated skips stop counting as concluded siblings" siblings-not-concluded
 mutate_tol "G1-H1k every skipped leg is tolerated" tolerate-anything-skipped
 mutate_tol "G1-H1l a failed leg is tolerated" tolerate-failure
+# Anchors of skip_re. The caret mutant is what the foreign-FIRST rows (G1-18) exist to kill: `^` dropped, `test-scripts,test-bun` matches
+# from its tail and the valid member is tolerated. The dollar mutant is killed by the trailing-comma row (G1-4e) and p16.
+mutate_tol "G1-H1m drop the ^ anchor of skip_re" skip-re-no-caret
+mutate_tol "G1-H1n drop the \$ anchor of skip_re" skip-re-no-dollar
+# The re-run remedy (G1-17) and the exact final line (G1-16).
+mutate_tol "G1-H1o the re-run remedy is removed" remedy-removed
+mutate_tol "G1-H1p the re-run remedy also fires on attempt 1" remedy-at-attempt-1
+mutate_tol "G1-H1q the re-run remedy fires with no skip decision (empty skip_legs)" remedy-without-skip-legs
+mutate_tol "G1-H1r the re-run remedy is inverted (fires on attempt 1 only)" remedy-inverted
+mutate_tol "G1-H1s the final line keeps its trailing comma" final-trailing-comma
+mutate_tol "G1-H1t the final line keeps its leading comma" final-leading-comma
+mutate_tol "G1-H1u the final line drops the skip_legs suffix" final-no-skip-legs
+mutate_tol "G1-H1v the all-six sentence is reworded (byte identity)" six-green-reworded
 
 # ── W1-W4: the STEP's wiring, which no row asserted ─────────────────────────
 # Every row above executes the extracted `run:` body against env vars the HARNESS
@@ -883,40 +964,35 @@ TOTAL=$((passes + fails))
 # ASSERTION FLOOR, reported with printf + exit rather than through the helpers
 # it backstops (ADR-193). A floor dispatched through pass()/fail() is silenced
 # by the same edit that silences everything else.
-# DERIVED FROM THE ROWS BELOW, NOT GUESSED. A floor set above the real count is
-# a broken instrument that reds a correct tree; a floor set below it is slack an
-# undispatched row can hide in. Itemised so the next author can re-derive it
-# after adding a row:
-#   1 instrument self-test + 1 control + 7 classification (R1,R1b,R2,R3,R3b,R4,R5)
-# + 3 failure-arm honesty (R1c no guessed mechanism, R1d names the ambiguity,
-#   R1e matrix rollup is not one log)
-# + 3 heavy-leg honesty (R1h names the leg, R1i skipped is not success,
-#   R1j matrix rollup is not one log)
-# + 2 event-gate (24b absent-SUPERSEDED, 24b says-something)
-# + 1 second-member (25) + 3 swallow (24, one per non-success result value)
-# + 1 must-PASS (Hb) + 4 mutants + 1 harness (Ha)
-# + 2 wiring (W1 env->needs mapping, W2 shard cardinality)
-# + 3 event/value cardinality (E1 merge_group, E1 workflow_dispatch,
-#   E3 out-of-enum result) = 32
-# + 2 fourth leg (R1f red, R1g skipped), #8136 — added then without raising
-#   this floor
-# + 2 sixth leg (R1k red, R1l skipped) + 1 armed-leg shape (W3)
-# + 1 aggregator can go red (W4), #6907 = 38
-# + 1 non-leg need is push-dedupe only (W5), #9512 = 39
-# + the draft arm (ADR-276 S3, #9728): D1, D1b, D2, 3 x (D3, D4) per event, 9 D5 values + D5b, D6, D6b, D8 = 23, W6 (the arm's
-#   env wiring) = 24, and 5 arm mutants (D7, D7b-D7e) = 29. The tree ran 51 rows before S3 (80 minus these 29), so the
-#   tree now runs 80 and the floor below is the measured total (the earlier 39 left 12 rows of slack an undispatched row could hide in)
-# + ADR-276 S4 (#9729, PR B): the Guard 1 executed triples G1-0..G1-15 (every row of the plan's Guard 1 matrix, looped over its value
-#   sets), 12 tolerance mutants (G1-H1a..l, each counted as one row), and W7 (the four inputs' wiring): the tree runs 298 rows on the
-#   closing run, so the floor is that measured total. Re-derive it from a green run after adding a row; never raise it above the total.
-MIN_ROWS=298
+if [ "$PROBE" -ne 0 ]; then
+  printf 'FAIL: PROBE mode leaked: PROBE=%s at the verdict, so every verdict after the leak was counted nowhere.\n' "$PROBE" >&2
+  exit 1
+fi
+# DERIVED FROM A GREEN RUN, NOT GUESSED, and with ZERO SLACK: a floor above the real count is a broken instrument that reds a correct
+# tree; a floor below it is slack an undispatched row can hide in. Mutant probes run in PROBE mode (pass()/fail() above), so the total
+# below counts ONLY rows that ran against the real body plus one row per mutant verdict; an earlier revision let ~150 probe passes
+# leak in and the floor it pinned (298) was inflated by them. Itemised so the next author can re-derive it after adding a row:
+#    1 instrument self-test + 1 control
+# + 17 classification: R1, R1b, R1c, R1d, R1e, R1f, R1g, R1h, R1i, R1j, R1k, R1l, R2, R3, R3b, R4, R5
+# +  2 event gate (24b absent-SUPERSEDED, 24b says-something) + 1 second member (25) + 3 swallow (24, one per non-success value)
+# +  1 must-PASS (Hb)
+# +  5 mutation battery (22, 23, 24, 25 as mutants; Ha, the swallowing-mutant harness row)
+# +  3 event/value cardinality (E1 merge_group, E1 workflow_dispatch, E3 out-of-enum)                                  = 34
+# + 27 the draft arm (ADR-276 S3, #9728): D1, D1b, D2 (3); D3 and D4 over 3 events (6); D5 over 9 values plus D5b (10); D6, D6b (2);
+#      the 5 arm mutants D7, D7b-D7e (5); D8 structure (1)                                                            = 61
+# + 70 Guard 1 executed rows (ADR-276 S4, #9729 PR B): 52 from the plan's G1-0..G1-15 matrix (G1-0 3, G1-1/5 2, G1-2 3, G1-3 9, G1-7b 7,
+#      G1-9 6, G1-4 family 8, G1-7/7c 2, G1-12 2, G1-13 2, G1-14 1, G1-8 6, G1-15 1) + 18 added by the review: G1-16 exact final line (4),
+#      G1-17 re-run remedy (9), G1-18 foreign-first lists (5)
+# + 22 tolerance mutants G1-H1a..v (one row per mutant verdict)                                                          = 153
+# +  7 wiring: W1, W2, W5, W6, W7, W3, W4                                                                                = 160
+MIN_ROWS=160
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-# 9 before S4 + 12 tolerance mutants (G1-H1a..l) = 21, the measured count.
-MIN_MUTANTS=21
+# 4 mutate() + 5 mutate_arm() + 22 mutate_tol() = 31, the measured count.
+MIN_MUTANTS=31
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor — %d mutants executed, at least %d required.\n' \
     "$MUT_TOTAL" "$MIN_MUTANTS" >&2

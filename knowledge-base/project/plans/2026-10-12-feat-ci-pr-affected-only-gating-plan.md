@@ -74,10 +74,19 @@ Not hypotheses: `scripts/ci-e2e-classify.sh` is present on `origin/main`; `fetch
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a regression that a reduced PR run waved through reaches `main` and then production (a broken page, an auth or billing path) because the affected selection skipped the suite that would have caught it; or every PR wedges because a required context never reports.
-**If this leaks, the user's [workflow] is exposed via:** an `--admin` merge that skips the merge queue and lands an affected-only-green PR; the push-to-main run still runs the full battery and the deploy arm waits on it, so the residual is a red `main` (caught by the ADR-270 post-merge alert) rather than a silently bad deploy.
+**If this leaks, the user's [workflow] is exposed via:** a reduced PR run read as a full one by a merge authority (`admin-merge-ready.sh`, `ci-head-verdict.sh`, `battery-owed.sh`, `monitor-pr-checks.sh`, ship Phase 7, `drain-prs`). The deploy arm cannot be reached by a PR run (`web-platform-release.yml` re-checks `WR_EVENT == push`), and `merge_group` runs the full battery on the candidate tree, so the residual is a red `main` caught by the ADR-270 post-merge alert, not a silently bad deploy. Whether `gh pr merge --admin` skips the merge queue is NOT asserted here; PR C verifies it by API before any text relies on it.
 **Brand-survival threshold:** single-user incident.
 
-`requires_cpo_signoff: true`. CPO sign-off is owed before `soleur:work` starts: the brainstorm spawned the CTO only (CI-internal lever, no product surface), so the sign-off has not been collected. `soleur:engineering:review:user-impact-reviewer` runs at review time.
+`requires_cpo_signoff: true`. CPO sign-off for PR B was collected at plan review (2026-10-14): APPROVED-WITH-CONDITIONS, conditions folded into 'PR B contract after plan review' and `knowledge-base/project/specs/feat-ci-pr-selection/decision-challenges.md`. `soleur:engineering:review:user-impact-reviewer` ran at review (verdict: no P1; gaps recorded below).
+
+| Failure mode (artifact -> vector) | Mitigation in PR B, or scope-out |
+|---|---|
+| A skipped leg lands a regression on `main` (`test-webplat`, `test-bun`, `test-scripts-heavy` results -> a skip emitted or tolerated) | Dark AND locked: a literal lock in the driver forces `active=false`, the switch must be exactly `on`, gated `if:` terms and the aggregator need `active == true`; executed Guard 1/2 rows with mutants; `merge_group` is the full-battery authority. |
+| A required context never reports or reports green wrongly (`test`, `e2e`) | `pr-selection` is not a required context and is not an aggregator leg; gated jobs keep `!cancelled()`; empty outputs mean run everything; the declared CI path stays 73 of 75 minutes (executed pin). |
+| A reduced run read as full by a merge authority | Impossible in PR B (nothing can be reduced). PR C: Guard 3 reduced-run read, audit probe, paging route; the lock-removal commit carries an executed coupling pin. |
+| A re-run turns a failed attempt green | The driver forces full on `run_attempt > 1`; the aggregator tolerates a skip on attempt 1 only and names the remedy. |
+| A PR author forges a skip (edits `ci.yml`, the driver, the lock) | Honest limit recorded in ADR-276: a `pull_request` run executes the PR's own files; the widened trigger list and positive allowlist stop accidental widening; `merge_group` and review are the authority. |
+| Dark-state cost to every PR author | Disclosed with measured figures in the ADR-276 amendment; net negative while dark. |
 
 ## Architecture Decision (ADR/C4)
 
@@ -184,29 +193,29 @@ Open `code-review` issues naming planned files: #8659 and #7942 (`scripts/test-a
 
 ```yaml
 liveness_signal:
-  what: scripts/ci-demand-census.sh PR CI job-minutes per run by mode (full|affected) and the count of SOLEUR_FULL_BATTERY_ESCAPE markers
-  cadence: per post-merge-monitor run and on demand
-  alert_target: Better Stack marker SOLEUR_FULL_BATTERY_ESCAPE (post-merge-monitor.yml step output)
-  configured_in: .github/workflows/post-merge-monitor.yml, scripts/ci-demand-census.sh
+  what: the ::notice title=ci-pr-selection::SOLEUR_PR_SELECTION annotation of each pull_request run (switch, locked, attempt, files, stage, reason, would_skip, active, groups, sel_s, sel_censored, budget) plus the pr-selection job conclusion in the jobs API
+  cadence: per pull_request run
+  alert_target: none in PR B (deferred to the PR C soak probe, which counts pr-selection failures and false skips)
+  configured_in: .github/workflows/ci.yml (pr-selection job), scripts/ci-pr-selection.sh
 error_reporting:
-  destination: ::warning:: / ::notice:: annotations (ci-pr-selection, ci-e2e-classify) plus the step summary; the aggregator prints each tolerated skip by name
-  fail_loud: yes (any unknown runs the full battery and prints the reason; the aggregator exits 1 on an unnamed skip)
+  destination: workflow run log ::notice:: annotations (readable with gh api repos/{o}/{r}/check-runs/<job_id>/annotations) and the step summary; the aggregator prints each tolerated skip by name and the cached-attempt remedy
+  fail_loud: yes (any unknown runs the full battery and prints a fixed reason token; the aggregator exits 1 on an unnamed skip)
 failure_modes:
-  - mode: pr-selection errors or times out
-    detection: annotation ci-pr-selection reason=lever_error and empty skip_legs
-    alert_route: census reports mode=full runs; no merge risk (full battery)
+  - mode: pr-selection fails, times out (3-minute job, 90 s stage-2 budget) or is cancelled
+    detection: the job conclusion in the jobs API and the ABSENCE of the SOLEUR_PR_SELECTION notice; a driver-internal abort prints reason=lever_error, a signal reason=signalled
+    alert_route: none in PR B (a failed continue-on-error job is a red check on a green run); PR C soak probe
+  - mode: stage 2 degrades (selector timeout, error, unparsable output)
+    detection: reason=selector_timeout|selector_error|selector_unparsed|selector_fallback or reason=affected_degraded with the per-group tokens in groups=
+    alert_route: none in PR B; the first dark doc-only runs on a cold runner are expected to be censored (sel_censored=1)
   - mode: reduced run read as full by a merge authority
-    detection: admin-merge-ready.sh / ci-head-verdict.sh full-verified read (5.1); ci-full-battery-audit.sh
-    alert_route: SOLEUR_FULL_BATTERY_ESCAPE marker
-  - mode: e2e classifier falls back again
-    detection: ::warning:: with git stderr and base SHA
-    alert_route: census counts enum-failed per PR class
+    detection: impossible while the lock holds; PR C reduced-run read and ci-full-battery-audit.sh
+    alert_route: SOLEUR_FULL_BATTERY_ESCAPE marker (PR C)
 logs:
-  where: GitHub Actions step summaries and annotations (jobs API)
+  where: GitHub Actions run logs and annotations (jobs and check-runs APIs)
   retention: 90 days (GitHub default)
 discoverability_test:
-  command: bash scripts/ci-demand-census.sh --selftest
-  expected_output: SELFTEST_OK
+  command: EVENT_NAME= bash scripts/ci-pr-selection.sh
+  expected_output: a single ::notice::...SOLEUR_PR_SELECTION line with reason=not_pr, exit 0
 ```
 
 ## Guard Contract

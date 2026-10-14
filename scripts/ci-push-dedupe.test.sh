@@ -101,8 +101,10 @@ pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # on the unmodified tree before this stage (the aggregator body, env, timeout and runner must not move). Re-measured at ADR-276 S3
 # (#9728), which adds the DRAFT_LIGHT env and the draft arm to the aggregator body (scripts/ci-draft-light.test.sh executes them), and again at
 # ADR-276 S4 (#9729, PR B), which adds the SKIP_LEGS/ACTIVE/HEAD_SHA_OK/ATTEMPT env and the PR-AFFECTED-SKIP tolerance (the aggregator-diagnosis
-# suite executes them).
-AGG_DIGEST="d572c95b4b1ff74d4ed3afb865fe49a960b2d1e5ba07fb7339bb8198400d561b"
+# suite executes them), and a third time for the review fixes: the re-run remedy line in the `skipped)` arm and the final line's tolerated list
+# with its `skip_legs=` suffix (the same suite executes both). The sha256 is of the job minus `needs` and `if`, so a comment edit elsewhere in
+# ci.yml does not move it but ANY edit to this job's steps, env or timeout does.
+AGG_DIGEST="f66e83be33636b52043d131c98ac01243841bd81bd9fbfaf35cc7820928173f4"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
 UNGATED_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate pr-selection rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
@@ -269,10 +271,19 @@ if mode == "prsel":
     steps = job.get("steps") or []
     if len(steps) != 2: tags.append("P-STEPS"); print(" ".join(tags)); sys.exit(0)
     co, sel = steps
-    if not str(co.get("uses", "")).startswith("actions/checkout@"): tags.append("P-CHECKOUT")
-    w = co.get("with") or {}
-    if w.get("fetch-depth") != 0 or w.get("persist-credentials") is not False: tags.append("P-FETCH")
+    if not re.fullmatch(r"actions/checkout@[0-9a-f]{40}", str(co.get("uses", ""))): tags.append("P-CHECKOUT")  # a full-length lowercase-hex commit pin, never a tag or branch
+    w = co.get("with")
+    # EXACTLY {fetch-depth: 0, persist-credentials: false}: an extra key (`ref:`, `repository:`, `token:`) would change what the selector reads.
+    # `0 == False` in Python, so the types are checked as well as the values.
+    if not isinstance(w, dict) or set(w) != {"fetch-depth", "persist-credentials"} or type(w["fetch-depth"]) is not int or w["fetch-depth"] != 0 or w["persist-credentials"] is not False: tags.append("P-FETCH")
     if sel.get("id") != "select" or sel.get("shell") != "bash": tags.append("P-SELECT")
+    # the select step runs the driver as written, unconditionally, from the repo root, as a plain `run`
+    if "if" in sel: tags.append("P-SELIF")
+    if "working-directory" in sel: tags.append("P-SELWD")
+    if "uses" in sel: tags.append("P-SELUSES")
+    # no job-level env or defaults: either would reach the driver (PR_SELECTION_TEST_ALL and a run-wide working-directory are the known knobs)
+    if "env" in job: tags.append("P-JOBENV")
+    if "defaults" in job: tags.append("P-DEFAULTS")
     if sel.get("continue-on-error") is not True: tags.append("P-STEPCOE")
     if sel.get("timeout-minutes") != 2: tags.append("P-STEPTIMEOUT")
     if str(sel.get("run", "")).strip() != "bash scripts/ci-pr-selection" + ".sh": tags.append("P-RUN")  # split on purpose: a whole path literal makes the kb-consumer census hop into the driver and charge this suite with its knowledge-base strings
@@ -292,6 +303,51 @@ if mode == "prsel":
         blk.append(ln)
     if sum(1 for ln in blk if ln == "    timeout-minutes: 3") != 1: tags.append("P-TIMEOUT-LINE")
     if any(re.match(r"^    needs:", ln) for ln in blk): tags.append("P-NEEDS-LINE")
+    print(" ".join(tags)); sys.exit(0)
+
+if mode == "legparity":
+    # The gateable-leg set must be IDENTICAL in every copy of it: the aggregator's skip_re (both groups), the pinned set, the three gated jobs that
+    # carry the PR term (job names AND the leg each term names), and the driver (its group list and its final-block regex). One copy edited alone
+    # either strands a skip (the tolerance never fires: a red PR) or tolerates a leg the gate did not skip.
+    d, jobs = load()
+    tags = []
+    ref = set(PRGATED)
+    def add(src, got):
+        got = set(got)
+        if not got or got != ref: tags.append("L-SET:%s:%s" % (src, ",".join(sorted(got)) or "none"))
+    if len(ref) != 3: tags.append("L-SET:pinned:%s" % ",".join(sorted(ref)))
+    steps = ((jobs.get("test") or {}).get("steps")) or []
+    agg = [s for s in steps if isinstance(s, dict) and s.get("name") == "Aggregate shard results"]
+    body = agg[0].get("run", "") if agg else ""
+    m = re.search(r"^[ \t]*skip_re='([^']*)'", body, re.M)
+    if not m: tags.append("L-NOSKIPRE")
+    else:
+        groups = re.findall(r"\(([a-z|-]+)\)", m.group(1))
+        if len(groups) != 2: tags.append("L-SKIPRE-SHAPE")
+        for g in groups: add("skip_re", g.split("|"))
+    term_jobs = set()
+    term_legs = set()
+    for n, j in jobs.items():
+        iff = str((j or {}).get("if", ""))
+        if "needs.pr-selection.outputs.skip_legs" not in iff: continue
+        term_jobs.add(n)
+        legs = re.findall(r"contains\(format\(',\{0\},', needs\.pr-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", iff)
+        if legs != [n]: tags.append("L-TERM:%s:%s" % (n, ",".join(legs) or "none"))
+        term_legs.update(legs)
+    add("term-jobs", term_jobs)
+    add("term-legs", term_legs)
+    try:
+        src = open(os.environ.get("DRIVER_SH", "")).read()
+    except Exception:
+        tags.append("L-NODRIVER"); print(" ".join(tags)); sys.exit(0)
+    fm = re.search(r"^[ \t]*for g in ([a-z -]+?)\s*;\s*do\b", src, re.M)
+    if not fm: tags.append("L-NOFORLIST")
+    else: add("driver-for", ["test-" + g for g in fm.group(1).split()])
+    regs = []
+    for ln in src.split("\n"):
+        if "=~" in ln and "skip_legs" in ln: regs.extend(re.findall(r"\((test-[a-z-]+(?:\|test-[a-z-]+)*)\)", ln))
+    if len(regs) < 2: tags.append("L-NODRIVERRE")
+    for r in regs: add("driver-re", r.split("|"))
     print(" ".join(tags)); sys.exit(0)
 
 if mode == "zero-prsel":
@@ -323,6 +379,9 @@ if mode == "gated":
         if n not in GATED and n != "push-dedupe" and "push-dedupe" in needs(j): tags.append("G-EXTRANEED:" + n)
         if n not in GATED and n != "push-dedupe" and n not in UNGATED: tags.append("G-UNCLASSIFIED:" + n)
         if n not in GATED and set(needs(j)) & set(GATED): tags.append("G-DEPENDENT:" + n)
+        # pr-selection may be needed ONLY by the three PR-gated jobs and the `test` aggregator: any other job that needs it would be an
+        # ungated required job that reads the (red-only, skip-only) selection outputs, or one that waits on it without being skippable
+        if n != "pr-selection" and n not in PRGATED and n != "test" and "pr-selection" in needs(j): tags.append("G-PRNEEDS-EXTRA:" + n)
         if n != "push-dedupe" and "push-dedupe" in json.dumps((j or {}).get("outputs", {})): tags.append("G-REEXPORT:" + n)
     for n in UNGATED:
         if n not in jobs: tags.append("G-GONE:" + n)
@@ -372,7 +431,11 @@ if mode == "aggbody":
 sys.stderr.write("unknown mode\n"); sys.exit(2)
 PY
 
-chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" DL_GATED_PINNED="$DL_GATED_PINNED" PR_GATED_PINNED="$PR_GATED_PINNED" PR_TERM_PRE="$PR_TERM_PRE" LIGHT_CLAUSE="$LIGHT_CLAUSE" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" python3 "$SANDBOX/chk.py" "$@"; }
+chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" DL_GATED_PINNED="$DL_GATED_PINNED" PR_GATED_PINNED="$PR_GATED_PINNED" PR_TERM_PRE="$PR_TERM_PRE" LIGHT_CLAUSE="$LIGHT_CLAUSE" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" DRIVER_SH="${DRIVER_SH-}" python3 "$SANDBOX/chk.py" "$@"; }
+# The driver is read by the leg-parity row only. Its path is assembled from parts on purpose (the kb-consumer census otherwise follows a whole
+# path literal into the driver and charges this suite with the knowledge-base strings the driver names).
+DRV_STEM="scripts/ci-pr-selection"
+DRIVER_SH="$REPO_ROOT/$DRV_STEM.sh"
 
 # ── Helper: the gh shim ──────────────────────────────────────────────────────
 cat > "$SANDBOX/shim/gh" <<'SH'
@@ -628,6 +691,7 @@ live_check() { # <label> <mode>
 live_check WRAPPER wrapper
 live_check "GATED" gated
 live_check "PR-SELECTION JOB" prsel
+live_check "LEG PARITY" legparity
 live_check "TRUTH TABLE" truth
 live_check AGGREGATOR agg
 
@@ -882,6 +946,76 @@ mutate_yml y-prsel-shallow "          fetch-depth: 0
           persist-credentials: false" prsel P-FETCH
 mutate_yml y-prsel-switch-var "          SWITCH: \${{ vars.CI_PR_AFFECTED }}" "          SWITCH: \${{ vars.CI_PR_AFFECTED_X }}" prsel P-ENV
 mutate_yml y-prsel-output-swap "      skip_legs: \${{ steps.select.outputs.skip_legs }}" "      skip_legs: \${{ steps.select.outputs.active }}" prsel P-OUTPUTS
+# the checkout is a full-hash pin with EXACTLY the two `with` keys; the select step is a bare `run`; the job carries no env or defaults
+mutate_yml y-prsel-checkout-extra-key "          fetch-depth: 0
+          persist-credentials: false" "          fetch-depth: 0
+          persist-credentials: false
+          ref: refs/heads/main" prsel P-FETCH
+mutate_yml y-prsel-checkout-tag "      active: \${{ steps.select.outputs.active }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" "      active: \${{ steps.select.outputs.active }}
+    steps:
+      - uses: actions/checkout@v4" prsel P-CHECKOUT
+mutate_yml y-prsel-step-if "        id: select
+        shell: bash" "        id: select
+        if: always()
+        shell: bash" prsel P-SELIF
+mutate_yml y-prsel-step-wd "        id: select
+        shell: bash" "        id: select
+        working-directory: scripts
+        shell: bash" prsel P-SELWD
+mutate_yml y-prsel-step-uses "        id: select
+        shell: bash" "        id: select
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        shell: bash" prsel P-SELUSES
+mutate_yml y-prsel-job-env "    permissions:
+      contents: read
+    outputs:
+      head_sha:" "    env:
+      PR_SELECTION_TEST_ALL: '1'
+    permissions:
+      contents: read
+    outputs:
+      head_sha:" prsel P-JOBENV
+mutate_yml y-prsel-defaults "    permissions:
+      contents: read
+    outputs:
+      head_sha:" "    defaults:
+      run:
+        working-directory: scripts
+    permissions:
+      contents: read
+    outputs:
+      head_sha:" prsel P-DEFAULTS
+# the ungated-required-job escape: any job other than the three PR-gated ones and `test` that needs pr-selection
+mutate_yml y-prneeds-extra "  lockfile-sync:
+    # 15m — measured max 1.4m" "  lockfile-sync:
+    needs: [pr-selection]
+    # 15m — measured max 1.4m" gated G-PRNEEDS-EXTRA:lockfile-sync
+# leg-set parity: edit ONE copy of the three-leg set and the parity row must name it
+mutate_yml y-leg-skipre-first-group "skip_re='^(test-webplat|test-bun|test-scripts-heavy)(" "skip_re='^(test-webplat|test-scripts-heavy)(" legparity L-SET:skip_re
+mutate_yml y-leg-skipre-second-group "(,(test-webplat|test-bun|test-scripts-heavy))*\$'" "(,(test-webplat|test-bun|test-scripts-heavy|test-scripts))*\$'" legparity L-SET:skip_re
+mutate_yml y-leg-term-names-another-leg "$PRT_BUN" "$(pr_term test-webplat)" legparity L-TERM:test-bun
+MUT_RUN=$((MUT_RUN + 1))
+if [ -n "$(PR_GATED_PINNED="test-bun test-webplat" chk legparity "$WF" 2>/dev/null)" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
+else fail "MUTANT y-leg-pinned: dropping a leg from the pinned set alone went unnoticed by the leg-parity row"; fi
+# the same, against mutated COPIES of the driver
+mutate_drv() { # <name> <old> <new> <expected-tag-prefix>
+  local name="$1" f="$SANDBOX/mut/$1.drv" got
+  MUT_RUN=$((MUT_RUN + 1))
+  if ! python3 "$SANDBOX/mut.py" "$DRIVER_SH" "$f" "$2" "$3" 2>"$SANDBOX/mut.err"; then
+    fail "MUTANT $name: mutation did NOT land ($(head -c 120 "$SANDBOX/mut.err"))"; return
+  fi
+  got=$(DRIVER_SH="$f" chk legparity "$WF" 2>/dev/null)
+  case " $got " in
+    *" $4"*) MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass ;;
+    *) fail "MUTANT $name: legparity did not report $4 (got: ${got:0:160})" ;;
+  esac
+}
+mutate_drv y-leg-driver-for-drops-bun "for g in webplat bun scripts-heavy; do" "for g in webplat scripts-heavy; do" L-SET:driver-for
+mutate_drv y-leg-driver-for-adds-scripts "for g in webplat bun scripts-heavy; do" "for g in webplat bun scripts scripts-heavy; do" L-SET:driver-for
+mutate_drv y-leg-driver-regex-drops-heavy "=~ ^(test-webplat|test-bun|test-scripts-heavy)(," "=~ ^(test-webplat|test-bun)(," L-SET:driver-re
+
 # the release budget: a 10-minute bound on the job lengthens the longest declared needs: path (3 minutes does not), proven by
 # executing the release workflow's own function on the mutant
 MUT_RUN=$((MUT_RUN + 1))
@@ -987,8 +1121,8 @@ fi
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 63 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
-else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 63), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
+if [ "$MUT_RUN" -ge 78 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 78), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a
@@ -997,7 +1131,7 @@ else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 63), $EQUIV_OK
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=157
+_FLOOR=173
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2
