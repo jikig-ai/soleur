@@ -213,13 +213,17 @@ hits="$(git grep -nE "$PATTERN" -- '.claude/hooks/*.sh' '.claude/hooks/lib/*.sh'
 # `; echo "# sigpipe-demo: intentional"` tail does not exempt the line. KNOWN HOLE (Item F, measured in the S4 review): a string that
 # contains the words followed by a space (`"a # sigpipe-demo: intentional b"`) still matches, and the marker is not capped per file.
 ALLOW_MARKER='[[:space:]]#[[:space:]]*sigpipe-demo:[[:space:]]*intentional([[:space:]]|$)'
-# The comment filter every scan shares: drops `path:NN:<spaces>#...` lines. `--marker` also drops a line carrying the
-# per-line ALLOW_MARKER (the sweep only; the four named passes deliberately have no opt-out).
+# The comment filter every scan shares, PER LANGUAGE (Item F): `path:NN:<spaces>#...` is a comment in a shell, YAML, Terraform, template, Python or
+# markdown-fence line, and `//`, `/*` and a leading `*` are comments in the JS family (js ts tsx mjs cjs). A `#` line in a .ts file is code (a private
+# field), a `//` line in a .py file is code, and a `*) ...` case arm in a .sh file is code, so each filter reads only its own extensions. `--marker`
+# also drops a line carrying the per-line ALLOW_MARKER (the sweep only; the four named passes deliberately have no opt-out).
 _strip_comments() { # [--marker], stdin -> stdout
+  local hash_re='^[^:]+\.(sh|bash|bats|yml|yaml|tf|template|js|py|md):[0-9]+:[[:space:]]*#'
+  local slash_re='^[^:]+\.(js|ts|tsx|mjs|cjs):[0-9]+:[[:space:]]*(//|/\*|\*)'
   if [[ "${1:-}" == --marker ]]; then
-    grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -vE "$ALLOW_MARKER" || true
+    grep -vE "$hash_re" | grep -vE "$slash_re" | grep -vE "$ALLOW_MARKER" || true
   else
-    grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true
+    grep -vE "$hash_re" | grep -vE "$slash_re" || true
   fi
 }
 FILES_7024=(
@@ -428,22 +432,22 @@ fi
 # tracked; --exclude-standard keeps it out of node_modules and ignored trees (1.0 s versus 24.3 s and ten stray
 # hits without it); -a makes a NUL-bearing file searchable as text; core.excludesFile=/dev/null stops a
 # developer's global ignore file changing the local result.
-SWEEP_PATHSPEC=(
-  ':(glob)**/*.sh' ':(glob)**/*.bash' ':(glob)**/*.bats' ':(glob)**/*.yml' ':(glob)**/*.yaml'
-  ':(glob)**/*.tf' ':(glob)**/*.template' ':(glob)**/*.js'
+# The extension list, one array. Item F builds the pathspec AND the extension witness from it, so a dropped entry would drop out of both; the
+# literal count and the separately typed list below are what see a drop (ext-count, ext-expected).
+SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)
+SWEEP_EXT_COUNT=13
+SWEEP_EXT_EXPECTED='sh bash bats yml yaml tf template js ts tsx mjs cjs py'
+SWEEP_PATHSPEC=()
+for _e in "${SWEEP_EXTS[@]}"; do SWEEP_PATHSPEC+=(":(glob)**/*.$_e"); done
+SWEEP_PATHSPEC+=(
   ':(exclude)knowledge-base'
   # This file carries the forbidden shape in its own probe fixtures, so it cannot sweep itself.
   ':(exclude).claude/hooks/grep-q-pipe-guard.test.sh'
 )
 # One swept file under each of these must exist, or the derivation is reading the wrong tree.
 SWEEP_CANARIES=('scripts/' 'plugins/soleur/' 'apps/web-platform/scripts/' 'apps/cla-evidence/' 'tests/' 'plugins/soleur/scripts/' 'plugins/soleur/skills/' 'apps/web-platform/infra/' 'apps/web-platform/test/')
-SWEEP_FLOOR=1400   # measured 1,646 swept files on 2026-10-05 (1,405 without every non-.sh file); a truncated population reads UNRESOLVED, never "no hits"
+SWEEP_FLOOR=4000   # measured 4,488 swept files on 2026-10-15 with the 13 extensions (1,862 with the 8 of 2026-10-05); a truncated population reads UNRESOLVED, never "no hits"
 SWEEP_FLOOR_MIN=3500   # a literal beside the floor: the floor can only move with a visible edit of THIS number (floor-lower-bound below)
-# The extension list, one array. Item F builds the pathspec AND the extension witness from it, so a dropped entry would drop out of both; the
-# literal count and the separately typed list below are what see a drop (ext-count, ext-expected).
-SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)
-SWEEP_EXT_COUNT=13
-SWEEP_EXT_EXPECTED='sh bash bats yml yaml tf template js ts tsx mjs cjs py'
 SWEEP_CANARY_COUNT=9   # pinned beside SWEEP_CANARIES: the probe compares against this literal, not against the array's own length
 # To add a canary root: the array and SWEEP_CANARY_COUNT here, then one violating file for it in the sweep probe's sweeproot (a spelling
 # PATTERN_V2 matches), the sw_roots alternation, and one compliant file in okroot. The hit and population checks compare against
