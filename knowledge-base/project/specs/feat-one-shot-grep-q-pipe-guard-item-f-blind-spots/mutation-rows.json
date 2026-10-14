@@ -1,0 +1,1345 @@
+[
+ {
+  "id": "M1a",
+  "desc": "empty the case table",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "V2_CASE_COUNT=67\n",
+    "new": "V2_CASE_COUNT=67\nV2_CASES=''\n",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "v2-cases: ran 0/"
+  ]
+ },
+ {
+  "id": "M1b",
+  "desc": "a part that breaks the compile",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EARLY='[[:space:]]+(-[A-Za-z0-9]*[qm]",
+    "new": "SWEEP_EARLY='[[:space:]]+((-[A-Za-z0-9]*[qm]",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "PATTERN_V2 does not compile"
+  ],
+  "rc": [
+   3
+  ]
+ },
+ {
+  "id": "M2",
+  "desc": "remove sudo from the wrapper words",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice)'",
+    "new": "SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|doas|time|nohup|setsid|xargs|ionice)'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad wrap-sudo]"
+  ]
+ },
+ {
+  "id": "M3a",
+  "desc": "wrapper token bound {0,4} to {0,1}",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "${SWEEP_TOK}){0,4}",
+    "new": "${SWEEP_TOK}){0,1}",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad wrap-sudo-u]"
+  ]
+ },
+ {
+  "id": "M3b",
+  "desc": "wrapper token bound {0,4} to {0,3}",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "${SWEEP_TOK}){0,4}",
+    "new": "${SWEEP_TOK}){0,3}",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad wrap-4-tokens]"
+  ]
+ },
+ {
+  "id": "M3c",
+  "desc": "wrapper token bound {0,4} to {0,5}",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "${SWEEP_TOK}){0,4}",
+    "new": "${SWEEP_TOK}){0,5}",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[res wrap-5-tokens]"
+  ]
+ },
+ {
+  "id": "M4",
+  "desc": "operand rule widened to any run of tokens",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "([[:space:]]+${SWEEP_TOK})?${SWEEP_FLAG}\"",
+    "new": "([[:space:]]+${SWEEP_TOK})*${SWEEP_FLAG}\"",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[good quoted-context-pipe]"
+  ]
+ },
+ {
+  "id": "M5-doas",
+  "desc": "remove doas",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice)'",
+    "new": "SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|time|nohup|setsid|xargs|ionice)'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad wrap-doas]"
+  ]
+ },
+ {
+  "id": "M5-xargs",
+  "desc": "remove xargs",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice)'",
+    "new": "SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|ionice)'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad wrap-xargs]"
+  ]
+ },
+ {
+  "id": "M5-zgrep",
+  "desc": "remove zgrep",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(e|f|z|ze)?grep",
+    "new": "(e|f)?grep",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad bin-zgrep]"
+  ]
+ },
+ {
+  "id": "M5-rg",
+  "desc": "remove rg",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(rg|ag|ugrep|pcregrep)",
+    "new": "(ag|ugrep|pcregrep)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad bin-rg]"
+  ]
+ },
+ {
+  "id": "M5-ag",
+  "desc": "remove ag",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(rg|ag|ugrep|pcregrep)",
+    "new": "(rg|ugrep|pcregrep)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad bin-ag]"
+  ]
+ },
+ {
+  "id": "M5-ugrep",
+  "desc": "remove ugrep",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(rg|ag|ugrep|pcregrep)",
+    "new": "(rg|ag|pcregrep)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad bin-ugrep]"
+  ]
+ },
+ {
+  "id": "M5-pcregrep",
+  "desc": "remove pcregrep",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(rg|ag|ugrep|pcregrep)",
+    "new": "(rg|ag|ugrep)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad bin-pcregrep]"
+  ]
+ },
+ {
+  "id": "M5-shc",
+  "desc": "remove the sh -c alternative",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "|${SWEEP_SHC}\"\n",
+    "new": "\"\n",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-single]"
+  ]
+ },
+ {
+  "id": "M5-shc-count",
+  "desc": "sh -c reader accepts any flag",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SHC='(^|[^|])\\|&?[[:space:]]*(ba|da)?sh[[:space:]]+(-[a-z]+[[:space:]]+)*-[a-z]*c[[:space:]]+['\"'\"'\"]([^'\"'\"'\"]*[^[:alnum:]_/.-])?(e|f)?grep([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?))*[[:space:]]+(-[A-Za-z0-9]*[qm][A-Za-z0-9]*|--quiet|--silent|--max-count)'",
+    "new": "SWEEP_SHC='(^|[^|])\\|&?[[:space:]]*(ba|da)?sh[[:space:]]+(-[a-z]+[[:space:]]+)*-[a-z]*c[[:space:]]+['\"'\"'\"]([^'\"'\"'\"]*[^[:alnum:]_/.-])?(e|f)?grep([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?))*[[:space:]]+(-[A-Za-z0-9]+|--quiet|--silent|--max-count)'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[good shc-count]"
+  ]
+ },
+ {
+  "id": "M6",
+  "desc": "GREP-named variable rule widened to any name",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "[A-Za-z_]*[Gg][Rr][Ee][Pp][A-Za-z_]*",
+    "new": "[A-Za-z_]+",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[good var-hook]"
+  ]
+ },
+ {
+  "id": "M7a",
+  "desc": "EARLY loses digits in the cluster",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EARLY='[[:space:]]+(-[A-Za-z0-9]*[qm]",
+    "new": "SWEEP_EARLY='[[:space:]]+(-[A-Za-z]*[qm]",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad early-5q]"
+  ]
+ },
+ {
+  "id": "M7b",
+  "desc": "EARLY loses the long-option abbreviations",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "--(q[a-z]*|si[a-z]*|max(-c[a-z]*)?)",
+    "new": "--(quiet|silent|max-count)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad early-qui]"
+  ]
+ },
+ {
+  "id": "M7c",
+  "desc": "EARLY widens --s[a-z]*",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "si[a-z]*",
+    "new": "s[a-z]*",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[good rg-sort]"
+  ]
+ },
+ {
+  "id": "M7d",
+  "desc": "EARLY widens --max[a-z-]*",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "max(-c[a-z]*)?",
+    "new": "max[a-z-]*",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[good rg-max-depth]"
+  ]
+ },
+ {
+  "id": "M8",
+  "desc": "residual flip: head in BIN and a digit-only early flag",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(rg|ag|ugrep|pcregrep)",
+    "new": "(rg|ag|ugrep|pcregrep|head)",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_EARLY='[[:space:]]+(-[A-Za-z0-9]*[qm]",
+    "new": "SWEEP_EARLY='[[:space:]]+(-[0-9]+|-[A-Za-z0-9]*[qm]",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "residual-v2"
+  ]
+ },
+ {
+  "id": "M9a",
+  "desc": "scan_sweep filters the passes with the old PATTERN",
+  "mode": "full",
+  "edits": [
+   {
+    "old": "cand=\"$(grep -E -- \"$PATTERN_V2\" <<<\"$extra\"",
+    "new": "cand=\"$(grep -E -- \"$PATTERN\" <<<\"$extra\"",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-must-report",
+   "pattern-single-source"
+  ]
+ },
+ {
+  "id": "H1",
+  "desc": "delete one fixture line but keep the pinned counts",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "x | exec grep -q p\n",
+    "new": "",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "v2-fixtures"
+  ]
+ },
+ {
+  "id": "H2",
+  "desc": "the negative control keeps the wrapper part",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "PATTERN_V2_NOWRAP=\"${SWEEP_LEAD}${SWEEP_BIN}",
+    "new": "PATTERN_V2_NOWRAP=\"${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_BIN}",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "v2-cases-negative"
+  ]
+ },
+ {
+  "id": "H3",
+  "desc": "operand tokens not quote-aware",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_TOK='('\"'\"'[^'\"'\"']*'\"'\"'|\"[^\"]*\"|[^[:space:]'\"'\"'\"|;&)}]+)+'",
+    "new": "SWEEP_TOK='[^[:space:]]+'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[good grep-cF-quoted]"
+  ]
+ },
+ {
+  "id": "G2-1a",
+  "desc": "the md listing is empty",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_MD_PATHSPEC=(':(glob)**/*.md'",
+    "new": "SWEEP_MD_PATHSPEC=(':(glob)**/*.mdx'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "UNRESOLVED: the markdown listing"
+  ],
+  "rc": [
+   3
+  ]
+ },
+ {
+  "id": "G2-1b",
+  "desc": "the split pass is never called",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "{ scan_split \"$root\"; scan_md \"$root\"; }",
+    "new": "{ scan_md \"$root\"; }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-must-report"
+  ]
+ },
+ {
+  "id": "G2-1c",
+  "desc": "the md pass is never called",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "{ scan_split \"$root\"; scan_md \"$root\"; }",
+    "new": "{ scan_split \"$root\"; }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "UNRESOLVED: the markdown listing"
+  ],
+  "rc": [
+   3
+  ]
+ },
+ {
+  "id": "G2-2",
+  "desc": "drop the join",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "print FILENAME \":\" pn \": | \" t",
+    "new": "t = t",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-must-report"
+  ]
+ },
+ {
+  "id": "G2-3",
+  "desc": "stop after the first trailing bar",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "pend = 1; pn = FNR",
+    "new": "if (!done) { pend = 1; pn = FNR; done = 1 }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-second-site"
+  ]
+ },
+ {
+  "id": "G2-4",
+  "desc": "drop the block-scalar exclusion",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "      if (line ~ /:[ \\t]*[|>][-+]?[ \\t]*$/ || line ~ /^[ \\t]*-?[ \\t]*[|>][-+]?[ \\t]*$/) next\n",
+    "new": "",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-block-scalar"
+  ]
+ },
+ {
+  "id": "G2-5",
+  "desc": "report the next line's number",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "print FILENAME \":\" pn \": | \" t",
+    "new": "print FILENAME \":\" FNR \": | \" t",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-line-number"
+  ]
+ },
+ {
+  "id": "G2-6a",
+  "desc": "every fence of a listed file counts",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (hasPf) for (i = 1;",
+    "new": "if (1) for (i = 1;",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-pipefail-other-fence"
+  ]
+ },
+ {
+  "id": "G2-6b",
+  "desc": "fence state is never reset",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "inf = 0; n = 0; hasPf = 0\n  }",
+    "new": "inf = 0; n = 0\n  }",
+    "count": 1
+   },
+   {
+    "old": "FNR == 1 { if (inf) close_fence(); inf = 0; n = 0; hasPf = 0 }",
+    "new": "FNR == 1 { if (inf) close_fence(); inf = 0; n = 0 }",
+    "count": 1
+   },
+   {
+    "old": "flen = len; n = 0; hasPf = 0; next }",
+    "new": "flen = len; n = 0; next }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-pipefail-leak"
+  ]
+ },
+ {
+  "id": "G2-7",
+  "desc": "pipefail only counts above the hit",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (line ~ /pipefail/) hasPf = 1 }",
+    "new": "if (line ~ /pipefail/ && !hasPf) { hasPf = 1; pfAt = n } }",
+    "count": 1
+   },
+   {
+    "old": "if (hasPf) for (i = 1; i <= n; i++)",
+    "new": "if (hasPf) for (i = pfAt + 1; i <= n; i++)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-pipefail-after-hit"
+  ]
+ },
+ {
+  "id": "G2-8",
+  "desc": "drop the pipefail requirement",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "sweep_git_grep \"$root\" --md -al -e pipefail",
+    "new": "sweep_git_grep \"$root\" --md -al -e ''",
+    "count": 1
+   },
+   {
+    "old": "if (hasPf) for (i = 1;",
+    "new": "for (i = 1;",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-no-pipefail"
+  ]
+ },
+ {
+  "id": "G2-9",
+  "desc": "scan prose outside fences",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (inf) { n++; ln[n] = FNR;",
+    "new": "if (1) { n++; ln[n] = FNR;",
+    "count": 1
+   },
+   {
+    "old": "flen = len; n = 0; hasPf = 0; next }",
+    "new": "flen = len; hasPf = 0; next }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-prose"
+  ]
+ },
+ {
+  "id": "G2-10a",
+  "desc": "drop the comment filter for md",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "js|py|md):[0-9]+:[[:space:]]*#",
+    "new": "js|py):[0-9]+:[[:space:]]*#",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-comment-line"
+  ]
+ },
+ {
+  "id": "G2-10b",
+  "desc": "an unclosed fence at EOF is not scanned",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "END { if (inf) close_fence() }",
+    "new": "END { }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-unclosed-fence"
+  ]
+ },
+ {
+  "id": "G2-11-orbar",
+  "desc": "a logical OR joins",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (line ~ /[^|][ \\t]*\\|[ \\t]*$/ ||",
+    "new": "if (line ~ /\\|[ \\t]*$/ ||",
+    "count": 1
+   },
+   {
+    "old": "      if (line ~ /\\|\\|[ \\t]*$/) next\n",
+    "new": "",
+    "count": 1
+   },
+   {
+    "old": "-alE -e '(^|[^|])\\|&?[[:space:]]*$'",
+    "new": "-alE -e '\\|&?[[:space:]]*$'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-or-or"
+  ]
+ },
+ {
+  "id": "G2-11-comment",
+  "desc": "a comment line next is not skipped",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (line ~ /^[ \\t]*#/ || line ~ /^[ \\t]*$/) { next }",
+    "new": "if (line ~ /^[ \\t]*$/) { next }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-comment-next"
+  ]
+ },
+ {
+  "id": "G2-11-blank",
+  "desc": "a blank line next is not skipped",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (line ~ /^[ \\t]*#/ || line ~ /^[ \\t]*$/) { next }",
+    "new": "if (line ~ /^[ \\t]*#/) { next }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-blank-next"
+  ]
+ },
+ {
+  "id": "G2-11-eof",
+  "desc": "a bar at EOF joins the next file",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "  FNR == 1 { pend = 0 }\n",
+    "new": "",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-eof"
+  ]
+ },
+ {
+  "id": "G2-11-pipeamp",
+  "desc": "a bar-ampersand end is not a join",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": " || line ~ /\\|&[ \\t]*$/) {",
+    "new": ") {",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-pipe-amp"
+  ]
+ },
+ {
+  "id": "G2-11-lonebar",
+  "desc": "a lone bar line joins",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": " || line ~ /^[ \\t]*-?[ \\t]*[|>][-+]?[ \\t]*$/) next",
+    "new": ") next",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-lone-bar"
+  ]
+ },
+ {
+  "id": "G2-11-indent",
+  "desc": "an indented fence is not a fence",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (match(line, /^[ \\t]*(```+|~~~+)/)) {",
+    "new": "if (match(line, /^(```+|~~~+)/)) {",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-indented"
+  ]
+ },
+ {
+  "id": "G2-11-tilde",
+  "desc": "a tilde fence is not a fence",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "/^[ \\t]*(```+|~~~+)/",
+    "new": "/^[ \\t]*(```+)/",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-tilde"
+  ]
+ },
+ {
+  "id": "G2-11-mismatch",
+  "desc": "any fence character closes",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (ch == fch && len >= flen && rest",
+    "new": "if (len >= flen && rest",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-tilde-mismatch"
+  ]
+ },
+ {
+  "id": "G2-11-long",
+  "desc": "a shorter run closes a longer fence",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "ch == fch && len >= flen && rest",
+    "new": "ch == fch && rest",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-long-fence"
+  ]
+ },
+ {
+  "id": "G2-11-crlf",
+  "desc": "carriage returns are not stripped in the fence pass",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "    line = $0; sub(/\\r$/, \"\", line)\n    if (match(line",
+    "new": "    line = $0\n    if (match(line",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-crlf"
+  ]
+ },
+ {
+  "id": "H4",
+  "desc": "scan_sweep stops appending the two passes",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "{ printf '%s\\n' \"$out\"; printf '%s\\n' \"$cand\"; } | _strip_comments",
+    "new": "{ printf '%s\\n' \"$out\"; } | _strip_comments",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "sweep-wiring-multiline"
+  ]
+ },
+ {
+  "id": "G3-1",
+  "desc": "SWEEP_EXTS empty",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=()",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-witness"
+  ]
+ },
+ {
+  "id": "G3-2-sh",
+  "desc": "drop sh from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-bash",
+  "desc": "drop bash from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bats yml yaml tf template js ts tsx mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-bats",
+  "desc": "drop bats from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash yml yaml tf template js ts tsx mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-yml",
+  "desc": "drop yml from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yaml tf template js ts tsx mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-yaml",
+  "desc": "drop yaml from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yml tf template js ts tsx mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-tf",
+  "desc": "drop tf from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yml yaml template js ts tsx mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-template",
+  "desc": "drop template from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yml yaml tf js ts tsx mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-js",
+  "desc": "drop js from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template ts tsx mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-ts",
+  "desc": "drop ts from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js tsx mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-tsx",
+  "desc": "drop tsx from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts mjs cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-mjs",
+  "desc": "drop mjs from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx cjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-cjs",
+  "desc": "drop cjs from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs py)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-2-py",
+  "desc": "drop py from SWEEP_EXTS",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
+    "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ext-count",
+   "ext-expected"
+  ]
+ },
+ {
+  "id": "G3-3",
+  "desc": "restore the whole knowledge-base exclusion",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": ":(exclude,glob)knowledge-base/**/archive/**",
+    "new": ":(exclude)knowledge-base",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "kb-witness"
+  ]
+ },
+ {
+  "id": "G3-4a",
+  "desc": "exclusion by a *archive* glob",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": ":(exclude,glob)knowledge-base/**/archive/**",
+    "new": ":(exclude,glob)knowledge-base/**/*archive*/**",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "kb-archive-lookalike"
+  ]
+ },
+ {
+  "id": "G3-4b",
+  "desc": "drop the archive exclusion",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "  ':(exclude,glob)knowledge-base/**/archive/**'\n",
+    "new": "",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "kb-archive-must-not"
+  ]
+ },
+ {
+  "id": "G3-5a",
+  "desc": "the hash filter is extension-blind",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "local hash_re='^[^:]+\\.(sh|bash|bats|yml|yaml|tf|template|js|py|md):",
+    "new": "local hash_re='^[^:]+:",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ts-hash-line"
+  ]
+ },
+ {
+  "id": "G3-5b",
+  "desc": "the slash filter is extension-blind",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "local slash_re='^[^:]+\\.(js|ts|tsx|mjs|cjs):",
+    "new": "local slash_re='^[^:]+:",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "py-slash-line"
+  ]
+ },
+ {
+  "id": "G3-6a",
+  "desc": "drop the JSDoc star filter",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(//|/\\*|\\*)'",
+    "new": "(//|/\\*)'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ts-jsdoc-star"
+  ]
+ },
+ {
+  "id": "G3-6b",
+  "desc": "the star filter applies to sh",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "local slash_re='^[^:]+\\.(js|ts|tsx|mjs|cjs):",
+    "new": "local slash_re='^[^:]+\\.(js|ts|tsx|mjs|cjs|sh):",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "sh-case-arm"
+  ]
+ },
+ {
+  "id": "G3-6c",
+  "desc": "drop the py hash filter",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "js|py|md):[0-9]+:[[:space:]]*#",
+    "new": "js|md):[0-9]+:[[:space:]]*#",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "py-hash-comment"
+  ]
+ },
+ {
+  "id": "G3-7a",
+  "desc": "a marker added to a pinned file",
+  "mode": "fast",
+  "edits": [],
+  "expect": [
+   "marker-pin"
+  ],
+  "file_edits": [
+   {
+    "file": "apps/web-platform/infra/registry-luks.test.sh",
+    "append": "true # sigpipe-demo: intentional\n"
+   }
+  ]
+ },
+ {
+  "id": "G3-7b",
+  "desc": "a pinned marker deleted",
+  "mode": "fast",
+  "edits": [],
+  "expect": [
+   "marker-pin"
+  ],
+  "file_edits": [
+   {
+    "file": ".claude/hooks/iac-plan-write-guard.test.sh",
+    "old": "  ( set -o pipefail; echo \"$t6_big\" | grep -q MATCHME ) || t6_fails=$((t6_fails + 1))  # sigpipe-demo: intentional (T6 asserts the pipe form races)\n",
+    "new": "",
+    "count": 1
+   }
+  ]
+ },
+ {
+  "id": "G3-7c",
+  "desc": "a marker added in an unlisted file",
+  "mode": "fast",
+  "edits": [],
+  "expect": [
+   "marker-pin"
+  ],
+  "add_files": [
+   {
+    "path": "scripts/zz-marker-new.sh",
+    "text": "true # sigpipe-demo: intentional\n"
+   }
+  ]
+ },
+ {
+  "id": "G3-7d",
+  "desc": "a marker added in a knowledge-base code file",
+  "mode": "fast",
+  "edits": [],
+  "expect": [
+   "marker-pin"
+  ],
+  "add_files": [
+   {
+    "path": "knowledge-base/project/specs/feat-x/zz-marker.sh",
+    "text": "true # sigpipe-demo: intentional\n"
+   }
+  ]
+ },
+ {
+  "id": "G3-7e",
+  "desc": "the pin is derived outside sweep_git_grep",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "mp_raw=\"$(sweep_git_grep . -cE -e \"$ALLOW_MARKER\")\"",
+    "new": "mp_raw=\"$(git grep --no-index -cE -e \"$ALLOW_MARKER\" -- .)\"",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "marker-pin"
+  ]
+ },
+ {
+  "id": "G3-8",
+  "desc": "a pathspec exclusion hiding only the new test canary",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "  ':(exclude).claude/hooks/grep-q-pipe-guard.test.sh'\n",
+    "new": "  ':(exclude).claude/hooks/grep-q-pipe-guard.test.sh'\n  ':(exclude)apps/web-platform/test/scripts/run-migrations-unmerged-gate.test.ts'\n",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "test-canaries"
+  ]
+ },
+ {
+  "id": "G3-9",
+  "desc": "revert the stub conversion in the test file",
+  "mode": "fast",
+  "edits": [],
+  "expect": [
+   "outside the deferral table",
+   "run-migrations-unmerged-gate.test.ts"
+  ],
+  "file_edits": [
+   {
+    "file": "apps/web-platform/test/scripts/run-migrations-unmerged-gate.test.ts",
+    "old": "      'if grep -qi \"SELECT count(\\\\*)\" <<<\"${*}\"; then',",
+    "new": "      'if echo \"${*}\" | grep -qi \"SELECT count(\\\\*)\"; then',"
+   }
+  ]
+ },
+ {
+  "id": "G3-10",
+  "desc": "a reader shape written as text in a spec-dir script",
+  "mode": "fast",
+  "edits": [],
+  "expect": [
+   "spec-dir-zero",
+   "outside the deferral table"
+  ],
+  "add_files": [
+   {
+    "path": "knowledge-base/project/specs/feat-x/zz-mutant.sh",
+    "text": "echo \"$x\" | grep -q p\n"
+   }
+  ]
+ },
+ {
+  "id": "H6",
+  "desc": "lower SWEEP_FLOOR toward the old 1400",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_FLOOR=4000",
+    "new": "SWEEP_FLOOR=1400",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "floor-lower-bound"
+  ]
+ },
+ {
+  "id": "W1",
+  "desc": "a probe check deleted (the count pin)",
+  "mode": "full",
+  "edits": [
+   {
+    "old": "SWEEP_PROBE_CHECKS=71",
+    "new": "SWEEP_PROBE_CHECKS=70",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "probe-count"
+  ]
+ },
+ {
+  "id": "W2",
+  "desc": "the MD_FLOOR argument dropped from the capture",
+  "mode": "full",
+  "edits": [
+   {
+    "old": "sweep_main . \"$SWEEP_FLOOR\" \"$MD_FLOOR\" || sweep_rc=$?",
+    "new": "sweep_main . \"$SWEEP_FLOOR\" || sweep_rc=$?",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "return-wiring"
+  ]
+ }
+]

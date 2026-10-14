@@ -990,7 +990,7 @@ bad shc-single x | sh -c 'grep -q p'
 bad shc-lc x | bash -lc "grep -qE p"
 bad head-chain x | head -1 | grep -q p
 bad head-chain-n x | head -n 1 | grep -qE p
-good quoted-context-pipe check "a | grep -c foo bar" baz -eq 1
+good quoted-context-pipe expect 'adds a | grep -cx >/dev/null 1.2.3.4' 'no_ll' 'test "$(ev)" -eq 0'
 good var-hook x | "$HOOK" -q p
 good var-hmac x | "$CMD" -hmac key
 good rg-sort x | rg --sort path p
@@ -1287,7 +1287,8 @@ _ml_put scripts/ml-split-blank-next.sh    'x |' '' '  sudo grep -q p f'
 _ml_put scripts/ml-split-pipe-amp.sh      'x |&' '  sudo grep -q p f'
 _ml_put scripts/ml-split-or-or.sh         'x ||' '  sudo grep -q p f'
 _ml_put scripts/ml-split-block-scalar.yml 'run: |' '  sudo grep -q p "$f"'
-_ml_put scripts/ml-split-eof.sh           'echo a' 'x |'
+_ml_put scripts/ml-split-eof-a.sh         'echo a' 'x |'
+_ml_put scripts/ml-split-eof-b.sh         '  sudo grep -q p f' 'z |'
 _ml_put scripts/ml-split-lone-bar.yml     'run:' '  |' '  sudo grep -q p "$f"'
 _ml_put docs/ml-md-env-i.md               'prose' '```bash' 'set -o pipefail' 'x | env -i grep -q p' '```'
 _ml_put docs/ml-md-pipefail-after-hit.md  '```sh' 'x | sudo grep -q p' 'set -euo pipefail' '```'
@@ -1296,7 +1297,8 @@ _ml_put docs/ml-md-indented.md            '- item' '  ```sh' '  set -o pipefail'
 _ml_put docs/ml-md-long-fence.md          '````' 'set -o pipefail' 'x | sudo grep -q p' '```' 'w | sudo grep -q p' '````' 'q | sudo grep -q p'
 _ml_put docs/ml-md-tilde-mismatch.md      '~~~' 'set -o pipefail' '```' 'x | sudo grep -q p' '~~~'
 _ml_put docs/ml-md-unclosed-fence.md      '```bash' 'set -o pipefail' 'x | sudo grep -q p'
-printf '%s\r\n' '```bash' 'set -o pipefail' 'x | sudo grep -q p' '```' > "$ml/docs/ml-md-crlf.md"
+printf '%s\r\n' '```bash' 'set -o pipefail' 'x | sudo grep -q p' '```' 'y | sudo grep -q p' > "$ml/docs/ml-md-crlf.md"
+_ml_put docs/ml-md-pipefail-leak.md       '```bash' 'set -o pipefail' '```' '```bash' 'x | sudo grep -q p' '```'
 _ml_put docs/ml-md-pipefail-other-fence.md '```bash' 'x | sudo grep -q p' '```' '```bash' 'set -o pipefail' '```'
 _ml_put docs/ml-md-no-pipefail.md         '```bash' 'x | sudo grep -q p' '```'
 _ml_put docs/ml-md-prose.md               'x | sudo grep -q p' '```bash' 'set -o pipefail' '```'
@@ -1315,7 +1317,8 @@ _ml_want split-blank-next   scripts/ml-split-blank-next.sh 1
 _ml_want split-pipe-amp     scripts/ml-split-pipe-amp.sh 1
 _ml_not  split-or-or        scripts/ml-split-or-or.sh
 _ml_not  split-block-scalar scripts/ml-split-block-scalar.yml
-_ml_not  split-eof          scripts/ml-split-eof.sh
+_ml_not  split-eof          scripts/ml-split-eof-a.sh
+_ml_not  split-eof-next-file scripts/ml-split-eof-b.sh
 _ml_not  split-lone-bar     scripts/ml-split-lone-bar.yml
 _ml_want md-env-i               docs/ml-md-env-i.md 4
 _ml_want md-pipefail-after-hit  docs/ml-md-pipefail-after-hit.md 2
@@ -1327,6 +1330,8 @@ _ml_want md-tilde-mismatch      docs/ml-md-tilde-mismatch.md 4
 _ml_want md-unclosed-fence      docs/ml-md-unclosed-fence.md 3
 _ml_want md-crlf                docs/ml-md-crlf.md 3
 _ml_not  md-long-fence-after    docs/ml-md-long-fence.md:7
+_ml_not  md-crlf-after          docs/ml-md-crlf.md:5
+_ml_not  md-pipefail-leak       docs/ml-md-pipefail-leak.md
 _ml_not  md-pipefail-other-fence docs/ml-md-pipefail-other-fence.md
 _ml_not  md-no-pipefail         docs/ml-md-no-pipefail.md
 _ml_not  md-prose               docs/ml-md-prose.md
