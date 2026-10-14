@@ -3,19 +3,18 @@ import { createClient } from "@/lib/supabase/server";
 import { validateCustomName } from "@/server/team-names-validation";
 import { ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { verifiedUserId } from "@/server/request-auth";
 
 const VALID_LEADER_IDS = new Set<string>(ROUTABLE_DOMAIN_LEADERS.map((l) => l.id));
 
 const ICON_PATH_PATTERN = /^settings\/team-icons\/[a-z]{2,3}\.(png|webp|svg)$/;
 
 /** GET /api/team-names — returns all custom names for the authenticated user. */
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -23,11 +22,11 @@ export async function GET() {
     supabase
       .from("team_names")
       .select("leader_id, custom_name, custom_icon_path")
-      .eq("user_id", user.id),
+      .eq("user_id", userId),
     supabase
       .from("users")
       .select("nudges_dismissed, naming_prompted_at")
-      .eq("id", user.id)
+      .eq("id", userId)
       .single(),
   ]);
 
@@ -57,11 +56,9 @@ export async function PUT(request: Request) {
   if (!originValid) return rejectCsrf("api/team-names", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -98,7 +95,7 @@ export async function PUT(request: Request) {
     const { data: updated, error: updateErr } = await supabase
       .from("team_names")
       .update({ custom_icon_path: iconPath, updated_at: new Date().toISOString() })
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("leader_id", leaderId)
       .select("leader_id");
 
@@ -110,7 +107,7 @@ export async function PUT(request: Request) {
     if (!updated || updated.length === 0) {
       const defaultName = ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === leaderId)?.name ?? leaderId.toUpperCase();
       const { error: insertErr } = await supabase.from("team_names").insert({
-        user_id: user.id,
+        user_id: userId,
         leader_id: leaderId,
         custom_name: defaultName,
         custom_icon_path: iconPath,
@@ -132,7 +129,7 @@ export async function PUT(request: Request) {
     await supabase
       .from("team_names")
       .delete()
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("leader_id", leaderId);
 
     return NextResponse.json({ deleted: true });
@@ -151,7 +148,7 @@ export async function PUT(request: Request) {
   }
 
   const upsertData: Record<string, string | null> = {
-    user_id: user.id,
+    user_id: userId,
     leader_id: leaderId,
     custom_name: trimmed,
     updated_at: new Date().toISOString(),
@@ -178,11 +175,9 @@ export async function PATCH(request: Request) {
   if (!originValid) return rejectCsrf("api/team-names", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -199,7 +194,7 @@ export async function PATCH(request: Request) {
   const { data: userData } = await supabase
     .from("users")
     .select("nudges_dismissed")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
   const current: string[] = userData?.nudges_dismissed ?? [];
@@ -208,7 +203,7 @@ export async function PATCH(request: Request) {
     const { error } = await supabase
       .from("users")
       .update({ nudges_dismissed: current })
-      .eq("id", user.id);
+      .eq("id", userId);
 
     if (error) {
       return NextResponse.json({ error: "Failed to dismiss nudge" }, { status: 500 });

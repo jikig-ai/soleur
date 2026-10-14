@@ -1,6 +1,7 @@
 "use client";
 
 import { SearchIcon } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { useShortcuts } from "./use-shortcuts";
 
 /**
@@ -21,13 +22,14 @@ export function MobilePaletteTrigger() {
   if (!enabled) return null;
 
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       onClick={openPalette}
       aria-label="Open command menu"
       className="ml-auto flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
     >
       <SearchIcon className="h-5 w-5" />
-    </button>
+    </Button>
   );
 }

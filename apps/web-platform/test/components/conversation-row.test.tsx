@@ -4,8 +4,10 @@ import { ConversationRow } from "@/components/inbox/conversation-row";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
 import { createUseTeamNamesMock } from "../mocks/use-team-names";
 
+const { mockPush } = vi.hoisted(() => ({ mockPush: vi.fn() }));
+
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: mockPush }),
 }));
 
 const { mockGetIconPath } = vi.hoisted(() => ({
@@ -156,5 +158,31 @@ describe("ConversationRow Archive", () => {
 
     const indicators = screen.getAllByText("Archived");
     expect(indicators.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("ConversationRow keyboard (#9283 review)", () => {
+  it("Enter on the row navigates; Enter/Space on an inner button does not", () => {
+    mockPush.mockClear();
+    render(
+      <ConversationRow
+        conversation={makeConversation()}
+        onArchive={vi.fn()}
+      />,
+    );
+    const row = screen.getByRole("button", { name: /Test conversation/i });
+
+    // Row itself: Enter navigates.
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(mockPush).toHaveBeenCalledWith("/dashboard/chat/conv-1");
+    mockPush.mockClear();
+
+    // Inner archive button: bubbled Enter/Space must NOT navigate.
+    const archiveBtn = screen.getAllByRole("button", {
+      name: "Archive conversation",
+    })[0];
+    fireEvent.keyDown(archiveBtn, { key: "Enter", bubbles: true });
+    fireEvent.keyDown(archiveBtn, { key: " ", bubbles: true });
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });

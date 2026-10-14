@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Decide whether `/ship` Phase 4 still owes a full local `test-all.sh` run.
+# Decide whether `/ship` Phase 4 still owes a local `test-all.sh` run.
 #
 # EXIT CONTRACT (the caller branches on this, never on the prose):
 #   42  SKIPPABLE    — CI already verified this exact tree; running it again buys nothing
-#    0  OWED         — run the battery
+#    0  OWED         — run the gate. Since #8322 that means `--affected` by
+#                     default; the FULL local battery is opt-in via
+#                     `/ship --full` (operator) → `test-all.sh --full`
 #    2  UNDECIDABLE  — could not determine; the caller MUST treat this as OWED
 #   anything else    — an error; the caller MUST treat it as OWED
 #
@@ -23,9 +25,9 @@
 # "not 42 ⇒ run", which is safe no matter how the script dies.
 #
 # WHY THIS EXISTS (#8247). CI's required `test` context aggregates
-# test-webplat + test-bun + test-scripts + web-platform-build, of which the first
-# three are the same three `test-all.sh` shards this battery runs — on the pushed
-# head. The skill also mandates re-running the battery after any post-Phase-4
+# test-webplat + test-bun + test-scripts + test-scripts-heavy + web-platform-build,
+# of which the first four are the same `test-all.sh` shards this battery runs —
+# on the pushed head. The skill also mandates re-running the battery after any post-Phase-4
 # change (a review fix, a main sync, an advisor fix), and on that re-run path the
 # work is frequently a pure duplicate. Measured on PR #8233: two full batteries, ~70 min, the second
 # finishing against a head whose 26/26 required checks were already green on the
@@ -239,13 +241,15 @@ command -v timeout >/dev/null 2>&1 || undecidable "timeout (coreutils) not on PA
 #
 # Carry each context's OWN integration_id; do NOT collapse this to a constant.
 # The app id is NOT uniform across the required set. Measured 2026-09-17 against
-# the live ruleset: 26 contexts, 25 pinned to 15368 (GitHub Actions) and `CodeQL`
-# pinned to 57789 (github-advanced-security). scripts/required-checks.txt has
-# recorded that split since #6050 and names CodeQL as the sole 57789 context —
-# an earlier revision of this comment asserted all 26 were 15368, contradicting
-# a file this gate cites as the drifted mirror it refuses to trust. The code was
-# always per-context and so was always right; only the comment overclaimed.
-# Hardcoding 15368 would leave CodeQL permanently unmatched → ABSENT → OWED.
+# the live ruleset. Today (post-#9454, merge queue adopted, CodeQL advisory) every
+# required context is pinned to 15368 (GitHub Actions) — 23 CI Required + 2 CLA
+# Required — but that is a property of the current rulesets, not of this gate. While
+# CodeQL WAS required (until #9454) the split was 25 x 15368 + `CodeQL` x 57789
+# (github-advanced-security), and a CodeQL re-tighten (codeql-1537-revisit-watch.yml)
+# would restore a non-uniform set. The code is deliberately per-context so it stays
+# right either way; an earlier revision of this comment asserted a uniform 15368 set
+# and was wrong at the time. Hardcoding 15368 would leave any differently-bound
+# context permanently unmatched → ABSENT → OWED.
 # --paginate here too. Without it a rules array exceeding one page truncates and
 # the gate requires FEWER contexts than the ruleset does — under-requiring, the
 # unsafe direction, and the same failure this file rejects required-checks.txt
@@ -363,7 +367,7 @@ fi
 # {context, integration_id} OBJECTS, so a bare-string index never matches and the
 # condition would never retire.
 if ! jq -e --arg c "infra-validate-required" 'any(.[]; .context == $c)' <<<"$REQUIRED_JSON" >/dev/null 2>&1; then
-  if printf '%s\n' "$CHANGED" | grep -qE "$INFRA_RE"; then
+  if grep -qE "$INFRA_RE" <<<"$CHANGED"; then
     owed "diff touches the infra surface and infra-validate-required is NOT in the live required set (#6480) — the battery is its only BLOCKING gate"
   fi
 fi
@@ -372,9 +376,10 @@ fi
 # Every condition held.
 # ---------------------------------------------------------------------------
 # No "and these suites go unrun" note here, deliberately: it would be FALSE.
-# test-all.sh registers every suite inside one of want_scripts / want_bun /
-# want_webplat / want_infra, and CI's required `test` context runs the first
-# three plus web-platform-build. The only local-only residue is the infra group,
+# test-all.sh registers every suite inside one of want_scripts /
+# want_scripts_heavy / want_bun / want_webplat / want_infra, and CI's required
+# `test` context runs the first four plus web-platform-build. The only
+# local-only residue is the infra group,
 # which condition 2 refuses on. An earlier revision claimed a residue that does
 # not exist, which both overstated the risk and contradicted this file's own
 # containment argument.

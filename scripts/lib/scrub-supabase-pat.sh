@@ -3,15 +3,16 @@
 # tokens (sbp_-prefixed) out of any string before it reaches a log, a
 # $GITHUB_OUTPUT line, or a GitHub issue body.
 #
-# Why a shared lib: this helper is already inlined in FOUR places —
+# Why a shared lib: this helper is inlined in THREE places — re-measured
+# 2026-09-19 with `git grep -l 'sbp_REDACTED' -- . ':!knowledge-base'`, after
+# apply-inngest-rls-dev.yml was retired with the #6488 drop:
 #   .github/workflows/apply-inngest-rls.yml
-#   .github/workflows/apply-inngest-rls-dev.yml
 #   .github/workflows/scheduled-inngest-health.yml
 #   apps/web-platform/scripts/postgrest-reload-schema.sh
 # Bash functions do not cross GitHub-Actions step boundaries, which is why the
-# three workflow copies exist; postgrest-reload-schema.sh is a script and could
+# two workflow copies exist; postgrest-reload-schema.sh is a script and could
 # source this instead. A standalone script CAN source a lib, so new callers take
-# this one and add no fifth copy. Mirrors scripts/lib/strip-log-injection.sh.
+# this one and add no fourth copy. Mirrors scripts/lib/strip-log-injection.sh.
 #
 # The drift this exists to stop is already real, not hypothetical: a FIFTH copy
 # at .github/workflows/cutover-inngest.yml (PAT_SCRUB) shares this regex but

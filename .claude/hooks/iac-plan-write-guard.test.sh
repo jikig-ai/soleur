@@ -22,7 +22,7 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
 assert_decision() {
   local label="$1" want="$2" payload="$3"
@@ -265,7 +265,7 @@ TOTAL=$((TOTAL + 1))
 t6_big="$(mk_big_body 128 MATCHME)"
 t6_fails=0
 for _ in $(seq 1 20); do
-  ( set -o pipefail; echo "$t6_big" | grep -q MATCHME ) || t6_fails=$((t6_fails + 1))
+  ( set -o pipefail; echo "$t6_big" | grep -q MATCHME ) || t6_fails=$((t6_fails + 1))  # sigpipe-demo: intentional (T6 asserts the pipe form races)
 done
 t6_safe_fails=0
 for _ in $(seq 1 20); do

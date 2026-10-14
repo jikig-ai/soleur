@@ -49,6 +49,15 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        }
        export INCIDENTS_REPO_ROOT="$_soleur_sb"
        export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_sb"
+       # Marker-at-creation (#9117): declare an owner the reapers can verify BEFORE anything can go
+       # wrong. 33 suites install their own EXIT trap after sourcing this file and replace the one
+       # composed below (#8659), and SIGKILL runs no trap at all; either way the dir is then a
+       # reaper-eligible `marker:<pid>` entry instead of unattributable residue. Done in a SUBSHELL so
+       # the suite's function namespace is not polluted and no trap is involved (ADR-129); a missing
+       # lib (a lib-copy fixture) or a failed write degrades to the pre-#9117 shape, never aborts.
+       ( set +e; _soleur_sr="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/lib/scratch-root.sh"
+         # shellcheck source=/dev/null
+         [ -f "$_soleur_sr" ] && . "$_soleur_sr" && soleur_scratch_mark_owned "$_soleur_sb" ) >/dev/null 2>&1 || true
        # Own it (ADR-129 rule (c)), COMPOSED with any EXIT trap already installed.
        #
        # Unescaped with PARAMETER EXPANSION, never `eval`. `trap -p` emits the body single-quoted
@@ -140,14 +149,22 @@ assert_file_not_exists() {
 }
 
 make_gh_stub() {
-  # Creates a `gh` stub at "$stub_dir/gh" that handles `gh run list ...`.
+  # Creates a `gh` stub at "$stub_dir/gh" that handles `gh pr list ...` — the
+  # subcommand cmd_cron_run_stale has used since the binding moved off
+  # `gh run list` (#7255: the check is an Inngest cron; its GitHub artifact is
+  # the weekly `ci/vendor-attest-*` attestation PR, ADR-203).
   # The first arg is the stub directory (prepend to PATH); the second is the
-  # literal stdout for `gh run list`. Subcommands other than `run list` exit 1.
+  # literal stdout for `gh pr list` (the post---jq value, e.g. an ISO8601
+  # timestamp). Subcommands other than `pr list` exit 1.
+  # Every invocation appends its argv to "$stub_dir/argv.log" so tests can pin
+  # the query shape (the `head:ci/vendor-attest` selector) — if the probe's
+  # data source moves again, that pin reds instead of silently 999ing.
   local stub_dir="$1" output="$2"
   mkdir -p "$stub_dir"
   cat > "$stub_dir/gh" <<EOF
 #!/usr/bin/env bash
-if [[ "\$1 \$2" == "run list" ]]; then
+printf '%s\n' "\$@" >> "$stub_dir/argv.log"
+if [[ "\$1 \$2" == "pr list" ]]; then
   printf '%s\n' "$output"
   exit 0
 fi
@@ -163,7 +180,7 @@ make_gh_stub_sleep() {
   mkdir -p "$stub_dir"
   cat > "$stub_dir/gh" <<EOF
 #!/usr/bin/env bash
-if [[ "\$1 \$2" == "run list" ]]; then
+if [[ "\$1 \$2" == "pr list" ]]; then
   sleep $seconds
   printf '2026-02-01T00:00:00Z\n'
   exit 0
@@ -175,7 +192,7 @@ EOF
 
 make_gh_api_stub() {
   # Creates a `gh` stub at "$stub_dir/gh" that handles `gh api <url>` and
-  # `gh auth status`. Unlike make_gh_stub (which only knows `gh run list`),
+  # `gh auth status`. Unlike make_gh_stub (which only knows `gh pr list`),
   # this dispatches on the API path and serves fixtures from "$fixture_dir".
   #
   # Per-endpoint fixture files, keyed by URL substring

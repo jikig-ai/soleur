@@ -116,6 +116,12 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(registry)[0]?.wedged).toBe(false);
   });
 
+  test("mirrors SOLEUR_CLEANUP_GH_QUERY_FAILED without paging (#8490: fail-closed, branch kept)", () => {
+    const ghDown = "SOLEUR_CLEANUP_GH_QUERY_FAILED branch=feat-x rc=1";
+    expect(extractGitLockMarkers(ghDown).length).toBe(1);
+    expect(extractGitLockMarkers(ghDown)[0]?.wedged).toBe(false);
+  });
+
   test("matches the #5934 config-target-masked family and classifies it as wedged", () => {
     expect(extractGitLockMarkers(CONFIG_TARGET_MASKED)[0]?.wedged).toBe(true);
     expect(extractGitLockMarkers(CONFIG_TARGET_MASKED_REMEDY)[0]?.wedged).toBe(true);
@@ -128,6 +134,42 @@ describe("extractGitLockMarkers", () => {
   test("mirrors the benign SOLEUR_GIT_CONFIG_MASK_SKIP non-bare-skip diagnostic but does NOT page it (D3)", () => {
     expect(extractGitLockMarkers(MASK_SKIP).length).toBe(1);
     expect(extractGitLockMarkers(MASK_SKIP)[0]?.wedged).toBe(false);
+  });
+
+  // #9269 — install_deps skip marker. Warn-and-continue by contract: creation
+  // completes and the worktree is usable in every arm, so it must never page.
+  test("mirrors SOLEUR_WORKTREE_INSTALL_SKIPPED arms without paging", () => {
+    const lines = [
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=registry.npmjs.org endpoint=https___registry.npmjs.org arm=root-npm",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout arm=app-web-platform secs=300",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=failed arm=app-demo rc=3",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=bun arm=app-demo",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=no-lockfile arm=root",
+      "SOLEUR_WORKTREE_INSTALL_UNBOUNDED arm=root-npm",
+    ];
+    for (const line of lines) {
+      expect(extractGitLockMarkers(line).length, `${line} must be mirrored`).toBe(1);
+      expect(extractGitLockMarkers(line)[0]?.wedged, `${line} must not page`).toBe(false);
+    }
+  });
+
+  // #9677 — cleanup-merged's effective-space line and the opt-in Docker prune. Reports, never pages,
+  // and a lookalike name must not be mirrored (the alternation is word-bounded).
+  test("mirrors SOLEUR_CLEANUP_SPACE and SOLEUR_DOCKER_PRUNE without paging", () => {
+    const lines = [
+      "SOLEUR_CLEANUP_SPACE logical_bytes=4096 df_delta_bytes=512000 fstype=btrfs docker_prune=off snapshots=snapper",
+      "SOLEUR_CLEANUP_SPACE note: freed space can stay pinned by snapper snapshots until they rotate out; Soleur never deletes snapshots.",
+      'SOLEUR_DOCKER_PRUNE mode=apply builder="Total:  1.2GB" images="Total reclaimed space: 300MB"',
+      "SOLEUR_DOCKER_PRUNE skipped reason=remote-daemon",
+      "SOLEUR_DOCKER_PRUNE skipped reason=prune-failed rc=1",
+    ];
+    for (const line of lines) {
+      expect(extractGitLockMarkers(line).length, `${line} must be mirrored`).toBe(1);
+      expect(extractGitLockMarkers(line)[0]?.wedged, `${line} must not page`).toBe(false);
+    }
+    expect(extractGitLockMarkers("SOLEUR_CLEANUP_SPACE_EXTRA x=1").length).toBe(0);
+    expect(extractGitLockMarkers("SOLEUR_DOCKER_PRUNED x=1").length).toBe(0);
   });
 
   // #7394 — the bare-config polarity markers. Classification is by `branch=`, not by
@@ -349,9 +391,23 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
     //     the system would be pure volume, and paging on it is meaningless: it
     //     reports that nothing is wrong. The FAILURE direction stays mirrored via
     //     ..._LIB_MISSING, so the signal this telemetry exists for is unaffected.
+    //   - SOLEUR_WORKTREE_REAP_CAPABILITY (#8400/#8401) — exactly parallel to
+    //     ..._LEASE_LIB_OK: emitted once per worktree-manager.sh load, i.e. on EVERY
+    //     invocation including `list`, and READ LOCALLY — /soleur:go's session-start
+    //     fence greps the shipped file for this literal before it dispatches
+    //     cleanup-merged. It is a capability declaration, not an observation about
+    //     the machine, so there is no failure direction for it to report. The exemption
+    //     rests on VOLUME alone, and that is stated plainly because an earlier revision
+    //     justified it by claiming the absence "is mirrored by the consumer as
+    //     SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified" — measured
+    //     FALSE twice over: that marker is not in MARKER_RE, and commands/*.md is outside
+    //     this guard's scan set entirely, so the consumer mirrors to nothing. The refusal
+    //     is visible on the operator's terminal (layer 7) and nowhere else, which is the
+    //     honest scope.
     const SUCCESS_PATH_CONTROL_SIGNALS = new Set([
       "SOLEUR_GIT_REPO_READY",
       "SOLEUR_WORKTREE_LEASE_LIB_OK",
+      "SOLEUR_WORKTREE_REAP_CAPABILITY",
     ]);
     for (const name of unique) {
       if (SUCCESS_PATH_CONTROL_SIGNALS.has(name)) continue;

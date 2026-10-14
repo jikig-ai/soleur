@@ -174,5 +174,5 @@ bounded by the diff's file list and structurally cannot see the twin.
 ## Related
 
 - `knowledge-base/legal/audits/2026-07-counsel-review-6588.md` — withdrawal + Amendments 1-3
-- `knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md` — DC-1 (hold), DC-2 (rebase reversal), DC-3 (banner date)
+- `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-6588-legal-clause-retraction/decision-challenges.md` — DC-1 (hold), DC-2 (rebase reversal), DC-3 (banner date)
 - #6808 (dead LUKS heartbeat — the claim-decay dependency), #6897, #6931, #6812, #3723

@@ -88,6 +88,6 @@ For `jq` numeric fallbacks: `// 0` silently aliases missing-field to a real nume
 ## References
 
 - PR #3421 (this learning's source)
-- Plan: `knowledge-base/project/plans/2026-05-07-feat-deploy-pipeline-hardening-3408-3409-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-07-feat-deploy-pipeline-hardening-3408-3409-plan.md`
 - Sibling: `2026-04-17-align-ci-poll-windows-with-adjacent-steps.md` (the original poll-window alignment learning)
 - Parent recurrence: `2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md` (#3398's learning)

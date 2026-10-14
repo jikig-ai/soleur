@@ -5,7 +5,7 @@ date: 2026-07-01
 related: [5766, 5417, 5694, 5767, 5240]
 related_adrs: [ADR-030, ADR-033]
 related_plans:
-  - knowledge-base/project/plans/2026-07-01-feat-durable-agent-run-lifecycle-plan.md
+  - knowledge-base/project/plans/archive/20261013-041741-2026-07-01-feat-durable-agent-run-lifecycle-plan.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -118,3 +118,11 @@ element inside the already-modeled `supabase` container (C4 models containers, n
 external actor, external system, container, or access relationship. No `views.c4` include change.
 
 Pairs with #5767 (runaway guard) as the "agent-run supervisor".
+
+## Amendment — 2026-09-23 (#8611, ADR-243): the last two bypassing crons now write live rows
+
+`cron-daily-triage` and `cron-follow-through-monitor` spawned Claude inline and bypassed
+`spawnClaudeEval` in v1, so they wrote no `routine_run_progress` row. #8611 moved both onto
+`spawnClaudeEval`, so they now upsert and heartbeat a live row like the other claude-eval crons and
+appear in the Routines UI. The table's any-authenticated SELECT is unchanged (rows carry system ids
+only).

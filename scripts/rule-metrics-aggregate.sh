@@ -666,7 +666,9 @@ fi
 # build and --dry-run print above are intentionally left intact so compound's
 # unused-rules hint (compound/SKILL.md step 8) still parses.
 if [[ "${valid_lines:-0}" -eq 0 ]]; then
-  echo "rule-metrics: 0 rule-carrying incident lines; leaving committed $OUT unchanged." >&2
+  # NOT "committed" since #8377/ADR-235 -- $OUT is an untracked cache. Callers that need it
+  # must treat this exit-0-without-writing as "nothing was produced", not as success.
+  echo "rule-metrics: 0 rule-carrying incident lines; no aggregate written ($OUT left as-is)." >&2
   if [[ "${drops_total:-0}" -gt 0 ]]; then
     drops_breakdown=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(" ")' <<< "$drops_counts_json" 2>/dev/null || echo "")
     echo "rule-metrics: filtered $drops_total telemetry-drop sentinel row(s) [${drops_breakdown}]; no aggregate written." >&2

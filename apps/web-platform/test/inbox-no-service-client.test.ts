@@ -17,6 +17,7 @@ const SERVER_MODULES = [
   "../server/inbox-sources.ts",
   "../server/inbox-tools.ts",
   "../server/inbox-state-handler.ts",
+  "../server/inbox-bulk-archive-handler.ts",
 ].map((p) => path.join(__dirname, p));
 
 function walk(dir: string): string[] {

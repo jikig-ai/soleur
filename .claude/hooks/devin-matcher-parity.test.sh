@@ -18,8 +18,8 @@
 #      `.claude/hooks/devin-dispositions.tsv`.
 #   2. Every `bind` row is backed by a live `.devin/config.json` entry whose
 #      matcher is anchored and regex-EVALUATES true on a real Devin tool name
-#      (jq `test()` — never string-compare; `kb-index-merge-driver-registration`
-#      precedent).
+#      (jq `test()` — never string-compare; a matcher that string-compares passes
+#      for an exact tool name and silently fails every prefixed variant).
 #   3. Every `covered-by-twin` row is backed by an anchored lowercase matcher
 #      in settings.json that fires under Devin.
 #   4. No hook is dispatched by two registries for the same Devin tool —
@@ -69,7 +69,7 @@ WORK="$(mktemp -d -t devinparity.XXXXXXXX)"
 #   python3 "<root>/.claude/hooks/foo.py"
 canon() {
   local cmd="$1" p
-  if printf '%s' "$cmd" | grep -q 'PLUGIN_ROOT'; then
+  if printf '%s' "$cmd" | grep -c >/dev/null 'PLUGIN_ROOT'; then
     p="$(printf '%s' "$cmd" | grep -oE 'hooks/[A-Za-z0-9_.-]+\.(sh|py)' | head -1)"
     [[ -n "$p" ]] && printf 'plugins/soleur/%s' "$p" && return 0
   else
@@ -116,7 +116,7 @@ matches() { # $1 = matcher regex, $2 = tool name
   # under both harnesses — treating either as never-dispatching would let a
   # matcherless PreToolUse entry evade T4 while dispatching everywhere.
   [[ "$1" == "(none)" || "$1" == '""' ]] && return 0
-  jq -n --arg t "$2" --arg m "$1" '$t | test($m)' 2>/dev/null | grep -q true
+  jq -n --arg t "$2" --arg m "$1" '$t | test($m)' 2>/dev/null | grep -c >/dev/null true
 }
 
 # Ledger rows as emitted by grep — comments and blank lines stripped.
@@ -185,6 +185,25 @@ while IFS=$'\t' read -r ev m p; do
   [[ "$ev" == CANONFAIL ]] && continue
   [[ -f "$REPO_ROOT/$p" ]] || { echo "  registration points at missing file: $p" >&2; t1_fail=1; }
 done < <(cat "$WORK/settings.tsv" "$WORK/devin.tsv" "$WORK/plugin.tsv")
+
+# The path check above canon()s the command and then stats the PATH — so it is
+# satisfied by a command whose path resolves while the COMMAND ITSELF cannot run.
+# That is not hypothetical: #8377 shipped
+#   bash "${...}/scripts/ensure-kb-index.sh --soft"
+# with the closing quote AFTER the flag, so bash received ONE argv entry — a
+# filename ending in ".sh --soft" — and exited 127 on every Devin SessionStart.
+# canon()'s regex stops at `.sh` and discards the ` --soft"` remainder, so
+# [[ -f ]] was true and this suite stayed green while the hook was dead.
+# Assert the SHAPE the bug takes: a script extension followed by whitespace and a
+# flag while still inside the double-quoted span.
+while IFS= read -r cmd; do
+  [[ -n "$cmd" ]] || continue
+  if printf '%s' "$cmd" | grep -cE >/dev/null '\.(sh|py)[[:space:]]+-[^"]*"'; then
+    echo "  flag glued inside the quoted script path (bash would treat it as a filename): $cmd" >&2
+    t1_fail=1
+  fi
+done < <(jq -r '.hooks // {} | to_entries[] | .value[]? | .hooks[]? | .command // empty' \
+           "$SETTINGS" "$DEVIN_CFG" "$PLUGIN_HOOKS" 2>/dev/null)
 
 # anti-vacuity: the enumeration must actually have found rows. 50 is a floor,
 # not a count assertion — ~100 registrations exist today; the floor only
@@ -399,7 +418,7 @@ done < "$WORK/lifecycle-double.tsv"
 # must-fail control: the awk above must actually flag a duplicated pair.
 printf 'Stop\tplugins/soleur/hooks/stop-hook.sh\tdup\nStop\tplugins/soleur/hooks/stop-hook.sh\tdup2\n' \
   | awk -F'\t' '{k=$1"|"$2; cnt[k]++} END {for (k in cnt) if (cnt[k] > 1) print k}' \
-  | grep -q 'stop-hook' || { echo "  T8 control: dedup awk failed to flag a known duplicate" >&2; t8_fail=1; }
+  | grep -c >/dev/null 'stop-hook' || { echo "  T8 control: dedup awk failed to flag a known duplicate" >&2; t8_fail=1; }
 
 # Sentinel invariant (review P1): devin-session-start.sh MUST be plugin-bound,
 # never .devin-bound — only plugin dispatch exports CLAUDE_PLUGIN_ROOT, and a
@@ -408,7 +427,7 @@ printf 'Stop\tplugins/soleur/hooks/stop-hook.sh\tdup\nStop\tplugins/soleur/hooks
 # catch a single-registration .devin binding, so assert placement directly.
 grep -F $'SessionStart\t""\tplugins/soleur/hooks/devin-session-start.sh' "$WORK/plugin.tsv" >/dev/null \
   || { echo "  devin-session-start.sh missing plugin '' SessionStart binding" >&2; t8_fail=1; }
-if grep -F $'plugins/soleur/hooks/devin-session-start.sh' "$WORK/devin.tsv" | grep -q '^SessionStart'; then
+if grep -F $'plugins/soleur/hooks/devin-session-start.sh' "$WORK/devin.tsv" | grep -c >/dev/null '^SessionStart'; then
   echo "  devin-session-start.sh is .devin-bound — writes hook_source:repo sentinels, breaking cloud-detect local classification" >&2; t8_fail=1
 fi
 

@@ -728,6 +728,26 @@ ck; n=$(scan_sites "$D/noncanonical_pass.sh"); _sf "$n" "$D/noncanonical_pass.sh
   && pass "non-canonical must-PASS: a mktemp-rooted binding stays quiet (the || return 1 is incidental)" \
   || fail "false positive on a permitted binding+guard combination (SITES=${n:-unset})"
 
+# The #10017 sweep's shape: per-case allocs route through a wrapper into a
+# FILE-SCOPE root. The emit chain dies inside the wrapper body unless the
+# resolver falls back to the caller file's bindings.
+cat > "$D/filescope_prefix.sh" <<'EOF'
+SUITE_TMP=$(mktemp -d)
+mk_root() { mktemp -d -p "$SUITE_TMP"; }
+seed() {
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  echo "$tmp"
+}
+run() {
+  local a; a=$(mk_root)
+  local b; b=$(seed)
+  rm -rf "$a" "$b"
+}
+EOF
+ck; n=$(scan_sites "$D/filescope_prefix.sh"); _sf "$n" "$D/filescope_prefix.sh"; [[ "${n:-1}" -eq 0 ]] \
+  && pass "a wrapper's -p prefix var resolves against file scope (the #10017 suite-root sweep)" \
+  || fail "file-scope SUITE_TMP prefix read as never-bound (SITES=${n:-unset}) -- the outer-scope fallback regressed"
+
 # --- E. The two resolver bugs that made sites look SAFE. Both are pinned in the FAIL direction. ----
 echo "E. resolver regressions (both were false-NEGATIVE bugs)"
 E="$TMP_ROOT/e"; mkdir -p "$E"
@@ -801,7 +821,7 @@ if [[ $((passes + fails)) -ne "$asserted" ]]; then
   exit 2
 fi
 
-MIN_ASSERTIONS=62
+MIN_ASSERTIONS=63
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- arms were removed" >&2
   exit 2

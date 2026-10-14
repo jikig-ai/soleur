@@ -1,0 +1,10 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// A regex literal holding a quote must not make the lexer swallow the rest of the file.
+const QUOTES = /["']/;
+export const looksQuoted = (s: string) => QUOTES.test(s);
+
+// Code inside a template expression is live code.
+export const cmd = `echo ${mkdtempSync(join(tmpdir(), "tpl-"))}`;

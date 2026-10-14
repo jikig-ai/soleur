@@ -53,7 +53,10 @@ export function AnalyticsDashboardLoader() {
         <p className="text-red-400">
           Failed to load analytics data. Please try again.
         </p>
+        {/* data-nav-exempt: intentional full reload — the retry must re-run
+            the whole loader fetch chain, not soft-nav to the same route. */}
         <a
+          data-nav-exempt="intentional hard reload — retry re-runs the loader fetch chain"
           href="/dashboard/admin/analytics"
           className="text-amber-500 underline hover:text-amber-400"
         >

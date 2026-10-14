@@ -92,10 +92,23 @@ if grep -qF '<!-- gate-override: new-scheduled-cron-prefer-inngest -->' <<<"$con
 fi
 
 # Strip a leading project-dir prefix so the on-main check sees a repo-rooted path.
+# ORDER IS LOAD-BEARING (#8480): the basename arm must run FIRST. A linked
+# worktree under the repo produces a path like
+#   $PROJECT_DIR/.worktrees/<branch>/.github/workflows/<file>.yml
+# which also matches "$PROJECT_DIR"/* — if that arm ran first it would strip to
+# `.worktrees/<branch>/.github/workflows/<file>.yml`, the origin/main existence
+# check would miss, and an edit to an existing scheduled workflow would be
+# denied as new. The basename arm yields `.github/workflows/<file>` — the
+# canonical repo-relative path — for BOTH the worktree case and the plain
+# $PROJECT_DIR/.github/workflows/ case, so nothing the first arm used to get
+# right is lost. (The outer `case` above already restricted file_path to a
+# `…/.github/workflows/scheduled-*` tail, so collapsing to basename here is
+# always the gate's intended file set; GitHub only executes root-level
+# `.github/workflows/`, so a nested-path write cannot smuggle a live workflow.)
 rel_path="$file_path"
 case "$rel_path" in
-  "$PROJECT_DIR"/*) rel_path="${rel_path#"$PROJECT_DIR"/}" ;;
   /*/.github/workflows/*) rel_path=".github/workflows/$(basename "$rel_path")" ;;
+  "$PROJECT_DIR"/*) rel_path="${rel_path#"$PROJECT_DIR"/}" ;;
 esac
 
 # Does the file already exist on origin/main? If so, it's an Edit of an
@@ -132,6 +145,8 @@ The project's canonical pattern for scheduled work is Inngest (ADR-033). Existin
 To proceed in Inngest:
   1. Add a new file under apps/web-platform/server/inngest/functions/cron-<name>.ts
   2. Register it in apps/web-platform/app/api/inngest/route.ts
+  3. Complete every row of the ADR-033 Registration checklist (manifest, metadata,
+     registry count, Sentry monitor, execution-placement row, ...)
 
 To override this gate (rare — pure-GH ops like Dependabot, CodeQL, or release-only workflows):
   Add the literal HTML comment

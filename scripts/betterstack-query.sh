@@ -37,7 +37,7 @@
 #      "SELECT dt, raw FROM remote($BS_TABLE) WHERE … LIMIT 50 FORMAT JSONEachRow"
 #      --table / --table-s3 are honoured here too (either side of the SQL); they are
 #      pre-scanned ahead of mode dispatch (#8043 Guard 5) — never silently dropped.
-#   2. Convenience flags (no SQL arg): --since <Nh|Nm|ISO>, --until <ISO>,
+#   2. Convenience flags (no SQL arg): --since <Nh|Nm|Nd|ISO-Z|'YYYY-MM-DD HH:MM:SS'>, --until <ISO-Z|…>,
 #      --grep <substr> (repeatable, OR-combined), --limit <N>, --raw-only
 #      (exclude host metrics + journald noise), --no-archive (hot window only —
 #      see below), --table / --table-s3 (override either table).
@@ -150,9 +150,9 @@ export BS_TABLE="${BS_TABLE:-t520508_soleur_inngest_vector_prd_3_logs}"
 # the derived name exists and the query succeeds. That is this script's own headline bug
 # (asks for X, gets Y, exit 0) reintroduced one level down.
 # (#7873, #7898 §6) BETTERSTACK_QUERY_HOST is interpolated into `https://${HOST}?...` and
-# run_sql attaches Basic auth with `curl -u`, which sends the credential PREEMPTIVELY on the
-# first request with no challenge. The value IS the destination of a live secret, so it is
-# validated in two steps before run_sql is ever reachable.
+# run_sql attaches Basic auth (a `user = "..."` line on curl's stdin config; curl sends it PREEMPTIVELY on the
+# first request with no challenge). The value IS the destination of a live secret, so it is validated in two
+# steps before run_sql is ever reachable.
 #
 # STEP 1 — the SHAPE arm (cheap, first refusal). It rejects the userinfo/path/scheme family:
 # `real.host@evil.example` resolves to evil.example, and `evil.example/x?` puts the query on
@@ -346,13 +346,46 @@ EOF
   exit 64
 }
 
+# (#9597, S2 of the argv-credential sweep) The Basic-auth pair used to ride curl's ARGUMENT LIST
+# (`-u USER:PASS`), which every local user can read from /proc/<pid>/cmdline and `ps`. It now travels on
+# curl's STDIN as one `user = "USER:PASS"` config line (`--config -`), fed by a PROCESS SUBSTITUTION: a
+# `printf | curl --config -` pipe can die with 141 (SIGPIPE) under `pipefail` when curl does not read stdin.
+#
+# A config line is a quoted string, so the VALUE decides what curl parses. Measured against real curl 8.22
+# (a byte sweep of 0x01..0x7f through `--libcurl`): only a double quote, a backslash and a newline change the
+# parse of a `user = "..."` value (a newline ends the line and the rest is read as another directive: config
+# injection, e.g. a second `url = "..."`). The deny-list below is a SUPERSET of that: every control character
+# (so CR and tab are refused although curl delivers them verbatim), the quote, the backslash, and a colon in
+# the USERNAME (the first colon is the user/password separator, so a username colon silently moves bytes into
+# the password; a PASSWORD may hold colons, which real values do). Empties are refused too. It is a deny-list
+# of what can break a quoted config value, not an allow-list: the real credential shapes were measured
+# (counts only) to pass it, and a stricter class would turn a re-minted credential into an outage.
+#
+# EXIT 2, never 1: `bs_read_classify` maps 1 to `reader-exit-1`, whose remedy blames DOPPLER_TOKEN, the wrong
+# action for a credential-shape refusal; 2 is this script's existing "refusing to send credentials" class (host
+# pin). The empty case never gets here: the credential guard above exits 3 first. One value-free marker line
+# (the existing SOLEUR_CREDENTIAL_REFUSED arm) and one stderr line that names only the VARIABLE, never a value.
+_bs_refuse() {  # $1 = variable name, $2 = reason (control_char | token_shape)
+  printf 'betterstack-query.sh: refusing to send %s: its value cannot be carried safely on the curl config channel (%s); re-mint it or fix the Doppler value (#9597)\n' "$1" "$2" >&2
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=betterstack-query reason=%s\n' "$2" >&2
+  exit 2
+}
+_bs_credential_guard() {
+  local LC_ALL=C _u="${BETTERSTACK_QUERY_USERNAME}" _p="${BETTERSTACK_QUERY_PASSWORD}"
+  case "$_u" in *[[:cntrl:]]*) _bs_refuse BETTERSTACK_QUERY_USERNAME control_char ;; esac
+  case "$_p" in *[[:cntrl:]]*) _bs_refuse BETTERSTACK_QUERY_PASSWORD control_char ;; esac
+  case "$_u" in ''|*:*|*\"*|*\\*) _bs_refuse BETTERSTACK_QUERY_USERNAME token_shape ;; esac
+  case "$_p" in ''|*\"*|*\\*) _bs_refuse BETTERSTACK_QUERY_PASSWORD token_shape ;; esac
+}
+
 run_sql() {
-  # $1 = SQL. Credentials via Basic auth; never echoed.
+  # $1 = SQL (not a secret; stays a `-d` argument). The credential pair is guarded, then sent on stdin.
+  _bs_credential_guard
   curl --disable --noproxy '*' -sS --fail-with-body --max-time 60 \
-    -u "${BETTERSTACK_QUERY_USERNAME}:${BETTERSTACK_QUERY_PASSWORD}" \
     -H 'Content-type: plain/text' \
     -X POST "https://${BETTERSTACK_QUERY_HOST}?output_format_pretty_row_numbers=0" \
-    -d "$1"
+    -d "$1" \
+    --config - < <(printf 'user = "%s:%s"\n' "$BETTERSTACK_QUERY_USERNAME" "$BETTERSTACK_QUERY_PASSWORD")
 }
 
 # --- Mode 1: raw SQL ---
@@ -405,7 +438,19 @@ if [[ ! "$LIMIT" =~ ^[0-9]+$ ]]; then
 fi
 
 # Build the WHERE clause. `dt` is the ClickHouse event-time column.
-# --since accepts Nh / Nm / Nd (relative) or a literal 'YYYY-MM-DD HH:MM:SS'.
+# --since accepts Nh / Nm / Nd (relative), a literal 'YYYY-MM-DD HH:MM:SS', or ISO-8601 UTC
+# 'YYYY-MM-DDTHH:MM:SSZ' (--until: the last two). ISO-Z is NORMALISED here, before sql_quote:
+# ClickHouse's DateTime cast rejects the `T…Z` form (measured 2026-09-24: rc 22, HTTP 400), and
+# the session timezone is UTC (measured), so dropping the `Z` keeps UTC semantics (#7761).
+_iso_z_to_ck() {
+  if [[ "$1" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2})Z$ ]]; then
+    printf '%s %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+  else
+    printf '%s' "$1"
+  fi
+}
+SINCE="$(_iso_z_to_ck "$SINCE")"
+[[ -n "$UNTIL" ]] && UNTIL="$(_iso_z_to_ck "$UNTIL")"
 if [[ "$SINCE" =~ ^([0-9]+)([hmd])$ ]]; then
   unit="${BASH_REMATCH[2]}"
   case "$unit" in h) ivl="HOUR";; m) ivl="MINUTE";; d) ivl="DAY";; esac

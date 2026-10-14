@@ -22,7 +22,11 @@
 # EXIT CONTRACT: 0 = the invariant holds; 1 = read succeeded, it does not yet; 2 = TRANSIENT;
 # 78 = refused under xtrace.
 #
-# RETIREMENT: when #6894's cutover tracker closes, delete this file with its staging sibling.
+# RETIREMENT: RETIRED 2026-09-21 (#8296). Its #8295 directive was removed: after the cutover the only
+# reason=cutover-complete row leaves this probe's 48h window, so every sweep from 2026-09-23 would
+# exit 1 and falsely reopen the correctly-closed #8295. Nothing runs this file now. Delete it in any
+# change that also drops its row from plugins/soleur/test/fixture-relative-assert.baseline.txt
+# (deleting it alone reddens that ratchet, and editing the baseline fires a plugin release).
 set -uo pipefail
 
 case "$-" in
@@ -34,12 +38,24 @@ case "$-" in
     ;;
 esac
 
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+# Resolved from THIS file's own location, never from $PWD (the shared load contract).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="$REPO_ROOT/scripts/betterstack-query.sh"
 HOST="soleur-inngest"
 HOST_NAME="soleur-inngest-prd"
 
 if [[ ! -r "$QUERY" ]]; then echo "TRANSIENT: $QUERY missing"; exit 2; fi
+# The ONE probe-row predicate (#8846): emitter + anchored marker. The inngest event log ships from
+# the same host under SYSLOG_IDENTIFIER=doppler and quotes probe lines, so host isolation alone does
+# not make a row a probe reading.
+# Load contract (scripts/lib/inngest-probe-row.sh header): unset first, prove the def by selftest.
+unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
+_ipr_lib="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
+# shellcheck source=scripts/lib/inngest-probe-row.sh
+if ! source "$_ipr_lib" || ! declare -F inngest_probe_row_selftest >/dev/null || ! inngest_probe_row_selftest; then
+  echo "TRANSIENT: reason=selector_unavailable lib=${_ipr_lib}"
+  exit 2
+fi
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
   if [[ -z "${!v:-}" ]]; then echo "TRANSIENT: $v is not set in the probe environment"; exit 2; fi
 done
@@ -62,15 +78,16 @@ if (( RC != 0 )); then
   exit 2
 fi
 
-# ECHO ISOLATION: pin host AND host_name before reading any field. The tracker's own body quotes
-# these markers and reaches the same source through the GitHub webhook.
+# ECHO ISOLATION: pin host AND host_name AND the FSM's own emitter (its readonly LOG_TAG) before
+# reading any field. The tracker's own body quotes these markers and reaches the same source through
+# the GitHub webhook, logged on the SAME host by the inngest event log (SYSLOG_IDENTIFIER=doppler).
 #
 # The FSM's message is JSON, so the flag is read as a FIELD rather than matched as a substring —
 # `"flag":"done"` and `"flag":"rolled-back"` are otherwise both "contains done" under a careless
 # grep, and the second is the state this probe must never accept.
 DONE_N=$(printf '%s\n' "$DONE_ROWS" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
   fromjson? | .raw? | fromjson?
-  | select(.host == $h and .host_name == $hn)
+  | select(.host == $h and .host_name == $hn and .SYSLOG_IDENTIFIER == "inngest-luks-cutover")
   | (.message | if type == "string" then (fromjson? // {}) else . end)
   | select(.marker == "SOLEUR_INNGEST_LUKS_CUTOVER")
   | select(.flag == "done" and .exit_code == 0 and .reason == "cutover-complete")
@@ -81,20 +98,20 @@ DONE_N=$(printf '%s\n' "$DONE_ROWS" | jq -R -r --arg h "$HOST" --arg hn "$HOST_N
 # cutover is the expected history of a retried migration.
 NEWEST_DONE=$(printf '%s\n' "$DONE_ROWS" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
   fromjson? | select(.dt != null) | . as $r | ($r.raw | fromjson?)
-  | select(.host == $h and .host_name == $hn)
+  | select(.host == $h and .host_name == $hn and .SYSLOG_IDENTIFIER == "inngest-luks-cutover")
   | (.message | if type == "string" then (fromjson? // {}) else . end)
   | select(.marker == "SOLEUR_INNGEST_LUKS_CUTOVER" and .flag == "done" and .exit_code == 0)
   | $r.dt' 2>/dev/null | sort | tail -1)
 NEWEST_BAD=$(printf '%s\n' "$FSM" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
   fromjson? | select(.dt != null) | . as $r | ($r.raw | fromjson?)
-  | select(.host == $h and .host_name == $hn)
+  | select(.host == $h and .host_name == $hn and .SYSLOG_IDENTIFIER == "inngest-luks-cutover")
   | (.message | if type == "string" then (fromjson? // {}) else . end)
   | select(.marker == "SOLEUR_INNGEST_LUKS_CUTOVER")
   | select(.flag == "rolled-back" or .flag == "aborted")
   | select((.reason // "") | startswith("noop-") | not)
   | $r.dt' 2>/dev/null | sort | tail -1)
 
-PROBE=$(bash "$QUERY" --since 48h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 200 2>&1)
+PROBE=$(bash "$QUERY" --since 48h --grep "$INNGEST_PROBE_MARKER" --limit 200 2>&1)
 RC=$?
 if (( RC != 0 )); then
   echo "TRANSIENT: the probe-row read exited $RC (output withheld)"
@@ -103,14 +120,22 @@ fi
 # The probe row must pin a volume alias (never __NOMATCH__ / __AMBIGUOUS__ / __UNREADABLE__ — an
 # unresolved device is not evidence of anything) and its mount source must be the CANONICAL mapper,
 # which is what "the store is on the encrypted volume" looks like from off-host.
-ON_MAPPER=$(printf '%s\n' "$PROBE" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
+ON_MAPPER_OUT=$(printf '%s\n' "$PROBE" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" "$INNGEST_PROBE_ROW_JQ"'
   fromjson? | .raw? | fromjson?
+  | select(type == "object")
   | select(.host == $h and .host_name == $hn)
-  | (.message // "") | select(test("host_role=dedicated "))
+  | select(inngest_probe_row)
+  | .message | select(test("host_role=dedicated "))
   | select(test("data_mount_src=/dev/mapper/inngest-redis "))
   | select(test("data_mount_devid=scsi-0HC_Volume_[0-9]+ "))
   | select(test("redis_active=active|redis_active=true"))
-  | 1' 2>/dev/null | grep -c '^1$' || true)
+  | 1' 2>/dev/null)
+RC=$?
+if (( RC != 0 )); then
+  echo "TRANSIENT: reason=selector_failed jq_rc=$RC on the probe-row selector"
+  exit 2
+fi
+ON_MAPPER=$(printf '%s\n' "$ON_MAPPER_OUT" | grep -c '^1$' || true)
 
 echo "terminal cutover-complete rows: ${DONE_N} (newest ${NEWEST_DONE:-none})"
 echo "newest rolled-back/aborted row: ${NEWEST_BAD:-none}"
@@ -122,7 +147,7 @@ if [[ "$DONE_N" -ge 1 && "$ON_MAPPER" -ge 1 ]]; then
     exit 1
   fi
   echo "PASS: the FSM completed and the host reports /mnt/data on the canonical mapper with a pinned volume alias (#6894 AC-35)."
-  echo "NEXT (not automatic): flip hcloud_volume.inngest_redis_luks to mechanism=luks in scripts/encryption-posture-ledger.json, and rewrite the hcloud_volume.inngest_redis row as a retained plaintext backstop (#8285)."
+  echo "NEXT (not automatic): the ledger flip landed in #8296 and the retained plaintext backstop hcloud_volume.inngest_redis was destroyed on 2026-10-09 (#8285). Nothing remains here."
   exit 0
 fi
 echo "not yet: the cutover has not completed on this host, or the store is not yet reported on the canonical mapper"

@@ -326,6 +326,74 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
 
     expect(triggerBasenames).toEqual(fixtureBasenames);
   });
+
+  // #9151 — the web-2 sibling's trigger list is a CLOSED subset: every file() it
+  // hashes must be a FILE_MAP member it genuinely delivers (a stray file would be
+  // a trigger with no delivery channel) or its own host-key pin, which changes
+  // the connection it re-dials. Explicitly: push-infra-config.sh (web-1 channel
+  // only) and soleur-doppler-token.tmpl (the credential boundary) are forbidden.
+  test("deploy_pipeline_fix_web2 triggers ⊆ TRIGGER_FILES ∪ {web-2 pin}, minus web-1-only/credential entries", () => {
+    const resourceStart = serverTf.indexOf(
+      'resource "terraform_data" "deploy_pipeline_fix_web2"',
+    );
+    expect(resourceStart).toBeGreaterThanOrEqual(0);
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
+
+    const blockMatch = resourceBlock.match(
+      /triggers_replace\s*=\s*sha256\(join\(\s*",\s*"\s*,\s*\[([\s\S]*?)\]\s*\)\s*\)/,
+    );
+    expect(blockMatch).not.toBeNull();
+    const inner = blockMatch![1];
+    const fileBasenames = Array.from(
+      inner.matchAll(/file\(\s*"\$\{path\.module\}\/([^"]+)"\s*\)/g),
+    ).map((m) => m[1]);
+    // Vacuity: the sibling hashes 20+ files; a broken extraction must not pass on [].
+    expect(fileBasenames.length).toBeGreaterThanOrEqual(20);
+
+    const allowed = new Set([
+      ...TRIGGER_FILES.map((p) => p.split("/").pop()!),
+      "web-2-ssh-host-key.pub",
+      // #9393 — the cron-egress artifacts a RUNNING web-2 gets only through
+      // this resource: the carved CIDR allow list, the resolver, and the
+      // post-apply probe (delivered then executed). #9534 adds the loader:
+      // the resolver's scope-marker heal check is unsatisfiable against a
+      // birth-frozen (pre-#9529) loader that cannot install the gw legs.
+      // They are hashed by cron_egress_firewall's triggers_replace on the
+      // web-1 side, not by deploy_pipeline_fix, so they are sanctioned here
+      // the same way the host-key pin is — as named exceptions, not
+      // TRIGGER_FILES members. The gw deny-CIDR file is the loader's hard
+      // precondition (it dies without it), co-delivered so the pair is
+      // self-sufficient on this channel.
+      "cron-egress-allowlist-cidr.txt",
+      "cron-egress-resolve.sh",
+      "cron-egress-postapply-assert.sh",
+      "cron-egress-nftables.sh",
+      "egress-deny-cidrs.txt",
+    ]);
+    const forbidden = new Set([
+      "push-infra-config.sh",
+      "soleur-doppler-token.tmpl",
+      "hooks.json.tmpl", // delivered via local.hooks_json render, not file()
+    ]);
+    for (const b of fileBasenames) {
+      expect(allowed.has(b)).toBe(true);
+      expect(forbidden.has(b)).toBe(false);
+    }
+    // The non-file triggers are the rendered hooks.json (never the .tmpl bytes),
+    // the host id (cattle re-delivery), the pin file, and a sentinel — and NO
+    // credential local.
+    expect(inner).toContain("local.hooks_json");
+    expect(inner).toContain('hcloud_server.web["web-2"].id');
+    expect(inner).not.toContain("webhook_doppler_token_env");
+    expect(inner).not.toContain("soleur-doppler-token");
+  });
 });
 
 // #7104 PR-A — FILE_MAP ⊆ TRIGGER_FILES.
@@ -492,6 +560,24 @@ describe("apply-deploy-pipeline-fix.yml on.push.paths in sync with TRIGGER_FILES
       // apparmor apply-parity describe below pins the co-target; this line pins
       // the paths reachability.
       "apps/web-platform/infra/apparmor-soleur-bwrap.profile",
+      // #9151 — web-2's host-key pin feeds local.web_2_ssh_host_key + the web-2
+      // sibling's triggers_replace; a re-capture must re-fire the apply.
+      "apps/web-platform/infra/web-2-ssh-host-key.pub",
+      // #9393 — the cron-egress artifacts are hashed by
+      // deploy_pipeline_fix_web2's OWN triggers_replace (the sibling resource),
+      // not by deploy_pipeline_fix, so like the seccomp/apparmor precedents they
+      // are absent from TRIGGER_FILES. A body-only edit — e.g. the daily
+      // CIDR-refresh regeneration — must still fire this workflow or web-2 never
+      // receives it (the same silent-skip shape #5505 fixed for the web-1 set).
+      "apps/web-platform/infra/cron-egress-allowlist-cidr.txt",
+      "apps/web-platform/infra/cron-egress-resolve.sh",
+      "apps/web-platform/infra/cron-egress-postapply-assert.sh",
+      // #9534 — the loader + its deny-file precondition now hash into the
+      // sibling's triggers_replace too; a loader-only edit must re-fire this
+      // workflow or web-2's resolver↔loader pair silently skews (the very
+      // heal-loop this PR closes).
+      "apps/web-platform/infra/cron-egress-nftables.sh",
+      "apps/web-platform/infra/egress-deny-cidrs.txt",
     ]);
     expect(new Set(paths)).toEqual(expected);
   });

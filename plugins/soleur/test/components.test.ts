@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { Glob } from "bun";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   discoverAgents,
@@ -18,7 +18,7 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus", "fable"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 2499; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline)
+const SKILL_DESCRIPTION_WORD_BUDGET = 2413; // bumped +24 for #8880 (cohort-status skill description, 24 words measured through discoverSkills()/parseComponent(), against a 2389/2389 zero-headroom baseline). Earlier history: // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline), bumped +62 for #8289 (kb-glossary 28 + questionnaire-generate 34 words measured through discoverSkills()/parseComponent(), against a 2499/2499 zero-headroom baseline), lowered -172 for #8290 (8 skills moved to disable-model-invocation; flag-create, flag-set-role, cron-list and cron-delete stay model-invocable per review; counted words are model-visible only, ADR-236; 2561 -> 2389 measured through discoverSkills()/parseComponent())
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------
@@ -155,6 +155,9 @@ describe("Skill description budget", () => {
     let totalWords = 0;
     for (const skillPath of skills) {
       const { frontmatter } = parseComponent(skillPath);
+      // Count what the model sees (ADR-236): a user-invoked skill's description is absent from
+      // the model's skill listing, so it spends none of this budget. Filter BEFORE summing.
+      if (frontmatter["disable-model-invocation"] === true) continue;
       const desc = String(frontmatter.description || "");
       const words = desc.split(/\s+/).filter(Boolean).length;
       counts.push({ path: skillPath, words });
@@ -301,16 +304,19 @@ describe("references/ files are reachable from their skill", () => {
 // Autonomous-loop skills must disclose API budget (#3819)
 // ---------------------------------------------------------------------------
 
+// Shared by the API-budget and pipeline-tally sentinels — one list, never two
+// (#9403 review: a duplicated list silently diverges on the next loop skill).
+const AUTONOMOUS_LOOP_SKILLS = [
+  "test-fix-loop",
+  "drain-labeled-backlog",
+  "resolve-todo-parallel",
+  "resolve-pr-parallel",
+  "work",
+  "one-shot",
+  "eval-harness",
+];
+
 describe("Autonomous-loop API-budget disclosure", () => {
-  const AUTONOMOUS_LOOP_SKILLS = [
-    "test-fix-loop",
-    "drain-labeled-backlog",
-    "resolve-todo-parallel",
-    "resolve-pr-parallel",
-    "work",
-    "one-shot",
-    "eval-harness",
-  ];
 
   // Sentinel chosen for distinctiveness + verbatim across all 7 disclosures.
   // Tracks the BSL 1.1 disclaimer carried over from `goal-primitive.md`.
@@ -336,6 +342,132 @@ describe("Autonomous-loop API-budget disclosure", () => {
       ).toBe(true);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Autonomous-loop skills must carry the pipeline-tally call-out (#9403)
+// ---------------------------------------------------------------------------
+// Prose-only bookkeeping has ~zero compliance — the tally only exists if every
+// autonomous loop invokes the counter script. This sentinel pins the anchored
+// call forms: each skill must `init`, `gate` (pre-expensive-step), and `incr`
+// via scripts/pipeline-tally.sh. review/ship are instrumented alongside the
+// loop list (review seats; ship ci_cycles + the ## Pipeline Tally render).
+
+describe("Autonomous-loop pipeline-tally call-out (#9403)", () => {
+  // review (seats) and ship (ci_cycles + render) are instrumented alongside the
+  // loop list — the sentinel covers all nine skills.
+  const TALLY_SKILLS = [...AUTONOMOUS_LOOP_SKILLS, "review", "ship"];
+
+  // Loop until stable — a nested `<!-- <!-- --> -->` can splice neighbours into
+  // a fresh comment (CodeQL incomplete-multi-character-sanitization); a
+  // comment-only mention must NOT satisfy the call-form assertions below.
+  const stripHtmlComments = (raw: string) => {
+    let out = raw;
+    let prev: string;
+    do {
+      prev = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prev);
+    return out;
+  };
+
+  // The qualified invocation is the contract — `pipeline-tally.sh` copied
+  // bare resolves to `command not found`, and the fail-open design makes that
+  // a SILENT skip. `[ \t]+` (not `\s+`) keeps the subcommand on the same line.
+  const CALL_FORMS = [
+    /scripts\/pipeline-tally\.sh"?[ \t]+init\b/, // init invocation
+    /scripts\/pipeline-tally\.sh"?[ \t]+gate\b/, // gate before expensive steps
+    /scripts\/pipeline-tally\.sh"?[ \t]+incr\b/, // incr <dim> call form
+  ];
+
+  for (const skillName of TALLY_SKILLS) {
+    test(`${skillName} SKILL.md carries pipeline-tally init/gate/incr call forms`, () => {
+      const raw = stripHtmlComments(
+        readFileSync(
+          resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md"),
+          "utf-8",
+        ),
+      );
+      for (const re of CALL_FORMS) {
+        expect(
+          re.test(raw),
+          `${skillName} is missing tally call form ${re.source} — every autonomous loop must ` +
+            `invoke scripts/pipeline-tally.sh (init at start, gate before expensive steps, ` +
+            `incr per counted op). Removing or renaming the call defeats the running tally (#9403).`,
+        ).toBe(true);
+      }
+    });
+  }
+
+  test("review SKILL.md counts seats via pipeline-tally incr", () => {
+    const raw = stripHtmlComments(readFileSync(resolve(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8"));
+    expect(
+      /scripts\/pipeline-tally\.sh"?[ \t]+incr[ \t]+seats/.test(raw),
+      "review must `incr seats <N>` after spawning its panel (#9403)",
+    ).toBe(true);
+  });
+
+  test("ship SKILL.md renders ## Pipeline Tally in BOTH PR-body templates", () => {
+    // NOT comment-stripped: ship's own regex literals contain an unbalanced
+    // `<!--` (gate-override grep patterns ~L2004), so the fixpoint strip eats
+    // this entire section — a comment-strip here false-negatives the very
+    // templates it checks. The `<tally>`-placeholder scope already excludes
+    // prose mentions.
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    // `## Pipeline Tally` followed by the <tally> placeholder only exists
+    // inside the two PR-body templates — a bare count can't distinguish
+    // template headings from prose mentions (deleting BOTH templates once
+    // left the count at 2 and the assert green on the property it names).
+    const occurrences = (raw.match(/## Pipeline Tally\n\s*<tally>/g) || []).length;
+    expect(
+      occurrences === 2,
+      `ship SKILL.md has ${occurrences} '## Pipeline Tally' template heading(s) — the ` +
+        `\`gh pr edit\` AND \`gh pr create\` fallback templates must each render it (#9403 AC4)`,
+    ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_ABSENT"),
+      "ship must render SOLEUR_TALLY_ABSENT for an instrumented run that wrote no ledger",
+    ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_CAP_IGNORED"),
+      "ship must render SOLEUR_TALLY_CAP_IGNORED for a run that crossed a cap and shipped anyway",
+    ).toBe(true);
+  });
+
+  test("instrumented workflows return a counts field (one-writer bridge)", () => {
+    // Enumerate workflows under instrumented skills, not a hardcoded list —
+    // a new *.workflow.js in a tally-instrumented skill joins this contract
+    // automatically (un-instrumented skills' workflows legitimately carry none).
+    const bridged = readdirSync(resolve(PLUGIN_ROOT, "skills"), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && TALLY_SKILLS.includes(d.name))
+      .flatMap((d) =>
+        existsSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+          ? readdirSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+              .filter((f) => f.endsWith(".workflow.js"))
+              .map(() => d.name)
+          : [],
+      )
+      .sort();
+    expect(
+      bridged.length > 0,
+      "no *.workflow.js found under instrumented skills — the bridge contract lost its population",
+    ).toBe(true);
+    for (const name of bridged) {
+      const wfPath = resolve(
+        PLUGIN_ROOT,
+        "skills",
+        name,
+        "workflows",
+        `${name}.workflow.js`,
+      );
+      const raw = readFileSync(wfPath, "utf-8");
+      expect(
+        /counts:\s*\{/.test(raw),
+        `${name}.workflow.js does not return counts:{…} — the invoking prose posts ` +
+          `it via \`pipeline-tally.sh incr\`; without the field the workflow path tallies nothing (#9403)`,
+      ).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -381,6 +513,109 @@ describe("Decision-principles taxonomy wiring", () => {
         `ship/SKILL.md lost the "${token}" wiring — headless decision challenges would ` +
           `no longer reach the operator (regresses ADR-084's legible surface).`,
       ).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Technical-ruling delegation wiring (hr-technical-fork-is-not-an-operator-question)
+// ---------------------------------------------------------------------------
+// Consumers are DERIVED (every skill whose SKILL.md names the CTO agent must link the
+// reference) plus the seven the brief names; the artifact's writers must link the
+// taxonomy doc, which carries the Decision Classes schema. `go` is wired through its
+// authority file commands/go.md (skills/go/SKILL.md is a harness shim that reads it).
+describe("Technical-ruling delegation wiring", () => {
+  const REF_REL = "skills/brainstorm-techniques/references/technical-ruling-delegation.md";
+  const LINK_RE = /\]\([^)]*technical-ruling-delegation\.md\)/;
+  const NAMED = ["one-shot", "plan", "work", "review", "ship", "brainstorm"];
+  const read = (rel: string) => readFileSync(resolve(PLUGIN_ROOT, rel), "utf-8");
+  const skillDirs = readdirSync(resolve(PLUGIN_ROOT, "skills"), { withFileTypes: true })
+    .filter((d) => d.isDirectory() && existsSync(resolve(PLUGIN_ROOT, "skills", d.name, "SKILL.md")))
+    .map((d) => d.name);
+  const derived = skillDirs.filter((n) => read(`skills/${n}/SKILL.md`).includes("soleur:engineering:cto"));
+  const consumers = Array.from(new Set([...NAMED, ...derived, "plan-review"]));
+
+  test("the reference exists", () => {
+    expect(existsSync(resolve(PLUGIN_ROOT, REF_REL)), `${REF_REL} is missing.`).toBe(true);
+  });
+
+  test("consumer set has a floor of 7 (a zero-file glob must not pass)", () => {
+    // 6 named skills + go (commands/go.md) + plan-review => at least 8 distinct links asserted.
+    expect(consumers.length).toBeGreaterThanOrEqual(7);
+    expect(skillDirs.length).toBeGreaterThanOrEqual(50);
+  });
+
+  for (const name of consumers) {
+    test(`${name} links technical-ruling-delegation.md`, () => {
+      expect(
+        LINK_RE.test(read(`skills/${name}/SKILL.md`)),
+        `${name}/SKILL.md does not link technical-ruling-delegation.md via a markdown link.`,
+      ).toBe(true);
+    });
+  }
+
+  test("go links it through commands/go.md (the authority file)", () => {
+    expect(LINK_RE.test(read("commands/go.md")), "commands/go.md lost the technical-ruling pointer.").toBe(true);
+  });
+
+  for (const name of ["plan", "plan-review", "work", "ship"]) {
+    test(`${name} (an artifact writer) links decision-principles.md`, () => {
+      expect(/\]\([^)]*decision-principles\.md\)/.test(read(`skills/${name}/SKILL.md`))).toBe(true);
+    });
+  }
+
+  test("ship carries the Technical-Ruling Gate heading, names the script and links the render reference", () => {
+    const raw = read("skills/ship/SKILL.md");
+    expect(raw.includes("### Technical-Ruling Gate (mandatory)")).toBe(true);
+    expect(raw.includes("scripts/technical-ruling-gate.sh")).toBe(true);
+    expect(/\]\([^)]*decision-challenges-render\.md\)/.test(raw)).toBe(true);
+    expect(existsSync(resolve(PLUGIN_ROOT, "skills/ship/references/decision-challenges-render.md"))).toBe(true);
+  });
+
+  test("the gate is invoked at all three call sites, through the plugin root, with each exit handled", () => {
+    const GATE = 'skills/ship/scripts/technical-ruling-gate.sh';
+    const oneShot = read("skills/one-shot/SKILL.md");
+    const ship = read("skills/ship/SKILL.md");
+    // one-shot: the plan-phase call, the plugin-root form, and all three exit codes named.
+    const os = oneShot.slice(oneShot.indexOf("**Technical-ruling gate (before `work`)."));
+    expect(os.startsWith("**Technical-ruling gate"), "one-shot lost its gate step").toBe(true);
+    const osStep = os.slice(0, os.indexOf("\n"));
+    expect(osStep.includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && osStep.includes("--branch")).toBe(true);
+    for (const exit of ["**0**", "**1**", "**2**"]) expect(osStep.includes(exit), `one-shot gate step lost ${exit}`).toBe(true);
+    // ship Phase 5.5 (--branch) and Phase 6 step 4.5 (--pr-body), both via the plugin root, never a repo-relative path.
+    // window-assembly: gateSection — everything from the gate heading to the end of ship/SKILL.md, of which only the first 1200 bytes (the gate paragraph) are asserted on
+    const gateSection = ship.slice(ship.indexOf("### Technical-Ruling Gate (mandatory)"));
+    expect(gateSection.slice(0, 1200).includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && gateSection.slice(0, 1200).includes("--branch")).toBe(true);
+    const step45 = ship.slice(ship.indexOf("4.5. **Technical-ruling body check"));
+    expect(step45.slice(0, 700).includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && step45.slice(0, 700).includes("--pr-body")).toBe(true);
+    // Exit handling is part of the contract, not just the invocation.
+    expect(osStep.includes("**2** the gate could not measure"), "one-shot lost its exit-2 handling").toBe(true);
+    expect(gateSection.slice(0, 1200).includes("2 unmeasured: fix"), "ship 5.5 lost its exit-2 handling").toBe(true);
+    expect(step45.slice(0, 700).includes("gate-rc=") && step45.slice(0, 700).includes("never ready past it"), "ship step 4.5 lost its exit handling").toBe(true);
+    const renderDoc = read("skills/ship/references/decision-challenges-render.md");
+    expect(renderDoc.includes('echo "gate-rc=$rc"') && renderDoc.includes("else rc=2; fi"), "the --pr-body recipe lost its fetch-failure exit 2 or its rc print").toBe(true);
+    for (const f of [oneShot, ship, renderDoc]) {
+      expect(/bash\s+"?plugins\/soleur\/skills\/ship\/scripts\/technical-ruling-gate\.sh/.test(f), "a repo-relative gate path breaks end-user installs").toBe(false);
+    }
+  });
+
+  test("the gate script exists and is executable", () => {
+    const f = resolve(PLUGIN_ROOT, "skills/ship/scripts/technical-ruling-gate.sh");
+    expect(existsSync(f)).toBe(true);
+    expect((statSync(f).mode & 0o111) !== 0, "technical-ruling-gate.sh is not executable").toBe(true);
+  });
+
+  test("the rule body names the CTO agent and the one-shot inline copy carries the key tokens", () => {
+    const rules = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.rules.md"), "utf-8");
+    const line = rules.split("\n").find((l) => l.includes("[id: hr-technical-fork-is-not-an-operator-question]")) ?? "";
+    expect(line.includes("soleur:engineering:cto")).toBe(true);
+    // A Task subagent reads prompt text only, so one-shot carries the one deliberate copy.
+    const oneShot = read("skills/one-shot/SKILL.md");
+    const start = oneShot.indexOf("TECHNICAL RULINGS (inline copy");
+    expect(start, "one-shot lost its inline technical-rulings copy").toBeGreaterThan(-1);
+    const copy = oneShot.slice(start, start + 1400);
+    for (const token of ["soleur:engineering:cto", "Ruled by CTO agent", "surface it"]) {
+      expect(copy.includes(token), `one-shot inline copy lost "${token}"`).toBe(true);
     }
   });
 });
@@ -594,7 +829,6 @@ const EXEC_SURFACE_GLOBS = [
   "apps/**/scripts/*.sh",
   "tools/**/*.sh",
   ".claude/hooks/**/*.sh",
-  ".openhands/hooks/**/*.sh",
   // Shipped plugin shell surfaces (#7409). Opportunistic, NOT a regression this
   // change creates: this lint targets the `gh pr|issue list --search` class, and
   // the file that moved into plugins/soleur/scripts/lib/ contains zero such
@@ -624,7 +858,7 @@ function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
   for (const glob of EXEC_SURFACE_GLOBS) {
     // `dot: true` is load-bearing — Bun's Glob defaults to dot:false, which
     // silently skips EVERY dot-directory, so `.github/workflows`, `.github/
-    // actions`, `.claude/hooks`, and `.openhands/hooks` (the highest-value CI +
+    // actions` and `.claude/hooks` (the highest-value CI +
     // hook surface this lint claims to cover) would match ZERO files and the
     // offender assertions would pass vacuously against an absent surface class.
     for (const rel of new Glob(glob).scanSync({ cwd: REPO_ROOT, dot: true })) {
@@ -1055,7 +1289,7 @@ describe("collision-gate probes carry an explicit --state", () => {
 
   // Each declared surface CLASS must be non-empty in the live corpus, so a
   // silent per-surface drop (the Bun `dot:false` default that skipped the entire
-  // .github/.claude/.openhands surface, or a future glob regression) red-lines
+  // .github/.claude surface, or a future glob regression) red-lines
   // here instead of letting the offender assertions pass vacuously against an
   // absent class. The dot-directory anchor pins the CI + hook surface directly.
   test("every executable-surface class is represented in the corpus", () => {
@@ -1253,7 +1487,7 @@ describe("plugin slash-name uniqueness", () => {
     // "all manifests", and narrowing the dirent regex to `.claude-plugin` (the
     // one manifest that structurally cannot fail clause (a)) would drop both
     // real rows while a >= 1 floor stayed green.
-    expect(manifestDirs).toEqual([".claude-plugin", ".codex-plugin", ".devin-plugin"]);
+    expect(manifestDirs).toEqual([".claude-plugin", ".codex-plugin", ".cursor-plugin", ".devin-plugin"]);
 
     // Identity, not just count: three WRONG stems satisfy a length floor, and
     // clause (b) would then compare against names no command has.
@@ -1317,10 +1551,19 @@ describe("plugin slash-name uniqueness", () => {
   //
   // What this still guards, and why it is not merely belt-and-braces: the other
   // three harnesses DO resolve these paths. `devin skills list` reports
-  // /soleur:go from both `skills/go` and `devin/skills/go`; `.codex-plugin`
-  // declares `./skills`; `.grok/config.toml` loads this tree. Deleting them is a
-  // real change on three harnesses even though Claude Code absorbs it. Retired
-  // with #8236, which owns that deletion.
+  // /soleur:go; `.codex-plugin` declares `./skills` AND `./codex/skills`;
+  // `.grok/config.toml` loads this tree. Deleting them is a real change on three
+  // harnesses even though Claude Code absorbs it. Retired with #8236, which owns
+  // that deletion.
+  //
+  // CORRECTED 2026-09-23 by measurement (#8390 bundle). An earlier version of
+  // this comment said Devin "reports /soleur:go from BOTH roots". Measured on
+  // Devin CLI 3000.11.1, `devin skills list` reports each of the 102 names
+  // exactly ONCE — the double-listing was an earlier version's behaviour. Codex
+  // 0.156.1 IS the harness that lists both roots (`go`/`help`/`sync` twice),
+  // which is what this ack set exists for. The `harness-discovery` gate
+  // (ADR-245) now measures the multiplicity of both on every CI run, so this
+  // claim stops being a comment anybody has to trust.
   //
   // Derived from ACKED_CROSS_ROOT_DUPES rather than restated: two parallel
   // hardcoded lists drift under a partial #8236 retirement, and an empty literal
@@ -1343,6 +1586,55 @@ describe("plugin slash-name uniqueness", () => {
           `would hide it from the model, which is the dispatch regression.`,
       ).toBeUndefined();
       expect(fm["user-invocable"], `${rel} should stay hidden from the / menu`).toBe(false);
+    });
+  }
+
+  // Skills that must stay MODEL-invocable although they read as operator tooling (#8290,
+  // ADR-236). Their own set, not ACKED_CROSS_ROOT_DUPES: that set is pinned to go/help/sync and
+  // also asserts `user-invocable: false`, which these do not carry.
+  const MUST_STAY_INVOCABLE: Record<string, string> = {
+    "trigger-cron":
+      "an always-loaded rule (hr-no-dashboard-eyeball-pull-data-yourself) and the incident, " +
+      "gdpr-gate and reproduce-bug skills direct the AGENT to fire crons itself",
+    invoice:
+      "a founder-facing capability (ADR-107); the web Command Center reaches skills only " +
+      "through the model (prompt-injection-wrap.ts POSTAMBLE), so a user-invoked invoice is " +
+      "unreachable on the web",
+    "flag-list":
+      "a read-only drift audit the agent must pull itself, and the blast-radius step " +
+      "flag-delete calls before deleting",
+    "flag-create":
+      "plans prescribe it as an agent acceptance step (wg-plan-prescribed-skills-must-run-inline); " +
+      "the agent runs create.sh --dry-run and hands the operator the printed write command, " +
+      "which needs a typed yes at the operator's own terminal (ADR-249, #8486)",
+    "flag-set-role":
+      "plans prescribe it as an agent acceptance step; the agent runs flip.sh --dry-run and " +
+      "hands off the printed write command, which needs a typed yes at a TTY (ADR-249, #8486)",
+    "cron-list":
+      "read-only, pulled by the agent itself like flag-list; soleur:schedule runs the same " +
+      "steps in place, so a refusal only contradicts it",
+    "cron-delete":
+      "soleur:schedule runs the same delete step in place behind its confirm gate; a refusal " +
+      "contradicts schedule/SKILL.md",
+  };
+  test("MUST_STAY_INVOCABLE is exactly the reviewed set", () => {
+    expect(Object.keys(MUST_STAY_INVOCABLE).sort()).toEqual([
+      "cron-delete",
+      "cron-list",
+      "flag-create",
+      "flag-list",
+      "flag-set-role",
+      "invoice",
+      "trigger-cron",
+    ]);
+  });
+  for (const [name, reason] of Object.entries(MUST_STAY_INVOCABLE)) {
+    test(`skills/${name}/ stays model-invocable (must-stay-invocable pin)`, () => {
+      const fm = parseComponent(`skills/${name}/SKILL.md`).frontmatter;
+      expect(
+        fm["disable-model-invocation"],
+        `skills/${name}/SKILL.md must stay MODEL-invocable: ${reason}. See ADR-236.`,
+      ).toBeUndefined();
     });
   }
 

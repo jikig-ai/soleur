@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import useSWR from "swr";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -22,6 +22,15 @@ import { FUNNEL_STAGES } from "./stage-style";
 
 type ContactsResponse = { contacts: CrmContact[] };
 type View = "board" | "funnel";
+
+/** New CRO chat. Seed stays out of a hand-built query string so it is encoded. */
+export function newLeadHref(): string {
+  const params = new URLSearchParams();
+  params.set("leader", "cro");
+  params.set("mode", "crm-lead");
+  params.set("msg", "I want to enter a new CRM lead.");
+  return `/dashboard/chat/new?${params.toString()}`;
+}
 
 export function CrmSurface() {
   const pathname = usePathname();
@@ -144,15 +153,23 @@ function Header({ view, onSwitch }: { view: View; onSwitch: (v: View) => void })
           {view === "board" ? (
             <>
               Editing happens in a{" "}
-              <Link href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
+              <NavLink href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
                 chat with your CRO or CPO agent
-              </Link>
+              </NavLink>
               .
             </>
           ) : null}
         </p>
       </div>
-      <ViewToggle view={view} onSwitch={onSwitch} />
+      <div className="flex shrink-0 flex-col items-end gap-3">
+        <NavLink
+          href={newLeadHref()}
+          className="text-sm font-medium text-soleur-accent-gold-fg hover:underline"
+        >
+          New lead
+        </NavLink>
+        <ViewToggle view={view} onSwitch={onSwitch} />
+      </div>
     </div>
   );
 }
@@ -168,6 +185,7 @@ function ViewToggle({ view, onSwitch }: { view: View; onSwitch: (v: View) => voi
         <button
           key={v}
           type="button"
+          data-button-exempt="role=tab in tablist — aria-selected segmented Board|Funnel toggle inside a shared bordered control; per-option active tint conflicts with variant base"
           role="tab"
           aria-selected={view === v}
           onClick={() => onSwitch(v)}
@@ -194,10 +212,14 @@ function EmptyState() {
       </div>
       <h2 className="text-lg font-medium text-soleur-text-primary">No contacts yet</h2>
       <p className="mx-auto mt-2 max-w-sm text-sm text-soleur-text-secondary">
-        Your pipeline fills as you talk to beta testers. Mention a prospect in a
-        chat with your CRO or CPO agent and it appears here automatically —
-        there&apos;s nothing to enter by hand.
+        The CRO chat is how a lead is entered.
       </p>
+      <NavLink
+        href={newLeadHref()}
+        className="mt-4 inline-block text-sm font-medium text-soleur-accent-gold-fg hover:underline"
+      >
+        New lead
+      </NavLink>
       <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-soleur-text-muted">
         <LockIcon className="h-3.5 w-3.5" />
         This board is read-only

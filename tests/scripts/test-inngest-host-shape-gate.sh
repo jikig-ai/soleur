@@ -3,10 +3,10 @@
 # .github/workflows/apply-web-platform-infra.yml, #6894 — ADR-142 Guard 3).
 #
 # The gate grades every resource_changes entry against a per-address permitted-actions table over
-# the job's 18 -target= addresses. Creates are PERMITTED, never REQUIRED.
+# this job's -target addresses. Creates are PERMITTED, never REQUIRED.
 #
 # ONE CASE PER PREDICATE, AND ONE PER FORBIDDEN CELL of the permitted table. Every fixture starts
-# from the REALISTIC base — all 18 addresses present as ["no-op"] (untargeted-but-present is the
+# from the REALISTIC base — every -target address present as ["no-op"] (untargeted-but-present is the
 # live shape) — and changes ONE thing, and every RED asserts the gate's `reason=<token>` rather than
 # merely rc. Must-PASS rows are counted from the file (H2), so a gate stuck at "reject everything"
 # cannot hide behind a RED-only battery.
@@ -64,8 +64,8 @@ _job_body() {
 JOB="$(_job_body inngest_host)"
 TARGETS="$(grep -oE "\-target='[^']+'" <<<"$JOB" | sed -E "s/^-target='([^']+)'$/\1/" | sort)"
 _n_targets="$(grep -c . <<<"$TARGETS" || true)"
-if [[ "$_n_targets" != "18" ]]; then
-  printf '[FATAL] expected the inngest_host job to carry 18 -target= addresses, derived %s — the extraction or the job drifted\n' "$_n_targets" >&2
+if [[ "$_n_targets" != "15" ]]; then
+  printf '[FATAL] expected the inngest_host job to carry 15 -target= addresses, derived %s — the extraction or the job drifted\n' "$_n_targets" >&2
   exit 2
 fi
 
@@ -126,7 +126,7 @@ if ! gate_harness_selftest; then fails=$((fails + 1)); fi
 
 # ── MUST-PASS ─────────────────────────────────────────────────────────────────────
 build
-check "PASS: all 18 addresses no-op (no create is ever required)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
+check "PASS: every -target address no-op (no create is ever required)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
 all_of '["create"]'
 check "PASS: full from-scratch build (every address create, passphrase pair absent)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
 build 'doppler_secret.inngest_betterstack_logs_token=["update"]'
@@ -152,23 +152,20 @@ red server_touched "$S=[\"delete\",\"create\"]"
 red server_touched "$S=[\"create\",\"delete\"]"
 red server_touched "$S=[\"delete\"]"
 red server_touched "$S=[\"forget\"]"
-# live volume: no-op | create IFF the server is a create
-red old_volume_touched "$OV=[\"update\"]"
-red old_volume_touched "$OV=[\"create\"]"
-red old_volume_touched "$OV=[\"create\"]" "$S=[\"delete\",\"create\"]"
-red old_volume_touched "$OV=[\"delete\"]"
-red old_volume_touched "$OV=[\"forget\"]"
-red old_volume_touched "$OV=[\"delete\",\"create\"]"
-# live attachment: same rule
-red old_attachment_touched "$OA=[\"update\"]"
-red old_attachment_touched "$OA=[\"create\"]"
-red old_attachment_touched "$OA=[\"create\"]" "$S=[\"update\"]"
-red old_attachment_touched "$OA=[\"delete\"]"
-red old_attachment_touched "$OA=[\"forget\"]"
-red old_attachment_touched "$OA=[\"delete\",\"create\"]"
-# ...and the conditional's PERMITTED direction: both created alongside a from-scratch server.
+# RETIRED backstop pair (#8285): outside the allow-set, so every action is refused by the GLOBAL predicates
+# (a delete trips resource_deletes, a forget trips forget_present, anything else out_of_scope).
+red out_of_scope "$OV=[\"create\"]"
+red server_touched "$OV=[\"create\"]" "$S=[\"delete\",\"create\"]"
+red out_of_scope "$OV=[\"update\"]"
+red resource_deletes "$OV=[\"delete\"]"
+red forget_present "$OV=[\"forget\"]"
+red out_of_scope "$OA=[\"create\"]"
+red out_of_scope "$OA=[\"update\"]"
+red resource_deletes "$OA=[\"delete\"]"
+red forget_present "$OA=[\"forget\"]"
+# ...even alongside a from-scratch server: the pair is no longer part of any inngest-host build.
 build "$S=[\"create\"]" "$OV=[\"create\"]" "$OA=[\"create\"]"
-check "PASS: the live volume + attachment created ALONGSIDE a server create" 0 "$PLAN" "inngest_host_shape_gate: PASS"
+check "RED: the retired pair created ALONGSIDE a server create is out of scope (no longer a legal build)" 1 "$PLAN" "reason="
 # additive LUKS volume / attachment: no-op | create
 red luks_volume_touched "$LV=[\"update\"]"
 red luks_volume_touched "$LV=[\"delete\"]"
@@ -181,11 +178,12 @@ red luks_attachment_touched "$LA=[\"forget\"]"
 red network_touched 'hcloud_server_network.inngest=["update"]'
 red network_touched 'hcloud_server_network.inngest=["delete"]'
 red network_touched 'hcloud_server_network.inngest=["forget"]'
-# firewall + its attachment: no-op | create (an update is an ingress change on a no-inbound host)
+# firewall: no-op | create (an update is an ingress change on a no-inbound host)
 red firewall_touched 'hcloud_firewall.inngest=["update"]'
-red firewall_touched 'hcloud_firewall_attachment.inngest=["update"]'
 red firewall_touched 'hcloud_firewall.inngest=["delete"]'
-red firewall_touched 'hcloud_firewall_attachment.inngest=["forget"]'
+# The attachment left the allow-set (#8754): any action on it is refused by the global predicates.
+red out_of_scope 'hcloud_firewall_attachment.inngest=["update"]'
+red forget_present 'hcloud_firewall_attachment.inngest=["forget"]'
 # generated secrets: no-op | create — a regeneration rotates the host's credentials
 red generated_secret_touched 'random_id.inngest_signing_key_dedicated=["update"]'
 red generated_secret_touched 'random_id.inngest_event_key_dedicated=["delete","create"]'
@@ -316,11 +314,11 @@ if grep -qE '^[[:space:]]*continue-on-error:' <<<"$JOB"; then fail "WIRING: cont
 
 # ── H2: must-PASS arms counted from the file ──────────────────────────────────────
 _pass_arms="$(grep -cE '^check "PASS: [^"]*" 0 "\$PLAN" "inngest_host_shape_gate: PASS"' "${BASH_SOURCE[0]}" || true)"
-if [[ "$_pass_arms" =~ ^[0-9]+$ ]] && [[ "$_pass_arms" -ge 7 ]]; then pass; else fail "H2: only ${_pass_arms} must-PASS arms found (floor 7)"; fi
+if [[ "$_pass_arms" =~ ^[0-9]+$ ]] && [[ "$_pass_arms" -ge 6 ]]; then pass; else fail "H2: only ${_pass_arms} must-PASS arms found (floor 6)"; fi
 
 # ── H1: anti-vacuity floor ────────────────────────────────────────────────────────
 # Self-contained; reported via printf + exit, never through pass()/fail(). A floor, not equality.
-_floor=79
+_floor=74
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_floor" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_floor" >&2

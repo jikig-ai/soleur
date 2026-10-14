@@ -1,0 +1,7 @@
+# S3 hand edits that are NOT a plain grep -q -> grep -c transform, keyed by BASE-side (origin/main d0b5d2e35b (identical to fd1c4d5cac for these files)) line: path:OLD[-OLD2]:reason
+# Re-derive the line numbers in Phase 0 if origin/main has moved; verify fails on a range that matches no hunk.
+# The 18 one-token data conversions (see data-conversions.txt) are NOT listed here: they are a plain transform, so verify counts them as verified and refuses an entry that is wider than the edit.
+scripts/prod-version-drift-check.test.sh:1691:H-m display inside a failure message reads a here-string
+scripts/prod-version-drift-check.test.sh:1697:H-m display inside a failure message reads a here-string
+scripts/prod-version-drift-check.test.sh:1723:H-m display inside a failure message reads a here-string
+scripts/prod-version-drift-check.test.sh:1788:H-m display inside a failure message reads a here-string

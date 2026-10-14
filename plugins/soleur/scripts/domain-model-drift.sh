@@ -199,7 +199,7 @@ emit_drift_report() {
   local reg_body; reg_body="$(cat "$reg")"
   while IFS= read -r tbl; do
     [[ -n "$tbl" ]] || continue
-    if ! printf '%s' "$reg_body" | grep -qE "\\b${tbl//[^A-Za-z0-9_]/}\\b"; then
+    if ! grep -qE "\\b${tbl//[^A-Za-z0-9_]/}\\b" <<<"$reg_body"; then
       undoc_n=$((undoc_n + 1))
       [[ $undoc_n -le 25 ]] && undoc+="- \`$tbl\` — table has RLS/constraints but is not named in the register"$'\n'
     fi

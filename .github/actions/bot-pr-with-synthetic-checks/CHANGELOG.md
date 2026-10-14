@@ -4,6 +4,50 @@ Composite-action behavior log. No test runner exists for composites in this
 repo, so backward-compat is asserted by reading existing callers and verifying
 their input set is unchanged. See `action.yml` for the live contract.
 
+## v4 (2026-10-11)
+
+Issue: #9454 (item 4). Decision: ADR-285.
+
+**Contract change: `pr-token` is a new REQUIRED input.** The PR is authored, pushed and armed for
+auto-merge under `pr-token`, a `soleur-infra` App installation token the caller mints in its own
+job with `./.github/actions/mint-infra-app-token`. `gh-token` keeps one job: it posts the
+synthetic check-runs, because the rulesets match `integration_id 15368` (the workflow token).
+A PR authored and armed as the workflow token had its own runs held for approval and its merge
+queue entry received no `merge_group` runs (PR 10013, 2026-10-11).
+
+- The step now refuses, before the no-change exit, an empty or non-bearer `pr-token`, one equal to
+  `gh-token`, and a non-main ref. It copies both tokens into unexported variables and unsets them
+  (and `GH_TOKEN`), so the gitleaks download and the repo lint scripts never inherit a credential.
+  There is no step-level `GH_TOKEN`: PR writes go through `gh_app`, check-runs through `gh_gate`,
+  and a bare `gh` call fails.
+- `git push` carries the App token as a per-command `http.https://github.com/.extraheader`
+  (the `actions/checkout` form), never on an argument list. The caller's checkout must therefore use
+  `persist-credentials: false`, or git sends two Authorization headers.
+- The `cla-check` synthetic summary is author-neutral.
+- The commit identity is the App's too (`soleur-infra[bot]`, the pair the pin-bump script pins), so the
+  commit author, the pusher and the PR author are one identity; `cla.yml` allowlists it. Before this
+  version the commit author was `github-actions[bot]`.
+- The step refuses a non-regular-file path before staging, and refuses a push when the date-suffixed
+  branch already exists on origin (a same-day re-run), naming the delete command in the error.
+- The single in-repo caller (`weakness-miner.yml`) moves in the same change; the static guard in
+  `tests/scripts/test-weakness-miner.sh` evaluates every caller and hash-pins this composite's
+  run body, env, shell, inputs and defaults: an edit to any of them re-pins `WM_COMPOSITE_PIN` there in the same
+  PR. The earned-green blocks, the allowlist and the off-main refusal are unchanged.
+
+## 2026-09-20 — ALLOWED_PATHS drops rule-metrics.json (#8377)
+
+`knowledge-base/project/rule-metrics.json` was removed from `ALLOWED_PATHS`. ADR-235
+reclassified it as an untracked cache (it aggregates gitignored local incident data per
+ADR-091, so the committed copy only ever reflected the worktree that last ran the
+aggregator), and `.github/workflows/rule-metrics-aggregate.yml` — the only workflow that
+staged it — was deleted in the same change. A bot PR can no longer produce that path at
+all, so the array entry was unreachable machinery.
+
+Earlier entries below reference `rule-metrics-aggregate.yml` and the two-member
+`ALLOWED_PATHS`; they are left as written because they were accurate when made. Every
+unreachability argument that named the two-member set still holds — removing a member can
+only shrink an intersection.
+
 ## v3 (2026-07-05)
 
 Issue: #6049. Plan:

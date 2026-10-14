@@ -198,6 +198,7 @@ if not effective_drops:
 SHAPE_IV = {  # TOM 4 shape (iv): RLS enabled, ZERO policies, Customer Data
     "tc_acceptances", "workspace_member_actions", "dsar_export_audit_pii",
     "tenant_deploy_audit", "denied_jti", "mint_rate_window", "runtime_mint_intent",
+    "pending_checkout_sessions",  # user-keyed checkout claim marker (migration 144)
 }
 # Zero-policy tables that hold no Customer Data. Assertion 4 requires every
 # zero-policy table to sit in exactly one of these two lists, so a NEW
@@ -206,6 +207,7 @@ NOT_CUSTOMER_DATA = {
     "_schema_migrations", "flag_flip_audit", "probe_tokens",
     "processed_github_events", "processed_resend_events", "processed_stripe_events",
     "statutory_repin_send", "tool_attempts",
+    "email_inbox_routes",  # inbound address -> (workspace, owner) routing config (migration 155, ADR-269); no Customer Data
 }
 WORKSPACE_KEYED = {
     "scope_grants":           "scope_grants_workspace_member_select",

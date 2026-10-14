@@ -178,3 +178,31 @@ call sites, and each is a property of the RULE, not of those files:
   Distinct: argv hygiene closes `ps` / `/proc/<pid>/cmdline`; this closes the
   trace. PR #7793 shipped both for one script, and reading them as duplicates
   would retire the wrong one.
+
+## Addendum — 2026-10-06 (#7843, PR #9594): the argv sweep is implemented for Tier 1 and ratcheted
+
+The "Named residual holes" correction above (argv hygiene is the only defense against a traced **parent**) is now
+implemented, not only recorded. 53 tracked shell scripts moved their bearer header from curl's argument list to its
+stdin config channel (`--config -` fed by a process substitution), and **Rule E** of
+`scripts/lint-shell-trace-credential-refusal.py` fails any new argv bearer. Its baseline,
+`scripts/lint-shell-trace-credential-refusal-e.baseline.txt`, records `path<TAB>site count` and is compared by equality,
+so growth and shrink both need a regeneration commit. The canonical forms, the config-injection finding (a newline in a
+token injects a second curl request) and the `printf | curl` SIGPIPE measurement live in Rule E's header comment, not here.
+
+- **Sourced libraries get procfs hygiene, not trace immunity.** `_cf-admin-token.sh` and the `tests/scripts/lib/*-gate.sh`
+  files run in their caller's shell with no preamble of their own, so under a traced parent the builtin `printf` that
+  feeds curl still expands the token into a `+` line. The caller's preamble remains the trace defense there.
+- **Wrapper-aware Rule D** now follows file-local curl wrappers, so a converted call whose URL interpolates an env-derived
+  host, org, project or id must be pinned against a literal. That is a behaviour change for the scripts that gained a pin
+  (`sentry-issue.sh`, `weekly-analytics.sh`, `provision-plausible-goals.sh`, `arm-heartbeats.sh`, the three seed scripts,
+  `stock-preflight-gate.sh`, `configure-sentry-alerts.sh` and others): an override that
+  used to redirect the credential now refuses.
+- **Named residual: the sweeper-to-probe hop.** `scripts/sweep-followthroughs.sh` builds `env -i NAME=<secret> <probe>`, so
+  every forwarded secret is on `env`'s argv for the life of that exec. The sweeper carries its own unconditional xtrace
+  refusal, so this is a procfs-window residual, not a trace one, and converting the probes does not remove it.
+- **Named residual: non-bearer and out-of-scope credentials**, tracked in #9597 with the 11 host-deployed and
+  live-in-apply scripts (editing the host-hashed ones re-runs prod provisioners on merge, per #7898), the workflow YAML
+  and composite actions, `CF-Access-Client-Secret` in `check-cloudflare-token-drift.sh`, the PATCH body secrets in
+  `configure-auth.sh`, and the `Api-Key` Flagsmith header in `set-role.sh`.
+- **Proxy and `~/.curlrc`.** Every converted call carries `--disable` first, so a user's `~/.curlrc` is ignored; `--noproxy '*'`
+  is kept wherever the script already carried it.

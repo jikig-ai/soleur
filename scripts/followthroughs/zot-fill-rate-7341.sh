@@ -7,15 +7,19 @@
 # fixed, because a freshly wiped disk is empty regardless of the defect.
 #
 # The untreated cause is upstream zot#4235: gc completes repeatedly for `soleur-inngest-bootstrap`
-# and never for `soleur-web-platform`, panicking in `pkg/scheduler/scheduler.go`. PR #4236 is
-# unmerged, so it is NOT fixed in the v2.1.20 pin this host runs. A refill is therefore the
-# EXPECTED outcome to measure. A second candidate — orphaned `.uploads/` staging, seen as
-# `i/o timeout ... PatchBlobUpload` during the recut — is not discriminable from here; attribution
+# and never for `soleur-web-platform`, panicking in `pkg/scheduler/scheduler.go`. Upstream #4235 (as
+# filed: gc re-reads every manifest per deleted blob) is closed and its fix PR #4236 merged 2026-08-11,
+# in v2.1.21 and later, so the v2.1.22 pin this host runs (from the #9252 replace on) carries it; before
+# that replace the host ran v2.1.20, which did not. The issue text does not describe the one-repo-never-
+# completes signature above, so whether #4236 ends the refill on THIS host is exactly what this probe
+# measures: a refill after that replace is a result to report, not an expected outcome. A second
+# candidate — orphaned `.uploads/` staging, seen as `i/o timeout ... PatchBlobUpload` during the
+# recut — is not discriminable from here; attribution
 # was blocked by #7440 (the registry shipped no zot logs; this heartbeat was its only instrument).
 # UNBLOCKED 2026-08-12 (#7455): the zot container-log channel is LIVE, and it counts
-# message:PatchBlobUpload as one of its four evidence classes — which is the very discriminator
-# named as missing below. Attribution is now answerable; this script has not yet been rewritten to
-# use it.
+# the func-keyed PatchBlobUpload error line (#9373) as one of its evidence classes — which is the
+# very discriminator named as missing below. Attribution is now answerable; this script has not
+# yet been rewritten to use it.
 #
 # ── EVERY PARSE STEP BELOW IS A GUARD. DO NOT REGEX THE WHOLE ROW. ───────────────────────────
 #
@@ -316,6 +320,16 @@ ENV = "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=" + os.environ["ZOT_ATTR_HOST
 # positional anchor depends on is not guaranteed to survive.
 START_LIT = "executing gc of orphaned blobs for "
 DONE_LIT  = "gc successfully completed for "
+UPLOAD_ERR = re.compile(r"level:error,.*\(\*RouteHandler\)\.PatchBlobUpload,goroutine:[0-9]+\}\s*$")
+def is_upload_err(payload):
+    # The real upload error line (#9373) is level:error with the handler named only in the parsed
+    # `func` field, which zot writes immediately before `goroutine` at the END of the row. The end
+    # anchor keeps a client header that spells the func text mid-row from counting, and the length
+    # bound keeps a row that sanitize() CUT at 800 characters from counting: a client controls how
+    # such a row ends. A real row whose error text exceeds ~550 characters loses its tail in the shipper
+    # and is not counted (a lower bound). Informational counter only; it never gates a verdict. Keep in step with the
+    # awk counter in zot-log-channel-7440.sh (T21 pins that both carry the shipper func literal).
+    return len(payload) < 800 and UPLOAD_ERR.search(payload) is not None
 def msg_field(payload):
     for f in payload.lstrip("{").rstrip("}").split(","):
         if f.startswith("message:"):
@@ -356,7 +370,7 @@ for line in sys.stdin:
     if mf is None: continue
     if mf.startswith(START_LIT): starts[mf[len(START_LIT):]] += 1; continue
     if mf.startswith(DONE_LIT):  dones[mf[len(DONE_LIT):]] += 1;  continue
-    if mf.startswith("PatchBlobUpload"): n_patch += 1
+    if is_upload_err(msg[len(ENV):]): n_patch += 1
 lagging = sorted(r for r in starts if dones[r] < starts[r])
 drop_txt = str(drop_sum) + ("+unbounded" if drop_unknown else "")
 print("  gc_start_events=%d gc_completion_events=%d over %d repo(s); patch_blob_upload=%d dropped_rows=%s (markers=%d)"
@@ -370,7 +384,10 @@ if lagging:
           % (", ".join(shown), more))
     print("  A LEAD, NOT A VERDICT: dropped_rows above can remove a completion while its start")
     print("  survives, and the trailing window edge cuts gc cycles that had not finished yet.")
-    print("  zot#4235 is the standing suspect (gc completing for one repo and never another);")
+    print("  the one-repo-never-completes signature (gc completing for one repo and never another,")
+    print("  attributed to zot#4235 whose text does not describe it) was the standing suspect; the")
+    print("  #4236 fix for that issue ships in v2.1.21+, and whether it covers this signature is")
+    print("  what this probe measures, so a recurrence on v2.1.22 is a result to report;")
     print("  .uploads/ staging is the other.")
 elif sum(starts.values()) == 0:
     # NOT an exoneration. starts==dones==0 is also what a dead shipper, an unparseable row shape
@@ -394,7 +411,7 @@ else:
 echo "zot-fill-rate[#7341]: ${verdict} ${detail} samples=${n} boot=${boot:0:8} window=${WINDOW}"
 case "$verdict" in
   PASS) exit 0 ;;
-  FAIL) echo "The store is refilling toward the threshold. zot#4235 is unfixed in v2.1.20; also weigh the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
+  FAIL) echo "The store is refilling toward the threshold. The zot#4235 fix (#4236) ships in v2.1.21+ and is in the v2.1.22 pin, so if this host is on that pin weigh other causes, including the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
         attribution_lead || true
         exit 1 ;;
   TRANSIENT) echo "TRANSIENT: the store's state could not be established. NOT a pass."; exit 2 ;;

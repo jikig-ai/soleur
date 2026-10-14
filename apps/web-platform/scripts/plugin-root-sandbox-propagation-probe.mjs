@@ -5,9 +5,11 @@
 // actually PRESENT in the bwrap-SANDBOXED Bash subprocess's environment. AC3
 // only proves it in `buildAgentEnv`'s OUTPUT; whether it survives the SDK's
 // `query()` → claude-CLI → bwrap projection is SDK-internal and was the gating
-// unknown (plan §Phase 2 F2). If it does NOT reach sandbox bash, the deployed
-// skills' `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` would silently fall back to
-// the UNTRUSTED connected-repo `./plugins/soleur` copy on the server surface.
+// unknown (plan §Phase 2 F2). If it does NOT reach sandbox bash, an unsubstituted
+// bare `"${CLAUDE_PLUGIN_ROOT}/…"` skill anchor refuses on a root-anchored path, and
+// every payload script reading the variable at runtime loses the platform root
+// (ADR-179 A18, #7453 — before that migration the skills' default arm would have
+// silently fallen back to the UNTRUSTED connected-repo copy).
 //
 // MECHANISM (empirically established, #6121): the SDK spawns the bwrap process
 // with `options.env` (= buildAgentEnv output) as its process env and does NOT

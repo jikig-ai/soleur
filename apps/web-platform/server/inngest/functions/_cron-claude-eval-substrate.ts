@@ -1,14 +1,16 @@
 import { RUN_REPORT_CRONS } from "./_cron-run-reports";
 import {
   countFilingDenials,
+  countPermissionDenials,
   emitCronFilingDenyMarker,
 } from "@/server/cron-filing-deny-marker";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import {
   upsertRoutineRunProgress,
   heartbeatRoutineRunProgress,
@@ -18,6 +20,7 @@ import {
   buildAuthenticatedCloneUrl,
   DeployInProgressError,
   deployLeaseAgeMsIfFresh,
+  formatTailForSentry,
   redactToken,
   resolveCronWorkspaceRoot,
   warnIfCronWorkspaceLowOnDisk,
@@ -27,6 +30,7 @@ import {
   emitClaudeCostMarker,
   type CaptureStatus,
 } from "@/server/claude-cost-marker";
+import { budgetFlags } from "@/server/inngest/cron-budgets";
 
 export interface SpawnResult {
   ok: boolean;
@@ -39,8 +43,7 @@ export interface SpawnResult {
   // which Vector does NOT ship to Better Stack — capturing the tail here is the
   // only path that reaches Sentry. #4714 follow-up (roadmap/content silent
   // non-zero exits were undiagnosable: app stdout is not in the log warehouse).
-  // Optional: sibling crons (daily-triage, follow-through-monitor) build their
-  // own SpawnResult literals via the inline spawn pattern and do not populate it.
+  // Optional: a spawn that never started (ENOENT) or a synthetic result has none.
   stderrTail?: string;
   // Bounded tail of the child's stdout (redacted). `claude --print` writes its
   // max-turns notice to STDOUT, not stderr — that notice previously reached only
@@ -48,14 +51,13 @@ export interface SpawnResult {
   // turn-exhaustion exit was red-on-the-monitor but not self-diagnosing without
   // SSH. Capturing the tail here folds the notice into the scheduled-output-missing
   // Sentry extra alongside stderrTail. #4773 (follow-up to #4714/#4770).
-  // Optional, same as stderrTail: inline-spawn sibling crons do not populate it.
+  // Optional, same as stderrTail.
   stdoutTail?: string;
   // #cost-attribution (plan Phase 2 / ADR-033 I5): the claude CLI's own
   // authoritative per-run cost + usage + model, parsed from the final `result`
-  // JSON event when the spawn requests `--output-format json`. All optional so
-  // inline-spawn sibling crons that build their own SpawnResult literals stay
-  // compiling (mirrors stdoutTail?/stderrTail?), and so a parse failure / old
-  // text format degrades to `undefined` (fail-open, never fatal).
+  // JSON event when the spawn requests `--output-format json`. All optional so a
+  // parse failure / old text format degrades to `undefined` (fail-open, never
+  // fatal), and synthetic results (makeThrewSpawnResult) need not carry them.
   costUsd?: number;
   usage?: {
     input_tokens: number;
@@ -64,6 +66,27 @@ export interface SpawnResult {
     cache_creation_input_tokens: number;
   };
   model?: string | null;
+  // #8611: the result event's own verdict, so a run stopped by its per-run
+  // `--max-budget-usd` cap (subtype `error_max_budget_usd`) is distinguishable
+  // from a clean exit by classifyEvalFatal, not only by the Better Stack marker.
+  isError?: boolean;
+  subtype?: string;
+  numTurns?: number;
+  // #7122 — the run's final assistant message (the `result` event's text), for a
+  // cron whose handler validates and publishes it (community-monitor's JSON draft).
+  // Redacted with the child redactor, capped at FINAL_MESSAGE_CAP_BYTES CUT FROM THE
+  // HEAD (never tail-sliced: a cut tail is not parseable and cannot signal oversize),
+  // with `finalMessageTruncated` saying whether the cap bit. Both are `undefined` for a
+  // run that produced no `result` event or whose event carried no string `result`
+  // (e.g. `error_max_turns`), so "absent" is distinguishable from an empty string.
+  // makeThrewSpawnResult carries neither.
+  finalMessage?: string;
+  finalMessageTruncated?: boolean;
+  // #7122 — EVERY permission denial in the result event (not only filings, which
+  // `filingDenials` counts) and the denied tool classes from a closed vocabulary
+  // (tool names only; see countPermissionDenials). `undefined` without a result event.
+  permissionDenialCount?: number;
+  deniedTools?: string[];
 }
 
 // #5728 — synthetic SpawnResult for the silence-hole audit issue (#4960) when an
@@ -97,6 +120,11 @@ export interface ParsedEvalResult {
     costUsd?: number;
     usage?: SpawnResult["usage"];
     model: string | null;
+    // #8611 — whether the run FAILED (budget cap, credit, max turns) and why. `null` when the
+    // CLI omitted the field or sent a malformed value; never passed through unvalidated.
+    isError: boolean | null;
+    subtype: string | null;
+    numTurns: number | null;
   };
   // The human-readable `result` text (the CLI's final assistant output OR, on
   // an API error, the error message). Folded into stdoutTail so the I8
@@ -107,6 +135,12 @@ export interface ParsedEvalResult {
   // `permission_denials[]` (a hook deny lands there with the full command —
   // measured 2026-09-11). Command HEADS only; see cron-filing-deny-marker.ts.
   filingDenials: { count: number; commands: string[]; fieldPresent: boolean };
+  // #7122 — all denials, by closed tool class (see SpawnResult.permissionDenialCount).
+  allDenials: { permissionDenialCount: number; deniedTools: string[] };
+  // #7122 — the `result` text ONLY when the event carried a string; `resultText`
+  // above stands in `""` (two characters) for an absent one, which a strict consumer
+  // must not mistake for a message.
+  finalMessage: string | undefined;
 }
 
 /**
@@ -140,6 +174,9 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
     modelUsage?: Record<string, unknown>;
     result?: unknown;
     permission_denials?: unknown;
+    is_error?: unknown;
+    subtype?: unknown;
+    num_turns?: unknown;
   };
   return {
     // `fieldPresent` splits "no denials" from "the CLI stopped emitting the
@@ -148,6 +185,8 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
       ...countFilingDenials(r.permission_denials),
       fieldPresent: Array.isArray(r.permission_denials),
     },
+    allDenials: countPermissionDenials(r.permission_denials),
+    finalMessage: typeof r.result === "string" ? r.result : undefined,
     cost: {
       costUsd:
         typeof r.total_cost_usd === "number" ? r.total_cost_usd : undefined,
@@ -161,6 +200,16 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
           }
         : undefined,
       model: Object.keys(r.modelUsage ?? {})[0] ?? null,
+      isError: typeof r.is_error === "boolean" ? r.is_error : null,
+      // A closed token shape, so no free text (and no newline) can ride into a log line.
+      subtype:
+        typeof r.subtype === "string" && /^[a-z_]{1,64}$/.test(r.subtype)
+          ? r.subtype
+          : null,
+      numTurns:
+        Number.isInteger(r.num_turns) && (r.num_turns as number) >= 0
+          ? (r.num_turns as number)
+          : null,
     },
     resultText:
       typeof r.result === "string"
@@ -189,6 +238,12 @@ export function resolveEvalCaptureStatus(
 
 export const KILL_ESCALATION_MS = 5_000;
 
+// #7122 P2-2 — how long the spawn waits, after the child's `exit`, for its stdout/stderr
+// pipes to be read to the end. Node can emit `exit` while the pipe still holds the final
+// `result` line; resolving on `exit` alone lost that line (a lost community draft is a
+// rejected day). Bounded: a grandchild that inherited the pipe must not hold the run open.
+export const STDIO_CLOSE_WAIT_MS = 2_000;
+
 // Hard ceiling on captured child stderr — a pathological process must not OOM
 // the worker. 8 KiB comfortably holds a git fatal: line + a few hints.
 export const STDERR_CAP_BYTES = 8192;
@@ -197,6 +252,11 @@ export const STDERR_CAP_BYTES = 8192;
 // bytes; the cap is a pathological-OOM ceiling (a runaway --print could stream
 // unbounded stdout), same rationale and value as STDERR_CAP_BYTES.
 export const STDOUT_TAIL_CAP_BYTES = 8192;
+
+// #7122 — ceiling on SpawnResult.finalMessage. The community draft is one line of
+// compact JSON (well under 4 KiB); 16 KiB leaves headroom for drift while still
+// bounding what a runaway or injected message can push into step output.
+export const FINAL_MESSAGE_CAP_BYTES = 16 * 1024;
 
 export function resolveClaudeBin(): string {
   const override = process.env.CLAUDE_BIN;
@@ -292,6 +352,68 @@ export const ISSUE_CREATOR_BASH_ALLOWLIST = [
   "gh label list",
   "gh label create",
 ];
+
+// #7122 — the ONLY Bash surface of cron-community-monitor: thirteen read-only router
+// invocations, each a COMPLETE LITERAL command. The old entry allowlisted the whole
+// router prefix, which also admitted `bsky post`, `linkedin post-content` and
+// `x post-tweet` (inert only because the per-platform *_ALLOW_POST env guards are
+// absent from buildSpawnEnv: an env convention, not a structural control), plus
+// `gh issue create|comment|list` and `gh label create|list` (publication verbs, and a
+// `--jq env` dump of the spawn environment into the agent's own context). The
+// handler now publishes from a validated draft, so the agent needs none of them.
+//
+// EXACT-LITERAL semantics. For a cron carrying the `no-file-tools` directive the hook
+// matches each `;`/`&&` segment against ONE of these lines token for token: same token
+// count, every token identical, no trailing argument of any kind. The single
+// variable token is the placeholder `<uint>`, which matches `^(0|[1-9][0-9]*)$` (a
+// canonical non-negative decimal; `08` would reach bash arithmetic as an octal
+// literal). The earlier prefix semantics left `hn mentions --query <any word>` open,
+// and an agent holding member content in its context could leak it word by word
+// through that query to a third-party search API. The fixed `--query soleur` /
+// `--limit 20` / `50` / `1` arguments are the ones the prompt uses; a prompt edit must
+// edit this list in the same change (cron-community-monitor-allowlist.test.ts G2-8
+// runs every prompt command through the REAL hook). The charset layer (every token in
+// [A-Za-z0-9._:=@/+-]) still runs as a second layer, and the platform scripts
+// validate numeric operands themselves (#7122 P1-A).
+//
+// `discord members` (a payload of up to 1000 member objects; the member count comes
+// from guild-info's approximate count), `hn trending` (no schema field consumes it)
+// and `linkedin fetch-activity` (feeds no schema field; the script keeps the verb)
+// are NOT in this list.
+// allow[0] MUST be a complete command that RUNS: runHookSelfTest executes it verbatim.
+export const COMMUNITY_ROUTER_READ_VERBS: readonly string[] = [
+  "bash plugins/soleur/skills/community/scripts/community-router.sh platforms",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh discord channels",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh discord messages <uint> 50",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github contributors 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github discussions 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20",
+];
+
+// #7122 — crons whose allow file carries the `no-file-tools` directive: the hook then
+// denies Read, Glob, Grep, Write, Edit, MultiEdit, Task, Agent and Skill (NotebookEdit
+// hits the hook's catch-all deny regardless). The agent holds Bash and nothing else:
+// it cannot overwrite an allowlisted script and then run it with the whole spawn env,
+// and it cannot read a secret path a deny-list failed to anticipate (a recursive
+// `Grep{path:"/",glob:"proc/*/environ"}` and `Glob{pattern:"**/.git/config",path:"/tmp"}`
+// both pass the path deny-list). Per-cron, never global: every other cron keeps its
+// tools. `buildAllowlistLines` is the directive's only producer.
+export const CRON_NO_FILE_TOOLS: readonly string[] = ["cron-community-monitor"];
+
+// #7122 — the CLI-level second layer for the same cron: removes the nine tools (and
+// NotebookEdit) from the model's pool, including the sub-agent route that otherwise
+// rests on hook inheritance. The hook directive above is the LOAD-BEARING layer: no
+// cron spawn passed `--disallowedTools` before this one, and how the flag composes
+// with a hook `allow` cannot be proved offline. Consumed by cron-community-monitor.ts.
+export const COMMUNITY_DISALLOWED_TOOLS =
+  "Read,Glob,Grep,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,Skill";
 
 export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
   "cron-roadmap-review": [
@@ -392,19 +514,11 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "gh label list",
     "gh label create",
   ],
-  // community-monitor (cron-community-monitor.ts): `bash …community-router.sh`
-  // (the router's child curl/gh-api are grandchild OS processes gated by the
-  // egress firewall, NOT this hook), DEDUP `gh issue list`, `gh issue create`,
-  // `gh issue comment`. Prompt-level `gh api` is REWRITTEN to
-  // `gh issue list --json updatedAt,number` (F4a). Bespoke.
-  "cron-community-monitor": [
-    "bash plugins/soleur/skills/community/scripts/community-router.sh",
-    "gh issue list",
-    "gh issue create",
-    "gh issue comment",
-    "gh label list",
-    "gh label create",
-  ],
+  // community-monitor (cron-community-monitor.ts): the thirteen read-only router
+  // invocations and NOTHING else (#7122) — see COMMUNITY_ROUTER_READ_VERBS. The
+  // router's child curl/gh-api are grandchild OS processes gated by the egress
+  // firewall, NOT this hook. No gh verb: the handler upserts the issue.
+  "cron-community-monitor": [...COMMUNITY_ROUTER_READ_VERBS],
   // #5199 (final) — cron-bug-fixer, the LAST Tier-2-deferred cron and the widest
   // bash surface. UNLIKE the 7 auto-crons above, bug-fixer's commit lives in the
   // fix-issue SKILL (NOT safeCommitAndPr), so this entry legitimately INCLUDES
@@ -436,6 +550,21 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "git push", // SKILL Phase 5 — git push -u origin … (origin-only via gitVerbReason)
     "bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh", // SKILL Phase 3
     "./node_modules/.bin/vitest run", // SKILL Phase 2/4 — LITERAL test verb (Phase 3.5 rewrite)
+  ],
+  // #8611 — the two crons that moved from an inline spawn onto spawnClaudeEval (for the
+  // single-flight guard and the cost marker). They spawn in the server cwd, NOT through
+  // setupEphemeralWorkspace, so no cron-allow.txt is written for them and the hook does not
+  // read these rows today: the live enforcement is the CLI `--allowedTools` in each cron's
+  // CLAUDE_CODE_FLAGS. Each row mirrors that list verb-for-verb (pinned by
+  // cron-claude-eval-mcp-flags.test.ts), so moving either cron onto a workspace later is safe.
+  "cron-daily-triage": ["gh issue list", "gh issue view", "gh issue edit", "gh issue comment"],
+  "cron-follow-through-monitor": [
+    "gh issue list",
+    "gh issue view",
+    "gh issue edit",
+    "gh issue comment",
+    "gh issue close",
+    "gh label create",
   ],
 };
 
@@ -474,14 +603,24 @@ export const CRON_MCP_ALLOWLISTS: Record<
 // DERIVED from the leaf, never hand-copied: `_cron-run-reports.ts` is the
 // single source and `cron-run-report-labels-parity.test.ts` binds it to the
 // `resolveOutputAwareOk` call sites. Absent for every other cron.
+//
+// #7122: AGENT-filed rows only. A handler-filed row (`filer: "handler"`, community-
+// monitor) never gets the directive: its agent holds no `gh` verb, and
+// `runHookSelfTest` would otherwise abort every spawn probing a filing the agent
+// must not be able to make. The row stays in the leaf for the sweeper and the
+// measurement mirror.
 export const CRON_RUN_REPORT_LABELS: Readonly<Record<string, string>> =
-  Object.freeze(Object.fromEntries(RUN_REPORT_CRONS.map((r) => [r.fn, r.label])));
+  Object.freeze(
+    Object.fromEntries(
+      RUN_REPORT_CRONS.filter((r) => r.filer === "agent").map((r) => [r.fn, r.label]),
+    ),
+  );
 
 /**
  * The exact lines the substrate writes into `.claude/cron-allow.txt` for a
  * cron: bash prefixes first, then the directive lines the hook's
  * `parseAllowlist` understands (`mcp-allow`, `navigate-origin`,
- * `run-report-label`). Pure, so the delivery contract is unit-testable without
+ * `run-report-label`, `no-file-tools`). Pure, so the delivery contract is unit-testable without
  * a clone. Throws when an mcp cron's navigate origin cannot be resolved — the
  * unguarded form is the exfil vector the origin pin exists to close.
  */
@@ -489,7 +628,12 @@ export function buildAllowlistLines(
   cronName: string,
   allow: readonly string[],
   env: Readonly<Record<string, string | undefined>>,
-): { lines: string[]; navigateOrigin: string | null; runReportLabel: string | null } {
+): {
+  lines: string[];
+  navigateOrigin: string | null;
+  runReportLabel: string | null;
+  noFileTools: boolean;
+} {
   const mcpEntry = CRON_MCP_ALLOWLISTS[cronName];
   let navigateOrigin: string | null = null;
   const lines = [...allow];
@@ -516,7 +660,10 @@ export function buildAllowlistLines(
   }
   const runReportLabel = CRON_RUN_REPORT_LABELS[cronName] ?? null;
   if (runReportLabel) lines.push(`run-report-label ${runReportLabel}`);
-  return { lines, navigateOrigin, runReportLabel };
+  // #7122 — a bare flag line (the hook's NO_FILE_TOOLS_DIRECTIVE). Written only here.
+  const noFileTools = CRON_NO_FILE_TOOLS.includes(cronName);
+  if (noFileTools) lines.push("no-file-tools");
+  return { lines, navigateOrigin, runReportLabel, noFileTools };
 }
 
 // Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
@@ -592,6 +739,11 @@ export function runHookSelfTest(args: {
   // parsed from the file) so probe (a) cross-checks that the file ACTUALLY
   // delivered it, exactly like the bash allow[0] probe verifies bash delivery.
   runReportLabel?: string | null;
+  // #7122 — the `no-file-tools` directive, passed explicitly (from the map, not
+  // parsed from the file) for the same delivery cross-check: when set, Write, Grep,
+  // Task and Skill must all DENY. A file that failed to deliver the directive, or a
+  // hook that does not honour it, makes the real hook ALLOW one of them → throw.
+  noFileTools?: boolean;
 }): void {
   const {
     spawnCwd,
@@ -600,6 +752,7 @@ export function runHookSelfTest(args: {
     mcpAllow = [],
     navigateOrigin = null,
     runReportLabel = null,
+    noFileTools = false,
   } = args;
   const nodeBin = resolveNodeBin();
   const hookAbs = join(spawnCwd, HOOK_REL_PATH);
@@ -630,7 +783,9 @@ export function runHookSelfTest(args: {
   if (allow.length > 0) {
     const allowed = run({
       tool_name: "Bash",
-      tool_input: { command: allow[0] },
+      // `<uint>` is the exact-literal placeholder (no-file-tools crons only): a real
+      // number is what the agent would send.
+      tool_input: { command: allow[0].replaceAll("<uint>", "1") },
     });
     if (!allowed.includes('"permissionDecision":"allow"')) {
       throw new Error(
@@ -685,6 +840,60 @@ export function runHookSelfTest(args: {
     }
   }
 
+  // #7122 — the no-file-tools directive: one probe per switch-case the directive
+  // gates (Write/Edit/MultiEdit, Read/Glob/Grep, Task/Agent/Skill; Task and Skill are
+  // probed separately for the reason the Tier-2 loop below gives). The Tier-2 relax
+  // probes that follow EXPECT Task and Skill to allow, which is exactly what this
+  // directive reverses, so they are skipped for a cron that carries it.
+  if (noFileTools) {
+    for (const tool of ["Write", "Grep", "Task", "Skill"]) {
+      const out = run({
+        tool_name: tool,
+        tool_input: { file_path: "knowledge-base/x.md", path: "knowledge-base", pattern: "x" },
+      });
+      if (!out.includes('"permissionDecision":"deny"')) {
+        throw new Error(
+          `[${cronName}] containment hook self-test FAILED: the no-file-tools directive ` +
+            `did not take effect — ${tool} was NOT denied (directive not delivered, or ` +
+            `the hook does not honour it; the agent could overwrite an allowlisted script). ` +
+            `Aborting cron.`,
+        );
+      }
+    }
+  }
+
+  // #7122 P2-4 — a no-file-tools cron's Bash surface is EXACT LITERALS. The hook's
+  // literal layer (and the charset layer under it) is what stops a trailing or altered
+  // argument of an allowlisted verb from reaching a script; this makes a regression (or
+  // a clone carrying a hook without the layer) abort the spawn on the host, not only in
+  // CI. Probes are derived from the delivered lines and are safe to RUN if they were
+  // ever allowed: an extra trailing token on the first literal, a hostile
+  // substitution payload on it, and for every `--query <word>` literal a DIFFERENT
+  // word (the word-by-word exfil channel), for every `<uint>` literal a trailing token and
+  // a leading-zero operand.
+  if (noFileTools && allow.length > 0) {
+    const real = (l: string) => l.replaceAll("<uint>", "1");
+    const probes = new Set<string>([`${real(allow[0])} extra`, `${real(allow[0])} 'HOME[$(id)]'`]);
+    for (const l of allow) {
+      if (/ --query \S+/.test(l)) probes.add(real(l).replace(/ --query \S+/, " --query selftestprobe"));
+      if (l.includes("<uint>")) {
+        probes.add(`${l.replaceAll("<uint>", "1")} extra`);
+        probes.add(l.replace("<uint>", "08").replaceAll("<uint>", "1"));
+      }
+    }
+    for (const command of probes) {
+      const out = run({ tool_name: "Bash", tool_input: { command } });
+      if (!out.includes('"permissionDecision":"deny"')) {
+        throw new Error(
+          `[${cronName}] containment hook self-test FAILED: a hostile or altered variant of an ` +
+            `allowlisted invocation was NOT denied (the no-file-tools exact-literal grammar is ` +
+            `missing or broken — an allowlisted script could receive an agent-chosen argument). ` +
+            `Aborting cron.`,
+        );
+      }
+    }
+  }
+
   // Tier-2 relax gate (#5046 PR-2, AC-P2.2). The hook's catch-all now allows
   // Task/Skill ONLY because sub-agents inherit this same hook — their interior
   // Bash hits the SAME containment the canonical-exfil probe above just proved.
@@ -702,7 +911,7 @@ export function runHookSelfTest(args: {
   // Probe Task AND Skill separately: today they share one switch case, but a
   // future hook edit could split them — and a clone carrying a Task-only
   // intermediate would silently fail-close every Skill-invoking cron.
-  for (const relaxedTool of ["Task", "Skill"]) {
+  for (const relaxedTool of noFileTools ? [] : ["Task", "Skill"]) {
     const allowed = run({ tool_name: relaxedTool, tool_input: {} });
     if (!allowed.includes('"permissionDecision":"allow"')) {
       throw new Error(
@@ -896,6 +1105,7 @@ export async function setupEphemeralWorkspace(args: {
     lines: allowlistLines,
     navigateOrigin,
     runReportLabel,
+    noFileTools,
   } = buildAllowlistLines(cronName, allow, process.env);
   await writeFile(
     join(claudeDir, "cron-allow.txt"),
@@ -926,9 +1136,42 @@ export async function setupEphemeralWorkspace(args: {
     mcpAllow: mcpEntry?.tools ?? [],
     navigateOrigin,
     runReportLabel,
+    noFileTools,
   });
 
   return { ephemeralRoot, spawnCwd };
+}
+
+// #7122 — credential custody. The clone embeds its token in `.git/config` through
+// buildAuthenticatedCloneUrl, so a cron that must not hold a write credential while
+// its agent runs clones with a READ token. After the child has exited the handler
+// mints the write token and re-points `origin` here, so its own git steps (the
+// digest commit and push) authenticate with it. Never logs the URL; the token is
+// redacted out of any thrown git stderr (git echoes the remote on some failures).
+export async function setOriginToken(spawnCwd: string, token: string): Promise<void> {
+  // Refuse to write the WRITE token through a symlink the agent planted (security
+  // round-2 F4): `git remote set-url` follows a symlinked `.git/config`.
+  for (const rel of [".git", ".git/config"]) {
+    let linked = false;
+    try {
+      linked = (await lstat(join(spawnCwd, rel))).isSymbolicLink();
+    } catch {
+      linked = false; // absent: git will report it
+    }
+    if (linked) throw new Error("git remote set-url origin refused: a symlinked git entry");
+  }
+  const res = await spawnSimple(
+    "git",
+    ["remote", "set-url", "origin", buildAuthenticatedCloneUrl(token)],
+    { cwd: spawnCwd },
+  );
+  if (res.exitCode !== 0) {
+    const reason = redactToken(res.stderr, token);
+    throw new Error(
+      `git remote set-url origin failed (exit ${res.exitCode}, signal ${res.signal})` +
+        (reason ? `: ${reason}` : ""),
+    );
+  }
 }
 
 export async function teardownEphemeralWorkspace(
@@ -948,7 +1191,97 @@ export async function teardownEphemeralWorkspace(
   }
 }
 
-export async function spawnClaudeEval(args: {
+// #8611 Guard 1 — single-flight per (cronName, runId). A step retry that arrives while the first
+// Claude child is still running JOINS that child instead of spawning a second paid session. A retry
+// that arrives AFTER the child finished — the step stream dropped before Inngest read the result —
+// gets that same result back for SETTLED_TTL_MS instead of a fresh session. A call that throws
+// (setup failure, no child result) is not kept, so a transient failure can retry. The map lives on
+// globalThis (Symbol.for) so a second module instance in the same process shares it. Process-local
+// state (AP-013): correct while ONE web host executes Inngest steps (dns.tf points `app` at web-1
+// only); ADR-243 §2 names what reopens it.
+type SpawnArgs = Parameters<typeof spawnClaudeEvalUnguarded>[0];
+type Flight = { promise: Promise<SpawnResult>; prompt: string };
+const IN_FLIGHT_KEY = Symbol.for("soleur.claudeEvalInFlight");
+// Inngest run ids are ULIDs today. If an SDK/server upgrade changes the shape (#8628), every spawn
+// reports `claude-eval-singleflight-no-runid` and runs unguarded — re-check this at that upgrade.
+const INNGEST_RUN_ID = /^01[0-9A-HJKMNP-TV-Z]{24}$/;
+// How long a finished child's result stays joinable. A dropped-stream retry can wait far longer
+// than Inngest's backoff: while the step awaits its retry the account-wide `cron-platform`
+// concurrency slot (limit 1) is free, so another claude-eval cron (up to 70 min) can take it first.
+// Two hours covers the longest MAX_TURN_DURATION_MS plus that queue. Bounded: ≤ 2 starts/h × 18
+// functions × 2 h = 72 entries of ~16 KB. Revisit with `retries` (#8613) — later backoffs grow.
+export const SETTLED_TTL_MS = 2 * 60 * 60_000;
+function inFlight(): Map<string, Flight> {
+  const g = globalThis as unknown as Record<symbol, Map<string, Flight> | undefined>;
+  return (g[IN_FLIGHT_KEY] ??= new Map());
+}
+
+/** Test seam: empty the single-flight map between cases (settled results otherwise persist). */
+export function __resetClaudeEvalSingleFlightForTests(): void {
+  inFlight().clear();
+}
+
+export function spawnClaudeEval(args: SpawnArgs): Promise<SpawnResult> {
+  const { cronName, runId, prompt } = args;
+  if (!runId || !INNGEST_RUN_ID.test(runId)) {
+    // Never key on `undefined`: two unrelated runs would share one child.
+    reportSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "claude-eval-singleflight-no-runid",
+      message: "claude-eval spawned without a well-formed Inngest runId; single-flight guard skipped",
+      tags: { cron: cronName },
+      extra: { cronName },
+    });
+    return spawnClaudeEvalUnguarded(args);
+  }
+  const key = `${cronName}:${runId}`;
+  const map = inFlight();
+  const live = map.get(key);
+  if (live) {
+    // The key carries no step identity: every caller spawns ONCE per run. A second, different
+    // spawn in the same run (a future plan-then-execute cron) must not silently receive the first
+    // spawn's result — refuse it loudly instead.
+    if (live.prompt !== prompt) {
+      reportSilentFallback(null, {
+        feature: "cron-claude-eval",
+        op: "claude-eval-singleflight-key-collision",
+        message: "a second, different claude-eval spawn in one run collided with the single-flight key",
+        tags: { cron: cronName },
+        extra: { cronName, runId },
+      });
+      return Promise.reject(
+        new Error(`claude-eval ${cronName}: second distinct spawn in run ${runId} (single-flight key is per run)`),
+      );
+    }
+    // Expected, degraded path: the guard did its job (warning, not error, severity).
+    warnSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "claude-eval-singleflight-join",
+      message: "claude-eval step re-invoked for a run whose child is live or just finished; returned that child's result",
+      tags: { cron: cronName },
+      extra: { cronName, runId },
+    });
+    return live.promise;
+  }
+  // Set SYNCHRONOUSLY, before any await: a retry landing during the first call's awaits must see it.
+  const promise = spawnClaudeEvalUnguarded(args);
+  const flight: Flight = { promise, prompt };
+  map.set(key, flight);
+  promise.then(
+    () => {
+      // Keep the settled result for a late retry, then forget it. unref: never holds the process open.
+      setTimeout(() => {
+        if (map.get(key) === flight) map.delete(key);
+      }, SETTLED_TTL_MS).unref?.();
+    },
+    () => {
+      if (map.get(key) === flight) map.delete(key);
+    },
+  );
+  return promise;
+}
+
+async function spawnClaudeEvalUnguarded(args: {
   spawnCwd: string;
   installationToken: string;
   flags: string[];
@@ -963,6 +1296,11 @@ export async function spawnClaudeEval(args: {
   // non-Inngest callers / tests need not supply it.
   runId?: string;
   attempt?: number;
+  // #7122 P2-3 — capture the `result` event's text as SpawnResult.finalMessage. OFF by
+  // default: three sibling crons spread the whole SpawnResult into Sentry extras, so a
+  // field nobody asked for must not exist on their result. Only a handler that validates
+  // and publishes the message (community-monitor) opts in.
+  captureFinalMessage?: boolean;
 }): Promise<SpawnResult> {
   const {
     spawnCwd,
@@ -975,6 +1313,7 @@ export async function spawnClaudeEval(args: {
     logger,
     runId,
     attempt,
+    captureFinalMessage = false,
   } = args;
 
   if (!existsSync(spawnCwd)) {
@@ -988,6 +1327,25 @@ export async function spawnClaudeEval(args: {
         `A replay will NOT rebuild it — setup-workspace is memoized inside step.run, so the replay reads back this same deleted path. Callers passing retryEligible:false report one honest terminal failure instead.`,
     );
   }
+
+  // #8611 Fix 3 — the per-run dollar ceiling is owned HERE, derived from the cron's own name, so
+  // no spawn through this chokepoint can run uncapped. Resolved before any side effect (progress
+  // row, heartbeat, child): an unknown cron name throws instead of spawning. A caller-supplied
+  // `--max-budget-usd` is refused — the CLI takes the last value, so it could raise the cap.
+  if (flags.includes("--max-budget-usd")) {
+    throw new Error(
+      `claude-eval ${cronName}: flags must not carry --max-budget-usd; the substrate sets it from cron-budgets.ts (#8611)`,
+    );
+  }
+  const budget = budgetFlags(cronName);
+
+  // Child output is redacted for the installation token AND the operator Anthropic key the child
+  // runs with, so a model answer that quotes its environment never reaches logs or Sentry.
+  const anthropicKey = process.env.ANTHROPIC_API_KEY ?? "";
+  const redactChild = (text: string): string => {
+    const out = redactToken(text, installationToken);
+    return anthropicKey.length >= 20 ? out.replaceAll(anthropicKey, "[REDACTED-ANTHROPIC-KEY]") : out;
+  };
 
   const claudeBin = resolveClaudeBin();
   const ac = new AbortController();
@@ -1009,6 +1367,11 @@ export async function spawnClaudeEval(args: {
   let evalCost: ParsedEvalResult["cost"] | null = null;
   // #8076 — filing-gate denials seen in the result event (0 until parsed).
   let evalFilingDenials: ParsedEvalResult["filingDenials"] = { count: 0, commands: [], fieldPresent: false };
+  // #7122 — all denials (not only filings) and the run's final message, from the same
+  // result event. Both stay undefined until a `result` event parses.
+  let evalAllDenials: ParsedEvalResult["allDenials"] | undefined;
+  let evalFinalMessage: string | undefined;
+  let evalFinalMessageTruncated: boolean | undefined;
   // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
   // "genuinely no result". Set when a JSON-object-shaped stdout line (`{…}` under
   // `--output-format json`) did NOT yield a usable `result` event — a truncated/
@@ -1058,7 +1421,7 @@ export async function spawnClaudeEval(args: {
         : ["--output-format", "json"];
       const child = spawn(
         claudeBin,
-        ["--strict-mcp-config", ...outputFormatFlags, ...flags, prompt],
+        ["--strict-mcp-config", ...budget, ...outputFormatFlags, ...flags, prompt],
         {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
@@ -1069,10 +1432,17 @@ export async function spawnClaudeEval(args: {
         },
       });
 
+      // #7122 P2-2 — resolves when a stream's readline has delivered its last line.
+      // Immediately for a stream that does not exist (spawn failure).
+      const streamsClosed: Promise<void>[] = [];
+      const closedPromise = (rl: ReturnType<typeof createInterface> | null): Promise<void> =>
+        rl ? new Promise<void>((done) => rl.once("close", () => done())) : Promise.resolve();
+
       if (child.stdout) {
         const rlOut = createInterface({ input: child.stdout });
+        streamsClosed.push(closedPromise(rlOut));
         rlOut.on("line", (line) => {
-          const redacted = redactToken(line, installationToken);
+          const redacted = redactChild(line);
           logger.info({ fn: cronName, stream: "stdout" }, redacted);
           // #cost-attribution (plan Phase 2): parse each line as a CLI JSON
           // event, fail-open (pure helper — unit-tested against fixtures). On
@@ -1086,10 +1456,26 @@ export async function spawnClaudeEval(args: {
           if (parsedResult) {
             evalCost = parsedResult.cost;
             evalFilingDenials = parsedResult.filingDenials;
-            const tailText = redactToken(
-              parsedResult.resultText,
-              installationToken,
-            );
+            evalAllDenials = parsedResult.allDenials;
+            // #7122 — redact FIRST, then cap from the HEAD: a token straddling the cut
+            // must not survive as a partial prefix, and a front-cut tail is not parseable.
+            if (!captureFinalMessage || parsedResult.finalMessage === undefined) {
+              evalFinalMessage = undefined;
+              evalFinalMessageTruncated = undefined;
+            } else {
+              const bytes = Buffer.from(redactChild(parsedResult.finalMessage), "utf8");
+              if (bytes.length > FINAL_MESSAGE_CAP_BYTES) {
+                // Back up to a UTF-8 character boundary so the cut never leaves a lone continuation byte.
+                let end = FINAL_MESSAGE_CAP_BYTES;
+                while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+                evalFinalMessage = bytes.subarray(0, end).toString("utf8");
+                evalFinalMessageTruncated = true;
+              } else {
+                evalFinalMessage = bytes.toString("utf8");
+                evalFinalMessageTruncated = false;
+              }
+            }
+            const tailText = redactChild(parsedResult.resultText);
             stdoutTail = (stdoutTail + tailText + "\n").slice(
               -STDOUT_TAIL_CAP_BYTES,
             );
@@ -1111,15 +1497,38 @@ export async function spawnClaudeEval(args: {
       }
       if (child.stderr) {
         const rlErr = createInterface({ input: child.stderr });
+        streamsClosed.push(closedPromise(rlErr));
+        // #8603: an unknown `--effort` VALUE is not an error to the CLI — it
+        // warns on stderr and runs at the model's default effort. Mirror that
+        // silent degraded mode to Sentry once per run
+        // (cq-silent-fallback-must-mirror-to-sentry).
+        let effortFallbackReported = false;
         rlErr.on("line", (line) => {
-          const redacted = redactToken(line, installationToken);
+          const redacted = redactChild(line);
           logger.error({ fn: cronName, stream: "stderr" }, redacted);
+          if (
+            !effortFallbackReported &&
+            line.includes(CLI_EFFORT_FALLBACK_NEEDLE)
+          ) {
+            effortFallbackReported = true;
+            warnSilentFallback(null, {
+              feature: "cron-claude-eval",
+              op: "claude-eval-effort-fallback",
+              message:
+                "claude CLI ignored --effort (unknown value); run fell back to the default effort",
+              // Same scrub + cap as every other Sentry tail sink (_cron-shared.ts
+              // formatTailForSentry), not just the installation-token redaction.
+              extra: { fn: cronName, line: formatTailForSentry(redacted) },
+            });
+          }
           // Keep a bounded tail (drop oldest) for the Sentry surface.
           stderrTail = (stderrTail + redacted + "\n").slice(-STDERR_CAP_BYTES);
         });
       }
 
       const finish = (r: SpawnResult) => {
+        // Node may emit `exit` after `error`; one spawn = one marker, one resolve.
+        if (exited) return;
         exited = true;
         if (escalationTimer) clearTimeout(escalationTimer);
         // #5766: stop heartbeating once the child has exited — no tick may land
@@ -1146,6 +1555,9 @@ export async function spawnClaudeEval(args: {
           cache_creation_input_tokens:
             evalCost?.usage?.cache_creation_input_tokens ?? null,
           capture_status: captureStatus,
+          is_error: evalCost?.isError ?? null,
+          subtype: evalCost?.subtype ?? null,
+          num_turns: evalCost?.numTurns ?? null,
         });
         // #8076 — one positive marker per run that had a filing-shaped deny;
         // fail-open like the cost marker, and silent at 0 (a heartbeat would
@@ -1170,9 +1582,16 @@ export async function spawnClaudeEval(args: {
         resolve(r);
       };
 
+      // #7122 perf P3-1 — set by the `exit` handler below; declared BEFORE the abort
+      // listener so the listener can stand down once the child has exited. Without it a
+      // timeout firing inside the (bounded) stdio-drain window re-labelled a clean exit
+      // as abortedByTimeout (the handler then skipped publication) and SIGTERMed a
+      // process group that may already belong to another process.
+      let exitSeen = false;
       ac.signal.addEventListener(
         "abort",
         () => {
+          if (exitSeen) return;
           abortedByTimeout = true;
           if (!child.pid) return;
           const pid = child.pid;
@@ -1193,24 +1612,66 @@ export async function spawnClaudeEval(args: {
         { once: true },
       );
 
+      // #7122 P2-2 — once `exit` has been seen the (bounded) stdio drain is in flight
+      // and the exit verdict must win: a later `error` must not settle the spawn as -1
+      // (before the drain wait, `finish` ran synchronously on `exit` and the `settled`
+      // guard made a following `error` a no-op; the drain made that window async).
       child.on("exit", (exitCode, signal) => {
-        finish({
-          ok: exitCode === 0,
-          exitCode,
-          signal,
-          abortedByTimeout,
-          durationMs: Date.now() - startedAt,
-          stderrTail,
-          stdoutTail,
-          // ADR-033 I5 deterministic capture: surface the parsed cost on the
-          // SpawnResult (undefined when no result event parsed — fail-open).
-          costUsd: evalCost?.costUsd,
-          usage: evalCost?.usage,
-          model: evalCost?.model,
+        exitSeen = true;
+        // Snapshot BEFORE the drain wait: the verdict belongs to the moment of exit.
+        const timedOut = abortedByTimeout;
+        // #7122 P2-1 — kill the child's WHOLE process group on every exit, not only on
+        // the timeout path. A grandchild left running here could outlive the run and read
+        // the write token the handler mints into `.git/config` after this spawn resolves.
+        // Best-effort: the group is usually already gone (ESRCH). The child is its own
+        // group leader (`detached: true`); a grandchild that called setsid() escapes the
+        // group, which is why the hook also denies every verb that could start one.
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            // process group already gone
+          }
+        }
+        const durationMs = Date.now() - startedAt;
+        // #7122 P2-2 — `exit` can fire before the pipes are drained; wait (bounded) for
+        // both readlines to close so the final `result` line is never lost.
+        let waitTimer: NodeJS.Timeout | undefined;
+        const bound = new Promise<void>((done) => {
+          waitTimer = setTimeout(done, STDIO_CLOSE_WAIT_MS);
+        });
+        void Promise.race([Promise.all(streamsClosed).then(() => undefined), bound]).then(() => {
+          if (waitTimer) clearTimeout(waitTimer);
+          finish({
+            ok: exitCode === 0,
+            exitCode,
+            signal,
+            abortedByTimeout: timedOut,
+            durationMs,
+            stderrTail,
+            stdoutTail,
+            // ADR-033 I5 deterministic capture: surface the parsed cost on the
+            // SpawnResult (undefined when no result event parsed — fail-open).
+            costUsd: evalCost?.costUsd,
+            usage: evalCost?.usage,
+            model: evalCost?.model,
+            isError: evalCost?.isError ?? undefined,
+            subtype: evalCost?.subtype ?? undefined,
+            numTurns: evalCost?.numTurns ?? undefined,
+            // #7122 P2-3 — present ONLY for a caller that opted in.
+            ...(captureFinalMessage
+              ? { finalMessage: evalFinalMessage, finalMessageTruncated: evalFinalMessageTruncated }
+              : {}),
+            permissionDenialCount: evalAllDenials?.permissionDenialCount,
+            deniedTools: evalAllDenials?.deniedTools,
+          });
         });
       });
       child.on("error", (err) => {
-        const redactedMsg = redactToken(err.message ?? "", installationToken);
+        // After `exit` the run's verdict is the exit's: an error here (a late kill or
+        // pipe failure) is not a failed spawn, and must not be reported as one.
+        if (exitSeen) return;
+        const redactedMsg = redactChild(err.message ?? "");
         const redacted = new Error(redactedMsg);
         redacted.name = err.name;
         reportSilentFallback(redacted, {

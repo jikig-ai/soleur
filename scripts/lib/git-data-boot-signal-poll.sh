@@ -67,7 +67,10 @@ git_data_boot_sql() {
                      JSONExtractString(raw,'hooks_path')   AS hooks_path,
                      JSONExtractString(raw,'provision')    AS provision,
                      JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop,
-                     JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit
+                     JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit,
+                     JSONExtractString(raw,'fence_on_mapper') AS fence_on_mapper,
+                     JSONExtractString(raw,'erasure_probe') AS erasure_probe,
+                     JSONExtractString(raw,'plaintext_empty') AS plaintext_empty
               FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
                     UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
               WHERE dt > fromUnixTimestamp($anchor)
@@ -121,6 +124,35 @@ git_data_boot_answered() {
   bs_absence_response_is_answer "$body"
 }
 
+# git_data_served_empty_read <outfile> <errfile>
+# (#8211 PR2 / ADR-220 D6) The rotate precondition's read: the LATEST boot_complete row's
+# served_repos field. Same pinned tables and credential scope as git_data_boot_read; the
+# reader's rc answers whether the query executed at all.
+git_data_served_empty_sql() {
+  cat <<'SQL'
+              SELECT JSONExtractString(raw,'served_repos') AS served_repos
+              FROM (SELECT dt, raw FROM remote($BS_TABLE)
+                    UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+              WHERE JSONExtractString(raw,'stage') = 'boot_complete'
+                AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
+              ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow
+SQL
+}
+git_data_served_empty_read() {
+  local outfile="$1" errfile="$2" reader
+  case "$outfile" in /*) : ;; *) printf 'git_data_served_empty_read: refusing a relative stdout target: %s\n' "$outfile" >&2; return 78 ;; esac
+  case "$errfile" in /*) : ;; *) printf 'git_data_served_empty_read: refusing a relative stderr target: %s\n' "$errfile" >&2; return 78 ;; esac
+  reader="$(bs_absence_query_script)"
+  BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3" \
+    timeout -k 5 "$GIT_DATA_BOOT_READ_TIMEOUT_S" \
+    doppler run -p soleur -c prd_terraform \
+      --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
+      --no-exit-on-missing-only-secrets \
+      -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
+      bash "$reader" "$(git_data_served_empty_sql)" \
+    >"$outfile" 2>"$errfile"
+}
+
 # git_data_boot_poll_decide <found> <final_answered>   (yes/no, yes/no)
 # The verdict, as a pure function so a suite can drive every arm. It rests on the FINAL
 # read, and the caller also reports how many reads answered, so "the final read failed after
@@ -171,6 +203,13 @@ git_data_boot_poll() {
     printf '::error::git-data boot poll: could not create a scratch directory under TMPDIR=%s — refusing to poll. This is a runner fault, not a host state.\n' "${TMPDIR:-/tmp}" >&2
     return 2
   fi
+  # Declare the owner the tmp reaper can check (#7004): this sourced lib cannot
+  # own a trap (ADR-129), so the marker is what lets Reaper 3 reclaim the dir
+  # once the owning process is gone. pid= is the session harness owner when
+  # soleur_scratch_session_begin ran, else this process.
+  printf 'pid=%s\nschema=1\nns=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}" \
+    "$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')" \
+    > "$scratch/.soleur-owned" 2>/dev/null || true
   out="$scratch/rows"; err="$scratch/err"
 
   for (( i = 1; i <= max_polls; i++ )); do
@@ -225,7 +264,11 @@ git_data_boot_poll() {
 # from it (the message used to re-spell the five names, so a sixth would have made it lie).
 # git-data-emit.test.sh's consumer-roster guard reads THIS declaration (anchored on
 # `GIT_DATA_BOOT_TERMINAL=`), so a name added here without a producer change REDs that suite.
-GIT_DATA_BOOT_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit"
+# (#8211) fence_on_mapper, erasure_probe and plaintext_empty join it: the bootstrap MEASURES
+# each (the fence's findmnt SOURCE, a real erasure run as `git`, the read-only plaintext
+# count), and a host missing any of them must not release a replace. The SQL above projects
+# each one; a name read here but not projected is absent from every row and reads as drift.
+GIT_DATA_BOOT_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty"
 git_data_boot_check_invariants() {
   local kind="$1" row="$2" f
   # shellcheck disable=SC2086

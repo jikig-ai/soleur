@@ -63,7 +63,7 @@ mkaction() { # <path> <body>  (into the sibling actions dir the lint derives fro
 run_lint() { python3 "$SUT" "$TMP/wf" >"$TMP/out" 2>"$TMP/err"; RC=$?; }
 # reset() restores the filler, never a bare directory — a bare `rm -rf` would drop every case
 # below the floor and every RED below would then be measuring the floor, not the rule.
-reset() { rm -rf "$TMP/wf" "$TMP/actions"; cp -r "$TMP/filler" "$TMP/wf"; cp -r "$TMP/filler-actions" "$TMP/actions"; }
+reset() { rm -rf "$TMP/wf" "$TMP/actions" "$TMP/.github" "$TMP/scripts"; cp -r "$TMP/filler" "$TMP/wf"; cp -r "$TMP/filler-actions" "$TMP/actions"; }
 n_findings() { grep -c '^::error file=' "$TMP/err"; }
 
 # --- must-PASS (i): the filler alone is clean, asserted BEFORE any case runs -----------------
@@ -353,6 +353,10 @@ else
   fail "9 $TARGET is absent from the live tree — row 9 has no sibling to mutate"
   fail "9 (delta) not measured"
 fi
+
+# Row 9's copy of the live tree lies under "$TMP", which is the repository root of every later fixture; its scripts would
+# join the derived set (S4 rows assert the exact size), so it is dropped here.
+rm -rf "$TMP/live9"
 
 # --- RED 10: a commented-out checkout, or one named in a run: body, is not a checkout --------
 reset
@@ -785,6 +789,862 @@ else
   fail "26 the composite .yaml glob is unpinned — dropping it is a silent bypass: rc=$RC"
 fi
 
+# --- RED 27-31 + must-PASS (ADR-280): the library surface -----------------------------------
+# A job that sends a credential through scripts/lib/bearer-curl.sh needs a checkout that
+# materialises scripts/lib/, and its workflow must not run under pull_request_target.
+reset
+mkwf lib-nocheckout.yml 'name: lib-nocheckout
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: send
+        run: source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"'
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-nocheckout.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "27 a step that sources the library with no checkout in its job is REFUSED"
+else
+  fail "27 a library consumer with no checkout was accepted: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-path.yml "name: lib-path
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          path: sub
+      - name: send
+        run: source \"\${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh\""
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-path.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "28 a checkout into a subdirectory does not materialise scripts/lib/ for a sourcing step"
+else
+  fail "28 a path: checkout was accepted for a library consumer: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-sparse.yml "name: lib-sparse
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-sparse.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "29 a sparse cone that resolves the composite (.github) but excludes scripts/ is REFUSED for the library"
+else
+  fail "29 a .github-only cone was accepted for a composite that sources the library: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-prt.yml "name: lib-prt
+on:
+  pull_request_target:
+    types: [opened]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - uses: ./.github/actions/anthropic-preflight"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-prt.yml: job 'j'.*pull_request_target" "$TMP/err"; then
+  pass "30 a library consumer in a pull_request_target workflow is REFUSED"
+else
+  fail "30 a pull_request_target caller of a credential composite was accepted: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-prt-list.yml "name: lib-prt-list
+on: [push, pull_request_target]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - name: send
+        run: source \"\${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh\""
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-prt-list.yml: job 'j'.*pull_request_target" "$TMP/err"; then
+  pass "31 the list form of on: is read too (pull_request_target among several triggers)"
+else
+  fail "31 the list-form trigger escaped the pull_request_target check: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-ok.yml "name: lib-ok
+on:
+  schedule:
+    - cron: '0 3 * * *'
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: |
+            .github
+            scripts
+      - uses: ./.github/actions/notify-ops-email
+      - name: send
+        run: source \"\${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh\""
+run_lint
+if [[ "$RC" -eq 0 ]]; then
+  pass "32 (must-PASS) a plain-trigger job with a usable checkout whose cone names scripts passes"
+else
+  fail "32 a compliant library consumer was refused: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# --- 33: the LIVE tree's library population is non-trivial (the floor lives here, not in the lint) ----
+python3 "$SUT" "$ROOT/.github/workflows" >"$TMP/live.out" 2>"$TMP/live.err"; LIVE_RC=$?
+live_lib="$(sed -nE 's/.*; ([0-9]+) library-consuming step\(s\) each have a checkout.*/\1/p' "$TMP/live.out")"
+if [[ "$LIVE_RC" -eq 0 && "$live_lib" =~ ^[0-9]+$ && "$live_lib" -ge 20 ]]; then
+  pass "33 the live tree is clean and carries >= 20 library-consuming steps ($live_lib): the third surface is not scanning nothing"
+else
+  fail "33 live tree: rc=$LIVE_RC library-consuming steps='${live_lib:-<unparsed>}': $(head -1 "$TMP/live.err")"
+fi
+
+# --- 34-: review fix round — untrusted-ref rule (every trigger, every spelling), cone segments, derivation ----
+# 34: every untrusted trigger, with a checkout of a head sha, is refused.
+for trig in workflow_run issue_comment pull_request_review pull_request_review_comment issues; do
+  reset
+  mkwf "lib-headref-$trig.yml" "name: lib-headref
+on:
+  $trig:
+    types: [created]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          ref: \${{ github.event.workflow_run.head_sha }}
+      - uses: ./.github/actions/notify-ops-email"
+  run_lint
+  if [[ "$RC" -eq 1 ]] && grep -q "lib-headref-$trig.yml: job 'j'.*other than the default branch" "$TMP/err"; then
+    pass "34 a library consumer on a $trig trigger that checks out a head sha is REFUSED"
+  else
+    fail "34 $trig: a head-ref checkout was accepted for a library consumer: rc=$RC: $(head -1 "$TMP/err")"
+  fi
+done
+
+# 34b: other spellings of a non-default ref fail closed too (refs/pull merge ref, a step output, an input).
+for refv in 'refs/pull/${{ github.event.issue.number }}/merge' '${{ steps.pr.outputs.sha }}' '${{ inputs.sha }}' 'feature-branch'; do
+  reset
+  mkwf lib-refspell.yml "name: lib-refspell
+on:
+  issue_comment:
+    types: [created]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          ref: $refv
+      - uses: ./.github/actions/notify-ops-email"
+  run_lint
+  if [[ "$RC" -eq 1 ]] && grep -q "lib-refspell.yml: job 'j'.*other than the default branch" "$TMP/err"; then
+    pass "34b ref '$refv' under issue_comment is REFUSED (a ref other than the default branch's own fails closed)"
+  else
+    fail "34b ref '$refv' was accepted under issue_comment: rc=$RC: $(head -1 "$TMP/err")"
+  fi
+done
+
+# 34c: the near side — an untrusted trigger whose checkout is the default ref (no ref, github.sha, main) PASSES.
+for refline in '' 'ref: ${{ github.sha }}' 'ref: ${{ github.ref }}' 'ref: ${{ github.event.repository.default_branch }}' 'ref: main' 'ref: master'; do
+  reset
+  if [[ -n "$refline" ]]; then withblock="        with:
+          $refline"; else withblock=""; fi
+  mkwf lib-defref.yml "name: lib-defref
+on:
+  workflow_run:
+    workflows: [ci]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+$withblock
+      - uses: ./.github/actions/notify-ops-email"
+  run_lint
+  if [[ "$RC" -eq 0 ]]; then
+    pass "34c (must-PASS) a workflow_run consumer whose checkout is the default ref ('${refline:-no ref:}') passes"
+  else
+    fail "34c a default-ref checkout under workflow_run was refused ('${refline:-no ref:}'): rc=$RC: $(head -1 "$TMP/err")"
+  fi
+done
+
+# 34d: on the PR-review triggers the implicit and github.sha refs are the PR's merge ref: only an explicit default branch counts.
+for refline in '' 'ref: ${{ github.sha }}' 'ref: ${{ github.ref }}'; do
+  reset
+  if [[ -n "$refline" ]]; then withblock="        with:
+          $refline"; else withblock=""; fi
+  mkwf lib-review-strict.yml "name: lib-review-strict
+on:
+  pull_request_review:
+    types: [submitted]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+$withblock
+      - uses: ./.github/actions/notify-ops-email"
+  run_lint
+  if [[ "$RC" -eq 1 ]] && grep -q "lib-review-strict.yml: job 'j'.*other than the default branch" "$TMP/err"; then
+    pass "34d a pull_request_review consumer whose checkout is '${refline:-the implicit ref}' (the PR merge ref) is REFUSED"
+  else
+    fail "34d pull_request_review with '${refline:-no ref}' was accepted: rc=$RC: $(head -1 "$TMP/err")"
+  fi
+done
+reset
+mkwf lib-review-main.yml "name: lib-review-main
+on:
+  pull_request_review:
+    types: [submitted]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          ref: main
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 0 ]]; then pass "34e (must-PASS) a pull_request_review consumer with an explicit default-branch ref passes"; else fail "34e: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 34f: a second checkout that does not serve the workspace root (foreign repository) may carry any ref.
+reset
+mkwf lib-foreign-ref.yml "name: lib-foreign-ref
+on:
+  workflow_run:
+    workflows: [ci]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - uses: actions/checkout@$SHA
+        with:
+          repository: other/repo
+          ref: some-branch
+          path: other
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 0 ]]; then pass "34f (must-PASS) a foreign-repository checkout with its own ref does not make the workspace checkout untrusted"; else fail "34f: rc=$RC: $(head -1 "$TMP/err")"; fi
+
+reset
+mkwf lib-headref-pr.yml "name: lib-headref-pr
+on:
+  pull_request:
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          ref: \${{ github.event.pull_request.head.sha }}
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 0 ]]; then
+  pass "35 (must-PASS) a head-ref checkout under plain pull_request is not refused (composite and library resolve from one tree)"
+else
+  fail "35 plain pull_request with a head ref was refused: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# 36: cone segments. RED: a prefix, a sibling directory, a later negation, a prefix of .github. GREEN: the accepted spellings.
+cone_row() { # <label> <expect rc> <cone lines...>
+  local label="$1" want="$2"; shift 2
+  local cone_block="" l
+  for l in "$@"; do cone_block+="            $l"$'\n'; done
+  reset
+  mkwf lib-cone.yml "name: lib-cone
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: |
+${cone_block%$'\n'}
+      - uses: ./.github/actions/notify-ops-email"
+  run_lint
+  if [[ "$RC" -eq "$want" ]] && { [[ "$want" -eq 0 ]] || grep -q "lib-cone.yml: job 'j'" "$TMP/err"; }; then
+    pass "36 cone [$label] -> rc $want"
+  else
+    fail "36 cone [$label] expected rc $want, got rc=$RC: $(head -1 "$TMP/err")"
+  fi
+}
+cone_row ".github scripts-old"        1 .github scripts-old
+cone_row ".github scripts/ci"         1 .github scripts/ci
+cone_row ".github scripts/lib-old"    1 .github scripts/lib-old
+cone_row ".github scripts !scripts/lib" 1 .github scripts '!scripts/lib'
+cone_row ".github-old scripts"        1 .github-old scripts
+cone_row ".github/workflows scripts" 1 .github/workflows scripts
+cone_row ".github/actions scripts"   0 .github/actions scripts
+cone_row ".github scripts !apps/x/scripts" 0 .github scripts '!apps/x/scripts'
+cone_row ".github scripts"            0 .github scripts
+cone_row ".github /scripts"           0 .github /scripts
+cone_row ".github scripts/lib"        0 .github scripts/lib
+cone_row ".github scripts/lib/"       0 .github scripts/lib/
+cone_row ".github scripts/**"         0 .github 'scripts/**'
+
+reset
+mkwf lib-dollar.yml 'name: lib-dollar
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: $/.github/actions/notify-ops-email'
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-dollar.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "37 the \$/ spelling of a local composite with no checkout is REFUSED by the library rule (not only the generic one)"
+else
+  fail "37 a \$/ composite call without a checkout was accepted or refused for the wrong reason: rc=$RC: $(head -1 "$TMP/err")"
+fi
+reset
+mkwf lib-dollar-ok.yml "name: lib-dollar-ok
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - uses: \$/.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 0 ]]; then pass "37b (must-PASS) the \$/ spelling after a plain checkout passes"; else fail "37b: rc=$RC: $(head -1 "$TMP/err")"; fi
+
+reset
+mkwf lib-prt-str.yml "name: lib-prt-str
+on: pull_request_target
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - uses: ./.github/actions/anthropic-preflight"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-prt-str.yml: job 'j'.*pull_request_target" "$TMP/err"; then
+  pass "38 the string form of on: (on: pull_request_target) is read too"
+else
+  fail "38 the string-form trigger escaped the pull_request_target check: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# 39: derivation. The composite is NEW (not in the default pair), the job HAS a usable checkout whose cone is .github
+# only, so the ONLY finding available is the library rule — which exists only if derivation found the composite.
+reset
+mkaction newlibcomp 'name: newlibcomp
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"'
+mkwf lib-derived.yml "name: lib-derived
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/newlibcomp"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-derived.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "39 a NEW composite that sources the library is picked up by derivation (a .github-only cone is refused for it)"
+else
+  fail "39 a derived library composite under a .github-only cone was accepted or refused for the wrong reason: rc=$RC: $(head -1 "$TMP/err")"
+fi
+# 39b: retention — a composite that does NOT name the library is unaffected by the same cone.
+reset
+mkaction plaincomp 'name: plaincomp
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo hi'
+mkwf lib-plain.yml "name: lib-plain
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/plaincomp"
+run_lint
+if [[ "$RC" -eq 0 ]]; then pass "39b (must-PASS) a composite that does not source the library passes under a .github-only cone"; else fail "39b: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 39c: a NESTED composite directory is derived by its path under actions/.
+reset
+mkaction grp/nestedlib 'name: nestedlib
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"'
+mkwf lib-nested.yml "name: lib-nested
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/grp/nestedlib"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-nested.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then pass "39c a nested composite directory that sources the library is derived by its path"; else fail "39c nested derivation: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 39d: a variable spelling of the library path is still recognised (the basename is the needle).
+reset
+mkwf lib-varspell.yml 'name: lib-varspell
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: send
+        run: |
+          LIBDIR=scripts/lib
+          source "${GITHUB_WORKSPACE:?}/${LIBDIR}/bearer-curl.sh"'
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-varspell.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then pass "39d a run: step that names the library through a variable is still a consumer"; else fail "39d: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 39f: derivation reads the BASENAME (a variable spelling in the composite) and an action.yaml file name.
+reset
+mkaction varcomp 'name: varcomp
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        LIBDIR=scripts/lib
+        source "${GITHUB_WORKSPACE:?}/${LIBDIR}/bearer-curl.sh"'
+mkwf lib-varcomp.yml "name: lib-varcomp
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/varcomp"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-varcomp.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then pass "39f a composite that names the library through a variable is derived by the basename"; else fail "39f variable-spelling derivation: rc=$RC: $(head -1 "$TMP/err")"; fi
+reset
+mkdir -p "$TMP/actions/yamlcomp"
+printf '%s\n' 'name: yamlcomp' 'runs:' '  using: composite' '  steps:' '    - shell: bash' '      run: source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"' > "$TMP/actions/yamlcomp/action.yaml"
+mkwf lib-yamlcomp.yml "name: lib-yamlcomp
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/yamlcomp"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-yamlcomp.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then pass "39g a composite named action.yaml is derived too"; else fail "39g action.yaml derivation: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 39e: a malformed composite (runs is not a mapping) is reported by name, never a traceback.
+reset
+mkaction badruns 'name: badruns
+runs: composite'
+run_lint
+if [[ "$RC" -ne 0 ]] && grep -q "badruns/action.yml" "$TMP/err" && ! grep -q "Traceback" "$TMP/err"; then pass "39e a composite whose runs: is not a mapping is reported by name (no traceback)"; else fail "39e malformed composite: rc=$RC: $(head -2 "$TMP/err")"; fi
+
+# --- S4 Guard 3: a `run:` that names a SCRIPT which itself sources the library is a library consumer --------------
+# The lint's third surface used to see only a step or composite whose own text names bearer-curl.sh. A script file that
+# sources the library and is invoked by `run:` (dispatch-web-redeploy/track.sh) was its documented blind spot. The set of
+# such scripts is DERIVED from the tree (the fixture tree here has no .git, so the walk arm runs; the real tree uses
+# the tracked-file listing). The derived-set size is printed on its own line; the fixture rows below assert the EXACT size, which is
+# the anti-vacuity floor for the derivation: a derivation emptied by a mutation turns S4-0 and S4-9 red.
+# Fixture scripts live under "$TMP" at their repo-relative path (the fixture tree's repo root is "$TMP", the parent of wf/).
+mkscript() { # <repo-relative path> <body>
+  mkdir -p "$TMP/${1%/*}"
+  printf '%s\n' "$2" > "$TMP/$1"
+}
+S4_SCRIPT='.github/actions/dispatch-web-redeploy/track.sh'
+S4_BODY='#!/usr/bin/env bash
+source "$(dirname "$0")/../../../scripts/lib/bearer-curl.sh"
+bc_curl track "Authorization:Bearer :KEY" -- -sS https://example.invalid/'
+S4_RUN='bash .github/actions/dispatch-web-redeploy/track.sh'
+s4_info() { sed -nE 's/^lint-workflow-local-action-checkout: script-consumers: ([0-9]+) derived \([a-z .-]+\), ([0-9]+) step\(s\) run one$/\1 \2/p' "$TMP/out"; }
+# s4_wf <file> <workflow body>: reset, drop the fixture script in, write the workflow
+s4_case() { reset; mkscript "$S4_SCRIPT" "$S4_BODY"; mkwf "$1" "$2"; run_lint; }
+
+# S4-0 (must-PASS): a script consumer behind a full checkout is clean, the derived set holds exactly the one script, and the
+# step is counted. This is the derived-set floor: an emptied derivation reads 0 here.
+s4_case s4-ok.yml "name: s4-ok
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - name: track
+        run: $S4_RUN"
+if [[ "$RC" -eq 0 && "$(s4_info)" == "1 1" ]]; then
+  pass "S4-0 (must-PASS) a script consumer behind a full checkout is clean, and the derived set is exactly 1 script / 1 step"
+else
+  fail "S4-0 control: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
+fi
+
+# S4-1 (mutation 1): the checkout is removed from the job that calls the script.
+s4_case s4-nocheckout.yml "name: s4-nocheckout
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: track
+        run: $S4_RUN"
+if [[ "$RC" -eq 1 ]] && grep -q "s4-nocheckout.yml: job 'j', step 'track'.*bearer-curl.sh.*\[script consumer: $S4_SCRIPT\]" "$TMP/err"; then
+  pass "S4-1 a step that runs a library-sourcing script with no checkout in its job is REFUSED, naming the script"
+else
+  fail "S4-1 a script consumer with no checkout was accepted: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# S4-2 (mutation 2): a checkout into a subdirectory, and a cone that excludes scripts/, do not materialise scripts/lib/.
+s4_case s4-path.yml "name: s4-path
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          path: x
+      - name: track
+        run: $S4_RUN"
+if [[ "$RC" -eq 1 ]] && grep -q "s4-path.yml: job 'j', step 'track'.*bearer-curl.sh" "$TMP/err"; then
+  pass "S4-2a a script consumer behind a checkout with path: x is REFUSED"
+else
+  fail "S4-2a a path: checkout was accepted for a script consumer: rc=$RC: $(head -1 "$TMP/err")"
+fi
+s4_case s4-cone.yml "name: s4-cone
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - name: track
+        run: $S4_RUN"
+if [[ "$RC" -eq 1 ]] && grep -q "s4-cone.yml: job 'j', step 'track'.*bearer-curl.sh" "$TMP/err"; then
+  pass "S4-2b a script consumer behind a cone that resolves .github but excludes scripts/ is REFUSED"
+else
+  fail "S4-2b a .github-only cone was accepted for a script consumer: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# S4-3 (mutation 3): the second caller, added after a compliant first (job and file), is judged too, and the first is not named.
+s4_case s4-second.yml "name: s4-second
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - name: track a
+        run: $S4_RUN
+  b:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: track b
+        run: $S4_RUN"
+mkwf zz-s4-third.yml "name: s4-third
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: track c
+        run: $S4_RUN"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "s4-second.yml: job 'b', step 'track b'" "$TMP/err" && ! grep -q "s4-second.yml: job 'a'" "$TMP/err" \
+   && grep -q "zz-s4-third.yml: job 'j', step 'track c'" "$TMP/err" && [[ "$(n_findings)" -eq 2 ]]; then
+  pass "S4-3 a second script caller after a compliant first is judged (job b and a later file named, job a not)"
+else
+  fail "S4-3 only the first script caller was judged: rc=$RC n=$(n_findings): $(tr '\n' ' ' < "$TMP/err" | cut -c1-300)"
+fi
+# ...and a second STEP in the same job after a compliant first step, with the checkout skipped by its own condition for it.
+s4_case s4-two-steps.yml "name: s4-two-steps
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        if: \${{ inputs.x }}
+      - name: first
+        if: \${{ inputs.x }}
+        run: $S4_RUN
+      - name: second
+        run: $S4_RUN"
+if [[ "$RC" -eq 1 ]] && grep -q "s4-two-steps.yml: job 'j', step 'second'" "$TMP/err" && ! grep -q "step 'first'" "$TMP/err"; then
+  pass "S4-3b the second step of a job is judged on its own if: (the first twin passes, the unconditional second is REFUSED)"
+else
+  fail "S4-3b a conditional checkout satisfied an unconditional script step: rc=$RC: $(tr '\n' ' ' < "$TMP/err" | cut -c1-300)"
+fi
+
+# S4-4 (mutation 4): under workflow_run a checkout of the triggering head sha is a tree the author controls.
+s4_case s4-headref.yml "name: s4-headref
+on:
+  workflow_run:
+    workflows: [ci]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          ref: \${{ github.event.workflow_run.head_sha }}
+      - name: track
+        run: $S4_RUN"
+if [[ "$RC" -eq 1 ]] && grep -q "s4-headref.yml: job 'j', step 'track'.*other than the default branch.*\[script consumer: $S4_SCRIPT\]" "$TMP/err"; then
+  pass "S4-4 a script consumer on workflow_run that checks out a head sha is REFUSED"
+else
+  fail "S4-4 a head-sha checkout was accepted for a script consumer: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# S4-5 (mutation 5): pull_request_target runs with secrets against a ref the author controls.
+s4_case s4-prt.yml "name: s4-prt
+on:
+  pull_request_target:
+    types: [opened]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - name: track
+        run: $S4_RUN"
+if [[ "$RC" -eq 1 ]] && grep -q "s4-prt.yml: job 'j', step 'track'.*pull_request_target.*\[script consumer: $S4_SCRIPT\]" "$TMP/err"; then
+  pass "S4-5 a script consumer in a pull_request_target workflow is REFUSED"
+else
+  fail "S4-5 a pull_request_target script caller was accepted: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# S4-6 (mutation 6): the derived set. A script that does NOT name the library is no consumer (the rule must not over-reach), and a
+# derivation that returned nothing makes S4-0 / S4-1 red. Both directions, so neither "match everything" nor "match nothing" survives.
+reset
+mkscript .github/actions/plain/plain.sh '#!/usr/bin/env bash
+echo hello'
+mkwf s4-plain.yml "name: s4-plain
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: plain
+        run: bash .github/actions/plain/plain.sh"
+run_lint
+if [[ "$RC" -eq 0 && "$(s4_info)" == "0 0" ]]; then
+  pass "S4-6a a script that does not source the library is no consumer (derived 0, rc 0): the rule does not over-reach"
+else
+  fail "S4-6a a plain script was treated as a consumer: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
+fi
+reset
+mkscript scripts/lib/other-helper.sh '#!/usr/bin/env bash
+source "$(dirname "$0")/bearer-curl.sh"'
+mkwf s4-libdir.yml "name: s4-libdir
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: helper
+        run: bash scripts/lib/other-helper.sh"
+run_lint
+if [[ "$RC" -eq 0 && "$(s4_info)" == "0 0" ]]; then
+  pass "S4-6b a script under scripts/lib/ is outside the derived set (the library's own tree is not a consumer)"
+else
+  fail "S4-6b a scripts/lib/ file was derived as a consumer: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
+fi
+
+# S4-7 (mutation 7): a cone naming scripts/lib-old is a sibling by string prefix, not a path segment. The two must-PASS shapes differ
+# from the real workflows: a cone of exactly the library file with cone-mode off, and a cone naming scripts.
+s4_case s4-libold.yml "name: s4-libold
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: |
+            .github
+            scripts/lib-old
+      - name: track
+        run: $S4_RUN"
+if [[ "$RC" -eq 1 ]] && grep -q "s4-libold.yml: job 'j', step 'track'.*bearer-curl.sh" "$TMP/err"; then
+  pass "S4-7 a script consumer behind a cone naming scripts/lib-old is REFUSED (path segments, not a string prefix)"
+else
+  fail "S4-7 scripts/lib-old satisfied the cone rule: rc=$RC: $(head -1 "$TMP/err")"
+fi
+s4_case s4-cone-file.yml "name: s4-cone-file
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: |
+            .github/actions/dispatch-web-redeploy
+            scripts/lib/bearer-curl.sh
+          sparse-checkout-cone-mode: false
+      - name: track
+        run: $S4_RUN"
+if [[ "$RC" -eq 0 && "$(s4_info)" == "1 1" ]]; then
+  pass "S4-7b (must-PASS) a non-cone sparse checkout naming scripts/lib/bearer-curl.sh and the script directory is clean"
+else
+  fail "S4-7b a compliant sparse shape was refused: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
+fi
+s4_case s4-cone-scripts.yml "name: s4-cone-scripts
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: |
+            .github
+            scripts
+      - name: track
+        run: $S4_RUN"
+if [[ "$RC" -eq 0 ]]; then
+  pass "S4-7c (must-PASS) a cone naming .github and scripts is clean for a script consumer"
+else
+  fail "S4-7c a cone naming scripts was refused: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# S4-8: the spellings by which a run: names the script. Every one is a consumer (no checkout -> refused); the negative control above
+# (S4-6a) shows the same shapes do not flag a script that does not source the library.
+for spelling in "bash ./$S4_SCRIPT" "bash \"\$GITHUB_WORKSPACE/$S4_SCRIPT\"" "bash \"\${GITHUB_WORKSPACE:?}/$S4_SCRIPT\"" \
+                "REDEPLOY_TIMEOUT_S=900 bash $S4_SCRIPT" "cd .github/actions/dispatch-web-redeploy && bash track.sh" "if bash $S4_SCRIPT; then echo ok; fi"; do
+  s4_case s4-spell.yml "name: s4-spell
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: track
+        run: |
+          $spelling"
+  if [[ "$RC" -eq 1 ]] && grep -q "s4-spell.yml: job 'j', step 'track'.*\[script consumer: $S4_SCRIPT\]" "$TMP/err"; then
+    pass "S4-8 the spelling '$spelling' names the script consumer (refused without a checkout)"
+  else
+    fail "S4-8 the spelling '$spelling' did not reach the script consumer: rc=$RC: $(head -1 "$TMP/err")"
+  fi
+done
+# A basename that merely extends the name (track.sh.bak, retrack.sh) is a different file: no consumer.
+s4_case s4-lookalike.yml "name: s4-lookalike
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: lookalike
+        run: bash .github/actions/dispatch-web-redeploy/track.sh.bak"
+if [[ "$RC" -eq 0 && "$(s4_info)" == "1 0" ]]; then
+  pass "S4-8b a name that merely extends the script's (track.sh.bak) is not that script (the match is bounded)"
+else
+  fail "S4-8b a lookalike name was treated as the consumer: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
+fi
+
+# S4-9: a composite whose own run: invokes a script that sits in its directory is a library composite (derived), so a caller of the
+# composite needs the checkout too. The info size here is 1 (the script), which is the derivation floor for this arm.
+reset
+mkaction s4comp 'name: s4comp
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: bash "${{ github.action_path }}/helper.sh"'
+mkscript actions/s4comp/helper.sh '#!/usr/bin/env bash
+source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"'
+mkwf s4-comp.yml "name: s4-comp
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/s4comp"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "s4-comp.yml: job 'j'.*bearer-curl.sh" "$TMP/err" && [[ "$(s4_info)" == "1 0" ]]; then
+  pass "S4-9 a composite that runs a library-sourcing script from its own directory is derived as a library composite"
+else
+  fail "S4-9 composite-via-script derivation: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
+fi
+
+# S4-10: the informational line is present in BOTH outcomes (clean and with findings) and never turns an empty set into a failure.
+reset
+run_lint
+if [[ "$RC" -eq 0 && "$(s4_info)" == "0 0" ]]; then
+  pass "S4-10 an empty derived set is reported (0 derived) and is NOT a failure on its own"
+else
+  fail "S4-10 an empty derived set failed the lint or the line is missing: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
+fi
+
+# S4-11: the live tree's set size is REPORTED here (parsed, asserted to be numeric); its FLOORS (derived >= 10, steps >= 4) are asserted by the
+# argv-bearer battery (tests/scripts/test-argv-bearer-sweep.sh, stage S4, the row that runs this lint on the real tree). The tracked-file-listing (git) arm
+# is reached by the live tree and by S4-13 below, nowhere else: every other fixture has no `.git`.
+live_info="$(sed -nE 's/^lint-workflow-local-action-checkout: script-consumers: ([0-9]+) derived \(([a-z .-]+)\), ([0-9]+) step\(s\) run one$/\1 \3/p' "$TMP/live.out")"
+if [[ "$LIVE_RC" -eq 0 && "$live_info" =~ ^[0-9]+\ [0-9]+$ ]]; then
+  pass "S4-11 the live tree reports its script-consumer set size ('$live_info': derived, steps) and is clean"
+else
+  fail "S4-11 live tree: rc=$LIVE_RC info='${live_info:-<unparsed>}': $(head -1 "$TMP/live.err")"
+fi
+
+# S4-12: the repository root is `<dir>/../..` when the directory is `.github/workflows` (the real layout), so a script outside
+# `.github` (here `tools/run.sh`) is in the derived set and a step that runs it is judged.
+reset
+mkdir -p "$TMP/rt/.github"
+cp -r "$TMP/filler" "$TMP/rt/.github/workflows"
+cp -r "$TMP/filler-actions" "$TMP/rt/.github/actions"
+mkdir -p "$TMP/rt/tools"
+printf '%s\n' '#!/usr/bin/env bash' 'source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"' > "$TMP/rt/tools/run.sh"
+printf '%s\n' "name: s4-rt" "jobs:" "  j:" "    runs-on: ubuntu-24.04" "    steps:" "      - name: tool" "        run: bash tools/run.sh" > "$TMP/rt/.github/workflows/s4-rt.yml"
+python3 "$SUT" "$TMP/rt/.github/workflows" >"$TMP/out" 2>"$TMP/err"; RC=$?
+if [[ "$RC" -eq 1 && "$(s4_info)" == "1 1" ]] && grep -q "s4-rt.yml: job 'j', step 'tool'.*\[script consumer: tools/run.sh\]" "$TMP/err"; then
+  pass "S4-12 under the real .github/workflows layout the repository root is two levels up (a script outside .github is derived and judged)"
+else
+  fail "S4-12 .github/workflows layout: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
+fi
+rm -rf "$TMP/rt"
+
+# S4-13: the tracked-file-listing (git) arm of the derivation. Every fixture above has no `.git`, so the walk arm is the only one they reach; a pathspec
+# that stopped matching (`*.sh` -> `*.shx`) would leave them all green. Here the root holds a `.git`: a TRACKED consumer is derived through git,
+# an ignored one is not (`--exclude-standard`), and the printed line names the arm that ran.
+reset
+S4_GIT_ARM="git ls""-files"   # the arm's name as the lint prints it, spelled so that this file is not mistaken for a corpus walker
+mkdir -p "$TMP/gt/.github" "$TMP/gt/tools"
+cp -r "$TMP/filler" "$TMP/gt/.github/workflows"
+cp -r "$TMP/filler-actions" "$TMP/gt/.github/actions"
+printf '%s\n' '#!/usr/bin/env bash' 'source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"' > "$TMP/gt/tools/run.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"' > "$TMP/gt/tools/ignored.sh"
+printf '%s\n' 'tools/ignored.sh' > "$TMP/gt/.gitignore"
+printf '%s\n' "name: s4-gt" "jobs:" "  j:" "    runs-on: ubuntu-24.04" "    steps:" "      - name: tool" "        run: bash tools/run.sh" > "$TMP/gt/.github/workflows/s4-gt.yml"
+git -C "$TMP/gt" init -q 2>/dev/null && git -C "$TMP/gt" add .gitignore tools .github 2>/dev/null
+python3 "$SUT" "$TMP/gt/.github/workflows" >"$TMP/out" 2>"$TMP/err"; RC=$?
+if [[ "$RC" -eq 1 && "$(s4_info)" == "1 1" ]] && grep -q "script-consumers: 1 derived ($S4_GIT_ARM), 1 step(s) run one" "$TMP/out" \
+   && grep -q "s4-gt.yml: job 'j', step 'tool'.*\[script consumer: tools/run.sh\]" "$TMP/err"; then
+  pass "S4-13 with a .git at the repository root the set is derived through the git listing (a tracked consumer is judged, an ignored one is not derived)"
+else
+  fail "S4-13 git arm: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err") out='$(tail -1 "$TMP/out")'"
+fi
+rm -rf "$TMP/gt"
+
+# S4-14: the third clause of the git arm's listing, UNTRACKED-and-not-ignored (`--others`). S4-13 stages everything, so a listing that dropped `--others` (cached files only) passes it;
+# a consumer script written after the last `git add` is the shape a developer has before committing, and it must still be derived and judged.
+reset
+mkdir -p "$TMP/gu/.github" "$TMP/gu/tools"
+cp -r "$TMP/filler" "$TMP/gu/.github/workflows"
+cp -r "$TMP/filler-actions" "$TMP/gu/.github/actions"
+printf '%s\n' '#!/usr/bin/env bash' 'true' > "$TMP/gu/tools/tracked.sh"
+printf '%s\n' "name: s4-gu" "jobs:" "  j:" "    runs-on: ubuntu-24.04" "    steps:" "      - name: tool" "        run: bash tools/fresh.sh" > "$TMP/gu/.github/workflows/s4-gu.yml"
+git -C "$TMP/gu" init -q 2>/dev/null && git -C "$TMP/gu" add tools .github 2>/dev/null
+printf '%s\n' '#!/usr/bin/env bash' 'source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"' > "$TMP/gu/tools/fresh.sh"
+python3 "$SUT" "$TMP/gu/.github/workflows" >"$TMP/out" 2>"$TMP/err"; RC=$?
+if [[ "$RC" -eq 1 && "$(s4_info)" == "1 1" ]] && grep -q "script-consumers: 1 derived ($S4_GIT_ARM), 1 step(s) run one" "$TMP/out" \
+   && grep -q "s4-gu.yml: job 'j', step 'tool'.*\[script consumer: tools/fresh.sh\]" "$TMP/err"; then
+  pass "S4-14 an UNTRACKED, not-ignored consumer (written after the last git add) is derived through the git listing and judged (a listing without --others would miss it)"
+else
+  fail "S4-14 untracked consumer: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err") out='$(tail -1 "$TMP/out")'"
+fi
+rm -rf "$TMP/gu"
+
 # --- HARNESS CANARY + a floor that does NOT dispatch through the helper it guards ----------
 _cp=$PASS; _cf=$FAIL
 pass "canary: a true condition registers as PASS"
@@ -817,7 +1677,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=48
+FAIL_FLOOR_MIN=125
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2

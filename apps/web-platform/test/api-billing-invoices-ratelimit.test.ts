@@ -78,7 +78,7 @@ describe("GET /api/billing/invoices — per-user rate limit", () => {
     setupUser(USER_A);
 
     for (let i = 0; i < 10; i++) {
-      const res = await GET();
+      const res = await GET(new Request("http://localhost/test"));
       expect(res.status).toBe(200);
     }
   });
@@ -88,11 +88,11 @@ describe("GET /api/billing/invoices — per-user rate limit", () => {
 
     // Exhaust the bucket.
     for (let i = 0; i < 10; i++) {
-      const res = await GET();
+      const res = await GET(new Request("http://localhost/test"));
       expect(res.status).toBe(200);
     }
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("60");
   });
@@ -100,17 +100,17 @@ describe("GET /api/billing/invoices — per-user rate limit", () => {
   test("different users don't share the throttle", async () => {
     setupUser(USER_A);
     for (let i = 0; i < 10; i++) {
-      const res = await GET();
+      const res = await GET(new Request("http://localhost/test"));
       expect(res.status).toBe(200);
     }
 
     // User A is exhausted.
-    const resA = await GET();
+    const resA = await GET(new Request("http://localhost/test"));
     expect(resA.status).toBe(429);
 
     // User B should still have a full bucket.
     setupUser(USER_B);
-    const resB = await GET();
+    const resB = await GET(new Request("http://localhost/test"));
     expect(resB.status).toBe(200);
   });
 
@@ -119,14 +119,14 @@ describe("GET /api/billing/invoices — per-user rate limit", () => {
 
     // 15 unauthenticated requests — more than the 10/min limit.
     for (let i = 0; i < 15; i++) {
-      const res = await GET();
+      const res = await GET(new Request("http://localhost/test"));
       expect(res.status).toBe(401);
     }
 
     // Now authenticate and verify the authenticated user's slots are untouched.
     setupUser(USER_A);
     for (let i = 0; i < 10; i++) {
-      const res = await GET();
+      const res = await GET(new Request("http://localhost/test"));
       expect(res.status).toBe(200);
     }
   });

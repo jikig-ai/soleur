@@ -180,6 +180,17 @@ Per-harness discovery, stated at the strength the evidence actually carries.
 `/soleur:sync` from `skills/` **and** `devin/skills/`, each `[user,model]`. That is
 decision 5's condition observed live on a real harness.
 
+> **Amended 2026-09-23 (ADR-245, #8390 bundle) — BOTH readings above are stale,
+> in opposite directions.** Re-measured on Devin CLI **3000.11.1**: `devin skills
+> list` reports each of the 102 `soleur:` names exactly **ONCE**. Devin DEDUPS
+> across declared roots; the double-listing recorded above was an earlier
+> version's behaviour. And Codex is no longer inferred — see the amendment under
+> "Codex" below. The instrument is now standing rather than anecdotal: the
+> `harness-discovery` CI job re-measures the multiplicity of both harnesses on
+> every run and infers ONE mode per run (all-1 = dedup, all-k = additive),
+> because a per-name "1 or k" test passes a listing with `go` twice and `help`
+> once — which is precisely the loader ambiguity decision 5 exists to detect.
+
 **Grok — one negative result, which is weaker than this section first claimed.**
 `grok inspect` reports the soleur plugin at **98 skills** both with and without
 `user-invocable: false` present (branch vs `origin/main`).
@@ -206,6 +217,15 @@ in the 98 — before it contacts Codex at all. Only `discoveredSkills` would pro
 anything, and nothing in the repo captures it. Codex's additive-vs-replace
 behaviour here rests on the manifest declaring `./skills` explicitly, which is
 inference from configuration, not measurement.
+
+> **Amended 2026-09-23 (ADR-245, #8390 bundle): Codex is now MEASURED.** On Codex
+> CLI **0.156.1**, with an isolated `CODEX_HOME` and no auth, `codex plugin
+> marketplace add <checkout>` → `codex plugin add soleur@soleur` → `codex debug
+> prompt-input` renders the skills list: 105 entries for 102 unique names, with
+> `go`/`help`/`sync` appearing twice — one per declared root. Codex is therefore
+> ADDITIVE, which is the behaviour this section inferred from the manifest, now
+> observed. `discoveredSkills` is exactly what the `harness-discovery` job
+> captures, closing the gap this paragraph named.
 
 ADR-215's `98` figures are a dated record of a 95-canonical tree and are left
 unchanged.

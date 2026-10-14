@@ -185,7 +185,7 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
  * construction, regardless of any future demand signal.
  *
  * See brainstorm Key Decision #3:
- *   knowledge-base/project/brainstorms/2026-05-13-mcp-tier-classify-cc-soleur-go-brainstorm.md
+ *   knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-13-mcp-tier-classify-cc-soleur-go-brainstorm.md
  *
  * NOTE: legacy `TOOL_TIER_MAP` entries for Plausible tools do not exist;
  * `getToolTier()` returns "gated" by default for them on the legacy path,
@@ -205,6 +205,36 @@ export const CC_ROUTER_TIER3_DENYLIST: ReadonlySet<string> = new Set([
  */
 export function getToolTier(toolName: string): ToolTier {
   return TOOL_TIER_MAP[toolName] ?? "gated";
+}
+
+/**
+ * Outbound-email tool inputs carry a third party's address and a message body,
+ * and the published privacy notice scopes where those may be stored (#8532).
+ * For those tools, returns a summary naming only which fields were supplied;
+ * for any other tool, returns null so the caller summarises as usual.
+ */
+export function summarizeOutboundEmailInput(toolName: string, input: unknown): string | null {
+  if (!/(^|__)email_(send|reply|suppress)$/.test(toolName)) return null;
+  const keys = input !== null && typeof input === "object" ? Object.keys(input).sort() : [];
+  return `[outbound email: ${keys.join(", ") || "no fields"} — values withheld]`;
+}
+
+/**
+ * The gate question for the OFFLINE path (push + Resend email via
+ * notifyOfflineUser). The in-app gate must show the outbound recipient and body
+ * (see buildGateMessage), but a push payload and a vendor-retained email are
+ * stores the privacy notice does not list (#8532), so outbound-email gates are
+ * content-free here and the operator reviews the details in the app.
+ */
+export function buildOfflineGateMessage(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string {
+  const shortName = toolName.replace("mcp__soleur_platform__", "");
+  if (shortName === "email_send" || shortName === "email_reply" || shortName === "email_suppress") {
+    return "An agent is waiting for your approval on an outbound email action. Open the conversation to review it.";
+  }
+  return buildGateMessage(toolName, toolInput);
 }
 
 /**

@@ -27,8 +27,8 @@ trap 'rm -rf "$SUITE_TMP"' EXIT
 declare -a FAILURES=()   # append-only ledger the verdict reads; see the instrument self-test
 _case=""          # set by run(); names the case a FAIL row belongs to
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v realpath >/dev/null 2>&1 || { echo "SKIP: realpath missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v realpath >/dev/null 2>&1 || { echo "UNRESOLVED: realpath missing — this suite asserted nothing; install realpath"; exit 3; }
 
 # Build a tmp WORK_DIR with scripts/followthroughs/ + an existing executable
 # stub. Echoes the path.
@@ -110,7 +110,7 @@ assert_deny() {
     FAIL=$((FAIL + 1)); FAILURES+=("$_case")
     return
   fi
-  if ! printf '%s' "$HOOK_OUT" | grep -q "$expected_substring"; then
+  if ! printf '%s' "$HOOK_OUT" | grep -c >/dev/null "$expected_substring"; then
     echo "       FAIL: deny reason missing substring '$expected_substring'"
     FAIL=$((FAIL + 1)); FAILURES+=("$_case")
     return
@@ -372,7 +372,7 @@ elif grep -q 'CODE FENCE' "$MUT"; then
 else
   printf '%s' "$FENCED_BODY" > "$TMP/body.md"
   MUT_OUT=$(printf '%s' "$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")" | "$MUT" 2>&1 || true)
-  if printf '%s' "$MUT_OUT" | grep -q 'script=. is empty'; then
+  if printf '%s' "$MUT_OUT" | grep -c >/dev/null 'script=. is empty'; then
     echo "[T$TOTAL] T17d with the fence branch reverted, the fenced body falls back to the generic reason"
     PASS=$((PASS + 1))
   else

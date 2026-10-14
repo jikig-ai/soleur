@@ -114,3 +114,5 @@ present on the very first failure and on every success since.
 - #7634 — the two scripts still on the deprecated **write** path; blocked on the
   replacement's payload shape, not on typing.
 - #4781 — open recurrence guard whose target field moved with this migration.
+  (Corrected 2026-09-23: #4781 is closed by PR #8654; the guard is
+  `scripts/sentry-alert-live-fidelity.sh`.)

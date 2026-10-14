@@ -74,7 +74,7 @@ export function mirrorWithDebounce(err, ctx, userId, errorClass) {
 - `apps/web-platform/server/soleur-go-runner.ts` — handleResultMessage symmetric reset (line ~1813), notifyAwaitingUser body
 - `apps/web-platform/test/observability-mirror-debounce.test.ts` — TTL contract tests
 - `apps/web-platform/test/cc-dispatcher.test.ts` — mock that forwards `actual.MIRROR_DEBOUNCE_MS`
-- Plan: `knowledge-base/project/plans/2026-05-11-fix-cc-hardening-safe-bash-mirror-reaper-wallclock-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-11-fix-cc-hardening-safe-bash-mirror-reaper-wallclock-plan.md`
 
 ## Tags
 

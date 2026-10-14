@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   chmodSync,
   cpSync,
+  existsSync,
   rmSync,
 } from "node:fs";
 import { resolve, join } from "node:path";
@@ -35,8 +36,17 @@ import { randomBytes } from "node:crypto";
 // to the canonical repo path (basename-only lookup), so a temp-dir filename
 // absent from origin/main still trips the gate — exactly what these tests
 // exercise.
+//
+// cwd independence (#8606): tenant-integration.yml and rls-authz-fuzz.yml run
+// the SUT with `working-directory: apps/web-platform`, while the prd release
+// runs it from the repo root. `git ls-tree` resolves a plain pathspec against
+// the CURRENT directory, so a root-relative pathspec named nothing from the
+// subdirectory: every file (merged ones included) was classed "not on
+// origin/main" and the coexists-with listing was computed against an empty
+// main listing. Every case below therefore runs from BOTH cwds.
 
 const REPO_ROOT = resolve(__dirname, "../../../..");
+const APP_DIR = resolve(__dirname, "../..");
 const SCRIPT_PATH = resolve(__dirname, "../../scripts/run-migrations.sh");
 const REAL_MIGRATIONS_DIR = resolve(__dirname, "../../supabase/migrations");
 
@@ -51,6 +61,15 @@ const SYNTHETIC_FILE = `zzz_unmerged_gate_${randomBytes(4).toString("hex")}.sql`
 // `001_initial_schema.sql` (the earliest stable filename).
 const KNOWN_MERGED_FILE = "053_template_authorizations.sql";
 
+// Collision fixture (#8606): an unmerged file sharing prefix 053 with main.
+// The gate's cross-branch collision warning lists main's same-prefix files as
+// `coexists-with:` lines. COLLISION_WITNESS is a main file that is deliberately
+// NOT staged in the collision dir, so its coexists-with line can only come from
+// the `git ls-tree origin/main` listing — an empty listing (the cwd-relative
+// pathspec bug) drops it.
+const COLLISION_FILE = `053_zz_gate_${randomBytes(4).toString("hex")}.sql`;
+const COLLISION_WITNESS = "053_append_kb_sync_row_rpc.sql";
+
 // Each runScript spawns bash + the psql stub + git + schema probes; give
 // headroom over the 16s global default so a slow/contended CI runner does not
 // flake. The minimal-fixture rewrite (2 git spawns vs ~130) is the real fix;
@@ -64,6 +83,8 @@ const stubDirs: string[] = [];
 // synthetic fixture. Set in beforeAll, swept in afterAll. The SUT globs this
 // dir via RUN_MIGRATIONS_TEST_DIR instead of the real migrations tree.
 let tempMigrationsDir = "";
+// Second staging dir for the collision case: {KNOWN_MERGED_FILE, COLLISION_FILE}.
+let collisionMigrationsDir = "";
 
 function makePsqlStub(): string {
   const dir = mkdtempSync(join(tmpdir(), "psql-stub-"));
@@ -91,14 +112,18 @@ function makePsqlStub(): string {
   return dir;
 }
 
-function runScript(env: Record<string, string | undefined>): {
+function runScript(
+  cwd: string,
+  env: Record<string, string | undefined>,
+  migrationsDir: string = tempMigrationsDir,
+): {
   stdout: string;
   stderr: string;
   status: number;
 } {
   const stubDir = makePsqlStub();
   const result = spawnSync("bash", [SCRIPT_PATH, "--bootstrap=skip"], {
-    cwd: REPO_ROOT,
+    cwd,
     env: {
       ...process.env,
       ...env,
@@ -110,10 +135,11 @@ function runScript(env: Record<string, string | undefined>): {
       SUPABASE_ACCESS_TOKEN: "",
       // Point the SUT's *.sql glob at the temp staging dir (#4957) so the
       // synthetic fixture never lands in the real migrations tree. The gate's
-      // `git ls-tree origin/main -- apps/web-platform/supabase/migrations/<name>`
-      // predicate stays anchored to the canonical path (basename-only), so it
-      // still fires for the temp-dir-only `zzz_*` file.
-      RUN_MIGRATIONS_TEST_DIR: tempMigrationsDir,
+      // `git ls-tree origin/main -- ':(top,literal)apps/web-platform/supabase/
+      // migrations/<name>'` predicate stays anchored to the canonical path
+      // (basename-only, repo-top-anchored since #8606), so it still fires for
+      // the temp-dir-only `zzz_*` file from either cwd.
+      RUN_MIGRATIONS_TEST_DIR: migrationsDir,
       PATH: `${stubDir}:${process.env.PATH ?? ""}`,
     },
     encoding: "utf8",
@@ -131,9 +157,10 @@ function sweep(): void {
   // No file is ever written into the real migrations tree, so there is
   // nothing to unlink there. `force: true` tolerates already-removed dirs
   // (e.g., a process.on("exit") sweep after afterAll already ran).
-  if (tempMigrationsDir) {
+  for (const dir of [tempMigrationsDir, collisionMigrationsDir]) {
+    if (!dir) continue;
     try {
-      rmSync(tempMigrationsDir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
     } catch {
       /* best-effort sweep — already-removed dir is fine */
     }
@@ -184,6 +211,22 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
       join(tempMigrationsDir, SYNTHETIC_FILE),
       "-- synthetic test migration; never on origin/main.\nSELECT 1;\n",
     );
+    collisionMigrationsDir = mkdtempSync(
+      join(tmpdir(), "run-migrations-collision-"),
+    );
+    expect(collisionMigrationsDir).toBeTruthy();
+    cpSync(
+      join(REAL_MIGRATIONS_DIR, KNOWN_MERGED_FILE),
+      join(collisionMigrationsDir, KNOWN_MERGED_FILE),
+    );
+    writeFileSync(
+      join(collisionMigrationsDir, COLLISION_FILE),
+      "-- synthetic prefix-collision migration; never on origin/main.\nSELECT 1;\n",
+    );
+    // The witness must come from origin/main, never from the staged dir.
+    expect(existsSync(join(collisionMigrationsDir, COLLISION_WITNESS))).toBe(
+      false,
+    );
     // Belt-and-braces: process.on("exit") fires even on uncaught throws /
     // explicit process.exit() that vitest's afterAll cannot intercept.
     process.on("exit", sweep);
@@ -193,60 +236,83 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
     sweep();
   });
 
-  test("ALLOW_UNMERGED_DEV_APPLY unset: gate blocks with exit 1 + ::error::", () => {
-    const { stdout, stderr, status } = runScript({
-      DATABASE_URL_POOLER: "postgres://stub@localhost:5432/stub",
-      ALLOW_UNMERGED_DEV_APPLY: undefined,
-    });
-    expect(status).toBe(1);
-    // The temp staging dir holds a copy of the real (all on-origin/main)
-    // migrations plus exactly one unmerged file: SYNTHETIC_FILE. So the gate
-    // fires deterministically on the synthetic basename. Assert the contract
-    // (`::error::` + the unmerged-on-main predicate) AND pin the synthetic
-    // filename so a regression that trips the gate on a *different* file (or
-    // fires it for everything) cannot pass. ::error:: lands on stdout (the
-    // script uses `echo`, not `echo >&2`).
-    expect(stdout).toMatch(/::error::Migration .*\.sql is NOT on origin\/main/i);
-    expect(stdout).toMatch(
-      new RegExp(`Migration ${SYNTHETIC_FILE} is NOT on origin/main`, "i"),
-    );
-    expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
-    expect(stderr).toBe("");
-  }, SLOW_SUBPROCESS_TIMEOUT_MS);
+  describe.each([
+    ["repo root", REPO_ROOT],
+    ["apps/web-platform", APP_DIR],
+  ])("cwd = %s", (_label, cwd) => {
+    test("ALLOW_UNMERGED_DEV_APPLY unset: gate blocks with exit 1 + ::error::", () => {
+      const { stdout, stderr, status } = runScript(cwd, {
+        DATABASE_URL_POOLER: "postgres://stub@localhost:5432/stub",
+        ALLOW_UNMERGED_DEV_APPLY: undefined,
+      });
+      expect(status).toBe(1);
+      // The temp staging dir holds a copy of the real (all on-origin/main)
+      // migrations plus exactly one unmerged file: SYNTHETIC_FILE. So the gate
+      // fires deterministically on the synthetic basename. Assert the contract
+      // (`::error::` + the unmerged-on-main predicate) AND pin the synthetic
+      // filename so a regression that trips the gate on a *different* file (or
+      // fires it for everything) cannot pass. ::error:: lands on stdout (the
+      // script uses `echo`, not `echo >&2`).
+      expect(stdout).toMatch(/::error::Migration .*\.sql is NOT on origin\/main/i);
+      expect(stdout).toMatch(
+        new RegExp(`Migration ${SYNTHETIC_FILE} is NOT on origin/main`, "i"),
+      );
+      expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
+      expect(stderr).toBe("");
+    }, SLOW_SUBPROCESS_TIMEOUT_MS);
 
-  test("ALLOW_UNMERGED_DEV_APPLY=1: gate warns and proceeds (exit 0)", () => {
-    const { stdout, status } = runScript({
-      DATABASE_URL_POOLER: "postgres://stub@localhost:5432/stub",
-      ALLOW_UNMERGED_DEV_APPLY: "1",
-    });
-    expect(status).toBe(0);
-    // With the ack set, the gate downgrades to ::warning:: for every unmerged
-    // file — the synthetic one MUST appear (it is brand-new in this branch),
-    // and so MAY any other in-PR migrations. Assert the synthetic file gets
-    // its warning, plus the ack name surfaces in stdout for operator clarity.
-    expect(stdout).toMatch(
-      new RegExp(`${SYNTHETIC_FILE} is not on origin/main`, "i"),
-    );
-    expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
-  }, SLOW_SUBPROCESS_TIMEOUT_MS);
+    test("ALLOW_UNMERGED_DEV_APPLY=1: gate warns and proceeds (exit 0)", () => {
+      const { stdout, status } = runScript(cwd, {
+        DATABASE_URL_POOLER: "postgres://stub@localhost:5432/stub",
+        ALLOW_UNMERGED_DEV_APPLY: "1",
+      });
+      expect(status).toBe(0);
+      // With the ack set, the gate downgrades to ::warning:: for every unmerged
+      // file — the synthetic one MUST appear (it is brand-new in this branch),
+      // and so MAY any other in-PR migrations. Assert the synthetic file gets
+      // its warning, plus the ack name surfaces in stdout for operator clarity.
+      expect(stdout).toMatch(
+        new RegExp(`${SYNTHETIC_FILE} is not on origin/main`, "i"),
+      );
+      expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
+    }, SLOW_SUBPROCESS_TIMEOUT_MS);
 
-  test("positive control: known-merged filename does NOT trigger the gate", () => {
-    // Without this test, a regression that fires the gate for every file
-    // would still let the two cases above pass — both test SYNTHETIC_FILE
-    // exclusively, and both treat the gate firing as the expected outcome.
-    // This case asserts the gate stays silent for a filename present on
-    // origin/main: the only "Migration X is NOT on origin/main" line we
-    // expect is the SYNTHETIC_FILE one, never KNOWN_MERGED_FILE.
-    const { stdout, status } = runScript({
-      DATABASE_URL_POOLER: "postgres://stub@localhost:5432/stub",
-      ALLOW_UNMERGED_DEV_APPLY: "1",
-    });
-    expect(status).toBe(0);
-    expect(stdout).not.toMatch(
-      new RegExp(`${KNOWN_MERGED_FILE}.*NOT on origin/main`, "i"),
-    );
-    expect(stdout).not.toMatch(
-      new RegExp(`${KNOWN_MERGED_FILE}.*is not on origin/main`, "i"),
-    );
-  }, SLOW_SUBPROCESS_TIMEOUT_MS);
+    test("positive control: known-merged filename does NOT trigger the gate", () => {
+      // Without this test, a regression that fires the gate for every file
+      // would still let the two cases above pass — both test SYNTHETIC_FILE
+      // exclusively, and both treat the gate firing as the expected outcome.
+      // This case asserts the gate stays silent for a filename present on
+      // origin/main: the only "Migration X is NOT on origin/main" line we
+      // expect is the SYNTHETIC_FILE one, never KNOWN_MERGED_FILE.
+      const { stdout, status } = runScript(cwd, {
+        DATABASE_URL_POOLER: "postgres://stub@localhost:5432/stub",
+        ALLOW_UNMERGED_DEV_APPLY: "1",
+      });
+      expect(status).toBe(0);
+      expect(stdout).not.toMatch(
+        new RegExp(`${KNOWN_MERGED_FILE}.*NOT on origin/main`, "i"),
+      );
+      expect(stdout).not.toMatch(
+        new RegExp(`${KNOWN_MERGED_FILE}.*is not on origin/main`, "i"),
+      );
+    }, SLOW_SUBPROCESS_TIMEOUT_MS);
+
+    test("collision: same-prefix main files are listed as coexists-with", () => {
+      const { stdout, status } = runScript(
+        cwd,
+        {
+          DATABASE_URL_POOLER: "postgres://stub@localhost:5432/stub",
+          ALLOW_UNMERGED_DEV_APPLY: "1",
+        },
+        collisionMigrationsDir,
+      );
+      expect(status).toBe(0);
+      expect(stdout).toContain(
+        `Cross-branch migration filename collision: branch '${COLLISION_FILE}' shares prefix 053`,
+      );
+      expect(stdout.split("\n")).toContain(
+        `::warning::  coexists-with: ${COLLISION_WITNESS}`,
+      );
+    }, SLOW_SUBPROCESS_TIMEOUT_MS);
+  });
 });

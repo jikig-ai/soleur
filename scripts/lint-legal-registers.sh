@@ -177,6 +177,15 @@ NOT_TRANSCRIBED=(
   "knowledge-base/legal/audits/2026-09-counsel-review-8159.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the #8159 provider-operated-session disclosure floor (three-doc scope paragraphs, the Art. 30 scope-test bracket and the compliance-posture row, PR #8155). Its Art. 33/34 mention is the frontmatter recording that NO trigger exists — a documentation-scoping change destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043 and 8189 reviews above; citing #8159."
   "knowledge-base/legal/audits/2026-09-counsel-review-8205.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the #8205 Devin hook-matcher audit (PA-8/PA-31 §(g) dated clarifications and the compliance-posture IN-PROGRESS row, PR #8214). Its Art. 33/34 mention is the frontmatter recording that NO trigger exists — an absent preventive control on one harness is not an Art. 4(12) event — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189 and 8159 reviews above; citing #8205."
   "knowledge-base/legal/audits/2026-09-counsel-review-8248.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the ADR-142 additive LUKS cutover apparatus for the Inngest Redis AOF store (Art. 30 PA-13/PA-21/PA-22 brackets and the encryption-posture ledger rows, #6894 / PR #8248). Its Art. 33/34 mention is the frontmatter recording that NO trigger exists — the merge creates an empty raw volume and copies nothing, and the later cutover is a controller-internal security-measure transition, not an Art. 4(12) event — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189, 8159 and 8205 reviews above; citing #6894."
+  "knowledge-base/legal/audits/2026-09-counsel-review-7226.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the #7226 / PR #8511 SSH host-key pinning amendments (PA-36 (g)(14), the (g)(11) and PA-1/PA-2 markers, the #6588 addendum). Its one Art. 33 mention is a PROSPECTIVE re-evaluation trigger -- a future web-1 host-key mismatch that neither a wrong capture nor a legitimate re-key explains is routed to breach-notice triage -- so it assesses no fact pattern, records no event and makes no controller determination. Same class as the 2026-09-counsel-review-8043.md and 2026-08-counsel-review-7440.md waivers. Citing #7226"
+  "knowledge-base/legal/audits/2026-09-counsel-review-5274.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the PA-36 (g) 2026-09-24 MECHANISM-ONLY markers and plaintext_journal addendum (#5274 / PR #8711: the git-data plaintext count reads the retained volume through a non-persistent dm snapshot). Its Art. 33/34 mention records that NO trigger exists -- the motivating step-3 FATAL was a fail-closed refusal that wrote nothing to the volume and sent nothing off the host -- so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189 and 7226 reviews above; citing #5274."
+  "knowledge-base/legal/audits/2026-09-counsel-review-8754.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the #8754 inngest cloud-firewall records (PR #8831). The determination it attests is indexed separately as the 2026-09-25 breach-register row (knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md)"
+  "knowledge-base/legal/audits/2026-09-counsel-review-8918.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the #8918 pending_checkout_sessions legal lockstep (migration 144 + the four legal docs, DSAR exclusion, PA-3 markers, PR #9115). Its Art. 33/34 mentions record that NO trigger exists — a transient operational claim-table introduction destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189 and 5274 reviews above; citing #8918."
+  "knowledge-base/legal/audits/2026-09-counsel-review-9034.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the #8978 / PR #9034 legal-doc lockstep amendments (the bounded DSAR re-authentication technical-behavior note across the three published docs, their mirrors and compliance-posture). Its Art. 33/34 mentions are the frontmatter recording that NO trigger exists — a documentation-and-timeout change destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189, 8159, 8205, 8248, 7226 and 5274 reviews above; citing #8978."
+  "knowledge-base/legal/audits/2026-09-counsel-reattestation-8634.md | Not a determination: the CLO RE-ATTESTATION discharging #8634 — it records that row D5 of 2026-09-counsel-review-8189.md's forward claim was superseded by ADR-239. Its Art. 33/34 mentions are the frontmatter fields recording that NO trigger exists — recording a supersession of a dated attestation assesses no fact pattern and makes no Art. 4(12) determination. Same class as the 8043 and 8189 counsel-review rows; citing #8634."
+  "knowledge-base/legal/audits/2026-10-counsel-review-9601.md | Not a determination: the COUNSEL REVIEW (CLO attestation under the ship Phase 5.5 gate, 2026-10-06) of an Art. 32 technical-measure entry in the Art. 30 register (the Anthropic API key withheld from sandboxed Bash). It assesses no fact pattern and makes no Art. 4(12) determination; its Art. 33 mention states that a readable-token residual is not a breach and starts no clock, which is a scoping statement, not an event. Same class as the 8043 and 8189 counsel-review rows; citing #9601"
+  "knowledge-base/legal/audits/2026-10-09-clo-ruling-arm-f-elevation-disposition.md | Not a determination: the CLO RULING on the arm-F elevation-arm disposition (#9873, PR #9896). Its Art. 4(12)/Art. 33(5) mentions record that NO event occurred — a mechanism-choice decision (drop the setuid arm, keep the wrap flag-off) assesses no fact pattern; #9871 is named as a deploy-availability incident touching no personal-data limb, expressly stated in the ruling itself. Same class as the 9601 ruling row; citing #9873"
+  "knowledge-base/legal/audits/2026-10-12-8209-k1-nonmain-run-census-addendum.md | Not a determination: the CLO addendum recording a read-only attribution census of non-main GitHub runs, evidence INSIDE the already-indexed 2026-09-23 #8209 and 2026-09-30 #8609 rows. Its Art. 33/34 mentions state that this census starts no clock; it closes no limb and records no controller decision. Revisit at the 2026-10-24 re-ruling (#9066), where any closure or flip is indexed on the existing rows. Citing #8209"
 )
 
 # The one indexed determination that lives outside the producer's scope. Asserted literally
@@ -299,7 +308,7 @@ done <<< "$cited_paths"
 # same path -- so deleting the determination ROW left this assertion green and the guard reported
 # 6 assertions, 0 failed over a register missing the one row (c)'s producer cannot see. That is
 # cq-assert-anchor-not-bare-token, five lines below where this file cites it. Measured at review.
-if printf '%s' "$cited_paths" | grep -qxF "$OUT_OF_SCOPE_ROW"; then
+if grep -qxF "$OUT_OF_SCOPE_ROW" < <(printf '%s' "$cited_paths"); then
   pass "(b) the out-of-producer-scope determination row is present"
 else
   fail "(b) the out-of-producer-scope determination row is missing: $OUT_OF_SCOPE_ROW
@@ -382,7 +391,7 @@ for entry in "${NOT_TRANSCRIBED[@]}"; do
   [[ -n "$wpath" ]] || die2 "NOT_TRANSCRIBED entry has no path: $entry"
   [[ -f "$REPO_ROOT/$wpath" ]] || die2 "NOT_TRANSCRIBED waives a path that does not exist: $wpath"
   # Fail-closed on an uncited waiver -- the same contract EXCLUSIONS already uses.
-  echo "$wreason" | grep -qE '#[0-9]+' \
+  grep -qE '#[0-9]+' <<<"$wreason" \
     || die2 "NOT_TRANSCRIBED entry for $wpath has no citing issue (#NNNN): $wreason"
   waived_paths+="$wpath"$'\n'
 done
@@ -397,10 +406,10 @@ while IFS= read -r f; do
   # table and by the `related:` frontmatter, so a file listed as EXCLUDED counted as INDEXED
   # and its waiver became unfalsifiable -- deleting a waiver left the gate green. Caught by
   # mutation 7b (cq-assert-anchor-not-bare-token).
-  if printf '%s' "$cited_paths" | grep -qxF "$rel"; then
+  if grep -qxF "$rel" < <(printf '%s' "$cited_paths"); then
     continue
   fi
-  if printf '%s' "$waived_paths" | grep -qxF "$rel"; then
+  if grep -qxF "$rel" < <(printf '%s' "$waived_paths"); then
     continue
   fi
   uncovered=$((uncovered + 1))

@@ -54,6 +54,25 @@ export const C4_VISUALIZER_FLAG = "c4-visualizer" as const;
 export const C4_EDIT_FLAG = "c4-edit" as const;
 
 /**
+ * #8739 — DOM CustomEvent re-broadcast by `ws-client.ts` when a server→client
+ * `c4_diagram_saved` frame arrives (a Concierge `edit_c4_diagram` write
+ * completed). `C4Workspace` listens on `window` — it holds no handle on the
+ * socket, and the frame is user-scoped so ANY live session socket translates
+ * it. Lives here (not in ws-client) so the workspace component does not pull
+ * the whole chat-client module graph into its unit test.
+ */
+export const C4_DIAGRAM_SAVED_EVENT = "soleur:c4DiagramSaved";
+
+/** `detail` payload of {@link C4_DIAGRAM_SAVED_EVENT} — mirrors the wire shape. */
+export interface C4DiagramSavedDetail {
+  /** dirname of the written KB-relative path (today always C4_DIAGRAMS_DIR). */
+  dirPath: string;
+  /** Mirrors the Code panel's `onSaved(rerendered, diagnostic)` contract. */
+  rerendered: boolean;
+  diagnostic: string | null;
+}
+
+/**
  * True when `relativePath` (KB-relative, forward-slashed) is a writable
  * canonical diagram source: a `.c4` or `.md` file directly under the diagrams
  * dir. This is the scope guard for every C4 write surface — keep it strict.

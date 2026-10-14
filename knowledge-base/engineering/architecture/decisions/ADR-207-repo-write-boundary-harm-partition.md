@@ -4,7 +4,7 @@ status: accepted
 date: 2026-09-07
 tags: [test-runner, repo-write-boundary, guard-design, attribution, worktrees, git-refs]
 related_adrs: [ADR-166, ADR-181, ADR-183, ADR-193]
-related_issues: [7553, 7652, 7702, 7795]
+related_issues: [7553, 7652, 7702, 7795, 7924]
 ---
 
 # ADR-207: the repo-write boundary partitions by ATTRIBUTION, not severity
@@ -137,8 +137,24 @@ propagated.
 
 **What was NOT softened, and stays FATAL in every regime:** `HEAD`; the working tree; this
 worktree's own branch; any tag **move**; any tag **deletion**; any tag creation on a checkout
-with no sibling (every CI runner, i.e. the path that gates merges); and any tag creation whose
-short name could shadow a ref git resolves ahead of it.
+with no sibling (every CI runner, i.e. the path that gates merges); any tag creation whose
+short name could shadow a ref git resolves ahead of it; and — added by #7924 — every measured
+`shallow` transition.
+
+Added by #7924: **`shallow`** — the `.git/shallow` state in the repository's **common dir**
+(created, removed, or graft-set changed; a non-regular or unreadable node at the path is the
+measured `unreadable` state and transitions FATAL the same way). It is the first dimension to
+resolve its target path via `git rev-parse --path-format=absolute --git-common-dir` — necessary
+because `--git-dir` on a linked worktree is `.git/worktrees/<n>`, a per-worktree path that never
+carries the file. (It is NOT the first dimension to read common-dir state — `config` reads the
+shared local config and `refs` reads the shared ref store; an earlier revision of this sentence
+claimed otherwise.) Two reasons, each sufficient, keep it out of the ledger: **(a)** the
+admission test is "a sibling *routinely* produces it", and after #7924 moved the four
+battery-reachable producers into scratch repos no routine producer of a shallow delta exists — a
+softened cell would buy nothing; **(b)** unlike a softened ref move, the harm lands on THIS run's
+own evidence: a mid-window shallow flip changes what `git log` and friends answer for every
+suite still to run, in this worktree and every sibling. A `REPORT` would print-and-pass a
+corruption of the evidence base itself.
 
 ### 4. The collision guard, and why a CREATION can reach move-grade harm
 
@@ -234,8 +250,9 @@ UNDER-approximations — they fail toward a false GREEN — and they are what bo
 
 - **Reach.** A suite executed through a runtime glob rather than a path literal never enters the
   root set; `.github/scripts/test/run-all.sh` collects its 11 siblings that way, and 9 of them are
-  outside the closure today. The `npm run test:ci` out-of-class entry waves through the vitest
-  suites under `apps/web-platform`, of which only a handful are closure members.
+  outside the closure today. (Post-#9815 the ledger's last member — the `npm run test:ci`
+  inline scripts that waved through the vitest suites under `apps/web-platform` — retired with
+  the registrations; the class is empty and re-arms fail-loud on the next unresolvable argv.)
 - **Spelling of the callee.** The closure regex recognises four variable prefixes and five
   extensions; `"$ROOT/x.sh"`, `node scripts/x.js`, and `find … -exec bash {} \;` are invisible.
 - **Spelling of the command.** `VERB_RE` requires a literal lowercase `git` followed by one of three
@@ -308,4 +325,4 @@ own renderer.
 | Drop `refs/tags/**` from the measured set, mirroring the `refs/remotes/**` exclusion | Gives up tag moves and deletions entirely — a suite deleting a release tag would become invisible. |
 | Re-derive `elsewhere` at classify time when the snapshot lacks it | The laundering hole three reviewers found independently. A mid-run `worktree add -b` manufactures its own softener. |
 | `git ls-remote --tags origin <name>` to discriminate fetched from authored | Discriminates the wrong property (a tag this run authored via an auto-following fetch is also "on origin"), re-derives an input after the window closes, and adds a network dependency with no offline disposition. |
-| Widen the measured set with a fifth `refs/remotes/**` dimension as a sharper discriminator | Genuinely sharper and still pure BEFORE/AFTER measurement. Deferred: remotes deltas would flow into a refs partition with no arm for them, and the `render_not_inspected` heredoc blocks the manifest change. |
+| Widen the measured set with a seventh `refs/remotes/**` dimension as a sharper discriminator | Genuinely sharper and still pure BEFORE/AFTER measurement. Deferred: remotes deltas would flow into a refs partition with no arm for them, and the `render_not_inspected` heredoc blocks the manifest change. |

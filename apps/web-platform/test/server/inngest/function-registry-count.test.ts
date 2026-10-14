@@ -27,8 +27,15 @@ const CRON_MONITORS_TF = resolve(
 const routeSrc = readFileSync(ROUTE_PATH, "utf8");
 const tfSrc = readFileSync(CRON_MONITORS_TF, "utf8");
 
+// Scoped to the `functions: [ … ]` array, not the whole file: a multi-line
+// import in route.ts has the same `  name,` line shape and was counted as a
+// served function (#8803).
 function extractRouteArrayEntries(): string[] {
-  return [...routeSrc.matchAll(/^\s+(\w+),$/gm)].map((m) => m[1]);
+  // Anchored on the serve() call: the file's header comment also contains the
+  // literal "functions: []".
+  const m = routeSrc.match(/\bserve\(\{[\s\S]*?\bfunctions:\s*\[([\s\S]*?)\n\s*\]/);
+  if (!m) throw new Error("fixture: the serve() functions array was not found in route.ts");
+  return [...m[1].matchAll(/^\s+(\w+),$/gm)].map((e) => e[1]);
 }
 
 function listCronFiles(): string[] {
@@ -48,7 +55,10 @@ function extractSentryMonitorSlugs(): Map<string, string> {
 }
 
 function extractTfMonitorNames(): Set<string> {
-  return new Set([...tfSrc.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+  // Comment lines are stripped first: a commented `# name = "<slug>"` must not
+  // satisfy the (c2)/(c3) guards for a monitor that is no longer declared.
+  const code = tfSrc.replace(/^[ \t]*#.*$/gm, "");
+  return new Set([...code.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
 }
 
 const KNOWN_UNMONITORED_SLUGS = new Set([
@@ -73,15 +83,14 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
   // New (never a GHA workflow). Findings alert via reportSilentFallback Sentry
   // issues, not a cron monitor; tf monitor deferred with the TR9 batch (#4476).
   "cron-workspace-sync-health",
-  // #6031 (ADR-088 arm-b) — the GHCR minter cron is DISABLED (App installation
-  // tokens can't pull the private repo-linked packages; pending GitHub support).
-  // Its handler no-ops under GHCR_MINTER_DISABLED=true, so the sentry monitor was
-  // removed; the slug is exempt here until the cron is re-enabled or removed.
-  "scheduled-ghcr-token-minter",
 ]);
 
 const NON_INNGEST_MONITORS = new Set([
   "scheduled-terraform-drift",
+  // W3 (epic #9601, #9826): GHA-fired on its own daily `schedule:` (image-cve-scan.yml), advisory, with
+  // no Inngest cron function and therefore no SENTRY_MONITOR_SLUG. The monitor covers both a missed run
+  // and an unmeasured scan (exit 3 posts `error`).
+  "image-cve-scan",
   // #7471: GHA-fired on its own `schedule:` (scheduled-marketplace-drift.yml). It checks the
   // PUBLISHED marketplace manifest with two unauthenticated raw GETs and no product secrets, so
   // there is deliberately no Inngest cron function and therefore no SENTRY_MONITOR_SLUG — same
@@ -150,6 +159,13 @@ const NON_INNGEST_MONITORS = new Set([
   // class, deliberately NOT an Inngest function; its final sentry-heartbeat
   // step pings the check-in. Same class as scheduled-realtime-probe.
   "scheduled-zot-restart-loop",
+  // #9703: GHA-fired (scheduled-inngest-probe-heartbeat.yml, dispatched by the web
+  // watchdog clock every 15 min) — the verifier that feeds the inngest-server probe's
+  // dead-probe Better Stack heartbeat. It must stay external to Inngest scheduling: the
+  // heartbeat is the sole paging surface, so an Inngest-fired feeder would make every
+  // Inngest/web-1 outage page as "probe dark" (ADR-248 amendment 2026-10-11);
+  // no cron-*.ts counterpart. Its final sentry-heartbeat step pings the check-in.
+  "scheduled-inngest-probe-heartbeat",
   // #6374: GHA-fired (scheduled-inngest-health.yml, on.schedule '*/15') — the
   // EXTERNAL inngest health watchdog. It MUST be external to Inngest (a
   // self-hosted inngest cron cannot detect inngest being down — the #5542 blind
@@ -157,7 +173,7 @@ const NON_INNGEST_MONITORS = new Set([
   // const; its final sentry-heartbeat step pings the check-in. Same class as
   // scheduled-realtime-probe / scheduled-zot-restart-loop.
   "scheduled-inngest-health",
-  // #7091: GHA-fired (scheduled-prod-version-drift.yml, on.schedule '*/30') — the
+  // #7091: GHA-fired (scheduled-prod-version-drift.yml, on.schedule hourly since #8450) — the
   // production version-drift alerter. It MUST be external to the deployed image:
   // an Inngest cron runs from whatever build is CURRENTLY serving, so a staleness
   // checker dispatched from Inngest would judge staleness using the stale build's
@@ -170,9 +186,10 @@ const NON_INNGEST_MONITORS = new Set([
   // /workspaces LUKS at-rest re-assert. Its native `schedule:` is ANTI-CIRCULARITY, not
   // convenience. The SCHEDULER is not the problem — since the #6178 cutover (ADR-100, superseding
   // the #5450 same-host framing) the Inngest SCHEDULER runs on its own
-  // host (hcloud_server.inngest, 10.0.1.40). EXECUTION is: Inngest calls functions over a single
-  // stable callback, sdk_url http://10.0.1.10:3000/api/inngest (inngest-host.tf), i.e. the app on
-  // WEB-1, with no failover to web-2. This workflow exists to detect that web-1's /mnt/data is no
+  // host (hcloud_server.inngest, 10.0.1.40). EXECUTION is: Inngest calls step requests at the
+  // registered serve URL https://app.soleur.ai/api/inngest (Cloudflare → the `app` A record, web-1
+  // only; the sdk_url http://10.0.1.10:3000/api/inngest in inngest-host.tf is the registration poll,
+  // #8611/ADR-243), i.e. the app on WEB-1, with no failover to web-2. This workflow exists to detect that web-1's /mnt/data is no
   // longer on the LUKS mapper — up to and including "web-1 is gone" — so a cron-*.ts dispatching it
   // would execute on the subject itself, the callback would never land, and the check would report
   // silence, read as health. A verifier must not be executed by the host it verifies (ADR-033's
@@ -182,6 +199,11 @@ const NON_INNGEST_MONITORS = new Set([
   // cron-*.ts counterpart and no SENTRY_MONITOR_SLUG const; its final sentry-heartbeat step pings
   // the check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
   "workspaces-luks-verify",
+  // #6931: the web-2 soak-marker job of the same workflow (workspaces-luks-verify.yml, job
+  // `web2_marker`, same on.schedule). Same anti-circularity class as the web-1 leg above: the
+  // verifier must not run on the host it verifies. No cron-*.ts counterpart and no
+  // SENTRY_MONITOR_SLUG const; its own check-in step pings sentry_cron_monitor.workspaces_luks_verify_web2.
+  "workspaces-luks-verify-web2",
   // #8160: GHA-fired (scheduled-devin-docs-drift.yml, on.schedule '23 7 * * *') — the
   // disposable docs.devin.ai capability-drift watcher. Its subject is OUTSIDE the
   // product (Cognition's public documentation, fetched anonymously), so it has no
@@ -190,6 +212,28 @@ const NON_INNGEST_MONITORS = new Set([
   // close; productization of the watch substrate is #8253's design problem. Same
   // class as scheduled-marketplace-drift.
   "scheduled-devin-docs-drift",
+  // #8450: GHA-executed (scheduled-actions-queue-health.yml) — the Actions
+  // runner under-assignment probe. Its subject is GitHub's hosted-runner
+  // scheduler, so the EXECUTOR runs in an ephemeral runner and this monitor
+  // maps to no SENTRY_MONITOR_SLUG (its final sentry-heartbeat step pings the
+  // check-in). #9273 demoted its native `schedule:` to a fallback: the primary
+  // trigger is now cron-actions-queue-health-dispatch.ts (dispatch-only, no
+  // slug — same class as cron-supabase-watchdog-dispatch) because GHA schedule
+  // deferral paged ~47 missed check-ins/day on a healthy queue.
+  "scheduled-actions-queue-health",
+  // #9168: GHA-executed (scheduled-supabase-watchdog.yml) — the bounded
+  // Postgres-hang auto-restart watchdog. The cron-supabase-watchdog-dispatch.ts
+  // function only DISPATCHES the workflow (it holds no Supabase PAT) and declares
+  // no SENTRY_MONITOR_SLUG; the workflow's terminal sentry-heartbeat step posts
+  // the check-in. Same class as scheduled-terraform-drift / main-health-monitor.
+  "scheduled-supabase-watchdog",
+  // #9855: GHA-fired (scheduled-integration-suites.yml, on.schedule
+  // '30 4 * * *') — the nightly env-gated integration-suites leg's dead-man
+  // monitor. Its work is git/repo-scoped test execution on an ephemeral
+  // runner, so it has no cron-*.ts counterpart and declares no
+  // SENTRY_MONITOR_SLUG; its terminal sentry-heartbeat step posts the
+  // check-in. Same class as scheduled-realtime-probe.
+  "scheduled-integration-suites",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
@@ -207,10 +251,26 @@ describe("Inngest function registry — drift guards", () => {
     expect(tfMonitors.size).toBeGreaterThan(0);
   });
 
-  // UPDATE this number when adding/removing Inngest functions.
+  // UPDATE this number when adding/removing Inngest functions, and add an EXECUTION_PLACEMENT row
+  // with the tightest class (execution-placement.test.ts, Guard 1; #7230).
   // 68 -> 69: cron-machinery-drain (the weekly issue-flow measurement + drain).
+  // 69 -> 70: agentOnSpawnSettle (#8803, settles orphaned leader-loop runs).
+  // 70 -> 69: cron-ghcr-token-minter deleted (#8714, ADR-096 task 5.4).
+  // 69 -> 70: cron-supabase-watchdog-dispatch (#9168, */5 dispatcher for the
+  // bounded DB-hang restart workflow — dispatch-hybrid, no SENTRY_MONITOR_SLUG;
+  // the GHA executor posts the heartbeat, so its monitor sits in
+  // NON_INNGEST_MONITORS like scheduled-terraform-drift).
+  // 70 -> 69: cron-gh-pages-cert-state deleted (ADR-194: the origin cert it polled is abandoned).
+  // 69 -> 71: cron-actions-queue-health-dispatch + cron-bot-pr-reaper (#9273/#9274).
+  // 71 -> 72: cron-merge-queue-stall-dispatch (#9482 follow-up (a)).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(69);
+    expect(routeEntries.length).toBe(72);
+  });
+
+  // An event function is invisible to the cron-glob guards; an unserved settle
+  // function never runs, and every orphaned spawn stays on "Working" (#8803).
+  it("(a3) agentOnSpawnSettle event function is registered in route.ts", () => {
+    expect(routeEntries).toContain("agentOnSpawnSettle");
   });
 
   // EVENT functions are invisible to the cron-glob guards (b)/(e) — they only
@@ -255,6 +315,13 @@ describe("Inngest function registry — drift guards", () => {
       }
     }
     expect(phantom).toEqual([]);
+  });
+
+  // The mirror of (c2): an exemption must name a monitor that still exists, so a
+  // temporary entry expires when the monitor it covers is deleted.
+  it("(c3) every NON_INNGEST_MONITORS entry names a monitor declared in cron-monitors.tf", () => {
+    const stale = [...NON_INNGEST_MONITORS].filter((name) => !tfMonitors.has(name));
+    expect(stale).toEqual([]);
   });
 
   it("(d) KNOWN_UNMONITORED_SLUGS contains no stale entries", () => {

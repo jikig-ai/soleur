@@ -124,3 +124,41 @@ render chain rather than about this number.
 - ADR-184 (the zot log shipper whose growth surfaced this)
 - ADR-096 (registry host is cloud-init-only; no in-place execution path)
 - `#7299` / `dff874e05` — the plan whose AC1 became this arm
+
+## Amendment 2026-09-28 — `REGISTRY_GZIP_BUDGET` 20,000 → 21,000 (#8714 step 5.3b-iii)
+
+The policy above is unchanged: at least 8,000 B of preserved headroom. Only the budget constant
+moves, per a CTO ruling. The constant is a tripwire set just above the measured payload; it is not
+the policy.
+
+- **Measured:** stored `user_data` (terraform's own `base64gzip`, `registry-userdata-budget.sh`) was
+  18,024 B on `main` and 19,920 B for the first revision of PR 2b. The host now boots zot from a pinned
+  release asset through an on-host fetch-and-verify step. After that PR's review fixes it measured
+  20,408 B.
+- **Cause:** the 408 B over 20,000 is exactly three review P2 fixes, and cutting them was rejected, as
+  in the original decision:
+  - the host-side anchor proving config digest C from manifest D before `docker load`;
+  - bounded retries plus a `docker load` timeout;
+  - the added verdicts (`fetching`, `manifest_mismatch`, `docker_unavailable`, `record_failed`) and
+    the recorded rc.
+
+  Deleting every diagnostic message in the fetch script still left 20,060 B, so trimming prose cannot
+  close the gap.
+- **New numbers:** headroom floor 11,768 B, which is about 19 times the largest measured divergence
+  (612 B). The slack over the measurement is 592 B, so a ~1.5 KB re-inlining still trips the gate.
+- **Remaining runway:** 24,767 − 21,000 = 3,767 B before the policy boundary. Any budget above 24,767
+  is a policy change and needs its own ADR. The next feature that hits this wall must shrink the payload
+  structurally (for example by consolidating repeated verdict/state-file boilerplate), not raise the
+  constant again.
+
+## Addendum 2026-09-28 — liveness counters fit under 21,000 without raising it (#7270)
+
+The budget constant is unchanged, as the amendment above requires. #7270 adds per-boot liveness
+counters to the zot liveness feeder and five `liveness_*` fields to `SOLEUR_ZOT_DISK`. The first
+revision measured 21,292 B stored, over the budget. It was shrunk by making the tmpfs state a single
+line of six positional fields (no per-key parsing) and validating the fields in one loop.
+
+- **Measured:** 20,932 B stored (`registry-userdata-budget.sh --json`), up from 20,408 B. Headroom is
+  11,836 B against the 11,768 B floor.
+- **Remaining slack under the constant:** 68 B. The next registry-host addition will trip the gate.
+  Per the amendment above, it must shrink the payload structurally rather than raise the constant.

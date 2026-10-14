@@ -17,7 +17,7 @@
 
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
@@ -153,6 +153,10 @@ export async function cronWeeklyAnalyticsHandler({
         repoRoot,
       };
     });
+    // Read back from the memoized result: the assignment inside the step
+    // callback only exists in the request that ran it, and Inngest re-enters
+    // the handler after the step, so `finally` would otherwise see null (#8726).
+    ephemeralRoot = dirname(scriptResult.repoRoot);
 
     if (scriptResult.exitCode !== 0) {
       reportSilentFallback(

@@ -277,7 +277,7 @@ GIT_ROOT="$_SAVED_GIT_ROOT"
 assert_eq "0" "$EBC_RC" "ensure_bare_config returns 0 (no-op) on a non-bare repo"
 assert_eq "__ABSENT__" "$(git config --file "$WS12/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "extensions.worktreeConfig NOT set on the non-bare repo (the #6184 regression is gone)"
-if git config --file "$WS12/.git/config" --get core.repositoryformatversion 2>/dev/null | grep -qx 1; then
+if git config --file "$WS12/.git/config" --get core.repositoryformatversion 2>/dev/null | grep -cx >/dev/null 1; then
   echo "  FAIL: repositoryformatversion bumped to 1 on a non-bare repo"; FAIL=$((FAIL + 1))
 else
   echo "  PASS: repositoryformatversion left at plain-repo default on the non-bare repo"; PASS=$((PASS + 1))
@@ -460,7 +460,7 @@ if git config --file "$BARE17/repo.git/config" --get extensions.worktreeConfig >
 else
   echo "  PASS: bare accommodation REMOVES extensions.worktreeConfig (reversed polarity)"; PASS=$((PASS + 1))
 fi
-if git config --file "$BARE17/repo.git/config" --get core.bare 2>/dev/null | grep -qx true; then
+if git config --file "$BARE17/repo.git/config" --get core.bare 2>/dev/null | grep -cx >/dev/null true; then
   echo "  PASS: core.bare RETAINED in the shared config (the bare root must keep reporting bare)"; PASS=$((PASS + 1))
 else
   echo "  FAIL: core.bare was removed from the shared config — the bare root now reports as a working tree"; FAIL=$((FAIL + 1))
@@ -776,7 +776,7 @@ for _t27_path in "" "/" "//" "/."; do
   )
   _t27_rc=$(printf '%s' "$_t27_out" | sed -n 's/^RC=//p' | tail -1)
   if [[ "$_t27_rc" == "1" ]] \
-     && printf '%s' "$_t27_out" | grep -q 'reason=degenerate-worktree-path'; then
+     && printf '%s' "$_t27_out" | grep -c >/dev/null 'reason=degenerate-worktree-path'; then
     echo "  PASS: operand '${_t27_path}' refused with rc=1 and the DIAG marker"; PASS=$((PASS + 1))
   else
     echo "  FAIL: operand '${_t27_path}' — rc=${_t27_rc}, marker missing"; FAIL=$((FAIL + 1))
@@ -791,7 +791,7 @@ _t27_ok=$(
   eval "$_t27_fn"
   ensure_worktree_identity "$TMP/t27-real" 2>&1 || true
 )
-if ! printf '%s' "$_t27_ok" | grep -q 'reason=degenerate-worktree-path'; then
+if ! printf '%s' "$_t27_ok" | grep -c >/dev/null 'reason=degenerate-worktree-path'; then
   echo "  PASS: an ordinary absolute path does not trip the degenerate-operand guard"; PASS=$((PASS + 1))
 else
   echo "  FAIL: the guard refused an ordinary absolute path (blanket refusal)"; FAIL=$((FAIL + 1))

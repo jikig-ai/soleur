@@ -107,7 +107,7 @@ export const oneshotFILL = inngest.createFunction(
   oneshotFILLHandler as unknown as Parameters<typeof inngest.createFunction>[2],
 );
 
-// === ALSO DO — the 3 integration points (the function alone does nothing) ===
+// === ALSO DO — the 4 integration points (the function alone does nothing) ===
 //
 // 1. REGISTER in app/api/inngest/route.ts:
 //      import { oneshotFILL } from "@/server/inngest/functions/oneshot-FILL-name";
@@ -136,3 +136,7 @@ export const oneshotFILL = inngest.createFunction(
 // 3. BUMP the count in test/server/inngest/function-registry-count.test.ts `(a)`
 //    (+1). Do NOT add the fn to EXPECTED_CRON_FUNCTIONS / KNOWN_UNMONITORED_SLUGS
 //    / cron-monitors.tf — those are cron-only and a oneshot has no Sentry monitor.
+//
+// 4. CLASS it in server/inngest/execution-placement.ts: add an EXECUTION_PLACEMENT row
+//    keyed by the function id, classed by the first matching rule in that file's header
+//    (execution-placement.test.ts Guard 1 fails without it; ADR-033 §Registration checklist).

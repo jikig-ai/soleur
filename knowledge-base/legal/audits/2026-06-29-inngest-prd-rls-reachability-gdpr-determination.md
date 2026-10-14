@@ -1,6 +1,6 @@
 # GDPR determination — RLS-disabled reachability on `soleur-inngest-prd` (`pigsfuxruiopinouvjwy`)
 
-**Date:** 2026-06-29 · **Authority:** Soleur v1 CLO-attestation (founder-grade internal sign-off, not formal external legal advice — external counsel re-review reserved for first arms-length user / EEA-out / regulated-industry triggers) · **Status:** SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1, 2026-06-29) · **Evidence:** `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
+**Date:** 2026-06-29 · **Authority:** Soleur v1 CLO-attestation (founder-grade internal sign-off, not formal external legal advice — external counsel re-review reserved for first arms-length user / EEA-out / regulated-industry triggers) · **Status:** SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1, 2026-06-29) · **Evidence:** `knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
 
 ## Verdict — NOT a notifiable personal-data breach; recorded as an Art. 33(5) breach-documentation / near-miss entry (cross-referenced from the Art. 30 register). DISCHARGED.
 
@@ -95,7 +95,7 @@ untouched. The follow-up stays open.
 
 **Sibling records carrying the same addendum:**
 
-- `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
+- `knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
 - `knowledge-base/engineering/operations/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
 
 <!-- ADDENDUM-2026-08-26 END -->
@@ -132,7 +132,7 @@ the 2026-08-26 addendum does not credit it.
 
 **The source that records REST traffic was never queried.** `postgrest_logs` is the
 instrumented source that emits on this project's REST surface. The evidence file
-`knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
+`knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
 records exactly two sources consulted — `edge_logs` and `auth_logs`, both zero — and
 records no `postgrest_logs` query among the sources consulted (as that file stood on
 2026-08-26; this addendum adds a pointer to it, so the literal string now appears there). The
@@ -165,7 +165,7 @@ remains the canonical record.
 
 **Sibling records carrying a pointer to this addendum:**
 
-- `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
+- `knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
 - `knowledge-base/engineering/operations/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
 
 <!-- ADDENDUM-2026-09-03 END -->

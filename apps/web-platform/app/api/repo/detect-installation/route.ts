@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import {
   findInstallationForLogin,
@@ -10,6 +10,7 @@ import {
 import { resolveReachableInstallationIds } from "@/server/reachable-installations";
 import { resolveGithubLogin } from "@/server/github-login";
 import { resolveInstallationIdForWorkspace } from "@/server/resolve-installation-id-for-workspace";
+import { verifiedUserId } from "@/server/request-auth";
 import logger from "@/server/logger";
 
 /**
@@ -65,12 +66,9 @@ export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
   if (!valid) return rejectCsrf("api/repo/detect-installation", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -82,20 +80,20 @@ export async function POST(request: Request) {
   // carries the install (workspaces.id == users.id, ADR-038 N2), same value.
   // `github_username` is NOT relocated by ADR-044, so it stays a `users` read.
   const storedInstallationId = await resolveInstallationIdForWorkspace(
-    user.id,
+    userId,
     serviceClient,
   );
 
   const { data: userData } = await serviceClient
     .from("users")
     .select("github_username")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
   // Resolve GitHub login from identity (shared helper, github_username fallback)
   const githubLogin = await resolveGithubLogin(
     serviceClient,
-    user.id,
+    userId,
     userData?.github_username,
   );
 
@@ -105,10 +103,10 @@ export async function POST(request: Request) {
     // repos appear here too.
     const reachable = await resolveReachableInstallationIds(
       serviceClient,
-      user.id,
+      userId,
       githubLogin,
     );
-    const repos = await aggregateReposForInstalls(reachable, user.id);
+    const repos = await aggregateReposForInstalls(reachable, userId);
     return NextResponse.json({ installed: true, repos });
   }
 
@@ -133,7 +131,7 @@ export async function POST(request: Request) {
     if (!verification.verified) {
       logger.warn(
         {
-          userId: user.id,
+          userId,
           installationId: personalInstallationId,
           error: verification.error,
         },
@@ -146,7 +144,7 @@ export async function POST(request: Request) {
     }
 
     // ADR-044 PR-2: this auto-detect persists the caller's OWN login-matched
-    // personal install to their OWN SOLO workspace (`workspaces.id = user.id`) —
+    // personal install to their OWN SOLO workspace (`workspaces.id = userId`) —
     // the authoritative target (was `users.github_installation_id` + a solo
     // mirror). A team workspace's install is bound separately via the owner-gated
     // install/setup routes, never auto-detected, so this stays solo-keyed and
@@ -162,12 +160,12 @@ export async function POST(request: Request) {
     const { writeRepoColsToWorkspace } = await import(
       "@/server/workspace-repo-mirror"
     );
-    await writeRepoColsToWorkspace(serviceClient, user.id, {
+    await writeRepoColsToWorkspace(serviceClient, userId, {
       github_installation_id: personalInstallationId,
     });
 
     logger.info(
-      { userId: user.id, installationId: personalInstallationId, githubLogin },
+      { userId, installationId: personalInstallationId, githubLogin },
       "Auto-detected and registered GitHub App installation",
     );
   }
@@ -177,7 +175,7 @@ export async function POST(request: Request) {
   // first call — no double-connect.
   const reachable = await resolveReachableInstallationIds(
     serviceClient,
-    user.id,
+    userId,
     githubLogin,
   );
 
@@ -187,6 +185,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ installed: false, reason: "not_installed" });
   }
 
-  const repos = await aggregateReposForInstalls(reachable, user.id);
+  const repos = await aggregateReposForInstalls(reachable, userId);
   return NextResponse.json({ installed: true, repos });
 }

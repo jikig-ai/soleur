@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import * as Sentry from "@sentry/nextjs";
+import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import type { PlanTier, ConcurrencyCapHitPreamble } from "@/lib/types";
 import { OPEN_UPGRADE_MODAL_EVENT } from "@/lib/ws-client";
 import { PLAN_LIMITS } from "@/lib/plan-limits";
@@ -47,6 +49,9 @@ interface ModalContext {
 export function UpgradeAtCapacityModal() {
   const [state, setState] = useState<ModalState>("idle");
   const [ctx, setCtx] = useState<ModalContext | null>(null);
+  /** Server-supplied error copy for the "error" state — set when the route
+   *  returns a human-readable body (e.g. the 409 in-progress signal). */
+  const [errorBody, setErrorBody] = useState<string | null>(null);
   /** Abort in-flight /api/checkout on unmount or modal close so an orphaned
    *  fetch doesn't setState on a stale component. */
   const abortRef = useRef<AbortController | null>(null);
@@ -98,29 +103,53 @@ export function UpgradeAtCapacityModal() {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    setErrorBody(null);
     setState("loading");
     try {
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ targetTier }),
-        signal: ctrl.signal,
+        // Bound the flight so a hung POST cannot park the modal in the
+        // loading state forever — the compositing clock races with the
+        // caller's own close-abort, whichever fires first.
+        signal: AbortSignal.any([
+          ctrl.signal,
+          AbortSignal.timeout(PENDING_WATCHDOG_MS),
+        ]),
       });
       if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+          code?: string;
+        } | null;
+        // 409 = a sibling request owns a checkout in flight (or one just
+        // completed) — an expected race, not a failure. Show the server's
+        // copy and let Retry re-join; don't fire the Sentry warn.
+        if (res.status === 409 && body?.error) {
+          setErrorBody(body.error);
+          setState("error");
+          return;
+        }
         Sentry.captureMessage(
           `/api/checkout returned ${res.status} ${res.statusText}`,
           { level: "warning", tags: { feature: "concurrency", op: "upgrade-checkout" } },
         );
+        setErrorBody(body?.error ?? null);
         setState("error");
         return;
       }
       const body = (await res.json()) as { url?: string | null; clientSecret?: string | null };
       if (body.url) {
         window.location.href = body.url;
+        return;
       }
+      // res.ok with no url: /api/checkout returns url:null on embedded
+      // sessions — without this arm the modal sits in "loading" forever.
       // Embedded-mode wiring (clientSecret → EmbeddedCheckoutProvider) is a
       // follow-up; the server sets ui_mode='embedded' so when the React
       // provider is installed this branch mounts it inline.
+      setState("error");
     } catch (err) {
       // Swallowing here used to be silent; mirror to Sentry so transient
       // network failures on the upgrade path are observable. Aborts from
@@ -156,14 +185,15 @@ export function UpgradeAtCapacityModal() {
       aria-labelledby="upgrade-at-capacity-title"
     >
       <div data-state={state} className="text-soleur-text-primary">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={close}
           aria-label="Close"
           className="float-right text-soleur-text-muted hover:text-soleur-text-secondary"
         >
           ×
-        </button>
+        </Button>
 
         {state === "loading" && (
           <div data-state="loading">
@@ -178,25 +208,25 @@ export function UpgradeAtCapacityModal() {
             <p className="mt-2 text-sm text-soleur-text-secondary">{copy.subhead}</p>
             <div className="mt-6 flex items-center justify-between">
               {copy.targetTier ? (
-                <button
+                <Button
+                  variant="gold"
                   type="button"
                   onClick={() => startCheckout(copy.targetTier)}
-                  className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
                 >
                   {copy.primaryCtaLabel}
-                </button>
+                </Button>
               ) : (
-                <Link
+                <NavLink
                   href="mailto:jean@soleur.ai"
                   className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
                 >
                   {copy.primaryCtaLabel}
-                </Link>
+                </NavLink>
               )}
               {copy.secondaryLink ? (
-                <Link href={copy.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
+                <NavLink href={copy.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
                   {copy.secondaryLink.label}
-                </Link>
+                </NavLink>
               ) : null}
             </div>
           </div>
@@ -205,18 +235,18 @@ export function UpgradeAtCapacityModal() {
         {state === "error" && (
           <div data-state="error">
             <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">{ERROR_COPY.title}</h2>
-            <p className="mt-2 text-sm text-soleur-text-secondary">{ERROR_COPY.body}</p>
+            <p className="mt-2 text-sm text-soleur-text-secondary">{errorBody ?? ERROR_COPY.body}</p>
             <div className="mt-6 flex items-center justify-between">
-              <button
+              <Button
+                variant="gold"
                 type="button"
                 onClick={() => startCheckout(errorRetryTarget)}
-                className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
               >
                 {ERROR_COPY.primaryCtaLabel}
-              </button>
-              <Link href={ERROR_COPY.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
+              </Button>
+              <NavLink href={ERROR_COPY.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
                 {ERROR_COPY.secondaryLink.label}
-              </Link>
+              </NavLink>
             </div>
           </div>
         )}
@@ -240,19 +270,20 @@ function AdminOverrideBody({ cap, onClose }: { cap: number; onClose: () => void 
       <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">{copy.title}</h2>
       <p className="mt-2 text-sm text-soleur-text-secondary">{copy.subhead}</p>
       <div className="mt-6 flex items-center justify-between">
-        <Link
+        <NavLink
           href={copy.primaryCtaHref}
           className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
         >
           {copy.primaryCtaLabel}
-        </Link>
-        <button
+        </NavLink>
+        <Button
+          variant="ghost"
           type="button"
           onClick={onClose}
-          className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
+          className="hover:text-soleur-text-primary"
         >
           {copy.secondaryLink.label}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -268,19 +299,20 @@ function EnterpriseCapBody({ cap, onClose }: { cap: number; onClose: () => void 
         50 in parallel is the platform ceiling today. Your Enterprise contract can carry more — let&apos;s size a custom quota against your usage.
       </p>
       <div className="mt-6 flex items-center justify-between">
-        <Link
+        <NavLink
           href="mailto:jean@soleur.ai"
           className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
         >
           Contact your account team
-        </Link>
-        <button
+        </NavLink>
+        <Button
+          variant="ghost"
           type="button"
           onClick={onClose}
-          className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
+          className="hover:text-soleur-text-primary"
         >
           Dismiss
-        </button>
+        </Button>
       </div>
     </div>
   );

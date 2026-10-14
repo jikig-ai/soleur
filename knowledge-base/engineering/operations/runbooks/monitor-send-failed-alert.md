@@ -23,7 +23,7 @@ off-host — no SSH is needed at any step.
 
 | Alert name | Vendor | Means | Time to page |
 |---|---|---|---|
-| `soleur-monitor-send-failed-prd` | Better Stack (Logs alert, `logtail_exploration_alert`) | One of the four web-1 monitor units tried to page (Resend email or Sentry event) and the send **failed** or was **refused**. The monitored condition itself (disk / memory / container restart / cron egress) may be live and unreported. | ≤ ~6 min (check every 60 s over a 300 s window) |
+| `soleur-monitor-send-failed-prd` | Better Stack (Logs alert, `logtail_exploration_alert`) | One of the four web-1 monitor units, or (since #8706) the LUKS probe's emit helper, tried to page (Resend email or Sentry event) and the send **failed** or was **refused**. The monitored condition itself (disk / memory / container restart / cron egress / LUKS at-rest drift) may be live and unreported. | ≤ ~6 min (check every 60 s over a 300 s window) |
 
 It reads Better Stack Logs source `2457081` for PRIORITY-2 journald rows whose message starts
 with `SOLEUR_` and contains `_SEND_FAILED` or `_REFUSED` (predicate in
@@ -58,6 +58,8 @@ Never `--grep PRIORITY=2`: `--grep` compiles to `raw LIKE '%…%'` over the doub
 column and cannot see a field. `JSONExtractString(raw, …)` is the field read. `host` is
 authoritative for which machine emitted the row; `host_name` on web-1 still carries the stale
 `soleur-inngest-prd` render (#6616) and must not be read.
+(Measured 2026-09-27, #8706: web-1's `web-git-data-probe` rows read `host_name` and `host` both
+`soleur-web-platform`, so the stale render may be gone. `host` stays the field to read here.)
 
 ### Decode the marker
 
@@ -69,13 +71,21 @@ authoritative for which machine emitted the row; `host_name` on web-1 still carr
 | `SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=<token>` | `container-restart-monitor` | Sentry | The Sentry destination was refused **before** any send (a DSN that is not the pinned host, a malformed DSN). Configuration, not a network fault. |
 | `SOLEUR_CRON_EGRESS_ALARM_SEND_FAILED channel=sentry\|resend …` | `cron-egress-alarm` | Sentry or Resend | The cron-egress firewall alarm could not page. |
 | `SOLEUR_CRON_EGRESS_ALARM_REFUSED channel=sentry reason=<token>` | `cron-egress-alarm` | Sentry | As above: refused destination. |
+| `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=<r> drift_reason=<slug>` | `luks-monitor` (emitter `apps/web-platform/infra/workspaces-luks-emit.sh`, #8706) | Sentry | A LUKS at-rest drift event was lost. `<r>` is `no_dsn` or `send_failed`. `no_dsn` = no `SOLEUR_SENTRY_DSN=` line resolved on the host; `send_failed` = the Sentry POST failed (ingest or egress). `drift_reason` is the lost event's reason. Decode: [the cutover runbook's host-timer section](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706), step D. |
 | `… synthetic=1 probe_rev=<n>` on any of the above | `disk-monitor` tag | — | **The verification probe.** Not a real failure — see [Synthetic rows](#synthetic-rows). |
 
 Rows that **never** page, by construction (a `SOLEUR_*_SEND_SKIPPED` or `SOLEUR_*_HALT` row in the
 same window is context, not the cause):
 
-- `SOLEUR_<UNIT>_SEND_SKIPPED channel=… reason=unset|cooldown|jq` — a deliberate skip (a channel's
-  env unset, cooldown, jq missing). Configuration; the alert's needles cannot match it.
+- `SOLEUR_<UNIT>_SEND_SKIPPED channel=… reason=unset|cooldown|jq|token_shape` — a deliberate skip (a channel's
+  env unset, cooldown, jq missing, or — `container-restart-monitor` / `cron-egress-alarm` only, which still
+  have the Sentry channel — a Resend key that fails the token-shape guard, #9597). Configuration; the alert's
+  needles cannot match it. Fix a `token_shape` skip by re-setting `RESEND_API_KEY` in Doppler `prd` (a stray
+  space, quote or newline), never via SSH.
+- `SOLEUR_DISK_MONITOR_REFUSED` / `SOLEUR_RESOURCE_MONITOR_REFUSED channel=resend reason=token_shape` — **does
+  page** (it matches the `_REFUSED` needle): those two units have no second channel, so a Resend key that
+  fails the token-shape guard is an unusable alert path, the same condition a 401 `SEND_FAILED` reported
+  before the key moved onto curl's stdin config (#9597). Same fix: re-set `RESEND_API_KEY` in Doppler `prd`.
 - `SOLEUR_<UNIT>_HALT reason=xtrace-credential-bound issue=7797` — the unit refused to run under
   shell tracing with a credential bound. Deliberately outside this alert's scope
   (decision-challenges UC-1 in the #8097 spec; ADR-218). Opting in is one more needle.

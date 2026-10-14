@@ -51,7 +51,17 @@ case "$-" in
     ;;
 esac
 
-if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
+# Token-shape guard: a newline in the token would inject a curl config directive on the stdin
+# channel sentry_curl uses, and an empty one would send the request headerless. Never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN unusable" >&2; exit 2; fi
+
+# The one credentialed transport: owns the flags and the header. The bearer rides curl's stdin
+# config channel, never its argument list. Stderr is suppressed (a transport error can echo the URL).
+sentry_curl() {
+  curl --disable --noproxy '*' -sS "$@" --config - 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN")
+}
 
 # `jikigai-eu`, not the legacy `jikigai` slug: that org was cancelled vendor-side (article-30
 # register PA-8 (d), 2026-05-21) and returns 403/404 for every credential, so this probe
@@ -74,9 +84,8 @@ STATS_PERIOD="${SYNC_HEALTH_STATS_PERIOD:-14d}"
 
 # Region discovery: the org lives on a non-US Sentry cluster (EU/DE). Resolve the
 # regionUrl from the control-silo endpoint rather than hardcoding the host.
-region_json=$(curl --disable --noproxy '*' -sS --max-time 30 \
-  -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
-  "https://sentry.io/api/0/organizations/${ORG}/" 2>/dev/null || echo "")
+region_json=$(sentry_curl --max-time 30 \
+  "https://sentry.io/api/0/organizations/${ORG}/" || echo "")
 api_host=$(printf '%s' "$region_json" | jq -r '.links.regionUrl // empty' 2>/dev/null | sed 's#^https://##; s#/$##')
 # Rule D (ADR-202): the host read back from the API is PINNED to the one literal it may
 # take. A response naming any other host -- or no host (transport failure, `sentry.io`
@@ -92,12 +101,11 @@ fi
 QUERY="feature:workspace-sync-health op:ready-null-installation"
 url="https://${api_host}/api/0/projects/${ORG}/${PROJECT}/issues/"
 
-http_code=$(curl --disable --noproxy '*' -sS -o /tmp/sh5689.json -w '%{http_code}' --max-time 45 \
-  -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
+http_code=$(sentry_curl -o /tmp/sh5689.json -w '%{http_code}' --max-time 45 \
   --get "$url" \
   --data-urlencode "query=${QUERY}" \
   --data-urlencode "statsPeriod=${STATS_PERIOD}" \
-  --data-urlencode "limit=25" 2>/dev/null || echo "000")
+  --data-urlencode "limit=25" || echo "000")
 
 if [[ "$http_code" != "200" ]]; then
   echo "TRANSIENT: Sentry issues API returned HTTP ${http_code} (host=${api_host}, org=${ORG}, project=${PROJECT})"

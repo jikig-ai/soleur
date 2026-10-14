@@ -73,14 +73,13 @@ INFRA_RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
 # Leaving a stale exclusion behind would re-hide the next regression in the
 # very suite that was just repaired.
 #
-# CROSS-CHECKED against the other exclusion list over an overlapping domain,
-# .github/scripts/test/test-infra-suite-registration.sh's EXCLUSIONS (#7402 step 8). That list
-# carries exactly one entry, workspaces-luks-loopback.test.sh, excluded from
-# run-registered-suites.sh's single-line DERIVATION because it needs root and exits 2
-# unprivileged (#7076). That is a statement about local EXECUTION, not about registration:
-# this file asks only "does anything run it?", surface 6 answers yes, and it is therefore
-# COVERED here and must not be excluded. The two lists are disjoint today and one being empty
-# is what keeps them from disagreeing.
+# CROSS-CHECKED historically against the registration gate's old EXCLUSIONS array
+# (#7402 step 8). That array is gone: since #8736 the runner's PRIVILEGED_WHY map
+# is the only exclusion list over this domain — the three root-requiring loopback
+# suites are derived-but-not-executed (the surface-3/--enumerate arm already
+# excludes them) and covered by surface 6's explicit `sudo bash` steps. A
+# privileged pin here would still be wrong for the same reason: this file asks
+# "does anything run it?", and the sudo surface answers yes.
 EXCLUSIONS=()
 
 fails=0
@@ -95,6 +94,29 @@ trap 'rm -rf "$WORK"' EXIT
 # plausible-subset direction, which clears a zero-check and prints a clean report).
 git -C "$REPO_ROOT" ls-files '*.test.sh' | LC_ALL=C sort -u > "$WORK/tracked"
 tracked_n=$(wc -l < "$WORK/tracked" | tr -d ' ')
+
+# The full index, once. The declared-edge and relevance arms below membership-test
+# every declared path element; doing that as a per-element `git ls-files
+# --error-unmatch` exec costs ~0.1-0.3s × ~600 elements per invocation — measured
+# as the dominant term in the mutation battery's per-row spend (#8322 CI: the
+# test-scripts shard hit its 60m ceiling). One ls-files + an in-memory string
+# scan answers the same question at ~µs per element.
+#
+# SEMANTIC PARITY with --error-unmatch on a single arg: the pathspec matches when
+# the path is an index member OR a directory prefix under which index entries
+# live — arrays here carry both shapes (`apps/web-platform/` and
+# `plugins/soleur` style bare dirs), so the helper checks both. The one residual
+# difference is glob metacharacters in the declared path itself (pathspec vs
+# [[ == ]] pattern semantics) — `glob:` members carry `*` in their tails, but the
+# declared-member census's `glob:*` arm handles them before this helper sees them.
+_TRACKED_SET=$'\n'"$(git -C "$REPO_ROOT" ls-files)"$'\n'
+_tracked_member() {
+  [[ "$1" == "." ]] && { [[ "$_TRACKED_SET" != $'\n'$'\n' ]]; return; }
+  [[ "$_TRACKED_SET" == *$'\n'"$1"$'\n'* ]] && return 0
+  local d="${1%/}"
+  d="${d%/.}"
+  [[ "$_TRACKED_SET" == *$'\n'"$d/"* ]]
+}
 
 # PRODUCER FLOOR. A zero-check alone cannot see the failure that matters most here: narrowing
 # the producer back to one directory leaves it enumerating 70 real files, passes every
@@ -129,7 +151,7 @@ fi
 # reddened on its own first run -- `tests/` uses a `test-*.sh` convention this producer does
 # not match. Re-derive with:
 #   git ls-files '*.test.sh' | awk -F/ 'NF{print $1}' | LC_ALL=C sort -u
-EXPECTED_SUITE_ROOTS=".claude apps plugins scripts"
+EXPECTED_SUITE_ROOTS=".claude .github apps plugins scripts"
 actual_roots="$(awk -F/ 'NF{print $1}' "$WORK/tracked" | LC_ALL=C sort -u | tr '\n' ' ')"
 actual_roots="${actual_roots% }"
 # Non-vacuity: an empty derivation must never be compared as a legitimate set. (It was, on the
@@ -226,7 +248,7 @@ sed -nE 's/^[[:space:]]*run_suite[[:space:]].*[[:space:]]bash[[:space:]]+"?([A-Z
 # buys is that the guarantee stops depending on the ORDER of two blocks in a 2400-line file —
 # the same reason `-u TEST_GROUP` is here rather than trusting the caller.
 globs_rc=0
-env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
+env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_ENUM_DEADLINE_S SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
 globs_n=$(wc -l < "$WORK/globs" | tr -d ' ')
 if (( globs_rc != 0 )) || (( globs_n < 1 )); then
   echo "ERROR: 'bash scripts/test-all.sh --print-suite-globs' exited ${globs_rc} and printed ${globs_n} pattern(s) -- this linter derives the auto-discovery surface from that flag, so without it every glob-registered suite would be reported as an orphan. Restore the flag rather than re-copying the patterns here." >&2
@@ -243,25 +265,28 @@ LC_ALL=C sort -u -o "$WORK/raw2" "$WORK/raw2"
 
 # --- Surface 3: the infra suites, DELEGATED to run-registered-suites.sh --------------------
 # Three authorities already derive over this one domain (this file, run-registered-suites.sh's
-# own report_orphans, and .github/scripts/test/test-infra-suite-registration.sh) and they
-# disagreed on method. Re-grepping infra-validation.yml here would make a fourth. `--list`
-# prints the runner's OWN derivation, so a change to that extraction cannot silently
-# desynchronise from what this file believes runs (#7402 step 8).
+# own untracked-file report, and .github/scripts/test/test-infra-suite-registration.sh) and
+# they disagreed on method. Re-grepping infra-validation.yml here would make a fourth.
+# `--enumerate` prints the runner's OWN EXECUTE set (the derived set minus the privileged
+# sudo suites, which are covered by surface 6's `run: |` multi-line arm instead) — a change
+# to that derivation cannot silently desynchronise from what this file believes runs
+# (#7402 step 8).
 #
-# INFRA_ORPHAN_LIST=/dev/null suppresses the runner's own orphan section, for two reasons.
-# (1) That section is a naive bare-basename `git grep` -- the technique this file rejects, and
-# the one that reports a suite covered because a COMMENT names it; consuming its output would
-# re-import the method through the back door. (2) It prints its members with the same
-# two-space indent as the derived list and costs 10.6 s of `git grep` per invocation, against
-# 0.03 s without it.
+# INFRA_ORPHAN_LIST=/dev/null suppresses the runner's own untracked-file section, for two
+# reasons. (1) It prints its members with the same two-space indent as the derived list —
+# consuming it would double-count. (2) It costs per-candidate `git` calls against 0.03 s
+# without it.
 infra_rc=0
 ( cd "$REPO_ROOT" && INFRA_ORPHAN_LIST=/dev/null bash "$INFRA_RUNNER" --list ) > "$WORK/infra_list" 2>/dev/null || infra_rc=$?
-# The header states the count the runner derived. Assert the parse recovered exactly that
-# many: a header saying 98 over a body this file read as 3 is a broken parse, and a broken
-# parse here manufactures 95 phantom orphans that a reader would rightly ignore -- after which
-# the check is ignored permanently.
+( cd "$REPO_ROOT" && bash "$INFRA_RUNNER" --enumerate ) > "$WORK/infra_enum" 2>/dev/null || infra_rc=$?
+# The --list header states the count the runner DERIVED (on disk = registered). The
+# SUITE_REGISTRATION rows state the count it EXECUTES. Their difference is the
+# privileged set, printed as `  SKIP privileged:` lines — assert all three agree:
+# a header saying 146 over an execute set this file read as 3 is a broken parse, and
+# a broken parse here manufactures phantom orphans a reader would rightly ignore.
 infra_declared=$(sed -nE 's/^Derived ([0-9]+) registered infra suite.*/\1/p' "$WORK/infra_list" | head -1)
-sed -nE 's/^  ([A-Za-z0-9._\/-]+\.test\.sh)$/\1/p' "$WORK/infra_list" | LC_ALL=C sort -u > "$WORK/raw3"
+infra_priv=$(grep -c '^  SKIP privileged: ' "$WORK/infra_list" || true)
+sed -nE 's/^SUITE_REGISTRATION\t(.*\.test\.sh)$/\1/p' "$WORK/infra_enum" | LC_ALL=C sort -u > "$WORK/raw3"
 infra_parsed=$(wc -l < "$WORK/raw3" | tr -d ' ')
 # SURFACE-3 FLOOR. The declared-vs-parsed check below compares two numbers that move TOGETHER:
 # narrow run-registered-suites.sh's derivation and both shrink, they still agree, and surface 5
@@ -270,13 +295,13 @@ infra_parsed=$(wc -l < "$WORK/raw3" | tr -d ' ')
 # the only surface backed by a runner that actually EXECUTES its list, so its silent shrinkage is
 # the most consequential blind spot in the union. Absolute, hand-ratcheted, and deliberately not
 # derived from raw3 (that would be the floor deriving itself from its own subject).
-MIN_INFRA_DERIVED=90
+MIN_INFRA_DERIVED=135
 if (( infra_parsed < MIN_INFRA_DERIVED )); then
   echo "ERROR: surface 3 derived only ${infra_parsed} infra suites, below the floor of ${MIN_INFRA_DERIVED} -- run-registered-suites.sh's derivation has narrowed. This is invisible to the declared-vs-parsed check (both numbers shrink together) and to the totals (surface 5's subtraction absorbs exactly the dropped paths), so nothing else in this file can see it." >&2
   fails=$((fails + 1))
 fi
-if (( infra_rc != 0 )) || [[ -z "$infra_declared" ]] || [[ "$infra_declared" != "$infra_parsed" ]]; then
-  echo "ERROR: 'run-registered-suites.sh --list' exited ${infra_rc} and declared '${infra_declared:-<no header>}' derived suites while this parse recovered ${infra_parsed} -- the infra registration surface is not readable, so every infra suite would be judged against an incomplete covered set." >&2
+if (( infra_rc != 0 )) || [[ -z "$infra_declared" ]] || (( infra_parsed + infra_priv != infra_declared )); then
+  echo "ERROR: 'run-registered-suites.sh' exited ${infra_rc}; --list declared '${infra_declared:-<no header>}' derived suites (${infra_priv} privileged) while --enumerate recovered ${infra_parsed} executable -- the infra registration surface is not readable, so every infra suite would be judged against an incomplete covered set." >&2
   fails=$((fails + 1))
 fi
 
@@ -299,11 +324,10 @@ fi
 # --- Surface 5: single-line `run: … bash <path>.test.sh` in any workflow --------------------
 # Every workflow, INCLUDING infra-validation.yml, minus whatever surface 3 already derived.
 # Subtracting surface 3's actual output (rather than excluding the file, or excluding a path
-# prefix) is what keeps the two surfaces disjoint AND complete: the seven suites under
-# apps/web-platform/infra/<subdir>/ carry correct single-line steps but are structurally
-# underivable by run-registered-suites.sh, whose extraction class excludes `/` (#7076,
-# pinned as KNOWN_UNDERIVABLE in .github/scripts/test/test-infra-suite-registration.sh).
-# Excluding the file would have dropped all seven and reported them as orphans.
+# prefix) is what keeps the two surfaces disjoint AND complete — since #8736 the infra
+# suites are glob-registered (presence is registration) rather than step-registered, so
+# surface 5's infra membership is now ordinarily EMPTY and it exists for the other
+# workflows' explicit `run: bash …test.sh` steps.
 #
 # Disjointness is DESIRABLE but NOT achieved, and the difference is asserted rather than
 # claimed. Measured 2026-08-13: five suites are legitimately covered twice -- registered both
@@ -324,8 +348,10 @@ LC_ALL=C comm -23 "$WORK/raw5all" "$WORK/raw3" > "$WORK/raw5"
 
 # --- Surface 6: `bash <path>.test.sh` inside a multi-line `run: |` block ---------------------
 # The line carries no `run:` -- it is a body line of a block scalar -- and it may carry a
-# prefix. Today's only member is `sudo bash apps/web-platform/infra/workspaces-luks-loopback.test.sh`
-# at infra-validation.yml, which needs root for losetup/luksFormat.
+# prefix. Its members today are the three privileged `sudo bash` loopback suites in
+# infra-validation.yml's deploy-script-tests-fixed job (#8736) — suites that need root
+# for losetup/luksFormat/dmsetup and so are derived-but-not-executed by surface 3's
+# runner (#7076).
 #
 # THIS SURFACE IS WHY ZERO ORPHANS IS SATISFIABLE. Without it that suite is reported as an
 # orphan while it demonstrably runs in CI, and the only ways to make the report green would
@@ -375,6 +401,13 @@ if [[ "${SOLEUR_LINT_ORPHAN_DUMP_SURFACES:-}" == "1" ]]; then
   for i in 1 2 3 4 5 6; do
     while IFS= read -r p; do [[ -n "$p" ]] && echo "SURFACE${i} ${p}"; done < "$WORK/s${i}"
   done
+  # Exit here: the seam's only consumer is the companion suite's single-surface
+  # precondition, which greps SURFACE<i> lines and ignores the exit code. Every
+  # remaining arm (disjointness, relevance, declared edges, classification
+  # receipts) re-derives nothing the dump needs — running them made each
+  # precondition row pay a second full linter invocation for output nobody
+  # reads (#8322 CI: precondition rows were the battery's second-biggest spend).
+  exit 0
 fi
 
 # --- Disjointness, asserted against the LIVE repo ---------------------------------------------
@@ -598,8 +631,11 @@ else
   # left the linter green and the harness green at one assertion fewer. The floor makes a deliberate
   # removal an explicit, reviewable edit to this number instead of a silent narrowing.
   RELEVANCE_ARRAYS=(
-    "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh|9"
-    "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh|12"
+    "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh|14"
+    "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh|17"
+    "LINT_ORPHAN_BATTERY_PATHS|scripts/lint-orphan-test-suites.test.sh|11"
+    "TAG_AUTHORSHIP_BATTERY_PATHS|scripts/battery-tag-authorship-mutations.test.sh|15"
+    "TEST_ALL_AFFECTED_BATTERY_PATHS|scripts/test-all-affected.test.sh|9"
     "C4_PRODUCER_PATHS|plugins/soleur/test/c4-from-components.test.sh|6"
     "GITHUB_SCRIPTS_SUITE_PATHS|.github/scripts/test/run-all.sh|9"
     "WEBPLAT_APP_PATHS|apps/web-platform/test/repo-wide-containment.test.ts|3"
@@ -614,6 +650,48 @@ else
     fails=$((fails + 1))
   fi
 
+  # PR-GATED SET AND SUBJECT-SET CLOSURE (ADR-262, Guard 2). A battery whose call site carries
+  # `_diff_touches --pr-gated` DECLINES on a pull_request CI run when the diff misses its array, so
+  # the array is the ONLY thing standing between a stale declaration and a silently skipped battery.
+  # The set is DERIVED from the runner — a hand list of "which arrays are gated" is exactly the
+  # declaration that falls behind. The closure check below compares each such array with what the
+  # battery file ITSELF names (`$REPO_ROOT/<path>` operands), which a commit that edits only the
+  # array cannot change. `grep -o` exits 1 on zero matches (a legitimate "none gated"); >= 2 is a
+  # real read error — the same split the dispatch floor below keeps, for the same reason.
+  pr_gated_set=""
+  pr_gated_out=$(sed 's/[[:space:]]*#.*$//' "$RUNNER" \
+                 | grep -oE '_diff_touches --pr-gated +"\$\{[A-Z0-9_]+' \
+                 | sed 's/.*{//' | LC_ALL=C sort -u | tr '\n' ' ') || {
+    grep_rc=$?
+    if (( grep_rc > 1 )); then
+      echo "ERROR: could not read ${RUNNER} to derive the --pr-gated arrays (exit ${grep_rc}) -- the closure check could not run, so it is not evidence about anything." >&2
+      fails=$((fails + 1))
+    fi
+    pr_gated_out=""
+  }
+  pr_gated_set=" ${pr_gated_out} "
+  g2_checked=0
+  # Directory and corpus operands a battery names that NO array element contains. Each needs a
+  # written reason: the battery copies or hardlinks a whole tree, so declaring the tree would arm it
+  # on nearly every diff (ADR-181: dependencies, not copy sets). They are ADR-262 residual R3 and
+  # an edit to an undeclared member of one is caught on the push run, not on the PR.
+  # Format: "<ARRAY>|<operand relative to the repo root>|<reason>".
+  PR_GATE_CORPUS_ALLOWLIST=(
+    "CF_TUNNEL_BATTERY_PATHS|.github|cp -a of the whole .github tree into the sandbox; its dependencies are the W7 workflows and the bridge action, declared individually"
+    "CF_TUNNEL_BATTERY_PATHS|scripts|cp -a of the whole scripts/ tree into the sandbox; its dependencies are the oracle and its SUT, declared individually"
+    "TEST_ALL_AFFECTED_BATTERY_PATHS|scripts|cp -al hardlinks all of scripts/ into the census sandbox; declared by dependency (runner, libs, linter, itself)"
+  )
+  # An allowlist entry is a CLAIM that an operand is uncovered on purpose. It must carry a reason, and
+  # it must still be needed: an entry no operand uses any more silently licenses the next edit.
+  g2_used=" "
+  for g2_a in "${PR_GATE_CORPUS_ALLOWLIST[@]}"; do
+    g2_reason="${g2_a#*|}"; g2_reason="${g2_reason#*|}"
+    if [[ -z "${g2_reason// /}" ]]; then
+      echo "ERROR: PR_GATE_CORPUS_ALLOWLIST entry '${g2_a%%|*}|...' has no written reason -- an unexplained exemption is exactly what ADR-262 Guard 2 exists to refuse." >&2
+      fails=$((fails + 1))
+    fi
+  done
+
   # DISPATCH FLOOR, DERIVED FROM THE RUNNER — not a hand-typed literal.
   #
   # Today RELEVANCE_ARRAYS=() makes the ENTIRE anti-rot block below iterate zero times while this
@@ -625,7 +703,7 @@ else
   # time a list grows". It also catches strictly MORE — a literal floor can only see the list
   # SHRINK, while deriving `want` from the runner catches a gate ADDED to test-all.sh and never
   # registered here, which a literal cannot see at all. Verified: this pattern matches only the
-  # four real `_diff_touches "${ARRAY[@]}"` call sites and no comment in test-all.sh.
+  # the real `_diff_touches "${ARRAY[@]}"` call sites and no comment in test-all.sh.
   #
   # `[A-Z0-9_]+`, NOT `[A-Z_]+`. Measured: the first form counted 3 of 4 gates, because
   # C4_PRODUCER_PATHS carries a DIGIT and a digit-free class silently skips it. The failure is the
@@ -654,8 +732,14 @@ else
   # under-counted: `[A-Z_]+` missed the array whose name carries a digit, and an explicit two-shape
   # alternation still missed `"${NAME[@]:-}"`. Every miss is the same failure -- `want` drops, so a
   # SHORTER registry satisfies the floor and the unseen gate is the one that rots.
+  # `_AC_EDGES` is excluded by NAME, not by shape (#8322): the affected-mode
+  # classifier resolves each registration's edges into that scratch array and
+  # calls `_diff_touches` on it — a SELECTION test, not a relevance gate, and
+  # not a declaration site. Counting it would inflate `want` past
+  # RELEVANCE_ARRAYS and red the floor on a gate that does not exist.
   want=$(sed 's/[[:space:]]*#.*$//' "$RUNNER" \
-         | grep -cE '_diff_touches +[^#]*\$\{[A-Z0-9_]+\[@\]') || {
+         | grep -E '_diff_touches +[^#]*\$\{[A-Z0-9_]+\[@\]' \
+         | grep -cvF '${_AC_EDGES[@') || {
     grep_rc=$?
     if (( grep_rc > 1 )); then
       echo "ERROR: could not read ${RUNNER} to count _diff_touches gates (grep exit ${grep_rc}) -- the dispatch floor could not be derived, so it is not evidence about anything." >&2
@@ -709,10 +793,11 @@ else
       fails=$((fails + 1))
     fi
 
-    # Each declared path must still exist in the tree. `git -C` because this linter is invocable
-    # from any cwd (lefthook runs it from the repo root; a developer may not).
+    # Each declared path must still exist in the tree. `_tracked_member` reads the
+    # whole-index set captured at the top (see _TRACKED_SET) rather than a
+    # per-element `git ls-files --error-unmatch` exec.
     for p in "${rel_elems[@]}"; do
-      if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
+      if ! _tracked_member "$p"; then
         echo "ERROR: ${arr_name} declares '${p}', which is not a tracked file -- the predicate can never match it, so its suite is declined locally forever." >&2
         fails=$((fails + 1))
       fi
@@ -774,9 +859,68 @@ else
     # level up: an array can be correct, fully resolvable, and consumed by NOTHING. Anchored on
     # the call shape, never the bare name -- the name also appears in this script and in
     # test-all.sh's comments, either of which would satisfy a bare-token grep.
-    ref_re='_diff_touches "\$\{'"$arr_name"'\[@\]\}"'
+    ref_re='_diff_touches( --pr-gated)? "\$\{'"$arr_name"'\[@\]\}"'
     if ! grep -qE "$ref_re" "$RUNNER"; then
       echo "ERROR: test-all.sh no longer references \${${arr_name}[@]} in a _diff_touches call -- the predicate is declared but consumes nothing, so its suite is ungated or unreachable." >&2
+      fails=$((fails + 1))
+    fi
+
+    # SUBJECT-SET CLOSURE (ADR-262 Guard 2), for --pr-gated arrays only. Every repo path the battery
+    # file names as `$REPO_ROOT/<path>` or `${REPO_ROOT}/<path>` (comment lines dropped) must be an
+    # element of the array, sit under a directory element, or carry an allowlist reason above.
+    # Operands that are not repo paths (a `$TMPDIR` path, a variable suffix) are not tracked and are
+    # ignored, never guessed at. The scope is the battery file's explicit operands — the copy set and
+    # corpus reads are the allowlist's business, stated once.
+    if [[ "$pr_gated_set" == *" ${arr_name} "* ]]; then
+      g2_checked=$((g2_checked + 1))
+      g2_ops=$(grep -vE '^[[:space:]]*#' "$REPO_ROOT/$battery" \
+               | grep -oE '\$\{?(REPO_ROOT|ROOT)\}?"?/[A-Za-z0-9_./-]+' \
+               | sed -E 's/^\$\{?(REPO_ROOT|ROOT)\}?"?\///' | LC_ALL=C sort -u) || g2_ops=""
+      # A battery that yields ZERO operands is not "closed", it is UNREAD: the registry battery names
+      # its inputs through `${ROOT}`-rooted loop variables, which this extraction could not see until
+      # `ROOT` was added above. Counting such a battery toward the floor would certify nothing.
+      if [[ -z "$g2_ops" ]]; then
+        echo "ERROR: ${battery} names no \$REPO_ROOT/ or \${ROOT}/ operand, so the ADR-262 closure check examined nothing for ${arr_name}. Extend the operand extraction to this battery's root variable." >&2
+        fails=$((fails + 1))
+      fi
+      while IFS= read -r g2_op; do
+        g2_op="${g2_op%/.}"; g2_op="${g2_op%/}"
+        [[ -n "$g2_op" && "$g2_op" != "." ]] || continue
+        _tracked_member "$g2_op" || continue
+        g2_cov=""
+        for p in "${rel_elems[@]}"; do
+          [[ "$g2_op" == "$p" || "$g2_op" == "$p"/* ]] && g2_cov=1
+        done
+        if [[ -z "$g2_cov" ]]; then
+          g2_ok=""
+          for g2_a in "${PR_GATE_CORPUS_ALLOWLIST[@]}"; do
+            if [[ "$g2_a" == "${arr_name}|${g2_op}|"* ]]; then g2_ok=1; g2_used="${g2_used}${arr_name}|${g2_op} "; fi
+          done
+          if [[ -z "$g2_ok" ]]; then
+            echo "ERROR: ${battery} names '${g2_op}', which ${arr_name} does not contain -- on a pull_request run a diff touching it would DECLINE this battery. Add it to the array, or list it in PR_GATE_CORPUS_ALLOWLIST with a written reason (ADR-262 Guard 2)." >&2
+            fails=$((fails + 1))
+          fi
+        fi
+      done <<<"$g2_ops"
+    fi
+  done
+
+  # FLOOR ON THE CLOSURE CHECK. A derivation that finds no --pr-gated arrays would make Guard 2
+  # iterate nothing while this script still printed `orphan test suites: none` — the vacuity the
+  # dispatch floor above exists to catch, one layer up. Five batteries are gated today; the floor is
+  # the count, not a margin below it, and rises in the edit that gates a sixth.
+  # Two floors on purpose: the LITERAL catches an emptied derivation (a call site lost its flag, or the
+  # sed/grep that derives the set went blind); the DERIVED equality catches a gated array nothing
+  # examined. Raise the literal in the same edit that gates a sixth battery.
+  pr_gated_n=$(printf '%s\n' "$pr_gated_set" | tr -s ' ' '\n' | grep -c . || true)
+  if (( g2_checked < 5 || g2_checked != pr_gated_n )); then
+    echo "ERROR: the ADR-262 closure check examined ${g2_checked} --pr-gated array(s) of ${pr_gated_n} derived from the runner (expected >= 5, and equal) -- a gated battery was un-gated, its call site lost the --pr-gated flag, is missing from RELEVANCE_ARRAYS, or the derivation broke; raise the literal 5 when a sixth battery is gated." >&2
+    fails=$((fails + 1))
+  fi
+  for g2_a in "${PR_GATE_CORPUS_ALLOWLIST[@]}"; do
+    g2_key="${g2_a%%|*}|$(printf '%s' "$g2_a" | cut -d'|' -f2)"
+    if [[ "$g2_used" != *" ${g2_key} "* ]]; then
+      echo "ERROR: PR_GATE_CORPUS_ALLOWLIST entry '${g2_key}' matched no uncovered operand -- it is stale (the battery no longer names it, or its array now contains it). Delete it." >&2
       fails=$((fails + 1))
     fi
   done
@@ -814,6 +958,315 @@ done
 if (( cmd_seen < 1 )); then
   echo "ERROR: tests/commands/ matched zero suites -- the glob is broken, so this check certified nothing" >&2
   fails=$((fails + 1))
+fi
+
+# --- Affected-set census (#8322) ------------------------------------------------
+# test-all.sh's affected gate (the local default) classifies every registration
+# as ALWAYS_ON (verdict is a property of the whole tree), EDGE (verdict is a
+# property of declared/derived paths), or UNCLASSIFIED -- which runs anyway,
+# fail-safe, but means the edge index failed to see a suite. This block makes
+# unclassified a RED, because the silent version of it is the false-green this
+# file exists to prevent: a suite that never selects on the diffs that matter
+# is a suite that gates nothing.
+#
+# Same discipline as the rest of this file: ask the producer, never re-parse it.
+# The classification is read from `test-all.sh --print-affected-set` receipts,
+# NOT recomputed here -- a second classifier would certify its own drift.
+AFF_LIB="$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+if [[ ! -f "$AFF_LIB" ]]; then
+  echo "ERROR: $AFF_LIB is missing -- test-all.sh degrades to full without it, so no classification is trustworthy." >&2
+  fails=$((fails + 1))
+else
+  # shellcheck source=scripts/lib/test-affected-paths.sh
+  source "$AFF_LIB"
+
+  # The live registration stream. Same env-scrubbing as the --print-suite-globs
+  # call above and for the same reasons: this runs INSIDE test-all.sh as a
+  # registered suite, so an inherited TEST_GROUP/SCRIPTS_SHARD would change what
+  # the child enumerates, and the session-state handler must never serialize on
+  # the advisory lock this process's own parent holds.
+  aff_enum_rc=0
+  env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_ENUM_DEADLINE_S SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash "$RUNNER" --enumerate-commands > "$WORK/aff_enum" 2>/dev/null || aff_enum_rc=$?
+  awk -F'\t' '$1=="SUITE_COMMAND"{print $2}' "$WORK/aff_enum" \
+    | LC_ALL=C sort -u > "$WORK/aff_runnable"
+  # ALL registrations — runnable AND declined. Relevance-declined suites emit
+  # SUITE_COMMAND_DECLINED on this diff; a staleness check that only read the
+  # runnable stream would report every relevance-gated suite as de-registered
+  # on exactly the diffs that decline it.
+  awk -F'\t' '$1=="SUITE_COMMAND" || $1=="SUITE_COMMAND_DECLINED"{print $2}' "$WORK/aff_enum" \
+    | LC_ALL=C sort -u > "$WORK/aff_labels"
+  aff_label_n=$(wc -l < "$WORK/aff_labels" | tr -d ' ')
+  if (( aff_enum_rc != 0 )) || (( aff_label_n < 1 )); then
+    echo "ERROR: 'bash scripts/test-all.sh --enumerate-commands' exited ${aff_enum_rc} and emitted ${aff_label_n} registrations -- the census cannot derive the live floor, so every check below would certify a subset." >&2
+    # `|| true` is load-bearing: a child that died by signal (SIGKILL, OOM)
+    # emits no ERROR/FATAL line — grep's rc=1 under set -o pipefail would
+    # abort the linter before fails++ and truncate every check below.
+    grep -E '^(ERROR|FATAL):' "$WORK/aff_enum" | sed 's/^/    child: /' >&2 || true
+    fails=$((fails + 1))
+  fi
+
+  # ALWAYS_ON VACUITY. An emptied list makes every membership check below pass
+  # vacuously while every suite falls through to edge-derivation — including the
+  # corpus scanners that derivation can never reach.
+  if [[ "${#ALWAYS_ON_SUITES[@]}" -eq 0 ]]; then
+    echo "ERROR: ALWAYS_ON_SUITES is EMPTY -- every always-on check passes vacuously while the repo-global scanners silently become edge-derived." >&2
+    fails=$((fails + 1))
+  fi
+
+  # THE *-live FLOOR, DERIVED LIVE. The live-scanner class is the irreducible
+  # core of always-on; its size is read from the registration stream, not
+  # hand-ratcheted, because the estimate in the plan (~24) already drifted to 30
+  # before this file existed. A label carrying a hyphenated `live` or `liveness`
+  # is a live-corpus scanner by the repo's naming convention and MUST
+  # be always-on: its verdict is a property of the live corpus, and any
+  # file-based edge will eventually decline it on a diff that changed the code
+  # it scans. `live` is matched as a hyphenated/standalone word — a bare
+  # substring match flags `deLIVEry`, `redeLIVEr`, and `fideLITy`-adjacent
+  # names that have nothing to do with live infrastructure. `liveness` stands
+  # alone because it carries no `live` word boundary (`-liveness-`).
+  live_floor=$(LC_ALL=C grep -cE '(^|[^a-zA-Z])live([^a-zA-Z]|$)|liveness' "$WORK/aff_labels") || live_floor=0
+  if (( ${#ALWAYS_ON_SUITES[@]} < live_floor )); then
+    echo "ERROR: ALWAYS_ON_SUITES has ${#ALWAYS_ON_SUITES[@]} entries but the live registration stream carries ${live_floor} live-scanner labels -- the always-on set is smaller than the class it must contain." >&2
+    fails=$((fails + 1))
+  fi
+  while IFS= read -r live_label; do
+    [[ -n "$live_label" ]] || continue
+    found=""
+    for a in ${ALWAYS_ON_SUITES[@]+"${ALWAYS_ON_SUITES[@]}"}; do
+      [[ "$a" == "$live_label" ]] && { found=1; break; }
+    done
+    if [[ -z "$found" ]]; then
+      # A live-named suite may also carry a DECLARED edge — the liveness
+      # mutation batteries name the gate they mutate but their verdict is
+      # scoped to the battery paths, and (#9307) a live scanner whose OBSERVED
+      # reads an audit confined to the declared paths
+      # (knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/
+      # always-on-audit.md) may leave the always-on set the same way. This
+      # check does NOT verify that evidence; it only demands a declaration.
+      # What this check refuses is a live-named
+      # suite with ONLY a derived edge: derivation attaches a self-edge to a
+      # corpus scanner, which then declines on the diffs that drift the corpus.
+      for entry in ${AFFECTED_CONSUMED_EDGES[@]+"${AFFECTED_CONSUMED_EDGES[@]}"}; do
+        [[ "${entry%%|*}" == "$live_label" ]] && { found=1; break; }
+      done
+    fi
+    if [[ -z "$found" ]]; then
+      live_arr="AFFECTED_$(printf '%s' "$live_label" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9' '_' | sed 's/^_//')_PATHS"
+      declare -p "$live_arr" >/dev/null 2>&1 && found=1
+    fi
+    if [[ -z "$found" ]]; then
+      echo "ERROR: live-scanner registration '${live_label}' has no declared classification -- add it to ALWAYS_ON_SUITES (corpus scanner) or declare an AFFECTED_*_PATHS edge (a battery named for the live gate it mutates). A derived self-edge is not enough: it declines on the corpus-drift diffs the name says it guards." >&2
+      fails=$((fails + 1))
+    fi
+  done < <(LC_ALL=C grep -E '(^|[^a-zA-Z])live([^a-zA-Z]|$)|liveness' "$WORK/aff_labels")
+
+  # ALWAYS_ON STALENESS. Every entry must still be a live registration — the
+  # same check EXCLUSIONS runs on its keys, for the same reason: a stale entry
+  # masks nothing while reading as a deliberate classification, and survives
+  # the rename it was written for.
+  for a in ${ALWAYS_ON_SUITES[@]+"${ALWAYS_ON_SUITES[@]}"}; do
+    if ! LC_ALL=C grep -qxF -- "$a" "$WORK/aff_labels"; then
+      echo "ERROR: ALWAYS_ON_SUITES entry '${a}' is not a live registration -- either the label was renamed (update the entry) or the suite is gone (delete it). A stale entry is a false statement in the classification index." >&2
+      fails=$((fails + 1))
+    fi
+  done
+
+  # CONSUMED EDGE SETS. Each entry maps a label to an edge array owned by
+  # test-relevance-paths.sh — the diff that makes the suite relevant IS the diff
+  # that selects it. The label must be a live registration and the array must
+  # exist and be non-empty (the relevance block above already checks element
+  # floors and path resolution; this checks the wiring).
+  for entry in ${AFFECTED_CONSUMED_EDGES[@]+"${AFFECTED_CONSUMED_EDGES[@]}"}; do
+    c_label="${entry%%|*}"
+    c_arr="${entry#*|}"
+    if ! LC_ALL=C grep -qxF -- "$c_label" "$WORK/aff_labels"; then
+      echo "ERROR: AFFECTED_CONSUMED_EDGES names label '${c_label}', which is not a live registration -- the mapping is stale or the suite was de-registered without updating the edge index." >&2
+      fails=$((fails + 1))
+    fi
+    if ! declare -p "$c_arr" >/dev/null 2>&1; then
+      echo "ERROR: AFFECTED_CONSUMED_EDGES maps '${c_label}' to array ${c_arr}, which is not declared -- the suite's edge set silently vanished." >&2
+      fails=$((fails + 1))
+      continue
+    fi
+    eval "c_elems=( \${${c_arr}[@]+\"\${${c_arr}[@]}\"} )"
+    # shellcheck disable=SC2154  # c_elems assigned by the eval above
+    if [[ "${#c_elems[@]}" -eq 0 ]]; then
+      echo "ERROR: consumed edge array ${c_arr} (label '${c_label}') is EMPTY -- the suite has no declared diff and can never be selected." >&2
+      fails=$((fails + 1))
+    fi
+  done
+
+  # DECLARED EDGE ARRAYS. Every AFFECTED_*_PATHS array in the lib must be
+  # non-empty and resolve: a trailing-"/" entry is a directory prefix and must
+  # exist as a directory; anything else must be a tracked file — same doctrine
+  # as the relevance arrays' "each declared path must still exist in the tree".
+  while IFS= read -r aff_arr; do
+    [[ "$aff_arr" == "AFFECTED_CONSUMED_EDGES" ]] && continue
+    eval "aff_elems=( \${${aff_arr}[@]+\"\${${aff_arr}[@]}\"} )"
+    # shellcheck disable=SC2154  # aff_elems assigned by the eval above
+    if [[ "${#aff_elems[@]}" -eq 0 ]]; then
+      echo "ERROR: declared edge array ${aff_arr} is EMPTY -- an empty edge set can never select its suite." >&2
+      fails=$((fails + 1))
+      continue
+    fi
+    for p in "${aff_elems[@]}"; do
+      case "$p" in
+        glob:*)
+          # Third declared kind (#9813): glob:<literal-head>/<glob-tail>.
+          # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm
+          # in _affected_add_edge, the in-flight revalidation in _diff_edge_hit,
+          # this census arm, and the covers() oracle in
+          # scripts/test-affected-kb-consumers.test.sh must classify a shape
+          # identically; GLOBENT (registration-only classifier) is a deliberate
+          # superset — admission can only widen, never narrow (the census is
+          # where a bad shape becomes loud). Here a malformed or dead declared
+          # glob is a static RED, not a
+          # runtime narrow: a bad entry degrades WIDER than declared — and a
+          # `..`/`/`-headed glob can pass the -d probe while matching no
+          # repo-relative diff line ever (a dead edge that narrows).
+          _cg="${p#glob:}"
+          _cg_why=""
+          case "$_cg" in
+            *[\*?[]*)
+              case "$_cg" in
+                *[?[]*) _cg_why="contains ? or [ (outside the grammar)" ;;
+                *[!A-Za-z0-9_./*-]*) _cg_why="contains a byte outside the grammar charset" ;;
+                *)
+                  _cgh="${_cg%%[*?[]*}"
+                  case "$_cgh" in
+                    /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _cg_why="its head is not a repo-relative prefix" ;;
+                    */)
+                      _cgt="${_cg#$_cgh}"
+                      case "$_cgt" in
+                        */) _cg_why="its tail ends in / — no path can match it" ;;
+                        *\**) [[ -d "$REPO_ROOT/${_cgh%/}" ]] || _cg_why="its head dir ${_cgh} does not exist" ;;
+                        *) _cg_why="its tail carries no *" ;;
+                      esac
+                      ;;
+                    *) _cg_why="its head does not end in /" ;;
+                  esac
+                  ;;
+              esac
+              ;;
+            *)
+              # No metachar: the mint recurses it as a literal path entry —
+              # the census checks it as one. A miss here mints NOTHING — the
+              # entry is dead, which narrows (the opposite direction from the
+              # malformed branch's degrade-wider).
+              if [[ "$_cg" == */ ]]; then
+                [[ -d "$REPO_ROOT/$_cg" ]] || _cg_why="a literal dir entry that does not exist -- a dead edge that can never match a diff"
+              elif ! _tracked_member "$_cg"; then
+                _cg_why="a literal entry that is not a tracked file -- a dead edge that can never match a diff"
+              fi
+              ;;
+          esac
+          if [[ -n "$_cg_why" ]]; then
+            if [[ "$_cg_why" == *"dead edge"* ]]; then
+              echo "ERROR: ${aff_arr} declares glob: edge '${p}', ${_cg_why}." >&2
+            else
+              echo "ERROR: ${aff_arr} declares glob: edge '${p}', ${_cg_why} -- it degrades wider than declared and would silently widen every diff's selection." >&2
+            fi
+            fails=$((fails + 1))
+          fi
+          ;;
+        */)
+          [[ -d "$REPO_ROOT/$p" ]] || {
+            echo "ERROR: ${aff_arr} declares directory prefix '${p}', which does not exist -- a dead edge can never match a diff." >&2
+            fails=$((fails + 1))
+          }
+          ;;
+        *)
+          _tracked_member "$p" || {
+            echo "ERROR: ${aff_arr} declares '${p}', which is not a tracked file -- a dead edge can never match a diff." >&2
+            fails=$((fails + 1))
+          }
+          ;;
+      esac
+    done
+    # Self-inclusion: an array that cannot see edits to the edge index itself
+    # ships a narrowed selection unexercised — same argument as the relevance
+    # arrays' scripts/lib/test-relevance-paths.sh check.
+    lib_ok=""
+    for p in "${aff_elems[@]}"; do
+      [[ "$p" == "scripts/lib/test-affected-paths.sh" ]] && lib_ok=1
+    done
+    if [[ -z "$lib_ok" ]]; then
+      echo "ERROR: ${aff_arr} does not contain 'scripts/lib/test-affected-paths.sh' -- a commit editing only the edge data would not select the suite it could blind." >&2
+      fails=$((fails + 1))
+    fi
+  done < <(declare -p | LC_ALL=C grep -oE 'declare -[a-zA-Z]* AFFECTED_[A-Z0-9_]+' | awk '{print $3}')
+
+  # REPO-WIDE-IDIOM ARM. A suite whose own source walks a corpus — unscoped
+  # `git ls-files`, `find .`, a repo-root find, or a recursive grep — has a
+  # verdict that is not localizable to a hand of files. Such a suite must be
+  # ALWAYS_ON, carry a DECLARED edge set (an explicit statement that its scan
+  # is scoped to those paths), or be consumed-edge mapped. Derivation alone is
+  # not enough: it can attach a narrow self-edge to a whole-tree scanner and
+  # the suite declines on exactly the diffs it guards.
+  while IFS= read -r line; do
+    i_label="${line%%$'\t'*}"
+    i_rest="${line#*$'\t'}"
+    i_file=""
+    IFS=$'\t' read -ra i_argv <<< "$i_rest"
+    for tok in "${i_argv[@]}"; do
+      tok="${tok%\"}"; tok="${tok#\"}"; tok="${tok%\'}"; tok="${tok#\'}"
+      case "$tok" in
+        *.test.sh|*.test.ts|test-*.sh|test_*.sh)
+          [[ -f "$REPO_ROOT/$tok" ]] && { i_file="$tok"; break; } ;;
+      esac
+    done
+    [[ -z "$i_file" ]] && continue
+    if grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]"]+[[:space:]]+)?ls-files|find[[:space:]]+["'"'"']?\.([[:space:]]|$)|find[[:space:]]+"?\$\{?REPO_ROOT|grep[[:space:]]+(-[[:alnum:]]*[rR][[:alnum:]]*[[:space:]]|--recursive)' "$REPO_ROOT/$i_file" 2>/dev/null; then
+      i_class=""
+      for a in ${ALWAYS_ON_SUITES[@]+"${ALWAYS_ON_SUITES[@]}"}; do
+        [[ "$a" == "$i_label" ]] && { i_class="always-on"; break; }
+      done
+      if [[ -z "$i_class" ]]; then
+        for entry in ${AFFECTED_CONSUMED_EDGES[@]+"${AFFECTED_CONSUMED_EDGES[@]}"}; do
+          [[ "${entry%%|*}" == "$i_label" ]] && { i_class="consumed"; break; }
+        done
+      fi
+      if [[ -z "$i_class" ]]; then
+        i_arr="AFFECTED_$(printf '%s' "$i_label" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9' '_' | sed 's/^_//')_PATHS"
+        declare -p "$i_arr" >/dev/null 2>&1 && i_class="declared"
+      fi
+      if [[ -z "$i_class" ]]; then
+        echo "ERROR: '${i_label}' (${i_file}) walks a corpus (unscoped git ls-files / find . / recursive grep) but has NO declared classification -- if its scan is the whole tree it belongs in ALWAYS_ON_SUITES; if scoped, declare AFFECTED_*_PATHS naming that scope." >&2
+        fails=$((fails + 1))
+      fi
+    fi
+  done < <(awk -F'\t' '$1=="SUITE_COMMAND"{print $2"\t"$0}' "$WORK/aff_enum")
+
+  # CLASSIFICATION RECEIPTS. `--print-affected-set` is enumerate-shaped: it
+  # walks every registration and prints AFFECTED_CLASS<TAB>label<TAB>class.
+  # Fail-closed if the flag is gone (same contract as --print-suite-globs); RED
+  # on any runnable registration the runner could not classify.
+  aff_set_rc=0
+  env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_ENUM_DEADLINE_S SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash "$RUNNER" --affected --print-affected-set > "$WORK/aff_set" 2>/dev/null || aff_set_rc=$?
+  if (( aff_set_rc != 0 )); then
+    echo "ERROR: 'bash scripts/test-all.sh --affected --print-affected-set' exited ${aff_set_rc} -- the census derives classification from that flag's receipts; without them every check below is vacuous. Restore the flag rather than re-deriving here." >&2
+    grep -E '^(ERROR|FATAL):' "$WORK/aff_set" | sed 's/^/    child: /' >&2 || true
+    fails=$((fails + 1))
+  else
+    awk -F'\t' '$1=="AFFECTED_CLASS"{print $2"\t"$3}' "$WORK/aff_set" \
+      | LC_ALL=C sort -u > "$WORK/aff_receipts"
+    while IFS= read -r r_label; do
+      [[ -n "$r_label" ]] || continue
+      r_class=$(awk -F'\t' -v l="$r_label" '$1==l{print $2}' "$WORK/aff_receipts" | head -1)
+      if [[ -z "$r_class" ]]; then
+        echo "ERROR: registration '${r_label}' has no AFFECTED_CLASS receipt -- the print-affected-set walk stopped reaching it, so its classification is unknown." >&2
+        fails=$((fails + 1))
+      elif [[ "$r_class" == "unclassified" ]]; then
+        echo "ERROR: registration '${r_label}' is UNCLASSIFIED -- it runs fail-safe today, but no edge, always-on, or group rule names it. Add it to ALWAYS_ON_SUITES, declare an AFFECTED_*_PATHS edge, or accept the derivation channel that should have reached it." >&2
+        fails=$((fails + 1))
+      fi
+    # Runnable only: a relevance-declined suite never reaches the chokepoint, so
+    # it emits no receipt by design — its classification lives in
+    # AFFECTED_CONSUMED_EDGES and is checked there.
+    done < "$WORK/aff_runnable"
+  fi
 fi
 
 if (( fails > 0 )); then

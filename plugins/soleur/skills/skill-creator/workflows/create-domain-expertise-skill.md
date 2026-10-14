@@ -29,7 +29,7 @@ Domain expertise skills:
 
 1. references/recommended-structure.md
 2. references/core-principles.md
-3. references/use-xml-tags.md
+3. references/skill-structure.md
 </required_reading>
 
 <process>
@@ -205,7 +205,7 @@ references/
 
 **For each reference file:**
 
-- Pure XML structure
+- Markdown headings for structure (XML tags only as optional wrappers inside a section)
 - Decision trees: "If X, use Y. If Z, use A instead."
 - Comparison tables: Library vs Library (speed, features, learning curve)
 - Code examples showing patterns
@@ -223,7 +223,8 @@ name: build-{domain-name}
 description: Build {domain things} from scratch through shipping. Full lifecycle - build, debug, test, optimize, ship. {Any specific constraints like "CLI-only, no IDE"}.
 ---
 
-<essential_principles>
+# Build {Domain Name}
+
 ## How {This Domain} Works
 
 {Domain-specific principles that ALWAYS apply}
@@ -236,9 +237,9 @@ description: Build {domain things} from scratch through shipping. Full lifecycle
 
 ### 3. {Third Principle}
 {Core workflow pattern}
-</essential_principles>
 
-<intake>
+## Intake
+
 **Ask the user:**
 
 What would you like to do?
@@ -251,9 +252,9 @@ What would you like to do?
 7. Something else
 
 **Then read the matching workflow from `workflows/` and follow it.**
-</intake>
 
-<routing>
+## Routing
+
 | Response | Workflow |
 |----------|----------|
 | 1, "new", "create", "build", "start" | `workflows/build-new-{thing}.md` |
@@ -263,9 +264,7 @@ What would you like to do?
 | 5, "slow", "optimize", "performance", "fast" | `workflows/optimize-performance.md` |
 | 6, "ship", "release", "deploy", "publish" | `workflows/ship-{thing}.md` |
 | 7, other | Clarify, then select workflow or references |
-</routing>
 
-<verification_loop>
 ## After Every Change
 
 {Domain-specific verification steps}
@@ -287,9 +286,6 @@ Report to the user:
 - "Build: ✓"
 - "Tests: X pass, Y fail"
 - "Ready for you to check [specific thing]"
-</verification_loop>
-
-<reference_index>
 
 ## Domain Knowledge
 
@@ -300,9 +296,6 @@ All in `references/`:
 **{Domain Area}:** {list files}
 **Development:** {list files}
 **Shipping:** {list files}
-</reference_index>
-
-<workflows_index>
 
 ## Workflows
 
@@ -317,8 +310,6 @@ All in `workflows/`:
 | optimize-performance.md | Profile and speed up |
 | ship-{thing}.md | Deploy/distribute |
 
-</workflows_index>
-
 ```
 
 ## Step 7: Write Workflows
@@ -330,27 +321,28 @@ For EACH workflow identified in Step 3:
 ```markdown
 # Workflow: {Workflow Name}
 
-<required_reading>
+## Required reading
+
 **Read these reference files NOW before {doing the task}:**
 1. references/{relevant-file}.md
 2. references/{another-relevant-file}.md
 3. references/{third-relevant-file}.md
-</required_reading>
 
-<process>
-## Step 1: {First Action}
+## Process
+
+### Step 1: {First Action}
 
 {What to do}
 
-## Step 2: {Second Action}
+### Step 2: {Second Action}
 
 {What to do - actual implementation steps}
 
-## Step 3: {Third Action}
+### Step 3: {Third Action}
 
 {What to do}
 
-## Step 4: Verify
+### Step 4: Verify
 
 {How to prove it works}
 
@@ -358,17 +350,16 @@ For EACH workflow identified in Step 3:
 {verification commands}
 ```
 
-</process>
+## Anti-patterns
 
-<anti_patterns>
 Avoid:
 
 - {Common mistake 1}
 - {Common mistake 2}
 - {Common mistake 3}
-</anti_patterns>
 
-<success_criteria>
+## Success criteria
+
 A well-{completed task}:
 
 - {Criterion 1}
@@ -377,7 +368,6 @@ A well-{completed task}:
 - Builds/runs without errors
 - Tests pass
 - Feels {native/professional/correct}
-</success_criteria>
 
 ```
 
@@ -394,12 +384,13 @@ For EACH reference file identified in Step 5:
 
 ### Structure Template
 
-```xml
-<overview>
-Brief introduction to this domain area
-</overview>
+Headings carry the structure; the `<option>`, `<pattern>`, and `<anti_pattern>` tags are optional wrappers that bound one block inside a section.
 
-<options>
+````markdown
+# {Domain Area}
+
+Brief introduction to this domain area
+
 ## Available Approaches/Libraries
 
 <option name="Library A">
@@ -418,9 +409,6 @@ Brief introduction to this domain area
 <option name="Library B">
 [Same structure]
 </option>
-</options>
-
-<decision_tree>
 
 ## Choosing the Right Approach
 
@@ -429,9 +417,7 @@ Brief introduction to this domain area
 **If you have [constraint Z]:** Use [Library C]
 
 **Avoid [Library D] if:** [specific scenarios]
-</decision_tree>
 
-<patterns>
 ## Common Patterns
 
 <pattern name="Pattern Name">
@@ -439,9 +425,6 @@ Brief introduction to this domain area
 **Implementation:** [code example]
 **Considerations:** [trade-offs]
 </pattern>
-</patterns>
-
-<anti_patterns>
 
 ## What NOT to Do
 
@@ -450,9 +433,6 @@ Brief introduction to this domain area
 **Why it's bad:** [consequences]
 **Instead:** [correct approach]
 </anti_pattern>
-</anti_patterns>
-
-<platform_considerations>
 
 ## Platform-Specific Notes
 
@@ -460,9 +440,8 @@ Brief introduction to this domain area
 **macOS:** [considerations]
 **Linux:** [considerations]
 **Mobile:** [if applicable]
-</platform_considerations>
 
-```
+````
 
 ### Quality Standards
 
@@ -579,7 +558,7 @@ Review entire skill:
 
 **References:**
 
-- [ ] Pure XML structure (no markdown headings)
+- [ ] Structured with markdown headings (XML wrappers optional, inside a section)
 - [ ] Decision guidance in every file
 - [ ] Current versions verified
 - [ ] Code examples work

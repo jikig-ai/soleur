@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface DeleteAccountDialogProps {
   userEmail: string;
@@ -9,29 +11,38 @@ interface DeleteAccountDialogProps {
 export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [confirmEmail, setConfirmEmail] = useState("");
-  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const emailMatches = confirmEmail === userEmail;
 
-  async function handleDelete() {
-    if (!emailMatches) return;
+  // feat-ui-action-feedback: the app's most destructive control gets the
+  // shared pending contract — a hung DELETE previously stranded the disabled
+  // button with no watchdog, and latch() marks only the hard-nav path
+  // terminal (every error path releases for retry).
+  const { run: handleDelete, pending: isDeleting, latch } = usePendingAction(
+    async () => {
+      if (!emailMatches) return;
 
-    setIsDeleting(true);
-    setError(null);
+      setError(null);
 
-    try {
-      const res = await fetch("/api/account/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmEmail }),
-      });
-
-      const data = await res.json();
+      let res: Response;
+      let data: { success?: boolean; error?: string; gitDataErasurePending?: boolean } = {};
+      try {
+        res = await fetch("/api/account/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmEmail }),
+        });
+        // res.json() inside the try — a non-JSON error body must land in the
+        // catch, not in the hook's error slot nobody renders.
+        data = await res.json();
+      } catch {
+        setError("Network error. Please try again.");
+        return;
+      }
 
       if (!res.ok || !data.success) {
         setError(data.error || "Deletion failed. Please try again.");
-        setIsDeleting(false);
         return;
       }
 
@@ -39,22 +50,34 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
       // account deletion is the strongest principal-LEAVING boundary — hard-nav
       // so the App Router Router Cache is fully wiped (a soft push would leave
       // the deleted user's warm RSC shells reachable on this device).
-      window.location.assign("/login?deleted=true");
-    } catch {
-      setError("Network error. Please try again.");
-      setIsDeleting(false);
-    }
-  }
+      //
+      // (#8094) THE HARD NAV STAYS UNCONDITIONAL, and the pending fact rides the URL.
+      // A first cut of this change rendered the erasure-pending notice HERE and left
+      // navigation to a "Continue" button — which made GAP F user-discretionary. The
+      // cookies are already cleared by the response this fetch consumed, so the server
+      // side was closed; but the page underneath the notice is the full authenticated
+      // settings page, and with staleTimes.dynamic=30 a soft nav serves warm RSC
+      // segments from client memory with no middleware round-trip. A deleted principal
+      // could browse their own shells for as long as the notice sat open. The notice
+      // belongs on the unauthenticated side of the boundary, not in front of it.
+      latch();
+      window.location.assign(
+        data.gitDataErasurePending
+          ? "/login?deleted=true&erasure=pending"
+          : "/login?deleted=true",
+      );
+    },
+  );
 
   if (!isOpen) {
     return (
-      <button
+      <Button
+        variant="danger"
         type="button"
         onClick={() => setIsOpen(true)}
-        className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/50 hover:text-red-300"
       >
         Delete Account
-      </button>
+      </Button>
     );
   }
 
@@ -87,25 +110,29 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
       )}
 
       <div className="flex gap-3">
-        <button
+        <Button
+          variant="danger"
           type="button"
           onClick={handleDelete}
           disabled={!emailMatches || isDeleting}
-          className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+          loading={isDeleting}
+          loadingLabel="Deleting"
         >
-          {isDeleting ? "Deleting..." : "Confirm Deletion"}
-        </button>
-        <button
+          Confirm Deletion
+        </Button>
+        <Button
+          variant="outlined"
           type="button"
           onClick={() => {
             setIsOpen(false);
             setConfirmEmail("");
             setError(null);
           }}
-          className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+          disabled={isDeleting}
+          className="text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );

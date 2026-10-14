@@ -194,3 +194,36 @@ the "a monitor may not exist in Sentry while ingest still answers 202" class is 
 - `knowledge-base/project/learnings/2026-08-13-every-guard-i-shipped-was-satisfiable-by-a-guard-that-asserts-nothing.md`
   — same failure class (a control that reports success while asserting nothing), found four more
   times in the same PR's review
+
+## Addendum — 2026-09-20 (#8313): the scheduled path is now proven, not just the fix
+
+The `recovery_at` above cites a `workflow_dispatch` check-in, which proves the repair RESOLVES
+(the composite loads in a checkout-free job) but not that the SCHEDULED path — the one the
+monitor exists to watch — delivers. That distinction is the point of this PIR, so the scheduled
+rows are recorded here rather than folded into the field above.
+
+Measured 2026-09-20T14:35Z via `GET /monitors/scheduled-marketplace-drift/checkins/`:
+
+| run | event | check-in id | dateCreated |
+|---|---|---|---|
+| 35419097145 | `workflow_dispatch` (on `main`, merge commit `a50cf9ad2`) | `357ad056-ccfa-4b6c-8c0c-8b4bb2dde5f0` | 2026-09-19T03:44:21Z |
+| 35440135873 | `schedule` | `b86e28dd-f6b0-4293-a90f-cb720d894b52` | 2026-09-19T11:27:55Z |
+| 35508695589 | `schedule` | `3e307148-2590-4ecb-88fb-7138dc4d2c5b` | 2026-09-20T11:46:41Z |
+
+Run 35508695589's `drift-check` log re-read directly: **0** `Can't find` lines, no checkout step,
+`Download action repository 'jikig-ai/soleur@18887f8d5…'` at `Set up job`, and
+`sentry-heartbeat: http_code=202`. Monitor state `active`, environment `production` `ok`.
+
+One observation the dark window hid. Both scheduled ticks fired well after the `37 6 * * *`
+cron minute: 2026-09-19 at 11:26:55Z (**4h49m** late) and 2026-09-20 at 11:45:08Z (**5h08m**
+late). The lag is **not** runner queueing — each run's `created_at` equals its `run_started_at`
+to the second, so a runner was available immediately and the delay is in GitHub's delivery of
+the `schedule` event itself. Why GitHub delayed it is not measured here; the numbers are, and
+they are what matters downstream.
+
+The live monitor config reads `checkin_margin: 360` (re-read 2026-09-20), so a 5h08m tick clears
+the 6h margin with **~52 minutes** of headroom. That margin had never been exercised before,
+because until 2026-09-18 no check-in had ever arrived for it to be measured against. Two
+consequences worth carrying forward: tightening it toward the cron would alarm on GitHub's
+delivery lag rather than on a dark heartbeat, and the current headroom is thin enough that a
+worse-than-usual delivery day can page without anything being wrong with this workflow.

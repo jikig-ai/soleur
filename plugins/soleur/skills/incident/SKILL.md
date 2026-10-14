@@ -14,8 +14,12 @@ preconditions:
 ---
 
 <!-- soleur-cloud-mode:start -->
-**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
 
 # incident Skill
 
@@ -275,17 +279,17 @@ gate exists to stop escaping — a leak with a longer lifetime than the session.
 
 The two checks below have **different** jobs, and conflating them overstates the second.
 
-The **bare anchor is the load-bearing control.** The loader substitutes `${CLAUDE_PLUGIN_ROOT}` with the installed root at delivery, *before* this text reaches bash — so at this site there is no shell variable for an ambient `direnv` / `.bashrc` / `postinstall` value to poison. Measured directly, with a decoy value simultaneously live in the executing subprocess and ignored: [`phase-1-measurement.md`](../../../../knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md) Arm 4.
+The **bare anchor is the load-bearing control.** The loader substitutes `${CLAUDE_PLUGIN_ROOT}` with the installed root at delivery, *before* this text reaches bash — so at this site there is no shell variable for an ambient `direnv` / `.bashrc` / `postinstall` value to poison. Measured directly, with a decoy value simultaneously live in the executing subprocess and ignored: [`phase-1-measurement.md`](../../../../knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md) Arm 4.
 
-The **identity preflight is defence-in-depth** — for surfaces where substitution does *not* govern and the environment does. It is a *shape* check: it cannot distinguish an installed plugin from a checkout carrying the same manifest, and ADR-179 §(a) measured a shape check passing while an attacker-chosen payload executed. It is retained because it is the only control on an unsubstituted surface; it is not what makes the bare anchor safe. The stronger "assert the root is outside the working tree" form was evaluated and **rejected** — it guards an operand the adversary cannot reach here, breaks dogfooding on any plain clone, and reintroduces `git rev-parse` into the very gate this PR de-git-roots: [`b1-disposition.md`](../../../../knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md).
+The **identity preflight is defence-in-depth** — for surfaces where substitution does *not* govern and the environment does. It is a *shape* check: it cannot distinguish an installed plugin from a checkout carrying the same manifest, and ADR-179 §(a) measured a shape check passing while an attacker-chosen payload executed. It is retained because it is the only control on an unsubstituted surface; it is not what makes the bare anchor safe. The stronger "assert the root is outside the working tree" form was evaluated and **rejected** — it guards an operand the adversary cannot reach here, breaks dogfooding on any plain clone, and reintroduces `git rev-parse` into the very gate this PR de-git-roots: [`b1-disposition.md`](../../../../knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md).
 
 Each halt emits a `SOLEUR_*` marker on stdout so a refusal is visible in telemetry rather than only to whoever was watching the terminal (`hr-observability-as-plan-quality-gate`; same pattern as `go.md`'s `SOLEUR_GIT_REPO_DIAG`). The operator guidance is **state-discriminating**: an empty root and a wrong root need different actions, and "re-run this skill" is not an action for either.
 
 ```bash
-DRAFT="$(mktemp)" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
+DRAFT="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
                        echo "incident: cannot allocate a draft file — stopping before any post-mortem text exists." >&2
                        exit 2; }
-trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+trap 'rm -f "$DRAFT"; rmdir "$(dirname "$DRAFT")" 2>/dev/null' EXIT INT TERM HUP
 
 # Write the drafted post-mortem into "$DRAFT" here — in THIS fence, before the gate below.
 # Use a QUOTED heredoc delimiter (`<<'PIR_EOF'`), which is load-bearing twice over: production

@@ -10,7 +10,8 @@
 // Going live later is a one-flag-flip (CONCIERGE_ONLINE = true) + wiring the
 // composer onSubmit to the conversation backend (tracked follow-up).
 
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { CONCIERGE_ONLINE } from "./concierge-flag";
 
 const INTRO_MESSAGE =
@@ -63,24 +64,25 @@ export function IssueConciergePanel() {
           aria-label="Message Concierge"
           className="flex-1 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none"
         />
-        <button
+        <Button
+          variant="outlined"
           type="button"
           disabled={!CONCIERGE_ONLINE}
           aria-label="Send"
           className="rounded-lg border border-soleur-border-default px-3 py-2 text-sm text-soleur-text-secondary disabled:cursor-not-allowed disabled:opacity-60"
         >
           Send
-        </button>
+        </Button>
       </div>
 
       {/* Real, working escape hatch to the live chat surface. */}
-      <Link
+      <NavLink
         href="/dashboard/chat"
         className="mt-3 inline-flex items-center gap-1 text-sm text-soleur-accent-gold-text transition-opacity hover:opacity-80"
       >
         Discuss in Chat
         <span aria-hidden="true">→</span>
-      </Link>
+      </NavLink>
     </section>
   );
 }

@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { PENDING_ESCALATION_MS } from "@/lib/pending-timing";
+
+// ~8s escalation delay (feat-ui-action-feedback brief §5): sign-out is one of
+// the named irreversible-path surfaces — a pending episode older than this
+// appends "Still working…" to a polite live region so a slow sign-out never
+// reads as hung.
+const ESCALATION_DELAY_MS = PENDING_ESCALATION_MS;
 
 interface SignOutConfirmModalProps {
   open: boolean;
@@ -20,10 +28,20 @@ export function SignOutConfirmModal({
   const triggerRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   const isSigningOutRef = useRef(isSigningOut);
+  const [stillWorking, setStillWorking] = useState(false);
   useEffect(() => {
     onCloseRef.current = onClose;
     isSigningOutRef.current = isSigningOut;
   });
+
+  // ~8s escalation (brief §5). The timer resets per pending episode — a fresh
+  // sign-out attempt gets a fresh clock.
+  useEffect(() => {
+    setStillWorking(false);
+    if (!isSigningOut) return;
+    const timer = setTimeout(() => setStillWorking(true), ESCALATION_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [isSigningOut]);
 
   useEffect(() => {
     if (!open) return;
@@ -93,26 +111,38 @@ export function SignOutConfirmModal({
           You&apos;ll be returned to the login page. Any unsaved input in the
           current view may be lost.
         </p>
+        {/* Reserved-space escalation sublabel (brief §5): always mounted so
+            "Still working…" populating causes zero layout shift. */}
+        <p
+          role="status"
+          aria-live="polite"
+          className="mb-4 min-h-5 text-xs text-soleur-text-muted"
+        >
+          {stillWorking ? "Still working…" : ""}
+        </p>
         <div className="flex justify-end gap-3">
-          <button
+          <Button
+            variant="outlined"
             ref={cancelButtonRef}
             type="button"
             onClick={onClose}
             disabled={isSigningOut}
-            className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            className="text-soleur-text-secondary hover:text-soleur-text-primary"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="gold"
             type="button"
             onClick={onConfirm}
             disabled={isSigningOut}
+            loading={isSigningOut}
+            loadingLabel="Signing out"
+            modal
             aria-label="Sign out"
-            aria-busy={isSigningOut || undefined}
-            className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {isSigningOut ? "Signing out…" : "Sign out"}
-          </button>
+            Sign out
+          </Button>
         </div>
       </div>
     </div>

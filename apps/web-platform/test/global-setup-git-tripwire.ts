@@ -14,9 +14,15 @@
 // than 97. From globalSetup the real code propagates.
 import { assertNoInheritedGitLocation } from "../../../plugins/soleur/test/lib/git-tripwire";
 import { ensureIncidentSandbox } from "../../../plugins/soleur/test/lib/incident-sandbox";
+import { ensureScratchSession } from "../../../plugins/soleur/test/lib/scratch-session";
 
 export default function setup(): void {
   assertNoInheritedGitLocation("vitest");
+  // Bind ONE per-run scratch root (#9117) BEFORE the incident sandbox, or `soleur-inc-*` lands in the
+  // shared base and escapes it. One root per run, not per worker: workers fork after globalSetup and
+  // inherit TMPDIR and SOLEUR_SCRATCH_SESSION_ROOT (a valid parent root is adopted, never deleted).
+  // Measured leak on a direct `vitest run <file>`: one `soleur-inc-*` entry left in the TMPDIR base.
+  ensureScratchSession();
   // Redirect incident telemetry at the same chokepoint (#7853). Measured for this runner rather
   // than assumed: vitest forks its workers AFTER globalSetup, so a `process.env` write here is in
   // the parent image the children inherit. Verified under both `pool: "forks"` and

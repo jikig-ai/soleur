@@ -31,7 +31,12 @@
 #   credentials-rejected      rc=22  body names an auth failure
 #   source-under-maintenance  rc=22  body names maintenance
 #   source-not-in-connection  rc=22  body names CLUSTER_DOESNT_EXIST (#7867)
-#   reader-refusal            rc 2/64/78   destination pin / usage / trace
+#   reader-refusal            rc 2/64/78   destination pin / credential-shape refusal / usage / trace.
+#                                    rc 2 is ALSO the reader refusing a credential value that cannot be
+#                                    carried safely (quote, backslash, control character, colon in the
+#                                    username): stderr then names only the VARIABLE and carries the marker
+#                                    SOLEUR_CREDENTIAL_REFUSED. The remedy is to re-mint that credential
+#                                    (or fix its Doppler value), NOT to file an issue about the reader.
 #   transport                 rc 6/7/28/35 DNS / connect / timeout / TLS, and
 #                             rc 124/137   the caller's `timeout` expired / killed it
 #   other                     anything else
@@ -64,7 +69,7 @@ bs_read_classify() {
     3)          printf '%s\n' 'credentials-absent'; return 0 ;;
     1)          printf '%s\n' 'reader-exit-1';      return 0 ;;
     6|7|28|35|124|137) printf '%s\n' 'transport';   return 0 ;;
-    2|64|78)    printf '%s\n' 'reader-refusal';     return 0 ;;
+    2|64|78)    printf '%s\n' 'reader-refusal';     return 0 ;;  # pin / credential shape (re-mint) / usage / trace
     22)         : ;;  # fall through to the body greps below
     *)          printf '%s\n' 'other';              return 0 ;;
   esac

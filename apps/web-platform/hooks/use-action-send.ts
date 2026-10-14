@@ -29,11 +29,20 @@
 //                        between writeActionSend and archive flip threw.
 //                        Cards should render "Acknowledged (queued)" copy.
 //   confirming        — non-null while the typed-confirm modal is open.
+//   confirmPending    — typed-confirm POST in flight. The modal stays
+//                        open (`confirming` is NOT cleared until the POST
+//                        resolves) so the founder sees "Sending…" instead
+//                        of a silent gap (was: modal closed before the
+//                        POST — the highest-stakes feedback gap).
 //   onConfirmTyped    — called from the typed-confirm modal submit.
 //   onCancelConfirm   — called from the typed-confirm modal cancel.
 
 import { useState, useTransition } from "react";
 
+import { reportSilentFallback } from "@/lib/client-observability";
+// Shared 30s termination horizon with the pending watchdog — one clock for
+// every "hung request must not hold the UI" path in the feature.
+import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import type { DenyReason } from "@/server/templates/is-template-authorized";
 
 export interface ConfirmationPayload {
@@ -69,6 +78,7 @@ export interface UseActionSendResult {
   artifactUrl: string;
   degraded: "enqueue_failed" | "no_artifact_in_pr_a" | undefined;
   confirming: ConfirmationPayload | null;
+  confirmPending: boolean;
   onConfirmTyped: (confirmedTyped: boolean, typedValue: string) => void;
   onCancelConfirm: () => void;
 }
@@ -78,6 +88,7 @@ export function useActionSend(
 ): UseActionSendResult {
   const { messageId, denyReasonCopy, onAcknowledgedArchive } = opts;
   const [isPending, startTransition] = useTransition();
+  const [confirmPending, startConfirmTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [artifactUrl, setArtifactUrl] = useState("");
@@ -93,11 +104,28 @@ export function useActionSend(
     typed_value: string;
     expected_draft_preview_hash: string;
   }) {
+    // Pending must always terminate (spec FR2): an unbounded POST would lock
+    // the typed-confirm modal open with every dismiss vector inert. Abort at
+    // the watchdog horizon so the transition resolves into the in-modal
+    // role="alert" error path instead.
     return fetch(`/api/dashboard/today/${messageId}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(extra ?? {}),
+      signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
     });
+  }
+
+  function sendFailureMessage(err: unknown): string {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      reportSilentFallback(err, {
+        feature: "ui-action-feedback",
+        op: "action-send-timeout",
+        message: `send POST exceeded ${PENDING_WATCHDOG_MS}ms — aborted`,
+      });
+      return "Send timed out — please try again";
+    }
+    return "Send failed — network error";
   }
 
   function handle200(json: {
@@ -186,17 +214,20 @@ export function useActionSend(
           }
         }
         setError(`Send failed (${res.status})`);
-      } catch {
-        setError("Send failed — network error");
+      } catch (err) {
+        setError(sendFailureMessage(err));
       }
     });
   }
 
   function onConfirmTyped(_confirmedTyped: boolean, typedValue: string) {
     const pendingHash = confirming?.expectedDraftPreviewHash ?? "";
-    setConfirming(null);
     setError(null);
-    startTransition(async () => {
+    // `confirming` stays set for the whole flight — the modal renders the
+    // pending state and closes only on RESOLUTION: success clears it via
+    // the acknowledged paths below; failure keeps it open with `error`
+    // rendered in-modal (the typed SEND value persists).
+    startConfirmTransition(async () => {
       try {
         const res = await postSend({
           confirmed_typed: true,
@@ -210,6 +241,7 @@ export function useActionSend(
             artifact_view_url?: string;
             degraded?: string;
           };
+          setConfirming(null);
           handle200(json);
           return;
         }
@@ -218,6 +250,7 @@ export function useActionSend(
             error?: string;
           };
           if (json.error === "already_sent") {
+            setConfirming(null);
             setAcknowledged(true);
             onAcknowledgedArchive?.();
             return;
@@ -226,13 +259,18 @@ export function useActionSend(
           return;
         }
         setError(`Send failed (${res.status})`);
-      } catch {
-        setError("Send failed — network error");
+      } catch (err) {
+        setError(sendFailureMessage(err));
       }
     });
   }
 
   function onCancelConfirm() {
+    // Never cleared mid-flight — Cancel is inert while the POST is out.
+    // Belt-and-suspenders: the modal already makes every dismiss vector
+    // inert while confirmPending, so this guard is unreachable in practice —
+    // kept as defense if a future consumer wires onCancelConfirm loosely.
+    if (confirmPending) return;
     setConfirming(null);
   }
 
@@ -244,6 +282,7 @@ export function useActionSend(
     artifactUrl,
     degraded,
     confirming,
+    confirmPending,
     onConfirmTyped,
     onCancelConfirm,
   };

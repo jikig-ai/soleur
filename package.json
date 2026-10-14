@@ -5,7 +5,7 @@
     "test": "bash scripts/test-all.sh",
     "docs:dev": "npx @11ty/eleventy --serve",
     "docs:build": "npx @11ty/eleventy",
-    "prepare": "bash scripts/install-kb-merge-driver.sh"
+    "prepare": "bash scripts/ensure-kb-index.sh --soft"
   },
   "devDependencies": {
     "@11ty/eleventy": "^3.1.5",
@@ -15,13 +15,17 @@
     "yaml": "^2.8.2"
   },
   "overrides": {
-    "js-yaml": "^4.3.1",
+    "js-yaml": "^4.3.2",
     "gray-matter": {
       "js-yaml": "^3.15.1"
     },
     "brace-expansion": "^1.1.16",
     "markdownlint-cli": {
-      "brace-expansion": "^5.0.8"
+      "brace-expansion": "^5.0.8",
+      "smol-toml": "1.9.1"
+    },
+    "micromark-extension-math": {
+      "katex": "0.18.2"
     }
   }
 }

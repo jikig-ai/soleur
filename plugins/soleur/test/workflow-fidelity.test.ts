@@ -29,7 +29,9 @@ import {
   declaredTransitions,
   isDeclaredTransition,
   DECLARED_TRANSITIONS,
+  DECLARED_SUB_STEPS,
   workflowFidelityInstructions,
+  formatSkillRef,
 } from "../lib/workflow-fidelity";
 import { invokeSkill, routingInstructions, pollInstructions } from "../lib/harness";
 import { dispatchGoRoute, expectedGrokSlashCommand, grokTestEnv } from "../lib/go-routing";
@@ -143,6 +145,27 @@ describe("workflow-fidelity contract", () => {
     expect(pollInstructions("grok")).toContain("FORBIDDEN");
     expect(pollInstructions("claude")).toContain("Monitor tool");
     expect(pollInstructions("claude")).toContain("postmerge");
+  });
+
+  test("formatSkillRef renders cursor names with go and sync bare", () => {
+    expect(formatSkillRef("go", "cursor")).toBe("/go");
+    expect(formatSkillRef("sync", "cursor")).toBe("/sync");
+    expect(formatSkillRef("help", "cursor")).toBe("/soleur-help");
+    expect(formatSkillRef("plan", "cursor")).toBe("/soleur-plan");
+    expect(formatSkillRef("review", "cursor")).toBe("/soleur-review");
+    expect(formatSkillRef("one-shot", "cursor")).toBe("/soleur-one-shot");
+  });
+
+  test("cursor workflow fidelity reads the stub file and skips the shared essay", () => {
+    const md = workflowFidelityInstructions("cursor");
+    expect(md).toContain("canonical file");
+    expect(md).toContain("/go");
+    expect(md).toContain("/soleur-plan");
+    expect(md).not.toContain("/soleur-go");
+    expect(md).not.toContain("Stop hook");
+    expect(md).not.toContain("Skill");
+    expect(md).not.toContain("Task");
+    expect(workflowFidelityInstructions("grok")).toContain("Stop hook");
   });
 
   test("one-shot invokeSkill stresses full pipeline on Grok", () => {
@@ -523,14 +546,34 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
     expect(step1).toContain("Skill tool");
   });
 
-  test("go.md plugin-root prefers GROK_PLUGIN_ROOT then CLAUDE_PLUGIN_ROOT with no CWD default", () => {
+  test("go.md plugin-root resolves from the loader token, then GROK_PLUGIN_ROOT, with no CWD default", () => {
+    // This test PINNED `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` from 2026-09-12 to
+    // 2026-09-19 (#8061 -> #8308). The loader substitutes only the exact braced literal
+    // `${CLAUDE_PLUGIN_ROOT}` — measured on Claude Code and Grok Build 1.0.34, #7450
+    // phase-1-measurement.md §Arm 5 — so that form reached bash verbatim and expanded empty,
+    // and all three /soleur:go session gates took their degraded branch while CI stayed green
+    // over the literal. A guard that pins the defect is worse than no guard.
     const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
-    expect(goMd).toContain('ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"');
+    // CALL-FORM anchors, not bare tokens. `toContain("GROK_PLUGIN_ROOT")` and
+    // `toContain("SOLEUR_PLUGIN_ROOT_RESOLVE")` were both satisfied by this PR's OWN new
+    // operator-facing prose ("Read the `SOLEUR_PLUGIN_ROOT_RESOLVE` line…", "`GROK_PLUGIN_ROOT`
+    // is set but…"), so deleting all four echo lines and the entire grok-env arm left this test
+    // green. The diff created the satisfier and the assertion together —
+    // `cq-assert-anchor-not-bare-token`.
+    expect(goMd).toContain('ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token');
+    expect(goMd).toContain('ROOT="$GROK_PLUGIN_ROOT"; SRC=grok-env');
+    expect(goMd).toContain('echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=');
     expect(goMd).toContain("plugin-root-unverified");
-    expect(goMd).not.toContain(":-./plugins/soleur");
     expect(goMd).toContain("grok inspect");
+    // A bare `ROOT="${CLAUDE_PLUGIN_ROOT}"` prefix is not enough on its own: an indirection
+    // (`XROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${GROK_PLUGIN_ROOT:-$XROOT}"`) contains it while
+    // functionally reverting the arm order, and dodges both negatives below. Measured green
+    // before the call-form anchors above were added.
+    expect(goMd).not.toContain(":-$CLAUDE_PLUGIN_ROOT");
+    expect(goMd).not.toContain(":-./plugins/soleur");
+    expect(goMd).not.toMatch(/ROOT="\$\{GROK_PLUGIN_ROOT:-/);
     const namePin = `grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"'`;
-    expect(goMd.split(namePin).length - 1).toBeGreaterThanOrEqual(2);
+    expect(goMd.split(namePin).length - 1).toBeGreaterThanOrEqual(3);
   });
 
   test("public getting-started does not overclaim Grok support", () => {
@@ -667,12 +710,13 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(declaredTransitions("review")).toEqual(["compound", "work"]);
     expect(declaredTransitions("compound")).toEqual(["ship"]);
     expect(declaredTransitions("ship")).toEqual(["postmerge", "work"]);
-    expect(declaredTransitions("postmerge")).toEqual([]);
+    expect(declaredTransitions("postmerge")).toEqual(["work"]);
   });
 
-  test("the three operator-approved back-edges are declared", () => {
+  test("the four operator-approved back-edges are declared", () => {
     expect(isDeclaredTransition("review", "work")).toBe(true);
     expect(isDeclaredTransition("ship", "work")).toBe(true);
+    expect(isDeclaredTransition("postmerge", "work")).toBe(true);
     expect(isDeclaredTransition("work", "plan")).toBe(true);
   });
 
@@ -685,8 +729,12 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(declaredTransitions("plan")).not.toContain("ship");
   });
 
-  test("postmerge -> work is NOT declared (rejected as redundant with ship -> work)", () => {
-    expect(isDeclaredTransition("postmerge", "work")).toBe(false);
+  // Declared 2026-09-19 (#8325): seven sessions took this edge, five of them
+  // re-entering work -> review -> compound -> ship -> postmerge in full; the
+  // recovery path was recorded on the ship node until then.
+  test("postmerge -> work is the post-merge verification recovery edge", () => {
+    expect(isDeclaredTransition("postmerge", "work")).toBe(true);
+    expect(declaredTransitions("postmerge")).toEqual(["work"]);
   });
 
   // The semantic separation, pinned from the other side: a back-edge must never
@@ -695,6 +743,7 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(mandatorySuccessors("work")).not.toContain("plan");
     expect(mandatorySuccessors("review")).not.toContain("work");
     expect(mandatorySuccessors("ship")).not.toContain("work");
+    expect(mandatorySuccessors("postmerge")).not.toContain("work");
   });
 
   // THE WIRE BETWEEN THE TWO FUNCTIONS. The toEqual pins on mandatorySuccessors
@@ -733,6 +782,12 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(pipelineInvocationSuffix("work", "grok")).not.toContain("/plan");
     expect(pipelineInvocationSuffix("ship", "grok")).toContain("/postmerge");
     expect(pipelineInvocationSuffix("ship", "grok")).not.toContain("/work");
+    // postmerge DECLARES `work` as of #8325, and mandatorySuccessors("postmerge")
+    // is still empty — which is the whole point of the permitted-vs-mandatory
+    // split. These two assert the ABSENCE of the back-edge from rendered prompt
+    // text: a legal transition must never render as a directive.
+    expect(pipelineInvocationSuffix("postmerge", "grok")).toContain("Phase 7");
+    expect(pipelineInvocationSuffix("postmerge", "grok")).not.toContain("/work");
   });
 
   // Typo guard: every destination must itself be a declared node, so a mistyped
@@ -797,7 +852,9 @@ describe("declared-transitions derived view parity", () => {
     delete view._comment;
     // Round-trip the const through JSON so readonly/tuple types normalise to
     // plain arrays for a structural compare.
-    const canonical = JSON.parse(JSON.stringify({ transitions: DECLARED_TRANSITIONS }));
+    const canonical = JSON.parse(
+      JSON.stringify({ transitions: DECLARED_TRANSITIONS, sub_steps: DECLARED_SUB_STEPS }),
+    );
     expect(view).toEqual(canonical);
   });
 
@@ -816,6 +873,36 @@ describe("declared-transitions derived view parity", () => {
         ).toBe(true);
       }
     }
+  });
+
+  // Same direction check for the sub-step map (#8325): a view collapsing a
+  // record the const does not name would silently delete pairs from the
+  // classifier's reading.
+  test("the view names no sub-step absent from the const", () => {
+    const view = JSON.parse(readFileSync(VIEW_PATH, "utf-8")) as {
+      sub_steps: Record<string, string[]>;
+    };
+    for (const [node, subs] of Object.entries(view.sub_steps)) {
+      for (const sub of subs) {
+        expect(
+          (DECLARED_SUB_STEPS[node] ?? []).includes(sub),
+          `view names sub-step ${node} : ${sub}, which the canonical const does not`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // Name both key sets outright (#8399): a missing mirror key then fails with a
+  // named message rather than inside a deep-equal diff.
+  test("the view's sub_steps and transitions key sets are the reviewed ones", () => {
+    const view = JSON.parse(readFileSync(VIEW_PATH, "utf-8")) as {
+      transitions: Record<string, string[]>;
+      sub_steps: Record<string, string[]>;
+    };
+    expect(Object.keys(view.sub_steps).sort()).toEqual(["brainstorm", "plan", "postmerge", "ship"]);
+    expect(Object.keys(view.transitions).sort()).toEqual([
+      "brainstorm", "compound", "plan", "postmerge", "review", "ship", "work",
+    ]);
   });
 
   // THE RATCHET'S NODE SET IS THIS SET. scripts/lint-skill-body-budget.py derives
@@ -837,4 +924,158 @@ describe("declared-transitions derived view parity", () => {
     expect(Object.keys(budget.ceilings).sort()).toEqual([...nodes].sort());
   });
 
+});
+
+// ---------------------------------------------------------------------------
+// Sub-step map invariants (#8325). DECLARED_SUB_STEPS is consumed by the
+// classifier AFTER its node filter and BEFORE pairing, so an entry is only
+// meaningful when both sides are lifecycle nodes and the value is not already a
+// declared successor of the key (the collapse would delete a declared pair).
+// Each test opens with a non-empty check so an emptied const cannot pass as a
+// zero-iteration loop.
+// ---------------------------------------------------------------------------
+describe("DECLARED_SUB_STEPS invariants", () => {
+  const nodes = Object.keys(DECLARED_TRANSITIONS);
+
+  // THE SET, not just its members. Every invariant below constrains the SHAPE
+  // of an entry; none of them says which entries exist, so a rule-legal
+  // addition (e.g. `postmerge: ["plan"]` — key is a node, value is a node, value
+  // is not a declared successor of its key) passes all of them while silently
+  // deleting every real `postmerge -> plan` pair from the classifier. Adding a
+  // sub-step is a semantic claim about a SKILL.md, so it must be made here.
+  test("DECLARED_SUB_STEPS is exactly the reviewed set", () => {
+    expect(DECLARED_SUB_STEPS).toEqual({
+      brainstorm: ["compound"],
+      plan: ["compound"],
+      postmerge: ["compound"],
+      ship: ["compound", "review"],
+    });
+  });
+
+  // A sub-step entry is a claim about a SKILL.md: the key's own run invokes the
+  // value. Pin that claim to each section that makes it, so moving or deleting
+  // the call fails here instead of silently collapsing real pairs (#8399).
+  // Anchored per ENTRY, not per key (#8627): ship makes two different sub-step
+  // calls from three different sections. A heading's scope runs to the next H2.
+  // Section-scoped, not file-wide: ship names `skill: soleur:compound` in
+  // Headless Mode Detection too, which would survive deleting Phase 2.
+  // `brainstorm` is scoped by its H3 `### Phase 4: Handoff`: an H2 scope would
+  // stop at the `## Domain Assessments` line that sits inside a fenced markdown
+  // template earlier in that file. LIMITS (accepted, #8399 and #8627 reviews):
+  // the match is textual, so a sentence that merely MENTIONS the call ("do not
+  // run `skill: soleur:compound`") satisfies it, and one surviving call in a
+  // section with several keeps it green — ship Phase 2 has three compound calls,
+  // and Phase 1.5 has two review calls, so deleting either one of those is
+  // invisible here. Phase 5.5 holds exactly one review call today (the Code
+  // Review Completion Gate); a second `skill: soleur:review` mention anywhere
+  // in that H2 scope would mask deleting it, because a scope always ends at the
+  // next H2 whatever the anchor's own level. It proves the
+  // designed call is named where the entry says, not that it is the only or an
+  // unconditional one, and it cannot see a designed call the map does not list.
+  test("every sub-step is invoked by its key's SKILL.md in each section that owns it", () => {
+    const ANCHORS: Record<string, Record<string, readonly string[]>> = {
+      brainstorm: { compound: ["### Phase 4: Handoff"] },
+      plan: { compound: ["## Exit Gate"] },
+      postmerge: { compound: ["## Phase 6: Update Issue and Compound"] },
+      ship: {
+        compound: ["## Phase 2: Capture Learnings"],
+        review: ["## Phase 1.5: Review Evidence Gate", "## Phase 5.5: Pre-Ship Review Gates"],
+      },
+    };
+    // Loop over the CONST, not over ANCHORS: an unanchored entry fails on its
+    // own named message below.
+    let checks = 0;
+    for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
+      const text = readFileSync(join(PLUGIN_ROOT, "skills", node, "SKILL.md"), "utf-8");
+      const lines = text.split("\n");
+      for (const sub of subs) {
+        const headings = ANCHORS[node]?.[sub] ?? [];
+        expect(headings.length, `${node}:${sub} has no anchor headings`).toBeGreaterThan(0);
+        for (const heading of headings) {
+          const start = lines.findIndex((l) => l.startsWith(heading));
+          expect(start, `${node}/SKILL.md has no section starting "${heading}"`).toBeGreaterThanOrEqual(0);
+          const rest = lines.slice(start + 1);
+          const end = rest.findIndex((l) => l.startsWith("## "));
+          const scope = (end === -1 ? rest : rest.slice(0, end)).join("\n");
+          expect(
+            new RegExp(`skill: soleur:${sub}(?![\\w-])`).test(scope),
+            `${node}/SKILL.md ${heading} does not invoke \`skill: soleur:${sub}\``,
+          ).toBe(true);
+          checks++;
+        }
+      }
+    }
+    // The heading total, reviewed like the entry set above: a heading dropped
+    // from ANCHORS (e.g. to "fix" a deleted Phase 5.5 call) fails here.
+    expect(checks).toBe(6);
+  });
+
+  // ship calls review as a SUB-STEP, so review must return to ship rather than
+  // run its standalone exit (compound, then ship again — a nested second ship
+  // run, measured in ADR-229's 2026-09-23 re-baseline). The contract is an
+  // explicit `--parent ship` argument: every ship call site passes it, and each
+  // review site that decides standalone-vs-pipeline honours it.
+  test("every ship -> review call passes --parent ship and review honours it", () => {
+    const ship = readFileSync(join(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    const calls = ship.split("\n").filter((l) => /skill: soleur:review(?![\w-])/.test(l));
+    expect(calls.length).toBe(3);
+    for (const l of calls) {
+      expect(l, `ship call site lacks --parent ship: ${l.slice(0, 120)}`).toContain(
+        "`skill: soleur:review` with args `--parent ship`",
+      );
+    }
+    const review = readFileSync(join(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8").split("\n");
+    const site = (prefix: string) => review.find((l) => l.startsWith(prefix)) ?? "";
+    expect(site("**Lifecycle handoff (standalone `soleur:review`):**")).toContain("`--parent ship`");
+    expect(site("- [ ] Strip a leading `--parent ship` token")).not.toBe("");
+    expect(site("**Pipeline detection (run BEFORE writing the summary):**")).toContain("`--parent ship`");
+    expect(site("**Pipeline detection:** If the conversation contains")).toContain(
+      "**If the arguments carried `--parent ship`,** run only step 3",
+    );
+    // Precedence: under one-shot/work -> ship -> review both signals hold, and
+    // the trailer must still be emitted (ship re-reads it).
+    expect(site("**Pipeline detection:** If the conversation contains")).toContain(
+      "This clause wins over the conversation scan above",
+    );
+  });
+
+  // Same gap one level up: the edge set's members are each pinned by toEqual,
+  // but nothing pinned which KEYS exist, so a mirrored `qa: ["ship"]` entered
+  // fully green (the budget-ceiling test only catches a name that is not
+  // already a ceiling row).
+  test("DECLARED_TRANSITIONS is exactly the seven lifecycle nodes", () => {
+    expect(Object.keys(DECLARED_TRANSITIONS).sort()).toEqual([
+      "brainstorm", "compound", "plan", "postmerge", "review", "ship", "work",
+    ]);
+  });
+
+  test("every sub_steps key is a lifecycle node", () => {
+    expect(Object.keys(DECLARED_SUB_STEPS).length).toBeGreaterThan(0);
+    for (const node of Object.keys(DECLARED_SUB_STEPS)) {
+      expect(nodes.includes(node), `sub_steps key ${node} is not a lifecycle node`).toBe(true);
+    }
+  });
+
+  test("every sub_steps value is a lifecycle node — a non-node is removed by the classifier before the collapse, so the entry would be dead", () => {
+    // Guard the collection this test actually LOOPS over: a key-count check
+    // leaves `{brainstorm: []}` as a zero-iteration quantifier.
+    expect(Object.values(DECLARED_SUB_STEPS).flat().length).toBeGreaterThan(0);
+    for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
+      for (const sub of subs) {
+        expect(nodes.includes(sub), `sub_steps ${node} : ${sub} is not a lifecycle node`).toBe(true);
+      }
+    }
+  });
+
+  test("a sub_steps value is not a declared successor of its key — the collapse would delete a declared pair", () => {
+    expect(Object.values(DECLARED_SUB_STEPS).flat().length).toBeGreaterThan(0);
+    for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
+      for (const sub of subs) {
+        expect(
+          isDeclaredTransition(node, sub),
+          `sub_steps ${node} : ${sub} is also a declared edge ${node} -> ${sub}`,
+        ).toBe(false);
+      }
+    }
+  });
 });

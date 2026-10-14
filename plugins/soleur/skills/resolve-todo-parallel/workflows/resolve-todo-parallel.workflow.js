@@ -242,7 +242,7 @@ function resolveWorkflowModel(tier) {
   var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
   var claude = !!env.CLAUDECODE
   var map = grok
-    ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
+    ? { cheap: 'grok-4.5', standard: 'grok-4.7', strong: 'grok-4.7', advisor: 'grok-4.7', inherit: 'inherit' }
     : claude
       ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
       : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
@@ -309,6 +309,7 @@ phase('Resolve')
 const RESOLVE_FLOOR = 80_000
 const results = []
 const budgetSkipped = []
+let resolversSpawned = 0 // #9403: pipeline-tally `counts` surface
 for (let i = 0; i < tiers.length; i++) {
   const tier = tiers[i]
   if (budget.total && budget.remaining() < RESOLVE_FLOOR) {
@@ -317,6 +318,7 @@ for (let i = 0; i < tiers.length; i++) {
     break
   }
   log(`Tier ${i}: resolving ${tier.length} todo(s) in parallel — ${tier.map((t) => t.issueId).join(', ')}.`)
+  resolversSpawned += tier.length // #9403: pipeline-tally `counts` surface
   const tierResults = (
     await parallel(
       tier.map((t) => () => agent(resolvePrompt(t, i), { label: `resolve:${t.issueId}`, phase: 'Resolve', schema: RESOLVE_SCHEMA })),
@@ -362,6 +364,13 @@ const report = {
   tiers: tiers.length,
   tierPlan: tiers.map((tier, i) => ({ tier: i, ids: tier.map((t) => t.issueId) })),
   fanOutAgents: todos.length,
+  // #9403: pipeline-tally bridge — invoking prose posts these via
+  // `pipeline-tally.sh incr <dim> <n>`. agent_rounds = resolver agents actually
+  // spawned (tiers skipped by the budget floor never dispatched — not counted).
+  counts: {
+    agent_rounds: resolversSpawned,
+    ci_cycles: commit.pushed ? 1 : 0, // the final push retriggers CI
+  },
   totals: {
     resolved: resolved.length,
     deferred: deferred.length,

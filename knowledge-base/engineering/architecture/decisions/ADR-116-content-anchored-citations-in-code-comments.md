@@ -5,9 +5,9 @@ date: 2026-07-16
 related_adrs: [ADR-071, ADR-076, ADR-092]
 related: [6517, 6479, 6456, 6529, 4270]
 related_plans:
-  - knowledge-base/project/plans/2026-07-16-feat-citation-rot-bare-token-gates-plan.md
+  - knowledge-base/project/plans/archive/20261013-041741-2026-07-16-feat-citation-rot-bare-token-gates-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-citation-rot-bare-token-gates/spec.md
+  - knowledge-base/project/specs/archive/20261013-041741-feat-citation-rot-bare-token-gates/spec.md
 brand_survival_threshold: single-user incident
 ---
 

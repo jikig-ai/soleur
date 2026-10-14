@@ -35,6 +35,10 @@ ROOT="$(git rev-parse --show-toplevel)" || exit 2
 # as lint-orphan-test-suites.test.sh's LINT_ORPHAN_TARGET_OVERRIDE). CI never sets it.
 GUARD="${SFA_GUARD_OVERRIDE:-$ROOT/apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh}"
 INFRA="$ROOT/apps/web-platform/infra"
+# The scorer is located from THIS file, never from the cwd's checkout.
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../infra" && pwd)/lib/mutation-scorer.sh" \
+  || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 [[ -f "$GUARD" ]] || { echo "FATAL: guard not found at $GUARD" >&2; exit 2; }
 
 # The guard's seams are its INPUT CONTRACT. Every input this battery sandboxes must be reachable
@@ -97,10 +101,8 @@ open(p, 'w').write(s)
 PYEOF
 }
 landed() { ! cmp -s "$SB/$1" "$PR/$1"; }
-attributed() { # <anchor>... -> 0 when every anchor is on a [FAIL] line of $OUT
-  local a
-  for a in "$@"; do grep -F '[FAIL]' "$OUT" | grep -qF -- "$a" || return 1; done
-}
+# <anchor>... -> 0 when every anchor is on a [FAIL] line of $OUT. Zero anchors aborts (exit 2).
+attributed() { mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$@"; }
 
 # expect_red <label> <file> <anchor>... -- the mutation script is read from MUT
 expect_red() {
@@ -145,13 +147,30 @@ expect_green_added() {
 # (no slack: a whole check deleted from the guard is a count change, and nothing else sees it)
 # 58 -> 59 at #6894: the guard's NON_PAGING_MARKERS gained the LUKS cutover seam refusal (a bare
 # `logger -t`, user.notice), which adds one census row.
-BASELINE_PASSES=59
+# 59 -> 62 and 6 -> 7 guard cases at #8706: workspaces-luks-emit.sh joins the paging population
+# (its no_dsn / send_failed exits emit SOLEUR_WORKSPACES_LUKS_SEND_FAILED through a crit emit_refusal).
+# 62 -> 65 and 7 -> 9 guard cases at #9597: container-restart-monitor adds a never-page SEND_SKIPPED
+# marker (reason=token_shape) and disk-monitor / resource-monitor add a paging REFUSED marker for the same
+# refusal (their Resend email is the ONLY channel, so a malformed key must page exactly as the 401 it
+# replaced did); the guard classifies each by needle, so no mutation row changes.
+# 65 -> 66 at #7777: NON_PAGING_MARKERS gains SOLEUR_INNGEST_CUTOVER_REFLUSH_REFUSED — a bare
+# `logger -t` user.notice evidence-validation refusal (same class as the SEAM_REFUSED entry),
+# adding one census row. The case count is unchanged.
+# 66 -> 67 at #9597 (S4): NON_PAGING_MARKERS gains SOLEUR_CREDENTIAL_REFUSED — infra-config-verify.sh prints
+# it to stderr inside the apply-deploy-pipeline-fix job, so it never reaches web-1 journald. One census row;
+# the case count is unchanged.
+# 71 -> 73 at #9757 residue: luks-monitor.sh and web-git-data-probe.sh now emit SOLEUR_CREDENTIAL_REFUSED (non-paging), one stays-below-crit check each.
+# 67 -> 71 at #9597 (S5): the four Better Stack posting scripts of cloud-init-registry.yml (disk heartbeat, log shipper,
+# private-NIC guard, boot block) each print SOLEUR_CREDENTIAL_REFUSED on a refused ingest token, to stderr and never at crit. The guard
+# scans cloud-init*.yml, so each emitter is one NON_PAGING census row (+4); the case count is unchanged. No mutation row changes.
+BASELINE_PASSES=73
+BASELINE_CASES=9
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
 else no "baseline: guard is RED against the UNMUTATED sandbox; every RED below is meaningless. Output: $(<"$OUT")"
   echo "=== betterstack-send-failed-alert mutation: $pass passed, $fail failed ($cases cases) ===" >&2; exit 1; fi
-if grep -qE "^=== Summary: ${BASELINE_PASSES} passed, 0 failed \(6 cases\) ===$" "$OUT"; then ok "baseline: summary is exactly '${BASELINE_PASSES} passed, 0 failed (6 cases)'"
-else no "baseline: summary drifted from '${BASELINE_PASSES} passed, 0 failed (6 cases)' — a check was added or deleted; re-pin deliberately: $(grep '=== Summary' "$OUT")"; fi
+if grep -qE "^=== Summary: ${BASELINE_PASSES} passed, 0 failed \(${BASELINE_CASES} cases\) ===$" "$OUT"; then ok "baseline: summary is exactly '${BASELINE_PASSES} passed, 0 failed (${BASELINE_CASES} cases)'"
+else no "baseline: summary drifted from '${BASELINE_PASSES} passed, 0 failed (${BASELINE_CASES} cases)' — a check was added or deleted; re-pin deliberately: $(grep '=== Summary' "$OUT")"; fi
 
 # ── Predicate anchors ────────────────────────────────────────────────────────────────
 MUT='
@@ -191,9 +210,12 @@ s = s.replace(old, "      OR JSONExtractString(raw, '"'"'PRIORITY'"'"') = '"'"'2
 expect_red "G1 (AND PRIORITY → OR PRIORITY)" betterstack-logs-alerts.tf "predicate widened: OR in WHERE"
 
 MUT='
-old = "      AND startsWith("
-assert s.count(old) == 1, "anchor"
-s = s.replace(old, "      AND NOT startsWith(")'
+old = "      AND startsWith(JSONExtractString("
+# #9045 added a second exploration using startsWith (workspaces_luks_deadman_fired); the edit is
+# scoped to THIS heredoc, and the one occurrence it replaces is asserted to sit inside it.
+i = s.index("monitor_send_failed_sql = <<-SQL"); j = s.index("  SQL\n", i)
+assert s[i:j].count(old) == 1, "anchor"
+s = s[:i] + s[i:j].replace(old, "      AND NOT startsWith(JSONExtractString(", 1) + s[j:]'
 expect_red "G2 (NOT startsWith)" betterstack-logs-alerts.tf "predicate widened: NOT in WHERE"
 
 MUT='
@@ -205,8 +227,10 @@ expect_red "G4 (appended OR multiSearchAny SKIPPED — every anchor still presen
 
 MUT='
 old = "      AND multiSearchAny("
-assert s.count(old) == 1, "anchor"
-s = s.replace(old, "      AND JSONExtractString(raw, '"'"'message'"'"') ILIKE '"'"'%_SEND_%'"'"' AND multiSearchAny(")'
+# #8611 added a second exploration using this construct; the edit is scoped to THIS heredoc.
+i = s.index("monitor_send_failed_sql = <<-SQL"); j = s.index("  SQL\n", i)
+assert s[i:j].count(old) == 1, "anchor"
+s = s[:i] + s[i:j].replace(old, "      AND JSONExtractString(raw, '"'"'message'"'"') ILIKE '"'"'%_SEND_%'"'"' AND multiSearchAny(") + s[j:]'
 expect_red "G5 (ILIKE wildcard added)" betterstack-logs-alerts.tf "predicate widened: LIKE/ILIKE in WHERE"
 
 # ── Emitter severity ─────────────────────────────────────────────────────────────────
@@ -235,12 +259,16 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# TWO explorations carry this line since #6894, and the guard reads the monitor_send_failed block
-# only — so the mutation must land in THAT block, which is the first occurrence in the file. The
-# count is asserted exactly (not `>= 1`): a third exploration would make "the first" ambiguous.
+# THIRTEEN explorations carry this line (monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #8611's three, #8706's
+# luks_monitor_host_timer_dark, #9045's workspaces_luks_deadman_fired, #9342's bwrap_probe_rollback, #9391's ghcr_hostsfile_deny_lost, #9534's egress_gw_deny_spike and
+# egress_gw_probe_silent, and the review follow-up's egress_gw_probe_fail), and the guard
+# reads the monitor_send_failed block only — so the mutation must land in THAT block, which is the
+# first occurrence in the file. The count is asserted exactly (not `>= 1`), and the first-occurrence
+# premise is asserted directly below, so a reordered file cannot make "the first" mean another block.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 2, "anchor"
+assert s.count(old) == 13, "anchor"
+assert s.index(old) > s.index("resource \"logtail_exploration\" \"monitor_send_failed\" {") and s.index(old) < s.index("resource \"logtail_exploration\" \"inngest_luks_wrong_volume\" {"), "first occurrence is not in monitor_send_failed"
 s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"
 
@@ -354,7 +382,9 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "  # " + old.strip())'
 expect_red "M19 (the crit logger inside disk-monitor.sh's definer commented out)" scripts/disk-monitor.sh "emitter not crit: disk-monitor.sh"
 
-# ── H1a: every emit_refusal CALL deleted from the four units → floor fires ────────────
+# ── H1a: every emit_refusal CALL removed from the five units → floor fires ────────────
+# workspaces-luks-emit.sh (#8706) calls emit_refusal mid-line (`then emit_refusal …`, `|| emit_refusal …`),
+# so each whole call expression, marker literal included, is replaced by the `:` builtin in place.
 h1a_apply() {
   local u
   for u in disk-monitor.sh resource-monitor.sh container-restart-monitor.sh cron-egress-alarm.sh; do
@@ -366,6 +396,13 @@ assert s != before, "no emit_refusal call lines in this unit"'
     mutate "scripts/$u" "$MUT" || return 1
     landed "scripts/$u" || return 1
   done
+  MUT='
+import re
+s, n = re.subn(r"emit_refusal \"SOLEUR_[^\n]*?unspecified\}\"\)\"", ":", s)
+assert n == 2, "expected exactly 2 emit_refusal calls in workspaces-luks-emit.sh"
+assert "SOLEUR_WORKSPACES_LUKS_SEND_FAILED" not in s, "a marker literal survived"'
+  mutate scripts/workspaces-luks-emit.sh "$MUT" || return 1
+  landed scripts/workspaces-luks-emit.sh || return 1
 }
 cases=$((cases + 1)); restore
 if h1a_apply; then

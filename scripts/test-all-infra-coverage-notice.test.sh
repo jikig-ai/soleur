@@ -224,7 +224,7 @@ echo "=== test-all.sh infra coverage-notice suite ==="echo "=== test-all.sh infr
 # --- THE CORE INVARIANT, over the full group x diff matrix ---------------------------------
 # The claim and the invocation must agree in EVERY cell. This is the assertion the defect
 # would have failed in three of them.
-for group in all webplat bun scripts infra; do
+for group in all webplat bun scripts scripts-heavy infra; do
   for in_diff in 1 0; do
     run_arm "$group" "$in_diff" 0 || continue
     claims_covered=0
@@ -237,10 +237,10 @@ for group in all webplat bun scripts infra; do
   done
 done
 
-# --- The three CI shards specifically, on an infra-touching diff ----------------------------
+# --- The four CI shards specifically, on an infra-touching diff ----------------------------
 # Named individually because these are the exact invocations ci.yml uses, and the defect was
 # invisible anywhere else.
-for group in webplat bun scripts; do
+for group in webplat bun scripts scripts-heavy; do
   run_arm "$group" 1 0 || continue
   if grep -q 'IS covered above' <<<"$ARM_OUT"; then
     fail "CI shard '$group' claims infra coverage it does not have"
@@ -406,6 +406,12 @@ GATED=(
   "plugins/soleur/test/c4-from-components.test.sh|C4_PRODUCER_PATHS"
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
   "apps/web-platform [unit]|WEBPLAT_APP_PATHS"
+  # ADR-262 (--pr-gated): one row per label, so the two --rows halves of the lint-orphan battery
+  # are two rows over one array (two declines from one call site).
+  "scripts/lint-orphan-test-suites-mutations-a|LINT_ORPHAN_BATTERY_PATHS"
+  "scripts/lint-orphan-test-suites-mutations-b|LINT_ORPHAN_BATTERY_PATHS"
+  "scripts/battery-tag-authorship-mutations|TAG_AUTHORSHIP_BATTERY_PATHS"
+  "scripts/test-all-affected|TEST_ALL_AFFECTED_BATTERY_PATHS"
 )
 
 # REGISTRATION FLOOR, derived from $TARGET — not a hand-typed literal.
@@ -428,9 +434,16 @@ GATED=(
 # test) while GATED is hand-maintained here, so the two operands have independent lifetimes. The
 # one thing this cannot check is the label<->array PAIRING, which check_element_arms covers
 # behaviourally.
+# `_AC_EDGES` is filtered out of the runner side: it is the affected-mode
+# classifier's per-registration SCRATCH array — a resolved copy of the
+# consumed-edge arrays it names — not a declaration site. The declaration
+# arrays it copies from (AFFECTED_CONSUMED_EDGES members) are already GATED
+# rows here; a scratch alias needs no row of its own, and giving it one would
+# assert a gate no diff can exercise on a name nothing declares. (#8322)
 RUNNER_ARRAYS=$(sed 's/[[:space:]]*#.*$//' "$TARGET" \
-  | grep -oE '_diff_touches +"?\$\{[A-Z0-9_]+\[@\]' \
-  | grep -oE '[A-Z0-9_]+\[@\]' | sed 's/\[@\]//' | sort -u)
+  | grep -oE '_diff_touches +(--pr-gated +)?"?\$\{[A-Z0-9_]+\[@\]' \
+  | grep -oE '[A-Z0-9_]+\[@\]' | sed 's/\[@\]//' \
+  | grep -vxF '_AC_EDGES' | sort -u)
 GATED_ARRAYS=$(printf '%s\n' "${GATED[@]}" | sed 's/^[^|]*|//' | sort -u)
 if [[ "$RUNNER_ARRAYS" != "$GATED_ARRAYS" ]]; then
   echo "FATAL: GATED does not match the predicate arrays scripts/test-all.sh dereferences." >&2
@@ -487,7 +500,10 @@ run_gate_arm() {
   # `skip=not_in_diff` rows and 26 spurious `bytes_tmp=0` boundary rows landed in the log the
   # run's own measurement was read from. A test suite must not write into the artifact the
   # thing under test produces.
-  GATE_OUT=$(cd "$REPO_ROOT" && env SOLEUR_TEST_FORCE_ALL= CI= SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+  # GITHUB_EVENT_NAME= belongs to the same list for the same reason (ADR-262): inside an Actions job
+  # the outer env carries `pull_request`, and the sandbox runner then takes the PR arm of
+  # `_diff_touches --pr-gated` and declines the very batteries the `CI=1` arm asserts are RUN.
+  GATE_OUT=$(cd "$REPO_ROOT" && env SOLEUR_TEST_FORCE_ALL= CI= GITHUB_EVENT_NAME= SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
              TEST_GROUP=all SOLEUR_INCIDENT_SKIP=0 \
              TEST_TIMING_LOG="$TMP/gate-timing-${label}.tsv" \
              SANDBOX_DIFF_NAMES="$diff_fixture" "$@" timeout 300 bash "$sb" 2>&1)
@@ -515,7 +531,7 @@ DOCS_GATE_OUT="$GATE_OUT"
 # ANNOUNCED; nothing asserted it was COUNTED. Measured: replacing a gate's skip_suite call with bare
 # echoes emitting byte-identical output left this suite at 99/0 while the denominator dropped 303 ->
 # 302 and `skipped` 5 -> 4 -- the #3366 class (a suite silently leaving the denominator behind a
-# green summary) live for all four ADR-181 gates. The Phase-B denominator arms above cannot see it:
+# green summary) live for every ADR-181 gate. The Phase-B denominator arms above cannot see it:
 # they run with SOLEUR_TEST_FORCE_ALL=1, so they measure only the infra gate.
 #
 # Expected skipped = every gated suite + the infra runner's own not_in_diff decline on this fixture.

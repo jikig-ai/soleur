@@ -23,7 +23,7 @@ issues: [8172, 8159, 8234]
 
 Three cloud-session surfaces that look identical to their local counterparts
 behave measurably differently (probe record:
-`knowledge-base/project/specs/feat-devin-cloud-session-parity/cloud-probe.md`
+`knowledge-base/project/specs/archive/20261013-051752-feat-devin-cloud-session-parity/cloud-probe.md`
 §Results — residual arms, 2026-09-17):
 
 1. **`requiredPlugins` string form.** `"https://github.com/owner/repo#subdir"`

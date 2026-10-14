@@ -464,9 +464,12 @@ on-host loopback re-query
 **Reference incident:** 2026-05-27 `scheduled-community-monitor` missed
 check-in (Sentry incident #5010688). Last successful check-in
 2026-05-25T11:56:14Z. Preceded by 15+ web-platform deploys in a 24h window
-(TR9 Phase 2 merge burst) and a function-count jump from ~18 to 40. Sentry
-alert triggered by `auth-callback-no-code-burst` was coincidental (unrelated
-issue alert type).
+(TR9 Phase 2 merge burst) and a function-count jump from ~18 to 40. The
+"triggered by `auth-callback-no-code-burst`" line in that email was NOT a
+coincidence: that rule really fired, because all four `auth-*` rules had empty
+trigger conditions and tag filters from 2026-05-17 to 2026-06-02 and matched
+every issue (#4781). See
+`knowledge-base/project/learnings/bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
 
 **Preventive guard:** `function-registry-count.test.ts` asserts route.ts
 function count, cron-file ↔ route.ts parity, and SENTRY_MONITOR_SLUG ↔
@@ -486,12 +489,19 @@ both sub-modes.
 its own `scheduled-*` monitor with `failure_issue_threshold`, so a cron that
 stops checking in pages on its own (that is how the original #4650 regression —
 `scheduled-community-monitor` / `scheduled-gh-pages-cert-state` missed check-ins
-— was caught). Read any monitor's state via the Sentry Crons API (no SSH):
+— was caught). Since #8630 every declared monitor is bound to the one
+`sentry_alert.cron_monitor_failure` workflow, which emails the org's active members
+(cron issues have no owners, so `issue_owners` falls through to `ActiveMembers`) on a
+monitor's first failure, on each failure after a recovery, and when an archived
+cron issue escalates, at most once per monitor per 24 h. A **persistent** failure
+emails once, at its start; the next reminder is Sentry's own broken-monitor email
+after 14 days. A **muted** monitor environment creates no issue and sends nothing,
+even though it is routed. Read any monitor's state via the Sentry Crons API (no SSH):
 
 ```bash
 curl -s -H "Authorization: Bearer $SENTRY_API_TOKEN" \
   "https://sentry.io/api/0/organizations/$SENTRY_ORG/monitors/?per_page=100" \
-  | jq '.[] | {slug, envs: [.environments[]? | {name, status, lastCheckIn}]}'
+  | jq '.[] | {slug, status, isMuted, envs: [.environments[]? | {name, status, isMuted, lastCheckIn}]}'
 ```
 
 **The `cron-inngest-cron-watchdog` function is RETIRED to a liveness-only beacon
@@ -519,13 +529,20 @@ When the operator `ANTHROPIC_API_KEY` cannot do work, EVERY claude-eval cron
 no-ops at once. Before #5674 this was silent (green monitors, `status=completed`
 rows). Now two signals surface it:
 
-**Primary — the hourly canary `cron-anthropic-credit-probe`** (Sentry monitor
-`scheduled-anthropic-credit-probe`). It sends a 1-token ping on the operator key
-each hour and pages on the CLASSIFIED failure:
+**Primary — the hourly canary `cron-anthropic-credit-probe`** sends a 1-token ping
+on the operator key each hour. Since #8505 the page is the Sentry issue alert
+`anthropic-credit-exhausted` (`sentry_alert.anthropic_credit_exhausted`), which
+emails the operator; the probe's cron monitor turns RED too, and since #8630 it is
+routed to the `cron-monitor-failure` email workflow, but it is muted (measured
+2026-09-24; unmute tracked in #8704) and a muted monitor creates no issue, so do
+not rely on it to page while it stays muted.
 
-- `op=anthropic-credit-exhausted` + monitor RED → **operator Anthropic credit is
-  zero.** Top up the balance at `console.anthropic.com → Billing`. The fleet
-  self-recovers on the next scheduled fire once credit is restored (no restart).
+- Sentry issue "Anthropic credit balance is too low — operator key exhausted"
+  (`feature=anthropic-credit`, `op=anthropic-credit-exhausted`, `source=cron:<name>`
+  or `source=email-triage`) → **operator Anthropic credit is zero.** Top up the
+  balance in the Console (Plans & Billing) of the org that owns the production key.
+  The fleet self-recovers on the next scheduled fire once credit is restored (no
+  restart). The alert re-pages at most once a day while exhaustion persists.
 - `op=anthropic-key-invalid` + monitor RED → **the operator key is invalid /
   revoked.** Rotate `ANTHROPIC_API_KEY` in Doppler (`prd`) and redeploy.
 - A transient (`429`/`500`/`529 overloaded`/network) does NOT page as
@@ -582,8 +599,13 @@ doppler run -p soleur -c prd_terraform -- bash -c \
     | jq "{status, isMuted}"'
 ```
 
+Mute is per monitor ENVIRONMENT (`environments[].isMuted`), not only the
+top-level flag, so read both: `jq "{status, isMuted, envs: [.environments[] | {name, isMuted}]}"`.
 If `status` is `disabled` or `isMuted` is `true`, re-enable with a `PUT` to the
-same monitor URL (`{"status":"active","isMuted":false}`) using the same token;
+same monitor URL (`{"status":"active","isMuted":false}`) using the same token; for
+a muted environment, `PUT` `…/monitors/<slug>/environments/<env>/` with
+`{"isMuted":false}` (unverified form — confirm with the read above that every
+`environments[].isMuted` is `false` afterwards);
 fall back to the Sentry dashboard ONLY on a confirmed API-write failure (record a
 `playwright-attempt:` evidence line). (The GET above is live-verified; the
 PUT/un-mute form is unverified as of writing — it should succeed under
@@ -751,6 +773,165 @@ an incident. Rule them out in order:
 
 Note the re-spawn in cases 2 and 3 costs a full agent run, and the re-spawned agent files its own
 dated issue — so **two issues with the same dated title for one day is expected**, not a bug.
+
+### H13 — Community publication rejected (`cron-community-monitor`, #7122 / ADR-273)
+
+The `scheduled-community-monitor` monitor goes RED and Sentry holds an event with
+`op: community-publication-rejected`. Since #7122 the agent no longer files the issue
+or writes the digest: its final message is a one-line JSON draft that the handler
+validates against a closed schema and renders itself (ADR-273). A rejected draft is
+**loud and never published**; nothing from the model's output reaches the repository or
+the issue. The failure-path audit issue is handler-authored and withholds the model's
+output by design, so the issue body will not tell you why: Sentry will.
+
+**Sentry first, no SSH** (`hr-no-ssh-fallback-in-runbooks`). The monitor alert (or the
+Sentry issue it links) names the event. Read it inline; do not open the dashboard to
+eyeball it:
+
+```bash
+# Issue summary, then the event's extras (the discriminating fields are in `extra`).
+doppler run -p soleur -c prd -- scripts/sentry-issue.sh <issue-id>
+doppler run -p soleur -c prd -- scripts/sentry-issue.sh --latest-event <issue-id>
+```
+
+`scripts/sentry-issue.sh` takes an issue id, not a tag query. If you have no issue id, list
+by the op tag with the read-only token, the same issues-search form the git-data runbook
+uses (`runbooks/git-data-luks-cutover-5274.md`, the `erasure_outcome` query):
+
+```bash
+SENTRY_ISSUE_RO_TOKEN=$(doppler secrets get SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --plain)
+curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+  'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=op%3Acommunity-publication-rejected&statsPeriod=7d' \
+  | jq -r '.[] | [.id, .count, .title] | @tsv'
+```
+
+The three RED-class ops below (`community-publication-rejected`, `community-publication-issue-failed`,
+`community-publication-notice-failed`) are emitted on the message path (a null error), so their
+`op` tag survives in Sentry (#8629). The warn-level ops in the list further down are emitted with an
+Error value; their op tag is not verified to be searchable, so if an op-tag search for one of
+them returns nothing, search by `feature:cron-community-monitor` and read the event message.
+Tags and run id come from the sentry-correlation middleware (`inngest.fn_id`, `inngest.run_id`).
+
+Read these `extra` fields in one pass; none carries text from the model, only closed
+vocabulary and numbers:
+
+| Field | What it separates |
+|---|---|
+| `reason` | `missing`, `oversized`, `parse` (not one valid JSON object) or `schema` (valid JSON, wrong shape) |
+| `codes` | zod issue codes plus schema-known leaf paths only, never values or key names |
+| `draftBytes`, `startsWithBrace` | an empty or narrated message vs an oversized or fenced one |
+| `abortedByTimeout`, `spawnExit`, `resultSubtype`, `numTurns` | a timeout, an errored run or max turns, vs a run that finished and answered badly |
+| `denialCount`, `sidecarPresent` | an agent that reached for a denied verb; collectors that never ran |
+
+**Four statements to act on:**
+
+1. **That day's digest is lost and is NOT retried.** There is no automatic retry and the
+   platform does not backfill the missed day. The monitor is the notice.
+2. **The founder does nothing for a single occurrence.** No action and no issue: one
+   rejection is model drift or an in-flight run, and the next scheduled run (daily 08:00 UTC)
+   starts clean. If the missing day matters, a manual re-run is available without SSH through
+   `soleur:trigger-cron` with the event `cron/community-monitor.manual-trigger`
+   (`trigger.sh --event cron/community-monitor.manual-trigger`; it publishes publicly and is
+   throttled with the other Claude-spawning crons). A same-day re-run while the first digest PR
+   is still pending (its auto-merge not yet landed) finds the digest not yet on the default
+   branch, proceeds, and opens a **second PR** for the same file; this predates #7122.
+3. **Two follow-up triggers, written down so nobody improvises:**
+   - **Three consecutive RED runs with `reason: schema`** trigger the documented follow-up
+     in ADR-273: coerce unknown enum members to `other` (the PA-27 `MAIL_CLASS_ALLOWLIST`
+     precedent) instead of rejecting. It is an enum-parse edit plus its test, small enough
+     to do inline rather than file.
+   - **Two consecutive `reason: parse` rejections are possible abuse, not drift.** A
+     persistent hostile message in the collection window (a pinned message, a long-lived
+     comment) can make the agent's final message fail the strict parse every day. Inspect
+     the ingested sources (the Discord channels, Hacker News mentions and the GitHub
+     comments in the period) for the injected text. The enum coercion above does not cover
+     a non-JSON message.
+4. **Read `denialCount` before assuming drift.** A non-zero count means the agent reached for
+   a tool outside its allowlist (injection attempt or drift); `community-agent-denied-verb`
+   below names the tools. The prompt never instructs a denied verb.
+
+**The first RED after the #7122 deploy may be an in-flight run.** A run that memoized
+`claude-eval` under the old prompt (the agent filed the issue itself; its final message is
+not a draft) and resumed on the new code carries a result with no `finalMessage`, because
+only the new code captures it. It is rejected with `reason: missing`, `draftBytes: 0` and
+`startsWithBrace: false`, which is **identical to a genuine empty result**: those fields
+cannot tell the two apart, so judge by timing (the first run on or just after the deploy)
+and by the next day's run being clean. The deploy drain waits for a live child, so this is
+one daily slot at most. The old prompt's public issue for that day **stays as the agent
+wrote it**: a rejected draft publishes and overwrites nothing, so nothing on the handler
+side removes it.
+
+**Expect a visible format discontinuity.** From the first run after the deploy, the
+published digest and issue are counts, statuses and topic counts only. The sections that
+came from free text (Top Contributors, Community Interactions, stargazer usernames,
+quoted excerpts, narrative Trending prose) are gone by design; digests dated before the
+cutover keep their old format. The interactive `/soleur:community digest` skill still
+shows full detail on demand. This is not a regression.
+
+**A day that shows `partial` with cause `output-too-large`.** Since #9678 the cron handler sets
+`SOLEUR_COLLECTOR_COMPACT=1`, so each collector prints one compact line (counts, at most 40 channel
+ids, the newest 40 titles per list) and this cause should no longer appear on a normal day. The
+prompt keeps the rule as a fallback: if a collector's output still exceeds the Bash tool's inline
+limit (30,000 characters) the agent marks that platform `partial` rather than guess. An accepted
+draft raises **no Sentry event** (only a rejection or a collector failure does, and the collector
+sidecar covers github only), so the evidence is the rendered row itself (status `partial`, cause
+`output-too-large`, with the "a 0 may mean unavailable" label) in the digest and the issue, plus the
+`SOLEUR_COMMUNITY_DIGEST_FILE` marker in Better Stack (`verdict`, `present`, `writer: handler`; query
+recipe in `betterstack-log-query.md`). Work through these in order, credential-free first:
+
+1. Read the rendered row and the Better Stack marker (above). A `partial` github row on its own is
+   usually the standing `auth` label (stargazers are unreadable with the read-only token, #9679),
+   not this cause.
+2. For github, read the sidecar `warn` the handler reports to Sentry (`op:collector-status-warn`,
+   `feature:cron-community-monitor`; read it with `doppler run -p soleur -c prd -- scripts/sentry-issue.sh`,
+   see `sentry-issue-read.md`): `compact_off` means the flag did not reach the collector (the handler
+   already publishes the github row as `partial` / `script-error` in that case; check the
+   `buildSpawnEnv` wrapper in `cron-community-monitor.ts` still sets it); `compact_over_budget` means
+   one compact line passed 6,000 bytes (read the collector's projection). Either outranks a
+   `truncated_at_per_page` warn on the same run.
+3. Only if the first two do not explain it, replay locally with the real credentials, using the
+   arguments the cron passes: `SOLEUR_COLLECTOR_COMPACT=1 bash plugins/soleur/skills/community/scripts/github-community.sh <verb> 1 | wc -c`
+   (verbs: `repo-stats`, `activity`, `contributors`, `discussions`, `fetch-interactions`) and
+   `... discord-community.sh messages <channel_id> 50 | wc -c`, then compare with the 30,000 limit.
+   Discord has no sidecar and no `compact_off` signal, so its only in-surface evidence is the rendered
+   row, plus the probe in `scripts/followthroughs/community-collectors-collected-9678.sh`
+   (`--status-line` prints the newest digest's row statuses).
+
+A platform shown `failed` or `disabled` renders no metrics at all, by design.
+
+**Related ops** (queried the same way):
+
+- `community-agent-denied-verb` (warn): the spawn recorded at least one denied tool call;
+  extras `count` and `deniedTools` (closed tool names). The run stays **GREEN** because
+  nothing was published; the prompt never instructs a denied verb, so a non-zero count is
+  anomalous and worth a look, but it pages no one by design. (If a file tool such as `Write`
+  appears here, the CLI `--disallowedTools` layer did not remove it and the hook refused it.)
+- `community-publication-issue-failed`: the handler could not upsert the tracking issue
+  (GitHub 5xx or 429 after bounded retry, a non-array list body, or another API error).
+  Extras: `errorName` and a numeric `status` when there is one, never the error message. The
+  error is then rethrown, so the redacted error also reaches Sentry as `handler-body-threw`.
+  The monitor goes RED and the digest is not committed for that run.
+- `community-publication-notice-failed`: the issue was published, the digest did not land
+  (a failed or refused commit, or a throw between the two), and the follow-up PATCH that
+  replaces the issue's `Digest file:` line with the fixed `not committed - see Sentry` notice itself failed. The public
+  issue may still link a digest file that does not exist. Extras: `issueNumber`, `errorName`,
+  `status`. Edit that one issue by hand if you want the link gone; find why the digest did not
+  land from the `safe-commit-*` ops and `handler-body-threw` for the same run. When the notice
+  PATCH **succeeds** only that line changes (the validated counts stay in the body), and the 9-day
+  run-report sweeper closes that issue like any other report (it keys on the title, the author and an audit-stub body prefix,
+  none of which the notice changes), so its closing comment's "digest file it links is committed" does not apply to it.
+- `community-publication-milestone-lookup-failed` (warn): the milestone list read failed, so
+  the digest issue was created **without** a milestone. Extra `milestoneTitle`.
+- `community-publication-milestone-missing` (warn): the open milestone `Post-MVP / Later` was
+  not found among open milestones, so the issue was created without one. Extra `milestoneTitle`.
+- `community-publication-bot-login-mismatch` (warn): a bot-authored digest issue for today
+  exists under a login other than the App's resolved `<slug>[bot]` login (`getAppSlug`, GET
+  /app), so the run **created a second issue** instead of PATCHing; it does not refuse and it
+  does not overwrite. Extra `issueNumber` (the unexpected issue). Usually an App rename or slug
+  drift: check the App login against the existing issue's author.
+- `collector-status-failed`: the collector sidecar reported a failed record (for example
+  the READ-scoped token under-serves a collector). The digest still commits with github
+  rendered `failed`.
 
 ## Restore Procedure (generalized)
 
@@ -1034,7 +1215,7 @@ instead:
 
 | Sentry op (`feature=cron-cloud-task-heartbeat`) | Meaning | Action |
 | --- | --- | --- |
-| `stale-bot-pr` | An open `ci/*` / non-draft `self-healing/auto-*` / `bot-fix/*` PR has been open >48h. `extra` carries `pr_number`, `head_ref`, `age_hours`, `owning_cron`. Also comments once (deduped by a `<!-- stale-bot-pr:<n> -->` marker) on the owning cron's `scheduled-<cron>` issue when one is open (`bot-fix/*` has none → Sentry-only). | Open the PR. Rebase the head branch to resolve the conflict and let auto-merge re-fire, or close it if obsolete. |
+| `stale-bot-pr` | An open `ci/*` / non-draft `self-healing/auto-*` / `bot-fix/*` / `soleur/inngest-pin-*` PR has been open >48h. `extra` carries `pr_number`, `head_ref`, `age_hours`, `owning_cron`. Also comments once (deduped by a `<!-- stale-bot-pr:<n> -->` marker) on the owning cron's `scheduled-<cron>` issue when one is open (`bot-fix/*` and `soleur/inngest-pin-*` have none → Sentry-only). | Open the PR. Rebase the head branch to resolve the conflict and let auto-merge re-fire, or close it if obsolete. **For `soleur/inngest-pin-*`**: do NOT push a fix commit to the branch — a non-bot tip flips the bump script into its `branch-has-manual-commits` skip for every later run of that tag. Merge it if the pin is right, close it if obsolete (the next publish's supersede sweep closes stale ones anyway), and check `mirror_status` — auto-merge is withheld whenever the publish's mirror status does not attest the pinned target. |
 | `stale-bot-pr-scan-failed` | The `GET …/pulls` list call failed — the watchdog **could not scan this run** (it returns `[]`, so no stale PR can be detected until the next run). | Transient GitHub/network or token expiry usually self-heals next run. If it recurs, the watchdog is blind — investigate the installation token / GitHub API status. |
 | `stale-bot-pr-comment-failed` | The owning-issue comment POST failed (the `stale-bot-pr` warn still fired — Sentry is the primary signal). | No action unless recurring. |
 
@@ -1046,9 +1227,9 @@ required. Discoverability without SSH:
 ## References
 
 - Migration PR: #1095
-- Migration plan: `knowledge-base/project/plans/2026-03-24-feat-scheduled-tasks-cloud-migration-plan.md`
+- Migration plan: `knowledge-base/project/plans/archive/20261012-213508-2026-03-24-feat-scheduled-tasks-cloud-migration-plan.md`
 - Migration spec: `knowledge-base/project/specs/archive/20260325-003628-feat-scheduled-tasks-migration/`
-- Silence-detection plan: `knowledge-base/project/plans/2026-04-21-fix-scheduled-content-generator-cloud-task-silence-plan.md`
+- Silence-detection plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-21-fix-scheduled-content-generator-cloud-task-silence-plan.md`
 - Prior incident learning: `knowledge-base/project/learnings/2026-04-03-content-cadence-gap-cloud-task-migration.md`
 - Doppler token-scope learning: `knowledge-base/project/learnings/2026-03-29-doppler-service-token-config-scope-mismatch.md`
 - Peer watchdog pattern: `.github/workflows/scheduled-cf-token-expiry-check.yml`

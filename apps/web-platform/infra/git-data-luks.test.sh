@@ -6,8 +6,8 @@
 #   * cryptsetup `isLuks` idempotency guard present (2nd cloud-init run is a no-op);
 #   * the LUKS passphrase is delivered via stdin (`--key-file -`) and NEVER appears
 #     as a bare argv token on any luksFormat/luksOpen line (leak via `ps`/argv);
-#   * the mapper /dev/mapper/git-data is mounted at /mnt/git-data-luks (the staging mount
-#     a future cutover repoints from — #8211);
+#   * the mapper /dev/mapper/git-data is mounted at /mnt/git-data — the SERVED store since
+#     #8211 (ADR-239), not a staging mount beside a plaintext one;
 #   * fail-loud on an empty key — never an unencrypted fallback;
 #   * the key arrives from the Doppler-injected env (doppler run), and the passphrase
 #     literal is NOT baked into user_data (only random_password → doppler_secret).
@@ -28,7 +28,7 @@
 # `$(… || true)` command-subs so `set -e` never aborts the harness mid-suite.
 #
 # Run: bash apps/web-platform/infra/git-data-luks.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 
@@ -115,9 +115,10 @@ p_printf_pipe() {
   if grep -Eq "printf[[:space:]]+'%s'[[:space:]]+\"\\\$GIT_DATA_LUKS_KEY\"[[:space:]]*\|[[:space:]]*cryptsetup" "$1"; then echo 1; else echo 0; fi
 }
 
-# Mapper mounted at the LUKS staging mount (/mnt/git-data-luks).
+# Mapper mounted at the SERVED store root (/mnt/git-data — #8211, ADR-239). Anchored on the
+# trailing boundary so the pre-#8211 /mnt/git-data-luks cannot satisfy it as a prefix.
 p_mapper_mount() {
-  if grep -Eq 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data-luks' "$1"; then echo 1; else echo 0; fi
+  if grep -Eq 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data([[:space:]]|$)' "$1"; then echo 1; else echo 0; fi
 }
 
 # Fail-loud on empty key (no unencrypted fallback).
@@ -151,27 +152,27 @@ _cutover_code() { sed -E 's/^[[:space:]]*#.*$//' "$1"; }
 
 # A8 retired: no repoint of the mapper onto the live path, no fstab rewrite.
 p_no_repoint() {
-  if _cutover_code "$1" | grep -Eq '^repoint_luks_[a-z_]+\(\)|mount "\$LUKS_MAPPER"|/etc/fstab'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '^repoint_luks_[a-z_]+\(\)|mount "\$LUKS_MAPPER"|/etc/fstab' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A9 retired: no canary, no DL-2 wipe step, no CANARY_OK gate.
 p_no_canary_wipe() {
-  if _cutover_code "$1" | grep -Eq '^canary_luks_[a-z_]+\(\)|^old_volume_[a-z_]+\(\)|CANARY_OK'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '^canary_luks_[a-z_]+\(\)|^old_volume_[a-z_]+\(\)|CANARY_OK' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A10 retired: no LUKS unlock and no passphrase anywhere in the script.
 p_no_prepare_luks() {
-  if _cutover_code "$1" | grep -Eq '^prepare_luks_target\(\)|cryptsetup|GIT_DATA_LUKS_KEY'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '^prepare_luks_target\(\)|cryptsetup|GIT_DATA_LUKS_KEY' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A11 retired: no rollback function, no ROLLBACK-only mode, no flag write.
 p_no_rollback_mode() {
-  if _cutover_code "$1" | grep -Eq '^rollback\(\)|\[ "\$ROLLBACK" = "1" \]|doppler[[:space:]]+secrets[[:space:]]+set|set_flag'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '^rollback\(\)|\[ "\$ROLLBACK" = "1" \]|doppler[[:space:]]+secrets[[:space:]]+set|set_flag' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A12 retired: no freeze, rsync, set-identity verify or flip — called or defined.
 p_no_freeze_flip() {
-  if _cutover_code "$1" | grep -Eq '(^|[^A-Za-z_])((acquire|release)_freeze|(bulk|delta)_rsync|verify_set_identity|flip_flag_and_reload)([^A-Za-z_]|$)|soleur-(web|drain)'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '(^|[^A-Za-z_])((acquire|release)_freeze|(bulk|delta)_rsync|verify_set_identity|flip_flag_and_reload)([^A-Za-z_]|$)|soleur-(web|drain)' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # DI-HIGH: the pre-receive hook honours the cutover freeze sentinel (fail-closed).
@@ -239,7 +240,7 @@ canon_doppler_pair() {
   # Strip `#` and whitespace-preceded `//` comments (HCL supports both). The `//` arm
   # requires leading whitespace or line-start so a `https://` URL is never truncated.
   line="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" \
-    | grep -E 'doppler_sha256[[:space:]]*=' | grep -F '?' | head -1)"
+    | grep -E 'doppler_sha256[[:space:]]*=' | grep -F '?' | sed -n '1p')"
   [ -n "$line" ] || { echo ""; return; }
   condarch="$(printf '%s' "$line" | grep -oE '==[[:space:]]*"[a-z0-9]+"' | grep -oE '[a-z0-9]+"$' | tr -d '"')"
   t="$(printf '%s' "$line" | grep -oE '\?[[:space:]]*"[0-9a-f]{64}"' | grep -oE '[0-9a-f]{64}')"
@@ -337,7 +338,7 @@ p_arch_derivation() {
   # distinction is the whole assertion: `[[:space:]]*=` matches the first `=` of an `==`, so
   # an unanchored form would read any future `x = local.git_data_arch == …` REFERENCE as a
   # re-declared duplicate and fail on a correct file.
-  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1)"
+  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | sed -n '1p')"
   [ -n "$expr" ] || { echo 0; return; }
   pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.git_data_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
   tval="$(printf '%s' "$expr" | grep -oE '\?[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
@@ -434,7 +435,7 @@ p_doppler_config_scope() {
   # pins that line). Any other `$X` is NOT accepted — the variable NAME is the contract.
   for _sib in "${DIR}/git-data-cutover.sh" "${DIR}/git-data-gc-failure.service" \
            "${DIR}/git-data-gc.service" "${DIR}/git-data-luks-reopen.service" \
-           "${DIR}/git-data-luks-reopen-failure.service"; do
+           "${DIR}/git-data-luks-reopen-failure.service" "${DIR}/git-data-liveness.sh"; do
     [ -f "$_sib" ] || continue
     n_run=$(( n_run + $(grep -Ec 'doppler run --project soleur ' "$_sib" || true) ))
     n_scoped=$(( n_scoped + $(grep -Ec 'doppler run --project soleur --config prd_git_data ' "$_sib" || true) ))
@@ -449,7 +450,7 @@ p_doppler_config_scope() {
 p_reopen_config_env() {
   local block
   block=$(awk '/^  - path: \/etc\/default\/git-data-doppler$/{f=1;next} f&&/^    content: \|/{c=1;next} f&&c&&/^    [a-z]/{exit} f&&c{print}' "$1")
-  if printf '%s\n' "$block" | grep -qxF '      GIT_DATA_DOPPLER_CONFIG=${doppler_config_name}'; then echo 1; else echo 0; fi
+  if printf '%s\n' "$block" | grep -cxF '      GIT_DATA_DOPPLER_CONFIG=${doppler_config_name}' >/dev/null; then echo 1; else echo 0; fi
 }
 
 # A20b (#7025, R1): the PRODUCTION render binds ${doppler_config_name} to the config the
@@ -466,7 +467,7 @@ p_reopen_config_env() {
 p_doppler_config_binding() {
   local bound declared
   bound="$(grep -oE '^[[:space:]]*doppler_config_name[[:space:]]*=[[:space:]]*"[^"]+"' "$1" \
-           | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+           | sed -n '1p' | sed 's/.*"\([^"]*\)"$/\1/')"
   # Same extraction as A17 and `_var_default`, for the same reason: `$NF` after
   # `gsub(/[",]/,"")` reads a TRAILING COMMENT's last word. Measured: regressing the config to
   # `name = "prd" # the boot service token is scoped to prd_git_data` made `declared` read
@@ -541,9 +542,9 @@ p_delivery_assert() {
 p_sshd_limits() {
   local block
   block=$(awk '/- path: \/etc\/ssh\/sshd_config.d\/01-hardening.conf/,/permissions:/' "$1")
-  if printf '%s' "$block" | grep -Eq '^[[:space:]]*MaxStartups[[:space:]]+[0-9]' \
-     && printf '%s' "$block" | grep -Eq '^[[:space:]]*MaxSessions[[:space:]]+[0-9]' \
-     && printf '%s' "$block" | grep -Eq '^[[:space:]]*ClientAliveInterval[[:space:]]+60$'; then echo 1; else echo 0; fi
+  if printf '%s' "$block" | grep -Ec '^[[:space:]]*MaxStartups[[:space:]]+[0-9]' >/dev/null \
+     && printf '%s' "$block" | grep -Ec '^[[:space:]]*MaxSessions[[:space:]]+[0-9]' >/dev/null \
+     && printf '%s' "$block" | grep -Ec '^[[:space:]]*ClientAliveInterval[[:space:]]+60$' >/dev/null; then echo 1; else echo 0; fi
 }
 
 # A25: `set -e` is armed in runcmd, and the checksum block is UNDER it — the supply-chain
@@ -554,19 +555,19 @@ p_set_e_before_checksum() {
   # block was never seen — `|| true` on the actual checksum line left this GREEN.
   local src l_sete l_sum
   src="$(sed 's/#.*//' "$1")"
-  l_sete=$(printf '%s\n' "$src" | grep -n '^[[:space:]]*set -e$' | head -1 | cut -d: -f1)
-  l_sum=$(printf '%s\n' "$src" | grep -n 'sha256sum -c -' | head -1 | cut -d: -f1)
+  l_sete=$(printf '%s\n' "$src" | grep -n '^[[:space:]]*set -e$' | sed -n '1p' | cut -d: -f1)
+  l_sum=$(printf '%s\n' "$src" | grep -n 'sha256sum -c -' | sed -n '1p' | cut -d: -f1)
   [ -n "$l_sete" ] && [ -n "$l_sum" ] && [ "$l_sete" -lt "$l_sum" ] || { echo 0; return; }
   # And the checksum must not be TOLERATED. `set -e` before a `|| true`-suffixed command
   # aborts nothing; the ordering alone is not the property.
-  grep -E 'sha256sum -c -' <<<"$src" | grep -qE '\|\|[[:space:]]*true' && { echo 0; return; }
+  grep -E 'sha256sum -c -' <<<"$src" | grep -cE '\|\|[[:space:]]*true' >/dev/null && { echo 0; return; }
   echo 1
 }
 
 # A26: no BARE terraform directive anywhere (AC4). The doubled form `curl -w` would need
 # must still pass, so the pattern is negative-lookbehind, not a plain substring.
 p_no_bare_directive() {
-  # NOT `grep -cP … | grep -q '^0$'`: grep -c PRINTS 0 but EXITS 1 when there are no
+  # NOT `grep -qP … | grep -q '^0$'`: grep -c PRINTS 0 but EXITS 1 when there are no
   # matches, and this file runs under `set -o pipefail`, so that pipeline fails on a
   # CLEAN file and the guard reports the opposite of the truth.
   local n
@@ -660,9 +661,11 @@ assert_mutation "A2 key-file-stdin" p_keyfile_stdin "$CLOUD_INIT" \
 assert_holds   "A3 printf-pipe" p_printf_pipe "$CLOUD_INIT"
 assert_mutation "A3 printf-pipe" p_printf_pipe "$CLOUD_INIT" "s/printf '%s'/printf 'X%sX'/"
 
-# A4: mapper mounted at FRESH_ROOT.
+# A4: mapper mounted at the served store root. The mutation is the #8211 regression written
+# backwards — the mapper parked at the pre-#8211 staging path, where no store script looks.
 assert_holds   "A4 mapper-mount" p_mapper_mount "$CLOUD_INIT"
-assert_mutation "A4 mapper-mount" p_mapper_mount "$CLOUD_INIT" 's#/mnt/git-data-luks#/mnt/git-data#g'
+assert_mutation "A4 mapper-mount" p_mapper_mount "$CLOUD_INIT" \
+  's#(mount /dev/mapper/git-data) /mnt/git-data([[:space:]])#\1 /mnt/git-data-luks\2#'
 
 # A5: fail-loud on empty key.
 assert_holds   "A5 fail-loud" p_fail_loud "$CLOUD_INIT"
@@ -1016,10 +1019,10 @@ for _bp in $(boot_path_files); do
 done
 # Mutation: echo the key. This is the shape that actually puts it in the shared log.
 assert_mutation "A28b key-never-on-argv" p_key_never_on_argv "$CLOUD_INIT" \
-  's;^([[:space:]]*)mkdir -p /mnt/git-data-luks.*$;\1echo "key=$GIT_DATA_LUKS_KEY";'
+  's;^([[:space:]]*)mkdir -p /mnt/git-data .*$;\1echo "key=$GIT_DATA_LUKS_KEY";'
 # Same shape in the second key site, which the template-only scan could not see.
 assert_mutation "A28b key-never-on-argv (bootstrap)" p_key_never_on_argv \
-  "$DIR/git-data-bootstrap.sh" 's;^LUKS_ROOT="/mnt/git-data-luks"$;echo "key=$GIT_DATA_LUKS_KEY";'
+  "$DIR/git-data-bootstrap.sh" 's;^GIT_DATA_ROOT="/mnt/git-data"$;echo "key=$GIT_DATA_LUKS_KEY";'
 
 # --- A2: the gc units must NOT source their env file in a shell -----------------------
 #
@@ -1159,7 +1162,7 @@ assert_mutation "B16c mkfs-project-at-birth (project dropped)" p_mkfs_project "$
 # That is strictly worse than the unstarted promise (#6588).
 #
 # THE PREDICATE ANCHORS ON WHAT FOLLOWS THE MOUNT, not on "no || near mount". The shipped
-# line is `mountpoint -q /mnt/git-data-luks || mount /dev/mapper/git-data /mnt/git-data-luks`
+# line is `mountpoint -q /mnt/git-data || mount /dev/mapper/git-data /mnt/git-data`
 # — it legitimately CONTAINS `||` before the mount verb, so a naive test is wrong in both
 # directions: it would fail on the correct line and pass on `mount … || true` written across
 # a continuation.
@@ -1170,9 +1173,9 @@ p_mount_no_fallthrough() {
   # line left the suite 107/107 green. That is the single most likely way a future author adds
   # a fall-through, and the previous comment claimed this predicate covered it.
   folded="$(printf '%s\n' "$slice" | sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}')"
-  line="$(printf '%s\n' "$folded" | grep -E 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data-luks' || true)"
+  line="$(printf '%s\n' "$folded" | grep -E 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data([[:space:]]|$)' || true)"
   [ -n "$line" ] || { echo 0; return; }   # the mount vanished entirely — not a pass
-  after="${line#*mount /dev/mapper/git-data /mnt/git-data-luks}"
+  after="${line#*mount /dev/mapper/git-data /mnt/git-data}"
   # `||` AND `;`-separated continuations both let the boot proceed past a failed mount.
   case "$after" in
     *'||'*) echo 0; return ;;
@@ -1201,23 +1204,23 @@ p_mount_no_raw_device() {
 
 assert_holds    "B17 mount-no-fallthrough" p_mount_no_fallthrough "$CLOUD_INIT"
 assert_mutation "B17 mount-no-fallthrough (|| true)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || true#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 || true#'
 assert_mutation "B17 mount-no-fallthrough (|| : )" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || :#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 || :#'
 assert_mutation "B17 mount-no-fallthrough (; true separator)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 ; true#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 ; true#'
 assert_mutation "B17 mount-no-fallthrough (backslash continuation)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 \\\n      || true#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 \\\n      || true#'
 assert_mutation "B17 mount-no-fallthrough (if-wrapper suppresses errexit)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#mountpoint -q /mnt/git-data-luks \|\| (mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#if \1\2; then :; else echo WARN; fi#'
+  's#mountpoint -q /mnt/git-data \|\| (mount /dev/mapper/git-data /mnt/git-data)(.*)$#if \1\2; then :; else echo WARN; fi#'
 assert_mutation "B17 mount-no-fallthrough (set +e disarms errexit)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#^([[:space:]]*)(mountpoint -q /mnt/git-data-luks)#\1set +e\n\1\2#'
+  's#^([[:space:]]*)(mountpoint -q /mnt/git-data)#\1set +e\n\1\2#'
 
 assert_holds    "B17r mount-no-raw-device" p_mount_no_raw_device "$CLOUD_INIT"
 assert_mutation "B17r mount-no-raw-device (by-id fallback)" p_mount_no_raw_device "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || mount /dev/disk/by-id/scsi-0HC_Volume_x /mnt/git-data-luks#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 || mount /dev/disk/by-id/scsi-0HC_Volume_x /mnt/git-data#'
 assert_mutation "B17r mount-no-raw-device (\$DEV fallback)" p_mount_no_raw_device "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || mount "$DEV" /mnt/git-data-luks#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 || mount "$DEV" /mnt/git-data#'
 
 # --- B18 (#7216): the isLuks probe BRANCHES ON ITS EXIT CODE; rc 1 is the ONLY format ------
 #
@@ -1298,11 +1301,26 @@ p_isluks_rc_branch() {
   # capacity — the exact "presence, not usability" defect this conjunct exists for, and it feeds
   # (h) because a zero-length device also returns isLuks rc=1. Assert `-b`, the capacity call and
   # the `> 0` test on ONE line, plus the literal bound so the wait cannot become unbounded.
-  _waitln="$(grep -E 'getsize64' <<<"$slice" || true)"
+  _waitln="$(grep -E 'getsize64' <<<"$slice" | grep -F '&& break' || true)"
   if [ -z "$_waitln" ]; then echo 0; return; fi
   if ! grep -Eq '\[ -b "\$DEV" \]' <<<"$_waitln"; then echo 0; return; fi
   if ! grep -Eq -- '-gt[[:space:]]+0' <<<"$_waitln"; then echo 0; return; fi
-  if ! grep -Eq '_i"?[[:space:]]*-lt[[:space:]]*30' <<<"$slice"; then echo 0; return; fi
+  # (#10138) The literal is EXACTLY 300, with a boundary: a prefix match would also accept 3000 or
+  # 30000 (an effectively unbounded wait), and the original `-lt 30` would still match `-lt 300`.
+  if ! grep -Eq '_i"?[[:space:]]*-lt[[:space:]]*300([^0-9]|$)' <<<"$slice"; then echo 0; return; fi
+  # ...each pass SLEEPS one second and COUNTS one (a `sleep 0` or a lost increment turns the 300-pass
+  # wait into a no-wait or an unbounded one while the literal above still reads 300)...
+  if ! grep -Eq '^[[:space:]]*sleep 1;[[:space:]]*_i=\$\(\(_i\+1\)\)[[:space:]]*$' <<<"$slice"; then echo 0; return; fi
+  # ...and ONE settle sits between the loop's `done` and the isLuks probe, so the single-shot probes
+  # that gate luksFormat never read a node udev is still processing.
+  _between="$(awk '/^[[:space:]]*done[[:space:]]*$/{f=1;next} /_isluks_err=/{exit} f' <<<"$slice")"
+  if ! grep -Eq '^[[:space:]]*/usr/bin/udevadm settle --timeout=[0-9]+ >/dev/null 2>&1 \|\| true[[:space:]]*$' <<<"$_between"; then echo 0; return; fi
+  # ...then a REFUSAL when the node is a block device that still reports size 0 (luksFormat must not
+  # be reachable on a half-attached node), and both size probes run under `timeout -k 2 10`.
+  _refl="$(grep -E 'size 0 after the wait.*exit[[:space:]]+1' <<<"$_between" || true)"
+  if [ -z "$_refl" ]; then echo 0; return; fi
+  if ! grep -Eq 'getsize64' <<<"$_refl" || ! grep -Eq -- '-gt[[:space:]]+0' <<<"$_refl"; then echo 0; return; fi
+  if [ "$(grep -c '/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64' <<<"$slice" || true)" -ne 2 ]; then echo 0; return; fi
   echo 1
 }
 
@@ -1350,6 +1368,115 @@ assert_mutation "B18 isLuks-rc-branch (blankness proof removed)" p_isluks_rc_bra
 # zero-length device also returns isLuks rc=1.
 assert_mutation "B18 isLuks-rc-branch (wait reverts to -e presence)" p_isluks_rc_branch "$CLOUD_INIT" \
   's#\[ -b "\$DEV" \]#[ -e "$DEV" ]#'
+# (i, #10138) the literal moves in EITHER direction: back to the old 30 (the race returns) or to an
+# effectively unbounded 30000 (a hung boot instead of a reported one). Both must red.
+assert_mutation "B18 isLuks-rc-branch (wait literal back to 30)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#_i" -lt 300 \]#_i" -lt 30 ]#'
+assert_mutation "B18 isLuks-rc-branch (wait literal unbounded, 30000)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#_i" -lt 300 \]#_i" -lt 30000 ]#'
+assert_mutation "B18 isLuks-rc-branch (wait sleeps 0 s per pass)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#sleep 1; _i=#sleep 0; _i=#'
+assert_mutation "B18 isLuks-rc-branch (wait never counts: unbounded)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#sleep 1; _i=\$\(\(_i\+1\)\)#sleep 1; _i=\$_i#'
+assert_mutation "B18 isLuks-rc-branch (the post-loop udev settle removed)" p_isluks_rc_branch "$CLOUD_INIT" \
+  '/\/usr\/bin\/udevadm settle --timeout=10/d'
+assert_mutation "B18 isLuks-rc-branch (the size-0 refusal removed)" p_isluks_rc_branch "$CLOUD_INIT" \
+  '/size 0 after the wait/d'
+assert_mutation "B18 isLuks-rc-branch (the size probe loses its timeout)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#/usr/bin/timeout -k 2 10 ##'
+
+# B18r — THE LOOP RUNS (#10138, CTO ruling). B18's text pins cannot see `_i=290`, a second `_i=0`
+# inside the loop, `&& break` turned into `|| break`, or `|| echo 0` turned into `|| echo 1`: each
+# leaves every pin above green while changing how long first boot waits. So the real template text,
+# from `_i=0` through the size-0 refusal, is EXTRACTED and RUN with stub sleep / blockdev / udevadm /
+# timeout on a scratch PATH. Two rewrites are needed and both are asserted to have landed: the
+# absolute tool paths point at the stubs, and `-b` (a block-special test no fixture can satisfy
+# without root) becomes `-e`; B18 still pins the real `-b`. Each scenario asserts its OWN counts.
+_b18r_dir="$(mktemp -d -t gdluks-b18r.XXXXXX)" || { echo "FAIL: mktemp (B18r)" >&2; exit 2; }
+case "$_b18r_dir" in
+  /*) ;;
+  *) echo "FATAL: B18r scratch dir '$_b18r_dir' is not absolute; refusing" >&2; exit 2 ;;
+esac
+trap 'rm -rf "$_b18r_dir"' EXIT
+mkdir -p "$_b18r_dir/bin"
+cat > "$_b18r_dir/bin/sleep" <<'STUB'
+printf 'sleep %s\n' "$*" >> "$B18R_LOG"
+_n=$(( $(cat "$B18R_DIR/n" 2>/dev/null || echo 0) + 1 )); echo "$_n" > "$B18R_DIR/n"
+if [ -s "$B18R_DIR/late" ] && [ "$_n" -eq "$(cat "$B18R_DIR/late")" ]; then : > "$DEV"; echo 1000 > "$DEV.size"; fi
+STUB
+cat > "$_b18r_dir/bin/blockdev" <<'STUB'
+[ "$1" = --getsize64 ] || exit 64
+cat "$2.size" 2>/dev/null || exit 1
+STUB
+cat > "$_b18r_dir/bin/udevadm" <<'STUB'
+printf 'udevadm %s\n' "$*" >> "$B18R_LOG"
+STUB
+cat > "$_b18r_dir/bin/timeout" <<'STUB'
+[ "$1" != -k ] || shift 2
+shift
+exec "$@"
+STUB
+chmod +x "$_b18r_dir"/bin/*
+_b18r_src="$_b18r_dir/loop.src"
+_luks_slice "$CLOUD_INIT" | awk '/^[[:space:]]*_i=0[[:space:]]*$/{f=1} f{print} f&&/size 0 after the wait/{exit}' > "$_b18r_src"
+_b18r_rewrite() { # <in> <out>
+  sed -E -e "s#/usr/bin/timeout#$_b18r_dir/bin/timeout#g" -e "s#/usr/sbin/blockdev#$_b18r_dir/bin/blockdev#g" \
+    -e "s#/usr/bin/udevadm#$_b18r_dir/bin/udevadm#g" -e 's#\[ ! -b "\$DEV" \]#[ ! -e "$DEV" ]#g' -e 's#\[ -b "\$DEV" \]#[ -e "$DEV" ]#g' "$1" > "$2"
+}
+# run <src> <scenario> — prints "rc sleeps udevadm last" on one line; scenario files live in $B18R_DIR.
+_b18r_run() {
+  local rc=0 out
+  _b18r_rewrite "$1" "$_b18r_dir/loop.run"
+  : > "$_b18r_dir/log"; : > "$_b18r_dir/detail"; rm -f "$_b18r_dir/n"
+  B18R_DIR="$_b18r_dir" B18R_LOG="$_b18r_dir/log" DEV="$_b18r_dir/dev" GIT_DATA_LUKS_DETAIL="$_b18r_dir/detail" PATH="$_b18r_dir/bin:$PATH" \
+    bash -c 'set -euo pipefail; . "$1"' _ "$_b18r_dir/loop.run" > "$_b18r_dir/out" 2>&1 || rc=$?
+  out="$(printf '%s %s %s %s' "$rc" "$(grep -c '^sleep 1$' "$_b18r_dir/log" || true)" "$(grep -c '^udevadm settle --timeout=10$' "$_b18r_dir/log" || true)" "$(tail -1 "$_b18r_dir/log" | cut -d' ' -f1)")"
+  printf '%s' "$out"
+}
+_b18r_reset() { rm -f "$_b18r_dir/dev" "$_b18r_dir/dev.size" "$_b18r_dir/late"; }
+_b18r_expect() { # <name> <got> <want>
+  if [ "$2" = "$3" ]; then pass; else fail "B18r $1: got '$2', want '$3' (rc sleeps settles last-call)"; fi
+}
+if [ "$(grep -c . "$_b18r_src")" -ge 6 ] && grep -q '_i=0' "$_b18r_src" && grep -q 'size 0 after the wait' "$_b18r_src"; then pass; else fail "B18r the heredoc loop was not extracted from the template (anchors drifted)"; fi
+_b18r_rewrite "$_b18r_src" "$_b18r_dir/probe.run"
+if ! grep -q '/usr/' "$_b18r_dir/probe.run" && ! grep -qF -- '-b "$DEV"' "$_b18r_dir/probe.run"; then pass; else fail "B18r the stub rewrite did not land (a real /usr path or -b test survives)"; fi
+_b18r_reset
+_b18r_expect "never appears: 300 one-second sleeps, then ONE settle, then falls through" "$(_b18r_run "$_b18r_src")" "0 300 1 udevadm"
+_b18r_reset; printf '5\n' > "$_b18r_dir/late"
+_b18r_expect "appears on pass 5: exactly 5 sleeps, then ONE settle" "$(_b18r_run "$_b18r_src")" "0 5 1 udevadm"
+_b18r_reset; : > "$_b18r_dir/dev"; echo 1000 > "$_b18r_dir/dev.size"
+_b18r_expect "present from the start: no sleep, ONE settle" "$(_b18r_run "$_b18r_src")" "0 0 1 udevadm"
+_b18r_reset; : > "$_b18r_dir/dev"; echo 0 > "$_b18r_dir/dev.size"
+_b18r_expect "a size-0 node never breaks the loop (300 sleeps), then the refusal exits 1" "$(_b18r_run "$_b18r_src")" "1 300 1 udevadm"
+if grep -q 'size 0 after the wait' "$_b18r_dir/detail"; then pass; else fail "B18r the size-0 refusal wrote nothing to the detail file"; fi
+_b18r_mut() { # <name> <old> <new> <scenario-setup> <want> — replace exactly one occurrence in the extracted loop, run, expect <want>
+  local name="$1" old="$2" new="$3" want="$5" mut="$_b18r_dir/mut.$1"
+  if python3 - "$_b18r_src" "$mut" "$old" "$new" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(dst, "w").write(s.replace(old, new))
+PY
+  then
+    if cmp -s "$_b18r_src" "$mut"; then fail "B18r mutant $name did not land (byte-identical)"; return; fi
+  else fail "B18r mutant $name did not land (anchor not unique)"; return; fi
+  _b18r_reset; eval "$4"
+  _b18r_expect "mutant $name behaves as its own count says" "$(_b18r_run "$mut")" "$want"
+}
+# `&& break` -> `|| break`: an ABSENT node now breaks on the first pass, so first boot stops waiting at once.
+_b18r_mut orbreak '&& break' '|| break' 'printf "5\n" > "$_b18r_dir/late"' "0 0 1 udevadm"
+# `-lt 300` -> `-lt 30`: the wait is a tenth as long.
+_b18r_mut short '-lt 300' '-lt 30' ':' "0 30 1 udevadm"
+# `_i=0` -> `_i=290`: ten passes.
+_b18r_mut late_start '_i=0' '_i=290' ':' "0 10 1 udevadm"
+# a lost counter: the loop never ends (bounded here by a 400-sleep guard in the stub's own count).
+_b18r_mut nocount 'sleep 1; _i=$((_i+1))' 'sleep 1; _i=$_i; [ "$(cat "$B18R_DIR/n")" -lt 400 ] || break' ':' "0 400 1 udevadm"
+# `|| echo 0` -> `|| echo 1` on the LOOP line: a failing blockdev counts as capacity, so a node whose size probe
+# FAILS breaks the wait at once (0 sleeps); the refusal line, which keeps its `|| echo 0`, still stops it (rc 1).
+_b18r_mut echo1 '|| echo 0)" -gt 0 ] && break' '|| echo 1)" -gt 0 ] && break' ': > "$_b18r_dir/dev"; rm -f "$_b18r_dir/dev.size"' "1 0 1 udevadm"
+rm -rf "$_b18r_dir"
 # (h) INVERT the refusal rather than deleting it. This is the arm that matters: `==` refuses a
 # blank volume and formats the damaged-header populated store. A token-presence predicate stays
 # green on it; this one must not.
@@ -1383,20 +1510,20 @@ p_mkfs_keyed_on_creation() {
   if ! grep -Eq '^[[:space:]]*_luks_created_now=0[[:space:]]*$' <<<"$slice"; then echo 0; return; fi
   n=$(grep -cE '^[[:space:]]*_luks_created_now=1' <<<"$slice" || true)
   if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
-  if ! awk '/cryptsetup[[:space:]]+luksFormat/{f=1;next} f&&/_luks_created_now=1/{print "ok";exit} f&&/;;/{exit}' <<<"$slice" | grep -q ok; then echo 0; return; fi
+  if ! awk '/cryptsetup[[:space:]]+luksFormat/{f=1;next} f&&/_luks_created_now=1/{print "ok";exit} f&&/;;/{exit}' <<<"$slice" | grep -c ok >/dev/null; then echo 0; return; fi
   # (b) blkid's rc is CAPTURED (a substitution, not a bare `if ! blkid`) and rc other than 0/2 refuses
   if grep -Eq 'if[[:space:]]+![[:space:]]*blkid[[:space:]]+/dev/mapper/git-data' <<<"$slice"; then echo 0; return; fi
   if ! grep -Eq '_fs_type="\$\(/usr/sbin/blkid -o value -s TYPE /dev/mapper/git-data[^)]*\)"[[:space:]]*\|\|[[:space:]]*_fs_rc=\$\?' <<<"$slice"; then echo 0; return; fi
   if ! grep -Eq '\[ "\$_fs_rc" -eq 0 \] \|\| \[ "\$_fs_rc" -eq 2 \]' <<<"$slice"; then echo 0; return; fi
   # (c) an EXISTING container with no filesystem is a FATAL exit, checked BEFORE the mkfs branch
   if ! grep -Eq '^[[:space:]]*if \[ -z "\$_fs_type" \] && \[ "\$_luks_created_now" -ne 1 \]; then' <<<"$slice"; then echo 0; return; fi
-  if ! awk '/_luks_created_now" -ne 1/{f=1;next} f&&/exit 1/{print "ok";exit} f&&/^[[:space:]]*fi/{exit}' <<<"$slice" | grep -q ok; then echo 0; return; fi
+  if ! awk '/_luks_created_now" -ne 1/{f=1;next} f&&/exit 1/{print "ok";exit} f&&/^[[:space:]]*fi/{exit}' <<<"$slice" | grep -c ok >/dev/null; then echo 0; return; fi
   # (d) exactly one mkfs, and it is inside the `-z "$_fs_type"` branch AFTER the refusal
   n=$(grep -cE 'mkfs\.ext4' <<<"$slice" || true)
   if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
   local l_refuse l_mkfs
-  l_refuse=$(grep -nE '_luks_created_now" -ne 1' <<<"$slice" | head -1 | cut -d: -f1)
-  l_mkfs=$(grep -nE 'mkfs\.ext4' <<<"$slice" | head -1 | cut -d: -f1)
+  l_refuse=$(grep -nE '_luks_created_now" -ne 1' <<<"$slice" | sed -n '1p' | cut -d: -f1)
+  l_mkfs=$(grep -nE 'mkfs\.ext4' <<<"$slice" | sed -n '1p' | cut -d: -f1)
   if [ -z "$l_refuse" ] || [ -z "$l_mkfs" ] || [ "$l_refuse" -ge "$l_mkfs" ]; then echo 0; return; fi
   echo 1
 }
@@ -1461,7 +1588,7 @@ p_bootstrap_keyfile_stdin() {
   n_stdin=$(grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | grep -c -- '--key-file -' || true)
   # And the key must not appear as a cryptsetup argv positional.
   if [ "$n_stdin" -ne "$n_key" ]; then echo 0; return; fi
-  if grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | sed -E 's/.*(cryptsetup[[:space:]]+luks)/\1/' | grep -q 'GIT_DATA_LUKS_KEY'; then echo 0; return; fi
+  if grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | sed -E 's/.*(cryptsetup[[:space:]]+luks)/\1/' | grep -c 'GIT_DATA_LUKS_KEY' >/dev/null; then echo 0; return; fi
   echo 1
 }
 assert_holds    "B19d bootstrap-key-file-stdin" p_bootstrap_keyfile_stdin "$BOOTSTRAP_SH"
@@ -1531,9 +1658,15 @@ assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_s
 # A floor (`-lt`), never an equality: the count is developer-incremented, so `-eq` would
 # redden the suite on every legitimate new arm and teach the next author to edit the guard
 # instead of trusting it.
+# RAISED 133 -> 173 (#10138): the suite already measured 154 against the stale 133, so 21 assertions
+# were pure slack; this edit adds the exact-300 pin, the sleep/count pin, the post-loop settle, the
+# size-0 refusal and the two `timeout -k 2 10` probes as B18 pins, 7 B18 mutation arms (literal back
+# to 30, unbounded 30000, sleep 0, no count, settle removed, refusal removed, timeout removed) and the
+# B18r rows that RUN the extracted heredoc loop (4 scenarios, the refusal's detail line, 5 mutants,
+# each asserting its own sleep and settle counts). The floor is the measured total, so slack is zero.
 total=$((passes + fails))
-if [ "$total" -lt 133 ]; then
-  echo "FAIL: ran only ${total} assertions (<133) — suite did not execute fully" >&2
+if [ "$total" -lt 173 ]; then
+  echo "FAIL: ran only ${total} assertions (<173) — suite did not execute fully" >&2
   exit 1
 fi
 

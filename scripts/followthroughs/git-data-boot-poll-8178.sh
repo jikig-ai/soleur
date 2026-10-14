@@ -171,7 +171,36 @@ for run_id in "${run_ids[@]}"; do
     # region is everything after the first header stamped at or after the poll step's start
     # second, up to the next header. Each line is reduced to its third field, so a tab inside
     # echoed text cannot place a line of its own choosing at the start.
+    # STRIP THE BOM ALONGSIDE THE CR, AND IN BASH RATHER THAN IN awk. `gh run view --log` writes
+    # a UTF-8 byte-order mark at the start of EVERY step's log section, and the mark lands AFTER
+    # the two tab fields — i.e. immediately before the timestamp the awk block below anchors on.
+    # Measured on job 106093730126 (run 35516692240): 15 `##[group]Run` headers, 14 of them
+    # BOM-prefixed; only the job's first section ("Set up job") is bare, because gh strips the
+    # mark from the head of the concatenated stream and not from each section it appends.
+    #
+    # Without this, `^[0-9]` matched ONLY that first bare header, whose ts is the job start and
+    # therefore always < the poll step's start, so `started` never flipped, `region` came back
+    # empty, and the probe took the `_cannot` arm on every real log it has ever read — reporting
+    # CANNOT ESTABLISH against the exact evidence it exists to read. The mark also shifted
+    # `substr(line, 1, 19)` by three bytes, corrupting the ts compare even had a header matched.
+    #
+    # WHY HERE AND NOT IN THE awk PROGRAM. `sub(/^\357\273\277/, "", line)` beside the tab-field
+    # strip also works, and it is NOT a portability problem — that was this change's first
+    # rationale and it was wrong. Measured during review on gawk 5.4.1, mawk 1.3.4 and busybox
+    # 1.35.0 awk, under both LC_ALL=C and a UTF-8 locale: all three match the three bytes and
+    # emit a byte-identical region. POSIX XCU requires `\ddd` in ERE tokens, and two awk programs
+    # in this repo already depend on exactly that (scripts/tenant-dpa-register-guard.sh gsub
+    # /\002/, plugins/soleur/hooks/browser-snapshot-credential-guard.sh gsub /\001/). Do not
+    # cite this comment to "fix" either of those.
+    #
+    # The bash form is kept on its own merits, which are real but ordinary: it sits beside the
+    # \r strip that already establishes this exact pattern one line up, it is one mechanism
+    # rather than two for the same normalization, and it clears the mark for EVERY consumer of
+    # "$log" rather than only the block that happens to normalize. Pinned by the suite: turning
+    # the `//` into a single `/` drives 18 failures, because a real log carries one mark per
+    # step section and clearing only the first leaves the poll step's header BOM-prefixed.
     log=${log//$'\r'/}
+    log=${log//$'\357\273\277'/}
     region=$(awk -v ps="${poll_start:0:19}" '
       { line = $0; sub(/^[^\t]*\t[^\t]*\t/, "", line); ts = substr(line, 1, 19) }
       line ~ /^[0-9][0-9TZ:.-]* ##\[group\]Run / { if (started) exit; if (ts >= ps) { started = 1; next } }

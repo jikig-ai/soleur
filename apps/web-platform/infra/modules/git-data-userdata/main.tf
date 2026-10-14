@@ -81,8 +81,14 @@ locals {
 
 locals {
   rendered = replace(templatefile("${path.module}/../../cloud-init-git-data.yml", {
-    git_data_bootstrap               = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
-    git_data_pre_receive_placeholder = replace(file("${path.module}/../../git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
+    git_data_bootstrap = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
+    # (#8211 PR2) The REAL CAS-fence hook ships and installs at birth — the flip's
+    # d6_replace_stale precondition means a replace always precedes the flag write, and a
+    # hook copied out-of-band is reverted to the reject-all placeholder by the next routine
+    # replace (a silent total replication outage). The placeholder's deny-all posture is
+    # preserved in substance: the real hook fail-closed-rejects every non-CAS push, and
+    # before the flag flips no transport credential exists to push with.
+    git_data_pre_receive_placeholder = replace(file("${path.module}/../../git-data-pre-receive.sh"), local.git_data_rationale_strip, "")
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
     git_data_provision = replace(file("${path.module}/../../git-data-provision.sh"), local.git_data_rationale_strip, "")
@@ -106,10 +112,20 @@ locals {
     git_data_luks_reopen_service         = replace(file("${path.module}/../../git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
     git_data_luks_reopen_failure_service = replace(file("${path.module}/../../git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
     git_data_luks_reopen_timer           = replace(file("${path.module}/../../git-data-luks-reopen.timer"), local.git_data_rationale_strip, "")
+    # (#9438) The host-originated liveness feeder: script + unit + timer. Same strip, same
+    # one-line shape; the URL it pings is NOT here (it is read at runtime from the scoped
+    # Doppler config), so the rung-2 rehearsal render carries no production monitor.
+    git_data_liveness         = replace(file("${path.module}/../../git-data-liveness.sh"), local.git_data_rationale_strip, "")
+    git_data_liveness_service = replace(file("${path.module}/../../git-data-liveness.service"), local.git_data_rationale_strip, "")
+    git_data_liveness_timer   = replace(file("${path.module}/../../git-data-liveness.timer"), local.git_data_rationale_strip, "")
     # trimspace()'d by the CALLER — see local.git_transport_pubkey in git-data.tf.
     git_transport_pubkey = var.git_transport_pubkey
     git_provision_pubkey = var.git_provision_pubkey
     git_remove_pubkey    = var.git_remove_pubkey
+    # (#7226, ADR-237) The SSH HOST key pair: the ssh_keys: block installs it, the boot proof
+    # fingerprints the public half. Identity-class divergence (variables.tf).
+    host_ssh_ed25519_private_key = var.host_ssh_ed25519_private_key
+    host_ssh_ed25519_public_key  = var.host_ssh_ed25519_public_key
     # Mount the bare-repo volume by its specific id (server.tf/cloud-init.yml
     # by-id pattern). Known at plan time; the attachment is a separate resource.
     git_data_volume_id = var.git_data_volume_id

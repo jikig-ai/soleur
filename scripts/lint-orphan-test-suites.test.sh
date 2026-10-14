@@ -14,8 +14,8 @@
 #   reproducing, inside this harness, the exact vacuity row M6 exists to catch. The
 #   enumeration is asserted non-empty before any row runs.
 #
-#   Synthetic: measured, this worktree is 13,630 tracked files / 258 MB, so fourteen tree
-#   copies would be ~3.6 GB of I/O plus fourteen `git add` of 13.6k files. The sandbox instead
+#   Synthetic: measured, this worktree is 13,630 tracked files / 258 MB, so seventeen tree
+#   copies would be ~4.4 GB of I/O plus seventeen `git add` of 13.6k files. The sandbox instead
 #   holds path-shaped EMPTY files at every tracked `*.test.sh` path (they are never executed —
 #   the linter only ever asks whether something is registered) plus the four real inputs the
 #   linter reads: scripts/test-all.sh, .github/workflows/, apps/web-platform/infra/run-registered-suites.sh
@@ -34,6 +34,22 @@
 # otherwise, so a mutator whose anchor drifted aborts the harness instead of scoring a phantom
 # kill against an unmutated file. That failure — a battery that stops mutating and keeps
 # reporting kills — is the same class as the one the battery guards.
+#
+# ROWS-SPLIT. This battery was the worst leg of the test-scripts shard as one ~10-minute
+# indivisible suite (#8864), and no matrix leg count can subdivide an atomic registration.
+# scripts/test-all.sh therefore registers it TWICE — the `-a`/`-b` halves of
+# scripts/lint-orphan-test-suites-mutations — each carrying a `--rows A-B` range over the
+# DECLARED_TOTAL mutation rows below. C0, R1 and R1b are unconditional: every leg needs its
+# own control, and the R-rows are cheap greps. The same-commit rule: a DECLARED_TOTAL bump
+# and the registered-range re-split land together, because the B > DECLARED_TOTAL bound
+# refuses a range this file cannot execute; the union of registered ranges tiling
+# 1..DECLARED_TOTAL is asserted by the tiling block in
+# plugins/soleur/test/scripts-shard-totality.test.sh. No flag runs every row — and
+# `--rows N-N` is the cheap way to iterate on a single row locally.
+#
+# KNOWN SURVIVOR (parity with the precedent): an edit that accepts --rows but drops the value
+# (ROWS_HI left 0) runs all rows on both registrations — coverage stays total and every floor
+# stays green; the shape reddens only as wasted leg time, not as a gap.
 set -uo pipefail
 # repo-write-boundary-sandbox: not-needed this sandbox only ever drives `--print-suite-globs`, which exits above the lib source (#7652)
 
@@ -54,6 +70,63 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 # Same reason the SUT pins it: `comm` and `sort` must agree on collation, and the harness sorts
 # too.
 export LC_ALL=C
+
+# --- Row-range selection (--rows A-B) --------------------------------------------------------
+# Ported from plugins/soleur/test/scripts-shard-totality-mutations.sh's DECLARED_TOTAL
+# contract, with the split site adapted: that battery is split by a ci.yml matrix, this one by
+# the two `run_suite … --rows A-B` registrations in scripts/test-all.sh (see ROWS-SPLIT above).
+# One deliberate divergence from the copied loop: a REPEATED --rows exits 2 rather than letting
+# the last flag win — the tiling extractor would then assert a coverage the battery ignores.
+DECLARED_TOTAL=27   # the gated mutation rows M1..M27; C0/R1/R1b are unconditional
+ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared rows
+_seen_rows_flag=0
+while (( $# )); do
+  case "$1" in
+    --rows)
+      shift
+      if [[ ! "${1:-}" =~ ^[0123456789]{1,9}-[0123456789]{1,9}$ ]]; then
+        echo "ERROR: --rows requires a decimal range A-B (got '${1:-<missing>}')" >&2
+        exit 2
+      fi
+      if (( _seen_rows_flag == 1 )); then
+        echo "ERROR: --rows given twice — a range must be stated once" >&2
+        exit 2
+      fi
+      _seen_rows_flag=1
+      ROWS_LO=$((10#${1%-*})); ROWS_HI=$((10#${1#*-}))
+      ;;
+    *)
+      echo "ERROR: unknown argument '$1'" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+# Unconditional bounds: 1 <= A <= B <= DECLARED_TOTAL. Only runs when a flag was given —
+# the no-flag state ROWS_HI=0 is unreachable as a flag value because HI >= LO >= 1, so a
+# passed "0-0"/"N-0" can never silently decode into "all rows".
+if (( _seen_rows_flag == 1 )) && ! (( 1 <= ROWS_LO && ROWS_LO <= ROWS_HI && ROWS_HI <= DECLARED_TOTAL )); then
+  echo "ERROR: --rows ${ROWS_LO}-${ROWS_HI} is out of bounds: need 1 <= A <= B <= ${DECLARED_TOTAL} declared rows." >&2
+  exit 2
+fi
+
+# in_range <M-ordinal>: called once per gated row site, in ROW_IDS order. _site_seq counts
+# gated sites (never C0/R1/R1b); the ordinal argument must equal it, so a duplicated or
+# reordered M-id FATALs instead of silently re-mapping the ranges. EXECUTED counts dispatched.
+_site_seq=0; EXECUTED=0
+in_range() {
+  local _ord="$1"
+  _site_seq=$(( _site_seq + 1 ))
+  if (( _ord != _site_seq )); then
+    echo "FATAL(harness): row M${_ord} reached the range gate as site ${_site_seq} — a duplicated or reordered ROW_IDS entry would silently re-map the registered ranges" >&2
+    exit 2
+  fi
+  if (( ROWS_HI == 0 )) || (( ROWS_LO <= _site_seq && _site_seq <= ROWS_HI )); then
+    EXECUTED=$(( EXECUTED + 1 ))
+    return 0
+  fi
+  return 1
+}
 
 PASS=0; FAIL=0; ROWS=0
 TMP="$(mktemp -d)" || exit 2
@@ -80,9 +153,20 @@ materialise() {
   # `git ls-files --error-unmatch`, which is satisfied by any tracked file BENEATH the path.
   # Writing a file AT that path instead fails with "Is a directory" the moment a sibling entry
   # has already created it — order-dependently, which is the worst way for a fixture to break.
-  local p
+  local p _mp
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
+    case "$p" in
+      glob:*)
+        # Third declared kind (#9813): materialise the head dir only — the census
+        # arm probes [[ -d ]] on it; the pattern tail is not a path.
+        _mp="${p#glob:}"; _mp="${_mp%%[*?[]*}"
+        [[ "$_mp" == */ ]] || continue
+        mkdir -p "$PRISTINE/${_mp%/}" || return 1
+        : > "$PRISTINE/${_mp%/}/.keep" || return 1
+        continue
+        ;;
+    esac
     if [[ -d "$REPO_ROOT/$p" ]]; then
       mkdir -p "$PRISTINE/$p" || return 1
       : > "$PRISTINE/$p/.keep" || return 1
@@ -108,9 +192,22 @@ build_pristine() {
   ( set +u
     # shellcheck source=scripts/lib/test-relevance-paths.sh
     source "$REPO_ROOT/scripts/lib/test-relevance-paths.sh"
-    printf '%s\n' "${REGISTRY_BATTERY_PATHS[@]}" "${CF_TUNNEL_BATTERY_PATHS[@]}" \
-                  "${C4_PRODUCER_PATHS[@]}" "${GITHUB_SCRIPTS_SUITE_PATHS[@]}" \
-                  "${WEBPLAT_APP_PATHS[@]}"
+    # EVERY `*_PATHS` array the relevance lib declares, derived rather than listed: the SUT asserts all
+    # of them tracked, so a hand list of five went stale the day ADR-262 added three more arrays
+    # (and made any new array's non-*.test.sh member red this battery's own control).
+    while IFS= read -r _rarr; do
+      eval "printf '%s\n' \${${_rarr}[@]+\"\${${_rarr}[@]}\"}"
+    done < <(declare -p | LC_ALL=C grep -oE 'declare -[a-zA-Z]* [A-Z0-9_]+_PATHS' | awk '{print $3}')
+    # #8322: the SUT's affected-census arm asserts every declared AFFECTED_*_PATHS
+    # element resolves — a tracked file, or a directory prefix (trailing /). Same
+    # doctrine as the relevance arrays above: missing them reds every row for a
+    # reason unrelated to any mutation.
+    # shellcheck source=scripts/lib/test-affected-paths.sh
+    source "$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+    while IFS= read -r _aarr; do
+      [[ "$_aarr" == "AFFECTED_CONSUMED_EDGES" || "$_aarr" == "ALWAYS_ON_SUITES" ]] && continue
+      eval "printf '%s\n' \${${_aarr}[@]+\"\${${_aarr}[@]}\"}"
+    done < <(declare -p | LC_ALL=C grep -oE 'declare -[a-zA-Z]* AFFECTED_[A-Z0-9_]+' | awk '{print $3}')
   ) | LC_ALL=C sort -u | materialise || return 1
 
   # (4) The real inputs, copied verbatim. These are what the rows mutate.
@@ -118,11 +215,31 @@ build_pristine() {
   cp "$SUT" "$PRISTINE/scripts/lint-orphan-test-suites.sh" || return 1
   cp "$REPO_ROOT/scripts/test-all.sh" "$PRISTINE/scripts/test-all.sh" || return 1
   cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$PRISTINE/scripts/lib/" || return 1
+  # #8322: the linter's census arm drives the sandbox runner's
+  # `--print-affected-set`, which sits BELOW the runner's repo-write-boundary
+  # requirement and reads the affected-declarations lib for `edge:declared`
+  # receipts — without both copies that call exits 2 and every census row
+  # reds for a reason unrelated to the row under test.
+  cp "$REPO_ROOT/scripts/lib/test-affected-paths.sh" "$PRISTINE/scripts/lib/" || return 1
+  cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$PRISTINE/scripts/lib/" || return 1
   cp "$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh" "$PRISTINE/apps/web-platform/infra/" || return 1
   cp "$REPO_ROOT"/.github/workflows/*.yml "$PRISTINE/.github/workflows/" || return 1
+  # ADR-262 Guard 2 reads each --pr-gated battery's OWN text for `$REPO_ROOT/<path>` operands, so the
+  # five battery files must be the real bytes, not the empty placeholders materialised above.
+  local _bf
+  for _bf in tests/scripts/test-registry-gate-mutation-battery.sh scripts/cf-tunnel-liveness-gate-mutations.test.sh \
+             scripts/lint-orphan-test-suites.test.sh scripts/battery-tag-authorship-mutations.test.sh \
+             scripts/test-all-affected.test.sh; do
+    cp "$REPO_ROOT/$_bf" "$PRISTINE/$_bf" || return 1
+  done
 
   git -C "$PRISTINE" init -q -b main >/dev/null 2>&1 || return 1
   git -C "$PRISTINE" add -A >/dev/null 2>&1 || return 1
+  # A COMMIT, not just a stage: since #8736 the sandbox runner derives its
+  # suite set from `git ls-tree HEAD`, so a staged-but-uncommitted file is
+  # invisible to surface 3 — the fixture that only `git add`ed measured a
+  # tree where every infra suite read as orphaned (the 144-orphan abort).
+  git -C "$PRISTINE" -c user.email=t@t -c user.name=t commit -qm init >/dev/null 2>&1 || return 1
 }
 
 # NORMALISE THE FIXTURE TO A FULLY-REGISTERED BASELINE.
@@ -216,8 +333,8 @@ mutate_or_die() {
 # because `$?` after a pipe is the LAST element's status — which is how a crash reads as a pass.
 run_lint() {
   local sb="$1"
-  OUT="$SB/.lint-out"
-  bash "$SB/scripts/lint-orphan-test-suites.sh" > "$OUT" 2>&1
+  OUT="$sb/.lint-out"
+  bash "$sb/scripts/lint-orphan-test-suites.sh" > "$OUT" 2>&1
   return $?
 }
 
@@ -252,14 +369,16 @@ require_single_surface() {
   pass "${row} precondition: ${path} is covered by exactly one surface (surface ${found% })"
 }
 
-row() { ROWS=$((ROWS + 1)); echo ""; echo "[$1] $2"; }
+# row() only runs inside worker subshells now — the parent's ROWS counter is rebuilt at
+# aggregation, so it carries no counter side-effect (a worker-local increment would be
+# discarded anyway).
+row() { echo ""; echo "[$1] $2"; }
 
 # Literals the rows anchor on, hoisted so a drift breaks ALL of them at once (loudly, via
 # mutate's DID-NOT-LAND) rather than silently weakening one row.
 BOARD_LINE='  run_suite "scripts/board/set-board-status" bash scripts/board/set-board-status.test.sh'
 BOARD_SUITE='scripts/board/set-board-status.test.sh'
 GLOB_LINE="  'apps/cla-evidence/scripts/*.test.sh'"
-INFRA_STEP='        run: bash apps/web-platform/infra/zot-log-shipper.test.sh'
 INFRA_SUITE='apps/web-platform/infra/zot-log-shipper.test.sh'
 HOOK_LINE='            bash main.test.sh'
 HOOK_SUITE='apps/cla-evidence/infra/main.test.sh'
@@ -273,6 +392,8 @@ ORPHAN_MSG='is never run by any runner'
 # C0 — NOOP CONTROL. The positive control every mutation battery needs: if the unmutated
 # sandbox is already RED, every row below "kills" a mutant that was dead on arrival.
 # =============================================================================================
+run_C0() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row C0 "noop control — the unmutated synthetic repo is GREEN"
 new_sandbox c0
 run_lint "$SB"; rc=$?
@@ -282,11 +403,14 @@ if (( rc == 0 )); then pass "C0 — unmutated sandbox exits 0"; else
 fi
 assert_has "C0 — reports no orphans" "orphan test suites: none"
 assert_has "C0 — reports a non-empty walk over six surfaces" "walked ${real_tracked} tracked *.test.sh against 6 registration surfaces"
+}
 
 # =============================================================================================
 # M1 — delete a registered suite's run_suite line (surface 1). Verify-the-verifier: this
 # re-introduces a REAL orphan, the #6734/#7402 defect itself.
 # =============================================================================================
+run_M1() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M1 "delete a run_suite line from test-all.sh (surface 1)"
 new_sandbox m1
 require_single_surface "$SB" "$BOARD_SUITE" "M1"
@@ -294,34 +418,48 @@ mutate_or_die "$SB/scripts/test-all.sh" "$BOARD_LINE"$'\n' ""
 run_lint "$SB"; rc=$?
 assert_red "M1" "$rc"
 assert_has "M1 — names the de-registered suite" "${BOARD_SUITE} ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M2 — two new unregistered suites under directories no glob covers, BOTH named. Two in one
 # row is strictly stronger than a separate "reports the second member" row, and unlike that
 # row it stays meaningful under a set-difference implementation.
 # =============================================================================================
+run_M2() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M2 "two unregistered suites under uncovered directories, both reported"
 new_sandbox m2
 mkdir -p "$SB/tools/nowhere" "$SB/docs/deep/nested" || harness_die "M2 mkdir"
 : > "$SB/tools/nowhere/alpha.test.sh"; : > "$SB/docs/deep/nested/beta.test.sh"
 git -C "$SB" add -A >/dev/null 2>&1 || harness_die "M2 git add"
+git -C "$SB" -c user.email=t@t -c user.name=t commit -qm m2 >/dev/null 2>&1 || harness_die "M2 git commit"
 run_lint "$SB"; rc=$?
 assert_red "M2" "$rc"
 assert_has "M2 — names the first new orphan" "tools/nowhere/alpha.test.sh ${ORPHAN_MSG}"
 assert_has "M2 — names the second new orphan" "docs/deep/nested/beta.test.sh ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M3 — delete a `run: bash …` step from infra-validation.yml (surface 3). Surface 3 carries 98
 # of the ~340 tracked suites, an order of magnitude more than any other, and it is delegated to
 # a second script's derivation — the likeliest surface to silently under-match.
 # =============================================================================================
-row M3 "delete a run: bash step from infra-validation.yml (surface 3)"
+run_M3() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M3 "git mv an infra suite out of the glob (surface 3 de-registration)"
 new_sandbox m3
 require_single_surface "$SB" "$INFRA_SUITE" "M3"
-mutate_or_die "$SB/.github/workflows/infra-validation.yml" "$INFRA_STEP"$'\n' ""
+# #8736 replaced the per-suite `run:` step with presence-is-registration, so
+# the de-registration hazard moved with it: a suite moved OUT of
+# apps/web-platform/infra/ stays a tracked *.test.sh but leaves the runner's
+# glob — uncovered, silently, unless a surface catches it.
+mkdir -p "$SB/tools/nowhere" || harness_die "M3 mkdir"
+git -C "$SB" mv "$INFRA_SUITE" tools/nowhere/ >/dev/null 2>&1 || harness_die "M3 git mv"
+git -C "$SB" -c user.email=t@t -c user.name=t commit -qm m3 >/dev/null 2>&1 || harness_die "M3 git commit"
 run_lint "$SB"; rc=$?
 assert_red "M3" "$rc"
-assert_has "M3 — names the de-registered infra suite" "${INFRA_SUITE} ${ORPHAN_MSG}"
+assert_has "M3 — names the de-registered infra suite" "tools/nowhere/zot-log-shipper.test.sh ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M4 — keep the run_suite LABEL, swap the COMMAND. Closes the silent direction: a parser
@@ -329,6 +467,8 @@ assert_has "M3 — names the de-registered infra suite" "${INFRA_SUITE} ${ORPHAN
 # green "none", which no floor can detect. Measured escape at test-all.sh's REQUIRED_RUNNERS
 # comment: `run_suite "<path>" bash -c true` once left this linter reporting no orphans.
 # =============================================================================================
+run_M4() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M4 "keep the run_suite label, swap its command (registration must be command-anchored)"
 new_sandbox m4
 mutate_or_die "$SB/scripts/test-all.sh" "$BOARD_LINE" \
@@ -336,12 +476,16 @@ mutate_or_die "$SB/scripts/test-all.sh" "$BOARD_LINE" \
 run_lint "$SB"; rc=$?
 assert_red "M4" "$rc"
 assert_has "M4 — a label-only mention does not count as registration" "${BOARD_SUITE} ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M5 — delete one glob pattern from test-all.sh's SUITE_GLOBS. This row ONLY reds if the linter
 # ASKS the runner for its patterns. Carry a duplicate copy in the linter and the runner stops
 # running eight suites while the linter, reading its stale copy, reports them covered.
 # =============================================================================================
+run_M5() {
+# declared floor is dynamic: assert_red(1) + require_single_surface + assert_has per glob member
+EXPECTED_ASSERTIONS=1
 row M5 "delete a glob pattern from the runner (surface 2 must be derived, never duplicated)"
 new_sandbox m5
 glob_members=$(git -C "$SB" ls-files 'apps/cla-evidence/scripts/*.test.sh')
@@ -352,11 +496,15 @@ mutate_or_die "$SB/scripts/test-all.sh" "$GLOB_LINE"$'\n' ""
 run_lint "$SB"; rc=$?
 assert_red "M5" "$rc"
 while IFS= read -r m; do assert_has "M5 — names ${m}" "${m} ${ORPHAN_MSG}"; done <<< "$glob_members"
+EXPECTED_ASSERTIONS=$(( EXPECTED_ASSERTIONS + 2 * GLOB_MEMBER_N ))
+}
 
 # =============================================================================================
 # M6 — OWN DISPATCH. Neuter the walk so it enumerates zero files. The single most valuable row
 # here: it is the only one covering the direction where failure is byte-identical to success.
 # =============================================================================================
+run_M6() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M6 "neuter the producer to enumerate zero files (anti-vacuity floor)"
 new_sandbox m6
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" "$PRODUCER_LINE" \
@@ -365,10 +513,13 @@ run_lint "$SB"; rc=$?
 assert_red "M6" "$rc"
 assert_has "M6 — the producer floor fires on a zero walk" "enumerated 0 tracked suites"
 assert_lacks "M6 — does not report a clean repo" "orphan test suites: none"
+}
 
 # =============================================================================================
 # M7 — an exclusion with a reason but no tracking issue.
 # =============================================================================================
+run_M7() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M7 "exclusion with a reason but no #NNNN"
 new_sandbox m7
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
@@ -376,6 +527,7 @@ mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
 run_lint "$SB"; rc=$?
 assert_red "M7" "$rc"
 assert_has "M7 — fail-closed on a missing tracking issue" "has no reason or no tracking issue"
+}
 
 # =============================================================================================
 # M8 — PRODUCER PARTIAL-NARROWING. The highest-value row, and the one this guard is most likely
@@ -384,6 +536,8 @@ assert_has "M7 — fail-closed on a missing tracking issue" "has no reason or no
 # and prints `orphan test suites: none`. M6 covers "enumerates zero"; only a count floor covers
 # "enumerates a plausible SUBSET".
 # =============================================================================================
+run_M8() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M8 "narrow the producer back to scripts/*.test.sh (plausible-subset)"
 new_sandbox m8
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" "$PRODUCER_LINE" \
@@ -394,12 +548,15 @@ narrowed=$(git -C "$SB" ls-files 'scripts/*.test.sh' | wc -l | tr -d ' ')
 assert_red "M8" "$rc"
 assert_has "M8 — the producer floor fires on a plausible subset (${narrowed} of ${real_tracked})" "enumerated ${narrowed} tracked suites"
 assert_lacks "M8 — does not read as a clean repo" "orphan test suites: none"
+}
 
 # =============================================================================================
 # M9 — delete the per-app main.test.sh hook step (surface 4). One workflow step registers a
 # suite in every infra root at once without naming any of them; nothing else in the linter can
 # see it, because the path on that step is relative.
 # =============================================================================================
+run_M9() {
+EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M9 "delete the per-app main.test.sh hook step (surface 4)"
 new_sandbox m9
 require_single_surface "$SB" "$HOOK_SUITE" "M9"
@@ -408,10 +565,13 @@ run_lint "$SB"; rc=$?
 assert_red "M9" "$rc"
 assert_has "M9 — names the suite the hook covered" "${HOOK_SUITE} ${ORPHAN_MSG}"
 assert_has "M9 — surface 4 is reported dark" "registration surface 4 matched ZERO tracked suites"
+}
 
 # =============================================================================================
 # M10 — delete a `run: bash …` step from a workflow OTHER than infra-validation.yml (surface 5).
 # =============================================================================================
+run_M10() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M10 "delete a run: bash step from another workflow (surface 5)"
 new_sandbox m10
 require_single_surface "$SB" "$S5_SUITE" "M10"
@@ -419,6 +579,7 @@ mutate_or_die "$SB/.github/workflows/validate-vector-config.yml" "$S5_STEP"$'\n'
 run_lint "$SB"; rc=$?
 assert_red "M10" "$rc"
 assert_has "M10 — names the de-registered suite" "${S5_SUITE} ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M11 — an exclusion key matching ZERO tracked files. M7 covers the missing issue-ref and the
@@ -426,6 +587,8 @@ assert_has "M10 — names the de-registered suite" "${S5_SUITE} ${ORPHAN_MSG}"
 # disciplined is a third, distinct failure — and the one that survives longest, because
 # deleting or renaming the suite an exclusion was written for leaves no trace.
 # =============================================================================================
+run_M11() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M11 "exclusion key matching zero tracked files"
 new_sandbox m11
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
@@ -433,6 +596,7 @@ mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
 run_lint "$SB"; rc=$?
 assert_red "M11" "$rc"
 assert_has "M11 — fail-closed on a stale key" "matches 0 tracked files, expected exactly 1"
+}
 
 # =============================================================================================
 # M12 (AC26) — an exclusion key matching TWO tracked files. This is the basename-collision the
@@ -440,6 +604,8 @@ assert_has "M11 — fail-closed on a stale key" "matches 0 tracked files, expect
 # constraint-scaffold/test/ and linear-fetch/test/, and linear-fetch's is one of the suites
 # #7402 exists to keep honest — so the collision lands exactly on the work.
 # =============================================================================================
+run_M12() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M12 "exclusion key matching two tracked files (basename collision)"
 new_sandbox m12
 collide=$(git -C "$SB" ls-files 'plugins/soleur/skills/*/test/parity.test.sh' | wc -l | tr -d ' ')
@@ -449,6 +615,7 @@ mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
 run_lint "$SB"; rc=$?
 assert_red "M12" "$rc"
 assert_has "M12 — fail-closed on an ambiguous key" "matches ${collide} tracked files, expected exactly 1"
+}
 
 # =============================================================================================
 # M13 (AC25) — REMOVE SURFACE 6 and assert the loopback suite becomes an orphan. Surface 6 is
@@ -456,6 +623,8 @@ assert_has "M12 — fail-closed on an ambiguous key" "matches ${collide} tracked
 # satisfiable at all, and without this row a later "simplify the two greps into one" edit could
 # delete it and leave the battery green.
 # =============================================================================================
+run_M13() {
+EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M13 "remove surface 6 (multi-line \`run: |\` block) — the loopback suite must become an orphan"
 new_sandbox m13
 require_single_surface "$SB" "$LOOPBACK_SUITE" "M13"
@@ -469,6 +638,7 @@ run_lint "$SB"; rc=$?
 assert_red "M13" "$rc"
 assert_has "M13 — the loopback suite is reported as an orphan without surface 6" "${LOOPBACK_SUITE} ${ORPHAN_MSG}"
 assert_has "M13 — surface 6 is reported dark" "registration surface 6 matched ZERO tracked suites"
+}
 
 # =============================================================================================
 # M14 — surface 4 goes dark on the LINTER side rather than the workflow side. M9 removes the
@@ -476,6 +646,8 @@ assert_has "M13 — surface 6 is reported dark" "registration surface 6 matched 
 # (the guard-rot failure). They are different subjects with the same symptom, and only one of
 # them is a change anybody would notice while reviewing a workflow diff.
 # =============================================================================================
+run_M14() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M14 "the surface-4 detector stops matching (guard-side rot)"
 new_sandbox m14
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" \
@@ -485,6 +657,7 @@ run_lint "$SB"; rc=$?
 assert_red "M14" "$rc"
 assert_has "M14 — the per-surface zero-check names the dark surface" "registration surface 4 matched ZERO tracked suites"
 assert_has "M14 — and the suite that surface covered is named" "${HOOK_SUITE} ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M15 — the runner stops answering `--print-suite-globs`. M5 proves the linter notices a pattern
@@ -493,16 +666,19 @@ assert_has "M14 — and the suite that surface covered is named" "${HOOK_SUITE} 
 # reported as orphans at once — a report so obviously wrong it gets ignored, taking the real
 # findings with it. Fail-closed means saying WHY.
 # =============================================================================================
+run_M15() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M15 "the runner no longer answers --print-suite-globs (the derivation contract itself)"
 new_sandbox m15
 mutate_or_die "$SB/scripts/test-all.sh" \
-  'if [[ "${1:-}" == "--print-suite-globs" ]]; then' \
-  'if [[ "${1:-}" == "--this-flag-was-removed" ]]; then'
+  '--print-suite-globs) _query_globs=1 ;;' \
+  '--this-flag-was-removed) _query_globs=1 ;;'
 run_lint "$SB"; rc=$?
 assert_red "M15" "$rc"
 assert_has "M15 — names the broken contract rather than reporting 167 phantom orphans" \
   "--print-suite-globs' exited 2 and printed 0 pattern(s)"
 assert_has "M15 — and says not to re-copy the patterns into the linter" "rather than re-copying the patterns here"
+}
 
 # =============================================================================================
 # M16 — POSITIVE CONTROL for the exclusion mechanism. M7, M11 and M12 each prove a malformed
@@ -511,11 +687,14 @@ assert_has "M15 — and says not to re-copy the patterns into the linter" "rathe
 # three kills and look healthy, and the next person with a legitimate suite to skip would find
 # the escape hatch welded shut.
 # =============================================================================================
+run_M16() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M16 "a well-formed exclusion suppresses its orphan and says so"
 new_sandbox m16
 mkdir -p "$SB/tools/nowhere" || harness_die "M16 mkdir"
 : > "$SB/tools/nowhere/gamma.test.sh"
 git -C "$SB" add -A >/dev/null 2>&1 || harness_die "M16 git add"
+git -C "$SB" -c user.email=t@t -c user.name=t commit -qm m16 >/dev/null 2>&1 || harness_die "M16 git commit"
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
   'EXCLUSIONS=( "tools/nowhere/gamma.test.sh|blocked on a fixture rewrite, tracked in #9999" )'
 run_lint "$SB"; rc=$?
@@ -525,18 +704,326 @@ if (( rc == 0 )); then pass "M16 — a correctly-formed exclusion is accepted (e
 fi
 assert_has "M16 — the exclusion is announced with its reason" "note: tools/nowhere/gamma.test.sh excluded -- blocked on a fixture rewrite, tracked in #9999"
 assert_lacks "M16 — and the suite is not also reported as an orphan" "tools/nowhere/gamma.test.sh ${ORPHAN_MSG}"
+}
 
-# --- Floors -----------------------------------------------------------------------------------
-# TWO floors, because they catch different deletions. The ROW floor catches a whole row being
-# deleted (the mutation matrix silently shrinking); the ASSERTION floor catches a row being
-# hollowed out — kept in place, still printing its banner, with its assertions removed.
-# The assertion floor is DERIVED, not a literal, for the reason the neighbouring MIN_ASSERTIONS
-# comment in scripts/test-all-infra-coverage-notice.test.sh gives: a fixed literal acquires
-# slack every time a list grows. M5 contributes two assertions per member of the glob it
-# deletes (a precondition and a name check), so that term is accumulated from the fixture
-# rather than restated. MIN_FIXED is the count produced by no loop, and it is the only number
-# here ever edited by hand: 1 harness + 3 C0 + 3 M1 + 3 M2 + 3 M3 + 2 M4 + 1 M5 + 3 M6 + 2 M7
-# + 3 M8 + 4 M9 + 3 M10 + 2 M11 + 2 M12 + 4 M13 + 3 M14 + 3 M15 + 3 M16 + 1 normalisation = 49.
+# =============================================================================================
+# M17-M20 — ADR-262 Guard 2 (the --pr-gated subject-set closure check). A battery that is declined on a
+# pull_request run is only as covered as its declared array, and this check is what stops the array
+# falling behind what the battery itself names. It had no row of its own: every other row here is about
+# registration, so the closure check could be deleted, narrowed or blinded with the whole battery green.
+# =============================================================================================
+run_M17() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M17 "Guard 2: a gated battery names a tracked file its array does not contain"
+new_sandbox m17
+# The mutation text is composed from ${_RR} rather than spelled `$REPO_ROOT/...`, because Guard 2 reads THIS
+# file for operands too and these strings are fixtures, not reads (it flagged them on the first run).
+_RR='$REPO_ROOT'
+# scratch-root.sh is tracked in the sandbox already (the runner sources it); assert rather than create it
+git -C "$SB" ls-files --error-unmatch scripts/lib/scratch-root.sh >/dev/null 2>&1 \
+  || harness_die "M17: scripts/lib/scratch-root.sh is not tracked in the sandbox"
+mutate_or_die "$SB/scripts/battery-tag-authorship-mutations.test.sh" \
+  "SUBJECT=\"${_RR}/scripts/battery-tag-authorship.test.sh\"" \
+  "SUBJECT=\"${_RR}/scripts/battery-tag-authorship.test.sh\"
+UNDECLARED_OPERAND=\"${_RR}/scripts/lib/scratch-root.sh\""
+run_lint "$SB"; rc=$?
+assert_red "M17" "$rc"
+assert_has "M17 — names the battery, the operand and the array" \
+  "scripts/battery-tag-authorship-mutations.test.sh names 'scripts/lib/scratch-root.sh', which TAG_AUTHORSHIP_BATTERY_PATHS does not contain"
+}
+
+run_M18() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M18 "Guard 2: a declared path the battery still names is removed from its array"
+new_sandbox m18
+_before=$(grep -c '^  "scripts/battery-tag-authorship.test.sh"' "$SB/scripts/lib/test-relevance-paths.sh")
+sed -i '/^  "scripts\/battery-tag-authorship.test.sh"/d' "$SB/scripts/lib/test-relevance-paths.sh" || harness_die "M18 sed"
+_after=$(grep -c '^  "scripts/battery-tag-authorship.test.sh"' "$SB/scripts/lib/test-relevance-paths.sh")
+[[ "$_before" == 1 && "$_after" == 0 ]] || harness_die "M18: the mutation did not land (before=${_before} after=${_after})"
+pass "M18 precondition: the element was present exactly once and is gone"
+run_lint "$SB"; rc=$?
+assert_red "M18" "$rc"
+assert_has "M18 — names the removed operand and its array" \
+  "names 'scripts/battery-tag-authorship.test.sh', which TAG_AUTHORSHIP_BATTERY_PATHS does not contain"
+}
+
+run_M19() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M19 "Guard 2: the --pr-gated derivation goes dark (every call site loses its flag)"
+new_sandbox m19
+sed -i 's/_diff_touches --pr-gated/_diff_touches/g' "$SB/scripts/test-all.sh" || harness_die "M19 sed"
+if grep -qE '_diff_touches --pr-gated +"' "$SB/scripts/test-all.sh"; then harness_die "M19: a --pr-gated call site survived the mutation"; fi
+pass "M19 precondition: no --pr-gated call site remains in the sandbox runner"
+run_lint "$SB"; rc=$?
+assert_red "M19" "$rc"
+assert_has "M19 — the floor names the empty derivation instead of passing over nothing" "examined 0 --pr-gated array(s)"
+}
+
+run_M20() {
+EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M20 "Guard 2: the corpus allowlist rejects a stale entry and an entry with no written reason"
+new_sandbox m20a
+mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'PR_GATE_CORPUS_ALLOWLIST=(' \
+  'PR_GATE_CORPUS_ALLOWLIST=(
+    "CF_TUNNEL_BATTERY_PATHS|nowhere/stale|a reason that is no longer true"'
+run_lint "$SB"; rc=$?
+assert_red "M20 (stale entry)" "$rc"
+assert_has "M20 — the stale entry is named" "'CF_TUNNEL_BATTERY_PATHS|nowhere/stale' matched no uncovered operand"
+new_sandbox m20b
+mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'PR_GATE_CORPUS_ALLOWLIST=(' \
+  'PR_GATE_CORPUS_ALLOWLIST=(
+    "CF_TUNNEL_BATTERY_PATHS|nowhere/silent| "'
+run_lint "$SB"; rc=$?
+assert_red "M20 (empty reason)" "$rc"
+assert_has "M20 — the unexplained entry is refused" "has no written reason"
+}
+
+# =============================================================================================
+# M21-M27 — Guard 3 (#9813): the declared-member census admits `glob:<head>/<tail>` entries, and
+# a malformed or dead declared glob is a static RED — the mint degrades bad shapes to
+# always-match edges, so a bad DECLARED glob is a silent widening of every diff's selection.
+# =============================================================================================
+# Replace the N-th glob: member of declared array $2 in file $1 with glob:$4...$3 — anchored at
+# the array name, so the six `glob:knowledge-base/**.sh` siblings don't collide the anchor.
+# (Five carriers plus scripts/lib/repo-write-boundary.test.sh's array, added under #9969.)
+mutate_glob_entry() {
+  python3 - "$1" "$2" "$3" "${4:-1}" <<'PY' || harness_die "glob-entry mutator did not land"
+import sys
+path, arr, new, n = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+s = open(path).read()
+i = s.index(arr + "=(")
+pos = i
+for _ in range(n):
+    pos = s.index('"glob:', pos) + 1
+j = pos - 1
+k = s.index('"', j + 1) + 1
+s = s[:j] + '"glob:' + new + '"' + s[k:]
+open(path, "w").write(s)
+PY
+}
+
+# kb literals below are COMPOSED (`${_KB}`), never spelled out: the kb-consumers
+# oracle scans this file for `knowledge-base/<path>` tokens and would charge the
+# fixture strings as real reads. The mutated values land in the sandbox lib
+# byte-identical — composition only changes how the SOURCE spells them.
+_KB='knowledge-base'
+run_M21() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M21 "Guard 3: a declared glob: carrying ? or [ is malformed — static RED"
+new_sandbox m21
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_KB}/x?[y].sh"
+run_lint "$SB"; rc=$?
+assert_red "M21" "$rc"
+assert_has "M21 — names the malformed entry and the grammar reason" \
+  "declares glob: edge 'glob:${_KB}/x?[y].sh', contains ? or ["
+}
+
+run_M22() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M22 "Guard 3: a declared glob: whose head does not end in / is malformed — static RED"
+new_sandbox m22
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'a*/b'
+run_lint "$SB"; rc=$?
+assert_red "M22" "$rc"
+assert_has "M22 — names the malformed entry and the grammar reason" \
+  "declares glob: edge 'glob:a*/b', its head does not end in /"
+}
+
+run_M23() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M23 "Guard 3: a declared glob: with a dead head dir is a dead edge — static RED"
+new_sandbox m23
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'nowhere-xyz/**.sh'
+run_lint "$SB"; rc=$?
+assert_red "M23" "$rc"
+assert_has "M23 — names the entry and the dead head" \
+  "declares glob: edge 'glob:nowhere-xyz/**.sh', its head dir nowhere-xyz/ does not exist"
+}
+
+run_M24() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M24 "Guard 3: a declared glob: with no metachar recurses literal — an untracked target REDs"
+new_sandbox m24
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_KB}/no-such-file.md"
+run_lint "$SB"; rc=$?
+assert_red "M24" "$rc"
+assert_has "M24 — names the entry and the literal-miss reason" \
+  "declares glob: edge 'glob:${_KB}/no-such-file.md', a literal entry that is not a tracked file"
+}
+
+run_M25() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M25 "Guard 3: a bad glob: entry AFTER a compliant first still reds (the walk reaches it)"
+new_sandbox m25
+# lint-trap-tempfile-ownership is the one array carrying several glob: members —
+# mutate its SECOND, leaving the first compliant.
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS' 'nowhere-xyz/**.sh' 2
+run_lint "$SB"; rc=$?
+assert_red "M25" "$rc"
+assert_has "M25 — the second (bad) member is named" \
+  "declares glob: edge 'glob:nowhere-xyz/**.sh', its head dir nowhere-xyz/ does not exist"
+}
+
+run_M26() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M26 "Guard 3: the real glob: declarations pass — and the walk demonstrably reached them"
+new_sandbox m26
+_n=$(grep -c "\"glob:${_KB}/" "$SB/scripts/lib/test-affected-paths.sh")
+(( _n >= 11 )) || harness_die "M26: sandbox lib carries ${_n} glob: kb entries (want >=11 — the walk would be vacuous)"
+pass "M26 precondition: ${_n} declared glob: kb entries are in the walk's domain"
+run_lint "$SB"; rc=$?
+if (( rc == 0 )); then pass "M26 — every declared glob: edge validates (exit 0)"; else
+  fail "M26 — a valid glob: declaration was REJECTED (exit ${rc})"
+  sed 's/^/    /' "$OUT" | head -10
+fi
+}
+
+run_M27() {
+EXPECTED_ASSERTIONS=6   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M27 "Guard 3: a glob: head that is not repo-relative, or a tail that can never match, is malformed — static RED"
+# The head classes the -d probe can resolve while no repo-relative diff line can
+# ever match: a dead edge that narrows while every static guard reads green (B1).
+new_sandbox m27a
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' '../x/*.sh'
+run_lint "$SB"; rc=$?
+assert_red "M27a" "$rc"
+assert_has "M27a — names the non-repo-relative head" \
+  "declares glob: edge 'glob:../x/*.sh', its head is not a repo-relative prefix"
+new_sandbox m27b
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' '/x/*.sh'
+run_lint "$SB"; rc=$?
+assert_red "M27b" "$rc"
+assert_has "M27b — a leading-/ head reds identically" \
+  "declares glob: edge 'glob:/x/*.sh', its head is not a repo-relative prefix"
+new_sandbox m27c
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'x/*/'
+run_lint "$SB"; rc=$?
+assert_red "M27c" "$rc"
+assert_has "M27c — a /-terminated tail is well-formed but unmatchable" \
+  "declares glob: edge 'glob:x/*/', its tail ends in /"
+}
+
+# --- Row dispatch: bounded-parallel -----------------------------------------------------------
+# Every row builds its own sandbox from PRISTINE (read-only once the harness is built) and
+# asserts against its own .lint-out — the matrix is order-free by construction. Serial cost was
+# ~28 min on CI and put the test-scripts (3/3) leg over its 60-minute ceiling twice (#8322);
+# a bounded pool divides the wall time by the pool width. SOLEUR_ORPHAN_MUT_JOBS overrides it.
+#
+# Mechanics, and the three traps they dodge:
+#   * workers are SUBSHELLS — bash subshells inherit the parent's EXIT trap, and ours rm -rf's
+#     $TMP, so the first worker to finish would delete every sibling's sandbox mid-row. Each
+#     worker clears the trap before anything else.
+#   * harness_die inside a worker kills only that subshell. The parent detects the missing
+#     counters file after the pool drains, replays the row's captured log (which carries the
+#     FATAL line), then dies the same death — the verdict stays "broken harness", never a
+#     phantom pass or a phantom kill.
+#   * PASS/FAIL/ROWS live in the worker's subshell; each row writes its counters
+#     to $TMP/rows/<id>.rc (PASS FAIL DECLARED ELAPSED) and the parent aggregates them during
+#     the ordered replay below, so the floors and the summary see exactly the serial numbers.
+ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27"
+JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
+# JOBS feeds arithmetic in the pool gate — an unsettable-to-0 or non-numeric value would spin
+# the `running >= JOBS` wait forever, and the arithmetic context must never see a non-digit
+# string (same discipline as SCRIPTS_SHARD's validator in test-all.sh).
+if [[ ! "$JOBS" =~ ^[0123456789]{1,3}$ ]] || (( 10#$JOBS < 1 )); then
+  echo "ERROR: SOLEUR_ORPHAN_MUT_JOBS must be a positive integer (got '$JOBS')" >&2
+  exit 2
+fi
+# Parity: every run_M<ordinal> FUNCTION defined in this file must be listed in ROW_IDS, and
+# vice versa — _site_seq counts list entries, so a defined-but-unlisted row would be a green
+# battery that never runs its mutation.
+_defined="$(grep -oE '^run_M[0123456789]+' "$0" | sed 's/^run_//' | sort -t M -k2 -n | tr '\n' ' ')"
+_listed="$(echo "$ROW_IDS" | tr ' ' '\n' | grep -E '^M' | tr '\n' ' ')"
+if [[ "${_defined% }" != "${_listed% }" ]]; then
+  echo "FATAL(harness): run_M* function definitions [${_defined% }] do not match ROW_IDS M-entries [${_listed% }] — a defined-but-undispatched row is a mutation that runs nowhere" >&2
+  exit 2
+fi
+mkdir -p "$TMP/rows" || harness_die "row-dispatch mkdir"
+# EXEC_IDS is the dispatched set, recorded PARENT-SIDE (worker subshells cannot tick parent
+# state) at the moment each worker spawns. Replay and aggregation iterate it — never
+# re-derived, because `in_range` is stateful (a second pass doubles _site_seq) and a substring
+# membership test is wrong (M1 is a prefix of M10..M16). C0 dispatches ahead of the range
+# gate: it is the unconditional control, not a gated site. `in_range` stays a standalone
+# statement — as the left operand of `&&` before `&`, bash binds the AND-list into the
+# backgrounded subshell and the parent's counters would read zero.
+EXEC_IDS=()
+for _id in $ROW_IDS; do
+  if [[ "$_id" != "C0" ]]; then
+    in_range "${_id#M}" || continue
+  fi
+  EXEC_IDS+=("$_id")
+  while (( $(jobs -rp | wc -l) >= JOBS )); do sleep 0.2; done
+  (
+    trap - EXIT
+    PASS=0; FAIL=0; EXPECTED_ASSERTIONS=
+    _t0=$SECONDS
+    "run_${_id}"
+    # fields: PASS FAIL DECLARED_ASSERTIONS ELAPSED_S. An unset declared field must not
+    # collapse — an empty middle field would shift ELAPSED into _d's slot and report the
+    # WRONG failure ("hollowed" instead of "undeclared"). UNSET is non-numeric, so the
+    # aggregation's numeric check FATALs with the true reason.
+    echo "$PASS $FAIL ${EXPECTED_ASSERTIONS:-UNSET} $((SECONDS - _t0))" > "$TMP/rows/$_id.rc"
+  ) > "$TMP/rows/$_id.log" 2>&1 &
+done
+wait
+
+# Two passes, not one: replay EVERY dispatched log first so a dead row cannot hide the logs of
+# the rows after it, then aggregate — where a missing counters file dies as a broken harness.
+for _id in "${EXEC_IDS[@]}"; do cat "$TMP/rows/$_id.log"; done
+
+# Directory-side audit BEFORE aggregation: the executed-set loops cannot see a rogue .rc — a
+# worker that wrote counters for an undispatched id (a range-gate leak) is invisible to them.
+# Membership, not a count check: every .rc must belong to a dispatched id — a count-equal
+# swap still dies here on the rogue name, and a missing dispatched file dies at the per-row
+# harness_die below.
+_rc_files=( "$TMP/rows/"*.rc )
+if [[ -e "${_rc_files[0]}" ]]; then
+  for _f in "${_rc_files[@]}"; do
+    _rc_id="${_f##*/}"; _rc_id="${_rc_id%.rc}"
+    _known=0
+    for _e in "${EXEC_IDS[@]}"; do [[ "$_e" == "$_rc_id" ]] && { _known=1; break; }; done
+    (( _known == 1 )) || harness_die "a counters file exists for undispatched row ${_rc_id} — the range gate leaked"
+  done
+else
+  (( ${#EXEC_IDS[@]} == 0 )) || harness_die "dispatched ${#EXEC_IDS[@]} rows but $TMP/rows is empty — every worker died before writing counters"
+fi
+
+WORKER_ASSERTS=0
+for _id in "${EXEC_IDS[@]}"; do
+  if [[ ! -f "$TMP/rows/$_id.rc" ]]; then
+    harness_die "row $_id's worker exited without writing counters — its log above carries the FATAL line; the verdict is a broken harness, not a mutation result"
+  fi
+  read -r _p _f _d _t < "$TMP/rows/$_id.rc"
+  # _p/_f/_d all enter arithmetic below — every field must be digits-only before any (( ))
+  # sees it (an unvalidated numeric field is an arithmetic-evaluation surface).
+  if [[ ! "$_p" =~ ^[0123456789]+$ || ! "$_f" =~ ^[0123456789]+$ ]]; then
+    harness_die "row $_id wrote non-numeric counters ('$_p $_f') — the .rc contract is four whitespace-separated fields"
+  fi
+  if [[ ! "${_d:-}" =~ ^[0123456789]+$ ]]; then
+    echo "FATAL: row $_id wrote no declared assertion count (3rd .rc field) — a row without an expectation is a floor this battery refuses to estimate" >&2
+    exit 1
+  fi
+  if (( _d < 1 )); then
+    echo "FATAL: row $_id declared a ZERO assertion floor — under-declaring is the silent direction; every mutation row must assert something" >&2
+    exit 1
+  fi
+  if (( _p + _f < _d )); then
+    echo "FATAL: row $_id ran $((_p + _f)) assertions, expected >= ${_d} — the row was hollowed out; an over-delivering sibling cannot subsidize it" >&2
+    exit 1
+  fi
+  echo "    row $_id: $((_p + _f))/${_d} assertions, ${_t:-?}s"
+  PASS=$((PASS + _p)); FAIL=$((FAIL + _f)); ROWS=$((ROWS + 1))
+  WORKER_ASSERTS=$((WORKER_ASSERTS + _p + _f))
+done
+
 # --- R1: the linter must not inherit the caller's TEST_GROUP ------------------------------
 #
 # WHY THIS IS A ROW AND NOT A COMMENT. The linter's fail-closed path for an unanswered
@@ -588,7 +1075,7 @@ ROWS=$(( ROWS + 1 ))
 # counts. Ported from run-registered-suites.test.sh, the only suite that already had it.
 _ctl_p=$PASS; _ctl_f=$FAIL
 pass "positive control: pass() increments the pass counter"
-fail "positive control: fail() increments the fail counter" "this FAIL line is expected"
+fail "positive control: fail() increments the fail counter (this FAIL line is expected)"
 if (( PASS == _ctl_p + 1 && FAIL == _ctl_f + 1 )); then
   PASS=$_ctl_p; FAIL=$_ctl_f
   pass "positive control: pass()/fail() both move their own counters"
@@ -597,19 +1084,38 @@ else
   echo "FAIL: positive control -- pass()/fail() do NOT move their counters; every verdict in this file is unreliable" >&2
 fi
 
-MIN_ROWS=18
-# +3 for the positive control above.
-MIN_FIXED=51
-MIN_ASSERTIONS=$(( MIN_FIXED + (2 * ${GLOB_MEMBER_N:-0}) ))
+# FLOORS — equality, not thresholds, so a deleted site can never read as a smaller green.
+# _site_seq counts every gated call site (M1..M16): a removed row FATALs here even when the
+# range it fell in still produces a green half. (The old MIN_ROWS=18 was a floor over 19 sites
+# — deleting R1 or R1b stayed green. Equality removes that slack; conservation below pins the
+# unconditional sites.)
 echo ""
-if (( ROWS < MIN_ROWS )); then
-  echo "FATAL: ${ROWS} mutation rows ran, expected >= ${MIN_ROWS} — a row was deleted, so the matrix silently shrank." >&2
+if (( _site_seq != DECLARED_TOTAL )); then
+  echo "FATAL: ${_site_seq} gated row sites reached the range gate, expected ${DECLARED_TOTAL} — a declared row was deleted or reordered, so the registered --rows ranges no longer name the real matrix." >&2
   exit 1
 fi
-if (( PASS + FAIL < MIN_ASSERTIONS )); then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS} — the suite was stranded, not clean." >&2
+_EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
+if (( EXECUTED != _EXPECTED_EXECUTED )); then
+  echo "FATAL: ${EXECUTED} rows dispatched, expected ${_EXPECTED_EXECUTED} for --rows ${ROWS_LO}-${ROWS_HI} — the gate mis-selected." >&2
+  exit 1
+fi
+# Conservation over UNCONDITIONAL sites: ROWS counts C0 + executed gated rows + R1 + R1b. A
+# deleted R1/R1b/C0 drops ROWS below EXECUTED+3 — the check that makes removing an
+# unconditional row loud.
+_UNCONDITIONAL_SITES=3
+if (( ROWS != EXECUTED + _UNCONDITIONAL_SITES )); then
+  echo "FATAL: ${ROWS} rows ran but EXECUTED+${_UNCONDITIONAL_SITES} = $((EXECUTED + _UNCONDITIONAL_SITES)) — an unconditional site (C0, R1, R1b) was deleted or double-counted." >&2
+  exit 1
+fi
+# Parent-side assertion floor: assertions that live OUTSIDE workers — the enumeration pass,
+# the normalisation pass, R1, R1b, and the positive control's net +1 — so a hollowed
+# unconditional site cannot hide inside the workers' sum. (Worker assertions are floored
+# per-row at aggregation: each row's actual >= its declared count.)
+MIN_PARENT_ASSERTIONS=5
+if (( PASS + FAIL - WORKER_ASSERTS < MIN_PARENT_ASSERTIONS )); then
+  echo "FATAL: only $((PASS + FAIL - WORKER_ASSERTS)) unconditional assertions ran, expected >= ${MIN_PARENT_ASSERTIONS} — an unconditional site (harness enumeration/normalise, R1, R1b, positive control) was hollowed or deleted." >&2
   exit 1
 fi
 
-echo "lint-orphan-test-suites.test.sh: ${ROWS} rows, $PASS passed, $FAIL failed"
+echo "lint-orphan-test-suites.test.sh: ${ROWS} rows (${EXECUTED} gated of ${DECLARED_TOTAL}), $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]] || exit 1

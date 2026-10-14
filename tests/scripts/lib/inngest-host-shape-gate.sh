@@ -2,7 +2,7 @@
 # Sourced plan-SHAPE gate for the inngest-host dispatch
 # (apply_target=inngest-host in .github/workflows/apply-web-platform-infra.yml, #6894 / ADR-142).
 #
-# EXTRACTED + SOURCED (mirrors inngest-volume-recut-gate.sh / inngest-host-replace-gate.sh): both
+# EXTRACTED + SOURCED (mirrors inngest-host-replace-gate.sh and, until #8285 PR B deleted it, inngest-backstop-retire-gate.sh): both
 # the workflow's inngest_host plan step AND tests/scripts/test-inngest-host-shape-gate.sh source
 # this file and call inngest_host_shape_gate directly, so the CI decision logic is the SAME bytes
 # the test exercises.
@@ -13,7 +13,7 @@
 # (an all-no-op plan passes, and so does an empty resource_changes array — nothing would be
 # applied). What the gate refuses is every action outside the per-address permitted table below.
 #
-# ALLOW-SET = EXACTLY the inngest_host job's 18 `-target=` addresses (derived from the workflow,
+# ALLOW-SET = EXACTLY the inngest_host job's `-target=` addresses (derived from the workflow,
 # not retyped; the battery and terraform-target-parity.test.ts both RED if the two drift apart).
 # Every allow-set address belongs to EXACTLY ONE class; `allow_unpartitioned` aborts the gate if an
 # address is in the allow-set with no class (it would be unconstrained) or in a class but not the
@@ -23,16 +23,12 @@
 #   hcloud_server.inngest                       no-op | create            → server_touched
 #       (update covers the in-place server_type change, which reboots the sole scheduler; a
 #        replace is the separately-gated inngest-host-replace dispatch)
-#   hcloud_volume.inngest_redis                 no-op | create IFF the server is a create
-#                                                                         → old_volume_touched
-#   hcloud_volume_attachment.inngest_redis      no-op | create IFF the server is a create
-#                                                                         → old_attachment_touched
 #   hcloud_volume.inngest_redis_luks            no-op | create            → luks_volume_touched
 #   hcloud_volume_attachment.inngest_redis_luks no-op | create            → luks_attachment_touched
 #   hcloud_server_network.inngest               no-op | create            → network_touched
-#   hcloud_firewall.inngest, hcloud_firewall_attachment.inngest
-#                                               no-op | create            → firewall_touched
-#       (an update is an ingress change on a host that takes no inbound traffic)
+#   hcloud_firewall.inngest                     no-op | create            → firewall_touched
+#       (an update is an ingress change on a host that takes no inbound traffic). The binding is
+#       hcloud_server.inngest.firewall_ids (#8754); the old attachment's forget reds forget_present.
 #   random_id.inngest_{signing,event}_key_dedicated, random_password.inngest_redis_password_dedicated
 #                                               no-op | create            → generated_secret_touched
 #   doppler_project.inngest, doppler_environment.inngest_prd, doppler_secret.*_dedicated,
@@ -40,9 +36,10 @@
 #                                               no-op | create | update   → doppler_touched
 #       (rotations reach Doppler by design — inngest-host.tf's "TF owns these three values")
 #
-# "create IFF the server is a create": the live plaintext AOF volume and its attachment may only be
-# born alongside a from-scratch host. A create of either while the server already exists means the
-# volume left state — creating a fresh EMPTY volume at the address the host mounts as /mnt/data.
+# RETIRED (#8285): hcloud_volume.inngest_redis and hcloud_volume_attachment.inngest_redis (the plaintext
+# backstop pair) are no longer declared, `-target`ed or in the allow-set. The volume was destroyed
+# 2026-10-09 (the since-deleted inngest-backstop-retire dispatch), so ANY action on either address is an
+# out-of-allow-set change (out_of_scope; a delete trips resource_deletes and a forget forget_present first).
 #
 # GLOBAL:
 #   luks_passphrase_in_graph — random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key
@@ -83,7 +80,7 @@ inngest_host_shape_gate() {
   local counts dg rd nd reason t
   local -A c=()
   # Every counter, in REASON ORDER (most specific first; the catch-alls last).
-  local -a order=(allow_unpartitioned luks_passphrase_in_graph old_volume_touched old_attachment_touched
+  local -a order=(allow_unpartitioned luks_passphrase_in_graph
     server_touched luks_volume_touched luks_attachment_touched firewall_touched network_touched
     generated_secret_touched doppler_touched forget_present resource_deletes nested_deletes out_of_scope)
 
@@ -93,13 +90,10 @@ inngest_host_shape_gate() {
   if ! counts=$(jq -n --slurpfile p "$plan_json" '
       def allow: [
         "hcloud_server.inngest",
-        "hcloud_volume.inngest_redis",
-        "hcloud_volume_attachment.inngest_redis",
         "hcloud_volume.inngest_redis_luks",
         "hcloud_volume_attachment.inngest_redis_luks",
         "hcloud_server_network.inngest",
         "hcloud_firewall.inngest",
-        "hcloud_firewall_attachment.inngest",
         "random_id.inngest_signing_key_dedicated",
         "random_id.inngest_event_key_dedicated",
         "random_password.inngest_redis_password_dedicated",
@@ -113,13 +107,10 @@ inngest_host_shape_gate() {
       ];
       def classes: [
         {r: "server_touched",           a: ["hcloud_server.inngest"],                       ok: [["no-op"], ["create"]],           with_server_create: false},
-        {r: "old_volume_touched",       a: ["hcloud_volume.inngest_redis"],                 ok: [["no-op"]],                       with_server_create: true},
-        {r: "old_attachment_touched",   a: ["hcloud_volume_attachment.inngest_redis"],      ok: [["no-op"]],                       with_server_create: true},
         {r: "luks_volume_touched",      a: ["hcloud_volume.inngest_redis_luks"],            ok: [["no-op"], ["create"]],           with_server_create: false},
         {r: "luks_attachment_touched",  a: ["hcloud_volume_attachment.inngest_redis_luks"], ok: [["no-op"], ["create"]],           with_server_create: false},
         {r: "network_touched",          a: ["hcloud_server_network.inngest"],               ok: [["no-op"], ["create"]],           with_server_create: false},
-        {r: "firewall_touched",         a: ["hcloud_firewall.inngest", "hcloud_firewall_attachment.inngest"],
-                                                                                            ok: [["no-op"], ["create"]],           with_server_create: false},
+        {r: "firewall_touched",         a: ["hcloud_firewall.inngest"],                     ok: [["no-op"], ["create"]],           with_server_create: false},
         {r: "generated_secret_touched", a: ["random_id.inngest_signing_key_dedicated", "random_id.inngest_event_key_dedicated",
                                             "random_password.inngest_redis_password_dedicated"],
                                                                                             ok: [["no-op"], ["create"]],           with_server_create: false},
@@ -193,9 +184,9 @@ inngest_host_shape_gate() {
     if [[ "${c[$t]}" -ne 0 ]]; then reason="$t"; break; fi
   done
   if [[ -z "$reason" ]]; then
-    echo "inngest_host_shape_gate: PASS — every action is in the inngest-host permitted table (no touch on the live AOF volume/attachment or an existing server, no firewall/network/generated-secret update, the LUKS passphrase pair absent, no delete/forget, nothing out of scope)"
+    echo "inngest_host_shape_gate: PASS — every action is in the inngest-host permitted table (no touch on an existing server, no firewall/network/generated-secret update, the LUKS passphrase pair absent, no delete/forget, nothing out of scope)"
     return 0
   fi
-  echo "inngest_host_shape_gate: ABORT reason=${reason} — plan is NOT an inngest-host shape (see the permitted table in tests/scripts/lib/inngest-host-shape-gate.sh: the live AOF volume/attachment may only be created alongside a from-scratch server; the server may only be created; firewall/network/generated secrets only created; Doppler never deleted; the LUKS passphrase pair must be absent; no delete, forget, nested-block removal or out-of-scope action)"
+  echo "inngest_host_shape_gate: ABORT reason=${reason} — plan is NOT an inngest-host shape (see the permitted table in tests/scripts/lib/inngest-host-shape-gate.sh: the retired plaintext backstop pair is outside the allow-set; the server may only be created; firewall/network/generated secrets only created; Doppler never deleted; the LUKS passphrase pair must be absent; no delete, forget, nested-block removal or out-of-scope action)"
   return 1
 }

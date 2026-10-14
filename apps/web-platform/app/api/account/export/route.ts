@@ -5,7 +5,8 @@
 //
 // Flow:
 //   1. CSRF origin check.
-//   2. supabase.auth.getUser() — return 401 if unauthenticated.
+//   2. verifiedUserId(req) — middleware-minted identity header, remote
+//      getUser() fallback; return 401 if unauthenticated.
 //   3. Abuse rate-limit (1 req / 60s per user) via SlidingWindowCounter.
 //   4. Consume reauth event (single-use, <=5min, auth_time<=300s OAuth)
 //      via requireFreshReauth(req) per AC21 + AC27.
@@ -13,7 +14,6 @@
 //   6. Return 202 with {jobId, acknowledged_at}.
 
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import {
   SlidingWindowCounter,
@@ -21,6 +21,7 @@ import {
 } from "@/server/rate-limiter";
 import { ReauthEventInvalid, requireFreshReauth } from "@/server/dsar-reauth";
 import { enqueueExport } from "@/server/dsar-export";
+import { verifiedUserId } from "@/server/request-auth";
 
 // 1 request per 60 seconds per user — abuse gate (TR7).
 const dsarLimiter = new SlidingWindowCounter({
@@ -32,14 +33,12 @@ export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/account/export", origin);
 
-  const supabase = await createClient();
-  const { data: userData, error: userErr } = await supabase.auth.getUser();
-  if (userErr || !userData?.user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const user = userData.user;
 
-  if (!dsarLimiter.isAllowed(user.id)) {
+  if (!dsarLimiter.isAllowed(userId)) {
     return NextResponse.json(
       {
         error: "Too many requests. Please wait before trying again.",

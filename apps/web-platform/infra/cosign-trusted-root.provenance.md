@@ -38,10 +38,11 @@ re-verify against a live signed image **before** the WARN→ENFORCE flip.
 ## Rotation recipe
 
 ```sh
-# On a network-connected machine, re-capture the current public-good root:
+# On a network-connected machine, re-capture the current public-good root. The verifier image is
+# pulled from gcr.io since #8714 (same digest as the ghcr.io ref the capture row above records):
 d=$(mktemp -d)
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/out -v "$d":/out \
-  ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870 initialize
+  gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870 initialize
 cp "$d/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json" \
   apps/web-platform/infra/cosign-trusted-root.json
 # Then update the Capture date + sha256 above, and re-verify a live signed digest offline.

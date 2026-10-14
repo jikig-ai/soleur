@@ -420,7 +420,7 @@ run_part_a() {
     nwords="$(printf '%s' "$cons" | wc -w | tr -d '[:space:]')"
     if [[ "$nwords" -lt 4 ]]; then
       fail "A5 $w: consequence has $nwords word(s), need >= 4 — a row with no consequence is a row that should not exist"
-    elif [[ "$cancel" == "no" ]] && ! printf '%s' "$cons" | grep -qi 'no cancel'; then
+    elif [[ "$cancel" == "no" ]] && ! printf '%s' "$cons" | grep -ci >/dev/null 'no cancel'; then
       fail "A5 $w: cancel=no but the consequence never says why (expected the phrase 'no cancel: <reason>') — a superseded push leaves this run on the pool; name the state it holds or the rollout it awaits"
     else
       pass "A5 $w: consequence has $nwords words"

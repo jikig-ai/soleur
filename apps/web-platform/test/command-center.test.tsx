@@ -156,6 +156,13 @@ function foundationResponse(
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
+      // Phase 5: the client auth read moved to getSession() (local cookie
+      // read) in both useConversations and useOnboarding — return the same
+      // user shape on both.
+      getSession: vi.fn().mockResolvedValue({
+        data: { session: { user: { id: "user-1" } } },
+        error: null,
+      }),
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id: "user-1" } },
         error: null,
@@ -535,6 +542,99 @@ describe("Command Center", () => {
       });
     });
 
+    it("accepts a .md the browser reports with an empty type and labels it MD", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      expect((fileInput.getAttribute("accept") ?? "").split(",")).toEqual(
+        expect.arrayContaining([".md", ".txt"]),
+      );
+
+      const mdFile = new File(["# notes"], "onboarding-notes.md", { type: "" });
+      fireEvent.change(fileInput, { target: { files: [mdFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("onboarding-notes.md")).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/not a supported file type/)).not.toBeInTheDocument();
+      expect(screen.getByTestId("first-run-attachment-label")).toHaveTextContent("MD");
+    });
+
+    it("labels a .txt TXT, titles the tile with the filename, and announces rejections as an alert", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File(["notes"], "plain-notes.txt", { type: "text/plain" })] } });
+      await waitFor(() => {
+        expect(screen.getByText("plain-notes.txt")).toBeInTheDocument();
+      });
+      expect(screen.getByTestId("first-run-attachment-label")).toHaveTextContent("TXT");
+      expect(screen.getByText("plain-notes.txt").closest("[title]")).toHaveAttribute("title", "plain-notes.txt");
+
+      fireEvent.change(fileInput, { target: { files: [new File(["bad"], "malware.exe", { type: "application/x-executable" })] } });
+      await waitFor(() => {
+        expect(screen.getByRole("alert")).toHaveTextContent(/not a supported file type/);
+      });
+    });
+
+    it("keeps the rejection message when a batch mixes a valid and an invalid file", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: {
+          files: [
+            new File(["# notes"], "ok.md", { type: "" }),
+            new File(["bad"], "malware.exe", { type: "application/octet-stream" }),
+          ],
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("ok.md")).toBeInTheDocument();
+      });
+      expect(screen.getByText(/"malware.exe" is not a supported file type/)).toBeInTheDocument();
+    });
+
+    it("rejects a 0-byte .md as empty", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File([""], "empty.md", { type: "" })] } });
+
+      await waitFor(() => {
+        expect(screen.getByText('"empty.md" is empty.')).toBeInTheDocument();
+      });
+    });
+
     it("removes attachment when X button is clicked", async () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"
@@ -560,6 +660,25 @@ describe("Command Center", () => {
       });
     });
 
+    it("ignores files added after the message was submitted (they would miss the pending-files snapshot)", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("What are you building?")).toBeInTheDocument();
+      });
+
+      const input = screen.getByPlaceholderText("What are you building?");
+      fireEvent.change(input, { target: { value: "A SaaS for cats" } });
+      fireEvent.submit(input.closest("form")!);
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File(["late"], "late-notes.md", { type: "" })] } });
+      expect(screen.queryByText("late-notes.md")).not.toBeInTheDocument();
+    });
+
     it("navigates to chat/new on submit with text", async () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"
@@ -577,6 +696,38 @@ describe("Command Center", () => {
       expect(mockPush).toHaveBeenCalledWith(
         expect.stringContaining("/dashboard/chat/new"),
       );
+      // No staged files -> no first-run marker.
+      expect(mockPush.mock.calls.at(-1)![0]).not.toContain("fr=1");
+    });
+
+    it("adds the fr=1 first-run marker to the chat URL when files are staged", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: { files: [new File(["# notes"], "notes.md", { type: "text/markdown" })] },
+      });
+      await waitFor(() => {
+        expect(screen.getByText("notes.md")).toBeInTheDocument();
+      });
+
+      // Files only (empty message): the marker is the only signal the chat
+      // page has that the staged files belong to this navigation.
+      const input = screen.getByPlaceholderText("What are you building?");
+      fireEvent.submit(input.closest("form")!);
+
+      expect(mockPush).toHaveBeenCalledTimes(1);
+      const url = new URL(mockPush.mock.calls[0]![0] as string, "http://localhost");
+      expect(url.pathname).toBe("/dashboard/chat/new");
+      expect(url.searchParams.get("fr")).toBe("1");
+      expect(url.searchParams.has("msg")).toBe(false);
     });
   });
 });

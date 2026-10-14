@@ -13,7 +13,8 @@
 # app container starts (invoked from cloud-init.yml's terminal block) and is NOT
 # skippable — the container IS up when it runs.
 #
-# FAIL-CLOSED: on ANY failure this script emits a discriminating Sentry event (SSH-free
+# FAIL-CLOSED: on ANY failure (except the xtrace refusal below, exit 78, which is silent by design)
+# this script emits a discriminating Sentry event (SSH-free
 # root-cause signal, mirroring soleur-host-bootstrap.sh's emit_fail envelope + a
 # probe_result tag that names WHICH hypothesis fired) then exits non-zero. The cloud-init
 # caller `poweroff -f`s on that non-zero exit, so a host whose container egress is not
@@ -26,6 +27,30 @@
 # is one shell with no implicit errexit. The enforcement probes capture the curl exit code
 # explicitly (`|| rc=$?`) so errexit does not abort before the exit-code discrimination.
 set -e
+# (#7797) Refuse to run under shell tracing: emit_fail() below mints a credentialed
+# Sentry POST and the gateway probe mints a session token — -x would print both.
+case "$-" in
+  *x*)
+    printf '[cron-egress-enforce-probe] refusing to run under xtrace: this script handles a live credential and -x would print it\n' >&2
+    exit 78
+    ;;
+esac
+
+# Refuse to run under xtrace (#7797): emit_fail ACQUIRES credentials at runtime (the deploy-owned
+# /etc/default/webhook-deploy it sources, a Doppler token, and the Sentry DSN from `doppler secrets
+# get`), so tracing would print them into whatever captures stderr. Unconditional on purpose: a
+# `${VAR:+x}` escape hatch would be open by construction, since the credential is not in the
+# environment at launch. It tests the STATE (`$-`), so `bash -x`, SHELLOPTS=xtrace and a BASH_ENV
+# `set -x` are all caught. Placed BEFORE `trap emit_fail EXIT` so emit_fail's credential steps never
+# run under trace and the EXIT trap is not armed when the refusal exits. This exit is deliberately
+# SILENT (no Sentry event: emitting needs the DSN, which is what is being protected); the caller
+# (cloud-init.yml) powers the host off on any non-zero exit, so a traced fresh-host boot fails closed and
+# is observable only by that host's absence (the refusal text reaches stderr only; tracked as #9639).
+# LIMIT: emit_fail sources a deploy-owned file as root; a `set -x` planted there is not caught by this
+# entry check (tracked as #9639).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 CONTAINER=soleur-web-platform
 STAGE=egress-enforce
@@ -65,8 +90,11 @@ trap emit_fail EXIT
 
 # 1. Container readiness — bounded wait (the container starts moments before this runs;
 #    a missing container is itself a failure, not a skip, on this path).
+# The grep predicates in this script read the whole stream (grep -c, count discarded) so a producer never takes
+# EPIPE. It sets no pipefail today; this keeps the exit status identical if one is added or inherited via
+# SHELLOPTS. See the header of .claude/hooks/grep-q-pipe-guard.test.sh.
 N=0
-until docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; do
+until docker ps --format '{{.Names}}' | grep -cx "$CONTAINER" >/dev/null; do
   N=$((N + 1))
   if [ "$N" -ge 30 ]; then
     PROBE_RESULT=container_absent
@@ -80,7 +108,7 @@ done
 # 2. Structure — the egress chain must be wired and the loader unit active BEFORE trusting
 #    the behavioral probes (a missing jump would make the negative probe pass for the wrong
 #    reason). `nft`/`systemctl` failures here mean the firewall never came up.
-if ! nft list chain ip filter DOCKER-USER 2>/dev/null | grep -q 'jump SOLEUR-EGRESS'; then
+if ! nft list chain ip filter DOCKER-USER 2>/dev/null | grep -c 'jump SOLEUR-EGRESS' >/dev/null; then
   PROBE_RESULT=structure_fail
   echo 'ASSERT-FAILED: docker-user-jump (SOLEUR-EGRESS jump absent from DOCKER-USER)'
   emit_fail
@@ -128,6 +156,67 @@ elif [ "$neg_rc" -ne 28 ]; then
   exit 1
 fi
 echo egress-probe-negative-ok
+
+# 4. Egress gateway (#9534) — fresh-host bring-up is PROVEN, not assumed: the gw
+#    container must be up, and a real authenticated CONNECT pair must traverse it
+#    (one allow, one deny through the Squid ACLs). The probe mints a one-run
+#    session token into the host token dir (revocation = file absence), drives
+#    both CONNECTs from INSIDE the app container, and removes the token after.
+#    A gateway that cannot reach the metadata-deny path on a fresh host would
+#    otherwise dark-launch broken while every monitor stays green.
+GW_CONTAINER=soleur-egress-gw
+GW_TOKEN_DIR="${EGRESS_GW_TOKEN_DIR:-/var/lib/soleur/egress-tokens}"
+if ! grep -qx "$GW_CONTAINER" < <(docker ps --format '{{.Names}}'); then
+  PROBE_RESULT=gw_absent
+  echo "ASSERT-FAILED: egress-gw-absent ($GW_CONTAINER not running — gateway bootstrap did not land)"
+  emit_fail
+  exit 1
+fi
+GW_IP=$(docker inspect "$GW_CONTAINER" -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || true)
+case "$GW_IP" in
+  ''|*[!0-9.]*)
+    PROBE_RESULT=gw_absent
+    echo "ASSERT-FAILED: egress-gw-no-ip ($GW_CONTAINER has no derived IP)"
+    emit_fail
+    exit 1
+    ;;
+esac
+GW_TOK="probe-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+if ! : > "$GW_TOKEN_DIR/$GW_TOK" 2>/dev/null; then
+  PROBE_RESULT=gw_absent
+  echo "ASSERT-FAILED: egress-gw-token-dir ($GW_TOKEN_DIR missing or unwritable — token mount did not land)"
+  emit_fail
+  exit 1
+fi
+# allow leg: authenticated CONNECT to an allowlisted public host must complete
+# (any real upstream HTTP status counts; 000/407 = tunnel failed).
+gw_rc=0
+GW_CODE=$(docker exec "$CONTAINER" curl -s -o /dev/null \
+  --proxy "http://probe:${GW_TOK}@${GW_IP}:8443" \
+  --connect-timeout 8 --max-time 15 --retry 2 \
+  -w '%{http_code}' https://api.github.com/ 2>/dev/null || true) || gw_rc=$?
+if [ "$gw_rc" -ne 0 ] || [ "$GW_CODE" = "000" ] || [ "$GW_CODE" = "407" ]; then
+  rm -f "$GW_TOKEN_DIR/$GW_TOK"
+  PROBE_RESULT=gw_allow_fail
+  echo "ASSERT-FAILED: egress-gw-allow (authenticated CONNECT to api.github.com failed: rc=$gw_rc code=$GW_CODE)"
+  emit_fail
+  exit 1
+fi
+echo egress-gw-allow-ok
+# deny leg: CONNECT to the instance-metadata IP must be refused BY the proxy
+# (rc != 0). A zero exit means the ACL set is broken on this host.
+gw_rc=0
+docker exec "$CONTAINER" curl -s -o /dev/null \
+  --proxy "http://probe:${GW_TOK}@${GW_IP}:8443" \
+  --connect-timeout 5 --max-time 10 https://169.254.169.254/ 2>/dev/null || gw_rc=$?
+rm -f "$GW_TOKEN_DIR/$GW_TOK"
+if [ "$gw_rc" -eq 0 ]; then
+  PROBE_RESULT=gw_deny_fail
+  echo 'ASSERT-FAILED: egress-gw-deny (CONNECT to 169.254.169.254 NOT refused — deny ACLs broken)'
+  emit_fail
+  exit 1
+fi
+echo egress-gw-deny-ok
 
 PROBE_RESULT=ok
 trap - EXIT   # disarm: a clean success must NOT emit a fatal event

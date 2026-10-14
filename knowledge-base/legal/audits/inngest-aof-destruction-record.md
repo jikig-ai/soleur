@@ -9,6 +9,14 @@ brand_survival_threshold: single-user incident
 
 # Art. 5(2) destruction record — Inngest Redis AOF volume
 
+> **Superseded 2026-09-21 (#8296): this template does not fit the destroy that is now due.** It was
+> written for ADR-199's empty-store recut, so it says STOP unless `redis_keys` is 0 and has the
+> `hcloud_volume.inngest_redis` row flipping to luks. The store took ADR-142's additive route
+> instead: it was copied onto `hcloud_volume.inngest_redis_luks` on 2026-09-20, and the old volume
+> is a **non-empty** plaintext backstop whose destroy is tracked in #8285 (expires 2026-10-22). That
+> destroy needs its own Art. 5(2) record, made at the time, for a populated volume. Do not complete
+> this template for it. Everything below is kept unchanged as the record of the recut route.
+
 ## What this file is
 
 A **template**, not a record. It is committed EMPTY and dated, and it is completed by the operator
@@ -72,3 +80,10 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
       `data_mount_src=/dev/mapper/inngest-redis` AND `data_mount_devid` still pinning the volume
       (ADR-199 §Consequences, as amended 2026-09-10 by #8017 — the mapper NAME alone proves
       nothing about which device backs it).
+
+## Addendum — 2026-10-09
+
+Appended; nothing above is changed. The record that applies to the #8285 destroy is
+`knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md` (a template until its fields
+are filled from run output). This file stays as the record of the ADR-199 recut route and is not
+completed.

@@ -22,9 +22,15 @@
 // The rename wins over `SENSITIVE_LOWER.has()` so a future addition of
 // `userId` to `SENSITIVE_KEY_NAMES` does not bury the pseudonymous
 // identifier under `[Redacted]`.
+//
+// `founderId` (the same person id under the Inngest event-data name) is hashed
+// in place as `founderIdHash` (#8719): the sentry-correlation middleware attaches
+// the raw `inngest.event_data` to every event of a run, and several
+// agent/workspace events carry `founderId`.
 
 import { SENSITIVE_LOWER, SENSITIVE_KEY_NAMES } from "./sensitive-keys";
 import { hashUserIdValue } from "./userid-pseudonymize";
+import { redactEmailAddresses } from "./pii-redact";
 
 // Canonical inventory of helper-migration sites bound to `Sentry.setUser` via
 // `Sentry.withIsolationScope`. Single source of truth for the Article 30
@@ -70,6 +76,10 @@ function scrubRecursive(
   value: unknown,
   memo: Map<object, unknown>,
 ): unknown {
+  // Value-based layer (#8532 PR-0): an address inside ANY string — the
+  // exception value that becomes the issue title, `event.message`, a
+  // breadcrumb message — is redacted, whichever capture path produced it.
+  if (typeof value === "string") return redactEmailAddresses(value);
   if (value === null || typeof value !== "object") return value;
   const obj = value as object;
 
@@ -117,6 +127,11 @@ function scrubRecursive(
       continue;
     }
 
+    if (keyLower === "founderid") {
+      out["founderIdHash"] = hashUserIdValue(v);
+      continue;
+    }
+
     if (SENSITIVE_LOWER.has(keyLower)) {
       out[k] = REDACTED;
     } else {
@@ -126,8 +141,42 @@ function scrubRecursive(
   return out;
 }
 
+// Token-bearing public path prefixes and the URL/transaction-name
+// sanitizers live in `../lib/sentry-url-sanitize` — a single source of truth
+// shared with `sentry.client.config.ts` (browser tracing envelopes, #9178).
+// Duplicating the prefix list here is the replicated-literal parity-drift
+// class: a prefix added on one side only reopens the leak the other closed.
+import {
+  reduceTransactionName,
+  sanitizeRequestUrl,
+} from "@/lib/sentry-url-sanitize";
+
+/** Strip query + token-bearing path tails off `event.request` fields. */
+function sanitizeRequestForSentry<T>(event: T): T {
+  const req = (
+    event as {
+      request?: { url?: unknown; query_string?: unknown };
+    }
+  ).request;
+  if (req && typeof req === "object") {
+    if (typeof req.url === "string") {
+      req.url = sanitizeRequestUrl(req.url);
+    }
+    delete (req as { query_string?: unknown }).query_string;
+  }
+
+  // Transaction names carry raw path tails for unrouted requests
+  // ("GET /invite/<token>") — same prefix reduction as request.url.
+  const tx = (event as { transaction?: unknown }).transaction;
+  if (typeof tx === "string") {
+    (event as { transaction?: unknown }).transaction =
+      reduceTransactionName(tx);
+  }
+  return event;
+}
+
 export function scrubSentryEvent<T>(event: T): T {
-  return scrubRecursive(event, new Map()) as T;
+  return sanitizeRequestForSentry(scrubRecursive(event, new Map()) as T);
 }
 
 export function scrubSentryBreadcrumb<T>(breadcrumb: T): T {

@@ -2,7 +2,7 @@
 
 The Company-as-a-Service platform. Collapse the friction between a startup idea and a billion-dollar outcome.
 
-68 agents across engineering, finance, legal, marketing, operations, product, sales, and support -- compounding your company knowledge with every session.
+67 agents across engineering, finance, legal, marketing, operations, product, sales, and support -- compounding your company knowledge with every session.
 
 [![Version](https://img.shields.io/github/v/release/jikig-ai/soleur)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-BSL_1.1-blue.svg)](LICENSE)
@@ -11,7 +11,7 @@ The Company-as-a-Service platform. Collapse the friction between a startup idea 
 
 ## What is Soleur?
 
-Soleur gives a single founder the leverage of a full organization. **68 agents**, **3 commands**, and **100 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **67 agents**, **4 commands**, and **103 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
 
 ## Installation
 
@@ -188,6 +188,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 | `/soleur:go` | Unified entry point -- routes to the right workflow skill |
 | `/soleur:sync` | Analyze codebase and populate knowledge-base |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
+| `/soleur:version` | Show the installed plugin version and whether a newer release exists (Claude Code only) |
 
 Claude Code: `/soleur:go`. Grok Build: `/go`.
 

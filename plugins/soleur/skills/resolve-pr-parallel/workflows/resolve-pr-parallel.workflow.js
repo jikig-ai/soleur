@@ -233,7 +233,7 @@ function resolveWorkflowModel(tier) {
   var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
   var claude = !!env.CLAUDECODE
   var map = grok
-    ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
+    ? { cheap: 'grok-4.5', standard: 'grok-4.7', strong: 'grok-4.7', advisor: 'grok-4.7', inherit: 'inherit' }
     : claude
       ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
       : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
@@ -389,6 +389,16 @@ const report = {
   fanOutCap: maxComments,
   confirmed,
   budget: { total: budget.total, spent: budget.spent() },
+  // #9403: pipeline-tally bridge — invoking prose posts these via
+  // `pipeline-tally.sh incr <dim> <n>`. agent_rounds = resolver agents actually
+  // spawned (sum of per-round fanOut); fetch/commit agents are mechanical
+  // spawns, not counted.
+  counts: {
+    agent_rounds: rounds.reduce((n, r) => n + (r.fanOut || 0), 0),
+    // Each pushed round retriggers the target PR's CI — counted on THIS
+    // session's ledger (the run that drove the cost).
+    ci_cycles: rounds.filter((r) => r.pushed).length,
+  },
   totals: {
     threadsResolved: allResolved.length,
     threadsFailed: allFailed.length,

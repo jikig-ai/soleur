@@ -1,0 +1,31 @@
+## Problem
+
+Stage 3 of the #9721 hosted-runner demand plan (lever 2): draft PRs run only a light check set and the full required set runs on `ready_for_review` and again in `merge_group`. Measured 2026-10-07 (6h window, runner-bound jobs): draft-state `CI` is 1,319 of 3,094 PR-event `CI` job-minutes (18 runs, 73 each); expected net saving at steady state (every draft PR eventually readied, r = 7) 180 to 895 job-minutes per 6h (first-pass to re-measure inputs; the in-window transient of 591 to 1,277 is not the steady state; formula and table in the plan), against a measured pre-policy mean of 2.6 draft pushes per draft PR. It only pays above about 2.2 draft pushes per PR (about 1.1 on re-measure inputs), so the saving is marginal until the draft-push distribution is measured.
+
+## Entry gates (resolve on a throwaway PR before any `ci.yml` edit)
+
+Preconditions: ADR-270 is `accepted`, and this stage's PR appends its dated `## Amendment` to ADR-276 (Decision 3(g), (h)) before any switch is flipped.
+
+1. How the required-status rollup treats two same-name check runs on one SHA (draft light green, then ready pending).
+2. A `gh pr ready` with an ordinary user token versus `GITHUB_TOKEN` (the latter triggers no workflow).
+3. Whether repository variables reach a fork `pull_request` run.
+4. The arm-then-register window: ship Phase 6 runs `gh pr ready` then `gh pr merge --squash --auto` within seconds; the head already carries the draft run's greens. Ship Phase 6 must wait for a non-draft `CI` run on HEAD created after the ready call and fail closed (same in `drain-prs` and `merge-pr`).
+5. The agent `--admin` merge path skips the queue: `plugins/soleur/scripts/admin-merge-ready.sh` and its wiring test are in scope, because the `test` aggregator is created only after every shard ends and the draft run's `test` is the newest row until then.
+6. First check the cheaper alternative, with its pass criterion: the pre-policy and the post-policy mean pushes per draft PR (30-day census) are measured separately, and after the policy "no draft push before a local `--affected` run passes" is applied first the post-policy mean is at least 2.75 (the 2.2 break-even plus a 25% margin); the gate may legitimately fail, and then this stage closes by its stop rule.
+
+Design (Option R is the decision, ADR-276 Decision 4): the draft aggregator concludes red ("full battery owed at ready"), which needs no tolerance arm. Option T (a tolerance arm plus a marker) is rejected: the ruleset cannot enforce a marker, and a required marker would land in `required-checks.txt`, from which the composite action `bot-pr-with-synthetic-checks` derives its names and would post it green for bot PRs (the `SYNTHETIC_CHECK_NAMES` list in `_cron-safe-commit.ts` is hard-coded and needs a manual add). Consumers (`monitor-pr-checks.sh`, ship Phase 7 `required_failed`, `drain-prs` triage, `gh pr checks` readers, `admin-merge-ready.sh --wait`) must, for a non-draft head with a red `test` and the newest `CI` `pull_request` run still in progress, resolve the verdict from the newest non-draft run at HEAD, not the check row. Variable: `CI_DRAFT_LIGHT`, accepted value exactly `on` (unset, empty, `ON`, `on` with surrounding whitespace or any other string means full CI). Fork PRs always run full. The ready run is never gated on the variable: a flip between the draft push and the ready transition would skip it and could post a green or skipped required row (the #8450 pattern); the only allowed form is a full run unless the head's own draft run concluded a full-mode `test` success read from the API, failing closed to full, and any skip arm concludes explicitly, never `skipped` (ADR-276 Decision 4; Guard 1 mutation row). The variable comparison runs in a step shell (the Actions `==` operator is case-insensitive), heavy-family gating hangs off a detect job's output, and the variable enters through `env:`, never inline in `run:`.
+
+## Scope
+
+`ci.yml` adds the full `types:` list with `ready_for_review`, resolves the draft state live (a re-run reuses the original payload), gates heavy families on it behind a repository variable (unset means full CI, set with `gh variable set`, removed after 30 days with zero escapes), and the draft `test` aggregator concludes red. `battery-owed.sh` must not read a light `test` as full (a mutation row either way). A follow-through probe in `scripts/followthroughs/` raises an owner-visible signal for a non-draft head whose newest `test` is draft-mode red for more than N minutes (N above the observed maximum (about 38 min success, 51 min failed), fixed in S3's plan; covers a missing ready run and one that ran light on a lagging draft read; the ADR-270 stall probe watches queue entries only). Files: `ci.yml`, `battery-owed.sh` and its test, `admin-merge-ready.sh` and its wiring test, `monitor-pr-checks.sh`, ship Phase 6/7 (`plugins/soleur/skills/ship/SKILL.md`), `drain-prs`, `merge-pr`, the Guard 1 aggregator harness, the probe, and the ledger row. `e2e` keeps its step-level gating. Guard 1 of the plan carries the mutation matrix; the harness reuses the existing aggregator-over-synthetic-triples suite. `scripts/pr-fanout-ledger.txt` needs a row bump if a job is added (`ci.yml` is at its declared ceiling of 24).
+
+User-Impact: PR checks on draft pull requests (`.github/workflows/ci.yml`, `plugins/soleur/skills/ship/scripts/battery-owed.sh`); merge_group stays the full battery
+Fix-Size: 450 lines / 12 files
+
+Exit: draft `CI` minutes per draft push down at least 80%; zero queue stalls; zero PRs entering the queue with a heavy family unrun on a non-draft head; and net: total `CI` minutes on PRs that went draft then ready, before versus after, down at least 25% (threshold confirmed from the S1 census). Stop rule: if pushes per draft PR fall below 2.75, turn the variable off and close the stage.
+
+Rollback: unsetting the variable restores full draft CI but does not undo the `ready_for_review` entry in `types` (up to one extra full run of about 95 to 137 job-minutes per drafted-then-readied PR while it is unset; the skip arm may avoid it), the Phase 6 / `drain-prs` / `merge-pr` wait step, or the `admin-merge-ready.sh`, `battery-owed.sh` and consumer changes; those need a revert.
+
+Re-evaluation: after the S1 census exists and the entry gates are answered.
+
+Refs #9721

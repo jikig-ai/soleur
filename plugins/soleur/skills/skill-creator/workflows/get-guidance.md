@@ -85,7 +85,7 @@ skill-name/
 
 Ask: "What rules should ALWAYS apply, no matter which workflow?"
 
-These become `<essential_principles>` in SKILL.md.
+These become the essential-principles section (a `##` heading) in SKILL.md.
 
 Examples:
 

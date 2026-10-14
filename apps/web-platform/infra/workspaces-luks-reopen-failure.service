@@ -1,0 +1,89 @@
+[Unit]
+# (#9123) OnFailure= handler for workspaces-luks-reopen.service — the SINGLE
+# emitter for every way the boot unlock can fail: a script phase (the phase file
+# names it), or the unit itself (the doppler fetch exited, exec failed,
+# start-timeout, start-limit-hit — action=unit, discriminated by the systemctl
+# show tags packed into luks_open_result). Its own unit because a dangling
+# OnFailure= is a silent no-op.
+#
+# The emit channel is workspaces_luks_emit (sourced from
+# /usr/local/bin/workspaces-luks-emit.sh, delivered by
+# terraform_data.luks_monitor_install): feature=workspaces-luks /
+# op=workspaces-luks-drift is the sole paging op, and this unit is the ONLY arm
+# of the reopen family allowed to reach it — the reopen script itself is
+# journald-only on every outcome (a success-path emit would page on every
+# healthy reboot, AC9). workspaces_luks_emit resolves the DSN from the BAKED
+# /etc/default/luks-monitor first (DP-9), so it still pages through the exact
+# failure it reports — a Doppler outage at boot.
+Description=Report a workspaces LUKS boot-unlock failure off-host
+Documentation=https://github.com/jikig-ai/soleur/issues/9123
+
+[Service]
+Type=oneshot
+Environment=HOME=/root
+# DOPPLER_TOKEN (for the doppler_reachable probe) + SOLEUR_SENTRY_DSN (the baked
+# DSN the emitter reads directly from the same file) from the shared env file;
+# the device pin + scoped config name from this installer's own file. Read-only
+# consumer of both — the line-ownership contract on /etc/default/luks-monitor is
+# sacred.
+EnvironmentFile=-/etc/default/luks-monitor
+EnvironmentFile=-/etc/default/workspaces-luks-boot
+UMask=0077
+# Belt-and-suspenders only: confines any CLI tmp writes. The git-data reporter's
+# cited mechanism (DOPPLER_CONFIG_DIR=/tmp/.doppler) is NOT set on web-1 — the
+# CLI resolves $HOME/.doppler = /root/.doppler here, already root-only. The emit
+# runs in a child shell that inherits the same confinement.
+# Environment=TMPDIR is DELIBERATELY absent: this unit's emit path writes no
+# temp files (the DP-9 in-memory emit) — unlike the git-data sibling, whose
+# emitter's _devalue mktemp needed TMPDIR=/dev/shm.
+PrivateTmp=yes
+LimitCORE=0
+# Without this the ExecStart basename (`sh`) is the journald tag, so the
+# classification echo would be tagged `sh` and match NO vector include_matches
+# entry — the discriminating failure line would be dark off-box. MUST equal the
+# vector.toml tag.
+SyslogIdentifier=workspaces-luks-reopen
+# The body, in order:
+#  1. action from the phase file the script maintains; `unit` when it never ran.
+#  2. the unit's own verdict tags (Result / ExecMainStatus / ExecMainCode /
+#     NRestarts) — measured on systemd 255 and 261 to survive the
+#     start-limit-hit transition — packed into luks_open_result (the emit
+#     envelope is fixed-shape; that tag is where the discriminating tuple rides).
+#  3. the discriminating WL_* fields: mapper_present ([ -e ] + cryptsetup status
+#     for cryptsetup_unit_result), mountpoint_ok + mount_source (findmnt), and
+#     doppler_reachable — a bounded `timeout 15` NON-SECRET probe,
+#     `doppler secrets --only-names --config <scoped>` (the same config-scoped
+#     no-run/no-download shape as the R9-pinned key read, minus the value: a
+#     names listing proves reachability+scope without a secret ever transiting
+#     the probe; the rc is the signal, output to /dev/null).
+#  4. one emit under `timeout 90`: workspaces_luks_emit is fail-open and
+#     read-only, but a hang (network, resolver) must not eat TimeoutStartSec and
+#     lose the whole report on the one unit that is the sole signal for a
+#     store-absent host. The emit runs in a bash child because the helper is
+#     bash (BASH_SOURCE/local). If the emit leg itself fails — helper absent,
+#     bash absent, timeout — a crit SOLEUR_*_SEND_FAILED row is the mirror the
+#     send-failed alert reads (cq-silent-fallback-must-mirror-to-sentry).
+# No backslash sequences in the body: systemd's ExecStart parser C-unescapes them
+# and reads `\;` as a command separator (measured).
+ExecStart=/bin/sh -c 'u=workspaces-luks-reopen.service; \
+  a=$(head -n1 /run/workspaces-luks-reopen/action 2>/dev/null | grep -oE "^action=[a-z-]+" | cut -d= -f2- || true); \
+  [ -n "$a" ] || a=unit; \
+  r=$(systemctl show --value -p Result "$u" 2>/dev/null || echo unknown); \
+  c=$(systemctl show --value -p ExecMainStatus "$u" 2>/dev/null || echo unknown); \
+  k=$(systemctl show --value -p ExecMainCode "$u" 2>/dev/null || echo unknown); \
+  n=$(systemctl show --value -p NRestarts "$u" 2>/dev/null || echo unknown); \
+  if [ -e /dev/mapper/workspaces ]; then mp=true; else mp=false; fi; \
+  if cryptsetup status workspaces >/dev/null 2>&1; then cs=active; else cs=inactive; fi; \
+  if mountpoint -q /mnt/data 2>/dev/null; then mok=true; else mok=false; fi; \
+  ms=$(findmnt -n -o SOURCE /mnt/data 2>/dev/null || true); [ -n "$ms" ] || ms=none; \
+  if timeout 15 /usr/local/bin/doppler secrets --only-names --config "${WORKSPACES_DOPPLER_CONFIG:-prd_workspaces_luks}" >/dev/null 2>&1; then dr=true; else dr=false; fi; \
+  d=/run/workspaces-luks-reopen/log; \
+  echo "workspaces-luks-reopen FAILED action=$a result=$r rc=$c code=$k restarts=$n mapper_present=$mp cryptsetup_unit=$cs mountpoint_ok=$mok mount_source=$ms doppler_reachable=$dr" >&2; \
+  [ ! -s "$d" ] || sed "s/[[:cntrl:]]//g; s/[[][0-9;]*m//g" "$d" | grep -iE "doppler error|unable to|failed|fatal|error" | tail -n 4 >&2 || true; \
+  WL_REASON="boot_unlock_failed:$a" WL_LEVEL=fatal WL_MAPPER_PRESENT="$mp" WL_CRYPTSETUP_UNIT_RESULT="$cs" WL_MOUNTPOINT_OK="$mok" WL_MOUNT_SOURCE="$ms" WL_DOPPLER_REACHABLE="$dr" WL_LUKS_OPEN_RESULT="result=$r,rc=$c,code=$k,restarts=$n" \
+  timeout 90 /bin/bash -c ". /usr/local/bin/workspaces-luks-emit.sh; workspaces_luks_emit" \
+  || logger -p user.crit -t workspaces-luks-reopen -- "SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=emit_leg_failed drift_reason=boot_unlock_failed:$a"'
+# 150, not 120: the emit arm's `timeout 90` plus the doppler_reachable probe's
+# `timeout 15` plus systemctl/journal slack is ~120 s; nothing waits on this
+# oneshot, so the extra headroom is free.
+TimeoutStartSec=150

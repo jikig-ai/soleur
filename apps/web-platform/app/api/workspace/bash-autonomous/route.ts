@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { verifiedUserId } from "@/server/request-auth";
 import { resolveBashAutonomous } from "@/server/resolve-bash-autonomous";
 import {
   setBashAutonomous,
@@ -16,13 +16,10 @@ export async function GET(request: Request) {
   const { valid, origin } = validateOrigin(request);
   if (!valid) return rejectCsrf("api/workspace/bash-autonomous", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = await verifiedUserId(request);
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const autonomous = await resolveBashAutonomous(user.id);
+  const autonomous = await resolveBashAutonomous(userId);
   return NextResponse.json({ autonomous });
 }
 
@@ -30,11 +27,8 @@ export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
   if (!valid) return rejectCsrf("api/workspace/bash-autonomous", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = await verifiedUserId(request);
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   let body: { value?: unknown };
   try {
@@ -51,7 +45,7 @@ export async function POST(request: Request) {
     // raises (P0001) → BashAutonomousOwnerDeniedError → 403. A genuine infra
     // fault is NOT an authz denial → 500 (so it surfaces in 5xx alerting
     // rather than hiding behind a 403).
-    const autonomous = await setBashAutonomous(user.id, body.value);
+    const autonomous = await setBashAutonomous(userId, body.value);
     return NextResponse.json({ autonomous });
   } catch (err) {
     if (err instanceof BashAutonomousOwnerDeniedError) {

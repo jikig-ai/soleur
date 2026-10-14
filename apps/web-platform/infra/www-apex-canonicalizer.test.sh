@@ -110,16 +110,22 @@ eq_case() { # <want> <got> <name>
 # READERS
 # ---------------------------------------------------------------------------------------
 
-# Strip `#` and `//` line comments while tracking string state, so a `#` inside a quoted
-# value (seo-bulk-redirects.tf's description carries "…, #3367, #3297.") and a `//` inside a
-# URL ("https://soleur.ai/") both survive. Char-by-char rather than a regex because a regex
-# that is right about quoting is longer than this loop and harder to check.
+# Strip `#`, `//`, and `/* */` comments while tracking string state, so a `#` inside a quoted
+# value (seo-bulk-redirects.tf's description carries "…, #3367, #3297."), a `//` inside a
+# URL ("https://soleur.ai/"), and a `/*` inside a string all survive. Char-by-char rather than
+# a regex because a regex that is right about quoting is longer than this loop and harder to
+# check. `inblock` persists across records so multi-line block comments strip too — without it
+# a `/* rules { … } */`-wrapped declaration still parses live (#8364 review).
 strip_comments() { # <file>
   awk '
     {
       line = $0; out = ""; q = ""; i = 1; n = length(line)
       while (i <= n) {
         c = substr(line, i, 1)
+        if (inblock) {
+          if (c == "*" && substr(line, i + 1, 1) == "/") { inblock = 0; i += 2; continue }
+          i++; continue
+        }
         if (q != "") {
           if (c == "\\") { out = out c substr(line, i + 1, 1); i += 2; continue }
           if (c == q) { q = "" }
@@ -128,6 +134,7 @@ strip_comments() { # <file>
         if (c == "\"" || c == "'"'"'") { q = c; out = out c; i++; continue }
         if (c == "#") { break }
         if (c == "/" && substr(line, i + 1, 1) == "/") { break }
+        if (c == "/" && substr(line, i + 1, 1) == "*") { inblock = 1; i += 2; continue }
         out = out c; i++
       }
       print out
@@ -635,8 +642,9 @@ SIBLING_PNS="$(strip_comments "$UPTIME_TF" | awk '
   }
 ')"
 sib_n="$(printf '%s\n' "$SIBLING_PNS" | grep -c . || true)"
-# 3 = soleur_apex, app, app_health (#7884). Exact, so a sibling losing its name fails here.
-eq_case '3' "$sib_n" \
+# 6 = soleur_apex, app, app_health (#7884) + the three sampled seo_redirect_*
+# deep-URL probes (#8364). Exact, so a sibling losing its name fails here.
+eq_case '6' "$sib_n" \
   "the sibling pronounceable_name set is non-empty (distinctness over an empty set is vacuous); found ${sib_n}"
 
 pn_rc=1

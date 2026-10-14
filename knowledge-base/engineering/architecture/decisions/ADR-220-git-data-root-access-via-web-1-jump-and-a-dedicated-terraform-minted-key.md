@@ -212,6 +212,9 @@ replay the root login.
 > **Superseded 2026-09-15 (#8189), as to the D1b and D2–D3 rows:** their flip conditions are restated
 > in the Amendment log, "D5".
 
+> **Superseded 2026-09-27 (#8211 PR2, post-merge), as to the D1b row's status:** D1b is `accepted`.
+> See the Amendment log, "2026-09-27 (#8211 PR2, post-merge): D1b is accepted".
+
 ### D6 — Sequencing
 
 **This PR** ships D1a's wiring and a fail-closed access gate; the change list is in the plan
@@ -385,6 +388,13 @@ The authenticated hop is written by a workflow step into a fixed-path `ssh_confi
     is environment-gated to `main`; the replace job has no `environment:`, so a replace dispatched from
     a branch supplies that branch's own anchor. Against a repository-write actor the replace path's
     anchor is not outside reach (#8093).
+
+    > **Superseded 2026-09-22 (#8209, ADR-241 D2):** `git_data_host_replace` now carries
+    > `environment: infra-privileged`, whose deployment-branch policy admits `main` only, so a
+    > replace dispatched from a branch is refused before the job starts and can no longer supply
+    > its own anchor. The reachable set narrows from "anyone with repository write" to "anyone who
+    > can land a commit on `main`". The residual named above is not closed by that -- it is
+    > narrowed -- and the remaining reach is tracked as ADR-241's residual R1.
 - **Token delivery: the fallback is taken.** Doppler service-account identities need the Team or
   Enterprise plan, and the workplace is on the Developer plan. The fallback's three guards, as delivered:
   1. A reference census allows `DOPPLER_TOKEN_GIT_DATA_ROOT` under `.github/` only in the `cutover` job of
@@ -516,3 +526,219 @@ authorization.
 - **AP-008:** the key is in the Doppler project `soleur-git-data-root`, and the repo secret carries only a
   read token.
 - **AP-003:** the root has its own state key in the R2 backend's shared bucket.
+
+### 2026-09-21 (#8101, PR #8454): a fourth read probe, the pre-receive fence
+
+The dry run now runs a fourth read-only probe after the three store probes: `probe=fence-shape`
+(`git-data-cutover.sh` › `refuse_if_fence_not_intact`). It checks that a push would run a root-owned
+`pre-receive` of the planted shape. That means the hooks directory and hook are owned and permissioned
+as the bootstrap sets them, the `git` user can run the hook, the installed transport wrapper and the
+system `core.hooksPath` both name the directory, and it sits on the accepted store device. The 2026-09-15
+D5 row for D1b is unchanged: D1b is judged on the access gate and the three store probes. Exit 0 of the
+dry run now also requires the fence probe. Like every store probe, its answer is unauthenticated while
+#7226 is open. The copy half of #8101, and the wrappers' mapper-device assertion, are carried by #8211.
+
+### 2026-09-21 (#7226, PR #8511): host keys are pinned (ADR-237)
+
+[ADR-237](./ADR-237-ssh-host-keys-are-pinned.md) pins web-1's host key on every CI path and git-data's
+on both cutover hops and in the app's git transport. Earlier entries are not rewritten; this entry
+records what changes in them.
+
+- **D4, first residual ("Unverified host keys (#7226)") — closed by ADR-237, effective at post-merge
+  step 4** of the runbook's host-key sequence: the strict dry run from `main` reads
+  `role=git-data-auth verdict=ok` with both hops pinned. Until then the residual stands as written.
+  The 2026-09-15 residual "Store-probe evidence is unauthenticated until #7226" closes at the same
+  step, as to web-1 standing in for git-data. A pinned key authenticates the host, not its answers:
+  a rooted git-data can still answer falsely, so `store_not_empty` and the bounded probes stay.
+- **D4, second residual ("Verdicts show liveness, not authenticity").** The host-key half of D2's
+  `accepted` precondition now points to ADR-237 reaching `accepted`. The other conditions in the
+  2026-09-15 D5 table (#8209, #8211) are unchanged.
+- **D6 — design change.** The fresh replace immediately before the real cutover (a #8211
+  precondition) now also **rotates git-data's SSH host key** and **redeploys the app**: the replace
+  job re-mints `tls_private_key.git_data_host_ssh`, republishes `GIT_DATA_SSH_HOST_KEY` to `prd`, and
+  the `git-data-pin-redeploy.yml` workflow, triggered when that apply run completes, forces a web
+  release so the app loads the new pin. Nothing planted during the read-only period survives into
+  the cutover, now including the host key. The replace is still required; ADR-237's post-merge
+  step 3 is a separate, earlier replace, not this one.
+- **New constraint from ADR-237.** Setting `GIT_DATA_STORE_ENABLED` requires the pin present in `prd`
+  **and** #5914 closed (the app's unpinned fallback arm deleted). The runbook's precondition list
+  carries it.
+
+### 2026-09-22 (#8209): the custody goal gets a boundary — ADR-241's credential tiers
+
+[ADR-241](./ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md) decides the
+eviction this ADR deferred. Earlier entries are not rewritten; this entry records what changes in
+them.
+
+- **D2, "The custody goal is nominal today" — now carried by ADR-241's Tier-B boundary, not yet
+  discharged.** That clause said the separate root "does not protect against a repo-secret holder"
+  and named #8209 as the decision that would. ADR-241 D1–D2 is that decision: credentials are split
+  into a branch-reachable Tier A and a main-only Tier B, and a Tier-B credential is delivered only as
+  a GitHub environment secret on an environment whose deployment-branch policy admits `main` only.
+  `web-platform-infra-apply`, the environment this ADR's D2 already reuses, is one of the four Tier-B
+  environments, and ADR-241's census asserts its `main` policy from the Terraform sources on every
+  PR. What does **not** change: an environment is still a human gate, not the boundary — the
+  *branch policy* is the boundary, and ADR-241 D2 is explicit that it holds whether or not reviewers
+  are configured.
+- **D4, "Repo-secret reach (#8209)" — addressed, not closed.** That residual named two paths to the
+  root key: the repo secret and the R2 state object. ADR-241 D7 moves both. The repo secret
+  `DOPPLER_TOKEN_GIT_DATA_ROOT` becomes an **environment secret on `web-platform-infra-apply` under
+  the same name** at operator step O7 of the #8209 runbook, so `git-data-cutover.yml` needs no edit
+  (its `cutover` job already declares that environment, and an environment secret overrides a
+  repo secret of the same name); the Terraform-minted token and the repo secret are forgotten by
+  Terraform with `removed { … lifecycle { destroy = false } }` and then revoked out of band. The
+  state object moves to a second R2 bucket, `soleur-terraform-state-privileged`, read only by a
+  bucket-scoped Tier-B token — which **reverses D2.1 as amended on 2026-09-15**: that reversal put
+  the root-key state in the shared bucket because `CF_API_TOKEN_R2` is account-wide and no credential
+  can mint a bucket-scoped token (ADR-130). The token is still operator-minted; what changed is the
+  measurement that the `prd_terraform` `AWS_*` keys are **bucket-scoped**, so a bucket they are not
+  scoped to is genuinely out of reach. **This residual is not closed until ADR-241's residual R1
+  closes.** R1 is the soleur-ai *runtime* key in Doppler `prd`, readable by `DOPPLER_TOKEN_PRD` and
+  by every `prd_*` branch-config repo-secret token; the App holds `administration:write` on
+  `jikig-ai/soleur`, so a holder can rewrite the very deployment-branch policy the new boundary rests
+  on. Until R1 closes, the move stops a branch workflow from *naming* the secret; it does not stop a
+  `prd` repo-secret holder. R1 is filed at `priority/p1-high`, `type/security` and blocks #8211's
+  real cutover.
+- **D5 — the "D2–D3 credential and lifetime" row.** Its 2026-09-15 flip condition reads "#7226, #8209
+  and #8211 land". Restated with the #8209 limb made precise, the other two unchanged:
+
+  | Decision | Status | Flips to `accepted` when |
+  |---|---|---|
+  | D2–D3 credential and lifetime | `proposed` | #7226 (ADR-237 reaching `accepted`, per the 2026-09-21 entry) and #8211 land, **and** the #8209 limb is satisfied — which is not the merge of #8209's PR but ADR-241's own D2 reaching `accepted`, i.e. ADR-241 residual **R1** closed and **R7** closed at the runbook's state-key step. Merging #8209 alone leaves the boundary nominal against a `prd` repo-secret holder, which is the same gap this row was opened for. |
+
+  The D1a, D1b and D4 rows are unchanged.
+- **No change to the root's additive-only contract.** #8209 adds exactly one typed allowlist arm,
+  `8209_custody_forget`, admitting a forget of exactly the two custody addresses
+  (`github_actions_secret.doppler_token_git_data_root`, `doppler_service_token.git_data_root_read`)
+  and nothing else. It is one-shot: ADR-241's residual R6 deletes it once that forget has landed.
+  That is the D3 rule as written — any change is a reviewed PR with a typed arm — not an exception to
+  it.
+- **The backend becomes partial.** `git-data-root-key/main.tf` drops its literal `bucket`, so
+  `terraform init` takes `-backend-config=bucket=$BUCKET`: the privileged bucket when the credential
+  loader exported the `GIT_DATA_ROOT_STATE_*` pair (all-or-none; a half-set pair is refused), the
+  legacy bucket otherwise, and the legacy bucket **refused** once the repo variable
+  `GIT_DATA_ROOT_STATE_MIGRATED=1` is set. D2.2 still holds by placement: the nested root collapses
+  into its parent in `detect-changes`, so the PR `plan` job never initializes it and needs no backend
+  config. If the legacy fallback were ever taken after the old object is gone, `init` would yield an
+  empty state — and the existing `git_data_root_key_remint_refused` gate, keyed on the committed
+  fingerprint file, refuses that plan. A re-mint stays structurally unreachable.
+
+### 2026-09-23 (#8211, PR #8564): the store is served from LUKS at birth (ADR-239)
+
+[ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md) reverses ADR-068 D10: the git-data render
+always mounts `/dev/mapper/git-data` at `/mnt/git-data`. Earlier entries are not rewritten; this
+entry records what changes in them.
+
+- **D6 — there is no runtime repoint.** D6 and the 2026-09-15 amendment both assume the serving
+  device moves inside a cutover run, on the route D10 kept. That step does not exist and is not
+  being rebuilt: `user_data` is `ForceNew`, so a mount moved by a script does not survive the next
+  replace, and an in-place host config change is barred by
+  `hr-prod-host-config-change-immutable-redeploy`. **The serving change is the first
+  `git_data_host_replace` of the new render** — ADR-237's post-merge step 3 — applied while the
+  store is empty and `GIT_DATA_STORE_ENABLED` is off. Nothing in the cutover workflow moves a
+  device any more.
+- **D6 — the rotation is pending PR2.** The fresh replace immediately before the real cutover,
+  which rotates the `GIT_DATA_LUKS_KEY` and the LUKS volume (and, since ADR-237, the SSH host key),
+  is **pending PR2 of #8211** and is gated there on a recent `proof` run and on `served_repos=0`
+  re-asserted before the volume is replaced. PR1 builds none of it. Until that rotation runs,
+  `erased` on the Art. 17 path means **unlinked**: the blocks stay readable to a holder of the LUKS
+  key.
+
+- **Unchanged.** D1a, D1b, D2, D3, D4 and D5 are untouched. The access path, the dedicated root key
+  and the read credential are the same; ADR-239 changes what the host serves, not how CI reaches
+  root on it.
+
+### 2026-09-30 (#8211 PR2): D6 has a route — `git-data-host-rotate`
+
+The pending-PR2 sentence above is discharged: D6's combined rotation is `apply_target=
+git-data-host-rotate` in `apply-web-platform-infra.yml` — the `git_data_host_replace` job run
+with `confirm=ROTATE-GIT-DATA`, a `served_repos=0` Better Stack precondition (the host is
+deny-all; the latest `stage:bootstrap` emit on `host_name=git-data` must read empty — an
+unreadable store fails closed, not open), and the `-replace` set extended by
+`hcloud_volume.git_data_luks` + `random_password.git_data_luks` +
+`doppler_secret.git_data_luks_key`. The `git_data_host_replace_gate` gained a `rotate` arm that
+requires the trio to move TOGETHER — a passphrase without a fresh volume can never `luksOpen`,
+and a retained passphrase is not a rotation — while `hcloud_volume.git_data` (the plaintext
+rollback backstop) stays preserved by omission in both modes. The pin-load is the job's inline
+`pin_load` step (the `git-data-pin-redeploy.yml` follower is retired; ADR-237 addendum
+2026-09-30). "Freshness" for the cutover's `d6_replace_stale` precondition is a completed
+`git-data-host-rotate` run whose apply job concluded `success` AND whose rotate-confirm
+marker step concluded `success` — the rotation proof; a plain `git-data-host-replace`
+cannot discharge D6 because it re-mints no LUKS key.
+
+> **Corrected 2026-10-13 (#10166).** The sentence above named a "rotate-confirm marker step" that did not
+> discriminate: `Validate dispatch inputs (rotate confirm token)` is unconditional and concludes `success`
+> (printing `rotate confirm: n/a` on every non-rotate target), so a plain replace or a plan-only rotate
+> satisfied the gate. The marker is now the last step of `git_data_host_replace`,
+> `Rotate completed (d6 marker)`, skipped unless the dispatch is a non-plan-only `git-data-host-rotate`; the
+> gate reads it through `scripts/lib/git-data-rotate-stamp.sh`, and a failed or unreadable newest rotate
+> attempt (once its apply began) blocks instead of being skipped. Runs that predate the marker cannot
+> qualify. The stamp attests that a rotate job completed; it does not attest key-escrow state, and a later
+> plain replace does not invalidate it (a plain replace never re-mints the key). No decision changes; the
+> proof is the same one.
+
+### 2026-09-27 (#8211 PR2): the store probes read the LUKS-served store
+
+The probe chain is now a configuration check (`probe=config`), then `store-mounted`,
+`store-on-mapper`, one ssh session reporting `store-verified` and `store-empty`, then `fence-shape`
+([ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md), amendment 2026-09-27). One of the "three
+store probes" the D5 row for D1b names is retired, so that flip condition is restated. **Departing
+from the 2026-09-21 entry**, which judged D1b on the access gate and the store probes only, the fence
+probe is now part of it too, because the flip evidence is the run's exit 0: **D1b flips on a dispatch
+from `main` that reads `role=git-data-auth verdict=ok` with the store probes and the fence probe
+clear.** The caveat is unchanged: a pinned host authenticates the host, not the truth of its answers.
+Dated text above is not rewritten.
+
+### 2026-09-27 (#8211 PR2, post-merge): D1b is accepted
+
+- **The D1b condition, as the entry above restates it, is met.** `git-data-cutover.yml` run
+  [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) was dispatched from
+  `main` at `ab4a07e5e0` on 2026-09-27 and concluded `success`. Its notice annotations read
+  `role=web`, `role=git-data-jump` and `role=git-data-auth` `verdict=ok`; `probe=store-mounted`,
+  `store-on-mapper`, `store-verified`, `store-empty` and `fence-shape` `verdict=ok`; then
+  `verdict=clear`. Both hops were pinned (ADR-237 `accepted`, PR #9036). Recorded on #5914
+  (issuecomment-5859802570). The same run warned `TOFU_ARM present`: the app's unpinned git-data
+  fallback arm (#5914, host-key step 6) is untouched by this flip and still gates
+  `GIT_DATA_STORE_ENABLED`.
+- **History.** The 2026-09-15 form of the condition was first met by run
+  [35119099336](https://github.com/jikig-ai/soleur/actions/runs/35119099336) (2026-09-16, `main` at
+  `2d9177bec2`, `verdict=clear`). That run was unpinned and predates the fence probe. It closed
+  #8189 and #6680, but the D1b flip was not recorded then.
+- **`probe=config` has no `ok` notice.** It annotates only on refusal. The run reached the access
+  gate and ended `verdict=clear`, so it passed.
+- **The caveat stands.** A pinned host authenticates the host, not the truth of its answers, so
+  `store_not_empty` and the bounded probes stay.
+- **D5 for the D1b row.** D1b authenticated hop is `accepted` (2026-09-27). D1a is unchanged.
+  D2–D3 stay `proposed`: their #7226 limb is met (ADR-237 `accepted`), while the #8211 limb and
+  the #8209 limb (ADR-241 residuals R1 and R7) remain. D4 stays standing constraints, except its
+  first residual, which closed at host-key post-merge step 4 (run 36119817656, 2026-09-25), as the
+  2026-09-21 entry provides; ADR-237 recorded it `accepted` on 2026-09-27.
+- **The frontmatter stays `proposed`,** the least-advanced status, because D2–D3 are `proposed`.
+  Dated text above is not rewritten.
+
+### 2026-09-28 (#5914, PR #9096): the app's unpinned git-data arm is deleted
+
+- **The flag-flip precondition "#5914 closed" is met on the merge of PR #9096** (host-key step 6): the app's
+  transitional unpinned fallback arm is deleted, and the pin resolver now refuses an absent pin
+  whatever `GIT_DATA_STORE_ENABLED` says (ADR-237, Addendum PR #9096). From this merge, a
+  `git-data-cutover.yml` dispatch from `main` reads `TOFU_ARM absent`. The other flip preconditions
+  (the pin present in `prd`, #8572 paging, and #8211's per-id re-erasure path, which the LUKS
+  cutover runbook requires before the first flip) stand. No earlier entry is edited, and no status in D5
+  changes.
+
+### 2026-09-28 (#8572): the "#8572 paging" flip precondition
+
+- **Met on #8572's merge plus a green `apply-sentry-infra.yml` and `web-platform-release.yml`.** The
+  `git-data-host-key-pin-fault` rule pages on the `pin_fault` tag (boot and replication-push pin
+  faults), and `art17-erasure-incomplete` now also re-pages per event on an unresolved issue. The
+  #8211 PR2 flip check (`pin_fault_paging_absent`, not built yet) must read the live rule's content
+  (enabled, the exact `in` set, the issue-owners email falling back to active members) and the
+  deployed release, not the rule's name; until it exists, `scripts/sentry-alert-live-fidelity.sh`'s
+  `sentry_alert live fidelity: PASS` is that read. #8211's per-id re-erasure path remains a separate, hard precondition. No earlier entry
+  is edited.
+- **Condition met 2026-09-28 (#8572).** PR #9150 merged as `7541fb13`; apply-sentry-infra run
+  36454249853 read `sentry_alert live fidelity: PASS (all 35 in-scope rules …)`, and the release
+  serving `7541fb13` finished deploying at 2026-09-28T17:15:30Z (deploy arm 36456390256). So the
+  "#8572 paging" precondition holds as configured and verified; email delivery is not yet observed
+  (nothing has fired), and the per-id re-erasure path is still the open hard precondition. Record:
+  `knowledge-base/legal/audits/2026-09-counsel-reattestation-5914.md`, "Verification 2026-09-28 (#8572)".

@@ -4,8 +4,12 @@ description: "This skill should be used when scanning Claude Code skills or agen
 ---
 
 <!-- soleur-cloud-mode:start -->
-**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
 
 # skill-security-scan
 
@@ -60,19 +64,35 @@ alone.
 Scan a file:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh < path/to/SKILL.md
+bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh" < path/to/SKILL.md
 ```
 
 Scan stdin content (used by `soleur:engineering:discovery:agent-finder` post-fetch / `skill-creator` post-scaffold
 integrations):
 
 ```bash
-echo "$skill_md_content" | bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh
+echo "$skill_md_content" | bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh"
 ```
 
+**No verdict line means REVIEW.** If the output carries no `LOW-RISK`/`REVIEW`/`HIGH-RISK` verdict — the script
+crashed, or the shell printed `No such file or directory` because the plugin root did not resolve — treat the
+skill as **REVIEW**, never LOW-RISK (ADR-179 A18).
+
 Output: markdown findings table on stdout, mandatory advisory disclaimer footer
-(non-removable), and `.scan-meta.json` written next to the input file (or to
-`$XDG_RUNTIME_DIR/skill-security-scan-$$/` for stdin input).
+(non-removable), and `.scan-meta.json` persisted under
+`$XDG_RUNTIME_DIR/skill-security-scan-<pid>/` (or `SKILL_SCAN_META_BASE` when
+set; `/tmp` when neither is set). Retention is bounded by the scanner's own
+startup age-reap: `skill-security-scan-*` dirs older than
+`SKILL_SCAN_META_REAP_MIN` minutes (default 10080 = 7 days) are reaped at the
+next invocation, and the same knob bounds a sibling sweep under
+`${TMPDIR:-/tmp}` covering `skill-scan-*` scratch orphans, stranded
+`skill-security-scan-*` crossover dirs, and `sss-write.*.err` hook captures
+(#6789, #6760). One knob, two scopes: shrinking it shrinks BOTH the Art. 32
+evidence window and the scratch floor — and both sweeps clamp to a 60-minute
+minimum because a lower floor can reap a concurrent scan's live scratch or
+live meta dir.
+The dir is deliberately NOT EXIT-trap-cleaned: the override flow reads the
+path after the scan exits.
 
 ## Override mechanism
 

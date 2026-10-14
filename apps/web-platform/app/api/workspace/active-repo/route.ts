@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { verifiedUserId } from "@/server/request-auth";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 
 /**
@@ -18,16 +19,16 @@ import { normalizeRepoUrl } from "@/lib/repo-url";
  * a read poll, and not a CSRF target (resetting a victim to their own solo
  * workspace confers no attacker benefit).
  */
-export async function GET() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+export async function GET(req: Request) {
+  // Middleware-verified identity (x-soleur-auth-user-id) replaces the
+  // getUser() RTT; absent header falls back to getUser() — fail-closed.
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const userId = user.id;
+  // Own cookie-scoped client retained for the self-heal RPC below.
+  const supabase = await createClient();
   // ADR-038 N2: the solo workspace id equals the user id.
   const soloWorkspaceId = userId;
   const service = createServiceClient();

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { stripComments } from "../../helpers/strip-comments";
 
 /**
  * Negative-space regression gate. The classifier's docblock forbids
@@ -25,9 +26,7 @@ describe("provider-error-classifier does not normalize or substring-match", () =
   // Strip comments before matching so the docblock's mention of forbidden
   // idioms (`.toLowerCase()`, `.includes()`, etc.) does not falsely fail
   // these negative-space assertions.
-  const src = rawSrc
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const src = stripComments(rawSrc);
 
   it("source file is non-trivial", () => {
     expect(rawSrc.length).toBeGreaterThan(300);

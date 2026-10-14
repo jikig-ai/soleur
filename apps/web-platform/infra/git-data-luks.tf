@@ -5,7 +5,7 @@
 # (mounted /mnt/git-data-luks) under a write-freeze and then flipped GIT_DATA_STORE_ENABLED
 # was removed from git-data-cutover.sh by #8189, because it called host mechanisms that do
 # not exist; it is being rebuilt in #8211. Until then git-data-cutover.sh is a read-only
-# proof (access gate plus three store probes) that moves no data. The design it rebuilds:
+# proof (access gate, the store probes and the fence probe) that moves no data. The design it rebuilds:
 # both volumes attached to the SAME git-data host and mounted SIMULTANEOUSLY during the
 # cutover (additive, non-destructive — the plaintext source is the rollback backstop until
 # the DL-2 wipe).
@@ -151,11 +151,13 @@ resource "doppler_secret" "git_data_betterstack_logs_token" {
 # of the full-prd `var.doppler_token` so a git-data-host compromise reads only this
 # config — restoring the "separate blast radii" property git-data.tf already advertises.
 #
-# CARDINALITY (#6982): this config now holds TWO secrets — GIT_DATA_LUKS_KEY and
-# BETTERSTACK_LOGS_TOKEN (the ingest token added above). It was one until #6982. The
-# blast-radius argument is unchanged in kind: an ingest token is write-only against a
-# log source (git-data's OWN since #7772, not the shared one) and cannot read anything back, so a compromise still yields no
-# service-role, GIT_REMOVE or PROXY_TLS material. `.key` is Computed/write-once (same handling as
+# CARDINALITY (#6982, #9438): this config now holds THREE secrets — GIT_DATA_LUKS_KEY,
+# BETTERSTACK_LOGS_TOKEN (the ingest token added above) and GIT_DATA_HOST_HEARTBEAT_URL (the host's
+# own liveness heartbeat, doppler_secret.git_data_host_heartbeat_url_prd in git-data.tf). It was
+# one until #6982. The blast-radius argument is unchanged in kind: an ingest token is write-only
+# against a log source (git-data's OWN since #7772, not the shared one) and cannot read anything
+# back, and the heartbeat URL can only forge an "alive" ping for one monitor, so a compromise still
+# yields no service-role, GIT_REMOVE or PROXY_TLS material. `.key` is Computed/write-once (same handling as
 # doppler_service_token.write / .kb_drift); rotate via
 # `terraform apply -replace=doppler_service_token.git_data`.
 resource "doppler_service_token" "git_data" {

@@ -27,7 +27,7 @@ const CONV_ID = "conv-resume-1";
 const WORKSPACE_ID = "a1b2c3d4-0000-4000-8000-000000000123";
 const USER_ID = "user-resume-A";
 
-const { rpcSpy, singleSpy } = vi.hoisted(() => ({
+const { rpcSpy, singleSpy, engineRunSpy } = vi.hoisted(() => ({
   rpcSpy: vi.fn(
     async (): Promise<{
       error: { code: string; message: string } | null;
@@ -39,9 +39,11 @@ const { rpcSpy, singleSpy } = vi.hoisted(() => ({
       status: "active",
       repo_url: "https://github.com/acme/repo.git",
       workspace_id: "a1b2c3d4-0000-4000-8000-000000000123",
+      engine_binding_state: "legacy",
     },
     error: null,
   })),
+  engineRunSpy: vi.fn(async (): Promise<{ data: Record<string, unknown> | null; error: null }> => ({ data: null, error: null })),
 }));
 
 vi.mock("@/server/current-repo-url", () => ({
@@ -73,12 +75,13 @@ vi.mock("@/lib/supabase/tenant", () => {
   // sibling-slot probe (`.select().eq().neq().gte()`, awaited directly) resolve.
   // `.single()` yields the conversation row; awaiting the chain yields an empty
   // slot set (no live sibling).
-  const makeChain = () => {
+  const makeChain = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of ["select", "eq", "neq", "gte", "lte", "order", "limit"]) {
       chain[m] = () => chain;
     }
     chain.single = singleSpy;
+    chain.maybeSingle = table === "agent_engine_runs" ? engineRunSpy : singleSpy;
     // Thenable so `await tenantClient.from(...).select().eq().neq().gte()`
     // resolves to an empty (no live sibling slot) result.
     chain.then = (resolve: (v: { data: unknown[]; error: null }) => unknown) =>
@@ -86,7 +89,7 @@ vi.mock("@/lib/supabase/tenant", () => {
     return chain;
   };
   const tenantClient = {
-    from: () => makeChain(),
+    from: (table: string) => makeChain(table),
     rpc: rpcSpy,
   };
   return {
@@ -97,6 +100,7 @@ vi.mock("@/lib/supabase/tenant", () => {
 });
 
 import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";
+import { streamReplayBuffer } from "@/server/stream-replay-buffer";
 
 function makeSession(): ClientSession {
   const ws = {
@@ -119,10 +123,14 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
   beforeEach(() => {
     rpcSpy.mockClear();
     singleSpy.mockClear();
+    engineRunSpy.mockReset();
+    engineRunSpy.mockResolvedValue({ data: null, error: null });
+    streamReplayBuffer.reset();
   });
 
   afterEach(() => {
     sessions.delete(USER_ID);
+    streamReplayBuffer.reset();
   });
 
   it("aligns current_workspace_id to conversations.workspace_id via set_current_workspace_id", async () => {
@@ -166,6 +174,43 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
     expect(frames).not.toContain("session_started");
   });
 
+  it("rejoin replay: buffered debug_event frames re-emit marked `replayed` (leave-and-return)", async () => {
+    // fix-debug-stream-replay — a remount sends resume_session, never
+    // resume_stream, so the debug panel would otherwise come back empty.
+    // The rebind tail replays the conversation's buffered debug frames.
+    streamReplayBuffer.stamp(CONV_ID, {
+      type: "stream",
+      content: "not-replayed",
+      partial: true,
+      leaderId: "cto",
+    });
+    streamReplayBuffer.stamp(CONV_ID, {
+      type: "debug_event",
+      kind: "tool_use",
+      label: "tool",
+      body: "{}",
+    });
+    const session = makeSession();
+    sessions.set(USER_ID, session);
+
+    await handleMessage(
+      USER_ID,
+      JSON.stringify({ type: "resume_session", conversationId: CONV_ID }),
+    );
+
+    const sendMock2 = session.ws.send as unknown as { mock: { calls: unknown[][] } };
+    const rejoinFrames = sendMock2.mock.calls.map(
+      (c: unknown[]) => JSON.parse(c[0] as string) as { type: string; replayed?: boolean },
+    );
+    // The debug frame replays marked replayed; stream frames do NOT — the
+    // remount's history fetch owns the persisted transcript.
+    const debug = rejoinFrames.filter((f) => f.type === "debug_event");
+    expect(debug).toHaveLength(1);
+    expect(debug[0].replayed).toBe(true);
+    expect(rejoinFrames.some((f) => f.type === "stream")).toBe(false);
+    expect(rejoinFrames.some((f) => f.type === "session_started")).toBe(true);
+  });
+
   it("does NOT rebind when the conversation's repo is out of scope (gate precedes the switch)", async () => {
     // Repo-scope mismatch: the conversation belongs to a different repo than
     // the session's current repo. The resume path must return "Conversation
@@ -177,6 +222,7 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
         status: "active",
         repo_url: "https://github.com/other/repo.git",
         workspace_id: WORKSPACE_ID,
+        engine_binding_state: "legacy",
       },
       error: null,
     });
@@ -195,6 +241,63 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
     };
     const frames = sendMock.mock.calls.map(
       (c: unknown[]) => JSON.parse(c[0] as string).type,
+    );
+    expect(frames).toContain("error");
+    expect(frames).not.toContain("session_started");
+  });
+
+  it("rejects a Codex-bound conversation before workspace rebind or legacy session start", async () => {
+    engineRunSpy.mockResolvedValueOnce({
+      data: {
+        id: "run-codex-1",
+        execution_kind: "conversation",
+        conversation_id: CONV_ID,
+        workspace_id: WORKSPACE_ID,
+        engine_id: "codex",
+        auth_mode: "api-key",
+        adapter_version: "1",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      error: null,
+    });
+    const session = makeSession();
+    sessions.set(USER_ID, session);
+
+    await handleMessage(USER_ID, JSON.stringify({ type: "resume_session", conversationId: CONV_ID }));
+
+    expect(engineRunSpy).toHaveBeenCalledOnce();
+    expect(rpcSpy).not.toHaveBeenCalled();
+    expect(sessions.get(USER_ID)?.conversationId).toBeUndefined();
+    const frames = (session.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call: unknown[]) => JSON.parse(call[0] as string).type,
+    );
+    expect(frames).toContain("error");
+    expect(frames).not.toContain("session_started");
+  });
+
+  it("rejects a Codex-bound chat turn on an already resumed session", async () => {
+    engineRunSpy.mockResolvedValueOnce({
+      data: {
+        id: "run-codex-1",
+        execution_kind: "conversation",
+        conversation_id: CONV_ID,
+        workspace_id: WORKSPACE_ID,
+        engine_id: "codex",
+        auth_mode: "api-key",
+        adapter_version: "1",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      error: null,
+    });
+    const session = makeSession();
+    session.conversationId = CONV_ID;
+    sessions.set(USER_ID, session);
+
+    await handleMessage(USER_ID, JSON.stringify({ type: "chat", content: "synthetic hello" }));
+
+    expect(engineRunSpy).toHaveBeenCalledOnce();
+    const frames = (session.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call: unknown[]) => JSON.parse(call[0] as string).type,
     );
     expect(frames).toContain("error");
     expect(frames).not.toContain("session_started");

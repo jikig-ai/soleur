@@ -10,6 +10,9 @@
 # in the SAME maintenance window that provisions web-2, as a FULL operator apply (not
 # the -target CI path). See knowledge-base/engineering/operations/runbooks/
 # git-data-luks-cutover-5274.md §"Multi-host DNS rewire".
+# Single step-executing host is load-bearing: the Inngest server calls steps at app.soleur.ai, and
+# spawnClaudeEval's single-flight guard is process-local (ADR-243 §2). Pointing `app` at a second
+# host lets a step retry land elsewhere and re-opens the double paid session — reopen ADR-243 first.
 resource "cloudflare_record" "app" {
   zone_id = var.cf_zone_id
   name    = "app"

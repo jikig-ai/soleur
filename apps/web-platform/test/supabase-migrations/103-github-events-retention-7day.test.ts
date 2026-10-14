@@ -20,7 +20,7 @@ import path from "node:path";
 // File-parse test, not a live-DB test — pins the SQL contract. Mirrors
 // 094-dedup-retention.test.ts.
 //
-// Plan: knowledge-base/project/plans/2026-06-14-fix-supabase-disk-io-github-events-retention-window-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-14-fix-supabase-disk-io-github-events-retention-window-plan.md
 
 const MIG_DIR = path.join(__dirname, "../../supabase/migrations");
 const stripComments = (sql: string) => sql.replace(/--[^\n]*/g, "");

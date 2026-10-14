@@ -339,7 +339,14 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
             error && typeof error === "object" && "code" in error
               ? String((error as { code: unknown }).code)
               : "send_failed";
-          return textResponse({ error: "Send refused or failed", code }, true);
+          // `field` names the argument to fix (a field NAME, never a value), so the
+          // agent can tell a bad `to` from a bad `replyTo` (#8532).
+          const field =
+            error && typeof error === "object" && "field" in error &&
+            typeof (error as { field: unknown }).field === "string"
+              ? (error as { field: string }).field
+              : undefined;
+          return textResponse({ error: "Send refused or failed", code, ...(field ? { field } : {}) }, true);
         }
       },
     ),
@@ -406,7 +413,22 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
             error && typeof error === "object" && "code" in error
               ? String((error as { code: unknown }).code)
               : "reply_failed";
-          return textResponse({ error: "Reply refused or failed", code }, true);
+          // `field` names the argument to fix (a field NAME, never a value), so the
+          // agent can tell a bad `to` from a bad `replyTo` (#8532).
+          const field =
+            error && typeof error === "object" && "field" in error &&
+            typeof (error as { field: unknown }).field === "string"
+              ? (error as { field: string }).field
+              : undefined;
+          // A reply's `to` is the stored inbound sender, not an agent argument, so a
+          // bad `to` is not something the agent can fix — say so rather than
+          // pointing it at an argument it did not supply.
+          return textResponse(
+            field === "to"
+              ? { error: "Reply refused or failed", code, field: "inbound_sender", agentFixable: false }
+              : { error: "Reply refused or failed", code, ...(field ? { field } : {}) },
+            true,
+          );
         }
       },
     ),

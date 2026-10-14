@@ -10,6 +10,7 @@ import {
   normalizeSkillName,
   normalizeAgentName,
 } from "../lib/harness";
+import { behindSyncInstructions } from "../lib/pr-merge-poll";
 
 function env(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = {};
@@ -96,6 +97,11 @@ describe("detectHarness", () => {
 
   test("empty env → unknown", () => {
     expect(detectHarness(env({}))).toBe("unknown");
+  });
+
+  test("slice 1 does not classify a cursor-shaped env", () => {
+    expect(detectHarness(env({ CURSOR_AGENT: "1" }))).toBe("unknown");
+    expect(detectHarness(env({ CLAUDECODE: "1", CURSOR_AGENT: "1" }))).toBe("claude");
   });
 });
 
@@ -313,9 +319,35 @@ describe("routingInstructions", () => {
     expect(md).toContain("grok inspect");
     expect(md).not.toMatch(/grok --trust/);
   });
+
+  test("cursor names /go and /soleur-plan and does not name claude tools", () => {
+    const md = routingInstructions("cursor");
+    expect(md).toContain("/go");
+    expect(md).toContain("/sync");
+    expect(md).toContain("/soleur-plan");
+    expect(md).toContain("/soleur-help");
+    expect(md).toContain("/soleur-review");
+    expect(md).toContain("/soleur-engineering-cto");
+    expect(md).not.toContain("/soleur-go");
+    expect(md).not.toContain("/soleur:");
+    expect(md).not.toContain("Skill");
+    expect(md).not.toContain("Task");
+    expect(md).not.toContain("run_subagent");
+    expect(md).not.toContain("AwaitShell");
+    expect(md).not.toContain("Stop hook");
+    expect(md).toContain("canonical file");
+    expect(md).toContain("does not classify the session as cursor");
+    expect(md).toContain("does not run hooks");
+  });
 });
 
 describe("pollInstructions", () => {
+  test("every harness carries the queue-mode exception beside its BEHIND instruction (#9710)", () => {
+    for (const h of ["claude", "grok", "codex", "devin", "unknown"] as const) {
+      expect(pollInstructions(h)).toContain("[ship.phase7.queue_wait]");
+    }
+  });
+
   test("grok documents AwaitShell merge-deploy polling and BEHIND resync", () => {
     const md = pollInstructions("grok");
     expect(md).toContain("AwaitShell");
@@ -331,12 +363,30 @@ describe("pollInstructions", () => {
     expect(md).toContain("postmerge");
   });
 
-  test("devin documents get_output merge-deploy polling", () => {
+  test("devin arms merge-deploy waits as a background run_subagent loop", () => {
     const md = pollInstructions("devin");
-    expect(md).toContain("get_output");
+    expect(md).toContain("run_subagent");
+    expect(md).toContain("exit-coded");
     expect(md).toContain("/soleur:postmerge");
     expect(md).toContain("NEVER ask");
     expect(md).toContain("BEHIND");
     expect(md).toContain("/soleur:ship");
+    // The whole point of #8390's item 2: `devin/INSTRUCTIONS.md` measures that
+    // `get_output` only READS a backgrounded shell and cannot wait on an event,
+    // so naming it as the wait primitive tells a Devin session it is waiting
+    // while nothing will ever wake it. Absence is the property; a `toContain`
+    // on the replacement cannot express it.
+    expect(md).not.toContain("get_output");
+  });
+
+  test("cursor poll is the behind-sync stop and names no wait tool", () => {
+    const stop = behindSyncInstructions("cursor");
+    expect(pollInstructions("cursor")).toBe(stop);
+    expect(stop).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(stop).not.toContain("AwaitShell");
+    expect(stop).not.toContain("run_subagent");
+    expect(stop).toContain("or stop");
+    expect(stop).toContain("harness that already has a wait");
+    expect(stop).toContain("No wait primitive has been measured");
   });
 });

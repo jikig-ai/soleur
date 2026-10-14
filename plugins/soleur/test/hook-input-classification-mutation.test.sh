@@ -171,7 +171,7 @@ expect_red() {
          "a survivor is EITHER a fixture gap OR an equivalent mutant — decide which and record it"
     restore; return
   fi
-  if ! grep -E '^(FAIL|FATAL)' "$log" | grep -qE "$want_pat"; then
+  if ! grep -E '^(FAIL|FATAL)' "$log" | grep -cE >/dev/null "$want_pat"; then
     fails="$(grep -cE '^FAIL' "$log" || true)"
     fail "$id reddened, but NOT on the property it names — $desc" \
          "expected a FAIL/FATAL line matching: $want_pat" \

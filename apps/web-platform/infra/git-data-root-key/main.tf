@@ -15,7 +15,33 @@
 #   - Every key-bearing resource carries prevent_destroy. A rotation is a reviewed PR that lifts it.
 terraform {
   backend "s3" {
-    bucket = "soleur-terraform-state"
+    # (#8209, ADR-241 D7) PARTIAL BACKEND — the bucket is supplied at init time as
+    # `-backend-config=bucket=$BUCKET`, NOT pinned here.
+    #
+    # WHY. A distinct KEY inside a SHARED bucket is not isolation. Measured (M7):
+    # listing `soleur-terraform-state` with the Tier-A `prd_terraform` AWS_* keys
+    # returns all seven state objects, this one included — so the git-data root key,
+    # which is root on the host storing every connected user's repositories, was
+    # readable from any branch workflow through the state object. ADR-220 D2's "never
+    # enters the web-platform state" is true and was never the whole reach.
+    #
+    # The object moves to `soleur-terraform-state-privileged`
+    # (cloudflare_r2_bucket.terraform_state_privileged in the parent root), whose
+    # bucket-scoped token is Tier-B only. The Tier-A keys are bucket-scoped (M7:
+    # ListBuckets returns AccessDenied), so a bucket they are not scoped to is out of
+    # reach rather than merely un-referenced.
+    #
+    # The loader (.github/actions/infra-credentials) passes the privileged bucket when
+    # it exported the GIT_DATA_ROOT_STATE_* key pair, and the legacy bucket otherwise —
+    # which is what keeps this merge-safe before the operator migrates the object. Once
+    # the repo variable GIT_DATA_ROOT_STATE_MIGRATED=1 is set (operator step O8), the
+    # loader REFUSES the legacy bucket, so a post-migration run cannot silently write
+    # back to the object the operator is about to delete.
+    #
+    # The PR plan job never initializes this nested root (detect-changes collapses it
+    # into its parent, ADR-220 D2.2/TS2b), so no PR-plan backend config is needed. A
+    # local operator init passes -backend-config=bucket=… ; the runbook gives the form.
+    #
     # A DISTINCT KEY from the parent's web-platform/terraform.tfstate — the key never enters the
     # web-platform state that dozens of plan/apply jobs read (ADR-220 D2).
     key                         = "web-platform/git-data-root-key/terraform.tfstate"
@@ -65,9 +91,26 @@ provider "doppler" {
 # Copied verbatim from the parent root's App-auth block (hr-github-app-auth-not-pat).
 provider "github" {
   owner = "jikig-ai"
-  app_auth {
-    id              = var.github_app_id
-    installation_id = "122213433"
-    pem_file        = var.github_app_private_key
+  token = var.github_plan_actions_credential != "" && var.github_infra_app_private_key == "" ? var.github_plan_actions_credential : null
+
+  # (#8209, ADR-241) Three auth modes, selected by which variables are non-empty:
+  # INFRA (github_infra_app_private_key set) is the Tier-B `soleur-infra` App and the
+  # mode every apply runs in after the operator sequence; TOKEN
+  # (github_plan_actions_credential set, no infra key) is the PR plan job's own
+  # read-only `github.token`; LEGACY (neither) is the soleur-ai key from prd_terraform,
+  # the BEFORE state that keeps this merge safe. The `for_each` is the exact complement
+  # of the `token` condition so exactly one always resolves -- integrations/github v6
+  # otherwise falls back to an ambient GITHUB_TOKEN/`gh auth token`, authenticating as
+  # whoever the runner happens to be instead of failing. Full rationale:
+  # apps/web-platform/infra/main.tf, the same block.
+  dynamic "app_auth" {
+    for_each = var.github_infra_app_private_key != "" || var.github_plan_actions_credential == "" ? [1] : []
+    content {
+      id = var.github_infra_app_private_key != "" ? var.github_infra_app_id : var.github_app_id
+      # 122213433 is the soleur-ai INSTALLATION id on jikig-ai, not the App id
+      # (3261325). Literal because it belongs to the legacy mode only.
+      installation_id = var.github_infra_app_private_key != "" ? var.github_infra_app_installation_id : "122213433"
+      pem_file        = var.github_infra_app_private_key != "" ? var.github_infra_app_private_key : var.github_app_private_key
+    }
   }
 }

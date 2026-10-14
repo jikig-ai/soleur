@@ -47,4 +47,4 @@ case "$-" in
   *x*) printf "refusing\n" >&2; exit 78 ;;
 esac
 
-curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true
+curl --disable --noproxy '*' -sS --config - https://example.invalid/ < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true

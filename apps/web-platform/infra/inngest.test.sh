@@ -144,9 +144,11 @@ HEARTBEAT_BLOCK=$(awk '/cat > "\$HEARTBEAT_UNIT" <</,/^HEARTBEATEOF$/' "$BOOTSTR
 # (e.g. "inngest-server.service's"), which break the single-quoted eval form.
 # #6555: the heartbeat unit dropped `--project` — it resolves the Doppler project from
 # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a flag. The
-# ExecStart is `doppler run --config prd -- ${HEARTBEAT_SCRIPT}` with NO --project.
-assert "heartbeat unit uses doppler run --config prd with NO --project (#6555)" \
-  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --config prd' && ! printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.*--project'"
+# ExecStart is `doppler run --config @@DOPPLER_CONFIG@@ -- ${HEARTBEAT_SCRIPT}` with NO
+# --project; #9175 made the config name a sentinel substituted from the bootstrap's
+# normalized `export DOPPLER_CONFIG="${DOPPLER_CONFIG:-prd}"` (prd on prod).
+assert "heartbeat unit uses doppler run --config @@DOPPLER_CONFIG@@ with NO --project (#6555/#9175)" \
+  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE 'run --config @@DOPPLER_CONFIG@@' >/dev/null && ! printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^ExecStart=.*--project' >/dev/null"
 assert "heartbeat unit ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
 # #7695: the heredoc that renders this unit is now QUOTED, so the two values it needs arrive by
@@ -156,21 +158,23 @@ assert "heartbeat unit ExecStart is exactly one line" \
 # run --config prd") is still pinned rather than merely relocated.
 # Herestring, not a pipe: this file runs under pipefail, where `producer | grep -q` takes SIGPIPE
 # on an early match and fails the pipeline even though grep matched.
-assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler run --config prd" \
-  "grep -qE '^ExecStart=@@DOPPLER_BIN@@ run --config prd -- @@HEARTBEAT_SCRIPT@@\$' <<<\"\$HEARTBEAT_BLOCK\""
+assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler run --config @@DOPPLER_CONFIG@@ (#9175)" \
+  "grep -qE '^ExecStart=@@DOPPLER_BIN@@ run --config @@DOPPLER_CONFIG@@ -- @@HEARTBEAT_SCRIPT@@\$' <<<\"\$HEARTBEAT_BLOCK\""
 assert "the heartbeat sentinels are substituted after the heredoc (so the unit is not shipped with @@)" \
-  "(( \$(grep -cE 's\\|@@DOPPLER_BIN@@\\|.*s\\|@@HEARTBEAT_SCRIPT@@\\|' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
+  "(( \$(grep -cE 's\\|@@DOPPLER_BIN@@\\|.*s\\|@@HEARTBEAT_SCRIPT@@\\|.*s\\|@@DOPPLER_CONFIG@@\\|' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
+assert "DOPPLER_CONFIG default PRESERVES 'prd' (prod-render invariance, #9175)" \
+  "grep -qF 'export DOPPLER_CONFIG=\"\${DOPPLER_CONFIG:-prd}\"' \"\$BOOTSTRAP_SH\""
 assert "the render refuses to install a unit still carrying an unsubstituted sentinel" \
   "(( \$(grep -cF 'still carries an unsubstituted sentinel' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
 assert "heartbeat unit reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qxF 'EnvironmentFile=/etc/default/inngest-server'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null"
 assert "DOPPLER_PROJECT is exported (so inngest-redis-bootstrap.sh inherits it), default soleur" \
   "grep -qF 'export DOPPLER_PROJECT=\"\${DOPPLER_PROJECT:-soleur}\"' '$BOOTSTRAP_SH'"
-DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 # shellcheck disable=SC2016
 # Single-quotes are intentional — the regex matches the literal shell text
 # `cat > "$HEARTBEAT_UNIT"` in the bootstrap script's source.
-HEARTBEAT_UNIT_LINE=$(grep -nE 'cat > "\$HEARTBEAT_UNIT"' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+HEARTBEAT_UNIT_LINE=$(grep -nE 'cat > "\$HEARTBEAT_UNIT"' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
   "[[ -n '$DOPPLER_BIN_LINE' && -n '$HEARTBEAT_UNIT_LINE' && '$DOPPLER_BIN_LINE' -lt '$HEARTBEAT_UNIT_LINE' ]]"
 
@@ -181,32 +185,32 @@ assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
 # 3,724 failures undiagnosable off-box. This retag onto Source 4's `inngest-heartbeat`
 # channel is what makes the "no row at all + unit failed" signature readable with no SSH.
 assert "heartbeat unit sets SyslogIdentifier=inngest-heartbeat (AC1, #6536)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^SyslogIdentifier=inngest-heartbeat$' >/dev/null"
 
 # #6556 Part 2 — the OnFailure alarm unit (push-less, queryable-only). The heartbeat unit
 # declares OnFailure=; the target unit reuses the inngest-heartbeat Source 4 tag and emits a
 # bare `logger` ERR line with NO `doppler run` wrapper (a wrapper would hardcode a project,
 # wrong on the soleur-inngest host, re-introducing the #6555 project-resolution surface).
 assert "heartbeat unit declares OnFailure=inngest-heartbeat-failure-log.service (#6556)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^OnFailure=inngest-heartbeat-failure-log\\.service$'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^OnFailure=inngest-heartbeat-failure-log\\.service$' >/dev/null"
 FAILLOG_BLOCK=$(awk '/cat > "\$HEARTBEAT_FAILURE_LOG_UNIT" <</,/^FAILLOGEOF$/' "$BOOTSTRAP_SH")
 assert "failure-log unit block extraction is non-empty (non-vacuity)" \
   "[[ -n \"\$FAILLOG_BLOCK\" ]]"
 assert "failure-log unit is Type=oneshot" \
-  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^Type=oneshot$'"
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -cE '^Type=oneshot$' >/dev/null"
 assert "failure-log unit reuses SyslogIdentifier=inngest-heartbeat (no new Source 4 entry)" \
-  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -cE '^SyslogIdentifier=inngest-heartbeat$' >/dev/null"
 # Anchor on the ExecStart LINE (not the whole block, whose comments mention doppler/--project):
 # the command must BE /usr/bin/logger and must NOT be a `doppler run`/`--project` wrapper.
 FAILLOG_EXECSTART=$(printf '%s\n' "$FAILLOG_BLOCK" | grep -E '^ExecStart=')
 assert "failure-log ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
 assert "failure-log ExecStart command is /usr/bin/logger (bare)" \
-  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger '"
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -cE '^ExecStart=/usr/bin/logger ' >/dev/null"
 assert "failure-log ExecStart carries NO doppler run / --project wrapper (#6555 surface)" \
-  "! printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE 'doppler|--project'"
+  "! printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -cE 'doppler|--project' >/dev/null"
 assert "failure-log ExecStart emits at ERR priority on the inngest-heartbeat tag" \
-  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger -t inngest-heartbeat -p err '"
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -cE '^ExecStart=/usr/bin/logger -t inngest-heartbeat -p err ' >/dev/null"
 
 # #6536 ROUND 2: EVERY doppler-wrapped unit MUST set PrivateTmp=true.
 #
@@ -309,7 +313,7 @@ assert "ping-script heredoc body extracted (carries the curl exec)" \
 assert "ping-script carries the @@DARK_ARM@@ sentinel line (render-time split, not a runtime if)" \
   "grep -qE '^@@DARK_ARM@@$' '$PING_BODY'"
 assert "@@DARK_ARM@@ render block extracted from the bootstrap (non-empty)" \
-  "[[ -n \"\$DARK_ARM_RENDER_BLOCK\" ]] && printf '%s\n' \"\$DARK_ARM_RENDER_BLOCK\" | grep -qF 'sed -i'"
+  "[[ -n \"\$DARK_ARM_RENDER_BLOCK\" ]] && printf '%s\n' \"\$DARK_ARM_RENDER_BLOCK\" | grep -cF 'sed -i' >/dev/null"
 
 # LOG_TAG must be a REAL assignment, never a bare `logger -t inngest-heartbeat` literal:
 # vector-pii-scrub.test.sh:392-404 derives EXPECTED_TAGS from
@@ -439,7 +443,7 @@ assert "AC5b/1 dedicated render + URL absent -> exit 0 (was rc=2, the 60s storm)
 assert "AC5b/1 dedicated render + URL absent -> exactly one url_present=no row (never silent)" \
   "[[ \$(grep -c 'url_present=no' '$DED_LOG') -eq 1 ]]"
 assert "AC5b/1 dedicated render + URL absent -> curl never ran (no curl error on output)" \
-  "! printf '%s' \"\$DED_ABSENT_OUT\" | grep -qi 'curl'"
+  "! printf '%s' \"\$DED_ABSENT_OUT\" | grep -ci 'curl' >/dev/null"
 
 # --- #6617b (A6): the dark arm is RATE-LIMITED, not ELIMINATED (plan CF-9) ---
 # The dark arm fires every 60s and each fire ships a row through Source 4 (which applies no
@@ -534,9 +538,9 @@ assert "A6/P3-3 the recovering fire overwrites the future stamp with a non-futur
 # this is a ONESHOT, so systemd would otherwise delete the directory -- and the stamp -- the
 # instant it exits, on every single fire.
 assert "A6 heartbeat unit declares RuntimeDirectory=inngest-heartbeat (deploy cannot write bare /run)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectory=inngest-heartbeat$'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^RuntimeDirectory=inngest-heartbeat$' >/dev/null"
 assert "A6 heartbeat unit declares RuntimeDirectoryPreserve=yes (a oneshot would else drop the stamp each fire)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectoryPreserve=yes$'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^RuntimeDirectoryPreserve=yes$' >/dev/null"
 
 # --- #6617b task 1.6.2: this change provisions NO heartbeat URL ---
 # Writing the URL early would put TWO pushers on one monitor -- the co-located web host (live
@@ -571,7 +575,7 @@ WEB_ABSENT_OUT=$(run_ping "$WEB_PING" "" "$WEB_LOG") && WEB_ABSENT_RC=0 || WEB_A
 #     (`sh: exec: /usr/bin/curl: not found` — sh's message, not curl's) and satisfy a bare
 #     `-ne 0`, passing this assertion for the one reason that would mean the test proved nothing.
 assert "AC5b/3 web render + URL absent -> non-zero AND curl is what rejected it (loud; absent URL on the live pusher is a fault)" \
-  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && printf '%s' \"\$WEB_ABSENT_OUT\" | grep -q '^curl:'"
+  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && printf '%s' \"\$WEB_ABSENT_OUT\" | grep -c '^curl:' >/dev/null"
 assert "AC5b/3 web render + URL absent -> emitted no dark-arm row" \
   "[[ ! -s '$WEB_LOG' ]]"
 
@@ -642,7 +646,7 @@ GATE_404_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_LOG" "$HEALTH_404
 assert "AC4 listener 404 -> the beat is SUPPRESSED (rc=0: curl never reached the heartbeat URL)" \
   "[[ '$GATE_404_RC' -eq 0 ]]"
 assert "AC4 listener 404 -> curl never ran against the heartbeat URL (no curl error on output)" \
-  "! printf '%s' \"\$GATE_404_OUT\" | grep -qi '^curl:'"
+  "! printf '%s' \"\$GATE_404_OUT\" | grep -ci '^curl:' >/dev/null"
 # Loud, not silent: cq-silent-fallback-must-mirror-to-sentry. Absence-of-beat is the ALARM, but
 # the journal row is the only thing that says WHY without an SSH (hr-no-ssh-fallback-in-runbooks).
 assert "AC4 listener 404 -> emits a loud listener=no row naming the code (never a silent exit 0)" \
@@ -697,8 +701,8 @@ assert "AC4 listener 302 -> SUPPRESSED (only a literal 200 may beat)" \
 # host forever, turning "absence-of-beat is the alarm" into a permanent page) at full green.
 # Both operands by shape: the gate's default vs the port the unit actually binds.
 GATE_DEFAULT_URL=$(grep -oE '^INNGEST_HEALTH_URL="\$\{INNGEST_HEARTBEAT_HEALTH_URL:-[^}]+\}"' "$BOOTSTRAP_SH" \
-  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
-BOUND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
+BOUND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | sed -n '1p' || true)
 assert "AC4/S3 the gate's default health URL was extracted by shape (else this pin is vacuous)" \
   "[[ -n '$GATE_DEFAULT_URL' && -n '$BOUND_PORT' ]]"
 assert "AC4/S3 the gate's default health URL targets the port the unit BINDS ($BOUND_PORT) on loopback" \
@@ -1050,7 +1054,7 @@ assert "#7695 schema 5: patterns is a real histogram, not a sentinel" \
 # The value must remain ONE whitespace-free token, or the dark gate's token parser sees extra
 # fields — the injection shape its duplicate-field refusal exists to catch.
 assert "#7695 schema 5: patterns is a single token (no whitespace leaked into the row)" \
-  "[[ \$(grep -oE 'redis_key_patterns=[^ ]+' '$PROBE_D_LOG' | head -1 | wc -w) -eq 1 ]]"
+  "[[ \$(grep -oE 'redis_key_patterns=[^ ]+' '$PROBE_D_LOG' | sed -n '1p' | wc -w) -eq 1 ]]"
 
 # ── probe_schema=6: expires, the field that separates residue from live keys ────────────────
 # WHY THIS EXISTS. `keys=` is the raw dict size and counts keys whose TTL has elapsed but which
@@ -1113,7 +1117,7 @@ assert "#7695 schema 6: an errored scan is DISTINGUISHABLE from a genuinely empt
   "! grep -qE 'redis_key_patterns=__SCANEMPTY_[a-z0-9-]*_noerr__( |\$)' '$PROBE_E_LOG'"
 # The error text is untrusted server output on a whitespace-parsed row — it must not split.
 assert "#7695 schema 6: the carried error text stays ONE token" \
-  "[[ \$(grep -oE 'redis_key_patterns=[^ ]+' '$PROBE_E_LOG' | head -1 | wc -w) -eq 1 ]]"
+  "[[ \$(grep -oE 'redis_key_patterns=[^ ]+' '$PROBE_E_LOG' | sed -n '1p' | wc -w) -eq 1 ]]"
 # ...and the count is unaffected: a failed scan must never rewrite the destroy-authorizing field.
 assert "#7695 schema 6: a failed scan leaves redis_keys alone (16, not cleared)" \
   "grep -qE 'redis_keys=16( |\$)' '$PROBE_E_LOG'"
@@ -1132,7 +1136,7 @@ assert "#7695 schema 6: a failed scan leaves redis_keys alone (16, not cleared)"
 # model. Anchored on the invocation to avoid matching this comment (cq-assert-anchor-not-bare-token).
 PROBE_SRC="$SCRIPT_DIR/inngest-bootstrap.sh"
 assert "#7695 schema 7: the scan invocation passes NO --count (not a redis-cli option)" \
-  "! grep -nE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC' | grep -q -- '--count'"
+  "! grep -nE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC' | grep -c -- >/dev/null '--count'"
 # Non-vacuity: there must BE a --scan invocation for the negative above to mean anything.
 assert "#7695 schema 7: non-vacuity — a --scan invocation exists to be checked" \
   "grep -qE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC'"
@@ -1140,7 +1144,7 @@ assert "#7695 schema 7: non-vacuity — a --scan invocation exists to be checked
 # status is the LAST command's, so `redis-cli … | head` reported head's 0 and made the
 # __SCANFAIL_ branch unreachable for a failing redis-cli no matter what that branch contained.
 assert "#7695 schema 7: the scan is redirected, never piped, so redis-cli's rc survives" \
-  "! grep -nE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC' | grep -q '|'"
+  "! grep -nE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC' | grep -c '|' >/dev/null"
 
 # ============================================================================================
 # ARM 5b — probe_schema=8: data_mount_devid, data_mount_base, registry_fns (#8017/#8015/#8013)
@@ -1462,7 +1466,7 @@ assert "#8013 a SHORT LOWERCASE HEX id does not survive (no digit run, no upperc
 assert "#8013 OVER-REDACTION guard: the category tag survives the allowlist" \
   "grep -qE 'redis_key_patterns=[^ ]*[?]queue[?]:queue:[*]' '$S8_KEYS'"
 assert "#8013 OVER-REDACTION guard: a brace-free category pair survives" \
-  "grep -qE 'redis_key_patterns=[^ ]*inngest:queue:[*]' '$S8_KEYS' || grep -qE 'redis_key_patterns=[^ ]*[?]connect[?]:gateways:[*]' '$S8_KEYS'"
+  "grep -qE 'redis_key_patterns=[^ ]*inngest:queue:[*]' '$S8_KEYS' || grep -cE 'redis_key_patterns=[^ ]*[?]connect[?]:gateways:[*]' >/dev/null '$S8_KEYS'"
 assert "#8013 the field is still non-empty and carries no whitespace" \
   "grep -qE 'redis_key_patterns=[^ ]+( |\$)' '$S8_KEYS'"
 cp "$PROBE_D_BIN/redis-cli" "$PROBE_S8_BIN/redis-cli"
@@ -1494,7 +1498,7 @@ assert "#8015 the GQL query is drift-pinned at column zero (else the cross-file 
 assert "#8015 the registry curl discards stderr (untrusted response text must not reach the warehouse)" \
   "grep -qE 'v0/gql 2>/dev/null' '$PROBE_SRC'"
 assert "#8013 the histogram uses no regex INTERVAL expressions (older mawk lacks them)" \
-  "! grep -nE 'isulid|isuuid|ishex' '$PROBE_SRC' | grep -qE '\{[0-9]+(,[0-9]*)?\}'"
+  "! grep -nE 'isulid|isuuid|ishex' '$PROBE_SRC' | grep -cE '\{[0-9]+(,[0-9]*)?\}' >/dev/null"
 
 # ============================================================================================
 # mutate_emitter — emitter-side mutation rows that RUN (#8017 task 1a.1)
@@ -1522,7 +1526,7 @@ emit_field() {  # emit_field <probe-body> <field> -> value, or the empty string
     PROBE_BYID_DIR="$PROBE_S8_BYID" DOPPLER_PROJECT="soleur-inngest" \
     INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
     sh "$1" >/dev/null 2>&1 || true
-  tr ' ' '\n' < "$_ef_log" | grep -oE "^$2=.*" | head -1 | cut -d= -f2-
+  tr ' ' '\n' < "$_ef_log" | grep -oE "^$2=.*" | sed -n '1p' | cut -d= -f2-
 }
 mutate_emitter() {
   local label="$1" expr="$2" field="$3" want="$4"
@@ -1806,7 +1810,7 @@ assert "#7695 never-zero invariant covered 6 logs x 7 fields" \
 assert "#7695 presence list minus never-zero list == the four fields whose 0 is a MEASUREMENT" \
   "[[ \$(( \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) - \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) )) -eq 4 ]]"
 assert "#7695 those four are exactly redis_keys, redis_expires, redis_key_patterns, registry_fns" \
-  "for f in redis_keys redis_expires redis_key_patterns registry_fns; do printf '%s\n' \$PROBE_7695_FIELDS | grep -qx \"\$f\" || exit 1; printf '%s\n' \$PROBE_7695_NEVER_ZERO | grep -qx \"\$f\" && exit 1; done; true"
+  "for f in redis_keys redis_expires redis_key_patterns registry_fns; do printf '%s\n' \$PROBE_7695_FIELDS | grep -cx >/dev/null \"\$f\" || exit 1; printf '%s\n' \$PROBE_7695_NEVER_ZERO | grep -cx >/dev/null \"\$f\" && exit 1; done; true"
 
 # redis_key_patterns must never render as the empty string: the emit is unconditional, so an
 # unbound variable would drop the field entirely and G14 downstream would read the row as
@@ -1833,7 +1837,7 @@ assert "#7695 the extracted payload is non-empty (parity cannot pass vacuously o
   "[[ -n '$PROBE_PAYLOAD_LOGGER' ]]"
 # A payload of pure literals would compare equal while carrying no measurement at all.
 assert "#7695 the extracted payload binds variables, not literals" \
-  "printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q '\\\$'"
+  "printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -c '\\\$' >/dev/null"
 assert "#7695 both emit sites carry a BYTE-IDENTICAL payload (names AND bindings)" \
   "[[ '$PROBE_PAYLOAD_LOGGER' == '$PROBE_PAYLOAD_PHONE' ]]"
 # CARDINALITY, not just membership: adding a 22nd field to both emit sites without classifying it
@@ -1842,7 +1846,7 @@ assert "#7695 both emit sites carry a BYTE-IDENTICAL payload (names AND bindings
 assert "#7695 the emitted payload carries EXACTLY the presence list's field count (a new field must be classified)" \
   "[[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$' | wc -l) -eq \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]] || [[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$[a-z_]+' | wc -l) -ge \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]]"
 assert "#7695 every field in the presence list appears in the shared payload" \
-  "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q \"\$f=\\\$\$f\" || exit 1; done"
+  "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -c >/dev/null \"\$f=\\\$\$f\" || exit 1; done"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
 # Stack, which is the same ambiguity a missing row creates.
 # #7228 adds instance_id, cli_version and cutover_flag. The three answer questions the existing
@@ -1904,9 +1908,9 @@ assert "#7228 the inngest-server restart is GUARDED (a guard refusal must not ki
 # Without it the capture aborts the script on exactly the failure that assertion exists to catch,
 # so the guard could never run on its own trigger — and an aborted suite reads as an error rather
 # than as the clear "the anchor moved" verdict the assertion would have printed.
-RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
-PROBE_TIMER_LINE=$(grep -nE '^systemctl enable --now inngest-server-probe\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
-FLIP_TIMER_LINE=$(grep -nE '^[[:space:]]*systemctl enable --now inngest-cutover-flip\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+PROBE_TIMER_LINE=$(grep -nE '^systemctl enable --now inngest-server-probe\.timer$' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+FLIP_TIMER_LINE=$(grep -nE '^[[:space:]]*systemctl enable --now inngest-cutover-flip\.timer$' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
 assert "#7228 the restart and both downstream timers were located by shape (else this pin is vacuous)" \
   "[[ -n '$RESTART_LINE' && -n '$PROBE_TIMER_LINE' && -n '$FLIP_TIMER_LINE' ]]"
 assert "#7228 the probe + flip timers are DOWNSTREAM of the restart, so a refusal cannot strand them" \
@@ -1915,13 +1919,13 @@ assert "#7228 a refused start is reported on the Vector-INDEPENDENT channel (vec
   "grep -qE 'inngest-boot-phone-home\.sh inngest-server-start-REFUSED' '$BOOTSTRAP_SH'"
 
 assert "A4/#7228 the probe unit still ships exactly ONE SyslogIdentifier, unchanged (no new Source 4 tag)" \
-  "[[ \$(printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^SyslogIdentifier=') -eq 1 ]] && printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-server-probe$'"
+  "[[ \$(printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^SyslogIdentifier=') -eq 1 ]] && printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^SyslogIdentifier=inngest-server-probe$' >/dev/null"
 # The cutover_flag read needs Doppler credentials, and the ONLY safe way to give a shared-renderer
 # unit an env file that exists on just one of the two hosts is the `-` prefix. Without it systemd
 # fails the unit outright on the co-located web host — a change made to ADD observability would
 # silently DELETE it on one host. Anchored on the `=-` construct, which a comment cannot produce.
 assert "A4/#7228 the probe unit's EnvironmentFile is OPTIONAL (\`=-\`), so the co-located host's probe still runs" \
-  "printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -qE '^EnvironmentFile=-/etc/default/inngest-doppler$'"
+  "printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^EnvironmentFile=-/etc/default/inngest-doppler$' >/dev/null"
 assert "A4 cloud-init writes INNGEST_BOOTSTRAP_IMAGE from the full \$IREF (what image_ref reports)" \
   "grep -qF \"printf 'INNGEST_BOOTSTRAP_IMAGE=%s\\\\n' \\\"\\\$IREF\\\"\" '$SCRIPT_DIR/cloud-init-inngest.yml'"
 
@@ -2006,22 +2010,22 @@ assert "inngest-server unit block extracted (non-empty)" \
   "[[ -n \"\$SERVER_UNIT_BLOCK\" ]] && [[ \$(printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | wc -l) -ge 5 ]]"
 # AC1: each new flag asserted independently (flag-order-insensitive).
 assert "server ExecStart sets --poll-interval 60" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE 'inngest start .*--poll-interval 60'"
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cE 'inngest start .*--poll-interval 60' >/dev/null"
 # #6178: --sdk-url is now TEMPLATED (@@SDK_URL@@ sentinel, same bash-param-expansion
 # mechanism as @@BACKEND_*@@) so the dedicated inngest host can point at a remote web
 # backend's private interface. The heredoc carries the sentinel; a substitution strips
 # it; the SDK_URL DEFAULT preserves the exact co-located loopback literal (the web-host
 # regression guard — cross-consumer behavior-preservation, hr-type-widening-cross-consumer-grep).
 assert "server ExecStart carries the @@SDK_URL@@ sentinel (templated, #6178)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'sdk-url @@SDK_URL@@'"
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cF 'sdk-url @@SDK_URL@@' >/dev/null"
 assert "the @@SDK_URL@@ sentinel is substituted (bash param expansion, not sed)" \
   "grep -qE '@@SDK_URL@@/' \"\$BOOTSTRAP_SH\""
 assert "SDK_URL default PRESERVES the co-located loopback app route (web regression guard, #6178)" \
   "grep -qF 'SDK_URL=\"\${SDK_URL:-http://127.0.0.1:3000/api/inngest}\"' \"\$BOOTSTRAP_SH\""
 # #6555: the server ExecStart dropped `--project` — it resolves the Doppler project from
 # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a sentinel flag.
-assert "server ExecStart is doppler run --config prd with NO --project (#6555)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'run --config prd' && ! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE '^ExecStart=.*--project'"
+assert "server ExecStart is doppler run --config @@DOPPLER_CONFIG@@ with NO --project (#6555/#9175)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cF 'run --config @@DOPPLER_CONFIG@@' >/dev/null && ! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cE '^ExecStart=.*--project' >/dev/null"
 # No @@DOPPLER_PROJECT@@ SUBSTITUTION (`${var//@@DOPPLER_PROJECT@@/...}`) survives anywhere in the
 # bootstrap — a lingering render mechanism could silently re-introduce a hardcoded --project.
 # Anchored on the substitution syntax, NOT the bare sentinel (comments legitimately name it).
@@ -2036,7 +2040,7 @@ assert "DOPPLER_PROJECT default PRESERVES 'soleur' for the co-located web host (
 # at all (read from the doppler env by name) — asserted absent by the #5560 security
 # invariant below.
 assert "server ExecStart re-exports the stripped signing-key (env-delivered, #5560)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'export INNGEST_SIGNING_KEY=\"\$\${INNGEST_SIGNING_KEY#signkey-prod-}\"'"
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cF 'export INNGEST_SIGNING_KEY=\"\$\${INNGEST_SIGNING_KEY#signkey-prod-}\"' >/dev/null"
 # --- #5547 Gap 2: REDIS_READY-gated durable/SQLite-fail-safe ExecStart ---
 # The durable backend flags (#5450) moved OUT of the single-quoted server-unit
 # heredoc into a REDIS_READY-gated BACKEND_FLAGS fragment that is substituted
@@ -2052,9 +2056,9 @@ echo "--- #5547 Gap 2: REDIS_READY-gated durable/SQLite ExecStart fragment ---"
 # materialization (the Redis unit reads it for the Doppler-injected password —
 # the load-bearing ordering dependency) AND BEFORE the server-unit cat> (so the
 # substitution can branch the ExecStart on it).
-ENV_FILE_LINE=$(grep -nE 'cat > /etc/default/inngest-server <<DOPPLEREOF' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
-REDIS_READY_LINE=$(grep -nE '^[[:space:]]*REDIS_READY=' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
-SERVER_CAT_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+ENV_FILE_LINE=$(grep -nE 'cat > /etc/default/inngest-server <<DOPPLEREOF' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+REDIS_READY_LINE=$(grep -nE '^[[:space:]]*REDIS_READY=' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+SERVER_CAT_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
 TOTAL=$((TOTAL + 1))
 if [[ -n "$ENV_FILE_LINE" && -n "$REDIS_READY_LINE" && -n "$SERVER_CAT_LINE" \
       && "$ENV_FILE_LINE" -lt "$REDIS_READY_LINE" && "$REDIS_READY_LINE" -lt "$SERVER_CAT_LINE" ]]; then
@@ -2088,14 +2092,14 @@ fi
 # BACKEND_ENV exports INNGEST_REDIS_URI from the password (loopback :6379, NEVER the
 # pooler :6543); the durable BACKEND_FLAGS carries ONLY the non-secret
 # --postgres-max-open-conns sentinel (NO --postgres-uri/--redis-uri flags).
-DURABLE_ENV=$(grep -E "^[[:space:]]*BACKEND_ENV='export INNGEST_REDIS_URI=" "$BOOTSTRAP_SH" | head -1 || true)
-DURABLE_FLAGS=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | head -1 || true)
+DURABLE_ENV=$(grep -E "^[[:space:]]*BACKEND_ENV='export INNGEST_REDIS_URI=" "$BOOTSTRAP_SH" | sed -n '1p' || true)
+DURABLE_FLAGS=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | sed -n '1p' || true)
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$DURABLE_ENV" | grep -qF -- 'export INNGEST_REDIS_URI="redis://:' \
-   && printf '%s\n' "$DURABLE_ENV" | grep -qF -- '@127.0.0.1:6379' \
-   && ! printf '%s\n' "$DURABLE_ENV" | grep -qF ':6543' \
-   && printf '%s\n' "$DURABLE_FLAGS" | grep -qE -- '--postgres-max-open-conns [0-9]+' \
-   && ! printf '%s\n' "$DURABLE_FLAGS" | grep -qE -- '--(postgres|redis)-uri'; then
+if printf '%s\n' "$DURABLE_ENV" | grep -cF -- >/dev/null 'export INNGEST_REDIS_URI="redis://:' \
+   && printf '%s\n' "$DURABLE_ENV" | grep -cF -- >/dev/null '@127.0.0.1:6379' \
+   && ! printf '%s\n' "$DURABLE_ENV" | grep -cF ':6543' >/dev/null \
+   && printf '%s\n' "$DURABLE_FLAGS" | grep -cE -- >/dev/null '--postgres-max-open-conns [0-9]+' \
+   && ! printf '%s\n' "$DURABLE_FLAGS" | grep -cE -- >/dev/null '--(postgres|redis)-uri'; then
   PASS=$((PASS + 1))
   echo "  PASS: durable backend delivers INNGEST_REDIS_URI via env (loopback :6379, never :6543); BACKEND_FLAGS is sentinel-only, no secret flags (#5450/#5560)"
 else
@@ -2108,12 +2112,12 @@ fi
 # durability sentinel; the parsers use a substring match but this test + the #5560
 # drift-guard anchor on the flag being first). Conservative fixed values safe for any
 # per-subsystem pool count P ≤ 4 (worst-case total 4×5 = 20 < pool_size 30). NOTE the
-# unit trap (#6258, verified against inngest v1.19.4 cmd/start): --postgres-conn-max-idle-time
+# unit trap (#6258, verified against inngest v1.45.1 cmd/start): --postgres-conn-max-idle-time
 # is an IntFlag in MINUTES (default 5), NOT seconds — so `1` = drain idle conns after 1 min
 # (fast release of the pinned Supavisor session), NOT the plan's mis-labelled "30s".
-DURABLE_FLAGS_FULL=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | head -1 || true)
+DURABLE_FLAGS_FULL=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | sed -n '1p' || true)
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$DURABLE_FLAGS_FULL" | grep -qE -- "BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'"; then
+if printf '%s\n' "$DURABLE_FLAGS_FULL" | grep -cE -- >/dev/null "BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'"; then
   PASS=$((PASS + 1))
   echo "  PASS: durable BACKEND_FLAGS bounds total footprint (open 5 / idle 2 / idle-time 1min), sentinel --postgres-max-open-conns FIRST (#6258 AC1)"
 else
@@ -2126,10 +2130,10 @@ fi
 # (systemd unescapes $$→$, then bash -c expands the doppler-injected env). grep -F
 # single-quoted so the $$ is matched literally (never the shell PID). #5560: the
 # postgres URI + event key are read from the env by name with NO bootstrap token.
-EXECSTART_LINE=$(grep -E '^ExecStart=.*doppler run' "$BOOTSTRAP_SH" | head -1 || true)
+EXECSTART_LINE=$(grep -E '^ExecStart=.*doppler run' "$BOOTSTRAP_SH" | sed -n '1p' || true)
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$DURABLE_ENV" | grep -qF '$${INNGEST_REDIS_PASSWORD}' \
-   && printf '%s\n' "$EXECSTART_LINE" | grep -qF '$${INNGEST_SIGNING_KEY#signkey-prod-}'; then
+if printf '%s\n' "$DURABLE_ENV" | grep -cF '$${INNGEST_REDIS_PASSWORD}' >/dev/null \
+   && printf '%s\n' "$EXECSTART_LINE" | grep -cF '$${INNGEST_SIGNING_KEY#signkey-prod-}' >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: durable env preserves literal \$\${INNGEST_REDIS_PASSWORD}; ExecStart re-exports stripped \$\${INNGEST_SIGNING_KEY} (#5560 AC4)"
 else
@@ -2142,9 +2146,9 @@ fi
 # (those are env-delivered). The only $${...} on the ExecStart line is the signing-key
 # re-export (an env export, not an argv flag).
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$EXECSTART_LINE" | grep -qF 'exec /usr/local/bin/inngest start' \
-   && ! printf '%s\n' "$EXECSTART_LINE" | grep -qE -- '--signing-key|--event-key' \
-   && ! printf '%s\n' "$EXECSTART_LINE" | grep -qE -- '--(postgres|redis)-uri'; then
+if printf '%s\n' "$EXECSTART_LINE" | grep -cF 'exec /usr/local/bin/inngest start' >/dev/null \
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -cE -- >/dev/null '--signing-key|--event-key' \
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -cE -- >/dev/null '--(postgres|redis)-uri'; then
   PASS=$((PASS + 1))
   echo "  PASS: ExecStart passes NO secret on argv (no --signing-key/--event-key/--postgres-uri/--redis-uri); uses exec (#5560 security invariant)"
 else
@@ -2176,9 +2180,9 @@ fi
 echo ""
 echo "--- Inngest-server unit reconcile-always + restart (#4652 AC2) ---"
 # shellcheck disable=SC2016
-GUARD_CLOSE_LINE=$(grep -nE '^fi  # end SKIP_BINARY_INSTALL guard' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+GUARD_CLOSE_LINE=$(grep -nE '^fi  # end SKIP_BINARY_INSTALL guard' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 # shellcheck disable=SC2016
-SERVER_UNIT_WRITE_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+SERVER_UNIT_WRITE_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-always)" \
   "[[ -n '$GUARD_CLOSE_LINE' && -n '$SERVER_UNIT_WRITE_LINE' && '$GUARD_CLOSE_LINE' -lt '$SERVER_UNIT_WRITE_LINE' ]]"
 # #7228: the restart is now GUARDED (`if ! systemctl restart …; then`) so a flip-guard refusal
@@ -2186,12 +2190,39 @@ assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-al
 # unchanged — the restart still happens — so the anchor moves to the guarded construct.
 assert "bootstrap restarts inngest-server.service (new ExecStart loads on redeploy)" \
   "grep -qE '^if ! systemctl restart inngest-server\.service; then$' '$BOOTSTRAP_SH'"
-# The upgrade-drain resume must still run after the restart (R2 — restart must
-# not orphan the pause/resume pairing). Match the actual resume COMMAND
-# (`"$INSTALL_PATH" resume`) precisely — no broad `|| grep resume` fallback,
-# which would vacuously pass on any comment line merely mentioning "resume".
-assert "upgrade-drain resume command still present (pause/resume pairing intact)" \
-  "grep -qE '\"\\\$INSTALL_PATH\" resume' '$BOOTSTRAP_SH'"
+# #9219: the bootstrap must not invoke inngest-cli verbs that do not exist on the pinned binary.
+# `pause`/`resume` were measured ABSENT on v1.19.4 and v1.45.1 ("No help topic",
+# knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md)
+# and were removed. Both checks read inngest-bootstrap.sh's NON-COMMENT lines only; helper scripts
+# it installs are out of scope (none invokes the CLI today).
+#   (1) No `pause`/`resume` word in any spelling — catches the forms the extractor cannot see
+#       (bare `inngest pause` via PATH, an alias variable, a backslash continuation, a --flag).
+#   (2) Every verb invoked via $INSTALL_PATH, ${INSTALL_PATH} or /usr/local/bin/inngest is in the
+#       allowlist of verbs in production use (start: the unit's ExecStart; version: the probe).
+#       Add a verb only after measuring it on the pinned binary and recording it in
+#       inngest-cli.provenance.md.
+# The `start` floor proves only the absolute-path branch, so the extractor is self-tested on a
+# fixture covering all three spellings: dropping a branch is RED.
+inngest_cli_verbs() {
+  # shellcheck disable=SC2016
+  grep -vE '^[[:space:]]*#' \
+    | grep -oE '(\$INSTALL_PATH|\$\{INSTALL_PATH\}|/usr/local/bin/inngest)"?[[:space:]]+[A-Za-z][A-Za-z0-9_-]*' \
+    | awk '{print $NF}' | sort -u
+}
+# shellcheck disable=SC2016
+INNGEST_EXTRACTOR_FIXTURE=$(printf '%s\n' '"$INSTALL_PATH" aaa' '"${INSTALL_PATH}" bbb' '/usr/local/bin/inngest ccc' '  # "$INSTALL_PATH" ddd')
+INNGEST_EXTRACTOR_SELFTEST=$(inngest_cli_verbs <<<"$INNGEST_EXTRACTOR_FIXTURE" | tr '\n' ' ' || true)
+assert "#9219 verb extractor sees all three path spellings and skips comment lines (got: $INNGEST_EXTRACTOR_SELFTEST)" \
+  "[[ '$INNGEST_EXTRACTOR_SELFTEST' == 'aaa bbb ccc ' ]]"
+INNGEST_DEAD_VERB_LINES=$(grep -vE '^[[:space:]]*#' "$BOOTSTRAP_SH" | grep -cwE 'pause|resume' || true)
+assert "bootstrap code names no pause/resume verb in any spelling (#9219) (matching lines: $INNGEST_DEAD_VERB_LINES)" \
+  "[[ '$INNGEST_DEAD_VERB_LINES' == 0 ]]"
+INNGEST_VERB_ALLOWLIST_RE='^(start|version)$'
+INNGEST_VERBS_USED=$(inngest_cli_verbs <"$BOOTSTRAP_SH" || true)
+INNGEST_VERBS_UNMEASURED=$(grep -vE "$INNGEST_VERB_ALLOWLIST_RE" <<<"$INNGEST_VERBS_USED" || true)
+INNGEST_HAS_START=$(grep -cx start <<<"$INNGEST_VERBS_USED" || true)
+assert "bootstrap invokes only allowlisted inngest-cli verbs, start present (#9219) (got: $(tr '\n' ' ' <<<"$INNGEST_VERBS_USED"); unmeasured: $(tr '\n' ' ' <<<"$INNGEST_VERBS_UNMEASURED"))" \
+  "[[ '$INNGEST_HAS_START' == 1 && -z '$INNGEST_VERBS_UNMEASURED' ]]"
 
 # --- Durable backend assets (#5450) ---
 echo ""
@@ -2217,8 +2248,8 @@ assert "redis.service requirepass injected from Doppler" "grep -qF 'requirepass 
 # #6555: the redis.service ExecStart dropped `--project` — it resolves the Doppler project from
 # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime. The bootstrap installs
 # the unit verbatim (no @@DOPPLER_PROJECT@@ substitution round-trip).
-assert "redis.service runs under doppler run --config prd with NO --project (#6555)" \
-  "grep -qF 'doppler run --config prd' '$REDIS_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$REDIS_SERVICE'"
+assert "redis.service runs under doppler run --config \${DOPPLER_CONFIG} with NO --project (#6555/#9175)" \
+  "grep -qF 'doppler run --config \${DOPPLER_CONFIG}' '$REDIS_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$REDIS_SERVICE'"
 assert "redis.service reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
   "grep -qxF 'EnvironmentFile=/etc/default/inngest-server' '$REDIS_SERVICE'"
 assert "inngest-redis-bootstrap.sh no longer renders a @@DOPPLER_PROJECT@@ substitution (#6555)" \
@@ -2244,8 +2275,8 @@ assert "INNGEST_REDIS_PASSWORD doppler_secret"      "grep -qE 'name[[:space:]]+=
 # the `install …` line — after the #5547 reorder the install line still ends in
 # `inngest-redis-bootstrap.sh` and a `$`-anchored `tail -1` could pick it; the
 # invocation is the line whose ordering vs the restart actually matters.
-REDIS_RUN_LINE=$(grep -nE 'if /usr/local/bin/inngest-redis-bootstrap.sh; then' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
-RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+REDIS_RUN_LINE=$(grep -nE 'if /usr/local/bin/inngest-redis-bootstrap.sh; then' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
+RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 assert "bootstrap runs inngest-redis-bootstrap.sh (REDIS_READY probe) BEFORE the inngest-server restart" \
   "[[ -n '$REDIS_RUN_LINE' && -n '$RESTART_LINE' && '$REDIS_RUN_LINE' -lt '$RESTART_LINE' ]]"
 
@@ -2278,9 +2309,9 @@ assert "webhook.service has exactly one ReadWritePaths= line (head -1 safety)" "
 
 # CI_RWP/WS_RWP are consumed inside assert's `eval "$condition"` (SC can't see through eval).
 # shellcheck disable=SC2034
-CI_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
+CI_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" | sed -n '1p' | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
 # shellcheck disable=SC2034
-WS_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
+WS_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" | sed -n '1p' | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
 
 assert "cloud-init RWP marks /var/lib/inngest optional (-prefix)" \
   "grep -qE -- '(^|[[:space:]])-/var/lib/inngest([[:space:]]|\$)' <<< \"\$CI_RWP\""
@@ -2336,14 +2367,42 @@ assert "no ExecStart --project remains in inngest-bootstrap.sh units (#6555)" \
 # shellcheck disable=SC2034  # consumed inside the single-quoted predicate `assert` evals below,
 # which shellcheck cannot follow. Kept as a variable rather than inlined so the join runs once.
 CUTOVER_FLIP_EXEC="$(sed -n '/^ExecStart=/,/[^\\]$/p' "$CUTOVER_FLIP_SERVICE" | sed 's/\\$//' | tr -d '\n')"
-assert "inngest-cutover-flip.service ExecStart has NO --project, continuations joined (#6555/#7761)" \
-  "grep -qF 'doppler run --config prd' <<<\"\$CUTOVER_FLIP_EXEC\" && ! grep -qE 'ExecStart=.*--project' <<<\"\$CUTOVER_FLIP_EXEC\""
+assert "inngest-cutover-flip.service ExecStart has NO --project, continuations joined (#6555/#7761/#9175)" \
+  "grep -qF 'doppler run --config \${DOPPLER_CONFIG}' <<<\"\$CUTOVER_FLIP_EXEC\" && ! grep -qE 'ExecStart=.*--project' <<<\"\$CUTOVER_FLIP_EXEC\""
 assert "deploy-inngest-bootstrap.sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE '^Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$SUDOERS_SRC'"
 assert "cloud-init.yml inline sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE 'Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$CLOUD_INIT'"
 assert "ci-deploy.sh --preserve-env drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE 'preserve-env=.*DOPPLER_PROJECT' '$CI_DEPLOY'"
+
+echo ""
+echo "--- #9175: Doppler --config census on the inngest dedicated-host boot path ---"
+#
+# EVERY doppler `--config` flag site on the dedicated-host boot path resolves the config name
+# through a parameterization, never a literal name — the rehearsal host (inngest-provision-
+# rehearsal.tf) renders soleur-inngest/rehearsal_<runid> through the same files, and a literal
+# `--config prd` anywhere on this path would silently aim the throwaway host at PRODUCTION
+# secrets. Allowed forms, one per file class:
+#   cloud-init-inngest.yml          --config ${inngest_doppler_config}   (template arg; prod arg = "prd")
+#   inngest-bootstrap.sh emitted    --config @@DOPPLER_CONFIG@@  or  $DOPPLER_CONFIG  (provision-time)
+#   committed .service files        --config ${DOPPLER_CONFIG}           (systemd env substitution)
+#   scripts' own doppler calls      --config "${DOPPLER_CONFIG:-prd}" / "$DOPPLER_CONFIG"
+# A site carrying ANY other form — including a reverted literal `--config prd` — is an
+# unclassified site: RED, and the site must be enumerated here (the count is exact, so a NEW
+# site cannot slip in unlisted either).
+DOPPLER_CFG_SITES="$(for _f in "$CLOUD_INIT_INNGEST" "$BOOTSTRAP_SH" \
+    "$SCRIPT_DIR/inngest-cutover-flip.sh" "$SCRIPT_DIR/inngest-luks-cutover.sh" \
+    "$SCRIPT_DIR/inngest-redis.service" "$CUTOVER_FLIP_SERVICE" \
+    "$SCRIPT_DIR/inngest-luks-cutover.service"; do
+    grep -nE -- '--config [^ ]+' "$_f" | grep -vE '^[0-9]+:[[:space:]]*#'
+  done)"
+DCFG_N="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -c . || true)"
+DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inngest_doppler_config\}|@@DOPPLER_CONFIG@@|"?\$?\{?DOPPLER_CONFIG[^ ]*"?)' || true)"
+assert "inngest boot-path --config census is exactly 19 sites (unlisted site -> RED, #9175)" \
+  "[[ '$DCFG_N' == '19' ]]"
+assert "every boot-path --config site resolves through a parameterization (no literal config name, #9175)" \
+  "[[ -z \"\$DCFG_BAD\" ]]"
 
 echo ""
 echo "--- #7286: unconditional-doppler unit -> credential drop-in FULL lockstep (class-closing) ---"
@@ -2494,7 +2553,7 @@ assert "lockstep invariant examined >= 1 unit (guard against a vacuous selector)
 # second hazard unit is wired, acking inngest-redis.service AND deleting its drop-in goes green —
 # #7286 reintroduced verbatim with the guard still satisfied. Pin the member by name.
 assert "lockstep invariant examined inngest-redis.service specifically" \
-  "printf '%s' '$LOCKSTEP_EXAMINED_UNITS' | grep -qF 'inngest-redis.service'"
+  "printf '%s' '$LOCKSTEP_EXAMINED_UNITS' | grep -cF 'inngest-redis.service' >/dev/null"
 # The ack list is the guard's only escape hatch, and prose ("an unexplained skip is how a ratchet
 # stops ratcheting") does not enforce itself. Growing it must be a deliberate, visible edit.
 # Grown 1 -> 2 by #6894 (inngest-luks-cutover.service, reason recorded at the list). The members
@@ -2503,6 +2562,122 @@ assert "ack list holds exactly 2 entries (a silent third ack cannot open a hole)
   "[[ \${#DROPIN_ACK_UNITS[@]} -eq 2 ]]"
 assert "ack list members are exactly the two dedicated-host units" \
   "[[ \"\${DROPIN_ACK_UNITS[*]}\" == 'inngest-cutover-flip.service inngest-luks-cutover.service' ]]"
+
+echo ""
+echo "--- #9939: ConditionPathExists skip-vs-fail on the LUKS cutover trio ---"
+#
+# Every EnvironmentFile= a unit declares is written by a runcmd stage late in first boot, so a
+# start attempted before the writer completes (an aborted LUKS stage, the bootstrap-armed timer
+# against never-written files) must SKIP — one "skipped, unmet condition check" notice — never
+# FAIL into the LUKS journal channel. The service carries the condition for its non-timer
+# start jobs (its [Install] WantedBy=multi-user.target arm if ever enabled, manual starts,
+# future Wants=/Requires= consumers); the timer carries the same pair because a
+# condition on it is evaluated at ACTIVATION, so an abort-host never arms the ~30s tick storm.
+# The EnvironmentFile= lines themselves stay unprefixed — the fail-closed contract is retained.
+LUKS_CUTOVER_SVC="$SCRIPT_DIR/inngest-luks-cutover.service"
+LUKS_CUTOVER_TMR="$SCRIPT_DIR/inngest-luks-cutover.timer"
+# Placement is part of the property: a ConditionPathExists= under [Service]/[Install] is an
+# inert unknown lvalue — the unit starts unconditionally and the storm returns while a
+# whole-file presence grep stays green — so every condition assert counts lines inside the
+# [Unit] section only, and the counter names the literal paths with exact equality.
+# <file> <section> — print the section's lines; <file> <section> <directive> — sorted value set.
+# Both EnvironmentFile= and ConditionPathExists= are section-scoped directives ([Service] and
+# [Unit] respectively); each assert scopes to its directive's own section so a misplaced line
+# reads as absent.
+_luks_sec()      { awk -v sec="$2" '$0=="["sec"]"{u=1;next} /^\[/{u=0} u' "$1"; }
+_luks_sec_vals() { _luks_sec "$1" "$2" | sed -n "s/^[[:space:]]*$3=//p" | tr ' \t' '\n' | sed '/^$/d' | sort -u; }
+assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-server is absent" \
+  "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-luks-volumes is absent" \
+  "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
+assert "inngest-luks-cutover.service keeps BOTH EnvironmentFile= lines unprefixed in [Service] (fail-closed)" \
+  "_luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-luks-volumes' >/dev/null && ! _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
+# Bare `Directive=` resets the list wholesale in systemd (EnvironmentFile= empties the env
+# set, ConditionPathExists= erases every condition) — invisible to the literal pins and to the
+# set extractors, which drop empty tokens. Checked file-wide: a reset line is never legitimate
+# here, in any section, at any indent.
+assert "no bare EnvironmentFile=/ConditionPathExists= reset lines in the cutover units" \
+  "! grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' '$LUKS_CUTOVER_SVC' '$LUKS_CUTOVER_TMR' >/dev/null"
+# SET IDENTITY, not cardinality: the sorted path set of [Unit] conditions must equal the
+# sorted path set of [Service] EnvironmentFile= values — a coordinated mismatched pair or a
+# non-/etc/default/ path fails where a count comparison would pass.
+assert "inngest-luks-cutover.service's [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
+  "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
+assert "inngest-luks-cutover.timer carries the inngest-server condition in [Unit] (evaluated at activation, not per-elapse)" \
+  "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-luks-cutover.timer carries the inngest-luks-volumes condition in [Unit] (evaluated at activation, not per-elapse)" \
+  "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
+assert "inngest-luks-cutover.timer's [Unit] condition path-set equals the service's [Service] EnvironmentFile path-set" \
+  "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
+
+echo "--- #9962: the same skip-vs-fail class on the non-LUKS siblings ---"
+#
+# #9962 extends the #9939 calibration to every unit whose unprefixed EnvironmentFile= is a
+# late-runcmd write and whose activation path can fire before it — flip pair (30s), provision
+# (boot re-entry), heartbeat (60s), vector + server (Restart crash-loops). inngest-redis stays
+# deliberately loud (RequiresMountsFor is already its designed signal). The bootstrap-generated
+# units live inside inngest-bootstrap.sh heredocs — each block is extracted by its delimiter
+# and the [Unit]/[Service] sections are judged inside it, so a condition dropped into [Service]
+# reads as absent the same way the LUKS pins do.
+FLIP_SVC="$SCRIPT_DIR/inngest-cutover-flip.service"
+FLIP_TMR="$SCRIPT_DIR/inngest-cutover-flip.timer"
+REDIS_SVC="$SCRIPT_DIR/inngest-redis.service"
+# <heredoc-delimiter> — print the generated unit body from inngest-bootstrap.sh.
+# Opener anchored end-of-line with an optional single-quote each side of the delimiter: the old
+# `.?`-slack form would alias a future `<<XUNITEOF`/`<<UNITEOF2` into this extraction, and a
+# condition line in the aliased body could satisfy a -eq 1 pin vacuously (review P3).
+_boot_unit() { awk -v q="'" -v d="$1" '$0~("cat > .*<<" q "?" d q "?[[:space:]]*$"){u=1;next} $0==d{u=0} u' "$BOOTSTRAP_SH"; }
+# <text-via-stdin> <section> — same section semantics as _luks_sec but for heredoc bodies.
+# Indent-tolerant: the cloud-init yaml embeds units under write_files `content: |`, where the
+# [Unit] header itself is indented — the exact-match form would never enter the section there.
+_sec_body() { awk -v sec="$1" '{ h=$0; sub(/^[[:space:]]+/,"",h); if (h=="["sec"]") {u=1;next} if (h ~ /^\[/) u=0 } u'; }
+# <section> <directive> — sorted value set of a directive inside a named section, from stdin.
+_sec_body_vals() { _sec_body "$1" | sed -n "s/^[[:space:]]*$2=//p" | tr ' \t' '\n' | sed '/^$/d' | sort -u; }
+
+assert "inngest-cutover-flip.service skips in [Unit] when /etc/default/inngest-server is absent" \
+  "[[ \$(_luks_sec '$FLIP_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-cutover-flip.service keeps its EnvironmentFile= unprefixed (fail-closed)" \
+  "_luks_sec '$FLIP_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && ! _luks_sec '$FLIP_SVC' Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
+assert "inngest-cutover-flip.service's [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
+  "[[ -n \"\$(_luks_sec_vals '$FLIP_SVC' Service EnvironmentFile)\" && \"\$(_luks_sec_vals '$FLIP_SVC' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$FLIP_SVC' Service EnvironmentFile)\" ]]"
+assert "inngest-cutover-flip.timer carries the condition in [Unit] (evaluated at activation, not per-elapse)" \
+  "[[ \$(_luks_sec '$FLIP_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "no bare EnvironmentFile=/ConditionPathExists= reset lines in the flip pair" \
+  "! grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' '$FLIP_SVC' '$FLIP_TMR' >/dev/null"
+
+assert "inngest-heartbeat.service (heredoc) skips when /etc/default/inngest-server is absent" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit HEARTBEATEOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-heartbeat.timer (heredoc) carries the condition in [Unit]" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit TIMEREOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-server.service (heredoc) skips when /etc/default/inngest-server is absent" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit UNITEOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "vector.service (heredoc) skips when /etc/default/inngest-server is absent" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit VECTOREOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+
+# Precedent-shape set-identity + fail-closed pins for the heredoc units (AC-1, review P2):
+# presence pins alone let a stray wrong-path condition or a `-` prefixed envfile ride green.
+for _hb in HEARTBEATEOF UNITEOF VECTOREOF; do
+  assert "heredoc unit ${_hb} [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
+    "[[ \$(printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body_vals Service EnvironmentFile) == /etc/default/inngest-server && \$(printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body_vals Unit ConditionPathExists) == /etc/default/inngest-server ]]"
+  assert "heredoc unit ${_hb} keeps its EnvironmentFile= unprefixed (fail-closed)" \
+    "printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && ! printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
+  assert "heredoc unit ${_hb} carries no bare EnvironmentFile=/ConditionPathExists= reset line" \
+    "! printf '%s\n' \"\$(_boot_unit ${_hb})\" | grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*\$' >/dev/null"
+done
+assert "inngest-heartbeat.timer's [Unit] condition path-set equals heartbeat.service's envfile path-set" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit TIMEREOF)\" | _sec_body_vals Unit ConditionPathExists) == \$(printf '%s\n' \"\$(_boot_unit HEARTBEATEOF)\" | _sec_body_vals Service EnvironmentFile) ]]"
+assert "inngest-cutover-flip.timer's [Unit] condition path-set equals the flip service's envfile path-set" \
+  "[[ \$(_luks_sec_vals '$FLIP_TMR' Unit ConditionPathExists) == \$(_luks_sec_vals '$FLIP_SVC' Service EnvironmentFile) ]]"
+
+assert "soleur-inngest-provision.service (cloud-init) skips when /etc/default/inngest-doppler is absent" \
+  "[[ \$(awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Unit | grep -cxF '      ConditionPathExists=/etc/default/inngest-doppler') -eq 1 ]]"
+assert "soleur-inngest-provision.service keeps the !-latch condition beside the new one" \
+  "[[ \$(awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Unit | grep -cxF '      ConditionPathExists=!/var/lib/soleur-inngest-provision/done') -eq 1 ]]"
+assert "soleur-inngest-provision.service: every [Service] EnvironmentFile path has a non-! [Unit] condition (subset — the !-latch sits in the condition set too)" \
+  "_prov_ef() { awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Service | sed -n 's/^[[:space:]]*EnvironmentFile=//p' | sort -u; }; _prov_cd() { awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Unit | sed -n 's/^[[:space:]]*ConditionPathExists=//p' | grep -v '^!' | sort -u; }; [[ -n \"\$(_prov_ef)\" && -z \"\$(comm -23 <(_prov_ef) <(_prov_cd))\" ]]"
+
+assert "inngest-redis.service stays deliberately unconditioned on the env file (designed-loud, #9962)" \
+  "! _luks_sec '$REDIS_SVC' Unit | grep -cE '^[[:space:]]*ConditionPathExists=' >/dev/null"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
@@ -2518,7 +2693,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=414
+INNGEST_MIN_ASSERTIONS=451
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2

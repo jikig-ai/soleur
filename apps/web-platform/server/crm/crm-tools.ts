@@ -79,6 +79,58 @@ function untrustedRowsResponse(payload: unknown): ToolTextResponse {
 const STAGE_VALUES = Object.keys(STAGE_PROBABILITY) as [Stage, ...Stage[]];
 const LENS_VALUES = ["sales", "product"] as const;
 
+// Single upsert input list. The tool schema and the CRO directive both
+// read this — do not keep a second copy of the keys.
+export const CRM_CONTACT_UPSERT_FIELDS = [
+  "contactId",
+  "name",
+  "company",
+  "role",
+  "source",
+  "stage",
+  "nextAction",
+  "nextActionDate",
+  "lastContact",
+  "amount",
+  "currency",
+  "amountBasis",
+  "expectedCloseDate",
+] as const;
+
+const CRM_CONTACT_UPSERT_SHAPE = {
+  contactId: z.string().uuid().optional(),
+  name: z.string().optional(),
+  company: z.string().optional(),
+  role: z.string().optional(),
+  source: z.string().optional(),
+  stage: z.enum(STAGE_VALUES).optional(),
+  nextAction: z.string().optional(),
+  nextActionDate: z.string().date().optional(),
+  lastContact: z.string().date().optional(),
+  amount: z.number().optional(),
+  currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+  amountBasis: z.enum(["hypothetical_acv", "committed", "unknown"]).optional(),
+  expectedCloseDate: z.string().date().optional(),
+};
+
+type CrmUpsertField = (typeof CRM_CONTACT_UPSERT_FIELDS)[number];
+type _CrmUpsertFieldParity = Exclude<
+  CrmUpsertField,
+  keyof typeof CRM_CONTACT_UPSERT_SHAPE
+> extends never
+  ? Exclude<keyof typeof CRM_CONTACT_UPSERT_SHAPE, CrmUpsertField> extends never
+    ? true
+    : never
+  : never;
+const _crmUpsertFieldParity: _CrmUpsertFieldParity = true;
+void _crmUpsertFieldParity;
+
+function crmContactUpsertInputSchema(): typeof CRM_CONTACT_UPSERT_SHAPE {
+  return Object.fromEntries(
+    CRM_CONTACT_UPSERT_FIELDS.map((field) => [field, CRM_CONTACT_UPSERT_SHAPE[field]]),
+  ) as typeof CRM_CONTACT_UPSERT_SHAPE;
+}
+
 export function buildCrmTools(opts: BuildCrmToolsOpts) {
   const { userId } = opts;
 
@@ -244,21 +296,7 @@ export function buildCrmTools(opts: BuildCrmToolsOpts) {
         "their current value (never nulled). Changing `stage` records a pipeline " +
         "transition automatically. Owner-only — you can only write your own " +
         "contacts. Returns { id }.",
-      {
-        contactId: z.string().uuid().optional(),
-        name: z.string().optional(),
-        company: z.string().optional(),
-        role: z.string().optional(),
-        source: z.string().optional(),
-        stage: z.enum(STAGE_VALUES).optional(),
-        nextAction: z.string().optional(),
-        nextActionDate: z.string().date().optional(),
-        lastContact: z.string().date().optional(),
-        amount: z.number().optional(),
-        currency: z.string().regex(/^[A-Z]{3}$/).optional(),
-        amountBasis: z.enum(["hypothetical_acv", "committed", "unknown"]).optional(),
-        expectedCloseDate: z.string().date().optional(),
-      },
+      crmContactUpsertInputSchema(),
       async (args) => {
         try {
           const tenant = await getFreshTenantClient(userId);

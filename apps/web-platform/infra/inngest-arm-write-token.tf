@@ -30,7 +30,8 @@
 # matching the read token's by-reference wiring (inngest-host.tf:174-175). Consequence: the
 # per-merge `-target` of this token is a STANDING transitive path onto the excluded project/env.
 # A teardown/re-provision of doppler_project.inngest must be OPERATOR-applied FIRST — else the
-# next per-merge CI apply recreates the isolated project unattended. (Precedent for the
+# next per-merge CI apply recreates the isolated project unattended. It now ALSO needs a reviewed
+# lift of its prevent_destroy first (runbook "Sole-copy protection and key loss", #9879). (Precedent for the
 # transitive-edge concern: doppler_service_token.inngest, by-reference; NOT
 # doppler_service_token.write, which is a string-literal token with zero edges.)
 #
@@ -80,7 +81,9 @@ resource "github_repository_environment" "inngest_cutover" {
   # #7695. THE REVIEWER RULE ALONE DOES NOT GATE THE CODE THAT RUNS. `workflow_dispatch` executes
   # the SELECTED REF's workflow and the scripts that workflow sources, and the reviewer prompt
   # shows a branch NAME, not a diff. The destructive `inngest_volume_recut` job added under this
-  # environment sources BOTH of its guards from `${GITHUB_WORKSPACE}` — so without a branch pin,
+  # environment (later converted into `inngest_backstop_retire` by #8285, which sourced its gate the
+  # same way, and deleted by #8285 PR B once the backstop volume was destroyed) sourced BOTH of its
+  # guards from `${GITHUB_WORKSPACE}` — so without a branch pin,
   # anyone who can dispatch can point the run at a branch carrying neutered guards and ask the
   # reviewer to approve what reads as a routine recut.
   #
@@ -120,11 +123,18 @@ resource "github_repository_environment_deployment_policy" "inngest_cutover_main
 #   1. cutover-inngest.yml:123 — conditional injection
 #      (`(op == 'arm' || 'rollback' || 'resume') && secrets.… || ''`), and those jobs declare
 #      `environment: inngest-cutover` (cutover-inngest.yml:78), so they hold for the reviewer.
-#   2. apply-web-platform-infra.yml, job `inngest_volume_recut` — unconditional injection, but
-#      that job declares `environment: inngest-cutover`, so the human ack still gates it.
+#   2. (RETIRED by #8285 PR B) apply-web-platform-infra.yml, job `inngest_backstop_retire` (converted
+#      from `inngest_volume_recut` by #8285) — unconditional injection, but that job declared
+#      `environment: inngest-cutover`, so the human ack gated it. The job no longer exists; the item
+#      keeps its number so the references below stay valid.
 #   3. apply-web-platform-infra.yml, job `inngest_host_replace`, the #7228 inherited-`done`
-#      preflight (added 2026-09-17) — UNCONDITIONAL injection into a job with NO `environment:`
-#      key. This is the FIRST resolution site with neither of the two bounds above.
+#      preflight (added 2026-09-17) — UNCONDITIONAL injection. Still the FIRST resolution site
+#      with neither of the two bounds above, and still the residual this comment is about.
+#      AMENDED 2026-09-23 (#8209, ADR-241 D2): the "job with NO `environment:` key" clause is
+#      no longer true — that job now declares `environment: infra-privileged`. That is NOT a
+#      third bound: the environment has no reviewers by design, so nothing human gates it. What
+#      it adds is branch reach — the deployment-branch policy admits `main` only, so the
+#      injection is unreachable from a dispatch on any other ref.
 #
 # An earlier revision of this comment asserted the residual was "bounded by the conditional
 # injection … and the post-cutover revoke". Consumer 3 falsifies the first half, and this file

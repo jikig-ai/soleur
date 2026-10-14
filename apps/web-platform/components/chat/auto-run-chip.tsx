@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 
 /**
  * feat-bash-autonomous-default-on — persistent Concierge posture chip.
@@ -14,12 +14,13 @@ import { useRouter } from "next/navigation";
  * chip is not a switch).
  */
 export function AutoRunChip({ autonomous }: { autonomous: boolean }) {
-  const router = useRouter();
+  const router = usePendingRouter();
   const label = autonomous ? "Auto-run on" : "Approve each";
 
   return (
     <button
       type="button"
+      data-button-exempt="compact status chip — conditional gold/neutral tint would lose to variant bg-transparent; brand-mandated rounded-none"
       aria-label={`Concierge command execution: ${label}. Open settings.`}
       onClick={() =>
         router.push(

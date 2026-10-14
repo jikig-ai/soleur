@@ -65,6 +65,9 @@ closes: [N]
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -99,7 +102,12 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
-  expected_output: # canonical "everything OK" output
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
+  expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
+                   # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
                    # "<scope> — <why no unauthenticated probe verifies the same property>".
                    # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
@@ -160,17 +168,47 @@ the members must flow through, and if there is more than one, say so.>
 Write the matrix BEFORE the guard. A matrix derived from finished code tests the
 code that exists; one derived from the design tests the property.
 
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
+
 ## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
 
 - [ ] Core requirement 1
 - [ ] Core requirement 2
 
 ## Test Scenarios
 
-Derive from acceptance criteria. Use Given/When/Then format for logic tests, and deterministic verification commands for integration tests (consumed by `/soleur:qa`):
+Derive from acceptance criteria. Use Given/When/Then format for logic tests, and deterministic verification commands for integration tests (consumed by `soleur:qa`):
 
 - Given [precondition], when [action], then [expected result]
 - Given [edge case], when [action], then [expected handling]
+
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
 
 If the feature touches external services, include verification commands:
 
@@ -244,7 +282,7 @@ closes: [N]
 - Architecture impacts
 - Performance implications
 - Security considerations
-- NFR impacts (read `knowledge-base/engineering/architecture/nfr-register.md` and assess which non-functional requirements this feature affects — run `/soleur:architecture assess` for a structured assessment)
+- NFR impacts (read `knowledge-base/engineering/architecture/nfr-register.md` and assess which non-functional requirements this feature affects — run `soleur:architecture assess` for a structured assessment)
 
 ### Attack Surface Enumeration (for security fixes)
 
@@ -260,6 +298,9 @@ List ALL code paths that touch the security surface being fixed:
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -294,7 +335,12 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
-  expected_output: # canonical "everything OK" output
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
+  expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
+                   # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
                    # "<scope> — <why no unauthenticated probe verifies the same property>".
                    # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
@@ -355,7 +401,35 @@ the members must flow through, and if there is more than one, say so.>
 Write the matrix BEFORE the guard. A matrix derived from finished code tests the
 code that exists; one derived from the design tests the property.
 
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
+
 ## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
 
 - [ ] Detailed requirement 1
 - [ ] Detailed requirement 2
@@ -368,9 +442,11 @@ Translate each acceptance criterion into a testable scenario:
 - Given [precondition], when [action], then [expected result]
 - Given [error condition], when [action], then [graceful handling]
 
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
+
 Include regression scenarios for any bugs this work addresses.
 
-If the feature touches external services, include deterministic verification commands (consumed by `/soleur:qa`):
+If the feature touches external services, include deterministic verification commands (consumed by `soleur:qa`):
 
 - **Browser:** [Navigate to URL, fill form, submit, verify UI state]
 - **API verify:** `doppler run -c dev -- curl -s [API endpoint] | jq '[query]'` expects `[value]`
@@ -468,10 +544,13 @@ closes: [N]
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
-If the threshold is `single-user incident` or `aggregate pattern`, list each user-facing artifact + exposure vector pair on its own bullet so `user-impact-reviewer` can cross-check them against the diff.
+If the threshold is `single-user incident` or `aggregate pattern`, list each user-facing artifact + exposure vector pair on its own bullet so `soleur:engineering:review:user-impact-reviewer` can cross-check them against the diff.
 
 ## Observability
 
@@ -504,7 +583,12 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
-  expected_output: # canonical "everything OK" output
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
+  expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
+                   # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
                    # "<scope> — <why no unauthenticated probe verifies the same property>".
                    # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
@@ -565,7 +649,35 @@ the members must flow through, and if there is more than one, say so.>
 Write the matrix BEFORE the guard. A matrix derived from finished code tests the
 code that exists; one derived from the design tests the property.
 
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
+
 ## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
 
 ### Functional Requirements
 
@@ -576,7 +688,7 @@ code that exists; one derived from the design tests the property.
 - [ ] Performance targets
 - [ ] Security requirements
 - [ ] Accessibility standards
-- [ ] NFR register assessment (run `/soleur:architecture assess` against `knowledge-base/engineering/architecture/nfr-register.md`)
+- [ ] NFR register assessment (run `soleur:architecture assess` against `knowledge-base/engineering/architecture/nfr-register.md`)
 
 ### Quality Gates
 
@@ -585,6 +697,8 @@ code that exists; one derived from the design tests the property.
 - [ ] Code review approval
 
 ## Test Scenarios
+
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
 
 ### Acceptance Tests (RED phase targets)
 
@@ -602,7 +716,7 @@ For each bug fix included, write a scenario proving the fix:
 
 - Given [boundary condition], when [action], then [expected handling]
 
-### Integration Verification (for `/soleur:qa`)
+### Integration Verification (for `soleur:qa`)
 
 If the feature touches external services, include deterministic verification commands:
 

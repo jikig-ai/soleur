@@ -4,8 +4,12 @@ description: "This skill should be used when running pre-ship checks on migratio
 ---
 
 <!-- soleur-cloud-mode:start -->
-**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
 
 # preflight Skill
 
@@ -25,6 +29,10 @@ When `HEADLESS_MODE=true`:
 
 - On any FAIL: abort with error details, no prompt
 - On all PASS/SKIP: continue silently. **Two exceptions, both Check 10 only, both always emitted:** **SKIP-DECLARED** — continue, but emit one line naming the declared credential scope (a verification waiver exists to be reviewable, so silencing it defeats it); and **SKIP-NOSANDBOX** — continue, but emit one line stating that Check 10 did not run at all on this host. The second is the more important of the two: it means a security-relevant gate is dark, and folded into the silent set it is indistinguishable from the gate having nothing to do.
+
+**Check 13 headless contract.** Check 13 never prompts in headless mode, and headless is the default: treat the run as interactive only when the founder is present in this session (started without `--headless`, `CI` unset); when unsure, headless. A founder-stated check that FAILED, is INVALID, CHANGED-SINCE-APPROVAL, UNTRUSTED, BLOCK-REJECTED or `needs-your-eyes`, or that cannot run for want of a sandbox, is a FAIL recorded as `STOPPED-AWAITING-FOUNDER`; an agent never accepts, overrides or confirms on the founder's behalf. Always emitted, like Check 10's: the no-block banner and the no-sandbox line (`founder-check.py text no-block` / `text no-sandbox`).
+
+**`--founder-check-baseline`.** If `$ARGUMENTS` contains `--founder-check-baseline`, strip it like `--headless`, **skip Checks 1–12 explicitly**, and run only Check 13 in baseline polarity (reference section 7). Invoked by `soleur:plan` at capture, before the freeze commit.
 
 ## Phase 0: Context Detection
 
@@ -63,6 +71,7 @@ If the command fails (e.g., offline, no remote), every path-gated check falls ba
 | 10 (Discoverability test) | Zero matches for the canonical sensitive-path regex (re-use Check 6 SSOT). |
 | 11 (Register drift) | Zero matches for `(^\|/)apps/web-platform/supabase/migrations/.*\.sql$`, `(^\|/)apps/web-platform/server/workspace-resolver\.ts$`, or `(^\|/)knowledge-base/engineering/architecture/domain-model\.md$` (empty/missing cache → run, never SKIP). |
 | 12 (Encryption posture) | Zero matches for `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$` (empty/missing cache → run, never SKIP). |
+| 13 (Founder check) | Never SKIPs on an empty cache: runs whenever a plan for this branch carries a `founder_check` block or freeze evidence (the resolver, not the diff cache, decides), else prints the no-block banner. |
 | Not-Bare-Repo | Always runs. |
 
 For PR #3488-class diffs (lockfile bumps + orphan-cleanup deletions), Checks 1, 2, 5, 6, 7, 8 fast-skip → Checks 3 (lockfile fires), 4 (env isolation always), 9 (always), Not-Bare-Repo (always) execute. Of those four, only Check 3 and Check 9 do "real work" against the diff; Check 4 and Not-Bare-Repo are constant-cost.
@@ -88,9 +97,9 @@ Both Check 6 (Brand-Survival Self-Review) and Check 10 (Discoverability Test Exe
 
 ```bash
 # Step S.1: fetch PR body to a private temp file (umask 077; mktemp).
-PR_BODY_FILE=$(umask 077 && mktemp -t preflight-pr-body.XXXXXXXX.md)
+PR_BODY_FILE=$(umask 077 && mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" preflight-pr-body.XXXXXXXX.md)
 gh pr view --json body --jq .body > "$PR_BODY_FILE"
-trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT
+trap 'rm -f "$PR_BODY_FILE" "$COMBINED"; rmdir "$(dirname "$PR_BODY_FILE")" 2>/dev/null' EXIT
 
 # Step S.2: strip HTML comments and fenced code blocks from PR body.
 SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_BODY_FILE" \
@@ -100,7 +109,7 @@ SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_B
 PLAN_PATH=$(printf '%s' "$SCRUBBED_BODY" | grep -Eo 'knowledge-base/project/plans/[^[:space:])"`'\'']+\.md' | head -n 1 || true)
 
 # Step S.4: build the combined check input.
-COMBINED=$(mktemp -t preflight-combined.XXXXXXXX.md)
+COMBINED=$(mktemp -p "$(dirname "$PR_BODY_FILE")" preflight-combined.XXXXXXXX.md)
 printf '%s\n' "$SCRUBBED_BODY" > "$COMBINED"
 if [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]]; then
   awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PLAN_PATH" \
@@ -120,7 +129,7 @@ Re-use the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-dif
 grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `a=$(mktemp) && b=$(mktemp) && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `_v=$(mktemp -d -t soleur-run.$$.XXXXXXXX) && a=$(mktemp -p "$_v") && b=$(mktemp -p "$_v") && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
 
 If no migration files are found (grep rc=1), return **SKIP**.
 
@@ -487,7 +496,7 @@ Enforces `hr-weigh-every-decision-against-target-user-impact`: PRs that touch cr
 
 **Step 6.1: Detect sensitive-path diff.**
 
-The canonical sensitive-path regex (single source of truth, mirrored verbatim in `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2):
+The canonical sensitive-path regex (single source of truth, mirrored verbatim in Check 10 Step 10.1, `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2, and `plugins/soleur/skills/review/scripts/fix-round-seats.sh` `SENSITIVE_PATH_RE`):
 
 ```bash
 SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
@@ -675,7 +684,7 @@ Invariant gate per `knowledge-base/project/learnings/2026-04-27-preflight-securi
 ```bash
 set -uo pipefail
 # SSOT: see Check 6 Step 6.1; this literal MUST stay byte-identical.
-# Mirrored consumers: Check 6 Step 6.1, deepen-plan/SKILL.md Phase 4.6 Step 2.
+# Mirrored consumers: Check 6 Step 6.1, deepen-plan/SKILL.md Phase 4.6 Step 2, review/scripts/fix-round-seats.sh.
 SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
 grep -E "$SENSITIVE_PATH_RE" "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
@@ -716,6 +725,9 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # FAILs with "no command could be parsed" — a false FAIL on a plan that is
 # perfectly well-formed. Verified against #6698's plan: unanchored extracted 47
 # lines of the wrong section; anchored reaches the real block.
+# Separate Bash calls do not share variables, so re-assert the plan path here: awk
+# given an EMPTY filename skips it and reads stdin, which hangs the call (#8705).
+[[ -n "${PLAN_PATH:-}" && -f "$PLAN_PATH" ]] || { echo "SKIP: no readable plan file (PLAN_PATH='${PLAN_PATH:-}') — re-run Shared Plan-File Resolution in this call."; exit 0; }
 awk '/^## Observability$/{ino=1; next} /^## /{if (ino) exit} ino' "$PLAN_PATH" > "$PREFLIGHT_TMP/preflight-observability.txt"
 test -s "$PREFLIGHT_TMP/preflight-observability.txt" || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
 ```
@@ -751,8 +763,18 @@ Form A accepts all three YAML scalar shapes for `command:`:
 | Shape | Header | Continuations joined with |
 | --- | --- | --- |
 | **inline** | `command: curl …` | — (value is on the key line) |
+| **inline quoted** | `command: "…"` / `'…'` | — (value is on the key line; decoded, see below) |
 | **block** | `command: \|`, `\|-`, `\|+` | newline |
 | **folded** | `command: >`, `>-`, `>+` | space |
+
+An **inline quoted** scalar is decoded once, by the parser, and nowhere else: `"…"` decodes
+`\"` and `\\` only, and every other backslash sequence (`\n`, `\t`, …) passes through
+byte-for-byte, so a shell `\n` never becomes a newline that Step 10.5 rejects. `'…'` decodes
+`''` only. The closing quote is the first unescaped one, and only space, tab or CR
+(optionally then a whitespace-led `# comment`) may follow it. An empty pair (`""`, `''`), an
+unterminated or mismatched pair, or other trailing text stays unchanged. Block and folded
+content is never decoded. `expected_output` and `credentials_required` are not YAML-decoded:
+their reads below strip one symmetric quote pair and decode no escapes.
 
 Block and folded headers may carry a trailing `# comment`. Scalar extent follows YAML
 indent semantics: a continuation is any non-empty line indented **more** than the
@@ -782,29 +804,22 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 #
 # The parser lives in a real file so the parity harness can execute it.
 #
-# RATIONALE CORRECTED (#7450). This comment used to argue FOR `git rev-parse
-# --show-toplevel` and AGAINST `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}`, on the grounds
-# that CLAUDE_PLUGIN_ROOT is unset in a plain session and the `:-` default would silently
-# make the path CWD-relative. The PREMISE is true and is ADR-179's own headline finding.
-# The CONCLUSION does not follow: it is true of the `:-plugins/soleur` form it was written
-# against, but NOT of the canonical BARE `${CLAUDE_PLUGIN_ROOT}` form, whose unset
-# expansion is root-anchored rather than CWD-relative — and the loader substitutes the
-# bare token at delivery time, so it is not unset at the point of use (measured, #7450).
-# Resolving via the git root is ADR-179's explicitly-rejected option (d): after a
-# `gh pr checkout` the git root is the REVIEWED PARTY's tree.
-#
-# The two operands in this file are deliberately NOT migrated here (#7450 DC-1) — they are
-# not secret-emission gates, so they are routed to #7453 with a severity flag. Only this
-# falsified argument is corrected, so the next reader does not take it as authority and
-# propagate the rejected form.
+# Both Check 10 operands resolve through the loader token (ADR-179, #7453): the loader
+# substitutes it with the INSTALLED plugin root at delivery. Never the git root — after a
+# `gh pr checkout` that is the REVIEWED PARTY's tree (ADR-179's rejected option (d)). Under
+# this check's `set -u` an unset token aborts at the assignment ("unbound variable"); an empty one
+# expands to a root-anchored `/skills/...` path that the `test -r` below refuses.
 #
 # Hard-fail on a load error. `awk -f <missing>` exits 2 with EMPTY stdout, and
 # `set -uo pipefail` does NOT abort on it (command-substitution rc is discarded), so a
 # missing parser would leave $CMD empty and Form B would silently parse a DIFFERENT
 # command. Never fall through.
-FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"
-test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK"; exit 1; }
-CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
+#
+# LC_ALL=C pins the parse to bytes: under a UTF-8 gawk `[[:space:]]` matches U+2028, so the
+# same plan would parse differently on different operator hosts.
+FORM_A_AWK="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/parse-form-a.awk"
+test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK (plugin root unresolved? export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>, never a path inside this repository)"; exit 1; }
+CMD=$(LC_ALL=C awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
 AWK_RC=$?
 if [[ "$AWK_RC" -ne 0 ]]; then
   # `$?` here would report the `!`-inverted status (always 0) — capture the real
@@ -843,8 +858,11 @@ exec — must see the SAME string. Gating one form while executing another is a 
 gap, and normalizing inside the gate alone produced exactly that: the gate judged the
 normalized command while Step 10.5 rejected the raw one on its embedded newline, so a Form A
 block scalar carrying a leading `#` comment failed the runtime even though the gate (and the
-TypeScript mirror) accepted it. The mirror's `normalizeCommand()` is this, and the parity
-harness only compares the GATE, so this divergence was invisible to it.
+TypeScript mirror) accepted it. The mirror's `normalizeCommand()` is this. The parity
+harness once compared only the GATE, so this divergence was invisible to it. The test suite
+now also runs the parse fence above and this fence under bash and compares the `$CMD` they
+leave, the string the gate, the reject and the exec all receive (#7548). It does not run
+the gate, the reject or the exec themselves.
 
 ```bash
 # Drop full-line `#` comments and blank lines, then trim. A `#` inside a quoted
@@ -854,22 +872,9 @@ harness only compares the GATE, so this divergence was invisible to it.
 CMD="$(printf '%s' "$CMD" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d')"
 CMD="${CMD#"${CMD%%[![:space:]]*}"}"
 CMD="${CMD%"${CMD##*[![:space:]]}"}"
-# A YAML-quoted inline scalar (`command: "bash scripts/x.sh"`) IS the string inside
-# the quotes, but parse-form-a.awk prints the line verbatim, so the quotes reached
-# `bash -c` as part of the first word and every quoted command died rc=127 — a
-# program named `bash scripts/x.sh` does not exist. Measured on #8149's plan:
-# the verb gate PASSED (it matches a dequoted COPY) and the exec returned 127,
-# reported by row 10b as "not on the sandbox PATH". The TypeScript mirror's
-# stripQuotes() had modelled this all along; the runtime had not. Symmetric pair,
-# single-line scalars only — the same idiom credentials_required uses below.
-# (`$CMD` unquoted on purpose: the wiring test's shell-active anchor is
-# `^if [[ "$CMD` + a `$'\n'` token, and this guard must not collide with it.)
-if [[ $CMD != *$'\n'* ]]; then
-  case "$CMD" in
-    \"*\") CMD="${CMD#\"}"; CMD="${CMD%\"}" ;;
-    \'*\') CMD="${CMD#\'}"; CMD="${CMD%\'}" ;;
-  esac
-fi
+# Quoted inline scalars are decoded ONCE, by parse-form-a.awk; a strip here would double-decode `command: "'x'"` into `x`.
+# preflight-discoverability-test.test.ts slices this fence and the FORM_A_AWK= fence out of this file and runs them (E rows, #7453): keep both anchors unique and no other bash fence between the two.
+# Version skew: this fence and parse-form-a.awk must come from ONE plugin root. New SKILL.md + old awk leaves the quotes in, so the exec fails rc=127; old SKILL.md + new awk decodes twice.
 ```
 
 If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
@@ -877,7 +882,10 @@ If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>
 **Reject SSH commands** (defense-in-depth):
 
 ```bash
-if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
+# Match on a DEQUOTED COPY, as probe-verb-gate.sh does for the verb: bash resolves `\ssh`,
+# `'s''sh'` and `"ssh"` to the same binary. Never strip from the string that is executed.
+CMD_NOQ="${CMD//[\"\'\\]/}"
+if [[ "$CMD_NOQ" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
   echo "FAIL: discoverability_test.command contains ssh; rule violation per hr-observability-as-plan-quality-gate."
   exit 1
 fi
@@ -946,6 +954,19 @@ CREDS_REQ=$(awk '
 # was undone in the runtime of record by one apostrophe, invisibly to the suite.
 CREDS_REQ="${CREDS_REQ#"${CREDS_REQ%%[![:space:]]*}"}"
 CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}"
+# Drop a YAML trailing comment (` #…` after whitespace) BEFORE the quote strip, or
+# `"TODO" # fill later` keeps its comment, fails the pair match and waives the check.
+# A value OPENING with a quote keeps everything through its first matching close quote.
+case "$CREDS_REQ" in
+  \"*|\'*)
+    CR_Q="${CREDS_REQ:0:1}"; CR_BODY="${CREDS_REQ:1}"; CR_BODY="${CR_BODY%%"$CR_Q"*}"
+    CR_TAIL="${CREDS_REQ:$(( ${#CR_BODY} + 2 ))}"
+    if [[ "$CREDS_REQ" == "$CR_Q$CR_BODY$CR_Q"* && "$CR_TAIL" =~ ^[[:space:]]+# ]]; then
+      CREDS_REQ="$CR_Q$CR_BODY$CR_Q"
+    fi ;;
+  *) CREDS_REQ="${CREDS_REQ%%[[:space:]]#*}"
+     CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}" ;;
+esac
 case "$CREDS_REQ" in
   \"*\") CREDS_REQ="${CREDS_REQ#\"}"; CREDS_REQ="${CREDS_REQ%\"}" ;;
   \'*\') CREDS_REQ="${CREDS_REQ#\'}"; CREDS_REQ="${CREDS_REQ%\'}" ;;
@@ -1004,7 +1025,7 @@ verb was `""`; a Form A block scalar kept a leading `#`, so it was `"#"`). Conte
 the allowlist literal cannot detect behavioural drift.
 
 ```bash
-PROBE_GATE="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh"
+PROBE_GATE="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/probe-verb-gate.sh"
 test -r "$PROBE_GATE" || { echo "FAIL: Check 10 probe-verb gate missing at $PROBE_GATE"; exit 1; }
 if ! PROBE_REJECT="$(bash "$PROBE_GATE" "$CMD")"; then
   echo "FAIL: $(sanitize "$PROBE_REJECT")"
@@ -1292,7 +1313,7 @@ the denylist mistake ADR-175 exists to retire.
 | 9 | Command times out | `$DT_RC == 28` (curl) OR `$DT_RC == 124` (timeout(1)) | **FAIL** | Endpoint unreachable; DNS resolved but no response in 15s. |
 | 10 | Command requires creds not in Doppler (auth-gated probe) | `$DT_RC == 22` AND HTTP 401/403 AND `$EXPECTED` does NOT explicitly list 401/403 | **SKIP** | Auth-gated probe with no operator creds; surface diagnostic suggesting a `credentials_required` declaration or a Doppler-fetched probe variant. |
 | 10b | Command not found in the sandbox | `$DT_RC == 127` | **FAIL** | The probe's program is not on the sandbox `PATH` (`/usr/local/bin:/usr/bin:/bin`), which is deliberately NOT widened — that would be an authority grant inside a change that narrows authority. Wrap the probe in a repo-relative script, or use an allowlisted verb. Reported as its own state because falling through to row 11 blamed "expectation drift" for a cause the code measured exactly. |
-| 11 | Command returns a code/output the plan's `expected_output` does NOT include | `$DT_STDOUT_SAFE` not present in `$EXPECTED` | **FAIL** | Plan's expectation drifted from production reality. |
+| 11 | Command returns a code/output the plan's `expected_output` does NOT include | NO token of `$EXPECTED` is present in `$DT_STDOUT_SAFE` (see the semantics paragraph below; this cell read `$DT_STDOUT_SAFE` not present in `$EXPECTED` until #8412 — backwards, and contradicted by both the paragraph and the shipped `matchExpected` in `plugins/soleur/test/lib/discoverability-test-parser.ts`) | **FAIL** | Plan's expectation drifted from production reality. |
 | 12 | Command returns expected output | All other paths — `$DT_RC == 0` AND stdout matches `$EXPECTED` | **PASS** | Invariant proven by live execution inside the sandbox. |
 
 **Expected-output matching semantics.** When `$EXPECTED` is a comma-separated or "or"-joined list (e.g., `200 or 401`, `200, 401`, `["200","401"]`), tokenize on `,|\s+or\s+|\bor\b|[\`"\[\]/]+` and treat as a list. Match if any token is a non-empty substring of `$DT_STDOUT_SAFE`. When `$EXPECTED` is a single value, substring-match. The tokenizer accepts both `200` and `"200"`.
@@ -1447,6 +1468,17 @@ python3 scripts/lint-encryption-posture.py --repo-sweep > "$PREFLIGHT_TMP/encryp
   of truth for the pass/fail decision.
 - **SKIP** — the cached path-set contains zero `.tf` / store-class / connection-class paths.
 
+### Check 13: Founder-Stated Check
+
+Runs the check a founder wrote in their own words, approved as an exact command, and froze before work started (ADR-275). The decisions live in [founder-check.py](./scripts/founder-check.py); this check relays them and never re-derives a verdict in prose. The wrapper, the outcome tables and the prompts are in [check-13-founder-check.md](${CLAUDE_PLUGIN_ROOT}/skills/preflight/references/check-13-founder-check.md).
+
+1. **Resolve.** Run `founder-check.py verify` (reference section 1). `NO-BLOCK` is SKIP with the pinned banner; a missing block with freeze evidence is FAIL, never SKIP; a `FAIL` outcome is `BLOCK-REJECTED`; `UNTRUSTED` is a FAIL that never runs (the command and its author are shown); `CHANGED-SINCE-APPROVAL` stops and is decided in Phase 2.
+2. **Run only through Step 10.5.** The approved command runs in the Step 10.5 sandbox via the reference's wrapper, which reads it from a file `verify` wrote and runs `true` first as the sandbox-health control. Check 13 declares no sandbox of its own and never executes the command any other way. Output the wrapper does not map is INVALID, never a pass.
+3. **Classify and record.** `founder-check.py classify` is the one chokepoint and reads the verify record, not argv; `founder-check.py log` is the only writer of outcomes and prints the metadata-only `SOLEUR_FOUNDER_CHECK_RESULT` marker. After the last row, `founder-check.py commit-log` stages and commits only the log as `founder-check: log`.
+4. **Say only what is true.** A pass reads `founder-check.py text aggregate-pass` in the aggregate row, beside the full sentence from `founder-check.py text pass`. Every founder-facing sentence is printed from `founder-check.py text <key>`, never typed from this file.
+
+A block present with no sandbox (`founder-check.py text no-sandbox`) is a FAIL in every mode: a gate that went dark must not read as green.
+
 ## Phase 2: Aggregate Go/No-Go Report
 
 After all checks complete, aggregate results into a structured report:
@@ -1467,9 +1499,12 @@ After all checks complete, aggregate results into a structured report:
 | SW Cache Bump on Client-Bundle Fix | PASS/FAIL/SKIP | <details> |
 | Node-Only Encodings Banned in Client-Bundle | PASS/FAIL | <details> |
 | Discoverability Test Execution | PASS/FAIL/SKIP/SKIP-DECLARED/SKIP-NOSANDBOX | <details> — on SKIP-DECLARED, quote the declared `credentials_required` scope verbatim so the waiver is visible in the aggregate; on SKIP-NOSANDBOX, state plainly that Check 10 did not execute on this host and why |
+| Founder-Stated Check | ran-returned-success/FOUNDER-CONFIRMED/FAIL/SKIP/OVERRIDDEN | `founder-check.py text aggregate-pass` (never a bare PASS) or `text aggregate-judgement`, the exact command and expected string beside it; roll-up per reference section 4 |
 
 **Overall: PASS / FAIL**
 ```
+
+On OVERRIDDEN add the matching `founder-check.py text overridden-failed` / `overridden-invalid` / `overridden-changed` / `overridden-rejected` line. With no block add nothing.
 
 ### If any FAIL
 
@@ -1482,6 +1517,8 @@ After all checks complete, aggregate results into a structured report:
   1. "Fix and retry" -- fix the issues, then re-run preflight from Phase 1
   2. "Abort" -- stop the pipeline
 
+**Founder check (Check 13) prompts run here**, after the parallel checks finish: retry, restore or change the check, or continue anyway (recorded as `OVERRIDDEN`, with a reason and the cause it overrides) — reference section 5.
+
 ### If all PASS or SKIP
 
 Print the summary table and continue.
@@ -1492,7 +1529,8 @@ Preflight validation passed. Return control to the calling orchestrator.
 
 ## Sharp Edges
 
-- **Triple-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, AND `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2. All three MUST stay byte-identical. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
+- **Check 13 reuses Step 10.5 by wrapper, never by copy.** Step 10.5 is a fence an agent follows, so reuse means running it inside a command substitution with `CMD` set. A second `BWRAP_ARGS` array would fork the sandbox; `preflight-check10-suite-integrity.test.sh` asserts the Check 13 section declares none. Check 13 is not path-gated like Check 10, so it widens what runs on a checked-out PR head: the authorship anchor in `founder-check.py verify` (`UNTRUSTED`, a FAIL that never runs) is what keeps a contributor's self-consistent plan from executing on the operator's machine. It makes an override legible and attributable; it does not authenticate the founder. Pins fix the named script only, not what it loads.
+- **Quad-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2, AND `plugins/soleur/skills/review/scripts/fix-round-seats.sh` (ADR-267). All four MUST stay byte-identical — `plugins/soleur/test/review-tier-parity.test.ts` pins the script copy against this file. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
 - **Shared Plan-File Resolution is a SSOT.** Both Check 6 Step 6.2 and Check 10 Step 10.2 call it. A future PR that changes the scrub/extract logic must edit the shared sub-section once — both consumers pick it up. Do NOT copy-paste the logic back into a caller block.
 - **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across every fixture in `plugins/soleur/test/fixtures/preflight-check-10/`.
 - **Rule order in `parse-form-a.awk` IS the bug (#6772).** The inline rule `/^[[:space:]]*command:/` matches EVERY `command:` line, including `command: >-` and `command: |`. If it is ever moved ahead of the fold/block header rules it returns the literal indicator, which then self-rejects against Step 10.5's shell-active `>` branch — a check that cannot parse its input, reporting a shell injection the plan does not have. AC1 and fixtures F1–F3 are the pins; do not drop them when refactoring.

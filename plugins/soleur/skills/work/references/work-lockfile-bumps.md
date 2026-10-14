@@ -6,6 +6,14 @@
 > here, run `npx --yes npm@11 update <pkg>` and validate with `npm ci --ignore-scripts`
 > — npm produces a clean transitive-only diff and no surgical editing is needed.
 >
+> **Ratchet the drain guard in the same PR.** `scripts/assert-dependabot-drain.py`
+> pins per-major advisory floors (`REQUIRED` rows + `FLOOR_ANCHORS`). When an
+> advisory forces a floor up, set each affected row and anchor to the advisory's
+> strictest `first_patched_version` — otherwise a regression to a still-vulnerable
+> version passes the guard silently. Verify with `python3
+> scripts/assert-dependabot-drain.py` and `bash
+> scripts/assert-dependabot-drain.test.sh`.
+>
 > The bun procedure below is retained for **tenant repositories**, which the
 > constraint-scaffold skill also targets and which may legitimately still be bun-based.
 

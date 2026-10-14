@@ -1,0 +1,26 @@
+diff --git a/apps/web-platform/e2e/checkout-flow.e2e.ts b/apps/web-platform/e2e/checkout-flow.e2e.ts
+new file mode 100644
+index 0000000..794cfcc
+--- /dev/null
++++ b/apps/web-platform/e2e/checkout-flow.e2e.ts
+@@ -0,0 +1,20 @@
++import { test, expect } from "@playwright/test";
++
++test.describe("checkout flow", () => {
++  test("guest can add an item and reach the confirmation page", async ({
++    page,
++  }) => {
++    await page.goto("/products/example-widget");
++
++    await page.getByRole("button", { name: "Add to cart" }).click();
++    await page.getByRole("link", { name: "Checkout" }).click();
++
++    // The payment iframe settles slowly in the dev sandbox; give it room.
++    await page.waitForTimeout(15000);
++
++    await page.getByLabel("Email").fill("buyer@example.com");
++    await page.getByRole("button", { name: "Pay now" }).click();
++
++    await expect(page.getByText("Order confirmed")).toBeVisible();
++  });
++});

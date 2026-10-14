@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import { usePathname } from "next/navigation";
 import { RailSlotPortal, useRailCollapsed } from "@/components/dashboard/rail-slot";
 
@@ -92,7 +92,7 @@ export function SettingsShell({
 
                 return (
                   <li key={tab.href}>
-                    <Link
+                    <NavLink
                       href={tab.href}
                       // Collapsed: the Link has no text label, so the tab name is
                       // the accessible name (aria-label) + hover tooltip (title),
@@ -125,7 +125,7 @@ export function SettingsShell({
                       )}
                       <Icon className="h-4 w-4 shrink-0" />
                       {!collapsed && <span className="truncate">{tab.label}</span>}
-                    </Link>
+                    </NavLink>
                   </li>
                 );
               })}

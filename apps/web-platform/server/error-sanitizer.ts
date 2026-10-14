@@ -1,4 +1,5 @@
 import { KeyInvalidError } from "../lib/types";
+import { SDK_STALE_RESUME_SESSION_ID } from "./claude-error-signatures";
 import {
   ERR_WORKSPACE_NOT_PROVISIONED,
   ERR_NO_ACTIVE_SESSION,
@@ -49,7 +50,7 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
   [ERR_FILE_TOO_LARGE]:
     "The file exceeds the 20 MB size limit. Please choose a smaller file.",
   [ERR_UNSUPPORTED_FILE_TYPE]:
-    "This file type is not supported. Please upload an image (PNG, JPEG, GIF, WebP) or PDF.",
+    "This file type is not supported. Please upload an image (PNG, JPEG, GIF, WebP), a PDF, or a Markdown (.md) or text (.txt) file.",
   [ERR_UPLOAD_FAILED]:
     "The file upload failed. Please try again.",
   [ERR_ATTACHMENT_NOT_FOUND]:
@@ -67,7 +68,7 @@ export function sanitizeErrorForClient(err: unknown): string {
     const safe = KNOWN_SAFE_MESSAGES[err.message];
     if (safe) return safe;
 
-    if (err.message.includes("No conversation found with session ID")) {
+    if (err.message.includes(SDK_STALE_RESUME_SESSION_ID)) {
       return "Session resume failed. Falling back to conversation history.";
     }
 

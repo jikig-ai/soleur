@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 
 export function NoProjectState() {
   return (
@@ -16,12 +16,12 @@ export function NoProjectState() {
           Connect a GitHub project so your AI team can build your knowledge
           base with plans, specs, and analyses.
         </p>
-        <Link
+        <NavLink
           href="/connect-repo?return_to=/dashboard/kb"
           className="inline-flex items-center gap-2 rounded-lg bg-soleur-accent-gold-fill px-5 py-2.5 text-sm font-medium text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           Set Up Project
-        </Link>
+        </NavLink>
       </div>
     </div>
   );

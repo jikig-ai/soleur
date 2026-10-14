@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
@@ -20,14 +23,14 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-# Preflight: skip with exit 0 if python3 or jq missing.
+# Preflight: a missing tool is UNRESOLVED (exit 3) — not measured, never green (#8616).
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "SKIP: python3 not on PATH"
-  exit 0
+  echo "UNRESOLVED: python3 missing — this suite asserted nothing; install python3"
+  exit 3
 fi
 if ! command -v jq >/dev/null 2>&1; then
-  echo "SKIP: jq not on PATH"
-  exit 0
+  echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"
+  exit 3
 fi
 if [[ ! -x "$HOOK" ]]; then
   echo "FAIL: $HOOK not executable or missing"
@@ -189,7 +192,7 @@ TOTAL=$((TOTAL+1))
 # ---------- Case 12: deny emits rule-incident line ----------
 # Uses INCIDENTS_REPO_ROOT to redirect the emit_incident write off the
 # operator's real .claude/.rule-incidents.jsonl.
-INC_ROOT_12=$(mktemp -d)
+INC_ROOT_12=$(mktemp -d -p "$SUITE_TMP")
 PAYLOAD_12=$(jq -c -n '{
   tool_name: "Edit",
   tool_input: {
@@ -223,7 +226,7 @@ rm -rf "$INC_ROOT_12"
 # Two subshell invocations write to the same incidents file concurrently.
 # The bash emitter uses flock; the Python emitter must acquire the same
 # lock. Expect exactly two lines — no truncation, no interleaving.
-INC_ROOT_13=$(mktemp -d)
+INC_ROOT_13=$(mktemp -d -p "$SUITE_TMP")
 (
   printf '%s' "$PAYLOAD_12" | INCIDENTS_REPO_ROOT="$INC_ROOT_13" "$HOOK" >/dev/null 2>&1
 ) &
@@ -257,7 +260,7 @@ rm -rf "$INC_ROOT_13"
 # Pre-fill .rule-incidents.jsonl just over a 1 KB threshold; verify a
 # workflow-injection deny path triggers rotation via the shell-out to the
 # bash log-rotation helper.
-INC_ROOT_14=$(mktemp -d)
+INC_ROOT_14=$(mktemp -d -p "$SUITE_TMP")
 mkdir -p "$INC_ROOT_14/.claude/hooks/lib"
 # Wire helper into the fixture root — symlink to the real helper so we
 # exercise the production code path under a controlled REPO_ROOT.

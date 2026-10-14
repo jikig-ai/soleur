@@ -30,6 +30,8 @@
 #   git push … refs/tags/…  writes the REMOTE, never the local ref store
 #   git clone               creates refs in the NEW repo, which by construction is not the live one
 #   git tag -d / --list/-l  delete or read; create nothing
+#   git tag --merged/--no-merged/--no-contains  list filters: they put `git tag` in list
+#                           mode, so a trailing name is a PATTERN (measured: no tag is created)
 #   git ls-remote           reads the remote; writes no ref
 #   git checkout/switch/worktree add   move HEAD, never write refs/tags/*
 #   git replace/notes/bundle unbundle  write refs/replace|notes|bundle — other namespaces
@@ -205,12 +207,13 @@ LEDGER=(
 # the ledger environment-dependent, which is the drift this file exists to avoid.
 OUT_OF_CLASS_CEILING=4
 OUT_OF_CLASS=(
-  # Runs a PACKAGE SCRIPT, not a tracked executable path. `npm run test:ci` expands through
-  # vitest's own project config, so there is no path literal for this guard to resolve, and
-  # inventing one would be a guess presented as a root. The vitest suites it runs are TypeScript
-  # under apps/web-platform, which cannot author a git tag without going through a spawn whose
-  # argv this guard already scans in its array-form spelling.
-  'npm run test:ci'
+  # EMPTY as of #9815. This ledger licenses registration argv that resolve NO tracked root
+  # (the old `npm run test:ci` inline scripts — package-script indirection with no path literal).
+  # Post-9815 every registered command resolves a tracked executable, so the class is empty and
+  # the last member was retired with it. The mechanism stays: a future argv that resolves no
+  # root surfaces here as `unclassified` (census red) until an author adds a stated-reason
+  # entry — fail-loud by construction. R13 of the mutation battery was removed with this
+  # retirement; its premise required a live member.
 )
 
 # --- Stage A: roots -------------------------------------------------------------------------
@@ -353,7 +356,7 @@ while IFS= read -r line; do
   fi
   if ! _resolve_command "${argv[@]}"; then
     _ooc=0
-    for _o in "${OUT_OF_CLASS[@]}"; do
+    for _o in "${OUT_OF_CLASS[@]+"${OUT_OF_CLASS[@]}"}"; do
       case "${argv[*]}" in *"$_o"*) _ooc=1 ;; esac
     done
     if (( _ooc == 1 )); then
@@ -408,9 +411,10 @@ while (( depth < DEPTH_BOUND )); do
       CLOSURE["$cand"]=1; added=$((added + 1))
     done < <(
       # NO DIRECTORY ALLOWLIST. An earlier revision enumerated top-level dirs
-      # (scripts|plugins|apps|tests|.github|.claude) and therefore could not reach
-      # `.openhands/hooks/pre-merge-rebase.sh`, which `pre-merge-rebase-parity.test.sh` — a
-      # battery suite — invokes by path. That is UNDER-approximation, i.e. fail-OPEN: a real
+      # (scripts|plugins|apps|tests|.github|.claude) and therefore could not reach a hook a
+      # battery suite invokes by path from outside those dirs — measured on the hand-ported
+      # sibling harness tree, since retired in ADR-245 / #8306, but the defect is the allowlist,
+      # not that tree. That is UNDER-approximation, i.e. fail-OPEN: a real
       # tag author outside the listed dirs was invisible. The plan's design is explicit that any
       # tracked executable path literal joins the closure, so the allowlist is the defect. The
       # `-f` test below is what bounds this; a prose mention of a non-existent path is dropped.
@@ -505,7 +509,7 @@ _is_in_class() {
   [[ "$l" =~ [[:space:]]ls-remote([[:space:]]|$) ]] && return 1
   if [[ "$l" =~ [[:space:]]tag([[:space:]]|$) ]]; then
     # creating forms only
-    [[ "$l" =~ [[:space:]]tag[[:space:]]+(-d|--delete|-l|--list|--verify|-n|--contains|--points-at) ]] && return 1
+    [[ "$l" =~ [[:space:]]tag[[:space:]]+(-d|--delete|-l|--list|--verify|-n|--contains|--no-contains|--points-at|--merged|--no-merged) ]] && return 1
   fi
   if [[ "$l" =~ update-ref ]]; then
     [[ "$l" =~ refs/tags/ ]] || return 1

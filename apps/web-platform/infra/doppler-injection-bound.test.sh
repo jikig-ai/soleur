@@ -201,16 +201,19 @@ MIN_POPULATION = 5
 # Row R3's "non-seam read-set" is the script's read-set MINUS the names Guard 1's in-script argv
 # gate unsets. Re-deriving it here would invert the intent: a naive read-set would demand every
 # fixture seam appear in `--only-secrets`, i.e. that the unit INJECT the very names the gate
-# exists to strip. These are the 15 names Guard 1 unsets (measured 2026-09-03); when Guard 1's
-# list changes, this copy moves with it.
+# exists to strip. These are the 17 names Guard 1 unsets (15 measured 2026-09-03 + CUTOVER_BOOT_ID
+# added by #7777's latch-clear record, which stamps the boot the clear was recorded under, +
+# CUTOVER_NOOP_THROTTLE_S added by #7696's noop-heartbeat throttle); when Guard 1's list
+# changes, this copy moves with it.
 GUARD1_UNSET = {
-    'CUTOVER_CURL_CMD', 'CUTOVER_DONE_OWNER_MARKER', 'CUTOVER_FLAG_SET_CMD', 'CUTOVER_FLIP_FLAG',
-    'CUTOVER_GQL_URL', 'CUTOVER_HEALTH_URL', 'CUTOVER_LOGGER_CMD', 'CUTOVER_REDIS_CLI_CMD',
-    'CUTOVER_REDIS_DBSIZE', 'CUTOVER_SYSTEMCTL_CMD', 'CUTOVER_VERIFY_INTERVAL_S',
-    'CUTOVER_VERIFY_WINDOW_S', 'INNGEST_CUTOVER_LATCH', 'INNGEST_CUTOVER_LATCH_MOUNT',
-    'INNGEST_CUTOVER_STATE',
+    'CUTOVER_BOOT_ID', 'CUTOVER_CURL_CMD', 'CUTOVER_DONE_OWNER_MARKER', 'CUTOVER_FLAG_SET_CMD',
+    'CUTOVER_FLIP_FLAG', 'CUTOVER_GQL_URL', 'CUTOVER_HEALTH_URL', 'CUTOVER_LOGGER_CMD',
+    'CUTOVER_NOOP_THROTTLE_S', 'CUTOVER_REDIS_CLI_CMD', 'CUTOVER_REDIS_DBSIZE',
+    'CUTOVER_SYSTEMCTL_CMD',
+    'CUTOVER_VERIFY_INTERVAL_S', 'CUTOVER_VERIFY_WINDOW_S', 'INNGEST_CUTOVER_LATCH',
+    'INNGEST_CUTOVER_LATCH_MOUNT', 'INNGEST_CUTOVER_STATE',
 }
-GUARD1_UNSET_CARDINALITY = 15
+GUARD1_UNSET_CARDINALITY = 17
 
 # ── the ack list: AUTHORED, each entry carrying WHY, cardinality pinned ───────────────────────
 ACK_REASONS = {
@@ -752,7 +755,7 @@ done
 # stage 2 (the doppler-run population) and stage 4 (the bound-required set) — so a zeroed floor
 # there is the most load-bearing vacuity available in this file.
 for _c in doppler_run_units bound_required_population; do
-  _line="$(grep -E "^CENSUS: ${_c}=" "$CONTROL_OUT" | head -1 || true)"
+  _line="$(grep -E "^CENSUS: ${_c}=" "$CONTROL_OUT" | sed -n '1p' || true)"
   if [[ -z "$_line" ]]; then
     fail "census: no count reported for '$_c'"
     continue
@@ -819,7 +822,7 @@ _pin_fp() {
     return 0
   fi
   # The POPULATION line is printed directly under its unit; -A1 is the association.
-  if grep -A1 -E "^  UNIT: +$2" "$CONTROL_OUT" | grep -q 'POPULATION'; then
+  if grep -A1 -E "^  UNIT: +$2" "$CONTROL_OUT" | grep -c 'POPULATION' >/dev/null; then
     fail "FP pin: $1 entered the bound-required population (false positive)"
   else
     pass "FP pin: $1 is enumerated but not bound-required"
@@ -948,7 +951,7 @@ import re, sys
 p = sys.argv[1]
 s = open(p).read()
 s = s.replace('  --only-secrets INNGEST_CUTOVER_FLIP \\\n', '  --only-secrets "" \\\n')
-s = re.sub(r'^  --only-secrets INNGEST_REDIS_PASSWORD \\\n', '', s, flags=re.M)
+s = re.sub(r'^  --only-secrets (INNGEST_REDIS_PASSWORD|DOPPLER_CONFIG) \\\n', '', s, flags=re.M)
 open(p, 'w').write(s)
 PY
 }

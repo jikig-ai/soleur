@@ -1,0 +1,19 @@
+# fixture data, never executed: bound token 16 lines above the cursor; W bounded=no
+[ "$p" != "$SOLEUR_TEST_SUITE_PID" ] || exit 0
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+p=$(awk '{print $4}' "/proc/$p/stat")
+kill -TERM "$target"

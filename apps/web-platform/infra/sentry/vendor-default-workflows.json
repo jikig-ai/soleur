@@ -1,0 +1,13 @@
+[
+  {
+    "id": "1143693",
+    "name": "Send a notification when pull requests are ready",
+    "triggerTypes": [
+      "seer_activity_trigger"
+    ],
+    "created": "2026-09-17T15:31:44.733178Z",
+    "registered": "2026-09-22",
+    "issue": "#8267",
+    "note": "Created by Sentry (createdBy null); Seer notifies when a pull request it opened is ready for review. Not Terraform-managed: provider v0.15.7 cannot express seer_activity_trigger."
+  }
+]

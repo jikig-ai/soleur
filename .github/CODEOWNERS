@@ -21,6 +21,15 @@
 /apps/web-platform/scripts/parse-gitleaks-allowlists.mjs @deruelle
 /apps/web-platform/scripts/rename-guard.sh              @deruelle
 /apps/web-platform/scripts/allowlist-diff.sh            @deruelle
+/scripts/secret-scan-smoke-gate.test.sh                 @deruelle
+/scripts/ci-draft-light.test.sh                         @deruelle
+/scripts/ci-draft-push-census.sh                       @deruelle
+/scripts/ci-draft-push-census.test.sh                  @deruelle
+/scripts/ci-push-dedupe.test.sh                         @deruelle
+/scripts/followthroughs/ci-draft-light-soak-9728.sh      @deruelle
+/scripts/followthroughs/ci-draft-light-soak-9728.test.sh @deruelle
+/scripts/followthroughs/ci-push-dedupe-soak-9512.sh     @deruelle
+/scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh @deruelle
 /apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @deruelle
 
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
@@ -88,6 +97,8 @@
 /scripts/lib/canonicalize-bypass-actors.sh              @deruelle
 /scripts/lib/canonicalize-required-status-checks.sh     @deruelle
 /scripts/lib/strip-log-injection.sh                     @deruelle
+/scripts/lib/bearer-curl.sh                             @deruelle
+/scripts/lib/bearer-curl.test.sh                        @deruelle
 /scripts/audit-ruleset-bypass.sh                        @deruelle
 /scripts/update-ci-required-ruleset.sh                  @deruelle
 /scripts/create-ci-required-ruleset.sh                  @deruelle
@@ -103,6 +114,13 @@
 /scripts/marketplace-ruleset-canonical-bypass-actors.json @deruelle
 /scripts/verify-marketplace-ruleset.sh                   @deruelle
 /scripts/marketplace-manifest-validate.sh                @deruelle
+# #9362 — the pre-apply by-value gate on the two rulesets' required checks, the CLA canonical it
+# compares against (the CI canonical is pinned above) and the suite that pins both the gate and the
+# absence of any prd_terraform injection in the apply job. A canonical editable in the same
+# unreviewed commit as its guard proves consistency, not integrity.
+/scripts/verify-ruleset-required-checks.sh              @deruelle
+/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json @deruelle
+/tests/scripts/test-apply-github-infra-mint-shape.sh    @deruelle
 
 # Auto-apply for github branch-protection terraform (#3895/#3896 replacement).
 # The merge IS the human authorization, so CODEOWNERS is the load-bearing
@@ -193,18 +211,50 @@
 # explicit load-bearing-files-get-explicit-rows row).
 /.github/actions/cf-tunnel-ssh-bridge/                  @deruelle
 
-# Knowledge-base index merge driver (#7935). Once registered, merge-kb-index.sh
-# is UNATTENDED EXECUTABLE CODE ON THE MERGE PATH: an ordinary merge, rebase,
-# pull or cherry-pick that touches knowledge-base/INDEX.md runs it as the
-# invoking user, with no prompt and nothing in the merge output distinguishing
-# it from a conflict-free merge. The CI freshness guard validates artifact
-# CONTENT, so a driver that emits a byte-correct index while also doing
-# something else passes every check in the repo. These are the
-# load-bearing-files-get-explicit-rows rows for that surface.
-/scripts/merge-kb-index.sh                              @deruelle
-/scripts/lib/kb-index-render.sh                         @deruelle
-/scripts/install-kb-merge-driver.sh                     @deruelle
-# .gitattributes decides WHICH paths reach a merge driver, so it is the lever that
-# governs the surface the three rows above describe — a single line there can point
-# any path at any driver. It had only the blanket `*` rule.
-/.gitattributes                                         @deruelle
+# The knowledge-base index merge driver (#7935) and the root .gitattributes that
+# routed paths to it were RETIRED by #8377 / ADR-235: the index is an untracked
+# cache now, and a file that is never committed can never conflict, so there is
+# no merge-path code left to own. The rows that guarded the driver, its render
+# library, its installer and .gitattributes went with the files themselves. plugins/soleur/scripts/resolve-regenerable-conflicts.sh is the
+# replacement surface and is NOT unattended: it runs only when a sync script
+# calls it by name, never from git's merge machinery.
+
+# SSH host-key pinning trust files (#7226 / #5914, ADR-237). Each of these decides which
+# host key an SSH session to web-1 or git-data will accept: the committed web-1 pin, the
+# bridge that writes it into known_hosts, the redeploy workflow and its scripts that load the
+# git-data pin into the app, the app's git-data SSH transport and pin resolver, the cutover
+# precheck that reads the pin, and the plan-gate libraries whose allow-sets govern when the
+# git-data key rotates. A drive-by edit to any one can reopen TOFU without a failing test, so
+# they carry explicit rows (load-bearing-files-get-explicit-rows). NOTE: as the header says,
+# CODEOWNERS review is only an anchor once branch protection requires it.
+/apps/web-platform/infra/web-1-ssh-host-key.pub         @deruelle
+/.github/actions/dispatch-web-redeploy/                 @deruelle
+/apps/web-platform/server/git-auth.ts                   @deruelle
+/apps/web-platform/server/git-data-replication.ts       @deruelle
+/apps/web-platform/server/git-data-host-key-pin-shape.ts @deruelle
+/apps/web-platform/infra/git-data-flag-precheck.sh      @deruelle
+/tests/scripts/lib/git-data-host-replace-gate.sh        @deruelle
+/tests/scripts/lib/git-data-host-birth-gate.sh          @deruelle
+/tests/scripts/test-no-tofu-ssh.sh                      @deruelle
+
+# Merge-queue + advisory-CodeQL machinery (#9454, ADR-270). With CodeQL advisory on the queue, the post-merge alert
+# gate IS the control for a critical/high alert on main, and the CLA verify, the probe and the queued-skip tooling
+# decide whether a queued PR is merged, synced or dequeued. A PR that edits one of these is judged by the very edit
+# (the gate runs from the pushed commit), so each carries an explicit row (load-bearing-files-get-explicit-rows).
+# NOTE: as the header says, CODEOWNERS review is only an anchor once branch protection requires it. The three
+# workflows (.github/workflows/codeql-main-alert-gate.yml, merge-queue-cla-synthetics.yml, merge-queue-stall-check.yml)
+# are already covered by the /.github/workflows/ umbrella row above, so they get no redundant row here.
+/scripts/codeql-main-alert-gate.sh                      @deruelle
+/plugins/soleur/test/codeql-main-alert-gate.test.sh     @deruelle
+/plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh @deruelle
+/plugins/soleur/test/fixtures/codeql-main-alert-gate/   @deruelle
+/plugins/soleur/test/fixtures/codeql-main-alert-gate-workflow-wiring/ @deruelle
+/scripts/merge-queue-cla-verify.sh                      @deruelle
+/scripts/probe-merge-group-coverage.sh                  @deruelle
+/plugins/soleur/scripts/sync-pr-behind.sh               @deruelle
+/.claude/hooks/pre-merge-rebase.sh                      @deruelle
+/plugins/soleur/scripts/ci-head-verdict.sh              @deruelle
+/plugins/soleur/test/ci-head-verdict.test.sh            @deruelle
+/plugins/soleur/scripts/admin-merge-ready.sh            @deruelle
+/plugins/soleur/scripts/monitor-pr-checks.sh            @deruelle
+/apps/web-platform/server/webhook-draft-ci-run.ts       @deruelle

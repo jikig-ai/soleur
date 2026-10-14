@@ -14,7 +14,7 @@
 # inngest-host recreate: a -replace of hcloud_server.inngest + its two id-referencing
 # dependents that terraform replaces because they interpolate the NEW server id:
 #   - hcloud_server_network.inngest        (network.tf; server_id is ForceNew -> replace)
-#   - hcloud_volume_attachment.inngest_redis (inngest-host.tf; server_id is ForceNew -> replace)
+#   - hcloud_volume_attachment.inngest_redis_luks (inngest-redis-luks.tf; server_id is ForceNew -> replace)
 #   - doppler_service_token.inngest        (#6178: an UPSTREAM ForceNew that CAUSES the
 #     recreate. `access` is immutable on a Doppler service token, so an access change (e.g.
 #     the read->read/write flip #6889 needs for the on-host cutover FSM) destroys+recreates
@@ -26,16 +26,17 @@
 #     rotation that did NOT cascade to a host replace would fail inngest_server_replaced==1.)
 # This allow-set was DERIVED (2026-06, #6178) from the then-current web-2-recreate golden
 # fixture, which showed that a scoped `-replace` of an hcloud server touches EXACTLY
-# server + server_network + volume_attachment — hcloud_firewall_attachment.* (server_ids,
-# non-ForceNew) does NOT change, so it is DELIBERATELY absent from the allow-set.
+# server + server_network + volume_attachment. Its claim that the firewall attachment "does NOT
+# change" left inngest unfirewalled after every replace (#8754, ADR-100 2026-09-25 addendum).
 # That fixture was removed with the web-2 dispatch sweep (#6575, 2026-07-20); the derivation
 # it justified is unchanged and is now pinned by this gate's OWN tests, which are the live
 # guarantee. Do not re-add a pointer to a deleted fixture.
 #
-# hcloud_volume.inngest_redis (the durable Redis AOF store) is DELIBERATELY ABSENT — the
-# volume MUST be preserved across the replace (exactly how web2-retire-gate.sh preserves
-# hcloud_volume.workspaces), so ANY change to it trips inngest_out_of_scope_changes AND the
-# explicit redis_volume_destroyed backstop below.
+# RETIRED (#8285): hcloud_volume.inngest_redis and hcloud_volume_attachment.inngest_redis (the plaintext
+# backstop pair) are no longer declared or `-target`ed; the volume was destroyed 2026-10-09 by the
+# since-deleted inngest-backstop-retire dispatch. Both are DELIBERATELY ABSENT from the allow-set, so ANY
+# action on either trips inngest_out_of_scope_changes; the named redis_volume_* counters below stay as
+# loud backstops. The live store is hcloud_volume.inngest_redis_luks (preserved by omission).
 #
 # NO [ack-destroy] BYPASS: a destructive prod host recreate is authorized by the menu-ack
 # workflow_dispatch (hr-menu-option-ack-not-prod-write-auth), never a commit trailer.
@@ -45,15 +46,16 @@
 # while UPDATING (resizing) the live AOF volume printed PASS — measured on a synthesized
 # `hcloud_server.inngest ["delete","create"]` + `hcloud_volume.inngest_redis ["update"]` fixture —
 # because an update is neither a delete nor out of the allow-set.
-#   hcloud_volume.inngest_redis                 no-op | create of an ABSENT volume (before == null)
-#                                                                     → redis_volume_touched
+#   hcloud_volume.inngest_redis (orphan)         no-op ONLY                → redis_volume_touched
 #   hcloud_volume.inngest_redis_luks            no-op | create        → luks_volume_touched
-#   hcloud_volume_attachment.inngest_redis{,_luks}
+#   hcloud_volume_attachment.inngest_redis_luks
 #                                               no-op | create | replace (delete+create, either order)
 #                                                                     → attachment_touched
 #   random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key
 #                                               ABSENT (any entry, a no-op included)
 #                                                                     → luks_passphrase_in_graph
+#   hcloud_server.inngest (its create)          after.firewall_ids == [id of hcloud_firewall.inngest]
+#                                                                     → firewall_not_bound (#8754)
 #
 # PASS (rc=0) iff every counter is 0 and inngest_server_replaced==1. The ABORT line names the first
 # failing counter as `reason=<token>`.
@@ -80,7 +82,7 @@ fi
 
 inngest_host_replace_gate() {
   local plan_json="$1"
-  local counts oos rdel ldel replaced rvt lvt att lpig reason
+  local counts oos rdel ldel replaced rvt lvt att lpig fnb reason
 
   # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
   # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
@@ -101,31 +103,7 @@ inngest_host_replace_gate() {
       def allow: [
         "hcloud_server.inngest",
         "hcloud_server_network.inngest",
-        "hcloud_volume_attachment.inngest_redis",
         "doppler_service_token.inngest",
-        # #7695 admitted this address for CREATE ONLY as the recovery route out of a partial
-        # `inngest-volume-recut` apply. `redis_volume_touched` below (#6894 CTO ruling) keeps that
-        # route and nothing else: a no-op, or a bare create whose `before` is null — a volume that
-        # does not exist, so there is no store to harm. An update, or a create that replaces a
-        # prior object, aborts. The ruling first read "no-op ONLY"; that withdrew the only route
-        # out of a partial recut, which the recovery text of the recut job still prescribes, so the
-        # create-of-absent arm was restored on the reasoning recorded here:
-        #
-        # Measured: after a partial recut the volume is destroyed and out of state, and every
-        # dispatch refused. `inngest-volume-recut` aborts because Guard 2 runs before the plan and
-        # grades the LIVE host (no volume by that name => id_pin_mismatch, and /mnt/data is not on
-        # the pinned volume alias => mount_mismatch, on `data_mount_devid` since #8017).
-        # `apply_target=inngest-host` aborts because
-        # the hcloud_server.inngest `user_data` embeds hcloud_volume.inngest_redis.id with no
-        # `ignore_changes` on it, so an absent volume makes that id unknown at plan time, forces a
-        # server replace, and the additive-only guard refuses any delete. And this gate aborted
-        # here, on `inngest_out_of_scope_changes=1`, because the volume was not in this list.
-        #
-        # ADMITTING IT COSTS NOTHING THIS GATE WAS PROTECTING. `redis_volume_destroyed` below is
-        # unchanged and still counts delete/forget at this exact address, so a plan that DESTROYS
-        # the volume aborts exactly as before. The only shape this widening newly permits is the
-        # one the recovery needs: creating a volume that is missing.
-        "hcloud_volume.inngest_redis",
         # #6894 / ADR-142. The ADDITIVE target volume ATTACHMENT. It interpolates the
         # server id exactly as its plaintext sibling does, so a replace FORCES it into the
         # plan; without admitting it this gate aborts `inngest_out_of_scope_changes=1` and
@@ -141,15 +119,15 @@ inngest_host_replace_gate() {
         "hcloud_volume.inngest_redis_luks"
       ];
       def pair: ["random_password.inngest_redis_luks", "doppler_secret.inngest_redis_luks_key"];
-      def attachments: ["hcloud_volume_attachment.inngest_redis", "hcloud_volume_attachment.inngest_redis_luks"];
+      def attachments: ["hcloud_volume_attachment.inngest_redis_luks"];
       $p[0] as $plan
       | {
           redis_volume_touched: (
-            # The live plaintext AOF: a replace must never resize, relabel or re-create it. The one
-            # admitted change is the #7695 recovery — creating it when it is ABSENT (before == null).
+            # The retired plaintext AOF orphan: a replace must not act on it at all (no create-of-absent
+            # recovery route exists any more -- the resource is no longer declared).
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.inngest_redis")
-              | select((.change.actions == ["no-op"]) or (.change.actions == ["create"] and .change.before == null) | not) ]
+              | select(.change.actions != ["no-op"]) ]
             | length
           ),
           luks_volume_touched: (
@@ -187,6 +165,19 @@ inngest_host_replace_gate() {
               | select(.change.actions? | any(. == "delete" or . == "forget")) ]
             | length
           ),
+          firewall_not_bound: (
+            # #8754: the replacement must be CREATED bound to exactly the deny-all firewall. The id
+            # comes from the plan entry of that firewall (a no-op dependency on a replace). An absent
+            # entry or unknown id reads as "", which no firewall_ids list equals: fail closed.
+            ([ $plan.resource_changes[]? | select(.address == "hcloud_firewall.inngest")
+               | (.change.after.id? // .change.before.id?) ] | first // null) as $raw
+            | (if ($raw | type) == "number" or ($raw | type) == "string" then ($raw | tostring) else "" end) as $fw
+            | [ $plan.resource_changes[]?
+                | select(.address == "hcloud_server.inngest")
+                | select(.change.actions? | index("create"))
+                | select((.change.after.firewall_ids? | if type == "array" then map(tostring) else null end) != [$fw]) ]
+            | length
+          ),
           inngest_server_replaced: (
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_server.inngest")
@@ -206,16 +197,17 @@ inngest_host_replace_gate() {
   lvt=$(echo "$counts" | jq -r '.luks_volume_touched')
   att=$(echo "$counts" | jq -r '.attachment_touched')
   lpig=$(echo "$counts" | jq -r '.luks_passphrase_in_graph')
+  fnb=$(echo "$counts" | jq -r '.firewall_not_bound')
 
   # Every counter is a non-negative integer BEFORE any arithmetic compares one.
   # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
   # under bash coercion — so an uncomputed counter silently satisfies every threshold.
   # The shared helper names WHICH counter failed rather than reporting them all.
   plan_gate_assert_numeric "inngest_host_replace_gate" "inngest_out_of_scope_changes=${oos}" "redis_volume_destroyed=${rdel}" "luks_volume_destroyed=${ldel}" "inngest_server_replaced=${replaced}" \
-    "redis_volume_touched=${rvt}" "luks_volume_touched=${lvt}" "attachment_touched=${att}" "luks_passphrase_in_graph=${lpig}" || return 1
+    "redis_volume_touched=${rvt}" "luks_volume_touched=${lvt}" "attachment_touched=${att}" "luks_passphrase_in_graph=${lpig}" "firewall_not_bound=${fnb}" || return 1
 
-  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} luks_volume_destroyed=${ldel} inngest_server_replaced=${replaced} redis_volume_touched=${rvt} luks_volume_touched=${lvt} attachment_touched=${att} luks_passphrase_in_graph=${lpig}"
-  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$ldel" -eq 0 && "$replaced" -eq 1 && "$rvt" -eq 0 && "$lvt" -eq 0 && "$att" -eq 0 && "$lpig" -eq 0 ]]; then
+  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} luks_volume_destroyed=${ldel} inngest_server_replaced=${replaced} redis_volume_touched=${rvt} luks_volume_touched=${lvt} attachment_touched=${att} luks_passphrase_in_graph=${lpig} firewall_not_bound=${fnb}"
+  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$ldel" -eq 0 && "$replaced" -eq 1 && "$rvt" -eq 0 && "$lvt" -eq 0 && "$att" -eq 0 && "$lpig" -eq 0 && "$fnb" -eq 0 ]]; then
     echo "inngest_host_replace_gate: PASS — scoped inngest-host recreate permitted (server + 3 dependents replace; BOTH the Redis AOF volume and the ADR-142 additive target preserved)"
     return 0
   fi
@@ -229,7 +221,8 @@ inngest_host_replace_gate() {
   elif [[ "$att"  -ne 0 ]]; then reason=attachment_touched
   elif [[ "$oos"  -ne 0 ]]; then reason=inngest_out_of_scope_changes
   elif [[ "$replaced" -ne 1 ]]; then reason=server_not_replaced
+  elif [[ "$fnb"  -ne 0 ]]; then reason=firewall_not_bound
   fi
-  echo "inngest_host_replace_gate: ABORT reason=${reason} — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, any action on the live Redis AOF volume, an update/delete/forget of the additive target, a bare attachment update/delete/forget, the LUKS passphrase pair in the plan, or no server replace)"
+  echo "inngest_host_replace_gate: ABORT reason=${reason} — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, any action on the live Redis AOF volume, an update/delete/forget of the additive target, a bare attachment update/delete/forget, the LUKS passphrase pair in the plan, no server replace, or a replacement not born bound to hcloud_firewall.inngest)"
   return 1
 }

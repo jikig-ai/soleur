@@ -143,7 +143,7 @@ assert_nic_cause_contains() {
   CASES=$((CASES + 1))
   out="$(ZOT_BQ_OVERRIDE="$STUB" bash "$CHECKER" 2>&1)" || true
   cause="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_CAUSE=//p' | head -1)"
-  if printf '%s\n' "$cause" | grep -qiF "$needle"; then
+  if printf '%s\n' "$cause" | grep -ciF >/dev/null "$needle"; then
     PASS=$((PASS + 1)); printf 'ok   - %s (nic cause ~ "%s")\n' "$name" "$needle"
   else
     FAIL=$((FAIL + 1)); printf 'FAIL - %s: nic cause did not contain "%s" (got: %s)\n' "$name" "$needle" "$cause"
@@ -165,7 +165,7 @@ assert_cause_contains() {
   CASES=$((CASES + 1))
   out="$(ZOT_BQ_OVERRIDE="$STUB" bash "$CHECKER" 2>&1)" || true
   cause="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_CAUSE=//p' | head -1)"
-  if printf '%s\n' "$cause" | grep -qiF "$needle"; then
+  if printf '%s\n' "$cause" | grep -ciF >/dev/null "$needle"; then
     PASS=$((PASS + 1)); printf 'ok   - %s (cause ~ "%s")\n' "$name" "$needle"
   else
     FAIL=$((FAIL + 1)); printf 'FAIL - %s: cause did not contain "%s" (got: %s)\n' "$name" "$needle" "$cause"

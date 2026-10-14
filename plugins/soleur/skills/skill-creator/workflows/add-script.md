@@ -72,13 +72,14 @@ chmod +x ~/.claude/skills/{skill-name}/scripts/{script-name}.sh
 
 Find the workflow that needs this operation. Add:
 
-```xml
-<process>
+```markdown
+## Process
+
 ...
 N. Run `scripts/{script-name}.sh [arguments]`
 N+1. Verify operation succeeded
 ...
-</process>
+
 ```
 
 ## Step 8: Test

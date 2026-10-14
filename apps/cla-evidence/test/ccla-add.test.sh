@@ -47,17 +47,33 @@ trap 'rm -rf "$WORK"' EXIT
 # to have the ref while this one did not run in CI at all. Fixing the symptom in
 # one of two suites that share a dependency leaves the other armed.
 #
-# One shallow fetch of exactly this ref, then re-try. A genuine unavailability
-# still ABORTS — "could not read the reference set" must never degrade to an
-# empty ledger, which would pass every account.
+# One shallow CLONE of exactly this branch into a scratch repo under $WORK,
+# then extract the ledger blob with `git show` — the committed bytes, not the
+# checked-out file, so the clone's core.autocrlf/smudge configuration and any
+# post-checkout hook cannot shape the reference set. Never a fetch into the
+# live checkout. A genuine unavailability still ABORTS — "could not read the
+# reference set" must never degrade to an empty ledger, which would pass every
+# account.
 if ! git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null; then
-  # --no-tags is load-bearing, not tidiness: `git fetch` auto-follows tags, and the gate runner samples the repo's refs as a read-only boundary — a plain fetch wrote 157 tags and tripped [FATAL] A SUITE WROTE TO THE LIVE REPOSITORY on CI run 34123093118. 157 is what that run measured, not the current scale -- the repo carries far more tags now, so the flag matters more than it did, not less.
-  # Measured: plain fetch creates tags, --no-tags creates none and still fetches the ref.
-  git fetch --no-tags --depth=1 -q origin \
-    '+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures' 2>/dev/null
-  git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null \
+  # A `git fetch --depth=1` into this checkout would write `.git/shallow` into
+  # the repo's COMMON dir — shared by every linked worktree — which the
+  # repo-write boundary's shallow dimension (#7924) classifies FATAL. The
+  # scratch clone writes NOTHING into this repo at all: no ref, no objects, no
+  # tags, no `.git/shallow` — strictly stronger than the old --no-tags fetch,
+  # which still wrote the ref and its objects into the caller's store. $WORK is
+  # suite-owned and removed by the EXIT trap above, so the clone needs no
+  # cleanup of its own.
+  _ledger_url="$(git remote get-url origin 2>/dev/null)"
+  [[ -n "$_ledger_url" ]] \
+    || { echo "harness: could not read the ICLA ledger at origin/cla-signatures, and remote" >&2
+         echo "         \`origin\` has no URL to clone it from." >&2
+         exit 2; }
+  git clone -q --depth=1 --no-tags --single-branch --branch cla-signatures \
+    -- "$_ledger_url" "$WORK/ledger-clone" 2>/dev/null \
+    && git -C "$WORK/ledger-clone" show HEAD:signatures/cla.json \
+       > "$WORK/ledger.json" 2>/dev/null \
     || { echo "harness: could not read the ICLA ledger at origin/cla-signatures, even after a" >&2
-         echo "         shallow fetch. That branch is maintained by the upstream CLA action;" >&2
+         echo "         shallow clone. That branch is maintained by the upstream CLA action;" >&2
          echo "         without it the reference set is unavailable and no verdict is possible." >&2
          exit 2; }
 fi
@@ -999,6 +1015,51 @@ fi
   && pass "H3 control: the two fixtures have DIFFERENT digests, so the arm above discriminates" \
   || fail "H3 control: both fixtures hash identically — the must-PASS proves nothing"
 
+# ===========================================================================
+# #7924 — the ledger fallback must not write into the CALLER'S repository.
+#
+# The repo-write boundary now samples `.git/shallow` in the repo's COMMON dir —
+# shared by every linked worktree — so a `git fetch --depth=1` into the
+# caller's repo classifies FATAL. The SUT's fallback is a scratch CLONE, and
+# the arm asserts the command's SHAPE: the clone's destination operand derives
+# from a `mktemp -d` dir the script's own EXIT trap removes. Never the
+# `--depth` token — the depth bound is meant to survive inside the throwaway
+# repo (the plan's sharp edge: grading `--depth` is both unachievable and
+# wrong).
+# ===========================================================================
+# Controls first — a span that extracted nothing would make every absence arm
+# below vacuous (the same failure the FR8 controls exist to refuse).
+grep -qF 'git show "origin/cla-signatures:signatures/cla.json"' "$SCRIPT" \
+  && pass "#7924 control: the git-show fast path is still the first recovery" \
+  || fail "#7924 control: the ledger fast path is gone — the shape arms below are vacuous"
+sut_clone_span="$(awk '/^[[:space:]]*(if[[:space:]]+!?[[:space:]]*)?git[[:space:]]+clone/{f=1} f{print; if ($0 !~ /\\$/) exit}' "$SCRIPT")"
+grep -q 'cla-signatures' <<<"$sut_clone_span" \
+  && pass "#7924 control: the scratch-clone command was extracted (it names the branch)" \
+  || fail "#7924 control: no command-position git clone found — the shape arms below are vacuous"
+grep -qE '"\$_ledger_scratch/repo"' <<<"$sut_clone_span" \
+  && pass "#7924: the clone's destination operand is under the scratch dir, not the caller's repo" \
+  || fail "#7924: the clone destination does not derive from the scratch dir: ${sut_clone_span:0:140}"
+grep -qF '_ledger_scratch="$(mktemp -d' "$SCRIPT" \
+  && pass "#7924: the clone destination's parent is a mktemp -d, not a repo path" \
+  || fail "#7924: the scratch dir is not a mktemp -d — the clone could land inside the live repo"
+grep -qF 'TMP_DIRS+=("$_ledger_scratch")' "$SCRIPT" \
+  && pass "#7924: the scratch dir is registered with the script's own cleanup trap (TMP_DIRS)" \
+  || fail "#7924: the scratch dir is not registered for cleanup — the clone would leak"
+sut_cleanup_span="$(awk '/^cleanup\(\)/,/^}/' "$SCRIPT")"
+grep -qF 'rm -rf "${TMP_DIRS[@]}"' <<<"$sut_cleanup_span" \
+  && pass "#7924: the EXIT trap removes TMP_DIRS with rm -rf (a tree, not a file)" \
+  || fail "#7924: TMP_DIRS is registered but never removed by the cleanup trap"
+# The negative arm, in command position: comments and quoted strings mention
+# `git fetch` legitimately, so the anchor is a `git fetch` (optionally `-C`-ed)
+# at a line's command position — the shape a revert to the in-repo fetch would
+# take. The scratch clone makes an in-place fetch unnecessary, so ANY such
+# command is the defect this change removed.
+if grep -nE '^[[:space:]]*(if[[:space:]]+!?[[:space:]]*)?git([[:space:]]+-C[[:space:]]+[^[:space:]]+)*[[:space:]]+fetch' "$SCRIPT"; then
+  fail "#7924: a command-position git fetch still targets a repository — the ledger recovery must clone into the scratch dir, never fetch"
+else
+  pass "#7924: no command-position git fetch remains — nothing writes .git/shallow into the caller's common dir"
+fi
+
 # ---------------------------------------------------------------------------
 echo "---"
 echo "Total: $passes passed, $fails failed"
@@ -1008,7 +1069,7 @@ echo "Total: $passes passed, $fails failed"
 # assertion could be deleted and the run stayed green and silent — the floor
 # only fires when TWO go. `guard-vacuity-floor.test.sh` verifies that floors
 # FIRE, never that they are tight, so nothing else catches the slack.
-MIN_ASSERTIONS=118
+MIN_ASSERTIONS=125
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

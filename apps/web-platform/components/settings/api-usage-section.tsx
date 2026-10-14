@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import {
   loadApiUsageForUser,
   relativeTime,
@@ -93,12 +93,12 @@ function EmptyState() {
         key. Start one and costs show up in this table the moment the
         response lands.
       </p>
-      <Link
+      <NavLink
         href="/dashboard"
         className="inline-flex items-center rounded-md bg-soleur-accent-gold-fill px-3 py-1.5 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-soleur-border-emphasized focus:ring-offset-2"
       >
         Start a conversation
-      </Link>
+      </NavLink>
     </div>
   );
 }

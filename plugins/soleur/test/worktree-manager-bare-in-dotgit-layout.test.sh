@@ -191,7 +191,7 @@ C1_OUT="$(run_sourced "$C1_WT" 'require_working_tree && echo RWT_OK' 2>&1)"
 C1_RC=$?
 set -e
 CASES=$((CASES + 1))
-if (( C1_RC == 0 )) && printf '%s' "$C1_OUT" | grep -qF 'RWT_OK'; then
+if (( C1_RC == 0 )) && printf '%s' "$C1_OUT" | grep -cF >/dev/null 'RWT_OK'; then
   echo "  PASS: require_working_tree succeeds from inside the poisoned worktree"; PASS=$((PASS + 1))
 else
   echo "  FAIL: require_working_tree refused from inside a VALID worktree (the #7394 symptom)"
@@ -216,7 +216,7 @@ CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C2/.git/conf
 CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C2/.git/config" --get core.worktree 2>/dev/null || echo __ABSENT__)" \
   "stale core.worktree removed (this step is retained from the old behaviour)"
 CASES=$((CASES + 1))
-if printf '%s' "$C2_OUT" | grep -qF 'SOLEUR_GIT_BARE_POISON' && printf '%s' "$C2_OUT" | grep -qF 'branch=healed'; then
+if printf '%s' "$C2_OUT" | grep -cF >/dev/null 'SOLEUR_GIT_BARE_POISON' && printf '%s' "$C2_OUT" | grep -cF >/dev/null 'branch=healed'; then
   echo "  PASS: SOLEUR_GIT_BARE_POISON … branch=healed emitted (work was done)"; PASS=$((PASS + 1))
 else
   echo "  FAIL: expected branch=healed when normalization actually changed something"
@@ -240,7 +240,7 @@ CASES=$((CASES + 1)); assert_eq "true" "$(git config --file "$C3/.git/config" --
 C3_WT_BARE="$(git -C "$C3/.worktrees/feat-b" rev-parse --is-bare-repository 2>/dev/null || echo ERR)"
 CASES=$((CASES + 1)); assert_eq "false" "$C3_WT_BARE" "the linked worktree no longer reports bare"
 CASES=$((CASES + 1))
-if printf '%s' "$C3_OUT" | grep -qF 'branch=healed'; then
+if printf '%s' "$C3_OUT" | grep -cF >/dev/null 'branch=healed'; then
   echo "  PASS: branch=healed emitted for the poisoned fixture"; PASS=$((PASS + 1))
 else
   echo "  FAIL: expected branch=healed on a poisoned fixture"; FAIL=$((FAIL + 1))
@@ -262,7 +262,7 @@ CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C4/config" -
 CASES=$((CASES + 1)); assert_eq "false" "$(git -C "$TMP/c4/wt-a" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
   "genuine-bare linked worktree no longer reports bare"
 CASES=$((CASES + 1))
-if printf '%s' "$C4_OUT" | grep -qF 'branch=healed'; then
+if printf '%s' "$C4_OUT" | grep -cF >/dev/null 'branch=healed'; then
   echo "  PASS: branch=healed emitted on the genuine-bare layout too"; PASS=$((PASS + 1))
 else
   echo "  FAIL: expected branch=healed on the genuine-bare fixture"; FAIL=$((FAIL + 1))
@@ -290,7 +290,7 @@ fi
 # The guard SKIPS before the normalization block, so no POISON marker may be emitted.
 # Without this, a future change that falls through on a non-bare clone would be silent.
 CASES=$((CASES + 1))
-if printf '%s' "$C5_OUT" | grep -qF 'branch=guard-skip'; then
+if printf '%s' "$C5_OUT" | grep -cF >/dev/null 'branch=guard-skip'; then
   echo "  PASS: the skip is OBSERVABLE (branch=guard-skip), not silent"; PASS=$((PASS + 1))
 else
   echo "  FAIL: the guard declined to act and said nothing — the exact unobservable-no-op"
@@ -299,7 +299,7 @@ else
 fi
 # …and it must still be a SKIP: no healed/clean normalization marker on a non-bare clone.
 CASES=$((CASES + 1))
-if printf '%s' "$C5_OUT" | grep -qE 'branch=(healed|clean)'; then
+if printf '%s' "$C5_OUT" | grep -cE >/dev/null 'branch=(healed|clean)'; then
   echo "  FAIL: ran the normalization on a NON-bare clone (guard fell through)"; FAIL=$((FAIL + 1))
 else
   echo "  PASS: normalization not entered on a non-bare clone"; PASS=$((PASS + 1))
@@ -318,8 +318,8 @@ set +e; C6_OUT="$(ensure_bare_config 2>&1)"; C6_RC=$?; set -e
 restore_root
 CASES=$((CASES + 1)); assert_eq "0" "$C6_RC" "masked-config clone still returns 0 (graceful degrade, not a wedge)"
 CASES=$((CASES + 1))
-if printf '%s' "$C6_OUT" | grep -qF 'SOLEUR_GIT_CONFIG_MASK_SKIP' \
-   && printf '%s' "$C6_OUT" | grep -qF 'branch=non-bare-skip'; then
+if printf '%s' "$C6_OUT" | grep -cF >/dev/null 'SOLEUR_GIT_CONFIG_MASK_SKIP' \
+   && printf '%s' "$C6_OUT" | grep -cF >/dev/null 'branch=non-bare-skip'; then
   echo "  PASS: benign SOLEUR_GIT_CONFIG_MASK_SKIP … branch=non-bare-skip emitted"; PASS=$((PASS + 1))
 else
   echo "  FAIL: expected the benign mask-skip diagnostic on a masked config"
@@ -327,7 +327,7 @@ else
   FAIL=$((FAIL + 1))
 fi
 CASES=$((CASES + 1))
-if printf '%s' "$C6_OUT" | grep -qE 'worktree wedge|soleur-tmp|mv:'; then
+if printf '%s' "$C6_OUT" | grep -cE >/dev/null 'worktree wedge|soleur-tmp|mv:'; then
   echo "  FAIL: attempted a write against a masked config"; FAIL=$((FAIL + 1))
 else
   echo "  PASS: no write attempted against the masked config"; PASS=$((PASS + 1))
@@ -370,7 +370,7 @@ C8_OUT="$(run_sourced "$C8_WT" 'require_working_tree && echo RWT_OK' 2>&1)"
 C8_RC=$?
 set -e
 CASES=$((CASES + 1))
-if (( C8_RC == 0 )) && printf '%s' "$C8_OUT" | grep -qF 'RWT_OK'; then
+if (( C8_RC == 0 )) && printf '%s' "$C8_OUT" | grep -cF >/dev/null 'RWT_OK'; then
   echo "  PASS: self-heal alone makes require_working_tree succeed"; PASS=$((PASS + 1))
 else
   echo "  FAIL: self-heal did not recover the already-poisoned worktree"
@@ -438,8 +438,8 @@ set +e; C11_OUT="$(ensure_bare_config 2>&1)"; C11_RC=$?; set -e
 restore_root
 CASES=$((CASES + 1)); assert_eq "0" "$C11_RC" "already-clean bare-in-.git returns 0 (does NOT wedge on --unset-all)"
 CASES=$((CASES + 1))
-if printf '%s' "$C11_OUT" | grep -qF 'SOLEUR_GIT_BARE_POISON' \
-   && printf '%s' "$C11_OUT" | grep -qF 'branch=clean'; then
+if printf '%s' "$C11_OUT" | grep -cF >/dev/null 'SOLEUR_GIT_BARE_POISON' \
+   && printf '%s' "$C11_OUT" | grep -cF >/dev/null 'branch=clean'; then
   echo "  PASS: SOLEUR_GIT_BARE_POISON … branch=clean emitted"; PASS=$((PASS + 1))
 else
   echo "  FAIL: expected SOLEUR_GIT_BARE_POISON … branch=clean on an already-clean repo"
@@ -447,7 +447,7 @@ else
   FAIL=$((FAIL + 1))
 fi
 CASES=$((CASES + 1))
-if printf '%s' "$C11_OUT" | grep -qF 'worktree wedge:'; then
+if printf '%s' "$C11_OUT" | grep -cF >/dev/null 'worktree wedge:'; then
   echo "  FAIL: emitted a wedge give-up on an already-healthy repo"; FAIL=$((FAIL + 1))
 else
   echo "  PASS: no 'worktree wedge:' give-up on an already-healthy repo"; PASS=$((PASS + 1))
@@ -477,8 +477,8 @@ else
     echo "  FAIL: returned success despite being unable to write the recovery config"; FAIL=$((FAIL + 1))
   fi
   CASES=$((CASES + 1))
-  if printf '%s' "$C12_OUT" | grep -qF 'SOLEUR_GIT_BARE_SELFHEAL' \
-     && printf '%s' "$C12_OUT" | grep -qF 'branch=failed'; then
+  if printf '%s' "$C12_OUT" | grep -cF >/dev/null 'SOLEUR_GIT_BARE_SELFHEAL' \
+     && printf '%s' "$C12_OUT" | grep -cF >/dev/null 'branch=failed'; then
     echo "  PASS: SOLEUR_GIT_BARE_SELFHEAL … branch=failed emitted"; PASS=$((PASS + 1))
   else
     echo "  FAIL: expected SOLEUR_GIT_BARE_SELFHEAL … branch=failed"
@@ -490,32 +490,32 @@ else
   # ("error: could not lock config file <abs path>: Permission denied"), which
   # run_sourced now surfaces — so deleting every guidance line below left this case green.
   CASES=$((CASES + 1))
-  if printf '%s' "$C12_OUT" | grep -qF 'Could not write:'; then
+  if printf '%s' "$C12_OUT" | grep -cF >/dev/null 'Could not write:'; then
     echo "  PASS: message names the file it could not write (script literal)"; PASS=$((PASS + 1))
   else
     echo "  FAIL: the script's own 'Could not write:' line is absent"; FAIL=$((FAIL + 1))
   fi
   CASES=$((CASES + 1))
-  if printf '%s' "$C12_OUT" | grep -qF 'Likely causes:'; then
+  if printf '%s' "$C12_OUT" | grep -cF >/dev/null 'Likely causes:'; then
     echo "  PASS: message names likely causes (script literal)"; PASS=$((PASS + 1))
   else
     echo "  FAIL: the script's own 'Likely causes:' line is absent"; FAIL=$((FAIL + 1))
   fi
   CASES=$((CASES + 1))
-  if printf '%s' "$C12_OUT" | grep -qF 'Next step: run  ls -ld'; then
+  if printf '%s' "$C12_OUT" | grep -cF >/dev/null 'Next step: run  ls -ld'; then
     echo "  PASS: message names one concrete next step (script literal)"; PASS=$((PASS + 1))
   else
     echo "  FAIL: the script's own 'Next step:' line is absent"; FAIL=$((FAIL + 1))
   fi
   CASES=$((CASES + 1))
-  if printf '%s' "$C12_OUT" | grep -qF "$C12_ADMIN"; then
+  if printf '%s' "$C12_OUT" | grep -cF >/dev/null "$C12_ADMIN"; then
     echo "  PASS: message names the ABSOLUTE path"; PASS=$((PASS + 1))
   else
     echo "  FAIL: message does not name the absolute unwritable path"; FAIL=$((FAIL + 1))
   fi
   # The message this replaces — do NOT fall back to it (the plan's Third defect).
   CASES=$((CASES + 1))
-  if printf '%s' "$C12_OUT" | grep -qF 'Run from an existing worktree'; then
+  if printf '%s' "$C12_OUT" | grep -cF >/dev/null 'Run from an existing worktree'; then
     echo "  FAIL: fell back to the uninformative 'Run from an existing worktree' text"; FAIL=$((FAIL + 1))
   else
     echo "  PASS: did not fall back to the uninformative bare-root text"; PASS=$((PASS + 1))
@@ -575,7 +575,7 @@ CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C14/.git/con
 # [R-arch2] The intended behaviour on this fall-through, asserted rather than implied:
 # the run reaches the normalization block, finds nothing to do, and says so.
 CASES=$((CASES + 1))
-if printf '%s' "$C14_OUT" | grep -qF 'branch=clean'; then
+if printf '%s' "$C14_OUT" | grep -cF >/dev/null 'branch=clean'; then
   echo "  PASS: falls through and reports branch=clean (nothing to heal)"; PASS=$((PASS + 1))
 else
   echo "  FAIL: expected branch=clean on the corrupted non-bare clone"
@@ -685,7 +685,7 @@ set +e
 C20_OUT="$(run_sourced "$C20/.worktrees/feat-link" 'require_working_tree && echo RWT_OK' 2>&1)"
 set -e
 CASES=$((CASES + 1))
-if printf '%s' "$C20_OUT" | grep -qF 'reason=config-worktree-symlink'; then
+if printf '%s' "$C20_OUT" | grep -cF >/dev/null 'reason=config-worktree-symlink'; then
   echo "  PASS: refused to write through the symlink (marker names the reason)"; PASS=$((PASS + 1))
 else
   echo "  FAIL: no symlink refusal — the write followed the link"
@@ -736,7 +736,7 @@ if [[ -z "$C22_BODY" ]]; then
 else
   echo "  PASS: extracted the self-heal body ($(printf '%s\n' "$C22_BODY" | wc -l) lines)"; PASS=$((PASS + 1))
   CASES=$((CASES + 1))
-  if printf '%s\n' "$C22_BODY" | grep -qE '^[[:space:]]*IS_BARE=false'; then
+  if printf '%s\n' "$C22_BODY" | grep -cE >/dev/null '^[[:space:]]*IS_BARE=false'; then
     echo "  FAIL: the self-heal assigns IS_BARE=false — a degraded re-probe then leaves it"
     echo "        false with GIT_ROOT on a real working tree, and cleanup-merged's non-bare"
     echo "        tail runs 'git reset --hard HEAD' there. Upgrade-only, like the init block."
@@ -748,7 +748,7 @@ else
   # `git -C "$common_dir" rev-parse …` and would otherwise satisfy this, which it did on
   # the first attempt — the mutation survived until the pattern excluded it.
   CASES=$((CASES + 1))
-  if printf '%s\n' "$C22_BODY" | grep -qE '\$\(git rev-parse --is-bare-repository[^)]*\)"[[:space:]]*==[[:space:]]*"true"[[:space:]]*\]\]; then'; then
+  if printf '%s\n' "$C22_BODY" | grep -cE >/dev/null '\$\(git rev-parse --is-bare-repository[^)]*\)"[[:space:]]*==[[:space:]]*"true"[[:space:]]*\]\]; then'; then
     echo "  PASS: a post-write re-probe gates the success claim"; PASS=$((PASS + 1))
   else
     echo "  FAIL: nothing re-probes before emitting branch=ok — atomic_git_config returns 0"

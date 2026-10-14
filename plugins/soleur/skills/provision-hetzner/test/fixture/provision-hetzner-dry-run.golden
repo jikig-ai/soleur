@@ -21,7 +21,7 @@ unset HCLOUD_TOKEN
   Delete sub-project via Console: Projects → tenant-fixture-tenant-prd → Delete
   Revoke the API token: Security → API Tokens → Revoke
 
-Next step: soleur:provision-github fixture-tenant <org> <reviewer>
+Next step: type /soleur:provision-cloudflare fixture-tenant <zone-id> <account-id> yourself (user-invoked; Soleur cannot run it, ADR-236)
 
 === Teardown commands (resources created during this run) ===
   (no resources were created)

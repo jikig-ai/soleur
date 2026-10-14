@@ -29,6 +29,10 @@ This was a **regression** of the 2026-05-27 community-monitor incident
 `auth-callback-no-code-burst` line in the Sentry emails was a red-herring
 alert-routing artifact (same as the prior incident).
 
+> **Corrected 2026-09-23 (#4781):** this rule really fired: all four `auth-*` rules
+> matched every issue from 2026-05-17 to 2026-06-02. See
+> `bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
+
 ## Why the prior remediation was insufficient
 
 The prior fix (issue #4533, closed COMPLETED 2026-05-27, PR #4531) shipped **only**
@@ -109,5 +113,5 @@ The operational/automation piece is shipped this cycle — NOT deferred (unlike
 
 - Runbook: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` (H9 → "Self-healing (automated)")
 - Prior incident: `knowledge-base/project/learnings/bug-fixes/2026-05-27-sentry-cron-community-monitor-missed-checkin.md`
-- Plan: `knowledge-base/project/plans/2026-05-30-fix-inngest-cron-trigger-self-heal-watchdog-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-30-fix-inngest-cron-trigger-self-heal-watchdog-plan.md`
 - Issue: #4650 · Sentry incidents 5032155, 5010688

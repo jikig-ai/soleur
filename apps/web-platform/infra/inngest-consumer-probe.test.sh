@@ -140,7 +140,7 @@ assert "second fault run within the window is RATE-LIMITED (no re-emit)" \
   "! grep -q 'UNREACHABLE' '$RL_OUT'"
 # Suppressing the line must never suppress the DECISION: the ping stays withheld either way,
 # or the rate-limit would silently convert a dark host into a green one.
-assert "rate-limited run still withholds the ping" "[[ ! -s \"\$(ls -t $TMP/rlping.* | head -1)\" ]]"
+assert "rate-limited run still withholds the ping" "[[ ! -s \"\$(ls -t $TMP/rlping.* | sed -n '1p')\" ]]"
 
 # --- BEHAVIORAL: real mock GQL server + a genuinely closed port ---------------------------
 echo "--- behavioral: real mock inngest /v0/gql + real connection-refused ---"
@@ -291,9 +291,9 @@ assert ".service sets Environment=HOME=/root (else doppler: \$HOME is not define
 assert ".service sets SyslogIdentifier=inngest-consumer-probe" \
   "grep -qE '^SyslogIdentifier=inngest-consumer-probe\$' '$SVC'"
 assert ".service does NOT set DOPPLER_CONFIG_DIR (root doppler uses /root/.doppler)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'DOPPLER_CONFIG_DIR'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c 'DOPPLER_CONFIG_DIR' >/dev/null"
 assert ".service does NOT reference /tmp/.doppler (#6536 clash surface)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q '/tmp/.doppler'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c '/tmp/.doppler' >/dev/null"
 assert "vector.toml Source 4 allowlists inngest-consumer-probe (else the WHY is SSH-only)" \
   "grep -qE '^[[:space:]]*\"inngest-consumer-probe\",' '$VECTOR_TOML'"
 assert "server.tf writes DOPPLER_TOKEN=<web_probes.key> into /etc/default/inngest-consumer-probe" \
@@ -316,11 +316,11 @@ assert "a NEW betteruptime_heartbeat resource exists for the consumer probe" \
 assert "a NEW doppler_secret resource carries its URL" \
   "grep -qE '^resource \"doppler_secret\" \"inngest_consumer_url\"' '$INNGEST_TF'"
 assert "the new heartbeat is born paused=true in source (ADR-117 arm gate owns the unpause)" \
-  "awk '/\"betteruptime_heartbeat\" \"inngest_consumer\"/,/^}/' '$INNGEST_TF' | grep -qE 'paused[[:space:]]*=[[:space:]]*true'"
+  "awk '/\"betteruptime_heartbeat\" \"inngest_consumer\"/,/^}/' '$INNGEST_TF' | grep -cE 'paused[[:space:]]*=[[:space:]]*true' >/dev/null"
 assert "the new heartbeat carries lifecycle ignore_changes=[paused] (arm must never be reverted)" \
-  "awk '/\"betteruptime_heartbeat\" \"inngest_consumer\"/,/^}/' '$INNGEST_TF' | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\\[paused\\]'"
+  "awk '/\"betteruptime_heartbeat\" \"inngest_consumer\"/,/^}/' '$INNGEST_TF' | grep -cE 'ignore_changes[[:space:]]*=[[:space:]]*\\[paused\\]' >/dev/null"
 assert "the pre-existing inngest_heartbeat_url_prd still sources the ORIGINAL heartbeat (no value repoint)" \
-  "awk '/\"doppler_secret\" \"inngest_heartbeat_url_prd\"/,/^}/' '$INNGEST_TF' | grep -qE 'value[[:space:]]*=[[:space:]]*betteruptime_heartbeat\\.inngest_prd\\.url'"
+  "awk '/\"doppler_secret\" \"inngest_heartbeat_url_prd\"/,/^}/' '$INNGEST_TF' | grep -cE 'value[[:space:]]*=[[:space:]]*betteruptime_heartbeat\\.inngest_prd\\.url' >/dev/null"
 
 echo
 echo "=== $PASS passed, $FAIL failed ==="

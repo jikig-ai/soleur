@@ -9,6 +9,7 @@
  */
 
 import type { Harness } from "./harness";
+import { cursorSkillSlash } from "../scripts/sync-cursor-name-map";
 
 /** Skills that own a multi-phase pipeline — must be invoked, never inlined. */
 export const PIPELINE_SKILLS = [
@@ -93,6 +94,8 @@ export const GO_SKILL_ROUTES: Record<string, string> = {
   "drain-prs": "drain-prs",
   review: "review",
   incident: "incident",
+  questionnaire: "questionnaire-generate",
+  glossary: "kb-glossary",
   default: "brainstorm",
 };
 
@@ -129,8 +132,9 @@ export function mandatorySuccessors(skill: string): readonly string[] {
 }
 
 /**
- * The operator-typed / adapter-rendered form of one skill on one harness — the same four
- * branches as `formatSkillInvocation` in harness.ts. Docs name skills as `soleur:<name>` and
+ * The operator-typed / adapter-rendered form of one skill on one harness. The cursor
+ * arm is `formatSkillRef`-only until `detectHarness` returns `cursor`. `formatSkillInvocation`
+ * does not share that arm in slice 1. Docs name skills as `soleur:<name>` and
  * leave THIS to the adapter (ADR-226); every fidelity string below goes through it so no
  * harness receives another harness's form (arch F3, #8299).
  */
@@ -142,6 +146,8 @@ export function formatSkillRef(skill: string, harness: Harness): string {
       return `/${skill}`;
     case "devin":
       return `/soleur:${skill}`;
+    case "cursor":
+      return cursorSkillSlash(skill);
     default:
       return `soleur:${skill}`;
   }
@@ -158,10 +164,13 @@ export function formatSkillRef(skill: string, harness: Harness): string {
  * Putting `plan` into `work`'s successors to express the `work -> plan` back-edge
  * would instruct the model to re-enter planning after EVERY work run.
  *
- * The three back-edges are operator-approved (#8302): `review -> work` (review
- * produced findings that need implementing), `ship -> work` (postmerge failed),
- * and `work -> plan` (implementation invalidated the plan). `postmerge -> work`
- * was considered and REJECTED as redundant with `ship -> work`.
+ * The four back-edges are operator-approved: `review -> work` (review produced
+ * findings that need implementing), `ship -> work` (a pre-merge gate —
+ * preflight/QA — failed), `postmerge -> work` (post-merge verification failed;
+ * declared 2026-09-19 on #8325 — 7 sessions took it, 5 re-entered
+ * `work -> review -> compound -> ship -> postmerge` in full, 2 ended at `work`,
+ * none skipped `ship`) and `work -> plan` (implementation invalidated the
+ * plan). The first, second and fourth were approved on #8302.
  *
  * `plan -> ship` is deliberately ABSENT. It is the path that lets a session skip
  * `review` entirely, which surfaces only after merge — the operator-facing loss
@@ -184,7 +193,58 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
   review: ["compound", "work"],
   compound: ["ship"],
   ship: ["postmerge", "work"],
-  postmerge: [],
+  postmerge: ["work"],
+};
+
+/**
+ * Node skills that another node's SKILL.md invokes as a designed SUB-STEP of
+ * its own run, keyed by the invoking node. Each entry names the section that
+ * makes the call (pinned per entry by the anchor test in workflow-fidelity.test.ts):
+ *   - brainstorm: runs `compound` to capture learnings, then hands off to
+ *     `plan`, so the log shows `brainstorm compound plan` for the handoff.
+ *   - plan: §Exit Gate step 1 runs `compound` (direct invocation only; in a
+ *     pipeline the gate is skipped and the entry is simply unused — sound
+ *     either way, since `plan -> work` is the only pair it can declare).
+ *   - postmerge: §Phase 6 (Update Issue and Compound) runs `compound`.
+ *   - ship: §Phase 2 (Capture Learnings) runs `compound` inside ship.
+ *     §Phase 1.5 (Review Evidence Gate: the missing-evidence option and the
+ *     `sequential-fallback` re-run) and §Phase 5.5 (Pre-Ship Review Gates ->
+ *     Code Review Completion Gate) run `review` inside ship. These are
+ *     interactive arms only; headless aborts instead (PR #8627). The log
+ *     records starts only, so the classifier collapses ANY review whose
+ *     previous kept node is ship, whatever invoked it; see ADR-229's
+ *     2026-09-23 re-baseline for what that masks.
+ * The classifier drops a record whose skill is a sub-step of the PREVIOUS KEPT
+ * node before pairing, so `plan compound work` pairs as `plan -> work`. This is
+ * NOT an edge: no `K -> compound` edge is declared for any key K, and because
+ * the collapse joins K to its NEXT node, `plan compound ship` surfaces as the
+ * review skip `plan -> ship` instead of hiding behind the declared
+ * `compound -> ship` (#8399). `review: ["compound"]` is the entry the rules
+ * below forbid: `compound` is a declared successor of `review`, so the collapse
+ * would turn `review compound work` into the declared `review -> work`.
+ * Mirrored in .claude/workflow-transitions.json under `sub_steps`
+ * (parity-pinned). See ADR-229 (amended 2026-09-21, #8399; 2026-09-23, PR #8627).
+ *
+ * To add an entry: the key and every value must be DECLARED_TRANSITIONS nodes
+ * (a non-node is removed by the classifier's node filter first, so the entry
+ * would be dead); a value must not be a declared successor of its key (the
+ * collapse would silently delete a declared pair from `pairs`). An entry also
+ * hands the value's outgoing edges to the key: any successor of the key that is
+ * not a successor of the value becomes a declared pair after the collapse, so
+ * measure which pairs vanish before adding one. Edit this const first, then
+ * mirror it in the JSON view (and its `_comment` amendment list), then update in
+ * the same PR: the exact-set pin, the `ANCHORS` heading list and its heading
+ * total in workflow-fidelity.test.ts (a new KEY also moves the view key-set pin
+ * there and `LOOP_KEYS` in the classifier suite), a case in
+ * scripts/classify-workflow-transitions.test.sh (plus its `MIN_CASES` floor),
+ * and ADR-229's Status line, a re-baseline bullet and its Verification counts.
+ * Run `bun test plugins/soleur/test/workflow-fidelity.test.ts`.
+ */
+export const DECLARED_SUB_STEPS: Readonly<Record<string, readonly string[]>> = {
+  brainstorm: ["compound"],
+  plan: ["compound"],
+  postmerge: ["compound"],
+  ship: ["compound", "review"],
 };
 
 /** Edges declared FROM `skill`. Unknown nodes declare nothing. */
@@ -206,6 +266,15 @@ function formatSkillList(skills: readonly string[], harness: Harness): string {
  * Cite in go.md Step 2.1 (`<!-- workflow-fidelity:block:go-post-route:start -->`).
  */
 export function workflowFidelityInstructions(harness: Harness): string {
+  if (harness === "cursor") {
+    return [
+      "**Workflow fidelity (Cursor CLI)**",
+      "- Read the canonical file the stub names, relative to the plugin root, and follow that file.",
+      `- \`${formatSkillRef("go", harness)}\` and \`${formatSkillRef("sync", harness)}\` stay bare. Every other name is prefixed, including \`${formatSkillRef("plan", harness)}\`, \`${formatSkillRef("help", harness)}\`, and \`${formatSkillRef("review", harness)}\`.`,
+      "- Slice 1 does not run hooks and does not classify the session as cursor.",
+    ].join("\n");
+  }
+
   const invokeSurface =
     harness === "codex"
       ? "skill loading (skills.read when available; otherwise read the installed SKILL.md and execute its full workflow)"

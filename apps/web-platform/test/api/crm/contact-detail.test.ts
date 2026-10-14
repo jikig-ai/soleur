@@ -23,7 +23,11 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
-vi.mock("@sentry/nextjs", () => ({ captureException: mockCaptureException }));
+// verifiedUserId breadcrumbs on the absent-header fallback path.
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mockCaptureException,
+  addBreadcrumb: vi.fn(),
+}));
 
 import { GET } from "@/app/api/crm/contacts/[id]/route";
 

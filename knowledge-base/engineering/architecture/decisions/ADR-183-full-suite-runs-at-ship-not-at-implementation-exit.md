@@ -3,6 +3,8 @@ title: The full suite runs at ship, not at the implementation exit
 status: active
 date: 2026-08-12
 related_adrs: [ADR-133, ADR-177, ADR-181]
+amended_by:
+  - "ADR-262 (2026-09-30, #9323) — CI's required `test` context no longer runs five self-test mutation batteries on a pull_request event when the diff misses their subject paths; see ## Amendment — 2026-09-30"
 ---
 
 # ADR-183: The full suite runs at ship, not at the implementation exit
@@ -50,7 +52,13 @@ first and cut: it has none of those, and it has an **empty-derived-set** state t
 
 ### The two ceilings
 
-1. **`/ship` Phase 4 stays `TEST_GROUP=all`.** This is the load-bearing constraint of the whole
+1. **`/ship` Phase 4 stays `TEST_GROUP=all`.** *(Amended 2026-09-18, ADR-242/#8322: Phase 4's
+   default dispatch is now `test-all.sh --affected` behind `battery-owed.sh`; `--full` is the
+   explicit operator opt-in and outranks even a SKIPPABLE verdict. The infra-coverage rationale
+   below survives the mode change — under `--affected` the infra runner is selected by its declared
+   consumed edge whenever the diff touches `apps/web-platform/infra/`, and `fullsuite-merge-gate`
+   re-pins the command as "unsharded, with an explicit mode flag".)*
+   This is the load-bearing constraint of the whole
    change. Sharding it for speed would delete the only BLOCKING gate the registered
    `apps/web-platform/infra/` suites have, because **no required status check runs that shard**.
    They are not unrun: `infra-validation.yml`'s `deploy-script-tests` executes the same registered
@@ -140,3 +148,12 @@ change inside workflow prose. Tracked separately.
 - ADR-177 — the UNRESOLVED (`rc=3`) taxonomy the reaped-run rule depends on
 - ADR-181 — relevance-gated suites and counted declines, which reduces the cost of each run where
   this ADR reduces the number of runs
+
+## Amendment — 2026-09-30 (#9323, ADR-262)
+
+This record's "no local run is the merge gate" still holds and is not what changed. What changed is the CI
+side of the same sentence: the required `test` context aggregates a sharded full battery on the PR head,
+**except** that five self-test mutation batteries decline on a `pull_request` event when the diff touches none
+of their declared subject paths (ADR-262). A break that slips past that declaration is caught by the
+per-SHA `push` run on `main` and the 6-hourly monitor rather than by the PR, which is the residual ADR-262
+names. Anything above that reads "CI runs the full battery on the PR head" should be read with that exception.

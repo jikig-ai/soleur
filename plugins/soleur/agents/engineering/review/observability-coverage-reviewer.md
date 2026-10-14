@@ -81,6 +81,8 @@ For each server-side **or layer-7 `plugins/`** `.ts` file added or modified, gre
 
 Any other shape = **P1 finding**.
 
+**Tag-filtered alerts need the message path.** When a `sentry_alert` filters on the `feature`/`op` tags of a `reportSilentFallback` event, that call must pass `err = null`. With an `Error`, the pino mirror captures it first and the tagged capture is deduplicated away, so the rule never matches (#8629). For any "X pages" claim in the diff, also check that the rule exists and routes to a person. **Why:** #8505: a probe documented as paging emitted untagged events to a monitor that routes to no one.
+
 ### Step 4: Inngest-middleware-coverage check
 
 Verify every new Inngest function file under `server/inngest/functions/` is registered in `app/api/inngest/route.ts`. The middleware applies automatically via `server/inngest/client.ts` — but a function not registered in route.ts is silently invisible (no run-id tags, no breadcrumbs, no error capture). Unregistered new function = **P0 finding**.
@@ -126,7 +128,9 @@ In each plan's `## Observability` block, the `discoverability_test.command` fiel
 
 Preflight Check 10 **executes** this command inside a sandbox behind a deny-by-default verb allowlist, so also verify it can actually run. Acceptable shapes are the allowlisted verbs — `curl …`, `grep …`, `rg …`, `jq …`, `printf …`, `git …`, `bash <repo-relative-script> …`, `python3 …`, `node …`, `bun …` — **plus** any other shape (`gh api …`, `doppler secrets get …`, `docker …`, `npm …`, and every other non-allowlisted verb) *only when* the block carries a non-placeholder `credentials_required` declaration naming the credential scope and stating why no unauthenticated probe verifies the same property. Note there is **no path-shaped exemption**: `./doppler …` and `gh/Sentry …` are rejected exactly like a bare `doppler`. Without a declaration, a non-allowlisted command is a **P1**
 
-Treat `credentials_required` as a **verification waiver**, and review it as one. It is the cheapest path to a non-FAIL for any probe, for any reason, and in `/soleur:one-shot` the same agent authors the declaration and runs the gate. Accept it only where the property genuinely has no unauthenticated substitute; where an unauthenticated probe would verify the same property, a declaration that swaps live verification for prose is a **P1 finding**. Canonical gate: `plugins/soleur/skills/preflight/SKILL.md` §Check 10 Step 10.4 (ADR-175).
+Two further shapes are **P1** on a block this PR authors or amends (#8412; a non-placeholder `credentials_required` short-circuits both, since Check 10 row 4 `SKIP-DECLARED` precedes rows 9 and 11). First, a `command` that cannot finish inside Check 10's **15-second cap** — a whole test suite or full build is killed at `rc=124` and reported as a FAILED probe, indistinguishable from the endpoint being down; wrapping it in a repo-relative script satisfies the verb allowlist and not the cap. Second, an `expected_output` that is PROSE (or absent) rather than the literal string(s) the command prints: Check 10 asks whether any token of `expected_output` is a substring of stdout, so a sentence cannot be relied on to match and the probe FAILs on a healthy system. Canonical statement: `plugins/soleur/skills/plan/SKILL.md` Phase 2.9 **Reject conditions**.
+
+Treat `credentials_required` as a **verification waiver**, and review it as one. It is the cheapest path to a non-FAIL for any probe, for any reason, and in `soleur:one-shot` the same agent authors the declaration and runs the gate. Accept it only where the property genuinely has no unauthenticated substitute; where an unauthenticated probe would verify the same property, a declaration that swaps live verification for prose is a **P1 finding**. Canonical gate: `plugins/soleur/skills/preflight/SKILL.md` §Check 10 Step 10.4 (ADR-175).
 
 ### Step 7: Report
 
@@ -139,5 +143,5 @@ Only report findings you are >70% confident in. Drop signals where the rule clea
 ## What you DO NOT do
 
 - You don't review code style, simplicity, or architecture — those belong to other reviewer agents.
-- You don't review security findings — `security-sentinel` covers those.
+- You don't review security findings — `soleur:engineering:review:security-sentinel` covers those.
 - You don't audit existing observability surfaces beyond the diff — only new/modified content is in scope.

@@ -23,8 +23,16 @@
 #   anything — run this script.
 #
 # Modes:
-#   (default)               dry-run: GET-only inventory, prints matches
-#   --apply                 rewrite: replace `extra.text` -> `extra.shape`
+#   (default)               dry-run: GET-only inventory, prints matches.
+#                           Agent-runnable (no TTY needed, zero writes).
+#   --apply                 rewrite: replace `extra.text` -> `extra.shape`.
+#                           PRODUCTION WRITE: run it in your OWN terminal. After
+#                           the inventory and before the first PUT it asks for a
+#                           typed yes (operator-script class-2 ack, no skip
+#                           variable, no flag); with no TTY it exits 64 with
+#                           SOLEUR_BOOTSTRAP_INPUT_REQUIRED before any network
+#                           call (#8486, ADR-249). The token is already in the
+#                           caller's environment by then (doppler run -- …).
 #   --apply --add-or-clause rewrite: wrap in `(extra.text:* OR extra.shape:*)`
 #                             — query strings only; fields[] always replaces.
 #   --help                  usage
@@ -59,6 +67,21 @@ case "$-" in
 esac
 set -euo pipefail
 
+# Human-presence gate (#8486, ADR-249). The first apps/ -> plugin-internals
+# dependency: this script sources the operator-script library for its class-2
+# ack. Sourcing it also sets umask 077 (this script writes only mktemp files).
+# Clear anything an inherited environment could use to pre-empt the library's
+# double-source guard or to stand in for its ack first.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+unset _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED
+unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted
+# shellcheck source=../../../plugins/soleur/scripts/lib/operator-script.sh
+source "$SCRIPT_DIR/../../../plugins/soleur/scripts/lib/operator-script.sh"
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
+
 # --- Argument parsing ----------------------------------------------------
 APPLY=0
 ADD_OR_CLAUSE=0
@@ -87,6 +110,9 @@ Environment:
 Exit codes:
   0  zero matches (or all rewrites verified)
   1  env / dependency / API / verification failure
+      (also: --apply answered with anything but yes at the prompt)
+  64 --apply with no TTY on stdin (SOLEUR_BOOTSTRAP_INPUT_REQUIRED); run it
+      in your own terminal
 USAGE
 }
 
@@ -105,6 +131,9 @@ if (( ADD_OR_CLAUSE && ! APPLY )); then
   exit 1
 fi
 
+# --- no TTY, no write: refuse before any network call ---------------------
+if (( APPLY )); then [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack; fi
+
 # --- Required env --------------------------------------------------------
 # Token resolution: prefer SENTRY_API_TOKEN (typically a `sntryu_` user-auth
 # token with org:read scope) over SENTRY_AUTH_TOKEN (often a narrower
@@ -118,6 +147,36 @@ fi
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set (or set SENTRY_API_TOKEN)}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
 : "${SENTRY_PROJECT:?SENTRY_PROJECT must be set}"
+
+# Destination pins: the bearer travels to https://<host>/api/0/.../<org>/<project>/ and the org
+# and project are env-derived, so an override must not redirect the credential. Refuse anything
+# but the live org/project (infra/sentry/variables.tf defaults; `jikigai` is the pre-DE slug
+# the sibling configure-sentry-alerts.sh also accepts). Exit 1 keeps the documented
+# env-failure contract.
+case "$SENTRY_ORG" in
+  jikigai|jikigai-eu) ;;
+  *) echo "ERROR: refusing org (expected jikigai-eu)" >&2; exit 1 ;;
+esac
+case "$SENTRY_PROJECT" in
+  web-platform|soleur-web-platform) ;;
+  *) echo "ERROR: refusing project (expected web-platform)" >&2; exit 1 ;;
+esac
+
+# One wrapper owns the transport flags, the token-shape guard and the bearer header, so the
+# credential travels on curl's stdin config channel and never on its argument list
+# (/proc/<pid>/cmdline, ps, a traced parent). A newline in the token would inject a curl config
+# directive and an empty one would send the request headerless, so it is refused before any
+# curl runs; the value is never echoed.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$SENTRY_AUTH_TOKEN"; then
+  echo "ERROR: SENTRY_AUTH_TOKEN has an unexpected shape" >&2
+  exit 1
+fi
+sentry_curl() {
+  _bearer_ok "${SENTRY_AUTH_TOKEN:-}" || { echo "sentry_curl: SENTRY_AUTH_TOKEN unusable" >&2; return 1; }
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN")
+}
 
 # --- jq dependency -------------------------------------------------------
 command -v jq >/dev/null 2>&1 || {
@@ -140,8 +199,8 @@ api_host=""
 probe_resp=""
 for candidate in sentry.io de.sentry.io; do
   resp_file=$(mktemp)
-  http=$(curl -s --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  case "$candidate" in sentry.io|de.sentry.io) ;; *) continue ;; esac
+  http=$(sentry_curl -s --max-time 10 \
     -o "$resp_file" -w '%{http_code}' \
     "https://${candidate}/api/0/organizations/${SENTRY_ORG}/")
   if [[ "$http" == "200" ]]; then
@@ -164,6 +223,13 @@ if [[ -z "$api_host" ]]; then
   echo "  re-run with: SENTRY_AUTH_TOKEN=\"\$SENTRY_API_TOKEN\" $0 $*" >&2
   exit 1
 fi
+
+# api_host is derived from the response body (links.regionUrl), so pin it to Sentry's own
+# data-plane hosts before the bearer is sent there again (auth_get / auth_put).
+case "$api_host" in
+  sentry.io|us.sentry.io|de.sentry.io|eu.sentry.io|jikigai-eu.sentry.io|jikigai.sentry.io) ;;
+  *) echo "ERROR: refusing api host (expected a sentry.io data-plane host)" >&2; exit 1 ;;
+esac
 
 mode_label="dry-run"
 if (( APPLY && ADD_OR_CLAUSE )); then
@@ -196,13 +262,11 @@ auth_get() {
   local resp_file
   resp_file=$(mktemp)
   trap 'rm -f "$resp_file"' RETURN
-  http=$(curl -s --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  http=$(sentry_curl -s --max-time 10 \
     -o "$resp_file" -w '%{http_code}' "$url")
   if [[ "$http" == "429" ]]; then
     sleep 5
-    http=$(curl -s --max-time 10 \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    http=$(sentry_curl -s --max-time 10 \
       -o "$resp_file" -w '%{http_code}' "$url")
   fi
   if [[ "$http" == "404" && "$allow_404_empty" == "1" ]]; then
@@ -231,8 +295,7 @@ auth_put() {
   local resp_file
   resp_file=$(mktemp)
   trap 'rm -f "$resp_file"' RETURN
-  http=$(curl -s --max-time 10 -X PUT \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  http=$(sentry_curl -s --max-time 10 -X PUT \
     -H "Content-Type: application/json" \
     -o "$resp_file" -w '%{http_code}' \
     "$url" -d "$payload")
@@ -625,6 +688,7 @@ inventory_all
 
 if (( APPLY && total_matches > 0 )); then
   echo
+  soleur_op_ack_or_die "Rewrite ${total_matches} Sentry references in production now? Type yes: "
   echo "[info] Applying rewrites..."
   rewrite_alert_rules
   rewrite_saved_searches
@@ -637,7 +701,7 @@ if (( APPLY && total_matches > 0 )); then
   # explicit zero-match message) instead of relying on the variable.
   total_matches=0
   remaining=$(inventory_all 2>&1 || true)
-  if printf '%s\n' "$remaining" | grep -q '^No matches found\.'; then
+  if grep -q '^No matches found\.' <<<"$remaining"; then
     remaining_count=0
   else
     remaining_count=$(

@@ -23,6 +23,13 @@ claude plugin install soleur@soleur-marketplace
 
 ## The Soleur Workflow
 
+**Local data the plugin writes:** one metadata-only line per `/soleur:go` routing
+decision into `.soleur/decisions.jsonl` at your project root (event names,
+skill/agent labels, timestamps — never prompt text, args, or file paths; the
+directory self-ignores in git and nothing leaves your machine). Opt out with
+`SOLEUR_DISABLE_DECISION_LOG=1`. See
+[ADR-254](../../knowledge-base/engineering/architecture/decisions/ADR-254-tester-owned-local-decision-log.md).
+
 **Codex:** install with `codex plugin marketplace add jikig-ai/soleur --sparse .agents/plugins --sparse plugins/soleur`,
 then `codex plugin add soleur@soleur`. Start a new session, review `/hooks`,
 and use `$soleur:go <intent>`. Codex shares the same skills and agent
@@ -51,6 +58,7 @@ Claude Code: `/soleur:go`. Grok Build: `/go`.
 | Entry | `/soleur:go` | `/go` |
 | Sync | `/soleur:sync` | `/sync` |
 | Help | `/soleur:help` | `/help` |
+| Version | `/soleur:version` (Claude Code only) | not available |
 | Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
 
 The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build):
@@ -73,9 +81,9 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 
 | Component | Count |
 |-----------|-------|
-| Agents | 68 |
-| Commands | 3 |
-| Skills | 100 |
+| Agents | 67 |
+| Commands | 4 |
+| Skills | 103 |
 | MCP Servers | 5 |
 
 ## Agents
@@ -180,7 +188,7 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `pr-comment-resolver` | Address PR comments and implement fixes |
 
-### Operations (6)
+### Operations (5)
 
 | Agent | Description |
 |-------|-------------|
@@ -230,6 +238,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `/soleur:go` | Unified entry point -- classifies intent and routes to the right workflow skill |
 | `/soleur:sync` | Analyze codebase and populate knowledge-base with conventions, patterns, and overview documentation |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
+| `/soleur:version` | Show the installed plugin version and whether a newer release exists |
 
 ## Skills
 
@@ -299,6 +308,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
 | `archive-kb` | Archive knowledge-base artifacts with timestamped prefixes |
 | `cf-token-scope` | Widen a Cloudflare API token's scope via Playwright, then run the ADR-130 retained-scope probe set |
+| `cohort-status` | Print the alpha-tester cohort table: tally, checkpoint state, quiet flags (pull-based, operator-invoked) |
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 | `git-worktree` | Manage Git worktrees for parallel development |
 | `invoice` | Get paid via your own Stripe account: list who owes you, create/send behind an approval preview, chase overdue (test mode only in v1) |
@@ -455,6 +465,52 @@ check regardless of how you installed.
 
 </details>
 
+## Version Visibility
+
+`/soleur:help` prints the installed version in its header. On Claude Code, `/soleur:version` prints
+the installed version, the latest release, whether a newer one exists, and the update commands. A
+marketplace install is identified by its 12-character commit hash (the published manifest carries
+no `version` key by design), so today you see `Soleur commit <sha12>` rather than a semver; the
+banner shows `Soleur v<X.Y.Z>` only for an install whose manifest does carry a version. A plugin run in
+place from a local git checkout (a local-folder marketplace, or `--plugin-dir`) shows `Soleur commit
+<sha12> (local checkout)`: that is the HEAD commit of the git checkout that contains the plugin folder,
+read from its files without running git, not its uncommitted or unsynced files (a plugin folder vendored
+inside another project's repository shows that project's HEAD); `/soleur:version` prints the update steps
+for it.
+
+**Session-start banner (on by default, no network).** Every session start shows one line, `Soleur
+commit <sha12>` (or `Soleur v<X.Y.Z>`), read from the local install. It makes no network call.
+`SOLEUR_DISABLE_VERSION_BANNER=1` turns the banner off.
+
+**Opt-in newer-release check.** Only the check for a newer release is off by default. To add it to
+the session-start banner, set `SOLEUR_UPDATE_CHECK=1` (exactly `1`) in your **user-level** Claude
+Code settings (`~/.claude/settings.json`), not in a checked-in project `.claude/settings.json`:
+
+```json
+{
+  "env": { "SOLEUR_UPDATE_CHECK": "1" }
+}
+```
+
+Remove the key to turn the check off. Do not enable it in CI or ephemeral containers: the lookup
+uses unauthenticated GitHub requests, which GitHub limits to 60 per hour per IP address. A lookup
+runs `git ls-remote --tags` against github.com/jikig-ai/soleur and, for a commit-hash or local-checkout install
+only, one unauthenticated GitHub compare API request whose URL includes the installed commit hash (for a
+local checkout, its current commit, which may be one you have never pushed). It runs
+with git configuration isolated (no user git config, no ssh, no credentials of its own, https only; a
+proxy configured in your environment is still used) and each
+request is time-limited (8 seconds by default, `SOLEUR_FETCH_TIMEOUT` to change). While lookups keep
+failing, the check retries at most once every 10 minutes.
+
+The result is cached in one file per install, `${XDG_CACHE_HOME:-~/.cache}/soleur/latest-release.<install id>`
+(a relative `XDG_CACHE_HOME` is ignored; every commit of a local checkout shares `latest-release.checkout`). A cached result is treated as fresh for 24 hours and
+re-checked after that; the file stays on disk until it is replaced or deleted.
+
+`/soleur:version` is an explicit, user-started request (the model cannot start it) and runs the same
+lookup even if you did not opt in. "No release newer than yours" means only that no release tag newer
+than your install was found, not that nothing else has changed. The lookup is implemented in
+`plugins/soleur/scripts/plugin-version.sh`, shared by the hook, `/soleur:version` and `/soleur:help`.
+
 ## Compaction-Aware Session Hooks
 
 When a session's context is compacted, Soleur injects a short directive telling
@@ -496,6 +552,8 @@ unconditionally.
 | `SOLEUR_COMPACTION_COUNT_THRESHOLD` | `2` | Automatic compactions in one session window before a fresh session is recommended. `1` recommends on the first; a high value effectively never recommends. `0` and any non-numeric value fall back to the default — `0` reads as "off" to most people, and honouring it literally would mean "recommend always", so use the kill switch above instead |
 | `SOLEUR_COMPACTION_CLI_VERSION` | derived from `claude --version` | Pins the CLI version stamped into the directive, for drift attribution |
 
+`SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1` makes the `unkept-promise-hook.sh` Stop hook exit immediately. The web platform sets it for every agent session (`AGENT_ENV_OVERRIDES` in `apps/web-platform/server/agent-env.ts`) because that hook's block turn would replace the chat reply and its closing-text rules are operator-CLI workflow; an operator can export it as a kill switch. Only the exact value `1` opts out.
+
 ### Harness support
 
 The compaction lifecycle is a Claude Code API. The other three harnesses
@@ -507,6 +565,34 @@ degrade to **silence**, never to a false claim that the behaviour is present.
 | Codex | No | The skill-prose fallback: the end-of-work resume prompt still fires, with no `/clear` recommendation |
 | Devin Cloud | No | Same as Codex. Plugin hooks do not fire in cloud sessions at all — see `devin/INSTRUCTIONS.md` §Cloud Mode |
 | Grok Build | No | Same as Codex |
+
+## Destructive-Command Guard
+
+`plugins/soleur/hooks/destructive-command-guard.sh` is a `PreToolUse` hook on the Bash tool. It asks you before
+`terraform|tofu destroy` or `apply -destroy`, a force-push or deletion of a default branch, and a recursive delete of
+the working directory or one of its ancestors. It denies a recursive delete of `/`, your home directory or an
+ancestor of it.
+
+The guard does not cover a plain `terraform apply`, secret writes, SQL, non-Bash tools, `terragrunt` or `pulumi` destroy, or indirect command forms (scripts or heredocs fed to a shell, wrappers it does not unwrap, obfuscated command names), and is not a substitute for scoped credentials.
+
+Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the workspace's approval mode, and in the default autonomous mode (after the owner's one-time acknowledgement) commands outside a short blocklist run without a prompt, apart from a separate Soleur check that pauses to ask before the default-branch force-push, delete and mirror, `terraform destroy` and `gh` ref or repository delete forms it recognises (it does not recognise every spelling); this guard does not add a prompt.
+
+It is a seatbelt, not a boundary: an agent that can edit your settings can switch it off.
+
+The guard also asks, rather than allows, when it cannot read a command it was given: an oversized or unparsable command, a path, command name or option longer than 4096 bytes, `env -S`, or wrappers nested more than eight deep (the last two only on a command the guard parses in full, which any command that spells `rm`, `destroy` or `push`, or uses a quote or `$`, is). You may meet such an ask on a command that is not destructive.
+
+`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off. Set it in your own shell before you start the session; the
+harness reads it at startup, so a running session needs a restart. Any other value, including `0` and empty, leaves
+the guard on.
+
+It needs `bash`, `jq`, `perl` and `git`. Without `jq` or `perl` it scans with a narrower set of patterns and prints a
+notice on stderr, which a person may never see, and a command that scan misses runs without a prompt. That scan cannot see the branch or the quoting, so it also asks on a force push to any branch (a routine `git push --force-with-lease` of a feature branch) and on text that only names a destroy, such as a commit message. It also needs `/dev/fd`
+(standard on Linux and macOS); in a minimal sandbox without it the guard asks with a "could not parse" reason instead of denying.
+
+Headless and CI: under `claude -p` an ask blocks the call and the agent is told why (measured on Claude Code 2.1.291). There is
+no per-rule allow, and the kill switch is all-or-nothing and is read when the process starts. Soleur's own server-side scheduled
+agents that load this plugin outside the hosted session environment are covered by the guard too, and an ask there blocks the
+same way (ADR-277).
 
 ## Known Issues
 

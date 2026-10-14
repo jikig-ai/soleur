@@ -114,7 +114,7 @@ n=$("$GUARD" --register "$reg_mixed" count-signed)
 
 # The old predicate's exact failure. Pinning it keeps a revert visibly red rather than
 # silently green.
-if "$GUARD" --register "$reg_signed" count-signed | grep -qx '0'; then
+if "$GUARD" --register "$reg_signed" count-signed | grep -cx >/dev/null '0'; then
   fail "A1 regression: the guard reports 0 against a planted signed row (the #7349 defect)"
 else
   pass "A1 regression: a planted signed row is never reported as 0"

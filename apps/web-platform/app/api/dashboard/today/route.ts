@@ -33,6 +33,7 @@
 
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { verifiedUserId } from "@/server/request-auth";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
@@ -118,13 +119,15 @@ function rank(a: TodayItem, b: TodayItem): number {
 
 const TODAY_ITEM_CAP = 7;
 
-export async function GET(_req: Request) {
-  const supabase = await createClient();
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !auth?.user) {
+export async function GET(req: Request) {
+  // Middleware-verified identity (x-soleur-auth-user-id) replaces the
+  // getUser() RTT; absent header falls back to getUser() — fail-closed.
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const userId = auth.user.id;
+  // Own client retained for the workspace resolution + messages queries.
+  const supabase = await createClient();
 
   // Resolve the caller's ACTIVE workspace (claim → solo fallback, never a
   // sibling). Drives the workspace_id filter below so cards pinned to one of

@@ -1,0 +1,6 @@
+from tempfile import mkstemp
+
+
+def stage(payload):
+    fd, path = mkstemp(suffix=".json")
+    return fd, path

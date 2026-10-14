@@ -257,9 +257,9 @@ if [[ "$STAGE" == "pre-cutover" ]]; then
 
     # --- 4. BOTH hosts are in scope --------------------------------------------------
     # www alone leaves the apex on the zone default; apex alone leaves www there.
-    rc=1; printf '%s' "$m_expr" | grep -qF 'soleur.ai' && rc=0
+    rc=1; printf '%s' "$m_expr" | grep -cF 'soleur.ai' >/dev/null && rc=0
     verdict "$rc" "the mitigation expression covers the apex soleur.ai"
-    rc=1; printf '%s' "$m_expr" | grep -qF 'www.soleur.ai' && rc=0
+    rc=1; printf '%s' "$m_expr" | grep -cF 'www.soleur.ai' >/dev/null && rc=0
     verdict "$rc" "the mitigation expression covers www.soleur.ai"
 
     # --- 5. EXACTLY ONE ssl rule targets these hosts ---------------------------------

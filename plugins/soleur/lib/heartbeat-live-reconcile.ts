@@ -284,16 +284,36 @@ export interface DiscoveredLogsAlert {
   /** The `name = "..."` attribute — how the Telemetry API keys the alert. */
   liveName: string;
   /**
-   * Whether the resource declares `paused = false` LITERALLY.
+   * Whether the resource's declared `paused` RESOLVES to false — i.e. the source intent is "armed",
+   * so a live pause is drift worth reporting.
    *
-   * The reconciler's premise used to be "every declared alert writes `paused = false` as intent, so
-   * a live pause is always a vendor-side rejection or a hand pause". #6894 broke that premise: the
-   * wrong-volume alert ships `paused = !var.inngest_luks_cutover_complete` because before the
-   * cutover the condition it watches is the CORRECT state, so an armed rule would page continuously
-   * and get muted before it ever mattered. A variable-driven pause is intent, not drift — and
-   * reporting it twice a day would be a false page for the whole window between merge and cutover.
+   * True for a literal `paused = false`, for an absent `paused` (the provider default is unpaused,
+   * which is the same intent), and — since #8296 — for a `var`-driven expression whose variable
+   * default is a known boolean that resolves the expression to false.
+   *
+   * The reconciler's original premise was "every declared alert writes `paused = false` as intent".
+   * #6894 broke it: the wrong-volume alert ships `paused = !var.inngest_luks_cutover_complete`
+   * because before the cutover the condition it watches is the CORRECT state, so an armed rule
+   * would page continuously and get muted before it ever mattered. That was handled by treating
+   * EVERY expression as intent-to-pause, which exempted the alert from drift reporting
+   * permanently — including after the cutover armed it, when a live pause is exactly the silent
+   * failure the arm exists to surface.
+   *
+   * Resolving the expression removes the exemption without removing the variable. An unresolved
+   * variable, a non-boolean default, or an expression shape `resolvePausedIntent` does not
+   * understand stays EXEMPT (this field reads false and nothing is reported). Note the polarity:
+   * this file's header calls "throw `UnresolvableDeclaration`" fail-closed, and the monitor arm
+   * does exactly that for a non-literal `paused`; this arm deliberately does the QUIET thing
+   * instead, because reporting a pause we cannot prove is unintended is a false page. Quiet is
+   * not free — it collapses "could not resolve" into "nothing to report" — and the trade is
+   * recorded here rather than hidden behind the word "closed".
+   *
+   * Resolved from the SOURCE default only. A `TF_VAR_*` override in Doppler (the apply reads
+   * `soleur/prd_terraform`) is invisible here, so an override that PAUSES an alert whose default
+   * arms it will be reported as `logs-alert-paused`. That is intended: it is the only detector a
+   * forgotten override has. The triage text in scheduled-terraform-drift.yml names the check.
    */
-  pausedIsLiteralFalse: boolean;
+  pausedResolvesFalse: boolean;
 }
 
 /** One alert as reported by `GET telemetry.betterstack.com/api/v2/alerts` (`data[].attributes`). */
@@ -671,6 +691,12 @@ export function listTfFiles(infraDir: string): string[] {
     if (f === "override.tf" || f.endsWith("_override.tf") || f.endsWith(".tf.json")) {
       throw new UnresolvableDeclaration(f, "override and JSON configuration files are unsupported");
     }
+    // A tfvars file is a value source the apply WOULD read and this resolver does not model; since
+    // #8296 a var-driven `paused` is resolved from declared defaults, so a silently-ignored tfvars
+    // could invert that verdict in either direction. Refuse rather than resolve past it.
+    if (f === "terraform.tfvars" || f === "terraform.tfvars.json" || f.endsWith(".auto.tfvars") || f.endsWith(".auto.tfvars.json")) {
+      throw new UnresolvableDeclaration(f, "tfvars files are unsupported: this resolver reads declared defaults only");
+    }
   }
   return names.filter((f) => f.endsWith(".tf"));
 }
@@ -864,17 +890,44 @@ export function assertUniqueMonitorUrls(declared: readonly DiscoveredMonitor[]):
   }
 }
 
-/** Extract every `logtail_exploration_alert` block's live name (#8097 `logs_alert` arm). */
-export function parseLogsAlertBlocks(tfText: string): DiscoveredLogsAlert[] {
+/**
+ * Extract every `logtail_exploration_alert` block's live name (#8097 `logs_alert` arm).
+ *
+ * `vars` (#8296) resolves a `var`-driven `paused`. It is the SAME resolution the heartbeat and
+ * monitor arms already take — `parseHeartbeatBlocks` / `parseMonitorBlocks` have carried a `vars`
+ * parameter since #7884; this arm was the one that did not.
+ */
+export function parseLogsAlertBlocks(tfText: string, vars: InfraVariables = new Map()): DiscoveredLogsAlert[] {
   const code = codeView(tfText);
   return resourceBlocks(code, "logtail_exploration_alert").map(({ resourceName, body }) => {
     const nameMatch = /\bname\s*=\s*"([^"]+)"/.exec(body);
     // `paused` is read from the block rather than assumed. A resource with no `paused` at all also
-    // counts as literal-false: the provider's default is unpaused, which is the same intent.
+    // counts as intent-false: the provider's default is unpaused, which is the same intent.
     const pausedMatch = /^\s*paused\s*=\s*(.+?)\s*$/m.exec(body);
-    const pausedIsLiteralFalse = pausedMatch === null || pausedMatch[1].trim() === "false";
-    return { resourceName, liveName: nameMatch ? nameMatch[1] : "", pausedIsLiteralFalse };
+    const pausedResolvesFalse =
+      pausedMatch === null || resolvePausedIntent(pausedMatch[1].trim(), vars) === false;
+    return { resourceName, liveName: nameMatch ? nameMatch[1] : "", pausedResolvesFalse };
   });
+}
+
+/**
+ * Resolve a declared `paused` expression to a boolean, or `null` when it cannot be resolved.
+ *
+ * Understands exactly three shapes: a boolean literal, `var.<name>`, and `!var.<name>`. The name is
+ * matched EXACTLY — never by prefix, so `var.foo_complete` can never be satisfied by a declaration
+ * of `var.foo`. Anything else (a conditional, a `local.`, a function call, a QUOTED literal such as
+ * `"false"` which HCL would coerce but this does not, a variable whose default is not a literal
+ * boolean) returns `null`, and the caller treats `null` as "leave it exempt".
+ */
+const PAUSED_VAR_RE = new RegExp(`^(!?)\\s*var\\.(${IDENT})$`);
+function resolvePausedIntent(raw: string, vars: InfraVariables): boolean | null {
+  if (raw === "false") return false;
+  if (raw === "true") return true;
+  const m = PAUSED_VAR_RE.exec(raw);
+  if (m === null) return null;
+  const def = vars.get(m[2]);
+  if (def === undefined || def.kind !== "bool") return null;
+  return m[1] === "!" ? !def.value : def.value;
 }
 
 // ─── Reconcile ──────────────────────────────────────────────────────────────────────────────────
@@ -884,9 +937,11 @@ export function parseLogsAlertBlocks(tfText: string): DiscoveredLogsAlert[] {
  *
  * - **logs-alert-absent** — a declared `logtail_exploration_alert` missing from the live payload
  *   (the main apply never created it, or it was deleted vendor-side).
- * - **logs-alert-paused** — present but `paused` live. Unlike heartbeats there is no fed/unfed
- *   distinction: every declared alert writes `paused = false` as intent, so a live pause is
- *   always a vendor-side rejection (`paused_reason` carried as `detail`) or a hand pause.
+ * - **logs-alert-paused** — present but `paused` live, AND the declaration's `paused` resolves to
+ *   false (a literal, an absent attribute, or since #8296 a `var`-driven expression whose default
+ *   resolves to false). Unlike heartbeats there is no fed/unfed distinction: the declaration says
+ *   armed, so a live pause is a vendor-side rejection (`paused_reason` carried as `detail`) or a
+ *   hand pause. A declaration whose `paused` cannot be resolved stays exempt.
  *
  * Foreign live alerts (not declared in `.tf`) are ignored — the arm only READS.
  */
@@ -903,10 +958,11 @@ export function reconcileLogsAlerts(
       violations.push({ kind: "logs_alert", resourceName: d.resourceName, liveName: d.liveName, live: "logs_alert", reason: "logs-alert-absent" });
       continue;
     }
-    // A live pause is drift ONLY where the declaration says `paused = false`. Where the declaration
-    // is an expression, the pause is what the author asked for and the apply re-asserts it every
-    // merge — so flagging it would be a standing false page, not a finding.
-    if (l.paused && d.pausedIsLiteralFalse) {
+    // A live pause is drift ONLY where the declaration RESOLVES to `paused = false` — a literal, an
+    // absent attribute, or (since #8296) a `var`-driven expression whose default resolves to false;
+    // see `resolvePausedIntent`. Where it resolves to true, or cannot be resolved, the pause is
+    // taken as what the author asked for and is not reported.
+    if (l.paused && d.pausedResolvesFalse) {
       violations.push({
         kind: "logs_alert",
         resourceName: d.resourceName,

@@ -3,6 +3,10 @@ name: changelog
 description: "This skill should be used when creating changelogs for recent merges. Analyzes PR labels, issues, and descriptions to generate formatted summaries."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Changelog Generator
 
 Generate a fun, engaging changelog for an internal development team by summarizing the latest merges to the main branch, highlighting new features, bug fixes, and giving credit to the developers.

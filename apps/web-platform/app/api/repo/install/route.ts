@@ -4,6 +4,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { verifyInstallationOwnership, getInstallationAccount } from "@/server/github-app";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import { writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
+import { verifiedUserId } from "@/server/request-auth";
 import logger from "@/server/logger";
 
 /**
@@ -20,11 +21,9 @@ export async function POST(request: Request) {
   if (!valid) return rejectCsrf("api/repo/install", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -52,10 +51,10 @@ export async function POST(request: Request) {
   let githubLogin: string | undefined;
   try {
     const { data: adminUser, error: adminError } =
-      await serviceClient.auth.admin.getUserById(user.id);
+      await serviceClient.auth.admin.getUserById(userId);
     if (adminError) {
       logger.error(
-        { err: adminError, userId: user.id },
+        { err: adminError, userId },
         "auth.admin.getUserById failed",
       );
     }
@@ -67,7 +66,7 @@ export async function POST(request: Request) {
       | undefined;
   } catch (err) {
     logger.error(
-      { err, userId: user.id },
+      { err, userId },
       "auth.admin.getUserById threw — check SUPABASE_SERVICE_ROLE_KEY and server connectivity",
     );
     return NextResponse.json(
@@ -85,7 +84,7 @@ export async function POST(request: Request) {
 
     if (!verification.verified) {
       logger.warn(
-        { userId: user.id, installationId: body.installationId, error: verification.error },
+        { userId, installationId: body.installationId, error: verification.error },
         "Installation ownership verification failed",
       );
       return NextResponse.json(
@@ -103,7 +102,7 @@ export async function POST(request: Request) {
       await getInstallationAccount(body.installationId);
     } catch (err) {
       logger.warn(
-        { userId: user.id, installationId: body.installationId, err },
+        { userId, installationId: body.installationId, err },
         "Installation not found for email-only user",
       );
       return NextResponse.json(
@@ -112,7 +111,7 @@ export async function POST(request: Request) {
       );
     }
     logger.info(
-      { userId: user.id, installationId: body.installationId },
+      { userId, installationId: body.installationId },
       "Email-only user registering installation (existence-verified)",
     );
   }
@@ -121,7 +120,7 @@ export async function POST(request: Request) {
   // `workspaces` row (was the `users` row). Resolve the target id server-side via
   // the membership-verified resolver (IDOR-safe; fail-closed 503 on db-error,
   // never write a credential into the caller's solo workspace under a team claim).
-  const activeResolution = await resolveActiveWorkspace(user.id, supabase);
+  const activeResolution = await resolveActiveWorkspace(userId, supabase);
   if (!activeResolution.ok) {
     return NextResponse.json(
       { error: "Could not resolve your active workspace. Please retry." },
@@ -133,14 +132,14 @@ export async function POST(request: Request) {
   // Owner-gate (confused-deputy parity with setup/disconnect): a credential write
   // to a team workspace must be owner-only — a non-owner member must not overwrite
   // the team's installation grant with their own. No-op for solo (a solo user owns
-  // workspace_id=user.id).
+  // workspace_id=userId).
   const ownerRes = await supabase.rpc("is_workspace_owner", {
     p_workspace_id: activeWorkspaceId,
-    p_user_id: user.id,
+    p_user_id: userId,
   });
   if (ownerRes.error) {
     logger.error(
-      { err: ownerRes.error, userId: user.id, workspaceId: activeWorkspaceId },
+      { err: ownerRes.error, userId, workspaceId: activeWorkspaceId },
       "is_workspace_owner check failed during install",
     );
     return NextResponse.json(
@@ -167,7 +166,7 @@ export async function POST(request: Request) {
     );
   } catch (writeErr) {
     logger.error(
-      { err: writeErr, userId: user.id, workspaceId: activeWorkspaceId },
+      { err: writeErr, userId, workspaceId: activeWorkspaceId },
       "Failed to store installation ID on the active workspace",
     );
     return NextResponse.json(

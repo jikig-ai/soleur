@@ -14,6 +14,11 @@
 # Fixtures are real closings from the 2026-09-07 session, both directions.
 
 set -uo pipefail
+# HERMETIC against the web opt-out: the web agent's Bash tool inherits
+# SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1 from buildAgentEnv, and an operator may export
+# it as a kill switch. Left set, every BLOCK row reads ALLOW and the suite fails with
+# no message naming the cause (measured 35 passed / 31 failed).
+unset SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK
 REPO_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 HOOK="$REPO_ROOT/plugins/soleur/hooks/unkept-promise-hook.sh"
 
@@ -37,24 +42,24 @@ INVOCATION_LOG="$(mktemp -t unkept-inv.XXXXXXXX)"
 export SOLEUR_HOOK_TRACE
 SOLEUR_HOOK_TRACE="$(mktemp -t unkept-sut.XXXXXXXX)"
 trap 'rm -f "$INVOCATION_LOG" "$SOLEUR_HOOK_TRACE"' EXIT INT TERM
-verdict() { # <message> [extra-json] -> BLOCK | ALLOW
+verdict() { # <message> [extra-json] [VAR=value] -> BLOCK | ALLOW
   echo x >> "$INVOCATION_LOG"
-  local msg="$1" extra="${2:-{\}}" out
+  local msg="$1" extra="${2:-{\}}" envkv="${3:-}" out
   # stderr is captured, not discarded, so the SUT's own execution marker can be
   # counted. The marker is what makes the coverage floor measure the subject: a
   # harness that skips the spawn produces none, whatever its own counters say.
   local _err; _err=$(mktemp -t unkept-err.XXXXXXXX)
   out=$(jq -n --arg m "$msg" --argjson e "$extra" '$e + {last_assistant_message:$m}' \
-        | bash "$HOOK" 2>"$_err")
-  grep -c '^SOLEUR_HOOK_RAN$' "$_err" 2>/dev/null | grep -qv '^0$' \
+        | env ${envkv:+"$envkv"} bash "$HOOK" 2>"$_err")
+  grep -c '^SOLEUR_HOOK_RAN$' "$_err" 2>/dev/null | grep -cv >/dev/null '^0$' \
     && printf 'ran\n' >> "$SOLEUR_HOOK_TRACE"
   rm -f "$_err"
   printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1 && echo BLOCK || echo ALLOW
 }
 EXPECT_ROWS=0
-expect() { # <want> <label> <message>
+expect() { # <want> <label> <message> [VAR=value]
   EXPECT_ROWS=$((EXPECT_ROWS + 1))
-  local got; got=$(verdict "$3")
+  local got; got=$(verdict "$3" "{}" "${4:-}")
   [ "$got" = "$1" ] && pass "$2" || fail "$2 (want $1, got $got)"
 }
 
@@ -91,7 +96,7 @@ echo "=== NEWLINE-separated sentences (every other fixture uses \". \") ==="
 # separator left the whole message as ONE sentence, so per-sentence scoping was
 # inert for any multi-line text -- which is most real turns.
 expect BLOCK "promise on its own line, sentinel only DISCUSSED earlier" \
-  "The escape hatch is <stop>BLOCKED: reason</stop> as documented.
+  "The escape hatch is a Blocked: label as documented.
 
 I will implement the fix next."
 expect BLOCK "conditional on a SEPARATE line must not veto the promise" \
@@ -101,7 +106,7 @@ Let me know if you disagree."
 expect ALLOW "sentinel as the final line is a real declaration" \
   "Implementing the register entry now.
 
-<stop>OPERATOR-GATE: the credential must be entered by hand</stop>"
+Paused: the credential must be entered by hand"
 expect BLOCK "promise above a mandated fenced resume prompt" \
   "Remaining: emit the trailer, then ship. I'll run those rather than describe them.
 
@@ -115,9 +120,9 @@ echo "=== must PASS: correct handoffs ==="
 expect ALLOW "conditional in the SAME sentence as the promise" \
   "My recommendation is to ship the corrected core. Say the word and I'll run it."
 expect ALLOW "operator-gate sentinel (fixture CARRIES a promise, so it reaches the arm)" \
-  "Implementing the register entry now. <stop>OPERATOR-GATE: the Sentry credential must be entered by hand</stop>"
+  "Implementing the register entry now. Paused: the Sentry credential must be entered by hand"
 expect ALLOW "blocked sentinel (fixture CARRIES a promise)" \
-  "Let me now finish the determination. <stop>BLOCKED: the access investigation has not been run</stop>"
+  "Let me now finish the determination. Blocked: the access investigation has not been run"
 expect ALLOW "trailing question (fixture CARRIES a promise)" \
   "Let me now write the plan. Should I open the PR against main?"
 expect ALLOW "past tense -- already done" \
@@ -130,6 +135,45 @@ expect ALLOW "operator's action, not mine" \
   "Your action is unchanged: rotate the token in prd_terraform."
 expect ALLOW "future session, not this turn" \
   "The follow-up this earns is widening the rule to credential liveness, which is not in this PR."
+
+echo "=== the label vocabulary (2026-10-11): plain Paused:/Blocked:, anchored to a sentence start ==="
+# The escape hatch used to be a literal <stop>...</stop> tag that users read as a defect.
+# Rows pin the SHAPES a model really produces, and the prose that must NOT count.
+expect ALLOW "bold label: **Paused:** reason" \
+  "Implementing the wiring now. **Paused:** waiting on CI run 123 to finish"
+expect ALLOW "bold label, colon outside: **Blocked**: reason" \
+  "Let me now finish the fix. **Blocked**: the credential must be entered by hand"
+expect ALLOW "bullet label as the final line" \
+  "Let me now finish the fix.
+- Paused: waiting on the review agents"
+expect ALLOW "label is case-insensitive" \
+  "Implementing now. PAUSED: waiting on the aggregate test gate"
+expect BLOCK "colon is required: a final 'Blocked ...' sentence is prose, not a label" \
+  "I will merge it next. Blocked PRs are listed below."
+expect BLOCK "vocabulary is closed: a different 'Word:' label buys no exit (Next:)" \
+  "I will merge it next. Next: ship it"
+expect BLOCK "vocabulary is closed: a different 'Word:' label buys no exit (Note:)" \
+  "I will merge it next. Note: I'll run it"
+expect BLOCK "an empty label is a status line, not a declaration (Blocked: none.)" \
+  "I'll run the suite next.
+
+Blocked: none."
+expect BLOCK "an empty label is a status line, not a declaration (Paused: n/a)" \
+  "I will now implement the fix. Paused: n/a"
+expect ALLOW "a populated label with 'none' inside still counts" \
+  "Implementing now. Blocked: none of the three reviewers has answered yet"
+expect ALLOW "an UNLABELLED parked sentence is outside the parked arm (residual 0), not over-blocked" \
+  "Done. The PR is green and awaiting your merge."
+expect BLOCK "legacy <stop> tag is no longer honoured (one vocabulary)" \
+  "Implementing the register entry now. <stop>OPERATOR-GATE: waiting on CI</stop>"
+expect BLOCK "prose containing 'blocked' mid-sentence is not a declaration" \
+  "The deploy was blocked by CI. I'll rerun it now."
+expect BLOCK "'Blocked PRs' without a colon is not a declaration" \
+  "Blocked PRs are listed below. I will fix them next."
+expect BLOCK "label NOT in the final sentence does not disarm a later promise" \
+  "Paused: waiting on CI. I will merge it next."
+expect BLOCK "a label mid-sentence ('Status paused: ...') is not anchored" \
+  "Implementing now. Status paused: waiting on CI."
 
 echo "=== loop safety: stop_hook_active bounds the chain with NO persistence ==="
 r=$(verdict "Let me now do it." '{"stop_hook_active":true}')
@@ -172,8 +216,12 @@ out=$(jq -n '{session_id:"x"}' | bash "$HOOK" 2>/dev/null); rc=$?
 
 echo "=== the block payload is actionable ==="
 body=$(jq -n --arg m "Let me now do it." '{last_assistant_message:$m}' | bash "$HOOK" 2>/dev/null)
-printf '%s' "$body" | jq -e '.reason | test("OPERATOR-GATE")' >/dev/null 2>&1 \
+printf '%s' "$body" | jq -e '.reason | test("Paused:") and test("Blocked:")' >/dev/null 2>&1 \
   && pass "reason names the escape hatch" || fail "reason does not name the escape hatch"
+# The whole point of the 2026-10-11 vocabulary change: the model is never told to write
+# raw markup, so users never see it. Pinned on the REAL payload, not on the source text.
+printf '%s' "$body" | jq -e '.reason | (test("<[a-z!/]|OPERATOR-GATE") | not) and test("no sentence break")' >/dev/null 2>&1 \
+  && pass "reason teaches no angle-bracket markup" || fail "reason still teaches the <stop> tag"
 printf '%s' "$body" | jq -e '.reason | test("in THIS turn")' >/dev/null 2>&1 \
   && pass "reason states the required action" || fail "reason does not state the action"
 
@@ -203,7 +251,7 @@ printf '%s' "$body" | jq -e '.reason | test("in THIS turn")' >/dev/null 2>&1 \
 #      its firing count. Hence each threshold sits IMMEDIATELY above its own
 #      `if`, with nothing in between.
 echo "=== the parked-deliverable arm (2026-09-17) ==="
-# A stop tag is legitimate for something the model CANNOT clear. It is not
+# A Paused/Blocked label is legitimate for something the model CANNOT clear. It is not
 # legitimate for handing FINISHED WORK back for a merge/review/ship, which
 # rf-never-skip-qa-review-before-merging requires be carried in-session.
 #
@@ -213,15 +261,15 @@ echo "=== the parked-deliverable arm (2026-09-17) ==="
 # promise detection when a parked turn makes no promise. A suite without the real
 # case cannot tell a working arm from those.
 expect BLOCK "the real 2026-09-17 turn: green PR parked on the operator" \
-  "Done. <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge. Nothing else is outstanding.</stop>"
+  "Done. Paused: PR #8244 is green and awaiting your merge. Nothing else is outstanding."
 expect BLOCK "awaiting review as an end state" \
-  "Pushed. <stop>OPERATOR-GATE: awaiting review before merge.</stop>"
+  "Pushed. Paused: awaiting review before merge."
 expect BLOCK "needs a human, bare -- no trailing verb" \
-  "That is as far as I can take it. <stop>OPERATOR-GATE: this needs a human.</stop>"
+  "That is as far as I can take it. Paused: this needs a human."
 expect BLOCK "the obvious rephrase: ready for your merge" \
-  "Green. <stop>OPERATOR-GATE: PR #8244 is ready for your merge.</stop>"
+  "Green. Paused: PR #8244 is ready for your merge."
 expect BLOCK "the obvious rephrase: over to you to merge" \
-  "Green. <stop>OPERATOR-GATE: over to you to merge.</stop>"
+  "Green. Paused: over to you to merge."
 
 # ── THE OVER-BLOCK DIRECTION ────────────────────────────────────────────────────
 # Every row below is a stop this repo's own rules MANDATE. An earlier revision
@@ -232,17 +280,17 @@ expect BLOCK "the obvious rephrase: over to you to merge" \
 # authorization, COST and SCOPE are the operator's to answer. This direction is
 # the one a self-written battery omits, and it is the one that does real harm.
 expect ALLOW "a genuine requirements fork" \
-  "Two designs are viable. <stop>OPERATOR-GATE: waiting for your decision on which to build.</stop>"
+  "Two designs are viable. Paused: waiting for your decision on which to build."
 expect ALLOW "pre-agent confirmation (wg-zero-agents-until-user-confirms)" \
-  "I summarised the landscape. <stop>OPERATOR-GATE: pending your go-ahead before I spawn the research agents.</stop>"
+  "I summarised the landscape. Paused: pending your go-ahead before I spawn the research agents."
 expect ALLOW "API budget disclosure (hr-autonomous-loop-skill-api-budget-disclosure)" \
-  "The loop will cost roughly 40 dollars in API spend. <stop>OPERATOR-GATE: awaiting your approval of the budget.</stop>"
+  "The loop will cost roughly 40 dollars in API spend. Paused: awaiting your approval of the budget."
 expect ALLOW "outward-facing effect: an invoice reaching a customer" \
-  "The invoice preview is rendered. <stop>OPERATOR-GATE: awaiting your approval before it is sent to the customer.</stop>"
+  "The invoice preview is rendered. Paused: awaiting your approval before it is sent to the customer."
 expect ALLOW "outward-facing effect: a post leaving the repo" \
-  "Draft post is ready. <stop>OPERATOR-GATE: needs your sign-off before it goes out on X.</stop>"
+  "Draft post is ready. Paused: needs your sign-off before it goes out on X."
 expect ALLOW "word boundary: a human-READABLE message is not 'needs a human'" \
-  "The error copy is placeholder. <stop>OPERATOR-GATE: needs a human-readable message before launch.</stop>"
+  "The error copy is placeholder. Paused: needs a human-readable message before launch."
 
 # ── SCOPE: all three terms must describe the SAME stop ──────────────────────────
 # Tested independently over the window, the terms can be satisfied by three
@@ -251,32 +299,32 @@ expect ALLOW "word boundary: a human-READABLE message is not 'needs a human'" \
 # legitimate in-flight CI gate because a neighbouring sentence mentioned somebody
 # else's review.
 expect ALLOW "an unrelated sibling review does not veto a CI gate" \
-  "The sibling PR is still awaiting review by the other team. <stop>OPERATOR-GATE: waiting on CI run 123 for this one.</stop>"
+  "The sibling PR is still awaiting review by the other team. Paused: waiting on CI run 123 for this one."
 # The mirror: an unrelated sentence must not DISARM the arm either. The escape is
-# scoped to the tag's sentence, which is this file's own documented lesson --
+# scoped to the label's sentence, which is this file's own documented lesson --
 # "a courtesy closer anywhere in the window vetoed a promise anywhere else in it".
 expect BLOCK "an unrelated 'revoked' sentence does not disarm the arm" \
-  "I revoked the old token as part of cleanup. <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge.</stop>"
+  "I revoked the old token as part of cleanup. Paused: PR #8244 is green and awaiting your merge."
 
 # ── LEGITIMATE STOPS, verbatim from the session that motivated this arm ─────────
 expect ALLOW "waiting on an in-flight CI run" \
-  "Pushed. <stop>OPERATOR-GATE: waiting on CI for PR #8244 -- in-flight checks, not a decision of yours.</stop>"
+  "Pushed. Paused: waiting on CI for PR #8244 -- in-flight checks, not a decision of yours."
 expect ALLOW "waiting on in-flight review agents" \
-  "Spawned. <stop>OPERATOR-GATE: waiting on 7 of 8 review seats -- in-flight agents, not a decision of yours.</stop>"
+  "Spawned. Paused: waiting on 7 of 8 review seats -- in-flight agents, not a decision of yours."
 expect ALLOW "names a merge it will perform ITSELF on green" \
-  "Green so far. <stop>OPERATOR-GATE: waiting on the aggregate test gate. On green I merge without asking.</stop>"
+  "Green so far. Paused: waiting on the aggregate test gate. On green I merge without asking."
 expect ALLOW "mid-flight production apply, nothing actionable" \
-  "Applying. <stop>OPERATOR-GATE: apply run 35215052952 is mid-replace; the host is being replaced now.</stop>"
+  "Applying. Paused: apply run 35215052952 is mid-replace; the host is being replaced now."
 # LOAD-BEARING escape row. The obvious "awaiting your authorization" fixture allows
 # because PARKED_RE never matches it ("authorization" is not in the object set), so
 # it passes for a different reason than the one it names -- measured: deleting
 # PARKED_AUTH_RE entirely left the suite GREEN until this row existed.
 expect ALLOW "PARKED_RE fires, and the irreversible-prod escape is what rescues it" \
-  "Plan is ready. <stop>OPERATOR-GATE: awaiting your review of the irreversible production wipe before I run it per-command.</stop>"
+  "Plan is ready. Paused: awaiting your review of the irreversible production wipe before I run it per-command."
 # Residual #5 says forcing a real question through is the worse failure. This arm
 # runs above the message-level question escape, so it carries its own.
 expect ALLOW "a turn ending in a genuine question is not parked work" \
-  "<stop>OPERATOR-GATE: PR is awaiting your review.</stop> Which approach do you want?"
+  "Paused: PR is awaiting your review. Which approach do you want?"
 
 # ── each escape alternative pinned ALONE ───────────────────────────────────────
 # The single escape row tripped `irreversible`, `wipe` AND `per-command` at once,
@@ -285,37 +333,36 @@ expect ALLOW "a turn ending in a genuine question is not parked work" \
 # three trip exactly one apiece; `hr-menu-option-ack-not-prod-write-auth` is the
 # rule the escape honours, so its own vocabulary is what needs pinning.
 expect ALLOW "escape: irreversible, alone" \
-  "Plan is ready. <stop>OPERATOR-GATE: awaiting your review of the irreversible migration.</stop>"
+  "Plan is ready. Paused: awaiting your review of the irreversible migration."
 expect ALLOW "escape: per-command ack, alone" \
-  "Staged. <stop>OPERATOR-GATE: awaiting your review, per-command, before I proceed.</stop>"
+  "Staged. Paused: awaiting your review, per-command, before I proceed."
 # `destroy` covers `ack-destroy` by substring, so a dedicated alternative for the
 # latter is unpinnable by construction — measured: breaking it left the suite
 # green because `destroy` rescued the fixture. Removed from the pattern rather
 # than documented as equivalent; this row pins what remains.
 expect ALLOW "escape: destroy, alone (covers the ack-destroy literal too)" \
-  "Plan graded. <stop>OPERATOR-GATE: awaiting your review of the ack-destroy line.</stop>"
+  "Plan graded. Paused: awaiting your review of the ack-destroy line."
 
-# ── the tag alternation, and WHICH tag is selected ─────────────────────────────
-# A `BLOCKED:` parked fixture existed at HEAD and I rewrote it to OPERATOR-GATE
-# while adding rows, so every parked BLOCK row used one alternative and the other
-# went dark: narrowing the tag pattern to (OPERATOR-GATE) then survived.
-expect BLOCK "the BLOCKED: tag alternative parks work too" \
-  "Finished. <stop>BLOCKED: this is awaiting your merge.</stop>"
+# ── both labels park work, and the LAST label is the one selected ─────────────
+# `tail -n 1` selects the last label sentence; with `head -n 1` a turn that names a
+# harmless label first and parks second would escape.
+expect BLOCK "the Blocked: label parks work too" \
+  "Finished. Blocked: this is awaiting your merge."
 # `tail -n 1` selects the LAST tag. With `head -n 1` a turn that DOCUMENTS the
 # sentinel first and parks second escapes — the self-disarm-by-documenting class
 # this hook's history is built around. The promise arm has a fixture for it; the
 # parked arm had none, because no parked fixture carried two tags.
-expect BLOCK "a documented sentinel first, real parking last" \
-  "The escape hatch is <stop>BLOCKED: what is blocking</stop> as documented. And now: <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge.</stop>"
+expect BLOCK "a harmless label first, real parking last" \
+  "Blocked: what is blocking, as documented. Paused: PR #8244 is green and awaiting your merge."
 
 # ── `ship` is in the arm's stated object set and had no fixture ────────────────
 expect BLOCK "ship is an object verb, not just merge and review" \
-  "Release notes written. <stop>OPERATOR-GATE: awaiting your ship of the 0.265.0 tag.</stop>"
+  "Release notes written. Paused: awaiting your ship of the 0.265.0 tag."
 # The word boundary on `awaiting (review|merge)`. The IDENTICAL guard on
 # `needs a human` is pinned; this site was not, so one row on the boundary axis
 # read as covering the axis while covering one of its two sites.
 expect ALLOW "boundary: 'awaiting reviewers' is not 'awaiting review'" \
-  "Staffing note. <stop>OPERATOR-GATE: awaiting reviewers to be assigned by the other team.</stop>"
+  "Staffing note. Paused: awaiting reviewers to be assigned by the other team."
 
 # ── the arm's OUTPUT is the whole mechanism, so it is asserted ──────────────────
 # A Stop block changes behaviour only through what the model READS. With only
@@ -330,10 +377,10 @@ expect ALLOW "boundary: 'awaiting reviewers' is not 'awaiting review'" \
 # corroborate. The conservation check caught it (51 harness vs 50 SUT), which is
 # the defect that check exists for, committed here by the change that added it.
 PARKED_ERR=$(mktemp -t unkept-perr.XXXXXXXX)
-PARKED_BODY=$(jq -n --arg m "Done. <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge.</stop>" \
+PARKED_BODY=$(jq -n --arg m "Done. Paused: PR #8244 is green and awaiting your merge." \
   '{last_assistant_message:$m}' | bash "$HOOK" 2>"$PARKED_ERR")
 PARKED_RC=$?
-grep -c '^SOLEUR_HOOK_RAN$' "$PARKED_ERR" 2>/dev/null | grep -qv '^0$' \
+grep -c '^SOLEUR_HOOK_RAN$' "$PARKED_ERR" 2>/dev/null | grep -cv >/dev/null '^0$' \
   && printf 'ran\n' >> "$SOLEUR_HOOK_TRACE"
 rm -f "$PARKED_ERR"
 EXPECT_ROWS=$((EXPECT_ROWS + 1)); echo x >> "$INVOCATION_LOG"
@@ -357,17 +404,39 @@ printf '%s' "$PARKED_BODY" | jq -e '.systemMessage | test("parked on the operato
 # Protocol: this hook blocks by JSON on stdout at rc 0. Appending `exit 2` to the
 # block path (a DIFFERENT Claude Code protocol -- stderr as the reason) survived.
 EXPECT_ROWS=$((EXPECT_ROWS + 1))
+printf '%s' "$PARKED_BODY" | jq -e '.reason | test("<[a-z!/]|OPERATOR-GATE") | not' >/dev/null 2>&1 \
+  && pass "parked reason teaches no markup" || fail "parked reason teaches markup"
+EXPECT_ROWS=$((EXPECT_ROWS + 1))
 [ "$PARKED_RC" -eq 0 ] \
   && pass "a parked block exits 0 and speaks via stdout JSON, not rc 2" || fail "a parked block exits 0 (got rc=$PARKED_RC)"
+
+echo "=== web runtime opt-out (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK) ==="
+# The web Concierge loads this plugin's hooks.json, so this operator-CLI guard ran
+# against end users and steered the model into writing `<stop>OPERATOR-GATE...` (since replaced by a plain label)
+# over its own question list. The opt-out must silence the hook in the web runtime
+# WITHOUT touching CLI behaviour: each fixture is a BLOCK without the variable and an
+# ALLOW with it, so an opt-out that neuters the hook for everyone reds the BLOCK row.
+# Two phrasings, so a hook that allows one memorised string is not enough.
+CRM_CLOSING=$'To enter the lead I need:\n- **lastContact**\n- **amount**, with **currency** (required if you give an amount)\n- **expectedCloseDate**\n\nYou can paste everything in one message. I\'ll show you a review before saving, and that review is the only confirmation step.'
+FORM_CLOSING="Implementing the lead form now."
+expect BLOCK "opt-out unset: the CRM question-list closing still blocks (CLI behaviour unchanged)" "$CRM_CLOSING"
+expect ALLOW "opt-out set: the CRM question-list closing is allowed" "$CRM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1"
+expect BLOCK "opt-out unset: a differently-phrased promise still blocks" "$FORM_CLOSING"
+expect ALLOW "opt-out set: a differently-phrased promise is allowed" "$FORM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1"
+# Value semantics: only the exact string "1" opts out. A truthy-looking or empty value
+# must NOT (`!= "0"` would treat "" and "true" as an opt-out).
+expect BLOCK "opt-out value 0 does not opt out" "$FORM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=0"
+expect BLOCK "opt-out value empty does not opt out" "$FORM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK="
+expect BLOCK "opt-out value true does not opt out" "$FORM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=true"
 
 SUT_RUNS=$(wc -l < "$SOLEUR_HOOK_TRACE" 2>/dev/null | tr -d ' ')
 SUT_RUNS=${SUT_RUNS:-0}
 INVOCATIONS=$(wc -l < "$INVOCATION_LOG" 2>/dev/null | tr -d ' ')
 INVOCATIONS=${INVOCATIONS:-0}
-MIN_INVOCATIONS=51
+MIN_INVOCATIONS=74
 # THE SUT-WRITTEN FLOOR, checked FIRST. This is the one a neutered harness cannot
 # satisfy, because only the hook appends to it.
-MIN_SUT_RUNS=51
+MIN_SUT_RUNS=74
 if [ "$SUT_RUNS" -lt "$MIN_SUT_RUNS" ]; then
   printf '[FATAL] coverage: the hook itself ran %s time(s), floor is %s -- the harness is certifying rows it never spawned the SUT for\n' \
     "$SUT_RUNS" "$MIN_SUT_RUNS" >&2
@@ -392,7 +461,7 @@ if [ "$INVOCATIONS" -lt "$MIN_INVOCATIONS" ]; then
     "$INVOCATIONS" "$MIN_INVOCATIONS" >&2
   exit 1
 fi
-MIN_EXPECT_ROWS=51
+MIN_EXPECT_ROWS=75
 if [ "$EXPECT_ROWS" -lt "$MIN_EXPECT_ROWS" ]; then
   printf '[FATAL] coverage: %s expect rows, floor is %s -- rows were removed\n' \
     "$EXPECT_ROWS" "$MIN_EXPECT_ROWS" >&2
@@ -401,7 +470,7 @@ fi
 echo ""
 echo "=== $PASS passed, $FAIL failed ($INVOCATIONS SUT invocations, $EXPECT_ROWS expect rows) ==="
 [ "${#FAILURES[@]}" -gt 0 ] && printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
-MIN_ASSERTIONS=62
+MIN_ASSERTIONS=87
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: ran %s, expected >= %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

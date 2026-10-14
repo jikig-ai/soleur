@@ -12,10 +12,9 @@
 # subject matter, so it does not subsume this file. The earlier wording here, "actionlint
 # runs in ZERO CI workflows (it is a local-only tool here)", is no longer true.)
 #
-# It is wired into .github/workflows/infra-validation.yml as an EXPLICIT step.
-# That workflow hand-enumerates ~50 `run: bash ...test.sh` steps and has no
-# glob/find runner — a new .test.sh is picked up by NOTHING. An unwired guard
-# passes locally and gates nothing on every PR: present, and doing nothing.
+# It reaches CI through the deploy-script-tests matrix legs — presence under
+# apps/web-platform/infra/ IS registration since #8736 (ADR-252), so no explicit
+# step is needed; the checks below pin the runner connection instead.
 # That is the same defect shape this whole gate exists to catch, which is why
 # the wiring is asserted by AC9b rather than assumed.
 #
@@ -94,10 +93,10 @@ echo "== BOTH gates are actually WIRED (this file's header claims it; now it ass
 # registered in ZERO runners. A PR arguing that unwired guards are worse than
 # none had shipped its best guard unwired. Delete either line below and this
 # goes RED.
-if grep -qF 'bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh' "$INFRA_VALIDATION"; then
-  pass "this shape guard is registered as a step in infra-validation.yml"
+if grep -qF 'run: bash apps/web-platform/infra/run-registered-suites.sh' "$INFRA_VALIDATION"; then
+  pass "this shape guard's runner is invoked in infra-validation.yml (presence under infra/ is registration, #8736)"
 else
-  fail "shape guard is wired" "no 'run: bash …/supabase-advisor/scan-workflow.test.sh' step in infra-validation.yml — this guard would never run in CI"
+  fail "shape guard is wired" "no 'run: bash …/run-registered-suites.sh' step in infra-validation.yml — no infra suite, this one included, would run in CI"
 fi
 if [[ -f "$HARNESS" ]]; then
   pass "the behavioural harness exists"
@@ -111,11 +110,13 @@ else
 fi
 # Third gate, same reasoning: the mutation attestation is what proves the checks
 # below still DISCRIMINATE (they pass on an unmutated tree either way — #6572).
-# Unregistered, it would be the strongest evidence in this subsystem, running nowhere.
-if [[ -f "$MUTATION_HARNESS" ]] && grep -qF 'bash apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh' "$INFRA_VALIDATION"; then
-  pass "the mutation attestation exists and is registered in infra-validation.yml"
+# Since #8736 presence under apps/web-platform/infra/ IS registration — so the
+# check is file-exists (the registration half) + the runner invocation is wired
+# (the execution half), not a per-suite step.
+if [[ -f "$MUTATION_HARNESS" ]] && grep -qF 'run: bash apps/web-platform/infra/run-registered-suites.sh' "$INFRA_VALIDATION"; then
+  pass "the mutation attestation exists and its runner is invoked in infra-validation.yml"
 else
-  fail "mutation attestation is wired" "scan-workflow-mutation.test.sh is missing or has no 'run:' step in infra-validation.yml — this guard's non-vacuity would rest on prose again (#6572)"
+  fail "mutation attestation is wired" "scan-workflow-mutation.test.sh is missing, or no 'run: bash …/run-registered-suites.sh' step exists in infra-validation.yml — this guard's non-vacuity would rest on prose again (#6572)"
 fi
 # Fourth gate, same reasoning, for the #6578 triage probe. The assertion lives
 # HERE rather than in the probe's own attestation on purpose: a script cannot
@@ -136,10 +137,10 @@ fi
 # argument: delete the attestation's run: step and every gate here stayed green
 # while the entire non-vacuity apparatus silently stopped running.
 SIGPIPE_ATTEST="$REPO_ROOT/apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh"
-if [[ -f "$SIGPIPE_ATTEST" ]] && grep -qF 'bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh' "$INFRA_VALIDATION"; then
-  pass "the sigpipe probe's attestation exists and is registered in infra-validation.yml (#6578)"
+if [[ -f "$SIGPIPE_ATTEST" ]] && grep -qF 'run: bash apps/web-platform/infra/run-registered-suites.sh' "$INFRA_VALIDATION"; then
+  pass "the sigpipe probe's attestation exists and its runner is invoked in infra-validation.yml (#6578; glob registration since #8736)"
 else
-  fail "sigpipe attestation is wired" "sigpipe-triage-feasibility.test.sh is missing or has no 'run:' step in infra-validation.yml — the probe's false-all-clear guards would rest on prose, unproven, which is the exact failure this file exists to catch"
+  fail "sigpipe attestation is wired" "sigpipe-triage-feasibility.test.sh is missing or no 'run: bash …/run-registered-suites.sh' step exists in infra-validation.yml — the probe's false-all-clear guards would rest on prose, unproven, which is the exact failure this file exists to catch"
 fi
 
 echo "== no check in this file feeds a producer into grep -q (#6572) =="
@@ -397,7 +398,7 @@ fi
 # the coverage-bearing tier depend on the advisory one's health — ADR-112
 # inverted through the back door). The behavioural harness proves both directions
 # empirically; this is the structural companion.
-rung3_gate="$(awk '/^# --- Rung 3:/,/^# --- Rung 4:/' "$SCRIPT" | grep -E '^if ' | head -1)"
+rung3_gate="$(awk '/^# --- Rung 3:/,/^# --- Rung 4:/' "$SCRIPT" | grep -E '^if ' | sed -n '1p')"
 if [[ "$rung3_gate" == *'identity_ok'* ]]; then
   pass "catalog rung is gated on identity_ok (runs even when the advisor is broken)"
 else
@@ -519,9 +520,9 @@ echo "== cross-file: the Inngest schedule and the Sentry monitor window agree ==
 # pages nightly for a run that arrived on time, or opens a blind window. Both
 # operands are extracted by shape — hardcoding either would re-create the drift
 # class this asserts against.
-fn_cron="$(grep -oE '\{ cron: "[^"]+" \}' "$INNGEST_FN" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+fn_cron="$(grep -oE '\{ cron: "[^"]+" \}' "$INNGEST_FN" | sed -n '1p' | sed -E 's/.*"([^"]+)".*/\1/')"
 tf_cron="$(awk '/resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan"/,/^}/' "$MONITORS_TF" |
-  grep -E '^\s*schedule\s*=' | head -1 | sed -E 's/.*crontab\s*=\s*"([^"]+)".*/\1/')"
+  grep -E '^\s*schedule\s*=' | sed -n '1p' | sed -E 's/.*crontab\s*=\s*"([^"]+)".*/\1/')"
 if [[ -n "$fn_cron" && "$fn_cron" == "$tf_cron" ]]; then
   pass "Inngest cron '$fn_cron' == Sentry monitor crontab '$tf_cron'"
 else
@@ -530,8 +531,8 @@ fi
 
 echo "== cross-file: slugify(tf name) == workflow monitor-slug =="
 tf_name="$(awk '/resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan"/,/^}/' "$MONITORS_TF" \
-  | grep -E '^\s*name\s*=' | head -1 | sed -E 's/.*=\s*"([^"]+)".*/\1/')"
-wf_slug="$(grep -E '^\s*monitor-slug:' "$WORKFLOW" | head -1 | sed -E 's/.*monitor-slug:\s*//')"
+  | grep -E '^\s*name\s*=' | sed -n '1p' | sed -E 's/.*=\s*"([^"]+)".*/\1/')"
+wf_slug="$(grep -E '^\s*monitor-slug:' "$WORKFLOW" | sed -n '1p' | sed -E 's/.*monitor-slug:\s*//')"
 # Sentry derives the slug by slugifying `name`; writing `name` already
 # slug-shaped makes the two literally equal.
 tf_slug="$(printf '%s' "$tf_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
@@ -546,7 +547,7 @@ echo "== cross-file: model.c4's enumeration matches live cron-monitors.tf =="
 # untouched would have locked in a now-false model — verify the invariant, not
 # the silence.
 tf_count="$(grep -c '^resource "sentry_cron_monitor"' "$MONITORS_TF")"
-c4_count="$(grep -oE 'Of [0-9]+ cron monitors' "$MODEL_C4" | head -1 | grep -oE '[0-9]+')"
+c4_count="$(grep -oE 'Of [0-9]+ cron monitors' "$MODEL_C4" | sed -n '1p' | grep -oE '[0-9]+')"
 if [[ -n "$c4_count" && "$tf_count" == "$c4_count" ]]; then
   pass "model.c4 says $c4_count cron monitors; cron-monitors.tf declares $tf_count"
 else

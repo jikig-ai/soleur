@@ -76,9 +76,17 @@ def normalise: canon
       | .actionFilters |= map(.conditions |= sort_by(tostring) | .actions |= sort_by(tostring))
       | .actionFilters |= sort_by(tostring)));
 
-# Trigger types the provider cannot express as `sentry_alert` (they stay
-# `sentry_issue_alert` and are outside the probe's live scope by this predicate).
-def excluded: ["event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue"];
+# Trigger types the provider cannot express as a native `sentry_alert` trigger.
+# A rule carrying one is outside the fidelity scope on BOTH sides by this one
+# definition: the live side's `in_scope` and the TF side's `tf_in_scope`. Such a
+# rule is either still a `sentry_issue_alert`, or an adopted `sentry_alert` whose
+# trigger the provider's Read carries only in `legacy_trigger_conditions` (#8451),
+# or a default Sentry itself created that Terraform does not manage, which the
+# probe's census accepts only by id AND name (the captured high-priority default;
+# Seer's `seer_activity_trigger` pull-requests-ready default, registered in
+# apps/web-platform/infra/sentry/vendor-default-workflows.json, #8267). When #7985
+# converts the frozen rules, the vendor-default types must STAY in this set.
+def excluded: ["event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue", "seer_activity_trigger"];
 # Lifecycle triggers: the provider renders them `{}`; the live API renders their
 # `comparison` as `true`. Both mean "no parameters".
 def lifecycle: ["first_seen_event", "reappeared_event", "regression_event", "issue_resolved_trigger"];
@@ -163,6 +171,14 @@ def tf_rule:
   | if ($v.name | type) != "string" then error("\($a): name is not a string") else . end
   | if ($v.frequency_minutes | type) != "number" then error("\($a): frequency_minutes is not a number") else . end
   | if ($v.monitor_ids | type) != "array" then error("\($a): monitor_ids is not an array (\($v.monitor_ids | tojson))") else . end
+  # Unknown-detector floor (#8630). A `sentry_cron_monitor` created or recreated
+  # in this plan has no id until the apply, so a rule binding it renders a `null`
+  # element. Projecting it would commit `detectorIds: [..., null]`: the PR-time
+  # gate goes green, and the post-apply probe (live: the real id) reds `main`
+  # after a COMPLETE apply — the #8050 class. The text must NOT contain the
+  # phrase the reference gate's generic arm matches for "set the attribute
+  # explicitly" (the wrong remedy here); the gate has a dedicated arm for it.
+  | if ($v.monitor_ids | any(. == null)) then error("\($a): monitor_ids carries \($v.monitor_ids | map(select(. == null)) | length) detector id(s) that do not exist yet (a monitor created or recreated in this plan) — it cannot be routed in the same apply; list it in local.cron_monitor_alert_unrouted in cron-monitor-alerts.tf with a (#N) reason and route it in a follow-up PR after the first apply") else . end
   | {
       name: $v.name,
       enabled: $v.enabled,
@@ -180,12 +196,44 @@ def tf_rule:
           } ]
     };
 
+# TF-side mirror of the live side's `in_scope` (#8451): a `sentry_alert` is out of
+# scope when ANY of its trigger types is in `excluded`, in EITHER representation —
+#   native: the key of a `trigger_conditions[]` element carrying a non-null value;
+#   legacy: a string in `legacy_trigger_conditions`.
+# On the TF side `legacy_trigger_conditions` comes from the provider's Read, i.e.
+# refreshed/imported STATE, not the `.tf` config: an adopted type-only rule under
+# `ignore_changes = all` carries its trigger there, with `trigger_conditions` `[]`
+# or `null`. Keying on the legacy field alone would break the symmetry the day a
+# provider bump makes Read populate the native field. `// []` here is membership
+# only; `tf_rule` still floors a non-array `trigger_conditions` on an IN-scope rule.
+def tf_trigger_types:
+  [ (.values.trigger_conditions // [])[] | to_entries[] | select(.value != null) | .key ]
+  + (.values.legacy_trigger_conditions // []);
+def tf_in_scope:
+  tf_trigger_types as $t
+  | (excluded | any(. as $e | $t | index($e))) | not;
+# An in-scope rule may not carry ANY legacy type: every legacy type in `excluded`
+# was dropped above, so what remains is unmapped — an error, never a rule that
+# silently projects with fewer triggers than Sentry evaluates.
+def tf_legacy_floor:
+  .address as $a
+  | .values.legacy_trigger_conditions as $l
+  | if ($l | type) != "array" and $l != null
+    then error("\($a): legacy_trigger_conditions is neither an array nor null (\($l | tojson))")
+    elif ($l // [] | length) > 0
+    then error("\($a): unmapped legacy trigger type(s) \($l | map(tostring) | join(",")) (excluded: \(excluded | join(","))); a legacy type outside `excluded` has no projection — map it on BOTH sides or add it to `excluded`")
+    else . end;
+
 def project_tf:
   ((.planned_values // .values) // error("not a terraform show -json plan or state document (no .planned_values and no .values)"))
   | .root_module
   | if ((.child_modules // []) | length) > 0
     then error("the root carries child_modules; the projection reads root_module.resources only and refuses a second injection site") else . end
   | [ (.resources // [])[] | select(.type == "sentry_alert") ]
+  # BEFORE `canon | map(tf_rule)`: an excluded adopted rule may render
+  # `trigger_conditions: null` with no `sensitive_values`, and `tf_rule`'s floors
+  # would refuse a rule that is out of scope anyway.
+  | map(select(tf_in_scope) | tf_legacy_floor)
   | canon
   | map(tf_rule)
   | (group_by(.name) | map(select(length > 1) | .[0].name)) as $dups
@@ -201,6 +249,23 @@ def project_tf:
 # comparing raw live against a normalised reference reported 38 divergences on a
 # healthy org. Projecting ONLY the asserted fields makes a future server-side
 # addition inert by construction.
+# ANY-CONDITION, deliberately, and symmetric with `tf_in_scope` above: one
+# excluded type anywhere in a workflow's conditions takes the WHOLE workflow out
+# of scope, because the provider cannot express that type and a comparison of the
+# remaining fields would be a comparison of a rule Sentry does not evaluate.
+# Narrowing this to all-conditions-excluded was considered and rejected: it would
+# re-admit a rule the provider still cannot write, and report it as DRIFT — whose
+# remedy is "re-run the apply", which is wrong for exactly this case. Instead,
+# scripts/sentry-alert-live-fidelity.sh classifies a MANAGED name found out of
+# scope as `MANAGED RULE GAINED EXCLUDED TRIGGER` and says an apply is not a
+# repair — on the DAILY job; on the apply job the reference is projected from the
+# plan, where a refreshed legacy trigger has already taken the rule out of
+# `tf_in_scope`, so the same live state lands on the census's generic arm instead.
+# FOUR sites spell this predicate, not two: `in_scope` and `tf_in_scope` here, plus
+# `def excl_type` and `$INSCOPE` in scripts/sentry-alert-live-fidelity.sh. Only the
+# SET (`def excluded`) is shared — both the probe and its suite lift that one line
+# verbatim and refuse if the lift fails. Changing any of these predicates means
+# changing all four.
 def in_scope:
   [ .triggers.conditions[]?.type ] as $t
   | (excluded | any(. as $e | $t | index($e))) | not;

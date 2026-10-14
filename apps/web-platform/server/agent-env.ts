@@ -1,5 +1,6 @@
 import { PROVIDER_CONFIG } from "./providers";
 import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
+import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";
 
 /**
  * The auth scheme an agent run is funded by. `api_key` feeds the raw
@@ -41,32 +42,59 @@ const AGENT_ENV_ALLOWLIST = Object.freeze([
   "USER",
   "SHELL",
   "TMPDIR",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
+  // HTTP(S)_PROXY/NO_PROXY (both cases) are DELIBERATELY absent: ambient proxy
+  // env on the dispatcher would steer EVERY session outside the egress guard
+  // (#9534 review, structural A8). The only sanctioned carrier is the
+  // entitled-session `egressProxy` injection below.
+  // #8752 — the bwrap shim's artifact override. Forwarded so an incident-time
+  // override reaches the Agent SDK spawn path symmetrically with the C4
+  // prelude (which reads the same var); without it the shim would always
+  // resolve the baked default while `probeAgentSandboxHardening` certified a
+  // different file. Not secret — a path.
+  "SOLEUR_BWRAP_SECCOMP_BPF",
 ] as const);
 
 const AGENT_ENV_OVERRIDES = Object.freeze({
   DISABLE_AUTOUPDATER: "1",
   DISABLE_TELEMETRY: "1",
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+  // The platform-deployed plugin's hooks.json is loaded into every web session
+  // (`plugins:[{type:"local"}]`; `settingSources:[]` does not exclude it), and the
+  // `unkept-promise-hook.sh` Stop hook is operator-CLI vocabulary whose block reason
+  // made the Concierge write `<stop>OPERATOR-GATE...` over its own reply. It reads
+  // this variable and exits early. Rides the overrides, not the allowlist, so an
+  // ambient value cannot re-enable it. See the ADR-093 amendment (2026-09-30).
+  SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK: "1",
+  // The same plugin hooks.json also registers `operator-stage-approval.sh` (ADR-264), the PreToolUse
+  // hook that turns the harness approval prompt into the human acknowledgement of a generated
+  // operator script's production write. The web runtime has no such prompt yet (the web approval
+  // adapter is a tracked follow-up), so the hook must be a no-op here and a staged write exits 75 and
+  // writes nothing. Rides the overrides for the same reason as the line above: an ambient value
+  // cannot re-enable it. `buildAgentEnv` decides the env of the hosted Concierge sessions only: the
+  // server-side scheduled agents that load the plugin through their own `--plugin-dir` spawn build their
+  // env with a per-function `buildSpawnEnv` allowlist and never receive these overrides (ADR-277).
+  SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
+  // `destructive-command-guard.sh` is a no-op in hosted sessions by decision D8 (ADR-277), which also states what actually gates hosted Bash. Hosted `canUseTool` asks, through a must-ask lane, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (ADR-284, #9776); the hook itself stays off here and enabling it is a later consolidation.
+  SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
 } as const);
 
 // Defense-in-depth: only env var names from PROVIDER_CONFIG are allowed
 // as service token keys. Prevents injection of LD_PRELOAD, NODE_OPTIONS, etc.
-const ALLOWED_SERVICE_ENV_VARS = new Set(
+// Exported (feat-open-web-egress #9534): the entitled-session sandbox
+// `credentials.envVars` deny census reuses this exact set so the BYOK
+// secret census can never drift out of sync with the injection allowlist
+// (the census derives FROM this export, never a hand-copied list).
+export const ALLOWED_SERVICE_ENV_VARS = new Set(
   Object.values(PROVIDER_CONFIG).map((c) => c.envVar),
 );
 
-// The two mutually-exclusive auth env vars. The CLI subprocess authenticates
-// with `CLAUDE_CODE_OAUTH_TOKEN` (subscription) XOR `ANTHROPIC_API_KEY` (per-
-// token API). Injecting BOTH is the silent-API-billing trap (FR2): the SDK
-// prefers one but the operator believes they are on the subscription.
-const API_KEY_ENV_VAR = "ANTHROPIC_API_KEY";
-const OAUTH_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
+// The two auth variables are mutually exclusive: the CLI subprocess
+// authenticates with `CLAUDE_CODE_OAUTH_TOKEN` (subscription) XOR
+// `ANTHROPIC_API_KEY` (per-token API). Injecting BOTH is the silent-API-billing
+// trap (FR2): the SDK prefers one but the operator believes they are on the
+// subscription. Their names (`OAUTH_ENV_VAR`, `API_KEY_ENV_VAR`) live in
+// `agent-auth-env-vars.ts`, which the sandbox config reads to deny the same set
+// to sandboxed Bash (W1, ADR-272).
 
 /**
  * Optional env extras that are NOT service tokens and NOT auth vars.
@@ -107,6 +135,23 @@ export interface BuildAgentEnvOptions {
    */
   gitInstallationToken?: string;
   /**
+   * feat-open-web-egress (#9534) — per-session egress forwarder. When the
+   * workspace's `web_egress` grant is ON, the dispatcher mints a session
+   * token and spawns a loopback forwarder; this field carries its
+   * `{port, token, workspaceId}` so the spawned-CLI env gets
+   * `HTTP(S)_PROXY=http://<workspaceId>:<token>@127.0.0.1:<port>` (+lowercase
+   * twins) — the credentialed URL is BOTH the transport and the forwarder's
+   * inbound auth (its token check reads the Proxy-Authorization password).
+   * Phase-0 spike (spec TR7): this one env covers BOTH egress paths —
+   * in-process WebFetch honors process-env proxy, and SRT chains the
+   * sandboxed child's traffic upstream presenting THESE URL creds.
+   * Overrides the AGENT_ENV_ALLOWLIST ambient copies for THIS dispatch.
+   * The token never enters the sandbox child's env (SRT mints its own
+   * child-side proxy creds) — it lives only in the CLI-subprocess env and
+   * on the host loopback.
+   */
+  egressProxy?: { workspaceId: string; token: string; port: number };
+  /**
    * The platform-deployed plugin root (`getPluginPath()` →
    * `/app/shared/plugins/soleur` in prod), injected as `CLAUDE_PLUGIN_ROOT`.
    * The deployed skills' shell-outs read this var so they execute the
@@ -114,17 +159,15 @@ export interface BuildAgentEnvOptions {
    * `./plugins/soleur/` copy (the connected-repo-shadow delivery fix — plan
    * §Phase 2).
    *
-   * TWO ANCHOR FORMS NOW EXIST, and this comment used to name only the first.
-   * The ~105 non-gate skills still emit `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}`
-   * (deferred to #7453) — for those, this injection is what stops the `:-` arm
-   * resolving into the connected repo, and it is load-bearing. The secret gates
-   * (`incident`, `legal-generate`, `linear-fetch`, `trigger-cron`) and `community`
-   * were migrated by #7450 to the BARE `${CLAUDE_PLUGIN_ROOT}` with no default arm, so on those
-   * this injection is defence-in-depth rather than the sole control: with the var
-   * absent the bare form yields a root-anchored nonexistent path and the gate
-   * refuses, instead of silently resolving into the tree. Do not read the
-   * migration as making this injection optional — it still carries every
-   * unmigrated site, and the fail-closed precondition below is unchanged.
+   * Every skill now emits the BARE `"${CLAUDE_PLUGIN_ROOT}/…"` anchor with no default
+   * arm (#7450 migrated the secret gates, #7453 the rest — ADR-179 A18). The SDK
+   * loader most likely substitutes the token at delivery (`plugins:[{path}]` becomes
+   * `--plugin-dir`; code inspection, not a server measurement), so for skill TEXT this
+   * injection is defence-in-depth: with the var absent an unsubstituted token yields a
+   * root-anchored nonexistent path and the step refuses, instead of resolving into the
+   * connected repo. It stays FAIL-CLOSED because it still carries (a) the
+   * non-substituting branch and (b) payload SCRIPTS that read the variable at runtime —
+   * do not read the migration as making it optional.
    * It rides this
    * dedicated per-dispatch param rather than `AGENT_ENV_ALLOWLIST` on purpose:
    * the allowlist copies AMBIENT `process.env` (a whole-process constant),
@@ -150,10 +193,11 @@ export function buildAgentEnv(
   opts?: BuildAgentEnvOptions,
 ): Record<string, string> {
   const env: Record<string, string> = {
-    // Telemetry-suppression overrides ride OUTSIDE the auth branch: a
-    // subscription token must NOT phone home to the operator's personal
-    // Claude account. These names are not in ALLOWED_SERVICE_ENV_VARS, so
-    // the service-token loop below cannot clobber them.
+    // Fixed overrides (telemetry suppression and plugin-hook opt-outs) ride
+    // OUTSIDE the auth branch: a subscription token must NOT phone home to the
+    // operator's personal Claude account, and no ambient value may re-enable an
+    // opted-out hook. These names are not in ALLOWED_SERVICE_ENV_VARS, so the
+    // service-token loop below cannot clobber them.
     ...AGENT_ENV_OVERRIDES,
   };
 
@@ -211,25 +255,46 @@ export function buildAgentEnv(
     env.GIT_CONFIG_GLOBAL = "/dev/null";
   }
 
+  // feat-open-web-egress (#9534) — credentialed per-session proxy URL. Set
+  // AFTER the allowlist + service-token loops: this is a per-dispatch value
+  // and MUST beat any ambient HTTP_PROXY the server process carries (the
+  // allowlist copies ambient vars — an ambient proxy URL without the session
+  // token would 407 at the forwarder). NO_PROXY enumerates the platform
+  // control plane so API/telemetry traffic ideally bypasses the tenant
+  // gateway. Measured caveat (spec TR7): the SDK's API path still transits
+  // the proxy even with these hosts listed — the gateway must therefore
+  // allow them (they are ordinary public CONNECTs) and the ADR records the
+  // control-plane audit noise as accepted Phase-A posture.
+  if (opts?.egressProxy) {
+    const proxyUrl = `http://${opts.egressProxy.workspaceId}:${opts.egressProxy.token}@127.0.0.1:${opts.egressProxy.port}`;
+    // Curl-class stacks DO honor this — keep it complete for those even
+    // though the SDK API path ignores it (spec TR7 arm on NO_PROXY).
+    const noProxy =
+      "localhost,127.0.0.1,::1,api.anthropic.com,mcp-proxy.anthropic.com,statsig.anthropic.com,*.sentry.io,*.datadoghq.com,*.supabase.co,*.supabase.in,api.stripe.com,github.com,*.github.com";
+    env.HTTP_PROXY = proxyUrl;
+    env.HTTPS_PROXY = proxyUrl;
+    env.http_proxy = proxyUrl;
+    env.https_proxy = proxyUrl;
+    env.NO_PROXY = noProxy;
+    env.no_proxy = noProxy;
+  }
+
   // Deployed plugin root for the agent's `bash` shell-outs (Slice B / #6223).
   // Injected OUTSIDE the allowlist loop and the auth switch — it is a
   // per-dispatch platform path (getPluginPath()), NOT an ambient process.env
   // value, so it is deliberately absent from AGENT_ENV_ALLOWLIST. The deployed
-  // skills expand `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` to run the
-  // platform-controlled worktree-manager.sh, never the untrusted connected-repo
-  // copy.
+  // skills' bare `"${CLAUDE_PLUGIN_ROOT}/…"` anchors (ADR-179 A18, #7453) resolve to
+  // the platform-controlled scripts, never the untrusted connected-repo copy.
   //
   // FAIL-CLOSED (#6223, ADR-093): the injection is the per-dispatch boundary at
   // which the export invariant is pinned. A dispatch whose env OMITS
-  // CLAUDE_PLUGIN_ROOT would let the `:-./plugins/soleur` fallback resolve the
-  // connected repo's UNTRUSTED committed copy — silently re-opening the hole
-  // ADR-093 closes. The two examples this comment used to cite —
-  // redact-sentinel.sh and trigger.sh — are no longer instances: #7450 migrated
-  // both to the bare anchor, whose unset expansion is root-anchored and refuses
-  // rather than resolving into the tree. The hole is still real for the ~105
-  // sites that keep the `:-` arm pending #7453, which is why this stays
-  // fail-closed; worktree-manager.sh above is a live example. Do not "simplify"
-  // this on the strength of the migrated gates. So:
+  // CLAUDE_PLUGIN_ROOT leaves an unsubstituted skill token, and every payload
+  // script that reads the variable at runtime, without the platform root. Since
+  // #7453 no skill carries a `:-` default arm (ADR-179 A18), so the unset case
+  // refuses on a root-anchored path rather than resolving into the connected
+  // repo — but a refusal is an outage, and a future default arm would re-open
+  // the ADR-093 hole silently. Do not "simplify" this on the strength of the
+  // migration. So:
   //   - present → validate via assertTrustedPluginPath (rejects non-/app/ in
   //     prod; returns the value unchanged) then set. This is a SECOND, distinct
   //     call from the `assertTrustedPluginPath` guard in `buildAgentQueryOptions`

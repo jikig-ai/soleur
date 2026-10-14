@@ -18,7 +18,7 @@ import path from "node:path";
 // so this asserts on the file text. Standalone file per the work-skill guidance
 // — never colocate readFileSync source asserts with a file that mocks node:fs.
 //
-// Plan: knowledge-base/project/plans/2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 1.
+// Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 1.
 
 const SRC = readFileSync(
   path.join(__dirname, "../server/agent-runner.ts"),

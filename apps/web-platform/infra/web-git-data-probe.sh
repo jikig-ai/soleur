@@ -31,13 +31,35 @@ URL="${GIT_DATA_HEARTBEAT_URL:-}"
 # the fail-soft SUPPRESS classification below always emits. Set SOLEUR_PROBE_VERBOSE=1 for on-host debug.
 VERBOSE="${SOLEUR_PROBE_VERBOSE:-}"
 
+# The heartbeat URL's PATH is the credential, so it must not ride curl's argument list (readable by every
+# local user in /proc/<pid>/cmdline; ADR-280, #9757): it reaches curl on the stdin config (`--config -`),
+# `--disable` (first, so no ~/.curlrc is read as root) and `--noproxy '*'` confine the transport (lint Rule D); `-g` is new here (a URL with [ ] or
+# { } would otherwise print itself in curl's glob-parse error). This host has no checkout, so this is the
+# inline form of the library. The value is judged BEFORE any request, with no trimming: a scheme other
+# than https://, an empty rest, or any byte outside [A-Za-z0-9._~:/?&=%+-] (a quote, backslash or newline
+# would add directives to the config grammar) is refused, with zero requests, one value-free marker on
+# stderr (the unit's SyslogIdentifier ships it) and the same fail-soft exit as the other arms.
+_hb_url_ok() {
+  local LC_ALL=C
+  case "$1" in https://*) ;; *) return 1 ;; esac
+  case "${1#https://}" in ''|*[!A-Za-z0-9._~:/?\&=%+-]*) return 1 ;; esac
+}
+# One call = one attempt = one fresh process substitution (a substitution is consumed once, so a second
+# attempt sharing the first one's would read EOF and send no URL).
+_hb_curl() { curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config - 2>/dev/null < <(printf 'url = "%s"\n' "$URL"); }
+
 _ping() {
   if [ -n "${SOLEUR_GIT_DATA_PROBE_PING_LOG:-}" ]; then
     printf 'PING %s\n' "$1" >> "$SOLEUR_GIT_DATA_PROBE_PING_LOG"
     return 0
   fi
   [ -n "$URL" ] || { echo "[git-data-probe] WARN: GIT_DATA_HEARTBEAT_URL unset — reachable but cannot ping." >&2; return 0; }
-  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[git-data-probe] WARN: heartbeat ping FAILED (reachable, url_present=yes)" >&2
+  if ! _hb_url_ok "$URL"; then
+    echo "SOLEUR_CREDENTIAL_REFUSED script=web-git-data-probe reason=$(case "$URL" in *[[:cntrl:]]*) echo control_char ;; *) echo token_shape ;; esac) var=GIT_DATA_HEARTBEAT_URL" >&2
+    echo "[git-data-probe] WARN: heartbeat URL refused (reachable, no ping sent)" >&2
+    return 0
+  fi
+  _hb_curl || _hb_curl || echo "[git-data-probe] WARN: heartbeat ping FAILED (reachable, url_present=yes)" >&2
 }
 
 _reachable() {

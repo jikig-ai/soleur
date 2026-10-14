@@ -41,6 +41,21 @@ CONTENTION_LIB="$REPO_ROOT/scripts/lib/test-contention.sh"
 # hostile environment; test-all.sh:851 classifies rc 97 as [TRIPWIRE], not a failing assertion.
 # test-helpers.sh runs `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
 # deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every run (#8339 review).
+ROOTS=()
+SPAWNED=()
+cleanup() {
+  local p r
+  for p in ${SPAWNED[@]+"${SPAWNED[@]}"}; do
+    kill -KILL "$p" 2>/dev/null || true
+  done
+  for r in ${ROOTS[@]+"${ROOTS[@]}"}; do
+    rm -rf "$r" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
 # shellcheck source=plugins/soleur/test/test-helpers.sh
 source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: missing test-helpers.sh" >&2; exit 2; }
 
@@ -73,18 +88,6 @@ _harness_selfcheck() {
   FAIL="$f0"
 }
 
-ROOTS=()
-SPAWNED=()
-cleanup() {
-  local p r
-  for p in ${SPAWNED[@]+"${SPAWNED[@]}"}; do
-    kill -KILL "$p" 2>/dev/null || true
-  done
-  for r in ${ROOTS[@]+"${ROOTS[@]}"}; do
-    rm -rf "$r" 2>/dev/null || true
-  done
-}
-trap cleanup EXIT
 
 if [[ ! -f "$HELPER" ]]; then
   echo "ERROR: $HELPER does not exist" >&2
@@ -244,7 +247,7 @@ counts_of_linked() { run_linked "$1" kill_mine test-all.sh 2>/dev/null | _signat
 counts_esc() {
   local o
   o=$(run_fake "$1" list_runs test-all.sh 2>/dev/null)
-  if printf '%s' "$o" | LC_ALL=C grep -q $'\033'; then
+  if printf '%s' "$o" | LC_ALL=C grep -c >/dev/null $'\033'; then
     printf 'RAW-CONTROL-BYTE-PRESENT'
   else
     printf '%s' "$BASELINE_COUNTS"
@@ -324,7 +327,7 @@ fi
 # The sanitizer must be a CLASS, not a hand-picked list: \n \t \r were covered
 # from the start and ESC was not, and an ESC in a printed path can erase the
 # line above it in the operator's terminal.
-if printf '%s' "$out" | LC_ALL=C grep -q $'\033'; then
+if printf '%s' "$out" | LC_ALL=C grep -c >/dev/null $'\033'; then
   fail "T-ESC-B: a raw ESC byte reached the output"
 else
   pass "T-ESC-B: no raw control bytes in the output (sanitizer is a class, not a list)"
@@ -378,7 +381,7 @@ else
   fail "T-baseline: expected '$BASELINE_COUNTS', got '$got'"
 fi
 if run_fake "$HELPER" kill_mine no-such-pattern-xyz 2>/dev/null \
-   | grep -qE '^killed=0 would_signal=0 failed=0 refused=0 late_refused=0 skipped_same_pgroup=0 scanned=17 mode=dry-run$'; then
+   | grep -cE >/dev/null '^killed=0 would_signal=0 failed=0 refused=0 late_refused=0 skipped_same_pgroup=0 scanned=17 mode=dry-run$'; then
   pass "T-D6: counter line printed even when nothing matched"
 else
   fail "T-D6: counter line missing/wrong on a zero-match run"

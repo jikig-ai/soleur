@@ -110,7 +110,7 @@ Why it matters: Art. 35 requires a Data Protection Impact Assessment **before** 
 
 Fix pattern:
 - Run an Art. 35(7)-shaped DPIA before the feature ships. Required elements: (i) systematic description of the processing operations and purposes, (ii) assessment of necessity and proportionality, (iii) assessment of risks to data-subject rights and freedoms, (iv) measures envisaged to address the risks. Track the assessment in `compliance-posture.md` Active Items.
-- Consult `clo` and (for high-risk residual) the supervisory authority under Art. 36.
+- Consult `soleur:legal:clo` and (for high-risk residual) the supervisory authority under Art. 36.
 
 Regulation: GDPR Art. 35; Art. 36; Recitals 84, 89–96; EDPB Guidelines on DPIA (WP 248 rev.01).
 

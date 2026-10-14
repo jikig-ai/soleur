@@ -91,6 +91,195 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
     expect(row).not.toHaveProperty("hostname");
   });
 
+  // -- Guard 3 (#8427): refusal_detail carries no free text ----------------
+  //
+  // The property is now structural rather than transformational. An earlier
+  // revision carried git's `detail` string here behind a redact -> classify ->
+  // cap transform; review measured the classifier failing on any path without a
+  // `/` (a repository-root filename, which the model names freely), so ~198
+  // model-chosen characters per refused cluster reached the sink byte for byte.
+  // Every repair for that is a denylist over a string the model writes. The
+  // field is gone; these rows pin that it stays gone.
+
+  /** Emit one refusal row and return the parsed `refusal_detail` array. */
+  const emitDetail = (
+    entries: Parameters<typeof emitOutcomeMarker>[0]["refusal_detail"],
+  ): Record<string, unknown>[] => {
+    emitOutcomeMarker({ status: "completed", refusal_detail: entries });
+    expect(captured.lines).toHaveLength(1);
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    return row.refusal_detail as Record<string, unknown>[];
+  };
+
+  it("carries NO free-text field, even when a caller supplies one", () => {
+    // The regression row. A `detail` reintroduced anywhere upstream — on
+    // ClusterOutcome, in the push, in a future field — must not reach the row.
+    // Cast because the type forbids it; the type is the first gate and this is
+    // the second, because the payload crosses a JSON boundary where `tsc` ends.
+    const smuggling = [
+      {
+        cluster_hash: "abc",
+        reason: "diff-structural-op",
+        detail: "A ALERT-OPERATOR-model-chose-this-whole-string.md",
+      },
+    ] as unknown as NonNullable<Parameters<typeof emitOutcomeMarker>[0]["refusal_detail"]>;
+    const out = emitDetail(smuggling);
+    expect(out[0]).not.toHaveProperty("detail");
+    expect(JSON.stringify(out)).not.toMatch(/ALERT-OPERATOR/);
+  });
+
+  it("the exploit that falsified the previous design produces no free text", () => {
+    // Verified end-to-end against git 2.55.0: a proposal creating a root-level
+    // file named `<prose>.md` yields `${status} ${path}` as git's detail, and
+    // the old classifier was the identity function on it (no `/` to match).
+    const exploit = "A CONTACT ATTACKER AT evil-host FOR INSTRUCTIONS.md";
+    const out = emitDetail([
+      { cluster_hash: "abc", reason: "diff-structural-op", diff_len: 258 },
+    ]);
+    expect(JSON.stringify(out)).not.toContain(exploit);
+    // …and the row still says what an operator needs: which gate, which cluster.
+    expect(out[0]).toMatchObject({ cluster_hash: "abc", reason: "diff-structural-op" });
+  });
+
+  it("relays the diff-shape fields untouched — numbers and booleans only", () => {
+    const out = emitDetail([
+      {
+        cluster_hash: "abc",
+        reason: "diff-empty",
+        diff_len: 0,
+        diff_fenced: false,
+        diff_header_pair: false,
+        diff_hunk: false,
+      },
+    ]);
+    expect(out[0]).toMatchObject({
+      diff_len: 0,
+      diff_fenced: false,
+      diff_header_pair: false,
+      diff_hunk: false,
+    });
+    for (const [k, v] of Object.entries(out[0])) {
+      if (k === "cluster_hash" || k === "reason") continue;
+      expect(typeof v === "number" || typeof v === "boolean").toBe(true);
+    }
+  });
+
+  it("REBUILDS each entry: an unknown field is dropped, never relayed", () => {
+    // The spread-vs-destructure row. `{...entry}` would relay every future
+    // field — and an allowlist that decides which ENTRIES pass is not an
+    // allowlist of what they CARRY.
+    const rogue = {
+      cluster_hash: "abc",
+      reason: "diff-path-refused",
+      smuggled: "model-chosen-payload",
+    } as unknown as NonNullable<Parameters<typeof emitOutcomeMarker>[0]["refusal_detail"]>[number];
+    const out = emitDetail([rogue]);
+    expect(out[0]).not.toHaveProperty("smuggled");
+    expect(JSON.stringify(out)).not.toMatch(/model-chosen-payload/);
+  });
+
+  it("the rebuild is TOTAL over entries — every entry, not just the first", () => {
+    // A `.map` that transformed only [0], or a loop with an early break, passes
+    // a single-entry fixture. The second member is where that fails.
+    const rogues = Array.from({ length: 3 }, (_, i) => ({
+      cluster_hash: `h${i}`,
+      reason: "diff-path-refused",
+      smuggled: `payload-${i}`,
+    })) as unknown as NonNullable<Parameters<typeof emitOutcomeMarker>[0]["refusal_detail"]>;
+    const out = emitDetail(rogues);
+    expect(out).toHaveLength(3);
+    for (const e of out) expect(e).not.toHaveProperty("smuggled");
+    expect(JSON.stringify(out)).not.toMatch(/payload-/);
+  });
+
+  it("the entry cap still applies and the rebuild runs on the survivors", () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      cluster_hash: `h${i}`,
+      reason: "diff-path-refused",
+      diff_len: i,
+    }));
+    const out = emitDetail(many);
+    expect(out).toHaveLength(20);
+    expect(out[19]).toMatchObject({ cluster_hash: "h19" });
+  });
+
+  it("the row stays well under Vector's 10,000-character slice at worst case", () => {
+    // vector.toml: `if length(msg) > 10000 { msg = slice!(msg, 0, 10000) }`.
+    // A sliced row breaks mid-JSON, so `.message` decodes as a STRING and the
+    // runbook's own `select(type == "object")` drops the whole marker — the
+    // #8281 blind spot, reintroduced by its own fix.
+    //
+    // Measured on this exact worst case (20 entries, 64-hex hash, longest
+    // reason literal, all four shape fields, error_class + 200-char
+    // error_message):
+    //
+    //   shipped design                      5,515 B   headroom  +4,485
+    //   previous, 200 ASCII `detail`        9,755 B   headroom    +245
+    //   previous, 200 ASTRAL code points   21,755 B   headroom -11,755
+    //
+    // The astral row is the one that mattered: the removed `DETAIL_CAP` counted
+    // CODE POINTS, so 200 emoji is 800 bytes and the row landed 2.2x over the
+    // slice. Dropping `detail` is what buys the headroom; this row keeps it.
+    //
+    // Bytes, not `.length`: VRL's `length()` counts bytes for strings.
+    emitOutcomeMarker({
+      status: "error",
+      trigger: "cron",
+      run_id: "01TESTRUNID0000000000000000",
+      corpus_count: 2248,
+      corpus_input_bytes: 1214087,
+      clusters_proposed: 20,
+      clusters_opened: 0,
+      error_class: "AnthropicApiError",
+      error_message: "x".repeat(200),
+      refusals: Array.from({ length: 20 }, () => "diff-underivable-unparsable-record"),
+      refusal_detail: Array.from({ length: 20 }, (_, i) => ({
+        cluster_hash: "a".repeat(64),
+        reason: "diff-underivable-unparsable-record",
+        diff_len: 16384,
+        diff_fenced: true,
+        diff_header_pair: true,
+        diff_hunk: true,
+        ...(i === 0 ? {} : {}),
+      })),
+    });
+    expect(captured.lines).toHaveLength(1);
+    const bytes = Buffer.byteLength(captured.lines[0], "utf8");
+    expect(bytes).toBeLessThan(10000);
+  });
+
+  it("the discriminator keys survive an outcome that tries to shadow them", () => {
+    const shadowing = {
+      status: "completed",
+      SOLEUR_COMPOUND_PROMOTE_OUTCOME: false,
+      fn: "not-the-cron",
+    } as unknown as Parameters<typeof emitOutcomeMarker>[0];
+    emitOutcomeMarker(shadowing);
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    expect(row.SOLEUR_COMPOUND_PROMOTE_OUTCOME).toBe(true);
+    expect(row.fn).toBe("cron-compound-promote");
+  });
+
+  it("the handler redacts before every sink that can reach Better Stack", () => {
+    const handler = stripComments(
+      readFileSync(
+        join(__dirname, "..", "..", "..", "server", "inngest", "functions", "cron-compound-promote.ts"),
+        "utf-8",
+      ),
+    );
+    // The ctx-logger line carries no detail at all.
+    const call = handler.match(/logger\.warn\(\s*\{[^}]*\},\s*"diff-path-refused"/);
+    expect(call).not.toBeNull();
+    expect(call?.[0]).not.toMatch(/detail:/);
+    // Both model-supplied strings are redacted THEN capped. reportSilentFallback
+    // reaches the app pino instance, i.e. the same Better Stack source as the
+    // marker — "it only goes to Sentry" was never true.
+    expect(handler).toMatch(/detail:\s*safeDetail\(redactGithubSourcedText\(pathVerdict\.detail\)\)/);
+    expect(handler).toMatch(/safeDetail\(redactGithubSourcedText\(cluster\.target_path\)\)/);
+    // And no bare model-supplied value survives at either refusal site.
+    expect(handler).not.toMatch(/path:\s*cluster\.target_path/);
+  });
+
   it("shape-scrubs error_message — the one free-text field — on the DEFAULT path", () => {
     // The instance carries no `redact` paths (sibling-marker boundary), so the
     // emitter must scrub the field itself; a mutant deleting that call must

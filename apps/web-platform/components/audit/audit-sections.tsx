@@ -12,7 +12,7 @@
 // critical-tier finding. Closed-preview cohort routes through
 // legal@jikigai.com email; the inbox + outbound reply is the audit trail.
 
-import Link from "next/link";
+import { NavLink } from "../ui/nav-link";
 import { useEffect, useState } from "react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { humanTitle } from "@/lib/messages/action-class-copy";
@@ -266,12 +266,12 @@ function InngestSection({ initialRows }: { initialRows?: InngestRunRow[] }) {
                 >
                   Request human review →
                 </a>
-                <Link
+                <NavLink
                   href="/dashboard/settings/scope-grants"
                   className="text-soleur-text-secondary hover:text-soleur-text-primary hover:underline"
                 >
                   Change authorization →
-                </Link>
+                </NavLink>
               </div>
             </li>
           ))}

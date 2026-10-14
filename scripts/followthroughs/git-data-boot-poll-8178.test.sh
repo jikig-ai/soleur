@@ -119,16 +119,59 @@ add_job() {
                     conclusion:$pc, started_at:$ps, completed_at:$pe}] end)}]' \
     "$d/jobs-$2.json" > "$d/jobs.tmp" && mv "$d/jobs.tmp" "$d/jobs-$2.json"
 }
+# GH_LOG_BOM — the UTF-8 byte-order mark `gh run view --log` writes at the start of EVERY
+# step's log section. NOT decoration and NOT a captured artifact: these are three literal
+# bytes (EF BB BF), synthesized here per cq-test-fixtures-synthesized-only.
+#
+# WHY THE FIXTURE CARRIES IT NOW. It did not, and that omission is why this suite went 86/86
+# green against a probe that could not read a single real log. Measured on job 106093730126
+# (run 35516692240): the job log carries 15 `##[group]Run` headers and 14 of them begin with
+# the BOM — only the job's FIRST section ("Set up job") lacks one, because gh strips the mark
+# from the head of the concatenated stream and not from each section it appends. The poll step
+# is never the first section, so on a REAL log its header always carries the BOM. A fixture
+# that omits it tests a shape gh never emits, and the probe's region extractor — anchored on
+# `^[0-9]` after the tab fields are stripped — matched the fixture while failing on every real
+# log, returning CANNOT ESTABLISH against the exact evidence it exists to read.
+GH_LOG_BOM=$'\357\273\277'
 # log_lines_at <fx> <job_id> <job_name> <ts> <line>... — one `<job>\t<step>\t<ts> <line>` per
-# arg, the shape `gh run view --job --log` emits (measured on run 34836141887).
+# arg, the shape `gh run view --job --log` emits (measured on run 34836141887). The `<ts>` is
+# prefixed by ${LOG_BOM:-}, so a caller opening a step section sets LOG_BOM="$GH_LOG_BOM".
 log_lines_at() {
   local d="$1" jid="$2" jn="$3" ts="$4"; shift 4; assert_fixture_dir "$d"
   local l
-  for l in "$@"; do printf '%s\tUNKNOWN STEP\t%s %s\n' "$jn" "$ts" "$l"; done >> "$d/log-$jid.txt"
+  for l in "$@"; do printf '%s\tUNKNOWN STEP\t%s%s %s\n' "$jn" "${LOG_BOM:-}" "$ts" "$l"; done >> "$d/log-$jid.txt"
 }
 # log_poll_header — the runner's `##[group]Run` header that opens the poll step's output,
-# stamped in the step's start second.
-log_poll_header() { log_lines_at "$1" "$2" "$3" "2026-09-20T09:59:00.1000000Z" "##[group]Run set -uo pipefail"; }
+# stamped in the step's start second, PRECEDED (when the job has no log yet) by a faithful
+# model of the sections gh emits ahead of it.
+#
+# WHY THE PRELUDE. A faithful LINE shape is not a faithful DOCUMENT shape, and two regressions
+# walk through the gap between them. Before this, every fixture log began with the poll step's
+# own header, so:
+#   * the probe's timestamp gate (`ts >= ps`, the rule that makes it skip an EARLIER step's
+#     section and take the poll's) was unpinned — no fixture had an earlier header to skip, so
+#     deleting the gate outright left the suite fully green; and
+#   * a single-replacement BOM strip (`${log/…/}` instead of `${log//…/}`) was indistinguishable
+#     from the correct global one — with a lone BOM in the file, stripping "the first" and
+#     stripping "every" are the same operation. On a real 15-section log they are not: the
+#     single form clears section 2's mark and leaves the poll header's intact, i.e. it fails
+#     exactly as the unfixed probe did.
+# Both are dead now: the bare `Set up job` section reproduces gh's real asymmetry (it strips the
+# mark from the head of the concatenated stream, so ONLY the first section is bare), and the
+# BOM'd intermediate section stamped before POLL_START gives the timestamp gate something it
+# must actually skip AND puts a second mark in the file.
+log_poll_header() {
+  local d="$1" jid="$2" jn="$3"
+  if ! grep -q '##\[group\]Run' "$d/log-$jid.txt" 2>/dev/null; then
+    # Section 1 — BARE, because gh strips the BOM from the head of the stream, not per section.
+    log_lines_at "$d" "$jid" "$jn" "2026-09-20T09:57:00.1000000Z" "##[group]Run Set up job"
+    # Section 2 — BOM'd header, bare body. Stamped BEFORE the poll step's start second, so the
+    # probe must decline it on the timestamp rule rather than on its content.
+    LOG_BOM="$GH_LOG_BOM" log_lines_at "$d" "$jid" "$jn" "2026-09-20T09:58:00.1000000Z" "##[group]Run terraform apply"
+    log_lines_at "$d" "$jid" "$jn" "2026-09-20T09:58:01.1000000Z" "Apply complete! Resources: 1 added, 0 changed, 1 destroyed."
+  fi
+  LOG_BOM="$GH_LOG_BOM" log_lines_at "$d" "$jid" "$jn" "2026-09-20T09:59:00.1000000Z" "##[group]Run set -uo pipefail"
+}
 # log_lines — the poll step's OWN output. Writes the header first if the job has none yet.
 # A summary line `answered=N/M …` is preceded by the N `poll k/M: answered` lines the real
 # loop prints, so a fixture summary is consistent unless NOEXPAND=1 says otherwise.
@@ -147,7 +190,10 @@ log_lines() {
 # log_next_step <fx> <job_id> <job_name> <ts> <line>... — the NEXT step's header and output.
 log_next_step() {
   local d="$1" jid="$2" jn="$3" ts="$4"; shift 4
-  log_lines_at "$d" "$jid" "$jn" "$ts" "##[group]Run {" "$@"
+  # The mark opens the SECTION, so it rides the header line only — the body lines after it are
+  # bare, exactly as in the poll step's own output above.
+  LOG_BOM="$GH_LOG_BOM" log_lines_at "$d" "$jid" "$jn" "$ts" "##[group]Run {"
+  if [[ $# -gt 0 ]]; then log_lines_at "$d" "$jid" "$jn" "$ts" "$@"; fi
 }
 
 # run_arm <fx> [extra env...] — runs the REAL probe with the shim first on PATH; prints rc.
@@ -312,6 +358,7 @@ add_job "$fx" 115 1150 git_data_host_create completed failure "2026-09-20T09:01:
 log_lines "$fx" 1150 git_data_host_create $'\e[36;1manswered=3/30 last_class=none\e[0m' $'\e[36;1mVERDICT=received\e[0m' \
   "echo VERDICT=received" "x answered=3/30 last_class=none"
 expect "echoed script / mid-line VERDICT is not a result -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "echoed" "$fx" "carries no VERDICT line"
 
 echo "== a verdict must come from the POLL STEP's own output"
 # The operator's `reason` input is echoed by the NEXT step's env block. Forged lines there,
@@ -342,6 +389,7 @@ log_lines_at "$fx" 1420 git_data_host_replace "2026-09-20T09:59:00.0500000Z" "${
 log_poll_header "$fx" 1420 git_data_host_replace
 log_lines_at "$fx" 1420 git_data_host_replace "2026-09-20T09:59:00.9000000Z" "::error::DOPPLER_TOKEN is not present — refusing"
 expect "same-second forgery BEFORE the poll header, no verdict inside -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "forgebefore" "$fx" "carries no VERDICT line"
 
 # A tab inside echoed text cannot place `<ts> VERDICT=` at the start of the third field.
 fx="$WORK/fx-forgetab"; new_fx forgetab
@@ -365,6 +413,7 @@ add_job "$fx" 145 1450 git_data_host_replace completed failure "2026-09-20T09:01
 log_lines "$fx" 1450 git_data_host_replace "answered=0/20 last_class=transport" "VERDICT=unreadable"
 NOEXPAND=1 log_lines "$fx" 1450 git_data_host_replace "answered=3/20 last_class=none"
 expect "two summaries in the step -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "twosum" "$fx" "answered= summaries alongside"
 
 fx="$WORK/fx-noheader"; new_fx noheader
 add_run "$fx" 146 "2026-09-20T09:00:00Z"
@@ -398,24 +447,28 @@ add_run "$fx" 120 "2026-09-20T09:00:00Z"
 add_job "$fx" 120 1200 git_data_host_create completed success "2026-09-20T09:01:00Z"
 log_lines "$fx" 1200 git_data_host_create "answered=0/30 last_class=transport" "$REC"
 expect "VERDICT=received with answered=0 -> CANNOT ESTABLISH, never PASS" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "contra" "$fx" "the log contradicts the library's contract"
 
 fx="$WORK/fx-twov"; new_fx twov
 add_run "$fx" 121 "2026-09-20T09:00:00Z"
 add_job "$fx" 121 1210 git_data_host_create completed success "2026-09-20T09:01:00Z"
 log_lines "$fx" 1210 git_data_host_create "$ANS3" "VERDICT=unreadable" "$REC"
 expect "two VERDICT lines -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "twov" "$fx" "VERDICT lines in its poll step's output"
 
 fx="$WORK/fx-vocab"; new_fx vocab
 add_run "$fx" 122 "2026-09-20T09:00:00Z"
 add_job "$fx" 122 1220 git_data_host_create completed success "2026-09-20T09:01:00Z"
 log_lines "$fx" 1220 git_data_host_create "$ANS3" "VERDICT=ok"
 expect "VERDICT outside the vocabulary -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "vocab" "$fx" "outside the library's vocabulary"
 
 fx="$WORK/fx-nosum"; new_fx nosum
 add_run "$fx" 123 "2026-09-20T09:00:00Z"
 add_job "$fx" 123 1230 git_data_host_create completed success "2026-09-20T09:01:00Z"
 log_lines "$fx" 1230 git_data_host_create "$REC"
 expect "VERDICT=received without an answered= summary -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "nosum" "$fx" "answered= summaries alongside"
 
 echo "== ordering: the newest poll decides"
 fx="$WORK/fx-newfail"; new_fx newfail
@@ -461,7 +514,7 @@ for d in notoken unmerged prfail prshape noruns runsfail runsjunk atmerge wrongr
 done
 
 # Assertion count, EXACT, reported with printf + exit, never through fail() (ADR-193).
-EXACT=86
+EXACT=93
 if (( total != EXACT )); then
   printf 'FATAL: %d assertions ran, expected exactly %d -- coverage changed; update EXACT deliberately\n' "$total" "$EXACT" >&2
   exit 1

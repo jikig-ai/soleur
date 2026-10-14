@@ -45,6 +45,25 @@ if command -v docker >/dev/null && docker network inspect bridge >/dev/null 2>&1
   [[ "$V6" == "false" ]] || die "default bridge EnableIPv6=$V6 — IPv6 egress would bypass the v4 allowlist"
 fi
 
+# Egress gateway bridge (#9534): the opt-in open-web path lives on a second
+# bridge so it never enters the docker0-scoped SOLEUR-EGRESS jump. Three
+# placements (see plan §Proposed Solution): a docker0→gw accept here, a
+# DOCKER-USER reply accept + an egress0 jump into SOLEUR-EGRESS-GW below.
+EGRESS_BRIDGE_IF="${EGRESS_BRIDGE_IF:-soleur-egress0}"
+if command -v docker >/dev/null && docker network inspect "$EGRESS_BRIDGE_IF" >/dev/null 2>&1; then
+  V6E="$(docker network inspect "$EGRESS_BRIDGE_IF" -f '{{.EnableIPv6}}' 2>/dev/null || echo unknown)"
+  [[ "$V6E" == "false" ]] || die "$EGRESS_BRIDGE_IF EnableIPv6=$V6E — IPv6 would bypass the v4 gw deny set"
+fi
+
+# Gateway container IP: derived, never hardcoded — the bootstrap may
+# re-number the bridge subnet on collision. Absent container → no accept rule
+# (fail closed; the gateway itself is unreachable anyway).
+EGRESS_GW_IP=""
+if command -v docker >/dev/null; then
+  EGRESS_GW_IP="$(docker inspect soleur-egress-gw -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || true)"
+  [[ "$EGRESS_GW_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || EGRESS_GW_IP=""
+fi
+
 # Host-gateway address for the explicit Inngest :8288 accept. Derived, never
 # hardcoded (a daemon.json bip/default-address-pools change shifts it).
 BRIDGE_GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
@@ -67,15 +86,33 @@ CIDR_ELEMENTS=""
 # half-installing the firewall. The CIDR file is repo-controlled config — a bad
 # line means the committed file is wrong → reject-whole-file (vs. the resolver's
 # filter-and-drop, which is correct for untrusted DNS input; see plan precedent-diff).
+#
+# LINK-LOCAL (#9378): the instance-metadata endpoint 169.254.169.254 serves cloud-init user_data (a
+# Doppler read token), so NO CIDR whose range overlaps 169.254.0.0/16 may become an element — not only
+# the spellings someone thought of: 0.0.0.0/0, 128.0.0.0/1, 160.0.0.0/3, 169.0.0.0/8 and
+# 169.254.0.0/15 all cover it. Decided by RANGE ARITHMETIC on the numeric range, never prefix matching.
+# The loader's Phase 3 also carries a literal link-local drop ahead of every accept, so the invariant
+# does not rest on this validator alone.
+LL_LO=$((0xA9FE0000))  # 169.254.0.0
+LL_HI=$((0xA9FEFFFF))  # 169.254.255.255
 is_valid_ipv4_cidr() {
-  local cidr="$1" prefix o1 o2 o3 o4
+  local cidr="$1" prefix o1 o2 o3 o4 part ip size lo hi
   [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
   o1=${BASH_REMATCH[1]}; o2=${BASH_REMATCH[2]}; o3=${BASH_REMATCH[3]}
   o4=${BASH_REMATCH[4]}; prefix=${BASH_REMATCH[5]}
-  # A leading-zero octet (e.g. 08/09) makes (( )) attempt octal parse and fail
-  # non-zero ("value too great for base"); the `|| return 1` catches it, so such a
-  # line safely REJECTS (a canonical allowlist should not carry leading zeros anyway).
+  # A leading zero (010, 08) is refused outright: bash arithmetic would read it as OCTAL (010 == 8),
+  # so the range check below would be computed on a different number than nft parses.
+  for part in "$o1" "$o2" "$o3" "$o4" "$prefix"; do
+    [[ "$part" =~ ^0[0-9] ]] && return 1
+  done
+  # Range-check the (leading-zero-free) octets and prefix; any value out of range REJECTS the line.
   (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32 )) || return 1
+  ip=$(( (10#$o1 << 24) | (10#$o2 << 16) | (10#$o3 << 8) | 10#$o4 ))
+  size=$(( 1 << (32 - 10#$prefix) ))
+  # Align down to the network address: nft masks host bits when it stores an interval element (169.255.0.0/15 is
+  # stored as 169.254.0.0/15), so the overlap test must run on the MASKED range, not on the literal address.
+  lo=$(( ip / size * size )); hi=$(( lo + size - 1 ))
+  (( hi < LL_LO || lo > LL_HI )) || return 1
   return 0
 }
 
@@ -91,6 +128,34 @@ if [[ -f "$CIDR_FILE" ]]; then
     CIDR_ELEMENTS+="${CIDR_ELEMENTS:+,}$line"
   done < "$CIDR_FILE"
 fi
+
+# Shared gateway DENY set (#9534): one file feeds this loader's nftables
+# drop AND the Squid `dst` ACL (parity pinned by egress-gateway.test.sh).
+# Deliberately NOT is_valid_ipv4_cidr — that validator rejects link-local,
+# which is exactly what a deny file must contain. Format+range only; `ip6`
+# lines are Squid-only (this table is `ip`); missing file dies loud — an
+# empty deny is an open internal network.
+DENY_CIDR_FILE="${DENY_CIDR_FILE:-/etc/soleur/egress-deny-cidrs.txt}"
+DENY_ELEMENTS=""
+is_valid_ipv4_cidr_format() {
+  local cidr="$1" prefix o1 o2 o3 o4 part
+  [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
+  o1=${BASH_REMATCH[1]}; o2=${BASH_REMATCH[2]}; o3=${BASH_REMATCH[3]}
+  o4=${BASH_REMATCH[4]}; prefix=${BASH_REMATCH[5]}
+  for part in "$o1" "$o2" "$o3" "$o4" "$prefix"; do
+    [[ "$part" =~ ^0[0-9] ]] && return 1
+  done
+  (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32 )) || return 1
+  return 0
+}
+[[ -s "$DENY_CIDR_FILE" ]] || die "gateway deny file $DENY_CIDR_FILE missing/empty — an empty deny is an open internal network"
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ "$line" =~ ^[[:space:]]*(#|$) || "$line" == *:* ]] && continue
+  line="${line%%[[:space:]]#*}"
+  is_valid_ipv4_cidr_format "$line" \
+    || die "invalid CIDR in $DENY_CIDR_FILE: '$line' (reject-whole-file; refusing to build nft elements)"
+  DENY_ELEMENTS+="${DENY_ELEMENTS:+,}$line"
+done < "$DENY_CIDR_FILE"
 
 # --- Phase 1: declare table/sets/chains (additive, idempotent) -----------------
 # `nft -f` table declarations MERGE into existing state — safe to re-run.
@@ -108,7 +173,13 @@ table ip filter {
   set soleur_egress_dns {
     type ipv4_addr
   }
+  set soleur_egress_gw_deny {
+    type ipv4_addr
+    flags interval
+  }
   chain SOLEUR-EGRESS {
+  }
+  chain SOLEUR-EGRESS-GW {
   }
   chain DOCKER-USER {
   }
@@ -127,6 +198,14 @@ add element ip filter soleur_egress_allow_cidr { $CIDR_ELEMENTS }
 EOF
 fi
 
+# --- Phase 1.6: populate the shared gateway deny set (static, atomic) ----------
+if [[ -n "$DENY_ELEMENTS" ]]; then
+  nft -f - <<EOF
+flush set ip filter soleur_egress_gw_deny
+add element ip filter soleur_egress_gw_deny { $DENY_ELEMENTS }
+EOF
+fi
+
 # --- Phase 2: populate the sets BEFORE any drop rule exists --------------------
 # CRON_EGRESS_FROM_LOADER=1 suppresses the resolver's enforcement self-heal
 # (the rules are legitimately absent at this point — that's the availability
@@ -134,11 +213,30 @@ fi
 CRON_EGRESS_FROM_LOADER=1 "$RESOLVE_SCRIPT" || die "allowlist resolution failed — NOT installing default-drop (fail-open bootstrap; OnFailure alarms)"
 
 # --- Phase 3: (re)install our rules atomically ----------------------------------
+# Gateway forward accept — interpolated ONLY when the gw container exists and
+# its IP derived (empty line is a harmless blank in the nft script). It sits
+# after the CIDR allowlist and before the default-drop pair.
+GW_ACCEPT_LINE=""
+if [[ -n "$EGRESS_GW_IP" ]]; then
+  # Bake the (already ^[0-9.]+$ -validated) IP into the rule — a literal
+  # `$EGRESS_GW_IP` inside the nft -f script is an unknown identifier and
+  # aborts the whole transaction (review B1).
+  GW_ACCEPT_LINE="add rule ip filter SOLEUR-EGRESS ip daddr ${EGRESS_GW_IP} tcp dport 8443 accept comment \"soleur-egress: egress gateway (#9534)\""
+fi
 # One transaction: flush OUR chain + add the ordered rules. First-match-wins,
 # drop LAST. Everything in this chain arrived via the iifname-scoped jump, so
-# per-rule iifname repeats are unnecessary.
+# per-rule iifname repeats are unnecessary. The link-local drop (instance metadata,
+# #9378) is the FIRST DROP/ACCEPT-class rule, ahead of every accept: no set element or
+# later rule can admit 169.254.0.0/16. It is NOT silent: a rate-limited log rule for the
+# same range, with the SAME `egress-blocked: ` prefix as the default-drop log, sits
+# immediately BEFORE it so a container probing the metadata endpoint still reaches the
+# egress_blocked page (cron-egress-resolve.sh counts that prefix). The log is a separate
+# rule from the drop (never limit+log+drop in one rule): a `limit` that is exceeded makes
+# the rule fall through, and the unconditional drop right after still drops every packet.
 nft -f - <<EOF
 flush chain ip filter SOLEUR-EGRESS
+add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 limit rate 6/minute burst 10 packets log prefix "egress-blocked: " level notice comment "soleur-egress: link-local (instance metadata) probe log"
+add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 counter drop comment "soleur-egress: link-local (instance metadata) drop"
 add rule ip filter SOLEUR-EGRESS ct state established,related accept comment "soleur-egress: return traffic"
 add rule ip filter SOLEUR-EGRESS oifname "$BRIDGE_IF" accept comment "soleur-egress: intra-bridge (canary<->app)"
 add rule ip filter SOLEUR-EGRESS udp dport 53 ip daddr @soleur_egress_dns accept comment "soleur-egress: pinned DNS"
@@ -155,14 +253,89 @@ add rule ip filter SOLEUR-EGRESS ip daddr $BRIDGE_GW tcp dport 8288 accept comme
 add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.40 tcp dport 8288 accept comment "soleur-egress: dedicated inngest host (#6178)"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "soleur-egress: allowlist"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow_cidr accept comment "soleur-egress: cidr allowlist (github git LB ranges)"
+$GW_ACCEPT_LINE
 add rule ip filter SOLEUR-EGRESS limit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"
 add rule ip filter SOLEUR-EGRESS counter drop comment "soleur-egress: default drop"
 EOF
 
+# --- Phase 3.5: (re)install the gateway deny chain atomically -------------------
+# Every deny is `ct state new`-scoped: the same chain's packets include gw→docker0
+# REPLIES (docker0's 172.17.0.0/16 is inside the deny set's 172.16/12) — an
+# unscoped drop would sever the very tunnel it protects. NEW gw→docker0 dials
+# still die (the one-way invariant), because cold opens are `new`.
+# Bridge membership gate: only the gateway's OWN new connections may leave
+# soleur-egress0. Without this, `docker network connect soleur-egress0 <any>`
+# hands a container open egress minus the deny set — bypassing Squid auth
+# entirely. With no gw IP derived, the whole bridge is default-deny.
+GW_MEMBER_LINE="add rule ip filter SOLEUR-EGRESS-GW ct state new counter drop comment \"soleur-egress-gw: non-gateway member drop\""
+if [[ -n "$EGRESS_GW_IP" ]]; then
+  GW_MEMBER_LINE="add rule ip filter SOLEUR-EGRESS-GW ct state new ip saddr != ${EGRESS_GW_IP} counter drop comment \"soleur-egress-gw: non-gateway member drop\""
+fi
+nft -f - <<EOF
+flush chain ip filter SOLEUR-EGRESS-GW
+add rule ip filter SOLEUR-EGRESS-GW ct state new ip daddr @soleur_egress_gw_deny limit rate 10/minute burst 50 packets log prefix "egress-gw-deny: " level notice comment "soleur-egress-gw: deny log"
+add rule ip filter SOLEUR-EGRESS-GW ct state new ip daddr @soleur_egress_gw_deny counter drop comment "soleur-egress-gw: deny drop"
+$GW_MEMBER_LINE
+EOF
+
 # --- Phase 4: ensure the single DOCKER-USER jump exists -------------------------
-if ! nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS'; then
+# Capture-then-match, not `nft list | grep -q` under pipefail (#9392): a grep -q early exit
+# (SIGPIPE, status 141) or a failed nft read looks like "no jump" and used to insert a DUPLICATE
+# rule on every self-heal re-run. An unreadable chain is retried once; if it stays unreadable
+# the jump is inserted anyway and a WARN names the read failure: a duplicate jump is inert (the
+# chain ends in an unconditional drop), a missing jump leaves egress open until the next tick,
+# so this fails toward enforcement. The jump is matched by its target token, so a rule
+# naming `SOLEUR-EGRESS-OLD` does not count.
+jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)'
+retry_sleep="${NFT_RETRY_SLEEP:-1}"
+[[ "$retry_sleep" =~ ^[0-9]$ ]] || retry_sleep=1
+jump_rc=0; docker_user_rules="$(nft list chain ip filter DOCKER-USER 2>/dev/null)" || jump_rc=$?
+if (( jump_rc != 0 )); then
+  sleep "$retry_sleep"
+  jump_rc=0; docker_user_rules="$(nft list chain ip filter DOCKER-USER 2>/dev/null)" || jump_rc=$?
+fi
+if (( jump_rc != 0 )); then
+  log "WARN: cannot read the DOCKER-USER chain (nft rc=$jump_rc): inserting the jump anyway (a duplicate is inert, a missing jump is not)"
+  docker_user_rules=""
+fi
+if [[ ! "$docker_user_rules" =~ $jump_re ]]; then
   nft insert rule ip filter DOCKER-USER iifname "$BRIDGE_IF" counter jump SOLEUR-EGRESS comment '"soleur-egress: jump"'
   log "installed DOCKER-USER jump rule"
+fi
+
+# --- Phase 4.5: egress-gateway legs at DOCKER-USER (#9534) -----------------------
+# DOCKER-USER evaluates BEFORE DOCKER-ISOLATION-STAGE-2 in FORWARD, so both legs
+# live here. Order is append-sequential: the REPLY accept precedes the egress0
+# jump so established/related gw→docker0 packets (tunnel replies — docker0's
+# 172.17.0.0/16 is inside the deny set) never even reach the `ct state new`
+# denies. NEW gw→docker0 dials fall into SOLEUR-EGRESS-GW and die against the
+# RFC1918 ranges — the one-way property.
+# `nft insert`, not `add`: DOCKER-USER ends in a terminal `return`, so an
+# appended rule is DEAD RULES — never evaluated (review P1). Insert order is
+# LIFO: the jump goes in first, then the reply-accept ahead of it.
+reply_re="iifname \"$EGRESS_BRIDGE_IF\" oifname \"$BRIDGE_IF\" ct state established,related accept"
+gwyjump_re='jump[[:space:]]+SOLEUR-EGRESS-GW([[:space:]]|$)'
+if [[ ! "$docker_user_rules" =~ $gwyjump_re ]]; then
+  nft insert rule ip filter DOCKER-USER iifname "$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW comment '"soleur-egress: egress0 jump"'
+  log "installed DOCKER-USER egress0 jump"
+fi
+if [[ ! "$docker_user_rules" =~ $reply_re ]]; then
+  nft insert rule ip filter DOCKER-USER iifname "$EGRESS_BRIDGE_IF" oifname "$BRIDGE_IF" ct state established,related accept comment '"soleur-egress: gw reply traffic (#9534)"'
+  log "installed DOCKER-USER gw reply accept"
+fi
+# Third-interface direct-routing drop: the bridge is created gateway_mode
+# nat-unprotected (docker >=28's raw-PREROUTING protection is disabled — it
+# killed the designed docker0→gw leg at pre-conntrack). That mode also opens
+# direct-routed access to the gw from any OTHER ingress (a LAN-adjacent host
+# routed to the bridge subnet, or a third docker bridge). Our chains only jump
+# on {docker0, soleur-egress0}, so restore the boundary at our own layer: NEW
+# packets headed OUT egress0 that didn't come IN docker0 die here. Established
+# traffic (the gw's own upstream replies) is untouched; docker0 ingress keeps
+# the SOLEUR-EGRESS accept/deny discipline.
+routed_drop_re="oifname \"$EGRESS_BRIDGE_IF\" iifname != \"$BRIDGE_IF\" ct state new"
+if [[ ! "$docker_user_rules" =~ $routed_drop_re ]]; then
+  nft insert rule ip filter DOCKER-USER oifname "$EGRESS_BRIDGE_IF" iifname != "$BRIDGE_IF" ct state new counter drop comment '"soleur-egress: non-docker0 direct-routing drop (#9534)"'
+  log "installed DOCKER-USER non-docker0 direct-routing drop"
 fi
 
 log "OK: SOLEUR-EGRESS active (bridge=$BRIDGE_IF gw=$BRIDGE_GW)"

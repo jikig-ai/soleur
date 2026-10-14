@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { verifiedUserId } from "@/server/request-auth";
 
 // AC-FLOW3: org-switcher writes user_session_state via the set_current_organization_id
 // RPC (migration 060). Caller's supabase session refresh then propagates the new
@@ -18,10 +19,8 @@ export async function POST(request: Request) {
   if (!originValid) return rejectCsrf("api/workspace/set-current-organization", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

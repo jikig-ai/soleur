@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-05
+last_updated: 2026-09-25
 last_reviewed: 2026-06-01
 review_cadence: quarterly
 owner: CMO
@@ -25,8 +25,10 @@ Solo founders who think in billions. Technical builders who refuse to accept tha
 
 | Segment | Description | Default channels |
 |---------|-------------|-----------------|
-| Technical builders | Founders who code, use Claude Code, think in systems. The beachhead audience. | HN, GitHub, Discord, technical blog posts |
-| Non-technical founders | Founders who use AI tools (ChatGPT, Notion) but don't code. Want business leverage, not technical leverage. | Website, LinkedIn, X/Twitter, onboarding content |
+| Technical builders | Founders who code, use Claude Code, think in systems. The beachhead audience. | HN, GitHub, Discord, docs |
+| Non-technical founders | Founders who use AI tools (ChatGPT, Notion) but don't code. Want business leverage, not technical leverage. | Blog, website, LinkedIn, X/Twitter, onboarding content |
+
+The blog is written for non-technical founders by default (see `### Blog` under Channel Notes). Technical write-ups live on GitHub or in the docs, not on the blog. This reverses the 2026-03-29 routing (#1004), which sent the blog to technical builders; it changed on 2026-09-25 (#8774) after a mechanism-first post was rejected for losing its non-technical reader.
 
 ### Positioning
 
@@ -78,6 +80,8 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 
 > **Numbers: soft floors in prose.** Use "60+ agents" and "60+ skills" in static documentation and marketing prose. The live site renders exact counts from the filesystem via `{{ stats.agents }}` / `{{ stats.skills }}` -- never duplicate the exact count in prose, where it will drift as new agents and skills ship. Soft floors stay accurate across releases.
 
+> **[2026-10-06 Homepage computed counts (#9579)]** Pages that set `summaryCounts: computed` in their frontmatter (the homepage only) render the live `{{ stats.agents }}` / `{{ stats.skills }}` counts in prose, because the hero, the FAQ answer, the final CTA and the page summary would otherwise contradict the stat strip beside them. Pricing, about, vision, agents, skills, blog posts and static prose keep the soft floor. The stats line quoted under the 2026-03-22 Business Validation note below is a static-prose use and keeps the floor. Pinned by "#9579 Guard 2" in `plugins/soleur/test/seo-aeo-drift-guard.test.ts`; do not quote an exact count in this guide (`marketing-content-drift.test.ts` Test 1 rejects stale literals).
+
 - Write like the future is already here
 - Use "we" when speaking as Soleur, "you" when addressing the founder
 - Keep sentences short and punchy in marketing copy
@@ -100,14 +104,14 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 
 Two registers share the same brand identity (bold, mission-driven, precise). They differ in vocabulary, explanation depth, and proof points.
 
-**Technical register** (default for HN, GitHub, Discord, technical blog posts):
+**Technical register** (default for HN, GitHub, Discord, docs):
 
 - Use engineering metaphors and developer-native terms freely
 - Proof points: "420+ merged PRs," "60+ agents, 60+ skills," "brainstorm-plan-implement-review-compound lifecycle"
 - Assume the reader understands agents, CLI, workflows, and software development concepts
 - "Trust the reader's intelligence" applies -- don't over-explain
 
-**General register** (default for website, LinkedIn, X/Twitter, onboarding content):
+**General register** (default for the blog, website, LinkedIn, X/Twitter, onboarding content):
 
 - Plain language -- no jargon without immediate definition in the same sentence
 - Proof points: "saves 15+ hours/week on marketing, legal, and ops," "handles 7 of the 8 jobs you're doing alone," "remembers everything about your business"
@@ -474,6 +478,7 @@ Same guardrails as X/Twitter apply (see above), with these Bluesky-specific addi
 - Respect HN culture: be direct, cite sources, admit limitations, engage with criticism honestly.
 - When discussing Soleur, focus on the technical architecture and specific capabilities, not positioning or branding.
 - Example story title: "Soleur -- AI agents that run the non-engineering 70% of a solo founder's company"
+- Blog posts are written for non-technical founders, so do not submit one here as-is. Submit its technical write-up (the pull request, architecture decision record, or README) instead, or skip HN for that post (see `### Blog`).
 - Example comment reply: "The knowledge base is a git-tracked directory of markdown files. Agents read and write to it like a shared filesystem. No vector DB, no embeddings -- just files the founder can read and edit directly."
 
 ### Website / Landing Page
@@ -486,3 +491,27 @@ Same guardrails as X/Twitter apply (see above), with these Bluesky-specific addi
 - Final CTA: "Ready to build at scale?" / "Your AI organization is ready. Are you?" / Start Building.
 
 > **[2026-03-22 Business Validation Review]** When the web platform launches, the website CTA must shift from plugin installation to platform signup/login. The hero pattern, visual identity, and brand energy transfer directly -- the Solar Forge aesthetic is delivery-agnostic. The stats line ("60+ agents, 8 departments, 1 founder") remains valid. CTA copy candidates: "Start Building" (current, still works), "Open Your Dashboard", "Meet Your Organization." Do not reference CLI installation as the primary CTA in any new landing page content.
+
+> **[2026-10-06 Homepage hero CTA test (#9579, #9588)]** Scope: the homepage hero only, as a time-boxed rollout rather than an experiment. The hero primary button is "Get the self-hosted version" (the self-hosted install section), with the hosted waitlist kept visible and labelled below it; the premise of the rule above (the hosted platform launching) has not occurred. Review date: 2026-11-03. Revert triggers: the hero waitlist-signup rate falls more than about 30 percent relative to the pre-change baseline without matching install activity; the alpha cohort mix drifts further from its goal of at least 3 of 10 non-Claude-Code founders; hero copy drifts toward developer register. This note does not license "install", "CLI" or "terminal" wording, and every new landing page remains bound by the rule above.
+
+> **[2026-10-06 Homepage hero CTA test, bundled change (#9577, #9588)]** The homepage also gains a below-the-fold illustration section, "How a brief reaches the departments" (#9577), shipping inside the hero test window. It has no button and fires no event, so it cannot move the hero click events, but it adds a screen between the hero and the FAQ and is a candidate cause for scroll-based or waitlist-rate movement. The 2026-11-03 review compares hero click and waitlist signup rates in before and after windows around the section's ship date (recorded on #9588) and annotates the window; it does not restart it. The section is an illustration with sample data, not a depiction of the hosted product, until #9620 is decided.
+
+<!-- Heading read by name by plugins/soleur/skills/content-writer/SKILL.md; pinned by plugins/soleur/test/blog-audience-contract.test.ts. -->
+### Blog
+
+The blog is written for the non-technical solo founder. Every post starts from a problem that founder has in running their company and shows what changes once it is solved. How Soleur solves it comes second.
+
+- **Reader.** A solo founder who uses AI tools (ChatGPT, Notion) but does not code. Write in the General register (see `### Audience Voice Profiles`): explain, don't dumb down. Use the general thesis ("Running a company alone shouldn't mean doing everything alone"), not the engineering-problem thesis, and "your AI team" rather than agent or skill counts. A technical founder loses nothing reading the same post; the reverse is not true.
+- **Before drafting, write the founder sentence.** Put it in your working notes, not in the post: "A solo founder has this problem: [the problem]. After reading, they can [the outcome]." If the sentence needs a technical term, or the problem is ours rather than theirs (a bug we fixed, a tool we built, an audit we ran), re-angle the story to the founder's problem underneath it. Our own story can illustrate that problem, but it is never the subject. In an unattended run, always re-angle; never skip or abort. In an interactive run, the author may instead send the story to GitHub or the changelog.
+- **Open with their problem, in their words.** The title, SEO title, meta description and first paragraph name the founder's problem or the outcome, never the mechanism. The founder should recognize their own week in the first two sentences.
+- **Outcome before mechanism.** Show what changes for the founder's company: time back, a decision kept, a mistake avoided. Say what the founder still decides and what Soleur does. Then explain the mechanism in plain sentences, only as far as the reader needs to trust the outcome. Section headings follow the same rule.
+- **Jargon limits.** Nothing a reader sees (title, headings, body, FAQ answers) contains backticks or inline code, code blocks, terminal commands or flags, file paths, API names or system limits, internal skill, agent or command names (with or without the `soleur:` prefix), or issue or PR numbers (including the `#1234` shorthand). Define any other unavoidable term in the same sentence, using the General-register glossary. Test: a reader who has never opened a terminal can repeat each paragraph back.
+- **Proof points.** Use numbers a founder cares about (hours back, departments covered, decisions kept), never engineering metrics (PR, issue, commit or test counts). Use only numbers from a real source you can check; never estimate hours saved. "It was looking at a quarter of our plan" beats "30 of 118 open issues."
+- **Search.** Target the words a founder types when they have the problem ("how to handle contracts as a solo founder", "AI to run my marketing"), not developer queries ("Claude Code plugins", "MCP", "agentic engineering"). Comparison posts keep "Soleur vs X" or "X alternative" in the title and meta description, because that is the query, and name the founder's problem in the first paragraph.
+- **Where technical detail goes.** The technical half of a story lives on GitHub (the pull request, the architecture decision record, or the README) or in the docs. The post may link it once, at the end, as a full URL behind plain words: "For the technical write-up, see [how we fixed it](<full GitHub URL>)." That URL is the only place a PR or issue number may appear. Do not add an inline technical appendix.
+- **Call to action.** One next step a non-technical founder can take: try Soleur (the signup page) or read a related founder post. Never a terminal command or an install step.
+- **Distribution.** Distribute as usual, each channel following its own note, except Hacker News: skip it, or submit the technical write-up there instead of the post (see `### Hacker News`).
+- **Scope.** Applies to every new post. A refresh of an existing post updates facts only and keeps its title, slug, H1, meta description and target keywords; re-angling an existing post means writing a new one. Posts published before this note keep their register; do not rewrite, rename or redirect them to match.
+- **Example opening.**
+  - Don't: "Our own `product-roadmap next` saw 30 of 118 open issues and recommended the wrong phase."
+  - Do: "You keep a list of everything your business needs. Somewhere in it are ideas you chose to park and ideas you forgot, and from the outside they look exactly the same."

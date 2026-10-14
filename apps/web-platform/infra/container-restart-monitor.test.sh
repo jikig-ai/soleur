@@ -72,7 +72,7 @@ setup_mocks_and_run() {
   # Env file (Resend key)
   local env_file="$mock_dir/env"
   if [[ "${MOCK_NO_WEBHOOK:-}" != "1" ]]; then
-    printf 'RESEND_API_KEY=%s\n' "re_test_fake_key_123" > "$env_file"
+    printf 'RESEND_API_KEY=%q\n' "${MOCK_RESEND_KEY:-re_test_fake_key_123}" > "$env_file"
   else
     : > "$env_file"
   fi
@@ -149,6 +149,14 @@ fi
 # A plain-http (loopback) call must NOT carry --proto '=https' — a mechanical
 # "confine every curl" sweep would break it silently (the stub answers 200).
 if [[ "\$scheme_http" -eq 1 && "\$has_proto" -eq 1 ]]; then echo "PROTO_ON_HTTP" >> "$mock_dir/curl_violations"; fi
+# (#9597) The credential rides curl's stdin config channel (`--config -`). Consume
+# stdin when that flag pair is present, otherwise the process-substitution writer
+# is never read; one recorded line per call, never the argv.
+_prev=""
+for arg in "\$@"; do
+  if [[ "\$_prev" == "--config" && "\$arg" == "-" ]]; then cat >> "$mock_dir/curl_stdin"; fi
+  _prev="\$arg"
+done
 echo "\$*" >> "$mock_dir/curl_args"
 if [[ -n "\${MOCK_CURL_EXIT:-}" ]]; then echo "000"; exit "\$MOCK_CURL_EXIT"; fi
 if [[ "\${MOCK_RESEND_FAIL:-}" == "1" && "\$vendor" == "api.resend.com" ]]; then echo "500"; exit 0; fi
@@ -405,7 +413,7 @@ t_resend_fail_mirror() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   sentry_hit "$d" || ok=0                                   # mirror still posted
-  printf '%s\n' "$out" | grep -qiF "resend" || ok=0          # warning logged
+  printf '%s\n' "$out" | grep -ciF "resend" >/dev/null || ok=0          # warning logged
   # (#7898 P9) the failed send ships off-box as a crit row: marker + http code,
   # never the key
   grep -qF -- "-p user.crit" "$d/logger_args" 2>/dev/null || ok=0
@@ -471,7 +479,7 @@ t_cooldown_suppressed() {
   [[ "$rc" -eq 0 ]] || ok=0
   ! resend_hit "$d" || ok=0                                     # email suppressed
   ! sentry_hit "$d" || ok=0                                     # both channels gated by cooldown
-  printf '%s\n' "$out" | grep -qiF "cooldown" || ok=0           # logged the suppression reason
+  printf '%s\n' "$out" | grep -ciF "cooldown" >/dev/null || ok=0           # logged the suppression reason
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: active cooldown suppresses the alert send (logged)";
   else FAIL=$((FAIL+1)); echo "  FAIL: cooldown suppression (rc=$rc) out: $out"; fi
   rm -rf "$d"
@@ -537,7 +545,7 @@ t_pin_refused_host() {
   grep -qF "example.test" "$d/curl_args" 2>/dev/null && ok=0            # no Sentry curl to the refused host
   resend_hit "$d" || ok=0                                                # Resend channel survives
   grep -qF "sentry channel refused" "$d/curl_args" 2>/dev/null || ok=0  # note rides the email payload
-  printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" || ok=0
+  printf '%s\n' "$out" | grep -cF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" >/dev/null || ok=0
   grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" "$d/logger_args" 2>/dev/null || ok=0
   grep -qF "example.test" "$d/logger_args" 2>/dev/null && ok=0          # reason token only, never the host
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: refused ingest host → no Sentry curl, marker+crit row (reason token), email carries the note, exit 0";
@@ -557,7 +565,7 @@ t_pin_folded_host() {
   [[ "$rc" -eq 0 ]] || ok=0
   sentry_hit "$d" || ok=0                                                # folded host in the request
   grep -qF "INGEST.DE.SENTRY.IO" "$d/curl_args" 2>/dev/null && ok=0     # never the raw value
-  printf '%s\n' "$out" | grep -qF "_REFUSED channel=sentry" && ok=0
+  printf '%s\n' "$out" | grep -cF "_REFUSED channel=sentry" >/dev/null && ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: uppercase + trailing-dot host is accepted and the request uses the folded host";
   else FAIL=$((FAIL+1)); echo "  FAIL: folded-host row (rc=$rc) out: $out"; echo "        curl: $(cat "$d/curl_args" 2>/dev/null)"; fi
   rm -rf "$d"
@@ -574,7 +582,7 @@ t_pin_smuggled_host() {
     out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_SENTRY_HOST="$host"; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
     [[ "$rc" -eq 0 ]] || ok=0
     grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0             # no Sentry curl at all
-    printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" || ok=0
+    printf '%s\n' "$out" | grep -cF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" >/dev/null || ok=0
     resend_hit "$d" || ok=0
   done
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: path/query suffix and %2F-encoded separator are refused with reason=host-shape";
@@ -592,7 +600,7 @@ t_pin_bad_key() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   sentry_hit "$d" && ok=0
-  printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=key-shape" || ok=0
+  printf '%s\n' "$out" | grep -cF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=key-shape" >/dev/null || ok=0
   grep -qF "pubkey_test" "$d/logger_args" 2>/dev/null && ok=0
   resend_hit "$d" || ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo  "  PASS: non-hex public key is refused with reason=key-shape; email still fires";
@@ -610,7 +618,7 @@ t_pin_bad_project() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0
-  printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=project-shape" || ok=0
+  printf '%s\n' "$out" | grep -cF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=project-shape" >/dev/null || ok=0
   resend_hit "$d" || ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo  "  PASS: non-numeric project id is refused with reason=project-shape; email still fires";
   else FAIL=$((FAIL+1)); echo "  FAIL: bad-project row (rc=$rc) out: $out"; fi
@@ -629,8 +637,8 @@ t_pin_triple_unset() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0
-  printf '%s\n' "$out" | grep -qF "Sentry env unset" || ok=0
-  printf '%s\n' "$out" | grep -qF "_REFUSED channel=sentry" && ok=0     # unset is not a refusal
+  printf '%s\n' "$out" | grep -cF "Sentry env unset" >/dev/null || ok=0
+  printf '%s\n' "$out" | grep -cF "_REFUSED channel=sentry" >/dev/null && ok=0     # unset is not a refusal
   grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=sentry reason=unset" "$d/logger_args" 2>/dev/null || ok=0   # but it is shipped off-box
   resend_hit "$d" || ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: triple unset → 'Sentry env unset' log + SEND_SKIPPED row, no refusal marker, Resend still fires, exit 0";
@@ -649,7 +657,7 @@ t_logger_absent() {
   local ok=1
   [[ "$rc" -eq 0 ]] || ok=0
   sentry_hit "$d" || ok=0
-  printf '%s\n' "$out" | grep -qF "logger=absent" || ok=0
+  printf '%s\n' "$out" | grep -cF "logger=absent" >/dev/null || ok=0
   [[ -f "$d/logger_args" ]] && ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: logger absent: alert still posts, exit 0, stderr carries logger=absent";
   else FAIL=$((FAIL+1)); echo "  FAIL: logger-absent row (rc=$rc) out: $out"; fi
@@ -725,14 +733,85 @@ t_constants() {
 t_constants
 
 echo ""
+echo "--- (#9597) credential rides stdin (--config -), never argv ---"
+
+# Valid key: argv carries no credential and no Authorization header, the stdin
+# config carries the exact header line, and `--config -` is present.
+test_bearer_off_argv() {
+  TOTAL=$((TOTAL + 1))
+  local description="valid key: argv has no credential/Authorization, stdin config has the exact header"
+  local mock_dir
+  mock_dir=$(mktemp -d -t container-restart-monitor-bearer.XXXXXXXX)
+  seed_baseline "$mock_dir" "cid-A" 0 0
+  local output actual_exit
+  output=$(
+    export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3
+    setup_mocks_and_run "$mock_dir" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+  local ok=1 largs="$mock_dir/curl_args" lstdin="$mock_dir/curl_stdin"
+  [[ "$actual_exit" -eq 0 ]] || ok=0
+  [[ -f "$largs" && -f "$lstdin" ]] || ok=0
+  grep -qF -- "re_test_fake_key_123" "$largs" 2>/dev/null && ok=0
+  grep -qF -- "Authorization" "$largs" 2>/dev/null && ok=0
+  grep -qF -- "--config -" "$largs" 2>/dev/null || ok=0
+  [[ "$(cat "$lstdin" 2>/dev/null)" == 'header = "Authorization: Bearer re_test_fake_key_123"' ]] || ok=0
+  [[ ! -f "$mock_dir/curl_violations" ]] || ok=0
+  if [[ "$ok" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $description (exit=$actual_exit)"
+    echo "        curl_args: $(cat "$largs" 2>/dev/null)"
+    echo "        output: $output"
+  fi
+  rm -rf "$mock_dir"
+}
+test_bearer_off_argv
+
+# Unusable key (newline / quote / space): the Resend curl is NOT invoked, the
+# skip is reported on the existing marker family (stdout + off-box logger row),
+# the exit stays 0, and the key never reaches output or the logger row.
+assert_token_refused() {
+  local description="$1" key="$2" frag="$3"
+  TOTAL=$((TOTAL + 1))
+  local mock_dir
+  mock_dir=$(mktemp -d -t container-restart-monitor-bearer.XXXXXXXX)
+  seed_baseline "$mock_dir" "cid-A" 0 0
+  local output actual_exit
+  output=$(
+    export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_RESEND_KEY="$key"
+    setup_mocks_and_run "$mock_dir" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+  local ok=1 largs="$mock_dir/logger_args"
+  [[ "$actual_exit" -eq 0 ]] || ok=0
+  grep -qF "api.resend.com" "$mock_dir/curl_args" 2>/dev/null && ok=0
+  [[ ! -f "$mock_dir/curl_stdin" ]] || ok=0
+  grep -cF 'SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=resend reason=token_shape' <<<"$output" >/dev/null || ok=0
+  grep -qF 'SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=resend reason=token_shape' "$largs" 2>/dev/null || ok=0
+  grep -qF -- "$frag" "$largs" 2>/dev/null && ok=0
+  grep -cF -- "$frag" <<<"$output" >/dev/null && ok=0
+  grep -qF -- "$frag" "$mock_dir/curl_args" 2>/dev/null && ok=0
+  sentry_hit "$mock_dir" || ok=0                              # the Sentry channel is unaffected
+  if [[ "$ok" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $description (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+  rm -rf "$mock_dir"
+}
+assert_token_refused "key with an embedded newline: Resend curl not invoked, SEND_SKIPPED token_shape, exit 0" $'synthetic-fixture-token\nheader = "X-Injected: 1"' "X-Injected"
+assert_token_refused "key with a double quote: Resend curl not invoked, SEND_SKIPPED token_shape, exit 0" 'synthetic-fixture"-token-0002' 'fixture"-token'
+assert_token_refused "key with a space: Resend curl not invoked, SEND_SKIPPED token_shape, exit 0" 'synthetic fixture token 0003' 'fixture token'
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 # Anti-vacuity floor (ADR-193): the results line above is a human convention;
 # CI reads only the exit status, so a deleted row-dispatch line would vanish
 # green. Read the INDEPENDENT total and report directly — never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ "$TOTAL" -lt 29 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= 29. A row was deleted or its dispatch line removed.\n' "$TOTAL" >&2
+if [[ "$TOTAL" -lt 33 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= 33. A row was deleted or its dispatch line removed.\n' "$TOTAL" >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

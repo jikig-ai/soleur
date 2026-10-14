@@ -11,6 +11,9 @@
 # operator's real .claude/.rule-incidents.jsonl is never touched.
 
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
@@ -54,12 +57,12 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq  >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
-command -v perl >/dev/null 2>&1 || { echo "SKIP: perl missing"; exit 0; }
+command -v jq  >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
+command -v perl >/dev/null 2>&1 || { echo "UNRESOLVED: perl missing — this suite asserted nothing; install perl"; exit 3; }
 if [[ ! -f "$HOOK" ]]; then
-  echo "SKIP: $HOOK not yet present (RED)"
-  exit 0
+  echo "FAIL: $HOOK not found — the hook under test is repo-owned, so its absence is a defect"
+  exit 1
 fi
 
 pass() { echo "PASS: $1"; PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); }
@@ -69,7 +72,7 @@ fail() { echo "FAIL: $1"; echo "  detail: ${2:-}"; FAIL=$((FAIL + 1)); TOTAL=$((
 # Echoes the repo path. Args: <initial doc.md body> (empty → no doc.md).
 INCIDENTS_DIR=""
 new_repo() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   assert_fixture_dir "$tmp"
   git -C "$tmp" init -q
   git -C "$tmp" config user.email t@t.dev
@@ -91,7 +94,7 @@ make_input() { jq -n --arg cmd "$1" --arg cwd "$2" '{tool_name:"Bash", tool_inpu
 
 # Run the hook with a fresh incident ledger. Sets HOOK_OUT.
 run_hook() {
-  INCIDENTS_DIR=$(mktemp -d)
+  INCIDENTS_DIR=$(mktemp -d -p "$SUITE_TMP")
   HOOK_OUT=$(printf '%s' "$1" | INCIDENTS_REPO_ROOT="$INCIDENTS_DIR" "$HOOK" 2>/dev/null)
 }
 

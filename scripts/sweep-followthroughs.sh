@@ -23,13 +23,17 @@ set -euo pipefail
 # Refuse unconditionally, not behind a `${VAR:+x}` hatch: the forwarded-secret
 # set is determined at RUNTIME by each issue's `secrets=` clause, so no literal
 # name exists for a hatch to test and it would be open by construction.
-# Measured -- the append at `env_args+=("$name=${!name}")` does NOT leak (bash
-# prints array appends unexpanded), but the invocation below traces as
+# Measured -- the pre-S2 invocation (`env -i PATH=... NAME=<value> ... "$script"`)
+# traced as
 #   ++ env -i PATH=... SENTRY_ACTIONS_RO_TOKEN=<value> scripts/followthroughs/<probe>
 # putting every secret this sweeper forwards onto one line, which then reaches a
-# public issue comment. To debug a probe, trace the probe itself: xtrace is not
-# inherited across this child invocation (and `env -i` clears it outright), so
-# tracing the sweeper never showed the probe's execution anyway.
+# public issue comment. The hop is now a name-only launcher (FT_LAUNCHER below), so
+# the traced line carries the NAMES, but the refusal stays: the launcher's environment
+# (the export that precedes it) is still the credential channel, and a traced `export`
+# or substitution around it is one edit from a leak. To debug a probe, trace the probe
+# itself: xtrace is not inherited across this child invocation (the launcher rebuilds
+# the environment from scratch), so tracing the sweeper never showed the probe's
+# execution anyway.
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script forwards live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;
 esac
@@ -62,6 +66,55 @@ now_epoch=$(date -u +%s)
 log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
+# The probe launcher (argv-bearer sweep S2, D6), run as `python3 -I -c "$FT_LAUNCHER" SCRIPT EARLIEST NAME...`.
+# It rebuilds EXACTLY the environment the old `env -i PATH=<FHS default> HOME=.. NAME=value.. SOLEUR_FT_EARLIEST=..`
+# built -- nothing else survives -- reading each NAME's value from its OWN environment and execve()ing the
+# probe. The values are never an argument of any process. Written without single quotes (it lives in one).
+#  * `-I` ignores PYTHON* variables and the user site, so the interpreter cannot be steered by the
+#    forwarded environment; `os.environb` is bytes, so a non-UTF-8 value cannot raise.
+#  * Python ignores SIGPIPE and SIGXFSZ, and an ignored signal SURVIVES exec: restore both so the probe
+#    sees the disposition `env` would have handed it (a probe piping into a closed reader must die, not spin).
+#  * A name missing from the environment is a hard stop (126), not a silent skip: the sweeper validated
+#    and exported it a moment ago, so absence means the hop is broken and the probe must not run half-armed.
+#  * An exec failure maps to the codes `env` used (127 not found, 126 otherwise) so the sweeper reads the
+#    same TRANSIENT verdict it always did and no Python traceback reaches a public tracker comment.
+#  * ANY other exception (BaseException, minus the launcher own SystemExit) also exits 126 with the
+#    exception TYPE only, never its value or a traceback: an escaped exception exits 1, and on the
+#    closed set rc 1 means "verification FAILED -> reopen the tracker".
+#  * Edge cases where the launcher DELIBERATELY DIFFERS from `env` (measured, coreutils 9.11), pinned by
+#    rows S2D-7: a probe with no shebang fails execve with ENOEXEC (126, no shell fallback) whereas
+#    `env -i ./noshebang` falls back to /bin/sh and exits 0; execve does NO PATH search whereas `env`
+#    searches PATH for a slash-less name (the launcher exits 127); an unset HOME is a missing
+#    forwarded name (126). Neither difference is reachable: row S2D-10 pins a shebang and the exec bit
+#    on every committed probe, and every probe path is the canonical scripts/followthroughs/<name>
+#    (contains a slash) after the realpath check in run_one.
+FT_LAUNCHER='import os, signal, sys
+def run():
+    script, earliest, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+    src = os.environb
+    env = {b"PATH": b"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+    for n in names:
+        k = os.fsencode(n)
+        if k not in src:
+            sys.stderr.write("launcher: forwarded name %s is not in the sweeper environment\n" % n)
+            sys.exit(126)
+        env[k] = src[k]
+    env[b"SOLEUR_FT_EARLIEST"] = os.fsencode(earliest)
+    for s in (signal.SIGPIPE, signal.SIGXFSZ):
+        signal.signal(s, signal.SIG_DFL)
+    os.execve(script, [script], env)
+try:
+    run()
+except SystemExit:
+    raise
+except OSError as e:
+    sys.stderr.write("launcher: cannot exec %s: %s\n" % (sys.argv[1], e.strerror))
+    sys.exit(127 if e.errno == 2 else 126)
+except BaseException as e:
+    sys.stderr.write("launcher: internal failure before exec (%s)\n" % type(e).__name__)
+    sys.exit(126)
+'
+
 # Parse a single directive from an issue body. Stdin = body text.
 # Writes lines: `KEY VALUE` for script/earliest/secrets, or nothing if no
 # directive is present. Multiple directives in one body → only the FIRST
@@ -88,6 +141,12 @@ valid_secret_name() {
   [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
   case "$name" in
     PATH|HOME|IFS|BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PS4|CDPATH|LD_*|BASH_FUNC_*) return 2 ;;
+    # The sweeper's own channel to the probe (SOLEUR_FT_EARLIEST below; SOLEUR_FT_WINDOW and
+    # SOLEUR_FT_LIMIT are read by probes as operator overrides). A directive must not be able to
+    # name one in `secrets=`: forwarding is last-assignment-wins, so a directive-supplied copy
+    # placed after ours would hand the probe a horizon the sweeper did not gate on -- which is
+    # the whole defect this channel closes. Reserved, so the attempt is REFUSED loudly instead.
+    SOLEUR_FT_*) return 2 ;;
   esac
   return 0
 }
@@ -546,7 +605,13 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
   # be augmented with tool-cache or actions-runner-prefix dirs) defeats
   # the purpose of `env -i`. The verification scripts under
   # scripts/followthroughs/ should not depend on caller-side PATH state.
-  local -a env_args=("env" "-i" "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "HOME=$HOME")
+  #
+  # THE HOP IS A NAME-ONLY LAUNCHER (argv-bearer sweep S2, D6). The old form was
+  # `env -i PATH=... NAME=<value> ... "$script"`, which put every forwarded secret in `env`'s
+  # /proc/<pid>/cmdline (world-readable) until `env` called exec. Now this loop collects NAMES only;
+  # FT_LAUNCHER (below) reads each value from its own environment and execve()s the probe with the
+  # exact environment `env -i` built. Names travel on argv, values never do.
+  local -a fwd_names=()
   # Guard 3 (#7946). Three properties of this loop, each measured absent before it:
   #   (a) VALIDATE BEFORE EXPANDING. `${!name+x}` on an author-controlled `name` evaluates
   #       an array subscript, so a directive `secrets=a[$(cmd)]` ran `cmd` inside this job
@@ -586,7 +651,7 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
         missing_lines+=("- \`${name}\` — bound but empty: the repo secret is absent or the \`secrets.\` reference in the workflow is misspelled")
         continue
       fi
-      env_args+=("$name=${!name}")
+      fwd_names+=("$name")
     done
   fi
   if (( ${#missing_lines[@]} > 0 )); then
@@ -613,10 +678,27 @@ Fix: add the name to the \`env:\` block of \`.github/workflows/scheduled-followt
     return 0
   fi
 
+  # ONE CLOCK FOR BOTH HALVES. A probe that measures how long it has been parked needs the same
+  # `earliest` this sweep gated on at line ~530. Before this, probes re-derived it from a copy in
+  # their own file header -- a second copy of an issue-body value, which drifts the moment a body
+  # directive is re-baselined or a second tracker enrols the same script with its own `earliest=`.
+  # Forwarded unconditionally (it is not a secret, and `${earliest:-}` may legitimately be empty:
+  # a probe treats an empty/unparseable value as "no clock" and never escalates on it). Appended
+  # Set by the launcher AFTER the forwarded names, so ours is the last assignment the probe sees,
+  # independent of the reserved-name refusal above -- two mechanisms, because only one of them is
+  # a validator. `earliest` is a directive date, not a secret, so it rides argv.
   log "issue #$issue_num: running $script"
   local rc=0
   local out
-  out=$("${env_args[@]}" "$script" 2>&1) || rc=$?
+  # The subshell exports the already-validated names (HOME first: the launcher forwards it like a
+  # secret) so a name that is set but not exported still reaches the launcher's environment, then
+  # execs the launcher. `export` with no operand would print every exported variable WITH its
+  # value, so the operand list is never empty (HOME is always in it). Subshell, so the sweeper's
+  # own environment is unchanged and the launcher's stdout/stderr feed `out` exactly as `env`'s did.
+  out=$(
+    export -- HOME ${fwd_names[@]+"${fwd_names[@]}"}
+    exec python3 -I -c "$FT_LAUNCHER" "$script" "${earliest:-}" HOME ${fwd_names[@]+"${fwd_names[@]}"} 2>&1
+  ) || rc=$?
   log "issue #$issue_num: $script exit=$rc"
 
   # STRIP SHELL-TRACE LINES BEFORE THIS OUTPUT REACHES A PUBLIC COMMENT (#7797).
@@ -690,9 +772,45 @@ $trimmed_out
         log "issue #$issue_num: closed and verification passes — no action, no comment"
         return 0
         ;;
+      5)
+        # ACTION REQUIRED on a CLOSED issue: COMMENT, do not reopen. The open path
+        # learned exit 5; this one did not, so a 5 fell into the TRANSIENT catch-all
+        # below and posted nothing (#8657). That silently discarded the one verdict
+        # class whose whole purpose is to need a human: ghcr-read-retired-8036.sh
+        # uses exit 5 for cosign verdicts that NO Sentry rule matches, so the sweeper
+        # comment is its only notification — and that probe's own header argues leg 3
+        # must live on an OPEN tracker precisely because a closed one cannot carry it.
+        # Comment rather than reopen: 5 is "a human should look", not "the thing that
+        # closed this regressed" (that is 1, above).
+        action="comment"; verdict="ACTION REQUIRED"
+        # The body is set HERE, not left to the shared tail: this arm used to set only the action,
+        # so the tail expanded an unset body_msg (an unbound variable under set -u, with set -e
+        # suppressed by the caller's `|| fail`) and then reopened the issue anyway, because the
+        # reopen below ran for every action. A probe that exits 5 on a hand-closed tracker still
+        # carrying the label (the probe's own retirement path) was therefore reopened daily.
+        body_msg="### Sweeper run: ACTION REQUIRED (exit 5, $(date -u +%FT%TZ))
+Script: \`$script\` exited 5 on this CLOSED issue. Not reopening: 5 means a human should look. Remove the \`follow-through\` label to stop these comments.
+
+<details><summary>Output (last 4 KB)</summary>
+
+\`\`\`\`\`
+$trimmed_out
+\`\`\`\`\`
+
+</details>"
+        ;;
       *)
         # TRANSIENT on a closed issue: no action AND no comment. A flaky probe
         # must not accrete daily noise on an issue that is already closed.
+        #
+        # ONE EXCEPTION IS LOG-ONLY: a probe that refused its credential (the value-free
+        # SOLEUR_CREDENTIAL_REFUSED marker on its output) would otherwise be indistinguishable from a
+        # flaky probe here, so a rotted secret on a closed tracker stayed invisible. One run-log line
+        # names it (no comment, no reopen: the policy above is unchanged); `$out` is the sanitized
+        # output, so the marker line is the probe's own and carries no credential.
+        if [[ "$out" == *SOLEUR_CREDENTIAL_REFUSED* ]]; then
+          log "issue #$issue_num: closed, probe REFUSED its credential (SOLEUR_CREDENTIAL_REFUSED, exit $rc) — re-mint it; no comment on a closed tracker"
+        fi
         log "issue #$issue_num: closed, verification TRANSIENT (exit $rc) — no action, no comment"
         return 0
         ;;
@@ -708,10 +826,11 @@ $trimmed_out
     fi
 
     printf '%s' "$body_msg" | gh issue comment "$issue_num" --repo "$REPO" --body-file -
+    # Only the reopen action reopens: exit 5 comments and leaves the issue closed.
     # A failed reopen is the ONLY failure surface for this path — surface it as
     # a workflow annotation rather than letting the caller's `|| fail` swallow
     # it into the log.
-    if ! gh issue reopen "$issue_num" --repo "$REPO"; then
+    if [[ "$action" == "reopen" ]] && ! gh issue reopen "$issue_num" --repo "$REPO"; then
       printf '::error::sweeper failed to reopen issue #%s (verification exits 1 but the issue stays closed)\n' "$issue_num"
       return 1
     fi

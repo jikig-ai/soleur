@@ -28,8 +28,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/ship-soak-followthrough-gate.sh"
 
 PASS=0; FAIL=0
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 # ADR-129 rule (c): ONE owning trap for every tempfile this suite allocates.
 # Per-case sandboxes are children of this root, so a case that dies mid-assertion

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useActiveRepo } from "@/hooks/use-active-repo";
+import { Button } from "@/components/ui/button";
 
 // ADR-044 (#4543): the J5 (access-revocation) interstitial for the user's
 // ACTIVE workspace. The active-repo endpoint reads workspaces-only (never
@@ -52,14 +53,15 @@ export function LiveRepoBadge() {
           You no longer have access to that workspace — returning to your
           personal workspace.
         </span>
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={() => setDismissed(true)}
           aria-label="Dismiss notice"
-          className="shrink-0 text-soleur-text-muted hover:text-soleur-text-primary"
+          className="shrink-0 hover:text-soleur-text-primary"
         >
           ✕
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,10 +1,14 @@
 # shellcheck shell=bash
-# Guard 2 — inngest_host_dark_gate. The fifth authorization layer for the inngest-volume-recut
-# apply_target (#7695), and the only one that checks the WORLD rather than an intent.
+# inngest_host_dark_gate — "Guard 2" of the RETIRED inngest-volume-recut apply_target (#7695), the
+# fifth authorization layer of that dispatch and the only one that checked the WORLD rather than an
+# intent. (#8285 PR A converted that job into `inngest-backstop-retire`, whose own, separate guards
+# lived in a gate library deleted by #8285 PR B with that job; the "Guard N" numbers in this file and
+# in that one were unrelated.) Since then NO workflow calls `inngest_host_dark_gate`: it is kept, with
+# its suite, only while the retire-or-keep decision for the dormant recut target (#8316) is open.
 #
-# TWO ENTRY POINTS, TWO CONSUMERS — EDITING A SHARED HELPER EDITS BOTH:
-#   inngest_host_dark_gate         .github/workflows/apply-web-platform-infra.yml  (recut Guard 2)
-#   inngest_execute_registry_gate  scripts/cutover-inngest.sh op=execute step 2.0  (P0 cutover, #8054)
+# TWO ENTRY POINTS, ONE LIVE CONSUMER — EDITING A SHARED HELPER EDITS BOTH:
+#   inngest_host_dark_gate         no production caller since #8285 PR A (suite only; was the recut's Guard 2)
+#   inngest_execute_registry_gate  scripts/cutover-inngest.sh op=execute step 2.0 and its registry-probe arm (P0 cutover, #8054)
 # `_IHDG_IDENT` / `_IHDG_SELECT` and every `_ihdg_*` helper are SHARED; `_ihdg_graded_row` is the
 # shared prelude (G1-G6 plus the boot_id shape check == E1-E7; the execute gate's E8 is the same
 # predicate as G7). Helpers prefixed `_erg_` are consumed by the EXECUTE gate only. The execute
@@ -42,9 +46,14 @@
 #      The corrected form is a MONOTONICITY claim over all three callers, and it is strictly
 #      stronger than the false one: the only non-server writer decreases the count, and the reader
 #      does not write at all.
-#   2. G8 ∧ G9 prove inngest-server was NOT BOUND on the newest row — `server_active=inactive` AND
-#      a non-200 loopback `http_code`. A process that is not running and not answering cannot have
-#      written a key since that row was emitted.
+#   2. G8 ∧ G9 prove inngest-server was NOT BOUND on the newest row — `server_active` present,
+#      non-empty, != `unknown`, != `active` (#8078: `activating`/`failed` are non-serving systemd
+#      states the P1-5 refuse loop legitimately produces, and `unknown`/empty are readability
+#      failures, not claims) AND a non-200 loopback `http_code`. A process that is not running
+#      and not answering cannot have written a key since that row was emitted — and a unit that
+#      is `activating` under the P1-5 refuse loop cannot have reached `active`, because the guard
+#      refuses the start from ExecStartPre while the flag is outside its allowlist, which G19
+#      re-reads synchronously below.
 #   3. G19 proves no concurrent FLUSHALL can be AUTHORIZED: the cutover flip FSM only writes to
 #      this Redis under `INNGEST_CUTOVER_FLIP` ∈ {arm, execute}, and G19 re-reads the flag
 #      SYNCHRONOUSLY at dispatch time (not from the row) and refuses anything but
@@ -115,7 +124,7 @@
 #     G6  envelope host_name == soleur-inngest-prd                             -> wrong_host
 #     G7  message host_role  == dedicated                                      -> wrong_host
 #   Not serving
-#     G8  server_active == inactive                                            -> host_serving
+#     G8  server_active present, non-empty, != unknown; != active              -> host_serving / unreadable
 #     G9  http_code parses as ^[0-9]+$ AND != 200                              -> host_serving
 #     G10 zero function.finished rows attributable to this host                -> host_executing
 #   Store empty
@@ -183,15 +192,57 @@
 #
 # SPLIT IN TWO SINCE #8054. `_IHDG_IDENT` is the decode + host-identity conjunction — the part
 # every stream this lib reads shares, the heartbeat included — and `_IHDG_SELECT` is that plus the
-# probe marker. The heartbeat reader embeds `_IHDG_IDENT` and adds its own identifier test, so the
-# host conjunction is still written exactly once (the suite counts its occurrences).
+# probe-row predicate. The heartbeat reader embeds `_IHDG_IDENT` and adds its own identifier test,
+# so the host conjunction is still written exactly once (the suite counts its occurrences).
+#
+# THE PROBE-ROW PREDICATE IS NO LONGER DEFINED HERE (#8846). A marker-anchored `test(...)` was the
+# whole of it, and it was not enough: the inngest server's own event log ships from the SAME host
+# under SYSLOG_IDENTIFIER=doppler and quotes the marker whenever a GitHub issue/PR/comment about the
+# probe is webhooked in. The emitter is part of a probe row's identity, and "what is a probe row" is
+# now answered in ONE place for every reader in the repo — scripts/lib/inngest-probe-row.sh, whose
+# `inngest_probe_row` jq def checks the emitter AND the anchor. `_IHDG_PROBE` applies it to the
+# DECODED row; every jq program that embeds it is prefixed with "$INNGEST_PROBE_ROW_JQ".
+#
+# RESOLVED FROM THIS FILE'S OWN LOCATION, with an override for test sandboxes that run a COPY of
+# this lib from a temp dir (INNGEST_PROBE_ROW_LIB). A failed load is NOT silence: it sets
+# `_IHDG_PROBE_LIB_OK=0`, and both entry points refuse `unreadable` on that before anything else.
+# The `|| true` keeps a failed `cd` from aborting a `set -e` caller at the assignment — the path is
+# then `/scripts/lib/…`, the source fails, and the flag carries the refusal instead.
+#
+# THE LOAD IS PROVEN, NOT ASSUMED (the shared consumer load contract, #8846 review P2-1):
+#   - `unset` FIRST. `.github/actions/infra-credentials` exports every Doppler key into
+#     $GITHUB_ENV, so an INHERITED `INNGEST_PROBE_ROW_JQ='def inngest_probe_row: true;'` survived a
+#     lib that sources cleanly but assigns nothing (/dev/null, a truncated checkout) and the old
+#     `[[ -n $INNGEST_PROBE_ROW_JQ ]]` check passed on it — measured: a doppler row quoting the
+#     marker counted as a probe row with the flag still 1.
+#   - `declare -F` before calling the selftest: a lib that defines no selftest must refuse, never
+#     fall through to whatever executable of that name is on PATH.
+#   - the selftest grades the LOADED def against the event-log shapes; a def that loads but admits
+#     a doppler row (or compiles to nothing) is the same missing selector.
+#   - the source's stderr is NOT discarded: a missing file and a syntax error must read differently.
+unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
+_IHDG_PROBE_ROW_LIB="${INNGEST_PROBE_ROW_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/scripts/lib/inngest-probe-row.sh}" || true
+_IHDG_PROBE_LIB_OK=1
+# shellcheck source=scripts/lib/inngest-probe-row.sh
+if ! source "$_IHDG_PROBE_ROW_LIB" || ! declare -F inngest_probe_row_selftest >/dev/null || ! inngest_probe_row_selftest; then
+  _IHDG_PROBE_LIB_OK=0
+fi
+
+# _ihdg_selector_unavailable — the ONE stderr line G0 and E0 print before refusing `unreadable`.
+# Only the message is shared: the refusal itself (`_ihdg_verdict`) stays at each entry point, because
+# no shared helper may call `_ihdg_verdict` (the suite enforces it). stdout stays the bare token.
+_ihdg_selector_unavailable() {
+  echo "inngest-host-dark-gate: selector_unavailable lib=${_IHDG_PROBE_ROW_LIB:-<unresolved>} — the probe-row selector (scripts/lib/inngest-probe-row.sh, or INNGEST_PROBE_ROW_LIB) did not load or failed its selftest; nothing was measured" >&2
+}
+
 _IHDG_IDENT='
         | . as $outer
         | ((.raw? // empty) | fromjson?) as $d
         | select(($d | type) == "object")
         | select($d.host == $h and $d.host_name == $hn)'
-_IHDG_SELECT="$_IHDG_IDENT"'
-        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))'
+# ONE LINE, deliberately: the suite's B10 row ERG-M-PROBE empties it with a single-line sed.
+_IHDG_PROBE='| select($d | inngest_probe_row)'
+_IHDG_SELECT="$_IHDG_IDENT$_IHDG_PROBE"
 
 # THE EXPECTED PROBE SCHEMA, DEFINED ONCE. Both entry points default `--expected-schema` to this
 # and the execute gate's caller interpolates it into the `stale_schema` remedy. The emitter's
@@ -262,7 +313,7 @@ _ihdg_field() {
 # reading the OLDEST row and calling it current.
 _ihdg_rows() {
   local rows_file="$1" host="$2" host_name="$3"
-  jq -Rn --arg h "$host" --arg hn "$host_name" '
+  jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs
         | fromjson?
         | select(type == "object")
@@ -282,7 +333,7 @@ _ihdg_rows() {
 # filter and same sort as `_ihdg_rows`, so the row it names is the row the gate grades.
 _ihdg_newest_dt() {
   local rows_file="$1" host="$2" host_name="$3"
-  jq -Rn --arg h "$host" --arg hn "$host_name" '
+  jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs
         | fromjson?
         | select(type == "object")
@@ -302,7 +353,7 @@ _ihdg_newest_dt() {
 # caller's numeric predicate refuses.
 _ihdg_row_count() {
   local rows_file="$1" host="$2" host_name="$3"
-  jq -Rn --arg h "$host" --arg hn "$host_name" '
+  jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs
         | fromjson?
         | select(type == "object")
@@ -318,7 +369,7 @@ _ihdg_row_count() {
 # refuse. Echoes `0` on any read failure, so an unparseable file lands on the refusal.
 _ihdg_tied_newest() {
   local rows_file="$1" host="$2" host_name="$3" out
-  out="$(jq -Rn --arg h "$host" --arg hn "$host_name" '
+  out="$(jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs
         | fromjson?
         | select(type == "object")
@@ -498,12 +549,16 @@ _ihdg_graded_row() {
   # sed-rendered `soleur-inngest-prd` literal — which is why `host`, Vector's auto-derived OS
   # hostname that a stale literal cannot forge, is required alongside it. G5 and G6 are separate
   # predicates for that reason: either one alone is spoofable.)
+  #
+  # A census of PROBE rows, through the same shared predicate the selector uses (#8846): decode,
+  # `$_IHDG_PROBE`, then the NEGATED host conjunction. A forged event-log row from the web host is
+  # not evidence that the identity filter is wrong, so it must not turn `silent` into `wrong_host`.
   local wrong_host_rows
-  wrong_host_rows="$(jq -Rn --arg h "$host" --arg hn "$host_name" '
+  wrong_host_rows="$(jq -Rn --arg h "$host" --arg hn "$host_name" "$INNGEST_PROBE_ROW_JQ"'
       [ inputs | fromjson? | select(type == "object")
         | ((.raw? // empty) | fromjson?) as $d
         | select(($d | type) == "object")
-        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))
+        '"$_IHDG_PROBE"'
         | select(($d.host != $h) or ($d.host_name != $hn))
       ] | length' < "$rows_file" 2>/dev/null)"
   [[ "$wrong_host_rows" =~ ^[0-9]+$ ]] || { _ihdg_refuse unreadable; return 1; }
@@ -668,6 +723,15 @@ _ihdg_verdict() {
 }
 
 inngest_host_dark_gate() {
+  # ── G0 — the probe-row selector is LOADED (#8846) ───────────────────────────────
+  # FIRST, before argument parsing, G1 and every dispatch-time predicate (G18's
+  # `followthrough_7674` included): without the selector no row was measured, and any later token
+  # would name a host-side remedy for a reader-side defect. The path goes to STDERR; stdout stays
+  # the bare token, because the caller reads it with `$(…)`.
+  if [[ "${_IHDG_PROBE_LIB_OK:-0}" != "1" ]]; then
+    _ihdg_selector_unavailable
+    _ihdg_verdict "unreadable"; return $?
+  fi
   local rows_file="" query_rc="" finished_file="" finished_rc=""
   local expected_volume_id="" live_attachment_id="" followthrough_rc=""
   local cutover_flag="" diagnostic_boot=""
@@ -749,14 +813,22 @@ inngest_host_dark_gate() {
   host_role="$(_ihdg_field "$chosen_msg" host_role)" || { _ihdg_verdict "wrong_host"; return $?; }
   [[ "$host_role" == "dedicated" ]]                  || { _ihdg_verdict "wrong_host"; return $?; }
 
-  # ── G8 — systemd says the server unit is not running ────────────────────────────
+  # ── G8 — systemd does not say the unit is active ────────────────────────────────
+  # `!= active`, not `== inactive` (#8078): identical to the execute gate's E10. The P1-5
+  # flip-guard refuse loop leaves the unit in `activating` indefinitely (measured 2026-09-11
+  # on the live host — 25/25 probe rows `activating`, `http_code=000`), and `failed` is where a
+  # start-limit-latched unit lands. Neither serves, so `== inactive` graded the exact host this
+  # gate exists to authorise a recut on as `host_serving`. The safety argument for the WIDER
+  # predicate is carried by the gates around it, not by this line: G9 (`http_code != 200`)
+  # excludes a bound listener, and G19 re-reads the cutover flag SYNCHRONOUSLY and refuses
+  # anything but rolled-back/aborted — under the P1-5 refusal `activating` cannot progress to
+  # `active` without the flag leaving the pre-arm set, which G19 already refuses.
   local server_active
   server_active="$(_ihdg_field "$chosen_msg" server_active)" || { _ihdg_verdict "unreadable"; return $?; }
-  # A present-but-EMPTY value is a readability failure, not a claim about the unit. The emitter
-  # defaults this to `unknown` rather than blank, so a blank here means the row shape changed —
-  # which is a reason to stop, not a reason to say the host is serving.
-  [[ -n "$server_active" ]]                                 || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$server_active" == "inactive" ]]                      || { _ihdg_verdict "host_serving"; return $?; }
+  # `unknown` is the emitter's read-failed sentinel and a blank is a shape change; neither is a
+  # claim about the unit — both are `unreadable`, never a non-serving reading.
+  [[ -n "$server_active" && "$server_active" != "unknown" ]] || { _ihdg_verdict "unreadable"; return $?; }
+  [[ "$server_active" != "active" ]]                        || { _ihdg_verdict "host_serving"; return $?; }
 
   # ── G9 — and the loopback agrees ────────────────────────────────────────────────
   # `server_active` alone is a systemd CLAIM; `http_code` is the claim that matters. This host has
@@ -929,7 +1001,8 @@ inngest_host_dark_gate() {
   esac
 
   # ── G17 — the LIVE volume is the one the operator pinned ────────────────────────
-  # Guard 1's ID-PIN reads `.change.before.id` from a plan document. This one reads LIVE Hetzner
+  # The recut gate's Guard 1 ID-PIN (a plan-shape gate that no longer exists; its successor is the
+  # `before.id` pin in the since-deleted inngest-backstop-retire gate library) read `.change.before.id` from a plan document. This one reads LIVE Hetzner
   # state at dispatch time. They can disagree — a plan is a projection of state, and state can be
   # wrong about the world — and it is the world that gets destroyed.
   #
@@ -940,7 +1013,8 @@ inngest_host_dark_gate() {
   # THAT then added "and asserts the volume is attached to the inngest server", which is equally
   # false. G17 proves exactly one thing: the volume carrying this NAME has the id the operator
   # pinned. The attachment property is carried by G14's `data_mount_src` — a fact about what the
-  # host actually mounted — and the terraform ADDRESS question by Guard 1's `before.id`. Guard 1's before.id pin is the counter that answers the address
+  # host actually mounted — and the terraform ADDRESS question by the plan-shape gate's `before.id` pin (the recut gate's Guard 1,
+  # now the retire gate's). That pin is the counter that answers the address
   # question; the two are complementary and neither subsumes the other.
   #
   # An unreadable live id lands here rather than on `unreadable`: the pin could not be confirmed,
@@ -1007,11 +1081,16 @@ inngest_host_dark_gate() {
 # hourly row, `rolled-back` on the minute-old heartbeat) — only the NEWEST same-boot heartbeat is
 # graded, never "any arm-set flag in the window".
 #
-# THE DELIBERATE DIVERGENCE FROM G8. The recut gate requires `server_active == "inactive"`. The
-# P1-5 refuse loop leaves the unit in `activating` indefinitely (measured 2026-09-11 on the live
-# host), so G8 refuses today's host as `host_serving` — the same class of defect as this file's
-# reason for existing, tracked in its own issue (#8078) rather than changed under a destroy gate
-# here. E10 is `server_active != "active"`: `activating`, `failed`, `inactive` are all not-serving.
+# THE RESOLVED DIVERGENCE FROM G8 (#8078). G8 once required `server_active == "inactive"`, and
+# the P1-5 refuse loop leaves the unit in `activating` indefinitely (measured 2026-09-11 on the
+# live host), so G8 refused today's host as `host_serving` — the same class of defect as this
+# file's reason for existing. G8 now shares THIS gate's E10 predicate verbatim: `server_active`
+# present, non-empty, `!= "unknown"`, `!= "active"`. The divergence was safe to close because the
+# narrow reading was never load-bearing: G9 (`http_code != 200`) excludes a bound listener and
+# G19 re-reads the cutover flag synchronously, refusing anything but rolled-back/aborted —
+# `activating` under the P1-5 refusal cannot progress to `active` without the flag leaving the
+# pre-arm set, which G19 already refuses. `activating`, `failed`, `inactive` are all
+# not-serving; `active` alone is serving.
 #
 # E-TABLE (evaluation order; population before silence, identity before content):
 #   E1  probe --query-rc numeric and 0                                      unreadable
@@ -1147,6 +1226,16 @@ _erg_hb_newest() {
 }
 
 inngest_execute_registry_gate() {
+  # ── E0 — the probe-row selector is LOADED (#8846) ───────────────────────────────
+  # Same refusal, same position, same reason as the sibling's G0. The message is the shared
+  # `_ihdg_selector_unavailable`; the `_ihdg_verdict` call stays here for the reason the whitelist
+  # `case` below records (a helper may not call `_ihdg_verdict`). Both production callers truncate
+  # the emit file themselves before the call, so refusing ahead of this gate's own truncation
+  # leaves no stale value for the caller's notice to read.
+  if [[ "${_IHDG_PROBE_LIB_OK:-0}" != "1" ]]; then
+    _ihdg_selector_unavailable
+    _ihdg_verdict "unreadable"; return $?
+  fi
   local rows_file="" query_rc="" hb_file="" hb_rc="" emit_file=""
   local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="$_IHDG_EXPECTED_SCHEMA"
   # Two freshness bounds, both NUMERIC seconds. The caller's `FLIP_LIVENESS_SINCE` is the string

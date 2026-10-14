@@ -200,11 +200,23 @@ Three guards, plus two the review round added:
 18. **`gh run view --log` returns CR-laden lines** that truncated every extraction until stripped
     with `tr -d '\r'`. — Recovery: strip CR before parsing. — **Prevention:** one-off.
 
-19. **UNRESOLVED: #6617 reads rc=0 PASS locally and exit 1 FAIL under the sweeper.** Measured both
-    with and without `GH_REPO`, so repo resolution is not the cause; the remaining difference is
-    token identity, which should not affect `authorAssociation`. — Recovery: the record and the PR
-    body state the SWEEPER's verdict, because it is the authority. — **Prevention:** when a local
-    reading contradicts the authority, publish the authority's and say the cause is unestablished.
+19. **[Updated 2026-09-19 — RESOLVED, #6488/#6617] #6617 read rc=0 PASS locally and exit 1 FAIL
+    under the sweeper.** The entry below was right to publish the authority's verdict and right to
+    call the cause unestablished. It was wrong in one clause, and the wrong clause is the reason the
+    cause stayed unestablished for a day: *"the remaining difference is token identity, which should
+    not affect `authorAssociation`."* **Token identity is exactly what `authorAssociation` depends
+    on.** GitHub computes it against the READING token's visibility, and the operator's `jikig-ai`
+    membership is private — so the same comment renders `MEMBER` under the operator PAT and
+    `CONTRIBUTOR` under the sweeper's `GITHUB_TOKEN`, measured within one hour of each other. The
+    probe's `(OWNER, MEMBER, COLLABORATOR)` filter dropped the second, which is the whole of the
+    FAIL: the verdict had been recorded on 2026-07-20 and the probe could not see it. Fixed by
+    resolving effective repository permission (`scripts/lib/trusted-verdict.sh`) instead, which does
+    not depend on membership visibility. — Recovery: the record and the PR body stated the SWEEPER's
+    verdict, because it is the authority. — **Prevention, revised:** when a local reading contradicts
+    the authority, publish the authority's — and when the only remaining difference is IDENTITY, do
+    not reason about whether identity "should" matter. Make the runtime PRINT what it observes. The
+    fix shipped an `observed authorAssociation=<value> for verdict author <login> (token=GITHUB_TOKEN)`
+    line for exactly that reason, and it answered the question in one dispatch.
 
 20. **The sweeper dry run sat queued ~28 minutes** behind a repo-wide Actions backlog (13 of 15
     recent runs queued) and my first Monitor expired silent. — Recovery: re-armed; the run

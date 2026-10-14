@@ -26,6 +26,7 @@ import {
   emitCronPersistSkipped,
   emitCronTier2Deferred,
   emitRunReportSweep,
+  emitWatchdogDispatch,
 } from "@/server/cron-liveness-marker";
 
 afterEach(() => {
@@ -63,6 +64,10 @@ const MARKERS = [
       attempt: 0,
       digest_path: "knowledge-base/support/community/2026-07-19-digest.md",
       present: 1 as const,
+      // #7122: `present` alone no longer separates "the agent never wrote the file"
+      // from "validation rejected the draft", because the HANDLER writes the file.
+      verdict: "ok" as const,
+      writer: "handler" as const,
     },
     msg: "community digest file",
   },
@@ -109,6 +114,19 @@ const MARKERS = [
       dryRun: false,
     },
     msg: "run-report sweep changed state",
+  },
+  {
+    name: "SOLEUR_WATCHDOG_DISPATCH",
+    emit: emitWatchdogDispatch,
+    payload: {
+      host_id: "hetzner-123",
+      workflow: "scheduled-inngest-health.yml",
+      slot: "2026-09-24T10:15:00.000Z",
+      outcome: "skipped_slot_has_run" as const,
+      run_id: 777,
+      run_event: "schedule",
+    },
+    msg: "watchdog dispatch tick",
   },
 ] as const;
 
@@ -172,6 +190,33 @@ describe("cron-liveness-marker — per-marker contract (#6714 AC25/AC26)", () =>
     const mod = await import("@/server/cron-liveness-marker");
     const exportedEmitters = Object.keys(mod).filter((k) => k.startsWith("emit"));
     expect(exportedEmitters).toHaveLength(MARKERS.length);
+  });
+});
+
+describe("SOLEUR_COMMUNITY_DIGEST_FILE verdict + writer (#7122)", () => {
+  it.each(["ok", "rejected", "skipped-timeout"] as const)("carries verdict %s verbatim, with writer handler, after the existing keys", (verdict) => {
+    emitCommunityDigestFile({
+      cron: "cron-community-monitor",
+      attempt: 1,
+      digest_path: "knowledge-base/support/community/2026-10-06-digest.md",
+      present: 0,
+      verdict,
+      writer: "handler",
+    });
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    const [obj] = warnMock.mock.calls[0];
+    expect(obj).toMatchObject({ SOLEUR_COMMUNITY_DIGEST_FILE: true, verdict, writer: "handler", present: 0 });
+    // Key ORDER is part of the contract (a Better Stack reader greps the raw line): the
+    // pre-existing keys keep their positions and the two new keys follow them.
+    expect(Object.keys(obj as object)).toEqual([
+      "SOLEUR_COMMUNITY_DIGEST_FILE",
+      "cron",
+      "attempt",
+      "digest_path",
+      "present",
+      "verdict",
+      "writer",
+    ]);
   });
 });
 

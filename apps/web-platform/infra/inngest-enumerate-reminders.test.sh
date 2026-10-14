@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for inngest-enumerate-reminders.sh — the no-SSH cutover step-2 enumeration
 # (#5450). Verifies the script reconstructs FULL re-armable records from the
-# inngest v1.19.4 eventsV2 `raw` envelope, drops already-fired events (terminal
+# inngest v1.45.1 eventsV2 `raw` envelope, drops already-fired events (terminal
 # `runs` status), drops past-dated events (client-side `occurredAt`/`ts` filter —
 # the server `from`/`until` bounds receivedAt, NOT fire-time), and paginates the
 # cursor to exhaustion.
@@ -36,7 +36,7 @@ readonly NOW_MS=1781784000000
 readonly FUTURE_MS=1781870400000   # 2026-06-18T12:00:00Z
 readonly PAST_MS=1780358400000     # 2026-06-01T12:00:00Z
 
-# Build a v1.19.4-shaped eventsV2 page. Args: <hasNextPage> <endCursor> <edges-json>
+# Build a v1.45.1-shaped eventsV2 page. Args: <hasNextPage> <endCursor> <edges-json>
 make_page() {
   local has_next="$1" end_cursor="$2" edges="$3"
   jq -nc --argjson hn "$has_next" --arg ec "$end_cursor" --argjson edges "$edges" \

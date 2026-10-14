@@ -19,8 +19,8 @@
  * DAILY, not twice-daily. The window this closes is "a rule silently stopped
  * matching", whose cost accrues only when an incident happens to occur inside
  * it; halving a one-day window does not halve that risk, and each run is a
- * write-free API call against a vendor whose alert-rule family is already under
- * brownout pressure. 07:15 UTC deliberately avoids `cron-terraform-drift`'s
+ * write-free API call against a vendor whose legacy alert-rule family was retired
+ * outright in 2026-09 (#8451 — the probe reads the workflows API). 07:15 UTC deliberately avoids `cron-terraform-drift`'s
  * 06:00 fire so two Sentry-touching jobs do not stack.
  *
  * Liveness (Design A — no own Sentry monitor):

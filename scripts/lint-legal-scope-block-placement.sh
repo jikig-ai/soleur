@@ -255,7 +255,10 @@ awk '
     p=$0
     sub(/^\+\+\+ /, "", p)
     if (p == "/dev/null") { path=""; remaining=0; next }
-    sub(/^b\//, "", p)
+    # Git mnemonicPrefix mode uses c/w (and i/o for index/worktree sides)
+    # instead of the usual a/b prefixes. Strip every standard diff-side prefix
+    # so path lookups remain valid under either repository configuration.
+    sub(/^(a|b|c|i|o|w)\//, "", p)
     path=p
     remaining=0
     next

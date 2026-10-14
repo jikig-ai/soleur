@@ -66,11 +66,11 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
 # --- Transport-confinement diagnostics (#7873) --------------------------------
 # Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
 # curl's own stderr (which can carry the URL). A failed request then has four
-# competing causes the founder cannot tell apart: the xtrace refusal, the proxy
-# this script deliberately bypassed, a ~/.curlrc that `--disable` dropped, or an
-# ordinary network failure. So each failure emits ONE structured marker carrying
-# all four discriminators, beside a human line that names the bypass instead of
-# blaming the founder's connectivity.
+# competing causes the founder cannot tell apart: the proxy this script
+# deliberately bypassed, a ~/.curlrc that `--disable` dropped, a TLS trust
+# variable it cleared, or an ordinary network failure. So each failure emits ONE
+# structured marker carrying the discriminators, beside a human line that names
+# the bypass instead of blaming the founder's connectivity.
 SOLEUR_TRANSPORT_SCRIPT="bsky-community.sh"
 SOLEUR_TRANSPORT_PLATFORM="Bluesky"
 
@@ -111,7 +111,8 @@ proxy_bypassed() {
 # claiming it was applied. It now reports whether a proxy was actually configured
 # for this request to bypass, which is the fact a reader needs. `refusal` was the
 # constant "none" at every call site, so the cause it exists to discriminate could
-# never appear; it now carries `env-rebind-refused` and `xtrace-credential-bound`.
+# never appear; the field stays for a caller that can refuse for a named cause, and
+# this script has none, so it passes "none".
 #
 # `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
 # which is correct against an attacker and BREAKS a founder whose corporate CA
@@ -175,6 +176,50 @@ readonly BSKY_API="https://bsky.social/xrpc"
 ACCESS_JWT=""
 USER_DID=""
 
+# --- Bearer transport (#7843) ---
+# ACCESS_JWT is parsed out of an API reply, so it is RESPONSE-DERIVED: untrusted bytes. It
+# rides curl's STDIN config channel (`--config -`), never its argument list, where every
+# local user would read it from /proc/<pid>/cmdline. That channel is line-oriented, so a
+# token holding a quote and a newline could append a `url = "..."` directive and make curl
+# issue a second request. The guard refuses anything outside the JWT/base64url alphabet
+# BEFORE the value is formatted into the stream, and never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
+# Every authenticated request goes through here: ONE place owns the transport flags
+# (`--disable` first, `--noproxy '*'`), the token-shape guard and the header. Returns 120
+# with zero curl calls when the token is unusable; callers map that to a refusal.
+bsky_authed_curl() {
+  _bearer_ok "$ACCESS_JWT" || return 120
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$ACCESS_JWT")
+}
+
+# --- createSession body transport (#9597) ---
+# The createSession body carries the app password and a user-supplied handle. Neither may
+# ride curl's argument list (readable by every local user in /proc/<pid>/cmdline). The
+# createSession call has no bearer config, so curl's stdin is free: `jq` builds the body and
+# pipes it to `curl --data-binary @-` (NOT `-d @-`, which strips CR/LF). The values reach
+# `jq` through its ENVIRONMENT as an inline assignment prefix (`$ENV.X`), never `jq --arg`
+# (jq's own argv is world-readable too). This script never `export`s them: the BSKY_ID /
+# BSKY_PW aliases live on the one jq child only. (BSKY_HANDLE / BSKY_APP_PASSWORD themselves
+# are whatever the CALLER exported, so later children inherit those regardless.) No file, no
+# trap: the secret exists only in the processes' memory and the pipe.
+
+# A control character can never be part of a handle or an app password. Refusing one
+# before anything is sent keeps garbage off the wire; jq escapes everything else (a handle
+# holding a double quote is escaped, never injected into the JSON).
+_bsky_cred_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+
+# A fixed, value-free marker plus ONE human line on stderr, naming only which FIELD was
+# refused (never the handle or the password), and a non-zero exit. $2 is the variable name.
+# `post` also runs HOSTED, from scripts/content-publisher.sh, which captures stderr into its
+# fallback-issue path: the exit is 1, never 0 or 3.
+bsky_refuse() {
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  echo "Error: ${2} is empty or contains a control character (for example a stray carriage return or newline from a copy-paste or a CRLF .env file), so nothing was sent. Remove it and retry. The value is not shown." >&2
+  exit 1
+}
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -201,7 +246,7 @@ require_credentials() {
     echo "To configure:" >&2
     echo "  1. Create an account at https://bsky.app" >&2
     echo "  2. Go to Settings > App Passwords > Add App Password" >&2
-    echo "  3. Export BSKY_HANDLE and BSKY_APP_PASSWORD as environment variables" >&2
+    echo "  3. Export BSKY_HANDLE and BSKY_APP_PASSWORD as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs BSKY_APP_PASSWORD; export BSKY_APP_PASSWORD" >&2
     exit 1
   fi
 }
@@ -213,10 +258,25 @@ create_session() {
   local response http_code body
 
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
+  # Refuse BEFORE the body is built so a refused value never reaches a child process.
+  _bsky_cred_ok "${BSKY_HANDLE:-}" || bsky_refuse control_char BSKY_HANDLE
+  _bsky_cred_ok "${BSKY_APP_PASSWORD:-}" || bsky_refuse control_char BSKY_APP_PASSWORD
+  # The body is built into a variable FIRST, so a jq failure is classified as what it is (a
+  # body-build failure) and never reaches curl: it does not depend on `pipefail`, and it can
+  # never read as a transport failure or as a successful empty POST. The credentials reach jq
+  # only through its inline environment prefix; `printf` is a builtin, so the body (which holds
+  # the password) is on no argv; curl reads it from stdin.
+  local req_body
+  req_body=$(BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \
+    jq -n '{identifier: $ENV.BSKY_ID, password: $ENV.BSKY_PW}') || {
+    echo "Error: could not build the Bluesky createSession request body (jq failed); nothing was sent." >&2
+    exit 1
+  }
+  response=$(printf '%s' "$req_body" \
+    | curl --disable --noproxy '*' -s -w "\n%{http_code}" \
     -X POST \
     -H "Content-Type: application/json" \
-    -d "{\"identifier\": \"${BSKY_HANDLE}\", \"password\": \"${BSKY_APP_PASSWORD}\"}" \
+    --data-binary @- \
     "${BSKY_API}/com.atproto.server.createSession" 2>/dev/null) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to Bluesky API."
@@ -236,6 +296,11 @@ create_session() {
       USER_DID=$(echo "$body" | jq -r '.did // empty')
       if [[ -z "$ACCESS_JWT" || -z "$USER_DID" ]]; then
         echo "Error: Session response missing accessJwt or DID." >&2
+        exit 1
+      fi
+      if ! _bearer_ok "$ACCESS_JWT"; then
+        ACCESS_JWT=""
+        echo "Error: Session response carried an accessJwt with an unexpected shape; refusing to use it." >&2
         exit 1
       fi
       ;;
@@ -316,9 +381,12 @@ get_request() {
 
   local response http_code body
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-    -H "Authorization: Bearer ${ACCESS_JWT}" \
+  response=$(bsky_authed_curl -s -w "\n%{http_code}" \
     "$url" 2>/dev/null) || __curl_rc=$?
+  if (( __curl_rc == 120 )); then
+    echo "Error: Bluesky session token has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to Bluesky API."
     exit 1
@@ -344,12 +412,9 @@ post_request() {
   fi
 
   local url="${BSKY_API}/${endpoint}"
+  # `--disable` first and `--noproxy '*'` plus the bearer are added by bsky_authed_curl.
   local -a curl_args=(
-    # `--disable` first (position is load-bearing) and `--noproxy '*'`: the array
-    # is expanded as `curl "${curl_args[@]}"`, so element 0 is curl's first arg.
-    --disable --noproxy '*'
     -s -w "\n%{http_code}"
-    -H "Authorization: Bearer ${ACCESS_JWT}"
     -H "Content-Type: application/json"
   )
 
@@ -359,7 +424,11 @@ post_request() {
 
   local response http_code body
   local __curl_rc=0
-  response=$(curl "${curl_args[@]}" "$url" 2>/dev/null) || __curl_rc=$?
+  response=$(bsky_authed_curl "${curl_args[@]}" "$url" 2>/dev/null) || __curl_rc=$?
+  if (( __curl_rc == 120 )); then
+    echo "Error: Bluesky session token has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to Bluesky API."
     exit 1

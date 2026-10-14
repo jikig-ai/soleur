@@ -20,7 +20,7 @@ const CC: DomainLeaderId = "cc_router";
 
 function startBubble(): {
   messages: ChatMessage[];
-  activeStreams: Map<DomainLeaderId, number>;
+  activeStreams: Map<DomainLeaderId, string>;
 } {
   const r = applyStreamEvent([], new Map(), {
     type: "stream_start",

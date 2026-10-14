@@ -72,6 +72,6 @@ The plan's choice (single parent fetch, text-only subagent) avoids both. This le
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-05-12-feat-linear-issue-image-context-plan.md` (Research Reconciliation FR9/FR10)
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-12-linear-issue-image-context-brainstorm.md` (Capability Gap #3 — first multimodal-MCP-passthrough skill)
-- Spec: `knowledge-base/project/specs/feat-linear-issue-image-context/spec.md` (FR9, FR10, R6 in Risks)
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-linear-issue-image-context-plan.md` (Research Reconciliation FR9/FR10)
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-12-linear-issue-image-context-brainstorm.md` (Capability Gap #3 — first multimodal-MCP-passthrough skill)
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-linear-issue-image-context/spec.md` (FR9, FR10, R6 in Risks)

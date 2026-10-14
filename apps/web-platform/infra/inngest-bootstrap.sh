@@ -3,11 +3,13 @@
 #
 # Idempotent contract:
 #   - Downloads pinned inngest-cli, SHA256-verifies, installs to /usr/local/bin.
-#   - Writes systemd units for inngest-server.service + inngest-heartbeat.{service,timer}.
+#   - Writes systemd units for inngest-server.service, inngest-heartbeat.{service,timer},
+#     inngest-heartbeat-failure-log.service, inngest-server-probe.{service,timer}, and
+#     vector.service; stages the flip + LUKS cutover units from the image's /tmp payload.
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
-#   - On version bump, pauses the running server (drains in-flight events),
-#     restarts, resumes.
+#   - On version bump: a DRAIN_SLEEP_SEC settle delay, then binary replace, then
+#     restart; in-flight step dispatches are interrupted at the restart (#7463/#9219).
 #
 # Self-hosted Inngest binds 0.0.0.0:8288 (events) + 8289 (connect-gateway).
 # ADR-030's "loopback only" intent — keep Inngest unreachable from the public
@@ -61,6 +63,11 @@ SDK_URL="${SDK_URL:-http://127.0.0.1:3000/api/inngest}"
 # /hooks/deploy-status. #6555 removed the RUNTIME `--project` surface (units resolve the project
 # from the env-file) but NOT this render-time default. Ref #6555.
 export DOPPLER_PROJECT="${DOPPLER_PROJECT:-soleur}"
+# #9175: same env-defaulted contract for the CONFIG name — `prd` on prod (the correct name in
+# BOTH projects: soleur/prd and soleur-inngest/prd), the scratch `rehearsal_<runid>` config on
+# the provision rehearsal host (delivered through the provision unit's explicit env list).
+# Emitted units substitute @@DOPPLER_CONFIG@@ from this normalized value at provision time.
+export DOPPLER_CONFIG="${DOPPLER_CONFIG:-prd}"
 
 if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
   echo "ERROR: INNGEST_CLI_VERSION and INNGEST_CLI_SHA256 must be set (templated at build/cloud-init time)" >&2
@@ -81,10 +88,8 @@ readonly HEARTBEAT_SCRIPT="/usr/local/bin/inngest-heartbeat.sh"
 # oneshot that emits an ERR-priority `inngest-heartbeat` line when the heartbeat unit fails.
 readonly HEARTBEAT_FAILURE_LOG_UNIT="/etc/systemd/system/inngest-heartbeat-failure-log.service"
 readonly DOWNLOAD_URL="https://github.com/inngest/inngest/releases/download/${INNGEST_CLI_VERSION}/inngest_${INNGEST_CLI_VERSION#v}_linux_${INNGEST_CLI_ARCH}.tar.gz"
-# In-place upgrade drain. Override via env at install time if event volume
-# exceeds ~10 events/sec sustained — at higher rates the SQLite fsync window
-# can leave some inbound HTTP events unacknowledged. Default is fine for
-# alpha-internal (CFO autonomous-draft from Stripe webhooks, low volume).
+# In-place upgrade settle delay (DRAIN_SLEEP_SEC: the name is historical — nothing is drained).
+# Not overridable on the ci-deploy sudo path (--preserve-env omits it); edit the default.
 DRAIN_SLEEP_SEC="${DRAIN_SLEEP_SEC:-2}"
 
 # Defense-in-depth: refuse to operate if the writable host paths are symlinks
@@ -121,16 +126,15 @@ fi
 if [[ -z "$SKIP_BINARY_INSTALL" ]]; then
 
 # Detect in-place version upgrade (existing service running an older version).
-# Pause the server so the in-memory queue drains to the SQLite store before
-# replacing the binary, then resume after restart. Wall-clock downtime per
-# upgrade on loopback-only binding: ~5s.
+# No pause/resume verb exists (measured absent on v1.19.4 and v1.45.1, #7463/#9219);
+# the sleep is a settle delay, not a drain — nothing is quiesced before the restart,
+# and a host replace never enters this block.
 UPGRADE_FROM=""
 if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
   UPGRADE_FROM=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
   if [[ "$UPGRADE_FROM" != "$INNGEST_CLI_VERSION" ]]; then
-    log "upgrade detected: $UPGRADE_FROM → $INNGEST_CLI_VERSION; pausing for queue drain (${DRAIN_SLEEP_SEC}s)"
-    "$INSTALL_PATH" pause >/dev/null 2>&1 || log "warn: pause command failed (continuing)"
-    sleep "$DRAIN_SLEEP_SEC"  # allow in-flight events to drain to SQLite
+    log "upgrade detected: $UPGRADE_FROM → $INNGEST_CLI_VERSION; ${DRAIN_SLEEP_SEC}s settle delay before binary replace"
+    sleep "$DRAIN_SLEEP_SEC"
   fi
 fi
 
@@ -360,9 +364,21 @@ Description=Inngest server heartbeat ping to Better Stack
 After=network-online.target
 # #6556 Part 2: on failure, fire a push-less oneshot that emits an ERR-priority
 # `inngest-heartbeat` line so a unit failure is READABLE off-box (no SSH). Before this, a
-# heartbeat failure surfaced only as the un-shippable SYSLOG_IDENTIFIER=systemd "Failed to
-# start" journal row (the #6551 signature); now it also ships on the inngest-heartbeat channel.
+# heartbeat failure surfaced only as the SYSLOG_IDENTIFIER=systemd "Failed to
+# start" journal row (the #6551 signature — since explained and positively controlled by
+# #9963: Source 1's PRIORITY<=4 OR-arm carries it); now it also ships on the
+# inngest-heartbeat channel.
 OnFailure=inngest-heartbeat-failure-log.service
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write and
+# the 60s timer fires from boot — an absent file must SKIP the start (one "skipped, unmet
+# condition check" notice), never FAIL it into the every-60s storm + OnFailure ERR rows. The
+# EnvironmentFile= line stays unprefixed: once a start IS attempted, an absent file still fails
+# the unit — the fail-closed contract is retained. A skipped heartbeat is a MISSING heartbeat:
+# on this host the designed-dark signal is the web-1-fed inngest_consumer beat (the
+# missing-ping monitor pings nothing only while a beat never landed — the dark arm means that
+# alarm's arm state is an operator-runbook step, so the consumer beat is the channel that
+# pages either way).
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=oneshot
@@ -417,7 +433,7 @@ RuntimeDirectoryPreserve=yes
 # This line is what made the PrivateTmp defect above diagnosable in 2 minutes, off-box,
 # after 3 days of a blind 60s storm. It earned its keep before the fix it shipped with did.
 SyslogIdentifier=inngest-heartbeat
-ExecStart=@@DOPPLER_BIN@@ run --config prd -- @@HEARTBEAT_SCRIPT@@
+ExecStart=@@DOPPLER_BIN@@ run --config @@DOPPLER_CONFIG@@ -- @@HEARTBEAT_SCRIPT@@
 HEARTBEATEOF
 
 # #7695: the delimiter above is QUOTED, so nothing in the unit body is expanded or
@@ -427,7 +443,7 @@ HEARTBEATEOF
 # @@DARK_ARM@@ line above it cannot be ^...$-anchored) and use | as the delimiter because both
 # values are absolute paths. The @@ residual check below is not ceremony: an & in a substituted
 # path expands to the whole match and corrupts it at exit 0, which set -e does not catch.
-sed -i "s|@@DOPPLER_BIN@@|${DOPPLER_BIN}|; s|@@HEARTBEAT_SCRIPT@@|${HEARTBEAT_SCRIPT}|" "$HEARTBEAT_UNIT"
+sed -i "s|@@DOPPLER_BIN@@|${DOPPLER_BIN}|; s|@@HEARTBEAT_SCRIPT@@|${HEARTBEAT_SCRIPT}|; s|@@DOPPLER_CONFIG@@|${DOPPLER_CONFIG}|" "$HEARTBEAT_UNIT"
 # Refuse to install a unit still carrying an unsubstituted sentinel: a half-rendered
 # ExecStart= would fail at systemd start with a message about a literal @@ path, which is
 # exactly the class this file already learned to make diagnosable off-box.
@@ -447,9 +463,12 @@ cat > "$HEARTBEAT_FAILURE_LOG_UNIT" <<'FAILLOGEOF'
 Description=Log an ERR-priority marker when inngest-heartbeat.service fails (#6556)
 # QUERYABLE, NOT ALARMING. This oneshot emits a single ERR line on the inngest-heartbeat
 # Vector -> Better Stack channel (vector.toml Source 4) so a heartbeat-unit failure is readable
-# off-box with NO SSH — it turns the failure systemd otherwise emits as the un-shippable
-# SYSLOG_IDENTIFIER=systemd "Failed to start" row (the #6551 signature) into a shippable
-# inngest-heartbeat line.
+# off-box with NO SSH — it turns the failure systemd emits as a SYSLOG_IDENTIFIER=systemd
+# "Failed to start" row (the #6551 signature) into a row that also ships under the unit's
+# own tag. That systemd row is no longer un-shippable: it rides Source 1's
+# include_matches.PRIORITY arm under OR-over-fields matching — the #9939 storm proved it,
+# #9963 pins it — but this tagged re-emit stays belt-and-braces so the failure is
+# queryable under inngest-heartbeat where the rest of the channel's evidence lives.
 #
 # It deliberately does NOT push to any monitor. One-unambiguous-pusher-per-monitor
 # (inngest-host.tf:137-171): the LIVE co-located pusher's alarm IS the Better Stack heartbeat
@@ -462,7 +481,7 @@ Description=Log an ERR-priority marker when inngest-heartbeat.service fails (#65
 Type=oneshot
 # Reuse the existing Source 4 tag (vector.toml) — no new allowlist entry, no fresh quota decision.
 SyslogIdentifier=inngest-heartbeat
-# Bare `logger`, NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
+# Unwrapped `logger` (absolute /usr/bin form), NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
 # secrets. A `doppler run --project …` wrapper would hardcode a project (WRONG on the
 # soleur-inngest host) and re-introduce the exact project-resolution surface #6555 removes.
 ExecStart=/usr/bin/logger -t inngest-heartbeat -p err "inngest-heartbeat.service entered failed state (OnFailure) — the 60s ping failed; see the preceding inngest-heartbeat lines for the underlying ping error (#6556)"
@@ -480,6 +499,11 @@ FAILLOGEOF
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
 [Unit]
 Description=Run Inngest heartbeat every 60s
+# SKIP-VS-FAIL (#9962): a condition on the TIMER is evaluated at activation — an abort-host
+# never arms the 60s tick against a missing /etc/default/inngest-server at all. A timer skipped
+# this way stays unarmed for the boot's life (systemd does not re-evaluate); re-entry is the
+# bootstrap `enable --now` on the next provision run or a reboot with the file present.
+ConditionPathExists=/etc/default/inngest-server
 
 [Timer]
 OnBootSec=30s
@@ -553,7 +577,7 @@ LOG_TAG="inngest-server-probe"
 # and must be ABSENT from every OCI bake surface, which is exactly why the query text is inlined
 # here rather than sourced. The guard is a `grep -qF` over this file, so writing the filename even
 # in a COMMENT trips it -- which it did, on the first draft of this block.
-readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
+readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id slug triggers { type value } } }'
 
 # --- gather (never branch on the results before the emit below) ---
 # `|| true` on every capture: this probe must ALWAYS reach its logger call. A non-zero curl
@@ -618,7 +642,7 @@ cli_version="$(timeout 10 /usr/local/bin/inngest version 2>/dev/null | head -1 |
 # itself reads; the slot records the FSM's last write, which is a different question.
 # doppler's stderr is discarded, never shipped: this row's tag is allowlisted, so raw stderr
 # from a credentialed CLI would be a route from the token's own error text to Better Stack.
-cutover_flag="$(timeout 10 doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+cutover_flag="$(timeout 10 doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config "$DOPPLER_CONFIG" --plain 2>/dev/null || true)"
 cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 [ -n "$cutover_flag" ] || cutover_flag=unknown
 
@@ -1191,6 +1215,20 @@ esac
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
 logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns"
 
+# --- #9963: second unconditional emit, SAME invariant (no `if` may precede it) ---
+# Positive control for the SYSLOG_IDENTIFIER=systemd journald delivery path. Vector's
+# contains_match is OR-over-record-fields, so a `-t systemd -p err` row (PRIORITY 3) is
+# admitted by inngest_journald's include_matches.PRIORITY {3,4} arm regardless of unit —
+# the SAME arm real PID-1 `Failed to start` rows take. The spoofed tag is load-bearing:
+# consumers discriminate the path by SYSLOG_IDENTIFIER=systemd, so the control must prove
+# THAT field shape transits. Absolute /usr/bin/logger per the FAILLOG ExecStart
+# precedent (~:487); the sibling emit two lines up can stay bare `logger` — it emits
+# under $LOG_TAG (script-set), while this line's tag is the contract itself, so its
+# binary is pinned absolute to keep the emission independent of PATH resolution
+# (journald stamps host itself; no host= field). NOT in Source 4 by design
+# (vector.toml).
+/usr/bin/logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=$(date -u +%s) — rides the inngest_journald PRIORITY≤4 admission arm (#9963)"
+
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
 # Better Stack via journald -> Vector Source 4. So `vector_active=inactive` is unobservable by
@@ -1309,6 +1347,13 @@ if [[ -f /etc/default/inngest-server ]] && grep -q '^DOPPLER_TOKEN=dp\.' /etc/de
     printf 'DOPPLER_PROJECT=%s\n' "$DOPPLER_PROJECT" >> /etc/default/inngest-server
     log "/etc/default/inngest-server: appended DOPPLER_PROJECT=$DOPPLER_PROJECT (#6555 in-place augment)"
   fi
+  # #9175: same preserve-augment for DOPPLER_CONFIG — a pre-#9175 env file lacks it, and the
+  # committed units' `doppler run --config ${DOPPLER_CONFIG}` would substitute an EMPTY flag
+  # value (systemd has no `:-` default syntax), which makes doppler consume the next token.
+  if ! grep -qE '^DOPPLER_CONFIG=' /etc/default/inngest-server; then
+    printf 'DOPPLER_CONFIG=%s\n' "$DOPPLER_CONFIG" >> /etc/default/inngest-server
+    log "/etc/default/inngest-server: appended DOPPLER_CONFIG=$DOPPLER_CONFIG (#9175 in-place augment)"
+  fi
 else
   # Pull token from the sibling webhook-deploy env file (same Doppler scope
   # — both run as `deploy` user against the `prd` config).
@@ -1330,6 +1375,7 @@ DOPPLER_TOKEN=$TOKEN
 DOPPLER_CONFIG_DIR=/tmp/.doppler
 DOPPLER_ENABLE_VERSION_CHECK=false
 DOPPLER_PROJECT=$DOPPLER_PROJECT
+DOPPLER_CONFIG=$DOPPLER_CONFIG
 DOPPLEREOF
   )
   chown root:deploy /etc/default/inngest-server
@@ -1448,7 +1494,7 @@ fi
 # where SKIP_BINARY_INSTALL fires; leaving the write inside the guard would
 # skip it and the host would keep the OLD ExecStart indefinitely (same masking
 # class as the #4144 heartbeat-fix cascade). The binary download/install +
-# upgrade-drain stay inside the guard above (no need to re-download on a
+# upgrade settle delay stay inside the guard above (no need to re-download on a
 # no-op redeploy); only the unit write + the restart below are reconciled
 # every bootstrap. Mirrors webhook.service hardening (User=deploy,
 # ProtectSystem=strict, PrivateTmp, ReadWritePaths).
@@ -1510,7 +1556,7 @@ fi
 #   --postgres-conn-max-idle-time 1  close idle conns after 1 MINUTE so they RELEASE their
 #                                 Supavisor session (this is the release lever). ⚠ UNIT TRAP:
 #                                 this IntFlag is MINUTES (default 5), NOT seconds — verified
-#                                 against inngest v1.19.4 cmd/start; the plan's "SECS=30" was
+#                                 against inngest v1.45.1 cmd/start; the plan's "SECS=30" was
 #                                 mis-labelled (30 would mean 30 MINUTES — worse than default).
 # default_pool_size stays 30 (the #5562 30→15 revert is SUPERSEDED — its premise "cap holds
 # total under 15" is falsified by the per-pool model; a 15-slot upstream while inngest bursts
@@ -1537,6 +1583,17 @@ cat > "$UNIT_FILE" <<'UNITEOF'
 Description=Inngest self-hosted server (:8288/:8289, firewall+nftables scoped)
 After=network-online.target
 Wants=network-online.target
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write —
+# on an aborted first boot a missing file must SKIP the start, never FAIL it into the
+# RestartSec=5 crash-loop storm. The EnvironmentFile= line stays unprefixed: once a start IS
+# attempted, an absent file still fails the unit — the fail-closed contract is retained.
+# A skipped server is a DARK server — the designed off-box detectors are the web-1-fed
+# betteruptime_heartbeat.inngest_consumer beat (armed; dies in ~4 min when the dedicated host
+# stops serving) and the inngest-server-probe unit (its EnvironmentFile is `-`-tolerant, so the
+# probe itself still runs). NOT the heartbeat — it is conditioned on this same file and skips
+# too (review finding: the earlier claim credited the heartbeat, which co-dies in exactly the
+# scenario the condition covers).
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=simple
@@ -1557,7 +1614,7 @@ EnvironmentFile=/etc/default/inngest-server
 # inngest-server-flip-guard.test.sh derives both sets from source so the pair cannot drift again
 # without a suite failure.
 @@FLIP_GUARD_EXECSTARTPRE@@
-ExecStart=/usr/bin/doppler run --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
+ExecStart=/usr/bin/doppler run --config @@DOPPLER_CONFIG@@ -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -1599,8 +1656,10 @@ UNITEOF
 # the fragments contain `/`, `&`, and the literal `$${...}` Doppler token, all of which
 # sed's replacement string would mangle. The fragments are single-quoted so `$${...}`
 # stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c expands the
-# injected env (same $${...} contract as before). The `exec` in the ExecStart keeps
-# inngest as the unit's main PID (Type=simple signal/drain/`inngest pause` semantics).
+# injected env (same $${...} contract as before). NOTE the `exec` inside the bash -c
+# payload does NOT make inngest the unit's main PID — `doppler run` forks the bash
+# child and stays the MainPID itself (signal-forwarding supervisor), which is why
+# /proc/<MainPID>/exe resolves to doppler, not inngest.
 # #7228 DIAGNOSTIC BOOT takes precedence over Redis readiness. After the 2026-08-11 rollback
 # the cutover flag rests at `rollback`, outside the flip guard's allowlist, so the guard refuses
 # every prod-URI start — and a replaced host could therefore never attempt a bind, leaving every
@@ -1655,13 +1714,17 @@ unit_content="${unit_content//@@BACKEND_FLAGS@@/$BACKEND_FLAGS}"
 # missing binary. Runs under doppler run so the guard sees INNGEST_POSTGRES_URI +
 # INNGEST_CUTOVER_FLIP (P1-5).
 if [[ "${DEDICATED_FLIP:-0}" == "1" ]]; then
-  FLIP_GUARD_LINE="ExecStartPre=/usr/bin/doppler run --config prd -- /usr/local/bin/inngest-server-flip-guard.sh"
+  FLIP_GUARD_LINE="ExecStartPre=/usr/bin/doppler run --config $DOPPLER_CONFIG -- /usr/local/bin/inngest-server-flip-guard.sh"
 else
   FLIP_GUARD_LINE=""
 fi
 unit_content="${unit_content//@@FLIP_GUARD_EXECSTARTPRE@@/$FLIP_GUARD_LINE}"
 # #6178: same bash-parameter-expansion mechanism (NOT sed — SDK_URL contains `/`).
 unit_content="${unit_content//@@SDK_URL@@/$SDK_URL}"
+# #9175: the Doppler config name is a provision-time sentinel too — prod renders `prd`
+# (the normalized env value from the export above), the rehearsal host renders its
+# scratch `rehearsal_<runid>` config.
+unit_content="${unit_content//@@DOPPLER_CONFIG@@/$DOPPLER_CONFIG}"
 # #6555: no @@DOPPLER_PROJECT@@ substitution — the unit dropped `--project` and resolves the
 # project from EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime.
 printf '%s\n' "$unit_content" > "$UNIT_FILE"
@@ -1678,9 +1741,8 @@ systemctl daemon-reload
 # below (this file, "enable vector.service" + "restart vector.service") and
 # the same root cause documented there. Combined with the reconcile-always
 # unit write above, an ExecStart-only change is now deploy-reliable even on a
-# same-CLI-version redeploy (SKIP_BINARY_INSTALL path). The upgrade-drain
-# pause above runs before the binary replace; this restart subsumes the start
-# and the resume below runs after.
+# same-CLI-version redeploy (SKIP_BINARY_INSTALL path). The upgrade settle
+# delay above runs before the binary replace; this restart subsumes the start.
 systemctl enable inngest-server.service 2>/dev/null || true
 # --- #7228: a REFUSED start must not take the observability stack down with it -------------
 # This was the only unguarded systemctl call in this block, and under `set -euo pipefail` a
@@ -1735,10 +1797,9 @@ if [[ "${DEDICATED_LUKS_CUTOVER:-0}" == "1" ]]; then
   log "LUKS cutover poll timer enabled (#6894)"
 fi
 
-# Resume from upgrade pause (if any).
+# In-place upgrade completion marker. Logged even when the restart above was refused
+# (its warn line and inngest-server-start-REFUSED marker report that case).
 if [[ -n "${UPGRADE_FROM:-}" ]]; then
-  sleep 2  # let the new server bind loopback before resume
-  "$INSTALL_PATH" resume >/dev/null 2>&1 || log "warn: resume command failed (server is still running)"
   log "upgrade complete: $UPGRADE_FROM → $INNGEST_CLI_VERSION"
 fi
 
@@ -1792,14 +1853,41 @@ else
       return 0
     fi
     log "downloading vector $VECTOR_CLI_VERSION"
-    local tmp
+    local tmp attempt rc actual_sha=""
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' RETURN
-    curl -fsSL --max-time 120 -o "$tmp/vector.tar.gz" "$VECTOR_DOWNLOAD_URL"
-    local actual_sha
-    actual_sha="$(sha256sum "$tmp/vector.tar.gz" | awk '{print $1}')"
+    # One stalled transfer used to end the install: a single `curl --max-time 120` timed out at
+    # 11.9 of 45 MB on the 2026-09-24 replace, the checksum then refused the partial file, and the
+    # host booted with no log shipper. Retry up to 4 times. `-C -` resumes the partial file, so
+    # progress accumulates across attempts instead of restarting. The checksum is checked after
+    # every attempt, whatever curl returned: the bytes on disk decide, not curl's exit code.
+    # This runs after inngest-server has started, so the extra time never delays scheduling.
+    # Worst case: 4 x 180s plus 30s of backoff.
+    for attempt in 1 2 3 4; do
+      rc=0
+      curl -fsSL -C - --connect-timeout 15 --max-time 180 -o "$tmp/vector.tar.gz" "$VECTOR_DOWNLOAD_URL" || rc=$?
+      if [[ -s "$tmp/vector.tar.gz" ]]; then
+        actual_sha="$(sha256sum "$tmp/vector.tar.gz" | awk '{print $1}')"
+        [[ "$actual_sha" == "$VECTOR_CLI_SHA256" ]] && break
+        # Start clean when resuming cannot help:
+        #   rc 0      curl finished and the bytes are wrong, so appending would extend a bad file;
+        #   rc 33/36  the server will not resume (it ignores Range), so every later `-C -` would
+        #             fail the same way against the same partial file.
+        case "$rc" in
+          0|33|36)
+            log "warn: vector download attempt $attempt: discarding the partial file (curl rc=$rc)"
+            rm -f "$tmp/vector.tar.gz"
+            actual_sha=""
+            ;;
+        esac
+      fi
+      log "warn: vector download attempt $attempt incomplete (curl rc=$rc)"
+      if [[ "$attempt" -lt 4 ]]; then sleep $((attempt * 5)); fi
+    done
     if [[ "$actual_sha" != "$VECTOR_CLI_SHA256" ]]; then
-      log "error: vector sha256 mismatch: expected $VECTOR_CLI_SHA256 actual $actual_sha"
+      # Name the last curl rc: with a dead network there is no file to hash, and a checksum
+      # message alone would point at the wrong cause.
+      log "error: vector download failed after $attempt attempts (last curl rc=$rc, last sha256=${actual_sha:-none}, expected $VECTOR_CLI_SHA256)"
       return 1
     fi
     tar -xzf "$tmp/vector.tar.gz" -C "$tmp"
@@ -1839,6 +1927,11 @@ else
 Description=Vector observability shipper (journald + host_metrics -> Better Stack Logs)
 After=network-online.target inngest-server.service
 Wants=network-online.target
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write —
+# a missing file must SKIP the shipper, never FAIL it into the RestartSec=10 crash-loop storm.
+# The EnvironmentFile= line stays unprefixed: once a start IS attempted, an absent file still
+# fails the unit — the fail-closed contract is retained.
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=simple
@@ -1846,7 +1939,7 @@ EnvironmentFile=/etc/default/inngest-server
 # Vector needs Doppler-injected BETTERSTACK_LOGS_TOKEN (and any other
 # secrets the config references). doppler run resolves them at
 # ExecStart time.
-ExecStart=/usr/bin/doppler run --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
+ExecStart=/usr/bin/doppler run --config @@DOPPLER_CONFIG@@ -- /usr/local/bin/vector --config /etc/vector/vector.toml
 Restart=on-failure
 RestartSec=10
 User=deploy
@@ -1864,6 +1957,14 @@ TimeoutStopSec=30
 [Install]
 WantedBy=multi-user.target
 VECTOREOF
+      # #9175: @@DOPPLER_CONFIG@@ resolves at provision time from the normalized env
+      # export — prod emits `prd`, the rehearsal host emits its scratch config name.
+      # Same sentinel+sed pattern as @@DOPPLER_BIN@@ in the heartbeat unit.
+      sed -i "s|@@DOPPLER_CONFIG@@|${DOPPLER_CONFIG}|g" "$VECTOR_UNIT"
+      if grep -qF '@@' "$VECTOR_UNIT"; then
+        log "ERROR: vector.service still carries an unsubstituted sentinel after render"
+        exit 1
+      fi
       # #6555: the vector unit dropped `--project` and resolves the project from
       # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime — no
       # @@DOPPLER_PROJECT@@ sentinel remains, so the re-read/substitute/rewrite round-trip that

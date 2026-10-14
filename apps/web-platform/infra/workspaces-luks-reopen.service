@@ -1,0 +1,106 @@
+[Unit]
+# (#9123) Reopen the workspaces LUKS mapper from a Doppler-delivered key on EVERY
+# boot of web-1. /mnt/data's fstab line is `nofail`, so without this unit a
+# reboot mounts nothing (or, pre-fix, wedged local-fs.target on a glob that names
+# no device) and left every user workspace without its backing store, silently.
+# ADR-115 amendment: this oneshot is the accepted equivalent of the
+# crypttab/keyscript the blocker named; ADR-198 amendment: the passphrase is
+# fetched at boot, never baked. Delivered by
+# terraform_data.workspaces_boot_unlock_install (workspaces-luks.tf) on web-1; a
+# FRESH host gets the same unit baked into the image and enabled by
+# workspaces-luks-provision.sh (ADR-263 reverses ADR-119 §(d), #6931).
+Description=Reopen the workspaces LUKS mapper from Doppler on every boot (#9123)
+Documentation=https://github.com/jikig-ai/soleur/issues/9123
+Wants=network-online.target
+After=network-online.target
+# A [Unit] directive. Fires ONCE, when the unit reaches its FINAL failed state
+# after the bounded restarts below — BECAUSE OF RestartMode=direct in [Service],
+# not by default. Under the default RestartMode=normal the unit passes through
+# `failed` before every auto-restart and OnFailure fires on EVERY attempt plus
+# the terminal one — six fatals per exhausted ladder, and a transient blip that
+# recovered on attempt 2 still pages (measured on 261 in the git-data review).
+# systemd 254 added RestartMode=direct precisely so "OnSuccess=/OnFailure= units
+# will not be triggered until the service state has converged" (NEWS); Ubuntu
+# 24.04 ships 255.
+OnFailure=workspaces-luks-reopen-failure.service
+# Five attempts in an hour absorb a transient Doppler/DNS blip at boot without an
+# in-script retry loop (a retrying guard hides its instrument fault); the sixth
+# is the terminal failure the reporter ships.
+StartLimitIntervalSec=1h
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Allowed for Type=oneshot: systemd's service.c rejects only always|on-success.
+# Measured on 255 and 261 (git-data): Result/ExecMainStatus/ExecMainCode/
+# NRestarts all survive start-limit-hit.
+Restart=on-failure
+# direct: no failed/inactive transit between attempts, so OnFailure= fires
+# exactly once, at convergence (measured on 261: 1 reporter run per ladder vs 3
+# for a 2-burst ladder under the default). Consequence the timer is shaped
+# around: a tick from workspaces-luks-reopen.timer inside the still-open
+# StartLimitIntervalSec is refused as start-limit-hit on an already-failed unit
+# and fires NOTHING, so recovery granularity is that window, not the tick.
+RestartMode=direct
+RestartSec=60
+# The emit phase's STRUCTURAL refusal (workspaces-luks-reopen.sh exits 3 when
+# the reporter's emit helper is absent or unreadable) must not be retried:
+# attempt 2 would find the store open and mounted, take the silent noop branch,
+# exit 0, and leave the unit active(exited) — the fault erased. Measured on 261:
+# with this directive the unit goes `failed` at once, NRestarts=0,
+# ExecMainStatus=3.
+RestartPreventExitStatus=3
+# HOME is REQUIRED for the doppler CLI under a root unit (it dies "$HOME is not
+# defined" before reading DOPPLER_CONFIG_DIR — the luks-monitor measurement).
+Environment=HOME=/root
+# EnvironmentFile=- not `. <file>`: an absent token file fails inside the doppler
+# call, which the reporter reports; a failed dot-source in dash kills the shell
+# first. /etc/default/luks-monitor carries DOPPLER_TOKEN (the prd_workspaces_luks
+# read-only service token, owned by terraform_data.luks_monitor_token_install —
+# this unit READS it, never writes it; the file's line-ownership contract is
+# sacred) and SOLEUR_SENTRY_DSN (owned by terraform_data.luks_monitor_install).
+# /etc/default/workspaces-luks-boot is written by this installer's own
+# EnvironmentFile step (0600 root): WORKSPACES_LUKS_DEV (the by-id pin) and
+# WORKSPACES_DOPPLER_CONFIG — no passphrase, no token.
+EnvironmentFile=-/etc/default/luks-monitor
+EnvironmentFile=-/etc/default/workspaces-luks-boot
+# The script's phase file + stderr log live here. RuntimeDirectoryPreserve=yes is
+# MANDATORY: measured on 255, systemd removes the directory when the unit reaches
+# its final failed state — BEFORE OnFailure= runs — so without it the reporter
+# reads nothing and every failure class collapses to action=unit.
+RuntimeDirectory=workspaces-luks-reopen
+RuntimeDirectoryPreserve=yes
+UMask=0077
+NoNewPrivileges=yes
+# cryptsetup holds the passphrase and doppler holds the resolved secret; a crash
+# under apport would write process memory to /var/crash on the ROOT DISK.
+LimitCORE=0
+# Per-attempt reset so a mixed-cause restart sequence (attempt 1 dies at open,
+# attempts 2-5 die inside the doppler fetch) reports the FINAL cause, not a
+# stale first one.
+ExecStartPre=/bin/rm -f /run/workspaces-luks-reopen/action /run/workspaces-luks-reopen/log
+# The script fetches the key itself via `doppler secrets get WORKSPACES_LUKS_KEY
+# --plain --config "$WORKSPACES_DOPPLER_CONFIG"` — the R9-pinned single-secret
+# form. NO `doppler run` wrapper here by design: wrapping ExecStart in it would
+# inject the ~116 inherited prd secrets into the unit's env (the CWE-522 hole)
+# for a process that needs exactly one.
+ExecStart=/usr/local/bin/workspaces-luks-reopen.sh
+# Doppler at boot + a 30 s device wait + the mount job, PER ATTEMPT. After a hard
+# reset the fstab `pass=2` fsck runs inside this bound too.
+TimeoutStartSec=300
+# Belt-and-suspenders only: confines any CLI tmp writes. The cited mechanism
+# (DOPPLER_CONFIG_DIR=/tmp/.doppler, the git-data measurement) is NOT set on
+# web-1 — the CLI resolves $HOME/.doppler = /root/.doppler, already root-only.
+# NOT ProtectSystem=strict: cryptsetup needs /run/cryptsetup and the reporter
+# reads /run/workspaces-luks-reopen; both would need ReadWritePaths= on a unit
+# whose script writes nothing else. Environment=TMPDIR is DELIBERATELY absent:
+# the emit path writes no temp files (DP-9 in-memory emit).
+PrivateTmp=yes
+# SyslogIdentifier MUST equal the vector.toml include_matches tag — else the
+# unit's own stderr is tagged with the ExecStart basename and never reaches
+# Better Stack (the #6536 class this pattern exists to prevent).
+SyslogIdentifier=workspaces-luks-reopen
+
+[Install]
+WantedBy=multi-user.target

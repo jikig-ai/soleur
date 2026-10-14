@@ -83,3 +83,48 @@ describe("DelegationAcceptanceModal — withdraw affordance (Phase 5)", () => {
     expect(screen.queryByRole("button", { name: /i accept/i })).toBeNull();
   });
 });
+
+describe("DelegationAcceptanceModal — failure surface (#9053)", () => {
+  it("a non-OK accept renders a role=alert error (previously a silent dead click)", async () => {
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const onAccepted = vi.fn();
+    render(<DelegationAcceptanceModal {...baseProps} onAccepted={onAccepted} />);
+
+    await userEvent.click(screen.getByRole("checkbox"));
+    await userEvent.click(screen.getByRole("button", { name: /i accept/i }));
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    expect(onAccepted).not.toHaveBeenCalled();
+    // The control re-enables for retry — the hook releases on resolve.
+    await vi.waitFor(() => {
+      expect(screen.getByRole("button", { name: /i accept/i })).toBeEnabled();
+    });
+  });
+
+  it("a thrown fetch on withdraw renders the generic error surface", async () => {
+    fetchMock = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onWithdrawn = vi.fn();
+    render(
+      <DelegationAcceptanceModal
+        {...baseProps}
+        alreadyAccepted
+        onWithdrawn={onWithdrawn}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /withdraw/i }));
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        /something went wrong/i,
+      );
+    });
+    expect(onWithdrawn).not.toHaveBeenCalled();
+  });
+});

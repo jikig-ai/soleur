@@ -10,6 +10,10 @@ preconditions:
   - Linear MCP server is authenticated (mcp__linear-server__authenticate has been run for this session)
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Linear Issue Image Context
 
 This skill detects Linear issue references in caller input, fetches the issue body and recent comments, and streams the embedded screenshots directly into the active model conversation. The caller (typically `soleur:one-shot` Step 0a or `soleur:brainstorm` Phase 0.4) receives two return artifacts and is responsible for choosing the right one for each downstream consumer.
@@ -23,7 +27,7 @@ This skill returns **two artifacts**. Mixing them up is the load-bearing failure
 
 The redaction primitive lives at [scripts/redact-linear-urls.sh](./scripts/redact-linear-urls.sh). It uses a **case-insensitive hostname match** (`[Hh][Tt][Tt][Pp][Ss]?://[Uu][Pp][Ll][Oo][Aa][Dd][Ss]\.[Ll][Ii][Nn][Ee][Aa][Rr]\.[Aa][Pp][Pp]/`) — DNS is case-insensitive and `https://Uploads.Linear.App/...` serves the same signed bearer credential as the lowercase form. The URL path uses a positive ASCII-only character class (RFC 3986 unreserved + reserved set), so Unicode separators (U+2028, U+2029, NBSP) and markdown/HTML terminators (`< > " ' ) ]`) all terminate the match cleanly. The full justification per character is inline in the script. The companion CI `pii-grep` job in `.github/workflows/pr-quality-guards.yml` mirrors the case-insensitive matching with `grep -iE`.
 
-The repository is public on GitHub. A single leaked `uploads.linear.app` URL is a `single-user incident` brand-survival event per `knowledge-base/project/specs/feat-linear-issue-image-context/spec.md`.
+The repository is public on GitHub. A single leaked `uploads.linear.app` URL is a `single-user incident` brand-survival event per `knowledge-base/project/specs/archive/20261013-014038-feat-linear-issue-image-context/spec.md`.
 
 ## Phases
 
@@ -229,7 +233,7 @@ The 10 spec acceptance-test scenarios. Operators run these against a real Linear
 6. **False-positive identifier.** Type `the PR-123 we shipped`. Expected: silent no-op for `PR-123` (404 → silently dropped). No warning, no MCP error surfacing to the operator.
 7. **Comments cap.** Pick an issue with 15+ comments, several of which contain images. Expected: only 10 most-recent processed; the disclosure's `M_comments_with_images` count is at most 10.
 8. **Persist-safe round-trip.** After a `soleur:brainstorm` invocation that triggered the skill, run `grep -c 'uploads.linear.app' knowledge-base/project/brainstorms/<latest>.md`. Expected: `0`.
-9. **CI grep gate fires.** Create a fixture branch outside Claude Code, manually `git add` and `git commit` a file containing `https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png`, push, and open a PR. Expected: the `pii-grep` CI job fails the PR with a clear `::error::` annotation pointing at `knowledge-base/project/specs/feat-linear-issue-image-context/spec.md`.
+9. **CI grep gate fires.** Create a fixture branch outside Claude Code, manually `git add` and `git commit` a file containing `https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png`, push, and open a PR. Expected: the `pii-grep` CI job fails the PR with a clear `::error::` annotation pointing at `knowledge-base/project/specs/archive/20261013-014038-feat-linear-issue-image-context/spec.md`.
 10. **Telemetry redaction.** Run any skill that emits incident telemetry while the conversation has linear-fetch context. Inspect `.claude/incidents/*.jsonl` after the test run. Expected: zero lines contain a Linear identifier (`SOL-\d+` or similar) or `uploads.linear.app`.
 
 If any scenario fails post-merge, file a P1 follow-up issue, leave `#3635` open, and do not mark the skill production-ready until the failure is reproduced and fixed.

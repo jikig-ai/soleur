@@ -2,13 +2,13 @@
 
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { TC_BUMP_METADATA } from "@/lib/legal/tc-version";
 
 export default function AcceptTermsPage() {
   const searchParams = useSearchParams();
   const [accepted, setAccepted] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
 
   // Middleware redirects here with `?error=db_unavailable` when the
   // T&C-version SELECT fails open-DB-side (fail-closed redirect). Surface
@@ -20,39 +20,50 @@ export default function AcceptTermsPage() {
       ? "We're having trouble verifying your account. Please try again in a moment — if the problem persists, we've been alerted."
       : "";
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    try {
+  // latch(): on success the action ends in window.location.assign —
+  // pending must never reset in the gap before the hard nav commits (a
+  // finally-reset would reopen the double-submit window mid-redirect).
+  const { run: runAcceptance, pending, error, latch } = usePendingAction(
+    async () => {
       // Forward a post-acceptance destination (e.g. /invite/<token> threaded
       // from signup) so an invited user lands on the invite once T&C is
       // recorded. The server re-validates it via safeReturnTo.
       const redirectTo = searchParams?.get("redirectTo");
-      const res = await fetch("/api/accept-terms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(redirectTo ? { redirectTo } : {}),
-      });
+      let res: Response;
+      try {
+        res = await fetch("/api/accept-terms", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(redirectTo ? { redirectTo } : {}),
+        });
+      } catch {
+        throw new Error(
+          "Network error. Please check your connection and try again.",
+        );
+      }
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(body.error || "Something went wrong. Please try again.");
-        return;
+        throw new Error(
+          typeof body.error === "string" && body.error
+            ? body.error
+            : "Something went wrong. Please try again.",
+        );
       }
 
-      const { redirect } = await res.json();
+      const { redirect } = await res.json().catch(() => ({}));
       // GAP E (ADR-067 staleTimes): recording T&C advances the authenticated
       // onboarding funnel — hard-nav so every funnel exit uniformly wipes the
       // App Router Router Cache (the server-returned `redirect` is trusted, and
       // may itself be a terminal /dashboard entry).
+      latch();
       window.location.assign(redirect || "/setup-key");
-    } catch {
-      setError("Network error. Please check your connection and try again.");
-    } finally {
-      setLoading(false);
-    }
+    },
+  );
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    runAcceptance();
   }
 
   return (
@@ -110,7 +121,11 @@ export default function AcceptTermsPage() {
               required
               checked={accepted}
               onChange={(e) => setAccepted(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-soleur-border-default bg-soleur-bg-surface-1"
+              // feat-ui-action-feedback (consent): lock the ack while the
+              // POST is in flight — a live checkbox mid-commit reads as
+              // revocable consent, but the record is already submitted.
+              disabled={pending}
+              className="mt-0.5 h-4 w-4 rounded border-soleur-border-default bg-soleur-bg-surface-1 disabled:opacity-50"
             />
             <span>
               I agree to the{" "}
@@ -134,15 +149,18 @@ export default function AcceptTermsPage() {
             </span>
           </label>
 
-          {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
+          {error && <p role="alert" className="text-sm text-red-400">{error.message}</p>}
 
-          <button
+          <Button
+            variant="gold"
             type="submit"
-            disabled={loading || !accepted}
-            className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
+            loading={pending}
+            loadingLabel="Saving"
+            disabled={!accepted}
+            className="w-full"
           >
-            {loading ? "Saving..." : "Accept and continue"}
-          </button>
+            Accept and continue
+          </Button>
         </form>
       </div>
     </main>

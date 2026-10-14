@@ -77,8 +77,11 @@ If you see a transient warning such as "plugin ... is in your settings but its c
 | Task / Agent / spawn_subagent | run_subagent tool |
 | AskUserQuestion | ask_user_question tool |
 | TodoWrite / TodoRead | todo_write tool |
-| Monitor / AwaitShell / TaskOutput | get_output to poll a backgrounded shell's output; for wait-until-event watches (CI settle, PR merge state) a background `run_subagent` exit-coded poll loop — see **Polling / watches** below |
+| Monitor / AwaitShell / TaskOutput | get_output to poll a backgrounded shell's output; for wait-until-event watches (CI settle, PR merge state) a background `run_subagent` exit-coded poll loop — **arming measured, wake-on-completion not yet measured end to end**; see **Polling / watches** below for the fallback |
 | WebSearch / WebFetch / ToolSearch | web_search, webfetch tools |
+| SendMessage / ListAgents | `read_subagent` reads a subagent's result. There is NO continue-with-context send and no agent listing, so re-spawn with `run_subagent`, passing the prior report in the prompt. Wire names measured (`devin-matcher-parity.test.sh` DEVIN_TOOLS, ADR-223) |
+| TaskCreate / TaskGet / TaskList / TaskUpdate / TaskStop | `todo_write` tool |
+| RemoteTrigger / PushNotification / ScheduleWakeup / CronCreate / CronDelete / CronList | No equivalent. Report the unsupported gate rather than simulating it |
 | Workflow scripts | Translate orchestration to available tools; do not execute Claude tool calls as shell JavaScript |
 
 Soleur skills are exposed as Devin slash commands (`/soleur:<skill>`). When a slash command is invoked, Devin loads the skill's `SKILL.md` and treats its body as the prompt. Follow the skill's full workflow and referenced files; do not stop after reading it, reproduce it selectively, or ask the user to run the next stage.
@@ -110,8 +113,23 @@ a `devin cloud drs` sandbox and a user-facing web-app session — plus the
 `non-plugin-source`, `malformed`, `conflicting-evidence`, `no-devin-env`). If
 `CLAUDE_PLUGIN_ROOT` is unset — measured: cloud exec shells export only
 `DEVIN_DIR` + `DEVIN_DISABLE_HISTEXPAND`, no `CLAUDE*`/`SOLEUR*` vars — resolve
-the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1` (the
-managed plugin cache; the lock file is `/opt/.devin/plugins/lock.json`).
+the plugin ROOT first, then name the script relative to it. Search the two
+managed plugin caches, `"$HOME/.local/share/devin/cli/plugins/cache"` and
+`/opt/.devin/plugins` (whose lock file is `/opt/.devin/plugins/lock.json`),
+skipping either unless `[ -d "$d" ]`, and select by IDENTITY:
+
+```sh
+MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
+  -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
+ROOT="${MANIFEST%/.claude-plugin/plugin.json}"
+```
+
+One resolution serves both consumers — `$ROOT/scripts/cloud-detect.sh` and
+`$ROOT/scripts/precommit-guard.sh`. Selecting by the script's BASENAME instead
+would accept any directory under the cache that happens to hold a file with
+that name, and then execute it. The identity check is a shape check, not
+authentication: a planted `{"name":"soleur"}` manifest passes it (ADR-179 A11).
+It buys consistency with `/soleur:go`'s own resolver and defence-in-depth.
 
 The classifier is sentinel-based: the SessionStart hook writes
 `.devin/soleur-local-session` (`{host, ts, hook_source}`) on local sessions,
@@ -233,7 +251,7 @@ claim that an independent review occurred when it did not.
 
 Review and trust the plugin hooks through `/hooks` before relying on them.
 Installation does not grant hook trust. Measured hook semantics under Devin
-(envelope capture: `knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md`):
+(envelope capture: `knowledge-base/project/specs/archive/20261013-051752-feat-settings-matcher-devin-audit/envelope-capture.md`):
 
 - **Wire names are lowercase**: `exec`, `write`, `edit`, `ask_user_question`,
   `run_subagent`, `skill`. Claude-style matchers (`Bash`, `Write|Edit`, …)
@@ -285,7 +303,7 @@ Devin's model pricing in harness-specific billing disclosures. Soleur disclaims
 warranty for runtime cost.
 
 For asynchronous CI and merge work, own the wait, report changes, resolve
-`BEHIND`, and finish the prescribed postmerge checks before claiming success.
+`BEHIND` (not when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`): GitHub then enqueues it), and finish the prescribed postmerge checks before claiming success.
 Arm the watch as a background `run_subagent` exit-coded loop (see **Polling /
 watches** below) rather than burning foreground turns on `sleep`-and-poll
 cycles.
@@ -295,8 +313,10 @@ and retain incomplete status instead of silently skipping it.
 ## Devin-specific considerations
 
 - **Skill invocation**: Devin exposes Soleur skills as slash commands (`/soleur:<skill>`). The `/soleur:go`, `/soleur:sync`, and `/soleur:help` commands are also slash commands.
-- **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool
-- **Polling / watches**: Devin has no Monitor tool (measured absent — envelope-capture §7). `get_output` only *reads* a backgrounded shell; nothing wakes the agent on output. For wait-until-actionable watches — CI settling, a PR reaching merged/`BEHIND`/`DIRTY`, a check failure — spawn a background `run_subagent` running an exit-coded poll loop: one distinct exit code per actionable transition, observe-and-report only. The subagent-completion notification is the only wake primitive, so the loop must exit to report; mutations (`gh pr update-branch`, merge) stay with the parent in the foreground where they are visible and approvable.
+- **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool. `subagent_explore` has NO exec/git tool — review-panel agents that must run `git diff` or execute test suites spawn as `subagent_general` with an explicit report-only contract (no worktree writes; scratch in `mktemp -d -t soleur-run.$$.XXXXXXXX`), or they reconstruct diffs by file comparison at degraded fidelity (#8471).
+- **Polling / watches**: Devin has no Monitor tool (measured absent — envelope-capture §7). `get_output` only *reads* a backgrounded shell; nothing wakes the agent on output. For wait-until-actionable watches — CI settling, a PR reaching merged/`BEHIND`/`DIRTY`, a check failure — spawn a background `run_subagent` running an exit-coded poll loop: one distinct exit code per actionable transition, observe-and-report only. Give it bounded exits too — a deadline exit and a probe-error exit — because an unbounded loop can never report. The subagent-completion notification is the only wake primitive, so the loop must exit to report; mutations (`gh pr update-branch`, merge) stay with the parent in the foreground where they are visible and approvable.
+
+  **How much of this is measured, stated exactly.** Measured 2026-09-23 on Devin CLI 3000.11.1, authenticated, `devin -p` in a scratch repo: `run_subagent` DOES arm a background subagent and the parent continues ("Subagent `<id>` is running in the background"). What is NOT yet measured end to end is the parent being WOKEN by that subagent's completion — the probe's foreground step hit headless mode's confirmation gate, and finishing it needs `--permission-mode dangerous`, which auto-approves every tool on the operator's account and is theirs to authorise. The claim this replaced — that `get_output` cannot wait on an event — is fully measured (§Polling, envelope-capture §7) and is not in doubt. **Consequence for a session:** set a deadline when you arm the watch. If no completion notification has arrived by it, do not keep waiting — fall back to foreground `exec` `gh` probes on your own cadence and disclose in the deliverable that the wait ran foreground. Never report a merge or deploy you did not observe.
 - **Permissions**: Devin's permission system differs from Claude's; use permissive defaults initially
 - **MCP servers**: Devin supports the same MCP server format as Claude, so existing servers should work without modification
 - **Worktree commits**: the tool envelope omits `.cwd`, so a bare `git commit` inside `.worktrees/` is false-denied by `guardrails.sh` block-commit-on-main (it resolves `$PWD` = main checkout). Attach `git -C <worktree-abs-path>` to worktree commits until #8254 lands.

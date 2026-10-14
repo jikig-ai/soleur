@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GATE="$REPO_ROOT/scripts/sentry-alert-reference-gate.sh"
 PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 pass=0; fail=0
-EXPECTED_TESTS=29
+EXPECTED_TESTS=45
 
 # A sandbox harness inherits the bare 4 GiB /tmp tmpfs on a direct invocation;
 # every other runner in this repo defaults TMPDIR to /var/tmp. Match them.
@@ -228,10 +228,13 @@ t_m9() {
     "enabled is not a boolean"
 }
 t_m10() {
-  local t; t=$(_trig event_frequency_count '{"interval":"1h","value":1}' | jq '. + {event_unique_user_frequency_count: {"interval":"1h","value":1}} | .event_frequency_count = null')
-  _red "M10 a trigger kind outside the allowlist (event_unique_user_frequency_count — the sentry_issue_alert survivors' type) → not mapped" \
+  # `event_unique_user_frequency_count` is in `excluded` and is now DROPPED on the
+  # TF side (Guard 1 row L3), so the unmapped-kind floor is exercised with a kind
+  # that is neither mapped nor excluded.
+  local t; t=$(_trig event_frequency_count '{"interval":"1h","value":1}' | jq '. + {event_frequency_percent: {"interval":"1h","value":1}} | .event_frequency_count = null')
+  _red "M10 a trigger kind outside the allowlist and outside excluded (event_frequency_percent) → not mapped" \
     "$(_mut_plan m10 '(.planned_values.root_module.resources[] | select(.name=="single_trigger") | .values.trigger_conditions) = [$t]' --argjson t "$t")" "$REF" \
-    "trigger kind 'event_unique_user_frequency_count' is not mapped by the projection"
+    "trigger kind 'event_frequency_percent' is not mapped by the projection"
 }
 t_m11() {
   _red "M11 two resources sharing one name → duplicate sentry_alert name" \
@@ -326,6 +329,38 @@ t_detector_hint() {
   _red "D1 a detectorIds-only divergence carries the monitor-binding hint" \
     "$PLAN" "$(_mut_ref d1 'with_entries(.value.detectorIds = ["9999"])')" \
     "issue-stream detector id moved"
+  # The cron branch's text must not ride along on an issue-stream-only diff.
+  if grep -qF 'the cron routing set changed' <<<"$_out"; then
+    _report "D1b the cron-routing hint is absent on a non-cron detectorIds diff" fail "cron hint printed for two-trigger/single-trigger"
+  else
+    _report "D1b the cron-routing hint is absent on a non-cron detectorIds diff" ok
+  fi
+}
+# D2 — a detectorIds-only divergence on `cron-monitor-failure` is the cron
+# ROUTING SET moving (a monitor routed/unrouted per the README two-PR rule, or
+# recreated with a new id), not the issue-stream detector. Its hint names the
+# cron remedy, and the issue-stream hint must not be printed for it.
+RULE_C=$(_rule cron_monitor_failure "cron-monitor-failure" "$TC_B" "$AF_B" \
+  | jq -c '.values.monitor_ids = ["400001", "400002"] | .sensitive_values.monitor_ids = [false, false]')
+PLAN_C="$TMPD/plan-cron.json"
+_plan_doc "$(jq -n --argjson a "$RULE_A" --argjson b "$RULE_B" --argjson c "$RULE_C" '[$a,$b,$c]')" > "$PLAN_C"
+REF_C="$TMPD/reference-cron.json"
+jq -S --arg side tf -f "$PROJ" "$PLAN_C" > "$REF_C" 2>"$TMPD/refc.err" \
+  || { echo "ERROR: the tf projection of the cron plan failed: $(cat "$TMPD/refc.err")" >&2; exit 1; }
+t_detector_hint_cron() {
+  local ref
+  ref=$(_mut "$REF_C" d2 '.["cron-monitor-failure"].detectorIds = ["400001"]')
+  if [[ "$ref" != "JQFAIL" && "$ref" != "NOOP" ]] \
+     && ! jq -e 'has("cron-monitor-failure") and (.["cron-monitor-failure"].detectorIds == ["400001","400002"])' "$REF_C" >/dev/null; then
+    _report "D2 cron-routing hint" fail "fixture did not land: $(jq -c '.["cron-monitor-failure"] // "absent"' "$REF_C" | head -c 300)"; return
+  fi
+  _red "D2 a detectorIds-only divergence on cron-monitor-failure names the cron routing set and the CI-artifact regeneration" \
+    "$PLAN_C" "$ref" "the cron routing set changed"
+  if grep -qF 'issue-stream detector id moved' <<<"$_out"; then
+    _report "D2b the issue-stream hint is absent on a cron-only detectorIds diff" fail "issue-stream hint printed. Output: $(head -c 400 <<<"$_out")"
+  else
+    _report "D2b the issue-stream hint is absent on a cron-only detectorIds diff" ok
+  fi
 }
 t_remedy_and_expected_file() {
   local f; f=$(_mut_ref r1 '.["two-trigger"].frequency = 1')
@@ -362,6 +397,220 @@ t_h2_empty_plan() {
   fi
 }
 
+# ── Guard 1 (#8451) — projection scope symmetry. A `sentry_alert` whose trigger
+# type is in `excluded` is outside the TF-side projection exactly as it is
+# outside the live side's `in_scope`, in EITHER representation: native
+# (`trigger_conditions[]` key) or legacy (`legacy_trigger_conditions` string —
+# what the provider's Read returns for an adopted type-only rule). A legacy type
+# NOT in `excluded` is an error, never a silent under-projection.
+#
+# _rule_legacy <tf-name> <name> <legacy-json> <trigger-conditions-json|null> [nomask]
+# `nomask` drops `sensitive_values` — a type-only adopted rule under
+# `ignore_changes = all` may render with `trigger_conditions: null` and no mask,
+# and the exclusion must run BEFORE `tf_rule`'s floors see it.
+_rule_legacy() {
+  local r; r=$(_rule "$1" "$2" '[]' "$AF_B")
+  jq --argjson l "$3" --argjson tc "$4" --arg mask "${5:-}" '
+    .values.legacy_trigger_conditions = $l | .values.trigger_conditions = $tc
+    | if $mask == "nomask" then del(.sensitive_values) else . end' <<<"$r"
+}
+# 30 normal rules (the live scope's size) and the reference projected from them
+# alone — the adopted rows must add NOTHING to it.
+NORMAL30=$(jq -n --argjson r "$RULE_B" '[range(30) as $i | $r
+  | .name = "normal_\($i)" | .address = "sentry_alert.normal_\($i)" | .values.name = "normal-\($i)"]')
+REF30="$TMPD/reference-30.json"
+_plan_doc "$NORMAL30" > "$TMPD/plan-30.json"
+jq -S --arg side tf -f "$PROJ" "$TMPD/plan-30.json" > "$REF30" 2>"$TMPD/ref30.err" \
+  || { echo "ERROR: the tf projection of the 30-rule plan failed: $(cat "$TMPD/ref30.err")" >&2; exit 1; }
+[[ "$(jq 'length' "$REF30")" == "30" ]] \
+  || { echo "ERROR: fixture self-check failed — the 30-rule reference has $(jq length "$REF30") keys" >&2; exit 1; }
+_NATIVE_EUU=$(_trig event_frequency_count '{"interval":"1h","value":1}' \
+  | jq '. + {event_unique_user_frequency_count: {"interval":"1h","value":20}} | .event_frequency_count = null')
+
+# _plan30 <label> <extra-resources-json> — the 30 normal rows plus the extras.
+_plan30() {
+  local f="$TMPD/plan30-$1.json"
+  _plan_doc "$(jq -n --argjson n "$NORMAL30" --argjson x "$2" '$n + $x')" > "$f"
+  echo "$f"
+}
+
+t_l1_legacy_excluded_drops() {
+  # Matrix row 1: two well-formed adopted rows (trigger_conditions [], mask
+  # present). Without the exclusion they project → 32 names vs 30 → ADDED.
+  local x; x=$(jq -n \
+    --argjson a "$(_rule_legacy auth_per_user_loop "auth-per-user-loop" '["event_unique_user_frequency_count"]' '[]')" \
+    --argjson b "$(_rule_legacy sandbox_startup_failure "sandbox-startup-failure" '["event_unique_user_frequency_count"]' '[]')" '[$a,$b]')
+  _green "L1 30 normal + 2 legacy-excluded rows project to the 30-key reference (TF side mirrors live in_scope)" \
+    "$(_plan30 l1 "$x")" "$REF30" "PASS (30 rules, plan == alert-reference.json)"
+}
+t_l3_native_excluded_drops() {
+  # Matrix row 3: a legacy row PLUS a second row carrying the excluded type in
+  # the NATIVE form (the post-#7985 shape). Both must be dropped.
+  local x; x=$(jq -n \
+    --argjson a "$(_rule_legacy auth_per_user_loop "auth-per-user-loop" '["event_unique_user_frequency_count"]' '[]')" \
+    --argjson b "$(_rule native_euu "native-euu" "$(jq -n --argjson t "$_NATIVE_EUU" '[$t]')" "$AF_B")" '[$a,$b]')
+  _green "L3 a native-form excluded row is dropped alongside the legacy one" \
+    "$(_plan30 l3 "$x")" "$REF30" "PASS (30 rules, plan == alert-reference.json)"
+}
+t_l4_unmapped_legacy_errors() {
+  # Matrix row 4: a legacy type NOT in `excluded` must ERROR (jq exit 5), never
+  # project with no triggers.
+  local x plan rc=0 out
+  x=$(jq -n --argjson a "$(_rule_legacy resolution "resolution-change" '["issue_resolution_change"]' '[]')" '[$a]')
+  plan=$(_plan30 l4 "$x")
+  out=$(jq --arg side tf -f "$PROJ" "$plan" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -eq 5 ]] && grep -qF -- "unmapped legacy trigger type" <<<"$out" && grep -qF -- "issue_resolution_change" <<<"$out"; then
+    _report "L4 a legacy trigger type outside excluded (issue_resolution_change) → jq exit 5, unmapped legacy trigger type" ok
+  else
+    _report "L4 unmapped legacy trigger type errors" fail "rc=$rc (want 5). Output: $(head -c 400 <<<"$out")"
+  fi
+  _red "L4b the gate refuses the same plan (projection floor), never PASS" "$plan" "$REF30" "unmapped legacy trigger type"
+}
+t_l5_legacy_null_nomask() {
+  # Matrix row 5: the imported-state render — `trigger_conditions: null` and no
+  # `sensitive_values`. The exclusion runs before `tf_rule`, so neither floor fires.
+  local x; x=$(jq -n \
+    --argjson a "$(_rule_legacy auth_per_user_loop "auth-per-user-loop" '["event_unique_user_frequency_count"]' 'null' nomask)" \
+    --argjson b "$(_rule_legacy sandbox_startup_failure "sandbox-startup-failure" '["event_unique_user_frequency_count"]' 'null' nomask)" '[$a,$b]')
+  _green "L5 legacy rows with trigger_conditions null and no sensitive_values are dropped before tf_rule (no crash)" \
+    "$(_plan30 l5 "$x")" "$REF30" "PASS (30 rules, plan == alert-reference.json)"
+}
+
+# ── Guard 2 (#8630) — the unknown-detector projection floor. A `sentry_alert`
+# whose `monitor_ids` carries an element unknown at plan time (a
+# `sentry_cron_monitor` created or recreated in the same plan — its id does not
+# exist until the apply) must NEVER project. Without the floor the PR-time gate
+# goes green once the author commits the null-carrying projection, and the
+# post-apply probe then compares live (the real id) with a reference projected
+# from the apply plan (`null`) — `main` red after a COMPLETE apply, the #8050
+# class. Each row asserts the exact rc and the floor's own text.
+G2_FLOOR_TEXT="detector id(s) that do not exist yet (a monitor created or recreated in this plan)"
+# _g2_null_plan <label> <tf-name> <monitor-ids-json> — the base plan with one
+# rule's monitor_ids replaced and `sensitive_values.monitor_ids` given the SAME
+# length (a real `terraform show -json` mask is element-wise).
+_g2_null_plan() {
+  _mut_plan "$1" '(.planned_values.root_module.resources[] | select(.name == $n))
+      |= (.values.monitor_ids = $ids | .sensitive_values.monitor_ids = ($ids | map(false)))' \
+    --arg n "$2" --argjson ids "$3"
+}
+# The reference the #8050 author would commit: the SAME null-carrying plan
+# projected by a module WITHOUT the floor. The tf side emits `detectorIds:
+# $v.monitor_ids` verbatim and the reference side re-normalises (sort), so this
+# is that projection exactly. Against it, a floorless gate compares equal and
+# exits 0 — the row cannot pass for the wrong reason.
+G2_PLAN=$(_g2_null_plan g2p single_trigger '["1", null]')
+G2_REF=$(_mut_ref g2r '.["single-trigger"].detectorIds = (["1", null] | sort)')
+t_g2_1_null_detector_floor() {
+  _red "G2-1 monitor_ids [\"1\", null] with the reference a floorless projection would commit → floor refuses (rc 1)" \
+    "$G2_PLAN" "$G2_REF" "sentry_alert.single_trigger: monitor_ids carries 1 ${G2_FLOOR_TEXT}"
+}
+t_g2_2_unknown_not_first() {
+  # Three rules; the unknown one is LAST by resource order AND by name, and its
+  # null is not the first element — a floor that checks only the first rule or
+  # the first element passes this row.
+  local third plan ref
+  third=$(_rule third "third-rule" "$TC_B" "$AF_B")
+  plan="$TMPD/mut-g2-2.json"
+  jq --arg n two_trigger --argjson ids '["1213799", "7", null]' --argjson t "$third" '
+      (.planned_values.root_module.resources[] | select(.name == $n))
+        |= (.values.monitor_ids = $ids | .sensitive_values.monitor_ids = ($ids | map(false)))
+      | .planned_values.root_module.resources = (
+          [.planned_values.root_module.resources[] | select(.name == "single_trigger")] + [$t]
+          + [.planned_values.root_module.resources[] | select(.name == "two_trigger")])' "$PLAN" > "$plan"
+  ref="$TMPD/ref-g2-2.json"
+  jq -S --argjson t "$third" '.planned_values.root_module.resources += [$t]' "$PLAN" \
+    | jq -S --arg side tf -f "$PROJ" \
+    | jq -S '.["two-trigger"].detectorIds = (["1213799", "7", null] | sort)' > "$ref"
+  if ! jq -e '[.planned_values.root_module.resources[].values.name] == ["single-trigger","third-rule","two-trigger"]
+              and (.planned_values.root_module.resources[2].values.monitor_ids[2] == null)' "$plan" >/dev/null; then
+    _report "G2-2 unknown detector in the last rule, not the first element" fail "fixture did not land: $(jq -c '[.planned_values.root_module.resources[] | {n: .name, m: .values.monitor_ids}]' "$plan")"
+    return
+  fi
+  _red "G2-2 three rules, the unknown detector in the LAST rule (by order and by name) at a non-first element → floor names that rule" \
+    "$plan" "$ref" "sentry_alert.two_trigger: monitor_ids carries 1 ${G2_FLOOR_TEXT}"
+}
+t_g2_3_remedy_pointer() {
+  _gate "$G2_PLAN" "$G2_REF"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "list it in local.cron_monitor_alert_unrouted in cron-monitor-alerts.tf with a (#N) reason and route it in a follow-up PR after the first apply" <<<"$_out"; then
+    _report "G2-3 the floor names its remedy (local.cron_monitor_alert_unrouted, a follow-up PR)" ok
+  else
+    _report "G2-3 the floor names its remedy" fail "rc=$_rc. Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+t_g2_4_direct_jq_rc5() {
+  local rc=0 out
+  out=$(jq --arg side tf -f "$PROJ" "$G2_PLAN" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -eq 5 ]] && grep -qF -- "monitor_ids carries 1 ${G2_FLOOR_TEXT}" <<<"$out"; then
+    _report "G2-4 jq -f projection.jq --arg side tf on the null-carrying plan → rc 5 with the floor text" ok
+  else
+    _report "G2-4 direct jq refuses the null-carrying plan" fail "rc=$rc (want 5). Output: $(head -c 400 <<<"$out")"
+  fi
+}
+t_g2_5_no_wrong_remedy() {
+  # The generic arm matches `*"unknown at plan time"*` and says "Set the
+  # attribute explicitly in the block" — the WRONG remedy for a detector id that
+  # does not exist yet. The floor's text must not trip it.
+  _gate "$G2_PLAN" "$G2_REF"
+  if [[ "$_rc" -eq 1 ]] && ! grep -qF -- "Set the attribute explicitly" <<<"$_out" \
+     && ! grep -qF -- "unknown at plan time" <<<"$_out"; then
+    _report "G2-5 the generic 'Set the attribute explicitly' remedy is ABSENT on the unknown-detector floor" ok
+  else
+    _report "G2-5 the wrong remedy is absent" fail "rc=$_rc. Output: $(head -c 600 <<<"$_out")"
+  fi
+}
+t_g2_5b_dedicated_arm() {
+  _gate "$G2_PLAN" "$G2_REF"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "::error::A monitor created or recreated in this plan has no detector id until this apply creates it" <<<"$_out"; then
+    _report "G2-5b the gate's dedicated case arm echoes the floor's own remedy" ok
+  else
+    _report "G2-5b dedicated remedy arm" fail "rc=$_rc. Output: $(head -c 600 <<<"$_out")"
+  fi
+}
+# Must-PASS twins: the floor refuses only a null element.
+G2_KNOWN_A='["1213799", "42", "7"]'
+G2_KNOWN_B='["1213799", "9"]'
+G2_KNOWN_PLAN="$TMPD/g2-known.json"
+jq --argjson a "$G2_KNOWN_A" --argjson b "$G2_KNOWN_B" '
+    (.planned_values.root_module.resources[] | select(.name == "two_trigger"))
+      |= (.values.monitor_ids = $a | .sensitive_values.monitor_ids = ($a | map(false)))
+    | (.planned_values.root_module.resources[] | select(.name == "single_trigger"))
+      |= (.values.monitor_ids = $b | .sensitive_values.monitor_ids = ($b | map(false)))' "$PLAN" > "$G2_KNOWN_PLAN"
+t_g2_p1_all_known_reverse_order() {
+  local rev="$TMPD/g2-p1-rev.json" ref="$TMPD/g2-p1-ref.json"
+  jq -S --arg side tf -f "$PROJ" "$G2_KNOWN_PLAN" > "$ref"
+  # Rules reversed AND every monitor_ids array reversed.
+  jq '.planned_values.root_module.resources |= (reverse | map(.values.monitor_ids |= reverse))' "$G2_KNOWN_PLAN" > "$rev"
+  if jq -e '.planned_values.root_module.resources[0].name == "single_trigger"
+            and .planned_values.root_module.resources[1].values.monitor_ids == ["7","42","1213799"]' "$rev" >/dev/null; then
+    _green "G2-P1 two rules with every detector id known, rules and ids in reverse order, PASS" "$rev" "$ref" "PASS (2 rules"
+  else
+    _report "G2-P1 all-known reverse order" fail "fixture did not land: $(jq -c '[.planned_values.root_module.resources[] | {n: .name, m: .values.monitor_ids}]' "$rev")"
+  fi
+}
+t_g2_p2_live_side_equal() {
+  # The live side (what the post-apply probe reads) carrying the SAME known ids
+  # in a different order projects byte-equal to the tf side.
+  local live="$TMPD/g2-p2-live.json" rc_t=0 rc_l=0 t l
+  t=$(jq -S -c --arg side tf -f "$PROJ" "$G2_KNOWN_PLAN" 2>&1) || rc_t=$?
+  jq --argjson a "$G2_KNOWN_A" --argjson b "$G2_KNOWN_B" '[ to_entries[] | .value | {
+      name, enabled,
+      detectorIds: (if .name == "two-trigger" then ($a | reverse) else ($b | reverse) end),
+      config: {frequency: .frequency},
+      triggers: {logicType: (if .triggerLogicType == "single" then "all" else .triggerLogicType end),
+                 conditions: [.triggerConditions[] | {type, comparison}]},
+      actionFilters: [.actionFilters[] | {logicType,
+        conditions: [.conditions[] | {type, comparison}],
+        actions: [.actions[] | {type, config: {targetType, targetIdentifier}, data: {fallthroughType}}]}] } ]' \
+    <<<"$t" > "$live"
+  l=$(jq -S -c --arg side live -f "$PROJ" "$live" 2>&1) || rc_l=$?
+  if [[ "$rc_t" -eq 0 && "$rc_l" -eq 0 && -n "$t" && "$t" == "$l" ]] \
+     && jq -e '.["two-trigger"].detectorIds == ["1213799","42","7"]' <<<"$l" >/dev/null; then
+    _report "G2-P2 the live-shape side with the same known ids (reordered) compares equal to the tf side" ok
+  else
+    _report "G2-P2 live side equal" fail "rc_t=$rc_t rc_l=$rc_l tf=$(head -c 300 <<<"$t") live=$(head -c 300 <<<"$l")"
+  fi
+}
+
 t_g0
 t_m1
 t_m2
@@ -387,10 +636,37 @@ t_show_state_passes
 t_whitespace_passes
 t_swap_values_reds
 t_detector_hint
+t_detector_hint_cron
 t_remedy_and_expected_file
 t_h2_empty_plan
+t_l1_legacy_excluded_drops
+t_l3_native_excluded_drops
+t_l4_unmapped_legacy_errors
+t_l5_legacy_null_nomask
+t_g2_1_null_detector_floor
+t_g2_2_unknown_not_first
+t_g2_3_remedy_pointer
+t_g2_4_direct_jq_rc5
+t_g2_5_no_wrong_remedy
+t_g2_5b_dedicated_arm
+t_g2_p1_all_known_reverse_order
+t_g2_p2_live_side_equal
 
 echo "=== $pass passed, $fail failed ==="
+# Harness self-test: the floor below reads counters that ONLY `_report` moves,
+# so it backstops the helper it depends on. Drive both of `_report`'s paths once
+# with the counters snapshotted, check each moved by exactly one, then unwind.
+# printf + exit DIRECTLY — never through `_report` (the pattern in
+# apps/web-platform/scripts/sentry-monitors-audit.test.sh; the defect class
+# scripts/guard-vacuity-floor.test.sh exists for).
+_h_p=$pass; _h_f=$fail
+{ _report "harness self-test (unwound)" ok; _report "harness self-test (unwound)" fail; } >/dev/null 2>&1
+if [[ "$pass" -ne $((_h_p + 1)) || "$fail" -ne $((_h_f + 1)) ]]; then
+  printf 'FATAL: _report cannot conclude — pass %s->%s (want +1), fail %s->%s (want +1).\n' \
+    "$_h_p" "$pass" "$_h_f" "$fail" >&2
+  exit 1
+fi
+pass=$_h_p; fail=$_h_f
 ran=$((pass + fail))
 if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then
   echo "[FAIL] harness: ran $ran test(s), expected $EXPECTED_TESTS — a suite that silently stops running its assertions reports green" >&2

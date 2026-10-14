@@ -1,10 +1,11 @@
 /**
- * Harness adapter — maps Soleur workflow invocations to Claude Code, Grok Build, Codex, or Devin CLI.
+ * Harness adapter — maps Soleur workflow invocations to Claude Code, Grok Build, Codex, Devin CLI, or the Cursor CLI.
  *
  * Claude: Skill tool (`soleur:<skill>`), Task tool (agents), `/soleur:<command>` slash commands.
  * Grok:   slash commands (`/<skill>`, `/go`), spawn_subagent (agents).
  * Codex:  $soleur:<skill> skill mentions, spawn_agent (agents).
  * Devin:  Skill tool (`soleur:<skill>`), run_subagent (agents), `/soleur:<command>` slash commands.
+ * Cursor: `/go` and `/sync` stay bare; every other skill and agent is `/soleur-<name>`. Slice 1 does not detect this harness.
  *
  * Skills and go.md must call these helpers (or follow routingInstructions) — never improvise workflows.
  */
@@ -16,10 +17,11 @@ import {
   pathToAgentId,
   PLUGIN_ROOT,
 } from "./agent-registry";
+import { cursorAgentSlash, cursorSkillSlash } from "../scripts/sync-cursor-name-map";
 import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
-export type Harness = "claude" | "grok" | "codex" | "devin" | "unknown";
+export type Harness = "claude" | "grok" | "codex" | "devin" | "cursor" | "unknown";
 
 /** Env vars set by Grok Build (see https://docs.x.ai/build/settings/reference). */
 const GROK_ENV_MARKERS = [
@@ -321,6 +323,12 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
  * Cite in ship Phase 7, postmerge Phase 2, one-shot Step 7–8.
  */
 export function pollInstructions(harness: Harness): string {
+  // Cursor returns the behind-sync stop immediately. Without this return the call
+  // falls through to the default poll essay and then appends the stop.
+  if (harness === "cursor") {
+    return behindSyncInstructions("cursor");
+  }
+
   const behind = behindSyncInstructions(harness);
 
   switch (harness) {
@@ -328,7 +336,7 @@ export function pollInstructions(harness: Harness): string {
       return [
         "**Merge/deploy polling (Codex)**",
         "- Use exec_command for bounded status probes; resume yielded shell sessions with write_stdin.",
-        "- Poll PR state and mergeStateStatus, resolve BEHIND in the PR worktree before continuing.",
+        "- Poll PR state and mergeStateStatus, resolve BEHIND in the PR worktree before continuing (except when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`): GitHub then enqueues it).",
         "- Keep waiting through merge and release completion; load $soleur:postmerge before declaring completion.",
         behind,
       ].join("\n");
@@ -374,10 +382,10 @@ export function pollInstructions(harness: Harness): string {
         "**Merge/deploy polling (Grok Build)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
         "- Use **Shell** with adequate `block_until_ms` for short `gh` probes.",
-        "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
+        "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `Merge poll timed out`, `\\[ship\\.phase7\\.`, `\\[pr-behind-sync\\] kind=`, `postmerge verification complete`.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/ship` merge: poll release workflows, invoke `/postmerge <PR>`, then emit `<promise>DONE</promise>`.",
-        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",
+        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND` — except when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`: GitHub enqueues it; never sync it by hand until `[ship.phase7.queue_wait_expired]`, a push line, MERGED, a dequeue or any poll exit).",
         "",
         behind,
       ].join("\n");
@@ -387,10 +395,38 @@ export function pollInstructions(harness: Harness): string {
         "**Merge/deploy polling (Devin CLI)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
         "- Use **exec** with adequate timeout for short `gh` probes.",
-        "- Use **get_output** with timeout for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
+        // SOLEUR-DEBT: partially live-verified. Measured 2026-09-23 on Devin CLI
+        // 3000.11.1 (authenticated, `devin -p` in a scratch repo): `run_subagent` DOES
+        // arm a background subagent and the parent continues — "Subagent <id> is running
+        // in the background". The wake-on-completion half is NOT yet verified: the
+        // probe's foreground step hit headless mode's confirmation gate ("rejected a
+        // tool call that requires confirmation"), and finishing it needs
+        // `--permission-mode dangerous`, which auto-approves every tool.
+        // The claim this bullet replaces — that `get_output` cannot wait — is fully
+        // measured (devin/INSTRUCTIONS.md §Polling, envelope-capture §7).
+        // Upgrade trigger: re-run the probe under a permission mode that admits the
+        // foreground write, or from an interactive trusted session. The measurement
+        // lives in `devin/INSTRUCTIONS.md` §Polling with an amendment to ADR-223 (Devin
+        // wire names) — NOT in ADR-245, which states in as many words that the wait
+        // primitive is a fact about Devin's TOOLS rather than about that decision.
+        // #8390 item 2 is the origin.
+        //
+        // The hedge is MIRRORED into the emitted bullets below on purpose. A caveat that
+        // lives only here is invisible to the agent that runs the string, and this one
+        // changes what the agent should do when the wake does not arrive.
+        //
+        // What is deliberately NOT mirrored: a bullet saying "`get_output` is not a
+        // fallback". harness.test.ts asserts this string never contains `get_output` at
+        // all, and that negative over the whole string is a stronger guard than any
+        // phrase match that would have to replace it. The measurement it rests on lives
+        // in `devin/INSTRUCTIONS.md` §Polling. Do not re-add the bullet to be helpful.
+        "- Arm the wait as a background **run_subagent** running an exit-coded poll loop: one exit code per actionable transition (`MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`, check failure). Its completion notification is the only wake primitive, so the loop must EXIT to report.",
+        "- Give the loop its own **bounded** exits, so a wait that ends without a transition is still diagnosable: a deadline exit (`Merge poll timed out`) and a probe-error exit (`gh` non-zero N consecutive ticks). An unbounded loop cannot report at all, because only its exit wakes you.",
+        "- **Partially verified, and this is the part to watch.** Arming IS measured: on Devin CLI 3000.11.1 `run_subagent` returns immediately and the parent continues. Waking the parent on that subagent's completion is NOT yet measured end to end. So treat a missing wake as possible, not impossible: if no notification has arrived by the deadline you set, fall back to foreground **exec** `gh` probes on your own cadence and say in the deliverable that the wait ran foreground. Never report a merge or a deploy you did not observe.",
+        "- Mutations (`gh pr update-branch`, the merge itself) stay in the foreground — never inside the waiting subagent.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/soleur:ship` merge: poll release workflows, invoke `/soleur:postmerge <PR>`, then emit `<promise>DONE</promise>`.",
-        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",
+        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND` — except when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`: GitHub enqueues it; never sync it by hand until `[ship.phase7.queue_wait_expired]`, a push line, MERGED, a dequeue or any poll exit).",
         "",
         behind,
       ].join("\n");
@@ -398,7 +434,7 @@ export function pollInstructions(harness: Harness): string {
     default:
       return [
         "**Merge/deploy polling**",
-        "- Poll PR state + mergeStateStatus; resync on BEHIND before watching checks.",
+        "- Poll PR state + mergeStateStatus; resync on BEHIND before watching checks (except when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`): GitHub then enqueues it).",
         "- Invoke postmerge verification before declaring done.",
         "",
         behind,
@@ -459,6 +495,20 @@ export function routingInstructions(harness: Harness): string {
         "- Commands: `/soleur:go`, `/soleur:sync`, `/soleur:help`.",
         "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke the slash command or subagent.",
         "- Read devin/INSTRUCTIONS.md in the installed plugin for tool and path mappings.",
+        "",
+        fidelity,
+        "",
+        polling,
+      ].join("\n");
+
+    case "cursor":
+      return [
+        "**Harness: Cursor CLI**",
+        `- Entry points: \`${cursorSkillSlash("go")}\` and \`${cursorSkillSlash("sync")}\`. Other skills use the prefixed form, including \`${cursorSkillSlash("plan")}\`, \`${cursorSkillSlash("help")}\`, and \`${cursorSkillSlash("review")}\`.`,
+        `- Agents use the prefixed stem, for example \`${cursorAgentSlash("engineering/cto.md")}\`.`,
+        "- Read the canonical file the stub names, relative to the plugin root.",
+        "- Read cursor/INSTRUCTIONS.md in the installed plugin.",
+        "- Slice 1 does not classify the session as cursor, does not run hooks, and does not block a commit.",
         "",
         fidelity,
         "",

@@ -122,7 +122,9 @@ print(s.tool_kind('$wire'))")"
   if [[ -z "$drift" ]]; then pass "maps agree"; else fail "map drift:$drift"; fi
 else
   # Skipping on a missing tool is how a gate becomes permanently inert on the
-  # one machine that needed it (convention: settings-hook-exec-bit.test.sh).
+  # one machine that needed it — not green, never skip (#8616 taxonomy in
+  # hook-suite-dep-unresolved.test.sh).
+  echo "UNRESOLVED: python3 missing — bash↔python map parity not run; install python3"
   fail "python3 missing — bash↔python map parity unchecked"
 fi
 

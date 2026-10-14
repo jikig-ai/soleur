@@ -14,8 +14,10 @@
 //   - else                 → omit
 
 import useSWR from "swr";
+import { usePathname } from "next/navigation";
 import { fetchMergedInbox } from "@/components/inbox/inbox-surface";
 import { swrKeys } from "@/lib/swr-config";
+import { usePostFcp } from "@/hooks/use-post-fcp";
 import { NavCountBadge, NavDotBadge } from "@/components/dashboard/nav-count-badge";
 import { warnSilentFallback } from "@/lib/client-observability";
 import {
@@ -34,8 +36,14 @@ function hasUnreadFyi(items: MergedInboxItem[]): boolean {
 }
 
 export function InboxNavBadge({ collapsed }: { collapsed: boolean }) {
+  // #9178 — the badge count is non-critical chrome: gate its key until after
+  // first paint so it does not contend with FCP. EXCEPT on the inbox route,
+  // where the count is route-primary content (the list fetches the same key
+  // anyway — dedup makes the gate a no-op there, but gating is pointless).
+  const postFcp = usePostFcp();
+  const onInboxRoute = (usePathname() ?? "").startsWith("/dashboard/inbox");
   const { data } = useSWR<MergedInboxItem[]>(
-    swrKeys.inbox("active"),
+    postFcp || onInboxRoute ? swrKeys.inbox("active") : null,
     fetchMergedInbox,
     {
       onError: (err) =>

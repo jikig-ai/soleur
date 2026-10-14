@@ -4,7 +4,7 @@ date: 2026-05-13
 category: best-practices
 module: claude-agent-sdk
 issue: 2909
-plan: knowledge-base/project/plans/2026-05-13-feat-mcp-tier-classify-cc-soleur-go-phase-1-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-13-feat-mcp-tier-classify-cc-soleur-go-phase-1-plan.md
 tags: [claude-agent-sdk, mcp, canUseTool, silent-failure, observability, plan-review]
 ---
 
@@ -54,7 +54,7 @@ This generalizes beyond MCP tools: any third-party SDK that wraps tool/function 
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-05-13-feat-mcp-tier-classify-cc-soleur-go-phase-1-plan.md` §"Research Reconciliation" + Phase 2.2.4.
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-13-feat-mcp-tier-classify-cc-soleur-go-phase-1-plan.md` §"Research Reconciliation" + Phase 2.2.4.
 - SDK type definitions: `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:122-140` (CanUseTool signature).
 - Related learning (guard-placement traceability from the OTHER direction — internal-codebase): `2026-05-05-trace-callgraph-from-entrypoint-when-placing-guards.md` (PR #3263). The two together form a complete picture: trace BOTH the codebase entry-points (where the value comes from) AND the SDK callback's invocation conditions (where the guard's hook can/cannot fire).
 - `cc-dispatcher.ts:533-610` (the platform-tools `canUseTool` branch — correct for the legacy path, dead for the cc-router).

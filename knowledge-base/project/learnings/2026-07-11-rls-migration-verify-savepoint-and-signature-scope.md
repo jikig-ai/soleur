@@ -58,7 +58,7 @@ Down-migrations can be proven reversible without persisting by running them insi
 
 ## Related
 
-- Plan: `knowledge-base/project/plans/2026-07-11-fix-rls-tenant-boundary-with-check-and-authorize-template-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-041741-2026-07-11-fix-rls-tenant-boundary-with-check-and-authorize-template-plan.md`
 - ADR-111 (RLS/authz-fuzz harness); un-baseline contracts in `apps/web-platform/test/rls-fuzz/`
 - Sibling: [[2026-07-10-supabase-default-privileges-defeat-revoke-from-public]] (why the kb_files column-REVOKE is inert — a table-level UPDATE grant subsumes it)
 - [[2026-05-25-migration-body-no-top-level-begin-commit]]

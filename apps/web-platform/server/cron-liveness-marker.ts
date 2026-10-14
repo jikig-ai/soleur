@@ -133,6 +133,16 @@ export interface CommunityDigestFileMarker {
   digest_path: string;
   /** 1 when the file exists in the spawn workspace, 0 otherwise. */
   present: 0 | 1;
+  /**
+   * #7122: the handler validates the agent's draft and WRITES the digest itself,
+   * so `present` alone no longer separates "the agent never produced a draft" from
+   * "the draft was rejected". `ok`: validated and rendered; `rejected`: the draft
+   * failed validation (no digest written); `skipped-timeout`: the run was killed at
+   * the ceiling and validation never ran.
+   */
+  verdict: "ok" | "rejected" | "skipped-timeout";
+  /** Who authored the committed bytes. Always the handler since #7122 (it was the agent before). */
+  writer: "handler";
 }
 
 /** Emit one `SOLEUR_COMMUNITY_DIGEST_FILE` WARN marker. NEVER throws. */
@@ -294,6 +304,48 @@ export interface RunReportSweepMarker {
 export function emitRunReportSweep(m: RunReportSweepMarker): void {
   try {
     log.warn({ SOLEUR_RUN_REPORT_SWEEP: true, ...m }, "run-report sweep changed state");
+  } catch {
+    // fail-open.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Marker 8 — SOLEUR_WATCHDOG_DISPATCH
+// ---------------------------------------------------------------------------
+// One line per watchdog dispatch-clock event (#8495, ADR-248): the boot-time
+// arm decision and every tick outcome, from each web host. `run_id`/`run_event`
+// on a skip name the run that already covered the slot, which separates "a GH
+// schedule tick got there first" from "the other host got there first".
+// Fields are a host id, a workflow basename, an ISO slot, closed enums,
+// numbers, and GitHub's own run event name (`run_event`, e.g. "schedule"). NEVER add an error message or a token here: this instance has no
+// `redact` (see the boundary note at the top of this file).
+
+export interface WatchdogDispatchMarker {
+  /** SOLEUR_HOST_ID of the emitting web host (infra id, never a user id). */
+  host_id: string;
+  outcome:
+    | "armed"
+    | "disarmed"
+    | "dispatched"
+    | "skipped_slot_has_run"
+    | "failed"
+    | "tick_escaped";
+  /** Workflow file basename; absent on armed/disarmed. */
+  workflow?: string;
+  /** ISO start of the slot the tick served; absent on armed/disarmed. */
+  slot?: string;
+  op?: "mint" | "dedup-read" | "dispatch";
+  reason?: "timeout" | "http" | "throw" | "not-production" | "no-host-id";
+  /** GitHub HTTP status on an `http` failure. */
+  status?: number;
+  run_id?: number;
+  run_event?: string;
+}
+
+/** Emit one `SOLEUR_WATCHDOG_DISPATCH` WARN marker. NEVER throws. */
+export function emitWatchdogDispatch(m: WatchdogDispatchMarker): void {
+  try {
+    log.warn({ SOLEUR_WATCHDOG_DISPATCH: true, ...m }, "watchdog dispatch tick");
   } catch {
     // fail-open.
   }

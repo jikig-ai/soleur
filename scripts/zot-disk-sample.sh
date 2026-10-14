@@ -74,7 +74,7 @@ fi
 
 # DECODE BEFORE MATCHING. Better Stack's `raw` column is DOUBLE-encoded JSON, so a bare grep
 # against it silently returns nothing. `-R` + `fromjson?` + `// empty` matches the decoder in
-# zot-inventory-assert-marker.sh and zot-inventory-marker-7278.sh: a mixed source carries rows
+# zot-inventory-assert-marker.sh: a mixed source carries rows
 # this has no business reading, and a hard `fromjson` aborts the whole pipeline on the first
 # one instead of skipping it.
 decode_rc=0
@@ -88,8 +88,11 @@ fi
 
 # `zot_last_err` is the marker's LAST field and the only one that may carry spaces, so a
 # whitespace split reaches every field ahead of it intact.
+# TRUSTED REGION FIRST (#7377): cut the row at the first ` zot_last_err=` so a crafted log tail
+# can never supply a field the emitter omitted (an older emitter, a future reorder). The END
+# sample's `zot_restarts`/`boot_id` now decide the durable restart_during_sweep verdict.
 field() {
-  printf '%s\n' "$LINE" | tr ' ' '\n' | awk -F= -v k="$1" '$1==k {print $2; exit}'
+  printf '%s\n' "$LINE" | sed 's/ zot_last_err=.*//' | tr ' ' '\n' | awk -F= -v k="$1" '$1==k {print $2; exit}'
 }
 
 SAMPLE_EPOCH=0

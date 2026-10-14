@@ -54,6 +54,7 @@ Components are organized by domain, then by function.
 agents/
 ├── engineering/
 │   ├── design/            # Architecture agents
+│   ├── discovery/         # Community agent/skill discovery agents
 │   ├── infra/             # Infrastructure agents
 │   ├── research/          # Engineering research agents
 │   ├── review/            # Code review agents
@@ -67,11 +68,13 @@ agents/
 ├── sales/                 # Sales pipeline and revenue agents
 └── support/               # Support and community agents
 
-commands/                      # Entry-point commands (go, sync, help)
+commands/                      # Commands (go, sync, help, version)
 
 skills/
 └── <skill-name>/          # All skills at root level (flat)
 ```
+
+**`agents/` holds only agent definitions.** Claude loads every `.md` under it as a subagent, so reference text an agent needs belongs in that agent's body, not in a sibling file (#8317). The harness-parity tree test pins the tracked set to the registry.
 
 **Note:** `AGENTS.rules.md` at the repo root is the rule corpus injected on
 every session (ADR-151). It is *not* a plugin component — the plugin loader
@@ -98,7 +101,7 @@ insufficient — the copy that runs must match the copy that is tested). Example
 `plan-review/lib/named-panel.mjs` + `test/plan-review-named-panel.test.ts`. The
 parent `SKILL.md` links its workflow via an opt-in pointer; the prose skill stays
 the default. Decision record + the full migrate-vs-keep inventory:
-`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`.
+`knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md`.
 
 ### Adding a New Domain
 
@@ -109,18 +112,19 @@ To add a new domain (e.g., product, growth):
 3. Add key to `domainOrder` and `DOMAIN_CSS_VARS` in the same file
 4. Add CSS variable in `docs/css/style.css`
 5. Skills stay flat at root level (the skill loader does not recurse into subdirectories)
-6. Commands stay flat under `commands/` (only entry-point commands: go, sync, help). Workflow stages are skills.
+6. Commands stay flat under `commands/` (only these commands: go, sync, help, version). Workflow stages are skills.
 7. The plugin loader discovers agents recursively -- no config changes needed
 8. Landing page department cards, stats, and legal doc counts update automatically from data
 9. If the domain gets a top-level `knowledge-base/<domain>/` directory, add `<domain>` to `SANCTIONED_DIRS` in `.claude/hooks/kb-domain-allowlist-guard.sh` (the advisory guard that flags new top-level KB dirs outside the sanctioned set)
 
 ## Command and Skill Naming Convention
 
-Only 3 **commands** remain under `commands/`, using the `soleur:` prefix to avoid collisions with built-in commands:
+Only 4 **commands** remain under `commands/`, using the `soleur:` prefix to avoid collisions with built-in commands:
 
 - `/soleur:go` - Unified entry point that routes to workflow skills
 - `/soleur:sync` - Populate knowledge base from existing codebase
 - `/soleur:help` - List all available Soleur commands, agents, and skills
+- `/soleur:version` - Show the installed plugin version and whether a newer release exists
 
 The 6 workflow stages are now **skills** under `skills/`:
 
@@ -147,15 +151,15 @@ When adding or modifying agents, verify compliance:
 
 ### YAML Frontmatter (Required)
 
-- [ ] `name:` present and matches filename (lowercase-with-hyphens)
+- [ ] `name:` present and matches filename (lowercase-with-hyphens), written exactly `name: <filename stem>` (unquoted, the first `name:` line, inside frontmatter that opens on line 1). It stays the bare leaf; the harness-parity census exempts that one line and no other
 - [ ] `description:` is 1-3 sentences of routing text only -- when to use this agent
 - [ ] `description:` contains NO `<example>` blocks, NO `<commentary>` tags (these bloat the system prompt on every turn)
-- [ ] `description:` includes a disambiguation sentence if another agent has overlapping scope ("Use [sibling] for [X]; use this agent for [Y].")
+- [ ] `description:` includes a disambiguation sentence if another agent has overlapping scope ("Use [sibling's registry id] for [X]; use this agent for [Y]."). Name the sibling by its registry id exactly as the harness-parity census prints it in its `write` hint (e.g. `soleur:engineering:review:security-sentinel`), never by its bare leaf: a bare leaf fails Claude Code's Task tool and Grok's spawn_subagent, and the registry id is the one form every harness resolves (ADR-226)
 - [ ] `model: inherit` (see Model Selection Policy; explicit overrides require justification)
 
 ### Token Budget Check (Required when adding agents)
 
-- [ ] Run: `grep -h 'description:' agents/**/*.md | wc -w` -- cumulative word count must stay under ~2500 words (~3.3k tokens, well under the 15k threshold)
+- [ ] Run: `grep -h 'description:' agents/**/*.md | wc -w` -- cumulative word count must stay under ~2500 words (~3.3k tokens, well under the 15k threshold). A registry id counts as ONE word but costs ~6-8 tokens, so this metric undercounts sibling references; a character/token budget is tracked in #8692
 - [ ] Reserve ~5 words per sibling needing disambiguation when budgeting the new agent's description -- large domains (marketing: 11 specialists) consume budget faster
 - [ ] Detailed instructions, frameworks, and examples belong in the agent body (after `---`), not in `description:`
 
@@ -172,12 +176,12 @@ grep -h 'description:' agents/**/*.md | wc -w
 
 ## Model Selection Policy
 
-Pricing basis, refreshed 2026-09-03 at the Fable 5.1 launch: Fable 5.1 is 2× Opus, **5× Sonnet**, 10× Haiku per MTok. The Sonnet multiple was 3.3× when ADR-053 was written against Sonnet 4.6 ($3/$15); Sonnet 5 bills $2/$10, so the cheap end of the range moved and the Fable-vs-Sonnet gap widened — re-read any tiering judgment that leaned on 3.3×. Fable 5.1 costs the same per token as Fable 5 ($10/$50) and differs only on cache reads, $0.25/MTok vs $1 (0.025× vs 0.1× of base input). That is 4× on the **cache-read line item alone** — output and cache writes are unchanged, and the ADR-083 consult is a cold single-shot spawn per gate with no reused prefix, so its cache reads are ~0 and this does not move Soleur's advisor spend.
+Pricing basis, refreshed 2026-09-03 at the Fable 5.1 launch: Fable 5.1 is 2× Opus, **5× Sonnet**, 10× Haiku 4.5 per MTok (Haiku 5.5, 2026-10-08, is $0.10/$0.50 up to 100K prompt tokens, so 100×; the `haiku` alias resolves to it on Claude Code CLIs at or above 2.1.293). The Sonnet multiple was 3.3× when ADR-053 was written against Sonnet 4.6 ($3/$15); Sonnet 5.5 bills $2/$10, so the cheap end of the range moved and the Fable-vs-Sonnet gap widened — re-read any tiering judgment that leaned on 3.3×. Fable 5.1 costs the same per token as Fable 5 ($10/$50) and differs only on cache reads, $0.25/MTok vs $1 (0.025× vs 0.1× of base input). That is 4× on the **cache-read line item alone** — output and cache writes are unchanged, and the ADR-083 consult is a cold single-shot spawn per gate with no reused prefix, so its cache reads are ~0 and this does not move Soleur's advisor spend.
 
 Model selection is governed by three tiers (ADR-053; revised 2026-06-10 for the Fable pricing era):
 
 1. **Agent frontmatter:** All agents use `model: inherit` in their YAML frontmatter, so agents run on whatever model the user's session is using, respecting their cost/quality preference. Explicit overrides (`haiku`, `sonnet`, `opus`, `fable`) require written justification in the agent body text explaining why the task is fundamentally mismatched with the session model. Current exceptions: the five `engineering/research/*` agents (`repo-research-analyst`, `learnings-researcher`, `best-practices-researcher`, `framework-docs-researcher`, `git-history-analyzer`) are pinned to `model: haiku` (#5087). These are pure read-and-summarize researchers that Soleur's planning/research skills (`/plan`, `/brainstorm`, `/deepen-plan`) spawn via **direct or unpinned `Task` calls** — a cost surface ADR-053's workflow call-site pins (tier 2) structurally do not reach (`deepen-plan`'s workflow deliberately leaves its research fan-out on `inherit`). The `haiku` floor is the safe tier: an absolute floor pin can never *upgrade* a cheaper session, so unlike the `sonnet` frontmatter tiering ADR-053 rejected, it introduces no silent cheap-session upgrade. Reviewers/verifiers are deliberately NOT frontmatter-pinned — they stay `inherit` so a stronger session model still flows through (see tier 3).
-2. **Workflow call-site pins:** `skills/*/workflows/*.workflow.js` scripts MAY pin `opts.model` (`'standard'` or `'cheap'`) at **mechanical** steps — extract, classify, fetch, commit-message, issue-file, report. Each pin requires a one-line justification comment at the call site. Judgment steps (review, verify/concur adjudication, synthesis, resolution, implementation, principle scoring) MUST NOT be pinned. Pins are **semantic** (ADR-110) — the workflow inlines `resolveWorkflowModel()` so `'standard'`/`'cheap'` become harness SKUs at spawn. Pins are **absolute**, never "one tier below session" — only pin where a fixed cheap tier is always correct. Named consequence: an absolute pin can run ABOVE a cheaper session model (a Haiku session still runs a `standard`-pinned step on Sonnet / grok-4.6); the per-run tier `log()` line is the disclosure. The pin set is enforced mechanically by `plugins/soleur/test/workflow-model-pins.test.ts` — changing the allowlist is a clo-attestation-class change.
+2. **Workflow call-site pins:** `skills/*/workflows/*.workflow.js` scripts MAY pin `opts.model` (`'standard'` or `'cheap'`) at **mechanical** steps — extract, classify, fetch, commit-message, issue-file, report. Each pin requires a one-line justification comment at the call site. Judgment steps (review, verify/concur adjudication, synthesis, resolution, implementation, principle scoring) MUST NOT be pinned. Pins are **semantic** (ADR-110) — the workflow inlines `resolveWorkflowModel()` so `'standard'`/`'cheap'` become harness SKUs at spawn. Pins are **absolute**, never "one tier below session" — only pin where a fixed cheap tier is always correct. Named consequence: an absolute pin can run ABOVE a cheaper session model (a Haiku session still runs a `standard`-pinned step on the `standard` tier's SKU — Sonnet on Claude; see `TIER_MAPS.grok` on Grok); the per-run tier `log()` line is the disclosure. The pin set is enforced mechanically by `plugins/soleur/test/workflow-model-pins.test.ts` — changing the allowlist is a clo-attestation-class change.
 3. **Never-downgrade exemption list:** all `engineering/review/*` agents, `data-migration-expert`, security/SAST agents, legal/compliance surfaces (`clo`, `gdpr-gate`, `data-integrity-guardian`), C-suite strategy agents, enumeration-scoring audits (`agent-native-audit` — the platform's own sonnet→opus upgrade precedent for the identical scoring workload, `cron-agent-native-audit.ts`), and any step that gates a merge or touches user data.
 4. **SKILL.md prose advisories (ungated fourth surface):** SKILL.md prose MAY advise spawning a Task/Agent with a cheap tier for mechanical sweeps (e.g., deepen-plan's verify-the-negative passes). Each advisory must cite ADR-053 and is discoverable via `grep -rn 'model: cheap\|model: standard\|resolveAdvisorTier' plugins/soleur/skills/*/SKILL.md` (plus residual `model: sonnet\|model: haiku\|model: fable` until those SKUs leave SKILL.md) — prose advisories are advisory-only and carry no mechanical gate, so keep them to mechanical-step classes only, with one sanctioned exception: the scoped `advisor` upgrade consult at the two named judgment gates (see the Scoped advisor consult bullet below, ADR-083 / ADR-110).
 
@@ -308,7 +312,7 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 
 Soleur skills load in Devin Cloud sessions, but the enforcement surface differs from the local CLI — this file is a guaranteed-load surface, so the rules live here:
 
-- [id: cloud-detect-before-pipeline] — In a Devin session, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work (if `CLAUDE_PLUGIN_ROOT` is unset — cloud exec shells do not export it — resolve via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`). `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` activates Cloud Mode for the whole session.
+- [id: cloud-detect-before-pipeline] — In a Devin session, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the plugin root by `.claude-plugin/plugin.json` identity per `devin/INSTRUCTIONS.md` §Detection — never by the script's basename. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` activates Cloud Mode for the whole session.
 - [id: cloud-banner-on-not-local] — In a `not-local` session (excluding `no-devin-env`), emit `cloud-detect.sh --banner` (stderr) at the start of pipeline work so the degraded surface is visible, never silent.
 - [id: cloud-sequential-fallback] — Plugin subagents are local-only. A skill that fans out executes each role sequentially inline with the same definition, discloses `Reviewed-Coverage: sequential-fallback` in deliverables and PR trailers, and never claims an independent review ran. `/ship` blocks `sequential-fallback` coverage on a `single-user incident` plan without explicit acknowledgement.
 - [id: cloud-ack-before-secrets] — In a `not-local` session, no secrets read, production mutation, Doppler action, Terraform prod action, or mutating GitHub API call proceeds without an explicit session-scoped acknowledgement via `message_user` (the only cloud ask primitive — it blocks; an unanswered or headless session defers/aborts the step with a documented alternative; never a persisted ack file).

@@ -3,7 +3,7 @@ date: 2026-05-25
 category: workflow
 status: applied
 session_pr: "#4417"
-plan_ref: knowledge-base/project/plans/2026-05-25-feat-attachments-workspace-shared-pr2-plan.md
+plan_ref: knowledge-base/project/plans/archive/20261013-014038-2026-05-25-feat-attachments-workspace-shared-pr2-plan.md
 ---
 
 # Solo-operator sign-off gates default to no-op

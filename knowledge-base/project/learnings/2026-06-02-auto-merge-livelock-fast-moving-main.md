@@ -25,12 +25,14 @@ The failure is a livelock:
 4. Checks finish green, but the branch is already stale → never `CLEAN` → never merges.
 
 Two amplifiers made it worse:
+
 - A **monitor that auto-updated the branch on every `BEHIND`** guaranteed the branch was
   never green-at-current-`main` — it actively fed the loop.
 - A **pre-merge `PreToolUse` hook** re-synced the branch with `main` on each `gh pr merge`
   attempt, adding another HEAD churn per attempt.
 
 Observed failure signatures:
+
 - `gh pr view --json mergeStateStatus` cycling `BEHIND → BLOCKED → BEHIND`.
 - GraphQL `Base branch was modified. Review and try the merge again.` on the merge call.
 - `gh pr merge --admin`: `Merge succeeded but push failed ... non-fast-forward` (the *local*
@@ -39,6 +41,8 @@ Observed failure signatures:
 ## Solution
 
 Break the livelock **deterministically** instead of chasing a moving target:
+
+> **Superseded 2026-09-22 (#8500):** steps 2, 3 and 5 below are wrong and must not be followed. `--admin` bypasses the whole `required_status_checks` rule, checks included, and "`pending=0, fail=0`" cannot see a required check that has not been created yet (#8458). Use `plugins/soleur/skills/ship/references/settle-then-admin-merge.md` steps 2-5, which run `plugins/soleur/scripts/admin-merge-ready.sh` before every attempt and pin `--match-head-commit`.
 
 1. **Stop auto-updating the branch.** Let a single check run reach a terminal state on one
    SHA. Continuous `update-branch` on `BEHIND` is an anti-pattern under a busy `main`.
@@ -70,6 +74,41 @@ cycle. Updating the branch only helps if the branch can stay current long enough
 otherwise it just burns CI and resets the clock. Detect the loop (≥2 `BEHIND` cycles without
 convergence) and switch to settle-then-admin-merge rather than nudging forever.
 
+This applies only to a hatch-eligible diff (condition (b) above). For a diff that carries code, the
+admin-merge is the operator's call, not the agent's; see §Recurrence: PR #8474.
+
+## Recurrence: PR #8474, 2026-09-21
+
+**Scale.** #8474 was marked ready at 14:02Z and merged at 23:48:20Z (`97633e8e`). Ten `origin/main`
+merges went into the branch after review (15:14Z to 23:17Z), about eight of them forced by BEHIND or
+DIRTY during the merge poll. Measured from the check-run API, the two CI runs that finished took 36
+and 31 minutes, and `main` usually moved before a run could finish; cancelled runs lingered up to 99 minutes
+under a saturated runner queue (#8450). The 2026-06-02 case above had an ~8-minute cycle.
+
+**What differed from 2026-06-02.** The diff carried code, so the settle-then-admin-merge hatch was
+not eligible (`plugins/soleur/skills/ship/references/settle-then-admin-merge.md`), and an admin-merge
+was the operator's decision, not the agent's. The agent offered it from cycle 5 onward and kept
+syncing. No approval came. The loop ended without one: a run finished inside a quiet window, the
+required `test` context concluded `success` on `b93f5ad63` at 23:48:15Z, and the queued auto-merge
+fired 5 s later.
+
+**A new failure the livelock caused.** Each sync push cancels the in-flight PR run (`ci.yml`
+`cancel-in-progress` for `pull_request`). The `test-scripts (3/3)` shard was cancelled on four heads
+(`7c8a60222` and the next three), so a real red test went unobserved from 19:24Z to 23:10Z, 3 h 46 min
+(`workflow-issues/2026-09-22-the-test-my-merge-broke-merged-cleanly-so-it-was-never-in-my-conflict-list.md`).
+Reading rule: a cancelled shard is unobserved, neither passed nor failed. The aggregate `test` context
+runs `if: always()` and reads `failure` on such a head whatever the code does, so read the shard
+conclusions, not the aggregate.
+
+**The separate admin-merge.** Earlier the same day, #8458 was admin-merged while the
+ruleset-required `test` context did not yet exist. That is recorded in
+`knowledge-base/engineering/operations/post-mortems/admin-merge-required-check-absent-postmortem.md`
+and tracked by #8500 (closed 2026-09-22); it is referenced here, not re-fixed.
+
+## Recurrence: PR #8611, 2026-09-23
+
+Same livelock, two days later; operator-merged by hand because the diff edits `.github/workflows/` (`UNTRUSTED-CI`). Tracked as #8683: `sync-pr-behind.sh` should defer while the head's CI is in flight. See `2026-09-24-8611-merge-tail-six-frictions-and-a-stale-reaper.md`.
+
 ## Session Errors
 
 1. **`Edit` rejected — "File has not been read yet"** (dns.tf viewed via shell `sed`, not the
@@ -86,6 +125,32 @@ convergence) and switch to settle-then-admin-merge rather than nudging forever.
    sync local→origin before any local-push-coupled merge when the branch was updated remotely.
 5. **`--admin` "Base branch was modified"** — transient race. Recovery: bounded retry loop.
    **Prevention:** retry; it's optimistic-concurrency, not a hard block.
+
+## Resolution under the merge queue (2026-10-07)
+
+Appended; nothing above is rewritten. The livelock above is a property of a strict up-to-date policy WITHOUT a merge
+queue. `main` now has one (ADR-270), and the queue builds each candidate against the projected post-merge state, so
+"up to date" holds by construction and the sync buys an armed PR nothing. A third recurrence on PR #9697 (three syncs
+in about 35 minutes, a fourth cycle running) was the push loop itself, not slow CI: the poll still synced a BEHIND,
+armed PR in the window BEFORE enqueue, which is where a PR spends its whole CI cycle.
+
+**Measured.** GitHub enqueues an armed PR whose head is behind `main`, under `strict_required_status_checks_policy = true`.
+PR #9697 was enqueued 12:39:57Z with its head (`4b0bb6d78d`, last commit dated 11:53:47Z) missing 2 `main` commits and no push
+in between (the plan records it reading BEHIND only while a check was pending). So the right behaviour on a queue repo is to wait, not to sync.
+
+**Fix (#9710).** Phase 7 (ship and the merge-pr mirror) enters queue mode when `main` has a `merge_queue` rule
+and auto-merge is armed: no sync on a BEHIND that GitHub reported, one `[ship.phase7.queue_wait]` line, one
+`[ship.phase7.queued]` line (at the first 5th-tick read that finds the PR queued), and a fall-back to today's sync after more than 5 consecutive idle ticks (the 6th)
+(`[ship.phase7.queue_wait_expired]`). Every unreadable answer falls toward the sync. A repo with no merge queue runs the
+old code unchanged. Decision record: ADR-270 Decision 5 (amendment 2026-10-07).
+
+**Still open.** Option A of #8683 (settle before sync) is the answer for a repo WITHOUT a queue and is not delivered
+here; #8683 stays open for it.
+
+**Prevention.** When a platform feature removes the condition that made a workaround necessary, search the tooling for
+the workaround and give it a measured off-switch, with the old behaviour as the fail-safe. The livelock was documented
+three times and "rely on the merge queue" was recorded as an option each time; nothing made the poll consult the queue
+before pushing.
 
 ## Tags
 

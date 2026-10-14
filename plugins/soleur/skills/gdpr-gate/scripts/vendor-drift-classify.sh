@@ -92,13 +92,13 @@ fi
 # anchor prevents false-positives on paths like docs/LICENSE-DISCUSSION.md
 # or src/license_parser.py where `LICENSE` is a substring but the file is
 # not a license document.
-if printf '%s\n' "$DIFF" | grep -qE '^(\+\+\+|---) [ab]/(.*/)?LICENSE(\.[^/]+)?$'; then
+if grep -qE '^(\+\+\+|---) [ab]/(.*/)?LICENSE(\.[^/]+)?$' <<<"$DIFF"; then
   echo "category=license"
   (( exit_code == 0 )) && exit_code=11
 fi
 
 # 4. Security-relevant regex set.
-if printf '%s\n' "$DIFF" | grep -qE '^\+.*\|.*\|.*$|^\+.*\[CRITICAL\]|^\+.*\bMUST\b|^\+.*Art\. [0-9]+|^\+.*§[[:space:]]*[0-9]+|^\+\+\+ b/.*/layers/'; then
+if grep -qE '^\+.*\|.*\|.*$|^\+.*\[CRITICAL\]|^\+.*\bMUST\b|^\+.*Art\. [0-9]+|^\+.*§[[:space:]]*[0-9]+|^\+\+\+ b/.*/layers/' <<<"$DIFF"; then
   echo "category=security"
   (( exit_code == 0 )) && exit_code=10
 fi
