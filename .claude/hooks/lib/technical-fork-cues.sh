@@ -15,8 +15,10 @@
 # the existing veto silences one of them (the word `deploy` inside `deploy-channel`). So the closing
 # group adds three cues and a narrower veto; the pre-ask hook is NOT widened by them. It asks for `shared+ask`, which
 # adds ONE cue of its own (`ask`, 2026-10-14: a brief's "ask the operator" question about how named leftover items are
-# disposed of, run as a new pipeline vs recorded as not fixed). `shared` itself is unchanged, and the closing group
-# never sets `ask`, so the Stop carrier cannot reach it.
+# disposed of, run as a new pipeline vs recorded as not fixed). `shared` itself is unchanged and no production hook
+# calls plain `shared` any more (the pre-ask suite's NR3 row still drives it, so do not "clean it up"). The closing
+# group never sets `ask`, so the Stop carrier cannot reach it: the cue was fitted to AskUserQuestion text, a closing
+# message was never sampled against it, and a cue nobody measured on that carrier is not added to it.
 #
 # ON A WRONGFUL BLOCK (a closing message stopped that carried a real operator question):
 #   1. Find the closing in the local session transcript by the ledger row's sha256 of the unit (the hash is of the
@@ -83,13 +85,17 @@ TFC_CLOSING_EXTRA_RE='\b(prioriti[sz]\w*|publish\w*|announce\w*|auditors?|accoun
 
 # ASK group (2026-10-14, Ruled by CTO agent): the DISPOSITION of items a brief already named. A brief that says "ask the
 # operator" about whether leftover roadmap items run as a new pipeline or are recorded as not fixed is a technical routing
-# call, not a scope ask. Both halves must sit in ONE interrogative sentence (ROUTE and RECORD), inside the weak-cue block,
-# so the operator-vocabulary veto and the permission exemption apply. Named TFC_ASK_*, never RULING_*_RE (suite row L2).
+# call, not a scope ask. Both halves (ROUTE and RECORD) must sit in the SAME '?' segment, inside the weak-cue block, so
+# the operator-vocabulary veto and the permission exemption apply; TFC_ASK_VETO_RE (drop, defer, scope) additionally
+# leaves a genuine scope ask to the operator. Named TFC_ASK_*, never RULING_*_RE (suite row L2 forbids a RULING_*_RE
+# definition in the HOOK; the lib is the one definition site by convention).
 # No ownership arm: "who should own the remaining items, Alice or Bob?" is an assignment ask and must stay allowed.
-# RESIDUAL: ownership-only and scope-limited phrasings, and a split across two sentences, are not caught (skill text
-# covers them). More than three TFC_ASK_* patterns, or a second paraphrase miss, means stop widening (ADR-084 addendum).
-TFC_ASK_ROUTE_RE='(\b(as|in|via|into) (a |an )?(new|separate|fresh) (pipeline|one-shot|pr|run|issue)\b|\b(start|open|file|spin up)[a-z]* (a |an )?(new|separate|fresh) (pipeline|one-shot|pr|run|issue)\b)'
+# RESIDUAL (stated in the pre-ask hook header): ownership-only and scope-limited phrasings, a split across two sentences,
+# halves only in option labels, and permission-shaped questions are not caught; the skill text covers them. More than
+# three TFC_ASK_* patterns, or a second paraphrase miss, means stop widening (ADR-084 addendum).
+TFC_ASK_ROUTE_RE='(\b(as|in|via|into) (a |an )?(new|separate|fresh) (pipeline|one-shot|one shot)\b|\b(start|open|file|spin up)[a-z]* (a |an )?(new|separate|fresh) (pipeline|one-shot|one shot)\b)'
 TFC_ASK_RECORD_RE='\b(record|note|mark|log|document|list|leave)[a-z]* [^?.;]{0,30}\b(not fixed|unfixed|not addressed|not done|known gaps?)\b'
+TFC_ASK_VETO_RE='\b(drop(ped)?|defer(red)?|scope)\b'
 
 # CLOSING-ONLY permission shapes (Ruled by CTO agent, 2026-10-12 review): an authorization request that the shared
 # RULING_PERM_RE (pinned by the pre-ask suite, never edited for a closing-only reason) does not name. Each member binds
@@ -99,12 +105,14 @@ TFC_CLOSING_PERM_RE='\b(can|shall) i (now |just )?(go ahead and |proceed (and|to
 
 tfc_self_check() {
   [[ -n "${_TFC_COMPLETE-}" ]] || return 1
+  # An EMPTY ask regex matches every line (ROUTE/RECORD would deny, VETO would veto), so a lib that lost one is parse doubt.
+  [[ -n "${TFC_ASK_ROUTE_RE-}" && -n "${TFC_ASK_RECORD_RE-}" && -n "${TFC_ASK_VETO_RE-}" ]] || return 1
   declare -f tfc_is_fork >/dev/null 2>&1 || return 1
   return 0
 }
 
 tfc_is_fork() {
-  local unit="${1-}" groups="${2-}" closing=0 ask=0 hit="" asked ends
+  local unit="${1-}" groups="${2-}" closing=0 ask=0 hit="" asked ends seg
   # shellcheck disable=SC2034  # TFC_HIT is the function's output channel, read by the sourcing hook
   TFC_HIT=""
   case "$groups" in
@@ -134,7 +142,13 @@ tfc_is_fork() {
     if grep -qE "$RULING_STRICT_RE" <<<"$asked" && grep -qE "$RULING_EVID_NOUN_RE" <<<"$asked"; then hit="strict"; fi
     if [[ -z "$hit" ]] && grep -qE "$RULING_STATUS_RE" <<<"$asked" && grep -qE "$RULING_ADR_RE" <<<"$asked"; then hit="status"; fi
     if [[ -z "$hit" ]] && grep -qE "$RULING_AB_RE" <<<"$asked" && grep -qE "$RULING_TECH_RE" <<<"$asked"; then hit="ab"; fi
-    if [[ -z "$hit" && "$ask" -eq 1 ]] && grep -qE "$TFC_ASK_ROUTE_RE" <<<"$asked" && grep -qE "$TFC_ASK_RECORD_RE" <<<"$asked"; then hit="ask"; fi
+    if [[ -z "$hit" && "$ask" -eq 1 ]]; then
+      # Per SEGMENT, not over the concatenation: two unrelated questions must not combine into one disposition ask.
+      while IFS= read -r seg; do
+        [[ -n "$seg" ]] || continue
+        if grep -qE "$TFC_ASK_ROUTE_RE" <<<"$seg" && grep -qE "$TFC_ASK_RECORD_RE" <<<"$seg" && ! grep -qE "$TFC_ASK_VETO_RE" <<<"$seg"; then hit="ask"; break; fi
+      done <<<"${asked//\? /$'\n'}"
+    fi
   fi
   # STRONG cues (bar, adopting...accepted, sufficiency): technical on their own, no `?` needed. The
   # sufficiency cue alone yields to a money phrase.

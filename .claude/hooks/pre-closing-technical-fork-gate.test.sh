@@ -32,10 +32,12 @@
 #   G2-2  the pre-ask group (`shared+ask`) also sets closing=1       a pre-ask row (NR2a) flips allow -> deny
 #         (retarget: the pre-ask hook asks for `shared+ask`, so a mutant on the `shared)` line no longer widens it;
 #          a pre-ask group change reddens THIS suite, which is why the mutant targets the line the hook now asks for)
+#   G2-3  change RULING_OPVOCAB_RE in the lib                       the byte-equality row flips
 #   G2-4  the lib ignores the `shared+ask` group (ask never set)     the ask-cue deny row flips deny -> allow
 #   G2-5  the pre-ask hook asks for `shared` (arm dispatch is dead)  the ask-cue deny row flips deny -> allow
 #   G2-6  the Stop carrier is widened with the ask cue               a closing allow row flips pass -> block
-#   G2-3  change RULING_OPVOCAB_RE in the lib                       the byte-equality row flips
+#   G2-7  the ask check reads all '?' segments at once               a two-question allow row flips allow -> deny
+#   G2-8  the ask-only veto (drop, defer, scope) is dropped          a scope-naming allow row flips allow -> deny
 # Harness rows: H1 neuters the decider the row helper uses (must-PASS rows redden); H3 drives the row helper
 # through one real pass and one real fail before any row; the neutered-counter and floor mutants are built by
 # scripts/guard-vacuity-floor.test.sh for any suite whose floor has the recognised shape, so the floor below
@@ -609,11 +611,13 @@ if apply_mut "$TREE/lib/technical-fork-cues.sh" '    shared+ask) ask=1 ;;' '    
   else printf '  FAIL: G2-2 control=%s mutant=%s\n' "$g22_ctl" "$g22_mut" >&2; FAIL=$((FAIL+1)); fi
 else echo "  FAIL: G2-2 the mutation did not land" >&2; FAIL=$((FAIL+1)); fi
 
-# preask_mut_row <label> <hook|lib> <old> <new> <question>: the pre-ask variant of mut_row. The control tree must DENY the
-# question; the mutant must ALLOW it. It keeps mut_row's guards: the mutation must land and parse, the mutant must differ
-# byte-for-byte from the pristine file, a mutant that crashes (a bash diagnostic) is not a kill, and KILLED is bumped.
+# preask_mut_row <label> <hook|lib> <old> <new> <question> [control-verdict] [mutant-verdict]: the pre-ask variant of mut_row.
+# The control tree must give <control-verdict> (default deny) for the question and the mutant <mutant-verdict> (default
+# allow). It keeps mut_row's guards: the mutation must land and parse, the mutant must differ byte-for-byte from the
+# pristine file, and a mutant that merely BREAKS the hook is not a kill: a bash diagnostic, a non-zero exit, stdout that is
+# not a JSON object, or the arm announcing it was skipped all fail the row instead of reading as "allow".
 preask_mut_row() {
-  local label="$1" which="$2" old="$3" new="$4" q="$5" target pristine json ctl got errf
+  local label="$1" which="$2" old="$3" new="$4" q="$5" want_ctl="${6:-deny}" want_mut="${7:-allow}" target pristine json ctl got out rc errf
   TOTAL=$((TOTAL+1))
   mk_tree "${label//[^A-Za-z0-9]/_}" || { printf '  FAIL: %s — could not build the tree\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; }
   case "$which" in hook) target="$TREE/pre-ask-technical-fork-gate.sh"; pristine="$PREASK" ;; lib) target="$TREE/lib/technical-fork-cues.sh"; pristine="$LIB" ;; *) echo "FATAL: bad mutation target" >&2; exit 2 ;; esac
@@ -622,15 +626,22 @@ preask_mut_row() {
   if ! apply_mut "$target" "$old" "$new"; then printf '  FAIL: %s — the mutation did not land or the mutant does not parse\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
   if cmp -s "$pristine" "$target"; then printf '  FAIL: %s — the mutant is byte-identical to the pristine file\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
   errf="$WORK/${label//[^A-Za-z0-9]/_}.stderr"; assert_fixture_dir "$errf"
-  got="$(printf '%s' "$json" | bash "$TREE/pre-ask-technical-fork-gate.sh" 2>"$errf")"
-  got="$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${got:-{\}}" 2>/dev/null || echo allow)"
-  if grep -qE '(^|: )line [0-9]+: ' "$errf"; then printf '  FAIL: %s — the mutant crashed (bash diagnostic), not a behavioural kill\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
-  if [[ "$ctl" == "deny" && "$got" == "allow" ]]; then printf '  PASS: %s killed (control %s, mutant %s)\n' "$label" "$ctl" "$got"; PASS=$((PASS+1)); KILLED=$((KILLED+1))
-  else printf '  FAIL: %s — control=%s mutant=%s want control deny and mutant allow\n' "$label" "$ctl" "$got" >&2; FAIL=$((FAIL+1)); fi
+  out="$(printf '%s' "$json" | bash "$TREE/pre-ask-technical-fork-gate.sh" 2>"$errf")"; rc=$?
+  if [[ "$rc" -ne 0 ]] || grep -qE '(^|: )line [0-9]+: |arm skipped|parse skipped|cue lib' "$errf" || { [[ -n "$out" ]] && ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$out"; }; then
+    printf '  FAIL: %s — the mutant broke the hook (rc=%s, stderr or stdout malformed), not a behavioural kill\n' "$label" "$rc" >&2; FAIL=$((FAIL+1)); return 0
+  fi
+  got="$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${out:-{\}}" 2>/dev/null || echo allow)"
+  if [[ "$ctl" == "$want_ctl" && "$got" == "$want_mut" ]]; then printf '  PASS: %s killed (control %s, mutant %s)\n' "$label" "$ctl" "$got"; PASS=$((PASS+1)); KILLED=$((KILLED+1))
+  else printf '  FAIL: %s — control=%s mutant=%s want control %s and mutant %s\n' "$label" "$ctl" "$got" "$want_ctl" "$want_mut" >&2; FAIL=$((FAIL+1)); fi
   return 0
 }
 preask_mut_row "G2-4 the lib ignores the shared+ask group" lib '    shared+ask) ask=1 ;;' '    shared+ask) ;;' "$AK3_TEXT"
 preask_mut_row "G2-5 the pre-ask hook asks for shared (arm dispatch dead)" hook 'tfc_is_fork "$__rq" shared+ask' 'tfc_is_fork "$__rq" shared' "$AK3_TEXT"
+# G2-7/G2-8 run the other way (control ALLOW, mutant DENY): a mutant that makes the ask cue MORE aggressive must flip a
+# must-allow fixture. G2-7 judges the concatenation of every '?' segment instead of one segment at a time; G2-8 drops the
+# ask-only veto (drop, defer, scope).
+preask_mut_row "G2-7 the ask check reads all segments at once" lib 'done <<<"${asked//\? /$'"'"'\n'"'"'}"' 'done <<<"$asked"' "Should I run the migration as a new pipeline? Should I note the backup as unfixed?" allow deny
+preask_mut_row "G2-8 the ask-only veto is dropped" lib ' && ! grep -qE "$TFC_ASK_VETO_RE" <<<"$seg"' '' "Item 3 is out of scope per your brief; should it be run as a new pipeline or recorded as not fixed?" allow deny
 # G2-6: the Stop carrier widened with the ask cue must flip the closing allow row (A1b) pass -> block.
 mut_row "G2-6 the Stop carrier is widened with the ask cue" lib '    shared+closing) closing=1 ;;' '    shared+closing) closing=1; ask=1 ;;' pass "$STATUS $AK3_TEXT"
 
@@ -667,13 +678,13 @@ if [[ -z "$d_missing" && "$RAN" -eq "$SPAWNS" && "$SPAWNS" -ge 70 ]]; then
   printf '  PASS: V5 all %s named must-block rows were blocked by this hook'"'"'s reason; the SUT ran %s of %s spawns\n' "$(wc -w <<<"$D_NAMES" | tr -d ' ')" "$RAN" "$SPAWNS"; PASS=$((PASS+1))
 else printf '  FAIL: V5 missing=[%s] SUT markers=%s harness spawns=%s (want equal and >= 70)\n' "$d_missing" "$RAN" "$SPAWNS" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
-if [[ "$KILLED" -ge 27 ]]; then printf '  PASS: V6 %s mutants killed (floor 27)\n' "$KILLED"; PASS=$((PASS+1))
-else printf '  FAIL: V6 only %s mutants killed (floor 27)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$KILLED" -ge 29 ]]; then printf '  PASS: V6 %s mutants killed (floor 29)\n' "$KILLED"; PASS=$((PASS+1))
+else printf '  FAIL: V6 only %s mutants killed (floor 29)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
 
 # --- inventory, accounting conservation and the assertion floor ---------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 134 ]]; then echo "  PASS: V1 full inventory ran (134 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 134 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 136 ]]; then echo "  PASS: V1 full inventory ran (136 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 136 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # Reported with printf + exit 1, never through a verdict helper: a floor routed through the machinery it backstops
 # is disarmed by the same edit it exists to catch (ADR-193).
@@ -682,7 +693,7 @@ if (( PASS + FAIL != TOTAL )); then
     "$PASS" "$FAIL" "$TOTAL" >&2
   exit 1
 fi
-MIN_CASES=134
+MIN_CASES=136
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

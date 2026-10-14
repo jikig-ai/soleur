@@ -15,3 +15,4 @@ None
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan, CTO and 4 plan reviewers
+cto_spawns=1 (post-review batch)

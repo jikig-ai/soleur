@@ -318,16 +318,22 @@ fi
 # worse, so the arm judges the question, not the sentence. The ship gate and the skill text are the
 # primary defence; this arm is the backstop at the moment of asking.
 # The cue regexes (RULING_*_RE) and the verdict function `tfc_is_fork` live in ONE shared lib, which the
-# closing-message Stop hook (pre-closing-technical-fork-gate.sh) also calls, so the two cannot drift. This
-# hook asks for group `shared+ask`: the `shared` cues are byte-for-byte what the inline cues did, the closing
-# group's extra cues never reach an AskUserQuestion, and `ask` (2026-10-14) adds ONE cue: a question that asks the
-# operator to route items the brief already named (run them as a new pipeline vs record them as not fixed). THE
-# RESIDUAL, STATED: ownership-only ("Who owns the remaining items?") and scope-limited ("Is the scope of this fix limited
-# to item 1?") phrasings stay allowed, as does a two-sentence split ("Run these as a new pipeline now. Or record them as
-# not fixed?"), because the halves must sit in one interrogative sentence; the skill text carries those. The recall is
-# fitted to synthesized phrasing, so the miss, cue, fixture loop carries the rest. A missing, empty or truncated lib is parse doubt for THIS
-# arm: an empty cue regex matches every line, so the arm is skipped (announced) instead of judging with it.
-# The other arms of this hook are independent of the lib and keep running.
+# closing-message Stop hook (pre-closing-technical-fork-gate.sh) also calls, so the two cannot drift. This hook asks
+# for group `shared+ask`: the `shared` cues are byte-for-byte what the inline cues did, the closing group's extra
+# cues never reach an AskUserQuestion, and `ask` (2026-10-14) adds ONE cue: a question that asks the operator to route
+# items the brief already named (run them as a new pipeline vs record them as not fixed), both halves in one
+# interrogative sentence.
+#
+# THE ASK CUE'S RESIDUAL, STATED (it is a lexical nudge, fitted to synthesized phrasing; the miss, cue, fixture loop
+# carries the rest): ownership-only ("Who owns the remaining items?") and scope-limited ("Is the scope of this fix
+# limited to item 1?") questions; a two-sentence split ("Run these as a new pipeline now. Or record them as not
+# fixed?"); a payload whose halves sit only in the option labels, which no cue here reads; a permission-shaped question
+# ("Approve running ... as a new pipeline, or recording ... as not fixed?"), because the permission exemption applies
+# to every cue; and a sentence that mentions drop, defer or scope, because an ask-only veto leaves a genuine scope ask to
+# the operator. All of them stay allowed; the skill text covers them.
+#
+# A missing, empty or truncated lib is parse doubt for THIS arm: an empty cue regex matches every line, so the arm is
+# skipped (announced) instead of judging with it. The other arms of this hook are independent of the lib and keep running.
 TFC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/technical-fork-cues.sh"
 __TFC_OK=0
 if [[ -s "$TFC_LIB" ]]; then
@@ -366,28 +372,42 @@ elif [[ -n "$RULING_ROWS" ]]; then
     # The verdict (weak cues over the interrogative sentences, strong cues, the operator-vocabulary veto and the
     # permission exemption, all judged over THIS question's text alone) is the shared lib's `tfc_is_fork`.
     # Exit 1 is a pass and exit 2 (bad arguments) is treated as a pass: this arm can only ever deny on a clear hit.
-    if tfc_is_fork "$__rq" shared+ask; then :; else continue; fi
+    # Group `shared+ask` is this hook's own (the `ask` cue is reachable from here only). A lib that predates the group
+    # answers exit 2 for it; that must not silently switch off every OTHER ruling cue, so announce it and retry once
+    # with `shared` (the vocabulary every lib version understands). Exit 1 is a pass; any other non-zero is a pass.
+    tfc_is_fork "$__rq" shared+ask; __tfc_rc=$?
+    if [[ "$__tfc_rc" -eq 2 ]]; then
+      printf 'pre-ask-technical-fork-gate: cue lib rejected group shared+ask (lib older than this hook?) - retrying with group shared, the ask cue is off.\n' >&2
+      tfc_is_fork "$__rq" shared; __tfc_rc=$?
+    fi
+    [[ "$__tfc_rc" -eq 0 ]] || continue
     if [[ "${TFC_HIT:-}" == "ask" ]]; then
-      RULING_LEAD="BLOCKED: this AskUserQuestion asks the operator to route items the brief already named (run them as a new pipeline vs record them as not fixed). That is a technical routing call: spawn soleur:engineering:cto first, record \`Ruled by CTO agent\`, and ask the operator only the authorization. If you are asking the operator to DROP, DEFER or ADD something they asked for, reword it as a permission ask (\"Approve dropping ...?\")."
+      RULING_LEAD="BLOCKED: this AskUserQuestion asks the operator to route items the brief already named (run them as a new pipeline vs record them as not fixed). That is a technical routing call: spawn soleur:engineering:cto first, record \`Ruled by CTO agent\`, and ask the operator only the authorization. If you are asking whether to DROP, DEFER or ADD work the operator asked for, reword it as a permission ask. Never reword a routing choice that way; the CTO rules it."
+      RULING_FLIP=""
+      RULING_SPLIT_EXTRA=" If no closed-list action remains, act on the ruling and record it; do not invent an authorization question. Without the Agent tool, write \`pending - assumed: <default>\` as the Ruling of the technical row and return it to your parent."
+      RULING_REWORD="If this question is really an authorization of an action (merge, delete, drop, defer), reword it as a permission ask (\"May I ...?\"); a routing choice is never reworded that way, the CTO rules it. There is no override to set from a tool call."
     else
       RULING_LEAD="BLOCKED: this AskUserQuestion puts a TECHNICAL RULING to the operator.
 
 How strict an evidence bar must be, whether the evidence is sufficient, whether an ADR status moves, which of two named technical designs or approaches — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses."
+      RULING_FLIP="If the criterion is already stated in the ADR or plan, the flip is mechanical: run the grader, cite it, flip. Otherwise the CTO rules.
+
+"
+      RULING_SPLIT_EXTRA=""
+      RULING_REWORD="If this question is really an authorization, reword it as a permission ask (\"May I ...?\" / \"Approve ...?\") so it reaches the operator. Otherwise have the CTO rule via the delegation reference above. There is no override to set from a tool call."
     fi
     RULING_REASON="${RULING_LEAD}
 
 Delegate it: spawn soleur:engineering:cto with the question and the facts, and act on its ruling. The procedure and the closed list of rulings that do NOT go to the CTO are in technical-ruling-delegation.md (plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md).
 
-If the criterion is already stated in the ADR or plan, the flip is mechanical: run the grader, cite it, flip. Otherwise the CTO rules.
+${RULING_FLIP}Then split the item; ask the operator only the authorization — the decision left once the ruling is made, and only if it is in this closed list: money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand.${RULING_SPLIT_EXTRA}
 
-Then split the item; ask the operator only the authorization — the decision left once the ruling is made, and only if it is in this closed list: money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand.
-
-If this question is really an authorization, reword it as a permission ask (\"May I ...?\" / \"Approve ...?\") so it reaches the operator. Otherwise have the CTO rule via the delegation reference above. There is no override to set from a tool call.
+${RULING_REWORD}
 
 See hr-technical-fork-is-not-an-operator-question."
 
     declare -f emit_incident >/dev/null 2>&1 && \
-      emit_incident pre-ask-technical-fork-gate deny "technical ruling put to a non-technical operator" "$__rq" 2>/dev/null || true
+      emit_incident pre-ask-technical-fork-gate deny "technical ruling put to a non-technical operator [cue=${TFC_HIT:-unknown}]" "$__rq" 2>/dev/null || true
 
     jq -n --arg r "$RULING_REASON" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
     exit 0

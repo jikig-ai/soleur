@@ -423,7 +423,7 @@ changes; `skills/go/SKILL.md` is a shim and the authority is `commands/go.md`), 
   answer (the cue misses), or a genuine routing or authorization question is denied with a CTO-first reason (a wrong
   deny), forcing a reword to a permission ask.
 - **If this leaks, the user's workflow is exposed via:** nothing leaves the machine; the hook reads one tool-call
-  payload locally and writes a hashed incident row (cue name, length, sha256, never the text).
+  payload locally and writes the standard local incident row (a gitignored ledger; the pre-ask hook stores the question text there, as it did before this change).
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** `none`, not `aggregate pattern`: the failure is a stalled or mis-routed
   internal question in this repository's own sessions, the hook is repo-local and fail-open, and the worse failure (a

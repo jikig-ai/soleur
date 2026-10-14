@@ -13,9 +13,9 @@ these categories. The Class cell of the Decision Classes table (section 6) uses 
 
 - **money** — spend, price, a recurring cost, a new paid dependency or sub-processor.
 - **scope** — dropping, deferring or adding what the operator asked for. A scope question is the operator's only when it
-  asks to DROP, DEFER or ADD something the operator themselves asked for; routing or ownership of an
-  already-identified gap that the brief named (run leftover items as a new pipeline vs record them as not fixed, who
-  owns them) is technical and goes to the CTO.
+  asks to DROP, DEFER or ADD something the operator themselves asked for; the routing of an
+  already-identified gap that the brief named (which pipeline or PR carries it: run leftover items as a new pipeline vs
+  record them as not fixed) is technical and goes to the CTO; assigning work to a named person stays the operator's.
 - **priority / schedule** — what goes first, when it ships.
 - **irreversible / production-mutating** — the AUTHORIZATION to run the act (merge, dispatch, delete, rotate, apply).
 - **legal-risk** — accepting regulatory or legal exposure (the legal posture itself goes to the CLO, see section 3).
@@ -141,5 +141,5 @@ fails CI.
 | T1a authorization to run the cleanup | operator (production-mutating) | Authorise merging the cleanup PR that deletes the guard (split from T1) |
 | T2 wire seven skills or only the choke points | operator (scope) | Keep the seven skills the brief names |
 | T3 which of two log wordings reads better | taste |  |
-| T4 run the leftover roadmap items as a new pipeline or record them as not fixed | technical | Ruled by CTO agent, 2026-10-14: record the closed class as not fixed - the open trackers already own the remainder |
+| T4 run the leftover items the brief named as a new pipeline or record them as not fixed | technical | Ruled by CTO agent, 2026-10-14: route them to the tracker that already owns them - a new pipeline would duplicate it |
 ```

@@ -8,9 +8,9 @@ Three carriers had already been closed: the tool call (pre-ask hook), an artifac
 
 ## Solution
 
-- The delegation reference now says a brief's "ask the operator" / "OPEN DECISION" wording about a technical item is itself the trigger to spawn the CTO, and classifies routing or ownership of an already-identified gap the brief named as technical (the closed operator-only list is unchanged).
-- `commands/go.md` (the authority) and its `skills/go/SKILL.md` shim, and the one-shot inline copy, carry the same sentence; `components.test.ts` pins it.
-- The pre-ask hook gets one narrow `ask` cue under a new `shared+ask` group: a route phrase and a record phrase in one interrogative sentence. Measured on the real hook: five synthesized variants of the incident question were all allowed before, three of five are denied after; the rest are the stated residual.
+- The delegation reference now says a brief's "ask the operator" / "OPEN DECISION" wording about a technical item is itself the trigger to spawn the CTO, and classifies routing or ownership of an already-identified gap the brief named as technical (the closed operator-only list keeps its eight categories; only the `scope` definition is clarified).
+- `commands/go.md` (the authority), its `skills/go/SKILL.md` shim and the one-shot inline copy carry equivalent wording; `components.test.ts` pins the reference, the Sharp Edge and the inline copy. `AGENTS.rules.md` and `work/SKILL.md` still carry only the older "surface it" wording: the brief forbade editing them, so extending them is the operator's call.
+- The pre-ask hook gets one narrow `ask` cue under a new `shared+ask` group: a route phrase and a record phrase in one interrogative sentence. Measured on the real hook: the synthesized incident variants were all allowed before; the committed AK1-AK5 fixtures are denied after (fitted to that phrasing), and the ownership-only, scope-limited, two-sentence, options-only and permission-shaped phrasings stay allowed (the stated residual, pinned as AL9-AL11 and AL18-AL19).
 
 ## Key Insight
 
