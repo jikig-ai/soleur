@@ -446,13 +446,13 @@ mkshim() {
     "$pat" "$d/cnt" "$d/cnt" "$nth" "$act" "$real" > "$d/$t"
   chmod +x "$d/gh" "$d/$t"
 }
-# the marker chains (first_on: grep, sed, sort, head; last_on: grep, sed, sort, tail; last_off: grep, sed, sort, tail; census: grep): each (chain, tool) failure injected on ITS
+# the marker chains (first_on: grep, sed, sort, sed -n 1p; last_on: grep, sed, sort, tail; last_off: grep, sed, sort, tail; census: grep): each (chain, tool) failure injected on ITS
 # chain only is exit 3 naming the read, never "no marker". The DEACTIVATED chain runs against a fixture whose HEALTHY verdict is NOT YET (a dropped DEACTIVATED marker
 # used to read as an active soak and PASS at rc 0). The sort/tail/head shims count every call: the probe calls them once per chain, in the order first_on, last_on, last_off.
 r_markers() {
   local spec label tool pat nth mode kind d fx n=0
   local -a specs=(
-    "S3-ACTIVATED first|grep|*S3-ACTIVATED*|1|err|pass" "S3-ACTIVATED first|sed|*S3-ACTIVATED*|1|err|pass" "S3-ACTIVATED first|sort|*|1|err|pass" "S3-ACTIVATED first|head|*|1|err|pass"
+    "S3-ACTIVATED first|grep|*S3-ACTIVATED*|1|err|pass" "S3-ACTIVATED first|sed|*S3-ACTIVATED*|1|err|pass" "S3-ACTIVATED first|sort|*|1|err|pass" "S3-ACTIVATED first|sed|*1p*|1|err|pass"
     "S3-ACTIVATED last|grep|*S3-ACTIVATED*|2|err|pass"  "S3-ACTIVATED last|sed|*S3-ACTIVATED*|2|err|pass"  "S3-ACTIVATED last|sort|*|2|err|pass"  "S3-ACTIVATED last|tail|*|1|err|pass"
     "S3-DEACTIVATED last|grep|*S3-DEACTIVATED*|1|err|deact" "S3-DEACTIVATED last|sed|*S3-DEACTIVATED*|1|err|deact" "S3-DEACTIVATED last|sort|*|3|err|deact" "S3-DEACTIVATED last|tail|*|2|err|deact"
     "S3-EXIT-CENSUS|grep|*S3-EXIT-CENSUS*|1|err|pass" "S3-EXIT-CENSUS|grep|*S3-EXIT-CENSUS*|1|silent|pass")
@@ -660,7 +660,7 @@ mutant m-cancelled 'select(.conclusion == \"success\" or .conclusion == \"failur
 mutant m-test-red 'if [ "$tconc" != "failure" ]; then bad_test=' 'if false; then bad_test=' r_inv1_success r_inv1_notest
 mutant m-conf-missing 'if [ -z "$conf_epoch" ]; then' 'if false; then' r_noconf r_conf_noperm r_conf_placeholder
 mutant m-conf-order 'if [ "$conf_epoch" -gt "$first_on_epoch" ]; then' 'if false; then' r_conf_late
-mutant m-conf-earliest '.t'"'"' <<<"$comments" 2>/dev/null | sort | head -n 1)"' '.t'"'"' <<<"$comments" 2>/dev/null | sort | tail -n 1)"' r_conf_two
+mutant m-conf-earliest '.t'"'"' <<<"$comments" 2>/dev/null | sort | sed -n 1p)"' '.t'"'"' <<<"$comments" 2>/dev/null | sort | tail -n 1)"' r_conf_two
 mutant m-conf-anchor "CONF_RE='^S3-CONFIRMED: " "CONF_RE='S3-CONFIRMED: " r_conf_mid
 mutant m-conf-any '(https://github\.com/[^ ]+|"[^"]{3,}")$'"'" '.+$'"'" r_conf_bare r_conf_placeholder
 mutant m-trusted 'comments="$(trusted_verdict_comments "$TRACKER" "$REPO")" || fail_comments "tracker $TRACKER comments (trusted-author resolution)"' 'comments="$(trusted_verdict_comments "$TRACKER" "$REPO")"' r_commentsfail r_permfail
@@ -673,7 +673,7 @@ mutant m-no-projection-check ' || fail_projection "tracker $TRACKER comments (pr
 mutant m-no-conf-check ' \
   || fail_projection "tracker $TRACKER comments (confirmation projection)"' '' r_badconf
 # the marker chains: each restored to the bare, unchecked form the review found (the status of every stage dropped)
-mutant m-first-unchecked 'marker_stamp S3-ACTIVATED first; first_on="$MARKER_VAL"' 'first_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed '"'"'s/^S3-ACTIVATED: //'"'"' | sort | head -n 1)"' r_markers
+mutant m-first-unchecked 'marker_stamp S3-ACTIVATED first; first_on="$MARKER_VAL"' 'first_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed '"'"'s/^S3-ACTIVATED: //'"'"' | sort | sed -n 1p)"' r_markers
 mutant m-laston-unchecked 'marker_stamp S3-ACTIVATED last; last_on="$MARKER_VAL"' 'last_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed '"'"'s/^S3-ACTIVATED: //'"'"' | sort | tail -n 1)"' r_markers
 mutant m-lastoff-unchecked 'marker_stamp S3-DEACTIVATED last; last_off="$MARKER_VAL"' 'last_off="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S3-DEACTIVATED: $TS_RE\$" | sed '"'"'s/^S3-DEACTIVATED: //'"'"' | sort | tail -n 1)"' r_markers
 mutant m-census-unchecked 'marker_count S3-EXIT-CENSUS '"'"'^S3-EXIT-CENSUS: https://github\.com/[^ ]+$'"'"'; census_marked="$MARKER_VAL"' 'census_marked="$(printf '"'"'%s\n'"'"' "$trusted" | grep -cE '"'"'^S3-EXIT-CENSUS: https://github\.com/[^ ]+$'"'"')"' r_markers

@@ -133,7 +133,7 @@ TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
 # (no match) is an answer, every other non-zero status anywhere in the chain is CANNOT ESTABLISH naming the read.
 marker_stamp() {   # <marker name> <first|last>: sets MARKER_VAL to the EARLIEST or LATEST `<name>: <ISO>` stamp ("" = no such marker)
   local name="$1" pick="$2" r st
-  r="$(printf '%s\n' "$trusted" | grep -oE "^$name: $TS_RE\$" | sed "s/^$name: //" | sort | if [ "$pick" = first ]; then head -n 1; else tail -n 1; fi; printf '#%s' "${PIPESTATUS[*]}")"
+  r="$(printf '%s\n' "$trusted" | grep -oE "^$name: $TS_RE\$" | sed "s/^$name: //" | sort | if [ "$pick" = first ]; then sed -n 1p; else tail -n 1; fi; printf '#%s' "${PIPESTATUS[*]}")"
   st="${r##*#}"; MARKER_VAL="${r%#*}"; MARKER_VAL="${MARKER_VAL%$'\n'}"
   case "$st" in "0 0 0 0 0"|"0 1 0 0 0") : ;; *) fail_marker "$name $pick" ;; esac
 }
@@ -149,7 +149,7 @@ marker_stamp S3-DEACTIVATED last; last_off="$MARKER_VAL"
 marker_count S3-EXIT-CENSUS '^S3-EXIT-CENSUS: https://github\.com/[^ ]+$'; census_marked="$MARKER_VAL"
 # the earliest trusted S3-CONFIRMED comment (a github URL, or a quoted statement of at least 3 characters), by createdAt
 CONF_RE='^S3-CONFIRMED: (https://github\.com/[^ ]+|"[^"]{3,}")$'
-conf_iso="$(jq -r --arg re "$CONF_RE" 'select(.b | split("\n") | map(rtrimstr("\r")) | any(test($re))) | .t' <<<"$comments" 2>/dev/null | sort | head -n 1)" \
+conf_iso="$(jq -r --arg re "$CONF_RE" 'select(.b | split("\n") | map(rtrimstr("\r")) | any(test($re))) | .t' <<<"$comments" 2>/dev/null | sort | sed -n 1p)" \
   || fail_projection "tracker $TRACKER comments (confirmation projection)"
 conf_epoch=""
 [ -n "$conf_iso" ] && { conf_epoch="$(date -u -d "$conf_iso" +%s 2>/dev/null)" || fail_api "confirmation time $conf_iso"; }
