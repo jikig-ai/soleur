@@ -21,6 +21,26 @@ if ! declare -f headless_or_stderr >/dev/null; then
   headless_or_stderr() { echo "[$1] $2" >&2; }
 fi
 
+# Shared wrapper-boundary prefix fragment (#10248): every boundary-anchored
+# gated-command gate interpolates ${SOLEUR_BOUNDARY_PFX:-} — sourced here once
+# so all hook consumers get it transitively across the .claude/hooks ->
+# plugins/soleur/scripts/lib tree boundary (same reach the session-state
+# source above already uses). Fail-soft: a missing/corrupt lib leaves the
+# `:-` defaults empty at consumption sites, which is identical pre-#10248
+# matching, and emits one WARN — never a hard error, never a new hole.
+# unset-first: an inherited env value must not masquerade as the loaded
+# fragment after a failed source (the LOADED sentinel is what is asserted).
+unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX SOLEUR_BOUNDARY_PFX_LOADED
+_incidents_wb="$(dirname "${BASH_SOURCE[0]}")/../../../plugins/soleur/scripts/lib/wrapper-boundary.sh"
+if [[ -f "$_incidents_wb" ]]; then
+  # shellcheck source=/dev/null
+  source "$_incidents_wb" 2>/dev/null || true
+fi
+if [[ "${SOLEUR_BOUNDARY_PFX_LOADED:-0}" != 1 ]]; then
+  headless_or_stderr warn "wrapper-boundary.sh unavailable at $_incidents_wb — boundary gates run pre-#10248 matching (no rtk-prefix tolerance)"
+fi
+unset _incidents_wb
+
 # --- Repo-root resolution --------------------------------------------------
 # BASH_SOURCE[0] is the path to THIS file regardless of how it was sourced.
 # From .claude/hooks/lib/incidents.sh, the repo root is three dirs up.

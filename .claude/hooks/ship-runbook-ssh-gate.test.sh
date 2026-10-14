@@ -18,7 +18,11 @@ FAIL=0
 TOTAL=0
 
 SSH_RE='^[[:space:]]*([-*]|[0-9]+\.)?[[:space:]]*`?(ssh\b|docker\s+exec\b|journalctl\s+.*(-f\b|--follow\b)|systemctl\s+(restart|stop|start|kill)\b|kill\b|systemd-run\b)'
-CMD_RE='(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'
+# The shared wrapper-boundary fragment (#10248) — same source the gate's own
+# incidents.sh chain provides; restated here so CMD_RE stays a faithful copy.
+# shellcheck source=../../plugins/soleur/scripts/lib/wrapper-boundary.sh
+source "$SCRIPT_DIR/../../plugins/soleur/scripts/lib/wrapper-boundary.sh" 2>/dev/null || true
+CMD_RE='(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'
 
 t() {
   TOTAL=$((TOTAL + 1))
@@ -59,6 +63,8 @@ t "gh pr ready 4239"                 "$CMD_RE" "gh pr ready 4239" match
 t "gh pr merge --auto"               "$CMD_RE" "gh pr merge --squash --auto" match
 t "gh pr merge w/o --auto"           "$CMD_RE" "gh pr merge 4239 --squash" no-match
 t "chain: ready && merge --auto"     "$CMD_RE" "gh pr ready 1 && gh pr merge --auto" match
+t "rtk gh pr merge --auto (wrapper prefix, #10248)" "$CMD_RE" "rtk gh pr merge --auto" match
+t "rtk-foo gh pr merge --auto (glued suffix is not rtk)" "$CMD_RE" "rtk-foo gh pr merge --auto" no-match
 
 # --- #5192: commit-body / heredoc strip → CMD_RE no longer fires -----------
 # shellcheck source=lib/incidents.sh

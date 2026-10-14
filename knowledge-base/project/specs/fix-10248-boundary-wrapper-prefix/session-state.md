@@ -21,3 +21,13 @@
 ### Components Invoked
 - soleur:plan (inline), soleur:deepen-plan (inline), plan-sharp-edges.md, lint-guard-contract.py, markdownlint, rtk-grammar-parity.test.sh (11/11), gh issue/pr verification
 - Commits: c0614250f8, f334af1d12 — pushed; draft PR #10288
+
+## Work Phase
+- Technical rulings: all 7 `pending - assumed` rows CONFIRMED in one batched `soleur:engineering:cto` consult (per technical-ruling-gate.sh); gate green.
+- Phase 1 (RED): `wrapper-boundary.sh` created (SOLEUR_ENV_ASN_RE / SOLEUR_LAUNCHER_RE / SOLEUR_RTK_RE / SOLEUR_BOUNDARY_PFX + LOADED sentinel + canonical-TSV pin); TSV gained flag-global + flag-string class rows; parity suite extended to 15 arms (green); `boundary-prefix.test.sh` created — census RED as designed, behavioral matrix green.
+- Phase 2: `incidents.sh` nested-source carrier (unset-first, headless_or_stderr warn on load failure); `precommit-guard.sh` sources `$(dirname)/lib/wrapper-boundary.sh` + COMMIT_RE consumes the fragment with the pre-fix env/launcher alternation as `:-` fallback. `rtk git commit` refuses on main — verified incl. plugin-cache-shaped layout.
+- Phase 3: all 20 derived sites interpolate `${SOLEUR_BOUNDARY_PFX}` (18 production + 2 test-fixture CMD_RE). `_merge_args` reworked per Design Note A (boundary+prefix strip; `^[^g]*` gone). Per-hook rtk rows: T7b/T1b/T2b/T3b clones, guardrails stash+create+conflict rows, net-issue-flow deny/allow loop rows, soak deny row, prod-write defer A1b/A2b/A3b + nomatch, parity T-M2 (rtk + rtk run intercept) + T-M3 (_merge_args unit).
+- Phase 4: #10248 comments past-tense (pre-merge-rebase.sh, guardrails.sh); known-external-tools.md boundary coverage rewritten post-fix (residual classes disclosed: unknown wrappers + string payloads). Exemption registry line refs re-pointed after comment drift (230/704).
+- Deviations: `rtk-foo gh issue create` negative moved off the issue-create surface — filing gate's word-boundary scan already denies it by design; negative pinned on the stash surface instead.
+- Test evidence: boundary-prefix 51/51, rtk-grammar-parity 15/15, guardrails 364/364, pre-merge-rebase 215/215, parity 17/17, auto-close 49/49, follow-through 25/25, cla-signed 7/7, ship-unpushed 17/17, net-issue-flow 40, soak 26, operator-step 26/26, runbook 26/26, prod-write-defer 222/222, guard-vacuity-floor 23/23. Fixture baselines regenerated (no residue change).
+- Parent PR #10227 MERGED (d3714354a0) mid-work — rebase --onto origin/main now unblocked.

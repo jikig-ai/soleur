@@ -60,7 +60,7 @@ WORK_DIR="$HOOK_CWD"
 # scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
 # commit message documenting `gh pr ready` is not mistaken for one (#5192).
 SCAN=$(strip_command_bodies "$CMD")
-if ! grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
+if ! grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
   exit 0
 fi
 if [[ "$WORK_DIR" != /* ]] || [[ ! -d "$WORK_DIR" ]]; then exit 0; fi

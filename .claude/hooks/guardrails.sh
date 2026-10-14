@@ -134,15 +134,17 @@ fi
 # and git options between `git` and `commit` (-C dir, -c k=v, --git-dir=d) —
 # the same width precommit-guard.sh detects; a narrower gate here would make
 # those arms unreachable on the hook path.
-# #10248: `rtk git commit` still bypasses — prefix-tolerance lands via the
-# boundary-anchor follow-up's shared fragment, not a per-site edit.
+# #10248 landed: ${SOLEUR_BOUNDARY_PFX:-…} carries env-assignment, launcher and
+# rtk atoms from the shared wrapper-boundary fragment (sourced via
+# lib/incidents.sh); its :- fallback restates the pre-#10248 alternation so a
+# missing lib degrades to exactly the old matching.
 # Scans $COMMAND (NOT $SCAN): this gates the REAL commit, so a message body
 # mentioning "git commit" still IS a commit — no false-positive class here.
 # The canonical check lives in plugins/soleur/scripts/precommit-guard.sh —
 # plugin is the source of truth so work/ship/one-shot can invoke the identical
 # check in sessions where hooks do not fire (Soleur Cloud Mode, FR5). This
 # wrapper translates the script's refusal into the hook deny envelope.
-if grep -qE '(^|[|;&])[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*((sudo|command|nice|env|xargs)[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit' <<<"$COMMAND"; then
+if grep -qE '(^|[|;&])[[:space:]]*('"${SOLEUR_BOUNDARY_PFX:-([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+|sudo|command|nice|env|xargs)}"'[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit' <<<"$COMMAND"; then
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
   GUARD="$REPO_ROOT/plugins/soleur/scripts/precommit-guard.sh"
   if [ -n "$REPO_ROOT" ] && [ -x "$GUARD" ]; then
@@ -392,7 +394,7 @@ fi
 # emitted as `+++ "b/caf\303\251.md"`, which `^\+\+\+ b/` does not match. Measured:
 # a `<<<<<<< HEAD` line in one file plus a `=======` line in an unrelated
 # accented-filename file made the counting go global and DENIED a clean commit.
-if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pick|revert)\s+--continue)' <<<"$COMMAND"; then
+if grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pick|revert)\s+--continue)' <<<"$COMMAND"; then
   CONFLICT_MARKERS_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
   # FAIL LOUD, not open. `2>/dev/null || true` made an errored `git diff` (an
   # index.lock race, a fork failure under memory pressure, a corrupt index)
@@ -475,7 +477,7 @@ fi
 # approve a `git stash` riding on the same line (#9089 review).
 # scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
 # commit message documenting "never git stash" is not mistaken for one (#5192).
-if grep -qE '(^|&&|\|\||;)\s*git\s+stash' <<<"$SCAN"; then
+if grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*git\s+stash' <<<"$SCAN"; then
   emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
   jq -n '{
     hookSpecificOutput: {
@@ -567,8 +569,8 @@ _fg_deny() {
 
 # THE FLOOR, counted. CLASS 1 is anchored on `^`/`&&`/`||`/`;` over $SCAN.
 _fl_create=0; _fl_api=0
-if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
-  _fl_create="$(grep -oE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN" | wc -l)" || _fl_create=1
+if grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+issue\s+create' <<<"$SCAN"; then
+  _fl_create="$(grep -oE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+issue\s+create' <<<"$SCAN" | wc -l)" || _fl_create=1
   _fl_create=$((_fl_create + 0))
 fi
 if grep -qE 'gh\s+api\b' <<<"$SCAN"; then

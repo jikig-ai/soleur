@@ -118,12 +118,18 @@ globals:           -v/-vv/-vvv/--verbose, --skip-env (either position — clap g
 calls. <code>Read</code>, <code>Grep</code>, and <code>Glob</code> results are not filtered —
 savings claims like "90%" are scoped to terminal-output tokens, not your bill.</p>
 
-<p><strong>Boundary-anchor gap:</strong> the unwrap above covers Soleur's
-<em>destructive-command</em> guard (and the pkill/proc siblings). Boundary-anchored gates —
-the <code>gh pr merge</code> review-evidence gate, <code>git commit</code> guards — do not
-yet unwrap <code>rtk</code>-prefixed forms, so <code>rtk gh pr merge</code> still reaches
-them unjudged until <a href="https://github.com/jikig-ai/soleur/issues/10248">#10248</a>
-lands.</p>
+<p><strong>Boundary-anchor coverage:</strong> since
+<a href="https://github.com/jikig-ai/soleur/issues/10248">#10248</a>, boundary-anchored
+gates — the <code>gh pr merge</code> review-evidence gate, <code>git commit</code> guards,
+<code>git stash</code>, <code>gh issue create</code>, prod-write defers — interpolate the
+shared wrapper-prefix fragment (<code>plugins/soleur/scripts/lib/wrapper-boundary.sh</code>),
+so <code>rtk gh pr merge</code>, <code>sudo rtk git commit</code>,
+<code>X=1 rtk gh pr merge</code> and <code>… -- rtk gh pr merge</code> reach them judged.
+Two residual classes remain BY DESIGN: unknown wrappers are not unwrapped (the fragment is
+a closed grammar, not a heuristic), and opaque string payloads — <code>rtk run -c '…'</code>,
+<code>rtk summary --shell '…'</code> — join the hooks' existing declared-lexical-limit class
+(alongside <code>bash -c '…'</code>, subshells and eval): they are not matchable without
+parsing a string as shell, which the gates deliberately never do.</p>
 
 <h2>Three-rung diagnosis</h2>
 

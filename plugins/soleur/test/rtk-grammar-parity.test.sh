@@ -77,4 +77,37 @@ else
   echo "NOTE: known-external-tools.md absent — doc parity skipped (lands in the docs phase)"
 fi
 
+# 7-9. The boundary-prefix fragment's rtk atom (#10248) — SOLEUR_RTK_RE in
+# plugins/soleur/scripts/lib/wrapper-boundary.sh restates BOTH the exec set and
+# the flag sets; each is asserted against its own canonical TSV class.
+WBLIB="$REPO_ROOT/plugins/soleur/scripts/lib/wrapper-boundary.sh"
+assert_file_exists "$WBLIB" "wrapper-boundary.sh (shared boundary fragment) exists"
+if [[ -f "$WBLIB" ]]; then
+  # The inner alternation between `[[:space:]]+(` and `))*'` — non-member
+  # delimiters both edges, same discipline as arms 1-6.
+  members="$(grep -E "^SOLEUR_RTK_RE=" "$WBLIB" | head -1 \
+    | sed -E "s/^SOLEUR_RTK_RE='rtk\(\[\[:space:\]\]\+\(//; s/\)\)\*'.*$//" \
+    | tr '|' '\n' | grep -vE '^\s*$')"
+  [[ -n "$members" ]] || { echo "FATAL: SOLEUR_RTK_RE extraction yielded no members"; exit 3; }
+  # bare-word members are exec subcommands; dash-members are global flags
+  # (value-shape suffixes like (=[^[:space:]]+)? normalize to the bare flag).
+  frag_exec="$(grep -E '^[a-z]+$' <<<"$members" | sort | tr '\n' ' ' | sed 's/ $//')"
+  frag_glob="$(grep -E '^-' <<<"$members" | sed 's/(=.*//' | sort | tr '\n' ' ' | sed 's/ $//')"
+  [[ -n "$frag_exec" && -n "$frag_glob" ]] \
+    || { echo "FATAL: fragment member split yielded an empty arm (exec='$frag_exec' glob='$frag_glob')"; exit 3; }
+
+  assert_eq "$want" "$frag_exec" "wrapper-boundary SOLEUR_RTK_RE exec set matches canonical"
+
+  tsv_glob="$(awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $2 == "flag-global" { print $1 }' "$CANON" | sort | tr '\n' ' ' | sed 's/ $//')"
+  [[ -n "$tsv_glob" ]] || { echo "FATAL: canonical TSV yielded no flag-global rows"; exit 3; }
+  assert_eq "$tsv_glob" "$frag_glob" "wrapper-boundary SOLEUR_RTK_RE global-flag set matches canonical flag-global rows"
+
+  # flag-string flags (-c/--command/--shell) are the exclusion pin: the boundary
+  # atom must NOT admit them (opaque-payload class), so zero members overlap.
+  tsv_str="$(awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $2 == "flag-string" { print $1 }' "$CANON" | sort)"
+  [[ -n "$tsv_str" ]] || { echo "FATAL: canonical TSV yielded no flag-string rows"; exit 3; }
+  overlap="$(comm -12 <(sort <<<"$tsv_str") <(grep -E '^-' <<<"$members" | sed 's/(=.*//' | sort) | tr '\n' ' ' | sed 's/ $//')"
+  assert_eq "" "$overlap" "wrapper-boundary SOLEUR_RTK_RE admits no flag-string members (opaque-payload exclusion)"
+fi
+
 print_results

@@ -94,7 +94,7 @@ else
   SCAN="$CMD"
 fi
 
-if ! grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
+if ! grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+(ready|merge)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
   exit 0
 fi
 

@@ -237,6 +237,10 @@ check "closing target named by BOTH Closes and Ref → allows" "<none>" \
   "$(decision_of 'gh pr ready' "$REPO" soakcloses)"
 check "third-party unenrolled tracker still DENIES (fix narrows, not disables)" "deny" \
   "$(decision_of 'gh pr ready' "$REPO" soakother)"
+check "rtk-prefixed gh pr ready reaches the gate (#10248)" "deny" \
+  "$(decision_of 'rtk gh pr ready' "$REPO" soakother)"
+check "rtk-foo is not rtk — glued suffix does not reach the gate" "<none>" \
+  "$(decision_of 'rtk-foo gh pr ready' "$REPO" soakother)"
 
 # --- negated soak vocabulary is not a soak declaration ----------------------
 # The gate matched a bare `soak` anywhere in the corpus, so a plan row saying the
