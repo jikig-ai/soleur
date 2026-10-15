@@ -33,7 +33,9 @@ Envelope: <path>[#<title>]
 **A gate says WHEN a hold's condition is true, never WHO the hold is reserved to.** Some holds reserve a decision to the
 operator ("do not release until Dana approves the pricing page copy", brand copy, spend). A gate such as `pr-merged 1`
 can be true while that approval has not been given, so such a hold must not carry a discharging gate at all. Write it as
-`- Hold: Operator-reserved: <words>`. A hold whose words BEGIN with `Operator-reserved:` (any case) always STANDS: the
+`- Hold: Operator-reserved: <words>`. A hold whose words BEGIN with `Operator-reserved:` always STANDS, however it is spelt: case, spaces, hyphens, underscores,
+bold, quotes, a full-width colon and invisible characters are ignored (`Operator reserved:`, `**Operator-reserved:**` and
+`operator-reserved :` all count), because an honest slip must not turn a reserved hold into a dischargeable one: the
 evaluator prints `Reserved for you: <words> - only you can clear this`, does not probe its gates, and exits 2. It is cleared
 only by the operator saying so, and the CTO then removes or rewrites the line. Words in the middle of a hold do not reserve
 it.
@@ -50,9 +52,11 @@ Rules the evaluator applies to this section:
 - **`Delegation:`** appears at most once. Two lines are exit 2. **`Envelope:` is required** beside it, exactly once: a
   delegation with no runbook to check it against leaves every hold standing, because the verifier has nothing to compare the
   Scope with.
-- **Markers** (`Hold:`, `Gate:`, `Delegation:`, `Envelope:`) are read in any case, with or without the list dash and with a
-  space before the colon. A line inside a code fence is an example and is ignored; only a fence of the same character, at
-  least as long, closes it.
+- **Markers** (`Hold:`, `Gate:`, `Delegation:`, `Envelope:`) are read in any case and in any common spelling: with or without
+  a list marker (`-`, `*`, `+`, `1.`, `2)`) or a quote (`>`), in bold or underscores (`**Hold:**`, `__Hold__:`), with a space or
+  a non-breaking space before the colon, and with a full-width colon. The evaluator counts every such line in the whole file
+  and compares the count with the lines it parsed inside readable sections; any difference is exit 2. A line inside a code
+  fence is an example and is ignored; only a fence of the same character, at least as long, closes it.
 - A hold with no `Gate:` line is "Needs a person" (section 2).
 
 The operator's wording stays beside the gates so a gate that weakens a hold is visible in review. Whether a gate
@@ -84,9 +88,8 @@ because a PR body is not an operator-visible surface. The standing delegation is
 leaves every hold standing, and the gates are not probed. When it does not verify, the evaluator's first line is the
 verifier's verdict, `delegation: <invalid|unverifiable> reason=<token>`. Say the plain sentence for that token from
 [standing-delegation.md](../../brainstorm-techniques/references/standing-delegation.md) section 7 (Reason tokens), never the
-token itself. The evaluator adds two tokens of its own: `no-answer` (the verifier printed nothing, or timed out) and
-`verifier-error` (its exit status and its first line disagree); for both say "I could not get a clear answer when I checked
-your standing approval, so I have not done anything."
+token itself. The evaluator adds two tokens of its own, `no-answer` and `verifier-error`; their sentences are in the same
+table.
 
 Record each hold's verdict line and the command that produced it in the PR body, so a discharge is auditable and "three
 conditions probed green" is distinguishable from "no conditions found". A `Done:` line carries the gate text that was true
@@ -109,16 +112,22 @@ ACTION (what the operator is being asked to approve, in plain words), print one 
 
 ## 4. Timing: twice, and the receipt after a delegated act
 
-Evaluate at the draft exit AND again immediately before arming, through the same command
-(`hold-gate-eval.sh --plan <plan file>`; any exit other than 0 stops the arming). The second look runs BEFORE the plan is
-archived (Phase 6.45), because after archiving the plan file is no longer at its live path and the evaluator would answer 2. A predicate such as `no-inflight-run` is true only at
-that instant: a run that starts between the two looks makes the hold stand again.
+Evaluate at the draft exit AND again at the start of Phase 6.45, before the plan is archived, through the same command
+(`hold-gate-eval.sh --plan <plan file>`; any exit other than 0 stops the arming). It runs there, not at the arming call itself,
+because once Phase 6.45 archives the plan its live path is gone and the evaluator would answer 2. Be honest about the gap: a
+predicate such as `no-inflight-run` is true only at the instant it is read, so a run that starts between that look and the
+arming is not seen. The repository's required checks, not this look, are the final authority at the merge.
+
+**Keep envelopes out of what Phase 6.45 archives.** The ship gate reads the envelope path of a `ran` row from the committed
+tree. Put the Production Envelope in a runbook, or any path that survives Phase 6.45, never inside the plan or the spec
+directory that gets moved to `archive/`: a moved envelope is a path that no longer exists, and the delegation stops verifying.
 
 All conditions discharged ⇒ continue. The merge remains gated by review having run (`rf-never-skip-qa-review-before-merging`)
 and by the required checks; those are the merge authority, not the hold. Any condition unmet ⇒ stop and name **that
 condition** ("the earlier change has not gone live yet"), never "the change is not ready".
 
-A delegated act (a merge or dispatch the CTO ran under the delegation) leaves a receipt: one comment on the epic whose first
+A delegated act (a merge or dispatch the CTO ran under the delegation) leaves a receipt, written after the act and so dated at or
+after the `ran` time: one comment on the epic whose first
 line is `<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back run=<url|none> -->`
 (format: [standing-delegation.md](../../brainstorm-techniques/references/standing-delegation.md) section 8). After each delegated
 act the CTO ALSO records the row `Authorized by delegation <url>, envelope <path>, ran <ISO UTC time>` (class

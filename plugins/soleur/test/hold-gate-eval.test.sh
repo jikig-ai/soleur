@@ -369,6 +369,53 @@ scn; mkplan reserved4 's/^- Hold: do not ship while a release is running\./- Hol
 expect "OR4: a reserved hold with no gate at all is reserved, not 'needs a person' by accident" 2 "holds: 3 discharged: 2 standing: 1"
 assert_eq "1" "$(grep -c '^Reserved for you: ' "$TMP/o")" "OR4b: it is the reserved line"
 
+echo "=== Arm 4d: every spelling of a hold or gate marker is read, or the run exits 2 (verification V4) ==="
+NB=$'\xc2\xa0'; FW=$'\xef\xbc\x9a'; ZW=$'\xe2\x80\x8b'; SH=$'\xc2\xad'; NH=$'\xe2\x80\x91'
+FIRST='- Hold: do not ship while a release is running.
+  Gate: no-inflight-run example-release.yml'
+spell() { # <name> <hold marker line> <gate marker line>: a second hold, spelled oddly, must be PARSED (two holds, both discharged)
+  scn; mkholds "$1" "$FIRST
+$2
+$3"; run_h --plan "$PLAN"
+  expect "V4 $1: the hold and its gate are read" 0 "holds: 2 discharged: 2 standing: 0"
+}
+spell star       '* Hold: wait for the earlier change.'          '  Gate: pr-merged 55'
+spell numbered   '1. Hold: wait for the earlier change.'         '  Gate: pr-merged 55'
+spell paren      '2) Hold: wait for the earlier change.'         '  Gate: pr-merged 55'
+spell quote      '> Hold: wait for the earlier change.'          '> Gate: pr-merged 55'
+spell bold       '- **Hold:** wait for the earlier change.'      '  - **Gate:** pr-merged 55'
+spell boldcolon  '- **Hold**: wait for the earlier change.'      '  **Gate**: pr-merged 55'
+spell underscore '- __Hold__: wait for the earlier change.'      '  __Gate__: pr-merged 55'
+spell plus       '+ Hold: wait for the earlier change.'          '  + Gate: pr-merged 55'
+spell fullwidth  "- Hold$FW wait for the earlier change."        "  Gate$FW pr-merged 55"
+spell nbsp       "Hold$NB: wait for the earlier change."         "  Gate$NB: pr-merged 55"
+spell spaced     '- hold : wait for the earlier change.'         '  gate : pr-merged 55'
+spell zerowidth  "- Ho${ZW}ld: wait for the earlier change."     "  Ga${SH}te: pr-merged 55"
+scn; mkholds oddprefix "$FIRST"; printf '\n## Notes\n\n* Hold: a hold hiding under another heading.\n  Gate: pr-merged 9999\n' >> "$PLAN"; run_h --plan "$PLAN"
+assert_eq "2" "$(last_rc)" "V4b: an oddly spelt hold OUTSIDE the section is counted too: exit 2, not silently dropped"
+scn; mkholds oddprefix2 "$FIRST"; printf '\n## Notes\n\n1. Gate: pr-merged 9999\n' >> "$PLAN"; run_h --plan "$PLAN"
+assert_eq "2" "$(last_rc)" "V4c: so is an oddly spelt gate outside the section"
+
+echo "=== Arm 4e: Operator-reserved is recognised however it is spelt (verification V5) ==="
+resv() { # <name> <hold words>
+  scn; mkholds "$1" "$FIRST
+- Hold: $2
+  Gate: pr-merged 55"; run_h --plan "$PLAN"
+  expect "V5 $1: stands as reserved" 2 "holds: 2 discharged: 1 standing: 1"
+  assert_eq "1" "$(grep -c '^Reserved for you: ' "$TMP/o")" "V5 $1: it is printed as reserved"
+}
+resv space       'Operator reserved: approve the pricing copy'
+resv spaced      'operator-reserved : approve the pricing copy'
+resv bold        '**Operator-reserved:** approve the pricing copy'
+resv nbhyphen    "Operator${NH}reserved: approve the pricing copy"
+resv underscore  'Operator_reserved: approve the pricing copy'
+resv fwcolon     "Operator-reserved$FW approve the pricing copy"
+resv quoted      '"Operator-reserved: approve the pricing copy"'
+resv leadzw      "${ZW}Operator-reserved: approve the pricing copy"
+resv innerzw     "Opera${ZW}tor-reser${SH}ved: approve the pricing copy"
+resv leadnb      "${NB}Operator-reserved: approve the pricing copy"
+resv dashed      '- Operator-reserved: approve the pricing copy'
+
 echo "=== Arm 5: sections and headings ==="
 scn; run_h --plan "$FX/holds-none.md"
 expect "no Operator Holds section is a no-op" 0 "holds: 0 discharged: 0 standing: 0"
@@ -677,6 +724,14 @@ s_stale() { jq -n --arg s "$SHA_MOVED" '{state:"MERGED", mergeCommit:{oid:$s}, b
 s_trunk() { jq -n --arg s "$SHA_TRUNK" '{state:"MERGED", mergeCommit:{oid:$s}, baseRefName:"trunk"}' > "$STUB_DIR/pr-55.json"; cp "$STUB_DIR/pr-55.json" "$STUB_DIR/pr-120.json"; mkplan mixed; RUN_REPO="$W6"; }
 s_vstdin() { mkplan mvs; RUN_STDIN="$TMP/stdin-ten"; export FAKE_V_OUT='delegation: valid reason=ok\n' FAKE_V_RC=0; cp "$FAKE/scripts/delegation-verify.sh" "$TMP/pristine/scripts/delegation-verify.sh"; cp "$FAKE/scripts/delegation-verify.sh" "$TMP/mutants/stdin-verify/scripts/delegation-verify.sh"; }
 r_vstdin() { run_h --plan "$PLAN"; echo "holds: x vstdin=$(tr -d ' \n' < "$STUB_DIR/v-stdin-bytes")" >> "$TMP/o"; unset FAKE_V_OUT FAKE_V_RC; cp "$TMP/real-verifier.sh" "$TMP/pristine/scripts/delegation-verify.sh"; }
+s_star() { mkholds mstar "- Hold: do not ship while a release is running.
+  Gate: no-inflight-run example-release.yml
+- Hold$FW wait for the earlier change.
+  Gate$FW pr-merged 55"; }
+s_resv() { mkholds mresv '- Hold: do not ship while a release is running.
+  Gate: no-inflight-run example-release.yml
+- Hold: **Operator-reserved:** approve the pricing copy
+  Gate: pr-merged 55'; }
 s_hidden() { mkplan mhid ''; printf '\n## Operator Hold (misspelt, second)\n\n- Hold: Do not merge until Dana has signed off the copy.\n  Gate: pr-merged 9999\n' >> "$PLAN"; }
 s_dirty() { echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-120.json"; sed -i.bak '/^- Gate: pr-merged 120$/d' "$W/env-valid.md"; rm -f "$W/env-valid.md.bak"; }
 r_dirty() { run_h --file env-valid.md --section "Production Envelope"; git -C "$W" checkout -q -- env-valid.md; }
@@ -759,6 +814,8 @@ mutate deleg-rc 's/ && \[ "\$VRC" -eq 0 \]//' && {
   unset FAKE_V_OUT FAKE_V_RC; cp "$TMP/real-verifier.sh" "$TMP/pristine/scripts/delegation-verify.sh"
 }
 mutate stray-all "$(noop stray-all)" && killed stray-all "2|holds: 3 discharged: 0 standing: 3" s_hidden r_plan
+mutate marker-norm 's/nt = norm\(t\) # mut:marker-norm/nt = t # mut:marker-norm/' && killed marker-norm "0|holds: 2 discharged: 2 standing: 0" s_star r_plan
+mutate reserved-norm 's/^.*# mut:reserved-norm$/  rn="" # mut:reserved-norm/' && killed reserved-norm "2|holds: 2 discharged: 1 standing: 1" s_resv r_plan
 mutate file-head "$(noop file-head)" && killed file-head "1|holds: 1 discharged: 0 standing: 1" s_dirty r_dirty
 mutate reserved "$(noop reserved)" && killed reserved "2|holds: 3 discharged: 2 standing: 1" s_reserved r_plan
 # 11 structure
@@ -768,7 +825,7 @@ mutate fence-split 's/\{ fence\(\) \} # mut:fence-split/{ } # mut:fence-split/' 
 mutate stray "$(noop stray)" && killed stray "2|" s_stray r_plan
 mutate deleg-multi "$(noop deleg-multi)" && killed deleg-multi "2|holds: 1 discharged: 0 standing: 1" s_twodeleg r_plan
 mutate envelope-req "$(noop envelope-req)" && killed envelope-req "2|holds: 3 discharged: 0 standing: 3" s_noenv r_plan
-mutate ci-markers 's/lt = tolower\(t\) # mut:ci-markers/lt = t # mut:ci-markers/' && killed ci-markers "1|holds: 1 discharged: 0 standing: 1" s_lcgate r_plan
+mutate ci-markers 's/lt = tolower\(st\) # mut:ci-markers/lt = st # mut:ci-markers/' && killed ci-markers "1|holds: 1 discharged: 0 standing: 1" s_lcgate r_plan
 mutate done-gates "$(noop done-gates)" && killed done-gates "0|holds: x checked=3" s_doneg r_checked
 # 12 tools, sanitising, the --file address
 mutate need-timeout "$(noop need-timeout)" && killed need-timeout "2|" s_notimeout r_plan
@@ -778,7 +835,7 @@ mutate file-title "$(noop file-title)" && killed file-title "0|holds: 1 discharg
 echo "=== Floor: the SUT answered every row ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
 # Zero-slack floors, committed from a green run: re-measure and raise them when rows are added; a lower number is a deleted row.
-if (( n_calls >= 762 )); then echo "  PASS: gh stub calls $n_calls >= 762"; PASS=$((PASS + 1))
-else echo "  FAIL: gh stub calls $n_calls < 762 -- the rows did not drive the script"; FAIL=$((FAIL + 1)); fi
+if (( n_calls >= 911 )); then echo "  PASS: gh stub calls $n_calls >= 911"; PASS=$((PASS + 1))
+else echo "  FAIL: gh stub calls $n_calls < 911 -- the rows did not drive the script"; FAIL=$((FAIL + 1)); fi
 
-print_results 451
+print_results 537

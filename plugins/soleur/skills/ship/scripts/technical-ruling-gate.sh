@@ -53,8 +53,11 @@
 # path, the sha256 the verifier just reported for that envelope, and a result of ok or rolled-back. Every field is
 # compared EXACTLY, a missing author_association never defaults, and the receipt must lie inside the delegation's life
 # (created at or after the delegation, not after the end of its expiry day, not in the future), must never have been
-# edited (updated_at == created_at), must come from a User (not a bot), and satisfies at most ONE row (three rows
-# cannot share one receipt). A `ran` time later than now is `delegation-invalid`. That is all the check proves: a receipt exists, is attributable and matches the row. It is NOT proof of what ran (a receipt-checking
+# edited (updated_at == created_at), must come from a User (not a bot), must be created at or after the `ran` instant it
+# vouches for (a receipt posted in advance is no receipt), and satisfies at most ONE row (three rows
+# cannot share one receipt). A `ran` time later than now is `delegation-invalid`. A delegation row needs a time-limit tool
+# (timeout or gtimeout); without one it is `delegation-unverifiable`, never an unbounded call. That is all the check proves:
+# a receipt exists, is attributable and matches the row. It is NOT proof of what ran (a receipt-checking
 # hook on the executed command is the stronger follow-up, #10361). Missing, mismatching or unreadable receipts are
 # `receipt-missing`, `receipt-mismatch`, `receipt-unreadable` (exit 2, never a pass).
 # Verdicts: valid passes; invalid is `delegation-invalid` (exit 1); unverifiable, including a missing verifier or a
@@ -88,13 +91,15 @@ DELEG_RE='^Authorized by delegation (https://github\.com/([A-Za-z0-9_.-]+/[A-Za-
 SHAPE_ONLY=0
 SHAPE_ROWS=0
 DR=0
-TOG=(); TOV=()
+TOG=(); TOV=(); HAVE_TO=0; TOBIN=""
 CONSUMED=""
-if command -v timeout >/dev/null 2>&1; then
-  TOG=(timeout 60)
+if command -v timeout >/dev/null 2>&1; then TOBIN=timeout
+elif command -v gtimeout >/dev/null 2>&1; then TOBIN=gtimeout; fi # mut:gtimeout
+if [[ -n "$TOBIN" ]]; then
+  HAVE_TO=1
   VT=60
   case "${TRG_VERIFY_TIMEOUT:-}" in ''|*[!0-9]*) ;; *) [[ "$TRG_VERIFY_TIMEOUT" -ge 1 && "$TRG_VERIFY_TIMEOUT" -lt 60 ]] && VT="$TRG_VERIFY_TIMEOUT" ;; esac
-  TOV=(timeout "$VT")
+  TOG=("$TOBIN" 60); TOV=("$TOBIN" "$VT")
 fi
 CTO_REMEDY='spawn soleur:engineering:cto now (at most two attempts, see technical-ruling-delegation.md), write the Ruled by cell, re-run; after two failed attempts leave the PR draft and file one domain/engineering issue, never an operator question'
 
@@ -198,7 +203,7 @@ memo_find() { [[ -f "$1" ]] || return 0; grep -nxF -- "$2" "$1" 2>/dev/null </de
 # expiry day) and not in the future, it was never edited (updated_at == created_at), its author is a User (not a bot),
 # and it has not already satisfied another row (a receipt is consumed by the row that uses it).
 receipt_check() {
-  local durl="$1" repo="$2" epic="$3" env="$4" sha="$5" vcre="$6" vexp="$7" key="$2#$3" n rd re rs rr ra rk rcre rupd rtyp nrec=0 okrec=0 now
+  local durl="$1" repo="$2" epic="$3" env="$4" sha="$5" vcre="$6" vexp="$7" ran="$8" key="$2#$3" n rd re rs rr ra rk rcre rupd rtyp nrec=0 okrec=0 now
   RC_REASON=unreadable
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   n="$(memo_find "$work_dir/rcpt.keys" "$key")"
@@ -224,7 +229,8 @@ receipt_check() {
     case "$rr" in ok|rolled-back) ;; *) continue ;; esac # mut:receipt-result
     case "$ra" in OWNER|MEMBER|COLLABORATOR) ;; *) continue ;; esac # mut:receipt-author
     [[ "$rcre" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || continue
-    [[ "$rcre" < "$vcre" ]] && continue # mut:receipt-low
+    # created >= ran also bounds the receipt below by the delegation itself: the verifier enforces delegation created <= ran
+    [[ "$rcre" < "$ran" ]] && continue # mut:receipt-before-ran
     [[ "$rcre" > "$now" ]] && continue # mut:receipt-future
     [[ "$rcre" > "${vexp}T23:59:59Z" ]] && continue # mut:receipt-expiry
     [[ "$rupd" == "$rcre" ]] || continue # mut:receipt-edited
@@ -252,6 +258,7 @@ check_delegation_row_inner() {
   durl="${BASH_REMATCH[1]}"; repo="${BASH_REMATCH[2]}"; epic="${BASH_REMATCH[4]}"; dpath="${BASH_REMATCH[5]}"; dran="${BASH_REMATCH[7]:-}"
   [[ -n "${TRG_EXEC_LOG:-}" ]] && echo "delegation $shown:$ln" >> "${TRG_EXEC_LOG:?}" # mut:deleg-log
   if (( SHAPE_ONLY )); then SHAPE_ROWS=$((SHAPE_ROWS + 1)); DR=0; return; fi
+  (( HAVE_TO )) || { printf '[FAIL] %s:%s: delegation-unverifiable - no time limit tool (timeout or gtimeout) is installed, so the delegation was not checked, which is never a pass\n' "$shown" "$ln" >&2; DR=2; return; } # mut:need-timeout
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   [[ -n "$dran" && "$dran" > "$now" ]] && { printf '[FAIL] %s:%s: delegation-invalid - the row says the act ran at %s, which is in the future, so it cannot have run yet (reason: ran-in-future)\n' "$shown" "$ln" "$dran" >&2; DR=1; return; } # mut:ran-future
   [[ -f "$VERIFIER" ]] || { printf '[FAIL] %s:%s: delegation-unverifiable - the delegation checker was not found next to this gate, so the row was not examined\n' "$shown" "$ln" >&2; DR=2; return; }
@@ -283,7 +290,7 @@ check_delegation_row_inner() {
     if [[ ! "$vcre" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "$vexp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
       printf '[FAIL] %s:%s: receipt-unreadable - the delegation checker did not report when the delegation was recorded and when it ends, so the receipt window cannot be checked; the row was not examined, which is never a pass\n' "$shown" "$ln" >&2; DR=2; return
     fi
-    receipt_check "$durl" "$repo" "$epic" "$dpath" "$sha" "$vcre" "$vexp"
+    receipt_check "$durl" "$repo" "$epic" "$dpath" "$sha" "$vcre" "$vexp" "$dran"
     case "$RC_REASON" in
       ok) ;;
       receipt-missing) printf '[FAIL] %s:%s: receipt-missing - no execution receipt for this delegation is on epic #%s; the CTO writes one comment per delegated act (standing-delegation.md section 8) before this row may say the act ran\n' "$shown" "$ln" "$epic" >&2; DR=2; return ;;

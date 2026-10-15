@@ -527,7 +527,7 @@ run_d() { # <script> <args...>: runs from the fixture repository with the stub g
   local script="$1"; shift
   : > "$DLOG"
   set +e
-  ( cd "$DREPO" && git_fixture_env "$DREPO" && TRG_EXEC_LOG="$DLOG" PATH="$DBIN:$PATH" bash "$script" "$@" ) >"$TMP/last.out" 2>"$TMP/last.err"
+  ( cd "$DREPO" && git_fixture_env "$DREPO" && TRG_EXEC_LOG="$DLOG" PATH="${DPATH:-$DBIN:$PATH}" bash "$script" "$@" ) >"$TMP/last.out" 2>"$TMP/last.err"
   echo "$?" > "$TMP/last.rc"
   set -e
 }
@@ -703,6 +703,39 @@ dscn; RCT "$DNOW"; mkdr ax5 "$(dts 5)"; run_d "$GATE" "$DF"
 assert_eq "1" "$(last_rc)" "AX5: a ran time in the future is delegation-invalid (an act cannot have run yet), even inside the delegation's window"
 assert_reason "delegation-invalid" "AX5"
 assert_eq "0" "$(ncalls 'issues/comments/1001')" "AX5b: it is refused before any verifier call"
+
+echo "=== Arm 6g3: a receipt is written AFTER the act it vouches for (verification V8) ==="
+dscn_past; RCPT_CREATED="$(dts -10)" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr rv8 "$(dts -6)"; run_d "$GATE" "$DF"
+assert_eq "2" "$(last_rc)" "RV8: a receipt created before the ran time (but inside the delegation's life) is receipt-mismatch"
+assert_reason "receipt-mismatch" "RV8"
+dscn_past; RCPT_CREATED="$(dts -6)" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr rv8b "$(dts -6)"; run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "RV8b: a receipt created at the ran instant passes"
+dscn_past; RCPT_CREATED="$(dts -5)" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr rv8c "$(dts -6)"; run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "RV8c: a receipt created after the ran time passes"
+
+echo "=== Arm 6g4: a time-limit tool is required (timeout OR gtimeout), and its absence is a plain refusal (verification V9a) ==="
+mkbin_t() { # <dir> <tools to leave out...>: reduced PATH with the gate's tools, the stub wrapper and its base stub
+  local d="$1" t o p; shift; rm -rf "$d"; mkdir -p "$d"
+  for t in bash git jq awk sed tr cut grep cat head tail wc mktemp rm dirname basename cmp date sort uniq env sleep timeout expr tee touch mkdir ln cp mv ls id uname xargs true false find stat sha256sum shasum openssl od readlink realpath; do
+    for o in "$@"; do [[ "$t" == "$o" ]] && continue 2; done
+    p="$(command -v "$t" 2>/dev/null)"; [[ "$p" == /* && -x "$p" ]] && ln -sf "$p" "$d/$t"
+  done
+  cp "$DBIN/gh" "$d/gh"; cp "$DBIN/gh-base" "$d/gh-base"
+}
+mkbin_t "$TMP/tbin-none" timeout
+mkbin_t "$TMP/tbin-g" timeout; ln -sf "$(command -v timeout)" "$TMP/tbin-g/gtimeout"
+mkbin_t "$TMP/tbin-ok"
+dscn; mkd tq0 deleg-valid.md; DPATH="$TMP/tbin-ok" run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "TQ0: the reduced PATH itself passes a valid row (instrument control)"
+dscn; mkd tq1 deleg-valid.md; DPATH="$TMP/tbin-none" run_d "$GATE" "$DF"
+assert_eq "2" "$(last_rc)" "TQ1: with neither timeout nor gtimeout a delegation row is exit 2, never an unbounded call"
+assert_reason "delegation-unverifiable" "TQ1"
+assert_eq "1" "$(grep -c 'time limit tool' "$TMP/last.err" || true)" "TQ1b: and the reason is named in plain words"
+assert_eq "0" "$(ncalls 'issues/comments/1001')" "TQ1c: nothing was read from GitHub"
+dscn; mkd tq2 deleg-valid.md; DPATH="$TMP/tbin-g" run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "TQ2: gtimeout alone is enough (macOS with coreutils)"
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr tq3 "$AT"; DPATH="$TMP/tbin-g" run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "TQ3: gtimeout alone also bounds the receipt read (a ran row passes)"
 
 echo "=== Arm 6h: one verifier call per (delegation, envelope, time), one receipt read per epic ==="
 cat > "$TMP/df/memo-same.md" <<EOF
@@ -901,10 +934,17 @@ mutate_d memo 's/^memo_find\(\) \{.*# mut:memo$/memo_find() { return 0; } # mut:
   else echo "  FAIL: mutant memo SURVIVED (verifier calls $pv -> $mv_, epic reads $pe -> $me)"; FAIL=$((FAIL + 1)); fi
 }
 
+mutate_d receipt-before-ran "$(dnoop receipt-before-ran)" && { dscn_past; RCPT_CREATED="$(dts -10)" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr m24 "$(dts -6)"; killed_d receipt-before-ran 2 - "$DF"; }
+mutate_d need-timeout "$(dnoop need-timeout)" && {
+  dscn; mkd m25 deleg-valid.md; DPATH="$TMP/tbin-none"
+  run_d "$GATE" "$DF"; pw="$(grep -c 'time limit tool (timeout or gtimeout)' "$TMP/last.err" || true)"
+  run_d "$TMP/dm/need-timeout/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; mw="$(grep -c 'time limit tool (timeout or gtimeout)' "$TMP/last.err" || true)"; unset DPATH
+  if [[ "$pw" == 1 && "$mw" == 0 ]]; then echo "  PASS: mutant need-timeout killed (the gate's own refusal $pw -> $mw; the verifier's tool-missing would still exit 2)"; PASS=$((PASS + 1)); else echo "  FAIL: mutant need-timeout SURVIVED ($pw -> $mw)"; FAIL=$((FAIL + 1)); fi
+}
+mutate_d gtimeout 's/command -v gtimeout/command -v gtimeout-zz/' && { dscn; mkd m26 deleg-valid.md; DPATH="$TMP/tbin-g"; killed_d gtimeout 0 - "$DF"; unset DPATH; }
 # 14 R3 receipt binding and the audit-time memo key
 mutate_d memo-key 's/key="\$durl\|\$dpath\|\$dran"/key="$durl|$dpath"/' && { dscn; echo '{"number":77,"state":"closed"}' > "$STUB_DIR/issue-77.json"; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; killed_d memo-key 1 2 "$TMP/df/memo-mixed.md"; }
 mutate_d ran-future "$(dnoop ran-future)" && { dscn; RCT "$DNOW"; mkdr m15 "$(dts 5)"; killed_d ran-future 1 - "$DF"; }
-mutate_d receipt-low "$(dnoop receipt-low)" && { dscn; RCT "$(dts -1)"; mkdr m16 "$AT"; killed_d receipt-low 2 - "$DF"; }
 mutate_d receipt-future "$(dnoop receipt-future)" && { dscn; RCT "$(dts 1)"; mkdr m17 "$AT"; killed_d receipt-future 2 - "$DF"; }
 mutate_d receipt-expiry "$(dnoop receipt-expiry)" && { dscn_past; RCT "$(dts -1)"; mkdr m18 "$(dts -6)"; killed_d receipt-expiry 2 - "$DF"; }
 mutate_d receipt-edited "$(dnoop receipt-edited)" && { dscn; RCPT_UPDATED="${DTODAY}T00:07:00Z" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr m19 "$AT"; killed_d receipt-edited 2 - "$DF"; }
@@ -952,4 +992,4 @@ else
   echo "  FAIL: SUT execution markers $n_rows < 222 -- the cases above did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-print_results 478
+print_results 493

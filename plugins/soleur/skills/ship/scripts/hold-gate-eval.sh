@@ -43,7 +43,8 @@
 # failed probe into a pass. Any other status the caller sees (127 script not found, 124, 137) is a hold that was
 # not checked: treat it as 2.
 #
-# `Operator-reserved:` (at the START of a hold's words, any case) marks a hold that reserves the decision to the
+# `Operator-reserved:` (at the START of a hold's words; case, spaces, hyphens, underscores, bold, quotes, full-width colon and
+# invisible characters are ignored, so `Operator reserved:` and `**Operator-reserved:**` count) marks a hold that reserves the decision to the
 # operator (pricing approval, brand copy, spend). A gate only says WHEN a condition is true, never WHO may clear the
 # hold, so such a hold always STANDS: it is printed `Reserved for you: ... - only you can clear this`, its gates are
 # not probed, and the run exits 2. Every `Hold:` or `Gate:` line must sit inside a readable hold section; one that does
@@ -189,9 +190,29 @@ split_sections() {
   ' "$1"
 }
 
+# Marker spellings (security V4). Both the counter and the parser first NORMALISE a line: full-width colon to ":", NBSP and the
+# other Unicode spaces to " ", zero-width characters and the soft hyphen dropped, Unicode hyphens to "-"; then leading list,
+# quote and emphasis markers (`* ` `+ ` `- ` `1. ` `2) ` `> ` `**` `__`) are stripped, so `* Hold:`, `> Hold:`, `- **Hold:**`,
+# `Hold：` and `Hold<NBSP>:` are all the marker `hold:`. byte-wise (LC_ALL=C).
+NORM_AWK='
+  function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+  function norm(s) {
+    gsub(/\357\274\232/, ":", s)
+    gsub(/\302\240/, " ", s); gsub(/\342\200[\200-\212]/, " ", s); gsub(/\342\200\257/, " ", s); gsub(/\342\201\237/, " ", s); gsub(/\343\200\200/, " ", s)
+    gsub(/\342\200[\213-\215]/, "", s); gsub(/\342\201\240/, "", s); gsub(/\357\273\277/, "", s); gsub(/\302\255/, "", s)
+    gsub(/\342\200[\220-\225]/, "-", s)
+    return s
+  }
+  function strip_prefix(s) {
+    while (match(s, /^([ \t]+|[>*+_-]+|[0-9]+[.)]([ \t]|$))/)) s = substr(s, RLENGTH + 1)
+    return s
+  }
+  function val(s) { s = substr(s, index(s, ":") + 1); sub(/^[*_ \t]+/, "", s); return trim(s) }
+'
+
 # marker_count <file>: prints how many unfenced `Hold:` or `Gate:` marker lines the file has.
 marker_count() {
-  awk '
+  awk "$NORM_AWK"'
     function fence(   tok, c, n) {
       tok = t; sub(/^ +/, "", tok)
       match(tok, /^(`+|~+)/); c = substr(tok, 1, 1); n = RLENGTH
@@ -201,17 +222,17 @@ marker_count() {
     { t = $0; sub(/\r$/, "", t) }
     t ~ /^ ? ? ?(```+|~~~+)/ { fence(); next }
     f { next }
-    { lt = tolower(t) }
-    lt ~ /^[ \t]*(-[ \t]+)?(hold|gate)[ \t]*:/ { found++ }
+    { nt = norm(t) # mut:marker-norm
+      st = strip_prefix(nt); lt = tolower(st) # mut:ci-markers
+    }
+    lt ~ /^(hold|gate)[*_ \t]*:/ { found++ }
     END { print found + 0 }
   ' "$1"
 }
 
 # parse_items <section file> <mode>: records DELEG / ENVF / HOLD i text / GATE i text / ORPHAN.
 parse_items() {
-  awk -v mode="$2" '
-    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
-    function val(s) { return trim(substr(s, index(s, ":") + 1)) }
+  awk -v mode="$2" "$NORM_AWK"'
     function fence(   tok, c, n) {
       tok = t; sub(/^ +/, "", tok)
       match(tok, /^(`+|~+)/); c = substr(tok, 1, 1); n = RLENGTH
@@ -222,11 +243,12 @@ parse_items() {
     { t = $0; sub(/\r$/, "", t)
       if (t ~ /^ ? ? ?(```+|~~~+)/) { fence(); next }
       if (f) next
-      lt = tolower(t) # mut:ci-markers
-      if (mode == "plan" && lt ~ /^[ \t]*(-[ \t]+)?delegation[ \t]*:/) { print "DELEG\t" val(t); next }
-      if (mode == "plan" && lt ~ /^[ \t]*(-[ \t]+)?envelope[ \t]*:/) { print "ENVF\t" val(t); next }
-      if (mode == "plan" && lt ~ /^[ \t]*(-[ \t]+)?hold[ \t]*:/) { n++; print "HOLD\t" n "\t" val(t); next }
-      if (lt ~ /^[ \t]*(-[ \t]+)?gate[ \t]*:/) { if (n > 0) print "GATE\t" n "\t" val(t); else print "ORPHAN"; next }
+      nt = norm(t) # mut:marker-norm
+      st = strip_prefix(nt); lt = tolower(st) # mut:ci-markers
+      if (mode == "plan" && lt ~ /^delegation[*_ \t]*:/) { print "DELEG\t" val(st); next }
+      if (mode == "plan" && lt ~ /^envelope[*_ \t]*:/) { print "ENVF\t" val(st); next }
+      if (mode == "plan" && lt ~ /^hold[*_ \t]*:/) { n++; print "HOLD\t" n "\t" val(st); next }
+      if (lt ~ /^gate[*_ \t]*:/) { if (n > 0) print "GATE\t" n "\t" val(st); else print "ORPHAN"; next }
     }
   ' "$1"
 }
@@ -332,8 +354,8 @@ if [ "$MODE" = plan ]; then
   fi
   ND="$(grep -c '^DELEG' "$WORK/items" || true)"; NE="$(grep -c '^ENVF' "$WORK/items" || true)"; NH="$(grep -c '^HOLD' "$WORK/items" || true)"
   [ "$ND" -gt 0 ] || { echo "No standing approval is recorded, so the usual check applies."; [ "$NH" -eq 0 ] || echo "holds: $NH discharged: 0 standing: $NH"; exit 3; } # mut:no-deleg
-  SEC_M=0; for ((s = 1; s <= CNT; s++)); do SEC_M=$((SEC_M + $(marker_count "$WORK/sec.$s"))); done
-  [ "$(marker_count "$SRC")" -le "$SEC_M" ] || { echo "I found a hold that is not inside a hold section I can read, so I am treating every hold as still on hold."; echo "holds: $NH discharged: 0 standing: $NH"; exit 2; } # mut:stray-all
+  PARSED="$(grep -c '^\(HOLD\|GATE\|ORPHAN\)' "$WORK/items" || true)"
+  [ "$(marker_count "$SRC")" -eq "$PARSED" ] || { echo "I found a hold that is not inside a hold section I can read, so I am treating every hold as still on hold."; echo "holds: $NH discharged: 0 standing: $NH"; exit 2; } # mut:stray-all
   [ "$ND" -eq 1 ] || stall_unchecked "More than one standing approval is named, so I am treating every hold as still on hold." "the standing approval is not clear" # mut:deleg-multi
   [ "$CNT" -eq 1 ] || stall_unchecked "The plan has more than one hold section, so I am treating every hold as still on hold." "the plan is not clear"
   [ "$NE" -eq 1 ] || stall_unchecked "The standing approval does not name exactly one runbook it covers, so I am treating every hold as still on hold." "the standing approval is incomplete" # mut:envelope-req
@@ -367,7 +389,8 @@ fi
 DISCHARGED=0; STANDING=0; ANY_UNEVAL=0
 while IFS=$'\t' read -r _ i text; do
   lt="$(printf '%s' "$text" | tr 'A-Z' 'a-z')"
-  case "$lt" in operator-reserved:*) print_result_line RESERVED "$text" ""; STANDING=$((STANDING + 1)); ANY_UNEVAL=1; continue ;; esac # mut:reserved
+  rn="$(printf '%s' "$lt" | tr -cd 'a-z0-9' | cut -c1-16)" # mut:reserved-norm
+  case "$rn" in operatorreserved) print_result_line RESERVED "$text" ""; STANDING=$((STANDING + 1)); ANY_UNEVAL=1; continue ;; esac # mut:reserved
   awk -F'\t' -v i="$i" '$1 == "GATE" && $2 == i { print $3 }' "$WORK/items" > "$WORK/g.$i"
   ng="$(wc -l < "$WORK/g.$i" | tr -d ' ')"
   HV=OK; WHY=""; GTXT=""
