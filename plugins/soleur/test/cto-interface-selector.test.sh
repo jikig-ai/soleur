@@ -181,6 +181,11 @@ BASE_REF="$(g merge-base origin/main HEAD 2>/dev/null || true)"
 [[ -n "$BASE_REF" ]] || BASE_REF="refs/unresolvable-merge-base"
 HEAD_SHA="$(g rev-parse HEAD 2>/dev/null || true)"
 
+# The discovery command has ONE canonical spelling: the fenced line in standing-delegation.md. cto.md must carry it
+# byte for byte (a second spelling is how the two documents drifted apart once already).
+STD_DELEG="$ROOT/plugins/soleur/skills/brainstorm-techniques/references/standing-delegation.md"
+CANON_DISCOVERY="$(grep -F -m1 -- 'gh api repos/{owner}/{repo}/issues/<epic>/comments --paginate' "$STD_DELEG" || true)"
+
 # --- cto.md evaluation -------------------------------------------------------------------------------
 # evaluate_cto <cto.md> <base-ref> : print one `V:<token>` line per violated property; rc 0 iff none.
 # Properties of a section are asserted against THAT section's text, never the whole body, so words that
@@ -247,7 +252,7 @@ evaluate_cto() { # <cto.md> <base> [check|skip]   skip = the merge-base anchor i
   [[ "$esec" == *'## Production Envelope'* ]] || emit epic-envelope
   [[ "$esec" == *'last verified item'* ]]                || emit epic-close-on-last
   [[ "$esec" == *'action-required'* ]]                   || emit epic-stall-issue
-  [[ "$esec" == *'issues/<epic>/comments --paginate'* && "$esec" == *'soleur-delegation v1'* && "$esec" == *'sort -r'* ]] || emit epic-discovery
+  [[ "$esec" == *"$CANON_DISCOVERY"* && -n "$CANON_DISCOVERY" && "$esec" == *'issues/<epic>/comments --paginate'* && "$esec" == *'soleur-delegation v1'* && "$esec" == *'last line upward'* ]] || emit epic-discovery
   [[ "$esec" == *'newest'* && "$esec" == *'delegation: valid'* && "$esec" == *'never fall back to an older'* ]] || emit epic-discovery-pick
   [[ "$esec" == *'verify --delegation <comment-url> --envelope '* && "$esec" == *'--command '* && "$esec" == *'--audit --at <ISO8601 UTC>'* ]] || emit epic-verify-synopsis
   [[ "$esec" == *'--section "Production Envelope - <title>"'* ]] || emit epic-section-title
@@ -258,7 +263,8 @@ evaluate_cto() { # <cto.md> <base> [check|skip]   skip = the merge-base anchor i
   [[ "$esec" == *'<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back run=<url|none> -->'* ]] || emit epic-receipt-format
   [[ "$esec" == *'verified-envelope-sha256'* && "$esec" == *'run summary'* && "$esec" == *'execution sentence'* ]] || emit epic-receipt-wiring
   [[ "$esec" == *'gh api -X DELETE repos/{owner}/{repo}/issues/comments/<id>'* && "$esec" == *'gh pr merge <N> --disable-auto'* && "$esec" == *'could not be stopped'* && "$esec" == *'gh run cancel'* && "$esec" == *'delete EVERY delegation marker comment'* ]] || emit epic-stop-sequence
-  [[ "$esec" == *'Authorized by delegation <comment-url>, envelope <path>, ran <ISO UTC>'* && "$esec" == *'decision-challenges.md'* ]] || emit epic-ran-row
+  [[ "$esec" == *'Authorized by delegation <comment-url>, envelope <path>, ran <ISO UTC>'* && "$esec" == *'decision-challenges.md'* && "$esec" == *'returns the row'* && "$esec" == *'replace the plan-time row'* ]] || emit epic-ran-row
+  [[ "$esec" == *'one receipt per act'* && "$esec" == *'not in the future'* && "$esec" == *'never edit'* && "$esec" == *'posted by a person'* && "$esec" == *'precede'* && "$esec" == *'standing-delegation.md'*'section 8'* ]] || emit epic-receipt-rules
   [[ "$esec" == *'Headless'* && "$esec" == *'holds stand'* && "$esec" == *'never ask'* ]] || emit epic-headless
   [[ "$esec" == *'recorded consent'* && "$esec" == *'drift guard'* ]] || emit epic-consent-wording
   [[ "$esec" != *'two independent keys'* ]]              || emit epic-two-keys-claim
@@ -301,7 +307,7 @@ CTO_PROP_LIST=(base-unresolvable base-degenerate frontmatter-differs preserved-l
   epic-section-missing epic-verifier epic-hold-eval epic-gate-predicates epic-envelope epic-close-on-last
   epic-stall-issue epic-discovery epic-discovery-pick epic-verify-synopsis epic-section-title epic-hold-eval-exit0
   epic-epic-line epic-allowlist epic-no-render epic-receipt-format epic-receipt-wiring epic-stop-sequence
-  epic-ran-row epic-headless epic-consent-wording epic-two-keys-claim epic-nondelegable-list epic-reserved-routing
+  epic-ran-row epic-receipt-rules epic-headless epic-consent-wording epic-two-keys-claim epic-nondelegable-list epic-reserved-routing
   epic-link-missing epic-link-unresolved epic-holds-link-missing epic-holds-link-unresolved
   repo-relative-path plugin-root-paths plugin-root-unset-undeclared format-duplicated)
 nprops=0
@@ -382,7 +388,10 @@ ck; [[ "$_s3" != *'plugins/soleur/'* && "$_s1" != *'plugins/soleur/'* ]] && ok "
 ck; [[ "$_s1" == *'reserves a decision to the operator'* && "$_s1" == *'Undeferred Operator-Step'* && "$_s1" == *'sole-copy destruction'* && "$_s1" == *'rollback is not named'* ]] \
   && ok "section 1 carries the non-delegable list incl. operator-reserved decisions" || bad "section 1 lost part of the non-delegable list (operator-reserved decisions / Undeferred Operator-Step routing)"
 ck; [[ "$_s6" == *'Authorized by delegation <comment-url>, envelope <path>[, ran <ISO>]'* ]] && ok "section 6 states the delegation row shape incl. the optional ran clause" || bad "section 6 lost the 'Authorized by delegation <comment-url>, envelope <path>[, ran <ISO>]' row shape"
-ck; [[ "$_s1" == *'Operator-reserved:'* && "$_s1" == *'operator-holds.md'* && "$_s6" == *'records the `ran` row itself'* ]] && ok "the reference links the Operator-reserved grammar and says the CTO records the ran row" || bad "the reference lost the Operator-reserved link or the 'CTO records the ran row' sentence"
+ck; [[ "$_s1" == *'Cloud Mode'* && "$_s1" == *'CLAUDE_PLUGIN_ROOT'* ]] && ok "the reference says how to resolve CLAUDE_PLUGIN_ROOT when it is unset" || bad "the reference lost the 'if unset, resolve as ship's Cloud Mode paragraph' sentence"
+ck; [[ "$_s6" == *'replaces the plan-time row'* ]] && ok "section 6 says the ran row replaces the plan-time row" || bad "section 6 does not say the ran row replaces the plan-time row"
+ck; [[ "$CANON_DISCOVERY" == *'--paginate'* ]] && ok "extracted the canonical discovery command from standing-delegation.md" || bad "could not extract the canonical discovery command"
+ck; [[ "$_s1" == *'Operator-reserved:'* && "$_s1" == *'operator-holds.md'* && "$_s6" == *'records the `ran` row in decision-challenges.md'* ]] && ok "the reference links the Operator-reserved grammar and says the CTO records the ran row" || bad "the reference lost the Operator-reserved link or the 'CTO records the ran row' sentence"
 ck; [[ "$_s6" == *'overlap vehicle'* && "$_s6" == *'vehicle=<N|this>'* ]] && ok "section 6 names the 'overlap vehicle' ruling row" || bad "section 6 does not describe the 'overlap vehicle' row"
 ck; [[ "$_s7" == *'overlap vehicle'* && "$_s7" == *'Ruled by CTO agent'* ]] && ok "section 7's example carries an 'overlap vehicle' ruling row" || bad "section 7's example has no 'overlap vehicle' row"
 ck; [[ "$(printf '%s\n' "$_s7" | grep -c 'Authorized by delegation' || true)" -eq 1 ]] && ok "section 7's example still carries exactly one delegation row" || bad "section 7's example must carry exactly one delegation row (the gate suite counts it)"
@@ -555,6 +564,12 @@ printf 'not the agent file\n' > "$M/degenerate-base.txt"
 row "V22 a degenerate base (not the real file)" "$CTO" "file:$M/degenerate-base.txt" base-degenerate; nrows=$((nrows + 1))
 sub_in v18b.md "$HDR_EPIC" 'Operator-reserved:' 'Reserved:'
 row "V18b the Operator-reserved marker dropped" "$M/v18b.md" "$BASE_REF" epic-reserved-routing; nrows=$((nrows + 1))
+sub_in v26.md "$HDR_EPIC" 'one receipt per act' 'receipts as needed'
+row "V26 the receipt rules lose 'one receipt per act'" "$M/v26.md" "$BASE_REF" epic-receipt-rules; nrows=$((nrows + 1))
+sub_in v27.md "$HDR_EPIC" 'replace the plan-time row' 'keep both rows'
+row "V27 the plan-time row is kept next to the ran row" "$M/v27.md" "$BASE_REF" epic-ran-row; nrows=$((nrows + 1))
+sub_in v28.md "$HDR_EPIC" 'last line upward' 'first line downward'
+row "V28 discovery drifts from the canonical command" "$M/v28.md" "$BASE_REF" epic-discovery; nrows=$((nrows + 1))
 sub_in v23.md "$HDR_EPIC" 'decision-challenges.md' 'the rulings file'
 row "V23 the ran row is not recorded in decision-challenges.md" "$M/v23.md" "$BASE_REF" epic-ran-row; nrows=$((nrows + 1))
 sub_in v24.md "$HDR_EPIC" 'delete EVERY delegation marker comment' 'delete the delegation comment'
@@ -602,8 +617,8 @@ ck; [[ "$(printf '%s\n' "$SURFACES" | grep -c . || true)" -ge 8 ]] && ok "cto sp
 # (2) ABSOLUTE: the count of a green run, committed with ZERO slack. A derived floor moves with the rows it
 #     guards (delete six rows and the floor drops with them), so this constant is the one that bites. Raise it
 #     in the same commit that adds rows, never ahead of them.
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 8 + caller_n + 1 + 4 + 12 + nrows + 1 + 1 ))
-ABSOLUTE_FLOOR=160
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 8 + caller_n + 1 + 4 + 15 + nrows + 1 + 1 ))
+ABSOLUTE_FLOOR=167
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' "$asserted" "$MIN_ASSERTIONS" >&2

@@ -147,7 +147,7 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'## Operator Holds'* && "$para" == *'Gate:'* && "$para" == *'hold-gate-eval.sh'* ]] || emit gate-handoff
   [[ "$para" == *'operator-holds.md'* ]]   || emit container-link
   [[ "$para" == *'delegation-verify.sh'* && "$para" == *'`render`'* && "$para" == *'calling skill'* && "$para" == *'AFTER'* ]] || emit delegation-render
-  [[ "$para" == *'Scope items'* && "$para" == *'30 days'* && "$para" == *'every merge and every dispatch'* && "$para" == *'posted publicly'* && "$para" == *'business terms'* && "$para" == *'expiry'* ]] || emit render-text
+  [[ "$para" == *'Scope items'* && "$para" == *'30 days'* && "$para" == *'every merge, ready, dispatch and revert-PR listed'* && "$para" == *'posted publicly'* && "$para" == *'business terms'* && "$para" == *'expiry'* ]] || emit render-text
   [[ "$para" == *'Headless'* && "$para" == *'do not ask'* && "$para" == *'action-required'* && "$para" == *'draft PR'* ]] || emit headless
   [[ "$para" == *'"${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh"'* && "$para" == *'"${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh"'* ]] || emit plugin-root-paths
   if [[ "$para" == *'plugins/soleur/'* ]]; then emit repo-relative-path; fi
@@ -183,6 +183,26 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   return "$v"
 }
 
+# ship/SKILL.md wiring: the merge-mode block sits at the START of Phase 6.45 (before the archival paragraph, because the
+# archive moves the plan and the rulings file it reads); the sentence right after it gives the full ${CLAUDE_PLUGIN_ROOT}
+# invocation of the hold evaluator (the pinned block names it bare); step 5's exit table treats any other status as 2.
+SHIP_MD="$ROOT/plugins/soleur/skills/ship/SKILL.md"
+evaluate_ship() { # <ship SKILL.md> -> V:<token> lines
+  local f="$1" v=0 blk arch p645 nxt s5
+  emit() { printf 'V:%s\n' "$1"; v=1; }
+  blk="$(grep -n -F -m1 'Before Phase 6.45 archives the plan and rulings file, run' "$f" | cut -d: -f1)"
+  arch="$(grep -n -F -m1 '**KB artifact archival' "$f" | cut -d: -f1)"
+  p645="$(grep -n -F -m1 '## Phase 6.45' "$f" | cut -d: -f1)"
+  [[ -n "$blk" && -n "$arch" && -n "$p645" && "$blk" -gt "$p645" && "$blk" -lt "$arch" ]] || emit ship-block-misplaced
+  nxt="$(awk -v b="${blk:-0}" 'NR > b && NF { print; exit }' "$f")"
+  [[ "$nxt" == *'bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh"'* ]] || emit ship-invocation-missing
+  s5="$(grep -F -m1 'A recorded operator HOLD is a condition' "$f")"
+  [[ "$s5" == *'124, 127, 137'* && "$s5" == *'treated as 2'* ]] || emit ship-exit-status
+  [[ "$s5" == *'start of Phase 6.45, before the plan is archived'* ]] || emit ship-second-look-wording
+  if grep -Fq 'Before the `merge-main` lock block, run' "$f"; then emit ship-old-block; fi
+  return "$v"
+}
+
 BASE_REF="$(g merge-base origin/main HEAD 2>/dev/null || true)"
 [[ -n "$BASE_REF" ]] || BASE_REF="refs/unresolvable-merge-base"
 
@@ -211,6 +231,14 @@ if [[ "$BASE_REF" != refs/unresolvable-merge-base && -n "$(g rev-parse --verify 
   ok "merge-base anchor resolves: ${BASE_REF:0:12} (HEAD ${HEAD_SHA:0:12})"
 else bad "merge-base anchor does not resolve (origin/main is not fetched?)"; fi
 [[ "$ANCHOR_MODE" == skip ]] && printf '  NOTE: %s\n' "$ANCHOR_REASON"
+
+SHIP_OUT="$(evaluate_ship "$SHIP_MD")"; SHIP_RC=$?
+for p in ship-block-misplaced ship-invocation-missing ship-exit-status ship-second-look-wording ship-old-block; do
+  ck
+  if grep -Fxq -- "V:$p" <<<"$SHIP_OUT"; then bad "ship/SKILL.md violates '$p'"; else ok "ship/SKILL.md has no violation of '$p'"; fi
+done
+ck
+[[ "$SHIP_RC" -eq 0 && -z "$SHIP_OUT" ]] && ok "evaluate_ship agrees: rc=0 and no violation lines" || bad "evaluate_ship reported violations: ${SHIP_OUT//$'\n'/ }"
 
 # one-shot carries the one-sentence pointer for a direct run (the go.md paragraph is not reachable from there).
 ONE_SHOT_MD="$ROOT/plugins/soleur/skills/one-shot/SKILL.md"
@@ -347,6 +375,23 @@ _o="$(evaluate "$M/m1.md" "$HEAD_SHA" skip)"; _r=$?
 [[ "$_o" != *block-hash-differs* ]] && ok "N14 anchor skip mode does not evaluate the merge-base comparison" || bad "N14 skip mode still ran the anchor: ${_o//$'\n'/ }"
 row "N14b against HEAD as base a changed block is still RED (the rows stay meaningful after merge)" "$M/m1.md" "$HEAD_SHA" block-hash-differs; nrows=$((nrows + 1))
 
+# S1..S4: the ship wiring rows (each removes one element)
+shiprow() { # <label> <mutated ship SKILL.md> <expected token>
+  local out rc; out="$(evaluate_ship "$2")"; rc=$?; ck
+  [[ "$rc" -ne 0 ]] && grep -Fxq -- "V:$3" <<<"$out" && ok "$1: RED for '$3'" || bad "$1: expected RED for '$3', got rc=$rc ${out//$'\n'/ }"
+}
+awk '/^Before Phase 6.45 archives the plan and rulings file, run/ { next } { print }' "$SHIP_MD" > "$M/s0.md"
+{ cat "$M/s0.md"; grep -F -m1 'Before Phase 6.45 archives the plan and rulings file, run' "$SHIP_MD"; } > "$M/s1.md"
+shiprow "S1 the merge-mode block moved to the end of the file, after the archival paragraph" "$M/s1.md" ship-block-misplaced; nrows=$((nrows + 1))
+awk '{ gsub(/bash "\$\{CLAUDE_PLUGIN_ROOT\}\/skills\/ship\/scripts\/hold-gate-eval\.sh"/, "hold-gate-eval.sh"); print }' "$SHIP_MD" > "$M/s2.md"
+shiprow "S2 the full hold-evaluator invocation dropped everywhere" "$M/s2.md" ship-invocation-missing; nrows=$((nrows + 1))
+sed 's/124, 127, 137/124/' "$SHIP_MD" > "$M/s3.md"
+shiprow "S3 step 5 no longer names the odd exit statuses" "$M/s3.md" ship-exit-status; nrows=$((nrows + 1))
+sed 's/start of Phase 6.45, before the plan is archived/arming/' "$SHIP_MD" > "$M/s4.md"
+shiprow "S4 step 5 says the second look is at arming" "$M/s4.md" ship-second-look-wording; nrows=$((nrows + 1))
+{ cat "$SHIP_MD"; printf '\nBefore the `merge-main` lock block, run x\n'; } > "$M/s5.md"
+shiprow "S5 the old lock-block copy returns" "$M/s5.md" ship-old-block; nrows=$((nrows + 1))
+
 # H1 the base ref is unresolvable: a FAIL, never a skip
 row "H1 unresolvable base ref" "$GO_MD" "refs/does-not-exist" base-unresolvable; nrows=$((nrows + 1))
 
@@ -371,8 +416,8 @@ ctl_passes row "ctl-late" "$GO_MD" "$BASE_REF" none                      || { pr
 #     guards (delete six rows and the floor drops with them); this constant is the one that bites. Raise it in
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 ))
-ABSOLUTE_FLOOR=60
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 ))
+ABSOLUTE_FLOOR=71
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \

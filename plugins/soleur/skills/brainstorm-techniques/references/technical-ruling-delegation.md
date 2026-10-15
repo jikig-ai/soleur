@@ -29,6 +29,7 @@ these categories. The Class cell of the Decision Classes table (section 6) uses 
   "explicit go-ahead", "operator approval"): no `Gate:` can discharge that hold. It is written `Operator-reserved:`
   ([operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md)), always stands, and goes to the
   Undeferred Operator-Step Gate in `soleur:ship`. Acts that `prod-write-defer-gate.sh` recognises still defer to the harness approval prompt.
+  Script paths in this reference use `${CLAUDE_PLUGIN_ROOT}`; if it is unset, resolve it as ship's Cloud Mode paragraph does.
 - **legal-risk** — accepting regulatory or legal exposure (the legal posture itself goes to the CLO, see section 3).
 - **brand** — what the product looks and sounds like.
 
@@ -121,7 +122,7 @@ per persisted decision, whatever shape the free-form body uses. Columns: `Item |
   `Authorized by delegation <comment-url>, envelope <path>[, ran <ISO>]` and is valid only on
   `operator (production-mutating)`. Without `, ran <ISO>` the act has not run yet and the gate verifies the delegation
   as it stands now; with `, ran <ISO>` the act ran at that time, and the gate audits the delegation as of that time and
-  also requires the receipt comment the CTO posted on the epic (Own the epic, step 6). The CTO records the `ran` row itself, in decision-challenges.md, right after posting that receipt; a delegated act with no `ran` row is not checked at all. The gate verifies through
+  also requires the receipt comment the CTO posted on the epic (Own the epic, step 6). The CTO records the `ran` row in decision-challenges.md right after posting that receipt (or returns it for the calling skill to record when it is not on the branch that owns the file); a delegated act with no `ran` row is not checked at all. The `ran` row replaces the plan-time row (no `ran`) for that act; do not keep both, because a plan-time row left behind fails the strict check once the epic closes or the delegation expires. The gate verifies through
   `delegation-verify.sh` (invalid is exit 1, unreadable is exit 2, never a pass). The row remains required: no row, no pass.
 - **`overlap vehicle` row.** When the open-PR preflight reports a duplicate and no vehicle (exit 12), the CTO designates
   one; the caller records a technical row with Item `overlap vehicle` whose Ruling ends `vehicle=<N|this>`, and `ship`
