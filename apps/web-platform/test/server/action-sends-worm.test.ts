@@ -40,7 +40,6 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
 import {
-  hasUndeletableActionSendsAnchor,
   tearDownTenantUser,
   tearDownTenantUsers,
 } from "@/test/helpers/tenant-isolation-teardown";
@@ -195,13 +194,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     // failure reds the suite instead of leaking the synthetic user.
     // 60_000: ~24 sequential round-trips × 2 users under withGoTrueRetry.
     afterAll(async () => {
-      await tearDownTenantUsers(service, [userA, userB], {
-        tolerate: async (_err, u) =>
-          // #10254: a user who ever had an action_sends row is undeletable
-          // (anonymised WORM row anchors its message). Tolerate ONLY that
-          // verified defect — any other teardown failure stays loud.
-          !!u.id && (await hasUndeletableActionSendsAnchor(service, u.id)),
-      });
+      await tearDownTenantUsers(service, [userA, userB]);
     }, 60_000);
 
     test("(a) INSERT happy → 201", async () => {
@@ -439,16 +432,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
       // Cleanup of the throwaway user — independent of the assertion under
       // test. Cascade-ordering owned by
-      // account-delete-scope-grants-cascade.test.ts. Fail-loud per #10096 —
-      // except the #10254 shape: this test deliberately seeded an
-      // action_sends row, so the user is undeletable while that NO-ACTION
-      // message anchor exists (WORM). Tolerate only the verified anchor.
-      try {
-        await tearDownTenantUser(service, u);
-      } catch (err) {
-        if (!(await hasUndeletableActionSendsAnchor(service, u.id)))
-          throw err;
-      }
+      // account-delete-scope-grants-cascade.test.ts. Fail-loud per #10096.
+      await tearDownTenantUser(service, u);
     }, 30_000);
 
     test("(i) cross-tenant SELECT → 0 rows", async () => {
