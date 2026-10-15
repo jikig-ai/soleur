@@ -144,7 +144,10 @@ export interface DeleteAccountResult {
  *                             #9545). Deletes the solo workspace's egress
  *                             audit rollup rows by workspace_id (= user id);
  *                             the workspace row survives erasure (migration
- *                             065), so the FK cascade does not cover it.
+ *                             065), so the FK cascade does not cover it. Runs
+ *                             after the member-row anonymise step: the RPC only
+ *                             erases a workspace that has no member left, so a
+ *                             workspace that still has members keeps its history.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -1190,7 +1193,10 @@ export async function deleteAccount(
   //       orphan workspace row (migration 065), so ON DELETE CASCADE from
   //       workspaces never fires on account erasure. Team workspaces the user
   //       owned persist for the remaining members and keep their rows under the
-  //       30-day retention (the rows hold no per-user data). Required step:
+  //       30-day retention (the rows hold no per-user data). The RPC erases only a
+  //       workspace with NO member row left (anonymise_workspace_members has
+  //       already deleted this user's), so it cannot over-erase a team workspace
+  //       and the ingest RPC skips such an orphan afterwards. Required step:
   //       a failure aborts before auth-delete like the other Art. 17 steps.
   //       Idempotent (a re-run deletes nothing).
   try {

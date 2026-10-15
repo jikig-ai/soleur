@@ -731,9 +731,14 @@ describe("deleteAccount", () => {
     expect(erasedWith).toEqual({ p_workspace: "user-123" });
     const eraseIdx = callOrder.indexOf("rpc:erase_egress_audit_rollup");
     const engineIdx = callOrder.indexOf("rpc:anonymise_agent_engine_data");
+    const membersIdx = callOrder.indexOf("rpc:anonymise_workspace_members");
     const authIdx = callOrder.indexOf("auth.deleteUser");
     expect(eraseIdx).toBeGreaterThanOrEqual(0);
     expect(eraseIdx).toBeGreaterThan(engineIdx);
+    // The erase RPC only erases a workspace with no member row left, so it must run after the
+    // member rows are removed.
+    expect(membersIdx).toBeGreaterThanOrEqual(0);
+    expect(eraseIdx).toBeGreaterThan(membersIdx);
     expect(eraseIdx).toBeLessThan(authIdx);
   });
 
@@ -755,6 +760,14 @@ describe("deleteAccount", () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/erase-egress-audit-rollup/);
     expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "account-delete",
+        op: "erase-egress-audit-rollup",
+        extra: { userId: "user-123" },
+      }),
+    );
   });
 
   test("Art. 17 — erase_egress_audit_rollup throwing aborts cascade BEFORE auth-delete (#9545)", async () => {
@@ -772,6 +785,10 @@ describe("deleteAccount", () => {
 
     expect(result.success).toBe(false);
     expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "account-delete", op: "erase-egress-audit-rollup" }),
+    );
   });
 
   test("Art. 17 — anonymise_tc_acceptances precedes auth.admin.deleteUser (FK ON DELETE RESTRICT)", async () => {

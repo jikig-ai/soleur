@@ -28,17 +28,30 @@
 CREATE TABLE IF NOT EXISTS public.workspace_egress_audit_rollup (
   workspace_id   uuid        NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
   bucket_start   timestamptz NOT NULL,
-  requested_host text        NOT NULL CHECK (char_length(requested_host) BETWEEN 1 AND 253),
-  -- Normalised in Vector to allowed | denied | other. Text with a length bound
-  -- rather than a CHECK on values: Squid emits many %Ss values and a value CHECK
-  -- would reject the whole batch on a new one.
-  decision       text        NOT NULL CHECK (char_length(decision) BETWEEN 1 AND 32),
+  -- The character set Vector's rollup allows (lower-case host name or address, an IPv6 literal in
+  -- brackets) or the overflow row. No control characters, quotes, spaces or markup can be stored,
+  -- so a later read surface never renders attacker-shaped text.
+  requested_host text        NOT NULL CHECK (
+                               char_length(requested_host) BETWEEN 1 AND 253
+                               AND requested_host ~ '^([a-z0-9._:\[\]-]+|\(other\))$'),
+  -- Normalised in Vector to allowed | denied | other (the gateway emits many %Ss values; the
+  -- rollup maps them down), so the column is closed to those three.
+  decision       text        NOT NULL CHECK (decision IN ('allowed', 'denied', 'other')),
   source_host    text        NOT NULL CHECK (source_host ~ '^[a-z0-9][a-z0-9-]{0,62}$'),
   request_count  bigint      NOT NULL CHECK (request_count >= 0),
   bytes_out      bigint      NOT NULL CHECK (bytes_out >= 0),
   first_seen     timestamptz NOT NULL,
   last_seen      timestamptz NOT NULL,
-  PRIMARY KEY (workspace_id, bucket_start, requested_host, decision, source_host)
+  PRIMARY KEY (workspace_id, bucket_start, requested_host, decision, source_host),
+  -- Vector floors the event time to the 15-minute bucket and derives first_seen/last_seen from the
+  -- same timestamps, so a legitimate row always satisfies these. They keep a forged or skewed value
+  -- from landing outside its bucket (purge and the retention probe both key on last_seen).
+  CONSTRAINT workspace_egress_audit_rollup_bucket_aligned
+    CHECK (extract(epoch FROM bucket_start)::numeric % 900 = 0),
+  CONSTRAINT workspace_egress_audit_rollup_seen_window
+    CHECK (first_seen <= last_seen
+           AND first_seen >= bucket_start
+           AND last_seen < bucket_start + interval '15 minutes')
 );
 
 -- The retention sweep deletes by last_seen; the primary key serves per-workspace
@@ -64,9 +77,10 @@ COMMENT ON TABLE public.workspace_egress_audit_rollup IS
 -- ---------------------------------------------------------------------------
 -- ingest_egress_audit_rollup(rows jsonb) -> jsonb counts
 --
--- Batch upsert for the Vector sink. NEVER raises on row content: unknown or
+-- Batch upsert for the Vector sink. NEVER raises on row content: unknown, orphaned or
 -- toggle-off workspaces and malformed or out-of-bounds rows are skipped and
--- counted, because raising would make the sink retry the same batch forever.
+-- counted, because raising would make the sink retry the same batch forever. A system fault
+-- (lock, I/O, permission, schema drift) does raise, so it is retried and mirrored.
 -- The toggle is read at ingest time (workspaces.web_egress), so buffered events
 -- from before a toggle-off are dropped (errs toward minimization; ADR-288).
 -- Merge is per column: GREATEST for request_count, bytes_out, last_seen and
@@ -147,6 +161,18 @@ BEGIN
         v_unknown := v_unknown + 1;
         CONTINUE;
       END IF;
+      -- A workspace with no member left is an orphan (account erasure keeps the workspace row,
+      -- migration 065, but deletes its members first). Late buckets from Vector's reduce or disk
+      -- buffer must not re-create rows that erase_egress_audit_rollup just removed.
+      -- FOR SHARE takes a row lock on the member rows until this transaction commits: the saga's
+      -- DELETE of the member row waits for the insert below, so erase (which runs after it) sees
+      -- and removes this row; and if the delete committed first, no row is found here. Without the
+      -- lock a delete + erase landing between this check and the insert would leave an orphan row.
+      PERFORM 1 FROM public.workspace_members m WHERE m.workspace_id = v_ws FOR SHARE;
+      IF NOT FOUND THEN
+        v_unknown := v_unknown + 1;
+        CONTINUE;
+      END IF;
       IF v_toggle IS NOT TRUE THEN
         v_off := v_off + 1;
         CONTINUE;
@@ -177,10 +203,17 @@ BEGIN
         request_count = GREATEST(workspace_egress_audit_rollup.request_count, EXCLUDED.request_count),
         bytes_out     = GREATEST(workspace_egress_audit_rollup.bytes_out,     EXCLUDED.bytes_out),
         first_seen    = LEAST(workspace_egress_audit_rollup.first_seen,       EXCLUDED.first_seen),
-        last_seen     = GREATEST(workspace_egress_audit_rollup.last_seen,     EXCLUDED.last_seen);
+        last_seen     = GREATEST(workspace_egress_audit_rollup.last_seen,     EXCLUDED.last_seen)
+      -- A replay that changes nothing must not rewrite the tuple (WAL and dead tuples).
+      WHERE workspace_egress_audit_rollup.request_count < EXCLUDED.request_count
+         OR workspace_egress_audit_rollup.bytes_out     < EXCLUDED.bytes_out
+         OR workspace_egress_audit_rollup.first_seen    > EXCLUDED.first_seen
+         OR workspace_egress_audit_rollup.last_seen     < EXCLUDED.last_seen;
       v_accepted := v_accepted + 1;
-    EXCEPTION WHEN OTHERS THEN
-      -- A cast or constraint failure on one row must not lose the batch.
+    EXCEPTION WHEN data_exception OR integrity_constraint_violation THEN
+      -- Bad CONTENT (a cast, range or CHECK failure) in one row must not lose the batch. Anything
+      -- else (a lock, I/O or permission error, schema drift) is a SYSTEM fault: let it raise so the
+      -- route answers 5xx, mirrors it and Vector retries, instead of counting it as invalid.
       v_invalid := v_invalid + 1;
     END;
   END LOOP;
@@ -250,7 +283,8 @@ COMMENT ON FUNCTION public.purge_egress_audit_rollup(interval, int) IS
 -- GDPR Art. 17 for the solo workspace (workspace id = the user's id). The
 -- account-delete saga keeps the orphan workspace row (migration 065), so the
 -- ON DELETE CASCADE does not fire on account erasure; the saga calls this
--- (step 5.15) before deleting the auth user. Idempotent.
+-- (step 5.15) before deleting the auth user. Idempotent. Does nothing while the
+-- workspace still has a member (see below).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.erase_egress_audit_rollup(p_workspace uuid)
   RETURNS bigint
@@ -262,6 +296,12 @@ DECLARE
   v_n bigint := 0;
 BEGIN
   IF p_workspace IS NULL THEN
+    RETURN 0;
+  END IF;
+  -- Only an orphaned workspace is erased. The saga deletes the departing member's row first, so a
+  -- solo workspace has no member left here; a workspace that gained members (or whose ownership
+  -- moved, migration 075) keeps its history for the remaining members.
+  IF EXISTS (SELECT 1 FROM public.workspace_members m WHERE m.workspace_id = p_workspace) THEN
     RETURN 0;
   END IF;
   DELETE FROM public.workspace_egress_audit_rollup WHERE workspace_id = p_workspace;
@@ -277,9 +317,57 @@ GRANT EXECUTE ON FUNCTION public.erase_egress_audit_rollup(uuid) TO service_role
 COMMENT ON FUNCTION public.erase_egress_audit_rollup(uuid) IS
   '#9545: Art. 17 erasure of one workspace''s rollup rows; called by account-delete step 5.15.';
 
+-- ---------------------------------------------------------------------------
+-- erase_egress_audit_rollup_for_requester(workspace, requester) -> rows deleted
+--
+-- GDPR Art. 17 / Art. 15 follow-up for an explicit request made while the account stays open
+-- (the requester is still the member, so erase_egress_audit_rollup would do nothing). Deletes
+-- only when the requester is the SOLE member of the workspace; a team workspace's history belongs
+-- to its remaining members. One audited path instead of raw SQL in a runbook. The request record
+-- (DSAR ticket) holds the returned count; there is no audit table for this in PR1.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.erase_egress_audit_rollup_for_requester(
+  p_workspace uuid,
+  p_requester uuid
+)
+  RETURNS bigint
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_n bigint := 0;
+BEGIN
+  IF p_workspace IS NULL OR p_requester IS NULL THEN
+    RETURN 0;
+  END IF;
+  -- Lock the member rows so the "sole member" fact holds until the delete commits.
+  PERFORM 1 FROM public.workspace_members m WHERE m.workspace_id = p_workspace FOR SHARE;
+  IF (SELECT count(*) FROM public.workspace_members m WHERE m.workspace_id = p_workspace) <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM public.workspace_members m
+        WHERE m.workspace_id = p_workspace AND m.user_id = p_requester) THEN
+    RETURN 0;
+  END IF;
+  DELETE FROM public.workspace_egress_audit_rollup WHERE workspace_id = p_workspace;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.erase_egress_audit_rollup_for_requester(uuid, uuid)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.erase_egress_audit_rollup_for_requester(uuid, uuid) TO service_role;
+
+COMMENT ON FUNCTION public.erase_egress_audit_rollup_for_requester(uuid, uuid) IS
+  '#9545: erases one workspace''s rollup rows on an explicit data-subject request, only when the requester is the sole member.';
+
 -- Daily retention sweep. A prior apply of the same job is not an error.
 DO $$
 BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'egress-audit-rollup-retention') THEN
+    PERFORM cron.unschedule('egress-audit-rollup-retention');
+  END IF;
   PERFORM cron.schedule(
     'egress-audit-rollup-retention',
     '30 4 * * *',

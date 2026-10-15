@@ -75,4 +75,57 @@ SELECT 'retention_job_scheduled',
        CASE WHEN EXISTS (SELECT 1 FROM cron.job
                           WHERE jobname = 'egress-audit-rollup-retention'
                             AND command LIKE '%purge_egress_audit_rollup%')
+            THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'ingest_is_security_definer_with_pinned_search_path',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc p
+                          WHERE p.oid = 'public.ingest_egress_audit_rollup(jsonb)'::regprocedure
+                            AND p.prosecdef
+                            AND 'search_path=public, pg_temp' = ANY (p.proconfig))
+            THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'purge_is_security_definer_with_pinned_search_path',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc p
+                          WHERE p.oid = 'public.purge_egress_audit_rollup(interval, int)'::regprocedure
+                            AND p.prosecdef
+                            AND 'search_path=public, pg_temp' = ANY (p.proconfig))
+            THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'erase_is_security_definer_with_pinned_search_path',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc p
+                          WHERE p.oid = 'public.erase_egress_audit_rollup(uuid)'::regprocedure
+                            AND p.prosecdef
+                            AND 'search_path=public, pg_temp' = ANY (p.proconfig))
+            THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'table_anon_authenticated_no_write',
+       CASE WHEN has_table_privilege('anon', 'public.workspace_egress_audit_rollup', 'INSERT,UPDATE,DELETE')
+              OR has_table_privilege('authenticated', 'public.workspace_egress_audit_rollup', 'INSERT,UPDATE,DELETE')
+            THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'requester_erase_anon_revoked',
+       CASE WHEN has_function_privilege('anon',
+              'public.erase_egress_audit_rollup_for_requester(uuid, uuid)', 'EXECUTE')
+            THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'requester_erase_authenticated_revoked',
+       CASE WHEN has_function_privilege('authenticated',
+              'public.erase_egress_audit_rollup_for_requester(uuid, uuid)', 'EXECUTE')
+            THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'requester_erase_service_role_granted',
+       CASE WHEN has_function_privilege('service_role',
+              'public.erase_egress_audit_rollup_for_requester(uuid, uuid)', 'EXECUTE')
+            THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'requester_erase_is_security_definer_with_pinned_search_path',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc p
+                          WHERE p.oid = 'public.erase_egress_audit_rollup_for_requester(uuid, uuid)'::regprocedure
+                            AND p.prosecdef
+                            AND 'search_path=public, pg_temp' = ANY (p.proconfig))
+            THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'retention_job_active',
+       CASE WHEN EXISTS (SELECT 1 FROM cron.job
+                          WHERE jobname = 'egress-audit-rollup-retention' AND active)
             THEN 0 ELSE 1 END::int;

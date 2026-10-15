@@ -35,6 +35,7 @@ const FUNCS = [
   "ingest_egress_audit_rollup",
   "purge_egress_audit_rollup",
   "erase_egress_audit_rollup",
+  "erase_egress_audit_rollup_for_requester",
 ] as const;
 
 function fnBlock(name: string): string {
@@ -78,6 +79,16 @@ describe("migration 162_workspace_egress_audit_rollup", () => {
       expect(upExec).toMatch(
         /REVOKE\s+ALL\s+ON\s+(TABLE\s+)?public\.workspace_egress_audit_rollup\s+FROM\s+PUBLIC\s*,\s*anon\s*,\s*authenticated/i,
       );
+    });
+
+    it("closes the columns the writer controls: decision enum, host charset, aligned bucket, ordered window", () => {
+      const tbl = upExec.match(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+public\.workspace_egress_audit_rollup[\s\S]*?\n\);/i)![0];
+      expect(tbl).toMatch(/decision\s+text\s+NOT\s+NULL\s+CHECK\s*\(\s*decision\s+IN\s*\(\s*'allowed'\s*,\s*'denied'\s*,\s*'other'\s*\)\s*\)/i);
+      expect(tbl).toMatch(/requested_host\s+~\s+'\^\(\[a-z0-9\._:\\\[\\\]-\]\+\|\\\(other\\\)\)\$'/i);
+      expect(tbl).toMatch(/extract\s*\(\s*epoch\s+FROM\s+bucket_start\s*\)::numeric\s*%\s*900\s*=\s*0/i);
+      expect(tbl).toMatch(/first_seen\s*<=\s*last_seen/i);
+      expect(tbl).toMatch(/first_seen\s*>=\s*bucket_start/i);
+      expect(tbl).toMatch(/last_seen\s*<\s*bucket_start\s*\+\s*interval\s+'15\s+minutes'/i);
     });
 
     it("annotates the lawful basis and the retention on the table", () => {
@@ -127,6 +138,39 @@ describe("migration 162_workspace_egress_audit_rollup", () => {
       expect(block).toMatch(/\(other\)/);
     });
 
+    it("ingest skips an orphaned workspace (no member row found under a FOR SHARE lock)", () => {
+      expect(fnBlock("ingest_egress_audit_rollup")).toMatch(/NOT\s+FOUND[\s\S]*?v_unknown\s*:=\s*v_unknown\s*\+\s*1/i);
+    });
+
+    it("ingest catches only content errors (data_exception, integrity_constraint_violation), never WHEN OTHERS", () => {
+      const block = fnBlock("ingest_egress_audit_rollup");
+      expect(block).toMatch(/EXCEPTION\s+WHEN\s+data_exception\s+OR\s+integrity_constraint_violation\s+THEN/i);
+      expect(block).not.toMatch(/WHEN\s+OTHERS/i);
+    });
+
+    it("ingest does not rewrite a tuple when a replay changes nothing", () => {
+      const block = fnBlock("ingest_egress_audit_rollup");
+      expect(block).toMatch(/DO\s+UPDATE\s+SET[\s\S]*?\bWHERE\b[\s\S]*?request_count\s*<\s*EXCLUDED\.request_count/i);
+    });
+
+    it("ingest locks the member rows (FOR SHARE) so a concurrent erasure cannot interleave with the insert", () => {
+      expect(fnBlock("ingest_egress_audit_rollup")).toMatch(
+        /PERFORM\s+1\s+FROM\s+public\.workspace_members\s+m\s+WHERE\s+m\.workspace_id\s*=\s*v_ws\s+FOR\s+SHARE/i,
+      );
+    });
+
+    it("the requester erase deletes only when the requester is the sole member, under a member-row lock", () => {
+      const block = fnBlock("erase_egress_audit_rollup_for_requester");
+      expect(block).toMatch(/FOR\s+SHARE/i);
+      expect(block).toMatch(/count\(\*\)[\s\S]*?<>\s*1/i);
+      expect(block).toMatch(/m\.user_id\s*=\s*p_requester/i);
+    });
+
+    it("erase deletes only a workspace that has no member row left", () => {
+      const block = fnBlock("erase_egress_audit_rollup");
+      expect(block).toMatch(/IF\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+public\.workspace_members[\s\S]*?RETURN\s+0/i);
+    });
+
     it("purge refuses a retention shorter than one day", () => {
       const block = fnBlock("purge_egress_audit_rollup");
       expect(block).toMatch(/interval\s+'1\s+day'/i);
@@ -139,6 +183,7 @@ describe("migration 162_workspace_egress_audit_rollup", () => {
       const doBlock = upExec.match(/DO\s+\$\$[\s\S]*?cron\.schedule[\s\S]*?END\s+\$\$;/i);
       expect(doBlock, "DO block with cron.schedule").not.toBeNull();
       expect(doBlock![0]).toMatch(/duplicate_object/i);
+      expect(doBlock![0]).toMatch(/cron\.unschedule\('egress-audit-rollup-retention'\)/i);
       expect(doBlock![0]).toMatch(/purge_egress_audit_rollup/);
       expect(doBlock![0]).toMatch(/interval\s+'30\s+days'/i);
     });
@@ -163,6 +208,10 @@ describe("migration 162_workspace_egress_audit_rollup", () => {
       expect(verify).toMatch(/obj_description/i);
       expect(verify).toMatch(/relrowsecurity/i);
       expect(verify).toMatch(/cron\.job/i);
+      expect(verify).toMatch(/prosecdef/i);
+      expect(verify).toMatch(/proconfig/i);
+      expect(verify).toMatch(/INSERT,UPDATE,DELETE/i);
+      expect(verify).toMatch(/AND\s+active/i);
     });
   });
 });

@@ -30,16 +30,22 @@ const bucketAt = (minutesAgo: number): string => {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 };
 
+// One fixed, aligned bucket for every case: the first_seen/last_seen assertions use explicit
+// second offsets from it, never the wall clock, so they cannot flake across a bucket boundary.
+const BASE = bucketAt(60);
+const at = (seconds: number): string =>
+  new Date(Date.parse(BASE) + seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
 const row = (ws: string, over: Record<string, unknown> = {}) => ({
   workspace_id: ws,
-  bucket_start: bucketAt(60),
+  bucket_start: BASE,
   requested_host: "a.example.test",
   decision: "allowed",
   source_host: "web-1",
   request_count: 5,
   bytes_out: 100,
-  first_seen: bucketAt(60),
-  last_seen: bucketAt(55),
+  first_seen: at(0),
+  last_seen: at(300),
   ...over,
 });
 
@@ -109,11 +115,12 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
     expect(n).toBe(1);
   });
 
-  test("anon and authenticated cannot execute any of the three functions", async () => {
+  test("anon and authenticated cannot execute any of the four functions", async () => {
     const calls = [
       "select public.ingest_egress_audit_rollup('[]'::jsonb)",
       "select public.purge_egress_audit_rollup(interval '30 days')",
       `select public.erase_egress_audit_rollup('${ctx.wsA}'::uuid)`,
+      `select public.erase_egress_audit_rollup_for_requester('${ctx.wsA}'::uuid, '${ctx.userA}'::uuid)`,
     ];
     for (const stmt of calls) {
       await expect(asTenant(sql, ctx.userA, (t) => t.unsafe(stmt))).rejects.toMatchObject({ code: "42501" });
@@ -136,15 +143,15 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
 
   test("two partial emissions of one bucket keep the larger value per column, first_seen the earlier", async () => {
     const rows = await asService(async (t) => {
-      await ingest(t, [row(ctx.wsA, { request_count: 5, bytes_out: 100, first_seen: bucketAt(60), last_seen: bucketAt(55) })]);
-      await ingest(t, [row(ctx.wsA, { request_count: 3, bytes_out: 200, first_seen: bucketAt(61), last_seen: bucketAt(56) })]);
+      await ingest(t, [row(ctx.wsA, { request_count: 5, bytes_out: 100, first_seen: at(60), last_seen: at(300) })]);
+      await ingest(t, [row(ctx.wsA, { request_count: 3, bytes_out: 200, first_seen: at(10), last_seen: at(200) })]);
       return readAll(t, ctx.wsA);
     });
     expect(rows).toHaveLength(1);
     expect(rows[0].request_count).toBe("5");
     expect(rows[0].bytes_out).toBe("200");
-    expect(rows[0].first_seen.toISOString()).toBe(new Date(`${bucketAt(61)}`).toISOString());
-    expect(rows[0].last_seen.toISOString()).toBe(new Date(`${bucketAt(55)}`).toISOString());
+    expect(rows[0].first_seen.toISOString()).toBe(new Date(at(10)).toISOString());
+    expect(rows[0].last_seen.toISOString()).toBe(new Date(at(300)).toISOString());
   });
 
   test("an identical replay leaves the row unchanged (idempotent)", async () => {
@@ -185,12 +192,19 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
         row(ctx.wsA, { requested_host: "old.example.test", bucket_start: bucketAt(60 * 24 * 40) }),
         { workspace_id: "not-a-uuid", requested_host: "x.example.test" },
         "not-an-object",
+        // CHECK violations (content errors the function must absorb, not raise):
+        row(ctx.wsA, { requested_host: "misaligned.example.test", bucket_start: at(1), first_seen: at(1), last_seen: at(2) }),
+        row(ctx.wsA, { requested_host: "inverted.example.test", first_seen: at(300), last_seen: at(10) }),
+        row(ctx.wsA, { requested_host: "before-bucket.example.test", first_seen: at(-5), last_seen: at(10) }),
+        row(ctx.wsA, { requested_host: "after-bucket.example.test", last_seen: at(900) }),
+        row(ctx.wsA, { requested_host: "has space.example.test" }),
+        row(ctx.wsA, { requested_host: "enum.example.test", decision: "weird" }),
       ]);
       return { c, rows: await readAll(t, ctx.wsA) };
     });
     expect(out.c.accepted).toBe(1);
     expect(out.c.skipped_unknown).toBe(1);
-    expect(out.c.skipped_invalid).toBe(5);
+    expect(out.c.skipped_invalid).toBe(11);
     expect(out.rows.map((r) => r.requested_host)).toEqual(["ok.example.test"]);
   });
 
@@ -200,6 +214,32 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
       return r.c;
     });
     expect(c.accepted).toBe(0);
+  });
+
+  test("an orphaned workspace (no member row) is skipped, so erased history is not re-created", async () => {
+    const out = await asService(async (t) => {
+      await t`reset role`;
+      await t`delete from public.workspace_members where workspace_id = ${ctx.wsA}`;
+      await t`set local role service_role`;
+      const c = await ingest(t, [row(ctx.wsA)]);
+      return { c, rows: await readAll(t, ctx.wsA) };
+    });
+    expect(out.c).toMatchObject({ accepted: 0, skipped_unknown: 1 });
+    expect(out.rows).toHaveLength(0);
+  });
+
+  test("a replay that changes nothing does not rewrite the tuple", async () => {
+    const xmin = await asService(async (t) => {
+      await ingest(t, [row(ctx.wsA)]);
+      await t`reset role`;
+      const [a] = await t<{ x: string }[]>`select xmin::text as x from public.workspace_egress_audit_rollup where workspace_id = ${ctx.wsA}`;
+      await t`set local role service_role`;
+      await ingest(t, [row(ctx.wsA)]);
+      await t`reset role`;
+      const [b] = await t<{ x: string }[]>`select xmin::text as x from public.workspace_egress_audit_rollup where workspace_id = ${ctx.wsA}`;
+      return { a: a.x, b: b.x };
+    });
+    expect(xmin.b).toBe(xmin.a);
   });
 
   test("distinct hosts beyond the per-bucket cap fold into one (other) row", async () => {
@@ -226,9 +266,11 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
     const left = await rolledBackRaw(sql, async (t) => {
       const ws = randomUUID();
       await t`insert into public.workspaces (id, organization_id, web_egress) values (${ws}, ${ctx.orgA}, true)`;
-      await t`set local role service_role`;
-      await ingest(t, [row(ws)]);
-      await t`reset role`;
+      // Inserted directly: a freshly created workspace has no member, so the ingest RPC would
+      // (correctly) skip it as an orphan.
+      await t`insert into public.workspace_egress_audit_rollup
+        (workspace_id, bucket_start, requested_host, decision, source_host, request_count, bytes_out, first_seen, last_seen)
+        values (${ws}, ${BASE}::timestamptz, 'a.example.test', 'allowed', 'web-1', 1, 1, ${at(0)}::timestamptz, ${at(60)}::timestamptz)`;
       const before = await readAll(t, ws);
       await t`delete from public.workspaces where id = ${ws}`;
       const after = await readAll(t, ws);
@@ -243,8 +285,10 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
       await t`insert into public.workspace_egress_audit_rollup
         (workspace_id, bucket_start, requested_host, decision, source_host, request_count, bytes_out, first_seen, last_seen)
         values
-        (${ctx.wsA}, now() - interval '31 days', 'old.example.test', 'allowed', 'web-1', 1, 1, now() - interval '31 days', now() - interval '31 days'),
-        (${ctx.wsA}, now() - interval '29 days', 'new.example.test', 'allowed', 'web-1', 1, 1, now() - interval '29 days', now() - interval '29 days')`;
+        (${ctx.wsA}, date_trunc('hour', now() - interval '31 days'), 'old.example.test', 'allowed', 'web-1', 1, 1,
+         date_trunc('hour', now() - interval '31 days'), date_trunc('hour', now() - interval '31 days') + interval '5 minutes'),
+        (${ctx.wsA}, date_trunc('hour', now() - interval '29 days'), 'new.example.test', 'allowed', 'web-1', 1, 1,
+         date_trunc('hour', now() - interval '29 days'), date_trunc('hour', now() - interval '29 days') + interval '5 minutes')`;
       await t`set local role service_role`;
       const [d] = await t<{ n: string }[]>`select public.purge_egress_audit_rollup(interval '30 days')::text as n`;
       const rows = await readAll(t, ctx.wsA);
@@ -257,7 +301,7 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
         await t`set local role service_role`;
         await t`select public.purge_egress_audit_rollup(interval '0 seconds')`;
       }),
-    ).rejects.toBeDefined();
+    ).rejects.toMatchObject({ code: "P0001", message: expect.stringContaining("retention must be at least 1 day") });
   });
 
   test("the retention job is scheduled daily in pg_cron", async () => {
@@ -267,9 +311,13 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
     expect(r.cmd).toMatch(/30 days/);
   });
 
-  test("erase removes one workspace's rows, is idempotent, and leaves other workspaces", async () => {
+  test("erase removes an orphaned workspace's rows, is idempotent, and leaves other workspaces", async () => {
     const out = await asService(async (t) => {
       await ingest(t, [row(ctx.wsA), row(ctx.wsB)]);
+      await t`reset role`;
+      // The saga deletes the departing member's row before step 5.15.
+      await t`delete from public.workspace_members where workspace_id = ${ctx.wsA}`;
+      await t`set local role service_role`;
       const [first] = await t<{ n: string }[]>`select public.erase_egress_audit_rollup(${ctx.wsA}::uuid)::text as n`;
       const [second] = await t<{ n: string }[]>`select public.erase_egress_audit_rollup(${ctx.wsA}::uuid)::text as n`;
       const [nul] = await t<{ n: string }[]>`select public.erase_egress_audit_rollup(null)::text as n`;
@@ -280,5 +328,74 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
     expect(out.nul).toBe("0");
     expect(out.a).toHaveLength(0);
     expect(out.b).toHaveLength(1);
+  });
+
+  test("erase does nothing while the workspace still has a member (no over-erasure of a team workspace)", async () => {
+    const out = await asService(async (t) => {
+      await ingest(t, [row(ctx.wsA)]);
+      const [n] = await t<{ n: string }[]>`select public.erase_egress_audit_rollup(${ctx.wsA}::uuid)::text as n`;
+      return { n: n.n, rows: await readAll(t, ctx.wsA) };
+    });
+    expect(out.n).toBe("0");
+    expect(out.rows).toHaveLength(1);
+  });
+
+  test("requester erase deletes for a sole member, and does nothing for a team workspace, another requester or nulls", async () => {
+    const out = await asService(async (t) => {
+      await ingest(t, [row(ctx.wsA)]);
+      const n = async (ws: string | null, req: string | null) => {
+        const [r] = await t<{ n: string }[]>`select public.erase_egress_audit_rollup_for_requester(${ws}::uuid, ${req}::uuid)::text as n`;
+        return r.n;
+      };
+      await t`reset role`;
+      const [{ c }] = await t<{ c: number }[]>`select count(*)::int as c from public.workspace_members where workspace_id = ${ctx.wsA}`;
+      await t`set local role service_role`;
+      // The fixture's wsA is a team workspace (userA owner, userC member): nothing is erased.
+      const team = await n(ctx.wsA, ctx.userA);
+      const wrongRequester = await n(ctx.wsA, randomUUID());
+      const nulls = [await n(null, ctx.userA), await n(ctx.wsA, null)];
+      await t`reset role`;
+      await t`delete from public.workspace_members where workspace_id = ${ctx.wsA} and user_id = ${ctx.userC}`;
+      await t`set local role service_role`;
+      const otherSole = await n(ctx.wsA, ctx.userC);
+      const sole = await n(ctx.wsA, ctx.userA);
+      return { c, team, wrongRequester, nulls, otherSole, sole, left: await readAll(t, ctx.wsA) };
+    });
+    expect(out.c).toBeGreaterThan(1);
+    expect(out.team).toBe("0");
+    expect(out.wrongRequester).toBe("0");
+    expect(out.nulls).toEqual(["0", "0"]);
+    expect(out.otherSole).toBe("0");
+    expect(out.sole).toBe("1");
+    expect(out.left).toHaveLength(0);
+  });
+
+  test("an in-flight ingest holds a lock that blocks the member-row delete, so erasure cannot interleave", async () => {
+    // Transaction A ingests (takes FOR SHARE on the member rows) and stays open; transaction B, on a
+    // second connection (the saga's member delete), must not get past the lock. Both roll back.
+    const other = connect(DSN);
+    let blocked: unknown;
+    try {
+      const A = sql.begin(async (a) => {
+        await a`update public.workspaces set web_egress = true where id = ${ctx.wsA}`;
+        await a`set local role service_role`;
+        await ingest(a, [row(ctx.wsA)]);
+        await a`reset role`;
+        try {
+          await other.begin(async (b) => {
+            await b`set local lock_timeout = '400ms'`;
+            await b`delete from public.workspace_members where workspace_id = ${ctx.wsA}`;
+            throw new Error("rollback-b");
+          });
+        } catch (err) {
+          blocked = err;
+        }
+        throw new Error("rollback-a");
+      });
+      await expect(A).rejects.toThrow("rollback-a");
+    } finally {
+      await other.end({ timeout: 5 });
+    }
+    expect(blocked).toMatchObject({ code: "55P03" });
   });
 });
