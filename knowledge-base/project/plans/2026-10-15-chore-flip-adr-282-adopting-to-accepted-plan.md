@@ -24,6 +24,52 @@ Issue #10018 body (the producer's own list, a floor not a ceiling): "ADR-282, ru
 5c, the ADR-119, ADR-142 and ADR-263 addenda, the C4 model, the Art. 30 register, compliance-posture and the
 encryption-posture ledger". The repo-wide subject sweep below adds ADR-199 and two further runbook sentences.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-15
+**Sections enhanced:** gate verification (4.4-4.12), citation re-verification, one added section (Encryption Posture), one added note (Network-Outage)
+**Agents used:** CTO (technical rulings T1-T8), CLO (legal rulings L1-L3), plan-review panel (DHH, Kieran, code-simplicity); no further research fan-out was warranted for a docs-only status flip with every claim already traced to a repo file or a GitHub run log.
+
+### Key improvements
+
+1. Vacuous check removed: AC-4's wrapped-line phrase ("takes" / "effect" split across runbook lines 330-331) could never have failed; the pattern now starts on the second line and is first run against `origin/main`.
+2. Run history stated exactly: merge-SHA run 38139392390 applied the update and later failed on an unrelated step; the brief's "all succeeded" is not repeated.
+3. Legal wording is the CLO's verbatim text; non-legal markers shortened to a pointer so the run facts live once, in the ADR-282 addendum.
+
+### New considerations discovered
+
+- ADR-199 carries an `adopting` sentence about ADR-282 that the issue's list missed.
+- `model.likec4.json` holds the C4 sentence in 3 description strings (5 matching lines); the regenerated diff must show exactly those.
+- Compliance-posture's row ends in `**]**`: the appended marker needs a separating space or the result is `]****]`.
+
+## Gate Notes (deepen-plan 4.4-4.12)
+
+- 4.5 Network-Outage: the word "timeout" appears only as a quoted fact of an unrelated, past job step (`terraform_data.egress_gateway_web2` remote-exec). The plan proposes no SSH, firewall or service-layer fix and drives no `terraform apply`, so the L3-first checklist has nothing to verify; no apply provisioner is in scope.
+- 4.55 Downtime: none (docs only, no infra path, no apply triggered).
+- 4.6 User-Brand Impact: present, threshold `aggregate pattern`, non-placeholder.
+- 4.7 Observability: skipped (every Files-to-Edit path is a record, a generated JSON twin or the ledger JSON; no code or infra path).
+- 4.8 PAT-shaped variables: grep over the plan returns nothing.
+- 4.9 UI wireframe: skipped (no UI-surface file).
+- 4.11 Guard Contract: skipped (no guard delivered; AC-6 is a one-time sweep, not a standing gate).
+- 4.12 Scope Check: one unfenced `## Scope Check`, three subsections, no `unmapped`, no empty justification, a `Recommendation:` line, no `status: BLOCKED`.
+- Citations re-verified live with `gh`: #9925, #9876, #10083, #10014, #10103 MERGED; #9879 and #9372 CLOSED; #9927, #9703, #9705, #10112 OPEN; #10081 an OPEN PR labelled `parked`. No AGENTS rule ID is cited in the plan body.
+
+## Encryption Posture
+
+No new store or connection is introduced; this section records that the existing ledger row is not changed in substance (4.10 trigger fired on prose naming a volume).
+
+```yaml
+at_rest:
+  - store: hcloud_volume.inngest_redis_luks (existing ledger row; unchanged by this PR)
+    mechanism: luks
+    evidence: scripts/encryption-posture-ledger.json row hcloud_volume.inngest_redis_luks, at_rest.evidence (cloud-init-inngest.yml luksFormat/luksOpen, inngest-redis-luks.tf)
+    defends_against: a seized, RMA'd or snapshot-imaged Hetzner block volume
+    does_not_defend: a leaked credential, an app-layer read on the unlocked host, a dead probe pipeline, a read/write Hetzner token holder lifting delete protection, loss of both passphrase copies, and the absence of any backup of the ciphertext or header (all carried unchanged in the row)
+    disclosed_as: not-publicly-claimed
+    live_verification: unavailable:the hourly probe row proves which device backs /mnt/data, not the cipher (unchanged; this read-back is not the ledger's live verification)
+in_transit: []   # no connection added or changed
+```
+
 ## Research Reconciliation - Spec vs. Codebase
 
 | Claim in the brief or issue | Reality (measured this session) | Plan response |
@@ -195,9 +241,9 @@ Single PR; the ADR is true now (the condition was met on 2026-10-15), so nothing
 
 Product/UX Gate: not relevant (no user-facing surface; no `components/**`, `app/**` file). Pencil: N/A (no UI surface).
 
-## Infrastructure, Observability, Encryption Posture, Guard Contract
+## Infrastructure, Observability, Guard Contract
 
-Skipped by their own rules: no infra file, no new store or connection, no code-class file, no guard delivered. The ledger row's
+Skipped by their own rules: no infra file, no code-class file, no guard delivered (Encryption Posture is recorded above because the 4.10 prose trigger fired). The ledger row's
 `mechanism` (`luks`), `live_verification` and `at_rest` evidence are not edited; only one `does_not_defend` clause is.
 
 ## Files to Edit
