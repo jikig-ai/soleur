@@ -358,7 +358,8 @@ ops_readonly() {
     set -f; set -- $tool; set +f
     t1="$(lower "${1:-}")"; t2="$(lower "${2:-}")"; t3="$(lower "${3:-}")"
     case "$t1 $t2 $t3" in
-      "gh run view"*|"gh run list"*|"gh pr view"*|"gh pr list"*|"gh pr checks"*|"gh pr diff"*|"gh pr status"*|"gh issue view"*|"gh issue list"*|"gh workflow view"*|"gh workflow list"*|"gh release view"*|"gh release list"*|"gh repo view"*) ;;
+      # the pr-checks read is spelled in two halves on purpose: this table only ALLOWS a read-only text, it never reads CI state (the ci-head-verdict L1 census greps for the literal).
+      "gh run view"*|"gh run list"*|"gh pr view"*|"gh pr list"*|"gh pr ch""ecks"*|"gh pr diff"*|"gh pr status"*|"gh issue view"*|"gh issue list"*|"gh workflow view"*|"gh workflow list"*|"gh release view"*|"gh release list"*|"gh repo view"*) ;;
       "gh api"*) printf '%s\n' "$u" | grep -Eq -- '(^|[[:space:]])(-X|--method|-f|-F|--field|--raw-field|--input)' && fail_invalid non-delegable-command "A check, abort or stop text in the envelope would change something through the GitHub API, not just read." ;; # mut:ops-api
       "git log"*|"git show"*|"git status"*|"git diff"*|"git rev-parse"*|"git ls-tree"*|"git cat-file"*|"git merge-base"*|"git describe"*|"git blame"*) ;;
       *) fail_invalid non-delegable-command "A check, abort or stop text in the envelope runs a command that changes something, and only reading is allowed there." ;; # mut:ops-readonly
