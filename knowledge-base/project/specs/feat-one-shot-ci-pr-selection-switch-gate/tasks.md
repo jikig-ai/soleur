@@ -19,7 +19,7 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-ci-pr-selection-switch-gate-
 
 - 3.1 `scripts/ci-push-dedupe.test.sh`: `PRSEL_IF` constant exported to `chk.py`; `P-JOBIF` against it; rebuild the nine `y-prsel-*` anchors and `y-budget-10` from it; no "did NOT land" mutant remains.
 - 3.2 Same file: `darkequiv` mode over the real parsed `if:` strings (AC7) with the Guard 2 mutants (8 job-`if` rows, 3 gated-job rows and, from the review rounds, 12 switch-census rows) and harness rows; model `vars.CI_PR_AFFECTED` unset as the empty string (documented).
-- 3.3 `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh`: G1-8c rows (add `pull_request` to the existing G1-8 event loop; empty inputs, `HEAD_SHA_OK` in empty and `false`) and the 3 Guard 3 mutants (AC8): a new `tolmut.py` operator loosening `HEAD_SHA_OK`, new probe rows in the `mutate_tol` p-set (non-empty listed skip with `HEAD_SHA_OK=''`; empty-inputs `pull_request`), one compound mutant. `AGG_DIGEST` unchanged.
+- 3.3 `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh`: G1-8c rows (add `pull_request` to the existing G1-8 event loop; empty inputs, `HEAD_SHA_OK` in empty and `false`) and the 3 Guard 3 mutants (AC8): a new `tolmut.py` operator loosening `HEAD_SHA_OK`, one new probe row in the `mutate_tol` p-set (p23: non-empty listed skip with `HEAD_SHA_OK=''`; the empty-inputs probes were dropped at review as non-kills), one compound mutant. `AGG_DIGEST` unchanged.
 - 3.4 Re-run `scripts/ci-draft-light.test.sh` unchanged.
 
 ## Phase 4: Docs

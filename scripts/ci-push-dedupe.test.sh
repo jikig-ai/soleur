@@ -353,7 +353,7 @@ if mode == "prcensus":
                 if n: found[".".join(loc)] = found.get(".".join(loc), 0) + n
         walk(root, ())
         return found
-    found = census(re.compile(r"needs\.pr-selection\b|needs\[\s*['\"]pr-selection['\"]\s*\]", re.I), d.get("jobs") or {})
+    found = census(re.compile(r"needs\s*\.\s*pr-selection\b|needs\s*\[\s*['\"]pr-selection['\"]\s*\]", re.I), d.get("jobs") or {})
     want = {"%s.if" % n: 4 for n in PRGATED}
     want.update({"test.steps.[Aggregate shard results].env.SKIP_LEGS": 1, "test.steps.[Aggregate shard results].env.ACTIVE": 1,
                  "test.steps.[Aggregate shard results].env.HEAD_SHA_OK": 2})
@@ -366,11 +366,11 @@ if mode == "prcensus":
     # case-insensitively (Actions context, property and function names are case-insensitive: `toJson(needs)` and `vars.ci_pr_affected` are the
     # same reads). The census above matches only `needs.pr-selection` / `needs['pr-selection']`, so a direct reader of the repository variable
     # (a step-level `if: vars.CI_PR_AFFECTED == 'on'` on a gated job's test step, a job `env:` carrying it) or a whole-context read
-    # (`toJSON(needs)`, `needs.*.result`, `format('{0}', needs)`, a dynamic `vars[...]` / `needs[...]` index) changes which work runs while the
+    # (`toJSON(needs)` and `toJSON(vars)`, which the bare-context arm covers, `needs.*.result`, `format('{0}', needs)`, a dynamic `vars[...]` / `needs[...]` index) changes which work runs while the
     # switch is unset and the job still concludes `success`. Exactly two reads may exist: the pr-selection job-level `if:` and the `SWITCH:` env
     # of one of its steps, each exactly once; no whole-context read of `needs` or `vars` may exist at all. (A literal-name bracket read of the
     # variable is also a CI_PR_AFFECTED read and is counted; the SWITCH key name is pinned a second time by prsel's P-ENV and P-COKEYS.)
-    found2 = census(re.compile(r"CI_PR_AFFECTED|to_?json\(\s*(?:needs|vars)\b|\b(?:needs|vars)\s*\.\s*\*|\b(?:needs|vars)\s*\[(?!\s*['\"]pr-selection['\"]\s*\])|(?<![\w.\-])(?:needs|vars)\s*[,)]", re.I), d)
+    found2 = census(re.compile(r"CI_PR_AFFECTED|\b(?:needs|vars)\s*\.\s*\*|\b(?:needs|vars)\s*\[(?!\s*['\"]pr-selection['\"]\s*\])|(?<![\w.\-])(?:needs|vars)\s*[,)]", re.I), d)
     sw_keys = [k for k in found2 if k.startswith("jobs.pr-selection.steps.") and k.endswith(".env.SWITCH")]
     if len(sw_keys) != 1 or set(found2) != {"jobs.pr-selection.if", sw_keys[0]} or any(v != 1 for v in found2.values()):
         for k in sorted(found2): tags.append("C-VARS:%s:%d" % (k, found2[k]))
@@ -1239,7 +1239,7 @@ else fail "MUTANT y-budget-10: mutation did NOT land"; fi
 # ADR-276 S4 follow-up (#9729), Guard 2: the job-level condition and the dark equivalence. The eight job-`if` mutants (four edits, each driven twice)
 # are caught by the single P-JOBIF equality (ONE structural detector) and, independently, by `darkequiv` (MODEL, not verified live), whose `zero` row
 # kills `== 'on'` without leaning on Actions' case-insensitivity. The three gated-job mutants edit a GATED job (the lost-coverage direction), the
-# last after a compliant first one. The three y-vars-* mutants drive the switch census: a direct reader of the variable or of a whole context.
+# last after a compliant first one. The y-vars-* mutants drive the switch census: a direct reader of the variable or of a whole context.
 prsel_hdr() { printf '  pr-selection:\n    if: %s\n    continue-on-error: true' "$1"; }
 PRSEL_HDR_OLD="$(prsel_hdr "$PRSEL_IF")"
 mutate_yml y-prsel-if-var-removed "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV")" prsel P-JOBIF
@@ -1255,7 +1255,7 @@ mutate_yml y-prsel-if-gated-needs-result "$PRT_BUN" "$PRT_BUN$NEED_OK" darkequiv
 mutate_yml y-prsel-if-gated-needs-result-gcond "$PRT_BUN" "$PRT_BUN$NEED_OK" gated G-COND:test-bun
 mutate_yml y-prsel-if-gated-second-job "$(pr_term test-scripts-heavy)" "$(pr_term test-scripts-heavy)$NEED_OK" darkequiv DE-CONS:test-scripts-heavy:pull_request
 # the switch census (structural seat, review of #10341): none of these touches `needs.pr-selection`, so only `prcensus` can see them. One mutant
-# per regex arm and per shape class: the literal name, its lowercase spelling, a dynamic index, every whole-context spelling, a job-level and a
+# per shape class (the bare-context arm kills every toJSON spelling; the whitespace and case spellings of the first census are pinned by the three y-ref-* mutants): the literal name, its lowercase spelling, a dynamic index, every whole-context spelling, a job-level and a
 # step-level env, a MOVED read (the sum stays 2) and a doubled read in the pr-selection `if:`.
 BUN_RUN="      - name: Run bun-side tests
         run: bash scripts/test-all.sh bun"
@@ -1267,6 +1267,9 @@ vars_step_if() {  # $1 name  $2 the expression put in a step-level if on test-bu
 vars_step_if y-vars-step-if "vars.CI_PR_AFFECTED == 'on'" C-VARS:jobs.test-bun.steps.
 vars_step_if y-vars-lowercase "vars.ci_pr_affected == 'on'" C-VARS:jobs.test-bun.steps.
 vars_step_if y-vars-dynamic-index "vars[format('CI_PR_{0}','AFFECTED')] == 'on'" C-VARS:jobs.test-bun.steps.
+vars_step_if y-ref-ws-dot "needs . pr-selection . outputs.active == 'true'" C-REF:test-bun.steps.
+vars_step_if y-ref-ws-bracket "needs ['pr-selection'].outputs.active == 'true'" C-REF:test-bun.steps.
+vars_step_if y-ref-upper "NEEDS.PR-SELECTION.outputs.active == 'true'" C-REF:test-bun.steps.
 vars_step_if y-vars-toJSON-needs "!contains(toJSON(needs), 'active')" C-VARS:jobs.test-bun.steps.
 vars_step_if y-vars-toJson-lower "!contains(toJson(needs), 'active')" C-VARS:jobs.test-bun.steps.
 vars_step_if y-vars-toJSON-vars "toJSON(vars) != ''" C-VARS:jobs.test-bun.steps.
@@ -1373,8 +1376,8 @@ fi
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 117 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
-else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 117), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
+if [ "$MUT_RUN" -ge 120 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 120), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a
@@ -1383,7 +1386,7 @@ else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 117), $EQUIV_O
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=214
+_FLOOR=217
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2
