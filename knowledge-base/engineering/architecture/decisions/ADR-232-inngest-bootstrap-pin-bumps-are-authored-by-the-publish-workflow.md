@@ -601,7 +601,7 @@ and #9944 merged inside that window; the open prerequisite that would remove the
 exemption for a PR's own carrier change). Until then the exception is a NAMED-ROW SUBSET predicate, not a blanket
 "GuardA is red by design" (CTO-ruled, 2026-10-15): the `FAIL:` rows of the suite on the merge tree are a subset of
 {the web pin row, the dedicated-host pin row, the byte-identity row `every baked carrier is byte-identical at ...`},
-the byte-identity row's drifted list is a subset of the carriers the change edited, and every other test file the PR
+the byte-identity row's drifted list is a subset of the carriers the change edited plus any carrier already drifted on main by an earlier change whose pin bump is still pending (on 2026-10-15: `vector.toml`, from #10255), and every other test file the PR
 touches is fully green. The mint decides from the tree against the newest merged `vinngest-v*` tag, not against the
 pin, so the change does not wait for an older open pin-bump PR; after the merge exactly one pin-bump PR may stay open
 and it must target the semver-maximum merged tag (the mint's PR and an older one rewrite the same four pin sites on
