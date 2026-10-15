@@ -1378,3 +1378,123 @@ resource "logtail_exploration_alert" "egress_gw_probe_fail" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #10321 / ADR-218: credential shapes in the zot container-log channel ─────
+#
+# WHY THIS EXISTS. scripts/followthroughs/zot-log-channel-7440.sh carried the only
+# automated read of what the registry shipper's redact() actually emits on this
+# source — its exit-1 arm flags three credential shapes in shipped SOLEUR_ZOT_LOG
+# rows. Its tracker #7455 closed on PASS 2026-08-13 and scripts/sweep-followthroughs.sh
+# reads only open issues plus closed ones inside CLOSED_LOOKBACK_DAYS=14, so the
+# arm has been dormant since ~2026-08-27 while its header still claimed
+# "enrolled as a REGRESSION detector" (#10321). A check meant to outlive its
+# tracker is a standing alert, not a follow-through probe — the same vehicle the
+# 2026-10-14 CTO ruling gave the sibling clientIP invariant (#7530). The probe
+# file stays as the manual deep-grader.
+#
+# THE THREE SHAPES (ported from the probe's authleak/shapeleak arms):
+#   (a) any `Authorization:[<v>` value that is neither the zot `***` mask (three
+#       or more asterisks) nor the shipper's REDACTED marker — evaluated per
+#       OCCURRENCE so a leading decoy cannot hide a real credential on the same
+#       row (probe fixture S13); a literal `Authorization:[]` is benign while
+#       `Authorization:[ ` (a value that empties after the space cut) fails loud,
+#       matching the probe's malformed-unmasked arm.
+#   (b) a Doppler token prefix `dp.(pt|st|sa|ct).` followed by a token run with
+#       >=16 non-separator chars (`._-` stripped — substance, not length, so 20
+#       dots of padding cannot post a page on demand).
+#   (c) a bcrypt prefix `$2[aby]$<2 digits>$`.
+# Unlike the probe — whose newest-boot scoping existed to attribute DELIVERY —
+# every matching row fires: a credential-shaped row on any host generation is an
+# incident. COVERAGE BOUNDARY (named, not hidden): shapes outside these three
+# patterns, rows the shipper's rate cap never emitted, and a leak on another
+# source are not this alert's.
+#
+# LIVE-PROBE: not run (the predicate is a port of the probe's tested arms, not a
+# new hypothesis; the drift guard asserts each arm on the as-written SQL text).
+
+locals {
+  registry_zot_log_credential_shape_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND startsWith(raw, '{"message":"SOLEUR_ZOT_LOG ')
+      AND position(JSONExtractString(raw, 'message'), 'SOLEUR_ZOT_LOG ') = 1
+      AND (
+        arrayExists(
+          v -> v != 'Authorization:[' AND NOT match(v, '^Authorization:\\[(\\*\\*\\*|REDACTED)'),
+          extractAll(JSONExtractString(raw, 'message'), 'Authorization:\\[[^\\]\\s]*')
+        )
+        OR match(JSONExtractString(raw, 'message'), 'Authorization:\\[ ')
+        OR arrayExists(
+          t -> length(replaceRegexpAll(t, '^dp\\.(?:pt|st|sa|ct)\\.|[._-]', '')) >= 16,
+          extractAll(JSONExtractString(raw, 'message'), 'dp\\.(?:pt|st|sa|ct)\\.[A-Za-z0-9._-]+')
+        )
+        OR match(JSONExtractString(raw, 'message'), '\\$2[aby]\\$[0-9][0-9]\\$')
+      )
+    GROUP BY time
+  SQL
+
+  registry_zot_log_credential_shape_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/registry-zot-credential-shape-10321.md"
+}
+
+resource "logtail_exploration" "registry_zot_log_credential_shape" {
+  name      = "soleur-registry-zot-log-credential-shape-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.registry_zot_log_credential_shape_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "registry_zot_log_credential_shape" {
+  exploration_id = logtail_exploration.registry_zot_log_credential_shape.id
+  name           = "soleur-registry-zot-log-credential-shape-prd"
+
+  # value = 0 with higher_than: ONE credential-shaped row is a page — unlike
+  # registry_store_not_luks there is no transient benign row for this signal.
+  # recovery_period covers two windows so one clean bucket does not close an
+  # incident the next would re-open.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 1800
+  # A count query with no rows returns NO bucket, which must read as healthy (0)
+  # so an open incident can observe recovery. Silence is NOT this rule's job:
+  # the channel going dark is covered by the registry heartbeats
+  # (betteruptime_heartbeat.registry_prd; the ci/zot-telemetry-silent arm).
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A shipped SOLEUR_ZOT_LOG row carries something shaped like a credential: an unmasked Authorization value (neither the *** mask nor REDACTED), a Doppler token prefix dp.(pt|st|sa|ct). with a substantive run, or a bcrypt $2[aby]$ hash. The registry push/pull credential protects the image supply chain — rotate the affected credential FIRST, then fix redact(). Counts only: never echo the matched value. Runbook: ${local.registry_zot_log_credential_shape_runbook_url}"
+  metadata = {
+    runbook = local.registry_zot_log_credential_shape_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}

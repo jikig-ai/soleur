@@ -233,6 +233,9 @@ on:
       # (#9391) The hosts-file GHCR deny lost alert's drift guard resolves the runbook anchor in
       # its incident link against this file; a docs-only heading rename must run the guard.
       - "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"
+      # (#10321) The credential-shape alert drift guard asserts the runbook its
+      # incident link resolves to exists; a rename/delete must run the guard.
+      - "knowledge-base/engineering/operations/runbooks/registry-zot-credential-shape-10321.md"
       # (#4699) cloud-init-inngest-bootstrap.test.sh's AC6d block asserts the scheduled
       # published-digest reconciler's wiring — the workflow is dispatched and drives the
       # script, the checkout carries full history + tags, the GHCR login is present, and
@@ -826,6 +829,15 @@ jobs:
       # predicate, exact literals, unpaused, both -target lines, and its mutation rows.
       - name: Run registry store-not-LUKS alert drift guard (#8408)
         run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
+
+      # (#10321) The zot log channel credential-shape Logs alert: the three-arm predicate
+      # (per-occurrence Authorization values with the exact mask exemption, Doppler
+      # dp.(pt|st|sa|ct). with a >=16 non-separator substance floor, bcrypt), the
+      # one-row-is-an-incident value=0 paging semantics, both -target lines (the only
+      # enforcement for logtail resources), the runbook anchor + existence, and the
+      # mutation rows that each require this guard to red.
+      - name: Run registry zot credential-shape alert drift guard (#10321)
+        run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh
 
       # (#9391) The hosts-file GHCR deny lost Logs alert: both emitters' needles read from their own source,
       # the two-arm value-0 predicate compared whole, head-scoping, the paging windows, both -target lines
