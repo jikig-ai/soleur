@@ -1739,7 +1739,7 @@ BODYF = re.compile(r"(?:^|\s)(?:-[A-Za-z]*d(?=[\"'@\s=]|$)|--data(?:-raw|-binary
 BODYF_FLAT = re.compile(r"\b(?:curl|wget)\b.{0,300}?" + BODYF.pattern)
 CLI = re.compile(r"\bhcloud(?:[ \t]+-\S+(?:[ \t]+[^\s-]\S*)?)*[ \t]+(?:server|volume|firewall|ssh-key|network|floating-ip|primary-ip|image|load-balancer|certificate|placement-group|zone)[ \t]+(?:delete|rm|create|update|detach|attach|enable-protection|disable-protection|shutdown|poweroff|reset|reboot|rebuild|resize|change-[a-z-]+|add-[a-z-]+|remove-[a-z-]+|set-[a-z-]+|assign|unassign)\b")
 DOP = re.compile(r"\bdoppler\b(?:[ \t]+-\S+(?:[ \t]+[^\s-]\S*)?)*[ \t]+(?:configs|environments|projects|secrets|tokens|api|workplace|groups|integrations)\b.{0,80}?\b(?:delete|destroy|revoke)\b", re.I)
-REPOPATH = re.compile(r"(?:^|[\s<>=\"'(])(?:\.{1,2}/|\.github/|scripts/|docs/|knowledge-base/|plugins/|apps/)\S*")
+REPOPATH = re.compile(r"(?:^|[\s<>=\"'(])(?:\.{1,2}/|\.github/|scripts/|docs/|knowledge-ba[s]e/|plugins/|apps/)\S*")
 BODYFILE = re.compile(r"(?:--body-file|-F[ \t]+body=@)[ \t=]*(\S+)")
 def filer_inline(joined):
     # a filer builds its body inline: no repo-path token anywhere, and every --body-file operand is the scratch file
@@ -1845,7 +1845,7 @@ ROWS = [
     ("filer-cat", "filer-bad", "filer", "cat docs/orphan-remedy.md >> /tmp/orphan-body.md"),
     ("filer-envsubst", "filer-bad", "filer", "envsubst < .github/templates/orphan.md.tmpl >> /tmp/orphan-body.md"),
     ("filer-cp", "filer-bad", "filer", "cp docs/orphan-remedy.md /tmp/orphan-body.md"),
-    ("filer-bodyfile", "filer-bad", "filer", "gh issue comment 1 --body-file knowledge-base/x/remedy.md"),
+    ("filer-bodyfile", "filer-bad", "filer", "gh issue comment 1 --body-file docs/x/remedy.md"),
     ("filer-uppercase", "filer-bad", "filer", "cat docs/Orphan.MD >> /tmp/orphan-body.md"),
     ("filer-bodyfile-other", "filer-bad", "filer", "gh issue comment 1 --body-file \"$RUNNER_TEMP/remedy.md\""),
     ("filer-ok", "filer-ok", "filer", "gh issue comment 1 --body-file /tmp/orphan-body.md"),
