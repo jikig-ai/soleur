@@ -1424,7 +1424,7 @@ locals {
           v -> v != 'Authorization:[' AND NOT match(v, '^Authorization:\\[(\\*\\*\\*|REDACTED)'),
           extractAll(JSONExtractString(raw, 'message'), 'Authorization:\\[[^\\]\\s]*')
         )
-        OR match(JSONExtractString(raw, 'message'), 'Authorization:\\[ ')
+        OR match(JSONExtractString(raw, 'message'), 'Authorization:\\[\\s')
         OR arrayExists(
           t -> length(replaceRegexpAll(t, '^dp\\.(?:pt|st|sa|ct)\\.|[._-]', '')) >= 16,
           extractAll(JSONExtractString(raw, 'message'), 'dp\\.(?:pt|st|sa|ct)\\.[A-Za-z0-9._-]+')

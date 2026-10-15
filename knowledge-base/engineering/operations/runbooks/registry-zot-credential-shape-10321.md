@@ -13,8 +13,8 @@ graded before its tracker #7455 closed and the probe went dormant:
 - **(a) unmasked Authorization value** — any `Authorization:[<v>` on the row whose
   value is neither the zot `***` mask (three or more asterisks) nor the shipper's
   `REDACTED` marker. Evaluated per occurrence; a leading decoy cannot mask a real
-  credential. `Authorization:[ ` (a value that empties after the space cut) also
-  fires; a literal `Authorization:[]` is benign.
+  credential. An `Authorization:[` whose value is whitespace-only also fires;
+  a literal `Authorization:[]` is benign.
 - **(b) Doppler token prefix** — `dp.(pt|st|sa|ct).` followed by a token run with
   ≥16 non-separator characters (`.` `_` `-` stripped — padding does not count).
 - **(c) bcrypt prefix** — `$2[aby]$<2 digits>$`.

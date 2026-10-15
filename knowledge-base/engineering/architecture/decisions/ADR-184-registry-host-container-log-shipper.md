@@ -318,7 +318,10 @@ here about redaction as scoped to `zot-log-shipper.sh`.
 an envelope-stamped row read back OUT of the warehouse, which no exit code on the host can fake.
 **(This condition FIRED 2026-08-12T21:03:51Z — see *Amendment 2026-08-12* at the end of this ADR.)**
 
-The probe is enrolled on a **dedicated tracker (#7455)**, never on #7440.
+The probe is enrolled on a **dedicated tracker (#7455)**, never on #7440. That is not a preference:
+the sweeper lists `--state open`, and on the closed issue this PR's `Closes` produces, a correct
+exit-2 probe is a permanent silent no-op with no artifact to flip this ADR.
+
 
 > **Amendment 2026-10-15 (#10321):** enrollment on a tracker is lifetime-bounded — #7455 closed
 > 2026-08-13 and `scripts/sweep-followthroughs.sh` reads only open issues plus closed ones inside
@@ -327,9 +330,7 @@ The probe is enrolled on a **dedicated tracker (#7455)**, never on #7440.
 > The credential-shape arm (unmasked Authorization, `dp.(pt|st|sa|ct).` prefix with substance,
 > bcrypt `$2[aby]$`) is discharged by the standing `logtail_exploration_alert.
 > registry_zot_log_credential_shape` (ADR-218); the probe file remains the manual deep-grader.
- That is not a preference:
-the sweeper lists `--state open`, and on the closed issue this PR's `Closes` produces, a correct
-exit-2 probe is a permanent silent no-op with no artifact to flip this ADR.
+
 
 Deferred work from this change is consolidated on **#7456**: the root-filesystem LUKS exception
 recorded below (expires 2027-02-11), the forward-looking growth-attribution discriminator, and any

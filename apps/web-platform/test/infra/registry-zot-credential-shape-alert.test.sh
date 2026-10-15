@@ -84,7 +84,7 @@ grep -qF 'sql_query = replace(trimspace(local.registry_zot_log_credential_shape_
   || no "the exploration does not carry local.registry_zot_log_credential_shape_sql"
 
 _M="JSONExtractString(raw, 'message')"
-EXPECTED_FLAT="SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}} AND startsWith(raw, '{\"message\":\"SOLEUR_ZOT_LOG ') AND position($_M, 'SOLEUR_ZOT_LOG ') = 1 AND ( arrayExists( v -> v != 'Authorization:[' AND NOT match(v, '^Authorization:\\\\[(\\\\*\\\\*\\\\*|REDACTED)'), extractAll($_M, 'Authorization:\\\\[[^\\\\]\\\\s]*') ) OR match($_M, 'Authorization:\\\\[ ') OR arrayExists( t -> length(replaceRegexpAll(t, '^dp\\\\.(?:pt|st|sa|ct)\\\\.|[._-]', '')) >= 16, extractAll($_M, 'dp\\\\.(?:pt|st|sa|ct)\\\\.[A-Za-z0-9._-]+') ) OR match($_M, '\\\\\$2[aby]\\\\\$[0-9][0-9]\\\\\$') ) GROUP BY time"
+EXPECTED_FLAT="SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}} AND startsWith(raw, '{\"message\":\"SOLEUR_ZOT_LOG ') AND position($_M, 'SOLEUR_ZOT_LOG ') = 1 AND ( arrayExists( v -> v != 'Authorization:[' AND NOT match(v, '^Authorization:\\\\[(\\\\*\\\\*\\\\*|REDACTED)'), extractAll($_M, 'Authorization:\\\\[[^\\\\]\\\\s]*') ) OR match($_M, 'Authorization:\\\\[\\\\s') OR arrayExists( t -> length(replaceRegexpAll(t, '^dp\\\\.(?:pt|st|sa|ct)\\\\.|[._-]', '')) >= 16, extractAll($_M, 'dp\\\\.(?:pt|st|sa|ct)\\\\.[A-Za-z0-9._-]+') ) OR match($_M, '\\\\\$2[aby]\\\\\$[0-9][0-9]\\\\\$') ) GROUP BY time"
 [ "$FLAT" = "$EXPECTED_FLAT" ] \
   && ok "the whole predicate is byte-exact (SELECT, aggregate, all three disjuncts, GROUP BY)" \
   || no "the predicate drifted from the pinned text — diff FLAT against EXPECTED_FLAT"
@@ -111,9 +111,9 @@ grep -qF "extractAll(JSONExtractString(raw, 'message'), 'Authorization:\\\\[[^\\
   && grep -qF "arrayExists( v -> v != 'Authorization:[' AND NOT match(v, '^Authorization:\\\\[(\\\\*\\\\*\\\\*|REDACTED)')" <<<"$FLAT" \
   && ok "arm (a) walks EVERY Authorization:[ value (no decoy masking); exemption is exactly (***|REDACTED)" \
   || no "arm (a) lost the per-occurrence extractAll/arrayExists shape or the mask exemption"
-grep -qF "OR match(JSONExtractString(raw, 'message'), 'Authorization:\\\\[ ')" <<<"$FLAT" \
-  && ok "arm (a') flags 'Authorization:[ ' — a value empty after the space cut fails loud" \
-  || no "the malformed-unmasked conjunct (Authorization:[ ) is missing"
+grep -qF "OR match(JSONExtractString(raw, 'message'), 'Authorization:\\\\[\\\\s')" <<<"$FLAT" \
+  && ok "arm (a') flags 'Authorization:[<whitespace>' — a value empty after the space cut fails loud (tab too, matching the probe)" \
+  || no "the malformed-unmasked conjunct (Authorization:[\\s) is missing"
 
 # Arm (b): Doppler prefix + >=16 non-separator substance.
 grep -qF "extractAll(JSONExtractString(raw, 'message'), 'dp\\\\.(?:pt|st|sa|ct)\\\\.[A-Za-z0-9._-]+')" <<<"$FLAT" \
@@ -155,6 +155,15 @@ alr_kv() { printf '%s' "$ALR_BLOCK" | grep -E "^  $1 +=" | head -1 | sed -E 's/^
 [ "$(alr_kv on_missing_data)" = '"treat_as_zero"' ] \
   && ok "treat_as_zero, so an open incident can observe recovery" \
   || no "on_missing_data is $(alr_kv on_missing_data), want \"treat_as_zero\""
+[ "$(alr_kv confirmation_period)" = "0" ] \
+  && ok "confirmation_period = 0 (one row pages immediately, no dwell)" \
+  || no "confirmation_period is $(alr_kv confirmation_period), want 0"
+[ "$(alr_kv recovery_period)" = "1800" ] \
+  && ok "recovery_period = 1800 (two query windows before an incident closes)" \
+  || no "recovery_period is $(alr_kv recovery_period), want 1800"
+[ "$(alr_kv critical_alert)" = "false" ] && [ "$(alr_kv email)" = "true" ] \
+  && ok "email=true, critical_alert=false — the siblings' severity, not a page-escalation" \
+  || no "alert channel drifted: email=$(alr_kv email) critical=$(alr_kv critical_alert)"
 
 grep -qF 'policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null' <<<"$ALR_BLOCK" \
   && grep -qF 'team_name = var.betterstack_paid_tier ? null : "Your team"' <<<"$ALR_BLOCK" \
@@ -233,13 +242,13 @@ head, block, tail = s[:i], s[i:j], s[j:]
 assert block.count("  value               = 0\n") == 1
 s = head + block.replace("  value               = 0\n", "  value               = 1\n") + tail'
   mutate green "M7 whitespace reflow of the heredoc" tf \
-    'old = "\n        OR match(JSONExtractString(raw, \x27message\x27), \x27Authorization:\\\\[ \x27)"
+    'old = "\n        OR match(JSONExtractString(raw, \x27message\x27), \x27Authorization:\\\\[\\\\s\x27)"
 assert s.count(old) == 1
-s = s.replace(old, " OR\n          match(JSONExtractString(raw, \x27message\x27), \x27Authorization:\\\\[ \x27)")'
+s = s.replace(old, " OR\n          match(JSONExtractString(raw, \x27message\x27), \x27Authorization:\\\\[\\\\s\x27)")'
 fi
 
-_floor=24
-[ -n "${MUT_SKIP:-}" ] && _floor=17
+_floor=27
+[ -n "${MUT_SKIP:-}" ] && _floor=20
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
