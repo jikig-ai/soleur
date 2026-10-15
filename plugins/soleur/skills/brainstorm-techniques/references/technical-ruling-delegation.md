@@ -52,18 +52,7 @@ When a phase reaches a technical ruling, spawn the owner of the domain and conti
   `soleur:legal:clo`. Require **drafted replacement wording** back, not only a verdict.
 - Other domains: the domain leader through the existing domain-leader pattern.
 
-Copy this brief, filling the angle brackets (a CTO that is not told the shape returns an options menu, which is not a ruling):
-
-```text
-Rule on this technical question. Do NOT use AskUserQuestion. Your Decision is BINDING and will be implemented exactly as you return it; nobody can answer a follow-up (this run is headless). Choose ONE option; do not return a menu. You may read the repository to check the evidence. If the evidence is thin, choose the STRICTER option and say what evidence would flip the ruling.
-Question: <the question>
-Evidence (file:line, command output): <evidence>
-Options and trade-offs: <options>
-Brand-survival threshold: <the plan's value>
-Facts that would DISQUALIFY the option not preferred: <facts>
-Reply with exactly these four headings: Decision: / Rationale: / Rejected alternatives: / Dissent:
-(For several pending rows in one spawn, give one such block per row, headed `Item <id>:`.)
-```
+Open the spawn prompt with `Rule on this technical question. Do NOT use AskUserQuestion.` and then give these fields, each filled from the session: Question; Evidence (file:line, command output); Options and trade-offs; Brand-survival threshold (the plan's value); Facts that would DISQUALIFY the option not preferred. For several pending rows in one spawn give one such block per row, headed `Item <id>:`. The opening sentence is the cue that selects the agent's Rule interface (`plugins/soleur/agents/engineering/cto.md`, "Interface selector"); that interface owns the binding reply shape (Decision / Rationale / Rejected alternatives / Dissent), the one-option rule and the stricter default when the evidence is thin, so do not restate them here. A prompt without the cue gets an assessment or an options menu, which is not a ruling. To hand the CTO a whole epic instead of one question, start the prompt `Own the epic` (its record formats: [standing-delegation.md](./standing-delegation.md)).
 
 For legal posture add the governing records (determination, Art. 30 / 30(2) registers, LIA, any instrument) and the binding
 constraints to the brief, and require drafted replacement wording back. Qualified-counsel review is a different act with a

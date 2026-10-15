@@ -53,14 +53,14 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 
 ## Phase 7: cto.md and reference
 
-- 7.1 Rewrite the `cto.md` body (frontmatter byte-identical): interface selector, Rule, Own the epic.
-- 7.2 Test: each existing caller's spawn phrase selects the intended interface.
-- 7.3 Run `bun plugins/soleur/scripts/sync-grok-agent-compat.ts --check` and `sync-cursor-name-map.ts --check`; run the harness-parity census.
+- [x] 7.1 Rewrite the `cto.md` body (frontmatter byte-identical): interface selector, Rule, Own the epic.
+- [x] 7.2 Test: each existing caller's spawn phrase selects the intended interface.
+- [x] 7.3 Run `bun plugins/soleur/scripts/sync-grok-agent-compat.ts --check` and `sync-cursor-name-map.ts --check`; run the harness-parity census.
 
 ## Phase 8: go.md hold routing
 
-- 8.1 Write `plugins/soleur/test/go-hold-routing.test.sh` (tokens, outside markers, fail-closed and ask-once wording, block hash equals merge base).
-- 8.2 Add the paragraph outside the `go-routing` markers.
+- [x] 8.1 Write `plugins/soleur/test/go-hold-routing.test.sh` (tokens, outside markers, fail-closed and ask-once wording, block hash equals merge base).
+- [x] 8.2 Add the paragraph outside the `go-routing` markers.
 
 ## Phase 9: Doctrine
 
