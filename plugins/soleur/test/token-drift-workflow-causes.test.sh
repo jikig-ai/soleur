@@ -1715,6 +1715,7 @@ fi
 # One python source for the scan, the verdict rule and the mutation table, so the file scan and the
 # mutation rows run the SAME code. The mutation rows run in-process (one YAML load, no dump/reload).
 SCAN_PY=$(cat <<'PYD'
+ROWS_MIN = 95
 import copy, re, sys, yaml
 
 SKIP = {"name", "id", "if"}
@@ -1734,10 +1735,17 @@ METHOD = re.compile(r"(?:^|[\s=])(?:-[A-Za-z]*X|--request|--method)[ \t=]*([^\s]
 KEYWORD = re.compile(r"\brequest[ \t]*=[ \t]*(?:DELETE|PUT|POST|PATCH)\b", re.I)
 HTTPIE = re.compile(r"\b(?:http|https|xh)[ \t]+(?:-\S+[ \t]+)*(?:DELETE|PUT|POST|PATCH)\b")
 BARE = re.compile(r"\b(?:DELETE|PUT|POST|PATCH)[ \t]+https?://")
-BODYF = re.compile(r"(?:^|\s)(?:-[A-Za-z]*d(?=[\"'@\s=]|$)|--data(?:-raw|-binary|-urlencode|-ascii)?|--post-data|--post-file|--json|-F|--form|-T|--upload-file)(?=[\s=\"'@]|$)")
+BODYF = re.compile(r"(?:^|\s)(?:-[A-Za-z]*d(?=[\"'@\s=]|$)|--data(?:-raw|-binary|-urlencode|-ascii)?|--post-data|--post-file|--json|-F|--form(?:-string)?|-T|--upload-file)(?=[\s=\"'@]|$)")
+BODYF_FLAT = re.compile(r"\b(?:curl|wget)\b.{0,300}?" + BODYF.pattern)
 CLI = re.compile(r"\bhcloud(?:[ \t]+-\S+(?:[ \t]+[^\s-]\S*)?)*[ \t]+(?:server|volume|firewall|ssh-key|network|floating-ip|primary-ip|image|load-balancer|certificate|placement-group|zone)[ \t]+(?:delete|rm|create|update|detach|attach|enable-protection|disable-protection|shutdown|poweroff|reset|reboot|rebuild|resize|change-[a-z-]+|add-[a-z-]+|remove-[a-z-]+|set-[a-z-]+|assign|unassign)\b")
 DOP = re.compile(r"\bdoppler\b(?:[ \t]+-\S+(?:[ \t]+[^\s-]\S*)?)*[ \t]+(?:configs|environments|projects|secrets|tokens|api|workplace|groups|integrations)\b.{0,80}?\b(?:delete|destroy|revoke)\b", re.I)
-INDIRECT = re.compile(r"\b(?:cat|bash|sh|source)[ \t]+[^\s|>;&]*\.(?:md|txt|tpl|sh|json)\b")
+REPOPATH = re.compile(r"(?:^|[\s<>=\"'(])(?:\.{1,2}/|\.github/|scripts/|docs/|knowledge-base/|plugins/|apps/)\S*")
+BODYFILE = re.compile(r"(?:--body-file|-F[ \t]+body=@)[ \t=]*(\S+)")
+def filer_inline(joined):
+    # a filer builds its body inline: no repo-path token anywhere, and every --body-file operand is the scratch file
+    if REPOPATH.search(joined):
+        return False
+    return all(re.fullmatch(r"[\"']?/tmp/orphan-body(?:-inngest)?\.md[\"']?", m.group(1)) for m in BODYFILE.finditer(joined))
 SCOPE = ("api.hetzner.cloud", "HCLOUD_TOKEN", "api.doppler.com")
 
 def forms(unit):
@@ -1756,6 +1764,8 @@ def write_hit(joined, flat):
         for line in joined.split("\n"):
             if re.search(r"\b(?:curl|wget)\b", line) and BODYF.search(line):
                 return True
+        if BODYF_FLAT.search(flat):
+            return True
     return False
 
 def scan(wf):
@@ -1775,7 +1785,7 @@ def scan(wf):
         if is_step and str(unit.get("name", "")).startswith("File an issue for orphaned rehearsal hosts"):
             label = ("rung2" if "app%3Dsoleur-rung2-rehearsal" in joined
                      else "inngest" if "app%3Dsoleur-inngest-provision-rehearsal" in joined else "?")
-            ok = "label_selector=" in joined and "uses" not in unit and not INDIRECT.search(joined)
+            ok = "label_selector=" in joined and "uses" not in unit and filer_inline(joined)
             recs.append(("filer", "%s:%s" % ("ok" if ok else "bad", label)))
     return recs, n
 
@@ -1833,6 +1843,17 @@ ROWS = [
     ("d-upper",   "destroy", "run",  "doppler api DELETE /v3/configs/config"),
     ("d-rewrap",  "destroy", "run",  "echo \"run `doppler configs\"\necho \"delete scratch -p soleur`\""),
     ("filer-cat", "filer-bad", "filer", "cat docs/orphan-remedy.md >> /tmp/orphan-body.md"),
+    ("filer-envsubst", "filer-bad", "filer", "envsubst < .github/templates/orphan.md.tmpl >> /tmp/orphan-body.md"),
+    ("filer-cp", "filer-bad", "filer", "cp docs/orphan-remedy.md /tmp/orphan-body.md"),
+    ("filer-bodyfile", "filer-bad", "filer", "gh issue comment 1 --body-file knowledge-base/x/remedy.md"),
+    ("filer-uppercase", "filer-bad", "filer", "cat docs/Orphan.MD >> /tmp/orphan-body.md"),
+    ("filer-bodyfile-other", "filer-bad", "filer", "gh issue comment 1 --body-file \"$RUNNER_TEMP/remedy.md\""),
+    ("filer-ok", "filer-ok", "filer", "gh issue comment 1 --body-file /tmp/orphan-body.md"),
+    ("data-wrapped", "write", "run", "echo 'curl -sS -H \"Authorization: Bearer $HCLOUD_TOKEN\" \\'\necho '  -d \"{}\" https://api.hetzner.cloud/v1/volumes/1/actions/change_protection'"),
+    ("json-wrapped", "write", "run", "echo 'curl -sS -H \"Authorization: Bearer $HCLOUD_TOKEN\" \\'\necho '  --json {} https://api.hetzner.cloud/v1/volumes/1/actions/change_protection'"),
+    ("form-long", "write", "run", "curl -sS --form a=b https://api.hetzner.cloud/v1/volumes/1"),
+    ("form-string", "write", "run", "curl -sS --form-string a=b https://api.hetzner.cloud/v1/volumes/1"),
+    ("post-file", "write", "run", "wget --post-file=f https://api.hetzner.cloud/v1/volumes/1"),
     ("g-list",    "none",    "run",  'curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN" "https://api.hetzner.cloud/v1/servers?label_selector=a"'),
     ("g-get",     "none",    "run",  "curl -sS -X GET https://api.hetzner.cloud/v1/servers"),
     ("g-head",    "none",    "run",  "curl -sS -X HEAD https://api.hetzner.cloud/v1/servers"),
@@ -1841,6 +1862,14 @@ ROWS = [
     ("g-doppler", "none",    "run",  "doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain"),
     ("g-gh",      "none",    "run",  "gh issue create --title t --body-file b"),
 ]
+
+# one row per alternative of each matcher family, so a tidy-up that drops one token goes red
+for _res in ("firewall", "ssh-key", "network", "floating-ip", "primary-ip", "image", "load-balancer", "certificate", "placement-group", "zone"):
+    ROWS.append(("hc-res-" + _res, "write", "run", "hcloud %s delete 1" % _res))
+for _verb in ("rm", "create", "update", "attach", "enable-protection", "disable-protection", "shutdown", "reset", "reboot", "rebuild", "resize", "change-type", "add-label", "remove-label", "set-rdns", "assign", "unassign"):
+    ROWS.append(("hc-verb-" + _verb, "write", "run", "hcloud server %s 1" % _verb))
+for _res in ("tokens", "workplace", "groups", "integrations"):
+    ROWS.append(("d-res-" + _res, "destroy", "run", "doppler %s delete x" % _res))
 
 def build(wf, row, field, payload):
     m = copy.deepcopy(wf)
@@ -1888,13 +1917,15 @@ if __name__ == "__main__":
         ctl = (verdict("write", [], 0) is False and verdict("none", ["write"], 1) is False
                and verdict("write", ["write"], 1) is True and verdict("none", [], 0) is True)
         print("%s\tcontrol\tverdict rule rejects a missed red and a flagged green, accepts the right ones" % ("PASS" if ctl else "FAIL"))
-        print("%s\trows\t%d mutation rows (table intact)" % ("PASS" if len(ROWS) >= 50 else "FAIL", len(ROWS)))
+        print("%s\trows\t%d mutation rows (table intact)" % ("PASS" if len(ROWS) >= ROWS_MIN else "FAIL", len(ROWS)))
+        results = []
         for row, expect, field, payload in ROWS:
             recs, n = scan(build(wf, row, field, payload))
-            if expect == "filer-bad":
+            if expect in ("filer-bad", "filer-ok"):
                 nbad = len([r for r in recs if r[0] == "filer" and r[1].startswith("bad")])
-                ok = nbad == len(base_filer_bad) + 1
-                print("%s\t%s\t%s" % ("PASS" if ok else "FAIL", row, "filer indirection is flagged" if ok else "a filer assembling its body from a repo file was NOT flagged"))
+                ok = nbad == len(base_filer_bad) + (1 if expect == "filer-bad" else 0)
+                print("%s\t%s\t%s" % ("PASS" if ok else "FAIL", row, ("filer indirection is flagged" if expect == "filer-bad" else "an inline filer is not flagged") if ok else "filer verdict wrong (%s): bad filers %d" % (expect, nbad)))
+                results.append(ok)
                 continue
             marker = {"jobenv": "(job-level)", "wfenv": "(workflow-level)"}.get(field, "ZZ injected " + row)
             mine = [r for r in recs if r[0] in ("write", "destroy") and marker in r[1]]
@@ -1903,6 +1934,8 @@ if __name__ == "__main__":
             ok = verdict(expect, hit, other)
             what = "legitimate input is not flagged" if expect == "none" else "injected %s is flagged under its own unit" % expect
             print("%s\t%s\t%s" % ("PASS" if ok else "FAIL", row, what if ok else "wrong verdict (expect %s, got %s, collateral %d)" % (expect, hit or "nothing", other)))
+            results.append(ok)
+        print("RESULT\t%d\t%d" % (len(results), len([r for r in results if not r])))
 PYD
 )
 
@@ -1950,27 +1983,40 @@ else
   fail "the R1/R2 scan could pass over nothing, or a filer's text lives outside the scanned YAML (${_nf} filer(s))"
 fi
 
+runbook_heading_ok() { grep -qE '^### Reclaiming survivors that state forgot( |$)' "$1"; }
 echo "R4: the filers' pointer to the reclaim procedure resolves (the heading exists in the runbook)"
 _rb="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md"
 _head="Reclaiming survivors that state forgot"
-if grep -qF "### Reclaiming survivors that state forgot" "$_rb" \
-   && [[ "$(python3 -c 'import re,sys,yaml; w=yaml.safe_load(open(sys.argv[1])); print(sum(re.sub(r"[\"\\\\]\s*\n\s*echo [\"]"," ",str(s.get("run",""))).count(sys.argv[2]) for j in w["jobs"].values() for s in j.get("steps",[]) or []))' "$WF" "$_head")" -ge 2 ]]; then
-  pass "both filer bodies name the runbook section and the section exists"
+printf '#### Reclaiming survivors that state forgot\nsee "### Reclaiming survivors that state forgot" in prose\n' > "$TMP/rb-neg.md"
+printf '### Reclaiming survivors that state forgot (x)\n' > "$TMP/rb-pos.md"
+if runbook_heading_ok "$_rb" && runbook_heading_ok "$TMP/rb-pos.md" && ! runbook_heading_ok "$TMP/rb-neg.md" \
+   && python3 -c 'import re,sys,yaml; w=yaml.safe_load(open(sys.argv[1])); c=[re.sub(r"[\"\\\\]\s*\n\s*echo [\"]"," ",str(s.get("run",""))).count(sys.argv[2]) for j in w["jobs"].values() for s in j.get("steps",[]) or [] if str(s.get("name","")).startswith("File an issue for orphaned rehearsal hosts")]; sys.exit(0 if len(c)>=2 and min(c)>=1 else 1)' "$WF" "$_head"; then
+  pass "each filer body names the runbook section, the section exists as a real heading, and a demoted or prose-only mention does not satisfy the check"
 else
-  fail "a filer body no longer names '${_head}' or the runbook heading was renamed — the issue would point at nothing"
+  fail "a filer body no longer names '${_head}', the runbook heading was renamed or demoted, or the heading check cannot reject a prose-only mention — the issue would point at nothing"
 fi
 
 # R5 — the mutation table runs in-process (python, one YAML load); each row injects one spelling into a
 # copy of the workflow. A red row must be flagged under its OWN unit; a green row must produce no
 # finding. The control rows prove the verdict rule can fail in both directions and the table is intact.
+R5_MIN=97
 echo "R5: mutation rows — every spelling of an injected write/destroy is RED, legitimate steps are GREEN"
 R5_OUT=$(python3 -c "$SCAN_PY" mutate "$WF") || { echo "FATAL: the mutation runner crashed" >&2; exit 2; }
-_r5n=0
+r5_line() { if [[ "$1" == "PASS" ]]; then pass "R5/$2: $3"; else fail "R5/$2: $3"; fi; }
+# the consumer is a verdict-owning helper: drive it once each way with stubbed counters, so a mapping
+# that always passes (or always fails) is caught here and not only through the python rows
+_c_fail=$( ( pass() { echo P; }; fail() { echo F; }; r5_line FAIL probe x ) )
+_c_pass=$( ( pass() { echo P; }; fail() { echo F; }; r5_line PASS probe x ) )
+if [[ "$_c_fail" == "F" && "$_c_pass" == "P" ]]; then pass "R5/consumer: the verdict mapping fails a FAIL line and passes a PASS line"
+else fail "R5/consumer: the verdict mapping does not discriminate (FAIL->'${_c_fail}', PASS->'${_c_pass}')"; fi
+_r5n=0; _r5res=""
 while IFS=$'\t' read -r _verdict _row _msg; do
+  if [[ "$_verdict" == "RESULT" ]]; then _r5res="$_row/$_msg"; continue; fi
   _r5n=$((_r5n + 1))
-  if [[ "$_verdict" == "PASS" ]]; then pass "R5/${_row}: ${_msg}"; else fail "R5/${_row}: ${_msg}"; fi
+  r5_line "$_verdict" "$_row" "$_msg"
 done <<<"$R5_OUT"
-(( _r5n >= 52 )) || { echo "FATAL: the mutation runner produced only ${_r5n} verdict lines" >&2; exit 2; }
+[[ -n "$_r5res" ]] || { echo "FATAL: the mutation runner printed no RESULT line" >&2; exit 2; }
+(( _r5n >= R5_MIN )) || { echo "FATAL: the mutation runner produced only ${_r5n} verdict lines" >&2; exit 2; }
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
@@ -1986,13 +2032,13 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 #
 # Raised 57 -> 60 with #7234's F5 (the for_each list IS the inventory) and C-a
 # (`config = each.key`, never a literal), then 60 -> 61 with F4b (the inventory's name set
-# never shrinks), then 61 -> 120 with R1-R5 (no step prints or runs a Hetzner write or Doppler
-# destroy, #9927 item 8c: 4 assertions + 55 mutation-runner verdicts). 120 is the REALIZED `PASS + FAIL`, and the number
+# never shrinks), then 61 -> 163 with R1-R5 (no step prints or runs a Hetzner write or Doppler
+# destroy, #9927 item 8c: 5 assertions + 97 mutation-runner verdicts). 163 is the REALIZED `PASS + FAIL`, and the number
 # in this comment and the number in the guard below MUST be the same number. They disagreed once
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
-if [[ "$((PASS + FAIL))" -lt 120 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 120." >&2
+if [[ "$((PASS + FAIL))" -lt 163 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 163." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

@@ -180,11 +180,15 @@ unlabeled object, and an id outside the listing is out of bounds. Doppler object
 name: the rung-2 scratch config is `prd_git_data_rehearsal_<run id>` in project `soleur` (environment `prd`), and the
 inngest scratch environment is `rehearsal_<run id>` in project `soleur-inngest`. Any other name is out of bounds.
 
-1. Re-run the read-only listing from the issue body. Require HTTP 200 per kind (use `curl -f` or print the status
-   code): an auth or rate-limit error prints nothing and would read as "empty".
-2. Before each write, read the object (`GET /v1/<kind>/<id>`) and require: `labels.app` equals the expected rehearsal
-   value, `protection.delete` is false, a volume's `server` is null or a listed rehearsal server, and a firewall's
-   `applied_to` holds only listed rehearsal servers. Show that output with the command (`hr-bulk-delete-per-item-live-infra-role-check`).
+1. Re-run the read-only listing from the issue body. Require HTTP 200 per kind (use `curl -f` and `set -o pipefail`,
+   or print the status code): an auth or rate-limit error prints nothing through the `jq` filter and would read as
+   "empty".
+2. Before each write, read the object (`GET /v1/<kind>/<id>`; the response wraps it, so the fields are
+   `volume.labels.app` and so on) and require: `labels.app` equals the expected rehearsal value; for a server or volume,
+   `protection.delete` is false (firewalls and ssh keys have no protection object); a volume's `server` is null or a
+   listed rehearsal server; a firewall's `applied_to` holds only listed rehearsal servers. Never act on volume 106903269
+   or web-1 volume 106443278, whatever the listing shows. Show that output with the command
+   (`hr-bulk-delete-per-item-live-infra-role-check`).
 3. Delete in dependency order, server first, then its volumes, firewalls, ssh keys: `DELETE /v1/<kind>/<id>`. Detach a
    volume (`POST /v1/volumes/<id>/actions/detach`) only if the read in step 2 shows it attached. If a delete is
    refused (for example `resource_in_use`), stop and report; do not unprotect, relabel or detach by other means.
@@ -192,7 +196,10 @@ inngest scratch environment is `rehearsal_<run id>` in project `soleur-inngest`.
    `prd_git_data_rehearsal_*` that the issue listed; list configs first and compare the name character for
    character. Never `environments delete` for rung-2 (that removes the production `prd` environment). Doppler,
    inngest: `environments delete` with `-p soleur-inngest`, only on a slug matching `rehearsal_*` that the issue listed.
-5. Verify: re-run the listing; empty output with HTTP 200 for every kind means reclaimed.
+5. Before a Doppler delete, confirm no rehearsal run is in flight (the config or environment is live while its
+   rehearsal workflow runs). A `server(name):` line in the issue that the label listing does not return is a
+   name-prefix hit with a different label: report it to the owner instead of acting on it.
+6. Verify: re-run the listing; empty output with HTTP 200 for every kind means reclaimed.
 
 A label-scoped reclaim dispatch (so step 3 needs no ad hoc API call) is a candidate follow-up, recorded on #9927.
 
