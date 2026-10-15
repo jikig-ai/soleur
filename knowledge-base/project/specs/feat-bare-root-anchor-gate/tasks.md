@@ -53,21 +53,21 @@ Issue: #10383
   — idiom rule (session-start bare-CWD detection + redirect; overlay is a
   maintained mirror) + Alternatives-considered row (deny/auto-create/
   plugin-arm/do-nothing).
-- [ ] 4.2 File follow-up issue A — bare-root scratch cleanup
+- [x] 4.2 File follow-up issue A — bare-root scratch cleanup
   (operator-authorized; stop anchored sessions; `diff HEAD` enumeration;
   preserve the mirror / `.mcp.json` / `plugins/` per ADR-179).
-- [ ] 4.3 File follow-up issue B — plugin-level `""`-matcher arm
+- [x] 4.3 File follow-up issue B — plugin-level `""`-matcher arm
   (cross-repo) + audit sibling SessionStart scripts
   (`ensure-kb-index.sh`, `memory-backstop-resolve.sh`,
   `supabase-loopback-warn.sh`) for bare-root write behavior.
 - [x] 4.4 Edit `plugins/soleur/commands/go.md` — one sentence in the Step 1
   bare-repo guard paragraph noting the earlier session-start layer (outside
   `eval-gate:block:go-routing`).
-- [ ] 4.5 Run the new suites + `git-lock-marker-telemetry.test.ts` +
+- [x] 4.5 Run the new suites + `git-lock-marker-telemetry.test.ts` +
   `session-rules-loader.test.sh`; verify every plan AC.
 
 ## Acceptance cross-check
 
-- [ ] 5.1 All `## Acceptance Criteria` items in the plan verified against
+- [x] 5.1 All `## Acceptance Criteria` items in the plan verified against
   the diff; `git grep -l SOLEUR_BARE_ROOT_CWD` covers helper, diag,
   MARKER_RE, both test files, probe.
