@@ -93,6 +93,13 @@ const RUNTIME_FLAGS = {
   // it is a separate, operator-visible flip after >=7 days of prd telemetry.
   // Fail-closed: FLAG_UNTRUSTED_CONTENT_WRAP=0 mirror.
   "untrusted-content-wrap": "FLAG_UNTRUSTED_CONTENT_WRAP",
+  // #9545 / ADR-288 — egress audit rollup collection (the Vector -> app ingest route,
+  // apps/web-platform/server/egress-audit-ingest.ts). Dark by default and evaluated PER
+  // ORG after the ingest route has authenticated the batch: environment default OFF
+  // (kill switch), a Jikigai-owned canary org enabled by a per-org segment override (ruling
+  // A); external orgs stay OFF until PR2 ships. Read ONLY through the ingest module.
+  // Fail-closed: FLAG_EGRESS_AUDIT_COLLECTION=0 mirror.
+  "egress-audit-collection": "FLAG_EGRESS_AUDIT_COLLECTION",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;

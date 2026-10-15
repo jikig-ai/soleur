@@ -24,10 +24,10 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-workspace-egress-audit-log-p
 
 ## Phase 2: Ingest route and server module
 
-- [ ] 2.1 RED: `test/egress-audit-ingest.test.ts` (token current/previous/unrelated, constant-time, body cap, zod, bucket bounds, flag-off 2xx before secret check, unknown workspace skipped, Sentry mirror debounced)
-- [ ] 2.2 `server/egress-audit-ingest.ts` and `app/api/internal/egress-audit-ingest/route.ts` (HTTP-method exports only; loopback `Host`, reject forwarding headers)
-- [ ] 2.3 `PUBLIC_PATHS` exact entry in `lib/routes.ts` and the csrf-coverage exemption
-- [ ] 2.4 Runtime flag created with `soleur:flag-create` (the typed-`yes` step is handed to the operator); `.env.example` and `lib/feature-flags/server.ts`
+- [x] 2.1 RED: `test/egress-audit-ingest.test.ts` (token current/previous/unrelated, constant-time, body cap, zod, bucket bounds, flag-off 2xx before secret check, unknown workspace skipped, Sentry mirror debounced)
+- [x] 2.2 `server/egress-audit-ingest.ts` and `app/api/internal/egress-audit-ingest/route.ts` (HTTP-method exports only; loopback `Host`, reject forwarding headers)
+- [x] 2.3 `PUBLIC_PATHS` exact entry in `lib/routes.ts` and the csrf-coverage exemption
+- [x] 2.4 Flag wired in `lib/feature-flags/server.ts`, `.env.example`, `flip.sh` and every flag-map fixture; `create.sh --flagsmith-only --dry-run` previewed. The Flagsmith feature itself is the operator's typed-`yes` step (not run by the agent)
 
 ## Phase 3: Gateway log and Vector config
 

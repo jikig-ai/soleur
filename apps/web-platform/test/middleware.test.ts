@@ -90,6 +90,16 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/internal")).toBe(false);
     });
 
+    test("/api/internal/egress-audit-ingest is public (Bearer-gated by route, not Supabase)", () => {
+      // Vector on the same host posts the egress rollup with no session cookie; without
+      // PUBLIC_PATHS membership Supabase middleware would 307 it to /login before the
+      // route's loopback-Host / forwarding-header / bearer gates run (#9545).
+      expect(PUBLIC_PATHS).toContain("/api/internal/egress-audit-ingest");
+      expect(isPublicPath("/api/internal/egress-audit-ingest")).toBe(true);
+      // Narrow exact entry: a sibling or a sub-path is not session-bypassed by prefix.
+      expect(isPublicPath("/api/internal/egress-audit-ingest-admin")).toBe(false);
+    });
+
     test("/api/internal/cohort is public (Bearer-gated by route, not Supabase)", () => {
       // #8880 — the cohort-tag PATCH is an operator curl (cookieless). Without
       // PUBLIC_PATHS membership the middleware 307s to /login before the
