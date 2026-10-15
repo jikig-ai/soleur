@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(Bash|exec)$",
+        "matcher": "^(Bash|exec|run_command)$",
         "hooks": [
           {
             "type": "command",
@@ -12,7 +12,7 @@
         ]
       },
       {
-        "matcher": "^(Bash|Monitor|Write|Edit|MultiEdit|NotebookEdit)$",
+        "matcher": "^(Bash|Monitor|Write|Edit|MultiEdit|NotebookEdit|run_command|write_to_file|replace_file_content)$",
         "hooks": [
           {
             "type": "command",
@@ -22,7 +22,7 @@
         ]
       },
       {
-        "matcher": "^Bash$",
+        "matcher": "^(Bash|run_command)$",
         "hooks": [
           {
             "type": "command",
@@ -48,6 +48,15 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/devin-session-start.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/antigravity-session-start.sh\""
           }
         ]
       },
