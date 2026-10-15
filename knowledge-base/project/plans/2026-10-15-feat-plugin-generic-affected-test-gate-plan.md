@@ -16,6 +16,24 @@ Ship the plugin-generic, stack-detecting affected-only test gate — deliverable
 
 This run is deliberately scoped to deliverable 2. Deliverable 1 (Soleur-repo over-selection fix) landed via #9306 and follow-ups; deliverable 3 (#8231 parallel scheduler) is a documented non-goal here — its green-baseline precondition does not hold.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-15
+**Sections enhanced:** Research Insights (premise validation vs. live `origin/main`), file lists (made explicit), guard contracts (lint-verified), wiring design (pin-test interaction discovered)
+**Research agents used:** none spawnable — Devin subagent context has no Task/agent tool; every check was discharged by direct measurement in-session
+
+### Key Improvements
+
+1. Verified all cited issues/PRs live (`gh issue view`, `gh pr view 9306` → MERGED) and all cited rule IDs against `AGENTS.md`/`scripts/migrated-rule-ids.txt` — no stale or fabricated citations.
+2. Corrected the inherited plan's stale assumptions: ADR-262 is taken (next free on fresh `origin/main` = ADR-288); skill-body headroom shrank to 8–183 B; vitest selector is the `related` subcommand (#9815).
+3. Discovered the `fullsuite-merge-gate.test.ts` pin interaction — replacing the ship Phase 4 `test-all.sh --affected` dispatch without updating that test reds it; the re-pin is now an explicit Files-to-Edit entry.
+4. Deliverable-1 residual audit: pre-pass cache (#9824), edge-token `..` resolution (D1), subcommand skip, kb-consumers ratchet and shard-legs regen all landed; #9564/#9441 remain open and are recorded, not re-implemented.
+
+### New Considerations Discovered
+
+- `affected-tests.test.sh` must rely on the name-stem edge (`<x>.test.sh → <x>.sh`); a manual `AFFECTED_*_PATHS` entry for a glob-registered suite classes INDEX-UNBOUND and degrades the repo gate to full (2026-10-14 learning).
+- #10333's `TEST_GROUP=affected` seat-scoping rewrite is explicitly out of scope but shares a sentence region in `review`/`work` — merge-order risk noted.
+
 ## Research Insights
 
 **Premise Validation (Phase 0.6).** Cited refs checked: #9307 (OPEN — umbrella; progress checklist shows PR 2 unchecked), PR #9306 (MERGED 2026-10-01: anchored edges + `--print-selection`), #8231 (OPEN, p3-low), #8621, #10333, #9729, #9564, #9441, #9340 (all OPEN). Held:
@@ -142,6 +160,29 @@ Every phase is test-first (`cq-write-failing-tests-before`): the failing test or
 **Phase 5 — ADR + build-versus-buy verdict.**
 
 - Author `ADR-<next>` "The plugin ships a stack-agnostic affected-test gate; the repo-local runner is the override" via `soleur:architecture` (provisional ordinal — highest on this base is ADR-287; re-probe every `origin/*` ref immediately before merge): scopes ADR-183 for repos with no Soleur runner; states which parallelism model each repo kind gets (native workers for user repos; the Soleur bash runner stays serial until #8231's precondition holds — ADR-133's verdict does not transfer between hosts); the exit-code contract and runner-code mapping; cloud behavior; the `toolchain` plugin verdict (time-boxed read, MIT terms, adopt-with-attribution or reject-with-reasons).
+
+## Files to Create
+
+- `plugins/soleur/scripts/affected-tests.sh` — the gate entry point
+- `plugins/soleur/scripts/lib/affected-tests/common.sh` — shared helpers (ncpu, process count, timeout portability, emit/finish)
+- `plugins/soleur/scripts/lib/affected-tests/js.sh` — vitest/jest adapter
+- `plugins/soleur/scripts/lib/affected-tests/python.sh` — pytest/testmon/xdist adapter
+- `plugins/soleur/scripts/lib/affected-tests/go.sh` — `go list` reverse-dependency adapter
+- `plugins/soleur/scripts/lib/affected-tests/nx-turbo.sh` — nx/turbo adapter
+- `plugins/soleur/scripts/affected-tests.test.sh` — the contract suite (glob-registered via `SUITE_GLOBS`; name-stem edge, no manual declaration)
+- `plugins/soleur/skills/ship/references/affected-gate-contract.md` — shared contract reference
+- `knowledge-base/engineering/architecture/decisions/ADR-<next>-*.md` — the ADR-242 cross-repo extension (provisional ordinal)
+
+## Files to Edit
+
+- `plugins/soleur/skills/ship/SKILL.md` — Phase 4 dispatch (pointer-only, ≤183 B net)
+- `plugins/soleur/skills/work/SKILL.md` — Phase 2 exit dispatch (≤10 B net)
+- `plugins/soleur/skills/review/SKILL.md` — lead gate + seat-scope pointer (≤8 B net)
+- `plugins/soleur/skills/test-fix-loop/SKILL.md` — name the entry point
+- `plugins/soleur/scripts/grok-pre-push-gate.sh` — resolve gate via `dirname "$0"`
+- `plugins/soleur/test/fullsuite-merge-gate.test.ts` — re-pin the dispatch contract
+- `plugins/soleur/skills/ship/scripts/battery-owed.sh` — conditional: only if its probes assume `scripts/test-all.sh` exists (verify at work time)
+- `scripts/lib/test-affected-paths.sh` — conditional: only if the affected census requires classifying the new suite beyond its name-stem edge (triggers `runner-changed` on this PR — expected, stated in PR body)
 
 ## Alternative Approaches Considered
 
