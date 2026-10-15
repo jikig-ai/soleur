@@ -1574,6 +1574,16 @@ def build_parser():
 _OUTPUT_FLAGS = ("--out", "--command-out", "--display-out")
 
 
+def _note(exc, site):
+    # Class name and a static site label only. Never str(exc)/repr(exc): exception text can carry a path or
+    # the founder's command. `site` is a string literal at every call site.
+    try:
+        sys.stderr.write("founder-check: swallowed %s at %s\n" % (type(exc).__name__, site))
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass  # a closed or full stderr must not turn a swallowed error into a crash
+
+
 def _clear_outputs(argv):
     """Remove the files a run is about to write, BEFORE argument parsing. A stale decision record or
     command file from an earlier run must never survive a run that dies early (a usage error, a
@@ -1591,8 +1601,8 @@ def _clear_outputs(argv):
         try:
             if os.path.islink(p) or os.path.isfile(p):
                 os.unlink(p)
-        except OSError:
-            pass
+        except OSError as exc:
+            _note(exc, "clear-output")
 
 
 def main(argv=None):
@@ -1603,14 +1613,14 @@ def main(argv=None):
         return args.fn(args)
     except Exception as e:  # a traceback is an unreadable verdict: print a one-line FAIL and a distinct rc
         line = json.dumps({"outcome": "FAIL", "reason": "internal-error", "environmental": True,
-                           "detail": f"{type(e).__name__}: {str(e)[:120]}"})
+                           "detail": type(e).__name__})  # class name only: exception text can carry a path or the command
         out = getattr(args, "out", None)
         if out:
             try:
                 with open(out, "w", encoding="utf-8") as fh:
                     fh.write(line + "\n")
-            except OSError:
-                pass
+            except OSError as exc:
+                _note(exc, "out-file-write")
         print(line)
         return 4
 

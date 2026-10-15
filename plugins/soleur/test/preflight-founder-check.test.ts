@@ -1585,6 +1585,108 @@ describe("verify: outputs and failure modes", () => {
   });
 });
 
+// The probe text is identical in the four suites whose scripts gain a `_note` helper (PR2 of #10331).
+const NOTE_PROBE = String.raw`import ast, importlib.util, io, os, sys
+spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+def say(ok, name):
+    print(("OK " if ok else "NOT-OK ") + name)
+
+class Boom(OSError):
+    pass
+
+def run_note(exc, stream):
+    real, sys.stderr = sys.stderr, stream
+    try:
+        mod._note(exc, "probe")
+    finally:
+        sys.stderr = real
+
+buf = io.StringIO()
+run_note(Boom("CANARY-7f3a"), buf)
+line = buf.getvalue()
+say(line.endswith(" swallowed Boom at probe\n") and line.count("\n") == 1, "line-shape")
+say("CANARY" not in line, "canary-absent")
+
+class Failing:
+    def __init__(self, exc):
+        self.exc = exc
+    def write(self, s):
+        raise self.exc
+    def flush(self):
+        raise self.exc
+
+for name, exc in (("oserror-stderr", OSError("w")), ("valueerror-stderr", ValueError("w"))):
+    try:
+        run_note(Boom("x"), Failing(exc))
+        say(True, name)
+    except BaseException:
+        say(False, name)
+
+closed = open(os.devnull, "w")
+closed.close()
+try:
+    run_note(Boom("x"), closed)
+    say(True, "closed-stderr")
+except BaseException:
+    say(False, "closed-stderr")
+
+def census(src):
+    calls, bad = 0, []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_note":
+            calls += 1
+            lit = (len(node.args) == 2 and not node.keywords
+                   and isinstance(node.args[0], ast.Name)
+                   and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str))
+            if not lit:
+                bad.append(node.lineno)
+    return calls, bad
+
+calls, bad = census(open(sys.argv[1], encoding="utf-8").read())
+say(calls >= 1 and not bad, "census-literal-labels")
+say(census("_note(exc, site='x')")[1] != [], "census-rejects-keyword")
+say(census("_note(str(exc), 'a')")[1] != [], "census-rejects-computed")
+say(census("_note(exc, 'a')") == (1, []), "census-accepts-literal")
+`;
+
+describe("swallowed note: the class name and a literal site label only", () => {
+  test("the unit probe: line shape, canary absent, failing and closed stderr safe, literal-label census", () => {
+    const r = spawnSync("python3", ["-I", "-", SCRIPT], { input: NOTE_PROBE, encoding: "utf8", timeout: 25_000, env: process.env });
+    const lines = (r.stdout ?? "").split("\n");
+    for (const tok of [
+      "line-shape",
+      "canary-absent",
+      "oserror-stderr",
+      "valueerror-stderr",
+      "closed-stderr",
+      "census-literal-labels",
+      "census-rejects-keyword",
+      "census-rejects-computed",
+      "census-accepts-literal",
+    ]) {
+      expect(lines).toContain(`OK ${tok}`);
+    }
+  });
+
+  test("an unwritable --out inside the fail-closed arm is noted, and rc 4 and the verdict line are unchanged", () => {
+    const missing = join(TMP, "fc-note-does-not-exist");
+    const outDir = mkdtempSync(join(TMP, "fc-note-out-"));
+    made.push(outDir);
+    const env = gitFixtureEnv(TMP);
+    const plain = runPy(["verify", "--repo", missing], { cwd: TMP, env });
+    const noted = runPy(["verify", "--repo", missing, "--out", outDir], { cwd: TMP, env });
+    expect([plain.status, noted.status]).toEqual([4, 4]);
+    expect(noted.stdout).toBe(plain.stdout);
+    expect(noted.stdout.startsWith('{"outcome": "FAIL", "reason": "internal-error", "environmental": true, "detail": "')).toBe(true);
+    expect(String(plain.json?.detail)).toMatch(/^[A-Za-z]+$/); // the class name only: no exception text
+    expect(plain.stderr).not.toContain("swallowed");
+    expect(noted.stderr.split("\n").filter((l) => l.includes("swallowed"))).toEqual(["founder-check: swallowed IsADirectoryError at out-file-write"]);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 describe("classify: the verdict matrix (in-process)", () => {
   // [rc, stdout, expected, polarity, first_token, sandbox_healthy] -> [outcome, matched, reason]

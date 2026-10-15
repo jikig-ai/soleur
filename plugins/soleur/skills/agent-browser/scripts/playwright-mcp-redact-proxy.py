@@ -128,6 +128,22 @@ def log(msg: str) -> None:
     sys.stderr.flush()
 
 
+def _note(exc: BaseException, site: str) -> None:
+    # Class name and a static site label only. Never str(exc)/repr(exc)/input text: exception text can carry page
+    # content, and Claude Code persists this stderr. `site` is a string literal at every call site. RuntimeError is
+    # in the guard because teardown can run from the SIGTERM handler, where a reentrant stderr write raises it.
+    try:
+        log(f"swallowed {type(exc).__name__} at {site}")
+    except (OSError, ValueError, RuntimeError):
+        pass  # a closed, full or busy stderr must not turn a swallowed error into a crash
+
+
+def _flush_notes(pending: List[Tuple[BaseException, str]]) -> None:
+    # Emits the (exc, literal-label) pairs a handler collected while it must not write to stderr (see teardown).
+    for exc, label in pending:
+        _note(exc, label)
+
+
 def refuse_start(reason: str) -> NoReturn:
     log(f"refusing to start: {reason}")
     os._exit(2)
@@ -658,8 +674,8 @@ class Proxy:
             assert self.child is not None and self.child.stdin is not None
             try:
                 write_line(self.child.stdin, jsonrpc_error(msg.get("id"), -32601, "method not relayed by playwright-mcp-redact-proxy"))
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as exc:
+                _note(exc, "reply-unrelayed-request")
             return
         if method in PASSTHROUGH_NOTIFICATIONS:
             rebuilt: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
@@ -721,7 +737,7 @@ class Proxy:
             try:
                 parsed = json.loads(cand)
             except (ValueError, RecursionError):
-                continue
+                continue  # a per-line probe over page text: most lines are not JSON, the negative result is the normal one
             # No newline requirement: one row returned by `ariaSnapshot()` on a
             # single locator is a whole tree to the redactor's predicate.
             if any(self.looks_like_a11y_tree(s) for s in json_strings(parsed)):
@@ -820,7 +836,7 @@ class Proxy:
                 try:
                     self.child.wait(timeout=0.05)
                 except subprocess.TimeoutExpired:
-                    pass
+                    pass  # a 50 ms poll: the child still running is the normal outcome of each tick
             if not self.group_alive():
                 return True
             time.sleep(0.05)
@@ -834,42 +850,46 @@ class Proxy:
         if child is None:
             log(f"no child to tear down ({why})")
             os._exit(1)
+        # Notes are collected here and written after the kill ladder: teardown also runs from on_signal, and a
+        # stderr write that raises ahead of os.killpg would skip the group kill, the proxy's core invariant.
+        pending: List[Tuple[BaseException, str]] = []
         try:
             if child.stdin and not child.stdin.closed:
                 child.stdin.close()
-        except OSError:
-            pass
+        except OSError as exc:
+            pending.append((exc, "teardown-stdin-close"))
         try:
             child.wait(timeout=STDIN_CLOSE_WAIT_S)
         except subprocess.TimeoutExpired:
-            pass
+            pass  # the designed route into the SIGTERM step: a child that ignores EOF is the case the ladder exists for
         # Always signal the GROUP: the direct child (npx) may already have exited
         # while Chrome, its grandchild, still holds the group.
         try:
             os.killpg(self.pgid, signal.SIGTERM)
         except ProcessLookupError:
-            pass
+            pass  # the group is already empty after a clean exit: the normal outcome of every clean session
         if not self.wait_group_empty(self.grace):
             log(f"group {self.pgid} survived SIGTERM; SIGKILL sent")
             try:
                 os.killpg(self.pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            except ProcessLookupError as exc:
+                pending.append((exc, "teardown-sigkill"))
             self.wait_group_empty(self.grace)
         try:
             child.wait(timeout=self.grace)
-        except subprocess.TimeoutExpired:
-            pass
+        except subprocess.TimeoutExpired as exc:
+            pending.append((exc, "teardown-final-wait"))
         rc = child.returncode
         if rc is None:
             rc = 1
         sig = -rc if rc < 0 else 0
+        _flush_notes(pending)
         log(f"child exited rc={rc} signal={sig} ({why})")
         code = rc if rc >= 0 else 128 - rc
         try:
             self.out.flush()
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            _note(exc, "teardown-flush")
         os._exit(code)
 
     # -- B4 -- the single loop ------------------------------------------------

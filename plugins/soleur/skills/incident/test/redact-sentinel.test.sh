@@ -1332,6 +1332,32 @@ echo
 echo "Total: ${PASS} pass, ${FAIL} fail"
 
 # ---------------------------------------------------------------------------
+# Test 21c — an engine crash is reported by class name only (PR2 of #10331): the exception text
+# can carry scanned content, so the fail-closed arm must not print it.
+# ---------------------------------------------------------------------------
+t21_out="${TMP_DIR}/test21.out"
+python3 -I - "${SKILL_DIR}/scripts/redact-engine.py" >"${t21_out}" 2>&1 <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("redact_engine_under_test", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+def boom(path):
+    raise ValueError("CANARY-7f3a")
+mod.scan = boom
+sys.argv = ["redact-engine.py", "x"]
+print("RC=%s" % mod.main())
+PY
+assert_grep "Test 21c: a crashing engine exits 2" "^RC=2$" "${t21_out}"
+assert_grep "Test 21c: the crash line names the class" "redact-engine: internal error: ValueError$" "${t21_out}"
+if grep -q "CANARY" "${t21_out}"; then
+  echo "FAIL: Test 21c: the exception text reached the output"
+  FAIL=$((FAIL + 1))
+else
+  echo "PASS: Test 21c: the exception text is absent from the output"
+  PASS=$((PASS + 1))
+fi
+
+# ---------------------------------------------------------------------------
 # ANTI-VACUITY FLOOR ON THIS HARNESS'S OWN DISPATCH.
 #
 # `[[ "${FAIL}" -eq 0 ]]` alone is satisfied by a run that asserted NOTHING: delete every
@@ -1348,7 +1374,7 @@ echo "Total: ${PASS} pass, ${FAIL} fail"
 # value from a green run and ratchet it UP when assertions are added — never down to make a
 # failure go away, which is how a floor becomes the thing it was built to prevent.
 # ---------------------------------------------------------------------------
-EXPECTED_MIN=96
+EXPECTED_MIN=99
 TOTAL_DISPATCHED=$(( PASS + FAIL ))
 if [[ "${TOTAL_DISPATCHED}" -lt "${EXPECTED_MIN}" ]]; then
   echo "FAIL: harness dispatched only ${TOTAL_DISPATCHED} assertions (expected >= ${EXPECTED_MIN}) — a vacuous run. Assertions were removed or the dispatch was neutered; a suite that asserts nothing exits 0 and reads as PASS." >&2

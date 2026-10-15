@@ -232,7 +232,7 @@ def _b64_decode(s):
         try:
             return base64.b64decode(body + "=" * ((-len(body)) % 4), validate=True)
         except (binascii.Error, ValueError):
-            continue
+            continue  # a per-candidate decode probe: most candidates are not base64 (ADR-095: decode errors are swallowed, never bubble to exit 2)
     return None
 
 
@@ -336,7 +336,7 @@ def _scan_encoded(norm, seen):
         try:
             raw = bytes.fromhex(blob)
         except ValueError:
-            continue
+            continue  # a per-candidate decode probe: most hex-shaped runs are not bytes (ADR-095: decode errors are swallowed, never bubble to exit 2)
         if _mostly_text(raw):
             hits += _scan_text(raw.decode("utf-8", "replace"), m.start(), "decoded hex", seen)
     # percent-encoding: unquote once over the normalized text (bounded like the base64/hex paths; a
@@ -388,7 +388,7 @@ def main():
     try:
         return scan(sys.argv[1])
     except Exception as e:  # any engine crash = cannot-evaluate, fail closed
-        sys.stderr.write(f"redact-engine: internal error: {e}\n")
+        sys.stderr.write(f"redact-engine: internal error: {type(e).__name__}\n")  # class name only: exception text can carry scanned content
         return 2
 
 
