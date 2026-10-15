@@ -129,6 +129,12 @@ describe("authentication", () => {
     expect(res.status).toBe(202);
   });
 
+  it("with both tokens configured, the current token still passes and an unrelated one fails", async () => {
+    process.env.EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS = PREVIOUS;
+    expect((await POST(req([row(WS_A)]))).status).toBe(202);
+    expect((await POST(req([row(WS_A)], { auth: "Bearer not-the-token-0123456789abcdef" }))).status).toBe(401);
+  });
+
   it("rejects an unrelated token, a missing header and a previous token that is not configured", async () => {
     expect((await POST(req([row(WS_A)], { auth: "Bearer not-the-token-0123456789abcdef" }))).status).toBe(401);
     expect((await POST(req([row(WS_A)], { auth: null }))).status).toBe(401);
@@ -149,6 +155,30 @@ describe("authentication", () => {
     expect(res.status).toBeGreaterThanOrEqual(200);
     expect(mockRpc).not.toHaveBeenCalled();
     expect(mockWarnDebounced).toHaveBeenCalled();
+  });
+
+  it("in production the global env mirror of the flag being on is refused (a Flagsmith outage must not open collection)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("FLAG_EGRESS_AUDIT_COLLECTION", "1");
+    try {
+      const res = await POST(req([row(WS_A)]));
+      expect(res.status).toBe(202);
+      expect(mockRpc).not.toHaveBeenCalled();
+      expect(mockGetRuntimeFlag).not.toHaveBeenCalled();
+      expect(mockWarnDebounced.mock.calls.map((c) => c[3])).toContain("env-fallback-on");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("outside production the env mirror does not block ingest", async () => {
+    vi.stubEnv("FLAG_EGRESS_AUDIT_COLLECTION", "1");
+    try {
+      expect((await POST(req([row(WS_A)]))).status).toBe(202);
+      expect(mockRpc).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("an empty configured secret is treated as missing", async () => {
@@ -180,7 +210,15 @@ describe("network surface", () => {
     },
   );
 
-  it.each(["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded", "cf-connecting-ip", "cf-ray", "x-real-ip"])(
+  // The route's proxy-marker rule rests on how Next.js decorates a request (it adds x-forwarded-*
+  // itself). That was measured on 16.3.x. A minor upgrade must re-measure, so this fails loudly
+  // instead of silently 401ing every batch or silently weakening the check.
+  it("pins the Next.js minor the proxy-marker rule was measured on (re-measure the injected headers on upgrade)", () => {
+    const pkg = JSON.parse(readFileSync(path.join(__dirname, "../node_modules/next/package.json"), "utf8")) as { version: string };
+    expect(pkg.version).toMatch(/^16\.3\./);
+  });
+
+  it.each(["forwarded", "cf-connecting-ip", "cf-ray", "x-real-ip"])(
     "rejects a request carrying %s (it arrived through a proxy)",
     async (name) => {
       const res = await POST(req([row(WS_A)], { extra: { [name]: "203.0.113.9" } }));
@@ -188,6 +226,29 @@ describe("network surface", () => {
       expect(mockRpc).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects a multi-hop x-forwarded-for chain", async () => {
+    const res = await POST(req([row(WS_A)], { extra: { "x-forwarded-for": "203.0.113.9, 172.17.0.1" } }));
+    expect(res.status).toBe(401);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  // Measured on Next 16.3.8: the framework adds all four x-forwarded-* headers to EVERY request
+  // it serves, including Vector's. A check on them 401s every legitimate batch.
+  it("accepts the x-forwarded-* headers Next.js adds to a request from Vector", async () => {
+    const res = await POST(
+      req([row(WS_A)], {
+        extra: {
+          "x-forwarded-for": "172.17.0.1",
+          "x-forwarded-host": "127.0.0.1:3000",
+          "x-forwarded-proto": "http",
+          "x-forwarded-port": "3000",
+        },
+      }),
+    );
+    expect(res.status).toBe(202);
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("body validation", () => {
@@ -197,24 +258,68 @@ describe("body validation", () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed JSON, a non-array body and malformed rows with 400", async () => {
+  it("rejects malformed JSON and a non-array body with 400", async () => {
     expect((await POST(req(null, { raw: "{not json" }))).status).toBe(400);
     expect((await POST(req({ rows: [] }))).status).toBe(400);
-    for (const bad of [
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("counts the body in bytes: a multi-byte body under the character count but over the byte cap is 413", async () => {
+    // 300k two-byte characters = 600 kB > 512 kB cap, but only 300k characters.
+    const res = await POST(req(null, { raw: "[\"" + "é".repeat(300_000) + "\"]" }));
+    expect(res.status).toBe(413);
+  });
+
+  it("rejects a chunked body that exceeds the cap without a content-length", async () => {
+    const big = "[" + " ".repeat(600 * 1024) + "]";
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        const enc = new TextEncoder().encode(big);
+        for (let i = 0; i < enc.length; i += 16 * 1024) c.enqueue(enc.slice(i, i + 16 * 1024));
+        c.close();
+      },
+    });
+    const headers = new Headers({ host: "127.0.0.1:3000", authorization: `Bearer ${TOKEN}` });
+    const r = new Request("http://127.0.0.1:3000/api/internal/egress-audit-ingest", {
+      method: "POST",
+      headers,
+      body: stream,
+      // @ts-expect-error duplex is required by undici for a stream body
+      duplex: "half",
+    });
+    expect((await POST(r)).status).toBe(413);
+  });
+
+  it("drops each malformed row and counts it, without failing the good rows", async () => {
+    const bad = [
       row("not-a-uuid"),
+      row(WS_A.toUpperCase()),
       row(WS_A, { requested_host: "" }),
       row(WS_A, { requested_host: "h".repeat(254) }),
+      row(WS_A, { requested_host: "has space.example.test" }),
+      row(WS_A, { requested_host: "nul\u0000.example.test" }),
       row(WS_A, { request_count: -1 }),
       row(WS_A, { request_count: 1.5 }),
       row(WS_A, { bucket_start: "yesterday" }),
       row(WS_A, { source_host: "Web_1" }),
       row(WS_A, { decision: "" }),
+      row(WS_A, { decision: "TCP_DENIED" }),
       { ...row(WS_A), user_id: "extra-key-not-allowed" },
-    ]) {
-      const res = await POST(req([bad]));
-      expect(res.status).toBe(400);
-    }
-    expect(mockRpc).not.toHaveBeenCalled();
+    ];
+    const res = await POST(req([...bad, row(WS_A, { requested_host: "ok.example.test" })]));
+    expect(res.status).toBe(202);
+    const sent = mockRpc.mock.calls[0][1].p_rows as { requested_host: string }[];
+    expect(sent.map((r) => r.requested_host)).toEqual(["ok.example.test"]);
+    expect((await json(res)).dropped_invalid).toBe(bad.length);
+    expect(mockWarnDebounced.mock.calls.map((c) => c[3])).toContain("rows-invalid");
+  });
+
+  it("accepts the overflow row and bracketed IPv6 hosts", async () => {
+    const res = await POST(
+      req([row(WS_A, { requested_host: "(other)", decision: "denied" }), row(WS_A, { requested_host: "[2001:db8::1]:443" })]),
+    );
+    expect(res.status).toBe(202);
+    expect((mockRpc.mock.calls[0][1].p_rows as unknown[]).length).toBe(2);
   });
 
   it("rejects more rows than the per-request cap", async () => {
@@ -277,6 +382,18 @@ describe("workspace resolution and the per-org flag", () => {
     expect(call[1]).toMatchObject({ role: "prd", orgId: ORG_A, userId: null });
   });
 
+  it("(org A off, org B on) writes only org B; (both on) writes both", async () => {
+    mockGetRuntimeFlag.mockImplementation(async (_n: string, id: { orgId: string | null }) => id.orgId === ORG_B);
+    await POST(req([row(WS_A), row(WS_B, { requested_host: "b.example.test" })]));
+    expect((mockRpc.mock.calls[0][1].p_rows as { workspace_id: string }[]).map((r) => r.workspace_id)).toEqual([WS_B]);
+    mockRpc.mockClear();
+    mockGetRuntimeFlag.mockResolvedValue(true);
+    await POST(req([row(WS_A), row(WS_B, { requested_host: "b.example.test" })]));
+    expect(
+      (mockRpc.mock.calls[0][1].p_rows as { workspace_id: string }[]).map((r) => r.workspace_id).sort(),
+    ).toEqual([WS_A, WS_B]);
+  });
+
   it("with the flag injected off for every org it answers 2xx and writes nothing", async () => {
     mockGetRuntimeFlag.mockResolvedValue(false);
     const res = await POST(req([row(WS_A), row(WS_B)]));
@@ -290,6 +407,19 @@ describe("workspace resolution and the per-org flag", () => {
     const res = await POST(req([row(WS_A)]));
     expect(res.status).toBe(202);
     expect(mockRpc).not.toHaveBeenCalled();
+    const call = mockWarnDebounced.mock.calls.find((c) => c[3] === "flag-eval");
+    expect(call).toBeTruthy();
+    expect(call![1]).toMatchObject({ feature: "egress-audit-ingest", op: "flag-eval" });
+  });
+
+  it("looks workspaces up in chunks of at most 100 ids", async () => {
+    const ids = Array.from({ length: 250 }, (_, i) => `${i.toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`);
+    mockIn.mockImplementation(async (_c: string, chunk: string[]) => ({
+      data: chunk.map((id) => ({ id, organization_id: ORG_A })),
+      error: null,
+    }));
+    await POST(req(ids.map((id) => row(id))));
+    expect(mockIn.mock.calls.map((c) => (c[1] as string[]).length)).toEqual([100, 100, 50]);
   });
 
   it("a failing workspace lookup returns 5xx so Vector retries, and is mirrored without host or workspace values", async () => {
@@ -300,6 +430,7 @@ describe("workspace resolution and the per-org flag", () => {
     const serialized = JSON.stringify(mockReport.mock.calls);
     expect(serialized).not.toContain("secret-host.example.test");
     expect(serialized).not.toContain(WS_A);
+    expect(mockReport.mock.calls[0][1]).toMatchObject({ feature: "egress-audit-ingest", op: "workspace-lookup" });
   });
 });
 
@@ -317,10 +448,23 @@ describe("database write", () => {
     expect(body.skipped_toggle_off).toBe(1);
   });
 
+  it("mirrors RPC-skipped rows as counts only", async () => {
+    mockRpc.mockResolvedValue({
+      data: { accepted: 0, skipped_unknown: 2, skipped_toggle_off: 0, skipped_invalid: 3 },
+      error: null,
+    });
+    await POST(req([row(WS_A, { requested_host: "secret-host.example.test" })]));
+    const call = mockWarnDebounced.mock.calls.find((c) => c[3] === "rows-skipped");
+    expect(call).toBeTruthy();
+    expect(call![1].extra).toEqual({ skipped_unknown: 2, skipped_invalid: 3 });
+    expect(JSON.stringify(mockWarnDebounced.mock.calls)).not.toContain("secret-host.example.test");
+  });
+
   it("an RPC error returns 5xx (retryable) and mirrors reason codes only", async () => {
     mockRpc.mockResolvedValue({ data: null, error: { message: "boom", code: "XX000" } });
     const res = await POST(req([row(WS_A, { requested_host: "secret-host.example.test" })]));
     expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(mockReport.mock.calls[0][1]).toMatchObject({ feature: "egress-audit-ingest", op: "rpc" });
     const serialized = JSON.stringify(mockReport.mock.calls);
     expect(serialized).not.toContain("secret-host.example.test");
     expect(serialized).not.toContain(WS_A);
