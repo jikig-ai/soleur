@@ -160,11 +160,12 @@ expect_green_added() {
 # it to stderr inside the apply-deploy-pipeline-fix job, so it never reaches web-1 journald. One census row;
 # the case count is unchanged.
 # 73 -> 74 at #10257: SOLEUR_INFRA_PULL_SEAM_REFUSED registered in NON_PAGING_MARKERS (inngest-config-refresh.sh's bare-logger seam refusal) — one census row.
+# 74 -> 79 at #9757 PR C (#10120, #10093): inngest-bootstrap.sh, inngest-consumer-probe.sh, web-private-nic-guard.sh (two sites: the refused and the unset URL) and web-zot-consumer-probe.sh now emit SOLEUR_CREDENTIAL_REFUSED (non-paging), one stays-below-crit check each (+5); the case count is unchanged.
 # 71 -> 73 at #9757 residue: luks-monitor.sh and web-git-data-probe.sh now emit SOLEUR_CREDENTIAL_REFUSED (non-paging), one stays-below-crit check each.
 # 67 -> 71 at #9597 (S5): the four Better Stack posting scripts of cloud-init-registry.yml (disk heartbeat, log shipper,
 # private-NIC guard, boot block) each print SOLEUR_CREDENTIAL_REFUSED on a refused ingest token, to stderr and never at crit. The guard
 # scans cloud-init*.yml, so each emitter is one NON_PAGING census row (+4); the case count is unchanged. No mutation row changes.
-BASELINE_PASSES=74
+BASELINE_PASSES=79
 BASELINE_CASES=9
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
