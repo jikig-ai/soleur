@@ -35,3 +35,25 @@
 - Findings → GitHub issues labeled code-review with "PR #10389" in body (skill's synthesis contract)
 - Tally: pipeline-tally.sh gate seats <N> before each batch, incr seats <N> after
 - Still open: background gate run /tmp/soleur-9307-gate.log (check GATE_RC); #8231 disposition comment + #8621/#10333 notes (ship conditions in tasks.md)
+
+## Design-pass findings (performance-oracle + code-simplicity; architecture seat pending agent_id=e0faedcb)
+
+MUST-FIX (P1):
+- 900s budget < this repo's measured ~22min affected run; grok-pre-push-gate.sh run_step has no rc-6 arm → rc6 maps to FAIL+exit1 (affected-tests.sh:573-608, grok-pre-push-gate.sh:99-101). Fix: add deferral arm for rc6 + reconcile budget default with in-repo measurement.
+
+MUST-FIX (P2):
+- common.sh affected_running_gates: `${BASHPID:-$pid}` trivially true on bash 3.2 → count always 0, biases width UP. Simplicity seat says CUT the divisor entirely (~50 LOC, keep ncpu/2 + max_workers). Choose: cut.
+- affected-tests.sh:478 `alt="${pat//\*\//}"` strips `*/` not `**/` → `docs/**/x`→`docs/*x` over-matches; inert_paths over-match = vacuous green. Fix `${pat//\*\*\/}`.
+- go.sh:73 BFS guard-trip returns rc0 with TRUNCATED rdep set (silent false-narrow). Fix: guard-trip → return 1.
+- nx-turbo.sh:79 `grep -qiE '0 tasks'` matches "10 tasks" → false vacuous → full retry. Fix `(^|[^0-9])0 tasks`.
+- In-gate ADR-179 resolver (affected-tests.sh:107-139) is diagnostic-only dead weight — call sites expand CLAUDE_PLUGIN_ROOT before gate runs. Fix: delete it or wire call sites through resolver idiom.
+
+P3 backlog (fix if cheap): watchdog kills direct child not process group (common.sh:135-144); git diff -M runs twice (affected-tests.sh:444+455); CI detection greps comments → ci= can name deploy workflow (affected-tests.sh:184-197); mode=selected reason=ok on full scripts.test run (js.sh:155-161, honesty gap); 4 duplicated find census blocks; python.sh probes system python3 for xdist not venv pytest; budget_seconds/max_workers accept 0/negatives; <15s self-check bound unenforced (~65s worst); mode= emits explain/none/help not in contract table; rc-1 custom path emits reason=ok; bad-config malformed-JSON reports filename not key.
+
+Design verdict (both seats): requirement-driven; mechanisms justified EXCEPT sibling-count divisor and in-gate resolver.
+
+## Remaining pipeline
+- Await architecture seat (e0faedcb), then spawn remaining code-panel seats (dedup design lenses): correctness/code-quality, security-sentinel, pattern-recognition, data-integrity, agent-native per review/SKILL.md
+- Fix MUST-FIX items, re-run affected-tests.test.sh
+- Check /tmp/soleur-9307-gate.log GATE_RC (affected gate queued under sibling contention)
+- Ship conditions: #8231 disposition comment, #8621/#10333 notes, PR body "affected-suite gate" + Ref #9307, then soleur:qa → soleur:compound → soleur:ship
