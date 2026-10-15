@@ -75,8 +75,9 @@ affected_nxt_run() {
   cat "$log"
 
   # Vacuous verdicts from the scheduler's own words: an affected run that
-  # reached zero tasks executed nothing.
-  if grep -qiE '0 tasks|no tasks were executed|ran target test for 0 projects|No projects' "$log"; then
+  # reached zero tasks executed nothing. The `0 tasks` alternative must not
+  # match inside a larger count — `10 tasks` is a real run, not a vacuous one.
+  if grep -qiE '(^|[^0-9])0 tasks|no tasks were executed|ran target test for 0 projects|No projects' "$log"; then
     ADP_VACUOUS=1
     rm -f "$log"
     ADP_RAN=0

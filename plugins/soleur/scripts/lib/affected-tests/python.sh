@@ -17,7 +17,17 @@ fi
 _SOLEUR_AFFECTED_PY_LOADED=1
 
 affected_py_detect() {
-  [[ -f pyproject.toml || -f pytest.ini || -f tox.ini || -f setup.cfg ]]
+  # A manifest alone is a Python-PROJECT marker, not a pytest-SUITE marker — a
+  # library's bare pyproject.toml must not claim the stack. Require a pytest
+  # signal: pytest.ini is one by name; the other manifests must mention pytest;
+  # with no manifest signal, test_*.py/*_test.py files are the fallback evidence.
+  local m
+  for m in pyproject.toml pytest.ini tox.ini setup.cfg; do
+    [[ -f "$m" ]] || continue
+    [[ "$m" == pytest.ini ]] && return 0
+    grep -qiE 'pytest' "$m" 2>/dev/null && return 0
+  done
+  affected_find_files any 'test_*.py' '*_test.py' | grep -q .
 }
 
 # Resolve the pytest invocation into ADP_TOOL (argv). A direct `pytest` binary
@@ -40,19 +50,42 @@ affected_py_tool() {
 }
 
 affected_py_total() {
-  find . \
-    \( -name .git -o -name node_modules -o -name .venv -o -name venv \
-       -o -name .tox -o -name __pycache__ -o -name dist -o -name build \) -prune \
-    -o -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print 2>/dev/null \
-    | grep -c .
+  affected_find_files count 'test_*.py' '*_test.py' | grep -c .
+}
+
+# The interpreter backing the resolved ADP_TOOL: a `python3 -m pytest` tool
+# answers to python3; a `pytest` entry point answers to ITS shebang interpreter
+# — a venv-pinned pytest must probe the venv's environment, not the system's.
+# Falls back to python3 when the shebang resolves to no python at all (a
+# compiled or shell-wrapped pytest).
+affected_py_interpreter() {
+  if [[ "${ADP_TOOL[*]}" == "python3 -m pytest" ]]; then
+    command -v python3 2>/dev/null
+    return 0
+  fi
+  local bin sheb interp=""
+  bin="$(command -v "${ADP_TOOL[0]:-pytest}" 2>/dev/null || true)"
+  if [[ -n "$bin" && -f "$bin" ]]; then
+    sheb="$(head -n 1 "$bin" 2>/dev/null)"
+    case "$sheb" in
+      '#!'*)
+        sheb="${sheb#\#!}"
+        set -- $sheb   # shebang argv: "/usr/bin/env python3" | "/venv/bin/python -E"
+        if [[ "${1##*/}" == env && -n "${2:-}" ]]; then interp="$2"; else interp="$1"; fi
+        case "${interp##*/}" in python*|py) ;; *) interp="" ;; esac
+        ;;
+    esac
+  fi
+  [[ -n "$interp" ]] || interp="$(command -v python3 2>/dev/null || true)"
+  printf '%s\n' "$interp"
 }
 
 # Append parallelism flags to ADP_TOOL-derived argv when xdist is importable;
 # print the serial reason when it is not (P4: the operator sees what ran).
 affected_py_width() {
   local width="$1" pybin
-  pybin="$(command -v python3 2>/dev/null || true)"
-  if [[ -n "$pybin" ]] && affected_timeout 15 python3 -c 'import xdist' >/dev/null 2>&1; then
+  pybin="$(affected_py_interpreter)"
+  if [[ -n "$pybin" ]] && affected_timeout 15 "$pybin" -c 'import xdist' >/dev/null 2>&1; then
     printf -- '-n %s' "$width"
   else
     echo "pytest-xdist not importable — running serially" >&2
@@ -87,8 +120,10 @@ affected_py_run() {
         *.py) non_test=1 ;;
       esac
     done
-    if command -v python3 >/dev/null 2>&1 \
-       && affected_timeout 15 python3 -c 'import pytest_testmon' >/dev/null 2>&1; then
+    local pybin_t
+    pybin_t="$(affected_py_interpreter)"
+    if [[ -n "$pybin_t" ]] \
+       && affected_timeout 15 "$pybin_t" -c 'import pytest_testmon' >/dev/null 2>&1; then
       testmon=1
     fi
     if (( testmon )); then

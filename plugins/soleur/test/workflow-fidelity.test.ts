@@ -402,6 +402,16 @@ describe("workflow-fidelity sentinel markers in skills", () => {
       expect(failed.stderr).not.toContain("[UNRESOLVED]");
       expect(failed.status).not.toBe(0);
     }
+
+    // affected-tests.sh's rc 6 (budget-deferred to a detected CI gate) and rc 7
+    // (no suite detected) pass WITH a note — they must not collapse into [FAIL]
+    // (ADR-288 records the block-vs-pass decision as pass-with-note).
+    for (const code of [6, 7]) {
+      const noted = runStepWithExit(code);
+      expect(noted.stderr).toContain("[note] probe");
+      expect(noted.stderr).not.toContain("[FAIL] probe");
+      expect(noted.status).toBe(0);
+    }
   });
 
   test("grok-fidelity-gate.sh runs AGENTS rule-budget lint when not skipped", () => {

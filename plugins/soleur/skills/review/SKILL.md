@@ -207,8 +207,7 @@ proceeds. Agents must not run the runner unscoped,
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement (860→1675 s, 2026-08-11). The lead runs the gate ONCE after the
-panel returns — `affected-tests.sh` ([contract](../ship/references/affected-gate-contract.md)); with no
-[scripts/test-all.sh](../../../../scripts/test-all.sh) that gate is the seat scope. Two mechanical backstops exist:
+panel returns — `affected-tests.sh` ([contract](../ship/references/affected-gate-contract.md)); absent a [runner](../../../../scripts/test-all.sh) it is the sole scope. Two backstops:
 [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate run already in flight
 (#7553) — `affected` is exempt from that too — and `tc_acquire`'s advisory lock (ADR-133)
 serialises whatever gets past that. The

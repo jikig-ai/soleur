@@ -29,9 +29,7 @@ affected_go_tool() {
 }
 
 affected_go_total() {
-  find . \
-    \( -name .git -o -name vendor -o -name node_modules \) -prune \
-    -o -type f -name '*_test.go' -print 2>/dev/null | grep -c .
+  affected_find_files count '*_test.go' | grep -c .
 }
 
 # Print the selected package set: changed packages plus their reverse-dependency
@@ -87,6 +85,13 @@ affected_go_closure() {
       fi
     done <<<"$graph"
   done
+  # A guard-trip means the closure was still growing at the bound — returning
+  # the TRUNCATED set would be a silent false-narrow. Refuse the selection;
+  # the caller treats rc 1 as unlistable and falls back to ./... (coverage-
+  # favoring).
+  if (( grew && guard >= 10000 )); then
+    return 1
+  fi
   printf '%s' "$sel" | tr ' ' '\n' | grep -v '^$' | sort -u
   return 0
 }
