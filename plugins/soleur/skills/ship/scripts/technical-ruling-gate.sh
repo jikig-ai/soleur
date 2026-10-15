@@ -38,7 +38,18 @@
 # check above catches a `technical` row there).
 #
 # Reasons (the suite asserts each): bad-class, bad-category, unruled-technical, bad-ruling-shape,
-# owner-label-unscoped.
+# owner-label-unscoped, delegation-invalid, delegation-unverifiable.
+#
+# Delegation arm (ADR-288, hr-menu-option-ack-not-prod-write-auth): a row whose Class is exactly
+# `operator (production-mutating)` and whose Ruling is `Authorized by delegation <comment-url>, envelope <path>`
+# is validated through plugins/soleur/scripts/delegation-verify.sh (`verify ... --audit`, the ship-time mode that
+# skips only `expired` and `epic-closed`): valid passes; invalid is `delegation-invalid` (exit 1); unverifiable,
+# including a missing verifier, is `delegation-unverifiable` (exit 2, never a pass). The same ruling shape on any
+# other Class is `bad-ruling-shape`: a delegation authorizes only production-mutating acts. The row stays
+# required (no row, no pass), every delegation row is examined (the first valid one does not end the scan), and a
+# delegation row outside a recognised table is exit 2. An ARCHIVED artifact (`--branch` found it under
+# specs/archive/) is checked for row shape only, with no network. Format source:
+# skills/brainstorm-techniques/references/standing-delegation.md.
 #
 # Test seams: TRG_EXEC_LOG (append one line per examined row), TRG_SPECS_ROOT and TRG_BRANCH (the
 # `--branch` lookup, so a suite needs no git repository); any of them being set is announced on stderr.
@@ -56,6 +67,10 @@ CATS_RE="${CATEGORIES// /|}"
 LABEL_RE='owner[ \t-]+(decision|ruling)s?[ \t]+((is|are)[ \t]+)?(needed|required)|decision[ \t]+needed[ \t]+from[ \t]+the[ \t]+owner|needs?[ \t]+(the[ \t]+)?owner[ \t]+(decision|ruling)'
 RULING_RE='^Ruled by (CTO|CLO) agent, [0-9]{4}-[0-9]{2}-[0-9]{2}: .+'
 PENDING_RE='pending[ \t]*[^a-z0-9 \t]+[ \t]*assumed'
+VERIFIER="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/delegation-verify.sh"
+DELEG_RE='^Authorized by delegation (https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull)/[0-9]+#issuecomment-[0-9]+), envelope ([A-Za-z0-9_./#@ -]+)$'
+SHAPE_ONLY=0
+DR=0
 CTO_REMEDY='spawn soleur:engineering:cto now (at most two attempts, see technical-ruling-delegation.md), write the Ruled by cell, re-run; after two failed attempts leave the PR draft and file one domain/engineering issue, never an operator question'
 
 work_dir=""
@@ -107,6 +122,7 @@ table_rows() {
     f { next }
     { if (hdr_pending) { if ($0 ~ /^ ? ? ?\|[ :|-]+$/) print "@BADHEADER"; hdr_pending = 0 } }
     { if ((state != 3 || $0 !~ /^ ? ? ?\|/) && tolower($0) ~ /\|[ \t]*technical[ \t]*\|/) print "@STRAY" }
+    { if ((state != 3 || $0 !~ /^ ? ? ?\|/) && $0 ~ /^ ? ? ?\|/ && tolower($0) ~ /authorized by delegation/) print "@STRAY" } # mut:stray-deleg
     /^ ? ? ?\|/ {
       line = $0; sub(/^ +/, "", line); sub(/[ \t]+$/, "", line); low = tolower(line)
       if (line ~ /^\|[ \t]*Item[ \t]*\|[ \t]*Class[ \t]*\|[ \t]*Ruling[ \t]*\|$/) { end_table(); print "@TABLE"; state = 2; rows_in = 0; next }
@@ -146,8 +162,35 @@ check_pending() { # <file> <display-path>; an unresolved placeholder anywhere in
   return "$n"
 }
 
+# check_delegation_row <line> <class> <ruling>: DR=0 pass, 1 a finding was printed, 2 could not verify (printed).
+# Runs with nocasematch OFF: the phrase, the class and the link are matched exactly.
+check_delegation_row() {
+  local had=0
+  shopt -q nocasematch && had=1
+  shopt -u nocasematch
+  check_delegation_row_inner "$@"
+  (( had )) && shopt -s nocasematch
+  return 0
+}
+check_delegation_row_inner() {
+  local ln="$1" cls="$2" ruling="$3" durl dpath reason why dv_rc
+  DR=0
+  [[ "$cls" == "operator (production-mutating)" ]] || { printf '[FAIL] %s:%s: bad-ruling-shape - a delegation can authorize only an operator (production-mutating) act, not "%s"\n' "$shown" "$ln" "$cls" >&2; DR=1; return; } # mut:deleg-class
+  [[ "$ruling" =~ $DELEG_RE ]] || { printf '[FAIL] %s:%s: bad-ruling-shape - a delegation ruling must read: Authorized by delegation <comment-url>, envelope <path> (standing-delegation.md)\n' "$shown" "$ln" >&2; DR=1; return; }
+  durl="${BASH_REMATCH[1]}"; dpath="${BASH_REMATCH[3]}"
+  [[ -n "${TRG_EXEC_LOG:-}" ]] && echo "delegation $shown:$ln" >> "${TRG_EXEC_LOG:?}" # mut:deleg-log
+  if (( SHAPE_ONLY )); then DR=0; return; fi
+  [[ -f "$VERIFIER" ]] || { printf '[FAIL] %s:%s: delegation-unverifiable - the delegation checker was not found next to this gate, so the row was not examined\n' "$shown" "$ln" >&2; DR=2; return; }
+  bash "$VERIFIER" verify --delegation "$durl" --envelope "$dpath" --audit >"$work_dir/dv.out" 2>"$work_dir/dv.err"; dv_rc=$? # mut:deleg-call
+  reason="$(head -1 "$work_dir/dv.out" | sed -n 's/^delegation: [a-z]* reason=\(.*\)$/\1/p' | tr -d '[:cntrl:]' | cut -c1-60)"
+  why="$(head -1 "$work_dir/dv.err" | tr -d '[:cntrl:]' | cut -c1-200)"
+  (( dv_rc == 0 )) && { echo 'SOLEUR_RULE_APPLIED rule=hr-menu-option-ack-not-prod-write-auth note=delegation-verified'; return; }
+  (( dv_rc == 1 )) && { printf '[FAIL] %s:%s: delegation-invalid - %s (reason: %s)\n' "$shown" "$ln" "$why" "$reason" >&2; DR=1; return; }
+  printf '[FAIL] %s:%s: delegation-unverifiable - %s (reason: %s); the row was not examined, which is never a pass\n' "$shown" "$ln" "$why" "${reason:-none}" >&2; DR=2 # mut:deleg-unv
+}
+
 check_artifact() { # <file> <display-path>
-  local file="$1" shown="$2" idx=0 fails=0 tables=0 ln row inner pipes c2 c3
+  local file="$1" shown="$2" idx=0 fails=0 unv=0 tables=0 ln row inner pipes c2 c3
   [[ -e "$file" ]] || die2 "$shown: no such file"
   [[ -f "$file" && -r "$file" ]] || die2 "$shown: not a readable regular file"
   grep -q '[^[:space:]]' "$file" || die2 "$shown: the artifact is EMPTY; nothing was examined"
@@ -173,6 +216,7 @@ check_artifact() { # <file> <display-path>
     c2="${c2#"${c2%%[![:space:]]*}"}"; c2="${c2%"${c2##*[![:space:]]}"}"
     c3="${c3#"${c3%%[![:space:]]*}"}"; c3="${c3%"${c3##*[![:space:]]}"}"
     c2="${c2//$'\001'/|}"; c3="${c3//$'\001'/|}"
+    if [[ "$c3" == "Authorized by delegation"* ]]; then check_delegation_row "$ln" "$c2" "$c3"; case "$DR" in 0) ;; 1) fails=$((fails + 1)) ;; *) unv=$((unv + 1)) ;; esac; continue; fi # mut:deleg-all
     if [[ "$c2" == technical ]]; then
       if [[ "$c3" == "pending - assumed"* ]]; then
         : # reported once, with its line, by the file-wide pending lint below
@@ -204,6 +248,7 @@ check_artifact() { # <file> <display-path>
   check_pending "$file" "$shown"; fails=$((fails + $?))
   check_labels "$file" "$shown"; fails=$((fails + $?))
   if (( fails > 0 )); then return 1; fi
+  if (( unv > 0 )); then return 2; fi
   if (( tables == 0 )); then
     printf '[WARN] %s: no "| Item | Class | Ruling |" table outside a fenced block; label and pending lints ran, rows were not examined (add the table: technical-ruling-delegation.md section 6)\n' "$shown"
     return 0
@@ -261,6 +306,7 @@ case "$mode" in
       exit 0
     fi
     (( ${#matches[@]} == 1 )) || die2 "ambiguous: ${#matches[@]} decision-challenges.md files match branch $branch (${matches[*]}); examine the right one by path"
+    case "${matches[0]}" in */archive/*) SHAPE_ONLY=1; printf '[NOTE] archived artifact: delegation rows are checked for shape only (no network)\n' >&2 ;; esac
     check_artifact "${matches[0]}" "${matches[0]}"; exit $? ;;
   ""|-h|--help)
     die2 "usage: $(basename "$0") <path> | --branch | --pr-body <file>" ;;

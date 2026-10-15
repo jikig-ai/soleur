@@ -23,6 +23,7 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
   `gh issue create --label action-required --label decision-challenge --milestone "Post-MVP / Later"` with a plain-language
   title linking the PR, because `operator-digest` Section 4 harvests `action-required` issues, not PR bodies. A split
   item yields both a technical row and an operator row.
+- **A delegated row** (`operator (production-mutating)` with Ruling `Authorized by delegation <comment-url>, envelope <path>`) renders as an informational line naming the act and the delegation link, and files NO issue: the operator already authorised it in the epic's recorded Standing Delegation. The gate verifies the link (`delegation-invalid` / `delegation-unverifiable` mean fix the delegation or the envelope, never ask the operator a technical question); see [standing-delegation.md](../../brainstorm-techniques/references/standing-delegation.md).
 - No new top-level PR-body heading: that keeps the diff and the `ship-operator-step-gate` deny-token surface unchanged.
 - `guardrails.sh`'s filing gate refuses the `gh issue create` unless the body names a user-visible consequence; when the
   dissent is about a hook/gate/guard the honest exit is `--label meta/machinery` (measured on PR #8354), which the digest

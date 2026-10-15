@@ -260,8 +260,10 @@ echo "=== Arm 3: contract (producer/consumer and parity) ==="
 extract_example() {
   awk '/^## 7\. Canonical example/{on=1; next} on && /^```/{ if(inb){exit} inb=1; next } on && inb{print}' "$1"
 }
-extract_example "$REFERENCE" > "$TMP/example.md"
-assert_eq "1" "$([[ -s "$TMP/example.md" ]] && echo 1 || echo 0)" "the reference carries a canonical example block"
+extract_example "$REFERENCE" > "$TMP/example-full.md"
+assert_eq "1" "$([[ -s "$TMP/example-full.md" ]] && echo 1 || echo 0)" "the reference carries a canonical example block"
+# The delegation row needs a live verifier; Arm 6 feeds the FULL example (with a stubbed gh). Offline, it is filtered out.
+grep -v 'Authorized by delegation' "$TMP/example-full.md" > "$TMP/example.md" || true
 run "$GATE" "$TMP/example.md"
 assert_eq "0" "$(last_rc)" "row8: the reference's canonical example passes the gate"
 sed 's/| technical |/| technicl |/' "$TMP/example.md" > "$TMP/example-broken.md"
@@ -465,6 +467,151 @@ mutate tilde-table '/# mut:fence-table$/ s/\|~~~\+//' && \
 mutate indent-table '/# mut:fence-table$/ s/\^ \? \? \?/^/' && \
   killed indent-table "$MUT/gate.indent-table.sh" 0 "$FIXTURES/table-in-indent.md"
 
+echo "=== Arm 6: the delegation arm (Guard 2) ==="
+DFX="$REPO_ROOT/plugins/soleur/test/fixtures/standing-delegation"
+DBIN="$TMP/dbin"; mkdir -p "$DBIN"
+[[ -f "$DFX/gh-stub.sh" && -f "$DFX/delegation-valid.md" && -f "$DFX/envelope-valid.md" ]] || { echo "FATAL: delegation fixtures missing" >&2; exit 2; }
+cp "$DFX/gh-stub.sh" "$DBIN/gh"; chmod +x "$DBIN/gh"
+DURL1="https://github.com/example-org/example-repo/issues/77#issuecomment-1001"
+DURL2="https://github.com/example-org/example-repo/issues/77#issuecomment-1002"
+DREPO="$TMP/drepo"; mkdir -p "$DREPO"
+sed -e "s|@URL@|$DURL1|g" "$DFX/envelope-valid.md" > "$DREPO/env-valid.md"
+sed -e "s|@URL@|$DURL2|g" "$DFX/envelope-valid.md" > "$DREPO/env-valid-2.md"
+( git_fixture_env "$DREPO" && git -C "$DREPO" init -q && git -C "$DREPO" add -A && git -C "$DREPO" commit -q -m "fixture envelopes" ) >/dev/null 2>&1 \
+  || { echo "FATAL: delegation fixture repository not built" >&2; exit 2; }
+DTODAY="$(date -u +%Y-%m-%d)"; DNOW="${DTODAY}T00:00:00Z"
+DEXP="$(jq -rn --arg d "$DTODAY" '($d + "T00:00:00Z" | fromdateiso8601) + 864000 | strftime("%Y-%m-%d")')"
+DSC=0
+dscn() { # fresh stub state: comment 1001 valid, comment 1002 edited (invalid), both on open epic 77 by an admin
+  DSC=$((DSC + 1)); STUB_DIR="$TMP/dscn$DSC"; mkdir -p "$STUB_DIR"; export STUB_DIR
+  echo "example-org/example-repo" > "$STUB_DIR/repo.txt"
+  sed -e "s/@EXPIRY@/$DEXP/" -e "s/@DATE@/$DTODAY/" "$DFX/delegation-valid.md" > "$STUB_DIR/body.md"
+  local id upd
+  for id in 1001 1002; do
+    upd="$DNOW"; [[ "$id" == 1002 ]] && upd="${DTODAY}T00:07:00Z"
+    jq -n --rawfile body "$STUB_DIR/body.md" --arg c "$DNOW" --arg u "$upd" --argjson id "$id" \
+      --arg iu "https://api.github.com/repos/example-org/example-repo/issues/77" \
+      '{id:$id, body:$body, user:{login:"owner-user", type:"User"}, author_association:"MEMBER", created_at:$c, updated_at:$u, issue_url:$iu}' > "$STUB_DIR/comment-$id.json"
+  done
+  echo '{"permission":"admin"}' > "$STUB_DIR/perm-owner-user.json"
+  echo '{"number":77,"state":"open"}' > "$STUB_DIR/issue-77.json"
+}
+mkd() { # <name> <fixture>: fixture with placeholders filled -> $DF
+  mkdir -p "$TMP/df"; DF="$TMP/df/$1.md"
+  sed -e "s|@URL2@|$DURL2|g" -e "s|@ENV2@|env-valid-2.md|g" -e "s|@URL@|$DURL1|g" -e "s|@ENV@|env-valid.md|g" "$FIXTURES/$2" > "$DF"
+}
+DLOG="$TMP/dexec.log"
+run_d() { # <script> <args...>: runs from the fixture repository with the stub gh first on PATH
+  local script="$1"; shift
+  : > "$DLOG"
+  set +e
+  ( cd "$DREPO" && git_fixture_env "$DREPO" && TRG_EXEC_LOG="$DLOG" PATH="$DBIN:$PATH" bash "$script" "$@" ) >"$TMP/last.out" 2>"$TMP/last.err"
+  echo "$?" > "$TMP/last.rc"
+  set -e
+}
+dlog_count() { grep -c '^delegation ' "$DLOG" || true; }
+no_miss() { if grep -q 'STUB-MISS' "$STUB_DIR/calls.log" 2>/dev/null; then echo "  FAIL: $1: gh stub refused an argv"; FAIL=$((FAIL + 1)); else echo "  PASS: $1: no stub miss"; PASS=$((PASS + 1)); fi; }
+
+dscn; mkd valid deleg-valid.md; run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "FR4: a valid delegation row on operator (production-mutating) passes"
+assert_verdict_line "valid delegation"
+assert_eq "1" "$(grep -c '^SOLEUR_RULE_APPLIED rule=hr-menu-option-ack-not-prod-write-auth note=delegation-verified$' "$TMP/last.out" || true)" "the arm announces that a delegation was verified"
+assert_eq "1" "$(dlog_count)" "the arm logged one examined delegation row"
+no_miss "valid delegation"
+
+dscn; mkd invalid deleg-valid.md; sed 's/-1001/-1002/g;s/env-valid.md/env-valid-2.md/' "$DF" > "$TMP/df/invalid2.md"; run_d "$GATE" "$TMP/df/invalid2.md"
+assert_eq "1" "$(last_rc)" "an edited delegation is exit 1"
+assert_reason "delegation-invalid" "edited delegation"
+assert_eq "1" "$(grep -c 'delegation-invalid - .*changed after it was recorded' "$TMP/last.err" || true)" "the finding carries the verifier's plain reason"
+no_miss "edited delegation"
+
+dscn; echo 404 > "$STUB_DIR/mode-comment-1001"; mkd gone deleg-valid.md; run_d "$GATE" "$DF"
+assert_eq "2" "$(last_rc)" "an unreadable (deleted) delegation link is exit 2, never a pass"
+assert_eq "1" "$(grep -c 'delegation-unverifiable - ' "$TMP/last.err" || true)" "the finding is delegation-unverifiable"
+dscn; echo net > "$STUB_DIR/mode-repo"; mkd net deleg-valid.md; run_d "$GATE" "$DF"
+assert_eq "2" "$(last_rc)" "an API failure while verifying is exit 2"
+
+dscn; mkd money deleg-wrong-class.md; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "row shape on operator (money) is refused"
+assert_reason "bad-ruling-shape" "delegation on operator (money)"
+assert_eq "0" "$(dlog_count)" "a refused class is never verified"
+dscn; mkd tech deleg-technical-class.md; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "row shape on a technical row is refused"
+assert_reason "bad-ruling-shape" "delegation on a technical row"
+dscn; mkd shape deleg-bad-shape.md; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "malformed delegation rulings are exit 1"
+assert_eq "3" "$(grep -cE '^\[FAIL\] .*: bad-ruling-shape - ' "$TMP/last.err" || true)" "no envelope, no link and a non-comment link are each flagged"
+
+dscn; mkd two deleg-two-rows.md; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "first row valid, second invalid: exit 1 (stopping at the first row is the defect)"
+assert_eq "1" "$(grep -cE '^\[FAIL\] .*: delegation-invalid - ' "$TMP/last.err" || true)" "exactly the second row is flagged"
+assert_eq "2" "$(dlog_count)" "both delegation rows were examined"
+dscn; mkd both deleg-both-valid.md; run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "two valid delegation rows pass (an envelope anchored by title included)"
+
+dscn; sed -e "s|https://github.com/example-org/example-repo/issues/77#issuecomment-1001|$DURL1|g" -e 's|knowledge-base/project/specs/example/envelope.md|env-valid.md|g' "$TMP/example-full.md" > "$TMP/df/example-d.md"
+assert_eq "1" "$(grep -c 'Authorized by delegation' "$TMP/df/example-d.md" || true)" "the canonical example carries one delegation row"
+run_d "$GATE" "$TMP/df/example-d.md"
+assert_eq "0" "$(last_rc)" "FR4: the reference's canonical example (delegation row included) passes the gate against a stubbed verifier"
+assert_eq "1" "$(dlog_count)" "the canonical example's delegation row was examined"
+
+dscn; mkd stray deleg-stray.md; run_d "$GATE" "$DF"
+assert_eq "2" "$(last_rc)" "a delegation row outside the table (after a blank line) is exit 2, never read as a ruling"
+assert_eq "0" "$(dlog_count)" "a stray row is never verified"
+dscn; mkd plain deleg-plain.md; run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "H2: a plain operator (production-mutating) row with no delegation still passes; prose naming the phrase is inert"
+assert_eq "0" "$(dlog_count)" "no delegation row, no verifier call"
+assert_verdict_line "plain production-mutating row"
+
+echo "=== Arm 6b: archived artifacts are checked for shape only (no network) ==="
+dscn; echo net > "$STUB_DIR/mode-repo"; mkd arch deleg-valid.md
+DSPECS="$TMP/dspecs"; mkdir -p "$DSPECS/archive/20260101-feat-dz"; cp "$DF" "$DSPECS/archive/20260101-feat-dz/decision-challenges.md"
+export TRG_SPECS_ROOT="$DSPECS"; TRG_BRANCH=feat-dz run_d "$GATE" --branch; unset TRG_SPECS_ROOT
+assert_eq "0" "$(last_rc)" "an archived artifact with a well-shaped delegation row passes without verification"
+assert_eq "0" "$(cat "$STUB_DIR/calls.log" 2>/dev/null | wc -l | tr -d ' ')" "the archive lookup made no gh call"
+dscn; mkd archbad deleg-bad-shape.md; cp "$DF" "$DSPECS/archive/20260101-feat-dz/decision-challenges.md"
+export TRG_SPECS_ROOT="$DSPECS"; TRG_BRANCH=feat-dz run_d "$GATE" --branch; unset TRG_SPECS_ROOT
+assert_eq "1" "$(last_rc)" "an archived artifact with a malformed delegation row still fails"
+
+echo "=== Arm 6c: a missing verifier is exit 2 ==="
+mkdir -p "$TMP/dm/lonely/skills/ship/scripts"; cp "$GATE" "$TMP/dm/lonely/skills/ship/scripts/technical-ruling-gate.sh"
+dscn; mkd lonely deleg-valid.md; run_d "$TMP/dm/lonely/skills/ship/scripts/technical-ruling-gate.sh" "$DF"
+assert_eq "2" "$(last_rc)" "no verifier next to the gate: exit 2, never a pass"
+
+echo "=== Arm 6d: mutations of the delegation arm (mirrored tree so the verifier resolves) ==="
+mutate_d() { # <name> <sed -E expr>
+  local d="$TMP/dm/$1"; mkdir -p "$d/skills/ship/scripts" "$d/scripts"
+  cp "$REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$d/scripts/"
+  sed -E "$2" "$GATE" > "$d/skills/ship/scripts/technical-ruling-gate.sh"
+  if cmp -s "$GATE" "$d/skills/ship/scripts/technical-ruling-gate.sh"; then
+    echo "  FAIL: mutation $1 did not land"; FAIL=$((FAIL + 1)); return 1
+  fi
+  echo "  PASS: mutation $1 landed"; PASS=$((PASS + 1))
+}
+dnoop() { echo "s/^.*# mut:$1\$/: # mut:$1/"; }
+killed_d() { # <name> <pinned-rc> <logged-delegation-rows-or--> <gate args...>; the scenario is already built
+  local name="$1" pinned="$2" want_log="$3"; shift 3
+  run_d "$GATE" "$@"
+  if [[ "$(last_rc)" != "$pinned" ]]; then echo "  FAIL: $name: the pristine gate gives rc $(last_rc), not the pinned $pinned"; FAIL=$((FAIL + 1)); return; fi
+  if [[ "$want_log" != "-" && "$(dlog_count)" != "$want_log" ]]; then echo "  FAIL: $name: the pristine gate logged $(dlog_count) delegation rows, not $want_log"; FAIL=$((FAIL + 1)); return; fi
+  run_d "$TMP/dm/$name/skills/ship/scripts/technical-ruling-gate.sh" "$@"
+  if mutant_crashed; then echo "  FAIL: mutant $name CRASHED (rc $(last_rc)); a crash is not a kill"; FAIL=$((FAIL + 1))
+  elif [[ "$(last_rc)" != "$pinned" || ( "$want_log" != "-" && "$(dlog_count)" != "$want_log" ) ]]; then echo "  PASS: mutant $name killed (rc $(last_rc), delegation rows logged $(dlog_count))"; PASS=$((PASS + 1))
+  else echo "  FAIL: mutant $name SURVIVED"; FAIL=$((FAIL + 1)); fi
+}
+# 1 the verifier's answer is ignored
+mutate_d deleg-call 's/; dv_rc=\$\? # mut:deleg-call/; dv_rc=0 # mut:deleg-call/' && { dscn; mkd mi deleg-valid.md; sed 's/-1001/-1002/g;s/env-valid.md/env-valid-2.md/' "$DF" > "$TMP/df/mi2.md"; killed_d deleg-call 1 - "$TMP/df/mi2.md"; }
+# 2 the exec-log line is the dispatch floor
+mutate_d deleg-log "$(dnoop deleg-log)" && { dscn; mkd ml deleg-valid.md; killed_d deleg-log 0 1 "$DF"; }
+# 3 stopping at the first delegation row
+mutate_d deleg-all 's/; continue; fi # mut:deleg-all/; break; fi # mut:deleg-all/' && { dscn; mkd mt deleg-two-rows.md; killed_d deleg-all 1 2 "$DF"; }
+# 4 the class conjunct
+mutate_d deleg-class "$(dnoop deleg-class)" && { dscn; mkd mc deleg-wrong-class.md; killed_d deleg-class 1 - "$DF"; }
+# 5 unverifiable mapped to a pass
+mutate_d deleg-unv "$(dnoop deleg-unv)" && { dscn; echo 404 > "$STUB_DIR/mode-comment-1001"; mkd mu deleg-valid.md; killed_d deleg-unv 2 - "$DF"; }
+# 6 a delegation row outside a table is honoured
+mutate_d stray-deleg '/# mut:stray-deleg$/ s/print "@STRAY"/x = 1/' && { dscn; mkd ms deleg-stray.md; killed_d stray-deleg 2 - "$DF"; }
+
 echo "=== Floor: the SUT wrote an execution marker per examined row ==="
 n_rows="$(wc -l < "$EXEC_LOG" | tr -d ' ')"
 if (( n_rows >= 200 )); then
@@ -473,4 +620,4 @@ else
   echo "  FAIL: SUT execution markers $n_rows < 200 -- the cases above did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-print_results 239
+print_results 275

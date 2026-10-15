@@ -18,6 +18,13 @@ these categories. The Class cell of the Decision Classes table (section 6) uses 
   record them as not fixed) is technical and goes to the CTO; assigning work to a named person stays the operator's.
 - **priority / schedule** — what goes first, when it ships.
 - **irreversible / production-mutating** — the AUTHORIZATION to run the act (merge, dispatch, delete, rotate, apply).
+  `production-mutating` stays an operator-only CATEGORY but is satisfiable by a recorded Standing Delegation plus a CTO
+  Production Envelope (record, envelope and `Gate:` formats: [standing-delegation.md](./standing-delegation.md)); the
+  verifier is `plugins/soleur/scripts/delegation-verify.sh`. A session with no recorded delegation behaves as before. Never
+  delegable, whatever the record says: user-data loss or sole-copy destruction, money, legal-risk, brand, scope changes,
+  force-push to main, bypassing required checks or rulesets, editing the delegation, credential rotation that can lock users
+  out, anything on third-party or tenant systems, and any act whose rollback is not named. Acts that
+  `prod-write-defer-gate.sh` recognises still defer to the harness approval prompt.
 - **legal-risk** — accepting regulatory or legal exposure (the legal posture itself goes to the CLO, see section 3).
 - **brand** — what the product looks and sounds like.
 
@@ -105,7 +112,11 @@ per persisted decision, whatever shape the free-form body uses. Columns: `Item |
   gets an `operator (scope)` row naming that override, so the operator sees it.
 - **Ruling, technical row:** `Ruled by CTO agent, <date>: <decision> - <rationale>` (`CLO` for legal; and `Dissent: <line>` when
   present). If the ruling differs from what a headless subagent assumed and built, re-enter `work` for the item.
-- **Ruling, operator row:** the ACTION being authorised, citing the sibling technical row's item id when split.
+- **Ruling, operator row:** the ACTION being authorised, citing the sibling technical row's item id when split. For a
+  production-mutating act covered by a Standing Delegation the Ruling cell reads exactly
+  `Authorized by delegation <comment-url>, envelope <path>` and is valid only on `operator (production-mutating)`; the
+  gate verifies it through `delegation-verify.sh` (invalid is exit 1, unreadable is exit 2, never a pass). The row remains
+  required: no row, no pass.
 - `pending - assumed: <default>` is the placeholder a subagent without the `Agent` tool writes; the main context
   replaces it before `work` (one-shot) or the gate fails it as `unruled-technical`.
 
@@ -128,6 +139,7 @@ fails CI.
 |---|---|---|
 | T1 evidence bar before the cleanup deletes the guard constants | technical | Ruled by CTO agent, 2026-10-11: keep the thresholds, the gate is single-use and deleted - tightening protects nothing |
 | T1a authorization to run the cleanup | operator (production-mutating) | Authorise merging the cleanup PR that deletes the guard (split from T1) |
+| T1b authorization to merge the follow-up cleanup PR | operator (production-mutating) | Authorized by delegation https://github.com/example-org/example-repo/issues/77#issuecomment-1001, envelope knowledge-base/project/specs/example/envelope.md |
 | T2 wire seven skills or only the choke points | operator (scope) | Keep the seven skills the brief names |
 | T3 which of two log wordings reads better | taste |  |
 | T4 run the leftover items the brief named as a new pipeline or record them as not fixed | technical | Ruled by CTO agent, 2026-10-14: route them to the tracker that already owns them - a new pipeline would duplicate it |
