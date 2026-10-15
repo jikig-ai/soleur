@@ -481,15 +481,15 @@ case_template_anchor_older() {
 }
 case_template_boot_before_template() {
   scenario
-  jq -n --arg at "$(iso "@$(( M_EPOCH - 6000 ))")" '{state:"MERGED", mergedAt:$at}' > "$FX/pr-template.json"
+  jq -n --arg at "$(iso "@$(( M_EPOCH - 14400 ))")" '{state:"MERGED", mergedAt:$at}' > "$FX/pr-template.json"
   new_boot_rows -300 5 "$OLDBOOT" > "$FX/disk.jsonl"
-  expect "the newest boot began before the template's delivery -> NOT YET" 2 "verdict=n_no_post_merge_boot"
+  expect "the newest boot began before the template's delivery (outside the lookback) -> NOT YET" 2 "verdict=n_no_post_merge_boot"
 }
 case_template_after_merge_min() {
   scenario
   jq -n --arg at "$(iso "@$(( M_EPOCH + 600 ))")" '{state:"MERGED", mergedAt:$at}' > "$FX/pr-template.json"
   { rowdisk "$(at $(( M_EPOCH - 300 )))" "$OLDBOOT"; new_boot_rows 5 5 "$NEWBOOT"; } > "$FX/disk.jsonl"
-  expect "a template merge later than this PR's cannot move the anchor past this PR's merge (min of the two) -> graded" 0 "verdict=p_pass"
+  expect "a boot that began between this PR's merge and a LATER template delivery predates the template -> NOT YET" 2 "verdict=n_no_post_merge_boot"
 }
 case_template_pr_unreadable() {
   scenario; : > "$FX/fail-template"
@@ -825,7 +825,7 @@ case_query_windows() {
   elif /usr/bin/grep -aqF 'parseDateTime64BestEffort' "$FX/sql.table"; then ok=0; fi
   if (( MUTANT_MODE )); then (( ok )) || MUT_RED=1; return; fi
   if (( ok )); then
-    pass "boot read is exactly --since <merge-2h> --grep --limit 5000; the three stream queries are lower-bounded (>=, three times each) at the post-merge boot's first row; the table query reads no stream"
+    pass "boot read is exactly --since <merge-2h> --grep --limit 5000; the three stream queries are lower-bounded (>=, three times each) at the current boot's first row; the table query reads no stream"
   else
     fail "query windows wrong (rc=$rc): $(tr '\n' '|' < "$FX/bq.calls" 2>/dev/null | cut -c1-300)"
   fi
@@ -914,7 +914,7 @@ cases=$((cases + 1))
 # the pre-merge lookback and the unchecked workflow name.
 if [[ "$HDR" == *"The measured population is the SHIPPER arm only"* && "$HDR" == *"control: 0 SOLEUR_ZOT_DISK rows with a clientIP at the time of writing"* \
    && "$HDR" == *"PR_NUMBER=10320 is hard-coded"* && "$HDR" == *"exit 2 (n_pr_unmerged) forever"* \
-   && "$HDR" == *"PRE_MERGE_LOOKBACK_SECS=7200: the boot read starts 2 hours before the merge"* && "$HDR" == *"(c_channel_dark) until a new boot reports"* \
+   && "$HDR" == *"PRE_MERGE_LOOKBACK_SECS=7200: the boot read starts 2 hours before the anchor"* && "$HDR" == *"(c_channel_dark) until a new boot reports"* \
    && "$HDR" == *"APPLY_WF is restated here with no parity check against the workflow YAML"* ]]; then
   pass "header documents the shipper-only population, the hard-coded PR number, the 2h pre-merge lookback and the unchecked workflow name"
 else
@@ -982,7 +982,8 @@ mutant tail_cut                's/i = index\(m, " zot_last_err="\)/i = 0 * index
 mutant host_scope              's/^EXPECTED_HOST="[a-z-]+"$/EXPECTED_HOST=".*"/' other_host
 mutant post_merge_boot         's/if ! \[\[ "\$ANCHOR_STR" < "\$FIRST_DT" \]\]; then/if false; then/' old_boot_only foreign_new_boot template_boot_before_template
 mutant anchor_is_merge         's/^ANCHOR_EPOCH=.*/ANCHOR_EPOCH="$MERGE_EPOCH"/' template_anchor_older
-mutant anchor_is_template      's/^ANCHOR_EPOCH=.*/ANCHOR_EPOCH="$TEMPLATE_EPOCH"/' template_after_merge_min
+mutant since_is_merge          's/\(\( ANCHOR_EPOCH - PRE_MERGE_LOOKBACK_SECS \)\)/(( MERGE_EPOCH - PRE_MERGE_LOOKBACK_SECS ))/' template_boot_before_template
+mutant anchor_is_min           's/^ANCHOR_EPOCH=.*/ANCHOR_EPOCH=$(( TEMPLATE_EPOCH < MERGE_EPOCH ? TEMPLATE_EPOCH : MERGE_EPOCH ))/' template_after_merge_min
 mutant template_unmerged_is_1  '/verdict=c_template_pr_unmerged/,/exit 3/ s/exit 3/exit 1/' template_pr_unmerged
 mutant min_span                's/^MIN_SPAN_SECS=[0-9]+$/MIN_SPAN_SECS=0/' boot_too_young
 mutant silent_threshold        's/^SILENT_SECS=[0-9]+$/SILENT_SECS=99999999/' producer_silent
@@ -1056,8 +1057,8 @@ if [[ "$n_tokens" -lt 35 ]]; then
   echo "FAIL: only $n_tokens distinct verdict tokens were asserted (floor 35, the measured count) — a case block stopped running" >&2
   fails=$((fails + 1))
 fi
-if [[ "$passes" -lt 145 ]]; then
-  echo "FAIL: only $passes assertions passed (floor 145) — a case block stopped running" >&2
+if [[ "$passes" -lt 146 ]]; then
+  echo "FAIL: only $passes assertions passed (floor 146) — a case block stopped running" >&2
   exit 1
 fi
 [[ "$fails" -eq 0 ]] || exit 1
