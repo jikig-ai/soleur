@@ -94,7 +94,7 @@ REFUSAL_INTERVAL=3600
 # trimming: a scheme other than https://, an empty rest, or any byte outside the class below (a quote,
 # backslash or newline would add directives to the config grammar) is refused with zero requests, one
 # value-free marker on stderr (the unit's SyslogIdentifier ships it) and the same fail-soft exit as every
-# other arm. The marker is rate-limited on its OWN stamp (CTO ruling, 2026-10-15): never _fault, whose
+# other arm. The marker is rate-limited on its OWN stamp (ADR-280, PR C follow-up): never _fault, whose
 # stamp is shared by every fault class and must not be masked by a refusal.
 _hb_url_ok() {
   local LC_ALL=C
@@ -113,7 +113,9 @@ _refusal_due() {
   now=$(date +%s 2>/dev/null || echo 0)
   last=0
   [ -f "$REFUSAL_MARKER" ] && last=$(cat "$REFUSAL_MARKER" 2>/dev/null || echo 0)
-  case "$last" in ''|*[!0-9]*|????????????????*) last=0 ;; esac
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ "${#last}" -le 10 ] || last=0
+  last=$((10#$last))
   if [ "$now" -gt 0 ] && [ "$last" -le "$now" ] && [ $((now - last)) -lt "$REFUSAL_INTERVAL" ]; then
     return 1
   fi
@@ -132,7 +134,7 @@ _ping() {
   fi
   [ -n "$URL" ] || { echo "[inngest-consumer-probe] WARN: INNGEST_CONSUMER_URL unset — the registry is servable but the beat cannot be sent, so the monitor will alarm on a HEALTHY host. Check /etc/default/inngest-consumer-probe." >&2; return 0; }
   if ! _hb_url_ok "$URL"; then
-    local reason=token_shape
+    local reason=token_shape LC_ALL=C
     case "$URL" in *[[:cntrl:]]*) reason=control_char ;; esac
     if _refusal_due; then
       echo "SOLEUR_CREDENTIAL_REFUSED script=inngest-consumer-probe reason=$reason var=INNGEST_CONSUMER_URL" >&2

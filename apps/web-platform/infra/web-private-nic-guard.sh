@@ -143,7 +143,7 @@ fi
 # emitter is observable-when-healthy (a SOLEUR_PRIVATE_NIC emit that never fires is indistinguishable
 # from "guard dead"). Ping ONLY when nic_ok AND the guard could report (not SHIP_REFUSED) — a NIC-broken
 # host, or a guard that cannot ship, must let the beat lapse so absence alarms. Decode a missing beat by
-# reading the guard's stderr in Better Stack (`bad_token` / `unpinned_url` / `WARN` vs `nic_ok=false`). Independent unit/failure-domain from the zot beat (folding would re-introduce OR-masking).
+# reading the guard's stderr in Better Stack (`bad_token` / `unpinned_url` / `WARN` / `SOLEUR_CREDENTIAL_REFUSED` vs `nic_ok=false`). Independent unit/failure-domain from the zot beat (folding would re-introduce OR-masking).
 URL="${WEB_NIC_GUARD_URL:-}"
 # The beat URL is itself the credential (its path is the secret), so it must not ride curl's argument list
 # (readable by every local user in /proc/<pid>/cmdline; ADR-280, #9757): it reaches curl on the stdin config
@@ -182,8 +182,15 @@ _refusal_due() {
   printf '%s\n' "$now" | tee "$m" >/dev/null 2>&1 || true
   return 0
 }
-if [ "$NIC_OK" = true ] && [ "$SHIP_REFUSED" = false ] && [ -n "$URL" ]; then
-  if _hb_url_ok "$URL"; then
+if [ "$NIC_OK" = true ] && [ "$SHIP_REFUSED" = false ]; then
+  if [ -z "$URL" ]; then
+    # An unset beat URL (a wrong key name, or a secret missing on a freshly replaced host) pages "host down" with
+    # nothing off-box saying why: same hourly limiter, reason=empty (the inngest heartbeat body uses the same token).
+    if _refusal_due; then
+      echo "SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=empty var=WEB_NIC_GUARD_URL" >&2
+      echo "[nic] WARN: web_nic_guard heartbeat URL unset (nic_ok=true, no ping sent) — the monitor will alarm on a healthy host." >&2
+    fi
+  elif _hb_url_ok "$URL"; then
     _hb_curl || _hb_curl || echo "[nic] WARN: web_nic_guard heartbeat ping FAILED (nic_ok=true, url_present=yes)" >&2
   elif _refusal_due; then
     echo "SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=$(_refusal_reason "$URL") var=WEB_NIC_GUARD_URL" >&2

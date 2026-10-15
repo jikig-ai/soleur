@@ -193,8 +193,9 @@ cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 LOG_TAG="inngest-heartbeat"
 #
 # --- #6617b: dark-arm rate limiter ---------------------------------------------------------
-# Reachable ONLY from the dark arm rendered below (the live co-located host's render deletes
-# that arm entirely, so on that host this function is defined and never called). It exists as a
+# Called from the dark arm rendered below, from the listener gate, and from the credential-refusal
+# branch at the end of this body, each on its OWN stamp (the dark arm's render is deleted entirely on
+# the live co-located host, but the gate and the refusal branch still call it there). It exists as a
 # function rather than inline in the sed replacement because the replacement is a single
 # `s|...|...|` expression with \n escapes -- readable logic does not survive in there.
 #
@@ -306,15 +307,17 @@ fi
 # { } makes curl print the FULL URL in its glob-parse error (`curl: (3) bad range in URL
 # position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier
 # now ships straight to Better Stack. -g disables globbing (we never glob) and the echo
-# with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient.
+# with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient. (Since #9757 the shape
+# guard below refuses any value carrying [ ] { } before curl runs, so -g is defence in depth here.)
 #
 # #9757 / ADR-280: the URL's PATH is the credential, so it must not be a curl ARGUMENT either (argv is
 # readable by every local user in /proc/<pid>/cmdline for the life of the child). It reaches curl on the
 # stdin config (`--config -`) through a PIPE: this body is POSIX sh (dash on Ubuntu), so no process
 # substitution and no [[ ]], and the repo's Rule E lint refuses a heredoc feeding the config. `printf` is a
 # builtin, so the URL is never an argument of any process. There is no `exec` before curl (inside a
-# pipeline it would run in a subshell and replace nothing) and no pipefail: this line is the script's LAST
-# command, so the script's status is the pipeline's, which is curl's, exactly as `exec curl` gave.
+# pipeline it would only replace the pipeline's forked subshell, not this shell) and no pipefail: this line
+# is the script's LAST command, so the script's status is the pipeline's, which is curl's, exactly as
+# `exec curl` gave.
 # `--disable` (first, so no ~/.curlrc is read) and `--noproxy '*'` confine the transport (lint Rule D); the
 # host has no checkout, so this is the inline form of the shared library.
 #
@@ -325,11 +328,15 @@ fi
 # LC_ALL=C pins bytewise matching: dash matches bytewise anyway, a busybox or bash `sh` would use locale
 # ranges.
 #
-# A refusal makes zero requests and exits 2 (what curl's own blank-URL rejection gave, so the web render,
-# which has no dark arm, stays loud on an absent URL). The marker is ONE value-free line through the
-# hourly limiter on its OWN stamp (this unit fires every 60 s: the EXIT stays nonzero every tick, only
-# the log line is limited). The marker is assigned to a variable first so no logger line names the URL
-# variable (inngest.test.sh bans exactly that shape).
+# A refusal makes zero requests and logs ONE value-free marker through the hourly limiter on its OWN
+# stamp. EXIT STATUS (CTO-ruled, 2026-10-15): a present-but-malformed value (reason token_shape or
+# control_char) exits 0 ON PURPOSE. The missed Better Stack beat IS the alarm (the monitors are armed and
+# page within minutes, exactly as for the three web-1 probe scripts), and a non-zero exit would fire this
+# unit's unlimited OnFailure ERR logger on every 60 s tick (the #6536 storm shape: about 2.9k rows/day
+# against the Source 4 quota). Only `reason=empty` keeps exit 2, because the web render has no dark arm
+# and an absent URL on the live pusher must stay loud, as curl's own blank-URL rejection (rc 2) was.
+# The marker is assigned to a variable first so no logger line names the URL variable
+# (inngest.test.sh bans exactly that shape).
 LC_ALL=C
 _hb_ok=
 case $INNGEST_HEARTBEAT_URL in
@@ -343,9 +350,11 @@ if [ -z "$_hb_ok" ]; then
   case $INNGEST_HEARTBEAT_URL in '') _hb_reason=empty ;; *[[:cntrl:]]*) _hb_reason=control_char ;; *) _hb_reason=token_shape ;; esac
   _hb_marker="SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=$_hb_reason var=INNGEST_HEARTBEAT_URL"
   if INNGEST_HEARTBEAT_DARK_STAMP="${INNGEST_HEARTBEAT_REFUSAL_STAMP:-/run/inngest-heartbeat/refusal.stamp}" dark_arm_emit_due; then
-  logger -t "$LOG_TAG" "$_hb_marker"
+    logger -t "$LOG_TAG" "$_hb_marker"
   fi
-  exit 2
+  # The exit is OUTSIDE the rate limit (the limit governs the LINE, never the DECISION).
+  case $_hb_reason in empty) exit 2 ;; esac
+  exit 0
 fi
 printf 'url = "%s"\n' "$INNGEST_HEARTBEAT_URL" | /usr/bin/curl --disable --noproxy '*' -gfsS --max-time 10 --config - >/dev/null
 HEARTBEATSCRIPTEOF
@@ -383,7 +392,7 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   log "inngest-heartbeat: dark arm RENDERED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — an absent URL skips the ping and logs why, hourly"
 else
   sed -i '/^@@DARK_ARM@@$/d' "$HEARTBEAT_SCRIPT"
-  log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (curl rc=2)"
+  log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (guard refusal reason=empty, exit 2)"
 fi
 # @@DARK_ARM@@ render end
 
@@ -453,7 +462,8 @@ EnvironmentFile=/etc/default/inngest-server
 # Do NOT remove without moving DOPPLER_CONFIG_DIR off the shared /tmp.
 PrivateTmp=true
 # #6617b: the dark arm's hourly rate limiter keeps its last-emit stamp at
-# /run/inngest-heartbeat/dark.stamp. This unit runs User=deploy and /run is root-owned 0755,
+# /run/inngest-heartbeat/dark.stamp (and the listener gate and the credential refusal keep gate.stamp
+# and refusal.stamp in the same directory). This unit runs User=deploy and /run is root-owned 0755,
 # so deploy cannot create anything there directly -- without RuntimeDirectory= the stamp write
 # fails on every fire, the limiter never engages, and the quota fix is a silent no-op.
 # PrivateTmp=true above does NOT cover /run, so this is the right mechanism (and /tmp is

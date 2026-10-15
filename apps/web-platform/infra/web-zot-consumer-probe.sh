@@ -92,7 +92,8 @@ esac
 # NON-EMPTY repo elements in order; a missing position reads 000; pin HEADs are NOT seamed, the suite drives
 # them through a mock registry and a stub curl) so the classification branches are
 # unit-testable without a live registry; SOLEUR_ZOT_PROBE_PING_LOG re-routes the heartbeat ping to
-# a file so a test can assert ping/no-ping. Neither is ever set in production. The auth/-f behavioral
+# a file so a test can assert ping/no-ping; SOLEUR_PROBE_REFUSAL_MARKER relocates the heartbeat-URL refusal's own
+# stamp (default /run/web-zot-consumer-probe.refusal, like this file's other marker seams). None is ever set in production. The auth/-f behavioral
 # properties are covered by a separate mock-HTTP-server test (web-zot-consumer-probe.test.sh).
 
 ENDPOINT="${ZOT_ENDPOINT:-10.0.1.30:5000}"
@@ -138,7 +139,7 @@ _ping() {
 }
 
 # A refused heartbeat URL (#9757): fail-soft, never an argv fallback (no ping, the caller's exit status is
-# unchanged), and loud but bounded. Ruled by CTO agent, 2026-10-15: the refusal has its OWN stamp (never the
+# unchanged), and loud but bounded. Ruled (ADR-280 PR C follow-up): the refusal has its OWN stamp (never the
 # canary's or the per-repo marker's, which a healthy tick refreshes), a 3600 s window, and fails OPEN when the
 # stamp cannot be written (emit on every tick: loud, never silent). The marker and the WARN both sit inside the
 # limiter. The reason is control_char when the value holds a control character, else token_shape; the value is
@@ -183,7 +184,7 @@ _stamp() {  # <marker-file> <epoch>
   printf '%s\n' "$2" > "$1" 2>/dev/null || true
 }
 
-# One rate-limit window shared by the canary and the per-repo markers (#7258): true (return 0) when a
+# One rate-limit helper shared by the canary, the per-repo markers (#7258) and the heartbeat-URL refusal: true (return 0) when a
 # new emit is due, i.e. the marker file is missing, empty, non-numeric, wider than 10 digits (not a
 # plausible epoch, and a guard against integer overflow), DATED IN THE FUTURE, or older than the window
 # (1800 s unless the caller passes a second argument; the heartbeat refusal passes 3600), or
