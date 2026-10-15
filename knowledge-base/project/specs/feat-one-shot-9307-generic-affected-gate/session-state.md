@@ -57,3 +57,20 @@ Design verdict (both seats): requirement-driven; mechanisms justified EXCEPT sib
 - Fix MUST-FIX items, re-run affected-tests.test.sh
 - Check /tmp/soleur-9307-gate.log GATE_RC (affected gate queued under sibling contention)
 - Ship conditions: #8231 disposition comment, #8621/#10333 notes, PR body "affected-suite gate" + Ref #9307, then soleur:qa → soleur:compound → soleur:ship
+
+## Architecture seat findings (e0faedcb) + consolidated fix plan
+
+NEW P1: inert early-exit (affected-tests.sh:551) fires BEFORE runner probe (:587) — md-only diffs get NO_TESTS_AFFECTED rc0 while delegated test-all.sh would run ~114 always-on ratchets (AGENTS.md/SKILL.md are live edges). THE fail-away-from-coverage path. FIX: reorder — capability probe before classification; when runner capable, always delegate (--affected, or --full only for operator --full); gate's own global/inert classification applies to adapter arm only. Also fixes arch-P2.3 (delegated --full overrides finer selection) and ADR "unchanged modulo indirection" claim.
+
+MUST-FIX list (dedup all 3 seats):
+1. P1 inert-preempts-runner → reorder dispatch (probe before classify; runner always sees diff)
+2. P1 900s budget < ~22min measured run + grok-pre-push-gate.sh:93-96 maps rc6/7 to FAIL → add rc6/7 arms (6=defer-to-CI proceed/note, 7=proceed w/ disclosure per contract) + ADR records block-or-pass decision
+3. P2 --explain bypassed under test_command (:377 before :525) → move --explain before custom arm, emit mode=custom exit 0
+4. P2 affected_running_gates dead on bash3.2 (`${BASHPID:-$pid}` tautology) → fix guard `[[ -n "${BASHPID:-}" && "$pid" == "$BASHPID" ]] && continue`; correct comment bias claim. (Simplicity seat recommends cutting mechanism — kept per plan prescription, bug fixed)
+5. P2 go.sh:73 guard-trip → return 1 (not rc0 truncated)
+6. P2 nx-turbo.sh:79 '0 tasks' → '(^|[^0-9])0 tasks'
+7. P2 in-gate ADR-179 resolver (:107-139) dead diagnostic weight → DELETE (~32 lines); grok gate already resolves via dirname $0; call sites expand CLAUDE_PLUGIN_ROOT
+8. P2 --base not forwarded under delegation → scope contract doc claim (base steers adapter-arm only; runner resolves own base); fix ADR consequence line
+9. P3 batch (one-liners/doc edits): watchdog kill process-group or document; git diff -M twice→once; CI-detect strip comments (sed 's/#.*//'); js mode=selected→mode=full reason=no-selector; py xdist probe via pytest shebang interpreter; clamp budget_seconds/max_workers>0 or bad-config; self-check <15s claim → doc "worst ~80s bounded"; contract table add mode=explain|none|help; rc1 custom reason=ok→failed; bad-config malformed→document filename stand-in; consolidate 4 find census blocks→common.sh helper; delegated rc0 emit verdict sentence; runner rc contract paragraph in contract md; py over-detect→require pytest signal or test_*.py; rc6 wording for budget_ci; NXT suppress js only when suite produced; "marker on every path"→"verdict paths"; review/SKILL.md "seat scope"→"sole scope"
+
+THEN: spawn remaining 5 code-panel seats (correctness, security-sentinel, pattern-recognition, data-integrity, agent-native), synthesize all findings → gh issues labeled code-review w/ "PR #10389", verify affected-tests.test.sh still green, check /tmp/soleur-9307-gate.log GATE_RC, then qa→compound→ship. Ship conditions: #8231 comment, #8621/#10333 notes, PR body affected-suite-gate + Ref #9307.
