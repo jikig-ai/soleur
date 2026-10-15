@@ -994,7 +994,7 @@ class Census:
         notify_words = sorted(set(re.findall(r'swords=" ([A-Z][A-Z_]+)"', wtxt)))
         # completeness: every wipe_* token in those sources is either a derived verdict word or on the explicit non-verdict list
         NONVERDICT = {"wipe_assert", "wipe_check", "wipe_reread", "wipe_soak", "wipe_word", "wipe_family", "wipe_finish", "wipe_listing", "wipe_origin_run_ok",
-                      "wipe_last_rollback_epoch", "wipe_run_title_class", "wipe_detach_gate", "wipe_delete_gate", "wipe_other", "wipe_boot_field_", "wipe_unknown"}
+                      "wipe_last_rollback_epoch", "wipe_run_title_class", "wipe_detach_gate", "wipe_delete_gate", "wipe_other", "wipe_boot_field_", "wipe_unknown", "wipe_variant"}
         alltoks = set()
         for p in srcs:
             alltoks.update(re.findall(r"\bwipe_[a-z0-9_]+\b", open(p).read()))
@@ -1296,7 +1296,7 @@ case "$phase" in
     [ "${WIPE_ROW_DT:-}" = "$(cat "$W/boot_epoch" 2>/dev/null)" ] || { ev "host BADROWDT row_dt=${WIPE_ROW_DT:-none}"; exit 2; }
     [ "$PT_SERVER" = "$SRV_ID" ] || refuse wipe_device_absent
     ev "host phase=pre ok listing=$listing row_dt=${WIPE_ROW_DT:-none} vid=$vid env=$(leaks)"
-    echo "wipe_assert pre ok layout_signal=ok journal=clean top_d=0 top_f=0 top_l=0 top_o=0 repos=0 boot_to_row_s=600" ;;
+    echo "wipe_assert pre ok layout_signal=ok journal=clean top_d=0 top_f=0 top_l=0 top_o=0 repos=0 boot_to_row_s=600 lock_residue=0 store_root_repos=0" ;;
   post_detach|finish)
     [ -z "${WIPE_ROW_DT:-}${WIPE_LISTING:-}" ] || { ev "host BADPRE_ONLY phase=$phase"; exit 2; }
     [ "$PT_SERVER" != "$SRV_ID" ] || refuse wipe_device_still_attached

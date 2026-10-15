@@ -943,7 +943,7 @@ mode_wipe_assert() {
   fi
   cmd="$cmd bash -s"
   if [ "$phase" = pre ]; then
-    pat='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+$'
+    pat='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+ lock_residue=([0-9]+|na) store_root_repos=[0-9]+$'
     if [ "$listing" = run ]; then tmo=300; else tmo=90; fi
   else
     pat="^wipe_assert $phase ok byid=gone mapper_read=ok store_root=ok\$"

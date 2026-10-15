@@ -259,9 +259,7 @@ path, `prd` config, `DOPPLER_TOKEN_PRD`.
 `WIPE_SOAK_FLOOR_SECONDS` stays `604800`, pinned, untouched (CLO 2026-10-14 row forbids relaxing it; the 2026-10-15 ruling limits the
 relaxation to the separated variant by not applying the soak there, not by changing the constant). The script prints
 `wipe_variant=separated|flip_chained` as its first output line. `F` and `S` are read UNCONDITIONALLY in every wipe-family mode (today `wipe` reads the stamp only when the flag is `true`), and `wipe_reread` gains an `S` read (today it is flag-only). W7b (`wipe_reread`, immediately before W9) re-asserts the variant's
-own predicates: for `separated`, `F` still not `true` and `S` still absent (a flip begun in between refuses `wipe_precondition_flag_not_true`
-when the flag reads `true`, or `wipe_precondition_variant_changed` when only the stamp appeared); for `flip_chained`, flag still `true`
-and the stamp unchanged. A variant that differs from the one W3 printed is always a refusal, never a re-selection.
+own predicates, implemented as: `wipe_reread` takes the variant W3 printed as `WIPE_VARIANT` (an EXPECTATION that is compared, never a selector; absent or off-set it refuses `wipe_precondition_variant_changed expected=none`). Expecting `flip_chained`: the flag must still read `true` (else the existing `wipe_precondition_flag_not_true`); the stamp is not re-read. Expecting `separated`: flag and stamp are re-read and the recomputed variant must still be `separated`, else `wipe_precondition_variant_changed expected=separated got=<v>` (a flip began, or a stamp appeared), or `wipe_precondition_flag_unreadable` when the flag is outside the closed set. A variant that differs from the one W3 printed is always a refusal, never a re-selection.
 
 **A1.2b Where the variant is decided (review findings 1, 2, 6).**
 - *The scan is the SOLE post-flip barrier.* A flip with a failed probe leaves the flag `true` until a rollback; a rollback leaves `F=false`

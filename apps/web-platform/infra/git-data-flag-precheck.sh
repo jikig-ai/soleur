@@ -279,19 +279,19 @@ fi
 #   none          the flag is outside the closed set (true|false|unset) and the stamp is absent.
 # A garbage stamp counts as PRESENT, so it can never reach `separated`. The run-record scan and the boot_complete
 # predicates of `separated` live in a later workflow step (they need W4's server `created` and W5's row).
-wipe_stamp_state=""; wipe_stamp_epoch=""
-wipe_classify_stamp() { # sets wipe_stamp_state=absent|valid|malformed and wipe_stamp_epoch
-  wipe_stamp_epoch=""
+CLS_STAMP_STATE=""; CLS_STAMP_EPOCH=""
+classify_stamp_state() { # sets CLS_STAMP_STATE=absent|valid|malformed and CLS_STAMP_EPOCH
+  CLS_STAMP_EPOCH=""
   if [ -z "$1" ]; then
-    wipe_stamp_state=absent
+    CLS_STAMP_STATE=absent
   elif [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
-       && wipe_stamp_epoch="$(date -u -d "$1" +%s 2>/dev/null)" && [[ $wipe_stamp_epoch =~ ^[0-9]+$ ]]; then
-    wipe_stamp_state=valid
+       && CLS_STAMP_EPOCH="$(date -u -d "$1" +%s 2>/dev/null)" && [[ $CLS_STAMP_EPOCH =~ ^[0-9]+$ ]]; then
+    CLS_STAMP_STATE=valid
   else
-    wipe_stamp_epoch=""; wipe_stamp_state=malformed
+    CLS_STAMP_EPOCH=""; CLS_STAMP_STATE=malformed
   fi
 }
-wipe_select_variant() { # <flag> <stamp-state> -> prints flip_chained|separated|none
+select_variant() { # <flag> <stamp-state> -> prints flip_chained|separated|none
   if [ "$1" = true ] || [ "$2" != absent ]; then echo flip_chained
   elif [ -z "$1" ] || [ "$1" = false ]; then echo separated
   else echo none
@@ -311,8 +311,8 @@ if [ "$FLAG_MODE" = wipe_reread ]; then
       ;;
     separated)
       read_secret GIT_DATA_LUKS_CUTOVER_AT wipe_stamp_read_failed --no-exit-on-missing-secret
-      wipe_classify_stamp "$VAL"
-      got="$(wipe_select_variant "$flag" "$wipe_stamp_state")"
+      classify_stamp_state "$VAL"
+      got="$(select_variant "$flag" "$CLS_STAMP_STATE")"
       if [ "$got" = none ]; then
         refuse wipe_precondition_flag_unreadable
       fi
@@ -331,9 +331,9 @@ if [ "$FLAG_MODE" = wipe ] || [ "$FLAG_MODE" = wipe_check ]; then
   # Both reads are UNCONDITIONAL: the variant is a function of the flag AND the stamp.
   read_secret GIT_DATA_LUKS_CUTOVER_AT wipe_stamp_read_failed --no-exit-on-missing-secret
   stamp="$VAL"
-  wipe_classify_stamp "$stamp"
-  stamp_epoch="$wipe_stamp_epoch"
-  wipe_variant="$(wipe_select_variant "$flag" "$wipe_stamp_state")"
+  classify_stamp_state "$stamp"
+  stamp_epoch="$CLS_STAMP_EPOCH"
+  wipe_variant="$(select_variant "$flag" "$CLS_STAMP_STATE")"
   echo "wipe_variant=${wipe_variant}"
   wipe_word=""; elapsed_s=""
   case "$wipe_variant" in
@@ -345,12 +345,12 @@ if [ "$FLAG_MODE" = wipe ] || [ "$FLAG_MODE" = wipe_check ]; then
         wipe_word=wipe_precondition_flag_not_true
       fi
       if [ -z "$wipe_word" ]; then
-        case "$wipe_stamp_state" in
+        case "$CLS_STAMP_STATE" in
           absent)    wipe_word=wipe_precondition_stamp_absent ;;
           malformed) wipe_word=wipe_precondition_stamp_malformed ;;
         esac
       fi
-      if [ "$wipe_stamp_state" = valid ]; then
+      if [ "$CLS_STAMP_STATE" = valid ]; then
         elapsed_s=$(( $(date -u +%s) - stamp_epoch ))
         if [ -z "$wipe_word" ] && [ "$elapsed_s" -lt "$WIPE_SOAK_FLOOR_SECONDS" ]; then
           wipe_word=wipe_precondition_soak_not_elapsed

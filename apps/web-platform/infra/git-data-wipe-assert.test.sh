@@ -372,7 +372,7 @@ run_script() {
     bash -s < "${RUN_SCRIPT:-$SCRIPT}" > "$W/out" 2> "$W/err" || RC=$?
 }
 
-RE_PRE='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+$'
+RE_PRE='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+ lock_residue=([0-9]+|na) store_root_repos=[0-9]+$'
 RE_POST='^wipe_assert (post_detach|finish) ok byid=gone mapper_read=ok store_root=ok$'
 RE_ERR='^wipe-assert: rc=[0-9]+ reason=[a-z_0-9]+( [a-z_]+=[0-9]+)*$'
 INVARIANT_RUNS=0
@@ -494,9 +494,11 @@ findmnt|-n|-o|UUID|--mountpoint|@W@/root
 findmnt|-n|-o|UUID|--mountpoint|@W@/root
 find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
 find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|repositories|-printf|T:%y
 find|/proc|-ignore_readdir_race|-maxdepth|3|-type|l|-regex|/proc/[0-9]+/fd/[0-9]+|-lname|/dev/sdb|-print|-quit
 find|@D@/mnt/lost+found|-mindepth|1|-maxdepth|1|-printf|x
 find|@D@/mnt/repositories|-mindepth|1|-maxdepth|1|!|(|-type|f|(|-name|.*.init.lock|-o|-name|.init.lock|)|)|!|(|-type|d|-name|lost+found|-empty|)|-printf|x
+find|@D@/mnt/repositories|-mindepth|1|-maxdepth|1|-type|f|-name|.?*.init.lock|-printf|x
 find|@D@/mnt|-mindepth|1|-maxdepth|1|-printf|%y\t%f\0
 losetup|--find|--show|--|@D@/cow
 losetup|-d|/dev/loop99
@@ -532,6 +534,7 @@ findmnt|-n|-o|UUID|--mountpoint|@W@/root
 findmnt|-n|-o|UUID|--mountpoint|@W@/root
 find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
 find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|repositories|-printf|T:%y
 find|/proc|-ignore_readdir_race|-maxdepth|3|-type|l|-regex|/proc/[0-9]+/fd/[0-9]+|-lname|/dev/sdb|-print|-quit
 realpath|-e|--|/dev/disk/by-id/scsi-0HC_Volume_111111111
 realpath|-e|--|/dev/sdc
@@ -564,7 +567,7 @@ echo "--- TIER A: the host script over a simulated host"
 # ── the clean host: skip (wipe_check) and run (wipe) ──────────────────────────────────────────
 world a-skip
 run_script pre WIPE_LISTING=skip
-expect_line "A01 clean host, listing skipped (wipe_check)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200$'
+expect_line "A01 clean host, listing skipped (wipe_check)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200 lock_residue=na store_root_repos=0$'
 if [ "$(called dmsetup)" = 0 ] && [ "$(called mount)" = 0 ] && [ "$(called losetup)" = 0 ]; then ok "A01 skip: no snapshot was created, nothing mounted (wipe_check stays a metadata read)"
 else no "A01 skip: a snapshot call was made"; fi
 # the operand/flag contract: the record of every selector-bearing call equals the modelled argv (a wrong device, a
@@ -575,7 +578,7 @@ else no "A01 contract (skip): the recorded argv differs from the model: $(argv_n
 world a-run
 set_contract
 run_script pre
-expect_line "A02 clean host, listing run (dirty journal)" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+expect_line "A02 clean host, listing run (dirty journal)" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0$'
 if caught_contract_pre; then ok "A02 contract (pre, listing): every operand and flag is the modelled one (typed device for getro/getsz/dumpe2fs/isLuks/findmnt -S/the /proc scan, iflag-free, if=/of= never the device, ro mount, table 0 <sectors> snapshot <origin> <cow> N 8, losetup on the COW file, 2 s quiescence)"
 else no "A02 contract (pre, listing): the recorded argv differs from the model: $(argv_norm "$W" | tr '\n' ';' | cut -c1-900)"; fi
 
@@ -585,7 +588,7 @@ tree_clean
 : > "$W/tree/.init.lock"; : > "$W/tree/.ws-9.init.lock"
 : > "$W/tree/repositories/.init.lock"; : > "$W/tree/repositories/.ws-9.init.lock"; mkdir -p "$W/tree/repositories/lost+found"
 run_script pre
-expect_line "A03 (must-PASS) lock dotfiles and lost+found are not repositories" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=3 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+expect_line "A03 (must-PASS) lock dotfiles and lost+found are not repositories" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=3 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=2 store_root_repos=0$'
 
 # the exclusions are TYPED: a lock is a regular file, lost+found an empty directory
 world a-lfcontent
@@ -617,12 +620,36 @@ expect_refuse "A09c a repositories/lost+found that holds an entry counts (only a
 world a-clean-journal
 printf 'Filesystem features:      has_journal ext_attr resize_inode dir_index filetype extent\nFilesystem state:         clean\nTotal journal blocks:     16384\nBlock size:               4096\n' > "$W/sb_origin"
 run_script pre
-expect_line "A04 a clean journal reads journal=clean" '^wipe_assert pre ok layout_signal=ok journal=clean top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+expect_line "A04 a clean journal reads journal=clean" '^wipe_assert pre ok layout_signal=ok journal=clean top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0$'
 
 world a-norepos
 tree_reset; mkdir -p "$W/tree/lost+found"
 run_script pre
-expect_line "A05 (must-PASS) a volume with no repositories directory and nothing else is empty" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=1 top_f=0 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+expect_line "A05 (must-PASS) a volume with no repositories directory and nothing else is empty" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=1 top_f=0 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0$'
+
+# ── A1 (2026-10-15): store_root_repos (the LUKS store root: an independent barrier for the separated wipe) ──
+# A read-only count of $OLD_ROOT/repositories with the bootstrap exclusions; the host is NOT told the variant, the
+# runner refuses on a non-zero count. Counts only, never a name.
+world a-sr-repos
+mkdir -p "$W/root/repositories/$CORPUS_REPO_A" "$W/root/repositories/$CORPUS_TOP_DIR"; : > "$W/root/repositories/.ws-9.init.lock"; : > "$W/root/repositories/.init.lock"
+run_script pre
+expect_line "A95 two repositories under the store root (lock files excluded) -> store_root_repos=2, exit 0, no name" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=2$'
+world a-sr-locksonly
+mkdir -p "$W/root/repositories/lost+found"; : > "$W/root/repositories/.ws-9.init.lock"
+run_script pre
+expect_line "A96 (must-PASS) only lock files and an empty lost+found under the store root -> store_root_repos=0" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0$'
+world a-sr-lfcontent
+mkdir -p "$W/root/repositories/lost+found/$CORPUS_REPO_A"
+run_script pre
+expect_line "A97 a store-root repositories/lost+found that holds an entry counts (only an EMPTY one is excluded)" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=1$'
+world a-sr-symlink
+ln -s lost+found "$W/root/repositories"
+run_script pre
+expect_refuse "A98 a store-root repositories that is a SYMLINK is unreadable, never counted as empty" 42 store_root_unreadable
+world a-sr-skip
+mkdir -p "$W/root/repositories/$CORPUS_REPO_A"
+run_script pre WIPE_LISTING=skip
+expect_line "A99 the store-root count runs even when the snapshot listing is skipped (lock_residue=na)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200 lock_residue=na store_root_repos=1$'
 
 # ── the layout-independent signal: off-list, non-empty, unparseable ──────────────────────────────
 world a-offdir
@@ -934,7 +961,7 @@ expect_refuse "A93 the row is further after the boot than the bounded window" 32
 if grep -q 'boot_to_row_s=4000' "$W/err"; then ok "A93 the measured boot-to-row seconds are on the refusal (digits)"; else no "A93 boot_to_row_s missing: $(cat "$W/err")"; fi
 world a-boundary
 run_script pre WIPE_ROW_DT=$((NOW - UPTIME_S + 3600))
-expect_line "A94 (must-PASS) a row exactly at the window bound passes" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=3600$'
+expect_line "A94 (must-PASS) a row exactly at the window bound passes" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=3600 lock_residue=0 store_root_repos=0$'
 
 # ── post_detach / finish ─────────────────────────────────────────────────────────────────────────
 world a-post
@@ -1096,7 +1123,7 @@ caught_no_leak() { # no synthesized name in stdout/stderr (the mutant prints one
 mutant_row m1-prints-name '      [ -n "$n" ] || die 35 record_empty' '      [ -n "$n" ] || die 35 record_empty
       say "$n"' set_offdir pre caught_no_leak
 # M2 (Guard 8 row 4): a digest of the listing rides on the output line
-mutant_row m2-digest 'boot_to_row_s=%s\n'"'"' \' 'boot_to_row_s=%s digest=0f0f\n'"'"' \' set_clean pre caught_grammar
+mutant_row m2-digest 'store_root_repos=%s\n'"'"' \' 'store_root_repos=%s digest=0f0f\n'"'"' \' set_clean pre caught_grammar
 # M3: the path-typed allowlist is name-only (a symlinked repositories is accepted)
 mutant_row m3-name-only-allowlist '        repositories:d) HAS_REPOS=yes ;;' '        repositories:*) HAS_REPOS=yes ;;' set_reposlink pre caught_34
 # M4: the absolute-zero written counters check is dropped
@@ -1135,8 +1162,21 @@ set_noroot()      { rmdir "$W/root"; }
 caught_37() { caught_rc 37; }
 caught_40() { caught_rc 40; }
 mutant_row m17-lostfound-contents-unread '      [ "$ln" -eq 0 ] || OFFLIST=1' '      :' set_lfcontent pre caught_34
-mutant_row m18-lock-excluded-by-name '! \( -type f \( -name '"'"'.*.init.lock'"'"' -o -name '"'"'.init.lock'"'"' \) \)' "! -name '.*.init.lock' ! -name '.init.lock'" set_lockdir pre caught_37
-mutant_row m19-lostfound-repos-excluded-by-name '! \( -type d -name lost+found -empty \)' '! -name lost+found' set_lfrepos pre caught_37
+mutant_row m18-lock-excluded-by-name '"$WA_MNT/repositories" -mindepth 1 -maxdepth 1 ! \( -type f \( -name '"'"'.*.init.lock'"'"' -o -name '"'"'.init.lock'"'"' \) \)' '"$WA_MNT/repositories" -mindepth 1 -maxdepth 1 ! -name '"'"'.*.init.lock'"'"' ! -name '"'"'.init.lock'"'"'' set_lockdir pre caught_37
+mutant_row m19-lostfound-repos-excluded-by-name '! \( -type d -name lost+found -empty \) -printf x | wc -c)" || die 33 repos_count_failed' '! -name lost+found -printf x | wc -c)" || die 33 repos_count_failed' set_lfrepos pre caught_37
+# A1 (2026-10-15): the store-root count and the id-bearing lock count.
+set_srrepos()  { mkdir -p "$W/root/repositories/$CORPUS_REPO_A"; }
+set_srlocks()  { mkdir -p "$W/root/repositories"; : > "$W/root/repositories/.ws-9.init.lock"; }
+set_srsymlink() { ln -s lost+found "$W/root/repositories"; }
+set_lockres()  { tree_clean; : > "$W/tree/repositories/.ws-9.init.lock"; }
+caught_srr1()  { grep -qE ' store_root_repos=1$' "$W/out"; }
+caught_srr0()  { grep -qE ' store_root_repos=0$' "$W/out"; }
+caught_lockres1() { grep -qE ' lock_residue=1 ' "$W/out"; }
+caught_42()    { caught_rc 42; }
+mutant_row m24-store-root-count-hardcoded '        SRR="$n" ;;' '        SRR=0 ;;' set_srrepos pre caught_srr1
+mutant_row m25-store-root-lock-counted '! \( -type f \( -name '"'"'.*.init.lock'"'"' -o -name '"'"'.init.lock'"'"' \) \) ! \( -type d -name lost+found -empty \) -printf x | wc -c)" || die 42 store_root_unreadable' '-printf x | wc -c)" || die 42 store_root_unreadable' set_srlocks pre caught_srr0
+mutant_row m26-store-root-symlink-accepted '      *) die 42 store_root_unreadable ;;' '      *) SRR=0 ;;' set_srsymlink pre caught_42
+mutant_row m27-lock-residue-repos-dropped '      LOCKS=$((LOCKS + lk))' '      LOCKS="$LOCKS_TOP"' set_lockres pre caught_lockres1
 mutant_row m20-byid-stat-fails-open '    while byid_present; do' '    while stat -- "$BYID"; do' set_stat_denied post_detach caught_40
 mutant_row m21-freeze-by-test-e '    fz="$(find -H "$OLD_ROOT" -mindepth 1 -maxdepth 1 -name .cutover-freeze -print)" || die 16 freeze_probe' '    fz=""; [ ! -e "$OLD_ROOT/.cutover-freeze" ] || fz=x' set_noroot pre caught_16
 # M22-M33: the selector mutants (each aims one call at the wrong operand or drops/adds one flag): the clean run's
@@ -1210,17 +1250,17 @@ run_verb() {
     GITHUB_OUTPUT="$TL/gh_output" GITHUB_STEP_SUMMARY="$TL/gh_summary" \
     "$@" bash "$CUTOVER" > "$TL/out" 2> "$TL/err" || VRC=$?
 }
-PRE_ANS='wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200'
+PRE_ANS='wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0'
 V_PRE=(WIPE_PHASE=pre WIPE_VOLUME_ID="$ID_T" WIPE_LUKS_VOLUME_ID="$ID_L" WIPE_SERVER_ID="$ID_S" WIPE_ROW_DT="$ROWDT" WIPE_LISTING=run)
 V_POST=(WIPE_PHASE=post_detach WIPE_VOLUME_ID="$ID_T" WIPE_LUKS_VOLUME_ID="$ID_L" WIPE_SERVER_ID="$ID_S")
 has_store() { grep -qxF "[git-data-cutover] STORE probe=wipe-assert verdict=$1" "$TL/out"; }
 no_remote_call() { [ "$(wc -l < "$TL/calls")" = 0 ]; }
 
 run_verb b01 "$PRE_ANS" 0 "${V_PRE[@]}"
-if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200" "$TL/out" && has_store ok; then
+if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0" "$TL/out" && has_store ok; then
   ok "B01 pre with the listing: exit 0, the fixed-shape line is logged (counts only)"
 else no "B01 pre did not pass: rc=$VRC out=[$(tr '\n' '|' < "$TL/out" | cut -c1-300)]"; fi
-if grep -qxF "wipe_assert=$PRE_ANS" "$TL/gh_output" && grep -qxF -- "- WIPE_ASSERT pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200" "$TL/gh_summary"; then
+if grep -qxF "wipe_assert=$PRE_ANS" "$TL/gh_output" && grep -qxF -- "- WIPE_ASSERT pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0" "$TL/gh_summary"; then
   ok "B01 the line is written to GITHUB_OUTPUT and the step summary, verbatim"
 else no "B01 output/summary missing the line"; fi
 if cmp -s "$SCRIPT" "$TL/stdin"; then ok "B02 the host script is sent on STDIN, byte for byte (the single ssh site, gd_capture)"
@@ -1598,12 +1638,12 @@ fi
 # FLOOR — self-contained: bash builtins and this suite's own counters, reported by printf + exit and
 # never through ok()/no() (ADR-193). Each bound is a literal on the line directly above its `if`.
 # ══════════════════════════════════════════════════════════════════════════════════════════
-EXPECTED_INVARIANT_RUNS=92
+EXPECTED_INVARIANT_RUNS=97
 if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=570
+MIN_ASSERTIONS=607
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1

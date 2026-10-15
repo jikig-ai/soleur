@@ -310,7 +310,7 @@ wa_main() {
   # body and never written anywhere. A name that cannot be classified is "unparseable", not skipped.
   wl_classify() {
     local rec t n saw_end=0
-    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no HAS_LF=no OFFLIST=0
+    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no HAS_LF=no OFFLIST=0 LOCKS_TOP=0
     while IFS= read -r -d '' rec; do
       t="${rec%%$'\t'*}"
       n="${rec#*$'\t'}"
@@ -323,14 +323,15 @@ wa_main() {
       case "$n:$t" in
         repositories:d) HAS_REPOS=yes ;;
         lost+found:d) HAS_LF=yes ;;
-        .gc-cursor:f | .init.lock:f | .*.init.lock:f) : ;;
+        .*.init.lock:f) LOCKS_TOP=$((LOCKS_TOP + 1)) ;;
+        .gc-cursor:f | .init.lock:f) : ;;
         *) OFFLIST=1 ;;
       esac
     done
     [ "$saw_end" = 1 ] || die 33 listing_failed
   }
   wipe_listing() {
-    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln names_after hold_after w_after ro_after
+    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln lk names_after hold_after w_after ro_after
     wl_same
     sb="$(timeout 20 dumpe2fs -h "$DEV")" || die 33 dumpe2fs_failed
     if wl_has_nr "$sb"; then J=dirty; else J=clean; fi
@@ -383,6 +384,14 @@ wa_main() {
       [[ "$rn" =~ ^[0-9]+$ ]] || die 33 repos_count_unparseable
       REPOS="$rn"
     fi
+    # id-bearing lock residue (A1, 2026-10-15): regular files named .<id>.init.lock at the top level (counted by the
+    # classifier) and under repositories/. A COUNT only, never a name; the bare .init.lock carries no id.
+    LOCKS="$LOCKS_TOP"
+    if [ "$HAS_REPOS" = yes ]; then
+      lk="$(timeout 30 find "$WA_MNT/repositories" -mindepth 1 -maxdepth 1 -type f -name '.?*.init.lock' -printf x | wc -c)" || die 33 lock_count_failed
+      [[ "$lk" =~ ^[0-9]+$ ]] || die 33 lock_count_unparseable
+      LOCKS=$((LOCKS + lk))
+    fi
     # The allowlisted top-level lost+found is a directory whose CONTENTS the classifier never opens: it must be
     # empty (any entry inside is off the list; only the count is read, never a name).
     if [ "$HAS_LF" = yes ]; then
@@ -412,15 +421,33 @@ wa_main() {
   }
   # ---- END wipe-listing unit ----
 
+  # store_root_repos (A1, 2026-10-15): a read-only COUNT of the entries under the LUKS store root's repositories/
+  # directory, with the bootstrap's exclusions (id-bearing and bare lock files, an EMPTY lost+found). It is an
+  # independent barrier for the separated wipe (ADR-239 Amendment 2026-10-15): the runner refuses when it is not
+  # 0. The host is not told which variant is running, so no input can steer it. A repositories entry that is not a
+  # directory (a symlink or a file) is unreadable, never "empty". Only the integer leaves the host.
+  store_root_repos() {
+    local rt n
+    rt="$(find -H "$OLD_ROOT" -mindepth 1 -maxdepth 1 -name repositories -printf 'T:%y')" || die 42 store_root_unreadable
+    case "$rt" in
+      "") SRR=0 ;;
+      T:d)
+        n="$(timeout 30 find -H "$OLD_ROOT/repositories" -mindepth 1 -maxdepth 1 ! \( -type f \( -name '.*.init.lock' -o -name '.init.lock' \) \) ! \( -type d -name lost+found -empty \) -printf x | wc -c)" || die 42 store_root_unreadable
+        [[ "$n" =~ ^[0-9]+$ ]] || die 42 store_root_unreadable
+        SRR="$n" ;;
+      *) die 42 store_root_unreadable ;;
+    esac
+  }
+
   line_pre() {
-    local lsig journal d f l o r
+    local lsig journal d f l o r k
     if [ "$LISTING" = run ]; then
-      lsig=ok journal="$J" d="$TOP_D" f="$TOP_F" l="$TOP_L" o="$TOP_O" r="$REPOS"
+      lsig=ok journal="$J" d="$TOP_D" f="$TOP_F" l="$TOP_L" o="$TOP_O" r="$REPOS" k="$LOCKS"
     else
-      lsig=not_run journal=na d=na f=na l=na o=na r=na
+      lsig=not_run journal=na d=na f=na l=na o=na r=na k=na
     fi
-    printf 'wipe_assert pre ok layout_signal=%s journal=%s top_d=%s top_f=%s top_l=%s top_o=%s repos=%s boot_to_row_s=%s\n' \
-      "$lsig" "$journal" "$d" "$f" "$l" "$o" "$r" "$BOOT_TO_ROW" >&4
+    printf 'wipe_assert pre ok layout_signal=%s journal=%s top_d=%s top_f=%s top_l=%s top_o=%s repos=%s boot_to_row_s=%s lock_residue=%s store_root_repos=%s\n' \
+      "$lsig" "$journal" "$d" "$f" "$l" "$o" "$r" "$BOOT_TO_ROW" "$k" "$SRR" >&4
   }
 
   phase_post() {
@@ -447,6 +474,8 @@ wa_main() {
   budget
   h8
   h9_h10
+  budget
+  store_root_repos
   budget
   if [ "$LISTING" = run ]; then wipe_listing; fi
   budget

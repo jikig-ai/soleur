@@ -909,7 +909,7 @@ fi
 # ── A1 mutants (Guard 6 rows 6a-6g): the separated variant is reachable only from in-session reads ──────────
 # M-sep-from-env: the variant honours an exported WIPE_VARIANT. WV6 goes RED.
 # shellcheck disable=SC2016
-if mutate sep-from-env "$PRECHECK" 2 's#^  wipe_variant="\$\(wipe_select_variant "\$flag" "\$wipe_stamp_state"\)"$#  wipe_variant="${WIPE_VARIANT:-$(wipe_select_variant "$flag" "$wipe_stamp_state")}"#'; then
+if mutate sep-from-env "$PRECHECK" 2 's#^  wipe_variant="\$\(select_variant "\$flag" "\$CLS_STAMP_STATE"\)"$#  wipe_variant="${WIPE_VARIANT:-$(select_variant "$flag" "$CLS_STAMP_STATE")}"#'; then
   CASE_SCRIPT="$MUTANT" mutant_red sep-from-env case_env_cannot_select
 fi
 # M-sep-ignores-stamp: a present stamp no longer forces flip_chained. WV5 (garbage stamp, flag false) goes RED.
