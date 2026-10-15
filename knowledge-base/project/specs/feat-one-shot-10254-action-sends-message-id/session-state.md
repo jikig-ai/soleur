@@ -10,3 +10,8 @@
 - **TODO**: (a) extend `test/server/account-delete.cascade.integration.test.ts` — seed scope_grants→messages→action_sends ancestors (pattern in `action-sends-worm.test.ts` `seedDraftMessage` + `grant_action_class` RPC, scope_grants via service-role), assert row survives with `message_id IS NULL`; (b) legal docs ×3 — `docs/legal/data-protection-disclosure.md` §2.3(r)+(t) + Last-Updated preamble (CPO conditions 1-3), `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` mirror, `knowledge-base/legal/article-30-register.md` ~344/421 (fix session_replication_role→app.worm_bypass, preserve transition-bound-not-role-bound wording); (c) `bash apps/web-platform/scripts/lint-migration-fk-preconditions.sh <162.sql>`; (d) commit all.
 - **Then**: `soleur:review` → resolve findings (+ADR-267 fix-round) → `soleur:qa` → `soleur:compound` → `soleur:ship` → postmerge → `<promise>DONE</promise>`. node_modules absent (registry unreachable) — vitest runs CI-side.
 - **Notes**: `#10254` assigned Phase 4 milestone; `action_sends.grant_id` descoped to #10379; depart_member greens confirmed on CI runs 38721345071/38734703094.
+
+### Pipeline position update (post-work)
+- Implementation committed + pushed: PR #10385, HEAD 482affd91c (12 files, +724/-97).
+- Review panel armed (3 background seats): e6af6521 security-sentinel, 1897aaa9 code-quality, 97760956 data-integrity/cascade. Await findings → resolve ALL → ADR-267 fix-round if any → qa → compound → ship → postmerge → DONE.
+- Known-verify gap to re-check if flagged: verify/162 tgtype value (should be 11 for BEFORE UPDATE ROW if 23 is wrong).
