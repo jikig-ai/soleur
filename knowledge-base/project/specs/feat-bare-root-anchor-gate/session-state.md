@@ -51,3 +51,10 @@
 ## Compound Phase (complete)
 - Learning written: knowledge-base/project/learnings/2026-10-15-a-predicate-parity-claim-needs-an-env-injection-fixture.md
 - NEXT: soleur:ship (Phases: commit artifacts, docs verify, tests, semver label, PR ready, CI, merge, postmerge) → merge → DONE
+
+## Ship Phase (starting)
+- Branch feat-bare-root-anchor-gate, PR #10386 (draft), issue #10383 (Closes via PR body — verify), HEAD pushed.
+- All implementation+review complete; suites green; learnings committed.
+- Semver label to set: semver:patch (machinery fix, no new user-facing component? — new hook+marker is a feature-ish addition; plan title says chore(machinery); choose semver:patch).
+- Remaining: ship phases (PR body/changelog, ready, CI watch, squash auto-merge, postmerge) then <promise>DONE</promise>.
+- Test-design seat b880e82a still running — fold findings if it lands pre-merge.
