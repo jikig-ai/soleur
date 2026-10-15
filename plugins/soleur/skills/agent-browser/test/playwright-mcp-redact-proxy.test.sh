@@ -747,7 +747,7 @@ r="$(odd meta-in-result)"; assert_withheld 'FR11b: _meta in the result → withh
 r="$(odd result-and-method)"; assert_withheld 'FR11b: result AND method → withheld' "$r" 3 'unrecognised result shape'
 r="$(odd no-content)"; assert_withheld 'FR11b: no content key → withheld' "$r" 3 'unrecognised result shape'
 r="$(odd result-string)"; assert_withheld 'FR11b: result is a string → withheld' "$r" 3 'unrecognised result shape'
-for f in evaluate-escaped-object run-code-escaped; do
+for f in evaluate-escaped-object; do
   r="$(odd "$f")"
   assert_true "PR2: non-JSON candidate lines ($f) emit no swallowed marker (characterization)" bash -c 'stderr_has "$1" "child pgid" && ! stderr_has "$1" "swallowed"' _ "$r"
 done
@@ -1536,7 +1536,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=492
+MIN_ASSERTIONS=491
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

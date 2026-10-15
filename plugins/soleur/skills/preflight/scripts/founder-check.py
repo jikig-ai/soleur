@@ -1585,14 +1585,19 @@ def _note(exc, site):
 
 
 def _locator(exc):
-    # Exception class plus the innermost frame's function name and line, e.g. "KeyError at cmd_verify:1034".
-    # Never str(exc): that text can carry a path or the founder's command. Needs no import.
-    tb = exc.__traceback__
-    while tb is not None and tb.tb_next is not None:
+    # Exception class plus the innermost frame IN THIS FILE (function name and line), e.g. "KeyError at cmd_verify:1034";
+    # the innermost frame overall is usually a stdlib one an agent cannot locate. Never str(exc): that text can carry a
+    # path or the founder's command. Needs no import. Mirrored inline in incident/scripts/redact-engine.py main().
+    tb, own, last = exc.__traceback__, None, None
+    while tb is not None:
+        last = tb
+        if tb.tb_frame.f_code.co_filename == __file__:
+            own = tb
         tb = tb.tb_next
+    tb = own or last
     if tb is None:
         return type(exc).__name__
-    return "%s at %s:%d" % (type(exc).__name__, tb.tb_frame.f_code.co_name, tb.tb_lineno)
+    return "%s at %s:%s" % (type(exc).__name__, tb.tb_frame.f_code.co_name, tb.tb_lineno)
 
 
 def _clear_outputs(argv):

@@ -388,12 +388,19 @@ def main():
     try:
         return scan(sys.argv[1])
     except Exception as e:  # any engine crash = cannot-evaluate, fail closed
-        tb = e.__traceback__
-        while tb is not None and tb.tb_next is not None:
+        tb, own, last = e.__traceback__, None, None
+        while tb is not None:
+            last = tb
+            if tb.tb_frame.f_code.co_filename == __file__:
+                own = tb
             tb = tb.tb_next
-        where = "" if tb is None else " at %s:%d" % (tb.tb_frame.f_code.co_name, tb.tb_lineno)
-        # class name and innermost frame only: exception text can carry scanned content
-        sys.stderr.write(f"redact-engine: internal error: {type(e).__name__}{where}\n")
+        tb = own or last
+        where = "" if tb is None else " at %s:%s" % (tb.tb_frame.f_code.co_name, tb.tb_lineno)
+        # class name and innermost frame in this file only: exception text can carry scanned content (mirrors founder-check _locator)
+        try:
+            sys.stderr.write(f"redact-engine: internal error: {type(e).__name__}{where}\n")
+        except (OSError, ValueError, AttributeError):
+            pass  # a closed stderr (None when fd 2 is closed) must not turn the fail-closed rc 2 into an uncaught crash (rc 1 reads as "redaction needed")
         return 2
 
 

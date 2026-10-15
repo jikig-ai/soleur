@@ -1692,7 +1692,8 @@ describe("swallowed note: the class name and a literal site label only", () => {
     expect([plain.status, noted.status]).toEqual([4, 4]);
     expect(noted.stdout).toBe(plain.stdout);
     expect(noted.stdout.startsWith('{"outcome": "FAIL", "reason": "internal-error", "environmental": true, "detail": "')).toBe(true);
-    expect(String(plain.json?.detail)).toMatch(/^[A-Za-z]+ at [A-Za-z_]+:\d+$/); // class name and innermost frame only: no exception text
+    expect(String(plain.json?.detail)).toMatch(/^[A-Za-z]+ at \S+:\d+$/); // class name and a frame of this script only: no exception text
+    expect(String(plain.json?.detail)).not.toContain("_execute_child"); // the stdlib frame the error is raised from is skipped
     expect(plain.stderr).not.toContain("swallowed");
     expect(noted.stderr.split("\n").filter((l) => l.includes("swallowed"))).toEqual(["founder-check: swallowed IsADirectoryError at out-file-write"]);
   });

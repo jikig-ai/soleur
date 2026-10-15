@@ -128,14 +128,19 @@ def log(msg: str) -> None:
     sys.stderr.flush()
 
 
+def _log_quiet(msg: str) -> None:
+    # log() that cannot raise: for lines written on the teardown path, where an exception would skip the reap and the exit.
+    # RuntimeError is in the guard because teardown can run from the SIGTERM handler, where a reentrant stderr write raises it.
+    try:
+        log(msg)
+    except (OSError, ValueError, RuntimeError, AttributeError):
+        pass  # a closed, full, busy or missing stderr (None when fd 2 is closed) must not abort teardown
+
+
 def _note(exc: BaseException, site: str) -> None:
     # Class name and a static site label only. Never str(exc)/repr(exc)/input text: exception text can carry page
-    # content, and Claude Code persists this stderr. `site` is a string literal at every call site. RuntimeError is
-    # in the guard because teardown can run from the SIGTERM handler, where a reentrant stderr write raises it.
-    try:
-        log(f"swallowed {type(exc).__name__} at {site}")
-    except (OSError, ValueError, RuntimeError, AttributeError):
-        pass  # a closed, full, busy or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash
+    # content, and Claude Code persists this stderr. `site` is a string literal at every call site.
+    _log_quiet(f"swallowed {type(exc).__name__} at {site}")
 
 
 def _flush_notes(pending: List[Tuple[BaseException, str]]) -> None:
@@ -873,7 +878,7 @@ class Proxy:
                 os.killpg(self.pgid, signal.SIGKILL)
             except ProcessLookupError as exc:
                 pending.append((exc, "teardown-sigkill"))
-            log(f"group {self.pgid} survived SIGTERM; SIGKILL sent")  # after the kill: a stderr write that raises must not skip it
+            _log_quiet(f"group {self.pgid} survived SIGTERM; SIGKILL sent")  # after the kill
             self.wait_group_empty(self.grace)
         try:
             child.wait(timeout=self.grace)
@@ -884,7 +889,7 @@ class Proxy:
             rc = 1
         sig = -rc if rc < 0 else 0
         _flush_notes(pending)
-        log(f"child exited rc={rc} signal={sig} ({why})")
+        _log_quiet(f"child exited rc={rc} signal={sig} ({why})")
         code = rc if rc >= 0 else 128 - rc
         try:
             self.out.flush()
