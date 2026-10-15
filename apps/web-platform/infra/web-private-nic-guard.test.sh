@@ -677,8 +677,10 @@ assert "HB hostile list: 16 values, 16 labels, 16 reasons (the list is defined o
   "[[ \"\${#HB_VALUES[@]}\" -eq 16 && \"\${#HB_LABELS[@]}\" -eq 16 && \"\${#HB_REASONS[@]}\" -eq 16 ]]"
 assert "HB hostile list: the labels are exactly the sixteen defects named by the plan, in order" \
   "[[ \"\${HB_LABELS[*]}\" == 'empty-rest http-scheme uppercase-scheme leading-space trailing-space double-quote single-quote backslash newline-smuggled-url-directive carriage-return tab semicolon dollar backtick at-sign hash' ]]"
+hb_values_distinct() { local -A seen=(); local v n=0; for v in "${HB_VALUES[@]}"; do if [[ -z "${seen[$v]+x}" ]]; then seen[$v]=1; n=$((n + 1)); fi; done; echo "$n"; }
+hb_values_equal_good() { local v n=0; for v in "${HB_VALUES[@]}"; do if [[ "$v" == "$HB_GOOD" ]]; then n=$((n + 1)); fi; done; echo "$n"; }
 assert "HB hostile list: every value is distinct and none equals the good URL" \
-  "[[ \"\$(printf '%s\\0' \"\${HB_VALUES[@]}\" | tr '\\0' '\\n' | wc -l)\" -ge 16 ]] && ! printf '%s\\0' \"\${HB_VALUES[@]}\" | grep -qzxF -- \"\$HB_GOOD\""
+  "[[ \"\$(hb_values_distinct)\" -eq 16 && \"\$(hb_values_equal_good)\" -eq 0 ]]"
 assert "HB hostile list: exactly three control-character reasons (newline, CR, tab), thirteen token-shape" \
   "[[ \"\$(printf '%s\\n' \"\${HB_REASONS[@]}\" | grep -c '^control_char\$' || true)\" -eq 3 && \"\$(printf '%s\\n' \"\${HB_REASONS[@]}\" | grep -c '^token_shape\$' || true)\" -eq 13 ]]"
 assert "HB hostile list: the content carries the bytes it names (quote, apostrophe, backslash, newline, CR, tab, ;, \$, backtick, @, #)" \

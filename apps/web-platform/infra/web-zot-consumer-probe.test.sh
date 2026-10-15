@@ -502,9 +502,10 @@ hb_win_row 'a per-repo stamp' SOLEUR_PROBE_REPOS_MARKER 1900 emit SOLEUR_ZOT_PRO
 # non-comment line BEFORE the single stdin url line, one per-attempt _hb_curl called twice, -g kept
 HB_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
 hb_code() { sed 's/^[[:space:]]*#.*//' "$SUT"; }
-hb_line_of() { hb_code | grep -nF -e "$1" | head -1 | cut -d: -f1; }
+HB_CODE_TXT="$(hb_code)"
+hb_line_of() { grep -nF -e "$1" <<<"$HB_CODE_TXT" | head -1 | cut -d: -f1; }
 assert "(hb-s) the guard-class literal appears exactly once, on a non-comment line, before the single stdin url line" \
-  "[[ \"\$(hb_code | grep -cF -e '$HB_CLASS')\" -eq 1 && \"\$(hb_code | grep -cF -e 'url = \"')\" -eq 1 && -n \"\$(hb_line_of '$HB_CLASS')\" && \"\$(hb_line_of '$HB_CLASS')\" -lt \"\$(hb_line_of 'url = \"')\" ]]"
+  "[[ \"\$(grep -cF -e '$HB_CLASS' <<<\"\$HB_CODE_TXT\")\" -eq 1 && \"\$(grep -cF -e 'url = \"' <<<\"\$HB_CODE_TXT\")\" -eq 1 && -n \"\$(hb_line_of '$HB_CLASS')\" && \"\$(hb_line_of '$HB_CLASS')\" -lt \"\$(hb_line_of 'url = \"')\" ]]"
 assert "(hb-s) _hb_curl is defined once and called twice (one fresh process substitution per attempt)" "[[ \"\$(hb_code | grep -oE '_hb_curl' | wc -l)\" -eq 3 ]]"
 assert "(hb-s) the heartbeat curl keeps -g and the --disable --noproxy '*' confinement" \
   "[[ \"\$(hb_code | grep -cF -e \"curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config -\")\" -eq 1 ]]"
