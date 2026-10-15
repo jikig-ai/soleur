@@ -1744,3 +1744,49 @@
 - PR #9051 remains OPEN, draft, disarmed and default-off. Customer content,
   live operations, recovery/retry, build, deployment and promotion remain held.
   Build authorization stays consumed and the withdrawn command stays forbidden.
+
+### Draft maintenance and legal-hash conflict resolution — 2026-10-15
+
+- At pushed `4b3c49e8e623feda96f5f3a35f9949b6c68f4923`, GitHub reported
+  95 successful checks, 15 skipped, no pending and only aggregate `test` red.
+  Its executed log in CI `38626306550` confirms `DRAFT_LIGHT=true` and
+  `draft: full battery owed at ready`. This is historical draft evidence,
+  not full-suite clearance. The PR was OPEN, draft and disarmed.
+- Main advanced to `6a5d639c1ffb8ee689d9b6ca265384c920f895df`; GitHub
+  reported DIRTY. Canonical `sync-pr-behind.sh 9051 --max-attempts 1`
+  classified one genuine conflict in `lib/legal/legal-doc-shas.ts` and
+  refused automatic resolution. Its prescribed merge/resolution path produced
+  `ec578e3525831eba7cdd3a6c7aa5c0f4daeca52e`. Both branches' legal prose
+  remains; the two conflicting SHA entries were recomputed from the merged
+  canonical raw bytes. The nine-document SHA guard and mirror-drift ratchet
+  pass. The existing 80-line drift/expired-target warning remains tracked by
+  Ref #7465, verified OPEN; no legal disposition or deadline was changed.
+- The incoming main delta spans 198 files, including infrastructure, CI/test
+  tooling, legal disclosures and ADRs. Qualification components, the registered
+  offline wrapper, all forward migration bodies and the production Dockerfile
+  are byte-identical to the preceding source. The sole incoming application
+  server delta changes comments in `cron-inngest-config-drift.ts`.
+- The complete registered offline wrapper passed on the merged source under
+  inherited `PYTHONOPTIMIZE=1`, with explicit `CODEX_20261015_OFFLINE_RC=0`.
+  Synthetic socket/file/transport fixtures establish source behavior only;
+  no real image, daemon, database, provider or browser operation ran. The static
+  registration census reports 690 covered suites and zero orphans. Whitespace
+  and staged secret scanning passed. Refresh exact-head pairing/export and PR
+  description after this documentation commit, then watch that pushed head.
+- Ref #10082 and Ref #9791 were verified OPEN. SAST remains VOID and C.9
+  remains unverified without a latest-source execution. Hosted authentication
+  stays BLOCKED in both modes; the alternate route remains PENDING. Sharing,
+  retention/inheritance and regions remain unresolved. Actual reviewed profiles
+  and observations, fresh exact-action approval, recovery/screenshots, routine
+  qualification, permitted Web/CLO matrices and full review/QA/preflight/promotion
+  remain pending. Keep draft/disarmed/default-off/customer-blocked; build
+  authorization is consumed and the withdrawn command remains forbidden.
+- Session errors: the initial Git status probe ran at the bare root and was
+  corrected to the supplied worktree; sandbox lock/network refusals were
+  retried only through exact approval prompts. A guessed offline-suite path
+  and a removed cached hook-reference path did not exist; the current README
+  and skill identified the registered wrapper and hook policy. Prevention:
+  set the worktree on every command, discover paths before reading them, and
+  check producer exits rather than a trailing pipe's status. The session-start
+  cleanup completed without reaping any branch or worktree; Docker pruning
+  remained off. These process corrections confer no operational authorization.
