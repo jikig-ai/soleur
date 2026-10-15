@@ -25,6 +25,9 @@
 #   redeploy  the same-version redeploy lever alone (manual recovery for pin loads etc.).
 #   wipe / wipe_finish / wipe_check  (job `wipe`; the `cutover` job is skipped for them): retire the plaintext
 #             rollback volume. Owner-gated; see the runbook section "The wipe".
+#   snapshot_clear  (job `wipe`, no loader, no Hetzner write): remove a LEFTOVER throwaway device-mapper snapshot of the
+#             plaintext volume that a killed wipe_check/wipe listing left on the git-data host. Owner-gated; it never
+#             detaches or deletes a volume. See the runbook section "A leftover snapshot".
 #
 # Failure semantics (the failure-state matrix):
 #   flag==true + flip     -> resume arm B: the write is skipped; redeploy+assert run.
@@ -75,19 +78,19 @@ name: git-data cutover (#5274 / ADR-220 / ADR-239)
 
 # The run title is a closed pattern the wipe preconditions parse (scripts/lib/git-data-wipe-runs.sh): the wipe
 # family carries the typed volume id, every other mode is `git-data <mode>`.
-run-name: ${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}
+run-name: ${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "proof | flip | rollback | unfreeze | redeploy | wipe | wipe_finish | wipe_check"
+        description: "proof | flip | rollback | unfreeze | redeploy | wipe | wipe_finish | wipe_check | snapshot_clear"
         required: true
         type: choice
         default: proof
-        options: [proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check]
+        options: [proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check, snapshot_clear]
       confirm:
-        description: "Typed token matching the mode: proof=CUTOVER-GIT-DATA flip=FLIP-GIT-DATA rollback=ROLLBACK-GIT-DATA unfreeze=UNFREEZE-GIT-DATA redeploy=REDEPLOY-GIT-DATA wipe=WIPE-GIT-DATA wipe_finish=WIPE-FINISH-GIT-DATA wipe_check=WIPE-CHECK-GIT-DATA (typo-guard; the environment reviewer is the authorization)."
+        description: "Typed token matching the mode: proof=CUTOVER-GIT-DATA flip=FLIP-GIT-DATA rollback=ROLLBACK-GIT-DATA unfreeze=UNFREEZE-GIT-DATA redeploy=REDEPLOY-GIT-DATA wipe=WIPE-GIT-DATA wipe_finish=WIPE-FINISH-GIT-DATA wipe_check=WIPE-CHECK-GIT-DATA snapshot_clear=CLEAR-SNAPSHOT-GIT-DATA (typo-guard; the environment reviewer is the authorization)."
         required: true
         type: string
       lineage:
@@ -125,7 +128,7 @@ env:
 
 jobs:
   cutover:
-    if: inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check'
+    if: inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check' && inputs.mode != 'snapshot_clear'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     environment: web-platform-infra-apply
@@ -828,7 +831,7 @@ jobs:
   # with `exec env -i` so the loader's whole-project environment never reaches a child, and a credential
   # reaches a child on STDIN (here-string), never as `NAME=value` on an env -i line.
   wipe:
-    if: inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check'
+    if: inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: web-platform-infra-apply
@@ -861,6 +864,7 @@ jobs:
             wipe)        want="WIPE-GIT-DATA" ;;
             wipe_finish) want="WIPE-FINISH-GIT-DATA" ;;
             wipe_check)  want="WIPE-CHECK-GIT-DATA" ;;
+            snapshot_clear) want="CLEAR-SNAPSHOT-GIT-DATA" ;;
             *) echo "::error::unknown mode '$MODE'"; exit 1 ;;
           esac
           if [[ "$CONFIRM" != "$want" ]]; then
@@ -919,6 +923,7 @@ jobs:
       # reports the verdict it WOULD have returned and exits 0.
       - name: Flag, soak and rollback-recency precheck (W3)
         id: wipe_flag_precheck
+        if: steps.wipe_confirm.outputs.mode != 'snapshot_clear'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
           FLAG_MODE: ${{ steps.wipe_confirm.outputs.mode == 'wipe_check' && 'wipe_check' || 'wipe' }}
@@ -1063,6 +1068,8 @@ jobs:
               helper state
               helper identity --expect attached --volume-id "$VOLUME_ID" --record write --show-ids
               helper actions --volume-id "$VOLUME_ID" ;;
+            snapshot_clear)
+              helper identity --expect attached --volume-id "$VOLUME_ID" --record write ;;
             wipe_finish)
               helper identity --expect detached --volume-id "$VOLUME_ID" --record write
               vs="$(sed -n 's/^volume_state=//p' "$GITHUB_OUTPUT" | tail -n 1)"
@@ -1076,7 +1083,7 @@ jobs:
       # A non-empty store is a STOP that routes to the CLO, never a retry.
       - name: Boot-signal read (W5)
         id: wipe_boot_read
-        if: steps.wipe_confirm.outputs.mode != 'wipe_finish'
+        if: steps.wipe_confirm.outputs.mode != 'wipe_finish' && steps.wipe_confirm.outputs.mode != 'snapshot_clear'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
@@ -1242,11 +1249,36 @@ jobs:
           EOF
           echo "ssh_config written."
 
+      # snapshot_clear: ONE ssh session that removes a LEFTOVER throwaway snapshot (A1, 2026-10-15; CTO follow-up ruling).
+      # It runs for no other mode, needs no Tier-B credential and makes no provider call: the host verb proves the
+      # leftover is the one the listing makes (origin = the typed device, a loop-backed COW and a mount under the pinned
+      # /dev/shm directory) and refuses (wipe_snapshot_not_ours) otherwise. It never detaches or deletes a volume.
+      - name: Clear a leftover transient snapshot (snapshot_clear)
+        id: wipe_snapshot_clear
+        if: steps.wipe_confirm.outputs.mode == 'snapshot_clear'
+        env:
+          WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
+          GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
+          MODE: wipe_assert
+          WIPE_PHASE: clear
+        run: |
+          set -euo pipefail
+          rec="$RUNNER_TEMP/git-data-wipe-record"
+          WIPE_VOLUME_ID="$(sed -n 's/^plaintext_id=//p' "$rec")"
+          WIPE_SERVER_ID="$(sed -n 's/^server_id=//p' "$rec")"
+          WIPE_LUKS_VOLUME_ID="$(sed -n 's/^luks_id=//p' "$rec")"
+          export WIPE_VOLUME_ID WIPE_SERVER_ID WIPE_LUKS_VOLUME_ID
+          bash apps/web-platform/infra/git-data-cutover.sh
+          {
+            echo "### git-data snapshot_clear"
+            echo "- This run removed only a transient local snapshot, or found none. It detached and deleted no volume and made no provider write."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # W7: ONE ssh session, read-only toward the store and the volume. The typed id, the LUKS id and the
       # server id come from the verdict record W4 wrote (Hetzner's answer, not an input). Stamps the W7 epoch.
       - name: Host-side wipe assertion (W7)
         id: wipe_host_assert
-        if: steps.wipe_confirm.outputs.mode != 'wipe_finish' || steps.wipe_identity.outputs.volume_state == 'detached'
+        if: steps.wipe_confirm.outputs.mode != 'snapshot_clear' && (steps.wipe_confirm.outputs.mode != 'wipe_finish' || steps.wipe_identity.outputs.volume_state == 'detached')
         env:
           WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
           GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
@@ -1319,7 +1351,7 @@ jobs:
 
       - name: Flag re-read (W7b)
         id: wipe_flag_reread
-        if: steps.wipe_confirm.outputs.mode != 'wipe_check'
+        if: steps.wipe_confirm.outputs.mode != 'wipe_check' && steps.wipe_confirm.outputs.mode != 'snapshot_clear'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
           FLAG_MODE: wipe_reread
@@ -1590,14 +1622,14 @@ jobs:
           # A wipe job that published no outputs (lost runner, rejected approval) leaves MODE empty while the
           # cutover job was skipped: that is a wipe-family failure of unknown mode, never a cutover one.
           if [ -z "$MODE" ] && [ "${CUTOVER_RESULT:-}" = skipped ]; then MODE=wipe_unknown; fi
-          case "$MODE" in proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|wipe_unknown) ;; *) MODE=unknown ;; esac
+          case "$MODE" in proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown) ;; *) MODE=unknown ;; esac
           case "$RESULT" in failure|cancelled|success|skipped) ;; *) RESULT=unknown ;; esac
           case "$RUN_ID" in ''|*[!0-9]*) echo "::error::run id is not numeric"; exit 1 ;; esac
           words=""; swords=""; remedy_needed=0; wipe_family=0
           # The wipe family (#10138) has its own words, chosen BEFORE the generic logic below. No wipe word ever
           # carries the unfreeze remedy: a wipe run never froze anything. An ABSENT phase is read as "this run made
           # no irreversible call" only when the started output proves the job published outputs.
-          case "$MODE" in wipe|wipe_finish|wipe_check|wipe_unknown)
+          case "$MODE" in wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown)
             wipe_family=1
             case "${WIPE_PHASE:-}" in ''|detach_attempted|detached|delete_attempted|delete_sent|deleted) ;; *) WIPE_PHASE=unknown ;; esac
             case "${WIPE_REFUSAL:-}" in ''|volume_already_detached|store_not_serving) ;; *) WIPE_REFUSAL=unknown ;; esac
@@ -1611,7 +1643,10 @@ jobs:
             if [ "$MODE" = wipe ]; then orig="$RUN_ID"; fi
             finish_cmd_origin="gh workflow run git-data-cutover.yml --ref main -f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=${vid} -f origin_run=ORIGIN_RUN_ID"
             finish_cmd_here="gh workflow run git-data-cutover.yml --ref main -f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=${vid} -f origin_run=${orig}"
-            if [ "$MODE" = wipe_check ]; then
+            if [ "$MODE" = snapshot_clear ]; then
+              words=" SNAPSHOT_CLEAR_FAILED (mode=snapshot_clear removes only a transient local snapshot: no volume was detached or deleted. If the failing step is the snapshot clear, a leftover may still be present: read the run log, then the runbook section A leftover snapshot: gh run view ${RUN_ID} --log)"
+              swords=" SNAPSHOT_CLEAR_FAILED"
+            elif [ "$MODE" = wipe_check ]; then
               words=" WIPE_CHECK_FAILED (mode=wipe_check is read-only: nothing on any host or at the provider was changed. Read the failing step in the run log: gh run view ${RUN_ID} --log)"
               swords=" WIPE_CHECK_FAILED"
             elif [ "${WIPE_REFUSAL:-}" = volume_already_detached ]; then

@@ -4,7 +4,7 @@
 # SOURCED by .github/workflows/git-data-cutover.yml (job `wipe`), never executed; functions and constants only.
 # `gh run list --json` does NOT return dispatch inputs or job outputs, so the only handle on an earlier run is its
 # `displayTitle`, which the workflow's `run-name:` builds from `inputs.mode` (and, for the wipe modes, the volume id):
-#     wipe modes   ^git-data (wipe|wipe_finish|wipe_check) [0-9]{1,12}$
+#     wipe modes   ^git-data (wipe|wipe_finish|wipe_check|snapshot_clear) [0-9]{1,12}$
 #     other modes  ^git-data (proof|flip|rollback|unfreeze|redeploy)$
 #     legacy       git-data cutover (#5274 / ADR-220 / ADR-239)   (the workflow name: every run before `run-name:` landed)
 #
@@ -12,7 +12,7 @@
 # credential, and nothing is read as "fine" when it could not be read.
 #
 #   wipe_run_title_class <displayTitle>
-#       prints: wipe | wipe_finish | wipe_check | other | legacy | wipe_other | unparseable        rc 0 always
+#       prints: wipe | wipe_finish | wipe_check | snapshot_clear | other | legacy | wipe_other | unparseable        rc 0 always
 #       `wipe_other` is ANY title starting `git-data wipe` that is not a full match (a refused dispatch whose free-text
 #       volume_id made an off-pattern title): the guard ignores it. `other` covers the five non-wipe modes, rollback
 #       included (wipe_last_rollback_epoch tells rollback apart by its exact title).
@@ -61,7 +61,7 @@ readonly WIPE_ORIGIN_DELETE_STEP=wipe_delete_gate
 _WIPE_RUNS_JQ_DEFS='
   def tclass:
     if type != "string" then "unparseable"
-    elif test("^git-data (wipe|wipe_finish|wipe_check) [0-9]{1,12}\\z") then capture("^git-data (?<m>wipe_finish|wipe_check|wipe) ").m
+    elif test("^git-data (wipe|wipe_finish|wipe_check|snapshot_clear) [0-9]{1,12}\\z") then capture("^git-data (?<m>wipe_finish|wipe_check|snapshot_clear|wipe) ").m
     elif test("^git-data (proof|flip|rollback|unfreeze|redeploy)\\z") then "other"
     elif . == $legacy then "legacy"
     elif startswith("git-data wipe") then "wipe_other"
@@ -76,7 +76,7 @@ wipe_run_title_class() {
   local out
   out="$(jq -rn --arg legacy "$WIPE_LEGACY_TITLE" --arg t "${1-}" "${_WIPE_RUNS_JQ_DEFS} \$t | tclass" 2>/dev/null)" || out=""
   case "$out" in
-    wipe|wipe_finish|wipe_check|other|legacy|wipe_other|unparseable) printf '%s\n' "$out" ;;
+    wipe|wipe_finish|wipe_check|snapshot_clear|other|legacy|wipe_other|unparseable) printf '%s\n' "$out" ;;
     *) printf 'unparseable\n' ;;
   esac
   return 0
