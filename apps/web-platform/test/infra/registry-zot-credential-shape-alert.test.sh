@@ -2,7 +2,7 @@
 #
 # Drift guard for the #10321 credential-shape Better Stack Logs alert
 # (apps/web-platform/infra/betterstack-logs-alerts.tf, Guard 1 of
-# knowledge-base/project/plans/2026-10-15-fix-dormant-probe-ledger-10321-10136-plan.md).
+# knowledge-base/project/plans/archive/20261015-153536-2026-10-15-fix-dormant-probe-ledger-10321-10136-plan.md).
 #
 # WHAT THE ALERT IS FOR. zot-log-channel-7440.sh's exit-1 arm was the only automated
 # reader of what the registry shipper's redact() emits on source 2457081 — it went
