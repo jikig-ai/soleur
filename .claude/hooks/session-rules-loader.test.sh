@@ -848,7 +848,7 @@ TOTAL=$((TOTAL+1))
 T34=$(mktemp -d); LATE_TMPDIRS+=("$T34"); setup_repo "$T34"
 ( cd "$T34" && git config core.bare true )
 ctx34=$(invoke_hook "$T34" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-n34=$(grep -c '^- \[id: ' "$T34/AGENTS.md")
+n34=$(grep -c '^- \[id: ' "$T34/AGENTS.md") || true
 if printf '%s' "$ctx34" | grep -c >/dev/null "loaded: ${n34} of ${n34} rules" \
    && printf '%s' "$ctx34" | grep -c >/dev/null '^SOLEUR_BARE_ROOT_CWD source=session-start$' \
    && printf '%s' "$ctx34" | grep -c >/dev/null '^\[bare-root-cwd\].*--yes create'; then
