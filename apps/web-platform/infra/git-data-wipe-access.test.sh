@@ -455,7 +455,7 @@ FORBIDDEN = re.compile(FORBIDDEN_SRC, re.I)
 STANDING = "This run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), residue on the served store, or any copy held by someone with prior access."
 SECRET_RE = re.compile(r"secrets\.([A-Za-z0-9_]+)")
 ECHO_VARS_ALLOWED = {"DOPPLER_CLI_SHA256", "rrc", "cls", "MODE", "RUN_ATTEMPT", "want", "v", "gv", "would", "W3_WOULD", "line", "ORIGIN_RUN", "VOLUME_ID", "reason", "row_epoch",
-                     "origin_epoch", "d", "w4", "w7", "srr", "ans", "W3_VARIANT", "verdict", "variant", "sv", "sw", "srv_created", "row_at", "RUN_ID", "RUN_ACTOR", "EPOCHSECONDS", "WIPE_VOLUME_ID", "WIPE_SERVER_ID", "WIPE_LUKS_VOLUME_ID",
+                     "origin_epoch", "d", "w4", "w7", "srr", "ans", "W3_VARIANT", "verdict", "variant", "sv", "sw", "srv_created", "row_at", "RECORD_RUN_ID", "RECORD_ACTOR", "EPOCHSECONDS", "WIPE_VOLUME_ID", "WIPE_SERVER_ID", "WIPE_LUKS_VOLUME_ID",
                      "WIPE_ROW_EPOCH", "srr_word"}
 # The names the wipe run expands in echo/printf output are pinned. A credential-holding variable (`tok`, `dt`) is NOT on the
 # list: `printf '::add-mask::%s\n' "$tok"` is excluded by the add-mask scan, and `echo "$tok"` is therefore RED.
