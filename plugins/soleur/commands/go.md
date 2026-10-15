@@ -535,6 +535,15 @@ If the user wants to continue the current feature, delegate to `soleur:work`. **
 
 **Bare-repo CWD guard.** If `pwd` is NOT inside `.worktrees/` AND `git rev-parse --is-bare-repository` returns `true`, the CWD is a bare-repo root with no working tree. Any Edit/Write to files visible at this path lands on stray untracked content not on any branch, and `node_modules` is not hydrated so typecheck/dev-server commands fail. For file-touching intents (the `fix`/`implement`/`drain`/`review` rows in Step 2), do NOT edit in place — route through `soleur:one-shot` so a proper worktree is created via `worktree-manager.sh`. For read-only intents (questions, exploration, `clo-attestation`, `legal-threshold`), proceed without worktree creation. See `knowledge-base/project/learnings/2026-05-19-bare-repo-grep-and-subagent-infra-claim-verification.md`.
 
+## Step 1.5: Hold routing (pre-route)
+
+This paragraph runs before the routing table and sits outside the eval-gated block, so it never changes a routing row. A resume or handoff brief that contains the literal `HOLDS` or `ask the operator` carries operator holds. Never call AskUserQuestion for a technical hold. Spawn `soleur:engineering:cto` with a prompt that starts `Own the epic` (the interface is defined in `plugins/soleur/agents/engineering/cto.md`) and pass the brief; then follow the case that applies:
+
+- **A Standing Delegation is recorded** (the CTO finds it by its marker on the epic and checks it with `plugins/soleur/scripts/delegation-verify.sh verify`): the holds are written as machine-checkable `Gate:` lines under `## Operator Holds`, and `soleur:ship` Phase 6 evaluates them through `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh`. Fail closed: a hold whose predicate or delegation cannot be evaluated (unknown kind, unreadable probe, expired, edited or missing delegation, timeout) still stands and is never discharged on a guess.
+- **No delegation is recorded**: today's behaviour with one improvement. Classify the holds, have the CTO rule the technical ones, then ask the operator the single epic-start confirmation first and ask once (wording in [standing-delegation.md](../skills/brainstorm-techniques/references/standing-delegation.md); it names the delegated acts in plain words). A Yes records the delegation through `delegation-verify.sh render` and the holds become `Gate:` lines as above. Only on a No does the operator get one plain question per operator-class item, naming the ACTION. Then route normally with the original input.
+
+When an active delegation exists and the operator says to stop or to take back the standing approval, delete the delegation comment and say so in one plain sentence. The CTO re-runs `delegation-verify.sh` immediately before every delegated act, so a stop between verification and execution is honoured. The executor of a delegated act is the agent session that holds the envelope; ship's own auto-merge arming of its PR is not a delegated act. A paraphrased handoff that misses both tokens falls through to normal routing, and its holds still stand.
+
 ## Step 2: Classify and Route
 
 ### Step 2.0: Harness adapter (never improvise)
