@@ -9,7 +9,7 @@
 None blocking (one heredoc tripped a repo hook; re-ran from a script file).
 
 ### Decisions
-- Shared verifier plugins/soleur/scripts/delegation-verify.sh used by the ruling gate, the ask hook and the hold evaluator; any state it cannot evaluate keeps today's behaviour.
+- Shared verifier plugins/soleur/scripts/delegation-verify.sh used by the ruling gate and the hold evaluator (the ask-hook arm was removed by CTO ruling R2); any state it cannot evaluate keeps today's behaviour.
 - Delegation record format lives in one new reference, standing-delegation.md; CTO frontmatter description unchanged so no mirror regenerates.
 - Procedure moved into reference files (ship/SKILL.md and one-shot/SKILL.md byte headroom).
 - Overlap preflight: shared-file-only overlap is informational (exit 13) and never blocks.

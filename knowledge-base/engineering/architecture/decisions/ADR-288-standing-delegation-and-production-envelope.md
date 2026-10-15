@@ -43,9 +43,9 @@ Be exact about the loss. Commit `fa06eef79a` (#2883, 2026-04-24) wrote that "the
 confirmation (user reads the exact command before approving)", and
 `knowledge-base/project/learnings/2026-04-19-menu-option-ack-not-authorization-for-prod-writes.md` (#2618) records the incident
 behind it: an agent read a menu "A" as authorization for `terraform apply -auto-approve`. Inside a recorded delegation, for merge,
-dispatch and revert only, this ADR removes the operator's per-command read of the exact command. "Revert only" is exact about
-the command set, not about intent: the closed set is merge, ready, dispatch of a named workflow file and PR creation (`gh pr
-create --fill`, scoped by an item that names create or revert), and never a hook-gated form. It also makes the epic-start
+dispatch and revert only, this ADR removes the operator's per-command read of the exact command. The words merge, dispatch and
+revert name intents; the closed command set is merge, ready, dispatch of a named workflow file and PR creation (`gh pr create
+--fill`, scoped by a Scope item that names the act), and never a hook-gated form. It also makes the epic-start
 confirmation a deliberate, single menu-style acknowledgement that DOES extend to commands the operator never saw. The rule's
 sentence "Menu acks and prior approvals do NOT extend to new commands" therefore carries the exception explicitly ("outside a
 recorded delegation"). The trade is accepted because the question is plain-language, names act classes, is recorded verbatim and is
@@ -160,7 +160,8 @@ and requires the verifier to accept them.
 
 ### Mechanical holds
 
-A resume brief's holds become `Gate:` predicates that `hold-gate-eval.sh` evaluates at ship Phase 6; any hold it cannot evaluate
+A resume brief's holds become `Gate:` predicates that `hold-gate-eval.sh` evaluates at the ship draft exit and a second time at the
+start of Phase 6.45, before the plan and spec are archived (the last point at which they are readable); any hold it cannot evaluate
 STANDS. The grammar is `Gate: pr-merged <N>` and `Gate: no-inflight-run <workflow-file>` only. **`command` and `run-green` are
 deferred. The first real consumer re-adds them, and only by CTO ruling.** (Ruling R1; an unknown kind makes the evaluator exit 2 and
 the hold stands.) With no `Delegation:` line in the plan, the evaluator exits 3 before any other check and the legacy prose path is
@@ -169,21 +170,28 @@ routing block; a message that merely says "ask the operator" is an ordinary mess
 
 ### What the ship gate checks (execution receipts)
 
-The Technical-Ruling Gate does not and cannot prove what ran. After each delegated act the CTO records the row
-`Authorized by delegation <url>, envelope <path>, ran <ISO UTC>` (class `operator (production-mutating)`) for the calling skill to
-put in `decision-challenges.md`, and posts the receipt. Receipt enforcement fires ONLY for rows carrying `ran`: the gate cannot know
-that an act happened that no row names, so a row without `ran` gets the plain strict `verify` and no receipt check. The gate checks,
-per delegation row, that the delegation still verifies at the recorded act time and, for a row carrying `ran`, that the epic holds a
-**receipt**: a comment starting
+The Technical-Ruling Gate does not and cannot prove what ran. After each delegated act the CTO itself (`cto.md` step 6) posts the
+receipt and records the row `Authorized by delegation <url>, envelope <path>, ran <ISO UTC>` (class `operator
+(production-mutating)`) in `decision-challenges.md`; it replaces the plan-time row for that act. Receipt enforcement fires ONLY for
+rows carrying `ran`: the gate cannot know that an act happened that no row names, so a row without `ran` gets the plain strict
+`verify` and no receipt check. For a row carrying `ran` the gate checks that the delegation was in force at that time
+(`verify --audit --at <ran>`) and that the epic holds a **receipt**: a comment starting
 `<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back run=<url|none> -->`
-followed by a plain sentence, whose delegation and envelope equal the row's, whose `sha256` equals the verifier's
-`verified-envelope-sha256`, whose result is `ok` or `rolled-back`, and whose `author_association` is OWNER, MEMBER or COLLABORATOR. The receipt window rules are part of the gate's contract: the
-receipt's `created_at` lies within the delegation's life (from the delegation's `created_at` to the end of its expiry day) and is not
-in the future; the receipt was never edited (`updated_at` equals `created_at`) and was posted by a `User`, not a bot; each receipt
-satisfies at most one row, so three rows cannot share one receipt; and every field matches exactly. A missing, mismatched or unreadable receipt exits 2 (`receipt-missing`, `receipt-mismatch`, `receipt-unreadable`). So the gate
-establishes that a receipt exists, is attributable to a repository participant and matches the envelope; it does not establish that
-the recorded command is the command that ran, because the CTO writes the receipt. The calling skill also states each delegated act
-in-session and lists delegated acts in the run summary, so the operator can see them.
+followed by a plain sentence. The exact rules, which are the gate's contract:
+
+- every field matches exactly: the delegation URL and the envelope string equal the row's, `sha256` equals the verifier's
+  `verified-envelope-sha256`, and `result` is `ok` or `rolled-back`;
+- the receipt was created inside the delegation's life (not before the delegation, not after the end of its expiry day), is not in
+  the future, and was created after the `ran` instant it vouches for;
+- it was never edited (`updated_at` equals `created_at`) and was posted by a person (`user.type` is `User`), not a bot or App;
+- its `author_association` is OWNER, MEMBER or COLLABORATOR; a missing association is a mismatch;
+- each receipt satisfies at most one row, so three rows cannot share one receipt;
+- a `ran` time in the future is `delegation-invalid`.
+
+A missing, mismatched or unreadable receipt exits 2 (`receipt-missing`, `receipt-mismatch`, `receipt-unreadable`). So the gate
+establishes that a receipt exists, is attributable to a repository participant, sits in the right window and matches the envelope;
+it does not establish that the recorded command is the command that ran, because the CTO writes the receipt. The calling skill also
+states each delegated act in-session and lists delegated acts in the run summary, so the operator can see them.
 
 ### CTO interfaces
 
@@ -223,8 +231,27 @@ Each is a statement of what this design does not prevent.
   not in the future, and a receipt cannot be reused across rows. A row that omits `ran` skips the receipt check altogether.
 - **A hold discharges when its condition is true, whoever the hold is reserved to.** The evaluator checks facts (`pr-merged`,
   `no-inflight-run`); it cannot read that a hold was worded as the operator's decision. The mitigation is the `Operator-reserved:`
-  grammar, which marks a hold that only a person may discharge; a hold not marked so, and a gate that does not mention the hold's
-  target, remain the CTO's authoring and review's check.
+  grammar: a hold whose words begin with it always stands, and the evaluator exits 2 and does not probe its gates. The old
+  allowance, that the CTO could clear a hold on the operator's spoken say-so, is not a delegable path: `operator-holds.md` section 1
+  still says an `Operator-reserved:` hold is cleared only by the operator saying so, after which the CTO removes or rewrites the line.
+  That removal is an agent edit on a conversational claim, so it is covered by the same shared-identity residual as the record
+  itself. A hold not marked so, an unusual spelling of the prefix, and a gate that does not mention the hold's target remain the
+  CTO's authoring and review's check.
+- **The second look precedes the archive commit, not the arming.** The pre-arming check (hold re-evaluation, overlap preflight,
+  vehicle lookup) runs at the start of Phase 6.45, because afterwards the plan and the decision challenges are archived and no
+  longer readable at their live paths. "Immediately before arming" is therefore not literally true: the archive commit, the CI wait
+  and the queue lie between. `no-inflight-run` is true only at an instant, so a run that starts and ends inside that gap is not seen.
+  Closing it needs the archived paths. Envelopes must not live in the directories ship archives (`knowledge-base/project/specs`,
+  `plans`, `brainstorms`): an archived envelope path no longer exists at HEAD, and its whole-file fingerprint moves with every edit
+  of that file. A vehicle row written at Phase 6.45 reaches the PR body through the normal body update.
+- **Text in the envelope other than the `Command:` block is vetted by a denylist, not an allowlist.** `Verification:`, `Abort:`,
+  `Stop conditions:` and `Rollback:` are checked against the denylist (Rollback also against the command grammar for its backticked
+  spans), because the CTO runs them. Plain prose in those parts is read by the CTO and is not parsed. Known limits: a denylist is dodged by a wrapper or prefix word
+  (`timeout 5 kubectl ...`); comment markers inside a code fence can hide a line from the check; hidden-text constructs other than
+  HTML comments are counted as live scope; scope negation is a word list, so phrasings such as "unless" or "avoid" are not seen;
+  a Rollback span is not bound to the cited Scope item; and two PR numbers in one Scope item both count as covered.
+- **A same-identity author can always forge a record** (the first residual). The review panel's verification pass found no P1: every
+  finding that remains either fails closed or is listed here.
 - **`updated_at` and reactions.** The verifier treats any `updated_at` different from `created_at` as edited (the strict reading;
   it fails closed). Whether a reaction moves `updated_at` was not probed with a write. As an observation only, not proof for this
   repository: a read-only look at `cli/cli` found 8 of 8 reacted comments with `updated_at` equal to `created_at`. If a reaction

@@ -49,7 +49,7 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 
 - [x] 6.1 Write `plugins/soleur/test/pr-overlap-preflight.test.sh` (stub `gh`, jargon assertions, zero write calls, 100-file case, exits 0/10/11/12/13/2).
 - [x] 6.2 Implement `plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh`.
-- [x] 6.3 Write `plugins/soleur/skills/ship/references/pr-overlap.md`; wire one-shot Step 0a.5 (<= 1150 bytes) and ship Phase 6.5 before the `merge-main` lock block; do not touch review.
+- [x] 6.3 Write `plugins/soleur/skills/ship/references/pr-overlap.md`; wire one-shot Step 0a.5 (<= 1150 bytes) and ship at the start of Phase 6.45, before the archive move (moved from 6.5 in the review-fix round); do not touch review.
 
 ## Phase 7: cto.md and reference
 
@@ -128,3 +128,20 @@ Two more seats reported (fix-round architecture and security). Items owned by ot
 - Not recorded as an ADR residual because another agent may still fix it: the grammar guards `Command:` only while Verification,
   Abort and Rollback text is not vetted (security N2/N1 of the fix round), and revocation falling back to an older delegation.
 - Verifier, gate, hold evaluator, cto.md and go.md changes from these reports belong to their fix agents.
+
+## Final fix batch (PR #10348, verification pass at 43cffd6705)
+
+The verification pass found no P1. Items owned by other agents carry no checkbox.
+
+- Docs (agent F3b):
+  - [x] ADR-288 "What the ship gate checks": the CTO records the `ran` row (it replaces the plan-time row) and the exact receipt
+        rules are listed, including the `ran` instant, unedited, person-authored and one-per-row.
+  - [x] ADR-288: the pre-arming check sits at the start of Phase 6.45 and the residual is recorded; envelopes stay out of archived
+        directories; the vehicle row reaches the PR body through the normal body update; "Revert only" removed from line 46.
+  - [x] ADR-288 residuals: the `Operator-reserved:` removal path, the Verification, Abort and Rollback vetting limits, same-identity
+        forgery, and that the verification pass found no P1.
+  - [x] Plan, tasks 6.3 and session-state: stale Phase 6.5 and ask-hook text annotated; repo-relative script paths replaced by
+        `${CLAUDE_PLUGIN_ROOT}`.
+- Not done here (other owners or open): the vetting gaps in security V1 to V7 (denylist narrowing, comment markers inside code
+  fences, unreadable hold markers, prefix spellings of `Operator-reserved:`, negation phrasing); the receipt-predates-act check
+  (V8) is documented as a gate rule and must be confirmed in `technical-ruling-gate.sh`.

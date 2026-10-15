@@ -32,8 +32,10 @@ Recorded operator consent plus a drift guard, recorded in ADR-288 (the first dra
   `Gate:` lines (`pr-merged`, `no-inflight-run`) that ship Phase 6 evaluates mechanically.
 - **Receipts.** After each delegated act the CTO posts a receipt comment on the epic and records the row
   `Authorized by delegation <url>, envelope <path>, ran <ISO UTC>` in `decision-challenges.md`. The ship gate checks a receipt
-  only for rows that carry `ran`, so recording that row is what turns the check on; the receipt must sit inside the delegation's
-  life, be unedited and user-authored, and serve one row only. It proves a receipt exists and matches, not what ran.
+  only for rows that carry `ran`, so recording that row (the CTO's job, not the calling skill's) is what turns the check on. The
+  receipt must be created inside the delegation's life, not in the future and after the `ran` instant, never edited, posted by a
+  person (not a bot), from an OWNER, MEMBER or COLLABORATOR, matching exactly, and serve one row only. It proves a receipt
+  exists and matches, not what ran.
 - **Still the operator's:** money, legal exposure, brand, scope, user-data loss, force-push to main, bypassing checks or
   rulesets, editing the delegation, lock-out credential rotation, third-party systems, any act with no named rollback.
 
