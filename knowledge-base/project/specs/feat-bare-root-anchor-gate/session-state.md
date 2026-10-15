@@ -42,3 +42,8 @@
 - Review commit 2: review fixes pushed. Security seat: clean except P3-1 (fixed) + P3-2 sanitizer gap (pre-existing codebase-wide: DEL/U+2028/U+2029 pass `tr -d '\000-\037'` — follow-up issue to file). Simplicity+arch seat: A-P2 fixed (diag env scrub); A-P3s noted (guard↔heal parity unpinned — acknowledge; MARKER_RE bare-token vs loader space asymmetry — note only).
 - Test-design seat (b880e82a) still running.
 - NEXT: collect test-design seat → file P3-2 follow-up issue → soleur:qa → soleur:compound → soleur:ship → merge → postmerge → DONE
+
+## Review+QA Phase (complete)
+- Review fixes committed+pushed (9c650a4f8d). All suites green incl. T37 + D6. E2E verified: real SessionStart envelope at a bare-root fixture carries marker + redirect block; probe prints marker in 0.03s.
+- P3-2 sanitizer follow-up filed: #10395. Test-design seat (b880e82a) still running in background.
+- NEXT: soleur:compound → soleur:ship → merge → postmerge → DONE. PR #10386 draft, issue #10383.
