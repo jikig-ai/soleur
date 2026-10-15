@@ -2068,12 +2068,13 @@ jobs:
             echo "Hetzner rather than trusting \`terraform destroy\`'s exit code — so if state"
             echo "has forgotten the resource, the dispatch will say so instead of exiting 0."
             echo ""
-            echo "If that arm reports survivors, they are unreachable through Terraform. The"
-            echo "block below is **read-only**: it lists every object still carrying the"
-            echo "rehearsal label, with its id. It prints no delete call on purpose. Reclaiming"
-            echo "a survivor is a Hetzner write, so it is an owner-authorised action (the owner"
-            echo "tells an agent session to reclaim the listed ids), not a command to paste from"
-            echo "an issue body."
+            echo "If that arm reports survivors, they are unreachable through Terraform. The block"
+            echo "below only makes GET calls (the token it loads is still the read/write one): it"
+            echo "lists every object still carrying the rehearsal label, with its id. Reclaiming a"
+            echo "survivor is a Hetzner write, so an agent session names each exact call and runs"
+            echo "it only after the owner's per-command go-ahead; it is never a command to paste"
+            echo "from an issue body. The procedure is the \"Reclaiming survivors that state"
+            echo "forgot\" section of the inngest-provision-rehearsal runbook."
             echo ""
             echo '```bash'
             echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"'
@@ -2085,9 +2086,8 @@ jobs:
             echo 'done'
             echo '```'
             echo ""
-            echo "The scratch Doppler config, if listed above, is destroyed with the box by that"
-            echo "arm when state still owns it. If it survives, removing it is the same"
-            echo "owner-authorised reclaim, not a command printed here. It holds a live"
+            echo "The scratch Doppler config, if listed above, goes with the box when state still"
+            echo "owns it; otherwise it is reclaimed the same way. It holds a live"
             echo "GIT_DATA_LUKS_KEY and the production Better Stack ingest token, so it matters"
             echo "more than the box does."
             echo ""
@@ -2434,11 +2434,12 @@ jobs:
             echo ""
             echo "Dispatch **inngest provision forced-race rehearsal** with \`teardown_only=true\`."
             echo "That arm exists for exactly this case. If state has forgotten the resource,"
-            echo "Terraform cannot reach it. The block below is **read-only**: it lists every"
-            echo "object still carrying the rehearsal label, with its id. It prints no delete"
-            echo "call on purpose. Reclaiming a survivor is a Hetzner write, so it is an"
-            echo "owner-authorised action (the owner tells an agent session to reclaim the"
-            echo "listed ids), not a command to paste from an issue body."
+            echo "the block below only makes GET calls (the token it loads is still the"
+            echo "read/write one): it lists every object still carrying the rehearsal label, with"
+            echo "its id. Reclaiming a survivor is a Hetzner write, so an agent session names each"
+            echo "exact call and runs it only after the owner's per-command go-ahead; it is never"
+            echo "a command to paste from an issue body. The procedure is the \"Reclaiming"
+            echo "survivors that state forgot\" section of the inngest-provision-rehearsal runbook."
             echo ""
             echo '```bash'
             echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"'
@@ -2451,7 +2452,7 @@ jobs:
             echo '```'
             echo ""
             echo "A stranded scratch Doppler environment (slug \`rehearsal_*\` in project"
-            echo "\`soleur-inngest\`) is reclaimed the same way, as an owner-authorised action."
+            echo "\`soleur-inngest\`) is reclaimed the same way."
             echo "It holds only throwaway values — the worst it leaks is the write-only ingest"
             echo "tokens — but it is not free to leave."
             echo ""

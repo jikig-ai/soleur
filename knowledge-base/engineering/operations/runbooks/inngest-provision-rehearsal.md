@@ -165,8 +165,24 @@ gh workflow run inngest-provision-rehearsal.yml --ref main   -f confirm=REHEARSE
 ```
 
 If the arm cannot remove a survivor (state forgot it), the filed issue lists the stranded objects read-only, with their
-ids. Reclaiming them is an owner-authorised action: ask an agent session to delete those ids. The issue no longer prints
-a delete call.
+ids. Reclaiming them is a separately authorized action, described next.
+
+### Reclaiming survivors that state forgot (owner-authorized, per command)
+
+The filed issue prints no delete call. An agent session reclaims a survivor only from the ids that the issue's
+`label_selector` listing returned, and runs each write only after the owner's per-command go-ahead
+(`hr-menu-option-ack-not-prod-write-auth`); an earlier go-ahead does not extend to the next id. The label
+`app=soleur-inngest-provision-rehearsal` (rung-2 sweeps use `app=soleur-rung2-rehearsal`) never selects the sole-copy
+volume, the web-1 volume or any unlabeled object, so an id outside that listing is out of bounds.
+
+1. Re-run the read-only listing from the issue body (a GET per kind: `servers`, `volumes`, `ssh_keys`, `firewalls`).
+2. Per listed object, in dependency order (server first, then its volumes, firewalls, ssh keys): a volume is detached
+   (`POST /v1/volumes/<id>/actions/detach`) before it is deleted (`DELETE /v1/<kind>/<id>`).
+3. A stranded scratch Doppler environment (`rehearsal_*` in project `soleur-inngest`) or config is removed with the
+   Doppler CLI `environments delete` or `configs delete` subcommand, naming the project explicitly.
+4. Verify: re-run the listing; empty output for every kind means reclaimed.
+
+A label-scoped reclaim dispatch (so step 2 needs no ad hoc API call) is a candidate follow-up, tracked under #9927.
 
 ## Failure table
 

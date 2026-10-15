@@ -39,6 +39,9 @@
 #      reads a field parsed out of the YAML (comments cannot survive yaml.safe_load)
 #      or the step's published outputs.
 #
+# ALSO PINNED HERE (R1-R4, bottom of file): no step in the drift workflow prints or runs a Hetzner write
+# or a Doppler destroy (#9927 item 8c).
+#
 # Run: bash plugins/soleur/test/token-drift-workflow-causes.test.sh
 
 set -uo pipefail
@@ -1686,154 +1689,192 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# R1-R4 — NO ISSUE-BODY PRINTER HANDS A READER A RUNNABLE DESTROY (#9927 item 8c).
+# R1-R4 — THE DRIFT WORKFLOW PRINTS NO RUNNABLE HETZNER WRITE OR DOPPLER DESTROY (#9927 item 8c).
 #
-# The two orphan filers ("Orphaned rung-2 / inngest rehearsal resource(s) on Hetzner") used to
-# print a bash fence ending in a pasteable `curl -X DELETE … /v1/<kind>/<id>` and, beside it, a
-# `doppler configs|environments delete` one-liner. ADR-282 names that as a one-paste destroy
-# vector for anyone holding the read/write token. Listing the stranded objects is read-only and
-# stays; reclaiming one is an owner-authorised action, not a command printed in an issue.
+# The two orphan filers ("File an issue for orphaned rehearsal hosts") used to print a pasteable
+# Hetzner delete call and a Doppler destroy one-liner into the auto-filed issue (ADR-282 residual).
+# Listing stranded objects is a GET and stays; reclaiming one is an owner-authorized, per-command
+# action, never text printed in an issue.
 #
-# POPULATION. EVERY step of EVERY job in the parsed YAML — not the two filers by name or line.
-# Both filers share one step name, so `step_get name:` (first match) cannot reach the second,
-# and a future third issue-body printer must be covered with no edit here. The workflow path is
-# a parameter so the mutation rows can point at a sandbox copy.
-#
-# SCOPE. The Hetzner write check is per STEP BODY, not per line: the old recipe split the verb
-# (`curl -sS -X DELETE …`) and the URL (`"https://api.hetzner.cloud/v1/<kind>/<id>"`) across
-# separate `echo` lines, so a same-line `api.hetzner.cloud` match would have missed it. A step
-# counts as Hetzner-touching when its comment-stripped body names `api.hetzner.cloud` or
-# `HCLOUD_TOKEN`, so a legitimate GitHub write (`gh api -X POST …`) in an unrelated step is not
-# a false positive. The Doppler destroy check is workflow-wide: that destroy needs no URL.
-# New prose must not SPELL the command it replaces, or the guard fires on its own text.
+# SCOPE, stated exactly. Population: every string leaf of every step and of every job-level key in the
+# parsed YAML (run, with.*, env.*), not the two filers by name; both filers share one step name, so
+# `step_get name:` reaches only the first. Line continuations are joined before matching, and comments
+# are NOT stripped: a match in a comment can only false-RED, the safe direction, and a `#` line inside
+# a heredoc is printed content. Matchers: any explicit non-GET method flag on any command (-X /
+# --request / --method, any case, any value including a variable), curl body flags and hcloud write
+# verbs in a step that names a Hetzner/Doppler API or HCLOUD_TOKEN, and any doppler line carrying
+# delete/destroy/revoke. This is a tripwire against re-adding the recipes, not a proof: spellings
+# outside those matchers (python requests, a URL built across steps) are out of reach, and
+# `terraform destroy` / `-replace` text is a different class (token re-mint) and is not scanned.
+# New prose must not SPELL a command it replaces, or the guard fires on its own text.
 # ---------------------------------------------------------------------------
 
 # scan_wf <workflow-path>
-#   Prints one record per line:
-#     steps=<N>                              steps examined (anti-vacuity)
-#     hetzner-write<TAB><job>/<step name>    a Hetzner-touching step body holds a write verb
-#     doppler-destroy<TAB><job>/<step name>  a step body holds a Doppler configs|environments|projects delete
-#     filer<TAB><ok|bad>:<label>             one per step named "File an issue for orphaned rehearsal hosts"
-#   `run:` bodies are comment-stripped (a `#` line inside a block scalar survives yaml.safe_load).
+#   One record per line:
+#     steps=<N>                          steps examined (anti-vacuity)
+#     write<TAB><job>/<step>             a Hetzner/Doppler write verb in that step
+#     destroy<TAB><job>/<step>           a doppler delete/destroy/revoke in that step
+#     filer<TAB>ok|bad:<label>           one per step named "File an issue for orphaned rehearsal hosts"
 scan_wf() {
   python3 - "$1" <<'PYD'
 import re, sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
-def strip(b):
-    return "\n".join(l for l in b.split("\n") if not l.lstrip().startswith("#"))
-WRITE = re.compile(
-    r"(-X|--request)[ \t=]*\\?[\"']?(DELETE|PUT|POST|PATCH)\b"
-    r"|-X(DELETE|PUT|POST|PATCH)\b"
-    r"|\bhcloud[ \t].*[ \t](delete|create|update)\b")
-DESTROY = re.compile(r"\bdoppler[ \t]+(configs|environments|projects)[ \t]+delete\b")
+SKIP = {"name", "id", "if"}
+def leaves(x, top=False):
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for k, v in x.items():
+            if top and k in SKIP:
+                continue
+            yield from leaves(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from leaves(v)
+METHOD = re.compile(r"(?:^|[\s'\"=])(?:-[A-Za-z]*X|--request|--method)[ \t=]*[\\\"']*([^\s\"'\\]+)")
+BODYF = re.compile(r"(?:^|\s)(?:-d|--data(?:-raw|-binary|-urlencode|-ascii)?|--json|-F|--form|-T|--upload-file)(?=[\s=]|$)")
+CLI = re.compile(r"\bhcloud[ \t]+(?:server|volume|firewall|ssh-key|network|floating-ip|primary-ip|image|load-balancer|certificate|placement-group|zone)[ \t]+(?:delete|rm|create|update|detach|attach|enable-protection|disable-protection|shutdown|poweroff|reset|reboot|rebuild|resize|change-[a-z-]+|add-[a-z-]+|remove-[a-z-]+|set-[a-z-]+|assign|unassign)\b")
+DOP = re.compile(r"\bdoppler\b[^\n]*?\b(?:delete|destroy|revoke)\b")
+SCOPE = ("api.hetzner.cloud", "HCLOUD_TOKEN", "api.doppler.com")
+def write_hit(text):
+    for m in METHOD.finditer(text):
+        if m.group(1).upper() not in ("GET", "HEAD"):
+            return True
+    scoped = any(s in text for s in SCOPE)
+    if scoped:
+        for line in text.split("\n"):
+            if re.search(r"\b(?:curl|wget)\b", line) and BODYF.search(line):
+                return True
+    return bool(CLI.search(text))
 n = 0
+units = []
 for jname, job in wf["jobs"].items():
+    units.append(("%s/(job-level)" % jname, {k: v for k, v in job.items() if k != "steps"}, False))
     for st in job.get("steps", []) or []:
         n += 1
-        run = st.get("run")
-        if not isinstance(run, str):
-            continue
-        body = strip(run)
-        who = "%s/%s" % (jname, st.get("name", "<unnamed>"))
-        if ("api.hetzner.cloud" in body or "HCLOUD_TOKEN" in body) and WRITE.search(body):
-            print("hetzner-write\t" + who)
-        if DESTROY.search(body):
-            print("doppler-destroy\t" + who)
-        if str(st.get("name", "")).startswith("File an issue for orphaned rehearsal hosts"):
-            label = ("rung2" if "app%3Dsoleur-rung2-rehearsal" in body
-                     else "inngest" if "app%3Dsoleur-inngest-provision-rehearsal" in body else "?")
-            # read-only enumeration survives: the label_selector GET loop, and no -X on it
-            ok = ("for k in servers volumes ssh_keys firewalls" in body
-                  and "label_selector=" in body
-                  and not re.search(r"(^|[ \t])-X[ \t]*[A-Z]", body, re.M))
-            print("filer\t%s:%s" % ("ok" if ok else "bad", label))
+        units.append(("%s/%s" % (jname, st.get("name", "<unnamed>")), st, True))
+for who, unit, is_step in units:
+    text = re.sub(r"\\\n[ \t]*", " ", "\n".join(leaves(unit, top=True)))
+    if write_hit(text):
+        print("write\t" + who)
+    if DOP.search(text):
+        print("destroy\t" + who)
+    if is_step and str(unit.get("name", "")).startswith("File an issue for orphaned rehearsal hosts"):
+        label = ("rung2" if "app%3Dsoleur-rung2-rehearsal" in text
+                 else "inngest" if "app%3Dsoleur-inngest-provision-rehearsal" in text else "?")
+        print("filer\t%s:%s" % ("ok" if "label_selector=" in text else "bad", label))
 print("steps=%d" % n)
 PYD
 }
 
-echo "R1: no Hetzner-touching step body holds a write verb (DELETE/PUT/POST/PATCH or hcloud delete)"
-D_REAL=$(scan_wf "$WF") || { echo "FATAL: scan_wf failed on the real workflow" >&2; exit 2; }
-_d1=$(grep -c '^hetzner-write' <<<"$D_REAL") || _d1=0
-if [[ "$_d1" == "0" ]]; then
-  pass "no step that names the Hetzner API or HCLOUD_TOKEN prints or runs a write verb"
-else
-  fail "a Hetzner-touching step holds a write verb (${_d1} step(s): $(grep '^hetzner-write' <<<"$D_REAL" | cut -f2 | tr '\n' ';')) — an auto-filed issue body must list stranded objects read-only; reclaiming one is an owner-authorised action, never a pasted command (ADR-282 residual, #9927 item 8c)"
-fi
-
-echo "R2: no step body holds a Doppler configs|environments|projects delete one-liner"
-_d2=$(grep -c '^doppler-destroy' <<<"$D_REAL") || _d2=0
-if [[ "$_d2" == "0" ]]; then
-  pass "no step prints or runs a Doppler destroy command"
-else
-  fail "a step holds a Doppler destroy one-liner (${_d2} step(s): $(grep '^doppler-destroy' <<<"$D_REAL" | cut -f2 | tr '\n' ';')) — the rung-2 scratch config holds a live GIT_DATA_LUKS_KEY, so a printed delete beside a removed Hetzner recipe is the same one-paste destroy"
-fi
-
-echo "R3: the scan examined the right population (both orphan filers, each keeping the read-only loop)"
-_d3=1
-_steps=$(sed -n 's/^steps=//p' <<<"$D_REAL")
-[[ "$_steps" =~ ^[0-9]+$ ]] && (( _steps >= 40 )) \
-  || { _d3=0; echo "    only '${_steps}' steps examined — the scan walked the wrong population"; }
-_nf=$(grep -c '^filer' <<<"$D_REAL") || _nf=0
-[[ "$_nf" == "2" ]] || { _d3=0; echo "    ${_nf} step(s) named 'File an issue for orphaned rehearsal hosts', expected exactly 2"; }
-for _lbl in rung2 inngest; do
-  grep -qxF "$(printf 'filer\tok:%s' "$_lbl")" <<<"$D_REAL" \
-    || { _d3=0; echo "    the ${_lbl} filer is missing, or lost its read-only label_selector loop, or carries a -X"; }
-done
-if [[ "$_d3" == "1" ]]; then
-  pass "${_steps} steps examined; exactly 2 orphan filers, each with its label_selector GET loop and no -X"
-else
-  fail "the R1/R2 scan could pass over nothing (${_nf} filer(s), ${_steps} steps) — a guard over the wrong population is green by construction"
-fi
-
-echo "R4: mutation — an injected write is RED, a comment or a non-Hetzner GitHub write is GREEN"
-# Sandbox copies only; the real workflow is never touched. Each mutation is confirmed to have
-# LANDED (cmp against the pristine copy) because a mutation that does not land reports the
-# baseline, which is indistinguishable from a pass.
-_d4=1
-mut() { # mut <name> -> writes $TMP/mut.<name>.yml from the real workflow, one injected edit
-  python3 - "$WF" "$TMP/mut.$1.yml" "$1" <<'PYM' || return 2
-import sys
-s = open(sys.argv[1]).read()
-kind = sys.argv[3]
-# Anchors are content, not line numbers: the footer echo every orphan filer ends with, and the
-# name of a step that never touches Hetzner.
-footer = '            echo "_Auto-created by the [terraform-drift workflow]'
-nonhz = '      - name: Close the coverage issue once the declared floor is met'
-assert s.count(footer) >= 2 and s.count(nonhz) == 1, "mutation anchors drifted"
-if kind == "ctl":
-    s = s + "\n"
-elif kind == "del":
-    s = s.replace(footer, "            echo 'curl -sS -X DELETE -H \"Authorization: Bearer $TOKEN\" \\\\'\n"
-                          "            echo '  \"https://api.hetzner.cloud/v1/<kind>/<id>\"'\n" + footer, 1)
-elif kind == "dop":
-    s = s.replace(footer, "            echo 'doppler configs delete scratch -p soleur'\n" + footer, 1)
-elif kind == "cmt":
-    s = s.replace(footer, "            # curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1\n" + footer, 1)
-elif kind == "gh":
-    s = s.replace(nonhz, "      - name: injected GitHub write\n        run: gh api -X POST repos/o/r/issues/1/labels\n" + nonhz, 1)
-else:
-    raise SystemExit("unknown mutation " + kind)
-open(sys.argv[2], "w").write(s)
-PYM
-  [[ "$1" == "ctl" ]] && return 0
-  ! cmp -s "$WF" "$TMP/mut.$1.yml" || { echo "    mutation '$1' did not land" >&2; return 2; }
+# scan_or_die <workflow-path>: the scan's output, or a non-zero status when the scan crashed or
+# examined nothing — so a "must find nothing" row can never pass over a broken scan.
+scan_or_die() {
+  local out
+  out=$(scan_wf "$1") || return 99
+  grep -q '^steps=' <<<"$out" || return 99
+  printf '%s\n' "$out"
 }
-for _m in ctl del dop cmt gh; do
-  mut "$_m" || { echo "FATAL: mutation ${_m} did not apply" >&2; exit 2; }
-done
-_hz()  { scan_wf "$1" | grep -c '^hetzner-write'  || true; }
-_dp()  { scan_wf "$1" | grep -c '^doppler-destroy' || true; }
-[[ "$(_hz "$TMP/mut.ctl.yml")" == "0" && "$(_dp "$TMP/mut.ctl.yml")" == "0" ]] \
-  || { _d4=0; echo "    the unmutated control is not clean"; }
-(( $(_hz "$TMP/mut.del.yml") >= 1 )) || { _d4=0; echo "    an injected curl -X DELETE to api.hetzner.cloud was not flagged"; }
-(( $(_dp "$TMP/mut.dop.yml") >= 1 )) || { _d4=0; echo "    an injected doppler configs delete was not flagged"; }
-[[ "$(_hz "$TMP/mut.cmt.yml")" == "0" ]] || { _d4=0; echo "    a #-comment mentioning -X DELETE was flagged (comments must be ignored)"; }
-[[ "$(_hz "$TMP/mut.gh.yml")" == "0"  ]] || { _d4=0; echo "    a gh api -X POST in a non-Hetzner step was flagged (false positive)"; }
-if [[ "$_d4" == "1" ]]; then
-  pass "control clean; injected DELETE and doppler delete RED; comment-only and gh api -X POST GREEN"
+
+R_REAL=$(scan_or_die "$WF") || { echo "FATAL: scan_wf failed on the real workflow" >&2; exit 2; }
+
+echo "R1: no step holds a Hetzner/Doppler write verb (non-GET method flag, curl body flag, hcloud write verb)"
+_r1=$(grep -c '^write' <<<"$R_REAL") || _r1=0
+if [[ "$_r1" == "0" ]]; then
+  pass "no step prints or runs a write verb"
 else
-  fail "the R1/R2 scan does not discriminate (see lines above) — a guard that cannot go red is indistinguishable from one that passes"
+  fail "a step holds a write verb (${_r1}: $(grep '^write' <<<"$R_REAL" | cut -f2 | tr '\n' ';')) — an auto-filed issue body must list stranded objects with GET calls only; reclaiming one is an owner-authorized, per-command action, never a printed command (ADR-282 residual, #9927 item 8c)"
 fi
+
+echo "R2: no step holds a Doppler delete/destroy/revoke"
+_r2=$(grep -c '^destroy' <<<"$R_REAL") || _r2=0
+if [[ "$_r2" == "0" ]]; then
+  pass "no step prints or runs a Doppler destroy"
+else
+  fail "a step holds a Doppler destroy (${_r2}: $(grep '^destroy' <<<"$R_REAL" | cut -f2 | tr '\n' ';')) — the rung-2 scratch config holds a live GIT_DATA_LUKS_KEY, so a printed destroy is the same one-paste vector"
+fi
+
+echo "R3: the scan examined the right population (both orphan filers, each keeping a label_selector listing)"
+_r3=1
+_nf=$(grep -c '^filer' <<<"$R_REAL") || _nf=0
+(( _nf >= 2 )) || { _r3=0; echo "    ${_nf} step(s) named 'File an issue for orphaned rehearsal hosts', expected at least 2"; }
+for _lbl in rung2 inngest; do
+  grep -qxF "$(printf 'filer\tok:%s' "$_lbl")" <<<"$R_REAL" \
+    || { _r3=0; echo "    the ${_lbl} filer is missing or lost its label_selector listing"; }
+done
+grep -qE '^filer.bad' <<<"$R_REAL" && { _r3=0; echo "    a filer lost its label_selector listing"; }
+if [[ "$_r3" == "1" ]]; then
+  pass "${_nf} orphan filers examined, each keeping its label_selector listing"
+else
+  fail "the R1/R2 scan could pass over nothing (${_nf} filer(s)) — a guard over the wrong population is green by construction"
+fi
+
+# R4 — every row mutates a SANDBOX copy (yaml load -> append one step -> dump), so the injected text
+# lands in a known step ("ZZ injected <row>") and no text anchor in the real workflow can drift. A red
+# row must be flagged under its own step; a green row must produce no finding at all.
+mutate_wf() { # mutate_wf <out> <row> <field> <payload>   (field: run | body | env)
+  python3 - "$WF" "$1" "$2" "$3" "$4" <<'PYM' || return 2
+import sys, yaml
+src, out, row, field, payload = sys.argv[1:6]
+wf = yaml.safe_load(open(src))
+job = next(iter(wf["jobs"].values()))
+step = {"name": "ZZ injected " + row}
+if field == "run":
+    step["run"] = payload
+elif field == "body":
+    step["uses"] = "./.github/actions/notify-ops-email"
+    step["with"] = {"body": payload}
+elif field == "env":
+    step["run"] = "echo ok"
+    step["env"] = {"REMEDY": payload}
+job["steps"].append(step)
+yaml.safe_dump(wf, open(out, "w"), sort_keys=False)
+PYM
+}
+r4_row() { # r4_row <row> <expect: write|destroy|none> <field> <payload>
+  local row="$1" expect="$2" f out
+  f="$TMP/mut.${row}.yml"
+  if ! mutate_wf "$f" "$row" "$3" "$4"; then fail "R4/${row}: could not build the mutated workflow"; return; fi
+  if ! out=$(scan_or_die "$f"); then fail "R4/${row}: the scan crashed or examined nothing on the mutated workflow"; return; fi
+  local hit
+  hit=$(awk -F'\t' -v n="ZZ injected ${row}" 'index($2, n) { print $1 }' <<<"$out")
+  local other
+  other=$(grep -cE '^(write|destroy)' <<<"$out") || other=0
+  if [[ "$expect" == "none" ]]; then
+    if [[ -z "$hit" && "$other" == "0" ]]; then pass "R4/${row}: legitimate step is not flagged"
+    else fail "R4/${row}: a legitimate step was flagged (${hit:-elsewhere})"; fi
+  else
+    if grep -qx "$expect" <<<"$hit"; then pass "R4/${row}: injected ${expect} is flagged under its own step"
+    else fail "R4/${row}: injected ${expect} was NOT flagged (got '${hit:-nothing}') — the scan cannot go red on this spelling"; fi
+  fi
+}
+echo "R4: mutation rows — each spelling of an injected write/destroy is RED, legitimate steps are GREEN"
+r4_row control   none    run  'echo ok'
+r4_row x-delete  write   run  'curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1'
+r4_row request   write   run  'curl -sS --request DELETE https://api.hetzner.cloud/v1/volumes/1'
+r4_row x-put     write   run  'curl -sS -X PUT https://api.hetzner.cloud/v1/volumes/1'
+r4_row lowercase write   run  'curl -sS -X delete "$HZ_API/volumes/1"'
+r4_row combined  write   run  'curl -sSX DELETE "$U"'
+r4_row varmethod write   run  'curl -sS -X "$M" "$U"'
+r4_row method    write   run  'wget --method=DELETE https://api.hetzner.cloud/v1/volumes/1'
+r4_row continued write   run  $'curl -sS -X \\\n  DELETE "$U"'
+r4_row data      write   run  'curl -sS -d "{}" -H "Authorization: Bearer $HCLOUD_TOKEN" https://api.hetzner.cloud/v1/volumes/1/actions/detach'
+r4_row json      write   run  'curl -sS --json "{}" https://api.hetzner.cloud/v1/volumes/1/actions/detach'
+r4_row hc-detach write   run  'hcloud volume detach 1'
+r4_row hc-delete write   run  'hcloud volume delete 1'
+r4_row doppler   write   run  'curl -sS -X DELETE https://api.doppler.com/v3/configs/config'
+r4_row email     write   body 'curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1'
+r4_row envtext   write   env  'curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1'
+r4_row d-config  destroy run  'doppler configs delete scratch -p soleur'
+r4_row d-env     destroy run  'doppler environments delete scratch -p soleur'
+r4_row d-project destroy run  'doppler projects delete scratch'
+r4_row d-flag    destroy run  'doppler -p soleur configs delete scratch'
+r4_row d-secret  destroy run  'doppler secrets delete GIT_DATA_LUKS_KEY -p soleur -c prd'
+r4_row g-list    none    run  'curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN" "https://api.hetzner.cloud/v1/servers?label_selector=a"'
+r4_row g-get     none    run  'curl -sS -X GET https://api.hetzner.cloud/v1/servers'
+r4_row g-hcloud  none    run  'hcloud server list'
+r4_row g-doppler none    run  'doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain'
+r4_row g-gh      none    run  'gh issue create --title t --body-file b'
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
@@ -1849,13 +1890,13 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 #
 # Raised 57 -> 60 with #7234's F5 (the for_each list IS the inventory) and C-a
 # (`config = each.key`, never a literal), then 60 -> 61 with F4b (the inventory's name set
-# never shrinks), then 61 -> 65 with R1-R4 (no issue-body printer prints a runnable destroy,
-# #9927 item 8c). 65 is the REALIZED `PASS + FAIL`, and the number
+# never shrinks), then 61 -> 90 with R1-R4 (no step prints or runs a Hetzner write or Doppler
+# destroy, #9927 item 8c: 3 assertions + 25 mutation rows). 90 is the REALIZED `PASS + FAIL`, and the number
 # in this comment and the number in the guard below MUST be the same number. They disagreed once
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
-if [[ "$((PASS + FAIL))" -lt 65 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 65." >&2
+if [[ "$((PASS + FAIL))" -lt 90 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 90." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

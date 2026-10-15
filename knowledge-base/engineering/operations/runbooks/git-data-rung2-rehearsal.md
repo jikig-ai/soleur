@@ -403,7 +403,10 @@ or by re-dating an old evidence file, which `RUN_HASH_MISMATCH` refuses.
 Re-dispatch with `teardown_only=true`. A surviving host is a paying box with a LUKS volume
 attached; the scheduled drift workflow sweeps for the `soleur-git-data-rehearsal-` prefix
 daily and files an issue, but the recovery is this arm, not a console click (a Terraform
-destroy also reclaims the volumes and the scratch Doppler config).
+destroy also reclaims the volumes and the scratch Doppler config). A survivor that state has
+forgotten is out of that arm's reach: reclaim it per the owner-authorized procedure in
+`inngest-provision-rehearsal.md` ("Reclaiming survivors that state forgot"), using the
+`app=soleur-rung2-rehearsal` label.
 
 ## Three things that will mislead you
 
