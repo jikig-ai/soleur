@@ -2187,6 +2187,8 @@ Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but una
 
 If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
 
+Before the `merge-main` lock block, run `pr-overlap-preflight.sh --mode merge` ([pr-overlap.md](./references/pr-overlap.md)); exit 10 or 12 stops arming.
+
 Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
 ```bash
