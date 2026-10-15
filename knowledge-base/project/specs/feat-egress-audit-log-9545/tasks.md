@@ -13,13 +13,13 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-workspace-egress-audit-log-p
 
 ## Phase 1: Migration and database tests
 
-- [ ] 1.1 RED: live-database harness cases (`RLS_FUZZ_LOCAL`): service-role write positive control, member reads denied, cascade on workspace delete, sweep deletes a 31-day row and keeps a 29-day row, per-column `GREATEST`/`LEAST`, toggle join drops `web_egress=false` rows
-- [ ] 1.2 RED: offline text lints in `test/supabase-migrations/162-*.test.ts` (grants, search_path pin, comment, cron wrapper)
-- [ ] 1.3 `162_workspace_egress_audit_rollup.sql`: table, composite key incl. `source_host`, FK `ON DELETE CASCADE`, RLS on, `REVOKE` all from anon/authenticated, `LAWFUL_BASIS` annotation, `COMMENT ON TABLE` with retention
-- [ ] 1.4 `ingest_egress_audit_rollup(rows jsonb)`: `SECURITY DEFINER`, pinned `search_path` incl. `pg_temp`, service-role only, skips and counts unknown/toggle-off workspaces, never raises
-- [ ] 1.5 `purge_egress_audit_rollup(retention interval)` plus daily `pg_cron` job in a `DO`/`EXCEPTION duplicate_object` block
-- [ ] 1.6 `.down.sql` (unschedule, drop both functions) and `supabase/verify/162_*.sql` in the migration-158 `bad=1` row format
-- [ ] 1.7 Register the table in `test/rls-fuzz/targets.ts`
+- [x] 1.1 RED: live-database harness cases (`RLS_FUZZ_LOCAL`): service-role write positive control, member reads denied, cascade on workspace delete, sweep deletes a 31-day row and keeps a 29-day row, per-column `GREATEST`/`LEAST`, toggle join drops `web_egress=false` rows
+- [x] 1.2 RED: offline text lints in `test/supabase-migrations/162-*.test.ts` (grants, search_path pin, comment, cron wrapper)
+- [x] 1.3 `162_workspace_egress_audit_rollup.sql`: table, composite key incl. `source_host`, FK `ON DELETE CASCADE`, RLS on, `REVOKE` all from anon/authenticated, `LAWFUL_BASIS` annotation, `COMMENT ON TABLE` with retention
+- [x] 1.4 `ingest_egress_audit_rollup(rows jsonb)`: `SECURITY DEFINER`, pinned `search_path` incl. `pg_temp`, service-role only, skips and counts unknown/toggle-off workspaces, never raises
+- [x] 1.5 `purge_egress_audit_rollup(retention interval)` plus daily `pg_cron` job in a `DO`/`EXCEPTION duplicate_object` block
+- [x] 1.6 `.down.sql` (unschedule, drop both functions) and `supabase/verify/162_*.sql` in the migration-158 `bad=1` row format
+- [x] 1.7 Register the table in `test/rls-fuzz/targets.ts`
 - [ ] 1.8 (R3) RED then GREEN: `erase_egress_audit_rollup(p_workspace uuid)` (service-role only, idempotent) in migration 162, saga step `5.15 erase-egress-audit-rollup` in `server/account-delete.ts` after 5.14 and before step 6 (abort on failure), test in `test/account-delete.test.ts`
 
 ## Phase 2: Ingest route and server module
