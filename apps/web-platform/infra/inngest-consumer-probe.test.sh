@@ -277,6 +277,170 @@ assert "the sourced script still guards its own execution (BASH_SOURCE), else so
 assert "the sourced script still exposes fetch_functions" \
   "grep -qE '^fetch_functions\\(\\)' '$REGISTRY_PROBE'"
 
+# --- HEARTBEAT CHANNEL (#9757, ADR-280): the URL reaches curl on stdin, never on argv -----------
+# Every row above runs behind the SOLEUR_INNGEST_CONSUMER_PING_LOG seam, which returns BEFORE the
+# transport line, so nothing above ever executed it. This block runs with NO ping-log seam, a recording
+# curl stub on PATH and the registry probe's INNGEST_PROBE_FUNCTIONS_FIXTURE seam (a non-empty registry,
+# no network), so the run reaches the real heartbeat. The stub is the single witness of requests: it
+# records one argv line per call and, for a `--config -` call, that call's whole stdin to its own file.
+# A stub that recorded no stdin (STUB_IGNORE_STDIN=1) must make the stdin rows RED, and is run once as
+# the harness witness for exactly that. The guard sits after the seam, so the seam rows above (which use
+# an http:// URL) stay green.
+echo "--- heartbeat channel: stdin config, per-attempt, shape guard, refusal limiter (#9757) ---"
+HB_STUBDIR="$TMP/hbstub"; mkdir -p "$HB_STUBDIR"
+cat > "$HB_STUBDIR/curl" <<'STUB'
+#!/usr/bin/env bash
+n=$(( $(cat "$CURL_LOG.n" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$CURL_LOG.n"
+printf '%s\n' "$*" >> "$CURL_LOG"
+case " $* " in
+  *" --config - "*) if [ "${STUB_IGNORE_STDIN:-}" != 1 ]; then cat > "$CURL_LOG.stdin.$n"; fi ;;
+esac
+if [ "${STUB_FAIL_FIRST:-}" = 1 ] && [ "$n" -eq 1 ]; then exit 7; fi
+exit "${STUB_RC:-0}"
+STUB
+chmod +x "$HB_STUBDIR/curl"
+HB_FX="$TMP/hb_registry.json"
+printf '%s' '{"data":{"functions":[{"id":"cron-daily-triage"}]}}' > "$HB_FX"
+HB_FX_FAIL="$TMP/hb_registry_fail.json"
+printf '%s' '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}' > "$HB_FX_FAIL"
+
+# run_hb <url value> [ENV=val ...] -> TEC / N_ARGV / N_STDIN_OK / N_MARK / CURL_LOG / HB_OUT. A fresh
+# fault stamp and a fresh refusal stamp per run unless the caller overrides them (later env wins).
+run_hb() {
+  local url="$1" ec=0 f; shift
+  CURL_LOG="$(mktemp "$TMP/hbcurl.XXXXXX")"; : > "$CURL_LOG"; rm -f "$CURL_LOG.n" "$CURL_LOG".stdin.*
+  HB_OUT="$(mktemp "$TMP/hbout.XXXXXX")"
+  env -u SOLEUR_INNGEST_CONSUMER_PING_LOG \
+    PATH="$HB_STUBDIR:$PATH" CURL_LOG="$CURL_LOG" \
+    INNGEST_PROBE_FUNCTIONS_FIXTURE="$HB_FX" \
+    SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/hbfault.$RANDOM.$$" \
+    SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER="$TMP/hbrefusal.$RANDOM.$$" \
+    "$@" "INNGEST_CONSUMER_URL=$url" \
+    timeout 20 bash "$SUT" >"$HB_OUT" 2>&1 || ec=$?
+  TEC=$ec
+  N_ARGV="$(grep -c . "$CURL_LOG" || true)"
+  N_MARK="$(grep -c 'SOLEUR_CREDENTIAL_REFUSED' "$HB_OUT" || true)"
+  N_STDIN_OK=0
+  for f in "$CURL_LOG".stdin.*; do
+    [[ -e "$f" ]] || continue
+    if printf 'url = "%s"\n' "$url" | cmp -s - "$f"; then N_STDIN_OK=$((N_STDIN_OK + 1)); fi
+  done
+}
+GOOD='https://uptime.betterstack.test/api/v1/heartbeat/synthetic-token'
+GOOD_REST="${GOOD#https://}"
+DIFF_URL='https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q'
+ARGV_FORM='--disable --noproxy * -gfsS -m 10 -o /dev/null --config -'
+
+# (a) a well-formed URL with a DIFFERENT token and every allowed punctuation class beats once
+run_hb "$DIFF_URL"
+assert "heartbeat: well-formed URL beats exactly once, exit 0" "[[ '$N_ARGV' -eq 1 && '$TEC' -eq 0 ]]"
+assert "heartbeat: argv is exactly the --disable --noproxy * -gfsS -m 10 -o /dev/null --config - form" \
+  "grep -qxF -e '$ARGV_FORM' '$CURL_LOG'"
+assert "heartbeat: no URL word on curl's argv" "! grep -q -e 'betterstack' -e 'https' -e 'A.b_c' '$CURL_LOG'"
+assert "heartbeat: stdin is exactly one url = \"...\" line carrying the stored URL" \
+  "[[ '$N_STDIN_OK' -eq 1 ]] && [[ \"\$(wc -l < '$CURL_LOG.stdin.1')\" -eq 1 ]]"
+assert "heartbeat: no marker, no WARN on a healthy beat" "[[ '$N_MARK' -eq 0 ]] && ! grep -q WARN '$HB_OUT'"
+
+# (b) the first attempt fails: two attempts, each with its OWN identical stdin line
+run_hb "$GOOD" STUB_FAIL_FIRST=1
+assert "retry: two attempts, two identical recorded url lines (the second did not read EOF)" \
+  "[[ '$N_ARGV' -eq 2 && '$N_STDIN_OK' -eq 2 && '$TEC' -eq 0 ]] && ! grep -q 'ping FAILED' '$HB_OUT'"
+run_hb "$GOOD" STUB_RC=7
+assert "both attempts fail: two attempts, one FAILED warning, fail-soft exit 0" \
+  "[[ '$N_ARGV' -eq 2 && '$N_STDIN_OK' -eq 2 && '$TEC' -eq 0 ]] && grep -q 'ping FAILED' '$HB_OUT'"
+# harness witness: a stub that records no stdin makes the per-attempt rows RED
+run_hb "$GOOD" STUB_FAIL_FIRST=1 STUB_IGNORE_STDIN=1
+assert "witness: a stub recording no stdin line yields zero recorded url lines (the retry row would fail)" \
+  "[[ '$N_ARGV' -eq 2 && '$N_STDIN_OK' -eq 0 ]]"
+
+# (c) shape guard: ONE defect per row (a good URL plus one bad thing, built per row)
+HOSTILE=(empty_rest http_scheme upper_scheme lead_space trail_space double_quote single_quote backslash
+         newline_directive cr tab semicolon dollar backtick at_sign hash)
+hostile_value() {  # <name> -> HV (value), HR (expected reason token)
+  HR=token_shape
+  case "$1" in
+    empty_rest)        HV='https://' ;;
+    http_scheme)       HV="http://${GOOD_REST}" ;;
+    upper_scheme)      HV="HTTPS://${GOOD_REST}" ;;
+    lead_space)        HV=" ${GOOD}" ;;
+    trail_space)       HV="${GOOD} " ;;
+    double_quote)      HV="${GOOD}\"" ;;
+    single_quote)      HV="${GOOD}'" ;;
+    backslash)         HV="${GOOD}\\" ;;
+    newline_directive) HV="${GOOD}"$'\n''url = "https://203.0.113.1/x"'; HR=control_char ;;
+    cr)                HV="${GOOD}"$'\r'; HR=control_char ;;
+    tab)               HV="${GOOD}"$'\t'; HR=control_char ;;
+    semicolon)         HV="${GOOD};" ;;
+    dollar)            HV="${GOOD}\$" ;;
+    backtick)          HV="${GOOD}\`" ;;
+    at_sign)           HV="${GOOD}@" ;;
+    hash)              HV="${GOOD}#" ;;
+    *)                 HV=''; HR=unknown ;;
+  esac
+}
+assert "hostile list is defined once and holds 16 entries" "[[ ${#HOSTILE[@]} -eq 16 ]]"
+HOSTILE_RAN=0
+for h in "${HOSTILE[@]}"; do
+  hostile_value "$h"
+  run_hb "$HV"
+  HOSTILE_RAN=$((HOSTILE_RAN + 1))
+  assert "guard refuses $h: zero heartbeat curls, exactly one marker, exit status unchanged (0)" \
+    "[[ '$N_ARGV' -eq 0 && '$N_MARK' -eq 1 && '$TEC' -eq 0 ]]"
+  assert "guard refuses $h: marker names reason=$HR and the variable, never the value" \
+    "grep -q 'SOLEUR_CREDENTIAL_REFUSED script=inngest-consumer-probe reason=$HR var=INNGEST_CONSUMER_URL\$' '$HB_OUT' && ! grep -q -e 'betterstack' -e '203\\.0\\.113' '$HB_OUT'"
+done
+assert "every one of the 16 hostile entries was exercised" "[[ '$HOSTILE_RAN' -eq 16 ]]"
+# the empty-URL arm is the pre-existing WARN (not a refusal): zero curls, no marker, same text
+run_hb ""
+assert "empty URL: the existing WARN arm, zero curls, no marker, exit 0" \
+  "[[ '$N_ARGV' -eq 0 && '$N_MARK' -eq 0 && '$TEC' -eq 0 ]] && grep -q 'INNGEST_CONSUMER_URL unset' '$HB_OUT'"
+
+# (d) refusal limiter: its OWN stamp, a 3600 s window, fail-open
+RSTAMP="$TMP/hb_refusal_limiter.stamp"
+rm -f "$RSTAMP"; MARKS=0
+for _ in 1 2 3 4; do
+  run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
+  MARKS=$((MARKS + N_MARK))
+done
+assert "limiter: four refused runs inside one window log exactly ONE marker" "[[ '$MARKS' -eq 1 ]]"
+assert "limiter: every refused run still made zero curls (the limiter governs the line, never the decision)" \
+  "[[ '$N_ARGV' -eq 0 && '$TEC' -eq 0 ]]"
+NOW="$(date +%s)"
+printf '%s\n' "$((NOW - 2000))" > "$RSTAMP"
+run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
+assert "limiter: a stamp aged 2000 s still suppresses (the window is 3600 s, not the fault 1800 s)" "[[ '$N_MARK' -eq 0 ]]"
+printf '%s\n' "$((NOW - 3700))" > "$RSTAMP"
+run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
+assert "limiter: a stamp aged 3700 s re-emits" "[[ '$N_MARK' -eq 1 ]]"
+assert "limiter: the stamp is rewritten on emit" "[[ \"\$(cat '$RSTAMP')\" -ge '$NOW' ]]"
+printf '%s\n' "$((NOW + 100000))" > "$RSTAMP"
+run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
+assert "limiter: a future-dated stamp emits (a suppressing negative age is a silent-forever bug)" "[[ '$N_MARK' -eq 1 ]]"
+assert "limiter: a future-dated stamp is rewritten to the present" "[[ \"\$(cat '$RSTAMP')\" -lt '$((NOW + 1000))' ]]"
+printf '%s\n' 'not-a-number' > "$RSTAMP"
+run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
+assert "limiter: a garbage stamp emits" "[[ '$N_MARK' -eq 1 ]]"
+# own-stamp rows: the refusal stamp is NOT the fault stamp, in either direction
+FSTAMP="$TMP/hb_fault_limiter.stamp"
+rm -f "$RSTAMP"; printf '%s\n' "$NOW" > "$FSTAMP"
+run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP" "SOLEUR_INNGEST_CONSUMER_FAULT_MARKER=$FSTAMP"
+assert "own stamp: a fresh fault stamp does NOT suppress the refusal marker" "[[ '$N_MARK' -eq 1 ]]"
+assert "own stamp: a refusal never writes the fault stamp" "[[ \"\$(cat '$FSTAMP')\" == '$NOW' ]]"
+assert "own stamp: the refusal wrote its own stamp file" "[[ -s '$RSTAMP' ]]"
+rm -f "$FSTAMP"
+run_hb "$GOOD" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP" "SOLEUR_INNGEST_CONSUMER_FAULT_MARKER=$FSTAMP" \
+  "INNGEST_PROBE_FUNCTIONS_FIXTURE=$HB_FX_FAIL"
+assert "own stamp: a fresh refusal stamp does NOT suppress a fault line (a refusal must not mask a fault)" \
+  "grep -q 'UNREACHABLE' '$HB_OUT'"
+# unwritable stamp path: fails OPEN (emit on every run), exit status unchanged
+BADSTAMP="$TMP/no-such-dir/sub/refusal.stamp"
+MARKS=0
+for _ in 1 2; do
+  run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$BADSTAMP"
+  MARKS=$((MARKS + N_MARK))
+done
+assert "limiter: an UNWRITABLE stamp path fails OPEN (the marker emits on every run)" "[[ '$MARKS' -eq 2 && '$TEC' -eq 0 ]]"
+
 # --- STATIC: unit contract (doppler-auth + observability delivery) ------------------------
 # Mirrors web-zot-consumer-probe.test.sh's block. The unit runs `doppler run` as ROOT, so
 # Environment=HOME=/root is required or the CLI dies before exec'ing the probe. SyslogIdentifier
