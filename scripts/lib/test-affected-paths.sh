@@ -896,6 +896,17 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
 )
 
+# tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
+# (git ls-files .github/workflows filtered to the workflows that plan or apply the web-platform root, plus the root's HCL
+# for the -target dependency closure and the gate libraries those workflows source).
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_WIPE_WEDGE_PATHS=(
+  ".github/workflows/"
+  "glob:apps/web-platform/infra/*.tf"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/"
+  "tests/scripts/test-git-data-wipe-wedge.sh"
+)
+
 # tests/scripts/eu-location-allowset-parity — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_EU_LOCATION_ALLOWSET_PARITY_PATHS=(
