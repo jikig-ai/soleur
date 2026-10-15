@@ -594,10 +594,13 @@ dts() { jq -rn --arg d "$DTODAY" --argjson n "$1" '($d + "T00:00:00Z" | fromdate
 mkdr() { # <name> <ran-iso> [fixture]: the delegation fixture with ", ran <iso>" on its delegation row(s); the result is $DF
   mkd "$1" "${3:-deleg-valid.md}"; sed "s/\(envelope [A-Za-z0-9_.#@ -]*[A-Za-z0-9_.#-]\) |\$/\1, ran $2 |/" "$DF" > "$TMP/df/$1-ran.md"; DF="$TMP/df/$1-ran.md"
 }
+RID=9000
 rcpt() { # <delegation-url> <envelope> <sha> <result> <author_association>: append a receipt comment to the epic's comment list
   local body
   body="$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=%s sha256=%s result=%s run=none -->\nMerged the change under your standing approval; it is live and healthy.' "$1" "$2" "$3" "$4")"
-  jq -n --arg b "$body" --arg a "$5" '{id: 9001, body: $b, author_association: $a, user: {login: "owner-user", type: "User"}}' >> "$STUB_DIR/rcpt.lines"
+  RID=$((RID + 1))
+  jq -n --arg b "$body" --arg a "$5" --arg c "${RCPT_CREATED:-$DNOW}" --arg u "${RCPT_UPDATED:-${RCPT_CREATED:-$DNOW}}" --arg t "${RCPT_TYPE:-User}" --argjson id "$RID" \
+    '{id: $id, body: $b, created_at: $c, updated_at: $u, user: {login: "owner-user", type: $t}} + (if $a == "ABSENT" then {} else {author_association: $a} end)' >> "$STUB_DIR/rcpt.lines"
   jq -s . "$STUB_DIR/rcpt.lines" > "$STUB_DIR/receipts-77.json"
 }
 AT="$DNOW"
@@ -661,18 +664,45 @@ dscn; rcpt "$DURL2" env-valid.md "$SHA_ENV1" ok MEMBER;            rx RX6 2 rece
 dscn; echo net > "$STUB_DIR/mode-comments";                        rx RX7 2 receipt-unreadable
 dscn; echo 'not json' > "$STUB_DIR/receipts-77.json";              rx RX8 2 receipt-unreadable
 dscn; echo '{"a":1}' > "$STUB_DIR/receipts-77.json";               rx RX8b 2 receipt-unreadable
-dscn; jq -n '[{id:1,body:"unrelated chatter",author_association:"MEMBER"}]' > "$STUB_DIR/receipts-77.json"
-printf '%s\n' "$(jq -n --arg b "$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none -->\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"MEMBER"}]')" >> "$STUB_DIR/receipts-77.json"
+dscn; jq -n '[{id:1,body:"unrelated chatter",author_association:"MEMBER",created_at:"x",updated_at:"x",user:{type:"User"}}]' > "$STUB_DIR/receipts-77.json"
+printf '%s\n' "$(jq -n --arg b "$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none -->\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"MEMBER",created_at:"'$DNOW'",updated_at:"'$DNOW'",user:{type:"User"}}]')" >> "$STUB_DIR/receipts-77.json"
 rx RX9 0 -
-dscn; jq -n --arg b "$(printf 'hello\n<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none -->\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"MEMBER"}]' > "$STUB_DIR/receipts-77.json"; rx RX10 2 receipt-missing
-dscn; jq -n --arg b "$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none --> trailing\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"MEMBER"}]' > "$STUB_DIR/receipts-77.json"; rx RX11 2 receipt-missing
+dscn; jq -n --arg b "$(printf 'hello\n<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none -->\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"MEMBER",created_at:"'$DNOW'",updated_at:"'$DNOW'",user:{type:"User"}}]' > "$STUB_DIR/receipts-77.json"; rx RX10 2 receipt-missing
+dscn; jq -n --arg b "$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none --> trailing\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"MEMBER",created_at:"'$DNOW'",updated_at:"'$DNOW'",user:{type:"User"}}]' > "$STUB_DIR/receipts-77.json"; rx RX11 2 receipt-missing
 dscn; rcpt "$DURL1" env-valid.md "$(printf '%s' "$SHA_ENV1" | tr 'a-f' 'A-F')" ok MEMBER; rx RX12 2 receipt-missing
-dscn; jq -n --arg b "$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none -->\r\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"OWNER"}]' > "$STUB_DIR/receipts-77.json"; rx RX13 0 -
+dscn; jq -n --arg b "$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none -->\r\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"OWNER",created_at:"'$DNOW'",updated_at:"'$DNOW'",user:{type:"User"}}]' > "$STUB_DIR/receipts-77.json"; rx RX13 0 -
 dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkd rx14 deleg-valid.md; run_d "$GATE" "$DF"
 assert_eq "0" "$(last_rc)" "RX14: a row without ran needs no receipt"
 assert_eq "0" "$(ncalls 'issues/77/comments')" "RX14b: and the epic's comments are not read for it"
 dscn; echo '{"number":77,"state":"open"}' > "$STUB_DIR/issue-77.json"; mkdr rx15 "$AT"
 assert_eq "1" "$([ "$(grep -c 'ran ' "$DF")" -ge 1 ] && echo 1 || echo 0)" "RX15: the ran fixture carries a ran value (instrument)"
+
+echo "=== Arm 6g2: the receipt is bound to the delegation's life, to now, to its author and to ONE row ==="
+RCT() { RCPT_CREATED="$1" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; }
+dscn; RCT "$(dts -1)";                                              rx RW1 2 receipt-mismatch
+dscn; RCT "$(dts 1)";                                               rx RW3 2 receipt-mismatch
+dscn; RCPT_UPDATED="${DTODAY}T00:07:00Z" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; rx RW4 2 receipt-mismatch
+dscn; RCPT_TYPE=Bot rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok COLLABORATOR; rx RW5 2 receipt-mismatch
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok ABSENT;             rx RX16 2 receipt-mismatch
+dscn; rcpt "${DURL1}9" env-valid.md "$SHA_ENV1" ok MEMBER;           rx RX17 2 receipt-missing
+dscn; rcpt "$DURL1" "env-valid.md#extra" "$SHA_ENV1" ok MEMBER;      rx RX18 2 receipt-mismatch
+dscn; RCT "$DNOW";                                                  rx RW0 0 -
+dscn_past() { # a delegation recorded 20 days ago whose expiry day was 5 days ago (the act ran in between)
+  dscn
+  local c e d; c="$(dts -20)"; e="$(dts -5)"; e="${e%%T*}"; d="${c%%T*}"
+  sed -e "s/@EXPIRY@/$e/" -e "s/@DATE@/$d/" "$DFX/delegation-valid.md" > "$STUB_DIR/body.md"
+  jq -n --rawfile body "$STUB_DIR/body.md" --arg c "$c" --arg iu "https://api.github.com/repos/example-org/example-repo/issues/77" \
+    '{id:1001, body:$body, user:{login:"owner-user", type:"User"}, author_association:"MEMBER", created_at:$c, updated_at:$c, issue_url:$iu}' > "$STUB_DIR/comment-1001.json"
+}
+dscn_past; RCT "$(dts -6)"; mkdr rwp1 "$(dts -6)"; run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "RWP1: a receipt written on the day of the act passes even though the delegation has expired since"
+dscn_past; RCT "$(dts -1)"; mkdr rwp2 "$(dts -6)"; run_d "$GATE" "$DF"
+assert_eq "2" "$(last_rc)" "RWP2: a receipt written AFTER the delegation's expiry day ended is receipt-mismatch (it cannot vouch for an in-window act)"
+assert_reason "receipt-mismatch" "RWP2"
+dscn; RCT "$DNOW"; mkdr ax5 "$(dts 5)"; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "AX5: a ran time in the future is delegation-invalid (an act cannot have run yet), even inside the delegation's window"
+assert_reason "delegation-invalid" "AX5"
+assert_eq "0" "$(ncalls 'issues/comments/1001')" "AX5b: it is refused before any verifier call"
 
 echo "=== Arm 6h: one verifier call per (delegation, envelope, time), one receipt read per epic ==="
 cat > "$TMP/df/memo-same.md" <<EOF
@@ -686,10 +716,27 @@ cat > "$TMP/df/memo-same.md" <<EOF
 | O2 second merge | operator (production-mutating) | Authorized by delegation $DURL1, envelope env-valid.md, ran $AT |
 EOF
 dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; run_d "$GATE" "$TMP/df/memo-same.md"
-assert_eq "0" "$(last_rc)" "MX1: two rows with the same delegation, envelope and time pass"
+assert_eq "2" "$(last_rc)" "MX1: two rows that need the SAME receipt: the second finds none left (one receipt satisfies one row)"
+assert_eq "1" "$(grep -cE '^\[FAIL\] .*: receipt-missing - ' "$TMP/last.err" || true)" "MX1a: exactly one row, the second, is receipt-missing"
 assert_eq "2" "$(dlog_count)" "MX1b: both rows were examined"
 assert_eq "1" "$(ncalls 'issues/comments/1001')" "MX1c: the delegation comment was read once"
 assert_eq "1" "$(ncalls 'issues/77/comments')" "MX1d: the epic's comments were read once"
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; run_d "$GATE" "$TMP/df/memo-same.md"
+assert_eq "0" "$(last_rc)" "MX1e: with one receipt per row both rows pass"
+cat > "$TMP/df/memo-mixed.md" <<EOF
+# Decision challenges - an audited row, then a strict row, same delegation and envelope (synthesized)
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| O1 the act that ran | operator (production-mutating) | Authorized by delegation $DURL1, envelope env-valid.md, ran $AT |
+| O2 the next act, not yet run | operator (production-mutating) | Authorized by delegation $DURL1, envelope env-valid.md |
+EOF
+dscn; echo '{"number":77,"state":"closed"}' > "$STUB_DIR/issue-77.json"; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; run_d "$GATE" "$TMP/df/memo-mixed.md"
+assert_eq "1" "$(last_rc)" "MX3: a strict row after an audited row of the same delegation and envelope never inherits the audited verdict (closed epic: exit 1)"
+assert_eq "1" "$(grep -cE '^\[FAIL\] .*: delegation-invalid - ' "$TMP/last.err" || true)" "MX3b: exactly the strict row is delegation-invalid"
+assert_eq "2" "$(ncalls 'issues/comments/1001')" "MX3c: the two audit times were verified separately"
 cat > "$TMP/df/memo-env.md" <<EOF
 # Decision challenges - two rows, two envelope addresses (synthesized)
 
@@ -720,6 +767,7 @@ mkdir -p "$TMP/dm/fakeg/skills/ship/scripts" "$TMP/dm/fakeg/scripts"; cp "$GATE"
 cat > "$TMP/dm/fakeg/scripts/delegation-verify.sh" <<'FAKEV'
 #!/usr/bin/env bash
 cat >/dev/null
+[ -z "${FAKE_V_SLEEP-}" ] || exec sleep "$FAKE_V_SLEEP"
 [ -z "${FAKE_V_OUT-}" ] || printf '%b' "$FAKE_V_OUT"
 exit "${FAKE_V_RC:-0}"
 FAKEV
@@ -739,6 +787,18 @@ assert_eq "1" "$(last_rc)" "FG4: rc 1 is delegation-invalid whatever else it pri
 dscn; mkdr fg5 "$AT"; export FAKE_V_OUT='delegation: valid reason=ok\n' FAKE_V_RC=0; run_d "$TMP/dm/fakeg/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; unset FAKE_V_OUT FAKE_V_RC
 assert_eq "2" "$(last_rc)" "FG5: a ran row whose verifier reports no fingerprint is exit 2"
 assert_reason "receipt-unreadable" "FG5"
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr fg6 "$AT"; export FAKE_V_OUT='delegation: valid reason=ok\nverified-envelope-sha256: '"$SHA_ENV1"'\n' FAKE_V_RC=0; run_d "$TMP/dm/fakeg/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; unset FAKE_V_OUT FAKE_V_RC
+assert_eq "2" "$(last_rc)" "FG6: a ran row whose verifier reports no delegation dates is exit 2 (the receipt window cannot be checked)"
+assert_reason "receipt-unreadable" "FG6"
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr fg7 "$AT"; export FAKE_V_OUT='delegation: valid reason=ok\nverified-created-at: '"$DNOW"'\nverified-expiry: '"$DEXP"'\nverified-envelope-sha256: '"$SHA_ENV1"'\n' FAKE_V_RC=0; run_d "$TMP/dm/fakeg/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; unset FAKE_V_OUT FAKE_V_RC
+assert_eq "0" "$(last_rc)" "FG7: with fingerprint and dates the fake verifier's ran row passes (instrument control for FG6)"
+if command -v timeout >/dev/null 2>&1; then
+  dscn; mkd vt deleg-valid.md; export FAKE_V_OUT='delegation: valid reason=ok\n' FAKE_V_RC=0 FAKE_V_SLEEP=8 TRG_VERIFY_TIMEOUT=2
+  t0=$SECONDS; run_d "$TMP/dm/fakeg/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; el=$((SECONDS - t0)); unset FAKE_V_OUT FAKE_V_RC FAKE_V_SLEEP TRG_VERIFY_TIMEOUT
+  assert_eq "2" "$(last_rc)" "VT1: a verifier that never answers is exit 2, never a pass (testdesign N15)"
+  assert_eq "1" "$(grep -c 'delegation-unverifiable - ' "$TMP/last.err" || true)" "VT1b: the finding is delegation-unverifiable"
+  assert_eq "1" "$([ "$el" -lt 6 ] && echo 1 || echo 0)" "VT1c: it was cut off at the shortened limit (took ${el}s, not the 8s the fake sleeps)"
+fi
 
 echo "=== Arm 6b: archived artifacts are checked for shape only (no network) ==="
 dscn; echo net > "$STUB_DIR/mode-repo"; mkd arch deleg-valid.md
@@ -841,7 +901,33 @@ mutate_d memo 's/^memo_find\(\) \{.*# mut:memo$/memo_find() { return 0; } # mut:
   else echo "  FAIL: mutant memo SURVIVED (verifier calls $pv -> $mv_, epic reads $pe -> $me)"; FAIL=$((FAIL + 1)); fi
 }
 
+# 14 R3 receipt binding and the audit-time memo key
+mutate_d memo-key 's/key="\$durl\|\$dpath\|\$dran"/key="$durl|$dpath"/' && { dscn; echo '{"number":77,"state":"closed"}' > "$STUB_DIR/issue-77.json"; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; killed_d memo-key 1 2 "$TMP/df/memo-mixed.md"; }
+mutate_d ran-future "$(dnoop ran-future)" && { dscn; RCT "$DNOW"; mkdr m15 "$(dts 5)"; killed_d ran-future 1 - "$DF"; }
+mutate_d receipt-low "$(dnoop receipt-low)" && { dscn; RCT "$(dts -1)"; mkdr m16 "$AT"; killed_d receipt-low 2 - "$DF"; }
+mutate_d receipt-future "$(dnoop receipt-future)" && { dscn; RCT "$(dts 1)"; mkdr m17 "$AT"; killed_d receipt-future 2 - "$DF"; }
+mutate_d receipt-expiry "$(dnoop receipt-expiry)" && { dscn_past; RCT "$(dts -1)"; mkdr m18 "$(dts -6)"; killed_d receipt-expiry 2 - "$DF"; }
+mutate_d receipt-edited "$(dnoop receipt-edited)" && { dscn; RCPT_UPDATED="${DTODAY}T00:07:00Z" rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr m19 "$AT"; killed_d receipt-edited 2 - "$DF"; }
+mutate_d receipt-bot "$(dnoop receipt-bot)" && { dscn; RCPT_TYPE=Bot rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok COLLABORATOR; mkdr m20 "$AT"; killed_d receipt-bot 2 - "$DF"; }
+mutate_d receipt-consume "$(dnoop receipt-consume)" && { dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; killed_d receipt-consume 2 2 "$TMP/df/memo-same.md"; }
+mutate_d receipt-assoc-default 's/\(\.author_association \/\/ "ABSENT"\)/(.author_association \/\/ "MEMBER")/' && { dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok ABSENT; mkdr m21 "$AT"; killed_d receipt-assoc-default 2 - "$DF"; }
+mutate_d receipt-deleg-prefix 's/== "\$durl" \]\] \|\| continue/== "$durl"* ]] || continue/' && { dscn; rcpt "${DURL1}9" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr m22 "$AT"; killed_d receipt-deleg-prefix 2 - "$DF"; }
+mutate_d receipt-env-prefix 's/== "\$env" \]\] \|\| continue/== "$env"* ]] || continue/' && { dscn; rcpt "$DURL1" "env-valid.md#extra" "$SHA_ENV1" ok MEMBER; mkdr m23 "$AT"; killed_d receipt-env-prefix 2 - "$DF"; }
+
 echo "=== Arm 6k: the verdict helpers are under controls (testdesign F4) ==="
+no_miss_ctl() { # no_miss must go red on a STUB-MISS log and stay green on a clean one
+  mkdir -p "$TMP/ctl-nm1" "$TMP/ctl-nm2"; printf 'STUB-MISS api x\n' > "$TMP/ctl-nm1/calls.log"; printf 'api repos/o/r/issues/1\n' > "$TMP/ctl-nm2/calls.log"
+  ( b=$FAIL; STUB_DIR="$TMP/ctl-nm1"; no_miss ctl >/dev/null; [[ $FAIL -eq $((b + 1)) ]] ) || return 1
+  ( b=$FAIL; STUB_DIR="$TMP/ctl-nm2"; no_miss ctl >/dev/null; [[ $FAIL -eq $b ]] ) || return 1
+}
+no_miss_ctl || { printf 'FATAL: no_miss cannot tell a refused argv from a clean log\n' >&2; exit 2; }
+write_audit() { # <calls.log files...>: lines that are neither a read shape nor a known stub shape
+  cat "$@" 2>/dev/null | grep -vcE '^(api repos/[A-Za-z0-9_./-]+( --paginate)?|repo view --json nameWithOwner --jq \.nameWithOwner)$' || true
+}
+printf 'api -X POST repos/o/r/issues/1/comments\nissue comment 5\n' > "$TMP/ctl-nm1/audit.log"
+[[ "$(write_audit "$TMP/ctl-nm1/audit.log")" == 2 ]] || { printf 'FATAL: the zero-write audit cannot see a write verb\n' >&2; exit 2; }
+assert_eq "0" "$(write_audit "$TMP"/dscn*/calls.log)" "ZW1: no gh call in any delegation scenario was anything but a read (testdesign N9)"
+assert_eq "0" "$(cat "$TMP"/dscn*/calls.log | grep -c 'STUB-MISS' || true)" "ZW2: and no scenario hit a refused argv"
 ( echo 127 > "$TMP/last.rc"; : > "$TMP/last.err"; mutant_crashed ) \
   || { printf 'FATAL: mutant_crashed cannot see rc 127\n' >&2; exit 2; }
 ( echo 0 > "$TMP/last.rc"; echo 'x.sh: line 3: v: unbound variable' > "$TMP/last.err"; mutant_crashed ) \
@@ -866,4 +952,4 @@ else
   echo "  FAIL: SUT execution markers $n_rows < 222 -- the cases above did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-print_results 414
+print_results 478

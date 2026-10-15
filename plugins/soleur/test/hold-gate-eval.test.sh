@@ -108,6 +108,10 @@ O3="$TMP/origin3.git"; W6="$TMP/work6"
   git -C "$W" checkout -q -b main
   sed -e "s|@URL@|$URL|g" "$FX/envelope-valid.md" > "$W/env-valid.md"
   sed -e "s|@URL@|$URL|g" "$FX/envelope-two-sections.md" > "$W/env-two.md"
+  sed '/^- Gate:/d' "$W/env-valid.md" > "$W/env-nogate.md"
+  sed 's/^## Production Envelope/### production envelope/' "$W/env-valid.md" > "$W/env-lvl3.md"
+  sed 's/^- Gate: pr-merged 120$/- Gate: command scripts\/x.sh => y/' "$W/env-valid.md" > "$W/env-cmd.md"
+  ln -s env-valid.md "$W/env-link.md"
   git -C "$W" add -A && git -C "$W" commit -q -m "base" && git -C "$W" push -q origin main
   git -C "$W" rev-parse HEAD > "$TMP/sha-merged"
   git -C "$W" checkout -q -b side && printf 'x\n' > "$W/side.txt" && git -C "$W" add side.txt && git -C "$W" commit -q -m "side"
@@ -188,6 +192,14 @@ expect() { # <name> <rc> <machine line>
   || { printf 'FATAL: expect cannot fail -- dispatch is neutered\n' >&2; exit 2; }
 calls() { { cat "$STUB_DIR/calls.log" 2>/dev/null || true; } | grep -c -e "$1" || true; }
 probed() { { cat "$STUB_DIR/calls.log" 2>/dev/null || true; } | grep -c '^pr view\|^run list' || true; }
+# F4/N9: the helpers that COUNT are under controls too. no_stub_miss must see a STUB-MISS line; probed must count gate probes.
+mkdir -p "$TMP/ctl-miss" "$TMP/ctl-probed"
+printf 'STUB-MISS api bogus\n' > "$TMP/ctl-miss/calls.log"
+( b=$FAIL; STUB_DIR="$TMP/ctl-miss"; : > "$TMP/o"; echo 0 > "$TMP/rc"; printf 'holds: x\n' > "$TMP/o"; expect ctrl 0 "holds: x" >/dev/null; [[ $FAIL -eq $((b + 1)) ]] ) \
+  || { printf 'FATAL: no_stub_miss cannot see a STUB-MISS line -- a refused argv would pass\n' >&2; exit 2; }
+printf 'pr view 1 --json state,mergeCommit,baseRefName\nrun list --workflow w.yml --limit 100 --json status\napi repos/o/r/issues/1\npr view 2 --json state,mergeCommit,baseRefName\n' > "$TMP/ctl-probed/calls.log"
+( STUB_DIR="$TMP/ctl-probed"; [[ "$(probed)" == 3 && "$(calls 'api repos')" == 1 ]] ) \
+  || { printf 'FATAL: probed/calls cannot count -- every "nothing was probed" row would pass\n' >&2; exit 2; }
 
 echo "=== Control: three holds, one verified delegation, every gate true ==="
 scn; mkplan mixed; run_h --plan "$PLAN"
@@ -197,6 +209,7 @@ assert_eq "1" "$(grep -c '^Done: do not ship until the earlier change has gone l
 assert_eq "1" "$(grep -c '^Done: do not ship while a release is running. - checked: no-inflight-run example-release.yml$' "$TMP/o")" "XD2b: the no-inflight-run gate text is printed too"
 assert_eq "1" "$(calls '^run list --workflow example-release.yml --limit 100 --json status$')" "no-inflight-run asks ONE run list for every state"
 assert_eq "valid" "$(head -1 "$TMP/o" | sed -n 's/^delegation: \(valid\) reason=ok$/\1/p')" "the first line is the delegation verdict"
+assert_eq "1" "$([ "$(probed)" -ge 3 ] && echo 1 || echo 0)" "N9: the control run probed at least three gates (so a probed count of 0 elsewhere is meaningful)"
 
 echo "=== Arm 1: pr-merged ==="
 scn; echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-55.json"; mkplan mixed; run_h --plan "$PLAN"
@@ -212,6 +225,13 @@ scn; mkplan mixed 's/pr-merged 55/pr-merged 55x/'; run_h --plan "$PLAN"
 expect "malformed number is not evaluated (exit 2)" 2 "holds: 3 discharged: 2 standing: 1"
 scn; jq -n --arg s "$SHA_ABSENT" '{state:"MERGED", mergeCommit:{oid:$s}, baseRefName:"main"}' > "$STUB_DIR/pr-55.json"; mkplan mixed; run_h --plan "$PLAN"
 expect "HX4: a merge commit this clone does not know is exit 2, never a pass" 2 "holds: 3 discharged: 2 standing: 1"
+scn; echo '{"state":"MERGED","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-55.json"; mkplan mixed; run_h --plan "$PLAN"
+expect "HX10: a merged change with no merge commit recorded stands (exit 1), it is not an unreadable probe" 1 "holds: 3 discharged: 2 standing: 1"
+assert_eq "1" "$(grep -c 'cannot see which version of the work' "$TMP/o")" "HX10b: and the reason is stated in plain words"
+scn; X300="$(printf 'x%.0s' $(seq 1 300))"; mkholds long "- Hold: $X300
+  Gate: no-inflight-run example-release.yml"; run_h --plan "$PLAN"
+assert_eq "0" "$(grep -c 'x\{161\}' "$TMP/o")" "HX11: a 300-character hold is capped at 160 (no 161st character)"
+assert_eq "1" "$(grep -c 'x\{160\}' "$TMP/o")" "HX11b: and exactly 160 are printed"
 echo "=== Arm 1b: the default branch is resolved, not assumed (trunk, and origin/HEAD set) ==="
 scn; jq -n --arg s "$SHA_TRUNK" '{state:"MERGED", mergeCommit:{oid:$s}, baseRefName:"trunk"}' > "$STUB_DIR/pr-55.json"; cp "$STUB_DIR/pr-55.json" "$STUB_DIR/pr-120.json"; mkplan mixed; RUN_REPO="$W6"; run_h --plan "$PLAN"
 expect "XB1: a change merged into the repository's own default branch (trunk) counts" 0 "holds: 3 discharged: 3 standing: 0"
@@ -336,6 +356,19 @@ scn; mkholds fafter $'```text\n- Hold: example\n```\n- Hold: do not ship while a
 run_h --plan "$PLAN"
 expect "XF3: a real hold after a closed fence is read" 0 "holds: 1 discharged: 1 standing: 0"
 
+echo "=== Arm 4c: Operator-reserved holds are never discharged by a gate (security F7) ==="
+scn; mkplan reserved 's/^- Hold: do not ship while a release is running\./- Hold: Operator-reserved: approve the new pricing page copy./'; run_h --plan "$PLAN"
+expect "OR1: an Operator-reserved hold stands even though its gate is true (exit 2)" 2 "holds: 3 discharged: 2 standing: 1"
+assert_eq "1" "$(grep -c '^Reserved for you: Operator-reserved: approve the new pricing page copy. - only you can clear this$' "$TMP/o")" "OR1b: it is printed as reserved, with 'only you can clear this'"
+assert_eq "0" "$(calls '^run list')" "OR1c: its gate was not even probed"
+scn; mkplan reserved2 's/^- Hold: do not ship while a release is running\./- Hold: OPERATOR-RESERVED: spend above the budget/'; run_h --plan "$PLAN"
+expect "OR2: the prefix is read in any case" 2 "holds: 3 discharged: 2 standing: 1"
+scn; mkplan reserved3 's/^- Hold: do not ship while a release is running\./- Hold: ask first, this is Operator-reserved: nothing special/'; run_h --plan "$PLAN"
+expect "OR3: the words in the middle of a hold do not reserve it (it must BEGIN with the prefix)" 0 "holds: 3 discharged: 3 standing: 0"
+scn; mkplan reserved4 's/^- Hold: do not ship while a release is running\./- Hold: Operator-reserved: brand copy/;/^  Gate: no-inflight-run/d'; run_h --plan "$PLAN"
+expect "OR4: a reserved hold with no gate at all is reserved, not 'needs a person' by accident" 2 "holds: 3 discharged: 2 standing: 1"
+assert_eq "1" "$(grep -c '^Reserved for you: ' "$TMP/o")" "OR4b: it is the reserved line"
+
 echo "=== Arm 5: sections and headings ==="
 scn; run_h --plan "$FX/holds-none.md"
 expect "no Operator Holds section is a no-op" 0 "holds: 0 discharged: 0 standing: 0"
@@ -371,7 +404,18 @@ assert_eq "0" "$(last_rc)" "XH4: a hold and a gate that exist only inside a fenc
 scn; mkplan sub 's/^- Hold: wait until the second earlier change has gone live./### Notes\n\nA sub-heading inside the section.\n\n- Hold: wait until the second earlier change has gone live./'; run_h --plan "$PLAN"
 expect "XH5: a deeper heading inside the section does not end it" 0 "holds: 3 discharged: 3 standing: 0"
 scn; mkplan after 's/^## Acceptance Criteria$/## Acceptance Criteria\n\n- Hold: not part of the section.\n  Gate: pr-merged 9999/'; run_h --plan "$PLAN"
-expect "XH6: holds after the next same-level heading are not part of the section" 0 "holds: 3 discharged: 3 standing: 0"
+assert_eq "2" "$(last_rc)" "XH6: holds after the next same-level heading are outside the section: exit 2, never silently dropped (security N2)"
+assert_eq "0" "$(calls 'repos/')" "XH6b: and nothing was verified or probed"
+scn; mkplan misspelt ''; printf '\n## Operator Hold (misspelt, second)\n\n- Hold: Do not merge until Dana has signed off the copy.\n  Gate: pr-merged 9999\n' >> "$PLAN"; run_h --plan "$PLAN"
+assert_eq "2" "$(last_rc)" "XN2a: a good hold section plus a hold under a misspelt second heading is exit 2 (the hidden hold stands)"
+assert_eq "1" "$(grep -c 'not inside a hold section I can read' "$TMP/o")" "XN2b: and says so in plain words"
+assert_eq "0" "$(grep -c '^Done: ' "$TMP/o")" "XN2c: nothing is discharged"
+scn; printf '# Plan\n\n## Operator Holds\n\n## Operator Hold (misspelt)\n\n- Hold: x\n  Gate: pr-merged 9999\n' > "$TMP/plans/emptyplusmisspelt.md"; run_h --plan "$TMP/plans/emptyplusmisspelt.md"
+assert_eq "2" "$(last_rc)" "XN2f: an EMPTY hold section plus holds under a misspelt heading is exit 2, not the all-clear"
+scn; mkplan fencedextra ''; printf '\nExample, not a hold:\n\n```text\n- Hold: an example\n  Gate: pr-merged 9999\n```\n' >> "$PLAN"; run_h --plan "$PLAN"
+expect "XN2d: a fenced example outside the section is not a hold" 0 "holds: 3 discharged: 3 standing: 0"
+scn; printf '# Plan\n\n## Operator Holds\n\n- Wait for the earlier change.\n\n## Operator Hold (misspelt)\n\n- Hold: x\n  Gate: pr-merged 9999\n' > "$TMP/plans/prose-misspelt.md"; run_h --plan "$TMP/plans/prose-misspelt.md"
+assert_eq "3" "$(last_rc)" "XN2e: with no Delegation line the prose path (exit 3) still comes first"
 
 echo "=== Arm 6: delegation and envelope ==="
 s_nodeleg() { mkplan nodeleg '/^Delegation: /d'; }
@@ -416,6 +460,7 @@ cat > "$FAKE/scripts/delegation-verify.sh" <<'FAKEV'
 #!/usr/bin/env bash
 # fake verifier: prints $FAKE_V_OUT (printf %b), exits $FAKE_V_RC, and records how many stdin bytes it was handed
 n="$(cat | wc -c | tr -d ' ')"; echo "$n" >> "${STUB_DIR:?}/v-stdin-bytes"
+[ -z "${FAKE_V_SLEEP-}" ] || exec sleep "$FAKE_V_SLEEP"
 [ -z "${FAKE_V_OUT-}" ] || printf '%b' "$FAKE_V_OUT"
 exit "${FAKE_V_RC:-0}"
 FAKEV
@@ -447,6 +492,16 @@ scn; mkplan mixed; export FAKE_V_OUT='delegation: valid reason=ok\n' FAKE_V_RC=0
 SUT="$FAKE/skills/ship/scripts/hold-gate-eval.sh"; run_h --plan "$PLAN"; SUT="$SUT_REAL"
 assert_eq "0" "$(sort -u "$STUB_DIR/v-stdin-bytes" | tr '\n' ' ' | tr -d ' ')" "XI1: the verifier is handed no stdin"
 unset FAKE_V_OUT FAKE_V_RC
+
+echo "--- a verifier that hangs is cut off at the (test-shortened) time limit and the holds stand (testdesign N15) ---"
+scn; mkplan mixed; export FAKE_V_OUT='delegation: valid reason=ok\n' FAKE_V_RC=0 FAKE_V_SLEEP=8 HGE_VERIFY_TIMEOUT=2
+t0=$SECONDS; SUT="$FAKE/skills/ship/scripts/hold-gate-eval.sh"; run_h --plan "$PLAN"; SUT="$SUT_REAL"; el=$((SECONDS - t0)); unset FAKE_V_OUT FAKE_V_RC FAKE_V_SLEEP HGE_VERIFY_TIMEOUT
+assert_eq "2" "$(last_rc)" "VT1: a verifier that never answers leaves every hold standing (exit 2)"
+assert_eq "delegation: unverifiable reason=no-answer" "$(head -1 "$TMP/o")" "VT1b: and says it got no answer"
+assert_eq "1" "$([ "$el" -lt 6 ] && echo 1 || echo 0)" "VT1c: it was cut off at the shortened limit (took ${el}s, not the 8s the fake sleeps)"
+scn; mkplan mixed; export FAKE_V_OUT='delegation: valid reason=ok\n' FAKE_V_RC=0 HGE_VERIFY_TIMEOUT=900
+SUT="$FAKE/skills/ship/scripts/hold-gate-eval.sh"; run_h --plan "$PLAN"; SUT="$SUT_REAL"; unset FAKE_V_OUT FAKE_V_RC HGE_VERIFY_TIMEOUT
+assert_eq "0" "$(last_rc)" "VT2: a limit above 60 is ignored (the knob can only shorten) and a quick verifier still passes"
 
 echo "=== Arm 6b: stdin hygiene (a gh call that drains stdin must not swallow the remaining gates or holds) ==="
 scn; touch "$STUB_DIR/eat-stdin"; echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-9999.json"; mkplan eat 's/^  Gate: no-inflight-run example-release.yml$/  Gate: no-inflight-run example-release.yml\n  Gate: pr-merged 9999/'; run_h --plan "$PLAN"
@@ -516,13 +571,27 @@ scn; run_h --file "env-valid.md#"
 assert_eq "2" "$(last_rc)" "XP6: path# with an empty title is exit 2"
 scn; run_h --file env-two.md --section "nonesuch"
 assert_eq "2" "$(last_rc)" "a section that does not exist is exit 2"
-scn; sed '/^- Gate:/d' "$W/env-valid.md" > "$TMP/plans/nogate-env.md"; run_h --file "$TMP/plans/nogate-env.md" --section "Production Envelope"
+scn; run_h --file env-nogate.md --section "Production Envelope"
 assert_eq "2" "$(last_rc)" "an envelope with no gate is exit 2"
 assert_eq "0" "$(calls 'repos/.*comments')" "envelope mode does not re-verify the delegation (the caller just did)"
-scn; sed 's/^## Production Envelope/### production envelope/' "$W/env-valid.md" > "$TMP/plans/lvl3-env.md"; run_h --file "$TMP/plans/lvl3-env.md" --section "Production Envelope"
+scn; run_h --file env-lvl3.md --section "Production Envelope"
 expect "XP7: a level-3 mixed-case envelope heading is found" 0 "holds: 1 discharged: 1 standing: 0"
-scn; sed 's/^- Gate: pr-merged 120$/- Gate: command scripts\/x.sh => y/' "$W/env-valid.md" > "$TMP/plans/cmd-env.md"; run_h --file "$TMP/plans/cmd-env.md" --section "Production Envelope"
+scn; run_h --file env-cmd.md --section "Production Envelope"
 expect "XP8: a retired command precondition in an envelope stands (exit 2)" 2 "holds: 1 discharged: 0 standing: 1"
+echo "--- --file reads the committed blob (HEAD), never the working tree (security N4) ---"
+scn; echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-120.json"
+sed -i.bak '/^- Gate: pr-merged 120$/d' "$W/env-valid.md"; rm -f "$W/env-valid.md.bak"; run_h --file env-valid.md --section "Production Envelope"; git -C "$W" checkout -q -- env-valid.md
+expect "XN4a: deleting the false precondition in the working tree does not change the answer (HEAD still has it)" 1 "holds: 1 discharged: 0 standing: 1"
+scn; sed -i.bak 's/^- Gate: pr-merged 120$/- Gate: pr-merged 9999/' "$W/env-valid.md"; rm -f "$W/env-valid.md.bak"; run_h --file env-valid.md --section "Production Envelope"; git -C "$W" checkout -q -- env-valid.md
+expect "XN4b: making a precondition false in the working tree does not change the answer either" 0 "holds: 1 discharged: 1 standing: 0"
+scn; cp "$W/env-valid.md" "$W/env-untracked.md"; run_h --file env-untracked.md --section "Production Envelope"; rm -f "$W/env-untracked.md"
+assert_eq "2" "$(last_rc)" "XN4c: an envelope file that is not committed is exit 2"
+assert_eq "0" "$(probed)" "XN4d: and nothing was probed for it"
+scn; run_h --file env-link.md --section "Production Envelope"
+assert_eq "2" "$(last_rc)" "XN4e: a committed symlink is not a regular file: exit 2"
+scn; run_h --file /etc/hostname --section x;                 assert_eq "2" "$(last_rc)" "XN4f: an absolute path is exit 2"
+scn; run_h --file ../env-valid.md --section "Production Envelope"; assert_eq "2" "$(last_rc)" "XN4g: a path with .. is exit 2"
+scn; run_h --file 'env-*.md' --section "Production Envelope"; assert_eq "2" "$(last_rc)" "XN4h: a glob is exit 2"
 
 echo "=== Arm 10: usage ==="
 scn; run_h;                                   assert_eq "2" "$(last_rc)" "no arguments is exit 2"
@@ -538,7 +607,7 @@ jargon_hits() { # <outfile>: count lines (other than the machine lines) with a d
 jargon_hits_ci() {
   grep -v '^\(holds\|delegation\): ' "$1" | grep -i -E -c '(^|[^a-z])(patch-id|rebase|merge-base|stdout|diff|commit|draft|pull request|branch|unarmed)([^a-z]|$)' || true
 }
-for variant in mixed nogate unk uptodate edited noenv nodeleg-tools; do
+for variant in mixed nogate unk uptodate edited noenv nodeleg-tools reserved nullmerge; do
   scn
   case "$variant" in
     mixed) mkplan v ;; nogate) s_nogate ;; unk) s_unknown ;;
@@ -546,6 +615,8 @@ for variant in mixed nogate unk uptodate edited noenv nodeleg-tools; do
     edited) s_edited ;;
     noenv) mkplan noenv '/^Envelope: /d' ;;
     nodeleg-tools) mkplan v; RUN_PATH="$TMP/nobin-timeout" ;;
+    reserved) mkplan v 's/^- Hold: do not ship while a release is running\./- Hold: Operator-reserved: approve the new pricing copy./' ;;
+    nullmerge) echo '{"state":"MERGED","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-55.json"; mkplan v ;;
   esac
   run_h --plan "$PLAN"
   cp "$TMP/o" "$TMP/human-$variant.txt"; cat "$TMP/e" >> "$TMP/human-$variant.txt"
@@ -606,6 +677,10 @@ s_stale() { jq -n --arg s "$SHA_MOVED" '{state:"MERGED", mergeCommit:{oid:$s}, b
 s_trunk() { jq -n --arg s "$SHA_TRUNK" '{state:"MERGED", mergeCommit:{oid:$s}, baseRefName:"trunk"}' > "$STUB_DIR/pr-55.json"; cp "$STUB_DIR/pr-55.json" "$STUB_DIR/pr-120.json"; mkplan mixed; RUN_REPO="$W6"; }
 s_vstdin() { mkplan mvs; RUN_STDIN="$TMP/stdin-ten"; export FAKE_V_OUT='delegation: valid reason=ok\n' FAKE_V_RC=0; cp "$FAKE/scripts/delegation-verify.sh" "$TMP/pristine/scripts/delegation-verify.sh"; cp "$FAKE/scripts/delegation-verify.sh" "$TMP/mutants/stdin-verify/scripts/delegation-verify.sh"; }
 r_vstdin() { run_h --plan "$PLAN"; echo "holds: x vstdin=$(tr -d ' \n' < "$STUB_DIR/v-stdin-bytes")" >> "$TMP/o"; unset FAKE_V_OUT FAKE_V_RC; cp "$TMP/real-verifier.sh" "$TMP/pristine/scripts/delegation-verify.sh"; }
+s_hidden() { mkplan mhid ''; printf '\n## Operator Hold (misspelt, second)\n\n- Hold: Do not merge until Dana has signed off the copy.\n  Gate: pr-merged 9999\n' >> "$PLAN"; }
+s_dirty() { echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-120.json"; sed -i.bak '/^- Gate: pr-merged 120$/d' "$W/env-valid.md"; rm -f "$W/env-valid.md.bak"; }
+r_dirty() { run_h --file env-valid.md --section "Production Envelope"; git -C "$W" checkout -q -- env-valid.md; }
+s_reserved() { mkplan mres 's/^- Hold: do not ship while a release is running\./- Hold: Operator-reserved: approve the new pricing page copy./'; }
 s_prose2() { PLAN="$FX/holds-prose.md"; }
 s_status() { echo "[{\"status\":\"$STATUS_PROBE\"}]" > "$STUB_DIR/runs-example-release.yml.json"; mkplan mixed; }
 s_eat() { touch "$STUB_DIR/eat-stdin"; echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-9999.json"; mkplan eat 's/^  Gate: no-inflight-run example-release.yml$/  Gate: no-inflight-run example-release.yml\n  Gate: pr-merged 9999/'; }
@@ -683,6 +758,9 @@ mutate deleg-rc 's/ && \[ "\$VRC" -eq 0 \]//' && {
   killed deleg-rc "2|holds: 3 discharged: 0 standing: 3" s_mixed r_plan
   unset FAKE_V_OUT FAKE_V_RC; cp "$TMP/real-verifier.sh" "$TMP/pristine/scripts/delegation-verify.sh"
 }
+mutate stray-all "$(noop stray-all)" && killed stray-all "2|holds: 3 discharged: 0 standing: 3" s_hidden r_plan
+mutate file-head "$(noop file-head)" && killed file-head "1|holds: 1 discharged: 0 standing: 1" s_dirty r_dirty
+mutate reserved "$(noop reserved)" && killed reserved "2|holds: 3 discharged: 2 standing: 1" s_reserved r_plan
 # 11 structure
 mutate heading-ci 's/(rest = )tolower\(([^#]*)\) # mut:heading-ci/\1\2 # mut:heading-ci/' && killed heading-ci "0|holds: 3 discharged: 3 standing: 0" s_heading r_plan
 mutate fence-char 's/c == fc && n >= fn && //g' && killed fence-char "0|holds: 1 discharged: 1 standing: 0" s_fchar r_plan
@@ -700,7 +778,7 @@ mutate file-title "$(noop file-title)" && killed file-title "0|holds: 1 discharg
 echo "=== Floor: the SUT answered every row ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
 # Zero-slack floors, committed from a green run: re-measure and raise them when rows are added; a lower number is a deleted row.
-if (( n_calls >= 682 )); then echo "  PASS: gh stub calls $n_calls >= 682"; PASS=$((PASS + 1))
-else echo "  FAIL: gh stub calls $n_calls < 682 -- the rows did not drive the script"; FAIL=$((FAIL + 1)); fi
+if (( n_calls >= 762 )); then echo "  PASS: gh stub calls $n_calls >= 762"; PASS=$((PASS + 1))
+else echo "  FAIL: gh stub calls $n_calls < 762 -- the rows did not drive the script"; FAIL=$((FAIL + 1)); fi
 
-print_results 394
+print_results 451

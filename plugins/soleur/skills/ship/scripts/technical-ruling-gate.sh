@@ -50,8 +50,11 @@
 # epic is forgiven), and the row must also be backed by an execution receipt on the epic: a comment whose FIRST line
 # is `<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back
 # run=<url|none> -->`, written by an OWNER, MEMBER or COLLABORATOR, naming this row's delegation URL and envelope
-# path, the sha256 the verifier just reported for that envelope, and a result of ok or rolled-back. That is all the
-# check proves: a receipt exists, is attributable and matches the row. It is NOT proof of what ran (a receipt-checking
+# path, the sha256 the verifier just reported for that envelope, and a result of ok or rolled-back. Every field is
+# compared EXACTLY, a missing author_association never defaults, and the receipt must lie inside the delegation's life
+# (created at or after the delegation, not after the end of its expiry day, not in the future), must never have been
+# edited (updated_at == created_at), must come from a User (not a bot), and satisfies at most ONE row (three rows
+# cannot share one receipt). A `ran` time later than now is `delegation-invalid`. That is all the check proves: a receipt exists, is attributable and matches the row. It is NOT proof of what ran (a receipt-checking
 # hook on the executed command is the stronger follow-up, #10361). Missing, mismatching or unreadable receipts are
 # `receipt-missing`, `receipt-mismatch`, `receipt-unreadable` (exit 2, never a pass).
 # Verdicts: valid passes; invalid is `delegation-invalid` (exit 1); unverifiable, including a missing verifier or a
@@ -64,7 +67,7 @@
 # row with no delegation text passes on form, as before. Format source:
 # skills/brainstorm-techniques/references/standing-delegation.md.
 #
-# Test seams: TRG_EXEC_LOG (append one line per examined row), TRG_SPECS_ROOT and TRG_BRANCH (the
+# Test seams: TRG_VERIFY_TIMEOUT (seconds, 1-59: it can only SHORTEN the 60 s verifier limit), TRG_EXEC_LOG (append one line per examined row), TRG_SPECS_ROOT and TRG_BRANCH (the
 # `--branch` lookup, so a suite needs no git repository); any of them being set is announced on stderr.
 # Lines carrying `# mut:<name>` are the mutation points the suite edits to prove each check can fail.
 #
@@ -85,8 +88,14 @@ DELEG_RE='^Authorized by delegation (https://github\.com/([A-Za-z0-9_.-]+/[A-Za-
 SHAPE_ONLY=0
 SHAPE_ROWS=0
 DR=0
-TOG=()
-command -v timeout >/dev/null 2>&1 && TOG=(timeout 60)
+TOG=(); TOV=()
+CONSUMED=""
+if command -v timeout >/dev/null 2>&1; then
+  TOG=(timeout 60)
+  VT=60
+  case "${TRG_VERIFY_TIMEOUT:-}" in ''|*[!0-9]*) ;; *) [[ "$TRG_VERIFY_TIMEOUT" -ge 1 && "$TRG_VERIFY_TIMEOUT" -lt 60 ]] && VT="$TRG_VERIFY_TIMEOUT" ;; esac
+  TOV=(timeout "$VT")
+fi
 CTO_REMEDY='spawn soleur:engineering:cto now (at most two attempts, see technical-ruling-delegation.md), write the Ruled by cell, re-run; after two failed attempts leave the PR draft and file one domain/engineering issue, never an operator question'
 
 work_dir=""
@@ -181,32 +190,46 @@ check_pending() { # <file> <display-path>; an unresolved placeholder anywhere in
 # memo_find <keyfile> <key>: prints the 1-based entry number of <key>, or nothing. One key per line.
 memo_find() { [[ -f "$1" ]] || return 0; grep -nxF -- "$2" "$1" 2>/dev/null </dev/null | head -1 | cut -d: -f1; } # mut:memo
 
-# receipt_check <delegation-url> <repo> <epic> <envelope-path> <sha>: sets RC_REASON to ok, receipt-missing,
-# receipt-mismatch or receipt-unreadable. One read of the epic's comments per epic; every call has stdin closed.
+# receipt_check <delegation-url> <repo> <epic> <envelope-path> <sha> <verified-created-at> <verified-expiry>: sets
+# RC_REASON to ok, receipt-missing, receipt-mismatch or receipt-unreadable. One read of the epic's comments per epic;
+# every call has stdin closed. A receipt counts only if: its delegation and envelope equal the row's EXACTLY, its sha256
+# is the verifier's, its result is ok or rolled-back, its author_association is OWNER, MEMBER or COLLABORATOR (a missing
+# one never defaults), it was created inside the delegation's life (not before the delegation, not after the end of its
+# expiry day) and not in the future, it was never edited (updated_at == created_at), its author is a User (not a bot),
+# and it has not already satisfied another row (a receipt is consumed by the row that uses it).
 receipt_check() {
-  local durl="$1" repo="$2" epic="$3" env="$4" sha="$5" key="$2#$3" n rd re rs rr ra nrec=0 okrec=0
+  local durl="$1" repo="$2" epic="$3" env="$4" sha="$5" vcre="$6" vexp="$7" key="$2#$3" n rd re rs rr ra rk rcre rupd rtyp nrec=0 okrec=0 now
   RC_REASON=unreadable
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   n="$(memo_find "$work_dir/rcpt.keys" "$key")"
   if [[ -z "$n" ]]; then
     echo "$key" >> "$work_dir/rcpt.keys"; n="$(wc -l < "$work_dir/rcpt.keys" | tr -d ' ')"
     if ${TOG[@]+"${TOG[@]}"} gh api "repos/$repo/issues/$epic/comments" --paginate >"$work_dir/rcpt.$n.json" 2>/dev/null </dev/null \
-       && jq -r -s '[.[][]] | .[] | (.body // "" | split("\n") | (.[0] // "") | sub("\r$"; "")) as $l
+       && jq -r -s '[.[][]] | to_entries | .[] | .key as $k | .value
+           | (.body // "" | split("\n") | (.[0] // "") | sub("\r$"; "")) as $l
            | ([$l | capture("^<!-- soleur-delegated-act v1 delegation=(?<d>[^ ]+) envelope=(?<e>.+?) sha256=(?<s>[0-9a-f]{64}) result=(?<r>[A-Za-z-]+) run=(?<u>[^ ]+) -->$")] | .[0]) as $m
-           | select($m != null) | [$m.d, $m.e, $m.s, $m.r, (.author_association // "NONE")] | @tsv' "$work_dir/rcpt.$n.json" >"$work_dir/rcpt.$n.tsv" 2>/dev/null </dev/null; then
+           | select($m != null) | [$m.d, $m.e, $m.s, $m.r, (.author_association // "ABSENT"), ($k | tostring), (.created_at // "none"), (.updated_at // "none2"), (.user.type // "NONE")] | @tsv' "$work_dir/rcpt.$n.json" >"$work_dir/rcpt.$n.tsv" 2>/dev/null </dev/null; then
       echo ok > "$work_dir/rcpt.$n.st"
     else
       echo bad > "$work_dir/rcpt.$n.st"
     fi
   fi
   [[ "$(cat "$work_dir/rcpt.$n.st")" == ok ]] || return 0
-  while IFS=$'\t' read -r rd re rs rr ra; do
+  while IFS=$'\t' read -r rd re rs rr ra rk rcre rupd rtyp; do
     [[ "$rd" == "$durl" ]] || continue # mut:receipt-deleg
+    case " $CONSUMED " in *" $n:$rk "*) continue ;; esac # mut:receipt-consume
     nrec=$((nrec + 1))
     [[ "$re" == "$env" ]] || continue # mut:receipt-env
     [[ "$rs" == "$sha" ]] || continue # mut:receipt-sha
     case "$rr" in ok|rolled-back) ;; *) continue ;; esac # mut:receipt-result
     case "$ra" in OWNER|MEMBER|COLLABORATOR) ;; *) continue ;; esac # mut:receipt-author
-    okrec=1; break
+    [[ "$rcre" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || continue
+    [[ "$rcre" < "$vcre" ]] && continue # mut:receipt-low
+    [[ "$rcre" > "$now" ]] && continue # mut:receipt-future
+    [[ "$rcre" > "${vexp}T23:59:59Z" ]] && continue # mut:receipt-expiry
+    [[ "$rupd" == "$rcre" ]] || continue # mut:receipt-edited
+    [[ "$rtyp" == User ]] || continue # mut:receipt-bot
+    okrec=1; CONSUMED="$CONSUMED $n:$rk"; break
   done < "$work_dir/rcpt.$n.tsv"
   if (( okrec )); then RC_REASON=ok; elif (( nrec > 0 )); then RC_REASON=receipt-mismatch; else RC_REASON=receipt-missing; fi
 }
@@ -222,22 +245,24 @@ check_delegation_row() {
   return 0
 }
 check_delegation_row_inner() {
-  local ln="$1" cls="$2" ruling="$3" durl repo epic dpath dran reason why dv_rc dv_line key n sha
+  local ln="$1" cls="$2" ruling="$3" durl repo epic dpath dran reason why dv_rc dv_line key n sha vcre vexp now
   DR=0
   [[ "$cls" == "operator (production-mutating)" ]] || { printf '[FAIL] %s:%s: bad-ruling-shape - a delegation can authorize only an operator (production-mutating) act, not "%s"\n' "$shown" "$ln" "$cls" >&2; DR=1; return; } # mut:deleg-class
   [[ "$ruling" =~ $DELEG_RE ]] || { printf '[FAIL] %s:%s: bad-ruling-shape - a delegation ruling must read: Authorized by delegation <comment-url>, envelope <path>[, ran <time as 2026-01-31T09:30:00Z>] (standing-delegation.md)\n' "$shown" "$ln" >&2; DR=1; return; }
   durl="${BASH_REMATCH[1]}"; repo="${BASH_REMATCH[2]}"; epic="${BASH_REMATCH[4]}"; dpath="${BASH_REMATCH[5]}"; dran="${BASH_REMATCH[7]:-}"
   [[ -n "${TRG_EXEC_LOG:-}" ]] && echo "delegation $shown:$ln" >> "${TRG_EXEC_LOG:?}" # mut:deleg-log
   if (( SHAPE_ONLY )); then SHAPE_ROWS=$((SHAPE_ROWS + 1)); DR=0; return; fi
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  [[ -n "$dran" && "$dran" > "$now" ]] && { printf '[FAIL] %s:%s: delegation-invalid - the row says the act ran at %s, which is in the future, so it cannot have run yet (reason: ran-in-future)\n' "$shown" "$ln" "$dran" >&2; DR=1; return; } # mut:ran-future
   [[ -f "$VERIFIER" ]] || { printf '[FAIL] %s:%s: delegation-unverifiable - the delegation checker was not found next to this gate, so the row was not examined\n' "$shown" "$ln" >&2; DR=2; return; }
   key="$durl|$dpath|$dran"
   n="$(memo_find "$work_dir/dv.keys" "$key")"
   if [[ -z "$n" ]]; then
     echo "$key" >> "$work_dir/dv.keys"; n="$(wc -l < "$work_dir/dv.keys" | tr -d ' ')"
     if [[ -z "$dran" ]]; then
-      ${TOG[@]+"${TOG[@]}"} bash "$VERIFIER" verify --delegation "$durl" --envelope "$dpath" </dev/null >"$work_dir/dv.$n.out" 2>"$work_dir/dv.$n.err"; dv_rc=$? # mut:deleg-call
+      ${TOV[@]+"${TOV[@]}"} bash "$VERIFIER" verify --delegation "$durl" --envelope "$dpath" </dev/null >"$work_dir/dv.$n.out" 2>"$work_dir/dv.$n.err"; dv_rc=$? # mut:deleg-call
     else
-      ${TOG[@]+"${TOG[@]}"} bash "$VERIFIER" verify --delegation "$durl" --envelope "$dpath" --audit --at "$dran" </dev/null >"$work_dir/dv.$n.out" 2>"$work_dir/dv.$n.err"; dv_rc=$? # mut:deleg-audit
+      ${TOV[@]+"${TOV[@]}"} bash "$VERIFIER" verify --delegation "$durl" --envelope "$dpath" --audit --at "$dran" </dev/null >"$work_dir/dv.$n.out" 2>"$work_dir/dv.$n.err"; dv_rc=$? # mut:deleg-audit
     fi
     echo "$dv_rc" > "$work_dir/dv.$n.rc"
   fi
@@ -253,10 +278,15 @@ check_delegation_row_inner() {
     if [[ -z "$sha" ]]; then
       printf '[FAIL] %s:%s: receipt-unreadable - the delegation checker did not report the runbook fingerprint, so the execution receipt cannot be matched; the row was not examined, which is never a pass\n' "$shown" "$ln" >&2; DR=2; return
     fi
-    receipt_check "$durl" "$repo" "$epic" "$dpath" "$sha"
+    vcre="$(sed -n 's/^verified-created-at: \([0-9T:Z-]*\)$/\1/p' "$work_dir/dv.$n.out" | head -1)"
+    vexp="$(sed -n 's/^verified-expiry: \([0-9-]*\)$/\1/p' "$work_dir/dv.$n.out" | head -1)"
+    if [[ ! "$vcre" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "$vexp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+      printf '[FAIL] %s:%s: receipt-unreadable - the delegation checker did not report when the delegation was recorded and when it ends, so the receipt window cannot be checked; the row was not examined, which is never a pass\n' "$shown" "$ln" >&2; DR=2; return
+    fi
+    receipt_check "$durl" "$repo" "$epic" "$dpath" "$sha" "$vcre" "$vexp"
     case "$RC_REASON" in
       ok) ;;
-      receipt-missing) printf '[FAIL] %s:%s: receipt-missing - no execution receipt for this delegation is on epic #%s; the CTO writes one comment per delegated act (standing-delegation.md section 6) before this row may say the act ran\n' "$shown" "$ln" "$epic" >&2; DR=2; return ;;
+      receipt-missing) printf '[FAIL] %s:%s: receipt-missing - no execution receipt for this delegation is on epic #%s; the CTO writes one comment per delegated act (standing-delegation.md section 8) before this row may say the act ran\n' "$shown" "$ln" "$epic" >&2; DR=2; return ;;
       receipt-mismatch) printf '[FAIL] %s:%s: receipt-mismatch - epic #%s has a receipt for this delegation but none names this envelope path and its verified fingerprint with result ok or rolled-back, written by an owner, member or collaborator\n' "$shown" "$ln" "$epic" >&2; DR=2; return ;;
       *) printf '[FAIL] %s:%s: receipt-unreadable - the comments on epic #%s could not be read, so the execution receipt was not checked, which is never a pass\n' "$shown" "$ln" "$epic" >&2; DR=2; return ;;
     esac
@@ -336,7 +366,7 @@ check_artifact() { # <file> <display-path>
   return 0
 }
 
-if [[ -n "${TRG_SPECS_ROOT:-}${TRG_BRANCH:-}${TRG_EXEC_LOG:-}" ]]; then
+if [[ -n "${TRG_SPECS_ROOT:-}${TRG_BRANCH:-}${TRG_EXEC_LOG:-}${TRG_VERIFY_TIMEOUT:-}" ]]; then
   printf '[NOTE] test seam active (TRG_SPECS_ROOT=%s TRG_BRANCH=%s): this is not the live repository lookup\n' "${TRG_SPECS_ROOT:-}" "${TRG_BRANCH:-}" >&2
 fi
 

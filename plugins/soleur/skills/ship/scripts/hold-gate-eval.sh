@@ -43,6 +43,14 @@
 # failed probe into a pass. Any other status the caller sees (127 script not found, 124, 137) is a hold that was
 # not checked: treat it as 2.
 #
+# `Operator-reserved:` (at the START of a hold's words, any case) marks a hold that reserves the decision to the
+# operator (pricing approval, brand copy, spend). A gate only says WHEN a condition is true, never WHO may clear the
+# hold, so such a hold always STANDS: it is printed `Reserved for you: ... - only you can clear this`, its gates are
+# not probed, and the run exits 2. Every `Hold:` or `Gate:` line must sit inside a readable hold section; one that does
+# not (a misspelt second heading, text after the next heading) is exit 2, never silently dropped. --file mode reads the
+# COMMITTED blob (HEAD), exactly as the verifier does, never the working tree: an untracked, symlinked or dirty file
+# cannot change the answer. Test seam: HGE_VERIFY_TIMEOUT (seconds, 1-59) can only SHORTEN the 60 s verifier limit.
+#
 # The default branch is resolved once (origin/HEAD, else `git ls-remote --symref`); `pr-merged` needs MERGED into
 # it and the merge commit reachable from HEAD after a fresh fetch of it. Every gh, git and verifier call gets
 # `</dev/null`, so a call that drains stdin cannot swallow the remaining gates or holds. In flight means the
@@ -66,9 +74,11 @@ trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]
 # Control characters, C1 controls, zero-width and bidi marks and the line/paragraph separators are dropped (byte-wise: LC_ALL=C).
 clean_text() { printf '%s' "$1" | tr -d '[:cntrl:]' | sed -e $'s/\xc2[\x80-\x9f]//g' -e $'s/\xe2\x80[\x8b-\x8f\xa8-\xae]//g' -e $'s/\xe2\x81[\xa6-\xa9]//g' -e $'s/\xef\xbb\xbf//g' | cut -c1-160; } # mut:clean-text
 
+VT=60
+case "${HGE_VERIFY_TIMEOUT:-}" in ''|*[!0-9]*) ;; *) [ "$HGE_VERIFY_TIMEOUT" -ge 1 ] && [ "$HGE_VERIFY_TIMEOUT" -lt 60 ] && VT="$HGE_VERIFY_TIMEOUT" ;; esac
 TO10=(); TO30=(); TO60=(); HAVE_TO=0
-if command -v timeout >/dev/null 2>&1; then TO10=(timeout 10); TO30=(timeout 30); TO60=(timeout 60); HAVE_TO=1
-elif command -v gtimeout >/dev/null 2>&1; then TO10=(gtimeout 10); TO30=(gtimeout 30); TO60=(gtimeout 60); HAVE_TO=1; fi
+if command -v timeout >/dev/null 2>&1; then TO10=(timeout 10); TO30=(timeout 30); TO60=(timeout "$VT"); HAVE_TO=1
+elif command -v gtimeout >/dev/null 2>&1; then TO10=(gtimeout 10); TO30=(gtimeout 30); TO60=(gtimeout "$VT"); HAVE_TO=1; fi
 
 DEFBR=""; DEFBR_DONE=""
 resolve_default_branch() { # sets DEFBR to the repository's default branch name, or leaves it empty
@@ -118,7 +128,8 @@ gate_pr_merged() {
     esac
   else
     GRES=FALSE
-    if [ "$st" = MERGED ]; then GWHY="the earlier change went into another line of work, not the main one"; fi
+    if [ "$st" = MERGED ] && [ "$base" = "$DEFBR" ]; then GWHY="the earlier change is recorded as live, but I cannot see which version of the work it became"
+    elif [ "$st" = MERGED ]; then GWHY="the earlier change went into another line of work, not the main one"; fi
   fi
 }
 
@@ -178,8 +189,8 @@ split_sections() {
   ' "$1"
 }
 
-# stray_holds <file>: succeeds when an unfenced `Hold:` or `Gate:` line exists anywhere in the file.
-stray_holds() {
+# marker_count <file>: prints how many unfenced `Hold:` or `Gate:` marker lines the file has.
+marker_count() {
   awk '
     function fence(   tok, c, n) {
       tok = t; sub(/^ +/, "", tok)
@@ -191,8 +202,8 @@ stray_holds() {
     t ~ /^ ? ? ?(```+|~~~+)/ { fence(); next }
     f { next }
     { lt = tolower(t) }
-    lt ~ /^[ \t]*(-[ \t]+)?(hold|gate)[ \t]*:/ { found = 1 }
-    END { exit (found ? 0 : 1) }
+    lt ~ /^[ \t]*(-[ \t]+)?(hold|gate)[ \t]*:/ { found++ }
+    END { print found + 0 }
   ' "$1"
 }
 
@@ -227,6 +238,7 @@ print_result_line() { # <verdict> <text> <why> <gate text>
     OK) printf 'Done: %s%s\n' "$(clean_text "$2")" "$gsuffix" ;;
     WAIT) printf 'Still waiting: %s - %s\n' "$(clean_text "$2")" "$3" ;;
     NEEDS) printf 'Needs a person: %s - only a person can settle this\n' "$(clean_text "$2")" ;;
+    RESERVED) printf 'Reserved for you: %s - only you can clear this\n' "$(clean_text "$2")" ;;
     *) printf 'Could not check: %s - %s\n' "$(clean_text "$2")" "$3" ;;
   esac
 }
@@ -275,8 +287,20 @@ split_file_title # mut:file-title
 if [ -n "$PLAN" ] && [ -z "$FILE" ] && [ -z "$SECTION" ]; then MODE="plan"; SRC="$PLAN"
 elif [ -n "$FILE" ] && [ -n "$SECTION" ] && [ -z "$PLAN" ]; then MODE="file"; SRC="$FILE"
 else die2 "usage: hold-gate-eval.sh --plan <plan.md> | --file <envelope.md> --section <title> | --file <envelope.md>#<title>"; fi
-[ -f "$SRC" ] && [ -r "$SRC" ] || die2 "cannot read $SRC, so no hold can be checked"
+[ "$MODE" = file ] || { [ -f "$SRC" ] && [ -r "$SRC" ] || die2 "cannot read $SRC, so no hold can be checked"; }
 WORK="$(mktemp -d -t hge.XXXXXXXX)" || die2 "could not create a scratch folder"
+
+# read_head_blob <path>: --file mode reads the COMMITTED regular file (as the verifier does), never the working tree.
+read_head_blob() {
+  local p="$1" ent
+  case "$p" in ""|/*|..|../*|*/..|*/../*|*[*?[]*) die2 "the envelope path is not a plain path inside this repository, so its conditions are treated as not met" ;; esac
+  p="${p#./}"
+  command -v git >/dev/null 2>&1 || die2 "git is not installed, so no hold can be checked"
+  ent="$(GIT_LITERAL_PATHSPECS=1 git ls-tree HEAD -- "./$p" </dev/null 2>/dev/null | head -1)"
+  case "$ent" in "100644 blob "*) ;; *) die2 "the envelope file is not saved in the project history as a normal file, so its conditions are treated as not met" ;; esac
+  GIT_LITERAL_PATHSPECS=1 git show "HEAD:./$p" > "$WORK/head.md" 2>/dev/null </dev/null || die2 "could not read the saved envelope file, so its conditions are treated as not met"
+}
+if [ "$MODE" = file ]; then read_head_blob "$FILE"; SRC="$WORK/head.md"; fi # mut:file-head
 
 need_tools() { # after the no-delegation exit: nothing below can run without these
   command -v jq >/dev/null 2>&1 || die2 "jq is not installed, so no hold can be checked"
@@ -289,7 +313,7 @@ split_sections "$SRC" "$MODE" "$SECTION"
 CNT="$(cat "$WORK/sec.count" 2>/dev/null || echo 0)"
 if [ "$MODE" = plan ]; then
   if [ "$CNT" -eq 0 ]; then
-    stray_holds "$SRC" && { echo "I found a hold that is not inside a hold section I can read, so I am treating it as still on hold."; exit 2; } # mut:stray
+    [ "$(marker_count "$SRC")" -gt 0 ] && { echo "I found a hold that is not inside a hold section I can read, so I am treating it as still on hold."; exit 2; } # mut:stray
     echo "No holds are recorded, so there is nothing to wait for."
     echo "holds: 0 discharged: 0 standing: 0"
     exit 0
@@ -301,12 +325,15 @@ if [ "$MODE" = plan ]; then
     cat "$WORK/items.$s" >> "$WORK/items"
   done
   if [ "$nonblank" -eq 0 ]; then
+    [ "$(marker_count "$SRC")" -eq 0 ] || { echo "I found a hold that is not inside a hold section I can read, so I am treating it as still on hold."; exit 2; }
     echo "No holds are recorded, so there is nothing to wait for."
     echo "holds: 0 discharged: 0 standing: 0"
     exit 0
   fi
   ND="$(grep -c '^DELEG' "$WORK/items" || true)"; NE="$(grep -c '^ENVF' "$WORK/items" || true)"; NH="$(grep -c '^HOLD' "$WORK/items" || true)"
   [ "$ND" -gt 0 ] || { echo "No standing approval is recorded, so the usual check applies."; [ "$NH" -eq 0 ] || echo "holds: $NH discharged: 0 standing: $NH"; exit 3; } # mut:no-deleg
+  SEC_M=0; for ((s = 1; s <= CNT; s++)); do SEC_M=$((SEC_M + $(marker_count "$WORK/sec.$s"))); done
+  [ "$(marker_count "$SRC")" -le "$SEC_M" ] || { echo "I found a hold that is not inside a hold section I can read, so I am treating every hold as still on hold."; echo "holds: $NH discharged: 0 standing: $NH"; exit 2; } # mut:stray-all
   [ "$ND" -eq 1 ] || stall_unchecked "More than one standing approval is named, so I am treating every hold as still on hold." "the standing approval is not clear" # mut:deleg-multi
   [ "$CNT" -eq 1 ] || stall_unchecked "The plan has more than one hold section, so I am treating every hold as still on hold." "the plan is not clear"
   [ "$NE" -eq 1 ] || stall_unchecked "The standing approval does not name exactly one runbook it covers, so I am treating every hold as still on hold." "the standing approval is incomplete" # mut:envelope-req
@@ -339,6 +366,8 @@ fi
 
 DISCHARGED=0; STANDING=0; ANY_UNEVAL=0
 while IFS=$'\t' read -r _ i text; do
+  lt="$(printf '%s' "$text" | tr 'A-Z' 'a-z')"
+  case "$lt" in operator-reserved:*) print_result_line RESERVED "$text" ""; STANDING=$((STANDING + 1)); ANY_UNEVAL=1; continue ;; esac # mut:reserved
   awk -F'\t' -v i="$i" '$1 == "GATE" && $2 == i { print $3 }' "$WORK/items" > "$WORK/g.$i"
   ng="$(wc -l < "$WORK/g.$i" | tr -d ' ')"
   HV=OK; WHY=""; GTXT=""
