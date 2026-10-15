@@ -69,7 +69,7 @@ unavailable() {
   # an unavailable run measured nothing, and a floor that cannot see that is decorative.
   # (This is also what lets the vacuity-guard mutation battery score the floor FIRES on a
   # non-sudo host — the neutered mutant exits here and the sentinel still prints.)
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 118. The suite exited before executing.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 117. The suite exited before executing.\n' "$executed" >&2
   exit 2
 }
 
@@ -951,13 +951,13 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 # the merge left in (a stale 2-arg render_reopen arm that could only crash, removed in the resync fix) —
 # its mount/canary pair was netted against the restored survival assertions on the ensure_mount path. The
 # account: stale block carried reopen+mount+canary+absent = 4 assert sites, the dedup kept reopen + restored
-# canary/mount pair + absent-volume arm = 118 measured+restored. Floor moved to the MEASURED 118.
-if [ "$executed" -lt 118 ]; then
+# canary/mount pair + absent-volume arm = 117 measured (the mountpoint if/else emits exactly one assertion per run). Floor moved to the MEASURED 117.
+if [ "$executed" -lt 117 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 118. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 117. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
   exit 1
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 118)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 117)\n' "$executed"
 fi
 
 echo ""
