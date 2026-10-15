@@ -873,12 +873,16 @@ assert "A4 probe emits the marker under the resolved inngest-server-probe tag (l
 assert "A4 a failed curl degrades http_code to the literal 000, not to an empty field" \
   "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
 
-# --- #7695: the /mnt/data store facts Guard 2 decides on ---------------------------------
-# Guard 2 (the recut dispatch gate) clears a DESTRUCTIVE apply only on a measured-empty store.
-# Every field below is one it reads, and each carries two distinct not-a-measurement tokens:
+# --- #7695: the /mnt/data store facts the retired Guard 2 decided on ---------------------
+# Guard 2 (the recut dispatch gate) was retired under #8316; these fields are still emitted and
+# pinned here. The retired gate was their consumer; some now have none and some have live consumers
+# elsewhere (the audit and any pruning wait for the next probe_schema bump, #10290). While it
+# existed it cleared a DESTRUCTIVE apply only on a measured-empty store.
+# Every field below is one it read, and each carries two distinct not-a-measurement tokens:
 # `n/a` = the question does not apply on this host, `__UNREADABLE__` = it applied and could not
-# be answered. Neither may ever degrade to `0`, because `0` IS the clearance condition — a
-# degradation that renders as `0` would authorize the destroy it was meant to withhold.
+# be answered. Neither may ever degrade to `0`, because `0` was the retired gate's clearance
+# condition — a degradation that rendered as `0` would have authorized the destroy it was meant to
+# withhold. The rule stays so that a future gate can rely on it.
 #
 # THE ASSERTIONS BELOW ARE WRITTEN AS NEGATIVE SPACE, not as positive expectations. A mutation
 # audit flipped `__UNREADABLE__` to `0` in three fields and the suite stayed green at 250/250,
@@ -902,7 +906,7 @@ PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires
 # the field was added to detect can never be emitted.
 PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid"
 
-assert "#8017 probe declares probe_schema=8 (Guard 2 refuses a stale_schema row)" \
+assert "#8017 probe declares probe_schema=8 (the execute gate refuses a stale_schema row, E6)" \
   "grep -qE 'probe_schema=8( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \

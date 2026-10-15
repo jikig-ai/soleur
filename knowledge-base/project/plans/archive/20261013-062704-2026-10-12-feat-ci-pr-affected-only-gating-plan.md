@@ -15,16 +15,16 @@ amends: [ADR-276, ADR-262, ADR-183]
 
 ## Overview
 
-Doc-only PRs (PR 10097: one `knowledge-base/**` markdown file) run most of the CI battery on the 60-concurrent hosted-runner pool. This plan un-parks S4 (#9729, ADR-276 stage 4): on `pull_request` only, run the affected suite set plus the always-on ratchets; `merge_group`, push, `workflow_dispatch` and schedule keep the full battery. It also fixes the `e2e` classifier fallback and path-gates `shard-totality-mutations`.
+Doc-only PRs (PR 10097: one `knowledge-base/**` markdown file) run most of the CI battery on the 60-concurrent hosted-runner pool. This plan un-parks S4 (#9729, ADR-276 stage 4): on `pull_request` only, run the affected suite set plus the always-on ratchets; `merge_group`, push and `workflow_dispatch` keep the full battery (`ci.yml` has no schedule trigger). It also fixes the `e2e` classifier fallback and path-gates `shard-totality-mutations`.
 
-Brainstorm: `knowledge-base/project/brainstorms/2026-10-12-ci-path-aware-gating-brainstorm.md`. Spec: `knowledge-base/project/specs/feat-ci-path-filtering/spec.md`. Operator decisions carried in: S4 un-parked; the S2 (#9818) and S3 census gate waived 2026-10-12; detective post-merge probe for the `--admin` residual; e2e fix and shard-totality gate bundled.
+Brainstorm: `knowledge-base/project/brainstorms/2026-10-12-ci-path-aware-gating-brainstorm.md`. Spec: `knowledge-base/project/specs/archive/20261013-062704-feat-ci-path-filtering/spec.md`. Operator decisions carried in: S4 un-parked; the S2 (#9818) and S3 census gate waived 2026-10-12; detective post-merge probe for the `--admin` residual; e2e fix and shard-totality gate bundled.
 
 **Recommended landing order (three PRs, each dark behind the kill-switch until the ADR amendment activates it):**
 
 | PR | Phases | Saves | Needs aggregator edit |
 |---|---|---|---|
 | A | 1 (e2e fix), 1.4 (shard-totality gate) | about 4.2 + 10.7 job-min per PR run | no |
-| B | 2 (selection job), 3 (group-level gating + aggregator tolerance), ADR-276 amendment | about 15.3 + 2.4 + 3.0 + 2.4 job-min per doc-only PR run | yes |
+| B | 2 (selection job), 3 (group-level gating + aggregator tolerance), ADR-276 amendment | about 18.3 job-min gross per doc-only PR run (`test-webplat` 15.3, `test-scripts-heavy` 3.0; `test-bun` expected un-skipped, `web-platform-build` ungated) | yes |
 | C | 4 (per-suite selection in `test-scripts` shards), 5 (jobs-API reduced-run read, admin and probe controls) | the 119.2 job-min `test-scripts` family, 73% of the diff-sensitive cost | no (reads PR B's output) |
 
 Figures are the latest successful full PR run (`CI` run 38222769030: 164.4 job-min; `test-scripts` 119.2, `test-webplat` 15.3, `shard-totality` 10.7, `e2e` 4.2, `test-scripts-heavy` 3.0, `test-bun` 2.4, `web-platform-build` 2.4), measured by the research agent with the jobs API, runner-bound jobs only.
@@ -74,10 +74,19 @@ Not hypotheses: `scripts/ci-e2e-classify.sh` is present on `origin/main`; `fetch
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a regression that a reduced PR run waved through reaches `main` and then production (a broken page, an auth or billing path) because the affected selection skipped the suite that would have caught it; or every PR wedges because a required context never reports.
-**If this leaks, the user's [workflow] is exposed via:** an `--admin` merge that skips the merge queue and lands an affected-only-green PR; the push-to-main run still runs the full battery and the deploy arm waits on it, so the residual is a red `main` (caught by the ADR-270 post-merge alert) rather than a silently bad deploy.
+**If this leaks, the user's [workflow] is exposed via:** a reduced PR run read as a full one by a merge authority (`admin-merge-ready.sh`, `ci-head-verdict.sh`, `battery-owed.sh`, `monitor-pr-checks.sh`, ship Phase 7, `drain-prs`). The deploy arm cannot be reached by a PR run (`web-platform-release.yml` re-checks `WR_EVENT == push`), and `merge_group` runs the full battery on the candidate tree, so the residual is a red `main` caught by the ADR-270 post-merge alert, not a silently bad deploy. Whether `gh pr merge --admin` skips the merge queue is NOT asserted here; PR C verifies it by API before any text relies on it.
 **Brand-survival threshold:** single-user incident.
 
-`requires_cpo_signoff: true`. CPO sign-off is owed before `soleur:work` starts: the brainstorm spawned the CTO only (CI-internal lever, no product surface), so the sign-off has not been collected. `soleur:engineering:review:user-impact-reviewer` runs at review time.
+`requires_cpo_signoff: true`. CPO sign-off for PR B was collected at plan review (2026-10-14): APPROVED-WITH-CONDITIONS, conditions folded into 'PR B contract after plan review' and `knowledge-base/project/specs/archive/20261014-233501-feat-ci-pr-selection/decision-challenges.md`. `soleur:engineering:review:user-impact-reviewer` ran at review (verdict: no P1; gaps recorded below).
+
+| Failure mode (artifact -> vector) | Mitigation in PR B, or scope-out |
+|---|---|
+| A skipped leg lands a regression on `main` (`test-webplat`, `test-bun`, `test-scripts-heavy` results -> a skip emitted or tolerated) | Dark AND locked: a literal lock in the driver forces `active=false`, the switch must be exactly `on`, gated `if:` terms and the aggregator need `active == true`; executed Guard 1/2 rows with mutants; `merge_group` is the full-battery authority. |
+| A required context never reports or reports green wrongly (`test`, `e2e`) | `pr-selection` is not a required context and is not an aggregator leg; gated jobs keep `!cancelled()`; empty outputs mean run everything; the declared CI path stays 73 of 75 minutes (executed pin). |
+| A reduced run read as full by a merge authority | Impossible in PR B (nothing can be reduced). PR C: Guard 3 reduced-run read, audit probe, paging route; the lock-removal commit carries an executed coupling pin. |
+| A re-run turns a failed attempt green | The driver forces full on `run_attempt > 1`; the aggregator tolerates a skip on attempt 1 only and names the remedy. |
+| A PR author forges a skip (edits `ci.yml`, the driver, the lock) | Honest limit recorded in ADR-276: a `pull_request` run executes the PR's own files; the widened trigger list and positive allowlist stop accidental widening; `merge_group` and review are the authority. |
+| Dark-state cost to every PR author | Disclosed with measured figures in the ADR-276 amendment; net negative while dark. |
 
 ## Architecture Decision (ADR/C4)
 
@@ -106,7 +115,7 @@ A new `pr-selection` job (`if: github.event_name == 'pull_request'`, job-level `
 - **Bind to the head.** The job emits `head_sha` and `base_sha` (the base SHA is resolved once and pinned for both the diff and the index); the gated jobs and the aggregator treat `needs.pr-selection.outputs.head_sha != github.event.pull_request.head.sha` as full (a "Re-run failed jobs" reuses cached outputs against a moved base).
 - **Diff form.** `git diff --name-status --no-renames` against the pinned base; any Added, Deleted or Renamed (old or new path) file outside known doc paths is non-skippable.
 - **Widened full-battery trigger list.** The existing runner-edit detector (`scripts/test-all.sh:3752-3756`) matches only two paths and does not cover `ci.yml`. The job's own list adds `.github/workflows/ci.yml`, `scripts/ci-pr-selection.sh`, `scripts/lib/**`, `scripts/suite-shard-legs.tsv`, the heavy manifest, `scripts/test-affected-kb-consumers.baseline.txt`, `scripts/ci-e2e-classify.sh`, and anything `scripts/test-all.sh` sources (derived by a test, not listed by hand).
-- **Draft and ready.** The job runs on drafts too; on a light draft the Option R arm exits 1 before the tolerance is reached, so both arms cannot fire as green. `ready_for_review` is a new run, so it computes a fresh selection.
+- **Draft and ready.** The job runs on drafts too; on a light draft the tolerance loop runs first and the Option R arm after it still reds the run, so both arms cannot fire as green. `ready_for_review` is a new run, so it computes a fresh selection.
 - **Bounds.** `timeout-minutes: 10` written alone on its line (the release budget awk reads that shape), `fetch-depth: 0`, `continue-on-error: true`.
 - **Spike S-b:** measure what the pre-pass needs (dependencies, the 86 s wall) before fixing the job's shape.
 
@@ -117,13 +126,27 @@ Three groups are gateable: `test-webplat`, `test-bun`, `test-scripts-heavy`. `we
 **Phase 4.0 go/no-go gate (precedes any Phase 4 code).** Spikes S-b (pre-pass dependencies, wall time on the critical path of every PR) and S-c (label keying) are measured, and the replay result is recorded; Phase 4 proceeds only if the replay escape rate is under 2% and the pre-pass cost does not erase the saving (the saving is 23 suite-min against an 86 s pre-pass). If the gate fails, PR C ships Phase 5 only and Phase 4 is re-decided. `pr-selection` emits the label-keyed selection (`AFFECTED_SELECTED` rows carry label, selected flag, class and edges; `scripts/test-all.sh:4010-4021`; a skip list only, `skip_labels`) as a job output rather than an artifact, so there is no download step, no parser in every leg and no missing-artifact failure mode; each `test-scripts` and `test-scripts-heavy` leg receives it through `env:` and the runner gains a consumer that skips a suite only when its label is listed; an empty list, unknown label or PR-added suite runs. Adding `needs: pr-selection` to the `test-scripts` matrix puts the pre-pass on the critical path of every PR; measure it in S-b. The existing chokepoint keys by ordinal from the all-walk (1686, 3872), so Phase 4 adds label keying (spike S-c). The always-on ratchets (`lint-rule-bodies-live`, `lint-legal-registers-live`, `generate-kb-index-live`, the registration battery) are never skippable. Replay: extend the existing `scripts/ci-battery-gate-replay.sh` (it already owns the 300-commit first-parent loop and the `origin/main` fallback) with the selector; `--print-selection` over the last 300 first-parent commits against suite failures; the escape rate must be under 2% (break-even about 12 to 16%).
 
 ### Phase 5 — marker, admin control, census (PR C)
-5.1 **Reduced-run read (no `run-name`, no marker).** `pr-selection` has one extra step named `pr-affected-active` that runs (conclusion `success`) only when `active == true`. A PR head run is *full-verified* iff the newest completed `pull_request` `CI` run on the head SHA concluded `success`, none of `test-webplat`, `test-bun`, `test-scripts-heavy` has conclusion `skipped`, and the `pr-affected-active` step is not `success` (jobs API: job and step names and conclusions, head SHA, event; not a check name posted by a `checks: write` token, and not a title). A PR that edits `.github/workflows/` is already refused by `admin-merge-ready.sh` as UNTRUSTED-CI, so it cannot drop the step to look full.
+5.1 **Reduced-run read (no `run-name`, no marker).** `pr-selection` has one extra step named `pr-affected-active` that runs (conclusion `success`) only when `active == true`. A PR head run is *full-verified* iff the newest completed `pull_request` `CI` run on the head SHA concluded `success`, none of `test-webplat`, `test-bun`, `test-scripts-heavy` has conclusion `skipped`, and the `pr-affected-active` step is not `success` (jobs API: job and step names and conclusions, head SHA, event; not a check name posted by a `checks: write` token, and not a title). A PR that edits `.github/workflows/` is already refused by `admin-merge-ready.sh` as UNTRUSTED-CI, so it cannot drop the step to look full. PR C must also cover the wrongly-RED direction: ship's automated `gh run rerun <run-id> --failed` keeps the cached skip decision and the aggregator refuses a tolerated skip on attempt 2, so `test` would stay red; ship must rerun all jobs (or push) once the lever is active (PR B fix-round finding, user-impact seat).
 5.2 `plugins/soleur/scripts/admin-merge-ready.sh` and `plugins/soleur/scripts/ci-head-verdict.sh` require, in addition to a green `test`, a full-verified PR head run (5.1) or a `merge_group` success on that SHA. `battery-owed.sh`, the deploy `workflow_run` arm and `post-merge-monitor.yml` are checked so a reduced run is never read as full.
 5.3 Detective probe `plugins/soleur/scripts/ci-full-battery-audit.sh`, invoked as a step of the existing `post-merge-monitor.yml`: for each merge commit on `main` with no `merge_group` run on that SHA (a bypass merge), require a full-verified PR head run (5.1); else emit `SOLEUR_FULL_BATTERY_ESCAPE sha=... pr=...`. Counted in `scripts/ci-demand-census.sh` (PR `CI` job-min by mode, escape count).
 5.4 Verify with the API (the learnings corpus has no entry) that `gh pr merge --admin` skips the merge queue before relying on that sentence in the ADR amendment.
 5.5 **Activation lock.** `pr-selection` forces `active=false` through a literal sentinel until PR C removes it in its last commit, so PR B alone is never activatable (CPO condition 1). Activation also requires AC6 (replay escape under 2%), Guard 3 merged, and a pre-activation baseline census recorded in the ADR amendment.
 5.6 **Consumers of a green `test`.** Enumerate by grep every reader (`plugins/soleur/scripts/monitor-pr-checks.sh`, ship Phase 7, `drain-prs`, `battery-owed.sh`, `post-merge-monitor.yml`, `web-platform-release.yml`) and tie each to the `merge_group` backstop; `web-platform-release.yml` re-checks `WR_EVENT == push` on its `workflow_run` arm, so a reduced PR run never feeds the deploy arm (verified by the architecture review; a test pins it).
 5.7 **Page and own the escape.** `SOLEUR_FULL_BATTERY_ESCAPE` routes to Better Stack with a named responder recorded in the ADR amendment; an unowned count does not bound a single-user incident (CPO condition 4).
+
+### PR B contract after plan review (2026-10-14; supersedes Phase 2 and 3 wherever they differ)
+
+Seven reviewers (DHH, Kieran, simplicity, architecture, spec-flow, CPO, CTO) reviewed PR B. Rulings are in `knowledge-base/project/specs/archive/20261014-233501-feat-ci-pr-selection/decision-challenges.md`. AC11 failed after PR A (issue 10287: `git diff` runs outside a work tree in the e2e container); PR B never skips `e2e`, so it is not blocked.
+
+**Job `pr-selection`.** `if: github.event_name == 'pull_request'`; `runs-on: ubuntu-latest`; `continue-on-error: true`; `timeout-minutes: 3` alone on its line, in the 4-space form the release-budget awk parses; no `needs:` (a serial `push-dedupe` edge makes the declared path 76, over the 75 cap; today 73; pinned by an executed run of `run_declared_path` against `ci.yml` plus a 10-minute mutant); `permissions: contents: read`; `fetch-depth: 0`; no `setup-node`, `npm ci`, gitleaks or likec4 (a test runs the driver with those tools off `PATH`). In-step `timeout 120` degrades to full.
+**Driver `scripts/ci-pr-selection.sh`** (YAML stays thin; the driver holds the trigger list and the lock). Order of work: (1) emit fail-closed defaults first (`head_sha=`, `base_sha=`, `skip_legs=`, `active=false`); (2) assert `HEAD == $GITHUB_SHA`, two parents and `HEAD^2 == PR head sha`; `head_sha := HEAD^2`, `base_sha := HEAD^1`; any failure means full; (3) full on fork head (`HEAD_REPO != GH_REPO`), `run_attempt > 1`, zero changed files, more than 500 files; (4) `git diff -z --name-status --no-renames HEAD^1 HEAD` written to a file in `$RUNNER_TEMP` (never argv or env, never raw paths in annotations); (5) **stage 1**, a pure-bash positive allowlist: every path under `knowledge-base/**` or a root `*.md`, status M, or A/D inside that allowlist; any other status, any Added/Deleted/Renamed file outside it, and any path on the widened trigger list (`.github/workflows/ci.yml`, `scripts/ci-pr-selection.sh`, `scripts/lib/**`, `scripts/test-all.sh`, `scripts/suite-shard-legs.tsv`, the heavy manifest, `scripts/test-affected-kb-consumers.baseline.txt`; a test asserts every file `test-all.sh` sources matches the list) means full, and no selector runs; `plugins/soleur/docs/**` is outside the allowlist; (6) **stage 2**, only for stage-1 doc-only diffs, in dark mode too, under `timeout 120`: `env -u CI -u SOLEUR_TEST_FORCE_ALL bash scripts/test-all.sh --print-selection --paths=<file list>` plus `--enumerate-commands <group>` per gateable group. A group enters the would-skip set only if its stream is non-empty, every record is `AFFECTED_SELECTED ... 0` or a `--pr-gated` decline, `AFFECTED_SUMMARY fallback=none` was seen, and no `always_on` row exists; a diff touching `knowledge-base/engineering/architecture/diagrams/**` never skips `test-webplat`; (7) `active=true` only when the switch is exactly `on` (bash compare) AND the literal lock is absent; `skip_legs` is written only when `active=true`; (8) one final `printf` block writes every output, `skip_legs` last. Dark mode prints one `SOLEUR_PR_SELECTION switch=<unset|on|invalid> locked=<true|false> attempt=N files=N stage=<1|2> reason=<token> would_skip=<list> sel_s=N` notice plus a step summary, and nothing else (no `mode`, no `pr-affected-active`: both move to PR C).
+**Spike S-b and measured yield (work phase, 2026-10-14).** Measured on a loaded 16-core workstation: a cold selector pass is 126 to 211 s wall (about 180 CPU-s), a warm one 19 s (derive cache primed); the workflow's 90 s stage-2 budget will therefore usually end in `selector_timeout` on a cold runner (safe, no evidence), and the first dark doc-only runs print the real `sel_s`. Run against the real `test-all.sh` on a one-file knowledge-base diff, **no group is skippable under the ruled rule**: `test-webplat` holds `apps/web-platform [unit]` and `test-scripts-heavy` holds `.github/scripts/test/run-all.sh` (plain relevance declines, unreachable under CI per ADR-181), and `test-bun` holds two always-on suites. The 18 job-min (`test-webplat` 15.3 plus `test-scripts-heavy` 3.0) is therefore a CEILING that needs a later ruling extending ADR-181/ADR-262, not an expected saving; the go/no-go belongs to PR C's Phase 4.0 with the replay in hand. `web-platform-build` stays ungated.
+**Gating.** The three jobs gain `pr-selection` in `needs:` and a skip term that requires `github.event_name == 'pull_request'`, `outputs.active == 'true'`, a non-empty `outputs.head_sha` equal to `github.event.pull_request.head.sha`, and the delimited `contains(format(',{0},', outputs.skip_legs), ',<leg>,')`; the existing `!cancelled()` / push-dedupe / draft-light terms stay verbatim. A re-run reuses the original payload, so the SHA comparison cannot detect a moved base; `run_attempt > 1` forcing full is the real re-run protection.
+**Aggregator.** Add `pr-selection` to `needs:` only (never to `entries`; a skipped `pr-selection` on push or merge_group must not red `test`). Env: `SKIP_LEGS`, `ACTIVE`, `HEAD_SHA_OK`, `ATTEMPT`. The tolerance sits before the `fail=1` line as `PR-AFFECTED-SKIP`: a hard-coded allowlist `test-webplat|test-bun|test-scripts-heavy`, `SKIP_LEGS` validated against `^(<allowlist>)(,<allowlist>)*$` (invalid means empty), exact `ACTIVE == true`, `EVENT_NAME == pull_request`, `ATTEMPT == 1`, no trimming. Tolerated skips count as concluded in the `cancelled` sibling inference and are printed by name in place of "All six legs green".
+**Moved to PR C.** `pr-affected-active`, the `mode` output, G2-3/G2-4 (label and artifact), the `SOLEUR_FULL_BATTERY_ESCAPE` probe, the soak probe (false-skip count, `pr-selection` failure rate, projected saving) and the PR C pre-merge assertion that `CI_PR_AFFECTED` is unset when the lock is removed. PR B's seams for them: stable job name `pr-selection`, the `SOLEUR_PR_SELECTION` notice, and the three gated job names.
+**Added Guard rows.** G1-8 (`pr-selection` skipped on merge_group/push: no gated leg skipped, aggregator not red), G1-9 (`ATTEMPT=2` with a listed skip), G1-10 (`test-scripts` or `web-platform-build` listed and skipped), G1-11 (`ACTIVE=True`, `TRUE`), G1-12 (a listed leg with `failure` or `cancelled`), G1-13 (tolerated skip plus a failing sibling), G1-14 (all legs `skipped` on a cancelled run). G2-9 (`CI=true` leaks into the selector call), G2-10 (empty or summary-less selector output), G2-11 (group with no records or a non-`--pr-gated` decline), G2-12 (kill the step after the first write: gated `if:` evaluates to run), G2-13 (lock present and switch `on`: `active=false`; lock neutralized in a copy: `active=true` for exactly `on`), G2-14 (a newline or `::` in a path), G2-15 (docs rename/delete or diagrams edit). The whitespace-padded must-PASS row is deleted: both matchers are exact.
+**Dark proof.** A draft canary PR whose base is the PR B branch and whose diff is one `knowledge-base/**` markdown file runs PR B's `ci.yml` on a doc-only diff; its job conclusions are compared with a plain run and the verdict is recorded in the PR body (AC3 receipt). AC9 widens to every suite returned by `git grep -l 'ci\.yml' -- '*.test.sh'` plus the release-budget awk pin.
+**ADR.** ADR-276 gains `amends: [ADR-262, ADR-183]` and a `## Amendment` (S4, `CI_PR_AFFECTED`, 12% kill criterion and rollback `gh variable delete CI_PR_AFFECTED`, "locked, not activatable until PR C", activation prerequisites, one baseline definition, dark cost, named escape responder, supersession of the `run-name` marker, the base-ref copy and counted declines, the S2/S3 census waiver). ADR-262 gains `amended_by:`; ADR-183's existing `amended_by:` list is appended to; each gets a matching `## Amendment` section. The `--admin` queue-skip sentence is verified by API in PR B or omitted.
 
 ## Open Code-Review Overlap
 
@@ -139,7 +162,7 @@ Open `code-review` issues naming planned files: #8659 and #7942 (`scripts/test-a
 
 ## Test Scenarios
 
-- Doc-only PR (one `knowledge-base/project/learnings/*.md`): `pr-selection` emits `mode=affected`, `skip_legs` names the four groups, `test` concludes `success` with the `PR-AFFECTED-SKIP` line printed, `e2e` job reports `applicable=false`.
+- Doc-only PR (one `knowledge-base/project/learnings/*.md`): `pr-selection` emits `mode=affected`, `skip_legs` is empty while dark; the would-skip set names at most the three gateable groups, `test` concludes `success` with the `PR-AFFECTED-SKIP` line printed, `e2e` job reports `applicable=false`.
 - Same diff with `CI_PR_AFFECTED` unset or `ON`: every gated job runs, `would_skip` annotated, `test` green on full results.
 - PR editing `scripts/test-all.sh`, `ci.yml` or an affected-index file: `mode=full`.
 - `merge_group` and `push` and `workflow_dispatch`: `pr-selection` skipped, `skip_legs` empty, full battery, and the 5.1 read reports full-verified.
@@ -170,29 +193,29 @@ Open `code-review` issues naming planned files: #8659 and #7942 (`scripts/test-a
 
 ```yaml
 liveness_signal:
-  what: scripts/ci-demand-census.sh PR CI job-minutes per run by mode (full|affected) and the count of SOLEUR_FULL_BATTERY_ESCAPE markers
-  cadence: per post-merge-monitor run and on demand
-  alert_target: Better Stack marker SOLEUR_FULL_BATTERY_ESCAPE (post-merge-monitor.yml step output)
-  configured_in: .github/workflows/post-merge-monitor.yml, scripts/ci-demand-census.sh
+  what: the ::notice title=ci-pr-selection::SOLEUR_PR_SELECTION annotation of each pull_request run (switch, locked, attempt, files, stage, reason, would_skip, active, groups, sel_s, sel_censored, budget) plus the pr-selection job conclusion in the jobs API
+  cadence: per pull_request run
+  alert_target: none in PR B (deferred to the PR C soak probe, which counts pr-selection failures and false skips)
+  configured_in: .github/workflows/ci.yml (pr-selection job), scripts/ci-pr-selection.sh
 error_reporting:
-  destination: ::warning:: / ::notice:: annotations (ci-pr-selection, ci-e2e-classify) plus the step summary; the aggregator prints each tolerated skip by name
-  fail_loud: yes (any unknown runs the full battery and prints the reason; the aggregator exits 1 on an unnamed skip)
+  destination: workflow run log ::notice:: annotations (readable with gh api repos/{o}/{r}/check-runs/<job_id>/annotations) and the step summary; the aggregator prints each tolerated skip by name and the cached-attempt remedy
+  fail_loud: yes (any unknown runs the full battery and prints a fixed reason token; the aggregator exits 1 on an unnamed skip)
 failure_modes:
-  - mode: pr-selection errors or times out
-    detection: annotation ci-pr-selection reason=lever_error and empty skip_legs
-    alert_route: census reports mode=full runs; no merge risk (full battery)
+  - mode: pr-selection fails, times out (3-minute job, 90 s stage-2 budget) or is cancelled
+    detection: the job conclusion in the jobs API and the ABSENCE of the SOLEUR_PR_SELECTION notice; a driver-internal abort prints reason=lever_error, a signal reason=signalled
+    alert_route: none in PR B (a failed continue-on-error job is a red check on a green run); PR C soak probe
+  - mode: stage 2 degrades (selector timeout, error, unparsable output)
+    detection: reason=selector_timeout|selector_error|selector_unparsed|selector_fallback or reason=affected_degraded with the per-group tokens in groups=
+    alert_route: none in PR B; the first dark doc-only runs on a cold runner are expected to be censored (sel_censored=1)
   - mode: reduced run read as full by a merge authority
-    detection: admin-merge-ready.sh / ci-head-verdict.sh full-verified read (5.1); ci-full-battery-audit.sh
-    alert_route: SOLEUR_FULL_BATTERY_ESCAPE marker
-  - mode: e2e classifier falls back again
-    detection: ::warning:: with git stderr and base SHA
-    alert_route: census counts enum-failed per PR class
+    detection: impossible while the lock holds; PR C reduced-run read and ci-full-battery-audit.sh
+    alert_route: SOLEUR_FULL_BATTERY_ESCAPE marker (PR C)
 logs:
-  where: GitHub Actions step summaries and annotations (jobs API)
+  where: GitHub Actions run logs and annotations (jobs and check-runs APIs)
   retention: 90 days (GitHub default)
 discoverability_test:
-  command: bash scripts/ci-demand-census.sh --selftest
-  expected_output: SELFTEST_OK
+  command: EVENT_NAME= bash scripts/ci-pr-selection.sh
+  expected_output: a single ::notice::...SOLEUR_PR_SELECTION line with reason=not_pr, exit 0
 ```
 
 ## Guard Contract

@@ -10,6 +10,11 @@ related_runbooks:
 
 # ADR-199 — destructive clearance is a measurement, not an intent
 
+> **Status: superseded-in-part by the [Addendum — 2026-10-14 (#8316)](#addendum--2026-10-14-8316) below.**
+> The gate this ADR describes (`inngest_host_dark_gate`, predicates G1..G20, guarding
+> `apply_target=inngest-volume-recut`) no longer exists. The invariant is now a requirement on any
+> future destructive-clearing target, not an enforced property; the body below is kept as written.
+
 ## Status
 
 `accepted`. The invariant is true the moment this ADR merges: `apply_target=inngest-volume-recut`
@@ -357,3 +362,65 @@ store is provably healthy. The dark-host gate library
 ADR-142 addendum of 2026-10-08 and 2026-10-09.
 
 **Appended 2026-10-09 (#8285 PR B).** `apply_target=inngest-backstop-retire` and `tests/scripts/lib/inngest-backstop-retire-gate.sh`, named above, were deleted by PR B after the dispatch ran to completion (volume 106261946 answered 404 at 2026-10-09T16:21:26Z). The invariant of this ADR is unchanged and still enforced by `tests/scripts/lib/inngest-host-dark-gate.sh` for `scripts/cutover-inngest.sh`. See the ADR-142 addendum of 2026-10-09.
+
+## Addendum — 2026-10-14 (#8316)
+
+Appended; nothing above is changed. The gate this ADR's guards were written for is retired. #8316 asked
+whether the dormant recut target should be retired or kept; its inputs resolved (the ADR-142 additive
+path landed in #8248, `inngest-volume-recut` was converted by #8285 PR A (#9784) and deleted by PR B
+(#9877), and #7777, #8078 and #7695 are closed). **Retired:** `inngest_host_dark_gate`, the entry
+point with no production caller since PR A, and `_ihdg_finished_count`, the one helper only it used,
+were deleted from `tests/scripts/lib/inngest-host-dark-gate.sh`, together with the sections of
+`tests/scripts/test-inngest-host-dark-gate.sh` that exercised them. The library stays for
+`scripts/cutover-inngest.sh`: the function bodies of `inngest_execute_registry_gate` and the shared
+`_ihdg_*` helpers, and the `_IHDG_*` assignments, are byte-identical (the comments around them were
+reworded where they sat outside a function body). The retired code is recoverable at `b6d745fe78`
+(`git show b6d745fe78:tests/scripts/lib/inngest-host-dark-gate.sh`).
+
+**Superseded by this addendum, by name:**
+
+- the Status paragraph's claim that `apply_target=inngest-volume-recut` "cannot reach `terraform plan`
+  without `inngest_host_dark_gate` returning the literal `dark`" — the target does not exist, and
+  neither does the function;
+- Decision commitment 1 ("Twenty predicates ... G1..G20"): the library now carries the execute gate's
+  fourteen predicates, E1..E14. The retired G1-G6 live on as E1-E6 (E3 carries G2, G5 and G6), G7 as E8,
+  G9 as E9 and G8 as E10; E7 (the boot_id shape) and E11-E14 are new in the execute gate;
+- the Consequences bullet "Until the host is replaced, every dispatch verdicts `stale_schema`": it
+  was written for the pre-cutover dark host, and on a `done` host the common path was G19, not a
+  replace; there is now no dispatch to verdict;
+- the Consequences cost bullet "Twenty predicates plus two batteries": there is one gate, one
+  battery of drop-one cases and one guard-mutation harness;
+- the 2026-10-09 sentence "The invariant of this ADR is unchanged and still enforced by
+  `tests/scripts/lib/inngest-host-dark-gate.sh` for `scripts/cutover-inngest.sh`". That overclaimed:
+  the surviving gate grades only "the host is positively dark" (E1-E14), not the invariant below.
+
+**What the survivor does not reproduce.** The no-function-executed check (G10, `host_executing`), the
+store-empty predicates (G11-G13: `redis_active`, `redis_keys` numeric, `redis_keys == 0`), the
+mount-devid pin (G14) and the `redis_keys`/`redis_key_patterns` coherence check (also numbered G14),
+the readability-only checks on `data_bytes` and `flush_latched` (G15, G16), the live Hetzner
+volume-id pin (G17), the #7674 followthrough (G18), the cutover-flag allowlist at dispatch time (G19)
+and the diagnostic-boot refusal (G20) have no executable form in the repository after this change.
+The execute gate's E11 grades the flag read back from the probe row, which is a related check but
+not G19's synchronous dispatch-time read. The probe still emits several of the fields these read,
+and some have live consumers elsewhere (the audit is tracked in #10290); only the retired gate's
+consumption is gone.
+
+**The invariant is now a requirement on any future target, not an enforced property.** A destructive
+clearance of the live store needs a measured-empty store and a dark host, and any destructive
+clearing target written after this addendum must reintroduce a gate with that conjunction before it
+may plan a destroy. The reason this does not leave the sole copy unguarded today is the plan-time
+wall in `apps/web-platform/infra/inngest-redis-luks.tf`: `hcloud_volume.inngest_redis_luks` (the sole
+copy since 2026-10-09) carries `delete_protection = true` and `prevent_destroy = true` (#9879). That
+protection is conditional on ADR-282, whose status is `adopting` as read when this was written, so it
+is not yet a settled property of the repository. Lifting it is the deliberate two-step route recorded
+in that file (lift delete protection in its own reviewed change, let it apply, then remove
+`prevent_destroy`); the gate requirement above attaches to that lift, and ADR-282 carries a
+cross-reference to it. The loss is therefore bounded
+to "a future destroy target written after protection is lifted", not to the live volume today.
+
+> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15, a point-in-time check of the flag only; evidence in ADR-282's addendum of that date). The paragraph above is kept as the dated record.
+
+**Historical, not edited:** ADR-100 section 7 and the "Where the code is" paragraph that follows its
+section 8, and the
+ADR-142 and ADR-225 path mentions, describe the gate as it was; they stay as written. `status:` stays
+`accepted` and no front matter changes. #8316 stays open for the operator to close.
