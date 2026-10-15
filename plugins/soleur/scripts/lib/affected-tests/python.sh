@@ -110,18 +110,18 @@ affected_py_run() {
   ADP_OF="$(affected_py_total)"
   local -a cmd=("${ADP_TOOL[@]}")
   local -a width_args=()
+  local -a test_files=()
+  local f non_test=0 testmon=0
   local w
   w="$(affected_py_width "$width")"
   # shellcheck disable=SC2206  # `affected_py_width` emits flag words only
   [[ -n "$w" ]] && width_args=($w)
   local log rc=0
-  log="$(mktemp "${TMPDIR:-/tmp}/affected-py.XXXXXX")"
+  affected_mktemp py; log="$AFFECTED_TMP"
 
   if [[ "$mode" == selected ]]; then
     # Partition the changed set: changed test files run directly; the presence
     # of non-test sources requires coverage pytest cannot compute natively.
-    local -a test_files=()
-    local f non_test=0 testmon=0
     for f in ${AFFECTED_CHANGED[@]+"${AFFECTED_CHANGED[@]}"}; do
       [[ -f "$f" ]] || continue
       case "${f##*/}" in
@@ -132,7 +132,7 @@ affected_py_run() {
     local pybin_t
     pybin_t="$(affected_py_interpreter)"
     if [[ -n "$pybin_t" ]] \
-       && affected_timeout 15 "$pybin_t" -c 'import pytest_testmon' >/dev/null 2>&1; then
+       && affected_timeout 15 "$pybin_t" -I -c 'import pytest_testmon' >/dev/null 2>&1; then
       testmon=1
     fi
     if (( testmon )); then
@@ -166,9 +166,18 @@ affected_py_run() {
     ADP_RAN=0
     return 5
   fi
-  # `collected N items` is pytest's own count of what it selected.
-  ADP_RAN="$(grep -oE 'collected [0-9]+ item' "$log" | grep -oE '[0-9]+' | tail -n 1)"
-  [[ -n "$ADP_RAN" ]] || ADP_RAN="-"
+  # ran is in FILE units to match of= (the repo test-file census). pytest's
+  # `collected N items` counts test ITEMS — a different unit, and under testmon
+  # `collected N / M deselected` the pre-slash figure even overstates. So: the
+  # file-diff arm ran exactly the files it passed pytest; full ran the whole
+  # census; under testmon no honest file count is derivable → `-`.
+  if [[ "$mode" == full ]]; then
+    ADP_RAN="$ADP_OF"
+  elif (( testmon )); then
+    ADP_RAN="-"
+  else
+    ADP_RAN="${#test_files[@]}"
+  fi
   rm -f "$log"
   return "$rc"
 }

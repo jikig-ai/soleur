@@ -347,6 +347,13 @@ if (( ARG_SELFCHECK )); then
   # every probe is `command -v` or a bounded --version, so the worst case is
   # the per-stack timeout sum (~80 s over 4 stacks), the happy path seconds.
   command -v git >/dev/null 2>&1 || finish 4 none toolchain-missing config "$CI_NAME" - - -
+  # A capability-positive runner owns the run under delegation — adapter
+  # toolchains are then unreachable, so a missing one is informational only.
+  _sc_runner=0
+  if [[ -f scripts/test-all.sh ]] \
+     && grep -Eq '^[[:space:]]*(--[[:alnum:]_-]+\|)*--print-selection([])|,[:space:]])' scripts/test-all.sh; then
+    _sc_runner=1
+  fi
   # Probe each detected stack's toolchain: detection is free, and each tool()
   # --version probe is already bounded.
   _sc_trc=0; _sc_missing=0
@@ -362,9 +369,10 @@ if (( ARG_SELFCHECK )); then
       esac
     fi
   done
-  # A detected stack whose toolchain cannot run is not "ok" — the gate would
-  # refuse at run time, so the self-check must say so.
-  if (( _sc_missing )); then
+  # A detected stack whose toolchain cannot run is not "ok" WHEN IT CAN GATE —
+  # under delegation the adapters never run, so the gap is disclosed per-stack
+  # above but does not refuse the check.
+  if (( _sc_missing && _sc_runner == 0 )); then
     echo "AFFECTED_GATE_SELF_CHECK toolchain-missing"
     finish 4 none toolchain-missing - "$CI_NAME" - - -
   fi

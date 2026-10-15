@@ -311,9 +311,13 @@ finish() {
         # where EITHER count is unknown also suppresses the sentence — a
         # half-known tally (`Ran 3 of -`) reads as a real count with a broken
         # denominator.
-        if [[ "$mode" != explain && ( "$reason" == delegated || "$reason" == custom-command ) ]]; then
-          echo "affected-suite gate passed."
-        fi
+        # Verdict line still prints for a real run whose tallies are opaque:
+        # delegated runner, custom command, or a count-units case like
+        # testmon — anything in selected/full/custom mode DID run tests.
+        # Suppressed only on paths where nothing ran (explain/none/help).
+        case "$mode" in
+          selected|full|custom) echo "affected-suite gate passed." ;;
+        esac
       else
         # `of` is the repo-wide test-file census, not the affected subset —
         # `ran` counts files actually executed.

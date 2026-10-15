@@ -43,17 +43,15 @@ affected_nxt_tool() {
   return 0
 }
 
-# Project graph totals are scheduler-owned; `-` is the honest count.
-affected_nxt_total() { printf -- '-\n'; }
-
 # affected_nxt_run <selected|full> <width> <base>
 affected_nxt_run() {
   local mode="$1" width="$2" base="$3"
   ADP_VACUOUS=0
+  # Project graph totals are scheduler-owned; `-` is the honest count.
   ADP_OF="-"
   local -a cmd=()
   local log rc=0
-  log="$(mktemp "${TMPDIR:-/tmp}/affected-nxt.XXXXXX")"
+  affected_mktemp nxt; log="$AFFECTED_TMP"
 
   if [[ "$ADP_TOOL_KIND" == nx ]]; then
     if [[ "$mode" == selected ]]; then
@@ -84,8 +82,17 @@ affected_nxt_run() {
     return 5
   fi
   ADP_RAN="$(grep -oE 'for [0-9]+ project|[0-9]+ (tasks|successful|cached)' "$log" \
-    | grep -oE '[0-9]+' | head -n 1)"
+    | grep -oE '[0-9]+' | head -n 1 || true)"
   [[ -n "$ADP_RAN" ]] || ADP_RAN="-"
+  # A NUMERIC zero is vacuous the same as a phrase match: `Tasks: 0 successful`
+  # / `ran target test for 0 projects`-adjacent spellings the phrase grep above
+  # doesn't cover still mean the scheduler executed nothing.
+  if [[ "$ADP_RAN" =~ ^[0-9]+$ ]] && (( ADP_RAN == 0 )); then
+    ADP_VACUOUS=1
+    rm -f "$log"
+    ADP_RAN=0
+    return 5
+  fi
   rm -f "$log"
   return "$rc"
 }

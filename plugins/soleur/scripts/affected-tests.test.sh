@@ -173,7 +173,15 @@ for want in ${FAKE_PYTEST_EXPECT:-}; do
 done
 rc="${FAKE_PYTEST_RC:-0}"
 if [[ "$rc" == "5" ]]; then echo "no tests collected"; exit 5; fi
-echo "3 passed in 0.01s"
+# pytest's own tally line: `collected N items` (testmon adds `/ M deselected`)
+# — the gate pins ran to FILE units, so this line is realism, not the counter.
+_nitems="${FAKE_PYTEST_COLLECTED:-1}"
+if [[ -n "${FAKE_PYTEST_DESELECTED:-}" ]]; then
+  echo "collected $_nitems items / $FAKE_PYTEST_DESELECTED deselected"
+else
+  echo "collected $_nitems items"
+fi
+echo "=== $_nitems passed in 0.01s ==="
 exit "$rc"
 SHIM
 
@@ -190,6 +198,8 @@ case "$cmd" in
     done
     exit 0 ;;
   list)
+    # FAKE_GO_DIR/graph rows are pipe-form: `ImportPath|deps deps|TestImports|XTestImports`
+    # — the same shape the real `go list -e -f` template emits.
     graph="${FAKE_GO_DIR:-}/graph"
     [[ -f "$graph" ]] || { echo "stub go: list with no FAKE_GO_DIR/graph" >&2; exit 64; }
     has_f=0; has_deps=0; targets=""
@@ -206,12 +216,27 @@ case "$cmd" in
       esac
     done
     if (( has_f )); then
-      # `<importpath> <dep> <dep>` — the {{.ImportPath}} {{join .Deps " "}} shape.
-      while IFS= read -r line; do printf '%s\n' "$line"; done < "$graph"
+      if [[ "$targets" == *"/..."* || -z "${targets// /}" ]]; then
+        while IFS= read -r line; do printf '%s\n' "$line"; done < "$graph"
+      else
+        # `go list -e -f '{{.ImportPath}}' <dir>` — a dir target (./x) resolves
+        # to the graph row whose import path ENDS in it; `.` is the module root
+        # (the shortest import path).
+        for t in $targets; do
+          td="${t#./}"
+          if [[ "$td" == "." ]]; then
+            awk -F'|' '{n=gsub(/\//,"/",$1); if(NR==1||n<min){min=n;best=$1}} END{if(best!="")print best; else exit 1}' "$graph" \
+              || { echo "stub go: unknown dir $t" >&2; exit 64; }
+          else
+            awk -F'|' -v t="$td" 'length($1)>=length(t) && substr($1,length($1)-length(t)+1)==t{print $1; f=1} END{if(!f) exit 1}' "$graph" \
+              || { echo "stub go: unknown dir $t" >&2; exit 64; }
+          fi
+        done
+      fi
       exit 0
     fi
     if [[ "$targets" == *"/..."* || -z "${targets// /}" ]]; then
-      awk '{print $1}' "$graph"
+      awk -F'|' '{print $1}' "$graph"
       exit 0
     fi
     # named package(s): `go list -deps <pkg>` prints one import path per line
@@ -219,17 +244,28 @@ case "$cmd" in
     for t in $targets; do
       [[ "$t" == "list" ]] && continue
       if (( has_deps )); then
-        awk -v t="$t" '$1==t{for(i=1;i<=NF;i++) print $i; f=1} END{if(!f) exit 1}' "$graph" \
+        awk -F'|' -v t="$t" '$1==t{print $1; n=split($2,d," "); for(i=1;i<=n;i++) print d[i]; f=1} END{if(!f) exit 1}' "$graph" \
           || { echo "stub go: unknown package $t" >&2; exit 64; }
       else
-        awk -v t="$t" '$1==t{print $1; f=1} END{if(!f) exit 1}' "$graph" \
+        awk -F'|' -v t="$t" '$1==t{print $1; f=1} END{if(!f) exit 1}' "$graph" \
           || { echo "stub go: unknown package $t" >&2; exit 64; }
       fi
     done
     exit 0 ;;
   test)
-    has_p=0
-    for a in "$@"; do case "$a" in -p|-p=*|--parallel|--parallel=*) has_p=1 ;; esac; done
+    # `go test -p <n> [pkg …]` — emit the real `ok`/`?` per-package lines so
+    # the adapter can count *_test.go files under each reported package.
+    has_p=0; tgts=""; prev=""
+    for a in "$@"; do
+      if [[ -n "$prev" ]]; then prev=""; continue; fi
+      case "$a" in
+        -p|--parallel) prev="$a"; has_p=1 ;;
+        -p=*|--parallel=*) has_p=1 ;;
+        test) : ;;
+        -*) : ;;
+        *) tgts="$tgts $a" ;;
+      esac
+    done
     if [[ "${FAKE_GO_REQUIRE_P:-1}" == "1" && "$has_p" == "0" ]]; then
       echo "stub go: 'go test' without a -p worker cap: $*" >&2; exit 64
     fi
@@ -239,7 +275,14 @@ case "$cmd" in
         *) echo "stub go: expected package '$want' not under test: $*" >&2; exit 64 ;;
       esac
     done
-    echo "ok  	example.com/m/pkg	0.01s"
+    [[ -n "${tgts// /}" ]] || tgts=" ./..."
+    for t in $tgts; do
+      if [[ "$t" == "./..." ]]; then
+        awk '{print "ok\t"$1"\t0.01s"}' "${FAKE_GO_DIR:-}/graph" 2>/dev/null || true
+      else
+        printf 'ok\t%s\t0.01s\n' "$t"
+      fi
+    done
     exit "${FAKE_GO_TEST_RC:-0}" ;;
   *) echo "stub go: unrouted call: $*" >&2; exit 64 ;;
 esac
@@ -262,6 +305,9 @@ case " $* " in
     # read as a vacuous "0 tasks" verdict.
     echo "${FAKE_NX_LINE:-nx affected: ran target test}"
     exit "${FAKE_NX_RC:-0}" ;;
+  *" run-many "*|*" run-many"*)
+    echo "${FAKE_NX_FULL_LINE:-nx run-many: ran target test for 3 projects}"
+    exit "${FAKE_NX_FULL_RC:-0}" ;;
   *" show "*)
     for p in ${FAKE_NX_PROJECTS:-webapp}; do printf '%s\n' "$p"; done
     exit 0 ;;
@@ -318,6 +364,9 @@ cat > "$BIN/python3" <<'SHIM'
 #!/usr/bin/env bash
 [[ -n "${FAKE_LOG:-}" ]] || { echo "stub python3: FAKE_LOG unset" >&2; exit 64; }
 printf 'python3\t%s\n' "$*" >> "$FAKE_LOG"
+# The gate probes with isolated mode (`python3 -I -c …`): consume leading
+# single-letter interpreter flags before routing on the payload.
+while [[ "${1:-}" == -[a-zA-Z] && "${1:-}" != "-c" && "${1:-}" != "-m" && "${1:-}" != "-V" ]]; do shift; done
 # `python3 -m pytest <args>` runs the pytest shim.
 if [[ "${1:-}" == "-m" && "${2:-}" == "pytest" ]]; then
   shift 2; exec pytest "$@"
@@ -488,9 +537,11 @@ seed_go() { # <repo> <graph-dir> — go.mod + packages; writes <graph-dir>/graph
   printf 'package leaf\n\nfunc Leaf() int { return 1 }\n' > "$r/internal/leaf/leaf.go"
   printf 'package leaf\n\nimport "testing"\n\nfunc TestLeaf(t *testing.T) {}\n' > "$r/internal/leaf/leaf_test.go"
   printf 'package main\n\nimport _ "example.com/m/internal/leaf"\n\nfunc main() {}\n' > "$r/cmd/app/main.go"
+  # Pipe-form rows: ImportPath|Imports|TestImports|XTestImports — the shape
+  # `go list -e -f '{{.ImportPath}}|{{join .Imports " "}}|…'` emits.
   cat > "$g/graph" <<'GRAPH'
-example.com/m/cmd/app example.com/m/internal/leaf fmt
-example.com/m/internal/leaf
+example.com/m/cmd/app|example.com/m/internal/leaf fmt||
+example.com/m/internal/leaf|||
 GRAPH
 }
 
@@ -621,7 +672,8 @@ reset_fakes() {
   export FAKE_PYTEST_RC=0 FAKE_PYTEST_EXPECT="" FAKE_PYTEST_SLEEP=""
   export FAKE_PY_IMPORTABLE="pytest"
   export FAKE_GO_TEST_RC=0 FAKE_GO_EXPECT="" FAKE_GO_DIR="" FAKE_GO_GOMOD="" FAKE_GO_REQUIRE_P=1
-  export FAKE_NX_RC=0 FAKE_NX_EXPECT="" FAKE_NX_PROJECTS="" FAKE_NX_LINE=""
+  export FAKE_NX_RC=0 FAKE_NX_EXPECT="" FAKE_NX_PROJECTS="" FAKE_NX_LINE="" FAKE_NX_FULL_LINE="" FAKE_NX_FULL_RC=0
+  export FAKE_PYTEST_COLLECTED="" FAKE_PYTEST_DESELECTED=""
   export FAKE_TURBO_RC=0 FAKE_TURBO_EXPECT=""
   export FAKE_RUNNER_RC=0 FAKE_RUNNER_AFFECTED_RC="" FAKE_RUNNER_FULL_RC=""
   export FAKE_PM_TEST_RC=0
@@ -697,7 +749,7 @@ run_gate "$R_CONTROL" gate
 CONTROL_OK=0
 [[ "$RC" == "0" ]] && CONTROL_OK=1
 want_rc 0 "A1 control: vitest fixture exits 0"
-want_out "A1 control: human sentence" 'Ran [0-9]+ of [0-9]+ test files affected by this change: passed\.'
+want_out "A1 control: human sentence" "Ran [0-9]+ of the repo's [0-9]+ test files affected by this change: passed\."
 want_call "A1 control: vitest invoked in related form" 'vitest.*related'
 want_call "A1 control: --run on the related call" 'vitest.*related.*--run'
 want_call "A1 control: the changed file reaches the selector" 'related.*util\.ts'
@@ -930,14 +982,34 @@ want_field "C6: mode=full" mode 'full'
 want_no_call "C6: no related selector under a global hit" 'related'
 want_call "C6: the full command did run" 'vitest|npm|pnpm|yarn|bun|npx'
 
-# C7 [G1-7]: vacuous test_command values → rc 4 vacuous-test-command, each spelling.
-for _vac in 'true' ':' 'exit 0' 'echo'; do
-  _r="$(mk_cfg_repo "cfg-vac-$(printf '%s' "$_vac" | tr -c 'a-z0-9' '_')" "{\"test_command\": \"$_vac\"}")"
+# C7 [G1-7]: vacuous test_command values → rc 4 vacuous-test-command, each
+# spelling — INCLUDING the composition bypasses: a true-swallower tail
+# (`|| true`, `; exit 0`, `| true`), exit-inside-subcommand, comment padding.
+for _vac in 'true' ':' 'exit 0' 'echo' \
+            'npm test || true' 'npm test || :' 'make test; exit 0' \
+            'pytest && true' 'npm test | true' \
+            "bash -c 'exit 0'" 'sh -c "exit 0"' 'true # comment' \
+            'echo done; exit 0' 'env X=1 bash -c "exit 0"'; do
+  _r="$(mk_cfg_repo "cfg-vac-$(printf '%s' "$_vac" | tr -c 'a-z0-9' '_' | head -c 40)" "{\"test_command\": \"$(printf '%s' "$_vac" | sed 's/"/\\"/g')\"}")"
   reset_fakes; run_gate "$_r" gate
   want_rc 4 "C7: test_command '$_vac' refused"
   want_out "C7: vacuous reason for '$_vac'" 'AFFECTED_GATE_REFUSED.*reason=vacuous-test-command'
 done
 unset _vac _r
+# C7b must-PASS: a real command still runs — `echo` mid-command is not a
+# swallower when the LAST segment is substantive.
+R_VACOK="$(mk_cfg_repo cfg-vac-ok '{"test_command": "echo running && bash scripts/custom.sh"}')"
+mkdir -p "$R_VACOK/scripts"
+cat > "$R_VACOK/scripts/custom.sh" <<'FIX'
+#!/usr/bin/env bash
+printf 'custom\tcwd=%s\n' "$PWD" >> "${FAKE_LOG:?}"
+exit 0
+FIX
+chmod +x "$R_VACOK/scripts/custom.sh"
+assert_fixture_dir "$R_VACOK"; git -C "$R_VACOK" add -A; git -C "$R_VACOK" commit -q -m "add custom runner"
+reset_fakes; run_gate "$R_VACOK" gate
+want_rc 0 "C7b: substantive test_command accepted"
+want_call "C7b: the custom command ran" 'custom	cwd='
 
 # C8: non-positive budget_seconds / max_workers fail closed as bad-config — a
 # zero budget would defer instantly and a non-positive width is nonsense.
@@ -949,6 +1021,64 @@ R_CL2="$(mk_cfg_repo cfg-maxw-neg '{"max_workers": -2}')"
 reset_fakes; run_gate "$R_CL2" gate
 want_rc 4 "C8b: negative max_workers refused"
 want_out "C8b: reason names the key" 'bad-config.*max_workers|max_workers.*bad-config'
+want_out "C8b: refusal carries a remedy pointer" 'remedy:'
+
+# C9: a match-everything inert_paths pattern is a permanent green — refused as
+# bad-config, never silently applied. `*`/`**`/`**/*` and any pattern that
+# matches an arbitrary probe path all fail closed.
+_ipn=0
+for _ip in '*' '**' '**/*' '*/**'; do
+  _ipn=$((_ipn + 1))  # `**/*` and `*/**` both sanitise to `____` — index the name
+  _r="$(mk_cfg_repo "cfg-inertstar-${_ipn}" "{\"inert_paths\": [\"$_ip\"]}")"
+  reset_fakes; run_gate "$_r" gate
+  want_rc 4 "C9: inert_paths '$_ip' refused"
+  want_out "C9: refusal names inert_paths for '$_ip'" 'bad-config.*inert_paths|inert_paths.*bad-config'
+  want_no_call "C9: nothing ran for '$_ip'" 'vitest	'
+done
+unset _ip _r _ipn
+# C9b must-PASS: a real inert pattern still classifies (docs/** inert over a
+# docs-only diff → NO_TESTS_AFFECTED, same shape as C5a).
+R_INOK="$(mk_repo cfg-inert-ok)"; seed_js "$R_INOK"
+write_config "$R_INOK" '{"inert_paths": ["docs/**", "notes.txt"]}'; seal_base "$R_INOK"
+commit_chg "$R_INOK" docs/guide.md 'docs'
+reset_fakes; run_gate "$R_INOK" gate
+want_rc 0 "C9b: a non-total inert_paths set is accepted"
+want_out "C9b: inert verdict" 'NO_TESTS_AFFECTED'
+
+# C10: the jq config decoder actually DECODES — a jq-only host (no python3, no
+# node on PATH) must still honour test_command. Literal NULs in the jq program
+# were stripped by bash before this row existed; the pinned engine is real jq.
+JQBIN="$TESTROOT/bin-jqonly"; mkdir -p "$JQBIN"
+for _t in jq git bash env grep find sed awk sort sort tr cut head tail cat date \
+          sleep ps getconf sysctl mktemp rm wc dirname basename uname comm ls \
+          mkdir chmod touch printf od; do
+  _p="$(command -v "$_t" 2>/dev/null || true)"
+  [[ -n "$_p" && "$_p" != "$BIN"/* ]] && ln -sf "$_p" "$JQBIN/$_t"
+done
+for _t in vitest jest pytest go nx turbo npm npx pnpm yarn bun bunx; do
+  ln -sf "$BIN/$_t" "$JQBIN/$_t"
+done
+if [[ -x "$JQBIN/jq" && -x "$JQBIN/git" && -x "$JQBIN/bash" ]]; then
+  R_JQONLY="$(mk_repo jq-only)"; seed_js "$R_JQONLY"
+  mkdir -p "$R_JQONLY/scripts"
+  cat > "$R_JQONLY/scripts/custom.sh" <<'FIX'
+#!/usr/bin/env bash
+printf 'custom\tcwd=%s\n' "$PWD" >> "${FAKE_LOG:?}"
+exit 0
+FIX
+  chmod +x "$R_JQONLY/scripts/custom.sh"
+  write_config "$R_JQONLY" '{"test_command": "bash scripts/custom.sh"}'
+  seal_base "$R_JQONLY"
+  commit_chg "$R_JQONLY" src/util.ts 'export const u = 1;'
+  reset_fakes
+  run_gate_path "$JQBIN" "$R_JQONLY" gate
+  want_rc 0 "C10: jq-only host parses the config"
+  want_field "C10: jq decode reached the custom arm" mode 'custom'
+  want_call "C10: the configured command ran" 'custom'
+else
+  fail "C10: cannot build the jq-only PATH fixture (missing jq/git/bash on host)"
+fi
+unset _t _p
 
 # ============================ Guard 1 — no vacuous green =======================
 
@@ -1041,6 +1171,10 @@ want_rc 0 "D7: staged+unstaged+untracked union runs green"
 want_call "D7: unstaged file selected" 'test_a\.py'
 want_call "D7: staged file selected" 'test_b\.py'
 want_call "D7: untracked file selected" 'test_c\.py'
+# Unit integrity: ran/of both count test FILES — the 3 changed test files ran
+# out of a 3-file census (pytest's `collected N items` is items, not the count).
+want_field "D7: ran is in file units" ran '3'
+want_field "D7: of is the repo census" of '3'
 
 # D8: --base overrides resolution — only the LAST commit's files are selected.
 R_BASE="$(mk_repo base-flag)"; seed_js "$R_BASE"; seal_base "$R_BASE"
@@ -1082,14 +1216,17 @@ want_no_out "D9: never a silent full on a dead base" 'mode=full'
 
 # ============================ adapters =========================================
 
-# D15: jest — --findRelatedTests <files>.
-R_JEST="$(mk_repo jest-repo)"; seed_jest "$R_JEST"; seal_base "$R_JEST"
+# D15: jest — --findRelatedTests <files>; the __tests__ convention counts in of=.
+R_JEST="$(mk_repo jest-repo)"; seed_jest "$R_JEST"
+mkdir -p "$R_JEST/src/__tests__"; printf 'test("x", () => {});\n' > "$R_JEST/src/__tests__/x.js"
+seal_base "$R_JEST"
 commit_chg "$R_JEST" src/util.ts 'export const u = 1;'
 reset_fakes; export FAKE_JEST_REQUIRE_RELATED=1
 run_gate "$R_JEST" gate
 want_rc 0 "D15: jest fixture exits 0"
 want_call "D15: jest selector is --findRelatedTests" 'jest.*--findRelatedTests'
 want_call "D15: the changed file reaches jest" 'findRelatedTests.*util\.ts'
+want_field "D15: of= counts __tests__ files too" of '2'
 
 # D16 [G1-9]: go — a leaf change must pull the reverse-dependency closure; the
 # changed package alone is the mutation this row exists to refuse.
@@ -1100,6 +1237,10 @@ run_gate "$R_GO" gate
 want_rc 0 "D16: go fixture exits 0"
 want_call "D16: leaf package under test" 'go.*test.*internal/leaf'
 want_call "D16: reverse dependent under test" 'go.*test.*cmd/app'
+# Unit integrity: two PACKAGES ran but only one test FILE exists — ran is in
+# file units like of= (packages≠files was the original unit-divergence defect).
+want_field "D16: ran counts test files not packages" ran '1'
+want_field "D16: of is the repo census" of '1'
 
 # D17: nx.json wins over package.json.
 R_NX="$(mk_repo nx-repo)"; seed_nx "$R_NX"; seal_base "$R_NX"
@@ -1118,6 +1259,14 @@ want_rc 0 "D17b: nx '10 tasks' run exits 0"
 want_call "D17b: nx affected ran" 'nx.*affected'
 want_no_call "D17b: no vacuous full-retry on a real task count" 'nx.*run-many'
 
+# D17c: a NUMERIC ran=0 (`0 successful` — a spelling the phrase grep misses) is
+# vacuous the same as `0 tasks` → empty-selection full retry, never a pass.
+reset_fakes; export FAKE_NX_LINE="Tasks: 0 successful" FAKE_NX_FULL_LINE="nx run-many: ran target test for 3 projects"
+run_gate "$R_NX" gate
+want_rc 0 "D17c: nx numeric-zero selection retries full"
+want_call "D17c: the full retry ran" 'nx.*run-many'
+want_out "D17c: the escalation is disclosed" 'empty-selection|mode=full'
+
 # D18: turbo.json wins over package.json.
 R_TB="$(mk_repo turbo-repo)"; seed_turbo "$R_TB"; seal_base "$R_TB"
 commit_chg "$R_TB" src/util.ts 'export const u = 1;'
@@ -1132,6 +1281,8 @@ commit_chg "$R_PYSRC" src/mod.py 'def f():\n    return 2'
 reset_fakes; run_gate "$R_PYSRC" gate
 want_rc 0 "D10: source diff without testmon runs the suite"
 want_call "D10: pytest invoked" 'pytest'
+want_field "D10: full-escalation ran equals the census" ran '1'
+want_field "D10: census" of '1'
 R_PYTM="$(mk_repo py-testmon)"; seed_python "$R_PYTM"; seal_base "$R_PYTM"
 commit_chg "$R_PYTM" src/mod.py 'def f():\n    return 2'
 reset_fakes; export FAKE_PY_IMPORTABLE="pytest testmon pytest_testmon"
@@ -1142,6 +1293,11 @@ if grep -qiE 'testmon' "$CALLS" || grep -qiE 'testmon' <<<"$OUT"; then
 else
   fail "D11: testmon importable but no testmon selection visible: $(tr '\n' '|' < "$CALLS")"
 fi
+# testmon's file count is not derivable from `collected N / M deselected`
+# (items, not files) — the honest marker is ran=-, and the pass verdict still
+# prints because a real run happened.
+want_field "D11: testmon ran is honestly unknown" ran '-'
+want_out "D11: pass verdict prints despite opaque tally" 'affected-suite gate passed\.'
 
 # D12/D13: pytest -n auto iff pytest-xdist imports, else serial with a reason.
 R_PYXD="$(mk_repo py-xdist)"; seed_python "$R_PYXD"; seal_base "$R_PYXD"
@@ -1210,9 +1366,15 @@ want_rc 6 "D20a: expired budget with CI detected defers"
 want_out "D20a: deferral marker" 'AFFECTED_GATE_BUDGET_DEFERRED'
 want_field "D20a: ci field names the workflow" ci '.*\.yml|.*workflows.*'
 
-# D20b [G1-8]: a failure BEFORE expiry wins over deferral.
+# D20b [G1-8]: a failure BEFORE expiry wins over deferral. A 1 s budget makes
+# this racy (gate startup can eat the deadline before the run starts), so this
+# arm gets a larger budget — the failure still lands first, deterministically.
+R_BUDF="$(mk_repo budget-fail-first)"; seed_js "$R_BUDF"; seed_ci "$R_BUDF"
+write_config "$R_BUDF" '{"budget_seconds": 120}'
+seal_base "$R_BUDF"
+commit_chg "$R_BUDF" src/util.ts 'export const u = 1;'
 reset_fakes; export FAKE_VITEST_RC=1
-run_gate "$R_BUD" gate
+run_gate "$R_BUDF" gate
 want_rc 1 "D20b: failure before budget expiry is rc 1"
 want_no_out "D20b: no deferral when a failure already landed" 'AFFECTED_GATE_BUDGET_DEFERRED'
 
@@ -1273,6 +1435,57 @@ want_rc 0 "D22: pnpm-workspace / subdir-config / trunk-base fixture exits 0"
 # A workspace may legitimately run the package's own test command rather than
 # `vitest related`; what is NOT acceptable is a green run with nothing invoked.
 want_call "D22: a runner executed (related selection or the package test command)" 'vitest|jest|npm.test|pnpm.test|yarn.test|bun.test'
+
+# ============================ env-hygiene + aux modes ==========================
+
+# E1: forged budget env must NOT launder a deferral. A caller exporting
+# AFFECTED_BUDGET_ACTIVE=1 + a past AFFECTED_DEADLINE would make every bound
+# expire instantly on the OLD code (`${VAR:-0}` inherited env); the gate now
+# initialises both unconditionally and requires a detected CI for rc 6.
+R_FORGE="$(mk_repo env-forge)"; seed_js "$R_FORGE"; seal_base "$R_FORGE"
+commit_chg "$R_FORGE" src/util.ts 'export const u = 1;'
+reset_fakes
+( cd "$R_FORGE" && env -u CLAUDE_PLUGIN_ROOT \
+    AFFECTED_BUDGET_ACTIVE=1 AFFECTED_DEADLINE=1 \
+    PATH="$BIN:$BASEPATH" FAKE_LOG="$CALLS" FAKE_DIR="$TESTROOT" \
+    REAL_NODE="$REAL_NODE" REAL_PY="$REAL_PY" \
+    bash "$SUT" ) > "$TESTROOT/outs/forge.out" 2>&1
+RC=$?; OUT="$(cat "$TESTROOT/outs/forge.out")"
+printf 'gate\t%s\t%s\n' "$RC" "$TESTROOT/outs/forge.out" >> "$RUNS"
+want_rc 0 "E1: forged budget env does not defer"
+want_no_out "E1: no deferral marker" 'AFFECTED_GATE_BUDGET_DEFERRED'
+want_call "E1: the run actually executed" 'vitest'
+
+# E2: --self-check outside a git repo names the real cause, not no-base-ref.
+reset_fakes
+mkdir -p "$TESTROOT/not-a-repo"
+( cd "$TESTROOT/not-a-repo" && env -u CLAUDE_PLUGIN_ROOT \
+    PATH="$BIN:$BASEPATH" FAKE_LOG="$CALLS" FAKE_DIR="$TESTROOT" \
+    bash "$SUT" --self-check ) > "$TESTROOT/outs/norepo.out" 2>&1
+RC=$?; OUT="$(cat "$TESTROOT/outs/norepo.out")"
+printf 'selfcheck\t%s\t%s\n' "$RC" "$TESTROOT/outs/norepo.out" >> "$RUNS"
+want_rc 4 "E2: --self-check outside a repo refuses"
+want_out "E2: reason is not-a-repo" 'reason=not-a-repo'
+
+# E3: --self-check downgrades `ok` when a detected stack's toolchain is missing
+# — a py repo on a PATH without pytest/python3 must not self-check green.
+TLBIN="$TESTROOT/bin-toolless"; mkdir -p "$TLBIN"
+for _t in git bash env grep find sed awk sort tr cut head tail cat date sleep \
+          ps getconf sysctl mktemp rm wc dirname basename uname comm ls mkdir \
+          chmod touch printf od jq node vitest jest nx turbo npm npx pnpm yarn bun; do
+  _p="$(command -v "$_t" 2>/dev/null || true)"
+  [[ -n "$_p" ]] && ln -sf "$_p" "$TLBIN/$_t"
+done
+R_SC_MISS="$(mk_repo selfcheck-missing)"; seed_python "$R_SC_MISS"; seal_base "$R_SC_MISS"
+reset_fakes
+run_gate_path "$TLBIN" "$R_SC_MISS" selfcheck --self-check
+want_rc 4 "E3: missing toolchain self-check refuses"
+want_out "E3: marker says toolchain-missing" 'AFFECTED_GATE_SELF_CHECK toolchain-missing|reason=toolchain-missing'
+
+# E4: --help emits mode=help (contract vocabulary), not mode=none.
+reset_fakes; run_gate "$R_CONTROL" gate --help
+want_rc 0 "E4: --help exits 0"
+want_field "E4: mode is help" mode 'help'
 
 # ============================ portability (source scan) ========================
 # The contract bans specific spellings in the gate source; scanned over the SUT and

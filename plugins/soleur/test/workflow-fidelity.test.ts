@@ -364,7 +364,7 @@ describe("workflow-fidelity sentinel markers in skills", () => {
   // environment, alert 214) because the command string is built next to an absolute path. The
   // path was already in argv rather than interpolated, so this is a shape change, not a
   // behaviour change: $1 and $2 keep exactly the same meaning.
-  const runStepWithExit = (code: number) => {
+  const runStepWithExit = (code: number, name = "probe") => {
     const dir = mkdtempSync(join(tmpdir(), "grok-pre-push-gate-"));
     harnessDirs.push(dir);
     const harness = join(dir, "harness.sh");
@@ -373,13 +373,13 @@ describe("workflow-fidelity sentinel markers in skills", () => {
       [
         "set -euo pipefail",
         `eval "$(sed -n '/^step() {/,/^}/p;/^run_step() {/,/^}/p' "$1")"`,
-        'run_step probe bash -c "exit $2"',
+        'run_step "${3:-probe}" bash -c "exit $2"',
         "",
       ].join("\n"),
     );
     return spawnSync(
       "bash",
-      [harness, resolve(PLUGIN_ROOT, "scripts/grok-pre-push-gate.sh"), String(code)],
+      [harness, resolve(PLUGIN_ROOT, "scripts/grok-pre-push-gate.sh"), String(code), name],
       { encoding: "utf-8" },
     );
   };
@@ -404,12 +404,18 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     }
 
     // affected-tests.sh's rc 6 (budget-deferred to a detected CI gate) and rc 7
-    // (no suite detected) pass WITH a note — they must not collapse into [FAIL]
-    // (ADR-288 records the block-vs-pass decision as pass-with-note).
+    // (no suite detected) pass WITH a note — but ONLY on the affected-gate
+    // step; on any other step 6/7 is an ordinary failure (ADR-288 records the
+    // block-vs-pass decision as pass-with-note, scoped).
     for (const code of [6, 7]) {
-      const noted = runStepWithExit(code);
-      expect(noted.stderr).toContain("[note] probe");
-      expect(noted.stderr).not.toContain("[FAIL] probe");
+      const other = runStepWithExit(code);
+      expect(other.stderr).toContain("[FAIL] probe");
+      expect(other.stderr).not.toContain("[note] probe");
+      expect(other.status).not.toBe(0);
+
+      const noted = runStepWithExit(code, "affected-tests gate");
+      expect(noted.stderr).toContain("[note] affected-tests gate");
+      expect(noted.stderr).not.toContain("[FAIL] affected-tests gate");
       expect(noted.status).toBe(0);
     }
   });

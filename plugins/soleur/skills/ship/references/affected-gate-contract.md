@@ -51,7 +51,7 @@ gate probes registration, not presence.
 |----|---------|--------------|
 | 0 | Selected tests passed, or `NO_TESTS_AFFECTED` (all-inert diff) | proceed |
 | 1 | A selected test failed / runner signal-killed | stop; report failures |
-| 4 | `AFFECTED_GATE_REFUSED reason=<no-stack\|bad-config\|vacuous-test-command\|no-base-ref\|toolchain-missing\|runner-refused>` | stop; fix the named cause — never retry blindly |
+| 4 | `AFFECTED_GATE_REFUSED reason=<no-stack\|bad-config\|vacuous-test-command\|no-base-ref\|not-a-repo\|toolchain-missing\|runner-refused>` + a `remedy:` line | stop; fix the named cause — never retry blindly |
 | 6 | `AFFECTED_GATE_BUDGET_DEFERRED` — budget expired AND a CI test workflow exists | proceed to CI; record CI as the authoritative gate; never label the run passed |
 | 7 | No test suite detected at all | proceed with the disclosed note; never label passed |
 
@@ -61,9 +61,11 @@ runner `3` → rc 1 `reason=runner-signal`.
 
 ## Output
 
-- Human line: `Ran X of N test files affected by this change: passed.`; a
-  delegated or `test_command` pass (opaque counts) still prints
-  `affected-suite gate passed.`
+- Human line: `Ran X of the repo's N test files affected by this change:
+  passed.` — N is the repo-wide test-file census, not the affected subset; the
+  sentence is suppressed when either count is `-` (a run in
+  selected/full/custom mode with opaque tallies still prints
+  `affected-suite gate passed.`).
 - Machine line: `AFFECTED_GATE ran=X of=N skipped=Y mode=<selected|full|custom|explain|none|help> reason=… stack=… ci=<file|none>`
   on every verdict path, including refusals and non-run paths (`explain`,
   `help`, `self-check`) — counts are `-` where no honest count exists.
@@ -74,8 +76,10 @@ runner `3` → rc 1 `reason=runner-signal`.
   a capable runner it reports `mode=delegated` (run
   `bash scripts/test-all.sh --print-selection` for the runner's own selection).
 - `--self-check` validates config + toolchain and prints
-  `AFFECTED_GATE_SELF_CHECK ok`; bounded — worst case is the per-stack
-  `--version` timeout sum (~80 s), the happy path seconds.
+  `AFFECTED_GATE_SELF_CHECK ok`; a detected stack whose toolchain cannot run
+  downgrades it to `AFFECTED_GATE_SELF_CHECK toolchain-missing` with rc 4, and
+  outside a repository the refusal reason is `not-a-repo`. Bounded — worst
+  case is the per-stack `--version` timeout sum (~80 s), the happy path seconds.
 - `--base <ref>` overrides base-ref resolution — **adapter arm only**; a
   delegated runner resolves its own base.
 - Malformed (unparseable) `.soleur-test-gate.json` is `rc 4
@@ -88,9 +92,9 @@ runner `3` → rc 1 `reason=runner-signal`.
 
 | Key | Type | Effect |
 |-----|------|--------|
-| `test_command` | string | Full-run command via `bash -c` from repo root; vacuous (`true`, `:`, `exit 0`, bare `echo`) → `vacuous-test-command` |
+| `test_command` | string | Full-run command via `bash -c` from repo root; vacuous (`true`, `:`, `exit 0`, bare `echo`, or a vacuous LAST `;`/`&&`/`\|\|`/`\|` segment: `cmd \|\| true`, `cmd ; exit 0`, `bash -c 'exit 0'`, `true # comment`) → `vacuous-test-command`. A documented denylist, not a proof |
 | `global_paths` | string[] | Replaces built-ins (lockfiles, `package.json`, `pyproject.toml`, `go.mod`, `tsconfig*`, `vitest.config.*`, `jest.config.*`, `conftest.py`, `.github/workflows/**`); any hit forces the full command |
-| `inert_paths` | string[] | Replaces built-ins (default `**/*.md`); all-inert diff → `NO_TESTS_AFFECTED` |
+| `inert_paths` | string[] | Replaces built-ins (default `**/*.md`); all-inert diff → `NO_TESTS_AFFECTED`; a match-everything pattern (`*`, `**`, `**/*`, anything matching an arbitrary path) → `bad-config key=inert_paths` |
 | `budget_seconds` | number | Wall-clock cap; enforced only when CI detected; default 900; must be a positive integer |
 | `max_workers` | number | Overrides `max(1, ncpu/2) / (1 + running gate processes)`; positive integer |
 | `budget_ci` | boolean | Forces CI-deferral eligibility |
