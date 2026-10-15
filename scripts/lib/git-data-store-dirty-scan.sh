@@ -2,7 +2,7 @@
 # git-data-store-dirty-scan.sh — has the LUKS store ever been offered a write? (#10175)
 #
 # SOURCED by .github/workflows/apply-web-platform-infra.yml (job git_data_host_replace, step "Rotate
-# precondition — store never written (cutover run records)"), never executed. A git-data-host-rotate
+# precondition — store never written (cutover run records)") and by git-data-cutover.yml (the wipe job's W3 step, separated variant, with GDSD_SELF_RUN_ID), never executed. A git-data-host-rotate
 # destroys the LUKS volume. After the first real flip that volume may hold the ONLY copy of replicated
 # repositories, and the old emptiness check (one boot-time row, served_repos=0) cannot see them. This
 # library answers the question from the cutover workflow's own run records, so no prd credential is needed

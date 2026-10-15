@@ -18,7 +18,11 @@
 #                           quiescent (sectors written/discarded ABSOLUTELY 0 0 and stable over 2 s),
 #                           kernel read-only, the host is the instance Hetzner names, and the host
 #                           booted before, and within a bounded window of, the boot_complete row.
-#                           With WIPE_LISTING=run it also takes the layout-independent listing below.
+#                           With WIPE_LISTING=run it also takes the layout-independent listing below, and the pre line
+#                           ends in `lock_residue=<n|na> store_root_repos=<n>` (counts only; store_root_repos counts the
+#                           entries of the LUKS store's repositories/ directory and refuses rc 42 if it cannot be read).
+#   WIPE_PHASE=clear        (A1) Remove a LEFTOVER throwaway snapshot a killed listing left behind, after proving it has the
+#                           shape the listing makes (rc 43 and nothing removed otherwise). No volume operation.
 #   WIPE_PHASE=post_detach  After the Hetzner detach: the store facts again, the by-id link of the
 #   WIPE_PHASE=finish       typed id is GONE, an uncached direct-I/O read of the mapper and a listing
 #                           of the store root succeed (the store is still served).
@@ -449,16 +453,19 @@ wa_main() {
     case "$ro" in 1) : ;; *) die 30 ro_flag_lost ;; esac
   }
   # clear_snapshot (phase=clear; A1 2026-10-15, CTO follow-up ruling) — remove a LEFTOVER git-data-pt-snap that a run
-  # killed with SIGKILL (which no trap can catch) left behind. It touches nothing it cannot prove it made: the
+  # killed with SIGKILL (which no trap can catch) left behind. It touches nothing that does not match the shape this file's
+  # own listing makes (a SHAPE proof, not authorship: git-data-bootstrap.sh makes the same name and shape, and only a held
+  # handle or a busy device stops a removal there): the
   # snapshot's origin must be the typed device and it must be non-persistent (N); its COW must be a loop device whose
   # backing file lives in a /dev/shm/tmp.<id> directory, and a mount of the snapshot, if any, must be that directory's
   # mnt. Anything else is rc 43 and NOTHING is removed. The removal is wa_release, the one function that also tears
   # down this file's own listing (its single `dmsetup remove` names the pinned constant; no name is an input).
   clear_snapshot() {
-    local names tbl c d e f h dmn rc try hits tgt mntdir lo lk lf cowdir
+    local names tbl tbl2 c d e f h dmn rc try hits tgt mntdir lo lk lf cowdir
     names="$(dmsetup ls)" || die 16 dmsetup_ls
     if ! awk_hit "$names" -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then CLEAR_RESULT=absent; return 0; fi
     tbl="$(dmsetup table "$WA_SNAP")" || die 16 table_unreadable
+    case "$tbl" in *$'\n'*) die 43 snapshot_not_ours ;; esac  # one segment only: the first line alone is never trusted for a multi-target table
     read -r _ _ c d e f _ h <<< "$tbl"
     [ "$c" = snapshot ] && [ "$d" = "$(devno_dec "$MM")" ] && [ "$f" = N ] && [ -z "$h" ] || die 43 snapshot_not_ours
     dmn="$(dmsetup info -c --noheadings -o blkdevname "$WA_SNAP")" || die 16 blkdevname_unreadable
@@ -481,9 +488,9 @@ wa_main() {
       mntdir="${BASH_REMATCH[1]}"
     fi
     lo="$(losetup -l -n -O NAME,BACK-FILE)" || die 16 losetup_list
-    # The COW must be a LOOP device: only a loop device appears in the loop listing under its /dev/loop<minor> name, and the
-    # lookup below refuses (rc 43) for anything that does not, so no separate check of the major number is needed.
-    [[ "$e" =~ ^[0-9]+:[0-9]+$ ]] || die 43 snapshot_not_ours
+    # The COW must be a LOOP device: major 7 is the loop driver. The name /dev/loop<minor> below assumes loop.max_part=0 (the
+    # kernel default); with partitions the minor differs and every leftover is refused (rc 43, nothing removed), which is safe.
+    [[ "$e" =~ ^7:[0-9]+$ ]] || die 43 snapshot_not_ours
     lk="/dev/loop${e#*:}"
     lf="$(printf '%s\n' "$lo" | sed -n "s#^${lk}[[:space:]][[:space:]]*\(.*\)\$#\1#p")"
     case "$lf" in "" | *$'\n'*) die 43 snapshot_not_ours ;; esac
@@ -491,6 +498,9 @@ wa_main() {
     cowdir="${BASH_REMATCH[1]}"
     if [ -n "$mntdir" ] && [ "$mntdir" != "$cowdir" ]; then die 43 snapshot_not_ours; fi
     clear_origin_ok
+    # Removal is by name, so re-read the table once more right before it: a snapshot swapped in during the proof is refused.
+    tbl2="$(dmsetup table "$WA_SNAP")" || die 16 table_unreadable
+    [ "$tbl2" = "$tbl" ] || die 43 snapshot_not_ours
     WA_DIR="$cowdir"; WA_MNT="$cowdir/mnt"; WA_LOOP="$lk"; WA_SNAP_UP=1
     if [ -n "$mntdir" ]; then WA_MOUNTED=1; fi
     if ! wa_release; then die 36 teardown_failed; fi

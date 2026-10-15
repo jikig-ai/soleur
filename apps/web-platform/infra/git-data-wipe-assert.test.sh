@@ -292,7 +292,9 @@ case "$n" in
         exit 1 ;;
       create) note create; flag fail_create && exit 1; : > "$ST/snap_up"; exit 0 ;;
       deps) cat "$W/deps"; exit 0 ;;
-      table) [ -e "$ST/snap_up" ] || exit 1; cat "$W/dm_table"; exit 0 ;;
+      table) [ -e "$ST/snap_up" ] || exit 1
+        # dm_table2, when present, answers every read AFTER the first (a snapshot swapped in during the ownership proof)
+        if [ -e "$W/dm_table2" ] && [ -e "$ST/table_read1" ]; then cat "$W/dm_table2"; else : > "$ST/table_read1"; cat "$W/dm_table"; fi; exit 0 ;;
       remove) note remove; flag fail_remove && exit 1; rm -f "$ST/snap_up"; exit 0 ;;
       status) if flag snap_invalid; then echo "0 2097152 snapshot Invalid"; else echo "0 2097152 snapshot 16/1000000 16"; fi; exit 0 ;;
     esac
@@ -574,7 +576,7 @@ echo "--- TIER A: the host script over a simulated host"
 # ── the clean host: skip (wipe_check) and run (wipe) ──────────────────────────────────────────
 world a-skip
 run_script pre WIPE_LISTING=skip
-expect_line "A01 clean host, listing skipped (wipe_check)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200 lock_residue=na store_root_repos=0$'
+expect_line "A01 clean host, listing skipped (the finish-phase shape)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200 lock_residue=na store_root_repos=0$'
 if [ "$(called dmsetup)" = 0 ] && [ "$(called mount)" = 0 ] && [ "$(called losetup)" = 0 ]; then ok "A01 skip: no snapshot was created, nothing mounted (wipe_check stays a metadata read)"
 else no "A01 skip: a snapshot call was made"; fi
 # the operand/flag contract: the record of every selector-bearing call equals the modelled argv (a wrong device, a
@@ -714,9 +716,18 @@ printf '0 2097152 snapshot 8:32 7:99 N 8\n' > "$W/dm_table"
 run_script clear
 clear_expect_refuse "C03 a snapshot whose origin is another device is not ours" 43 snapshot_not_ours
 clear_world c-cow-notloop
-printf '0 2097152 snapshot 8:16 8:48 N 8\n' > "$W/dm_table"
+printf '0 2097152 snapshot 8:16 8:99 N 8\n' > "$W/dm_table"
 run_script clear
-clear_expect_refuse "C04 a snapshot whose COW is not a loop device (major 7) is not ours" 43 snapshot_not_ours
+clear_expect_refuse "C04 a snapshot whose COW is not a loop device (major 8, minor 99 = a LISTED /dev/loop99) is not ours: only major 7 is the loop driver" 43 snapshot_not_ours
+clear_world c-multiline
+printf '0 2097152 snapshot 8:16 7:99 N 8\n2097152 2097152 linear 8:16 2097152\n' > "$W/dm_table"
+run_script clear
+clear_expect_refuse "C04c a multi-segment table whose FIRST line looks right is not ours (one segment only)" 43 snapshot_not_ours
+clear_world c-swapped
+printf '0 2097152 snapshot 8:16 7:99 N 8\n' > "$W/dm_table"
+printf '0 2097152 snapshot 8:32 7:99 N 8\n' > "$W/dm_table2"
+run_script clear
+clear_expect_refuse "C04d a snapshot that changes between the proof and the removal (the table is re-read right before it) is not ours" 43 snapshot_not_ours
 clear_world c-persistent
 printf '0 2097152 snapshot 8:16 7:99 P 8\n' > "$W/dm_table"
 run_script clear
@@ -1436,12 +1447,12 @@ else no "B06 post_detach: rc=$VRC"; fi
 run_verb b07 "wipe_assert finish ok byid=gone mapper_read=ok store_root=ok" 0 "${V_POST[@]/post_detach/finish}"
 if [ "$VRC" = 0 ]; then ok "B07 finish: exit 0"; else no "B07 finish: rc=$VRC"; fi
 
-# A1 (2026-10-15) phase=clear through the cutover verb: its own fixed answer shape, a 120 s bound, no pre-only input
+# A1 (2026-10-15) phase=clear through the cutover verb: its own fixed answer shape, a 240 s bound (the host's own budget), no pre-only input
 V_CLEAR=(WIPE_PHASE=clear WIPE_VOLUME_ID="$ID_T" WIPE_LUKS_VOLUME_ID="$ID_L" WIPE_SERVER_ID="$ID_S")
 run_verb b20 "wipe_assert clear ok snapshot=cleared" 0 "${V_CLEAR[@]}"
-if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT clear ok snapshot=cleared" "$TL/out" && has_store ok && [ "$(paste -sd' ' "$TL/timeouts" | awk '{print $NF}')" = 120 ] && ! grep -q 'WIPE_ROW_DT\|WIPE_LISTING' "$TL/cmd" \
+if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT clear ok snapshot=cleared" "$TL/out" && has_store ok && [ "$(paste -sd' ' "$TL/timeouts" | awk '{print $NF}')" = 240 ] && ! grep -q 'WIPE_ROW_DT\|WIPE_LISTING' "$TL/cmd" \
    && grep -qxF "wipe_assert=wipe_assert clear ok snapshot=cleared" "$TL/gh_output"; then
-  ok "B20 clear: exit 0, 120 s, the answer is logged and written to GITHUB_OUTPUT verbatim, no pre-only input is sent"
+  ok "B20 clear: exit 0, 240 s, the answer is logged and written to GITHUB_OUTPUT verbatim, no pre-only input is sent"
 else no "B20 clear: rc=$VRC out=[$(tr '\n' '|' < "$TL/out" | cut -c1-200)]"; fi
 run_verb b21 "wipe_assert clear ok snapshot=absent" 0 "${V_CLEAR[@]}"
 if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT clear ok snapshot=absent" "$TL/out"; then ok "B21 clear with no leftover: exit 0, snapshot=absent"; else no "B21 clear absent: rc=$VRC"; fi
@@ -1814,7 +1825,7 @@ if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=691
+MIN_ASSERTIONS=697
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1

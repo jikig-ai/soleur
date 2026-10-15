@@ -1,6 +1,6 @@
 # git-data cutover — reviewer-gated modes (epic #5274 / ADR-068 / ADR-220 / ADR-239).
 #
-# workflow_dispatch-only, five modes on one reviewer-gated job (`cutover`), three wipe modes on a second
+# workflow_dispatch-only, five modes on one reviewer-gated job (`cutover`), four wipe-family modes on a second
 # reviewer-gated job (`wipe`, #10138; header at the job), plus a separate `notify-failure` job that reports
 # a failed, stranded or cancelled run of either:
 #
@@ -821,7 +821,10 @@ jobs:
   # mode=wipe        detach then delete the plaintext volume the owner NAMES BY ID (volume_id).
   # mode=wipe_finish the tail of a wipe that died between its detach and its delete (origin_run names the
   #                  wipe run that detached); it makes ZERO detach calls.
-  # mode=wipe_check  the read-only front of `wipe` (W1-W7 and teardown): no loader, no detach, no delete.
+  # mode=wipe_check  the front of `wipe` (W1-W7 and teardown) including the counts-only layout listing: no loader, no detach,
+  #                  no delete. No volume or provider state changes; a killed listing can leave a throwaway snapshot.
+  # mode=snapshot_clear removes such a LEFTOVER snapshot (pin-only precheck, identity read, bridge, host verb phase clear): no
+  #                  loader, no volume operation, no provider write.
   # The owner-gated dispatch, the preconditions and the S-table are the runbook's section "The wipe".
   # NOT valid for any wipe mode: the headless `pending_deployments` approval form.
   #
@@ -918,15 +921,17 @@ jobs:
           rm -f "$d/doppler.tar.gz"
           echo "$d" >> "$GITHUB_PATH"
 
-      # W3: the flag is exactly true, the stamp is present, the 7-day soak has elapsed (one pinned constant in
-      # the script), and no rollback ran after the stamp (the interim guard; #10297 retires it). wipe_check
-      # reports the verdict it WOULD have returned and exits 0.
+      # W3 has two variants (ADR-239 Amendment 2026-10-15), chosen by the precheck from the flag and the stamp only.
+      # flip_chained: the flag is exactly true, the stamp is present, the 7-day soak has elapsed (one pinned constant in
+      # the script), and no rollback ran after the stamp (the interim guard; #10297 retires it).
+      # separated: the flag is exactly false/unset and there is no stamp; the run-record scan below must read store_clean.
+      # wipe_check reports the verdict it WOULD have returned and exits 0. snapshot_clear runs this step in pin_only mode
+      # ONLY to write the git-data host-key pin the ssh_config step requires; it evaluates no predicate.
       - name: Flag, soak and rollback-recency precheck (W3)
         id: wipe_flag_precheck
-        if: steps.wipe_confirm.outputs.mode != 'snapshot_clear'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
-          FLAG_MODE: ${{ steps.wipe_confirm.outputs.mode == 'wipe_check' && 'wipe_check' || 'wipe' }}
+          FLAG_MODE: ${{ steps.wipe_confirm.outputs.mode == 'snapshot_clear' && 'pin_only' || steps.wipe_confirm.outputs.mode == 'wipe_check' && 'wipe_check' || 'wipe' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WIPE_MODE: ${{ steps.wipe_confirm.outputs.mode }}
         run: |
@@ -936,6 +941,14 @@ jobs:
           bash apps/web-platform/infra/git-data-flag-precheck.sh > "$RUNNER_TEMP/precheck.out" || rc=$?
           cat "$RUNNER_TEMP/precheck.out"
           if [[ "$rc" -ne 0 ]]; then exit "$rc"; fi
+          if [[ "$WIPE_MODE" == "snapshot_clear" ]]; then
+            # pin_only: no variant and no predicate. The ssh_config step below refuses without the pin, so prove it was written.
+            if ! grep -qE '^git_data_pin=present fp=SHA256:' "$RUNNER_TEMP/precheck.out"; then
+              echo "::error title=git-data-wipe::verdict=git_data_host_key_unavailable reason=pin_not_written"
+              exit 5
+            fi
+            exit 0
+          fi
           variant="$(sed -n 's/^wipe_variant=//p' "$RUNNER_TEMP/precheck.out" | head -n 1)"
           case "$variant" in
             flip_chained|separated|none) : ;;
@@ -956,15 +969,20 @@ jobs:
               exit 5
             fi
             sv=""
-            sv="$(git_data_store_dirty_list | GDSD_SELF_RUN_ID="$GITHUB_RUN_ID" git_data_store_dirty_scan)" || true
+            svrc=0
+            # Bounded at 5 minutes (about N+3 sequential gh calls for N recorded runs): a hang reads as unreadable, never as clean.
+            sv="$(timeout 300 bash -c 'set -uo pipefail; source "$1"; git_data_store_dirty_list | GDSD_SELF_RUN_ID="$2" git_data_store_dirty_scan' _ "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-store-dirty-scan.sh" "$GITHUB_RUN_ID")" || svrc=$?
             sw=""
             case "$sv" in
-              store_clean) : ;;
+              # The word AND the scan's own status must agree: a clean word with a non-zero status is a broken scan.
+              store_clean) if [[ "$svrc" -ne 0 ]]; then sw=wipe_separated_scan_unreadable; fi ;;
               "store_dirty "*) sw=wipe_separated_store_dirty ;;
               "cutover_in_flight "*) sw=wipe_separated_cutover_in_flight ;;
               *) sw=wipe_separated_scan_unreadable ;;
             esac
-            echo "separated run-record scan: ${sv%% *}"
+            # The verdict is the scan library's fixed vocabulary plus a numeric run id or a fixed reason word; print it whole so the
+            # refusal names the run that wrote the store (shape-checked first, so nothing else can reach the log).
+            if [[ "$sv" =~ ^[a-z_]+(\ [0-9a-z_]+)?$ ]]; then echo "separated run-record scan: ${sv} (status ${svrc})"; else echo "separated run-record scan: unprintable verdict (status ${svrc})"; fi
             if [[ -n "$sw" ]]; then
               if [[ "$WIPE_MODE" == "wipe_check" ]]; then
                 if [[ "$would" == "none" ]]; then would="$sw"; fi
@@ -1250,7 +1268,7 @@ jobs:
           echo "ssh_config written."
 
       # snapshot_clear: ONE ssh session that removes a LEFTOVER throwaway snapshot (A1, 2026-10-15; CTO follow-up ruling).
-      # It runs for no other mode, needs no Tier-B credential and makes no provider call: the host verb proves the
+      # It runs for no other mode, needs no Tier-B credential and makes no provider WRITE (the W4 identity step reads the provider with the read-only token): the host verb proves the
       # leftover is the one the listing makes (origin = the typed device, a loop-backed COW and a mount under the pinned
       # /dev/shm directory) and refuses (wipe_snapshot_not_ours) otherwise. It never detaches or deletes a volume.
       - name: Clear a leftover transient snapshot (snapshot_clear)
@@ -1303,18 +1321,19 @@ jobs:
             unset WIPE_LISTING
           fi
           bash apps/web-platform/infra/git-data-cutover.sh
-          env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
-            bash apps/web-platform/infra/git-data-wipe.sh stamp --epoch w7
+          # The W7 stamp is the token the detach chokepoint consumes, so it is written AFTER the separated variant's own
+          # store-root refusal below: a refusal exits before any token exists.
           srr_word=""
           if [[ "$WIPE_PHASE" == "pre" ]]; then
             ans="$(sed -n 's/^wipe_assert=//p' "$GITHUB_OUTPUT" | tail -n 1)"
             srr="$(sed -n 's/.* store_root_repos=\([0-9][0-9]*\)$/\1/p' <<<"$ans")"
             # The on-host store-root count is the separated variant's second, independent barrier (the host is not told
-            # the variant): anything but an integer 0 refuses. wipe_check reports it instead.
-            if [[ "$W3_VARIANT" == "separated" ]]; then
-              if ! [[ "$srr" =~ ^[0-9]+$ ]]; then
+            # the variant): anything but the canonical integer 0 refuses (a string compare, never arithmetic: 08 and 2^64 are
+            # not zero). Every variant but flip_chained is held to it, so an empty variant cannot skip it. wipe_check reports it.
+            if [[ "$W3_VARIANT" != "flip_chained" ]]; then
+              if ! [[ "$srr" =~ ^(0|[1-9][0-9]*)$ ]]; then
                 srr_word=wipe_separated_store_root_unreadable
-              elif [[ "$srr" -ne 0 ]]; then
+              elif [[ "$srr" != 0 ]]; then
                 srr_word=wipe_separated_store_root_populated
               fi
             fi
@@ -1335,9 +1354,11 @@ jobs:
               echo "- measured, this run: variant ${W3_VARIANT:-none}; W3 would be ${W3_WOULD:-none}; store-root entries ${srr:-unreadable}"
               echo "- measured, Better Stack, boot time only: newest boot_complete row at ${row_at}; this is no repository entry at boot, not no residue"
               echo "- measured, this run, counts only: ${ans}"
-              echo "- inherited, ADR-239 Amendment 2026-10-09: id-bearing .<id>.init.lock files and .gc-cursor residue are presumed possible from 2026-09-14 to 2026-09-24; the count above is the measurement of it when lock_residue is a number, otherwise it is unmeasured; provider snapshot or backup retention is unmeasured"
-            } >> "$GITHUB_STEP_SUMMARY"
+              echo "- inherited, ADR-239 Amendment 2026-10-09: before 2026-09-24 the plaintext volume may hold regular files named for a workspace id (.<id>.init.lock). lock_residue counts those files only. It does not say whose they are or whether that workspace was ever removed, and it does not count .gc-cursor. A number is a measurement of those lock files; lock_residue=na means the listing did not run and they are unmeasured. Provider snapshots, backups and copies of the volume are unmeasured."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+          env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            bash apps/web-platform/infra/git-data-wipe.sh stamp --epoch w7
           if [[ "$WIPE_RUN_MODE" == "wipe_check" ]]; then
             w4="$(sed -n 's/^w4_epoch=//p' "$rec")"
             w7="$(sed -n 's/^w7_epoch=//p' "$rec")"
@@ -1526,20 +1547,20 @@ jobs:
               echo ""
               echo "The provider API no longer lists the volume (404 by id, nothing by name) and the LUKS volume is still the one attached to the git-data server."
               echo "This states only that the device was deleted at the provider API. It does not state that the volume was empty or held no personal data; the entry-type counts above are a pre-detach listing read at the time of that line, not a statement about any copy."
-            } >> "$GITHUB_STEP_SUMMARY"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
           else
             {
               echo "## git-data wipe: the plaintext volume is absent at the provider API"
               echo ""
               echo "The provider API does not list the volume (404 by id, nothing by name) and the LUKS volume is still the one attached to the git-data server."
               echo "This run made no delete call. The delete outcome is in the origin run (run id ${ORIGIN_RUN:-unknown})."
-            } >> "$GITHUB_STEP_SUMMARY"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
           fi
           {
             echo "### git-data wipe evidence, run record"
             echo "- measured, this run: run id ${RECORD_RUN_ID:-unknown}, dispatched by ${RECORD_ACTOR:-unknown}; the typed volume id was checked against the id the provider API names (W4); the environment approval is recorded by GitHub on this run and is not read here"
-            echo "- measured, this run: the provider API read-back above answered at epoch second ${EPOCHSECONDS:-unknown}"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "- measured, this run: the provider API read-back above was recorded at epoch second ${EPOCHSECONDS:-unknown}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           echo "This run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), residue on the served store, or any copy held by someone with prior access." >> "$GITHUB_STEP_SUMMARY"' <<<"$DOPPLER_TOKEN"
 
       # W13: teardown, always. The whole body runs under env -i with every variable written NAME="${NAME:-}",
@@ -1647,7 +1668,7 @@ jobs:
               words=" SNAPSHOT_CLEAR_FAILED (mode=snapshot_clear removes only a transient local snapshot: no volume was detached or deleted. If the failing step is the snapshot clear, a leftover may still be present: read the run log, then the runbook section A leftover snapshot: gh run view ${RUN_ID} --log)"
               swords=" SNAPSHOT_CLEAR_FAILED"
             elif [ "$MODE" = wipe_check ]; then
-              words=" WIPE_CHECK_FAILED (mode=wipe_check is read-only: nothing on any host or at the provider was changed. Read the failing step in the run log: gh run view ${RUN_ID} --log)"
+              words=" WIPE_CHECK_FAILED (mode=wipe_check changes no volume or provider state, but a killed or failed listing can leave a throwaway snapshot on the git-data host: if the next run refuses wipe_snapshot_present, read the runbook section A leftover snapshot. Read the failing step in the run log: gh run view ${RUN_ID} --log)"
               swords=" WIPE_CHECK_FAILED"
             elif [ "${WIPE_REFUSAL:-}" = volume_already_detached ]; then
               words=" VOLUME_ALREADY_DETACHED (the volume is already detached, so this run detached nothing. If a wipe run detached it, finish with: ${finish_cmd_origin}, replacing ORIGIN_RUN_ID by the id of the wipe run that detached it; this run refused and is not that run)"

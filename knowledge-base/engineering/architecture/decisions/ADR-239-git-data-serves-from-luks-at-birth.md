@@ -401,6 +401,8 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   the flip (slipped, so the wipe, which is gated behind it, has not been reached), and the gc cursor (fixed by a
   hash-bound payload change, declined by the owner, or still open).
 
+> **Superseded 2026-10-15 (#6897): "the flip (slipped, so the wipe, which is gated behind it, has not been reached)" no longer holds for the separated wipe variant: its wipe is not gated behind the flip; see Amendment 2026-10-15 below.**
+
 Alternatives considered and rejected: purging the files in place by mounting the volume (violates D2); a
 standalone dated purge (needs the same writable mount); extending the date without re-opening this ADR
 (storage limitation; the ledger records `expires_on` as deliberately not extended).
@@ -541,9 +543,9 @@ Appended; nothing above is edited. The Consequences bullet "The wipe branch need
 
 ## Amendment 2026-10-15 — the plaintext-volume wipe is separated from the flip chain (#6897, #10138)
 
-Appended; nothing above is edited, and the three sentences it supersedes carry a marker directly beneath them. Takes effect when the carrying PR (#10352) merges, and #10352 was gated on the CLO re-attestation (task A.11, CTO ruling 2026-10-15 on the PR topology), recorded 2026-10-15; #10294 (the wipe mechanism) merged 2026-10-15T12:32:44Z, a8dffdedd5 (read from GitHub), and did not activate it. Until #10352 merges, the chained gate in the Amendments of 2026-10-09 and 2026-10-12 is the operative text.
+Appended; nothing above is edited, and the four sentences it supersedes (the gate sentence, the "gated behind it" clause in the CLO re-ruling inputs, "bound to the flip chain" and the blocker chain) carry a marker directly beneath them. Takes effect when the carrying PR (#10352) merges, and #10352 was gated on the CLO re-attestation (task A.11, CTO ruling 2026-10-15 on the PR topology), recorded 2026-10-15; #10294 (the wipe mechanism) merged 2026-10-15T12:32:44Z, a8dffdedd5 (read from GitHub), and did not activate it. Until #10352 merges, the chained gate in the Amendments of 2026-10-09 and 2026-10-12 is the operative text.
 
-Ruled by CTO agent, 2026-10-15 (separability, replacement predicates, schedule; follow-up ruling on the leftover-snapshot clear and the post-flip barrier). Ruled by CLO agent, 2026-10-15; v1 internal attestation, re-attested as final 2026-10-15 (A.11) (the soak is not a legal gate for the separated variant; evidence record; notice dates). Both rulings are posted on #10138 and recorded in `knowledge-base/project/specs/feat-one-shot-10138-git-data-wipe-body/decision-challenges.md`.
+Ruled by CTO agent, 2026-10-15 (separability, replacement predicates, schedule; follow-up ruling on the leftover-snapshot clear and the post-flip barrier). Ruled by CLO agent, 2026-10-15; v1 internal attestation, re-attested as final 2026-10-15 (A.11) (the soak is not a legal gate for the separated variant; evidence record; notice dates). Both rulings are posted on #10138 and recorded in `knowledge-base/project/specs/archive/20261015-113544-feat-one-shot-10138-git-data-wipe-body/decision-challenges.md`.
 
 **Decision.** The wipe of `hcloud_volume.git_data` has two variants, chosen in-session from reads and never by an input:
 
@@ -554,7 +556,7 @@ Unchanged for both: typed volume id equal to what Hetzner names, same-session ho
 
 **Why.** Rollback to the plaintext volume no longer exists (Consequences bullet 1, inherited) and the volume is never mounted writable (D2, policy), so the flip status does not decide whether destroying it loses served data. The flip chain (#8573, #8609, #8209, then a flip, then a 7-day soak) cannot finish before 2026-11-12 (CTO schedule, inferred), and each extra retention day is an Art. 5(1)(e) overrun against our own stated date (policy, CLO). The CLO ruled on 2026-10-13 that the destroy should be separated if it can be.
 
-**Alternatives considered.** (a) Keep the chained gate only: rejected, it cannot meet 2026-11-12 (inferred). (b) Drop the soak for every variant: rejected, a flip leaves the store populated and the soak is the engineering gate for that case. (c) Scan alone as the separated barrier: rejected by the CTO follow-up ruling, because after a flip with a failed probe and a rollback the flag is false and (once #10297 lands) the stamp is absent, and the scan reads run records only; the on-host count is the second, independent barrier.
+**Alternatives considered.** (a) Keep the chained gate only: rejected, it cannot meet 2026-11-12 (inferred). (b) Drop the soak for every variant: rejected, a flip leaves the store populated and the soak is the engineering gate for that case. (c) Scan alone as the separated barrier: rejected by the CTO follow-up ruling, because after a flip with a failed probe and a rollback the flag is false and the stamp is absent (the stamp is written last, only after a proven probe, so this holds today and after #10297), and the scan reads run records only; the on-host count is the second, independent barrier.
 
 **State as measured (read-only, 2026-10-15; the 2026-10-12 read of server 169724272 and LUKS volume 107102614 is a past measurement and those ids no longer exist).** Volume 106867358 (`soleur-git-data-store`, created 2026-09-14, no delete protection) is attached to server 170370833 beside LUKS volume 107140231 (created 2026-10-14T14:51:26Z). The newest `boot_complete` for `soleur-git-data` is 2026-10-14 14:52:17Z: `served_repos=0 plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty`. That row is boot-time only: `plaintext_empty=yes` means no repository entry at boot, not no residue.
 

@@ -97,8 +97,10 @@ tc 'git-data wipe 123' wipe
 tc 'git-data wipe_finish 999999999999' wipe_finish
 tc 'git-data wipe_check 7' wipe_check
 tc 'git-data snapshot_clear 7' snapshot_clear
-tc 'git-data snapshot_clear' unparseable
-tc 'git-data snapshot_clear 7 ' unparseable
+tc 'git-data snapshot_clear' wipe_other
+tc 'git-data snapshot_clear 7 ' wipe_other
+tc 'git-data snapshot_clear abc' wipe_other
+tc 'git-data snapshot_clear 1234567890123' wipe_other
 tc 'git-data wipe 0123' wipe
 tc 'git-data proof' other
 tc 'git-data flip' other
@@ -311,7 +313,7 @@ printf '== %d passed, %d failed\n' "$PASS" "$FAIL"
 # PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=115
+MIN_ASSERTIONS=117
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

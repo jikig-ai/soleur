@@ -1821,7 +1821,7 @@ iv = yaml.safe_load(open(iv_path)); ap = yaml.safe_load(open(apply_path))
 on = wf.get(True) or wf.get("on") or {}
 check("WF-on: the only trigger is workflow_dispatch (on: read through the True-key lookup)", isinstance(on, dict) and list(on.keys()) == ["workflow_dispatch"], on if not isinstance(on, dict) else list(on.keys()))
 inputs = ((on.get("workflow_dispatch") or {}).get("inputs") or {}) if isinstance(on, dict) else {}
-check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode, origin_run, volume_id} (mode selects the eight modes; lineage is the stranded-sentinel lever for unfreeze; volume_id and origin_run are read by the wipe modes only, #10138)", sorted(inputs.keys()) == ["confirm", "lineage", "mode", "origin_run", "volume_id"], sorted(inputs.keys()))
+check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode, origin_run, volume_id} (mode selects the nine modes; lineage is the stranded-sentinel lever for unfreeze; volume_id and origin_run are read by the wipe modes only, #10138)", sorted(inputs.keys()) == ["confirm", "lineage", "mode", "origin_run", "volume_id"], sorted(inputs.keys()))
 check("AC9: the mode input is a closed choice of exactly proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|snapshot_clear",
       sorted((inputs.get("mode") or {}).get("options") or []) == ["flip", "proof", "redeploy", "rollback", "snapshot_clear", "unfreeze", "wipe", "wipe_check", "wipe_finish"],
       (inputs.get("mode") or {}).get("options"))
@@ -2849,7 +2849,7 @@ g2n_row g2n-9-started-clause-dropped 2 "s# \\&\\& needs\\.cutover\\.outputs\\.st
 g2n_row g2n-9w-wipe-started-clause-dropped 2 "s# \\&\\& needs\\.wipe\\.outputs\\.started != 'false'\\)#)#" "N-if:"
 # 9c — the cutover job loses the wipe_check exclusion (a read-only wipe_check dispatch would start the cutover job as well as the wipe job).
 g2n_row g4-1-cutover-if-wipe-check-dropped 2 "s# \\&\\& inputs\\.mode != 'snapshot_clear'\$##" "WF-cutover-if:"
-# 9d — the wipe job's if: gains a fifth mode (a mode that is not a wipe word would start the wipe job).
+# 9d — the wipe job's if: gains a mode (a mode that is not a wipe word would start the wipe job).
 g2n_row g4-2-wipe-if-widened 2 "s#^(    if: inputs\\.mode == 'wipe' \\|\\| inputs\\.mode == 'wipe_finish' \\|\\| inputs\\.mode == 'wipe_check' \\|\\| inputs\\.mode == 'snapshot_clear')\$#\\1 || inputs.mode == 'redeploy'#" "WF-cutover-if:"
 # 9e — the run-name expression gains a trailing id for a non-wipe mode (a rollback title would carry a volume id).
 g2n_row g4-5-run-name-trailing-id 2 "s#format\\('git-data \\{0\\}', inputs\\.mode\\) \\}\\}\$#format('git-data {0} {1}', inputs.mode, inputs.volume_id) }}#" "WF-runname:"

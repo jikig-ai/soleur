@@ -90,7 +90,7 @@ mkdir -p "$T/cz" "$T/mut" "$T/sim" "$T/specs" "$T/cases" || { printf 'FAIL SETUP
 
 printf '\n=== git-data wipe job census (plan Phase 4/5, Guard Contract 1-8) ===\n\n'
 
-MUTANT_FLOOR=183
+MUTANT_FLOOR=184
 cat > "$T/wfsim.py" <<'PYEOF'
 #!/usr/bin/env python3
 # wfsim: a tiny GitHub-Actions expression engine, the wipe-job census, a step-by-step simulator that runs the
@@ -399,7 +399,7 @@ POST_LOADER = ["wipe_detach_gate", "wipe_detach", "wipe_post_detach_read", "wipe
 MODE_IS_WIPE = "steps.wipe_confirm.outputs.mode == 'wipe'"
 DETACHED_FINISH = "(steps.wipe_confirm.outputs.mode == 'wipe_finish' && steps.wipe_identity.outputs.volume_state == 'detached')"
 IF_EXACT = {
-    "wipe_confirm": None, "checkout": None, "wipe_doppler_install": None, "wipe_flag_precheck": "steps.wipe_confirm.outputs.mode != 'snapshot_clear'",
+    "wipe_confirm": None, "checkout": None, "wipe_doppler_install": None, "wipe_flag_precheck": None,
     "wipe_origin_check": "steps.wipe_confirm.outputs.mode == 'wipe_finish'",
     "wipe_identity": None,
     "wipe_boot_read": "steps.wipe_confirm.outputs.mode != 'wipe_finish' && steps.wipe_confirm.outputs.mode != 'snapshot_clear'",
@@ -435,7 +435,7 @@ RUNS = {
                       "wipe_flag_reread", "wipe_readback", "wipe_teardown"},
     "check": {"wipe_confirm", "checkout", "wipe_doppler_install", "wipe_flag_precheck", "wipe_identity", "wipe_boot_read",
               "wipe_bridge", "wipe_key_fetch", "wipe_ssh_config", "wipe_host_assert", "wipe_teardown"},
-    "clear": {"wipe_confirm", "checkout", "wipe_doppler_install", "wipe_identity", "wipe_bridge", "wipe_key_fetch", "wipe_ssh_config",
+    "clear": {"wipe_confirm", "checkout", "wipe_doppler_install", "wipe_flag_precheck", "wipe_identity", "wipe_bridge", "wipe_key_fetch", "wipe_ssh_config",
               "wipe_snapshot_clear", "wipe_teardown"},
 }
 CUTOVER_IF = "inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check' && inputs.mode != 'snapshot_clear'"
@@ -455,7 +455,7 @@ FORBIDDEN = re.compile(FORBIDDEN_SRC, re.I)
 STANDING = "This run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), residue on the served store, or any copy held by someone with prior access."
 SECRET_RE = re.compile(r"secrets\.([A-Za-z0-9_]+)")
 ECHO_VARS_ALLOWED = {"DOPPLER_CLI_SHA256", "rrc", "cls", "MODE", "RUN_ATTEMPT", "want", "v", "gv", "would", "W3_WOULD", "line", "ORIGIN_RUN", "VOLUME_ID", "reason", "row_epoch",
-                     "origin_epoch", "d", "w4", "w7", "srr", "ans", "W3_VARIANT", "verdict", "variant", "sv", "sw", "srv_created", "row_at", "RECORD_RUN_ID", "RECORD_ACTOR", "EPOCHSECONDS", "WIPE_VOLUME_ID", "WIPE_SERVER_ID", "WIPE_LUKS_VOLUME_ID",
+                     "origin_epoch", "d", "w4", "w7", "srr", "ans", "W3_VARIANT", "verdict", "variant", "sv", "sw", "srv_created", "row_at", "svrc", "RECORD_RUN_ID", "RECORD_ACTOR", "EPOCHSECONDS", "WIPE_VOLUME_ID", "WIPE_SERVER_ID", "WIPE_LUKS_VOLUME_ID",
                      "WIPE_ROW_EPOCH", "srr_word"}
 # The names the wipe run expands in echo/printf output are pinned. A credential-holding variable (`tok`, `dt`) is NOT on the
 # list: `printf '::add-mask::%s\n' "$tok"` is excluded by the add-mask scan, and `echo "$tok"` is therefore RED.
@@ -804,10 +804,12 @@ class Census:
         # ---- Guard 6/7 workflow-side -----------------------------------------------------------------------
         fp = by.get("wipe_flag_precheck") or {}; fr = by.get("wipe_flag_reread") or {}
         c("G6-flag-mode: W3 maps FLAG_MODE to wipe_check or wipe from the confirm step's mode, the re-read pins FLAG_MODE wipe_reread, both bind secrets.DOPPLER_TOKEN_PRD, and the interim rollback-recency guard (gh run list + wipe_last_rollback_epoch) sits in the W3 step",
-          (fp.get("env") or {}).get("FLAG_MODE") == "${{ steps.wipe_confirm.outputs.mode == 'wipe_check' && 'wipe_check' || 'wipe' }}"
+          (fp.get("env") or {}).get("FLAG_MODE") == "${{ steps.wipe_confirm.outputs.mode == 'snapshot_clear' && 'pin_only' || steps.wipe_confirm.outputs.mode == 'wipe_check' && 'wipe_check' || 'wipe' }}"
           and (fr.get("env") or {}) == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}", "FLAG_MODE": "wipe_reread", "WIPE_VARIANT": "${{ steps.wipe_flag_precheck.outputs.variant }}"}
           and (fp.get("env") or {}).get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN_PRD }}"
           and "wipe_last_rollback_epoch" in (fp.get("run") or "") and "gh run list --workflow git-data-cutover.yml" in (fp.get("run") or ""), "")
+        c("G-scan-status: the separated run-record scan accepts its clean word only together with a zero status, runs bounded by timeout, and prints the whole verdict (a clean word with a non-zero status is a broken scan)",
+          'store_clean) if [[ "$svrc" -ne 0 ]]; then sw=wipe_separated_scan_unreadable; fi ;;' in code_text(fp.get("run") or "") and "timeout 300 bash -c" in code_text(fp.get("run") or ""), "")
         c("G7-precheck-first: the soak and rollback-recency precheck runs before the loader, the detach and the delete (it is step 4, no destructive step precedes it)",
           idx.get("wipe_flag_precheck", 99) < idx.get("wipe_loader", -1) < idx.get("wipe_detach_gate", -1) < idx.get("wipe_delete_gate", -1), "")
         # ---- Guard 8 ---------------------------------------------------------------------------------------
@@ -1349,6 +1351,7 @@ if [ "${FLAG_MODE:-}" = wipe_reread ]; then
     *) echo "[git-data-flag-precheck] verdict=wipe_precondition_variant_changed expected=none"; exit 5 ;;
   esac
 fi
+if [ "${FLAG_MODE:-}" = pin_only ]; then echo "git_data_pin=present fp=SHA256:fixture"; exit 0; fi
 case "${FLAG_MODE:-}" in wipe|wipe_check) echo "wipe_variant=$variant" ;; esac
 if [ "$variant" = separated ]; then
   [ "${FLAG_MODE:-}" = wipe_check ] && echo "would_refuse=none"
@@ -1848,10 +1851,11 @@ MUTANTS = {
     "a4-no-since": [S("wipe_identity", ' --since "$ORIGIN_EPOCH"', "")],
     "a4-never-detached": [S("wipe_identity", 'if [[ "$vs" == "detached" ]]; then', 'if [[ "$vs" == "never_true" ]]; then')],
     "a5-listing-skip": [S("wipe_host_assert", "WIPE_LISTING: ${{ steps.wipe_confirm.outputs.mode != 'wipe_finish' && 'run' || 'skip' }}", "WIPE_LISTING: skip")],
-    "clear-precheck-runs": [S("wipe_flag_precheck", "        if: steps.wipe_confirm.outputs.mode != 'snapshot_clear'\n", "")],
+    "clear-pin-only-dropped": [S("wipe_flag_precheck", "mode == 'snapshot_clear' && 'pin_only' || ", "")],
     "clear-phase-wrong": [S("wipe_snapshot_clear", "WIPE_PHASE: clear", "WIPE_PHASE: pre")],
-    "sep-scan-skipped": [S("wipe_flag_precheck", 'sv="$(git_data_store_dirty_list | GDSD_SELF_RUN_ID="$GITHUB_RUN_ID" git_data_store_dirty_scan)" || true', 'sv=store_clean')],
-    "sep-srr-ignored": [S("wipe_host_assert", 'elif [[ "$srr" -ne 0 ]]; then', 'elif false; then')],
+    "sep-scan-status-dropped": [S("wipe_flag_precheck", 'store_clean) if [[ "$svrc" -ne 0 ]]; then sw=wipe_separated_scan_unreadable; fi ;;', 'store_clean) : ;;')],
+    "sep-scan-skipped": [S("wipe_flag_precheck", 'git_data_store_dirty_scan\' _ "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-store-dirty-scan.sh" "$GITHUB_RUN_ID")" || svrc=$?', 'git_data_store_dirty_scan\' _ "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-store-dirty-scan.sh" "$GITHUB_RUN_ID")" || svrc=$?; sv=store_clean')],
+    "sep-srr-ignored": [S("wipe_host_assert", 'elif [[ "$srr" != 0 ]]; then', 'elif false; then')],
     "sep-reread-expect-dropped": [S("wipe_flag_reread", ' WIPE_VARIANT="$WIPE_VARIANT"', '')],
     "evidence-run-record-dropped": [S("wipe_readback", 'echo "### git-data wipe evidence, run record"', 'echo "### dropped"')],
     "a5-row-dt-empty": [S("wipe_host_assert", 'WIPE_ROW_DT="$WIPE_ROW_EPOCH"', 'WIPE_ROW_DT=""')],
@@ -1950,13 +1954,13 @@ declare -A WANT=(
   [g1-1-env-u]=2 [g1-2-cred-on-envi]=2 [g1-3-second-bare-step]=4 [g1-4a-remote-uses-before-loader]=1 [g1-4b-remote-uses-after-loader]=1
   [g1-4c-install-version]=2 [g1-4d-install-sha]=2 [g1-5a-printenv]=1 [g1-5b-export-p]=1 [g1-5c-declare-x]=1 [g1-5d-bare-env]=1
   [g1-5e-bare-set]=1 [g1-5f-compgen-e]=1 [g1-6-first-statement]=1 [g1-7a-post-hook]=1 [g1-7b-using-node]=2 [g1-8-empty-list]=2
-  [g1-9-legacy-input]=2 [g1-10-mask-blob]=2 [g1-11-variant-reordered-lc-all]=2 [g2-2-host-after-detach]=118 [g2-2b-host-read-after-detach]=72 [g2-3-second-read]=14
+  [g1-9-legacy-input]=2 [g1-10-mask-blob]=2 [g1-11-variant-reordered-lc-all]=2 [g2-2-host-after-detach]=118 [g2-2b-host-read-after-detach]=75 [g2-3-second-read]=14
   [g2-5a-gate-record-check-removed]=1 [g2-5c-dgate-record-check-removed]=1 [g2-8-finish-no-record]=2 [g2h-5b-helper-w7-site]=1
   [g2h-5d-helper-w10b-site]=1 [g2h-6-no-w10b-restamp]=1 [g2h-6b-w10b-from-w7]=2 [g3-1b-marker-before-checks]=4 [g3-1c-dmarker-before-checks]=4
   [g3-1d-marker-after-call-swap]=34 [g3-2-merge-gate-into-detach]=15 [g3-3-chain-reordered]=2 [g3-4-finish-not-in-list]=2
   [g3-5-mode-before-refusal]=1 [g3-6-unfreeze-in-word]=2 [g3-7a-refusal-dropped]=2 [g3-7b-no-finish-command]=2 [g3-8-phase-arm-removed]=2
   [g4-1-cutover-if-operand]=2 [g4-2-fourth-mode]=2 [g4-3-volume-id-in-flip]=2 [g4-4-attempt-in-one-mode]=2 [g4-5-runname-trailing-id]=2
-  [g4h-a-volume-id-input-deleted]=5 [g6-1-flag-mode-mapping]=2 [g7-1-precheck-removed]=81 [g8-2a-forbidden-summary]=2
+  [g4h-a-volume-id-input-deleted]=5 [g6-1-flag-mode-mapping]=2 [g7-1-precheck-removed]=93 [g8-2a-forbidden-summary]=2
   [g8-2b-forbidden-notify-word]=2 [g8-names-echo]=1 [g8-3-helper-new-word]=1 [n-1a-detach-gate-name-differs]=2 [n-1b-delete-gate-name-differs]=2 [n-2-chain-with-identity]=2 [g3-9a-wipe-unknown-not-in-family]=2 [g3-9b-lost-runner-setter-removed]=3 [g3-9c-wipe-unknown-not-in-whitelist]=2
   [c-step-env-bash-env]=2 [c-step-shell]=1 [c-step-workdir]=1 [d-echo-tok]=1 [e-shkc-lax]=4 [e-forward-agent]=4 [e-hostkeyalias]=2 [e-updatehostkeys]=4
   [e-sha-dropped]=1 [e-keyval-dropped]=2 [e-xtrace-identity]=1 [b-w10-no-web-host-ssh]=2 [g-w7-raw-id]=2 [g-w10-raw-id]=2
@@ -1966,7 +1970,7 @@ declare -A WANT=(
   [a5-listing-skip]=2 [a5-row-dt-empty]=2 [a5-server-from-luks]=2 [w10-rc-any]=2 [w10-probe-excl]=2 [nv-already-here]=2 [w12-always-deleted]=2 [w12-standing-dropped]=2
   [w10-retry-removed]=2 [w10-retry-verdict]=2 [w10-retry-nosleep]=1 [w10-retry-first-decides]=1 [w10-retry-no-access]=1
   [t-install-maxtime-dropped]=2 [t-install-connect-dropped]=2 [t-doppler-identity-dropped]=2 [t-doppler-reread-dropped]=2 [t-doppler-readback-dropped]=2
-  [t-gh-list-dropped]=2 [t-gh-view-dropped]=2 [sep-scan-skipped]=2 [clear-precheck-runs]=1 [clear-phase-wrong]=2 [sep-srr-ignored]=2 [sep-reread-expect-dropped]=2 [evidence-run-record-dropped]=2
+  [t-gh-list-dropped]=2 [t-gh-view-dropped]=2 [sep-scan-skipped]=2 [sep-scan-status-dropped]=2 [clear-pin-only-dropped]=2 [clear-phase-wrong]=2 [sep-srr-ignored]=2 [sep-reread-expect-dropped]=2 [evidence-run-record-dropped]=2
   [f-retention-closed]=2 [nv-vid-unvalidated]=2 [nv-orig-always]=2 [nv-angle]=2 [h-identity-phase]=1
 )
 MUT_FILE=""
@@ -2112,6 +2116,7 @@ cmut g4-5-runname-trailing-id wf "WS-runname:" "WS-runname-eval:"
 cmut g4h-a-volume-id-input-deleted wf "WS-inputs:"
 # Guards 6/7 (workflow side)
 cmut g6-1-flag-mode-mapping wf "G6-flag-mode:"
+cmut sep-scan-status-dropped wf "G-scan-status:"
 cmut g7-1-precheck-removed wf "G6-flag-mode:" "G7-precheck-first:" "WS-order:"
 # Guard 8
 cmut g8-2a-forbidden-summary wf "G8-forbidden:"
@@ -2407,7 +2412,7 @@ notify_rows() { # <label-suffix>: every executed notify row against $NJ
     ncheck "$hv" "-f volume_id=VOLUME_ID -f origin_run=" "touch|12ab|1234567890123|evil" >/dev/null && [ "$(nlines "$hv")" = 2 ] || { hbad=$((hbad + 1)); echo "  vid hostile $hv: $(ncheck "$hv" "-f volume_id=VOLUME_ID" "touch|12ab|evil")"; }
   done
   [ "$hbad" = 0 ] && pass "NB-vid-hostile$sfx: a volume id that is not 1 to 12 digits (letters, 13 digits, a semicolon, a newline, a command substitution, empty) never reaches the recovery command: it reads the word VOLUME_ID and the output keeps its two lines" || fail "NB-vid-hostile$sfx: $hbad hostile volume id(s) reached the command"
-  nrow "NB-check-refused$sfx: a failed wipe_check reads WIPE_CHECK_FAILED with read-only wording" "wipe_check-refused" "WIPE_CHECK_FAILED.*read-only: nothing on any host or at the provider was changed" "$(only WIPE_CHECK_FAILED)"
+  nrow "NB-check-refused$sfx: a failed wipe_check reads WIPE_CHECK_FAILED with read-only wording" "wipe_check-refused" "WIPE_CHECK_FAILED.*changes no volume or provider state" "$(only WIPE_CHECK_FAILED)"
   nrow "NB-check-any-phase$sfx: wipe_check ignores any phase value and stays WIPE_CHECK_FAILED" "wipe_check-phase" "WIPE_CHECK_FAILED" "$(only WIPE_CHECK_FAILED)"
   nrow "NB-check-unknown$sfx: wipe_check with no outputs still reads WIPE_CHECK_FAILED" "wipe_check-unknown" "WIPE_CHECK_FAILED" "$(only WIPE_CHECK_FAILED)"
   nrow "NB-lost-runner$sfx: a wipe job that published no outputs at all (lost runner, rejected approval) reads WIPE_STATE_UNKNOWN and carries no unfreeze remedy" "wipe-lost-runner" "WIPE_STATE_UNKNOWN" "$(only WIPE_STATE_UNKNOWN)|unfreeze|UNFREEZE"
@@ -2583,6 +2588,7 @@ simdef gold-sep-wipe wipe world='json:{"VARIANT":"separated","FLAG_STATE":"false
 simdef neg-sep-dirty wipe world='json:{"VARIANT":"separated","FLAG_STATE":"false"}' scan=dirty
 simdef neg-sep-inflight wipe world='json:{"VARIANT":"separated","FLAG_STATE":"false"}' scan=inflight
 simdef neg-sep-srr wipe world='json:{"VARIANT":"separated","FLAG_STATE":"false","SRR":"2"}'
+simdef neg-sep-srr-octal wipe world='json:{"VARIANT":"separated","FLAG_STATE":"false","SRR":"08"}'
 simdef gold-clear snapshot_clear
 simdef neg-clear-notours snapshot_clear world='json:{"CLEAR_REFUSE":"wipe_snapshot_not_ours"}' notify="$T_TRUE"
 simdef chk-sep-srr wipe_check world='json:{"VARIANT":"separated","FLAG_STATE":"false","SRR":"1"}'
@@ -2633,7 +2639,7 @@ mutate a4-never-detached "$WF" && simdef m-a4-never "${FIN_W[@]}" wf="$MUT_FILE"
 mutate a5-listing-skip "$WF" && simdef m-a5-listing wipe wf="$MUT_FILE"
 mutate sep-scan-skipped "$WF" && simdef m-sep-scan wipe wf="$MUT_FILE" world='json:{"VARIANT":"separated","FLAG_STATE":"false"}' scan=dirty
 mutate sep-srr-ignored "$WF" && simdef m-sep-srr wipe wf="$MUT_FILE" world='json:{"VARIANT":"separated","FLAG_STATE":"false","SRR":"2"}'
-mutate clear-precheck-runs "$WF" && simdef m-clear-precheck snapshot_clear wf="$MUT_FILE"
+mutate clear-pin-only-dropped "$WF" && simdef m-clear-pin snapshot_clear wf="$MUT_FILE"
 mutate clear-phase-wrong "$WF" && simdef m-clear-phase snapshot_clear wf="$MUT_FILE"
 mutate sep-reread-expect-dropped "$WF" && simdef m-sep-reread wipe wf="$MUT_FILE" world='json:{"VARIANT":"separated","FLAG_STATE":"false"}'
 mutate evidence-run-record-dropped "$WF" && simdef m-evidence wipe wf="$MUT_FILE"
@@ -2867,11 +2873,27 @@ if simok gold-wipe && grep -qF '### git-data wipe evidence, pre-state' "$T/sim/g
 else fail "N-evidence" "$(grep -c 'evidence' "$T/sim/gold-wipe/summary.md" 2>/dev/null) evidence headings"; fi
 if simok m-evidence && ! grep -qF '### git-data wipe evidence, run record' "$T/sim/m-evidence/summary.md"; then pass "M-evidence-run-record-dropped: without the W12 run-record echo the golden summary lacks the block (the N-evidence row goes RED)"
 else fail "M-evidence-run-record-dropped: the run record is still printed with its echo removed"; fi
-CLEAR_RAN="wipe_confirm checkout wipe_doppler_install wipe_identity wipe_bridge wipe_key_fetch wipe_ssh_config wipe_snapshot_clear wipe_teardown"
+# snapshot_clear's pin hand-off is a writer/reader pair across two files: the precheck writes it, the ssh_config body refuses without it
+if grep -qF 'PIN_OUT="${RUNNER_TEMP:-}/git-data.pin"' "$PRECHECK" && python3 -I - "$WF" <<'PYEOF'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+steps = d['jobs']['wipe']['steps']
+by = {s.get('id'): s for s in steps}
+run = by['wipe_ssh_config']['run']
+env = by['wipe_flag_precheck']['env']
+ok = 'gd_pin="$RUNNER_TEMP/git-data.pin"' in run and 'git_data_host_key_unavailable reason=absent' in run
+ok = ok and 'pin_only' in env['FLAG_MODE'] and 'if' not in by['wipe_flag_precheck']
+ids = [s.get('id') for s in steps]
+ok = ok and ids.index('wipe_flag_precheck') < ids.index('wipe_ssh_config')
+sys.exit(0 if ok else 1)
+PYEOF
+then pass "N-clear-pin-handoff: the precheck WRITES \$RUNNER_TEMP/git-data.pin, the ssh_config body READS and refuses without it, the precheck step has no if: (so snapshot_clear gets it), is mapped to pin_only for that mode, and runs before ssh_config"
+else fail "N-clear-pin-handoff: the pin writer and the pin reader are not paired for snapshot_clear"; fi
+CLEAR_RAN="wipe_confirm checkout wipe_doppler_install wipe_flag_precheck wipe_identity wipe_bridge wipe_key_fetch wipe_ssh_config wipe_snapshot_clear wipe_teardown"
 if simok gold-clear && [ "$(R gold-clear .job_result)" = success ] && [ "$(ranset gold-clear)" = "$CLEAR_RAN" ] && [ "$(nev gold-clear 'loader inputs')" = 0 ] && [ "$(nev gold-clear 'curl (POST|DELETE)')" = 0 ] \
-   && ! grep -qE ' RW ' "$(EVL gold-clear)" && [ "$(R gold-clear .outputs.phase)" = "" ] && [ "$(nev gold-clear 'host phase=clear ok')" = 1 ] && [ "$(nev gold-clear 'precheck mode')" = 0 ] \
+   && ! grep -qE ' RW ' "$(EVL gold-clear)" && [ "$(R gold-clear .outputs.phase)" = "" ] && [ "$(nev gold-clear 'host phase=clear ok')" = 1 ] && [ "$(nev gold-clear 'precheck mode=pin_only')" = 1 ] && [ "$(nev gold-clear 'precheck mode')" = 1 ] \
    && grep -qF 'This run removed only a transient local snapshot, or found none.' "$T/sim/gold-clear/summary.md"; then
-  pass "N-clear-gold: snapshot_clear runs the identity read, the bridge and the ONE clear step and nothing else: no precheck, no boot read, no host assertion, no loader (no Tier-B token), no provider write; it ends green with no phase and prints that it removed only a transient snapshot"
+  pass "N-clear-gold: snapshot_clear runs the identity read, the bridge and the ONE clear step and nothing else: the precheck runs ONLY in pin_only mode (it writes the host-key pin the ssh_config step requires and evaluates no predicate), no boot read, no host assertion, no loader (no Tier-B token), no provider write; it ends green with no phase and prints that it removed only a transient snapshot"
 else fail "N-clear-gold" "job=$(R gold-clear .job_result) ran=$(ranset gold-clear) failed=$(failed_step gold-clear)"; fi
 neg_row "N-clear-notours: a leftover the host verb does not recognise as ours refuses at the clear step (wipe_snapshot_not_ours); nothing at the provider changed" neg-clear-notours wipe_snapshot_clear 'verdict=wipe_snapshot_not_ours'
 if simok neg-clear-notours && snot neg-clear-notours | grep -qF 'SNAPSHOT_CLEAR_FAILED' && ! snot neg-clear-notours | grep -qiE 'unfreeze|WIPE_STATE_UNKNOWN|VOLUME_DETACHED'; then
@@ -2880,6 +2902,10 @@ else fail "N-clear-notify" "$(snot neg-clear-notours | head -c 300)"; fi
 neg_row "N-sep-dirty: a separated run whose run records show a flag write refuses at wipe_flag_precheck (wipe_separated_store_dirty) before any Hetzner call" neg-sep-dirty wipe_flag_precheck 'verdict=wipe_separated_store_dirty'
 neg_row "N-sep-inflight: a separated run with ANOTHER cutover run in progress refuses (wipe_separated_cutover_in_flight); its own run does not count" neg-sep-inflight wipe_flag_precheck 'verdict=wipe_separated_cutover_in_flight'
 neg_row "N-sep-srr: a separated run whose LUKS store root holds entries (store_root_repos=2) refuses at wipe_host_assert (wipe_separated_store_root_populated) before the loader and the detach" neg-sep-srr wipe_host_assert 'verdict=wipe_separated_store_root_populated'
+neg_row "N-sep-srr-octal: a store-root count of 08 (octal-invalid arithmetic, never a canonical integer) refuses wipe_separated_store_root_unreadable instead of reading as zero" neg-sep-srr-octal wipe_host_assert 'verdict=wipe_separated_store_root_unreadable'
+_wn="$(awk '/id: wipe_host_assert/{f=1} f&&/stamp --epoch w7/{print NR; exit}' "$WF")"; _rn="$(awk '/id: wipe_host_assert/{f=1} f&&/verdict=wipe_separated_store_root_populated/{print NR; exit}' "$WF")"
+if [ -n "$_wn" ] && [ -n "$_rn" ] && [ "$_rn" -lt "$_wn" ]; then pass "N-w7-stamp-after-srr: in the W7 step the separated store-root refusal comes BEFORE the W7 stamp, so a refusal exits before the token the detach consumes exists"
+else fail "N-w7-stamp-after-srr: the W7 stamp is not after the store-root refusal (stamp line=${_wn:-none}, refusal line=${_rn:-none})"; fi
 neg_row "N-sep-flip-race: a flip that begins between W3 and W7b refuses at the re-read (wipe_precondition_variant_changed expected=separated got=flip_chained); nothing was detached" sep-flip-race wipe_flag_reread 'verdict=wipe_precondition_variant_changed expected=separated got=flip_chained'
 if simok chk-sep-srr && [ "$(R chk-sep-srr .job_result)" = success ] && grep -qF 'W3 would be separated/wipe_separated_store_root_populated; layout listing exercised' "$T/sim/chk-sep-srr/summary.md"; then
   pass "N-sep-check-srr: wipe_check stays green over a populated store root and reports the would-be refusal in its closing line (report-only)"
@@ -2938,8 +2964,8 @@ for _p in "m-a1-wrongrun:gh run view of a different run id" "m-a1-nojobs:droppin
   _sim="${_p%%:*}"; _msg="${_p#*:}"
   if ! finish_ok "$_sim" && [ -s "$T/sim/$_sim/world/gh-refusals.log" ]; then pass "M-${_sim#m-}: $_msg is refused by the argv-exact gh shim and the golden wipe_finish goes RED"; else fail "M-${_sim#m-}: $_msg stayed GREEN or was not seen by the shim" "job=$(R "$_sim" .job_result)"; fi
 done
-if simok m-clear-precheck && [ "$(ranset m-clear-precheck)" != "$CLEAR_RAN" ]; then pass "M-clear-precheck-runs: without the if: on the W3 step the flag precheck runs for snapshot_clear (the N-clear-gold run set goes RED)"
-else fail "M-clear-precheck-runs: the run set is unchanged with the W3 if: removed"; fi
+if simok m-clear-pin && [ "$(R m-clear-pin .job_result)" != success ] && [ "$(failed_step m-clear-pin)" = wipe_flag_precheck ]; then pass "M-clear-pin-only-dropped: without the pin_only mapping snapshot_clear no longer writes the host-key pin and fails AT the precheck step (the N-clear-gold row goes RED)"
+else fail "M-clear-pin-only-dropped: snapshot_clear still succeeds without the pin_only mapping (job=$(R m-clear-pin .job_result) failed=$(failed_step m-clear-pin))"; fi
 if simok m-clear-phase && [ "$(R m-clear-phase .job_result)" != success ]; then pass "M-clear-phase-wrong: a clear step that sends the pre phase cannot complete (the host stub refuses a pre-shaped call from a clear run)"
 else fail "M-clear-phase-wrong: the clear step still completes with the wrong phase"; fi
 mut_neg "M-sep-scan-skipped: a run-record scan whose result is discarded lets a separated wipe through over a flip record (RED)" m-sep-scan wipe_flag_precheck 'verdict=wipe_separated_store_dirty'
@@ -3138,7 +3164,7 @@ chk_floor "notify words derived" "$NWORDS_LIVE" 10
 chk_floor "W1 and cutover cases executed" "$CASES_RUN" 52
 chk_floor "notify cases executed" "$NOTIFY_CASES_N" 62
 chk_floor "simulator runs" "$SIMS_RUN" 129
-MIN_ASSERTIONS=625
+MIN_ASSERTIONS=631
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions passed, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$passes" "$MIN_ASSERTIONS" >&2
   exit 1

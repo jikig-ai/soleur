@@ -48,6 +48,10 @@
 #               leaves flag==true + freeze held, and unfreeze is exactly that recovery —
 #               so unfreeze never refuses on flag==true (reads like proof, prints the value).
 #
+# PIN_ONLY (review of #10352). snapshot_clear evaluates no wipe predicate but its ssh_config step needs $RUNNER_TEMP/git-data.pin, which only
+#   this script writes. pin_only runs the same scope check and the same pin read/validate/write as every other mode, refuses nothing on the
+#   flag's value, prints no wipe_variant line, and ends with `git_data_pin=present fp=...` like the others.
+#
 # WIPE MODES (#10138, design W3 / W7b; A1 2026-10-15). Three more FLAG_MODE values, all for git-data-cutover.yml::wipe.
 #   The first stdout line of `wipe` and `wipe_check` is `wipe_variant=flip_chained|separated|none`, chosen ONLY from
 #   the flag and the stamp (ADR-239 Amendment 2026-10-15): flip_chained = flag `true` OR a non-empty stamp;
@@ -160,7 +164,7 @@ reason_of() {
 
 FLAG_MODE="${FLAG_MODE:-proof}"
 case "$FLAG_MODE" in
-  proof|flip|rollback|unfreeze|wipe|wipe_check|wipe_reread) : ;;
+  proof|flip|rollback|unfreeze|wipe|wipe_check|wipe_reread|pin_only) : ;;
   *) echo "::error title=git-data-flag-precheck::verdict=flag_mode_invalid mode=${FLAG_MODE}"; exit 2 ;;
 esac
 
@@ -390,6 +394,7 @@ if [ "$flag" = true ]; then
       echo "flag=true mode=${FLAG_MODE}"
       ;;
     wipe|wipe_check) : ;;  # the wipe block above already printed the mode line
+    pin_only) : ;;  # no predicate: the flag value is irrelevant, only the pin below is wanted
   esac
 fi
 

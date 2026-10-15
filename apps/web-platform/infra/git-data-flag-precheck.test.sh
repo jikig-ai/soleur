@@ -956,13 +956,31 @@ if case_deny collapsed-flip "$T/deny-collapsed" flip   && [ "$RC" = 5 ] && grep 
   pass "D7: the flag-COLLAPSED helper shape (env read outside the deny fn) -> sandbox_deny_coverage_absent — the function-scope needle catches the #9725 form"
 else fail "D7: flag-collapsed helper shape was not detected as absent" "$(detail)"; fi
 
+# ── pin_only (review of #10352): snapshot_clear needs the host-key pin and nothing else from this script ────────────
+# The REAL script, a doppler shim for the store: the pin is written and fingerprinted, no variant line, no flag verdict.
+case_pin_only_ok() { # <flag value>
+  wipe_run "po-$1" "$1" ABSENT pin_only && [ "$RC" = 0 ] && grep -qF 'git_data_pin=present fp=SHA256:' "$OUT" \
+    && ! grep -qF 'wipe_variant=' "$OUT" && ! grep -qF 'verdict=' "$OUT" && [ -s "$RT/git-data.pin" ] && [ "$(stat -c %a "$RT/git-data.pin")" = 444 ]
+}
+if case_pin_only_ok false && case_pin_only_ok true; then pass "PO1: pin_only writes the 0444 host-key pin and prints git_data_pin=present with NO wipe_variant line and NO verdict, whether the flag is false or true (the flag value is irrelevant to it)"
+else fail "PO1: pin_only did not write the pin cleanly" "$(detail)"; fi
+CASE_PIN=ABSENT wipe_run po-pinabsent false ABSENT pin_only
+if [ "$RC" = 5 ] && grep -qF 'verdict=git_data_host_key_unavailable reason=absent' "$OUT" && [ ! -e "$RT/git-data.pin" ]; then pass "PO2: pin_only with the pin ABSENT still refuses git_data_host_key_unavailable reason=absent and writes no pin file"
+else fail "PO2: pin_only accepted an absent pin" "$(detail)"; fi
+if wipe_run po-badmode false ABSENT pin_only_x && [ "$RC" = 2 ] && grep -qF 'verdict=flag_mode_invalid' "$OUT"; then pass "PO3: a near-miss mode name is still refused flag_mode_invalid (pin_only is an exact member of the closed set)"
+else fail "PO3: an unknown mode was accepted" "$(detail)"; fi
+# shellcheck disable=SC2016  # sed programs are data
+if mutate pin-only-dropped "$PRECHECK" 2 's#\|wipe_reread\|pin_only\) : ;;#|wipe_reread) : ;;#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red pin-only-dropped case_pin_only_ok false
+fi
+
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=33  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5)
+MUTANT_FLOOR=34  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
 # Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 + census mutants 2 x 2 + wipe rows 26 + wipe mutants 7 x 2 + 1 must-refuse row = 146, plus the A1 (2026-10-15) variant rows WV1-WV14 (14) and 5 A1 mutants x 2 (10) = 170 (exact).
-FLOOR=170
+FLOOR=175
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

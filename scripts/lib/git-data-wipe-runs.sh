@@ -64,7 +64,7 @@ _WIPE_RUNS_JQ_DEFS='
     elif test("^git-data (wipe|wipe_finish|wipe_check|snapshot_clear) [0-9]{1,12}\\z") then capture("^git-data (?<m>wipe_finish|wipe_check|snapshot_clear|wipe) ").m
     elif test("^git-data (proof|flip|rollback|unfreeze|redeploy)\\z") then "other"
     elif . == $legacy then "legacy"
-    elif startswith("git-data wipe") then "wipe_other"
+    elif startswith("git-data wipe") or startswith("git-data snapshot_clear") then "wipe_other"
     else "unparseable" end;
   def epoch:
     if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")
