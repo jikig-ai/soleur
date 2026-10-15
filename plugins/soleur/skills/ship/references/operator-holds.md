@@ -1,6 +1,6 @@
 # Operator Holds — evaluating a recorded hold at the draft exit and again before arming
 
-Procedure behind `/ship` Phase 6 step 5. A recorded operator HOLD is a condition, not an outcome. It is evaluated by
+Procedure behind `soleur:ship` Phase 6 step 5. A recorded operator HOLD is a condition, not an outcome. It is evaluated by
 evidence, from the plan file, never from conversation and never by re-reading prose.
 
 **Plugin root in this file:** every command below is written with `${CLAUDE_PLUGIN_ROOT}`. If it is unset (cloud shells do
