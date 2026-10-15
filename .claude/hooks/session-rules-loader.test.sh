@@ -846,7 +846,7 @@ fi
 # SOLEUR_BARE_ROOT_CWD + the [bare-root-cwd] block, and the corpus still loads.
 TOTAL=$((TOTAL+1))
 T34=$(mktemp -d); LATE_TMPDIRS+=("$T34"); setup_repo "$T34"
-git -C "$T34" config core.bare true
+( cd "$T34" && git config core.bare true )
 ctx34=$(invoke_hook "$T34" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 n34=$(grep -c '^- \[id: ' "$T34/AGENTS.md")
 if printf '%s' "$ctx34" | grep -c >/dev/null "loaded: ${n34} of ${n34} rules" \
@@ -864,7 +864,7 @@ fi
 TOTAL=$((TOTAL+1))
 T35=$(mktemp -d); LATE_TMPDIRS+=("$T35"); setup_repo "$T35" docs
 ctx35=$(invoke_hook "$T35" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-if ! printf '%s' "$ctx35" | grep -q 'SOLEUR_BARE_ROOT_CWD\|\[bare-root-cwd\]'; then
+if ! grep -q 'SOLEUR_BARE_ROOT_CWD\|\[bare-root-cwd\]' <<<"$ctx35"; then
   echo "PASS: worktree envelope has no bare-root marker or block"
   PASS=$((PASS+1))
 else
@@ -880,14 +880,14 @@ T36=$(mktemp -d); LATE_TMPDIRS+=("$T36"); setup_repo "$T36"
 # Bare-root fixture on purpose (#10386 review): on a plain clone a helper is
 # silent anyway, so the no-marker arm could not tell helper-absent from
 # helper-silent. At a bare root a PRESENT helper would emit — absent means none.
-git -C "$T36" config core.bare true
+( cd "$T36" && git config core.bare true )
 copy36="$T36-loader-copy"; LATE_TMPDIRS+=("$copy36")
 mkdir -p "$copy36"
 cp "$HOOK" "$copy36/session-rules-loader.sh"
 chmod +x "$copy36/session-rules-loader.sh"
 out36=$(cd "$copy36" && printf '%s' "$(jq -nc --arg cwd "$T36" '{cwd: $cwd, session_id: "test-sess-1"}')" | "$copy36/session-rules-loader.sh" 2>/dev/null)
 if jq -e '.hookSpecificOutput.additionalContext' <<<"$out36" >/dev/null 2>&1 \
-   && ! printf '%s' "$out36" | grep -q 'SOLEUR_BARE_ROOT_CWD'; then
+   && ! grep -q 'SOLEUR_BARE_ROOT_CWD' <<<"$out36"; then
   echo "PASS: helper-absent loader emits a valid envelope with no marker"
   PASS=$((PASS+1))
 else
@@ -900,7 +900,7 @@ fi
 # a helper emitting extra stdout cannot smuggle lines into context.
 TOTAL=$((TOTAL+1))
 T37=$(mktemp -d); LATE_TMPDIRS+=("$T37"); setup_repo "$T37"
-git -C "$T37" config core.bare true
+( cd "$T37" && git config core.bare true )
 copy37="$T37-loader-copy"; LATE_TMPDIRS+=("$copy37")
 mkdir -p "$copy37"
 cp "$HOOK" "$copy37/session-rules-loader.sh"
@@ -914,9 +914,9 @@ STUB
 chmod +x "$copy37/session-rules-loader.sh" "$copy37/bare-root-cwd-guard.sh"
 out37=$(printf '%s' "$(jq -nc --arg cwd "$T37" '{cwd: $cwd, session_id: "test-sess-1"}')" | "$copy37/session-rules-loader.sh" 2>/dev/null)
 ctx37=$(jq -r '.hookSpecificOutput.additionalContext // empty' <<<"$out37" 2>/dev/null)
-if printf '%s' "$ctx37" | grep -q 'SOLEUR_BARE_ROOT_CWD source=session-start' \
-   && printf '%s' "$ctx37" | grep -q '\[bare-root-cwd\] legit line' \
-   && ! printf '%s' "$ctx37" | grep -q 'ARBITRARY-INJECTED'; then
+if grep -q 'SOLEUR_BARE_ROOT_CWD source=session-start' <<<"$ctx37" \
+   && grep -q '\[bare-root-cwd\] legit line' <<<"$ctx37" \
+   && ! grep -q 'ARBITRARY-INJECTED' <<<"$ctx37"; then
   echo "PASS: arbitrary helper lines are filtered; documented shape still passes"
   PASS=$((PASS+1))
 else

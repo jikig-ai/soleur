@@ -69,7 +69,8 @@ mk_true_bare() {
 # mk_wtmask: EFFECTIVE core.bare=true only via config.worktree — the fixture that
 # distinguishes the config-FILE read from an effective-config read (#10386 review).
 mk_wtmask() {
-  local d="$1"; mk_plain "$d" || return 1
+  local d="$1"; assert_fixture_dir "$d"
+  mk_plain "$d" || return 1
   git -C "$d" config extensions.worktreeConfig true || return 1
   git -C "$d" config --worktree core.bare true || return 1
 }

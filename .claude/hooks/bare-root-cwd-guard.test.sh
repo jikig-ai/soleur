@@ -148,6 +148,7 @@ mk_plain() {
 # (#10386 review, mutation survivor).
 mk_wtmask() {
   local d="$1"
+  assert_fixture_dir "$d"
   mk_plain "$d" || return 1
   git -C "$d" config extensions.worktreeConfig true || return 1
   git -C "$d" config --worktree core.bare true || return 1

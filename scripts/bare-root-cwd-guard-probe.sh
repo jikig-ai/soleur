@@ -24,12 +24,15 @@ export GIT_AUTHOR_NAME="Soleur Probe" GIT_AUTHOR_EMAIL="probe@example.com"
 export GIT_COMMITTER_NAME="Soleur Probe" GIT_COMMITTER_EMAIL="probe@example.com"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
 
-git -C "$TMP" init -q 2>/dev/null || { echo "probe: git init failed" >&2; exit 0; }
-t=$(git -C "$TMP" hash-object -t tree -w /dev/null 2>/dev/null) || exit 0
-c=$(git -C "$TMP" commit-tree "$t" -m seed 2>/dev/null) || exit 0
-git -C "$TMP" update-ref refs/heads/main "$c" 2>/dev/null || exit 0
-git -C "$TMP" symbolic-ref HEAD refs/heads/main 2>/dev/null || exit 0
-git -C "$TMP" config core.bare true 2>/dev/null || exit 0
+(
+  cd "$TMP" 2>/dev/null || exit 0
+  git init -q 2>/dev/null || { echo "probe: git init failed" >&2; exit 0; }
+  t=$(git hash-object -t tree -w /dev/null 2>/dev/null) || exit 0
+  c=$(git commit-tree "$t" -m seed 2>/dev/null) || exit 0
+  git update-ref refs/heads/main "$c" 2>/dev/null || exit 0
+  git symbolic-ref HEAD refs/heads/main 2>/dev/null || exit 0
+  git config core.bare true 2>/dev/null || exit 0
+)
 
 bash "$GUARD" "$TMP" || true
 exit 0
