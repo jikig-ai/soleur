@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=36327508617,36323335413,36249105039,36194570054,36186259058
 # default-weight-ms=1000
-# generated-at=2026-10-12T08:43:17Z
+# generated-at=2026-10-14T19:16:08Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	12000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -33,6 +33,7 @@ apps/web-platform/infra/cron-egress-nftables.test.sh	1000	floor
 apps/web-platform/infra/cron-egress-self-heal.test.sh	1000	floor
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	18500	measured
 apps/web-platform/infra/disk-monitor.test.sh	1000	measured
+apps/web-platform/infra/docker-run-tuple.test.sh	1000	floor
 apps/web-platform/infra/doppler-download-error-channel.test.sh	3000	measured
 apps/web-platform/infra/doppler-injection-bound.test.sh	5000	measured
 apps/web-platform/infra/egress-gateway.test.sh	1000	floor
@@ -60,7 +61,11 @@ apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	3500	measured
 apps/web-platform/infra/git-data-store-device-census.test.sh	1000	measured
 apps/web-platform/infra/git-data-template-strip.test.sh	1000	measured
 apps/web-platform/infra/git-data-transport-wrapper.test.sh	500	measured
+apps/web-platform/infra/git-data-wipe-access.test.sh	1000	floor
+apps/web-platform/infra/git-data-wipe-assert.test.sh	1000	floor
+apps/web-platform/infra/git-data-wipe.test.sh	1000	floor
 apps/web-platform/infra/git-lock-chardevice-sweep.test.sh	500	measured
+apps/web-platform/infra/htpasswd-stdin.test.sh	1000	floor
 apps/web-platform/infra/infra-config-apply.test.sh	30000	measured
 apps/web-platform/infra/infra-config-gate.test.sh	16500	measured
 apps/web-platform/infra/infra-config-handler-bootstrap.test.sh	500	measured
