@@ -27,6 +27,7 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | `inngest_pull_fatal attempt=N` / provision-unit stages after a host replace (#8562) | [§ Provision unit (#8562)](#provision-unit-8562) |
 | Flush latch stands on a `done` host / `op=arm` refused at G3.7 | expected — [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
 | Deliberate SECOND FLUSHALL on the same host (#7777) | `gh workflow run cutover-inngest.yml -f op=reflush` — [§ Authorizing a second FLUSHALL](#authorizing-a-second-flushall-opreflush-7777) |
+| First boot or reboot fails with `stage=unpointed_raw_refused`, `reopen_not_luks` or `inngest-luks-FAILED` (after the #9786 host replace) | read the stage and its `detail=` in Better Stack ([log query](betterstack-log-query.md)); meaning of each refusal: [cutover runbook, "After the host replace that carries #9786"](inngest-luks-cutover-6894.md) |
 | Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
 
 ## Inherited `done` after a host replace (#7228)
