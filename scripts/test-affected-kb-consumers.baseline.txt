@@ -11,6 +11,7 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms/archive
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans/archive
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
@@ -58,6 +59,9 @@ plugins/soleur/skills/incident/test/redact-sentinel.test.sh	knowledge-base/engin
 plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	knowledge-base/engineering/security/skill-overrides
 plugins/soleur/test/_base-notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	knowledge-base/project/constitution.md
+plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/engineering/architecture/diagrams
+plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/marketing/brand-guide.md
+plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/product/roadmap.md
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	knowledge-base/product/design
 plugins/soleur/test/ci-classify-step-exec.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base
@@ -236,9 +240,11 @@ tests/hooks/drop-sentinel-parity	knowledge-base/engineering/operations/skill-fre
 tests/hooks/drop-sentinel-parity	knowledge-base/project
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+tests/scripts/git-data-birth-readiness-gate	knowledge-base
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/project/specs
+tests/scripts/git-data-birth-readiness-gate	knowledge-base/project/specs/archive
 tests/scripts/git-data-root-token-census	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/project/learnings

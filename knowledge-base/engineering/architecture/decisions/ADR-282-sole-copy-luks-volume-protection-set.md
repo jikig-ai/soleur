@@ -185,7 +185,8 @@ the same owner and the `soleur:incident` skill as the route.
 - **Hetzner project deletion or account loss** is not covered; whether delete protection blocks a project deletion is
   unverified.
 - **A holder of the read/write Hetzner token can lift protection.** Protection defends against mistaken deletes (a console
-  click, a wrong id, a pasted recipe, the drift workflow's runnable DELETE recipes), not against a leaked read/write token.
+  click, a wrong id, a pasted recipe; the drift workflow's issue bodies printed runnable DELETE recipes until #9927 item 8c
+  removed them), not against a leaked read/write token.
   That token is also the silent fallback of the read-only loader; a no-fallback loader is carried by #9927.
 - **Other credentials can overwrite or delete the key:** the three writers of the Doppler copy are the inngest cutover arm
   token `doppler_service_token.inngest_arm_write` (read/write on `soleur-inngest/prd`, published as
@@ -290,3 +291,7 @@ Appended; nothing above is changed except the frontmatter `status` and the leadi
 **What the read-back is and is not.** It is a point-in-time read of the delete-protection flag only. `prevent_destroy` is a plan-time control, enforced by the guards named in this ADR, and is not read back from any live system. Guard 1 stays advisory until #9927. The residuals, the loss-mode table, the absent Art. 32(1)(c) restore capability and the "no sanctioned erase path" statement are unchanged. Protection defends against mistaken deletes; it does not defend against a holder of the read/write Hetzner token, which can lift it, or against the three writers of the Doppler copy of the key.
 
 **Who flips it** is discharged by this follow-up PR. `soleur:postmerge` Phase 5.7 step 6 files no tracking issue once the status is `accepted`.
+
+## Addendum — 2026-10-15 (#9927 item 8c, drift workflow DELETE recipes removed)
+
+Appended; the only change above is the parenthetical in the residual "A holder of the read/write Hetzner token can lift protection": it now records that the drift workflow's issue bodies no longer print DELETE recipes (PR #10355). Status stays `accepted`. Scope, stated exactly: the removed text templated calls against Hetzner objects labeled `app=soleur-rung2-rehearsal` or `app=soleur-inngest-provision-rehearsal` and against the key-bearing scratch Doppler objects (`prd_git_data_rehearsal_*` in `soleur`, `rehearsal_*` in `soleur-inngest`, identified by name), never against the sole-copy volume, whose resources carry neither label. The residual itself is unchanged: a holder of the read/write token can still lift protection.

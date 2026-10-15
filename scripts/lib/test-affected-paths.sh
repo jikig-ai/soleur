@@ -2117,6 +2117,8 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
 AFFECTED_SCRIPTS_CHECK_CLOUDFLARE_TOKEN_DRIFT_PATHS=(
   ".github/"
   "infra/"
+  # token-drift-workflow-causes.test.sh (R4) pins that the drift filers' pointer resolves to this heading.
+  "knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md"
   "scripts/check-cloudflare-token-drift.sh"
   "scripts/check-cloudflare-token-drift.test.sh"
   "scripts/lib/test-affected-paths.sh"
