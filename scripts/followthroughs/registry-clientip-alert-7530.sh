@@ -3,8 +3,9 @@
 #
 # WHAT THIS ANSWERS. PR #10320 adds `soleur-registry-clientip-not-rfc1918-prd` to
 # apps/web-platform/infra/betterstack-logs-alerts.tf: a Better Stack Logs alert that alerts by email (free
-# tier, no escalation policy) when the registry plane ships a `clientIP` outside 10/8, 172.16/12 and 192.168/16 (the CLO's 2026-08 ruling lets
-# the log shipper keep `clientIP` unredacted ONLY while every observable value is private). The alert is
+# tier, no escalation policy) when the registry plane ships a `clientIP` outside 10/8, 172.16/12 and
+# 192.168/16 (the CLO's 2026-08 ruling lets the log shipper keep `clientIP` unredacted ONLY while every
+# observable value is private). The alert is
 # applied by the merge's push apply and `treat_as_zero` means a predicate that silently stopped matching
 # reads as healthy forever, so "the resource exists" proves nothing. This probe is a pure verdict
 # emitter that proves the PREDICATE, as committed, behaves on the live engine and on the live stream.

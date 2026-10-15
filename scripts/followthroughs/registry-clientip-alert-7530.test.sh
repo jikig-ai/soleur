@@ -70,6 +70,10 @@ exec 4>&2
 STDERR_LOG="$WORK/suite-stderr.log"
 exec 2>"$STDERR_LOG"
 trap 'cat -- "$STDERR_LOG" >&4 2>/dev/null; rm -rf -- "$WORK"' EXIT
+# bash runs no EXIT trap when killed by a bare TERM/INT/HUP, which would drop every buffered stderr line: convert them to exits.
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 git_fixture_env "$WORK" || { printf 'FATAL: git_fixture_env refused %s\n' "$WORK" >&2; exit 2; }
 
 FX="$WORK/fx"
@@ -601,6 +605,7 @@ case_runbook_heading() {
   if (( MUTANT_MODE )); then (( ok )) || MUT_RED=1; return; fi
   printf '0\trunbook_heading\n' >> "$MARKER_LOG"
   if (( ok )); then pass "the runbook file (read: registry-clientip-rfc1918-7530.md) still has the heading '## After the first graded PASS' the PASS pointer names, and the check goes red on a copy without it"
+  elif [[ ! -r "$rb" ]]; then fail "the runbook registry-clientip-rfc1918-7530.md is unreadable at $rb (a sandbox without knowledge-base/ cannot run this row)"
   else fail "the runbook registry-clientip-rfc1918-7530.md lost its '## After the first graded PASS' heading (or the check is vacuous): the PASS pointer is dead"; fi
 }
 case_pass_unquoted_counts() {

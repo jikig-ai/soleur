@@ -242,8 +242,8 @@ obligation outlives #7530, then re-date each from "NOT in force" to "in force, g
 close that issue:
 
 1. `knowledge-base/legal/article-30-register.md`, PA-8 (c) and (g): search `registry_clientip_not_rfc1918`.
-2. `knowledge-base/legal/audits/2026-08-counsel-review-7440.md`: section 12, the bullet that follows the
-   `Superseded 2026-10-14 (#7530)` callout.
+2. `knowledge-base/legal/audits/2026-08-counsel-review-7440.md`: section 12, the last sentence of the
+   `Superseded 2026-10-14 (#7530)` blockquote (the one that says "NOT in force" until the merge).
 3. The same file's frontmatter key `clientip_monitoring_pointer`.
 4. ADR-211: the amendment sentence "NOT in force until PR #10320 is merged".
 5. ADR-218: the sentence beginning "Delivery state:" inside the `**Parameters.**` bullet of the #7530 amendment (it
