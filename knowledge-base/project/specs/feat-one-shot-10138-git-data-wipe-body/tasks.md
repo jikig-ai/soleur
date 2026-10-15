@@ -4,24 +4,6 @@ Plan: `knowledge-base/project/plans/2026-10-14-feat-git-data-wipe-body-plan.md`
 Issue: #10138 (Ref, not Closes). Also Ref #6897. Follow-ups already filed: #10296 (PR-R), #10297 (stamp clear), #10298 (retire the job), #10300 (single-name carrier).
 Constraints: nothing is dispatched, applied or deleted; no legal document, no `AGENTS.rules.md`; never push to an armed/queued PR without asking. RED first in every phase; targeted suites only (machine load); CI is the gate.
 
-## Layer 0 — Amendment A1 (2026-10-15): the separated wipe (plan Amendment A1; CTO and CLO rulings 2026-10-15)
-
-Order: documents first (CLO needs them by 10-22), then RED rows, then code. Nothing here dispatches, applies, writes Doppler or touches a volume.
-
-- [ ] A.1 `soleur:architecture`: ADR-239 amendment (headed `Ruled by CLO agent, 2026-10-15; v1 internal attestation, provisional to 2026-10-24` and `Ruled by CTO agent, 2026-10-15`) stating the separated predicate set; supersede ONLY "gated by the flip chain" (2026-10-09), "bound to the flip chain" and the blocker chain (2026-10-12) with a `> **Superseded 2026-10-15 (#6897): ...**` marker under each; same marker in every sibling file repeating them (grep `gated by the flip chain`, `bound to the flip chain`, `blocker chain` across ADR-239, the design doc, the cutover runbook, both plans, decision-challenges.md, the ledger row). Effective on merge of this PR.
-- [ ] A.2 `scripts/encryption-posture-ledger.json` row `hcloud_volume.git_data`: rewrite `defends_against`, `justification`, `reevaluate_when`, `live_verification` per plan A1.5, each sentence labelled measured (date) / policy / inherited; `expires_on` stays 2026-11-12; `git-data.tf:542` cite becomes a content anchor. Run `python3 scripts/lint-encryption-posture.py` and `scripts/lint-encryption-posture.test.sh`.
-- [ ] A.3 ADR-241 amendment note gains the #8609 residual disclosure; owner acceptance on #6897 is an owner action named in the PR body (not performed by an agent).
-- [ ] A.4 `decision-challenges.md`: add rows for the 2026-10-15 CTO ruling (separability, replacement predicates, schedule) and CLO ruling (soak not a legal gate for the separated variant, evidence record, `wipe_check` listing, notice dates), plus a taste row for the A1.2 verdict-word names.
-- [ ] A.5 Correct stale ids/counts where the plan states them (server 170370833, LUKS volume 107140231, 20 bound files); re-measure in 0.1 before pinning any stub.
-- [ ] A.6 RED rows: Guard 6 rows 6a-6g (variant selection, unreadable flag, `store_dirty`, stale/populated `boot_complete`, newest-row-decides, W7b `variant_changed`) in `git-data-flag-precheck` and access-census suites; then build A1.2 in `git-data-flag-precheck.sh` (`wipe_variant=` first line; `store_clean` via `scripts/lib/git-data-store-dirty-scan.sh`, job gains `actions: read`).
-- [ ] A.7 Host verb: `wipe_check` runs the counts-only listing (A1.3); add `lock_residue_n` (integer, strict-regex parse, no names); exit trap removes `git-data-pt-snap`; leftover-snapshot refusal verdict; RED rows Guard 9 (1-6). Phase 0 first confirms by code read that the verb reuses the bootstrap `plaintext-count unit` logic.
-- [ ] A.6b `scripts/lib/git-data-store-dirty-scan.sh`: skip `GITHUB_RUN_ID` only (a second in-progress run still refuses); new step `wipe_separated_gate` after W5 (scan + `boot_complete` predicates, only when the printed variant is `separated`); F and S read unconditionally; `wipe_reread` gains an S read; closed value check `^(true|false)?$` (`wipe_precondition_flag_unreadable`) and `wipe_precondition_stamp_malformed`. RED rows: Guard 6 6d (i)-(iv) with rollback-run and flip-with-failed-probe fixtures.
-- [ ] A.7b Leftover-snapshot clear after SIGKILL: BLOCKED on the CTO follow-up ruling (A1.3 open item); do not build until recorded in decision-challenges.md.
-- [ ] A.8 Evidence record (A1.4): W12 success summary and `wipe_check` closing block print the six labelled lines; test that no line says erased/purged/no residue about copies, the LUKS store or web-2.
-- [ ] A.9 Runbook: separated vs flip-chained variant, the leftover-snapshot recovery step (read-only first), the 11-02 command-naming ask, CLO notice dates (10-30, 11-02, 11-05; latest slip notice 11-06).
-- [ ] A.10 Do not edit any rung-2 bound file (20 today, e.g. no `variables.tf` edit); re-run `git_data_rung2_user_data_sha256` and compare to `RUNG2_TEMPLATE_SHA256` before pushing.
-- [ ] A.11 After the 2026-10-24 CLO re-ruling: re-attest the A1 wording; if the ruling changes, amend ADR-239 and the ledger row before merge.
-
 ## Layer 1 — read-only front (`wipe_check`), shippable alone
 
 ### Phase 0 — Re-read and baseline
