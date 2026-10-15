@@ -294,7 +294,7 @@ hotspot + one travel/coworking).
 ## Related
 
 - Automation skill: `plugins/soleur/skills/admin-ip-refresh/SKILL.md`
-- Plan: `knowledge-base/project/plans/2026-04-19-ops-admin-ip-drift-prevention-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-19-ops-admin-ip-drift-prevention-plan.md`
 - Sibling runbook: `ssh-fail2ban-unban.md` (sshd-layer lockout class)
 - Institutional learning:
   `knowledge-base/project/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md`

@@ -5,7 +5,7 @@
 # write with EEXIST forever). Age-guarded sweep: aged config locks removed,
 # fresh and future-dated locks preserved; index/HEAD locks out of scope.
 #
-# Plan: knowledge-base/project/plans/2026-07-01-fix-stale-git-lock-sweep-worktree-plan.md
+# Plan: knowledge-base/project/plans/archive/20261013-041741-2026-07-01-fix-stale-git-lock-sweep-worktree-plan.md
 #
 # Run via:  bash plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh
 

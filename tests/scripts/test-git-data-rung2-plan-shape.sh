@@ -90,6 +90,35 @@ plan "$TMP/order.json" hcloud_volume_attachment.rehearsal_luks:create,delete hcl
   hcloud_server.rehearsal:create,delete hcloud_volume_attachment.rehearsal:delete,create
 want "host-only: the admitted set in another order with [create,delete] ordering is admitted" 0 "$TMP/order.json" host-only
 
+# (#10138 D3) The rehearsal's two late-attachment delay resources. Their addresses are exact-match
+# admitted in host-only mode; additive mode already admits them as plain rehearsal-scoped creates.
+DELAY_LUKS=terraform_data.rehearsal_attach_delay_luks
+DELAY_PT=terraform_data.rehearsal_attach_delay_pt
+# real_delay_plan <file> <spec>... — plan() output with the two delay replaces appended in the shape
+# a real `terraform show -json` gives a terraform_data whose triggers_replace changed. Generated
+# 2026-10-13 with terraform 1.9.8 from a scratch root declaring the same two resources (no providers
+# needed: terraform_data is built in), applied with triggers_replace="1", then planned with "2"; the
+# entries are that output verbatim apart from the ids, which are fixed strings here.
+real_delay_plan() {
+  local out="$1"; shift
+  assert_fixture_dir "$out"
+  plan "$out" "$@"
+  jq -c --arg l "$DELAY_LUKS" --arg p "$DELAY_PT" '.resource_changes += ([$l, $p] | map({
+      address: ., mode: "managed", type: "terraform_data", name: (. | split(".")[1]),
+      provider_name: "terraform.io/builtin/terraform",
+      change: {actions: ["delete", "create"],
+               before: {id: "00000000-0000-0000-0000-000000000000", input: null, output: null, triggers_replace: "1"},
+               after: {input: null, output: null, triggers_replace: "2"},
+               after_unknown: {id: true}, before_sensitive: {}, after_sensitive: {},
+               replace_paths: [["triggers_replace"]]},
+      action_reason: "replace_because_cannot_update"}))' "$out" > "$out.tmp" && mv "$out.tmp" "$out"
+}
+real_delay_plan "$TMP/delay-ok.json" "${HOSTONLY_OK[@]}" tls_private_key.rehearsal_host_ssh:delete,create
+want "host-only: the two delay replaces (real terraform show -json shape) alongside the three host replaces are admitted" 0 "$TMP/delay-ok.json" host-only
+plan "$TMP/delay-seed.json" hcloud_server.rehearsal:create hcloud_volume.rehearsal:create hcloud_volume.rehearsal_luks:create \
+  hcloud_volume_attachment.rehearsal:create hcloud_volume_attachment.rehearsal_luks:create "$DELAY_LUKS:create" "$DELAY_PT:create"
+want "additive: the seed plan creating both delay resources is admitted (plain rehearsal-scoped creates)" 0 "$TMP/delay-seed.json" additive
+
 # ── refused (the Guard 3 matrix) ────────────────────────────────────────────────
 plan "$TMP/m1.json" "${HOSTONLY_OK[@]/hcloud_volume.rehearsal:no-op/hcloud_volume.rehearsal:delete,create}"
 want "row 1: host-only refuses a replace of hcloud_volume.rehearsal (the dirtied volume)" 1 "$TMP/m1.json" host-only "" "a replace of hcloud_volume.rehearsal is not admitted"
@@ -150,6 +179,23 @@ plan "$TMP/w3d2.json" hcloud_server.rehearsal:create hcloud_volume.rehearsal:no-
 want "W3d: additive refuses an importing resource_change" 1 "$TMP/w3d2.json" additive "" \
   "the plan IMPORTS hcloud_volume.rehearsal"
 
+# ── (#10138) the delay addresses are admitted EXACTLY, never by glob ──
+plan "$TMP/dl-glob.json" "${HOSTONLY_OK[@]}" terraform_data.rehearsal_other:delete,create
+want "host-only refuses a replace of a terraform_data that is not one of the two delay addresses (no glob)" 1 "$TMP/dl-glob.json" host-only "" \
+  "a replace of terraform_data.rehearsal_other is not admitted"
+plan "$TMP/dl-idx.json" "${HOSTONLY_OK[@]}" "terraform_data.rehearsal_attach_delay_luks[0]:delete,create"
+want "host-only refuses an indexed ([0]) replace of a delay address" 1 "$TMP/dl-idx.json" host-only "" \
+  "a replace of terraform_data.rehearsal_attach_delay_luks[0] is not admitted"
+plan "$TMP/dl-upd.json" "${HOSTONLY_OK[@]}" "$DELAY_PT:update"
+want "host-only refuses an in-place update of a delay resource (only a replace is admitted)" 1 "$TMP/dl-upd.json" host-only "" \
+  "an update of terraform_data.rehearsal_attach_delay_pt is not admitted"
+plan "$TMP/dl-del.json" "${HOSTONLY_OK[@]}" "$DELAY_PT:delete"
+want "host-only refuses a plain delete of a delay resource" 1 "$TMP/dl-del.json" host-only "" \
+  "terraform_data.rehearsal_attach_delay_pt delete is not admitted"
+plan "$TMP/dl-prod.json" "${HOSTONLY_OK[@]}" terraform_data.root_authorized_keys:delete,create
+want "host-only refuses a replace of a production terraform_data" 1 "$TMP/dl-prod.json" host-only "" \
+  "a replace of terraform_data.root_authorized_keys is not admitted"
+
 # ── script-level mutants (rows 6-8): each flips a verdict the pristine script gets right ──
 MUTS=0
 mutant() { # <name> <old> <new> — writes $TMP/mut.<name>.sh; refuses if the edit did not land
@@ -192,11 +238,23 @@ want "row 12 MUTANT (the old *.rehearsal glob) admits the module-scoped create �
 # row 13 — the importing check removed (W3d must catch it).
 mutant noimport 'done <<<"$imports"' 'done <<<""'
 want "row 13 MUTANT (importing check removed) admits the importing host-only plan — the arm is live" 0 "$TMP/w3d1.json" host-only "$MUT"
+
+# rows 14 and 16 (#10138): the admitted-delay list.
+# row 14 — the list is a glob over every terraform_data.
+mutant tdglob '          tls_private_key.rehearsal_host_ssh) ;;' '          tls_private_key.rehearsal_host_ssh) ;;
+          terraform_data.*) ;;'
+want "row 14 instrument: the pristine script refuses a replace of an unlisted terraform_data" 1 "$TMP/dl-glob.json" host-only "" "a replace of terraform_data.rehearsal_other is not admitted"
+want "row 14 MUTANT (terraform_data.* glob) admits the unlisted replace — the arm is live" 0 "$TMP/dl-glob.json" host-only "$MUT"
+# row 16 — the two delay entries dropped from the admitted list: the must-PASS plan flips to refused.
+mutant nodelay '          terraform_data.rehearsal_attach_delay_luks|terraform_data.rehearsal_attach_delay_pt) ;;' ''
+want "row 16 instrument: the pristine script admits the two delay replaces alongside the host replaces" 0 "$TMP/delay-ok.json" host-only
+want "row 16 MUTANT (delay addresses removed from the admitted list) refuses the must-PASS plan — the arm is live" 1 "$TMP/delay-ok.json" host-only "$MUT" "a replace of terraform_data.rehearsal_attach_delay_"
 }
 
 # ── floors: printf + exit, never through pass()/fail() (ADR-193) ────────────────
 # 3 -> 7 (review W3): rows 10-13, one per new check, each flipping a W3 fixture to admitted.
-MUT_EXPECTED=7
+# 7 -> 9 (#10138): rows 14 and 16, one per new check on the admitted-delay list (glob, list removal).
+MUT_EXPECTED=9
 if (( MUTS != MUT_EXPECTED )); then
   printf '[FATAL] anti-vacuity floor: %s script mutants ran, expected %s\n' "$MUTS" "$MUT_EXPECTED" >&2
   exit 1
@@ -204,7 +262,12 @@ fi
 # 25 -> 36 (review W3): +7 W3 fixtures (a, b, 3x c, 2x d) and +4 mutant rows. Measured: 36 ran.
 # (d)'s rows name the IMPORTS reason, so an import-free twin fixture would add nothing the reason
 # match does not already prove.
-MIN_CASES=36
+# 36 -> 47 (#10138): +2 must-PASS delay plans (real-shape host-only, additive seed: the seed phase creates
+# both delay resources, so a refusing additive gate would break the paid run), +5 refusal rows (glob,
+# indexed replace, in-place update, plain delete, production terraform_data: this gate decides what a
+# paid run may apply) and +4 mutant rows (2 instruments + 2 mutants across rows 14 and 16). The floor
+# is the measured total.
+MIN_CASES=47
 if (( cases < MIN_CASES )); then
   printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is %s\n' "$cases" "$MIN_CASES" >&2
   exit 1

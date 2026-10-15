@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2015,SC2034,SC1091  # `A && B || C` is the row idiom; the row table is a QUOTED heredoc of shell text and the python oracle is single-quoted on purpose; a few globals are read by sourced-in-place helpers
-# Guard 1 of the W2 plan (knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
+# Guard 1 of the W2 plan (knowledge-base/project/plans/archive/20261013-062704-2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
 # the destructive-command PreToolUse hook (plugins/soleur/hooks/destructive-command-guard.sh, ADR-277).
 #
 # PROPERTY. A Bash tool call whose command, after lexing and wrapper unwrapping, runs a command in the
@@ -223,7 +223,7 @@ mkrepo() { # mkrepo <dir> <current-branch> <origin-head-branch|-> <upstream-head
 # --- the recording stubs -----------------------------------------------------------------------------
 # Every stub records `argc NUL cwd NUL name NUL arg NUL ...` (one file per invocation: a pipeline runs its
 # members concurrently) and exits 0. They call no external program.
-STUB_NAMES="rm terraform tofu terragrunt pulumi git sudo doas env timeout nice nohup doppler aws-vault op xargs ls cat grep find docker npm wc tee sort head tail sed awk curl jq tar python3 diff mkdir cp mv date make node touch sleep chmod kubectl psql"
+STUB_NAMES="rm terraform tofu terragrunt pulumi git sudo doas env timeout nice nohup rtk doppler aws-vault op xargs ls cat grep find docker npm wc tee sort head tail sed awk curl jq tar python3 diff mkdir cp mv date make node touch sleep chmod kubectl psql"
 if [[ -z "$FAST" ]]; then
   assert_fixture_dir "$STUB"
   cat > "$STUB/rm" <<'STUBEOF'
@@ -584,6 +584,30 @@ def unwrap(name, args):
             i += 1
             if a in ("-n", "--adjustment"):
                 i += 1
+    elif name == "rtk":
+        # globals: -v/-vv/-vvv/--verbose (count) and --skip-env (global = true,
+        # legal before AND after the exec subcommand). An unknown -word lands
+        # as argv0 -> none; the hook's L rows pin the asks the oracle cannot.
+        while i < n and args[i].startswith("-") and args[i] != "-":
+            a = args[i]
+            i += 1
+            if a == "--":
+                break
+            if a in ("-v", "-vv", "-vvv", "--verbose", "--skip-env") or a.startswith("--skip-env="):
+                continue
+            i -= 1
+            break
+        if i < n and args[i] in ("run", "err", "test", "proxy", "bypass", "summary"):
+            i += 1
+            while i < n and args[i].startswith("-"):
+                a = args[i]
+                i += 1
+                if a == "--":
+                    break
+                if a in ("-v", "-vv", "-vvv", "--verbose", "--skip-env") or a.startswith("--skip-env="):
+                    continue
+                i -= 1
+                break
     return args[i:]
 
 
@@ -598,7 +622,7 @@ def decide(argv, cwd, depth=0):
         d = tf_decision(args)
     elif name == "git":
         d = git_decision(args, cwd)
-    elif name in ("sudo", "doas", "env", "timeout", "nice", "nohup"):
+    elif name in ("sudo", "doas", "env", "timeout", "nice", "nohup", "rtk"):
         d = decide(unwrap(name, args), cwd, depth + 1)
     for idx, a in enumerate(args):
         if a == "--":
@@ -1705,6 +1729,53 @@ L @@ wrapper: timeout --signal KILL 5 rm -rf ~ @@ deny @@ - @@ timeout --signal 
 L @@ wrapper: timeout -k 5 10 rm -rf ~ @@ deny @@ - @@ timeout -k 5 10 rm -rf ~
 L @@ wrapper: nice --adjustment 5 rm -rf ~ @@ deny @@ - @@ nice --adjustment 5 rm -rf ~
 L @@ wrapper: nice -n5 rm -rf ~ (an attached value) @@ deny @@ - @@ nice -n5 rm -rf ~
+# ---- rtk (external output-filter wrapper, #10230): `rtk <cmd>` always reaches <cmd> — a
+# filtered-subcommand exec (rtk git), an exec subcommand (run|err|test|proxy|bypass|summary),
+# or the run_fallback raw exec of an unrecognized word. Grammar verified 2026-10-13 against
+# src/lib.rs + src/core/constants.rs on develop; X rows only cover shapes the oracle models,
+# every ask shape is an L row.
+X @@ wrapper: rtk rm -rf ~ @@ deny @@ - @@ rtk rm -rf ~
+X @@ wrapper: rtk rm -rf / @@ deny @@ - @@ rtk rm -rf /
+X @@ wrapper: rtk terraform destroy @@ ask @@ - @@ rtk terraform destroy
+X @@ wrapper: rtk git push --force origin main @@ ask @@ @R1@ @@ rtk git push --force origin main
+X @@ wrapper: rtk run rm -rf ~ @@ deny @@ - @@ rtk run rm -rf ~
+X @@ wrapper: rtk err rm -rf ~ @@ deny @@ - @@ rtk err rm -rf ~
+X @@ wrapper: rtk test rm -rf ~ @@ deny @@ - @@ rtk test rm -rf ~
+X @@ wrapper: rtk proxy git push --force origin main @@ ask @@ @R1@ @@ rtk proxy git push --force origin main
+X @@ wrapper: rtk bypass rm -rf ~ @@ deny @@ - @@ rtk bypass rm -rf ~
+X @@ wrapper: rtk summary rm -rf ~ @@ deny @@ - @@ rtk summary rm -rf ~
+X @@ wrapper: rtk -v run rm -rf ~ @@ deny @@ - @@ rtk -v run rm -rf ~
+X @@ wrapper: rtk -vv rm -rf ~ @@ deny @@ - @@ rtk -vv rm -rf ~
+X @@ wrapper: rtk --skip-env run rm -rf ~ @@ deny @@ - @@ rtk --skip-env run rm -rf ~
+X @@ wrapper: rtk run --skip-env rm -rf ~ (globals legal after the subcommand, clap global=true) @@ deny @@ - @@ rtk run --skip-env rm -rf ~
+X @@ wrapper: rtk run -v rm -rf ~ (post-subcommand -v, same global set) @@ deny @@ - @@ rtk run -v rm -rf ~
+X @@ wrapper: rtk -- rm -rf ~ @@ deny @@ - @@ rtk -- rm -rf ~
+X @@ wrapper: rtk run -- rm -rf ~ @@ deny @@ - @@ rtk run -- rm -rf ~
+X @@ wrapper: rtk run rtk run rm -rf ~ @@ deny @@ - @@ rtk run rtk run rm -rf ~
+X @@ wrapper: sudo rtk rm -rf ~ @@ deny @@ - @@ sudo rtk rm -rf ~
+X @@ wrapper: rtk rtk rm -rf ~ @@ deny @@ - @@ rtk rtk rm -rf ~
+X @@ wrapper: rtk sudo rm -rf ~ @@ deny @@ - @@ rtk sudo rm -rf ~
+X @@ wrapper: rtk env rm -rf ~ (pinned over-deny: rtk's own env subcommand never execs rm, and judging it through the env arm stays the safe direction) @@ deny @@ - @@ rtk env rm -rf ~
+X @@ wrapper: rtk git status @@ none @@ - @@ rtk git status
+X @@ wrapper: rtk ls @@ none @@ - @@ rtk ls
+X @@ wrapper: rtk gain @@ none @@ - @@ rtk gain
+X @@ wrapper: rtk session @@ none @@ - @@ rtk session
+X @@ wrapper: bare rtk run @@ none @@ - @@ rtk run
+# string payloads never reach argv judgement — they ask unparsed-wrapper (L rows; the oracle
+# cannot model an ask)
+L @@ wrapper: rtk run -c 'rm -rf ~' asks (string payload) @@ ask @@ - @@ rtk run -c 'rm -rf ~'
+L @@ wrapper: rtk run --command 'rm -rf ~' asks (long form of -c) @@ ask @@ - @@ rtk run --command 'rm -rf ~'
+L @@ wrapper: rtk run --command='rm -rf ~' asks (the = form) @@ ask @@ - @@ rtk run --command='rm -rf ~'
+L @@ wrapper: rtk run --shell fish -c 'rm -rf ~' asks @@ ask @@ - @@ rtk run --shell fish -c 'rm -rf ~'
+L @@ wrapper: rtk err --shell fish 'rm -rf ~' asks (the positional becomes a script) @@ ask @@ - @@ rtk err --shell fish 'rm -rf ~'
+L @@ wrapper: rtk test --shell fish 'rm -rf ~' asks @@ ask @@ - @@ rtk test --shell fish 'rm -rf ~'
+L @@ wrapper: rtk summary --shell fish 'rm -rf ~' asks @@ ask @@ - @@ rtk summary --shell fish 'rm -rf ~'
+L @@ wrapper: rtk err 'rm -rf ~' asks (a one-word string payload could be joined to sh -c upstream) @@ ask @@ - @@ rtk err 'rm -rf ~'
+L @@ wrapper: rtk run --ultra-compact rm -rf ~ asks (unknown post-subcommand option -> ask, never land on it) @@ ask @@ - @@ rtk run --ultra-compact rm -rf ~
+L @@ wrapper: rtk --badopt rm -rf ~ asks (unknown pre-subcommand option) @@ ask @@ - @@ rtk --badopt rm -rf ~
+L @@ wrapper: rtk err --bogus rm -rf ~ asks (unknown post-subcommand option without metachar payload) @@ ask @@ - @@ rtk err --bogus rm -rf ~
+L @@ case: RTK rm -rf ~ (a case-insensitive filesystem runs RTK as rtk) @@ deny @@ - @@ RTK rm -rf ~
+L @@ case: Rtk run rm -rf ~ @@ deny @@ - @@ Rtk run rm -rf ~
 # ---- more wrappers than the guard unwraps is an ask, never a silent allow
 L @@ wrapper: eight nested sudo are still unwrapped (deny) @@ deny @@ - @@ sudo sudo sudo sudo sudo sudo sudo sudo rm -rf /
 L @@ wrapper: nine nested sudo before rm -rf / ask (wrapper-depth) @@ ask @@ - @@ sudo sudo sudo sudo sudo sudo sudo sudo sudo rm -rf /
@@ -1934,6 +2005,7 @@ quote_row "quote: a git user WITH a password is still masked (https://git:s3cr3t
 quote_row "quote: another user name without a password is still masked (ssh://deploy-token@host)" 'git push --force ssh://deploy-token@example.invalid/o/r.git main' @R1@ 'git push --force ssh://<redacted>@example.invalid/o/r.git main'
 quote_row "quote: a credential flag does not mask the destructive operand (rm -rf --password /)" 'rm -rf --password /' - 'rm -rf --password /'
 quote_row "quote: a credential flag does not mask a home operand (rm -rf --token ~)" 'rm -rf --token ~' - 'rm -rf --token ~'
+quote_row "quote: rtk as a token value stays unmasked (a command word is not a credential)" 'terraform destroy --token rtk' - 'terraform destroy --token rtk'
 quote_row "quote: a credential flag does not mask the command word that follows (sudo --auth rm -rf /)" 'sudo --auth rm -rf /' - 'sudo --auth rm -rf /'
 quote_row "quote: a credential flag does not mask the remote or the branch (git push --force --auth origin main)" 'git push --force --auth origin main' @R1@ 'git push --force --auth origin main'
 quote_row "quote: a base64 secret that starts with a slash is still masked (--token /Q29uZmlkZW50aWFsVG9rZW4=)" 'terraform destroy --token /Q29uZmlkZW50aWFsVG9rZW4=' - 'terraform destroy --token <redacted>'
@@ -1963,6 +2035,8 @@ rule_env() { # <label> <rule id> <stdin text> [ENV=VAL ...]: the same for a row 
 }
 rule_row "rule id: env -S asks with its own rule id" "env -S 'rm -rf /'" - unparsed-wrapper
 rule_row "rule id: env -iS asks with its own rule id" "env -iS 'rm -rf /'" - unparsed-wrapper
+rule_row "rule id: rtk run -c asks with its own rule id" "rtk run -c 'rm -rf ~'" - unparsed-wrapper
+rule_row "rule id: rtk err --shell asks with its own rule id" "rtk err --shell fish 'rm -rf ~'" - unparsed-wrapper
 rule_row "rule id: nine nested sudo ask with the wrapper-depth rule id" 'sudo sudo sudo sudo sudo sudo sudo sudo sudo ls "x"' - wrapper-depth
 # every other id the hook can emit has its own exact-id row (the roster row only proves the id is LISTED; these prove it is what the hook SAYS)
 rule_row "rule id: rm -rf ~ denies with the recursive-delete-home rule id" 'rm -rf ~' - recursive-delete-home
@@ -2066,6 +2140,7 @@ bound_row "bound: a 40000-component rm target then rm -rf ~ denies (the overlong
 bound_row "bound: rm -rf ~ then a 40000-component rm target denies, in under 5 s" deny - "rm -rf ~; rm -rf ${_PAD40K}"
 bound_row "bound: terraform destroy then a 40000-component rm target asks with the destroy rule id and the bound sentence, in under 5 s" ask - "terraform destroy; rm -rf ${_PAD40K}" "^${ASK_LEAD_RX}infra-destroy: .*Matched command: \[terraform destroy\].*too large to check in full"
 bound_row "bound: a 40000-component rm target alone asks with the bound reason and names the word limit, in under 5 s" ask - "rm -rf ${_PAD40K}" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
+bound_row "bound: a 40000-component rm target behind rtk asks bound (rtk is in the judged-wrapper set)" ask - "rtk rm -rf ${_PAD40K}" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
 bound_row "bound: a 60000-byte dash word on git push asks bound (a per-character loop over it is quadratic), in under 5 s" ask - "git push -${_W60K} origin feat \"x\"" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
 bound_row "bound: a 96000-byte command word then rm -rf ~ denies, in under 5 s" deny - "rm${_W60K}${_W60K:0:36000} x; rm -rf ~"
 bound_row "bound: a relative rm target of 3000 bytes is judged normally (no decision)" none - "rm -rf ${_W3000}"
@@ -2820,7 +2895,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=1232
+MIN_CASES=1276
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

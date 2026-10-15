@@ -33,7 +33,7 @@ import path from "node:path";
 // Behavioral integration tests live in the gated describe.skip block;
 // they activate when TENANT_INTEGRATION_TEST=1 (PR-B precedent).
 //
-// Plan: knowledge-base/project/plans/2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md §2.1
+// Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md §2.1
 // ADR: knowledge-base/engineering/architecture/decisions/ADR-033-runtime-jwt-signing-substrate.md
 // Source of truth for prior shape: apps/web-platform/supabase/migrations/037_audit_byok_use.sql
 

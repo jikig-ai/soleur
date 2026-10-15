@@ -145,12 +145,12 @@ transience reading, so none of them reads as still-live on its own:
 - `apps/web-platform/infra/sentry/versions.tf` — inline block on the provider pin.
 - ADR-031 §Amendment 2026-08-19 (#7590) — the per-endpoint replacement table and full brownout
   evidence.
-- `knowledge-base/project/plans/2026-07-17-fix-sentry-issue-alert-410-provider-bump-plan.md`
+- `knowledge-base/project/plans/archive/20261013-041741-2026-07-17-fix-sentry-issue-alert-410-provider-bump-plan.md`
   § Supersession — the Phase 0 gate whose stopping rule produced this reading.
 - `knowledge-base/project/learnings/2026-07-17-transient-provider-410-reproduce-before-choosing-a-fix.md`
   § Supersession — the generalised "may be transient" rule, half retracted. Read that one before
   applying its Key Insight to any other vendor-API break.
-- `knowledge-base/project/specs/feat-one-shot-6636-sentry-alert-migration/phase0-measurement-evidence.md`
+- `knowledge-base/project/specs/archive/20261013-041741-feat-one-shot-6636-sentry-alert-migration/phase0-measurement-evidence.md`
   § Supersession — the raw Phase 0 measurements, which stand; only §0.1's Finding is retracted.
 - `knowledge-base/project/learnings/integration-issues/2026-08-19-a-vendor-brownout-is-not-a-flake-and-the-header-said-so-all-along.md`
   — the successor learning.

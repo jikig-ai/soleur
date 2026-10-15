@@ -21,7 +21,7 @@
 # below asserts its tracked-ness BEFORE the reap (guard-matrix row 6) so a
 # neutered fixture fails loud instead of passing vacuously.
 #
-# Plan: knowledge-base/project/plans/2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md
+# Plan: knowledge-base/project/plans/archive/20261013-051752-2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md
 # Issue: https://github.com/jikig-ai/soleur/issues/9127
 #
 # Run via:  bash plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh

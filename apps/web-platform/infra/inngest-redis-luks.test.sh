@@ -89,21 +89,67 @@ if grep -qE "umask 0177 .*inngest-luks-key|umask 0177 && printf 'INNGEST_REDIS_L
 # the plaintext-AOF-on-root-disk failure one boot later, with nothing watching.
 if grep -qF '[ -s /etc/default/inngest-luks ] ||' "$CLOUD_INIT"; then ok "T1.5 the passphrase staging is asserted, not best-effort"; else no "T1.5 the /etc/default/inngest-luks write is unchecked"; fi
 
-# T1.6 The device-presence wait bound is 30. blkid on an absent path returns rc 2, which the
-# accept-0-or-2 policy would otherwise route into the luksFormat arm — a volume that is merely
-# slow to attach must never be read as blank. Tier 2 lowers this bound for one case; this is the
-# pin that keeps that a declared harness knob rather than an invented budget.
+# T1.6 The device-presence wait is the RULED counted bound (#10217, CTO rulings D1/D4/D7): a
+# LITERAL 300 in BOTH bodies — no env seam, no INNGEST_LUKS_ATTACH_WAIT_S tunable — counted
+# `sleep 1` passes that re-run the WHOLE `-b && size>0` predicate (never the clock), a probe once
+# immediately, a `/usr/bin/timeout -k 2 10` wrap on every blockdev call, exactly ONE
+# `udevadm settle --timeout=10` AFTER the loop — never per pass — and a post-settle re-probe so a
+# device landing inside the settle window still converges (review round, PR #10228). blkid on an absent path returns rc 2, which the accept-0-or-2
+# policy would otherwise route into the luksFormat arm — a volume merely slow to attach must never
+# be read as blank; ~80s attach latency is measured on this estate, so the bound moved 30 -> 300.
+# Tier 2 lowers this bound for its cases; this is the pin that keeps that a declared harness knob
+# rather than an invented budget.
 # PER-WINDOW, NOT A WHOLE-FILE COUNT — the same defect T1.10 carried. A `-ge 2` over the file is
 # satisfied by two bounds in ONE reader and none in the other, which is precisely the state the arm
 # names ("missing from one of the two"). Split at the runcmd stage's heredoc opener: above it is
 # the write_files region shipping the boot-2 reopen script, below it the first-boot runcmd stage.
 _split6="$(grep -n "bash -s <<'LUKSEOF'" "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)"
 if [ -n "$_split6" ]; then
-  _w6r="$(head -n "$((_split6 - 1))" "$CLOUD_INIT" | grep -cE '\[ "\$_i" -lt 30 \]|\[ "\$\$_i" -lt 30 \]')"
-  _w6c="$(tail -n +"$_split6" "$CLOUD_INIT" | grep -cE '\[ "\$_i" -lt 30 \]|\[ "\$\$_i" -lt 30 \]')"
-  if [ "$_w6r" -ge 1 ] && [ "$_w6c" -ge 1 ]; then ok "T1.6 BOTH device readers bound the attach wait at 30s (reopen ${_w6r}x, runcmd ${_w6c}x)"; else no "T1.6 the 30s device-presence wait bound is missing from one of the two device readers (reopen ${_w6r}x, runcmd ${_w6c}x)"; fi
+  _w6r="$(head -n "$((_split6 - 1))" "$CLOUD_INIT" | grep -cE '\[ "\$_i" -lt 300 \]|\[ "\$\$_i" -lt 300 \]')"
+  _w6c="$(tail -n +"$_split6" "$CLOUD_INIT" | grep -cE '\[ "\$_i" -lt 300 \]|\[ "\$\$_i" -lt 300 \]')"
+  if [ "$_w6r" -ge 1 ] && [ "$_w6c" -ge 1 ]; then ok "T1.6a BOTH device readers bound the attach wait at a literal 300s (reopen ${_w6r}x, runcmd ${_w6c}x)"; else no "T1.6a the 300s device-presence wait bound is missing from one of the two device readers (reopen ${_w6r}x, runcmd ${_w6c}x)"; fi
 else
-  no "T1.6 could not locate the runcmd LUKS stage in $CLOUD_INIT — the per-window split is vacuous"
+  no "T1.6a could not locate the runcmd LUKS stage in $CLOUD_INIT — the per-window split is vacuous"
+fi
+# THE MECHANISM IS PINNED PER EXTRACTED BODY, not per region — a region count is satisfied by a
+# settle moved INSIDE the loop, which is exactly the per-pass shape the ruling rejected. Each body
+# is lifted by its own indent (reopen payload 6, stage heredoc 4).
+_wd_reopen="$(awk '/^      wait_dev\(\) \{$/{f=1} f{print} f&&/^      \}$/{exit}' "$CLOUD_INIT")"
+_wd_stage="$(awk '/^    wait_dev\(\) \{$/{f=1} f{print} f&&/^    \}$/{exit}' "$CLOUD_INIT")"
+if [ -n "$_wd_reopen" ] && [ -n "$_wd_stage" ]; then ok "T1.6b both wait_dev bodies extract (reopen + runcmd stage)"; else no "T1.6b a wait_dev body failed to extract — T1.6c..e are vacuous"; fi
+# _wd_bad <body> — echoes defect tokens; EMPTY means the ruled shape. `grep -c` everywhere, never
+# `grep -q` on a pipe: -q exits early and pipefail turns the producer's SIGPIPE into a fake defect.
+_wd_bad() {
+  local body="$1" loop dn sn bad=""
+  loop="$(printf '%s\n' "$body" | awk '/while \[/{f=1} f{print} f&&/^[[:space:]]*done[[:space:]]*$/{exit}')"
+  [ "$(printf '%s\n' "$body" | grep -cE '\[ "\$\$_i" -lt 300 \]|\[ "\$_i" -lt 300 \]')" -ge 1 ] || bad="${bad}literal-300-bound "
+  [ "$(printf '%s\n' "$loop" | grep -cF 'sleep 1')" -ge 1 ] || bad="${bad}no-sleep-1-pass "
+  [ "$(printf '%s\n' "$loop" | grep -cF '_i=$((_i+1))')" -ge 1 ] || bad="${bad}no-counted-pass "
+  [ "$(printf '%s\n' "$loop" | grep -cF 'blockdev --getsize64 "$1"')" -ge 1 ] || bad="${bad}predicate-not-re-run-in-loop "
+  [ "$(printf '%s\n' "$loop" | grep -c 'udevadm')" -eq 0 ] || bad="${bad}settle-INSIDE-loop "
+  [ "$(printf '%s\n' "$body" | grep -cE 'udevadm settle --timeout=10')" -eq 1 ] || bad="${bad}settle-count!=1 "
+  [ "$(printf '%s\n' "$body" | grep -cF 'timeout -k 2 10 /usr/sbin/blockdev')" -ge 3 ] || bad="${bad}probe-not-timeout-wrapped "
+  dn="$(printf '%s\n' "$body" | grep -nE '^[[:space:]]*done[[:space:]]*$' | sed -n '1p' | cut -d: -f1)"
+  sn="$(printf '%s\n' "$body" | grep -nE 'udevadm settle --timeout=10' | sed -n '1p' | cut -d: -f1)"
+  { [ -z "$dn" ] || [ -z "$sn" ] || [ "$sn" -le "$dn" ]; } && bad="${bad}settle-not-AFTER-loop "
+  # the post-settle re-probe must sit AFTER the settle line, not merely exist as a third probe
+  [ "$(printf '%s\n' "$body" | sed -n "${sn:-0},\$p" | grep -cF 'timeout -k 2 10 /usr/sbin/blockdev')" -ge 1 ] || bad="${bad}no-post-settle-reprobe "
+  [ "$(printf '%s\n' "$body" | grep -c 'return 1')" -ge 1 ] || bad="${bad}no-return-1 "
+  [ "$(printf '%s\n' "$body" | grep -cF 'blockdev --getsize64')" -ge 2 ] || bad="${bad}probe-not-once-plus-per-pass "
+  printf '%s' "$bad"
+}
+_w6rb="$(_wd_bad "$_wd_reopen")"
+if [ -z "$_w6rb" ] && [ -n "$_wd_reopen" ]; then ok "T1.6c the reopen wait_dev is the ruled mechanism (literal 300, counted sleep-1 passes, whole predicate per pass, ONE post-loop settle)"; else no "T1.6c the reopen wait_dev deviates from the ruled mechanism:${_w6rb}"; fi
+_w6sb="$(_wd_bad "$_wd_stage")"
+if [ -z "$_w6sb" ] && [ -n "$_wd_stage" ]; then ok "T1.6d the runcmd wait_dev is the ruled mechanism (same shape, luks_emit channel)"; else no "T1.6d the runcmd wait_dev deviates from the ruled mechanism:${_w6sb}"; fi
+# The wait REPORTS through each reader's own emitter: one wait-start line on the first miss and an
+# appeared-after line on resolution — the late-attach arms exercise these, a silent wait is a
+# 300s blind spot on a host with no SSH.
+if [ "$(printf '%s\n' "$_wd_reopen" | grep -cE '(^|[^[:alnum:]_])emit[[:space:]]')" -ge 2 ] \
+   && [ "$(printf '%s\n' "$_wd_stage" | grep -cF 'luks_emit')" -ge 2 ]; then
+  ok "T1.6e each wait_dev body reports through its reader's own emitter (wait-start + appeared-after)"
+else
+  no "T1.6e a wait_dev body does not emit wait-start/appeared-after lines through its reader's own channel"
 fi
 
 # T1.7 No `|| true` / `|| :` / `set +e` on a mount. The whole apparatus is defeated by one of them:
@@ -459,16 +505,22 @@ _ops_mount="$(grep -cE '(^[[:space:]]*|[|;&][[:space:]]*)mount[[:space:]]' <<<"$
 _ops_mount_ok="$(grep -cE 'mountpoint -q /mnt/data \|\| mount "\$MAPPER" /mnt/data 2>>"\$INNGEST_LUKS_DETAIL"$' <<<"$_CI_OPS" || true)"
 _ops_fstab="$(grep -cE '^[[:space:]]*fstab_set[[:space:]]+/' <<<"$_CI_OPS" || true)"
 _ops_fstab_ok="$(grep -cF 'fstab_set /mnt/data "$MAPPER /mnt/data ext4 defaults,nofail 0 2"' <<<"$_CI_OPS" || true)"
-if [ "$_ops_mount" -eq 3 ] && [ "$_ops_mount_ok" -eq 3 ] && [ "$_ops_fstab" -eq 3 ] && [ "$_ops_fstab_ok" -eq 3 ]; then ok "T1.17b every mount and fstab_set in the template is the mapper at /mnt/data (mount ${_ops_mount}/${_ops_mount_ok}, fstab_set ${_ops_fstab}/${_ops_fstab_ok}; one per arm)"; else no "T1.17b a mount or fstab write targets something other than \$MAPPER at /mnt/data (mount ${_ops_mount} total / ${_ops_mount_ok} canonical, fstab_set ${_ops_fstab} / ${_ops_fstab_ok})"; fi
+# 3 -> 4 mounts (#10217): the reopen's ensure_mount adds a fstab-driven `mount "$2"` — by mountpoint,
+# so its source/options come from the line it just wrote, never a re-typed device. The three arm
+# mounts stay the canonical `$MAPPER` at /mnt/data (one per arm).
+if [ "$_ops_mount" -eq 4 ] && [ "$_ops_mount_ok" -eq 3 ] && [ "$_ops_fstab" -eq 3 ] && [ "$_ops_fstab_ok" -eq 3 ]; then ok "T1.17b every mount and fstab_set in the template is the mapper at /mnt/data or ensure_mount's by-mountpoint mount (mount ${_ops_mount}/${_ops_mount_ok}, fstab_set ${_ops_fstab}/${_ops_fstab_ok})"; else no "T1.17b a mount or fstab write targets something other than \$MAPPER at /mnt/data (mount ${_ops_mount} total / ${_ops_mount_ok} canonical, fstab_set ${_ops_fstab} / ${_ops_fstab_ok})"; fi
 _ops_open="$(grep -cE 'cryptsetup[^|;]*luksOpen' <<<"$_CI_OPS" || true)"
 _ops_open_ok="$(grep -cE 'cryptsetup luksOpen --key-file - ("\$1"|"\$CANON_DEV"|"\$DEV") ' <<<"$_CI_OPS" || true)"
 if [ "$_ops_open" -eq 4 ] && [ "$_ops_open_ok" -eq 4 ]; then ok "T1.17c exactly four luksOpen sites (one reopen, three stage arms), each on a device the resolver derived (${_ops_open}/${_ops_open_ok})"; else no "T1.17c luksOpen inventory drifted: ${_ops_open} sites, ${_ops_open_ok} on a resolver-derived device (want 4/4)"; fi
-# The boot-reopen script runs as root on EVERY boot after the first. It may open a LUKS volume and nothing
-# else: no format, no mkfs, no mount, no fstab, no wipe. (T1.16g/G1.e only ever scanned the stage window.)
+# The boot-reopen script runs as root on EVERY boot after the first. It may open a LUKS volume and
+# complete its mount — never format, never mkfs, never wipe a device. #10217's ensure_mount mounts
+# by mountpoint and heals the fstab line, so mount/fstab writes are legitimate here and are pinned
+# by the T1.17f closed set instead; what stays forbidden is any DEVICE write. (T1.16g/G1.e only ever
+# scanned the stage window.)
 _reopen_code="$(printf '%s\n' "$_G1_REOPEN" | grep -vE '^[[:space:]]*#' | grep -vE 'echo "FATAL' || true)"
-_reopen_bad="$(grep -cE 'luksFormat|luksErase|reencrypt|mkfs|mke2fs|wipefs|blkdiscard|(^|[|;&[:space:]])mount[[:space:]]|fstab' <<<"$_reopen_code" || true)"
+_reopen_bad="$(grep -cE 'luksFormat|luksErase|reencrypt|mkfs|mke2fs|wipefs|blkdiscard' <<<"$_reopen_code" || true)"
 _reopen_cs="$(grep -c 'cryptsetup' <<<"$_reopen_code" || true)"
-if [ -n "$_reopen_code" ] && [ "$_reopen_bad" -eq 0 ] && [ "$_reopen_cs" -eq 1 ]; then ok "T1.17d the boot-reopen script only opens: no format/mkfs/mount/fstab, exactly one cryptsetup call (luksOpen in open_as)"; else no "T1.17d the boot-reopen script can write a device or filesystem (forbidden ops ${_reopen_bad}, cryptsetup calls ${_reopen_cs}, want 0 and 1)"; fi
+if [ -n "$_reopen_code" ] && [ "$_reopen_bad" -eq 0 ] && [ "$_reopen_cs" -eq 1 ]; then ok "T1.17d the boot-reopen script never formats or wipes a device: no format/mkfs op, exactly one cryptsetup call (luksOpen in open_as)"; else no "T1.17d the boot-reopen script can write a device or filesystem (forbidden ops ${_reopen_bad}, cryptsetup calls ${_reopen_cs}, want 0 and 1)"; fi
 # Refusal BODIES, not just arm headers: G4.e proves the resolver arms exist; this proves what they do.
 _res2="$(printf '%s\n' "$_G1_STAGE" | awk '/^    STAGE=resolve$/{f=1} f&&/^    esac$/{print; exit} f')"
 _res_pointer="$(grep -c 'MODE=pointer' <<<"$_res2" || true)"; _res_unp="$(grep -c 'MODE=unpointed' <<<"$_res2" || true)"; _res_exit="$(grep -c 'exit 1' <<<"$_res2" || true)"
@@ -487,15 +539,36 @@ if [ "$_res_pointer" -eq 1 ] && [ "$_res_unp" -eq 1 ] && [ "$_res_exit" -eq 2 ] 
 _norm_code() { grep -vE '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba}' -e 's/^[[:space:]]*//'; }
 _OPS_TOK='(^|[^[:alnum:]_])(luksFormat|luksOpen|luksClose|luksErase|erase|reencrypt|luksAddKey|luksRemoveKey|luksKillSlot|luksHeaderRestore|luksChangeKey|luksConvertKey|mkfs[.a-z0-9]*|mke2fs|wipefs|blkdiscard|shred|sgdisk|sfdisk|parted|fdisk|dd|mkswap|truncate|cryptsetup|mount|umount|fstab|fstab_set|fs_setup|disk_setup|bootcmd|mounts|swapon|losetup|dmsetup)([^[:alnum:]_]|$)'
 _VAR_RE='^(export[[:space:]]+)?(DEV|MAPPER|BYID|LUKS_ID|CANON_DEV|POINTER|MNT|CANON_NAME)='
+# #10217 grew this list: the unit Description line (it names mount/cryptsetup tokens) and
+# ensure_mount's whole converge path (wrong-source umount loop, atomic fstab rewrite, daemon-reload,
+# by-mountpoint mount). #9786 removed the staging block's fstab/mount/luksFormat set and the
+# plaintext arm's sites with it.
 _exp_ops="$(cat <<'EXPEOF'
 - cryptsetup # #7695 guest-side LUKS-at-rest for /mnt/data (the Redis AOF store)
+Description=Open the LUKS mapper, then complete the mount for the arm it verified — never formats, never mkfs (#7695)
 After=cryptsetup-pre.target systemd-udev-settle.service
 printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$1" "$2"
+[ "$_em_i" -le 8 ] || fail reopen_mount 1 n/a "umount loop at $2 did not converge in 8 passes"
+umount "$2" || fail reopen_mount 1 n/a "umount of a wrong-source layer at $2 failed"
+if [ "$(awk -v mp="$2" '$1 !~ /^#/ && $2 == mp' /etc/fstab | grep -c .)" -eq 1 ]; then
+_em_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)" || fail reopen_fstab 1 n/a "mktemp /etc/fstab.soleur.XXXXXX failed"
+awk -v mp="$2" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "rewriting /etc/fstab for $2 failed"; }
+printf '%s\n' "$1 $2 ext4 defaults,nofail 0 2" >> "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "writing the $2 fstab line failed"; }
+chmod 0644 "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "chmod on the rewritten fstab failed"; }
+mv -f "$_em_tmp" /etc/fstab || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "installing the rewritten /etc/fstab failed"; }
+_em_n="$(awk -v mp="$2" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)" || _em_n=0
+[ "$_em_n" -eq 1 ] || fail reopen_fstab 1 n/a "fstab carries $_em_n lines for $2 after the rewrite — exactly one is required"
+systemctl daemon-reload || fail reopen_fstab 1 n/a "daemon-reload after the fstab install failed"
+mount "$2" || fail reopen_mount 1 n/a "mount $2 failed"
+emit reopen_mount 0 n/a "$1 mounted at $2 via fstab"
+emit reopen_mount 0 n/a "$1 already mounted at $2 — fstab line healed"
 [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || { echo "FATAL: INNGEST_REDIS_LUKS_KEY empty — refusing an unencrypted mount" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 fstab_set() {
-_fs_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)"
-awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_fs_tmp"
-cat "$_fs_tmp" > /etc/fstab
+_fs_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)" || { echo "FATAL: mktemp for the fstab rewrite failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_fs_tmp" || { rm -f "$_fs_tmp"; echo "FATAL: rewriting fstab for $1 failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+printf '%s\n' "$2" >> "$_fs_tmp" || { rm -f "$_fs_tmp"; echo "FATAL: writing the $1 fstab line failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+chmod 0644 "$_fs_tmp" || { rm -f "$_fs_tmp"; echo "FATAL: chmod on the rewritten fstab failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+mv -f "$_fs_tmp" /etc/fstab || { rm -f "$_fs_tmp"; echo "FATAL: installing the rewritten fstab failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 _fs_n="$(awk -v mp="$1" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)"
 [ "$_fs_n" -eq 1 ] || { echo "FATAL: fstab carries $_fs_n lines for $1 after the rewrite — exactly one is required" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 [ -e "$MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$CANON_DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
@@ -522,6 +595,7 @@ _exp_vars="$(cat <<'EXPEOF'
 LUKS_ID='${inngest_luks_volume_id}'
 BYID=/dev/disk/by-id/scsi-0HC_Volume_
 DEV="$${BYID}$${LUKS_ID}"
+MAPPER=/dev/mapper/inngest-redis
 POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
 CANON_DEV="$${BYID}$${POINTER}"
 LUKS_ID='${inngest_luks_volume_id}'
@@ -679,6 +753,111 @@ if [ -n "$_T115_EF_SET" ] && [ "$_T115_EF_SET" = "$_T115_CX_SET" ]; then ok "T1.
 # file-wide against the write_files block, not section-scoped.
 if ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' >/dev/null; then ok "T1.15g no bare EnvironmentFile=/ConditionPathExists= reset lines in the reopen unit"; else no "T1.15g a bare reset line empties the env set or erases every condition — systemd reset semantics make it invisible to the other arms"; fi
 
+# ═══ T1.16 — #10217: the reopen COMPLETES the mount (the lost-race self-heal) ═══════════
+# A mapper left open-but-unmounted by a first-boot attach race was unhealable by construction:
+# reopen opened only, no fstab line existed, and every later boot repeated the state. ensure_mount
+# converges it on the same boot. `_G1_REOPEN` (the write_files payload of inngest-luks-open.sh) is
+# extracted in Guard 1 above and reused here.
+_EM="$(printf '%s\n' "$_G1_REOPEN" | awk '/^      ensure_mount\(\) \{$/{f=1} f{print} f&&/^      \}$/{exit}')"
+if [ -n "$_EM" ]; then ok "T1.16a ensure_mount extracts from the reopen payload"; else no "T1.16a could not extract ensure_mount — T1.16b..f are vacuous"; fi
+# mountpoint -q FIRST: a healthy boot must be a strict no-op — zero writes, zero extra emits.
+if printf '%s\n' "$_EM" | grep -cF 'mountpoint -q "$2"' >/dev/null; then ok "T1.16b ensure_mount's first act is the mountpoint -q fast path (a healthy boot writes nothing)"; else no "T1.16b ensure_mount lacks the mountpoint -q fast path — every boot would rewrite fstab"; fi
+if printf '%s\n' "$_EM" | grep -cF 'ext4 defaults,nofail 0 2' >/dev/null; then ok "T1.16c ensure_mount writes the canonical nofail-carrying fstab line"; else no "T1.16c ensure_mount's fstab line lost 'ext4 defaults,nofail 0 2'"; fi
+# fstab_set semantics: drop the mountpoint's existing line (replace, never append), then assert
+# EXACTLY ONE — a second line is a silent one-boot time bomb (T1.8d's rule, applied here).
+if printf '%s\n' "$_EM" | grep -cF '$2 != mp' >/dev/null && printf '%s\n' "$_EM" | grep -cF '"$_em_n" -eq 1' >/dev/null; then ok "T1.16d ensure_mount replaces the mountpoint's line in place and asserts exactly one"; else no "T1.16d ensure_mount does not do replace-then-assert-exactly-one"; fi
+if printf '%s\n' "$_EM" | grep -cF 'fail reopen_fstab' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'fail reopen_mount' >/dev/null; then ok "T1.16e fstab and mount failures fail loudly under their own stage names (reopen_fstab / reopen_mount)"; else no "T1.16e an ensure_mount failure path does not fail — a silent half-mount is the defect this arm exists to heal"; fi
+# The mount is FSTAB-DRIVEN: `mount "$2"` reads source and options from the line just written —
+# re-typing them here would let the two disagree.
+if printf '%s\n' "$_EM" | grep -cF 'mount "$2"' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'emit reopen_mount' >/dev/null; then ok "T1.16f the mount is fstab-driven (mount <mountpoint>) and success emits reopen_mount"; else no "T1.16f the mount re-types source/options, or reopen_mount is not emitted"; fi
+# EVERY verified arm reaches ensure_mount — INCLUDING the open_as already-open noop path, which is
+# the incident's exact post-state (mapper open, nothing mounted, no fstab line). The noop
+# `return 0` inside open_as must land on the caller's ensure_mount; pin that EVERY open_as call
+# is immediately followed by one.
+_oa_calls="$(printf '%s\n' "$_G1_REOPEN" | grep -cE '^[[:space:]]*open_as "')"
+_oa_em="$(printf '%s\n' "$_G1_REOPEN" | awk '/^[[:space:]]*open_as "/{o++ ; getline nxt; if (nxt ~ /^[[:space:]]*ensure_mount /) e++} END{print o+0, e+0}')"
+# 3 -> 2 (#9786): the staging volume's open_as call went with the strip; the survivors are the
+# pointer arm's `open_as "$CANON_DEV"` and the unpointed arm's `open_as "$DEV"`.
+if [ "${_oa_calls}" -ge 2 ] && [ "${_oa_em#* }" -eq "$_oa_calls" ]; then ok "T1.16g every open_as call is followed by ensure_mount (${_oa_em#* }/${_oa_calls}) — the reopen_noop path still reaches it"; else no "T1.16g an open_as call is not followed by ensure_mount (${_oa_em#* }/${_oa_calls}) — the already-open noop path would leave the store unmounted"; fi
+if [ "$(printf '%s\n' "$_G1_REOPEN" | grep -cF 'ensure_mount "$MAPPER" /mnt/data')" -eq 2 ]; then ok "T1.16h the pointer and unpointed crypto_LUKS arms both complete /mnt/data from the canonical mapper"; else no "T1.16h ensure_mount \"\$MAPPER\" /mnt/data is missing from an arm"; fi
+# (#9786) the two pre-strip T1.16i/j pins — `ensure_mount "$DEV" /mnt/data` on the pre-cutover
+# ext4-skip arm and `ensure_mount "$STAGING_MAPPER" /mnt/data-luks` on the staging arm — went with
+# the arms they pinned; T1.16a-h (the strip tier above) now forbids both targets by name.
+# T1.16k ORDERING PIN (CTO binding, D2/D8): the fstab write and mkdir -p must not land on a
+# still-read-only root on boot >= 2. Scoped to the [Unit] section via _LUKS_OPEN_UNITSEC (T1.15).
+if printf '%s\n' "$_LUKS_OPEN_UNITSEC" | grep -cxF '      After=systemd-remount-fs.service' >/dev/null; then ok "T1.16k inngest-luks-open.service is ordered After=systemd-remount-fs.service"; else no "T1.16k the reopen unit lost After=systemd-remount-fs.service — the self-heal's fstab write can race a read-only root"; fi
+# T1.16l NO ENV SEAM (CTO D4): the bound is a literal 300 — an INNGEST_LUKS_ATTACH_WAIT_S
+# variable would be retunable through Doppler and would need an attach_wait_invalid class to
+# defend itself. Asserted ABSENT over the whole file.
+if grep -qF 'INNGEST_LUKS_ATTACH_WAIT_S' "$CLOUD_INIT"; then no "T1.16l an INNGEST_LUKS_ATTACH_WAIT_S env seam is present — the bound must be a literal, not a Doppler-retunable"; else ok "T1.16l no attach-wait env seam exists (the 300s bound is a literal)"; fi
+# T1.16m the `doppler run … -- bash -s <<'LUKSEOF'` invocation is BYTE-IDENTICAL to main — no
+# `env -u`, nothing inserted. A whole-line exact match is the only form that also pins the
+# indent and refuses a silently doubled invocation.
+_T116_INVOCATION='    doppler run --project soleur-inngest --config ${inngest_doppler_config} -- bash -s <<'"'"'LUKSEOF'"'"''
+if [ "$(grep -cxF "$_T116_INVOCATION" "$CLOUD_INIT")" -eq 1 ]; then ok "T1.16m the doppler run -- bash -s <<'LUKSEOF' invocation is byte-identical (no env -u strip)"; else no "T1.16m the doppler invocation drifted — something was inserted or the line moved"; fi
+
+# ═══ T1.16n-q — design-review hardening of the self-heal (PR #10228 design pass) ═══
+# T1.16n ATOMIC fstab install: a mid-write death on `cat tmp > /etc/fstab` truncates the file
+# and recreates the exact unhealable state this PR eliminates (inngest-luks-cutover.sh:536-539
+# documents the same defect). The install must be same-dir rename: chmod + mv -f, and no
+# redirect-to-/etc/fstab anywhere inside ensure_mount.
+if printf '%s\n' "$_EM" | grep -cF 'mv -f "$_em_tmp" /etc/fstab' >/dev/null && ! printf '%s\n' "$_EM" | grep -cE '> */etc/fstab' >/dev/null; then ok "T1.16n the fstab install is atomic (chmod + mv -f); no redirect-to-/etc/fstab survives"; else no "T1.16n the fstab install is not an atomic rename — a mid-write death truncates /etc/fstab"; fi
+# T1.16o SOURCE-CONGRUENT fast path: a bare mountpoint -q match no-ops a mount from the WRONG
+# source (a stale generated mnt-*.mount can hold one — the cutover FSM's envfile-before-fstab
+# desync window makes it reachable). The fast path must compare findmnt SOURCE through
+# readlink -f against $1, umount the wrong-source mount, and daemon-reload after the install
+# so the fstab generator re-reads the line THIS boot.
+if printf '%s\n' "$_EM" | grep -cF 'findmnt -no SOURCE' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'readlink -f' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'umount "$2"' >/dev/null && [ "$(printf '%s\n' "$_EM" | awk '/mv -f/{m=NR} /daemon-reload/{print (m && NR>m) ? "ok" : "bad"; exit}')" = "ok" ]; then ok "T1.16o the fast path is source-congruent (findmnt+readlink -f), wrong-source mounts converge, and daemon-reload runs AFTER the fstab install"; else no "T1.16o the fast path is still source-blind, or daemon-reload is missing/misordered — a stale generated mount unit can loop the degrade"; fi
+# T1.16p the open_as noop path must verify backing BEFORE emitting reopen_noop: the noop feeds
+# ensure_mount, so a wrongly-backed mapper would be mounted + fstab'd silently. The ordering
+# check asks whether backing_is was SEEN before the first reopen_noop — never compare NR against
+# a possibly-unset mark (b=0 makes every direction read green; PR #10228 panel).
+_OA="$(printf '%s\n' "$_G1_REOPEN" | awk '/^      open_as\(\) \{$/{f=1} f{print} f&&/^      \}$/{exit}')"
+if printf '%s\n' "$_OA" | grep -cF 'backing_is' >/dev/null && printf '%s\n' "$_OA" | grep -cF 'fail reopen_backing' >/dev/null && [ "$(printf '%s\n' "$_OA" | awk '/backing_is/{b++} /reopen_noop/{print (b ? "ok" : "bad"); exit}')" = "ok" ]; then ok "T1.16p the open_as noop path asserts backing_is before reopen_noop"; else no "T1.16p an already-open mapper is accepted without a backing-device check"; fi
+# T1.16q refusal strings name the TRUE bound: every 'after Ns' refusal sentence must read 300s —
+# a stale 30s misreports the bound the host actually enforced, and on a no-console host these
+# strings ARE the incident record.
+if [ "$(grep -c 'after 300s' "$CLOUD_INIT")" -ge 4 ] && ! grep -q 'after 30s\b' "$CLOUD_INIT"; then ok "T1.16q all wait-refusal sentences name the 300s bound (no stale 30s survivors)"; else no "T1.16q a wait-refusal sentence still claims the old 30s bound"; fi
+
+# T1.16r STACKED-MOUNT convergence + guarded findmnt: ensure_mount must not `head -1` a findmnt
+# listing (the shadowed-bottom read inngest-luks-cutover.sh documents), must guard the
+# substitution under pipefail (`|| _em_src=""`), must compare the KERNEL-SERVED layer (tail -1),
+# and must pop wrong layers with a bounded umount loop rather than guess which layer a stack
+# serves — the loop's `mountpoint -q` re-check is the convergence condition.
+if printf '%s\n' "$_EM" | grep -cE 'findmnt.*head -1' >/dev/null; then
+  no "T1.16r ensure_mount still reads findmnt | head -1 — the shadowed-bottom read"
+elif printf '%s\n' "$_EM" | grep -cF '|| _em_src=""' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'tail -1' >/dev/null && printf '%s\n' "$_EM" | grep -cE 'while mountpoint -q' >/dev/null && printf '%s\n' "$_EM" | grep -cF '-le 8' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'fail reopen_mount' >/dev/null; then
+  ok "T1.16r the fast path reads the kernel-served layer and pops wrong layers in a bounded loop"
+else
+  no "T1.16r the stacked-mount convergence loop or the findmnt pipefail guard is missing"
+fi
+# T1.16s POST-CUTOVER-EVIDENCE refusal on the ext4-skip arm: an empty pointer plus an already-open
+# canonical mapper or a mapper fstab line must fail reopen_pointer_lost rather than entrench the
+# plaintext backstop (data-integrity review, PR #10228). BOTH disjuncts are pinned by their exact
+# literals — a bare '/dev/mapper/' grep is satisfied by unrelated sites (MAPPER=, backing_is).
+# (#9786) T1.16s went with the arm it pinned: the post-cutover-evidence refusal (reopen_pointer_lost)
+# guarded the plaintext backstop on the ext4-skip path; with no plaintext volume the unpointed arm
+# fails reopen_not_luks on any non-LUKS signature, and T1.16a's closed needle set forbids both stage
+# names.
+# T1.16t the class-wide fix: NO `findmnt -no SOURCE | head -1` may survive in cloud-init's
+# host-side mount readers — stage mounted_from and the _sv_* checks read the kernel-served TOP
+# of a stack (tail -1), which the cutover script documents as the only correct read. The same
+# blind spot in inngest-redis-bootstrap.sh's guard is NOT pinnable here: that file ships via the
+# baked vinngest image (GuardA byte-identity), so its fix rides the image-redelivery work (#6780),
+# not this PR.
+if grep -qE 'findmnt -no SOURCE.*\| head -1' "$CLOUD_INIT"; then
+  no "T1.16t a findmnt | head -1 read survives in cloud-init — it reads the SHADOWED layer of a stacked mount"
+else
+  ok "T1.16t every cloud-init findmnt SOURCE read takes the kernel-served entry (tail -1 / single-line refuse)"
+fi
+# T1.16u BOTH fstab writers install atomically — same-dir mktemp + chmod + mv -f; the stage's
+# fstab_set had the same cat-truncate defect the cutover script documents.
+_FS="$(printf '%s\n' "$_G1_STAGE" | awk '/^    fstab_set\(\) \{$/{f=1} f{print} f&&/^    \}$/{exit}')"
+if printf '%s\n' "$_FS" | grep -cF 'mv -f "$_fs_tmp" /etc/fstab' >/dev/null && ! printf '%s\n' "$_FS" | grep -cE '> */etc/fstab' >/dev/null; then ok "T1.16u the stage's fstab_set installs atomically too (mv -f, no redirect-to-/etc/fstab)"; else no "T1.16u fstab_set still installs by redirect — a mid-write death truncates /etc/fstab"; fi
+# T1.16v the congruent-mount fast path still heals a LOST fstab line: mounted-from-the-right-
+# source but unanchored is converged for this boot only. _em_mount gates the mount, not the write.
+if printf '%s\n' "$_EM" | grep -cF '_em_mount=0' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'fstab line healed' >/dev/null && printf '%s\n' "$_EM" | grep -cF '"$_em_mount" -eq 1' >/dev/null; then ok "T1.16v a congruent-but-unanchored mount rewrites the fstab line without remounting"; else no "T1.16v the fstab-heal path is gone — a lost fstab line under a live mount stays lost"; fi
+
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
 # when the cutover FSM became the pointer's writer and the dispatch its second reader (G4.g1-g3/h/i). Derived from
@@ -699,13 +878,18 @@ if ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cE '^[[:space:]]*(EnvironmentFile|
 # flag the escaped-form bypass shapes, +1) are new: 83 - 5 + 1 + 1 + 1 = 81, exact.
 # 78 -> 83 (review fix round 2): T1.16k (allowlist glob / rehearsal config prefix contract, +1) and the closed-set
 # pins T1.17f-i (+4). T1.16i was re-driven in-arm and keeps its count.
+# #10217 (merged in alongside): T1.6 expanded into T1.6a-e (per-body mechanism pin) and T1.16a-q (ensure_mount
+# self-heal, ordering pin, no-seam + byte-identical invocation pins, then n-u review hardening) rode in with the
+# merge. The strip takes T1.16i/j (plaintext-device and staging-mapper ensure_mount targets) and T1.16s (the
+# reopen_pointer_lost refusal on the ext4-skip arm) back out (-3); the surviving T1.16h/g were re-pointed at the
+# single-volume arms, and T1.17b/d/f/g were re-derived for the merged template.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 81 ]; then
+if [ "$executed" -lt 104 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 81. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 104. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 81)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 104)\n' "$executed"
 fi
 
 echo ""

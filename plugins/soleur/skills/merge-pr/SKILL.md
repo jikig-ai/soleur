@@ -207,7 +207,7 @@ CHANGELOG requires special handling to preserve entries from both sides without 
 Read both sides using git stage numbers (NOT `git show HEAD:` which only gives one side):
 
 ```bash
-ours=$(mktemp -t changelog-ours.XXXXXXXX.md); theirs=$(mktemp -t changelog-theirs.XXXXXXXX.md)
+ours=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" changelog-ours.XXXXXXXX.md); theirs=$(mktemp -p "$(dirname "$ours")" changelog-theirs.XXXXXXXX.md)
 git show :2:plugins/soleur/CHANGELOG.md > "$ours"
 git show :3:plugins/soleur/CHANGELOG.md > "$theirs"
 echo "ours=$ours theirs=$theirs"  # echo the paths: the Read/Write steps below need them, and a separate tool call does not inherit these vars
@@ -232,6 +232,12 @@ wc -l plugins/soleur/CHANGELOG.md
 ```
 
 The line count should be roughly the sum of unique lines from both sides. If the result is suspiciously short (less than 80% of the larger input file), something was truncated -- stop and report.
+
+Then remove both scratch files — they are consumed by the reconstruction and the wc check, and unremoved `mktemp` files are the count-shaped `/tmp` leak (#10017):
+
+```bash
+rm -f "$ours" "$theirs"; rmdir "$(dirname "$ours")" 2>/dev/null
+```
 
 ```bash
 git add plugins/soleur/CHANGELOG.md
@@ -407,6 +413,12 @@ if [[ "$sync_ok" -eq 1 ]]; then
     sync_ok=0
   fi
 fi
+# ADR-276 S3 (#9728): the head-verdict resolver is read independent of sync_ok/SYNC_SNAP (mirror of ship Phase 7).
+VERDICT_OK=0
+if [[ -n "$SYNC_ROOT" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
+  VERDICT_OK=1
+fi
 # REQUIRED_CHECKS is fetched once, fail-open: empty array → no-op scan
 # (see ship/SKILL.md Phase 7 for the full rationale; do NOT harden).
 mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
@@ -444,7 +456,7 @@ while true; do
       # ADR-276 S3: a ready PR's red `test` may be the DRAFT run's row; ask the resolver.
       vstate=""
       for n in "${failed_names[@]}"; do
-        [[ "$n" == test && -n "$SYNC_SNAP" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] || continue
+        [[ "$n" == test && "$VERDICT_OK" -eq 1 ]] || continue
         vout="$(bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null)" || vout=""
         vline="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$vout")" || vline=""
         vstate="${vline#*state=}"; vstate="${vstate%% *}"; break

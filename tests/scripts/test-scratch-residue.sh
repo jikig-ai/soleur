@@ -7,12 +7,13 @@
 # SIGTERM, including the soleur-inc-* incident sandbox. A SIGKILLed runner leaves only an entry the
 # reapers can attribute (marker-bearing soleur-run.<pid>.* root, classified marker:<pid>).
 #
-# LEAVES. The eight directly-run suites measured leaking on main (6 bun TS suites, grep-rewrite,
-# test-weakness-miner) PLUS one bun suite run from plugins/soleur (its own bunfig preload), one shell
-# suite that sources test-helpers.sh (its normal-exit leaf), one `python -m unittest` module, the pytest
-# chokepoint hook (pytest itself is not installed on every host, so the hook pytest calls is driven
-# directly: pytest_configure is the whole of the conftest chokepoint) and two vitest leaves -- one
-# existing test and one GENERATED test that really mkdtemp's and leaks if the root is unbound.
+# LEAVES. The directly-run suites measured leaking on main plus the leaves added since — TS suites
+# driven via `bun test`, shell suites and producer scripts run directly (one sources test-helpers.sh,
+# two adopt scratch-session mid-flight), a `python -m unittest` module, the pytest chokepoint hook
+# (pytest itself is not installed on every host, so the hook pytest calls is driven directly:
+# pytest_configure is the whole of the conftest chokepoint) and vitest leaves including a GENERATED
+# test that really mkdtemp's and leaks if the root is unbound. The `add_leaf` registry below is the
+# enumeration; this paragraph names the categories, not the count.
 #
 # PROBES (beyond the leaves): SIGTERM/SIGINT/SIGKILL per runtime, the marker contract and a byte/mode
 # PARITY pin across the three writers (with drifted-copy controls), the python fork guard,
@@ -195,6 +196,53 @@ add_leaf sh-test-helpers        'bash plugins/soleur/test/auto-close-scanner.tes
 # errors) used to leave a marker-only root per invocation; a mutation battery driving it thousands of times
 # left 2388 in /var/tmp. --enumerate-commands exits 0 through the enumerate path, not the full trap.
 add_leaf sh-test-all-enumerate  'bash scripts/test-all.sh --enumerate-commands' sh
+# (#10017) Class-b paydown suites — every one allocates only under an owned
+# SUITE_TMP root now, so the delta arm asserts the abort-path residual is gone
+# too, not just the happy path. scripts-shard-totality-mutations.sh is
+# deliberately NOT a leaf: it mutates tracked files in place.
+add_leaf sh-brand-hex           'bash .claude/hooks/brand-hex-commit-gate.test.sh' sh
+add_leaf sh-cla-signed-author   'bash .claude/hooks/cla-signed-author-gate.test.sh' sh
+add_leaf sh-context-reviewed    'bash .claude/hooks/context-reviewed-gate.test.sh' sh
+add_leaf sh-freeze-lock         'bash .claude/hooks/lib/freeze-lock.test.sh' sh
+add_leaf sh-pencil-collapse     'bash .claude/hooks/pencil-collapse-guard.test.sh' sh
+add_leaf sh-phase-surface-hint  'bash .claude/hooks/phase-surface-hint.test.sh' sh
+add_leaf sh-security-reminder   'bash .claude/hooks/security_reminder_hook.test.sh' sh
+add_leaf sh-ship-unpushed       'bash .claude/hooks/ship-unpushed-commits-gate.test.sh' sh
+add_leaf sh-skill-context-q     'bash .claude/hooks/skill-context-queries.test.sh' sh
+add_leaf sh-extract-block       'bash plugins/soleur/skills/eval-harness/test/extract-block.test.sh' sh
+add_leaf sh-pencil-adapter      'bash plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh' sh
+add_leaf sh-ralph-loop          'bash plugins/soleur/test/ralph-loop.test.sh' sh
+add_leaf sh-resolve-git-root    'bash plugins/soleur/test/resolve-git-root.test.sh' sh
+add_leaf sh-grok-gpu-bootstrap  'bash scripts/dogfood/grok-gpu-bootstrap.test.sh' sh
+add_leaf sh-domain-model-drift  'bash scripts/domain-model-drift.test.sh' sh
+add_leaf sh-tweet-eligibility   'bash scripts/lib/tweet-eligibility.test.sh' sh
+add_leaf sh-validate-tweet      'bash scripts/lib/validate-tweet-draft.test.sh' sh
+add_leaf sh-lint-rule-budget    'bash scripts/lint-agents-rule-budget.test.sh' sh
+add_leaf sh-review-reminder     'bash scripts/review-reminder-liveness.test.sh' sh
+add_leaf sh-seccomp-alert       'bash scripts/seccomp-unenforced-alert.test.sh' sh
+add_leaf sh-sentry-issue        'bash scripts/sentry-issue.test.sh' sh
+add_leaf sh-content-publisher   'bash scripts/test-content-publisher.sh' sh
+add_leaf sh-watch-live-verify   'bash scripts/watch-live-verify-pass.test.sh' sh
+# (#7004) 12 mktemp sites under a growing four-arm EXIT trap; the begin+splice
+# adoption confines direct-run residue (the measured inngest-ci-*/inngest-arm-*
+# kill-residue classes) to an owned soleur-run.<pid>.* root. CI/GITHUB_ACTIONS
+# are scrubbed: under ambient CI vars the suite takes its CI-mode path and
+# HARD-FAILS on tag assertions that need a tags-fetched checkout (the shard's
+# clone lacks them) — residue is the leaf's probe, and the suite's own CI job
+# runs those assertions under the full fetch.
+add_leaf sh-cloud-init-inngest  'env -u CI -u GITHUB_ACTIONS bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh' sh
+# Verdict-tolerant leaves (#10255): a leaf registered in this table may exit nonzero — its suite
+# carries a BY-DESIGN red arm in the PR context (GuardA/GuardA2 byte-identity redden by design on
+# any carrier-changing PR until the post-merge mint bakes the new pin; the PR-context exemption is
+# open #9081). Tolerance covers THE VERDICT ONLY: the leaf still must execute (readable rc), must
+# leave delta 0, and must still allocate >=1 scratch entry — a leaked or vacuous run still reds.
+# An entry with an empty reason fails shape-check below (tolerated-for-nothing).
+declare -A LEAF_VERDICT_TOLERATED=(
+  [sh-cloud-init-inngest]="GuardA/GuardA2 carrier byte-identity is red by design on a carrier-changing PR until mint+bump lands; verdict coverage for the suite lives in deploy-script-tests (advisory on PRs, #9081)"
+)
+for _tol_n in "${!LEAF_VERDICT_TOLERATED[@]}"; do
+  [[ -n "${LEAF_VERDICT_TOLERATED[$_tol_n]}" ]] || { echo "[FATAL] tolerated leaf $_tol_n has an empty reason" >&2; exit 2; }
+done
 add_leaf py-unittest            'python3 -m unittest tests.scripts.test_lint_rule_ids'
 add_leaf py-pytest-configure    'python3 -c "import tests.conftest as c; c.pytest_configure()"'
 VITEST_BIN="$REPO_ROOT/apps/web-platform/node_modules/.bin/vitest"
@@ -297,12 +345,19 @@ verdict "$([[ "$n_noop" == "0" ]] && echo 0 || echo 1)" "H3: a no-op runtime lea
 REAL_MKTEMP="$(command -v mktemp)"
 assert_fixture_dir "$BASE"
 mkdir -p "$BASE/shim"
-cat > "$BASE/shim/mktemp" <<'SHIMEOF'
+cat > "$BASE/shim/mktemp" <<SHIMEOF
 #!/bin/sh
-printf 'x\n' >> "$SOLEUR_SHIM_LOG"
-exec "$SOLEUR_REAL_MKTEMP" "$@"
+# The env-carried SOLEUR_SHIM_LOG is wiped when a leaf sandboxes a child with
+# \`env -i\` (cloud-init-inngest-bootstrap.test.sh's G4 runner does) while the
+# shim stays on the inherited PATH — the old form also read env-carried
+# SOLEUR_REAL_MKTEMP and then ran \`exec ""\` so the LEAF failed 127, an
+# instrument breaking the measured system. The real mktemp path is baked in at
+# creation; the count line is skipped (never fails) when the log var is gone.
+# Bound: allocations inside env-scrubbed children go uncounted — safe direction
+# (a false-RED on anti-vacuity, never a false-GREEN).
+[ -n "\${SOLEUR_SHIM_LOG:-}" ] && printf 'x\n' >> "\$SOLEUR_SHIM_LOG"
+exec "$REAL_MKTEMP" "\$@"
 SHIMEOF
-export SOLEUR_REAL_MKTEMP="$REAL_MKTEMP"
 chmod +x "$BASE/shim/mktemp"
 shim_count() { if [[ -f "$1" ]]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
 assert_fixture_dir "$BASE"
@@ -354,8 +409,14 @@ for i in "${!LEAF_NAMES[@]}"; do
   rc="$(cat "$BASE/d.$n.rc" 2>/dev/null || echo 99)"
   new="$(new_since "$BASE/d.$n" "$BASE/d.$n.snap")"; nrc=$?
   nnew=0; [[ -n "$new" ]] && nnew="$(printf '%s\n' "$new" | wc -l | tr -d ' ')"
-  [[ "$rc" == "0" ]] && ran=$((ran + 1))
-  verdict "$([[ "$rc" == "0" ]] && echo 0 || echo 1)" "[$n] direct run exits 0 (rc=$rc)"
+  tol="${LEAF_VERDICT_TOLERATED[$n]:-}"
+  if [[ -n "$tol" ]]; then
+    [[ "$rc" != "99" ]] && ran=$((ran + 1))
+    verdict "$([[ "$rc" != "99" ]] && echo 0 || echo 1)" "[$n] direct run executed (rc=$rc; verdict tolerated: $tol)"
+  else
+    [[ "$rc" == "0" ]] && ran=$((ran + 1))
+    verdict "$([[ "$rc" == "0" ]] && echo 0 || echo 1)" "[$n] direct run exits 0 (rc=$rc)"
+  fi
   verdict "$([[ "$nrc" == "0" && "$nnew" == "0" ]] && echo 0 || echo 1)" "[$n] delta == 0 after a normal exit (left $nnew: $(printf '%s' "$new" | head -3 | tr '\n' ' '))"
 
   parent="$(cat "$BASE/c.$n.parent")"
@@ -368,11 +429,15 @@ for i in "${!LEAF_NAMES[@]}"; do
   else
     made="$(count_created "$BASE/c.$n" "$parent")"
   fi
-  verdict "$([[ "$crc" == "0" && "$made" -ge 1 ]] && echo 0 || echo 1)" "[$n] anti-vacuity: the leaf created >= 1 scratch entry (rc=$crc, created=$made)"
+  if [[ -n "$tol" ]]; then
+    verdict "$([[ "$crc" != "99" && "$made" -ge 1 ]] && echo 0 || echo 1)" "[$n] anti-vacuity: the leaf created >= 1 scratch entry (rc=$crc, created=$made; verdict tolerated)"
+  else
+    verdict "$([[ "$crc" == "0" && "$made" -ge 1 ]] && echo 0 || echo 1)" "[$n] anti-vacuity: the leaf created >= 1 scratch entry (rc=$crc, created=$made)"
+  fi
   verdict "$([[ -d "$parent" ]] && echo 0 || echo 1)" "[$n] nesting: an adopted parent root is never deleted by the leaf"
 done
 # Derived floors: EVERY registered leaf must run and exit 0 (not a typed ">= 8 of 11").
-verdict "$([[ "$N_LEAVES" -ge 1 && "$ran" -eq "$N_LEAVES" ]] && echo 0 || echo 1)" "floor: all $N_LEAVES registered leaves executed and exited 0 (ran=$ran) -- 0 checked is a failure"
+verdict "$([[ "$N_LEAVES" -ge 1 && "$ran" -eq "$N_LEAVES" ]] && echo 0 || echo 1)" "floor: all $N_LEAVES registered leaves executed and exited 0 or tolerated (ran=$ran) -- 0 checked is a failure"
 
 # --- probes: SIGTERM, SIGKILL, nesting validation, marker contract --------------------------------
 cat > "$BASE/probe.ts" <<'EOF'

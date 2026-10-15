@@ -176,4 +176,4 @@ Soleur's TOMs that bound Flagsmith-side risk under PA-1 + PA-2:
   `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` (PR-1).
 - `docs/legal/gdpr-policy.md` §2.2 (PR-1).
 - Umbrella issue #4456; draft PR #4455; plan
-  `knowledge-base/project/plans/2026-05-25-feat-audit-env-flags-flagsmith-policy-plan.md`.
+  `knowledge-base/project/plans/archive/20261013-014038-2026-05-25-feat-audit-env-flags-flagsmith-policy-plan.md`.

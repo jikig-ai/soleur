@@ -39,6 +39,11 @@ import {
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
+import {
+  hasUndeletableActionSendsAnchor,
+  tearDownTenantUser,
+  tearDownTenantUsers,
+} from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -184,29 +189,20 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       userA_grantId = grantRows![0].id as string;
     });
 
+    // The helper's anonymise-first sequence covers this suite's
+    // anonymise_action_sends + anonymise_scope_grants RPCs, runs even if
+    // individual tests failed, and is fail-loud per #10096 — a teardown
+    // failure reds the suite instead of leaking the synthetic user.
+    // 60_000: ~24 sequential round-trips × 2 users under withGoTrueRetry.
     afterAll(async () => {
-      // anonymise + delete users. Anonymise runs even if individual tests
-      // failed — keeps the test DB cleanish.
-      for (const u of [userA, userB]) {
-        if (!u.id) continue;
-        assertSynthetic(u.email);
-        try {
-          await service.rpc("anonymise_action_sends", { p_user_id: u.id });
-        } catch {
-          /* tolerate teardown failures */
-        }
-        try {
-          await service.rpc("anonymise_scope_grants", { p_user_id: u.id });
-        } catch {
-          /* tolerate teardown failures */
-        }
-        try {
-          await service.auth.admin.deleteUser(u.id);
-        } catch {
-          /* tolerate teardown failures */
-        }
-      }
-    });
+      await tearDownTenantUsers(service, [userA, userB], {
+        tolerate: async (_err, u) =>
+          // #10254: a user who ever had an action_sends row is undeletable
+          // (anonymised WORM row anchors its message). Tolerate ONLY that
+          // verified defect — any other teardown failure stays loud.
+          !!u.id && (await hasUndeletableActionSendsAnchor(service, u.id)),
+      });
+    }, 60_000);
 
     test("(a) INSERT happy → 201", async () => {
       const msg = await seedDraftMessage(service, userA.id, ACTION_CLASS);
@@ -441,16 +437,19 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(rearmErr!.code).toBe("P0001");
       expect(rearmErr!.message).toMatch(/append-only|WORM/i);
 
-      // Best-effort cleanup of the throwaway user — independent of the
-      // assertion under test. Cascade-ordering owned by
-      // account-delete-scope-grants-cascade.test.ts.
+      // Cleanup of the throwaway user — independent of the assertion under
+      // test. Cascade-ordering owned by
+      // account-delete-scope-grants-cascade.test.ts. Fail-loud per #10096 —
+      // except the #10254 shape: this test deliberately seeded an
+      // action_sends row, so the user is undeletable while that NO-ACTION
+      // message anchor exists (WORM). Tolerate only the verified anchor.
       try {
-        await service.rpc("anonymise_scope_grants", { p_user_id: u.id });
-      } catch { /* tolerate teardown failure */ }
-      try {
-        await service.auth.admin.deleteUser(u.id);
-      } catch { /* tolerate teardown failure */ }
-    });
+        await tearDownTenantUser(service, u);
+      } catch (err) {
+        if (!(await hasUndeletableActionSendsAnchor(service, u.id)))
+          throw err;
+      }
+    }, 30_000);
 
     test("(i) cross-tenant SELECT → 0 rows", async () => {
       // userA has rows; userB queries via JWT → RLS owner-select must

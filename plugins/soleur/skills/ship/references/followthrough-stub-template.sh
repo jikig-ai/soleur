@@ -7,7 +7,10 @@
 # Exit semantics (enforced by scripts/sweep-followthroughs.sh):
 #   0 = PASS         (close-criteria met; sweeper closes the issue)
 #   1 = FAIL         (criteria not met; sweeper comments, leaves open)
-#   * = TRANSIENT    (network error, unexpected state; sweeper retries next sweep)
+#   2 = NOT YET      (rendered "NOT YET"; the issue stays open)
+#   3 = CANNOT ESTABLISH (rendered as such; the issue stays open: use it when a read the verdict depends on failed)
+#   5 = ACTION REQUIRED  (rendered as such; a human must act)
+#   * = TRANSIENT    (any other code: network error, unexpected state; sweeper retries next sweep)
 #
 # Required secrets: declare via the directive `secrets=` clause AND add to
 # .github/workflows/scheduled-followthrough-sweeper.yml env: block.
@@ -49,9 +52,27 @@ esac
 #   - GH probe:   gh run list --workflow <wf>.yml --status success --limit 1 --json conclusion | jq -e ... && exit 0 || exit 1
 #   - Operator-confirmed: source the trusted-verdict lib; NEVER read .comments[].body directly.
 #       source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
-#       bodies="$(trusted_verdict_bodies <N>)" || exit 2      # rc 2 = TRANSIENT, not "no verdict"
-#       last="$(printf '%s\n' "$bodies" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
+#       bodies="$(trusted_verdict_bodies <N>)" || exit 3      # lib rc 2 = a failed trust read, never "no verdict": a new probe exits 3 (CANNOT ESTABLISH), not 2 (NOT YET)
+#       # read the marker through a CHECKED chain: a bare `last="$(... | grep ... | tail -1)"` drops the status of every stage, so a grep error (rc >= 2)
+#       # or a failing tail reads as "no verdict" (grep rc 1 = no match is an answer; every other non-zero status is not)
+#       last="$(printf '%s\n' "$bodies" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1; printf '#%s' "${PIPESTATUS[*]}")"
+#       case "${last##*#}" in "0 0 0"|"0 1 0") : ;; *) echo "CANNOT ESTABLISH: marker read failed (RESULT)"; exit 3 ;; esac
+#       last="${last%#*}"; last="${last%$'\n'}"
 #       [[ "$last" =~ ^RESULT:\ PASS ]] && exit 0 || exit 1
+#     MARKER-FAMILY CONTRACT (the lib header is the single statement): a lib-routed probe's marker grep must match
+#     a line the lib's candidate regex also matches; a marker outside that family is dropped without an error
+#     (rc 0, empty result), so a probe cannot tell it from "nobody posted it".
+#     Which view: the bodies view is the default. A probe that needs the COMMENT'S created time (the
+#     S3 soak orders S3-CONFIRMED before S3-ACTIVATED by it) calls the comments view instead, which
+#     carries each trusted comment's createdAt as one JSON object {t,b} per comment (a marker probe
+#     that orders by the marker's own timestamp, like S2, needs only the bodies view above):
+#       recs="$(trusted_verdict_comments <N>)" || exit 3      # lib rc 2 (its causes are the rc 2 list in the lib header): exit 3 (CANNOT ESTABLISH)
+#       trusted="$(jq -r '.b' <<<"$recs" | tr -d '\r')" || exit 3   # check the projection too
+#     Both examples exit 3 on a failed trust read: the sweeper renders 3 as CANNOT ESTABLISH and 2 as
+#     NOT YET (scripts/sweep-followthroughs.sh, the rc -> word map), so exit 2 would tell the operator
+#     "wait" about a read that FAILED. New probes reserve 2 for "the evidence is not there yet". The three
+#     `RESULT:` probes that predate the rule (concierge-strand-754ee124-5733.sh, cpx22-invoice-reconcile-7431.sh,
+#     inngest-zot-client-authz-6500.sh) exit 2 on a lib rc 2, which renders NOT YET: still non-closing.
 #
 #     The unfiltered `.comments[].body` form this line used to show is FORGEABLE: the repo is
 #     public with issues open, so one HTTP POST of `RESULT: PASS` from any authenticated user
@@ -60,12 +81,12 @@ esac
 #     membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped
 #     silently (#6617: two months of nightly FAIL on an already-recorded verdict).
 #
-#     lint-followthrough-varq-ban.sh rule 4 enforces the OBLIGATION, not a ban on one spelling:
-#     under scripts/followthroughs/, reading issue comments AND branching on a RESULT: verdict
-#     without calling trusted_verdict_bodies is the violation. The authorAssociation form is
-#     subsumed by that, and so is an unfiltered read with no author filter at all — which is the
-#     shape a ban on the wrong mechanism could not see. Calling the lib does not license a raw
-#     .comments[].body read beside it.
+#     lint-followthrough-varq-ban.sh enforces both halves: rule 4 is the OBLIGATION (under
+#     scripts/followthroughs/, reading issue comments AND branching on a RESULT: verdict or an
+#     S<n>- soak marker without calling trusted_verdict_bodies / trusted_verdict_comments is the
+#     violation, so an unfiltered read with no author filter at all is caught), and rule 5 is the
+#     SPELLING ban (author_association / authorAssociation on an executable line). Calling the lib
+#     does not license a raw .comments[].body read beside it.
 
 echo "TRANSIENT: stub not customized" >&2
 exit 2

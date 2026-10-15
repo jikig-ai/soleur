@@ -513,7 +513,15 @@ printf '\n'
 # hook-input-classification-mutation.test.sh, scripts/lib/test-affected-paths.sh (main's 4 -> 5
 # entry), test-jaccard-duplicates.sh, test_drop_sentinel_parity.sh. Lowering is the ratchet's
 # normal direction; the member is gone, not carved out.
-OUTSIDE_CEILING=4
+#
+# 4 -> 5 on 2026-10-12 (#6760): plugins/soleur/skills/skill-security-scan/test/
+# meta-dir-reap.test.sh gained a hook-side producer pin — it greps the path literal
+# `.claude/hooks/skill-security-scan-write.sh` as DATA (a source anchor asserting the
+# sss-write.*.err shape still lives inside the reap window). It never spawns the hook:
+# grep the file for a command position and `hook_producer` appears only as a grep
+# operand — the same measured zero-leak over-count class as test-affected-paths.sh's
+# basename literals.
+OUTSIDE_CEILING=5
 rc=1; [ "$n_out" -le "$OUTSIDE_CEILING" ] && rc=0
 verdict "$rc" "the outside set has not grown ($n_out, ceiling $OUTSIDE_CEILING)"
 

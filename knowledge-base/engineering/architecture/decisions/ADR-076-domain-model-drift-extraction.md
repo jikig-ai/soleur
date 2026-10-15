@@ -5,9 +5,9 @@ date: 2026-07-01
 related_adrs: [ADR-038, ADR-044, ADR-073]
 related: [5754, 5871, 5872, 5773]
 related_plans:
-  - knowledge-base/project/plans/2026-07-01-feat-sync-domain-model-drift-plan.md
+  - knowledge-base/project/plans/archive/20261013-041741-2026-07-01-feat-sync-domain-model-drift-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-sync-domain-model/spec.md
+  - knowledge-base/project/specs/archive/20261013-041741-feat-sync-domain-model/spec.md
 brand_survival_threshold: single-user incident
 ---
 

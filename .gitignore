@@ -55,9 +55,15 @@ __pycache__/
 .env
 # The mktemp sibling a generated bootstrap.sh writes beside its .env (operator-bootstrap)
 .env.tmp.*
+# The community setup scripts' write-env helper: its temp (a full copy of the .env while it runs), its mkdir
+# lock directory and its stale-lock recovery mutex (.env.lock.d.recover). A SIGKILLed run can leave any of them.
+.env.wenv.*
+.env.lock.d*
 # Generated bootstrap.sh run ledger — names-never-values local state written
 # beside the script in a TRACKED spec dir; committing it conflicts with every
-# branch that re-runs the bootstrap.
+# branch that re-runs the bootstrap. A finished run's ledger is kept by copying
+# it to bootstrap-runs-<issue>.jsonl beside the archived script; that name is
+# deliberately not matched here, so the record is tracked and live ledgers are not.
 bootstrap-runs.jsonl
 _site/
 _site_test/

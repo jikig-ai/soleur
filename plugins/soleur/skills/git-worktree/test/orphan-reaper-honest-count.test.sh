@@ -20,7 +20,7 @@
 # so every directory reads as unregistered; and an unsanitized directory name
 # interpolated into a line-oriented telemetry sink.
 #
-# Plan: knowledge-base/project/plans/2026-07-31-fix-honest-failure-reporting-hook-timeout-and-orphan-reaper-plan.md
+# Plan: knowledge-base/project/plans/archive/20261013-041741-2026-07-31-fix-honest-failure-reporting-hook-timeout-and-orphan-reaper-plan.md
 #
 # Run via:  bash plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh
 

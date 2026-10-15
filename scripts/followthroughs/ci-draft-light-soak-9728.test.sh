@@ -9,6 +9,8 @@
 # the wall clock, the live repo or the real resolver. Fixtures are synthesized (shas are `L###`/`F###`/`H###`,
 # PR numbers are 6xx-8xx, the tracker is the real #9728 only because the probe names it); nothing is written
 # outside a mktemp dir.
+# FIXTURE KEYS KEEP THE HISTORICAL NAMES (`untrustedact`, `marker=untrusted|collab|contrib`, the decoy association column): trust is the
+# fake permission table (perms.tsv), never the association.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export TZ=UTC
@@ -86,7 +88,19 @@ mk_jobs "$TMP/tpl/jobs-cancelledjobs.json" cancelled failure   # all four gated 
 # --- the fake gh: answers the endpoints the probe reads from $FX/*.json, applying --jq with real jq ---------------------------
 cat > "$TMP/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
-[ "$1" = "api" ] || exit 64
+# every refusal is LOGGED before exit 64: the lib sends `gh issue view` stderr to /dev/null and maps any failure to rc 2,
+# so without the log a refused argv would surface as CANNOT ESTABLISH and an rc-3 row would pass for the wrong reason
+refuse() { printf 'REFUSED %s\n' "$*" >> "$FX/refused.log"; exit 64; }
+if [ "$1" = "issue" ]; then   # issue view <N> --repo <r> --json comments [--jq <expr>]  (argv-strict)
+  [ "$2" = "view" ] && [ "$4" = "--repo" ] && [ "$6" = "--json" ] && [ "$7" = "comments" ] || refuse "$@"
+  if [ $# -eq 9 ]; then [ "$8" = "--jq" ] || refuse "$@"; jqx="$9"; elif [ $# -eq 7 ]; then jqx=""; else refuse "$@"; fi
+  printf 'issue view %s --repo %s --json comments\n' "$3" "$5" >> "$FX/requests.log"
+  [ -f "$FX/fail-comments" ] && { echo "gh: HTTP 403 Resource not accessible" >&2; exit 1; }
+  f="$FX/gql-comments-$3.json"; [ -f "$f" ] || exit 1
+  if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi
+  exit 0
+fi
+[ "$1" = "api" ] || refuse "$@"
 shift
 paginate=0; jqx=""; ep=""; gsha=""
 while (( $# )); do
@@ -94,7 +108,7 @@ while (( $# )); do
     --paginate) paginate=1 ;;
     --jq) jqx="$2"; shift ;;
     -f|-F) case "$2" in sha=*) gsha="${2#sha=}" ;; esac; shift ;;
-    -*) exit 64 ;;
+    -*) refuse "api $*" ;;
     *) ep="$1" ;;
   esac
   shift
@@ -105,11 +119,16 @@ case "$ep" in
   repos/*/pulls/9885) [ -f "$FX/fail-pr" ] && { echo "gh: HTTP 500" >&2; exit 1; }; emit "$FX/pr.json" ;;
   repos/*/pulls\?state=open\&per_page=100) [ -f "$FX/fail-open" ] && { echo "gh: HTTP 500" >&2; exit 1; }; emit "$FX/open.json" ;;
   repos/*/pulls/[0-9]*) [ -f "$FX/fail-mgpr" ] && { echo "gh: HTTP 500" >&2; exit 1; }; emit "$FX/prn-${ep##*/}.json" ;;
-  repos/*/issues/9728/comments\?per_page=100)
-    [ -f "$FX/fail-comments" ] && { echo "gh: HTTP 403 Resource not accessible" >&2; exit 1; }
-    (( paginate )) || exit 64   # past 100 comments only a paginated read sees a later marker
-    for f in "$FX/comments-1.json" "$FX/comments-2.json"; do [ -f "$f" ] && { if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi; }; done
-    exit 0 ;;
+  repos/*/collaborators/*/permission)   # the permission endpoint: perms.tsv is `login<TAB>perm|403|404`; stderr texts mirror the real gh
+    [ -n "$jqx" ] || refuse "$ep (no --jq)"
+    l="${ep#*collaborators/}"; l="${l%%/*}"
+    p="$(awk -F'\t' -v l="$l" '$1 == l { print $2; exit }' "$FX/perms.tsv")"
+    case "$p" in
+      "")  refuse "$ep (login not in perms.tsv)" ;;
+      404) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
+      403) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
+      *)   printf '{"permission":"%s"}\n' "$p" | jq -r "$jqx"; exit 0 ;;
+    esac ;;
   repos/*/actions/workflows/ci.yml/runs\?event=pull_request\&status=completed*) [ -f "$FX/fail-runs" ] && { echo "gh: HTTP 500" >&2; exit 1; }; emit "$FX/runs.json" ;;
   repos/*/actions/workflows/ci.yml/runs\?event=pull_request\&head_sha=*) [ -f "$FX/fail-headrun" ] && { echo "gh: HTTP 500" >&2; exit 1; }
     s="${ep#*head_sha=}"; emit "$FX/headrun-${s%%&*}.json" ;;
@@ -118,17 +137,18 @@ case "$ep" in
     [ -f "$FX/fail-jobs" ] && { echo "gh: HTTP 500" >&2; exit 1; }
     r="${ep#*runs/}"; r="${r%%/*}"; [ -f "$FX/kind-$r" ] || exit 1; emit "$TPL/jobs-$(cat "$FX/kind-$r").json" ;;
   graphql) [ -f "$FX/fail-gql" ] && { echo "gh: HTTP 502" >&2; exit 1; }; emit "$FX/gql-$gsha.json" ;;
-  *) exit 64 ;;
+  *) refuse "$ep" ;;
 esac
 FAKE
 chmod +x "$TMP/bin/gh"
 
 # build_fx <dir> <light runs> <full runs> [key=value ...]    (newest runs first in the fake listing; every run is a completed PR run)
-#   actdays=D  S3-ACTIVATED D days before the injected now (default 8, by an OWNER); noact: none; untrustedact: by NONE
-#   deact: a later S3-DEACTIVATED (act+30h)   page2: it is on comments page 2   twoact: an older ACTIVATED too (act-8d)
-#   crlf: markers end in CRLF   badts: ACTIVATED without the Z   midact: ACTIVATED mid-line/with trailing text
+#   actdays=D  S3-ACTIVATED D days before the injected now (default 8, by an OWNER); noact: none; untrustedact: by a login with no repository permission (404)
+#   deact: a later S3-DEACTIVATED (act+30h)   latebatch: it is staged in a SECOND fixture batch (merged into one list; gh's own paging is measured, not modelled)   twoact: an older ACTIVATED too (act-8d)
+#   crlf: markers end in CRLF (a line follows each marker: the lib turns a LONE trailing CR into a line ending, a CR before an LF survives to the caller)   badts: ACTIVATED without the Z   midact: ACTIVATED mid-line/with trailing text
 #   confirmed=url|quote|none|late|untrusted|placeholder|bare|mid   the S3-CONFIRMED comment (default url, before the activation)
-#   marker=yes|none|mid|untrusted|nonurl|placeholder|collab|contrib|lookalike|foreign   the S3-EXIT-CENSUS comment
+#   marker=yes|none|mid|untrusted|nonurl|placeholder|collab|contrib|lookalike|foreign   the S3-EXIT-CENSUS comment (`untrusted` = a login with
+#     no permission, `collab` = write, `contrib` = read; the association key is a decoy)
 #   merged=<epoch>  the S3 PR merge time (default now-12d)   unmerged: the PR is not merged
 #   earlylight=K  K light runs BEFORE the activation   rerun=K  K more runs on the first K light shas
 #   extra=<k>[,<k>...]  one more run per kind, newest in the listing: lightsuccess lightnotest lightready lightconverted
@@ -139,20 +159,27 @@ chmod +x "$TMP/bin/gh"
 #   mgnonqueue: a merge_group run on a non-queue branch   mgn=K  K merge_group runs (default 6)   mgbadat=I  mgbad at queue position I
 #   conf2: a second, LATER S3-CONFIRMED   between: a light run between two activations (with twoact)
 #   failX: the X read fails (pr|open|comments|runs|jobs|gql|mg|mgpr|headrun)
+#   EVERY comment carries an `authorAssociation` DECOY and a stable author login that maps to a row of perms.tsv (the fake
+#   permission endpoint): owner-op admin, member-op write, collab-op write, contrib-op read, none-op 404. The DEFAULT activation
+#   comment is by `priv-op`, whose association reads CONTRIBUTOR (a private org member under the sweeper's token) but whose
+#   repository permission is admin, so an association-consulting probe fails ~40 rows, not two.
+#   privact: ALSO the S3-CONFIRMED comment (and a `late` one) is by priv-op   assocowner: the activation's association is OWNER but its
+#   author's permission is `read` (the decoy must be ignored)   permfail: `priv-op`'s permission read is a 403
 build_fx() {
   local fx="$1" nl="$2" nf="$3"; shift 3
   assert_fixture_dir "$fx"; rm -rf "$fx"; mkdir -p "$fx"
-  local actdays=8 noact=0 untrustedact=0 deact=0 page2=0 twoact=0 crlf=0 badts=0 midact=0 confirmed=url marker=yes
+  local actdays=8 noact=0 untrustedact=0 deact=0 latebatch=0 twoact=0 crlf=0 badts=0 midact=0 confirmed=url marker=yes
   local merged="$MERGED_EPOCH" unmerged=0 earlylight=0 rerun=0 extra="" oldlast="" pad=0 stalled="" vmode="" noopen=0
-  local mgbad=0 mgolder=0 mgnonqueue=0 mgn=6 mgbadat=3 conf2=0 between=0 kv
+  local mgbad=0 mgolder=0 mgnonqueue=0 mgn=6 mgbadat=3 conf2=0 between=0 privact=0 assocowner=0 permfail=0 kv
   for kv in "$@"; do
     case "$kv" in
-      actdays=*) actdays="${kv#*=}" ;; noact) noact=1 ;; untrustedact) untrustedact=1 ;; deact) deact=1 ;; page2) page2=1 ;;
+      actdays=*) actdays="${kv#*=}" ;; noact) noact=1 ;; untrustedact) untrustedact=1 ;; deact) deact=1 ;; latebatch) latebatch=1 ;;
       twoact) twoact=1 ;; crlf) crlf=1 ;; badts) badts=1 ;; midact) midact=1 ;; confirmed=*) confirmed="${kv#*=}" ;;
       marker=*) marker="${kv#*=}" ;; merged=*) merged="${kv#*=}" ;; unmerged) unmerged=1 ;; earlylight=*) earlylight="${kv#*=}" ;;
       rerun=*) rerun="${kv#*=}" ;; extra=*) extra="${kv#*=}" ;; oldlast=*) oldlast="${kv#*=}" ;; pad=*) pad="${kv#*=}" ;;
       stalled=*) stalled="${kv#*=}" ;; vfail|vgarbage|vunknown|vmismatch|vnoise0) vmode="$kv" ;; noopen) noopen=1 ;;
       conf2) conf2=1 ;; between) between=1 ;; mgbad) mgbad=1 ;; mgolder) mgolder=1 ;; mgnonqueue) mgnonqueue=1 ;; mgn=*) mgn="${kv#*=}" ;; mgbadat=*) mgbadat="${kv#*=}" ;;
+      privact) privact=1 ;; assocowner) assocowner=1 ;; permfail) permfail=1 ;;
       fail*) : > "$fx/fail-${kv#fail}" ;;
     esac
   done
@@ -261,50 +288,62 @@ build_fx() {
   (( mgnonqueue )) && mg="$mg{\"id\":7999,\"head_branch\":\"feature/pr-899-deadbeef\"},"
   printf '{"workflow_runs":[%s]}\n' "${mg%,}" > "$fx/mg.json"
 
-  # ---- the tracker's comments: [{body, author_association, created_at}] ----
+  # ---- the tracker's comments: [{body, author_association (a DECOY the probe must ignore), created_at}] ----
   local cr=; (( crlf )) && cr=$'\r'
   local -a cm=() cm2=()
-  addc() { # <array name> <association> <created epoch> <body>
+  addc() { # <array name> <association> <created epoch> <body> [login]
     local -n arr="$1"; local iso; isoof "$3" iso
-    arr+=("$(jq -nc --arg b "$4" --arg a "$2" --arg t "$iso" '{body:$b,author_association:$a,created_at:$t}')")
+    arr+=("$(jq -nc --arg b "$4" --arg a "$2" --arg t "$iso" --arg l "${5:-}" '{body:$b,author_association:$a,created_at:$t} + (if $l == "" then {} else {login:$l} end)')")
   }
   addc cm OWNER $((act_epoch - 90000)) "noted"
   local ts_on; isoof "$act_epoch" ts_on
   if (( ! noact )); then
-    local assoc=OWNER; (( untrustedact )) && assoc=NONE
     if (( badts )); then addc cm OWNER "$act_epoch" "S3-ACTIVATED: ${ts_on%Z}"
     elif (( midact )); then addc cm OWNER "$act_epoch" "see S3-ACTIVATED: $ts_on"$'\n'"S3-ACTIVATED: $ts_on and then some"
-    else addc cm "$assoc" "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}"; fi
+    elif (( assocowner )); then addc cm OWNER "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}${cr:+$'\n'thanks}" ownread-op
+    elif (( untrustedact )); then addc cm NONE "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}${cr:+$'\n'thanks}"
+    else addc cm CONTRIBUTOR "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}${cr:+$'\n'thanks}" priv-op; fi
     if (( twoact )); then local ts_old; isoof "$first_on_epoch" ts_old; addc cm OWNER "$first_on_epoch" "S3-ACTIVATED: $ts_old"; fi
   fi
   if (( deact )); then
     local ts_off; isoof "$off_epoch" ts_off
-    if (( page2 )); then addc cm2 OWNER "$off_epoch" "S3-DEACTIVATED: $ts_off"; else addc cm OWNER "$off_epoch" "S3-DEACTIVATED: $ts_off"; fi
+    if (( latebatch )); then addc cm2 OWNER "$off_epoch" "S3-DEACTIVATED: $ts_off"; else addc cm OWNER "$off_epoch" "S3-DEACTIVATED: $ts_off"; fi
   fi
   local conf_at=$((first_on_epoch - 3600)); (( noact )) && conf_at=$((NOW_EPOCH - 5 * 86400))
   case "$confirmed" in
-    url)         addc cm MEMBER "$conf_at" "CTO review, as posted:${cr}"$'\n'"S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1${cr}" ;;
-    quote)       addc cm OWNER "$conf_at" "S3-CONFIRMED: \"activation proceeds without the CTO comment\"" ;;
-    late)        addc cm OWNER $((first_on_epoch + 3600)) "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1" ;;
+    url)         if (( privact )); then addc cm CONTRIBUTOR "$conf_at" "CTO review, as posted:${cr}"$'\n'"S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1${cr}${cr:+$'\n'thanks}" priv-op
+                 else addc cm MEMBER "$conf_at" "CTO review, as posted:${cr}"$'\n'"S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1${cr}${cr:+$'\n'thanks}"; fi ;;
+    quote)       addc cm OWNER "$conf_at" "S3-CONFIRMED: \"activation proceeds without the CTO comment\"${cr}${cr:+$'\n'thanks}" ;;
+    late)        if (( privact )); then addc cm CONTRIBUTOR $((first_on_epoch + 3600)) "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1" priv-op
+                 else addc cm OWNER $((first_on_epoch + 3600)) "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1"; fi ;;
     untrusted)   addc cm NONE "$conf_at" "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1" ;;
     placeholder) addc cm OWNER "$conf_at" "S3-CONFIRMED: <url or quoted statement>" ;;
     bare)        addc cm OWNER "$conf_at" "S3-CONFIRMED: ok" ;;
-    mid)         addc cm OWNER "$conf_at" "I will post S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876" ;;
+    mid)         addc cm OWNER "$conf_at" "I will post S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876"$'\nS3-NOTE: draft' ;;   # the second line makes the comment a lib CANDIDATE (the lib drops a comment with no line-start marker before the probe sees it), so the probe's own ^ anchor stays the thing under test
   esac
   (( conf2 )) && addc cm OWNER $((first_on_epoch + 7200)) "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-9"
   case "$marker" in
-    yes)         addc cm MEMBER $((NOW_EPOCH - 3600)) "exit census${cr}"$'\n'"S3-EXIT-CENSUS: https://github.com/jikig-ai/soleur/issues/9728#issuecomment-2${cr}" ;;
+    yes)         addc cm MEMBER $((NOW_EPOCH - 3600)) "exit census${cr}"$'\n'"S3-EXIT-CENSUS: https://github.com/jikig-ai/soleur/issues/9728#issuecomment-2${cr}${cr:+$'\n'thanks}" ;;
     lookalike)   addc cm OWNER $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: https://githubXcom/x/y" ;;
     foreign)     addc cm OWNER $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: https://example.com/x/y" ;;
     contrib)     addc cm CONTRIBUTOR $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: https://github.com/x/y" ;;
     collab)      addc cm COLLABORATOR $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: https://github.com/x/y" ;;
-    mid)         addc cm OWNER $((NOW_EPOCH - 3600)) "we will post an S3-EXIT-CENSUS: https://github.com/x/y" ;;
+    mid)         addc cm OWNER $((NOW_EPOCH - 3600)) "we will post an S3-EXIT-CENSUS: https://github.com/x/y"$'\nS3-NOTE: draft' ;;   # candidate line: see the confirmed=mid fixture
     untrusted)   addc cm NONE $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: https://github.com/x/y" ;;
     nonurl)      addc cm OWNER $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: see-my-notes" ;;
     placeholder) addc cm OWNER $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: <url>" ;;
   esac
-  printf '[%s]\n' "$(IFS=,; printf '%s' "${cm[*]}")" > "$fx/comments-1.json"
-  (( page2 )) && printf '[%s]\n' "$(IFS=,; printf '%s' "${cm2[*]}")" > "$fx/comments-2.json"
+  assert_fixture_dir "$fx"
+  printf '[%s]\n' "$(IFS=,; printf '%s' "${cm[*]}")" > "$fx/stage-1.json"
+  (( latebatch )) && printf '[%s]\n' "$(IFS=,; printf '%s' "${cm2[*]}")" > "$fx/stage-2.json"
+  # the `gh issue view --json comments` shape (what the trusted-author lib reads): every comment gets a stable login that
+  # maps to a permission row, while its association stays on the comment as a DECOY the probe must ignore
+  jq -n --argjson a "$(cat "$fx/stage-1.json")" --argjson b "$( [ -f "$fx/stage-2.json" ] && cat "$fx/stage-2.json" || echo '[]')" '
+    {OWNER:"owner-op",MEMBER:"member-op",COLLABORATOR:"collab-op",CONTRIBUTOR:"contrib-op",NONE:"none-op"} as $m
+    | {comments: ($a + $b | map({author:{login:(.login // $m[.author_association])},
+        authorAssociation:.author_association, createdAt:.created_at, body:.body}))}' > "$fx/gql-comments-9728.json"
+  local pp=admin; (( permfail )) && pp=403
+  printf 'owner-op\tadmin\nmember-op\twrite\ncollab-op\twrite\ncontrib-op\tread\nnone-op\t404\npriv-op\t%s\nownread-op\tread\n' "$pp" > "$fx/perms.tsv"
   return 0
 }
 
@@ -317,15 +356,124 @@ expect() {
   local out rc
   out="$(env FX="$fx" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_BIN="$TMP/verdict-stub.sh" "$@" bash "$PROBE_UNDER" 2>&1)"; rc=$?
   note_crash "$out"
+  if [ -s "$fx/refused.log" ]; then fail "$label: the fake gh REFUSED an argv (the row would pass or fail for the wrong reason): $(head -2 "$fx/refused.log" | tr '\n' '|')"; return; fi
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 }
 # the same run, returning the output (for assertions on the request log or the info line)
 LAST_OUT=""
 expect_out() { LAST_OUT="$(env FX="$1" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_BIN="$TMP/verdict-stub.sh" bash "$PROBE_UNDER" 2>&1)"; note_crash "$LAST_OUT"; }
 
+# mk_tree <name> [probe source] [nolink|nofn|srcfail|onlybodies|onlycomments|stublib|stubconf] -> prints the path of a copy of the probe inside a MIRRORED tree: the probe sources
+# the trust lib by a relative path, so a lone copy in $TMP would resolve no lib, the source guard would exit 3 on EVERY row, every mutant
+# would be "caught" by that alone and the verdict would prove nothing. scripts/lib is a symlink to the real lib (probe-only mutants; lib
+# mutants live in the lib suite); `nolink` leaves it out (a control); `nofn` puts a lib that sources cleanly but defines no view; `srcfail` one that defines both views and then returns
+# non-zero; `stublib` puts a stub lib whose helper prints non-JSON and
+# `stubconf` one whose helper prints JSON whose `.b` is not a string (parses for the body projection, not for the confirmation one).
+mk_tree() {
+  local d="$TMP/tree-$1"; rm -rf "$d"; mkdir -p "$d/scripts/followthroughs"
+  cp "${2:-$PROBE}" "$d/scripts/followthroughs/ci-draft-light-soak-9728.sh"
+  case "${3:-}" in
+    nolink) : ;;
+    nofn) mkdir -p "$d/scripts/lib"; printf '# a lib that defines nothing\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    srcfail) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_bodies() { return 0; }\ntrusted_verdict_comments() { return 0; }\nreturn 3\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    onlybodies) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_bodies() { return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    onlycomments) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_comments() { return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    stublib) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_bodies() { return 0; }\ntrusted_verdict_comments() { printf "not json at all\n"; return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    stubconf) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_bodies() { return 0; }\ntrusted_verdict_comments() { printf "{\\"t\\":\\"2026-10-01T00:00:00Z\\",\\"b\\":5}\\n"; return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    *) ln -s "$REPO_ROOT/scripts/lib" "$d/scripts/lib" ;;
+  esac
+  printf '%s\n' "$d/scripts/followthroughs/ci-draft-light-soak-9728.sh"
+}
+
 # A lean PASS fixture is 20 light pushes + 6 full runs, active 8 days, confirmed before the activation, census attached.
 # --- baseline and the info line ------------------------------------------------------------------------------------------
 r_pass()      { build_fx "$TMP/c1" 20 6;                                   expect "PASS: 20 distinct draft pushes light over 8 days, confirmed, census attached, a draft PR with a stalled stub line ignored" 0 "PASS" "$TMP/c1"; }
+r_privmember(){ build_fx "$TMP/c1p" 20 6 privact;                         expect "PASS: S3-CONFIRMED then S3-ACTIVATED by a private-org-member admin (decoy association CONTRIBUTOR) count: trust is the permission lookup" 0 "PASS" "$TMP/c1p"; }
+r_late_conf_private(){ build_fx "$TMP/c1q" 20 6 confirmed=late privact;      expect "FAIL: S3-CONFIRMED by a private-org-member admin AFTER the activation still fails (ordering uses the preserved createdAt)" 1 "after the activation" "$TMP/c1q"; }
+r_assoc_decoy(){ build_fx "$TMP/c1r" 3 6 assocowner;                          expect "FAIL: light runs while the only activation is by an OWNER-association author whose permission is read (the association is a decoy)" 1 "no activation on record" "$TMP/c1r"; }
+r_permfail()  { build_fx "$TMP/c1s" 20 6 permfail;                           expect "CANNOT ESTABLISH: a 403 on the activation author's permission read is never a pass and never 'untrusted'" 3 "comment or permission read failed" "$TMP/c1s"; }
+r_badjq()     { build_fx "$TMP/c1t" 20 6
+  local keep="$PROBE_UNDER" t; t="$(mk_tree badjq "$PROBE_UNDER" stublib)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: helper output the projection cannot parse is never read as 'no marker', and the label says the LOCAL projection failed" 3 "comment projection failed (local jq) (tracker 9728 comments (projection))" "$TMP/c1t"
+  PROBE_UNDER="$keep"; }
+r_badconf()   { build_fx "$TMP/c1u" 20 6
+  local keep="$PROBE_UNDER" t; t="$(mk_tree badconf "$PROBE_UNDER" stubconf)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a confirmation projection that fails is never read as 'no S3-CONFIRMED', and the label says the LOCAL projection failed" 3 "comment projection failed (local jq) (tracker 9728 comments (confirmation projection))" "$TMP/c1u"
+  PROBE_UNDER="$keep"; }
+r_nolib()     { build_fx "$TMP/c1v" 20 6
+  local keep="$PROBE_UNDER" t; t="$(mk_tree nolib "$PROBE_UNDER" nolink)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a missing trust lib is its own message, never 'GitHub API read failed'" 3 "CANNOT ESTABLISH: trusted-verdict lib unavailable" "$TMP/c1v"
+  PROBE_UNDER="$keep"; }
+r_nofn()      { build_fx "$TMP/c1w" 20 6
+  local keep="$PROBE_UNDER" t; t="$(mk_tree nofn "$PROBE_UNDER" nofn)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a lib that sources but defines no view is the same message" 3 "CANNOT ESTABLISH: trusted-verdict lib unavailable" "$TMP/c1w"
+  PROBE_UNDER="$keep"; }
+r_srcfail()   { build_fx "$TMP/c1x" 20 6
+  local keep="$PROBE_UNDER" t; t="$(mk_tree srcfail "$PROBE_UNDER" srcfail)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a lib whose source returns non-zero is the same message even when both views are defined" 3 "CANNOT ESTABLISH: trusted-verdict lib unavailable" "$TMP/c1x"
+  PROBE_UNDER="$keep"; }
+r_nocomments(){ build_fx "$TMP/c1y" 20 6
+  local keep="$PROBE_UNDER" t; t="$(mk_tree nocomments "$PROBE_UNDER" onlybodies)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a lib lacking ONLY the comments view (the view this probe calls) is the lib-unavailable message" 3 "CANNOT ESTABLISH: trusted-verdict lib unavailable" "$TMP/c1y"
+  PROBE_UNDER="$keep"; }
+r_onlycomments(){ build_fx "$TMP/c1z" 0 6 noact merged=$((NOW_EPOCH - 3600))
+  local keep="$PROBE_UNDER" t; t="$(mk_tree onlycomments "$PROBE_UNDER" onlycomments)"; PROBE_UNDER="$t"
+  expect "NOT YET: a lib lacking ONLY the bodies view (a view this probe never calls) still runs the probe" 2 "not activated" "$TMP/c1z"
+  PROBE_UNDER="$keep"; }
+r_trfail()    { build_fx "$TMP/c1aa" 20 6
+  assert_fixture_dir "$TMP"; mkdir -p "$TMP/bin-trfail"; printf '#!/usr/bin/env bash\nexit 5\n' > "$TMP/bin-trfail/tr"; chmod +x "$TMP/bin-trfail/tr"
+  expect "CANNOT ESTABLISH: a failing CR strip (tr) in the comment projection is never read as 'no marker'" 3 "comment projection failed (local jq)" "$TMP/c1aa" PATH="$TMP/bin-trfail:$TMP/bin:$PATH"; }
+NEED_NEW=(grep sed tr tail head date rm dirname)   # the tools the probe or the lib runs by name that the need list did not name before the review
+r_needtools() { build_fx "$TMP/c1ab" 20 6
+  local t b ok=1 d out rc; assert_fixture_dir "$TMP"
+  for t in "${NEED_NEW[@]}"; do
+    d="$TMP/bin-no-$t"; rm -rf "$d"; mkdir -p "$d"; cp "$TMP/bin/gh" "$d/gh"
+    for b in bash env cat dirname rm mkdir mktemp basename wc cut uniq sort grep sed tr tail head date awk jq base64 timeout; do
+      [ "$b" = "$t" ] && continue
+      command -v "$b" >/dev/null 2>&1 && ln -s "$(command -v "$b")" "$d/$b"
+    done
+    out="$(env FX="$TMP/c1ab" TPL="$TMP/tpl" PATH="$d" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_BIN="$TMP/verdict-stub.sh" bash "$PROBE_UNDER" 2>&1)"; rc=$?
+    if [[ "$rc" != 3 || "$out" != *"CANNOT ESTABLISH: $t is not installed"* ]]; then ok=0; fail "need tools: without $t want rc 3 'CANNOT ESTABLISH: $t is not installed', got rc=$rc: $(printf '%s' "$out" | head -2 | tr '\n' '|')"; fi
+  done
+  (( ok )) && pass "CANNOT ESTABLISH: each of ${NEED_NEW[*]} missing from PATH is exit 3 naming it, never a silent 'no marker'"; }
+# mkshim <dir> <tool> <glob over the joined argv> <nth matching call> <err|silent>: a dir with the fake gh and ONE tool that, on its nth call whose
+# argv matches the glob, exits 2 (err) or exits 0 printing nothing (silent), and runs the real tool on every other call
+mkshim() {
+  local d="$1" t="$2" pat="$3" nth="$4" mode="$5" act real; real="$(command -v "$t")"
+  case "$mode" in err) act='exit 2' ;; silent) act='exit 0' ;; esac
+  assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d"; cp "$TMP/bin/gh" "$d/gh"
+  printf '#!/usr/bin/env bash\ncase "$*" in %s) n=$(( $(cat %q 2>/dev/null || echo 0) + 1 )); echo "$n" > %q; if [ "$n" = %s ]; then %s; fi ;; esac\nexec %q "$@"\n' \
+    "$pat" "$d/cnt" "$d/cnt" "$nth" "$act" "$real" > "$d/$t"
+  chmod +x "$d/gh" "$d/$t"
+}
+# the marker chains (first_on: grep, sed, sort, sed -n 1p; last_on: grep, sed, sort, tail; last_off: grep, sed, sort, tail; census: grep): each (chain, tool) failure injected on ITS
+# chain only is exit 3 naming the read, never "no marker". The DEACTIVATED chain runs against a fixture whose HEALTHY verdict is NOT YET (a dropped DEACTIVATED marker
+# used to read as an active soak and PASS at rc 0). The sort/tail/head shims count every call: the probe calls them once per chain, in the order first_on, last_on, last_off.
+r_markers() {
+  local spec label tool pat nth mode kind d fx n=0
+  local -a specs=(
+    "S3-ACTIVATED first|grep|*S3-ACTIVATED*|1|err|pass" "S3-ACTIVATED first|sed|*S3-ACTIVATED*|1|err|pass" "S3-ACTIVATED first|sort|*|1|err|pass" "S3-ACTIVATED first|sed|*1p*|1|err|pass"
+    "S3-ACTIVATED last|grep|*S3-ACTIVATED*|2|err|pass"  "S3-ACTIVATED last|sed|*S3-ACTIVATED*|2|err|pass"  "S3-ACTIVATED last|sort|*|2|err|pass"  "S3-ACTIVATED last|tail|*|1|err|pass"
+    "S3-DEACTIVATED last|grep|*S3-DEACTIVATED*|1|err|deact" "S3-DEACTIVATED last|sed|*S3-DEACTIVATED*|1|err|deact" "S3-DEACTIVATED last|sort|*|3|err|deact" "S3-DEACTIVATED last|tail|*|2|err|deact"
+    "S3-EXIT-CENSUS|grep|*S3-EXIT-CENSUS*|1|err|pass" "S3-EXIT-CENSUS|grep|*S3-EXIT-CENSUS*|1|silent|pass")
+  for spec in "${specs[@]}"; do
+    IFS='|' read -r label tool pat nth mode kind <<<"$spec"; n=$((n + 1)); fx="$TMP/mk$n"; d="$TMP/bin-mk$n"
+    if [ "$kind" = deact ]; then build_fx "$fx" 20 6 deact; else build_fx "$fx" 20 6; fi
+    mkshim "$d" "$tool" "$pat" "$nth" "$mode"
+    expect "CANNOT ESTABLISH: $tool ($mode) failing on the $label chain only is exit 3 naming that read, never 'no marker'" 3 "CANNOT ESTABLISH: marker read failed ($label)" "$fx" PATH="$d:$TMP/bin:$PATH"
+  done
+}
+# a LATEST-activation read that comes back empty (exit 0, no output) while the EARLIEST one is set is a contradiction, never an activation "now" (`date -d ""` is today)
+r_lastempty() { build_fx "$TMP/mke" 20 6; mkshim "$TMP/bin-mke" tail '*' 1 silent
+  expect "CANNOT ESTABLISH: an empty latest ACTIVATED while the earliest is set is exit 3, never 'date -d empty' (today)" 3 "marker read failed (S3-ACTIVATED last (empty while the earliest is" "$TMP/mke" PATH="$TMP/bin-mke:$TMP/bin:$PATH"; }
+r_needcomplete() { build_fx "$TMP/c1ac" 20 6
+  local d="$TMP/bin-exact" t line out rc; assert_fixture_dir "$TMP"; rm -rf "$d"; mkdir -p "$d"; cp "$TMP/bin/gh" "$d/gh"
+  line="$(grep -m1 '^for need in ' "$PROBE_UNDER")"; line="${line#for need in }"; line="${line%%; do*}"
+  for t in $line bash env cat; do if [ ! -e "$d/$t" ] && command -v "$t" >/dev/null 2>&1; then ln -s "$(command -v "$t")" "$d/$t"; fi; done
+  out="$(env FX="$TMP/c1ac" TPL="$TMP/tpl" PATH="$d" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_BIN="$TMP/verdict-stub.sh" bash "$PROBE_UNDER" 2>&1)"; rc=$?
+  if [[ "$rc" == 0 && "$out" == *"PASS"* && "$out" != *"not found"* ]]; then pass "PASS on a PATH holding exactly the need list (+ bash env cat): the list names every external command the probe and the lib run"
+  else fail "need list incomplete: rc=$rc out=$(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi; }
+r_conf_quote_crlf(){ build_fx "$TMP/c12b" 20 6 confirmed=quote crlf; expect "PASS: a QUOTED S3-CONFIRMED with CRLF line endings is read (the closing quote must be the last character of its line, so the CR is trimmed before the match)" 0 "PASS" "$TMP/c12b"; }
 r_info()      { build_fx "$TMP/c2" 20 6;                                   expect "the info line reports the counts" 0 "light_pushes=20 " "$TMP/c2"; }
 # --- (a) STALL --------------------------------------------------------------------------------------------------------------
 r_stall()     { build_fx "$TMP/a1" 20 6 stalled=707;                       expect "FAIL: an open ready PR whose verdict is stalled is named, with the resolver's 120-minute window" 1 "no deciding CI run 120 minutes after the ready event" "$TMP/a1"; }
@@ -343,20 +491,20 @@ r_openfail()  { build_fx "$TMP/a11" 20 6 failopen;                         expec
 r_deadline()  { build_fx "$TMP/b1" 0 6 noact merged=$((NOW_EPOCH - 86400 - 1)); expect "FAIL: more than 1 day after the merge with no S3-ACTIVATED" 1 "no S3-ACTIVATED" "$TMP/b1"; }
 r_deadline_edge(){ build_fx "$TMP/b2" 0 6 noact merged=$((NOW_EPOCH - 86400)); expect "NOT YET: exactly 1 day after the merge is not past the deadline" 2 "not activated" "$TMP/b2"; }
 r_dark_young(){ build_fx "$TMP/b3" 0 6 noact merged=$((NOW_EPOCH - 3600));  expect "NOT YET: merged an hour ago, nothing activated" 2 "not activated" "$TMP/b3"; }
-r_untrusted_act(){ build_fx "$TMP/b4" 0 6 untrustedact;                    expect "FAIL: an ACTIVATED comment by a NONE-association commenter does not stop the deadline" 1 "no S3-ACTIVATED" "$TMP/b4"; }
+r_noperm_act(){ build_fx "$TMP/b4" 0 6 untrustedact;                    expect "FAIL: an ACTIVATED comment by a login with no repository permission does not stop the deadline" 1 "no S3-ACTIVATED" "$TMP/b4"; }
 r_unmerged()  { build_fx "$TMP/b5" 20 6 unmerged;                          expect "NOT YET: the S3 PR is not merged" 2 "not merged" "$TMP/b5"; }
 r_deact()     { build_fx "$TMP/b6" 20 6 deact;                             expect "NOT YET: a later S3-DEACTIVATED ends the activation (no deadline once an activation was recorded)" 2 "deactivated" "$TMP/b6"; }
-r_page2()     { build_fx "$TMP/b7" 20 6 deact page2;                       expect "NOT YET: a DEACTIVATED marker on comments page 2 is read" 2 "deactivated" "$TMP/b7"; }
+r_latebatch() { build_fx "$TMP/b7" 20 6 deact latebatch;                   expect "NOT YET: a DEACTIVATED marker staged in a second fixture batch is read (the probe does not slice the comment list; gh's own paging is measured 220/220 on #9777, not modelled here)" 2 "deactivated" "$TMP/b7"; }
 r_badts()     { build_fx "$TMP/b8" 0 6 badts merged=$((NOW_EPOCH - 3600)); expect "NOT YET: an ACTIVATED timestamp without the Z is not a marker" 2 "not activated" "$TMP/b8"; }
 r_midact()    { build_fx "$TMP/b9" 0 6 midact merged=$((NOW_EPOCH - 3600)); expect "NOT YET: ACTIVATED mid-line or with trailing text is not a marker" 2 "not activated" "$TMP/b9"; }
 r_crlf()      { build_fx "$TMP/b10" 20 6 crlf;                             expect "PASS: CRLF comment lines (browser-posted) still parse" 0 "PASS" "$TMP/b10"; }
 r_twoact()    { build_fx "$TMP/b11" 20 6 twoact;                           expect "the LATEST of two ACTIVATED markers sets the age" 0 "age_days=8 " "$TMP/b11"; }
 # --- (c) DETECTIVE ACTIVATION CHECK ------------------------------------------------------------------------------------------
 r_light_noact(){ build_fx "$TMP/c3" 3 6 noact;                             expect "FAIL: light runs with no activation on record" 1 "no activation on record" "$TMP/c3"; }
-r_light_untrusted(){ build_fx "$TMP/c4" 3 6 untrustedact;                  expect "FAIL: light runs while only an untrusted activation exists" 1 "no activation on record" "$TMP/c4"; }
+r_light_noperm(){ build_fx "$TMP/c4" 3 6 untrustedact;                  expect "FAIL: light runs while the only activation is by a login with no repository permission" 1 "no activation on record" "$TMP/c4"; }
 r_light_early(){ build_fx "$TMP/c5" 20 6 earlylight=2;                     expect "FAIL: light runs created BEFORE the recorded activation" 1 "predate" "$TMP/c5"; }
 r_noconf()    { build_fx "$TMP/c6" 20 6 confirmed=none;                    expect "FAIL: light runs with no S3-CONFIRMED comment" 1 "S3-CONFIRMED" "$TMP/c6"; }
-r_conf_untrusted(){ build_fx "$TMP/c7" 20 6 confirmed=untrusted;           expect "FAIL: an S3-CONFIRMED by a NONE-association commenter does not count" 1 "S3-CONFIRMED" "$TMP/c7"; }
+r_conf_noperm(){ build_fx "$TMP/c7" 20 6 confirmed=untrusted;           expect "FAIL: an S3-CONFIRMED by a login with no repository permission does not count" 1 "S3-CONFIRMED" "$TMP/c7"; }
 r_conf_placeholder(){ build_fx "$TMP/c8" 20 6 confirmed=placeholder;       expect "FAIL: the literal placeholder S3-CONFIRMED: <url or quoted statement> does not count" 1 "S3-CONFIRMED" "$TMP/c8"; }
 r_conf_bare() { build_fx "$TMP/c9" 20 6 confirmed=bare;                    expect "FAIL: S3-CONFIRMED with neither a github URL nor a quoted statement does not count" 1 "S3-CONFIRMED" "$TMP/c9"; }
 r_conf_mid()  { build_fx "$TMP/c10" 20 6 confirmed=mid;                    expect "FAIL: S3-CONFIRMED mid-line does not count" 1 "S3-CONFIRMED" "$TMP/c10"; }
@@ -403,20 +551,20 @@ r_rerun()     { build_fx "$TMP/e6" 19 6 rerun=5;                           expec
 r_stuck29()   { build_fx "$TMP/e7" 19 6 actdays=29 merged=$((NOW_EPOCH - 40 * 86400)); expect "NOT YET: 29 days active with 19 pushes (the deadline is 30)" 2 "19 distinct" "$TMP/e7"; }
 r_stuck30()   { build_fx "$TMP/e8" 19 6 actdays=30 merged=$((NOW_EPOCH - 40 * 86400)); expect "FAIL: 30 days active and the soak never reached 20 draft pushes" 1 "19 distinct" "$TMP/e8"; }
 r_nomarker()  { build_fx "$TMP/e9" 20 6 marker=none;                       expect "NOT YET: no S3-EXIT-CENSUS marker (the sweeper closes on exit 0)" 2 "S3-EXIT-CENSUS" "$TMP/e9"; }
-r_untrusted_marker(){ build_fx "$TMP/e10" 20 6 marker=untrusted;           expect "NOT YET: an exit-census marker by an untrusted commenter does not count" 2 "S3-EXIT-CENSUS" "$TMP/e10"; }
+r_noperm_marker(){ build_fx "$TMP/e10" 20 6 marker=untrusted;           expect "NOT YET: an exit-census marker by a login with no repository permission does not count" 2 "S3-EXIT-CENSUS" "$TMP/e10"; }
 r_nonurl_marker(){ build_fx "$TMP/e11" 20 6 marker=nonurl;                 expect "NOT YET: an exit-census marker without an https github URL does not count" 2 "S3-EXIT-CENSUS" "$TMP/e11"; }
 r_placeholder_marker(){ build_fx "$TMP/e12" 20 6 marker=placeholder;       expect "NOT YET: the literal placeholder S3-EXIT-CENSUS: <url> does not count" 2 "S3-EXIT-CENSUS" "$TMP/e12"; }
 r_mid_marker(){ build_fx "$TMP/e13" 20 6 marker=mid;                       expect "NOT YET: the marker must start a line" 2 "S3-EXIT-CENSUS" "$TMP/e13"; }
 r_lookalike() { build_fx "$TMP/e14" 20 6 marker=lookalike;                 expect "NOT YET: a lookalike host (githubXcom) is not a census URL" 2 "S3-EXIT-CENSUS" "$TMP/e14"; }
 r_foreign()   { build_fx "$TMP/e15" 20 6 marker=foreign;                   expect "NOT YET: a non-github URL is not a census URL" 2 "S3-EXIT-CENSUS" "$TMP/e15"; }
-r_collab()    { build_fx "$TMP/e16" 20 6 marker=collab;                    expect "PASS: a COLLABORATOR's exit-census comment counts" 0 "PASS" "$TMP/e16"; }
-r_contrib()   { build_fx "$TMP/e17" 20 6 marker=contrib;                   expect "NOT YET: a CONTRIBUTOR's exit-census comment does not count" 2 "S3-EXIT-CENSUS" "$TMP/e17"; }
+r_marker_write()    { build_fx "$TMP/e16" 20 6 marker=collab;                    expect "PASS: an exit-census comment by an author holding write counts" 0 "PASS" "$TMP/e16"; }
+r_marker_read()   { build_fx "$TMP/e17" 20 6 marker=contrib;                   expect "NOT YET: an exit-census comment by an author holding only read does not count" 2 "S3-EXIT-CENSUS" "$TMP/e17"; }
 # --- sample caps ---------------------------------------------------------------------------------------------------------------
 r_idle_cap()  { build_fx "$TMP/g1" 0 44 noact merged=$((NOW_EPOCH - 3600)) oldlast=lightsuccess; expect "NOT YET: while idle only the newest 40 runs are sampled (a light run at position 45 is outside)" 2 "not activated" "$TMP/g1"; }
 r_max_cap()   { build_fx "$TMP/g2" 20 0 pad=85 oldlast=lightsuccess;       expect "PASS: only the newest 100 runs are sampled (a bad light run at position 106 is outside)" 0 "PASS" "$TMP/g2"; }
 # --- reads that fail -----------------------------------------------------------------------------------------------------------
 r_prfail()    { build_fx "$TMP/h1" 20 6 failpr;                            expect "CANNOT ESTABLISH: the PR merge-time read fails" 3 "CANNOT ESTABLISH" "$TMP/h1"; }
-r_commentsfail(){ build_fx "$TMP/h2" 20 6 failcomments;                    expect "CANNOT ESTABLISH: the tracker comments read fails (403)" 3 "CANNOT ESTABLISH" "$TMP/h2"; }
+r_commentsfail(){ build_fx "$TMP/h2" 20 6 failcomments;                    expect "CANNOT ESTABLISH: the tracker comments read fails (403)" 3 "comment or permission read failed" "$TMP/h2"; }
 r_runsfail()  { build_fx "$TMP/h3" 20 6 failruns;                          expect "CANNOT ESTABLISH: the pull_request runs listing fails" 3 "CANNOT ESTABLISH" "$TMP/h3"; }
 r_jobsfail()  { build_fx "$TMP/h4" 20 6 failjobs;                          expect "CANNOT ESTABLISH: a jobs read fails" 3 "CANNOT ESTABLISH" "$TMP/h4"; }
 # the query shapes the probe documents: the since-merge window, the exact jobs read, the sha-keyed PR join, and a
@@ -429,20 +577,25 @@ r_shapes() {
      && grep -cF "event=merge_group&status=completed&per_page=100&created=%3E$ai" "$TMP/z2/requests.log" >/dev/null \
      && grep -cF '/jobs?per_page=100&filter=latest' "$TMP/z2/requests.log" >/dev/null \
      && grep -cF 'event=pull_request&head_sha=H801&per_page=1' "$TMP/z2/requests.log" >/dev/null \
-     && [ "$(grep -c '^graphql ' "$TMP/z2/requests.log")" -eq 19 ]; then
-    pass "the queries carry their documented parameters (merge window, activation-anchored merge_group, jobs filter, head_sha lookup, one join per distinct head)"
+     && [ "$(grep -c '^graphql ' "$TMP/z2/requests.log")" -eq 19 ] \
+     && [ "$(grep -cxF 'issue view 9728 --repo jikig-ai/soleur --json comments' "$TMP/z2/requests.log")" -eq 1 ] \
+     && [ "$(grep -cE '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/z2/requests.log")" -eq 2 ] \
+     && [ "$(grep -E '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/z2/requests.log" | sort -u | wc -l)" -eq 2 ] \
+     && ! grep -q 'issues/9728/comments' "$TMP/z2/requests.log"; then
+    pass "the queries carry their documented parameters (merge window, activation-anchored merge_group, jobs filter, head_sha lookup, one join per distinct head, ONE tracker issue view and one permission request per distinct author)"
   else fail "the queries lost their parameters: $(head -8 "$TMP/z2/requests.log" | tr '\n' '|') graphql=$(grep -c '^graphql ' "$TMP/z2/requests.log")"; fi
 }
 
 ALL_ROWS=(r_pass r_info r_stall r_stall2 r_stall_dark r_stall_prec r_vfail r_vgarbage r_vunknown r_vmismatch r_vnoise r_noopen r_openfail
-          r_deadline r_deadline_edge r_dark_young r_untrusted_act r_unmerged r_deact r_page2 r_badts r_midact r_crlf r_twoact
-          r_light_noact r_light_untrusted r_light_early r_noconf r_conf_untrusted r_conf_placeholder r_conf_bare r_conf_mid r_conf_late
+          r_deadline r_deadline_edge r_dark_young r_noperm_act r_unmerged r_deact r_latebatch r_badts r_midact r_crlf r_twoact
+          r_light_noact r_light_noperm r_light_early r_noconf r_conf_noperm r_conf_placeholder r_conf_bare r_conf_mid r_conf_late
           r_conf_quote r_nolight_noconf r_decoy_mixed r_decoy_heavy r_decoy_nofam r_decoy_prefix r_decoy_cancel r_decoy_failed r_decoy_cancjobs r_nobranch
           r_inv1_success r_inv1_notest r_inv2_ready r_inv2_converted r_inv2_beforeready r_inv2_never r_inv2_convfirst r_inv2_nopr
           r_inv2_multipr r_inv2_trunc r_gqlfail r_mgbad r_mgolder r_mgnonqueue r_mgfail r_mgprfail r_mgrunfail r_mgcap r_mg_dark
-          r_light_after_off r_six r_seven r_nineteen r_rerun r_stuck29 r_stuck30 r_nomarker r_untrusted_marker r_nonurl_marker
-          r_placeholder_marker r_mid_marker r_lookalike r_foreign r_collab r_contrib r_idle_cap r_max_cap
-          r_prfail r_commentsfail r_runsfail r_jobsfail r_conf_two r_between r_shapes)
+          r_light_after_off r_six r_seven r_nineteen r_rerun r_stuck29 r_stuck30 r_nomarker r_noperm_marker r_nonurl_marker
+          r_placeholder_marker r_mid_marker r_lookalike r_foreign r_marker_write r_marker_read r_idle_cap r_max_cap
+          r_prfail r_commentsfail r_runsfail r_jobsfail r_conf_two r_between r_shapes r_privmember
+          r_late_conf_private r_assoc_decoy r_permfail r_badjq r_badconf r_nolib r_nofn r_srcfail r_nocomments r_onlycomments r_trfail r_needtools r_markers r_lastempty r_needcomplete r_conf_quote_crlf)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
 
@@ -475,7 +628,7 @@ PY
   cmp -s "$f" "$PROBE" && { MUT_LANDED=0; return 0; }
   chmod +x "$f"
   bash -n "$f" 2>/dev/null || MUT_CRASHED=1
-  PROBE_UNDER="$f"; core_rows_quiet "$@"; PROBE_UNDER="$PROBE"
+  PROBE_UNDER="$(mk_tree "m-$name" "$f")"; core_rows_quiet "$@"; PROBE_UNDER="$PROBE"
   [ -f "$TMP/crashed" ] && MUT_CRASHED=1
   return 0
 }
@@ -505,30 +658,63 @@ mutant m-light-prefix 'test("^" + $n + "( |$)")' 'test("^" + $n)' r_decoy_prefix
 mutant m-light-exact 'test("^" + $n + "( |$)")' 'test("^" + $n + "$")' r_pass
 mutant m-cancelled 'select(.conclusion == \"success\" or .conclusion == \"failure\") | ' '' r_decoy_cancel
 mutant m-test-red 'if [ "$tconc" != "failure" ]; then bad_test=' 'if false; then bad_test=' r_inv1_success r_inv1_notest
-mutant m-conf-missing 'if [ -z "$conf_epoch" ]; then' 'if false; then' r_noconf r_conf_untrusted r_conf_placeholder
+mutant m-conf-missing 'if [ -z "$conf_epoch" ]; then' 'if false; then' r_noconf r_conf_noperm r_conf_placeholder
 mutant m-conf-order 'if [ "$conf_epoch" -gt "$first_on_epoch" ]; then' 'if false; then' r_conf_late
-mutant m-conf-earliest '.t'"'"' <<<"$comments" 2>/dev/null | sort | head -n 1)"' '.t'"'"' <<<"$comments" 2>/dev/null | sort | tail -n 1)"' r_conf_two
+mutant m-conf-earliest '.t'"'"' <<<"$comments" 2>/dev/null | sort | sed -n 1p)"' '.t'"'"' <<<"$comments" 2>/dev/null | sort | tail -n 1)"' r_conf_two
 mutant m-conf-anchor "CONF_RE='^S3-CONFIRMED: " "CONF_RE='S3-CONFIRMED: " r_conf_mid
 mutant m-conf-any '(https://github\.com/[^ ]+|"[^"]{3,}")$'"'" '.+$'"'" r_conf_bare r_conf_placeholder
-mutant m-trusted 'IN("OWNER", "MEMBER", "COLLABORATOR")' 'IN("OWNER", "MEMBER", "COLLABORATOR", "NONE")' r_untrusted_act r_conf_untrusted r_untrusted_marker
-mutant m-no-collab 'IN("OWNER", "MEMBER", "COLLABORATOR")' 'IN("OWNER", "MEMBER")' r_collab
-mutant m-contrib 'IN("OWNER", "MEMBER", "COLLABORATOR")' 'IN("OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR")' r_contrib
+mutant m-trusted 'comments="$(trusted_verdict_comments "$TRACKER" "$REPO")" || fail_comments "tracker $TRACKER comments (trusted-author resolution)"' 'comments="$(trusted_verdict_comments "$TRACKER" "$REPO")"' r_commentsfail r_permfail
+# the trust-source mutants: the helper call is replaced by a raw `issue view` read through the same fake arm
+_HELPER='comments="$(trusted_verdict_comments "$TRACKER" "$REPO")" || fail_comments "tracker $TRACKER comments (trusted-author resolution)"'
+mutant m-legacy-assoc "$_HELPER" 'comments="$(gh issue view "$TRACKER" --repo "$REPO" --json comments --jq '"'"'.comments[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {t: .createdAt, b: .body} | tojson'"'"')" || fail_comments "tracker $TRACKER comments"' r_privmember r_assoc_decoy
+mutant m-project-raw "$_HELPER" 'comments="$(gh issue view "$TRACKER" --repo "$REPO" --json comments --jq '"'"'.comments[] | {t: .createdAt, b: .body} | tojson'"'"')" || fail_comments "tracker $TRACKER comments"' r_assoc_decoy r_noperm_act r_light_noperm r_conf_noperm r_noperm_marker r_marker_read
+mutant m-empty-helper "$_HELPER" 'comments=""' r_pass r_privmember r_late_conf_private
+mutant m-no-projection-check ' || fail_projection "tracker $TRACKER comments (projection)"' '' r_badjq r_trfail
+mutant m-no-conf-check ' \
+  || fail_projection "tracker $TRACKER comments (confirmation projection)"' '' r_badconf
+# the marker chains: each restored to the bare, unchecked form the review found (the status of every stage dropped)
+mutant m-first-unchecked 'marker_stamp S3-ACTIVATED first; first_on="$MARKER_VAL"' 'first_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed '"'"'s/^S3-ACTIVATED: //'"'"' | sort | sed -n 1p)"' r_markers
+mutant m-laston-unchecked 'marker_stamp S3-ACTIVATED last; last_on="$MARKER_VAL"' 'last_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed '"'"'s/^S3-ACTIVATED: //'"'"' | sort | tail -n 1)"' r_markers
+mutant m-lastoff-unchecked 'marker_stamp S3-DEACTIVATED last; last_off="$MARKER_VAL"' 'last_off="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S3-DEACTIVATED: $TS_RE\$" | sed '"'"'s/^S3-DEACTIVATED: //'"'"' | sort | tail -n 1)"' r_markers
+mutant m-census-unchecked 'marker_count S3-EXIT-CENSUS '"'"'^S3-EXIT-CENSUS: https://github\.com/[^ ]+$'"'"'; census_marked="$MARKER_VAL"' 'census_marked="$(printf '"'"'%s\n'"'"' "$trusted" | grep -cE '"'"'^S3-EXIT-CENSUS: https://github\.com/[^ ]+$'"'"')"' r_markers
+mutant m-stamp-status-any 'case "$st" in "0 0 0 0 0"|"0 1 0 0 0") : ;; *) fail_marker "$name $pick" ;; esac' ':' r_markers
+mutant m-stamp-rc1 '"0 0 0 0 0"|"0 1 0 0 0") : ;;' '"0 0 0 0 0") : ;;' r_pass r_deact
+mutant m-count-status-any 'case "$st" in "0 0"|"0 1") [[ "$MARKER_VAL" =~ ^[0-9]+$ ]] || fail_marker "$name" ;; *) fail_marker "$name" ;; esac' ':' r_markers
+mutant m-count-numeric ') [[ "$MARKER_VAL" =~ ^[0-9]+$ ]] || fail_marker "$name" ;;' ') : ;;' r_markers
+mutant m-count-rc1 '"0 0"|"0 1") [[' '"0 0") [[' r_nomarker r_noperm_marker
+mutant m-last-on-guard '  [ -n "$last_on" ] || fail_marker "S3-ACTIVATED last (empty while the earliest is $first_on)"
+' '' r_lastempty
+mutant m-conf-rtrim 'map(rtrimstr("\r")) | ' '' r_conf_quote_crlf
+mutant m-undeclared-tool 'NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"' 'NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"; wc -l </dev/null >/dev/null' r_needcomplete
+mutant m-projection-label 'fail_projection() { echo "CANNOT ESTABLISH: comment projection failed (local jq) ($1)"; exit 3; }' 'fail_projection() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 3; }' r_badjq r_badconf r_trfail
+mutant m-comments-quiet 'fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 3; }' 'fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 0; }' r_commentsfail r_permfail
+# the function check removed AND the missing views stubbed to print nothing, so the mutant runs on instead of crashing on `command not found` (which proves nothing)
+mutant m-no-fn-check ' \
+   || ! declare -F trusted_verdict_comments >/dev/null; then' ' \
+   || { declare -F trusted_verdict_comments >/dev/null || trusted_verdict_comments() { :; }; false; }; then' r_nofn r_nocomments
+mutant m-guard-wrong-view ' \
+   || ! declare -F trusted_verdict_comments >/dev/null; then' ' \
+   || ! { declare -F trusted_verdict_bodies >/dev/null && { declare -F trusted_verdict_comments >/dev/null || trusted_verdict_comments() { :; }; }; }; then' r_nocomments r_onlycomments
+mutant m-need-short 'for need in gh jq timeout base64 awk mktemp sort grep sed tr tail head date rm dirname; do' 'for need in gh jq timeout base64 awk mktemp sort; do' r_needtools
+mutant m-no-source-check 'if ! source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh" \
+   ||' 'if ! { source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh"; true; } \
+   ||' r_srcfail
 mutant m-early 'if (( ! has_on )) || [ "$created" -lt "$first_on_epoch" ]; then' 'if false; then' r_light_early
 mutant m-late 'elif (( deactivated )) && [ "$created" -gt "$off_epoch" ]; then' 'elif false; then' r_light_after_off
-mutant m-first-on 'S3-ACTIVATED: //'"'"' | sort | head -n 1)"' 'S3-ACTIVATED: //'"'"' | sort | tail -n 1)"' r_between
-mutant m-last-on 'S3-ACTIVATED: //'"'"' | sort | tail -n 1)"' 'S3-ACTIVATED: //'"'"' | sort | head -n 1)"' r_twoact
-mutant m-deact-order 'if [ "$act_epoch" -gt "$off_epoch" ]; then active=1; else deactivated=1; fi' 'if true; then active=1; else deactivated=1; fi' r_deact r_page2
+mutant m-first-on 'marker_stamp S3-ACTIVATED first;' 'marker_stamp S3-ACTIVATED last;' r_between
+mutant m-last-on 'marker_stamp S3-ACTIVATED last; last_on' 'marker_stamp S3-ACTIVATED first; last_on' r_twoact
+mutant m-deact-order 'if [ "$act_epoch" -gt "$off_epoch" ]; then active=1; else deactivated=1; fi' 'if true; then active=1; else deactivated=1; fi' r_deact r_latebatch
 mutant m-distinct 'LSHA[$sha]=1' 'LSHA[$id]=1' r_rerun
 mutant m-min-pushes 'if (( light_pushes < MIN_PUSHES || age_days < MIN_DAYS )); then' 'if (( age_days < MIN_DAYS )); then' r_nineteen r_rerun
 mutant m-min-days 'if (( light_pushes < MIN_PUSHES || age_days < MIN_DAYS )); then' 'if (( light_pushes < MIN_PUSHES )); then' r_six
 mutant m-days-edge 'age_days < MIN_DAYS' 'age_days <= MIN_DAYS' r_seven
 mutant m-pushes-edge 'light_pushes < MIN_PUSHES' 'light_pushes <= MIN_PUSHES' r_pass
 mutant m-stuck 'if (( age_days >= DEADLINE_DAYS )); then' 'if false; then' r_stuck30
-mutant m-census 'if (( census_marked == 0 )); then' 'if false; then' r_nomarker r_untrusted_marker r_nonurl_marker
+mutant m-census 'if (( census_marked == 0 )); then' 'if false; then' r_nomarker r_noperm_marker r_nonurl_marker
 mutant m-census-dot "'^S3-EXIT-CENSUS: https://github\\.com/[^ ]+\$'" "'^S3-EXIT-CENSUS: https://github.com/[^ ]+\$'" r_lookalike
 mutant m-census-host "'^S3-EXIT-CENSUS: https://github\\.com/[^ ]+\$'" "'^S3-EXIT-CENSUS: https://[^ ]+\$'" r_foreign
 mutant m-census-anchor "'^S3-EXIT-CENSUS: https://github\\.com/[^ ]+\$'" "'S3-EXIT-CENSUS: https://github\\.com/[^ ]+\$'" r_mid_marker
-mutant m-deadline 'if (( NOW - merged_epoch > DARK_DAYS * 86400 )); then' 'if false; then' r_deadline r_untrusted_act
+mutant m-deadline 'if (( NOW - merged_epoch > DARK_DAYS * 86400 )); then' 'if false; then' r_deadline r_noperm_act
 mutant m-deadline-edge 'NOW - merged_epoch > DARK_DAYS * 86400' 'NOW - merged_epoch >= DARK_DAYS * 86400' r_deadline_edge
 mutant m-mg-flag '&& mg_light_list="$mg_light_list #$qpr"' '&& :' r_mgbad
 mutant m-mg-newest "--jq '.workflow_runs[0].id // empty'" "--jq '.workflow_runs[-1].id // empty'" r_mgolder
@@ -554,7 +740,7 @@ mutant m-idle-cap '(( active )) || cap="$IDLE_RUNS"' ':' r_idle_cap
 mutant m-max-cap 'MAX_RUNS=100' 'MAX_RUNS=200' r_max_cap
 mutant m-crlf " | tr -d '\\r')\"" ')"' r_crlf
 mutant m-ts-loose "TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'" "TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z?'" r_badts
-mutant m-act-anchor 'first_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S3-ACTIVATED' 'first_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "S3-ACTIVATED' r_midact
+mutant m-act-anchor 'grep -oE "^$name: $TS_RE\$"' 'grep -oE "$name: $TS_RE\$"' r_midact
 
 mutant m-light-failure 'all(.conclusion == "skipped")))) as $light' 'all(.conclusion == "skipped" or .conclusion == "failure")))) as $light' r_decoy_failed
 mutant m-light-cancelled 'all(.conclusion == "skipped")))) as $light' 'all(.conclusion == "skipped" or .conclusion == "cancelled")))) as $light' r_decoy_cancjobs
@@ -573,22 +759,61 @@ else fail "harness control: the crashing mutant was not flagged (landed=$MUT_LAN
 mutant_probe c-crash-rt 'MAX_RUNS=100' 'MAX_RUNS=100; no_such_command_zz' r_pass
 if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-rt.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that parses but fails at runtime is flagged as crashed"
 else fail "harness control: the runtime-crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
-if [ "$CTRL_OK" -ne 3 ]; then fail "harness controls: $CTRL_OK of 3 held"; fi
+# the mirrored tree itself: an IDENTITY copy must show zero reds over the full row set (else every mutant verdict is polluted), and a copy
+# whose lib symlink is REMOVED must red at least one row (else the tree is not what resolves the lib)
+PROBE_UNDER="$(mk_tree identity "$PROBE")"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
+if [ "$MUT_REDS" -eq 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an identity copy in the mirrored tree turns no row red"
+else fail "harness control: the identity copy turned $MUT_REDS row(s) red (the tree is broken)"; fi
+PROBE_UNDER="$(mk_tree nolink "$PROBE" nolink)"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
+if [ "$MUT_REDS" -gt 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a copy without the lib symlink turns $MUT_REDS row(s) red (the tree resolves the lib)"
+else fail "harness control: a copy without the lib symlink turned no row red"; fi
+# the VERDICT itself: an inert, a PARSE-crashing and an anchor-NOT-LANDED mutant fed through `mutant` must each be REPORTED as what it is (exactly one
+# failure, nothing counted as caught, the right word in the report); counters are restored after. A verdict forced to `caught`
+# (`if [ "$MUT_REDS" -gt 0 ]` -> `if true`) reports the inert mutant as caught and fails the first control. ctrl_verdict refuses an empty word, and the
+# last control asserts it can REFUSE (a wrong word must fail it), so deleting the word check from the helper goes red.
+ctrl_verdict() { # <name> <word the report must contain> <old> <new> <row ids...>
+  local name="$1" word="$2"; shift 2
+  [ -n "$word" ] || return 2
+  local p0=$passes f0=$fails a0=$asserted n0=${#FAILURES[@]} r0=$MUT_RUN c0=$MUT_CAUGHT nfail ncaught
+  mutant "$name" "$@" > "$TMP/ctrl-$name.out"
+  nfail=$((fails - f0)); ncaught=$((MUT_CAUGHT - c0))
+  passes=$p0; fails=$f0; asserted=$a0; FAILURES=("${FAILURES[@]:0:$n0}"); MUT_RUN=$r0; MUT_CAUGHT=$c0
+  [ "$nfail" -eq 1 ] && [ "$ncaught" -eq 0 ] && grep -q -- "$word" "$TMP/ctrl-$name.out"
+}
+if ctrl_verdict c-inert 'went red' 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an inert mutant is reported as a SURVIVOR and makes the suite red"
+else fail "harness control: an inert mutant was not reported as a survivor"; fi
+if ctrl_verdict c-parse-verdict CRASHED 'MAX_RUNS=100' 'MAX_RUNS=100; readonly X=(' r_pass; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a PARSE-crashing mutant fed through mutant() is reported CRASHED and makes the suite red"
+else fail "harness control: a parse-crashing mutant was not reported as CRASHED through mutant()"; fi
+if ctrl_verdict c-nolanding 'did NOT land' 'ANCHOR_THAT_IS_NOT_IN_THE_PROBE_ZZ' 'x' r_pass; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant whose anchor does not land is reported NOT LANDED and makes the suite red"
+else fail "harness control: a mutant with a missing anchor was not reported as NOT LANDED"; fi
+if ! ctrl_verdict c-wrongword CRASHED 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass && ! ctrl_verdict c-emptyword '' 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: the verdict helper REFUSES a report that lacks the expected word (and an empty word), so its word check cannot be deleted green"
+else fail "harness control: the verdict helper accepted a report without the expected word"; fi
+# CRASH_RE alternatives: one runtime-only mutant per alternative (each parses; only that alternative can flag it). `command not found` is the c-crash-rt control above.
+mutant_probe c-crash-badsub 'MAX_RUNS=100' 'MAX_RUNS=100; _x=a; : "${_x@Z}"' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-badsub.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that dies on a bad substitution is flagged as crashed (CRASH_RE keeps that alternative)"
+else fail "harness control: the bad-substitution mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+mutant_probe c-crash-unbound 'MAX_RUNS=100' 'MAX_RUNS=100; : "$UNSET_ZZ_SENTINEL"' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-unbound.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that dies on an unbound variable is flagged as crashed (CRASH_RE keeps that alternative)"
+else fail "harness control: the unbound-variable mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+mutant_probe c-crash-syntax 'MAX_RUNS=100' "MAX_RUNS=100; eval '('" r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-syntax.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant whose runtime eval dies on a syntax error is flagged as crashed (CRASH_RE keeps that alternative)"
+else fail "harness control: the runtime syntax-error mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+if [ "$CTRL_OK" -ne 12 ]; then fail "harness controls: $CTRL_OK of 12 held"; fi
 # the probe quotes the resolver's stall window: the two must not drift
 _rs="$(sed -n 's/^STALL_MINUTES=\([0-9]*\).*/\1/p' "$REPO_ROOT/plugins/soleur/scripts/ci-head-verdict.sh" | head -n 1)"
 _ps="$(sed -n 's/^STALL_MIN=\([0-9]*\).*/\1/p' "$PROBE" | head -n 1)"
 if [ -n "$_rs" ] && [ "$_rs" = "$_ps" ]; then pass "STALL_MIN in the probe ($_ps) equals STALL_MINUTES in the resolver ($_rs)"; else fail "STALL_MIN drift: probe '$_ps', resolver '$_rs'"; fi
-if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 45 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 45)"; fi
+if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 85 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 85)"; fi
 
 # harness row: a probe that always exits 0 must be refused by the named rows (the rows can fail)
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
 PROBE_UNDER="$TMP/always-pass.sh"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
-if [ "$MUT_REDS" -ge 60 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
+if [ "$MUT_REDS" -ge 105 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
 
 printf 'ci-draft-light-soak-9728: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 # DELIBERATELY NOT ROUTED THROUGH fail(): compares against a literal and exits directly.
 _total=$((passes + fails))
-_FLOOR=162
+_FLOOR=222
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1

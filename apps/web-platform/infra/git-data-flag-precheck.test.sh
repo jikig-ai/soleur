@@ -90,6 +90,9 @@ if [ "${2:-}" = set ]; then
   # secrets set NAME -p P -c C — value on stdin (the only supported form here; the caller
   # must never pass a value on argv). SHIM_SET_ERR forces a classified failure;
   # SHIM_WRITE_STORE redirects the store so the write lands where the case expects.
+  # The value is read FIRST (#9217): the caller pipes it in under pipefail, so an arm that exits on the
+  # missing token or a classified failure before reading would let the writer take SIGPIPE. Not a terminal only.
+  value=""; [ -t 0 ] || value="$(timeout 2 cat)"
   name="${3:-}"; shift 3
   proj=""; cfg=""
   while [ $# -gt 0 ]; do
@@ -104,7 +107,6 @@ if [ "${2:-}" = set ]; then
     auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
     network) echo "Doppler Error: dial tcp: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
   esac
-  read -r value
   d="$DOPPLER_STORE/$proj/$cfg"
   [ -d "$d" ] || { echo "Doppler Error: Could not find requested config '$cfg'" >&2; exit 1; }
   printf '%s' "$value" > "$d/$name"
@@ -127,6 +129,13 @@ done
 # SHIM_PIN_ERR forces one error class on the pin read ONLY (the flag and scope reads succeed).
 if [ "$name" = GIT_DATA_SSH_HOST_KEY ]; then
   case "${SHIM_PIN_ERR:-}" in
+    auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
+    network) echo "Doppler Error: dial tcp: lookup api.doppler.com: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
+  esac
+fi
+# SHIM_STAMP_ERR forces one error class on the GIT_DATA_LUKS_CUTOVER_AT read ONLY (wipe modes).
+if [ "$name" = GIT_DATA_LUKS_CUTOVER_AT ]; then
+  case "${SHIM_STAMP_ERR:-}" in
     auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
     network) echo "Doppler Error: dial tcp: lookup api.doppler.com: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
   esac
@@ -210,6 +219,7 @@ run_case() {
   rm -rf "$store"; mkdir -p "$store/soleur/prd" "$store/soleur/prd_terraform" "$store/other-project/prd" || { printf 'FAIL SETUP: store\n' >&2; exit 1; }
   [ "$value" = ABSENT ] || printf '%s' "$value" > "$store/soleur/prd/GIT_DATA_STORE_ENABLED"
   [ "$pin" = ABSENT ] || printf '%s' "$pin" > "$store/soleur/prd/GIT_DATA_SSH_HOST_KEY"
+  [ "${CASE_STAMP-ABSENT}" = ABSENT ] || printf '%s' "$CASE_STAMP" > "$store/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT"
   CTMP="$T/tmp-$name"; RT="$T/rt-$name"
   assert_fixture_dir "$CTMP"
   assert_fixture_dir "$RT"
@@ -471,6 +481,112 @@ RC=$?
 if [ "$RC" = 78 ] && [ ! -s "$DLOG" ]; then pass "P7: under bash -x the precheck exits 78 before calling doppler"
 else fail "P7: the xtrace refusal did not fire first" "rc=$RC"; fi
 
+# ── wipe modes (#10138, W3 / W7b): three separate predicates, one pinned floor ─────────────────────
+# Stamps are relative to the real clock with +-1 day margins (the script has no clock hook by design).
+ST8="$(date -u -d '8 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+ST6="$(date -u -d '6 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+STFUT="$(date -u -d '1 day' +%Y-%m-%dT%H:%M:%SZ)"
+ST8_EPOCH="$(date -u -d "$ST8" +%s)"
+WIPE_ARGV='doppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd
+doppler secrets get DOPPLER_PROJECT --plain -p soleur -c prd
+doppler secrets get DOPPLER_CONFIG --plain -p soleur -c prd
+doppler secrets get GIT_DATA_LUKS_CUTOVER_AT --plain --no-exit-on-missing-secret -p soleur -c prd
+doppler secrets get GIT_DATA_SSH_HOST_KEY --plain --no-exit-on-missing-secret -p soleur -c prd'
+# wipe_run <label> <flag> <stamp|ABSENT> <mode> [VAR=value ...]
+wipe_run() {
+  local label="$1" flagv="$2" stamp="$3" mode="$4"; shift 4
+  CASE_STAMP="$stamp" run_case "wipe-$label" "$flagv" FLAG_MODE="$mode" "$@"
+}
+case_wipe_ok() { # flag true + an 8-day stamp: passes, prints the mode line first and the soak line second
+  wipe_run ok true "$ST8" wipe
+  [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT")" = "flag=true mode=wipe" ] \
+    && [ "$(sed -n 2p "$OUT" | sed -E 's/elapsed_s=[0-9]+$/elapsed_s=N/')" = "wipe_soak floor_days=7 stamp_epoch=${ST8_EPOCH} elapsed_s=N" ] \
+    && [ "$(cat "$DLOG")" = "$WIPE_ARGV" ] && ! grep -qF 'flag_already_true' "$OUT"
+}
+case_wipe_refuses() { # <label> <flag> <stamp> <expected-verdict-prefix> [VAR=value ...]
+  local label="$1" flagv="$2" stamp="$3" want="$4"; shift 4
+  wipe_run "$label" "$flagv" "$stamp" wipe "$@"
+  [ "$RC" = 5 ] && grep -qE "^\[git-data-flag-precheck\] verdict=${want}( |$)" "$OUT" && ! grep -qF 'git_data_pin=' "$OUT"
+}
+case_wipe_flag() { case_wipe_refuses flag-off false "$ST8" wipe_precondition_flag_not_true && ! grep -qF GIT_DATA_LUKS_CUTOVER_AT "$DLOG"; }
+case_wipe_stamp_absent() { case_wipe_refuses stamp-absent true ABSENT wipe_precondition_stamp_absent; }
+case_wipe_soak() { case_wipe_refuses soak6 true "$ST6" wipe_precondition_soak_not_elapsed && grep -qE 'floor_days=7 elapsed_s=[0-9]+' "$OUT"; }
+case_wipe_soak_env0() { case_wipe_refuses soak6-env0 true "$ST6" wipe_precondition_soak_not_elapsed WIPE_SOAK_FLOOR_SECONDS=0; }
+
+if case_wipe_ok; then pass "WP1: mode=wipe, flag true, an 8-day-old stamp -> 'flag=true mode=wipe' then 'wipe_soak floor_days=7 stamp_epoch=<n> elapsed_s=<n>', exit 0; doppler called 5 times (flag, project, config, stamp with --no-exit-on-missing-secret, pin)"
+else fail "WP1: the passing wipe precheck output differs" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_wipe_flag; then pass "WP2: mode=wipe with the flag false -> verdict=wipe_precondition_flag_not_true, exit 5, the stamp is never read, no pin work"
+else fail "WP2: wipe over a false flag was not refused" "$(detail)"; fi
+if wipe_run unset ABSENT "$ST8" wipe && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT"; then pass "WP2b: an UNSET flag under wipe refuses too (the final case no longer falls through to flag=unset exit 0)"
+else fail "WP2b: wipe over an unset flag was not refused" "$(detail)"; fi
+if wipe_run upper TRUE "$ST8" wipe && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT"; then pass "WP2c: 'TRUE' is not true under wipe either (exact compare)"
+else fail "WP2c: TRUE passed the wipe flag predicate" "$(detail)"; fi
+if case_wipe_stamp_absent; then pass "WP3: flag true and no GIT_DATA_LUKS_CUTOVER_AT -> verdict=wipe_precondition_stamp_absent, exit 5"
+else fail "WP3: an absent stamp was not refused as stamp_absent" "$(detail)"; fi
+_stn=0
+for bad in '2026-10-07' '2026-10-07T00:00:00+00:00' '2026-13-45T99:99:99Z' '2026-02-30T00:00:00Z' 'not-a-timestamp' ' 2026-10-01T00:00:00Z' '2026-10-01T00:00:00Z extra' '2026-10-01 00:00:00Z' '@1700000000'; do
+  if case_wipe_refuses "stamp-bad-$_stn" true "$bad" wipe_precondition_stamp_absent; then :; else fail "WP4: malformed stamp [$bad] was not refused as stamp_absent" "$(detail)"; fi
+  _stn=$((_stn + 1))
+done
+if [ "$_stn" = 9 ]; then pass "WP4: 9 malformed or unparseable stamps (date-only, offset form, impossible month, 30 Feb, words, leading space, trailing text, no T, @epoch) each refuse as stamp_absent"
+else fail "WP4: stamp loop ran $_stn rows, expected 9"; fi
+if case_wipe_soak; then pass "WP5: a 6-day-old stamp -> verdict=wipe_precondition_soak_not_elapsed floor_days=7 elapsed_s=<n>, exit 5"
+else fail "WP5: a 6-day stamp was not refused as soak_not_elapsed" "$(detail)"; fi
+if case_wipe_refuses stamp-future true "$STFUT" wipe_precondition_soak_not_elapsed; then pass "WP5b: a stamp in the FUTURE is not elapsed time (soak_not_elapsed)"
+else fail "WP5b: a future stamp was not refused" "$(detail)"; fi
+if case_wipe_soak_env0; then pass "WP6: WIPE_SOAK_FLOOR_SECONDS=0 exported in the environment still refuses a 6-day stamp (no env path relaxes the floor)"
+else fail "WP6: an exported zero floor relaxed the soak" "$(detail)"; fi
+if case_wipe_refuses stamp-absent-env0 true ABSENT wipe_precondition_stamp_absent WIPE_SOAK_FLOOR_SECONDS=0; then pass "WP6b: with the floor env at 0 an absent stamp still refuses stamp_absent"
+else fail "WP6b: a zero floor env let an absent stamp through" "$(detail)"; fi
+if [ "$(grep -c '^readonly WIPE_SOAK_FLOOR_SECONDS=604800$' "$PRECHECK")" = 1 ] && ! grep -qF 'WIPE_SOAK_FLOOR_SECONDS:-' "$PRECHECK" && ! grep -qF 'WIPE_SOAK_FLOOR_SECONDS-' "$PRECHECK"; then pass "WP7: the floor is the unconditional constant 'readonly WIPE_SOAK_FLOOR_SECONDS=604800' (7 days), with no default-expansion form anywhere"
+else fail "WP7: the soak floor line is not exactly the pinned constant"; fi
+if wipe_run nl true "$ST8"$'\n' wipe && [ "$RC" = 0 ]; then pass "WP8 (must-PASS): a stamp with the trailing newline --plain prints is accepted"
+else fail "WP8: a stamp with a trailing newline was refused" "$(detail)"; fi
+wipe_run nostamp-probe true ABSENT wipe
+if [ "$RC" = 5 ]; then pass "WP8b (harness): removing the stamp fixture turns the passing row RED (the soak rows are not vacuous)"
+else fail "WP8b: the passing wipe row survived without a stamp fixture" "$(detail)"; fi
+if wipe_run stamp-auth true "$ST8" wipe SHIM_STAMP_ERR=auth && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_stamp_read_failed reason=auth_invalid rc=1' "$OUT" && ! grep -q CANARY "$OUT"; then pass "WP9: an unreadable stamp -> verdict=wipe_stamp_read_failed reason=auth_invalid rc=1 (never stamp_absent), stderr not printed"
+else fail "WP9: a failed stamp read was not wipe_stamp_read_failed" "$(detail)"; fi
+
+# wipe_check: report-only. Every would-be refusal prints would_refuse=<word> and exits 0; the pin work still runs.
+case_check() { # <label> <flag> <stamp> <expected-word>
+  wipe_run "chk-$1" "$2" "$3" wipe_check
+  [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT" | cut -d' ' -f1)" != "[git-data-flag-precheck]" ] && grep -qxF "would_refuse=$4" "$OUT" \
+    && ! grep -qF 'verdict=' "$OUT" && grep -qF 'git_data_pin=present' "$OUT" && grep -qF GIT_DATA_LUKS_CUTOVER_AT "$DLOG"
+}
+if case_check off false "$ST8" wipe_precondition_flag_not_true; then pass "WC1: wipe_check with the flag false -> would_refuse=wipe_precondition_flag_not_true, exit 0, no verdict= line, the stamp read and the pin work still run"
+else fail "WC1: wipe_check flag-off report differs" "$(detail)"; fi
+if case_check stamp true ABSENT wipe_precondition_stamp_absent; then pass "WC2: wipe_check with no stamp -> would_refuse=wipe_precondition_stamp_absent, exit 0"
+else fail "WC2: wipe_check stamp-absent report differs" "$(detail)"; fi
+if case_check soak true "$ST6" wipe_precondition_soak_not_elapsed; then pass "WC3: wipe_check with a 6-day stamp -> would_refuse=wipe_precondition_soak_not_elapsed, exit 0"
+else fail "WC3: wipe_check soak report differs" "$(detail)"; fi
+if case_check ok true "$ST8" none && [ "$(sed -n 1p "$OUT")" = "flag=true mode=wipe_check" ]; then pass "WC4: wipe_check with every predicate satisfied -> flag=true mode=wipe_check, would_refuse=none, exit 0"
+else fail "WC4: wipe_check pass report differs" "$(detail)"; fi
+if wipe_run chk-stamp-auth true "$ST8" wipe_check SHIM_STAMP_ERR=network && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_stamp_read_failed reason=network rc=3' "$OUT"; then pass "WC5: an unreadable stamp is a read failure (exit 5) even in report-only mode, not a would_refuse"
+else fail "WC5: wipe_check swallowed a stamp read failure" "$(detail)"; fi
+if wipe_run chk-env0 true "$ST6" wipe_check WIPE_SOAK_FLOOR_SECONDS=0 && grep -qxF 'would_refuse=wipe_precondition_soak_not_elapsed' "$OUT"; then pass "WC6: the exported zero floor does not relax wipe_check's report either"
+else fail "WC6: the zero floor env changed wipe_check's report" "$(detail)"; fi
+
+# wipe_reread (W7b): flag only. No stamp, no pin, no TOFU, no deny-roots probe.
+case_reread_ok() {
+  wipe_run reread-ok true ABSENT wipe_reread
+  [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "flag=true mode=wipe_reread" ] \
+    && [ "$(cat "$DLOG")" = "$(printf '%s\n%s\n%s' 'doppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd' 'doppler secrets get DOPPLER_PROJECT --plain -p soleur -c prd' 'doppler secrets get DOPPLER_CONFIG --plain -p soleur -c prd')" ] \
+    && [ ! -e "$RT/git-data.pin" ]
+}
+if case_reread_ok; then pass "WR1: wipe_reread with the flag true -> exactly 'flag=true mode=wipe_reread', exit 0; 3 doppler calls (flag, project, config); no stamp read, no pin file, no TOFU or deny-roots line"
+else fail "WR1: wipe_reread output or side effects differ" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if wipe_run reread-off false ABSENT wipe_reread && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT" && [ ! -e "$RT/git-data.pin" ]; then pass "WR2: wipe_reread with the flag no longer true -> verdict=wipe_precondition_flag_not_true, exit 5"
+else fail "WR2: wipe_reread over a false flag was not refused" "$(detail)"; fi
+if wipe_run reread-unset ABSENT ABSENT wipe_reread && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT"; then pass "WR3: wipe_reread over an unset flag refuses"
+else fail "WR3: wipe_reread over an unset flag was not refused" "$(detail)"; fi
+if wipe_run reread-scope ABSENT ABSENT wipe_reread SHIM_BOUND_CONFIG=prd_terraform && [ "$RC" = 5 ] && grep -qF 'verdict=flag_read_failed reason=scope_mismatch' "$OUT"; then pass "WR4: wipe_reread keeps the scope check (a token bound to another config is scope_mismatch)"
+else fail "WR4: wipe_reread dropped the scope check" "$(detail)"; fi
+if wipe_run reread-notoken true ABSENT wipe_reread DOPPLER_TOKEN= && [ "$RC" = 5 ] && grep -qF 'verdict=flag_token_absent' "$OUT" && [ ! -s "$DLOG" ]; then pass "WR5: wipe_reread without DOPPLER_TOKEN -> flag_token_absent, doppler never called"
+else fail "WR5: wipe_reread ran without a token" "$(detail)"; fi
+if wipe_run bogus true ABSENT wipe_bogus && [ "$RC" = 2 ] && grep -qF 'verdict=flag_mode_invalid' "$OUT"; then pass "WM1: the FLAG_MODE set stays closed (wipe_bogus -> flag_mode_invalid, exit 2)"
+else fail "WM1: an unknown wipe-ish mode was accepted" "$(detail)"; fi
+
 # ── workflow rows ─────────────────────────────────────────────────────────────────────
 cat > "$T/wf.py" <<'PY'
 import sys, yaml, json
@@ -503,9 +619,21 @@ sites = [("step", s.get("id") or s.get("name")) for s in steps if "DOPPLER_TOKEN
 job = (wf.get("jobs") or {}).get("cutover") or {}
 sites += [("job", k) for k, v in job.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
 sites += [("top", k) for k, v in wf.items() if k != "jobs" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
-sites += [("job", j) for j, b in (wf.get("jobs") or {}).items() if j != "cutover" and "DOPPLER_TOKEN_PRD" in json.dumps(b, default=str)]
-check("G1-census: DOPPLER_TOKEN_PRD is named only by the flag precheck step (%d steps scanned)" % len(steps),
-      len(steps) >= 1 and sites == [("step", "flag_precheck")], sites)
+# The wipe job (#10138) legitimately reads the prd flag in exactly two steps (the W3 precheck and the W7b
+# re-read); every OTHER job, and every other wipe-job site, is still a violation.
+wipe = (wf.get("jobs") or {}).get("wipe") or {}
+wsteps = wipe.get("steps") or []
+wsites = [("step", s.get("id") or s.get("name")) for s in wsteps if "DOPPLER_TOKEN_PRD" in json.dumps(s)]
+wsites += [("job", k) for k, v in wipe.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
+sites += [("job", j) for j, b in (wf.get("jobs") or {}).items() if j not in ("cutover", "wipe") and "DOPPLER_TOKEN_PRD" in json.dumps(b, default=str)]
+# The exact shape of each allowed site: the secret is named ONCE, as env.DOPPLER_TOKEN of the step, nowhere in its run text.
+def prd_once_as_env(s):
+    return (json.dumps(s).count("DOPPLER_TOKEN_PRD") == 1 and (s.get("env") or {}).get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN_PRD }}")
+allowed = [s for s in steps if s.get("id") == "flag_precheck"] + [s for s in wsteps if s.get("id") in ("wipe_flag_precheck", "wipe_flag_reread")]
+check("G1-census: DOPPLER_TOKEN_PRD is named only by cutover.flag_precheck, wipe.wipe_flag_precheck and wipe.wipe_flag_reread, once each, as the step's env DOPPLER_TOKEN (%d + %d steps scanned)" % (len(steps), len(wsteps)),
+      len(steps) >= 1 and len(wsteps) >= 1 and sites == [("step", "flag_precheck")]
+      and wsites == [("step", "wipe_flag_precheck"), ("step", "wipe_flag_reread")]
+      and len(allowed) == 3 and all(prd_once_as_env(s) for s in allowed), (sites, wsites))
 # #9725: the flip must also require the SERVED image to carry the dual-root
 # tenant deny — the GIT_DATA_DENY_FLOOR arm (env bound, refusal emitted).
 fp = [s for s in steps if s.get("id") == "flip_preconditions"]
@@ -599,6 +727,18 @@ if mutate prd-in-script-step "$WF" 1 's#^          MODE: proof$#&\n          DOP
   python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census.tsv" 2>&1
   mutant_red prd-in-script-step wf_row "$T/mut/wf-census.tsv" "G1-census:"
 fi
+# Row 3b — the wipe job's root-key fetch step is re-pointed at the prd flag token: a third wipe site.
+# shellcheck disable=SC2016
+if mutate prd-in-wipe-key-fetch "$WF" 2 '/id: wipe_key_fetch/,/^        run:/ s#DOPPLER_TOKEN_GIT_DATA_ROOT#DOPPLER_TOKEN_PRD#'; then
+  python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census-wipe.tsv" 2>&1
+  mutant_red prd-in-wipe-key-fetch wf_row "$T/mut/wf-census-wipe.tsv" "G1-census:"
+fi
+# Row 3c — a fourth job (not cutover, not wipe) binds the prd flag token: the per-job allow-list is closed.
+# shellcheck disable=SC2016
+if mutate prd-in-notify-job "$WF" 2 '/^  notify-failure:/,/^    steps:/ s#^    steps:$#    env:\n      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}\n    steps:#'; then
+  python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census-job.tsv" 2>&1
+  mutant_red prd-in-notify-job wf_row "$T/mut/wf-census-job.tsv" "G1-census:"
+fi
 # Row 4 — compare `true` case-insensitively.
 # shellcheck disable=SC2016
 if mutate true-case-insensitive "$PRECHECK" 2 's#^if \[ "\$flag" = true \]; then$#if [ "${flag,,}" = true ]; then#'; then
@@ -679,6 +819,44 @@ if mutate deny-write-gate "$PRECHECK" 2 's#"\$FLAG_WRITE_VALUE" = true#"\$FLAG_W
   CASE_SCRIPT="$MUTANT" mutant_red deny-write-gate case_write_deny_absent_true_refused
 fi
 
+# ── Guard 6 mutation rows (#10138): the soak floor is one pinned constant ──────────────────────────
+# M-wipe-floor-zero: the constant at zero. A 6-day stamp then passes (the soak row goes RED); an absent stamp must
+# STILL refuse stamp_absent (the predicates are separate), checked against the same mutant copy.
+# shellcheck disable=SC2016
+if mutate wipe-floor-zero "$PRECHECK" 2 's#^readonly WIPE_SOAK_FLOOR_SECONDS=604800$#readonly WIPE_SOAK_FLOOR_SECONDS=0#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-floor-zero case_wipe_soak
+  if CASE_SCRIPT="$MUTANT" case_wipe_stamp_absent; then pass "M-wipe-floor-zero (must-refuse): with the floor at zero an absent stamp STILL refuses stamp_absent"
+  else fail "M-wipe-floor-zero: a zero floor let an absent stamp through" "$(detail)"; fi
+fi
+# M-wipe-floor-default-form: the constant becomes `${VAR:-604800}`; an exported 0 then relaxes it.
+# shellcheck disable=SC2016
+if mutate wipe-floor-default-form "$PRECHECK" 2 's#^readonly WIPE_SOAK_FLOOR_SECONDS=604800$#readonly WIPE_SOAK_FLOOR_SECONDS="${WIPE_SOAK_FLOOR_SECONDS:-604800}"#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-floor-default-form case_wipe_soak_env0
+fi
+# M-wipe-flag-predicate: drop the flag-true predicate. A false flag then passes under wipe.
+if mutate wipe-flag-predicate "$PRECHECK" 2 's#wipe_word=wipe_precondition_flag_not_true$#wipe_word=#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-flag-predicate case_wipe_flag
+fi
+# M-wipe-stamp-predicate: drop the stamp-present predicate.
+if mutate wipe-stamp-predicate "$PRECHECK" 2 's#wipe_word=wipe_precondition_stamp_absent; fi$#:; fi#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-stamp-predicate case_wipe_stamp_absent
+fi
+# M-wipe-soak-predicate: drop the elapsed-time comparison.
+# shellcheck disable=SC2016
+if mutate wipe-soak-predicate "$PRECHECK" 2 's#elapsed_s" -lt "\$WIPE_SOAK_FLOOR_SECONDS" \]; then$#elapsed_s" -lt 0 ]; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-soak-predicate case_wipe_soak
+fi
+# M-wipe-reread-gone: wipe_reread falls into the generic path (stamp-free, but pin + TOFU + deny lines appear).
+# shellcheck disable=SC2016
+if mutate wipe-reread-gone "$PRECHECK" 2 's#^if \[ "\$FLAG_MODE" = wipe_reread \]; then$#if [ "$FLAG_MODE" = wipe_reread_never ]; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-reread-gone case_reread_ok
+fi
+# M-wipe-check-refuses: the report-only mode refuses like wipe.
+# shellcheck disable=SC2016
+if mutate wipe-check-refuses "$PRECHECK" 2 's#^  if \[ "\$FLAG_MODE" = wipe \]; then$#  if [ "$FLAG_MODE" = wipe ] || [ "$FLAG_MODE" = wipe_check ]; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-check-refuses case_check soak true "$ST6" wipe_precondition_soak_not_elapsed
+fi
+
 # ── SANDBOX_DENY_ROOTS arm (#9725) ────────────────────────────────────────────────
 if case_deny absent "$T/deny-absent" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS absent' "$OUT"; then
   pass "D1: source without the deny-root markers under proof -> SANDBOX_DENY_ROOTS absent, informational only (exit 0)"
@@ -703,12 +881,12 @@ if case_deny collapsed-flip "$T/deny-collapsed" flip   && [ "$RC" = 5 ] && grep 
 else fail "D7: flag-collapsed helper shape was not detected as absent" "$(detail)"; fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=19  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17
+MUTANT_FLOOR=28  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 = 101 (exact).
-FLOOR=101
+# Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 + census mutants 2 x 2 + wipe rows 26 + wipe mutants 7 x 2 + 1 must-refuse row = 146 (exact).
+FLOOR=146
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

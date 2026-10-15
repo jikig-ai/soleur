@@ -61,7 +61,7 @@ Issue #3034 tracks updating the canonical postmerge runbook.
 - When adding a Cloudflare Access app or other proxy in front of an existing endpoint, grep `knowledge-base/project/plans/` and `plugins/soleur/skills/postmerge/` for the hostname and update any HTTP-status assertions in the same PR.
 - Verify `terraform output` names by running `terraform output` once during deepen-plan; do not infer names from convention. (#3019 plan prescribed `server_ipv4`; actual is `server_ip`.)
 
-**Resolved:** 2026-04-29 — file+systemd contract canonicalized in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md` ("When NOT to use this probe") and surfaced from `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" alongside the structural fix from #2881. See plan `knowledge-base/project/plans/2026-04-29-fix-deploy-pipeline-fix-ship-gate-and-postapply-contract-plan.md`.
+**Resolved:** 2026-04-29 — file+systemd contract canonicalized in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md` ("When NOT to use this probe") and surfaced from `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" alongside the structural fix from #2881. See plan `knowledge-base/project/plans/archive/20261013-003106-2026-04-29-fix-deploy-pipeline-fix-ship-gate-and-postapply-contract-plan.md`.
 
 ## Session Errors (PR #3022 session)
 

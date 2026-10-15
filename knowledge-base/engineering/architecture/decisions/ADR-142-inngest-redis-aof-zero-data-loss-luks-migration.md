@@ -696,6 +696,8 @@ that replaces them. Ref #9879.
 apply has landed the one in-place update on `hcloud_volume.inngest_redis_luks`, and the post-apply read-back returns
 `protection.delete=true` (ADR-282, Status). Until then each mark below describes the target state, not a fact.
 
+> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15, a point-in-time check of the flag only; evidence in ADR-282's addendum of that date). The paragraph above is kept as the dated record.
+
 > **Superseded 2026-10-10 (#9879), in part:** the "No key escrow (git-data-lean shape)" rationale in the Decision section
 > ("The AOF is transient and self-healing ... its total-loss recovery is already built and proven ... the sole-copy reminder
 > subset can be enumerated/re-armed"). The 2026-10-08 addendum had already sharpened it; ADR-282 now carries the key-loss
@@ -712,6 +714,19 @@ apply has landed the one in-place update on `hcloud_volume.inngest_redis_luks`, 
 
 **What this addendum does NOT change.** The decision, its encryption mechanism, the additive-cutover design, or any earlier
 amendment or addendum.
+
+## Addendum — 2026-10-13 (#10217): bounded attach-wait in both readers; the boot-reopen completes the mount
+
+Appended; nothing above is edited. Records the failure measured on production replace iid 170091264 and the two mechanism changes that answer it.
+
+**What happened.** First boot began before `hcloud_volume_attachment.inngest_redis_luks` had propagated (~80 s measured vs the ~30 s wait bound). `wait_dev`'s `pointer_device_wait` FATAL'd; the reopen unit later opened the mapper (`reopen_ok`) but its contract then was "opens ONLY; never mounts", so with no fstab line and no mount the host sat unhealable-degraded until a second full `inngest-host-replace` (iid 170097260).
+
+**Changes in force once this PR's template ships (via the next sanctioned `inngest-host-replace` — `user_data` is ForceNew, merge is inert):**
+
+- Both device readers — the `LUKSEOF` runcmd stage and `inngest-luks-open.sh` — wait under the same counted, fail-closed bound: literal `300` s, `sleep 1` counted passes, whole-predicate re-probe each pass, one post-loop `udevadm settle --timeout=10 || true`, same named FATALs and stages (the embedded bound literal moved 30s→300s — the sentences name the true bound). No env seam: the bound is not retunable from Doppler (CTO ruling D4; the shape conforms to the sibling's shipped `cloud-init-git-data.yml` heredoc wait — `sleep 1` passes, timeout-wrapped probe, one post-loop settle — with a post-settle re-probe added at review).
+- The reopen contract is extended to "**opens, then completes the mount for the arm it verified — never formats, never mkfs**" (CTO ruling D8): `ensure_mount` writes the fstab line (`ext4 defaults,nofail 0 2`) and mounts it on every verified arm, including the already-open noop path — the incident's exact post-state. `inngest-luks-open.service` gains `After=systemd-remount-fs.service` so the fstab write cannot race a read-only root (CTO ruling D2).
+
+**What this addendum does NOT change.** The decision, its encryption mechanism, the additive-cutover design, or any earlier amendment or addendum. The pre-cutover/staging arms are unchanged in meaning; they get the same bound only because the two readers share one `wait_dev` body and the bound must not drift (D5).
 
 ## Addendum — 2026-10-12 (#9786, strip the dead plaintext resolver)
 

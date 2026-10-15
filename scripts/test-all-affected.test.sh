@@ -115,7 +115,7 @@ PASS=$_self_pass; FAIL=$_self_fail; cases=0
 # (every edge suite selects -> rows f/q red), SOLEUR_SUBAGENT/SOLEUR_ALLOW_FULL_GATE
 # move the refusal arms, FORCE_ALL preempts the asserted fallback reason, and
 # TEST_TIMING_LOG would write synthetic skip rows into the operator's real log.
-ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S -u SOLEUR_ENUM_DEADLINE_S -u SECONDS -u SANDBOX_STAGED_NAMES"
+ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S -u SOLEUR_ENUM_DEADLINE_S -u SECONDS -u SANDBOX_STAGED_NAMES -u SANDBOX_DIFF_NAMES -u SANDBOX_DETECT_OK -u SANDBOX_HEAD_OK -u SANDBOX_PREFIXES -u SANDBOX_LIVE_UNTRACKED -u SANDBOX_SIBLINGS -u SANDBOX_RD_ROOT -u SANDBOX_RD_DIFF -u SANDBOX_RD_HASH -u SANDBOX_RECORD"
 
 # ---------------------------------------------------------------------------
 # Sandbox builder. $1 = sandbox runner path; $2 = "with-lib" | "no-lib".
@@ -238,7 +238,10 @@ s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labe
     scripts/lint-trap-tempfile-ownership|\\
     scripts/lint-shell-capture-exit-live|\\
     scripts/lint-shell-trace-credential-refusal|\\
-    scripts/test-affected-kb-consumers) : ;;
+    scripts/test-affected-kb-consumers|\\
+    scripts/guard-vacuity-floor|\\
+    scripts/lint-orphan-test-suites|\\
+    scripts/lib/repo-write-boundary.test.sh) : ;;
     *) return 0 ;;
   esac
 ''', 1)
@@ -584,7 +587,10 @@ AFFECTED_A_TWO_PATHS=(
 )
 '
 
-rc_g() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }
+# Whole-prefix sweep, not a named list — a named GIT_* list went stale within
+# a day once already (sc9's comment). The subshell keeps the unsets out of the
+# caller's env. GIT_TRACE is swept too — fixture ops stay quiet by design.
+rc_g() { ( for _v in "${!GIT_@}"; do unset "$_v"; done; exec git "$@" ); }
 
 # Build a scratch repo whose origin/main is the base commit. $2 = "broken-lib" makes the base lib
 # unparseable (the G4 row). Never links into the live tree.
@@ -1681,10 +1687,10 @@ fi
 _wt_fixture() { # $1 = fixture root
   local d="$1"
   _WT=""; _SB=""
-  git init -q "$d/repo" || return 1
-  git -C "$d/repo" -c user.email=suite@example.com -c user.name=suite \
-    commit -qm init --allow-empty || return 1
-  git -C "$d/repo" worktree add -q --detach "$d/wt" HEAD || return 1
+  rc_g init -q "$d/repo" || return 1
+  rc_g -C "$d/repo" -c user.email=suite@example.com -c user.name=suite \
+    -c commit.gpgsign=false commit -qm init --allow-empty || return 1
+  rc_g -C "$d/repo" worktree add -q --detach "$d/wt" HEAD || return 1
   build_sandbox "$d/sb/test-all.sh" with-lib >/dev/null || return 1
   _WT="$d/wt"; _SB="$d/sb/test-all.sh"
 }
@@ -2216,7 +2222,7 @@ fi
 #
 # TWO HARSHNESS DETAILS, both caught by the architecture seat (#9197):
 # - the eval unsets the runner's full 9-name GIT_* list, not just GIT_DIR:
-#   this suite is always-on, so it runs inside the lefthook bun-test hook
+#   this suite is edge-selected, so it still runs inside the lefthook bun-test hook
 #   itself — where lefthook injects GIT_INDEX_FILE/GIT_WORK_TREE and the
 #   eval'd `git diff --cached` would read the bookkeeping index instead of
 #   the scratch repo's;
@@ -2228,7 +2234,7 @@ cases=$((cases + 1))
 REAL_REPO="$TESTROOT/realstate-staged"
 mkdir -p "$REAL_REPO"
 # The fixture BUILD unset the whole GIT_* prefix before any git op — this
-# suite is always-on, so it runs inside the very lefthook hook that injects
+# suite is edge-selected, so it still runs inside the very lefthook hook that injects
 # GIT_INDEX_FILE/GIT_WORK_TREE/GIT_DIR. Under that env an unscrubbed
 # `git add`/`git commit`/`git update-ref` inside the scratch repo lands on
 # the LIVE index and refs (data-loss class #7772/#7835 — 16 stray commits
@@ -2240,7 +2246,7 @@ if (
   for _v in "${!GIT_@}"; do unset "$_v"; done
   cd "$REAL_REPO"
   git init -q -b main .
-  git config user.email t@t; git config user.name t
+  git config user.email t@t; git config user.name t; git config commit.gpgsign false
   echo base > base.txt
   mkdir -p scripts
   echo tracked > scripts/tracked-unstaged-fixture.sh
@@ -2607,10 +2613,10 @@ cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "108" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 108 (#9763 + #9947 + #9814 registrations: 113-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
+if [[ "$_f1_floor" == "109" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 109 (#9763 + #9947 + #9814 + #8875 registrations: 114-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
-  fail "f1: floor='${_f1_floor}' (want 108) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 109) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------
@@ -2619,7 +2625,7 @@ fi
 # ~150. `--print-selection` runs the SAME pre-pass a real run applies and prints
 # what THIS diff selects, without running a suite.
 #
-# p1: rows and summary for a forced diff. Sandbox corpus = 6 runnable labels.
+# p1: rows and summary for a forced diff. Sandbox corpus = 16 runnable labels.
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
@@ -2628,9 +2634,9 @@ _rc=$ARM_RC
 _sel_yes=$(awk -F'\t' '$1=="AFFECTED_SELECTED" && $3=="1"{print $2}' <<<"$ARM_OUT" | sort | tr '\n' ' ')
 _sum=$(awk -F'\t|[[:space:]]' '$1=="AFFECTED_SUMMARY"' <<<"$ARM_OUT" | head -1)
 if [[ "$_rc" == "0" ]] \
-  && [[ "$_sel_yes" == "plugins/soleur/test/operator-ack-guard.test.sh plugins/soleur/test/operator-agent-runnable.test.sh plugins/soleur/test/operator-script.test.sh scripts/lint-dual-lockfile scripts/lint-shell-capture-exit-live scripts/lint-shell-trace-credential-refusal scripts/lint-trap-tempfile-ownership test/x-community " ]] \
+  && [[ "$_sel_yes" == "plugins/soleur/test/operator-ack-guard.test.sh plugins/soleur/test/operator-agent-runnable.test.sh plugins/soleur/test/operator-script.test.sh scripts/guard-vacuity-floor scripts/lint-dual-lockfile scripts/lint-orphan-test-suites scripts/lint-shell-capture-exit-live scripts/lint-shell-trace-credential-refusal scripts/lint-trap-tempfile-ownership test/x-community " ]] \
   && grep -qF $'AFFECTED_SELECTED\tplugins/soleur\t0' <<<"$ARM_OUT" \
-  && grep -qF 'selected=8 of=13 always_on=1 edge=7 fallback=none' <<<"$_sum" \
+  && grep -qF 'selected=10 of=16 always_on=1 edge=9 fallback=none' <<<"$_sum" \
   && [[ "$(ran_count)" == "0" ]]; then
   pass "p1: --print-selection prints the exact selected set + summary and runs nothing"
 else
@@ -2672,7 +2678,7 @@ SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
   -- --affected
 if [[ "$ARM_RC" == "0" ]] && grep -qF 'AFFECTED_SUMMARY' <<<"$ARM_OUT" \
-  && grep -qF 'selected=8 of=13' <<<"$ARM_OUT"; then
+  && grep -qF 'selected=10 of=16' <<<"$ARM_OUT"; then
   pass "p4: a real --affected run prints the AFFECTED_SUMMARY line"
 else
   fail "p4: rc=$ARM_RC summary lines=$(grep -c AFFECTED_SUMMARY <<<"$ARM_OUT")"
@@ -2841,13 +2847,99 @@ else
   fail "q6: enumerate call carries _aff_child_paths x${_q6_n}, assignment x${_q6_set} (expected 1 and 1)"
 fi
 
+# --- Rows q7-q9: --paths element normalization (#10117) ----------------------------------
+# A --paths element stands in for a diff-name line; a `./`-headed element never
+# matched a git path line and silently selected nothing — a misleading
+# diagnostic. The parse arm strips a leading `./` run to fixpoint and REFUSES
+# (rc 2, named error echoing the element and a valid example) any element that
+# is still not a clean repo-relative path.
+#
+# q7: --paths=./<p> selects byte-identically to --paths=<p>. Full-output compare
+#     (records + summary + preamble): the dotted spelling must not even differ
+#     in a banner line.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  -- --print-selection --paths=test/x-community.test.ts
+_q7_rc_clean=$ARM_RC
+_q7_clean="$ARM_OUT"
+SANDBOX_LIB=with-lib run_arm \
+  -- --print-selection --paths=./test/x-community.test.ts
+if [[ "$_q7_rc_clean" == "0" && "$ARM_RC" == "0" && -n "$_q7_clean" && "$ARM_OUT" == "$_q7_clean" ]]; then
+  pass "q7: --paths=./<p> selects byte-identically to --paths=<p>"
+else
+  fail "q7: clean rc=$_q7_rc_clean, ./ rc=$ARM_RC — selections differ"
+fi
+
+# q8: every unclean element refuses rc 2 with a named error — the message names
+#     the reject contract and shows a valid example. One row per reject class:
+#     empty element (a,,b), bare `.`, `./` alone, absolute, `..` SEGMENTS (the
+#     path's own name content — foo..bar.sh — stays legal, pinned by q9), `//`
+#     and `/.` segments, a trailing `/` (a dir ref is not a diff path), TAB and
+#     LF bytes (they mint fake diff lines downstream), and the `/./`-residual
+#     class a fixpoint strip alone would leave behind (././x).
+for _q8_in in 'a,,b' '.' './' '/abs/x.sh' 'a/../b' '../x.sh' 'x/..' 'x/.' 'a//b' 'a/./b' 'dir/' $'a\tb.sh' $'a\nb.sh' $'a\x1bb.sh' '././x' '..'; do
+  cases=$((cases + 1))
+  _q8_rc=0
+  _q8_out=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash "$RUNNER" --print-selection "--paths=${_q8_in}" 2>&1) || _q8_rc=$?
+  if [[ "$_q8_rc" == "2" ]] \
+    && grep -qF 'ERROR: --paths element' <<<"$_q8_out" \
+    && grep -qF 'e.g. --paths=' <<<"$_q8_out"; then
+    pass "q8: --paths='${_q8_in}' refuses rc 2 with named error"
+  else
+    fail "q8: --paths='${_q8_in}' rc=$_q8_rc — $(tail -1 <<<"$_q8_out")"
+  fi
+done
+
+# q8b: the named error echoes the OFFENDING element — without it an operator
+#      cannot tell which element of a long list tripped the reject.
+cases=$((cases + 1))
+_q8e_rc=0
+_q8e=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --print-selection '--paths=a/../b' 2>&1) || _q8e_rc=$?
+if [[ "$_q8e_rc" == "2" ]] && grep -qF 'a/../b' <<<"$_q8e"; then
+  pass "q8b: the reject error echoes the offending element"
+else
+  fail "q8b: rc=$_q8e_rc out=$(tail -1 <<<"$_q8e")"
+fi
+
+# q8c: the echoed element is scrubbed — a control-byte element must reach
+#      stderr as a SINGLE line with ?-substituted bytes, never as a forged
+#      multi-line error block.
+cases=$((cases + 1))
+_q8s_rc=0
+_q8s=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --print-selection "--paths=a"$'\nb'".sh" 2>&1) || _q8s_rc=$?
+if [[ "$_q8s_rc" == "2" ]] && grep -qF 'a?b.sh' <<<"$_q8s" \
+  && [[ "$(grep -cF 'ERROR: --paths element' <<<"$_q8s")" == "1" ]]; then
+  pass "q8c: control-byte element echoes scrubbed on a single line"
+else
+  fail "q8c: rc=$_q8s_rc out=$(tail -1 <<<"$_q8s")"
+fi
+
+# q9: legal spellings the reject set must NOT touch — `..` not segment-anchored
+#     and a literal space are both valid git path content; a leading-dot root
+#     (.github) is a first-class root, not a /. segment.
+for _q9_in in 'foo..bar.sh' 'a b.sh' '.github/workflows/x.yml'; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    -- --print-selection "--paths=${_q9_in}"
+  if [[ "$ARM_RC" == "0" ]]; then
+    pass "q9: --paths='${_q9_in}' accepted"
+  else
+    fail "q9: --paths='${_q9_in}' rc=$ARM_RC"
+  fi
+done
+
 # ---- tg rows (Guard 2, #9813): the `glob:` hit arm ---------------------------------------
-# The five extension-bounded kb-corpus walkers carry `glob:` kb edges — a kb .md
-# line can never move their verdict. operator-agent-runnable keeps `^knowledge-base/`:
-# its Guard-1 corpus is content-keyed (g1_discover scans ANY extension for the
-# generated-script marker), so **.sh would under-cover it — the review's honest
-# disposition, at ~16 committed seconds per kb-md diff. Labels sit in the sandbox
-# keep-list, so "absent from RAN" is a real decline, never a trim artifact.
+# Six extension-bounded kb-corpus carriers hold `glob:` kb-.sh edges — the five
+# original walkers plus repo-write-boundary.test.sh, added under #9969 — a kb
+# .md line can never move their verdict. operator-agent-runnable keeps
+# `^knowledge-base/`: its Guard-1 corpus is content-keyed (g1_discover scans ANY
+# extension for the generated-script marker), so **.sh would under-cover it —
+# the review's honest disposition, at ~16 committed seconds per kb-md diff.
+# Labels sit in the sandbox keep-list, so "absent from RAN" is a real decline,
+# never a trim artifact.
 _TG_GLOB_WALKERS=(
   'plugins/soleur/test/operator-ack-guard.test.sh'
   'plugins/soleur/test/operator-script.test.sh'
@@ -2855,9 +2947,11 @@ _TG_GLOB_WALKERS=(
   'scripts/lint-shell-capture-exit-live'
   'scripts/lint-shell-trace-credential-refusal'
 )
-_TG_ALL_SIX=("${_TG_GLOB_WALKERS[@]}" 'plugins/soleur/test/operator-agent-runnable.test.sh')
-_tg_all_ran() { local _l; for _l in "${_TG_ALL_SIX[@]}"; do ran_exact "$_l" || return 1; done; }
-_tg_none_ran() { local _l; for _l in "${_TG_GLOB_WALKERS[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
+_TG_ALL_SEVEN=("${_TG_GLOB_WALKERS[@]}" 'plugins/soleur/test/operator-agent-runnable.test.sh' 'scripts/lib/repo-write-boundary.test.sh')
+_tg_all_ran() { local _l; for _l in "${_TG_ALL_SEVEN[@]}"; do ran_exact "$_l" || return 1; done; }
+# rwb joins the .md decliners: its kb edge is `**.sh`-tailed like the five's.
+_TG_MD_DARK=("${_TG_GLOB_WALKERS[@]}" 'scripts/lib/repo-write-boundary.test.sh')
+_tg_none_ran() { local _l; for _l in "${_TG_MD_DARK[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
 
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
@@ -2867,7 +2961,7 @@ _rc=$ARM_RC
 if [[ "$_rc" == "0" ]] && _tg_none_ran \
   && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh' \
   && ran_exact 'scripts/test-affected-kb-consumers'; then
-  pass "tg1: a kb .md line declines the five glob: walkers (agent-runnable + kb-consumers still select)"
+  pass "tg1: a kb .md line declines the six kb-.sh glob: carriers (agent-runnable + kb-consumers still select)"
 else
   fail "tg1: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
@@ -2882,7 +2976,7 @@ for _sandbox_probe in 'knowledge-base/x.sh' 'knowledge-base/a/b/c.sh' 'knowledge
     -- --affected
   _rc=$ARM_RC
   if [[ "$_rc" == "0" ]] && _tg_all_ran; then
-    pass "tg2: ${_sandbox_probe} selects all six kb-corpus walkers"
+    pass "tg2: ${_sandbox_probe} selects all seven kb-corpus walkers"
   else
     fail "tg2 (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
   fi
@@ -2896,7 +2990,7 @@ SANDBOX_LIB=with-lib run_arm \
   -- --affected
 _rc=$ARM_RC
 if [[ "$_rc" == "0" ]] && _tg_all_ran; then
-  pass "tg3: a rename line whose SOURCE is a kb .sh selects all six kb-corpus walkers"
+  pass "tg3: a rename line whose SOURCE is a kb .sh selects all seven kb-corpus walkers"
 else
   fail "tg3: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
@@ -2911,6 +3005,7 @@ _TG_TRAP_ONLY=(
   'plugins/soleur/test/operator-script.test.sh'
   'scripts/lint-shell-capture-exit-live'
   'scripts/lint-shell-trace-credential-refusal'
+  'scripts/lib/repo-write-boundary.test.sh'
 )
 for _ext in py bash ts mjs js; do
   cases=$((cases + 1))
@@ -2922,7 +3017,7 @@ for _ext in py bash ts mjs js; do
   for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
   if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership' \
     && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh'; then
-    pass "tg4: knowledge-base/x.${_ext} selects only lint-trap-tempfile-ownership among the glob: walkers"
+    pass "tg4: knowledge-base/x.${_ext} selects only lint-trap-tempfile-ownership among the kb-.sh glob: carriers"
   else
     fail "tg4 (.${_ext}): rc=$_rc extras:${_tg_bad:-none} trap_ran=$(awk -F'\t' -v l='scripts/lint-trap-tempfile-ownership' '$1=="RAN"&&$2==l{f=1}END{print f+0}' <<<"$ARM_RECORD")"
   fi
@@ -2936,7 +3031,7 @@ _tg_bad=""
 for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
 if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership' \
   && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh'; then
-  pass "tg4b: a kb bunfig.toml selects only lint-trap-tempfile-ownership among the glob: walkers"
+  pass "tg4b: a kb bunfig.toml selects only lint-trap-tempfile-ownership among the kb-.sh glob: carriers"
 else
   fail "tg4b: rc=$_rc extras:${_tg_bad:-none}"
 fi
@@ -2971,17 +3066,677 @@ else
   fail "tg5: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
 
-# The receipt carries the minted edge verbatim (real index, print arm).
+# The receipt carries the minted edge verbatim (real index, print arm). The
+# family is six since #9969: the five tg walkers plus repo-write-boundary.test.sh,
+# whose new declared array carries the same ^glob:knowledge-base/**.sh edge.
 # The probe and needle are COMPOSED — a literal `knowledge-base/<path>` here is a
 # fixture the kb-consumers oracle would otherwise charge to this suite as a read.
 cases=$((cases + 1))
 _tg_rcpt_n=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
   bash "$RUNNER" --print-selection --paths="knowledge""-base/project/specs/foo.md" all 2>/dev/null \
   | awk -F'\t' '$1=="AFFECTED_SELECTED" && index($5, "^glob:knowledge" "-base/**.sh") && $3=="0" {n++} END{print n+0}')
-if [[ "$_tg_rcpt_n" == "5" ]]; then
-  pass "tg6: the five glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
+if [[ "$_tg_rcpt_n" == "6" ]]; then
+  pass "tg6: the six kb-.sh glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
 else
-  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 5)"
+  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 6)"
+fi
+
+# ---- th rows (#9969): whole-tree corpus suites' `glob:` edges ---------------
+# guard-vacuity-floor and lint-orphan-test-suites scan `git ls-files '*.test.sh'`
+# whole-tree; repo-write-boundary.test.sh scans whole-tree `*.sh` content-keyed
+# on `test-all\.sh`. The pair's declared edges enumerated only the roots holding
+# suites today, and rwb carried no declared array at all (edge:derived) — a
+# corpus file under an unlisted root was scanned but never selected: the diff
+# moved the verdict and the local gate stayed silent. The `glob:` entries these
+# rows pin live in scripts/lib/test-affected-paths.sh; the labels sit in the
+# sandbox keep-list, so "absent from RAN" is a real decline, never a trim
+# artifact (th7 pins that binding).
+_TH_ALL_THREE=(
+  'scripts/guard-vacuity-floor'
+  'scripts/lint-orphan-test-suites'
+  'scripts/lib/repo-write-boundary.test.sh'
+)
+_th_all_three_ran() { local _l; for _l in "${_TH_ALL_THREE[@]}"; do ran_exact "$_l" || return 1; done; }
+_th_none_ran() { local _l; for _l in "${_TH_ALL_THREE[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
+_th_rwb_only_ran() {
+  ran_exact 'scripts/lib/repo-write-boundary.test.sh' || return 1
+  ! ran_exact 'scripts/guard-vacuity-floor' && ! ran_exact 'scripts/lint-orphan-test-suites'
+}
+# The seven roots the pair covers by legacy dir prefix — a deliberate literal
+# set (same doctrine as EXPECTED_SUITE_ROOTS): a dropped prefix must flip the
+# .sh expectation and RED the probe, which a derived set would mask.
+_TH_PREFIX_ROOTS=(apps .claude .github plugins scripts test tests)
+_th_is_prefix_root() { local _r; for _r in "${_TH_PREFIX_ROOTS[@]}"; do [[ "$_r" == "$1" ]] && return 0; done; return 1; }
+# The listing producer for the th family — a FUNCTION, not a frozen capture,
+# so th8's mutation arms can repoint it at a per-row fixture repo through
+# _TH_REPO (a top-level variable would bind before any row sets it and leave
+# every arm dead). _TH_REPO is CONFINED to $TESTROOT: outside it, refuse — the
+# seam must never retarget the family at a sibling checkout whose populated
+# listing would read green.
+_th_ls_files() {
+  # `${_TH_REPO+set}` not `${_TH_REPO:-}` — a set-but-empty value is a wiring
+  # bug and must refuse rather than silently fall back to the live listing.
+  if [[ -n "${_TH_REPO+set}" ]]; then
+    assert_fixture_dir "$_TH_REPO"
+    # Confinement must compare RESOLVED paths AND the resolved gitdir: a
+    # symlink inside TESTROOT passes a lexical prefix check while git follows
+    # it out of the fixture, and a `.git` FILE (the `git worktree add` shape)
+    # hands discovery a foreign gitdir with no symlink at all. rc_g keeps a
+    # lefthook-injected GIT_DIR/GIT_INDEX_FILE out of the fixture reads (the
+    # suite is edge-selected and still runs inside the bun-test lefthook hook
+    # — #7772/#7835). Every substitution in this block fails closed — an
+    # unresolvable TESTROOT must never leave _tc empty (an empty prefix would
+    # degenerate `== "$_tc"/*` to `== /*` and admit every absolute path).
+    local _tc _abs _gd
+    _tc=$(cd -P -- "$TESTROOT" 2>/dev/null && pwd -P) \
+      || { printf 'FATAL: TESTROOT %s does not resolve\n' "$TESTROOT" >&2; return 2; }
+    _abs=$(cd -P -- "$_TH_REPO" 2>/dev/null && pwd -P) \
+      || { printf 'FATAL: _TH_REPO %s does not resolve\n' "$_TH_REPO" >&2; return 2; }
+    [[ "$_abs" == "$_tc"/* ]] \
+      || { printf 'FATAL: _TH_REPO %s escapes TESTROOT; refusing\n' "$_TH_REPO" >&2; return 2; }
+    _gd=$(rc_g -C "$_abs" rev-parse --absolute-git-dir 2>/dev/null) \
+      || { printf 'FATAL: _TH_REPO %s is not a git work tree\n' "$_TH_REPO" >&2; return 2; }
+    [[ "$_gd" == "$_tc"/* ]] \
+      || { printf 'FATAL: _TH_REPO %s links a gitdir outside TESTROOT; refusing\n' "$_TH_REPO" >&2; return 2; }
+    _TH_REPO="$_abs"
+  fi
+  rc_g -C "${_TH_REPO:-$REPO_ROOT}" -c core.quotePath=false ls-files
+}
+# The live tracked top-level root set — th4/th4b/th4c probes AND th6's census
+# derive from it, so a new root joins every probe automatically. -c
+# core.quotePath=false so C-quoted names (the Cyrillic fixtures) emit their
+# real root; NF>1 drops dir-less paths, which yield no root token. Caveat:
+# a dir name carrying `"`/`\`/control bytes emits C-quoted (`"x\ty/…`) and
+# mints a phantom root token — the same dir-less grammar residual one level
+# up; the verdict stays correct since no anchored edge can match the escaped
+# diff lines either. A dir-less
+# corpus file is the grammar residual the th8 row detects loudly — see below.
+_TH_ROOTS=$(_th_ls_files | awk -F/ 'NF>1{print $1}' | LC_ALL=C sort -u)
+# The dir-less (single-component) complement of the root projection, classified
+# DISJOINTLY — under a monolithic \.sh$ arm, deadening one extension inside a
+# th8-m4 mutant could not be told apart from the whole filter dying; the split
+# keeps the surviving y.sh flag as the discriminator. Arm 2's `NF<2` is arm 1's
+# condition spelled differently — the single-field-count token stays singular
+# file-wide so a mutation anchor can count arms precisely, and arm 1 carries it
+# (a second occurrence would make an exactly-once anchor ambiguous). Arms 3/4
+# close the C-quote channel: git quote_path ALWAYS
+# C-quotes `"`, `\` and control bytes regardless of core.quotePath=false, so a
+# dir-less `x<TAB>y.test.sh` emits `"x\ty.test.sh"` — the extension still ends
+# the name before the closing quote, and a real `/` inside quotes is a genuine
+# dir separator (a name cannot contain one), so NF<2 stays correct. Membership
+# is index-defined: an untracked dir-less file is not yet corpus (the real
+# diff channel surfaces it via --others, but no suite's verified read set does).
+_th_root_corpus() { # dir-less corpus members on stdin, one per line
+  awk -F/ '
+    NF==1 && /\.test\.sh$/                    {print; next}
+    NF<2  && /\.sh$/ && !/\.test\.sh$/        {print; next}
+    NF<2  && /^".*\.test\.sh"$/               {print; next}
+    NF<2  && /^".*\.sh"$/ && !/\.test\.sh"$/  {print}
+  '
+}
+# Coverage predicate for th6 (#10117 FR2 — tightened from a suffix check to a
+# matchability check): a member qualifies iff it is the exact `root/` dir
+# prefix or a `glob:root/` edge whose tail is a bare wildcard over the corpus
+# extension — `*<ext>` or `**<ext>` literally. A file literal under the root
+# does NOT count — it selects itself and nothing else, and letting it satisfy
+# the check re-opens the #9969 class one layer down (the fix-round's
+# literal-satisfaction hole). Nor do tails that merely END in the extension:
+# a literal-in-glob (`x.test.sh`), a subset (`pre*.test.sh`, `*x.test.sh`), a
+# subdir scope (`sub/*.test.sh` — under-covers, reaches only the subtree), or
+# the overlapping `**.test.sh` tail under a `.sh` corpus — the old `*"$3"`
+# suffix shape certified those; head-side (`glob:docsx/`…), wrong-extension
+# and bare file-literal members were already declined and stay declined.
+_th6_root_covered() { # <array-name> <root> <corpus-tail> — no declare -n (macOS bash 3.2)
+  # $1 reaches eval below — restrict it to identifier shape (the same guard the
+  # runner's resolve_edges applies), and the RHS stays quoted so a space-
+  # bearing member cannot split inside the eval'd assignment. The `+`-guarded
+  # expansion keeps an unset array from aborting under `set -u` (bash 3.2).
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  # A set-but-empty _TH_REPO is a wiring bug — refuse (decline, fail-loud)
+  # rather than silently probing the live listing.
+  [[ -z "${_TH_REPO+set}" || -n "$_TH_REPO" ]] || return 1
+  local _n _i _m _tail
+  eval "_n=\${$1[@]+\"\${#$1[@]}\"}"
+  _n=${_n:-0}
+  for ((_i=0; _i<_n; _i++)); do
+    eval "_m=\"\${$1[$_i]}\""
+    # A bare `<root>/` dir member (or the slash-less `<root>` spelling — the
+    # mint arm probes -e/-d and mints `^<root>/` for either) certifies its
+    # whole subtree — this disjunct is what covers the seven _TH_PREFIX_ROOTS.
+    # Metachar-free `glob:<root>`/`glob:<root>/` spellings mint the same
+    # `^<root>/` edge via the mint's literal recursion, so they accept too —
+    # declining them would false-RED a fully covering declaration. It counts
+    # ONLY when the root still exists on disk: the mint arm drops the member
+    # when the probe fails at classify time (a tracked dir deleted in the
+    # worktree without `git rm` stays in _TH_ROOTS — the census must decline
+    # in parity rather than certify an edge that never reaches the
+    # selection pass).
+    [[ ("$_m" == "$2/" || "$_m" == "$2" || "$_m" == "glob:$2" || "$_m" == "glob:$2/") \
+      && -d "${_TH_REPO:-$REPO_ROOT}/$2" ]] && return 0
+    # Head anchor is the literal `glob:<root>/` prefix — a `glob:<root>x/…`
+    # member names a DIFFERENT root and must not certify this one.
+    [[ "$_m" == "glob:$2/"* ]] || continue
+    _tail="${_m#"glob:$2/"}"
+    # QUOTED RHS is a literal string compare — the quotes carry the fix:
+    # unquoted, `*${3}` would be a glob pattern and the arm would degenerate
+    # back to the suffix check this predicate exists to remove. Superset tails
+    # (`**`, `**.sh` certifying a `.test.sh` corpus) decline too — RED, the
+    # safe direction.
+    [[ "$_tail" == "*${3}" || "$_tail" == "**${3}" ]] && return 0
+  done
+  return 1
+}
+
+# th1 — a corpus-extension file under a previously-unlisted root selects all
+#       three: x.test.sh matches the **.test.sh tails AND the rwb **.sh tail.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/x.test.sh' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
+  pass "th1: knowledge""-base/x.test.sh selects all three whole-tree corpus suites"
+else
+  fail "th1: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# th2 — a .sh outside the pair's corpus extension selects ONLY
+#       repo-write-boundary.test.sh of the three (.sh IS rwb's own corpus
+#       extension): the **.test.sh tails decline, proving the glob: kind
+#       narrows rather than relocating the over-coverage the dir prefixes had.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/x.sh' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && ran_exact 'scripts/lib/repo-write-boundary.test.sh' \
+  && ! ran_exact 'scripts/guard-vacuity-floor' \
+  && ! ran_exact 'scripts/lint-orphan-test-suites'; then
+  pass "th2: knowledge""-base/x.sh selects only repo-write-boundary.test.sh of the three"
+else
+  fail "th2: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# th3 — a non-corpus extension under an unlisted root selects NONE of the three.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/x.md' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && _th_none_ran; then
+  pass "th3: knowledge""-base/x.md selects none of the three corpus suites"
+else
+  fail "th3: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# th4 — EVERY extant root's *.test.sh selects all three: the pair via its
+#       **.test.sh tail (or the retained dir prefix at the seven listed
+#       roots), rwb via **.sh. The root list is derived live, so a NEW root
+#       joins the probe automatically; a well-formed-but-wrong tail
+#       (glob:.grok/**.tst.sh) mints cleanly and never fires — only a
+#       per-root behavioral probe catches that class. The nested probes
+#       exercise depth (`*` crosses `/`).
+while IFS= read -r _sandbox_probe; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}/x.test.sh" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
+    pass "th4: ${_sandbox_probe}/x.test.sh selects all three corpus suites"
+  else
+    fail "th4 (${_sandbox_probe}/x.test.sh): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done <<<"$_TH_ROOTS"
+for _sandbox_probe in 'knowledge-base/a/b/c.test.sh' 'infra/a/b.test.sh'; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
+    pass "th4: ${_sandbox_probe} selects all three (nested)"
+  else
+    fail "th4 (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done
+
+# th4b — rwb's `**.sh` tail per root: a bare .sh at every unlisted root
+#        selects rwb and declines the pair; at the seven prefix-held roots it
+#        selects all three (the legacy prefixes cover any extension). Roots
+#        derived live; the listed/unlisted split keys on the literal
+#        _TH_PREFIX_ROOTS set, never on the declared data itself — a dropped
+#        prefix must flip the expectation and RED, not silently re-derive.
+while IFS= read -r _sandbox_probe; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}/x.sh" \
+    -- --affected
+  _rc=$ARM_RC
+  if _th_is_prefix_root "$_sandbox_probe"; then
+    _th_ok=0; [[ "$_rc" == "0" ]] && _th_all_three_ran && _th_ok=1
+  else
+    _th_ok=0; [[ "$_rc" == "0" ]] && _th_rwb_only_ran && _th_ok=1
+  fi
+  if [[ "$_th_ok" == "1" ]]; then
+    pass "th4b: ${_sandbox_probe}/x.sh selects $( _th_is_prefix_root "$_sandbox_probe" && echo 'all three (dir-prefix root)' || echo 'only repo-write-boundary.test.sh' )"
+  else
+    fail "th4b (${_sandbox_probe}/x.sh): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done <<<"$_TH_ROOTS"
+for _sandbox_probe in 'knowledge-base/a/b/c.sh' 'infra/a/b.sh'; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _th_rwb_only_ran; then
+    pass "th4b: ${_sandbox_probe} selects only repo-write-boundary.test.sh (nested)"
+  else
+    fail "th4b (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done
+
+# th4c — the NARROW direction per root: a non-corpus extension (.md) at every
+#        unlisted root selects NONE of the three — a malformed extension-less
+#        glob (glob:docs/**) added alongside a good one widens silently and
+#        only a decline probe catches it. The seven prefix roots legitimately
+#        select .md (dir prefixes cover any extension) — excluded by the same
+#        deliberate literal set.
+while IFS= read -r _sandbox_probe; do
+  _th_is_prefix_root "$_sandbox_probe" && continue
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}/x.md" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _th_none_ran; then
+    pass "th4c: ${_sandbox_probe}/x.md selects none of the three"
+  else
+    fail "th4c (${_sandbox_probe}/x.md): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done <<<"$_TH_ROOTS"
+
+# th5 — the new declared array moves the suite's receipt from edge:derived to
+#       edge:declared (the class pin; th1/th2/th4b already pin its selection).
+#       --print-affected-set ignores the diff, so the sandbox copy emits the
+#       identical AFFECTED_CLASS row in seconds — no ~4-min real enumerate.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm -- --print-affected-set
+_th5_class=$(awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="scripts/lib/repo-write-boundary.test.sh" {print $3}' <<<"$ARM_OUT")
+if [[ "$_th5_class" == "edge:declared" ]]; then
+  pass "th5: scripts/lib/repo-write-boundary.test.sh receipts edge:declared (was edge:derived)"
+else
+  fail "th5: AFFECTED_CLASS for repo-write-boundary.test.sh = '${_th5_class:-<absent>}' (want edge:declared)"
+fi
+
+# th6 — exists→declared census: re-derive the tracked top-level root set live
+#       and require every root covered by each corpus suite (dir prefix or a
+#       glob head). A NEW top-level dir added without an edge entry reopens
+#       the #9969 hole; this row REDs it in CI, where the full gate runs.
+#       Root-level dir-less files have no head to mint — the grammar residual
+#       the th8 row below detects loudly (#10117; extension deferred to #10198).
+#       -c core.quotePath=false so the
+#       C-quoted Cyrillic fixture paths emit their real root, not `"…`.
+# Members anchored at <root> that did NOT certify coverage — the decline
+# diagnostic the fail line carries so an engineer hitting the red does not
+# have to reverse-engineer WHICH member the census rejected.
+_th6_declined() { # <array-name> <root> — space-joined declined members anchored at <root>
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  local _i _n _m
+  eval "_n=\${$1[@]+\"\${#$1[@]}\"}"
+  _n=${_n:-0}
+  for ((_i=0; _i<_n; _i++)); do
+    eval "_m=\"\${$1[$_i]}\""
+    case "$_m" in "$2"|"$2/"*|"glob:$2"|"glob:$2/"*) printf ' %s' "$_m" ;; esac
+  done
+}
+cases=$((cases + 1))
+_th6_missing=$(
+  source "$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+  # Non-vacuity floor: an empty derivation must never read as a clean census
+  # (the lint producer's own arm carries the same guard — a broken ls-files
+  # yields zero roots and an empty miss set otherwise passes).
+  [[ -n "$_TH_ROOTS" ]] || { echo "EMPTY-ROOT-DERIVATION"; exit 0; }
+  while IFS= read -r _r; do
+    _th6_root_covered AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" .test.sh \
+      || echo "guard-vacuity-floor:${_r}$(_th6_declined AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+    _th6_root_covered AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" .test.sh \
+      || echo "lint-orphan-test-suites:${_r}$(_th6_declined AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+    _th6_root_covered AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" .sh \
+      || echo "repo-write-boundary.test.sh:${_r}$(_th6_declined AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+  done <<<"$_TH_ROOTS"
+)
+if [[ -z "$_th6_missing" ]]; then
+  pass "th6: every tracked top-level root is edge-covered by all three corpus suites"
+else
+  fail "th6: uncovered roots — ${_th6_missing//$'\n'/ }"
+fi
+
+# th7 — keep-list binding: every label the th rows assert on sits inside
+#       build_sandbox's injected case block — a decline verdict then reads a
+#       real decline, never a trim artifact. The block is windowed out of the
+#       sandbox copy so a same-string mention elsewhere cannot satisfy it.
+cases=$((cases + 1))
+_th7_sb="$TESTROOT/sb-keep-$cases/test-all.sh"
+build_sandbox "$_th7_sb" with-lib > /dev/null
+_th7_block=$(sed -n '/SANDBOX corpus trim/,/^  esac/p' "$_th7_sb")
+_th7_missing=""
+for _l in "${_TH_ALL_THREE[@]}"; do
+  # Delimiter-anchored, not substring: a label is a case alternative only when
+  # it ends with `|` (mid-list) or `)` (last). A superstring or comment mention
+  # cannot satisfy the check.
+  grep -qF "${_l}|" <<<"$_th7_block" || grep -qF "${_l})" <<<"$_th7_block" \
+    || _th7_missing+=" $_l"
+done
+if [[ -z "$_th7_missing" ]]; then
+  pass "th7: the three asserted labels sit in the sandbox keep-list"
+else
+  fail "th7: labels absent from the keep-list — decline asserts read trim artifacts:${_th7_missing}"
+fi
+
+# --- th6v + th6m + th8 rows (#10117): census matchability + dir-less root detection --------
+#
+# Function-mutation dispatch for THIS file's own machinery — extract the named
+# function's real text, rewrite ONE exact anchor (python literal replace with an
+# exactly-once assert, so a glob char in the anchor cannot mis-match), source it
+# under a new name. A reimplemented mutant can drift from the shipped shape; an
+# extracted one cannot. rc 2 = the anchor did not land — a mutant that fails to
+# land reports the baseline and must not read as a pass. Extraction stops at the
+# first column-0 `}` — a target function may not carry one (a heredoc or quoted
+# block closing at column 0 would truncate the extraction).
+_th_fn_mut() { # <fn> <mutant-name> <old> <new> — defines <mutant-name>; rc 2 = anchor absent/ambiguous
+  local _out="$TESTROOT/mutfn-$cases.sh"
+  SELF_FILE="$REPO_ROOT/scripts/test-all-affected.test.sh" \
+  MUTFN="$1" MUTNAME="$2" MUTOLD="$3" MUTNEW="$4" \
+  python3 - "$_out" <<'PY' || return 2
+import os, re, sys
+src = open(os.environ["SELF_FILE"]).read()
+m = re.search(r"(?ms)^" + re.escape(os.environ["MUTFN"]) + r"\(\).*?^}", src)
+if not m:
+    sys.exit("function not found: " + os.environ["MUTFN"])
+fn = m.group(0).replace(os.environ["MUTFN"] + "()", os.environ["MUTNAME"] + "()", 1)
+# A self-referencing target would leave the mutant's interior calls bound to the
+# ORIGINAL — the row could read a false pass on unmutated code. Plain substring,
+# not `FN()`: a recursive call site is `foo args`, no parens.
+assert os.environ["MUTFN"] not in fn, "self-reference left in mutant"
+old, new = os.environ["MUTOLD"], os.environ["MUTNEW"]
+if fn.count(old) != 1:
+    sys.exit("anchor not exactly-once: x%d" % fn.count(old))
+open(sys.argv[1], "w").write(fn.replace(old, new, 1))
+PY
+  source "$_out"
+}
+
+# th6v — the tightened census predicate binds matchability, not suffix shape
+#        (FR2). The declines have two provenances: literal-in-glob, subset,
+#        subdir-scoped and `.sh`-overlap tails are the coverage lies the old
+#        `*"$3"` suffix check genuinely admitted; head-side, wrong-ext,
+#        file-literal, near-ext and the dir-member declines pin the boundary
+#        the tightened grammar must NOT grow. The dir-member cells also pin
+#        the -d parity probe: `fakenonexistent/` declines because its root is
+#        absent on disk (the mint arm drops it on -e, so certifying it here
+#        would be a lie), and `docs/sub/` / `docsx/` decline on the exact
+#        string anchor. Accepts pin the retained grammar: both bare wildcard
+#        tails, the bare `<root>/` dir member (in every covering spelling the
+#        mint honors, incl. metachar-free `glob:<root>`/`glob:<root>/`), and a
+#        covering member found AFTER a declining one (the walk does not stop
+#        early). The `docs` accept cells probe the LIVE checkout's `docs/` —
+#        deliberate (-d parity is the point); a root `docs/` removal flips
+#        them to declines.
+cases=$((cases + 1))
+_th6v_out=$(
+  _t() { # <root> <ext> <member>...
+    local _r="$1" _e="$2"; shift 2
+    local -a _fx=("$@")
+    _th6_root_covered _fx "$_r" "$_e" && printf '1 ' || printf '0 '
+  }
+  _t docs .test.sh 'glob:docs/**.test.sh'                     # **<ext> — accept
+  _t docs .test.sh 'glob:docs/*.test.sh'                      # *<ext> — accept
+  _t docs .test.sh 'docs/'                                    # bare dir member — accept
+  _t docs .test.sh 'glob:docs/x.test.sh'                      # literal-in-glob — decline
+  _t docs .test.sh 'glob:docs/pre*.test.sh'                   # subset — decline
+  _t docs .test.sh 'glob:docs/*x.test.sh'                     # subset — decline
+  _t docs .test.sh 'glob:docs/sub/*.test.sh'                  # subdir-scoped — decline
+  _t docs .test.sh 'glob:docsx/**.test.sh'                    # head-side (different root) — decline
+  _t docs .test.sh 'glob:docs/**.md'                          # wrong extension — decline
+  _t docs .test.sh 'docs/x.test.sh'                           # file literal — decline
+  _t docs .test.sh 'glob:docs/*.tst.sh'                       # near-miss extension — decline
+  _t docs .sh      'glob:docs/**.test.sh'                     # overlap class — decline
+  _t docs .sh      'glob:docs/**.sh'                          # **.sh corpus tail — accept
+  _t docs .test.sh 'glob:docs/sub/*.test.sh' 'glob:docs/**.test.sh'  # late cover — accept
+  _t docs .test.sh 'docs/sub/'                                # dir member below the root — decline
+  _t docs .test.sh 'docsx/'                                   # dir member astride the root name — decline
+  _t fakenonexistent .test.sh 'fakenonexistent/'              # dir member, worktree-absent root — decline
+  _t docs .test.sh 'docs'                                     # slash-less dir member — mint parity, accept
+  _t fakenonexistent .test.sh 'fakenonexistent'               # slash-less, worktree-absent — decline
+  _t docs .test.sh 'glob:docs'                                # metachar-free glob — mints ^docs/ — accept
+  _t docs .test.sh 'glob:docs/'                               # metachar-free glob+slash — mints ^docs/ — accept
+  _t fakenonexistent .test.sh 'glob:fakenonexistent'          # same, worktree-absent — decline
+)
+if [[ "${_th6v_out% }" == "1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0 1 0 1 1 0" ]]; then
+  pass "th6v: decline lit-glob/subset-2/subdir/head-side/wrong-ext/lit-file/near-ext/overlap/dir-below/dir-astride/dir-absent-3; accept bare tails, dir member (all spellings), late cover"
+else
+  fail "th6v: got '${_th6v_out}' want '1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0 1 0 1 1 0'"
+fi
+
+# th6m — mutation dispatch over the predicate (Guard 2): each row mutates ONE
+#        anchor of a sourced copy and asserts the mutant's verdict flips on a
+#        fixture the real predicate pins. A surviving mutant would mean the
+#        decline rows bind nothing.
+#
+# th6m-a: suffix-check revert — the pre-#10117 shape re-accepts the
+#         literal-in-glob fixture the tightened predicate declines.
+cases=$((cases + 1))
+_th6m_fx=('glob:docs/x.test.sh')
+if _th_fn_mut _th6_root_covered _th6_mut_suffix \
+    '[[ "$_tail" == "*${3}" || "$_tail" == "**${3}" ]] && return 0' \
+    '[[ "$_m" == "glob:$2/"*"$3" ]] && return 0' \
+  && _th6_mut_suffix _th6m_fx docs .test.sh; then
+  pass "th6m-a: suffix-revert mutant re-accepts literal-in-glob (decline rows bind the predicate)"
+else
+  fail "th6m-a: mutant declined or did not land (rc=$?)"
+fi
+
+# th6m-b: accept-any-glob under the head — deleting the bare-tail requirement
+#         re-accepts a subset tail.
+cases=$((cases + 1))
+_th6m_fx=('glob:docs/pre*.test.sh')
+if _th_fn_mut _th6_root_covered _th6_mut_any \
+    '[[ "$_tail" == "*${3}" || "$_tail" == "**${3}" ]] && return 0' \
+    'return 0' \
+  && _th6_mut_any _th6m_fx docs .test.sh; then
+  pass "th6m-b: metachar-deletion mutant re-accepts a subset tail"
+else
+  fail "th6m-b: mutant declined or did not land (rc=$?)"
+fi
+
+# th6m-c: stop-at-first-member — a mutant that examines only the first member
+#         declines a fixture whose SECOND member covers.
+cases=$((cases + 1))
+_th6m_fx=('glob:docs/sub/*.test.sh' 'glob:docs/**.test.sh')
+if _th_fn_mut _th6_root_covered _th6_mut_first \
+    'for ((_i=0; _i<_n; _i++)); do' \
+    'for ((_i=0; _i<1 && _i<_n; _i++)); do' \
+  && ! _th6_mut_first _th6m_fx docs .test.sh \
+  && _th6_root_covered _th6m_fx docs .test.sh; then
+  pass "th6m-c: first-member-only mutant misses the late cover (enumeration is load-bearing)"
+else
+  fail "th6m-c: mutant covered or did not land (rc=$?)"
+fi
+
+# th6m-d: head-anchor degenerate — relax the literal `glob:<root>/` prefix to a
+#         string prefix AND basename the tail; a `glob:docsx/**` member then
+#         wrongly certifies root `docs`. Under the shipped shape this flip
+#         needs BOTH lines because the stripped head's stray char always lands
+#         in the tail and declines — the anchor's strength is structural.
+cases=$((cases + 1))
+_th6m_fx=('glob:docsx/**.test.sh')
+if _th_fn_mut _th6_root_covered _th6_mut_head \
+    '[[ "$_m" == "glob:$2/"* ]] || continue
+    _tail="${_m#"glob:$2/"}"' \
+    '[[ "$_m" == "glob:$2"* ]] || continue
+    _tail="${_m#*/}"' \
+  && _th6_mut_head _th6m_fx docs .test.sh; then
+  pass "th6m-d: head-degenerate mutant lets glob:docsx certify docs (head-side rows bind)"
+else
+  fail "th6m-d: mutant declined or did not land (rc=$?)"
+fi
+
+# _th8_eval — the detection row's evaluation, callable under a row-local
+# _TH_REPO. Liveness floor binds the PRODUCER output (an empty complement is
+# legitimately green today; an empty listing is a dead producer).
+_th8_eval() {
+  local _list
+  _list=$(_th_ls_files) || { echo "TH8-PRODUCER-FAILED"; return 0; }
+  [[ -n "$_list" ]] || { echo "EMPTY-ROOT-DERIVATION"; return 0; }
+  _th_root_corpus <<<"$_list"
+}
+
+# th8 fixture repo: a bare git init under TESTROOT carrying the named root
+# files, staged with `git add -f` (a global core.excludesFile matching
+# *.test.sh would silently drop the fixture otherwise). Zero file args =
+# a repo with an empty listing — the producer-liveness arm.
+_th8_fix_repo() { # <name> [root-file...]
+  # The name mints a TESTROOT path — keep it a safe token.
+  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  local _d="$TESTROOT/th8fx-$1"; shift
+  mkdir -p "$_d" || return 1
+  ( cd "$_d" && rc_g init -q ) || return 1
+  local _f
+  # The fixture contract is dir-less basenames — refuse a path or a leading-dash
+  # name so a bad arg can't write outside the fixture or trip option parsing.
+  for _f in "$@"; do
+    [[ "$_f" != */* && "$_f" != -* && -n "$_f" ]] || return 1
+    printf 'fixture\n' > "$_d/$_f" || return 1
+  done
+  if (($#)); then ( cd "$_d" && rc_g add -f -- "$@" ) || return 1; fi
+}
+
+# th8 (FR3, #10117) — dir-less repo-root corpus detection. The `glob:` grammar
+#     needs a `<dir>/` head — a root-level x.test.sh/x.sh has none, so no
+#     declared edge can cover it and its diff would select no corpus suite: a
+#     silent hole. The row REDs on EXISTENCE (the grammar-extension trigger,
+#     deferred to #10198 — ADR-242 decision 27) and stays red while any dir-less
+#     corpus member exists; a literal edge or ALWAYS_ON covers the file's
+#     SELECTION but does not clear this row — the exits are moving the file
+#     under a covered root or landing #10198. Latency note (ADR-262): this suite
+#     is pr-gated, so a diff that adds only the dir-less file declines it — the
+#     row fires on the merge-SHA push run, same doctrine as th6.
+cases=$((cases + 1))
+_th8=$(_th8_eval)
+case "$_th8" in
+  "") pass "th8: no dir-less repo-root corpus file exists" ;;
+  EMPTY-ROOT-DERIVATION|TH8-PRODUCER-FAILED)
+    fail "th8: producer floor fired (${_th8}) — a dead listing must not read as a clean complement" ;;
+  *)  fail "th8: dir-less repo-root corpus file(s) — the glob: grammar has no head to mint and this row stays RED while any exist; exits: move the file under a covered root, or land the deferred grammar extension #10198 (a literal edge or ALWAYS_ON covers the file's selection but does not clear this row): ${_th8//$'\n'/ }" ;;
+esac
+
+# th8-m1: a fixture repo carrying a dir-less x.test.sh → the detector flags it
+#         (the row's whole reason to exist).
+cases=$((cases + 1))
+_th8_fix_repo m1 x.test.sh
+_th8_m=$(_TH_REPO="$TESTROOT/th8fx-m1" _th8_eval)
+if [[ "$_th8_m" == *x.test.sh* ]]; then
+  pass "th8-m1: a dir-less x.test.sh fixture is flagged"
+else
+  fail "th8-m1: detector output='${_th8_m}' (want x.test.sh flagged)"
+fi
+
+# th8-m2: an EMPTY fixture listing → the liveness floor fires rather than
+#         reading as a clean complement.
+cases=$((cases + 1))
+_th8_fix_repo m2
+_th8_m=$(_TH_REPO="$TESTROOT/th8fx-m2" _th8_eval)
+if [[ "$_th8_m" == "EMPTY-ROOT-DERIVATION" ]]; then
+  pass "th8-m2: an empty producer listing fires the liveness floor"
+else
+  fail "th8-m2: output='${_th8_m}' (want EMPTY-ROOT-DERIVATION)"
+fi
+
+# th8-m3: x.test.sh + y.sh both dir-less → BOTH flag — no stop-at-first and
+#         both disjoint extension classes observed.
+cases=$((cases + 1))
+_th8_fix_repo m3 x.test.sh y.sh
+_th8_m=$(_TH_REPO="$TESTROOT/th8fx-m3" _th8_eval)
+if [[ "$_th8_m" == *x.test.sh* && "$_th8_m" == *y.sh* ]]; then
+  pass "th8-m3: x.test.sh AND y.sh both flag (no stop-at-first)"
+else
+  fail "th8-m3: output='${_th8_m}' (want both members flagged)"
+fi
+
+# th8-m4: extension-arm completeness — deaden the .test.sh arm of the disjoint
+#         filter in a sourced mutant; x.test.sh must go unflagged while y.sh
+#         still flags (the arm carries weight, the mutant is not dead code).
+cases=$((cases + 1))
+_th8_fix_repo m4 x.test.sh y.sh
+if _th_fn_mut _th_root_corpus _th8_m4_corpus \
+    '&& /\.test\.sh$/                    {print; next}' \
+    '&& /\.nevermatch$/                  {print; next}'; then
+  _th8_m=$(_TH_REPO="$TESTROOT/th8fx-m4" _th_ls_files | _th8_m4_corpus)
+else
+  _th8_m="MUTATION-DID-NOT-LAND"
+fi
+if [[ "$_th8_m" != *x.test.sh* && "$_th8_m" == *y.sh* ]]; then
+  pass "th8-m4: deadening the .test.sh arm leaves x.test.sh unflagged, y.sh flagged"
+else
+  fail "th8-m4: mutant output='${_th8_m}' (want y.sh only)"
+fi
+
+# th8-m5: a dir-less NON-corpus file (x.md) → empty complement — the detector
+#         discriminates corpus from non-corpus rather than flagging every
+#         dir-less path.
+cases=$((cases + 1))
+_th8_fix_repo m5 x.md
+_th8_m=$(_TH_REPO="$TESTROOT/th8fx-m5" _th8_eval)
+if [[ -z "$_th8_m" ]]; then
+  pass "th8-m5: a dir-less x.md stays clean (corpus-only detection)"
+else
+  fail "th8-m5: output='${_th8_m}' (want empty)"
+fi
+
+# th8-m6: _TH_REPO outside TESTROOT — pointed at the live worktree (populated,
+#         so an unconfined seam returns the real complement and reads clean) —
+#         the confinement refusal must fire.
+cases=$((cases + 1))
+_th8_m=$(_TH_REPO="$REPO_ROOT" _th8_eval)
+if [[ "$_th8_m" == "TH8-PRODUCER-FAILED" ]]; then
+  pass "th8-m6: _TH_REPO outside TESTROOT is refused"
+else
+  fail "th8-m6: output='${_th8_m}' (want TH8-PRODUCER-FAILED refusal)"
+fi
+
+# th8-m7: a dir-less corpus file whose name git C-quotes — `"`, `\` and control
+#         bytes are quoted REGARDLESS of core.quotePath=false, so the listing
+#         emits `"x\ty.test.sh"` and a $-anchored extension regex alone would
+#         see nothing. The quoted-name arms flag it — both disjoint classes
+#         observed (quoted `.test.sh` AND quoted `.sh`).
+cases=$((cases + 1))
+_th8_fix_repo m7 $'x\ty.test.sh' $'x\ty.sh'
+_th8_m=$(_TH_REPO="$TESTROOT/th8fx-m7" _th8_eval)
+if [[ "$_th8_m" == *'"x\ty.test.sh"'* && "$_th8_m" == *'"x\ty.sh"'* ]]; then
+  pass "th8-m7: C-quoted dir-less members flag, both disjoint classes (quote channel closed)"
+else
+  fail "th8-m7: output='${_th8_m}' (want both quoted names flagged)"
+fi
+
+# th8-m8: deaden arm 4 (the quoted `.sh` class) in a sourced mutant — the
+#         quoted `.test.sh` still flags via arm 3 while the quoted `.sh` goes
+#         silent, proving arm 4 carries weight. The input is printf-emitted
+#         C-quote text, not the producer — m7 already owns the end-to-end
+#         channel; this row isolates the filter arm.
+cases=$((cases + 1))
+if _th_fn_mut _th_root_corpus _th8_m8_corpus \
+    '!/\.test\.sh"$/  {print}' \
+    '!/\.test\.sh"$/  {next}'; then
+  _th8_m=$(printf '"x\\ty.sh"\n"x\\ty.test.sh"\n' | _th8_m8_corpus)
+else
+  _th8_m="MUTATION-DID-NOT-LAND"
+fi
+if [[ "$_th8_m" != *'x\ty.sh"'* && "$_th8_m" == *'test.sh"'* ]]; then
+  pass "th8-m8: deadening the quoted-.sh arm leaves x\\ty.sh unflagged, x\\ty.test.sh flagged"
+else
+  fail "th8-m8: mutant output='${_th8_m}' (want quoted .test.sh only)"
 fi
 
 echo ""
@@ -2990,7 +3745,10 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=115
+# The floor embeds the live _TH_ROOTS census (~3 cases per tracked top-level
+# dir across th4/th4b/th4c): a top-level-dir REMOVAL shrinks the corpus
+# legitimately — recompute the literal rather than misdiagnosing truncation.
+MIN_CASES=228
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2

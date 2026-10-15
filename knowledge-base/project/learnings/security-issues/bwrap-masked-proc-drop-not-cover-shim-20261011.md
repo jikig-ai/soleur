@@ -161,3 +161,12 @@ replace) and a numeric guard (a glob-metachar fd token injects a pattern into
 - ADR-075 addendum 2026-10-11 (the mechanism-change record); #9723 (the
   isolation guarantee), #9860 (the incident), #9773 (per-tenant executor
   end-state), #10045 (kdeny least-privilege, deferred).
+
+## Correction — 2026-10-12 (#10065)
+
+> The sentences above that call a covered bind "a live host-procfs mount object beneath the cover" and say "No procfs mount
+> object exists to uncover" are too strong. The vendored argv begins with a recursive `--ro-bind / /`, so the container's
+> own procfs sits beneath the `--tmpfs /proc` after a drop as well; the shim's property is "no argv-requested procfs mount at
+> `/proc`", not a kernel-level absence. Every `umount2("/proc")` measured inside the sandbox was EPERM in every arm; the
+> attribution to `--cap-drop ALL` on an unelevated bwrap is inferred, not measured. See the ADR-075 addendum dated
+> 2026-10-12 (#10065) and `knowledge-base/project/specs/feat-one-shot-10065-sandbox-proc-suite-parity/measurements.md` (M3).

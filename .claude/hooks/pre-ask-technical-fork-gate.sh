@@ -317,21 +317,33 @@ fi
 # whole question (R6 pins it): wrongly blocking an authorization is the failure this header calls
 # worse, so the arm judges the question, not the sentence. The ship gate and the skill text are the
 # primary defence; this arm is the backstop at the moment of asking.
-RULING_STRICT_RE='(\bhow (strict|rigorous)|\b(strictness|stricter|stringen[a-z]*))'
-RULING_EVID_NOUN_RE='\b(evidence|proof|check|gate|guard|validation|verification|criteria|assertion|test|lint)\b'
-RULING_BAR_RE='(\b(evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)|\badopting\b.*\baccepted\b)'
-RULING_SUFF_RE='\b(is|are) (the )?(evidence|proof) (enough|sufficient|adequate)'
-RULING_STATUS_RE='\bstatus (flip|move|change)'
-RULING_ADR_RE='\b(adopting|accepted|decision record)\b'
-RULING_AB_RE='(\b(approach|variant|option) [ab]\b|\b[ab] (or|vs) [ab]\b)'
-RULING_TECH_RE='\b(architecture|schema|algorithm|substrate|data model|retry|queue|refactor)\b'
-RULING_PERM_RE='(\bmay i\b|\bis it fine to\b|\bok(ay)? to\b|\bgo-ahead\b|\bapprove[ds]?\b|\bauthori[sz]e|\back-destroy)'
-# Operator vocabulary: a question that NAMES money, scope, priority, schedule, brand, or a production action is the
-# operator's call however it is phrased. It vetoes the WEAK cues (C1 C2 C6 C7) only. Whole words, plural-tolerant, so
-# "deleted" and "dispatched" (the R1 incident question) do not veto it.
-RULING_OPVOCAB_RE='\b(prices?|pricing|plans?|tiers?|launch(es)?|dates?|deadlines?|licen[sc]es?|vendors?|logos?|copy|landing|budgets?|costs?|spend|revenue|invoices?|refunds?|schedules?|priorit(y|ies)|brand|hero|merge|deploy|ship|releases?|delete|prod|production)\b'
-# A money ask that carries an evidence-sufficiency phrase ("is the evidence enough to start charging") vetoes C4.
-RULING_MONEY_RE='\b(charging|paying|refunds?|invoices?|price|pricing|costs?|spend|revenue|contract|vendors?)\b'
+# The cue regexes (RULING_*_RE) and the verdict function `tfc_is_fork` live in ONE shared lib, which the
+# closing-message Stop hook (pre-closing-technical-fork-gate.sh) also calls, so the two cannot drift. This hook asks
+# for group `shared+ask`: the `shared` cues are byte-for-byte what the inline cues did, the closing group's extra
+# cues never reach an AskUserQuestion, and `ask` (2026-10-14) adds ONE cue: a question that asks the operator to route
+# items the brief already named (run them as a new pipeline vs record them as not fixed), both halves in one
+# interrogative sentence.
+#
+# THE ASK CUE'S RESIDUAL, STATED (it is a lexical nudge, fitted to synthesized phrasing; the miss, cue, fixture loop
+# carries the rest): ownership-only ("Who owns the remaining items?") and scope-limited ("Is the scope of this fix
+# limited to item 1?") questions; a two-sentence split ("Run these as a new pipeline now. Or record them as not
+# fixed?"); a payload whose halves sit only in the option labels, which no cue here reads; a permission-shaped question
+# ("Approve running ... as a new pipeline, or recording ... as not fixed?"), because the permission exemption applies
+# to every cue; and a sentence that mentions drop, defer or scope, because an ask-only veto leaves a genuine scope ask to
+# the operator. All of them stay allowed; the skill text covers them.
+#
+# A missing, empty or truncated lib is parse doubt for THIS arm: an empty cue regex matches every line, so the arm is
+# skipped (announced) instead of judging with it. The other arms of this hook are independent of the lib and keep running.
+TFC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/technical-fork-cues.sh"
+__TFC_OK=0
+if [[ -s "$TFC_LIB" ]]; then
+  # shellcheck source=lib/technical-fork-cues.sh
+  source "$TFC_LIB" 2>/dev/null
+  tfc_self_check 2>/dev/null && __TFC_OK=1
+fi
+if [[ "$__TFC_OK" -ne 1 ]]; then
+  printf 'pre-ask-technical-fork-gate: technical-ruling arm skipped — cue lib missing or incomplete (%s), allowing without ruling classification.\n' "$TFC_LIB" >&2
+fi
 # One row per question: its lowercased TEXT only (every cue reads the question text, never an option label or
 # description). Whitespace is mapped to a plain space by code point (linear), never by a jq regex gsub (quadratic: a
 # 32 KB question took 9.5 s), and runs of spaces are squeezed by tr. An absent question yields an empty row; one that
@@ -345,7 +357,9 @@ RULING_ROWS="$(printf '%s' "$__HI_RAW" | jq -r '
     elif .question == null then ""
     else "\u0001" end
 ' 2>/dev/null | tr -s ' ')" || __RQS_RC=$?
-if [[ "$__RQS_RC" -ne 0 ]]; then
+if [[ "$__TFC_OK" -ne 1 ]]; then
+  :
+elif [[ "$__RQS_RC" -ne 0 ]]; then
   printf 'pre-ask-technical-fork-gate: technical-ruling parse skipped (jq rc=%s) — unrecognised questions shape, allowing without ruling classification.\n' \
     "$__RQS_RC" >&2
 elif [[ -n "$RULING_ROWS" ]]; then
@@ -355,45 +369,45 @@ elif [[ -n "$RULING_ROWS" ]]; then
       continue
     fi
     [[ -n "$__rq" ]] || continue
-    __hit=0
-    # WEAK cues (C1 strictness+evidence noun, C6 status flip+ADR word, C7 approach A|B+technical noun) read the
-    # INTERROGATIVE sentences only, so a question with no `?` has none, and a declarative sentence ("Merge PR 9628
-    # now. It adds the stricter evidence gate.") never fires them. The operator-vocabulary veto reads the whole
-    # question. Extraction is linear: awk splits on `?` and keeps, per segment, the text after the last sentence
-    # boundary ("! " or ". "; " vs. " is rewritten to " vs " first, so the A/B cue needs no optional period). A regex with a nested quantifier here cost ~13 s on a 32 KB question.
-    if [[ "$__rq" == *"?"* ]] && ! grep -qE "$RULING_OPVOCAB_RE" <<<"$__rq"; then
-      __ends=0; [[ "$__rq" == *"?" ]] && __ends=1
-      __asked="$(printf '%s' "$__rq" | awk -v ends="$__ends" 'BEGIN { RS = "?"; ORS = "" }
-        function emit(t) { gsub(/ vs\. /, " vs ", t); sub(/^.*(!|\. )/, "", t); print t "? " }
-        NR > 1 { emit(prev) }
-        { prev = $0 }
-        END { if (ends) emit(prev) }')"
-      if grep -qE "$RULING_STRICT_RE" <<<"$__asked" && grep -qE "$RULING_EVID_NOUN_RE" <<<"$__asked"; then __hit=1; fi
-      if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_STATUS_RE" <<<"$__asked" && grep -qE "$RULING_ADR_RE" <<<"$__asked"; then __hit=1; fi
-      if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_AB_RE" <<<"$__asked" && grep -qE "$RULING_TECH_RE" <<<"$__asked"; then __hit=1; fi
+    # The verdict (weak cues over the interrogative sentences, strong cues, the operator-vocabulary veto and the
+    # permission exemption, all judged over THIS question's text alone) is the shared lib's `tfc_is_fork`.
+    # Exit 1 is a pass; exit 2 (a group the lib does not know) is handled below. This arm can only ever deny on a clear hit.
+    # Group `shared+ask` is this hook's own (the `ask` cue is reachable from here only). A lib that predates the group
+    # answers exit 2 for it; that must not silently switch off every OTHER ruling cue, so announce it and retry once
+    # with `shared` (the vocabulary every lib version understands). Exit 1 is a pass; any other non-zero is a pass.
+    tfc_is_fork "$__rq" shared+ask; __tfc_rc=$?
+    if [[ "$__tfc_rc" -eq 2 ]]; then
+      printf 'pre-ask-technical-fork-gate: cue lib rejected group shared+ask (lib older than this hook?) - retrying with group shared, the ask cue is off.\n' >&2
+      tfc_is_fork "$__rq" shared; __tfc_rc=$?
     fi
-    # STRONG cues (C3 bar, C5 adopting...accepted, C4 sufficiency): technical on their own, no `?` needed. C4 alone
-    # yields to a money phrase.
-    if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_BAR_RE" <<<"$__rq"; then __hit=1; fi
-    if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_SUFF_RE" <<<"$__rq" && ! grep -qE "$RULING_MONEY_RE" <<<"$__rq"; then __hit=1; fi
-    [[ "$__hit" -eq 1 ]] || continue
-    grep -qE "$RULING_PERM_RE" <<<"$__rq" && continue
-    RULING_REASON="BLOCKED: this AskUserQuestion puts a TECHNICAL RULING to the operator.
+    [[ "$__tfc_rc" -eq 0 ]] || continue
+    if [[ "${TFC_HIT:-}" == "ask" ]]; then
+      RULING_LEAD="BLOCKED: this AskUserQuestion asks the operator to route items the brief already named (run them as a new pipeline vs record them as not fixed). That is a technical routing call: spawn soleur:engineering:cto first, record \`Ruled by CTO agent\`, and ask the operator only the authorization. If you are asking whether to DROP, DEFER or ADD work the operator asked for, reword it as a permission ask. Never reword a routing choice that way; the CTO rules it."
+      RULING_FLIP=""
+      RULING_SPLIT_EXTRA=" If no closed-list action remains, act on the ruling and record it; do not invent an authorization question. Without the Agent tool, write \`pending - assumed: <default>\` as the Ruling of the technical row and return it to your parent."
+      RULING_REWORD="If this question is really an authorization of an action (merge, delete, drop, defer), reword it as a permission ask (\"May I ...?\"); a routing choice is never reworded that way, the CTO rules it. There is no override to set from a tool call."
+    else
+      RULING_LEAD="BLOCKED: this AskUserQuestion puts a TECHNICAL RULING to the operator.
 
-How strict an evidence bar must be, whether the evidence is sufficient, whether an ADR status moves, which of two named technical designs or approaches — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses.
+How strict an evidence bar must be, whether the evidence is sufficient, whether an ADR status moves, which of two named technical designs or approaches — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses."
+      RULING_FLIP="If the criterion is already stated in the ADR or plan, the flip is mechanical: run the grader, cite it, flip. Otherwise the CTO rules.
+
+"
+      RULING_SPLIT_EXTRA=""
+      RULING_REWORD="If this question is really an authorization, reword it as a permission ask (\"May I ...?\" / \"Approve ...?\") so it reaches the operator. Otherwise have the CTO rule via the delegation reference above. There is no override to set from a tool call."
+    fi
+    RULING_REASON="${RULING_LEAD}
 
 Delegate it: spawn soleur:engineering:cto with the question and the facts, and act on its ruling. The procedure and the closed list of rulings that do NOT go to the CTO are in technical-ruling-delegation.md (plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md).
 
-If the criterion is already stated in the ADR or plan, the flip is mechanical: run the grader, cite it, flip. Otherwise the CTO rules.
+${RULING_FLIP}Then split the item; ask the operator only the authorization — the decision left once the ruling is made, and only if it is in this closed list: money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand.${RULING_SPLIT_EXTRA}
 
-Then split the item; ask the operator only the authorization — the decision left once the ruling is made, and only if it is in this closed list: money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand.
-
-If this question is really an authorization, reword it as a permission ask (\"May I ...?\" / \"Approve ...?\") so it reaches the operator. Otherwise have the CTO rule via the delegation reference above. There is no override to set from a tool call.
+${RULING_REWORD}
 
 See hr-technical-fork-is-not-an-operator-question."
 
     declare -f emit_incident >/dev/null 2>&1 && \
-      emit_incident pre-ask-technical-fork-gate deny "technical ruling put to a non-technical operator" "$__rq" 2>/dev/null || true
+      emit_incident pre-ask-technical-fork-gate deny "technical ruling put to a non-technical operator [cue=${TFC_HIT:-unknown}]" "$__rq" 2>/dev/null || true
 
     jq -n --arg r "$RULING_REASON" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
     exit 0

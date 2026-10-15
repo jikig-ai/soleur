@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# STATUS 2026-10-15 (#10321 audit): tracker #3950 closed 2026-06-02; sweeps ended
+# ~2026-06-16. The part-(a) "regression guard" described below ran only while
+# invoked — this file is dormant by design; no standing successor.
 # Follow-through verification for #3950 (review: cla-evidence scripts hardening
 # bundle). Machine-verified close gate for a deferred-scope-out issue — the
 # first instance wiring a `deferred-scope-out` + `do-not-autoclose` issue into

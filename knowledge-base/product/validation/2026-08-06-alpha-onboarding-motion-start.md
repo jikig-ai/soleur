@@ -162,7 +162,7 @@ exposures are now determined:
 processed. Working material was schema, configuration, tests and documentation. A fixtures file
 containing company-officer records was present in the tree; no evidence it was read, and a read
 cannot be excluded — see
-`knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`.
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`.
 
 **Forward control:** no further Jikigai-keyed runs against tester content until an Art. 28(3)
 instrument exists — the operator uses the tester's machine and key, or does not run.

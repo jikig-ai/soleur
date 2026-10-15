@@ -1,6 +1,6 @@
 ---
 title: A sole-copy LUKS volume gets delete protection plus prevent_destroy on the volume, its passphrase pair and the Doppler cascade parents; the sanctioned-replace attachment stays unpinned
-status: adopting
+status: accepted
 date: 2026-10-10
 supersedes: none
 amends: [ADR-142]
@@ -14,6 +14,8 @@ brand_survival_threshold: single-user incident
 # ADR-282: A sole-copy LUKS volume gets delete protection plus `prevent_destroy` on the volume, its passphrase pair and the Doppler cascade parents; the sanctioned-replace attachment stays unpinned
 
 ## Status
+
+> **Accepted 2026-10-15 (#10018).** The condition stated below was met: the post-apply read-back (runbook section 5c, step 3) returned `protected` for volume 106903269 on 2026-10-15 (UTC), the word derived from `origin/main`. The evidence is in the Addendum of that date at the end of this ADR. The paragraph below is the 2026-10-10 text, kept as history: its sentence "Until then every sentence below that says a protection 'is in force' is a plan, not a fact" describes the state before the read-back, and the follow-up PR it promises ("the flip itself is one follow-up PR") is this one.
 
 **Adopting - 2026-10-10 (#9879, PR #9925).** This ADR describes the state the decision reaches when PR #9925 is merged,
 the merge's per-merge apply (`apply-web-platform-infra.yml`) has landed one in-place update on
@@ -138,7 +140,7 @@ decision, not an engineering default.
 | Doppler secret overwritten with another value | 12h drift plan (update planned) | A repair is a secret update with `random_password` a no-op; the per-merge HALT is still correct to block it unattended (an update of the pair is also what a rotation looks like), and the owner repairs it via the documented route. Two independent recoveries: Doppler version history (retained per secret on paid tiers; the plan tier and the rollback scope are NOT measured here and are carried by #9927; never print diffs, they carry plaintext), and the second, independent copy, the Terraform state value `random_password.inngest_redis_luks.result`, which the owner can write back to the Doppler secret without printing it (runbook section; per-command go-ahead; guarded by a fail-closed length and format check; the write is irreversible without Doppler history; NOT executed or rehearsed). It is total loss only when both copies are gone. While the value stays overwritten, every infra-path merge's per-merge apply halts on the rotation HALT, so infra PRs merge with `[skip-web-platform-apply]` until the key is repaired. Automated repair dispatch is DEFERRED (#9927). |
 | Terraform state entry lost | next plan shows a create of the passphrase | With the jq create-halt in this PR, the per-merge HALT blocks a create of `random_password.inngest_redis_luks`, alone or together with the Doppler copy; only the password create halts, and a create of the Doppler copy alone stays legal and restores a lost Doppler copy. **The halt wedges every merge's per-merge apply (all infra delivery, not only this store) until the owner repairs state**, by an owner-run state operation or an `import {}` block (which plans as a no-op and passes the HALT). State-loss recovery remains UNVERIFIED. An offline measurement showed that importing the `random_password` and then planning gives `special true -> false`, a replacement, which `prevent_destroy` turns into a hard error, so an accidental apply cannot mint a new key; editing `special = false` into the imported state gives "No changes". That edit is recorded as a CANDIDATE recipe only: it was NOT rehearsed and is not claimed. An import takes the passphrase value itself as its id, so a typed import puts it on argv (visible in `ps` and shell history) and a committed `import {}` block would expose it in the HCL and in plan output: if tried, it is owner-local with the value from an environment variable, never through CI. Owner: the repository owner, who decides the repair; do not apply. The import rehearsal in the rehearsal root is DEFERRED (#9927). |
 | Both copies lost (Doppler secret and Terraform state value) | none possible | Total loss of the store; accepted residual, recited in the Article 30 register. Reserve this label for both copies lost; one surviving copy is a recovery, not a total loss. |
-| LUKS header corrupted | the hourly probe row proves device binding, not the cipher, so detection lags to the first Redis failure (existing wrong-volume alert; dead-man's switch #9703, not yet armed) | No recovery. Header backup is DEFERRED to the planned host-replace window with a dated trigger (#9927: 2027-01-08 or the next planned host replace, whichever comes first). |
+| LUKS header corrupted | the hourly probe row proves device binding, not the cipher, so detection lags to the first Redis failure (existing wrong-volume alert; dead-man's switch #9703, armed 2026-10-12) | No recovery. Header backup is DEFERRED to the planned host-replace window with a dated trigger (#9927: 2027-01-08 or the next planned host replace, whichever comes first). |
 | Hetzner volume deleted despite protection, or project loss | none | No recovery; residual. |
 
 ### What losing the store costs (verified, with one claim left unconfirmed)
@@ -183,7 +185,8 @@ the same owner and the `soleur:incident` skill as the route.
 - **Hetzner project deletion or account loss** is not covered; whether delete protection blocks a project deletion is
   unverified.
 - **A holder of the read/write Hetzner token can lift protection.** Protection defends against mistaken deletes (a console
-  click, a wrong id, a pasted recipe, the drift workflow's runnable DELETE recipes), not against a leaked read/write token.
+  click, a wrong id, a pasted recipe; the drift workflow's issue bodies printed runnable DELETE recipes until #9927 item 8c
+  removed them), not against a leaked read/write token.
   That token is also the silent fallback of the read-only loader; a no-fallback loader is carried by #9927.
 - **Other credentials can overwrite or delete the key:** the three writers of the Doppler copy are the inngest cutover arm
   token `doppler_service_token.inngest_arm_write` (read/write on `soleur-inngest/prd`, published as
@@ -272,3 +275,23 @@ operator-applied, separately designed change (#9927), not a per-merge step.
 
 ADR-142's mechanism, the additive cutover, or the destruction records (attested; never edited). ADR-142 (which this ADR amends in part), ADR-263
 and ADR-119 carry dated pointer notes to this ADR; the records under `knowledge-base/legal/audits/` are untouched.
+
+## Addendum — 2026-10-14 (#8316)
+
+Appended; nothing above is changed. The retired `inngest_host_dark_gate` (ADR-199) no longer stands behind the lift of this ADR's protection: [ADR-199's addendum](./ADR-199-destructive-clearance-requires-a-measured-empty-store-and-a-dark-host.md#addendum--2026-10-14-8316) records that any destructive-clearing target written after the protection is lifted must reintroduce a measured-empty-store plus dark-host gate before it may plan a destroy. The lift route above (delete protection in its own reviewed change, then `prevent_destroy`) is where that requirement attaches, alongside the Guard 1 rows, `G4_PROTECTED` and `luks_volume_touched` named in this ADR.
+
+## Addendum — 2026-10-15 (#10018, accepted: the read-back)
+
+Appended; nothing above is changed except the frontmatter `status` and the leading blockquote under Status.
+
+**The read-back.** The post-apply read-back of runbook section 5c, step 3 (read-only, cited by section and not reprinted here) returned the word `protected` (exit 0) for Hetzner volume 106903269 (`hcloud_volume.inngest_redis_luks`) on 2026-10-15 (UTC). It was run once by the agent session working #10018, from the section 5c step 3 one-liner, and printed exactly that word. No time of day was captured, so none is recorded. The expected word was derived from `origin/main`, not assumed: `apps/web-platform/infra/inngest-redis-luks.tf` carries `delete_protection = true` inside `resource "hcloud_volume" "inngest_redis_luks"`, delivered by #9925 (commit `67cb281e4f`, an ancestor of `origin/main`). The expected word and the read word match, which is this ADR's own flip condition.
+
+**The run history, as measured.** Merge-SHA apply run 38139392390 applied the in-place update `hcloud_volume.inngest_redis_luks delete_protection false -> true` ("Apply complete! Resources: 0 added, 1 changed, 0 destroyed", 2026-10-11T12:32:53Z); the failing step (`terraform_data.egress_gateway_web2` remote-exec, dial tcp i/o timeout) ended at 12:48:18Z and the job concluded `failure` at 12:48:26Z, after that apply had completed and on an unrelated step. Later runs are mixed: dispatch run 38580429629 (2026-10-14) concluded `failure`, and the latest apply on main, run 38653889114 on 944372f0d5, succeeded. Neither proves the flag; only the read-back does.
+
+**What the read-back is and is not.** It is a point-in-time read of the delete-protection flag only. `prevent_destroy` is a plan-time control, enforced by the guards named in this ADR, and is not read back from any live system. Guard 1 stays advisory until #9927. The residuals, the loss-mode table, the absent Art. 32(1)(c) restore capability and the "no sanctioned erase path" statement are unchanged. Protection defends against mistaken deletes; it does not defend against a holder of the read/write Hetzner token, which can lift it, or against the three writers of the Doppler copy of the key.
+
+**Who flips it** is discharged by this follow-up PR. `soleur:postmerge` Phase 5.7 step 6 files no tracking issue once the status is `accepted`.
+
+## Addendum — 2026-10-15 (#9927 item 8c, drift workflow DELETE recipes removed)
+
+Appended; the only change above is the parenthetical in the residual "A holder of the read/write Hetzner token can lift protection": it now records that the drift workflow's issue bodies no longer print DELETE recipes (PR #10355). Status stays `accepted`. Scope, stated exactly: the removed text templated calls against Hetzner objects labeled `app=soleur-rung2-rehearsal` or `app=soleur-inngest-provision-rehearsal` and against the key-bearing scratch Doppler objects (`prd_git_data_rehearsal_*` in `soleur`, `rehearsal_*` in `soleur-inngest`, identified by name), never against the sole-copy volume, whose resources carry neither label. The residual itself is unchanged: a holder of the read/write token can still lift protection.

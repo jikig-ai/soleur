@@ -87,13 +87,28 @@ GATED_PINNED="e2e shard-totality-mutations test test-bun test-scripts test-scrip
 # condition (the other four, incl. e2e and the `test` aggregator, must NOT: scripts/ci-draft-light.test.sh pins the S3 side in full).
 LIGHT_CLAUSE="needs.draft-light.outputs.light != 'true'"
 DL_GATED_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webplat"
+# ADR-276 S4 (#9729, PR B): three of the gated jobs additionally carry `pr-selection` in `needs:` and a PR-skip term appended AFTER every
+# earlier term (draft-light's included), so the existing `!cancelled()` / push-dedupe / draft-light terms stay verbatim. The term is written
+# ONCE here (a prefix; the leg name and the closing `,'))` are appended) and chk.py, the truth table and the mutants all derive from it.
+PR_GATED_PINNED="test-bun test-scripts-heavy test-webplat"
+PR_T_EV="github.event_name == 'pull_request' && "
+PR_T_AC="needs.pr-selection.outputs.active == 'true' && "
+PR_T_HN="needs.pr-selection.outputs.head_sha != '' && "
+PR_T_HE="needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && "
+PR_TERM_PRE="!($PR_T_EV$PR_T_AC$PR_T_HN${PR_T_HE}contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',"
+pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # sha256 of the `test` aggregator job minus its `needs` and `if`, as json.dumps(sort_keys=True), measured
 # on the unmodified tree before this stage (the aggregator body, env, timeout and runner must not move). Re-measured at ADR-276 S3
-# (#9728), which adds the DRAFT_LIGHT env and the draft arm to the aggregator body (scripts/ci-draft-light.test.sh executes them).
-AGG_DIGEST="a93006d80e2948b175c60eb10d8f3e1480d57af3434da9a594f72d0e6e46690d"
+# (#9728), which adds the DRAFT_LIGHT env and the draft arm to the aggregator body (scripts/ci-draft-light.test.sh executes them), and again at
+# ADR-276 S4 (#9729, PR B), which adds the SKIP_LEGS/ACTIVE/HEAD_SHA_OK/ATTEMPT env and the PR-AFFECTED-SKIP tolerance (the aggregator-diagnosis
+# suite executes them), and a third time for the review fixes: the re-run remedy line in the `skipped)` arm and the final line's tolerated list
+# with its `skip_legs=` suffix (the same suite executes both), and a fourth time when the remedy line was narrowed to a shard NAMED in
+# SKIP_LEGS (the delimited match the tolerance uses). The sha256 is of the job minus `needs` and `if`, so a comment edit elsewhere in
+# ci.yml does not move it but ANY edit to this job's steps, env or timeout does.
+AGG_DIGEST="461f40243a0399f27826d0abe6e12db5c129b4a51809dd22b6e1db0714223394"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
-UNGATED_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
+UNGATED_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate pr-selection rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
 REASONS="not_push not_main rerun bad_sha proof_error no_mg_success no_test_job switch_off ok"
 SHA_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SHA_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -123,6 +138,8 @@ LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 mode, path = sys.argv[1], sys.argv[2]
 GATED = os.environ.get("GATED_PINNED", "").split()
 DLGATED = os.environ.get("DL_GATED_PINNED", "").split()
+PRGATED = os.environ.get("PR_GATED_PINNED", "").split()
+PRPRE = os.environ["PR_TERM_PRE"]
 CLAUSE = os.environ["LIGHT_CLAUSE"]
 UNGATED = os.environ.get("UNGATED_PINNED", "").split()
 AGG = os.environ.get("AGG_DIGEST", "")
@@ -130,6 +147,12 @@ TAIL = os.environ["ELIDE_TAIL"]
 CANON = {"test": "${{ always() && " + TAIL + " }}"}
 CANON_DEFAULT = "${{ !cancelled() && " + TAIL + " }}"
 CANON_DL = "${{ !cancelled() && " + TAIL + " && " + CLAUSE + " }}"
+def pr_term(leg): return PRPRE + leg + ",'))"
+def canon(n):
+    parts = ["!cancelled()" if n != "test" else "always()", TAIL]
+    if n in DLGATED: parts.append(CLAUSE)
+    if n in PRGATED: parts.append(pr_term(n))
+    return "${{ " + " && ".join(parts) + " }}"
 ENV_KEYS = {"GH_TOKEN", "GH_REPO", "SHA", "EVENT_NAME", "REF", "RUN_ATTEMPT", "SWITCH"}
 
 def load():
@@ -143,17 +166,20 @@ def needs(j):
     n = (j or {}).get("needs", [])
     return [n] if isinstance(n, str) else list(n)
 
-def ev(expr, event, elide, need, cancelled=False, light=""):
+def ev(expr, event, elide, need, cancelled=False, light="", active="", sk="", hs="", ph=""):
     e = str(expr).strip()
     if not (e.startswith("${{") and e.endswith("}}")):
         return None
     e = e[3:-2].strip()
     has_status = bool(re.search(r"\b(cancelled|always|success|failure)\(\)", e))
     e = e.replace("!cancelled()", "(not CANC)").replace("always()", "True").replace("success()", "(NEEDOK)")
+    e = re.sub(r"contains\(format\(',\{0\},', needs\.pr-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", lambda m: '(",%s," in "," + SK + ",")' % m.group(1), e)
+    e = e.replace("needs.pr-selection.outputs.active", "AC").replace("needs.pr-selection.outputs.head_sha", "HS").replace("github.event.pull_request.head.sha", "PH")
+    e = re.sub(r"!(?=\()", " not ", e)
     e = e.replace("github.event_name", "EV").replace("needs.push-dedupe.outputs.elide", "EL").replace("needs.draft-light.outputs.light", "LT")
     e = e.replace("&&", " and ").replace("||", " or ")
     try:
-        val = bool(eval(e, {"__builtins__": {}}, {"CANC": cancelled, "EV": event, "EL": elide, "LT": light, "NEEDOK": need == "success"}))
+        val = bool(eval(e, {"__builtins__": {}}, {"CANC": cancelled, "EV": event, "EL": elide, "LT": light, "NEEDOK": need == "success", "AC": active, "SK": sk, "HS": hs, "PH": ph}))
     except Exception:
         return None
     if not has_status:
@@ -229,6 +255,153 @@ if mode == "wrapper":
     if sum(1 for ln in blk if ln == "    timeout-minutes: 3") != 1: tags.append("W-TIMEOUT-LINE")
     print(" ".join(tags)); sys.exit(0)
 
+if mode == "prsel":
+    d, jobs = load()
+    tags = []
+    job = jobs.get("pr-selection")
+    if job is None:
+        print("P-JOB-MISSING"); sys.exit(0)
+    # CLOSED KEY SETS. Every key is accounted for, so a key nobody pinned (`environment:` changes what `vars.CI_PR_AFFECTED` resolves to;
+    # `container:`, `services:`, `strategy:`, `concurrency:`, `defaults:`, `env:`) cannot be added to the job or to either step unseen.
+    if set(job) != {"if", "runs-on", "timeout-minutes", "continue-on-error", "permissions", "outputs", "steps"}: tags.append("P-JOBKEYS")
+    top = d if isinstance(d, dict) else {}
+    # no workflow-level env or defaults either: both reach every job, pr-selection included (a run-wide working-directory, a switch)
+    if "env" in top: tags.append("P-TOPENV")
+    if "defaults" in top: tags.append("P-TOPDEFAULTS")
+    if job.get("if") != "github.event_name == 'pull_request'": tags.append("P-JOBIF")
+    if job.get("continue-on-error") is not True: tags.append("P-JOBCOE")
+    if job.get("runs-on") != "ubuntu-latest": tags.append("P-RUNSON")
+    if job.get("timeout-minutes") != 3: tags.append("P-JOBTIMEOUT")
+    if "needs" in job: tags.append("P-NEEDS")
+    if job.get("permissions") != {"contents": "read"}: tags.append("P-PERM")
+    outs = job.get("outputs") or {}
+    if outs != {k: "${{ steps.select.outputs.%s }}" % k for k in ("head_sha", "base_sha", "skip_legs", "active")}: tags.append("P-OUTPUTS")
+    steps = job.get("steps") or []
+    if len(steps) != 2: tags.append("P-STEPS"); print(" ".join(tags)); sys.exit(0)
+    co, sel = steps
+    if not isinstance(co, dict) or not isinstance(sel, dict): tags.append("P-STEPS"); print(" ".join(tags)); sys.exit(0)
+    if set(co) != {"uses", "with"}: tags.append("P-COKEYS")
+    if set(sel) != {"name", "id", "shell", "continue-on-error", "timeout-minutes", "env", "run"}: tags.append("P-SELKEYS")
+    if not re.fullmatch(r"actions/checkout@[0-9a-f]{40}", str(co.get("uses", ""))): tags.append("P-CHECKOUT")  # a full-length lowercase-hex commit pin, never a tag or branch
+    w = co.get("with")
+    # EXACTLY {fetch-depth: 0, persist-credentials: false}: an extra key (`ref:`, `repository:`, `token:`) would change what the selector reads.
+    # `0 == False` in Python, so the types are checked as well as the values.
+    if not isinstance(w, dict) or set(w) != {"fetch-depth", "persist-credentials"} or type(w["fetch-depth"]) is not int or w["fetch-depth"] != 0 or w["persist-credentials"] is not False: tags.append("P-FETCH")
+    if sel.get("id") != "select" or sel.get("shell") != "bash": tags.append("P-SELECT")
+    # the select step runs the driver as written, unconditionally, from the repo root, as a plain `run`
+    if "if" in sel: tags.append("P-SELIF")
+    if "working-directory" in sel: tags.append("P-SELWD")
+    if "uses" in sel: tags.append("P-SELUSES")
+    # no job-level env or defaults: either would reach the driver (PR_SELECTION_TEST_ALL and a run-wide working-directory are the known knobs)
+    if "env" in job: tags.append("P-JOBENV")
+    if "defaults" in job: tags.append("P-DEFAULTS")
+    if sel.get("continue-on-error") is not True: tags.append("P-STEPCOE")
+    if sel.get("timeout-minutes") != 2: tags.append("P-STEPTIMEOUT")
+    if str(sel.get("run", "")).strip() != "bash scripts/ci-pr-selection" + ".sh": tags.append("P-RUN")  # split on purpose: a whole path literal makes the kb-consumer census hop into the driver and charge this suite with its knowledge-base strings
+    exp = {"EVENT_NAME": "${{ github.event_name }}", "SWITCH": "${{ vars.CI_PR_AFFECTED }}",
+           "PR_HEAD_SHA": "${{ github.event.pull_request.head.sha }}", "HEAD_REPO": "${{ github.event.pull_request.head.repo.full_name }}",
+           "GH_REPO": "${{ github.repository }}", "RUN_ATTEMPT": "${{ github.run_attempt }}", "PR_SELECTION_STAGE2_TIMEOUT": "90"}
+    if (sel.get("env") or {}) != exp: tags.append("P-ENV")
+    if "secrets." in json.dumps(job) or "GH_TOKEN" in json.dumps(job): tags.append("P-SECRETS")
+    text = open(path).read().split("\n")
+    try:
+        i0 = text.index("  pr-selection:")
+    except ValueError:
+        tags.append("P-JOB-TEXT"); print(" ".join(tags)); sys.exit(0)
+    blk = []
+    for ln in text[i0 + 1:]:
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", ln): break
+        blk.append(ln)
+    if sum(1 for ln in blk if ln == "    timeout-minutes: 3") != 1: tags.append("P-TIMEOUT-LINE")
+    if any(re.match(r"^    needs:", ln) for ln in blk): tags.append("P-NEEDS-LINE")
+    print(" ".join(tags)); sys.exit(0)
+
+if mode == "prcensus":
+    # Every reference to the pr-selection job's outputs (or result) in the PARSED workflow, by location. YAML comments are gone after the
+    # parse; strings inside a `run:` body are counted (conservative). The design allows exactly: each of the three gated jobs' top-level
+    # `if:` (4 references: active, head_sha twice, skip_legs) and the aggregator's three env entries (SKIP_LEGS 1, ACTIVE 1, HEAD_SHA_OK 2).
+    # A step-level `if:`, a matrix `exclude`, a job `env:` or any other consumer inside a gated job could skip individual steps while the job
+    # still concludes `success`, a reduced run the aggregator would never see as a `skipped` leg.
+    d, jobs = load()
+    pat = re.compile(r"needs\.pr-selection\b|needs\[\s*['\"]pr-selection['\"]\s*\]")
+    found = {}
+    def walk(node, loc):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, loc + (str(k),))
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                nm = v.get("name") if isinstance(v, dict) and isinstance(v.get("name"), str) else None
+                walk(v, loc + ("[%s]" % (nm if nm is not None else i),))
+        else:
+            n = len(pat.findall(str(node)))
+            if n: found[".".join(loc)] = found.get(".".join(loc), 0) + n
+    walk(d.get("jobs") or {}, ())
+    want = {"%s.if" % n: 4 for n in PRGATED}
+    want.update({"test.steps.[Aggregate shard results].env.SKIP_LEGS": 1, "test.steps.[Aggregate shard results].env.ACTIVE": 1,
+                 "test.steps.[Aggregate shard results].env.HEAD_SHA_OK": 2})
+    tags = []
+    if found != want:
+        for k in sorted(set(found) | set(want)):
+            if found.get(k, 0) != want.get(k, 0): tags.append("C-REF:%s:%d" % (k, found.get(k, 0)))
+    if sum(found.values()) != 16: tags.append("C-TOTAL:%d" % sum(found.values()))
+    print(" ".join(tags)); sys.exit(0)
+
+if mode == "legparity":
+    # The gateable-leg set must be IDENTICAL in every copy of it: the aggregator's skip_re (both groups), the pinned set, the three gated jobs that
+    # carry the PR term (job names AND the leg each term names), and the driver (its group list and its final-block regex). One copy edited alone
+    # either strands a skip (the tolerance never fires: a red PR) or tolerates a leg the gate did not skip.
+    d, jobs = load()
+    tags = []
+    ref = set(PRGATED)
+    def add(src, got):
+        got = set(got)
+        if not got or got != ref: tags.append("L-SET:%s:%s" % (src, ",".join(sorted(got)) or "none"))
+    if len(ref) != 3: tags.append("L-SET:pinned:%s" % ",".join(sorted(ref)))
+    steps = ((jobs.get("test") or {}).get("steps")) or []
+    agg = [s for s in steps if isinstance(s, dict) and s.get("name") == "Aggregate shard results"]
+    body = agg[0].get("run", "") if agg else ""
+    m = re.search(r"^[ \t]*skip_re='([^']*)'", body, re.M)
+    if not m: tags.append("L-NOSKIPRE")
+    else:
+        groups = re.findall(r"\(([a-z|-]+)\)", m.group(1))
+        if len(groups) != 2: tags.append("L-SKIPRE-SHAPE")
+        for g in groups: add("skip_re", g.split("|"))
+    term_jobs = set()
+    term_legs = set()
+    for n, j in jobs.items():
+        iff = str((j or {}).get("if", ""))
+        if "needs.pr-selection.outputs.skip_legs" not in iff: continue
+        term_jobs.add(n)
+        legs = re.findall(r"contains\(format\(',\{0\},', needs\.pr-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", iff)
+        if legs != [n]: tags.append("L-TERM:%s:%s" % (n, ",".join(legs) or "none"))
+        term_legs.update(legs)
+    add("term-jobs", term_jobs)
+    add("term-legs", term_legs)
+    try:
+        src = open(os.environ.get("DRIVER_SH", "")).read()
+    except Exception:
+        tags.append("L-NODRIVER"); print(" ".join(tags)); sys.exit(0)
+    fm = re.search(r"^[ \t]*for g in ([a-z -]+?)\s*;\s*do\b", src, re.M)
+    if not fm: tags.append("L-NOFORLIST")
+    else: add("driver-for", ["test-" + g for g in fm.group(1).split()])
+    regs = []
+    for ln in src.split("\n"):
+        if "=~" in ln and "skip_legs" in ln: regs.extend(re.findall(r"\((test-[a-z-]+(?:\|test-[a-z-]+)*)\)", ln))
+    if len(regs) < 2: tags.append("L-NODRIVERRE")
+    for r in regs: add("driver-re", r.split("|"))
+    print(" ".join(tags)); sys.exit(0)
+
+if mode == "zero-prsel":
+    # copy of the workflow with pr-selection's job-level timeout written as 0: the declared path must not depend on the job
+    out = sys.argv[3]
+    text = open(path).read().split("\n")
+    i0 = text.index("  pr-selection:")
+    for k in range(i0 + 1, len(text)):
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", text[k]): break
+        if text[k].startswith("    timeout-minutes:"): text[k] = "    timeout-minutes: 0"; break
+    open(out, "w").write("\n".join(text)); sys.exit(0)
+
 if mode == "gated":
     d, jobs = load()
     tags = []
@@ -238,8 +411,9 @@ if mode == "gated":
         j = jobs.get(n)
         if j is None: tags.append("G-MISSING:" + n); continue
         if "push-dedupe" not in needs(j): tags.append("G-NEEDS:" + n)
-        want_if = CANON_DL if n in DLGATED else CANON.get(n, CANON_DEFAULT)
+        want_if = canon(n)
         if j.get("if") != want_if: tags.append("G-COND:" + n)
+        if (n in PRGATED or n == "test") != ("pr-selection" in needs(j)): tags.append("G-PRNEEDS:" + n)
         if n != "test" and (n in DLGATED) != ("draft-light" in needs(j)): tags.append("G-DLNEEDS:" + n)
         if n == "test" and "draft-light" not in needs(j): tags.append("G-DLNEEDS:" + n)
         if j.get("continue-on-error"): tags.append("G-COE:" + n)
@@ -247,6 +421,9 @@ if mode == "gated":
         if n not in GATED and n != "push-dedupe" and "push-dedupe" in needs(j): tags.append("G-EXTRANEED:" + n)
         if n not in GATED and n != "push-dedupe" and n not in UNGATED: tags.append("G-UNCLASSIFIED:" + n)
         if n not in GATED and set(needs(j)) & set(GATED): tags.append("G-DEPENDENT:" + n)
+        # pr-selection may be needed ONLY by the three PR-gated jobs and the `test` aggregator: any other job that needs it would be an
+        # ungated required job that reads the (red-only, skip-only) selection outputs, or one that waits on it without being skippable
+        if n != "pr-selection" and n not in PRGATED and n != "test" and "pr-selection" in needs(j): tags.append("G-PRNEEDS-EXTRA:" + n)
         if n != "push-dedupe" and "push-dedupe" in json.dumps((j or {}).get("outputs", {})): tags.append("G-REEXPORT:" + n)
     for n in UNGATED:
         if n not in jobs: tags.append("G-GONE:" + n)
@@ -257,15 +434,23 @@ if mode == "truth":
     tags = []
     for n in GATED:
         j = jobs.get(n) or {}
+        # the PR-skip dimensions only exist for the three PR-gated jobs; for the rest they stay at the inert point
+        acts = ("", "false", "true") if n in PRGATED else ("",)
+        sks = ("", n, "test-webplat,test-bun,test-scripts-heavy", "test-scripts", "test-scripts-heavy,x") if n in PRGATED else ("",)
+        hss = (("a" * 40, "a" * 40), ("a" * 40, "b" * 40), ("", ""), ("", "a" * 40)) if n in PRGATED else (("", ""),)
         for event in ("push", "pull_request", "merge_group", "workflow_dispatch"):
             for elide in ("", "false", "true"):
               for light in ("", "false", "true"):
-                needs_ = ("success", "failure") if event == "push" else ("skipped",)
-                for need in needs_:
-                    got = ev(j.get("if"), event, elide, need, light=light)
-                    want = not (event == "push" and elide == "true") and not (n in DLGATED and light == "true")
+               for active in acts:
+                for sk in sks:
+                 for hs, ph in hss:
+                  needs_ = ("success", "failure") if event == "push" else ("skipped",)
+                  for need in needs_:
+                    got = ev(j.get("if"), event, elide, need, light=light, active=active, sk=sk, hs=hs, ph=ph)
+                    prskip = n in PRGATED and event == "pull_request" and active == "true" and hs != "" and hs == ph and ("," + n + ",") in ("," + sk + ",")
+                    want = not (event == "push" and elide == "true") and not (n in DLGATED and light == "true") and not prskip
                     if got is None: tags.append("TT-ERR:%s" % n)
-                    elif got != want: tags.append("TT:%s:%s:%s:%s:%s" % (n, event, elide or "empty", need, light or "empty"))
+                    elif got != want: tags.append("TT:%s:%s:%s:%s:%s:%s:%s:%s" % (n, event, elide or "empty", need, light or "empty", active or "empty", sk or "empty", "m" if hs and hs == ph else "x"))
         if ev(j.get("if"), "push", "false", "success", cancelled=True) is not False and "always()" not in str(j.get("if")):
             tags.append("TT-CANCEL:" + n)
     print(" ".join(sorted(set(tags)))); sys.exit(0)
@@ -288,7 +473,11 @@ if mode == "aggbody":
 sys.stderr.write("unknown mode\n"); sys.exit(2)
 PY
 
-chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" DL_GATED_PINNED="$DL_GATED_PINNED" LIGHT_CLAUSE="$LIGHT_CLAUSE" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" python3 "$SANDBOX/chk.py" "$@"; }
+chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" DL_GATED_PINNED="$DL_GATED_PINNED" PR_GATED_PINNED="$PR_GATED_PINNED" PR_TERM_PRE="$PR_TERM_PRE" LIGHT_CLAUSE="$LIGHT_CLAUSE" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" DRIVER_SH="${DRIVER_SH-}" python3 "$SANDBOX/chk.py" "$@"; }
+# The driver is read by the leg-parity row only. Its path is assembled from parts on purpose (the kb-consumer census otherwise follows a whole
+# path literal into the driver and charges this suite with the knowledge-base strings the driver names).
+DRV_STEM="scripts/ci-pr-selection"
+DRIVER_SH="$REPO_ROOT/$DRV_STEM.sh"
 
 # ── Helper: the gh shim ──────────────────────────────────────────────────────
 cat > "$SANDBOX/shim/gh" <<'SH'
@@ -543,8 +732,29 @@ live_check() { # <label> <mode>
 }
 live_check WRAPPER wrapper
 live_check "GATED" gated
+live_check "PR-SELECTION JOB" prsel
+live_check "PR-SELECTION OUTPUT CENSUS" prcensus
+live_check "LEG PARITY" legparity
 live_check "TRUTH TABLE" truth
 live_check AGGREGATOR agg
+
+# ── The release workflow's CI budget (ADR-276 S4 PR B) ───────────────────────────────────────────────────────────────────────
+# web-platform-release.yml sums the longest declared `needs:` path through ci.yml and hard-fails above a cap (75 minutes; 73 today). A
+# serial `pr-selection` edge, or a longer bound on it, lengthens that path: measured 80 with a 10-minute bound. The function is EXTRACTED
+# from the release workflow and EXECUTED against ci.yml (never re-implemented here), once as shipped and once with pr-selection's
+# job-level timeout rewritten to 0; the two must be equal, i.e. the job contributes nothing to the longest path.
+REL_YML="$REPO_ROOT/.github/workflows/web-platform-release.yml"
+awk '/^          run_declared_path\(\) \{/{f=1} f{print} f&&/^          }$/{exit}' "$REL_YML" | sed 's/^          //' > "$SANDBOX/rdp.sh"
+declared_path() { bash --noprofile --norc -c 'source "$1"; run_declared_path "$2"' _ "$SANDBOX/rdp.sh" "$1" 2>/dev/null; }
+budget_tag() { # <ci.yml copy> -> empty when pr-selection adds nothing to the declared path, else a tag
+  local z="$SANDBOX/mut/zero.$RANDOM.yml" a b
+  chk zero-prsel "$1" "$z" 2>/dev/null || { echo "B-ZERO-FAILED"; return; }
+  a=$(declared_path "$1"); b=$(declared_path "$z")
+  case "$a$b" in ""|*[!0-9]*) echo "B-UNMEASURED"; return ;; esac
+  [ "$a" -eq "$b" ] || echo "B-PATH:$a>$b"
+}
+if [ -s "$SANDBOX/rdp.sh" ] && [ -z "$(budget_tag "$WF")" ] && [ "$(declared_path "$WF")" -gt 0 ] 2>/dev/null; then pass
+else fail "BUDGET: pr-selection lengthens the declared needs: path ($(budget_tag "$WF") / extracted $(wc -l <"$SANDBOX/rdp.sh") lines); web-platform-release.yml would fail the CI budget on every push"; fi
 # the canonical condition is restated by two pre-existing suites' carve-outs; each ASSIGNMENT must still equal ci.yml's
 # (the needle starts at the assignment head, so a comment or prose copy of the literal cannot satisfy it)
 for pair in "plugins/soleur/test/ci-e2e-skip-anchors.test.sh|E2E_ELIDE_IF=\"if: \\\${{ !cancelled() && " "plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh|_ALLOWED_IF = (\"always()\", \"\${{ always() && "; do
@@ -684,7 +894,10 @@ mutate_yml() {
     *) fail "MUTANT $name: checker $cmode did not report $want (got: ${got:0:160})" ;;
   esac
 }
-COND_DEFAULT="if: \${{ !cancelled() && $ELIDE_TAIL }}"
+COND_DEFAULT="if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-bun) }}"
+BUN_HDR="  test-bun:
+    needs: [push-dedupe, pr-selection]
+    $COND_DEFAULT"
 # anchors carry the push-dedupe-only line that follows (`SHA:` / `actions: read`) so they stay unique now that draft-light (S3) has the same shape
 mutate_yml y-no-coe "        continue-on-error: true
         timeout-minutes: 2
@@ -712,32 +925,243 @@ mutate_yml y-job-timeout "    timeout-minutes: 3
       actions: read" wrapper W-JOBTIMEOUT
 mutate_yml y-no-output "      elide: \${{ steps.proof.outputs.elide }}" "      elide: \${{ steps.proof.outputs.would_elide }}" wrapper W-OUTPUTS
 mutate_yml y-perm "      actions: read" "      actions: write" wrapper W-PERM
-mutate_yml y-success-fn "  test-bun:
-    needs: [push-dedupe]
-    $COND_DEFAULT" "  test-bun:
-    needs: [push-dedupe]
-    if: \${{ success() && $ELIDE_TAIL }}" truth TT:test-bun
-mutate_yml y-no-event-disjunct "  test-bun:
-    needs: [push-dedupe]
-    $COND_DEFAULT" "  test-bun:
-    needs: [push-dedupe]
-    if: \${{ !cancelled() && needs.push-dedupe.outputs.elide != 'true' }}" truth TT:test-bun
-mutate_yml y-lost-cancelled "  test-bun:
-    needs: [push-dedupe]
-    $COND_DEFAULT" "  test-bun:
-    needs: [push-dedupe]
-    if: \${{ github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true' }}" truth TT:test-bun
+mutate_yml y-success-fn "$BUN_HDR" "  test-bun:
+    needs: [push-dedupe, pr-selection]
+    if: \${{ success() && $ELIDE_TAIL && $(pr_term test-bun) }}" truth TT:test-bun
+mutate_yml y-no-event-disjunct "$BUN_HDR" "  test-bun:
+    needs: [push-dedupe, pr-selection]
+    if: \${{ !cancelled() && needs.push-dedupe.outputs.elide != 'true' && $(pr_term test-bun) }}" truth TT:test-bun
+mutate_yml y-lost-cancelled "$BUN_HDR" "  test-bun:
+    needs: [push-dedupe, pr-selection]
+    if: \${{ (github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && $(pr_term test-bun) }}" truth TT:test-bun
 mutate_yml y-lost-need "  test-bun:
-    needs: [push-dedupe]" "  test-bun:
-    needs: []" gated G-NEEDS:test-bun
+    needs: [push-dedupe, pr-selection]" "  test-bun:
+    needs: [pr-selection]" gated G-NEEDS:test-bun
+# S4 (#9729, PR B): the PR-skip term, one mutant per conjunct, plus the wiring around it
+PRT_BUN="$(pr_term test-bun)"
+mutate_yml y-pr-no-active "$PRT_BUN" "${PRT_BUN/"$PR_T_AC"/}" truth TT:test-bun
+mutate_yml y-pr-no-head-eq "$PRT_BUN" "${PRT_BUN/"$PR_T_HE"/}" truth TT:test-bun
+mutate_yml y-pr-no-head-nonempty "$PRT_BUN" "${PRT_BUN/"$PR_T_HN"/}" truth TT:test-bun
+mutate_yml y-pr-no-event "$PRT_BUN" "${PRT_BUN/"$PR_T_EV"/}" truth TT:test-bun
+# the substring trap: matching `test-scripts` instead of `test-scripts-heavy` skips the wrong job on a `test-scripts` listing
+mutate_yml y-pr-substring "$(pr_term test-scripts-heavy)" "$(pr_term test-scripts)" truth TT:test-scripts-heavy
+mutate_yml y-pr-need-dropped "  test-webplat:
+    needs: [push-dedupe, draft-light, pr-selection]" "  test-webplat:
+    needs: [push-dedupe, draft-light]" gated G-PRNEEDS:test-webplat
+mutate_yml y-pr-e2e-needs "  e2e:
+    needs: [push-dedupe]" "  e2e:
+    needs: [push-dedupe, pr-selection]" gated G-PRNEEDS:e2e
+mutate_yml y-prsel-needs "  pr-selection:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 3" "  pr-selection:
+    needs: [push-dedupe]
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 3" prsel P-NEEDS
+mutate_yml y-prsel-timeout "  pr-selection:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 3" "  pr-selection:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10" prsel P-JOBTIMEOUT
+mutate_yml y-prsel-no-coe "  pr-selection:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" "  pr-selection:
+    if: github.event_name == 'pull_request'" prsel P-JOBCOE
+mutate_yml y-prsel-on-every-event "  pr-selection:
+    if: github.event_name == 'pull_request'" "  pr-selection:
+    if: github.event_name != 'push'" prsel P-JOBIF
+mutate_yml y-prsel-perm "    permissions:
+      contents: read
+    outputs:
+      head_sha:" "    permissions:
+      contents: write
+    outputs:
+      head_sha:" prsel P-PERM
+mutate_yml y-prsel-shallow "          fetch-depth: 0
+          persist-credentials: false" "          fetch-depth: 1
+          persist-credentials: false" prsel P-FETCH
+mutate_yml y-prsel-switch-var "          SWITCH: \${{ vars.CI_PR_AFFECTED }}" "          SWITCH: \${{ vars.CI_PR_AFFECTED_X }}" prsel P-ENV
+mutate_yml y-prsel-output-swap "      skip_legs: \${{ steps.select.outputs.skip_legs }}" "      skip_legs: \${{ steps.select.outputs.active }}" prsel P-OUTPUTS
+# the checkout is a full-hash pin with EXACTLY the two `with` keys; the select step is a bare `run`; the job carries no env or defaults
+mutate_yml y-prsel-checkout-extra-key "          fetch-depth: 0
+          persist-credentials: false" "          fetch-depth: 0
+          persist-credentials: false
+          ref: refs/heads/main" prsel P-FETCH
+mutate_yml y-prsel-checkout-tag "      active: \${{ steps.select.outputs.active }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" "      active: \${{ steps.select.outputs.active }}
+    steps:
+      - uses: actions/checkout@v4" prsel P-CHECKOUT
+mutate_yml y-prsel-step-if "        id: select
+        shell: bash" "        id: select
+        if: always()
+        shell: bash" prsel P-SELIF
+mutate_yml y-prsel-step-wd "        id: select
+        shell: bash" "        id: select
+        working-directory: scripts
+        shell: bash" prsel P-SELWD
+mutate_yml y-prsel-step-uses "        id: select
+        shell: bash" "        id: select
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        shell: bash" prsel P-SELUSES
+mutate_yml y-prsel-job-env "    permissions:
+      contents: read
+    outputs:
+      head_sha:" "    env:
+      PR_SELECTION_TEST_ALL: '1'
+    permissions:
+      contents: read
+    outputs:
+      head_sha:" prsel P-JOBENV
+mutate_yml y-prsel-defaults "    permissions:
+      contents: read
+    outputs:
+      head_sha:" "    defaults:
+      run:
+        working-directory: scripts
+    permissions:
+      contents: read
+    outputs:
+      head_sha:" prsel P-DEFAULTS
+# the closed key sets: a key nobody pinned, on the job or on either step, is a tag. `environment:` is the load-bearing one (an
+# environment-scoped variable overrides the repository one, so SWITCH would no longer be the value the env pin reads).
+PRSEL_HDR="  pr-selection:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true"
+mutate_yml y-prsel-key-environment "$PRSEL_HDR" "  pr-selection:
+    environment: preview
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+mutate_yml y-prsel-key-container "$PRSEL_HDR" "  pr-selection:
+    container: ubuntu:22.04
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+mutate_yml y-prsel-key-strategy "$PRSEL_HDR" "  pr-selection:
+    strategy:
+      fail-fast: false
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+mutate_yml y-prsel-key-services "$PRSEL_HDR" "  pr-selection:
+    services:
+      redis:
+        image: redis
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+mutate_yml y-prsel-key-concurrency "$PRSEL_HDR" "  pr-selection:
+    concurrency: pr-selection
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+CO_HDR="      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # The pull_request checkout is the MERGE ref"
+mutate_yml y-prsel-checkout-if "$CO_HDR" "      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        if: always()
+        with:
+          # The pull_request checkout is the MERGE ref" prsel P-COKEYS
+mutate_yml y-prsel-checkout-env "$CO_HDR" "      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        env:
+          GIT_DIR: /tmp/x
+        with:
+          # The pull_request checkout is the MERGE ref" prsel P-COKEYS
+mutate_yml y-prsel-step-with "        id: select
+        shell: bash" "        id: select
+        with:
+          x: y
+        shell: bash" prsel P-SELKEYS
+# `fetch-depth: 0` is checked by TYPE too (`0 == False` in Python), and `persist-credentials` by identity
+mutate_yml y-prsel-fetch-false "          fetch-depth: 0
+          persist-credentials: false" "          fetch-depth: false
+          persist-credentials: false" prsel P-FETCH
+mutate_yml y-prsel-fetch-string "          fetch-depth: 0
+          persist-credentials: false" "          fetch-depth: \"0\"
+          persist-credentials: false" prsel P-FETCH
+mutate_yml y-prsel-persist-zero "          fetch-depth: 0
+          persist-credentials: false" "          fetch-depth: 0
+          persist-credentials: 0" prsel P-FETCH
+# no workflow-level env or defaults: both reach every job, pr-selection included
+mutate_yml y-top-env "
+jobs:
+" "
+env:
+  PR_SELECTION_TEST_ALL: '1'
+jobs:
+" prsel P-TOPENV
+mutate_yml y-top-defaults "
+jobs:
+" "
+defaults:
+  run:
+    working-directory: scripts
+jobs:
+" prsel P-TOPDEFAULTS
+# the census of references to the pr-selection outputs: one more consumer, anywhere, is a tag
+mutate_yml y-census-step-if "        if: strategy.job-index == 0
+" "        if: strategy.job-index == 0 && needs.pr-selection.outputs.active != 'true'
+" prcensus C-REF:test-webplat.steps
+mutate_yml y-census-matrix-exclude "        shard: [\"1/2\", \"2/2\"]
+" "        shard: [\"1/2\", \"2/2\"]
+        exclude:
+          - shard: \${{ needs.pr-selection.outputs.skip_legs }}
+" prcensus C-REF:test-webplat.strategy
+# the ungated-required-job escape: any job other than the three PR-gated ones and `test` that needs pr-selection
+mutate_yml y-prneeds-extra "  lockfile-sync:
+    # 15m — measured max 1.4m" "  lockfile-sync:
+    needs: [pr-selection]
+    # 15m — measured max 1.4m" gated G-PRNEEDS-EXTRA:lockfile-sync
+# leg-set parity: edit ONE copy of the three-leg set and the parity row must name it
+mutate_yml y-leg-skipre-first-group "skip_re='^(test-webplat|test-bun|test-scripts-heavy)(" "skip_re='^(test-webplat|test-scripts-heavy)(" legparity L-SET:skip_re
+mutate_yml y-leg-skipre-second-group "(,(test-webplat|test-bun|test-scripts-heavy))*\$'" "(,(test-webplat|test-bun|test-scripts-heavy|test-scripts))*\$'" legparity L-SET:skip_re
+mutate_yml y-leg-term-names-another-leg "$PRT_BUN" "$(pr_term test-webplat)" legparity L-TERM:test-bun
+MUT_RUN=$((MUT_RUN + 1))
+if [ -n "$(PR_GATED_PINNED="test-bun test-webplat" chk legparity "$WF" 2>/dev/null)" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
+else fail "MUTANT y-leg-pinned: dropping a leg from the pinned set alone went unnoticed by the leg-parity row"; fi
+# the same, against mutated COPIES of the driver
+mutate_drv() { # <name> <old> <new> <expected-tag-prefix>
+  local name="$1" f="$SANDBOX/mut/$1.drv" got
+  MUT_RUN=$((MUT_RUN + 1))
+  if ! python3 "$SANDBOX/mut.py" "$DRIVER_SH" "$f" "$2" "$3" 2>"$SANDBOX/mut.err"; then
+    fail "MUTANT $name: mutation did NOT land ($(head -c 120 "$SANDBOX/mut.err"))"; return
+  fi
+  got=$(DRIVER_SH="$f" chk legparity "$WF" 2>/dev/null)
+  case " $got " in
+    *" $4"*) MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass ;;
+    *) fail "MUTANT $name: legparity did not report $4 (got: ${got:0:160})" ;;
+  esac
+}
+mutate_drv y-leg-driver-for-drops-bun "for g in webplat bun scripts-heavy; do" "for g in webplat scripts-heavy; do" L-SET:driver-for
+mutate_drv y-leg-driver-for-adds-scripts "for g in webplat bun scripts-heavy; do" "for g in webplat bun scripts scripts-heavy; do" L-SET:driver-for
+mutate_drv y-leg-driver-regex-drops-heavy "=~ ^(test-webplat|test-bun|test-scripts-heavy)(," "=~ ^(test-webplat|test-bun)(," L-SET:driver-re
+mutate_drv y-leg-driver-regex-second-group-drops-heavy ")(,(test-webplat|test-bun|test-scripts-heavy))*\$" ")(,(test-webplat|test-bun))*\$" L-SET:driver-re
+
+# the release budget: a 10-minute bound on the job lengthens the longest declared needs: path (3 minutes does not), proven by
+# executing the release workflow's own function on the mutant
+MUT_RUN=$((MUT_RUN + 1))
+if python3 "$SANDBOX/mut.py" "$WF" "$SANDBOX/mut/budget10.yml" "  pr-selection:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 3" "  pr-selection:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10" 2>/dev/null; then
+  case "$(budget_tag "$SANDBOX/mut/budget10.yml")" in B-PATH:*) MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass ;; *) fail "MUTANT y-budget-10: a 10-minute pr-selection did not lengthen the declared path as measured (got: $(budget_tag "$SANDBOX/mut/budget10.yml"))" ;; esac
+else fail "MUTANT y-budget-10: mutation did NOT land"; fi
 mutate_yml y-extra-gated "    needs: detect-changes
     if: needs.detect-changes.outputs.docs == 'true'
 " "    needs: detect-changes
     if: needs.detect-changes.outputs.docs == 'true' || needs.push-dedupe.outputs.elide == 'x'
 " gated G-SET
-mutate_yml y-agg-env "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}
+mutate_yml y-agg-env "          ATTEMPT: \${{ github.run_attempt }}
         run: |
-          # NAME THE MEASURED CAUSE" "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}
+          # NAME THE MEASURED CAUSE" "          ATTEMPT: \${{ github.run_attempt }}
           ELIDE: \${{ needs.push-dedupe.outputs.elide }}
         run: |
           # NAME THE MEASURED CAUSE" agg A-DIGEST
@@ -821,8 +1245,8 @@ fi
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 47 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
-else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 47), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
+if [ "$MUT_RUN" -ge 94 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 94), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a
@@ -831,7 +1255,7 @@ else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 47), $EQUIV_OK
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=139
+_FLOOR=190
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

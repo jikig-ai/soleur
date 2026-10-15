@@ -1,6 +1,6 @@
 // Stage 2.6 RED — permission-callback SDK-native tool branches.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // (Stage 2 §"Files to edit" → permission-callback.ts).
 //
 // The new runner (`soleur-go-runner.ts`) invokes `query()` with the

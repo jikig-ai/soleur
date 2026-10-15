@@ -137,6 +137,25 @@ if [[ ! "$WINDOW" =~ ^[0-9]+[[:space:]]+(MINUTE|HOUR|DAY|WEEK|MONTH)$ ]]; then
   echo "refusing: --window must be '<n> MINUTE|HOUR|DAY|WEEK|MONTH' (it is interpolated into the Better Stack SQL). Got: ${WINDOW}" >&2
   exit 64
 fi
+# FLOOR: the systemd-path control emits hourly (OnUnitActiveSec=1h), so a --window
+# under 60 minutes can end below the emit period and reopen exactly the
+# unsatisfiable-control hole the run-window read exists to close (code-quality
+# fix-round note). The workflow's default '2 HOUR' clears this; refuse smaller.
+_win_n="${WINDOW%%[[:space:]]*}"
+_win_unit="${WINDOW##*[[:space:]]}"
+case "$_win_unit" in
+  MINUTE) _win_min=$(( 10#${_win_n} )) ;;
+  HOUR)   _win_min=$(( 10#${_win_n} * 60 )) ;;
+  DAY)    _win_min=$(( 10#${_win_n} * 1440 )) ;;
+  WEEK)   _win_min=$(( 10#${_win_n} * 10080 )) ;;
+  MONTH)  _win_min=$(( 10#${_win_n} * 43200 )) ;;
+esac
+# 61 not 60: AccuracySec=1min jitter means the worst emit gap is ~61 minutes, so
+# an exactly-1-hour window can still slip between emits.
+if (( _win_min < 61 )); then
+  echo "refusing: --window '${WINDOW}' is under the control row's worst emit gap (~61m: hourly timer plus AccuracySec jitter) — a run-window control read cannot be satisfied below that." >&2
+  exit 64
+fi
 _ISO_TS_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
 for _ts_flag in since reboot-since; do
   case "$_ts_flag" in
@@ -158,6 +177,7 @@ if ! [[ "$MIN_ATTEMPTS" =~ ^[0-9]+$ ]] || (( MIN_ATTEMPTS < 1 )); then
 fi
 
 [[ -r "$QUERY" ]] || { echo "TRANSIENT: query transport ${QUERY} not found." >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "TRANSIENT: jq is required for the field-true systemd-path control count." >&2; exit 2; }
 
 # ── Query helpers ────────────────────────────────────────────────────────────
 # Mode-1 raw SQL against the source union (hot window + s3 archive). The host-name substring
@@ -215,10 +235,37 @@ fi
 echo "  anchor: source is answering (${ANCHOR_N} rows in window)"
 
 # ── Host rows ────────────────────────────────────────────────────────────────
-HOST_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE $(host_where) position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow"
+HOST_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE $(host_where) position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt DESC LIMIT 2000 FORMAT JSONEachRow"
 HOST_ROWS="$(bs_query "$HOST_SQL")" || {
   echo "TRANSIENT: the host-row query failed after a live anchor — transport fault." >&2
   exit 2
+}
+
+# CONTROL ROWS are read on the RUN window, never the mode's --since bound. The hourly
+# probe's only guaranteed emit is the OnBootSec fire, which lands inside phase-a's
+# window — a phase-b-bounded read (the workflow passes --since=<phase-b-since>, taken
+# after cap_a passes) would demand the next +1h tick inside a 15-minute gate and could
+# never satisfy (review P1). The property the control attests is "the systemd-tagged
+# channel proved live during this run", not "a fresh row landed inside this mode's
+# boundary". A same-run-id re-run can re-see a previous attempt's emit inside the
+# window — bounded to the same host lineage, and the honest reading either way is
+# "channel recently proven". Post-reboot keeps its own boundary: the reboot re-fires
+# OnBootSec inside POST_ROWS, so the post-boundary arm still proves the channel
+# across the reboot. Fetched LAZILY inside the arms that use it — the post-reboot
+# arm reads POST_ROWS instead, a dark-host early exit never reaches the check, and
+# an invocation without --since has already fetched exactly this row set into
+# HOST_ROWS, so the alias skips the second query entirely (perf-review note).
+CONTROL_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE dt > now() - INTERVAL ${WINDOW} AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt DESC LIMIT 2000 FORMAT JSONEachRow"
+CONTROL_ROWS=""
+fetch_control_rows() {
+  [[ -n "$CONTROL_ROWS" ]] && return 0
+  if [[ -z "$SINCE" ]]; then
+    CONTROL_ROWS="$HOST_ROWS"; return 0
+  fi
+  CONTROL_ROWS="$(bs_query "$CONTROL_SQL")" || {
+    echo "TRANSIENT: the control-row query failed after a live anchor — transport fault." >&2
+    exit 2
+  }
 }
 
 # Needles match the `stage=<name>` FIELD SHAPE, not the bare marker: an exit row's
@@ -287,8 +334,9 @@ want() { note "WAIT: $1"; missing="${missing}$1; "; }
 # Journald rows carry no iid=, so the count is host+window scoped by design: the workflow's
 # always-on --since bound is what excludes a prior life's storm rows on a re-capture. This is
 # DETECTION, not prevention — the unit conditions are the preventive layer; the observed
-# storm's rows demonstrably shipped to this source (run 38031062344), though the systemd-tagged
-# delivery path is documented unexplained (vector.toml) — a liveness caveat, tracked separately.
+# storm's rows demonstrably shipped to this source (run 38031062344) — the delivery path
+# is now pinned and documented (#9963, ADR-286): Source 1's PRIORITY<=4 OR-arm admits the
+# SYSLOG_IDENTIFIER=systemd rows, and systemd_path_check below attests it stays live.
 # SYSTEMD-ROW SCOPED, not needle-text alone: the phrase also rides inside unrelated log
 # bodies — the inngest-server control API ships GitHub webhook payloads, and issue #9939's
 # own title IS the needle text (measured 2026-10-10: 10 false matches attributed to
@@ -296,7 +344,10 @@ want() { note "WAIT: $1"; missing="${missing}$1; "; }
 # "SYSLOG_IDENTIFIER":"systemd" (measured on the run-38031062344 storm rows, which also
 # carry UNIT=/JOB_RESULT=failed) or the journald console form systemd[N]:. grep -c consumes
 # all input, so no SIGPIPE.
-count_inngest_failed() {
+count_inngest_failed() {  # note: intentionally TEXT-level (the sibling control went
+    # field-true under review) — a forged doppler row can only manufacture false
+    # VIOLATIONS here, the honest loud direction; upgrading it is not in this PR's
+    # blast radius. The systemd path itself is field-bound by systemd_path_check.
   # The {0,N} gaps tolerate the JSONEachRow-serialized escape (\" is a wire char) as well as
   # the unescaped ":"/= forms; a doppler/inngest row carries a non-systemd identifier, no
   # UNIT=<unit> field, and no systemd[N]: console prefix, so it cannot match. The
@@ -346,6 +397,44 @@ unpointed_refused_check() { # <row-set> — viol on any stage=unpointed_raw_refu
     || ok "zero stage=unpointed_raw_refused rows"
 }
 
+# POSITIVE CONTROL FOR THE systemd-TAGGED PATH (#9963). The `ok` above — "zero 'Failed to
+# start' journal rows" — is only as good as the channel that would carry such a row: a
+# silently dead SYSLOG_IDENTIFIER=systemd delivery path reads as a green zero on every
+# capture. The control row is emitted hourly by the inngest-server-probe unit as
+# `logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ..."` and rides the SAME
+# inngest_journald PRIORITY<=4 admission arm a real failure row does, so its presence in
+# the window proves the discriminated path is live. The stage set mirrors
+# count_inngest_failed's exclusions — marker grep + BOOT_STAGE filter — but the
+# decisive stage is own-field extraction, not a text fragment: a doppler/inngest row
+# quoting the marker text, the field pair, or this recipe verbatim cannot satisfy it
+# because jq reads the row's OWN SYSLOG_IDENTIFIER (the measured contamination class:
+# control-API webhook payloads ship issue titles verbatim). Field-true, not
+# payload-scoped: the message text may differ arbitrarily; only marker + own-field
+# tag bind.
+count_systemd_path_control() { # <row-set> — control rows carried on the systemd tag
+  # FIELD-TRUE binding, not a text anchor: each candidate row's own SYSLOG_IDENTIFIER
+  # field is extracted with jq (`fromjson` on the JSONEachRow line, then on `raw` for
+  # the JSON-shaped journald rows). A doppler/webhook payload row can quote the marker,
+  # the field pair, and even this repo's own recipe verbatim — its OWN field is still
+  # `doppler` (the measured contamination class, and the security-review P2 the text-
+  # level anchor could not close). Non-JSON raws (BOOT_STAGE phone-home lines, plain
+  # markers) fail the inner fromjson and drop out; the explicit BOOT_STAGE grep stays
+  # as documented defense for embedded journalctl excerpts. `grep -cxF` makes the
+  # comparison exact — `systemd-journald` and `SYSLOG_IDENTIFIER_X` cannot qualify.
+  printf '%s\n' "$1" |
+    grep -F 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' |
+    grep -v 'SOLEUR_INNGEST_BOOT_STAGE' |
+    jq -Rr 'try (fromjson | .raw | fromjson | .SYSLOG_IDENTIFIER) // empty' 2>/dev/null |
+    grep -cxF 'systemd' || true
+}
+systemd_path_check() { # <row-set> — want while the systemd path is unproven in this window
+  local n_control
+  n_control="$(count_systemd_path_control "$1")"
+  (( n_control >= 1 )) \
+    && ok "systemd-path control row observed (SOLEUR_SYSTEMD_JOURNALD_CONTROL on SYSLOG_IDENTIFIER=systemd, n=${n_control}) — the systemd-tagged delivery path is proven live" \
+    || want "systemd-path control row absent (SOLEUR_SYSTEMD_JOURNALD_CONTROL tagged SYSLOG_IDENTIFIER=systemd, n=${n_control}) — a zero 'Failed to start' count rides an unproven channel until it lands"
+}
+
 if [[ -z "$IID" && -z "$(printf '%s' "$HOST_ROWS" | tr -d '[:space:]')" ]]; then
   # Zero host rows with a live anchor is "dark so far", not "dark forever".
   echo "TRANSIENT (${MODE}): the source is answering but this host has emitted nothing yet — keep polling; the poll deadline owns the terminal verdict." >&2
@@ -369,6 +458,10 @@ case "$MODE" in
     n_start_distinct="$(printf '%s\n' "$HOST_ROWS" | grep -oE 'stage=provision-attempt-start.{0,40}attempt=[0-9]+' | sort -u | wc -l | tr -d ' ')"
     (( n_start_distinct >= MIN_ATTEMPTS )) && ok "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)" || want "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)"
     (( n_nic_fail >= 1 ))        && ok "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})" || want "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})"
+    # The control arm evaluates BEFORE the failed-count arm prints ok — a want/TRANSIENT on
+    # a dark systemd path must dominate the zero-failed-rows note (#9963).
+    fetch_control_rows
+    systemd_path_check "$CONTROL_ROWS"
     inngest_failed_check "$HOST_ROWS"
     unpointed_refused_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_A_OBSERVED
@@ -389,6 +482,8 @@ case "$MODE" in
     n_exit="$(count_iid provision-attempt-exit-)"
     (( n_done >= 1 )) && ok "bootstrap-done emitted for this host (implies nic_present + zot + isolation + bootstrap all ran)" || want "bootstrap-done emitted for this host (n=${n_done})"
     note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected); private_nic_ok n=${n_ok} (informational — emitted only when the wait actually ran)"
+    fetch_control_rows
+    systemd_path_check "$CONTROL_ROWS"
     inngest_failed_check "$HOST_ROWS"
     unpointed_refused_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_B_RECOVERY
@@ -403,12 +498,13 @@ case "$MODE" in
     # property this leg exists to prove. The boundary timestamp is recorded BEFORE the API
     # call and `dt` is ingest-time, so a delayed pre-boundary row can read post-boundary —
     # that direction errs conservative (false FAIL, never false PASS).
-    POST_ROWS="$(bs_query "SELECT dt, raw FROM ${BS_SRC} WHERE dt > parseDateTime64BestEffort('${REBOOT_SINCE}', 3, 'UTC') AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow")" \
+    POST_ROWS="$(bs_query "SELECT dt, raw FROM ${BS_SRC} WHERE dt > parseDateTime64BestEffort('${REBOOT_SINCE}', 3, 'UTC') AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt DESC LIMIT 2000 FORMAT JSONEachRow")" \
       || { echo "TRANSIENT: the post-reboot query failed after a live anchor." >&2; exit 2; }
     n_restage="$(printf '%s\n' "$POST_ROWS" | grep -cE 'stage=bs-token-restaged' 2>/dev/null || true)"
     n_provision="$(printf '%s\n' "$POST_ROWS" | grep -cE 'provision-attempt-start|provision-attempt-exit|bootstrap-done|provision-unit-armed' 2>/dev/null || true)"
     (( n_provision > 0 )) && viol "${n_provision} provision marker(s) AFTER the reboot boundary — the latch did not hold (provision re-ran post-reboot)" || ok "zero provision markers after the reboot boundary — the latch held"
     (( n_restage >= 1 ))  && ok "token-restage anchor re-emitted post-reboot ON THE PHONE-HOME CHANNEL (proves this boot ran AND the measured channel is live)" || want "token-restage anchor re-emitted post-reboot (stage=bs-token-restaged n=${n_restage})"
+    systemd_path_check "$POST_ROWS"
     inngest_failed_check "$POST_ROWS"
     unpointed_refused_check "$POST_ROWS"
     KEY=REHEARSAL_POST_REBOOT_LATCH

@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
 import { decryptKey, encryptKey } from "../server/byok";
+import { tearDownTenantUsers } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.BYOK_INTEGRATION_TEST === "1";
 
@@ -138,28 +139,8 @@ describe.skipIf(!INTEGRATION_ENABLED)("BYOK per-tenant isolation (integration)",
 
   afterAll(async () => {
     if (!service) return;
-    for (const user of [userA, userB]) {
-      if (!user.id) continue;
-      assertSynthetic(user.email);
-      // Round-trip the allowlist against Supabase's record so a bug that
-      // left user.id pointing at a pre-existing UUID while user.email still
-      // held the synthetic string cannot slip through.
-      const { data: check } = await service.auth.admin.getUserById(user.id);
-      if (check?.user?.email && check.user.email !== user.email) {
-        throw new Error(
-          `afterAll: auth.users.email for ${user.id} (${check.user.email}) ` +
-            `does not match synthetic email ${user.email}`,
-        );
-      }
-      // public.users cascades to api_keys; auth.users cascades to public.users.
-      const { error } = await service.auth.admin.deleteUser(user.id);
-      if (error && !/not found/i.test(error.message)) {
-        throw new Error(
-          `afterAll: deleteUser(${user.email}) failed: ${error.message}`,
-        );
-      }
-    }
-  }, 30_000);
+    await tearDownTenantUsers(service, [userA, userB]);
+  }, 60_000);
 
   test("AC 3.a — user A's seeded ciphertext is visible to the service client", async () => {
     const { data, error } = await service

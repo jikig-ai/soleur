@@ -1,9 +1,0 @@
-<!doctype html><html><body>
-<form id="f" method="post" action="https://github.com/organizations/jikig-ai/settings/apps/new">
-  <input type="hidden" name="manifest" id="m">
-</form>
-<script>
-  document.getElementById("m").value = "{\"name\": \"Soleur CI Fixture\", \"url\": \"https://soleur.ai\", \"description\": \"Least-privilege identity for the MU1 AC-2 nightly integration leg (#9995). It mints an installation token and clones exactly one fixture repo, jikig-ai/mu1-fixture. Its key lives in the dev_scheduled Doppler config, so it must be harmless on leak: contents:read on that one repo and nothing else (ADR-241 tiering; soleur-board/O1b precedent).\", \"public\": false, \"default_permissions\": {\"contents\": \"read\", \"metadata\": \"read\"}, \"default_events\": []}";
-  document.getElementById("f").submit();
-</script>
-</body></html>

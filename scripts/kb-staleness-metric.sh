@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # kb-staleness-metric.sh — deterministic, pure-local corpus-redundancy metric.
 #
-# Spec:  knowledge-base/project/specs/feat-compound-consolidate/spec.md (FR1)
-# Plan:  knowledge-base/project/plans/2026-06-14-feat-kb-recall-quality-prereq-plan.md
+# Spec:  knowledge-base/project/specs/archive/20261013-032858-feat-compound-consolidate/spec.md (FR1)
+# Plan:  knowledge-base/project/plans/archive/20261013-032858-2026-06-14-feat-kb-recall-quality-prereq-plan.md
 # Issue: #5298 (gates deferred consolidation pass #5292)
 #
 # ONE gated signal: corpus-wide near-duplicate density over

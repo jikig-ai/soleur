@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=36327508617,36323335413,36249105039,36194570054,36186259058
 # default-weight-ms=1000
-# generated-at=2026-10-07T09:45:57Z
+# generated-at=2026-10-14T19:16:08Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	12000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -33,8 +33,11 @@ apps/web-platform/infra/cron-egress-nftables.test.sh	1000	floor
 apps/web-platform/infra/cron-egress-self-heal.test.sh	1000	floor
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	18500	measured
 apps/web-platform/infra/disk-monitor.test.sh	1000	measured
+apps/web-platform/infra/docker-run-tuple.test.sh	1000	floor
 apps/web-platform/infra/doppler-download-error-channel.test.sh	3000	measured
 apps/web-platform/infra/doppler-injection-bound.test.sh	5000	measured
+apps/web-platform/infra/egress-gateway.test.sh	1000	floor
+apps/web-platform/infra/egress-gw-image-staleness.test.sh	1000	floor
 apps/web-platform/infra/firewall-9000-deny.test.sh	0	measured
 apps/web-platform/infra/fresh-boot-parity.test.sh	500	measured
 apps/web-platform/infra/fresh-boot-ready.test.sh	0	measured
@@ -58,7 +61,11 @@ apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	3500	measured
 apps/web-platform/infra/git-data-store-device-census.test.sh	1000	measured
 apps/web-platform/infra/git-data-template-strip.test.sh	1000	measured
 apps/web-platform/infra/git-data-transport-wrapper.test.sh	500	measured
+apps/web-platform/infra/git-data-wipe-access.test.sh	1000	floor
+apps/web-platform/infra/git-data-wipe-assert.test.sh	1000	floor
+apps/web-platform/infra/git-data-wipe.test.sh	1000	floor
 apps/web-platform/infra/git-lock-chardevice-sweep.test.sh	500	measured
+apps/web-platform/infra/htpasswd-stdin.test.sh	1000	floor
 apps/web-platform/infra/infra-config-apply.test.sh	30000	measured
 apps/web-platform/infra/infra-config-gate.test.sh	16500	measured
 apps/web-platform/infra/infra-config-handler-bootstrap.test.sh	500	measured
@@ -71,6 +78,7 @@ apps/web-platform/infra/inngest-cli-staleness-mutation.test.sh	1000	floor
 apps/web-platform/infra/inngest-cli-staleness.test.sh	1000	floor
 apps/web-platform/infra/inngest-config-bundle-pack.test.sh	0	measured
 apps/web-platform/infra/inngest-config-drift-compare.test.sh	0	measured
+apps/web-platform/infra/inngest-config-refresh.test.sh	1000	floor
 apps/web-platform/infra/inngest-consumer-probe.test.sh	500	measured
 apps/web-platform/infra/inngest-cutover-flip.test.sh	2500	measured
 apps/web-platform/infra/inngest-cutover-latch.test.sh	1000	measured
@@ -83,12 +91,14 @@ apps/web-platform/infra/inngest-inventory.test.sh	7000	measured
 apps/web-platform/infra/inngest-luks-cutover.test.sh	22500	measured
 apps/web-platform/infra/inngest-luks-sole-copy.test.sh	1000	floor
 apps/web-platform/infra/inngest-nic-wait.test.sh	34500	measured
+apps/web-platform/infra/inngest-provision-rehearsal.test.sh	1000	floor
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	4000	measured
 apps/web-platform/infra/inngest-redis-luks.test.sh	500	measured
 apps/web-platform/infra/inngest-registry-probe.test.sh	1500	measured
 apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh	1000	measured
 apps/web-platform/infra/inngest-rls/inngest-rls.test.sh	0	measured
 apps/web-platform/infra/inngest-server-flip-guard.test.sh	500	measured
+apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh	1000	floor
 apps/web-platform/infra/inngest-vector-download.test.sh	500	measured
 apps/web-platform/infra/inngest-wiped-volume-verify.test.sh	2000	measured
 apps/web-platform/infra/inngest.test.sh	4000	measured
@@ -142,12 +152,10 @@ apps/web-platform/infra/web-ghcr-deny.test.sh	1000	floor
 apps/web-platform/infra/web-git-data-probe.test.sh	0	measured
 apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh	101500	measured
 apps/web-platform/infra/web-host-provisioner-parity.test.sh	2000	measured
-apps/web-platform/infra/web-host-reboot-workflow.test.sh	1000	floor
 apps/web-platform/infra/web-hosts-fanout-parity.test.sh	0	measured
 apps/web-platform/infra/web-private-nic-guard.test.sh	500	measured
 apps/web-platform/infra/web-probes-token-rotation.test.sh	12000	measured
 apps/web-platform/infra/web-zot-consumer-probe.test.sh	0	measured
-apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh	60000	measured
 apps/web-platform/infra/webhook-doppler-token-reread.test.sh	2000	measured
 apps/web-platform/infra/workspaces-boot-unlock.test.sh	1000	floor
 apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh	0	measured

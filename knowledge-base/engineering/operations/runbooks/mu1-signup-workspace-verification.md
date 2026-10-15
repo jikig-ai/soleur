@@ -70,8 +70,11 @@ Expected output: 4 passed, 2 skipped (AC-1 gated, AC-2 gated).
 ### 2. Gated trigger test (AC-1)
 
 Requires dev Supabase credentials. Use the synthetic-identifier prefix
-allowlist (`mu1-integration-*@soleur-test.invalid`) that the test file
-enforces; do not run this with production credentials.
+allowlist (`mu1-integration-<16 lowercase hex>@soleur.test`) that the test
+file enforces — converged onto the shared `tearDownTenantUser` convention
+for #9995; the cleanup guard still also sweeps the pre-convergence
+`mu1-integration-<uuid>@soleur-test.invalid` shape. Do not run this with
+production credentials.
 
 ```bash
 cd apps/web-platform
@@ -93,8 +96,10 @@ crashes before cleanup, sweep manually. The guard below hard-asserts
 (a) `DOPPLER_CONFIG === "dev"`, (b) `NEXT_PUBLIC_SUPABASE_URL`'s
 hostname exactly equals the dev Supabase hostname (no subdomain
 suffix tricks) — either trip aborts before any delete runs. The sweep
-uses the same v4-UUID regex the test uses so it cannot match anything
-but its own leftovers:
+matches both synthetic shapes — the legacy `mu1-integration-<uuid>
+@soleur-test.invalid` leftovers and the current `mu1-integration-<16hex>
+@soleur.test` helper convention — so it cannot match anything but the
+suite's own users:
 
 ```bash
 doppler run -p soleur -c dev -- node -e '
@@ -257,7 +262,7 @@ criteria or explicitly accepted.
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-04-18-ops-verify-signup-workspace-provisioning-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-18-ops-verify-signup-workspace-provisioning-plan.md`
 - Issue: [#1448][i1448]
 - Roadmap row: `knowledge-base/product/roadmap.md` Pre-Phase 4 MU1.
 - Learning: `knowledge-base/project/learnings/security-issues/docker-seccomp-blocks-bwrap-sandbox-20260405.md`

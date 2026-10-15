@@ -138,10 +138,14 @@ git_data_served_empty_sql() {
               ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow
 SQL
 }
-git_data_served_empty_read() {
-  local outfile="$1" errfile="$2" reader
-  case "$outfile" in /*) : ;; *) printf 'git_data_served_empty_read: refusing a relative stdout target: %s\n' "$outfile" >&2; return 78 ;; esac
-  case "$errfile" in /*) : ;; *) printf 'git_data_served_empty_read: refusing a relative stderr target: %s\n' "$errfile" >&2; return 78 ;; esac
+# _git_data_bs_read <label> <sql-function> <outfile> <errfile>
+# The ONE place the rotate-precondition reads are issued (served_repos, boot_complete epoch): same pinned tables and
+# credential scope, one redirect site, so the two reads cannot drift in how they are pinned.
+_git_data_bs_read() {
+  local label="$1" sqlfn="$2" outfile="$3" errfile="$4" reader
+  declare -F "$sqlfn" >/dev/null || { printf '%s: unknown sql function: %s\n' "$label" "$sqlfn" >&2; return 78; }
+  case "$outfile" in /*) : ;; *) printf '%s: refusing a relative stdout target: %s\n' "$label" "$outfile" >&2; return 78 ;; esac
+  case "$errfile" in /*) : ;; *) printf '%s: refusing a relative stderr target: %s\n' "$label" "$errfile" >&2; return 78 ;; esac
   reader="$(bs_absence_query_script)"
   BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3" \
     timeout -k 5 "$GIT_DATA_BOOT_READ_TIMEOUT_S" \
@@ -149,8 +153,123 @@ git_data_served_empty_read() {
       --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
       --no-exit-on-missing-only-secrets \
       -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
-      bash "$reader" "$(git_data_served_empty_sql)" \
+      bash "$reader" "$("$sqlfn")" \
     >"$outfile" 2>"$errfile"
+}
+git_data_served_empty_read() { _git_data_bs_read git_data_served_empty_read git_data_served_empty_sql "$1" "$2"; }
+
+# git_data_boot_complete_dt_read <outfile> <errfile>
+# (#10175) The rotate precondition's FRESHNESS read: the newest boot_complete row's ingest time as epoch
+# seconds. git_data_served_empty_sql is deliberately NOT changed (existing pins): this is a sibling query over
+# the same pinned tables. They are two separate queries, so a boot_complete landing between them could pair
+# different rows; both orderings fail closed on a stale row (freshness is the live check; see the workflow). `dt` is Better Stack's
+# ingest clock, the same clock the boot poll's anchor is compared against (AP-027).
+git_data_boot_complete_dt_sql() {
+  cat <<'SQL'
+              SELECT toUnixTimestamp(dt) AS epoch
+              FROM (SELECT dt, raw FROM remote($BS_TABLE)
+                    UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+              WHERE JSONExtractString(raw,'stage') = 'boot_complete'
+                AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
+              ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow
+SQL
+}
+git_data_boot_complete_dt_read() { _git_data_bs_read git_data_boot_complete_dt_read git_data_boot_complete_dt_sql "$1" "$2"; }
+
+# git_data_boot_fields_read <outfile> <errfile>
+# (#10138, wipe W5) The wipe job's field read: the NEWEST boot_complete row of host_name=soleur-git-data, with the
+# epoch (for the freshness test) and the seven fields the wipe judges. Same pinned tables, same credential scope and
+# the same three-flag `env -u` scrub as every other read here, through the ONE helper (_git_data_bs_read): no fork.
+# There is deliberately NO `dt >` anchor: after the flip no newer boot_complete can exist for this instance, so the
+# only row is old by construction; the row must instead belong to the CURRENT server (git_data_boot_fields_verdict).
+git_data_boot_fields_sql() {
+  cat <<'SQL'
+              SELECT toUnixTimestamp(dt) AS epoch,
+                     JSONExtractString(raw,'luks_mounted')      AS luks_mounted,
+                     JSONExtractString(raw,'fence_on_mapper')   AS fence_on_mapper,
+                     JSONExtractString(raw,'erasure_probe')     AS erasure_probe,
+                     JSONExtractString(raw,'plaintext_empty')   AS plaintext_empty,
+                     JSONExtractString(raw,'served_repos')      AS served_repos,
+                     JSONExtractString(raw,'plaintext_volume')  AS plaintext_volume,
+                     JSONExtractString(raw,'plaintext_journal') AS plaintext_journal
+              FROM (SELECT dt, raw FROM remote($BS_TABLE)
+                    UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+              WHERE JSONExtractString(raw,'stage') = 'boot_complete'
+                AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
+              ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow
+SQL
+}
+git_data_boot_fields_read() { _git_data_bs_read git_data_boot_fields_read git_data_boot_fields_sql "$1" "$2"; }
+
+# git_data_boot_fields_verdict <read_rc> <rows> <created_epoch>
+# (#10138) The W5 verdict as a pure function. Prints ONE line and returns:
+#   ok plaintext_journal=<clean|dirty|unknown>   rc 0   every judged field is as required; the journal state is
+#                                                      REPORTED only (a dirty journal is the measured, expected state)
+#   wipe_boot_absent                             rc 1   the read ANSWERED and no row exists (distinct from a failed read:
+#                                                      after the 90-day retention a healthy query returns no row)
+#   wipe_boot_predates_server                    rc 1   the row's epoch is not STRICTLY greater than the server's created
+#                                                      epoch (git_data_boot_complete_freshness, reused): another host's row
+#   wipe_boot_field_<name>                       rc 1   <name> is not the required value, or is missing. Roster order:
+#                                                      luks_mounted fence_on_mapper erasure_probe plaintext_empty (all `yes`),
+#                                                      served_repos (`0`), plaintext_volume (`present`)
+#   wipe_boot_unreadable                         rc 2   the read failed (rc != 0), a line is not a row (a bare exception),
+#                                                      the row has no epoch, or <created_epoch> is not an integer
+# Only the FIRST (newest) row decides. No value from the row is ever printed except the sanitised journal word.
+git_data_boot_fields_verdict() {
+  local rc="${1-}" rows="${2-}" created="${3-}" line first="" fresh f want val journal
+  [[ "$rc" =~ ^[0-9]+$ && "$rc" -eq 0 ]] || { echo wipe_boot_unreadable; return 2; }
+  [[ "$created" =~ ^[0-9]+$ ]] || { echo wipe_boot_unreadable; return 2; }
+  # Shape, not content: every non-blank line must open a row object; a ClickHouse mid-stream exception is a bare line.
+  while IFS= read -r line; do
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+    [[ "$line" == '{'* ]] || { echo wipe_boot_unreadable; return 2; }
+    [[ -n "$first" ]] || first="$line"
+  done <<<"$rows"
+  [[ -n "$first" ]] || { echo wipe_boot_absent; return 1; }
+  jq -e 'type == "object"' <<<"$first" >/dev/null 2>&1 || { echo wipe_boot_unreadable; return 2; }
+  fresh="$(git_data_boot_complete_freshness "$first" "$created")" || :   # a non-fresh word, or none, lands in the case below
+  case "$fresh" in
+    fresh) : ;;
+    stale_boot_complete) echo wipe_boot_predates_server; return 1 ;;
+    *) echo wipe_boot_unreadable; return 2 ;;
+  esac
+  for f in luks_mounted:yes fence_on_mapper:yes erasure_probe:yes plaintext_empty:yes served_repos:0 plaintext_volume:present; do
+    want="${f#*:}"; f="${f%%:*}"
+    val="$(jq -r --arg f "$f" 'if (.[$f] | type) == "string" or (.[$f] | type) == "number" then (.[$f] | tostring) else "" end' <<<"$first" 2>/dev/null)" || val=""
+    [[ "$val" == "$want" ]] || { echo "wipe_boot_field_${f}"; return 1; }
+  done
+  journal="$(jq -r 'if (.plaintext_journal | type) == "string" then .plaintext_journal else "" end' <<<"$first" 2>/dev/null)" || journal=""
+  case "$journal" in clean|dirty) : ;; *) journal=unknown ;; esac
+  echo "ok plaintext_journal=${journal}"
+  return 0
+}
+
+# git_data_server_created_epoch <hetzner-servers-json>
+# (#10175) Prints the creation time, epoch seconds, of THE git-data server. Refuses (rc 1, prints nothing)
+# unless the body lists EXACTLY ONE server, named soleur-git-data, with a parseable `created`: zero servers,
+# two servers (a replace caught half-way), a decoy name or a missing field are all "could not tell".
+git_data_server_created_epoch() {
+  local body="${1-}" created epoch
+  jq -e '(.servers | type) == "array" and (.servers | length) == 1 and (.servers[0] | type) == "object" and .servers[0].name == "soleur-git-data"' \
+    <<<"$body" >/dev/null 2>&1 || return 1
+  created="$(jq -r '.servers[0].created // empty' <<<"$body" 2>/dev/null)" || return 1
+  [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$ ]] || return 1
+  epoch="$(date -u -d "$created" +%s 2>/dev/null)" || return 1
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$epoch"
+}
+
+# git_data_boot_complete_freshness <rows> <created_epoch>
+# (#10175) The freshness verdict, ONE token, rc 0 only for `fresh`: the newest boot_complete row's epoch must be
+# STRICTLY greater than the server's creation epoch (a row at the creation instant, or before it, is the previous
+# host's). `stale_boot_complete` (rc 1) is a measured refusal; `boot_complete_unreadable` (rc 2) is "could not tell".
+git_data_boot_complete_freshness() {
+  local rows="${1-}" created="${2-}" epoch
+  [[ "$created" =~ ^[0-9]+$ ]] || { echo boot_complete_unreadable; return 2; }
+  epoch="$(printf '%s' "$rows" | head -1 | jq -r 'if type == "object" and ((.epoch | type) == "string" or (.epoch | type) == "number") then (.epoch | tostring) else empty end' 2>/dev/null)" || epoch=""
+  [[ "$epoch" =~ ^[0-9]+$ ]] || { echo boot_complete_unreadable; return 2; }
+  if (( epoch > created )); then echo fresh; return 0; fi
+  echo stale_boot_complete; return 1
 }
 
 # git_data_boot_poll_decide <found> <final_answered>   (yes/no, yes/no)

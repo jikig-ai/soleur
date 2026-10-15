@@ -78,7 +78,7 @@ Only **1 of the 4** clauses can ever be made true — verified live rather than 
 
 Operator decided to keep the claim published and make it true by encrypting, rather than
 retract or temporally qualify. Recorded with evidence + a 2026-07-23 re-raise trigger at
-`knowledge-base/project/specs/feat-6538-web2-fsn1-orphan/decision-challenges.md` DC-1.
+`knowledge-base/project/specs/archive/20261013-041741-feat-6538-web2-fsn1-orphan/decision-challenges.md` DC-1.
 
 ## The design rule that should have prevented the original claim
 

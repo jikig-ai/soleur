@@ -170,7 +170,7 @@ _excluded() {
 # Each entry MUST cite an OPEN tracking issue or a stated re-review trigger — `#7917` is closed
 # by the PR that adds this file, so citing it would leave every entry pointing at a dead ref.
 # CEILING: raising it is an ADR-207 edit, not a local decision.
-LEDGER_CEILING=12
+LEDGER_CEILING=13
 LEDGER=(
   # scripts/lib/repo-write-boundary.test.sh — 11 deliberate probe-tag creations. This is the
   # suite that TESTS the refs/tags boundary, so it is the one place a real tag author belongs;
@@ -194,6 +194,9 @@ LEDGER=(
   'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag v3.258.3'
   'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag v9.9.9'
   'scripts/battery-ref-guard.test.sh|env "${e[@]}" git -C "$WORK/fixture" tag -a -m m "$1" >/dev/null 2>&1 || rc=$?'
+  # .github/scripts/test/test-vinngest-digest-freshness.sh — one seed_tag site
+  # inside the mktemp fixture repos the battery itself creates (Ref #7596).
+  '.github/scripts/test/test-vinngest-digest-freshness.sh|seed_tag() { git -C "$F_REPO" tag "$1"; }'
 )
 
 # --- out-of-class registration ledger (Stage A, AC6) ----------------------------------------

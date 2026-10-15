@@ -262,7 +262,7 @@ class-specific rule ever appears, the answer is to put it in the owning
 skill/agent (per `cq-agents-md-tier-gate`), not to rebuild the classifier.
 
 **This ADR supersedes a spec, not an ADR.** The split shipped under
-`knowledge-base/project/specs/feat-agents-md-change-class-loader/` and never had an
+`knowledge-base/project/specs/archive/20261013-014038-feat-agents-md-change-class-loader/` and never had an
 ADR. It amends eight ADRs unevenly: substantively **092** (a named threat class
 ceases to exist), **094** (decision intact — and it is now the decisive reason
 hook injection beat an @-import), **140** (its decisive rejection rationale is

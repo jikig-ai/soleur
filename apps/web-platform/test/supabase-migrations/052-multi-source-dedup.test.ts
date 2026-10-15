@@ -6,7 +6,7 @@ import path from "node:path";
 //
 // File-parse contract test (mirrors 046 precedent), pinning the SQL
 // invariants required by PR-H Phase 1 of:
-//   knowledge-base/project/plans/2026-05-19-feat-daily-priorities-multi-source-pr-h-plan.md
+//   knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-daily-priorities-multi-source-pr-h-plan.md
 //
 // PR-H Phase 1 invariants:
 //   1. messages.source_ref column added (nullable for backfill safety).

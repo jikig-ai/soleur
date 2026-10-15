@@ -161,7 +161,7 @@ For CI gates: **trigger placement is part of the gate's definition**. A gate tha
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-029-rename-at-boundary-userid-pseudonymisation.md` §I4 (single-pepper reuse; VRL added as 4th consumer)
-- `knowledge-base/project/specs/feat-observability-consolidation-4273/spec.md` `## Plan-Time Corrections` C1-C9
+- `knowledge-base/project/specs/archive/20261013-014038-feat-observability-consolidation-4273/spec.md` `## Plan-Time Corrections` C1-C9
 - `apps/web-platform/test/infra/vector-pii-scrub.test.sh` (the canonical sequential-pipeline fixture harness)
 - `.github/workflows/validate-vector-config.yml` (the canonical "standalone PR-triggered validation gate" pattern)
 - Vector PR vectordotdev/vector#19274 (closed unmerged 2025-01-27) — proof native `better_stack_logs` sink does NOT exist

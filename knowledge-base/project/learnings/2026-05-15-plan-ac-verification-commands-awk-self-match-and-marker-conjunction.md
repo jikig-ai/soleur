@@ -12,7 +12,7 @@ tags:
   - cross-implementation
 related:
   - plugins/soleur/skills/plan/SKILL.md
-  - knowledge-base/project/plans/2026-05-15-feat-goal-primitive-operator-escape-hatch-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-goal-primitive-operator-escape-hatch-plan.md
   - knowledge-base/project/learnings/2026-05-15-brainstorm-leader-research-sequencing-and-prior-art-cwd.md
 ---
 

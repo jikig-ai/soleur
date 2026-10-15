@@ -80,6 +80,14 @@ locals {
     zot_pull_token         = var.zot_pull_token
     betterstack_logs_token = var.betterstack_logs_token
     sentry_dsn             = ""
+    # #6780 (ADR-135, 2026-10-13 amendment): the config-refresh consumer's baked
+    # payloads — the SAME templatefile vars production passes (D12; text-embed via
+    # `${indent(6, ...)}` in the template, not b64 — both b64 forms measured over the
+    # 32 KiB cap), reading the shared repo files one level up. A render missing these
+    # fails templatefile outright, so they must stay in parity with inngest-host.tf's
+    # map.
+    infra_config_install_text = file("${path.module}/../infra-config-install.sh")
+    cosign_trusted_root_text  = file("${path.module}/../cosign-trusted-root.json")
   }), local.inngest_rationale_strip, "")
   rehearsal_user_data_b64gz = base64gzip(local.rehearsal_user_data_plain)
 }

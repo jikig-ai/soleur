@@ -28,8 +28,11 @@ Think about the places it could go wrong looking at the codebase. Look for loggi
    ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain)
    PROJ=$(doppler secrets get SENTRY_PROJECT -p soleur -c prd --plain)
    TOK=$(doppler secrets get SENTRY_ISSUE_RW_TOKEN -p soleur -c prd --plain)
-   curl -s -H "Authorization: Bearer $TOK" \
+   # argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only; `bash -x` would print the token.
+   (LC_ALL=C; case "$TOK" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "TOK (SENTRY_ISSUE_RW_TOKEN) unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1; }
+   curl --disable --proto '=https' -m 30 -sS --config - \
      "https://jikigai-eu.sentry.io/api/0/projects/$ORG/$PROJ/issues/?query=<keyword>&statsPeriod=24h&limit=5" \
+     < <(printf 'header = "Authorization: Bearer %s"\n' "$TOK") \
      | jq -r '.[]? | "\(.lastSeen) | \(.title) | n=\(.count)"'
    ```
 
@@ -70,7 +73,7 @@ If you catch yourself reading code to build a theory before this command exists,
 
 1. **Add instrumentation (default).** Where a loop will follow once the signal exists, add a temporary `[DEBUG-<hex4>]` probe (Phase 6 spelling) and build the loop on its output. Where the failure lives on a blind production surface, apply Phase 1's blind-surface bullet: add a permanent `SOLEUR_*` marker so the next occurrence self-reports, write `no loop buildable yet; instrumentation added: SOLEUR_<…>; re-run soleur:reproduce-bug on the next occurrence` into the Phase 8 comment, and end the run.
 2. **Environment access — non-shell only.** Only when option 1 cannot carry the signal. Name the one environment that reproduces it and what you need from it: a preview or staging deploy to drive, a flag to flip, `soleur:trigger-cron` to fire. SSH and `docker exec` are never an ask (`hr-no-ssh-fallback-in-runbooks`); a blind production surface takes option 1. Carry the ask verbatim into Phase 8 item 6 and end the run.
-3. **A redacted captured artifact** (HAR file, log dump, core dump, screen recording with timestamps). The one data-retrieval ask permitted, and only after the ladder, option 1 and option 2 are exhausted: a founder's local device state is the one thing no instrumentation can capture. Carry the ask into Phase 8 item 6 and end the run; on the next run the artifact lands in a directory you create with `mktemp -d` — **never inside the repository** (`.gitignore` is not a control; `soleur:test-fix-loop` stages with `git add -A`). You perform the redaction, not the founder: for a HAR, drop every `headers[]` and `cookies[]` entry (request and response), `queryString[]`, `postData`, `content.text` and `_webSocketMessages`, keeping `url` path (no query), `status`, `time` and `mimeType`; for a log dump, keep only the lines that carry the signal. The artifact is never attached to the issue, never lands under `knowledge-base/`, and is deleted when the run ends (Phase 9 greps for it).
+3. **A redacted captured artifact** (HAR file, log dump, core dump, screen recording with timestamps). The one data-retrieval ask permitted, and only after the ladder, option 1 and option 2 are exhausted: a founder's local device state is the one thing no instrumentation can capture. Carry the ask into Phase 8 item 6 and end the run; on the next run the artifact lands in a directory you create with `mktemp -d -t soleur-run.$$.XXXXXXXX` — **never inside the repository** (`.gitignore` is not a control; `soleur:test-fix-loop` stages with `git add -A`). You perform the redaction, not the founder: for a HAR, drop every `headers[]` and `cookies[]` entry (request and response), `queryString[]`, `postData`, `content.text` and `_webSocketMessages`, keeping `url` path (no query), `status`, `time` and `mimeType`; for a log dump, keep only the lines that carry the signal. The artifact is never attached to the issue, never lands under `knowledge-base/`, and is deleted when the run ends (Phase 9 greps for it).
 
 Headless (one-shot, cloud, no TTY): take option 1; if the temporary-probe arm applies, build the loop and continue; otherwise add the permanent marker, write the Phase 8 line, and end the run. Never substitute a founder clicking for rung 10. **For a UI bug, Phase 3 is how rung 4 is built — go there and come back before declaring that no loop exists.**
 

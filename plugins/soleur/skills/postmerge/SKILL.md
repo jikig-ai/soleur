@@ -162,9 +162,16 @@ SENTRY_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain 2>
 SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai")
 API_HOST="${SENTRY_ORG}.sentry.io"
 
-curl -sfS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/?per_page=100" \
-  | jq '[.[] | {slug: .slug, status: .status}] | map(select(.status != "ok" and .status != "active"))'
+# argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only; `bash -x` would print the token.
+# Advisory phase: a missing or malformed token SKIPS (exit 0), it never fails the run.
+if ! (LC_ALL=C; case "$SENTRY_TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac); then
+  echo "WARNING: SENTRY_TOKEN (Doppler prd SENTRY_AUTH_TOKEN or SENTRY_API_TOKEN) unset or not [A-Za-z0-9._~+/=-] (refused, not sent). Sentry cron monitor health: SKIPPED."
+else
+  curl --disable --proto '=https' -m 30 -fsS --config - \
+    "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/?per_page=100" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_TOKEN") \
+    | jq '[.[] | {slug: .slug, status: .status}] | map(select(.status != "ok" and .status != "active"))'
+fi
 ```
 
 - If all monitors report `ok` or `active`: "Sentry cron monitors: all healthy"
@@ -533,6 +540,43 @@ gh issue create --label type/chore --milestone "Post-MVP / Later" \
 A failed or unrun read-back is a **red post-merge status**: report it verbatim as `Sole-copy read-back: <word>` in the Phase 6
 comment and the Phase 7 summary. It does not itself block "done" (report-only, like Phases 5.5 and 5.6).
 
+## Phase 5.8: KB archival read-back (REPORT-ONLY)
+
+The ship-side archival gate (`ship` Phase 6.45 + the `ship-kb-archive-gate.sh` PreToolUse hook) only sees merges that pass through
+the agent's own `gh pr merge` — UI merges, `gh api` merges, and queue merges from other harnesses bypass it. This phase is the
+catch-net: read the merge's landed diff and report any KB artifact it left at a LIVE path.
+
+For the merge commit recorded in Phase 1, diff the whole merge range against `origin/main`'s merge-base — `<merge-sha>^..<sha>`
+only covers squash and first-parent merge shapes; a `--rebase`-shape merge lands N commits and a single-parent diff misses the
+earlier ones. `git fetch origin main` first, so the worktree holds both endpoints:
+
+```bash
+git fetch origin main
+git diff --name-status --diff-filter=AMRCT \
+  "$(git merge-base origin/main <merge-sha>)" "<merge-sha>" -- \
+  knowledge-base/project/specs knowledge-base/project/plans knowledge-base/project/brainstorms
+```
+
+If `git merge-base` returns empty (shallow clone), diff `origin/main^..<merge-sha>` instead and report that fallback in the
+status line. Only `<root>/archive/` rows are compliant — a path under `specs/<live-dir>/archive/` is still inside a live spec
+dir. `R`/`C` rows are judged on the destination: `git mv specs/archive/x specs/y` lands a live path. Every remaining
+`A`/`M`/`R`/`C`/`T` row is an artifact the merge landed live. Report the surviving rows **verbatim** as a **red post-merge
+status** — `KB archival read-back: <verbatim rows, or "clean">` — in the Phase 6 issue comment AND the Phase 7 summary.
+
+**Remediation is per-row `git mv`, not `archive-kb.sh`:** the archiver's three discovery axes (slug glob, branch-diff, untracked
+`??`) cannot reach a spec dir that a leaked merge already committed — on a fresh branch all three return empty and the script
+exits `No artifacts found`, which reads as clean. On a NEW branch from `origin/main`, for each reported row:
+
+```bash
+git mv <row-path> knowledge-base/project/<root>/archive/$(date +%Y%m%d-%H%M%S)-<name> \
+  && git commit -m "chore(kb): archive leaked artifacts from <pr>"
+```
+
+then open a follow-up PR — archival cannot ride a PR that already merged. **M-row caveat:** an `M` on `specs/<dir>/` can be a
+drive-by edit to a SIBLING feature's in-flight spec — verify the dir belongs to the merged feature first; if not, revert the
+edit (`git checkout origin/main -- <path>` then commit) rather than `git mv`-ing another feature's dir. Like Phases 5.5/5.6/5.7
+it is REPORT-ONLY: it never blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
+
 ## Phase 6: Update Issue and Compound
 
 If the PR body contained `Closes #N`, update the linked issue with verification results:
@@ -548,6 +592,7 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 - Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 - Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
 - Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
+- KB archival read-back: <clean/verbatim rows> (report-only)
 "
 ```
 
@@ -574,6 +619,7 @@ File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
 Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
+KB archival read-back: <clean/verbatim rows> (report-only)
 Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run soleur:feature-tweet #N / NONE — ineligible>
 ```
 
@@ -593,5 +639,5 @@ per-prerequisite behaviour (skip / warn / poll).
 
 - **A deploy-arm database step failing on an auth/connect timeout is a production database signal, not an isolated flake: read readiness before rerunning.** `/health` returns HTTP 200 `status: ok` whatever the database state (only `.supabase` flips to `error`), the Management API project `status` can read `ACTIVE_HEALTHY` while Postgres is down, and a rerun's `migrate` can go green through the pooler. Read `curl -sS <prod>/health | jq -r .supabase` and `GET /v1/projects/<ref>/health?services=db&services=auth&services=rest&services=pooler` first — the latter carries the account-level admin PAT, so call it the way [supabase-logs-query.sh](../../../../scripts/supabase-logs-query.sh) does (header on stdin via `--header @-`, `--disable --noproxy '*'`, under `doppler run`), never with the token in argv. **Why:** 2026-09-15 — prd Postgres was unreachable 89 min; a rerun looped on health verification and `/health` was read directly only ~16 min later (post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
 - For production debugging use Sentry API (`SENTRY_API_TOKEN` in Doppler `prd`), Better Stack, or `/health` — never SSH for logs. SSH is for infra provisioning only. (ex-`cq-for-production-debugging-use`) To read a Sentry issue/event by id inline, use `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`); for host/app logs use [betterstack-query.sh](../../../../scripts/betterstack-query.sh) (runbook `betterstack-log-query.md`).
-- For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
+- For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body, all on curl's stdin config. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
 - Doppler env values on prd are baked into the container at start via `--env-file` (cloud-init.yml). Flipping a flag in Doppler does NOT affect the running container — POST-X gates that depend on a freshly-flipped flag must redeploy the current image tag (POST to `/hooks/deploy`) between the flip and the verification smoke. Full context: [2026-05-19-doppler-env-hot-reload-limitation.md](../../../../knowledge-base/project/learnings/2026-05-19-doppler-env-hot-reload-limitation.md).

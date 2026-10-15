@@ -62,6 +62,15 @@ BASE="https://deploy.soleur.ai/hooks"
 # existing `|| ...` / `if ...` failure path handles it exactly like a transport failure. `printf`
 # is the shell builtin (not an exec), so the token is on no argv at any point.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+# _mask_ok <value>: the shape check that precedes an `::add-mask::` line for a value that is NOT a bearer token (a DSN, a heartbeat URL, a channel key
+# legitimately carry `:`, `@`, `?`, `&`, so _bearer_ok would refuse them and leave them UNMASKED). `::add-mask::` is itself a workflow command and the
+# runner parses commands per LINE, so the only hazard is a value holding a control character (a newline or CR ends the directive and starts a forged
+# one). Empty and control-character values return 1: nothing is printed for them, so an empty read never prints a bare directive.
+_mask_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+# _body_head <body>: the FIRST line of a response body, every character outside printable ASCII replaced by `?`, cut at 160 characters. For the public run
+# log, where a raw body is an unbounded egress path (a host script's CombinedOutput can carry anything) and a body line starting with `::` could forge a
+# workflow command: callers embed the result MID-LINE in their own `::error::` text, never on a line of its own.
+_body_head() { local LC_ALL=C _h="${1%%$'\n'*}"; _h="${_h//[^ -~]/?}"; printf '%s' "${_h:0:160}"; }
 _bearer_curl() {
   local _tokvar="${1:-}"
   shift
@@ -124,6 +133,22 @@ _sig_curl() {
 # live signal.
 INNGEST_HOST="${INNGEST_HOST:-soleur-inngest}"
 INNGEST_HOST_NAME="${INNGEST_HOST_NAME:-soleur-inngest-prd}"
+
+# #6940 item 3 — the optional page-size knob, normalized ONCE here and spliced into every
+# doublefire-probe URL below as ${DF_PAGE_QS}. CUTOVER_PAGE_SIZE comes from the workflow's
+# `page_size` dispatch input; empty/absent = the probe's own default (100). A non-integer
+# or out-of-range value is DROPPED with a named ::error:: — never spliced — because a
+# malformed query param would read as a webhook/hook failure instead of the caller bug it
+# is. The on-host probe re-validates the same bound (1..1000) before it reaches
+# --argjson first (fail-closed FATAL) — this side is advisory, that side is the gate.
+DF_PAGE_QS=""
+if [[ -n "${CUTOVER_PAGE_SIZE:-}" ]]; then
+  if [[ "$CUTOVER_PAGE_SIZE" =~ ^[0-9]+$ ]] && (( 10#$CUTOVER_PAGE_SIZE >= 1 && 10#$CUTOVER_PAGE_SIZE <= 1000 )); then
+    DF_PAGE_QS="&page_size=${CUTOVER_PAGE_SIZE}"
+  else
+    echo "::error::CUTOVER_PAGE_SIZE='${CUTOVER_PAGE_SIZE}' is not an integer in 1..1000 — the page_size parameter is DROPPED (the probe's default page size applies)"
+  fi
+fi
 
 # THE SHARED flip-FSM READER (#7674). One reader, two callers: confirm_flip_state (below) and
 # _flip_liveness_count (G3.7's H signal), and — since #8054 — op=execute 2.0's two reads.
@@ -544,6 +569,15 @@ _inngest_server_created_epoch() {
   fi
   if [[ -z "$tok" ]]; then
     echo "::warning::G3 generation anchor: doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN in prd_terraform (unset, a Doppler auth failure or a network failure — not distinguished), so the current $INNGEST_HOST server could not be identified. Nothing was written; re-dispatch once the token read works." >&2
+    printf '%s' '__UNREADABLE__'
+    return 0
+  fi
+  # Shape-check FIRST, mask second, then the feed (the backup arm's order): the token is judged ONCE, before it is masked, printed on the `-H @-` channel
+  # or sent. A refusal takes the empty-token arm's verdict class (one ::warning:: naming the variable, `__UNREADABLE__`, rc 0) and prints the marker
+  # the way the other arms do; nothing about the value reaches any stream.
+  if ! _bearer_ok "$tok"; then
+    echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
+    echo "::warning::G3 generation anchor: the $tokvar read from prd_terraform has an unusable shape (a quote, backslash, control character, space or other character no Hetzner token carries), so it was neither masked nor sent. Nothing was written; re-mint the token in Doppler and re-dispatch." >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
@@ -1215,8 +1249,9 @@ missed_tick_report() {
   local RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-server.md § Bounded-outage note"
 
   if [[ "$1" != "true" ]]; then
-    # OFF (the default): the window is echoed but never parsed, so a malformed CUTOVER_WINDOW_*
-    # cannot redden a run whose verdict above was clean.
+    # OFF (the default): the window is echoed but never parsed, so a malformed
+    # CUTOVER_WINDOW_FROM or CUTOVER_WINDOW_UNTIL cannot redden a run whose
+    # verdict above was clean.
     echo "::notice::missed-tick candidates NOT EMITTED (default, #6939). A per-bucket list cannot tell a tick that was due from one that was never due, and re-firing a never-due tick double-fires that cron. Gap window as configured: [$SHOW_FROM, $SHOW_UNTIL]. A tick skipped in the gap is the accepted ADR-100 residual. Recover one ONLY via $RUNBOOK. Unverified per-bucket candidates: re-dispatch op=verify with missed_tick_candidates=true. Proper fix: #6940."
     return 0
   fi
@@ -1341,7 +1376,7 @@ case "$OP" in
       echo "::error::enumerate returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
     fi
     if ! echo "$BODY" | jq -e 'type == "array"' >/dev/null 2>&1; then
-      echo "::error::enumerate did not return a JSON array"; echo "$BODY"; exit 1
+      echo "::error::enumerate did not return a JSON array (first line of the response, bounded and scrubbed: $(_body_head "$BODY"))"; exit 1
     fi
     # P2-sec-a: surface counts + reminder_ids ONLY, never comment bodies.
     COUNT=$(echo "$BODY" | jq 'length')
@@ -1368,8 +1403,7 @@ case "$OP" in
     # Region start is BEFORE `SIG=` deliberately: the render driver sources this region
     # under `set -u`, and a region starting after `BODY=$(cat …)` would die on an unbound
     # `CODE`. Everything the gate branch reads is bound inside the region.
-    # D1 (argv-bearer S2 plan): this site keeps the openssl form until the infra suite's tool census is edited; that edit is tracked with S4/S5 (#9757).
-    SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/registry-probe-body
     CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
       -X GET \
@@ -1508,7 +1542,7 @@ case "$OP" in
       esac
     else
       if ! echo "$BODY" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1; then
-        echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object"; echo "$BODY"; exit 1
+        echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object (first line of the response, bounded and scrubbed: $(_body_head "$BODY"))"; exit 1
       fi
       REG_EMPTY=$(echo "$BODY" | jq -r '.registry_empty')
       REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
@@ -1542,8 +1576,7 @@ case "$OP" in
       echo "::error::doublefire-probe CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
     fi
     echo "::warning::doublefire-probe CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster, re-dispatch with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered period before trusting the result."
-    # D1 (argv-bearer S2 plan): this site keeps the openssl form until the infra suite's tool census is edited; that edit is tracked with S4/S5 (#9757).
-    SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     # Forward the window lower bound + optional functionIDs scope as URL query params
     # (HMAC is over the empty GET body, so params don't affect the sig).
     # #6178 — PER-ARM fallback. This is the PRE-cutover dark-host detector: it runs
@@ -1560,7 +1593,7 @@ case "$OP" in
     fi
     DF_FNIDS="${CUTOVER_DOUBLEFIRE_FUNCTION_IDS:-}"
     # OPEN-TOPPED (no `until`) — same invariant as the op=verify arm.
-    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
+    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}${DF_PAGE_QS}"
     echo "::notice::doublefire-probe: scanning from=${DF_FROM} anchor_source=${DF_ANCHOR_SOURCE} function_ids=[${DF_FNIDS:-<all>}]"
     rm -f /tmp/doublefire-probe-body
     CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
@@ -1572,7 +1605,7 @@ case "$OP" in
       echo "::error::doublefire-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
     fi
     if ! echo "$BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
-      echo "::error::doublefire-probe did not return a {runs:[...]} object"; echo "$BODY"; exit 1
+      echo "::error::doublefire-probe did not return a {runs:[...]} object (first line of the response, bounded and scrubbed: $(_body_head "$BODY"))"; exit 1
     fi
     # #6178 — PAGE-OVERLAP DEDUPE. The probe cursor-paginates runs(orderBy: STARTED_AT ASC) and a
     # run can come back on two pages (cause unconfirmed). Measured 2026-09-15: every reported
@@ -1724,9 +1757,9 @@ case "$OP" in
       -H "Content-Type: application/json" \
       -d "$PAYLOAD" \
       "$BASE/inngest-rearm-reminders" || echo "000")
-    echo "re-arm response:"; cat /tmp/rearm-body 2>/dev/null || true; echo
+    echo "re-arm response (first line, bounded and scrubbed): $(_body_head "$(cat /tmp/rearm-body 2>/dev/null || true)")"
     if [[ "$CODE" != "200" ]]; then
-      echo "::error::re-arm returned HTTP $CODE (a non-200 includes the host script's loud abort — e.g. a 503 that is cutover-quiesce (INNGEST_CUTOVER_QUIESCE still set) OR backend-refused (the app's Inngest backend is not serving); the response above names which). The capture is retained."; exit 1
+      echo "::error::re-arm returned HTTP $CODE (a non-200 includes the host script's loud abort — e.g. a 503 that is cutover-quiesce (INNGEST_CUTOVER_QUIESCE still set) OR backend-refused (the app's Inngest backend is not serving); the first response line above names which). The capture is retained."; exit 1
     fi
     # ---- Partial-rearm reconciliation (P1-11): the host script's CombinedOutput
     # carries the canonical `inngest-rearm-reminders: re-armed=N failed=F held_back=H total=K`.
@@ -1759,12 +1792,12 @@ case "$OP" in
     if [[ "$RFAILED" -ne 0 ]]; then
       # Missing reminder_ids the host script named on each failure (ids only, no bodies).
       MISSING=$(printf '%s' "$RBODY" | sed -n 's/.*re-arm failed for reminder_id=\([^ )]*\).*/\1/p' | paste -sd, -)
-      echo "::error::re-arm PARTIAL (P1-11): Σcaptured(total)=$RTOTAL = rearmed=$REARMED + held_back=$RHELD + failed=$RFAILED — $RFAILED reminder(s) NOT re-armed. Missing reminder_id(s): [${MISSING:-<unparsed; see body above>}]. RETRY: the on-host capture is retained on any failure, so re-dispatch op=rearm to finish the residual set (the route recomputes dedup ids — no double-fire). Do NOT proceed to op=verify until failed=0."
+      echo "::error::re-arm PARTIAL (P1-11): Σcaptured(total)=$RTOTAL = rearmed=$REARMED + held_back=$RHELD + failed=$RFAILED — $RFAILED reminder(s) NOT re-armed. Missing reminder_id(s): [${MISSING:-<unparsed; read the inngest-rearm-reminders lines in Better Stack>}]. RETRY: the on-host capture is retained on any failure, so re-dispatch op=rearm to finish the residual set (the route recomputes dedup ids — no double-fire). Do NOT proceed to op=verify until failed=0."
       exit 1
     fi
     if [[ "$RHELD" -ne 0 ]]; then
       HELD_IDS=$(printf '%s\n' "$RBODY" | sed -n 's/^.*held back [0-9]\{1,\} reminder(s) due before the quiesce: \([^ ]*\).*$/\1/p' | tail -n1)
-      echo "::notice::re-arm held back $RHELD reminder(s) due before the quiesce (already fired on the web scheduler, not re-armed): [${HELD_IDS:-<unparsed; see body above>}]"
+      echo "::notice::re-arm held back $RHELD reminder(s) due before the quiesce (already fired on the web scheduler, not re-armed): [${HELD_IDS:-<unparsed; read the inngest-rearm-reminders lines in Better Stack>}]"
     fi
     echo "::notice::re-arm completed: rearmed=$REARMED held_back=$RHELD == Σcaptured(total)=$RTOTAL (failed=0; no partial-rearm delta, P1-11)"
     ;;
@@ -2073,8 +2106,8 @@ case "$OP" in
       # row (http_code=000, server_active!=active, registry_fns=__UNREADABLE__, cutover_flag pre-arm,
       # current boot) plus the flip FSM's ~1/min heartbeat on the SAME boot attesting the flag is
       # still pre-arm within 15 min. Silence is not darkness: every state in which darkness cannot
-      # be established refuses. The gate is tests/scripts/lib/inngest-host-dark-gate.sh's second
-      # entry point; its E-table names every lib token below and the remedy each one carries. One
+      # be established refuses. The gate is the one entry point of tests/scripts/lib/inngest-host-dark-gate.sh;
+      # its E-table names every lib token below and the remedy each one carries. One
       # refusal is this script's own and precedes the gate: `webhook_path` (below).
       # THE NON-200 MUST BE THE DEDICATED HOST'S FETCH FAILURE, NOT THE WEBHOOK PATH'S. The web-host
       # probe (inngest-registry-probe.sh) exits 1 — HTTP 500 through the hook's error passthrough —
@@ -2308,6 +2341,13 @@ case "$OP" in
     # cover the web host.
     GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     QUIESCE_PROBES="${CUTOVER_QUIESCE_PROBES:-3}"
+    # #6940 item 2 — now a mapped repo var (was deferred). A malformed count must not reach
+    # `seq`: an empty loop would read as "UNREADABLE" — a real fail-closed outcome but a
+    # misattributed cause. Fail LOUD (named ::error::) and fall back to the default.
+    if ! [[ "$QUIESCE_PROBES" =~ ^[0-9]+$ ]] || (( QUIESCE_PROBES < 1 || QUIESCE_PROBES > 20 )); then
+      echo "::error::CUTOVER_QUIESCE_PROBES='${QUIESCE_PROBES}' is not an integer in 1..20 — using the default 3"
+      QUIESCE_PROBES=3
+    fi
     STILL_RUNNING=0
     UNKNOWN_COUNT=0
     serving=false
@@ -2465,11 +2505,13 @@ case "$OP" in
 
     # G2 — read the two SOURCE values read-through from prd_terraform (existing DOPPLER_TOKEN),
     # masking EACH on its OWN capture line (security F7 — never batch; a mid-sequence set -e
-    # exit must not leave an unmasked captured value in scope before its mask lands).
+    # exit must not leave an unmasked captured value in scope before its mask lands). Every mask
+    # line is shape-checked FIRST (_mask_ok: no control character, so a value cannot end the directive
+    # and start a forged one) and keeps `-n`, so an empty read never prints a bare `::add-mask::`.
     PG=$(doppler secrets get INNGEST_POSTGRES_URI --plain 2>/dev/null || true)
-    printf '::add-mask::%s\n' "$PG"
+    [[ -n "$PG" ]] && _mask_ok "$PG" && printf '::add-mask::%s\n' "$PG"
     HB=$(doppler secrets get INNGEST_HEARTBEAT_URL --plain 2>/dev/null || true)
-    printf '::add-mask::%s\n' "$HB"
+    [[ -n "$HB" ]] && _mask_ok "$HB" && printf '::add-mask::%s\n' "$HB"
     if [[ -z "$PG" || -z "$HB" ]]; then
       echo "::error::op=arm: a source value (INNGEST_POSTGRES_URI / INNGEST_HEARTBEAT_URL) is empty or unreadable from prd_terraform via DOPPLER_TOKEN. Refusing to arm (no value echoed)."; exit 1
     fi
@@ -2485,7 +2527,7 @@ case "$OP" in
     # after a rollback. Equality is now informational. All comparisons value-silent (only
     # booleans/tokens reach the log).
     PG_DARK=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_POSTGRES_URI -p soleur-inngest -c prd --plain 2>/dev/null || true)
-    printf '::add-mask::%s\n' "$PG_DARK"
+    [[ -n "$PG_DARK" ]] && _mask_ok "$PG_DARK" && printf '::add-mask::%s\n' "$PG_DARK"
     # FAIL-CLOSED on an empty/failed dark read (observability F1 / user-impact / DI): the
     # config is proven readable by G1, so an empty PG_DARK is anomalous — most plausibly a
     # token-scope or wrong-project fault. Refusing costs one dispatch; proceeding on an
@@ -2556,9 +2598,9 @@ case "$OP" in
     PARITY_FAIL=0
     for CK in INNGEST_EVENT_KEY INNGEST_SIGNING_KEY; do
       APP_CK=$(doppler secrets get "$CK" --plain 2>/dev/null || true)
-      printf '::add-mask::%s\n' "$APP_CK"
+      [[ -n "$APP_CK" ]] && _mask_ok "$APP_CK" && printf '::add-mask::%s\n' "$APP_CK"
       HOST_CK=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get "$CK" -p soleur-inngest -c prd --plain 2>/dev/null || true)
-      printf '::add-mask::%s\n' "$HOST_CK"
+      [[ -n "$HOST_CK" ]] && _mask_ok "$HOST_CK" && printf '::add-mask::%s\n' "$HOST_CK"
       if [[ -z "$APP_CK" || -z "$HOST_CK" ]]; then
         echo "::error::op=arm: G3.5 channel-key parity FAIL-CLOSED — $CK unreadable (app$([[ -n "$APP_CK" ]] && echo '=set' || echo '=empty') host$([[ -n "$HOST_CK" ]] && echo '=set' || echo '=empty')). Cannot prove app<->host channel parity; refusing to arm (no value echoed)."; PARITY_FAIL=1; continue
       fi
@@ -2638,7 +2680,7 @@ case "$OP" in
       clear)
         echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal. Note the two signals cover DIFFERENT windows: H proves the host is audible NOW ($FLIP_LIVENESS_SINCE), which does not prove it was audible across the whole $FLUSH_LATCH_SINCE window L was read over — so an outage inside L's window could still have hidden a flush row." ;;
       latched)
-        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch records can never be deleted, but a SECOND flush can be deliberately authorized: op=reflush (#7777) appends a cleared_at authorization record to the latch ledger — the prior flushed_at is NOT erased — and the on-host FSM then re-enters the flush path and re-engages the latch. Use op=reflush when the operator intent is 'this host may be flushed again'; use op=luks-cutover for the ADDITIVE path that preserves the store, or the inngest-volume-recut apply target when the whole volume goes. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). CORRECTED #6894: `apply_target=inngest-volume-recut` DOES exist (it shipped in #7695) and removes the latch file WITH the volume — but it is refused while the store is populated, which is exactly the case a reflush exists to empty. If a recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
+        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch records can never be deleted, but a SECOND flush can be deliberately authorized: op=reflush (#7777) appends a cleared_at authorization record to the latch ledger — the prior flushed_at is NOT erased — and the on-host FSM then re-enters the flush path and re-engages the latch. Use op=reflush when the operator intent is 'this host may be flushed again'; use op=luks-cutover for the ADDITIVE path that preserves the store (no apply_target recuts the volume: inngest-volume-recut was retired by #8285). CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). If a recut has ALREADY happened (the volume was recreated outside this repo's dispatches), set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
       silent)
         echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-cutover-flip, stamped and ingested after its Hetzner created time; an earlier server with the same name does not count; the generation ::notice:: above gives the server's age, and any ::warning:: under it says whether it is young, clock-skewed or shipping malformed rows) within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND SYSLOG_IDENTIFIER=inngest-cutover-flip (the FSM's own emitter tag, #8846), so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) or that the shipper renamed or dropped the SYSLOG_IDENTIFIER field — check both before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
       unreadable)
@@ -2983,7 +3025,7 @@ case "$OP" in
     # double-fire) lies AFTER CUTOVER_WINDOW_UNTIL, as does every op=rollback-initiated
     # interval. Bounding the top reads like a symmetric tidy-up and would cut out the
     # highest-risk region. Do not "tidy" it.
-    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
+    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}${DF_PAGE_QS}"
     echo "::notice::2.6 doublefire-probe: scanning from=${DF_FROM} anchor_source=${DF_ANCHOR_SOURCE} function_ids=[${DF_FNIDS:-<all>}]"
     # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the doublefire transport curl.
     # The 120s outer budget > the probe's 90s in-script deadline + 8s per-page floor (SUM bound).
@@ -3112,16 +3154,23 @@ case "$OP" in
           DISC_LOOKBACK="${CUTOVER_DISCOVERY_LOOKBACK_S:-15897600}"
           if [[ "$DISC_LOOKBACK" =~ ^[1-9][0-9]*$ ]]; then
             DISC_FROM=$(date -u -d "@$(( $(date -u +%s) - DISC_LOOKBACK ))" +%Y-%m-%dT%H:%M:%SZ)
-            DISC_URL="$BASE/inngest-doublefire-probe?from=${DISC_FROM}&function_ids=${ZERO_RUN_IDS}"
+            DISC_URL="$BASE/inngest-doublefire-probe?from=${DISC_FROM}&function_ids=${ZERO_RUN_IDS}${DF_PAGE_QS}"
             echo "::notice::2.6 zero-run discovery: re-probing registry cron function(s) with zero runs in the verify window over a ${DISC_LOOKBACK}s (~2x max cron period) lookback — function_ids=[$ZERO_RUN_IDS]"
             rm -f /tmp/verify-zero-run
             # Credential headers ride curl's stdin config channel (--config -), never argv —
             # lint-shell-trace-credential-refusal's per-file baseline is shrink-only and this
             # call is a NEW site; /proc/<pid>/cmdline must not carry the secrets.
-            DISC_CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-zero-run -w '%{http_code}' \
-              -X GET \
-              --config - \
-              "$DISC_URL" < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") || echo "000")
+            # All three values are judged BEFORE the config is built: a quote or newline would end its `header = "..."` line and open a second config
+            # directive. A refusal is the advisory failure this probe already has (HTTP 000: one warning below, the verdict above STANDS), plus the marker.
+            if _bearer_ok "$SIG" && _bearer_ok "$CF_ACCESS_CLIENT_ID" && _bearer_ok "$CF_ACCESS_CLIENT_SECRET"; then
+              DISC_CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-zero-run -w '%{http_code}' \
+                -X GET \
+                --config - \
+                "$DISC_URL" < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") || echo "000")
+            else
+              echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
+              DISC_CODE="000"
+            fi
             DISC_BODY=$(cat /tmp/verify-zero-run 2>/dev/null || echo "")
             if [[ "$DISC_CODE" == "200" ]] && echo "$DISC_BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
               DISC_N=$(echo "$DISC_BODY" | jq '.runs | length')
@@ -3409,8 +3458,9 @@ case "$OP" in
     #     there is no dispatchable path forward. G1 accepts `done` ONLY, and `op=arm` is refused by
     #     its own G3.7 whenever the latch that drove the FSM to `aborted` is still recorded. That
     #     is pre-existing and correct — the latch is what stops a second FLUSHALL — but it means
-    #     recovery from `aborted` is a /mnt/data recut via the inngest-host-replace window, not a
-    #     dispatch. #7462 did not change it; it made the refusal happen before the prod writes.
+    #     recovery from `aborted` is not a dispatch of this op: no apply_target recuts /mnt/data
+    #     (inngest-volume-recut was retired by #8285) and the latch yields only to the authorized
+    #     flush op=reflush (#7777). #7462 did not change it; it made the refusal happen before the prod writes.
     if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
       echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing the post-flush re-entry write."; exit 1
     fi

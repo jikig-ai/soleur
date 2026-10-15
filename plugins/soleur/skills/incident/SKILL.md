@@ -279,17 +279,17 @@ gate exists to stop escaping — a leak with a longer lifetime than the session.
 
 The two checks below have **different** jobs, and conflating them overstates the second.
 
-The **bare anchor is the load-bearing control.** The loader substitutes `${CLAUDE_PLUGIN_ROOT}` with the installed root at delivery, *before* this text reaches bash — so at this site there is no shell variable for an ambient `direnv` / `.bashrc` / `postinstall` value to poison. Measured directly, with a decoy value simultaneously live in the executing subprocess and ignored: [`phase-1-measurement.md`](../../../../knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md) Arm 4.
+The **bare anchor is the load-bearing control.** The loader substitutes `${CLAUDE_PLUGIN_ROOT}` with the installed root at delivery, *before* this text reaches bash — so at this site there is no shell variable for an ambient `direnv` / `.bashrc` / `postinstall` value to poison. Measured directly, with a decoy value simultaneously live in the executing subprocess and ignored: [`phase-1-measurement.md`](../../../../knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md) Arm 4.
 
-The **identity preflight is defence-in-depth** — for surfaces where substitution does *not* govern and the environment does. It is a *shape* check: it cannot distinguish an installed plugin from a checkout carrying the same manifest, and ADR-179 §(a) measured a shape check passing while an attacker-chosen payload executed. It is retained because it is the only control on an unsubstituted surface; it is not what makes the bare anchor safe. The stronger "assert the root is outside the working tree" form was evaluated and **rejected** — it guards an operand the adversary cannot reach here, breaks dogfooding on any plain clone, and reintroduces `git rev-parse` into the very gate this PR de-git-roots: [`b1-disposition.md`](../../../../knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md).
+The **identity preflight is defence-in-depth** — for surfaces where substitution does *not* govern and the environment does. It is a *shape* check: it cannot distinguish an installed plugin from a checkout carrying the same manifest, and ADR-179 §(a) measured a shape check passing while an attacker-chosen payload executed. It is retained because it is the only control on an unsubstituted surface; it is not what makes the bare anchor safe. The stronger "assert the root is outside the working tree" form was evaluated and **rejected** — it guards an operand the adversary cannot reach here, breaks dogfooding on any plain clone, and reintroduces `git rev-parse` into the very gate this PR de-git-roots: [`b1-disposition.md`](../../../../knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md).
 
 Each halt emits a `SOLEUR_*` marker on stdout so a refusal is visible in telemetry rather than only to whoever was watching the terminal (`hr-observability-as-plan-quality-gate`; same pattern as `go.md`'s `SOLEUR_GIT_REPO_DIAG`). The operator guidance is **state-discriminating**: an empty root and a wrong root need different actions, and "re-run this skill" is not an action for either.
 
 ```bash
-DRAFT="$(mktemp)" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
+DRAFT="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
                        echo "incident: cannot allocate a draft file — stopping before any post-mortem text exists." >&2
                        exit 2; }
-trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+trap 'rm -f "$DRAFT"; rmdir "$(dirname "$DRAFT")" 2>/dev/null' EXIT INT TERM HUP
 
 # Write the drafted post-mortem into "$DRAFT" here — in THIS fence, before the gate below.
 # Use a QUOTED heredoc delimiter (`<<'PIR_EOF'`), which is load-bearing twice over: production

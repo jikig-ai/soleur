@@ -14,7 +14,8 @@
 # This test removes the live GitHub API from the assertion path by executing the
 # REAL `Check idempotency` run-block (extracted verbatim from the workflow) under
 # a deterministic `gh` stub, then statically asserts the create/finalise gating
-# wiring. T6b/T7b (#7256) pin the BLOCKED-release Slack notifier on the parsed workflow.
+# wiring. T6b/T7b (#7256) pin the BLOCKED-release Slack notifier on the parsed workflow;
+# T8/T8b/T8c (#7079) pin the Finalise step's orphaned-draft notes regeneration and its producers.
 # Run via:  bash plugins/soleur/test/reusable-release-idempotency.test.sh
 
 set -uo pipefail
@@ -51,10 +52,10 @@ trap 'rm -rf "$TMP"' EXIT
 if [[ -n "${REUSABLE_RELEASE_WF:-}" ]]; then
   echo "NOTE: REUSABLE_RELEASE_WF override active -> $WF"
 fi
-# T6b/T7b read the workflow through PyYAML; without it every helper call is an opaque
+# T6b/T7b/T8/T8b/T8c read the workflow through PyYAML; without it every helper call is an opaque
 # `<rc=1>` mismatch, so name the cause once instead.
 if ! python3 -I -c 'import yaml' 2>/dev/null; then
-  fail "PyYAML is required (python3 -c 'import yaml') for T6b/T7b"
+  fail "PyYAML is required (python3 -c 'import yaml') for T6b/T7b/T8"
   echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
   exit 1
 fi
@@ -135,7 +136,24 @@ case "$sub" in
     esac ;;
   edit)
     printf 'edit %s\n' "$*" >> "$GH_TRACE"
-    exit 0 ;;
+    # One argument per line: `$*` flattens argv, so a dropped quote around a path with a
+    # space is invisible there (T8 asserts on this file by position).
+    if [[ -n "${GH_ARGV:-}" ]]; then printf '%s\n' "$@" >> "$GH_ARGV"; fi
+    # Content of the --notes-file target AT CALL TIME: a recorded path alone cannot see a
+    # mutation that empties or rewrites the file between the blank test and this call.
+    if [[ -n "${GH_NOTES_SNAPSHOT:-}" ]]; then
+      prev=""
+      for a in "$@"; do
+        if [[ "$prev" == "--notes-file" ]]; then cat "$a" > "$GH_NOTES_SNAPSHOT" 2>/dev/null; fi
+        prev="$a"
+      done
+    fi
+    # MOCK_GH_EDIT_FAIL_NOTES=1 fails ONLY the call that carries --notes-file, so a fallback that
+    # retries without it (and succeeds) is distinguishable from a stub that fails everything.
+    if [[ "${MOCK_GH_EDIT_FAIL_NOTES:-0}" == 1 ]]; then
+      for a in "$@"; do if [[ "$a" == "--notes-file" ]]; then exit 1; fi; done
+    fi
+    exit "${MOCK_GH_EDIT_RC:-0}" ;;
   create)
     printf 'create %s\n' "$*" >> "$GH_TRACE"
     exit 0 ;;
@@ -747,12 +765,308 @@ STUB
   fi
 fi
 
-# Anti-vacuity floor (#7256): without it, deleting the T6b/T7b sections (or neutering the
+# ---------------------------------------------------------------------------
+# T8 (#7079 item 3): the Finalise step on the orphaned-draft self-heal path regenerates the
+# draft's release notes in the SAME `gh release edit` call that publishes it. Executes the
+# REAL parsed run block under the `gh` stub, `bash -eo pipefail` as CI runs it.
+# ---------------------------------------------------------------------------
+echo "T8: Finalise regenerates notes on the self-heal publish (#7079)"
+
+STEP_FINALISE="Finalise release (publish draft)"
+FINALISE_BLOCK="$TMP/finalise.sh"
+wf_step_field "$STEP_FINALISE" run > "$FINALISE_BLOCK" || : > "$FINALISE_BLOCK"
+
+if [[ -s "$FINALISE_BLOCK" ]] && grep -qF 'gh release edit' "$FINALISE_BLOCK"; then
+  pass "Finalise run block extracted and contains gh release edit"
+else
+  fail "could not extract a 'gh release edit' run block for '$STEP_FINALISE' from $WF"
+fi
+
+# run_finalise <draft_exists> <pr_number> <notes_file>
+# Optional env knobs (function-prefix assignments): FIN_EDIT_RC=<n> fails EVERY gh edit with rc n;
+# FIN_FAIL_NOTES=1 fails only the edit call that carries --notes-file.
+# argv one-per-line -> $TMP/argv-f, flattened trace -> $TMP/trace-f, stdout -> $TMP/out-f
+run_finalise() {
+  : > "$TMP/argv-f"; : > "$TMP/trace-f"; : > "$TMP/out-f"; rm -f "$TMP/snap-f"
+  ( cd "$REPO_ROOT" && \
+    GH_NOTES_SNAPSHOT="$TMP/snap-f" \
+    MOCK_GH_EDIT_RC="${FIN_EDIT_RC:-0}" \
+    MOCK_GH_EDIT_FAIL_NOTES="${FIN_FAIL_NOTES:-0}" \
+    TAG="web-v1.2.3" \
+    DRAFT_EXISTS="$1" \
+    PR_NUMBER="$2" \
+    RELEASE_NOTES_FILE="$3" \
+    GH_TRACE="$TMP/trace-f" \
+    GH_ARGV="$TMP/argv-f" \
+    MOCK_GH_STATE="draft" \
+    PATH="$GH_STUB_DIR:$PATH" \
+      bash -eo pipefail "$FINALISE_BLOCK" > "$TMP/out-f" 2>&1 )
+}
+# edit_calls: number of recorded `gh release edit` invocations
+edit_calls() { grep -c '^edit ' "$TMP/trace-f" || true; }
+# argv_joined: the recorded argv, one argument per line, joined with "|"
+argv_joined() { tr '\n' '|' < "$TMP/argv-f"; }
+
+NOTES_DIR="$TMP/notes dir"
+mkdir -p "$NOTES_DIR"
+REAL_NOTES="$NOTES_DIR/release-notes.md"
+printf '## Changelog\n\n- fixed the thing\n- and the other thing\n' > "$REAL_NOTES"
+
+# (a) self-heal + resolved PR + real notes: ONE call carrying --notes-file and --draft=false
+cp "$REAL_NOTES" "$TMP/real-notes.pristine"
+run_finalise "true" "123" "$REAL_NOTES"; rc_a=$?
+assert_eq "Finalise (a) draft+PR+notes -> exit 0, exactly one edit call, notes and publish in the SAME call" \
+  "$rc_a $(edit_calls) $(argv_joined)" \
+  "0 1 release|edit|web-v1.2.3|--notes-file|$REAL_NOTES|--draft=false|"
+if cmp -s "$TMP/snap-f" "$TMP/real-notes.pristine"; then
+  pass "Finalise (a) the notes file content at call time is the regenerated changelog"
+else
+  fail "Finalise (a) the content passed via --notes-file must equal the changelog (snapshot: $(head -c 120 "$TMP/snap-f" 2>/dev/null))"
+fi
+if grep -qF 'notes_regenerated=true' "$TMP/out-f" && ! grep -qF '::warning::' "$TMP/out-f"; then
+  pass "Finalise (a) logs notes_regenerated=true and no warning"
+else
+  fail "Finalise (a) must log notes_regenerated=true with no ::warning:: (stdout: $(head -c 200 "$TMP/out-f"))"
+fi
+
+# (b) self-heal but no PR resolved (workflow_dispatch / give_up): existing notes are kept
+run_finalise "true" "" "$REAL_NOTES"; rc_b=$?
+assert_eq "Finalise (b) draft, no PR -> plain --draft=false, one call" \
+  "$rc_b $(edit_calls) $(argv_joined)" "0 1 release|edit|web-v1.2.3|--draft=false|"
+if grep -qF 'EXISTING notes' "$TMP/out-f" && grep -qF '::warning::' "$TMP/out-f" && grep -qF 'PR_NUMBER=<empty>' "$TMP/out-f"; then
+  pass "Finalise (b) warns (EXISTING notes) and names the cause: PR_NUMBER=<empty>"
+else
+  fail "Finalise (b) must warn 'EXISTING notes' (stdout: $(head -c 200 "$TMP/out-f"))"
+fi
+
+# (c) self-heal + PR but the notes file is blank in each of three ways
+printf ' \n\t\n' > "$NOTES_DIR/whitespace.md"
+: > "$NOTES_DIR/empty.md"
+for variant in whitespace.md empty.md missing.md; do
+  run_finalise "true" "123" "$NOTES_DIR/$variant"; rc_c=$?
+  if [[ "$rc_c" == 0 && "$(edit_calls)" == 1 && "$(argv_joined)" == "release|edit|web-v1.2.3|--draft=false|" ]] \
+    && grep -qF 'EXISTING notes' "$TMP/out-f" && grep -qF 'PR_NUMBER=123' "$TMP/out-f"; then
+    pass "Finalise (c) blank notes ($variant) -> plain --draft=false, warns with PR_NUMBER=123, exit 0"
+  else
+    fail "Finalise (c) blank notes ($variant) must publish plain --draft=false with a warning (rc=$rc_c argv=$(argv_joined) stdout: $(head -c 200 "$TMP/out-f"))"
+  fi
+done
+
+# (d) fresh draft created this run (DRAFT_EXISTS=false): unchanged plain publish, no warning
+run_finalise "false" "123" "$REAL_NOTES"; rc_d=$?
+assert_eq "Finalise (d) new draft -> plain --draft=false, one call" \
+  "$rc_d $(edit_calls) $(argv_joined)" "0 1 release|edit|web-v1.2.3|--draft=false|"
+if ! grep -qF '::warning::' "$TMP/out-f" && ! grep -qF 'regenerated' "$TMP/out-f"; then
+  pass "Finalise (d) new draft logs no warning and no regeneration"
+else
+  fail "Finalise (d) must log neither a warning nor regeneration (stdout: $(head -c 200 "$TMP/out-f"))"
+fi
+
+# (e) must-PASS non-canonical notes: CRLF, unicode, a leading blank line -> still one call
+printf '\r\n\xc3\xa9\xe2\x9c\x93 caf\xc3\xa9 \r\n- item\r\n' > "$NOTES_DIR/crlf-unicode.md"
+run_finalise "true" "123" "$NOTES_DIR/crlf-unicode.md"; rc_e=$?
+assert_eq "Finalise (e) CRLF/unicode/leading-blank notes -> one call with the exact path" \
+  "$rc_e $(edit_calls) $(argv_joined)" \
+  "0 1 release|edit|web-v1.2.3|--notes-file|$NOTES_DIR/crlf-unicode.md|--draft=false|"
+
+# (e2) a changelog made ONLY of non-ASCII text is still a changelog: a [[:alnum:]] or [A-Za-z0-9]
+# blank test would treat it as blank and silently keep the stale notes.
+printf -- '- \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\n' > "$NOTES_DIR/cjk.md"
+printf -- '- \xf0\x9f\x9a\x80\n' > "$NOTES_DIR/emoji.md"
+for variant in cjk.md emoji.md; do
+  run_finalise "true" "123" "$NOTES_DIR/$variant"; rc_e2=$?
+  assert_eq "Finalise (e2) non-ASCII-only changelog ($variant) -> regenerated, one call" \
+    "$rc_e2 $(edit_calls) $(argv_joined)" \
+    "0 1 release|edit|web-v1.2.3|--notes-file|$NOTES_DIR/$variant|--draft=false|"
+done
+
+# (f) a failing `gh release edit` must fail the step and must not claim a publish, on both
+# branches: a trailing `|| true` / `|| echo` would otherwise announce a release that is
+# still an unpublished draft.
+assert_publish_fails() { # <draft_exists> <pr_number> <notes_file> <label>
+  FIN_EDIT_RC=1 run_finalise "$1" "$2" "$3"; local rc_f=$?
+  if [[ "$rc_f" != 0 ]] && [[ "$(edit_calls)" -ge 1 ]] && ! grep -qF 'Published release' "$TMP/out-f"; then
+    pass "Finalise (f) failing gh release edit fails the step and prints no 'Published' ($4)"
+  else
+    fail "Finalise (f) a failing gh release edit must fail the step ($4; rc=$rc_f stdout: $(head -c 160 "$TMP/out-f"))"
+  fi
+}
+assert_publish_fails "true" "123" "$REAL_NOTES" "regenerating branch"
+# A rejected --notes-file call must NOT be retried as a plain publish: that would ship the stale
+# notes and report success, hiding the failure the regeneration exists to remove.
+FIN_FAIL_NOTES=1 run_finalise "true" "123" "$REAL_NOTES"; rc_fn=$?
+assert_eq "Finalise (f) a rejected notes call fails the step (rc 1) with NO plain-publish fallback (one call)" \
+  "$rc_fn $(edit_calls)" "1 1"
+assert_publish_fails "true" "" "$REAL_NOTES" "no-PR draft branch"
+assert_publish_fails "false" "123" "$REAL_NOTES" "new-draft branch"
+
+# T8b: wiring. T8 sets env directly and cannot see a mis-wired `env:` line or a renamed step id.
+for pair in \
+  "DRAFT_EXISTS=\${{ steps.idempotency.outputs.draft_exists }}" \
+  "PR_NUMBER=\${{ steps.pr.outputs.number }}" \
+  "RELEASE_NOTES_FILE=\${{ steps.tmpfiles.outputs.release_notes }}"; do
+  key="${pair%%=*}"
+  assert_eq "Finalise env.$key wiring" \
+    "$(wf_step_field "$STEP_FINALISE" "env.$key" || echo "<rc=$?>")" "${pair#*=}"
+done
+assert_eq "Finalise env.TAG wiring" \
+  "$(wf_step_field "$STEP_FINALISE" "env.TAG" || echo "<rc=$?>")" "\${{ steps.version.outputs.tag }}"
+assert_eq "Finalise env key set is exactly the five wired keys" \
+  "$(wf_env_keys "$STEP_FINALISE" || echo "<rc=$?>")" "DRAFT_EXISTS,GH_TOKEN,PR_NUMBER,RELEASE_NOTES_FILE,TAG"
+# T8 runs the block under `bash -eo pipefail` (a superset of Actions' default `bash -e {0}`: a
+# pipefail-only failure would be a false red here, never a missed bug). A `shell:` override or
+# continue-on-error would change what Actions runs / whether a failed publish fails the job.
+assert_eq "Finalise carries no shell: override" \
+  "$(wf_step_field "$STEP_FINALISE" shell || echo "<rc=$?>")" "<rc=4>"
+assert_eq "Finalise carries no continue-on-error" \
+  "$(wf_step_field "$STEP_FINALISE" continue-on-error || echo "<rc=$?>")" "<rc=4>"
+assert_eq "Finalise: every steps.<id> it reads is defined by a step" \
+  "$(wf_ref_check "$STEP_FINALISE" || echo "<rc=$?>")" \
+  "refs=check_changed,create_release,idempotency,pr,tmpfiles,version;unresolved="
+
+# ---------------------------------------------------------------------------
+# T8c (#7079): the PRODUCERS of the three Finalise inputs. T8/T8b set env directly and pin the
+# consumer's env: literals, so they cannot see a producer that stops emitting a value (the
+# feature then publishes the stale notes forever, with every T8 row green). Executes the real
+# `Find merged PR` and `Extract changelog from PR body` blocks and feeds their products to Finalise.
+# ---------------------------------------------------------------------------
+echo "T8c: producers of PR_NUMBER and the notes file (#7079)"
+
+STEP_PR="Find merged PR"
+STEP_CHANGELOG="Extract changelog from PR body"
+assert_eq "Extract-changelog step runs for an orphaned draft (gated on exists, not draft_exists)" \
+  "$(wf_step_field "$STEP_CHANGELOG" if || echo "<rc=$?>")" \
+  "steps.check_changed.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'"
+assert_eq "Extract-changelog env.RELEASE_NOTES_FILE wiring" \
+  "$(wf_step_field "$STEP_CHANGELOG" "env.RELEASE_NOTES_FILE" || echo "<rc=$?>")" "\${{ steps.tmpfiles.outputs.release_notes }}"
+assert_eq "Extract-changelog env.BODY_FILE wiring" \
+  "$(wf_step_field "$STEP_CHANGELOG" "env.BODY_FILE" || echo "<rc=$?>")" "\${{ steps.tmpfiles.outputs.pr_body }}"
+
+assert_eq "Extract-changelog env.PR_TITLE wiring" \
+  "$(wf_step_field "$STEP_CHANGELOG" "env.PR_TITLE" || echo "<rc=$?>")" "\${{ steps.pr.outputs.title }}"
+assert_eq "Find-merged-PR env.PR_BODY_FILE wiring (producer and consumer share ONE tmpfile)" \
+  "$(wf_step_field "$STEP_PR" "env.PR_BODY_FILE" || echo "<rc=$?>")" "\${{ steps.tmpfiles.outputs.pr_body }}"
+
+# The tmpfiles step is the SOURCE of the notes/body paths: run the real block and require the output keys.
+TMPFILES_BLOCK="$TMP/tmpfiles-step.sh"
+wf_step_field "Create secure temp files" run > "$TMPFILES_BLOCK" || : > "$TMPFILES_BLOCK"
+: > "$TMP/tmpfiles-out"
+( cd "$REPO_ROOT" && TMPDIR="$TMP" GITHUB_OUTPUT="$TMP/tmpfiles-out" bash -eo pipefail "$TMPFILES_BLOCK" >/dev/null 2>&1 ); rc_t=$?
+assert_eq "tmpfiles step emits exactly the keys pr_body, release_notes and gh_err" \
+  "$rc_t $(sed -n 's/^\([a-z_]*\)=.*/\1/p' "$TMP/tmpfiles-out" | sort | tr '\n' ',')" "0 gh_err,pr_body,release_notes,"
+
+PR_BLOCK="$TMP/pr-step.sh"
+CL_BLOCK="$TMP/changelog-step.sh"
+wf_step_field "$STEP_PR" run > "$PR_BLOCK" || : > "$PR_BLOCK"
+wf_step_field "$STEP_CHANGELOG" run > "$CL_BLOCK" || : > "$CL_BLOCK"
+
+if [[ ! -s "$PR_BLOCK" || ! -s "$CL_BLOCK" ]]; then
+  fail "could not extract the '$STEP_PR' / '$STEP_CHANGELOG' run blocks from $WF"
+else
+  PR_STUB_DIR="$TMP/bin-pr"
+  mkdir -p "$PR_STUB_DIR"
+  # The stub answers ONLY the argv the real block is expected to send; anything else exits 64 and is
+  # logged to $PR_STUB_REFUSED (asserted empty below), so a mutated call line cannot read the right answer.
+  cat > "$PR_STUB_DIR/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  api)
+    if [[ "$*" != "api repos/o/r/commits/deadbeef/pulls --jq .[0].number // empty" ]]; then
+      echo "api: $*" >> "$PR_STUB_REFUSED"; exit 64
+    fi
+    printf '%s\n' "${MOCK_API_OUT:-}" ;;
+  pr)
+    if [[ "${2:-}" != view || "${4:-}" != --json || "${5:-}" != number,title,labels,body || "$#" -ne 5 ]]; then
+      echo "pr: $*" >> "$PR_STUB_REFUSED"; exit 64
+    fi
+    if [[ "${MOCK_PR_VIEW_FAIL:-0}" == 1 ]]; then exit 1; fi
+    printf '{"number":%s,"title":"Fix the thing","labels":[{"name":"semver:patch"}],"body":%s}\n' "$3" '"intro\n\n## Changelog\n\n- real changelog line\n\n## Other\n"' ;;
+  *) echo "other: $*" >> "$PR_STUB_REFUSED"; exit 64 ;;
+esac
+STUB
+  chmod +x "$PR_STUB_DIR/gh"
+
+  # run_pr_step <event_name> <api_out> [commit_msg] -> products in $TMP/pr-out (GITHUB_OUTPUT) and $TMP/pr-body
+  # The PR number the stubbed `gh pr view` echoes is whatever number the block resolved.
+  PR_STUB_REFUSED="$TMP/pr-stub-refused"; : > "$PR_STUB_REFUSED"
+  run_pr_step() {
+    : > "$TMP/pr-out"; : > "$TMP/pr-body"
+    ( cd "$REPO_ROOT" && \
+      EVENT_NAME="$1" MOCK_API_OUT="$2" COMMIT_MSG="${3:-chore: x (#999)}" \
+      PR_STUB_REFUSED="$PR_STUB_REFUSED" \
+      GITHUB_OUTPUT="$TMP/pr-out" GITHUB_REPOSITORY="o/r" GITHUB_SHA="deadbeef" \
+      PR_BODY_FILE="$TMP/pr-body" GH_TOKEN="stub" \
+      PATH="$PR_STUB_DIR:$PATH" \
+        bash -eo pipefail "$PR_BLOCK" > "$TMP/pr-stdout" 2>&1 )
+  }
+  pr_out_number() { sed -n 's/^number=//p' "$TMP/pr-out" | tail -1; }
+
+  pr_out_field() { sed -n "s/^$1=//p" "$TMP/pr-out" | tail -1; }
+
+  run_pr_step "push" "123"; rc_p=$?
+  assert_eq "Find-merged-PR emits number=123 for a resolved PR" "$rc_p $(pr_out_number)" "0 123"
+  run_pr_step "workflow_dispatch" ""; rc_p=$?
+  assert_eq "Find-merged-PR emits an EMPTY number on workflow_dispatch" "$rc_p [$(pr_out_number)]" "0 []"
+  # Commit-message fallback (the API lags the merge): number comes from the (#N) in the subject.
+  run_pr_step "push" "" "feat: thing (#456)"; rc_p=$?
+  assert_eq "Find-merged-PR falls back to the (#N) in the commit message" "$rc_p $(pr_out_number)" "0 456"
+  # give_up paths: every one must emit an EMPTY number (Finalise then keeps the existing notes).
+  run_pr_step "push" "" "chore: no pr reference here"; rc_p=$?
+  assert_eq "Find-merged-PR give_up (no PR anywhere) emits an EMPTY number" "$rc_p [$(pr_out_number)]" "0 []"
+  MOCK_PR_VIEW_FAIL=1 run_pr_step "push" "123"; rc_p=$?
+  assert_eq "Find-merged-PR give_up ('not a PR': gh pr view fails) emits an EMPTY number" "$rc_p [$(pr_out_number)]" "0 []"
+  run_pr_step "push" "abc" "chore: no pr reference here"; rc_p=$?
+  assert_eq "Find-merged-PR rejects a non-integer API answer and emits an EMPTY number" "$rc_p [$(pr_out_number)]" "0 []"
+  assert_eq "Find-merged-PR only ever sent the argv the stub models (no refused calls)" \
+    "$(wc -c < "$PR_STUB_REFUSED" | tr -d ' ')" "0"
+  # give_up end to end: the empty number the real step produced drives Finalise to the plain publish.
+  run_pr_step "push" "" "chore: no pr reference here"
+  run_finalise "true" "$(pr_out_number)" "$REAL_NOTES"; rc_gu=$?
+  assert_eq "Chain give_up -> Finalise: plain --draft=false (existing notes kept) with the EXISTING-notes warning" \
+    "$rc_gu $(edit_calls) $(argv_joined) $(grep -c 'EXISTING notes' "$TMP/out-f")" \
+    "0 1 release|edit|web-v1.2.3|--draft=false| 1"
+
+  # Chain: PR step -> changelog step -> Finalise, all real blocks; title/body come from the PR step's OWN outputs.
+  run_pr_step "push" "123"
+  CL_NOTES="$NOTES_DIR/chain-notes.md"
+  : > "$CL_NOTES"
+  ( cd "$REPO_ROOT" && PR_TITLE="$(pr_out_field title)" BODY_FILE="$(pr_out_field body_file)" RELEASE_NOTES_FILE="$CL_NOTES" \
+      bash -eo pipefail "$CL_BLOCK" > "$TMP/cl-stdout" 2>&1 ); rc_c=$?
+  printf -- '- real changelog line\n' > "$TMP/chain-expected"
+  if [[ "$rc_c" == 0 ]] && cmp -s "$CL_NOTES" "$TMP/chain-expected"; then
+    pass "Extract-changelog writes exactly the PR's changelog section (bytes) into RELEASE_NOTES_FILE"
+  else
+    fail "Extract-changelog must write exactly '- real changelog line' (rc=$rc_c got: $(head -c 120 "$CL_NOTES"))"
+  fi
+  run_finalise "true" "$(pr_out_number)" "$CL_NOTES"; rc_chain=$?
+  assert_eq "Chain PR-step -> changelog-step -> Finalise: one call, notes flagged, content sent" \
+    "$rc_chain $(edit_calls) $(argv_joined)" \
+    "0 1 release|edit|web-v1.2.3|--notes-file|$CL_NOTES|--draft=false|"
+  if cmp -s "$TMP/snap-f" "$TMP/chain-expected"; then
+    pass "Chain: the content handed to gh release edit equals the changelog section (bytes)"
+  else
+    fail "Chain: the content sent must equal '- real changelog line' (snapshot: $(head -c 120 "$TMP/snap-f" 2>/dev/null))"
+  fi
+  # The title fallback: a PR with no `## Changelog` section yields '- <PR title>' (never blank).
+  run_pr_step "push" "123"
+  printf 'no changelog section here\n' > "$TMP/pr-body"
+  : > "$CL_NOTES"
+  ( cd "$REPO_ROOT" && PR_TITLE="$(pr_out_field title)" BODY_FILE="$TMP/pr-body" RELEASE_NOTES_FILE="$CL_NOTES" \
+      bash -eo pipefail "$CL_BLOCK" > "$TMP/cl-stdout" 2>&1 ); rc_c2=$?
+  printf -- '- Fix the thing\n' > "$TMP/chain-expected2"
+  if [[ "$rc_c2" == 0 ]] && cmp -s "$CL_NOTES" "$TMP/chain-expected2"; then
+    pass "Extract-changelog falls back to '- <PR title>' (title from the PR step's own output) when there is no changelog section"
+  else
+    fail "Extract-changelog title fallback must write '- Fix the thing' (rc=$rc_c2 got: $(head -c 120 "$CL_NOTES"))"
+  fi
+fi
+
+# Anti-vacuity floor (#7256): without it, deleting the T6b/T7b/T8 sections (or neutering the
 # assertion helpers) leaves a suite that prints `passed` and exits 0. Reported by printf +
 # exit, never through the fail() it backstops. Ratchet MIN_ASSERTIONS in the same commit as
 # any added assertion; slack in a floor is attack budget.
 ASSERTED=$((PASS + FAIL))
-MIN_ASSERTIONS=77
+MIN_ASSERTIONS=121
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran, expected >= %d - the suite was stranded, not clean.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2

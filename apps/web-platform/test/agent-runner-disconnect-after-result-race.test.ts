@@ -1,7 +1,7 @@
 /**
  * #3463 — disconnect-after-result race regression gate.
  *
- * Plan: knowledge-base/project/plans/2026-05-07-feat-disconnect-race-and-incoming-types-capability-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-07-feat-disconnect-race-and-incoming-types-capability-plan.md
  *
  * Scenario: the result branch writes `status='waiting_for_user'`. The WS
  * connection dies in the millisecond window between that write and the

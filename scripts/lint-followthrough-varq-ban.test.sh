@@ -33,10 +33,47 @@
 #   R4-M2h must-PASS: the lib-routed compliant shape                 -> exit 0 (widening counterweight)
 #   R4-M3  DISPATCH: guard COPY with the rule-4 grep deleted         -> exit 0 on the M1 fixture
 #   R4-M4  guard COPY with rule 4's file count forced to 0           -> exit 2, diagnostic names rule 4
+#
 #   R2-H2  must-PASS non-canonical: the NEW name + a Better Stack  -> exit 0
 #          name + a comment about "the sweeper's Sentry secret"
 #   R2-H3  must-PASS: an EMPTY sandbox dir                         -> exit 0 (pins the sandbox floor exemption)
 #   R2-H4  must-PASS: the live tree, counts parsed                 -> rule 1's N >= 10, rule 2's count >= N
+#
+# RULE 5 (#9818) -- the author-association SPELLING ban, plus the two rule-4 widenings it rides with:
+#   R5-M1  a lib-sourcing probe that ALSO names `.author_association` on code  -> exit 1 at the TRUE line, `rule 5:`
+#   R5-M2  the camelCase `.authorAssociation` spelling                          -> exit 1, `rule 5:`
+#   R5-M3  must-PASS: the word only in WHOLE-LINE comments                      -> exit 0
+#   R5-M4  CHARACTERIZATION: a trailing `# why` mention on an executable line   -> exit 1 (a documented limitation)
+#   R5-M5  must-PASS: the word in a `.test.sh` fixture                          -> exit 0 (exempt)
+#   R5-M6  a second probe after a compliant first                               -> cited (the walk does not stop)
+#   R5-M7  DISPATCH: guard COPY with the rule-5 grep deleted                    -> exit 0 on the M1 fixture
+#   R5-M8  guard COPY with rule 5's counter forced to 0, production run        -> exit 2 naming rule 5 (rule 1's floor did NOT fire)
+#   R5-M9  regex neutered: canary intact -> exit 2; canary deleted too -> M1 exits 0 (the canary is not dead code)
+#   R5-M10 an UNFILTERED marker reader (issues/N/comments + S4-ACTIVATED, no lib) -> exit 1, `rule 4:` (the VERDICT_BRANCH widening)
+#   R5-M11 DISPATCH: guard COPY with VERDICT_BRANCH reverted to RESULT:        -> exit 0 on the M10 fixture
+#   R5-M12 DISPATCH: guard COPY with LIB_CALL reverted to the bodies view       -> the denominator row reads 0
+#   R5-H1  must-PASS non-canonical: a probe that calls only `trusted_verdict_comments` -> exit 0, `checked 1 comment-reading probe(s)`
+#   R5-H2  the live tree: zero rule-5 hits, and the walk examined at least the floor
+#   R5-N1  one fixture per old soak-marker name (DEACTIVATED, CONFIRMED, EXIT-CENSUS): exit 1 `rule 4:`; the guard COPY with
+#          VERDICT_BRANCH set to the pre-round-4 four-name list minus that name -> exit 0 (the marker FAMILY is the mechanism)
+#   R5-N2  `S12-ACTIVATED` (two digits): exit 1 `rule 4:`; the COPY with a one-digit `S[0-9]-` family -> exit 0
+#   R5-N3  must-NOT-trip: a bare `ACTIVATED:` line (no `S<n>-` prefix) -> exit 0; the COPY whose prefix is optional -> exit 1
+#   R5-N4  a rule-5 offender NESTED in a subdirectory -> exit 1 `rule 5:`; the COPY with the shared probe walk at -maxdepth 1 -> exit 0
+#   R5-N5  the same for RULE 4's nested offender (both rules share the one probe-set walk since round 4)
+#   E1     (round 4) ONE sandbox, one unfiltered reader per READS_COMMENTS spelling (`--json body,comments`, `--json title,comments`,
+#          `--json=comments`, `gh issue view -c`, `.comments | ...`, `issues/N/timeline`, GraphQL `comments(first:`, `in:comments`),
+#          branching on `S4-GO` / `S2-ARMED:` (markers outside the old list): each cited at the read line; one guard COPY per alternative
+#          (reverted to its pre-round-4 text or dropped) frees exactly its readers while the control still trips; the four-name VERDICT_BRANCH
+#          frees the new markers; twins: the same spellings with no marker branch are exit 0 and COUNTED in the denominator, and a lib-routed
+#          probe quoting each spelling only in a comment is exit 0; CHARACTERIZATION: `S2-armed:` (lower case) and `watchdog:restart` stay uncovered
+#   E2     (round 4) rules 1/3/4/5 walk the probe set: any depth, `.sh` name OR executable OR `#!` first line, `*.test.sh` out. One sandbox
+#          with a nested no-shebang `.sh`, a nested rule-3 offender, an extensionless executable, a non-executable shebang file, a data file
+#          decoy and a `.test.sh` decoy; one guard COPY per predicate clause / the walk depth / the test exclusion frees exactly its file
+#   E1b    (round 5) `gh issue view 1 -c` at END OF LINE trips rule 4 (the COPY without the `|$` branch frees it); must-NOT-trip: `--json title | jq .comments_count`
+#          (the pipe stops --json pairing with `comments`; the COPY with `--json[^#]*comments` trips it); CHARACTERIZATION: `S3-PR9:` and
+#          `S2-EXIT_CENSUS:` readers trip (the VERDICT_BRANCH tail widening is a textual no-op: no mutant exists)
+#   E2b    (round 5) must-NOT-trip: a non-executable data file whose first line is `# note: author_association` (not `#!`) is not walked; the COPY
+#          whose shebang clause is `'#'*` walks it and rule 5 fires
 #
 # ADR-193 floor: `asserted` moves at the CALL SITE (check()), never inside pass()/fail(); the
 # conservation identity and MIN_ASSERTIONS are reported with printf + exit 1, never via fail().
@@ -615,7 +652,7 @@ EOF
 run_guard "$d"
 (( GUARD_RC == 0 )); check $? "R4-M2b must-PASS: a comment read with no RESULT: verdict branch does not fire" "R4-M2b expected exit 0, got $GUARD_RC: $GUARD_OUT"
 
-# --- R4-M2c: an inline authorAssociation filter is SUBSUMED, with no rule of its own ---
+# --- R4-M2c: an inline authorAssociation filter is a rule-4 violation (and, since #9818, a rule-5 one) ---
 d=$(mkcase r4_m2c)
 cat >"$d/probe-inline-filter.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -625,7 +662,8 @@ grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
 exit 1
 EOF
 run_guard "$d"
-(( GUARD_RC == 1 )); check $? "R4-M2c an inline authorAssociation filter still fires (the old ban is subsumed)" "R4-M2c expected exit 1, got $GUARD_RC: $GUARD_OUT"
+(( GUARD_RC == 1 )); check $? "R4-M2c an inline authorAssociation filter still fires (rule 5 fires too, so rule 4 is asserted by its own prefix)" "R4-M2c expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'rule 4:' <<<"$GUARD_OUT"; check $? "R4-M2c the inline filter is ALSO a rule-4 violation (a dead rule 4 must not hide behind rule 5)" "R4-M2c no 'rule 4:' citation: $GUARD_OUT"
 
 # --- R4-M2d: SOURCING the lib and then ignoring it must still fire (the wire, not the endpoint) ---
 # Anchoring on the filename rather than the CALL accepted exactly this: both endpoints present,
@@ -747,6 +785,451 @@ else
   grep -q 'rule 4 (trusted-verdict obligation)' <<<"$R4F_OUT"; check $? "R4-M4 the floor diagnostic names RULE 4 specifically" "R4-M4 diagnostic does not name rule 4: $R4F_OUT"
 fi
 
+# =====================================================================================================
+# RULE 5 (#9818) -- the author-association spelling ban, and the rule-4 widenings (VERDICT_BRANCH, LIB_CALL).
+# =====================================================================================================
+# R5-M1: the PRECONDITION is satisfied (the probe sources the lib and calls the view) AND the property is
+# violated (it also names the field on an executable line). Rule 4 alone would not fire: no raw comment read.
+d=$(mkcase r5_m1)
+cat >"$d/probe-lib-plus-assoc.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+# a comment line so the offender is NOT line 4
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+who=$(gh api repos/o/r/issues/1 --jq '.author_association')
+trusted_verdict_comments 1 >/dev/null
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R5-M1 a lib-sourcing probe that also names .author_association on code -> exit 1" "R5-M1 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-lib-plus-assoc.sh:5: rule 5:' <<<"$GUARD_OUT"; check $? "R5-M1 cites the offender at its TRUE line with the rule 5 prefix" "R5-M1 mis-cited: $GUARD_OUT"
+grep -q 'trusted-verdict.sh' <<<"$GUARD_OUT" && grep -q '#6617' <<<"$GUARD_OUT"; check $? "R5-M1 the diagnostic names the permission lib and the #6617 measurement" "R5-M1 diagnostic lacks the lib or #6617: $GUARD_OUT"
+R5_M1_DIR="$d"
+
+# R5-M2: the GraphQL camelCase spelling.
+d=$(mkcase r5_m2)
+cat >"$d/probe-camel.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+x=$(gh issue view 1 --json comments --jq '.comments[0].authorAssociation')
+trusted_verdict_comments 1 >/dev/null
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R5-M2 the camelCase .authorAssociation spelling -> exit 1" "R5-M2 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-camel.sh:4: rule 5:' <<<"$GUARD_OUT"; check $? "R5-M2 cites the camelCase line with the rule 5 prefix" "R5-M2 mis-cited: $GUARD_OUT"
+
+# R5-M3 (must-PASS): the word only in WHOLE-LINE comments, both spellings, as every migrated probe header carries it.
+d=$(mkcase r5_m3)
+cat >"$d/probe-header-only.sh" <<'EOF'
+#!/usr/bin/env bash
+# Trust is resolved through the lib, NOT from author_association / authorAssociation: that field is
+# computed against the READING token's visibility (#6617, #8389).
+set -uo pipefail
+    # an indented whole-line comment naming authorAssociation is also stripped
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+trusted_verdict_comments 1 >/dev/null
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R5-M3 must-PASS: the word only in whole-line comments does not fire" "R5-M3 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# R5-M4 CHARACTERIZATION (a documented false positive, pinned on purpose): a TRAILING comment on an executable line fires.
+d=$(mkcase r5_m4)
+cat >"$d/probe-trailing.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+echo ok  # not authorAssociation, see the lib
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R5-M4 CHARACTERIZATION: a trailing '# why' mention on an executable line fires (the strip is whole-line only; breaks on purpose if that is ever fixed)" "R5-M4 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# R5-M5 (must-PASS): a .test.sh fixture legitimately carries the field as a decoy.
+d=$(mkcase r5_m5)
+cat >"$d/probe-fixture.test.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '{"authorAssociation":"CONTRIBUTOR","author_association":"CONTRIBUTOR"}\n'
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R5-M5 must-PASS: the word in a .test.sh fixture is exempt" "R5-M5 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# R5-M6: a second offender after a compliant first is cited too (the walk does not stop at the first file).
+d=$(mkcase r5_m6)
+printf '#!/usr/bin/env bash\necho ok\n' >"$d/a-compliant.sh"
+printf '#!/usr/bin/env bash\nx=1\ny=.author_association\n' >"$d/b-bad.sh"
+printf '#!/usr/bin/env bash\nx=1\nz=.authorAssociation\n' >"$d/c-bad.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )) && grep -q 'b-bad.sh:3: rule 5:' <<<"$GUARD_OUT" && grep -q 'c-bad.sh:3: rule 5:' <<<"$GUARD_OUT"; check $? "R5-M6 both offenders after a compliant first file are cited" "R5-M6 expected both b-bad and c-bad cited, got rc=$GUARD_RC: $GUARD_OUT"
+
+# R5-M7 DISPATCH: deleting the rule-5 grep makes the M1 fixture pass -- that grep IS the mechanism.
+R5_GUARD="$SANDBOX/guard-no-rule5-grep.sh"
+# neutered, not deleted: the grep's own assignment is the only thing that sets hits5, so a deleted line would crash the guard under `set -u`, which proves nothing
+sed '/# rule5-grep$/s/hits5="$(.*)"  # rule5-grep$/hits5=""  # rule5-grep/' "$GUARD" >"$R5_GUARD"
+if diff -q "$GUARD" "$R5_GUARD" >/dev/null; then
+  check 1 "" "R5-M7 DISPATCH: the rule5-grep marker is absent from the guard -- the mutation did not land and the row is vacuous"
+else
+  R5_OUT="$(bash "$R5_GUARD" "$R5_M1_DIR" 2>&1)"; R5_RC=$?
+  (( R5_RC == 0 )); check $? "R5-M7 DISPATCH: deleting the rule-5 grep makes the M1 fixture pass" "R5-M7 expected exit 0 from the gutted guard, got $R5_RC: $R5_OUT"
+fi
+
+# R5-M8: rule 5's OWN floor on its OWN counter; rule 1's floor must NOT be the one that fires.
+R5F_GUARD="$SANDBOX/guard-rule5-zero.sh"
+sed 's|^  scanned_rule5=\$((scanned_rule5 + 1)).*# rule5-count$|  scanned_rule5=$((scanned_rule5 + 0))  # rule5-count|' "$GUARD" >"$R5F_GUARD"
+if diff -q "$GUARD" "$R5F_GUARD" >/dev/null; then
+  check 1 "" "R5-M8 the rule5-count marker is absent -- the mutation did not land and the row is vacuous"
+else
+  R5F_OUT="$(bash "$R5F_GUARD" 2>&1)"; R5F_RC=$?
+  (( R5F_RC == 2 )); check $? "R5-M8 rule 5's own floor breach -> exit 2" "R5-M8 expected exit 2, got $R5F_RC: $R5F_OUT"
+  grep -q 'rule 5 (author-association ban)' <<<"$R5F_OUT"; check $? "R5-M8 the floor diagnostic names RULE 5 specifically" "R5-M8 diagnostic does not name rule 5: $R5F_OUT"
+  ! grep -q 'expected the full set' <<<"$R5F_OUT"; check $? "R5-M8 rule 1's floor did NOT fire first (rule 5's counter is its own)" "R5-M8 rule 1's floor message appeared: $R5F_OUT"
+fi
+
+# R5-M9: the regex canary. Neutered regex with the canary INTACT -> exit 2; neutered regex with the canary deleted -> the M1 fixture
+# passes, which proves the canary was the only thing standing between a neutered pattern and a silent clean.
+R5N_GUARD="$SANDBOX/guard-rule5-neutered.sh"
+sed "s|^RULE5_RE='author_?association'.*# rule5-re\$|RULE5_RE='zzneverzz'  # rule5-re|" "$GUARD" >"$R5N_GUARD"
+R5NC_GUARD="$SANDBOX/guard-rule5-neutered-nocanary.sh"
+sed '/# rule5-canary/d' "$R5N_GUARD" >"$R5NC_GUARD"
+if diff -q "$GUARD" "$R5N_GUARD" >/dev/null || diff -q "$R5N_GUARD" "$R5NC_GUARD" >/dev/null; then
+  check 1 "" "R5-M9 the rule5-re / rule5-canary markers are absent -- the mutation did not land and the row is vacuous"
+else
+  R5N_OUT="$(bash "$R5N_GUARD" "$R5_M1_DIR" 2>&1)"; R5N_RC=$?
+  (( R5N_RC == 2 )); check $? "R5-M9 a neutered regex with the canary intact -> exit 2" "R5-M9 expected exit 2, got $R5N_RC: $R5N_OUT"
+  grep -q 'rule 5 (author-association ban) regex canary' <<<"$R5N_OUT"; check $? "R5-M9 the canary diagnostic names rule 5" "R5-M9 canary message missing: $R5N_OUT"
+  R5NC_OUT="$(bash "$R5NC_GUARD" "$R5_M1_DIR" 2>&1)"; R5NC_RC=$?
+  (( R5NC_RC == 0 )); check $? "R5-M9 the same neutered regex WITHOUT the canary reports clean over the M1 fixture (the canary is not dead code)" "R5-M9 expected exit 0 from the canary-less neutered guard, got $R5NC_RC: $R5NC_OUT"
+fi
+
+# R5-M10: an UNFILTERED marker reader: a REST comments read, branching on an S4-ACTIVATED marker, no lib, and no
+# association spelling -- so it passed rules 4 and 5 until VERDICT_BRANCH learned the marker names.
+d=$(mkcase r5_m10)
+cat >"$d/probe-marker-unfiltered.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+bodies=$(gh api repos/o/r/issues/1/comments --jq '.[].body')
+grep -qE '^S4-ACTIVATED: ' <<<"$bodies" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R5-M10 an unfiltered S4-ACTIVATED marker reader -> exit 1" "R5-M10 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-marker-unfiltered.sh:3: rule 4:' <<<"$GUARD_OUT"; check $? "R5-M10 it is a rule-4 violation at the comment-read line" "R5-M10 no rule 4 citation: $GUARD_OUT"
+R5_M10_DIR="$d"
+
+# R5-M11 DISPATCH: VERDICT_BRANCH reverted to RESULT: -> the M10 fixture passes (the widening is the mechanism).
+R5V_GUARD="$SANDBOX/guard-verdict-branch-reverted.sh"
+sed "s#^VERDICT_BRANCH=.*#VERDICT_BRANCH='RESULT:'#" "$GUARD" >"$R5V_GUARD"
+if diff -q "$GUARD" "$R5V_GUARD" >/dev/null; then
+  check 1 "" "R5-M11 the VERDICT_BRANCH line is absent -- the mutation did not land and the row is vacuous"
+else
+  R5V_OUT="$(bash "$R5V_GUARD" "$R5_M10_DIR" 2>&1)"; R5V_RC=$?
+  (( R5V_RC == 0 )); check $? "R5-M11 DISPATCH: reverting VERDICT_BRANCH to RESULT: lets the unfiltered marker reader through" "R5-M11 expected exit 0 from the reverted guard, got $R5V_RC: $R5V_OUT"
+fi
+
+# R5-H1 (must-PASS, non-canonical): different variable names, only the NEW view, a marker branch; compliant. The summary must COUNT it
+# as a comment-reading probe (the denominator must not shrink when a probe migrates onto trusted_verdict_comments).
+d=$(mkcase r5_h1)
+cat >"$d/probe-marker-compliant.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+recs=$(trusted_verdict_comments 77 jikig-ai/soleur) || exit 3
+armed=$(jq -r '.b' <<<"$recs" | grep -cE '^S9-ACTIVATED: ')
+(( armed > 0 )) && exit 0
+exit 2
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R5-H1 must-PASS: a probe that calls only trusted_verdict_comments is compliant" "R5-H1 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+grep -q 'checked 1 comment-reading probe(s)' <<<"$GUARD_OUT"; check $? "R5-H1 it is COUNTED in rule 4's denominator (hermetic: 1 in a sandbox of 1)" "R5-H1 denominator did not count the probe: $GUARD_OUT"
+R5_H1_DIR="$d"
+
+# R5-M12 DISPATCH: LIB_CALL reverted to the bodies view only -> the same sandbox reads 0 comment-reading probes.
+R5L_GUARD="$SANDBOX/guard-lib-call-reverted.sh"
+sed "s#^LIB_CALL=.*#LIB_CALL='trusted_verdict_bodies'#" "$GUARD" >"$R5L_GUARD"
+if diff -q "$GUARD" "$R5L_GUARD" >/dev/null; then
+  check 1 "" "R5-M12 the LIB_CALL line is absent -- the mutation did not land and the row is vacuous"
+else
+  R5L_OUT="$(bash "$R5L_GUARD" "$R5_H1_DIR" 2>&1)"
+  grep -q 'checked 0 comment-reading probe(s)' <<<"$R5L_OUT"; check $? "R5-M12 DISPATCH: reverting LIB_CALL drops the migrated probe from the denominator (the widening is the mechanism)" "R5-M12 expected 'checked 0', got: $R5L_OUT"
+fi
+
+# --- R5-N1: one fixture per soak-marker arm of VERDICT_BRANCH. Each fixture branches on ONE marker name and nothing
+# else (no RESULT:, no ACTIVATED), so dropping that arm from a COPY of the guard is the only thing that lets it through.
+R5N_OLD_ARMS='ACTIVATED DEACTIVATED CONFIRMED EXIT-CENSUS'
+r5n_arm() { # <marker> <arm to drop>
+  local marker="$1" arm="$2" dd g o rc rest a
+  dd=$(mkcase "r5_n1_$arm")
+  printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+    "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" \
+    "grep -qE '^$marker: ' <<<\"\$bodies\" && exit 0" 'exit 1' >"$dd/probe-arm.sh"
+  run_guard "$dd"
+  (( GUARD_RC == 1 )) && grep -q 'probe-arm.sh:3: rule 4:' <<<"$GUARD_OUT"; check $? "R5-N1 an unfiltered $marker reader -> exit 1, a rule-4 citation at the comment-read line" "R5-N1 ($marker) expected exit 1 with a rule 4 citation, got $GUARD_RC: $GUARD_OUT"
+  g="$SANDBOX/guard-no-arm-$arm.sh"
+  # content anchor: the whole VERDICT_BRANCH line becomes the pre-round-4 four-name list minus this arm
+  rest=""; for a in $R5N_OLD_ARMS; do [[ "$a" == "$arm" ]] || rest="${rest:+$rest|}$a"; done
+  sed "s#^VERDICT_BRANCH=.*#VERDICT_BRANCH='RESULT:|S[0-9]+-($rest)'#" "$GUARD" >"$g"
+  if diff -q "$GUARD" "$g" >/dev/null; then
+    check 1 "" "R5-N1 DISPATCH ($arm): the VERDICT_BRANCH line is absent -- the mutation did not land and the row is vacuous"
+  else
+    o="$(bash "$g" "$dd" 2>&1)"; rc=$?
+    (( rc == 0 )); check $? "R5-N1 DISPATCH: the pre-round-4 four-name list minus $arm lets the $marker reader through (the marker family is the mechanism)" "R5-N1 ($arm) expected exit 0 from the arm-less guard, got $rc: $o"
+  fi
+}
+r5n_arm S4-DEACTIVATED DEACTIVATED
+r5n_arm S4-CONFIRMED CONFIRMED
+r5n_arm S4-EXIT-CENSUS EXIT-CENSUS
+
+# --- R5-N2: the marker family number is ONE OR MORE digits (`S12-`), not one.
+d=$(mkcase r5_n2)
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+  "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" \
+  "grep -qE '^S12-ACTIVATED: ' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-two-digit.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )) && grep -q 'probe-two-digit.sh:3: rule 4:' <<<"$GUARD_OUT"; check $? "R5-N2 an unfiltered S12-ACTIVATED reader -> exit 1 (rule 4)" "R5-N2 expected exit 1 with a rule 4 citation, got $GUARD_RC: $GUARD_OUT"
+R5N2_GUARD="$SANDBOX/guard-one-digit.sh"
+sed "s#^VERDICT_BRANCH=.*#VERDICT_BRANCH='RESULT:|S[0-9]-[A-Z][A-Z-]*:?'#" "$GUARD" >"$R5N2_GUARD"
+if diff -q "$GUARD" "$R5N2_GUARD" >/dev/null; then
+  check 1 "" "R5-N2 DISPATCH: the S[0-9]+ anchor is absent from VERDICT_BRANCH -- the mutation did not land and the row is vacuous"
+else
+  R5N2_OUT="$(bash "$R5N2_GUARD" "$d" 2>&1)"; R5N2_RC=$?
+  (( R5N2_RC == 0 )); check $? "R5-N2 DISPATCH: narrowing S[0-9]+ to S[0-9] lets the two-digit marker reader through" "R5-N2 expected exit 0 from the one-digit guard, got $R5N2_RC: $R5N2_OUT"
+fi
+
+# --- R5-N3 (must-NOT-trip): a bare `ACTIVATED:` line with no `S<n>-` prefix is not a soak marker. The same read, branching on a
+# word the repository uses for unrelated things, must stay quiet; the mutation that drops the prefix requirement must trip it.
+d=$(mkcase r5_n3)
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+  "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" \
+  "grep -qE '^ACTIVATED: ' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-bare-word.sh"
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R5-N3 must-NOT-trip: a bare ACTIVATED: line (no S<n>- prefix) is not a soak marker" "R5-N3 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+R5N3_GUARD="$SANDBOX/guard-no-prefix.sh"
+sed "s#^VERDICT_BRANCH=.*#VERDICT_BRANCH='RESULT:|(S[0-9]+-)?[A-Z][A-Z-]*:?'#" "$GUARD" >"$R5N3_GUARD"
+if diff -q "$GUARD" "$R5N3_GUARD" >/dev/null; then
+  check 1 "" "R5-N3 DISPATCH: the S<n>- prefix is absent from VERDICT_BRANCH -- the mutation did not land and the row is vacuous"
+else
+  R5N3_OUT="$(bash "$R5N3_GUARD" "$d" 2>&1)"; R5N3_RC=$?
+  (( R5N3_RC == 1 )); check $? "R5-N3 DISPATCH: dropping the S<n>- prefix requirement makes the bare-word reader trip (the prefix is what keeps it quiet)" "R5-N3 expected exit 1 from the prefix-less guard, got $R5N3_RC: $R5N3_OUT"
+fi
+
+# --- R5-N4: rule 5's walk is RECURSIVE. An offender in a subdirectory of the probe dir is cited; a walk pinned to -maxdepth 1 misses it.
+d=$(mkcase r5_n4)
+mkdir -p "$d/nested/deeper"
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+  "who=\$(gh api repos/o/r/issues/1 --jq '.author_association')" >"$d/nested/deeper/probe-nested-assoc.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )) && grep -q 'probe-nested-assoc.sh:3: rule 5:' <<<"$GUARD_OUT"; check $? "R5-N4 a rule-5 offender two directories down -> exit 1 with a rule 5 citation" "R5-N4 expected exit 1 with a rule 5 citation, got $GUARD_RC: $GUARD_OUT"
+R5N4_GUARD="$SANDBOX/guard-rule5-flat.sh"
+sed '/# probe-walk$/s/find "\$TARGET_DIR" -type f/find "$TARGET_DIR" -maxdepth 1 -type f/' "$GUARD" >"$R5N4_GUARD"
+if diff -q "$GUARD" "$R5N4_GUARD" >/dev/null; then
+  check 1 "" "R5-N4 DISPATCH: the probe-walk find is absent -- the mutation did not land and the row is vacuous"
+else
+  R5N4_OUT="$(bash "$R5N4_GUARD" "$d" 2>&1)"; R5N4_RC=$?
+  (( R5N4_RC == 0 )); check $? "R5-N4 DISPATCH: a non-recursive probe walk misses the nested rule-5 offender (the recursion is the mechanism)" "R5-N4 expected exit 0 from the flat-walk guard, got $R5N4_RC: $R5N4_OUT"
+fi
+
+# --- R5-N5: rule 4's walk is RECURSIVE too (symmetry with R5-N4). A rule-4 offender in a subdirectory of the probe dir is cited.
+d=$(mkcase r5_n5)
+mkdir -p "$d/nested/deeper"
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+  "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" \
+  "grep -qE '^RESULT: PASS' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/nested/deeper/probe-nested-r4.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )) && grep -q 'probe-nested-r4.sh:3: rule 4:' <<<"$GUARD_OUT"; check $? "R5-N5 a rule-4 offender two directories down -> exit 1 with a rule 4 citation" "R5-N5 expected exit 1 with a rule 4 citation, got $GUARD_RC: $GUARD_OUT"
+R5N5_GUARD="$SANDBOX/guard-rule4-flat.sh"
+sed '/# probe-walk$/s/find "\$TARGET_DIR" -type f/find "$TARGET_DIR" -maxdepth 1 -type f/' "$GUARD" >"$R5N5_GUARD"
+if diff -q "$GUARD" "$R5N5_GUARD" >/dev/null; then
+  check 1 "" "R5-N5 DISPATCH: the probe-walk find is absent -- the mutation did not land and the row is vacuous"
+else
+  R5N5_OUT="$(bash "$R5N5_GUARD" "$d" 2>&1)"; R5N5_RC=$?
+  (( R5N5_RC == 0 )); check $? "R5-N5 DISPATCH: a non-recursive probe walk misses the nested rule-4 offender (the recursion is the mechanism)" "R5-N5 expected exit 0 from the flat-walk guard, got $R5N5_RC: $R5N5_OUT"
+fi
+
+# =====================================================================================================
+# E1 (round 4): READS_COMMENTS learns every spelling of a comment read, VERDICT_BRANCH learns the whole
+# `S<n>-<UPPERCASE-WORD>` marker family. One sandbox holds ONE offender per spelling (so a single guard run
+# proves every spelling trips) and each mutant reverts ONE alternative, which must free exactly the probes
+# that alternative alone catches while the control probe (the old `.comments[]` spelling) still trips.
+# =====================================================================================================
+e1_dir=$(mkcase e1_all)
+e1_labels=()
+e1_add() { # <label> <read line, one line, must set $bodies> <marker>
+  e1_labels+=("$1")
+  printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' "$2" "grep -qE '^$3' <<<\"\$bodies\" && exit 0" 'exit 1' >"$e1_dir/probe-$1.sh"
+}
+e1_add ctl        "bodies=\$(gh issue view 1 --json id --jq '.comments[].body')"                            'S4-ACTIVATED: '
+e1_add json-body  'bodies=$(gh issue view 1 --json body,comments | jq -r "$F")'                              'S4-GO'
+e1_add json-title 'bodies=$(gh issue view 1 --json title,comments | jq -r "$F")'                             'S2-ARMED:'
+e1_add json-eq    'bodies=$(gh issue view 1 --json=comments | jq -r "$F")'                                  'S4-GO'
+e1_add dash-c-par 'bodies=$(gh issue view 1 --repo o/r -c)'                                                 'S2-ARMED:'
+e1_add dash-c-sp  'bodies=$(gh issue view 1 -c | cat)'                                                      'S4-GO'
+e1_add dash-c-eol 'gh issue view 1 -c'                                                                      'S4-GO'
+e1_add dot-pipe   "bodies=\$(jq -r '.comments | map(.body) | .[]' \"\$F\")"                                 'S2-ARMED:'
+e1_add timeline   'bodies=$(gh api "repos/o/r/issues/1/timeline" --jq ".[].body")'                          'S4-GO'
+e1_add graphql    "bodies=\$(gh api graphql -f query='{repository(owner:\"o\",name:\"r\"){issue(number:1){comments(first:100){nodes{body}}}}}' --jq '.data')" 'S2-ARMED:'
+e1_add in-comm    'bodies=$(gh search issues "armed in:comments" --repo o/r --json body --jq ".[].body")'    'S4-GO'
+run_guard "$e1_dir"
+(( GUARD_RC == 1 )); check $? "E1 an unfiltered reader per spelling, branching on a marker outside the old list -> exit 1" "E1 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+for l in "${e1_labels[@]}"; do
+  grep -q "probe-$l.sh:3: rule 4:" <<<"$GUARD_OUT"; check $? "E1 spelling '$l' is cited as a rule-4 violation at the read line" "E1 spelling '$l' was NOT cited: $GUARD_OUT"
+done
+# e1_mutant <tag> <from> <to> <labels freed...>: a COPY of the guard whose READS_COMMENTS line has <from> replaced by <to>.
+e1_mutant() {
+  local tag="$1" from="$2" to="$3" g l o rc; shift 3
+  g="$SANDBOX/guard-e1-$tag.sh"
+  while IFS= read -r l; do [[ "$l" == READS_COMMENTS=* ]] && l="${l/"$from"/"$to"}"; printf '%s\n' "$l"; done <"$GUARD" >"$g"
+  if diff -q "$GUARD" "$g" >/dev/null; then
+    check 1 "" "E1 DISPATCH ($tag): the READS_COMMENTS alternative text is absent from the guard -- the mutation did not land and the row is vacuous"
+    return
+  fi
+  o="$(bash "$g" "$e1_dir" 2>&1)"; rc=$?
+  grep -q "probe-ctl.sh:3: rule 4:" <<<"$o"; check $? "E1 DISPATCH ($tag): the control probe still trips under the mutant (the mutant did not just break the rule)" "E1 ($tag) control probe not cited under the mutant: $o"
+  for l in "$@"; do
+    ! grep -q "probe-$l.sh:" <<<"$o"; check $? "E1 DISPATCH ($tag): reverting that alternative frees the '$l' reader (it is the mechanism for that spelling)" "E1 ($tag) '$l' still cited under the mutant: $o"
+  done
+}
+e1_mutant json   '--json[^|#]*comments|' '--json[[:space:]]+comments|' json-body json-title json-eq
+e1_mutant dash-c '|gh[[:space:]]+issue[[:space:]]+view[^|#]*[[:space:]]-c([[:space:])]|$)' '' dash-c-par dash-c-sp dash-c-eol
+e1_mutant dash-c-eol '[[:space:])]|$)' '[[:space:])])' dash-c-eol
+e1_mutant dotpipe '\.comments(\[\]| *\|)' '\.comments\[\]' dot-pipe
+e1_mutant timeline '/(comments|timeline)' '/comments' timeline
+e1_mutant graphql '|comments\(first:' '' graphql
+e1_mutant incomm '|in:comments' '' in-comm
+# the marker family: the pre-round-4 four-name list lets the S4-GO / S2-ARMED: readers through, the control (S4-ACTIVATED) still trips.
+e1m_g="$SANDBOX/guard-e1-markers.sh"
+sed "s#^VERDICT_BRANCH=.*#VERDICT_BRANCH='RESULT:|S[0-9]+-(ACTIVATED|DEACTIVATED|CONFIRMED|EXIT-CENSUS)'#" "$GUARD" >"$e1m_g"
+if diff -q "$GUARD" "$e1m_g" >/dev/null; then
+  check 1 "" "E1 DISPATCH (markers): the VERDICT_BRANCH line is absent -- the mutation did not land and the row is vacuous"
+else
+  e1m_o="$(bash "$e1m_g" "$e1_dir" 2>&1)"
+  grep -q 'probe-ctl.sh:3: rule 4:' <<<"$e1m_o" && ! grep -q 'probe-json-body.sh:' <<<"$e1m_o" && ! grep -q 'probe-json-title.sh:' <<<"$e1m_o"
+  check $? "E1 DISPATCH (markers): the four-name list frees S4-GO and S2-ARMED: readers, keeps S4-ACTIVATED (the family is the mechanism)" "E1 (markers) unexpected citations under the four-name list: $e1m_o"
+fi
+# must-NOT-trip twins. (a) the same READ spelling with no marker branch: not a verdict read, but COUNTED in rule 4's
+# denominator (so the denominator is tied to the spelling); (b) a lib-routed probe that mentions the spelling only in a
+# whole-line comment and takes its markers from the lib.
+e1t_a=$(mkcase e1_twin_a)
+e1t_b=$(mkcase e1_twin_b)
+for l in "${e1_labels[@]}"; do
+  [[ "$l" == ctl ]] && continue
+  sed -e '4,5d' "$e1_dir/probe-$l.sh" >"$e1t_a/probe-$l.sh"
+  printf '%s\n' '[[ -n "$bodies" ]] && exit 0' 'exit 1' >>"$e1t_a/probe-$l.sh"
+  {
+    printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' 'source "$(dirname "$0")/../lib/trusted-verdict.sh"'
+    printf '# was: %s\n' "$(sed -n 3p "$e1_dir/probe-$l.sh")"
+    printf '%s\n' 'bodies=$(trusted_verdict_bodies 1) || exit 3' "grep -qE '^S4-GO' <<<\"\$bodies\" && exit 0" 'exit 1'
+  } >"$e1t_b/probe-$l.sh"
+done
+n_twins=$(( ${#e1_labels[@]} - 1 ))
+run_guard "$e1t_a"
+(( GUARD_RC == 0 )); check $? "E1 twin (a): every new spelling WITHOUT a marker branch is not a verdict read -> exit 0" "E1 twin (a) expected exit 0, got $GUARD_RC: $GUARD_OUT"
+grep -q "checked $n_twins comment-reading probe(s)" <<<"$GUARD_OUT"; check $? "E1 twin (a): all $n_twins spellings are COUNTED in rule 4's denominator (the spelling is what puts a probe in it)" "E1 twin (a) denominator is not $n_twins: $GUARD_OUT"
+run_guard "$e1t_b"
+(( GUARD_RC == 0 )); check $? "E1 twin (b): a lib-routed probe that quotes each spelling only in a whole-line comment -> exit 0" "E1 twin (b) expected exit 0, got $GUARD_RC: $GUARD_OUT"
+# E1b (round 5), must-NOT-trip: the pipe stops `--json` pairing with `comments` in the NEXT command. The probe reads a count, not comments.
+d=$(mkcase e1_pipe)
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' 'n=$(gh issue view 1 --json title | jq .comments_count)' "grep -qE '^S4-GO' <<<\"\$n\" && exit 0" 'exit 1' >"$d/probe-pipe.sh"
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "E1b must-NOT-trip: '--json title | jq .comments_count' branching on a marker is clean -> exit 0" "E1b pipe twin expected exit 0, got $GUARD_RC: $GUARD_OUT"
+grep -q 'checked 0 comment-reading probe(s)' <<<"$GUARD_OUT"; check $? "E1b the piped --json is not a comment read (rule 4 denominator 0)" "E1b pipe twin was counted as a comment reader: $GUARD_OUT"
+e1p_g="$SANDBOX/guard-e1-pipe.sh"
+while IFS= read -r l; do [[ "$l" == READS_COMMENTS=* ]] && l="${l/'--json[^|#]*comments'/'--json[^#]*comments'}"; printf '%s\n' "$l"; done <"$GUARD" >"$e1p_g"
+if diff -q "$GUARD" "$e1p_g" >/dev/null; then
+  check 1 "" "E1b DISPATCH (pipe): the --json alternative text is absent -- the mutation did not land and the row is vacuous"
+else
+  e1p_o="$(bash "$e1p_g" "$d" 2>&1)"; e1p_rc=$?
+  (( e1p_rc == 1 )) && grep -q 'probe-pipe.sh:3: rule 4:' <<<"$e1p_o"
+  check $? "E1b DISPATCH (pipe): a --json class that admits a pipe pairs it with the next command's comments and trips the twin (the pipe in the class is the mechanism)" "E1b (pipe) mutant did not trip the twin (rc=$e1p_rc): $e1p_o"
+fi
+# E1b CHARACTERIZATION: the lib's candidate tail now admits digits and underscore (S3-PR9:, S2-EXIT_CENSUS:). The lint's `:?`-optional, unanchored VERDICT_BRANCH
+# already matched a prefix of those, so the widening is a textual no-op here and these rows hold before and after it (no mutant can exist).
+d=$(mkcase e1_family)
+printf '%s\n' '#!/usr/bin/env bash' "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" "grep -qE '^S3-PR9:' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-pr9.sh"
+printf '%s\n' '#!/usr/bin/env bash' "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" "grep -qE '^S2-EXIT_CENSUS:' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-census.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "E1b CHARACTERIZATION: unfiltered readers branching on S3-PR9: and S2-EXIT_CENSUS: -> exit 1" "E1b family expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-pr9.sh:2: rule 4:' <<<"$GUARD_OUT" && grep -q 'probe-census.sh:2: rule 4:' <<<"$GUARD_OUT"; check $? "E1b CHARACTERIZATION: both are cited as rule-4 violations at the read line" "E1b family citations missing: $GUARD_OUT"
+# CHARACTERIZATION of what stays OUT (named in the guard's COVERAGE paragraph): a lower-case marker and a different marker family.
+d=$(mkcase e1_not_covered)
+printf '%s\n' '#!/usr/bin/env bash' "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" "grep -qE '^S2-armed:' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-lower.sh"
+printf '%s\n' '#!/usr/bin/env bash' "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" "grep -qE '^watchdog:restart' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-family.sh"
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "E1 CHARACTERIZATION: a lower-case S2-armed: marker and a watchdog:restart marker are NOT covered (the declared non-coverage; breaks on purpose if widened)" "E1 characterization expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# =====================================================================================================
+# E2 (round 4): rules 1/3/4/5 walk what the sweeper EXECUTES: any depth, executable or shebang or `.sh`.
+# =====================================================================================================
+e2=$(mkcase e2_all)
+mkdir -p "$e2/a/b" "$e2/fixtures"
+printf '%s\n' 'set -uo pipefail' ': "${FOO:?must be set}"' >"$e2/a/b/probe-nested-r1.sh"                    # name clause ONLY: no shebang, not executable
+printf '%s\n' '#!/usr/bin/env bash' 'X="scripts/absent-7490.sh"' >"$e2/a/probe-nested-r3.sh"                   # nested rule 3
+printf '%s\n' 'set -uo pipefail' "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" "grep -qE '^RESULT: PASS' <<<\"\$bodies\" && exit 0" 'exit 1' >"$e2/probe-r4-exec-noext"
+chmod +x "$e2/probe-r4-exec-noext"                                                                              # exec clause ONLY: no shebang, no extension
+printf '%s\n' '#!/usr/bin/env bash' 'who=$(gh api repos/o/r/issues/1 --jq ".author_association")' >"$e2/probe-r5-shebang-noext"   # shebang clause ONLY: not executable, no extension
+printf '{"authorAssociation":"MEMBER","note":"%s"}\n' '${X:?}' >"$e2/fixtures/decoy.json"                         # data file: none of the three clauses
+printf '%s\n' '#!/usr/bin/env bash' 'who=.authorAssociation' "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" "grep -qE '^RESULT: PASS' <<<\"\$bodies\" && exit 0" >"$e2/probe-decoy.test.sh"
+chmod +x "$e2/probe-decoy.test.sh"
+run_guard "$e2"
+(( GUARD_RC == 1 )); check $? "E2 the executable/shebang/nested probes are walked -> exit 1" "E2 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-nested-r1.sh:2:.*banned' <<<"$GUARD_OUT"; check $? "E2 rule 1 walks a NESTED probe (no shebang, not executable: the .sh name alone qualifies it)" "E2 rule 1 missed the nested probe: $GUARD_OUT"
+grep -q 'probe-nested-r3.sh:2: rule 3: MISSING' <<<"$GUARD_OUT"; check $? "E2 rule 3 walks a NESTED probe" "E2 rule 3 missed the nested probe: $GUARD_OUT"
+grep -q 'probe-r4-exec-noext:2: rule 4:' <<<"$GUARD_OUT"; check $? "E2 rule 4 walks an EXECUTABLE file with no .sh name and no shebang" "E2 rule 4 missed the extensionless executable: $GUARD_OUT"
+grep -q 'probe-r5-shebang-noext:2: rule 5:' <<<"$GUARD_OUT"; check $? "E2 rule 5 walks a NON-executable file whose first line is a shebang and which has no .sh name" "E2 rule 5 missed the shebang-only file: $GUARD_OUT"
+! grep -q 'decoy.json:' <<<"$GUARD_OUT"; check $? "E2 a data file (none of name/exec/shebang) is NOT a probe: its decoys are not cited" "E2 the data file was cited: $GUARD_OUT"
+! grep -q 'probe-decoy.test.sh:' <<<"$GUARD_OUT"; check $? "E2 a *.test.sh is outside the probe set (its fixtures carry decoys on purpose)" "E2 the test fixture was cited: $GUARD_OUT"
+d=$(mkcase e2_clean)
+printf '%s\n' '#!/usr/bin/env bash' 'echo ok' >"$d/probe-clean.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'who=.authorAssociation' >"$d/probe-clean.test.sh"
+printf 'data\n' >"$d/note.txt"
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "E2 a probe plus a *.test.sh decoy plus a data file -> exit 0" "E2 clean sandbox expected exit 0, got $GUARD_RC: $GUARD_OUT"
+grep -q '1 \*\.test\.sh file(s) outside the probe set' <<<"$GUARD_OUT" && grep -q '1 probe(s) scanned' <<<"$GUARD_OUT"; check $? "E2 the summary reports 1 probe scanned and 1 test file outside the probe set (the data file counts as neither)" "E2 summary counts are wrong: $GUARD_OUT"
+# e2_mutant <tag> <sed expr> <cited-after-mutation grep> <freed file> : each predicate clause / the walk depth / the test exclusion is the mechanism for its own file.
+e2_mutant() {
+  local tag="$1" expr="$2" freed="$3" kind="$4" g o
+  g="$SANDBOX/guard-e2-$tag.sh"
+  sed "$expr" "$GUARD" >"$g"
+  if diff -q "$GUARD" "$g" >/dev/null; then
+    check 1 "" "E2 DISPATCH ($tag): the mutation did not land -- the row is vacuous"
+    return
+  fi
+  o="$(bash "$g" "$e2" 2>&1)"
+  if [[ "$kind" == freed ]]; then
+    ! grep -q "$freed" <<<"$o"; check $? "E2 DISPATCH ($tag): the mutant no longer cites '$freed' (that clause/walk is the mechanism)" "E2 ($tag) still cites '$freed': $o"
+    grep -q 'probe-r4-exec-noext:2: rule 4:\|probe-r5-shebang-noext:2: rule 5:\|probe-nested-r1.sh:2:' <<<"$o"; check $? "E2 DISPATCH ($tag): the mutant still cites the OTHER files (it did not just break the rule)" "E2 ($tag) cites nothing at all: $o"
+  else
+    grep -q "$freed" <<<"$o"; check $? "E2 DISPATCH ($tag): the mutant cites '$freed' (the exclusion is the mechanism)" "E2 ($tag) does not cite '$freed': $o"
+  fi
+}
+e2_mutant no-exec    '/# probe-pred-exec$/s/.*/  :/'    'probe-r4-exec-noext'     freed
+e2_mutant no-shebang '/# probe-pred-shebang$/s/.*/  :/' 'probe-r5-shebang-noext' freed
+e2_mutant no-name    '/# probe-pred-name$/s/.*/  :/'    'probe-nested-r1.sh'      freed
+e2_mutant flat       '/# probe-walk$/s/find "\$TARGET_DIR" -type f/find "$TARGET_DIR" -maxdepth 1 -type f/' 'probe-nested-r3.sh' freed
+e2_mutant tests-in   '/# probe-test-exclude$/s/.*/  :/'  'probe-decoy.test.sh'     cited
+
+# E2b (round 5), must-NOT-trip: a NON-executable data file whose first line is `# note: author_association` (a comment, not `#!`) is not a probe, even
+# though a later line carries the field on what would be an executable line. The shebang clause is `#!`, not `#`.
+d=$(mkcase e2_note)
+printf '%s\n' '# note: author_association' 'who=.author_association' >"$d/data-note.txt"
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "E2b must-NOT-trip: a non-executable data file starting '# note: author_association' is not walked -> exit 0" "E2b expected exit 0, got $GUARD_RC: $GUARD_OUT"
+grep -q '0 probe(s) scanned' <<<"$GUARD_OUT"; check $? "E2b the data file is not counted as a probe (0 scanned)" "E2b summary counts the data file: $GUARD_OUT"
+e2n_g="$SANDBOX/guard-e2-note.sh"
+sed "/# probe-pred-shebang\$/s/== '#!'/== '#'*/" "$GUARD" >"$e2n_g"
+if diff -q "$GUARD" "$e2n_g" >/dev/null; then
+  check 1 "" "E2b DISPATCH: the shebang clause text is absent -- the mutation did not land and the row is vacuous"
+else
+  e2n_o="$(bash "$e2n_g" "$d" 2>&1)"; e2n_rc=$?
+  (( e2n_rc == 1 )) && grep -q 'data-note.txt:2: rule 5:' <<<"$e2n_o"
+  check $? "E2b DISPATCH: a shebang clause of '#'* walks the comment-led data file and rule 5 fires (the '#!' clause is the mechanism)" "E2b mutant did not walk the data file (rc=$e2n_rc): $e2n_o"
+fi
+
+# R5-H2: the live tree. Zero rule-5 hits, and the walk examined at least the floor.
+R5_LIVE_OUT="$(bash "$GUARD" 2>&1)"; R5_LIVE_RC=$?
+(( R5_LIVE_RC == 0 )); check $? "R5-H2 the live tree is clean under rules 1-5" "R5-H2 live tree not clean (rc=$R5_LIVE_RC): $R5_LIVE_OUT"
+! grep -q 'rule 5:' <<<"$R5_LIVE_OUT"; check $? "R5-H2 zero rule-5 citations on the live tree" "R5-H2 rule 5 fired on the live tree: $R5_LIVE_OUT"
+R5_N="$(sed -n 's/.*rule 5 (author-association ban) examined \([0-9][0-9]*\) probe.*/\1/p' <<<"$R5_LIVE_OUT")"
+R5_FLOOR="$(sed -n 's/^MIN_RULE5_FILES="${VARQ_BAN_MIN_RULE5_FILES:-\([0-9][0-9]*\)}"$/\1/p' "$GUARD")"   # the lint's own floor, never a copy of its literal
+[[ "$R5_FLOOR" =~ ^[0-9]+$ ]]; check $? "R5-H2 the lint's rule-5 floor ($R5_FLOOR) is readable from the guard" "R5-H2 could not read MIN_RULE5_FILES from the guard"
+[[ "$R5_N" =~ ^[0-9]+$ && "$R5_FLOOR" =~ ^[0-9]+$ ]] && (( R5_N >= R5_FLOOR )); check $? "R5-H2 rule 5's walk examined $R5_N probe(s) on the live tree (the lint's floor: $R5_FLOOR)" "R5-H2 rule 5 examined '$R5_N' probe(s), expected >= $R5_FLOOR: $R5_LIVE_OUT"
+
 # --- Accounting (ADR-193). Emitted DIRECTLY, never through fail(): a conservation check routed
 # through the verdict helper it polices cannot report the fault that corrupted it. ---
 if (( passes + fails != asserted )); then
@@ -779,7 +1262,7 @@ fi
 passes=$_p; fails=$_f; asserted=$_a
 if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
 
-MIN_ASSERTIONS=80
+MIN_ASSERTIONS=191
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1

@@ -379,7 +379,7 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 2. Query open code-review issues. **Use two-stage piping (`--json` then a standalone `jq --arg`), not single-stage `gh --jq` with `--arg`.** The `gh` CLI does NOT forward `--arg` to its embedded jq; a single-stage form produces `unknown arguments` at runtime. See learning `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
 
     ```bash
-    ISSUES_JSON=$(mktemp -t open-review-issues.XXXXXXXX.json)
+    ISSUES_JSON=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" open-review-issues.XXXXXXXX.json)
     gh issue list --label code-review --state open \
       --json number,title,body --limit 200 > "$ISSUES_JSON"
     echo "ISSUES_JSON=$ISSUES_JSON"
@@ -396,7 +396,8 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
     A later Bash call does not inherit `ISSUES_JSON`, so carry the echoed path forward (or
     re-derive it in the same call). Do not substitute a fixed name: a concurrent `soleur:plan`
-    would overwrite the file between the write and this read.
+    would overwrite the file between the write and this read. When the last `jq` read is done,
+    `rm -f "$ISSUES_JSON"; rmdir "$(dirname "$ISSUES_JSON")" 2>/dev/null` — it is a snapshot, not an artifact (#10017).
 
 4. If any matches are returned, write a `## Open Code-Review Overlap` section to the plan file with a one-line bullet per match and an explicit disposition for each:
 
@@ -768,7 +769,7 @@ exception:        # present ONLY when mechanism is plaintext-exception OR cert_v
 
 **Skip silently** when the plan introduces no persistent store and no new cross-component connection — pure UI/docs/dependency-bump plans, or a change confined to an already-provisioned surface.
 
-**Why:** ADR-140 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11) — a new store or connection shipped with no declared encryption posture is undetectable at review time by name-similarity alone (a plaintext `hcloud_volume.workspaces` reads identically to its LUKS-backed sibling `hcloud_volume.workspaces_luks` until the device-binding chain is actually walked). Codifying the posture as a plan deliverable, resolved against real code by `lint-encryption-posture.py` (repo-root `scripts/`), closes the gap at design time instead of at incident time.
+**Why:** ADR-140 and `knowledge-base/project/plans/archive/20261013-041741-2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11) — a new store or connection shipped with no declared encryption posture is undetectable at review time by name-similarity alone (a plaintext `hcloud_volume.workspaces` reads identically to its LUKS-backed sibling `hcloud_volume.workspaces_luks` until the device-binding chain is actually walked). Codifying the posture as a plan deliverable, resolved against real code by `lint-encryption-posture.py` (repo-root `scripts/`), closes the gap at design time instead of at incident time.
 
 ### 2.12. Guard Contract Gate
 
@@ -898,7 +899,7 @@ end
 - [ ] **Browser task automation check:** Scan all tasks for steps labeled "manual", "browser", or "user must". If any task involves browser interaction (account creation, form submission, settings configuration, credential generation), rewrite it as a Playwright MCP automation step. The only genuinely manual browser steps are CAPTCHA solving and interactive OAuth consent -- and even those should be automated up to the CAPTCHA/consent gate, then handed to the user for that single interaction.
 - [ ] **Deferral tracking check:** Scan the plan's "Alternative Approaches Considered" table and any "Non-Goals" or "Out of Scope" sections for items explicitly deferred to a later phase. For each deferred item, create a GitHub issue with: what was deferred, why, re-evaluation criteria, and milestone from `knowledge-base/product/roadmap.md`. A deferral without a tracking issue is invisible. When its blocker is known, also run `gh issue edit <N> --add-blocked-by <M>`.
 - [ ] **Fog goes to the roadmap, not the plan:** in-scope product work you cannot yet state as a precise question gets no issue and no plan `TBD` (the Phase 0.7 token ban stands). Route it to `## Not Yet Specified` in `knowledge-base/product/roadmap.md` via the `soleur:product-roadmap` workshop; plan never edits roadmap.md. Headless: append it to `specs/<branch>/decision-challenges.md` as a Not Yet Specified candidate. Implementation unknowns stay in the plan.
-- [ ] **CLI-verification gate (#2566):** For every CLI invocation the plan prescribes to land in user-facing docs (`*.njk`, `*.md`, README, `apps/**`), verify the tokens exist. One of: (a) run `<tool> --help` or `<tool> <subcommand> --help` locally and paste the relevant line into Research Insights; (b) cite the tool's official command reference URL; (c) annotate the plan snippet with `<!-- verified: YYYY-MM-DD source: <url> -->`. A plan that embeds a CLI invocation without ONE of the three MUST NOT ship -- silence (omit the snippet) beats fabrication. `tsc` and Eleventy build do NOT catch fabricated tokens. **Why:** #1810/#2550 shipped `ollama launch claude --model gemma4:31b-cloud` -- every token fabricated, caught 8 days later.
+- [ ] **CLI-verification gate (#2566):** For every CLI invocation the plan prescribes to land in user-facing docs (`*.njk`, `*.md`, README, `apps/**`), verify the tokens exist. One of: (a) run `<tool> --help` or `<tool> <subcommand> --help` locally and paste the relevant line into Research Insights; (b) cite the tool's official command reference URL; (c) annotate the plan snippet with `<!-- verified: YYYY-MM-DD source: <url> -->`. A plan that embeds a CLI invocation without ONE of the three MUST NOT ship -- silence (omit the snippet) beats fabrication. `tsc` and Eleventy build do NOT catch fabricated tokens. When the plan consumes the tool's parse SEMANTICS into a security boundary (wrapper table, allowlist, gate regex — not just a doc snippet), token existence is insufficient: cite the parser source (clap/argparse defs, `src/main.rs`/`cli.rs`), because README claims drift from binary behavior (rtk-ai/rtk#640: README says argv-boundaries, HEAD joins to `sh -c`). **Why:** #1810/#2550 shipped `ollama launch claude --model gemma4:31b-cloud` -- every token fabricated, caught 8 days later; #10230 — the same gate caught `RTK_DISABLED=1` as fabricated while the grammar model needed src-level verification.
 
 ## Output Format
 
@@ -1071,6 +1072,8 @@ After plan review, use the **AskUserQuestion tool** to present these options:
 **Resume prompt (MANDATORY — AGENTS.md Communication):** Before presenting the question, generate a copy-pasteable resume prompt containing: skill to run (`soleur:work`), plan file path, branch name, worktree path, PR number, issue number, and a one-line summary of what was already done. Display it in a fenced code block so the user can paste it into a fresh session after `/clear`. This is the single most important output of the post-generation phase — without it, the user cannot resume in a new session without re-explaining context.
 
 **Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk. What would you like to do next?" — append " Two automatic compactions have occurred, so `/clear` before `soleur:work` is recommended." only when a `SOLEUR_COMPACTION_DIRECTIVE` marker with `recommend=true` is present in this session (#8323). The unconditional "run `/clear` for maximum headroom" this replaces fired identically on a session with zero compactions and on one that had lost state twice, which is the whole defect.
+
+**Closing text:** the summary around these options is a closing message: put no technical question ("Decision for you:", "Your calls") to the operator in it; spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`) and ask only the authorization. [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md).
 
 **Options:**
 

@@ -111,6 +111,8 @@ expect_verdict "subdir .md is NOT root-md safe"         true  pull_request $'M\t
 expect_verdict "workflow edit itself runs"              true  pull_request $'M\t.github/workflows/ci.yml\n'
 expect_verdict "bare path (no status) treated as M"     false pull_request $'knowledge-base/a.md\nREADME.md\n'
 expect_verdict "unmerged status runs"                   true  pull_request $'U\tknowledge-base/a.md\n'
+# Single-slash markdown outside the tree: the inner root-md guard must treat ANY slash as non-root (a `*/*/*` edit would not).
+expect_verdict "single-slash .md is NOT root-md safe"    true  pull_request $'M\tapps/README.md\n'
 
 echo "── Guard 1: hostile-input + self-evaluation axes"
 # Copy status is the same unsafe class as rename: a copied-in app file must run.
@@ -190,7 +192,19 @@ anchor_in_e2e "classifier invoked from workflow"        "scripts/ci-e2e-classify
 # The classifier the PR is judged by is the BASE ref's copy — losing this line
 # re-opens the self-evaluation hole (a PR shipping `emit false` for itself).
 anchor_in_e2e "base-ref classifier judged, not the PR's" 'git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh"'
-anchor_in_e2e "full-history checkout for PR diff"       "github.event_name == 'pull_request' && 0 || 1"
+# The `0` is a quoted STRING: `A && 0 || 1` evaluates to 1 in an Actions expression (0 is falsy), which made this
+# checkout depth-1 on every PR and sent every PR down the enum-failed fallback (#9729). The unquoted spelling this
+# row used to pin certified the bug; plugins/soleur/test/ci-shard-totality-skip.test.sh sweeps every workflow for it.
+anchor_in_e2e "full-history checkout for PR diff"       "github.event_name == 'pull_request' && '0' || '1'"
+anchor_absent "no falsy-zero checkout ternary (&& 0 ||)" "&& 0 || 1 }}"
+# git's stderr is kept so a fallback names its cause; a line that sends it to /dev/null re-opens the invisible-cause hole.
+if grep -qE '2> *(/dev/null|&-)|&>' < <(grep -E 'git (diff|show)' <<<"$e2e_section"); then
+  FAIL=$((FAIL + 1)); echo "FAIL a git diff/show in the e2e classify step discards stderr"
+else
+  PASS=$((PASS + 1)); echo "ok   no git diff/show line in the e2e classify step discards stderr"
+fi
+anchor_in_e2e "classify fallback prints the git stderr"  'git stderr: ['
+
 # The diff range is load-bearing: a narrowed spec (HEAD~1, fixed base) hides
 # app changes in earlier commits of a multi-commit PR.
 anchor_in_e2e "diff range is the PR merge-base"         'git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD"'
@@ -204,7 +218,9 @@ anchor_in_e2e "verdict whitelisted true|false"          'case "$APPLICABLE" in'
 # `== 'true'` gate is false and e2e green-skips on every PR.
 anchor_in_e2e "verdict emitted to GITHUB_OUTPUT"        'applicable=$APPLICABLE" >> "$GITHUB_OUTPUT'
 anchor_in_e2e "skip verdict surfaced"                   "e2e skipped"
-anchor_in_e2e "enum-failure fallback wired"             "--enum-failed"
+# The fallback is a LITERAL true: running the PR's own checked-out classifier with --enum-failed would let a PR that edits that
+# script turn the fallback into `false` (review of #10098).
+anchor_in_e2e "enum-failure fallback is a literal true"  'APPLICABLE=true'
 anchor_absent "no trigger-level paths: on e2e/CI"       "paths-ignore"
 
 # A job-level `if:`/`needs:` on `e2e` makes the required check conclude
@@ -274,8 +290,8 @@ fi
 # (ADR-193): a floor routed through fail()/FAIL++ is disarmed by the same
 # neutered machinery it exists to catch.
 total=$((PASS + FAIL))
-if [ "$total" -lt 40 ]; then
-  echo "[FATAL] assertion floor: only $total assertions ran, want >=40" >&2
+if [ "$total" -lt 51 ]; then
+  echo "[FATAL] assertion floor: only $total assertions ran, want >=51" >&2
   exit 1
 fi
 

@@ -364,8 +364,10 @@ Description=Inngest server heartbeat ping to Better Stack
 After=network-online.target
 # #6556 Part 2: on failure, fire a push-less oneshot that emits an ERR-priority
 # `inngest-heartbeat` line so a unit failure is READABLE off-box (no SSH). Before this, a
-# heartbeat failure surfaced only as the un-shippable SYSLOG_IDENTIFIER=systemd "Failed to
-# start" journal row (the #6551 signature); now it also ships on the inngest-heartbeat channel.
+# heartbeat failure surfaced only as the SYSLOG_IDENTIFIER=systemd "Failed to
+# start" journal row (the #6551 signature — since explained and positively controlled by
+# #9963: Source 1's PRIORITY<=4 OR-arm carries it); now it also ships on the
+# inngest-heartbeat channel.
 OnFailure=inngest-heartbeat-failure-log.service
 # SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write and
 # the 60s timer fires from boot — an absent file must SKIP the start (one "skipped, unmet
@@ -461,9 +463,12 @@ cat > "$HEARTBEAT_FAILURE_LOG_UNIT" <<'FAILLOGEOF'
 Description=Log an ERR-priority marker when inngest-heartbeat.service fails (#6556)
 # QUERYABLE, NOT ALARMING. This oneshot emits a single ERR line on the inngest-heartbeat
 # Vector -> Better Stack channel (vector.toml Source 4) so a heartbeat-unit failure is readable
-# off-box with NO SSH — it turns the failure systemd otherwise emits as the un-shippable
-# SYSLOG_IDENTIFIER=systemd "Failed to start" row (the #6551 signature) into a shippable
-# inngest-heartbeat line.
+# off-box with NO SSH — it turns the failure systemd emits as a SYSLOG_IDENTIFIER=systemd
+# "Failed to start" row (the #6551 signature) into a row that also ships under the unit's
+# own tag. That systemd row is no longer un-shippable: it rides Source 1's
+# include_matches.PRIORITY arm under OR-over-fields matching — the #9939 storm proved it,
+# #9963 pins it — but this tagged re-emit stays belt-and-braces so the failure is
+# queryable under inngest-heartbeat where the rest of the channel's evidence lives.
 #
 # It deliberately does NOT push to any monitor. One-unambiguous-pusher-per-monitor
 # (inngest-host.tf:137-171): the LIVE co-located pusher's alarm IS the Better Stack heartbeat
@@ -476,7 +481,7 @@ Description=Log an ERR-priority marker when inngest-heartbeat.service fails (#65
 Type=oneshot
 # Reuse the existing Source 4 tag (vector.toml) — no new allowlist entry, no fresh quota decision.
 SyslogIdentifier=inngest-heartbeat
-# Bare `logger`, NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
+# Unwrapped `logger` (absolute /usr/bin form), NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
 # secrets. A `doppler run --project …` wrapper would hardcode a project (WRONG on the
 # soleur-inngest host) and re-introduce the exact project-resolution surface #6555 removes.
 ExecStart=/usr/bin/logger -t inngest-heartbeat -p err "inngest-heartbeat.service entered failed state (OnFailure) — the 60s ping failed; see the preceding inngest-heartbeat lines for the underlying ping error (#6556)"
@@ -1209,6 +1214,20 @@ esac
 
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
 logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns"
+
+# --- #9963: second unconditional emit, SAME invariant (no `if` may precede it) ---
+# Positive control for the SYSLOG_IDENTIFIER=systemd journald delivery path. Vector's
+# contains_match is OR-over-record-fields, so a `-t systemd -p err` row (PRIORITY 3) is
+# admitted by inngest_journald's include_matches.PRIORITY {3,4} arm regardless of unit —
+# the SAME arm real PID-1 `Failed to start` rows take. The spoofed tag is load-bearing:
+# consumers discriminate the path by SYSLOG_IDENTIFIER=systemd, so the control must prove
+# THAT field shape transits. Absolute /usr/bin/logger per the FAILLOG ExecStart
+# precedent (~:487); the sibling emit two lines up can stay bare `logger` — it emits
+# under $LOG_TAG (script-set), while this line's tag is the contract itself, so its
+# binary is pinned absolute to keep the emission independent of PATH resolution
+# (journald stamps host itself; no host= field). NOT in Source 4 by design
+# (vector.toml).
+/usr/bin/logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=$(date -u +%s) — rides the inngest_journald PRIORITY≤4 admission arm (#9963)"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches

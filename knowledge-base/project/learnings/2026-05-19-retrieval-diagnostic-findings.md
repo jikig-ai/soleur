@@ -19,7 +19,7 @@ Bucket: **`reopen-rag`**. `R@5(heavy, kb-search) = 0.1331` across 1127 learnings
 
 ## Methodology
 
-Per the plan (`knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-bench-plan.md`) and post-first-run revision (see commit `3fb52a05`):
+Per the plan (`knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md`) and post-first-run revision (see commit `3fb52a05`):
 
 - **Three paraphrase intensities** generated per learning: `identity` (ground-truth verbatim, no LLM), `light` (synonym substitution via Haiku), `heavy` (different framing via Haiku).
 - **Keyword extraction from each query.** The retriever does NOT pass the full paraphrase sentence to `grep -F` (the original plan did; that yielded vacuous 0 because sentence-paraphrases never substring-match verbatim source text). Instead, a bash heuristic extracts the top-3 longest non-stopword tokens (≥4 chars, drop all-numeric, dedup) from each query.

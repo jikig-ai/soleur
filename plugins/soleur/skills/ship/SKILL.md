@@ -536,6 +536,7 @@ Ship Checklist for [branch name]:
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
 - [ ] Recurring-vendor-expense gate passed (Phase 5.5 gate)
+- [ ] KB artifacts archived (Phase 6.45 gate)
 - [ ] Push to remote
 - [ ] Create PR with semver label
 - [ ] PR is mergeable (no conflicts)
@@ -1017,25 +1018,24 @@ For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name
 - `apps/web-platform/infra/hooks.json.tmpl`
 - `apps/web-platform/infra/deploy-inngest-bootstrap.sudoers`
 - `apps/web-platform/infra/infra-config-apply.sh`
-- `apps/web-platform/infra/infra-config-install.sh` (#4829 — delivered by the SSH bridge, kept in the hash for drift-guard sync)
+- `apps/web-platform/infra/infra-config-install.sh` (#4829)
 - `apps/web-platform/infra/push-infra-config.sh`
 - `apps/web-platform/infra/cat-infra-config-state.sh`
-- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492 — webhook-delivered cutover script; registered so a body-only edit re-deploys)
+- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492)
 - `apps/web-platform/infra/inngest-rearm-reminders.sh` (#5492)
 - `apps/web-platform/infra/inngest-wiped-volume-verify.sh` (#5492)
 - `apps/web-platform/infra/cat-inngest-verify-state.sh` (#5492)
-- `apps/web-platform/infra/inngest-inventory.sh` (#5509 — cutover full-state inventory op)
-- `apps/web-platform/infra/git-lock-chardevice-sweep.sh` (#5934 — durable char-device config.lock substrate sweep)
-- `apps/web-platform/infra/inngest-registry-probe.sh` (#6178 — web-host 2.0 empty-registry cutover pre-flight)
-- `apps/web-platform/infra/inngest-doublefire-probe.sh` (#6178 — web-host 2.6 exactly-once run-enumeration probe)
+- `apps/web-platform/infra/inngest-inventory.sh` (#5509)
+- `apps/web-platform/infra/git-lock-chardevice-sweep.sh` (#5934)
+- `apps/web-platform/infra/inngest-registry-probe.sh` (#6178)
+- `apps/web-platform/infra/inngest-doublefire-probe.sh` (#6178)
+- `apps/web-platform/infra/{inngest-redis-bootstrap,inngest-cutover-flip,inngest-server-flip-guard,cat-inngest-cutover-state,inngest-luks-cutover}.sh` (#6780 — the five dedicated-host carriers; ADR-135 refresh-set members)
 - `apps/web-platform/infra/soleur-doppler-token.tmpl` (#7095 — re-deliverable web-host Doppler credential; folded in as `local.webhook_doppler_token_env`, i.e. the RENDERED content, so a secret rotation alone changes the hash)
-- `apps/web-platform/infra/10-vector-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `vector.service` at the credential above)
-- `apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-heartbeat.service` at the credential above)
-- `apps/web-platform/infra/10-inngest-server-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-server.service` at the credential above; it runs `doppler run` UNCONDITIONALLY and is restarted on every co-located deploy)
+- `apps/web-platform/infra/10-{vector,inngest-heartbeat,inngest-server}-doppler-token.conf` (#7095 — systemd drop-ins re-pointing the generated units at the credential above)
 
 **Detection:**
 
-The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: a gate's regex, its documentation block, and its fixtures are one unit — changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
 
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
@@ -1058,13 +1058,18 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
   "apps/web-platform/infra/inngest-registry-probe.sh"
   "apps/web-platform/infra/inngest-doublefire-probe.sh"
+  "apps/web-platform/infra/inngest-redis-bootstrap.sh"
+  "apps/web-platform/infra/inngest-cutover-flip.sh"
+  "apps/web-platform/infra/inngest-server-flip-guard.sh"
+  "apps/web-platform/infra/cat-inngest-cutover-state.sh"
+  "apps/web-platform/infra/inngest-luks-cutover.sh"
   "apps/web-platform/infra/soleur-doppler-token.tmpl"
   "apps/web-platform/infra/10-vector-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-server-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-redis-doppler-token.conf"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|inngest-redis-bootstrap\.sh|inngest-cutover-flip\.sh|inngest-server-flip-guard\.sh|cat-inngest-cutover-state\.sh|inngest-luks-cutover\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -1077,17 +1082,15 @@ The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by 
 
 **Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any trigger file changes. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies the post-apply `files_written == files_total` invariant, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
 
-**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it installs `cloudflared`, opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token, and adds an `iptables -t nat OUTPUT REDIRECT` rule so terraform's Go SSH client transparently reaches sshd. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect (the CI path cannot self-apply `root_authorized_keys` — same firewall reason).
+**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect (the CI path cannot self-apply `root_authorized_keys` — same firewall reason).
 
 **In-session apply (operator-machine fallback, #4829).** When `soleur:ship` runs on the operator's own machine rather than CI — detect via `[[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]` AND `ssh-add -l` listing a key — the agent CAN apply the bridge in-session over the operator's direct SSH (their IP is in `admin_ips`, their ssh-agent key is in root's `authorized_keys`) instead of deferring to the CI auto-apply. This is the rare fallback (transient CI failure, or shipping a handler change you want live immediately); the CI auto-apply above is the default. Run:
 
 ```bash
 if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1; then
   cd apps/web-platform/infra
-  # Only the bridge target here (NOT deploy_pipeline_fix): the in-session fallback
-  # exists to land a handler/helper/sudoers change immediately; the webhook push
-  # (deploy_pipeline_fix) is independently covered by the CI auto-apply and does not
-  # need the operator's SSH path. Do NOT widen this to a 2-target apply.
+  # Bridge target only (NOT deploy_pipeline_fix): this fallback lands a handler/helper/
+  # sudoers change now; the webhook push is covered by the CI auto-apply. Never widen it.
   doppler run -p soleur -c prd_terraform -- \
     terraform apply -target=terraform_data.infra_config_handler_bootstrap -input=true
   # The Terraform "yes" prompt is the load-bearing authorization
@@ -1095,17 +1098,19 @@ if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1;
 fi
 ```
 
-Verify with the no-host-login status hook (per `hr-no-ssh-fallback-in-runbooks` — `files_written == files_total` via `/hooks/infra-config-status`, NOT an SSH hash compare):
+Verify via the no-host-login status hook (`hr-no-ssh-fallback-in-runbooks`; `files_written == files_total` at `/hooks/infra-config-status`, never an SSH hash compare):
 
 ```bash
 WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
 CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
 CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
-HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
-  -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
-  -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
-  "https://deploy.$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)/hooks/infra-config-status" \
+HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+# headers ride curl's stdin config, not argv
+APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)
+(LC_ALL=C; for n in HMAC CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE; do case "${!n}" in ''|*[!A-Za-z0-9._~+/=-]*) echo "$n unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1;; esac; done) || exit 1
+curl --disable --proto '=https' -m 30 -fsS --config - \
+  "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" \
+  < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET") \
   | jq -e '.exit_code == 0 and .files_failed == 0 and .files_written == .files_total'
 ```
 
@@ -1459,7 +1464,7 @@ done
    # exemption's anchored match cannot see it — and the filing this rule
    # MANDATES would then be blocked by that gate with no exit but the
    # blanket override. Write the body to a file; do not inline it.
-   BODY_FILE="$(mktemp -t deferred-automation.XXXXXXXX.md)"
+   BODY_FILE="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")"
    # printf, not a heredoc: this snippet is indented inside a nested list, and
    # an indented terminator never closes a `<<EOF` (only `<<-EOF` strips, and
    # only TABS). Copy-pasting the heredoc form hangs the shell.
@@ -1473,6 +1478,7 @@ done
    } > "$BODY_FILE"
    gh issue create --label type/chore --label deferred-automation \
      --title "$TITLE" --body-file "$BODY_FILE"
+   rm -f "$BODY_FILE"
    ```
 
    The load-bearing part is the literal `deferred-automation` string in the
@@ -1518,7 +1524,7 @@ PLAN=$(grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' "$CO
 # Indent-tolerant (518 of 1905 plans indent a fence inside a list item) and
 # fail-closed on an unbalanced fence, matching the hook byte-for-byte.
 if [[ -n "$PLAN" && -f "$PLAN" ]]; then
-  _ps=$(mktemp)
+  _ps=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
   if awk '/^[[:space:]]*```/ { f = !f; next } !f { print } END { if (f) exit 2 }' "$PLAN" > "$_ps" 2>/dev/null
   then cat "$_ps" >> "$COMBINED"
   else echo "SOAK-CORPUS-PLAN-UNSTRIPPED: unbalanced fence in $PLAN; appending unstripped" >&2; cat "$PLAN" >> "$COMBINED"
@@ -1632,7 +1638,7 @@ Run `echo 'SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-questio
 
 [skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]
 
-Before queueing `gh pr merge --squash --auto` (Phase 6 below), verify every local commit is on `origin/<branch>`. GitHub's auto-merge consumes the PR head ref on origin — local-only commits are silently dropped from the squash. This was the failure mode in PR #3624 → #3627 → #3630: the orchestrator went `preflight → gh pr edit → gh pr ready → gh pr merge --squash --auto` without re-pushing, and 2 of 5 commits (the actual fix + the review fix) never landed on `main`.
+Before queueing `gh pr merge --squash --auto` (Phase 6.5's CI Status Check below), verify every local commit is on `origin/<branch>`. GitHub's auto-merge consumes the PR head ref on origin — local-only commits are silently dropped from the squash. This was the failure mode in PR #3624 → #3627 → #3630: the orchestrator went `preflight → gh pr edit → gh pr ready → gh pr merge --squash --auto` without re-pushing, and 2 of 5 commits (the actual fix + the review fix) never landed on `main`.
 
 The PreToolUse hook [`.claude/hooks/ship-unpushed-commits-gate.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.sh) enforces this gate mechanically — it intercepts every `gh pr merge` (including chained forms like `gh pr ready && gh pr merge`) and denies the tool call when `git rev-list origin/<branch>..HEAD --count` returns > 0. The deny message lists the unpushed SHAs so the operator can `git push` and re-issue.
 
@@ -1704,7 +1710,7 @@ Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title
 Write the proposed `PR_TITLE`, `PR_BODY`, and the branch commit messages (`git log origin/main..HEAD --format=%B`) to temp files, then run the shared scanner:
 
 ```bash
-TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp); TMP_COMMITS=$(mktemp)
+_SCAN_DIR=$(mktemp -d -t soleur-run.$$.XXXXXXXX); TMP_TITLE=$_SCAN_DIR/t; TMP_BODY=$_SCAN_DIR/b; TMP_COMMITS=$_SCAN_DIR/c
 printf '%s\n' "$PR_TITLE" > "$TMP_TITLE"
 printf '%s\n' "$PR_BODY"  > "$TMP_BODY"
 git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
@@ -1714,6 +1720,7 @@ git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
 T_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_TITLE")
 B_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_BODY")
 C_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_COMMITS")
+rm -f "$TMP_TITLE" "$TMP_BODY" "$TMP_COMMITS"
 ```
 
 If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
@@ -1733,9 +1740,11 @@ The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE 
 **Grok Build pre-push gate (mandatory before `git push`).** When the harness is Grok (`GROK_HOME` / `GROK_AGENT`), run from repo root and inspect exit code explicitly (do not pipe through `tail`):
 
 ```bash
-log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
+log=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
 bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
 ```
+
+The log is scratch: `rm -f "$log"` on green; on red, read it for the diagnosis, then remove it (#10017).
 
 Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run it here even if Phase 4 ran (this is the push-time recheck on the actual tree).
 <!-- grok-pre-push-gate:end -->
@@ -1956,40 +1965,9 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    On non-zero exit, set the real conventional-commit title (`gh pr edit PR_NUMBER --title "feat(scope): …"`) and re-run the guard before proceeding. Do NOT mark ready or queue auto-merge while the title starts with `WIP:`. **Why:** PR #5373 (#5371) merged with the squash subject `WIP: feat-one-shot-5371-cc-durability (#5373)` because Phase 6 updated `--body-file` but omitted `--title`; the blemish is immutable on `main`. This guard makes the omission fail loudly instead of silently shipping a `WIP:` commit.
 
-4.5. **Technical-ruling body check:** `${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh --pr-body <live body>` via the recipe in [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md) (it prints `gate-rc=`): 0 go on to `gh pr ready`; 1 remedy; 2 never ready past it.
+4.5. **Technical-ruling body check:** `${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh --pr-body <live body>` via the recipe in [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md) (it prints `gate-rc=`): 0 — proceed to Phase 6.45; 1 remedy; 2 never ready past it.
 
-5. **A recorded operator HOLD is a condition, not an outcome — evaluate it here, at the draft exit.** If the operator asked to hold ("wait for #N", "after the soak", "once the migration applies"), that is a condition with a discharge test. **Record it in the plan file under `## Operator Holds` the moment it is given, and read it from there here — not from conversation.** A hold that lives only in context is gone after compaction and was never present when `soleur:ship` is invoked standalone (the "no PR" fallback below explicitly supports entry via `soleur:plan` or `soleur:work`), and "no hold in context" is then indistinguishable from "no hold was given" — the reports-clean-because-it-could-not-look shape this gate exists to end. If the plan file is unreachable, say so and stop; do not read its absence as an all-clear. Evaluate each condition NOW: a sibling PR is `MERGED` **and** `git merge-base --is-ancestor <its-sha> HEAD`; a named verification is green **on the current tree** (re-run it — an inherited "it was green" describes a tree that may no longer exist); a state change (migration applied, flag flipped) is confirmed by probing the state, not by assuming the step ran. **If you cannot evaluate a condition — for any reason, including a failed probe — the hold STANDS.** Scope that rule precisely: if `## Operator Holds` is absent or empty, **no hold was recorded and this step is a no-op — proceed**. It is only once a hold IS recorded that an empty or unevaluated condition set must never be treated as discharged. A hold recorded with no stated test is not dischargeable here either — route it to the Undeferred Operator-Step Gate rather than improvising a condition to name. Record each condition's verdict and the command that produced it in the PR body, so a discharge is auditable and "four conditions probed green" is distinguishable from "no conditions found". All conditions discharged ⇒ continue to `gh pr ready` and the merge below, which remain gated by review having run (`rf-never-skip-qa-review-before-merging`) and by the required checks — those are the merge authority, not the hold. Any condition unmet ⇒ stop and name **that condition**; "the PR is a draft" is not a reason, "#7441 has not merged" is. A condition only a human can settle (a subjective call, an external party) is a genuine operator gate — file it per the Undeferred Operator-Step Gate, because a PR body is not an operator-visible surface. **Why:** PR #7470 — a hold transcribed as "the PR stays a draft" outlived its cleared conditions.
-
-5.5. **KB artifact archival — the LAST step that may touch `knowledge-base/project/specs|plans|brainstorms` (closes the stranded-archive class measured on #7240 and #9768).** Every earlier live read is behind us: step 2.5 folded `decision-challenges.md` into the PR body and step 5 evaluated `## Operator Holds` in the plan file. Nothing downstream reads the live paths — Phase 7's only spec-dir write is the budget-cap marker, which `mkdir -p`s the path and appends (it is a local resume hint; an already-archived dir just yields an uncommitted file the worktree cleanup reaps). Run it now so the `git mv` lands in THIS PR and merge is terminal:
-
-   ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
-   ```
-
-   If it archives anything (`Archived N artifact(s)`), commit and push the move so it rides this PR — never a follow-up PR, never a post-merge orphan:
-
-   ```bash
-   git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifacts at ship" && git push      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
-   ```
-
-   — but check `git status` first: `git add -A knowledge-base` sweeps any dirty KB file into the archival commit; stage the moves deliberately if the tree carries unrelated edits.
-
-   Then sweep for stale references — archival without it strands every consumer in the same stroke: `grep -rn "specs/<branch>" --include='*.md' knowledge-base/ plugins/ apps/ | grep -v archive/` — repoint live-path hits or document them as intentionally live. One known residue: an `operator-bootstrap` `bootstrap.sh` is named by a follow-through issue's `auto_command:` at its LIVE path — post-archive that command 404s; record the archive path in the issue.
-
-   A `WARNING: found a ... but NO ...` partial-discovery line means the union of both axes (slug match + branch diff) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
-
-6. If the PR is a draft, mark it ready with a user token (`GITHUB_TOKEN` cannot ready a PR) and wait for the ready run before arming. One Bash call, `timeout: 420000`:
-
-   ```bash
-   K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBER) && gh pr ready PR_NUMBER \
-     && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
-   ```
-
-   Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo).
-
-   If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
-
-7. Present the PR URL to the user.
+5. **A recorded operator HOLD is a condition, not an outcome — evaluate it here, at the draft exit.** If the operator asked to hold ("wait for #N", "after the soak", "once the migration applies"), that is a condition with a discharge test. **Record it in the plan file under `## Operator Holds` the moment it is given, and read it from there here — not from conversation.** A hold that lives only in context is gone after compaction and was never present when `soleur:ship` is invoked standalone (the "no PR" fallback below explicitly supports entry via `soleur:plan` or `soleur:work`), and "no hold in context" is then indistinguishable from "no hold was given" — the reports-clean-because-it-could-not-look shape this gate exists to end. If the plan file is unreachable, say so and stop; do not read its absence as an all-clear. Evaluate each condition NOW: a sibling PR is `MERGED` **and** `git merge-base --is-ancestor <its-sha> HEAD`; a named verification is green **on the current tree** (re-run it — an inherited "it was green" describes a tree that may no longer exist); a state change (migration applied, flag flipped) is confirmed by probing the state, not by assuming the step ran. **If you cannot evaluate a condition — for any reason, including a failed probe — the hold STANDS.** Scope that rule precisely: if `## Operator Holds` is absent or empty, **no hold was recorded and this step is a no-op — proceed**. It is only once a hold IS recorded that an empty or unevaluated condition set must never be treated as discharged. A hold recorded with no stated test is not dischargeable here either — route it to the Undeferred Operator-Step Gate rather than improvising a condition to name. Record each condition's verdict and the command that produced it in the PR body, so a discharge is auditable and "four conditions probed green" is distinguishable from "no conditions found". All conditions discharged ⇒ continue to Phase 6.45 (KB artifact archival) and the arming in Phase 6.5's CI Status Check — the merge remains gated by review having run (`rf-never-skip-qa-review-before-merging`) and by the required checks; those are the merge authority, not the hold. Any condition unmet ⇒ stop and name **that condition**; "the PR is a draft" is not a reason, "#7441 has not merged" is. A condition only a human can settle (a subjective call, an external party) is a genuine operator gate — file it per the Undeferred Operator-Step Gate, because a PR body is not an operator-visible surface. **Why:** PR #7470 — a hold transcribed as "the PR stays a draft" outlived its cleared conditions.
 
 **If no open PR exists:**
 
@@ -2025,9 +2003,37 @@ template above — including its placement ABOVE `## Changelog` and the four gat
 
 Do not quote flag names -- write `--title` not `"--title"`.
 
-Present the PR URL to the user.
+## Phase 6.45: KB Artifact Archival
 
-### Semver Label and Changelog
+[skill-enforced: ship Phase 6.45 + hook ship-kb-archive-gate.sh]
+
+Both PR arms converge here before any `gh pr ready`/`gh pr merge` site (exists-arm falls out of step 5; create-arm lands after `gh pr create`). The PreToolUse hook [ship-kb-archive-gate.sh](../../../../.claude/hooks/ship-kb-archive-gate.sh) backs it mechanically — denies `gh pr merge` when the head carries non-`archive/` rows under `knowledge-base/project/{specs,plans,brainstorms}` (rule `wg-kb-artifacts-archived-in-pr`, `AGENTS.rules.md`).
+
+Emit rule-application telemetry:
+
+```bash
+echo 'SOLEUR_RULE_APPLIED rule=wg-kb-artifacts-archived-in-pr note=`soleur:ship` Phase 6.45 archives KB artifacts into the PR before any merge site'
+```
+
+**KB artifact archival — the LAST step that may touch `knowledge-base/project/specs|plans|brainstorms` (closes the stranded-archive class measured on #7240 and #9768).** Earlier live reads are behind us: step 2.5 folded `decision-challenges.md` into the PR body; step 5 evaluated `## Operator Holds`. Nothing downstream reads the live paths — Phase 7's only spec-dir write is the budget-cap marker, which `mkdir -p`s the path and appends (a resume hint; an already-archived dir leaves an uncommitted file cleanup reaps). Run it now so the `git mv` lands in THIS PR and merge is terminal:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
+```
+
+If it archives anything (`Archived N artifact(s)`), commit and push the move so it rides this PR — never a follow-up:
+
+```bash
+git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifacts at ship" && git push      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
+```
+
+— but check `git status` first: `git add -A knowledge-base` sweeps dirty KB files into the commit; stage deliberately when the tree carries unrelated edits.
+
+Sweep for stale references — archival without it strands consumers: `grep -rn "specs/<branch>" --include='*.md' knowledge-base/ plugins/ apps/ | grep -v archive/` — repoint live-path hits or document them as intentionally live. One known residue: an `operator-bootstrap` `bootstrap.sh` is named by a follow-through issue's `auto_command:` at its LIVE path — post-archive that command 404s; record the archive path in the issue.
+
+A `WARNING: found a ... but NO ...` partial-discovery line means the union of the three axes (slug match + branch diff + untracked paths) found one class but nothing of the other — surface it verbatim; confirm no artifact of the missing class exists. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — once those reads have run, the deferral's reason is discharged; in-PR archival beats stranding. On `soleur:ship` re-entry after this step, resolve spec/plan from the `archive/` path — the live-path globs no longer match.
+
+## Semver Label and Changelog
 
 After the PR is created or updated, determine the appropriate semver label and apply it.
 
@@ -2079,7 +2085,7 @@ Replace `semver:patch` with `semver:minor` or `semver:major` as appropriate. Rep
 
 **Step 5:** Validate consistency -- if new agents, skills, or commands were detected in Step 1 but the label is `semver:patch`, warn the user that the label may be incorrect. New components typically warrant `semver:minor`.
 
-### Feature-Tweet Draft (pre-merge bundle)
+## Feature-Tweet Draft (pre-merge bundle)
 
 After the semver/`app:*` labels are applied, run the eligibility gate — **in this body, not
 behind the pointer.** The extraction under ADR-229 moved the whole step to the reference,
@@ -2168,7 +2174,20 @@ retired both the driver and AC17.)
 
 ### CI Status Check
 
-After confirming mergeability (and a passing `wait-ready-run`), queue auto-merge and let GitHub handle waiting for CI. Wrap the call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
+After confirming mergeability — and, for a draft, a passing `wait-ready-run` below — queue auto-merge and let GitHub handle waiting for CI.
+
+If the PR is a draft, mark it ready with a user token (`GITHUB_TOKEN` cannot ready a PR) and wait for the ready run before arming. One Bash call, `timeout: 420000`:
+
+```bash
+K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBER) && gh pr ready PR_NUMBER \
+  && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
+```
+
+Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
+
+If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
+
+Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
 ```bash
 SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
@@ -2200,6 +2219,8 @@ The `with_lock <name> <timeout_s> -- <cmd> [args...]` wrapper acquires the lock,
 Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks reported" when CI hasn't registered yet, causing premature merge attempts.
 
 **If auto-merge fails to queue:** Check `gh api repos/{owner}/{repo} --jq '.allow_auto_merge'` -- it must be `true`.
+
+Present the PR URL to the user.
 
 ## Phase 7: Poll for Merge and Cleanup
 
@@ -2267,6 +2288,14 @@ if [[ "$sync_ok" -eq 1 ]]; then
     sync_ok=0
   fi
 fi
+# ADR-276 S3 (#9728): the head-verdict resolver is read independent of sync_ok/SYNC_SNAP. A disabled BEHIND auto-sync (not in a
+# worktree, an old sync script) says nothing about the resolver; keying it on the snapshot made a ready PR's draft-run `test` row
+# read as a required failure there. Identity-verified root plus a readable script is the whole condition.
+VERDICT_OK=0
+if [[ -n "$SYNC_ROOT" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
+  VERDICT_OK=1
+fi
 # Required-check names: fetched ONCE (rules change only by operator action).
 # Fail-open by design: an API failure leaves REQUIRED_CHECKS empty and the per-tick
 # scan a no-op; do NOT "harden" to fail-closed (breaks repos without branch
@@ -2317,7 +2346,7 @@ while true; do
       # ADR-276 S3: a ready PR's red `test` may be the DRAFT run's row; ask the resolver.
       vstate=""
       for n in "${failed_names[@]}"; do
-        [[ "$n" == test && -n "$SYNC_SNAP" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] || continue
+        [[ "$n" == test && "$VERDICT_OK" -eq 1 ]] || continue
         vout="$(bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null)" || vout=""
         vline="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$vout")" || vline=""
         vstate="${vline#*state=}"; vstate="${vstate%% *}"; break
@@ -2755,56 +2784,20 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    4. Paste run-URL + byte count + verbatim URLs into the closing comment
    ```
 
-   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -t follow-through-body.XXXXXXXX.md); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and precondition-gate calls — a separate Bash call does not inherit `$body`), then create the issue:
+   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)"); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and `rm` calls — a separate Bash call does not inherit `$body`), then create the issue:
 
    ```bash
    gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file "$body"
+   rm -f "$body"
    ```
 
    Replace `<ITEM_DESCRIPTION>` with the text after the ⏳ emoji (trimmed). Replace `<MILESTONE>` with the value from the roadmap or "Post-MVP / Later".
 
    **Issue body template** (write to the temp file):
-
-   ````text
-   ## Follow-Through Item
-
-   <ITEM_DESCRIPTION>
-
-   <!-- When this item is about a migration, include either of:
-   **Migration file:** `NNN_full_stem.sql`
-   See "Migration filename anchor" rule above. -->
-
-   **Source PR:** #<PR_NUMBER>
-   **Created by:** soleur:ship Phase 7 Step 3.5
-   **Created:** <YYYY-MM-DD>
-
-   ## Verification
-
-   <!-- soleur:followthrough
-     script=scripts/followthroughs/<feature-name>-<ISSUE_NUM>.sh
-     earliest=<ISO-8601-UTC>
-     secrets=<comma-separated-secret-names-or-omit>
-   -->
-
-   **UNFENCED, COLUMN 0 — this is load-bearing, not formatting.** The sweeper deliberately
-   SKIPS fenced blocks (#4200 Gap 3: a fenced directive is an example, not an enrolment) and
-   anchors the opener at column 0. This template previously wrapped the directive in a
-   ```` ```html ```` fence, and every tracker created from it was enrolled in name only —
-   six of 56 open trackers were dead that way, the oldest silent since 2026-06, each with its
-   directive plainly visible in the issue body. The indentation above is this document's list
-   nesting; the `<!--` must start at column 0 in the ISSUE BODY. Two mechanical backstops now
-   agree with the sweeper: `.claude/hooks/follow-through-directive-gate.sh` denies a fenced
-   `gh issue create` and names the fence as the cause, and the sweeper comments on any open
-   tracker it finds in this state and reds the run.
-
-   Canonical convention: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
-   The directive is parsed daily by `.github/workflows/scheduled-followthrough-sweeper.yml`
-   via [scripts/sweep-followthroughs.sh](../../../../scripts/sweep-followthroughs.sh) — exit 0 PASS / exit 1 FAIL / other TRANSIENT.
-
-   ## Status
-
-   Awaiting verification. The follow-through sweeper will check this issue once `earliest` is reached.
-   ````
+   [followthrough-issue-body-template.md](./references/followthrough-issue-body-template.md)
+   — the fenced block inside IS the issue body; the `<!-- soleur:followthrough`
+   directive must land at column 0 in the issue body (the sweeper skips fenced
+   directives — enrollment-in-name-only was the #4200-Gap-3 failure shape).
 
    **Step 3.5.A — Generate the stub script.** For each item, scaffold a stub under
    [scripts/followthroughs/](../../../../scripts/followthroughs/) named
@@ -2822,9 +2815,9 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
   - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
   - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script reads member-authored comments and branches on the LAST verdict — do **not** inline a one-liner here, copy [cpx22-invoice-reconcile-7431.sh](../../../../scripts/followthroughs/cpx22-invoice-reconcile-7431.sh), which is the reference implementation. A `grep -q '^RESULT: (PASS|FAIL)'` in this section's `… && exit 0 || exit 1` idiom **exits 0 on an explicit FAIL** and closes the tracker on the operator's own rejection; that inversion shipped here once and is why this bullet points at code instead of prose. The operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
 
-     **An author filter is mandatory, and it is [trusted-verdict.sh](../../../../scripts/lib/trusted-verdict.sh), never an inline `authorAssociation` select.** The repo is PUBLIC and a probe's exit code closes the tracker, so an unfiltered `.comments[].body` takes a verdict from anyone (#7448). `source` it, call `trusted_verdict_bodies <issue>`: bodies on rc 0, **rc 2 (TRANSIENT) when a comment or permission read fails**, so absence-of-evidence never reads as a pass.
+     **An author filter is mandatory, and it is [trusted-verdict.sh](../../../../scripts/lib/trusted-verdict.sh), never an inline `authorAssociation` select.** The repo is PUBLIC and a probe's exit code closes the tracker, so an unfiltered `.comments[].body` takes a verdict from anyone (#7448). `source` it, call `trusted_verdict_bodies <issue>` (`trusted_verdict_comments` for created times): output on rc 0, **rc 2 (TRANSIENT) when a read fails**, so absence-of-evidence never reads as a pass.
 
-     **Never re-inline `authorAssociation`:** it is computed against the *reading token's* visibility, so under `GITHUB_TOKEN` a member with PRIVATE membership reads as `CONTRIBUTOR` and their verdict is dropped **silently** (#6617 — two months of nightly FAIL on a recorded verdict). [varq-ban](../../../../scripts/lint-followthrough-varq-ban.sh) rule 4 obliges the lib whenever a probe reads comments AND branches on `RESULT:`. Mechanism, its blind spots and the `\b`/no-echo/hardcoded-tracker rules: [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md).
+     **Never re-inline `authorAssociation` / `author_association`:** it is computed against the *reading token's* visibility, so under `GITHUB_TOKEN` a member with PRIVATE membership reads as `CONTRIBUTOR` and their verdict is dropped **silently** (#6617, #9818). [varq-ban](../../../../scripts/lint-followthrough-varq-ban.sh) rule 5 bans either spelling; rule 4 obliges the lib for comment-read spellings and `RESULT:` / `S<n>-<WORD>` markers (COVERAGE paragraph lists the gaps). Mechanism: [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md).
   - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
   - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
 
@@ -2958,12 +2951,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Step 3:** Verify each schema-addition migration is live in production by querying the Supabase REST API:
 
-   ```bash
-   SUPABASE_URL=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)
-   SUPABASE_KEY=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain)
-   curl -s "$SUPABASE_URL/rest/v1/<table>?select=<new_column>&limit=1" \
-     -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY"
-   ```
+   Run the probe in [supabase-column-probe.md](./references/supabase-column-probe.md) (one Bash call).
 
 - If the query returns data (even `null` values): the column exists. Report "Migration verified: `<column>` exists in `<table>`."
 - If the query returns a 400/404 or `column not found` error: the migration was NOT applied. Report the failure and attempt to apply it using the Supabase CLI or Management API. Do NOT silently proceed — the deployed code expects the new schema.
@@ -3018,7 +3006,7 @@ This detects `[gone]` branches (where the remote was deleted after merge), remov
 
 The archives that actually exist under `specs/archive/` were committed by **compound's** automatic consolidation (`git mv` + commit on the feature branch), which is the only mechanism that persists.
 
-The practical consequence: **ship's Phase 6 step 5.5 is now the in-PR archival point.** Compound's Step E archives eagerly when no live-path reader remains, but a deferred archival — the legitimate choice when `specs/<branch>/decision-challenges.md` must stay live for Phase 6 step 2.5's Model Dissents render or the plan file's `## Operator Holds` for step 5 — no longer strands the artifacts: step 5.5 runs `archive-kb.sh` AFTER those last reads and the `git mv` rides the same PR. A follow-up PR is never required for archival. **Why the ordering is load-bearing:** PR #7240 deferred compound's archival so Phase 6 step 2.5 could read `decision-challenges.md`, on the strength of `cleanup-merged` archiving post-merge — it did not, and the spec dir shipped unarchived; #9768 shipped unarchived the same way in 2026-10.
+The practical consequence: **ship's Phase 6.45 (KB Artifact Archival) is now the in-PR archival point** — the named phase both PR arms run before any `gh pr ready` / `gh pr merge` site, backed by the `ship-kb-archive-gate.sh` PreToolUse hook. Compound's Step E archives eagerly when no live-path reader remains, but a deferred archival — the legitimate choice when `specs/<branch>/decision-challenges.md` must stay live for Phase 6 step 2.5's Model Dissents render or the plan file's `## Operator Holds` for step 5 — no longer strands the artifacts: Phase 6.45 runs `archive-kb.sh` AFTER those last reads and the `git mv` rides the same PR. A follow-up PR is never required for archival. **Why the ordering is load-bearing:** PR #7240 deferred compound's archival so Phase 6 step 2.5 could read `decision-challenges.md`, on the strength of `cleanup-merged` archiving post-merge — it did not, and the spec dir shipped unarchived; #9768 shipped unarchived the same way in 2026-10.
 
 **If working from a worktree:** Navigate to the main repo root first, then run cleanup.
 

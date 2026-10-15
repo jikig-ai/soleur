@@ -137,7 +137,7 @@ where `SENTRY_IAC_AUTH_TOKEN` works; `dev` and `prd` must resolve to distinct Su
 refs. A smarter model does not thereby learn that your Sentry token is misprovisioned.
 
 Corroborating datum: the Opus 4.6→4.7 upgrade
-(`knowledge-base/project/brainstorms/2026-04-16-model-upgrade-opus-4-7-brainstorm.md`)
+(`knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-16-model-upgrade-opus-4-7-brainstorm.md`)
 retired **zero** rules as obsolete and added zero rules for model-specific failure modes.
 Soleur has never observed model-version-dependent rule necessity.
 

@@ -82,8 +82,18 @@ HEAVY_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webp
 # e2e is a required context and must keep reporting on drafts (#8450); test-bun is 1.81 min/run (below the 3 min bar);
 # web-platform-build and the aggregator `test` are checked on their own below.
 S2_ONLY_PINNED="e2e test-bun web-platform-build"
+# ADR-276 S4 (#9729, PR B): three jobs (two heavy ones and the S2-only test-bun) additionally carry `pr-selection` in `needs:` and a PR-skip
+# term appended AFTER every earlier term, so the S2 and S3 terms stay verbatim. scripts/ci-push-dedupe.test.sh pins the term's grammar and
+# executes its truth table; this suite only has to keep seeing the S3 terms intact, so it derives the term from the same prefix.
+PR_GATED_PINNED="test-bun test-scripts-heavy test-webplat"
+PR_T_EV="github.event_name == 'pull_request' && "
+PR_T_AC="needs.pr-selection.outputs.active == 'true' && "
+PR_T_HN="needs.pr-selection.outputs.head_sha != '' && "
+PR_T_HE="needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && "
+PR_TERM_PRE="!($PR_T_EV$PR_T_AC$PR_T_HN${PR_T_HE}contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',"
+pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # Every other job: cheap guards and the lever itself. A NEW job must be classified: add it to HEAVY_PINNED or here.
-LIGHT_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate push-dedupe rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
+LIGHT_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate pr-selection push-dedupe rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
 TYPES_PINNED='["opened", "synchronize", "reopened", "ready_for_review"]'
 REASONS="bad_pr ready fork read_error not_draft switch_off ok"
 REPO_SLUG="jikig-ai/soleur"
@@ -116,8 +126,14 @@ LIGHTSET = os.environ.get("LIGHT_PINNED", "").split()
 TAIL = os.environ["ELIDE_TAIL"]
 CLAUSE = os.environ["LIGHT_CLAUSE"]
 TYPES = json.loads(os.environ["TYPES_PINNED"])
-CANON_HEAVY = "${{ !cancelled() && " + TAIL + " && " + CLAUSE + " }}"
-CANON_S2 = "${{ !cancelled() && " + TAIL + " }}"
+PRGATED = os.environ.get("PR_GATED_PINNED", "").split()
+PRPRE = os.environ["PR_TERM_PRE"]
+def pr_term(leg): return PRPRE + leg + ",'))"
+def canon_heavy(n): return "${{ !cancelled() && " + TAIL + " && " + CLAUSE + ((" && " + pr_term(n)) if n in PRGATED else "") + " }}"
+def canon_s2(n): return "${{ !cancelled() && " + TAIL + ((" && " + pr_term(n)) if n in PRGATED else "") + " }}"
+def want_needs(n, dl):
+    out = ["push-dedupe"] + (["draft-light"] if dl else []) + (["pr-selection"] if n in PRGATED else [])
+    return sorted(out)
 CANON_TEST = "${{ always() && " + TAIL + " }}"
 ENV_KEYS = {"GH_TOKEN", "GH_REPO", "PR_NUMBER", "ACTION", "HEAD_REPO", "SWITCH"}
 LEGS = {"test-webplat", "test-bun", "test-scripts", "test-scripts-heavy", "web-platform-build", "encryption-posture"}
@@ -140,6 +156,11 @@ def ev(expr, event, elide, light, need_results, cancelled=False):
     e = e[3:-2].strip()
     has_status = bool(re.search(r"\b(cancelled|always|success|failure)\(\)", e))
     e = e.replace("!cancelled()", "(not CANC)").replace("always()", "True").replace("success()", "(NEEDOK)")
+    # the PR-skip term (ADR-276 S4): this suite grades the S3 terms, so the S4 inputs are held at their INERT point (no activation, no
+    # listed leg); scripts/ci-push-dedupe.test.sh executes that term's own truth table over every input combination.
+    e = re.sub(r"contains\(format\(',\{0\},', needs\.pr-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", lambda m: '(",%s," in ",,")' % m.group(1), e)
+    e = e.replace("needs.pr-selection.outputs.active", "''").replace("needs.pr-selection.outputs.head_sha", "''").replace("github.event.pull_request.head.sha", "''")
+    e = re.sub(r"!(?=\()", " not ", e)
     e = e.replace("github.event_name", "EV").replace("needs.push-dedupe.outputs.elide", "EL").replace("needs.draft-light.outputs.light", "LT")
     e = e.replace("&&", " and ").replace("||", " or ")
     ok = all(r == "success" for r in need_results)
@@ -252,15 +273,15 @@ if mode == "gated":
     for n in HEAVY:
         j = jobs.get(n)
         if j is None: tags.append("G-MISSING:" + n); continue
-        if sorted(needs(j)) != ["draft-light", "push-dedupe"]: tags.append("G-NEEDS:" + n)
-        if j.get("if") != CANON_HEAVY: tags.append("G-COND:" + n)
+        if sorted(needs(j)) != want_needs(n, True): tags.append("G-NEEDS:" + n)
+        if j.get("if") != canon_heavy(n): tags.append("G-COND:" + n)
         if j.get("continue-on-error"): tags.append("G-COE:" + n)
     for n in S2ONLY:
         j = jobs.get(n)
         if j is None: tags.append("G-MISSING:" + n); continue
         if "draft-light" in needs(j) or "draft-light" in str(j.get("if", "")): tags.append("G-S2ONLY-TOUCHED:" + n)
-        if j.get("if") != CANON_S2: tags.append("G-S2ONLY-COND:" + n)
-        if needs(j) != ["push-dedupe"]: tags.append("G-S2ONLY-NEEDS:" + n)
+        if j.get("if") != canon_s2(n): tags.append("G-S2ONLY-COND:" + n)
+        if sorted(needs(j)) != want_needs(n, False): tags.append("G-S2ONLY-NEEDS:" + n)
     t = jobs.get("test") or {}
     if "draft-light" not in needs(t): tags.append("G-TEST-NEEDS")
     if t.get("if") != CANON_TEST: tags.append("G-TEST-IF")
@@ -299,7 +320,7 @@ if mode == "agg":
     tags = []
     n = needs(t)
     if "draft-light" not in n: tags.append("A-NEEDS")
-    if sorted(x for x in n if x not in LEGS) != ["draft-light", "push-dedupe"]: tags.append("A-NEEDS-SET")
+    if sorted(x for x in n if x not in LEGS) != ["draft-light", "pr-selection", "push-dedupe"]: tags.append("A-NEEDS-SET")
     st = (t.get("steps") or [{}])[0]
     env = st.get("env") or {}
     if "".join(str(env.get("DRAFT_LIGHT", "")).split()) != "${{needs.draft-light.outputs.light}}": tags.append("A-ENV")
@@ -329,7 +350,7 @@ PY
 
 chk() {
   HEAVY_PINNED="$HEAVY_PINNED" S2_ONLY_PINNED="$S2_ONLY_PINNED" LIGHT_PINNED="$LIGHT_PINNED" ELIDE_TAIL="$ELIDE_TAIL" \
-    LIGHT_CLAUSE="$LIGHT_CLAUSE" TYPES_PINNED="$TYPES_PINNED" DRAFT_MSG="$DRAFT_MSG" python3 "$SANDBOX/chk.py" "$@"
+    LIGHT_CLAUSE="$LIGHT_CLAUSE" TYPES_PINNED="$TYPES_PINNED" DRAFT_MSG="$DRAFT_MSG" PR_GATED_PINNED="$PR_GATED_PINNED" PR_TERM_PRE="$PR_TERM_PRE" python3 "$SANDBOX/chk.py" "$@"
 }
 
 # ── Helper: the gh shim ──────────────────────────────────────────────────────
@@ -817,7 +838,7 @@ fi
 if [[ $fail -ne 0 ]]' '  exit 0
 fi
 if [[ $fail -ne 0 ]]' D3
-  mutate_agg arm-any-event '"$EVENT_NAME" == "pull_request" && ' '' D5
+  mutate_agg arm-any-event '"$EVENT_NAME" == "pull_request" && "$DRAFT_LIGHT"' '"$DRAFT_LIGHT"' D5
   mutate_agg arm-loose-compare '"$DRAFT_LIGHT" == "true"' '-n "$DRAFT_LIGHT"' D7
   mutate_agg arm-case-insensitive '"$DRAFT_LIGHT" == "true"' '"${DRAFT_LIGHT,,}" == "true"' D7
   mutate_agg arm-event-loose 'if [[ "$EVENT_NAME" == "pull_request" && "$DRAFT_LIGHT"' 'if [[ "$EVENT_NAME" != "push" && "$DRAFT_LIGHT"' D5
@@ -858,6 +879,10 @@ mutate_yml() {
 }
 HEAVY_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE }}"
 S2_IF="if: \${{ !cancelled() && $ELIDE_TAIL }}"
+# the three jobs that carry the S4 PR-skip term (appended last): their live conditions and needs lines
+WEBPLAT_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-webplat) }}"
+HEAVYSC_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-scripts-heavy) }}"
+BUN_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-bun) }}"
 # trigger
 mutate_yml y-types-no-ready "    types: [opened, synchronize, reopened, ready_for_review]" "    types: [opened, synchronize, reopened]" trigger T-TYPES
 mutate_yml y-types-only-ready "    types: [opened, synchronize, reopened, ready_for_review]" "    types: [ready_for_review]" trigger T-TYPES
@@ -908,10 +933,10 @@ mutate_yml y-dl-no-step-coe "        continue-on-error: true
           PR_NUMBER" wrapper W-COE
 # the gated set
 mutate_yml y-gate-no-clause "  test-webplat:
-    needs: [push-dedupe, draft-light]
-    $HEAVY_IF" "  test-webplat:
-    needs: [push-dedupe, draft-light]
-    $S2_IF" gated G-COND:test-webplat
+    needs: [push-dedupe, draft-light, pr-selection]
+    $WEBPLAT_IF" "  test-webplat:
+    needs: [push-dedupe, draft-light, pr-selection]
+    if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-webplat) }}" gated G-COND:test-webplat
 mutate_yml y-gate-no-need "  test-scripts:
     needs: [push-dedupe, draft-light]" "  test-scripts:
     needs: [push-dedupe]" gated G-NEEDS:test-scripts
@@ -921,15 +946,15 @@ mutate_yml y-gate-heavy-missing-clause "  shard-totality-mutations:
     needs: [push-dedupe, draft-light]
     if: \${{ !cancelled() && $ELIDE_TAIL }}" gated G-SET-IF
 mutate_yml y-gate-success-fn "  test-scripts-heavy:
-    needs: [push-dedupe, draft-light]
-    $HEAVY_IF" "  test-scripts-heavy:
-    needs: [push-dedupe, draft-light]
-    if: \${{ success() && $ELIDE_TAIL && $LIGHT_CLAUSE }}" truth TT:test-scripts-heavy
+    needs: [push-dedupe, draft-light, pr-selection]
+    $HEAVYSC_IF" "  test-scripts-heavy:
+    needs: [push-dedupe, draft-light, pr-selection]
+    if: \${{ success() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-scripts-heavy) }}" truth TT:test-scripts-heavy
 mutate_yml y-gate-lost-cancelled "  test-webplat:
-    needs: [push-dedupe, draft-light]
-    $HEAVY_IF" "  test-webplat:
-    needs: [push-dedupe, draft-light]
-    if: \${{ $ELIDE_TAIL && $LIGHT_CLAUSE }}" truth TT:test-webplat
+    needs: [push-dedupe, draft-light, pr-selection]
+    $WEBPLAT_IF" "  test-webplat:
+    needs: [push-dedupe, draft-light, pr-selection]
+    if: \${{ $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-webplat) }}" truth TT:test-webplat
 mutate_yml y-gate-light-eq-false "  test-scripts:
     needs: [push-dedupe, draft-light]
     $HEAVY_IF" "  test-scripts:
@@ -983,17 +1008,17 @@ mutate_yml y-e2e-if "  e2e:
     needs: [push-dedupe]
     $HEAVY_IF" gated G-S2ONLY-TOUCHED:e2e
 mutate_yml y-test-bun-gated "  test-bun:
-    needs: [push-dedupe]
-    $S2_IF" "  test-bun:
-    needs: [push-dedupe, draft-light]
-    $HEAVY_IF" gated G-S2ONLY-TOUCHED:test-bun
+    needs: [push-dedupe, pr-selection]
+    $BUN_IF" "  test-bun:
+    needs: [push-dedupe, draft-light, pr-selection]
+    if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-bun) }}" gated G-S2ONLY-TOUCHED:test-bun
 mutate_yml y-build-gated "  web-platform-build:
     needs: [push-dedupe]
     $S2_IF" "  web-platform-build:
     needs: [push-dedupe, draft-light]
     $HEAVY_IF" gated G-S2ONLY-TOUCHED:web-platform-build
 # the aggregator: draft-light in needs and env; its own `if:` must not gain the term (it would skip a required context)
-mutate_yml y-agg-no-need "web-platform-build, encryption-posture, push-dedupe, draft-light]" "web-platform-build, encryption-posture, push-dedupe]" agg A-NEEDS
+mutate_yml y-agg-no-need "web-platform-build, encryption-posture, push-dedupe, draft-light, pr-selection]" "web-platform-build, encryption-posture, push-dedupe, pr-selection]" agg A-NEEDS
 mutate_yml y-agg-no-env "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}
 " "" agg A-ENV
 mutate_yml y-agg-env-literal "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}" "          DRAFT_LIGHT: \${{ needs.draft-light.result }}" agg A-ENV
@@ -1026,11 +1051,11 @@ live_control gated gated "  e2e:
     needs: [push-dedupe]" "  e2e:
     needs: [push-dedupe, draft-light]" "TAGS:G-"
 live_control truth truth "  test-webplat:
-    needs: [push-dedupe, draft-light]
-    $HEAVY_IF" "  test-webplat:
-    needs: [push-dedupe, draft-light]
-    $S2_IF" "TAGS:TT:"
-live_control agg agg "web-platform-build, encryption-posture, push-dedupe, draft-light]" "web-platform-build, encryption-posture, push-dedupe]" "TAGS:A-"
+    needs: [push-dedupe, draft-light, pr-selection]
+    $WEBPLAT_IF" "  test-webplat:
+    needs: [push-dedupe, draft-light, pr-selection]
+    if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-webplat) }}" "TAGS:TT:"
+live_control agg agg "web-platform-build, encryption-posture, push-dedupe, draft-light, pr-selection]" "web-platform-build, encryption-posture, push-dedupe, pr-selection]" "TAGS:A-"
 case "$(live_verdict wrapper "$SANDBOX/does-not-exist.yml")" in CRASH:*) pass ;; *) fail "LIVE CONTROL: a missing workflow file did not read as a checker crash" ;; esac
 # names_clean: a doctored required-set file must be reported, a missing one must be reported as MISSING
 _nr="$SANDBOX/mut/nc-root"; rm -rf "$_nr"; mkdir -p "$_nr"

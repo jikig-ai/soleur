@@ -44,5 +44,5 @@ When transforming markdown files with bash scripts, three traps cause silent bod
 
 - Issue: #1774
 - Parent research: #1770 (OpenHands portability inventory)
-- Inventory: `knowledge-base/project/specs/openhands-portability/inventory.md`
-- Recommendation: `knowledge-base/project/specs/openhands-portability/recommendation.md`
+- Inventory: `knowledge-base/project/specs/archive/20261013-003106-openhands-portability/inventory.md`
+- Recommendation: `knowledge-base/project/specs/archive/20261013-003106-openhands-portability/recommendation.md`

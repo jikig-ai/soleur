@@ -1100,6 +1100,94 @@ def check_resource_partition(
     return tf_store_count
 
 
+# Redis client packages whose presence means the app talks to a Redis the ledger
+# must account for. Exact names only: `@opentelemetry/instrumentation-ioredis`
+# is instrumentation, not a client.
+REDIS_CLIENT_PACKAGES = frozenset(
+    {
+        "redis",
+        "ioredis",
+        "iovalkey",
+        "@redis/client",
+        "@valkey/client",
+        "@upstash/redis",
+        "@keyv/redis",
+        "connect-redis",
+        "bullmq",
+    }
+)
+_PKG_DEP_SECTIONS = (
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+    "peerDependencies",
+)
+_PKG_SKIP_DIRS = frozenset(
+    {"node_modules", ".git", ".next", ".worktrees", ".claude", ".terraform", "dist", "build"}
+)
+
+
+def find_package_json_files(repo_root: Path) -> list[Path]:
+    """Every package.json in the tree (any app or package), skipping vendored and
+    generated directories."""
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _PKG_SKIP_DIRS)
+        if "package.json" in filenames:
+            found.append(Path(dirpath) / "package.json")
+    return found
+
+
+def _redis_clients_in(deps: dict) -> list[str]:
+    """Names (or `npm:` alias targets) in a dependency map that are Redis clients."""
+    hits: list[str] = []
+    for name, spec in deps.items():
+        if name in REDIS_CLIENT_PACKAGES:
+            hits.append(name)
+        elif isinstance(spec, str) and spec.startswith("npm:"):
+            target = spec[len("npm:") :]
+            if "@" in target[1:]:  # drop a version suffix; keep a leading @scope
+                target = target[: target.index("@", 1)]
+            if target in REDIS_CLIENT_PACKAGES:
+                hits.append(f"{name} (alias of {target})")
+    return hits
+
+
+def check_redis_client_dependency(
+    ledger: dict, repo_root: Path, fails: list[str]
+) -> None:
+    """A Redis client dependency in any package.json with no `redis.*` ledger row means
+    a session/replay Redis (ADR-068 Phase 4a) is being added without an encryption-posture
+    row: a store with no *.tf anchor is invisible to the resource partition."""
+    clients: list[str] = []
+    for pkg in find_package_json_files(repo_root):
+        rel = pkg.relative_to(repo_root)
+        try:
+            data = json.loads(read_text(pkg))
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            fails.append(
+                f"FAIL: {rel} is not a valid JSON object -> cannot check for a Redis "
+                "client dependency"
+            )
+            continue
+        for key in _PKG_DEP_SECTIONS:
+            section = data.get(key)
+            if isinstance(section, dict):
+                clients.extend(f"{c} ({rel})" for c in _redis_clients_in(section))
+    has_row = any(s["store"].startswith("redis.") for s in ledger["stores"])
+    # MUTATION-TARGET: MB-R1 start (redis client dependency without a redis.* row -> FAIL)
+    if clients and not has_row:
+        fails.append(
+            f"FAIL: Redis client dependency {', '.join(sorted(clients))} but no redis.* "
+            "stores[] row -> add a stores[] row (and a non_iac_stores entry if it has no "
+            "*.tf anchor) for the Redis this client talks to"
+        )
+    # MUTATION-TARGET: MB-R1 end
+
+
+
 def check_positive_work_floor(
     ledger: dict, tf_store_count: int, fails: list[str]
 ) -> None:
@@ -1601,6 +1689,7 @@ def run_sweep(
     tf_inventory = scan_tf_inventory(tf_files, cache)
     tf_store_count = check_resource_partition(ledger, tf_inventory, fails)
     check_positive_work_floor(ledger, tf_store_count, fails)
+    check_redis_client_dependency(ledger, repo_root, fails)
     check_live_coverage_floor(ledger, fails)
     check_password_claims(ledger, tf_files, cache, fails)
     check_apparatus_pins(ledger, fails)
