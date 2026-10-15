@@ -340,3 +340,7 @@ The ingest route's Sentry events are designed to carry counts, a reason code and
 5. **The pre-authentication 403 residual (11.2)**, once engineering has measured it.
 6. **Marker lines (11.4)** as personal data in the Better Stack plane, and the Sentry fragment exposure (11.5): confirm that the existing PA-8 and Sentry entries cover them.
 7. That no `docs/legal/terms-and-conditions.md` change or `TC_VERSION` bump is owed.
+
+### 11.8 Addendum — 2026-10-15 (#9545): the pre-authentication 403 residual (11.2) is measured
+
+Engineering ran the repository's Squid configuration on the pinned digest (Squid 6.13) and sent three requests that are denied before the authentication rule, each presenting a victim workspace id as the proxy username with a bogus password: a plain GET, a CONNECT to port 22 and a CONNECT to port 8443. All three were logged with `workspace` `-` and status 403, so the presented name is not recorded on those paths; the same username on a CONNECT to port 443 reached authentication and was logged with status 407, which Vector drops (positive status allowlist). The 11.2 residual does not materialise on the tested paths; it is therefore removed from the open counsel list in 11.7 item 5 as an engineering fact. Re-measure on a Squid version change.
