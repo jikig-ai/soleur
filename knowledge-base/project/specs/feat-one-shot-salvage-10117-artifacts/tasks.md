@@ -45,9 +45,11 @@ all four archive destinations AND the Phase 1 frontmatter retarget.
   BETWEEN the `#6760` seat bullet and the PID-namespace bullet (~line 79).
   Extract the line from `git show feat-10117-edge-coverage-residuals:…` by
   anchor grep, not by retyping.
-- [x] 2.2 `plugins/soleur/skills/work/SKILL.md`: append the branch bullet
-  ("**A mutation row is vacuous until a fixture distinguishes the mutant…**")
-  verbatim as the file's last line.
+- [x] 2.2 `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md`:
+  append the branch bullet ("**A mutation row is vacuous until a fixture
+  distinguishes the mutant…**") verbatim as a `## ` section — relocated
+  from SKILL.md's tail (the file is at its byte ceiling; see
+  decision-challenges).
 - [x] 2.3 Do NOT port: the sibling-worktree paragraph variant, the `6.8`
   bullet deletion, or the test-harness-sharp-edges pointer deletion.
 
