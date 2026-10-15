@@ -172,6 +172,14 @@ Live standing alarms over this source:
   destination) or `reason=gw_absent` (the gateway container is missing). Previously Sentry-only
   (`op=egress_gw_probe_fail`), which paged nobody. Decode + per-host repair:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
+- **`logtail_exploration_alert.registry_zot_log_credential_shape`** (#10321, `higher_than 0`
+  over 900 s, missing data counts as zero): `soleur-registry-zot-log-credential-shape-prd`.
+  Pages on ANY `SOLEUR_ZOT_LOG` envelope row carrying a credential shape — an unmasked
+  `Authorization` value, a `dp.(pt|st|sa|ct).` Doppler prefix with a ≥16 non-separator run,
+  or a bcrypt `$2[aby]$` hash — the standing vehicle for the check the now-dormant
+  `zot-log-channel-7440.sh` probe's exit-1 arm performed. One row is an incident; rotate the
+  affected credential FIRST, counts-only (never echo the value). Runbook:
+  [`registry-zot-credential-shape-10321.md`](./registry-zot-credential-shape-10321.md).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
