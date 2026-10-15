@@ -471,7 +471,29 @@ echo "=== Arm 6: the delegation arm (Guard 2) ==="
 DFX="$REPO_ROOT/plugins/soleur/test/fixtures/standing-delegation"
 DBIN="$TMP/dbin"; mkdir -p "$DBIN"
 [[ -f "$DFX/gh-stub.sh" && -f "$DFX/delegation-valid.md" && -f "$DFX/envelope-valid.md" ]] || { echo "FATAL: delegation fixtures missing" >&2; exit 2; }
-cp "$DFX/gh-stub.sh" "$DBIN/gh"; chmod +x "$DBIN/gh"
+cp "$DFX/gh-stub.sh" "$DBIN/gh-base"; chmod +x "$DBIN/gh-base"
+# The shared stub is read-only here and does not know the epic comment listing the receipt check reads: a wrapper answers
+# `api repos/<o>/<r>/issues/<n>/comments --paginate` from receipts-<n>.json and hands every other argv to the shared stub.
+# `eat-stdin` makes it drain (and count) whatever stdin it inherited, to prove no call can swallow the gate's row loop.
+cat > "$DBIN/gh" <<'WRAP'
+#!/usr/bin/env bash
+d="${STUB_DIR:?}"
+here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [ -f "$d/eat-stdin" ]; then n="$(cat | wc -c | tr -d ' ')"; echo "$n" >> "$d/stdin-bytes"; fi
+if [ "${1:-}" = api ] && [ "$#" -eq 3 ] && [ "$3" = --paginate ]; then
+  echo "$*" >> "$d/calls.log"
+  case "$2" in
+    repos/*/*/issues/*/comments)
+      p="${2%/comments}"; n="${p##*/}"
+      case "$(cat "$d/mode-comments" 2>/dev/null)" in net) echo "error connecting to api.github.com" >&2; exit 1 ;; esac
+      if [ -f "$d/receipts-$n.json" ]; then cat "$d/receipts-$n.json"; else echo '[]'; fi
+      exit 0 ;;
+  esac
+  echo "STUB-MISS $*" >> "$d/calls.log"; echo "gh wrapper: unsupported argv: $*" >&2; exit 64
+fi
+exec "$here/gh-base" "$@"
+WRAP
+chmod +x "$DBIN/gh"
 DURL1="https://github.com/example-org/example-repo/issues/77#issuecomment-1001"
 DURL2="https://github.com/example-org/example-repo/issues/77#issuecomment-1002"
 DREPO="$TMP/drepo"; mkdir -p "$DREPO"
@@ -563,12 +585,176 @@ assert_eq "0" "$(last_rc)" "H2: a plain operator (production-mutating) row with 
 assert_eq "0" "$(dlog_count)" "no delegation row, no verifier call"
 assert_verdict_line "plain production-mutating row"
 
+echo "=== Arm 6e: what the call carries, closed epics, case variants (testdesign F2) ==="
+sha_of() { # <stdin>: sha256 of the bytes on stdin
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi
+}
+SHA_ENV1="$(git -C "$DREPO" show HEAD:env-valid.md | sha_of)"
+dts() { jq -rn --arg d "$DTODAY" --argjson n "$1" '($d + "T00:00:00Z" | fromdateiso8601) + ($n * 86400) | strftime("%Y-%m-%dT%H:%M:%SZ")'; }
+mkdr() { # <name> <ran-iso> [fixture]: the delegation fixture with ", ran <iso>" on its delegation row(s); the result is $DF
+  mkd "$1" "${3:-deleg-valid.md}"; sed "s/\(envelope [A-Za-z0-9_.#@ -]*[A-Za-z0-9_.#-]\) |\$/\1, ran $2 |/" "$DF" > "$TMP/df/$1-ran.md"; DF="$TMP/df/$1-ran.md"
+}
+rcpt() { # <delegation-url> <envelope> <sha> <result> <author_association>: append a receipt comment to the epic's comment list
+  local body
+  body="$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=%s sha256=%s result=%s run=none -->\nMerged the change under your standing approval; it is live and healthy.' "$1" "$2" "$3" "$4")"
+  jq -n --arg b "$body" --arg a "$5" '{id: 9001, body: $b, author_association: $a, user: {login: "owner-user", type: "User"}}' >> "$STUB_DIR/rcpt.lines"
+  jq -s . "$STUB_DIR/rcpt.lines" > "$STUB_DIR/receipts-77.json"
+}
+AT="$DNOW"
+ncalls() { { cat "$STUB_DIR/calls.log" 2>/dev/null || true; } | grep -c -e "$1" || true; }
+
+dscn; echo '{"number":77,"state":"closed"}' > "$STUB_DIR/issue-77.json"; mkd tx1 deleg-valid.md; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "TX1: a row WITHOUT ran is a pre-act authorization: a closed epic is delegation-invalid (strict verify)"
+assert_reason "delegation-invalid" "TX1 closed epic, no ran"
+dscn; echo '{"number":77,"state":"closed"}' > "$STUB_DIR/issue-77.json"; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr tx1b "$AT"; run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "TX1b: a row WITH ran is audited at that time: a closed epic is forgiven when the act ran while it was open"
+assert_eq "1" "$(grep -c '^SOLEUR_RULE_APPLIED rule=hr-menu-option-ack-not-prod-write-auth note=delegation-verified$' "$TMP/last.out" || true)" "TX1c: the arm announces the verified delegation"
+no_miss "TX1b"
+dscn; mkd tx3 deleg-valid.md; sed 's/env-valid\.md/env-nonexistent.md/' "$DF" > "$TMP/df/tx3b.md"; run_d "$GATE" "$TMP/df/tx3b.md"
+assert_eq "1" "$(last_rc)" "TX3: an envelope path that is not in the repository is delegation-invalid (the call carries --envelope)"
+assert_reason "delegation-invalid" "TX3 missing envelope"
+dscn; mkd tx3c deleg-valid.md; sed 's/env-valid\.md/env-untracked.md/' "$DF" > "$TMP/df/tx3d.md"; cp "$DREPO/env-valid.md" "$DREPO/env-untracked.md"; run_d "$GATE" "$TMP/df/tx3d.md"; rm -f "$DREPO/env-untracked.md"
+assert_eq "1" "$(last_rc)" "TX3b: an envelope file that was never committed is delegation-invalid"
+dscn; mkd tx4 deleg-valid.md; sed 's/| operator (production-mutating) |/| Operator (Production-Mutating) |/' "$DF" > "$TMP/df/tx4b.md"; run_d "$GATE" "$TMP/df/tx4b.md"
+assert_eq "1" "$(last_rc)" "TX4: the class of a delegation row is matched exactly: Operator (Production-Mutating) is refused"
+assert_reason "bad-ruling-shape" "TX4 class case variant"
+assert_eq "0" "$(dlog_count)" "TX4b: a refused class is never verified"
+dscn; mkd tx5 deleg-valid.md; sed 's/Authorized by delegation/authorized BY delegation/' "$DF" > "$TMP/df/tx5b.md"; run_d "$GATE" "$TMP/df/tx5b.md"
+assert_eq "1" "$(last_rc)" "TX5: the phrase is matched exactly: authorized BY delegation is refused, never read as a plain operator row"
+assert_reason "bad-ruling-shape" "TX5 phrase case variant"
+dscn; mkd tx6 deleg-valid.md; sed 's/envelope env-valid\.md |/envelope env-valid.md, ran yesterday |/' "$DF" > "$TMP/df/tx6b.md"; run_d "$GATE" "$TMP/df/tx6b.md"
+assert_eq "1" "$(last_rc)" "TX6: a ran value that is not an ISO 8601 UTC time is bad-ruling-shape"
+assert_reason "bad-ruling-shape" "TX6 ran shape"
+dscn; mkd tx7 deleg-valid.md; sed 's/envelope env-valid\.md |/envelope env-valid.md, ran 2026-1-5T00:00:00Z |/' "$DF" > "$TMP/df/tx7b.md"; run_d "$GATE" "$TMP/df/tx7b.md"
+assert_eq "1" "$(last_rc)" "TX7: a short date in ran is bad-ruling-shape"
+dscn; mkd tx8 deleg-valid.md; sed 's/envelope env-valid\.md |/envelope env-valid.md, ran 2026-01-05T00:00:00Z extra |/' "$DF" > "$TMP/df/tx8b.md"; run_d "$GATE" "$TMP/df/tx8b.md"
+assert_eq "1" "$(last_rc)" "TX8: trailing text after the ran time is bad-ruling-shape"
+
+echo "=== Arm 6f: the audit time is enforced, strictly for a row without ran (R3) ==="
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr ax1 "$(dts -1)"; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "AX1: a row whose act ran BEFORE the delegation existed is delegation-invalid"
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr ax2 "$(dts 11)"; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "AX2: a row whose act ran AFTER the delegation expired is delegation-invalid"
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr ax3 "$AT" deleg-valid.md; sed 's/-1001/-1002/g;s/env-valid.md/env-valid-2.md/' "$DF" > "$TMP/df/ax3b.md"; run_d "$GATE" "$TMP/df/ax3b.md"
+assert_eq "1" "$(last_rc)" "AX3: an edited delegation is invalid in audit mode too"
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr ax4 "$AT"; run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "AX4: a ran row at a time inside the window passes with a matching receipt"
+assert_eq "1" "$(ncalls '^api repos/example-org/example-repo/issues/77/comments --paginate$')" "AX4b: the epic's comments were read once, with the paginating form"
+
+echo "=== Arm 6g: the execution receipt (R3): exists, attributable, matches ==="
+rx() { # <name> <expect-rc> <expect-reason or -> : the stub state is already built; builds the ran row and runs the gate
+  mkdr "$1" "$AT"; run_d "$GATE" "$DF"
+  assert_eq "$2" "$(last_rc)" "$1: rc"
+  if [[ "$3" != "-" ]]; then assert_reason "$3" "$1"; fi
+  no_miss "$1"
+}
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER;           rx RX0 0 -
+dscn;                                                              rx RX1 2 receipt-missing
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" rolled-back OWNER;    rx RX1b 0 -
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok COLLABORATOR;      rx RX1c 0 -
+dscn; rcpt "$DURL1" other-envelope.md "$SHA_ENV1" ok MEMBER;       rx RX2 2 receipt-mismatch
+dscn; rcpt "$DURL1" env-valid.md "$(printf '%064d' 1)" ok MEMBER;  rx RX3 2 receipt-mismatch
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" failed MEMBER;        rx RX4 2 receipt-mismatch
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok NONE;              rx RX5 2 receipt-mismatch
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok CONTRIBUTOR;       rx RX5b 2 receipt-mismatch
+dscn; rcpt "$DURL2" env-valid.md "$SHA_ENV1" ok MEMBER;            rx RX6 2 receipt-missing
+dscn; echo net > "$STUB_DIR/mode-comments";                        rx RX7 2 receipt-unreadable
+dscn; echo 'not json' > "$STUB_DIR/receipts-77.json";              rx RX8 2 receipt-unreadable
+dscn; echo '{"a":1}' > "$STUB_DIR/receipts-77.json";               rx RX8b 2 receipt-unreadable
+dscn; jq -n '[{id:1,body:"unrelated chatter",author_association:"MEMBER"}]' > "$STUB_DIR/receipts-77.json"
+printf '%s\n' "$(jq -n --arg b "$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none -->\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"MEMBER"}]')" >> "$STUB_DIR/receipts-77.json"
+rx RX9 0 -
+dscn; jq -n --arg b "$(printf 'hello\n<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none -->\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"MEMBER"}]' > "$STUB_DIR/receipts-77.json"; rx RX10 2 receipt-missing
+dscn; jq -n --arg b "$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none --> trailing\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"MEMBER"}]' > "$STUB_DIR/receipts-77.json"; rx RX11 2 receipt-missing
+dscn; rcpt "$DURL1" env-valid.md "$(printf '%s' "$SHA_ENV1" | tr 'a-f' 'A-F')" ok MEMBER; rx RX12 2 receipt-missing
+dscn; jq -n --arg b "$(printf '<!-- soleur-delegated-act v1 delegation=%s envelope=env-valid.md sha256=%s result=ok run=none -->\r\nok.' "$DURL1" "$SHA_ENV1")" '[{id:2,body:$b,author_association:"OWNER"}]' > "$STUB_DIR/receipts-77.json"; rx RX13 0 -
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkd rx14 deleg-valid.md; run_d "$GATE" "$DF"
+assert_eq "0" "$(last_rc)" "RX14: a row without ran needs no receipt"
+assert_eq "0" "$(ncalls 'issues/77/comments')" "RX14b: and the epic's comments are not read for it"
+dscn; echo '{"number":77,"state":"open"}' > "$STUB_DIR/issue-77.json"; mkdr rx15 "$AT"
+assert_eq "1" "$([ "$(grep -c 'ran ' "$DF")" -ge 1 ] && echo 1 || echo 0)" "RX15: the ran fixture carries a ran value (instrument)"
+
+echo "=== Arm 6h: one verifier call per (delegation, envelope, time), one receipt read per epic ==="
+cat > "$TMP/df/memo-same.md" <<EOF
+# Decision challenges - two rows, one delegation and one envelope (synthesized)
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| O1 first merge | operator (production-mutating) | Authorized by delegation $DURL1, envelope env-valid.md, ran $AT |
+| O2 second merge | operator (production-mutating) | Authorized by delegation $DURL1, envelope env-valid.md, ran $AT |
+EOF
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; run_d "$GATE" "$TMP/df/memo-same.md"
+assert_eq "0" "$(last_rc)" "MX1: two rows with the same delegation, envelope and time pass"
+assert_eq "2" "$(dlog_count)" "MX1b: both rows were examined"
+assert_eq "1" "$(ncalls 'issues/comments/1001')" "MX1c: the delegation comment was read once"
+assert_eq "1" "$(ncalls 'issues/77/comments')" "MX1d: the epic's comments were read once"
+cat > "$TMP/df/memo-env.md" <<EOF
+# Decision challenges - two rows, two envelope addresses (synthesized)
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| O1 first merge | operator (production-mutating) | Authorized by delegation $DURL1, envelope env-valid.md, ran $AT |
+| O2 second merge | operator (production-mutating) | Authorized by delegation $DURL1, envelope env-valid.md#first merge, ran $AT |
+EOF
+dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; rcpt "$DURL1" "env-valid.md#first merge" "$SHA_ENV1" ok MEMBER; run_d "$GATE" "$TMP/df/memo-env.md"
+assert_eq "0" "$(last_rc)" "MX2: two envelope addresses of one delegation pass with a receipt each"
+assert_eq "2" "$(ncalls 'issues/comments/1001')" "MX2b: a different envelope address is verified separately"
+assert_eq "1" "$(ncalls 'issues/77/comments')" "MX2c: but the epic's comments are still read once"
+
+echo "=== Arm 6i: no call can swallow the gate's own row loop (stdin is closed) ==="
+dscn; touch "$STUB_DIR/eat-stdin"; mkd si1 deleg-two-rows.md; run_d "$GATE" "$DF"
+assert_eq "1" "$(last_rc)" "SI1: a gh that drains stdin does not hide the second delegation row (valid, then edited: exit 1)"
+assert_eq "2" "$(dlog_count)" "SI1b: both rows were examined"
+dscn; touch "$STUB_DIR/eat-stdin"; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; rcpt "$DURL1" "env-valid.md#first merge" "$SHA_ENV1" ok MEMBER; run_d "$GATE" "$TMP/df/memo-env.md"
+assert_eq "0" "$(last_rc)" "SI2: the receipt read does not swallow the second ran row either"
+assert_eq "2" "$(dlog_count)" "SI2b: both ran rows were examined"
+assert_eq "1" "$([ "$(wc -l < "$STUB_DIR/stdin-bytes" | tr -d ' ')" -ge 4 ] && echo 1 || echo 0)" "SI2c: and there were gh calls to see an empty stdin"
+assert_eq "0" "$(grep -vcx 0 "$STUB_DIR/stdin-bytes")" "SI2d: every gh call saw an empty stdin"
+
+echo "=== Arm 6j: the verifier's rc and first line must agree (a fake verifier in a mirrored tree) ==="
+mkdir -p "$TMP/dm/fakeg/skills/ship/scripts" "$TMP/dm/fakeg/scripts"; cp "$GATE" "$TMP/dm/fakeg/skills/ship/scripts/technical-ruling-gate.sh"
+cat > "$TMP/dm/fakeg/scripts/delegation-verify.sh" <<'FAKEV'
+#!/usr/bin/env bash
+cat >/dev/null
+[ -z "${FAKE_V_OUT-}" ] || printf '%b' "$FAKE_V_OUT"
+exit "${FAKE_V_RC:-0}"
+FAKEV
+fakeg() { # <out> <rc> <fixture>
+  dscn; mkd fg "$3"; export FAKE_V_OUT="$1" FAKE_V_RC="$2"
+  run_d "$TMP/dm/fakeg/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; unset FAKE_V_OUT FAKE_V_RC
+}
+fakeg 'delegation: valid reason=ok\n' 0 deleg-valid.md
+assert_eq "0" "$(last_rc)" "FG1: rc 0 with a valid first line passes (instrument control)"
+fakeg 'delegation: invalid reason=expired\n' 0 deleg-valid.md
+assert_eq "2" "$(last_rc)" "FG2: rc 0 with an invalid first line is exit 2: the gate reads both, never the rc alone"
+assert_reason "delegation-unverifiable" "FG2"
+fakeg '' 0 deleg-valid.md
+assert_eq "2" "$(last_rc)" "FG3: a verifier that prints nothing is exit 2"
+fakeg 'delegation: valid reason=ok\n' 1 deleg-valid.md
+assert_eq "1" "$(last_rc)" "FG4: rc 1 is delegation-invalid whatever else it printed"
+dscn; mkdr fg5 "$AT"; export FAKE_V_OUT='delegation: valid reason=ok\n' FAKE_V_RC=0; run_d "$TMP/dm/fakeg/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; unset FAKE_V_OUT FAKE_V_RC
+assert_eq "2" "$(last_rc)" "FG5: a ran row whose verifier reports no fingerprint is exit 2"
+assert_reason "receipt-unreadable" "FG5"
+
 echo "=== Arm 6b: archived artifacts are checked for shape only (no network) ==="
 dscn; echo net > "$STUB_DIR/mode-repo"; mkd arch deleg-valid.md
 DSPECS="$TMP/dspecs"; mkdir -p "$DSPECS/archive/20260101-feat-dz"; cp "$DF" "$DSPECS/archive/20260101-feat-dz/decision-challenges.md"
 export TRG_SPECS_ROOT="$DSPECS"; TRG_BRANCH=feat-dz run_d "$GATE" --branch; unset TRG_SPECS_ROOT
 assert_eq "0" "$(last_rc)" "an archived artifact with a well-shaped delegation row passes without verification"
 assert_eq "0" "$(cat "$STUB_DIR/calls.log" 2>/dev/null | wc -l | tr -d ' ')" "the archive lookup made no gh call"
+assert_eq "1" "$(grep -c 'shape only and are NOT verified' "$TMP/last.err" || true)" "AR1: the archive note says delegation rows are shape-checked only and NOT verified"
+assert_eq "1" "$(grep -c '^\[PASS\] .*archived: 1 delegation rows were checked for shape only and were NOT verified' "$TMP/last.out" || true)" "AR2: the PASS line says so too, with the count"
+dscn; echo net > "$STUB_DIR/mode-repo"; mkdr archran "$AT"; cp "$DF" "$DSPECS/archive/20260101-feat-dz/decision-challenges.md"
+export TRG_SPECS_ROOT="$DSPECS"; TRG_BRANCH=feat-dz run_d "$GATE" --branch; unset TRG_SPECS_ROOT
+assert_eq "0" "$(last_rc)" "AR3: an archived artifact with a ran row passes on shape, with no receipt read either"
+assert_eq "0" "$(cat "$STUB_DIR/calls.log" 2>/dev/null | wc -l | tr -d ' ')" "AR3b: and no gh call was made"
+cp "$TMP/example.md" "$DSPECS/archive/20260101-feat-dz/decision-challenges.md"
+export TRG_SPECS_ROOT="$DSPECS"; TRG_BRANCH=feat-dz run_d "$GATE" --branch; unset TRG_SPECS_ROOT
+assert_eq "1" "$(grep -c '^\[PASS\] [^ ]*: [0-9]* rows examined$' "$TMP/last.out" || true)" "AR4: an archived artifact with no delegation row keeps the plain PASS line"
 dscn; mkd archbad deleg-bad-shape.md; cp "$DF" "$DSPECS/archive/20260101-feat-dz/decision-challenges.md"
 export TRG_SPECS_ROOT="$DSPECS"; TRG_BRANCH=feat-dz run_d "$GATE" --branch; unset TRG_SPECS_ROOT
 assert_eq "1" "$(last_rc)" "an archived artifact with a malformed delegation row still fails"
@@ -611,6 +797,65 @@ mutate_d deleg-class "$(dnoop deleg-class)" && { dscn; mkd mc deleg-wrong-class.
 mutate_d deleg-unv "$(dnoop deleg-unv)" && { dscn; echo 404 > "$STUB_DIR/mode-comment-1001"; mkd mu deleg-valid.md; killed_d deleg-unv 2 - "$DF"; }
 # 6 a delegation row outside a table is honoured
 mutate_d stray-deleg '/# mut:stray-deleg$/ s/print "@STRAY"/x = 1/' && { dscn; mkd ms deleg-stray.md; killed_d stray-deleg 2 - "$DF"; }
+
+# 7 R3: the audit time and the audit mode are what a row with ran is verified at
+mutate_d deleg-audit 's/ --audit --at "\$dran"//' && { dscn; echo '{"number":77,"state":"closed"}' > "$STUB_DIR/issue-77.json"; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr m7 "$AT"; killed_d deleg-audit 0 - "$DF"; }
+mutate_d deleg-at 's/ --at "\$dran"//' && { dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; mkdr m8 "$(dts -1)"; killed_d deleg-at 1 - "$DF"; }
+# 8 the envelope is part of the call
+mutate_d deleg-env 's/ --envelope "\$dpath"//' && { dscn; mkd m9 deleg-valid.md; sed 's/env-valid\.md/env-nonexistent.md/' "$DF" > "$TMP/df/m9b.md"; killed_d deleg-env 1 - "$TMP/df/m9b.md"; }
+# 9 stdin is closed on the verifier call and on the receipt read
+# (the real verifier never reads stdin, so the fake one that drains it stands in, in both trees)
+mutate_d stdin-verify 's# </dev/null >"\$work_dir/dv\.\$n\.out"# >"$work_dir/dv.$n.out"#' && {
+  cp "$TMP/dm/fakeg/scripts/delegation-verify.sh" "$TMP/dm/stdin-verify/scripts/delegation-verify.sh"
+  dscn; mkd m10 deleg-two-rows.md; export FAKE_V_OUT='delegation: valid reason=ok\n' FAKE_V_RC=0
+  run_d "$TMP/dm/fakeg/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; pl="$(dlog_count)"
+  run_d "$TMP/dm/stdin-verify/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; ml="$(dlog_count)"; unset FAKE_V_OUT FAKE_V_RC
+  if [[ "$pl" == 2 && "$ml" != 2 ]]; then echo "  PASS: mutant stdin-verify killed (rows examined $pl -> $ml)"; PASS=$((PASS + 1)); else echo "  FAIL: mutant stdin-verify SURVIVED (rows examined $pl -> $ml)"; FAIL=$((FAIL + 1)); fi
+}
+mutate_d stdin-receipt 's#2>/dev/null </dev/null \\$#2>/dev/null \\#' && { dscn; touch "$STUB_DIR/eat-stdin"; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; rcpt "$DURL1" "env-valid.md#first merge" "$SHA_ENV1" ok MEMBER; killed_d stdin-receipt 0 2 "$TMP/df/memo-env.md"; }
+# 10 the class and phrase are matched exactly
+mutate_d case-off "$(dnoop case-off)" && { dscn; mkd m11 deleg-valid.md; sed 's/| operator (production-mutating) |/| Operator (Production-Mutating) |/' "$DF" > "$TMP/df/m11b.md"; killed_d case-off 1 - "$TMP/df/m11b.md"; }
+# 11 each part of a receipt must match (a perfect receipt that differs in ONE part)
+mrcpt() { # <mutant> <delegation> <envelope> <sha> <result> <assoc>
+  dscn; rcpt "$2" "$3" "$4" "$5" "$6"; mkdr "m-$1" "$AT"; killed_d "$1" 2 - "$DF"
+}
+mutate_d receipt-deleg "$(dnoop receipt-deleg)" && mrcpt receipt-deleg "$DURL2" env-valid.md "$SHA_ENV1" ok MEMBER
+mutate_d receipt-env "$(dnoop receipt-env)" && mrcpt receipt-env "$DURL1" other-envelope.md "$SHA_ENV1" ok MEMBER
+mutate_d receipt-sha "$(dnoop receipt-sha)" && mrcpt receipt-sha "$DURL1" env-valid.md "$(printf '%064d' 1)" ok MEMBER
+mutate_d receipt-result "$(dnoop receipt-result)" && mrcpt receipt-result "$DURL1" env-valid.md "$SHA_ENV1" failed MEMBER
+mutate_d receipt-author "$(dnoop receipt-author)" && mrcpt receipt-author "$DURL1" env-valid.md "$SHA_ENV1" ok NONE
+# 12 the verifier's first line is read as well as its rc (a fake verifier installed in the mutant's tree)
+mutate_d deleg-line "$(dnoop deleg-line)" && {
+  cp "$TMP/dm/fakeg/scripts/delegation-verify.sh" "$TMP/dm/deleg-line/scripts/delegation-verify.sh"
+  dscn; mkd m12 deleg-valid.md; export FAKE_V_OUT='delegation: invalid reason=expired\n' FAKE_V_RC=0
+  run_d "$TMP/dm/fakeg/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; pr="$(last_rc)"
+  run_d "$TMP/dm/deleg-line/skills/ship/scripts/technical-ruling-gate.sh" "$DF"; mr="$(last_rc)"; unset FAKE_V_OUT FAKE_V_RC
+  if [[ "$pr" == 2 && "$mr" != 2 ]]; then echo "  PASS: mutant deleg-line killed (pristine rc $pr, mutant rc $mr)"; PASS=$((PASS + 1)); else echo "  FAIL: mutant deleg-line SURVIVED or the control moved (pristine $pr, mutant $mr)"; FAIL=$((FAIL + 1)); fi
+}
+# 13 memoisation: the same (delegation, envelope, time) is verified once and the epic is read once
+mutate_d memo 's/^memo_find\(\) \{.*# mut:memo$/memo_find() { return 0; } # mut:memo/' && {
+  dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; run_d "$GATE" "$TMP/df/memo-same.md"; pv="$(ncalls 'issues/comments/1001')"; pe="$(ncalls 'issues/77/comments')"
+  dscn; rcpt "$DURL1" env-valid.md "$SHA_ENV1" ok MEMBER; run_d "$TMP/dm/memo/skills/ship/scripts/technical-ruling-gate.sh" "$TMP/df/memo-same.md"; mv_="$(ncalls 'issues/comments/1001')"; me="$(ncalls 'issues/77/comments')"
+  if mutant_crashed; then echo "  FAIL: mutant memo CRASHED"; FAIL=$((FAIL + 1))
+  elif [[ "$pv" == 1 && "$pe" == 1 && "$mv_" == 2 && "$me" == 2 ]]; then echo "  PASS: mutant memo killed (verifier calls $pv -> $mv_, epic reads $pe -> $me)"; PASS=$((PASS + 1))
+  else echo "  FAIL: mutant memo SURVIVED (verifier calls $pv -> $mv_, epic reads $pe -> $me)"; FAIL=$((FAIL + 1)); fi
+}
+
+echo "=== Arm 6k: the verdict helpers are under controls (testdesign F4) ==="
+( echo 127 > "$TMP/last.rc"; : > "$TMP/last.err"; mutant_crashed ) \
+  || { printf 'FATAL: mutant_crashed cannot see rc 127\n' >&2; exit 2; }
+( echo 0 > "$TMP/last.rc"; echo 'x.sh: line 3: v: unbound variable' > "$TMP/last.err"; mutant_crashed ) \
+  || { printf 'FATAL: mutant_crashed cannot see an unbound variable\n' >&2; exit 2; }
+( echo 1 > "$TMP/last.rc"; : > "$TMP/last.err"; mutant_crashed ) \
+  && { printf 'FATAL: mutant_crashed reports a clean rc 1 as a crash\n' >&2; exit 2; }
+mutate_d ctl 's/^# The \/ship Phase 5\.5/# The \/ship phase 5.5/' >/dev/null
+dscn; mkd kc deleg-valid.md
+( b=$FAIL; killed_d ctl 0 1 "$DF" >/dev/null; [[ $FAIL -gt $b ]] ) \
+  || { printf 'FATAL: killed_d cannot report a survivor -- a mutant that changes nothing would be graded as killed\n' >&2; exit 2; }
+mutate_d crashctl 's/^set -uo pipefail$/set -uo pipefail; if then/' >/dev/null
+( out="$(killed_d crashctl 0 1 "$DF")"; [[ "$out" == *CRASHED* ]] ) \
+  || { printf 'FATAL: killed_d cannot report a crashing mutant -- a crash would be graded as a kill\n' >&2; exit 2; }
+echo "  PASS: the crash detector and the survivor detector can fail"; PASS=$((PASS + 1))
 
 echo "=== Floor: the SUT wrote an execution marker per examined row ==="
 n_rows="$(wc -l < "$EXEC_LOG" | tr -d ' ')"

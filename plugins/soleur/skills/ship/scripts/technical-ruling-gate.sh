@@ -38,17 +38,30 @@
 # check above catches a `technical` row there).
 #
 # Reasons (the suite asserts each): bad-class, bad-category, unruled-technical, bad-ruling-shape,
-# owner-label-unscoped, delegation-invalid, delegation-unverifiable.
+# owner-label-unscoped, delegation-invalid, delegation-unverifiable, receipt-missing, receipt-mismatch,
+# receipt-unreadable.
 #
 # Delegation arm (ADR-288, hr-menu-option-ack-not-prod-write-auth): a row whose Class is exactly
-# `operator (production-mutating)` and whose Ruling is `Authorized by delegation <comment-url>, envelope <path>`
-# is validated through plugins/soleur/scripts/delegation-verify.sh (`verify ... --audit`, the ship-time mode that
-# skips only `expired` and `epic-closed`): valid passes; invalid is `delegation-invalid` (exit 1); unverifiable,
-# including a missing verifier, is `delegation-unverifiable` (exit 2, never a pass). The same ruling shape on any
-# other Class is `bad-ruling-shape`: a delegation authorizes only production-mutating acts. The row stays
-# required (no row, no pass), every delegation row is examined (the first valid one does not end the scan), and a
-# delegation row outside a recognised table is exit 2. An ARCHIVED artifact (`--branch` found it under
-# specs/archive/) is checked for row shape only, with no network. Format source:
+# `operator (production-mutating)` and whose Ruling is
+#   Authorized by delegation <comment-url>, envelope <path>[, ran <ISO 8601 UTC time>]
+# is validated through plugins/soleur/scripts/delegation-verify.sh. A row WITHOUT `ran` is an authorization for an
+# act that has not happened: plain `verify` (expiry and an open epic are enforced now). A row WITH `ran` records an
+# act that did: `verify --audit --at <time>` (the delegation must have been in force at that time; only a closed
+# epic is forgiven), and the row must also be backed by an execution receipt on the epic: a comment whose FIRST line
+# is `<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back
+# run=<url|none> -->`, written by an OWNER, MEMBER or COLLABORATOR, naming this row's delegation URL and envelope
+# path, the sha256 the verifier just reported for that envelope, and a result of ok or rolled-back. That is all the
+# check proves: a receipt exists, is attributable and matches the row. It is NOT proof of what ran (a receipt-checking
+# hook on the executed command is the stronger follow-up, #10361). Missing, mismatching or unreadable receipts are
+# `receipt-missing`, `receipt-mismatch`, `receipt-unreadable` (exit 2, never a pass).
+# Verdicts: valid passes; invalid is `delegation-invalid` (exit 1); unverifiable, including a missing verifier or a
+# verifier whose rc and first line disagree, is `delegation-unverifiable` (exit 2, never a pass). The same ruling
+# shape on any other Class is `bad-ruling-shape`: a delegation authorizes only production-mutating acts. The row
+# stays required (no row, no pass), every delegation row is examined (the first valid one does not end the scan),
+# one verifier call per (delegation, envelope, time) and one receipt read per epic, and a delegation row outside a
+# recognised table is exit 2. An ARCHIVED artifact (`--branch` found it under specs/archive/) is checked for row
+# shape ONLY, with no network, and says so in its [NOTE] and [PASS] lines. A plain `operator (production-mutating)`
+# row with no delegation text passes on form, as before. Format source:
 # skills/brainstorm-techniques/references/standing-delegation.md.
 #
 # Test seams: TRG_EXEC_LOG (append one line per examined row), TRG_SPECS_ROOT and TRG_BRANCH (the
@@ -68,9 +81,12 @@ LABEL_RE='owner[ \t-]+(decision|ruling)s?[ \t]+((is|are)[ \t]+)?(needed|required
 RULING_RE='^Ruled by (CTO|CLO) agent, [0-9]{4}-[0-9]{2}-[0-9]{2}: .+'
 PENDING_RE='pending[ \t]*[^a-z0-9 \t]+[ \t]*assumed'
 VERIFIER="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/delegation-verify.sh"
-DELEG_RE='^Authorized by delegation (https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull)/[0-9]+#issuecomment-[0-9]+), envelope ([A-Za-z0-9_./#@ -]+)$'
+DELEG_RE='^Authorized by delegation (https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(issues|pull)/([0-9]+)#issuecomment-[0-9]+), envelope ([A-Za-z0-9_./#@ -]+)(, ran ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z))?$'
 SHAPE_ONLY=0
+SHAPE_ROWS=0
 DR=0
+TOG=()
+command -v timeout >/dev/null 2>&1 && TOG=(timeout 60)
 CTO_REMEDY='spawn soleur:engineering:cto now (at most two attempts, see technical-ruling-delegation.md), write the Ruled by cell, re-run; after two failed attempts leave the PR draft and file one domain/engineering issue, never an operator question'
 
 work_dir=""
@@ -162,31 +178,90 @@ check_pending() { # <file> <display-path>; an unresolved placeholder anywhere in
   return "$n"
 }
 
+# memo_find <keyfile> <key>: prints the 1-based entry number of <key>, or nothing. One key per line.
+memo_find() { [[ -f "$1" ]] || return 0; grep -nxF -- "$2" "$1" 2>/dev/null </dev/null | head -1 | cut -d: -f1; } # mut:memo
+
+# receipt_check <delegation-url> <repo> <epic> <envelope-path> <sha>: sets RC_REASON to ok, receipt-missing,
+# receipt-mismatch or receipt-unreadable. One read of the epic's comments per epic; every call has stdin closed.
+receipt_check() {
+  local durl="$1" repo="$2" epic="$3" env="$4" sha="$5" key="$2#$3" n rd re rs rr ra nrec=0 okrec=0
+  RC_REASON=unreadable
+  n="$(memo_find "$work_dir/rcpt.keys" "$key")"
+  if [[ -z "$n" ]]; then
+    echo "$key" >> "$work_dir/rcpt.keys"; n="$(wc -l < "$work_dir/rcpt.keys" | tr -d ' ')"
+    if ${TOG[@]+"${TOG[@]}"} gh api "repos/$repo/issues/$epic/comments" --paginate >"$work_dir/rcpt.$n.json" 2>/dev/null </dev/null \
+       && jq -r -s '[.[][]] | .[] | (.body // "" | split("\n") | (.[0] // "") | sub("\r$"; "")) as $l
+           | ([$l | capture("^<!-- soleur-delegated-act v1 delegation=(?<d>[^ ]+) envelope=(?<e>.+?) sha256=(?<s>[0-9a-f]{64}) result=(?<r>[A-Za-z-]+) run=(?<u>[^ ]+) -->$")] | .[0]) as $m
+           | select($m != null) | [$m.d, $m.e, $m.s, $m.r, (.author_association // "NONE")] | @tsv' "$work_dir/rcpt.$n.json" >"$work_dir/rcpt.$n.tsv" 2>/dev/null </dev/null; then
+      echo ok > "$work_dir/rcpt.$n.st"
+    else
+      echo bad > "$work_dir/rcpt.$n.st"
+    fi
+  fi
+  [[ "$(cat "$work_dir/rcpt.$n.st")" == ok ]] || return 0
+  while IFS=$'\t' read -r rd re rs rr ra; do
+    [[ "$rd" == "$durl" ]] || continue # mut:receipt-deleg
+    nrec=$((nrec + 1))
+    [[ "$re" == "$env" ]] || continue # mut:receipt-env
+    [[ "$rs" == "$sha" ]] || continue # mut:receipt-sha
+    case "$rr" in ok|rolled-back) ;; *) continue ;; esac # mut:receipt-result
+    case "$ra" in OWNER|MEMBER|COLLABORATOR) ;; *) continue ;; esac # mut:receipt-author
+    okrec=1; break
+  done < "$work_dir/rcpt.$n.tsv"
+  if (( okrec )); then RC_REASON=ok; elif (( nrec > 0 )); then RC_REASON=receipt-mismatch; else RC_REASON=receipt-missing; fi
+}
+
 # check_delegation_row <line> <class> <ruling>: DR=0 pass, 1 a finding was printed, 2 could not verify (printed).
 # Runs with nocasematch OFF: the phrase, the class and the link are matched exactly.
 check_delegation_row() {
   local had=0
   shopt -q nocasematch && had=1
-  shopt -u nocasematch
+  shopt -u nocasematch # mut:case-off
   check_delegation_row_inner "$@"
   (( had )) && shopt -s nocasematch
   return 0
 }
 check_delegation_row_inner() {
-  local ln="$1" cls="$2" ruling="$3" durl dpath reason why dv_rc
+  local ln="$1" cls="$2" ruling="$3" durl repo epic dpath dran reason why dv_rc dv_line key n sha
   DR=0
   [[ "$cls" == "operator (production-mutating)" ]] || { printf '[FAIL] %s:%s: bad-ruling-shape - a delegation can authorize only an operator (production-mutating) act, not "%s"\n' "$shown" "$ln" "$cls" >&2; DR=1; return; } # mut:deleg-class
-  [[ "$ruling" =~ $DELEG_RE ]] || { printf '[FAIL] %s:%s: bad-ruling-shape - a delegation ruling must read: Authorized by delegation <comment-url>, envelope <path> (standing-delegation.md)\n' "$shown" "$ln" >&2; DR=1; return; }
-  durl="${BASH_REMATCH[1]}"; dpath="${BASH_REMATCH[3]}"
+  [[ "$ruling" =~ $DELEG_RE ]] || { printf '[FAIL] %s:%s: bad-ruling-shape - a delegation ruling must read: Authorized by delegation <comment-url>, envelope <path>[, ran <time as 2026-01-31T09:30:00Z>] (standing-delegation.md)\n' "$shown" "$ln" >&2; DR=1; return; }
+  durl="${BASH_REMATCH[1]}"; repo="${BASH_REMATCH[2]}"; epic="${BASH_REMATCH[4]}"; dpath="${BASH_REMATCH[5]}"; dran="${BASH_REMATCH[7]:-}"
   [[ -n "${TRG_EXEC_LOG:-}" ]] && echo "delegation $shown:$ln" >> "${TRG_EXEC_LOG:?}" # mut:deleg-log
-  if (( SHAPE_ONLY )); then DR=0; return; fi
+  if (( SHAPE_ONLY )); then SHAPE_ROWS=$((SHAPE_ROWS + 1)); DR=0; return; fi
   [[ -f "$VERIFIER" ]] || { printf '[FAIL] %s:%s: delegation-unverifiable - the delegation checker was not found next to this gate, so the row was not examined\n' "$shown" "$ln" >&2; DR=2; return; }
-  bash "$VERIFIER" verify --delegation "$durl" --envelope "$dpath" --audit >"$work_dir/dv.out" 2>"$work_dir/dv.err"; dv_rc=$? # mut:deleg-call
-  reason="$(head -1 "$work_dir/dv.out" | sed -n 's/^delegation: [a-z]* reason=\(.*\)$/\1/p' | tr -d '[:cntrl:]' | cut -c1-60)"
-  why="$(head -1 "$work_dir/dv.err" | tr -d '[:cntrl:]' | cut -c1-200)"
-  (( dv_rc == 0 )) && { echo 'SOLEUR_RULE_APPLIED rule=hr-menu-option-ack-not-prod-write-auth note=delegation-verified'; return; }
+  key="$durl|$dpath|$dran"
+  n="$(memo_find "$work_dir/dv.keys" "$key")"
+  if [[ -z "$n" ]]; then
+    echo "$key" >> "$work_dir/dv.keys"; n="$(wc -l < "$work_dir/dv.keys" | tr -d ' ')"
+    if [[ -z "$dran" ]]; then
+      ${TOG[@]+"${TOG[@]}"} bash "$VERIFIER" verify --delegation "$durl" --envelope "$dpath" </dev/null >"$work_dir/dv.$n.out" 2>"$work_dir/dv.$n.err"; dv_rc=$? # mut:deleg-call
+    else
+      ${TOG[@]+"${TOG[@]}"} bash "$VERIFIER" verify --delegation "$durl" --envelope "$dpath" --audit --at "$dran" </dev/null >"$work_dir/dv.$n.out" 2>"$work_dir/dv.$n.err"; dv_rc=$? # mut:deleg-audit
+    fi
+    echo "$dv_rc" > "$work_dir/dv.$n.rc"
+  fi
+  dv_rc="$(cat "$work_dir/dv.$n.rc")"
+  dv_line="$(head -1 "$work_dir/dv.$n.out")"
+  reason="$(printf '%s\n' "$dv_line" | sed -n 's/^delegation: [a-z]* reason=\(.*\)$/\1/p' | tr -d '[:cntrl:]' | cut -c1-60)"
+  why="$(head -1 "$work_dir/dv.$n.err" | tr -d '[:cntrl:]' | cut -c1-200)"
+  if (( dv_rc == 0 )) && [[ "$dv_line" != "delegation: valid reason="* ]]; then dv_rc=2; reason="verifier-error"; why="the delegation checker exited cleanly without saying valid"; fi # mut:deleg-line
   (( dv_rc == 1 )) && { printf '[FAIL] %s:%s: delegation-invalid - %s (reason: %s)\n' "$shown" "$ln" "$why" "$reason" >&2; DR=1; return; }
-  printf '[FAIL] %s:%s: delegation-unverifiable - %s (reason: %s); the row was not examined, which is never a pass\n' "$shown" "$ln" "$why" "${reason:-none}" >&2; DR=2 # mut:deleg-unv
+  (( dv_rc == 0 )) || { printf '[FAIL] %s:%s: delegation-unverifiable - %s (reason: %s); the row was not examined, which is never a pass\n' "$shown" "$ln" "$why" "${reason:-none}" >&2; DR=2; return; } # mut:deleg-unv
+  if [[ -n "$dran" ]]; then
+    sha="$(sed -n 's/^verified-envelope-sha256: \([0-9a-f]\{64\}\)$/\1/p' "$work_dir/dv.$n.out" | head -1)"
+    if [[ -z "$sha" ]]; then
+      printf '[FAIL] %s:%s: receipt-unreadable - the delegation checker did not report the runbook fingerprint, so the execution receipt cannot be matched; the row was not examined, which is never a pass\n' "$shown" "$ln" >&2; DR=2; return
+    fi
+    receipt_check "$durl" "$repo" "$epic" "$dpath" "$sha"
+    case "$RC_REASON" in
+      ok) ;;
+      receipt-missing) printf '[FAIL] %s:%s: receipt-missing - no execution receipt for this delegation is on epic #%s; the CTO writes one comment per delegated act (standing-delegation.md section 6) before this row may say the act ran\n' "$shown" "$ln" "$epic" >&2; DR=2; return ;;
+      receipt-mismatch) printf '[FAIL] %s:%s: receipt-mismatch - epic #%s has a receipt for this delegation but none names this envelope path and its verified fingerprint with result ok or rolled-back, written by an owner, member or collaborator\n' "$shown" "$ln" "$epic" >&2; DR=2; return ;;
+      *) printf '[FAIL] %s:%s: receipt-unreadable - the comments on epic #%s could not be read, so the execution receipt was not checked, which is never a pass\n' "$shown" "$ln" "$epic" >&2; DR=2; return ;;
+    esac
+  fi
+  echo 'SOLEUR_RULE_APPLIED rule=hr-menu-option-ack-not-prod-write-auth note=delegation-verified'
 }
 
 check_artifact() { # <file> <display-path>
@@ -253,7 +328,11 @@ check_artifact() { # <file> <display-path>
     printf '[WARN] %s: no "| Item | Class | Ruling |" table outside a fenced block; label and pending lints ran, rows were not examined (add the table: technical-ruling-delegation.md section 6)\n' "$shown"
     return 0
   fi
-  printf '[PASS] %s: %s rows examined\n' "$shown" "$idx"
+  if (( SHAPE_ROWS > 0 )); then
+    printf '[PASS] %s: %s rows examined (archived: %s delegation rows were checked for shape only and were NOT verified)\n' "$shown" "$idx" "$SHAPE_ROWS"
+  else
+    printf '[PASS] %s: %s rows examined\n' "$shown" "$idx"
+  fi
   return 0
 }
 
@@ -306,7 +385,7 @@ case "$mode" in
       exit 0
     fi
     (( ${#matches[@]} == 1 )) || die2 "ambiguous: ${#matches[@]} decision-challenges.md files match branch $branch (${matches[*]}); examine the right one by path"
-    case "${matches[0]}" in */archive/*) SHAPE_ONLY=1; printf '[NOTE] archived artifact: delegation rows are checked for shape only (no network)\n' >&2 ;; esac
+    case "${matches[0]}" in */archive/*) SHAPE_ONLY=1; printf '[NOTE] archived artifact: delegation rows are checked for shape only and are NOT verified (no network)\n' >&2 ;; esac
     check_artifact "${matches[0]}" "${matches[0]}"; exit $? ;;
   ""|-h|--help)
     die2 "usage: $(basename "$0") <path> | --branch | --pr-body <file>" ;;
