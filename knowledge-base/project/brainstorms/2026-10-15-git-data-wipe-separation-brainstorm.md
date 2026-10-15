@@ -16,7 +16,7 @@ A wipe PR (PR-W, on #10294's branch) that destroys `hcloud_volume.git_data` WITH
 
 ## Why This Approach
 
-Rulings, both 2026-10-15 (technical to CTO agent, legal to CLO agent; CLO is a v1 internal attestation, provisional to 2026-10-24):
+Rulings, both 2026-10-15 (technical to CTO agent, legal to CLO agent; CLO is a v1 internal attestation, re-attested as final 2026-10-15, A.11):
 
 - **Separable (CTO).** ADR-239 Consequences bullet 1 (rollback is flag-off only, data stays on LUKS) and D2 (volume never writable) mean flip status does not decide whether destroying the volume loses served data.
 - **Separated predicate set (CTO, CLO-conditioned).** Read in-session, never from an input: flag does not read `true`; `GIT_DATA_LUKS_CUTOVER_AT` absent; `git_data_store_dirty_scan` returns `store_clean`; newest `boot_complete` newer than the server's creation with `served_repos=0`. A flip stamp or present stamp routes to the flip-chained variant with the soak intact; there is no soak-less fall-through after a flip.
@@ -57,7 +57,7 @@ ADR amendment + CLO sign-off wording 10-19 to 10-22; PR-W merged 10-30; `wipe_ch
 
 ### Legal
 
-**Summary:** Ruled by CLO agent, 2026-10-15 (v1 internal attestation, provisional to 2026-10-24): no soak required for the separated wipe; destruction needs a dated, measured/policy/inherited record that claims nothing about copies.
+**Summary:** Ruled by CLO agent, 2026-10-15 (v1 internal attestation, re-attested as final 2026-10-15, A.11): no soak required for the separated wipe; destruction needs a dated, measured/policy/inherited record that claims nothing about copies.
 
 ## User-Brand Impact
 
