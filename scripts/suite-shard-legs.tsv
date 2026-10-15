@@ -457,7 +457,6 @@ scripts/lint-workflow-local-action-checkout-live	7
 scripts/lint-workflow-run-body-syntax	7
 scripts/lint-workflow-step-env-refs	7
 scripts/lint-workflow-step-env-refs-live	6
-scripts/luks-monitor-host-timer-8706	5
 scripts/marketplace-drift-check	7
 scripts/marketplace-manifest-validate	6
 scripts/md-to-mrkdwn	3

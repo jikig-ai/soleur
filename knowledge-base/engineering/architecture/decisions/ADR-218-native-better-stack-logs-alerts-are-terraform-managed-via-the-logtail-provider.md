@@ -449,3 +449,19 @@ thirteenth.
   conjunct, the host-distinct scalar shape, the paging semantics, the emitter needles in
   `cron-egress-resolve.sh`, and the runbook anchor — and carries the mutation rows proving it can
   red.
+
+## Amendment 2026-10-15 — credential-shape signal class + the dormant-probe rule (#10321)
+
+- The managed-alert census gains `logtail_exploration_alert.registry_zot_log_credential_shape`
+  (`soleur-registry-zot-log-credential-shape-prd`), the 14th managed Logs alert on the merge-SHA
+  main (re-derive if #10320 lands first — 15th then). Signal class: **credential-shape content
+  match over producer-anchored envelope rows** — three disjuncts ported from
+  `scripts/followthroughs/zot-log-channel-7440.sh`'s exit-1 arm (unmasked `Authorization` value,
+  `dp.(pt|st|sa|ct).` prefix with a >=16 non-separator run, bcrypt `$2[aby]$`). `value = 0` +
+  `higher_than`: one row is an incident; unlike the delivery-grader probe there is no
+  newest-boot scoping.
+- **The rule this codifies:** a check meant to outlive its tracker is a standing alert, not a
+  follow-through probe. A probe's enrollment dies with its tracker's `CLOSED_LOOKBACK_DAYS=14`
+  lookback — #7455 closed 2026-08-13 and the probe's regression arm silently went dark
+  ~2026-08-27 while its header (and ADR-184's) still claimed enrollment. Convention clause in
+  `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.

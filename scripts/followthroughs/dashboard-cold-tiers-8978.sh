@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# STATUS 2026-10-15 (#10321 audit): tracker #8978 closed 2026-09-29; the sweeper's
+# read set (open issues + CLOSED_LOOKBACK_DAYS=14) dropped it ~2026-10-13. The
+# "regression class is watched continuously" framing below was true only while
+# the tracker was open — this file is now dormant by design; any standing check
+# it implies lives in no alert (the soak's bounded-leg invariant has no successor).
 # Follow-through soak for #8978 (PR #9034): the dashboard cold-load incident
 # was unbounded remote Supabase legs stalling 20-38s inside `GET /dashboard`
 # transactions. PR #9034 bounds every leg (postgrest abortSignal -> error arm;
