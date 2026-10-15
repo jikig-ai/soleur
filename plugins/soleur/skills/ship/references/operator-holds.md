@@ -107,8 +107,9 @@ condition** ("the earlier change has not gone live yet"), never "the change is n
 A delegated act (a merge or dispatch the CTO ran under the delegation) leaves a receipt: one comment on the epic whose first
 line is `<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<fingerprint> result=ok|rolled-back run=<url|none> -->`
 (format: [standing-delegation.md](../../brainstorm-techniques/references/standing-delegation.md) section 8). The ship gate
-requires it for any decision-challenges row that says the act ran; see
-[decision-challenges-render.md](./decision-challenges-render.md).
+requires it for any decision-challenges row that says the act ran, and stops the ship with `receipt-missing` (none for the
+delegation), `receipt-mismatch` (one exists but not for that envelope, fingerprint, result or author) or `receipt-unreadable`
+(the epic's comments could not be read); see [decision-challenges-render.md](./decision-challenges-render.md).
 
 **Why:** PR #7470 — a hold transcribed as "the PR stays a draft" outlived its cleared conditions. The mechanical evaluator
 exists because prose re-evaluation by the model is the failure mode a hold guards against (CTO ruling T4, ADR-288).

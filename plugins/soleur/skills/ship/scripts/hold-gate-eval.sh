@@ -163,13 +163,13 @@ split_sections() {
     BEGIN { mt = tolower(match_text) }
     { t = $0; sub(/\r$/, "", t) }
     t ~ /^ ? ? ?(```+|~~~+)/ { fence() } # mut:fence-split
-    f == 0 && t ~ /^#+([ \t]|$)/ {
+    f == 0 && (t ~ /^#+[ \t]/ || t ~ /^#+$/) {
       match(t, /^#+/); L = RLENGTH
       if (cur != "" && L <= curlvl) { close(cur); cur = "" }
       if (cur == "" && L >= 2 && L <= 4) {
         rest = tolower(trim(substr(t, L + 1))) # mut:heading-ci
         sub(/[ \t]+#+$/, "", rest)
-        if (mode == "plan") hit = (rest ~ /^operator[ \t]+holds([^a-z0-9]|$)/); else hit = (mt != "" && index(rest, mt) > 0)
+        if (mode == "plan") hit = (rest ~ /^operator[ \t]+holds$/ || rest ~ /^operator[ \t]+holds[^a-z0-9]/); else hit = (mt != "" && index(rest, mt) > 0)
         if (hit) { n++; cur = dir "/sec." n; curlvl = L; print t > (dir "/sec.heads") }
       }
     }

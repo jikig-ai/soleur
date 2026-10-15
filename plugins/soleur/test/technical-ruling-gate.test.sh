@@ -859,10 +859,11 @@ echo "  PASS: the crash detector and the survivor detector can fail"; PASS=$((PA
 
 echo "=== Floor: the SUT wrote an execution marker per examined row ==="
 n_rows="$(wc -l < "$EXEC_LOG" | tr -d ' ')"
-if (( n_rows >= 200 )); then
-  echo "  PASS: SUT execution markers $n_rows >= 200"; PASS=$((PASS + 1))
+# Zero-slack floors, committed from a green run: re-measure and raise them when rows are added; a lower number is a deleted row.
+if (( n_rows >= 222 )); then
+  echo "  PASS: SUT execution markers $n_rows >= 222"; PASS=$((PASS + 1))
 else
-  echo "  FAIL: SUT execution markers $n_rows < 200 -- the cases above did not drive the script"; FAIL=$((FAIL + 1))
+  echo "  FAIL: SUT execution markers $n_rows < 222 -- the cases above did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-print_results 275
+print_results 414
