@@ -322,6 +322,10 @@ The ADR is authored now describing the target state with status "adopting"; it i
 - [ ] Counts are documented and tested as best-effort lower bounds; the set of hosts and decisions is exact.
 - [ ] ADR-288, the C4 edge and the DPIA addendum (with trigger t7) are committed; `c4-count-parity` and the C4 render tests pass.
 - [ ] ADR-281's stale sentence is corrected with "workflow fired with email action; receipt unobserved".
+- [ ] (gdpr-gate `GDPR-Art-6`) The migration annotates the lawful basis on the table or each column with `-- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f))`, matching the CLO's basis, and the DPIA addendum cites the same basis.
+- [ ] (gdpr-gate `GDPR-Art-5e`) The table carries a `COMMENT ON TABLE` stating the 30-day retention and the sweep function name, and the verify SQL asserts the comment and the scheduled job exist.
+- [ ] (gdpr-gate `GDPR-Art-17`) A test proves the rows disappear on workspace deletion AND on the account-erasure path for a solo workspace (where `workspace_id` equals the founder's id); if erasure anonymises rather than deletes the workspace row, the migration adds the anonymise step and the DSAR export allowlist decision is recorded.
+- [ ] (gdpr-gate testing layer) Test fixtures use synthesized workspace ids and hosts only (`cq-test-fixtures-synthesized-only`); no real workspace id or customer host appears in any fixture, including the Vector rollup fixtures.
 
 ### PR1b
 
