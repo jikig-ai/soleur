@@ -98,7 +98,7 @@ FETCHED=""; FETCH_RC=0
 ensure_fetch() {
   [ -n "$FETCHED" ] && return "$FETCH_RC"
   FETCHED=1
-  GIT_TERMINAL_PROMPT=0 ${TO30[@]+"${TO30[@]}"} git fetch -q origin "$DEFBR" </dev/null >/dev/null 2>&1; FETCH_RC=$? # mut:fetch
+  GIT_TERMINAL_PROMPT=0 ${TO30[@]+"${TO30[@]}"} git fetch --no-tags -q origin "$DEFBR" </dev/null >/dev/null 2>&1; FETCH_RC=$? # mut:fetch
   return "$FETCH_RC"
 }
 
