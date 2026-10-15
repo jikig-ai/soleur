@@ -113,20 +113,25 @@ DECLARE
   v_host_rows      int;
   v_accepted       int := 0;
   v_unknown        int := 0;
+  v_orphan         int := 0;
   v_off            int := 0;
   v_invalid        int := 0;
 BEGIN
   IF p_rows IS NULL OR jsonb_typeof(p_rows) <> 'array' THEN
-    RETURN jsonb_build_object('accepted', 0, 'skipped_unknown', 0,
+    RETURN jsonb_build_object('accepted', 0, 'skipped_unknown', 0, 'skipped_orphan', 0,
                               'skipped_toggle_off', 0, 'skipped_invalid', 0);
   END IF;
   IF jsonb_array_length(p_rows) > c_max_rows THEN
-    RETURN jsonb_build_object('accepted', 0, 'skipped_unknown', 0,
+    RETURN jsonb_build_object('accepted', 0, 'skipped_unknown', 0, 'skipped_orphan', 0,
                               'skipped_toggle_off', 0,
                               'skipped_invalid', jsonb_array_length(p_rows));
   END IF;
 
-  FOR v_el IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+  -- Rows are processed in workspace order so the member-row share locks below are taken in a
+  -- consistent order. The account-delete saga deletes a user's member rows across workspaces in
+  -- one statement in its own order, so a 40P01 deadlock between the two is still possible but
+  -- rare; PostgreSQL aborts one side, which retries (Vector on 5xx, the user on a failed step).
+  FOR v_el IN SELECT value FROM jsonb_array_elements(p_rows) ORDER BY value ->> 'workspace_id' LOOP
     BEGIN
       IF jsonb_typeof(v_el) <> 'object' THEN
         v_invalid := v_invalid + 1;
@@ -170,7 +175,7 @@ BEGIN
       -- lock a delete + erase landing between this check and the insert would leave an orphan row.
       PERFORM 1 FROM public.workspace_members m WHERE m.workspace_id = v_ws FOR SHARE;
       IF NOT FOUND THEN
-        v_unknown := v_unknown + 1;
+        v_orphan := v_orphan + 1;
         CONTINUE;
       END IF;
       IF v_toggle IS NOT TRUE THEN
@@ -219,6 +224,7 @@ BEGIN
   END LOOP;
 
   RETURN jsonb_build_object('accepted', v_accepted, 'skipped_unknown', v_unknown,
+                            'skipped_orphan', v_orphan,
                             'skipped_toggle_off', v_off, 'skipped_invalid', v_invalid);
 END;
 $$;
@@ -341,7 +347,16 @@ BEGIN
   IF p_workspace IS NULL OR p_requester IS NULL THEN
     RETURN 0;
   END IF;
-  -- Lock the member rows so the "sole member" fact holds until the delete commits.
+  -- While collection is on for the workspace, buckets already in Vector's reduce, its disk buffer
+  -- or the sink's retries would re-create the history just erased (the member row still exists, so
+  -- the orphan skip does not apply). Refuse until web access is off; the runbook says to wait 20
+  -- minutes after switching it off, then erase.
+  IF EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = p_workspace AND w.web_egress) THEN
+    RAISE EXCEPTION 'erase_egress_audit_rollup_for_requester: web access is still on for this workspace; switch it off and wait 20 minutes first';
+  END IF;
+  -- Lock the existing member rows so the "sole member" check cannot race a member removal. A
+  -- concurrent invite acceptance (an INSERT) is not blocked by a row lock; that window is accepted
+  -- (the runbook's preview step precedes this call and the function re-checks).
   PERFORM 1 FROM public.workspace_members m WHERE m.workspace_id = p_workspace FOR SHARE;
   IF (SELECT count(*) FROM public.workspace_members m WHERE m.workspace_id = p_workspace) <> 1
      OR NOT EXISTS (

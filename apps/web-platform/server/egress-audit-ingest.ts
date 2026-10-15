@@ -2,13 +2,16 @@
 //
 // Caller: the Vector sink on the same host (POST /api/internal/egress-audit-ingest, a
 // JSON array of closed buckets). Everything the route does is ordered so that no input
-// can make Vector retry forever and so that, before the bearer check, a caller learns only "401":
+// can make Vector retry forever and so that, before the bearer check, a caller learns only "401"
+// (the one exception is an unset secret, which answers 202: there is nothing to compare against):
 //
 //   1. loopback Host and no proxy marker             -> 401 (the app is published on
 //      0.0.0.0:3000 and reachable through Cloudflare; a request that came through it
 //      carries CF-Ray / CF-Connecting-IP and is not Vector)
-//   2. no configured secret, or the global env mirror of the flag on in production -> 2xx drop
+//   2. no configured secret                          -> 2xx drop (never 5xx)
 //   3. wrong or missing bearer (current OR previous) -> 401
+//      3b. the global env mirror of the flag on in production -> 2xx drop (after the bearer, so an
+//      unauthenticated caller cannot learn that setting)
 //   4. body cap (bytes, streamed) / JSON / array     -> 413 / 400
 //   5. per-row zod                                   -> bad rows dropped and counted
 //   6. per-row bucket bounds                         -> rows dropped and counted
@@ -32,7 +35,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getRuntimeFlag } from "@/lib/feature-flags/server";
-import { mirrorWarnWithDebounce, reportSilentFallback } from "@/server/observability";
+import { mirrorWarnWithDebounce, mirrorWithDebounce } from "@/server/observability";
 
 const FEATURE = "egress-audit-ingest";
 const FLAG = "egress-audit-collection" as const;
@@ -133,6 +136,8 @@ async function readBounded(request: Request): Promise<string | "too-large" | "un
       if (done) break;
       total += value.byteLength;
       if (total > MAX_BODY_BYTES) {
+        // review: swallowed on purpose - the body is already being rejected with 413 and a failed
+        // cancel only means the connection is already gone.
         await reader.cancel().catch(() => undefined);
         return "too-large";
       }
@@ -162,7 +167,13 @@ export async function handleEgressAuditIngest(request: Request): Promise<Respons
     return json({ dropped: true }, 202);
   }
 
-  // 2b. In production the GLOBAL env mirror of the flag must be off. getRuntimeFlag falls back to
+  // 3. Bearer.
+  if (!bearerMatches(request.headers.get("authorization"), tokens)) {
+    mirrorReject("bad-token");
+    return json({ error: "Unauthorized" }, 401);
+  }
+
+  // 3b. In production the GLOBAL env mirror of the flag must be off. getRuntimeFlag falls back to
   //     it, role-blind, when Flagsmith is unreachable, so a stale FLAG_EGRESS_AUDIT_COLLECTION=1
   //     would open collection for every organisation on an outage (CTO ruling R6-G). Refuse to
   //     run on it: collection is on only where Flagsmith positively says so. Local dev and tests
@@ -170,12 +181,6 @@ export async function handleEgressAuditIngest(request: Request): Promise<Respons
   if (process.env.NODE_ENV === "production" && process.env.FLAG_EGRESS_AUDIT_COLLECTION === "1") {
     mirrorReject("env-fallback-on");
     return json({ dropped: true }, 202);
-  }
-
-  // 3. Bearer.
-  if (!bearerMatches(request.headers.get("authorization"), tokens)) {
-    mirrorReject("bad-token");
-    return json({ error: "Unauthorized" }, 401);
   }
 
   // 4. Body cap (counted in bytes while streaming: content-length can be absent, chunked or lying),
@@ -233,6 +238,7 @@ export async function handleEgressAuditIngest(request: Request): Promise<Respons
     dropped_invalid: droppedInvalid,
     dropped_bounds: droppedBounds,
     skipped_unknown: 0,
+    skipped_orphan: 0,
     skipped_flag_off: 0,
     skipped_toggle_off: 0,
     skipped_invalid: 0,
@@ -250,11 +256,18 @@ export async function handleEgressAuditIngest(request: Request): Promise<Respons
       .select("id, organization_id")
       .in("id", chunk);
     if (wsErr || !wsRows) {
-      reportSilentFallback(wsErr ?? new Error("workspace lookup returned no data"), {
-        feature: FEATURE,
-        op: "workspace-lookup",
-        extra: { workspaces: chunk.length, pgCode: (wsErr as { code?: string } | null)?.code },
-      });
+      // Debounced: Vector retries a 5xx up to ten times, so an outage would otherwise emit one
+      // error event per retry per batch.
+      mirrorWithDebounce(
+        wsErr ?? new Error("workspace lookup returned no data"),
+        {
+          feature: FEATURE,
+          op: "workspace-lookup",
+          extra: { workspaces: chunk.length, pgCode: (wsErr as { code?: string } | null)?.code },
+        },
+        FEATURE,
+        "workspace-lookup",
+      );
       return json({ error: "Temporarily unavailable" }, 503);
     }
     for (const w of wsRows as { id: string; organization_id: string }[]) {
@@ -307,22 +320,29 @@ export async function handleEgressAuditIngest(request: Request): Promise<Respons
   // 9. Write.
   const { data, error } = await service.rpc("ingest_egress_audit_rollup", { p_rows: toWrite });
   if (error) {
-    reportSilentFallback(error, {
-      feature: FEATURE,
-      op: "rpc",
-      extra: { rows: toWrite.length, pgCode: (error as { code?: string }).code },
-    });
+    mirrorWithDebounce(
+      error,
+      {
+        feature: FEATURE,
+        op: "rpc",
+        extra: { rows: toWrite.length, pgCode: (error as { code?: string }).code },
+      },
+      FEATURE,
+      "rpc",
+    );
     return json({ error: "Temporarily unavailable" }, 503);
   }
   const counts = (data ?? {}) as Partial<Record<string, number>>;
   result.accepted = counts.accepted ?? 0;
   result.skipped_unknown += counts.skipped_unknown ?? 0;
+  result.skipped_orphan = counts.skipped_orphan ?? 0;
   result.skipped_toggle_off = counts.skipped_toggle_off ?? 0;
   result.skipped_invalid = counts.skipped_invalid ?? 0;
   // Content problems the pipeline should not produce (Vector and zod already filter): visible
   // in Sentry as counts, never as host or workspace values.
   mirrorCounts("rows-skipped", {
     skipped_unknown: result.skipped_unknown,
+    skipped_orphan: result.skipped_orphan,
     skipped_invalid: result.skipped_invalid,
   });
   return json(result, 202);

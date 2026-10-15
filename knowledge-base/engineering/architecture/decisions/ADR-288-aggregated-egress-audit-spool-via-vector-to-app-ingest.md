@@ -68,9 +68,13 @@ gateway log held 3,434 rows, 3,425 from its own synthetic probe and 9 unauthenti
    unauthenticated `-` drop out and write nothing), allowlists host characters and normalises the decision to
    `allowed | denied | other`.
 6. **Memory is bounded by a cap, not by hope.** `reduce` holds about 3.7 KB per key. A `throttle` caps 1,000 events per workspace
-   per 15 minutes upstream of it, and a second keyless `throttle` caps the TOTAL at 10,000 events per 15 minutes (the per-workspace
-   cap alone does not bound memory: 19 workspaces at the cap exceed the unit limit; 10,000 total events is exactly the ten-workspace
-   case measured below). Its discards raise a `SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL` marker. Measured: one workspace with 100,000 unique hosts peaks at 426 MiB uncapped; ten workspaces
+   per 15 minutes upstream of it, and a second keyless `throttle` bounds the TOTAL (the per-workspace cap alone does not bound memory:
+   19 workspaces at the cap exceed the unit limit). A Vector throttle is a leaky bucket, not a fixed window (measured on 0.43.1: it
+   admits `threshold` at once and refills `threshold` per window, so up to twice the threshold can be alive at once), so the global
+   threshold is 5,000 per 900 s, bounding the reduce keys at about 10,000: the ten-workspace case measured below. The cap is shared with
+   workspaces whose flag is off, because the app gates after Vector; a busy non-enabled tenant can use the canary's budget, which the
+   `SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL` marker makes visible. The per-workspace cap has the same shape (up to about 2,000 events in a
+   window), which the global cap bounds in aggregate. Measured: one workspace with 100,000 unique hosts peaks at 426 MiB uncapped; ten workspaces
    flooding at once peak at 162 MiB with this cap and 270 MiB at 2,000 (the unit's `MemoryMax` is 256M). Discards are exported as
    Vector's per-key discard counter and turned into one `SOLEUR_EGRESS_AUDIT_THROTTLED` marker line per change in Better Stack.
 7. **Retention and erasure.** 30 days, hard-deleted daily by a `pg_cron` job on `last_seen`, plus `ON DELETE CASCADE` from the
@@ -80,7 +84,11 @@ gateway log held 3,434 rows, 3,425 from its own synthetic probe and 9 unauthenti
    ingest RPC skips such an orphan, so a late buffered bucket cannot re-create erased history. Both decisions are taken under a
    `FOR SHARE` lock on the member rows, so the saga's member delete waits for an in-flight ingest and the erase that follows removes
    what it wrote (CTO ruling R6-D). An explicit data-subject request made while the account stays open goes through
-   `erase_egress_audit_rollup_for_requester(workspace, requester)`, which deletes only when the requester is the sole member.
+   `erase_egress_audit_rollup_for_requester(workspace, requester)`, which deletes only when the requester is the sole member and refuses
+   while web access is on for the workspace (buckets already in Vector's reduce or buffer would re-create the history; the runbook
+   says to switch web access off and wait 20 minutes). Ingest and the saga can deadlock on the member-row locks (40P01); ingest
+   processes rows in workspace order and either side retries, which is rare and only reachable once collection is on. Ingest counts
+   an orphaned workspace as `skipped_orphan`, separately from `skipped_unknown`.
 8. **Nothing is readable in PR1.** The table has RLS enabled, no policy and every privilege revoked from `anon` and
    `authenticated`. The member `SELECT` policy lands in PR2, with the DPIA t6 re-screen as its merge gate.
 9. **Counts are best-effort lower bounds; the host set is exact only below the cap.** A restart loses partial buckets and the cap

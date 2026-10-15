@@ -39,7 +39,7 @@ vi.mock("@/lib/feature-flags/server", () => ({
   getRuntimeFlag: mockGetRuntimeFlag,
 }));
 vi.mock("@/server/observability", () => ({
-  reportSilentFallback: mockReport,
+  mirrorWithDebounce: mockReport,
   mirrorWarnWithDebounce: mockWarnDebounced,
 }));
 
@@ -171,6 +171,29 @@ describe("authentication", () => {
     }
   });
 
+  it.each([undefined, "0", ""])("in production with the env mirror %j, ingest proceeds normally", async (v) => {
+    vi.stubEnv("NODE_ENV", "production");
+    if (v === undefined) delete process.env.FLAG_EGRESS_AUDIT_COLLECTION;
+    else vi.stubEnv("FLAG_EGRESS_AUDIT_COLLECTION", v);
+    try {
+      expect((await POST(req([row(WS_A)]))).status).toBe(202);
+      expect(mockRpc).toHaveBeenCalledTimes(1);
+      expect(mockWarnDebounced.mock.calls.map((c) => c[3])).not.toContain("env-fallback-on");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("an unauthenticated caller cannot learn that the env mirror is on (401, not 202)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("FLAG_EGRESS_AUDIT_COLLECTION", "1");
+    try {
+      expect((await POST(req([row(WS_A)], { auth: "Bearer wrong" }))).status).toBe(401);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("outside production the env mirror does not block ingest", async () => {
     vi.stubEnv("FLAG_EGRESS_AUDIT_COLLECTION", "1");
     try {
@@ -215,7 +238,10 @@ describe("network surface", () => {
   // instead of silently 401ing every batch or silently weakening the check.
   it("pins the Next.js minor the proxy-marker rule was measured on (re-measure the injected headers on upgrade)", () => {
     const pkg = JSON.parse(readFileSync(path.join(__dirname, "../node_modules/next/package.json"), "utf8")) as { version: string };
-    expect(pkg.version).toMatch(/^16\.3\./);
+    // On failure: start a Next dev server, POST once with curl -H 'Host: 127.0.0.1:3000' and log
+    // request.headers in the route; confirm which x-forwarded-* headers Next adds, then update
+    // PROXY_MARKER_HEADERS in server/egress-audit-ingest.ts and this pin together.
+    expect(pkg.version, "Next minor changed: re-measure the headers Next injects (see comment)").toMatch(/^16\.3\./);
   });
 
   it.each(["forwarded", "cf-connecting-ip", "cf-ray", "x-real-ip"])(
@@ -450,13 +476,13 @@ describe("database write", () => {
 
   it("mirrors RPC-skipped rows as counts only", async () => {
     mockRpc.mockResolvedValue({
-      data: { accepted: 0, skipped_unknown: 2, skipped_toggle_off: 0, skipped_invalid: 3 },
+      data: { accepted: 0, skipped_unknown: 2, skipped_orphan: 4, skipped_toggle_off: 0, skipped_invalid: 3 },
       error: null,
     });
     await POST(req([row(WS_A, { requested_host: "secret-host.example.test" })]));
     const call = mockWarnDebounced.mock.calls.find((c) => c[3] === "rows-skipped");
     expect(call).toBeTruthy();
-    expect(call![1].extra).toEqual({ skipped_unknown: 2, skipped_invalid: 3 });
+    expect(call![1].extra).toEqual({ skipped_unknown: 2, skipped_orphan: 4, skipped_invalid: 3 });
     expect(JSON.stringify(mockWarnDebounced.mock.calls)).not.toContain("secret-host.example.test");
   });
 

@@ -128,6 +128,10 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
     }
     // positive control: service_role can execute the same statements
     await asService(async (t) => {
+      // The requester erase refuses while web access is on; switch it off so every call can run.
+      await t`reset role`;
+      await t`update public.workspaces set web_egress = false where id = ${ctx.wsA}`;
+      await t`set local role service_role`;
       for (const stmt of calls) await t.unsafe(stmt);
     });
   });
@@ -224,19 +228,43 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
       const c = await ingest(t, [row(ctx.wsA)]);
       return { c, rows: await readAll(t, ctx.wsA) };
     });
-    expect(out.c).toMatchObject({ accepted: 0, skipped_unknown: 1 });
+    expect(out.c).toMatchObject({ accepted: 0, skipped_unknown: 0, skipped_orphan: 1 });
     expect(out.rows).toHaveLength(0);
+  });
+
+  test("the requester erase refuses while web access is on, and works once it is off", async () => {
+    const out = await asService(async (t) => {
+      await ingest(t, [row(ctx.wsA)]);
+      await t`reset role`;
+      await t`delete from public.workspace_members where workspace_id = ${ctx.wsA} and user_id = ${ctx.userC}`;
+      await t`set local role service_role`;
+      let refused: unknown;
+      try {
+        await t.savepoint(async (sp) => {
+          await sp`select public.erase_egress_audit_rollup_for_requester(${ctx.wsA}::uuid, ${ctx.userA}::uuid)`;
+        });
+      } catch (err) {
+        refused = err;
+      }
+      await t`reset role`;
+      await t`update public.workspaces set web_egress = false where id = ${ctx.wsA}`;
+      await t`set local role service_role`;
+      const [r] = await t<{ n: string }[]>`select public.erase_egress_audit_rollup_for_requester(${ctx.wsA}::uuid, ${ctx.userA}::uuid)::text as n`;
+      return { refused, n: r.n };
+    });
+    expect(String((out.refused as Error | undefined)?.message)).toContain("web access is still on");
+    expect(out.n).toBe("1");
   });
 
   test("a replay that changes nothing does not rewrite the tuple", async () => {
     const xmin = await asService(async (t) => {
       await ingest(t, [row(ctx.wsA)]);
       await t`reset role`;
-      const [a] = await t<{ x: string }[]>`select xmin::text as x from public.workspace_egress_audit_rollup where workspace_id = ${ctx.wsA}`;
+      const [a] = await t<{ x: string }[]>`select ctid::text as x from public.workspace_egress_audit_rollup where workspace_id = ${ctx.wsA}`;
       await t`set local role service_role`;
       await ingest(t, [row(ctx.wsA)]);
       await t`reset role`;
-      const [b] = await t<{ x: string }[]>`select xmin::text as x from public.workspace_egress_audit_rollup where workspace_id = ${ctx.wsA}`;
+      const [b] = await t<{ x: string }[]>`select ctid::text as x from public.workspace_egress_audit_rollup where workspace_id = ${ctx.wsA}`;
       return { a: a.x, b: b.x };
     });
     expect(xmin.b).toBe(xmin.a);
@@ -351,10 +379,14 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
       const [{ c }] = await t<{ c: number }[]>`select count(*)::int as c from public.workspace_members where workspace_id = ${ctx.wsA}`;
       await t`set local role service_role`;
       // The fixture's wsA is a team workspace (userA owner, userC member): nothing is erased.
+      await t`reset role`;
+      await t`update public.workspaces set web_egress = false where id = ${ctx.wsA}`;
+      await t`set local role service_role`;
       const team = await n(ctx.wsA, ctx.userA);
       const wrongRequester = await n(ctx.wsA, randomUUID());
       const nulls = [await n(null, ctx.userA), await n(ctx.wsA, null)];
       await t`reset role`;
+      await t`update public.workspaces set web_egress = false where id = ${ctx.wsA}`;
       await t`delete from public.workspace_members where workspace_id = ${ctx.wsA} and user_id = ${ctx.userC}`;
       await t`set local role service_role`;
       const otherSole = await n(ctx.wsA, ctx.userC);

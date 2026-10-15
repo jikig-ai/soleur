@@ -16,6 +16,7 @@ every box for that scope is checked.
 - [ ] The Flagsmith feature `egress-audit-collection` exists (`bash plugins/soleur/skills/flag-create/scripts/create.sh egress-audit-collection --flagsmith-only --description "..."`, a typed-`yes` TTY step) and is OFF by default.
 - [ ] The global env mirror `FLAG_EGRESS_AUDIT_COLLECTION` is `0` (or unset) in Doppler `prd`. The route refuses to run in production while it is `1`.
 - [ ] The app container was restarted after the `EGRESS_AUDIT_INGEST_TOKEN` secret was created (it is read at container start). A POST without the secret answers 202 and drops the batch.
+- [ ] Nothing in PR1 pages anyone when ingest is wrong: the route's reject and error events are queryable in Sentry (debounced warns and errors), the Vector markers in Better Stack, and the probe is manual. Treat this as "queryable, not paged" until the probe below is scheduled and alerts.
 - [ ] `scripts/egress-audit-retention-check.sh` runs on a schedule (for example the existing supabase watchdog or a follow-through) with `EGRESS_AUDIT_EXPECT_COLLECTION=1`, `EGRESS_AUDIT_CANARY_WORKSPACES=<ids>` and the Better Stack query credential, and its failure alerts someone. It is not scheduled anywhere in PR1.
 - [ ] `erase_egress_audit_rollup_for_requester` is applied (migration 162) so an explicit erasure request has a single audited path.
 

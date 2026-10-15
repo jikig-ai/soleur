@@ -53,8 +53,8 @@ row("prep reads the egress source directly and only that", prep["inputs"] == ["e
 row("egress source still admits only the gateway container", so["egress_gw_journald"].get("include_matches", {}).get("CONTAINER_NAME") == ["soleur-egress-gw"])
 row("throttles sit between prep and reduce, per-workspace first, then the global one",
     thr["inputs"] == ["egress_audit_prep"] and glob["inputs"] == ["egress_audit_throttle"] and red["inputs"] == ["egress_audit_throttle_global"])
-row("global throttle is keyless and bounds the total to 10000 events per 900 s (the measured flood ceiling)",
-    "key_field" not in glob and glob["threshold"] == 10000 and glob["window_secs"] == 900)
+row("global throttle is keyless and is a leaky bucket of 5000 per 900 s (about 10,000 keys alive at once: the measured flood ceiling)",
+    "key_field" not in glob and glob["threshold"] == 5000 and glob["window_secs"] == 900)
 row("marker filter reads the per-key counter events_discarded_total, not the keyless component-wide one",
     "\"events_discarded_total\"" in t["egress_audit_throttled_filter"]["condition"]
     and "component_discarded_events_total" not in t["egress_audit_throttled_filter"]["condition"])
@@ -104,8 +104,8 @@ check_test "the token name appears nowhere else as an assignment (no literal sec
 echo "-- fixture file --"
 N_TESTS="$(grep -c '^\[\[tests\]\]' "$TESTS_TOML" || true)"
 N_NEG="$(grep -c '^no_outputs_from' "$TESTS_TOML" || true)"
-check_test "fixture file carries at least 23 vector tests" test "$N_TESTS" -ge 23
-check_test "fixture file carries at least 17 drop-everything tests (407, probe, non-UUID, no status, injection, bad ts, not JSON, marker)" test "$N_NEG" -ge 17
+check_test "fixture file carries at least 30 vector tests" test "$N_TESTS" -ge 30
+check_test "fixture file carries at least 20 drop-everything tests (407, probe, non-UUID, no status, injection, bad ts, not JSON, marker)" test "$N_NEG" -ge 20
 
 echo "-- behaviour (vector test against the real vector.toml) --"
 run_vector_test() {

@@ -11,7 +11,9 @@
 #      reduce expiry, flush and batch), so the newest landed bucket is 31-46 minutes old in
 #      steady state, and an event older than 35 minutes must already be in a landed bucket
 #      whose start is at most 75 minutes old. Failed-authentication rows (status 407) are not
-#      ingested and are not counted.
+#      ingested and are not counted. Run it only after the 60-minute window has elapsed since
+#      collection was enabled: right after enabling, the window still holds gateway events from
+#      before the enable, which the app (correctly) dropped, and the probe would false-fail.
 # Any unavailable read is a failure (exit 1), never a pass; missing credentials or, when
 # freshness is asserted, a missing or malformed canary list exit 2.
 #
@@ -92,6 +94,7 @@ if [[ "${EGRESS_AUDIT_EXPECT_COLLECTION:-0}" == "1" ]]; then
     exit 2
   fi
   canary_or=""
+  canary_in=""
   IFS=',' read -ra CANARY_IDS <<< "$CANARY_RAW"
   for id in "${CANARY_IDS[@]}"; do
     if [[ ! "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
@@ -99,8 +102,11 @@ if [[ "${EGRESS_AUDIT_EXPECT_COLLECTION:-0}" == "1" ]]; then
       exit 2
     fi
     canary_or="${canary_or:+$canary_or OR }raw LIKE '%${id}%'"
+    canary_in="${canary_in:+$canary_in,}${id}"
   done
-  body="$(rest_get 'select=bucket_start&order=bucket_start.desc&limit=1')" || exit 1
+  # Freshness is read for the canary workspaces only: once another workspace has fresh rows, a
+  # table-wide newest bucket would mask a dead canary.
+  body="$(rest_get "select=bucket_start&workspace_id=in.(${canary_in})&order=bucket_start.desc&limit=1")" || exit 1
   newest="$(printf '%s' "$body" | jq -er 'if type == "array" then (.[0].bucket_start // "") else error("not an array") end' 2>/dev/null)" || {
     echo "UNAVAILABLE: the newest-bucket read did not return a JSON array" >&2
     exit 1
@@ -112,7 +118,7 @@ if [[ "${EGRESS_AUDIT_EXPECT_COLLECTION:-0}" == "1" ]]; then
   fi
   if [[ "$fresh" -eq 0 ]]; then
     # Stale or empty: acceptable only if the gateway log shows nothing to ingest. Unknown is a failure.
-    gw_sql="SELECT count() AS n FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 60 MINUTE AND dt <= now() - INTERVAL 35 MINUTE AND raw LIKE '%requested_host%' AND raw LIKE '%soleur-egress-gw%' AND match(raw, 'status[^0-9]{1,6}(200|403|502|503|504)') AND (${canary_or}) FORMAT JSONEachRow"
+    gw_sql="SELECT count() AS n FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 60 MINUTE AND dt <= now() - INTERVAL 35 MINUTE AND raw LIKE '%requested_host%' AND raw LIKE '%soleur-egress-gw%' AND match(raw, 'status\\W{1,12}(200|403|502|503|504)') AND (${canary_or}) FORMAT JSONEachRow"
     if [[ -n "${GW_QUERY_CMD:-}" ]]; then
       gw_out="$("$GW_QUERY_CMD" "$gw_sql" 2>/dev/null)" || gw_out=""
     else

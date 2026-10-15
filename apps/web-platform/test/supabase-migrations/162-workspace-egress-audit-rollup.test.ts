@@ -139,7 +139,9 @@ describe("migration 162_workspace_egress_audit_rollup", () => {
     });
 
     it("ingest skips an orphaned workspace (no member row found under a FOR SHARE lock)", () => {
-      expect(fnBlock("ingest_egress_audit_rollup")).toMatch(/NOT\s+FOUND[\s\S]*?v_unknown\s*:=\s*v_unknown\s*\+\s*1/i);
+      expect(fnBlock("ingest_egress_audit_rollup")).toMatch(
+        /workspace_members\s+m\s+WHERE\s+m\.workspace_id\s*=\s*v_ws\s+FOR\s+SHARE;\s*IF\s+NOT\s+FOUND\s+THEN\s*v_orphan\s*:=\s*v_orphan\s*\+\s*1/i,
+      );
     });
 
     it("ingest catches only content errors (data_exception, integrity_constraint_violation), never WHEN OTHERS", () => {
@@ -164,6 +166,16 @@ describe("migration 162_workspace_egress_audit_rollup", () => {
       expect(block).toMatch(/FOR\s+SHARE/i);
       expect(block).toMatch(/count\(\*\)[\s\S]*?<>\s*1/i);
       expect(block).toMatch(/m\.user_id\s*=\s*p_requester/i);
+    });
+
+    it("ingest takes the share locks in workspace order", () => {
+      expect(fnBlock("ingest_egress_audit_rollup")).toMatch(/jsonb_array_elements\(p_rows\)\s+ORDER\s+BY\s+value\s*->>\s*'workspace_id'/i);
+    });
+
+    it("the requester erase refuses while web access is on for the workspace", () => {
+      expect(fnBlock("erase_egress_audit_rollup_for_requester")).toMatch(
+        /w\.web_egress[\s\S]*?RAISE\s+EXCEPTION[\s\S]*?switch it off and wait 20 minutes/i,
+      );
     });
 
     it("erase deletes only a workspace that has no member row left", () => {

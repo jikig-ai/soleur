@@ -180,7 +180,27 @@ message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-",
 
 
 [[tests]]
-name = "kept: upstream failure statuses 502, 503 and 504 produce a row"
+name = "kept: status 502 produces a row"
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_MISS","decision_reason":"-","requested_host":"up.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":0,"duration_ms":1,"client":"172.19.0.1","status":"502"}'
+
+[[tests.outputs]]
+extract_from = "egress_audit_prep"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "up.example.test" && .request_count == 1
+'''
+
+
+
+[[tests]]
+name = "kept: status 503 produces a row"
 
 [[tests.inputs]]
 insert_at = "egress_audit_prep"
@@ -194,8 +214,107 @@ extract_from = "egress_audit_prep"
 [[tests.outputs.conditions]]
 type = "vrl"
 source = '''
-.requested_host == "up.example.test" && .decision == "other" && .request_count == 1
+.requested_host == "up.example.test" && .request_count == 1
 '''
+
+
+
+[[tests]]
+name = "kept: status 504 produces a row"
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_MISS","decision_reason":"-","requested_host":"up.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":0,"duration_ms":1,"client":"172.19.0.1","status":"504"}'
+
+[[tests.outputs]]
+extract_from = "egress_audit_prep"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "up.example.test" && .request_count == 1
+'''
+
+
+
+[[tests]]
+name = "kept: status 200 produces a row"
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_MISS","decision_reason":"-","requested_host":"up.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":0,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+[[tests.outputs]]
+extract_from = "egress_audit_prep"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "up.example.test" && .request_count == 1
+'''
+
+
+
+[[tests]]
+name = "kept: status 403 produces a row"
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_MISS","decision_reason":"-","requested_host":"up.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":0,"duration_ms":1,"client":"172.19.0.1","status":"403"}'
+
+[[tests.outputs]]
+extract_from = "egress_audit_prep"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "up.example.test" && .request_count == 1
+'''
+
+
+
+[[tests]]
+name = "dropped: status 5030 is not an exact allowlist member (anchors)"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":48,"duration_ms":1,"client":"172.19.0.1","status":"5030"}'
+
+
+
+[[tests]]
+name = "dropped: status x200 is not an exact allowlist member (anchors)"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":48,"duration_ms":1,"client":"172.19.0.1","status":"x200"}'
+
+
+
+[[tests]]
+name = "dropped: status 2003 is not an exact allowlist member (anchors)"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":48,"duration_ms":1,"client":"172.19.0.1","status":"2003"}'
 
 
 

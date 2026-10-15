@@ -47,7 +47,7 @@ for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
 if [[ "${CURL_FAIL:-0}" == 1 ]]; then exit 7; fi
 case "$url" in
   *"?select=last_seen&order=last_seen.asc&limit=1") body="${ROWS_OLDEST:-[]}" ;;
-  *"?select=bucket_start&order=bucket_start.desc&limit=1") body="${ROWS_NEWEST:-[]}" ;;
+  *"?select=bucket_start&workspace_id=in.("*")&order=bucket_start.desc&limit=1") body="${ROWS_NEWEST:-[]}"; printf '%s' "$url" > "$CURL_URL_LOG" ;;
   *) echo "shim: unexpected query $url" >&2; exit 64 ;;
 esac
 printf '%s\n%s' "$body" "${HTTP_CODE:-200}"
@@ -85,7 +85,7 @@ run() { # run <expected-rc> <description> [VAR=value ...]
   : > "$ROOT/gwsql.log"
   local out rc
   out="$(env -i PATH="$ROOT/bin:/usr/bin:/bin" HOME="$ROOT" \
-    CURL_ARGV_LOG="$ROOT/argv.log" CURL_STDIN_LOG="$ROOT/stdin.log" GW_SQL_LOG="$ROOT/gwsql.log" \
+    CURL_ARGV_LOG="$ROOT/argv.log" CURL_STDIN_LOG="$ROOT/stdin.log" GW_SQL_LOG="$ROOT/gwsql.log" CURL_URL_LOG="$ROOT/url.log" \
     SUPABASE_URL="https://example-ref.supabase.test" SUPABASE_SERVICE_ROLE_KEY="synthetic-service-key-0001" \
     "$@" bash "$SUT" 2>"$ROOT/stderr.log")"
   rc=$?
@@ -134,6 +134,14 @@ GWSQL="$(cat "$ROOT/gwsql.log")"
 if [[ "$GWSQL" == *"raw LIKE '%$CANARY%'"* ]]; then pass "the query names the canary workspace"; else fail "the query names the canary workspace (got: $GWSQL)"; fi
 if [[ "$GWSQL" == *"dt <= now() - INTERVAL 35 MINUTE"* && "$GWSQL" == *"dt > now() - INTERVAL 60 MINUTE"* ]]; then pass "the query ignores events newer than 35 minutes (not landed yet)"; else fail "the query ignores events newer than 35 minutes"; fi
 if [[ "$GWSQL" == *"(200|403|502|503|504)"* ]]; then pass "the query counts only the statuses the pipeline ingests (so 407 is excluded)"; else fail "the query counts only the statuses the pipeline ingests"; fi
+CANARY2="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+run 1 "two canaries, stale bucket, gateway active (to capture the query)" EGRESS_AUDIT_EXPECT_COLLECTION=1 EGRESS_AUDIT_CANARY_WORKSPACES="$CANARY,$CANARY2" ROWS_OLDEST="[]" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-active"
+GWSQL2="$(cat "$ROOT/gwsql.log")"
+if [[ "$GWSQL2" == *"AND (raw LIKE '%$CANARY%' OR raw LIKE '%$CANARY2%') FORMAT"* ]]; then pass "two canaries are OR-ed inside one parenthesised group"; else fail "two canaries are OR-ed inside one parenthesised group (got: $GWSQL2)"; fi
+if [[ "$(cat "$ROOT/url.log")" == *"workspace_id=in.($CANARY,$CANARY2)"* ]]; then pass "the freshness read is scoped to the canary workspaces"; else fail "the freshness read is scoped to the canary workspaces"; fi
+# The status pattern must match a real Better Stack row (plain quotes, as observed) and an escaped one.
+PAT="$(printf '%s' "$GWSQL" | sed -n "s/.*match(raw, '\([^']*\)').*/\1/p")"
+if python3 -c 'import re,sys; p=sys.argv[1]; ok=all(re.search(p,l) for l in (r"{\"workspace\":\"w\",\"status\":\"200\"}", r"{\\\"status\\\":\\\"503\\\"}")) and not any(re.search(p,l) for l in (r"{\"status\":\"407\"}", r"{\"status\":\"2000\"}x" if False else r"{\"status\":\"418\"}")); sys.exit(0 if ok else 1)' "$PAT"; then pass "the status pattern matches plain and escaped rows and not 407 or 418"; else fail "the status pattern matches plain and escaped rows and not 407 or 418 (pattern: $PAT)"; fi
 if [[ "$GWSQL" != *"[0-9a-f]{8}-"* ]]; then pass "the query no longer matches every UUID-shaped row"; else fail "the query no longer matches every UUID-shaped row"; fi
 
 echo "-- credential hygiene --"
@@ -145,8 +153,8 @@ run 78 "refuses to run under shell tracing while the key is set" SHELLOPTS=xtrac
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
-if [[ $((PASS + FAIL)) -lt 33 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 33.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 37 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 37.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

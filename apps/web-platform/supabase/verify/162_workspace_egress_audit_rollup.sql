@@ -125,6 +125,28 @@ SELECT 'requester_erase_is_security_definer_with_pinned_search_path',
                             AND 'search_path=public, pg_temp' = ANY (p.proconfig))
             THEN 0 ELSE 1 END::int
 UNION ALL
+SELECT 'check_' || c.conname,
+       CASE WHEN EXISTS (SELECT 1 FROM pg_constraint k
+                          WHERE k.conrelid = 'public.workspace_egress_audit_rollup'::regclass
+                            AND k.conname = c.conname AND k.contype = 'c')
+            THEN 0 ELSE 1 END::int
+  FROM (VALUES ('workspace_egress_audit_rollup_bucket_aligned'),
+               ('workspace_egress_audit_rollup_seen_window')) AS c(conname)
+UNION ALL
+SELECT 'decision_check_closed_to_three_values',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_constraint k
+                          WHERE k.conrelid = 'public.workspace_egress_audit_rollup'::regclass
+                            AND k.contype = 'c'
+                            AND pg_get_constraintdef(k.oid) LIKE '%decision%''allowed''%''denied''%''other''%')
+            THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'host_check_restricts_charset',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_constraint k
+                          WHERE k.conrelid = 'public.workspace_egress_audit_rollup'::regclass
+                            AND k.contype = 'c'
+                            AND pg_get_constraintdef(k.oid) LIKE '%requested_host ~%other%')
+            THEN 0 ELSE 1 END::int
+UNION ALL
 SELECT 'retention_job_active',
        CASE WHEN EXISTS (SELECT 1 FROM cron.job
                           WHERE jobname = 'egress-audit-rollup-retention' AND active)
