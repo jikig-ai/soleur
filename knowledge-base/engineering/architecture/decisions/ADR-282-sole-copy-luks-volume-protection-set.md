@@ -1,6 +1,6 @@
 ---
 title: A sole-copy LUKS volume gets delete protection plus prevent_destroy on the volume, its passphrase pair and the Doppler cascade parents; the sanctioned-replace attachment stays unpinned
-status: adopting
+status: accepted
 date: 2026-10-10
 supersedes: none
 amends: [ADR-142]
@@ -14,6 +14,8 @@ brand_survival_threshold: single-user incident
 # ADR-282: A sole-copy LUKS volume gets delete protection plus `prevent_destroy` on the volume, its passphrase pair and the Doppler cascade parents; the sanctioned-replace attachment stays unpinned
 
 ## Status
+
+> **Accepted 2026-10-15 (#10018).** The condition stated below was met: the post-apply read-back (runbook section 5c, step 3) returned `protected` for volume 106903269 on 2026-10-15 (UTC), the word derived from `origin/main`. The evidence is in the Addendum of that date at the end of this ADR. The paragraph below is the 2026-10-10 text, kept as history: its sentence "Until then every sentence below that says a protection 'is in force' is a plan, not a fact" describes the state before the read-back, and the follow-up PR it promises ("the flip itself is one follow-up PR") is this one.
 
 **Adopting - 2026-10-10 (#9879, PR #9925).** This ADR describes the state the decision reaches when PR #9925 is merged,
 the merge's per-merge apply (`apply-web-platform-infra.yml`) has landed one in-place update on
@@ -276,3 +278,15 @@ and ADR-119 carry dated pointer notes to this ADR; the records under `knowledge-
 ## Addendum — 2026-10-14 (#8316)
 
 Appended; nothing above is changed. The retired `inngest_host_dark_gate` (ADR-199) no longer stands behind the lift of this ADR's protection: [ADR-199's addendum](./ADR-199-destructive-clearance-requires-a-measured-empty-store-and-a-dark-host.md#addendum--2026-10-14-8316) records that any destructive-clearing target written after the protection is lifted must reintroduce a measured-empty-store plus dark-host gate before it may plan a destroy. The lift route above (delete protection in its own reviewed change, then `prevent_destroy`) is where that requirement attaches, alongside the Guard 1 rows, `G4_PROTECTED` and `luks_volume_touched` named in this ADR.
+
+## Addendum — 2026-10-15 (#10018, accepted: the read-back)
+
+Appended; nothing above is changed except the frontmatter `status` and the leading blockquote under Status.
+
+**The read-back.** The post-apply read-back of runbook section 5c, step 3 (read-only, cited by section and not reprinted here) returned the word `protected` (exit 0) for Hetzner volume 106903269 (`hcloud_volume.inngest_redis_luks`) on 2026-10-15 (UTC). It was run once by the agent session working #10018, from the section 5c step 3 one-liner, and printed exactly that word. No time of day was captured, so none is recorded. The expected word was derived from `origin/main`, not assumed: `apps/web-platform/infra/inngest-redis-luks.tf` carries `delete_protection = true` inside `resource "hcloud_volume" "inngest_redis_luks"`, delivered by #9925 (commit `67cb281e4f`, an ancestor of `origin/main`). The expected word and the read word match, which is this ADR's own flip condition.
+
+**The run history, as measured.** Merge-SHA apply run 38139392390 applied the in-place update `hcloud_volume.inngest_redis_luks delete_protection false -> true` ("Apply complete! Resources: 0 added, 1 changed, 0 destroyed", 2026-10-11T12:32:53Z); the failing step (`terraform_data.egress_gateway_web2` remote-exec, dial tcp i/o timeout) ended at 12:48:18Z and the job concluded `failure` at 12:48:26Z, after that apply had completed and on an unrelated step. Later runs are mixed: dispatch run 38580429629 (2026-10-14) concluded `failure`, and the latest apply on main, run 38653889114 on 944372f0d5, succeeded. Neither proves the flag; only the read-back does.
+
+**What the read-back is and is not.** It is a point-in-time read of the delete-protection flag only. `prevent_destroy` is a plan-time control, enforced by the guards named in this ADR, and is not read back from any live system. Guard 1 stays advisory until #9927. The residuals, the loss-mode table, the absent Art. 32(1)(c) restore capability and the "no sanctioned erase path" statement are unchanged. Protection defends against mistaken deletes; it does not defend against a holder of the read/write Hetzner token, which can lift it, or against the three writers of the Doppler copy of the key.
+
+**Who flips it** is discharged by this follow-up PR. `soleur:postmerge` Phase 5.7 step 6 files no tracking issue once the status is `accepted`.

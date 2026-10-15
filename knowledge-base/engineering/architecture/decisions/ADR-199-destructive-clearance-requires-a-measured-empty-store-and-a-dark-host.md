@@ -418,6 +418,8 @@ in that file (lift delete protection in its own reviewed change, let it apply, t
 cross-reference to it. The loss is therefore bounded
 to "a future destroy target written after protection is lifted", not to the live volume today.
 
+> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15, a point-in-time check of the flag only; evidence in ADR-282's addendum of that date). The paragraph above is kept as the dated record.
+
 **Historical, not edited:** ADR-100 section 7 and the "Where the code is" paragraph that follows its
 section 8, and the
 ADR-142 and ADR-225 path mentions, describe the gate as it was; they stay as written. `status:` stays
