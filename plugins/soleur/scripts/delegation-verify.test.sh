@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015,SC2016,SC2329  # A && B || C is the assertion idiom; jq/sed programs are single-quoted on purpose; row functions are dispatched indirectly
 # Suite for plugins/soleur/scripts/delegation-verify.sh -- Guard 1 of the plan's Guard Contract
-# (knowledge-base/project/plans/2026-10-15-feat-cto-standing-delegation-and-production-envelope-plan.md).
+# (knowledge-base/project/plans/archive/20261015-183324-2026-10-15-feat-cto-standing-delegation-and-production-envelope-plan.md).
 #
 # THE SEAM: `gh` is a PATH stub that answers ONLY GET-shaped `api repos/...` reads and one `repo view`
 # call, keyed on the FULL argv, and refuses every other argv with exit 64 after logging STUB-MISS. The

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2329,SC2015,SC2016  # row functions are dispatched indirectly; A && B || C is the assertion idiom; literals are single-quoted on purpose
 # Guard 6 of the CTO standing-delegation plan
-# (knowledge-base/project/plans/2026-10-15-feat-cto-standing-delegation-and-production-envelope-plan.md).
+# (knowledge-base/project/plans/archive/20261015-183324-2026-10-15-feat-cto-standing-delegation-and-production-envelope-plan.md).
 #
 # PROPERTY. `plugins/soleur/commands/go.md` carries ONE hold-routing paragraph, placed OUTSIDE the
 # eval-gated go-routing block, and the block itself is byte-identical to the merge base. The second
