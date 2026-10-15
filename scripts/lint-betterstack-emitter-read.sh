@@ -136,6 +136,7 @@ declare -A ALLOW=(
   ["scripts/followthroughs/compound-promote-outcome-8281.sh"]="field-scoped: decodes .raw|fromjson|.message and selects on the message object's fields (:101-102)"
   ["scripts/followthroughs/git-data-birth-emitter-6982.sh"]="field-scoped SQL: JSONExtractString(raw,'stage') = 'boot_complete' AND host_name equality (:83-84) — field predicates, not message substring"
   ["scripts/followthroughs/git-data-rung2-evidence-capture.sh"]="field-scoped SQL: JSONExtractString extraction of stage/host_name/rc/luks_* fields with host_name in the WHERE (:589-650)"
+  ["scripts/egress-audit-retention-check.sh"]="field-scoped SQL: JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-egress-gw' on the container axis, plus a status allowlist and canary workspace ids; the verdict can only FAIL on a match (n>0 means ingest is not landing), so a forged or quoting row can raise a false alarm but never a false pass"
   ["scripts/followthroughs/hosted-destroy-ask-window-9776.sh"]="field-scoped: selects .CONTAINER_NAME == \$c and the message object's .decision prefix on the decoded row (:129-132) — container axis, not substring"
   ["scripts/followthroughs/hostname-mislabel-web1-6616.sh"]="field-scoped SQL: JSONExtractString(raw,'host_name')/'host' GROUP BY read (:93-98); the verdict keys on host fields, not marker text"
   ["scripts/followthroughs/image-cve-scan-window-9826.sh"]="field-scoped: decoded selects .message == \$m and .marker == \$m (:95-97) — equality on the row's own fields"
