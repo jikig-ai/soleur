@@ -2586,6 +2586,8 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
 
 5. After re-queuing auto-merge, re-invoke the Phase 7 Monitor poll loop from the beginning. The agent carries `fix_attempt_count` across poll invocations.
 
+**Ask-before-push instruction:** read [cto-ruling-armed-push.md](./references/cto-ruling-armed-push.md) before pushing.
+
 Note: The DIRTY (merge conflict) exit is already handled inside the poll block — do not duplicate merge conflict resolution here. The CI auto-fix logic is OUTSIDE the Phase 7 poll block (`<!-- phase-7-poll-block:start/end -->` markers) and does NOT affect the mirror in `merge-pr/SKILL.md §5.2`.
 
 **CRITICAL: Do NOT use `--delete-branch` on merge.** The guardrails hook blocks `--delete-branch` whenever ANY worktree exists in the repo -- not just the one for the branch being merged -- so the restriction applies unconditionally during parallel development. Merge with `--squash` only, then `cleanup-merged` handles branch deletion after removing the worktree.
