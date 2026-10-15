@@ -20,7 +20,7 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-workspace-egress-audit-log-p
 - [x] 1.5 `purge_egress_audit_rollup(retention interval)` plus daily `pg_cron` job in a `DO`/`EXCEPTION duplicate_object` block
 - [x] 1.6 `.down.sql` (unschedule, drop both functions) and `supabase/verify/162_*.sql` in the migration-158 `bad=1` row format
 - [x] 1.7 Register the table in `test/rls-fuzz/targets.ts`
-- [ ] 1.8 (R3) RED then GREEN: `erase_egress_audit_rollup(p_workspace uuid)` (service-role only, idempotent) in migration 162, saga step `5.15 erase-egress-audit-rollup` in `server/account-delete.ts` after 5.14 and before step 6 (abort on failure), test in `test/account-delete.test.ts`
+- [x] 1.8 (R3) RED then GREEN: `erase_egress_audit_rollup(p_workspace uuid)` (service-role only, idempotent) in migration 162, saga step `5.15 erase-egress-audit-rollup` in `server/account-delete.ts` after 5.14 and before step 6 (abort on failure), test in `test/account-delete.test.ts`
 
 ## Phase 2: Ingest route and server module
 
