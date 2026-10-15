@@ -325,6 +325,7 @@ scripts/ci-deploy-sentry-post-fail-6475	122	measured
 scripts/ci-draft-light	87009	measured
 scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
+scripts/ci-pr-selection	1180	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
 scripts/compound-promote	1076	measured

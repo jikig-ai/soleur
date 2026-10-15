@@ -463,6 +463,16 @@ locals {
     # SENTRY_DSN changes this host's user_data, so the next hcloud_server.inngest apply
     # force-replaces the sole scheduler (ADR-096, 2026-09-21 amendment).
     sentry_dsn = var.sentry_dsn
+    # #6780 (ADR-135, 2026-10-13 amendment): the config-refresh consumer's two baked
+    # payloads. D12 asked for base64encode(file(...)) vars — measured against the 32 KiB
+    # cap both ordered forms overflow (~11 kB stored for the pair: the b64 alphabet
+    # defeats the outer gzip), so they ride as TEXT vars landed inside `content: |`
+    # scalars by `${indent(6, ...)}` in the template — still single-source via file(),
+    # and the payload's own comment-strip removes the installer's ~16 kB of `#` lines
+    # before gzip (the b64 fallback's whole benefit, without the b64 tax). Var values
+    # are substituted literally — templatefile never re-scans them for `${`/`%{`.
+    infra_config_install_text = file("${path.module}/infra-config-install.sh")
+    cosign_trusted_root_text  = file("${path.module}/cosign-trusted-root.json")
   }), local.inngest_rationale_strip, "")
 
   # base64gzip of the stripped render — THE value Hetzner stores against its 32,768 B cap,
