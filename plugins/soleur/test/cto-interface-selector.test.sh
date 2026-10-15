@@ -608,7 +608,7 @@ ctl_passes row "ctl-late" "$CTO" "$BASE_REF" none                        || { pr
 ctl_fails misroute_row "ctl-late" "$CTO" "$ONE_SHOT_PHRASE" rule        || { printf 'FATAL: late control: misroute_row() accepted an unchanged selection\n' >&2; exit 2; }
 
 # --- F. informational census of every cto spawn surface (drift is a WARN, never a vacuous green) ------
-SURFACES="$(cd "$ROOT" && grep -rl 'soleur:engineering:cto' plugins/soleur/skills plugins/soleur/commands .claude/hooks scripts .github/workflows 2>/dev/null | sort || true)"
+SURFACES="$(git -C "$ROOT" grep -l 'soleur:engineering:cto' -- plugins/soleur/skills plugins/soleur/commands .claude/hooks scripts .github/workflows 2>/dev/null | sort || true)"
 ck; [[ "$(printf '%s\n' "$SURFACES" | grep -c . || true)" -ge 8 ]] && ok "cto spawn-surface census found $(printf '%s\n' "$SURFACES" | grep -c .) files" || bad "cto spawn-surface census found fewer than 8 files (grep scope broke)"
 
 # --- ANTI-VACUITY: the assertion floors --------------------------------------------------------------------

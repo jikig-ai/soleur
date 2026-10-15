@@ -769,7 +769,7 @@ row_hostile() {
   chk_eq 0 "$(grep -c $'\033' "$OUTF" || true)" "hostile title: no escape byte reaches the output"
   chk_eq 0 "$(grep -c $'\007' "$OUTF" || true)" "hostile title: no bell byte reaches the output"
   local tline tlen
-  tline="$(grep '^- "' "$OUTF" | head -n 1)"
+  tline="$(grep '^- "' "$OUTF" | head -n 1 || true)"
   tlen="$(printf '%s' "$tline" | sed -E 's/^- "(.*)" - https.*$/\1/' | awk '{print length($0)}')"
   chk_eq 1 "$(( tlen <= 80 ))" "hostile title: shown title is at most 80 characters ($tlen)"
   chk_eq "SOLEUR_OVERLAP exit=13 prs=204 vehicle=none" "$(tail -n 1 "$OUTF")" "hostile title: the forged machine-line text inside a title does not become the last line"
