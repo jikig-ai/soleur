@@ -52,6 +52,22 @@ bare_out="$(git rev-parse --is-bare-repository 2>/dev/null)"
 
 if [[ "$wt_out" == "true" || "$bare_out" == "true" ]]; then
   echo "SOLEUR_GIT_REPO_READY=true"
+  # Bare-ROOT CWD marker (#10383): a session anchored at a bare repo root is READY for
+  # maintenance by design, but file-touching work belongs in a linked worktree. The marker
+  # is emitted ONLY under the same three-term config-FILE predicate as
+  # .claude/hooks/bare-root-cwd-guard.sh (parity is pinned by
+  # plugins/soleur/test/git-repo-readiness-diag.test.sh): `.git` a real non-symlink dir,
+  # core.bare=true read from the config FILE (never --is-bare-repository, ADR-173), and
+  # --absolute-git-dir resolving to exactly that dir. A true-bare repo, plain clone, linked
+  # worktree, masked config, or symlinked .git never emits.
+  if [[ "$wt_out" != "true" && "$bare_out" == "true" ]]; then
+    _root="$(pwd -P 2>/dev/null)"
+    if [[ -n "$_root" && -d "$_root/.git" && ! -L "$_root/.git" ]] \
+       && [[ "$(git config --file "$_root/.git/config" --type=bool --get core.bare 2>/dev/null)" == "true" ]] \
+       && [[ "$(git rev-parse --absolute-git-dir 2>/dev/null)" == "$_root/.git" ]]; then
+      echo "SOLEUR_BARE_ROOT_CWD source=readiness-diag"
+    fi
+  fi
   exit 0
 fi
 

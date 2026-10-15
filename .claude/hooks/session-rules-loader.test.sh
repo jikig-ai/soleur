@@ -841,6 +841,56 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ------------- Test 34: bare-root cwd envelope carries the marker + redirect block (#10383) ----
+# A SessionStart at a bare repo root in this layout must append
+# SOLEUR_BARE_ROOT_CWD + the [bare-root-cwd] block, and the corpus still loads.
+TOTAL=$((TOTAL+1))
+T34=$(mktemp -d); LATE_TMPDIRS+=("$T34"); setup_repo "$T34"
+git -C "$T34" config core.bare true
+ctx34=$(invoke_hook "$T34" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+n34=$(grep -c '^- \[id: ' "$T34/AGENTS.md")
+if printf '%s' "$ctx34" | grep -c >/dev/null "loaded: ${n34} of ${n34} rules" \
+   && printf '%s' "$ctx34" | grep -c >/dev/null '^SOLEUR_BARE_ROOT_CWD source=session-start$' \
+   && printf '%s' "$ctx34" | grep -c >/dev/null '^\[bare-root-cwd\].*--yes create'; then
+  echo "PASS: bare-root envelope carries marker + redirect block and corpus still loads (${n34} rules)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: bare-root envelope missing marker/block or corpus"
+  printf '%s\n' "$ctx34" | tail -12
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 35: worktree envelope carries neither marker nor block ----
+TOTAL=$((TOTAL+1))
+T35=$(mktemp -d); LATE_TMPDIRS+=("$T35"); setup_repo "$T35" docs
+ctx35=$(invoke_hook "$T35" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if ! printf '%s' "$ctx35" | grep -q 'SOLEUR_BARE_ROOT_CWD\|\[bare-root-cwd\]'; then
+  echo "PASS: worktree envelope has no bare-root marker or block"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: worktree envelope unexpectedly carries the bare-root marker"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 36: helper absent -> valid envelope, no marker (fail-open) ----
+# A stale bare-root copy of the loader without the sibling helper must still emit
+# the full envelope.
+TOTAL=$((TOTAL+1))
+T36=$(mktemp -d); LATE_TMPDIRS+=("$T36"); setup_repo "$T36"
+copy36="$T36-loader-copy"
+mkdir -p "$copy36"
+cp "$HOOK" "$copy36/session-rules-loader.sh"
+chmod +x "$copy36/session-rules-loader.sh"
+out36=$(cd "$copy36" && printf '%s' "$(jq -nc --arg cwd "$T36" '{cwd: $cwd, session_id: "test-sess-1"}')" | "$copy36/session-rules-loader.sh" 2>/dev/null)
+if jq -e '.hookSpecificOutput.additionalContext' <<<"$out36" >/dev/null 2>&1 \
+   && ! printf '%s' "$out36" | grep -q 'SOLEUR_BARE_ROOT_CWD'; then
+  echo "PASS: helper-absent loader emits a valid envelope with no marker"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: helper-absent envelope invalid or marker present"
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1

@@ -5,12 +5,12 @@ Issue: #10383
 
 ## Phase 1 — Detection helper + battery
 
-- [ ] 1.1 Create `.claude/hooks/bare-root-cwd-guard.sh` — config-FILE predicate
+- [x] 1.1 Create `.claude/hooks/bare-root-cwd-guard.sh` — config-FILE predicate
   (`-d .git && ! -L`, `git config --file .git/config --type=bool --get core.bare == true`,
   `--absolute-git-dir == $root/.git`), `unset GIT_*` location vars, `dir="${1:-$PWD}"`,
   prints `SOLEUR_BARE_ROOT_CWD source=session-start` + bounded `[bare-root-cwd]`
   redirect block on detection, silent + `exit 0` otherwise. No `set -e`.
-- [ ] 1.2 Create `.claude/hooks/bare-root-cwd-guard.test.sh` — fixtures via
+- [x] 1.2 Create `.claude/hooks/bare-root-cwd-guard.test.sh` — fixtures via
   `plugins/soleur/test/lib/git-fixture-env.sh`: mk_bare_root fires;
   mk_true_bare / mk_plain / linked worktree of bare repo / masked-config clone /
   symlinked `.git` / non-repo all silent; `dir` arg honored; marker+block shape
@@ -19,37 +19,37 @@ Issue: #10383
 
 ## Phase 2 — Loader integration
 
-- [ ] 2.1 Edit `.claude/hooks/session-rules-loader.sh` — timeout-guarded child
+- [x] 2.1 Edit `.claude/hooks/session-rules-loader.sh` — timeout-guarded child
   call beside `BARE_HEAL_OUT` (reuse the `command -v timeout` conditional-array
   pattern, `SOLEUR_BARE_CWD_TIMEOUT_S` env override), capture + bound + sanitize
   output, append to `OUT_BODY` after the heal marker; header job list gains
   item 11.
-- [ ] 2.2 Edit `.claude/hooks/session-rules-loader.test.sh` — bare-root
+- [x] 2.2 Edit `.claude/hooks/session-rules-loader.test.sh` — bare-root
   envelope contains marker + redirect block and `loaded: N of M` with N>0;
   worktree envelope contains neither; helper-absent → valid envelope, no
   marker (fail-open row).
-- [ ] 2.3 Edit `.claude/hooks/README.md` — sibling subsection under
+- [x] 2.3 Edit `.claude/hooks/README.md` — sibling subsection under
   "Bare-root HEAD self-heal" documenting the arm's contract.
 
 ## Phase 3 — Readiness marker + telemetry
 
-- [ ] 3.1 Edit `plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh`
+- [x] 3.1 Edit `plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh`
   — READY arm echoes `SOLEUR_BARE_ROOT_CWD source=readiness-diag` when
   `bare_out==true && wt_out!=true` AND the config-FILE predicate holds
   (parity comment pointing at the hook copy).
-- [ ] 3.2 Create `plugins/soleur/test/git-repo-readiness-diag.test.sh` —
+- [x] 3.2 Create `plugins/soleur/test/git-repo-readiness-diag.test.sh` —
   bare-root → READY + marker; worktree → READY only; masked-config → READY
   without marker.
-- [ ] 3.3 Edit `apps/web-platform/server/git-lock-marker-telemetry.ts` —
+- [x] 3.3 Edit `apps/web-platform/server/git-lock-marker-telemetry.ts` —
   `SOLEUR_BARE_ROOT_CWD\b.*` in MARKER_RE + MIRRORED-NOT-PAGED comment block.
-- [ ] 3.4 Edit `apps/web-platform/test/git-lock-marker-telemetry.test.ts` —
+- [x] 3.4 Edit `apps/web-platform/test/git-lock-marker-telemetry.test.ts` —
   mirror row for the marker.
-- [ ] 3.5 Create `scripts/bare-root-cwd-guard-probe.sh` — builds a throwaway
+- [x] 3.5 Create `scripts/bare-root-cwd-guard-probe.sh` — builds a throwaway
   bare-root-shaped dir, runs the guard, prints the marker (<15s, no creds).
 
 ## Phase 4 — Decision record + deferred filings
 
-- [ ] 4.1 Amend `knowledge-base/engineering/architecture/decisions/ADR-099-git-surface-topology.md`
+- [x] 4.1 Amend `knowledge-base/engineering/architecture/decisions/ADR-099-git-surface-topology.md`
   — idiom rule (session-start bare-CWD detection + redirect; overlay is a
   maintained mirror) + Alternatives-considered row (deny/auto-create/
   plugin-arm/do-nothing).
@@ -60,7 +60,7 @@ Issue: #10383
   (cross-repo) + audit sibling SessionStart scripts
   (`ensure-kb-index.sh`, `memory-backstop-resolve.sh`,
   `supabase-loopback-warn.sh`) for bare-root write behavior.
-- [ ] 4.4 Edit `plugins/soleur/commands/go.md` — one sentence in the Step 1
+- [x] 4.4 Edit `plugins/soleur/commands/go.md` — one sentence in the Step 1
   bare-repo guard paragraph noting the earlier session-start layer (outside
   `eval-gate:block:go-routing`).
 - [ ] 4.5 Run the new suites + `git-lock-marker-telemetry.test.ts` +
