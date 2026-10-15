@@ -24,6 +24,9 @@ An issue that cites a scanner's rule list is evidence about the scanner's view, 
 3. **Skipped the Phase 0.25 roadmap freshness check before spawning leaders** — Recovery: ran `roadmap-reconcile.sh validate` afterwards. Prevention: run it at Phase 0.25, not after the fact.
 4. **Spawned 4 of the 5 prescribed Phase 0.5/1.1 agents (omitted `learnings-researcher`) to save cost** — Recovery: none needed; the institutional-learning sweep was covered by the repo researcher. Prevention: either spawn it or record the omission in the brainstorm doc.
 5. **Sent a Stop-hook-triggering closing message that promised a next action** — Recovery: ended with a `Paused:` line. Prevention: end idle turns with `Paused:`/`Blocked:` from the start.
+6. **Plan write rejected by the infra-routing hook on UI-click wording** (the hook read browser-automation steps against the Code Quality alert list as a vendor-dashboard click-path) — Recovery: reworded as browser automation and re-sent; did not use the acknowledgement opt-out. Prevention: describe automated browser steps as automation, not as "the UI page".
+7. **Skipped the interactive founder-stated check (plan step 2.13)** — Recovery: none; recorded here. Prevention: ask at the point the skill prescribes (after Acceptance Criteria, before Plan Review), not after review has run.
+8. **First plan draft carried findings 7 plan-review and sharp-edges passes later corrected** (non-blocking CI job contradicting "fails CI"; typed-handler blind spot in ruff S110; four-vs-five script census; SKILL.md byte ceilings with 8-10 bytes spare; unregistered local suite selection) — Recovery: plan rewritten. Prevention: run the cheap grep-able premise checks (existing baseline pattern, `skill-body-budget.json`, `test-affected-paths.sh`) at plan drafting, before the review panel.
 
 ## Triage
 
@@ -34,6 +37,9 @@ An issue that cites a scanner's rule list is evidence about the scanner's view, 
 | roadmap check ordering | no | one-off |
 | omitted learnings-researcher | no | one-off |
 | promise-ending turn | no | one-off |
+| hook rejected click-path wording | no | one-off |
+| founder check skipped | no | one-off |
+| plan drafted before cheap premise greps | yes (mild) | fix-now-inline: noted above; no workflow rule proposed |
 
 ## Tags
 category: workflow-issues
