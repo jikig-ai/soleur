@@ -337,6 +337,8 @@ slip is Friday 2026-11-06 end of day. #10297 (rollback clears the stamp) is a pr
 being a PR-C precondition when the host replace runs before any flip (CTO, inferred; confirm in PR-C's plan). The R5 `HCLOUD_TOKEN`
 rotation must run before the wipe or after PR-C (its plan-only canary is refused by the wedge).
 
+**A1.7b Build status for `snapshot_clear` (2026-10-15).** Built in this PR, as ruled: the host verb gains `WIPE_PHASE=clear` (exit 43 `wipe_snapshot_not_ours` is the only new code; a failed removal reuses the existing rc 36 `wipe_snapshot_teardown_failed`, because the removal IS `wa_release`); the workflow gains `mode=snapshot_clear` (token `CLEAR-SNAPSHOT-GIT-DATA`) in the `wipe` job with its own step `wipe_snapshot_clear`, no Tier-B loader and no provider write; `wipe_run_title_class` recognises its run title; the runbook has a section "A leftover snapshot". It is never called from `wipe_check`. The earlier rule "until ruled, A.7 does not start that part" is discharged.
+
 **A1.8 Guard Contract deltas** (full entries edited below): Guard 6 gains the variant-selection property and rows; Guard 2 gains the
 listing-in-`wipe_check` row; a new Guard 9 covers the leftover-snapshot window.
 
