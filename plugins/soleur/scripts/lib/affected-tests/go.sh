@@ -52,7 +52,10 @@ affected_go_closure() {
   # must not be split into two bogus operands.
   while IFS= read -r d; do
     [[ -n "$d" ]] || continue
-    p="$("${ADP_TOOL[@]}" list -e -f '{{.ImportPath}}' "$d" 2>/dev/null || true)"
+    # Bounded like every other probe — a `go list` that blocks on module
+    # resolution must not park the gate (affected_timeout: timeout→gtimeout→
+    # watchdog). The same bound covers the ./... graph walk below.
+    p="$(affected_timeout 60 "${ADP_TOOL[@]}" list -e -f '{{.ImportPath}}' "$d" 2>/dev/null || true)"
     [[ -n "$p" && "$p" != -* ]] && changed_pkgs+=("$p")
   done < <(printf '%s\n' "${changed_dirs[@]}" | sort -u)
   if (( ${#changed_pkgs[@]} == 0 )); then
@@ -62,7 +65,7 @@ affected_go_closure() {
   # Forward edges: pkg -> packages it imports (test imports included — a test
   # file importing the changed package is how the change is observed).
   local graph
-  graph="$("${ADP_TOOL[@]}" list -e -f '{{.ImportPath}}|{{join .Imports " "}}|{{join .TestImports " "}}|{{join .XTestImports " "}}' ./... 2>/dev/null)" \
+  graph="$(affected_timeout 60 "${ADP_TOOL[@]}" list -e -f '{{.ImportPath}}|{{join .Imports " "}}|{{join .TestImports " "}}|{{join .XTestImports " "}}' ./... 2>/dev/null)" \
     || return 1
   [[ -n "$graph" ]] || return 1
 

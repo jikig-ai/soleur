@@ -69,6 +69,7 @@ git_fixture_env "$WORLD" || { echo "FATAL: git_fixture_env refused $WORLD" >&2; 
 # delegate unrecognized argv to these so the SUT's own internal use keeps working.
 REAL_NODE="$(command -v node || true)"
 REAL_PY="$(command -v python3 || true)"
+REAL_GIT="$(command -v git || true)"   # census-failure row: the git shim delegates here
 BASEPATH="$PATH"
 
 pass() { PASS=$((PASS + 1)); printf '  [ok] %s\n' "$1"; }
@@ -133,7 +134,13 @@ if [[ "$mode" == "related" && "${FAKE_VITEST_NOTESTS:-0}" == "1" ]]; then
   echo "No test files found"
   exit "${FAKE_VITEST_RC:-0}"
 fi
-echo "Test Files  2 passed (2)"
+# Honest tally: the reported count must equal the fixture's own test-file
+# count — a constant here would let ran= diverge from of= and launder the
+# unit-integrity rows (D7/D16/D19a pin file units).
+_n="$(find . -type f \( -name '*.test.*' -o -name '*.spec.*' \) \
+      -not -path './node_modules/*' 2>/dev/null | wc -l | tr -d ' ')"
+[[ "$_n" =~ ^[0-9]+$ ]] && ((_n > 0)) || _n=1
+echo "Test Files  $_n passed ($_n)"
 exit "${FAKE_VITEST_RC:-0}"
 SHIM
 
@@ -153,7 +160,14 @@ for want in ${FAKE_JEST_EXPECT:-}; do
     *) echo "stub jest: expected arg '$want' missing: $*" >&2; exit 64 ;;
   esac
 done
-echo "Test Suites: 1 passed, 1 total"
+# Same honest-tally rule as the vitest stub — the __tests__ convention carries
+# no .test./.spec. marker, so count the directory shape too (mirrors the
+# adapter's census).
+_n="$(find . -type f \( -name '*.test.*' -o -name '*.spec.*' \
+      -o -path '*/__tests__/*' \) -not -path './node_modules/*' 2>/dev/null \
+      | wc -l | tr -d ' ')"
+[[ "$_n" =~ ^[0-9]+$ ]] && ((_n > 0)) || _n=1
+echo "Test Suites: $_n passed, $_n total"
 exit "${FAKE_JEST_RC:-0}"
 SHIM
 
@@ -161,7 +175,6 @@ cat > "$BIN/pytest" <<'SHIM'
 #!/usr/bin/env bash
 [[ -n "${FAKE_LOG:-}" ]] || { echo "stub pytest: FAKE_LOG unset" >&2; exit 64; }
 printf 'pytest\t%s\n' "$*" >> "$FAKE_LOG"
-[[ -z "${FAKE_PYTEST_SLEEP:-}" ]] || sleep "$FAKE_PYTEST_SLEEP"
 for a in "$@"; do
   case "$a" in --version|-V|--help) echo "pytest 8.3.0"; exit 0 ;; esac
 done
@@ -669,7 +682,7 @@ reset_fakes() {
   : > "$CALLS"
   export FAKE_VITEST_RC=0 FAKE_VITEST_EXPECT="" FAKE_VITEST_MAXW="" FAKE_VITEST_NOTESTS=0 FAKE_VITEST_SLEEP=""
   export FAKE_JEST_RC=0 FAKE_JEST_EXPECT="" FAKE_JEST_REQUIRE_RELATED=0
-  export FAKE_PYTEST_RC=0 FAKE_PYTEST_EXPECT="" FAKE_PYTEST_SLEEP=""
+  export FAKE_PYTEST_RC=0 FAKE_PYTEST_EXPECT=""
   export FAKE_PY_IMPORTABLE="pytest"
   export FAKE_GO_TEST_RC=0 FAKE_GO_EXPECT="" FAKE_GO_DIR="" FAKE_GO_GOMOD="" FAKE_GO_REQUIRE_P=1
   export FAKE_NX_RC=0 FAKE_NX_EXPECT="" FAKE_NX_PROJECTS="" FAKE_NX_LINE="" FAKE_NX_FULL_LINE="" FAKE_NX_FULL_RC=0
@@ -677,6 +690,7 @@ reset_fakes() {
   export FAKE_TURBO_RC=0 FAKE_TURBO_EXPECT=""
   export FAKE_RUNNER_RC=0 FAKE_RUNNER_AFFECTED_RC="" FAKE_RUNNER_FULL_RC=""
   export FAKE_PM_TEST_RC=0
+  export FAKE_GIT_FAIL_OTHERS=0
 }
 
 RSEQ=0; RC=0; OUT=""
@@ -686,7 +700,7 @@ _run_gate() { # <PATH> <repo> <kind:gate|explain|selfcheck> [gate args…]
   ( cd "$repo" && env -u CLAUDE_PLUGIN_ROOT \
       PATH="$p" \
       FAKE_LOG="$CALLS" FAKE_DIR="$TESTROOT" \
-      REAL_NODE="$REAL_NODE" REAL_PY="$REAL_PY" \
+      REAL_NODE="$REAL_NODE" REAL_PY="$REAL_PY" REAL_GIT="$REAL_GIT" \
       bash "$SUT" "$@" ) > "$TESTROOT/outs/$RSEQ.out" 2>&1
   RC=$?
   OUT="$(cat "$TESTROOT/outs/$RSEQ.out")"
@@ -765,7 +779,11 @@ reset_fakes
 run_gate "$R_CONTROL" explain --explain
 want_rc 0 "A2: --explain exits 0"
 if [[ -s "$CALLS" ]]; then fail "A2: --explain invoked a runner: $(tr '\n' '|' < "$CALLS")"; else pass "A2: --explain ran nothing"; fi
-want_out "A2: --explain prints the selection/reasons" 'select|affected|reason'
+# The marker alone always carries reason=/mode= — pin the EXPLAIN-only lines:
+# the base dump, the per-path classification, and the SELECTION verdict.
+want_out "A2: --explain prints the base dump" 'AFFECTED_EXPLAIN base='
+want_out "A2: --explain lists per-path reasons" 'PATH src/util\.ts class=changed'
+want_out "A2: --explain prints the selection verdict" 'SELECTION mode=selected reason='
 
 # --- A3. --self-check ----------------------------------------------------------
 reset_fakes
@@ -866,6 +884,13 @@ reset_fakes; export FAKE_RUNNER_AFFECTED_RC=1
 run_gate "$R_CAP" gate
 want_rc 1 "B6c: runner rc 1 stays rc 1"
 
+# A runner usage/refusal rc 2 is a REFUSAL, not a plain failure — it must map
+# to rc 4 runner-refused the same as the runner's own 4.
+reset_fakes; export FAKE_RUNNER_AFFECTED_RC=2
+run_gate "$R_CAP" gate
+want_rc 4 "B6d: runner rc 2 maps to gate rc 4"
+want_out "B6d: runner-refused reason" 'AFFECTED_GATE_REFUSED.*reason=runner-refused'
+
 # B7 — the Soleur repo itself delegates: --explain in the real tree must resolve
 # to the repo runner or name its mode. Bounded at 120 s (the affected pre-pass is
 # measured ~150 s contended on a busy host, seconds here). REAL_NODE/REAL_PY are
@@ -873,13 +898,21 @@ want_rc 1 "B6c: runner rc 1 stays rc 1"
 # and the shimmed interpreters must delegate the config dump or the gate reads a
 # fake-unparseable config and refuses — a harness artifact, not a gate defect.
 reset_fakes
-( cd "$REPO_ROOT" && env -u CLAUDE_PLUGIN_ROOT PATH="$BIN:$BASEPATH" FAKE_LOG="$CALLS" \
+# Portability: bound with the gate's own affected_timeout chain (timeout →
+# gtimeout → watchdog) — a bare `timeout` is absent on stock macOS.
+# shellcheck source=plugins/soleur/scripts/lib/affected-tests/common.sh
+source "$DIR/lib/affected-tests/common.sh"
+( cd "$REPO_ROOT" && affected_timeout 120 \
+    env -u CLAUDE_PLUGIN_ROOT PATH="$BIN:$BASEPATH" FAKE_LOG="$CALLS" \
     REAL_NODE="$REAL_NODE" REAL_PY="$REAL_PY" \
-    timeout 120 bash "$SUT" --explain ) > "$TESTROOT/outs/live.out" 2>&1
+    bash "$SUT" --explain ) > "$TESTROOT/outs/live.out" 2>&1
 RC=$?; OUT="$(cat "$TESTROOT/outs/live.out")"
 printf 'explain\t%s\t%s\n' "$RC" "$TESTROOT/outs/live.out" >> "$RUNS"
 want_rc 0 "B7: --explain in the Soleur repo exits 0"
-want_out "B7: live explain resolves to the repo runner or names its mode" 'test-all\.sh|mode=|delegat'
+# mode=/delegat as bare alternation legs are vacuous (every marker carries
+# mode=): require the EXPLAIN-only emitters — a delegation line or the
+# adapter-arm explain dump.
+want_out "B7: live explain resolves to the repo runner or names its mode" 'SELECTION mode=delegated|SELECTION mode=(selected|full|custom|none)|AFFECTED_EXPLAIN base='
 
 # B8 [arch-P1 regression]: the capability probe runs BEFORE the gate's inert/
 # global classification — an all-inert diff under a capability-positive runner
@@ -967,7 +1000,11 @@ commit_chg "$R_INERT2" README.md 'readme change'
 reset_fakes; run_gate "$R_INERT2" gate
 want_no_out "C5b: README.md is NOT inert once inert_paths replaces the built-ins" 'NO_TESTS_AFFECTED'
 want_rc_in "C5b: replaced-inert README diff is refused or falls back to full" 0 4
-if [[ "$RC" == "0" ]]; then want_out "C5b: fallback discloses a reason" 'reason=|mode=full'; fi
+# `reason=|mode=full` is vacuous — every marker carries reason=. Pin the named
+# non-refusal reason set: on rc 0 the verdict must disclose WHY it ran what it ran.
+if [[ "$RC" == "0" ]]; then
+  want_out "C5b: fallback discloses a named reason" 'reason=(ok|empty-selection|empty-diff|census-degraded|global-paths|full-requested|no-selector|custom-command|delegated)'
+fi
 
 # C6: a global_paths hit (package.json is a built-in) forces the full command.
 R_GLOB="$(mk_repo global-hit)"; seed_js "$R_GLOB"; seal_base "$R_GLOB"
@@ -980,7 +1017,9 @@ reset_fakes; run_gate "$R_GLOB" gate
 want_rc 0 "C6: global-path diff exits 0 via the full command"
 want_field "C6: mode=full" mode 'full'
 want_no_call "C6: no related selector under a global hit" 'related'
-want_call "C6: the full command did run" 'vitest|npm|pnpm|yarn|bun|npx'
+# A bare 'vitest|npm|…' leg is satisfied by the toolchain's --version probe —
+# pin the invocation SHAPE of a test run, never the probe.
+want_call "C6: the full command did run" 'vitest	run |npm	test|pnpm	test|yarn	test|bun	test'
 
 # C7 [G1-7]: vacuous test_command values → rc 4 vacuous-test-command, each
 # spelling — INCLUDING the composition bypasses: a true-swallower tail
@@ -1074,11 +1113,26 @@ FIX
   run_gate_path "$JQBIN" "$R_JQONLY" gate
   want_rc 0 "C10: jq-only host parses the config"
   want_field "C10: jq decode reached the custom arm" mode 'custom'
-  want_call "C10: the configured command ran" 'custom'
+  want_call "C10: the configured command ran" 'custom	cwd='
 else
   fail "C10: cannot build the jq-only PATH fixture (missing jq/git/bash on host)"
 fi
 unset _t _p
+
+# C10b: a top-level NON-OBJECT config must refuse identically on every decoder.
+# py/node exit 3 on `[]`; a bare jq `to_entries` over `[]` decodes to ZERO
+# records — a silent accept (no keys, no badkey) unless the jq arm checks
+# `type == "object"` first. rc 4 bad-config is the contract.
+if [[ -x "$JQBIN/jq" && -x "$JQBIN/git" && -x "$JQBIN/bash" ]]; then
+  R_JQARR="$(mk_repo jq-array)"; seed_js "$R_JQARR"
+  write_config "$R_JQARR" '[]'
+  seal_base "$R_JQARR"
+  commit_chg "$R_JQARR" src/util.ts 'export const u = 1;'
+  reset_fakes
+  run_gate_path "$JQBIN" "$R_JQARR" gate
+  want_rc 4 "C10b: jq-only host refuses a top-level array config"
+  want_out "C10b: bad-config reason" 'AFFECTED_GATE_REFUSED.*reason=bad-config'
+fi
 
 # ============================ Guard 1 — no vacuous green =======================
 
@@ -1126,22 +1180,26 @@ R_EMPTY2="$(mk_repo empty-sel-py)"; seed_python "$R_EMPTY2"; seal_base "$R_EMPTY
 commit_chg "$R_EMPTY2" assets/logo.svg '<svg/>'
 reset_fakes; run_gate "$R_EMPTY2" gate
 if [[ "$RC" == "0" ]]; then
-  want_call "D3b: pytest ran the suite" 'pytest'
-  want_out "D3b: a named fallback reason is disclosed" 'reason=|mode=full'
+  want_call "D3b: pytest ran the suite" 'pytest	'
+  # `reason=|mode=full` is vacuous — the disclosure must be a NAMED fallback
+  # reason, not the mere presence of the marker's reason field.
+  want_out "D3b: a named fallback reason is disclosed" 'reason=(empty-selection|no-selector)|mode=full'
 else
   want_rc_in "D3b: unclassifiable diff is refused or falls back" 4
 fi
 
-# D4: tests exist but no stack resolves → rc 4 (a Ruby test file no adapter owns).
+# D4: tests exist but no stack resolves → rc 4 no-stack. The fixture file must
+# match the test-file census shape (`*.test.*`) — a plain `.rb` name is
+# invisible to it and would land on rc 7 no-tests instead, which is why the
+# filename carries the marker.
 R_RB="$(mk_repo no-stack)"; seal_base "$R_RB"
-mkdir -p "$R_RB/test"; printf 'def test_w; end\n' > "$R_RB/test/test_widget.rb"
+mkdir -p "$R_RB/test"; printf 'def test_w; end\n' > "$R_RB/test/test_widget.test.rb"
 assert_fixture_dir "$R_RB"; git -C "$R_RB" add -A; git -C "$R_RB" commit -q -m "ruby tests"
 reset_fakes; run_gate "$R_RB" gate
-# An unrecognized test file sits between the contract's rc-4 (tests exist, no
-# runner resolves) and rc-7 (no suite detected) readings; either is a loud,
-# disclosed non-green — the refusal both are aimed at.
-want_rc_in "D4: undetectable stack is never green" 4 7
-want_out "D4: the non-run is disclosed" 'AFFECTED_GATE_REFUSED|no test suite|no-tests'
+# Deterministic: the census sees a test file, no adapter resolves, no foreign
+# runner → rc 4 reason=no-stack. Never a hedged 4-or-7.
+want_rc 4 "D4: tests-exist-but-no-stack refuses (rc 4)"
+want_out "D4: no-stack reason" 'AFFECTED_GATE_REFUSED.*reason=no-stack'
 want_no_out "D4: never labelled passed" 'passed\.|tests verified'
 
 # D5 [G1-2]: no runner on PATH at all → rc 4, never a silent 0. The fixture has
@@ -1214,6 +1272,42 @@ want_rc 4 "D9: shallow clone with unrecoverable base is refused"
 want_out "D9: no-base-ref reason" 'AFFECTED_GATE_REFUSED.*reason=no-base-ref'
 want_no_out "D9: never a silent full on a dead base" 'mode=full'
 
+# D9b [census legs]: a census leg that fails toward empty must NEVER silently
+# narrow the selection — the untracked leg is the worst case (a dead
+# `ls-files --others` drops every NEW test file). The contract: forced full +
+# a disclosed reason=census-degraded. A scoped git shim fails ONLY the
+# untracked leg, and only while armed — all other git calls delegate to the
+# real binary.
+GITFAILBIN="$TESTROOT/bin-gitfail"; mkdir -p "$GITFAILBIN"
+ln -sf "$BIN"/* "$GITFAILBIN/"
+cat > "$GITFAILBIN/git" <<'SHIM'
+#!/usr/bin/env bash
+if [[ "${FAKE_GIT_FAIL_OTHERS:-0}" == "1" ]]; then
+  _ls=0; _oth=0
+  for _a in "$@"; do
+    [[ "$_a" == "ls-files" ]] && _ls=1
+    [[ "$_a" == "--others" ]] && _oth=1
+  done
+  if (( _ls && _oth )); then
+    echo "stub git: simulated ls-files --others failure" >&2
+    exit 1
+  fi
+fi
+exec "${REAL_GIT:?REAL_GIT unset}" "$@"
+SHIM
+chmod +x "$GITFAILBIN/git"
+R_CFAIL="$(mk_repo census-degraded)"; seed_js "$R_CFAIL"; seal_base "$R_CFAIL"
+commit_chg "$R_CFAIL" src/util.ts 'export const u = 1;'
+# An UNTRACKED test file — exactly what a masked ls-files leg would drop.
+printf 'import { test } from "vitest";\ntest("n", () => {});\n' > "$R_CFAIL/src/new.test.ts"
+reset_fakes; export FAKE_GIT_FAIL_OTHERS=1
+run_gate_path "$GITFAILBIN:$BASEPATH" "$R_CFAIL" gate
+want_rc 0 "D9b: a failed untracked census leg degrades to full — never narrows"
+want_field "D9b: mode=full" mode 'full'
+want_out "D9b: census-degraded reason disclosed" 'reason=census-degraded'
+want_call "D9b: the full command ran" 'vitest	run '
+want_no_call "D9b: no related selection on a degraded census" 'related'
+
 # ============================ adapters =========================================
 
 # D15: jest — --findRelatedTests <files>; the __tests__ convention counts in of=.
@@ -1280,7 +1374,9 @@ R_PYSRC="$(mk_repo py-src)"; seed_python "$R_PYSRC"; seal_base "$R_PYSRC"
 commit_chg "$R_PYSRC" src/mod.py 'def f():\n    return 2'
 reset_fakes; run_gate "$R_PYSRC" gate
 want_rc 0 "D10: source diff without testmon runs the suite"
-want_call "D10: pytest invoked" 'pytest'
+# 'pytest' bare matches the `python3 -c 'import pytest'` probe line too —
+# anchor on the tool's own ledger slot.
+want_call "D10: pytest invoked" 'pytest	'
 want_field "D10: full-escalation ran equals the census" ran '1'
 want_field "D10: census" of '1'
 R_PYTM="$(mk_repo py-testmon)"; seed_python "$R_PYTM"; seal_base "$R_PYTM"
@@ -1288,11 +1384,10 @@ commit_chg "$R_PYTM" src/mod.py 'def f():\n    return 2'
 reset_fakes; export FAKE_PY_IMPORTABLE="pytest testmon pytest_testmon"
 run_gate "$R_PYTM" gate
 want_rc 0 "D11: testmon-importable source diff exits 0"
-if grep -qiE 'testmon' "$CALLS" || grep -qiE 'testmon' <<<"$OUT"; then
-  pass "D11: the testmon path was taken or disclosed"
-else
-  fail "D11: testmon importable but no testmon selection visible: $(tr '\n' '|' < "$CALLS")"
-fi
+# A bare `testmon` grep is satisfied by the import-PROBE ledger line
+# (`python3 -I -c 'import pytest_testmon'`) — pin the RUN argv instead:
+# `pytest\t--testmon …` (the pytest stub re-logs under either tool spelling).
+want_call "D11: the testmon selection ran (--testmon argv, not the probe)" 'pytest	.*--testmon'
 # testmon's file count is not derivable from `collected N / M deselected`
 # (items, not files) — the honest marker is ran=-, and the pass verdict still
 # prints because a real run happened.
@@ -1336,7 +1431,7 @@ seal_base "$R_PYNO"
 commit_chg "$R_PYNO" src/lib.py 'def f():\n    return 2'
 reset_fakes; run_gate "$R_PYNO" gate
 want_rc 7 "D24: pytest-signal-free pyproject.toml is not a py detection"
-want_no_call "D24: pytest never invoked" 'pytest'
+want_no_call "D24: pytest never invoked" 'pytest	'
 
 # D19 [G1-6]: multi-stack — an empty adapter cannot launder or sink the other.
 R_MS="$(mk_repo multi-stack)"; seed_python "$R_MS"
@@ -1346,8 +1441,10 @@ commit_chg "$R_MS" src/mod.py 'def f():\n    return 3'
 reset_fakes; export FAKE_GO_DIR="$TESTROOT/go-graph-ms"
 run_gate "$R_MS" gate
 want_rc 0 "D19a: py-only diff in a py+go repo exits 0"
-want_call "D19a: pytest ran" 'pytest'
-want_out "D19a: the run is counted non-empty" 'AFFECTED_GATE ran=([1-9]|-) of=[1-9]'
+want_call "D19a: pytest ran" 'pytest	'
+# Both adapters produce honest FILE counts on this path — `ran=-` (opaque
+# tally) is a counted-path lie and must not satisfy this row.
+want_out "D19a: the run is counted non-empty" 'AFFECTED_GATE ran=[1-9][0-9]* of=[1-9][0-9]*'
 commit_chg "$R_MS" internal/leaf/leaf.go 'package leaf\n\nfunc Leaf() int { return 3 }'
 reset_fakes; export FAKE_PYTEST_RC=1 FAKE_GO_DIR="$TESTROOT/go-graph-ms" FAKE_GO_EXPECT="internal/leaf cmd/app"
 run_gate "$R_MS" gate
@@ -1387,7 +1484,9 @@ reset_fakes; export FAKE_VITEST_SLEEP=3
 run_gate "$R_NOCI" gate
 want_rc 0 "D20c: budget ignored without CI — run completes"
 want_no_out "D20c: no deferral without CI" 'AFFECTED_GATE_BUDGET_DEFERRED'
-if grep -qiE 'no ci|ci=none|without ci' <<<"$OUT"; then
+# `ci=none` is unconditional on every no-CI run's marker — pin the upfront
+# disclosure sentence itself, not the marker field.
+if grep -qiE 'no CI test workflow detected|budget not enforced' <<<"$OUT"; then
   pass "D20c: the no-CI disregard is disclosed"
 else
   fail "D20c: budget ignored without the upfront no-CI line"
@@ -1403,6 +1502,97 @@ run_gate "$R_BCI" gate
 want_rc 6 "D20d: budget_ci=true defers without a workflow file"
 want_out "D20d: deferral marker" 'AFFECTED_GATE_BUDGET_DEFERRED'
 
+# D20e [trigger anchor]: `push`/`pull_request` as a SUBSTRING inside a run:
+# step is not a trigger declaration — `git push` and `pushd` in a deploy
+# workflow must not arm the budget. The workflow below carries a real
+# test-command shape too, so only the anchored `on:` check keeps this dark.
+R_CIPUSH="$(mk_repo ci-push-substring)"; seed_js "$R_CIPUSH"
+mkdir -p "$R_CIPUSH/.github/workflows"
+cat > "$R_CIPUSH/.github/workflows/deploy.yml" <<'YML'
+name: deploy
+on: workflow_dispatch
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+      - run: git push origin main
+      - run: pushd dist && ./publish.sh
+YML
+write_config "$R_CIPUSH" '{"budget_seconds": 1}'
+seal_base "$R_CIPUSH"
+commit_chg "$R_CIPUSH" src/util.ts 'export const u = 1;'
+reset_fakes; export FAKE_VITEST_SLEEP=5
+run_gate "$R_CIPUSH" gate
+want_rc 0 "D20e: push-in-a-run-step is not a CI trigger — budget stays unarmed"
+want_no_out "D20e: no deferral without a declared trigger" 'AFFECTED_GATE_BUDGET_DEFERRED'
+want_field "D20e: ci field is none" ci 'none'
+want_out "D20e: the no-CI disregard is disclosed" 'no CI test workflow detected'
+
+# D20f [trigger anchor, positive]: flow-style `on: [push]` IS a declaration.
+R_CIFLOW="$(mk_repo ci-flow)"; seed_js "$R_CIFLOW"
+mkdir -p "$R_CIFLOW/.github/workflows"
+cat > "$R_CIFLOW/.github/workflows/ci.yml" <<'YML'
+name: ci
+on: [push, workflow_dispatch]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+YML
+write_config "$R_CIFLOW" '{"budget_seconds": 1}'
+seal_base "$R_CIFLOW"
+commit_chg "$R_CIFLOW" src/util.ts 'export const u = 1;'
+reset_fakes; export FAKE_VITEST_SLEEP=5
+run_gate "$R_CIFLOW" gate
+want_rc 6 "D20f: flow-style on: [push] detects CI and defers"
+want_out "D20f: deferral marker" 'AFFECTED_GATE_BUDGET_DEFERRED'
+want_field "D20f: ci field names the workflow" ci '.*\.yml'
+
+# D20g [trigger anchor, positive]: block-map `push:` key inside the `on:` block
+# — and a block-sequence `- pull_request` entry — both declare triggers.
+R_CIBLK="$(mk_repo ci-block)"; seed_js "$R_CIBLK"
+mkdir -p "$R_CIBLK/.github/workflows"
+cat > "$R_CIBLK/.github/workflows/ci.yml" <<'YML'
+name: ci
+on:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+YML
+write_config "$R_CIBLK" '{"budget_seconds": 1}'
+seal_base "$R_CIBLK"
+commit_chg "$R_CIBLK" src/util.ts 'export const u = 1;'
+reset_fakes; export FAKE_VITEST_SLEEP=5
+run_gate "$R_CIBLK" gate
+want_rc 6 "D20g: block-map push: trigger detects CI and defers"
+want_out "D20g: deferral marker" 'AFFECTED_GATE_BUDGET_DEFERRED'
+
+R_CISEQ="$(mk_repo ci-seq)"; seed_js "$R_CISEQ"
+mkdir -p "$R_CISEQ/.github/workflows"
+cat > "$R_CISEQ/.github/workflows/ci.yml" <<'YML'
+name: ci
+on:
+  - pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+YML
+write_config "$R_CISEQ" '{"budget_seconds": 1}'
+seal_base "$R_CISEQ"
+commit_chg "$R_CISEQ" src/util.ts 'export const u = 1;'
+reset_fakes; export FAKE_VITEST_SLEEP=5
+run_gate "$R_CISEQ" gate
+want_rc 6 "D20h: block-sequence - pull_request trigger detects CI and defers"
+want_out "D20h: deferral marker" 'AFFECTED_GATE_BUDGET_DEFERRED'
+
 # ============================ --full + G1-12 ===================================
 
 # D21: --full on an adapter repo bypasses selection.
@@ -1410,7 +1600,9 @@ reset_fakes; run_gate "$R_CONTROL" gate --full
 want_rc 0 "D21: --full on the vitest fixture exits 0"
 want_field "D21: mode=full" mode 'full'
 want_no_call "D21: --full never runs the related selector" 'related'
-want_call "D21: the full command ran" 'vitest|npm|pnpm|yarn|bun|npx'
+# Bare tool-name legs are satisfied by the --version toolchain probe — pin the
+# run argv shape (the ledger is `name<TAB>argv`).
+want_call "D21: the full command ran" 'vitest	run |npm	test|pnpm	test|yarn	test|bun	test'
 
 # D22 [G1-12 must-PASS]: pnpm workspace, vitest config in a subdirectory,
 # non-default base branch (trunk, resolved via origin/HEAD).
@@ -1433,8 +1625,38 @@ commit_chg "$R_PNPM" packages/web/src/util.ts 'export const u = 1;'
 reset_fakes; run_gate "$R_PNPM" gate
 want_rc 0 "D22: pnpm-workspace / subdir-config / trunk-base fixture exits 0"
 # A workspace may legitimately run the package's own test command rather than
-# `vitest related`; what is NOT acceptable is a green run with nothing invoked.
-want_call "D22: a runner executed (related selection or the package test command)" 'vitest|jest|npm.test|pnpm.test|yarn.test|bun.test'
+# `vitest related`; what is NOT acceptable is a green run with nothing invoked
+# or only a --version probe — pin the invocation shape, not the tool name.
+want_call "D22: a runner executed (related selection or the package test command)" 'vitest	(run|related)|jest	.*findRelatedTests|npm	test|pnpm	test|yarn	test|bun	test'
+
+# F1–F3 [pm arms]: the lockfile-detected package manager supplies the exec
+# prefix when node_modules/.bin is absent — pnpm-lock.yaml → `pnpm exec`,
+# yarn.lock → `yarn <tool>`, bun.lock → `npx --no-install` (the no-`bun x`
+# rule: bunx auto-installs registry content, so it is never an exec prefix).
+# Assert the prefix on the RUN argv — the --version probe shares the prefix.
+seed_pm_repo() { # <name> <lockfile> — vitest stack, no .bin, pm lock committed
+  local r; r="$(mk_repo "$1")"; seed_js_nobin "$r"
+  printf '# fixture lock\n' > "$r/$2"
+  seal_base "$r"; commit_chg "$r" src/util.ts 'export const u = 1;'
+  printf '%s' "$r"
+}
+R_FPNPM="$(seed_pm_repo pm-pnpm pnpm-lock.yaml)"
+reset_fakes; run_gate "$R_FPNPM" gate
+want_rc 0 "F1: pnpm-lock fixture exits 0"
+want_call "F1: pnpm exec prefix on the related run" 'pnpm	exec vitest related'
+want_call "F1: vitest ran through the prefix" 'vitest	related'
+
+R_FYARN="$(seed_pm_repo pm-yarn yarn.lock)"
+reset_fakes; run_gate "$R_FYARN" gate
+want_rc 0 "F2: yarn.lock fixture exits 0"
+want_call "F2: yarn prefix on the related run" 'yarn	vitest related'
+want_call "F2: vitest ran through the prefix" 'vitest	related'
+
+R_FBUN="$(seed_pm_repo pm-bun bun.lock)"
+reset_fakes; run_gate "$R_FBUN" gate
+want_rc 0 "F3: bun.lock fixture exits 0"
+want_call "F3: bun resolves via npx --no-install, never bun x" 'npx	--no-install vitest related'
+want_no_call "F3: bun x is never an exec prefix" 'bun	x|bunx	'
 
 # ============================ env-hygiene + aux modes ==========================
 
@@ -1454,7 +1676,7 @@ RC=$?; OUT="$(cat "$TESTROOT/outs/forge.out")"
 printf 'gate\t%s\t%s\n' "$RC" "$TESTROOT/outs/forge.out" >> "$RUNS"
 want_rc 0 "E1: forged budget env does not defer"
 want_no_out "E1: no deferral marker" 'AFFECTED_GATE_BUDGET_DEFERRED'
-want_call "E1: the run actually executed" 'vitest'
+want_call "E1: the run actually executed" 'vitest	(run|related)'
 
 # E2: --self-check outside a git repo names the real cause, not no-base-ref.
 reset_fakes
@@ -1524,19 +1746,29 @@ if grep -qw 'git' <<<"$_head" && grep -qE 'getconf|sysctl' <<<"$_head" && grep -
 else
   fail "D23c: header does not enumerate the external binaries it invokes"
 fi
-unset _f _hits _head _PORT_FILES port_hits _BANNED _allsrc _h
+# Every `go list` invocation in the go adapter runs under a bound — an
+# unbounded list can park the gate on module resolution (network fetch).
+_golist_unb="$(grep -anE 'list -e' "$DIR/lib/affected-tests/go.sh" \
+  | grep -av 'affected_timeout\|affected_bound' || true)"
+if [[ -z "$_golist_unb" ]]; then
+  pass "D23d: every go list call is bounded (affected_timeout/affected_bound)"
+else
+  fail "D23d: unbounded go list call in go.sh: $(head -n 3 <<<"$_golist_unb" | tr '\n' '|')"
+fi
+unset _f _hits _head _PORT_FILES port_hits _BANNED _allsrc _h _golist_unb
 
 # ============================ cross-run contract ===============================
 # G1-10: every run path emits the marker — a second exit site that fires before the
 # emit leaves a run with no AFFECTED_GATE line, and these loops catch it.
+# ALL recorded kinds are swept (gate AND explain AND selfcheck) — explain and
+# self-check are exit paths too and must not slip a marker-less finish.
 _xfail=0
 while IFS=$'\t' read -r _kind _rc _of; do
-  [[ "$_kind" == "gate" ]] || continue
   if ! grep -qE 'AFFECTED_GATE ' "$_of"; then
-    _xfail=$((_xfail + 1)); fail "X1: run kind=gate rc=$_rc emitted no AFFECTED_GATE marker: $_of"
+    _xfail=$((_xfail + 1)); fail "X1: run kind=$_kind rc=$_rc emitted no AFFECTED_GATE marker: $_of"
   fi
 done < "$RUNS"
-[[ "$_xfail" == "0" ]] && pass "X1: every gate run emitted the AFFECTED_GATE marker (single finish() exit site)"
+[[ "$_xfail" == "0" ]] && pass "X1: every run (gate/explain/selfcheck) emitted the AFFECTED_GATE marker (single finish() exit site)"
 _badword=0
 while IFS=$'\t' read -r _kind _rc _of; do
   if grep -qiE 'tests verified' "$_of"; then

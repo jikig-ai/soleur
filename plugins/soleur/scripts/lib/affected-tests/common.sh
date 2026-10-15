@@ -221,7 +221,7 @@ affected_bound() {
 # refusal paths that never reach the caller's own rm.
 AFFECTED_SCRATCH=()
 affected_mktemp() { # <tag> — sets AFFECTED_TMP to a fresh registered scratch path
-  AFFECTED_TMP="$(mktemp "${TMPDIR:-/tmp}/affected-$1.XXXXXX")" || return 1
+  AFFECTED_TMP="$(mktemp "${TMPDIR:-/tmp}/affected-$1.XXXXXX")" || return 1 # lint-trap-ownership: ok — owning `trap affected_scratch_clean EXIT INT TERM` is installed by the sourcing gate (affected-tests.sh); a sourced lib cannot own an EXIT trap without clobbering the importer's
   AFFECTED_SCRATCH+=("$AFFECTED_TMP")
 }
 affected_scratch_clean() {
@@ -289,7 +289,8 @@ _affected_cmd_vacuous() { # <command string> → rc 0 when it certifies nothing
 # finish <rc> <mode> <reason> <stack> <ci> [ran of skipped]
 #   rc:     0 pass-or-inert | 1 failure/signal | 4 refused | 6 budget-deferred | 7 no suite
 #   mode:   selected | full | custom | explain | none
-#   reason: ok | inert | empty-selection | empty-diff | global-paths | full-requested |
+#   reason: ok | inert | empty-selection | empty-diff | census-degraded |
+#           global-paths | full-requested |
 #           custom-command | delegated | runner-refused | runner-signal | foreign-runner |
 #           no-stack | bad-config key=<k> | vacuous-test-command | no-base-ref |
 #           toolchain-missing | no-tests | budget-deferred | bad-usage | help

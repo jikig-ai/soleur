@@ -177,7 +177,28 @@ affected_detect_ci() {
     # a workflow that merely exists is not a gate to defer to. `#` comments are
     # stripped BEFORE matching: a deploy workflow that only TALKS about tests
     # in a comment is not a test gate to defer to.
-    grep -qE 'pull_request|push' < <(sed 's/#.*//' "$f") || continue
+    #
+    # The trigger must be a yaml DECLARATION, not a substring — a bare
+    # `pull_request|push` grep reads `run: git push` or `pushd deploy/` inside a
+    # step as a CI test gate. Accepted shapes, tracked inside the `on:` block:
+    #   on: push            on: [push, pull_request]      on: {push: …}
+    #   on:\n  push:        on:\n  pull_request:          on:\n  - push
+    sed 's/#.*//' "$f" | awk '
+      /^[[:space:]]*on[[:space:]]*:/ {
+        rest = $0
+        sub(/^[[:space:]]*on[[:space:]]*:[[:space:]]*/, "", rest)
+        # Scalar / flow sequence / flow map on the on: line itself.
+        if (rest ~ /(^|[][{},[:space:]])(pull_request|push)([]},[:space:]]|$)/) found = 1
+        inon = 1
+        next
+      }
+      # The block ends at the next top-level (column-0) key; blank lines do not.
+      inon && /^[^[:space:]]/ { inon = 0 }
+      # Block-map key (`push:`/`pull_request:`) or sequence entry (`- push`).
+      inon && /^[[:space:]]*-?[[:space:]]*(pull_request|push)[[:space:]]*:/ { found = 1 }
+      inon && /^[[:space:]]*-[[:space:]]*(pull_request|push)[[:space:]]*$/   { found = 1 }
+      END { exit(!found) }
+    ' || continue
     if grep -qE 'test-all\.sh|npm[[:space:]]+(run[[:space:]]+)?test|yarn[[:space:]]+test|pnpm[[:space:]]+(run[[:space:]]+)?test|bun[[:space:]]+test|vitest|jest|pytest|go[[:space:]]+test|cargo[[:space:]]+test|ctest|make[[:space:]]+test|deno[[:space:]]+test' < <(sed 's/#.*//' "$f"); then
       CI_NAME="$(affected_marker_field "$f")"
       return 0
@@ -252,6 +273,10 @@ JSEOF
     return $?
   fi
   if command -v jq >/dev/null 2>&1; then
+    # Same contract as the py/node emitters: a non-object top level is not a
+    # config — `[]` decodes to ZERO records here (silent accept) while py/node
+    # exit 3. Refuse it identically before the dump.
+    jq -e 'type == "object"' "$f" >/dev/null 2>&1 || return 3
     jq -j '
       to_entries[] | .key as $k | (.value | type) as $t |
       if $t == "array" then
@@ -530,13 +555,26 @@ if (( _base_rc != 0 )); then
     finish 4 none no-base-ref - "$CI_NAME" - - -
   fi
 fi
+# Each census leg's rc is captured — never `|| true`. A leg that fails toward
+# empty silently NARROWS the selection, and the untracked leg is the worst case
+# (a failed `ls-files --others` drops every NEW test file from the union). Any
+# failed leg makes the changed set undecidable → coverage-favoring forced full
+# (reason=census-degraded), the same contract as an empty diff — never a silent
+# narrow, never a refusal for a recoverable shape.
+_census_rc=0
+_leg_staged="$(git -c core.quotePath=false diff --name-only --cached -M -- 2>/dev/null)" \
+  || _census_rc=$?
+_leg_unstaged="$(git -c core.quotePath=false diff --name-only -M -- 2>/dev/null)" \
+  || _census_rc=$?
+_leg_untracked="$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null)" \
+  || _census_rc=$?
 {
   printf '%s\n' "$_base_diff"
-  git -c core.quotePath=false diff --name-only --cached -M -- 2>/dev/null
-  git -c core.quotePath=false diff --name-only -M -- 2>/dev/null
-  git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null
+  printf '%s\n' "$_leg_staged"
+  printf '%s\n' "$_leg_unstaged"
+  printf '%s\n' "$_leg_untracked"
 } | grep -v '^[[:space:]]*$' | sort -u >"$CHANGED_TMP" || true
-unset _base_rc _base_diff
+unset _base_rc _base_diff _leg_staged _leg_unstaged _leg_untracked
 while IFS= read -r _p; do
   [[ -n "$_p" ]] && AFFECTED_CHANGED+=("$_p")
 done <"$CHANGED_TMP"
@@ -631,7 +669,13 @@ if (( ARG_EXPLAIN )); then
 fi
 
 # --- verdicts that need no runner ----------------------------------------------------
-if (( ${#AFFECTED_CHANGED[@]} == 0 )); then
+if (( _census_rc != 0 )); then
+  # A census leg failed — the partial union cannot be trusted for selection OR
+  # for inert/global classification. Coverage-favoring: forced full.
+  echo "affected-tests: a changed-set census leg failed (rc=$_census_rc) — the selection cannot be trusted; running the full command (reason=census-degraded)." >&2
+  ARG_FULL=1
+  EMPTY_REASON="census-degraded"
+elif (( ${#AFFECTED_CHANGED[@]} == 0 )); then
   # An empty diff is an undecidable selection — coverage-favoring, not a pass.
   # (explain emits ONE SELECTION line at the block below; nothing extra here.)
   ARG_FULL=1
@@ -639,6 +683,7 @@ if (( ${#AFFECTED_CHANGED[@]} == 0 )); then
 else
   EMPTY_REASON=""
 fi
+unset _census_rc
 
 if (( ALL_INERT )) && (( ${#AFFECTED_CHANGED[@]} > 0 )) && (( ARG_FULL == 0 )) && [[ -z "$GLOBAL_HIT" ]]; then
   (( ARG_EXPLAIN )) && echo "SELECTION mode=none reason=inert inert_rule=$(affected_marker_field "$INERT_RULE")"
