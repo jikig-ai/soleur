@@ -455,11 +455,11 @@ wa_main() {
   # mnt. Anything else is rc 43 and NOTHING is removed. The removal is wa_release, the one function that also tears
   # down this file's own listing (its single `dmsetup remove` names the pinned constant; no name is an input).
   clear_snapshot() {
-    local names tbl a b c d e f g h dmn rc try hits tgt mntdir lo lk lf cowdir
+    local names tbl c d e f h dmn rc try hits tgt mntdir lo lk lf cowdir
     names="$(dmsetup ls)" || die 16 dmsetup_ls
     if ! awk_hit "$names" -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then CLEAR_RESULT=absent; return 0; fi
     tbl="$(dmsetup table "$WA_SNAP")" || die 16 table_unreadable
-    read -r a b c d e f g h <<< "$tbl"
+    read -r _ _ c d e f _ h <<< "$tbl"
     [ "$c" = snapshot ] && [ "$d" = "$(devno_dec "$MM")" ] && [ "$f" = N ] && [ -z "$h" ] || die 43 snapshot_not_ours
     dmn="$(dmsetup info -c --noheadings -o blkdevname "$WA_SNAP")" || die 16 blkdevname_unreadable
     [[ "$dmn" =~ ^dm-[0-9]+$ ]] || die 16 blkdevname_unparseable
