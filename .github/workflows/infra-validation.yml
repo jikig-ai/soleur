@@ -248,6 +248,9 @@ on:
       # red — the same defect class as the #7278/#8449 entries above.
       - ".github/workflows/scheduled-vinngest-digest-freshness.yml"
       - ".github/scripts/vinngest-digest-freshness.sh"
+      # (#7530) The registry clientIP alert's drift guard asserts the runbook its incident link points at
+      # exists and still carries the legal-consequence anchors; a docs-only edit must run the guard.
+      - "knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md"
   workflow_dispatch:
 
 permissions:
@@ -842,6 +845,14 @@ jobs:
       # mutation rows that each require this guard to red.
       - name: Run registry zot credential-shape alert drift guard (#10321)
         run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh
+
+      # (#7530) The registry non-RFC1918 clientIP Logs alert: the producer-anchored predicate pinned whole and
+      # evaluated offline against the 16-literal table, first-occurrence extraction, the alerting parameters (it
+      # alerts by email: free tier, no escalation policy), both -target lines (the only enforcement for logtail
+      # resources), the verified zot digest pin, this very registration, and the mutation rows that each require
+      # this guard to red.
+      - name: Run registry non-RFC1918 clientIP alert drift guard (#7530)
+        run: bash apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh
 
       # (#9391) The hosts-file GHCR deny lost Logs alert: both emitters' needles read from their own source,
       # the two-arm value-0 predicate compared whole, head-scoping, the paging windows, both -target lines

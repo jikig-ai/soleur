@@ -6389,6 +6389,10 @@ if want_scripts; then
   # the measured record shapes, a restricted PATH, and a mutant per guard row). Same explicit-registration and LAST-in-block
   # reasons as above. Declared edge set, not always-on.
   run_suite "scripts/ci-pr-selection" bash scripts/ci-pr-selection.test.sh
+  # #7530 (PR 10320): the clientIP-alert post-merge probe's exit-code contract (same stubs, plus the SQL the
+  # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
+  # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
 fi
 
 # Named bun-test entries — bun shard.

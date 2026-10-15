@@ -180,6 +180,19 @@ Live standing alarms over this source:
   `zot-log-channel-7440.sh` probe's exit-1 arm performed. One row is an incident; rotate the
   affected credential FIRST, counts-only (never echo the value). Runbook:
   [`registry-zot-credential-shape-10321.md`](./registry-zot-credential-shape-10321.md).
+
+- **`logtail_exploration_alert.registry_clientip_not_rfc1918`** (#7530, `higher_than 0` over 900 s,
+  checked every 300 s, missing data counts as zero): `soleur-registry-clientip-not-rfc1918-prd`. Emails
+  (team email on the free tier) when a registry-plane row shipped to this source carries a FIRST `clientIP`
+  that is address-shaped and outside 10/8, 172.16/12 and 192.168/16: a `SOLEUR_ZOT_LOG shipper=zot-log-shipper
+  host=soleur-registry` envelope row (trailing space included) or a `SOLEUR_ZOT_DISK` row, each anchored at offset 0 of the stored row.
+  It is the enforcement of the CLO's "every observable clientIP is RFC1918" condition (ADR-211): a
+  topology change that exposes a public address emails the team here (free tier: email only, no escalation)
+  instead of silently turning a log field into personal data. Detection, not prevention: sampled over SHIPPED rows (the shipper rate-caps ordinary rows
+  to 17 per tick), up to about 20 minutes late. Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`;
+  drift guard `apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh`. Triage, legal
+  consequence and the counts-only readback (never paste an address):
+  [`registry-clientip-rfc1918-7530.md`](./registry-clientip-rfc1918-7530.md).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
