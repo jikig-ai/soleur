@@ -251,7 +251,7 @@ path, `prd` config, `DOPPLER_TOKEN_PRD`.
 | Reads | Variant | Predicates (each its own verdict word, exit 5) |
 |---|---|---|
 | `F == true`, OR `S` present (any `F`) | `flip_chained` | exactly today's: flag `true`, stamp present and parseable, `WIPE_SOAK_FLOOR_SECONDS=604800` elapsed, stamp newer than the last `mode=rollback` run. A stamp present with `F != true` refuses `wipe_precondition_flag_not_true`; there is NO soak-less fall-through after a flip (CLO). |
-| `F` read successfully and is exactly `false` or unset, AND `S` absent | `separated` | (1) `git_data_store_dirty_scan` (`scripts/lib/git-data-store-dirty-scan.sh`, needs `actions: read` on the job) returns `store_clean`, else `wipe_separated_store_dirty`; (2) the newest `stage=boot_complete host_name=soleur-git-data` row (W5) is newer than the current server's Hetzner `created` (W4) AND carries `served_repos=0`, else `wipe_separated_boot_stale` / `wipe_separated_store_populated`; (3) W4 shows the typed id attached to the current server (already in W4). |
+| `F` read successfully and is exactly `false` or unset, AND `S` absent | `separated` | (1) `git_data_store_dirty_scan` (`scripts/lib/git-data-store-dirty-scan.sh`, needs `actions: read` on the job) returns `store_clean`, else `wipe_separated_store_dirty`; (2) the newest `stage=boot_complete host_name=soleur-git-data` row (W5) is newer than the current server's Hetzner `created` (W4) AND carries `served_repos=0`, else `wipe_separated_boot_stale` / `wipe_separated_store_populated`; (3) W4 shows the typed id attached to the current server (already in W4); (4) [CTO follow-up ruling 2026-10-15] the W7 `pre` host verb prints `store_root_repos=<n>`, an integer from a read-only count of `$OLD_ROOT/repositories` entries with the bootstrap `_repo_count` exclusions (`.*.init.lock`, `.init.lock`, `lost+found`), and `wipe_separated_gate` refuses `wipe_separated_store_root_populated` when n is not 0. The host is not told the variant (no input selects it). |
 | `F` read errors | none | the existing `flag_read_failed` refusal (exit 5) fires first; do NOT add a second word for it (review 2026-10-15: `read_secret ... flag_read_failed` runs before any wipe block, so a new word would be unreachable) |
 | `F` read OK but outside the closed set `^(true\|false)?$` | none | refuse `wipe_precondition_flag_unreadable` (a new closed check; today garbage falls through to `flag=off`) |
 | `S` non-empty but not a valid timestamp | `flip_chained` | `S` counts as PRESENT: refuse `wipe_precondition_stamp_absent`'s sibling `wipe_precondition_stamp_malformed`; never `separated` |
@@ -269,12 +269,17 @@ and the stamp unchanged. A variant that differs from the one W3 printed is alway
   #10297 is not a "flip_chained-only" concern (it removes the stamp barrier for every flip). The only post-flip barrier for `separated` is
   `git_data_store_dirty_scan`, which reads workflow RUN RECORDS; it does not see a flag set by hand in Doppler (accepted residual, to be
   disclosed to the CLO at the 2026-10-24 re-ruling: the flag has one writer in the repo, and a hand write needs the owner's Doppler write
-  credential). The brainstorm and A1.1 text "no soak-less fall-through after a flip" is therefore true only to the extent the scan sees
+  credential). The CTO follow-up ruling adds an independent in-session barrier, predicate (4) in the A1.2 table (`store_root_repos=0`
+  from the W7 host verb); `served_repos=0` adds nothing after a flip (the bootstrap `luks_residue` FATAL makes it always 0 at boot). What
+  the CLO is told: plaintext is not a rollback target (ADR-239 bullet 1, inherited); the scan does not see a hand-set flag; the count
+  proves emptiness at that moment, not that the flag never flipped. The brainstorm and A1.1 text "no soak-less fall-through after a flip" is therefore true only to the extent the scan sees
   the flip; Guard 6 row 6d is built from a rollback-run fixture AND a flip-with-failed-probe fixture, not only a dirty store.
 - *Self-exclusion.* The scan lists every run of `git-data-cutover.yml`; the wipe/wipe_check run itself is `in_progress` and the scan returns
   `cutover_in_flight <own id>` before reading any jobs (`scripts/lib/git-data-store-dirty-scan.sh`, the `in_progress)` branch), so
-  `separated` would refuse on every dispatch. Required: the scan skips `GITHUB_RUN_ID` (and only that id), with a test row where the
-  current run is `in_progress` and a second in-progress run still refuses. `scripts/lib/git-data-store-dirty-scan.sh` is added to Files to Edit.
+  `separated` would refuse on every dispatch. Required [CTO follow-up ruling 2026-10-15: do NOT skip the whole id, because a re-run keeps `GITHUB_RUN_ID`]: when a listed run's id
+  equals `GITHUB_RUN_ID`, take the scan's existing `queued` branch (`last=$((attempt - 1))`): earlier attempts of the own run are still
+  read, only the current attempt is skipped. Test rows: the own run in progress passes; a second in-progress run refuses; an earlier dirty
+  attempt of the own id refuses. `scripts/lib/git-data-store-dirty-scan.sh` is added to Files to Edit.
 - *Split across steps.* The Doppler-only precheck (`wipe_flag_precheck`) decides and prints the variant from F and S. The scan and the
   `boot_complete` predicates need W4's `created` and W5's row, so they run in a NEW step `wipe_separated_gate` placed after W5, executed
   only when the printed variant is `separated`; `flip_chained` skips it. The existing W3 text that refuses whenever the stamp is absent
@@ -293,10 +298,14 @@ runbook recovery step that is read-only first. The branch's `apps/web-platform/i
 a leftover-snapshot refusal and a required `blockdev --getro` of 1), so this is NOT "reuse with no second copy": it is a port guarded by a
 parity row against the bootstrap block. The bootstrap and the assert script never restore `--setrw`; the volume stays kernel read-only
 until it is detached or the host reboots, so "read-only state restored" is not a property to claim. SIGKILL cannot be trapped: a
-leftover `git-data-pt-snap` then persists until reboot (dm snapshots are not persistent). **Open item, routed to the CTO agent (a technical
-fork; not asked of the operator):** how a SIGKILL leftover is cleared without SSH (`hr-no-ssh-fallback-in-runbooks`). Working default to
-rule on: a name-pinned `snapshot_clear` host verb (`dmsetup remove git-data-pt-snap` only, refusing any other name, typed volume id
-required) reachable from `wipe_check`; until ruled, A.7 does not start that part.
+leftover `git-data-pt-snap` then persists until reboot (dm snapshots are not persistent). **Ruled by CTO agent, 2026-10-15 (A1 follow-up):** a
+`snapshot_clear` host verb as its OWN dispatch mode (not a step of `wipe_check`, and not auto-called by it): `dmsetup remove git-data-pt-snap`
+appears once as a literal, no name input, typed volume id required; it first proves `dmsetup deps git-data-pt-snap` resolves to the typed
+device, runs the H7 `/proc` fd check, umounts only the pinned read-only mount, detaches only the loop device backed by the pinned `/dev/shm`
+COW file, and confirms absence with `dmsetup info`. Owner-named dispatch behind the reviewer-gated `web-platform-infra-apply`
+environment. `wipe_check` with a leftover keeps refusing `wipe_snapshot_present` (exit 26). No reboot path (no sanctioned git-data reboot
+verb; a reboot drops serving and invalidates the H10 window). Blast radius: a throwaway dm snapshot with a RAM COW file; the LUKS mapper and
+serving path are untouched; the origin's kernel read-only flag stays 1 (inherited: wipe-assert header; `served_repos=0` measured 2026-10-14).
 
 **A1.4 The evidence record (CLO). The W12 success summary and the `wipe_check` closing block print these lines, each labelled
 `measured <date>`, `policy` or `inherited`:**
@@ -701,6 +710,18 @@ volume's kernel read-only flag is NOT restored (not a property).
 
 **Harness rows.** A suite edit that removes the stub `dmsetup` must make rows 1-3 fail loudly (not pass vacuously); a must-PASS row runs
 the verb on a clean stub with a differing device number from the canonical.
+
+Rows added by the CTO follow-up ruling (`snapshot_clear`):
+
+| # | Mutation | Expected |
+|---|---|---|
+| 7 | Any name other than the pinned one; census that the literal is the only argument to `dmsetup remove` | refused / RED |
+| 8 | `dmsetup deps` does not equal the typed device | nothing removed |
+| 9 | A mount outside the pinned path | refuse |
+| 10 | An open handle on the snapshot (H7 check) | refuse |
+| 11 | Missing or mismatched typed volume id | refuse |
+| 12 | `wipe_check` with a leftover; call-site census | refuses `wipe_snapshot_present`; `snapshot_clear` reachable only from its own mode |
+| 13 | After a clear | counters read `0 0`, origin read-only flag is 1, a fresh `wipe_check` is required before any wipe |
 
 **Anchor.** The count logic is the bootstrap's `BEGIN/END plaintext-count unit` block; the branch's `wipe-listing unit` in
 `git-data-wipe-assert.sh` is a port; a parity row compares the port's counted-entry predicate to the bootstrap block so the two cannot drift.
