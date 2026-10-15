@@ -693,7 +693,7 @@ that replaces them. Ref #9879.
 apply has landed the one in-place update on `hcloud_volume.inngest_redis_luks`, and the post-apply read-back returns
 `protection.delete=true` (ADR-282, Status). Until then each mark below describes the target state, not a fact.
 
-> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15; evidence in ADR-282's addendum of that date). The sentence above is kept as the dated record.
+> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15, a point-in-time check of the flag only; evidence in ADR-282's addendum of that date). The paragraph above is kept as the dated record.
 
 > **Superseded 2026-10-10 (#9879), in part:** the "No key escrow (git-data-lean shape)" rationale in the Decision section
 > ("The AOF is transient and self-healing ... its total-loss recovery is already built and proven ... the sole-copy reminder

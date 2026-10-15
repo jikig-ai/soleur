@@ -264,7 +264,8 @@ copy has nowhere to land. The dated history of the verb stays in ADR-142.
 state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is the only opener the host reads; an independent
 copy of the passphrase exists in Terraform state.** Losing the volume, or both copies of the passphrase, is data loss with
 nothing to restore from. Protection for that (delete protection, edge pins, key-loss posture) was built by
-#9879 (PR #9925, ADR-282, accepted 2026-10-15) and is described in §5c.
+#9879 (PR #9925, ADR-282, accepted 2026-10-15) and is described in §5c. It is a point-in-time flag that a holder of the
+read/write Hetzner token can lift: re-read it per §5c before relying on it.
 
 **Signals that used to mean "the store went back to plaintext" are now incidents, not rollbacks.** The wrong-volume
 alert (`logtail_exploration_alert.inngest_luks_wrong_volume`), a probe row whose `data_mount_src` is not
@@ -335,8 +336,9 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
 ## 5c. Sole-copy protection and key loss
 
 **Status: accepted 2026-10-15 (#10018, ADR-282).** The read-back below returned protected on 2026-10-15 (evidence: ADR-282,
-Addendum 2026-10-15). It is a point-in-time check of the delete-protection flag; re-run it after any infra-path merge and
-after a sanctioned lift (each step below says what it expects).
+Addendum 2026-10-15). It is a point-in-time check of the delete-protection flag; re-run it after any merge that touches
+`apps/web-platform/infra/inngest-redis-luks.tf` (`soleur:postmerge` Phase 5.7 does) and after a sanctioned lift (each step below
+says what it expects).
 
 **What is pinned, and what is not.** The volume, the passphrase pair and the two Doppler cascade parents carry
 `prevent_destroy`; the volume also carries Hetzner delete protection. The attachment is deliberately NOT pinned, because
@@ -390,7 +392,8 @@ asserts presence of the read-only token; its scope is not verified here. The tok
 there is no `-v` and no `set -x`. A JSON string `"true"` reads as `read-failed`, not as `protected`. This read is a proxy
 for "Hetzner refuses a delete"; the refusal itself is not exercised. The command was exercised against a stubbed `doppler`
 and `curl` (fake token, no network) for protected, not-protected, HTTP 401, HTTP 404, network failure, non-JSON, a missing
-field, a missing token, an empty token and a failing `doppler` (no word); it has not been run against the real API.
+field, a missing token, an empty token and a failing `doppler` (no word). It was then run once against the real API, on
+2026-10-15, and printed `protected` (exit 0; ADR-282, Addendum 2026-10-15).
 
 **No drift check by log search.** The scheduled drift workflow does not print its plan to the job log (the plan goes to a
 file and, when drift is found, to the body or a comment of the open `infra-drift` issue, titled `infra: drift detected in

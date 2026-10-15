@@ -1574,4 +1574,4 @@ difference: its attachment stays unpinned because the sanctioned `inngest-host-r
 `apps/web-platform/infra/workspaces-luks.tf` remain the source of the web-1 attachment pin. Nothing about web-1 or this
 decision changes. It takes effect on the merge of PR #9925 (adopting until that merge's apply and read-back, per ADR-282).
 
-> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15; evidence in ADR-282's addendum of that date). The sentence above is kept as the dated record.
+> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15, a point-in-time check of the flag only; evidence in ADR-282's addendum of that date). The paragraph above is kept as the dated record.

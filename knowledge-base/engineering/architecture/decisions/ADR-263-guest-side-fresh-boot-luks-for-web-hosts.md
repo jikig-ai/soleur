@@ -845,7 +845,7 @@ The Inngest attachment is protected by the dispatch gates and the reachability p
 web-1, web-2 or this ADR's decision. It takes effect on the merge of PR #9925 (adopting until that merge's apply and
 read-back, per ADR-282).
 
-> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15; evidence in ADR-282's addendum of that date). The sentence above is kept as the dated record.
+> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15, a point-in-time check of the flag only; evidence in ADR-282's addendum of that date). The paragraph above is kept as the dated record.
 
 ## Addendum — 2026-10-11 (#9372, the grade and the ledger flip)
 
