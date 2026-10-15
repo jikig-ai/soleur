@@ -169,20 +169,32 @@ ids. Reclaiming them is a separately authorized action, described next.
 
 ### Reclaiming survivors that state forgot (owner-authorized, per command)
 
-The filed issue prints no delete call. An agent session reclaims a survivor only from the ids that the issue's
-`label_selector` listing returned, and runs each write only after the owner's per-command go-ahead
-(`hr-menu-option-ack-not-prod-write-auth`); an earlier go-ahead does not extend to the next id. The label
-`app=soleur-inngest-provision-rehearsal` (rung-2 sweeps use `app=soleur-rung2-rehearsal`) never selects the sole-copy
-volume, the web-1 volume or any unlabeled object, so an id outside that listing is out of bounds.
+The filed issue prints no delete call. An agent session reclaims a survivor only from objects that the issue's
+`label_selector` listing (Hetzner) or its name list (Doppler) returned, and runs each write only after the owner's
+per-command go-ahead (`hr-menu-option-ack-not-prod-write-auth`): show the exact command and the live-state read
+below, wait, and do not treat an earlier go-ahead as covering the next object. No SSH step is involved.
 
-1. Re-run the read-only listing from the issue body (a GET per kind: `servers`, `volumes`, `ssh_keys`, `firewalls`).
-2. Per listed object, in dependency order (server first, then its volumes, firewalls, ssh keys): a volume is detached
-   (`POST /v1/volumes/<id>/actions/detach`) before it is deleted (`DELETE /v1/<kind>/<id>`).
-3. A stranded scratch Doppler environment (`rehearsal_*` in project `soleur-inngest`) or config is removed with the
-   Doppler CLI `environments delete` or `configs delete` subcommand, naming the project explicitly.
-4. Verify: re-run the listing; empty output for every kind means reclaimed.
+Bounds, stated exactly. The label bound covers Hetzner objects only: `app=soleur-inngest-provision-rehearsal` here
+and `app=soleur-rung2-rehearsal` for the rung-2 sweep never select the sole-copy volume, the web-1 volume or any
+unlabeled object, and an id outside the listing is out of bounds. Doppler objects carry no label and are bounded by
+name: the rung-2 scratch config is `prd_git_data_rehearsal_<run id>` in project `soleur` (environment `prd`), and the
+inngest scratch environment is `rehearsal_<run id>` in project `soleur-inngest`. Any other name is out of bounds.
 
-A label-scoped reclaim dispatch (so step 2 needs no ad hoc API call) is a candidate follow-up, tracked under #9927.
+1. Re-run the read-only listing from the issue body. Require HTTP 200 per kind (use `curl -f` or print the status
+   code): an auth or rate-limit error prints nothing and would read as "empty".
+2. Before each write, read the object (`GET /v1/<kind>/<id>`) and require: `labels.app` equals the expected rehearsal
+   value, `protection.delete` is false, a volume's `server` is null or a listed rehearsal server, and a firewall's
+   `applied_to` holds only listed rehearsal servers. Show that output with the command (`hr-bulk-delete-per-item-live-infra-role-check`).
+3. Delete in dependency order, server first, then its volumes, firewalls, ssh keys: `DELETE /v1/<kind>/<id>`. Detach a
+   volume (`POST /v1/volumes/<id>/actions/detach`) only if the read in step 2 shows it attached. If a delete is
+   refused (for example `resource_in_use`), stop and report; do not unprotect, relabel or detach by other means.
+4. Doppler, rung-2: the Doppler CLI `configs delete` subcommand with `-p soleur`, only on a config named
+   `prd_git_data_rehearsal_*` that the issue listed; list configs first and compare the name character for
+   character. Never `environments delete` for rung-2 (that removes the production `prd` environment). Doppler,
+   inngest: `environments delete` with `-p soleur-inngest`, only on a slug matching `rehearsal_*` that the issue listed.
+5. Verify: re-run the listing; empty output with HTTP 200 for every kind means reclaimed.
+
+A label-scoped reclaim dispatch (so step 3 needs no ad hoc API call) is a candidate follow-up, recorded on #9927.
 
 ## Failure table
 

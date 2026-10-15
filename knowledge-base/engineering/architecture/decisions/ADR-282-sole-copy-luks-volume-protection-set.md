@@ -292,6 +292,6 @@ Appended; nothing above is changed except the frontmatter `status` and the leadi
 
 **Who flips it** is discharged by this follow-up PR. `soleur:postmerge` Phase 5.7 step 6 files no tracking issue once the status is `accepted`.
 
-## Addendum — #9927 item 8c (drift workflow DELETE recipes removed)
+## Addendum — 2026-10-15 (#9927 item 8c, drift workflow DELETE recipes removed)
 
-Appended; the only change above is the parenthetical in the residual "A holder of the read/write Hetzner token can lift protection": it now records that the drift workflow's issue bodies no longer print DELETE recipes (PR #10355). Status stays `accepted`. Scope, stated exactly: the removed text templated calls against rehearsal-labeled objects and the key-bearing scratch Doppler config (`app=soleur-rung2-rehearsal`, `app=soleur-inngest-provision-rehearsal`), never against the sole-copy volume, whose resources carry neither label. The residual itself is unchanged: a holder of the read/write token can still lift protection.
+Appended; the only change above is the parenthetical in the residual "A holder of the read/write Hetzner token can lift protection": it now records that the drift workflow's issue bodies no longer print DELETE recipes (PR #10355). Status stays `accepted`. Scope, stated exactly: the removed text templated calls against Hetzner objects labeled `app=soleur-rung2-rehearsal` or `app=soleur-inngest-provision-rehearsal` and against the key-bearing scratch Doppler objects (`prd_git_data_rehearsal_*` in `soleur`, `rehearsal_*` in `soleur-inngest`, identified by name), never against the sole-copy volume, whose resources carry neither label. The residual itself is unchanged: a holder of the read/write token can still lift protection.
