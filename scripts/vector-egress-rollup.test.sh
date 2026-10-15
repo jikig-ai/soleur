@@ -111,7 +111,7 @@ echo "-- behaviour (vector test against the real vector.toml) --"
 run_vector_test() {
   if [[ -n "${VECTOR_BIN:-}" ]] && command -v "$VECTOR_BIN" >/dev/null 2>&1; then
     BETTERSTACK_LOGS_TOKEN=dummy SENTRY_USERID_PEPPER=fixture-only "$VECTOR_BIN" test "$VECTOR_TOML" "$TESTS_TOML"
-  elif command -v vector >/dev/null 2>&1 && vector --version 2>/dev/null | grep -q ' 0\.43\.'; then
+  elif command -v vector >/dev/null 2>&1 && grep -q ' 0\.43\.' <<<"$(vector --version 2>/dev/null)"; then
     BETTERSTACK_LOGS_TOKEN=dummy SENTRY_USERID_PEPPER=fixture-only vector test "$VECTOR_TOML" "$TESTS_TOML"
   elif command -v docker >/dev/null 2>&1 && docker image inspect "$VECTOR_IMAGE" >/dev/null 2>&1; then
     docker run --rm -e BETTERSTACK_LOGS_TOKEN=dummy -e SENTRY_USERID_PEPPER=fixture-only \
