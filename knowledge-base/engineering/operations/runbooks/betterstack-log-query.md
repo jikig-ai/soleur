@@ -1181,6 +1181,12 @@ The egress gateway's decision log is also rolled up in Vector into per-workspace
   1,000 gateway events in 15 minutes and Vector discarded the excess from the rollup (the raw gateway log is unaffected). `<n>` is Vector's
   lifetime counter since its last restart. Query it with
   `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_EGRESS_AUDIT_THROTTLED`.
-  Above the cap the rollup's host set is incomplete by design.
+  Above the cap the rollup's host set is incomplete by design. The marker comes from Vector's per-key counter `events_discarded_total`
+  (the component-wide `component_discarded_events_total` has no workspace key). A second, keyless cap of 10,000 events per 15 minutes bounds the
+  whole pipeline; discards at that cap raise `SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=<n>` (same identifier, no workspace id). For a solo workspace the `workspace_id` equals the owner's user id (migration 053), so
+  treat the marker as personal data under the same access rules as the raw gateway log.
 
 Table freshness and retention are checked without SSH by `bash scripts/egress-audit-retention-check.sh` (needs the Supabase prd service-role read).
+With `EGRESS_AUDIT_EXPECT_COLLECTION=1` it also needs `EGRESS_AUDIT_CANARY_WORKSPACES` (comma-separated ids of the enabled canary workspaces) and
+the Better Stack query credential. It is not scheduled anywhere yet: until it is, it is a manual probe, and scheduling it is a precondition of
+enabling collection (ADR-288).
