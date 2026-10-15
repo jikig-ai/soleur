@@ -1,0 +1,384 @@
+# Vector unit tests for the egress audit rollup (#9545, ADR-288). Run against the REAL vector.toml:
+#   vector test apps/web-platform/infra/vector.toml apps/web-platform/infra/vector-egress-rollup.test.toml
+# (needs BETTERSTACK_LOGS_TOKEN and SENTRY_USERID_PEPPER set to dummies; the token for the ingest sink is
+# optional). All identifiers and hosts are synthetic (*.example.test, documentation IPs).
+
+[[tests]]
+name = "rollup merges same-key events, separates denied, floors buckets at 15 minutes"
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056418.653","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"Allowed.Example.Test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":100,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056500.100","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"allowed.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":50,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056418.668","decision":"TCP_DENIED","decision_reason":"-","requested_host":"169.254.169.254","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":239,"duration_ms":1,"client":"172.19.0.1","status":"403"}'
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792057499.999","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"edge.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":1,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792057500.000","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"edge.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":2,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+[[tests.outputs]]
+extract_from = "egress_audit_shape"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.workspace_id == "11111111-2222-4333-8444-555555555555" && .requested_host == "allowed.example.test" && .decision == "allowed" && .request_count == 2 && .bytes_out == 150 && .bucket_start == "2026-10-15T09:15:00Z" && .source_host == "soleur-web-platform" && .first_seen == "2026-10-15T09:26:58Z" && .last_seen == "2026-10-15T09:28:20Z"
+'''
+
+[[tests.outputs]]
+extract_from = "egress_audit_shape"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.decision == "denied" && .requested_host == "169.254.169.254" && .request_count == 1 && .bytes_out == 239
+'''
+
+[[tests.outputs]]
+extract_from = "egress_audit_shape"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "edge.example.test" && .bucket_start == "2026-10-15T09:30:00Z" && .request_count == 1 && .bytes_out == 1
+'''
+
+[[tests.outputs]]
+extract_from = "egress_audit_shape"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "edge.example.test" && .bucket_start == "2026-10-15T09:45:00Z" && .request_count == 1 && .bytes_out == 2
+'''
+
+
+
+[[tests]]
+name = "dropped: failed auth naming a victim id"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056386.143","decision":"TCP_DENIED","decision_reason":"-","requested_host":"example.test","resolved_ip":"203.0.113.10","workspace":"99999999-aaaa-4bbb-8ccc-dddddddddddd","bytes_out":219,"duration_ms":1,"client":"172.19.0.1","status":"407"}'
+
+
+
+[[tests]]
+name = "dropped: failed auth, unauthenticated"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056376.859","decision":"TCP_DENIED","decision_reason":"-","requested_host":"example.test","resolved_ip":"203.0.113.10","workspace":"-","bytes_out":114,"duration_ms":1,"client":"172.19.0.1","status":"407"}'
+
+
+
+[[tests]]
+name = "dropped: failed auth, probe username"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056396.190","decision":"TCP_DENIED","decision_reason":"-","requested_host":"example.test","resolved_ip":"203.0.113.10","workspace":"probe","bytes_out":179,"duration_ms":1,"client":"172.19.0.1","status":"407"}'
+
+
+
+[[tests]]
+name = "dropped: gateway probe tunnel (not a workspace)"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"probe-target.example.test","resolved_ip":"203.0.113.10","workspace":"probe","bytes_out":48,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+
+
+[[tests]]
+name = "dropped: valid UUID but an older gateway with no status field"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":48,"duration_ms":1,"client":"172.19.0.1"}'
+
+
+
+[[tests]]
+name = "dropped: non-UUID workspace"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a.example.test","resolved_ip":"203.0.113.10","workspace":"VICTIM-not-a-uuid","bytes_out":48,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+
+
+[[tests]]
+name = "dropped: uppercase-free UUID shape violated (too short)"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-5555555555","bytes_out":48,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+
+
+[[tests]]
+name = "dropped: host that injects JSON keys"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"x.example.test\",\"workspace\":\"11111111-2222-4333-8444-555555555555","resolved_ip":"-","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":1,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+
+
+[[tests]]
+name = "dropped: host with a space"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a b.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":1,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+
+
+[[tests]]
+name = "dropped: empty host"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":1,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+
+
+[[tests]]
+name = "dropped: non-numeric ts"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"notanumber","decision":"TCP_TUNNEL","requested_host":"a.example.test","workspace":"11111111-2222-4333-8444-555555555555","status":"200","bytes_out":1}'
+
+
+
+[[tests]]
+name = "dropped: not JSON at all"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = 'connection reset by peer'
+
+
+
+[[tests]]
+name = "source host is the first DNS label, lower-cased; an unusable host becomes unknown"
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "Soleur-Web-2.internal.example.test"
+message = '{"ts":"1792056418.653","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"one.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":1,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "bad_host!"
+message = '{"ts":"1792056418.653","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"two.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":1,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+[[tests.outputs]]
+extract_from = "egress_audit_shape"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "one.example.test" && .source_host == "soleur-web-2"
+'''
+
+[[tests.outputs]]
+extract_from = "egress_audit_shape"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "two.example.test" && .source_host == "unknown"
+'''
+
+
+
+[[tests]]
+name = "decision is normalised; an unexpected squid value becomes other; negative bytes clamp to zero"
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056418.653","decision":"TCP_DENIED_ABORTED","decision_reason":"-","requested_host":"abort.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":5,"duration_ms":1,"client":"172.19.0.1","status":"403"}'
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056418.653","decision":"TCP_MISS","decision_reason":"-","requested_host":"miss.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":-5,"duration_ms":1,"client":"172.19.0.1","status":"200"}'
+
+[[tests.outputs]]
+extract_from = "egress_audit_shape"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "abort.example.test" && .decision == "denied"
+'''
+
+[[tests.outputs]]
+extract_from = "egress_audit_shape"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "miss.example.test" && .decision == "other" && .bytes_out == 0
+'''
+
+
+
+[[tests]]
+name = "throttle discards become one marker line per workspace and change"
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 7.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle"
+key = "11111111-2222-4333-8444-555555555555"
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 7.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle"
+key = "11111111-2222-4333-8444-555555555555"
+
+[[tests.outputs]]
+extract_from = "egress_audit_throttled_dedupe"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=11111111-2222-4333-8444-555555555555 discarded_total=7" && .SYSLOG_IDENTIFIER == "vector-egress-audit"
+'''
+
+
+
+[[tests]]
+name = "other components, a zero counter and an unkeyed counter produce no marker"
+no_outputs_from = ["egress_audit_throttled_filter"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 9.0 }
+[tests.inputs.metric.tags]
+component_id = "some_other_transform"
+key = "11111111-2222-4333-8444-555555555555"
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 0.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle"
+key = "11111111-2222-4333-8444-555555555555"
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 4.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle"
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_received_events_total"
+kind = "absolute"
+counter = { value = 4.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle"
+key = "11111111-2222-4333-8444-555555555555"

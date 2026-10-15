@@ -18,6 +18,7 @@ on:
     paths:
       - "apps/web-platform/infra/vector.toml"
       - "apps/web-platform/infra/vector.tf"
+      - "apps/web-platform/infra/vector-egress-rollup.test.toml"
       # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
       # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
       # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
@@ -30,6 +31,7 @@ on:
     paths:
       - "apps/web-platform/infra/vector.toml"
       - "apps/web-platform/infra/vector.tf"
+      - "apps/web-platform/infra/vector-egress-rollup.test.toml"
       # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
       # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
       # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
@@ -176,6 +178,18 @@ jobs:
 
       - name: Admission-partition emulator tests (BLOCKING -- #6551)
         run: bash apps/web-platform/test/infra/vector-admission.test.sh
+
+      # VRL is compiled only by `vector test` (`vector validate --no-environment` accepts a config
+      # whose VRL does not compile), so the rollup's VRL and reduce/throttle wiring are proven here
+      # against the real vector.toml (#9545, ADR-288). REQUIRE_VECTOR_TEST turns a missing binary
+      # into a failure instead of a skip.
+      - name: Egress audit rollup unit tests (BLOCKING -- #9545)
+        env:
+          BETTERSTACK_LOGS_TOKEN: fixture-only-do-not-use-in-prod
+          SENTRY_USERID_PEPPER: fixture-only-do-not-use-in-prod
+          VECTOR_BIN: vector
+          REQUIRE_VECTOR_TEST: "1"
+        run: bash apps/web-platform/infra/vector-egress-rollup.test.sh
 
       # Better Stack source ID + cluster appear in vector.toml (load-bearing)
       # AND in 4 disclosure surfaces (legal corpus). Drift between them goes

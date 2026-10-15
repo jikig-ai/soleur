@@ -141,6 +141,31 @@ assert_grep "basic auth program is the baked helper" 'auth_param basic program.*
 assert_grep "workspace attribution (%un)" '%un' "$SQUID_CONF"
 assert_grep "structured decision log (JSON-ish)" 'logformat.*\{|logformat.*decision' "$SQUID_CONF"
 
+echo "-- squid.conf: decision-log status field (#9545 attribution hardening) --"
+# %un logs the PRESENTED username even when authentication fails (measured on the pinned
+# Squid 6.13: a victim id with a bogus token logs workspace=<victim>), so the rollup must
+# be able to drop failed-authentication rows. %>Hs carries the HTTP status (407 on failed
+# auth, 403 on a policy deny, 200 on an established tunnel).
+LOGFORMAT_LINE="$(grep -E '^logformat soleur_json' "$SQUID_CONF")"
+LOGFORMAT_FILE="$SUITE_SCRATCH/logformat.txt"
+printf '%s\n' "$LOGFORMAT_LINE" > "$LOGFORMAT_FILE"
+assert_grep "logformat carries the HTTP status (%>Hs)" '"status":"%>Hs"' "$LOGFORMAT_FILE"
+assert_grep "status is the LAST field, so a requested_host that injects JSON keys cannot override it" '"status":"%>Hs"\}$' "$LOGFORMAT_FILE"
+assert_grep "workspace (%un) precedes status in the line" '"workspace":"%un".*"status":"%>Hs"' "$LOGFORMAT_FILE"
+FIXTURE_LINES="$SCRIPT_DIR/test-fixtures/egress-gw-decision-lines.jsonl"
+check_cmd "decision-line fixture exists and is non-empty" test -s "$FIXTURE_LINES"
+LOGFORMAT_KEYS="$(grep -oE '"[a-z_]+":' "$LOGFORMAT_FILE" | LC_ALL=C sort -u)"
+FIXTURE_KEY_MISMATCH=0
+FIXTURE_N=0
+while IFS= read -r fx_line; do
+  [[ -n "$fx_line" ]] || continue
+  FIXTURE_N=$((FIXTURE_N + 1))
+  fx_keys="$(printf '%s\n' "$fx_line" | grep -oE '"[a-z_]+":' | LC_ALL=C sort -u)"
+  [[ "$fx_keys" == "$LOGFORMAT_KEYS" ]] || FIXTURE_KEY_MISMATCH=$((FIXTURE_KEY_MISMATCH + 1))
+done < "$FIXTURE_LINES"
+check_cmd "every fixture line has exactly the logformat's keys (fixtures cannot drift from the conf)" test "$FIXTURE_KEY_MISMATCH" -eq 0
+check_cmd "fixture covers allowed, policy-denied and failed-authentication lines" test "$FIXTURE_N" -ge 5
+
 echo "-- egress-deny-cidrs.txt: mandatory ranges --"
 for cidr in '10.0.0.0/8' '172.16.0.0/12' '192.168.0.0/16' '100.64.0.0/10' \
             '169.254.0.0/16' '127.0.0.0/8' 'fc00::/7' 'fe80::/10' \
@@ -436,8 +461,8 @@ assert_grep "firewall suite knows the new chains" 'SOLEUR-EGRESS-GW' "$TEST_SH"
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
-if [[ $((PASS + FAIL)) -lt 118 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 118.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 130 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 130.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

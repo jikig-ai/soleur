@@ -31,18 +31,18 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-workspace-egress-audit-log-p
 
 ## Phase 3: Gateway log and Vector config
 
-- [ ] 3.1 RED: `egress-gateway.test.sh` case: a failed-authentication attempt naming a victim id yields a 407 row
-- [ ] 3.2 Add `%>Hs` to the `soleur_json` logformat in `egress-gateway-squid.conf`
-- [ ] 3.3 RED: `vector-egress-rollup.test.sh` plus synthesized fixtures (UUID filter, drop 407, `probe` heartbeat with no write, `bucket_start` floor, host cap with `(other)`, 100k-unique-host flood, restart re-emit)
-- [ ] 3.4 Rollup transform, `throttle` per-workspace cap, `requested_host` length bound, and bearer sink (token through `${EGRESS_AUDIT_INGEST_TOKEN:-}`) with a disk buffer (`drop_newest`) in the shared `vector.toml`; `vector validate` passes with the variable unset and set
-- [ ] 3.5 Extend the admission-test model; keep `validate-vector-config.yml` green
-- [ ] 3.6 (R1) Throttle cap 1,000 events per workspace per 900 s; a path for throttle discards to a sink (internal metrics) or a Better Stack warning, without SSH
-- [ ] 3.7 (R4) `vector test` fixtures in `apps/web-platform/infra/vector-egress-rollup.test.toml`, run from a new step in `validate-vector-config.yml` after the admission-partition step, path filters extended
+- [x] 3.1 RED: `egress-gateway.test.sh` case: a failed-authentication attempt naming a victim id yields a 407 row
+- [x] 3.2 Add `%>Hs` to the `soleur_json` logformat in `egress-gateway-squid.conf`
+- [x] 3.3 RED: `vector-egress-rollup.test.sh` plus synthesized fixtures (UUID filter, drop 407, `probe` heartbeat with no write, `bucket_start` floor, host cap with `(other)`, 100k-unique-host flood, restart re-emit)
+- [x] 3.4 Rollup transform, `throttle` per-workspace cap, `requested_host` length bound, and bearer sink (token through `${EGRESS_AUDIT_INGEST_TOKEN:-}`) with a disk buffer (`drop_newest`) in the shared `vector.toml`; `vector validate` passes with the variable unset and set
+- [x] 3.5 Extend the admission-test model; keep `validate-vector-config.yml` green
+- [x] 3.6 (R1) Throttle cap 1,000 events per workspace per 900 s; a path for throttle discards to a sink (internal metrics) or a Better Stack warning, without SSH
+- [x] 3.7 (R4) `vector test` fixtures in `apps/web-platform/infra/vector-egress-rollup.test.toml`, run from a new step in `validate-vector-config.yml` after the admission-partition step, path filters extended
 
 ## Phase 4: Secret and delivery
 
-- [ ] 4.1 Terraform `random_id` plus `doppler_secret` (`soleur`/`prd`, masked) following `github-app.tf`; no variable, no default
-- [ ] 4.1b Add the new `random_id` and `doppler_secret` to the plan/apply `-target` allow-lists in `apply-web-platform-infra.yml` (terraform-target-parity test)
+- [x] 4.1 Terraform `random_id` plus `doppler_secret` (`soleur`/`prd`, masked) following `github-app.tf`; no variable, no default
+- [x] 4.1b Add the new `random_id` and `doppler_secret` to the plan/apply `-target` allow-lists in `apply-web-platform-infra.yml` (terraform-target-parity test)
 - [ ] 4.2 Order: secret exists, app route deployed, then Vector redelivery via the push apply of `journald_persistent{,_web2}`
 
 ## Phase 5: Records
