@@ -1,4 +1,0 @@
-[
-  {"number":201,"title":"docs: refresh the onboarding guide (#201)","url":"https://github.com/example-org/example-repo/pull/201","isDraft":false,"headRefName":"feat-onboarding-guide","files":[{"path":"docs/onboarding.md","additions":4,"deletions":1}]},
-  {"number":200,"title":"perf(lookup): speed up widget lookups (#10188)","url":"https://github.com/example-org/example-repo/pull/200","isDraft":false,"headRefName":"feat-faster-lookups","files":[{"path":"a.sh","additions":1,"deletions":1},{"path":"z.sh","additions":3,"deletions":0}]}
-]

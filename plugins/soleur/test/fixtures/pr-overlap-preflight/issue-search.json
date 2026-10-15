@@ -1,4 +1,0 @@
-[
-  {"number":203,"title":"fix(billing): handle the retry limit (Ref #555)","url":"https://github.com/example-org/example-repo/pull/203","isDraft":false,"headRefName":"feat-retry-limit"},
-  {"number":100,"title":"feat: add widget cache","url":"https://github.com/example-org/example-repo/pull/100","isDraft":false,"headRefName":"feat-widget-cache"}
-]

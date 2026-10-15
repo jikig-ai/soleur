@@ -440,43 +440,54 @@ Then `python3 scripts/lint-rule-bodies.py --write`, append the ack row `hr-menu-
 
 ## Operator Holds
 
-This section is read by ship Phase 6 step 5, not from conversation.
+This section is read by ship Phase 6 step 5, not from conversation. It carries no `Delegation:` line: no Standing Delegation is recorded for this PR, so `hold-gate-eval.sh --plan` exits 3 before any other check and the prose path below applies. The `Gate:` line is recorded so the hold becomes mechanical on the day a delegation is cited. The same hold is evaluated a second time right before arming (ship Phase 6.5).
 
 - Hold: do not arm merge while a registry host replace is running (this PR touches `plugins/soleur/**`).
   Gate: no-inflight-run registry-host-replace-dispatch.yml
-- Hold: the rule file, its hash manifest and the ack file are owned by the code owner in `.github/CODEOWNERS`; before arming, read the repository ruleset (`gh api repos/jikig-ai/soleur/rulesets`) for `require_code_owner_review`. If it is on, the owner's approval is an authorization to name in plain words (Class `operator (schedule)`), never a technical question.
-  Evaluation today (no delegation is recorded for this PR): the usual prose path - run `gh run list --workflow registry-host-replace-dispatch.yml --status in_progress --limit 5`, repeat with `queued` and `waiting`; all three empty discharges it; a failed probe leaves it standing. Record the three outputs in the PR body.
+- Hold: the rule file, its hash manifest and the ack file are owned by the code owner in `.github/CODEOWNERS`, and the ack row asks for that owner's human review of the widened go-ahead (`hr-menu-option-ack-not-prod-write-auth`); before arming, read the repository ruleset (`gh api repos/jikig-ai/soleur/rulesets`) for `require_code_owner_review`. If it is on, the owner's approval is an authorization to name in plain words (Class `operator (schedule)`), never a technical question.
+  Evaluation today (no delegation is recorded for this PR): the usual prose path - run `gh run list --workflow registry-host-replace-dispatch.yml --status in_progress --limit 5`, then repeat it with `queued`, `waiting`, `requested` and `pending`; all five empty discharges it; a failed probe leaves it standing. Record the outputs in the PR body.
 
 ## Observability
 
-Pure developer tooling that runs on the operator's or a Soleur user's own machine (observability layer 7, `cli-stdout-artifact`) and, for the hook arm, in this repository's own sessions (the repo-local incident ledger). No server-side surface.
+Pure developer tooling that runs on the operator's or a Soleur user's own machine (observability layer 7, `cli-stdout-artifact`). There is no hook arm any more (CTO ruling R2) and no server-side surface. Every failure mode below names the stdout marker AND a durable artifact: stdout alone does not survive the session, so a mode whose only signal is stdout says so and is advisory.
 
 ```yaml
 liveness_signal:
-  what: "delegation-verify.sh prints one stdout verdict line per call (delegation: valid|invalid|unverifiable reason=<token>) and SOLEUR_RULE_APPLIED rule=hr-menu-option-ack-not-prod-write-auth note=delegation-verified is echoed by the gate arm; the hook emits an emit_incident row on every delegation deny"
-  cadence: "per call"
-  alert_target: "the in-session tool result the agent reads (layer 7); .claude/.rule-incidents.jsonl for hook denies"
-  configured_in: "plugins/soleur/scripts/delegation-verify.sh, plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh, .claude/hooks/pre-ask-technical-fork-gate.sh"
+  what: "delegation-verify.sh prints one stdout verdict line per call (delegation: valid|invalid|unverifiable reason=<token>); hold-gate-eval.sh prints its own 'delegation: <state> reason=<token>' line on any stand and a final 'holds: N discharged: M standing: K' line; each delegated act leaves a receipt comment on the epic. The gate no longer echoes a SOLEUR_RULE_APPLIED marker (a script's stdout is not scanned by the capture hook)"
+  cadence: "per call; per delegated act"
+  alert_target: "cli-stdout-artifact: the in-session tool result the agent reads, plus the PR body (the 'holds:' line and each verifier verdict) and the epic's receipt comments"
+  configured_in: "plugins/soleur/scripts/delegation-verify.sh, plugins/soleur/skills/ship/scripts/hold-gate-eval.sh, plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh"
 error_reporting:
   destination: "stderr plain-language sentence plus the stdout verdict token; exit 1 invalid, exit 2 unverifiable; ship refuses to ready past exit 1 or 2"
-  fail_loud: "[FAIL] <file>:<line>: delegation-invalid|delegation-unverifiable - <plain reason>"
+  fail_loud: "[FAIL] <file>:<line>: delegation-invalid|delegation-unverifiable|receipt-missing|receipt-mismatch|receipt-unreadable - <plain reason>"
 failure_modes:
-  - mode: "GitHub API unreachable or rate-limited while verifying"
-    detection: "verifier exit 2 reason=api-error; the hook announces 'cue fired but verification did not complete' on stderr"
-    alert_route: "layer 7 stdout in the session; ship blocks on gate exit 2"
-  - mode: "delegation revoked (comment deleted or edited) mid-epic"
-    detection: "next verify returns comment-unreadable or edited; hold-gate-eval leaves every hold standing"
-    alert_route: "layer 7 stdout; the CTO files one action-required issue naming the stalled action"
-  - mode: "overlap preflight cannot list PRs"
-    detection: "exit 2 and the sentence 'I could not check', never 'clear'"
-    alert_route: "layer 7 stdout; one-shot continues with a visible warning, ship retries once"
+  - mode: "GitHub API unreachable or rate-limited while verifying, or no timeout tool on the host"
+    detection: "cli-stdout-artifact: verifier stdout 'delegation: unverifiable reason=api-error' (or 'reason=tool-missing'); the hold evaluator repeats it as 'delegation: unverifiable reason=<token>'"
+    alert_route: "cli-stdout-artifact: ship blocks on gate exit 2; durable artifact: the 'holds: N discharged: M standing: K' line and the verdict recorded in the PR body"
+  - mode: "delegation revoked (comment deleted or edited) or expired mid-epic"
+    detection: "cli-stdout-artifact: next verify prints 'delegation: invalid reason=edited|expired|epic-closed' or 'unverifiable reason=comment-unreadable'; hold-gate-eval leaves every hold standing"
+    alert_route: "durable artifact: the CTO files one action-required issue naming the stalled action; cli-stdout-artifact in the session"
+  - mode: "a delegated act ran but left no matching receipt on the epic, or the receipt does not match the envelope"
+    detection: "cli-stdout-artifact: gate exit 2 with reason receipt-missing, receipt-mismatch or receipt-unreadable; durable artifact: the 'Authorized by delegation ..., ran <ISO>' row in decision-challenges.md and the receipt comment on the epic"
+    alert_route: "durable artifact: ship stays blocked until the receipt exists; the stronger independent check is #10361"
+  - mode: "envelope outside the allowlist, scope or epic (command-not-delegable, scope-mismatch, epic-mismatch, envelope-uncommitted)"
+    detection: "cli-stdout-artifact: verifier stdout 'delegation: invalid reason=<token>' on the CTO's pre-execution call"
+    alert_route: "durable artifact: the committed envelope section and the PR body verdict; the act does not run"
+  - mode: "hold cannot be evaluated (unknown or removed gate kind, zero holds parsed, missing tool)"
+    detection: "cli-stdout-artifact: hold-gate-eval exit 2 and the plain sentence naming the hold that stands"
+    alert_route: "durable artifact: the PR body 'holds:' line; ship does not arm"
+  - mode: "overlap preflight cannot list PRs or hits its run deadline"
+    detection: "cli-stdout-artifact: exit 2 or a partial-comparison disclosure and the sentence 'I could not check', never 'clear' (stdout is the only signal here; the check is advisory and fails open with a visible notice)"
+    alert_route: "cli-stdout-artifact: one-shot continues with the notice, ship retries once then continues with the notice"
 logs:
-  where: "session tool results; .claude/.rule-incidents.jsonl (hook denies); the PR body records each verifier verdict and the three hold-probe outputs"
-  retention: "session lifetime / ledger rotation per .claude/hooks/lib/log-rotation.sh / PR lifetime"
+  where: "session tool results; the PR body (each verifier verdict, the hold-probe outputs and the 'holds:' line); the epic's delegation and receipt comments; decision-challenges.md"
+  retention: "session lifetime / PR lifetime / epic lifetime"
 discoverability_test:
-  command: bash plugins/soleur/scripts/delegation-verify.sh --self-check
-  expected_output: "delegation-verify: ready"
+  command: bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch
+  expected_output: "rows examined"
 ```
+
+The discoverability test is a read of the committed `decision-challenges.md` (the record of every delegated act and ruling for this branch): no network and no credentials while the artifact carries no delegation row, which is the case on this branch. It exits 0 and prints the row count, and it would print `[FAIL]` with the reason token for a malformed or unreceipted delegation row.
 
 ## Acceptance Criteria
 

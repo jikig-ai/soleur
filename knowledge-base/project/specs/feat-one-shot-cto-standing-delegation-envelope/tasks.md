@@ -8,9 +8,9 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 
 ## Phase 0: Preconditions
 
-- [ ] 0.1 Probe `updated_at` behaviour on a throwaway comment on the PR (post, react, read, delete) and note the result for the ADR.
+- [ ] 0.1 (not run: needs a GitHub write; ADR-288 states the behaviour as an observation only) Probe `updated_at` behaviour on a throwaway comment on the PR (post, react, read, delete) and note the result for the ADR.
 - [x] 0.2 Measure byte headroom: `ship/SKILL.md` vs ceiling 273955, `one-shot/SKILL.md` vs 52000 (`python3 scripts/lint-skill-body-budget.py --base origin/main`); draft the exact insertion text and count it with `wc -c` before touching either file.
-- [ ] 0.3 Measure `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` and the rule line byte count.
+- [x] 0.3 Measure `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` and the rule line byte count (review-fix round: B_ALWAYS=44263 WARN, rule line 596 bytes).
 - [x] 0.4 Confirm `pre-ask-technical-fork-gate.sh` payload shape with `__HI_RAW` for a two-question fixture.
 
 ## Phase 1: Format reference
@@ -25,13 +25,13 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 ## Phase 2: delegation-verify.sh
 
 - [x] 2.1 Write `plugins/soleur/scripts/delegation-verify.test.sh` with a PATH `gh` stub (rejects unknown argv), fixtures under `plugins/soleur/test/fixtures/standing-delegation/`, a row per reason token, harness rows H1/H2, mutation rows.
-- [x] 2.2 Implement `verify`, `--audit`, `render`, `--self-check` in `plugins/soleur/scripts/delegation-verify.sh`.
+- [x] 2.2 Implement `verify`, `--audit`, `render`, `--self-check` (the last is deleted in the review-fix round) in `plugins/soleur/scripts/delegation-verify.sh`.
 - [x] 2.3 Portability pass: no bare `timeout`, `date -d`, `stat -c`, `sed -i`; bash 3.2 and mawk safe.
 
 ## Phase 3: hold-gate-eval.sh
 
 - [x] 3.1 Write `plugins/soleur/test/hold-gate-eval.test.sh` and fixtures (plans with holds, envelope section).
-- [x] 3.2 Implement `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh` (four kinds, fail closed, exit 0/1/2/3, shared gate-line parser).
+- [x] 3.2 Implement `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh` (four kinds, fail closed, exit 0/1/2/3, shared gate-line parser; `command` and `run-green` are deferred in the review-fix round, CTO ruling R1).
 - [x] 3.3 Write `plugins/soleur/skills/ship/references/operator-holds.md`; shrink `ship/SKILL.md` step 5 to a pointer within the +183 byte headroom.
 
 ## Phase 4: technical-ruling-gate.sh
@@ -43,13 +43,13 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 ## Phase 5: pre-ask-technical-fork-gate.sh
 
 - [x] 5.1 Add RED cases to `.claude/hooks/pre-ask-technical-fork-gate.test.sh` (cue, mixed spans, mixed case, timeout, missing verifier, two questions, label-only).
-- [x] 5.2 Implement the arm (raw-payload span extraction, command-shaped spans only, 5 s cap, allow on any doubt, `emit_incident`).
+- [x] 5.2 Implement the arm (raw-payload span extraction, command-shaped spans only, 5 s cap, allow on any doubt, `emit_incident`). SUPERSEDED: the whole arm (5.1 and 5.2) was removed in the review-fix round by CTO ruling R2.
 
 ## Phase 6: pr-overlap-preflight.sh
 
-- 6.1 Write `plugins/soleur/test/pr-overlap-preflight.test.sh` (stub `gh`, jargon assertions, zero write calls, 100-file case, exits 0/10/11/12/13/2).
-- 6.2 Implement `plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh`.
-- 6.3 Write `plugins/soleur/skills/ship/references/pr-overlap.md`; wire one-shot Step 0a.5 (<= 1150 bytes) and ship Phase 6.5 before the `merge-main` lock block; do not touch review.
+- [x] 6.1 Write `plugins/soleur/test/pr-overlap-preflight.test.sh` (stub `gh`, jargon assertions, zero write calls, 100-file case, exits 0/10/11/12/13/2).
+- [x] 6.2 Implement `plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh`.
+- [x] 6.3 Write `plugins/soleur/skills/ship/references/pr-overlap.md`; wire one-shot Step 0a.5 (<= 1150 bytes) and ship Phase 6.5 before the `merge-main` lock block; do not touch review.
 
 ## Phase 7: cto.md and reference
 
@@ -64,14 +64,46 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 
 ## Phase 9: Doctrine
 
-- 9.1 Amend `hr-menu-option-ack-not-prod-write-auth` (id and `[compliance-tier]` kept, one line, cap ~600 bytes).
-- 9.2 `python3 scripts/lint-rule-bodies.py --write`; append the ack row; run the four AGENTS lints against the merge base.
+- [x] 9.1 Amend `hr-menu-option-ack-not-prod-write-auth` (id and `[compliance-tier]` kept, one line, cap ~600 bytes).
+- [x] 9.2 `python3 scripts/lint-rule-bodies.py --write`; append the ack row; run the four AGENTS lints against the merge base.
 
 ## Phase 10: ADR, C4, learning, finalize
 
 - [x] 10.1 `soleur:architecture` ADR-288 plus `Amended by ADR-288` pointer in ADR-084.
-- [x] 10.2 Edit `model.c4` (CTO component, plugin-side and hook-side GitHub edges); run C4 syntax, render and count-parity tests.
+- [x] 10.2 Edit `model.c4` (CTO component, plugin-side GitHub edge; the hook-side edge was dropped in the review-fix round, R2); run C4 syntax, render and count-parity tests.
 - [x] 10.3 Write the compound learning.
 - [x] 10.4 (shard manifest, ordinal re-probe, markdownlint, body-budget and guard-contract lints done; `--print-selection` and the bounded default run belong to the ship step) Finalize, in this order: regenerate shard manifest (`python3 scripts/regenerate-shard-manifest.py --incremental --write`), re-probe the ADR ordinal across every `origin/*` ref, markdownlint plan and tasks, `lint-skill-body-budget.py`, `lint-guard-contract.py`, `bash scripts/test-all.sh --print-selection` then the bounded default run.
 - [x] 10.5 File three follow-up issues (production-change skill, delegated-act digest, receipt-checking hook).
 - [ ] 10.6 PR body: `Ref #10333`, `Ref #9757`, `## Changelog`, `semver:minor`, the verifier verdicts, the three hold-probe outputs; leave the PR ready and unarmed until `## Operator Holds` discharge.
+
+## Review-fix round (PR #10348, 2026-10-15)
+
+Nine review seats reported on the pinned head; the contract and the four CTO rulings (R1 to R4, Ruled by CTO agent, 2026-10-15) are
+recorded in `decision-challenges.md` (rows RF-R1 to RF-R4) and ADR-288. Other fix agents own the items without a checkbox; their
+state is read from their commits, not from this file.
+
+Dispositions by class:
+
+- Technical rulings (CTO): R1 defer `Gate: command` and `Gate: run-green`; R2 remove the hook delegation arm; R3 enforce execution
+  receipts in the ship gate; R4 keep the overlap preflight in this PR as a separate section and commit range.
+- Verifier (agent F1a): closed command allowlist, scope binding, epic binding, envelope read from git HEAD, audit needs `--at`, render
+  guards and secret refusal, fixed Excluded sentence, App-authored comments rejected, `--self-check` and `keywords` deleted.
+- Gate and hold evaluator (agent F1b): no-delegation exit 3 first, receipt check, memoised verification, case-insensitive heading,
+  in-flight statuses, `</dev/null` on every call.
+- Overlap preflight (agent F2): collaborator-only stops, all-files duplicate rule, noise filter, run deadline, `--issue` dropped.
+- Prose and routing (agent F3a): `${CLAUDE_PLUGIN_ROOT}` paths, selector cue anchoring, go Step 1.5 trigger, stop path.
+- Docs (agent F3b, this file's owner):
+  - [x] The amended rule's menu-ack sentence carries the exception ("outside a recorded delegation"); line is 596 bytes; new hash
+        `4b86563d5be5ac98e1b377057a0ea34fd0761fd0087258bf9c4b5b4f6c5dd068`.
+  - [x] The ack row states the widening honestly, cites `fa06eef79a` and the 2026-04-19 learning, and asks for human review.
+  - [x] The four AGENTS lints plus `lint-rule-bodies --check --base origin/main` pass.
+  - [x] ADR-288: claims corrected (no "two independent keys", receipt scope, "no seam in the script", AP-020 and AP-024, 5 s cap
+        removed), V1 to V5, R1 to R4, precedents, residuals, overlap preflight as its own section.
+  - [x] Learning: the false merge-hook claim replaced by the verified `ship-kb-archive-gate.sh` behaviour.
+  - [x] C4: hook-side edge and hooks-to-plugin verifier mention removed; plugin-to-github comment corrected; model re-rendered
+        (churn back to 40 lines); freshness, count-parity and render tests pass.
+  - [x] `decision-challenges.md`: rows RF-R1 to RF-R4 and RF-1 to RF-8; `technical-ruling-gate.sh --branch` passes.
+  - [x] Plan: `## Observability` cites layer-7 artifacts per failure mode and reads a committed artifact; `## Operator Holds`
+        states the exit-3 prose path and the second evaluation before arming.
+  - [x] Shard weights of the five new suites set from measured seconds.
+  - Not done here: `.gitattributes` already marks `model.likec4.json` as `linguist-generated=true` on main.
