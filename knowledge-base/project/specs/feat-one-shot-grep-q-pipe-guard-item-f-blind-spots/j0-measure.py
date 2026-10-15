@@ -2,7 +2,7 @@
 """Item F plan-time measurement (J0). Read-only; run: python3 -I j0-measure.py [--samples N] [--cat NAME].
 
 It is NOT the guard. It tokenises every logical code line of the swept population (the guard's extension
-pathspec, knowledge-base and the guard file excluded, comment lines and `# sigpipe-demo: intentional`
+pathspec, every knowledge-base archive/ directory and the guard file excluded, comment lines and `# sigpipe-demo: intentional`
 lines dropped) and classifies the READER stage after each unquoted single bar, so each blind spot of the
 line regex is counted by the property it is about instead of by one more regex. Each figure is a
 point-in-time count: re-run it before quoting one (counts rot).
@@ -19,10 +19,12 @@ while a:
 
 ROOT = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip()
 os.chdir(ROOT)
-EXTS = ('.sh', '.bash', '.bats', '.yml', '.yaml', '.tf', '.template', '.js')
 GUARD = '.claude/hooks/grep-q-pipe-guard.test.sh'
+# The population is the guard's own: SWEEP_EXTS is read from the guard text (so a changed list moves this script too), and every knowledge-base archive/
+# directory is excluded, nothing else of knowledge-base (the Item F state; the plan-time run used 8 extensions and all of knowledge-base).
+EXTS = tuple('.' + e for e in re.search(r'^SWEEP_EXTS=\(([^)]*)\)', open(GUARD).read(), re.M).group(1).split())
 files = subprocess.check_output(['git', '-c', 'core.excludesFile=/dev/null', 'ls-files', '-co', '--exclude-standard'], text=True).split('\n')
-files = [f for f in files if f.endswith(EXTS) and not f.startswith('knowledge-base/') and f != GUARD and os.path.isfile(f)]
+files = [f for f in files if f.endswith(EXTS) and not re.match(r'knowledge-base/(.*/)?archive/', f) and f != GUARD and os.path.isfile(f)]
 
 MARK = re.compile(r'\s#\s*sigpipe-demo:\s*intentional(\s|$)')
 GREPS = {'grep', 'egrep', 'fgrep', 'zgrep', 'zegrep', 'rg', 'ag', 'ack', 'pcregrep', 'ugrep'}
