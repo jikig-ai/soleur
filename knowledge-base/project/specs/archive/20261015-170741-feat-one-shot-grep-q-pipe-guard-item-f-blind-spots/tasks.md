@@ -48,7 +48,7 @@ Plan: `knowledge-base/project/plans/2026-10-14-chore-grep-q-guard-item-f-blind-s
 
 ## Phase 6: ship
 
-- [ ] 6.1 Merge `origin/main`, re-run the guard, recompute pins (#10322 and #10081 edit the join table and `PJ_TRIPLES`)
-- [ ] 6.2 Lints (plan AC-9), pre-push ratchet lane on the merged tree
-- [ ] 6.3 Tracker comment on #9217 (dispositions, each figure with its command, NOT-fixed list); file the `head -N` / awk-exit wave issue (roadmap milestone, linked to #9217)
-- [ ] 6.4 PR body (`Ref #9217`; labels `semver:patch`, `app:web-platform`; barred vocabulary absent), `soleur:ship`
+- [x] 6.1 Merge `origin/main`, re-run the guard, recompute pins (#10322 and #10081 edit the join table and `PJ_TRIPLES`)
+- [x] 6.2 Lints (plan AC-9), pre-push ratchet lane on the merged tree
+- [x] 6.3 Tracker comment on #9217 (dispositions, each figure with its command, NOT-fixed list); file the `head -N` / awk-exit wave issue (roadmap milestone, linked to #9217)
+- [x] 6.4 PR body (`Ref #9217`; labels `semver:patch`, `app:web-platform`; barred vocabulary absent), `soleur:ship`
