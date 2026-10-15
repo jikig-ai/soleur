@@ -38,9 +38,9 @@ Two p3 issues sharing the zot + Inngest private-network surface, one PR.
   whose transport is attributed to the Cloudflare serve-URL leg per #9139, not this link).
 - Out of scope: TLS on the private hops (CLO ruling due 2026-10-24; the Inngest row is not
   renewable past 2026-11-12 without TLS or a CLO acceptance based on a measured nftables re-read —
-  both operator/infra-gated), the `hcloud_volume.git_data` ledger row (owned by open PR #10352),
-  all `docs/legal/**` (CLO hold), `terraform apply`, `workflow_dispatch`, Doppler writes, and
-  reopening the dead tracker #7455.
+  both gated on authority this pipeline lacks), the `hcloud_volume.git_data` ledger row (owned by
+  open PR #10352), all `docs/legal/**` (CLO hold), any Terraform-managed-infra or Doppler write,
+  and reopening the dead tracker #7455.
 
 ## Problem Statement / Motivation
 
@@ -656,8 +656,8 @@ surface is sibling PRs #10320/#10352/#10356, handled under Proposed Solution →
 - [ ] `followthrough-convention.md` gains the dormant-detector clause; each audited dormant probe's header carries a dated status note or the file is deleted (`luks-monitor-host-timer-8706.{sh,test.sh}` gone, `git grep -l luks-monitor-host-timer-8706` prints nothing outside planning artifacts and the #8706 issue).
 - [ ] ADR-218 and ADR-184 carry dated amendments; `bash scripts/check-adr-ordinals.sh` passes (no ordinal claimed).
 - [ ] `npx markdownlint-cli2` on touched markdown; `bash scripts/lint-orphan-test-suites.sh` clean; `python3 scripts/lint-shell-trace-credential-refusal.py` clean for touched shell files; `python3 scripts/lint-guard-contract.py <this plan>` passes.
-- [ ] PR body: `Closes #10321`; `Ref` (not Closes) #10136; `## Residuals on #10136` enumerating TLS remediation, the nftables re-read (operator-gated), the 2026-10-24 CLO re-ruling, NFR-026, the signing-key-rotation question, and the `/v1` reachability question (#9073); a `## Sequencing` note naming the #10320/#10352/#10356 overlap reads.
-- [ ] No terraform apply, no workflow dispatch, no Doppler write, no `docs/legal` edit performed by this PR.
+- [ ] PR body: `Closes #10321`; `Ref` (not Closes) #10136; `## Residuals on #10136` enumerating TLS remediation, the nftables re-read (gated on authority the pipeline lacks), the 2026-10-24 CLO re-ruling, NFR-026, the signing-key-rotation question, and the `/v1` reachability question (#9073); a `## Sequencing` note naming the #10320/#10352/#10356 overlap reads.
+- [ ] This PR performs no Terraform-managed-infra write, no workflow dispatch, no Doppler write, and no `docs/legal` edit — verified by `git diff --name-only origin/main...HEAD` (no `.tf` semantics changes beyond the additive alert pair already covered above; no `docs/legal/**` path).
 
 ## Test Scenarios
 
@@ -715,3 +715,58 @@ surface is sibling PRs #10320/#10352/#10356, handled under Proposed Solution →
   `2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md`,
   `2026-05-31-inngest-v1-loopback-gated-and-halt-on-stale-premise.md`,
   `2026-09-24-my-probe-accepted-more-evidence-than-its-absence-queries-could-see.md`.
+
+## Enhancement Summary (deepen-plan)
+
+Deepened in-place on 2026-10-15 by the planning subagent (agent fan-out unavailable in this
+harness — the Task spawn tool does not exist here; all mechanical gates ran inline and the
+adequacy reads were done in-session).
+
+### Gates verified
+
+- **4.6 User-Brand Impact** — section present, threshold `single-user incident`, concrete
+  artifact + exposure vector named. PASS.
+- **4.7 Observability** — trigger fires (`.tf` + `lib/` files); 5-field block present;
+  `discoverability_test.command` = `grep` (allowlisted verb, no shell metachars, <15 s);
+  `expected_output` is the literal `1`. PASS.
+- **4.8 PAT-shaped variables** — regex sweep clean (no `var.*_token`/`TF_VAR_(GH|GITHUB)_`/literal
+  token shapes; `BETTERSTACK_*`/`GH_TOKEN` appear only as existing-secret names in prose). PASS.
+- **4.9 UI wireframe** — N/A: no `components/**`, `app/**/page.tsx`, or `layout.tsx` in the file
+  lists; Product tier NONE. PASS.
+- **4.10 Encryption Posture** — section present; `in_transit` entry carries tls/cert_verification/
+  does_not_defend/disclosed_as; `cert_verification: off` carries an `exception` block with
+  `tracking_issue` + `expires_on`. PASS.
+- **4.11 Guard Contract** — `python3 scripts/lint-guard-contract.py` green (2 guards); adequacy
+  read: Guard 1's assembly names the predicate chokepoint + the `-target=` wiring + the
+  registration step (structural, not member enumeration); matrix has a dispatch row (untargeted
+  resource), a second-member row (masked+insubstantive must-PASS), and a harness row (mutation on
+  tracked file refused). Guard 2 binds to the two fetch call sites. PASS.
+- **4.12 Scope Check** — exactly one unfenced section; 9 ask rows all `mapped`; 4 `inferred`
+  provenance rows each carry a dependency/safety justification; Split Assessment derives counts
+  from the file lists. PASS.
+- **`lint-infra-no-human-steps.py`** — two initial flags (actor + infra-imperative co-occurrence
+  in the out-of-scope bullet and the closing AC) fixed by rewording; now clean.
+
+### Key improvements applied during deepening
+
+- Answered "does merging THIS alone mutate production?" explicitly in §Apply path: the
+  push-triggered `apply-web-platform-infra.yml` run creates the two `logtail` resources at merge —
+  intended and stated, with the blast-radius bound and the other apply-bearing workflow enumerated.
+- Negative-scope ACs rebound to `git diff --name-only origin/main...HEAD` (merge-base, not the
+  moving tip).
+- Server-side auth acceptance upgraded from "verify at work time" to source-verified:
+  `pkg/authn/signing_key_strategy.go` `HandleSigningKey` at v1.45.1 accepts raw OR hashed bearer —
+  the hash-the-bearer fix carries zero auth-behavior risk; recorded in decision-challenges.md as
+  evidence-resolved rather than pending.
+- Dormant-probe audit executed at plan time (7 trackers closed outside the 14-day lookback
+  enumerated with closedAt dates and per-probe dispositions) rather than deferred to work.
+
+### New considerations discovered
+
+- PR #10320 (open) is the dominant collision surface — same `.tf`, both apply/validation workflows,
+  the mutation-test count, ADR-218, ADR-184 — the plan's sequencing rule (append-only region +
+  re-measure counts at work time) absorbs it.
+- The 15th managed Logs alert may hit Better Stack's free-tier count cap (flagged by #10320's own
+  plan for the 14th); the refusal path is routed to #10321 rather than hidden.
+- `/v1/*` reachability of the dedicated Inngest host is an open sibling question (#9073); the fix
+  is correct regardless because the credential rides the request, not the response.
