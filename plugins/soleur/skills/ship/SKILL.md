@@ -2569,7 +2569,7 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
    gh run view <failing-run-id> --log-failed 2>&1 | tail -80
    ```
 
-3. **If `fix_attempt_count >= 1`:** Escalate to the operator. **Headless mode:** abort with structured error naming the failing check. **Interactive mode:** present failure details and ask whether to investigate manually or abort.
+3. **If `fix_attempt_count >= 1`** (and no CTO ruling bounds further attempts, see the paragraph after step 5): Escalate to the operator. **Headless mode:** abort with structured error naming the failing check. **Interactive mode:** present failure details and ask whether to investigate manually or abort.
 
 4. **If `fix_attempt_count == 0`:** Increment `fix_attempt_count`. Attempt autonomous fix:
 
@@ -2585,6 +2585,8 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
    b. If the failure is in a flaky or unrelated check (not reproducible locally): **Headless mode:** abort. **Interactive mode:** ask whether to wait for a re-run or abort.
 
 5. After re-queuing auto-merge, re-invoke the Phase 7 Monitor poll loop from the beginning. The agent carries `fix_attempt_count` across poll invocations.
+
+**An operator's "ask before pushing to an armed or queued PR" instruction is cleared by a CTO ruling for a technical fix, not by asking the operator.** A push that repairs a red check (a test or harness defect, a lint or ratchet repin, a count the diff legitimately moved) is a technical fork under `hr-technical-fork-is-not-an-operator-question`: spawn `soleur:engineering:cto` with the failing job and log tail, the `git diff --stat` of the unpushed commit, the local evidence and what is NOT proven, then record the answer as "Ruled by CTO agent" and act on it. Ask the CTO for three things: whether to push with auto-merge left armed or disarm first, any pre-push condition, and a bound on repeat pushes (precedent, PR #10294: three pushes in all; the same failure signature twice means disarm and return to the operator; a fix that touches production code, workflow semantics, required-check configuration or the PR's scope means disarm and return to the operator). After the push, read the re-run job log and confirm the step that failed actually ran: a green check from a skipped tier is not validation. Do not merge `main` by hand while the PR is armed in queue mode (the queue rebases it). Only a production write, an irreversible action, a legal-risk call or a scope change stays with the operator.
 
 Note: The DIRTY (merge conflict) exit is already handled inside the poll block — do not duplicate merge conflict resolution here. The CI auto-fix logic is OUTSIDE the Phase 7 poll block (`<!-- phase-7-poll-block:start/end -->` markers) and does NOT affect the mirror in `merge-pr/SKILL.md §5.2`.
 
