@@ -17,6 +17,11 @@
 # posted publicly, and the outcome in business terms), the headless behaviour, ${CLAUDE_PLUGIN_ROOT} script
 # paths, the execution-sentence wiring and the stop sequence (delete, disarm, cancel, say what remains).
 #
+# PR-TIME CHECKS. The merge-base anchor describes THIS PR's diff. After the merge the merge base IS HEAD, so on
+# the real file the anchored properties are SKIPPED with a printed reason (never a silent pass); the mutation
+# rows still compare a changed file against the base and stay meaningful. Rows match the violation token as an
+# EXACT line (`V:x` is not satisfied by `V:x-y`).
+#
 # ANCHOR. The block's hash is compared with `git show $(git merge-base origin/main HEAD):<go.md>`, a
 # value that lives OUTSIDE the commit under test. An unresolvable base is a FAIL, never a skip (H1):
 # a guard that skips when its anchor is missing reports green exactly where it cannot see.
@@ -53,6 +58,8 @@ trap 'rm -rf "$SANDBOX"; rm -f "$VERDICT_LOG"' EXIT
 ok()  { printf '  PASS: %s\n' "$1"; printf 'PASS\n' >> "$VERDICT_LOG"; passes=$((passes + 1)); }
 bad() { printf '  FAIL: %s\n' "$1" >&2; printf 'FAIL\n' >> "$VERDICT_LOG"; fails=$((fails + 1)); FAILED+=("$1"); }
 ck()  { asserted=$((asserted + 1)); }
+skips=0
+skip() { printf '  SKIP: %s\n' "$1"; printf 'SKIP\n' >> "$VERDICT_LOG"; skips=$((skips + 1)); }
 
 # --- instrument self-test: both verdict helpers must record before anything is trusted ----------
 _iv_p="$passes"; _iv_f="$fails"; _iv_n="${#FAILED[@]}"
@@ -60,7 +67,7 @@ _iv_p="$passes"; _iv_f="$fails"; _iv_n="${#FAILED[@]}"
 if [[ "$passes" -ne $((_iv_p + 1)) || "$fails" -ne $((_iv_f + 1)) || "${#FAILED[@]}" -ne $((_iv_n + 1)) ]]; then
   printf '[FATAL] instrument self-test: the verdict helpers did not both record\n' >&2; exit 1
 fi
-passes=0; fails=0; asserted=0; FAILED=(); : > "$VERDICT_LOG"
+passes=0; fails=0; asserted=0; skips=0; FAILED=(); : > "$VERDICT_LOG"
 
 [[ -r "$GO_MD" ]] || { printf 'FATAL: cannot read %s\n' "$GO_MD" >&2; exit 2; }
 command -v git >/dev/null || { printf 'FATAL: git required\n' >&2; exit 2; }
@@ -119,8 +126,11 @@ para_awk() {
 }
 
 # evaluate <go.md> <base-ref> : print one `V:<token>` line per violated property, return 0 iff none.
-evaluate() {
-  local f="$1" base="$2" para v=0 bh gh start_ln end_ln head_ln step1_ln base_blob
+base_blob_of() { # <base> <rel-path>; a base written `file:<path>` reads that file (the degenerate-anchor control)
+  case "$1" in file:*) cat "${1#file:}" 2>/dev/null ;; *) g show "$1:$2" 2>/dev/null ;; esac
+}
+evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not evaluated (base == HEAD)
+  local f="$1" base="$2" anchor="${3:-check}" para v=0 bh gh start_ln end_ln head_ln step1_ln base_blob
   emit() { printf 'V:%s\n' "$1"; v=1; }
   para="$(para_awk extract "$f")"
 
@@ -143,7 +153,8 @@ evaluate() {
   if [[ "$para" == *'plugins/soleur/'* ]]; then emit repo-relative-path; fi
   [[ "$para" == *'execution sentence'* && "$para" == *'run summary'* ]] || emit receipt-wiring
   [[ "$para" == *'AskUserQuestion'* ]]     || emit no-askuserquestion-for-technical-hold
-  [[ "$para" == *'delete the delegation comment'* && "$para" == *'gh api -X DELETE'* && "$para" == *'--disable-auto'* && "$para" == *'could not be stopped'* ]] || emit stop-sequence
+  [[ "$para" == *'newest admin-authored marker comment decides'* && "$para" == *'invalid newest one means no delegation'* ]] || emit newest-decides
+  [[ "$para" == *'delete every delegation comment'* && "$para" == *'gh api -X DELETE'* && "$para" == *'--disable-auto'* && "$para" == *'could not be stopped'* ]] || emit stop-sequence
 
   # Location: after the Step 1 heading, before the start marker, and never between the markers.
   start_ln="$(awk -v s="$BLOCK_START" 'index($0, s) { print NR; exit }' "$f")"
@@ -158,7 +169,9 @@ evaluate() {
   fi
 
   # Anchor: the block hash equals the merge base's (outside the commit under test).
-  if ! base_blob="$(g show "$base:$GO_REL" 2>/dev/null)" || [[ -z "$base_blob" ]]; then
+  if [[ "$anchor" == skip ]]; then
+    :
+  elif ! base_blob="$(base_blob_of "$base" "$GO_REL")" || [[ -z "$base_blob" ]]; then
     emit base-unresolvable; emit block-hash-differs
   else
     # The anchor must be the real block (a degenerate base would make the comparison vacuous when base == HEAD).
@@ -174,25 +187,30 @@ BASE_REF="$(g merge-base origin/main HEAD 2>/dev/null || true)"
 [[ -n "$BASE_REF" ]] || BASE_REF="refs/unresolvable-merge-base"
 
 # --- real-file verdicts ----------------------------------------------------------------------------
-REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold stop-sequence anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+HEAD_SHA="$(g rev-parse HEAD 2>/dev/null || true)"
+ANCHOR_MODE=check; ANCHOR_REASON=""
+if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
+  ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
+fi
+REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
-  if [[ "$REAL_OUT" == *"V:$p"* ]]; then bad "go.md violates '$p'"; else ok "go.md has no violation of '$p'"; fi
+  case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
+    if [[ "$ANCHOR_MODE" == skip ]]; then skip "'$p' not evaluated: $ANCHOR_REASON"; continue; fi ;;
+  esac
+  if grep -Fxq -- "V:$p" <<<"$REAL_OUT"; then bad "go.md violates '$p'"; else ok "go.md has no violation of '$p'"; fi
 done
 ck
 [[ "$REAL_RC" -eq 0 && -z "$REAL_OUT" ]] && ok "evaluate() agrees: rc=0 and no violation lines" || bad "evaluate() reported violations: ${REAL_OUT//$'\n'/ }"
 
 # The merge-base anchor must never be a silent tautology: it resolves, its sha is printed, and base == HEAD
 # (post-merge) is announced rather than passing quietly.
-HEAD_SHA="$(g rev-parse HEAD 2>/dev/null || true)"
 ck
 if [[ "$BASE_REF" != refs/unresolvable-merge-base && -n "$(g rev-parse --verify --quiet "${BASE_REF}^{commit}" || true)" ]]; then
   ok "merge-base anchor resolves: ${BASE_REF:0:12} (HEAD ${HEAD_SHA:0:12})"
 else bad "merge-base anchor does not resolve (origin/main is not fetched?)"; fi
-if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
-  printf '  NOTE: merge base == HEAD, so the block-hash comparison is self-identity here; the anchor-content check (base-degenerate) still ran\n'
-fi
+[[ "$ANCHOR_MODE" == skip ]] && printf '  NOTE: %s\n' "$ANCHOR_REASON"
 
 # one-shot carries the one-sentence pointer for a direct run (the go.md paragraph is not reachable from there).
 ONE_SHOT_MD="$ROOT/plugins/soleur/skills/one-shot/SKILL.md"
@@ -218,7 +236,7 @@ row() {
   if [[ "$want" == none ]]; then
     [[ "$rc" -eq 0 && -z "$out" ]] && ok "$label: stays green" || bad "$label: expected green, got ${out//$'\n'/ }"
   else
-    [[ "$rc" -ne 0 && "$out" == *"V:$want"* ]] && ok "$label: RED for '$want'" || bad "$label: expected RED for '$want', got rc=$rc ${out//$'\n'/ }"
+    [[ "$rc" -ne 0 ]] && grep -Fxq -- "V:$want" <<<"$out" && ok "$label: RED for '$want'" || bad "$label: expected RED for '$want', got rc=$rc ${out//$'\n'/ }"
   fi
 }
 
@@ -310,6 +328,25 @@ row "M18 stop no longer disarms armed merges" "$M/m18.md" "$BASE_REF" stop-seque
 para_awk sub "$GO_MD" 'execution sentence' 'log line' > "$M/m19.md"
 row "M19 the execution sentence is no longer printed" "$M/m19.md" "$BASE_REF" receipt-wiring; nrows=$((nrows + 1))
 
+# M20..M22: the positive-only properties get a RED row each
+para_awk sub "$GO_MD" '"${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh"' '${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh' > "$M/m20.md"
+row "M20 the hold-evaluator path loses its quotes" "$M/m20.md" "$BASE_REF" plugin-root-paths; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'AskUserQuestion' 'AskTool' > "$M/m21.md"
+row "M21 the paragraph no longer names AskUserQuestion" "$M/m21.md" "$BASE_REF" no-askuserquestion-for-technical-hold; nrows=$((nrows + 1))
+grep -vF "$BLOCK_START" "$GO_MD" > "$M/m22.md"
+row "M22 the eval-gate start marker is gone" "$M/m22.md" "$BASE_REF" anchors-missing; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'invalid newest one means no delegation' 'any valid one counts' > "$M/m23.md"
+row "M23 an older valid delegation may take over from an invalid newest one" "$M/m23.md" "$BASE_REF" newest-decides; nrows=$((nrows + 1))
+printf 'not go.md\n' > "$M/degenerate-base.txt"
+row "M24 a degenerate base (not the real file)" "$GO_MD" "file:$M/degenerate-base.txt" base-degenerate; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'delete every delegation comment' 'delete the delegation comment' > "$M/m25.md"
+row "M25 the stop sequence deletes only one comment" "$M/m25.md" "$BASE_REF" stop-sequence; nrows=$((nrows + 1))
+# N14: with base == HEAD the anchor is SKIPPED (printed reason) and a changed file is still caught against it
+ck
+_o="$(evaluate "$M/m1.md" "$HEAD_SHA" skip)"; _r=$?
+[[ "$_o" != *block-hash-differs* ]] && ok "N14 anchor skip mode does not evaluate the merge-base comparison" || bad "N14 skip mode still ran the anchor: ${_o//$'\n'/ }"
+row "N14b against HEAD as base a changed block is still RED (the rows stay meaningful after merge)" "$M/m1.md" "$HEAD_SHA" block-hash-differs; nrows=$((nrows + 1))
+
 # H1 the base ref is unresolvable: a FAIL, never a skip
 row "H1 unresolvable base ref" "$GO_MD" "refs/does-not-exist" base-unresolvable; nrows=$((nrows + 1))
 
@@ -321,6 +358,12 @@ awk -v e="$BLOCK_END" '
   END { print "" }' "$GO_MD" > "$M/h2.md"
 row "H2 whitespace-only change outside the block" "$M/h2.md" "$BASE_REF" none; nrows=$((nrows + 1))
 
+# Late-redefinition defence: re-run the controls AFTER the last row, so a helper redefined between the first
+# controls and here cannot silently grade the rows above.
+ctl_fails row "ctl-late" "$M/ctl-bad.md" "$BASE_REF" none               || { printf 'FATAL: late control: row() accepted a RED file as green\n' >&2; exit 2; }
+ctl_fails row "ctl-late" "$M/ctl-bad.md" "$BASE_REF" block-hash-differs || { printf 'FATAL: late control: row() accepted the wrong token\n' >&2; exit 2; }
+ctl_passes row "ctl-late" "$GO_MD" "$BASE_REF" none                      || { printf 'FATAL: late control: row() cannot record a PASS\n' >&2; exit 2; }
+
 # --- ANTI-VACUITY: the assertion floors ---------------------------------------------------------------
 # (1) Derived: one assertion per property, the aggregate, the anchor row, three extraction floors, one per
 #     mutation row.
@@ -328,8 +371,8 @@ row "H2 whitespace-only change outside the block" "$M/h2.md" "$BASE_REF" none; n
 #     guards (delete six rows and the floor drops with them); this constant is the one that bites. Raise it in
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows ))
-ABSOLUTE_FLOOR=51
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 ))
+ABSOLUTE_FLOOR=60
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \
@@ -339,13 +382,14 @@ fi
 
 _lp="$(grep -c '^PASS$' "$VERDICT_LOG" || true)"
 _lf="$(grep -c '^FAIL$' "$VERDICT_LOG" || true)"
-if [[ "${_lp:-0}" -ne "$passes" || "${_lf:-0}" -ne "$fails" || $((passes + fails)) -ne "$asserted" ]]; then
-  printf '\nFATAL: accounting: ledger (%s pass / %s fail) vs counters (%d / %d), asserted %d.\n' \
-    "${_lp:-0}" "${_lf:-0}" "$passes" "$fails" "$asserted" >&2
+_ls="$(grep -c '^SKIP$' "$VERDICT_LOG" || true)"
+if [[ "${_lp:-0}" -ne "$passes" || "${_lf:-0}" -ne "$fails" || "${_ls:-0}" -ne "$skips" || $((passes + fails + skips)) -ne "$asserted" ]]; then
+  printf '\nFATAL: accounting: ledger (%s pass / %s fail / %s skip) vs counters (%d / %d / %d), asserted %d.\n' \
+    "${_lp:-0}" "${_lf:-0}" "${_ls:-0}" "$passes" "$fails" "$skips" "$asserted" >&2
   exit 1
 fi
 
-printf '\ngo-hold-routing.test.sh: %d passed, %d failed, %d assertion(s) executed (floor %d); base %s\n' \
-  "$passes" "$fails" "$asserted" "$MIN_ASSERTIONS" "${BASE_REF:0:12}"
+printf '\ngo-hold-routing.test.sh: %d passed, %d failed, %d skipped, %d assertion(s) executed (floor %d); base %s\n' \
+  "$passes" "$fails" "$skips" "$asserted" "$MIN_ASSERTIONS" "${BASE_REF:0:12}"
 [[ "$fails" -eq 0 && "$passes" -gt 0 ]] || exit 1
 exit 0

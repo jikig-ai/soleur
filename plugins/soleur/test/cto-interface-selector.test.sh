@@ -24,7 +24,13 @@
 # technical-ruling-delegation.md points at the agent instead of restating the brief.
 #
 # The base anchor is `git show $(git merge-base origin/main HEAD):<cto.md>`, outside the commit under
-# test. An unresolvable base is a FAIL, never a skip. Every mutation row asserts the REASON it reds.
+# test. An unresolvable base is a FAIL, never a skip. Every mutation row asserts the REASON it reds, matched
+# as an EXACT violation line (`V:epic-hold-eval` is not satisfied by `V:epic-hold-eval-exit0`).
+#
+# PR-TIME CHECKS. The merge-base invariants (frontmatter byte-identical, old body preserved) describe THIS
+# PR's diff. Once it is merged the merge base IS HEAD and the comparison would be self-identity, so on the
+# real file those properties are SKIPPED with a printed reason (never a silent pass). The mutation rows still
+# compare a changed file against the base and stay meaningful.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 set -uo pipefail
 
@@ -62,6 +68,8 @@ trap 'rm -rf "$SANDBOX"; rm -f "$VERDICT_LOG"' EXIT
 ok()  { printf '  PASS: %s\n' "$1"; printf 'PASS\n' >> "$VERDICT_LOG"; passes=$((passes + 1)); }
 bad() { printf '  FAIL: %s\n' "$1" >&2; printf 'FAIL\n' >> "$VERDICT_LOG"; fails=$((fails + 1)); FAILED+=("$1"); }
 ck()  { asserted=$((asserted + 1)); }
+skips=0
+skip() { printf '  SKIP: %s\n' "$1"; printf 'SKIP\n' >> "$VERDICT_LOG"; skips=$((skips + 1)); }
 
 # --- instrument self-test --------------------------------------------------------------------------
 _iv_p="$passes"; _iv_f="$fails"; _iv_n="${#FAILED[@]}"
@@ -69,7 +77,7 @@ _iv_p="$passes"; _iv_f="$fails"; _iv_n="${#FAILED[@]}"
 if [[ "$passes" -ne $((_iv_p + 1)) || "$fails" -ne $((_iv_f + 1)) || "${#FAILED[@]}" -ne $((_iv_n + 1)) ]]; then
   printf '[FATAL] instrument self-test: the verdict helpers did not both record\n' >&2; exit 1
 fi
-passes=0; fails=0; asserted=0; FAILED=(); : > "$VERDICT_LOG"
+passes=0; fails=0; asserted=0; skips=0; FAILED=(); : > "$VERDICT_LOG"
 
 for f in "$CTO" "$DELEG" "$ONE_SHOT" "$WORK" "$DOMAIN_CFG" "$PLAN_REVIEW_WF" "$RENDER" "$REVIEW" "$GO_MD"; do
   [[ -r "$f" ]] || { printf 'FATAL: cannot read %s\n' "$f" >&2; exit 2; }
@@ -177,8 +185,11 @@ HEAD_SHA="$(g rev-parse HEAD 2>/dev/null || true)"
 # evaluate_cto <cto.md> <base-ref> : print one `V:<token>` line per violated property; rc 0 iff none.
 # Properties of a section are asserted against THAT section's text, never the whole body, so words that
 # also appear elsewhere in the document cannot satisfy them.
-evaluate_cto() {
-  local f="$1" base="$2" v=0 base_blob bfm ffm body line link target sel rsec esec nd
+base_blob_of() { # <base> <rel-path>; a base written `file:<path>` reads that file (the degenerate-anchor control)
+  case "$1" in file:*) cat "${1#file:}" 2>/dev/null ;; *) g show "$1:$2" 2>/dev/null ;; esac
+}
+evaluate_cto() { # <cto.md> <base> [check|skip]   skip = the merge-base anchor is not evaluated (base == HEAD)
+  local f="$1" base="$2" anchor="${3:-check}" v=0 base_blob bfm ffm body line link target sel rsec esec nd
   emit() { printf 'V:%s\n' "$1"; v=1; }
   body="$(body_of "$f")"
   sel="$(section_of "$f" '## Interface selector')"
@@ -187,7 +198,9 @@ evaluate_cto() {
 
   # Anchor: frontmatter byte-identical to the merge base, old body preserved. The base must RESOLVE and
   # must be the real file (a degenerate anchor would make both checks vacuous when base == HEAD).
-  if ! base_blob="$(g show "$base:$CTO_REL" 2>/dev/null)" || [[ -z "$base_blob" ]]; then
+  if [[ "$anchor" == skip ]]; then
+    :
+  elif ! base_blob="$(base_blob_of "$base" "$CTO_REL")" || [[ -z "$base_blob" ]]; then
     emit base-unresolvable; emit frontmatter-differs; emit preserved-line-missing
   else
     printf '%s\n' "$base_blob" > "$SANDBOX/base-cto.md"
@@ -235,7 +248,7 @@ evaluate_cto() {
   [[ "$esec" == *'last verified item'* ]]                || emit epic-close-on-last
   [[ "$esec" == *'action-required'* ]]                   || emit epic-stall-issue
   [[ "$esec" == *'issues/<epic>/comments --paginate'* && "$esec" == *'soleur-delegation v1'* && "$esec" == *'sort -r'* ]] || emit epic-discovery
-  [[ "$esec" == *'newest'* && "$esec" == *'delegation: valid'* ]] || emit epic-discovery-pick
+  [[ "$esec" == *'newest'* && "$esec" == *'delegation: valid'* && "$esec" == *'never fall back to an older'* ]] || emit epic-discovery-pick
   [[ "$esec" == *'verify --delegation <comment-url> --envelope '* && "$esec" == *'--command '* && "$esec" == *'--audit --at <ISO8601 UTC>'* ]] || emit epic-verify-synopsis
   [[ "$esec" == *'--section "Production Envelope - <title>"'* ]] || emit epic-section-title
   [[ "$esec" == *'exit 0'* && "$esec" == *'hold-gate-eval.sh" --file '* ]] || emit epic-hold-eval-exit0
@@ -244,7 +257,8 @@ evaluate_cto() {
   [[ "$esec" == *'must NOT run'* && "$esec" == *'`render`'* && "$esec" == *'calling skill'* ]] || emit epic-no-render
   [[ "$esec" == *'<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back run=<url|none> -->'* ]] || emit epic-receipt-format
   [[ "$esec" == *'verified-envelope-sha256'* && "$esec" == *'run summary'* && "$esec" == *'execution sentence'* ]] || emit epic-receipt-wiring
-  [[ "$esec" == *'gh api -X DELETE repos/{owner}/{repo}/issues/comments/<id>'* && "$esec" == *'gh pr merge <N> --disable-auto'* && "$esec" == *'could not be stopped'* && "$esec" == *'gh run cancel'* ]] || emit epic-stop-sequence
+  [[ "$esec" == *'gh api -X DELETE repos/{owner}/{repo}/issues/comments/<id>'* && "$esec" == *'gh pr merge <N> --disable-auto'* && "$esec" == *'could not be stopped'* && "$esec" == *'gh run cancel'* && "$esec" == *'delete EVERY delegation marker comment'* ]] || emit epic-stop-sequence
+  [[ "$esec" == *'Authorized by delegation <comment-url>, envelope <path>, ran <ISO UTC>'* && "$esec" == *'decision-challenges.md'* ]] || emit epic-ran-row
   [[ "$esec" == *'Headless'* && "$esec" == *'holds stand'* && "$esec" == *'never ask'* ]] || emit epic-headless
   [[ "$esec" == *'recorded consent'* && "$esec" == *'drift guard'* ]] || emit epic-consent-wording
   [[ "$esec" != *'two independent keys'* ]]              || emit epic-two-keys-claim
@@ -252,7 +266,7 @@ evaluate_cto() {
   local kw; for kw in 'user-data loss' 'sole-copy destruction' 'money' 'legal-risk' 'brand' 'scope' 'force-push to main' 'bypassing required checks' 'editing this delegation' 'credential rotation' 'third-party or tenant' 'rollback is not named' 'reserves a decision'; do
     [[ "$nd" == *"$kw"* ]] || { emit epic-nondelegable-list; break; }
   done
-  [[ "$nd" == *'Undeferred Operator-Step'* ]]            || emit epic-reserved-routing
+  [[ "$nd" == *'Undeferred Operator-Step'* && "$esec" == *'Operator-reserved:'* ]] || emit epic-reserved-routing
   link="$(link_in "$esec" standing-delegation)"
   if [[ -z "$link" ]]; then emit epic-link-missing
   else target="$(resolve_link "$link")"; [[ -f "$target" ]] || emit epic-link-unresolved; fi
@@ -274,7 +288,11 @@ evaluate_cto() {
 }
 
 # --- A. the cto.md properties ------------------------------------------------------------------------
-CTO_OUT="$(evaluate_cto "$CTO" "$BASE_REF")"; CTO_RC=$?
+ANCHOR_MODE=check; ANCHOR_REASON=""
+if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
+  ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
+fi
+CTO_OUT="$(evaluate_cto "$CTO" "$BASE_REF" "$ANCHOR_MODE")"; CTO_RC=$?
 CTO_PROP_LIST=(base-unresolvable base-degenerate frontmatter-differs preserved-line-missing selector-missing
   selector-assess-after-rule selector-assess-cue-structured selector-assess-cue-plan selector-lowercase-binding selector-case-undeclared
   rule-section-missing rule-heading-Decision rule-heading-Rationale "rule-heading-Rejected alternatives"
@@ -283,13 +301,16 @@ CTO_PROP_LIST=(base-unresolvable base-degenerate frontmatter-differs preserved-l
   epic-section-missing epic-verifier epic-hold-eval epic-gate-predicates epic-envelope epic-close-on-last
   epic-stall-issue epic-discovery epic-discovery-pick epic-verify-synopsis epic-section-title epic-hold-eval-exit0
   epic-epic-line epic-allowlist epic-no-render epic-receipt-format epic-receipt-wiring epic-stop-sequence
-  epic-headless epic-consent-wording epic-two-keys-claim epic-nondelegable-list epic-reserved-routing
+  epic-ran-row epic-headless epic-consent-wording epic-two-keys-claim epic-nondelegable-list epic-reserved-routing
   epic-link-missing epic-link-unresolved epic-holds-link-missing epic-holds-link-unresolved
   repo-relative-path plugin-root-paths plugin-root-unset-undeclared format-duplicated)
 nprops=0
 for p in "${CTO_PROP_LIST[@]}"; do
   nprops=$((nprops + 1)); ck
-  if [[ "$CTO_OUT" == *"V:$p"* ]]; then bad "cto.md violates '$p'"; else ok "cto.md has no violation of '$p'"; fi
+  case "$p" in base-unresolvable|base-degenerate|frontmatter-differs|preserved-line-missing)
+    if [[ "$ANCHOR_MODE" == skip ]]; then skip "'$p' not evaluated: $ANCHOR_REASON"; continue; fi ;;
+  esac
+  if grep -Fxq -- "V:$p" <<<"$CTO_OUT"; then bad "cto.md violates '$p'"; else ok "cto.md has no violation of '$p'"; fi
 done
 ck
 [[ "$CTO_RC" -eq 0 && -z "$CTO_OUT" ]] && ok "evaluate_cto agrees: rc=0 and no violation lines" || bad "evaluate_cto reported violations: ${CTO_OUT//$'\n'/ }"
@@ -300,9 +321,7 @@ ck
 if [[ "$BASE_REF" != refs/unresolvable-merge-base && -n "$(g rev-parse --verify --quiet "${BASE_REF}^{commit}" || true)" ]]; then
   ok "merge-base anchor resolves: ${BASE_REF:0:12} (HEAD ${HEAD_SHA:0:12})"
 else bad "merge-base anchor does not resolve (origin/main is not fetched?)"; fi
-if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
-  printf '  NOTE: merge base == HEAD, so the frontmatter/old-body comparison is self-identity here; the anchor-content check (base-degenerate) still ran\n'
-fi
+[[ "$ANCHOR_MODE" == skip ]] && printf '  NOTE: %s\n' "$ANCHOR_REASON"
 
 # --- B. floors on the extractions --------------------------------------------------------------------
 ck; [[ -n "$ONE_SHOT_PHRASE" ]] && ok "extracted one-shot's spawn phrase: \"$ONE_SHOT_PHRASE\"" || bad "could not extract one-shot's AskUserQuestion spawn phrase"
@@ -363,6 +382,7 @@ ck; [[ "$_s3" != *'plugins/soleur/'* && "$_s1" != *'plugins/soleur/'* ]] && ok "
 ck; [[ "$_s1" == *'reserves a decision to the operator'* && "$_s1" == *'Undeferred Operator-Step'* && "$_s1" == *'sole-copy destruction'* && "$_s1" == *'rollback is not named'* ]] \
   && ok "section 1 carries the non-delegable list incl. operator-reserved decisions" || bad "section 1 lost part of the non-delegable list (operator-reserved decisions / Undeferred Operator-Step routing)"
 ck; [[ "$_s6" == *'Authorized by delegation <comment-url>, envelope <path>[, ran <ISO>]'* ]] && ok "section 6 states the delegation row shape incl. the optional ran clause" || bad "section 6 lost the 'Authorized by delegation <comment-url>, envelope <path>[, ran <ISO>]' row shape"
+ck; [[ "$_s1" == *'Operator-reserved:'* && "$_s1" == *'operator-holds.md'* && "$_s6" == *'records the `ran` row itself'* ]] && ok "the reference links the Operator-reserved grammar and says the CTO records the ran row" || bad "the reference lost the Operator-reserved link or the 'CTO records the ran row' sentence"
 ck; [[ "$_s6" == *'overlap vehicle'* && "$_s6" == *'vehicle=<N|this>'* ]] && ok "section 6 names the 'overlap vehicle' ruling row" || bad "section 6 does not describe the 'overlap vehicle' row"
 ck; [[ "$_s7" == *'overlap vehicle'* && "$_s7" == *'Ruled by CTO agent'* ]] && ok "section 7's example carries an 'overlap vehicle' ruling row" || bad "section 7's example has no 'overlap vehicle' row"
 ck; [[ "$(printf '%s\n' "$_s7" | grep -c 'Authorized by delegation' || true)" -eq 1 ]] && ok "section 7's example still carries exactly one delegation row" || bad "section 7's example must carry exactly one delegation row (the gate suite counts it)"
@@ -376,7 +396,7 @@ row() { # <label> <mutated-cto.md> <base> <expected-token|none>
   if [[ "$want" == none ]]; then
     [[ "$rc" -eq 0 && -z "$out" ]] && ok "$label: stays green" || bad "$label: expected green, got ${out//$'\n'/ }"
   else
-    [[ "$rc" -ne 0 && "$out" == *"V:$want"* ]] && ok "$label: RED for '$want'" || bad "$label: expected RED for '$want', got rc=$rc ${out//$'\n'/ }"
+    [[ "$rc" -ne 0 ]] && grep -Fxq -- "V:$want" <<<"$out" && ok "$label: RED for '$want'" || bad "$label: expected RED for '$want', got rc=$rc ${out//$'\n'/ }"
   fi
 }
 misroute_row() { # <label> <mutated-cto.md> <prompt> <must-not-be>
@@ -478,6 +498,73 @@ row "E14 Rule section loses 'never a menu'" "$M/e14.md" "$BASE_REF" rule-no-menu
 mut e15.md 's/hold-gate-eval.sh" --file /hold-gate-eval.sh" --plan /'
 row "E15 the envelope check no longer uses --file" "$M/e15.md" "$BASE_REF" epic-hold-eval-exit0; nrows=$((nrows + 1))
 
+# --- V1..V22: every positive-only evaluator property gets a row that REMOVES one phrase inside ONE section ---
+sub_in() { # <out> <section heading> <from> <to>   literal replace of every <from> inside that section only
+  awk -v h="$2" -v from="$3" -v to="$4" '
+    index($0, h) == 1 { f = 1; print; next }
+    f && /^## / { f = 0 }
+    f { line = $0; out = ""; while ((i = index(line, from)) > 0) { out = out substr(line, 1, i - 1) to; line = substr(line, i + length(from)) } print out line; next }
+    { print }' "$CTO" > "$M/$1"
+}
+HDR_SEL='## Interface selector'; HDR_RULE='## Rule interface'; HDR_EPIC='## Own the epic interface'
+sed 's/^## Interface selector/## Interface chooser/' "$CTO" > "$M/v1.md"
+row "V1 selector heading renamed" "$M/v1.md" "$BASE_REF" selector-missing; nrows=$((nrows + 1))
+sub_in v1b.md "$HDR_SEL" 'starts with `Own the epic`' 'starts with an epic prompt'
+row "V1b the Own-the-epic rule loses its cue" "$M/v1b.md" "$BASE_REF" selector-missing; nrows=$((nrows + 1))
+sub_in v2.md "$HDR_SEL" 'IMPLEMENTATION PLAN (not code)' 'IMPL PLAN'
+row "V2 assess cue 'IMPLEMENTATION PLAN (not code)' dropped" "$M/v2.md" "$BASE_REF" selector-assess-cue-plan; nrows=$((nrows + 1))
+sub_in v3.md "$HDR_SEL" 'case-sensitively' 'literally'
+row "V3 selector no longer declares case-sensitivity" "$M/v3.md" "$BASE_REF" selector-case-undeclared; nrows=$((nrows + 1))
+sed 's/^## Rule interface/## Ruling interface/' "$CTO" > "$M/v4.md"
+row "V4 Rule section heading renamed" "$M/v4.md" "$BASE_REF" rule-section-missing; nrows=$((nrows + 1))
+sub_in v5.md "$HDR_RULE" 'unverified' 'unchecked'
+row "V5 evidence bar loses 'unverified'" "$M/v5.md" "$BASE_REF" rule-evidence-bar; nrows=$((nrows + 1))
+sub_in v6.md "$HDR_RULE" 'never ask' 'maybe ask'
+row "V6 Rule section loses 'never ask'" "$M/v6.md" "$BASE_REF" rule-headless; nrows=$((nrows + 1))
+sub_in v7.md "$HDR_RULE" 'Item <id>:' 'Row <id>:'
+row "V7 multi-item form renamed" "$M/v7.md" "$BASE_REF" rule-multi-item; nrows=$((nrows + 1))
+sub_in v8.md "$HDR_RULE" '[technical-ruling-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/technical-ruling-delegation.md)' 'the delegation reference'
+row "V8 Rule section loses its reference link" "$M/v8.md" "$BASE_REF" rule-link-missing; nrows=$((nrows + 1))
+sed 's/^## Own the epic interface/## Epic interface/' "$CTO" > "$M/v9.md"
+row "V9 Own-the-epic heading renamed" "$M/v9.md" "$BASE_REF" epic-section-missing; nrows=$((nrows + 1))
+sub_in v10.md "$HDR_EPIC" 'delegation-verify.sh' 'delegation-check.sh'
+row "V10 the verifier is no longer named" "$M/v10.md" "$BASE_REF" epic-verifier; nrows=$((nrows + 1))
+sub_in v11.md "$HDR_EPIC" 'hold-gate-eval.sh' 'hold-check.sh'
+row "V11 the hold evaluator is no longer named" "$M/v11.md" "$BASE_REF" epic-hold-eval; nrows=$((nrows + 1))
+sub_in v12.md "$HDR_EPIC" 'Gate:' 'Gat:'
+row "V12 no Gate: predicates" "$M/v12.md" "$BASE_REF" epic-gate-predicates; nrows=$((nrows + 1))
+sub_in v13.md "$HDR_EPIC" '## Production Envelope' '## Prod Envelope'
+row "V13 the Production Envelope heading renamed" "$M/v13.md" "$BASE_REF" epic-envelope; nrows=$((nrows + 1))
+sub_in v14.md "$HDR_EPIC" 'action-required' 'needs-operator'
+row "V14 the stall issue label dropped" "$M/v14.md" "$BASE_REF" epic-stall-issue; nrows=$((nrows + 1))
+sub_in v15.md "$HDR_EPIC" 'never fall back to an older' 'may fall back to an older'
+row "V15 discovery may fall back to an older delegation" "$M/v15.md" "$BASE_REF" epic-discovery-pick; nrows=$((nrows + 1))
+sub_in v16.md "$HDR_EPIC" 'run summary' 'final note'
+row "V16 delegated acts no longer go in the run summary" "$M/v16.md" "$BASE_REF" epic-receipt-wiring; nrows=$((nrows + 1))
+sub_in v17.md "$HDR_EPIC" 'drift guard' 'check'
+row "V17 the consent wording loses 'drift guard'" "$M/v17.md" "$BASE_REF" epic-consent-wording; nrows=$((nrows + 1))
+sub_in v18.md "$HDR_EPIC" 'Undeferred Operator-Step' 'Operator Queue'
+row "V18 operator-reserved holds no longer route to the Undeferred Operator-Step Gate" "$M/v18.md" "$BASE_REF" epic-reserved-routing; nrows=$((nrows + 1))
+sub_in v19.md "$HDR_EPIC" '[operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md)' 'the holds reference'
+row "V19 the holds-container link dropped" "$M/v19.md" "$BASE_REF" epic-holds-link-missing; nrows=$((nrows + 1))
+sub_in v20.md "$HDR_EPIC" '"${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh"' '${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh'
+row "V20 the verifier path loses its quotes" "$M/v20.md" "$BASE_REF" plugin-root-paths; nrows=$((nrows + 1))
+sub_in v21.md "$HDR_EPIC" 'Cloud Mode' 'Devin mode'
+row "V21 the unset-CLAUDE_PLUGIN_ROOT sentence loses its pointer" "$M/v21.md" "$BASE_REF" plugin-root-unset-undeclared; nrows=$((nrows + 1))
+printf 'not the agent file\n' > "$M/degenerate-base.txt"
+row "V22 a degenerate base (not the real file)" "$CTO" "file:$M/degenerate-base.txt" base-degenerate; nrows=$((nrows + 1))
+sub_in v18b.md "$HDR_EPIC" 'Operator-reserved:' 'Reserved:'
+row "V18b the Operator-reserved marker dropped" "$M/v18b.md" "$BASE_REF" epic-reserved-routing; nrows=$((nrows + 1))
+sub_in v23.md "$HDR_EPIC" 'decision-challenges.md' 'the rulings file'
+row "V23 the ran row is not recorded in decision-challenges.md" "$M/v23.md" "$BASE_REF" epic-ran-row; nrows=$((nrows + 1))
+sub_in v24.md "$HDR_EPIC" 'delete EVERY delegation marker comment' 'delete the delegation comment'
+row "V24 the stop sequence deletes only one comment" "$M/v24.md" "$BASE_REF" epic-stop-sequence; nrows=$((nrows + 1))
+# N14: with base == HEAD the anchor is SKIPPED (a printed reason, not a silent pass) and a changed file is still caught
+ck
+_o="$(evaluate_cto "$M/ctl-bad.md" "$HEAD_SHA" skip)"; _r=$?
+[[ "$_r" -eq 0 && "$_o" != *frontmatter-differs* ]] && ok "N14 anchor skip mode does not evaluate the merge-base comparison" || bad "N14 skip mode still ran the anchor: ${_o//$'\n'/ }"
+row "N14b against HEAD as base a changed file is still RED (the rows stay meaningful after merge)" "$M/ctl-bad.md" "$HEAD_SHA" frontmatter-differs; nrows=$((nrows + 1))
+
 # Selector mutations: a cue removed from the document must change what a real caller gets.
 sed 's/`[Dd]o NOT use AskUserQuestion`/`do-not-use-the-ask-tool`/g' "$CTO" > "$M/s1.md"
 misroute_row "S1 both 'Do/do NOT use AskUserQuestion' cues removed (one-shot phrase)" "$M/s1.md" "Evidence: x. $ONE_SHOT_PHRASE" rule; nrows=$((nrows + 1))
@@ -498,6 +585,13 @@ row "S5b lowercase 'binding' cue" "$M/s5.md" "$BASE_REF" selector-lowercase-bind
 awk '/^2\. The prompt contains `Structured/ { held = $0; next } held != "" && /^3\. / { print; print held; held = ""; next } { print }' "$CTO" > "$M/s6.md"
 row "S6 assess rule placed after the Rule rule" "$M/s6.md" "$BASE_REF" selector-assess-after-rule; nrows=$((nrows + 1))
 
+# Late-redefinition defence: re-run the controls AFTER the last row. A helper redefined (or shadowed) between the
+# first controls and here would otherwise grade every row above with a different function.
+ctl_fails row "ctl-late" "$M/ctl-bad.md" "$BASE_REF" none               || { printf 'FATAL: late control: row() accepted a RED file as green\n' >&2; exit 2; }
+ctl_fails row "ctl-late" "$M/ctl-bad.md" "$BASE_REF" rule-no-menu       || { printf 'FATAL: late control: row() accepted the wrong token\n' >&2; exit 2; }
+ctl_passes row "ctl-late" "$CTO" "$BASE_REF" none                        || { printf 'FATAL: late control: row() cannot record a PASS\n' >&2; exit 2; }
+ctl_fails misroute_row "ctl-late" "$CTO" "$ONE_SHOT_PHRASE" rule        || { printf 'FATAL: late control: misroute_row() accepted an unchanged selection\n' >&2; exit 2; }
+
 # --- F. informational census of every cto spawn surface (drift is a WARN, never a vacuous green) ------
 SURFACES="$(cd "$ROOT" && grep -rl 'soleur:engineering:cto' plugins/soleur/skills plugins/soleur/commands .claude/hooks scripts .github/workflows 2>/dev/null | sort || true)"
 ck; [[ "$(printf '%s\n' "$SURFACES" | grep -c . || true)" -ge 8 ]] && ok "cto spawn-surface census found $(printf '%s\n' "$SURFACES" | grep -c .) files" || bad "cto spawn-surface census found fewer than 8 files (grep scope broke)"
@@ -508,8 +602,8 @@ ck; [[ "$(printf '%s\n' "$SURFACES" | grep -c . || true)" -ge 8 ]] && ok "cto sp
 # (2) ABSOLUTE: the count of a green run, committed with ZERO slack. A derived floor moves with the rows it
 #     guards (delete six rows and the floor drops with them), so this constant is the one that bites. Raise it
 #     in the same commit that adds rows, never ahead of them.
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 8 + caller_n + 1 + 4 + 11 + nrows + 1 ))
-ABSOLUTE_FLOOR=130
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 8 + caller_n + 1 + 4 + 12 + nrows + 1 + 1 ))
+ABSOLUTE_FLOOR=160
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' "$asserted" "$MIN_ASSERTIONS" >&2
@@ -517,11 +611,12 @@ if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
 fi
 _lp="$(grep -c '^PASS$' "$VERDICT_LOG" || true)"
 _lf="$(grep -c '^FAIL$' "$VERDICT_LOG" || true)"
-if [[ "${_lp:-0}" -ne "$passes" || "${_lf:-0}" -ne "$fails" || $((passes + fails)) -ne "$asserted" ]]; then
-  printf '\nFATAL: accounting: ledger (%s pass / %s fail) vs counters (%d / %d), asserted %d.\n' "${_lp:-0}" "${_lf:-0}" "$passes" "$fails" "$asserted" >&2
+_ls="$(grep -c '^SKIP$' "$VERDICT_LOG" || true)"
+if [[ "${_lp:-0}" -ne "$passes" || "${_lf:-0}" -ne "$fails" || "${_ls:-0}" -ne "$skips" || $((passes + fails + skips)) -ne "$asserted" ]]; then
+  printf '\nFATAL: accounting: ledger (%s pass / %s fail / %s skip) vs counters (%d / %d / %d), asserted %d.\n' "${_lp:-0}" "${_lf:-0}" "${_ls:-0}" "$passes" "$fails" "$skips" "$asserted" >&2
   exit 1
 fi
-printf '\ncto-interface-selector.test.sh: %d passed, %d failed, %d assertion(s) executed (floor %d); base %s\n' \
-  "$passes" "$fails" "$asserted" "$MIN_ASSERTIONS" "${BASE_REF:0:12}"
+printf '\ncto-interface-selector.test.sh: %d passed, %d failed, %d skipped, %d assertion(s) executed (floor %d); base %s\n' \
+  "$passes" "$fails" "$skips" "$asserted" "$MIN_ASSERTIONS" "${BASE_REF:0:12}"
 [[ "$fails" -eq 0 && "$passes" -gt 0 ]] || exit 1
 exit 0

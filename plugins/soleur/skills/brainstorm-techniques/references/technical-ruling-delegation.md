@@ -26,8 +26,9 @@ these categories. The Class cell of the Decision Classes table (section 6) uses 
   loss or sole-copy destruction, money, legal-risk, brand, scope changes, force-push to main, bypassing required checks
   or rulesets, editing the delegation, credential rotation that can lock users out, anything on third-party or tenant
   systems, any act whose rollback is not named, and a hold that reserves a decision to the operator ("ask me before",
-  "explicit go-ahead", "operator approval"): no `Gate:` can discharge that hold, it goes to the Undeferred Operator-Step
-  Gate in `soleur:ship`. Acts that `prod-write-defer-gate.sh` recognises still defer to the harness approval prompt.
+  "explicit go-ahead", "operator approval"): no `Gate:` can discharge that hold. It is written `Operator-reserved:`
+  ([operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md)), always stands, and goes to the
+  Undeferred Operator-Step Gate in `soleur:ship`. Acts that `prod-write-defer-gate.sh` recognises still defer to the harness approval prompt.
 - **legal-risk** — accepting regulatory or legal exposure (the legal posture itself goes to the CLO, see section 3).
 - **brand** — what the product looks and sounds like.
 
@@ -120,7 +121,7 @@ per persisted decision, whatever shape the free-form body uses. Columns: `Item |
   `Authorized by delegation <comment-url>, envelope <path>[, ran <ISO>]` and is valid only on
   `operator (production-mutating)`. Without `, ran <ISO>` the act has not run yet and the gate verifies the delegation
   as it stands now; with `, ran <ISO>` the act ran at that time, and the gate audits the delegation as of that time and
-  also requires the receipt comment the CTO posted on the epic (Own the epic, step 6). The gate verifies through
+  also requires the receipt comment the CTO posted on the epic (Own the epic, step 6). The CTO records the `ran` row itself, in decision-challenges.md, right after posting that receipt; a delegated act with no `ran` row is not checked at all. The gate verifies through
   `delegation-verify.sh` (invalid is exit 1, unreadable is exit 2, never a pass). The row remains required: no row, no pass.
 - **`overlap vehicle` row.** When the open-PR preflight reports a duplicate and no vehicle (exit 12), the CTO designates
   one; the caller records a technical row with Item `overlap vehicle` whose Ruling ends `vehicle=<N|this>`, and `ship`

@@ -1967,7 +1967,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
 4.5. **Technical-ruling body check:** `${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh --pr-body <live body>` via the recipe in [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md) (it prints `gate-rc=`): 0 — proceed to Phase 6.45; 1 remedy; 2 never ready past it.
 
-5. **A recorded operator HOLD is a condition, not an outcome — evaluate it here, at the draft exit, from `## Operator Holds` in the plan file (never from conversation), by [operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md).** Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh" --plan <plan file>`: 0 every hold discharged or none recorded (a no-op) — continue to Phase 6.45; 1 or 2 a hold STANDS — stop and name **that condition**; 3 no delegation recorded — evaluate by hand per the reference. An unreachable plan file, an unevaluable condition or a hold with no gate is never an all-clear (route a person-only hold to the Undeferred Operator-Step Gate). Record each verdict in the PR body, and evaluate again immediately before arming in Phase 6.5. **Why:** PR #7470.
+5. **A recorded operator HOLD is a condition, not an outcome — evaluate it here, at the draft exit, from `## Operator Holds` in the plan file (never from conversation), by [operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md).** Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh" --plan <plan file>`: 0 every hold discharged or none recorded (a no-op) — continue to Phase 6.45; 1 or 2 a hold STANDS — stop and name **that condition**; 3 no delegation recorded — evaluate by hand per the reference. An unreachable plan file, an unevaluable condition or a hold with no gate is never an all-clear (route a person-only hold to the Undeferred Operator-Step Gate). Record each verdict in the PR body, and evaluate again at the start of Phase 6.45, before the plan is archived. **Why:** PR #7470.
 
 **If no open PR exists:**
 
@@ -2015,7 +2015,9 @@ Emit rule-application telemetry:
 echo 'SOLEUR_RULE_APPLIED rule=wg-kb-artifacts-archived-in-pr note=`soleur:ship` Phase 6.45 archives KB artifacts into the PR before any merge site'
 ```
 
-**KB artifact archival — the LAST step that may touch `knowledge-base/project/specs|plans|brainstorms` (closes the stranded-archive class measured on #7240 and #9768).** Earlier live reads are behind us: step 2.5 folded `decision-challenges.md` into the PR body; step 5 evaluated `## Operator Holds`. Nothing downstream reads the live paths — Phase 7's only spec-dir write is the budget-cap marker, which `mkdir -p`s the path and appends (a resume hint; an already-archived dir leaves an uncommitted file cleanup reaps). Run it now so the `git mv` lands in THIS PR and merge is terminal:
+Before Phase 6.45 archives the plan and rulings file, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode merge` (add `--vehicle <N|this>` from the `overlap vehicle` row of decision-challenges.md when it exists): exit 10 or 12 stops arming; 2 retries once then continues with the notice; 0, 11, 13 continue. If the plan has a `## Operator Holds` section with a `Delegation:` line, run `hold-gate-eval.sh --plan <plan>` again now ([operator-holds.md](./references/operator-holds.md)): exit 1 or 2 stops arming.
+
+**KB artifact archival — the LAST step that may touch `knowledge-base/project/specs|plans|brainstorms` (closes the stranded-archive class measured on #7240 and #9768).** Earlier live reads are behind us: step 2.5 folded `decision-challenges.md` into the PR body; step 5 and the paragraph above evaluated `## Operator Holds` and the overlap check. Nothing downstream reads the live paths — Phase 7's only spec-dir write is the budget-cap marker, which `mkdir -p`s the path and appends (a resume hint; an already-archived dir leaves an uncommitted file cleanup reaps). Run it now so the `git mv` lands in THIS PR and merge is terminal:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
@@ -2186,8 +2188,6 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
 Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
 If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
-
-Before the `merge-main` lock block, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode merge` (add `--vehicle <N|this>` from the `overlap vehicle` row of decision-challenges.md when it exists): exit 10 or 12 stops arming; 2 retries once then continues with the notice; 0, 11, 13 continue. If the plan has a `## Operator Holds` section with a `Delegation:` line, run `hold-gate-eval.sh --plan <plan>` again now ([operator-holds.md](./references/operator-holds.md)): exit 1 or 2 stops arming.
 
 Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
