@@ -9,8 +9,8 @@
 #   --mode      start (default; no change needs to exist yet) or merge (a change must exist and the
 #               starting point must be readable, otherwise exit 2)
 #   --pr        this change's number (default: read from `gh pr view`)
-#   --files     the files this change touches, space-separated (default: git diff --name-only
-#               origin/main...HEAD)
+#   --files     the files this change touches, space-separated (default: git diff --no-renames
+#               --name-only origin/main...HEAD)
 #   --vehicle   the change a CTO ruling designated to carry the work. Taken from this flag ONLY, never
 #               parsed out of prose. `this` means THIS change is the vehicle (usable before a change
 #               exists).
@@ -41,10 +41,12 @@
 # Cost bounds: one list call plus one author read (100 a page); same-title history is read only for
 # team changes that share a file (per_page=100); a diff is downloaded only when the other change's
 # per-file additions/deletions equal ours; at most 20 diffs; the whole run stops comparing after 45
-# seconds (PR_OVERLAP_DEADLINE_SECS overrides, whole seconds, 1 to 999) and says so.
+# seconds (PR_OVERLAP_DEADLINE_SECS overrides, whole seconds, 1 to 999) and says so, with `deadline=hit`
+# on the last line. Without `timeout`/`gtimeout` the clock is checked before every call.
 #
 # Output: a plain-language human block, then ONE last line for the calling agent:
-#   SOLEUR_OVERLAP exit=<code> prs=<n,n|none> vehicle=<n|this|none>
+#   SOLEUR_OVERLAP exit=<code> prs=<n,n|none> vehicle=<n|this|none>[ deadline=hit]
+# A change from outside the team is shown as a link only: its title is never printed.
 # Titles are attacker-controllable text on a public repository: they are printed as data (control,
 # format, bidirectional and line-separator characters stripped, change number and conventional-commit
 # prefix removed, 80 characters), never executed and never placed in a question option.
@@ -67,19 +69,24 @@ PAGE_CAP=100 # mut:paginate
 LIST_CAP=200 # mut:lcap
 DIFF_CAP=20
 DEADLINE_SECS=45
-case "${PR_OVERLAP_DEADLINE_SECS:-}" in
-  '' | *[!0-9]*) ;;
-  *) if [ "${#PR_OVERLAP_DEADLINE_SECS}" -le 3 ] && [ "$PR_OVERLAP_DEADLINE_SECS" -gt 0 ]; then DEADLINE_SECS="$PR_OVERLAP_DEADLINE_SECS"; fi ;;
-esac
+deadline_ok() { case "${1-}" in '' | *[!0-9]*) return 1 ;; esac; [ "${#1}" -le 3 ] && [ "$((10#$1))" -gt 0 ]; } # mut:envcheck
+if deadline_ok "${PR_OVERLAP_DEADLINE_SECS:-}"; then DEADLINE_SECS=$((10#$PR_OVERLAP_DEADLINE_SECS)); fi
 T0=$SECONDS
+DEADLINE_HIT=0
+TO_BIN=""
+if command -v timeout >/dev/null 2>&1; then TO_BIN=timeout; elif command -v gtimeout >/dev/null 2>&1; then TO_BIN=gtimeout; fi
 
 say() { printf '%s\n' "$*"; }
 
 over_deadline() { [ $((SECONDS - T0)) -ge "$DEADLINE_SECS" ]; } # mut:deadline
 
 finish() { # finish <code> <csv|none>
-  local v="${VEHICLE:-none}"
-  printf 'SOLEUR_OVERLAP exit=%s prs=%s vehicle=%s\n' "$1" "${2:-none}" "$v"
+  local v="${VEHICLE:-none}" tok=""
+  [ "$DEADLINE_HIT" -eq 1 ] && tok=" deadline=hit" # mut:dltoken
+  if [ -z "$TO_BIN" ]; then
+    say "This machine has no time-limit tool, so one slow answer from GitHub cannot be cut off; no call starts after the deadline, and a call already running is waited for."
+  fi
+  printf 'SOLEUR_OVERLAP exit=%s prs=%s vehicle=%s%s\n' "$1" "${2:-none}" "$v" "$tok"
   exit "$1"
 }
 
@@ -106,20 +113,19 @@ is_int() { # digits only, 1 to 9 of them
   [ "${#1}" -le 9 ]
 }
 
-# Bound every network call by its own cap and by what is left of the run deadline. `timeout` is
-# coreutils and absent on a stock macOS; without it the call runs unbounded (the deadline is then
-# only checked between calls) rather than failing, because the callers retry once and then continue
-# with a visible notice.
+# Bound every network call by its own cap and by what is left of the run deadline. Where neither
+# `timeout` nor `gtimeout` exists (a stock macOS) a running call cannot be cut off, so no call is
+# started once the deadline has passed (status 124, as a killed call would give) and the output says
+# so; the callers retry once and then continue with a visible notice.
 bounded() { # bounded <seconds> <cmd...>
   local secs="$1" left
   shift
+  if [ -z "$TO_BIN" ] && over_deadline; then return 124; fi # mut:notimeoutguard
   left=$((DEADLINE_SECS - (SECONDS - T0)))
   [ "$left" -lt 1 ] && left=1
-  [ "$secs" -gt "$left" ] && secs="$left"
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" "$@"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$secs" "$@"
+  [ "$secs" -gt "$left" ] && secs="$left" # mut:clip
+  if [ -n "$TO_BIN" ]; then
+    "$TO_BIN" "$secs" "$@"
   else
     "$@"
   fi
@@ -168,8 +174,9 @@ JQ_DEFS='
 def clean: explode | map(select(. >= 32 and . != 127 and (. < 128 or . > 159) and . != 173 and . != 1564 and . != 6158 and (. < 8203 or . > 8207) and (. < 8232 or . > 8238) and (. < 8288 or . > 8297) and . != 65279 and (. < 65529 or . > 65531) and (. < 917504 or . > 917631))) | implode; # mut:clean
 def norm: clean | sub("\\s*\\(#[0-9]+\\)\\s*$";"") | ascii_downcase | gsub("\\s+";" ") | sub("^ +";"") | sub(" +$";""); # mut:norm
 def short: length < 20; # mut:short
-def generic: test("^(chore: initialize|wip(:| |$)|fixup!|squash!|merge )") or . == "chore: record plan-phase session state" or short;
+def generic: test("^(chore: initialize|wip(:| |$)|fixup!|squash!|merge )") or . == "chore: record plan-phase session state" or short; # mut:generic
 def disp: clean | sub("\\s*\\(#[0-9]+\\)\\s*$";"") | sub("^[a-zA-Z]+(\\([^)]*\\))?!?: *";"") | gsub("#(?=[0-9])";"") | gsub("\\s+";" ") | sub("^ +";"") | sub(" +$";"") | (if length == 0 then "untitled" else . end) | (if length > 80 then .[0:77] + "..." else . end);
+def shown: if .trusted then "\"" + (.title | disp) + "\"" else "a change from someone outside the team" end; # mut:untitle
 def noise: test("(^|/)(package-lock\\.json|npm-shrinkwrap\\.json|bun\\.lockb?|yarn\\.lock|pnpm-lock\\.yaml|Gemfile\\.lock|Cargo\\.lock|poetry\\.lock|uv\\.lock|composer\\.lock|go\\.sum|suite-[a-z-]+\\.tsv|rule-body-hashes\\.txt)$") or test("\\.likec4\\.json$") or test("\\.baseline\\.txt$"); # mut:noise
 def trusted: IN("OWNER","MEMBER","COLLABORATOR"); # mut:assoc
 '
@@ -320,7 +327,6 @@ EDIT_NUMS=""
 DIFF_ELIG=0
 DIFF_N=0
 DIFF_FAILED=0
-DEADLINE_HIT=0
 DEADLINE_SKIPPED=0
 NOBASE=0
 NOEDITS=0
@@ -427,11 +433,11 @@ if [ "$N_OVER" -eq 0 ]; then
 else
   say "Other open work overlaps with this change:"
   printf '%s' "$OVER" | jq -r "$JQ_DEFS"'.[] |
-    "- \"" + (.title | disp) + "\" - " + (.url | clean),
+    "- " + shown + " - " + (.url | clean),
     (if (.files | length) > 0 then "    Changes some of the same files as yours: " + (.files | map(clean) | .[0:5] | join(", ")) + (if (.files | length) > 5 then " and " + (((.files | length) - 5) | tostring) + " more" else "" end) else empty end),
     (if .edit then "    This change makes the same edit as yours." else empty end),
     (if .subject then "    It has a change with the same title as one of yours." else empty end),
-    (if .trusted | not then "    It comes from someone outside the team, so I list it for information only and will not hold anything back for it." else empty end),
+    (if .trusted | not then "    I list it for information only and will not hold anything back for it." else empty end),
     (if .draft then "    It is still being worked on and is not ready yet." else empty end)'
 fi
 
