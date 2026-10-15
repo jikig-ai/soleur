@@ -18,6 +18,7 @@ every box for that scope is checked.
 - [ ] The app container was restarted after the `EGRESS_AUDIT_INGEST_TOKEN` secret was created (it is read at container start). A POST without the secret answers 202 and drops the batch.
 - [ ] Nothing in PR1 pages anyone when ingest is wrong: the route's reject and error events are queryable in Sentry (debounced warns and errors), the Vector markers in Better Stack, and the probe is manual. Treat this as "queryable, not paged" until the probe below is scheduled and alerts.
 - [ ] `scripts/egress-audit-retention-check.sh` runs on a schedule (for example the existing supabase watchdog or a follow-through) with `EGRESS_AUDIT_EXPECT_COLLECTION=1`, `EGRESS_AUDIT_CANARY_WORKSPACES=<ids>` and the Better Stack query credential, and its failure alerts someone. It is not scheduled anywhere in PR1.
+- [ ] `workspace_egress_audit_rollup` is moved from `DSAR_TABLE_EXCLUSIONS` to `DSAR_TABLE_ALLOWLIST` in `apps/web-platform/server/dsar-export-allowlist.ts` (or the exclusion is re-justified in writing by the CLO) before collection is enabled for an external workspace; the Art. 15 export must cover a solo workspace's rows without the runbook.
 - [ ] `erase_egress_audit_rollup_for_requester` is applied (migration 162) so an explicit erasure request has a single audited path.
 
 ## Any external workspace (in addition)
