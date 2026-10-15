@@ -1143,7 +1143,7 @@ write_files:
       # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
       # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
       # and every consumer below follows IREF.
-      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.54@sha256:34be1714a01bf74fa6d5db320c6a5bc4e73bf375955975169768b9de9081da5f
+      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.55@sha256:bbd056f0ce1af015b9c20faddb0c724c0b6ca547dbb8d928e68a09eec9445215
       # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
       # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
       # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
@@ -1193,7 +1193,7 @@ write_files:
       # mirror_only=true` is picked up by the NEXT attempt on the same host, without a replace.
       set +e
       if [ -n "$ZOT_EP" ]; then
-        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.54@sha256:34be1714a01bf74fa6d5db320c6a5bc4e73bf375955975169768b9de9081da5f"
+        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.55@sha256:bbd056f0ce1af015b9c20faddb0c724c0b6ca547dbb8d928e68a09eec9445215"
         last_stage=pre-zot-pull
         /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
         install -m 600 /dev/null /var/log/inngest-zot-pull.log
