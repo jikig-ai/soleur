@@ -21,7 +21,14 @@ set -uo pipefail
 
 # Refuse to run under shell tracing while a live credential is set: `set -x` would trace the
 # service-role key into whatever collects the output. `$-` tests whether tracing is ON.
-case "$-" in *x*) echo "refusing to run under shell tracing (set -x) with a service-role key" >&2; exit 2 ;; esac
+case "$-" in
+  *x*)
+    if [ -n "${SUPABASE_SERVICE_ROLE_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 URL="${SUPABASE_URL:-${NEXT_PUBLIC_SUPABASE_URL:-}}"
@@ -41,7 +48,7 @@ NOW="$(date -u +%s)"
 rest_get() {
   local resp code
   resp="$(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$KEY" "$KEY" |
-    curl -sS --max-time 20 -K - -w '\n%{http_code}' "${URL%/}/rest/v1/workspace_egress_audit_rollup?$1")" || return 1
+    curl --disable --noproxy '*' --silent --show-error --max-time 20 -K - -w '\n%{http_code}' "${URL%/}/rest/v1/workspace_egress_audit_rollup?$1")" || return 1
   code="${resp##*$'\n'}"
   [[ "$code" == 200 ]] || { echo "UNAVAILABLE: REST API answered HTTP $code" >&2; return 1; }
   printf '%s' "${resp%$'\n'*}"

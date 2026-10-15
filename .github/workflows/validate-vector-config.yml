@@ -19,6 +19,7 @@ on:
       - "apps/web-platform/infra/vector.toml"
       - "apps/web-platform/infra/vector.tf"
       - "apps/web-platform/infra/vector-egress-rollup.test.toml"
+      - "scripts/vector-egress-rollup.test.sh"
       # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
       # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
       # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
@@ -32,6 +33,7 @@ on:
       - "apps/web-platform/infra/vector.toml"
       - "apps/web-platform/infra/vector.tf"
       - "apps/web-platform/infra/vector-egress-rollup.test.toml"
+      - "scripts/vector-egress-rollup.test.sh"
       # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
       # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
       # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
@@ -189,7 +191,7 @@ jobs:
           SENTRY_USERID_PEPPER: fixture-only-do-not-use-in-prod
           VECTOR_BIN: vector
           REQUIRE_VECTOR_TEST: "1"
-        run: bash apps/web-platform/infra/vector-egress-rollup.test.sh
+        run: bash scripts/vector-egress-rollup.test.sh
 
       # Better Stack source ID + cluster appear in vector.toml (load-bearing)
       # AND in 4 disclosure surfaces (legal corpus). Drift between them goes

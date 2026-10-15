@@ -16,10 +16,26 @@ fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
 [[ -f "$SUT" ]] || { echo "FAIL: $SUT does not exist"; echo "RESULT: 0 passed, 1 failed"; exit 1; }
 
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/egress-retention-check.XXXXXX")"
-trap 'rm -rf "$ROOT"' EXIT
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$ROOT"
+cleanup_suite() {
+  assert_fixture_dir "$ROOT"
+  rm -rf "$ROOT"
+}
+trap cleanup_suite EXIT
 mkdir -p "$ROOT/bin"
 
 # curl shim: ROWS_OLDEST / ROWS_NEWEST / HTTP_CODE select the answer; CURL_ARGV_LOG records argv.
+assert_fixture_dir "$ROOT"
 cat > "$ROOT/bin/curl" <<'SHIM'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CURL_ARGV_LOG"
@@ -38,14 +54,17 @@ printf '%s\n%s' "$body" "${HTTP_CODE:-200}"
 SHIM
 chmod +x "$ROOT/bin/curl"
 
+assert_fixture_dir "$ROOT"
 cat > "$ROOT/gw-active" <<'EOF'
 #!/usr/bin/env bash
 echo '{"n":3}'
 EOF
+assert_fixture_dir "$ROOT"
 cat > "$ROOT/gw-idle" <<'EOF'
 #!/usr/bin/env bash
 echo '{"n":0}'
 EOF
+assert_fixture_dir "$ROOT"
 cat > "$ROOT/gw-broken" <<'EOF'
 #!/usr/bin/env bash
 echo 'boom' >&2
@@ -58,6 +77,7 @@ iso() { date -u -d "@$(( $(date +%s) - $1 ))" +%Y-%m-%dT%H:%M:%SZ; }
 run() { # run <expected-rc> <description> [VAR=value ...]
   local want="$1" desc="$2"
   shift 2
+  assert_fixture_dir "$ROOT"
   : > "$ROOT/argv.log"
   : > "$ROOT/stdin.log"
   local out rc
@@ -72,10 +92,10 @@ run() { # run <expected-rc> <description> [VAR=value ...]
 
 echo "-- retention (always checked) --"
 run 0 "oldest row 10 days old, collection not expected: OK" ROWS_OLDEST="[{\"last_seen\":\"$(iso 864000)\"}]"
-[[ "$LAST_OUT" == "OK" ]] && pass "stdout is exactly OK" || fail "stdout is exactly OK (got: $LAST_OUT)"
+if [[ "$LAST_OUT" == "OK" ]]; then pass "stdout is exactly OK"; else fail "stdout is exactly OK (got: $LAST_OUT)"; fi
 run 0 "empty table, collection not expected: OK" ROWS_OLDEST="[]"
 run 1 "oldest row 40 days old: the sweep has stopped" ROWS_OLDEST="[{\"last_seen\":\"$(iso 3456000)\"}]"
-[[ "$LAST_OUT" != "OK" ]] && pass "a failing run does not print OK" || fail "a failing run does not print OK"
+if [[ "$LAST_OUT" != "OK" ]]; then pass "a failing run does not print OK"; else fail "a failing run does not print OK"; fi
 run 1 "oldest row just past the 35 day line (35 days + 1 h)" ROWS_OLDEST="[{\"last_seen\":\"$(iso $((35 * 86400 + 3600)))\"}]"
 run 0 "oldest row just inside the 35 day line (34 days)" ROWS_OLDEST="[{\"last_seen\":\"$(iso $((34 * 86400)))\"}]"
 
@@ -102,7 +122,7 @@ run 0 "baseline run for the hygiene assertions" ROWS_OLDEST="[]"
 if grep -q "synthetic-service-key-0001" "$ROOT/argv.log"; then fail "the key never appears on curl's argv"; else pass "the key never appears on curl's argv"; fi
 if grep -q "synthetic-service-key-0001" "$ROOT/stdin.log"; then pass "the key reaches curl through the stdin config"; else fail "the key reaches curl through the stdin config"; fi
 if grep -q "synthetic-service-key-0001" "$ROOT/stderr.log"; then fail "the key is never written to stderr"; else pass "the key is never written to stderr"; fi
-run 2 "refuses to run under shell tracing" SHELLOPTS=xtrace
+run 78 "refuses to run under shell tracing while the key is set" SHELLOPTS=xtrace
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"

@@ -15,8 +15,10 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VECTOR_TOML="$SCRIPT_DIR/vector.toml"
-TESTS_TOML="$SCRIPT_DIR/vector-egress-rollup.test.toml"
+# This suite lives under scripts/ (a guard-vacuity-floor covered directory) but tests the infra config.
+INFRA_DIR="$(cd "$SCRIPT_DIR/../apps/web-platform/infra" && pwd)"
+VECTOR_TOML="$INFRA_DIR/vector.toml"
+TESTS_TOML="$INFRA_DIR/vector-egress-rollup.test.toml"
 VECTOR_IMAGE="${VECTOR_IMAGE:-timberio/vector:0.43.1-alpine}"
 
 command -v python3 >/dev/null 2>&1 || { echo "SETUP FAILED: python3 absent" >&2; exit 2; }
@@ -30,6 +32,11 @@ pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
 check() { # check <description> <rc>
   if [[ "$2" -eq 0 ]]; then pass "$1"; else fail "$1"; fi
+}
+check_test() { # check_test <description> <command...>: pass when the command exits 0
+  local d="$1"
+  shift
+  if "$@"; then pass "$d"; else fail "$d"; fi
 }
 
 echo "-- structure --"
@@ -76,16 +83,18 @@ echo "-- interpolation hygiene --"
 # Vector interpolates inside COMMENTS too, so the strict form anywhere in the file (even in prose)
 # breaks startup on the host that has no copy of the secret.
 STRICT_N="$(grep -cE '\$\{EGRESS_AUDIT_INGEST_TOKEN\}' "$VECTOR_TOML" || true)"
+# shellcheck disable=SC2016  # the literal dollar-brace text is the thing searched for
 DEFAULT_N="$(grep -cF '${EGRESS_AUDIT_INGEST_TOKEN:-}' "$VECTOR_TOML" || true)"
-check "no strict (default-less) reference to the ingest token anywhere, comments included" "$([[ "$STRICT_N" -eq 0 ]]; echo $?)"
-check "exactly one default-value reference to the ingest token" "$([[ "$DEFAULT_N" -eq 1 ]]; echo $?)"
-check "the token name appears nowhere else as an assignment (no literal secret)" "$(! grep -qE 'EGRESS_AUDIT_INGEST_TOKEN[[:space:]]*=' "$VECTOR_TOML"; echo $?)"
+check_test "no strict (default-less) reference to the ingest token anywhere, comments included" test "$STRICT_N" -eq 0
+check_test "exactly one default-value reference to the ingest token" test "$DEFAULT_N" -eq 1
+# shellcheck disable=SC2016  # $1 belongs to the inner bash -c on purpose
+check_test "the token name appears nowhere else as an assignment (no literal secret)" bash -c '! grep -qE "EGRESS_AUDIT_INGEST_TOKEN[[:space:]]*=" "$1"' _ "$VECTOR_TOML"
 
 echo "-- fixture file --"
 N_TESTS="$(grep -c '^\[\[tests\]\]' "$TESTS_TOML" || true)"
 N_NEG="$(grep -c '^no_outputs_from' "$TESTS_TOML" || true)"
-check "fixture file carries at least 17 vector tests" "$([[ "$N_TESTS" -ge 17 ]]; echo $?)"
-check "fixture file carries at least 13 drop-everything tests (407, probe, non-UUID, no status, injection, bad ts, not JSON, marker)" "$([[ "$N_NEG" -ge 13 ]]; echo $?)"
+check_test "fixture file carries at least 17 vector tests" test "$N_TESTS" -ge 17
+check_test "fixture file carries at least 13 drop-everything tests (407, probe, non-UUID, no status, injection, bad ts, not JSON, marker)" test "$N_NEG" -ge 13
 
 echo "-- behaviour (vector test against the real vector.toml) --"
 run_vector_test() {
@@ -95,14 +104,30 @@ run_vector_test() {
     BETTERSTACK_LOGS_TOKEN=dummy SENTRY_USERID_PEPPER=fixture-only vector test "$VECTOR_TOML" "$TESTS_TOML"
   elif command -v docker >/dev/null 2>&1 && docker image inspect "$VECTOR_IMAGE" >/dev/null 2>&1; then
     docker run --rm -e BETTERSTACK_LOGS_TOKEN=dummy -e SENTRY_USERID_PEPPER=fixture-only \
-      -v "$SCRIPT_DIR:/c:ro" "$VECTOR_IMAGE" test /c/vector.toml /c/vector-egress-rollup.test.toml
+      -v "$INFRA_DIR:/c:ro" "$VECTOR_IMAGE" test /c/vector.toml /c/vector-egress-rollup.test.toml
   else
     return 99
   fi
 }
-VT_OUT="$(mktemp -d "${TMPDIR:-/tmp}/vector-egress-rollup.XXXXXX")/out"
-trap 'rm -rf "$(dirname "$VT_OUT")"' EXIT
-run_vector_test > "$VT_OUT" 2>&1
+VT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vector-egress-rollup.XXXXXX")"
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$VT_DIR"
+cleanup_suite() {
+  assert_fixture_dir "$VT_DIR"
+  rm -rf "$VT_DIR"
+}
+trap cleanup_suite EXIT
+VT_OUT="$VT_DIR/out"
+run_vector_test > "$VT_DIR/out" 2>&1
 VT_RC=$?
 if [[ "$VT_RC" -eq 99 ]]; then
   if [[ "${REQUIRE_VECTOR_TEST:-0}" == "1" ]]; then
@@ -114,9 +139,9 @@ if [[ "$VT_RC" -eq 99 ]]; then
 else
   VT_PASSED="$(sed 's/\x1b\[[0-9;]*m//g' "$VT_OUT" | grep -cE '^test .* \.\.\. passed' || true)"
   VT_FAILED="$(sed 's/\x1b\[[0-9;]*m//g' "$VT_OUT" | grep -cE '^test .* \.\.\. failed' || true)"
-  check "vector test exits 0" "$([[ "$VT_RC" -eq 0 ]]; echo $?)"
-  check "vector test reports no failed test" "$([[ "$VT_FAILED" -eq 0 ]]; echo $?)"
-  check "vector test passed every test in the fixture file (not zero)" "$([[ "$VT_PASSED" -eq "$N_TESTS" && "$VT_PASSED" -gt 0 ]]; echo $?)"
+  check_test "vector test exits 0" test "$VT_RC" -eq 0
+  check_test "vector test reports no failed test" test "$VT_FAILED" -eq 0
+  check_test "vector test passed every test in the fixture file (not zero)" test "$VT_PASSED" -eq "$N_TESTS" -a "$VT_PASSED" -gt 0
 fi
 
 echo ""
