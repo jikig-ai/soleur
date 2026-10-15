@@ -8053,7 +8053,7 @@ describe("the rotate's store-never-written gate (#10175)", () => {
       { label: "the lib's write-step constant drifts from the cutover workflow", lib: sw(`GDSD_WRITE_STEP="Write GIT_DATA_STORE_ENABLED (via the"`, `GDSD_WRITE_STEP="Write GIT_DATA_STORE_ENABLED (via the seam"`), want: /appears 0 times/ },
       { label: "the lib's job constant drifts", lib: sw(`readonly GDSD_JOB_NAME="cutover"`, `readonly GDSD_JOB_NAME="cutover2"`), want: /no job 'cutover2'/ },
       { label: "the lib's workflow-file constant drifts", lib: sw(`readonly GDSD_WORKFLOW_FILE="git-data-cutover.yml"`, `readonly GDSD_WORKFLOW_FILE="git-data-cutover2.yml"`), want: /GDSD_WORKFLOW_FILE/ },
-      { label: "the cutover job gains a display name", cutover: sw(`  cutover:\n    runs-on: ubuntu-24.04`, `  cutover:\n    name: Cutover\n    runs-on: ubuntu-24.04`), want: /gained a name/ },
+      { label: "the cutover job gains a display name", cutover: sw(`  cutover:\n    if: inputs.mode != 'wipe'`, `  cutover:\n    name: Cutover\n    if: inputs.mode != 'wipe'`), want: /gained a name/ },
     ];
     for (const m of mutants) {
       let a = applyText, c = cutoverText, l = libText;
