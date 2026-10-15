@@ -623,6 +623,29 @@ All scenarios are fixture-deterministic (no ambient machine state):
   `discoverability_test.expected_output` is a literal the probe prints —
   both halt gates at deepen-plan are written to pass.
 
+## Enhancement Summary (deepen-plan pass)
+
+Halt-gate results on this plan, verified mechanically on 2026-10-15:
+
+- Phase 4.6 User-Brand: PASS — section present, threshold `none` +
+  non-empty scope-out reason for the `apps/web-platform/server/` touch.
+- Phase 4.7 Observability: PASS — all 5 fields populated; probe is
+  `bash scripts/bare-root-cwd-guard-probe.sh` (allowlisted verb, <15 s,
+  literal `SOLEUR_BARE_ROOT_CWD` expected output, no SSH, not suite-shaped).
+- Phase 4.8 PAT sweep: PASS — zero hits.
+- Phase 4.9 UI wireframe: SKIP — no UI-surface file.
+- Phase 4.10 Encryption posture: SKIP — no new store/connection; section
+  present declaring N/A.
+- Phase 4.11 Guard Contract: PASS — `lint-guard-contract.py` scanned 2
+  guard entries, no rejections.
+- Phase 4.12 Scope Check: PASS — exactly one `## Scope Check`, every ask
+  mapped or descoped-with-justification, no `status: BLOCKED`.
+
+Research/review fan-outs (per-section agents, review panel) ran
+**sequential inline** — this harness exposes no subagent tool;
+`Reviewed-Coverage: sequential-fallback` applies and technical rulings are
+`pending - assumed:` rows in `decision-challenges.md`.
+
 ## References
 
 - Issue: #10383
