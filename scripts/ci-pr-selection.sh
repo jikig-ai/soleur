@@ -11,7 +11,7 @@
 #
 # INPUTS ARE ENV ONLY (the workflow passes them through `env:`; nothing is interpolated into the script):
 #   EVENT_NAME      github.event_name                       (anything but `pull_request` is full)
-#   SWITCH          vars.CI_PR_AFFECTED                      (only the exact string `on` can arm; compared in bash)
+#   SWITCH          vars.CI_PR_AFFECTED                      (only the exact string `on` runs stage 2 and can arm; compared in bash)
 #   GITHUB_SHA      the merge commit the checkout is at
 #   PR_HEAD_SHA     github.event.pull_request.head.sha
 #   HEAD_REPO       github.event.pull_request.head.repo.full_name   (a fork head is full)
@@ -36,9 +36,9 @@
 # The step also prints ONE `::notice title=ci-pr-selection::SOLEUR_PR_SELECTION ...` line (counts and fixed tokens only:
 # a path, a ref name, a SHA from the diff, the repository name or the raw switch value is NEVER echoed) and a short step
 # summary. The notice carries, in this order: switch, locked, attempt, files, stage, reason, would_skip, sel_s, sel_censored,
-# budget, active, groups. `sel_s` is the stage-2 wall time and a LOWER BOUND when `sel_censored=1` (the stage-2 budget or a
-# per-call timeout was hit); the first dark runs on a cold runner are expected to be censored, so they do NOT measure cold wall
-# time. `groups` is webplat:TOK,bun:TOK,scripts-heavy:TOK (`-` when stage 2 did not finish). Reason `affected_degraded`
+# budget, active, groups. `sel_s` is the stage-2 wall time (0 when stage 2 did not run: any switch but `on`) and a LOWER BOUND when `sel_censored=1` (the budget or a
+# per-call timeout was hit); a cold runner is expected to censor it, so it does NOT measure cold wall
+# time. Reason `switch_off`: a doc-only diff whose switch is not `on` (stage 2 skipped). `groups` is webplat:TOK,bun:TOK,scripts-heavy:TOK (`-` when stage 2 did not finish). Reason `affected_degraded`
 # replaces `affected` when any group token is timeout|bad_rc|parse|missing_row|no_records|empty, so a degraded enumerate never
 # reads as the benign `affected would_skip=none`. `affected_degraded` is TELEMETRY ONLY: healthy groups still arm when a sibling
 # group is degraded (per-group evaluation), a decision to revisit before the lock is removed (ADR-276 S4 amendment). Reasons
@@ -57,12 +57,12 @@
 #   * every byte of the path is printable ASCII 0x20-0x7e (this also rejects ASCII control characters, U+2028 and C1
 #     controls as `odd_path`), the path has no `::` and no comma;
 #   * the path is not on the TRIGGER LIST below.
-# Nothing else runs in stage 1, so a code PR pays no pre-pass. STAGE 2 runs only for a doc-only diff, in dark mode too:
+# Nothing else runs in stage 1, so a code PR pays no pre-pass. STAGE 2 runs only for a doc-only diff AND only when the switch is exactly `on`:
 #   env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT ... bash test-all.sh --print-selection --paths=<list>
 #   env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT ... bash test-all.sh --enumerate-commands --paths=<list> <group>
 # (the selector child also loses GITHUB_STEP_SUMMARY, GITHUB_ENV, GITHUB_PATH and GITHUB_STATE. That denies it the INHERITED
 # variables only: a same-user child could still discover the path some other way. The real boundary is that stage 2 runs only
-# for a doc-only diff and the final output block is written LAST, after the child has exited, so nothing a child appended can
+# for a doc-only diff with the switch on and the final output block is written LAST, after the child has exited, so nothing a child appended can
 # outlive it: the last value per key wins.)
 # A group joins the would-skip set only if its enumerate stream is non-empty, every runnable record is an
 # AFFECTED_SELECTED row with sel=0 (and not always_on) or a SUITE_COMMAND_DECLINED record whose label is a known
@@ -354,7 +354,10 @@ run() {
   reason=paths_too_long
   [ "${#paths}" -le 100000 ] || return 0  # GUARD:G2-15-PATHS-CAP
 
-  # (6) STAGE 2: a doc-only diff, in dark mode too.
+  # (6) STAGE 2 runs only for a doc-only diff AND only when the switch is exactly `on` (the sw token above is the one decision
+  # point). Any other value stops here with ZERO selector calls; stage 1 and the notice already ran.
+  reason=switch_off
+  [ "$sw" = on ] || return 0  # GUARD:G2-16-SWITCH-GATE
   stage=2
   reason=selector_error
   test_all="${PR_SELECTION_TEST_ALL:-scripts/test-all.sh}"
