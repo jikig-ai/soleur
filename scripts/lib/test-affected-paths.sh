@@ -1884,16 +1884,62 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
-# tests/scripts/trio-baseline-census — the deploy-channel trio census (#9294 G1): scans every non-test
-# file under the workflow, composite-action, scripts and infra directories for the trio names and
-# compares them with tests/scripts/trio-baseline.tsv (and its merge-base copy).
+# tests/scripts/trio-baseline-census — the deploy-channel trio census, Guard 1a (#9294 G1). Its population is
+# `git ls-files --cached --others` repo-wide minus knowledge-base/ and docs/ (every non-docs file can name the trio:
+# .github, scripts, plugins, apps, and the .md skill docs), it reads the sibling census for the Tier-B environment
+# set, and its ratchet reads git history, so the edge is every top-level entry EXCEPT knowledge-base/ (declared,
+# not derived: no argv literal reaches the files it scans). A new top-level entry needs a line here. The suite
+# EXCLUDES knowledge-base/ from its scan and never reads it, except the two governed files it names by path (the
+# ADR-241 Re-date line and the plan are diffed by the ratchet and the expiry gate), which are declared individually
+# for the dropped-consumer ratchet. The self-edge literal is required by the declared-edge census.
 AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
+  ".agents/"
+  ".bun-version"
+  ".claude-plugin/"
+  ".claude/"
+  ".codex/"
+  ".cursor-plugin/"
+  ".devin/"
+  ".doppler.yaml"
+  ".gitattributes"
   ".github/"
+  ".gitignore"
+  ".gitleaks.toml"
+  ".gitleaksignore"
+  ".grok/"
+  ".markdownlint.json"
+  ".markdownlintignore"
+  ".mcp.json"
+  ".nvmrc"
+  "AGENTS.md"
+  "AGENTS.rules.md"
+  "CLAUDE.md"
+  "CODE_OF_CONDUCT.md"
+  "CONTRIBUTING.md"
+  "LICENSE"
+  "LICENSES/"
+  "README.md"
+  "apps/"
+  "bin/"
+  "bunfig.toml"
+  "cla-smoke-test.md"
+  "docs/"
+  "eleventy.config.js"
+  "feature-request-plugin-dir-settings.md"
+  "feature-request-plugin-update-surfaces-install-divergence.md"
+  "infra/"
+  "lefthook.yml"
+  "package-lock.json"
+  "package.json"
+  "plugins/"
+  "pricing-wireframe.pen"
   "scripts/"
-  "apps/web-platform/scripts/"
-  "apps/web-platform/infra/"
-  "tests/scripts/test-trio-baseline-census.sh"
-  "tests/scripts/trio-baseline.tsv"
+  "spike/"
+  "test/"
+  "tests/"
+  "todos/"
+  "knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
+  "knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.md"
   "scripts/lib/test-affected-paths.sh"
 )
 
