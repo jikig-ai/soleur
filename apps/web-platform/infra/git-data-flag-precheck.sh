@@ -48,6 +48,25 @@
 #               leaves flag==true + freeze held, and unfreeze is exactly that recovery —
 #               so unfreeze never refuses on flag==true (reads like proof, prints the value).
 #
+# WIPE MODES (#10138, design W3 / W7b). Three more FLAG_MODE values, all for git-data-cutover.yml::wipe:
+#   wipe        -> three SEPARATE predicates, each with its own verdict word and exit 5, evaluated in order:
+#                    1 wipe_precondition_flag_not_true   the flag is not exactly `true` (unset and `off` refuse)
+#                    2 wipe_precondition_stamp_absent    GIT_DATA_LUKS_CUTOVER_AT (prd) is absent or not
+#                                                        ^YYYY-MM-DDTHH:MM:SSZ$ or not a real date
+#                    3 wipe_precondition_soak_not_elapsed  now minus the stamp is below WIPE_SOAK_FLOOR_SECONDS
+#                                                        (prints floor_days=<n> elapsed_s=<n>)
+#                 an unreadable stamp is a READ failure, not a predicate: wipe_stamp_read_failed reason=<word> rc=<n>.
+#                 On a pass it prints `flag=true mode=wipe` then `wipe_soak floor_days=7 stamp_epoch=<n> elapsed_s=<n>`
+#                 and continues with the TOFU / deny-roots / pin work exactly as the other modes do.
+#   wipe_check  -> the same three predicates, REPORT ONLY: the first failing one prints `would_refuse=<word>` (or
+#                 `would_refuse=none`) and the run continues and exits 0, so W4-W7 can be exercised before the flip
+#                 and the soak. A stamp READ failure still refuses (exit 5): a report must not hide a broken read.
+#   wipe_reread -> the W7b read: the flag only. Prints `flag=true mode=wipe_reread` or refuses
+#                 wipe_precondition_flag_not_true; no stamp read, no pin write, no TOFU, no deny-roots probe.
+# WIPE_SOAK_FLOOR_SECONDS is ONE unconditional constant (ADR-239, runbook "The wipe"): there is deliberately no
+# `${VAR:-...}` form, so no environment value, input or variable can lower it. Relaxing it is a reviewed diff of that
+# one line plus its pin test, the runbook number and an ADR-239 amendment with a CLO ruling.
+#
 # WRITE PATH (#8211 PR2 / #8573 seam). When FLAG_WRITE_VALUE is set to `true` or `false`, the
 # step writes GIT_DATA_STORE_ENABLED through the dedicated write credential
 # DOPPLER_TOKEN_GIT_DATA_FLAG (read/write on `prd`, environment-bound — never
@@ -132,9 +151,12 @@ reason_of() {
 
 FLAG_MODE="${FLAG_MODE:-proof}"
 case "$FLAG_MODE" in
-  proof|flip|rollback|unfreeze) : ;;
+  proof|flip|rollback|unfreeze|wipe|wipe_check|wipe_reread) : ;;
   *) echo "::error title=git-data-flag-precheck::verdict=flag_mode_invalid mode=${FLAG_MODE}"; exit 2 ;;
 esac
+
+# The wipe soak floor, seconds (7 days). Assigned unconditionally: an exported WIPE_SOAK_FLOOR_SECONDS is overwritten.
+readonly WIPE_SOAK_FLOOR_SECONDS=604800
 
 # --- SANDBOX_DENY_ROOTS detector (#9725) ---
 # Markers are code-shaped, not name-mentions: the resolver must define the
@@ -240,6 +262,57 @@ if [ "$project" != soleur ] || [ "$config" != prd ]; then
   refuse "flag_read_failed reason=scope_mismatch"
 fi
 
+# ---- Wipe modes (#10138): predicates before the generic mode-aware flag read ----------------------
+if [ "$FLAG_MODE" = wipe_reread ]; then
+  # W7b: the flag only. No stamp, no pin, no TOFU, no deny-roots probe.
+  if [ "$flag" != true ]; then
+    refuse wipe_precondition_flag_not_true
+  fi
+  echo "flag=true mode=wipe_reread"
+  exit 0
+fi
+if [ "$FLAG_MODE" = wipe ] || [ "$FLAG_MODE" = wipe_check ]; then
+  wipe_word=""
+  if [ "$flag" != true ]; then
+    wipe_word=wipe_precondition_flag_not_true
+  fi
+  stamp=""
+  # `wipe` stops reading at the first failing predicate; the report-only mode always reads the stamp so the read
+  # is exercised under real credentials before the flip.
+  if [ -z "$wipe_word" ] || [ "$FLAG_MODE" = wipe_check ]; then
+    read_secret GIT_DATA_LUKS_CUTOVER_AT wipe_stamp_read_failed --no-exit-on-missing-secret
+    stamp="$VAL"
+  fi
+  stamp_epoch=""; elapsed_s=""
+  if [ -z "$wipe_word" ] || [ "$FLAG_MODE" = wipe_check ]; then
+    if [[ $stamp =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+       && stamp_epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" && [[ $stamp_epoch =~ ^[0-9]+$ ]]; then
+      elapsed_s=$(( $(date -u +%s) - stamp_epoch ))
+    else
+      stamp_epoch=""
+      if [ -z "$wipe_word" ]; then wipe_word=wipe_precondition_stamp_absent; fi
+    fi
+    if [ -z "$wipe_word" ] && [ "$elapsed_s" -lt "$WIPE_SOAK_FLOOR_SECONDS" ]; then
+      wipe_word=wipe_precondition_soak_not_elapsed
+    fi
+  fi
+  floor_days=$(( WIPE_SOAK_FLOOR_SECONDS / 86400 ))
+  if [ "$FLAG_MODE" = wipe ]; then
+    case "$wipe_word" in
+      "") : ;;
+      wipe_precondition_soak_not_elapsed) refuse "wipe_precondition_soak_not_elapsed floor_days=${floor_days} elapsed_s=${elapsed_s}" ;;
+      *) refuse "$wipe_word" ;;
+    esac
+  fi
+  if [ "$flag" = true ]; then echo "flag=true mode=${FLAG_MODE}"; fi
+  if [ -n "$stamp_epoch" ]; then
+    echo "wipe_soak floor_days=${floor_days} stamp_epoch=${stamp_epoch} elapsed_s=${elapsed_s}"
+  fi
+  if [ "$FLAG_MODE" = wipe_check ]; then
+    echo "would_refuse=${wipe_word:-none}"
+  fi
+fi
+
 # Mode-aware flag read (#8211 PR2): flag==true is a refusal only in proof; on flip it is
 # resume arm B (a prior flip died after the write — the workflow re-runs redeploy+assert);
 # on rollback it is the expected entry.
@@ -253,6 +326,7 @@ if [ "$flag" = true ]; then
     rollback|unfreeze)
       echo "flag=true mode=${FLAG_MODE}"
       ;;
+    wipe|wipe_check) : ;;  # the wipe block above already printed the mode line
   esac
 fi
 
