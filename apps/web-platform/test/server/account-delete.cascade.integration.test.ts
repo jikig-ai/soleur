@@ -248,7 +248,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(auditRow!.token_count).toBe(1);
     }, 10_000);
 
-    test("mig 162: action_sends row preserved with message_id NULLed (SET NULL carve-out fired)", async () => {
+    test("mig 162: action_sends row preserved, de-linked post-erasure (message_id NULLed)", async () => {
       const { data: sendRow, error: selErr } = await service
         .from("action_sends")
         .select("id, user_id, message_id")

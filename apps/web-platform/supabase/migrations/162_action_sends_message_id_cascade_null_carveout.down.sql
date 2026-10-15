@@ -48,6 +48,10 @@ $fn$;
 REVOKE ALL ON FUNCTION public.action_sends_no_mutate()
   FROM PUBLIC, anon, authenticated, service_role;
 
+-- Drop the 162-era catalog comments (pre-162 neither existed).
+COMMENT ON FUNCTION public.action_sends_no_mutate() IS NULL;
+COMMENT ON COLUMN public.action_sends.message_id IS NULL;
+
 ALTER TABLE public.action_sends DROP CONSTRAINT action_sends_message_id_fkey;
 ALTER TABLE public.action_sends
   ADD CONSTRAINT action_sends_message_id_fkey
@@ -63,6 +67,10 @@ AS $fn$
 DECLARE
   affected integer;
 BEGIN
+  -- Authorisation:
+  --   * Service-role callers (account-delete.ts) — auth.uid() is NULL,
+  --     current_user = 'service_role' (or 'postgres' in local dev).
+  --   * Self-DSAR callers (founder-initiated path) — auth.uid() = p_user_id.
   IF auth.uid() IS NULL THEN
     IF current_user NOT IN ('service_role', 'postgres') THEN
       RAISE EXCEPTION 'anonymise_action_sends: caller not authorised'

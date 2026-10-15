@@ -31,8 +31,11 @@ SELECT 'row_level_message_id_trigger',
          JOIN pg_proc p ON p.oid = t.tgfoid
          WHERE t.tgrelid = 'public.action_sends'::regclass
            AND t.tgname = 'action_sends_message_id_guard'
-           AND t.tgtype = 23
+           AND (t.tgtype & 19) = 19
+           AND (t.tgtype & 44) = 0
+           AND t.tgenabled = 'O'
            AND p.proname = 'action_sends_no_mutate'
+           AND p.pronamespace = 'public'::pg_catalog.regnamespace
        ) THEN 0 ELSE 1 END
 UNION ALL
 SELECT 'no_mutate_has_cascade_carveout',
