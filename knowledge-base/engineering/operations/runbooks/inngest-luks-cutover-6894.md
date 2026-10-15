@@ -429,8 +429,8 @@ file and, when drift is found, to the body or a comment of the open `infra-drift
   means applying locally to update state. For the sole-copy addresses that is wrong: never apply locally, never untargeted,
   and there is no SSH step anywhere on this path (`hr-no-ssh-fallback-in-runbooks`). A drift reason at a sole-copy address
   is read from the plan text for that address and resolved through a reviewed change or the `manual-rerun` route.
-- The drift workflow's own output prints runnable `DELETE` recipes for other resources. Those recipes must never be pointed
-  at this volume or its Doppler secret.
+- The drift workflow's issue bodies print no `DELETE` recipe (removed by #9927 item 8c). Any reclaim of a rehearsal
+  survivor is a separately authorized call and must never be pointed at this volume or its Doppler secret.
 
 ### Per-loss-mode owner and procedure
 
