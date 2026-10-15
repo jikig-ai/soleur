@@ -141,6 +141,7 @@ if [[ "$GWSQL2" == *"AND (raw LIKE '%$CANARY%' OR raw LIKE '%$CANARY2%') FORMAT"
 if [[ "$(cat "$ROOT/url.log")" == *"workspace_id=in.($CANARY,$CANARY2)"* ]]; then pass "the freshness read is scoped to the canary workspaces"; else fail "the freshness read is scoped to the canary workspaces"; fi
 # The status pattern must match a real Better Stack row (plain quotes, as observed) and an escaped one.
 PAT="$(printf '%s' "$GWSQL" | sed -n "s/.*match(raw, '\([^']*\)').*/\1/p")"
+if [[ "$PAT" == *'\'* ]]; then fail "the status pattern has no backslash (ClickHouse string-literal escaping is not modelled here)"; else pass "the status pattern has no backslash (ClickHouse string-literal escaping is not modelled here)"; fi
 if python3 -c 'import re,sys; p=sys.argv[1]; ok=all(re.search(p,l) for l in (r"{\"workspace\":\"w\",\"status\":\"200\"}", r"{\\\"status\\\":\\\"503\\\"}")) and not any(re.search(p,l) for l in (r"{\"status\":\"407\"}", r"{\"status\":\"2000\"}x" if False else r"{\"status\":\"418\"}")); sys.exit(0 if ok else 1)' "$PAT"; then pass "the status pattern matches plain and escaped rows and not 407 or 418"; else fail "the status pattern matches plain and escaped rows and not 407 or 418 (pattern: $PAT)"; fi
 if [[ "$GWSQL" != *"[0-9a-f]{8}-"* ]]; then pass "the query no longer matches every UUID-shaped row"; else fail "the query no longer matches every UUID-shaped row"; fi
 
@@ -153,8 +154,8 @@ run 78 "refuses to run under shell tracing while the key is set" SHELLOPTS=xtrac
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
-if [[ $((PASS + FAIL)) -lt 37 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 37.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 38 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 38.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

@@ -63,8 +63,8 @@ select 'requester_is_member', count(*) from public.workspace_members where works
 SQL
 ```
 
-Proceed only when `members` is 1 and `requester_is_member` is 1. **Switch web access off first** (the owner's workspace toggle, or
-the per-organisation flag for a canary) **and wait at least 20 minutes**: Vector's reduce, its disk buffer and the sink retries can
+Proceed only when `members` is 1 and `requester_is_member` is 1. **Switch web access off first** (the workspace's own web-access toggle, `workspaces.web_egress = false`,
+in every case; switching off only the per-organisation flag is not enough, because the function checks the toggle) **and wait at least 20 minutes**: Vector's reduce, its disk buffer and the sink retries can
 still post buckets for the period just erased, and the function refuses while web access is on. Then erase through the one audited path, which repeats the
 same guard under a member-row lock (it deletes nothing for a workspace that gained a member between the two steps) and returns the
 number of rows deleted:

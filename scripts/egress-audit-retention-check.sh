@@ -118,7 +118,7 @@ if [[ "${EGRESS_AUDIT_EXPECT_COLLECTION:-0}" == "1" ]]; then
   fi
   if [[ "$fresh" -eq 0 ]]; then
     # Stale or empty: acceptable only if the gateway log shows nothing to ingest. Unknown is a failure.
-    gw_sql="SELECT count() AS n FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 60 MINUTE AND dt <= now() - INTERVAL 35 MINUTE AND raw LIKE '%requested_host%' AND raw LIKE '%soleur-egress-gw%' AND match(raw, 'status\\W{1,12}(200|403|502|503|504)') AND (${canary_or}) FORMAT JSONEachRow"
+    gw_sql="SELECT count() AS n FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 60 MINUTE AND dt <= now() - INTERVAL 35 MINUTE AND raw LIKE '%requested_host%' AND raw LIKE '%soleur-egress-gw%' AND match(raw, 'status[^0-9a-zA-Z]{1,12}(200|403|502|503|504)') AND (${canary_or}) FORMAT JSONEachRow"
     if [[ -n "${GW_QUERY_CMD:-}" ]]; then
       gw_out="$("$GW_QUERY_CMD" "$gw_sql" 2>/dev/null)" || gw_out=""
     else
