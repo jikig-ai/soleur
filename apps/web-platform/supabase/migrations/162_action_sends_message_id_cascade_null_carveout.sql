@@ -72,10 +72,6 @@ BEGIN
   END IF;
 END $$;
 
--- message_id is nullable from here on: the sole write boundary
--- (server/action-sends/write-action-send.ts) always supplies message.id;
--- NULL means de-linked post-erasure only. action_sends_message_unique
--- treats NULLs as distinct, so post-erasure rows coexist.
 ALTER TABLE public.action_sends ALTER COLUMN message_id DROP NOT NULL;
 ALTER TABLE public.action_sends DROP CONSTRAINT action_sends_message_id_fkey;
 ALTER TABLE public.action_sends
