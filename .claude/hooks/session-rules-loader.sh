@@ -334,7 +334,14 @@ BARE_CWD_TO=()
 if command -v timeout >/dev/null 2>&1; then BARE_CWD_TO=(timeout -k 1 "${SOLEUR_BARE_CWD_TIMEOUT_S:-5}"); fi
 BARE_CWD_OUT=$("${BARE_CWD_TO[@]+"${BARE_CWD_TO[@]}"}" bash "$(dirname "${BASH_SOURCE[0]}")/bare-root-cwd-guard.sh" "$REPO_ROOT" 2>/dev/null || true)
 if [[ "${BARE_CWD_OUT%%$'\n'*}" == "SOLEUR_BARE_ROOT_CWD "* ]]; then
-  BARE_CWD_BLOCK=$(printf '%s\n' "$BARE_CWD_OUT" | tr -d '\000-\010\013-\037' | sed -n '1,12p')
+  # Lines after the marker must carry the [bare-root-cwd] prefix — forwarding
+  # arbitrary helper stdout would let a future noisy line inside the helper
+  # reach context unfiltered (#10386 review, P3). Keep the marker, keep only
+  # prefixed lines, strip control chars (preserving newline/tab), cap at 12.
+  BARE_CWD_BLOCK=$(printf '%s\n' "$BARE_CWD_OUT" \
+    | tr -d '\000-\010\013-\037' \
+    | sed -n '1p;/^\[bare-root-cwd\] /p' \
+    | sed -n '1,12p')
 else
   BARE_CWD_BLOCK=""
 fi

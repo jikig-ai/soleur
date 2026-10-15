@@ -32,3 +32,8 @@
 - REMAINING: telemetry test row in apps/web-platform/test/git-lock-marker-telemetry.test.ts; ADR-099 amendment; go.md one-line touch (Step 1 bare-repo paragraph, outside eval-gate block); tasks.md checkboxes; commit+push; then soleur:review -> qa -> compound -> ship -> merge -> postmerge -> DONE.
 - Follow-ups already filed by plan phase: #10391, #10392.
 - Test invocation note: run hook/test scripts with `unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH` first (fixture tripwire).
+
+## Work Phase (complete)
+- Implementation commit: 6fc8f59869 pushed to origin/feat-bare-root-anchor-gate (PR #10386 draft)
+- All suites green: bare-root-cwd-guard.test.sh 30/30, session-rules-loader.test.sh 35/35, git-repo-readiness-diag.test.sh 8/8, git-lock-marker-telemetry.test.ts 32/32, probe verified.
+- NEXT: soleur:review (Step 4) → resolve findings → soleur:qa → soleur:compound → soleur:ship → merge → postmerge → DONE

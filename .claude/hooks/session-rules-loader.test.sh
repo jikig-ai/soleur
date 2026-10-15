@@ -891,6 +891,36 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ------------- Test 37: marker + arbitrary line -> arbitrary line dropped (#10386 P3) ----
+# The shape filter forwards ONLY the marker and [bare-root-cwd] prefixed lines;
+# a helper emitting extra stdout cannot smuggle lines into context.
+TOTAL=$((TOTAL+1))
+T37=$(mktemp -d); LATE_TMPDIRS+=("$T37"); setup_repo "$T37"
+git -C "$T37" config core.bare true
+copy37="$T37-loader-copy"
+mkdir -p "$copy37"
+cp "$HOOK" "$copy37/session-rules-loader.sh"
+cat > "$copy37/bare-root-cwd-guard.sh" <<'STUB'
+#!/usr/bin/env bash
+printf 'SOLEUR_BARE_ROOT_CWD source=session-start\n'
+printf '[bare-root-cwd] legit line\n'
+printf 'ARBITRARY-INJECTED\n'
+exit 0
+STUB
+chmod +x "$copy37/session-rules-loader.sh" "$copy37/bare-root-cwd-guard.sh"
+out37=$(printf '%s' "$(jq -nc --arg cwd "$T37" '{cwd: $cwd, session_id: "test-sess-1"}')" | "$copy37/session-rules-loader.sh" 2>/dev/null)
+ctx37=$(jq -r '.hookSpecificOutput.additionalContext // empty' <<<"$out37" 2>/dev/null)
+if printf '%s' "$ctx37" | grep -q 'SOLEUR_BARE_ROOT_CWD source=session-start' \
+   && printf '%s' "$ctx37" | grep -q '\[bare-root-cwd\] legit line' \
+   && ! printf '%s' "$ctx37" | grep -q 'ARBITRARY-INJECTED'; then
+  echo "PASS: arbitrary helper lines are filtered; documented shape still passes"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: shape filter leaked or dropped the wrong lines"
+  printf '%s\n' "$ctx37" | tail -8
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1

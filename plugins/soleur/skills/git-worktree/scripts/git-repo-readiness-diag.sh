@@ -60,14 +60,21 @@ if [[ "$wt_out" == "true" || "$bare_out" == "true" ]]; then
   # core.bare=true read from the config FILE (never --is-bare-repository, ADR-173), and
   # --absolute-git-dir resolving to exactly that dir. A true-bare repo, plain clone, linked
   # worktree, masked config, or symlinked .git never emits.
-  if [[ "$wt_out" != "true" && "$bare_out" == "true" ]]; then
+  (
+    # Scrub inherited git-location vars INSIDE the arm (never script-top: the
+    # readiness verdict above is intentionally evaluated under the caller's
+    # env). Without this an injected GIT_DIR makes --is-inside-work-tree read
+    # true and silently suppresses the marker at a real bare root — the exact
+    # divergence the parity suite pins (#10386 review, A-P2).
+    unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
     _root="$(pwd -P 2>/dev/null)"
     if [[ -n "$_root" && -d "$_root/.git" && ! -L "$_root/.git" ]] \
        && [[ "$(git config --file "$_root/.git/config" --type=bool --get core.bare 2>/dev/null)" == "true" ]] \
        && [[ "$(git rev-parse --absolute-git-dir 2>/dev/null)" == "$_root/.git" ]]; then
       echo "SOLEUR_BARE_ROOT_CWD source=readiness-diag"
     fi
-  fi
+  )
   exit 0
 fi
 

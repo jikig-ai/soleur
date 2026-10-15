@@ -134,6 +134,18 @@ for shape in bare plain masked sym nonrepo; do
 done
 if [[ "$parity_ok" == "1" ]]; then ok "guard and diag predicates agree on all 5 fixture classes"; fi
 
+begin D6
+# Env-injection parity (#10386 A-P2): GIT_DIR pointed at a plain clone must not
+# suppress the marker at a real bare root — both copies scrub before deciding.
+d="$SANDBOX/d6"; mk_bare_root "$d" || bad "fixture"
+p="$SANDBOX/d6-plain"; mk_plain "$p" || bad "fixture"
+RC=0
+OUT=$(cd "$d" && GIT_DIR="$p/.git" bash "$DIAG" 2>/dev/null) || RC=$?
+case "$OUT" in
+  *SOLEUR_BARE_ROOT_CWD\ source=readiness-diag*) ok "injected GIT_DIR cannot suppress the diag marker" ;;
+  *) bad "injected GIT_DIR suppressed the diag marker ($OUT)" ;;
+esac
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 if (( FAIL > 0 )); then printf 'failures:\n' >&2; printf '  %s\n' "${FAILURES[@]}" >&2; exit 1; fi
 exit 0
