@@ -394,6 +394,7 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   it. The lint warns inside 14 days of `expires_on` and fails CI after it.
 
 > **Superseded 2026-10-15 (#6897): "it is gated by the flip chain" no longer holds for the separated wipe variant; see Amendment 2026-10-15 below. The flip chain still gates the flip-chained variant.**
+
 - **Inputs for the CLO re-ruling.** The issue sets the trigger: if the fix and the served-store purge slip past
   2026-10-24, the CLO re-rules on the DPD §10.3(b) disclosure. The re-ruling needs the state of four things: the
   wipe (done, with Hetzner delete evidence, or slipped), the served-store purge (run, with its count, or not),
