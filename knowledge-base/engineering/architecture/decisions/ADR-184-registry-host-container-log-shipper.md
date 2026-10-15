@@ -545,3 +545,25 @@ are corrected here rather than edited in place.
   exhaust the sub-quota; the overflow is accounted as `reason=exempt_cap`, never silent, and the
   #7556 probe reads any non-`rate_cap` drop as TRANSIENT, never PASS (T21 S3b pins the sharing). The
   caps were deliberately not retuned: each retune is another cloud-init edit and another host replace.
+
+## Amendment 2026-10-14 (#7530): rate-cap sampling and zot's clientIP field order are a consumed contract
+
+Append-only; the sections above are unchanged. The Better Stack alert `registry_clientip_not_rfc1918`
+(ADR-218 amendment of the same date) consumes, from the merge's push apply that creates it, two properties of
+this shipper and of zot that earlier amendments describe without depending on:
+
+- **Rate-cap sampling.** The alert grades only rows that reach Better Stack. Ordinary rows are
+  rate-capped to 17 per tick, so detection is sampled over SHIPPED rows; a topology change would
+  produce many public rows, which is adequate, and a low-rate public prober inside the high-volume
+  private stream can be sampled out for some time. Rows the shipper drops stay in the host-local
+  journald log under its size bound. Retuning the caps (#7456 item c, ruled no-retune on 2026-10-14)
+  therefore also changes this alert's sampling.
+- **zot's `clientIP` field order and name.** zot writes its own `clientIP` BEFORE `method`, `path`
+  and `headers` (verified live 2026-10-14 against zot v2.1.22,
+  `sha256:46f688dc26315a35a247e1784368829e66a67bf91de94c7d8d1645044fac1d5b`). The alert extracts the
+  first `clientIP` so a later client-controlled copy cannot hide a real address; a version that
+  renames or reorders the field would read as healthy forever (`treat_as_zero`). The alert's drift
+  guard pins that digest, so a zot bump forces a re-check. The envelope prefix
+  `SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry` and the `SOLEUR_ZOT_DISK` marker (each
+  followed by a space) are likewise consumed at offset 0 of the stored row: changing either prefix
+  requires changing the alert.

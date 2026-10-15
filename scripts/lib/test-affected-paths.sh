@@ -2301,3 +2301,23 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/lint-betterstack-emitter-read.test.sh"
   "scripts/test-all.sh"
 )
+
+# scripts/followthroughs/registry-clientip-alert-7530.test.sh — the #7530 post-merge probe's
+# exit-code battery. Beyond the probe itself it READS the committed alert file at runtime (the suite
+# compares the SQL the probe sends against that text, and the probe extracts its predicate from it),
+# a read the name-stem convention cannot reach. Its retirement-header row also READS the alert drift
+# guard (apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh, the rename cross-reference),
+# the two suite-registration tables and the preflight-discoverability baseline. Its case_refire_parity
+# row also READS the apply workflow (the printed re-fire command is compared with the workflow's own comment).
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
+  ".github/workflows/apply-web-platform-infra.yml"
+  "apps/web-platform/infra/betterstack-logs-alerts.tf"
+  "apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/preflight-discoverability-test.test.ts"
+  "scripts/followthroughs/registry-clientip-alert-7530.sh"
+  "scripts/followthroughs/registry-clientip-alert-7530.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/suite-durations.tsv"
+  "scripts/suite-shard-legs.tsv"
+)

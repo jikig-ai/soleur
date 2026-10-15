@@ -465,3 +465,40 @@ thirteenth.
   lookback — #7455 closed 2026-08-13 and the probe's regression arm silently went dark
   ~2026-08-27 while its header (and ADR-184's) still claimed enrollment. Convention clause in
   `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
+
+## Amendment — 2026-10-14 (#7530): the fifteenth Logs alert, a producer-anchored per-bucket count
+
+Appended, not edited. `registry_clientip_not_rfc1918` (`soleur-registry-clientip-not-rfc1918-prd`)
+brings the Terraform-managed Logs alert count from 14 to **15** (the 2026-10-15 #10321 amendment above
+counted 14, with this PR landing second). The 2026-09-18 amendment asks each new alert to name its signal class and show that no
+existing alert covers it.
+
+- **Signal class: a stateless per-bucket count over producer-anchored rows, graded on one field.**
+  It counts shipped `SOLEUR_ZOT_LOG` envelope rows (host-scoped) and `SOLEUR_ZOT_DISK` rows, each
+  anchored at offset 0 of the stored row, whose FIRST `clientIP` is address-shaped and outside
+  RFC1918. No sibling covers it: `registry_store_not_luks` grades two fields of one heartbeat head,
+  `monitor_send_failed` greps a marker class, and the absence alerts count silence. Here the
+  predicate is a value test on a producer-controlled field, and the producer's field order is part of
+  the contract.
+- **Why an alert and not a follow-through probe.** The CLO's condition (every observable `clientIP`
+  is RFC1918) must hold continuously. A probe's tracker closes on PASS and drops out of the sweeper's
+  14-day lookback (`CLOSED_LOOKBACK_DAYS`), so the dormant `zot-log-channel-7440.sh` regression arm
+  has not run since about 2026-08-27 (tracked as #10321). An alert has no tracker to close.
+- **Parameters.** `higher_than 0`, `check_period 300`, `query_period 900`, `confirmation_period 0`,
+  `recovery_period 1800`, `on_missing_data treat_as_zero` (silence is the heartbeats' job), declared
+  `paused = false` because the 7-day population is all-private. Detection, not prevention: up to about
+  20 minutes late, sampled over shipped rows only (the shipper rate-caps ordinary rows). The channel is
+  the sibling's: email on the free tier, no escalation policy. **Delivery state: the alert exists only
+  after the merge's push apply creates it, and it is not treated as an enforced invariant until the #7530
+  follow-through probe has graded the new boot's window.**
+- **Consumed contract.** The grade depends on zot writing `clientIP` before `method`, `path` and
+  `headers` and on the field name; `treat_as_zero` reads a renamed field as healthy forever, so the
+  drift guard (`apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh`) pins the
+  zot image digest the order was verified against and reds on a `zot_image_amd64` bump until the live
+  population check is re-run (ADR-184 records the producer side of this contract).
+- **Vendor-tier reality.** The free-tier alert-count cap remains unmeasured; a refusal at this count
+  is the measurement and would land here.
+- **Enforcement and runbook.** Both `-target=` lines sit in `apply-web-platform-infra.yml`'s MAIN plan
+  set; the guard carries mutation and must-pass rows run on copies. Runbook:
+  `knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md` (the alert is the
+  observable signature of the public-ingress re-evaluation trigger; the legal steps live there).
