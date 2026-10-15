@@ -57,8 +57,8 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-workspace-egress-audit-log-p
 
 ## Phase 6: Legal commits (last commits of the PR)
 
-- [ ] 6.1 CLO-reviewed wording in the privacy policy, acceptable-use policy, data-protection disclosure and GDPR policy, each mirrored under `plugins/soleur/docs/pages/legal/`
-- [ ] 6.2 Article 30 rows (PA-2, PA-8, processor capacity) and `compliance-posture.md` rows
+- [x] 6.1 CLO-reviewed wording in the privacy policy, acceptable-use policy, data-protection disclosure and GDPR policy, each mirrored under `plugins/soleur/docs/pages/legal/`
+- [x] 6.2 Article 30 rows (PA-2, PA-8, processor capacity) and `compliance-posture.md` rows
 
 ## Not in this PR
 
