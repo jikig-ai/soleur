@@ -435,13 +435,14 @@ assert "(hb-c) an empty URL keeps the existing WARN arm: zero heartbeat curls, n
 
 # (d) the refusal limiter: its OWN stamp, 3600 s, future-dated or garbage reads as emit, unwritable fails OPEN
 RS="$TMP/refusal.window"; rm -f "$RS"
-hb_sum_mark=0; hb_sum_warn=0; hb_sum_hb=0
+hb_sum_mark=0; hb_sum_warn=0; hb_sum_hb=0; hb_sum_badec=0
 for _ in 1 2 3 4; do
   run_hb "${HB_GOOD}\"" SOLEUR_PROBE_REFUSAL_MARKER="$RS"
   hb_sum_mark=$((hb_sum_mark + N_MARK)); hb_sum_warn=$((hb_sum_warn + N_WARN)); hb_sum_hb=$((hb_sum_hb + N_HB))
+  [[ "$HEC" -eq "$HB_BASE_EC" ]] || hb_sum_badec=$((hb_sum_badec + 1))
 done
-assert "(hb-d) four refused runs inside one window log ONE marker and ONE WARN, and make zero heartbeat curls" \
-  "[[ '$hb_sum_mark' -eq 1 && '$hb_sum_warn' -eq 1 && '$hb_sum_hb' -eq 0 && '$HEC' -eq '$HB_BASE_EC' ]]"
+assert "(hb-d) four refused runs inside one window log ONE marker and ONE WARN, make zero heartbeat curls, and EVERY run keeps the baseline exit status" \
+  "[[ '$hb_sum_mark' -eq 1 && '$hb_sum_warn' -eq 1 && '$hb_sum_hb' -eq 0 && '$hb_sum_badec' -eq 0 ]]"
 assert "(hb-d) the emit wrote the refusal stamp (a current epoch)" "[[ -n \"\$(hb_epoch_age '$RS')\" && \"\$(hb_epoch_age '$RS')\" -ge 0 && \"\$(hb_epoch_age '$RS')\" -lt 120 ]]"
 
 hb_aged_row() {  # <label> <seed: age in seconds | @future | @garbage | @empty> <expected markers> <stamp: rewritten|unchanged>
@@ -449,6 +450,7 @@ hb_aged_row() {  # <label> <seed: age in seconds | @future | @garbage | @empty> 
   case "$seed" in
     @future)  printf '%s\n' "$(( $(date +%s) + 99999 ))" > "$RS" ;;
     @garbage) printf 'not-an-epoch\n' > "$RS" ;;
+    @text:*)  printf '%s\n' "${seed#@text:}" > "$RS" ;;
     @empty)   : > "$RS" ;;
     *)        printf '%s\n' "$(( $(date +%s) - seed ))" > "$RS" ;;
   esac
@@ -465,8 +467,31 @@ hb_aged_row 'a stamp aged 2000 s still suppresses (the window is 3600 s, not the
 hb_aged_row 'a stamp aged 3700 s re-emits' 3700 1 rewritten
 hb_aged_row 'a future-dated stamp emits' @future 1 rewritten
 hb_aged_row 'a garbage stamp emits' @garbage 1 rewritten
+# Short stamps: shorter than the 10-character cap, so only the numeric guard (and the base-10 coercion) can judge them.
+hb_aged_row 'a 3-character non-numeric stamp (abc) emits' @text:abc 1 rewritten
+hb_aged_row 'a 4-character mixed stamp (12ab) emits' @text:12ab 1 rewritten
+hb_aged_row 'a leading-zero 9 stamp (0000000009, an invalid octal) is read as base 10 and emits' @text:0000000009 1 rewritten
+hb_aged_row 'a leading-zero 8 stamp (0000000008) is read as base 10 and emits' @text:0000000008 1 rewritten
+hb_aged_row 'an 11-digit stamp (longer than any epoch) emits' @text:12345678901 1 rewritten
 hb_aged_row 'an empty stamp emits' @empty 1 rewritten
 hb_aged_row 'a fresh stamp (control for the rows above) suppresses' 5 0 unchanged
+# Boundary rows at the exact edge of the 3600 s window. A run that straddles a clock-second tick would age the stamp by one
+# more second and move the edge under the assertion, so the helper re-seeds until a run began and ended inside one second.
+hb_exact_age_run() {  # <age seconds> -> a refused run against a stamp of exactly that age; HB_T0 = that second; rc 1 if no tick-free run in 5 tries
+  local age="$1" t0 t1
+  for _ in 1 2 3 4 5; do
+    t0="$(date +%s)"; printf '%s\n' "$((t0 - age))" > "$RS"
+    run_hb "${HB_GOOD}\"" SOLEUR_PROBE_REFUSAL_MARKER="$RS"
+    t1="$(date +%s)"; HB_T0="$t0"; [[ "$t0" == "$t1" ]] && return 0
+  done
+  return 1
+}
+hb_exact_age_run 3599; HB_EXACT_OK=$?
+assert "(hb-d) a stamp aged exactly 3599 s suppresses (one second inside the window): no marker, no WARN, zero heartbeat curls, stamp left alone" \
+  "[[ '$HB_EXACT_OK' -eq 0 && '$N_MARK' -eq 0 && '$N_WARN' -eq 0 && '$N_HB' -eq 0 && \"\$(cat '$RS')\" -eq '$((HB_T0 - 3599))' ]]"
+hb_exact_age_run 3600; HB_EXACT_OK=$?
+assert "(hb-d) a stamp aged exactly 3600 s emits (the window is closed at 3600: age < 3600 suppresses) and the stamp is rewritten to now" \
+  "[[ '$HB_EXACT_OK' -eq 0 && '$N_MARK' -eq 1 && '$N_WARN' -eq 1 && '$N_HB' -eq 0 && \"\$(cat '$RS')\" -eq '$HB_T0' ]]"
 
 # the refusal stamp is its OWN file: a fresh canary/per-repo stamp must not suppress the refusal marker, and vice versa
 HB_CAN="$TMP/canary.own"; HB_REP="$TMP/repos.own"; HB_REF="$TMP/refusal.own"; rm -f "$HB_REF"
@@ -504,11 +529,28 @@ HB_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
 hb_code() { sed 's/^[[:space:]]*#.*//' "$SUT"; }
 HB_CODE_TXT="$(hb_code)"
 hb_line_of() { grep -nF -e "$1" <<<"$HB_CODE_TXT" | head -1 | cut -d: -f1; }
-assert "(hb-s) the guard-class literal appears exactly once, on a non-comment line, before the single stdin url line" \
+assert "(hb-s) the guard-class literal is DEFINED (source order) before the single stdin url line, exactly once on a non-comment line" \
   "[[ \"\$(grep -cF -e '$HB_CLASS' <<<\"\$HB_CODE_TXT\")\" -eq 1 && \"\$(grep -cF -e 'url = \"' <<<\"\$HB_CODE_TXT\")\" -eq 1 && -n \"\$(hb_line_of '$HB_CLASS')\" && \"\$(hb_line_of '$HB_CLASS')\" -lt \"\$(hb_line_of 'url = \"')\" ]]"
 assert "(hb-s) _hb_curl is defined once and called twice (one fresh process substitution per attempt)" "[[ \"\$(hb_code | grep -oE '_hb_curl' | wc -l)\" -eq 3 ]]"
 assert "(hb-s) the heartbeat curl keeps -g and the --disable --noproxy '*' confinement" \
   "[[ \"\$(hb_code | grep -cF -e \"curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config -\")\" -eq 1 ]]"
+
+# REAL-curl smoke. Every row above runs a stub curl, which accepts any argv, so a flag the real curl rejects (exit 2,
+# "curl: option ...") would pass them all. Extract the SUT's own _hb_curl definition and run it against the real curl at a
+# closed port: a well-formed argv gets as far as the connect and fails with rc 7; a rejected option gives rc 2. The
+# definition silences curl's stderr, so a second copy with that redirect removed shows the text itself.
+HB_DEF="$TMP/hb_curl.def"; HB_DEF_LOUD="$TMP/hb_curl_loud.def"
+sed -n '/^_hb_curl()/p' "$SUT" > "$HB_DEF"
+sed 's| 2>/dev/null||' "$HB_DEF" > "$HB_DEF_LOUD"
+SMOKE_RC="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \$?" _ "$HB_DEF" 2>&1)"
+SMOKE_TXT="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \"rc=\$?\"" _ "$HB_DEF_LOUD" 2>&1)"
+assert "(hb-smoke) the extracted _hb_curl definition is one non-empty line and the stderr-visible copy differs from it" \
+  "[[ \"\$(wc -l < '$HB_DEF')\" -eq 1 && -s '$HB_DEF' ]] && ! cmp -s '$HB_DEF' '$HB_DEF_LOUD'"
+assert "(hb-smoke) the curl on the test shell's PATH is the real one, not the stub" \
+  "[[ \"\$(command -v curl)\" != '$TMP/stubbin/curl' && -x \"\$(command -v curl)\" ]]"
+assert "(hb-smoke) the real curl accepts the argv: exit 7 (connection refused), never 2 (option rejected)" "[[ '$SMOKE_RC' == 7 ]]"
+assert "(hb-smoke) the real curl's own message is a connect failure, with no 'curl: option' and no '(2)' text" \
+  "grep -qF '(7)' <<<\"\$SMOKE_TXT\" && ! grep -qF -e 'curl: option' -e '(2)' <<<\"\$SMOKE_TXT\""
 
 # --- static drift-guard: doppler-auth unit-start contract + observability delivery --------
 # (#6438 §1 unit-start fix.) The unit runs `doppler run` as ROOT. Without Environment=HOME=/root
@@ -1222,11 +1264,11 @@ echo
 echo "=== $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor (ADR-193): a disarmed assert() or a skipped block must not read as green. Raise it in
 # the SAME edit that adds rows; it is reported with printf, never through assert().
-# 375 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
-# a box without terraform floors at the count WITHOUT them (372) and must not read as a disarmed suite. The threshold
+# 391 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
+# a box without terraform floors at the count WITHOUT them (388) and must not read as a disarmed suite. The threshold
 # literal sits directly above the `if` (scripts/guard-vacuity-floor.test.sh builds its mutant from that adjacency);
 # the stricter full count applies in a SECOND check wherever terraform ran, so no row can be deleted behind slack.
-MIN_ASSERTS=372
+MIN_ASSERTS=388
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
   printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
   exit 1

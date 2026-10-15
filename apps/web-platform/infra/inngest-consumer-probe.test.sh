@@ -304,7 +304,7 @@ printf '%s' '{"data":{"functions":[{"id":"cron-daily-triage"}]}}' > "$HB_FX"
 HB_FX_FAIL="$TMP/hb_registry_fail.json"
 printf '%s' '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}' > "$HB_FX_FAIL"
 
-# run_hb <url value> [ENV=val ...] -> TEC / N_ARGV / N_STDIN_OK / N_MARK / CURL_LOG / HB_OUT. A fresh
+# run_hb <url value> [ENV=val ...] -> TEC / N_ARGV / N_STDIN_OK / N_MARK / N_WARN / CURL_LOG / HB_OUT. A fresh
 # fault stamp and a fresh refusal stamp per run unless the caller overrides them (later env wins).
 run_hb() {
   local url="$1" ec=0 f; shift
@@ -320,6 +320,7 @@ run_hb() {
   TEC=$ec
   N_ARGV="$(grep -c . "$CURL_LOG" || true)"
   N_MARK="$(grep -c 'SOLEUR_CREDENTIAL_REFUSED' "$HB_OUT" || true)"
+  N_WARN="$(grep -c 'heartbeat URL refused' "$HB_OUT" || true)"
   N_STDIN_OK=0
   for f in "$CURL_LOG".stdin.*; do
     [[ -e "$f" ]] || continue
@@ -328,6 +329,8 @@ run_hb() {
 }
 GOOD='https://uptime.betterstack.test/api/v1/heartbeat/synthetic-token'
 GOOD_REST="${GOOD#https://}"
+# The credential is the URL's PATH: its last segment is the bare secret token no output line may ever carry.
+GOOD_TOKEN="${GOOD##*/}"
 DIFF_URL='https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q'
 ARGV_FORM='--disable --noproxy * -gfsS -m 10 -o /dev/null --config -'
 
@@ -384,10 +387,10 @@ for h in "${HOSTILE[@]}"; do
   hostile_value "$h"
   run_hb "$HV"
   HOSTILE_RAN=$((HOSTILE_RAN + 1))
-  assert "guard refuses $h: zero heartbeat curls, exactly one marker, exit status unchanged (0)" \
-    "[[ '$N_ARGV' -eq 0 && '$N_MARK' -eq 1 && '$TEC' -eq 0 ]]"
-  assert "guard refuses $h: marker names reason=$HR and the variable, never the value" \
-    "grep -q 'SOLEUR_CREDENTIAL_REFUSED script=inngest-consumer-probe reason=$HR var=INNGEST_CONSUMER_URL\$' '$HB_OUT' && ! grep -q -e 'betterstack' -e '203\\.0\\.113' '$HB_OUT'"
+  assert "guard refuses $h: zero heartbeat curls, exactly one marker and one WARN, exit status unchanged (0)" \
+    "[[ '$N_ARGV' -eq 0 && '$N_MARK' -eq 1 && '$N_WARN' -eq 1 && '$TEC' -eq 0 ]]"
+  assert "guard refuses $h: marker line is exactly reason=$HR and the variable; neither the value, its host nor its bare secret path token is echoed" \
+    "grep -qxF 'SOLEUR_CREDENTIAL_REFUSED script=inngest-consumer-probe reason=$HR var=INNGEST_CONSUMER_URL' '$HB_OUT' && ! grep -qF -e 'betterstack' -e '$GOOD_TOKEN' -e '203.0.113' '$HB_OUT'"
 done
 assert "every one of the 16 hostile entries was exercised" "[[ '$HOSTILE_RAN' -eq 16 ]]"
 # the empty-URL arm is the pre-existing WARN (not a refusal): zero curls, no marker, same text
@@ -397,14 +400,16 @@ assert "empty URL: the existing WARN arm, zero curls, no marker, exit 0" \
 
 # (d) refusal limiter: its OWN stamp, a 3600 s window, fail-open
 RSTAMP="$TMP/hb_refusal_limiter.stamp"
-rm -f "$RSTAMP"; MARKS=0
+rm -f "$RSTAMP"; MARKS=0; WARNS=0; CURLS=0; BAD_EC=0
 for _ in 1 2 3 4; do
   run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
-  MARKS=$((MARKS + N_MARK))
+  MARKS=$((MARKS + N_MARK)); WARNS=$((WARNS + N_WARN)); CURLS=$((CURLS + N_ARGV))
+  [[ "$TEC" -eq 0 ]] || BAD_EC=$((BAD_EC + 1))
 done
 assert "limiter: four refused runs inside one window log exactly ONE marker" "[[ '$MARKS' -eq 1 ]]"
-assert "limiter: every refused run still made zero curls (the limiter governs the line, never the decision)" \
-  "[[ '$N_ARGV' -eq 0 && '$TEC' -eq 0 ]]"
+assert "limiter: four refused runs inside one window log exactly ONE refusal WARN (the WARN sits inside the limiter with the marker)" "[[ '$WARNS' -eq 1 ]]"
+assert "limiter: every one of the four refused runs made zero curls and exited 0 (the limiter governs the line, never the decision)" \
+  "[[ '$CURLS' -eq 0 && '$BAD_EC' -eq 0 ]]"
 NOW="$(date +%s)"
 printf '%s\n' "$((NOW - 2000))" > "$RSTAMP"
 run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
@@ -420,6 +425,36 @@ assert "limiter: a future-dated stamp is rewritten to the present" "[[ \"\$(cat 
 printf '%s\n' 'not-a-number' > "$RSTAMP"
 run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
 assert "limiter: a garbage stamp emits" "[[ '$N_MARK' -eq 1 ]]"
+# Boundary rows at the exact edge of the 3600 s window. A run that straddles a clock-second tick would age the
+# stamp by one more second and move the edge under the assertion, so the helper re-seeds until a run began and
+# ended inside one second (the age the SUT saw is then exactly the age seeded).
+hb_exact_age_run() {  # <age seconds> -> a refused run against a stamp of exactly that age; rc 1 if no tick-free run in 5 tries
+  local age="$1" t0 t1
+  HB_T0=0
+  for _ in 1 2 3 4 5; do
+    t0="$(date +%s)"; printf '%s\n' "$((t0 - age))" | tee "$RSTAMP" >/dev/null
+    run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
+    t1="$(date +%s)"; HB_T0="$t0"; [[ "$t0" == "$t1" ]] && return 0
+  done
+  return 1
+}
+hb_exact_age_run 3599; EXACT_OK=$?
+assert "limiter: a stamp aged exactly 3599 s still suppresses (one second inside the window): no marker, no WARN, stamp untouched" \
+  "[[ '$EXACT_OK' -eq 0 && '$N_MARK' -eq 0 && '$N_WARN' -eq 0 && \"\$(cat '$RSTAMP')\" -eq '$((HB_T0 - 3599))' ]]"
+hb_exact_age_run 3600; EXACT_OK=$?
+assert "limiter: a stamp aged exactly 3600 s emits (the window is half-open: age < 3600 suppresses) and the stamp is rewritten to now" \
+  "[[ '$EXACT_OK' -eq 0 && '$N_MARK' -eq 1 && '$N_WARN' -eq 1 && \"\$(cat '$RSTAMP')\" -eq '$HB_T0' ]]"
+# Stamp normalisation (the same as the zot and nic limiters): a leading-zero 8 or 9 must not be read as an invalid octal
+# (the old arithmetic aborted the enclosing command, and the run fell through to a FALSE empty-registry fault line),
+# an 11+ digit stamp reads as emit (it is longer than any epoch), and every one of them is rewritten on emit.
+for seed in 0000000008 0000000009 12345678901 1234567890123456 99999999999999999999; do
+  printf '%s\n' "$seed" > "$RSTAMP"
+  run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
+  assert "limiter: a stamp of $seed reads as emit: one marker, zero curls, exit 0, stamp rewritten to a current epoch" \
+    "[[ '$N_MARK' -eq 1 && '$N_ARGV' -eq 0 && '$TEC' -eq 0 && \"\$(cat '$RSTAMP')\" =~ ^[0-9]{10}\$ && \"\$(cat '$RSTAMP')\" -ge '$NOW' ]]"
+  assert "limiter: a stamp of $seed leaves no shell arithmetic error and no false registry fault line in the run output" \
+    "! grep -qE -e 'value too great|syntax error|EMPTY REGISTRY|UNREACHABLE' '$HB_OUT'"
+done
 # own-stamp rows: the refusal stamp is NOT the fault stamp, in either direction
 FSTAMP="$TMP/hb_fault_limiter.stamp"
 rm -f "$RSTAMP"; printf '%s\n' "$NOW" > "$FSTAMP"
@@ -427,11 +462,16 @@ run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP" "SOLEUR_INNG
 assert "own stamp: a fresh fault stamp does NOT suppress the refusal marker" "[[ '$N_MARK' -eq 1 ]]"
 assert "own stamp: a refusal never writes the fault stamp" "[[ \"\$(cat '$FSTAMP')\" == '$NOW' ]]"
 assert "own stamp: the refusal wrote its own stamp file" "[[ -s '$RSTAMP' ]]"
-rm -f "$FSTAMP"
+# the other direction: a refusal that REALLY ran (bad URL, healthy registry) writes the refusal stamp; a later run whose
+# registry is dark (a fault line, and the ping arm is never reached) must still emit its fault line past that fresh stamp
+rm -f "$FSTAMP" "$RSTAMP"
+run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP" "SOLEUR_INNGEST_CONSUMER_FAULT_MARKER=$FSTAMP"
+assert "own stamp: the refusal path executed (a bad URL, a healthy registry: one marker) and wrote a fresh refusal stamp but no fault stamp" \
+  "[[ '$N_MARK' -eq 1 && -s '$RSTAMP' && ! -e '$FSTAMP' ]]"
 run_hb "$GOOD" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP" "SOLEUR_INNGEST_CONSUMER_FAULT_MARKER=$FSTAMP" \
   "INNGEST_PROBE_FUNCTIONS_FIXTURE=$HB_FX_FAIL"
 assert "own stamp: a fresh refusal stamp does NOT suppress a fault line (a refusal must not mask a fault)" \
-  "grep -q 'UNREACHABLE' '$HB_OUT'"
+  "[[ '$N_MARK' -eq 0 && '$N_ARGV' -eq 0 ]] && grep -q 'UNREACHABLE' '$HB_OUT'"
 # unwritable stamp path: fails OPEN (emit on every run), exit status unchanged
 BADSTAMP="$TMP/no-such-dir/sub/refusal.stamp"
 MARKS=0
@@ -440,6 +480,23 @@ for _ in 1 2; do
   MARKS=$((MARKS + N_MARK))
 done
 assert "limiter: an UNWRITABLE stamp path fails OPEN (the marker emits on every run)" "[[ '$MARKS' -eq 2 && '$TEC' -eq 0 ]]"
+
+# (e) REAL-curl smoke. Every row above runs a stub curl, which accepts any argv, so a flag the real curl rejects (exit 2,
+# "curl: option ...") would pass them all. Extract the SUT's own _hb_curl definition and run it against the real curl at a
+# closed port: a well-formed argv gets as far as the connect and fails with rc 7; a rejected option gives rc 2. The
+# definition silences curl's stderr, so a second copy with that redirect removed shows the text itself.
+HB_DEF="$TMP/hb_curl.def"; HB_DEF_LOUD="$TMP/hb_curl_loud.def"
+sed -n '/^_hb_curl()/p' "$SUT" > "$HB_DEF"
+sed 's| 2>/dev/null||' "$HB_DEF" > "$HB_DEF_LOUD"
+SMOKE_RC="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \$?" _ "$HB_DEF" 2>&1)"
+SMOKE_TXT="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \"rc=\$?\"" _ "$HB_DEF_LOUD" 2>&1)"
+assert "smoke: the extracted _hb_curl definition is one non-empty line and the stderr-visible copy differs from it" \
+  "[[ \"\$(wc -l < '$HB_DEF')\" -eq 1 && -s '$HB_DEF' ]] && ! cmp -s '$HB_DEF' '$HB_DEF_LOUD'"
+assert "smoke: the real curl (not the stub) is first on PATH for the smoke run" \
+  "[[ \"\$(command -v curl)\" != '$HB_STUBDIR/curl' && -x \"\$(command -v curl)\" ]]"
+assert "smoke: the real curl accepts the argv: exit 7 (connection refused), never 2 (option rejected)" "[[ '$SMOKE_RC' == 7 ]]"
+assert "smoke: the real curl's own message is a connect failure, with no 'curl: option' and no '(2)' text" \
+  "grep -qF '(7)' <<<\"\$SMOKE_TXT\" && ! grep -qF -e 'curl: option' -e '(2)' <<<\"\$SMOKE_TXT\""
 
 # --- STATIC: unit contract (doppler-auth + observability delivery) ------------------------
 # Mirrors web-zot-consumer-probe.test.sh's block. The unit runs `doppler run` as ROOT, so
@@ -488,4 +545,12 @@ assert "the pre-existing inngest_heartbeat_url_prd still sources the ORIGINAL he
 
 echo
 echo "=== $PASS passed, $FAIL failed ==="
+# Anti-vacuity floor: a skipped block or a disarmed assert() must not read as green. Raise it in the SAME edit that adds
+# rows; it is reported with printf and exit, never through assert() (scripts/guard-vacuity-floor.test.sh builds its mutant
+# from the literal sitting directly above the `if`).
+MIN_ASSERTS=129
+if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
+  printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]
