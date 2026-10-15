@@ -69,7 +69,7 @@ unavailable() {
   # an unavailable run measured nothing, and a floor that cannot see that is decorative.
   # (This is also what lets the vacuity-guard mutation battery score the floor FIRES on a
   # non-sudo host — the neutered mutant exits here and the sentinel still prints.)
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 119. The suite exited before executing.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 118. The suite exited before executing.\n' "$executed" >&2
   exit 2
 }
 
@@ -700,6 +700,11 @@ render_reopen "$B3_BYID" "$B3_MNT" "$B3_FSTAB" "$TMPROOT/reopen-b3.sh"
 R_RC=0
 INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="$LUKS_ID" LIBMOUNT_FSTAB="$B3_FSTAB" bash "$TMPROOT/reopen-b3.sh" > "$TMPROOT/reopen-b3.log" 2>&1 || R_RC=$?
 if [ "$R_RC" -eq 0 ] && [ "$(backing_of inngest-redis)" = "$(basename "$L_RAW")" ]; then ok "BOOT2-PTR reboot reopens the volume as the canonical mapper"; else no "BOOT2-PTR rc=$R_RC canonical backing='$(backing_of inngest-redis)'"; sed -n '1,8p' "$TMPROOT/reopen-b3.log" >&2; fi
+if mountpoint -q "$B3_MNT"; then
+  if [ -f "$B3_MNT/canary" ]; then ok "BOOT2-PTR the store survives the reboot"; else no "BOOT2-PTR the reopened store is not the formatted one"; fi
+else
+  no "BOOT2-PTR the reopen did not leave the store mounted at $B3_MNT"
+fi
 # The reopen now also COMPLETES the mount (ensure_mount): register its mountpoint for teardown and
 # umount before the next arm — a mounted mapper refuses cryptsetup close.
 CLEAN_MOUNTS+=("$B3_MNT")
@@ -940,14 +945,19 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 # five, six, four and one), the BOOT2 rebind assert (+1) and SH1-SH6 (+20: six, three, two, two, three, four).
 # The two-volume callers were re-keyed to the one LUKS volume (L_RAW plays the store in every arm, including
 # W1's late-attaching link), and BOOT2-STG plus the "opens nothing else" staging-mapper row went with the
-# machinery they pinned. 82 + 16 + 1 + 20 = 119, PROJECTED the same way the 82 was — confirm against the
-# first CI run; if the measured count differs, account for it arm by arm before moving the literal.
-if [ "$executed" -lt 119 ]; then
+# machinery they pinned. 82 + 16 + 1 + 20 = 119, PROJECTED the same way the 82 was.
+#
+# FIRST PRIVILEGED CI RUN measured 116: the projected 119 double-counted a duplicated BOOT2-PTR block that
+# the merge left in (a stale 2-arg render_reopen arm that could only crash, removed in the resync fix) —
+# its mount/canary pair was netted against the restored survival assertions on the ensure_mount path. The
+# account: stale block carried reopen+mount+canary+absent = 4 assert sites, the dedup kept reopen + restored
+# canary/mount pair + absent-volume arm = 118 measured+restored. Floor moved to the MEASURED 118.
+if [ "$executed" -lt 118 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 119. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 118. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
   exit 1
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 119)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 118)\n' "$executed"
 fi
 
 echo ""
