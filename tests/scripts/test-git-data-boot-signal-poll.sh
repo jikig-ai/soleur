@@ -647,6 +647,68 @@ for _row in \
   if [[ "$_got" == "${_want_epoch}|${_want_rc}" ]]; then _report "$_label" ok; else _report "$_label" bad "got '$_got' want '${_want_epoch}|${_want_rc}'"; fi
 done
 
+# ── S24  (#10138, W5) the wipe job's boot_complete FIELD read: the query, its pins, and the pure verdict ─────
+d=$(mkshim s24 "$(spec '0|{"epoch":"1790000010","luks_mounted":"yes"}|')")
+in_step "$d" "git_data_boot_fields_read '$SANDBOX/s24.out' '$SANDBOX/s24.err' && echo F_RC=0 || echo F_RC=\$?" >/dev/null
+have    "S24a the field read ran and returned 0"                   "F_RC=0"
+_s24_fields_ok=1
+for _f in luks_mounted fence_on_mapper erasure_probe plaintext_empty served_repos plaintext_volume plaintext_journal; do
+  grep -qF "JSONExtractString(raw,'$_f')" "$d/sql" || _s24_fields_ok=0
+done
+if (( _s24_fields_ok )) && grep -qF "toUnixTimestamp(dt) AS epoch" "$d/sql"; then _report "S24b the SQL projects the epoch and all seven fields the wipe reads" ok
+else _report "S24b the SQL projects the epoch and all seven fields the wipe reads" bad "sql: $(tr '\n' ' ' < "$d/sql" | cut -c1-300)"; fi
+if grep -qF "stage') = 'boot_complete'" "$d/sql" && grep -qF "host_name') = 'soleur-git-data'" "$d/sql" && grep -qF "ORDER BY dt DESC LIMIT 1" "$d/sql"; then
+  _report "S24c the SQL reads the NEWEST boot_complete row of host_name=soleur-git-data" ok
+else _report "S24c the SQL reads the NEWEST boot_complete row of host_name=soleur-git-data" bad "sql: $(tr '\n' ' ' < "$d/sql" | cut -c1-300)"; fi
+if grep -qF "remote(\$BS_TABLE)" "$d/sql" && grep -qF "s3Cluster(primary, \$BS_TABLE_S3)" "$d/sql" && ! grep -qF "dt >" "$d/sql"; then
+  _report "S24d the SQL unions the hot and archive tables and has NO time anchor (the row is old by construction)" ok
+else _report "S24d the SQL unions the hot and archive tables and has NO time anchor" bad "sql: $(tr '\n' ' ' < "$d/sql" | cut -c1-300)"; fi
+if grep -q "wrong_table" "$d/tables"; then _report "S24e the library pins its OWN git-data tables for the field read" bad "wrong table reached the reader"
+else _report "S24e the library pins its OWN git-data tables for the field read" ok; fi
+if grep -qF -- "--only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD" "$d/doppler_argv" && grep -qF "DOPPLER_TOKEN=<unset> AWS_SECRET_ACCESS_KEY=<unset>" "$d/env"; then
+  _report "S24f the field read uses the same credential route and the same three-name scrub (no Doppler or R2 credential reaches the reader)" ok
+else _report "S24f the field read uses the same credential route and scrub" bad "argv: $(cat "$d/doppler_argv") env: $(cat "$d/env")"; fi
+in_step "$d" "git_data_boot_fields_read relative.out '$SANDBOX/e' && echo F_RC=0 || echo F_RC=\$?" >/dev/null
+have    "S24g a relative stdout target is refused (rc 78) with the caller's own label" "git_data_boot_fields_read: refusing a relative stdout target"
+_g='{"epoch":"1790000010","luks_mounted":"yes","fence_on_mapper":"yes","erasure_probe":"yes","plaintext_empty":"yes","served_repos":"0","plaintext_volume":"present","plaintext_journal":"dirty"}'
+_gj() { printf '%s' "$_g" | sed "s/\"plaintext_journal\":\"dirty\"/\"plaintext_journal\":\"$1\"/"; }
+_bad() { printf '%s' "$_g" | sed "s/\"$1\":\"[a-z0-9]*\"/\"$1\":\"$2\"/"; }
+_drop() { printf '%s' "$_g" | sed "s/\"$1\":\"[a-z0-9]*\",\{0,1\}//; s/,}/}/"; }
+for _row in \
+  "$_g|0|1790000000|ok plaintext_journal=dirty/0|S24h a fully good newest row passes and reports the journal state" \
+  "$(_gj clean)|0|1790000000|ok plaintext_journal=clean/0|S24i journal=clean passes too (it never gates)" \
+  "$(_drop plaintext_journal)|0|1790000000|ok plaintext_journal=unknown/0|S24j an absent journal field reads unknown, never gates" \
+  "$(_gj 'ev il;x')|0|1790000000|ok plaintext_journal=unknown/0|S24k an off-shape journal value is reported as unknown (no free text leaves the library)" \
+  "$_g|1|1790000000|wipe_boot_unreadable/2|S24l a failed read (rc 1) is unreadable even with good-looking rows" \
+  "|0|1790000000|wipe_boot_absent/1|S24m an answered read with no row is ABSENT, distinct from a failed read" \
+  "   |0|1790000000|wipe_boot_absent/1|S24n a whitespace-only answer is absent" \
+  "Code: 60. DB::Exception: boom|0|1790000000|wipe_boot_unreadable/2|S24o a bare exception line is unreadable, not absent" \
+  "$_g\nCode: 60. DB::Exception: boom|0|1790000000|wipe_boot_unreadable/2|S24p a good row followed by a mid-stream exception is a PARTIAL answer: unreadable" \
+  "{\"epoch\":\"1790000000\",\"luks_mounted\":\"yes\"}|0|1790000000|wipe_boot_predates_server/1|S24q a row at the server creation second belongs to the previous host (strict)" \
+  "{\"epoch\":\"1789999999\"}|0|1790000000|wipe_boot_predates_server/1|S24r a row before the server was created refuses" \
+  "{\"luks_mounted\":\"yes\"}|0|1790000000|wipe_boot_unreadable/2|S24s a row with no epoch is unreadable" \
+  "$_g|0||wipe_boot_unreadable/2|S24t a missing server created epoch is unreadable" \
+  "$_g|0|soon|wipe_boot_unreadable/2|S24u a non-numeric server created epoch is unreadable" \
+  "$(_bad luks_mounted no)|0|1790000000|wipe_boot_field_luks_mounted/1|S24v luks_mounted=no refuses and names the field" \
+  "$(_bad fence_on_mapper no)|0|1790000000|wipe_boot_field_fence_on_mapper/1|S24w fence_on_mapper=no refuses" \
+  "$(_bad erasure_probe maybe)|0|1790000000|wipe_boot_field_erasure_probe/1|S24x a third value is not yes" \
+  "$(_bad plaintext_empty no)|0|1790000000|wipe_boot_field_plaintext_empty/1|S24y plaintext_empty=no refuses" \
+  "$(_bad served_repos 3)|0|1790000000|wipe_boot_field_served_repos/1|S24z served_repos=3 refuses" \
+  "$(_bad served_repos '')|0|1790000000|wipe_boot_field_served_repos/1|S24za served_repos empty refuses" \
+  "$(_bad plaintext_volume absent)|0|1790000000|wipe_boot_field_plaintext_volume/1|S24zb plaintext_volume=absent (never attached to this instance) refuses" \
+  "$(_drop luks_mounted)|0|1790000000|wipe_boot_field_luks_mounted/1|S24zc a MISSING required field refuses (luks_mounted)" \
+  "$(_drop served_repos)|0|1790000000|wipe_boot_field_served_repos/1|S24zd a MISSING required field refuses (served_repos)" \
+  "$(_bad luks_mounted no | sed 's/"served_repos":"0"/"served_repos":"9"/')|0|1790000000|wipe_boot_field_luks_mounted/1|S24ze two bad fields: the first in roster order is named" \
+  "$_g\n$(_bad luks_mounted no)|0|1790000000|ok plaintext_journal=dirty/0|S24zf only the FIRST (newest) row decides: an older bad row behind a good one" \
+  "$(_bad luks_mounted no)\n$_g|0|1790000000|wipe_boot_field_luks_mounted/1|S24zg only the FIRST (newest) row decides: a bad newest row over an older good one" \
+  '{"plaintext_volume":"present","served_repos":0,"zzz":{"a":[1]},"plaintext_empty":"yes","erasure_probe":"yes","fence_on_mapper":"yes","luks_mounted":"yes","epoch":1790000010,"note":"CANARY-f00d"}|0|1790000000|ok plaintext_journal=unknown/0|S24zh (must-PASS) another key order, a numeric epoch and served_repos 0, extra fields, no journal'; do
+  IFS='|' read -r _r _rc _c _want _label <<<"$_row"
+  _got="$(in_step "$d" "t=\$(git_data_boot_fields_verdict '$_rc' '$(printf '%b' "$_r")' '$_c') && r=0 || r=\$?; echo \"V=\$t/\$r\"" >/dev/null; sed -n 's/^V=//p' "$SANDBOX/out")"
+  if [[ "$_got" == "$_want" ]]; then _report "$_label" ok; else _report "$_label" bad "got '$_got' want '$_want'"; fi
+done
+if grep -qF "CANARY" "$SANDBOX/out"; then _report "S24zi no field value from the row is echoed (the canary in an extra field never reaches the output)" bad "canary printed"
+else _report "S24zi no field value from the row is echoed (the canary in an extra field never reaches the output)" ok; fi
+
 # ── Assertion count: EXACT, printf + exit, never through the helper it backstops ──
 _total=$((pass + fail))
 # RAISED 146 -> 184 (#8211), ITEMISED:
@@ -665,7 +727,10 @@ _total=$((pass + fail))
 # RAISED 186 -> 213 (#10175), ITEMISED: 7 S23a-g the freshness read's SQL, pins, credential route and
 #     relative-target refusal; 11 S23h-r the freshness verdicts (strict boundary both sides, unreadable arms,
 #     newest row decides); 9 S23s-za the Hetzner created parse (one server only, decoy, key order).
-_EXACT=216
+# RAISED 216 -> 251 (#10138), ITEMISED: 7 S24a-g the wipe field read's SQL, pins, credential route and relative-target
+#     refusal; 27 S24h-zh the pure verdict (ok + journal reporting, absent vs unreadable, strict freshness, each required
+#     field wrong or missing, newest row decides, a must-PASS shape); 1 S24zi no row value is echoed.
+_EXACT=251
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' "$_total" "$_EXACT" >&2
   exit 1
