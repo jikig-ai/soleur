@@ -7,7 +7,7 @@ status: draft-requires-counsel-review
 addendum_to: "knowledge-base/legal/audits/2026-10-05-dpia-screening-agent-web-egress.md"
 processing_activity: "Article 30 register Processing Activity 2 — Conversation Data, opt-in web-egress sub-purpose (#9534), extended by the PR1 egress audit rollup store (#9545). A dedicated register row is proposed in the PR1 legal commits, not asserted here."
 conclusion: "PR1 as designed (dark pipeline, no member read, no external-workspace collection): a full DPIA is NOT required on the facts as designed, PROVISIONAL. The facts of the 2026-10-05 memo are changed. WP248 criterion 3 (systematic monitoring) is now partly engaged alongside the memo's partly-engaged innovative-technology criterion, so the WP248 'two criteria' threshold is reached in the partial sense. The full t6 re-screen is a PR2 merge gate and must treat a full DPIA as a live outcome. New trigger t7 pinned."
-plan: "knowledge-base/project/plans/2026-10-15-feat-workspace-egress-audit-log-plan.md"
+plan: "knowledge-base/project/plans/archive/20261015-142700-2026-10-15-feat-workspace-egress-audit-log-plan.md"
 final_pipeline_addendum: "section 11 (Addendum, 2026-10-15): reconciliation with the final pipeline and the Phase 0 measurements; supersedes the design-statement wording of sections 2 (attribution paragraph), 3 (Art. 35(3)(b) row), 4 (provisional paragraph) and 7 as marked there"
 pr: "10349 (draft, unmerged)"
 related:
