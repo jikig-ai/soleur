@@ -263,9 +263,8 @@ copy has nowhere to land. The dated history of the verb stays in ADR-142.
 **The live LUKS volume `hcloud_volume.inngest_redis_luks` (id 106903269) is now the only copy of the Inngest queue and run
 state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is the only opener the host reads; an independent
 copy of the passphrase exists in Terraform state.** Losing the volume, or both copies of the passphrase, is data loss with
-nothing to restore from. Protection for that (delete protection, edge pins, key-loss posture) is built by
-#9879 (PR #9925, ADR-282) and described in §5c; it is in force only once that PR is merged, its apply has landed and the
-§5c read-back returns `protected`, so do not assume it exists before then.
+nothing to restore from. Protection for that (delete protection, edge pins, key-loss posture) was built by
+#9879 (PR #9925, ADR-282, accepted 2026-10-15) and is described in §5c.
 
 **Signals that used to mean "the store went back to plaintext" are now incidents, not rollbacks.** The wrong-volume
 alert (`logtail_exploration_alert.inngest_luks_wrong_volume`), a probe row whose `data_mount_src` is not
@@ -327,8 +326,7 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
 
 - After retirement the live LUKS volume is the only copy of the store and `INNGEST_REDIS_LUKS_KEY` in Doppler
   `soleur-inngest/prd` is the only opener the host reads; an independent copy of the passphrase exists in Terraform state
-  (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 and takes
-  effect on the merge of PR #9925 and its apply).
+  (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 (accepted 2026-10-15)).
 - The dead on-host `rollback)` arm in `inngest-luks-cutover.sh`, its FSM comments and fixtures, and the dead
   plaintext-resolver arm in `cloud-init-inngest.yml` leave at the next planned Inngest host replace (#9786).
 
@@ -336,9 +334,9 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
 
 ## 5c. Sole-copy protection and key loss
 
-**Status: adopting (#9879, PR #9925, ADR-282).** Everything below that says a protection "is in force" becomes true only
-when the PR is merged, the merge's per-merge apply has landed one in-place update on `hcloud_volume.inngest_redis_luks`,
-and the read-back below has returned `protected`. Until then treat the live volume as unprotected (as §5a said).
+**Status: accepted 2026-10-15 (#10018, ADR-282).** The read-back below returned protected on 2026-10-15 (evidence: ADR-282,
+Addendum 2026-10-15). It is a point-in-time check of the delete-protection flag; re-run it after any infra-path merge and
+after a sanctioned lift (each step below says what it expects).
 
 **What is pinned, and what is not.** The volume, the passphrase pair and the two Doppler cascade parents carry
 `prevent_destroy`; the volume also carries Hetzner delete protection. The attachment is deliberately NOT pinned, because
