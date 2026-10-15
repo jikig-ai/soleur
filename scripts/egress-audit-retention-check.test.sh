@@ -143,6 +143,7 @@ if [[ "$(cat "$ROOT/url.log")" == *"workspace_id=in.($CANARY,$CANARY2)"* ]]; the
 PAT="$(printf '%s' "$GWSQL" | sed -n "s/.*match(raw, '\([^']*\)').*/\1/p")"
 if [[ "$PAT" == *'\'* ]]; then fail "the status pattern has no backslash (ClickHouse string-literal escaping is not modelled here)"; else pass "the status pattern has no backslash (ClickHouse string-literal escaping is not modelled here)"; fi
 if python3 -c 'import re,sys; p=sys.argv[1]; ok=all(re.search(p,l) for l in (r"{\"workspace\":\"w\",\"status\":\"200\"}", r"{\\\"status\\\":\\\"503\\\"}")) and not any(re.search(p,l) for l in (r"{\"status\":\"407\"}", r"{\"status\":\"2000\"}x" if False else r"{\"status\":\"418\"}")); sys.exit(0 if ok else 1)' "$PAT"; then pass "the status pattern matches plain and escaped rows and not 407 or 418"; else fail "the status pattern matches plain and escaped rows and not 407 or 418 (pattern: $PAT)"; fi
+if [[ "$GWSQL" == *"JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-egress-gw'"* ]]; then pass "the query selects the gateway by its container field, not by substring"; else fail "the query selects the gateway by its container field, not by substring"; fi
 if [[ "$GWSQL" != *"[0-9a-f]{8}-"* ]]; then pass "the query no longer matches every UUID-shaped row"; else fail "the query no longer matches every UUID-shaped row"; fi
 
 echo "-- credential hygiene --"
@@ -154,8 +155,8 @@ run 78 "refuses to run under shell tracing while the key is set" SHELLOPTS=xtrac
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
-if [[ $((PASS + FAIL)) -lt 38 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 38.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 39 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 39.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

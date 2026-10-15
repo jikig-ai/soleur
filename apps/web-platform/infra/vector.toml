@@ -949,7 +949,6 @@ ws = string(.tags.key) ?? "unknown"
 n = to_int(.counter.value) ?? 0
 . = {
   "message": "SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=" + ws + " discarded_total=" + to_string(n),
-  "SYSLOG_IDENTIFIER": "vector-egress-audit",
   "PRIORITY": "4"
 }
 '''
@@ -969,7 +968,6 @@ source = '''
 n = to_int(.counter.value) ?? 0
 . = {
   "message": "SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=" + to_string(n),
-  "SYSLOG_IDENTIFIER": "vector-egress-audit",
   "PRIORITY": "4"
 }
 '''

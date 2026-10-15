@@ -509,7 +509,7 @@ extract_from = "egress_audit_throttled_dedupe"
 [[tests.outputs.conditions]]
 type = "vrl"
 source = '''
-.message == "SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=11111111-2222-4333-8444-555555555555 discarded_total=7" && .SYSLOG_IDENTIFIER == "vector-egress-audit"
+.message == "SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=11111111-2222-4333-8444-555555555555 discarded_total=7"
 '''
 
 
@@ -605,7 +605,7 @@ extract_from = "egress_audit_throttled_dedupe"
 [[tests.outputs.conditions]]
 type = "vrl"
 source = '''
-.message == "SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=42" && .SYSLOG_IDENTIFIER == "vector-egress-audit"
+.message == "SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=42"
 '''
 
 

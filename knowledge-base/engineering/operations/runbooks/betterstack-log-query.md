@@ -1177,7 +1177,7 @@ lines is the expected state. The alerts themselves are tracked on #10195.
 The egress gateway's decision log is also rolled up in Vector into per-workspace 15-minute buckets and posted to the app (dark until the
 `egress-audit-collection` flag is on for the workspace's organisation). One marker reaches Better Stack, through the PII-scrub chain:
 
-- `SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=<uuid> discarded_total=<n>` (`SYSLOG_IDENTIFIER=vector-egress-audit`): the workspace exceeded
+- `SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=<uuid> discarded_total=<n>`: the workspace exceeded
   1,000 gateway events in 15 minutes and Vector discarded the excess from the rollup (the raw gateway log is unaffected). `<n>` is Vector's
   lifetime counter since its last restart. Query it with
   `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_EGRESS_AUDIT_THROTTLED`.
