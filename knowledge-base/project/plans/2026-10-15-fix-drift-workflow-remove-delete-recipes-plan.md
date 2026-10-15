@@ -238,16 +238,16 @@ Path-glob check: no globs prescribed; all four edited paths verified to exist vi
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `grep -nE -- '-X[[:space:]]*(DELETE|PUT|POST|PATCH)|--request' .github/workflows/scheduled-terraform-drift.yml` returns no line that is inside an issue-body `echo` (the whole-file count of `-X DELETE` is 0).
-- [ ] AC2: `grep -nE 'doppler[[:space:]]+(configs|environments|projects)[[:space:]]+delete' .github/workflows/scheduled-terraform-drift.yml` returns 0 lines.
-- [ ] AC3: each of the two filers' rendered bodies still contains the label_selector `for k in servers volumes ssh_keys firewalls` loop with `app%3Dsoleur-rung2-rehearsal` / `app%3Dsoleur-inngest-provision-rehearsal` respectively, a `# READ-ONLY:` comment, the `teardown_only=true` dispatch sentence, the Better Stack/LUKS-key warning (rung-2) and the "Auto-created by" footer.
-- [ ] AC4: neither body contains "the exact calls are", "reclaimed by the API directly" or "reclaim it by the API directly" (`git grep` over the workflow returns 0).
-- [ ] AC5: `bash -n` passes on both filers' extracted `run:` bodies; `python3 -c 'import yaml;yaml.safe_load(open(".github/workflows/scheduled-terraform-drift.yml"))'` exits 0.
-- [ ] AC6: the new guard section in `token-drift-workflow-causes.test.sh` is RED on the pre-edit workflow (Phase 1 evidence pasted in the PR body) and GREEN after Phase 2; its mutation row proves RED on injected `-X DELETE` and `doppler configs delete`, and GREEN on the comment-only and non-Hetzner `gh api -X POST` inputs.
-- [ ] AC7: the suite's anti-vacuity floor, its FATAL message and its comment name the same number, equal to the realized `PASS+FAIL` printed by the run.
-- [ ] AC8: ADR-282 residual bullet no longer claims the drift workflow prints runnable DELETE recipes in the present tense and cites #9927 item 8c; ADR status unchanged; runbook line no longer says "the filed issue prints the exact calls".
-- [ ] AC9: the targeted suites in Phase 4 all pass; `python3 scripts/lint-guard-contract.py` passes on this plan.
-- [ ] AC10: PR body/title/commits contain "Ref #9927" and no closing keyword (`Closes|Fixes|Resolves`) for #9927.
+- [x] AC1: `grep -nE -- '-X[[:space:]]*(DELETE|PUT|POST|PATCH)|--request' .github/workflows/scheduled-terraform-drift.yml` returns no line that is inside an issue-body `echo` (the whole-file count of `-X DELETE` is 0).
+- [x] AC2: `grep -nE 'doppler[[:space:]]+(configs|environments|projects)[[:space:]]+delete' .github/workflows/scheduled-terraform-drift.yml` returns 0 lines.
+- [x] AC3: each of the two filers' rendered bodies still contains the label_selector `for k in servers volumes ssh_keys firewalls` loop with `app%3Dsoleur-rung2-rehearsal` / `app%3Dsoleur-inngest-provision-rehearsal` respectively, a `# READ-ONLY:` comment, the `teardown_only=true` dispatch sentence, the Better Stack/LUKS-key warning (rung-2) and the "Auto-created by" footer.
+- [x] AC4: neither body contains "the exact calls are", "reclaimed by the API directly" or "reclaim it by the API directly" (`git grep` over the workflow returns 0).
+- [x] AC5: `bash -n` passes on both filers' extracted `run:` bodies; `python3 -c 'import yaml;yaml.safe_load(open(".github/workflows/scheduled-terraform-drift.yml"))'` exits 0.
+- [x] AC6 (superseded by the review round, see Implementation Outcome): the new guard section in `token-drift-workflow-causes.test.sh` is RED on the pre-edit workflow (Phase 1 evidence pasted in the PR body) and GREEN after Phase 2; its mutation row proves RED on injected `-X DELETE` and `doppler configs delete`, and GREEN on the comment-only and non-Hetzner `gh api -X POST` inputs.
+- [x] AC7: the suite's anti-vacuity floor, its FATAL message and its comment name the same number, equal to the realized `PASS+FAIL` printed by the run.
+- [x] AC8: ADR-282 residual bullet no longer claims the drift workflow prints runnable DELETE recipes in the present tense and cites #9927 item 8c; ADR status unchanged; runbook line no longer says "the filed issue prints the exact calls".
+- [x] AC9: the targeted suites in Phase 4 all pass; `python3 scripts/lint-guard-contract.py` passes on this plan.
+- [x] AC10: PR body/title/commits contain "Ref #9927" and no closing keyword (`Closes|Fixes|Resolves`) for #9927.
 
 ### Post-merge
 
@@ -313,3 +313,12 @@ Product/UX Gate: not relevant (no UI surface). GDPR gate: no regulated-data surf
 - New prose must not spell the destroy command it replaces, or the guard fires on the prose (`doppler ... delete`, `-X DELETE`). The CTO text avoids it; keep it that way when rewording.
 - `echo "..."` lines containing backticks or `$` need the same escaping the neighbouring lines use; `bash -n` on the extracted bodies is the check, and a column-0 line breaks the YAML block.
 - The anti-vacuity floor in the test file is edited in three places (guard, FATAL message, comment) and must name the realized number.
+
+## Implementation Outcome (added at QA, 2026-10-15)
+
+The shipped guard differs from the Guard Contract above; the contract text is kept as history.
+
+- **Final design (R1-R5, `token-drift-workflow-causes.test.sh`).** The scan reads every string leaf of every step, job-level key and workflow-level key, in a joined and a flattened form, ungated by a same-step Hetzner mention for method flags, `hcloud` write verbs and Doppler delete/destroy/revoke (body flags stay scoped to a Hetzner/Doppler API step). A filer must assemble its body inline. The mutation table (53 per-spelling rows, plus a verdict-rule control) runs in-process off the same code; floor 61 to 163.
+- **Superseded plan rows.** Comment-only input is now flagged (RED), not GREEN: comment stripping was dropped because a match in a comment can only false-RED and a `#` line in a heredoc is printed content (security, structural and simplicity seats). A non-Hetzner `gh api -X POST` is flagged only when it carries a non-GET explicit method on this workflow, which has none today; the unscoped method check replaced the per-step Hetzner gate. AC6's "GREEN on the comment-only input" no longer holds by design.
+- **Docs beyond the plan.** The reclaim procedure for state-forgotten survivors now lives in `inngest-provision-rehearsal.md` ("Reclaiming survivors that state forgot"), bounded by name for Doppler objects, with a per-item live-state read, HTTP 200 on the listing, per-command owner go-ahead. ADR-282 got a dated Addendum and a dateless bullet edit; two runbook statements that turned false were corrected (`inngest-luks-cutover-6894.md`, `infra-credential-tiers-8209.md`).
+- **Verified by running.** AC1, AC2, AC4: 0 hits. AC3/AC5: both filers keep the READ-ONLY comment, the dispatch sentence, the `label_selector` loop and the footer; `bash -n` clean. AC7: guard, FATAL text and comment all say 163 = realized 163/163. The guard is RED against the pre-fix workflow (origin/main) and mutants of the guard itself are each caught.
