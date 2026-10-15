@@ -2162,7 +2162,12 @@ export async function enqueueExport(
   // the unbounded partial unique index and 500'd the user. Aligning
   // the lookup with the index makes "1 active or completed-in-TTL"
   // the load-bearing invariant in BOTH layers.
-  const { data: existing, error: lookupErr } = await service
+  const {
+    data: existing,
+    error: lookupErr,
+    status: lookupErrStatus,
+    statusText: lookupErrStatusText,
+  } = await service
     .from("dsar_export_jobs")
     .select("id, status, requested_at, acknowledged_at")
     .eq("user_id", input.userId)
@@ -2170,14 +2175,21 @@ export async function enqueueExport(
     .order("requested_at", { ascending: false })
     .limit(1);
   if (lookupErr) {
-    throw new Error(`dsar idempotency lookup failed: ${lookupErr.message}`);
+    throw new Error(
+      `dsar idempotency lookup failed: ${describeDbError(lookupErr, lookupErrStatus, lookupErrStatusText)}`,
+    );
   }
   if (existing && existing.length > 0) {
     const row = existing[0] as { id: string; acknowledged_at: string };
     return { jobId: row.id, acknowledgedAt: row.acknowledged_at };
   }
 
-  const { data: inserted, error: insertErr } = await service
+  const {
+    data: inserted,
+    error: insertErr,
+    status: insertErrStatus,
+    statusText: insertErrStatusText,
+  } = await service
     .from("dsar_export_jobs")
     .insert({
       user_id: input.userId,
@@ -2190,7 +2202,7 @@ export async function enqueueExport(
     .single();
   if (insertErr || !inserted) {
     throw new Error(
-      `dsar_export_jobs insert failed: ${insertErr?.message ?? "no row"}`,
+      `dsar_export_jobs insert failed: ${insertErr ? describeDbError(insertErr, insertErrStatus, insertErrStatusText) : "no row"}`,
     );
   }
   const row = inserted as { id: string; acknowledged_at: string };
@@ -2266,7 +2278,11 @@ async function runExport(job: {
     // replaces it.
     const expiresAt = new Date(Date.now() + SIGNED_URL_TTL_MS);
 
-    const { error: updateErr } = await service
+    const {
+      error: updateErr,
+      status: updateErrStatus,
+      statusText: updateErrStatusText,
+    } = await service
       .from("dsar_export_jobs")
       .update({
         status: "completed",
@@ -2277,7 +2293,9 @@ async function runExport(job: {
       })
       .eq("id", job.id);
     if (updateErr) {
-      throw new Error(`job complete update failed: ${updateErr.message}`);
+      throw new Error(
+        `job complete update failed: ${describeDbError(updateErr, updateErrStatus, updateErrStatusText)}`,
+      );
     }
 
     // Email is fire-and-forget — a Resend failure does not roll back
