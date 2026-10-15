@@ -31,6 +31,14 @@ RED edits are local only; every pushed commit is green. No tag mint or push, no 
 - 3.2 Set `EXPECTED_TESTS` from the measured total of a full green run; record pre (811) and post in the PR body.
 - 3.3 Re-measure `.claude/hooks/grep-q-pipe-guard.test.sh` derivation, `fixture-relative-assert.baseline.txt`, `scripts/guard-vacuity-floor.test.sh`, `lint-shell-trace-credential-refusal.test.sh`, ADR-280 census rows; fix code before baselines.
 
+## Phase 3b: Deepen-pass test and hardening tasks
+
+- 3b.1 Repoint every existing assertion that pins the old argv shape (the plan's C3 list: zot P13 920 `curl_words` 3 to 2; NIC stub 136-139, T1 314, golden 262-263 and 285-292, X2 461-467, negatives T2/T3/X1/X3/X6 backed by `TA_PING`; inngest 309, 577-580, 588-598, 608, 637-640, 674-677). Shared `CANARY_URL` becomes https; scope the stub rewrite to the `--config -` line.
+- 3b.2 Zot stub: heartbeat calls recorded to their own files; one defect per hostile-value row with a per-row `reason=` assertion; stamp-age pairs bounded (1700/1900, 2000/3700); raise NIC `MIN_CASES` and zot `MIN_ASSERTS` from measured counts.
+- 3b.3 `LC_ALL=C` before the case in the POSIX body; NIC refusal stamp under `${SOLEUR_NIC_TEST_ROOT:-}/run/`; unwritable-stamp row in each suite.
+- 3b.4 Dash row: reuse the git-data rehearsal image layer, bounded pull retry, suite comment giving the reason.
+- 3b.5 ADR-232 dated addendum (named-row GuardA predicate) alongside the ADR-280 paragraph; ADR text states root-only `/proc/<pid>/environ`, web-2 and inngest-host delivery timing.
+
 ## Phase 4: ADR-280 paragraph and gates
 
 - 4.1 Append `### 2026-10-15 follow-ups - PR C (#10120, probe scripts of #10093)` to ADR-280 (after PR B's section); add a superseded note to the stale 2026-10-12 sentence about the three probe scripts.
@@ -40,4 +48,5 @@ RED edits are local only; every pushed commit is green. No tag mint or push, no 
 ## Phase 5: PR body and handoff
 
 - 5.1 PR body: first line (merge fires the tag mint and three web-1 re-deliveries, opens the GuardA window), `Ref #10120`, `Ref #10093`, `Ref #9757`, the `### Pre-merge baseline` block, the #10330 e2e measurement, the sibling-PR rebase note (#10294, #10320), `Ruled by CTO agent, 2026-10-15` entries, pre/post `EXPECTED_TESTS`, and a final `## Operator Holds` section with Gates 1-6. No closing keyword anywhere.
+- 5.1b PR body also: coupling note (the merge cuts a web release; web-2 and the inngest host are not re-delivered), Gate 7 (merge-tree evaluation, one open pin PR on the max tag), #10363 deferral, #10330 e2e measurement.
 - 5.2 Mark ready only when every non-Gate-3 check is green; do not arm auto-merge; do not merge.
