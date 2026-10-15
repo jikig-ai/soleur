@@ -203,7 +203,9 @@ live_run() {  # <mode> <port> -> EC / PINGED / OUT
     SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/lfault.$RANDOM.$$" \
     INNGEST_CONSUMER_URL="http://127.0.0.1:1/hb" \
     timeout 25 bash "$SUT" >"$outf" 2>&1 || ec=$?
-  EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes; OUT="$(cat "$outf")"
+  EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes
+  # shellcheck disable=SC2034  # OUT is read by NAME inside the assert() eval strings
+  OUT="$(cat "$outf")"
 }
 
 live_run full "$PORT"
@@ -445,15 +447,32 @@ hb_exact_age_run 3600; EXACT_OK=$?
 assert "limiter: a stamp aged exactly 3600 s emits (the window is half-open: age < 3600 suppresses) and the stamp is rewritten to now" \
   "[[ '$EXACT_OK' -eq 0 && '$N_MARK' -eq 1 && '$N_WARN' -eq 1 && \"\$(cat '$RSTAMP')\" -eq '$HB_T0' ]]"
 # Stamp normalisation (the same as the zot and nic limiters): a leading-zero 8 or 9 must not be read as an invalid octal
-# (the old arithmetic aborted the enclosing command, and the run fell through to a FALSE empty-registry fault line),
-# an 11+ digit stamp reads as emit (it is longer than any epoch), and every one of them is rewritten on emit.
-for seed in 0000000008 0000000009 12345678901 1234567890123456 99999999999999999999; do
+# (the old arithmetic aborted the enclosing command, and the run fell through to a FALSE empty-registry fault line), a
+# non-numeric stamp reads as "never emitted", and every one of them is rewritten on emit. The 11/16/20-digit seeds are
+# future-dated or overflowing numbers: they pin "no arithmetic error, still emits", but they would emit WITHOUT the
+# 10-digit length cap too. The cap itself is pinned ONLY by DISC: a zero-padded epoch 10 s old (12 characters). Without
+# the cap it is read as a number 10 s old and SUPPRESSES; with it, it is not an epoch and EMITS.
+for seed in 0000000008 0000000009 abc 12ab 12345678901 1234567890123456 99999999999999999999 DISC; do
+  if [[ "$seed" == DISC ]]; then seed="00$(( $(date +%s) - 10 ))"; seed_name="the zero-padded 12-char epoch aged 10 s (length cap)"; else seed_name="$seed"; fi
   printf '%s\n' "$seed" > "$RSTAMP"
   run_hb "${GOOD}\"" "SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER=$RSTAMP"
-  assert "limiter: a stamp of $seed reads as emit: one marker, zero curls, exit 0, stamp rewritten to a current epoch" \
+  assert "limiter: a stamp of $seed_name reads as emit: one marker, zero curls, exit 0, stamp rewritten to a current epoch" \
     "[[ '$N_MARK' -eq 1 && '$N_ARGV' -eq 0 && '$TEC' -eq 0 && \"\$(cat '$RSTAMP')\" =~ ^[0-9]{10}\$ && \"\$(cat '$RSTAMP')\" -ge '$NOW' ]]"
-  assert "limiter: a stamp of $seed leaves no shell arithmetic error and no false registry fault line in the run output" \
+  assert "limiter: a stamp of $seed_name leaves no shell arithmetic error and no false registry fault line in the run output" \
     "! grep -qE -e 'value too great|syntax error|EMPTY REGISTRY|UNREACHABLE' '$HB_OUT'"
+done
+# The FAULT limiter (_fault) has its own stamp read and the same normalisation: a leading-zero 8/9 in the fault marker must
+# not abort the script (bash: "value too great for base"), and the dark-registry fault line must still be emitted exactly
+# once and the marker rewritten; the zero-padded 12-char epoch (DISC) pins the length cap there too.
+FLSTAMP="$TMP/hb_fault_seed.stamp"
+for seed in 0000000008 0000000009 DISC; do
+  if [[ "$seed" == DISC ]]; then seed="00$(( $(date +%s) - 10 ))"; seed_name="the zero-padded 12-char epoch aged 10 s (length cap)"; else seed_name="$seed"; fi
+  printf '%s\n' "$seed" > "$FLSTAMP"
+  run_hb "$GOOD" "SOLEUR_INNGEST_CONSUMER_FAULT_MARKER=$FLSTAMP" "INNGEST_PROBE_FUNCTIONS_FIXTURE=$HB_FX_FAIL"
+  assert "fault limiter: a fault marker of $seed_name does not crash the script and the fault line is still emitted exactly once" \
+    "[[ \$(grep -c 'UNREACHABLE' '$HB_OUT') -eq 1 ]] && ! grep -qE -e 'value too great|syntax error|Illegal number' '$HB_OUT'"
+  assert "fault limiter: a fault marker of $seed_name is rewritten to a current epoch on emit" \
+    "[[ \"\$(cat '$FLSTAMP')\" =~ ^[0-9]{10}\$ && \"\$(cat '$FLSTAMP')\" -ge '$NOW' ]]"
 done
 # own-stamp rows: the refusal stamp is NOT the fault stamp, in either direction
 FSTAMP="$TMP/hb_fault_limiter.stamp"
@@ -489,6 +508,7 @@ HB_DEF="$TMP/hb_curl.def"; HB_DEF_LOUD="$TMP/hb_curl_loud.def"
 sed -n '/^_hb_curl()/p' "$SUT" > "$HB_DEF"
 sed 's| 2>/dev/null||' "$HB_DEF" > "$HB_DEF_LOUD"
 SMOKE_RC="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \$?" _ "$HB_DEF" 2>&1)"
+# shellcheck disable=SC2034  # read by NAME inside the assert() eval strings below
 SMOKE_TXT="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \"rc=\$?\"" _ "$HB_DEF_LOUD" 2>&1)"
 assert "smoke: the extracted _hb_curl definition is one non-empty line and the stderr-visible copy differs from it" \
   "[[ \"\$(wc -l < '$HB_DEF')\" -eq 1 && -s '$HB_DEF' ]] && ! cmp -s '$HB_DEF' '$HB_DEF_LOUD'"
@@ -548,7 +568,7 @@ echo "=== $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor: a skipped block or a disarmed assert() must not read as green. Raise it in the SAME edit that adds
 # rows; it is reported with printf and exit, never through assert() (scripts/guard-vacuity-floor.test.sh builds its mutant
 # from the literal sitting directly above the `if`).
-MIN_ASSERTS=129
+MIN_ASSERTS=141
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
   printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
   exit 1

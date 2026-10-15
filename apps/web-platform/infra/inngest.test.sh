@@ -776,6 +776,41 @@ assert "#9757 an unwritable refusal stamp fails OPEN: the marker ships on every 
 assert "#9757 the refusal limiter has its OWN stamp (not the dark arm's or the listener gate's)" \
   "grep -qE 'INNGEST_HEARTBEAT_DARK_STAMP=\"\\\$\\{INNGEST_HEARTBEAT_REFUSAL_STAMP:-/run/inngest-heartbeat/refusal\\.stamp\\}\" dark_arm_emit_due' '$PING_BODY'"
 
+# Stamp normalisation of the refusal limiter (dark_arm_emit_due): the stamp file is untrusted bytes and this function sits
+# on the credential-refusal path, whose contract is exit 0, so a bad stamp must read as "never emitted", never abort the shell.
+# A zero-padded 08/09 is an invalid OCTAL in shell arithmetic (dash aborts with "Illegal number", exit 2); a stamp longer than 10
+# digits is not an epoch. The 11-digit seed is future-dated and would emit WITHOUT the length cap; only DISC (a zero-padded epoch
+# 10 s old, 12 characters) pins the cap: a cap-less limiter reads it as a number 10 s old and SUPPRESSES, the capped one EMITS.
+HB_SEED_STAMP="$PING_TMP/hb-seed.stamp"
+HB_SEED_BAD='Illegal number|value too great|syntax error|bad number|arithmetic'
+for _seed in 0000000009 0000000008 abc 12ab 12345678901 DISC; do
+  if [[ "$_seed" == DISC ]]; then _seed="00$(( $(date +%s) - 10 ))"; _sname="the zero-padded 12-char epoch aged 10 s (length cap)"; else _sname="$_seed"; fi
+  HB_SEED_T0="$(date +%s)"; printf '%s' "$_seed" > "$HB_SEED_STAMP"
+  hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG" INNGEST_HEARTBEAT_REFUSAL_STAMP="$HB_SEED_STAMP"
+  assert "#9757 refusal stamp of $_sname reads as emit: exit 0 (never 2), zero requests, exactly one marker, stamp rewritten to a current epoch" \
+    "[[ '$HB_RC' -eq 0 && '$HB_N_ARGV' -eq 0 && '$HB_N_MARK' -eq 1 && \"\$(cat '$HB_SEED_STAMP')\" =~ ^[0-9]{10}\$ && \"\$(cat '$HB_SEED_STAMP')\" -ge '$HB_SEED_T0' ]]"
+  assert "#9757 refusal stamp of $_sname leaves no shell arithmetic error text in the run output" \
+    "! grep -qE '$HB_SEED_BAD' <<<\"\$HB_OUT\""
+done
+# Boundary rows at the exact edge of the 3600 s window. A run that straddles a clock-second tick would age the stamp by one more
+# second and move the edge under the assertion, so the helper re-seeds until a run began and ended inside one second.
+hb_exact_age_run() {  # <age seconds> -> a refused run against a stamp of exactly that age; rc 1 if no tick-free run in 5 tries
+  local age="$1" t0 t1 try
+  HB_AGE_T0=0
+  for try in 1 2 3 4 5; do
+    t0="$(date +%s)"; printf '%s' "$((t0 - age))" > "$HB_SEED_STAMP"
+    hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG" INNGEST_HEARTBEAT_REFUSAL_STAMP="$HB_SEED_STAMP"
+    t1="$(date +%s)"; HB_AGE_T0="$t0"; [[ "$t0" == "$t1" ]] && return 0
+  done
+  return 1
+}
+hb_exact_age_run 3599; HB_AGE_OK=$?
+assert "#9757 refusal stamp aged exactly 3599 s still suppresses (one second inside the window): zero markers, stamp left alone, exit 0" \
+  "[[ '$HB_AGE_OK' -eq 0 && '$HB_N_MARK' -eq 0 && '$HB_RC' -eq 0 && \"\$(cat '$HB_SEED_STAMP')\" -eq '$((HB_AGE_T0 - 3599))' ]]"
+hb_exact_age_run 3600; HB_AGE_OK=$?
+assert "#9757 refusal stamp aged exactly 3600 s emits (the window is half-open: age < 3600 suppresses): one marker, stamp rewritten to now" \
+  "[[ '$HB_AGE_OK' -eq 0 && '$HB_N_MARK' -eq 1 && '$HB_RC' -eq 0 && \"\$(cat '$HB_SEED_STAMP')\" -eq '$HB_AGE_T0' ]]"
+
 # STATIC: the body is POSIX sh. No process substitution and no [[ ]] in its CODE lines (comments excluded);
 # the config is fed by a printf pipe (no heredoc); the guard is the NEGATED class (never a positive pattern).
 PING_CODE="$PING_TMP/ping-body-code.sh"; grep -vE '^[[:space:]]*#' "$PING_BODY" > "$PING_CODE"
@@ -793,6 +828,21 @@ assert "#9757 the shape guard is the NEGATED class case (a positive pattern woul
 assert "#9757 the printf-pipe transport did not disturb the LOG_TAG derivation or the closing delimiter of the outer heredoc" \
   "[[ \$(grep -cE '^LOG_TAG=\"inngest-heartbeat\"\$' '$PING_BODY') -eq 1 && \$(grep -cxF 'HEARTBEATSCRIPTEOF' '$BOOTSTRAP_SH') -eq 1 ]]"
 
+# REAL-curl smoke for the POSIX body. Every row above runs a STUB curl, which accepts any argv, so a flag the real curl
+# rejects (exit 2, "curl: option ...") would pass them all. Extract the rendered web script's single transport line and run it
+# with sh against the REAL /usr/bin/curl at a closed port: a well-formed argv gets as far as the connect and fails with rc 7;
+# a rejected option gives rc 2. The line keeps its -S, so curl's own message is visible in the captured output.
+HB_SMOKE_LINE="$PING_TMP/hb-smoke-line.sh"
+grep -E '^printf .*\| /usr/bin/curl .*--config -' "$WEB_PING" > "$HB_SMOKE_LINE" || true
+HB_SMOKE_RC=0
+HB_SMOKE_TXT="$(env INNGEST_HEARTBEAT_URL='https://127.0.0.1:9/p' timeout 30 sh "$HB_SMOKE_LINE" 2>&1)" || HB_SMOKE_RC=$?
+assert "#9757 smoke: the rendered web script has exactly one transport line, and the real /usr/bin/curl is executable" \
+  "[[ \$(wc -l < '$HB_SMOKE_LINE') -eq 1 && -x /usr/bin/curl ]]"
+assert "#9757 smoke: the real curl accepts the transport line under sh: exit 7 (connection refused), never 2 (option rejected)" \
+  "[[ '$HB_SMOKE_RC' -eq 7 ]]"
+assert "#9757 smoke: the real curl's own message is a connect failure, with no 'curl: option' and no '(2)' text" \
+  "grep -qF '(7)' <<<\"\$HB_SMOKE_TXT\" && ! grep -qF -e 'curl: option' -e '(2)' <<<\"\$HB_SMOKE_TXT\""
+
 # --- the DASH row ----------------------------------------------------------------------------
 # A local /bin/sh may be bash, so a green local run proves nothing about the shell the unit actually runs
 # (Ubuntu /bin/sh is dash). The rendered body is therefore syntax-checked AND run for real under dash.
@@ -804,7 +854,7 @@ assert "#9757 the printf-pipe transport did not disturb the LOG_TAG derivation o
 # integration-shaped (a container start plus a digest-pinned registry pull) inside a unit-classified file
 # because issue 10120 asked for the pinned-image dash run; it reuses the image layer
 # git-data-runcmd-rehearsal.test.sh already pulls.
-DASH_ROWS=9
+DASH_ROWS=10
 DASH_SKIPPED=0
 _in_ci_dash() { [[ -n "${GITHUB_ACTIONS:-}" || "${CI:-}" == "1" || "${CI:-}" == "true" ]]; }
 DASH_UBUNTU="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\\.04@sha256:[0-9a-f]{64})'\$/\\1/p" "$SCRIPT_DIR/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | sed -n '1p')"
@@ -884,6 +934,22 @@ run empty ''
 # \201 followed by b. printf builds them so the driver file itself stays pure ASCII.
 run highc1 "$(printf 'https://uptime.betterstack.test/x\205\001')"
 run high81 "$(printf 'https://uptime.betterstack.test/x\201b')"
+# Stamp seeds (the refusal limiter): each case pre-writes its own refusal stamp. A zero-padded 08/09 is an invalid octal in
+# dash arithmetic ("Illegal number", exit 2) unless the limiter strips the padding; DISC is a zero-padded epoch 10 s old
+# (12 characters), which only the 10-digit length cap turns into an emit.
+runseed() {  # <case> <stamp text>
+  : > "$OUT/$1.calls"; : > "$OUT/$1.log"; printf '%s' "$2" > "$OUT/$1.stamp"
+  CALLS="$OUT/$1.calls" LOGGER_OUT="$OUT/$1.log" PATH="$WORK/bin:$PATH" \
+    INNGEST_HEARTBEAT_URL='https://uptime.betterstack.test/x"y' \
+    INNGEST_HEARTBEAT_REFUSAL_STAMP="$OUT/$1.stamp" "$SH" "$WORK/ping.sh" > "$OUT/$1.out" 2>&1
+  echo $? > "$OUT/$1.rc"
+}
+runseed seed9 0000000009
+runseed seed8 0000000008
+runseed seedabc abc
+runseed seed12ab 12ab
+runseed seed11 12345678901
+runseed seeddisc "00$(( $(date +%s) - 10 ))"
 echo done > "$OUT/DONE"
 DDRIVEEOF
   chmod +x "$DASH_DIR/curl" "$DASH_DIR/bin/logger" "$DASH_DIR/drive.sh"
@@ -917,6 +983,8 @@ DDRIVEEOF
     "[[ \"\$(dr http.rc)\" == 0 && ! -s '$DASH_OUT/http.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/http.log') -eq 1 ]]"
   assert "#9757 dash row ($DASH_LABEL): an empty value is refused under dash (exit 2, zero requests, one marker)" \
     "[[ \"\$(dr empty.rc)\" == 2 && ! -s '$DASH_OUT/empty.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/empty.log') -eq 1 ]]"
+  assert "#9757 dash row ($DASH_LABEL): refusal stamps 0000000009, 0000000008, abc, 12ab, an 11-digit and a zero-padded 12-char epoch each read as emit (exit 0 never 2, one marker, no arithmetic error text, stamp rewritten)" \
+    "[[ \$(for c in seed9 seed8 seedabc seed12ab seed11 seeddisc; do [[ \"\$(dr \$c.rc)\" == 0 && ! -s '$DASH_OUT'/\$c.calls && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT'/\$c.log) -eq 1 && \"\$(dr \$c.stamp)\" =~ ^[0-9]{10}\$ ]] && ! grep -qE 'Illegal number|value too great|syntax error|bad number' '$DASH_OUT'/\$c.out && echo ok; done | wc -l) -eq 6 ]]"
   # High bytes: pinned ubuntu 24.04 dash 0.5.12 refuses these (measured). A local dash build of another version may
   # not; that failure is a NON-PINNED-DASH QUIRK, labelled as such, and must not weaken the pinned-container check.
   if [[ "$DASH_MODE" == pinned ]]; then DASH_HB_NOTE=""; else DASH_HB_NOTE=" [NON-PINNED DASH QUIRK: a local dash build may classify high bytes differently; the pinned image is authoritative]"; fi
@@ -1635,13 +1703,13 @@ assert "#8017 a base device with no Hetzner alias => __NOMATCH__, never a false 
 # aliases for one device, so the emitter COUNTS instead of assuming -- and says so when it cannot
 # decide, rather than picking one arbitrarily.
 ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
-ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_5495499"
 S8_AMB="$(s8_run ambiguous)"
 assert "#8017 TWO aliases resolving to one device => __AMBIGUOUS__, never an arbitrary pick" \
   "grep -qE 'data_mount_devid=__AMBIGUOUS__( |\$)' '$S8_AMB'"
 assert "#8017 __AMBIGUOUS__ is not silently coerced to the expected alias" \
   "! grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_AMB'"
-rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_5495499"
 
 # --- __UNREADABLE__: the resolution itself broke, and base DISAMBIGUATES it -----------------
 s8_lsblk '\n'
@@ -1917,10 +1985,10 @@ mutate_emitter devid-revmap 's|^        \*/"\$data_mount_base")$|        __NEVER
 # ITS FIXTURE NEEDS TWO ALIASES. With one, _devid_hits is 1, the `-gt 1` arm is UNREACHABLE, and
 # the mutant survives for a reason that says nothing about the guard. Measured: it did survive on
 # the first run, and the fix was the FIXTURE, not the predicate.
-ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_5495499"
 mutate_emitter devid-ambiguity 's|^      elif \[ "\$_devid_hits" -gt 1 \]; then$|      elif false; then|' \
   data_mount_devid "__AMBIGUOUS__"
-rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_5495499"
 # M3 — unbound the base-device resolution: devid must inherit __UNREADABLE__, not invent a match.
 mutate_emitter base-resolution 's|^    data_mount_base="\$(timeout 5 lsblk|    data_mount_base="$(false \&\& timeout 5 lsblk|' \
   data_mount_base "sdb"
@@ -2648,6 +2716,7 @@ assert "RWP token lists byte-identical across both lockstep copies" \
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""
 echo "--- terraform fmt -check ---"
+TF_SKIPPED=0
 if command -v terraform >/dev/null 2>&1; then
   if (cd "$SCRIPT_DIR" && terraform fmt -check -diff=false inngest.tf >/dev/null 2>&1); then
     PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
@@ -2657,7 +2726,8 @@ if command -v terraform >/dev/null 2>&1; then
     echo "  FAIL: inngest.tf needs 'terraform fmt' (run: terraform fmt apps/web-platform/infra/inngest.tf)"
   fi
 else
-  echo "  SKIP: terraform not installed locally"
+  TF_SKIPPED=1
+  echo "  SKIP: terraform not installed locally (1 row NOT RUN; a skipped row does not count toward the floor)"
 fi
 
 # --- #6555: DOPPLER_PROJECT via EnvironmentFile (the units dropped --project) ---
@@ -3020,13 +3090,15 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-# #9757 / #10120: 451 -> 531 (the heartbeat stdin-config, shape-guard, hourly-marker, own-stamp, exit-status and dash rows; measured
-# 531/531 with the pinned-container dash rows run). Two tiers (the zot suite's shape): a run whose dash rows were SKIPPED
-# (no docker AND no local dash, outside CI) is held to the lower literal (521 measured with docker, dash and terraform all absent: 531 - 9 dash rows - 1 terraform fmt row); skipped rows are
-# never counted toward either floor. Under CI a skipped or failed dash row is itself a FAILURE (see the dash block above).
-INNGEST_MIN_ASSERTIONS_FULL=531
-INNGEST_MIN_ASSERTIONS_NODASH=521
-if [[ "$DASH_SKIPPED" -eq 0 ]]; then INNGEST_MIN_ASSERTIONS="$INNGEST_MIN_ASSERTIONS_FULL"; else INNGEST_MIN_ASSERTIONS="$INNGEST_MIN_ASSERTIONS_NODASH"; fi
+# #9757 / #10120: 451 -> 549 (the heartbeat stdin-config, shape-guard, hourly-marker, own-stamp, stamp-normalisation,
+# real-curl smoke, exit-status and dash rows; measured 549/549 with the pinned-container dash rows and terraform run).
+# Skipped rows are never counted toward the floor: the active floor is the FULL literal minus the dash rows that were SKIPPED
+# (no docker AND no local dash, outside CI: all-or-nothing, checked just below) minus the terraform fmt row when terraform is
+# absent. Under CI a skipped or failed dash row is itself a FAILURE (see the dash block above).
+# Accounting: DASH_SKIPPED is 0 or DASH_ROWS, never a partial count, so a half-skipped block cannot read as a tier.
+if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 'FAIL: dash accounting: DASH_SKIPPED=%s is neither 0 nor DASH_ROWS=%s.\n' "$DASH_SKIPPED" "$DASH_ROWS" >&2; exit 1; fi
+INNGEST_MIN_ASSERTIONS_FULL=549
+INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2

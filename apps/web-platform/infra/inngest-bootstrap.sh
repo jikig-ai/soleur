@@ -229,6 +229,11 @@ dark_arm_emit_due() {
   _last="$(cat "$_stamp" 2>/dev/null || true)"
   # A truncated/garbage stamp reads as "never emitted", not as "emitted just now".
   case "$_last" in '' | *[!0-9]*) _last=0 ;; esac
+  # A stamp longer than 10 digits is not an epoch, and a zero-padded one is OCTAL in arithmetic (dash aborts the shell
+  # with "Illegal number" on 08/09): strip the padding so a corrupted stamp reads as a number, never as a crash. This
+  # function now also serves the credential-refusal branch, whose contract is exit 0 (a crash here would exit 2).
+  [ "${#_last}" -le 10 ] || _last=0
+  _z=${_last%%[!0]*}; _last=${_last#"$_z"}; : "${_last:=0}"
   # A stamp in the FUTURE (boot-before-NTP wrote now+skew, then timesyncd stepped back) reads
   # as "never emitted" too. Without this the subtraction goes negative and suppresses the
   # marker for the entire skew -- the one path where this function failed CLOSED.
@@ -242,8 +247,9 @@ dark_arm_emit_due() {
 # just below): the skip branch on the dedicated host, EMPTY on the co-located web host.
 #
 # An absent INNGEST_HEARTBEAT_URL is NOT a curl no-op. `curl -fsS --max-time 10 ""` exits 2
-# ("option : blank argument where content is expected" -- measured, #6536); unset behaves
-# identically. That is why this oneshot failed every 60s for 3 days (3,724 fires) on the dark
+# ("option : blank argument where content is expected" -- measured, #6536); unset behaved
+# identically (since #9757 the shape guard at the end of this body refuses it first, reason=empty,
+# still exit 2, so the web render stays loud). That is why this oneshot failed every 60s for 3 days (3,724 fires) on the dark
 # host, and why inngest-host.tf's old "curl no-ops" claim was false. Same class as #4116.
 #
 # The dark host legitimately has NO url: inngest-host.tf:137-151 keeps one unambiguous pusher
@@ -256,7 +262,7 @@ dark_arm_emit_due() {
 # Everything above decides WHETHER THIS HOST SHOULD BEAT AT ALL. This decides whether it has
 # anything to beat ABOUT, and it is the whole of #7228.
 #
-# The beat below is `curl "$INNGEST_HEARTBEAT_URL"` fired by a 60s systemd timer: it proves a
+# The beat below (originally `curl "$INNGEST_HEARTBEAT_URL"`, now the stdin-config form) is fired by a 60s systemd timer: it proves a
 # TIMER FIRED, and asserts nothing whatsoever about :8288. That is why one correctly-armed,
 # correctly-scoped, unpaused monitor stayed GREEN for twelve days while the dedicated host
 # served nothing and every app dispatch failed with ECONNREFUSED. The tempting fix -- give the
@@ -332,9 +338,11 @@ fi
 # stamp. EXIT STATUS (CTO-ruled, 2026-10-15): a present-but-malformed value (reason token_shape or
 # control_char) exits 0 ON PURPOSE. The missed Better Stack beat IS the alarm (the monitors are armed and
 # page within minutes, exactly as for the three web-1 probe scripts), and a non-zero exit would fire this
-# unit's unlimited OnFailure ERR logger on every 60 s tick (the #6536 storm shape: about 2.9k rows/day
-# against the Source 4 quota). Only `reason=empty` keeps exit 2, because the web render has no dark arm
-# and an absent URL on the live pusher must stay loud, as curl's own blank-URL rejection (rc 2) was.
+# unit's unlimited OnFailure ERR logger on every 60 s tick (the #6536 storm shape: at least ~2.9k rows/day,
+# the ERR row on Source 4 plus the systemd failure row on Source 1, against Source 4 headroom as measured in
+# #7228). Only `reason=empty` keeps exit 2 and so keeps that storm exposure BY CHOICE (pre-existing since
+# #6536, a provisioning fault): the web render has no dark arm and an absent URL on the live pusher must stay
+# loud, as curl's own blank-URL rejection (rc 2) was.
 # The marker is assigned to a variable first so no logger line names the URL variable
 # (inngest.test.sh bans exactly that shape).
 LC_ALL=C

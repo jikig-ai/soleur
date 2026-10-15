@@ -156,6 +156,8 @@ _fault() {
   last=0
   [ -f "$FAULT_MARKER" ] && last=$(cat "$FAULT_MARKER" 2>/dev/null || echo 0)
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ "${#last}" -le 10 ] || last=0
+  last=$((10#$last))
   if [ $((now - last)) -ge "$FAULT_INTERVAL" ]; then
     echo "[inngest-consumer-probe] $1" >&2
     printf '%s\n' "$now" > "$FAULT_MARKER" 2>/dev/null || true

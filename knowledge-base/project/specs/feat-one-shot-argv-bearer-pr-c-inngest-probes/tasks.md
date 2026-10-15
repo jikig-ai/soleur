@@ -37,7 +37,7 @@ RED edits are local only; every pushed commit is green. No tag mint or push, no 
 - 3b.2 Zot stub: heartbeat calls recorded to their own files; one defect per hostile-value row with a per-row `reason=` assertion; stamp-age pairs bounded (1700/1900, 2000/3700); raise NIC `MIN_CASES` and zot `MIN_ASSERTS` from measured counts.
 - 3b.3 `LC_ALL=C` before the case in the POSIX body; NIC refusal stamp under `${SOLEUR_NIC_TEST_ROOT:-}/run/`; unwritable-stamp row in each suite.
 - 3b.4 Dash row: reuse the git-data rehearsal image layer, bounded pull retry, suite comment giving the reason.
-- 3b.5 ADR-232 dated addendum (named-row GuardA predicate) alongside the ADR-280 paragraph; ADR text states root-only `/proc/<pid>/environ`, web-2 and inngest-host delivery timing.
+- 3b.5 ADR-232 dated addendum (named-row GuardA predicate) alongside the ADR-280 paragraph; ADR text states the `/proc/<pid>/environ` residual (root for the web-1 probes, `deploy` for the inngest heartbeat unit; corrected in the review round), web-2 and inngest-host delivery timing.
 
 ## Phase 4: ADR-280 paragraph and gates
 

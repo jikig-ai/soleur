@@ -348,7 +348,9 @@ run_hb() {  # <WEB_ZOT_CONSUMER_URL value> [extra env assignments, applied last 
     SOLEUR_PROBE_REFUSAL_MARKER="$TMP/refusal.$MARKER_N" \
     ZOT_ENDPOINT=127.0.0.1:9 ZOT_PROBE_REPO=known/repo ZUSER=zuser ZTOK=ztok "WEB_ZOT_CONSUMER_URL=$url" "$@" \
     timeout 20 bash "$SUT" >"$HOUT" 2>&1 || ec=$?
-  HEC=$ec; HOUTTXT="$(cat "$HOUT")"
+  HEC=$ec
+  # shellcheck disable=SC2034  # read by NAME inside the assert() eval strings
+  HOUTTXT="$(cat "$HOUT")"
   N_HB="$(wc -l < "$HB_ARGV" | tr -d ' ')"
   N_MARK="$(grep -c 'SOLEUR_CREDENTIAL_REFUSED' "$HOUT" || true)"
   N_WARN="$(grep -c 'heartbeat URL refused' "$HOUT" || true)"
@@ -543,6 +545,7 @@ HB_DEF="$TMP/hb_curl.def"; HB_DEF_LOUD="$TMP/hb_curl_loud.def"
 sed -n '/^_hb_curl()/p' "$SUT" > "$HB_DEF"
 sed 's| 2>/dev/null||' "$HB_DEF" > "$HB_DEF_LOUD"
 SMOKE_RC="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \$?" _ "$HB_DEF" 2>&1)"
+# shellcheck disable=SC2034  # read by NAME inside the assert() eval strings below
 SMOKE_TXT="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \"rc=\$?\"" _ "$HB_DEF_LOUD" 2>&1)"
 assert "(hb-smoke) the extracted _hb_curl definition is one non-empty line and the stderr-visible copy differs from it" \
   "[[ \"\$(wc -l < '$HB_DEF')\" -eq 1 && -s '$HB_DEF' ]] && ! cmp -s '$HB_DEF' '$HB_DEF_LOUD'"

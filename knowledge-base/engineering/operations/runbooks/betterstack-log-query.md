@@ -988,7 +988,9 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3
 ```
 
 `unpinned_url`, `bad_token` or `WARN: BETTERSTACK_LOGS_TOKEN/BETTERSTACK_INGEST_URL unset` means the guard refused to
-ship (fix the Doppler value or the pin); a `SOLEUR_PRIVATE_NIC ... nic_ok=false` row means the private NIC is
+ship (fix the Doppler value or the pin); `SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=…
+var=WEB_NIC_GUARD_URL` (or a `heartbeat URL refused|unset` WARN) means the beat URL itself was refused or unset,
+hourly-limited, so search at least 70 minutes (ADR-280, PR C follow-ups); a `SOLEUR_PRIVATE_NIC ... nic_ok=false` row means the private NIC is
 really absent. A malformed token can blind Vector too (it reads the same secret), in which case the absence of
 rows is the only off-box signal. The monitor alerts only once the arm step has un-paused it.
 

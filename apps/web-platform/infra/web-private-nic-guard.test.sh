@@ -797,7 +797,8 @@ lim_run "$LIM5"
 assert "HB limiter: a garbage stamp is read as 'emit' and rewritten to a numeric epoch" \
   "[[ \"\$LIM_MARKERS\" -eq 1 && \"\$(cat '$LIM5/run/$STAMP_NAME')\" =~ ^[0-9]{10}\$ ]]"
 # The seeds below reach different arms of the stamp normalisation: the non-digit case (abc, 12ab, the 12-char text),
-# the base-10 coercion of a SHORT leading-zero stamp (0000000009 is an invalid octal without it), and the length cap (next).
+# the base-10 coercion of a SHORT leading-zero stamp (0000000009 is an invalid octal without it), and (further down) the
+# length cap, pinned only by the zero-padded 12-char epoch.
 lim_seed_raw() {  # <root path under $TMP> <literal stamp text>: unlike lim_seed, a numeric value is NOT turned into an age
   mkdir -p "$TMP/${1#"$TMP"/}/run"; printf '%s\n' "$2" > "$TMP/${1#"$TMP"/}/run/$STAMP_NAME"
 }
@@ -825,11 +826,15 @@ LIMB2="$TMP/limb2"; rm -rf "$LIMB2"; lim_exact_age_run "$LIMB2" 3600; LIMB2_OK=$
 assert "HB limiter: a stamp aged exactly 3600 s emits (the window is half-open: age < 3600 suppresses) and is rewritten to now" \
   "[[ \"\$LIMB2_OK\" -eq 0 && \"\$LIM_MARKERS\" -eq 1 && \"\$(cat '$LIMB2/run/$STAMP_NAME')\" == \"\$LIM_T0\" ]] && no_beat"
 # lim_seed would turn a numeric argument into an AGE (and the 20-digit one would overflow into a negative stamp, which the
-# non-digit arm catches, never the length cap), so the over-long stamps are written literally.
-for g in 12345678901 99999999999999999999; do
+# non-digit arm catches), so the over-long stamps are written literally. The 11- and 20-digit seeds are future-dated or
+# overflowing numbers and would emit WITHOUT the length cap too: they pin only "no arithmetic error, still emits". The cap
+# itself is pinned by DISC alone: a zero-padded epoch 10 s old (12 characters), which a cap-less limiter reads as a number
+# 10 s old and SUPPRESSES, and the capped limiter treats as not-an-epoch and EMITS.
+for g in 12345678901 99999999999999999999 DISC; do
+  if [[ "$g" == DISC ]]; then g="00$(( $(date +%s) - 10 ))"; g_name="the zero-padded 12-char epoch aged 10 s (the length cap)"; else g_name="an over-long numeric stamp of ${#g} digits (future-dated or overflowing)"; fi
   LIM5B="$TMP/lim5b.${#g}"; rm -rf "$LIM5B"; lim_seed_raw "$LIM5B" "$g"
   lim_run "$LIM5B"
-  assert "HB limiter: an over-long numeric stamp of ${#g} digits is read as 'emit' (the length cap, not arithmetic overflow) and is rewritten" \
+  assert "HB limiter: $g_name is read as 'emit' and is rewritten to a numeric epoch" \
     "[[ \"\$LIM_MARKERS\" -eq 1 && \"\$(cat '$LIM5B/run/$STAMP_NAME')\" =~ ^[0-9]{10}\$ ]]"
 done
 LIM6="$TMP/lim6"; rm -rf "$LIM6"; mkdir -p "$LIM6/run"
@@ -902,7 +907,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). An assertion recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=315
+MIN_CASES=316
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

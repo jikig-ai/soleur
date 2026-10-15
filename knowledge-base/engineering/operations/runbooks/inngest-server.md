@@ -944,7 +944,10 @@ BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-se
    - Both active → read `.services.inngest_heartbeat_journal_tail` from the *same* payload
      (#6536 gave the unit `SyslogIdentifier=inngest-heartbeat` precisely so this tail exists).
      Typical failure: missing `INNGEST_HEARTBEAT_URL` in Doppler prd, or Doppler CLI auth on the
-     host expired — both visible in that tail.
+     host expired — both visible in that tail. A present-but-malformed URL is refused by the shape
+     guard and the unit exits 0 (it does NOT show as failed): look for an hourly-limited
+     `SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=…` row over at least 70 minutes
+     (ADR-280, PR C follow-ups), and fix the Doppler value rather than reverting the guard.
 3. **Confirm the URL is fresh:**
 
    ```
