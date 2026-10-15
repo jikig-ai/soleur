@@ -141,6 +141,65 @@ message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-",
 
 
 [[tests]]
+name = "dropped: status 000 (aborted connection) is outside the allowlist"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":48,"duration_ms":1,"client":"172.19.0.1","status":"000"}'
+
+
+
+[[tests]]
+name = "dropped: status 418 (unlisted status) is outside the allowlist"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":48,"duration_ms":1,"client":"172.19.0.1","status":"418"}'
+
+
+
+[[tests]]
+name = "dropped: status 407 (407 with trailing space) is outside the allowlist"
+no_outputs_from = ["egress_audit_prep"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_TUNNEL","decision_reason":"-","requested_host":"a.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":48,"duration_ms":1,"client":"172.19.0.1","status":"407 "}'
+
+
+
+[[tests]]
+name = "kept: upstream failure statuses 502, 503 and 504 produce a row"
+
+[[tests.inputs]]
+insert_at = "egress_audit_prep"
+type = "log"
+[tests.inputs.log_fields]
+host = "soleur-web-platform"
+message = '{"ts":"1792056400.001","decision":"TCP_MISS","decision_reason":"-","requested_host":"up.example.test","resolved_ip":"203.0.113.10","workspace":"11111111-2222-4333-8444-555555555555","bytes_out":0,"duration_ms":1,"client":"172.19.0.1","status":"503"}'
+
+[[tests.outputs]]
+extract_from = "egress_audit_prep"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.requested_host == "up.example.test" && .decision == "other" && .request_count == 1
+'''
+
+
+
+[[tests]]
 name = "dropped: non-UUID workspace"
 no_outputs_from = ["egress_audit_prep"]
 
@@ -308,7 +367,7 @@ name = "throttle discards become one marker line per workspace and change"
 insert_at = "egress_audit_throttled_log"
 type = "metric"
 [tests.inputs.metric]
-name = "component_discarded_events_total"
+name = "events_discarded_total"
 kind = "absolute"
 counter = { value = 7.0 }
 [tests.inputs.metric.tags]
@@ -319,7 +378,7 @@ key = "11111111-2222-4333-8444-555555555555"
 insert_at = "egress_audit_throttled_log"
 type = "metric"
 [tests.inputs.metric]
-name = "component_discarded_events_total"
+name = "events_discarded_total"
 kind = "absolute"
 counter = { value = 7.0 }
 [tests.inputs.metric.tags]
@@ -344,7 +403,7 @@ no_outputs_from = ["egress_audit_throttled_filter"]
 insert_at = "egress_audit_throttled_log"
 type = "metric"
 [tests.inputs.metric]
-name = "component_discarded_events_total"
+name = "events_discarded_total"
 kind = "absolute"
 counter = { value = 9.0 }
 [tests.inputs.metric.tags]
@@ -355,7 +414,7 @@ key = "11111111-2222-4333-8444-555555555555"
 insert_at = "egress_audit_throttled_log"
 type = "metric"
 [tests.inputs.metric]
-name = "component_discarded_events_total"
+name = "events_discarded_total"
 kind = "absolute"
 counter = { value = 0.0 }
 [tests.inputs.metric.tags]
@@ -366,11 +425,23 @@ key = "11111111-2222-4333-8444-555555555555"
 insert_at = "egress_audit_throttled_log"
 type = "metric"
 [tests.inputs.metric]
-name = "component_discarded_events_total"
+name = "events_discarded_total"
 kind = "absolute"
 counter = { value = 4.0 }
 [tests.inputs.metric.tags]
 component_id = "egress_audit_throttle"
+
+# Real 0.43.1 shape: the component-wide counter carries no `key` tag.
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 19.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle"
+intentional = "true"
 
 [[tests.inputs]]
 insert_at = "egress_audit_throttled_log"
@@ -382,3 +453,77 @@ counter = { value = 4.0 }
 [tests.inputs.metric.tags]
 component_id = "egress_audit_throttle"
 key = "11111111-2222-4333-8444-555555555555"
+
+
+
+[[tests]]
+name = "global cap discards become one global marker line per change"
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 42.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle_global"
+intentional = "true"
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 42.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle_global"
+intentional = "true"
+
+[[tests.outputs]]
+extract_from = "egress_audit_throttled_dedupe"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=42" && .SYSLOG_IDENTIFIER == "vector-egress-audit"
+'''
+
+
+
+[[tests]]
+name = "the per-workspace component-wide counter, a zero global counter and an unrelated component produce no global marker"
+no_outputs_from = ["egress_audit_throttled_global_filter"]
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 19.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle"
+intentional = "true"
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 0.0 }
+[tests.inputs.metric.tags]
+component_id = "egress_audit_throttle_global"
+intentional = "true"
+
+[[tests.inputs]]
+insert_at = "egress_audit_throttled_log"
+type = "metric"
+[tests.inputs.metric]
+name = "component_discarded_events_total"
+kind = "absolute"
+counter = { value = 5.0 }
+[tests.inputs.metric.tags]
+component_id = "some_other_transform"
+intentional = "true"

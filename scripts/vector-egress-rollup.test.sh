@@ -47,10 +47,19 @@ t, s, so = c["transforms"], c["sinks"], c["sources"]
 def row(name, ok):
     print(f"{name}\t{0 if ok else 1}")
 prep, thr, red = t["egress_audit_prep"], t["egress_audit_throttle"], t["egress_audit_reduce"]
+glob = t["egress_audit_throttle_global"]
 sink = s["egress_audit_ingest"]
 row("prep reads the egress source directly and only that", prep["inputs"] == ["egress_gw_journald"])
 row("egress source still admits only the gateway container", so["egress_gw_journald"].get("include_matches", {}).get("CONTAINER_NAME") == ["soleur-egress-gw"])
-row("throttle sits between prep and reduce", thr["inputs"] == ["egress_audit_prep"] and red["inputs"] == ["egress_audit_throttle"])
+row("throttles sit between prep and reduce, per-workspace first, then the global one",
+    thr["inputs"] == ["egress_audit_prep"] and glob["inputs"] == ["egress_audit_throttle"] and red["inputs"] == ["egress_audit_throttle_global"])
+row("global throttle is keyless and bounds the total to 10000 events per 900 s (the measured flood ceiling)",
+    "key_field" not in glob and glob["threshold"] == 10000 and glob["window_secs"] == 900)
+row("marker filter reads the per-key counter events_discarded_total, not the keyless component-wide one",
+    "\"events_discarded_total\"" in t["egress_audit_throttled_filter"]["condition"]
+    and "component_discarded_events_total" not in t["egress_audit_throttled_filter"]["condition"])
+row("sink retries outlast an app restart (>= 10 attempts, backoff cap >= 120 s)",
+    sink.get("request", {}).get("retry_attempts", 0) >= 10 and sink.get("request", {}).get("retry_max_duration_secs", 0) >= 120)
 row("throttle cap is 1000 events per workspace per 900 s", thr["threshold"] == 1000 and thr["window_secs"] == 900 and thr["key_field"] == "{{ workspace_id }}")
 row("throttle emits per-key discard metrics (the operator-visible flood signal)", thr.get("internal_metrics", {}).get("emit_events_discarded_per_key") is True)
 row("reduce groups by workspace, bucket, host, decision AND source host", red["group_by"] == ["workspace_id", "bucket_start", "requested_host", "decision", "source_host"])
@@ -64,7 +73,9 @@ buf = sink.get("buffer", {})
 row("sink buffers to disk and drops the newest events when full", buf.get("type") == "disk" and buf.get("when_full") == "drop_newest")
 row("disk buffer is at least Vector's 256 MiB minimum", buf.get("max_size", 0) >= 268435488)
 row("sink consumes only the shaped rollup", sink["inputs"] == ["egress_audit_shape"])
-row("discard marker rides the PII-scrub chain", "egress_audit_throttled_dedupe" in t["pii_scrub_drop_userdata"]["inputs"])
+row("discard markers (per-workspace and global) both feed the one dedupe that rides the PII-scrub chain",
+    "egress_audit_throttled_dedupe" in t["pii_scrub_drop_userdata"]["inputs"]
+    and t["egress_audit_throttled_dedupe"]["inputs"] == ["egress_audit_throttled_marker", "egress_audit_throttled_global_marker"])
 row("Better Stack sink inputs are unchanged", s["betterstack"]["inputs"] == ["tag_journald", "tag_metrics"])
 row("the ingest sink has no literal Authorization header", "headers" not in sink.get("request", {}))
 import re
@@ -93,8 +104,8 @@ check_test "the token name appears nowhere else as an assignment (no literal sec
 echo "-- fixture file --"
 N_TESTS="$(grep -c '^\[\[tests\]\]' "$TESTS_TOML" || true)"
 N_NEG="$(grep -c '^no_outputs_from' "$TESTS_TOML" || true)"
-check_test "fixture file carries at least 17 vector tests" test "$N_TESTS" -ge 17
-check_test "fixture file carries at least 13 drop-everything tests (407, probe, non-UUID, no status, injection, bad ts, not JSON, marker)" test "$N_NEG" -ge 13
+check_test "fixture file carries at least 23 vector tests" test "$N_TESTS" -ge 23
+check_test "fixture file carries at least 17 drop-everything tests (407, probe, non-UUID, no status, injection, bad ts, not JSON, marker)" test "$N_NEG" -ge 17
 
 echo "-- behaviour (vector test against the real vector.toml) --"
 run_vector_test() {
@@ -146,8 +157,8 @@ fi
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed, $SKIP skipped"
-if [[ $((PASS + FAIL)) -lt 23 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 23.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 29 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 29.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

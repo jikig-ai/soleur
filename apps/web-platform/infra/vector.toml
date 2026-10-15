@@ -820,9 +820,10 @@ retry_max_duration_secs = 30
 #
 # Attribution hardening. Squid's %un logs the PRESENTED username even when authentication
 # fails, so a bad-credential attempt naming another workspace id would otherwise be
-# attributed to that workspace. egress_audit_prep therefore: drops rows with no status or
-# status 407 (fail closed on a mixed-version window where an older gateway has no status
-# field), requires the workspace to be a UUID (the gateway's own `probe` username and the
+# attributed to that workspace. egress_audit_prep therefore: keeps only rows whose status is a
+# positive allowlist (200 tunnel, 403 denied, 502/503/504 upstream; so 407, an aborted
+# connection's 000, an older gateway with no status field and anything new all fail closed),
+# requires the workspace to be a UUID (the gateway's own `probe` username and the
 # unauthenticated `-` fall out here and write nothing), allowlists the host characters
 # and normalises the decision. Measured on Squid 6.13 (plan Phase 0.6).
 #
@@ -839,7 +840,7 @@ parsed, perr = parse_json(string(.message) ?? "")
 if perr != null || !is_object(parsed) { abort }
 row = object!(parsed)
 status = string(row.status) ?? ""
-if status == "" || status == "407" { abort }
+if !match(status, r'^(200|403|502|503|504)$') { abort }
 ws = downcase(string(row.workspace) ?? "")
 if !match(ws, r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') { abort }
 host = downcase(string(row.requested_host) ?? "")
@@ -880,6 +881,10 @@ if bytes < 0 { bytes = 0 }
 # host set is exact only below 1,000 events per workspace per 15 minutes. This Vector
 # version cannot reroute discarded events, so the per-key discard counter is turned into a
 # marker line below, which makes a flood visible in Better Stack without SSH.
+#
+# The per-workspace cap alone does not bound memory: 19 workspaces at the cap already exceed
+# the unit limit. The second, keyless throttle bounds the TOTAL to the 10,000 events (about
+# 10,000 reduce keys) that the ten-workspace flood measurement above covers.
 [transforms.egress_audit_throttle]
 type = "throttle"
 inputs = ["egress_audit_prep"]
@@ -888,9 +893,15 @@ window_secs = 900
 key_field = "{{ workspace_id }}"
 internal_metrics.emit_events_discarded_per_key = true
 
+[transforms.egress_audit_throttle_global]
+type = "throttle"
+inputs = ["egress_audit_throttle"]
+threshold = 10000
+window_secs = 900
+
 [transforms.egress_audit_reduce]
 type = "reduce"
-inputs = ["egress_audit_throttle"]
+inputs = ["egress_audit_throttle_global"]
 group_by = ["workspace_id", "bucket_start", "requested_host", "decision", "source_host"]
 expire_after_ms = 900000
 flush_period_ms = 30000
@@ -909,9 +920,11 @@ del(.timestamp)
 '''
 
 # Throttle discards -> one marker line per workspace, through the PII-scrub chain into Better
-# Stack. The source is Vector's own per-key discard counter (a lifetime counter since the last
-# restart, scraped every 60 s), so `dedupe` keeps one line per change rather than one per
-# scrape. No host value is involved.
+# Stack. The source is Vector's own PER-KEY discard counter, `events_discarded_total` (it carries
+# the `key` tag; `component_discarded_events_total` is the component-wide one and has no key),
+# a lifetime counter since the last restart scraped every 60 s, so `dedupe` keeps one line per
+# change rather than one per scrape. Shape captured from a real 0.43.1 run. No host value is
+# involved.
 # VRL cannot read a metric's VALUE, and a remap cannot turn a metric into a log, so convert
 # first and filter the resulting log.
 [transforms.egress_audit_throttled_log]
@@ -921,7 +934,7 @@ inputs = ["vector_internal"]
 [transforms.egress_audit_throttled_filter]
 type = "filter"
 inputs = ["egress_audit_throttled_log"]
-condition = '.name == "component_discarded_events_total" && .tags.component_id == "egress_audit_throttle" && exists(.tags.key) && (to_float(.counter.value) ?? 0.0) > 0.0'
+condition = '.name == "events_discarded_total" && .tags.component_id == "egress_audit_throttle" && exists(.tags.key) && (to_float(.counter.value) ?? 0.0) > 0.0'
 
 [transforms.egress_audit_throttled_marker]
 type = "remap"
@@ -936,9 +949,29 @@ n = to_int(.counter.value) ?? 0
 }
 '''
 
+# The keyless global cap has no per-key counter; its component-wide counter (real 0.43.1 shape:
+# `component_discarded_events_total`, tags component_id/component_kind/component_type/intentional)
+# becomes one global marker, so a legitimate burst that hits the cap is not dropped silently.
+[transforms.egress_audit_throttled_global_filter]
+type = "filter"
+inputs = ["egress_audit_throttled_log"]
+condition = '.name == "component_discarded_events_total" && .tags.component_id == "egress_audit_throttle_global" && (to_float(.counter.value) ?? 0.0) > 0.0'
+
+[transforms.egress_audit_throttled_global_marker]
+type = "remap"
+inputs = ["egress_audit_throttled_global_filter"]
+source = '''
+n = to_int(.counter.value) ?? 0
+. = {
+  "message": "SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=" + to_string(n),
+  "SYSLOG_IDENTIFIER": "vector-egress-audit",
+  "PRIORITY": "4"
+}
+'''
+
 [transforms.egress_audit_throttled_dedupe]
 type = "dedupe"
-inputs = ["egress_audit_throttled_marker"]
+inputs = ["egress_audit_throttled_marker", "egress_audit_throttled_global_marker"]
 fields.match = ["message"]
 cache.num_events = 5000
 
@@ -948,8 +981,10 @@ cache.num_events = 5000
 # interpolates inside COMMENTS too, so never write the dollar-brace form of a variable name in a comment. Verified
 # with `vector validate` under strict env mode with the variable unset and set (Phase 0.6).
 # Same-host plain HTTP: authenticity rests on the bearer token, recorded in ADR-288.
-# 4xx responses are not retried by the http sink, so a flag-off or rejected batch is dropped
-# rather than filling the buffer; the disk buffer drops NEWEST events when full.
+# The app answers 202 for a flag-off or fully-filtered batch and 401/400/413 for a rejected one;
+# the http sink retries 5xx and 429 and drops other 4xx, so a rejected batch is dropped rather
+# than filling the buffer. Ten attempts with the sink's backoff (about two and a half minutes)
+# outlast an app restart or deploy; the disk buffer drops NEWEST events when full.
 [sinks.egress_audit_ingest]
 type = "http"
 inputs = ["egress_audit_shape"]
@@ -961,9 +996,9 @@ batch.timeout_secs = 30
 auth.strategy = "bearer"
 auth.token = "${EGRESS_AUDIT_INGEST_TOKEN:-}"
 request.timeout_secs = 10
-request.retry_attempts = 3
+request.retry_attempts = 10
 request.retry_initial_backoff_secs = 1
-request.retry_max_duration_secs = 30
+request.retry_max_duration_secs = 120
 buffer.type = "disk"
 buffer.max_size = 268435488
 buffer.when_full = "drop_newest"

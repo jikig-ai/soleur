@@ -153,6 +153,7 @@ printf '%s\n' "$LOGFORMAT_LINE" > "$SUITE_SCRATCH/logformat.txt"
 assert_grep "logformat carries the HTTP status (%>Hs)" '"status":"%>Hs"' "$LOGFORMAT_FILE"
 assert_grep "status is the LAST field, so a requested_host that injects JSON keys cannot override it" '"status":"%>Hs"\}$' "$LOGFORMAT_FILE"
 assert_grep "workspace (%un) precedes status in the line" '"workspace":"%un".*"status":"%>Hs"' "$LOGFORMAT_FILE"
+assert_grep "requested_host (agent-influenced) precedes workspace and status, so a later trusted key wins any duplicate" '"requested_host":"%>rd".*"workspace":"%un".*"status":"%>Hs"' "$LOGFORMAT_FILE"
 FIXTURE_LINES="$SCRIPT_DIR/test-fixtures/egress-gw-decision-lines.jsonl"
 check_cmd "decision-line fixture exists and is non-empty" test -s "$FIXTURE_LINES"
 LOGFORMAT_KEYS="$(grep -oE '"[a-z_]+":' "$LOGFORMAT_FILE" | LC_ALL=C sort -u)"
@@ -462,8 +463,8 @@ assert_grep "firewall suite knows the new chains" 'SOLEUR-EGRESS-GW' "$TEST_SH"
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
-if [[ $((PASS + FAIL)) -lt 130 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 130.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 131 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 131.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1
