@@ -1041,10 +1041,10 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    Before entering Phase 3, run the affected gate — **once, and not the whole battery**:
 
    ```bash
-   bash scripts/test-all.sh --affected
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"
    ```
 
-   Since #8322 `--affected` is also the bare-default local mode; the flag is written anyway so the command states what it is. The runner selects the suites this diff can move — argv self-edges, source/import closure, name-stem resolution, and the declared edges in [scripts/lib/test-affected-paths.sh](../../../../scripts/lib/test-affected-paths.sh) — plus every always-on repo-global ratchet. Selection fails toward coverage: an undecidable diff, a missing index, or a diff touching the runner or index itself degrades to the full battery and prints `AFFECTED_FALLBACK reason=…`. Preview it via `bash scripts/test-all.sh --print-selection`. **What it does not cover:** affected+ratchets does not exercise suite×suite interaction — the backstop for that class is CI's sharded full battery, and a green affected run is not a full-coverage claim.
+   The gate's rc contract (0/1/4/6/7), the `.soleur-test-gate.json` override schema, and per-rc actions live in [affected-gate-contract.md](../ship/references/affected-gate-contract.md). In THIS repo it capability-probes and delegates `scripts/test-all.sh --affected` — selection fails toward coverage (`AFFECTED_FALLBACK reason=…` on an undecidable diff or a touched runner/index); preview it via `bash scripts/test-all.sh --print-selection` (repo-local). A green affected run is the diff's coverage, not a full-coverage claim; CI's sharded battery is the backstop.
 
    A second, heuristic scoped selector also exists (#8591): `TEST_GROUP=affected bash scripts/test-all.sh` — chokepoint declines on argv paths, content references, stems, and an always-run census backstop, with no declared index to maintain. It is the substitute both rc=4 refusals prescribe; an undeterminable diff runs everything. `TEST_GROUP=affected --affected` refuses rc=2. Both are scoped evidence, not the ship gate.
 
