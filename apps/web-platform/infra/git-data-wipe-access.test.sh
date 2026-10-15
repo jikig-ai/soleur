@@ -90,7 +90,7 @@ mkdir -p "$T/cz" "$T/mut" "$T/sim" "$T/specs" "$T/cases" || { printf 'FAIL SETUP
 
 printf '\n=== git-data wipe job census (plan Phase 4/5, Guard Contract 1-8) ===\n\n'
 
-MUTANT_FLOOR=180
+MUTANT_FLOOR=181
 cat > "$T/wfsim.py" <<'PYEOF'
 #!/usr/bin/env python3
 # wfsim: a tiny GitHub-Actions expression engine, the wipe-job census, a step-by-step simulator that runs the
@@ -450,7 +450,7 @@ FORBIDDEN = re.compile(FORBIDDEN_SRC, re.I)
 STANDING = "This run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), residue on the served store, or any copy held by someone with prior access."
 SECRET_RE = re.compile(r"secrets\.([A-Za-z0-9_]+)")
 ECHO_VARS_ALLOWED = {"DOPPLER_CLI_SHA256", "rrc", "cls", "MODE", "RUN_ATTEMPT", "want", "v", "gv", "would", "W3_WOULD", "line", "ORIGIN_RUN", "VOLUME_ID", "reason", "row_epoch",
-                     "origin_epoch", "d", "w4", "w7", "srr", "ans", "W3_VARIANT", "verdict", "variant", "sv", "sw", "srv_created", "row_at", "WIPE_VOLUME_ID", "WIPE_SERVER_ID", "WIPE_LUKS_VOLUME_ID",
+                     "origin_epoch", "d", "w4", "w7", "srr", "ans", "W3_VARIANT", "verdict", "variant", "sv", "sw", "srv_created", "row_at", "RUN_ID", "RUN_ACTOR", "EPOCHSECONDS", "WIPE_VOLUME_ID", "WIPE_SERVER_ID", "WIPE_LUKS_VOLUME_ID",
                      "WIPE_ROW_EPOCH", "srr_word"}
 # The names the wipe run expands in echo/printf output are pinned. A credential-holding variable (`tok`, `dt`) is NOT on the
 # list: `printf '::add-mask::%s\n' "$tok"` is excluded by the add-mask scan, and `echo "$tok"` is therefore RED.
@@ -1838,6 +1838,7 @@ MUTANTS = {
     "sep-scan-skipped": [S("wipe_flag_precheck", 'sv="$(git_data_store_dirty_list | GDSD_SELF_RUN_ID="$GITHUB_RUN_ID" git_data_store_dirty_scan)" || true', 'sv=store_clean')],
     "sep-srr-ignored": [S("wipe_host_assert", 'elif [[ "$srr" -ne 0 ]]; then', 'elif false; then')],
     "sep-reread-expect-dropped": [S("wipe_flag_reread", ' WIPE_VARIANT="$WIPE_VARIANT"', '')],
+    "evidence-run-record-dropped": [S("wipe_readback", 'echo "### git-data wipe evidence, run record"', 'echo "### dropped"')],
     "a5-row-dt-empty": [S("wipe_host_assert", 'WIPE_ROW_DT="$WIPE_ROW_EPOCH"', 'WIPE_ROW_DT=""')],
     "a5-server-from-luks": [S("wipe_host_assert", "WIPE_SERVER_ID=\"$(sed -n 's/^server_id=//p' \"$rec\")\"", "WIPE_SERVER_ID=\"$(sed -n 's/^luks_id=//p' \"$rec\")\"")],
     "w10-rc-any": [S("wipe_post_detach_read", 'if [[ "$rc" -eq 5 ]] && ! grep -qE "^\\[git-data-cutover\\] STORE probe=[a-z-]+ verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi', 'echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"')],
@@ -1950,7 +1951,7 @@ declare -A WANT=(
   [a5-listing-skip]=2 [a5-row-dt-empty]=2 [a5-server-from-luks]=2 [w10-rc-any]=2 [w10-probe-excl]=2 [nv-already-here]=2 [w12-always-deleted]=2 [w12-standing-dropped]=2
   [w10-retry-removed]=2 [w10-retry-verdict]=2 [w10-retry-nosleep]=1 [w10-retry-first-decides]=1 [w10-retry-no-access]=1
   [t-install-maxtime-dropped]=2 [t-install-connect-dropped]=2 [t-doppler-identity-dropped]=2 [t-doppler-reread-dropped]=2 [t-doppler-readback-dropped]=2
-  [t-gh-list-dropped]=2 [t-gh-view-dropped]=2 [sep-scan-skipped]=2 [sep-srr-ignored]=2 [sep-reread-expect-dropped]=2
+  [t-gh-list-dropped]=2 [t-gh-view-dropped]=2 [sep-scan-skipped]=2 [sep-srr-ignored]=2 [sep-reread-expect-dropped]=2 [evidence-run-record-dropped]=2
   [f-retention-closed]=2 [nv-vid-unvalidated]=2 [nv-orig-always]=2 [nv-angle]=2 [h-identity-phase]=1
 )
 MUT_FILE=""
@@ -2616,6 +2617,7 @@ mutate a5-listing-skip "$WF" && simdef m-a5-listing wipe wf="$MUT_FILE"
 mutate sep-scan-skipped "$WF" && simdef m-sep-scan wipe wf="$MUT_FILE" world='json:{"VARIANT":"separated","FLAG_STATE":"false"}' scan=dirty
 mutate sep-srr-ignored "$WF" && simdef m-sep-srr wipe wf="$MUT_FILE" world='json:{"VARIANT":"separated","FLAG_STATE":"false","SRR":"2"}'
 mutate sep-reread-expect-dropped "$WF" && simdef m-sep-reread wipe wf="$MUT_FILE" world='json:{"VARIANT":"separated","FLAG_STATE":"false"}'
+mutate evidence-run-record-dropped "$WF" && simdef m-evidence wipe wf="$MUT_FILE"
 mutate a5-row-dt-empty "$WF" && simdef m-a5-rowdt wipe wf="$MUT_FILE"
 mutate a5-server-from-luks "$WF" && simdef m-a5-server wipe wf="$MUT_FILE"
 mutate b-w10-no-web-host-ssh "$WF" && simdef m-b-w10 wipe wf="$MUT_FILE"
@@ -2840,6 +2842,12 @@ if simok gold-sep-check && [ "$(R gold-sep-check .job_result)" = success ] && gr
    && grep -qF '### git-data wipe evidence, pre-state' "$T/sim/gold-sep-check/summary.md" && grep -qF 'inherited, ADR-239 Amendment 2026-10-09' "$T/sim/gold-sep-check/summary.md"; then
   pass "N-sep-check: wipe_check in the separated state is green, reports W3 would be separated/none and prints the labelled pre-state evidence block (measured / inherited)"
 else fail "N-sep-check" "job=$(R gold-sep-check .job_result) :: $(head -c 300 "$T/sim/gold-sep-check/summary.md")"; fi
+if simok gold-wipe && grep -qF '### git-data wipe evidence, pre-state' "$T/sim/gold-wipe/summary.md" && grep -qF '### git-data wipe evidence, run record' "$T/sim/gold-wipe/summary.md" \
+   && grep -qE 'run id 9000000123, dispatched by' "$T/sim/gold-wipe/summary.md" && grep -qF 'newest boot_complete row at 2' "$T/sim/gold-wipe/summary.md"; then
+  pass "N-evidence: a completed mode=wipe run prints the labelled pre-state block (W7: ids, variant, boot row glossed as boot-time only, counts only, the inherited residue statement) and the run-record block (W12: run id, dispatcher, the environment approval named as not read here)"
+else fail "N-evidence" "$(grep -c 'evidence' "$T/sim/gold-wipe/summary.md" 2>/dev/null) evidence headings"; fi
+if simok m-evidence && ! grep -qF '### git-data wipe evidence, run record' "$T/sim/m-evidence/summary.md"; then pass "M-evidence-run-record-dropped: without the W12 run-record echo the golden summary lacks the block (the N-evidence row goes RED)"
+else fail "M-evidence-run-record-dropped: the run record is still printed with its echo removed"; fi
 neg_row "N-sep-dirty: a separated run whose run records show a flag write refuses at wipe_flag_precheck (wipe_separated_store_dirty) before any Hetzner call" neg-sep-dirty wipe_flag_precheck 'verdict=wipe_separated_store_dirty'
 neg_row "N-sep-inflight: a separated run with ANOTHER cutover run in progress refuses (wipe_separated_cutover_in_flight); its own run does not count" neg-sep-inflight wipe_flag_precheck 'verdict=wipe_separated_cutover_in_flight'
 neg_row "N-sep-srr: a separated run whose LUKS store root holds entries (store_root_repos=2) refuses at wipe_host_assert (wipe_separated_store_root_populated) before the loader and the detach" neg-sep-srr wipe_host_assert 'verdict=wipe_separated_store_root_populated'
@@ -3096,8 +3104,8 @@ chk_floor "verdict words derived" "$WORDS_LIVE" 60
 chk_floor "notify words derived" "$NWORDS_LIVE" 10
 chk_floor "W1 and cutover cases executed" "$CASES_RUN" 52
 chk_floor "notify cases executed" "$NOTIFY_CASES_N" 62
-chk_floor "simulator runs" "$SIMS_RUN" 124
-MIN_ASSERTIONS=615
+chk_floor "simulator runs" "$SIMS_RUN" 125
+MIN_ASSERTIONS=618
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions passed, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$passes" "$MIN_ASSERTIONS" >&2
   exit 1

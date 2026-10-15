@@ -1475,9 +1475,11 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DELETE_PHASE: ${{ steps.wipe_delete.outputs.phase }}
           ORIGIN_RUN: ${{ inputs.origin_run }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ACTOR: ${{ github.actor }}
         run: |
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" VOLUME_ID="$VOLUME_ID" DELETE_PHASE="$DELETE_PHASE" ORIGIN_RUN="$ORIGIN_RUN" \
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" VOLUME_ID="$VOLUME_ID" DELETE_PHASE="$DELETE_PHASE" ORIGIN_RUN="$ORIGIN_RUN" RUN_ID="$RUN_ID" RUN_ACTOR="$RUN_ACTOR" \
             bash -c 'set -euo pipefail
           IFS= read -r dt
           tok=""
@@ -1501,6 +1503,11 @@ jobs:
               echo "This run made no delete call. The delete outcome is in the origin run (run id ${ORIGIN_RUN:-unknown})."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+          {
+            echo "### git-data wipe evidence, run record"
+            echo "- measured, this run: run id ${RUN_ID:-unknown}, dispatched by ${RUN_ACTOR:-unknown}; the typed volume id was checked against the id the provider API names (W4); the environment approval is recorded by GitHub on this run and is not read here"
+            echo "- measured, this run: the provider API read-back above answered at epoch second ${EPOCHSECONDS:-unknown}"
+          } >> "$GITHUB_STEP_SUMMARY"
           echo "This run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), residue on the served store, or any copy held by someone with prior access." >> "$GITHUB_STEP_SUMMARY"' <<<"$DOPPLER_TOKEN"
 
       # W13: teardown, always. The whole body runs under env -i with every variable written NAME="${NAME:-}",

@@ -278,10 +278,7 @@ own predicates, implemented as: `wipe_reread` takes the variant W3 printed as `W
   equals `GITHUB_RUN_ID`, take the scan's existing `queued` branch (`last=$((attempt - 1))`): earlier attempts of the own run are still
   read, only the current attempt is skipped. Test rows: the own run in progress passes; a second in-progress run refuses; an earlier dirty
   attempt of the own id refuses. `scripts/lib/git-data-store-dirty-scan.sh` is added to Files to Edit.
-- *Split across steps.* The Doppler-only precheck (`wipe_flag_precheck`) decides and prints the variant from F and S. The scan and the
-  `boot_complete` predicates need W4's `created` and W5's row, so they run in a NEW step `wipe_separated_gate` placed after W5, executed
-  only when the printed variant is `separated`; `flip_chained` skips it. The existing W3 text that refuses whenever the stamp is absent
-  (`stamp_absent`) is conditioned on the variant, not removed. A variant that changes between steps is a refusal (W7b).
+- *Where each predicate runs (implemented; supersedes an earlier plan to add a `wipe_separated_gate` step, which the build showed to be unnecessary).* The Doppler precheck (`wipe_flag_precheck`, W3) decides the variant and prints `wipe_variant=`; the same W3 step then runs the run-record scan (`GDSD_SELF_RUN_ID="$GITHUB_RUN_ID"`), because it already holds `GH_TOKEN` and the workflow already grants `actions: read`. The `boot_complete` predicates need no new step: W5 already requires a row newer than the server's creation with `served_repos=0` for BOTH variants. The on-host store-root count is read in W7 from the host verb's `store_root_repos=` field. The W3 `stamp_absent` refusal is conditioned on the variant (flip_chained only). A variant that changes between steps is a refusal (W7b).
 
 **A1.3 `wipe_check` runs the layout listing (CLO position; the CTO schedule's biggest risk).** The Phase 3.3 counts-only listing runs in
 `wipe_check` exactly as in the real dispatch; step 9's `(pre, listing skipped)` and the closing line `UNVERIFIED: layout listing not
