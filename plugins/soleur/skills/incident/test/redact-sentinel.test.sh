@@ -1355,6 +1355,26 @@ else
   PASS=$((PASS + 1))
 fi
 
+# Test 25b — with stderr closed (sys.stderr is None) the fail-closed arm still returns 2, never an uncaught crash.
+t25b_out="${TMP_DIR}/test25b.out"
+python3 -I - "${SKILL_DIR}/scripts/redact-engine.py" >"${t25b_out}" 2>&1 <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("redact_engine_under_test", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+def boom(path):
+    raise ValueError("CANARY-7f3a")
+mod.scan = boom
+sys.argv = ["redact-engine.py", "x"]
+real, sys.stderr = sys.stderr, None
+try:
+    rc = mod.main()
+finally:
+    sys.stderr = real
+print("RC=%s" % rc)
+PY
+assert_grep "Test 25b: a crashing engine with stderr closed still exits 2" "^RC=2$" "${t25b_out}"
+
 echo "Total: ${PASS} pass, ${FAIL} fail"
 
 # ---------------------------------------------------------------------------
@@ -1374,7 +1394,7 @@ echo "Total: ${PASS} pass, ${FAIL} fail"
 # value from a green run and ratchet it UP when assertions are added — never down to make a
 # failure go away, which is how a floor becomes the thing it was built to prevent.
 # ---------------------------------------------------------------------------
-EXPECTED_MIN=99
+EXPECTED_MIN=100
 TOTAL_DISPATCHED=$(( PASS + FAIL ))
 if [[ "${TOTAL_DISPATCHED}" -lt "${EXPECTED_MIN}" ]]; then
   echo "FAIL: harness dispatched only ${TOTAL_DISPATCHED} assertions (expected >= ${EXPECTED_MIN}) — a vacuous run. Assertions were removed or the dispatch was neutered; a suite that asserts nothing exits 0 and reads as PASS." >&2
