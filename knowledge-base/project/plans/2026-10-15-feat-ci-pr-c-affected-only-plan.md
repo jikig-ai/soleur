@@ -13,6 +13,24 @@ amends: [ADR-276]
 
 # ci: S4 PR C, affected-only pull_request runs (evidence, go/no-go, readers, lock removal)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-15. Sections checked: User-Brand Impact, Observability, Guard Contract, Scope Check, ADR/C4, Implementation Phases, Acceptance Criteria. Agents and gates used: the seven plan-review seats and four CTO rulings recorded below (the review panel is the deepen fan-out for this plan), the Phase 4.6 to 4.12 halts run mechanically, a live verification pass over every cited path, symbol, issue, PR and API shape.
+
+### Key improvements
+
+1. The expensive evidence is preceded by a cheap kill (Phase 1.0), and the go/no-go is a computed verdict with a machine line the gate script reads.
+2. The `full-verified` predicate now has an explicit shape table (a skipped `pr-selection` is the normal state), binds to the run that owns the graded `test` check run, uses `CHECK_SHA`, and prints `state=error` outside its closed set.
+3. The audit probe separates bypass merges from monitor reverts and carryover chains, records the push-run outcome and assigns the operator.
+4. Every guard row names an edit that must fail exactly one row; natural-repair rows (empty stubs, an empty prerequisite-5 heading) are included.
+
+### New considerations discovered
+
+- The unfiltered `actions/runs?head_sha=` endpoint is polluted by unrelated `workflow_dispatch` runs; the workflow-scoped endpoint is the only safe source (verified on `a54c4e315b`, which lists a `push` and a `merge_group` run).
+- The org-admin credential is unnecessary: the repo-scoped organization-variables read (200, `total_count` 0) covers every variable that resolves through `vars`.
+- No doc-only pull request has been observed after the Q1 merge, so AC9c stays an observation.
+- Stage 2 is probably unreachable on the plan's own prior (14% against a 20% bar); the stage 1 evidence tooling is the real deliverable.
+
 ## Overview
 
 Third build PR of stage 4 of the hosted-runner demand plan (#9729, ADR-276). PR B (`2f651e1643`) shipped the dark, locked selection lever; the Q1 follow-up (`269afa3ce4`) made the dark job cost nothing while `CI_PR_AFFECTED` is unset. PR C does three things in order, with a hard decision seam between the first two:
