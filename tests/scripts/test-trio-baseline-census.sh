@@ -27,73 +27,85 @@
 # suite does single-source the Tier-B ENVIRONMENT set from that census (E1).
 #
 # POPULATION (F-A). `git ls-files -z --cached --others --exclude-standard` (a git failure is FAIL
-# SETUP), minus the top-level prefixes knowledge-base/ and docs/, binaries (a NUL in the first 8 KiB),
-# symlinks, and this suite's own two files by exact path. `.md` outside those prefixes IS scanned (the
-# ship/postmerge/qa skill docs read the trio from Tier A). Whole-line `#` and `//` comments are
-# filtered for code and NOT for `.md`. A scanned file that exists but cannot be read is a hard FAIL
-# (T8). A structural test class is exempt from the name rule and still needs a row if it holds a
-# direct-store read shape: a directory segment in {test, tests, __tests__, fixtures}, a `.test.<ext>`
-# or `.spec.<ext>` suffix, or `.tftest.hcl`. Nothing under .github/ is ever exempt.
+# SETUP), minus: this suite's own two files by exact path; symlinks; files with a known BINARY
+# EXTENSION (a NUL byte never hides a file: a NUL-bearing file is scanned with each NUL read as a
+# newline and again with the NULs removed, as bash reads it; a file with a binary extension that
+# nevertheless names the trio is a hard FAIL, because `bash x.png` runs it); and, under the prefixes
+# knowledge-base/ and docs/, everything that is not CODE (a code extension there is scanned: a bootstrap
+# script archived under the knowledge base names the trio too). `.md` elsewhere IS scanned (the ship and
+# postmerge skill docs read the trio from Tier A). A scanned file that exists but cannot be read (a
+# gitlink directory included) is a hard FAIL (T8); cached-but-gone-from-worktree is skipped silently. Every
+# exclusion is a pinned constant (T6) and is re-derived independently in bash (A3, A4).
 #
-# NAMES (F-A3). Token family, case-insensitive:
+# COMMENTS. A whole-line comment is dropped only where it truly is one: `#` in everything but JS/TS, `//`
+# in JS/TS only, never in Markdown, and never when the line also holds `${` (a heredoc line `#${NAME}` and a
+# workflow `run:` line `#${{ secrets.X }}` expand).
+#
+# EXEMPT CLASS (R2). A structural test class (a directory segment in {test, tests, __tests__, fixtures}, a
+# `.test.<ext>` or `.spec.<ext>` suffix, `.tftest.hcl`; NEVER anything under .github/) may MENTION the names
+# without a row. It still needs a row when it holds a read shape. The class is pinned (T6, `@exempt`).
+#
+# NAMES (F-A3). Token family, case-insensitive, with a left AND right token boundary:
 #   (?<![A-Za-z0-9_])(?:TF_VAR_)?(STEM)(?:_[A-Za-z0-9]+)*(?![A-Za-z0-9_])
 # over STEMS = WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET. The row name is the
 # upper-cased token with TF_VAR_ stripped. ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID|SECRET rows cover the
-# Terraform spellings of the Access token (and `terraform output -raw`); FALLBACK:<NAME> rows cover a
-# `|| doppler secrets get <other credential>` on a logical (continuation-joined) line that names the
-# trio. The stems are pinned by the `@stems` record in the baseline (T6).
+# Terraform spellings of the DEPLOY Access token only (`access_service_token_client_(id|secret)` with a
+# left boundary, `cloudflare_zero_trust_access_service_token.deploy.client_*`; the ci_ssh and registry_push
+# tokens are other credentials, G1b); FALLBACK:<NAME> rows cover a `|| doppler secrets get <other
+# credential>` on a logical line (backslash and trailing-`||` continuations joined) that names the trio.
 #
 # CLASSES (F-C). Every row carries a class the scanner COMPUTES and the baseline must agree with (T5c):
-#   tier-a  a file with a direct-store read shape (`${{ secrets.<NAME> }}`, `doppler secrets get|download
-#           ... <NAME>`, `doppler run` against prd_terraform, `terraform output -raw
-#           access_service_token_client_*`), or a workflow naming the trio in a job without a Tier-B
-#           environment, or any composite action (no job to prove an environment), FALLBACK:*, ALIAS:*.
+#   tier-a  a file with a READ SHAPE: any `doppler run` or `doppler secrets get|download` invocation in a file
+#           that names the trio (regardless of arguments), `${{ secrets.<NAME> }}`, `${!var}` indirection of a
+#           family name, `terraform output -raw access_service_token_client_*`; or a workflow naming the trio in
+#           a job without a literal Tier-B environment; or any composite action; FALLBACK:*, ALIAS:*.
 #           Expiry required; TERMINAL: the end state is zero tier-a rows.
-#   tier-b  a workflow with no read shape where EVERY job naming the trio declares an `environment:`
-#           whose arms are all in the Tier-B set. Expiry `-`.
-#   sink    a non-workflow file with no read shape (variables.tf, server.tf, hooks.json.tmpl, ...).
-#           Expiry `-`.
+#   tier-b  a workflow with no read shape where EVERY job naming the trio (every job, when a workflow-level key
+#           names it) declares a LITERAL `environment:` that is a member of the Tier-B set. Anything the proof
+#           cannot measure (an expression, a matrix, unparseable YAML, no jobs, no naming job) is tier-a. Expiry `-`.
+#   sink    a non-workflow file with no read shape (variables.tf, server.tf, hooks.json.tmpl, ...). Expiry `-`.
 #
-# RATCHET (F-B, T4). Against the base copy of the baseline: tag fixed; class forward-only (tier-a ->
-# tier-b|sink); expiry never later (re-date path: ADR-241 line `Re-date: <date> ... Ruled by <owner>` in a
-# baseline/ADR/plan-only diff); a NEW (file, name) key is admitted only by an `@allow` line that exists at
-# the base and is deleted by the same diff; renames (>= 90%) carry their rows. The base FAILS CLOSED: an
-# unresolved ref, or a baseline absent at a base where this suite exists, is RED. The introduction arm is
-# legitimate only while this suite is absent at the base.
+# RATCHET (F-B, T4). Against the base copy of the baseline: tag fixed (and equal to the group computed from the
+# path); class forward-only (tier-a -> tier-b|sink); expiry never later (re-date path: ADR-241 line `Re-date:
+# <date> ... Ruled by <owner>` in a baseline/ADR-only diff); a NEW (file, name) key is admitted only by an
+# `@allow` line that exists at the base and is deleted by the same diff; a NEW `@allow` is admitted only in a
+# baseline/ADR-only diff whose ADR-241 diff adds `Allow: <file> <NAME> ... Ruled by <owner>`; renames
+# (>= 90%) carry their rows; a deleted row whose name reappears in an exempt file ADDED by the diff is RED
+# (similarity does not matter). The base FAILS CLOSED on every git failure (never an empty change list): an
+# unresolved ref, a failing git subcommand, or a baseline absent at a base where this suite exists is RED. The
+# introduction arm is legitimate only while this suite is absent at the merge-base; a branch cut before the
+# suite landed prints a T4w warning.
 #
 # EXPIRY (F-D). Tier-a rows: strict ISO date, at most MAX_EXPIRY, compared as dates. Hard RED only on a
-# blocking event that touches a row's file, the baseline, ADR-241 or the plan; on a main push, schedule,
-# merge-queue gate or dispatch-on-main it is a non-blocking T3m annotation (ci_not_green must not stop
-# tenant deploys). Within 21 days: a non-failing T3w row and a ::warning::.
+# blocking event that touches a row's file, the baseline or ADR-241; on a main push, schedule, merge-queue gate
+# or dispatch-on-main it is a non-blocking T3m annotation (ci_not_green must not stop tenant deploys). Within
+# 21 days: a non-failing T3w row and a ::warning::.
 #
-# Seams: TRIO_REPO_ROOT (the tree the scan reads), TRIO_BASELINE, TRIO_BASE_REF (the ref merged-base'd
-# against; default refs/remotes/origin/main), TRIO_TODAY (default today, UTC), TRIO_ALLOW_NO_BASE=1
-# (local only, loud banner). All four seams MUST be unset under GITHUB_ACTIONS=true (FAIL SETUP).
+# Authority. "Ruled by" and the ADR lines are self-attested text in the same repository: the platform does not
+# require a second reviewer (the rulesets carry no pull_request rule). The ratchet defends against accident
+# and drift, not against a PR author who edits the suite itself.
 #
-# Harness conventions (ADR-193): the instrument self-test drives both helpers once; every mutation
-# copies a PRISTINE fixture (a git-init'd copy of a synthetic tree, never the live tree), asserts the edit
-# LANDED, then requires the NAMED row RED (a crash or a missing row is UNRESOLVED, not a kill); the
-# control run is asserted all-green first; the mutant runner itself is proven by a no-op mutant that it
-# must score FAIL; floors report with printf + exit, never through the helpers they backstop.
+# SEAMS. TRIO_REPO_ROOT (the tree the scan reads), TRIO_BASELINE, TRIO_BASE_REF (the ref merge-based against;
+# default refs/remotes/origin/main), TRIO_TODAY (default today, UTC), TRIO_ALLOW_NO_BASE=1 (local only, loud
+# banner), and the internal RF_* run knobs are test hooks. ALL of them are refused (FAIL SETUP) under
+# GITHUB_ACTIONS=true and the RF_* ones are scrubbed locally. That refusal is accident-proofing, not
+# authorization: a workflow step can unset GITHUB_ACTIONS. `--seams-check` also audits this file's own source,
+# so a seam added without being declared in SEAMS fails.
+#
+# Harness conventions (ADR-193): the instrument self-test drives both helpers once; every mutation copies a
+# PRISTINE fixture (a git-init'd copy of a synthetic tree, never the live tree), asserts the edit LANDED, then
+# requires the NAMED row RED (kill rule, one mechanism: scanner rc 0 AND every row present AND the named row
+# FAIL AND its detail carries the named reason; anything else is UNRESOLVED, not a kill; a `want` is matched
+# against the DETAIL only and must not be satisfied by the row's own label); the control run is asserted
+# all-green first; helper internals have negative controls (a wrong want, a wrong arm, a red fixture under
+# green, a crashing scanner and a short row set must all be scored FAIL); scanner-branch mutants edit a COPY
+# of the scanner and must flip a named classification case; floors report with printf + exit, never through
+# the helpers they backstop. Mutant scans run in parallel; the verdicts are judged in registration order.
 #
 # Run: bash tests/scripts/test-trio-baseline-census.sh [--emit-baseline | --seams-check]
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
-
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$DIR/../.." && pwd)"
-SUITE="$DIR/$(basename "${BASH_SOURCE[0]}")"
-REPODIR="${TRIO_REPO_ROOT:-$ROOT}"
-BASELINE="${TRIO_BASELINE:-$ROOT/tests/scripts/trio-baseline.tsv}"
-TODAY="${TRIO_TODAY:-$(date -u +%F)}"
-SUITE_REL="tests/scripts/test-trio-baseline-census.sh"
-BASELINE_REL="tests/scripts/trio-baseline.tsv"
-# Spelled in two parts on purpose: this suite extracts ONE constant from the sibling census and never runs it or
-# inherits its reads, and the dropped-consumer ratchet follows a literal script path one hop into that script.
-SIBLING_REL="tests/scripts/test-infra-privileged-tier-census"".sh"
-ADR_REL="knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
-PLAN_REL="knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.md"
 
 passes=0; fails=0; MUTANTS_RUN=0
 FAILURES=()
@@ -107,18 +119,39 @@ if [ "$_st" != "1 1 1" ]; then
   printf 'FAIL INSTRUMENT: pass()/fail() self-test read "%s", expected "1 1 1"\n' "$_st" >&2; exit 1
 fi
 
-python3 -c 'import re, os, sys, datetime, subprocess, ast, json, yaml' 2>/dev/null || { printf 'FAIL SETUP: python3 (with the yaml module) unavailable\n' >&2; exit 1; }
-
-# F-B: the seams are test hooks. In CI they must be unset, or a workflow-level env edit could disarm the guard.
+# Every environment/flag seam of this suite (a test hook). Refused under CI; --seams-check audits the source.
+SEAMS="TRIO_TODAY TRIO_BASE_REF TRIO_BASELINE TRIO_REPO_ROOT TRIO_ALLOW_NO_BASE RF_PY RF_REF RF_TODAY RF_EVENT RF_EVENTREF RF_ENVS RF_SIB"
 if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-  for _seam in TRIO_TODAY TRIO_BASE_REF TRIO_BASELINE TRIO_REPO_ROOT; do
+  for _seam in $SEAMS; do
     if [ -n "${!_seam+x}" ]; then
-      printf 'FAIL SETUP: %s is set under GITHUB_ACTIONS=true; the TRIO_* seams are local test hooks and must be unset in CI\n' "$_seam" >&2
+      printf 'FAIL SETUP: %s is set under GITHUB_ACTIONS=true; it is a local test hook and must be unset in CI\n' "$_seam" >&2
       exit 1
     fi
   done
 fi
-if [ "${1:-}" = "--seams-check" ]; then printf 'SEAMS OK\n'; exit 0; fi
+unset RF_PY RF_REF RF_TODAY RF_EVENT RF_EVENTREF RF_ENVS RF_SIB
+if [ "${1:-}" = "--seams-check" ]; then
+  _undecl=""
+  for _n in $(grep -o '[$][{]\{0,1\}\(TRIO\|RF\)_[A-Za-z_]*' "${BASH_SOURCE[0]}" | sed 's/^[$]//; s/^{//' | sort -u); do
+    case " $SEAMS TRIO_BASE_ARM " in *" $_n "*) : ;; *) _undecl="$_undecl $_n" ;; esac
+  done
+  if [ -n "$_undecl" ]; then printf 'FAIL SETUP: seam(s) used but not declared in SEAMS:%s\n' "$_undecl" >&2; exit 1; fi
+  printf 'SEAMS OK\n'; exit 0
+fi
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/../.." && pwd)"
+SUITE="$DIR/$(basename "${BASH_SOURCE[0]}")"
+REPODIR="${TRIO_REPO_ROOT:-$ROOT}"
+BASELINE="${TRIO_BASELINE:-$ROOT/tests/scripts/trio-baseline.tsv}"
+TODAY="${TRIO_TODAY:-$(date -u +%F)}"
+SUITE_REL="tests/scripts/test-trio-baseline-census.sh"
+BASELINE_REL="tests/scripts/trio-baseline.tsv"
+SIBLING_REL="tests/scripts/test-infra-privileged-tier-census.sh"
+LIB_REL="scripts/lib/test-affected-paths.sh"
+ADR_REL="knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
+KBN="knowledge-base"   # the directory name as data (fixture paths, the A5 glob names), never as a path this suite reads
+AFFECTED_ARRAY="AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS"
 
 # Canonical copy of plugins/soleur/test/test-helpers.sh's guard (the fixture-dir-operand-assert
 # suite pins every tracked copy byte-identical).
@@ -133,12 +166,26 @@ assert_fixture_dir() {
   esac
 }
 
+# THE FIXTURE GIT ENVIRONMENT (#7849 chokepoint): sourcing arms the tripwire that refuses an inherited GIT_DIR (in a linked
+# worktree git exports it to every hook and it overrides `git -C`), and git_fixture_env then exports the ceiling ($T's
+# parent), an identity and config hermeticity into this shell. The live repo is read through `git -C "$REPODIR"`, whose
+# own root is found without climbing to the ceiling.
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "${ROOT}/plugins/soleur/test/lib/git-fixture-env.sh" \
+  || { printf 'FAIL SETUP: could not source the fixture git environment\n' >&2; exit 1; }
+
 T="$(mktemp -d "${TMPDIR}/trio-baseline-census.XXXXXX")" || { printf 'FAIL SETUP: mktemp\n' >&2; exit 1; }
 _REACHED_VERDICT=""; _rc=0
 trap '_rc=$?; rm -rf "$T"; if [ "$_rc" -eq 0 ] && [ -z "$_REACHED_VERDICT" ]; then printf "FAIL: suite exited 0 before its verdict\n" >&2; exit 1; fi' EXIT
 assert_fixture_dir "$T"
-mkdir -p "$T/mut" || { printf 'FAIL SETUP: mkdir %s/mut\n' "$T" >&2; exit 1; }
+git_fixture_env "$T" || { printf 'FAIL SETUP: git_fixture_env refused the fixture root %s\n' "$T" >&2; exit 1; }
+mkdir -p "$T/mut" "$T/probe" "$T/cm" || { printf 'FAIL SETUP: mkdir %s\n' "$T" >&2; exit 1; }
+: > "$T/empty.tsv"
 
+# python3 never runs from the caller's cwd (a stray json.py/yaml.py there would shadow the import): every call goes
+# through py3, which runs from the private temp dir.
+py3() { (cd "$T" && python3 "$@"); }
+py3 -c 'import re, os, sys, datetime, subprocess, ast, json, yaml' 2>/dev/null || { printf 'FAIL SETUP: python3 (with the yaml module) unavailable\n' >&2; exit 1; }
 
 cat > "$T/trio.py" <<'PY'
 import sys, os, re, datetime, argparse, subprocess, json, ast
@@ -159,6 +206,8 @@ ap.add_argument("--event-ref", default="")   # GITHUB_REF
 ap.add_argument("--envs", default="")        # a comma list overriding the Tier-B environment set (fixtures)
 ap.add_argument("--sibling", default="")     # the sibling census file the Tier-B environment set is extracted from
 ap.add_argument("--ann", default="")         # file receiving ::warning:: / ::error:: annotations
+ap.add_argument("--scanned-list", default="")  # file receiving the NUL-separated scanned paths (the conservation check reads it)
+ap.add_argument("--git-iso", action="store_true")  # fixtures: ignore the operator's global/system git config
 a = ap.parse_args()
 REPO = a.repo
 
@@ -171,14 +220,28 @@ WARN_DAYS = 21
 SUITE_REL = "tests/scripts/test-trio-baseline-census.sh"
 BASELINE_REL = "tests/scripts/trio-baseline.tsv"
 ADR_REL = "knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
-PLAN_REL = "knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.md"
 ROOTS = [".github/workflows", ".github/actions", ".github/scripts", "scripts", "plugins", "apps/web-platform"]
-# The knowledge base is excluded from the scan and never read (the two governed files this suite diffs by path are
-# ADR_REL and PLAN_REL below); the prefix is spelled in two parts so the dropped-consumer ratchet, which tokenises
-# the directory name as a read, sees only the real, declared reads.
-EXCLUDED_PREFIXES = ("knowledge" + "-base/", "docs/")
+# Under these prefixes only CODE is scanned (a script, a workflow, a template or a config can read the trio from a
+# docs directory too); prose, media and rendering inputs are not.
+EXCLUDED_PREFIXES = ("knowledge-base/", "docs/")
+KB_CODE_EXT = {"sh", "bash", "py", "ts", "tsx", "js", "jsx", "mjs", "cjs", "yml", "yaml", "tf", "tfvars", "tmpl", "hcl",
+               "toml", "json", "cfg", "service", "timer"}
+# Known binary EXTENSIONS. A NUL byte never hides a file; a file with one of these extensions that nevertheless names
+# the trio is a hard FAIL (T8), because `bash x.png` runs it.
+BINARY_EXT = {"png", "jpg", "jpeg", "gif", "ico", "webp", "avif", "bmp", "tif", "tiff", "woff", "woff2", "ttf", "otf", "eot",
+              "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "jar", "class", "so", "dylib", "o", "a", "bin", "mp3", "mp4", "mov",
+              "webm", "wasm", "pen", "sqlite", "db", "tsq", "tsr", "bpf"}
+# The structural test class: a directory segment, or a suffix. `.*` in a suffix stands for any one extension.
 EXEMPT_DIRS = {"test", "tests", "__tests__", "fixtures"}
-# The consumer groups of the plan (single-sourced there; this map labels rows and keys T5/T7).
+EXEMPT_SUFFIXES = (".test.*", ".spec.*", ".tftest.hcl")
+# The guard constants the baseline pins (each `@name` record must equal the constant here AND the base copy's record).
+PINS = {
+    "stems": ",".join(STEMS),
+    "exempt": ",".join(sorted(EXEMPT_DIRS)) + ";" + ",".join(EXEMPT_SUFFIXES),
+    "binary": ",".join(sorted(BINARY_EXT)),
+    "kbcode": ",".join(sorted(KB_CODE_EXT)),
+}
+# The consumer groups of the plan (this map labels rows and keys T5/T7; the plan table is the narrative).
 PR3 = {".github/workflows/web-platform-release.yml", ".github/workflows/canary-status.yml"}
 PR4_PREFIX = (".github/workflows/cutover-inngest.yml", ".github/workflows/deploy-inngest-image.yml",
               ".github/workflows/restart-inngest-server.yml", ".github/workflows/scheduled-inngest-health.yml",
@@ -207,9 +270,9 @@ if TODAY is None:
     sys.exit(3)
 
 out = []
+CTRL = re.compile(r"[\x00-\x1f\x7f]")
 def check(name, cond, detail=""):
-    out.append("%s\t%s\t%s" % ("ok" if cond else "FAIL", name.replace("\t", " ").replace("\n", " "),
-                              str(detail)[:700].replace("\t", " ").replace("\n", " ")))
+    out.append("%s\t%s\t%s" % ("ok" if cond else "FAIL", CTRL.sub(" ", name), CTRL.sub(" ", str(detail))[:700]))
 anns = []
 
 # ── the name family ──────────────────────────────────────────────────────────────────────
@@ -221,29 +284,43 @@ ROWNAME = re.compile(r"(?:" + STEM_ALT + r")(?:_[A-Z0-9]+)*")
 def row_name(tok):
     n = tok.upper()
     return n[len("TF_VAR_"):] if n.startswith("TF_VAR_") else n
-ALIAS_A = re.compile(r"access_service_token_client_(id|secret)", re.I)
-ALIAS_B = re.compile(r"cloudflare_zero_trust_access_service_token\.[A-Za-z0-9_]+\.client_(id|secret)", re.I)
+# The Terraform spellings of the DEPLOY Access token only (tunnel.tf: output "access_service_token_client_*" and
+# cloudflare_zero_trust_access_service_token.deploy). The ci_ssh and registry_push tokens are other credentials (G1b).
+ALIAS_A = re.compile(r"(?<![A-Za-z0-9_])(?:TF_VAR_)?access_service_token_client_(id|secret)(?![A-Za-z0-9_])", re.I)
+ALIAS_B = re.compile(r"(?<![A-Za-z0-9_])cloudflare_zero_trust_access_service_token\.deploy\.client_(id|secret)(?![A-Za-z0-9_])", re.I)
 ALIAS_NAMES = {"ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID", "ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET"}
 FALLBACK = re.compile(r"\|\|\s*doppler\s+secrets\s+get\s+([A-Za-z_][A-Za-z0-9_]*)")
 HCLOUD = re.compile(r"(?<![A-Za-z0-9_])HCLOUD_TOKEN(?![A-Za-z0-9_])", re.I)
-CONT = re.compile(r"\\[ \t]*\n[ \t]*")
+CONT = re.compile(r"\\[ \t]*\n[ \t]*")          # backslash continuation, joined with a space (read shapes)
+CONT_STRICT = re.compile(r"\\\r?\n")            # backslash continuation exactly as bash removes it (split names)
+ORJOIN = re.compile(r"\|\|[ \t]*\n[ \t]*")      # a line ending in `||` continues on the next line
 
-# direct-store read shapes (F-A2 / F-C)
+# direct-store read shapes (F-A2 / F-C). `doppler run` and `doppler secrets get|download` are read shapes REGARDLESS of
+# arguments, flags, pipes, variable names or split literals once the file names the family.
+_SEP = r"""[ \t"',]+"""
+_WORDS = r"""(?:""" + _SEP + r"""[^\s;|&)"',]+){0,6}?"""
+R_DOP_RUN = re.compile(r"(?<![A-Za-z0-9_])doppler" + _WORDS + _SEP + r"run(?![A-Za-z0-9_-])", re.I)
+R_DOP_SEC = re.compile(r"(?<![A-Za-z0-9_])doppler" + _WORDS + _SEP + r"secrets" + _SEP + r"(?:get|download)(?![A-Za-z0-9_-])", re.I)
 R_SECRETS = re.compile(r"secrets\s*(?:\.\s*|\[\s*['\"])(" + FAM_CORE + ")", re.I)
-R_GET_HEAD = re.compile(r"doppler[ \t]+(?:[^\s;|&)]+[ \t]+)*?secrets[ \t]+(?:get|download)\b", re.I)
-R_RUN = re.compile(r"doppler\b[^\n]*?\brun\b[^\n]*?prd_terraform", re.I)
-R_TFOUT = re.compile(r"terraform\b[^\n]*?\boutput\b[^\n]*?-raw\s+[\"']?access_service_token_client_(id|secret)", re.I)
+R_INDIRECT = re.compile(r"\$\{!([A-Za-z_][A-Za-z0-9_]*)\}")
+R_TFOUT = re.compile(r"terraform\b[^\n]*?\boutput\b[^\n]*?-raw\s+[\"']?(?<![A-Za-z0-9_])access_service_token_client_(id|secret)(?![A-Za-z0-9_])", re.I)
 
-def code_text(rel, text):
-    if rel.lower().endswith(".md"):
-        return text
+JS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+def code_lines(rel, text):
+    """The lines that are code. A whole-line comment is dropped only where it truly is one: `#` in everything but
+    JS/TS, `//` in JS/TS only, never when the line also holds a `${` (a heredoc line `#${NAME}` and a workflow
+    `run:` line `#${{ secrets.X }}` expand). Markdown is never filtered."""
+    low = rel.lower()
+    if low.endswith(".md"):
+        return text.split("\n")
+    js = low.endswith(JS_EXT)
     keep = []
     for ln in text.split("\n"):
         s = ln.lstrip()
-        if s.startswith("#") or s.startswith("//"):
+        if (s.startswith("//") if js else s.startswith("#")) and "${" not in ln:
             continue
         keep.append(ln)
-    return "\n".join(keep)
+    return keep
 
 def is_exempt(rel):
     if rel.startswith(".github/"):
@@ -252,34 +329,50 @@ def is_exempt(rel):
     if any(p in EXEMPT_DIRS for p in parts[:-1]):
         return True
     base = parts[-1]
-    return bool(re.search(r"\.(test|spec)\.[A-Za-z0-9]+$", base)) or base.endswith(".tftest.hcl")
+    for suf in EXEMPT_SUFFIXES:
+        if suf.endswith(".*"):
+            if re.search(re.escape(suf[:-1]) + r"[A-Za-z0-9]+$", base):
+                return True
+        elif base.endswith(suf):
+            return True
+    return False
 
-def excluded_path(rel):
-    return rel in (SUITE_REL, BASELINE_REL) or rel.startswith(EXCLUDED_PREFIXES) or is_exempt(rel)
+def ext_of(rel):
+    b = rel.rsplit("/", 1)[-1]
+    return b.rsplit(".", 1)[-1].lower() if "." in b else ""
 
 PREFILTER = [x.lower() for x in STEMS] + ["access_service_token_client_", "cloudflare_zero_trust_access_service_token"]
-def analyze(rel, text):
-    low = text.lower()
+EMPTY_AN = {"names": set(), "aliases": set(), "reads": set(), "gen_read": False, "alias_reads": set(),
+            "fallbacks": set(), "hcloud": False, "indirect": False}
+def analyze1(rel, text):
+    low = (text + "\n" + CONT_STRICT.sub("", text)).lower()
     if not any(x in low for x in PREFILTER):
-        return {"names": set(), "aliases": set(), "reads": set(), "gen_read": False, "alias_reads": set(),
-                "fallbacks": set(), "hcloud": False}
-    code = code_text(rel, text)
-    joined = CONT.sub(" ", code)
+        return {k: (set() if isinstance(v, set) else v) for k, v in EMPTY_AN.items()}
+    code = "\n".join(code_lines(rel, text))
+    joined = ORJOIN.sub("|| ", CONT.sub(" ", code))
+    strict = CONT_STRICT.sub("", code)
     an = {"names": set(), "aliases": set(), "reads": set(), "gen_read": False, "alias_reads": set(),
-          "fallbacks": set(), "hcloud": bool(HCLOUD.search(code))}
-    for m in FAM.finditer(code):
-        an["names"].add(row_name(m.group(0)))
-    for m in ALIAS_A.finditer(code):
-        an["aliases"].add("ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_" + m.group(1).upper())
-    for m in ALIAS_B.finditer(code):
-        an["aliases"].add("ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_" + m.group(1).upper())
+          "fallbacks": set(), "hcloud": bool(HCLOUD.search(code)), "indirect": False}
+    for txt in (code, joined, strict):
+        for m in FAM.finditer(txt):
+            an["names"].add(row_name(m.group(0)))
+        for m in ALIAS_A.finditer(txt):
+            an["aliases"].add("ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_" + m.group(1).upper())
+        for m in ALIAS_B.finditer(txt):
+            an["aliases"].add("ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_" + m.group(1).upper())
     for m in R_SECRETS.finditer(joined):
         an["reads"].add(row_name(m.group(1)))
-    for m in R_GET_HEAD.finditer(joined):
-        tail = re.split(r"[;|&)\n]", joined[m.end():], maxsplit=1)[0]
-        for t in FAM.finditer(tail):
-            an["reads"].add(row_name(t.group(0)))
-    an["gen_read"] = bool(R_RUN.search(joined))
+    named = bool(an["names"] or an["aliases"])
+    an["gen_read"] = named and bool(R_DOP_RUN.search(joined) or R_DOP_SEC.search(joined) or R_DOP_RUN.search(code) or R_DOP_SEC.search(code))
+    if named:
+        # `${!X}` is a read shape when X is itself a family name, or is given a family name on the same logical line
+        # (`n=NAME; echo "${!n}"`, `for n in NAME; do ... ${!n}`). A flow-insensitive cross-line match is a blind spot.
+        for ln in joined.split("\n"):
+            for m in R_INDIRECT.finditer(ln):
+                x = re.escape(m.group(1))
+                if FAM_FULL.fullmatch(m.group(1)) or re.search(r"(?<![A-Za-z0-9_])" + x + r"=[\"']?" + FAM_CORE, ln, re.I) \
+                        or re.search(r"\bfor\s+" + x + r"\s+in\b[^;\n]*" + FAM_CORE, ln, re.I):
+                    an["indirect"] = True
     for m in R_TFOUT.finditer(joined):
         an["alias_reads"].add("ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_" + m.group(1).upper())
     for ln in joined.split("\n"):
@@ -289,16 +382,25 @@ def analyze(rel, text):
                     an["fallbacks"].add("FALLBACK:" + m.group(1).upper())
     return an
 
+def merge_an(items):
+    res = {k: (set() if isinstance(v, set) else v) for k, v in EMPTY_AN.items()}
+    for an in items:
+        for k, v in an.items():
+            res[k] = (res[k] | v) if isinstance(v, set) else (res[k] or v)
+    return res
+
+def analyze(rel, texts):
+    return merge_an(analyze1(rel, t) for t in texts)
+
+def has_read(an):
+    return bool(an["reads"] or an["gen_read"] or an["alias_reads"] or an["indirect"])
+
 def keys_of(rel, an, exempt):
     if not exempt:
         return {(rel, n) for n in an["names"]} | {(rel, n) for n in an["fallbacks"]} | {(rel, n) for n in an["aliases"]}
-    ks = {(rel, n) for n in an["reads"]} | {(rel, n) for n in an["alias_reads"]}
-    if an["gen_read"]:
-        ks |= {(rel, n) for n in an["names"]}
-    return ks
-
-def has_read(an):
-    return bool(an["reads"] or an["gen_read"] or an["alias_reads"])
+    if has_read(an):
+        return {(rel, n) for n in an["names"]} | {(rel, n) for n in an["alias_reads"]}
+    return set()
 
 # ── the Tier-B environment set ───────────────────────────────────────────────────────────
 SIB = None
@@ -316,52 +418,55 @@ elif SIB:
 else:
     ENVS = set(PENDING_ENVS)
 
-def env_arms(raw):
-    """Every value `environment:` can resolve to. Scalar, mapping form, or a ${{ }} expression."""
-    if raw is None:
-        return None
+def env_literal(raw):
+    """The environment name when `environment:` is a LITERAL (a string, or a mapping whose name is a string); None for
+    anything computed or absent. An expression can never be a member of the closed Tier-B set, so no expression parsing
+    exists here: a conditional, a matrix, an input or a `|| ''` arm is simply not a member."""
     if isinstance(raw, dict):
         raw = raw.get("name")
-        if raw is None:
-            return [""]
-    s = str(raw)
-    if "${{" in s:
-        arms = re.findall(r"'([^']*)'", s) + re.findall(r'"([^"]*)"', s)
-        if re.search(r"\|\|\s*''", s) or re.search(r'\|\|\s*""', s):
-            arms.append("")
-        return arms if arms else [""]
-    return [s]
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if not s or "${{" in s:
+        return None
+    return s
 
 WF = re.compile(r"\.github/workflows/[^/]+\.ya?ml")
+ACTION = re.compile(r"\.github/actions/(?:[^/]+/)*action\.ya?ml")
 def tierb_ok(rel, text):
-    """True when every job naming the trio declares an `environment:` whose arms are all Tier-B."""
+    """True when EVERY job naming the trio declares a literal `environment:` that is a member of the Tier-B set.
+    Anything the proof cannot measure (unparseable YAML, no jobs, no naming job) is not tier-b."""
     try:
         doc = yaml.safe_load(text)
     except Exception:
         return False
     if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
         return False
-    wl = bool(FAM.search(json.dumps(doc.get("env") or {}, default=str)))
-    naming = [(jn, b) for jn, b in doc["jobs"].items() if isinstance(b, dict) and (wl or FAM.search(json.dumps(b, default=str)))]
+    wl = bool(FAM.search(json.dumps({k: v for k, v in doc.items() if k != "jobs"}, default=str)))
+    naming = [b for b in doc["jobs"].values() if isinstance(b, dict) and (wl or FAM.search(json.dumps(b, default=str)))]
     if not naming:
         return False
-    for _jn, b in naming:
-        arms = env_arms(b.get("environment")) if "environment" in b else None
-        if not arms or not all(x and x in ENVS for x in arms):
+    for b in naming:
+        e = env_literal(b.get("environment")) if "environment" in b else None
+        if e is None or e not in ENVS:
             return False
     return True
 
 def file_class(rel, text, an, exempt):
     if exempt or has_read(an):
         return "tier-a"
+    if ACTION.fullmatch(rel):
+        return "tier-a"
     if WF.fullmatch(rel):
         return "tier-b" if tierb_ok(rel, text) else "tier-a"
     return "sink"
 
 # ── 1. the population (F-A1) ─────────────────────────────────────────────────────────────
-genv = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+genv = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")}
+if a.git_iso:
+    genv.update({"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"})
 def git(*args):
-    return subprocess.run(["git", "-C", REPO] + list(args), capture_output=True, env=genv)
+    return subprocess.run(["git", "-C", REPO, "-c", "color.ui=never"] + list(args), capture_output=True, env=genv)
 
 _r = git("ls-files", "-z", "--cached", "--others", "--exclude-standard")
 if _r.returncode != 0:
@@ -369,15 +474,17 @@ if _r.returncode != 0:
     sys.exit(3)
 paths = sorted({os.fsdecode(p) for p in _r.stdout.split(b"\0") if p})
 
-stat = {"excluded": 0, "exempt": 0, "binary": 0, "symlinks": 0, "gone": 0, "hits": 0}
+stat = {"excluded": 0, "exempt": 0, "binary": 0, "symlinks": 0, "gone": 0, "hits": 0, "nul": 0}
 unreadable = []
 scanned = []
 need = {}
 hcloud_files = set()
 key_files = set()
 tf_texts = {}
+exempt_names = {}
 for rel in paths:
-    if rel in (SUITE_REL, BASELINE_REL) or rel.startswith(EXCLUDED_PREFIXES):
+    ex_ext = ext_of(rel)
+    if rel in (SUITE_REL, BASELINE_REL) or (rel.startswith(EXCLUDED_PREFIXES) and ex_ext not in KB_CODE_EXT):
         stat["excluded"] += 1
         continue
     full = os.path.join(REPO, rel)
@@ -387,35 +494,48 @@ for rel in paths:
     if not os.path.lexists(full):
         stat["gone"] += 1
         continue
-    if os.path.isdir(full):
-        continue
     try:
         with open(full, "rb") as fh:
             raw = fh.read()
     except OSError as e:
         unreadable.append("%s (%s)" % (rel, e.__class__.__name__))
         continue
-    if b"\0" in raw[:8192]:
+    if ex_ext in BINARY_EXT:
         stat["binary"] += 1
+        _rl = raw.lower()
+        if any(x.encode() in _rl for x in PREFILTER) and FAM.search(raw.decode("latin-1")):
+            unreadable.append("%s (binary extension, but it names the trio)" % rel)
         continue
-    text = raw.decode("utf-8", errors="replace")
+    if b"\0" in raw:
+        # a NUL never hides a file: scan it once with each NUL as a newline and once with the NULs removed (as bash reads it)
+        stat["nul"] += 1
+        texts = [raw.replace(b"\0", b"\n").decode("utf-8", errors="replace"), raw.replace(b"\0", b"").decode("utf-8", errors="replace")]
+    else:
+        texts = [raw.decode("utf-8", errors="replace")]
     ex = is_exempt(rel)
     scanned.append(rel)
     if ex:
         stat["exempt"] += 1
-    an = analyze(rel, text)
+    an = analyze(rel, texts)
     if has_read(an):
         stat["hits"] += 1
     ks = keys_of(rel, an, ex)
+    if ex and an["names"] and not ks:
+        exempt_names[rel] = set(an["names"])
     if ks:
-        fcls = file_class(rel, text, an, ex)
+        fcls = file_class(rel, texts[0], an, ex)
         key_files.add(rel)
         for (f, n) in ks:
             need[(f, n)] = "tier-a" if n.startswith(("FALLBACK:", "ALIAS:")) else fcls
     if an["hcloud"] and not ex:
         hcloud_files.add(rel)
     if re.fullmatch(r"apps/web-platform/infra/[^/]+\.tf", rel):
-        tf_texts[rel] = text
+        tf_texts[rel] = texts[0]
+
+if a.scanned_list:
+    with open(a.scanned_list, "wb") as fh:
+        for r in scanned:
+            fh.write(os.fsencode(r) + b"\0")
 
 pairs = {k for k in need if not k[1].startswith(("FALLBACK:", "ALIAS:"))}
 fallbacks = {k for k in need if k[1].startswith("FALLBACK:")}
@@ -423,20 +543,13 @@ aliases = {k for k in need if k[1].startswith("ALIAS:")}
 
 # ── 2. the baseline ──────────────────────────────────────────────────────────────────────
 def read_baseline(path):
-    rec = {"exists": os.path.isfile(path), "rows": [], "bad": [], "dup": [], "stems": [], "allows": []}
+    rec = {"exists": os.path.isfile(path), "rows": [], "bad": [], "dup": [], "pins": {k: [] for k in PINS}, "allows": []}
     if not rec["exists"]:
         rec["bad"].append("missing file")
         return rec
     seen, seen_allow = set(), set()
     for i, ln in enumerate(open(path, encoding="utf-8").read().split("\n"), 1):
         if not ln.strip() or ln.startswith("#"):
-            continue
-        if ln.startswith("@stems"):
-            m = re.fullmatch(r"@stems[ \t]+([A-Z0-9_,]+)", ln)
-            if m:
-                rec["stems"].append(m.group(1))
-            else:
-                rec["bad"].append("line %d: malformed @stems record" % i)
             continue
         if ln.startswith("@allow"):
             c = ln.split("\t")
@@ -447,15 +560,20 @@ def read_baseline(path):
                 rec["bad"].append("line %d: @allow name %r is not a trio-family name" % (i, n))
             if mx != "-" and parse_iso(mx) is None:
                 rec["bad"].append("line %d: @allow max-expiry %r is not '-' or a strict ISO date" % (i, mx))
-            if not re.fullmatch(r"#9294:PR-[1-4]", tg):
-                rec["bad"].append("line %d: @allow tag %r is not #9294:PR-1..4" % (i, tg))
+            if tg != "#9294:" + group_of(f):
+                rec["bad"].append("line %d: @allow tag %r is not the computed group #9294:%s of %s" % (i, tg, group_of(f), f))
             if (f, n) in seen_allow:
                 rec["dup"].append("@allow %s %s" % (f, n))
             seen_allow.add((f, n))
             rec["allows"].append((f, n, mx, tg))
             continue
         if ln.startswith("@"):
-            rec["bad"].append("line %d: unknown record %r" % (i, ln.split("\t")[0][:20])); continue
+            m = re.fullmatch(r"@(" + "|".join(PINS) + r")[ \t]+(\S+)", ln)
+            if m:
+                rec["pins"][m.group(1)].append(m.group(2))
+            else:
+                rec["bad"].append("line %d: unknown or malformed record %r" % (i, ln.split("\t")[0][:20]))
+            continue
         c = ln.split("\t")
         if len(c) != 5 or not all(x.strip() for x in c):
             rec["bad"].append("line %d: need 5 non-empty tab-separated columns (file, name, class, expires, tag)" % i); continue
@@ -474,10 +592,8 @@ def read_baseline(path):
             rec["bad"].append("line %d: name %r is not a trio-family, FALLBACK:* or ALIAS:* name" % (i, n))
         if n.startswith(("FALLBACK:", "ALIAS:")) and cls != "tier-a":
             rec["bad"].append("line %d: %s must be tier-a" % (i, n))
-        if not re.fullmatch(r"#9294:PR-[1-4]", tag):
-            rec["bad"].append("line %d: tag %r is not #9294:PR-1..4" % (i, tag))
-        elif cls == "tier-a" and tag != "#9294:" + group_of(f):
-            rec["bad"].append("line %d: tier-a tag %s is not the computed group #9294:%s of %s" % (i, tag, group_of(f), f))
+        if tag != "#9294:" + group_of(f):
+            rec["bad"].append("line %d: tag %r is not the computed group #9294:%s of %s" % (i, tag, group_of(f), f))
         if (f, n) in seen:
             rec["dup"].append("%s %s" % (f, n))
         seen.add((f, n))
@@ -485,14 +601,26 @@ def read_baseline(path):
     return rec
 
 if a.mode == "emit":
-    prev = read_baseline(a.baseline) if os.path.isfile(a.baseline) else {"allows": []}
-    print("@stems " + ",".join(STEMS))
+    prev = read_baseline(a.baseline) if os.path.isfile(a.baseline) else {"rows": [], "allows": []}
+    prev_rows = {(f, n): (c, e, t) for f, n, c, e, t in prev["rows"]}
+    prev_allow = {(f, n): (mx, tg) for f, n, mx, tg in prev["allows"]}
+    for name in PINS:
+        print("@%s %s" % (name, PINS[name]))
     for f, n, mx, tg in prev["allows"]:
         if (f, n) not in need:
             print("@allow\t%s\t%s\t%s\t%s" % (f, n, mx, tg))
     for (f, n) in sorted(need):
         c = need[(f, n)]
-        print("%s\t%s\t%s\t%s\t#9294:%s" % (f, n, c, ROW_EXPIRY if c == "tier-a" else "-", group_of(f)))
+        if (f, n) in prev_rows:                    # an existing key keeps its tag and its (possibly re-dated) expiry
+            _pc, pe, tag = prev_rows[(f, n)]
+            exp = (pe if parse_iso(pe) is not None else ROW_EXPIRY) if c == "tier-a" else "-"
+        elif (f, n) in prev_allow:                 # a key that spends an @allow takes the allow's tag and max-expiry
+            mx, tag = prev_allow[(f, n)]
+            exp = (mx if parse_iso(mx) is not None else ROW_EXPIRY) if c == "tier-a" else "-"
+        else:
+            tag = "#9294:" + group_of(f)
+            exp = ROW_EXPIRY if c == "tier-a" else "-"
+        print("%s\t%s\t%s\t%s\t%s" % (f, n, c, exp, tag))
     sys.exit(0)
 
 rec = read_baseline(a.baseline)
@@ -514,9 +642,10 @@ b_arm = slurp_s("arm")
 b_ref = slurp_s("ref")
 b_msg = slurp_s("msg")
 b_shallow = slurp_s("shallow") == "true"
+b_stale = slurp_s("stale") == "1"
 base_rec = read_baseline(os.path.join(a.base_dir, "base.tsv")) if b_status == "ok" else None
 
-changed, renames = set(), []
+changed, renames, added = set(), [], set()
 if b_status == "ok":
     toks = [os.fsdecode(t) for t in slurp("changed.z").split(b"\0")]
     i = 0
@@ -526,42 +655,50 @@ if b_status == "ok":
             i += 1; continue
         if s[0] in "RC" and i + 2 < len(toks):
             changed.update((toks[i + 1], toks[i + 2]))
+            added.add(toks[i + 2])
             if s[0] == "R":
                 renames.append((toks[i + 1], toks[i + 2]))
             i += 3
         elif i + 1 < len(toks):
-            changed.add(toks[i + 1]); i += 2
+            changed.add(toks[i + 1])
+            if s[0] == "A":
+                added.add(toks[i + 1])
+            i += 2
         else:
             i += 1
-    changed.update(os.fsdecode(t) for t in slurp("untracked.z").split(b"\0") if t)
+    untracked = {os.fsdecode(t) for t in slurp("untracked.z").split(b"\0") if t}
+    changed.update(untracked)
+    added.update(untracked)
 
 # ── 4. the rows ──────────────────────────────────────────────────────────────────────────
-check("T0: the population is git-derived and non-empty (%d scanned: %d exempt by structure, %d read-shape files; %d binary, %d symlink, %d excluded prefix/own skipped)"
+check("T0: the population is git-derived and non-empty (%d scanned: %d exempt by structure, %d read-shape files; %d binary-extension, %d symlink, %d excluded prefix/own skipped)"
       % (len(scanned), stat["exempt"], stat["hits"], stat["binary"], stat["symlinks"], stat["excluded"]),
       len(scanned) >= 1, "scanned=%d" % len(scanned))
 
 problems = rec["bad"] + ["duplicate %s" % d for d in rec["dup"]]
-if len(rec["stems"]) != 1:
-    problems.append("expected exactly one @stems record, found %d" % len(rec["stems"]))
-check("T5: the baseline is well-formed: 5 columns, a computed-class vocabulary, a family/FALLBACK/ALIAS name, a strict ISO expiry on tier-a (<= MAX_EXPIRY) and '-' elsewhere, a #9294:PR-n tag equal to the computed group on tier-a, valid @allow lines, no duplicate key",
+for _pn in PINS:
+    if len(rec["pins"][_pn]) != 1:
+        problems.append("expected exactly one @%s record, found %d" % (_pn, len(rec["pins"][_pn])))
+check("T5: the baseline is well-formed: 5 columns, a computed-class vocabulary, a family/FALLBACK/ALIAS name, a strict ISO expiry on tier-a (<= MAX_EXPIRY) and '-' elsewhere, a #9294:PR-n tag equal to the computed group, valid @allow lines, one record per pinned constant, no duplicate key",
       rec["exists"] and not problems, "; ".join(problems[:6]))
 
 mism = sorted("%s %s (baseline %s, computed %s)" % (f, n, bcls[(f, n)][0], need[(f, n)]) for (f, n) in bkeys & set(need) if bcls[(f, n)][0] != need[(f, n)])
-check("T5c: every row's class agrees with the class the scanner computes (tier-b needs every naming job on a Tier-B environment; a read shape is tier-a)",
+check("T5c: every row's class agrees with the class the scanner computes (tier-b needs every naming job on a literal Tier-B environment; a read shape is tier-a)",
       not mism, "; ".join(mism[:6]))
 
-stems_head = rec["stems"][0] if len(rec["stems"]) == 1 else None
-stems_bad = []
-if stems_head != ",".join(STEMS):
-    stems_bad.append("baseline @stems %r != the scanner's STEMS %r" % (stems_head, ",".join(STEMS)))
-if base_rec is not None:
-    stems_base = base_rec["stems"][0] if len(base_rec["stems"]) == 1 else None
-    if stems_base is None:
-        stems_bad.append("the base copy has no single @stems record")
-    elif stems_base != stems_head:
-        stems_bad.append("baseline @stems %r != the base copy's %r" % (stems_head, stems_base))
-check("T6: the stem set is pinned: the baseline @stems record equals the scanner's STEMS constant and the base copy's record (dropping a stem with its rows is RED)",
-      not stems_bad, "; ".join(stems_bad))
+pin_bad = []
+for _pn in PINS:
+    _hv = rec["pins"][_pn][0] if len(rec["pins"][_pn]) == 1 else None
+    if _hv != PINS[_pn]:
+        pin_bad.append("pin @%s: the baseline record %r differs from the scanner constant %r" % (_pn, _hv, PINS[_pn]))
+    if base_rec is not None:
+        _bv = base_rec["pins"][_pn][0] if len(base_rec["pins"][_pn]) == 1 else None
+        if _bv is None:
+            pin_bad.append("pin @%s: the base copy has no single record" % _pn)
+        elif _bv != _hv:
+            pin_bad.append("pin @%s: the baseline record %r differs from the base copy's %r" % (_pn, _hv, _bv))
+check("T6: the guard constants are pinned: the baseline records (stems, exempt class, binary extensions, code extensions under the doc prefixes) equal the scanner constants and the base copy's records (narrowing the population together with its records is RED)",
+      not pin_bad, "; ".join(pin_bad))
 
 if a.sibling:
     extra = sorted((PENDING_ENVS - (SIB or set())) - {"deploy-channel"})
@@ -571,7 +708,7 @@ if a.sibling:
 else:
     check("E1: the Tier-B environment set is the fixture set (no sibling given)", True, "envs=%s" % sorted(ENVS))
 
-check("T8: no scanned file was unreadable (a silent skip is a hole in the population) [%d unreadable]" % len(unreadable),
+check("T8: no scanned file was unreadable and no binary-extension file names the trio (a silent skip is a hole in the population) [%d unreadable]" % len(unreadable),
       not unreadable, "; ".join(unreadable[:6]))
 
 unbased = sorted("%s %s" % k for k in need if k not in bkeys)
@@ -590,18 +727,19 @@ tier_a = [(f, n, parse_iso(e)) for f, n, c, e, _t in brs if c == "tier-a" and pa
 expired = sorted((f, n, d) for f, n, d in tier_a if d < TODAY)
 soon = sorted((f, n, d) for f, n, d in tier_a if 0 <= (d - TODAY).days <= WARN_DAYS)
 if b_status == "ok":
-    touched = bool({f for f, _n, _d in tier_a} & changed) or bool({BASELINE_REL, ADR_REL, PLAN_REL} & changed)
+    touched = bool({f for f, _n, _d in tier_a} & changed) or bool({BASELINE_REL, ADR_REL} & changed)
 else:
     touched = True
 hard = bool(expired) and not main_event and touched
-check("T3: no tier-a row is past its expiry on a blocking event that touches a row's file, the baseline, ADR-241 or the plan (today %s, event %s%s)"
+check("T3: no tier-a row is past its expiry on a blocking event that touches a row's file, the baseline or ADR-241 (today %s, event %s%s)"
       % (a.today, a.event_name or "local", "" if main_event else " [blocking]"), not hard,
-      "; ".join("%s %s (%s)" % (f, n, d.isoformat()) for f, n, d in ([r for r in expired if r[0] in changed] or expired)[:8]))
+      "; ".join("%s %s (%s)" % (f, n, d.isoformat()) for f, n, d in ([r for r in expired if r[0] in changed] or expired)[:8])
+      + " -- re-date: an ADR-241 line 'Re-date: <date> ... Ruled by <owner>' in a baseline/ADR-only change; or migrate the consumer and delete its row")
 warn = []
 if soon:
     warn.append("%d of %d tier-a rows expire within %d days (earliest %s)" % (len(soon), len(tier_a), WARN_DAYS, min(d for _f, _n, d in soon).isoformat()))
 if expired and not hard and not main_event:
-    warn.append("%d of %d tier-a rows are past expiry but this change touches none of their files, the baseline, ADR-241 or the plan" % (len(expired), len(tier_a)))
+    warn.append("%d of %d tier-a rows are past expiry but this change touches none of their files, the baseline or ADR-241" % (len(expired), len(tier_a)))
 check("T3w: " + ("; ".join(warn) if warn else "no tier-a row expires within %d days" % WARN_DAYS), True, "")
 if warn:
     anns.append("::warning::%s; %d tier-a rows remain" % ("; ".join(warn), len(tier_a)))
@@ -613,6 +751,19 @@ else:
 
 # T4: the ratchet (F-B)
 v = []
+def adr_lines(kind):
+    """(file, NAME) pairs / dates for the `Allow:` or `Re-date:` lines the diff adds to ADR-241"""
+    res = set()
+    for ln in slurp_s("adr.diff").split("\n"):
+        if kind == "allow":
+            m = re.match(r"\+(?!\+).*?Allow:\s+(\S+)\s+(\S+)\b.*\bRuled by\s+\S", ln)
+            if m:
+                res.add((m.group(1), m.group(2)))
+        else:
+            m = re.match(r"\+(?!\+).*?Re-date:\s+([0-9]{4}-[0-9]{2}-[0-9]{2})\b.*\bRuled by\s+\S", ln)
+            if m:
+                res.add(m.group(1))
+    return res
 if b_status == "unresolved":
     v.append("T4 RED: base unresolved (ref %s, arm %s)%s%s" % (b_ref, b_arm,
              " [shallow clone: fetch the base ref, e.g. actions/checkout fetch-depth: 0]" if b_shallow else "",
@@ -662,25 +813,37 @@ elif b_status == "ok" and base_rec is not None:
             v.append("T4: @allow %s %s was added in the same diff that spends it" % k)
         else:
             v.append("T4: new (file,name) %s %s has no @allow at the merge-base; land a reviewed @allow-only PR first" % k)
+    new_allows = sorted(head_allow - set(base_allow))
+    if new_allows:
+        allow_ok = changed <= {BASELINE_REL, ADR_REL}
+        adr_allow = adr_lines("allow")
+        for k in new_allows:
+            if not (allow_ok and k in adr_allow):
+                v.append("T4: new @allow %s %s needs an ADR-241 line 'Allow: <file> <NAME> ... Ruled by <owner>' in a baseline/ADR-only change" % k)
     if extended:
-        redate_ok = changed <= {BASELINE_REL, ADR_REL, PLAN_REL}
-        adr_dates = set()
-        for ln in slurp_s("adr.diff").split("\n"):
-            m = re.match(r"\+(?!\+).*?Re-date:\s+([0-9]{4}-[0-9]{2}-[0-9]{2})\b.*\bRuled by\s+\S", ln)
-            if m:
-                adr_dates.add(m.group(1))
+        redate_ok = changed <= {BASELINE_REL, ADR_REL}
+        adr_dates = adr_lines("redate")
         if not (redate_ok and all(h in adr_dates for _k, _b, h in extended)):
             v.append("T4: expiry extension needs an ADR-241 line 'Re-date: <date> ... Ruled by <owner>' in a baseline/ADR-only change [%s]"
                      % ", ".join("%s %s %s -> %s" % (k[0], k[1], bb, hh) for k, bb, hh in extended[:4]))
     for old, new in renames:
         old_names = {n for (f, n) in base_by if f == old}
-        if old_names and excluded_path(new):
+        if old_names and (new.startswith(EXCLUDED_PREFIXES) and ext_of(new) not in KB_CODE_EXT or is_exempt(new)):
             fp = os.path.join(REPO, new)
             if os.path.isfile(fp) and not os.path.islink(fp):
-                an2 = analyze(new, open(fp, encoding="utf-8", errors="replace").read())
+                an2 = analyze(new, [open(fp, encoding="utf-8", errors="replace").read()])
                 still = old_names & (an2["names"] | an2["aliases"] | an2["fallbacks"])
                 if still:
                     v.append("T4: %s was renamed into the exempt/excluded path %s and still names %s" % (old, new, sorted(still)))
+    # a consumer moved into an exempt location with its rows deleted: the names of a deleted row must not reappear in a
+    # file this diff ADDED under the exempt class (similarity does not matter)
+    new_of = {old: new for old, new in renames}
+    for (f, n) in sorted(base_by):
+        if (f, n) in bkeys or (new_of.get(f), n) in bkeys:
+            continue
+        for p in sorted(added):
+            if n in exempt_names.get(p, ()):
+                v.append("T4: the row %s %s was deleted but %s, new in this diff and exempt from the census, now names %s" % (f, n, p, n))
 if b_status == "ok":
     t4_detail = "; ".join(v[:6])
 elif b_status == "introduction":
@@ -689,22 +852,20 @@ elif b_status == "skipped":
     t4_detail = "SKIPPED via TRIO_ALLOW_NO_BASE=1 (local only)"
 else:
     t4_detail = "; ".join(v[:6])
-check("T4: the baseline is a forward-only ratchet against its base copy (arm %s; tag fixed, class forward-only, expiry never later, new keys only via a spent @allow, renames carry rows)" % (b_arm or "none"),
+check("T4: the baseline is a forward-only ratchet against its base copy (arm %s; tag fixed, class forward-only, expiry never later, new keys only via a spent @allow, a new @allow only by an ADR-ruled baseline/ADR-only change, renames carry rows)" % (b_arm or "none"),
       b_status in ("introduction", "skipped") or (b_status == "ok" and not v), t4_detail)
+if b_stale:
+    check("T4w: WARNING this branch predates the suite: the suite is absent at the merge-base but present at %s, so T4 was skipped (introduction arm); rebase on %s" % (b_ref, b_ref), True, "")
+    anns.append("::warning::T4w: this branch predates the trio census (absent at the merge-base, present at %s); T4 was skipped, rebase on it" % b_ref)
+else:
+    check("T4w: the branch does not predate the suite (no stale-introduction warning)", True, "")
 
 creep = sorted(f for f in hcloud_files if group_of(f) in ("PR-3", "PR-4") and f in key_files)
 check("T7: no file in the PR-3/PR-4 groups (computed from its path, not the tag column) names HCLOUD_TOKEN (the narrow carrier must not drag the host-destroy credential in)", not creep, "; ".join(creep[:8]))
 
 # ── 5. the HMAC stays out of Terraform state (plan Guard 1, assembly of the state attributes) ─
 def tf_text(rel):
-    return "\n".join(code_lines(tf_texts[rel]))
-
-def code_lines(text):
-    for ln in text.split("\n"):
-        s = ln.lstrip()
-        if s.startswith("#") or s.startswith("//"):
-            continue
-        yield ln
+    return "\n".join(code_lines(rel, tf_texts[rel]))
 
 def balanced(text, i):
     """index just past the bracket group opening at text[i]"""
@@ -757,69 +918,109 @@ for l in out:
 if a.ann:
     with open(a.ann, "w", encoding="utf-8") as fh:
         for l in anns:
-            fh.write(l + "\n")
+            fh.write(CTRL.sub(" ", l) + "\n")
 print("TRIO_FILES_SCANNED=%d" % len(scanned), file=sys.stderr)
 print("TRIO_EXEMPT=%d" % stat["exempt"], file=sys.stderr)
 print("TRIO_READSHAPE_HITS=%d" % stat["hits"], file=sys.stderr)
 print("TRIO_SKIPPED_UNREADABLE=%d" % len(unreadable), file=sys.stderr)
 print("TRIO_BINARY=%d" % stat["binary"], file=sys.stderr)
+print("TRIO_NUL_SCANNED=%d" % stat["nul"], file=sys.stderr)
 print("TRIO_SYMLINKS=%d" % stat["symlinks"], file=sys.stderr)
+print("TRIO_GONE=%d" % stat["gone"], file=sys.stderr)
 print("TRIO_EXCLUDED=%d" % stat["excluded"], file=sys.stderr)
 print("TRIO_PAIRS=%d FALLBACKS=%d ALIASES=%d" % (len(pairs), len(fallbacks), len(aliases)), file=sys.stderr)
 for _root in ROOTS:
     print("TRIO_ROOT_COUNT %s %d" % (_root, sum(1 for r in scanned if r.startswith(_root + "/"))), file=sys.stderr)
 PY
 
-GITQ() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }
+# GITQ: git for every call this suite makes. The operator's environment never reaches a fixture: GIT_DIR/WORK_TREE/INDEX
+# and injected config are dropped, colour/pager/signature/ext-diff are pinned off, and with GITQ_ISO=1 (every fixture run)
+# the global and system config are ignored too (a user `color.ui=always` or `core.excludesFile` must not change a verdict).
+GITQ() {
+  # shellcheck disable=SC2086
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS \
+    ${GITQ_ISO:+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1} \
+    git -c color.ui=never -c core.pager=cat -c log.showSignature=false -c diff.mnemonicPrefix=false -c diff.noprefix=false "$@"
+}
 # gc: git for fixture repos (identity and hooks pinned; fixtures never inherit the operator's config)
-gc() { GITQ -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+gc() { GITQ_ISO=1 GITQ -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+REAL_GIT="$(command -v git)"
+
+# _rbg <label> <outfile> <git args...>  — run git in $repo, keep stdout in <outfile>. ANY non-zero rc is a failure to
+# MEASURE, never an empty answer: it sets status=unresolved and msg (variables of the calling resolve_base).
+_rbg() {
+  local label="$1" of="$2" r
+  shift 2
+  assert_fixture_dir "$of"
+  GITQ -C "$repo" "$@" > "$of" 2> "$of.err"; r=$?
+  if [ "$r" -ne 0 ]; then
+    status=unresolved; msg="git $label failed (rc $r): $(head -c 160 "$of.err" | tr -d '\000-\037')"
+    return 1
+  fi
+  return 0
+}
 
 # resolve_base <repo> <dir> <ref>  — the FAIL-CLOSED base resolution (F-B). Writes into <dir>:
-#   status (ok|introduction|unresolved|skipped), arm (merge-base|head1|introduction), ref, msg, shallow,
+#   status (ok|introduction|unresolved|skipped), arm (merge-base|head1|introduction), ref, msg, shallow, stale,
 #   base.tsv (the base copy), changed.z/untracked.z (name-status -M90% -z vs the base, plus untracked paths),
 #   adr.diff (the ADR-241 diff vs the base), addhist.txt (every `@allow` line added to the baseline since the base).
+# Every git call is checked: a failing subcommand is `status=unresolved` with the label that failed, never an empty
+# change list (which would read as "touches nothing") and never the green introduction arm.
 resolve_base() {
-  local repo="$1" d="$2" ref="$3" head mb base="" arm="merge-base" status="ok" msg="" shallow=false
+  local repo="$1" d="$2" ref="$3" head="" mb="" base="" arm="merge-base" status="ok" msg="" shallow=false stale=0 r
+  assert_fixture_dir "$repo"
+  assert_fixture_dir "$d"
   mkdir -p "$d"
   if [ "$(GITQ -C "$repo" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then shallow=true; fi
-  head="$(GITQ -C "$repo" rev-parse --verify -q 'HEAD^{commit}' 2>/dev/null)" || head=""
-  mb="$(GITQ -C "$repo" merge-base HEAD "$ref" 2>/dev/null)" || mb=""
-  if [ -z "$head" ] || [ -z "$mb" ]; then
-    status=unresolved; msg="no merge-base of HEAD and $ref"
-  elif [ "$mb" = "$head" ]; then
-    arm=head1
-    base="$(GITQ -C "$repo" rev-parse --verify -q 'HEAD^1^{commit}' 2>/dev/null)" || base=""
-    if [ -z "$base" ]; then status=unresolved; msg="HEAD is $ref and has no first parent"; fi
-  else
-    base="$mb"
+  if _rbg "rev-parse HEAD" "$d/head.txt" rev-parse --verify -q 'HEAD^{commit}'; then head="$(cat "$d/head.txt")"; fi
+  if [ "$status" = ok ] && ! GITQ -C "$repo" rev-parse --verify -q "$ref^{commit}" > "$d/ref.txt" 2> "$d/ref.err"; then
+    status=unresolved; msg="ref $ref does not resolve to a commit"
   fi
   if [ "$status" = ok ]; then
-    if GITQ -C "$repo" cat-file -e "$base:$SUITE_REL" 2>/dev/null; then
-      if ! GITQ -C "$repo" show "$base:$BASELINE_REL" > "$d/base.tsv" 2>/dev/null; then
-        status=unresolved; msg="$BASELINE_REL is absent at a base where $SUITE_REL exists"
-      fi
+    GITQ -C "$repo" merge-base HEAD "$ref" > "$d/mb.txt" 2> "$d/mb.err"; r=$?
+    if [ "$r" -eq 0 ]; then mb="$(cat "$d/mb.txt")"
+    elif [ "$r" -eq 1 ]; then status=unresolved; msg="no merge-base of HEAD and $ref"
+    else status=unresolved; msg="git merge-base failed (rc $r): $(head -c 160 "$d/mb.err" | tr -d '\000-\037')"; fi
+  fi
+  if [ "$status" = ok ]; then
+    if [ "$mb" = "$head" ]; then
+      arm=head1
+      if _rbg "rev-parse HEAD^1" "$d/b1.txt" rev-parse --verify -q 'HEAD^1^{commit}'; then base="$(cat "$d/b1.txt")"
+      else msg="HEAD is $ref and has no first parent ($msg)"; fi
     else
-      arm=introduction; status=introduction
+      base="$mb"
     fi
+  fi
+  if [ "$status" = ok ] && _rbg "ls-tree suite" "$d/ls_suite.z" ls-tree -z --name-only "$base" -- "$SUITE_REL"; then
+    if [ ! -s "$d/ls_suite.z" ]; then
+      arm=introduction; status=introduction
+      if _rbg "ls-tree suite at ref" "$d/ls_ref.z" ls-tree -z --name-only "$ref" -- "$SUITE_REL" && [ -s "$d/ls_ref.z" ]; then stale=1; fi
+    elif _rbg "ls-tree baseline" "$d/ls_bl.z" ls-tree -z --name-only "$base" -- "$BASELINE_REL"; then
+      if [ ! -s "$d/ls_bl.z" ]; then status=unresolved; msg="$BASELINE_REL is absent at a base where $SUITE_REL exists"
+      else _rbg "show baseline" "$d/base.tsv" show "$base:$BASELINE_REL"; fi
+    fi
+  fi
+  if [ "$status" = ok ]; then
+    _rbg "diff name-status" "$d/changed.z" diff -M90% --name-status -z --no-color --no-ext-diff "$base" \
+      && _rbg "ls-files others" "$d/untracked.z" ls-files -z --others --exclude-standard \
+      && _rbg "diff adr" "$d/adr.diff" diff --no-color --no-ext-diff --unified=0 "$base" -- "$ADR_REL" \
+      && _rbg "log baseline" "$d/log.diff" log -p --no-color --no-ext-diff --format= "$base..HEAD" -- "$BASELINE_REL" \
+      && _rbg "diff baseline" "$d/bl.diff" diff --no-color --no-ext-diff "$base" -- "$BASELINE_REL" \
+      && awk '/^\+@allow\t/' "$d/log.diff" "$d/bl.diff" > "$d/addhist.txt"
   fi
   if [ "$status" = unresolved ] && [ "${TRIO_ALLOW_NO_BASE:-}" = "1" ] && [ "${GITHUB_ACTIONS:-}" != "true" ]; then
     status=skipped
     printf '################################################################################\n# WARNING: TRIO_ALLOW_NO_BASE=1 -- the T4 ratchet is DISABLED for this run (local only). #\n################################################################################\n' >&2
   fi
-  if [ "$status" = ok ]; then
-    GITQ -C "$repo" diff -M90% --name-status -z "$base" > "$d/changed.z" 2>/dev/null
-    GITQ -C "$repo" ls-files -z --others --exclude-standard > "$d/untracked.z" 2>/dev/null
-    GITQ -C "$repo" diff --unified=0 "$base" -- "$ADR_REL" > "$d/adr.diff" 2>/dev/null
-    { GITQ -C "$repo" log -p --format= "$base..HEAD" -- "$BASELINE_REL" 2>/dev/null; GITQ -C "$repo" diff "$base" -- "$BASELINE_REL" 2>/dev/null; } | awk '/^\+@allow\t/' > "$d/addhist.txt"
-  fi
   printf '%s' "$status" > "$d/status"; printf '%s' "$arm" > "$d/arm"; printf '%s' "$ref" > "$d/ref"
-  printf '%s' "$msg" > "$d/msg"; printf '%s' "$shallow" > "$d/shallow"
+  printf '%s' "$msg" > "$d/msg"; printf '%s' "$shallow" > "$d/shallow"; printf '%s' "$stale" > "$d/stale"
 }
 
 # --emit-baseline: print the DERIVED baseline records for the live tree (never hand-written). The prose header
-# of tests/scripts/trio-baseline.tsv is kept by hand; this prints everything below it.
+# of tests/scripts/trio-baseline.tsv is kept by hand; this prints everything below it. An existing key keeps its tag
+# and its (possibly re-dated) expiry; a key that spends an @allow takes the allow's tag and max-expiry.
 if [ "${1:-}" = "--emit-baseline" ]; then
-  python3 "$T/trio.py" --repo "$REPODIR" --baseline "$BASELINE" --today "$TODAY" --mode emit --sibling "$REPODIR/$SIBLING_REL"
+  py3 "$T/trio.py" --repo "$REPODIR" --baseline "$BASELINE" --today "$TODAY" --mode emit --sibling "$REPODIR/$SIBLING_REL"
   _emit_rc=$?
   _REACHED_VERDICT=1
   exit "$_emit_rc"
@@ -827,17 +1028,20 @@ fi
 
 printf '\n=== deploy-channel trio census, Guard 1a (G1, PR-0; #9294, ADR-241) ===\n\n'
 
-NROWS=16
+NROWS=17
 FIXTODAY="2026-10-15"
 FIXENVS="infra-privileged,deploy-channel"
 # run_full <repo> <baseline> <out>  — resolve the base, run the scanner, write the TSV rows to <out>.
 # Knobs (set in a subshell by the caller): RF_REF RF_TODAY RF_EVENT RF_EVENTREF RF_ENVS RF_SIB RF_PY
 run_full() {
   local repo="$1" bl="$2" out="$3"
+  assert_fixture_dir "$repo"
+  assert_fixture_dir "$out"
   rm -rf "$out.bd"
   resolve_base "$repo" "$out.bd" "${RF_REF-refs/remotes/origin/main}" 2> "$out.bd.err"
-  python3 "${RF_PY:-$T/trio.py}" --repo "$repo" --baseline "$bl" --base-dir "$out.bd" --today "${RF_TODAY-$FIXTODAY}" \
-    --event-name "${RF_EVENT-}" --event-ref "${RF_EVENTREF-}" --envs "${RF_ENVS-$FIXENVS}" --sibling "${RF_SIB-}" --ann "$out.ann" > "$out" 2> "$out.err"
+  py3 "${RF_PY:-$T/trio.py}" --repo "$repo" --baseline "$bl" --base-dir "$out.bd" --today "${RF_TODAY-$FIXTODAY}" \
+    --event-name "${RF_EVENT-}" --event-ref "${RF_EVENTREF-}" --envs "${RF_ENVS-$FIXENVS}" --sibling "${RF_SIB-}" --ann "$out.ann" \
+    --scanned-list "$out.scan" ${GITQ_ISO:+--git-iso} > "$out" 2> "$out.err"
   return $?
 }
 # row_state <out> <ROWID>  — prints ok|FAIL|MISSING for the row whose name starts with "<ROWID>:"
@@ -846,8 +1050,9 @@ row_state() {
   s="$(awk -F'\t' -v id="$2" 'index($2, id ":") == 1 {print $1; exit}' "$1")"
   printf '%s' "${s:-MISSING}"
 }
-# row_line <out> <ROWID>  — the whole "<name> <detail>" text of that row
-row_line() { awk -F'\t' -v id="$2" 'index($2, id ":") == 1 {print $2 " | " $3; exit}' "$1"; }
+# row_label / row_detail <out> <ROWID>  — the label (name) and the detail of that row
+row_label() { awk -F'\t' -v id="$2" 'index($2, id ":") == 1 {print $2; exit}' "$1"; }
+row_detail() { awk -F'\t' -v id="$2" 'index($2, id ":") == 1 {print $3; exit}' "$1"; }
 # all_ok <out>  — true when every row in <out> is ok and at least one row exists
 all_ok() {
   [ -s "$1" ] && ! awk -F'\t' '$1 != "ok" {bad=1} END {exit bad ? 0 : 1}' "$1"
@@ -863,46 +1068,124 @@ roots_below_floor() {
     if [ "${got:-0}" -lt "$fl" ]; then printf '%s(%s<%s) ' "$rt" "${got:-0}" "$fl"; fi
   done
 }
+# floors_missing_roots <errfile> "<root>:<n> ..."  — prints the scan roots the scanner reports that the floor list does not name
+floors_missing_roots() {
+  local rt
+  for rt in $(awk '$1 == "TRIO_ROOT_COUNT" {print $2}' "$1"); do
+    case " $(for s in $2; do printf '%s ' "${s%:*}"; done)" in *" $rt "*) : ;; *) printf '%s ' "$rt" ;; esac
+  done
+}
+
+# The independent enumerator (E2): the documented exclusions applied with awk and test builtins, sharing no code with the
+# scanner. Its lists are hand-written here on purpose: a constant that drifts in the scanner shows up as a mismatch.
+ENUM_BINARY="png jpg jpeg gif ico webp avif bmp tif tiff woff woff2 ttf otf eot pdf zip gz tgz bz2 xz 7z jar class so dylib o a bin mp3 mp4 mov webm wasm pen sqlite db tsq tsr bpf"
+ENUM_KBCODE="sh bash py ts tsx js jsx mjs cjs yml yaml tf tfvars tmpl hcl toml json cfg service timer"
+# enum_scanned <repo> <outfile>  — the sorted list of paths the scanner must have scanned
+enum_scanned() {
+  local repo="$1" rel
+  assert_fixture_dir "$repo"
+  GITQ -C "$repo" ls-files -z --cached --others --exclude-standard | tr '\0' '\n' | LC_ALL=C sort -u \
+    | awk -v suite="$SUITE_REL" -v bl="$BASELINE_REL" -v bins="$ENUM_BINARY" -v codes="$ENUM_KBCODE" '
+        BEGIN { n = split(bins, b, " "); for (i = 1; i <= n; i++) bin[b[i]] = 1; n = split(codes, c, " "); for (i = 1; i <= n; i++) code[c[i]] = 1 }
+        { rel = $0; if (rel == suite || rel == bl) next
+          base = rel; sub(/^.*\//, "", base); ext = ""
+          if (index(base, ".") > 0) { ext = base; sub(/^.*\./, "", ext); ext = tolower(ext) }
+          if ((rel ~ /^knowledge-base\// || rel ~ /^docs\//) && !(ext in code)) next
+          if (ext in bin) next
+          print rel }' \
+    | while IFS= read -r rel; do
+        if [ -L "$repo/$rel" ] || [ ! -f "$repo/$rel" ]; then continue; fi
+        printf '%s\n' "$rel"
+      done
+}
+# cons_diff <repo> <scanner list (NUL separated)>  — empty when the scanner's population equals the independent enumeration
+cons_diff() {
+  local repo="$1"
+  assert_fixture_dir "$repo"
+  diff <(enum_scanned "$repo") <(tr '\0' '\n' < "$2" | LC_ALL=C sort -u)
+}
+# dirs_unscanned <repo> <scanner list> "<allow dirs>"  — second-level dirs of apps/web-platform and plugins/soleur that hold
+# a tracked file and no scanned file (and are not on the named allow-list)
+dirs_unscanned() {
+  local repo="$1" allow="$3" dd
+  assert_fixture_dir "$repo"
+  while IFS= read -r dd; do
+    case " $allow " in *" $dd "*) continue ;; esac
+    printf '%s ' "$dd"
+  done < <(
+    LC_ALL=C comm -23 \
+      <(GITQ -C "$repo" ls-files -z --cached --others --exclude-standard | tr '\0' '\n' | awk -F/ '($1 == "apps" && $2 == "web-platform" || $1 == "plugins" && $2 == "soleur") && NF > 3 {print $1 "/" $2 "/" $3}' | LC_ALL=C sort -u) \
+      <(tr '\0' '\n' < "$2" | awk -F/ '($1 == "apps" && $2 == "web-platform" || $1 == "plugins" && $2 == "soleur") && NF > 3 {print $1 "/" $2 "/" $3}' | LC_ALL=C sort -u)
+  )
+}
 
 # ── A. the live tree ─────────────────────────────────────────────────────────────────────
 assert_fixture_dir "$REPODIR"
 _live_ref="${TRIO_BASE_REF:-refs/remotes/origin/main}"
 _live_sib="$REPODIR/$SIBLING_REL"
 [ -f "$_live_sib" ] || _live_sib="$ROOT/$SIBLING_REL"
+LIVE_ROOT_FLOORS=".github/workflows:81 .github/actions:12 .github/scripts:26 scripts:756 plugins:1515 apps/web-platform:2990"
+NOSCAN_DIRS=""
 (
-  RF_REF="$_live_ref"; RF_TODAY="$TODAY"; RF_EVENT="${GITHUB_EVENT_NAME:-}"; RF_EVENTREF="${GITHUB_REF:-}"; RF_ENVS=""; RF_SIB="$_live_sib"
-  run_full "$REPODIR" "$BASELINE" "$T/live.tsv"
-); _live_rc=$?
-cat "$T/live.tsv.bd.err" >&2 2>/dev/null
-printf 'TRIO_BASE_ARM=%s ref=%s status=%s\n' "$(cat "$T/live.tsv.bd/arm" 2>/dev/null)" "$(cat "$T/live.tsv.bd/ref" 2>/dev/null | tr -d '[:cntrl:]')" "$(cat "$T/live.tsv.bd/status" 2>/dev/null)" >&2
-cat "$T/live.tsv.ann" 2>/dev/null
-cat "$T/live.tsv.err" >&2 2>/dev/null
-if [ "$_live_rc" -eq 3 ]; then
-  printf 'FAIL SETUP: the scanner could not assemble its population: %s\n' "$(head -c 300 "$T/live.tsv.err")" >&2
-  exit 1
-fi
-if [ "$_live_rc" -ne 0 ]; then
-  fail "A0: the scanner ran on the live tree" "rc=$_live_rc: $(head -c 300 "$T/live.tsv.err")"
-else
-  pass "A0: the scanner ran on the live tree"
-fi
-while IFS=$'\t' read -r _st _nm _dt; do
-  [ -n "${_st:-}" ] || continue
-  if [ "$_st" = "ok" ]; then pass "live $_nm"; else fail "live $_nm" "$_dt"; fi
-done < "$T/live.tsv"
-_nlive="$(nrows "$T/live.tsv")"
-if [ "$_nlive" -eq "$NROWS" ]; then pass "A1: the live run produced all $NROWS rows ($_nlive)"; else fail "A1: the live run produced all $NROWS rows" "got $_nlive"; fi
-# A2: per-root floors (F-A1), each within ~10% of the measured count at the time they were set.
-LIVE_ROOT_FLOORS=".github/workflows:81 .github/actions:12 .github/scripts:26 scripts:755 plugins:1515 apps/web-platform:2990"
-_below="$(roots_below_floor "$T/live.tsv.err" "$LIVE_ROOT_FLOORS")"
-if [ -z "$_below" ]; then pass "A2: every scan root meets its minimum file floor ($LIVE_ROOT_FLOORS)"; else fail "A2: every scan root meets its minimum file floor" "below: $_below"; fi
+  RF_REF="$_live_ref"; RF_TODAY="$TODAY"; RF_EVENT="${GITHUB_EVENT_NAME:-}"; RF_EVENTREF="${GITHUB_REF:-}"; RF_ENVS=""; RF_SIB="$_live_sib"; RF_PY=""
+  run_full "$REPODIR" "$BASELINE" "$T/live.tsv"; printf '%s' "$?" > "$T/live.rc"
+) > /dev/null 2>&1 &
+LIVE_PID=$!
+# eval_live: judge the live-tree scan that was started in the background at the top of section A
+eval_live() {
+  wait "$LIVE_PID"
+  _live_rc="$(cat "$T/live.rc" 2>/dev/null)"; _live_rc="${_live_rc:-99}"
+  cat "$T/live.tsv.bd.err" >&2 2>/dev/null
+  printf 'TRIO_BASE_ARM=%s ref=%s status=%s\n' "$(cat "$T/live.tsv.bd/arm" 2>/dev/null)" "$(tr -d '[:cntrl:]' < "$T/live.tsv.bd/ref" 2>/dev/null)" "$(cat "$T/live.tsv.bd/status" 2>/dev/null)" >&2
+  cat "$T/live.tsv.ann" 2>/dev/null
+  cat "$T/live.tsv.err" >&2 2>/dev/null
+  if [ "$_live_rc" -eq 3 ]; then
+    printf 'FAIL SETUP: the scanner could not assemble its population: %s\n' "$(head -c 300 "$T/live.tsv.err")" >&2
+    exit 1
+  fi
+  if [ "$_live_rc" -ne 0 ]; then
+    fail "A0: the scanner ran on the live tree" "rc=$_live_rc: $(head -c 300 "$T/live.tsv.err")"
+  else
+    pass "A0: the scanner ran on the live tree"
+  fi
+  while IFS=$'\t' read -r _rs _nm _dt; do
+    [ -n "${_rs:-}" ] || continue
+    if [ "$_rs" = "ok" ]; then pass "live $_nm"; else fail "live $_nm" "$_dt"; fi
+  done < "$T/live.tsv"
+  _nlive="$(nrows "$T/live.tsv")"
+  if [ "$_nlive" -eq "$NROWS" ]; then pass "A1: the live run produced all $NROWS rows ($_nlive)"; else fail "A1: the live run produced all $NROWS rows" "got $_nlive"; fi
+  # A2: per-root floors (F-A1), each within ~10% of the measured count at the time they were set.
+  _below="$(roots_below_floor "$T/live.tsv.err" "$LIVE_ROOT_FLOORS")"
+  if [ -z "$_below" ]; then pass "A2: every scan root meets its minimum file floor ($LIVE_ROOT_FLOORS)"; else fail "A2: every scan root meets its minimum file floor" "below: $_below"; fi
+  _missing_floor="$(floors_missing_roots "$T/live.tsv.err" "$LIVE_ROOT_FLOORS")"
+  if [ -z "$_missing_floor" ]; then pass "A2b: the floor list names every scan root the scanner reports"; else fail "A2b: the floor list names every scan root the scanner reports" "no floor for: $_missing_floor"; fi
+  # A3/A4 (E2): conservation against the independent enumerator, and no second-level directory silently unscanned.
+  _cons="$(cons_diff "$REPODIR" "$T/live.tsv.scan" | head -c 400)"
+  if [ -z "$_cons" ]; then pass "A3: the scanner's population equals the independent bash enumeration of git ls-files under the documented exclusions"; else fail "A3: the scanner's population equals the independent bash enumeration" "$_cons"; fi
+  _unscanned="$(dirs_unscanned "$REPODIR" "$T/live.tsv.scan" "$NOSCAN_DIRS")"
+  if [ -z "$_unscanned" ]; then pass "A4: every second-level directory of apps/web-platform and plugins/soleur holding a tracked file has a scanned file (or is on the named list: $NOSCAN_DIRS)"; else fail "A4: every second-level directory of apps/web-platform and plugins/soleur has a scanned file" "unscanned: $_unscanned"; fi
+  # A5 (F1): the affected-gate edge declares every top-level entry, and the knowledge-base code extensions.
+  _edge="$(bash -c 'source "$1" && printf "%s\n" "${'"$AFFECTED_ARRAY"'[@]}"' _ "$REPODIR/$LIB_REL" 2>/dev/null)"
+  _edge_miss=""
+  while IFS= read -r _top; do
+    [ -n "$_top" ] || continue
+    if [ -d "$REPODIR/$_top" ]; then
+      if [ "$_top" = "knowledge-base" ]; then
+        for _x in $ENUM_KBCODE; do printf '%s\n' "$_edge" | grep -qxF "glob:$KBN/**.$_x" || _edge_miss="$_edge_miss glob:$KBN/**.$_x"; done
+      else printf '%s\n' "$_edge" | grep -qxF "$_top/" || _edge_miss="$_edge_miss $_top/"; fi
+    else printf '%s\n' "$_edge" | grep -qxF "$_top" || _edge_miss="$_edge_miss $_top"; fi
+  done < <(GITQ -C "$REPODIR" ls-files -z | tr '\0' '\n' | awk -F/ '{print $1}' | LC_ALL=C sort -u)
+  printf '%s\n' "$_edge" | grep -qxF "$ADR_REL" || _edge_miss="$_edge_miss $ADR_REL"
+  if [ -n "$_edge" ] && [ -z "$_edge_miss" ]; then pass "A5: $AFFECTED_ARRAY declares every tracked top-level entry, the knowledge-base code globs and ADR-241 (a new top-level entry needs a line)"
+  else fail "A5: $AFFECTED_ARRAY declares every tracked top-level entry, the knowledge-base code globs and ADR-241" "missing:$_edge_miss"; fi
+}
 
 # ── B. the synthetic fixture (a git repo: the smallest fully compliant tree, with a base history) ─
 FX="$T/fx"
 assert_fixture_dir "$FX"
-mkdir -p "$FX/.github/workflows" "$FX/.github/actions/keep" "$FX/.github/scripts" "$FX/scripts/followthroughs" \
-  "$FX/apps/web-platform/infra" "$FX/apps/web-platform/server" "$FX/apps/web-platform/test" "$FX/plugins/soleur/skills/ship" \
-  "$FX/tests/scripts" "$FX/knowledge-base/engineering/architecture/decisions" "$FX/knowledge-base/project/plans" "$FX/docs" \
+mkdir -p "$FX/.github/workflows" "$FX/.github/actions/keep" "$FX/.github/actions/uses-trio" "$FX/.github/scripts" "$FX/scripts/followthroughs" \
+  "$FX/apps/web-platform/infra" "$FX/apps/web-platform/server" "$FX/apps/web-platform/test" "$FX/apps/web-platform/app" "$FX/plugins/soleur/skills/ship" \
+  "$FX/plugins/soleur/agents" "$FX/tests/scripts" "$FX/knowledge-base/engineering/architecture/decisions" "$FX/$KBN/project" "$FX/docs" \
   || { printf 'FAIL SETUP: mkdir fixture\n' >&2; exit 1; }
 cat > "$FX/.github/workflows/web-platform-release.yml" <<'EOF'
 name: rel
@@ -974,6 +1257,16 @@ jobs:
           X: ${{ secrets.CF_ACCESS_CLIENT_ID }}
 EOF
 printf 'name: keep\nruns:\n  using: composite\n  steps: []\n' > "$FX/.github/actions/keep/action.yml"
+cat > "$FX/.github/actions/uses-trio/action.yml" <<'EOF'
+name: uses-trio
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo hi
+      env:
+        CF_ACCESS_CLIENT_ID: ${{ inputs.cf_id }}
+EOF
 printf '#!/usr/bin/env bash\necho clean\n' > "$FX/.github/scripts/clean.sh"
 cat > "$FX/scripts/probe.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -983,7 +1276,11 @@ id="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain \
 EOF
 printf '#!/usr/bin/env bash\ndoppler secrets get WEBHOOK_DEPLOY_SECRET --plain\n' > "$FX/scripts/followthroughs/soak.sh"
 printf '#!/usr/bin/env bash\nexport H="$HCLOUD_TOKEN"\necho "using ${WEBHOOK_DEPLOY_SECRET}"\n' > "$FX/scripts/host-user.sh"
-printf 'a\0WEBHOOK_DEPLOY_SECRET\n' > "$FX/scripts/blob.bin"
+# a rename-calibration file: one naming line plus 99 filler comment lines (the -M90% boundary fixtures edit k of them)
+{ printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\n'; for _i in $(seq 1 99); do printf '# filler line number %03d: the quick brown fox jumps over the lazy dog\n' "$_i"; done; } > "$FX/scripts/ren.sh"
+# binaries by extension: NUL bytes, no names. One more binary-looking file without a binary extension is NOT here (it is a mutant).
+printf '\211PNG\r\n\032\n\0\0\0\rIHDR\0\0\0' > "$FX/scripts/blob.png"
+printf 'wOF2\0\0\0\0\0\0\0\0' > "$FX/plugins/soleur/skills/ship/font.woff2"
 ln -s probe.sh "$FX/scripts/link.sh"
 cat > "$FX/apps/web-platform/infra/server.tf" <<'EOF'
 locals {
@@ -1005,8 +1302,14 @@ output "access_service_token_client_secret" {
 output "access_service_token_client_id" {
   value = cloudflare_zero_trust_access_service_token.deploy.client_id
 }
+output "ci_ssh_access_service_token_client_id" {
+  value = cloudflare_zero_trust_access_service_token.ci_ssh.client_id
+}
 EOF
 printf 'export const clean = 1;\n' > "$FX/apps/web-platform/server/clean.ts"
+printf '// CF_ACCESS_CLIENT_ID in a slash comment must not create a row\nexport const c = 2;\n' > "$FX/apps/web-platform/server/c.ts"
+printf 'export default function Page() { return null; }\n' > "$FX/apps/web-platform/app/page.tsx"
+printf 'agent notes\n' > "$FX/plugins/soleur/agents/a.md"
 printf 'const n = "CF_ACCESS_CLIENT_SECRET";\n' > "$FX/apps/web-platform/test/y.ts"
 mkdir -p "$FX/apps/web-platform/fixtures" "$FX/plugins/soleur/skills/__tests__"
 printf '{"n": "WEBHOOK_DEPLOY_SECRET"}\n' > "$FX/apps/web-platform/fixtures/f.json"
@@ -1021,21 +1324,30 @@ doppler secrets get WEBHOOK_DEPLOY_SECRET -c prd_terraform --plain
 ```
 EOF
 printf '#!/usr/bin/env bash\n# mentions WEBHOOK_DEPLOY_SECRET and CF_ACCESS_CLIENT_ID only\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$FX/tests/x.test.sh"
+printf '#!/usr/bin/env bash\n# no trio name here: a doppler call alone is not a read of the trio\ndoppler secrets get SENTRY_DSN --plain\n' > "$FX/tests/y.test.sh"
 printf 'secrets.WEBHOOK_DEPLOY_SECRET in a kb note\n' > "$FX/knowledge-base/kb.md"
+printf '#!/usr/bin/env bash\necho clean kb script\n' > "$FX/knowledge-base/project/boot.sh"
 printf 'secrets.CF_ACCESS_CLIENT_ID in a doc\n' > "$FX/docs/d.md"
+printf '<svg>secrets.CF_ACCESS_CLIENT_ID</svg>\n' > "$FX/docs/pic.svg"
 printf 'ADR-241 fixture\n' > "$FX/$ADR_REL"
-printf 'plan fixture\n' > "$FX/$PLAN_REL"
-{ GITQ init -q -b fxmain "$FX" && gc -C "$FX" add -A && gc -C "$FX" commit -q -m c0; } || { printf 'FAIL SETUP: fixture git init\n' >&2; exit 1; }
+{ GITQ_ISO=1 GITQ init -q -b fxmain "$FX" && gc -C "$FX" add -A && gc -C "$FX" commit -q -m c0; } || { printf 'FAIL SETUP: fixture git init\n' >&2; exit 1; }
 gc -C "$FX" update-ref refs/remotes/origin/pre HEAD
 printf '#!/usr/bin/env bash\n# the suite placeholder: secrets.CF_ACCESS_CLIENT_ID\n' > "$FX/$SUITE_REL"
 gc -C "$FX" add -A && gc -C "$FX" commit -q -m c0b && gc -C "$FX" update-ref refs/remotes/origin/nobl HEAD
 TAB=$'\t'
-cat > "$T/fx-baseline.tsv" <<EOF
-# fixture baseline
-@stems WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET
-@allow${TAB}apps/web-platform/infra/hooks.json.tmpl${TAB}WEBHOOK_DEPLOY_SECRET_NEXT${TAB}-${TAB}#9294:PR-1
-@allow${TAB}apps/web-platform/infra/server.tf${TAB}WEBHOOK_DEPLOY_SECRET_NEXT${TAB}-${TAB}#9294:PR-1
-@allow${TAB}apps/web-platform/infra/variables.tf${TAB}WEBHOOK_DEPLOY_SECRET_NEXT${TAB}-${TAB}#9294:PR-1
+py3 "$T/trio.py" --repo "$FX" --baseline "$T/empty.tsv" --today "$FIXTODAY" --mode emit --envs "$FIXENVS" --git-iso 2>/dev/null | awk '/^@(stems|exempt|binary|kbcode) /' > "$T/fx-pins.txt"
+{
+  printf '# fixture baseline\n'
+  cat "$T/fx-pins.txt"
+  cat <<EOF
+@allow${TAB}apps/web-platform/infra/cloud-init.yml${TAB}WEBHOOK_DEPLOY_SECRET_NEXT${TAB}-${TAB}#9294:PR-2
+@allow${TAB}apps/web-platform/infra/hooks.json.tmpl${TAB}WEBHOOK_DEPLOY_SECRET_NEXT${TAB}-${TAB}#9294:PR-2
+@allow${TAB}apps/web-platform/infra/server.tf${TAB}WEBHOOK_DEPLOY_SECRET_NEXT${TAB}-${TAB}#9294:PR-2
+@allow${TAB}apps/web-platform/infra/soleur-host-bootstrap.sh${TAB}WEBHOOK_DEPLOY_SECRET_NEXT${TAB}-${TAB}#9294:PR-2
+@allow${TAB}apps/web-platform/infra/variables.tf${TAB}WEBHOOK_DEPLOY_SECRET_NEXT${TAB}-${TAB}#9294:PR-2
+@allow${TAB}scripts/gated-a.sh${TAB}CF_ACCESS_CLIENT_SECRET${TAB}2026-11-30${TAB}#9294:PR-2
+@allow${TAB}scripts/gated-b.sh${TAB}CF_ACCESS_CLIENT_ID${TAB}-${TAB}#9294:PR-2
+.github/actions/uses-trio/action.yml${TAB}CF_ACCESS_CLIENT_ID${TAB}tier-a${TAB}2026-11-30${TAB}#9294:PR-2
 .github/workflows/canary-status.yml${TAB}CF_ACCESS_CLIENT_ID${TAB}tier-a${TAB}2026-11-30${TAB}#9294:PR-3
 .github/workflows/cutover-inngest.yml${TAB}CF_ACCESS_CLIENT_SECRET${TAB}tier-a${TAB}2026-11-30${TAB}#9294:PR-4
 .github/workflows/deploy-chan.yml${TAB}WEBHOOK_DEPLOY_SECRET${TAB}tier-b${TAB}-${TAB}#9294:PR-2
@@ -1049,36 +1361,44 @@ apps/web-platform/infra/tunnel.tf${TAB}ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET$
 apps/web-platform/infra/variables.tf${TAB}WEBHOOK_DEPLOY_SECRET${TAB}sink${TAB}-${TAB}#9294:PR-2
 plugins/soleur/skills/ship/SKILL.md${TAB}CF_ACCESS_CLIENT_ID${TAB}tier-a${TAB}2026-11-30${TAB}#9294:PR-2
 plugins/soleur/skills/ship/SKILL.md${TAB}WEBHOOK_DEPLOY_SECRET${TAB}tier-a${TAB}2026-11-30${TAB}#9294:PR-2
-scripts/followthroughs/soak.sh${TAB}WEBHOOK_DEPLOY_SECRET${TAB}tier-a${TAB}2026-11-30${TAB}#9294:PR-4
+scripts/followthroughs/soak.sh${TAB}WEBHOOK_DEPLOY_SECRET${TAB}tier-a${TAB}2026-12-15${TAB}#9294:PR-4
 scripts/host-user.sh${TAB}WEBHOOK_DEPLOY_SECRET${TAB}sink${TAB}-${TAB}#9294:PR-2
 scripts/probe.sh${TAB}CF_ACCESS_CLIENT_ID${TAB}tier-a${TAB}2026-11-30${TAB}#9294:PR-2
 scripts/probe.sh${TAB}FALLBACK:CI_SSH_ACCESS_TOKEN_ID${TAB}tier-a${TAB}2026-11-30${TAB}#9294:PR-2
+scripts/ren.sh${TAB}WEBHOOK_DEPLOY_SECRET${TAB}sink${TAB}-${TAB}#9294:PR-2
 EOF
+} > "$T/fx-baseline.tsv"
 cp "$T/fx-baseline.tsv" "$FX/$BASELINE_REL"
 gc -C "$FX" add -A && gc -C "$FX" commit -q -m c1 && gc -C "$FX" update-ref refs/remotes/origin/main HEAD
 gc -C "$FX" commit -q --allow-empty -m head && gc -C "$FX" update-ref refs/remotes/origin/head HEAD
 FXHEAD="$(GITQ -C "$FX" rev-parse HEAD)"
 FX_TIER_A_ROWS="$(awk -F'\t' '$3 == "tier-a" {n++} END {print n + 0}' "$T/fx-baseline.tsv")"
 
-(run_full "$FX" "$FX/$BASELINE_REL" "$T/ctl.tsv")
+(GITQ_ISO=1 run_full "$FX" "$FX/$BASELINE_REL" "$T/ctl.tsv")
 if all_ok "$T/ctl.tsv" && [ "$(nrows "$T/ctl.tsv")" -eq "$NROWS" ]; then pass "B0: the control run on the compliant fixture is all green with $NROWS rows (a red control voids every mutant)"
 else fail "B0: the control run on the compliant fixture is all green with $NROWS rows" "$(grep -v '^ok' "$T/ctl.tsv" | head -c 600) $(head -c 200 "$T/ctl.tsv.err")"; fi
 if [ "$(cat "$T/ctl.tsv.bd/arm" 2>/dev/null)" = "merge-base" ]; then pass "B0a: the control resolved its base through the merge-base arm (TRIO_BASE_ARM=merge-base)"
 else fail "B0a: the control resolved its base through the merge-base arm" "arm=$(cat "$T/ctl.tsv.bd/arm" 2>/dev/null) status=$(cat "$T/ctl.tsv.bd/status" 2>/dev/null)"; fi
-# B1: the baseline is derived, and the fixture's classes are what the hand-written list says (not a tautology: the list is the input).
-python3 "$T/trio.py" --repo "$FX" --baseline "$FX/$BASELINE_REL" --today "$FIXTODAY" --mode emit --envs "$FIXENVS" > "$T/emit.tsv" 2> "$T/emit.err"
-if diff <(grep -v '^#' "$T/fx-baseline.tsv") "$T/emit.tsv" > "$T/emit.diff"; then pass "B1: --emit-baseline on the fixture reproduces the hand-written baseline records (class, tag, expiry, @stems, @allow) exactly"
-else fail "B1: --emit-baseline on the fixture reproduces the hand-written baseline records exactly" "$(head -c 500 "$T/emit.diff")"; fi
-# B2: population facts: 6 exempt by structure (a tests/ dir with .test.sh, a test/ dir, a fixtures/ dir, a __tests__/ dir, .spec.ts, .tftest.hcl),
-# 1 binary, 1 symlink, 6 excluded (kb x3, docs, the suite and the baseline by exact path)
-if grep -qx 'TRIO_EXEMPT=6' "$T/ctl.tsv.err" && grep -qx 'TRIO_BINARY=1' "$T/ctl.tsv.err" && grep -qx 'TRIO_SYMLINKS=1' "$T/ctl.tsv.err" && grep -qx 'TRIO_EXCLUDED=6' "$T/ctl.tsv.err" && grep -qx 'TRIO_READSHAPE_HITS=7' "$T/ctl.tsv.err"; then
-  pass "B2: the fixture population reports 6 exempt (every structural class), 1 binary, 1 symlink, 6 excluded (kb/docs/own files) and 7 read-shape files on stderr"
+# B1: the baseline is derived, and the fixture's classes/expiries are what the hand-written list says (not a tautology: the list is the input;
+# soak.sh carries a re-dated expiry that emit must PRESERVE, and the unspent @allow lines must survive).
+py3 "$T/trio.py" --repo "$FX" --baseline "$FX/$BASELINE_REL" --today "$FIXTODAY" --mode emit --envs "$FIXENVS" --git-iso > "$T/emit.tsv" 2> "$T/emit.err"
+if diff <(grep -v '^#' "$T/fx-baseline.tsv") "$T/emit.tsv" > "$T/emit.diff"; then pass "B1: --emit-baseline on the fixture reproduces the hand-written records (class, tag, a re-dated expiry, pins, @allow) exactly"
+else fail "B1: --emit-baseline on the fixture reproduces the hand-written records exactly" "$(head -c 500 "$T/emit.diff")"; fi
+# B2: population facts of the control (exempt by structure, binary by extension, symlink, excluded prefix/own, read-shape files)
+if grep -qx 'TRIO_EXEMPT=7' "$T/ctl.tsv.err" && grep -qx 'TRIO_BINARY=2' "$T/ctl.tsv.err" && grep -qx 'TRIO_SYMLINKS=1' "$T/ctl.tsv.err" && grep -qx 'TRIO_EXCLUDED=6' "$T/ctl.tsv.err" && grep -qx 'TRIO_READSHAPE_HITS=7' "$T/ctl.tsv.err"; then
+  pass "B2: the fixture population reports its exempt, binary-extension, symlink, excluded and read-shape counts on stderr (7 exempt, 2 binary, 1 symlink, 6 excluded, 7 read-shape files)"
 else fail "B2: the fixture population reports its exempt/binary/symlink/excluded/read-shape counts" "$(tr '\n' ' ' < "$T/ctl.tsv.err" | head -c 400)"; fi
+# B3: the independent enumerator and the scanner agree on the fixture too, and no second-level directory is unscanned
+_c="$(cons_diff "$FX" "$T/ctl.tsv.scan" | head -c 300)"
+_u="$(dirs_unscanned "$FX" "$T/ctl.tsv.scan" "")"
+if [ -z "$_c" ] && [ -z "$_u" ]; then pass "B3: on the fixture the scanner population equals the independent enumeration and every second-level directory has a scanned file"
+else fail "B3: on the fixture the scanner population equals the independent enumeration" "diff: $_c unscanned: $_u"; fi
 
 # Mutation machinery ----------------------------------------------------------------------------
-# prep <id>  — fresh git-init'd copy of the PRISTINE fixture at $D/fx; sets D
+# prep <id>  — fresh git-init'd copy of the PRISTINE fixture at $D/fx; sets D (PREP_BASE overrides the parent directory)
+PREP_BASE="$T/mut"
 prep() {
-  D="$T/mut/$1"
+  D="$PREP_BASE/$1"
   assert_fixture_dir "$D"
   rm -rf "$D"; mkdir -p "$D" || { printf 'FAIL SETUP: mkdir %s\n' "$D" >&2; exit 1; }
   cp -a "$FX" "$D/fx" || { printf 'FAIL SETUP: copy fixture for %s\n' "$1" >&2; exit 1; }
@@ -1088,7 +1408,7 @@ prep() {
 commit_all() { gc -C "$D/fx" add -A && gc -C "$D/fx" commit -q -m "mut" ; }
 # edit <file> <old> <new>  — exact-once replacement (exit 1 when <old> is not unique: the edit then did not land)
 edit() {
-  python3 - "$1" "$2" "$3" <<'PYE'
+  py3 - "$1" "$2" "$3" <<'PYE'
 import sys
 p, old, new = sys.argv[1:4]
 s = open(p, encoding="utf-8").read()
@@ -1103,6 +1423,14 @@ bl_set() {
 }
 bl_add() { printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "$BL"; }
 bl_del() { awk -F'\t' -v f="$1" -v n="$2" '!($1 == f && $2 == n)' "$BL" > "$BL.new" && mv "$BL.new" "$BL"; }
+# bl_allow_del <file> <name>  — delete one @allow line
+bl_allow_del() { awk -F'\t' -v f="$1" -v n="$2" '!($1 == "@allow" && $2 == f && $3 == n)' "$BL" > "$BL.new" && mv "$BL.new" "$BL"; }
+# bl_regen  — replace the copy's baseline with the scanner's own --emit-baseline output (what the documented regeneration produces)
+bl_regen() {
+  GITQ_ISO=1 py3 "$T/trio.py" --repo "$D/fx" --baseline "$BL" --today "$FIXTODAY" --mode emit --envs "$FIXENVS" --git-iso > "$BL.new" 2> /dev/null && mv "$BL.new" "$BL"
+}
+# adr_add <text>  — append a line to the copy's ADR-241
+adr_add() { printf '%s\n' "$1" >> "$D/fx/$ADR_REL"; }
 # landed_dir  — "landed" when the copy's tree, history or scanner differs from the pristine fixture
 landed_dir() {
   local ch=0
@@ -1111,45 +1439,166 @@ landed_dir() {
   if [ "$(GITQ -C "$D/fx" rev-parse HEAD)" != "$FXHEAD" ]; then ch=1; fi
   if [ "$ch" -eq 1 ]; then printf 'landed' > "$D/landed"; else printf 'unchanged' > "$D/landed"; fi
 }
-# knobs <text>  — shell assignments for run_full (RF_*), sourced in a subshell
-knobs() { printf '%s\n' "$1" > "$D/menv"; }
-# run_in <dir>  — run the scanner on $D/fx honouring $D/menv; output $D/out
+# knobs NAME=VALUE...  — shell assignments for run_full (RF_*, TRIO_*, BLPATH), written %q-quoted so no value can inject
+# a fragment; a leading `+` exports the variable (PATH for the git shim)
+knobs() {
+  local a
+  : > "$D/menv"
+  for a in "$@"; do
+    case "$a" in
+      +*) a="${a#+}"; printf 'export %s=%q\n' "${a%%=*}" "${a#*=}" >> "$D/menv" ;;
+      *)  printf '%s=%q\n' "${a%%=*}" "${a#*=}" >> "$D/menv" ;;
+    esac
+  done
+}
+# run_in <dir>  — run the scanner on <dir>/fx honouring <dir>/menv; output <dir>/out, rc <dir>/rc
 run_in() {
   local d="$1"
+  assert_fixture_dir "$d"
   (
+    unset TRIO_ALLOW_NO_BASE
+    export GITQ_ISO=1
+    # shellcheck disable=SC1091
     if [ -f "$d/menv" ]; then . "$d/menv"; fi
-    run_full "$d/fx" "$d/fx/$BASELINE_REL" "$d/out"
+    run_full "$d/fx" "${BLPATH:-$d/fx/$BASELINE_REL}" "$d/out"
+    printf '%s' "$?" > "$d/rc"
   )
 }
-# mutant <id> <row> <desc> [substr] [arm]
-#   expects $D/landed. The kill is attributed to the NAMED row: a scanner crash or a missing row is UNRESOLVED
-#   (FAIL), never a kill; the optional substring must appear in that row, the optional arm in TRIO_BASE_ARM.
-mutant() {
-  local id="$1" row="$2" desc="$3" want="${4:-}" arm="${5:-}" d="$T/mut/$1" rc n st line
-  MUTANTS_RUN=$((MUTANTS_RUN + 1))
+
+# The queue: a mutant/green registers its scan, which runs in the background (at most PAR at once); flush_pending judges
+# every registered row in registration order. MUT_SYNC=1 (the negative controls) runs and judges immediately.
+PAR=4
+if command -v nproc >/dev/null 2>&1; then _np="$(nproc 2>/dev/null || echo 2)"; [ "$_np" -lt "$PAR" ] && PAR="$_np"; fi
+[ "$PAR" -ge 1 ] || PAR=1
+MUT_SYNC=0
+Q="$T/pending.q"; : > "$Q"
+NOMINAL_WANTS=""
+_us=$'\037'
+_q() { local IFS="$_us"; printf '%s\n' "$*" >> "$Q"; }
+_launch() { # <dir>
+  if [ "$MUT_SYNC" = 1 ]; then run_in "$1"; return; fi
+  if [ "$(jobs -rp | wc -l)" -ge "$PAR" ]; then wait; fi
+  run_in "$1" &
+}
+# judge_mutant <id> <d> <row> <desc> [want] [arm]
+#   Kill rule (one mechanism): scanner rc 0 AND every row present AND the named row FAIL AND its detail carries the named
+#   reason. A crash, a short row set or an absent named row is UNRESOLVED (FAIL), never a kill. `want` is matched against the
+#   DETAIL only, and a `want` that is a substring of the row's own label is refused (it would be satisfied by any red).
+judge_mutant() {
+  local id="$1" d="$2" row="$3" desc="$4" want="${5:-}" arm="${6:-}" rc n st detail lbl
   if [ "$(cat "$d/landed" 2>/dev/null)" = "landed" ]; then pass "$id lands: $desc"; else fail "$id lands: $desc" "the edit did not change the pristine copy"; return; fi
-  run_in "$d"; rc=$?
-  n="$(nrows "$d/out")"
-  if [ "$rc" -ne 0 ] || [ "$n" -ne "$NROWS" ]; then
-    fail "$id: $row is RED" "UNRESOLVED (a crash is not a kill): scanner rc=$rc rows=$n/$NROWS: $(head -c 200 "$d/out.err")"; return
+  rc="$(cat "$d/rc" 2>/dev/null)"; n="$(nrows "$d/out" 2>/dev/null || echo 0)"
+  if [ "${rc:-x}" != "0" ] || [ "$n" -ne "$NROWS" ]; then
+    fail "$id: $row is RED" "UNRESOLVED (a crash is not a kill): scanner rc=${rc:-none} rows=$n/$NROWS: $(head -c 200 "$d/out.err" 2>/dev/null)"; return
   fi
-  st="$(row_state "$d/out" "$row")"; line="$(row_line "$d/out" "$row")"
+  st="$(row_state "$d/out" "$row")"; detail="$(row_detail "$d/out" "$row")"; lbl="$(row_label "$T/ctl.tsv" "$row")"
+  if [ "$st" = "MISSING" ]; then fail "$id: $row is RED" "the named row $row is absent from a complete row set (a harness bug)"; return; fi
   if [ "$st" != "FAIL" ]; then fail "$id: $row is RED" "state=$st; $(head -c 200 "$d/out")"; return; fi
-  if [ -n "$want" ] && [ "${line#*"$want"}" = "$line" ]; then fail "$id: $row is RED" "red, but not for the named reason: wanted '$want' in: ${line:0:300}"; return; fi
+  if [ -n "$want" ]; then
+    if [ "${lbl#*"$want"}" != "$lbl" ]; then NOMINAL_WANTS="$NOMINAL_WANTS $id"; fail "$id: $row is RED" "nominal attribution: want '$want' is a substring of the row's own label, so any red satisfies it"; return; fi
+    if [ "${detail#*"$want"}" = "$detail" ]; then fail "$id: $row is RED" "red, but not for the named reason: wanted '$want' in the detail: ${detail:0:300}"; return; fi
+  fi
   if [ -n "$arm" ] && [ "$(cat "$d/out.bd/arm" 2>/dev/null)" != "$arm" ]; then fail "$id: $row is RED" "red, but TRIO_BASE_ARM=$(cat "$d/out.bd/arm" 2>/dev/null), wanted $arm"; return; fi
   pass "$id: $row is RED${want:+ ($want)}"
 }
-# green <id> <desc> [substr] [arm]  — a must-stay-green fixture: every row ok, all rows present
-green() {
-  local id="$1" desc="$2" want="${3:-}" arm="${4:-}" d="$T/mut/$1" rc
+# judge_green <id> <d> <desc> [want] [arm] [ann]
+judge_green() {
+  local id="$1" d="$2" desc="$3" want="${4:-}" arm="${5:-}" ann="${6:-}" rc
   if [ "$(cat "$d/landed" 2>/dev/null)" != "landed" ]; then fail "$id: $desc" "the edit did not change the pristine copy"; return; fi
-  run_in "$d"; rc=$?
-  if [ "$rc" -ne 0 ] || [ "$(nrows "$d/out")" -ne "$NROWS" ] || ! all_ok "$d/out"; then fail "$id: $desc" "rc=$rc $(grep -v '^ok' "$d/out" | head -c 400)"; return; fi
+  rc="$(cat "$d/rc" 2>/dev/null)"
+  if [ "${rc:-x}" != "0" ] || [ "$(nrows "$d/out" 2>/dev/null || echo 0)" -ne "$NROWS" ] || ! all_ok "$d/out"; then fail "$id: $desc" "rc=${rc:-none} $(grep -v '^ok' "$d/out" 2>/dev/null | head -c 400)"; return; fi
   if [ -n "$want" ] && ! has_text "$d/out" "$want"; then fail "$id: $desc" "green, but '$want' is not in the output: $(head -c 300 "$d/out")"; return; fi
   if [ -n "$arm" ] && [ "$(cat "$d/out.bd/arm" 2>/dev/null)" != "$arm" ]; then fail "$id: $desc" "TRIO_BASE_ARM=$(cat "$d/out.bd/arm" 2>/dev/null), wanted $arm"; return; fi
+  if [ -n "$ann" ] && ! grep -qF -- "$ann" "$d/out.ann" 2>/dev/null; then fail "$id: $desc" "green, but the annotation '$ann' is not in: $(head -c 300 "$d/out.ann" 2>/dev/null)"; return; fi
   pass "$id: $desc"
 }
+# judge_cmut <id> <desc> <file> <name> <control-class> <rows file>  — a scanner-branch mutant: the edited scanner must change the class of the named case
+judge_cmut() {
+  local id="$1" desc="$2" f="$3" n="$4" ctl="$5" rows="$6" got
+  if [ -f "$T/cm/$id.landed" ]; then pass "$id lands: $desc"; else fail "$id lands: $desc" "the edit did not apply exactly once to the scanner copy"; return; fi
+  got="$(pr_class "$rows" "$f" "$n")"
+  if [ "$got" != "$ctl" ]; then pass "$id: the case $f $n flips from $ctl to $got"; else fail "$id: the case $f $n flips from $ctl" "unchanged under the mutated scanner: $got"; fi
+}
+# mutant <id> <row> <desc> [substr] [arm]
+mutant() {
+  local id="$1" row="$2" desc="$3" want="${4:-}" arm="${5:-}"
+  MUTANTS_RUN=$((MUTANTS_RUN + 1))
+  if [ "$MUT_SYNC" = 1 ]; then
+    if [ "$(cat "$D/landed" 2>/dev/null)" = "landed" ]; then _launch "$D"; fi
+    judge_mutant "$id" "$D" "$row" "$desc" "$want" "$arm"; return
+  fi
+  if [ "$(cat "$D/landed" 2>/dev/null)" = "landed" ]; then _launch "$D"; fi
+  _q mutant "$id" "$D" "$row" "$desc" "$want" "$arm"
+}
+# green <id> <desc> [substr] [arm] [annotation]  — a must-stay-green fixture: every row ok, all rows present
+green() {
+  local id="$1" desc="$2" want="${3:-}" arm="${4:-}" ann="${5:-}"
+  if [ "$MUT_SYNC" = 1 ]; then
+    if [ "$(cat "$D/landed" 2>/dev/null)" = "landed" ]; then _launch "$D"; fi
+    judge_green "$id" "$D" "$desc" "$want" "$arm" "$ann"; return
+  fi
+  if [ "$(cat "$D/landed" 2>/dev/null)" = "landed" ]; then _launch "$D"; fi
+  _q green "$id" "$D" "$desc" "$want" "$arm" "$ann"
+}
+flush_pending() {
+  local kind a1 a2 a3 a4 a5 a6
+  wait
+  while IFS="$_us" read -r kind a1 a2 a3 a4 a5 a6 <&3; do
+    case "$kind" in
+      mutant) judge_mutant "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" ;;
+      green)  judge_green "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" ;;
+      cmut)   judge_cmut "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" ;;
+      cons)   judge_cons "$a1" "$a2" "$a3" "$a4" ;;
+    esac
+  done 3< "$Q"
+  : > "$Q"
+}
+
+# ── the probe table (classification cases): small git repos, scanner in --mode emit ───────────────
+PT=""
+pr_new() { # <name>
+  PT="$T/probe/$1"
+  assert_fixture_dir "$PT"
+  rm -rf "$PT"; mkdir -p "$PT" && GITQ_ISO=1 GITQ init -q -b p "$PT" || { printf 'FAIL SETUP: probe repo %s\n' "$1" >&2; exit 1; }
+}
+pr_commit() { gc -C "$PT" add -A && gc -C "$PT" commit -q -m probe; }
+# pr_emit <probe name> <py> <rows out>  — the classes the scanner computes for the probe repo ("file<TAB>name<TAB>class")
+pr_emit() {
+  assert_fixture_dir "$T/probe/$1"
+  GITQ_ISO=1 py3 "$2" --repo "$T/probe/$1" --baseline "$T/empty.tsv" --today "$FIXTODAY" --mode emit --envs "$FIXENVS" --git-iso 2> "$3.err" \
+    | awk -F'\t' 'NF == 5 && $1 !~ /^@/ {print $1 "\t" $2 "\t" $3}' | LC_ALL=C sort > "$3"
+}
+pr_class() { # <rows> <file> <name>
+  awk -F'\t' -v f="$2" -v n="$3" '$1 == f && $2 == n {print $3; found = 1; exit} END {if (!found) print "ABSENT"}' "$1"
+}
+pr_expect() { # <rows> <label> <file> <name> <want class|ABSENT>
+  local got
+  got="$(pr_class "$1" "$3" "$4")"
+  if [ "$got" = "$5" ]; then pass "$2"; else fail "$2" "$3 $4: computed $got, expected $5"; fi
+}
+# cmut <id> <desc> <old> <new> <file> <name> <control class>  — run the probe repo $CMPROBE under an edited COPY of the scanner
+CMPROBE=""
+cmut() {
+  local id="$1" desc="$2" old="$3" new="$4" f="$5" n="$6" ctl="$7"
+  MUTANTS_RUN=$((MUTANTS_RUN + 1))
+  cp "$T/trio.py" "$T/cm/$id.py"
+  rm -f "$T/cm/$id.landed"
+  if edit "$T/cm/$id.py" "$old" "$new"; then : > "$T/cm/$id.landed"; fi
+  if [ -f "$T/cm/$id.landed" ]; then
+    if [ "$MUT_SYNC" = 1 ]; then pr_emit "$CMPROBE" "$T/cm/$id.py" "$T/cm/$id.rows"
+    else
+      if [ "$(jobs -rp | wc -l)" -ge "$PAR" ]; then wait; fi
+      pr_emit "$CMPROBE" "$T/cm/$id.py" "$T/cm/$id.rows" &
+    fi
+  fi
+  _q cmut "$id" "$desc" "$f" "$n" "$ctl" "$T/cm/$id.rows"
+}
+
 NEWYML=$'name: new\njobs:\n  j:\n    runs-on: x\n    steps:\n      - run: echo "$WEBHOOK_DEPLOY_SECRET"\n'
+ST_PIN_STEMS='STEMS = ["WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"]'
+ST_PIN_STEMS_DROP='STEMS = ["WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID"]'
+HDR_STEMS='@stems WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET'
+HDR_STEMS_DROP='@stems WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID'
 
 # ── M. the original matrix (M1-M13), now on a git fixture ───────────────────────────────────
 prep m1
@@ -1170,10 +1619,10 @@ landed_dir; mutant m3 T2 "a baseline row whose consumer no longer reads the name
 # M4 — a past expiry on a blocking event that touches a row's file
 prep m4
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
-knobs 'RF_TODAY=2027-01-01'
+knobs RF_TODAY=2027-01-01
 landed_dir; mutant m4 T3 "every tier-a row past its expiry on a PR that touches a row's file"
 
-# M5 — the narrow carrier must not drag the host-destroy credential in: HCLOUD_TOKEN in a PR-3 file, a PR-4 file, and (computed group) after a re-tag
+# M5 — the narrow carrier must not drag the host-destroy credential in
 prep m5
 printf 'env2:\n  H: ${{ secrets.HCLOUD_TOKEN }}\n' >> "$D/fx/.github/workflows/web-platform-release.yml"
 landed_dir; mutant m5 T7 "HCLOUD_TOKEN named in an already-baselined PR-3 file"
@@ -1184,10 +1633,13 @@ prep m5c
 printf 'env2:\n  H: ${{ secrets.HCLOUD_TOKEN }}\n' >> "$D/fx/.github/workflows/web-platform-release.yml"
 bl_set .github/workflows/web-platform-release.yml WEBHOOK_DEPLOY_SECRET 5 '#9294:PR-2'
 landed_dir; mutant m5c T7 "HCLOUD_TOKEN in a PR-3 file whose baseline tag was edited to PR-2 (T7 keys on the computed group)"
+prep m5d
+printf 'env2:\n  H: ${{ secrets.hcloud_token }}\n' >> "$D/fx/.github/workflows/web-platform-release.yml"
+landed_dir; mutant m5d T7 "a lower-case hcloud_token in a PR-3 file (the name match is case-insensitive)"
 
 # M6 — the scan walks nothing (the empty file set: every scanned file is gone from the worktree)
 prep m6
-rm -rf "$D/fx/.github" "$D/fx/scripts" "$D/fx/apps" "$D/fx/plugins" "$D/fx/tests/x.test.sh"
+rm -rf "$D/fx/.github" "$D/fx/scripts" "$D/fx/apps" "$D/fx/plugins" "$D/fx/tests" "$D/fx/$KBN" "$D/fx/docs"
 landed_dir; mutant m6 T0 "an empty scan set"
 
 # M7 — a file that already has one compliant baselined read gains a second trio name
@@ -1218,12 +1670,15 @@ landed_dir; mutant m11 H3 "a terraform_data input that references the rendered h
 # M12 — a duplicate baseline row
 prep m12
 bl_add .github/workflows/web-platform-release.yml WEBHOOK_DEPLOY_SECRET tier-a 2026-11-30 '#9294:PR-3'
-landed_dir; mutant m12 T5 "a duplicate (file, name) baseline row" "duplicate"
+landed_dir; mutant m12 T5 "a duplicate (file, name) baseline row" "duplicate .github/workflows/web-platform-release.yml"
 
-# M13 — an issue tag outside the four groups
+# M13 — an issue tag outside the four groups, and a tag inside them that is not the computed group
 prep m13
 bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 5 '#9294:PR-9'
 landed_dir; mutant m13 T5 "a baseline row tagged outside PR-1..PR-4" "PR-9"
+prep m13b
+bl_set scripts/probe.sh CF_ACCESS_CLIENT_ID 5 '#9294:PR-4'
+landed_dir; mutant m13b T5 "a tag inside PR-1..PR-4 that is not the group computed from the path" "is not the computed group #9294:PR-2 of scripts/probe.sh"
 
 # ── R1-R4 (F-A2): the structural test class replaces the name-based exemption ─────────────────────
 prep m14
@@ -1267,14 +1722,24 @@ landed_dir; mutant m22 T1 "R5: lower-case webhook_deploy_secret_prev merges into
 prep m22b
 printf '#!/usr/bin/env bash\nexport TF_VAR_cf_access_client_id="$X"\n' > "$D/fx/scripts/v3.sh"
 landed_dir; mutant m22b T1 "R5: TF_VAR_cf_access_client_id is CF_ACCESS_CLIENT_ID" "scripts/v3.sh CF_ACCESS_CLIENT_ID"
+prep m22c
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_\\\nDEPLOY_SECRET"\n' > "$D/fx/scripts/v4.sh"
+landed_dir; mutant m22c T1 "R5: a name split by a backslash continuation (bash reads it as one token)" "scripts/v4.sh WEBHOOK_DEPLOY_SECRET"
 
-# ── R6: the Access token under its Terraform spellings (ALIAS) ────────────────────────────────────
+# ── R6: the Access token under its Terraform spellings (ALIAS), DEPLOY token only ─────────────────
 prep m23
 printf '#!/usr/bin/env bash\nX="$(terraform output -raw access_service_token_client_secret)"\n' > "$D/fx/scripts/tf-out.sh"
 landed_dir; mutant m23 T1 "R6: terraform output -raw access_service_token_client_secret in a new script (ALIAS)" "scripts/tf-out.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET"
 prep m23b
-printf 'locals { i = cloudflare_zero_trust_access_service_token.other.client_id }\n' > "$D/fx/apps/web-platform/infra/other.tf"
-landed_dir; mutant m23b T1 "R6: the cloudflare_zero_trust_access_service_token.<r>.client_id attribute in a new .tf (ALIAS)" "other.tf ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID"
+printf 'locals { i = cloudflare_zero_trust_access_service_token.deploy.client_id }\n' > "$D/fx/apps/web-platform/infra/other.tf"
+landed_dir; mutant m23b T1 "R6: the cloudflare_zero_trust_access_service_token.deploy.client_id attribute in a new .tf (ALIAS)" "other.tf ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID"
+prep m23c
+printf 'variable "x" {}\n# TF_VAR_access_service_token_client_id\nlocals { v = var.TF_VAR_access_service_token_client_id }\n' > "$D/fx/apps/web-platform/infra/other2.tf"
+landed_dir; mutant m23c T1 "R6: the TF_VAR_ spelling of the deploy Access token output (ALIAS)" "other2.tf ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID"
+prep c23
+printf '#!/usr/bin/env bash\nA="$(terraform output -raw ci_ssh_access_service_token_client_id)"\nB="$CI_SSH_ACCESS_SERVICE_TOKEN_CLIENT_SECRET"\n' > "$D/fx/scripts/ci-ssh.sh"
+printf 'locals { a = cloudflare_zero_trust_access_service_token.ci_ssh.client_secret\n b = cloudflare_zero_trust_access_service_token.registry_push.client_id\n c = var.registry_push_access_service_token_client_id }\n' > "$D/fx/apps/web-platform/infra/ci-ssh.tf"
+landed_dir; green c23 "R6: the ci_ssh and registry_push spellings (G1b, other credentials) stay green in a shell script and in Terraform"
 
 # ── R7-R9 (F-B): tag, expiry, class ───────────────────────────────────────────────────────────────
 prep m24
@@ -1285,21 +1750,47 @@ bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-12-15
 commit_all; landed_dir; mutant m25 T4 "R8: a tier-a expiry later than the base copy's with no ADR line" "Re-date"
 prep c25
 bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-12-15
-printf 'Re-date: 2026-12-15 the git-data rehearsal slipped a week. Ruled by CTO\n' >> "$D/fx/$ADR_REL"
+adr_add 'Re-date: 2026-12-15 the git-data rehearsal slipped a week. Ruled by CTO'
 commit_all; landed_dir; green c25 "R8: the same extension is green with the ADR-241 Re-date line in a baseline/ADR-only diff"
 prep m26
 bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-12-15
-printf 'Re-date: 2026-12-15 the git-data rehearsal slipped a week. Ruled by CTO\n' >> "$D/fx/$ADR_REL"
+adr_add 'Re-date: 2026-12-15 the git-data rehearsal slipped a week. Ruled by CTO'
 printf '# touched\n' >> "$D/fx/scripts/host-user.sh"
 commit_all; landed_dir; mutant m26 T4 "R8: the Re-date line with a code file in the same diff is not a baseline-only change" "Re-date"
+prep m26b
+bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-12-15
+adr_add 'Re-date: 2026-12-15 the git-data rehearsal slipped a week. Ruled by CTO'
+mkdir -p "$D/fx/knowledge-base/project/plans"; printf 'a plan\n' > "$D/fx/knowledge-base/project/plans/some-plan.md"
+commit_all; landed_dir; mutant m26b T4 "D6: the Re-date lane's allowed subset is {baseline, ADR-241}: a plan document in the same diff is not baseline-only" "Re-date"
 prep m27
 bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-12-15
-printf 'Re-date: 2026-12-16 the git-data rehearsal slipped a week. Ruled by CTO\n' >> "$D/fx/$ADR_REL"
+adr_add 'Re-date: 2026-12-16 the git-data rehearsal slipped a week. Ruled by CTO'
 commit_all; landed_dir; mutant m27 T4 "R8: a Re-date line whose date is not the new expiry" "Re-date"
+prep m27b
+bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-12-15
+adr_add 'Re-date: 2026-12-15 the git-data rehearsal slipped a week, no owner named.'
+commit_all; landed_dir; mutant m27b T4 "E5: a Re-date line without a 'Ruled by <owner>' is not a ruling" "Re-date"
+prep c25b
+bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-12-15
+bl_set .github/workflows/cutover-inngest.yml CF_ACCESS_CLIENT_SECRET 4 2026-12-20
+adr_add 'Re-date: 2026-12-15 the rehearsal slipped a week. Ruled by CTO'
+adr_add 'Re-date: 2026-12-20 the wipe slipped a week. Ruled by CTO'
+commit_all; landed_dir; green c25b "E5: two extended rows, each date ruled in the ADR, are green"
+prep m25b
+bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-12-15
+bl_set .github/workflows/cutover-inngest.yml CF_ACCESS_CLIENT_SECRET 4 2026-12-20
+adr_add 'Re-date: 2026-12-15 the rehearsal slipped a week. Ruled by CTO'
+commit_all; landed_dir; mutant m25b T4 "E5: two extended rows with only one date ruled (every extended row needs its ruling, not any)" "Re-date"
+prep c27c
+bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-11-15
+commit_all; landed_dir; green c27c "E5: a SHORTENED expiry needs no ruling"
 prep m28
 bl_set .github/workflows/deploy-chan.yml WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set .github/workflows/deploy-chan.yml WEBHOOK_DEPLOY_SECRET 4 2026-11-30
 commit_all; landed_dir; mutant m28 T4 "R9: class tier-b -> tier-a moves backwards" "moved backwards or sideways"
+prep m28s
+bl_set .github/workflows/deploy-chan.yml WEBHOOK_DEPLOY_SECRET 3 sink
+commit_all; landed_dir; mutant m28s T4 "E5: class tier-b -> sink is sideways, not forward" "moved backwards or sideways"
 prep m29
 bl_set .github/workflows/migrate.yml CF_ACCESS_CLIENT_ID 3 tier-b
 bl_set .github/workflows/migrate.yml CF_ACCESS_CLIENT_ID 4 -
@@ -1317,98 +1808,198 @@ commit_all; landed_dir; mutant m28b T4 "R9: class sink -> tier-a (the file now h
 prep m28c
 printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 landed_dir; mutant m28c T5c "R9: a doppler run on prd_terraform makes a sink file tier-a (the read shape is detected)" "scripts/host-user.sh WEBHOOK_DEPLOY_SECRET (baseline sink, computed tier-a)"
+prep m28d
+printf 'doppler secrets download --no-file --format json | jq .\n' >> "$D/fx/scripts/host-user.sh"
+landed_dir; mutant m28d T5c "B3: any doppler secrets download in a file that names the family is a read shape, whatever its arguments" "scripts/host-user.sh WEBHOOK_DEPLOY_SECRET (baseline sink, computed tier-a)"
+prep m28e
+printf 'doppler -p soleur -c prd run -- true\n' >> "$D/fx/scripts/host-user.sh"
+landed_dir; mutant m28e T5c "B3: any doppler run in a file that names the family is a read shape, whatever its config" "scripts/host-user.sh WEBHOOK_DEPLOY_SECRET (baseline sink, computed tier-a)"
+prep m28f
+printf 'n=WEBHOOK_DEPLOY_SECRET; echo "${!n}"\n' >> "$D/fx/scripts/host-user.sh"
+landed_dir; mutant m28f T5c "B3: a \${!var} indirection of a family name is a read shape" "scripts/host-user.sh WEBHOOK_DEPLOY_SECRET (baseline sink, computed tier-a)"
+prep c28
+printf 'for v in INTERVAL TIMEOUT; do echo "${!v}"; done\n' >> "$D/fx/scripts/host-user.sh"
+printf '#!/usr/bin/env bash\ndoppler secrets get SENTRY_DSN --plain\n' > "$D/fx/scripts/dop-only.sh"
+landed_dir; green c28 "B3: an indirection over non-family names, and a doppler call in a file that names no family name, stay green"
 
 # ── R10 (F-B): renames ────────────────────────────────────────────────────────────────────────────
 prep c30
-gc -C "$D/fx" mv scripts/followthroughs/soak.sh scripts/followthroughs/soak2.sh
+gc -C "$D/fx" mv "$D/fx/scripts/followthroughs/soak.sh" "$D/fx/scripts/followthroughs/soak2.sh"
 bl_del scripts/followthroughs/soak.sh WEBHOOK_DEPLOY_SECRET
-bl_add scripts/followthroughs/soak2.sh WEBHOOK_DEPLOY_SECRET tier-a 2026-11-30 '#9294:PR-4'
+bl_add scripts/followthroughs/soak2.sh WEBHOOK_DEPLOY_SECRET tier-a 2026-12-15 '#9294:PR-4'
 commit_all; landed_dir; green c30 "R10: a renamed consumer carrying its row (same name, class, tag, expiry) is not a new key"
 prep c30b
-gc -C "$D/fx" mv apps/web-platform/infra/variables.tf apps/web-platform/infra/vars.tf
+gc -C "$D/fx" mv "$D/fx/apps/web-platform/infra/variables.tf" "$D/fx/apps/web-platform/infra/vars.tf"
 bl_del apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET
 bl_add apps/web-platform/infra/vars.tf WEBHOOK_DEPLOY_SECRET sink - '#9294:PR-2'
 commit_all; landed_dir; green c30b "R10: a renamed sink carrying its row is not a new key either"
 prep m30
-gc -C "$D/fx" mv apps/web-platform/infra/variables.tf apps/web-platform/infra/vars.tf
+gc -C "$D/fx" mv "$D/fx/apps/web-platform/infra/variables.tf" "$D/fx/apps/web-platform/infra/vars.tf"
 bl_del apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET
 bl_add apps/web-platform/infra/vars.tf WEBHOOK_DEPLOY_SECRET sink - '#9294:PR-3'
 commit_all; landed_dir; mutant m30 T4 "R10: a rename that carries its row with a CHANGED tag" "tag of apps/web-platform/infra/vars.tf WEBHOOK_DEPLOY_SECRET changed"
 prep m31
 mkdir -p "$D/fx/apps/web-platform/infra/tests"
-gc -C "$D/fx" mv apps/web-platform/infra/variables.tf apps/web-platform/infra/tests/variables.tf
+gc -C "$D/fx" mv "$D/fx/apps/web-platform/infra/variables.tf" "$D/fx/apps/web-platform/infra/tests/variables.tf"
 bl_del apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET
 commit_all; landed_dir; mutant m31 T4 "R10: a rename INTO an exempt path (tests/) with the row dropped while the file still names the trio" "renamed into the exempt/excluded path"
 prep m31b
-_fixture_kbdir="knowledge-base/x"
-mkdir -p "$D/fx/$_fixture_kbdir"
-gc -C "$D/fx" mv scripts/host-user.sh "$_fixture_kbdir/host-user.sh"
+mkdir -p "$D/fx/knowledge-base/x"
+gc -C "$D/fx" mv "$D/fx/scripts/host-user.sh" "$D/fx/knowledge-base/x/host-user.txt"
 bl_del scripts/host-user.sh WEBHOOK_DEPLOY_SECRET
-commit_all; landed_dir; mutant m31b T4 "R10: a rename INTO the knowledge base with the row dropped (the other excluded prefix)" "renamed into the exempt/excluded path"
+commit_all; landed_dir; mutant m31b T4 "R10: a rename INTO the knowledge base as a non-code file with the row dropped (the other excluded prefix)" "renamed into the exempt/excluded path"
+prep m31c
+rm -f "$D/fx/scripts/host-user.sh"
+mkdir -p "$D/fx/tests/scripts"
+{ printf '#!/usr/bin/env bash\necho "${WEBHOOK_DEPLOY_SECRET}"\n'; for _i in $(seq 1 40); do printf '# a completely different body, line %03d, so git cannot pair the two files\n' "$_i"; done; } > "$D/fx/tests/scripts/host-user2.sh"
+bl_del scripts/host-user.sh WEBHOOK_DEPLOY_SECRET
+commit_all; landed_dir; mutant m31c T4 "C4: a consumer MOVED into an exempt directory with its row deleted and a body edited far below 90% similarity (no rename pairing)" "now names WEBHOOK_DEPLOY_SECRET"
+prep m31d
+{ printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\n'; for _i in $(seq 1 40); do printf '# padding line %03d so this is nothing like the original\n' "$_i"; done; } > "$D/fx/scripts/ren-moved.test.sh"
+rm -f "$D/fx/scripts/ren.sh"
+bl_del scripts/ren.sh WEBHOOK_DEPLOY_SECRET
+commit_all; landed_dir; mutant m31d T4 "C4: the same move into the .test.sh suffix class (second exempt class)" "now names WEBHOOK_DEPLOY_SECRET"
+prep c31e
+gc -C "$D/fx" rm -q "$D/fx/scripts/host-user.sh"
+bl_del scripts/host-user.sh WEBHOOK_DEPLOY_SECRET
+commit_all; landed_dir; green c31e "C4: a consumer RETIRED (file removed, row deleted, name nowhere else) is green"
 
 # ── R11-R12 (F-B): the base fails closed; the introduction arm is legitimate only while the suite is absent at the base ──
 prep m33
-knobs 'RF_REF=refs/remotes/origin/does-not-exist'
-landed_dir
+knobs RF_REF=refs/remotes/origin/does-not-exist
 if GITQ -C "$D/fx" rev-parse --verify -q refs/remotes/origin/does-not-exist >/dev/null 2>&1; then printf 'unchanged' > "$D/landed"; else printf 'landed' > "$D/landed"; fi
 mutant m33 T4 "R11: an unresolved base ref" "base unresolved (ref refs/remotes/origin/does-not-exist, arm merge-base)"
 prep m33b
-rm -rf "$D/fx"; GITQ clone -q --depth 1 "file://$FX" "$D/fx" 2>/dev/null
+rm -rf "$D/fx"; GITQ_ISO=1 GITQ clone -q --depth 1 "file://$FX" "$D/fx" 2>/dev/null
 if [ "$(GITQ -C "$D/fx" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then printf 'landed' > "$D/landed"; else printf 'unchanged' > "$D/landed"; fi
 mutant m33b T4 "R11: a shallow clone without the base ref says so" "shallow clone"
 prep m34
-knobs 'RF_REF=refs/remotes/origin/nobl'
+knobs RF_REF=refs/remotes/origin/nobl
 printf 'landed' > "$D/landed"
 mutant m34 T4 "R12: the suite exists at the base but the baseline does not (not an introduction)" "base unresolved"
 prep c34
-knobs 'RF_REF=refs/remotes/origin/pre'
+knobs RF_REF=refs/remotes/origin/pre
 printf 'landed' > "$D/landed"
 green c34 "R12: the introduction arm is green while the suite is absent at the base (TRIO_BASE_ARM=introduction)" "introduction: the suite is absent at the base" introduction
 prep c34b
-knobs 'RF_REF=refs/remotes/origin/head'
+knobs RF_REF=refs/remotes/origin/head
 printf 'landed' > "$D/landed"
 green c34b "R11: a push to main (HEAD is the ref) compares against HEAD^1 (TRIO_BASE_ARM=head1)" "" head1
 prep m35
 printf '  more: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}\n' >> "$D/fx/.github/workflows/canary-status.yml"
 bl_add .github/workflows/canary-status.yml CF_ACCESS_CLIENT_SECRET tier-a 2026-11-30 '#9294:PR-3'
 commit_all; gc -C "$D/fx" update-ref refs/remotes/origin/head HEAD
-knobs 'RF_REF=refs/remotes/origin/head'
+knobs RF_REF=refs/remotes/origin/head
 landed_dir; mutant m35 T4 "R11: growth in the HEAD commit on the head1 arm" "has no @allow" head1
 prep c35
-knobs 'RF_REF=refs/remotes/origin/does-not-exist; TRIO_ALLOW_NO_BASE=1; GITHUB_ACTIONS=false'
+knobs RF_REF=refs/remotes/origin/does-not-exist TRIO_ALLOW_NO_BASE=1 GITHUB_ACTIONS=false
 printf 'landed' > "$D/landed"
 green c35 "R11: TRIO_ALLOW_NO_BASE=1 outside CI skips T4 loudly (and only there)" "SKIPPED via TRIO_ALLOW_NO_BASE=1"
 prep m35b
-knobs 'RF_REF=refs/remotes/origin/does-not-exist; TRIO_ALLOW_NO_BASE=1; GITHUB_ACTIONS=true'
+knobs RF_REF=refs/remotes/origin/does-not-exist TRIO_ALLOW_NO_BASE=1 GITHUB_ACTIONS=true
 printf 'landed' > "$D/landed"
 mutant m35b T4 "R11: TRIO_ALLOW_NO_BASE=1 is ignored under GITHUB_ACTIONS=true" "base unresolved"
+# the stale-branch warning (D7): a branch cut before the suite landed, run against a ref that already has it
+prep c36w
+gc -C "$D/fx" checkout -q -b stale refs/remotes/origin/pre
+mkdir -p "$D/fx/tests/scripts"; cp "$T/fx-baseline.tsv" "$D/fx/$BASELINE_REL"
+printf 'x\n' > "$D/fx/README.md"
+commit_all
+knobs RF_REF=refs/remotes/origin/main
+landed_dir; printf 'landed' > "$D/landed"
+green c36w "D7: a branch that predates the suite runs the introduction arm WITH a T4w warning row (not green-silent)" "T4w: WARNING this branch predates the suite" introduction "::warning::T4w"
 
 # ── R13 (F-B): @allow ─────────────────────────────────────────────────────────────────────────────
 prep m36
 printf 'echo "$WEBHOOK_DEPLOY_SECRET_NEXT"\n' >> "$D/fx/scripts/host-user.sh"
-bl_add scripts/host-user.sh WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-1'
+bl_add scripts/host-user.sh WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-2'
 commit_all; landed_dir; mutant m36 T4 "R13: a new key with no @allow at the base" "has no @allow at the merge-base"
 prep c36
 printf 'variable "webhook_deploy_secret_next" {}\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
-bl_add apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-1'
-awk -F'\t' '!($1 == "@allow" && $2 == "apps/web-platform/infra/variables.tf")' "$BL" > "$BL.new" && mv "$BL.new" "$BL"
+bl_add apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-2'
+bl_allow_del apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET_NEXT
 commit_all; landed_dir; green c36 "R13: a new key that spends an @allow present at the base (and deletes it) is green"
 prep c36b
 printf 'locals { n = var.webhook_deploy_secret_next }\n' >> "$D/fx/apps/web-platform/infra/server.tf"
-bl_add apps/web-platform/infra/server.tf WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-1'
-awk -F'\t' '!($1 == "@allow" && $2 == "apps/web-platform/infra/server.tf")' "$BL" > "$BL.new" && mv "$BL.new" "$BL"
+bl_add apps/web-platform/infra/server.tf WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-2'
+bl_allow_del apps/web-platform/infra/server.tf WEBHOOK_DEPLOY_SECRET_NEXT
 commit_all; landed_dir; green c36b "R13: the second @allow member (server.tf) spends the same way"
+prep c36c
+printf 'runcmd:\n  - WEBHOOK_DEPLOY_SECRET_NEXT=x\n' > "$D/fx/apps/web-platform/infra/cloud-init.yml"
+bl_add apps/web-platform/infra/cloud-init.yml WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-2'
+bl_allow_del apps/web-platform/infra/cloud-init.yml WEBHOOK_DEPLOY_SECRET_NEXT
+commit_all; landed_dir; green c36c "D2: the cloud-init.yml @allow member spends the same way"
+prep c36d
+printf '#!/usr/bin/env bash\necho "${WEBHOOK_DEPLOY_SECRET_NEXT:-}"\n' > "$D/fx/apps/web-platform/infra/soleur-host-bootstrap.sh"
+bl_add apps/web-platform/infra/soleur-host-bootstrap.sh WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-2'
+bl_allow_del apps/web-platform/infra/soleur-host-bootstrap.sh WEBHOOK_DEPLOY_SECRET_NEXT
+commit_all; landed_dir; green c36d "D2: the soleur-host-bootstrap.sh @allow member spends the same way"
 prep m37
 printf 'echo "$WEBHOOK_DEPLOY_SECRET_NEXT"\n' >> "$D/fx/scripts/host-user.sh"
-printf '@allow\tscripts/host-user.sh\tWEBHOOK_DEPLOY_SECRET_NEXT\t-\t#9294:PR-1\n' >> "$BL"
+printf '@allow\tscripts/host-user.sh\tWEBHOOK_DEPLOY_SECRET_NEXT\t-\t#9294:PR-2\n' >> "$BL"
+adr_add 'Allow: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET_NEXT reserved for the follow-on. Ruled by CTO'
 commit_all
-awk -F'\t' '!($1 == "@allow" && $2 == "scripts/host-user.sh")' "$BL" > "$BL.new" && mv "$BL.new" "$BL"
-bl_add scripts/host-user.sh WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-1'
+bl_allow_del scripts/host-user.sh WEBHOOK_DEPLOY_SECRET_NEXT
+bl_add scripts/host-user.sh WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-2'
 commit_all; landed_dir; mutant m37 T4 "R13: an @allow added and spent in one diff (two commits of one PR)" "was added in the same diff that spends it"
 prep m38
 printf 'variable "webhook_deploy_secret_next" {}\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
-bl_add apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-1'
+bl_add apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-2'
 commit_all; landed_dir; mutant m38 T4 "R13: the row is added but the @allow it spends is not deleted" "was not deleted by the diff that spends it"
+# the @allow's own policy: tag, max-expiry (finite and '-'), the spent row's tag
+prep c71d
+printf '#!/usr/bin/env bash\ndoppler secrets get CF_ACCESS_CLIENT_SECRET --plain\n' > "$D/fx/scripts/gated-a.sh"
+bl_add scripts/gated-a.sh CF_ACCESS_CLIENT_SECRET tier-a 2026-11-30 '#9294:PR-2'
+bl_allow_del scripts/gated-a.sh CF_ACCESS_CLIENT_SECRET
+commit_all; landed_dir; green c71d "E5: a tier-a row spending an @allow within its max-expiry is green"
+prep m71c
+printf '#!/usr/bin/env bash\ndoppler secrets get CF_ACCESS_CLIENT_SECRET --plain\n' > "$D/fx/scripts/gated-a.sh"
+bl_add scripts/gated-a.sh CF_ACCESS_CLIENT_SECRET tier-a 2026-12-15 '#9294:PR-2'
+bl_allow_del scripts/gated-a.sh CF_ACCESS_CLIENT_SECRET
+commit_all; landed_dir; mutant m71c T4 "E5: a spent row whose expiry is later than its @allow's finite max-expiry" "exceeds its @allow max-expiry"
+prep m71e
+printf '#!/usr/bin/env bash\ndoppler secrets get CF_ACCESS_CLIENT_ID --plain\n' > "$D/fx/scripts/gated-b.sh"
+bl_add scripts/gated-b.sh CF_ACCESS_CLIENT_ID tier-a 2026-11-30 '#9294:PR-2'
+bl_allow_del scripts/gated-b.sh CF_ACCESS_CLIENT_ID
+commit_all; landed_dir; mutant m71e T4 "E5: a tier-a row spending an @allow whose max-expiry is '-' (no expiry was reserved)" "exceeds its @allow max-expiry"
+prep m71d
+printf 'variable "webhook_deploy_secret_next" {}\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
+bl_add apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET_NEXT sink - '#9294:PR-3'
+bl_allow_del apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET_NEXT
+commit_all; landed_dir; mutant m71d T4 "E5: a spent row whose tag differs from its @allow's tag" "differs from its @allow tag"
+prep m71
+printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-4\n' >> "$BL"
+landed_dir; mutant m71 T5 "E5: an @allow whose tag is not the group computed from its path" "is not the computed group #9294:PR-2 of scripts/future.sh"
+# new @allow lines are authorized by an ADR line in a baseline/ADR-only diff (D3)
+prep m72
+printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n' >> "$BL"
+adr_add 'Allow: scripts/future.sh CF_ACCESS_CLIENT_ID reserved for the follow-on migration. Ruled by CTO'
+printf '# touched\n' >> "$D/fx/scripts/host-user.sh"
+commit_all; landed_dir; mutant m72 T4 "D3: a new @allow in a diff that also touches an unrelated file (even with its ADR line)" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line"
+prep m72b
+printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n' >> "$BL"
+commit_all; landed_dir; mutant m72b T4 "D3: a new @allow in a baseline-only diff with no ADR line" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line"
+prep m72c
+printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n' >> "$BL"
+adr_add 'Allow: scripts/other.sh CF_ACCESS_CLIENT_ID reserved for a different follow-on. Ruled by CTO'
+commit_all; landed_dir; mutant m72c T4 "D3: an ADR Allow line for a DIFFERENT (file, name) does not authorize it" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line"
+prep m72d
+printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n' >> "$BL"
+adr_add 'Allow: scripts/future.sh CF_ACCESS_CLIENT_ID reserved for the follow-on migration, no owner named.'
+commit_all; landed_dir; mutant m72d T4 "D3: an ADR Allow line without 'Ruled by <owner>' is not a ruling" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line"
+prep c72
+printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n' >> "$BL"
+adr_add 'Allow: scripts/future.sh CF_ACCESS_CLIENT_ID reserved for the follow-on migration. Ruled by CTO'
+commit_all; landed_dir; green c72 "D3: a new @allow with its ADR-241 Allow line in a baseline/ADR-only diff is green"
+prep c72b
+printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n@allow\tscripts/future2.sh\tCF_ACCESS_CLIENT_SECRET\t-\t#9294:PR-2\n' >> "$BL"
+adr_add 'Allow: scripts/future.sh CF_ACCESS_CLIENT_ID reserved for the follow-on migration. Ruled by CTO'
+adr_add 'Allow: scripts/future2.sh CF_ACCESS_CLIENT_SECRET reserved for the follow-on migration. Ruled by CTO'
+commit_all; landed_dir; green c72b "D3: two new @allow lines, each ruled in the ADR, are green"
+prep m72e
+printf '@allow\tscripts/future.sh\tCF_ACCESS_CLIENT_ID\t-\t#9294:PR-2\n@allow\tscripts/future2.sh\tCF_ACCESS_CLIENT_SECRET\t-\t#9294:PR-2\n' >> "$BL"
+adr_add 'Allow: scripts/future.sh CF_ACCESS_CLIENT_ID reserved for the follow-on migration. Ruled by CTO'
+commit_all; landed_dir; mutant m72e T4 "D3: two new @allow lines with only one ruled (every new allow needs its own ruling)" "new @allow scripts/future2.sh CF_ACCESS_CLIENT_SECRET needs an ADR-241 line"
 
 # ── R14 (F-D): expiry formats and the boundary ────────────────────────────────────────────────────
 prep m39
@@ -1423,98 +2014,151 @@ landed_dir; mutant m41 T5 "R14: a tier-a row with expiry '-'" "tier-a expiry '-'
 prep m42
 bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-02-30
 landed_dir; mutant m42 T5 "R14: an impossible calendar date" "2026-02-30"
+prep m42b
+bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2026-11-300
+landed_dir; mutant m42b T5 "R14: a date with trailing digits (a prefix match is not a strict match)" "2026-11-300"
 prep m43
 bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2027-04-01
-landed_dir; mutant m43 T5 "R14: a tier-a expiry beyond MAX_EXPIRY (2027-03-31)" "MAX_EXPIRY"
+landed_dir; mutant m43 T5 "R14: a tier-a expiry beyond MAX_EXPIRY (2027-03-31)" "later than MAX_EXPIRY 2027-03-31"
+prep c43
+bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 2027-03-31
+knobs RF_REF=refs/remotes/origin/pre
+printf 'landed' > "$D/landed"
+green c43 "R14: the cap itself (2027-03-31) is accepted (introduction arm: no base to compare)" "introduction: the suite is absent at the base"
 prep m43b
 bl_set apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET 4 2026-11-30
 landed_dir; mutant m43b T5 "R14: a sink row must carry expiry '-'" "a sink row needs expiry '-'"
 prep c44
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
-knobs 'RF_TODAY=2026-11-30'
+knobs RF_TODAY=2026-11-30
 landed_dir; green c44 "R14: today == expiry on a blocking PR that touches a row's file is green (the expiry day itself)" "T3w:"
 prep c44a
-knobs 'RF_TODAY=2026-11-09'
+knobs RF_TODAY=2026-11-09
 printf 'landed' > "$D/landed"
-green c44a "R14: 21 days before expiry is green with a T3w warning" "expire within 21 days"
-if has_text "$D/out.ann" '::warning::'; then pass "c44a: the T3w row emits a ::warning:: annotation naming the remaining tier-a count"; else fail "c44a: the T3w row emits a ::warning:: annotation naming the remaining tier-a count" "ann: $(head -c 200 "$D/out.ann" 2>/dev/null)"; fi
+green c44a "R14: 21 days before expiry is green with a T3w warning that names the remaining tier-a count" "expire within 21 days" "" "tier-a rows remain"
 prep c44b
-knobs 'RF_TODAY=2026-11-08'
+knobs RF_TODAY=2026-11-08
 printf 'landed' > "$D/landed"
 green c44b "R14: 22 days before expiry is green with no warning" "T3w: no tier-a row expires within 21 days"
 prep m44
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
-knobs 'RF_TODAY=2026-12-01'
+knobs RF_TODAY=2026-12-01
 landed_dir; mutant m44 T3 "R14: expiry + 1 day on a blocking PR that touches a row's file"
 
 # ── R15 (F-D): the event table (all rows past expiry: today 2027-01-01) ───────────────────────────
 prep c45
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
-knobs 'RF_TODAY=2027-01-01; RF_EVENT=push; RF_EVENTREF=refs/heads/main'
-landed_dir; green c45 "R15: expired + push to main touching a row's file is green with T3m" "T3m: $FX_TIER_A_ROWS tier-a rows are past expiry (non-blocking on main by ruling)"
-if has_text "$D/out.ann" '::error::T3m'; then pass "c45: the main-class expiry emits an ::error:: annotation yet exits green"; else fail "c45: the main-class expiry emits an ::error:: annotation yet exits green" "ann: $(head -c 200 "$D/out.ann" 2>/dev/null)"; fi
+knobs RF_TODAY=2027-01-01 RF_EVENT=push RF_EVENTREF=refs/heads/main
+landed_dir; green c45 "R15: expired + push to main touching a row's file is green with T3m, and emits an ::error:: annotation" "T3m: $FX_TIER_A_ROWS tier-a rows are past expiry (non-blocking on main by ruling)" "" "::error::T3m"
 prep c45b
-knobs 'RF_TODAY=2027-01-01; RF_EVENT=schedule; RF_EVENTREF=refs/heads/main'
+knobs RF_TODAY=2027-01-01 RF_EVENT=schedule RF_EVENTREF=refs/heads/main
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
 landed_dir; green c45b "R15: expired + schedule is green with T3m" "T3m: $FX_TIER_A_ROWS tier-a rows are past expiry"
 prep c45c
-knobs 'RF_TODAY=2027-01-01; RF_EVENT=workflow_dispatch; RF_EVENTREF=refs/heads/main'
+knobs RF_TODAY=2027-01-01 RF_EVENT=workflow_dispatch RF_EVENTREF=refs/heads/main
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
 landed_dir; green c45c "R15: expired + workflow_dispatch on main is green with T3m" "T3m: $FX_TIER_A_ROWS tier-a rows are past expiry"
 prep c45d
-knobs 'RF_TODAY=2027-01-01; RF_EVENT=merge_group; RF_EVENTREF=refs/heads/gh-readonly-queue/main/pr-1'
+knobs RF_TODAY=2027-01-01 RF_EVENT=merge_group RF_EVENTREF=refs/heads/gh-readonly-queue/main/pr-1
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
 landed_dir; green c45d "R15: expired + a merge-queue gate is green with T3m" "T3m: $FX_TIER_A_ROWS tier-a rows are past expiry"
 prep c46
-knobs 'RF_TODAY=2027-01-01; RF_EVENT=pull_request; RF_EVENTREF=refs/pull/1/merge'
+knobs RF_TODAY=2027-01-01 RF_EVENT=pull_request RF_EVENTREF=refs/pull/1/merge
 printf 'unrelated\n' > "$D/fx/README.md"
 landed_dir; green c46 "R15: expired + a PR that touches no row's file is green with T3w" "none of their files"
 prep m46
-knobs 'RF_TODAY=2027-01-01; RF_EVENT=pull_request; RF_EVENTREF=refs/pull/1/merge'
+knobs RF_TODAY=2027-01-01 RF_EVENT=pull_request RF_EVENTREF=refs/pull/1/merge
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
 landed_dir; mutant m46 T3 "R15: expired + a PR that touches a row's file is RED" "scripts/probe.sh"
 prep m47
-knobs 'RF_TODAY=2027-01-01; RF_EVENT=workflow_dispatch; RF_EVENTREF=refs/heads/feat-x'
+knobs RF_TODAY=2027-01-01 RF_EVENT=workflow_dispatch RF_EVENTREF=refs/heads/feat-x
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
 landed_dir; mutant m47 T3 "R15: expired + a dispatch on a non-main ref is blocking"
-prep m47b
-knobs 'RF_TODAY=2027-01-01; RF_EVENT=pull_request; RF_EVENTREF=refs/pull/1/merge'
-printf 'plan fixture, edited\n' >> "$D/fx/$PLAN_REL"
-landed_dir; mutant m47b T3 "R15: expired + a PR that touches only the plan is blocking (the plan is a governed file)"
 prep m47c
-knobs 'RF_TODAY=2027-01-01'
+knobs RF_TODAY=2027-01-01
 printf '# touched\n' >> "$D/fx/scripts/probe.sh"
 landed_dir; mutant m47c T3 "R15: expired + no event at all (a local run) defaults to PR-like and blocks"
+prep m47d
+knobs RF_TODAY=2027-01-01 RF_EVENT=pull_request RF_EVENTREF=refs/pull/1/merge
+adr_add 'an unrelated ADR sentence'
+landed_dir; mutant m47d T3 "E5: expired + a PR that touches only ADR-241 is blocking (the ADR is a governed file)"
+prep m47e
+knobs RF_TODAY=2027-01-01 RF_EVENT=pull_request RF_EVENTREF=refs/pull/1/merge
+printf '# a baseline comment\n' >> "$BL"
+landed_dir; mutant m47e T3 "E5: expired + a PR that touches only the baseline is blocking (the baseline is a governed file)"
+prep c47b
+knobs RF_TODAY=2027-01-01 RF_EVENT=pull_request RF_EVENTREF=refs/pull/1/merge
+mkdir -p "$D/fx/knowledge-base/project/plans"; printf 'a plan\n' > "$D/fx/knowledge-base/project/plans/some-plan.md"
+landed_dir; green c47b "D6: expired + a PR that touches only a plan document is NOT governed (the plan leaves the touched set)" "none of their files"
+prep m77
+knobs RF_REF=refs/remotes/origin/pre RF_TODAY=2027-01-01 RF_EVENT=pull_request RF_EVENTREF=refs/pull/1/merge
+printf 'landed' > "$D/landed"
+mutant m77 T3 "E5: expired + a blocking event on the introduction arm (no base to diff) counts as touched"
+prep c77
+knobs RF_REF=refs/remotes/origin/pre RF_TODAY=2027-01-01 RF_EVENT=push RF_EVENTREF=refs/heads/main
+printf 'landed' > "$D/landed"
+green c77 "E5: the same introduction arm on a push to main is green with T3m" "T3m:"
 
-# ── R16 (F-A3): the stems are pinned ──────────────────────────────────────────────────────────────
+# ── R16 (F-A3): the guard constants are pinned (stems, exempt class, binary extensions, code extensions) ───────
 prep m50
 cp "$T/trio.py" "$D/trio.py"
-edit "$D/trio.py" 'STEMS = ["WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"]' 'STEMS = ["WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID"]'
-knobs "RF_PY=$D/trio.py"
-landed_dir; mutant m50 T6 "R16: a stem dropped from the scanner constant" "STEMS"
+edit "$D/trio.py" "$ST_PIN_STEMS" "$ST_PIN_STEMS_DROP"
+knobs RF_PY="$D/trio.py"
+landed_dir; mutant m50 T6 "R16: a stem dropped from the scanner constant" "pin @stems: the baseline record"
 prep m51
-edit "$BL" '@stems WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET' '@stems WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID'
-landed_dir; mutant m51 T6 "R16: a stem dropped from the baseline header" "STEMS"
+edit "$BL" "$HDR_STEMS" "$HDR_STEMS_DROP"
+landed_dir; mutant m51 T6 "R16: a stem dropped from the baseline header" "pin @stems: the baseline record"
 prep m52
 cp "$T/trio.py" "$D/trio.py"
-edit "$D/trio.py" 'STEMS = ["WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"]' 'STEMS = ["WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID"]'
-edit "$BL" '@stems WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET' '@stems WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID'
+edit "$D/trio.py" "$ST_PIN_STEMS" "$ST_PIN_STEMS_DROP"
+edit "$BL" "$HDR_STEMS" "$HDR_STEMS_DROP"
 bl_del .github/workflows/cutover-inngest.yml CF_ACCESS_CLIENT_SECRET
-knobs "RF_PY=$D/trio.py"
-commit_all; landed_dir; mutant m52 T6 "R16: constant, header AND the dropped stem's rows removed together still differ from the base copy" "base copy"
+knobs RF_PY="$D/trio.py"
+commit_all; landed_dir; mutant m52 T6 "R16: constant, header AND the dropped stem's rows removed together still differ from the base copy" "differs from the base copy's"
+prep m69
+mkdir -p "$D/fx/bin"; printf '#!/usr/bin/env bash\ndoppler secrets download --no-file --format json | jq -r .WEBHOOK_DEPLOY_SECRET\n' > "$D/fx/bin/new.sh"
+cp "$T/trio.py" "$D/trio.py"
+edit "$D/trio.py" 'EXEMPT_DIRS = {"test", "tests", "__tests__", "fixtures"}' 'EXEMPT_DIRS = {"test", "tests", "__tests__", "fixtures", "bin"}'
+knobs RF_PY="$D/trio.py"
+landed_dir; mutant m69 T6 "C3: the exempt class widened in the scanner constant (a new trio-reading script sits in the newly exempt bin/)" "pin @exempt: the baseline record"
+prep m69b
+edit "$BL" '@exempt __tests__,fixtures,test,tests;' '@exempt __tests__,test,tests;'
+landed_dir; mutant m69b T6 "C3: the exempt class edited in the baseline header" "pin @exempt: the baseline record"
+prep m69c
+cp "$T/trio.py" "$D/trio.py"
+edit "$D/trio.py" 'EXEMPT_DIRS = {"test", "tests", "__tests__", "fixtures"}' 'EXEMPT_DIRS = {"test", "tests", "__tests__", "fixtures", "bin"}'
+edit "$BL" '@exempt __tests__,fixtures,test,tests;' '@exempt __tests__,bin,fixtures,test,tests;'
+knobs RF_PY="$D/trio.py"
+commit_all; landed_dir; mutant m69c T6 "C3: constant and header widened together still differ from the base copy" "differs from the base copy's"
+prep m69d
+cp "$T/trio.py" "$D/trio.py"
+edit "$D/trio.py" 'BINARY_EXT = {"png",' 'BINARY_EXT = {"sh", "png",'
+knobs RF_PY="$D/trio.py"
+landed_dir; mutant m69d T6 "C3: .sh added to the binary-extension constant (every script would vanish from the scan)" "pin @binary: the baseline record"
+prep m69e
+cp "$T/trio.py" "$D/trio.py"
+edit "$D/trio.py" 'KB_CODE_EXT = {"sh", "bash",' 'KB_CODE_EXT = {"bash",'
+knobs RF_PY="$D/trio.py"
+landed_dir; mutant m69e T6 "C3: .sh dropped from the code extensions scanned under knowledge-base/ and docs/" "pin @kbcode: the baseline record"
 
-# ── R17 (F-A1): an unreadable scanned file ────────────────────────────────────────────────────────
+# ── R17 (F-A1): an unreadable scanned file (a gitlink: listed by ls-files, open() raises even as root) ────────────
 prep m53
-chmod 000 "$D/fx/scripts/probe.sh"
-if [ ! -r "$D/fx/scripts/probe.sh" ]; then printf 'landed' > "$D/landed"; else printf 'unchanged' > "$D/landed"; fi
-mutant m53 T8 "R17: a scanned file that exists but cannot be read" "scripts/probe.sh"
-chmod 644 "$D/fx/scripts/probe.sh"
+mkdir -p "$D/fx/scripts/gitlink.sh"
+gc -C "$D/fx" update-index --add --cacheinfo "160000,$FXHEAD,scripts/gitlink.sh"
+landed_dir; mutant m53 T8 "R17: a scanned entry that cannot be read (a gitlink directory; root-proof)" "scripts/gitlink.sh (IsADirectoryError)"
+prep c53
+rm -f "$D/fx/apps/web-platform/server/clean.ts"
+landed_dir; green c53 "R17: a cached file that is merely gone from the worktree is skipped silently"
+prep m62
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$D/fx/scripts/payload.png"
+landed_dir; mutant m62 T8 "B1: a script hidden behind a binary extension (.png) that names the trio is a hard FAIL" "scripts/payload.png (binary extension, but it names the trio)"
+prep m62b
+printf 'run: echo "$CF_ACCESS_CLIENT_SECRET"\n' > "$D/fx/plugins/soleur/skills/ship/payload.woff2"
+landed_dir; mutant m62b T8 "B1: the same behind .woff2 (second binary extension)" "plugins/soleur/skills/ship/payload.woff2 (binary extension, but it names the trio)"
 
 # ── R18 (F-C): the Tier-B environment proof, against a FIXTURE environment set ────────────────────
-# The control's deploy-chan.yml (scalar) and deploy-chan2.yml (mapping form, quoted, 4-space indent, odd step keys,
-# one job on deploy-channel and one on infra-privileged) are tier-b under the set {infra-privileged, deploy-channel}.
 prep m54
-knobs 'RF_ENVS=infra-privileged'
+knobs RF_ENVS=infra-privileged
 printf 'landed' > "$D/landed"
 mutant m54 T5c "R18: deploy-channel removed from the fixture environment set: the jobs naming the trio are no longer Tier-B" "deploy-chan.yml WEBHOOK_DEPLOY_SECRET (baseline tier-b, computed tier-a)"
 prep m54b
@@ -1526,46 +2170,105 @@ landed_dir; mutant m54c T5c 'R18: a ${{ secrets.X }} read inside a Tier-B-enviro
 prep m54e
 edit "$D/fx/.github/workflows/deploy-chan.yml" 'curl -H "X-Sig: $WEBHOOK_DEPLOY_SECRET" https://example.invalid' 'doppler secrets get WEBHOOK_DEPLOY_SECRET -c prd_terraform --plain'
 landed_dir; mutant m54e T5c "R18: a doppler secrets get on prd_terraform inside a Tier-B-environment job is tier-a whatever the environment" "deploy-chan.yml WEBHOOK_DEPLOY_SECRET (baseline tier-b, computed tier-a)"
+prep m54f
+edit "$D/fx/.github/workflows/deploy-chan.yml" 'curl -H "X-Sig: $WEBHOOK_DEPLOY_SECRET" https://example.invalid' 'doppler run -- ./deploy.sh "$WEBHOOK_DEPLOY_SECRET"'
+landed_dir; mutant m54f T5c "B3: a doppler run of any config inside a Tier-B-environment job is tier-a" "deploy-chan.yml WEBHOOK_DEPLOY_SECRET (baseline tier-b, computed tier-a)"
 prep c54
-knobs 'RF_ENVS=; RF_SIB='"$ROOT/$SIBLING_REL"
+knobs RF_ENVS= RF_SIB="$ROOT/$SIBLING_REL"
 printf 'landed' > "$D/landed"
 green c54 "E1: with the environment set single-sourced from the sibling census (plus the pending deploy-channel) the fixture is all green" "E1: the Tier-B environment set is single-sourced from"
 prep m54d
 cp "$T/trio.py" "$D/trio.py"
 edit "$D/trio.py" 'PENDING_ENVS = {"deploy-channel", "inngest-cutover"}' 'PENDING_ENVS = {"deploy-channel", "inngest-cutover", "not-a-real-environment"}'
-knobs "RF_PY=$D/trio.py; RF_ENVS=; RF_SIB=$ROOT/$SIBLING_REL"
+knobs RF_PY="$D/trio.py" RF_ENVS= RF_SIB="$ROOT/$SIBLING_REL"
 landed_dir; mutant m54d E1 "R18: a pending environment name the sibling census does not hold is not accepted" "not-a-real-environment"
 
-# ── R19 (F-B): the seams are refused under GITHUB_ACTIONS=true ────────────────────────────────────
-_seam_probe() { # <seam> <ci:true|false> -> prints "<rc>|<stderr first line>"
-  local out rc
-  out="$(env -u GITHUB_ACTIONS -u TRIO_TODAY -u TRIO_BASE_REF -u TRIO_BASELINE -u TRIO_REPO_ROOT GITHUB_ACTIONS="$2" "$1=x" bash "$SUITE" --seams-check 2>&1 >/dev/null)"; rc=$?
-  printf '%s|%s' "$rc" "${out%%$'\n'*}"
-}
-MUTANTS_RUN=$((MUTANTS_RUN + 1))
-pass "m55 lands: the four seams are probed under GITHUB_ACTIONS=true and under a local shell"
-_m55_bad=""
-for _sm in TRIO_TODAY TRIO_BASE_REF TRIO_BASELINE TRIO_REPO_ROOT; do
-  _r="$(_seam_probe "$_sm" true)"
-  case "$_r" in 1\|"FAIL SETUP: $_sm is set under GITHUB_ACTIONS=true"*) : ;; *) _m55_bad="$_m55_bad $_sm(${_r:0:80})" ;; esac
-done
-if [ -z "$_m55_bad" ]; then pass "m55: FAIL SETUP for each of the four seams under GITHUB_ACTIONS=true"; else fail "m55: FAIL SETUP for each of the four seams under GITHUB_ACTIONS=true" "not refused:$_m55_bad"; fi
-_c55_bad=""
-for _sm in TRIO_TODAY TRIO_BASE_REF TRIO_BASELINE TRIO_REPO_ROOT; do
-  _r="$(env -u GITHUB_ACTIONS "$_sm=x" bash "$SUITE" --seams-check 2>&1)"; _rc=$?
-  [ "$_rc" -eq 0 ] && [ "$_r" = "SEAMS OK" ] || _c55_bad="$_c55_bad $_sm"
-done
-_r="$(env -u TRIO_TODAY -u TRIO_BASE_REF -u TRIO_BASELINE -u TRIO_REPO_ROOT GITHUB_ACTIONS=true bash "$SUITE" --seams-check 2>&1)"; _rc=$?
-[ "$_rc" -eq 0 ] && [ "$_r" = "SEAMS OK" ] || _c55_bad="$_c55_bad ci-without-seams"
-if [ -z "$_c55_bad" ]; then pass "c55: the seams are honoured locally, and CI without seams is fine"; else fail "c55: the seams are honoured locally, and CI without seams is fine" "refused:$_c55_bad"; fi
+# ── C1/C2 (round 2): composite actions are tier-a; the environment proof's could-not-measure branches ───────────────
+prep m68
+mkdir -p "$D/fx/.github/actions/z"
+printf 'name: z\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo "$CF_ACCESS_CLIENT_SECRET"\n' > "$D/fx/.github/actions/z/action.yaml"
+landed_dir; mutant m68 T1 "C1: a composite action (action.yaml spelling) naming the trio with no row" ".github/actions/z/action.yaml CF_ACCESS_CLIENT_SECRET"
+prep m68b
+bl_set .github/actions/uses-trio/action.yml CF_ACCESS_CLIENT_ID 3 sink
+bl_set .github/actions/uses-trio/action.yml CF_ACCESS_CLIENT_ID 4 -
+landed_dir; mutant m68b T5c "C1: a composite action recorded as a permanent sink (it has no job to prove an environment)" ".github/actions/uses-trio/action.yml CF_ACCESS_CLIENT_ID (baseline sink, computed tier-a)"
+prep m68c
+bl_set .github/actions/uses-trio/action.yml CF_ACCESS_CLIENT_ID 3 tier-b
+bl_set .github/actions/uses-trio/action.yml CF_ACCESS_CLIENT_ID 4 -
+landed_dir; mutant m68c T5c "C1: a composite action recorded as tier-b" ".github/actions/uses-trio/action.yml CF_ACCESS_CLIENT_ID (baseline tier-b, computed tier-a)"
+
+# ── B1/B2: a NUL never hides a file; the doc prefixes hide only non-code ─────────────────────────────
+prep m61
+{ printf '#!/usr/bin/env bash\necho start\n#%0100d\n' 0; printf '\0\n'; printf 'doppler secrets get WEBHOOK_DEPLOY_SECRET --plain\n'; } > "$D/fx/scripts/nul1.sh"
+landed_dir; mutant m61 T1 "B1: a .sh with a NUL after byte 80 and a doppler read of the trio after it (bash runs it)" "scripts/nul1.sh WEBHOOK_DEPLOY_SECRET"
+prep m61b
+{ printf '\0\n'; printf 'echo "$CF_ACCESS_CLIENT_ID"\n'; } > "$D/fx/scripts/nul2.sh"
+landed_dir; mutant m61b T1 "B1: a NUL on the first line, the name on the second" "scripts/nul2.sh CF_ACCESS_CLIENT_ID"
+prep m61c
+printf 'echo "$WEBHOOK_\0DEPLOY_SECRET"\n' > "$D/fx/scripts/nul3.sh"
+landed_dir; mutant m61c T1 "B1: a name split by a NUL (read once with the NULs removed, as bash reads it)" "scripts/nul3.sh WEBHOOK_DEPLOY_SECRET"
+prep m63
+printf '#!/usr/bin/env bash\ndoppler secrets get WEBHOOK_DEPLOY_SECRET --plain -c prd_terraform\n' > "$D/fx/docs/pull.sh"
+landed_dir; mutant m63 T1 "B2: a script under docs/ is code and is scanned" "docs/pull.sh WEBHOOK_DEPLOY_SECRET"
+prep m63b
+printf 'run: doppler secrets get CF_ACCESS_CLIENT_ID --plain\n' > "$D/fx/knowledge-base/project/pull.yaml"
+landed_dir; mutant m63b T1 "B2: a .yaml under knowledge-base/ is code and is scanned" "$KBN/project/pull.yaml CF_ACCESS_CLIENT_ID"
+prep m63c
+printf '{"env": "CF_ACCESS_CLIENT_SECRET"}\n' > "$D/fx/knowledge-base/project/cfg.json"
+landed_dir; mutant m63c T1 "B2: a .json under knowledge-base/ is scanned (third code extension)" "$KBN/project/cfg.json CF_ACCESS_CLIENT_SECRET"
+
+# ── B3: read shapes outside the adjacency form, in the exempt class ───────────────────────────────
+prep m64
+mkdir -p "$D/fx/tests/scripts/lib"; printf '#!/usr/bin/env bash\ndoppler secrets download --no-file --format json -p soleur -c prd_terraform | jq -r .WEBHOOK_DEPLOY_SECRET\n' > "$D/fx/tests/scripts/lib/x.sh"
+landed_dir; mutant m64 T1 "B3: doppler secrets download | jq .NAME in a production-sourced lib under an exempt tests/ directory" "tests/scripts/lib/x.sh WEBHOOK_DEPLOY_SECRET"
+prep m64b
+mkdir -p "$D/fx/tests/scripts/lib"; printf '#!/usr/bin/env bash\ndoppler run -p soleur -c "prd_""terraform" -- true\necho CF_ACCESS_CLIENT_ID\n' > "$D/fx/tests/scripts/lib/y.sh"
+landed_dir; mutant m64b T1 "B3: a split prd_ + terraform literal in an exempt lib" "tests/scripts/lib/y.sh CF_ACCESS_CLIENT_ID"
+prep m64c
+mkdir -p "$D/fx/tests/scripts/lib"; printf '#!/usr/bin/env bash\nV=CF_ACCESS_CLIENT_SECRET\ndoppler secrets get "$V" --plain\n' > "$D/fx/tests/scripts/lib/z.sh"
+landed_dir; mutant m64c T1 "B3: doppler secrets get with a variable name in an exempt lib" "tests/scripts/lib/z.sh CF_ACCESS_CLIENT_SECRET"
+prep m64d
+mkdir -p "$D/fx/tests/scripts/lib"; printf '#!/usr/bin/env bash\nn=WEBHOOK_DEPLOY_SECRET; echo "${!n}"\n' > "$D/fx/tests/scripts/lib/w.sh"
+landed_dir; mutant m64d T1 "B3: a \${!var} indirection of a family name in an exempt lib" "tests/scripts/lib/w.sh WEBHOOK_DEPLOY_SECRET"
+prep m64e
+mkdir -p "$D/fx/tests/scripts/lib"; printf '#!/usr/bin/env bash\nterraform output -raw access_service_token_client_secret\n' > "$D/fx/tests/scripts/lib/v.sh"
+landed_dir; mutant m64e T1 "B3: terraform output -raw access_service_token_client_secret in an exempt lib" "tests/scripts/lib/v.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET"
+prep m64f
+printf '#!/usr/bin/env bash\nS="${{ secrets['"'"'CF_ACCESS_CLIENT_ID'"'"'] }}"\n' > "$D/fx/scripts/b.test.sh"
+landed_dir; mutant m64f T1 "B3: the secrets['NAME'] bracket form in a .test.sh" "scripts/b.test.sh CF_ACCESS_CLIENT_ID"
+
+# ── B4: the comment filter keeps every line that expands ───────────────────────────────────────────
+prep m65
+printf '#!/usr/bin/env bash\n//usr/bin/curl -H "X: $WEBHOOK_DEPLOY_SECRET" https://example.invalid\n' > "$D/fx/scripts/dbl.sh"
+landed_dir; mutant m65 T1 "B4: a //usr/bin/curl line in a .sh runs (// is not a comment marker in shell)" "scripts/dbl.sh WEBHOOK_DEPLOY_SECRET"
+prep m65b
+printf '#!/usr/bin/env bash\ncat <<EOF2\n#${WEBHOOK_DEPLOY_SECRET}\nEOF2\n' > "$D/fx/scripts/heredoc.sh"
+landed_dir; mutant m65b T1 "B4: a heredoc line #\${NAME} expands and is not a comment" "scripts/heredoc.sh WEBHOOK_DEPLOY_SECRET"
+prep m65c
+printf 'name: x\njobs:\n  j:\n    runs-on: x\n    steps:\n      - run: |\n          curl --data-binary @- https://example.invalid <<EOF2\n          #${{ secrets.WEBHOOK_DEPLOY_SECRET }}\n          EOF2\n' > "$D/fx/.github/workflows/hd.yml"
+landed_dir; mutant m65c T1 "B4: a #\${{ secrets.X }} line inside a run: block expands before the shell sees it" ".github/workflows/hd.yml WEBHOOK_DEPLOY_SECRET"
+prep m65d
+printf 'class A {\n  #CF_ACCESS_CLIENT_ID = 1;\n}\n' > "$D/fx/apps/web-platform/server/priv.ts"
+landed_dir; mutant m65d T1 "B4: a JS/TS private field #NAME is code, not a comment" "apps/web-platform/server/priv.ts CF_ACCESS_CLIENT_ID"
+prep m65e
+printf '// ${CF_ACCESS_CLIENT_ID} is interpolated\nexport const t = 1;\n' > "$D/fx/apps/web-platform/server/tpl.ts"
+landed_dir; mutant m65e T1 "B4: a // line holding \${...} is kept even in TS" "apps/web-platform/server/tpl.ts CF_ACCESS_CLIENT_ID"
+
+# ── B6: a line ending in || continues on the next line ────────────────────────────────────────────
+prep m67
+printf '#!/usr/bin/env bash\nx=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain ||\n  doppler secrets get SOME_OTHER_CRED --plain)\n' > "$D/fx/scripts/fb.sh"
+landed_dir; mutant m67 T1 "B6: a trailing || joins the next line, so the fallback credential is a FALLBACK key" "scripts/fb.sh FALLBACK:SOME_OTHER_CRED"
+prep c67
+printf 'x=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain ||\n  echo none)\n' >> "$D/fx/scripts/probe.sh"
+landed_dir; green c67 "B6: the same trailing || followed by a non-doppler command adds no FALLBACK key"
 
 # ── Other must-stay-green fixtures and harness rows ───────────────────────────────────────────────
-# (1) A must-PASS input that is NOT the canonical: different indentation, a comment-only mention, the family look-alikes.
+# (1) A must-PASS input that is NOT the canonical: different indentation, comment-only mentions, the family look-alikes.
 prep c2
 printf '        # CF_ACCESS_CLIENT_SECRET named only in a comment\n      - run: echo "a   trio:   WEBHOOK_DEPLOY_SECRET   is baselined"\n' >> "$D/fx/.github/workflows/web-platform-release.yml"
-printf '#!/usr/bin/env bash\nFOO_WEBHOOK_DEPLOY_SECRETX=1\nWEBHOOK_DEPLOY_SECRETX=2\nXCF_ACCESS_CLIENT_ID=3\n// CF_ACCESS_CLIENT_ID in a slash comment\n' > "$D/fx/scripts/lookalike.sh"
+printf '#!/usr/bin/env bash\n# WEBHOOK_DEPLOY_SECRET named in a shell comment\nFOO_WEBHOOK_DEPLOY_SECRETX=1\nWEBHOOK_DEPLOY_SECRETX=2\nXCF_ACCESS_CLIENT_ID=3\nD_WEBHOOK_DEPLOY_SECRET=4\n' > "$D/fx/scripts/lookalike.sh"
 printf 'The CF_ACCESS_CLIENT_ID is mentioned in a knowledge-base note.\n' > "$D/fx/knowledge-base/n.md"
-landed_dir; green c2 "a comment-only mention, a re-indented baselined read, look-alike names (FOO_..._SECRETX) and a kb note stay green"
+landed_dir; green c2 "a comment-only mention, a re-indented baselined read, look-alike names (FOO_..._SECRETX, D_...) and a kb note stay green"
 # (2) The name match is a WHOLE token: WEBHOOK_DEPLOY_SECRET_NEXT is its own name, not a hit on the base name.
 prep c3
 printf 'S: ${{ secrets.WEBHOOK_DEPLOY_SECRET_NEXT }}\n' > "$D/fx/scripts/nxt.sh"
@@ -1576,6 +2279,470 @@ else fail "C3: the rotation next-secret is its own name (the base-name pair is N
 prep m56
 printf '#!/usr/bin/env bash\necho "$CF_ACCESS_CLIENT_SECRET" # why\n' > "$D/fx/scripts/trailing.sh"
 landed_dir; mutant m56 T1 "a read followed by a trailing comment is still a read" "scripts/trailing.sh CF_ACCESS_CLIENT_SECRET"
+# (3b) A file name carrying control characters is echoed sanitized (no ESC/CR reaches a log line)
+prep m82
+_esc_name="scripts/a$(printf '\033')[31mb$(printf '\r')c.sh"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$D/fx/$_esc_name"
+landed_dir; mutant m82 T1 "E6: a file name with ESC and CR naming the trio is reported with the control characters replaced" "scripts/a [31mb c.sh WEBHOOK_DEPLOY_SECRET"
+# (4) The -M90% rename boundary, calibrated against git's own similarity score (E5)
+prep cal
+_k_ok=""; _k_low=""; _prev_score=""; _prev_k=""; _sc_ok=0; _sc_low=100
+for _k in $(seq 0 40); do
+  { printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\n'; for _i in $(seq 1 99); do
+      if [ "$_i" -le "$_k" ]; then printf '# REWRITTEN: the slow red dog crawls under the busy brown hen number %03d\n' "$_i"; else printf '# filler line number %03d: the quick brown fox jumps over the lazy dog\n' "$_i"; fi
+    done; } > "$D/fx/scripts/ren2.sh"
+  rm -f "$D/fx/scripts/ren.sh"
+  gc -C "$D/fx" add -A >/dev/null 2>&1
+  _score="$(GITQ_ISO=1 GITQ -C "$D/fx" diff --cached -M1% --name-status -- scripts/ren.sh scripts/ren2.sh | awk '$1 ~ /^R/ {print substr($1, 2) + 0}')"
+  _score="${_score:-0}"
+  if [ "$_score" -lt 90 ]; then _k_low="$_k"; _k_ok="$_prev_k"; _sc_low="$_score"; _sc_ok="$_prev_score"; break; fi
+  _prev_k="$_k"; _prev_score="$_score"
+done
+if [ -n "$_k_ok" ] && [ "$_sc_ok" -ge 90 ] && [ "$_sc_low" -lt 90 ] && [ "$((_k_low - _k_ok))" -eq 1 ]; then pass "C-cal: git pairs scripts/ren.sh with a copy edited in $_k_ok lines at $_sc_ok% and unpairs it at $_k_low lines ($_sc_low%): the -M90% boundary brackets exactly"
+else fail "C-cal: the -M90% boundary is calibrated against git's similarity score" "k_ok=$_k_ok ($_sc_ok) k_low=$_k_low ($_sc_low)"; fi
+_ren_file() { # <k> <path>  — ren.sh with its first k filler lines rewritten, at <path>
+  { printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\n'; for _i in $(seq 1 99); do
+      if [ "$_i" -le "$1" ]; then printf '# REWRITTEN: the slow red dog crawls under the busy brown hen number %03d\n' "$_i"; else printf '# filler line number %03d: the quick brown fox jumps over the lazy dog\n' "$_i"; fi
+    done; } > "$2"
+}
+prep c75
+rm -f "$D/fx/scripts/ren.sh"; _ren_file "${_k_ok:-0}" "$D/fx/scripts/ren2.sh"
+bl_del scripts/ren.sh WEBHOOK_DEPLOY_SECRET
+bl_add scripts/ren2.sh WEBHOOK_DEPLOY_SECRET sink - '#9294:PR-2'
+commit_all; landed_dir; green c75 "E5: a rename at ${_sc_ok:-?}% similarity (>= 90%) carries its row"
+prep c75b
+rm -f "$D/fx/scripts/ren.sh"; _ren_file "$(( ${_k_ok:-1} > 0 ? ${_k_ok:-1} - 1 : 0 ))" "$D/fx/scripts/ren2.sh"
+bl_del scripts/ren.sh WEBHOOK_DEPLOY_SECRET
+bl_add scripts/ren2.sh WEBHOOK_DEPLOY_SECRET sink - '#9294:PR-2'
+commit_all; landed_dir; green c75b "E5: a rename one edited line closer than the boundary (above ${_sc_ok:-?}%) carries its row"
+prep m75
+rm -f "$D/fx/scripts/ren.sh"; _ren_file "${_k_low:-99}" "$D/fx/scripts/ren2.sh"
+bl_del scripts/ren.sh WEBHOOK_DEPLOY_SECRET
+bl_add scripts/ren2.sh WEBHOOK_DEPLOY_SECRET sink - '#9294:PR-2'
+commit_all; landed_dir; mutant m75 T4 "E5: the same rename at ${_sc_low:-?}% similarity (< 90%) is a new key, not a carried row" "has no @allow at the merge-base"
+
+# ── T5 well-formedness sub-checks (each branch of the vocabulary) ────────────────────────────────
+prep m78a
+bl_add scripts/host-user.sh FOO_BAR sink - '#9294:PR-2'
+landed_dir; mutant m78a T5 "T5: a row name outside the trio family" "name 'FOO_BAR' is not a trio-family"
+prep m78b
+printf 'scripts/host-user.sh\tWEBHOOK_DEPLOY_SECRET_X\tsink\t-\t\n' >> "$BL"
+landed_dir; mutant m78b T5 "T5: a blank cell" "need 5 non-empty tab-separated columns"
+prep m78c
+bl_set .github/workflows/deploy-chan.yml WEBHOOK_DEPLOY_SECRET 3 tier-c
+landed_dir; mutant m78c T5 "T5: a class outside the vocabulary" "is not tier-a|tier-b|sink"
+prep m78d
+bl_set scripts/probe.sh FALLBACK:CI_SSH_ACCESS_TOKEN_ID 3 sink
+bl_set scripts/probe.sh FALLBACK:CI_SSH_ACCESS_TOKEN_ID 4 -
+landed_dir; mutant m78d T5 "T5: a FALLBACK row that is not tier-a" "must be tier-a"
+prep m78e
+printf '%s\n' "$HDR_STEMS" >> "$BL"
+landed_dir; mutant m78e T5 "T5: two @stems records" "expected exactly one @stems record, found 2"
+prep m78f
+printf '@allow\tscripts/x.sh\tFOO_NAME\t-\t#9294:PR-2\n' >> "$BL"
+landed_dir; mutant m78f T5 "T5: an @allow whose name is outside the family" "@allow name 'FOO_NAME' is not a trio-family name"
+prep m78g
+printf '@allow\tapps/web-platform/infra/server.tf\tWEBHOOK_DEPLOY_SECRET_NEXT\t-\t#9294:PR-2\n' >> "$BL"
+landed_dir; mutant m78g T5 "T5: a duplicate @allow" "duplicate @allow apps/web-platform/infra/server.tf WEBHOOK_DEPLOY_SECRET_NEXT"
+prep m78h
+awk '!/^@exempt /' "$BL" > "$BL.new" && mv "$BL.new" "$BL"
+landed_dir; mutant m78h T5 "T5: the @exempt record missing (a pinned constant with no record)" "expected exactly one @exempt record, found 0"
+
+# ── D4: every git failure while resolving the base fails closed (a real PATH shim, not a function) ──────────
+mkdir -p "$T/shim"
+cat > "$T/shim/git" <<'SHIM'
+#!/usr/bin/env bash
+# fails (rc 128) any invocation whose argument string matches $SHIM_FAIL_RE; otherwise it is the real git
+if [ -n "${SHIM_FAIL_RE:-}" ] && [[ " $* " =~ $SHIM_FAIL_RE ]]; then echo "shim: injected failure" >&2; exit 128; fi
+exec "$SHIM_REAL_GIT" "$@"
+SHIM
+chmod +x "$T/shim/git"
+shim_case() { # <id> <regex> <label wanted in the T4 detail>
+  prep "$1"
+  knobs "+PATH=$T/shim:$PATH" "+SHIM_REAL_GIT=$REAL_GIT" "+SHIM_FAIL_RE=$2"
+  printf 'landed' > "$D/landed"
+  mutant "$1" T4 "D4: the shim fails \`git $3\` while the base resolves (the ratchet must fail closed, not read an empty change list)" "git $3 failed" merge-base
+}
+shim_case m73a ' ls-tree .*tests/scripts/test-trio-baseline-census.sh' "ls-tree suite"
+shim_case m73b ' ls-tree .*tests/scripts/trio-baseline.tsv' "ls-tree baseline"
+shim_case m73c ' show ' "show baseline"
+shim_case m73d ' diff .*--name-status ' "diff name-status"
+shim_case m73e ' ls-files -z --others ' "ls-files others"
+shim_case m73f ' diff .*--unified=0 ' "diff adr"
+shim_case m73g ' log ' "log baseline"
+shim_case m73h ' diff .* -- tests/scripts/trio-baseline.tsv ' "diff baseline"
+shim_case m73i ' merge-base ' "merge-base"
+shim_case m73j ' rev-parse --verify -q HEAD[^ ]*commit' "rev-parse HEAD"
+prep c73
+knobs "+PATH=$T/shim:$PATH" "+SHIM_REAL_GIT=$REAL_GIT" '+SHIM_FAIL_RE= no-such-subcommand '
+printf 'landed' > "$D/landed"
+green c73 "D4: the same shim with a regex that matches nothing is transparent (the failures above are the shim, not the harness)" "" merge-base
+
+# ── D1: the documented regeneration (--emit-baseline) is ratchet-green after an @allow is spent ──────────────
+prep c71
+printf 'variable "webhook_deploy_secret_next" {}\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
+printf 'locals { n = var.webhook_deploy_secret_next }\n' >> "$D/fx/apps/web-platform/infra/server.tf"
+printf 'runcmd:\n  - WEBHOOK_DEPLOY_SECRET_NEXT=x\n' > "$D/fx/apps/web-platform/infra/cloud-init.yml"
+bl_regen
+commit_all; landed_dir; green c71 "D1: after PR-1-style edits spend three @allow lines, the baseline REGENERATED by --emit-baseline (tags and a re-dated expiry preserved, spent allows dropped) passes the ratchet"
+prep c71b
+printf '#!/usr/bin/env bash\ndoppler secrets get CF_ACCESS_CLIENT_SECRET --plain\n' > "$D/fx/scripts/gated-a.sh"
+bl_regen
+commit_all; landed_dir; green c71b "D1: a regenerated baseline that spends a tier-a @allow takes the allow's max-expiry and stays green"
+
+# ── E2: the population is conserved against the independent enumerator (mutants of the scanner's exclusions) ─
+cons_mutant() { # <id> <desc> <expected unscanned second-level dir or ''>   (the scanner copy at $D/trio.py is already edited)
+  MUTANTS_RUN=$((MUTANTS_RUN + 1))
+  knobs RF_PY="$D/trio.py"
+  landed_dir
+  _launch "$D"
+  _q cons "$1" "$D" "$2" "$3"
+}
+judge_cons() { # <id> <d> <desc> <dir>
+  local id="$1" d="$2" desc="$3" want="$4" c u
+  if [ "$(cat "$d/landed" 2>/dev/null)" = "landed" ]; then pass "$id lands: $desc"; else fail "$id lands: $desc" "the edit did not change the pristine copy"; return; fi
+  if [ "$(cat "$d/rc" 2>/dev/null)" != "0" ]; then fail "$id: the independent enumeration disagrees" "UNRESOLVED: scanner rc=$(cat "$d/rc" 2>/dev/null)"; return; fi
+  c="$(cons_diff "$d/fx" "$d/out.scan" | head -c 200)"; u="$(dirs_unscanned "$d/fx" "$d/out.scan" "")"
+  if [ -n "$c" ] && { [ -z "$want" ] || case " $u" in *" $want "*) true ;; *) false ;; esac; }; then pass "$id: the independent enumeration and the second-level directory check both go RED${want:+ ($want)}"
+  else fail "$id: the independent enumeration and the second-level directory check both go RED" "diff='$c' unscanned='$u'"; fi
+}
+prep m80
+cp "$T/trio.py" "$D/trio.py"
+edit "$D/trio.py" 'if rel in (SUITE_REL, BASELINE_REL) or (rel.startswith(EXCLUDED_PREFIXES) and ex_ext not in KB_CODE_EXT):' 'if rel in (SUITE_REL, BASELINE_REL) or rel.startswith(("apps/web-platform/app/",)) or (rel.startswith(EXCLUDED_PREFIXES) and ex_ext not in KB_CODE_EXT):'
+cons_mutant m80 "E2: apps/web-platform/app/ added to the scanner's exclusions" "apps/web-platform/app"
+prep m80b
+cp "$T/trio.py" "$D/trio.py"
+edit "$D/trio.py" 'if rel in (SUITE_REL, BASELINE_REL) or (rel.startswith(EXCLUDED_PREFIXES) and ex_ext not in KB_CODE_EXT):' 'if rel in (SUITE_REL, BASELINE_REL) or rel.startswith(("plugins/soleur/agents/",)) or (rel.startswith(EXCLUDED_PREFIXES) and ex_ext not in KB_CODE_EXT):'
+cons_mutant m80b "E2: plugins/soleur/agents/ added to the scanner's exclusions" "plugins/soleur/agents"
+prep m80c
+cp "$T/trio.py" "$D/trio.py"
+edit "$D/trio.py" 'if rel in (SUITE_REL, BASELINE_REL) or (rel.startswith(EXCLUDED_PREFIXES) and ex_ext not in KB_CODE_EXT):' 'if rel in (SUITE_REL, BASELINE_REL) or ex_ext == "ts" or (rel.startswith(EXCLUDED_PREFIXES) and ex_ext not in KB_CODE_EXT):'
+cons_mutant m80c "E2: every .ts file added to the scanner's exclusions (no whole directory vanishes, only an extension)" ""
+# the floor list must name every scan root (a unit mutant: the list loses plugins)
+MUTANTS_RUN=$((MUTANTS_RUN + 1))
+_spec_full="$LIVE_ROOT_FLOORS"; _spec_noplug="${LIVE_ROOT_FLOORS/plugins:/zz:}"
+if [ "$_spec_noplug" != "$_spec_full" ]; then pass "m81 lands: the floor list loses the plugins root"; else fail "m81 lands: the floor list loses the plugins root" "the substitution did not apply"; fi
+_m81="$(floors_missing_roots "$T/ctl.tsv.err" "$_spec_noplug")"
+if [ "$_m81" = "plugins " ] && [ -z "$(floors_missing_roots "$T/ctl.tsv.err" "$_spec_full")" ]; then pass "m81: dropping plugins from the floor list is RED (and the full list is not)"
+else fail "m81: dropping plugins from the floor list is RED (and the full list is not)" "missing='$_m81'"; fi
+
+# ── the classification table: small probe repos, scanner in --mode emit ────────────────────────────
+pr_new pt
+PC="$T/probe/cases.tsv"; : > "$PC"
+pcase() { printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "$PC"; }
+pr_mk() { mkdir -p "$(dirname "$PT/$1")"; }
+# population (B1/B2)
+pr_mk scripts/nul1.sh; printf '#!/usr/bin/env bash\n#%0100d\n\0\ndoppler secrets get WEBHOOK_DEPLOY_SECRET --plain\n' 0 > "$PT/scripts/nul1.sh"
+pcase P1 scripts/nul1.sh WEBHOOK_DEPLOY_SECRET tier-a "a NUL after byte 80 does not hide the file (read shape after it)"
+pr_mk scripts/nul2.sh; printf '\0\necho "$CF_ACCESS_CLIENT_ID"\n' > "$PT/scripts/nul2.sh"
+pcase P2 scripts/nul2.sh CF_ACCESS_CLIENT_ID sink "a NUL on the first line does not hide the file"
+pr_mk scripts/nul3.sh; printf 'echo "$WEBHOOK_\0DEPLOY_SECRET"\n' > "$PT/scripts/nul3.sh"
+pcase P3 scripts/nul3.sh WEBHOOK_DEPLOY_SECRET sink "a name split by a NUL is read with the NULs removed"
+pr_mk assets/blob.png; printf '\211PNG\r\n\032\n\0\0\0\rIHDR\0\0\0' > "$PT/assets/blob.png"
+pcase P4 assets/blob.png WEBHOOK_DEPLOY_SECRET ABSENT "a real binary (PNG) names nothing"
+pr_mk docs/a.sh; printf '#!/usr/bin/env bash\ndoppler secrets get WEBHOOK_DEPLOY_SECRET --plain\n' > "$PT/docs/a.sh"
+pcase P5 docs/a.sh WEBHOOK_DEPLOY_SECRET tier-a "a script under docs/ is scanned"
+pr_mk "$KBN/x/a.yaml"; printf 'x: ${CF_ACCESS_CLIENT_ID}\n' > "$PT/$KBN/x/a.yaml"
+pcase P6 "$KBN/x/a.yaml" CF_ACCESS_CLIENT_ID sink "a .yaml under knowledge-base/ is scanned"
+pr_mk docs/a.md; printf 'WEBHOOK_DEPLOY_SECRET in prose\n' > "$PT/docs/a.md"
+pcase P7 docs/a.md WEBHOOK_DEPLOY_SECRET ABSENT "a .md under docs/ is prose"
+pr_mk "$KBN/x/pic.svg"; printf '<svg>CF_ACCESS_CLIENT_ID</svg>\n' > "$PT/$KBN/x/pic.svg"
+pcase P8 "$KBN/x/pic.svg" CF_ACCESS_CLIENT_ID ABSENT "an .svg under knowledge-base/ is media"
+pr_mk docs/a.png; printf 'CF_ACCESS_CLIENT_ID\n' > "$PT/docs/a.png"
+pcase P9 docs/a.png CF_ACCESS_CLIENT_ID ABSENT "a .png under docs/ is media"
+pr_mk plugins/soleur/skills/z/NOTES.md; printf '# NOTES\nCF_ACCESS_CLIENT_ID\n' > "$PT/plugins/soleur/skills/z/NOTES.md"
+pcase P10 plugins/soleur/skills/z/NOTES.md CF_ACCESS_CLIENT_ID sink "a .md outside the doc prefixes is scanned"
+# read shapes in the exempt class (B3)
+pr_mk tests/scripts/lib/r1.sh
+printf '#!/usr/bin/env bash\ndoppler secrets download --no-file --format json -c prd_terraform | jq -r .WEBHOOK_DEPLOY_SECRET\n' > "$PT/tests/scripts/lib/r1.sh"
+pcase R1 tests/scripts/lib/r1.sh WEBHOOK_DEPLOY_SECRET tier-a "exempt: secrets download | jq .NAME"
+printf '#!/usr/bin/env bash\ndoppler run -p soleur -c "prd_""terraform" -- true\necho CF_ACCESS_CLIENT_ID\n' > "$PT/tests/scripts/lib/r2.sh"
+pcase R2 tests/scripts/lib/r2.sh CF_ACCESS_CLIENT_ID tier-a "exempt: a split prd_ + terraform literal"
+printf '#!/usr/bin/env bash\nV=CF_ACCESS_CLIENT_SECRET\ndoppler secrets get "$V" --plain\n' > "$PT/tests/scripts/lib/r3.sh"
+pcase R3 tests/scripts/lib/r3.sh CF_ACCESS_CLIENT_SECRET tier-a "exempt: secrets get with a variable name"
+printf '#!/usr/bin/env bash\nn=WEBHOOK_DEPLOY_SECRET; echo "${!n}"\n' > "$PT/tests/scripts/lib/r4.sh"
+pcase R4 tests/scripts/lib/r4.sh WEBHOOK_DEPLOY_SECRET tier-a "exempt: \${!var} indirection of a family name"
+printf '#!/usr/bin/env bash\nterraform output -raw access_service_token_client_secret\n' > "$PT/tests/scripts/lib/r5.sh"
+pcase R5 tests/scripts/lib/r5.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET tier-a "exempt: terraform output -raw of the deploy Access token"
+printf '#!/usr/bin/env bash\nS="${{ secrets['"'"'CF_ACCESS_CLIENT_ID'"'"'] }}"\n' > "$PT/tests/scripts/lib/r6.sh"
+pcase R6 tests/scripts/lib/r6.sh CF_ACCESS_CLIENT_ID tier-a "exempt: the secrets['NAME'] bracket form"
+printf '#!/usr/bin/env bash\nS="${{ secrets.WEBHOOK_DEPLOY_SECRET }}"\n' > "$PT/tests/scripts/lib/r7.sh"
+pcase R7 tests/scripts/lib/r7.sh WEBHOOK_DEPLOY_SECRET tier-a "exempt: secrets.NAME"
+printf '#!/usr/bin/env bash\ndoppler -p soleur -c prd run -- true\necho WEBHOOK_DEPLOY_SECRET\n' > "$PT/tests/scripts/lib/r8.sh"
+pcase R8 tests/scripts/lib/r8.sh WEBHOOK_DEPLOY_SECRET tier-a "exempt: doppler run with flags before the subcommand"
+printf '#!/usr/bin/env bash\nDOPPLER_CONFIG=prd_terraform doppler run -- cmd\necho WEBHOOK_DEPLOY_SECRET\n' > "$PT/tests/scripts/lib/r9.sh"
+pcase R9 tests/scripts/lib/r9.sh WEBHOOK_DEPLOY_SECRET tier-a "exempt: an env-prefixed doppler run"
+printf 'import subprocess\nsubprocess.run(["doppler", "secrets", "get", "WEBHOOK_DEPLOY_SECRET"])\n' > "$PT/tests/scripts/lib/r10.py"
+pcase R10 tests/scripts/lib/r10.py WEBHOOK_DEPLOY_SECRET tier-a "exempt: a python argv list"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/tests/scripts/lib/t1.sh"
+pcase RT1 tests/scripts/lib/t1.sh WEBHOOK_DEPLOY_SECRET ABSENT "exempt twin: a mention with no read shape needs no row"
+printf '#!/usr/bin/env bash\ndoppler secrets get SENTRY_DSN --plain\n' > "$PT/tests/scripts/lib/t2.sh"
+pcase RT2 tests/scripts/lib/t2.sh WEBHOOK_DEPLOY_SECRET ABSENT "exempt twin: a doppler call in a file naming no family name"
+printf '#!/usr/bin/env bash\necho WEBHOOK_DEPLOY_SECRET\nfor v in INTERVAL TIMEOUT; do echo "${!v}"; done\n' > "$PT/tests/scripts/lib/t3.sh"
+pcase RT3 tests/scripts/lib/t3.sh WEBHOOK_DEPLOY_SECRET ABSENT "exempt twin: an indirection over non-family names"
+printf '#!/usr/bin/env bash\necho WEBHOOK_DEPLOY_SECRET\nterraform output -raw ci_ssh_access_service_token_client_id\n' > "$PT/tests/scripts/lib/t4.sh"
+pcase RT4 tests/scripts/lib/t4.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID ABSENT "exempt twin: terraform output -raw of the ci_ssh token"
+printf '#!/usr/bin/env bash\n# doppler run -c prd_terraform\necho WEBHOOK_DEPLOY_SECRET\n' > "$PT/tests/scripts/lib/t5.sh"
+pcase RT5 tests/scripts/lib/t5.sh WEBHOOK_DEPLOY_SECRET ABSENT "exempt twin: a doppler run named only in a comment"
+# non-exempt classification (B3)
+pr_mk scripts/n1.sh
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets get SENTRY_DSN --plain\n' > "$PT/scripts/n1.sh"
+pcase N1 scripts/n1.sh WEBHOOK_DEPLOY_SECRET tier-a "any doppler secrets get in a file naming the family"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n2.sh"
+pcase N2 scripts/n2.sh WEBHOOK_DEPLOY_SECRET sink "no read shape: sink"
+printf '#!/usr/bin/env bash\nfor v in WEBHOOK_DEPLOY_SECRET; do :; done\nfor w in INTERVAL; do echo "${!w}"; done\n' > "$PT/scripts/n3.sh"
+pcase N3 scripts/n3.sh WEBHOOK_DEPLOY_SECRET sink "an indirection over other names on another line is not a read of the family"
+printf '#!/usr/bin/env bash\nn=CF_ACCESS_CLIENT_ID; echo "${!n}"\n' > "$PT/scripts/n4.sh"
+pcase N4 scripts/n4.sh CF_ACCESS_CLIENT_ID tier-a "indirection of a family name on one line"
+printf '#!/usr/bin/env bash\ndoppler run -- app\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n5.sh"
+pcase N5 scripts/n5.sh WEBHOOK_DEPLOY_SECRET tier-a "any doppler run in a file naming the family"
+printf '#!/usr/bin/env bash\ndoppler secrets download --no-file\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n6.sh"
+pcase N6 scripts/n6.sh WEBHOOK_DEPLOY_SECRET tier-a "any doppler secrets download in a file naming the family"
+printf '#!/usr/bin/env bash\ndoppler --silent -p soleur secrets get X\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n7.sh"
+pcase N7 scripts/n7.sh WEBHOOK_DEPLOY_SECRET tier-a "doppler flags before the subcommand"
+printf '#!/usr/bin/env bash\necho doppler is great\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n8.sh"
+pcase N8 scripts/n8.sh WEBHOOK_DEPLOY_SECRET sink "the word doppler alone is not an invocation"
+# comments (B4)
+printf '#!/usr/bin/env bash\ncat <<EOF2\n#${WEBHOOK_DEPLOY_SECRET}\nEOF2\n' > "$PT/scripts/k1.sh"
+pcase K1 scripts/k1.sh WEBHOOK_DEPLOY_SECRET sink "a heredoc line #\${NAME} expands"
+printf '#!/usr/bin/env bash\n//usr/bin/curl -H "X: $WEBHOOK_DEPLOY_SECRET" https://example.invalid\n' > "$PT/scripts/k2.sh"
+pcase K2 scripts/k2.sh WEBHOOK_DEPLOY_SECRET sink "// is not a comment marker in a shell script"
+pr_mk .github/workflows/k3.yml
+printf 'name: k3\njobs:\n  j:\n    runs-on: x\n    steps:\n      - run: |\n          #${{ secrets.WEBHOOK_DEPLOY_SECRET }}\n' > "$PT/.github/workflows/k3.yml"
+pcase K3 .github/workflows/k3.yml WEBHOOK_DEPLOY_SECRET tier-a "a #\${{ secrets.X }} line in a run block expands"
+printf '#!/usr/bin/env bash\n# WEBHOOK_DEPLOY_SECRET is the hmac\n' > "$PT/scripts/k4.sh"
+pcase K4 scripts/k4.sh WEBHOOK_DEPLOY_SECRET ABSENT "a # comment in a shell script"
+printf 'name: k5\n# CF_ACCESS_CLIENT_ID in a comment\njobs: {}\n' > "$PT/.github/workflows/k5.yml"
+pcase K5 .github/workflows/k5.yml CF_ACCESS_CLIENT_ID ABSENT "a # comment in a workflow"
+pr_mk apps/web-platform/server/k6.ts; printf '// CF_ACCESS_CLIENT_ID in a comment\nexport const a = 1;\n' > "$PT/apps/web-platform/server/k6.ts"
+pcase K6 apps/web-platform/server/k6.ts CF_ACCESS_CLIENT_ID ABSENT "a // comment in TypeScript"
+printf '// ${CF_ACCESS_CLIENT_ID} x\nexport const a = 1;\n' > "$PT/apps/web-platform/server/k7.ts"
+pcase K7 apps/web-platform/server/k7.ts CF_ACCESS_CLIENT_ID sink "a // line holding \${...} is kept"
+printf 'class A {\n  #CF_ACCESS_CLIENT_ID = 1;\n}\n' > "$PT/apps/web-platform/server/k8.ts"
+pcase K8 apps/web-platform/server/k8.ts CF_ACCESS_CLIENT_ID sink "a JS/TS private field is code"
+printf '# CF_ACCESS_CLIENT_ID heading\n' > "$PT/plugins/soleur/skills/z/k9.md"
+pcase K9 plugins/soleur/skills/z/k9.md CF_ACCESS_CLIENT_ID sink "Markdown is never comment-filtered"
+printf '#!/usr/bin/env bash\n  # indented comment WEBHOOK_DEPLOY_SECRET\n' > "$PT/scripts/k10.sh"
+pcase K10 scripts/k10.sh WEBHOOK_DEPLOY_SECRET ABSENT "an indented # comment"
+# names
+printf 'export TF_VAR_WEBHOOK_DEPLOY_SECRET=1\n' > "$PT/scripts/tn1.sh"
+pcase TN1 scripts/tn1.sh WEBHOOK_DEPLOY_SECRET sink "TF_VAR_ spelling"
+printf 'webhook_deploy_secret_prev=1\n' > "$PT/scripts/tn2.sh"
+pcase TN2 scripts/tn2.sh WEBHOOK_DEPLOY_SECRET_PREV sink "lower-case tfvars spelling"
+printf 'D_WEBHOOK_DEPLOY_SECRET=1\nWEBHOOK_DEPLOY_SECRETX=2\nXCF_ACCESS_CLIENT_ID=3\n' > "$PT/scripts/tn3.sh"
+pcase TN3 scripts/tn3.sh WEBHOOK_DEPLOY_SECRET ABSENT "left and right token boundaries"
+printf 'echo "$WEBHOOK_\\\nDEPLOY_SECRET"\n' > "$PT/scripts/tn4.sh"
+pcase TN4 scripts/tn4.sh WEBHOOK_DEPLOY_SECRET sink "a name split by a backslash continuation"
+printf 'cf_access_client_id=1\n' > "$PT/scripts/tn5.sh"
+pcase TN5 scripts/tn5.sh CF_ACCESS_CLIENT_ID sink "lower-case spelling"
+# ALIAS (B5)
+printf 'terraform output -raw ci_ssh_access_service_token_client_id\n' > "$PT/scripts/a1.sh"
+pcase A1 scripts/a1.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID ABSENT "the ci_ssh spelling is another credential"
+pr_mk apps/web-platform/infra/a2.tf; printf 'locals { a = cloudflare_zero_trust_access_service_token.ci_ssh.client_id }\n' > "$PT/apps/web-platform/infra/a2.tf"
+pcase A2 apps/web-platform/infra/a2.tf ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID ABSENT "the ci_ssh resource label"
+printf 'locals { a = cloudflare_zero_trust_access_service_token.registry_push.client_secret }\n' > "$PT/apps/web-platform/infra/a3.tf"
+pcase A3 apps/web-platform/infra/a3.tf ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET ABSENT "the registry_push resource label"
+printf 'output "access_service_token_client_id" {}\n' > "$PT/apps/web-platform/infra/a4.tf"
+pcase A4 apps/web-platform/infra/a4.tf ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID tier-a "the deploy output name"
+printf 'export TF_VAR_access_service_token_client_secret=1\n' > "$PT/scripts/a5.sh"
+pcase A5 scripts/a5.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET tier-a "the TF_VAR_ spelling of the deploy output"
+printf 'locals { a = cloudflare_zero_trust_access_service_token.deploy.client_secret }\n' > "$PT/apps/web-platform/infra/a6.tf"
+pcase A6 apps/web-platform/infra/a6.tf ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET tier-a "the deploy resource label"
+printf 'x = var.registry_push_access_service_token_client_id\n' > "$PT/apps/web-platform/infra/a7.tf"
+pcase A7 apps/web-platform/infra/a7.tf ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID ABSENT "a prefixed variable name (left boundary)"
+printf 'echo "$CI_SSH_ACCESS_SERVICE_TOKEN_CLIENT_SECRET"\n' > "$PT/scripts/a8.sh"
+pcase A8 scripts/a8.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET ABSENT "the upper-case ci_ssh spelling"
+# FALLBACK (B6)
+printf '#!/usr/bin/env bash\nx=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain ||\n  doppler secrets get SOME_OTHER_CRED --plain)\n' > "$PT/scripts/f1.sh"
+pcase F1 scripts/f1.sh FALLBACK:SOME_OTHER_CRED tier-a "a trailing || joins the next line"
+printf '#!/usr/bin/env bash\nx=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain \\\n  || doppler secrets get SOME_OTHER_CRED --plain)\n' > "$PT/scripts/f2.sh"
+pcase F2 scripts/f2.sh FALLBACK:SOME_OTHER_CRED tier-a "a backslash continuation joins the next line"
+printf '#!/usr/bin/env bash\nx=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain || echo none)\n' > "$PT/scripts/f3.sh"
+pcase F3 scripts/f3.sh FALLBACK:NONE ABSENT "|| echo is not a credential fallback"
+# workflows (C2): every branch of the Tier-B environment proof
+pr_mk .github/workflows/w.yml
+wf() { # <file> <body>
+  printf '%s' "$2" > "$PT/.github/workflows/$1"
+}
+wf w1.yml $'name: w\njobs:\n  j:\n    runs-on: x\n    environment: ${{ inputs.e || \'deploy-channel\' }}\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n'
+pcase W1 .github/workflows/w1.yml CF_ACCESS_CLIENT_ID tier-a "an expression whose one arm is Tier-B is not a literal"
+wf w2.yml $'name: w\njobs:\n  j:\n    runs-on: x\n    environment: ${{ github.ref == \'refs/heads/main\' && \'deploy-channel\' || \'\' }}\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n'
+pcase W2 .github/workflows/w2.yml CF_ACCESS_CLIENT_ID tier-a "a conditional with an empty arm runs unprotected off main"
+wf w3.yml $'name: w\njobs:\n  j:\n    runs-on: x\n    strategy:\n      matrix:\n        e: [deploy-channel]\n    environment: ${{ matrix.e }}\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n'
+pcase W3 .github/workflows/w3.yml CF_ACCESS_CLIENT_ID tier-a "a matrix environment is not a literal"
+wf w4.yml $'name: w\njobs:\n\tj: [\n  environment: deploy-channel\n  run: echo "$CF_ACCESS_CLIENT_ID"\n'
+pcase W4 .github/workflows/w4.yml CF_ACCESS_CLIENT_ID tier-a "unparseable YAML cannot prove an environment"
+wf w5.yml $'name: w\non: push\nenv:\n  CF_ACCESS_CLIENT_ID: x\n'
+pcase W5 .github/workflows/w5.yml CF_ACCESS_CLIENT_ID tier-a "a document with no jobs cannot prove an environment"
+wf w6.yml $'name: w\n# note ${CF_ACCESS_CLIENT_ID}\njobs:\n  j:\n    runs-on: x\n    environment: deploy-channel\n    steps:\n      - run: echo hi\n'
+pcase W6 .github/workflows/w6.yml CF_ACCESS_CLIENT_ID tier-a "a name no job holds (only a comment) proves nothing"
+wf w7.yml $'name: w\nenv:\n  CF_ACCESS_CLIENT_ID: x\njobs:\n  a:\n    runs-on: x\n    environment: deploy-channel\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n  b:\n    runs-on: x\n    steps:\n      - run: echo hi\n'
+pcase W7 .github/workflows/w7.yml CF_ACCESS_CLIENT_ID tier-a "a workflow-level env naming the trio makes EVERY job a naming job (one has no environment)"
+wf w7b.yml $'name: w\nenv:\n  CF_ACCESS_CLIENT_ID: x\njobs:\n  a:\n    runs-on: x\n    environment: deploy-channel\n    steps:\n      - run: echo hi\n  b:\n    runs-on: x\n    environment: infra-privileged\n    steps:\n      - run: echo hi\n'
+pcase W7B .github/workflows/w7b.yml CF_ACCESS_CLIENT_ID tier-b "twin: a workflow-level name with every job on a Tier-B environment is tier-b"
+wf w8.yml $'name: w\njobs:\n  j:\n    runs-on: x\n    environment: "deploy-channel"\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n'
+pcase W8 .github/workflows/w8.yml CF_ACCESS_CLIENT_ID tier-b "twin: a double-quoted literal environment"
+wf w9.yml $'name: w\njobs:\n  j:\n    runs-on: x\n    environment:\n      name: deploy-channel\n      url: https://example.invalid\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n'
+pcase W9 .github/workflows/w9.yml CF_ACCESS_CLIENT_ID tier-b "twin: the mapping form of a literal environment"
+wf w10.yml $'name: w\njobs:\n  a:\n    runs-on: x\n    environment: infra-privileged\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n  b:\n    runs-on: x\n    steps:\n      - run: echo unrelated\n'
+pcase W10 .github/workflows/w10.yml CF_ACCESS_CLIENT_ID tier-b "twin: a job that does not name the trio needs no environment"
+wf w11.yml $'name: w\njobs:\n  j:\n    uses: ./.github/workflows/callee.yml\n    with:\n      name: CF_ACCESS_CLIENT_ID\n'
+pcase W11 .github/workflows/w11.yml CF_ACCESS_CLIENT_ID tier-a "a reusable-workflow call has no environment to prove"
+wf w12.yml $'name: w\njobs:\n  j:\n    runs-on: x\n    environment: release\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n'
+pcase W12 .github/workflows/w12.yml CF_ACCESS_CLIENT_ID tier-a "a literal environment outside the Tier-B set"
+wf w13.yaml $'name: w\njobs:\n  j:\n    runs-on: x\n    environment: deploy-channel\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n'
+pcase W13 .github/workflows/w13.yaml CF_ACCESS_CLIENT_ID tier-b "twin: the .yaml spelling of a workflow"
+wf w14.yml $'name: w\njobs:\n  j:\n    runs-on: x\n    environment: deploy-channel\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n---\nname: second\n'
+pcase W14 .github/workflows/w14.yml CF_ACCESS_CLIENT_ID tier-a "a multi-document file cannot be measured"
+wf w15.yml $'name: w\njobs:\n  j:\n    runs-on: x\n    environment: ""\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n'
+pcase W15 .github/workflows/w15.yml CF_ACCESS_CLIENT_ID tier-a "an empty environment"
+wf w16.yml $'name: w\nconcurrency:\n  group: ${CF_ACCESS_CLIENT_ID}\njobs:\n  j:\n    runs-on: x\n    steps:\n      - run: echo hi\n'
+pcase W16 .github/workflows/w16.yml CF_ACCESS_CLIENT_ID tier-a "a workflow-level key other than env (concurrency) naming the trio counts"
+wf w17.yml $'name: w\njobs:\n  j:\n    runs-on: x\n    environment: deploy-channel\n    steps:\n      - run: echo ${{ secrets.WEBHOOK_DEPLOY_SECRET }}\n'
+pcase W17 .github/workflows/w17.yml WEBHOOK_DEPLOY_SECRET tier-a "a repo-secret read in a Tier-B job is still a read shape"
+mkdir -p "$PT/.github/workflows/sub" "$PT/apps/web-platform/ci"
+printf 'name: w\njobs:\n  j:\n    runs-on: x\n    environment: deploy-channel\n    steps:\n      - run: echo "$CF_ACCESS_CLIENT_ID"\n' > "$PT/.github/workflows/sub/s.yml"
+pcase W18 .github/workflows/sub/s.yml CF_ACCESS_CLIENT_ID sink "a YAML in a workflows subdirectory is not a workflow"
+printf 'steps:\n  - run: echo "$CF_ACCESS_CLIENT_ID"\n' > "$PT/apps/web-platform/ci/ci.yml"
+pcase W19 apps/web-platform/ci/ci.yml CF_ACCESS_CLIENT_ID sink "a non-workflow YAML is a sink"
+# composite actions (C1)
+mkdir -p "$PT/.github/actions/c1" "$PT/.github/actions/c2" "$PT/.github/actions/c3"
+printf 'name: c1\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo "$CF_ACCESS_CLIENT_ID"\n' > "$PT/.github/actions/c1/action.yml"
+pcase CA1 .github/actions/c1/action.yml CF_ACCESS_CLIENT_ID tier-a "a composite action (action.yml) naming the trio is tier-a"
+printf 'name: c2\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo "$CF_ACCESS_CLIENT_ID"\n' > "$PT/.github/actions/c2/action.yaml"
+pcase CA2 .github/actions/c2/action.yaml CF_ACCESS_CLIENT_ID tier-a "a composite action (action.yaml) naming the trio is tier-a"
+printf '#!/usr/bin/env bash\necho "$CF_ACCESS_CLIENT_ID"\n' > "$PT/.github/actions/c3/helper.sh"
+pcase CA3 .github/actions/c3/helper.sh CF_ACCESS_CLIENT_ID sink "twin: a helper script inside an action directory is a sink"
+pr_commit
+pr_emit pt "$T/trio.py" "$T/probe/pt.rows"
+if [ -s "$T/probe/pt.rows" ]; then pass "PT0: the classification table repo produced rows ($(wc -l < "$T/probe/pt.rows") rows)"; else fail "PT0: the classification table repo produced rows" "$(head -c 300 "$T/probe/pt.rows.err")"; fi
+while IFS=$'\t' read -r _id _f _n _want _desc; do
+  pr_expect "$T/probe/pt.rows" "PT $_id: $_desc" "$_f" "$_n" "$_want"
+done < "$PC"
+
+# scanner-branch mutants: an edited COPY of the scanner must flip the named case
+CMPROBE=pt
+cmut cm1 "the NUL branch: a NUL-bearing file is skipped as binary" '    if b"\0" in raw:
+' '    if b"\0" in raw:
+        continue
+' scripts/nul1.sh WEBHOOK_DEPLOY_SECRET tier-a
+cmut cm2 "the code-extension carve-out under knowledge-base/ and docs/: everything there is skipped" '(rel.startswith(EXCLUDED_PREFIXES) and ex_ext not in KB_CODE_EXT)' 'rel.startswith(EXCLUDED_PREFIXES)' docs/a.sh WEBHOOK_DEPLOY_SECRET tier-a
+cmut cm3 "the doppler secrets get|download read shape is dropped" 'bool(R_DOP_RUN.search(joined) or R_DOP_SEC.search(joined) or R_DOP_RUN.search(code) or R_DOP_SEC.search(code))' 'bool(R_DOP_RUN.search(joined) or R_DOP_RUN.search(code))' scripts/n1.sh WEBHOOK_DEPLOY_SECRET tier-a
+cmut cm4 "the doppler run read shape is dropped" 'bool(R_DOP_RUN.search(joined) or R_DOP_SEC.search(joined) or R_DOP_RUN.search(code) or R_DOP_SEC.search(code))' 'bool(R_DOP_SEC.search(joined) or R_DOP_SEC.search(code))' scripts/n5.sh WEBHOOK_DEPLOY_SECRET tier-a
+cmut cm5 "the \${!var} indirection read shape is dropped" 'return bool(an["reads"] or an["gen_read"] or an["alias_reads"] or an["indirect"])' 'return bool(an["reads"] or an["gen_read"] or an["alias_reads"])' scripts/n4.sh CF_ACCESS_CLIENT_ID tier-a
+cmut cm6 "the terraform output -raw read shape is dropped" 'return bool(an["reads"] or an["gen_read"] or an["alias_reads"] or an["indirect"])' 'return bool(an["reads"] or an["gen_read"] or an["indirect"])' tests/scripts/lib/r5.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET tier-a
+cmut cm7 "the secrets.NAME / secrets['NAME'] read shape is dropped" 'for m in R_SECRETS.finditer(joined):' 'for m in []:' tests/scripts/lib/r7.sh WEBHOOK_DEPLOY_SECRET tier-a
+cmut cm8 "the \${ guard on whole-line comments is dropped" ' and "${" not in ln:' ':' scripts/k1.sh WEBHOOK_DEPLOY_SECRET sink
+cmut cm9 "// becomes a comment marker in every language and # in JS/TS" 'if (s.startswith("//") if js else s.startswith("#")) and "${" not in ln:' 'if (s.startswith("#") or s.startswith("//")) and "${" not in ln:' scripts/k2.sh WEBHOOK_DEPLOY_SECRET sink
+cmut cm10 "the ALIAS left boundary is dropped (ci_ssh_ spellings match)" 'ALIAS_A = re.compile(r"(?<![A-Za-z0-9_])(?:TF_VAR_)?access_service_token_client_' 'ALIAS_A = re.compile(r"(?:TF_VAR_)?access_service_token_client_' scripts/a1.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID ABSENT
+cmut cm11 "the ALIAS resource label is widened from deploy to any" 'cloudflare_zero_trust_access_service_token\.deploy\.client_' 'cloudflare_zero_trust_access_service_token\.[A-Za-z0-9_]+\.client_' apps/web-platform/infra/a2.tf ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID ABSENT
+cmut cm12 "the trailing-|| join is dropped" 'joined = ORJOIN.sub("|| ", CONT.sub(" ", code))' 'joined = CONT.sub(" ", code)' scripts/f1.sh FALLBACK:SOME_OTHER_CRED tier-a
+cmut cm13 "the strict continuation join for split names is dropped" 'strict = CONT_STRICT.sub("", code)' 'strict = code' scripts/tn4.sh WEBHOOK_DEPLOY_SECRET sink
+cmut cm14 "the workflow-level naming check is dropped" 'wl = bool(FAM.search(json.dumps({k: v for k, v in doc.items() if k != "jobs"}, default=str)))' 'wl = False' .github/workflows/w7.yml CF_ACCESS_CLIENT_ID tier-a
+cmut cm15 "no naming job is read as proof (the empty case returns True)" '    if not naming:
+        return False' '    if not naming:
+        return True' .github/workflows/w6.yml CF_ACCESS_CLIENT_ID tier-a
+cmut cm16 "unparseable YAML is read as proof" '        doc = yaml.safe_load(text)
+    except Exception:
+        return False' '        doc = yaml.safe_load(text)
+    except Exception:
+        return True' .github/workflows/w4.yml CF_ACCESS_CLIENT_ID tier-a
+cmut cm17 "a document with no jobs is read as proof" '    if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
+        return False' '    if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
+        return True' .github/workflows/w5.yml CF_ACCESS_CLIENT_ID tier-a
+cmut cm18 "the expression-arm extraction of the old classifier is reintroduced (the quoted literal inside \${{ }} counts)" 'e = env_literal(b.get("environment")) if "environment" in b else None' 'e = (re.findall(r"'"'"'([^'"'"']*)'"'"'", str(b.get("environment"))) or [None])[0] if "environment" in b else None' .github/workflows/w1.yml CF_ACCESS_CLIENT_ID tier-a
+cmut cm19 "composite actions fall through to sink" '    if ACTION.fullmatch(rel):
+        return "tier-a"
+' '' .github/actions/c1/action.yml CF_ACCESS_CLIENT_ID tier-a
+cmut cm20 "the Tier-B set membership test is dropped" '        if e is None or e not in ENVS:' '        if e is None:' .github/workflows/w12.yml CF_ACCESS_CLIENT_ID tier-a
+cmut cm21 "an exempt read-shape file earns rows only for the Access-token alias, not for its names" '        return {(rel, n) for n in an["names"]} | {(rel, n) for n in an["alias_reads"]}' '        return {(rel, n) for n in an["alias_reads"]}' tests/scripts/lib/r1.sh WEBHOOK_DEPLOY_SECRET tier-a
+flush_pending
+eval_live
+
+# ── D5: every seam is refused under CI; the audit of this file's own source is live ───────────────────────
+_seam_probe() { # <seam> <ci:true|false> -> prints "<rc>|<stderr first line>"
+  local out rc
+  out="$(env -u GITHUB_ACTIONS -u TRIO_TODAY -u TRIO_BASE_REF -u TRIO_BASELINE -u TRIO_REPO_ROOT -u TRIO_ALLOW_NO_BASE -u RF_PY -u RF_REF -u RF_TODAY -u RF_EVENT -u RF_EVENTREF -u RF_ENVS -u RF_SIB GITHUB_ACTIONS="$2" "$1=x" bash "$SUITE" --seams-check 2>&1 >/dev/null)"; rc=$?
+  printf '%s|%s' "$rc" "${out%%$'\n'*}"
+}
+_m55_bad=""
+for _sm in $SEAMS; do
+  _r="$(_seam_probe "$_sm" true)"
+  case "$_r" in 1\|"FAIL SETUP: $_sm is set under GITHUB_ACTIONS=true"*) : ;; *) _m55_bad="$_m55_bad $_sm(${_r:0:80})" ;; esac
+  MUTANTS_RUN=$((MUTANTS_RUN + 1))
+done
+if [ -z "$_m55_bad" ]; then pass "m55: FAIL SETUP for each of the $(printf '%s' "$SEAMS" | wc -w | tr -d ' ') seams under GITHUB_ACTIONS=true (accident-proofing, not authorization)"; else fail "m55: FAIL SETUP for each seam under GITHUB_ACTIONS=true" "not refused:$_m55_bad"; fi
+_c55_bad=""
+for _sm in TRIO_TODAY TRIO_BASE_REF TRIO_BASELINE TRIO_REPO_ROOT TRIO_ALLOW_NO_BASE RF_PY RF_REF; do
+  _r="$(env -u GITHUB_ACTIONS "$_sm=x" bash "$SUITE" --seams-check 2>&1)"; _rc=$?
+  [ "$_rc" -eq 0 ] && [ "$_r" = "SEAMS OK" ] || _c55_bad="$_c55_bad $_sm"
+done
+_r="$(env -u TRIO_TODAY -u TRIO_BASE_REF -u TRIO_BASELINE -u TRIO_REPO_ROOT -u TRIO_ALLOW_NO_BASE -u RF_PY -u RF_REF -u RF_TODAY -u RF_EVENT -u RF_EVENTREF -u RF_ENVS -u RF_SIB GITHUB_ACTIONS=true bash "$SUITE" --seams-check 2>&1)"; _rc=$?
+[ "$_rc" -eq 0 ] && [ "$_r" = "SEAMS OK" ] || _c55_bad="$_c55_bad ci-without-seams"
+if [ -z "$_c55_bad" ]; then pass "c55: the seams are honoured or scrubbed locally, and CI without seams is fine"; else fail "c55: the seams are honoured or scrubbed locally, and CI without seams is fine" "refused:$_c55_bad"; fi
+# the audit: a seam the source uses but SEAMS does not declare fails (a copy of this suite with one more seam appended)
+mkdir -p "$T/seamcopy"; cp "$SUITE" "$T/seamcopy/x.sh"
+printf '\n: "$%s"\n' '{TRIO_NEWSEAM:-}' >> "$T/seamcopy/x.sh"
+MUTANTS_RUN=$((MUTANTS_RUN + 1))
+_r="$(env -u GITHUB_ACTIONS bash "$T/seamcopy/x.sh" --seams-check 2>&1)"; _rc=$?
+if [ "$_rc" -eq 1 ] && [ "${_r#*TRIO_NEWSEAM}" != "$_r" ]; then pass "m55b: a seam added to the source without being declared in SEAMS fails the --seams-check audit"; else fail "m55b: an undeclared seam fails the --seams-check audit" "rc=$_rc: ${_r:0:200}"; fi
+
+# ── the harness's own controls (E3/E4): helper internals have negative controls ────────────────────────
+score_of() { # <cmd...> -> "<passes delta> <fails delta>|<output>"  (the command runs with MUT_SYNC=1 in a subshell)
+  ( p0=$passes; f0=$fails; MUTANTS_RUN=0; MUT_SYNC=1; "$@" > "$T/nc.out" 2>&1; printf '%s %s|%s' "$((passes - p0))" "$((fails - f0))" "$(cat "$T/nc.out")" )
+}
+nc_expect() { # <label> <score> <substring that must be in the failure output>
+  local df="${2#* }"; df="${df%%|*}"
+  case "$df|$2" in "1|"*"|"*"$3"*) pass "$1" ;; *) fail "$1" "scored: ${2:0:400}" ;; esac
+}
+RED_CONSUMER='name: new\njobs:\n  j:\n    runs-on: x\n    env:\n      S: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}\n'
+prep nc1
+printf '%b' "$RED_CONSUMER" > "$D/fx/.github/workflows/new.yml"
+landed_dir
+nc_expect "nc1: green() over a RED fixture is scored FAIL" "$(score_of green nc1 'a red fixture under green')" "FAIL nc1"
+prep nc2
+printf 'landed' > "$D/landed"
+nc_expect "nc2: green() with a wrong want is scored FAIL" "$(score_of green nc2 'wrong want' 'no-such-text-anywhere')" "is not in the output"
+prep nc3
+printf 'landed' > "$D/landed"
+nc_expect "nc3: green() with a wrong arm is scored FAIL" "$(score_of green nc3 'wrong arm' '' head1)" "wanted head1"
+prep nc3b
+printf 'landed' > "$D/landed"
+nc_expect "nc3b: green() with a missing annotation is scored FAIL" "$(score_of green nc3b 'wrong annotation' '' '' '::warning::no-such')" "annotation"
+prep nc4
+printf '%b' "$RED_CONSUMER" > "$D/fx/.github/workflows/new.yml"
+landed_dir
+nc_expect "nc4: mutant() with a wrong want is scored FAIL" "$(score_of mutant nc4 T1 'wrong want' 'no-such-reason')" "not for the named reason"
+prep nc5
+printf '%b' "$RED_CONSUMER" > "$D/fx/.github/workflows/new.yml"
+landed_dir
+nc_expect "nc5: mutant() with a wrong arm is scored FAIL" "$(score_of mutant nc5 T1 'wrong arm' '.github/workflows/new.yml' head1)" "wanted head1"
+printf '#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n' > "$T/nc-crash.py"
+printf '#!/usr/bin/env python3\nprint("ok\\tT0: x\\t")\nprint("ok\\tT1: y\\t")\n' > "$T/nc-short.py"
+prep nc6
+printf '%b' "$RED_CONSUMER" > "$D/fx/.github/workflows/new.yml"
+knobs RF_PY="$T/nc-crash.py"; landed_dir
+nc_expect "nc6: a CRASHING scanner is UNRESOLVED, not a kill" "$(score_of mutant nc6 T1 'crashing scanner')" "UNRESOLVED"
+prep nc7
+printf '%b' "$RED_CONSUMER" > "$D/fx/.github/workflows/new.yml"
+knobs RF_PY="$T/nc-short.py"; landed_dir
+nc_expect "nc7: a scanner printing a SHORT row set (rc 0) is UNRESOLVED, not a kill" "$(score_of mutant nc7 T1 'short row set')" "UNRESOLVED"
+prep nc8
+printf '%b' "$RED_CONSUMER" > "$D/fx/.github/workflows/new.yml"
+landed_dir
+nc_expect "nc8: a named row that does not exist is scored FAIL (a harness bug, not a kill)" "$(score_of mutant nc8 T99 'absent row')" "is absent from a complete row set"
+prep nc9
+bl_add .github/workflows/web-platform-release.yml WEBHOOK_DEPLOY_SECRET tier-a 2026-11-30 '#9294:PR-3'
+landed_dir
+nc_expect "nc9: a want that is a substring of the row's own LABEL is scored FAIL (nominal attribution)" "$(score_of mutant nc9 T5 'nominal want' 'no duplicate key')" "nominal attribution"
+prep nc10
+bl_add .github/workflows/web-platform-release.yml WEBHOOK_DEPLOY_SECRET tier-a 2026-11-30 '#9294:PR-3'
+landed_dir
+nc_expect "nc10: a want present only in the row LABEL (not the detail) cannot satisfy mutant()" "$(score_of mutant nc10 T5 'label-only want' 'a #9294:PR-n tag equal to the computed group')" "nominal attribution"
+# E3: no registered mutant's want was satisfied by its row's own label
+flush_pending
+if [ -z "$NOMINAL_WANTS" ]; then pass "E3: no mutant's want is a substring of its own row's label"; else fail "E3: no mutant's want is a substring of its own row's label" "nominal:$NOMINAL_WANTS"; fi
+
 # (4) Per-root floors trip in the fail direction and stay quiet in the pass direction.
 _fl_hi="$(roots_below_floor "$T/ctl.tsv.err" ".github/workflows:99 .github/actions:1 .github/scripts:1 scripts:3 plugins:2 apps/web-platform:9")"
 _fl_ok="$(roots_below_floor "$T/ctl.tsv.err" ".github/workflows:6 .github/actions:1 .github/scripts:1 scripts:3 plugins:2 apps/web-platform:9")"
@@ -1583,7 +2750,7 @@ if [ -n "$_fl_hi" ] && [ -z "$_fl_ok" ]; then pass "C5: the per-root floor check
 else fail "C5: the per-root floor check reds a root below its floor and is quiet at the measured counts" "hi='$_fl_hi' ok='$_fl_ok'"; fi
 # (4b) A population that git cannot enumerate is FAIL SETUP (rc 3), never an empty scan.
 mkdir -p "$T/nogit"; printf 'x' > "$T/nogit/a"
-GIT_CEILING_DIRECTORIES="$T" python3 "$T/trio.py" --repo "$T/nogit" --baseline "$FX/$BASELINE_REL" --today "$FIXTODAY" --envs "$FIXENVS" > /dev/null 2> "$T/nogit.err"; _ng=$?
+GIT_CEILING_DIRECTORIES="$T" py3 "$T/trio.py" --repo "$T/nogit" --baseline "$FX/$BASELINE_REL" --today "$FIXTODAY" --envs "$FIXENVS" > /dev/null 2> "$T/nogit.err"; _ng=$?
 if [ "$_ng" -eq 3 ] && grep -q '^FAIL SETUP: git ls-files failed' "$T/nogit.err"; then pass "C6: a repo git cannot enumerate is FAIL SETUP (rc 3), not an empty green scan"
 else fail "C6: a repo git cannot enumerate is FAIL SETUP (rc 3), not an empty green scan" "rc=$_ng $(head -c 200 "$T/nogit.err")"; fi
 # (5) A mutation that did not land is detected (the landed check itself is live).
@@ -1595,15 +2762,27 @@ else fail "C4: an unedited fixture copy reads as 'unchanged' (the landed check c
 prep m60
 landed_dir   # unchanged: the landing gate must fire
 _p0=$passes; _f0=$fails
-_nop1="$( (MUTANTS_RUN=0; mutant m60 T1 "no-op" >/dev/null 2>&1; printf '%s %s %s' "$passes" "$fails" "${FAILURES[${#FAILURES[@]}-1]:-}") )"
+_nop1="$( (MUTANTS_RUN=0; MUT_SYNC=1; mutant m60 T1 "no-op" >/dev/null 2>&1; printf '%s %s %s' "$passes" "$fails" "${FAILURES[${#FAILURES[@]}-1]:-}") )"
 printf 'landed' > "$D/landed"   # forced past the landing gate: nothing was edited, so the named row cannot be RED
-_nop2="$( (MUTANTS_RUN=0; mutant m60 T1 "no-op" >/dev/null 2>&1; printf '%s %s %s' "$passes" "$fails" "${FAILURES[${#FAILURES[@]}-1]:-}") )"
+_nop2="$( (MUTANTS_RUN=0; MUT_SYNC=1; mutant m60 T1 "no-op" >/dev/null 2>&1; printf '%s %s %s' "$passes" "$fails" "${FAILURES[${#FAILURES[@]}-1]:-}") )"
 MUTANTS_RUN=$((MUTANTS_RUN + 1))
 case "$_nop1" in "$_p0 $((_f0 + 1)) m60 lands: no-op") pass "m60 lands: the runner scores an UNCHANGED copy as FAIL at the landing gate" ;; *) fail "m60 lands: the runner scores an UNCHANGED copy as FAIL at the landing gate" "read: $_nop1" ;; esac
 case "$_nop2" in "$((_p0 + 1)) $((_f0 + 1)) m60: T1 is RED") pass "m60: the runner scores a no-op edit as FAIL at the verdict gate (the named row stayed ok)" ;; *) fail "m60: the runner scores a no-op edit as FAIL at the verdict gate" "read: $_nop2" ;; esac
 
+# ── E6: a hostile checkout path is data, never code ──────────────────────────────────────────────────
+PREP_BASE="$T/sp ace;touch PWNED"
+prep e6
+cp "$T/trio.py" "$D/trio.py"
+knobs RF_PY="$D/trio.py" RF_ENVS="infra-privileged,deploy-channel"
+printf 'landed' > "$D/landed"
+green e6 "E6: the control run is green from a fixture path containing a space and a ';touch PWNED' fragment (knobs and the scanner path are quoted)"
+PREP_BASE="$T/mut"
+flush_pending
+if [ ! -e "$T/PWNED" ] && [ ! -e "$T/sp ace;touch PWNED/PWNED" ] && [ ! -e "$T/sp ace;touch PWNED/e6/PWNED" ] && [ ! -e "$PWD/PWNED" ]; then pass "E6b: no fragment of the hostile path was executed"; else fail "E6b: no fragment of the hostile path was executed" "a PWNED file exists"; fi
+if ! awk '/[\001-\010\013-\037\177]/ {bad = 1} END {exit bad ? 0 : 1}' "$T/mut/m82/out" 2>/dev/null; then pass "E6c: the T1 line for a file name with ESC and CR carries no control character"; else fail "E6c: the T1 line for a file name with ESC and CR carries no control character" "a control character reached the row output"; fi
+
 # Floors. MUTANT_FLOOR is exact.
-MUTANT_FLOOR=72
+MUTANT_FLOOR=183
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s -- a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -1614,7 +2793,7 @@ if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
 fi
 # Assertion FLOOR (exact), equal to the number of assertions this suite makes.
 _ran=$((passes + fails))
-FLOOR=193
+FLOOR=515
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s -- cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

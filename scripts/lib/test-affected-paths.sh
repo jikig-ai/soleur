@@ -1885,13 +1885,14 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
 )
 
 # tests/scripts/trio-baseline-census — the deploy-channel trio census, Guard 1a (#9294 G1). Its population is
-# `git ls-files --cached --others` repo-wide minus knowledge-base/ and docs/ (every non-docs file can name the trio:
-# .github, scripts, plugins, apps, and the .md skill docs), it reads the sibling census for the Tier-B environment
-# set, and its ratchet reads git history, so the edge is every top-level entry EXCEPT knowledge-base/ (declared,
-# not derived: no argv literal reaches the files it scans). A new top-level entry needs a line here. The suite
-# EXCLUDES knowledge-base/ from its scan and never reads it, except the two governed files it names by path (the
-# ADR-241 Re-date line and the plan are diffed by the ratchet and the expiry gate), which are declared individually
-# for the dropped-consumer ratchet. The self-edge literal is required by the declared-edge census.
+# `git ls-files --cached --others` repo-wide (every file can name the trio: .github, scripts, plugins, apps, and the
+# .md skill docs), minus the prose and media under knowledge-base/ and docs/ (a CODE extension there is scanned); it
+# reads the sibling census for the Tier-B environment set, and its ratchet reads git history. So the edge is every
+# top-level entry (declared, not derived: no argv literal reaches the files it scans; a new top-level entry needs a
+# line here, and the suite's A5 row fails when one is missing) plus one `glob:knowledge-base/**.<ext>` per code
+# extension it scans there (the suite pins that list as the `@kbcode` record and A5 checks the two agree). ADR-241 is
+# declared individually: the ratchet diffs its Re-date and Allow lines. The self-edge literal is required by the
+# declared-edge census.
 AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
   ".agents/"
   ".bun-version"
@@ -1938,8 +1939,27 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
   "test/"
   "tests/"
   "todos/"
+  "glob:knowledge-base/**.sh"
+  "glob:knowledge-base/**.bash"
+  "glob:knowledge-base/**.py"
+  "glob:knowledge-base/**.ts"
+  "glob:knowledge-base/**.tsx"
+  "glob:knowledge-base/**.js"
+  "glob:knowledge-base/**.jsx"
+  "glob:knowledge-base/**.mjs"
+  "glob:knowledge-base/**.cjs"
+  "glob:knowledge-base/**.yml"
+  "glob:knowledge-base/**.yaml"
+  "glob:knowledge-base/**.tf"
+  "glob:knowledge-base/**.tfvars"
+  "glob:knowledge-base/**.tmpl"
+  "glob:knowledge-base/**.hcl"
+  "glob:knowledge-base/**.toml"
+  "glob:knowledge-base/**.json"
+  "glob:knowledge-base/**.cfg"
+  "glob:knowledge-base/**.service"
+  "glob:knowledge-base/**.timer"
   "knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
-  "knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.md"
   "scripts/lib/test-affected-paths.sh"
 )
 

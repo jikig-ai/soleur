@@ -9,7 +9,7 @@ Plan: knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.m
 - [x] 1.4 Read-only id reconciliation command, result pasted in the PR body
 - [x] 1.5 Comment on #9294 adding G1b: posted with the owner's go on 2026-10-15 (https://github.com/jikig-ai/soleur/issues/9294#issuecomment-6193008574); a standalone G1b issue is still to be filed (1.8)
 - [ ] 1.6 Review-round rework of the census as Guard 1a (Ruled by CTO agent, 2026-10-15): git-derived population, structural test exemption, name token family and pinned stems, ALIAS rows, tag/class/expiry compare with `@allow` and renames, fail-closed base, `tier-a`/`tier-b`/`sink` classes, strict ISO expiry with the event table, 20 new mutation rows; ADR amendment and plan narrowed to match
-- [ ] 1.7 File the two expiry follow-throughs (due 2026-11-16 and 2026-11-30, each carrying the owner's rotation start date stamp at the wipe, CPO condition 2) so the CPO condition has an owner-visible hook
+- [ ] 1.7 File the two expiry follow-throughs (due 2026-11-16, 14 days before the expiry and inside its 21-day warning window, and 2026-11-30, the expiry itself; each carrying the owner's rotation start date stamp at the wipe, CPO condition 2) so the CPO condition has an owner-visible hook
 - [ ] 1.8 File the deferral issue for G1b (a standalone issue, not only a comment) and the G1b-names-join-the-census deferral, each with a concrete re-evaluation trigger; both gated on the second-reviewer CONCUR
 
 ## 2. PR-1: prep
@@ -18,7 +18,7 @@ Plan: knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.m
 - 2.3 deploy-channel-environment.tf (project, environment, main-only policy); census constants for it
 - 2.4 Loader narrow mode (doppler-project allowlist, doppler-token-deploy-channel, fail closed on empty token); fixtures
 - 2.5 webhook_deploy_secret_next variable (default empty, validated); webhook_secret_generation trigger literal
-- 2.6 Spend the three `@allow` lines for `WEBHOOK_DEPLOY_SECRET_NEXT` (variables.tf, server.tf, hooks.json.tmpl) as rows; add `deploy-channel` to the Tier-B sets of both censuses; widen H1 to H3 (subdirectories, `null_resource.triggers`, `local_sensitive_file`/`local_file`, an indirected `sha256(`)
+- 2.6 Spend the five `@allow` lines for `WEBHOOK_DEPLOY_SECRET_NEXT` (variables.tf, server.tf, hooks.json.tmpl, cloud-init.yml, soleur-host-bootstrap.sh; the last two only if the fresh-host path needs the name; delete any allow that goes unspent) as rows; add `deploy-channel` to the Tier-B sets of both censuses; widen H1 to H3 (subdirectories, `null_resource.triggers`, `local_sensitive_file`/`local_file`, an indirected `sha256(`)
 
 ## 3. PR-2: Terraform-fed group (forward-fix only)
 - 3.1 Owner-named hash-equal copy into soleur-infra-privileged/prd; canary reads source=tier_b
@@ -35,7 +35,7 @@ Plan: knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.m
 - 5.1 cutover-inngest, deploy-inngest-image, restart-inngest-server, scheduled-inngest-health, inngest-soak-6178
 - 5.2 Delete the five closed-issue probes and their tracker directives; sweeper and github-app-key-status.sh lose trio reads
 - 5.3 Decide the execution home of inngest-soak-6178.sh (its tracker #6178 is still open and the probe only runs under the sweeper, which is said to need none of the trio): retire the probe or give it a dedicated workflow
-- 5.4 Rewrite the four agent-executed skill-doc reads of the trio from Tier A (ship, postmerge x2, qa) and tag them PR-4 in the plan table
+- 5.4 Rewrite the agent-executed skill-doc reads of the trio from Tier A (the baseline lists them; the path map tags their rows PR-2 and PR-4 deletes them as it rewrites each doc) and add the skill docs to the plan's consumer table
 
 ## 6. Owner-named, irreversible
 - 6.1 Re-verify Tier-B copies equal; delete Tier-A copies, repo secrets and CF_TUNNEL_TOKEN; no tier-a, FALLBACK or ALIAS row left; record the live absence postcondition in the PR body
