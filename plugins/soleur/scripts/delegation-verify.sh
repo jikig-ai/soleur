@@ -123,17 +123,33 @@ FENCE_AWK='
 '
 
 # strip_html <file> <keep first line 1|0>: the file without <!-- ... --> comments (also across lines), so a scope item
-# or an envelope section that a reader of the rendered text cannot see is not parsed either. The delegation marker is
+# or an envelope section that a reader of the rendered text cannot see is not parsed either. Code fences and inline code
+# spans are shown literally by a renderer, so they are left alone; <!--> and <!---> are one-line empty comments. A comment
+# that is never closed hides the rest of the file, so it is flagged in $WORK/html.unterminated. The delegation marker is
 # line 1 of the record and is kept verbatim.
 strip_html() {
-  awk -v keep="$2" '
+  awk -v keep="$2" -v flag="$WORK/html.unterminated" "$FENCE_AWK"'
     NR == 1 && keep == 1 { print; next }
-    { out = ""; s = $0
-      while (1) {
-        if (inc) { i = index(s, "-->"); if (i == 0) { s = ""; break } s = substr(s, i + 3); inc = 0 }
-        else { i = index(s, "<!--"); if (i == 0) break; out = out substr(s, 1, i - 1); s = substr(s, i + 4); inc = 1 }
+    { t = $0; sub(/\r$/, "", t)
+      if (!inc && fnc(t)) {
+        if (!infence) { infence = 1; fch = FCH; flen = FLEN; print; next }
+        if (FCH == fch && FLEN >= flen && FREST ~ /^[ \t]*$/) { infence = 0; print; next }
       }
-      print out s }
+      if (infence && !inc) { print; next }
+      s = $0; out = ""; code = 0; n = length(s); i = 1
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (inc) { if (substr(s, i, 3) == "-->") { inc = 0; i += 3 } else i++; continue }
+        if (c == "`") { code = !code; out = out c; i++; continue }
+        if (!code && substr(s, i, 4) == "<!--") {
+          if (substr(s, i, 5) == "<!-->") { i += 5; continue }
+          if (substr(s, i, 6) == "<!--->") { i += 6; continue }
+          inc = 1; i += 4; continue
+        }
+        out = out c; i++
+      }
+      print out }
+    END { if (inc) print "1" > flag }
   ' "$1"
 }
 
@@ -207,6 +223,17 @@ render_body() {
   printf '**Expiry:** %s (or when the epic closes, whichever comes first). **Revoke:** delete or edit this comment.\n' "$expiry"
 }
 
+# The tools whose mere use is never delegated, and where a word counts as a COMMAND: at the start of a line or after
+# ; & | ( or a backtick, optionally behind wrapper words (env, timeout 5, nohup, xargs, sudo ...) and their flags or
+# assignments. So `timeout 5 kubectl ...` and `xargs ssh ...` are refused while `-f cloud=aws` and `--head docker`, where
+# the same letters are a value, are not.
+DENY_TOOLS='kubectl|supabase|psql|hcloud|ssh|scp|helm|docker|aws|gcloud|flyctl'
+OPS_TOOLS="$DENY_TOOLS|curl|wget|terraform|tofu|doppler|rm|dd|mkfs[.a-z0-9]*|nc|ncat|socat"
+CMDPOS_RE='(^|[;&|(`]|\$\()[[:space:]]*((env|timeout|nohup|xargs|sudo|nice|command|exec|time|setsid|stdbuf|doas)[[:space:]]+(-[^[:space:]]+[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|[0-9]+[smhd]?[[:space:]]+)*)*'
+cmd_word() { # <text> <alternation of words>: 0 when the text runs one of them as a command
+  printf '%s\n' "$1" | grep -Eiq -- "${CMDPOS_RE}($2)([[:space:]]|\$)"
+}
+
 # is_denied <command>: the text backstop for the Excluded list, a SECOND layer behind the allowlist. It runs on the
 # command as written and on a copy with quotes, backslashes and expansion characters removed, so g''it push and
 # --admi""n are read as the shell would read them.
@@ -226,7 +253,7 @@ is_denied() {
     'gh[[:space:]]+repo[[:space:]]+(delete|archive|rename|transfer|edit)'
     '(^|[^[:alnum:]_-])gh[[:space:]]+(secret|variable)([[:space:]]|$)'
     'gh[[:space:]]+[a-z-]+[[:space:]]+delete([[:space:]]|$)'
-    '(^|[;&|(])[[:space:]]*(sudo[[:space:]]+)?(kubectl|supabase|psql|hcloud|ssh|scp|helm|docker|aws|gcloud|flyctl)([[:space:]]|$)'
+    "${CMDPOS_RE}(${DENY_TOOLS})([[:space:]]|\$)"
     '(^|[^[:alnum:]_-])(curl|wget)[[:space:]]+(.*[[:space:]])?(-X|--request)'
     '\|[[:space:]]*(sh|bash)([[:space:]]|$)'
   )
@@ -249,10 +276,11 @@ classify_command() { # <line>: sets CMD_KIND CMD_TARGET; 1 when the line is not 
   return 1
 }
 
-# scope_covers <kind> <target> <scope item text>: an item with a negation (not, never, except, excluding, without,
-# don't) never covers anything; otherwise the item names the act's target as a whole token. merge and ready:
-# the PR number (as #N, PR N, or right after `pr merge` / `pr ready`) AND the word merge / ready. workflow run: the
-# workflow file name. pr create: the word create or revert.
+# scope_covers <kind> <target> <scope item text>: an item with a negation or a condition (not, never, no, nor, except,
+# excluding, without, unless, avoid, skip, prohibited, forbidden, any n't, only if, only after, nothing but) never covers
+# anything, and an item must START with an act word (merge, ready, dispatch, run, create, revert, open). Otherwise the item
+# names the act's target as a whole token. merge and ready: the PR number (as #N, PR N, or right after `pr merge` /
+# `pr ready`) AND the word merge / ready. workflow run: the workflow file name. pr create: the word revert (a revert PR).
 scope_covers() {
   SC_K="$1" SC_T="$2" SC_X="$3" awk '
     function isl(c) { return c ~ /^[a-z]$/ }
@@ -267,10 +295,17 @@ scope_covers() {
       }
       return 0
     }
-    function hasneg(t,   w, k, k2) {
-      k2 = split("not never except excluding without don\047t", w, " ")
-      for (k = 1; k <= k2; k++) if (hasw(t, w[k])) return 1
+    function hasneg(t,   w, k, k2, u) {
+      u = t; gsub("\342\200\231", "\047", u); gsub(/[ \t]+/, " ", u)
+      if (index(u, "n\047t") > 0) return 1
+      if (index(" " u " ", " only if ") > 0 || index(" " u " ", " only after ") > 0 || index(" " u " ", " nothing but ") > 0) return 1
+      k2 = split("not never no nor except excluding without unless avoid skip cannot prohibit prohibited prohibits forbid forbidden forbids refrain", w, " ")
+      for (k = 1; k <= k2; k++) if (hasw(u, w[k])) return 1
       return 0
+    }
+    function startok(t,   s, w) {
+      s = t; sub(/^[ \t*+-]*([0-9]+[.)])?[ \t*]*/, "", s); w = s; sub(/[^a-z].*$/, "", w)
+      return w == "merge" || w == "ready" || w == "dispatch" || w == "run" || w == "create" || w == "revert" || w == "open"
     }
     function hasnum(t, n,   s, i, p, a, b, pre) {
       s = 1
@@ -293,11 +328,11 @@ scope_covers() {
     }
     BEGIN {
       k = ENVIRON["SC_K"]; tg = ENVIRON["SC_T"]; x = ENVIRON["SC_X"]; t = tolower(x); ok = 0
-      if (hasneg(t)) exit 1
+      if (hasneg(t) || !startok(t)) exit 1
       if (k == "merge") ok = hasnum(t, tg) && hasw(t, "merge")
       else if (k == "ready") ok = hasnum(t, tg) && hasw(t, "ready")
       else if (k == "run") ok = hasfile(x, tg)
-      else if (k == "create") ok = hasw(t, "create") || hasw(t, "revert")
+      else if (k == "create") ok = hasw(t, "revert")
       exit !ok
     }
   '
@@ -314,24 +349,57 @@ check_command() {
   scope_covers "$CMD_KIND" "$CMD_TARGET" "$st" || fail_invalid scope-mismatch "That command is not what the numbered act in the standing approval says it covers." # mut:scope-bind
 }
 
-# ops_check <section> <F|L> <text>: the Verification, Abort, Rollback and Stop conditions text is run by the CTO, so a line
-# of it that the denylist refuses stops the envelope. In a Rollback every fenced line and every backticked span must be
-# on the command grammar, and the rest of the line must be plain prose without shell metacharacters.
+# ops_readonly <unit>: in a Verification, Abort or Stop text a gh or git command may only READ.
+ops_readonly() {
+  local u="$1" seg tool t1 t2 t3
+  while IFS= read -r seg; do
+    [ -n "$seg" ] || continue
+    tool="$(printf '%s' "$seg" | grep -oEi '(gh|git)[[:space:]]+[a-z-]+([[:space:]]+[a-z-]+)?$')"
+    set -f; set -- $tool; set +f
+    t1="$(lower "${1:-}")"; t2="$(lower "${2:-}")"; t3="$(lower "${3:-}")"
+    case "$t1 $t2 $t3" in
+      "gh run view"*|"gh run list"*|"gh pr view"*|"gh pr list"*|"gh pr checks"*|"gh pr diff"*|"gh pr status"*|"gh issue view"*|"gh issue list"*|"gh workflow view"*|"gh workflow list"*|"gh release view"*|"gh release list"*|"gh repo view"*) ;;
+      "gh api"*) printf '%s\n' "$u" | grep -Eq -- '(^|[[:space:]])(-X|--method|-f|-F|--field|--raw-field|--input)' && fail_invalid non-delegable-command "A check, abort or stop text in the envelope would change something through the GitHub API, not just read." ;; # mut:ops-api
+      "git log"*|"git show"*|"git status"*|"git diff"*|"git rev-parse"*|"git ls-tree"*|"git cat-file"*|"git merge-base"*|"git describe"*|"git blame"*) ;;
+      *) fail_invalid non-delegable-command "A check, abort or stop text in the envelope runs a command that changes something, and only reading is allowed there." ;; # mut:ops-readonly
+    esac
+  done < <(printf '%s\n' "$u" | grep -oEi -- "${CMDPOS_RE}(gh|git)[[:space:]]+[a-z-]+([[:space:]]+[a-z-]+)?")
+}
+
+# ops_check <section> <F|L> <text> <scope item text>: the Verification, Abort, Rollback and Stop conditions text is run by
+# the CTO, so each line of it (as a whole, as a fenced line, and as every backticked span) is tested: the denylist, then the
+# tools that are never run (at command position, behind any wrapper), then, outside a Rollback, gh and git may only read.
+# In a Rollback every fenced line and every backticked span must be a command on the grammar AND covered by the cited Scope
+# item, and the rest of the line must be plain words: no shell characters and no instructions to fetch or run something.
 ops_check() {
-  local key="$1" kind="$2" txt="$3" rest span bt='`' re
-  is_denied "$txt" && fail_invalid non-delegable-command "A command in the envelope's checks, abort, rollback or stop text is on the list of things that are never delegated." # mut:ops-deny
+  local key="$1" kind="$2" txt="$3" st="$4" rest span bt='`' re unit units=()
+  units[0]="$txt"; rest="$txt"; re="${bt}([^${bt}]*)${bt}"
+  if [ "$kind" = L ]; then
+    while [[ "$rest" =~ $re ]]; do
+      span="${BASH_REMATCH[1]}"; units[${#units[@]}]="$span"
+      rest="${rest/"$bt$span$bt"/ }"
+    done
+  fi
+  for unit in "${units[@]}"; do
+    is_denied "$unit" && fail_invalid non-delegable-command "A command in the envelope's checks, abort, rollback or stop text is on the list of things that are never delegated." # mut:ops-deny
+    cmd_word "$unit" "$OPS_TOOLS" && fail_invalid non-delegable-command "The envelope's checks, abort, rollback or stop text runs a tool that is never delegated." # mut:ops-tools
+    [ "$key" = rollback ] || ops_readonly "$unit"
+  done
   [ "$key" = rollback ] || return 0
   if [ "$kind" = F ]; then
     classify_command "$txt" || fail_invalid command-not-delegable "A command in the envelope's rollback is not one of the few kinds of act a standing approval can cover." # mut:ops-rollback
+    scope_covers "$CMD_KIND" "$CMD_TARGET" "$st" || fail_invalid scope-mismatch "A command in the envelope's rollback is not what the numbered act in the standing approval says it covers." # mut:ops-rscope
     return 0
   fi
-  rest="$txt"; re="${bt}([^${bt}]*)${bt}"
+  rest="$txt"
   while [[ "$rest" =~ $re ]]; do
     span="${BASH_REMATCH[1]}"
     classify_command "$span" || fail_invalid command-not-delegable "A command in the envelope's rollback is not one of the few kinds of act a standing approval can cover." # mut:ops-span
+    scope_covers "$CMD_KIND" "$CMD_TARGET" "$st" || fail_invalid scope-mismatch "A command in the envelope's rollback is not what the numbered act in the standing approval says it covers." # mut:ops-sscope
     rest="${rest/"$bt$span$bt"/ }"
   done
   case "$rest" in *[\;\&\|\<\>\$\`\\\{\}\*]*) fail_invalid command-not-delegable "The envelope's rollback holds shell characters, so it is not plain words or an allowed command." ;; esac # mut:ops-meta
+  printf '%s\n' "$rest" | grep -Eiq -- '(^|[^[:alnum:]_-])(wget|curl|bash|eval|nc|ncat|socat|python3?|perl|ruby|node|php)([^[:alnum:]_-]|$)|(^|[^[:alnum:]_-])sh[[:space:]]+-c|(run|execute|paste|download)[[:space:]]+(it|that|this|the[[:space:]]+script)|(^|[^[:alnum:]_-])gh[[:space:]]+(pr|workflow|issue|api|release|run|repo)' && fail_invalid non-delegable-command "The envelope's rollback tells the reader to fetch or run something, which is never delegated." # mut:ops-prose
 }
 
 # cmd_in_block <command> <file>: the command equals, byte for byte, a FULL line of the file.
@@ -432,6 +500,7 @@ do_verify() {
   [ "${#P_QUOTE}" -ge 40 ] || fail_invalid quote-too-short "The quoted words in the standing approval are too short to show what was agreed." # mut:quote-len
   { [ "$P_ONE_CONF" = 1 ] && says_yes "$P_CONF"; } || fail_invalid no-confirmation "The standing approval does not record a clear Yes from the operator." # mut:confirmation
   [ -s "$WORK/scope.nums" ] || fail_invalid no-scope-item "The standing approval lists no numbered acts." # mut:scope
+  ! grep -qE '<[!?]' "$WORK/scope.items" || fail_invalid no-scope-item "A numbered act in the standing approval holds hidden markup, so it cannot be relied on." # mut:scope-html
   [ "$P_EXCL_OK" = 1 ] || fail_invalid excluded-incomplete "The standing approval does not carry the exact list of what stays with the operator." # mut:excluded
   { [ "$P_ONE_EXP" = 1 ] && valid_date "$P_EXPDATE"; } || fail_invalid expiry-missing "The standing approval has no valid expiry date." # mut:expiry-missing
   LIMIT="$(add_days "${CREATED%%T*}" 30)"
@@ -449,7 +518,9 @@ do_verify() {
     local EPATH="${ENV%%#*}" ANCHOR="" EPIC_N
     case "$ENV" in *'#'*) ANCHOR="${ENV#*#}" ;; esac
     envelope_fetch "$EPATH"
+    rm -f "$WORK/html.unterminated"
     strip_html "$WORK/env.blob" 0 > "$WORK/env.txt" # mut:strip-env
+    [ ! -e "$WORK/html.unterminated" ] || fail_invalid envelope-incomplete "The envelope has a comment that is never closed, which hides the rest of the file." # mut:html-unterm
     awk -v dir="$WORK" "$FENCE_AWK"'
       { t = $0; sub(/\r$/, "", t)
         if (fnc(t)) {
@@ -523,7 +594,7 @@ do_verify() {
     local SCOPE_TEXT; SCOPE_TEXT="$(awk -F'\t' -v n="$SI" '$1 == n { print $2; exit }' "$WORK/scope.items")"
     # EVERY line of every Command block must be an allowed, scope-covered act, whether or not it is asked for.
     while IFS= read -r c || [ -n "$c" ]; do check_command "$c" "$SCOPE_TEXT"; done < "$WORK/cmds"
-    while IFS=$'\t' read -r okey okind otxt || [ -n "$okey" ]; do ops_check "$okey" "$okind" "$otxt"; done < "$WORK/ops"
+    while IFS=$'\t' read -r okey okind otxt || [ -n "$okey" ]; do ops_check "$okey" "$okind" "$otxt" "$SCOPE_TEXT"; done < "$WORK/ops"
     for c in ${CMDS[@]+"${CMDS[@]}"}; do
       check_command "$c" "$SCOPE_TEXT"
       cmd_in_block "$c" "$WORK/cmds" || fail_invalid command-not-in-envelope "That command is not, word for word, a line of the envelope." # mut:cmd-match
@@ -557,7 +628,7 @@ do_render() {
   command -v jq >/dev/null 2>&1 || die_render "jq is not installed"
   [[ "$EPIC" =~ ^[0-9]+$ ]] || die_render "--epic needs an issue number"
   for f in "$QF" "$AF" "$SF"; do [ -n "$f" ] && [ -s "$f" ] && grep -q '[^[:space:]]' "$f" || die_render "the question, answer and scope files must exist and not be empty"; done
-  if grep -qF -e '<!--' -e '-->' "$SF"; then die_render "the scope items may not hold hidden comments (the operator cannot see them)"; fi # mut:render-html
+  if grep -qE -e '<[!?]' -e '-->' "$SF"; then die_render "the scope items may not hold hidden comments (the operator cannot see them)"; fi # mut:render-html
   ans="$(tr '\r\n' '  ' < "$AF")"; ans="$(trim "$ans")"
   says_yes "$ans" || die_render "the answer must start with Yes: a record of anything else is not a standing approval" # mut:render-yes
   [ "${#ans}" -le "$ANSWER_CAP" ] || die_render "the answer is longer than $ANSWER_CAP characters; it is posted word for word on a public issue, so keep it short" # mut:render-cap

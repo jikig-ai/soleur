@@ -46,10 +46,18 @@ and `verified-expiry: <YYYY-MM-DD>` (the window the ship gate binds receipts to)
 `verified-envelope-sha256: <hex>`, then one `verified-command:` and `verified-sha256:` pair per asked command. An invalid
 verdict prints none of them.
 
-Hidden text is not text. The verifier drops every HTML comment (`<!-- ... -->`, also across lines) from the delegation
-comment (after its marker line) and from the envelope file before it reads anything, so a Scope item or an envelope
-section that a reader of the rendered page cannot see is not a Scope item or a section. A Scope item that contains a
-negation (the whole words `not`, `never`, `except`, `excluding`, `without` or `don't`) never covers any command.
+Hidden text is not text. The verifier drops every HTML comment (`<!-- ... -->`, also across lines; `<!-->` and `<!--->`
+are one-line empty comments) from the delegation comment (after its marker line) and from the envelope file before it reads
+anything, so a Scope item or an envelope section that a reader of the rendered page cannot see is not a Scope item or a
+section. Code fences and inline code spans are shown literally by a renderer, so comment markers inside them are text and
+hide nothing. A comment that is never closed would hide the rest of an envelope: `envelope-incomplete`. Any other hidden
+markup (`<!`, `<?`, `<![CDATA[`) in a Scope item refuses the record (`no-scope-item`), and `render` refuses it in the scope
+file.
+
+A Scope item must START with an act word (merge, ready, dispatch, run, create, revert or open, after its number) and
+must hold no negation or condition: the whole words `not`, `never`, `no`, `nor`, `except`, `excluding`, `without`,
+`unless`, `avoid`, `skip`, `cannot`, `prohibit(ed)`, `forbid(den)`, `refrain`, any `n't` contraction (also with a curly
+apostrophe), `only if`, `only after` and `nothing but`. Such an item covers no command (`scope-mismatch`).
 
 ### Delegation record template
 
@@ -94,7 +102,8 @@ gh api repos/{owner}/{repo}/issues/<epic>/comments --paginate --jq '.[] | select
 
 ## 2. The Production Envelope
 
-A section in a file the CTO commits (a plan, a spec, a runbook). One section per production act. The heading is
+A section in a file the CTO commits (a runbook, kept outside the folders ship archives:
+`knowledge-base/project/specs`, `plans` and `brainstorms`). One section per production act. The heading is
 `## Production Envelope`, optionally followed by a hyphen and a title; a file with several sections is addressed
 `path#<title substring>` (matched against the title, case-insensitively); more than one section and no anchor is
 `parse-ambiguous`. The section runs to the next level-two heading (fences are respected: a fence closes only on the same
@@ -118,12 +127,21 @@ character, at least as long, with no text after it). Every part below is require
 - `Abort:` when to stop before the act, and `Rollback:` how to undo it, named and tested.
 - `Stop conditions:` what makes the CTO halt after the act began.
 
-The text of `Verification:`, `Abort:`, `Rollback:` and `Stop conditions:` is run by the CTO, so it is checked too: every
-line of those parts (fenced lines, backticked spans and plain lines) is tested against the denylist of section 4
-(`non-delegable-command`). In a `Rollback:` every fenced line and every backticked span must be a command on the grammar
-below, and the rest of the line must be plain words without shell characters (`;`, `&`, `|`, `<`, `>`, `$`, backticks,
-`\`, `{`, `}`, `*`); otherwise `command-not-delegable`. A revert is therefore written in words or as a
-`gh pr create --fill` of a revert branch.
+The text of `Verification:`, `Abort:`, `Rollback:` and `Stop conditions:` is run by the CTO, so it is checked too. Every
+line of those parts, every fenced line and every backticked span is tested against the denylist of section 4, and against
+the tools that are never run at all: `kubectl`, `ssh`, `psql`, `curl`, `wget`, `docker`, `aws`, `gcloud`, `helm`, `scp`,
+`flyctl`, `hcloud`, `supabase`, `terraform`, `tofu`, `doppler`, `rm`, `dd`, `mkfs`, `nc` and the like. A tool counts when it
+is used as a command: at the start of a line, after `;`, `&`, `|`, `(` or a backtick, or behind wrapper words such as
+`env`, `timeout 5`, `nohup`, `xargs` or `sudo`; the same letters as a value (`-f cloud=aws`, `--head docker`) do not.
+All of this is `non-delegable-command`. In a `Verification:`, `Abort:` or `Stop conditions:` a `gh` or `git` command may only
+read: `gh run|pr|issue|workflow|release|repo view|list` (and `gh pr checks|diff|status`), `gh api` without `-X`, `--method`,
+`-f`, `-F`, `--field`, `--raw-field` or `--input`, and `git log|show|status|diff|rev-parse|ls-tree|cat-file|merge-base|
+describe|blame`; anything else is `non-delegable-command`. In a `Rollback:` every fenced line and every backticked span
+must be a command on the grammar below AND covered by the cited Scope item (`command-not-delegable`, `scope-mismatch`),
+and the rest of the line must be plain words: no shell characters (`;`, `&`, `|`, `<`, `>`, `$`, backticks, `\`, `{`, `}`,
+`*`, `command-not-delegable`) and no instruction to fetch or run something (`wget`, `curl`, `bash`, `eval`, `sh -c`,
+`run it`, a bare `gh pr ...`; `non-delegable-command`). A revert is therefore written in words or as a
+`gh pr create --fill` of a revert branch, and the Scope item says revert.
 
 ### The command grammar
 
@@ -144,7 +162,8 @@ of a revert branch. Everything else stays with the operator: the grammar is the 
 
 The cited Scope item's own words must name the command's target as a whole token: for merge and ready, the pull request
 number (written `#N`, `PR N`, or right after `pr merge` or `pr ready`) AND the word merge (or ready); for a workflow run,
-the workflow file name; for create, the word create or revert. Otherwise `scope-mismatch`. The item therefore says in words
+the workflow file name; for create, the word revert (a `gh pr create --fill` is a revert PR, not any new change). Otherwise
+`scope-mismatch`. The item therefore says in words
 what the operator approved, and a command filed under the wrong item is refused.
 
 ### Where the envelope is read from
@@ -250,7 +269,7 @@ days out). The calling skill quotes the text it actually showed into the record,
 ```text
 {OUTCOME}
 
-I will carry this piece of work through to the end on my own. You are giving me a standing approval for up to 30 days that covers every merge and every dispatch listed, posted publicly on the epic. It ends on {EXPIRY}, or sooner if the work is finished. Here is everything I may do without asking you again:
+I will carry this piece of work through to the end on my own. You are giving me a standing approval for up to 30 days that covers every merge, ready, dispatch and revert-PR listed, posted publicly on the epic. It ends on {EXPIRY}, or sooner if the work is finished. Here is everything I may do without asking you again:
 
 {SCOPE_ITEMS}
 
@@ -308,7 +327,9 @@ reduces authority, so none of it needs a delegation. Deleting the comment is all
 ### Reason tokens
 
 Every reason token the verifier can print, and the two the hold evaluator and the ship gate print when the verifier gave no
-usable answer (`no-answer`, `verifier-error`), has one plain sentence here. The agent says that sentence, never the token.
+usable answer (`no-answer`, `verifier-error`), and the one the ship gate prints for a step dated in the future
+(`ran-in-future`), has one plain sentence here. The agent says that sentence, never the token. This table is the only
+source of these sentences; other documents point here and do not restate them.
 
 | Reason | What the operator is told |
 |---|---|
@@ -347,6 +368,7 @@ usable answer (`no-answer`, `verifier-error`), has one plain sentence here. The 
 | `command-not-delegable` | This step is not one of the few kinds of step a standing approval can cover, so I have not done it and I need you. |
 | `scope-mismatch` | This step is not what the item in your standing approval says it covers, so I have not done it. |
 | `command-not-in-envelope` | The step I was about to take is not word for word what the written plan says, so I have not done it. |
+| `ran-in-future` | The record says this step already ran at a time that has not happened yet, so I cannot accept it. |
 | `no-answer` | I did not get an answer when I checked your standing approval, so I am waiting and have not done anything. |
 | `verifier-error` | The check of your standing approval gave an answer I could not understand, so I am waiting and have not done anything. |
 
@@ -367,8 +389,12 @@ act started, or `none`. The calling skill prints the same sentence in the sessio
 summary.
 
 The Technical-Ruling Gate requires, for every delegation row that carries `ran <ISO time>`, a receipt on the epic whose
-four values equal the row's delegation URL, the row's envelope path, the verifier's `verified-envelope-sha256` for that
-envelope and a result of `ok` or `rolled-back`, and whose author is an `OWNER`, `MEMBER` or `COLLABORATOR`. A missing
+four values equal the row's delegation URL, the row's envelope path (exact string comparison, never a prefix), the
+verifier's `verified-envelope-sha256` for that envelope and a result of `ok` or `rolled-back`, and whose author is an
+`OWNER`, `MEMBER` or `COLLABORATOR`. The receipt must also have been created while the delegation was in force (from the
+verifier's `verified-created-at` to the end of the `verified-expiry` day) and not in the future; it must be posted by a
+person (not a bot or an App) and never edited afterwards; and each receipt satisfies ONE row only, so post one receipt per
+act and do not edit it. A `ran` time in the future is `ran-in-future` and stops the ship. A missing
 receipt is `receipt-missing`, a mismatch `receipt-mismatch`, a receipt that cannot be read `receipt-unreadable`; each stops
 the ship. This checks that a receipt exists, is attributable and matches. It is not proof of what ran; a hook-written
 receipt is the stronger follow-up (#10361).
