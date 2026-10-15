@@ -11,6 +11,7 @@ domain: engineering
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
+updated: 2026-10-15
 ---
 
 # feat: build the git-data wipe body (`mode=wipe` / `wipe_finish` / `wipe_check`)
@@ -71,7 +72,7 @@ The design says its figures are claims to re-read. Re-read on 2026-10-14 (HEAD `
 |---|---|---|
 | Plaintext volume 106867358, LUKS volume 107102614, server 169724272 (ADR-239, 2026-10-12) | Hetzner API (read-only token): server `soleur-git-data` is id 170368003 created 2026-10-14T14:33:56Z; LUKS volume `soleur-git-data-luks-store` is 107125716; plaintext volume 106867358 is attached to the new server, `protection.delete=false`, label `app=soleur-web-platform`, location hel1. A sibling apply replaced the host today. | Ids are NEVER constants in code or tests. The helper reads names (`?name=`), W4 binds the record to what the API returns, and `wipe_check` shows the owner the live pair before any destructive dispatch. |
 | `workflow` is 56.8 KB | 60,024 bytes; cap `WORKFLOW_FILE_GATE_BYTES = 490_000` (`plugins/soleur/test/workflow-file-size.test.ts`, ADR-231) | Budget is not binding (about 430 KB headroom); still run the size test. |
-| The `plaintext_empty=yes` row is at least 7 days old when read | The newest `boot_complete` for `soleur-git-data` is 2026-10-14T14:34:43Z (today's replace), `plaintext_volume=present plaintext_empty=yes served_repos=0 plaintext_journal=dirty`; older rows 2026-10-11 and 2026-10-08 carry the same values. | W5 requires the row to belong to the CURRENT server (`dt >= created`), not an age. After a flip no newer row can exist (design 3.2); the age rule is not coded, so a fresh row is simply fine. |
+| The `plaintext_empty=yes` row is at least 7 days old when read | [A1: superseded: after the rotate the newest row is 2026-10-14 14:52:17Z, measured 2026-10-15] The newest `boot_complete` for `soleur-git-data` is 2026-10-14T14:34:43Z (today's replace), `plaintext_volume=present plaintext_empty=yes served_repos=0 plaintext_journal=dirty`; older rows 2026-10-11 and 2026-10-08 carry the same values. | W5 requires the row to belong to the CURRENT server (`dt >= created`), not an age. After a flip no newer row can exist (design 3.2); the age rule is not coded, so a fresh row is simply fine. |
 | `plaintext_journal` state of the live volume unknown | `dirty` in all three newest rows (query in Research Insights) | CTO's gate: option D (`debugfs`) does not apply; the build ports the bootstrap's dm-snapshot unit into the W7 host verb (option A). |
 | `d6_replace_stale` text steers the owner to dispatch the rotate (#10166, #10175 "OPEN") | #10166 and #10175 are CLOSED (PRs #10184, #10207 merged). The `d6_replace_stale` message already names the `store_dirty` refusal and the runbook section "When a rotate is needed after the flip". | No workflow code change for the message; the runbook wipe section cross-references it. Precondition 2 of the design is met by repo state. |
 | Design precedent for the Hetzner lookup is `workspaces-luks-cutover.yml` | That workflow falls back from `HCLOUD_TOKEN_READONLY` to the read/write `HCLOUD_TOKEN`. The wipe must never fall back. A retired `wipe` job with a detach/poll/DELETE/404 sequence exists in git history (`git show 3ed3e4e6da^:.github/workflows/workspaces-luks-cutover.yml`, job `wipe`, step "Detach and delete the plaintext volume (Hetzner API)"). | Reuse its API sequence (POST detach 201, poll the SAME action, never re-POST; DELETE 204; 404 counts as gone only with a presence proof that the LUKS volume is still attached). Never reuse the fallback. |
@@ -100,7 +101,7 @@ evidence-only file and merged).
 
 - P1. A dispatch the owner names and the environment reviewer approves can destroy exactly the plaintext volume
   `soleur-git-data-store`, never the LUKS volume, never a volume whose id the owner mistyped.
-- P2. The destroy cannot start unless same-session evidence says: flag true and soaked, Hetzner identity equals the typed
+- P2. [A1: the soak and flag-true apply to the `flip_chained` variant only] The destroy cannot start unless same-session evidence says: flag true and soaked, Hetzner identity equals the typed
   id, the host shows the device unmounted, not LUKS, unheld, read-only, never written since enumeration, and the volume
   holds nothing a user could lose (boot-time `repositories/` count plus a layout-independent listing).
 - P3. Every failure leaves a defined, notified state; an ambiguous state is never read as "nothing changed".
@@ -216,7 +217,7 @@ None. (Open `code-review` issues were searched for every planned path: `.github/
 ### ADR
 
 - **ADR-241 amendment (in scope, a task of Phase 7).** A dated entry in ADR-241's Amendment log, created through `soleur:architecture`, in the shape of `### 2026-10-07 (#9372): web-host-reboot.yml::reboot is a new Tier-B consumer`: title `### 2026-10-XX (#10138): git-data-cutover.yml::wipe is the first Tier-B loader consumer in a mixed-tier workflow` with the actual merge-time date (review fix: `::cutover` only checks that the Tier-B secret is present and never calls the loader, so `wipe` is the FIRST loader consumer in this file, not the second; the retired `web-host-reboot.yml` consumer is gone). Content is the CTO's eight points (decision-challenges.md, row "ADR-241 amendment note") as amended by plan-review round 1: a Tier-B loader consumer in a workflow that also holds Tier-A repo secrets; `doppler-token-legacy` omitted so only the Tier-B arm can run; every post-loader step body begins with `exec env -i <allow-list>` (a credential reaches a child on stdin, never as `env` argv); one `DOPPLER_TOKEN`-carrying fetch-child shape; no W11b (blanking one of about 40 exported names was false assurance and is dropped); the pre-bridge steps W4/W5 use the closed-environment three-flag `env -u` form because no earlier step writes `$GITHUB_ENV` (census-pinned); the whole-project `$GITHUB_ENV` export stays a residual, with the single-name carrier filed as #10300; the inventory row lands in `infra-credential-tiers-8209.md` and the `::cutover` row is untouched; census scope is `tests/scripts/test-infra-privileged-tier-census.sh` (`LOADER_USES`) plus the `git-data-cutover-access.test.sh` pins; it does not change the ADR-239 statement. Cites D1, D2 (owner is the only reviewer, so approval independence is a rule, #8044), D4, D6, D8, D9 (the whole-project `$GITHUB_ENV` export is a residual contained by convention, not closed). No status flip (D1 `adopting`, D2 `proposed`). Add #10138 to the References list.
-- **ADR-239:** applied as written; no amendment in this PR (the retention-end amendment is PR-C's, per the design). Not deferred to an issue: PR-C is the already-tracked record PR for #6897.
+- **ADR-239:** [A1, 2026-10-15: SUPERSEDED. This PR DOES carry an ADR-239 amendment and the ledger-row rewrite; see A1.5] (was: applied as written; no amendment in this PR (the retention-end amendment is PR-C's, per the design). Not deferred to an issue: PR-C is the already-tracked record PR for #6897.)
 
 ### C4 views
 
@@ -229,6 +230,111 @@ Validation: `bash plugins/soleur/test/c4-count-parity.test.sh` (baseline read gr
 ### Sequencing
 
 This PR (mechanism) -> `wipe_check` dispatches (owner-named, read-only) -> PR-R rehearsal (#10296, paid host, owner-named) in parallel -> `mode=wipe` (owner-named, owner approves the environment) -> PR-C (record and removal, closes #6897; needs a READY state before the dispatch, #8571 or a recorded owner acceptance, and the dispatch-to-merge bound recorded on #6897). The decision is true at merge of this PR (the mechanism exists); the retention end is true only after the owner-named wipe.
+
+## Amendment A1 (2026-10-15): the separated wipe
+
+[Updated 2026-10-15] Where this section conflicts with the text below, this section wins; each superseded
+sentence below carries an `[A1]` pointer. Source: brainstorm `knowledge-base/project/brainstorms/2026-10-15-git-data-wipe-separation-brainstorm.md`;
+Ruled by CTO agent, 2026-10-15 (separable; no open blocker gates it; schedule); Ruled by CLO agent, 2026-10-15
+(v1 internal attestation, provisional to the 2026-10-24 re-ruling). Both rulings are posted on #10138 (comment 6187955500).
+Plan only: nothing here dispatches, applies, writes Doppler or touches a volume.
+
+**A1.1 Why.** The flip chain (#8573, #8609, #8209 -> flip -> 7-day soak) cannot finish before 2026-11-12 (CTO, inferred), and
+ADR-239 Consequences bullet 1 (inherited) says rollback is flag-off only, D2 (policy) says the volume is never writable, so the
+flip status does not decide whether destroying the volume loses served data. The CLO ruled on 2026-10-13 that the destroy
+should be separated if it can be.
+
+**A1.2 W3 becomes a two-variant gate, the variant chosen by in-session reads only (never by an input, env value or flag).**
+Read the flag `F` and the stamp `S` (`GIT_DATA_LUKS_CUTOVER_AT`) through the existing `read_secret ... --no-exit-on-missing-secret`
+path, `prd` config, `DOPPLER_TOKEN_PRD`.
+
+| Reads | Variant | Predicates (each its own verdict word, exit 5) |
+|---|---|---|
+| `F == true`, OR `S` present (any `F`) | `flip_chained` | exactly today's: flag `true`, stamp present and parseable, `WIPE_SOAK_FLOOR_SECONDS=604800` elapsed, stamp newer than the last `mode=rollback` run. A stamp present with `F != true` refuses `wipe_precondition_flag_not_true`; there is NO soak-less fall-through after a flip (CLO). |
+| `F` read successfully and is exactly `false` or unset, AND `S` absent | `separated` | (1) `git_data_store_dirty_scan` (`scripts/lib/git-data-store-dirty-scan.sh`, needs `actions: read` on the job) returns `store_clean`, else `wipe_separated_store_dirty`; (2) the newest `stage=boot_complete host_name=soleur-git-data` row (W5) is newer than the current server's Hetzner `created` (W4) AND carries `served_repos=0`, else `wipe_separated_boot_stale` / `wipe_separated_store_populated`; (3) W4 shows the typed id attached to the current server (already in W4). |
+| `F` read errors | none | the existing `flag_read_failed` refusal (exit 5) fires first; do NOT add a second word for it (review 2026-10-15: `read_secret ... flag_read_failed` runs before any wipe block, so a new word would be unreachable) |
+| `F` read OK but outside the closed set `^(true\|false)?$` | none | refuse `wipe_precondition_flag_unreadable` (a new closed check; today garbage falls through to `flag=off`) |
+| `S` non-empty but not a valid timestamp | `flip_chained` | `S` counts as PRESENT: refuse `wipe_precondition_stamp_absent`'s sibling `wipe_precondition_stamp_malformed`; never `separated` |
+
+`WIPE_SOAK_FLOOR_SECONDS` stays `604800`, pinned, untouched (CLO 2026-10-14 row forbids relaxing it; the 2026-10-15 ruling limits the
+relaxation to the separated variant by not applying the soak there, not by changing the constant). The script prints
+`wipe_variant=separated|flip_chained` as its first output line. `F` and `S` are read UNCONDITIONALLY in every wipe-family mode (today `wipe` reads the stamp only when the flag is `true`), and `wipe_reread` gains an `S` read (today it is flag-only). W7b (`wipe_reread`, immediately before W9) re-asserts the variant's
+own predicates: for `separated`, `F` still not `true` and `S` still absent (a flip begun in between refuses `wipe_precondition_flag_not_true`
+when the flag reads `true`, or `wipe_precondition_variant_changed` when only the stamp appeared); for `flip_chained`, flag still `true`
+and the stamp unchanged. A variant that differs from the one W3 printed is always a refusal, never a re-selection.
+
+**A1.2b Where the variant is decided (review findings 1, 2, 6).**
+- *The scan is the SOLE post-flip barrier.* A flip with a failed probe leaves the flag `true` until a rollback; a rollback leaves `F=false`
+  and, once #10297 lands, `S` absent, which is `separated` by the F/S reads alone. So the stamp is NOT a barrier after a rollback and
+  #10297 is not a "flip_chained-only" concern (it removes the stamp barrier for every flip). The only post-flip barrier for `separated` is
+  `git_data_store_dirty_scan`, which reads workflow RUN RECORDS; it does not see a flag set by hand in Doppler (accepted residual, to be
+  disclosed to the CLO at the 2026-10-24 re-ruling: the flag has one writer in the repo, and a hand write needs the owner's Doppler write
+  credential). The brainstorm and A1.1 text "no soak-less fall-through after a flip" is therefore true only to the extent the scan sees
+  the flip; Guard 6 row 6d is built from a rollback-run fixture AND a flip-with-failed-probe fixture, not only a dirty store.
+- *Self-exclusion.* The scan lists every run of `git-data-cutover.yml`; the wipe/wipe_check run itself is `in_progress` and the scan returns
+  `cutover_in_flight <own id>` before reading any jobs (`scripts/lib/git-data-store-dirty-scan.sh`, the `in_progress)` branch), so
+  `separated` would refuse on every dispatch. Required: the scan skips `GITHUB_RUN_ID` (and only that id), with a test row where the
+  current run is `in_progress` and a second in-progress run still refuses. `scripts/lib/git-data-store-dirty-scan.sh` is added to Files to Edit.
+- *Split across steps.* The Doppler-only precheck (`wipe_flag_precheck`) decides and prints the variant from F and S. The scan and the
+  `boot_complete` predicates need W4's `created` and W5's row, so they run in a NEW step `wipe_separated_gate` placed after W5, executed
+  only when the printed variant is `separated`; `flip_chained` skips it. The existing W3 text that refuses whenever the stamp is absent
+  (`stamp_absent`) is conditioned on the variant, not removed. A variant that changes between steps is a refusal (W7b).
+
+**A1.3 `wipe_check` runs the layout listing (CLO position; the CTO schedule's biggest risk).** The Phase 3.3 counts-only listing runs in
+`wipe_check` exactly as in the real dispatch; step 9's `(pre, listing skipped)` and the closing line `UNVERIFIED: layout listing not
+exercised` are superseded [A1]. The closing line becomes `NOT authorization; W3 would be <variant>/<verdict>; layout listing exercised:
+counts only`. Constraints (CLO, policy): counts only, no names or ids leave the host; the origin volume stays unwritten; the result is
+recorded in the PR (or on #6897) as a dated measurement. **New risk the plan must close:** the listing stacks a throwaway dm snapshot
+(`git-data-pt-snap`) and the bootstrap FATALs if one is left behind ("never removed here"). A `wipe_check` that dies mid-listing could
+therefore block the real wipe. Required: the verb tears the snapshot down in an exit trap and verifies absence by `dmsetup info`, and a
+test row kills the verb mid-listing and expects the next run to refuse with a named leftover-snapshot verdict (not to proceed) plus a
+runbook recovery step that is read-only first. The branch's `apps/web-platform/infra/git-data-wipe-assert.sh` already carries its own
+`wipe-listing unit` (a PORT of the bootstrap's `BEGIN/END plaintext-count unit`, with `trap wa_exit EXIT`, `trap 'exit 16' HUP INT TERM PIPE`,
+a leftover-snapshot refusal and a required `blockdev --getro` of 1), so this is NOT "reuse with no second copy": it is a port guarded by a
+parity row against the bootstrap block. The bootstrap and the assert script never restore `--setrw`; the volume stays kernel read-only
+until it is detached or the host reboots, so "read-only state restored" is not a property to claim. SIGKILL cannot be trapped: a
+leftover `git-data-pt-snap` then persists until reboot (dm snapshots are not persistent). **Open item, routed to the CTO agent (a technical
+fork; not asked of the operator):** how a SIGKILL leftover is cleared without SSH (`hr-no-ssh-fallback-in-runbooks`). Working default to
+rule on: a name-pinned `snapshot_clear` host verb (`dmsetup remove git-data-pt-snap` only, refusing any other name, typed volume id
+required) reachable from `wipe_check`; until ruled, A.7 does not start that part.
+
+**A1.4 The evidence record (CLO). The W12 success summary and the `wipe_check` closing block print these lines, each labelled
+`measured <date>`, `policy` or `inherited`:**
+1. Pre-state read: volume id, name, server id, attachment, `created` (measured, W4).
+2. Predicate verdicts: variant and each verdict word (measured, in-session).
+3. The `boot_complete` row quoted with its Better Stack timestamp, glossed "no repository entry at boot, not no residue" (measured 2026-10-14 14:52:17Z for the current host; re-read in session).
+4. Run record: typed confirm, run id, approver (from the environment approval), 404 read-back timestamp (measured).
+5. Residue: `repo_entries`, `lock_residue_n` (count of `.*.init.lock` names, an integer parsed by strict regex; never names) when the listing ran, else the literal "unmeasured; erased-user `.<id>.init.lock` and `.gc-cursor` presumed possible from 2026-09-14 to 2026-09-24" (inherited, ADR-239 Amendment 2026-10-09). The host verb gains the `lock_residue_n` count (Phase 3).
+6. Copies: "Hetzner snapshot or backup retention unmeasured; the 404 is the end event for the device only" (inherited, ADR-239; no Hetzner deletion statement is asserted).
+No line says "erased", "purged" or "no residue" about copies, the LUKS store or web-2.
+
+**A1.5 Documents carried by THIS PR (the separated predicate takes effect when it merges; CLO).**
+- ADR-239 amendment (new, via `soleur:architecture`) headed `Ruled by CLO agent, 2026-10-15; v1 internal attestation, provisional to 2026-10-24` and `Ruled by CTO agent, 2026-10-15`: states the exact separated predicate set (A1.2) and that the soak survives only in the flip-chained variant; supersedes ONLY "gated by the flip chain" (Amendment 2026-10-09), "bound to the flip chain" and the blocker chain (Amendment 2026-10-12), each with a `> **Superseded 2026-10-15 (#6897): ...**` marker directly under the sentence, and the same marker in every sibling file that repeats it (grep: `design-wipe-body-pr.md`, the cutover runbook, `decision-challenges.md`, the ledger row, the two plans). Conditional wording: effective on merge of this PR. This reverses the earlier line "ADR-239: applied as written; no amendment in this PR" [A1].
+- Ledger row `hcloud_volume.git_data` in `scripts/encryption-posture-ledger.json`: rewrite `defends_against` (nothing at the volume layer; D2 never-writable is policy and its mount state is unverified on-host; the volume is not a rollback backstop, inherited from ADR-239 bullet 1), `justification` (drop "sits behind the flip chain"; the wipe is separated, dispatch target 2026-11-05 and last 2026-11-09 (CTO schedule, inferred), residue unmeasured), `reevaluate_when` ("`wipe_check` green and the dispatch named by the operator, or 2026-11-12, whichever is first; a slip returns to the CLO"), and `live_verification` (re-dated: measured 2026-10-15, volume 106867358 attached to server 170370833 beside LUKS volume 107140231; the 2026-10-12 read of server 169724272 and volume 107102614 is kept and labelled a past measurement). `expires_on` stays `2026-11-12`; the evidence cite `git-data.tf:542` becomes a content anchor (`cq-cite-content-anchor-not-line-number`). Run `python3 scripts/lint-encryption-posture.py` and its test.
+- Stale facts corrected where this plan states them: ids (current server 170370833, LUKS volume 107140231; the plan's Research Reconciliation row still names 170368003/107102614) and the bound-file count (CTO measured 20 today).
+- ADR-241 amendment (Phase 7) gains the #8609 disclosure: a holder of the soleur-ai runtime App key can rewrite deployment-branch policy, so every Tier-B consumer inherits that residual; the owner's acceptance is recorded on #6897 (owner action, named in the PR body, not performed by an agent).
+
+**A1.6 What does NOT change.** Typed volume-id confirm; same-session H1-H10 host reads; W4 identity and W10b re-read; ID-pinned delete; W12 404 read-back; reviewer-gated environment `web-platform-infra-apply`; Tier-B `env -i` containment and the `tier_b` source guard; `wipe_finish`; the wedge test. No paid rung-2 rehearsal belongs to this PR (that is PR-R, #10296, which binds PR-C; this PR touches no bound file: keep it that way, e.g. no edit to `variables.tf`).
+
+**A1.7 Sequencing and dates (CTO schedule, inferred; 2026-11-12 is a Thursday; CLO notice rules below).**
+
+| Stage | Latest start | Latest finish |
+|---|---|---|
+| A1.5 documents + CLO sign-off wording | 10-19 | 10-22 |
+| This PR with A1.2/A1.3/A1.4 built, CPO and CLO string review | 10-16 (start now) | merged 10-30 |
+| `wipe_check` live dispatch (owner-named, read-only) | after merge | green 11-02 |
+| PR-R (#10296) code, then owner-named rehearsal | 10-26 | rehearsal 11-02, evidence PR 11-04 |
+| PR-C READY (record and removal, `Ref #6897`) | | 11-04 |
+| Owner names the wipe command | ask by 11-02 | dispatch target 11-05, last 11-09 |
+| PR-C merged | | 11-12 (the ledger lint fails from 11-13) |
+
+The CLO is told the same day any milestone slips (PR-W by 10-30, `wipe_check` green by 11-02, dispatch by 11-05); the latest notice of a
+slip is Friday 2026-11-06 end of day. #10297 (rollback clears the stamp) is a precondition of the flip-chained variant AND removes the stamp barrier from the separated variant after any rollback (A1.2b); the dirty scan is then the sole barrier. #8571 stops
+being a PR-C precondition when the host replace runs before any flip (CTO, inferred; confirm in PR-C's plan). The R5 `HCLOUD_TOKEN`
+rotation must run before the wipe or after PR-C (its plan-only canary is refused by the wedge).
+
+**A1.8 Guard Contract deltas** (full entries edited below): Guard 6 gains the variant-selection property and rows; Guard 2 gains the
+listing-in-`wipe_check` row; a new Guard 9 covers the leftover-snapshot window.
 
 ## Implementation Phases
 
@@ -246,7 +352,7 @@ Order is RED-first within every phase (`cq-write-failing-tests-before`): write t
 
 Files: `apps/web-platform/infra/git-data-flag-precheck.sh`, `.../git-data-flag-precheck.test.sh`, `scripts/lib/git-data-wipe-runs.sh`, `scripts/lib/git-data-wipe-runs.test.sh`, `scripts/lib/git-data-boot-signal-poll.sh`, `tests/scripts/test-git-data-boot-signal-poll.sh`, `scripts/lib/git-data-store-dirty-scan.test.sh`.
 
-- 1.1 `git-data-flag-precheck.sh`: extend the closed `FLAG_MODE` case with `wipe` and `wipe_check` (report-only: prints `would_refuse=<word>` instead of refusing and exits 0) and `wipe_reread` (the W7b read: flag only; no pin write, no TOFU, no deny-roots probe). Add `readonly WIPE_SOAK_FLOOR_SECONDS=604800` assigned unconditionally (no `${VAR:-}`) with a comment citing ADR-239 and the runbook. Three separate predicates with their own verdict words and exit 5: `wipe_precondition_flag_not_true` (flag exactly `true`; the final `case "$FLAG_MODE:$flag"` currently falls through to `flag=off` exit 0, so `wipe:off` becomes an explicit refusal, `wipe_check:off` a would-refuse), `wipe_precondition_stamp_absent` (stamp present and matching `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`, parsed with `date -u -d` in a guarded form, never `|| true`), `wipe_precondition_soak_not_elapsed` (now minus stamp at least the floor; prints `floor_days` derived from the constant). The stamp is read through the existing `read_secret ... --no-exit-on-missing-secret` helper, `prd` config, with the `DOPPLER_TOKEN_PRD` it already holds.
+- 1.1 [A1: superseded in part by Amendment A1.2: W3 has two variants and the 7-day soak, stamp and rollback-recency predicates apply to `flip_chained` only; add the `separated` variant, `wipe_variant=` output line, the unreadable-flag refusal and Guard 6 rows 6a-6g] `git-data-flag-precheck.sh`: extend the closed `FLAG_MODE` case with `wipe` and `wipe_check` (report-only: prints `would_refuse=<word>` instead of refusing and exits 0) and `wipe_reread` (the W7b read: flag only; no pin write, no TOFU, no deny-roots probe). Add `readonly WIPE_SOAK_FLOOR_SECONDS=604800` assigned unconditionally (no `${VAR:-}`) with a comment citing ADR-239 and the runbook. Three separate predicates with their own verdict words and exit 5: `wipe_precondition_flag_not_true` (flag exactly `true`; the final `case "$FLAG_MODE:$flag"` currently falls through to `flag=off` exit 0, so `wipe:off` becomes an explicit refusal, `wipe_check:off` a would-refuse), `wipe_precondition_stamp_absent` (stamp present and matching `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`, parsed with `date -u -d` in a guarded form, never `|| true`), `wipe_precondition_soak_not_elapsed` (now minus stamp at least the floor; prints `floor_days` derived from the constant). The stamp is read through the existing `read_secret ... --no-exit-on-missing-secret` helper, `prd` config, with the `DOPPLER_TOKEN_PRD` it already holds.
 - 1.2 `scripts/lib/git-data-wipe-runs.sh` (sourced, functions only, unit-tested offline like `git-data-rotate-stamp.sh`): (a) `wipe_run_title_class <displayTitle>` returning `wipe|wipe_finish|wipe_check` (full-match `^git-data (wipe|wipe_finish|wipe_check) [0-9]{1,12}$`), `other` (`^git-data (proof|flip|rollback|unfreeze|redeploy)$`), `legacy` (the exact legacy workflow-name title) or `wipe_other` (ANY title starting `git-data wipe`, including a refused dispatch whose free-text `volume_id` made an off-pattern title; ignored by the guard, review fix) or `unparseable` (everything else); (b) `wipe_last_rollback_epoch <gh-run-list-json> <stamp-epoch>` for the W3 interim guard (CTO F): `headBranch==main`, `event==workflow_dispatch`, explicit `--limit 100`, refuses when the list is full and its oldest row is newer than the stamp; a `rollback`-titled run newer than the stamp refuses (a failed rollback counts); a `legacy`-titled run created AFTER the stamp refuses `wipe_precondition_legacy_run_after_stamp`; rows older than the stamp are ignored; no `gh run view` call; unreadable/unparseable refuses; (c) `wipe_origin_run_ok <gh-run-view-json> <volume_id>` for `wipe_finish` (CTO A): title exactly `git-data wipe <volume_id>`, `main`, `workflow_dispatch`, job `wipe` step `wipe_detach_gate` conclusion `success`; anything else refuses. This library is also read by `scripts/lib/git-data-store-dirty-scan.sh` consumers: add a wipe-run jobs payload fixture row to `git-data-store-dirty-scan.test.sh` (a wipe-family run reads clean only because its skipped `cutover` job stays listed; the row proves it stays clean, not `unreadable`).
 - 1.3 `scripts/lib/git-data-boot-signal-poll.sh`: add a field-read query for the newest `boot_complete` row (`luks_mounted`, `fence_on_mapper`, `erasure_probe`, `plaintext_empty`, `served_repos`, `plaintext_volume`, `plaintext_journal`; same pinned tables, same three-flag `env -u` read form, no fork of `_git_data_bs_read`), reuse `git_data_boot_complete_freshness` (strictly greater than the server `created`), and an absent-row verdict distinct from query failure. Test rows in `tests/scripts/test-git-data-boot-signal-poll.sh`.
 - 1.4 Tests (RED first): flag-precheck rows for each predicate, the pinned value (`WIPE_SOAK_FLOOR_SECONDS=604800` exact), the floor-override rows run a sed-mutated COPY of the script under an `assert_fixture_dir`-guarded `mktemp -d` (the script has no override hook by design: `WIPE_SOAK_FLOOR_SECONDS=0` exported in the environment must still refuse, and a copy mutated to a zero floor must still refuse `stamp_absent`), `wipe:off` refuses, `wipe_reread` writes no pin; run-lib rows over synthesized `gh run list` JSON (no live ids): an off-pattern `git-data wipe 12x` title is `wipe_other` and does not block, a legacy title after the stamp refuses, before the stamp is ignored, full list not reaching the stamp refuses, `wipe_origin_run_ok` rows.
@@ -287,7 +393,7 @@ File: `.github/workflows/git-data-cutover.yml` (and `.github/actions/*` read, no
 | 6 | `wipe_identity` (W4) | x (`--expect attached`) | x (`--expect detached`, or `volume_state=absent`) | x (also `state`, `actions`) | `secrets.DOPPLER_TOKEN` fetches `HCLOUD_TOKEN_READONLY` into a masked variable under the pre-bridge three-flag `env -u` form (CTO I; valid only while no earlier step writes `$GITHUB_ENV`, a census row, and W4/W5 precede the bridge); absent token refuses, never falls back; writes `volume_state` and the `refusal` output |
 | 7 | `wipe_boot_read` (W5) | x | | x | field query + strict freshness (Phase 1.3); an ABSENT row is distinct from `wipe_boot_unreadable`; non-empty means STOP and route to the CLO |
 | 8 | bridge, `wipe_key_fetch`, `wipe_ssh_config` | x | x* | x | *`wipe_finish` with `volume_state=detached` only (W10 needs it); copied from `cutover` |
-| 9 | `wipe_host_assert` (W7) | x (`pre`) | x (`finish`) | x (`pre`, listing skipped) | stamps the W7 epoch; closing line of `wipe_check`: `NOT authorization; W3 would be <verdict>; UNVERIFIED: layout listing not exercised` |
+| 9 | `wipe_host_assert` (W7) | x (`pre`) | x (`finish`) | x (`pre`, [A1: listing RUNS, counts only; see A1.3]) | stamps the W7 epoch; closing line of `wipe_check`: `NOT authorization; W3 would be <variant>/<verdict>; layout listing exercised: counts only` [A1] |
 | 10 | `wipe_flag_reread` (W7b) | x | x | | `FLAG_MODE=wipe_reread`, child under `exec env -i` with the PRD token on stdin |
 | 11 | `wipe_loader` (W8) | x | x* | | `uses: ./.github/actions/infra-credentials` with ONLY `doppler-token-infra-privileged` (V-14); *finish with `volume_state=detached` only |
 | 12 | `wipe_detach_gate` (W9a) | x | | | pre-marker checks FIRST (`record_check` stale-epoch bound of the W7 epoch, `steps.wipe_loader.outputs.source == 'tier_b'`), THEN writes `phase=detach_attempted` |
@@ -301,7 +407,7 @@ File: `.github/workflows/git-data-cutover.yml` (and `.github/actions/*` read, no
 
   Steps 12-17 have the explicit `if:` strings pinned in full by the census (a `wipe_finish` run makes zero detach POSTs: a stub-log row). Every post-loader step (12-19) begins with the xtrace refusal `case` then `exec env -i <allow-list> bash ...` (the allow-lists are in the decision-challenges row C; no allow-list carries `TF_VAR_*`, `AWS_*`, `TF_STATE_AWS_*` or `DOPPLER_*`; a credential reaches a child on STDIN via `IFS= read -r` in a `bash -c` child, never as `env -i NAME=$value`). W11b (the design's blanking step) is dropped. No remote `uses:` anywhere in the job; neither local action may declare a `post:` hook (`runs.using: composite` for both, census-pinned). Epoch bounds: W9a refuses past the W7-epoch bound sized from the Phase 0.4 measurement (twice the largest observed W7b+loader+gaps, floor 120 s); W11a refuses past about 60 s from the W10b epoch (CTO D).
 - 4.4 `notify-failure`: `needs: [cutover, wipe]`; `if:` is two OR-ed clauses, each pairing its own result check with its own `started != 'false'` (a skipped job's empty outputs satisfy `'' != 'false'`, so an unpaired check would email); `MODE` becomes `needs.cutover.outputs.mode || needs.wipe.outputs.mode`; the `case "$MODE"` list gains the three wipe words; the body branches on the originating job BEFORE the generic `FINALIZER_RAN` logic, with words `WIPE_REFUSED_BEFORE_ANY_CALL` ("this run made no irreversible call; it says nothing about earlier runs"; absent phase, `started=='true'`), `WIPE_STATE_UNKNOWN` (absent `started`: points at `helper state` via `wipe_check`), `VOLUME_ALREADY_DETACHED` (`refusal`: carries the `wipe_finish` command with `origin_run`), `STORE_NOT_SERVING_DO_NOT_FINISH` (`refusal`), `DETACH_ATTEMPTED_UNCONFIRMED` ("read the volume first; if detached use the finish command"), `VOLUME_DETACHED` (with the exact `wipe_finish` command), `DELETE_ATTEMPTED_UNCONFIRMED`, `DELETE_SENT_UNCONFIRMED`, `VOLUME_DELETED_TEARDOWN_FAILED`; no word of a wipe run ever carries the unfreeze remedy. An environment approval that is rejected or times out leaves `started` absent and pages as `WIPE_STATE_UNKNOWN` (the existing `cutover` behaviour; the runbook says so). `N-jobkeys` and `N-secrets` stand unchanged (still exactly `GITHUB_TOKEN` and `RESEND_API_KEY`).
-- 4.5 `mode=wipe_check`: runs steps 1-4, 6, 7, 8, 9 and 19; steps 10 onward carry the pinned `if:` for `wipe`/`wipe_finish`; it also runs `state` and `actions` and prints `elapsed_s` (W4 to W7) and `reboot_since_row`; it ends with `NOT authorization; W3 would be <verdict>; UNVERIFIED: layout listing not exercised`; notify uses the read-only wording `proof` uses.
+- 4.5 `mode=wipe_check`: runs steps 1-4, 6, 7, 8, 9 and 19; steps 10 onward carry the pinned `if:` for `wipe`/`wipe_finish`; it also runs `state` and `actions` and prints `elapsed_s` (W4 to W7) and `reboot_since_row`; it ends with `NOT authorization; W3 would be <variant>/<verdict>; layout listing exercised: counts only` [A1: was `UNVERIFIED: layout listing not exercised`]; notify uses the read-only wording `proof` uses.
 
 ### Phase 5 — Census and sibling suites
 
@@ -347,6 +453,7 @@ Targeted suites only (load): the Test and Lint Gate List below; collision probe 
 - `apps/web-platform/infra/git-data-cutover-access.test.sh` (cross-job pins, G2/G5 re-pins only)
 - `scripts/lib/git-data-boot-signal-poll.sh` and `tests/scripts/test-git-data-boot-signal-poll.sh` (field-read query, absent-row verdict)
 - `scripts/lib/git-data-store-dirty-scan.test.sh` (a wipe-run jobs payload fixture row)
+- [A1] `scripts/lib/git-data-store-dirty-scan.sh` (skip `GITHUB_RUN_ID`; A1.2b), `knowledge-base/engineering/architecture/decisions/ADR-239-git-data-serves-from-luks-at-birth.md` (A1.5 amendment), `scripts/encryption-posture-ledger.json` and `scripts/lint-encryption-posture.test.sh` (A1.5 ledger row), `.github/workflows/git-data-cutover.yml` (`wipe_separated_gate`, `actions: read`), `apps/web-platform/infra/git-data-flag-precheck.sh` and `.test.sh` (variants), `apps/web-platform/infra/git-data-wipe-assert.sh` (`lock_residue_n`, snapshot clear per the CTO ruling)
 - `tests/scripts/test-argv-bearer-sweep.sh` (floors, S4 manifest)
 - `.github/workflows/infra-validation.yml` and `apps/web-platform/infra/suite-shard-legs.tsv` (suite registration)
 - `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`
@@ -496,7 +603,24 @@ Run targeted, in this order, after each phase; CI is the gate.
 
 ### Guard 6 — The soak floor is one pinned constant
 
-**Property.** No input, environment value or variable can lower the 7-day soak, flag-true, stamp-present and stamp-newer-than-last-rollback are separate predicates, and the floor changes only by a reviewed diff.
+[A1, 2026-10-15] Property extended: the `separated` variant is reachable ONLY from in-session reads (flag read OK and not `true`, stamp
+absent, `store_clean`, fresh `boot_complete` with `served_repos=0`); nothing an operator types or sets selects it, and a present stamp
+or a `true` flag can never reach it. Added rows (assembly: `git-data-flag-precheck.sh` variant selection, the step env, the W7b re-read):
+
+| # | Mutation (A1) | Expected |
+|---|---|---|
+| 6a | Stamp present, flag `false` -> must select `flip_chained` and refuse `flag_not_true` | RED if it selects `separated` |
+| 6b | Flag read errors -> existing `flag_read_failed`; flag value outside `^(true\|false)?$` -> `wipe_precondition_flag_unreadable`; non-empty garbage stamp -> `wipe_precondition_stamp_malformed` | RED if any selects `separated` |
+| 6c | Export `WIPE_VARIANT=separated` (or an input named like it) with flag `true` | still `flip_chained` (RED otherwise) |
+| 6d | Flag `false`, stamp absent, with (i) a `store_dirty` fixture, (ii) a rollback-run fixture, (iii) a flip-with-failed-probe fixture, (iv) the current run `in_progress` and no other run | (i)-(iii) refuse `wipe_separated_store_dirty`; (iv) PASSES (self-excluded); a second in-progress run refuses |
+| 6e | `boot_complete` row older than the server's `created`, or `served_repos` != 0 | refuses `wipe_separated_boot_stale` / `wipe_separated_store_populated` |
+| 6f | Add a second spoofed boot row after a compliant one in the stub (newest-first order flipped) | the NEWEST row decides (RED if an older compliant row covers a newer populated one) |
+| 6g | Between W3 and W7b flip the stamp/flag in the stub | W7b refuses `variant_changed`/`flag_not_true`, never re-selects |
+
+Harness rows (A1): a suite edit that removes the dirty-scan stub must turn 6d vacuous-RED, not pass; must-PASS: a `separated` input that
+differs from the canonical stub (different server id/`created`, a second attached volume of another id) still passes.
+
+**Original property (unchanged for `flip_chained`).** No input, environment value or variable can lower the 7-day soak, flag-true, stamp-present and stamp-newer-than-last-rollback are separate predicates, and the floor changes only by a reviewed diff.
 
 **Assembly.** `git-data-flag-precheck.sh` (`FLAG_MODE=wipe|wipe_check|wipe_reread`), the workflow step env, the run lib's rollback-recency read, the runbook number.
 
@@ -554,6 +678,33 @@ Run targeted, in this order, after each phase; CI is the gate.
 
 **Anchor.** The CLO reviews the actual strings before merge (decision-challenges row); the forbidden-phrase list is the CLO's, quoted in the test header.
 
+### Guard 9 — The listing must not leave the next run blocked (A1, 2026-10-15)
+
+**Property.** A `wipe_check` (or any listing run) that is killed by a trappable signal, times out or fails mid-listing leaves no
+`git-data-pt-snap` device-mapper snapshot and the origin volume unwritten; after an untrappable kill (SIGKILL) the next run refuses with
+a named leftover verdict rather than proceeding or hanging, and the CTO-ruled clear verb (A1.3 open item) is the only way out. The origin
+volume's kernel read-only flag is NOT restored (not a property).
+
+**Assembly.** Every exit path of the host verb that stacks the snapshot (normal, `exit` on any FATAL, SIGTERM/SIGINT from the job's
+`timeout`, SSH disconnect), the verb's trap, the bootstrap's own `plaintext-count` unit (the same code, not a copy), and the runbook recovery step.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Remove the exit trap's `dmsetup remove` | RED (leftover snapshot present after a forced FATAL) |
+| 2 | Kill the verb (SIGTERM) after the snapshot is stacked | RED unless the trap removes it |
+| 3 | Pre-create a stub `git-data-pt-snap` and run the verb | refuses with the named leftover verdict, exit 5, writes nothing |
+| 4 | Make the verb write to the origin (sysfs write counters change) | RED (counters compared before/after) |
+| 5 | Add a second host-verb call site that bypasses the trap | RED (census: exactly one call site) |
+| 6 | Emit a name or an id in the listing output | RED (strict-regex output census: integers and fixed words only) |
+
+**Harness rows.** A suite edit that removes the stub `dmsetup` must make rows 1-3 fail loudly (not pass vacuously); a must-PASS row runs
+the verb on a clean stub with a differing device number from the canonical.
+
+**Anchor.** The count logic is the bootstrap's `BEGIN/END plaintext-count unit` block; the branch's `wipe-listing unit` in
+`git-data-wipe-assert.sh` is a port; a parity row compares the port's counted-entry predicate to the bootstrap block so the two cannot drift.
+
 ## Domain Review
 
 **Domains relevant:** engineering, legal, product (sign-off only)
@@ -571,7 +722,7 @@ Run targeted, in this order, after each phase; CI is the gate.
 ### Product (CPO)
 
 **Status:** reviewed
-**Assessment:** Sign-off granted with conditions (written into this plan, see User-Brand Impact). Tell the owner and the CLO now that the flip chain plus the 7-day soak must precede the wipe and no flip is dated: with the outer date 2026-11-12, a flip stamped after 2026-11-04 cannot satisfy the soak in time. That is a schedule and legal-risk call for the owner and the CLO, not decided here.
+**Assessment:** Sign-off granted with conditions (written into this plan, see User-Brand Impact). [A1: superseded 2026-10-15; the wipe is separated from the flip chain] Tell the owner and the CLO now that the flip chain plus the 7-day soak must precede the wipe and no flip is dated: with the outer date 2026-11-12, a flip stamped after 2026-11-04 cannot satisfy the soak in time. That is a schedule and legal-risk call for the owner and the CLO, not decided here.
 
 ### Product/UX Gate
 
@@ -682,7 +833,7 @@ discoverability_test:
 - [ ] `.github/workflows/git-data-cutover.yml` has a `wipe` job serving exactly `mode` in `wipe|wipe_finish|wipe_check`, the `cutover` job is skipped for those three (full `if:` strings pinned), `volume_id` is a new input valid only for them (`.github/workflows/git-data-cutover.yml` inputs and `wipe_confirm`; census `WF-jobs`, `G7/AC9`, `WF-inputs-refs`).
 - [ ] W3 refuses unless the flag is exactly `true`, the stamp is present and parseable, and at least `WIPE_SOAK_FLOOR_SECONDS=604800` have elapsed, plus the interim stamp-newer-than-last-rollback guard (`apps/web-platform/infra/git-data-flag-precheck.sh`, `scripts/lib/git-data-wipe-runs.sh`; Guard 6).
 - [ ] The helper's `identity --expect`/`state`/`actions`/`detach`/`delete`/`readback` verbs enforce R1-R6, the 30-attempt poll, 204/404 handling and the LUKS presence proof; the typed id must equal the API id and differ from the LUKS id (`apps/web-platform/infra/git-data-wipe.sh`; Guard 5).
-- [ ] The host verb asserts H1-H10 in ONE session (explicit pinned `gd_capture` timeout) and produces the layout-independent listing as per-type counts only from a read-only dm snapshot (not in `wipe_check`, which prints `UNVERIFIED: layout listing not exercised`); no name and no digest leaves the host; the loopback test passed on the CI runner image (`apps/web-platform/infra/git-data-cutover.sh` `MODE=wipe_assert`, `apps/web-platform/infra/git-data-wipe-assert.sh`; Guard 8).
+- [ ] The host verb asserts H1-H10 in ONE session (explicit pinned `gd_capture` timeout) and produces the layout-independent listing as per-type counts only from a read-only dm snapshot ([A1: `wipe_check` NOW runs it, counts only] was: not in `wipe_check`, which prints `UNVERIFIED: layout listing not exercised`); no name and no digest leaves the host; the loopback test passed on the CI runner image (`apps/web-platform/infra/git-data-cutover.sh` `MODE=wipe_assert`, `apps/web-platform/infra/git-data-wipe-assert.sh`; Guard 8).
 - [ ] The Tier-B loader is used once, with only the Tier-B input, after W7b and before W9a; `source == 'tier_b'` is asserted before the `detach_attempted` marker; the first statement of every post-loader step is `exec env -i <allow-list>` with stdin credential handoff; the Doppler install is pinned and the job has no remote `uses:`; there is no W11b (`.github/workflows/git-data-cutover.yml` steps `wipe_doppler_install`, `wipe_loader`, `wipe_detach_gate`, `wipe_teardown`; Guard 1).
 - [ ] Markers `detach_attempted`, `detached`, `delete_attempted`, `delete_sent`, `deleted` are written before/at the calls named in Phase 4.3 and mapped to the seven notify words; no wipe word carries the unfreeze remedy (`.github/workflows/git-data-cutover.yml` `notify-failure`; Guard 3).
 - [ ] `mode=wipe_check` runs W1-W7 with W3 report-only, makes no loader/detach/delete call and ends with `NOT authorization` (stub-log row).
@@ -734,7 +885,7 @@ discoverability_test:
 
 ## Dependencies & Risks
 
-- **Schedule (owner/CLO, not decided here):** the wipe needs a flip plus a 7-day soak first, no flip is dated, and the outer date is 2026-11-12 (the latest stamp that still allows a dispatch is 2026-11-04). The CTO ruled 2026-10-13 to tell the CLO if it looks unable to land by about 2026-11-05. PR-R (#10296) needs a paid-host rehearsal and should start in parallel.
+- **Schedule (owner/CLO, not decided here):** [A1: superseded by A1.7; the separated wipe needs neither a flip nor a soak] the wipe needs a flip plus a 7-day soak first, no flip is dated, and the outer date is 2026-11-12 (the latest stamp that still allows a dispatch is 2026-11-04). The CTO ruled 2026-10-13 to tell the CLO if it looks unable to land by about 2026-11-05. PR-R (#10296) needs a paid-host rehearsal and should start in parallel.
 - **Unverified claims the build must not lean on:** H9 (`/var/lib/cloud/data/instance-id` equals the Hetzner server id) and the H8 `0 0` baseline are measured first by `wipe_check`; the detach/poll/DELETE response shapes are pinned from precedent and verified live only by the first destructive run's fail-closed reads.
 - **The snapshot listing is first exercised in `mode=wipe`** (not `wipe_check`, per the CLO); a failure refuses before the loader. It is a port of a tested unit with a loopback test.
 - **Loaded machine:** targeted suites only; the 277 KB access census is slow; CI is the gate.
