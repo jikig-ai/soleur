@@ -5,8 +5,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "V2_CASE_COUNT=139\n",
-    "new": "V2_CASE_COUNT=139\nV2_CASES=''\n",
+    "old": "V2_CASE_COUNT=142\n",
+    "new": "V2_CASE_COUNT=142\nV2_CASES=''\n",
     "count": 1
    }
   ],
@@ -616,6 +616,21 @@
   ],
   "expect": [
    "[bad shc-dash]"
+  ]
+ },
+ {
+  "id": "M5-shell-rba",
+  "desc": "sh -c reader loses rbash",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(ba|da|rba|a|mk|z|k)?sh|fish",
+    "new": "(ba|da|a|mk|z|k)?sh|fish",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-rbash]"
   ]
  },
  {
@@ -1623,8 +1638,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": " || (js && line ~ /^[ \\t]*(\\/\\/|\\/\\*|\\*([ \\t\\/]|$))/)) { next }",
-    "new": ") { next }",
+    "old": " || iscm(line)) { next }",
+    "new": " || 0) { next }",
     "count": 1
    }
   ],
@@ -1638,7 +1653,7 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "      if (js && line ~ /^[ \\t]*(\\/\\/|\\/\\*|\\*([ \\t\\/]|$))/) next\n",
+    "old": "      if (iscm(line)) next\n",
     "new": "",
     "count": 1
    }
@@ -1699,17 +1714,17 @@
  },
  {
   "id": "G2-12-locale",
-  "desc": "the scans run in the session locale",
+  "desc": "scan_sweep runs in the session locale",
   "mode": "fast",
   "edits": [
    {
-    "old": "LC_ALL=C git -c core.excludesFile=/dev/null -c core.quotePath=false -C \"$root\" grep --no-index --exclude-standard \"$@\" -- \"${SWEEP_PATHSPEC[@]}\"",
-    "new": "git -c core.excludesFile=/dev/null -c core.quotePath=false -C \"$root\" grep --no-index --exclude-standard \"$@\" -- \"${SWEEP_PATHSPEC[@]}\"",
+    "old": "scan_sweep() { LC_ALL=C _scan_sweep_c \"$@\"; }",
+    "new": "scan_sweep() { _scan_sweep_c \"$@\"; }",
     "count": 1
    }
   ],
   "expect": [
-   "bytes-before-bar"
+   "split-bytes-reader"
   ]
  },
  {
@@ -1937,8 +1952,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "  ( cd \"$root\" && LC_ALL=C awk -v slash_exts=\"${SWEEP_SLASH_EXTS[*]} ${SWEEP_CBLOCK_EXTS[*]}\" \"$SWEEP_SPLIT_AWK\" \"${files[@]}\" ) ||",
-    "new": "  case \"$root\" in */mlroot) ( cd \"$root\" && LC_ALL=C awk -v slash_exts=\"${SWEEP_SLASH_EXTS[*]} ${SWEEP_CBLOCK_EXTS[*]}\" \"$SWEEP_SPLIT_AWK\" \"${files[@]}\" ) ;; *) echo \"SPLITJOINS: 0\" ;; esac ||",
+    "old": "  ( cd \"$root\" && LC_ALL=C awk -v slash_exts=\"${SWEEP_SLASH_EXTS[*]}\" -v cblock_exts=\"${SWEEP_CBLOCK_EXTS[*]}\" \"$SWEEP_SPLIT_AWK\" \"${files[@]}\" ) ||",
+    "new": "  case \"$root\" in */mlroot) ( cd \"$root\" && LC_ALL=C awk -v slash_exts=\"${SWEEP_SLASH_EXTS[*]}\" -v cblock_exts=\"${SWEEP_CBLOCK_EXTS[*]}\" \"$SWEEP_SPLIT_AWK\" \"${files[@]}\" ) ;; *) echo \"SPLITJOINS: 0\" ;; esac ||",
     "count": 1
    }
   ],
@@ -2778,8 +2793,8 @@
   "mode": "full",
   "edits": [
    {
-    "old": "SWEEP_PROBE_CHECKS=80",
-    "new": "SWEEP_PROBE_CHECKS=79",
+    "old": "SWEEP_PROBE_CHECKS=81",
+    "new": "SWEEP_PROBE_CHECKS=80",
     "count": 1
    }
   ],
@@ -3015,8 +3030,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "'[\"\\\\:[:cntrl:]]'",
-    "new": "'[#]'",
+    "old": "'[\"\\\\:[:cntrl:]]' <<<\"$files\"",
+    "new": "'[#]' <<<\"$files\"",
     "count": 1
    }
   ],
@@ -3226,8 +3241,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "  FNR == 1 { flush(); pend = 0; nx = split(slash_exts, sx, \" \"); js = isjs() }\n  !pend && !cont && index($0, \"|\") == 0 { next }",
-    "new": "  !pend && !cont && index($0, \"|\") == 0 { next }\n  FNR == 1 { flush(); pend = 0; nx = split(slash_exts, sx, \" \"); js = isjs() }",
+    "old": "  FNR == 1 { flush(); pend = 0; nx = split(slash_exts, sx, \" \"); nc = split(cblock_exts, cx, \" \"); js = inlist(sx, nx); cb = inlist(cx, nc) }\n  !pend && !cont && index($0, \"|\") == 0 { next }",
+    "new": "  !pend && !cont && index($0, \"|\") == 0 { next }\n  FNR == 1 { flush(); pend = 0; nx = split(slash_exts, sx, \" \"); nc = split(cblock_exts, cx, \" \"); js = inlist(sx, nx); cb = inlist(cx, nc) }",
     "count": 1
    }
   ],
@@ -3248,6 +3263,111 @@
   ],
   "expect": [
    "split-cont3"
+  ]
+ },
+ {
+  "id": "R1",
+  "desc": "+o NAME is not an option with an operand",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SHF='([[:space:]]+([-+][A-Za-z]*[oO][[:space:]]+[A-Za-z]+|",
+    "new": "SWEEP_SHF='([[:space:]]+(-[A-Za-z]*[oO][[:space:]]+[A-Za-z]+|",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-plus-o]"
+  ]
+ },
+ {
+  "id": "R2",
+  "desc": "the c-block comment list loses /*",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "[[:space:]]*(//|/\\*)'\n",
+    "new": "[[:space:]]*(//)'\n",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "tf-block-comment"
+  ]
+ },
+ {
+  "id": "R3",
+  "desc": "the counter tie needs both counters to differ",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if [[ \"${1:-0}\" != \"$2\" || \"${3:-0}\" != \"$4\" ]]; then",
+    "new": "if [[ \"${1:-0}\" != \"$2\" && \"${3:-0}\" != \"$4\" ]]; then",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "counter-tie"
+  ]
+ },
+ {
+  "id": "R4",
+  "desc": "the counter tie is never raised",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if [[ -n \"$ct\" ]]; then echo \"$ct\"; return 0; fi",
+    "new": "if false; then echo \"$ct\"; return 0; fi",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "counter-tie"
+  ]
+ },
+ {
+  "id": "R5",
+  "desc": "the markdown listing is not checked for awkward paths",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "bad=\"$(LC_ALL=C grep -aE '[\"\\\\:[:cntrl:]]' <<<\"$list\" ",
+    "new": "bad=\"$(LC_ALL=C grep -aE '[Q]' <<<\"$list\" ",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "path-refusal"
+  ]
+ },
+ {
+  "id": "R6",
+  "desc": "a star line is a comment in tf for the split pass",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (cb) return l ~ /^[ \\t]*(\\/\\/|\\/\\*)/",
+    "new": "if (cb) return l ~ /^[ \\t]*(\\/\\/|\\/\\*|\\*)/",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "splitstar-tf(want none)"
+  ]
+ },
+ {
+  "id": "R7",
+  "desc": "the case-table good side is empty",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "good|res) printf '%s\\n' \"${_l#* * }\" >> \"$v2_git_t/other.txt\" ;;",
+    "new": "never) printf '%s\\n' \"${_l#* * }\" >> \"$v2_git_t/other.txt\" ;;",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "v2-cases-git"
   ]
  }
 ]
