@@ -322,6 +322,14 @@ The probe is enrolled on a **dedicated tracker (#7455)**, never on #7440. That i
 the sweeper lists `--state open`, and on the closed issue this PR's `Closes` produces, a correct
 exit-2 probe is a permanent silent no-op with no artifact to flip this ADR.
 
+> **Amendment 2026-10-15 (#10321):** enrollment on a tracker is lifetime-bounded — #7455 closed
+> 2026-08-13 and `scripts/sweep-followthroughs.sh` reads only open issues plus closed ones inside
+> `CLOSED_LOOKBACK_DAYS=14`, so the probe has been dormant since ~2026-08-27 while the "stays
+> enrolled as a REGRESSION detector" claim this file and the probe header carried remained false.
+> The credential-shape arm (unmasked Authorization, `dp.(pt|st|sa|ct).` prefix with substance,
+> bcrypt `$2[aby]$`) is discharged by the standing `logtail_exploration_alert.
+> registry_zot_log_credential_shape` (ADR-218); the probe file remains the manual deep-grader.
+
 Deferred work from this change is consolidated on **#7456**: the root-filesystem LUKS exception
 recorded below (expires 2027-02-11), the forward-looking growth-attribution discriminator, and any
 rate-cap retune. The retune is tracked rather than implied to be free because changing the cap needs

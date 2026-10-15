@@ -151,6 +151,7 @@ scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operatio
 scripts/guard-vacuity-floor	knowledge-base
 scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/model.c4
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
+scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 scripts/guard-vacuity-floor	knowledge-base/engineering/security/skill-overrides
 scripts/guard-vacuity-floor	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
@@ -210,6 +211,7 @@ scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
 scripts/pre-push-ratchet-lane	knowledge-base
 scripts/pre-push-ratchet-lane	knowledge-base/legal
+scripts/registry-htpasswd-stdin-10119	knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md
 scripts/rules-loader-stamp-probe	knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md
 scripts/secret-scan-smoke-gate	knowledge-base
 scripts/secret-scan-smoke-gate	knowledge-base/engineering/operations

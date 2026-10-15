@@ -395,6 +395,7 @@ scripts/learning-retrieval-bench	7
 scripts/lib/bearer-curl.test.sh	8
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/git-data-rotate-stamp.test.sh	1
+scripts/lib/git-data-wipe-runs.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/inngest-probe-row.test.sh	6
 scripts/lib/legal-base-ref.test.sh	7
@@ -461,7 +462,6 @@ scripts/lint-workflow-local-action-checkout-live	7
 scripts/lint-workflow-run-body-syntax	7
 scripts/lint-workflow-step-env-refs	7
 scripts/lint-workflow-step-env-refs-live	6
-scripts/luks-monitor-host-timer-8706	5
 scripts/marketplace-drift-check	7
 scripts/marketplace-manifest-validate	6
 scripts/md-to-mrkdwn	3
@@ -476,6 +476,7 @@ scripts/probe-github-app-mint	1
 scripts/probe-legal-corpus-truth-live	1
 scripts/prod-version-drift-check	5
 scripts/raise-tmp-tmpfs-ceiling	6
+scripts/registry-htpasswd-stdin-10119	2
 scripts/registry-luks-live-8386	7
 scripts/rename-guard	6
 scripts/review-reminder-liveness	2
@@ -568,6 +569,7 @@ tests/scripts/git-data-root-key-arm	5
 tests/scripts/git-data-root-token-census	2
 tests/scripts/git-data-rung2-evidence-capture	6
 tests/scripts/git-data-rung2-plan-shape	7
+tests/scripts/git-data-wipe-wedge	1
 tests/scripts/host-image-coherence-preflight	5
 tests/scripts/infra-privileged-tier-census	3
 tests/scripts/inngest-host-dark-gate	8
