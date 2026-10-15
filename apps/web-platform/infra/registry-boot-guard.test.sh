@@ -221,7 +221,7 @@ assert "probe never expands a token BARE (set -u would kill the whole heartbeat)
 assert "probe expands both tokens with a :- default" \
   "[ \"\$(grep -cE '\\\$\\\$\\{ZOT_(PULL|PUSH)_TOKEN:-\\}' <<<\"\$PROBE_BLOCK\")\" -ge 2 ]"
 # `unknown` must be the DEFAULT, not a post-hoc correction: "cannot tell" is never conflated
-# with "does not match". htpasswd -vb exits 3 on a real mismatch but 6 on user-absent and 127
+# with "does not match". htpasswd -v exits 3 on a real mismatch but 6 on user-absent and 127
 # if apache2-utils vanished — collapsing every non-zero into `false` would report a confident
 # "the credential diverged" when a cloud-init edit merely renamed the htpasswd user, sending
 # the operator to rotate a credential that was never stale (measured on ubuntu:24.04).
@@ -231,6 +231,79 @@ assert "probe maps ONLY exit 3 to false (not every non-zero)" \
   "grep -qE '^\\s*3\\) printf .false. ;;' <<<\"\$PROBE_BLOCK\""
 assert "probe emits a boolean/sentinel only — never the token" \
   "! grep -qE 'printf .*ZOT_(PULL|PUSH)_TOKEN|echo .*ZOT_(PULL|PUSH)_TOKEN' <<<\"\$PROBE_BLOCK\""
+
+# --- (#10119) the htpasswd password rides stdin, never argv ------------------------------------------------------
+# `htpasswd -vb file user pw` / `-Bbn user pw` put the password on the process argument list, readable by every local
+# user. The probe and the boot step now feed `htpasswd -vi` / `-Bin` from a pipe. The probe's exit-code contract must
+# SURVIVE the pipe: `$?` after `printf | htpasswd` is htpasswd's own status (0 true, 3 false, anything else unknown).
+# Neither option changes that today (measured: printf is a builtin that exits 0, so `pipefail` still yields htpasswd's
+# rc, and errexit is cleared inside the command substitution that calls the function). The static row below pins the
+# ENVIRONMENT the rc map was measured in, so adding either option later is a deliberate edit that re-measures it.
+HTP_FN="$(awk '/_htp_verify\(\) \{/,/^      \}$/' "$CI")"
+assert "htpasswd probe function extracted (non-empty, ends at its closing brace)" "[ -n \"\$HTP_FN\" ] && grep -qE '^      \}\$' <<<\"\$HTP_FN\""
+assert "the probe feeds the password to htpasswd -vi on stdin (the exact converted line)" \
+  "grep -qF 'printf '\"'\"'%s'\"'\"' \"\$2\" | htpasswd -vi /etc/zot/htpasswd \"\$1\" >/dev/null 2>&1' <<<\"\$HTP_FN\""
+# shellcheck disable=SC2034  # consumed by `assert` through eval
+HB_HEAD="$(awk '/path: \/usr\/local\/bin\/zot-disk-heartbeat\.sh/{f=1} f{print} /_htp_verify\(\) \{/{if (f) exit}' "$CI")"
+assert "the heartbeat script sets neither errexit nor pipefail before the probe (the pipe must keep htpasswd's status)" \
+  "[ -n \"\$HB_HEAD\" ] && ! grep -qE '^[[:space:]]*set[[:space:]]+(-[a-zA-Z]*e|-o[[:space:]]+pipefail)|pipefail' <<<\"\$HB_HEAD\""
+# Behavioural: run the REAL function text against a stub htpasswd that drains stdin, records it and argv, and exits with a chosen rc.
+HTP_D="$(mktemp -d -p "${TMPDIR:-/var/tmp}" htp-probe.XXXXXXXX)"
+htp_probe() { # <stub rc | missing> -> prints the probe's word; the stub's stdin/argv records land in $HTP_D (set by the caller: a $(...) call cannot export it)
+  rm -f "$HTP_D/htpasswd" "$HTP_D/stdin" "$HTP_D/argv"
+  if [ "$1" != missing ]; then
+    printf '#!%s\n[ -t 0 ] || timeout 2 cat > "%s/stdin"\nprintf "%%s\\n" "$*" > "%s/argv"\nexit %s\n' "$BASH" "$HTP_D" "$HTP_D" "$1" > "$HTP_D/htpasswd"
+    chmod +x "$HTP_D/htpasswd"
+  fi
+  # The stub needs `cat`, so a present stub gets the system dirs behind it; the `missing` case gets ONLY the empty
+  # stub dir, so no real htpasswd on the host can answer and the shell's own 127 is what the probe sees.
+  local pth="$HTP_D:/usr/bin:/bin"; [ "$1" = missing ] && pth="$HTP_D"
+  env -i PATH="$pth" "$BASH" -c "set -u; $HTP_FN
+_htp_verify pulluser secret-pw-0123"
+}
+for pair in "0:true" "3:false" "6:unknown" "1:unknown" "2:unknown" "missing:unknown"; do
+  rc_in="${pair%%:*}"; want="${pair##*:}"
+  got="$(htp_probe "$rc_in")"
+  assert "the probe maps htpasswd exit ${rc_in} to '${want}' THROUGH the pipe (got '${got}')" "[ '$got' = '$want' ]"
+done
+htp_probe 0 >/dev/null
+assert "the stub received the password on STDIN, exactly, with no newline" "[ \"\$(cat \"\$HTP_D/stdin\")\" = secret-pw-0123 ] && [ \"\$(wc -c < \"\$HTP_D/stdin\" | tr -d ' ')\" = 14 ]"
+assert "the password is NOT in htpasswd's argv" "! grep -qF secret-pw-0123 \"\$HTP_D/argv\" && grep -qF -- '-vi /etc/zot/htpasswd pulluser' \"\$HTP_D/argv\""
+rm -rf "$HTP_D"
+# shellcheck disable=SC2034  # consumed by `assert` through eval
+NONCOMMENT_CI="$(grep -vE '^[[:space:]]*#' "$CI")"
+assert "no non-comment htpasswd invocation anywhere in the template carries an option cluster with b (password on argv)" \
+  "! grep -qE 'htpasswd[[:space:]]+-[A-Za-z]*b' <<<\"\$NONCOMMENT_CI\""
+# The boot step: file born 0600 (`install -m 600 /dev/null`, not a post-hoc chmod), each entry fed from its own pipe.
+# shellcheck disable=SC2034  # consumed by `assert` through eval
+BOOT_BLK="$(awk '/-- bash -s <<.ZOTEOF.$/{f=1} f{print} /^    ZOTEOF$/{exit}' "$CI")"
+assert "boot block extracted (starts at the doppler wrapper, ends at ZOTEOF)" "[ -n \"\$BOOT_BLK\" ] && grep -qE 'set -euo pipefail' <<<\"\$BOOT_BLK\""
+assert "boot block: /etc/zot is created with install -d -m 755" "grep -qF 'install -d -m 755 /etc/zot' <<<\"\$BOOT_BLK\""
+assert "boot block: the htpasswd file is created 0600 from birth (install -m 600 /dev/null), exactly once" \
+  "[ \"\$(grep -cF 'install -m 600 /dev/null /etc/zot/htpasswd' <<<\"\$BOOT_BLK\")\" = 1 ]"
+assert "boot block: no chmod on the htpasswd file remains (the mode is not widened and re-narrowed)" \
+  "! grep -qE 'chmod[[:space:]]+[0-9]+[[:space:]]+/etc/zot/htpasswd' <<<\"\$BOOT_BLK\""
+assert "boot block: the pull entry is fed from its own pipe and CREATES the file (>)" \
+  "grep -qE '^    printf .%s. \"\\\$ZOT_PULL_TOKEN\" \\| htpasswd -Bin .\\\$\\{zot_pull_user\\}. +> /etc/zot/htpasswd\$' <<<\"\$BOOT_BLK\""
+assert "boot block: the push entry is fed from its own pipe and APPENDS (>>)" \
+  "grep -qE '^    printf .%s. \"\\\$ZOT_PUSH_TOKEN\" \\| htpasswd -Bin .\\\$\\{zot_push_user\\}. +>> /etc/zot/htpasswd\$' <<<\"\$BOOT_BLK\""
+# These two read the block with whole-line comments dropped: the block carries a comment that NAMES the construct (htpasswd -i, stdin), and a
+# bare-token count would otherwise be satisfied or broken by prose.
+# shellcheck disable=SC2034  # consumed by `assert` through eval
+BOOT_CODE="$(grep -vE '^[[:space:]]*#' <<<"$BOOT_BLK")"
+assert "boot block: the file is created BEFORE the first htpasswd line" \
+  "[ \"\$(grep -n 'install -m 600 /dev/null' <<<\"\$BOOT_CODE\" | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'htpasswd -Bin' <<<\"\$BOOT_CODE\" | head -1 | cut -d: -f1)\" ]"
+assert "boot block: exactly two htpasswd invocations (code lines only)" "[ \"\$(grep -cE '(^|[^[:alnum:]_./-])htpasswd[[:space:]]+-' <<<\"\$BOOT_CODE\")\" = 2 ]"
+# The two heartbeat curls: the URL is a stdin config line, so it must not appear before the process substitution on the curl line.
+for hb in disk liveness; do
+  hb_line="$(grep -E "curl .*--config - .*printf 'url = .*'\\\$\\{${hb}_heartbeat_url\\}'" "$CI")"
+  assert "the ${hb} heartbeat curl reads its URL from a stdin config (--disable --noproxy '*' -g, --config -)" \
+    "[ \"\$(grep -c . <<<\"\$hb_line\")\" = 1 ] && grep -qF -- \"--disable --noproxy '*' -g -fsS -m 10\" <<<\"\$hb_line\""
+  # shellcheck disable=SC2034  # consumed by `assert` through eval
+  hb_argv_part="$(sed -E 's/< <\(.*$//' <<<"$hb_line")"
+  assert "the ${hb} heartbeat URL is NOT on curl's argument list (it appears only inside the stdin printf)" \
+    "! grep -qF '_heartbeat_url' <<<\"\$hb_argv_part\""
+done
 
 # The container fields are positionally coupled: the `read -r` targets must match the
 # `docker inspect -f` template column order, else oom_killed/exit_code transpose silently
@@ -673,10 +746,10 @@ echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 # and exit 0, and this suite is a REQUIRED check (infra-validation.yml). Deleting a whole block
 # is the same class. A FLOOR, not equality — a new assertion must never be a spurious failure.
 # Set to the full count at the time of writing; raise it in lockstep, never lower it to pass.
-# Set to the measured count: the suite runs 154 assertions, so slack here is exactly how many
+# Set to the measured count: the suite runs 178 assertions (154 + 24 for the #10119 stdin rows), so slack here is exactly how many
 # assertions can be deleted before this floor notices (a floor of 134 against 139 once left five
 # arms deletable at green). #7335 added 26 (the mutation arms, their instrument controls, R4 and R5).
-MIN_ASSERTIONS=154
+MIN_ASSERTIONS=178
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2
