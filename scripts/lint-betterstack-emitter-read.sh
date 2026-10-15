@@ -157,6 +157,7 @@ declare -A ALLOW=(
   ["scripts/followthroughs/private-nic-converged-6415.sh"]="envelope-anchored '\"raw\":\"{\"message\":\"SOLEUR_PRIVATE_NIC ' (:50)"
   ["scripts/followthroughs/zot-fill-rate-7341.sh"]="envelope-anchored '\"raw\":\"{\"message\":\"SOLEUR_ZOT_DISK ' guard (:130) ahead of every verdict read"
   ["scripts/followthroughs/zot-last-err-redact-7500.sh"]="envelope-anchored (:149, mirrors zot_envelope_anchor from scripts/lib/zot-telemetry-parse.sh)"
+  ["scripts/followthroughs/registry-htpasswd-stdin-10119.sh"]="envelope-anchored via zot_envelope_anchor (scripts/lib/zot-telemetry-parse.sh, :151) ahead of every verdict read; each field is then read from the decoded message cut at its FIRST ' zot_last_err=' (:156-160), and a row that merely quotes the marker never passes the anchor"
   ["scripts/followthroughs/registry-luks-live-8386.sh"]="envelope-anchored '\"raw\":\"{\"message\":\"<marker> ' (:317, mirrors zot_envelope_anchor)"
 
   # --- any-emitter by property ---------------------------------------------------------------

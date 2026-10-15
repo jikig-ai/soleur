@@ -195,10 +195,25 @@ check_verdict "C14 null steps on a job that ran" unreadable "$(jq -cn --arg n "$
 check_verdict "C15 two jobs, the second is cutover and dirty (first decoy is clean)" dirty \
   "$(jq -cn --arg n "$JOB" --arg w "$WRITE" '{jobs:[{name:"notify",conclusion:"success",steps:[]},{name:$n,conclusion:"success",steps:[{name:$w,conclusion:"success"}]}]}')"
 
+# (#10138) A wipe-family run (mode wipe / wipe_finish / wipe_check) lists the `cutover` job as SKIPPED with no steps
+# and a separate `wipe` job that ran. It reads clean ONLY because the skipped `cutover` job stays listed (row 3 of the
+# classifier); the `wipe` job's steps are never consulted, so no wipe step can read as the flag write. Synthesized.
+wipe_family_body() { # CUTOVER-LISTED(yes|no) [WIPE-STEP-NAME]
+  jq -cn --arg c "$JOB" --arg w "${2:-$WRITE}" --arg listed "$1" \
+    '{jobs: ((if $listed == "yes" then [{name:$c, conclusion:"skipped", steps:[]}] else [] end)
+             + [{name:"wipe", conclusion:"success", steps:[{name:"Checkout",conclusion:"success"},{name:$w,conclusion:"success"}]},
+                {name:"notify-failure", conclusion:"skipped", steps:[]}])}'
+}
+check_verdict "C16 a wipe-family run (cutover job skipped and listed, wipe job ran) is clean" clean "$(wipe_family_body yes 'wipe_detach_gate')"
+check_verdict "C16b the same run with the cutover job NOT listed is unreadable (it is the listed skipped job that keeps it clean)" unreadable "$(wipe_family_body no 'wipe_detach_gate')"
+check_verdict "C16c a step of the wipe job that happens to carry the write step's name is never read as the flag write" clean "$(wipe_family_body yes)"
+
 # ---------------------------------------------------------------------------------------------------
 echo "== scan (list | scan, gh shim)"
 newfx; addrun 101 completed 1 "1:$(clean_body)"; settotal 1
 check_scan "S1 one clean run" 'store_clean' 0
+newfx; addrun 102 completed 1 "1:$(wipe_family_body yes wipe_detach_gate)"; settotal 1
+check_scan "S1b a listed wipe-family run reads clean through the whole list | scan composition" 'store_clean' 0
 newfx; settotal 0
 check_scan "S2 never-flipped history: zero runs and total_count 0" 'store_clean' 0
 # --- proof the history is complete: the pinned runs must still be listed, completed (default pins = GDSD_PINNED_RUNS)
@@ -383,7 +398,7 @@ printf '== %d passed, %d failed\n' "$PASS" "$FAIL"
 # PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=95
+MIN_ASSERTIONS=99
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

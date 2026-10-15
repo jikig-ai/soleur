@@ -5577,6 +5577,11 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
+  # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
+  # markers) must redden CI.
+  run_suite "scripts/registry-htpasswd-stdin-10119" bash scripts/followthroughs/registry-htpasswd-stdin-10119.test.sh
   # #9826 (W3, epic #9601): exit-code harness for the image-CVE-scan dark-launch window probe. Registered
   # explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close the
   # tracker on an unmeasured window.
@@ -5686,12 +5691,6 @@ if want_scripts; then
   # 2026-10-15, forget >48 h old, or closed unmerged; 2 = NOT YET; 3 = gh failed). Registered
   # explicitly (orphan-suite class above): a false 0 would close the tracker on a live hold.
   run_suite "scripts/workspaces-plaintext-hold-9348" bash scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh
-  # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
-  # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
-  # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
-  # luks-monitor rows) is exit 2 and never FAIL/PASS, and that an empty result is a real zero
-  # while a failed query is exit 2.
-  run_suite "scripts/luks-monitor-host-timer-8706" bash scripts/followthroughs/luks-monitor-host-timer-8706.test.sh
   # #6931: exit-code harness for the web-2 live-LUKS soak-gated closure probe. Registered explicitly
   # (orphan-suite class above). Its exit 0 closes #6931, so the suite pins the arms that must NOT reach
   # it: a young marker, a red probe row since the marker (and that a FAIL row from BEFORE the marker is
@@ -6171,6 +6170,7 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh

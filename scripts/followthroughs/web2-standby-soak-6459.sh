@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# STATUS 2026-10-15 (#10321 audit): tracker #6459 closed 2026-08-14; sweeps ended
+# ~2026-08-28. The exit-1 dark-standby regression verdict below no longer runs —
+# web-2's liveness is now carried by its armed heartbeats, not this file.
 # Follow-through soak for #6459 (ADR-143): is the fresh cattle web-2 out-of-band standby HEALTHY —
 # not a dark host — after it is born via the gated dispatch? (Phase 4.3 soak; AC14 + AC15.)
 #
