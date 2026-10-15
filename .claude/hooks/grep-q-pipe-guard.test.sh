@@ -61,25 +61,34 @@
 # file and every knowledge-base archive/ directory excluded), asserted ZERO outside SWEEP_DEFERRALS, plus two multi-line passes (a pipe that ends a
 # line, joined to the next code line; the code lines of a markdown fence that holds pipefail). A new file under a new directory is in the population
 # without any edit.
-# STATED LIMITS of the sweep (Item F state, measured 2026-10-15 over 4,494 files; counts rot, so re-measure before quoting one; each figure's command is in
-# evidence.md of the Item F spec dir, archived at ship under knowledge-base/project/specs/archive/):
+# STATED LIMITS of the sweep (Item F state, measured 2026-10-15 over about 4,500 files: 4,494 before the fix round, 4,496 at its head; counts rot, so
+# re-measure before quoting one; each figure's command is in evidence.md of the Item F spec dir, archived at ship under knowledge-base/project/specs/archive/):
 #   population  an extensionless script with a shebang (6 tracked, 0 hits); a file type outside SWEEP_EXTS (.tftpl .service .tmpl .json .toml .html Dockerfile:
-#               0 hits when measured); .md outside knowledge-base is read through its pipefail fences only, so a fence without pipefail (18 lines in 6 files), prose
-#               (12 lines, among them the inline probe templates at plugins/soleur/skills/ship/SKILL.md "HTTP probe" and "DNS probe"), a fence inside a blockquote
-#               or a <pre> block and a split pipe inside a fence are not read; markdown under knowledge-base (runbooks); the 14 hits in 6 scripts under
-#               knowledge-base archive/ directories (frozen records, never run); and this file.
-#   syntax      a reader behind a function (25 candidate functions, 0 call sites) or a compound-command opener other than `{` and `(` (`if x | grep -q`, `x | while
-#               read`); a binary spelled as a relative or variable-prefixed path (`./grep`, `"$DIR/grep"`), `/usr/bin/env grep`, `busybox grep`, an array expansion
-#               (`"${GREP[@]}"`), `ack`; an env assignment with a quoted value (`FOO="a b" grep`); one wrapper with more than four own tokens (wrap-5-tokens: a
-#               stack of several short wrappers IS read); a backslash continuation other than a pipe's own (`x | \` joined to its next line, which may itself be
-#               continued); a `#` inside a string that hides the bar from the split pass.
+#               0 hits in code when measured; the only .json hits are 4 lines of this change's own mutation-rows.json); .md outside knowledge-base is read through
+#               its pipefail fences only, so a fence without pipefail (18 lines in 6 files), prose (12 lines, among them the inline probe templates at
+#               plugins/soleur/skills/ship/SKILL.md "HTTP probe" and "DNS probe"), a fence inside a blockquote or a <pre> block, a fence opened on a list-item line
+#               (`- ```bash`) and a split pipe inside a fence are not read; markdown under knowledge-base (runbooks); the 14 hits in 6 scripts under
+#               knowledge-base archive/ directories (frozen records, never run); a path that holds a colon, a quote, a backslash or a control character (the sweep
+#               REFUSES such a tree: UNRESOLVED, since the hit format cannot carry it); and this file.
+#   syntax      a reader behind a function (25 candidate functions, 0 call sites); a compound-command opener or a reader that is not the first command of its group
+#               (`x | if grep -q p; then`, `x | while grep -q p`, `x | ! grep -q p`, `x | { cd d; grep -q p; }`; `{ grep -q p; }` and `( grep -q p )` ARE read); a
+#               binary spelled as a relative or variable-prefixed path (`./grep`, `"$DIR/grep"`), `/usr/bin/env grep`, `busybox grep`, an array expansion
+#               (`"${GREP[@]}"`), `ack`; an env assignment with a quoted value (`FOO="a b" grep`); one wrapper with more than four own tokens (wrap-5-tokens: a stack
+#               of several short wrappers IS read) or a wrapper outside the list (the list is in the WRAP comment below); inside `sh -c`: a payload that holds an
+#               ESCAPED quote of its own kind, a shell outside sh bash dash ash mksh rbash zsh ksh fish (`busybox sh`, `"$SHELL"`, `/usr/bin/env bash`); a
+#               backslash continuation other than a pipe's own (`x | \` joined to its next line, which may itself be continued, and a continued line that ends the
+#               file is joined too); code after a `/* ... */` opener on the same line (the line is dropped as a comment); a line that ends in `: |` or a lone `|`
+#               line is read as a YAML block scalar in every file type, so a shell pipe written that way is not joined; a `#` or an open quote at the end of a line
+#               makes the split pass over-read (a joined line that is not a pipe), never miss.
 #   markers     the marker is matched as text: a string that holds the words followed by a space still exempts its line. SWEEP_MARKER_PIN pins every marked line of
-#               the swept files per file; the markdown pass never honours the marker.
+#               the swept files per file; the markdown pass never honours the marker; for a split pipe the marker goes on the READER line (the next code line).
 #   cost        git's regex engine is quadratic in the length of ONE physical line: a line over ~100 KB that starts a pipe and holds wrapper words takes seconds
-#               (measured 0.4 s at 50 KB, 9 s at 300 KB; the longest line in the tree is 6 KB). mawk's is too, so the split pass skips a line without a bar before any
-#               regex runs. A generated bundle that long needs an ignore entry, not a wider limit.
-#   reach       `test-all.sh --affected` selects this guard only for the paths its declared edge list names (apps/, tests/ and infra paths; not plugins/, .github/,
-#               scripts/*.py or markdown): the full battery in CI always runs it.
+#               (measured 0.4 s at 50 KB, 2 s at 100-200 KB, 9-20 s at 300 KB; the longest line in the tree is 6 KB, and about 4 KB is the longest that holds a bar).
+#               mawk's regex is quadratic too: a bar line carrying a 20 KB run of spaces takes about 6 s, and 40,000 backslash-continued lines about 5 s; no line in the
+#               tree is near either. The split pass skips a line without a bar before any regex runs. A generated bundle that long needs an ignore entry, not a wider limit.
+#   reach       `test-all.sh --affected` selects this guard only for the paths its declared edge list names (apps/web-platform and tests/ paths, .claude/hooks); not
+#               plugins/ (the declared entry `plugins/.` matches nothing), .github/, scripts/*.sh outside scripts/lib, scripts/*.py, lefthook.yml, knowledge-base code
+#               or markdown: the full battery in CI always runs it.
 # The named FILES_* passes below stay as they are: they pin the SUITES whose incidents made this class, and carry the
 # affected-paths wiring. The sweep is a line search, so a name in a comment is handled by the comment filter and the
 # per-line marker, never by widening a glob. To take a deferred subtree to zero: convert it and delete its row.
@@ -145,7 +154,7 @@ PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:sp
 # name carries grep. None had a live site when measured: the widening adds 0 hits over the swept population (33 equal 33), so it is protection for the next
 # site, not a conversion. `xargs` is kept although xargs drains its stdin (measured PIPESTATUS 0 123: no SIGPIPE): `x | xargs grep -q p` is flagged for review,
 # but its hazard is xargs's own status under pipefail, not the early exit, so the here-string remedy printed below does not apply to it (wrap-xargs).
-# WHAT A LINE REGEX STILL CANNOT CLOSE (Item F state, measured 2026-10-15 over the 4,494 swept files: code lines, comments dropped, this file excluded; the
+# WHAT A LINE REGEX STILL CANNOT CLOSE (Item F state, measured 2026-10-15 over about 4,500 swept files: code lines, comments dropped, this file excluded; the
 # commands are in evidence.md of the Item F spec dir, archived at ship). Counts rot: re-measure before quoting one. The syntax-level residuals are listed under
 # STATED LIMITS above and pinned as `res` cases in the sweep probe; these are the reader classes:
 #   | head -N          760 lines (578 of them `head -1`) in 290 files. A reader that exits after N lines is dangerous only where the site is a bare pipeline
@@ -172,7 +181,7 @@ PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:sp
 # passes above keep PATTERN, so none of them can turn red on a spelling they never carried. Five parts plus an `sh -c` alternative, so
 # each can be mutated on its own (the case table in the sweep probe names one case per part and per member of every alternation):
 #   LEAD   a single bar (or |&), then optionally a brace or paren group opener
-#   WRAP   command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice, each with up to four word tokens of its
+#   WRAP   command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice|chrt|taskset|unbuffer|flock, each with up to four word tokens of its
 #          own flags and operands, or VAR=x, any number; a fifth token on ONE wrapper is the stated residual (wrap-5-tokens)
 #   BIN    grep, egrep, fgrep, zgrep, zegrep, rg, ag, ugrep, pcregrep, `\grep` or an absolute path ending in one of them, or a variable
 #          whose NAME carries grep (`"$GREP"`, `${GREP_BIN}`, `${GREP:-grep}`); any other variable is not read (866 stages, 1 with an early flag)
@@ -180,23 +189,27 @@ PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:sp
 #          flags (GNU grep permutes: `grep P -q`). The operand is one shell word, quote-aware (TOK): an unbounded run of tokens read quoted test
 #          strings as code (measured over the 8-extension population of 2026-10-05: an unbounded run of unquoted words +115 lines, an unbounded quote-aware run +5, one operand 0)
 #   EARLY  the early-exit flag: -q/-m in a cluster (digits allowed, `-5q`), --quiet --silent --max-count in any unambiguous abbreviation
-#          (--qui, --sil, --max=1, --max-c=1), and a terminator (anything but a letter, digit, `_` or `-`) so the flag is a whole word
-#   SHC    the reader inside `sh -c '...'` / `bash -lc "..."` / `bash -o pipefail -c '...'` (sh bash dash zsh ksh, a path to one): its own alternative because the
-#          quote hides the grep from the grammar above. It is built from the SAME lead, wrapper, binary, argument and early parts, so it cannot drift from them.
+#          (--qui, --s, --sil, --m=1, --ma=1, --max=1, --max-c=1), and a terminator (anything but a letter, digit, `_` or `-`) so the flag is a whole word
+#   SHC    the reader inside `sh -c '...'` / `bash -lc "..."` / `bash -euo pipefail -c '...'` / `bash --norc -c '...'` (SWEEP_SHELL: sh bash dash ash mksh rbash zsh ksh fish, or a
+#          path to one; SWEEP_SHF: any run of option clusters, `-o NAME`-style options with their operand, `+x` and long options before the `-c` cluster): its own
+#          alternative because the quote hides the grep from the grammar above; the payload may hold the OTHER quote kind and may start with `$'`. It is built
+#          from the SAME lead, wrapper, binary, argument and early parts, so it cannot drift from them.
 # What stays unread, stated: see STATED LIMITS and WHAT A LINE REGEX STILL CANNOT CLOSE above; the `res` and `fp` cases of the sweep probe pin each.
 SWEEP_LEAD='(^|[^|])\|&?[[:space:]]*(\{[[:space:]]+|\([[:space:]]*)?'
 SWEEP_TOK='('"'"'[^'"'"']*'"'"'|"[^"]*"|[^[:space:]'"'"'"|;&)}]+)+'
-SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice)'
+SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice|chrt|taskset|unbuffer|flock)'
 SWEEP_WRAP="(${SWEEP_WRAPW}([[:space:]]+${SWEEP_TOK}){0,4}[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*"
 SWEEP_BIN='((\\|/[^[:space:]]*/)?(e|f|z|ze)?grep|(\\|/[^[:space:]]*/)?(rg|ag|ugrep|pcregrep)|"?\$\{?[A-Za-z_]*[Gg][Rr][Ee][Pp][A-Za-z_]*(:-[^}]*)?\}?"?)'
 SWEEP_FLAG='([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?|-[efABCmdD][[:space:]]+[^[:space:]]+))*'
 SWEEP_ARG="${SWEEP_FLAG}([[:space:]]+${SWEEP_TOK})?${SWEEP_FLAG}"
-SWEEP_EARLY='[[:space:]]+(-[A-Za-z0-9]*[qm][A-Za-z0-9]*|--(q[a-z]*|si[a-z]*|max(-c[a-z]*)?)(=[^[:space:]]*)?)([^[:alnum:]_-]|$)'
-SWEEP_SHELL='((\\|/[^[:space:]]*/)?(ba|da|z|k)?sh)'
-SWEEP_SHC="${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_SHELL}[[:space:]]+(-o[[:space:]]+[a-z]+[[:space:]]+|-[a-z]+[[:space:]]+)*-[a-z]*c[[:space:]]+['\"]([^'\"]*[^[:alnum:]_/.-])?${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}"
+SWEEP_EARLY='[[:space:]]+(-[A-Za-z0-9]*[qm][A-Za-z0-9]*|--(q[a-z]*|s(i[a-z]*)?|m(a(x(-c[a-z]*)?)?)?)(=[^[:space:]]*)?)([^[:alnum:]_-]|$)'
+SWEEP_SHELL='((\\|/[^[:space:]]*/)?((ba|da|rba|a|mk|z|k)?sh|fish))'
+SWEEP_SHF='([[:space:]]+([-+][A-Za-z]*[oO][[:space:]]+[A-Za-z]+|[-+][A-Za-z]+|--[a-z-]+))*'
+SWEEP_SHQ="(\\\$?'([^']*[^[:alnum:]_/.-])?|\"([^\"]*[^[:alnum:]_/.-])?)"
+SWEEP_SHC="${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_SHELL}${SWEEP_SHF}[[:space:]]+-[A-Za-z]*c[A-Za-z]*[[:space:]]+${SWEEP_SHQ}${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}"
 PATTERN_V2="${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}|${SWEEP_SHC}"
 # Every alternative of PATTERN_V2 starts at a bar, so a line without one cannot match: the sweep ANDs this literal in front of the pattern (git's regexec has
-# no literal prefilter and tries the lead group at every byte: 17 s CPU became 1.5 s with it, byte-identical output). The probe pins the property (pattern-bar-prefilter).
+# no literal prefilter and tries the lead group at every byte: about 17 to 25 s of CPU became about 1.5 to 2 s with it, byte-identical output). The probe pins the property (pattern-bar-prefilter).
 SWEEP_PREFILTER='\|'
 
 # A PATTERN that does not compile must not read as "no hits": every grep below
@@ -244,22 +257,24 @@ hits="$(git grep -nE "$PATTERN" -- '.claude/hooks/*.sh' '.claude/hooks/lib/*.sh'
 ALLOW_MARKER='[[:space:]]#[[:space:]]*sigpipe-demo:[[:space:]]*intentional([[:space:]]|$)'
 # The comment filter every scan shares, PER LANGUAGE (Item F): `path:NN:<spaces>#...` is a comment in a shell, YAML, Terraform, template, Python or
 # markdown-fence line, and `//`, `/*` and a leading `*` (a JSDoc line: `*` then a space, a slash or the end) are comments in the JS family (js ts tsx mjs
-# cjs) and in Terraform. A `#` line in a .ts or .js file is code (a private field), a `//` line in a .py file is code, and a `*) ...` case arm in a .sh
-# or .ts file is code, so each filter reads only its own extensions. The two extension lists are the style of each SWEEP_EXTS member (comment-style-lists
+# cjs); Terraform has `//` and `/*` only. A `#` line in a .ts or .js file is code (a private field), a `//` line in a .py file is code, and a `*) ...` case arm in a .sh
+# or .ts file is code, so each filter reads only its own extensions. The three extension lists (hash, slash, c-block) are the style of each SWEEP_EXTS member (comment-style-lists
 # in the probe requires every swept extension to name one), and .md is read only through its fences. `--marker`
 # also drops a line carrying the per-line ALLOW_MARKER (the sweep only; the four named passes deliberately have no opt-out, and the markdown pass never
 # honours it: a marker in a fence is no entry of SWEEP_MARKER_PIN). `-a` keeps a line with a non-UTF-8 byte a line: without it grep prints
 # "Binary file matches" in its place and the hit is dropped.
 SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)
-SWEEP_SLASH_EXTS=(js ts tsx mjs cjs tf)
+SWEEP_SLASH_EXTS=(js ts tsx mjs cjs)
+SWEEP_CBLOCK_EXTS=(tf)   # `//` and `/*` open a comment here, a leading `*` does not: in a heredoc it is a crontab line
 _strip_comments() { # [--marker], stdin -> stdout
-  local IFS='|' hash_re slash_re
+  local IFS='|' hash_re slash_re cblock_re
   hash_re='^[^:]+\.('"${SWEEP_HASH_EXTS[*]}"'):[0-9]+:[[:space:]]*#'
   slash_re='^[^:]+\.('"${SWEEP_SLASH_EXTS[*]}"'):[0-9]+:[[:space:]]*(//|/\*|\*([[:space:]/]|$))'
+  cblock_re='^[^:]+\.('"${SWEEP_CBLOCK_EXTS[*]}"'):[0-9]+:[[:space:]]*(//|/\*)'
   if [[ "${1:-}" == --marker ]]; then
-    grep -avE "$hash_re" | grep -avE "$slash_re" | grep -avE "$ALLOW_MARKER" || true
+    LC_ALL=C grep -avE "$hash_re" | LC_ALL=C grep -avE "$slash_re" | LC_ALL=C grep -avE "$cblock_re" | LC_ALL=C grep -avE "$ALLOW_MARKER" || true
   else
-    grep -avE "$hash_re" | grep -avE "$slash_re" || true
+    LC_ALL=C grep -avE "$hash_re" | LC_ALL=C grep -avE "$slash_re" | LC_ALL=C grep -avE "$cblock_re" || true
   fi
 }
 FILES_7024=(
@@ -468,7 +483,8 @@ fi
 # tracked; --exclude-standard keeps it out of node_modules and ignored trees (1.0 s versus 24.3 s and ten stray
 # hits without it); -a makes a NUL-bearing file searchable as text; core.excludesFile=/dev/null stops a
 # developer's global ignore file changing the local result; core.quotePath=false keeps a non-ASCII path a path (git otherwise prints it quoted and the
-# awk passes could not open the file).
+# awk passes could not open the file); LC_ALL=C makes every regex byte-wise: in a UTF-8 locale `[^|]` and `.` do not match an invalid byte, so one stray 0xFF before
+# a bar hid the whole line from the pattern (and from the split listing) while `-a` only kept the line a line.
 # The extension list, one array. Item F builds the pathspec AND the extension witness from it, so a dropped entry would drop out of both; the
 # literal count and the separately typed list below are what see a drop (ext-count, ext-expected).
 SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)
@@ -487,14 +503,15 @@ SWEEP_PATHSPEC+=(
 )
 # One swept file under each of these must exist, or the derivation is reading the wrong tree.
 SWEEP_CANARIES=('scripts/' 'plugins/soleur/' 'apps/web-platform/scripts/' 'apps/cla-evidence/' 'tests/' 'plugins/soleur/scripts/' 'plugins/soleur/skills/' 'apps/web-platform/infra/' 'apps/web-platform/test/')
-SWEEP_FLOOR=4000   # measured 4,494 swept files on 2026-10-15 (`git grep -al -e ''` under SWEEP_PATHSPEC; 1,646 with the 8 extensions of 2026-10-05); a population below the floor is a FAIL, never "no hits"
+SWEEP_FLOOR=4000   # measured about 4,500 swept files on 2026-10-15 (4,494 before the fix round's two spec-dir scripts) (`git grep -al -e ''` under SWEEP_PATHSPEC; 1,646 with the 8 extensions of 2026-10-05); a population below the floor is a FAIL, never "no hits"
 SWEEP_FLOOR_MIN=3500   # a literal beside the floor: the floor can only move with a visible edit of THIS number (floor-lower-bound below)
 # The multi-line passes carry their own floors, each with a literal MIN beside it (md-floor-lower-bound in the probe): the markdown files that mention
-# pipefail, the fence lines the fence awk printed from them, and the joined lines the split awk printed. A pass that prints nothing on real input reads
-# UNRESOLVED (a stub, a broken opener, a listing that lost a directory), never "no hits".
-SWEEP_MD_FLOOR=18; SWEEP_MD_FLOOR_MIN=15             # measured 21 markdown files outside knowledge-base that mention pipefail, 2026-10-15
-SWEEP_MD_FENCE_FLOOR=500; SWEEP_MD_FENCE_FLOOR_MIN=400   # measured 676 code lines in the pipefail fences of those files (8 of the 21 hold one; go.md alone has 284)
-SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250        # measured 415 joined lines (a trailing bar, a bar and a backslash or comment, a backslash-continued next line)
+# pipefail, the fence lines the fence awk printed from them, and the joined lines the split awk printed. They are TRIPWIRES for a pass that is not running
+# (a stub, a broken opener, a listing that lost a directory), set far below the measured counts so an ordinary edit of one document cannot trip them; they do
+# not measure the tree. Each counter is also tied to the lines its program printed (scan_sweep), so a counter that lies reads UNRESOLVED too.
+SWEEP_MD_FLOOR=12; SWEEP_MD_FLOOR_MIN=10             # measured 21 markdown files outside knowledge-base that mention pipefail (8 of them hold a pipefail fence), 2026-10-15
+SWEEP_MD_FENCE_FLOOR=150; SWEEP_MD_FENCE_FLOOR_MIN=100   # measured 676 code lines in those fences, 455 of them in plugins/soleur/commands/go.md alone (the other 7 files: 221); a stub prints 0
+SWEEP_SPLIT_FLOOR=250; SWEEP_SPLIT_FLOOR_MIN=200        # measured 400 joined lines (a trailing bar, a bar and a backslash or comment, a backslash-continued next line); a stub prints 0
 SWEEP_CANARY_COUNT=9   # pinned beside SWEEP_CANARIES: the probe compares against this literal, not against the array's own length
 # To add a canary root: the array and SWEEP_CANARY_COUNT here, then one violating file for it in the sweep probe's sweeproot (a spelling
 # PATTERN_V2 matches), the sw_roots alternation, and one compliant file in okroot. The hit and population checks compare against
@@ -562,9 +579,9 @@ sweep_git_grep() { # <root> [--md] <git grep options...>
   local root="$1"; shift
   if [[ "${1:-}" == --md ]]; then   # the markdown listing (scan_md) reads the same flags over its own pathspec
     shift
-    git -c core.excludesFile=/dev/null -c core.quotePath=false -C "$root" grep --no-index --exclude-standard "$@" -- "${SWEEP_MD_PATHSPEC[@]}"
+    LC_ALL=C git -c core.excludesFile=/dev/null -c core.quotePath=false -C "$root" grep --no-index --exclude-standard "$@" -- "${SWEEP_MD_PATHSPEC[@]}"
   else
-    git -c core.excludesFile=/dev/null -c core.quotePath=false -C "$root" grep --no-index --exclude-standard "$@" -- "${SWEEP_PATHSPEC[@]}"
+    LC_ALL=C git -c core.excludesFile=/dev/null -c core.quotePath=false -C "$root" grep --no-index --exclude-standard "$@" -- "${SWEEP_PATHSPEC[@]}"
   fi
 }
 # Two LINEARISERS (Item F): awk programs that turn what a line search cannot see into `path:NN:text` lines, which scan_sweep then runs through the
@@ -587,29 +604,33 @@ SWEEP_SPLIT_AWK='
     for (i = 1; i <= nx; i++) if (substr(FILENAME, length(FILENAME) - length(sx[i])) == "." sx[i]) return 1
     return 0
   }
-  FNR == 1 { pend = 0; cont = 0; acc = ""; nx = split(slash_exts, sx, " "); js = isjs() }
+  function flush() {
+    if (cont) { print cname ":" pn ": | " acc; nj++ }
+    cont = 0; acc = ""
+  }
+  FNR == 1 { flush(); pend = 0; nx = split(slash_exts, sx, " "); js = isjs() }
   !pend && !cont && index($0, "|") == 0 { next }
   {
     line = $0; sub(/\r$/, "", line)
     if (pend) {
-      if (line ~ /^[ \t]*#/ || line ~ /^[ \t]*$/ || (js && line ~ /^[ \t]*(\/\/|\/\*|\*)/)) { next }
-      t = line; sub(/^[ \t]+/, "", t); acc = ""; pend = 0; cont = 1
+      if (line ~ /^[ \t]*#/ || line ~ /^[ \t]*$/ || (js && line ~ /^[ \t]*(\/\/|\/\*|\*([ \t\/]|$))/)) { next }
+      t = line; sub(/^[ \t]+/, "", t); acc = ""; pend = 0; cont = 1; cname = nm(FILENAME)
     } else if (cont) {
       t = line; sub(/^[ \t]+/, "", t)
     }
     if (cont) {
       if (t ~ /\\$/) { sub(/[ \t]*\\$/, "", t); acc = acc (acc == "" ? "" : " ") t; next }
       acc = acc (acc == "" ? "" : " ") t; cont = 0
-      print nm(FILENAME) ":" pn ": | " acc; nj++
+      print cname ":" pn ": | " acc; nj++
     }
     if (line ~ /[^|][ \t]*\|&?[ \t]*(\\[ \t]*|#.*)?$/ || line ~ /^[ \t]*\|&?[ \t]*(\\[ \t]*|#.*)?$/) {
       if (line ~ /:[ \t]*[|>][-+]?[ \t]*(#.*)?$/ || line ~ /^[ \t]*-?[ \t]*[|>][-+]?[ \t]*(#.*)?$/) next
       if (line ~ /^[ \t]*#/) next
-      if (js && line ~ /^[ \t]*(\/\/|\/\*|\*)/) next
+      if (js && line ~ /^[ \t]*(\/\/|\/\*|\*([ \t\/]|$))/) next
       pend = 1; pn = FNR
     }
   }
-  END { print "SPLITJOINS: " nj + 0 }
+  END { flush(); print "SPLITJOINS: " nj + 0 }
 '
 SWEEP_FENCE_AWK='
   function close_fence(   i) {
@@ -638,7 +659,7 @@ scan_split() {
   if (( rc > 1 )); then echo "UNRESOLVED: scan_split could not list the files that end a line in a pipe in $root (git grep rc=$rc) — nothing was scanned"; return 0; fi
   while IFS= read -r l; do [[ -n "$l" ]] && files+=("./$l"); done <<<"$list"
   if (( ${#files[@]} == 0 )); then echo "SPLITJOINS: 0"; return 0; fi
-  ( cd "$root" && LC_ALL=C awk -v slash_exts="${SWEEP_SLASH_EXTS[*]}" "$SWEEP_SPLIT_AWK" "${files[@]}" ) || echo "UNRESOLVED: scan_split's awk failed in $root — nothing was scanned"
+  ( cd "$root" && LC_ALL=C awk -v slash_exts="${SWEEP_SLASH_EXTS[*]} ${SWEEP_CBLOCK_EXTS[*]}" "$SWEEP_SPLIT_AWK" "${files[@]}" ) || echo "UNRESOLVED: scan_split's awk failed in $root — nothing was scanned"
 }
 # scan_md <root> -> `MDSWEPT: <n> files` (the markdown files that mention pipefail), then the code lines of their pipefail fences and `FENCELINES: <n>`, or an UNRESOLVED line.
 scan_md() {
@@ -654,17 +675,24 @@ scan_md() {
 # scan_sweep <root> -> `SWEPT: <n> files`, then `MDSWEPT`, `SPLITJOINS` and `FENCELINES` counts, any UNRESOLVED lines, then the matching code lines. The line
 # scan and the split joins honour the per-line marker; the markdown fence lines never do (a marker in a fence is no entry of the pin).
 scan_sweep() {
-  local root="$1" out rc=0 files nfiles c split_out md_out mdn sjn fln cand_split cand_md
+  local root="$1" out rc=0 files nfiles c split_out md_out mdn sjn fln cand_split cand_md bad sj_lines fl_lines
   files="$(sweep_git_grep "$root" -al -e '')" || rc=$?
   if (( rc > 1 )); then
     echo "SWEPT: 0 files"
     echo "UNRESOLVED: scan_sweep could not list its population in $root (git grep rc=$rc) — nothing was scanned"
     return 0
   fi
-  nfiles=$(printf '%s\n' "$files" | grep -c . || true)
+  nfiles=$(printf '%s\n' "$files" | grep -ac . || true)
   echo "SWEPT: $nfiles files"
+  # The hit format is path:NN:text and the comment filter and the verdict cut the path at the first colon: a path that holds a colon, a quote (git quotes such a
+  # path and awk cannot open it), a backslash or a control character would forge or hide a hit, so the sweep refuses the tree instead of reading it.
+  bad="$(LC_ALL=C grep -aE '["\\:[:cntrl:]]' <<<"$files" | head -n 3 || true)"
+  if [[ -n "$bad" ]]; then
+    echo "UNRESOLVED: a swept path holds a colon, a quote, a backslash or a control character, which the hit format path:NN:text cannot carry (first: ${bad//$'\n'/ | }) — rename the file or give it an ignore entry"
+    return 0
+  fi
   for c in "${SWEEP_CANARIES[@]}"; do
-    grep -q -- "^$c" <<<"$files" || echo "UNRESOLVED: no swept file under $c in $root — the population is not the repository's"
+    grep -aq -- "^$c" <<<"$files" || echo "UNRESOLVED: no swept file under $c in $root — the population is not the repository's"
   done
   rc=0
   out="$(sweep_git_grep "$root" -anE -e "$SWEEP_PREFILTER" --and -e "$PATTERN_V2")" || rc=$?
@@ -677,10 +705,21 @@ scan_sweep() {
   mdn="$(sed -n 's/^MDSWEPT: \([0-9]*\) files$/\1/p' <<<"$md_out")"
   sjn="$(sed -n 's/^SPLITJOINS: \([0-9]*\)$/\1/p' <<<"$split_out")"
   fln="$(sed -n 's/^FENCELINES: \([0-9]*\)$/\1/p' <<<"$md_out")"
+  if grep -aq '^UNRESOLVED:' <<<"$split_out"$'\n'"$md_out"; then
+    echo "MDSWEPT: ${mdn:-0} files"; echo "SPLITJOINS: 0"; echo "FENCELINES: 0"
+    grep -a '^UNRESOLVED:' <<<"$split_out"$'\n'"$md_out"; return 0
+  fi
+  # The floors read these counters, so each is tied to the lines its program printed, and the counter this function reports is the COUNT OF THOSE LINES: a program
+  # that reports a number it did not print is a stub or a bug, not a count.
+  sj_lines=$(grep -acE '^[^:]+:[0-9]+: \| ' <<<"$split_out" || true)
+  fl_lines=$(grep -acE '^[^:]+:[0-9]+:' <<<"$md_out" || true)
   echo "MDSWEPT: ${mdn:-0} files"
-  echo "SPLITJOINS: ${sjn:-0}"
-  echo "FENCELINES: ${fln:-0}"
-  if grep -aq '^UNRESOLVED:' <<<"$split_out"$'\n'"$md_out"; then grep -a '^UNRESOLVED:' <<<"$split_out"$'\n'"$md_out"; return 0; fi
+  echo "SPLITJOINS: $sj_lines"
+  echo "FENCELINES: $fl_lines"
+  if [[ "${sjn:-0}" != "$sj_lines" || "${fln:-0}" != "$fl_lines" ]]; then
+    echo "UNRESOLVED: the split pass reported ${sjn:-<none>} joins and printed $sj_lines, the fence pass reported ${fln:-<none>} fence lines and printed $fl_lines — a counter that is not the number of lines printed cannot back a floor"
+    return 0
+  fi
   cand_split="$(grep -aE -- "$PATTERN_V2" <<<"$split_out" || true)"
   cand_md="$(grep -aE -- "$PATTERN_V2" <<<"$md_out" || true)"
   { printf '%s\n' "$out" | _strip_comments --marker; printf '%s\n' "$cand_split" | _strip_comments --marker; printf '%s\n' "$cand_md" | _strip_comments; } | grep -a . || true
@@ -703,7 +742,9 @@ sweep_verdict() {
     fi
   done
   while IFS= read -r line; do
-    [[ -n "$line" && "$line" != SWEPT:* && "$line" != MDSWEPT:* && "$line" != SPLITJOINS:* && "$line" != FENCELINES:* ]] || continue
+    [[ -n "$line" ]] || continue
+    # the four counter lines, matched exactly: a glob here would let a file NAMED like one (SWEPT:x.sh) hide its own hits
+    if [[ "$line" =~ ^(SWEPT|MDSWEPT):\ [0-9]+\ files$ || "$line" =~ ^(SPLITJOINS|FENCELINES):\ [0-9]+$ ]]; then continue; fi
     path="${line%%:*}"
     owner=-1
     if [[ "$pinned" != *" $path "* ]]; then
@@ -732,7 +773,7 @@ sweep_verdict() {
     echo "  (this scan reads untracked, non-ignored files too: a vendored tree with no ignore line is read as code)"
     if grep -aq -E '^[^:]+:[0-9]+: \| ' <<<"$undeferred"; then
       echo "  A line shown as  path:NN: | text  is a SPLIT pipe: line NN ends in a pipe (or a pipe and a backslash or comment) and 'text' is the next code line, where the reader is."
-      echo "  Fix the reader on that next line, or the pipe on line NN; the reported line number is the pipe's."
+      echo "  Fix the reader on that next line, or the pipe on line NN; the reported line number is the pipe's. An intentional demo carries the marker on the READER line (the next code line), not on line NN."
     fi
     if grep -aq -E '^[^:]+\.md:[0-9]+:' <<<"$undeferred"; then
       echo "  A .md hit is a line inside a fenced code block that also holds the word pipefail (an agent runs such a fence under pipefail): fix the line in the fence."
@@ -748,7 +789,8 @@ sweep_verdict() {
     echo "           POSIX sh, Terraform inline, runcmd, or a value that may be empty  ->  producer | grep -cE P >/dev/null   (same exit status as -q, reads all input, no newline added)"
     echo "           an output-bearing  | grep -m1 P  in bash, with a value that is never empty  ->  grep -m1 P <<<\"\$V\" | ..."
     echo "           an output-bearing  producer | grep -m1 P  (value may be empty, or a producer)  ->  grep -m1 P < <(producer)"
-    echo "           the same shapes behind a wrapper (sudo, env, timeout, xargs, nohup ...), as rg/zgrep/pcregrep, as \"\$GREP\", or inside  sh -c '...'  ->  the same forms: the reader's stdin is the producer"
+    echo "           the same shapes behind a wrapper (sudo, env, timeout, nohup ...), as rg/zgrep/pcregrep, as \"\$GREP\", or inside  sh -c '...'  ->  the same forms: the reader's stdin is the producer"
+    echo "           behind xargs: xargs drains its stdin, so there is no early exit to fix; the hazard is its own status (123) under pipefail: capture the producer, then run xargs on the capture"
     echo "           an intentional demo of the shape  ->  append  # sigpipe-demo: intentional  to that line (not honoured inside a markdown fence)"
     echo "  A subtree that reached zero stays at zero: do NOT add a deferral row for it (the test-shaped and production row sets are pinned); rewrite the hit."
   fi
@@ -773,15 +815,15 @@ sweep_main() {
   fln="$(sed -n 's/^FENCELINES: \([0-9]*\)$/\1/p' <<<"$scan")"
   sjn="$(sed -n 's/^SPLITJOINS: \([0-9]*\)$/\1/p' <<<"$scan")"
   if [[ ! "${mdn:-}" =~ ^[0-9]+$ ]] || (( mdn < mdfloor )); then
-    echo "UNRESOLVED: the markdown listing read ${mdn:-<no count>} files that mention pipefail, below SWEEP_MD_FLOOR $mdfloor — the fence pass would assert nothing. A truncated listing is a wrong tree or a broken pathspec; if documents legitimately dropped the word pipefail, lower SWEEP_MD_FLOOR (and the SWEEP_MD_FLOOR_MIN literal beside it) in a reviewed edit"
+    echo "UNRESOLVED: the markdown listing read ${mdn:-<no count>} files that mention pipefail, below SWEEP_MD_FLOOR $mdfloor — the fence pass would assert nothing. A truncated listing is a wrong tree, a broken pathspec or an edited SWEEP_EXTS (every pass shrinks with it); if documents legitimately dropped the word pipefail, lower SWEEP_MD_FLOOR (and the SWEEP_MD_FLOOR_MIN literal beside it) in a reviewed edit"
     return 3
   fi
   if [[ ! "${fln:-}" =~ ^[0-9]+$ ]] || (( fln < fencefloor )); then
-    echo "UNRESOLVED: the fence pass printed ${fln:-<no count>} code lines from pipefail fences, below SWEEP_MD_FENCE_FLOOR $fencefloor — a pass that emits nothing on real documents asserts nothing; a stub, a broken fence opener or deleted fences all read like this (lower SWEEP_MD_FENCE_FLOOR and its _MIN literal only for a measured, reviewed shrink)"
+    echo "UNRESOLVED: the fence pass printed ${fln:-<no count>} code lines from pipefail fences, below SWEEP_MD_FENCE_FLOOR $fencefloor — a pass that emits nothing on real documents asserts nothing; a stub, a broken fence opener or deleted fences all read like this (an edited SWEEP_EXTS or SWEEP_MD_PATHSPEC shrinks it too; lower SWEEP_MD_FENCE_FLOOR and its _MIN literal only for a measured, reviewed shrink)"
     return 3
   fi
   if [[ ! "${sjn:-}" =~ ^[0-9]+$ ]] || (( sjn < splitfloor )); then
-    echo "UNRESOLVED: the split pass joined ${sjn:-<no count>} lines, below SWEEP_SPLIT_FLOOR $splitfloor — a pass that joins nothing on the real tree asserts nothing (lower SWEEP_SPLIT_FLOOR and its _MIN literal only for a measured, reviewed shrink)"
+    echo "UNRESOLVED: the split pass joined ${sjn:-<no count>} lines, below SWEEP_SPLIT_FLOOR $splitfloor — a pass that joins nothing on the real tree asserts nothing (an edited SWEEP_EXTS, such as a dropped sh, shrinks it too: check ext-count first; lower SWEEP_SPLIT_FLOOR and its _MIN literal only for a measured, reviewed shrink)"
     return 3
   fi
   n="$(sed -n '1s/^SWEPT: \([0-9]*\) files$/\1/p' <<<"$scan")"
@@ -1031,8 +1073,8 @@ v2_git_good=$(git -C "$probe" grep --no-index -nE -e "$SWEEP_PREFILTER" --and -e
 
 # The bar prefilter is only sound while every alternative of PATTERN_V2 starts at a bar: the lead part opens with the literal, the `sh -c` alternative is built
 # from the same lead, and the whole pattern is exactly those two. A third alternative with no bar (a process-substitution reader, for one) must widen or drop the prefilter.
-[[ "$SWEEP_LEAD" == "(^|[^|])${SWEEP_PREFILTER}"* && "$SWEEP_SHC" == "${SWEEP_LEAD}"* && "$PATTERN_V2" == "${SWEEP_LEAD}"*"|${SWEEP_SHC}" ]] \
-  || sweep_probe_fail+=("pattern-bar-prefilter: PATTERN_V2 is no longer 'lead ... | sh -c form built from the same lead', so the bar prefilter ($SWEEP_PREFILTER, ANDed in front of it by scan_sweep) can drop a match the pattern would make; add the new alternative's own literal to the prefilter or remove the prefilter")
+[[ "$SWEEP_LEAD" == "(^|[^|])${SWEEP_PREFILTER}"* && "$SWEEP_SHC" == "${SWEEP_LEAD}"* && "$PATTERN_V2" == "${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}|${SWEEP_SHC}" ]] \
+  || sweep_probe_fail+=("pattern-bar-prefilter: PATTERN_V2 is no longer exactly 'the lead form | the sh -c form built from the same lead', so the bar prefilter ($SWEEP_PREFILTER, ANDed in front of it by scan_sweep) can drop a match the pattern would make; give the new alternative's own literal to the prefilter (-e A --or -e B inside parentheses) or remove the prefilter")
 
 # ---- Item F, Guard 1 (#9217): the reader grammar as a table of NAMED cases. One line per case: <kind> <name> <text>.
 #   bad  must match          good must NOT match
@@ -1057,9 +1099,15 @@ bad wrap-setsid x | setsid grep -q p
 bad wrap-stdbuf x | stdbuf -oL -eL grep -q p
 bad wrap-4-tokens x | sudo -u root -g wheel grep -q p
 bad wrap-ionice x | ionice -c3 grep -q p
+bad wrap-chrt x | chrt 10 grep -q p
+bad wrap-taskset x | taskset 0x1 grep -q p
+bad wrap-unbuffer x | unbuffer grep -q p
+bad wrap-flock x | flock /tmp/l grep -q p
 bad bin-zgrep x | zgrep -q p
 bad bin-zegrep x | zegrep -q p
 bad bin-rg x | rg -q p
+bad bin-rg-path x | /usr/bin/rg -q p
+bad bin-rg-bs x | \rg -q p
 bad bin-rg-long x | rg --quiet p
 bad bin-ag x | ag -q p
 bad bin-ugrep x | ugrep -q p
@@ -1068,10 +1116,15 @@ bad var-dq x | "$GREP" -q p
 bad var-brace x | ${GREP_BIN} -qE p
 bad var-bare x | $GREP --quiet p
 bad var-default x | ${GREP:-grep} -q p
+bad var-lower x | "${grep_bin}" -q p
 bad arg-after-operand x | grep p -q
 bad arg-E-operand x | grep -E p -q
 bad arg-two-e x | grep -e a -e b -q
 bad arg-d-skip x | grep -d skip -q p
+bad arg-long-hyphen x | grep --fixed-strings --quiet p
+bad arg-trailing-flags x | grep p -i -q
+bad arg-sq-operand x | grep 'a b' -q
+bad arg-dq-operand x | grep "a b" -q
 bad arg-twice-f x | grep -f a -f b -q p
 bad arg-twice-A x | grep -A 1 -A 2 -q p
 bad arg-twice-B x | grep -B 1 -B 2 -q p
@@ -1085,6 +1138,9 @@ bad early-qui x | grep --qui p
 bad early-sil x | grep --sil p
 bad early-max x | grep --max=1 p
 bad early-max-c x | grep --max-c=1 p
+bad early-s x | grep --s p
+bad early-m x | grep --m=1 p
+bad early-ma x | grep --ma=1 p
 bad early-m-sep x | grep -m 1 p
 bad early-term-semi x | grep -q;
 bad early-term-amp x | grep -q&
@@ -1106,6 +1162,20 @@ bad shc-egrep x | sh -c 'egrep -q p'
 bad shc-quiet-long x | sh -c 'grep --quiet p'
 bad shc-max-count x | sh -c 'grep --max-count=1 p'
 bad shc-after-operand x | sh -c 'grep p -q'
+bad shc-euo x | bash -euo pipefail -c 'grep -q p'
+bad shc-eo x | bash -eo pipefail -c 'grep -q p'
+bad shc-norc x | bash --norc -c 'grep -q p'
+bad shc-norc2 x | bash --noprofile --norc -c 'grep -q p'
+bad shc-plus-e x | bash +e -c 'grep -q p'
+bad shc-O x | bash -O extglob -c 'grep -q p'
+bad shc-ce x | bash -ce 'grep -q p'
+bad shc-e-c x | bash -e -c 'grep -q p'
+bad shc-inner-sq x | bash -c "cd 'd' && grep -q p f"
+bad shc-inner-dq x | bash -c 'cd "$d" && grep -q p f'
+bad shc-ansi x | bash -c $'grep -q p'
+bad shc-ash x | ash -c 'grep -q p'
+bad shc-mksh x | mksh -c 'grep -q p'
+bad shc-fish x | fish -c 'grep -q p'
 bad head-chain x | head -1 | grep -q p
 bad head-chain-n x | head -n 1 | grep -qE p
 good quoted-context-pipe expect 'adds a | grep -cx >/dev/null 1.2.3.4' 'no_ll' 'test "$(ev)" -eq 0'
@@ -1116,6 +1186,8 @@ good rg-max-depth x | rg --max-depth 2 p
 good rg-smart-case x | rg --smart-case p
 good shc-count x | sh -c 'grep -c p'
 good shc-echo x | sh -c 'echo ok'
+good shc-xgrep x | sh -c 'xgrep -q p'
+good rg-stats x | rg --stats p
 good wrap-sudo-tee x | sudo tee /etc/f
 good wrap-time-cat x | time cat
 good wrap-command-v x | command -v grep
@@ -1134,6 +1206,12 @@ good sub-count $(x | grep -c p) -eq 1
 res wrap-5-tokens x | sudo -u root -g wheel -E grep -q p
 res wrap-abs-env x | /usr/bin/env grep -q p
 res env-quoted-value x | FOO="a b" grep -q p
+res shc-escaped-quote x | sh -c "echo \"hi\"; grep -q p"
+res shc-busybox x | busybox sh -c 'grep -q p'
+res shc-shell-var x | "$SHELL" -c 'grep -q p'
+res compound-if x | if grep -q p; then :; fi
+res compound-bang x | ! grep -q p
+res group-nonfirst x | { cd d; grep -q p; }
 res bin-rel-path x | ./grep -q p
 res bin-var-path x | "$DIR/grep" -q p
 res bin-busybox x | busybox grep -q p
@@ -1145,7 +1223,7 @@ fp fp-rg-type x | rg -tmd p
 fp fp-rg-max-columns x | rg --max-columns 100 p
 fp fp-dashdash x | grep -- -q
 EOF
-V2_CASE_COUNT=103
+V2_CASE_COUNT=139
 v2_case_misses() { # <pattern> -> one "[kind name]" per case the pattern disagrees with, "[INSTRUMENT name rc=N]" when grep itself failed
   local pat="$1" line kind rest name text r out=""
   while IFS= read -r line; do
@@ -1162,6 +1240,19 @@ v2_case_misses() { # <pattern> -> one "[kind name]" per case the pattern disagre
 }
 v2_case_n=$(grep -c . <<<"$V2_CASES" || true)
 v2_case_bad="$(v2_case_misses "$PATTERN_V2")"
+# The same table through the engine and the form the sweep scans with (git grep behind the bar prefilter): every `bad` text must be found, every `good` or `res`
+# text not. v2_case_misses uses plain grep, so a bar-less alternative would agree with its own case there and be invisible to the sweep.
+v2_git_t="$probe/cases-git"; mkdir -p "$v2_git_t"
+: > "$v2_git_t/bad.txt"; : > "$v2_git_t/other.txt"
+while IFS= read -r _l; do
+  [[ -n "$_l" ]] || continue
+  case "${_l%% *}" in bad) printf '%s\n' "${_l#* * }" >> "$v2_git_t/bad.txt" ;; good|res) printf '%s\n' "${_l#* * }" >> "$v2_git_t/other.txt" ;; esac
+done <<<"$V2_CASES"
+v2_git_nb=$(grep -c . "$v2_git_t/bad.txt" || true)
+v2_git_hb=$(LC_ALL=C git -C "$v2_git_t" grep --no-index -anE -e "$SWEEP_PREFILTER" --and -e "$PATTERN_V2" -- bad.txt | grep -c . || true)
+v2_git_ho=$(LC_ALL=C git -C "$v2_git_t" grep --no-index -anE -e "$SWEEP_PREFILTER" --and -e "$PATTERN_V2" -- other.txt | grep -c . || true)
+[[ "$v2_git_nb" -gt 0 && "$v2_git_hb" == "$v2_git_nb" && "$v2_git_ho" == 0 ]] \
+  || sweep_probe_fail+=("v2-cases-git: through git grep behind the bar prefilter the case table found ${v2_git_hb:-<err>} of $v2_git_nb bad texts and ${v2_git_ho:-<err>} good or residual texts (want all and 0: the sweep reads with this engine and form)")
 [[ "$v2_case_n" == "$V2_CASE_COUNT" && -z "$v2_case_bad" ]] \
   || sweep_probe_fail+=("v2-cases: ran ${v2_case_n:-<err>}/$V2_CASE_COUNT cases, PATTERN_V2 disagreed on: ${v2_case_bad:-none} (a [bad ..] case is a spelling the pattern no longer reads; a [good ..] or [res ..] case is one it now over-reads; an [fp ..] case stopped matching)")
 # The loop must be able to fail: the same table against a pattern with the wrapper part removed has to miss the wrapper cases.
@@ -1227,6 +1318,13 @@ _vp 'outside the deferral table' 'apps/* | <= | 9 | #1' -- "${FILES_7376[0]}:1:t
 own="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=('a/b/* | = | 1 | #1' 'a/* | = | 1 | #2'); sweep_verdict $'a/b/x.sh:1:t\na/y.sh:2:t'; echo "SWEEP_FAIL=$SWEEP_FAIL" )"
 [[ "$own" == *"DEFERRED: a/b/* (1 hits"* && "$own" == *"DEFERRED: a/* (1 hits"* && "$own" == *"SWEEP_FAIL=0" ]] \
   || sweep_probe_fail+=("deferral-owner: first-match-wins did not give each overlapping row its own hit")
+# The verdict's notes (a split hit and a fence hit are shown as path:NN:text; the notes say what that means and where the marker goes) and its counter lines,
+# which are matched exactly: a file NAMED like a counter must not hide its hit.
+vn="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=(); sweep_verdict $'scripts/a.sh:3: | sudo grep -q p f\ndocs/b.md:7:x | sudo grep -q p' )"
+[[ "$vn" == *"is a SPLIT pipe"* && "$vn" == *"on the READER line"* && "$vn" == *"fenced code block that also holds the word pipefail"* && "$vn" == *"behind xargs"* ]] \
+  || sweep_probe_fail+=("verdict-notes: the failure text lacks the split-pipe note, the marker-on-the-reader-line advice, the fence note or the xargs remedy (a hit shown as path:NN: | text is otherwise unreadable): ${vn:0:200}")
+_vp 'outside the deferral table' 'a/* | = | 1 | #1' -- 'a/x.sh:1:t' 'SWEPT:x.sh:1:t' 'FENCELINES:y.sh:2:t' \
+  || sweep_probe_fail+=("verdict-counter-name: a hit in a file named like a counter line (SWEPT:x.sh) was skipped as a counter; the counter lines are matched exactly")
 
 # The REAL table (Waves A2 and B). The synthetic rows above prove the arithmetic; these prove the table this file SHIPS still owns what it
 # must and nothing it must not. The scan runs scan_sweep on a scratch root (so SWEEP_PATHSPEC and PATTERN_V2 are exercised, not
@@ -1390,6 +1488,18 @@ rc_low=0;  ( SWEEP_DEFERRALS=(); sweep_main "$okroot" 100 0 0 0 >/dev/null ) || 
 rc_none=0; ( SWEEP_DEFERRALS=(); sweep_main "$probe/emptyroot" 1 0 0 0 >/dev/null ) || rc_none=$?
 [[ "$rc_bad" == 1 && "$rc_ok" == 0 && "$rc_low" == 1 && "$rc_none" == 3 ]] \
   || sweep_probe_fail+=("sweep-main: rc violating/compliant/below-floor/empty = $rc_bad/$rc_ok/$rc_low/$rc_none (want 1/0/1/3)")
+sm_a="$( ( sweep_main "$okroot" 1 ) 2>&1 || true )"; sm_b="$( ( sweep_main "$okroot" 1 0 ) 2>&1 || true )"; sm_c="$( ( sweep_main "$okroot" 1 0 0 ) 2>&1 || true )"
+[[ "$sm_a" == *"needs the markdown-file floor"* && "$sm_b" == *"needs the fence-line floor"* && "$sm_c" == *"needs the split-join floor"* ]] \
+  || sweep_probe_fail+=("sweep-main-args: a call with a missing floor argument must stop with a message naming it (a default of 0 is a floor that cannot fail); got [${sm_a:0:60}] [${sm_b:0:60}] [${sm_c:0:60}]")
+# A swept path the hit format cannot carry is refused, not read: a colon, a quote, a backslash or a control character.
+cn="$probe/cnroot"; mkdir -p "$cn" && cp -R "$okroot/." "$cn/"
+printf '%s\n' 'echo "$x" | grep -q p' > "$cn/scripts/SWEPT:x.sh"
+cn_out="$(scan_sweep "$cn")"
+cn2="$probe/cnroot2"; mkdir -p "$cn2" && cp -R "$okroot/." "$cn2/"
+printf '%s\n' 'echo "$x" | grep -q p' > "$cn2/scripts/q\"x.sh"
+cn2_out="$(scan_sweep "$cn2")"
+[[ "$cn_out" == *"UNRESOLVED: a swept path holds a colon"* && "$cn2_out" == *"UNRESOLVED: a swept path holds a colon"* ]] \
+  || sweep_probe_fail+=("path-refusal: a swept file named SWEPT:x.sh or q\"x.sh was read instead of refused (its hit would be forged, hidden or unreadable): [${cn_out: -120}] [${cn2_out: -120}]")
 # The fold itself, driven the way the suite uses it: rc 1 sets FAIL, rc 3 exits 3, rc 0 prints PASS and leaves FAIL alone.
 fold_a=$( FAIL=0; sweep_fold 1 >/dev/null; echo "$FAIL" ) || true
 fold_b=0; ( FAIL=0; sweep_fold 3 >/dev/null ) || fold_b=$?
@@ -1454,10 +1564,23 @@ _ml_put docs/ml-md-closer-info.md         '```bash' 'set -o pipefail' '``` text'
 _ml_put docs/ml-md-pipefail-comment.md    '```bash' '# note: needs pipefail' 'x | sudo grep -q p' '```'
 _ml_put docs/ml-md-pipefail-off.md        '```bash' 'set +o pipefail' 'x | sudo grep -q p' '```'
 _ml_put knowledge-base/ml-md-kb.md        '```bash' 'set -o pipefail' 'x | sudo grep -q p' '```'
+_ml_put scripts/ml-split-cont3.sh        'x |' 'grep \' '-E \' '-q p'
+_ml_put scripts/ml-split-eof-cont-a.sh    'x |' '  sudo grep -q p \'
+_ml_put scripts/ml-split-eof-cont-b.sh    'sudo grep -q p f'
+_ml_put scripts/ml-split-js-stale-a.ts    'x |' '// note' '  sudo grep -q p f'
+_ml_put scripts/ml-split-js-stale-b.sh    'echo hi' 'x |' '// note' '  sudo grep -q p f'
+_ml_put scripts/ml-split-acc.sh           'x |' '  sudo grep -q p f' 'y |' '  cat'
+_ml_put tests/zz-split-eof-cont-last.sh  'x |' '  sudo grep -q p \'   # sorts after every other file of the root: the continuation is pending at the END of the whole run
+printf 'x \377| sudo grep -q p\n' > "$ml/scripts/ml-bytes-before-bar.sh"
+printf 'x | grep "\377" -q a\n' > "$ml/scripts/ml-bytes-quoted.sh"
+printf 'x | # caf\351\n  sudo grep -q p f\n' > "$ml/scripts/ml-split-latin1.sh"
+_ml_put A=b.md                            '```bash' 'set -o pipefail' 'x | sudo grep -q p' '```'
+_ml_put "docs/ml-caf"$'\303\251'".md"       '```bash' 'set -o pipefail' 'x | sudo grep -q p' '```'
+_ml_put docs/ml-md-info-opener.md         '```bash title="a b"' 'set -o pipefail' 'x | sudo grep -q p' '```'
 ml_out="$(scan_sweep "$ml")"
 ml_miss=""; ml_over=""
 _ml_want() { local name="$1" path="$2" ln="$3" kind="${4:-}"; grep -q -- "^$path:$ln:" <<<"$ml_out" || ml_miss+=" $name${kind:+/}$kind"; }
-_ml_not()  { local name="$1" path="$2"; if grep -q -- "^$path:" <<<"$ml_out"; then ml_over+=" $name"; fi; }
+_ml_not()  { local name="$1" path="$2"; if [[ ! -f "$ml/${path%%:*}" ]]; then ml_miss+=" $name/nofile"; elif grep -q -- "^$path:" <<<"$ml_out"; then ml_over+=" $name"; fi; }   # a must-not on a file that is not there passes for the wrong reason
 _ml_want split-sudo         scripts/ml-split-sudo.sh 1
 _ml_want split-line-number  scripts/ml-split-line-number.sh 3
 _ml_want split-second-site  scripts/ml-split-second-site.sh 1 first
@@ -1509,6 +1632,20 @@ _ml_want md-long-run            docs/ml-md-long-run.md 48
 _ml_want md-fp-pipefail-comment docs/ml-md-pipefail-comment.md 3
 _ml_want md-fp-pipefail-off     docs/ml-md-pipefail-off.md 3
 _ml_not  md-kb-excluded         knowledge-base/ml-md-kb.md
+_ml_want split-cont3            scripts/ml-split-cont3.sh 1
+_ml_want split-eof-cont         scripts/ml-split-eof-cont-a.sh 1
+_ml_not  split-eof-cont-next    scripts/ml-split-eof-cont-b.sh
+_ml_want split-js-stale-a       scripts/ml-split-js-stale-a.ts 1
+_ml_not  split-js-stale-b       scripts/ml-split-js-stale-b.sh
+_ml_want split-acc              scripts/ml-split-acc.sh 1
+_ml_want split-eof-cont-last    tests/zz-split-eof-cont-last.sh 1
+_ml_not  split-acc-reset        scripts/ml-split-acc.sh:3
+_ml_want bytes-before-bar       scripts/ml-bytes-before-bar.sh 1
+_ml_want bytes-quoted           scripts/ml-bytes-quoted.sh 1
+_ml_want split-latin1           scripts/ml-split-latin1.sh 1
+_ml_want md-root-assign         A=b.md 3
+_ml_want md-nonascii-name       "docs/ml-caf"$'\303\251'".md" 3
+_ml_want md-info-opener         docs/ml-md-info-opener.md 3
 _ml_pick() { # <split|md> <case names...> -> the names of that half, routed by the split- name prefix, each with a leading space
   local half="$1" w out=""; shift
   for w in "$@"; do
@@ -1519,20 +1656,37 @@ _ml_pick() { # <split|md> <case names...> -> the names of that half, routed by t
   done
   printf '%s' "$out"
 }
-ml_split_miss="$(_ml_pick split $ml_miss)"; ml_md_miss="$(_ml_pick md $ml_miss)"; ml_split_over="$(_ml_pick split $ml_over)"; ml_md_over="$(_ml_pick md $ml_over)"
+# shellcheck disable=SC2086  # the word lists are space-separated case names, split on purpose
+_ml_report() { # <miss words> <over words> -> one line per non-empty half; the four checks below are these four lines
+  local miss="$1" over="$2" w
+  w="$(_ml_pick split $miss)"; if [[ -n "$w" ]]; then printf '%s\n' "split-must-report: the sweep did not report the bar's line for:$w (a pipe that ends a line is read together with the next code line; the reported line is the bar's; a name ending /nofile is a fixture that was not written)"; fi
+  w="$(_ml_pick split $over)"; if [[ -n "$w" ]]; then printf '%s\n' "split-must-not: the sweep reported a join it must not make:$w (a logical OR, a YAML block-scalar indicator, a bar with nothing after it)"; fi
+  w="$(_ml_pick md $miss)"; if [[ -n "$w" ]]; then printf '%s\n' "md-must-report: the sweep did not report a fenced early-exit pipe in:$w (a fence that holds pipefail is code the executing shell reads under it)"; fi
+  w="$(_ml_pick md $over)"; if [[ -n "$w" ]]; then printf '%s\n' "md-must-not: the sweep reported a line it must not:$w (prose, a comment line, a fence without pipefail, pipefail in a different fence, a reader that drains)"; fi
+}
 # The dispatch above is the part of this block that decides whether a case can fail at all: pin how many calls there are (a deleted call is a case that can
-# no longer fail), drive the two recorders and the router on a synthetic scan, and read both back.
-ML_WANT_CALLS=32; ML_NOT_CALLS=19   # pinned: the number of ^_ml_want and ^_ml_not lines above
+# no longer fail), drive the two recorders, the router and the report on a synthetic scan, and read them back.
+ML_WANT_CALLS=43; ML_NOT_CALLS=22   # pinned: the number of ^_ml_want and ^_ml_not lines above
 ml_nw=$(grep -cE '^_ml_want ' "$_self" || true)
 ml_nn=$(grep -cE '^_ml_not ' "$_self" || true)
-ml_ctl="$( ml_out=$'a/x.sh:1:t'; ml_miss=""; ml_over=""; _ml_want c1 a/x.sh 1; _ml_want c2 a/y.sh 1; _ml_not c3 a/x.sh; _ml_not c4 a/y.sh; echo "$ml_miss|$ml_over" )"
+ml_ctl_root="$probe/ctlroot"; mkdir -p "$ml_ctl_root/a" && : > "$ml_ctl_root/a/x.sh"
+ml_ctl="$( ml="$ml_ctl_root"; ml_out=$'a/x.sh:1:t'; ml_miss=""; ml_over=""; _ml_want c1 a/x.sh 1; _ml_want c2 a/y.sh 1; _ml_want c5 a/x.sh 2; _ml_not c3 a/x.sh; _ml_not c4 a/y.sh; _ml_not c6 a/x.sh:2; echo "$ml_miss|$ml_over" )"
 ml_route="$(_ml_pick split split-a md-b split-c):$(_ml_pick md split-a md-b split-c)"
-[[ "$ml_nw" == "$ML_WANT_CALLS" && "$ml_nn" == "$ML_NOT_CALLS" && "$ml_ctl" == " c2| c3" && "$ml_route" == " split-a split-c: md-b" ]] \
-  || sweep_probe_fail+=("ml-dispatch: the fixture checks above have ${ml_nw:-<err>} _ml_want and ${ml_nn:-<err>} _ml_not calls (pinned at $ML_WANT_CALLS and $ML_NOT_CALLS: a deleted call is a case that can no longer fail; add or remove a case and its pin together), the recorders read [${ml_ctl:-<err>}] on a synthetic scan (want [ c2| c3]), the router [${ml_route:-<err>}] (want [ split-a split-c: md-b])")
-[[ -z "$ml_split_miss" ]] || sweep_probe_fail+=("split-must-report: the sweep did not report the bar's line for:$ml_split_miss (a pipe that ends a line is read together with the next code line; the reported line is the bar's)")
-[[ -z "$ml_split_over" ]] || sweep_probe_fail+=("split-must-not: the sweep reported a join it must not make:$ml_split_over (a logical OR, a YAML block-scalar indicator, a bar with nothing after it)")
-[[ -z "$ml_md_miss" ]] || sweep_probe_fail+=("md-must-report: the sweep did not report a fenced early-exit pipe in:$ml_md_miss (a fence that holds pipefail is code the executing shell reads under it)")
-[[ -z "$ml_md_over" ]] || sweep_probe_fail+=("md-must-not: the sweep reported a line it must not:$ml_md_over (prose, a comment line, a fence without pipefail, pipefail in a different fence, a reader that drains)")
+ml_rep_ctl="$(_ml_report ' split-a md-b' ' split-c md-d')"
+ml_rep_bad=""
+_ml_names=(split-must-report md-must-report split-must-not md-must-not); _ml_words=(split-a md-b split-c md-d)
+for _i in 0 1 2 3; do
+  _l="$(grep -a "^${_ml_names[_i]}:" <<<"$ml_rep_ctl" || true)"
+  [[ "$_l" == *" ${_ml_words[_i]} "* || "$_l" == *" ${_ml_words[_i]}" ]] || ml_rep_bad+=" ${_ml_names[_i]}(word)"
+  [[ "$_l" != *"${_ml_words[(_i + 1) % 4]}"* ]] || ml_rep_bad+=" ${_ml_names[_i]}(leak)"
+done
+ml_rep="$(_ml_report "$ml_miss" "$ml_over")"
+ml_wire_a=$(grep -cE '^ml_rep="\$\(_ml_report "\$ml_miss" "\$ml_over"\)"$' "$_self" || true)   # the two statements that turn the report into a failure, pinned as text at column 0
+ml_wire_b=$(grep -cE '^\[\[ -z "\$ml_rep" \]\] \\$' "$_self" || true)
+[[ "$ml_wire_a" == 1 && "$ml_wire_b" == 1 && "$ml_nw" == "$ML_WANT_CALLS" && "$ml_nn" == "$ML_NOT_CALLS" && "$ml_ctl" == " c2 c5 c4/nofile| c3" && "$ml_route" == " split-a split-c: md-b" && -z "$ml_rep_bad" ]] \
+  || sweep_probe_fail+=("ml-dispatch: the fixture checks above have ${ml_nw:-<err>} _ml_want and ${ml_nn:-<err>} _ml_not calls (pinned at $ML_WANT_CALLS and $ML_NOT_CALLS: a deleted call is a case that can no longer fail; add or remove a case and its pin together), the recorders read [${ml_ctl:-<err>}] on a synthetic scan (want [ c2 c5 c4/nofile| c3]: a wrong line, a missing file and an over-read), the router [${ml_route:-<err>}] (want [ split-a split-c: md-b]), the report mis-routed:${ml_rep_bad:- none}, the report capture and failure statements found ${ml_wire_a:-<err>}/${ml_wire_b:-<err>} times (want 1 and 1)")
+[[ -z "$ml_rep" ]] \
+  || sweep_probe_fail+=("fixture-checks (multi-line passes):"$'\n'"$(sed 's/^/    /' <<<"$ml_rep")")
 ml_split_n=$(grep -c '^scripts/ml-split-' <<<"$ml_out" || true)
 ml_md_n=$(grep -c '^docs/ml-md-' <<<"$ml_out" || true)
 [[ "$ml_split_n" -gt 0 && "$ml_md_n" -gt 0 ]] \
@@ -1540,15 +1694,19 @@ ml_md_n=$(grep -c '^docs/ml-md-' <<<"$ml_out" || true)
 
 # Guard 3: one planted violation per extension, read through the same scan_sweep, so the pathspec and the extension list cannot disagree unseen.
 ew="$probe/extroot"; mkdir -p "$ew" && cp -R "$okroot/." "$ew/"
-for _e in ${SWEEP_EXTS[@]+"${SWEEP_EXTS[@]}"}; do printf '%s\n' 'echo "$x" | grep -q p' > "$ew/scripts/witness-$_e.$_e"; done
+for _e in ${SWEEP_EXTS[@]+"${SWEEP_EXTS[@]}"}; do
+  printf '%s\n' 'echo "$x" | grep -q p' > "$ew/scripts/witness-$_e.$_e"
+  printf '%s\n' 'x |' '  sudo grep -q p f' > "$ew/scripts/witness-split-$_e.$_e"   # the split pass has to list and read every extension too
+done
 ew_out="$(scan_sweep "$ew")"
 ew_swept=$(sed -n '1s/^SWEPT: \([0-9]*\) files$/\1/p' <<<"$ew_out")
 ew_miss=""
 for _e in ${SWEEP_EXTS[@]+"${SWEEP_EXTS[@]}"}; do
   grep -q -- "^scripts/witness-$_e\\.$_e:" <<<"$ew_out" || ew_miss+=" $_e"
+  grep -q -- "^scripts/witness-split-$_e\\.$_e:1:" <<<"$ew_out" || ew_miss+=" split-$_e"
 done
-[[ "${#SWEEP_EXTS[@]}" -gt 0 && "${ew_swept:-0}" == $(( SWEEP_CANARY_COUNT + ${#SWEEP_EXTS[@]} )) && -z "$ew_miss" ]] \
-  || sweep_probe_fail+=("ext-witness: the sweep read ${ew_swept:-<err>} files of a root holding $SWEEP_CANARY_COUNT canaries and ${#SWEEP_EXTS[@]} planted extension files and did not report a planted violation of:${ew_miss:- none} (an extension missing from the pathspec is a file type nobody reads; read 0 files means the list is empty)")
+[[ "${#SWEEP_EXTS[@]}" -gt 0 && "${ew_swept:-0}" == $(( SWEEP_CANARY_COUNT + 2 * ${#SWEEP_EXTS[@]} )) && -z "$ew_miss" ]] \
+  || sweep_probe_fail+=("ext-witness: the sweep read ${ew_swept:-<err>} files of a root holding $SWEEP_CANARY_COUNT canaries and ${#SWEEP_EXTS[@]} planted single-line plus ${#SWEEP_EXTS[@]} planted split-pair files and did not report a planted violation of:${ew_miss:- none} (an extension missing from the pathspec is a file type nobody reads; read 0 files means the list is empty)")
 [[ "${#SWEEP_EXTS[@]}" == "$SWEEP_EXT_COUNT" ]] \
   || sweep_probe_fail+=("ext-count: SWEEP_EXTS holds ${#SWEEP_EXTS[@]} extensions, pinned at $SWEEP_EXT_COUNT — the list changed: a dropped extension leaves SWEEP_PATHSPEC and the witness together (that file type is no longer read), an added one is read but unpinned; if you changed the list on purpose, edit SWEEP_EXT_COUNT, SWEEP_EXT_EXPECTED, SWEEP_COMMENT_STYLES and the two comment lists in the same commit")
 [[ "${SWEEP_EXTS[*]}" == "$SWEEP_EXT_EXPECTED" ]] \
@@ -1569,6 +1727,27 @@ mf_sp=0;  mf_sp_out="$( ( SWEEP_DEFERRALS=(); sweep_main "$ml" 1 0 0 "$SWEEP_SPL
 [[ "$mf_ctl" == 1 && "$mf_md" == 3 && "$mf_md_out" == *"below SWEEP_MD_FLOOR $SWEEP_MD_FLOOR"* && "$mf_fn" == 3 && "$mf_fn_out" == *"below SWEEP_MD_FENCE_FLOOR $SWEEP_MD_FENCE_FLOOR"* \
       && "$mf_sp" == 3 && "$mf_sp_out" == *"below SWEEP_SPLIT_FLOOR $SWEEP_SPLIT_FLOOR"* ]] \
   || sweep_probe_fail+=("md-floor-truncated: the multi-line floors on scratch roots gave rc ${mf_ctl:-<err>} with every floor at 0 (want 1: the planted hits), then ${mf_md:-<err>}/${mf_fn:-<err>}/${mf_sp:-<err>} for the markdown-file, fence-line and split-join floors (want 3/3/3, each message naming its own SWEEP_ variable)")
+# Each floor must read ITS OWN counter. On the multi-line fixture root the three counters are pairwise distinct (asserted); a floor set to a counter's exact value
+# passes (rc 1: the planted hits), the same floor plus one reads UNRESOLVED naming that floor, so a floor wired to another pass's counter cannot hide.
+ml_c_sj=$(scan_split "$ml" | grep -acE '^[^:]+:[0-9]+: \| ' || true)
+ml_c_fl=$(scan_md "$ml" | grep -acE '^[^:]+:[0-9]+:' || true)
+ml_c_md=$(scan_md "$ml" | sed -n 's/^MDSWEPT: \([0-9]*\) files$/\1/p')
+mx=""
+if [[ "$ml_c_sj" != "$ml_c_fl" && "$ml_c_sj" != "$ml_c_md" && "$ml_c_fl" != "$ml_c_md" && "${ml_c_sj:-0}" -gt 0 && "${ml_c_fl:-0}" -gt 0 && "${ml_c_md:-0}" -gt 0 ]]; then
+  for _k in 1 2 3; do
+    case "$_k" in 1) _v=$ml_c_md; _want="below SWEEP_MD_FLOOR" ;; 2) _v=$ml_c_fl; _want="below SWEEP_MD_FENCE_FLOOR" ;; *) _v=$ml_c_sj; _want="below SWEEP_SPLIT_FLOOR" ;; esac
+    _a=(0 0 0); _a[_k - 1]=$_v
+    _r=0; ( SWEEP_DEFERRALS=(); sweep_main "$ml" 1 "${_a[0]}" "${_a[1]}" "${_a[2]}" >/dev/null 2>&1 ) || _r=$?
+    [[ "$_r" == 1 ]] || mx+=" exact$_k(rc $_r, want 1)"
+    _a[_k - 1]=$(( _v + 1 ))
+    _r=0; _o="$( ( SWEEP_DEFERRALS=(); sweep_main "$ml" 1 "${_a[0]}" "${_a[1]}" "${_a[2]}" ) 2>&1 )" || _r=$?
+    [[ "$_r" == 3 && "$_o" == *"$_want"* ]] || mx+=" plus1-$_k(rc $_r, want 3 and '$_want')"
+  done
+else
+  mx=" counters not pairwise distinct and positive (joins ${ml_c_sj:-<err>}, fence lines ${ml_c_fl:-<err>}, markdown files ${ml_c_md:-<err>})"
+fi
+[[ -z "$mx" ]] \
+  || sweep_probe_fail+=("md-floor-exact: on the multi-line root a floor at its own counter's value must pass and one above it must read UNRESOLVED naming that floor:$mx")
 
 # The knowledge-base exclusion is path-segment exact: an archive/ directory at any depth is out, a directory that merely contains the word is not.
 kb="$probe/kbroot"; mkdir -p "$kb" && cp -R "$okroot/." "$kb/"
@@ -1597,40 +1776,50 @@ _cm_put scripts/cm-ts-hash-line.ts '# echo "$x" | grep -q p'
 _cm_put scripts/cm-py-slash-line.py '// echo "$x" | grep -q p'
 _cm_put scripts/cm-sh-case-arm.sh '  *) echo "$x" | grep -q p ;;'
 _cm_put scripts/cm-ts-star-paren.ts ' *) echo "$x" | grep -q p ;;'
+_cm_put scripts/cm-tf-cron-star.tf '*/5 * * * * root echo "$x" | grep -q p'
 cm_out="$(scan_sweep "$cm")"
 cm_miss=""; cm_over=""
-for _c in ts-hash-line.ts py-slash-line.py sh-case-arm.sh ts-star-paren.ts; do grep -q -- "^scripts/cm-$_c:" <<<"$cm_out" || cm_miss+=" ${_c%.*}"; done
+for _c in ts-hash-line.ts py-slash-line.py sh-case-arm.sh ts-star-paren.ts tf-cron-star.tf; do grep -q -- "^scripts/cm-$_c:" <<<"$cm_out" || cm_miss+=" ${_c%.*}"; done
 for _c in ts-slash-comment.ts ts-jsdoc-star.ts ts-block-comment.ts py-hash-comment.py; do if grep -q -- "^scripts/cm-$_c:" <<<"$cm_out"; then cm_over+=" ${_c%.*}"; fi; done
 [[ -z "$cm_miss" && -z "$cm_over" ]] \
   || sweep_probe_fail+=("comment-filter: code lines the filter dropped:${cm_miss:- none}; comment lines it kept:${cm_over:- none} (a # line is code in a .ts file, a // line is code in a .py file, a * case arm is code in a .sh or .ts file)")
 # The comment style of EVERY swept extension, typed out once more beside the two lists: each extension gets a # line and a // line, and the table says which of
 # the two is a comment there (dropped) and which is code (reported). A list that gained or lost an extension, or a regex that stopped reading one, disagrees with it.
-SWEEP_COMMENT_STYLES='sh:# bash:# bats:# yml:# yaml:# tf:#// template:# py:# js:// ts:// tsx:// mjs:// cjs://'
+SWEEP_COMMENT_STYLES='sh:# bash:# bats:# yml:# yaml:# tf:#// template:# py:# js://* ts://* tsx://* mjs://* cjs://*'   # # = hash comment, // = slash and block-open comment, a trailing * = a leading star line too (JSDoc)
 cs="$probe/csroot"; mkdir -p "$cs" && cp -R "$okroot/." "$cs/"
 for _s in $SWEEP_COMMENT_STYLES; do
   printf '%s\n' '# echo "$x" | grep -q p' > "$cs/scripts/cs-hash-${_s%%:*}.${_s%%:*}"
   printf '%s\n' '// echo "$x" | grep -q p' > "$cs/scripts/cs-slash-${_s%%:*}.${_s%%:*}"
+  printf '%s\n' '* echo "$x" | grep -q p' > "$cs/scripts/cs-star-${_s%%:*}.${_s%%:*}"
+  printf '%s\n' 'x |' '// note' '  sudo grep -q p f' > "$cs/scripts/cs-split-${_s%%:*}.${_s%%:*}"
 done
 cs_out="$(scan_sweep "$cs")"
 cs_bad=""; cs_lists=""; cs_n=0
-_cs_h=" ${SWEEP_HASH_EXTS[*]} "; _cs_s=" ${SWEEP_SLASH_EXTS[*]} "
+_cs_h=" ${SWEEP_HASH_EXTS[*]} "; _cs_s=" ${SWEEP_SLASH_EXTS[*]} "; _cs_b=" ${SWEEP_CBLOCK_EXTS[*]} "
 for _s in $SWEEP_COMMENT_STYLES; do
   _e="${_s%%:*}"; _st="${_s#*:}"; cs_n=$((cs_n + 1))
-  for _kind in hash slash; do
-    if [[ "$_kind" == hash && "$_st" == *'#'* ]] || [[ "$_kind" == slash && "$_st" == *//* ]]; then _want=dropped; else _want=reported; fi
-    if grep -aq -- "^scripts/cs-$_kind-$_e\\.$_e:" <<<"$cs_out"; then _got=reported; else _got=dropped; fi
+  for _kind in hash slash star split; do
+    case "$_kind" in
+      hash) if [[ "$_st" == *'#'* ]]; then _want=dropped; else _want=reported; fi ;;
+      slash) if [[ "$_st" == *//* ]]; then _want=dropped; else _want=reported; fi ;;
+      star) if [[ "$_st" == *'*' ]]; then _want=dropped; else _want=reported; fi ;;
+      split) if [[ "$_st" == *//* ]]; then _want=reported; else _want=none; fi ;;   # a // line between a bar and its reader is a comment (skipped, the join is made) only where the style says so
+    esac
+    if grep -aq -- "^scripts/cs-$_kind-$_e\\.$_e:" <<<"$cs_out"; then _got=reported; else _got=none; fi
+    if [[ "$_kind" != split && "$_got" == none ]]; then _got=dropped; fi
     [[ "$_got" == "$_want" ]] || cs_bad+=" $_kind-$_e(want $_want)"
   done
   _der=""
   if [[ "$_cs_h" == *" $_e "* ]]; then _der+='#'; fi
-  if [[ "$_cs_s" == *" $_e "* ]]; then _der+='//'; fi
+  if [[ "$_cs_s" == *" $_e "* ]]; then _der+='//*'; elif [[ "$_cs_b" == *" $_e "* ]]; then _der+='//'; fi
   [[ "$_der" == "$_st" ]] || cs_lists+=" $_e(table '$_st', lists '$_der')"
 done
-for _e in ${SWEEP_HASH_EXTS[@]+"${SWEEP_HASH_EXTS[@]}"} ${SWEEP_SLASH_EXTS[@]+"${SWEEP_SLASH_EXTS[@]}"}; do
+for _e in ${SWEEP_HASH_EXTS[@]+"${SWEEP_HASH_EXTS[@]}"} ${SWEEP_SLASH_EXTS[@]+"${SWEEP_SLASH_EXTS[@]}"} ${SWEEP_CBLOCK_EXTS[@]+"${SWEEP_CBLOCK_EXTS[@]}"}; do
   [[ " $SWEEP_COMMENT_STYLES " == *" $_e:"* || "$_e" == md ]] || cs_lists+=" $_e(in a list, not in the table)"
 done
+if [[ " ${SWEEP_SLASH_EXTS[*]} ${SWEEP_CBLOCK_EXTS[*]} " == *" md "* ]]; then cs_lists+=" md(markdown is read through its fences and takes the hash comment only)"; fi
 [[ "$cs_n" == "${#SWEEP_EXTS[@]}" && -z "$cs_bad" && -z "$cs_lists" ]] \
-  || sweep_probe_fail+=("comment-style-lists: ${cs_n:-<err>} extensions in the style table (want ${#SWEEP_EXTS[@]}, one per SWEEP_EXTS member); lines read the wrong way:${cs_bad:- none}; lists that disagree with the table:${cs_lists:- none} (SWEEP_HASH_EXTS and SWEEP_SLASH_EXTS drive _strip_comments; a new extension needs its comment style in both places)")
+  || sweep_probe_fail+=("comment-style-lists: ${cs_n:-<err>} extensions in the style table (want ${#SWEEP_EXTS[@]}, one per SWEEP_EXTS member); lines read the wrong way:${cs_bad:- none}; lists that disagree with the table:${cs_lists:- none} (SWEEP_HASH_EXTS, SWEEP_SLASH_EXTS and SWEEP_CBLOCK_EXTS drive _strip_comments; a new extension needs its comment style in both places)")
 
 # The marker pin: every marked line in the swept files (the guard and every knowledge-base archive/ directory excluded) is pinned per file. The derivation
 # goes through sweep_git_grep, so its population is exactly the swept files. A new marker needs the reason in the PR body and one row here. Markdown is not
@@ -1650,7 +1839,7 @@ tests/scripts/test-git-data-birth-readiness-gate.sh:4
 tests/scripts/test-sentry-full-root-apply.sh:2
 EOF
 SWEEP_MARKER_PIN="${SWEEP_MARKER_PIN_ROWS%$'\n'}"   # path:count, sorted bytewise (LC_ALL=C), one row per line so a change is a one-line diff
-mp_rc=0; mp_raw="$(sweep_git_grep . -cE -e "$ALLOW_MARKER")" || mp_rc=$?
+mp_rc=0; mp_raw="$(sweep_git_grep . -cE -e 'sigpipe-demo' --and -e "$ALLOW_MARKER")" || mp_rc=$?   # the literal first: 4.8 s CPU became 0.5 s, the same rows
 mp_now="$(LC_ALL=C sort <<<"$mp_raw")"
 [[ "$mp_rc" -le 1 && "$mp_now" == "$SWEEP_MARKER_PIN" ]] \
   || sweep_probe_fail+=("marker-pin: the per-file counts of '# sigpipe-demo: intentional' lines differ from SWEEP_MARKER_PIN (git grep rc ${mp_rc:-<err>}). '<' is pinned and absent now, '>' is present now and unpinned:"$'\n'"$(diff <(printf '%s\n' "$SWEEP_MARKER_PIN") <(printf '%s\n' "$mp_now") | sed 's/^/    /' || true)"$'\n'"    To accept a NEW marker: put its reason in the PR body and paste the '>' row (path:count, in this sorted order) into the SWEEP_MARKER_PIN_ROWS block above this check; a marker in a markdown fence is never honoured, so it cannot be pinned")
@@ -1658,11 +1847,18 @@ mp_now="$(LC_ALL=C sort <<<"$mp_raw")"
 # Self-sweep (G3-10): the real run read the repository, including this change's own spec dir; a fixture or a reader shape written as text in a script
 # there would be a hit. Zero undeferred hits under the specs tree, by name, so the failure says where the shape came from.
 # The scan must be the real run's (it starts with its SWEPT line): an unset or empty SWEEP_LAST_SCAN counts zero hits and would pass.
-sd_hits=$(grep -ac '^knowledge-base/project/specs/[^:]*:[0-9]*:' <<<"${SWEEP_LAST_SCAN:-}" || true)
-sd_msg="the real sweep reported ${sd_hits:-<err>} reader-shaped line(s) under knowledge-base/project/specs/ (a spec-dir script holds a literal early-exit reader: keep such text in .txt data files and build mutants with printf)"
-[[ "${SWEEP_LAST_SCAN:-}" == SWEPT:* ]] || sd_msg="this check ran with no scan to read (SWEEP_LAST_SCAN is empty, so the real sweep recorded none and zero hits would mean nothing)"
-[[ "${SWEEP_LAST_SCAN:-}" == SWEPT:* && "${sd_hits:-<err>}" == 0 ]] \
-  || sweep_probe_fail+=("spec-dir-zero: $sd_msg")
+_spec_dir_state() { # <scan> -> "noscan", or "hits:<n>" (the count of reader-shaped lines under knowledge-base/project/specs/)
+  local scan="$1" n
+  [[ "$scan" == SWEPT:* && "$scan" == *$'\nFENCELINES: '* ]] || { echo noscan; return 0; }
+  n=$(grep -ac '^knowledge-base/project/specs/[^:]*:[0-9]*:' <<<"$scan" || true)
+  echo "hits:$n"
+}
+sd_state="$(_spec_dir_state "${SWEEP_LAST_SCAN:-}")"
+sd_ctl="$(_spec_dir_state $'SWEPT: 3 files\nMDSWEPT: 0 files\nSPLITJOINS: 0\nFENCELINES: 0\nknowledge-base/project/specs/f/a.sh:1:t\nscripts/b.sh:2:t')|$(_spec_dir_state '')|$(_spec_dir_state 'SWEPT: 1 files')|$(_spec_dir_state $'SWEPT: 1 files\nMDSWEPT: 0 files\nSPLITJOINS: 0\nFENCELINES: 0')"
+sd_msg="the real sweep reported ${sd_state#hits:} reader-shaped line(s) under knowledge-base/project/specs/ (a spec-dir script holds a literal early-exit reader: keep such text in .txt data files and build mutants with printf)"
+[[ "$sd_state" != noscan ]] || sd_msg="this check ran with no complete scan to read (SWEEP_LAST_SCAN is empty or cut, so the real sweep recorded none and zero hits would mean nothing)"
+[[ "$sd_state" == hits:0 && "$sd_ctl" == "hits:1|noscan|noscan|hits:0" ]] \
+  || sweep_probe_fail+=("spec-dir-zero: $sd_msg (the check's own control read [$sd_ctl], want [hits:1|noscan|noscan|hits:0])")
 
 # What a line regex deliberately does NOT match (documented residuals) and the one known false positive, pinned as literal counts so a
 # widening or a regression shows up as a changed number and a header edit rather than as silent drift.
@@ -2555,12 +2751,12 @@ pj_col_shapes="$(pj_collide $'function base(p) { return p }\n    function anybar
 [[ -z "$pj_col_real" && "$pj_col_progs" == 2 && "$pj_col_names" == "PJ_AWK PJ_DEFS_AWK " && "$pj_col_cols" -gt 0 && "$pj_col_read" -ge "$pj_col_cols" && "$pj_col_pos" == "anybar:base" && -z "$pj_col_neg" && "$pj_col_two" == "b:a c:a " \
   && "$pj_col_shapes" == "anybar:base|anybar:base|anybar:base|anybar:base" ]] \
   || sweep_probe_fail+=("awk-param-collision: a function parameter that is also a function name in the derivation or the finder program [${pj_col_real:-none}] (want none: mawk stops on it), read from ${pj_col_progs:-<err>} programs named [${pj_col_names}] (want 2: PJ_AWK PJ_DEFS_AWK) with ${pj_col_read:-<err>} headers against ${pj_col_cols:-<err>} column-0 ones (want at least as many); the known collision read as [${pj_col_pos:-NOTHING}] (want anybar:base), the distinct-name program as [${pj_col_neg:-none}] (want none), two collisions as [${pj_col_two:-none}] (want b:a c:a); an indented header, two functions on one line, a parameter list continued on the next line and a function defined after its use read as [${pj_col_shapes:-NOTHING}] (want anybar:base four times)")
-# The same lint over the sweep's two awk programs (they define functions, and mawk stops on a parameter that is also a function name): clean, and read (3 headers).
+# The same lint over the sweep's two awk programs (they define functions, and mawk stops on a parameter that is also a function name): clean, and read (4 headers).
 sw_col_raw="$(pj_collide_raw "$SWEEP_SPLIT_AWK")"$'\n'"$(pj_collide_raw "$SWEEP_FENCE_AWK")"
 sw_col_real="$(grep -v '^FUNCS ' <<<"$sw_col_raw" | grep . || true)"
 sw_col_read=$(sed -n 's/^FUNCS //p' <<<"$sw_col_raw" | LC_ALL=C awk '{ n += $1 } END { print n + 0 }')
-[[ -z "$sw_col_real" && "$sw_col_read" == 3 ]] \
-  || sweep_probe_fail+=("sweep-awk-collision: a function parameter that is also a function name in SWEEP_SPLIT_AWK or SWEEP_FENCE_AWK [${sw_col_real:-none}] (want none: mawk stops on it), read ${sw_col_read:-<err>} function headers (want 3: nm, isjs, close_fence)")
+[[ -z "$sw_col_real" && "$sw_col_read" == 4 ]] \
+  || sweep_probe_fail+=("sweep-awk-collision: a function parameter that is also a function name in SWEEP_SPLIT_AWK or SWEEP_FENCE_AWK [${sw_col_real:-none}] (want none: mawk stops on it), read ${sw_col_read:-<err>} function headers (want 4: nm, isjs, flush, close_fence)")
 mkdir -p "$probe/pj"
 # GUARD 1, the derivation fixture suite. One case table and one loop, run through pj_derive (the call the real run makes) and the shared extension list.
 # A case is `name @@ expectations @@ file=text @@ file=text`: each expectation is `y:VERB` (the pair fxa.test.sh|VERB must derive) or `n:VERB` (it must
@@ -3093,7 +3289,7 @@ wire_a=$(grep -cE '^sweep_main \. "\$SWEEP_FLOOR" "\$SWEEP_MD_FLOOR" "\$SWEEP_MD
 wire_b=$(grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' <<<"$_code" || true)
 wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" "\$SWEEP_MD_FLOOR" "\$SWEEP_MD_FENCE_FLOOR" "\$SWEEP_SPLIT_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" | grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' || true)
 [[ "$wire_a" == 1 && "$wire_b" == 1 && "$wire_adj" == 1 ]] \
-  || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" \"\$MD_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
+  || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" \"\$SWEEP_MD_FLOOR\" \"\$SWEEP_MD_FENCE_FLOOR\" \"\$SWEEP_SPLIT_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
 # The verdict gate and the final exit are pinned the same way, but they report DIRECTLY (FAIL and exit 1 below, just ahead of the gate): a failure
 # appended to sweep_probe_fail is read by that very gate, so a gate edited to always pass would silence its own pin.
 # The producer-join verdict sinks: the judge, the row checks and the triple pin each print their FAIL lines into a variable that ONE column-0 statement merges into
@@ -3156,7 +3352,7 @@ ps_priv=no; [[ "$ps_lin" == *PATTERN* ]] && ps_priv=yes
 # of checks (the pin's own line included); comment lines are excluded, so rewording a comment can neither hide a deletion nor trip the pin,
 # and the append is counted only where an `||` or `&&` operator immediately precedes it, so a bare tail with no operator cannot stand in for
 # a deleted check (a decoy that fabricates a whole `|| sweep_probe_fail+=(` line is an edit of the probe itself, which review reads).
-SWEEP_PROBE_CHECKS=77
+SWEEP_PROBE_CHECKS=80
 probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code" || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")

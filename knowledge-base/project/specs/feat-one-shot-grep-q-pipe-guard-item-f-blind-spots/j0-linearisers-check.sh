@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# PLAN-TIME PROTOTYPE CHECK, kept as evidence only: it drives j0-split.awk and j0-fence.awk, which the guard text supersedes (see their first lines).
 # Item F prototype check (J0c): drives j0-split.awk and j0-fence.awk on built fixtures and prints the reported lines.
 # Fixture shapes are built with printf from split pieces so this script holds no literal reader shape (the sweep reads this dir).
 set -u

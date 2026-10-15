@@ -14,7 +14,6 @@ all="$(git -c core.excludesFile=/dev/null grep --no-index -anE -e "$PAT" -- "${F
 fence="$(awk -f "$H/j0-fence-all.awk" "${F[@]}")"
 # fence lines are path:ln:text:flag; key the join on path:ln
 keys() { cut -d: -f1,2; }
-fenced_keys="$(printf '%s\n' "$fence" | keys)"
 n_all=$(printf '%s\n' "$all" | grep -c . || true)
 inf=0; inf_pf=0; inf_nopf=0; files_nopf=""
 while IFS= read -r l; do

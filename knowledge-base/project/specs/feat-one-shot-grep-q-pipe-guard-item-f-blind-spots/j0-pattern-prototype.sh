@@ -4,7 +4,7 @@
 # It prints the live-tree delta (shipped pattern vs widened pattern over the guard's own sweep population) and a fixture table.
 # The widened text is the STARTING POINT of Phase 1 in the plan, not the authority: the guard's own fixtures are.
 set -u
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)" || exit 9
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 OLD='(^|[^|])\|&?[[:space:]]*(\{[[:space:]]+|\([[:space:]]*)?((command|builtin|exec|env|nice|stdbuf[[:space:]]+-[a-zA-Z]+|timeout[[:space:]]+[0-9a-z.]+)[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(\\|/[^[:space:]]*/)?(e|f)?grep([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?|-[efABCm][[:space:]]+[^[:space:]]+))*[[:space:]]+(-[A-Za-z]*[qm][A-Za-z0-9]*|--quiet|--silent|--max-count)'
 # TOK: one shell word, quote-aware, so a quoted pattern that contains " -q " is consumed whole and never read as a flag.

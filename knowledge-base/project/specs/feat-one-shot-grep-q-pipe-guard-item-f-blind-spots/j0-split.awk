@@ -1,3 +1,5 @@
+# PLAN-TIME PROTOTYPE, kept as evidence only. The guard text (SWEEP_SPLIT_AWK, SWEEP_FENCE_AWK in .claude/hooks/grep-q-pipe-guard.test.sh) supersedes it:
+# this copy still has the bugs the review rounds fixed (file name taken at flush, no continuation join, no counters, no ./ operand prefix).
 # Item F prototype (J0c): linearise a trailing single bar. Emits "FILE:LINE: | <next code line, left-trimmed>" for every
 # line that ends in a single bar (not "||", not a YAML block-scalar indicator, not a comment) joined to the next non-comment,
 # non-blank line. POSIX awk only (no gensub, no \b, no 3-argument match). The reader test is NOT here: the shared filter does it.

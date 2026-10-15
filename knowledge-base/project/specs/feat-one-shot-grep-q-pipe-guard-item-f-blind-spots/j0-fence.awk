@@ -1,3 +1,5 @@
+# PLAN-TIME PROTOTYPE, kept as evidence only. The guard text (SWEEP_SPLIT_AWK, SWEEP_FENCE_AWK in .claude/hooks/grep-q-pipe-guard.test.sh) supersedes it:
+# this copy still has the bugs the review rounds fixed (file name taken at flush, no continuation join, no counters, no ./ operand prefix).
 # Item F prototype (J0c): linearise fenced code of a markdown file. A fence is opened by a line of 3+ backticks or tildes
 # (optionally indented, optional info string) and closed by a line of the SAME character with at least as many. Its code lines
 # are emitted as "FILE:LINE:text" only when the fence text contains the token "pipefail" (checked at close; an unclosed fence is
