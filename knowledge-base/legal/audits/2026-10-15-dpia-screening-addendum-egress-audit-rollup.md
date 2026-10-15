@@ -8,6 +8,7 @@ addendum_to: "knowledge-base/legal/audits/2026-10-05-dpia-screening-agent-web-eg
 processing_activity: "Article 30 register Processing Activity 2 — Conversation Data, opt-in web-egress sub-purpose (#9534), extended by the PR1 egress audit rollup store (#9545). A dedicated register row is proposed in the PR1 legal commits, not asserted here."
 conclusion: "PR1 as designed (dark pipeline, no member read, no external-workspace collection): a full DPIA is NOT required on the facts as designed, PROVISIONAL. The facts of the 2026-10-05 memo are changed. WP248 criterion 3 (systematic monitoring) is now partly engaged alongside the memo's partly-engaged innovative-technology criterion, so the WP248 'two criteria' threshold is reached in the partial sense. The full t6 re-screen is a PR2 merge gate and must treat a full DPIA as a live outcome. New trigger t7 pinned."
 plan: "knowledge-base/project/plans/2026-10-15-feat-workspace-egress-audit-log-plan.md"
+final_pipeline_addendum: "section 11 (Addendum, 2026-10-15): reconciliation with the final pipeline and the Phase 0 measurements; supersedes the design-statement wording of sections 2 (attribution paragraph), 3 (Art. 35(3)(b) row), 4 (provisional paragraph) and 7 as marked there"
 pr: "10349 (draft, unmerged)"
 related:
   [
@@ -76,6 +77,8 @@ yet by test against the pinned Squid image; the Phase 0 measurement closes
 that. Until it does, the attribution-integrity statement here is a design
 intent, not a verified control.)
 
+> **Superseded 2026-10-15 (#9545), by section 11.1.** The Phase 0 measurement has since been taken on the pinned Squid 6.13: it logs the presented username on a failed login (HTTP 407), so the forged-attribution risk is real. The statement above that rows from failed authentication "are dropped before the database" is accurate only because Vector keeps a **positive status allowlist** (200, 403, 502, 503, 504) and drops 407, an aborted connection's 000, a non-UUID workspace and the gateway's own `probe` username before the application. The earlier text is left as written.
+
 **Write path:** Vector rollup, bearer-authenticated ingest route, one
 `SECURITY DEFINER` RPC (service role only, no tenant `INSERT` policy), skipping
 and counting rows for unknown workspaces and for workspaces whose
@@ -97,6 +100,8 @@ off, switchable without a deploy.
 | WP248 criterion 7: vulnerable data subjects or imbalance | Not met (population = opt-in owners and users) | **To be re-assessed at PR2, not concluded here.** Team-workspace members are not the opt-in party (the owner is), and an employee/employer imbalance is the classic WP248 example. The 2026-10-05 reasoning ("the feature is their opt-in") does not carry over to members who did not opt in. |
 | WP248 criterion 8: innovative use of technology | Partially engaged | Unchanged, partially engaged. |
 | WP248 criteria 6 (matching) and 9 (prevents exercise of rights) | Not met | Not met. The store is keyed by workspace and joined to nothing. An Art. 15/17 path must exist before external enablement (DSAR runbook is a PR1 acceptance criterion). |
+
+> **Superseded 2026-10-15 (#9545), by section 11.5, as to one clause of the Art. 35(3)(b) row above.** The row says Sentry payloads carry "reason codes and counts only". Corrected: they are designed to carry counts and error classes (including a database error code) and no workspace or host value, but the text of a database error returned by the ingest function is mirrored to Sentry and could echo a fragment of a row value. The earlier text is left as written.
 
 **Count.** The 2026-10-05 memo had one partially-engaged criterion and
 concluded the "two criteria in most cases" threshold was not met. With
@@ -131,6 +136,8 @@ traffic from one workspace value, so real customer volume is unmeasured), and
 the account-erasure path for solo workspaces (whether it deletes or anonymises
 the workspace row). Each is an acceptance criterion or Phase 0 gate in the
 plan. This addendum is not a statement that any of them has passed.
+
+> **Superseded 2026-10-15 (#9545), by section 11.1, as to three of the four items in the paragraph above.** The 407 attribution behaviour, the cardinality cap under a 100,000-unique-host flood and the account-erasure path for solo workspaces **were measured** in plan Phase 0 (results at 11.1). Only the real rows-per-day figure is still unmeasured. The paragraph's "design statements today, not measurements" is therefore wrong as to those three and right as to the fourth. The earlier text is left as written; the PR1 conclusion stays provisional (see 11.1 and 11.7).
 
 **The full t6 re-screen stays a PR2 merge gate.** It runs when the member
 `SELECT` policy and read route are in the diff, against the readable state.
@@ -203,6 +210,8 @@ anonymising, the workspace row; the work phase reads it first.
 number is the CLO's call and gates both enabling collection and merging the
 PR1 legal commits.** This addendum records 30 days as the proposed number, not
 as an approved one.
+
+> **Superseded 2026-10-15 (#9545), by section 11.3, as to "30 days, hard-deleted daily".** The sweep runs once a day at 04:30 UTC and deletes rows whose `last_seen` is more than 30 days old, so a row can live up to about 31 days. 30 days remains the **proposed** number and is still not approved. The earlier text is left as written.
 
 ## 8. Items for the operator and counsel to confirm
 
@@ -281,3 +290,53 @@ readable state is a **PR2 merge gate**, tracked on #9545.
 These are authorizations the operator still holds: enabling the flag in
 production, creating the runtime flag, and publishing any notice or legal
 text.
+
+## 11. Addendum — 2026-10-15: reconciliation with the final pipeline and the Phase 0 measurements
+
+**Timing.** Same as the box at the top: this describes PR #10349 (draft, unmerged) and the pipeline as it stands in its final code state. Nothing here is evidence that collection is happening. The pipeline is dark and ships behind a Flagsmith runtime flag (`egress-audit-collection`) that is OFF for every external workspace until PR2 has shipped and the 7-day owner notice has run (rulings A and B). Sources: ADR-288 (updated), migration 162, `apps/web-platform/server/egress-audit-ingest.ts`, the "Egress audit rollup" section of `apps/web-platform/infra/vector.toml`, plan Phase 0.6.
+
+### 11.1 What was measured (corrects sections 2 and 4)
+
+| Item the earlier text called a design statement | Result |
+|---|---|
+| 407 attribution behaviour | **Measured.** Squid 6.13 logs the presented username on a failed login, both for a bogus token and for another workspace's valid token, with HTTP status 407. A bad-credential attempt naming a victim workspace would therefore be attributed to it. Control: the gateway log gains the HTTP status as its last field and Vector keeps only a **positive allowlist** (200, 403, 502, 503, 504); 407, an aborted connection's 000, an older gateway's missing status, a non-UUID workspace and the gateway's own `probe` username are dropped before the application. |
+| Cardinality cap under a flood | **Measured.** One workspace with 100,000 unique hosts peaks at 426 MiB uncapped; ten workspaces at the 1,000-event cap peak at 162 MiB (270 MiB at 2,000, over the unit's 256 MiB limit). The per-workspace cap alone does not bound memory (19 workspaces at the cap exceed it), so a second keyless cap of 10,000 events per 15 minutes bounds the total. |
+| Real rows per day | **Still unmeasured.** In 8 days the gateway log held 3,434 rows, 3,425 from its own probe and 9 unauthenticated. The ADR's write-volume figures are estimates. |
+| Account-erasure path for solo workspaces | **Measured.** The account-erasure saga keeps the orphan workspace row (migration 065), so the `ON DELETE CASCADE` from the workspace does **not** cover erasure. Saga step 5.15 calls `erase_egress_audit_rollup`, which erases only a workspace with no member left; the ingest function skips such an orphan workspace, under a `FOR SHARE` lock on the member rows, so a late buffered bucket cannot re-create erased history. |
+
+Effect on the conclusion: the PR1 position ("no full DPIA on the facts as designed, PROVISIONAL") is unchanged, but it now rests on one unmeasured fact (real volume) plus the open items at 11.7, not on four design statements. The PR2 t6 re-screen is still a merge gate and still treats a full DPIA as a live outcome.
+
+### 11.2 One residual on attribution, not verified here
+
+Two `http_access deny` rules (a non-CONNECT method, and a CONNECT to a port other than 443) sit **before** the authentication rule in `egress-gateway-squid.conf`, and 403 is on the allowlist. Whether Squid 6.13 logs a presented-but-unverified username on a request denied by one of those two rules was **not** part of the Phase 0 measurement, and this addendum does not know. If it does, a client that sends a forged workspace username with a non-443 CONNECT could produce a 403 row attributed to that workspace (and the row would be stored if that workspace has collection on). This is for engineering to measure, not a legal conclusion; the public wording is written so that it does not claim more than the allowlist delivers.
+
+### 11.3 Retention, stated precisely (corrects section 7)
+
+A daily `pg_cron` job (04:30 UTC) deletes rows on `last_seen` older than 30 days. A row can therefore be held for up to about 31 days (30 days after its last update, plus up to a day until the next sweep); a bucket's last update is itself at most 15 minutes after the bucket opens. Public text now says "about 30 days, up to about 31" and that the number is a proposal. **30 days is still the proposed number, not an approved one; approval is a counsel/CLO item (11.7) that gates enabling.** The freshness probe flags a row older than 35 days; it is a manual command until it is scheduled (11.6).
+
+### 11.4 The raw gateway log holds more than the earlier text said
+
+The Better Stack copy (90 days) carries, per decision: `ts`, `decision` (the gateway's own result code), `decision_reason` (the error code), `requested_host`, `resolved_ip`, `workspace` (the username the client presented, so it also holds attempts that failed authentication), `bytes_out`, `duration_ms`, `client` and `status`. The earlier public sentences omitted `bytes_out`, `decision_reason` and `status`; they now include them. The **rollup** field `decision` is normalised to `allowed | denied | other` (not just allowed or denied), and one `(other)` host row is created per decision and source host per bucket once a workspace reaches 500 distinct rows in a bucket.
+
+**Marker lines.** When a throttle discards events, a marker line is written into the same Better Stack plane: `SOLEUR_EGRESS_AUDIT_THROTTLED` carries a **workspace id**, which for a solo workspace is the owner's user id and is therefore **personal data**; `SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL` carries a count only. Both are held 90 days and are subject to the same access rules as the raw gateway log. They are not erasable by workspace.
+
+### 11.5 Sentry (corrects the Art. 35(3)(b) row and PA-37 limb (c))
+
+The ingest route's Sentry events are designed to carry counts, a reason code and, for a database fault, the database error code, and never a requested host or workspace value. They are **not** guaranteed free of row content: on an RPC failure the error text from the database is mirrored, and a database error message can quote a fragment of the offending value. Sentry is an existing processor; the exposure is a possible incidental fragment, not a field.
+
+### 11.6 Operational state for the record
+
+- The pipeline is dark: no read policy, `SELECT` revoked from `anon` and `authenticated`, flag OFF for every external workspace. Enabling is an operator action with preconditions listed in `knowledge-base/engineering/operations/runbooks/egress-audit-enable.md`.
+- The retention/freshness probe `scripts/egress-audit-retention-check.sh` is **manual until it is scheduled**; scheduling it is a precondition of enabling collection for any workspace.
+- DSAR: export and erasure by workspace follow `knowledge-base/engineering/operations/runbooks/egress-audit-dsar.md`. An explicit request made while the account stays open goes through `erase_egress_audit_rollup_for_requester(workspace, requester)`, which deletes only when the requester is the sole member of the workspace. A team workspace's rows describe its agents, not a named member, and an erasure request from one member does not delete them.
+- Migration 162 is applied and the application deployed only when PR #10349 merges; the public documents describe the rollup as shipping switched off and use will-be wording for the controls.
+
+### 11.7 Counsel items, all OPEN
+
+1. **Team-workspace role versus lawful basis. OPEN, deliberately not resolved here.** The drafts record Jikigai as **processor** for a team workspace's rollup with no Art. 6 basis of its own, while Jikigai chose the fields, the retention and the purpose (controller conduct), and the same drafts rest the rollup on Art. 6(1)(f). Both cannot be right as drafted (section 6, section 8 inconsistency 2; PA-37 limb (a); reserved `P-3` in `article-30-2-register.md`). Owed before collection is enabled for the first non-Jikigai team workspace: the capacity decision (processor, controller or joint controller), an Art. 28(3) instrument if processor, and a standalone LIA.
+2. **Retention number.** 30 days (about 31 in practice) is proposed, not approved; it gates enabling.
+3. **Art. 21 and the toggle.** Whether toggle-off plus the DSAR route is sufficient given that toggle-off leaves records in place.
+4. **WP248 criterion 3 and 7** at the PR2 re-screen; the supervisory authority's Art. 35(4) list is unverified.
+5. **The pre-authentication 403 residual (11.2)**, once engineering has measured it.
+6. **Marker lines (11.4)** as personal data in the Better Stack plane, and the Sentry fragment exposure (11.5): confirm that the existing PA-8 and Sentry entries cover them.
+7. That no `docs/legal/terms-and-conditions.md` change or `TC_VERSION` bump is owed.
