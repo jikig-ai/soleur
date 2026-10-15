@@ -32,7 +32,8 @@
 # its sysfs sector counters must still read 0 0, it must have no holders and the snapshot must be gone.
 # What it reads is `find -mindepth 1 -maxdepth 1 -printf '%y\t%f\0'` over the snapshot (no -L, nothing
 # dereferenced), against a PATH-TYPED allowlist: `repositories` and `lost+found` must be real
-# directories, `.gc-cursor` and the lock dotfiles must be regular files. Anything else is off the list.
+# directories (`lost+found` also EMPTY), `.gc-cursor` and the lock dotfiles must be regular files (under
+# repositories/ the lock-name exclusion applies to regular files only). Anything else is off the list.
 #
 # NO NAME LEAVES THE HOST. The output is one fixed-shape line of per-type COUNTS (no digest, no name,
 # no per-name hash, nothing from inside repositories/ but a count). Names are read into shell variables
@@ -158,6 +159,17 @@ wa_main() {
     case "$arc" in 0) return 0 ;; 1) return 1 ;; *) die 16 awk_failed ;; esac
   }
   # wl_same — the by-id link still names the device pinned at resolution (a path is not an identity).
+  # byid_present — is the typed volume's by-id link still there? 0 = listed, 1 = ABSENT. "Absent" is only ever
+  # a positive reading: the by-id directory listed successfully AND still names the retained LUKS volume's link
+  # (so the listing is a real, complete one) AND does not name the typed link. A stat that fails (EACCES, EIO,
+  # ELOOP, a missing binary) is not "the link is gone", so nothing here asks stat; any doubt is rc 16.
+  byid_present() {
+    local names
+    names="$(ls -A -- /dev/disk/by-id)" || die 16 byid_dir_unreadable
+    case $'\n'"$names"$'\n' in *$'\n'"${BYID_LUKS##*/}"$'\n'*) : ;; *) die 16 byid_listing_incomplete ;; esac
+    case $'\n'"$names"$'\n' in *$'\n'"${BYID##*/}"$'\n'*) return 0 ;; esac
+    return 1
+  }
   wl_same() {
     local mm
     mm="$(devnum_hex "$BYID")" || die 20 device_vanished
@@ -188,10 +200,14 @@ wa_main() {
 
   # --- H1/H2: the store is still served by the mapper, not frozen, its marker bound ------------------------
   store_facts() {
-    local s fu m
+    local s fu m fz
     s="$(findmnt -n -o SOURCE --mountpoint "$OLD_ROOT")" || die 16 findmnt_source
     [ "$s" = "$MAPPER" ] || die 11 store_not_on_mapper
-    [ ! -e "$OLD_ROOT/.cutover-freeze" ] || die 12 cutover_frozen
+    # The sentinel is ABSENT only if the store root was read successfully and the name is not in it: `[ ! -e ]`
+    # is also true for EACCES / EIO / ELOOP, which would read an unreadable root as "not frozen". find exits
+    # non-zero on any such error (rc 16, never a verdict) and exits 0 with no output only for a real absence.
+    fz="$(find -H "$OLD_ROOT" -mindepth 1 -maxdepth 1 -name .cutover-freeze -print)" || die 16 freeze_probe
+    [ -z "$fz" ] || die 12 cutover_frozen
     fu="$(findmnt -n -o UUID --mountpoint "$OLD_ROOT")" || die 16 findmnt_uuid
     [ -n "$fu" ] || die 13 no_fs_uuid
     [ -f "$MARKER" ] && [ -s "$MARKER" ] || die 14 marker_absent
@@ -294,7 +310,7 @@ wa_main() {
   # body and never written anywhere. A name that cannot be classified is "unparseable", not skipped.
   wl_classify() {
     local rec t n saw_end=0
-    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no OFFLIST=0
+    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no HAS_LF=no OFFLIST=0
     while IFS= read -r -d '' rec; do
       t="${rec%%$'\t'*}"
       n="${rec#*$'\t'}"
@@ -306,7 +322,7 @@ wa_main() {
       case "$t" in d) TOP_D=$((TOP_D + 1)) ;; f) TOP_F=$((TOP_F + 1)) ;; l) TOP_L=$((TOP_L + 1)) ;; *) TOP_O=$((TOP_O + 1)) ;; esac
       case "$n:$t" in
         repositories:d) HAS_REPOS=yes ;;
-        lost+found:d) : ;;
+        lost+found:d) HAS_LF=yes ;;
         .gc-cursor:f | .init.lock:f | .*.init.lock:f) : ;;
         *) OFFLIST=1 ;;
       esac
@@ -314,7 +330,7 @@ wa_main() {
     [ "$saw_end" = 1 ] || die 33 listing_failed
   }
   wipe_listing() {
-    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn names_after hold_after w_after ro_after
+    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln names_after hold_after w_after ro_after
     wl_same
     sb="$(timeout 20 dumpe2fs -h "$DEV")" || die 33 dumpe2fs_failed
     if wl_has_nr "$sb"; then J=dirty; else J=clean; fi
@@ -358,12 +374,21 @@ wa_main() {
     # printed when find exits 0, and wl_classify refuses a stream without it.
     wl_classify < <(timeout 30 find "$WA_MNT" -mindepth 1 -maxdepth 1 -printf '%y\t%f\0' && printf 'E\tEND\0')
     # Counts under repositories/ — only if it is a real directory (find never follows); the bootstrap's
-    # exclusions, so a lock dotfile or lost+found is not a repository. Nothing but the count is kept.
+    # exclusions, narrowed to the TYPE they stand for: a lock is a REGULAR FILE and lost+found an EMPTY
+    # DIRECTORY, so a directory, symlink or other entry carrying a lock name (or a lost+found that holds
+    # anything) is counted, not excluded. Nothing but the count is kept.
     REPOS=0
     if [ "$HAS_REPOS" = yes ]; then
-      rn="$(timeout 30 find "$WA_MNT/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found -printf x | wc -c)" || die 33 repos_count_failed
+      rn="$(timeout 30 find "$WA_MNT/repositories" -mindepth 1 -maxdepth 1 ! \( -type f \( -name '.*.init.lock' -o -name '.init.lock' \) \) ! \( -type d -name lost+found -empty \) -printf x | wc -c)" || die 33 repos_count_failed
       [[ "$rn" =~ ^[0-9]+$ ]] || die 33 repos_count_unparseable
       REPOS="$rn"
+    fi
+    # The allowlisted top-level lost+found is a directory whose CONTENTS the classifier never opens: it must be
+    # empty (any entry inside is off the list; only the count is read, never a name).
+    if [ "$HAS_LF" = yes ]; then
+      ln="$(timeout 30 find "$WA_MNT/lost+found" -mindepth 1 -maxdepth 1 -printf x | wc -c)" || die 33 lostfound_count_failed
+      [[ "$ln" =~ ^[0-9]+$ ]] || die 33 lostfound_count_unparseable
+      [ "$ln" -eq 0 ] || OFFLIST=1
     fi
     e1="$(wl_errs "$dm")" || die 33 errors_count_unreadable
     [ "$e1" = "$e0" ] || die 33 errors_count_changed_by_listing
@@ -402,7 +427,7 @@ wa_main() {
     local t=0
     store_facts
     # The by-id link of the typed id must be GONE (udev drops it a moment after the detach).
-    while stat -- "$BYID"; do
+    while byid_present; do
       t=$((t + 1))
       [ "$t" -le "$WA_SETTLE_TRIES" ] || die 40 byid_still_present
       sleep 1

@@ -907,7 +907,7 @@ jobs:
           set -euo pipefail
           d="${RUNNER_TEMP}/doppler-cli"
           mkdir -p "$d"
-          curl -fsSL --retry 3 -o "$d/doppler.tar.gz" \
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 -o "$d/doppler.tar.gz" \
             "https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_CLI_VERSION}/doppler_${DOPPLER_CLI_VERSION}_linux_amd64.tar.gz"
           echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -
           tar xzf "$d/doppler.tar.gz" -C "$d" doppler
@@ -940,7 +940,7 @@ jobs:
               exit 5
             fi
             runs=""
-            if ! runs="$(gh run list --workflow git-data-cutover.yml --limit "${WIPE_RUNS_LIST_LIMIT:-100}" --json databaseId,displayTitle,createdAt,conclusion,headBranch,event)"; then
+            if ! runs="$(timeout 60 gh run list --workflow git-data-cutover.yml --limit "${WIPE_RUNS_LIST_LIMIT:-100}" --json databaseId,displayTitle,createdAt,conclusion,headBranch,event)"; then
               runs=""
             fi
             grc=0
@@ -972,7 +972,7 @@ jobs:
             exit 5
           fi
           j=""
-          if ! j="$(gh run view "$ORIGIN_RUN" --json displayTitle,headBranch,event,createdAt,workflowName,jobs)"; then
+          if ! j="$(timeout 60 gh run view "$ORIGIN_RUN" --json displayTitle,headBranch,event,createdAt,workflowName,jobs)"; then
             echo "::error title=git-data-wipe::verdict=wipe_origin_run_unreadable"
             exit 5
           fi
@@ -1010,7 +1010,7 @@ jobs:
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           tok=""
-          tok="$(doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || tok=""
+          tok="$(timeout 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || tok=""
           if [[ -n "$tok" ]]; then printf '::add-mask::%s\n' "$tok"; fi
           helper() {
             env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" \
@@ -1322,8 +1322,22 @@ jobs:
           export WIPE_SERVER_ID WIPE_LUKS_VOLUME_ID
           rc=0
           out="$RUNNER_TEMP/wipe-w10.out"
+          # The host read did not answer: the access gate refused (3) or the verb exited 5 with verdict=probe_failed.
+          unanswered() {
+            [[ "$rc" -eq 3 ]] && return 0
+            [[ "$rc" -eq 5 ]] && grep -qE "^\[git-data-cutover\] STORE probe=[a-z-]+ verdict=probe_failed" "$out" && return 0
+            return 1
+          }
           bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-cutover.sh" > "$out" || rc=$?
           cat "$out"
+          # One retry, after 10 s, of this READ-ONLY check when the first attempt did not answer (a transient ssh or
+          # tunnel fault); a store verdict is never retried, and the second attempt decides.
+          if [[ "$rc" -ne 0 ]] && unanswered; then
+            sleep 10
+            rc=0
+            bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-cutover.sh" > "$out" || rc=$?
+            cat "$out"
+          fi
           if [[ "$rc" -ne 0 ]]; then
             # Only a host VERDICT says the store is not serving. The host verb also exits 5 with verdict=probe_failed
             # when the read did not answer (ssh transport, timeout, a malformed argument) and exits 3 when the access
@@ -1346,7 +1360,7 @@ jobs:
             bash -c 'set -euo pipefail
           IFS= read -r dt
           tok=""
-          tok="$(DOPPLER_TOKEN="$dt" doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || tok=""
+          tok="$(DOPPLER_TOKEN="$dt" timeout 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || tok=""
           if [[ -n "$tok" ]]; then printf "::add-mask::%s\n" "$tok"; fi
           bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-wipe.sh" identity --expect detached --volume-id "$VOLUME_ID" --record check <<<"$tok"' <<<"$DOPPLER_TOKEN"
 
@@ -1391,7 +1405,7 @@ jobs:
             bash -c 'set -euo pipefail
           IFS= read -r dt
           tok=""
-          tok="$(DOPPLER_TOKEN="$dt" doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || tok=""
+          tok="$(DOPPLER_TOKEN="$dt" timeout 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || tok=""
           if [[ -n "$tok" ]]; then printf "::add-mask::%s\n" "$tok"; fi
           bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-wipe.sh" readback --volume-id "$VOLUME_ID" <<<"$tok"
           # This run made a delete call only when the delete step wrote its marker. A wipe_finish that found the

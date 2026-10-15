@@ -90,7 +90,7 @@ mkdir -p "$T/cz" "$T/mut" "$T/sim" "$T/specs" "$T/cases" || { printf 'FAIL SETUP
 
 printf '\n=== git-data wipe job census (plan Phase 4/5, Guard Contract 1-8) ===\n\n'
 
-MUTANT_FLOOR=161
+MUTANT_FLOOR=177
 cat > "$T/wfsim.py" <<'PYEOF'
 #!/usr/bin/env python3
 # wfsim: a tiny GitHub-Actions expression engine, the wipe-job census, a step-by-step simulator that runs the
@@ -874,6 +874,29 @@ class Census:
         i_c, i_s, i_t = inst.find("curl "), inst.find("sha256sum -c"), inst.find("tar xzf")
         c("G1-install-verifies: the inline Doppler install checks the downloaded archive against the pinned sha256 (`sha256sum -c -`, fed from DOPPLER_CLI_SHA256) AFTER the download and BEFORE the unpack",
           0 <= i_c < i_s < i_t and 'echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -' in inst, (i_c, i_s, i_t))
+        inst_curls = re.findall(r"\bcurl\b[^\n]*", re.sub(r"\\\n\s*", " ", inst))
+        c("G1-timeout-install: the inline Doppler install is the step's only curl and it is bounded (--connect-timeout 20 and --max-time 120), so a stalled release download cannot hold the job to its 30-minute timeout",
+          len(inst_curls) == 1 and bool(re.search(r"--connect-timeout 20(?!\d)", inst_curls[0])) and bool(re.search(r"--max-time 120(?!\d)", inst_curls[0])), inst_curls)
+        dop_bad = []
+        for k_ in ro_steps:
+            t_ = code_text(by[k_].get("run") or "")
+            n_all = len(re.findall(r"\bdoppler secrets get HCLOUD_TOKEN_READONLY\b", t_))
+            n_to = len(re.findall(r"""(?<![\w-])timeout 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null\)" \|\| tok=""$""", t_, re.M))
+            if n_all != 1 or n_to != 1:
+                dop_bad.append((k_, n_all, n_to))
+        c("G1-timeout-doppler: each of the three read-only token fetches (wipe_identity, wipe_reread, wipe_readback) runs under `timeout 60` and a timeout lands on `|| tok=\"\"` (an absent token: the helper refuses wipe_readonly_token_absent), never on a value",
+          ro_steps == ["wipe_identity", "wipe_readback", "wipe_reread"] and not dop_bad, dop_bad)
+        gh_all = gh_to = 0
+        gh_bad = []
+        for s_ in steps:
+            t_ = code_text(s_.get("run") or "")
+            a_ = len(re.findall(r"\bgh run (?:list|view)\b", t_))
+            b_ = len(re.findall(r"(?<![\w-])timeout 60 gh run (?:list|view)\b", t_))
+            gh_all += a_; gh_to += b_
+            if a_ != b_:
+                gh_bad.append(skey(s_))
+        c("G1-timeout-gh: every `gh run list` / `gh run view` of the wipe job runs under `timeout 60` (a timeout reads as an unreadable run list or origin run, which both refuse); live count reported",
+          gh_all >= 2 and gh_all == gh_to and not gh_bad, "%d calls, %d bounded, unbounded in %s" % (gh_all, gh_to, gh_bad))
         kfr = code_text((by.get("wipe_key_fetch") or {}).get("run") or "")
         c("G1-key-validated: the root-key fetch validates what it fetched (non-empty, an OpenSSH private key per `ssh-keygen -y`) and fails with reason=not_openssh_key / empty / rc_nonzero before the job continues",
           'ssh-keygen -y -f "$keyfile"' in kfr and "reason=not_openssh_key" in kfr and "reason=empty" in kfr and "reason=rc_nonzero" in kfr and kfr.find("ssh-keygen -y") < kfr.rfind("exit 1"), "")
@@ -933,6 +956,12 @@ class Census:
           'bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-cutover.sh" > "$out" || rc=$?' in h10 and 'out="$RUNNER_TEMP/wipe-w10.out"' in h10 and "cat \"$out\"" in h10
           and 'if [[ "$rc" -eq 5 ]] && ! grep -qE "^\\[git-data-cutover\\] STORE probe=[a-z-]+ verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi' in h10
           and h10.count("refusal=store_not_serving") == 1 and '"$RUNNER_TEMP/wipe-w10.out"' in tdn, "")
+        w10_run = 'bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-cutover.sh" > "$out" || rc=$?'
+        c("G10-retry-once: W10 retries its READ-ONLY host check exactly once, after `sleep 10`, and only when the first attempt did not answer (the access gate's 3, or the verb's 5 carrying verdict=probe_failed); the second attempt decides and the refusal is published after it",
+          h10.count(w10_run) == 2 and h10.count("sleep 10") == 1 and 'if [[ "$rc" -ne 0 ]] && unanswered; then' in h10
+          and '[[ "$rc" -eq 3 ]] && return 0' in h10
+          and '[[ "$rc" -eq 5 ]] && grep -qE "^\\[git-data-cutover\\] STORE probe=[a-z-]+ verdict=probe_failed" "$out" && return 0' in h10
+          and 0 <= h10.find("sleep 10") < h10.rfind(w10_run) < h10.find("refusal=store_not_serving"), "")
         wr_lim = re.search(r'WIPE_RUNS_LIST_LIMIT:-(\d+)\}', code_text((by.get("wipe_flag_precheck") or {}).get("run") or ""))
         lib_lim = re.search(r"^readonly WIPE_RUNS_LIST_LIMIT=(\d+)$", libtext, re.M)
         c("G6-limit-parity: the W3 `gh run list --limit` default equals the run lib's WIPE_RUNS_LIST_LIMIT (the lib's `list is full` reach test compares against it), and the list asks for exactly the fields the lib reads",
@@ -1219,6 +1248,19 @@ W='__W__'
 ev "sleep $*"
 '''
 
+TIMEOUT_SH = r'''#!/usr/bin/env bash
+# A transparent `timeout`: it logs the bound it was given and runs the command, except that a world which sets
+# TIMEOUT_FIRES=<command name> makes the bound expire for that command (exit 124, the command never runs).
+W='__W__'
+. "$W/lib.sh"
+ev "timeout $1 $2"
+secs="${1:-}"; shift
+fires="$(sed -n 's/^TIMEOUT_FIRES=//p' "$W/state.env" | tail -n 1)"
+if [ -n "$fires" ] && [ "${1:-}" = "$fires" ]; then exit 124; fi
+real="$(PATH=/usr/bin:/bin command -v timeout)"
+exec "$real" "$secs" "$@"
+'''
+
 SUDO_SH = r'''#!/usr/bin/env bash
 W='__W__'
 . "$W/lib.sh"
@@ -1383,7 +1425,7 @@ def sim_main(spec):
     with open(W + "/state.env", "w") as fh:
         for k, v in st.items():
             fh.write("%s=%s\n" % (k, v))
-    for nm, txt in (("curl", CURL_SH), ("doppler", DOPPLER_SH), ("gh", GH_SH), ("date", DATE_SH), ("sleep", SLEEP_SH), ("sudo", SUDO_SH), ("env", ENV_SH)):
+    for nm, txt in (("curl", CURL_SH), ("doppler", DOPPLER_SH), ("gh", GH_SH), ("date", DATE_SH), ("sleep", SLEEP_SH), ("timeout", TIMEOUT_SH), ("sudo", SUDO_SH), ("env", ENV_SH)):
         write_exec(BIN + "/" + nm, txt, W)
     write_exec(ws + "/apps/web-platform/infra/git-data-cutover.sh", HOST_STUB, W)
     write_exec(ws + "/apps/web-platform/infra/git-data-flag-precheck.sh", PRECHECK_STUB, W)
@@ -1748,6 +1790,18 @@ MUTANTS = {
     "a5-server-from-luks": [S("wipe_host_assert", "WIPE_SERVER_ID=\"$(sed -n 's/^server_id=//p' \"$rec\")\"", "WIPE_SERVER_ID=\"$(sed -n 's/^luks_id=//p' \"$rec\")\"")],
     "w10-rc-any": [S("wipe_post_detach_read", 'if [[ "$rc" -eq 5 ]] && ! grep -qE "^\\[git-data-cutover\\] STORE probe=[a-z-]+ verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi', 'echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"')],
     "w10-probe-excl": [S("wipe_post_detach_read", ' && ! grep -qE "^\\[git-data-cutover\\] STORE probe=[a-z-]+ verdict=probe_failed" "$out"', "")],
+    "w10-retry-removed": [S("wipe_post_detach_read", 'if [[ "$rc" -ne 0 ]] && unanswered; then', 'if false; then')],
+    "w10-retry-verdict": [S("wipe_post_detach_read", '[[ "$rc" -eq 5 ]] && grep -qE "^\\[git-data-cutover\\] STORE probe=[a-z-]+ verdict=probe_failed" "$out" && return 0', '[[ "$rc" -eq 5 ]] && return 0')],
+    "w10-retry-nosleep": [S("wipe_post_detach_read", "            sleep 10\n", "")],
+    "w10-retry-first-decides": [S("wipe_post_detach_read", "            sleep 10\n            rc=0\n", "            sleep 10\n")],
+    "w10-retry-no-access": [S("wipe_post_detach_read", '            [[ "$rc" -eq 3 ]] && return 0\n', "")],
+    "t-install-maxtime-dropped": [S("wipe_doppler_install", " --max-time 120", "")],
+    "t-install-connect-dropped": [S("wipe_doppler_install", " --connect-timeout 20", "")],
+    "t-doppler-identity-dropped": [S("wipe_identity", "timeout 60 doppler", "doppler")],
+    "t-doppler-reread-dropped": [S("wipe_reread", "timeout 60 doppler", "doppler")],
+    "t-doppler-readback-dropped": [S("wipe_readback", "timeout 60 doppler", "doppler")],
+    "t-gh-list-dropped": [S("wipe_flag_precheck", "timeout 60 gh run list", "gh run list")],
+    "t-gh-view-dropped": [S("wipe_origin_check", "timeout 60 gh run view", "gh run view")],
     "nv-already-here": [J("notify", "finish with: ${finish_cmd_origin}, replacing", "finish with: ${finish_cmd_here}, replacing")],
     "w12-always-deleted": [S("wipe_readback", 'if [[ "$DELETE_PHASE" == "delete_sent" ]]; then', "if true; then")],
     "w12-standing-dropped": [S("wipe_readback", "This run does not address provider-side", "This run addresses provider-side")],
@@ -1842,6 +1896,9 @@ declare -A WANT=(
   [a2-precheck-exit5]=1 [a2-wipemode-check]=2 [a2-runs-fallback-open]=2 [a2-limit-10]=2 [a2-no-event-field]=2
   [a3-boot-exit5]=1 [a3-created-zero]=2 [a3-rrc-zero]=2 [a4-no-actions-call]=2 [a4-no-since]=2 [a4-never-detached]=2
   [a5-listing-skip]=2 [a5-row-dt-empty]=2 [a5-server-from-luks]=2 [w10-rc-any]=2 [w10-probe-excl]=2 [nv-already-here]=2 [w12-always-deleted]=2 [w12-standing-dropped]=2
+  [w10-retry-removed]=2 [w10-retry-verdict]=2 [w10-retry-nosleep]=1 [w10-retry-first-decides]=1 [w10-retry-no-access]=1
+  [t-install-maxtime-dropped]=2 [t-install-connect-dropped]=2 [t-doppler-identity-dropped]=2 [t-doppler-reread-dropped]=2 [t-doppler-readback-dropped]=2
+  [t-gh-list-dropped]=2 [t-gh-view-dropped]=2
   [f-retention-closed]=2 [nv-vid-unvalidated]=2 [nv-orig-always]=2 [nv-angle]=2 [h-identity-phase]=1
 )
 MUT_FILE=""
@@ -2010,6 +2067,17 @@ cmut e-forward-agent wf "WS-copy-parity:"
 cmut e-hostkeyalias wf "WS-copy-parity:"
 cmut e-updatehostkeys wf "WS-copy-parity:"
 cmut e-sha-dropped wf "G1-install-verifies:"
+cmut t-install-maxtime-dropped wf "G1-timeout-install:"
+cmut t-install-connect-dropped wf "G1-timeout-install:"
+cmut t-doppler-identity-dropped wf "G1-timeout-doppler:"
+cmut t-doppler-reread-dropped wf "G1-timeout-doppler:"
+cmut t-doppler-readback-dropped wf "G1-timeout-doppler:"
+cmut t-gh-list-dropped wf "G1-timeout-gh:"
+cmut t-gh-view-dropped wf "G1-timeout-gh:"
+cmut w10-retry-removed wf "G10-retry-once:"
+cmut w10-retry-verdict wf "G10-retry-once:"
+cmut w10-retry-nosleep wf "G10-retry-once:"
+cmut w10-retry-no-access wf "G10-retry-once:"
 cmut e-keyval-dropped wf "G1-key-validated:" "WS-copy-parity:"
 cmut e-xtrace-identity wf "G1-xtrace-all:"
 cmut b-w10-no-web-host-ssh wf "G10-env-contract:"
@@ -2452,6 +2520,19 @@ simdef neg-actions-none "${FIN_W[@]}" actions_json="$ACT_NONE"
 simdef lead-zero wipe pt_id=12345 volume_id=000000012345
 simdef host-read-access-fail wipe world_before='json:{"wipe_post_detach_read":{"HOST_ACCESS_FAIL":"1"}}' notify="$T_TRUE"
 simdef host-read-probe-failed wipe world_before='json:{"wipe_post_detach_read":{"HOST_PROBE_FAIL":"1"}}' notify="$T_TRUE"
+# a bounded call that times out reads as an absent token / an unreadable run, never as success
+TF_GH_LIST='json:{"wipe_flag_precheck":{"TIMEOUT_FIRES":"gh"}}'; TF_GH_VIEW='json:{"wipe_origin_check":{"TIMEOUT_FIRES":"gh"}}'
+TF_DOP_W4='json:{"wipe_identity":{"TIMEOUT_FIRES":"doppler"}}'; TF_DOP_W10B='json:{"wipe_reread":{"TIMEOUT_FIRES":"doppler"}}'; TF_DOP_W12='json:{"wipe_readback":{"TIMEOUT_FIRES":"doppler"}}'
+simdef neg-timeout-gh-list wipe world_before="$TF_GH_LIST"
+simdef neg-timeout-gh-view "${FIN_W[@]}" world_before="$TF_GH_VIEW"
+simdef neg-timeout-doppler-w4 wipe world_before="$TF_DOP_W4"
+simdef neg-timeout-doppler-w10b wipe world_before="$TF_DOP_W10B"
+simdef neg-timeout-doppler-w12 wipe world_before="$TF_DOP_W12"
+simdef m-t-gh-list wipe wf="$T/mut/t-gh-list-dropped.yml" world_before="$TF_GH_LIST"
+simdef m-t-gh-view "${FIN_W[@]}" wf="$T/mut/t-gh-view-dropped.yml" world_before="$TF_GH_VIEW"
+simdef m-t-doppler-w4 wipe wf="$T/mut/t-doppler-identity-dropped.yml" world_before="$TF_DOP_W4"
+simdef m-t-doppler-w10b wipe wf="$T/mut/t-doppler-reread-dropped.yml" world_before="$TF_DOP_W10B"
+simdef m-t-doppler-w12 wipe wf="$T/mut/t-doppler-readback-dropped.yml" world_before="$TF_DOP_W12"
 # the one-line-edit mutants of those gates, each driven by the scenario that must catch it
 mutate a1-origin-exit5 "$WF" && simdef m-a1-exit5 "${FIN_W[@]}" wf="$MUT_FILE" origin_override='json:{"headBranch":"feature-x"}'
 mutate a1-origin-rc0 "$WF" && simdef m-a1-rc0 "${FIN_W[@]}" wf="$MUT_FILE" origin_override='json:{"headBranch":"feature-x"}'
@@ -2672,6 +2753,17 @@ neg_row "N-origin-unreadable: an origin run gh cannot read is refused at wipe_or
 neg_row "N-rollback: a git-data rollback run newer than the soak stamp refuses mode=wipe at wipe_flag_precheck (wipe_precondition_rollback_after_stamp) before any Hetzner call" neg-rollback wipe_flag_precheck 'verdict=wipe_precondition_rollback_after_stamp'
 [ "$(nev neg-rollback 'curl ')" = 0 ] && pass "N-rollback-nocall: the rollback refusal happens before the first Hetzner call (0 curl calls)" || fail "N-rollback-nocall" "$(nev neg-rollback 'curl ') curl calls"
 neg_row "N-runlist-unreadable: a gh run list that fails reads as unreadable, never as 'no rollback' (wipe_precondition_run_list_unreadable)" neg-runlist-unreadable wipe_flag_precheck 'verdict=wipe_precondition_run_list_unreadable'
+neg_row "N-timeout-gh-list: a gh run list that hits its 60 s bound is an unreadable run list, never 'no rollback' (wipe_precondition_run_list_unreadable at wipe_flag_precheck)" neg-timeout-gh-list wipe_flag_precheck 'verdict=wipe_precondition_run_list_unreadable'
+neg_row "N-timeout-gh-view: a gh run view that hits its 60 s bound is an unreadable origin run (wipe_origin_run_unreadable at wipe_origin_check); no detach, no delete" neg-timeout-gh-view wipe_origin_check 'verdict=wipe_origin_run_unreadable'
+neg_row "N-timeout-doppler-w4: a read-only token fetch that hits its 60 s bound is an absent token (wipe_readonly_token_absent at wipe_identity), nothing sent" neg-timeout-doppler-w4 wipe_identity 'verdict=wipe_readonly_token_absent'
+timeout_post() { # <sim> <failed step>: the bound fired at a step after the detach: that step refuses with the absent-token word, no delete call was made
+  simok "$1" && [ "$(R "$1" .job_result)" = failure ] && [ "$(failed_step "$1")" = "$2" ] && [ "$(nev "$1" 'curl DELETE')" = 0 ] && has_out "$1" "$2" 'verdict=wipe_readonly_token_absent'
+}
+timeout_end() { simok "$1" && [ "$(R "$1" .job_result)" = failure ] && [ "$(failed_step "$1")" = wipe_readback ] && has_out "$1" wipe_readback 'verdict=wipe_readonly_token_absent' && [ "$(R "$1" .outputs.phase)" = delete_sent ]; }
+timeout_post neg-timeout-doppler-w10b wipe_reread && pass "N-timeout-doppler-w10b: a re-read token fetch that hits its 60 s bound is an absent token (wipe_readonly_token_absent at wipe_reread) and no DELETE follows" || fail "N-timeout-doppler-w10b" "failed=$(failed_step neg-timeout-doppler-w10b)"
+timeout_end neg-timeout-doppler-w12 && pass "N-timeout-doppler-w12: a read-back token fetch that hits its 60 s bound is an absent token (wipe_readonly_token_absent at wipe_readback); the phase stays delete_sent, never a success" || fail "N-timeout-doppler-w12" "failed=$(failed_step neg-timeout-doppler-w12)"
+_td="$(nev gold-wipe 'timeout 60 doppler')"; _dg="$(nev gold-wipe 'doppler get HCLOUD_TOKEN_READONLY')"; _tg="$(nev gold-wipe 'timeout 60 gh')"; _tf="$(nev gold-finish 'timeout 60 gh')"
+[ "$_td" = 3 ] && [ "$_dg" = 3 ] && [ "$_tg" = 1 ] && [ "$_tf" = 2 ] && pass "N-timeout-executed: in the golden runs every read-only token fetch ($_dg of $_dg) and every gh run call (wipe: $_tg, wipe_finish: $_tf) went through the 60 s bound" || fail "N-timeout-executed" "doppler timeout=$_td gets=$_dg gh wipe=$_tg finish=$_tf"
 neg_row "N-stamp-absent: an absent soak stamp refuses mode=wipe at wipe_flag_precheck (wipe_precondition_stamp_absent)" neg-stamp-absent wipe_flag_precheck 'verdict=wipe_precondition_stamp_absent'
 if simok neg-rollback-check && [ "$(R neg-rollback-check .job_result)" = success ] && grep -qF 'W3 would be wipe_precondition_rollback_after_stamp; UNVERIFIED' "$T/sim/neg-rollback-check/summary.md" && [ "$(nev neg-rollback-check 'curl (POST|DELETE)')" = 0 ]; then
   pass "N-rollback-check: the same rollback leaves wipe_check GREEN and reports W3 would be wipe_precondition_rollback_after_stamp (report-only; only mode=wipe is stopped by it)"
@@ -2734,6 +2826,11 @@ for _p in "m-a2-limit:--limit 10" "m-a2-noevent:dropping event from --json"; do
   _sim="${_p%%:*}"; _msg="${_p#*:}"
   if ! flow_ok "$_sim" && [ -s "$T/sim/$_sim/world/gh-refusals.log" ]; then pass "M-${_sim#m-}: $_msg is refused by the argv-exact gh shim (the lib's list-reach test needs the whole window) and the golden wipe goes RED"; else fail "M-${_sim#m-}: $_msg stayed GREEN" "job=$(R "$_sim" .job_result)"; fi
 done
+mut_neg "M-t-gh-list: without the 60 s bound on gh run list the timed-out scenario is no longer refused (the N-timeout-gh-list row goes RED)" m-t-gh-list wipe_flag_precheck 'verdict=wipe_precondition_run_list_unreadable'
+mut_neg "M-t-gh-view: without the 60 s bound on gh run view the timed-out scenario is no longer refused (the N-timeout-gh-view row goes RED)" m-t-gh-view wipe_origin_check 'verdict=wipe_origin_run_unreadable'
+mut_neg "M-t-doppler-w4: without the 60 s bound on the W4 token fetch the timed-out scenario is no longer refused (RED)" m-t-doppler-w4 wipe_identity 'verdict=wipe_readonly_token_absent'
+if timeout_post m-t-doppler-w10b wipe_reread; then fail "M-t-doppler-w10b: the unbounded re-read fetch stayed GREEN"; else pass "M-t-doppler-w10b: without the 60 s bound on the W10b token fetch the timed-out scenario is no longer refused (RED)"; fi
+if timeout_end m-t-doppler-w12; then fail "M-t-doppler-w12: the unbounded read-back fetch stayed GREEN"; else pass "M-t-doppler-w12: without the 60 s bound on the W12 token fetch the timed-out scenario is no longer refused (RED)"; fi
 mut_neg "M-a3-exit5: deleting the exit 5 of the boot-verdict refusal lets a missing boot row through (RED)" m-a3-exit5 wipe_boot_read 'verdict=wipe_boot_row_absent'
 mut_neg "M-a3-rrc: passing 0 for the boot read's rc lets a failed read through (RED)" m-a3-rrc wipe_boot_read 'verdict=wipe_boot_unreadable'
 if ! flow_ok m-a3-created && [ "$(failed_step m-a3-created)" = wipe_boot_read ]; then pass "M-a3-created: passing 0 for the server's created epoch is refused by the boot verdict (the stub checks the argument against the server's own created time) and the golden wipe goes RED"; else fail "M-a3-created: the created-epoch argument is unchecked" "failed=$(failed_step m-a3-created)"; fi
@@ -2820,17 +2917,24 @@ printf '%s\n' "\$*" >> "$d/ssh.log"
 mode="\$(cat "$d/shim.mode")"
 last="\${*: -1}"
 if [[ " \$* " == *" -W "* ]]; then echo "SSH-2.0-OpenSSH_shim"; exit 0; fi
-if [[ "\$last" == true ]]; then [ "\$mode" = accessfail ] && exit 255; exit 0; fi
+if [[ "\$last" == true ]]; then
+  [ "\$mode" = accessfail ] && exit 255
+  if [ "\$mode" = accessfail_once ] && [ ! -e "$d/af.done" ]; then : > "$d/af.done"; exit 255; fi
+  exit 0
+fi
 if [[ "\$last" == WIPE_PHASE=*" bash -s" ]]; then
   cat > /dev/null
   [ "\$mode" = verdict ] && exit 41
   [ "\$mode" = probefail ] && { echo "something else entirely"; exit 0; }
+  if [ "\$mode" = probefail_once ] && [ ! -e "$d/pf.done" ]; then : > "$d/pf.done"; echo "something else entirely"; exit 0; fi
   ph="\${last#WIPE_PHASE=}"; ph="\${ph%% *}"
   echo "wipe_assert \$ph ok byid=gone mapper_read=ok store_root=ok"; exit 0
 fi
 exit 255
 SHIM
   chmod +x "$d/bin/ssh"
+  : > "$d/sleep.log"
+  printf '#!/usr/bin/env bash\nprintf "sleep %%s\\n" "$*" >> "%s/sleep.log"\n' "$d" > "$d/bin/sleep"; chmod +x "$d/bin/sleep"
   dump_step "w10-$n" "$wfp" wipe wipe_post_detach_read "{\"runner\":{\"temp\":\"$d/rt\"},\"steps\":{\"wipe_confirm\":{\"outputs\":{\"mode\":\"wipe\"}},\"wipe_identity\":{\"outputs\":{}}}}" || { echo "dump failed"; return; }
   local -a ev_=()
   mapfile -t ev_ < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' "$T/dump/w10-$n.env.json")
@@ -2858,6 +2962,29 @@ mutate w10-probe-excl "$WF" && { _r="$(envrow_run m-probe "$MUT_FILE" probefail)
 _r="$(envrow_run accessfail "$WF" accessfail)"; IFS='|' read -r _rc _ref _calls _unset _last <<<"$_r"
 if [ "$_rc" = 3 ] && [ -z "$_ref" ]; then pass "H-W10-access: a web host that does not answer is the access gate's exit 3 and W10 publishes NO store_not_serving refusal (the store was not read)"; else fail "H-W10-access" "$_r"; fi
 
+# the one retry of the read-only host check (executed against the REAL git-data-cutover.sh; sleep and ssh are PATH shims)
+w10_reads() { grep -c 'bash -s' "$T/exec/w10-$1/ssh.log" || true; }
+w10_sleeps() { tr '\n' ',' < "$T/exec/w10-$1/sleep.log"; }
+w10_retry_probe() { local r rc ref calls un last; r="$(envrow_run "$1" "$2" probefail_once)"; IFS='|' read -r rc ref calls un last <<<"$r"
+  [ "$rc" = 0 ] && [ -z "$ref" ] && [ "$(w10_reads "$1")" = 2 ] && [ "$(w10_sleeps "$1")" = "sleep 10," ]; }
+w10_retry_access() { local r rc ref calls un last; r="$(envrow_run "$1" "$2" accessfail_once)"; IFS='|' read -r rc ref calls un last <<<"$r"
+  [ "$rc" = 0 ] && [ -z "$ref" ] && [ "$(w10_reads "$1")" = 1 ] && [ "$(w10_sleeps "$1")" = "sleep 10," ]; }
+w10_retry_twice() { local r rc ref calls un last r2 rc2 ref2; r="$(envrow_run "$1" "$2" probefail)"; IFS='|' read -r rc ref calls un last <<<"$r"
+  [ "$rc" = 5 ] && [ -z "$ref" ] && [ "$(w10_reads "$1")" = 2 ] && [ "$(w10_sleeps "$1")" = "sleep 10," ] || return 1
+  r2="$(envrow_run "$1-a" "$2" accessfail)"; IFS='|' read -r rc2 ref2 calls un last <<<"$r2"
+  [ "$rc2" = 3 ] && [ -z "$ref2" ] && [ "$(w10_reads "$1-a")" = 0 ] && [ "$(w10_sleeps "$1-a")" = "sleep 10," ]; }
+w10_noretry_verdict() { local r rc ref calls un last; r="$(envrow_run "$1" "$2" verdict)"; IFS='|' read -r rc ref calls un last <<<"$r"
+  [ "$rc" = 5 ] && [ "$ref" = "store_not_serving," ] && [ "$(w10_reads "$1")" = 1 ] && [ -z "$(w10_sleeps "$1")" ]; }
+w10_retry_probe retryprobe "$WF" && pass "H-W10-retry-probe: a first host read that did not answer (verdict=probe_failed) is retried once after 10 s; a second attempt that answers ok ends the step green with NO refusal output (2 host reads, one sleep 10)" || fail "H-W10-retry-probe" "$(tr '\n' '|' < "$T/exec/w10-retryprobe/stdout" | cut -c1-200)"
+w10_retry_access retryaccess "$WF" && pass "H-W10-retry-access: a first attempt refused by the access gate (exit 3) is retried once after 10 s; a second attempt that passes ends the step green with NO refusal output (1 host read, one sleep 10)" || fail "H-W10-retry-access" "$(tr '\n' '|' < "$T/exec/w10-retryaccess/stdout" | cut -c1-200)"
+w10_retry_twice retrytwice "$WF" && pass "H-W10-retry-twice: probe_failed twice is exit 5 and an access refusal twice is exit 3, each after exactly ONE retry (one sleep 10), and neither publishes a store_not_serving refusal (the second attempt decides, and it did not answer)" || fail "H-W10-retry-twice"
+w10_noretry_verdict noretry "$WF" && pass "H-W10-noretry-verdict: a real store verdict (exit 5 without probe_failed) is NOT retried (1 host read, no sleep) and publishes refusal=store_not_serving" || fail "H-W10-noretry-verdict"
+mutate w10-retry-removed "$WF" && { if w10_retry_probe m-rr "$MUT_FILE" || w10_retry_access m-rra "$MUT_FILE"; then fail "M-w10-retry-removed-exec: an executed retry row stayed GREEN without the retry"; else pass "M-w10-retry-removed-exec: with the retry branch disabled both executed retry rows go RED"; fi; }
+mutate w10-retry-verdict "$WF" && { w10_noretry_verdict m-rv "$MUT_FILE" && fail "M-w10-retry-verdict-exec: a store verdict was retried and the executed row stayed GREEN" || pass "M-w10-retry-verdict-exec: retrying a store verdict (exit 5 without probe_failed) turns the executed no-retry row RED"; }
+mutate w10-retry-nosleep "$WF" && { w10_retry_probe m-rn "$MUT_FILE" && fail "M-w10-retry-nosleep-exec: the retry without its 10 s pause stayed GREEN" || pass "M-w10-retry-nosleep-exec: dropping the 10 s pause turns the executed retry row RED"; }
+mutate w10-retry-first-decides "$WF" && { w10_retry_probe m-rf "$MUT_FILE" && fail "M-w10-retry-first-decides-exec: a first-attempt rc that survives a good second attempt stayed GREEN" || pass "M-w10-retry-first-decides-exec: letting the first attempt keep deciding turns the executed retry row RED"; }
+mutate w10-retry-no-access "$WF" && { w10_retry_access m-ra "$MUT_FILE" && fail "M-w10-retry-no-access-exec: an access refusal that is not retried stayed GREEN" || pass "M-w10-retry-no-access-exec: dropping the exit-3 retry turns the executed access row RED"; }
+
 echo "-- J. forbidden-phrase fixtures: every alternative of the widened regex fires; the retained lines do not --"
 FIRE=("the volume was erased" "the volume was wiped clean" "the store is secure" "securely deleted" "no copies remain" "no snapshots remain" "no backups remain" "retention closed" "retention ended" "retention_end=2026-11-12" "Art. 17 satisfied" "art 17 compliant" "the volume holds no personal data" "the volume is empty" "store empty" "irrecoverable" "irrecoverably gone" "unrecoverable" "permanently deleted")
 CLEAN=("the plaintext volume was deleted at the provider API" "It does not state that the volume was empty or held no personal data" "wipe_check wipe_finish wipe" "an insecure default" "permanent and recoverable are other words" "backup retention is not addressed" "$STANDING_TXT")
@@ -2875,7 +3002,7 @@ floor_bad=0
 chk_floor() { # <label> <live> <min>
   if ! [[ "$2" =~ ^[0-9]+$ ]] || [ "$2" -lt "$3" ]; then printf 'FAIL FLOOR: %s is %s, floor %s\n' "$1" "$2" "$3" >&2; floor_bad=1; fi
 }
-chk_floor "census rows executed" "$ROWS_N" 84
+chk_floor "census rows executed" "$ROWS_N" 88
 chk_floor "wipe steps checked" "$STEPS_LIVE" 21
 chk_floor "post-loader steps checked" "$POST_LIVE" 8
 chk_floor "adjacent chain pairs" "$PAIRS_LIVE" 11
@@ -2883,8 +3010,8 @@ chk_floor "verdict words derived" "$WORDS_LIVE" 60
 chk_floor "notify words derived" "$NWORDS_LIVE" 10
 chk_floor "W1 and cutover cases executed" "$CASES_RUN" 52
 chk_floor "notify cases executed" "$NOTIFY_CASES_N" 62
-chk_floor "simulator runs" "$SIMS_RUN" 104
-MIN_ASSERTIONS=551
+chk_floor "simulator runs" "$SIMS_RUN" 114
+MIN_ASSERTIONS=602
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions passed, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$passes" "$MIN_ASSERTIONS" >&2
   exit 1

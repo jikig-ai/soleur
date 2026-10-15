@@ -83,7 +83,11 @@ readonly WIPE_W7_BOUND_SECONDS=120
 readonly WIPE_W10B_BOUND_SECONDS=60
 readonly WIPE_W4_OUTER_BOUND_SECONDS=900
 readonly WIPE_POLL_INTERVAL_SECONDS=2
-readonly WIPE_POLL_MAX_ATTEMPTS=30
+# The detach poll: up to 90 reads 2 s apart (a slow but healthy Hetzner detach runs past 60 s), and a
+# wall-clock cap counted from the accepted POST so that 90 x (2 s + 20 s curl max-time) can never
+# outrun the job's 30-minute timeout. Whichever bound trips first ends the poll as poll_exhausted.
+readonly WIPE_POLL_MAX_ATTEMPTS=90
+readonly WIPE_POLL_WALL_CAP_SECONDS=240
 readonly WIPE_CURL_MAX_TIME=20
 readonly WIPE_CURL_MAX_FILESIZE=1048576
 
@@ -506,7 +510,7 @@ do_actions() {
 }
 
 do_detach() {
-  local aid polls=0 status=running
+  local aid polls=0 status=running poll_t0
   only_opts "volume"
   need_volume_id
   read_token rw
@@ -519,6 +523,8 @@ do_detach() {
   esac
   jget '.action | must(type=="object" and (.id|uint)) | .id' || refuse wipe_detach_not_confirmed reason=no_action_id
   aid="$JV"; is_uint "$aid" || refuse wipe_detach_not_confirmed reason=no_action_id
+  now_epoch
+  poll_t0="$NOW"
   # Poll the SAME action; there is exactly one POST statement in this script and it is above.
   while (( polls < WIPE_POLL_MAX_ATTEMPTS )); do
     polls=$((polls + 1))
@@ -528,7 +534,12 @@ do_detach() {
     status="$JV"
     [[ -n "$status" ]] || refuse wipe_detach_not_confirmed reason=poll_shape
     case "$status" in
-      running) if (( polls < WIPE_POLL_MAX_ATTEMPTS )); then sleep "$WIPE_POLL_INTERVAL_SECONDS"; fi ;;
+      running)
+        if (( polls < WIPE_POLL_MAX_ATTEMPTS )); then
+          now_epoch
+          (( NOW - poll_t0 < WIPE_POLL_WALL_CAP_SECONDS )) || break
+          sleep "$WIPE_POLL_INTERVAL_SECONDS"
+        fi ;;
       success) break ;;
       *) refuse wipe_detach_not_confirmed reason=action_not_success ;;
     esac

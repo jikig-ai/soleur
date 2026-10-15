@@ -203,6 +203,8 @@ SHIM
 cat > "$BIN/sleep" <<'SHIM'
 #!/usr/bin/env bash
 printf 'sleep %s\n' "$*" >> "${GDW_WORLD:?}/sleeps.log"
+# Opt-in simulated cost of one poll cycle (the sleep plus the read): a world that carries a sleep_adv file moves its clock by that many seconds per sleep.
+if [ -f "$GDW_WORLD/sleep_adv" ]; then printf '%s\n' "$(( $(cat "$GDW_WORLD/clock") + $(cat "$GDW_WORLD/sleep_adv") ))" > "$GDW_WORLD/clock"; fi
 SHIM
 chmod +x "$BIN/date" "$BIN/sleep"
 
@@ -301,8 +303,8 @@ use_first="$(grep -nE '(^|[^_A-Za-z])bc_(curl|ok_var|refuse)[ "$]' "$HELPER_PRIS
 [ -n "$src_first" ] && [ -n "$use_first" ] && [ "$src_first" -lt "$use_first" ] && pass "A6 the library is sourced on a line of its own that opens with 'source' (the S4 population form) before its first use" || fail "A6 source line ($src_first) not before first library use ($use_first)"
 grep -qE '^set -[a-z]*e|^set -e|set -o errexit' "$HELPER_PRISTINE" && fail "A7 the helper sets errexit (every status is handled explicitly)" || pass "A7 no errexit (statuses are handled explicitly; a silent abort cannot read as a verdict)"
 grep -qiE 'erased|wiped|secure|no cop|snapshot|erasure|art\. ?17' "$HELPER_PRISTINE" && fail "A8 the script text carries a word the CLO ruling forbids" || pass "A8 no forbidden over-claiming word in the helper text (erased/wiped/secure/no copies/snapshot/erasure)"
-[ "$(grep -cE '^(readonly WIPE_W7_BOUND_SECONDS=120|readonly WIPE_W10B_BOUND_SECONDS=60|readonly WIPE_POLL_INTERVAL_SECONDS=2|readonly WIPE_POLL_MAX_ATTEMPTS=30|readonly WIPE_W4_OUTER_BOUND_SECONDS=900)$' "$HELPER_PRISTINE" || true)" = 5 ] \
-  && pass "A9 the time and poll constants are pinned literals, assigned unconditionally (W7 120 s, W10b 60 s, poll 2 s x 30, W4 outer 900 s)" || fail "A9 a pinned constant moved"
+[ "$(grep -cE '^(readonly WIPE_W7_BOUND_SECONDS=120|readonly WIPE_W10B_BOUND_SECONDS=60|readonly WIPE_POLL_INTERVAL_SECONDS=2|readonly WIPE_POLL_MAX_ATTEMPTS=90|readonly WIPE_POLL_WALL_CAP_SECONDS=240|readonly WIPE_W4_OUTER_BOUND_SECONDS=900)$' "$HELPER_PRISTINE" || true)" = 6 ] \
+  && pass "A9 the time and poll constants are pinned literals, assigned unconditionally (W7 120 s, W10b 60 s, poll 2 s x 90 capped at 240 s wall clock, W4 outer 900 s)" || fail "A9 a pinned constant moved"
 python3 "$ROOT/scripts/lint-shell-trace-credential-refusal.py" "$HELPER_PRISTINE" > "$T/lint.out" 2>&1; lrc=$?
 [ "$lrc" = 0 ] && pass "A10 scripts/lint-shell-trace-credential-refusal.py is clean on the helper (Rules A/B/C/D/E, in no baseline)" || fail "A10 the xtrace-refusal lint fails on the helper" "$(head -c 300 "$T/lint.out")"
 first_cmd="$(grep -vE '^[[:space:]]*(#|$)' "$HELPER_PRISTINE" | sed -n '1p')"
@@ -689,10 +691,21 @@ grep -E ' (POST|GET) ' "$CUR/calls.log" | awk '{print $2" "$3}' > "$T/h1.seq"
 reset_world DETACH_POLLS=0; rec_for_detach; run_helper "$RW_TOK" detach --volume-id $PT
 ok_run && out_has "polls=1" && [ "$(wc -l < "$CUR/sleeps.log" | tr -d ' ')" = 0 ] && pass "H4 an action that is already success on the first poll needs no sleep" || fail "H4"
 reset_world ACT_END=never; rec_for_detach; run_helper "$RW_TOK" detach --volume-id $PT
-if [ "$RC" = 5 ] && verdict_is wipe_detach_not_confirmed && verdict_line_has wipe_detach_not_confirmed "reason=poll_exhausted polls=30" && [ "$(npost)" = 1 ] && [ "$(nactions_get)" = 30 ] && [ "$(ndelete)" = 0 ] \
-   && [ "$(wc -l < "$CUR/sleeps.log" | tr -d ' ')" = 29 ] && ! grep -qxF phase=detached "$CUR/gho"; then
-  pass "H5 a poll that never reaches success: exactly 30 reads (29 sleeps), the detach is NOT re-sent (one POST), no phase=detached"
+if [ "$RC" = 5 ] && verdict_is wipe_detach_not_confirmed && verdict_line_has wipe_detach_not_confirmed "reason=poll_exhausted polls=90" && [ "$(npost)" = 1 ] && [ "$(nactions_get)" = 90 ] && [ "$(ndelete)" = 0 ] \
+   && [ "$(wc -l < "$CUR/sleeps.log" | tr -d ' ')" = 89 ] && ! grep -qxF phase=detached "$CUR/gho"; then
+  pass "H5 a poll that never reaches success: exactly 90 reads (89 sleeps), the detach is NOT re-sent (one POST), no phase=detached"
 else fail "H5" "posts=$(npost) polls=$(nactions_get)"; fi
+reset_world DETACH_POLLS=69; rec_for_detach; run_helper "$RW_TOK" detach --volume-id $PT
+if ok_run && out_has "detach ok action=777000111 polls=70" && [ "$(npost)" = 1 ] && [ "$(nactions_get)" = 70 ] && [ "$(wc -l < "$CUR/sleeps.log" | tr -d ' ')" = 69 ] && gho_has phase=detached; then
+  pass "H5a a slow healthy detach (success on poll 70, past the old 60 s window): confirmed, ONE POST, 69 sleeps, phase=detached written"
+else fail "H5a" "rc=$RC posts=$(npost) polls=$(nactions_get)"; fi
+reset_world ACT_END=never; printf '22\n' > "$CUR/sleep_adv"; rec_for_detach; run_helper "$RW_TOK" detach --volume-id $PT
+if [ "$RC" = 5 ] && verdict_is wipe_detach_not_confirmed && verdict_line_has wipe_detach_not_confirmed "reason=poll_exhausted polls=12" && [ "$(npost)" = 1 ] && [ "$(nactions_get)" = 12 ] && [ "$(ndelete)" = 0 ] \
+   && [ "$(wc -l < "$CUR/sleeps.log" | tr -d ' ')" = 11 ] && ! grep -qxF phase=detached "$CUR/gho"; then
+  pass "H5b a poll that never reaches success on a slow clock (22 s a cycle): the 240 s wall-clock cap ends it at 12 reads (11 sleeps) before the 90-read bound, still ONE POST"
+else fail "H5b" "rc=$RC posts=$(npost) polls=$(nactions_get)"; fi
+reset_world DETACH_POLLS=9; printf '22\n' > "$CUR/sleep_adv"; rec_for_detach; run_helper "$RW_TOK" detach --volume-id $PT
+ok_run && out_has "polls=10" && [ "$(npost)" = 1 ] && pass "H5c a slow clock that still succeeds inside the cap (10 reads, 198 s) is confirmed: the cap does not cut a healthy detach" || fail "H5c" "rc=$RC polls=$(nactions_get)"
 reset_world ACT_END=error; rec_for_detach; run_helper "$RW_TOK" detach --volume-id $PT
 [ "$RC" = 5 ] && verdict_is wipe_detach_not_confirmed && verdict_line_has wipe_detach_not_confirmed reason=action_not_success && [ "$(npost)" = 1 ] && pass "H6 an action that ends in error: wipe_detach_not_confirmed, one POST" || fail "H6"
 reset_world; rec_for_detach; fault POST '/actions/detach$' 500 '{"error":{"code":"x"}}'; run_helper "$RW_TOK" detach --volume-id $PT
@@ -896,7 +909,9 @@ sc_protect() { reset_world PT_PROT=true; run_helper "$RO_TOK" identity --expect 
 sc_readback_luks() { reset_world PT_SERVER=gone LUKS_SERVER=null; run_helper "$RO_TOK" readback --volume-id $PT; refused wipe_readback_luks_detached; }
 sc_readback_name() { reset_world PT_SERVER=gone; fault GET '^/volumes\?name=soleur-git-data-store$' 200 '{"volumes":[{"id":900000077}]}'; run_helper "$RO_TOK" readback --volume-id $PT; refused wipe_readback_name_still_listed; }
 sc_nofallback() { reset_world; EXTRA_ENV=("HCLOUD_TOKEN=$RW_TOK"); run_helper "" state; EXTRA_ENV=(); refused wipe_readonly_token_absent && [ "$(ncalls)" = 0 ]; }
-sc_poll_bound() { reset_world ACT_END=never; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 30)) ""; run_helper "$RW_TOK" detach --volume-id $PT; [ "$RC" = 5 ] && [ "$(npost)" = 1 ] && [ "$(nactions_get)" = 30 ]; }
+sc_poll_bound() { reset_world ACT_END=never; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 30)) ""; run_helper "$RW_TOK" detach --volume-id $PT; [ "$RC" = 5 ] && [ "$(npost)" = 1 ] && [ "$(nactions_get)" = 90 ]; }
+sc_poll_slow() { reset_world DETACH_POLLS=69; rec_for_detach; run_helper "$RW_TOK" detach --volume-id $PT; ok_run && out_has "polls=70" && [ "$(npost)" = 1 ]; }
+sc_poll_wall() { reset_world ACT_END=never; printf '22\n' > "$CUR/sleep_adv"; rec_for_detach; run_helper "$RW_TOK" detach --volume-id $PT; [ "$RC" = 5 ] && [ "$(npost)" = 1 ] && [ "$(nactions_get)" = 12 ]; }
 sc_record_bind() { reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 30)) "" 123456789; run_helper "$RW_TOK" detach --volume-id $PT; refused wipe_record_volume_mismatch && [ "$(ncalls)" = 0 ]; }
 sc_confirm_detach() { reset_world; mk_record $((CLOCK0 - 10)) $((CLOCK0 - 30)) ""; fault GET '^/volumes/'"$PT"'$' 200 '{"volume":{"id":900000001,"server":800000001}}'; run_helper "$RW_TOK" detach --volume-id $PT; [ "$RC" = 5 ] && verdict_is wipe_detach_not_confirmed; }
 sc_identity_no_phase() { reset_world PT_SERVER=null; run_helper "$RO_TOK" identity --expect detached --volume-id $PT --record write; ok_run && ! grep -q '^phase=' "$CUR/gho"; }
@@ -921,8 +936,18 @@ mutate readback-name-list-removed 2 's/^  \[\[ "\$JV" == 0 \]\] \|\| refuse wipe
 mutant_red readback-name-list-removed sc_readback_name
 mutate token-fallback-added 4 -e 's/^  unset HCLOUD_TOKEN HCLOUD_TOKEN_READONLY$/  :/' -e 's/^(  IFS= read -r -t 10 _line \|\| true)$/\1; _line="${_line:-${HCLOUD_TOKEN-}}"/'
 mutant_red token-fallback-added sc_nofallback
-mutate poll-bound-widened 2 's/^readonly WIPE_POLL_MAX_ATTEMPTS=30$/readonly WIPE_POLL_MAX_ATTEMPTS=31/'
+mutate poll-bound-widened 2 's/^readonly WIPE_POLL_MAX_ATTEMPTS=90$/readonly WIPE_POLL_MAX_ATTEMPTS=91/'
 mutant_red poll-bound-widened sc_poll_bound
+mutate poll-bound-narrowed-to-old-window 2 's/^readonly WIPE_POLL_MAX_ATTEMPTS=90$/readonly WIPE_POLL_MAX_ATTEMPTS=30/'
+mutant_red poll-bound-narrowed-to-old-window sc_poll_slow
+mutate poll-wall-cap-removed 2 's/^          \(\( NOW - poll_t0 < WIPE_POLL_WALL_CAP_SECONDS \)\) \|\| break$/          :/'
+mutant_red poll-wall-cap-removed sc_poll_wall
+mutate poll-wall-cap-widened 2 's/^readonly WIPE_POLL_WALL_CAP_SECONDS=240$/readonly WIPE_POLL_WALL_CAP_SECONDS=2400/'
+mutant_red poll-wall-cap-widened sc_poll_wall
+mutate poll-clock-not-refreshed 2 's/^          now_epoch$/          :/'
+mutant_red poll-clock-not-refreshed sc_poll_wall
+mutate poll-origin-not-taken 2 's/^  poll_t0="\$NOW"$/  poll_t0=0/'
+mutant_red poll-origin-not-taken sc_poll_wall
 mutate record-volume-binding-removed 2 's/^  if \[\[ -n "\$\{2-\}" && "\$2" != "\$R_plaintext_id" \]\]; then refuse wipe_record_volume_mismatch; fi$/  :/'
 mutant_red record-volume-binding-removed sc_record_bind
 mutate detach-confirm-removed 4 -e 's/^  jget .\.volume \| must\(type=="object" and \.id==\$v and \.server==null\) \| "ok". --argjson v "\$VID" \|\| refuse wipe_detach_not_confirmed reason=still_attached$/  :/' -e 's/^  \[\[ "\$JV" == ok \]\] \|\| refuse wipe_detach_not_confirmed reason=still_attached$/  :/'
@@ -941,10 +966,10 @@ mutate w4-octal-guard-removed 2 's/NOW - 10#\$R_w4_epoch > WIPE_W4_OUTER_BOUND_S
 mutant_red w4-octal-guard-removed sc_octal_w4
 mutate w7-octal-guard-removed 2 's/age=\$\(\( NOW - 10#\$e \)\)/age=$(( NOW - e ))/'
 mutant_red w7-octal-guard-removed sc_octal_w7
-[ "$MUTANTS_RUN" -ge 19 ] && pass "N-floor: $MUTANTS_RUN mutants were applied and each was run against its named scenario (floor 19)" || fail "N-floor: only $MUTANTS_RUN mutants ran (floor 19)"
+[ "$MUTANTS_RUN" -ge 24 ] && pass "N-floor: $MUTANTS_RUN mutants were applied and each was run against its named scenario (floor 24)" || fail "N-floor: only $MUTANTS_RUN mutants ran (floor 24)"
 # control: the pristine helper is GREEN on every named scenario (a scenario that is always RED would make the mutant rows vacuous)
 ctl_bad=""
-for s in sc_stale_detach sc_stale_delete sc_norecord_delete sc_luks_typed sc_id_mismatch sc_protect sc_readback_luks sc_readback_name sc_nofallback sc_poll_bound sc_record_bind sc_confirm_detach sc_check_binding sc_identity_no_phase sc_dad sc_inflight_report sc_phases_bare sc_octal_w4 sc_octal_w7; do
+for s in sc_stale_detach sc_stale_delete sc_norecord_delete sc_luks_typed sc_id_mismatch sc_protect sc_readback_luks sc_readback_name sc_nofallback sc_poll_bound sc_poll_slow sc_poll_wall sc_record_bind sc_confirm_detach sc_check_binding sc_identity_no_phase sc_dad sc_inflight_report sc_phases_bare sc_octal_w4 sc_octal_w7; do
   "$s" || ctl_bad+=" $s"
 done
 [ -z "$ctl_bad" ] && pass "N-control: every named scenario is GREEN against the pristine helper" || fail "N-control: scenario(s) red against the pristine helper:$ctl_bad"
@@ -956,5 +981,5 @@ if [ "$fails" -gt 0 ]; then
   printf 'FAILED:\n'; printf '  - %s\n' "${FAILURES[@]}"
   exit 1
 fi
-[ "$passes" -ge 297 ] || { printf 'FAIL: only %d rows executed (floor 297)\n' "$passes"; exit 1; }
+[ "$passes" -ge 318 ] || { printf 'FAIL: only %d rows executed (floor 318)\n' "$passes"; exit 1; }
 exit 0

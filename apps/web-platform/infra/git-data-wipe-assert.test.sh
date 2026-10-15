@@ -10,7 +10,13 @@
 #      those are PATH shims reading one "world" directory. The script carries no test seam (ADR-214).
 #      Runs unprivileged, everywhere. It proves every verdict, the fixed output grammar, the
 #      path-typed allowlist, the teardown, and that NO synthesized tenant name reaches stdout, stderr, a
-#      state file or /dev/shm.
+#      state file or a directory the script made. The shims RECORD their argv: the suite asserts the
+#      operand/flag contract of every selector-bearing call (the right device, `iflag=direct`, never an
+#      `of=` but /dev/null, a read-only mount, the `N 8` snapshot table, losetup on the COW file, the 2 s
+#      quiescence sleep) as one exact multiset per phase, plus a no-write-shaped-argv invariant on EVERY run.
+#      The script's `mktemp -d -p /dev/shm` is answered by a shim that creates the directory under the world
+#      (and records it), so a run never touches the shared host's /dev/shm and the leak check is scoped to the
+#      directories THIS run created (an unrelated entry in /dev/shm cannot move it).
 #   B  VERB. git-data-cutover.sh MODE=wipe_assert against an `ssh` shim: argument refusal before any
 #      remote call, the script body on stdin, the %q-quoted command, the per-phase bound, every rc ->
 #      verdict word, transport rcs as probe_failed, off-shape answers refused, and the rc table of the
@@ -113,6 +119,12 @@ ST="$W/state"
 last="${*: -1}"
 note() { printf '%s %s\n' "$n" "$1" >> "$ST/calls"; }
 flag() { [ -e "$W/$1" ]; }
+# rec — one TAB-separated line per call of every selector-bearing command: the command name, then its argv
+# EXACTLY as the host script passed it. The suite asserts the operand/flag contract over this record.
+rec() { { printf '%s' "$n"; local a; for a in "$@"; do printf '\t%s' "$a"; done; printf '\n'; } >> "$ST/argv"; }
+case "$n" in
+  blockdev|cryptsetup|dd|dumpe2fs|findmnt|find|losetup|mount|umount|dmsetup|sleep|udevadm|realpath|stat|mktemp|truncate) rec "$@" ;;
+esac
 case "$n" in
   cat)
     case "$last" in
@@ -133,6 +145,15 @@ case "$n" in
     exec date "$@" ;;
   sleep) exit 0 ;;
   udevadm) exit 0 ;;
+  mktemp)
+    # the script asks for `-d -p /dev/shm` (the suite asserts exactly that argv); the directory is created
+    # under the WORLD instead, so a run touches nothing on the shared host's /dev/shm, and the directories
+    # THIS run created are exactly the ones recorded here.
+    mkdir -p "$W/shm" || exit 1
+    d="$(mktemp -d -p "$W/shm")" || exit 1
+    printf '%s\n' "$d" >> "$ST/shm_dirs"
+    printf '%s\n' "$d"; exit 0 ;;
+  truncate) exec truncate "$@" ;;
   awk)
     # awk_fail_at <n>: the n-th awk call the host script makes exits 2 (a crashed or missing instrument)
     a=0; [ -f "$ST/awk_calls" ] && a="$(cat "$ST/awk_calls")"
@@ -142,7 +163,8 @@ case "$n" in
   stat)
     case "$last" in
       /dev/*)
-        if flag byid_gone && [ "$last" = "/dev/disk/by-id/scsi-0HC_Volume_111111111" ]; then exit 1; fi
+        # stat_denied_byid: the by-id link is listed but a stat of it fails (EACCES/EIO/ELOOP) -- not "gone"
+        if flag stat_denied_byid && [ "$last" = "/dev/disk/by-id/scsi-0HC_Volume_111111111" ]; then exit 1; fi
         p="$last"; fmt=""; follow=0; prev=""
         for a in "$@"; do
           [ "$prev" = "-c" ] && fmt="$a"
@@ -215,12 +237,20 @@ case "$n" in
         # getro_fail_from <n>: the n-th and every later getro read fails
         if flag getro_fail_from && [ "$g" -ge "$(cat "$W/getro_fail_from")" ]; then exit 1; fi
         cat "$W/ro"; exit 0 ;;
-      --getsz) echo 2097152; exit 0 ;;
+      --getsz) cat "$W/getsz"; exit 0 ;;
     esac
     exit 9 ;;
   ls)
     case "$last" in
       /sys/*) [ -f "$W/files$last" ] || exit 2; cat "$W/files$last"; exit 0 ;;
+      /dev/disk/by-id)
+        # the by-id directory: one name per link of the world; byid_gone drops the typed volume's link,
+        # fail_byid_ls is an unreadable directory, byid_listing_empty a listing that shows nothing at all
+        flag fail_byid_ls && exit 2
+        flag byid_listing_empty && exit 0
+        awk -v g="$([ -e "$W/byid_gone" ] && echo 1 || echo 0)" '{ n = $1; sub(/.*\//, "", n); if (g == 1 && n == "scsi-0HC_Volume_111111111") next; print n }' "$W/links"
+        exit 0 ;;
+      "$(cat "$W/root_path")") flag fail_ls_root && exit 2 ;;
     esac
     exec ls "$@" ;;
   find)
@@ -229,6 +259,7 @@ case "$n" in
       exit "$(cat "$W/find_proc_rc" 2>/dev/null || echo 0)"
     fi
     case "$*" in *"-printf %y"*) if flag fail_find_listing; then exit 3; fi ;; esac
+    case "$*" in *"-name .cutover-freeze"*) if flag fail_find_freeze; then exit 1; fi ;; esac
     exec find "$@" ;;
   dd) flag fail_dd && exit 1; exit 0 ;;
   dumpe2fs)
@@ -282,7 +313,7 @@ echo "shim: no arm for $n" >&2
 exit 99
 SHIM
 chmod +x "$SH/_shim" || instrument "chmod shim failed"
-for _n in awk cat date sleep udevadm stat realpath findmnt cryptsetup blockdev ls find dd dumpe2fs losetup dmsetup mount umount; do
+for _n in awk cat date sleep udevadm stat realpath findmnt cryptsetup blockdev ls find dd dumpe2fs losetup dmsetup mount umount mktemp truncate; do
   ln -s _shim "$SH/$_n" || instrument "ln shim $_n failed"
 done
 
@@ -294,6 +325,8 @@ world() {
     "$W/files/var/lib/cloud/data" "$W/files/sys/fs/ext4/dm-3" || instrument "world $1: mkdir failed"
   printf '%s' "$NOW" > "$W/now"
   : > "$W/state/calls"
+  : > "$W/state/argv"
+  printf '2097152\n' > "$W/getsz"
   cp "$PATS" "$W/pats" || instrument "world $1: corpus copy failed"
   printf '%s %s\n' "$UPTIME_S.55" "12000.10" > "$W/files/proc/uptime"
   printf '%s\n' "$ID_S" > "$W/files/var/lib/cloud/data/instance-id"
@@ -331,14 +364,12 @@ run_script() {
   if [ "$phase" = pre ]; then extra=("WIPE_ROW_DT=$ROWDT" "WIPE_LISTING=run"); fi
   assert_fixture_dir "$W"
   rm -f "$W/out" "$W/err"
-  SHM_BEFORE="$(ls -A /dev/shm 2>/dev/null | sort | paste -sd, -)"
   RC=0
   env -i PATH="$SH:/usr/bin:/bin" WORLD="$W" \
     WIPE_PHASE="$phase" WIPE_TYPED_ID="$ID_T" WIPE_LUKS_ID="$ID_L" WIPE_SERVER_ID="$ID_S" \
     WIPE_OLD_ROOT="$W/root" WIPE_LUKS_MAPPER=/dev/mapper/git-data WIPE_STORE_VERIFIED="$W/marker" \
     "${extra[@]}" "$@" \
     bash -s < "${RUN_SCRIPT:-$SCRIPT}" > "$W/out" 2> "$W/err" || RC=$?
-  SHM_AFTER="$(ls -A /dev/shm 2>/dev/null | sort | paste -sd, -)"
 }
 
 RE_PRE='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+$'
@@ -348,7 +379,7 @@ INVARIANT_RUNS=0
 NAMES_SEEN_RUNS=0
 # invariants <label> — what EVERY run owes, success or refusal.
 invariants() {
-  local label="$1" leak bad lines
+  local label="$1" leak bad lines left
   INVARIANT_RUNS=$((INVARIANT_RUNS + 1))
   # 1. no corpus name in stdout, stderr or any state file (the world's tree/files are the SOURCE and excluded)
   leak="$(grep -rlF -f "$PATS" "$W/out" "$W/err" "$W/state" || true)"
@@ -364,10 +395,18 @@ invariants() {
   done < "$W/err"
   if [ "$bad" = 0 ]; then ok "$label: stdout is empty or one fixed-shape line, every stderr line is a fixed reason line"
   else no "$label: output grammar violated: out=[$(tr '\n' '|' < "$W/out" | cut -c1-200)] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
-  # 3. teardown: no snapshot, loop, mount or /dev/shm directory left behind
-  if [ ! -e "$W/state/snap_up" ] && [ ! -e "$W/state/loop" ] && [ ! -e "$W/state/mounted" ] && [ "$SHM_BEFORE" = "$SHM_AFTER" ]; then
-    ok "$label: no snapshot, loop device, mount or /dev/shm entry survives"
-  else no "$label: transient state leaked (snap=$([ -e "$W/state/snap_up" ] && echo y || echo n) loop=$([ -e "$W/state/loop" ] && echo y || echo n) mounted=$([ -e "$W/state/mounted" ] && echo y || echo n) shm=[$SHM_BEFORE]->[$SHM_AFTER])"; fi
+  # 3. teardown: no snapshot, loop or mount, and no directory THIS run's script created is left behind. The
+  # mktemp shim creates the script's `mktemp -d -p /dev/shm` directory under the world (and records it), so
+  # the comparison is scoped to what the run itself made: an unrelated entry in the host's /dev/shm cannot
+  # move it, and a leak of the script's own COW/mnt directories cannot hide in a whole-listing diff.
+  left="$(ls -A "$W/shm" 2>/dev/null | wc -l)"
+  if [ ! -e "$W/state/snap_up" ] && [ ! -e "$W/state/loop" ] && [ ! -e "$W/state/mounted" ] && [ "$left" = 0 ]; then
+    ok "$label: no snapshot, loop device, mount or directory this run created survives"
+  else no "$label: transient state leaked (snap=$([ -e "$W/state/snap_up" ] && echo y || echo n) loop=$([ -e "$W/state/loop" ] && echo y || echo n) mounted=$([ -e "$W/state/mounted" ] && echo y || echo n) own_dirs_left=$left)"; fi
+  # 4. nothing the run called is write-shaped: no dd `of=` but /dev/null, every mount read-only, no loop/truncate on
+  # a /dev node, and the snapshot table is non-persistent (`N 8`)
+  if argv_safe "$W/state/argv"; then ok "$label: no write-shaped argv (dd of= only /dev/null, mounts read-only, loop and COW never on a /dev node, snapshot N 8)"
+  else no "$label: a write-shaped argv was recorded: $(tr '\t' ' ' < "$W/state/argv" | grep -E ' of=| rw|snapshot' | head -3 | cut -c1-200)"; fi
   if [ -s "$W/state/corpus_seen" ] && [ "$(cat "$W/state/corpus_seen")" -gt 0 ]; then NAMES_SEEN_RUNS=$((NAMES_SEEN_RUNS + 1)); fi
 }
 # expect_refuse <label> <rc> <reason-prefix> — a refusal: nothing on stdout, the rc and a fixed reason on stderr.
@@ -389,6 +428,137 @@ expect_line() {
 }
 called() { grep -c "^$1 " "$W/state/calls" 2>/dev/null || true; }
 
+# argv_safe <record> — the record of EVERY selector-bearing call holds nothing that could write to the retained
+# device: dd `of=` is /dev/null or absent, every mount carries `-o ro,...`, losetup/truncate never aim at a /dev
+# node (the COW is a file), and the snapshot table is `... N 8` (non-persistent, so nothing is ever written back).
+argv_safe() {
+  awk -F'\t' '
+    $1 == "dd"       { for (i = 2; i <= NF; i++) if ($i ~ /^of=/ && $i != "of=/dev/null") bad = 1 }
+    $1 == "mount"    { ok = 0; for (i = 2; i < NF; i++) if ($i == "-o" && $(i + 1) ~ /^ro(,|$)/) ok = 1; if (!ok) bad = 1 }
+    $1 == "truncate" { if ($NF ~ /^\/dev\//) bad = 1 }
+    $1 == "losetup"  { if ($2 != "-d" && $NF ~ /^\/dev\//) bad = 1 }
+    $1 == "dmsetup" && $2 == "create" { if ($NF !~ / N 8$/) bad = 1 }
+    END { exit bad }' "$1"
+}
+# argv_norm <world> — the world's record with its own paths abstracted (@W@ = the world, @D@ = the script's
+# mktemp directory) and TAB shown as `|`, sorted: one comparable multiset of every selector-bearing call.
+argv_norm() {
+  local w="$1" d
+  local -a sedargs=()
+  d="$(head -n 1 "$w/state/shm_dirs" 2>/dev/null || true)"
+  [ -z "$d" ] || sedargs+=(-e "s#${d}#@D@#g")
+  sedargs+=(-e "s#${w}#@W@#g")
+  sed "${sedargs[@]}" "$w/state/argv" | tr '\t' '|' | LC_ALL=C sort
+}
+# contract_has <world> <line> [count] — the normalised record holds that exact line (exactly <count> times if given)
+contract_has() {
+  local n; n="$(argv_norm "$1" | grep -cxF -- "$2" || true)"
+  if [ -n "${3-}" ]; then [ "$n" = "$3" ]; else [ "$n" -ge 1 ]; fi
+}
+# contract_eq <world> <expected-text> — the whole record equals the expected multiset (no extra call, none missing)
+contract_eq() { cmp -s <(argv_norm "$1") <(printf '%s\n' "$2" | LC_ALL=C sort); }
+
+# The contract world: a journal of 8192 blocks of 4096 bytes (so the COW is 8192*4096 + 64 MiB = 100663296 bytes) and a
+# device of 4194304 sectors (so the table size comes from `blockdev --getsz`, not a constant).
+set_contract() {
+  printf '4194304\n' > "$W/getsz"
+  printf 'Filesystem features:      has_journal ext_attr resize_inode dir_index filetype needs_recovery extent\nFilesystem state:         not clean\nTotal journal blocks:     8192\nBlock size:               4096\n' > "$W/sb_origin"
+}
+# THE MODEL: the exact multiset of selector-bearing calls (command, then argv; TAB shown as `|`; @W@ = the world,
+# @D@ = the script's mktemp directory) the host script makes. Every line was read against the script: the typed
+# device /dev/sdb for getro/getsz/dumpe2fs/isLuks/findmnt -S/the /proc scan, the LUKS backing /dev/sdc only for the
+# identity read, the mapper only for the uncached read, never an `of=` but /dev/null, `-o ro,...` on the one mount,
+# the table `0 <getsz> snapshot <origin> <cow-loop> N 8`, losetup on the COW FILE, the 2 s quiescence sleep.
+# pre, WIPE_LISTING=run
+EXP_PRE="$(cat <<'EXP_EOF'
+blockdev|--getro|/dev/sdb
+blockdev|--getro|/dev/sdb
+blockdev|--getsz|/dev/sdb
+cryptsetup|isLuks|--|/dev/sdb
+cryptsetup|status|git-data
+dmsetup|create|git-data-pt-snap|--table|0 4194304 snapshot /dev/sdb /dev/loop99 N 8
+dmsetup|deps|git-data-pt-snap
+dmsetup|info|-c|--noheadings|-o|blkdevname|git-data-pt-snap
+dmsetup|ls
+dmsetup|ls
+dmsetup|remove|--retry|git-data-pt-snap
+dmsetup|status|git-data-pt-snap
+dmsetup|status|git-data-pt-snap
+dumpe2fs|-h|/dev/mapper/git-data-pt-snap
+dumpe2fs|-h|/dev/sdb
+findmnt|-n|-S|/dev/sdb
+findmnt|-n|-o|SOURCE|--mountpoint|@D@/mnt
+findmnt|-n|-o|SOURCE|--mountpoint|@W@/root
+findmnt|-n|-o|SOURCE|--mountpoint|@W@/root
+findmnt|-n|-o|UUID|--mountpoint|@W@/root
+findmnt|-n|-o|UUID|--mountpoint|@W@/root
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+find|/proc|-ignore_readdir_race|-maxdepth|3|-type|l|-regex|/proc/[0-9]+/fd/[0-9]+|-lname|/dev/sdb|-print|-quit
+find|@D@/mnt/lost+found|-mindepth|1|-maxdepth|1|-printf|x
+find|@D@/mnt/repositories|-mindepth|1|-maxdepth|1|!|(|-type|f|(|-name|.*.init.lock|-o|-name|.init.lock|)|)|!|(|-type|d|-name|lost+found|-empty|)|-printf|x
+find|@D@/mnt|-mindepth|1|-maxdepth|1|-printf|%y\t%f\0
+losetup|--find|--show|--|@D@/cow
+losetup|-d|/dev/loop99
+mktemp|-d|-p|/dev/shm
+mount|-o|ro,errors=remount-ro,nosuid,nodev,noexec|/dev/mapper/git-data-pt-snap|@D@/mnt
+realpath|-e|--|/dev/disk/by-id/scsi-0HC_Volume_111111111
+realpath|-e|--|/dev/mapper/git-data-pt-snap
+realpath|-e|--|/dev/mapper/git-data-pt-snap
+realpath|-e|--|/dev/sdc
+sleep|2
+stat|-L|-c|%F|--|/dev/sdb
+stat|-L|-c|%t:%T|--|/dev/disk/by-id/scsi-0HC_Volume_111111111
+stat|-L|-c|%t:%T|--|/dev/disk/by-id/scsi-0HC_Volume_111111111
+stat|-L|-c|%t:%T|--|/dev/disk/by-id/scsi-0HC_Volume_111111111
+stat|-L|-c|%t:%T|--|/dev/disk/by-id/scsi-0HC_Volume_222222222
+stat|-L|-c|%t:%T|--|/dev/sdb
+stat|-L|-c|%t:%T|--|/dev/sdc
+truncate|-s|100663296|--|@D@/cow
+udevadm|settle|--timeout=15
+umount|@D@/mnt
+EXP_EOF
+)"
+# pre, WIPE_LISTING=skip (wipe_check): the metadata read, no snapshot, loop, mount, dd or mktemp call
+EXP_SKIP="$(cat <<'EXP_EOF'
+blockdev|--getro|/dev/sdb
+cryptsetup|isLuks|--|/dev/sdb
+cryptsetup|status|git-data
+dmsetup|ls
+findmnt|-n|-S|/dev/sdb
+findmnt|-n|-o|SOURCE|--mountpoint|@W@/root
+findmnt|-n|-o|SOURCE|--mountpoint|@W@/root
+findmnt|-n|-o|UUID|--mountpoint|@W@/root
+findmnt|-n|-o|UUID|--mountpoint|@W@/root
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+find|/proc|-ignore_readdir_race|-maxdepth|3|-type|l|-regex|/proc/[0-9]+/fd/[0-9]+|-lname|/dev/sdb|-print|-quit
+realpath|-e|--|/dev/disk/by-id/scsi-0HC_Volume_111111111
+realpath|-e|--|/dev/sdc
+sleep|2
+stat|-L|-c|%F|--|/dev/sdb
+stat|-L|-c|%t:%T|--|/dev/disk/by-id/scsi-0HC_Volume_111111111
+stat|-L|-c|%t:%T|--|/dev/disk/by-id/scsi-0HC_Volume_222222222
+stat|-L|-c|%t:%T|--|/dev/sdb
+stat|-L|-c|%t:%T|--|/dev/sdc
+EXP_EOF
+)"
+# post_detach / finish (the by-id link already gone)
+EXP_POST="$(cat <<'EXP_EOF'
+dd|if=/dev/mapper/git-data|of=/dev/null|bs=4096|count=1|iflag=direct
+findmnt|-n|-o|SOURCE|--mountpoint|@W@/root
+findmnt|-n|-o|SOURCE|--mountpoint|@W@/root
+findmnt|-n|-o|UUID|--mountpoint|@W@/root
+findmnt|-n|-o|UUID|--mountpoint|@W@/root
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+EXP_EOF
+)"
+
+caught_contract_pre()  { contract_eq "$W" "$EXP_PRE"; }
+caught_contract_skip() { contract_eq "$W" "$EXP_SKIP"; }
+caught_contract_post() { contract_eq "$W" "$EXP_POST"; }
+
 echo "--- TIER A: the host script over a simulated host"
 
 # ── the clean host: skip (wipe_check) and run (wipe) ──────────────────────────────────────────
@@ -397,10 +567,17 @@ run_script pre WIPE_LISTING=skip
 expect_line "A01 clean host, listing skipped (wipe_check)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200$'
 if [ "$(called dmsetup)" = 0 ] && [ "$(called mount)" = 0 ] && [ "$(called losetup)" = 0 ]; then ok "A01 skip: no snapshot was created, nothing mounted (wipe_check stays a metadata read)"
 else no "A01 skip: a snapshot call was made"; fi
+# the operand/flag contract: the record of every selector-bearing call equals the modelled argv (a wrong device, a
+# missing flag or an extra call is a failure; nothing is merely "called")
+if caught_contract_skip; then ok "A01 contract (skip): exactly the modelled argv, no snapshot, loop, mount, dd or mktemp call"
+else no "A01 contract (skip): the recorded argv differs from the model: $(argv_norm "$W" | head -40 | tr '\n' ';' | cut -c1-600)"; fi
 
 world a-run
+set_contract
 run_script pre
 expect_line "A02 clean host, listing run (dirty journal)" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+if caught_contract_pre; then ok "A02 contract (pre, listing): every operand and flag is the modelled one (typed device for getro/getsz/dumpe2fs/isLuks/findmnt -S/the /proc scan, iflag-free, if=/of= never the device, ro mount, table 0 <sectors> snapshot <origin> <cow> N 8, losetup on the COW file, 2 s quiescence)"
+else no "A02 contract (pre, listing): the recorded argv differs from the model: $(argv_norm "$W" | tr '\n' ';' | cut -c1-900)"; fi
 
 # must-PASS: lock dotfiles at the top level and inside repositories/, lost+found inside repositories/
 world a-locks
@@ -409,6 +586,33 @@ tree_clean
 : > "$W/tree/repositories/.init.lock"; : > "$W/tree/repositories/.ws-9.init.lock"; mkdir -p "$W/tree/repositories/lost+found"
 run_script pre
 expect_line "A03 (must-PASS) lock dotfiles and lost+found are not repositories" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=3 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+
+# the exclusions are TYPED: a lock is a regular file, lost+found an empty directory
+world a-lfcontent
+: > "$W/tree/lost+found/$CORPUS_TOP_FILE"
+run_script pre
+expect_refuse "A06 a top-level lost+found that holds a file is off the allowlist (its contents are opened)" 34 offlist
+world a-lfdeep
+mkdir -p "$W/tree/lost+found/$CORPUS_TOP_DIR"
+run_script pre
+expect_refuse "A07 a top-level lost+found that holds a directory is off the allowlist" 34 offlist
+world a-lockdir-top
+mkdir -p "$W/tree/.init.lock"
+run_script pre
+expect_refuse "A08 a top-level DIRECTORY named like the lock file is off the allowlist (the lock exclusion is for regular files)" 34 offlist
+world a-lockdir-repos
+mkdir -p "$W/tree/repositories/.ws-9.init.lock/$CORPUS_REPO_A"
+run_script pre
+expect_refuse "A09 a DIRECTORY named like a lock under repositories/ counts as an entry" 37 repositories_not_empty
+if grep -q 'repos=1' "$W/err"; then ok "A09 the lock-named directory is COUNTED (repos=1), no name"; else no "A09 count missing: $(cat "$W/err")"; fi
+world a-locklink-repos
+ln -s lost+found "$W/tree/repositories/.init.lock"
+run_script pre
+expect_refuse "A09b a SYMLINK named like the bare lock under repositories/ counts as an entry" 37 repositories_not_empty
+world a-lfrepos-content
+mkdir -p "$W/tree/repositories/lost+found/$CORPUS_REPO_A"
+run_script pre
+expect_refuse "A09c a repositories/lost+found that holds an entry counts (only an EMPTY one is excluded)" 37 repositories_not_empty
 
 world a-clean-journal
 printf 'Filesystem features:      has_journal ext_attr resize_inode dir_index filetype extent\nFilesystem state:         clean\nTotal journal blocks:     16384\nBlock size:               4096\n' > "$W/sb_origin"
@@ -433,7 +637,7 @@ run_script pre
 expect_refuse "A11 an extra top-level file" 34 offlist
 
 world a-reposlink
-tree_reset; mkdir -p "$W/tree/lost+found/$CORPUS_REPO_A"; ln -s lost+found "$W/tree/repositories"
+tree_reset; mkdir -p "$W/tree/lost+found" "$W/outside/$CORPUS_REPO_A"; ln -s "$W/outside" "$W/tree/repositories"
 run_script pre
 expect_refuse "A12 repositories is a SYMLINK: never followed, off the allowlist" 34 offlist
 
@@ -525,6 +729,12 @@ touch "$W/fail_dumpe2fs"
 run_script pre
 expect_refuse "A38 dumpe2fs of the origin fails" 33 dumpe2fs_failed
 
+world a-bs1024
+set_contract
+printf 'Filesystem features:      has_journal needs_recovery\nFilesystem state:         not clean\nTotal journal blocks:     8192\nBlock size:               1024\n' > "$W/sb_origin"
+run_script pre
+if contract_has "$W" 'truncate|-s|100663296|--|@D@/cow' 1; then ok "A39a a 1024-byte block size is clamped to 4096 when the COW is sized (8192*4096 + 64 MiB)"; else no "A39a COW size: $(argv_norm "$W" | grep '^truncate' || true)"; fi
+
 world a-geometry
 printf 'Filesystem features:      has_journal needs_recovery\n' > "$W/sb_origin"
 run_script pre
@@ -537,6 +747,9 @@ run_script pre
 if [ "$RC" = 36 ] && [ ! -s "$W/out" ] && grep -q 'rc=36 reason=teardown_failed' "$W/err"; then ok "A40 umount fails -> rc 36 teardown_failed (outranks every other verdict)"
 else no "A40 expected rc 36 teardown_failed; got rc=$RC err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
 # the apparatus is deliberately still up in the simulation (the teardown FAILED); the invariants that matter here are the grammar and the names
+if [ "$(wc -l < "$W/state/shm_dirs")" = 1 ] && [ -d "$(head -n 1 "$W/state/shm_dirs")/mnt" ]; then ok "A40 the script keeps its COW directory while the mount survives (it never removes a tree under a live mount); the suite removes it below"
+else no "A40 the COW directory state after a failed umount is not the modelled one"; fi
+rm -rf -- "$W/shm"
 leak="$(grep -rlF -f "$PATS" "$W/out" "$W/err" "$W/state" || true)"
 if [ -z "$leak" ]; then ok "A40 no name in any output or state file on the teardown-failure path"; else no "A40 name leaked: $leak"; fi
 
@@ -564,6 +777,15 @@ world a-frozen
 : > "$W/root/.cutover-freeze"
 run_script pre
 expect_refuse "A51 the freeze sentinel exists" 12 cutover_frozen
+world a-freeze-probe
+touch "$W/fail_find_freeze"
+run_script pre
+expect_refuse "A56 the store root cannot be read for the freeze sentinel (EACCES/EIO): probe_failed, never 'not frozen'" 16 freeze_probe
+world a-freeze-noroot
+rmdir "$W/root"
+run_script pre
+expect_refuse "A57 the store root does not exist (real find, ENOENT): the sentinel's absence is not asserted" 16 freeze_probe
+
 world a-nouuid
 : > "$W/fs_uuid"
 run_script pre
@@ -719,6 +941,8 @@ world a-post
 touch "$W/byid_gone"
 run_script post_detach
 expect_line "A100 post_detach: link gone, mapper read, store root" '^wipe_assert post_detach ok byid=gone mapper_read=ok store_root=ok$'
+if caught_contract_post; then ok "A100 contract (post_detach): the uncached read is dd if=<mapper> of=/dev/null iflag=direct and nothing else writes or reads a device"
+else no "A100 contract (post_detach): the recorded argv differs from the model: $(argv_norm "$W" | tr '\n' ';' | cut -c1-600)"; fi
 world a-finish
 touch "$W/byid_gone"
 run_script finish
@@ -726,15 +950,31 @@ expect_line "A101 finish: the same checks under their own phase word" '^wipe_ass
 world a-postpresent
 run_script post_detach
 expect_refuse "A102 the by-id link is still present after the detach" 40 byid_still_present
+if contract_has "$W" 'sleep|1' 20; then ok "A102 the settle wait is 20 one-second sleeps (WA_SETTLE_TRIES)"; else no "A102 settle sleeps: $(argv_norm "$W" | grep -c '^sleep|' || true)"; fi
 world a-postdd
 touch "$W/byid_gone" "$W/fail_dd"
 run_script post_detach
 expect_refuse "A103 the uncached mapper read fails" 41 mapper_read_failed
 world a-postroot
-touch "$W/byid_gone"
-rmdir "$W/root"
+touch "$W/byid_gone" "$W/fail_ls_root"
 run_script post_detach
 expect_refuse "A104 the store root cannot be listed" 42 store_root_unreadable
+world a-postbyid-unreadable
+touch "$W/fail_byid_ls"
+run_script post_detach
+expect_refuse "A106 the by-id directory cannot be listed: 'cannot tell' (probe_failed), never 'gone'" 16 byid_dir_unreadable
+world a-postbyid-empty
+touch "$W/byid_gone" "$W/byid_listing_empty"
+run_script post_detach
+expect_refuse "A107 a by-id listing that does not even show the retained LUKS link is no proof of absence" 16 byid_listing_incomplete
+world a-postbyid-stat
+touch "$W/stat_denied_byid"
+run_script post_detach
+expect_refuse "A108 a stat of the by-id link that FAILS while the listing still names it is not 'gone'" 40 byid_still_present
+world a-postfreeze-probe
+touch "$W/byid_gone" "$W/fail_find_freeze"
+run_script post_detach
+expect_refuse "A109 post_detach: the freeze sentinel cannot be read, so it is not asserted absent" 16 freeze_probe
 world a-postnotmapper
 touch "$W/byid_gone"
 printf '/dev/sdb\n' > "$W/findmnt_source"
@@ -819,7 +1059,7 @@ mutant_row() {
 }
 RUN_SCRIPT=""
 set_offdir()   { mkdir -p "$W/tree/$CORPUS_TOP_DIR"; }
-set_reposlink() { tree_reset; mkdir -p "$W/tree/lost+found/$CORPUS_REPO_A"; ln -s lost+found "$W/tree/repositories"; }
+set_reposlink() { tree_reset; mkdir -p "$W/tree/lost+found" "$W/outside/$CORPUS_REPO_A"; ln -s "$W/outside" "$W/tree/repositories"; }
 set_written()  { printf '0 0 0 0 0 0 8 0 0 0 0 0 0 0\n' > "$W/files/sys/dev/block/8:16/stat"; }
 set_isluks0()  { printf '0\n' > "$W/isluks_rc"; }
 set_findfail() { touch "$W/fail_find_listing"; }
@@ -829,6 +1069,7 @@ set_notmapper() { printf '/dev/sdb\n' > "$W/findmnt_source"; }
 set_holders()  { printf 'dm-0\n' > "$W/files/sys/dev/block/8:16/holders"; }
 set_isbacking() { printf '/dev/sdb\n' > "$W/cs_device"; }
 set_umountfail() { touch "$W/fail_umount"; }
+set_gone()     { touch "$W/byid_gone"; }
 set_notblock() { printf '/dev/sdb file 8:10\n/dev/sdc block 8:20\n' > "$W/nodes"; }
 caught_rc()   { # <rc> — true when the run is refused with that rc and prints nothing on stdout
   [ "$RC" = "$1" ] && [ ! -s "$W/out" ]
@@ -885,6 +1126,33 @@ mutant_row m13-late-stat-read-unchecked '  w_late="$(wstat)" || die 16 stat_unre
 mutant_row m14-after-stat-read-unchecked '    w_after="$(wstat)" || die 16 stat_unreadable_after' '    w_after="$(wstat)"' set_stat_late pre caught_16
 mutant_row m15-getro-after-unchecked '    ro_after="$(blockdev --getro "$DEV")" || die 16 getro_failed_after' '    ro_after="$(blockdev --getro "$DEV")"' set_getro_after pre caught_16
 mutant_row m16-awk-gate-fails-open '    case "$arc" in 0) return 0 ;; 1) return 1 ;; *) die 16 awk_failed ;; esac' '    case "$arc" in 0) return 0 ;; *) return 1 ;; esac' set_awk_gate1 pre-skip caught_16
+# M17-M20: the listing and probe tightening
+set_lfcontent()   { : > "$W/tree/lost+found/$CORPUS_TOP_FILE"; }
+set_lockdir()     { mkdir -p "$W/tree/repositories/.ws-9.init.lock/$CORPUS_REPO_A"; }
+set_lfrepos()     { mkdir -p "$W/tree/repositories/lost+found/$CORPUS_REPO_A"; }
+set_stat_denied() { touch "$W/stat_denied_byid"; }
+set_noroot()      { rmdir "$W/root"; }
+caught_37() { caught_rc 37; }
+caught_40() { caught_rc 40; }
+mutant_row m17-lostfound-contents-unread '      [ "$ln" -eq 0 ] || OFFLIST=1' '      :' set_lfcontent pre caught_34
+mutant_row m18-lock-excluded-by-name '! \( -type f \( -name '"'"'.*.init.lock'"'"' -o -name '"'"'.init.lock'"'"' \) \)' "! -name '.*.init.lock' ! -name '.init.lock'" set_lockdir pre caught_37
+mutant_row m19-lostfound-repos-excluded-by-name '! \( -type d -name lost+found -empty \)' '! -name lost+found' set_lfrepos pre caught_37
+mutant_row m20-byid-stat-fails-open '    while byid_present; do' '    while stat -- "$BYID"; do' set_stat_denied post_detach caught_40
+mutant_row m21-freeze-by-test-e '    fz="$(find -H "$OLD_ROOT" -mindepth 1 -maxdepth 1 -name .cutover-freeze -print)" || die 16 freeze_probe' '    fz=""; [ ! -e "$OLD_ROOT/.cutover-freeze" ] || fz=x' set_noroot pre caught_16
+# M22-M33: the selector mutants (each aims one call at the wrong operand or drops/adds one flag): the clean run's
+# whole argv record must stop equalling the model
+mutant_row m22-getro-on-mapper '    ro="$(blockdev --getro "$DEV")" || die 16 getro_failed' '    ro="$(blockdev --getro "$MAPPER")" || die 16 getro_failed' set_contract pre caught_contract_pre
+mutant_row m23-isluks-on-mapper '    cryptsetup isLuks -- "$DEV" || rc=$?' '    cryptsetup isLuks -- "$MAPPER" || rc=$?' set_contract pre caught_contract_pre
+mutant_row m24-proc-scan-on-mapper "-lname \"\$DEV\"" "-lname \"\$MAPPER\"" set_contract pre caught_contract_pre
+mutant_row m25-dd-writes-the-device 'dd if="$MAPPER" of=/dev/null bs=4096' 'dd if="$MAPPER" of="$DEV" bs=4096' set_gone post_detach caught_contract_post
+mutant_row m26-dd-cached-read ' count=1 iflag=direct ||' ' count=1 ||' set_gone post_detach caught_contract_post
+mutant_row m27-mount-read-write 'mount -o ro,errors=remount-ro,nosuid,nodev,noexec' 'mount -o rw,errors=remount-ro,nosuid,nodev,noexec' set_contract pre caught_contract_pre
+mutant_row m28-snapshot-persistent 'snapshot $DEV $WA_LOOP N 8' 'snapshot $DEV $WA_LOOP P 8' set_contract pre caught_contract_pre
+mutant_row m29-snapshot-origin-cow-swapped 'snapshot $DEV $WA_LOOP N 8' 'snapshot $WA_LOOP $DEV N 8' set_contract pre caught_contract_pre
+mutant_row m30-loop-on-the-device 'losetup --find --show -- "$WA_DIR/cow"' 'losetup --find --show -- "$DEV"' set_contract pre caught_contract_pre
+mutant_row m31-no-quiescence-sleep '    sleep 2' '    :' set_contract pre caught_contract_pre
+mutant_row m32-cow-size-constant 'cow_bytes=$((jb * bs + 67108864))' 'cow_bytes=4096' set_contract pre caught_contract_pre
+mutant_row m33-no-direct-find-regex "-regex '/proc/[0-9]+/fd/[0-9]+'" "-regex '/proc/[0-9]+/fdinfo/[0-9]+'" set_contract pre caught_contract_pre
 echo "    ($MUT_ROWS mutation rows run)"
 
 # Harness rows (the mutation machinery itself is not neutered)
@@ -1323,12 +1591,12 @@ fi
 # FLOOR — self-contained: bash builtins and this suite's own counters, reported by printf + exit and
 # never through ok()/no() (ADR-193). Each bound is a literal on the line directly above its `if`.
 # ══════════════════════════════════════════════════════════════════════════════════════════
-EXPECTED_INVARIANT_RUNS=79
+EXPECTED_INVARIANT_RUNS=92
 if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=405
+MIN_ASSERTIONS=570
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1
