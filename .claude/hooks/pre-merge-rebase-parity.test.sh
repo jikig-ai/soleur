@@ -207,6 +207,54 @@ else
   fail "[.claude] wrapped form BYPASSED the gate — the \\s--\\s matcher alternative is missing"
 fi
 
+# T-M2 (#10248): the rtk-prefixed form must be intercepted identically — the
+# boundary alternation gains the shared wrapper-prefix atom.
+i=$((i + 1))
+work="$TMP/w$i"
+build_repo "$work" "unreviewed" "$TMP/o$i.git"
+got=$(denied "$CLAUDE_HOOK" "$work" "rtk gh pr merge 902 --squash")
+if [[ "$got" == "yes" ]]; then
+  pass "[.claude] rtk-prefixed 'gh pr merge' is intercepted"
+else
+  fail "[.claude] rtk-prefixed form BYPASSED the gate — the wrapper-boundary fragment is missing"
+fi
+i=$((i + 1))
+work="$TMP/w$i"
+build_repo "$work" "unreviewed" "$TMP/o$i.git"
+got=$(denied "$CLAUDE_HOOK" "$work" "rtk run gh pr merge 903 --squash")
+if [[ "$got" == "yes" ]]; then
+  pass "[.claude] 'rtk run gh pr merge' (exec subcommand) is intercepted"
+else
+  fail "[.claude] 'rtk run gh pr merge' BYPASSED the gate"
+fi
+
+# T-M3 (#10248 Design Note A): the _merge_args sed must strip the full
+# boundary + wrapper-atom prefix, not `^[^g]*` — `X=g` strands that strip on
+# the env-assignment's own `g`, leaving the gated command unparsed.
+# Extract the function from the hook source and run it against the fragment.
+# unset-first per the lib contract (an inherited env value must not masquerade).
+unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX SOLEUR_BOUNDARY_PFX_LOADED
+source "$SCRIPT_DIR/../../plugins/soleur/scripts/lib/wrapper-boundary.sh" 2>/dev/null || true
+eval "$(sed -n '/^_merge_args()/,/^}/p' "$CLAUDE_HOOK")"
+_margs="$(_merge_args 'X=g rtk gh pr merge 5' 2>/dev/null)"
+if [[ "$_margs" == " 5" ]]; then
+  pass "[.claude] _merge_args strips env+rtk prefix (X=g rtk … → ' 5')"
+else
+  fail "[.claude] _merge_args left prefix residue: '$_margs' (expected ' 5')"
+fi
+_margs="$(_merge_args 'gh pr merge 4243' 2>/dev/null)"
+if [[ "$_margs" == " 4243" ]]; then
+  pass "[.claude] _merge_args unchanged on the bare spelling"
+else
+  fail "[.claude] _merge_args regressed on bare spelling: '$_margs' (expected ' 4243')"
+fi
+_margs="$(_merge_args 'a && rtk run gh pr merge --squash' 2>/dev/null)"
+if [[ "$_margs" == " --squash" ]]; then
+  pass "[.claude] _merge_args strips chain boundary + rtk run prefix"
+else
+  fail "[.claude] _merge_args residue on chained rtk run: '$_margs' (expected ' --squash')"
+fi
+
 echo ""
 echo "T-S: the Signal 2 matcher and the trailer lookup are present in source"
 # Source-level assertion on the alternation itself. The behavioural cases above

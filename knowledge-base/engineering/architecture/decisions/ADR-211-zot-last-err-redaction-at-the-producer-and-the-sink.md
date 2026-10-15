@@ -348,3 +348,22 @@ Evidence is posted on #7960 (comment `5731215695`, 2026-09-18T14:10:58Z) rather 
 in this file. Sites this amendment retracts, each carrying its own dated marker: the Status
 bullet, the Delivery-state note, the Primary re-evaluation trigger bullet, and the C4
 `github -> publicReader` edge.
+
+## Amendment 2026-10-14 (#7530): the clientIP condition is discharged by a standing alert, not by masking
+
+Appended, not edited. The *Scope limit* bullet above says the producer control "does **not** mask
+`clientIP`. That is deliberate and is owned by **#7530**", and the frontmatter lists #7530 as a
+related issue. Read that ownership as **discharged by the standing alert**
+`registry_clientip_not_rfc1918` (ADR-218 amendment of the same date) **from the moment it is in force**:
+merge-conditioned, and NOT in force until PR #10320 is merged, the push apply has created the alert and
+the #7530 follow-through probe has graded the new boot's window (the legal records say the same). `clientIP`
+is **detected and alerted, not masked**. A non-RFC1918 address-shaped first `clientIP` on a shipped
+registry-plane row emails the team within about 20 minutes (free tier: email only, no escalation policy);
+the value itself is still stored unredacted, so the condition "on the current topology `clientIP` is
+RFC1918 and not Art. 4(1) personal data" becomes monitored rather than merely documented. It stays
+detection, not prevention, and it is sampled over shipped rows: say "monitored and alerted by email" in
+any record. If the alert fires, the first carrier of an unmasked value is the `SOLEUR_ZOT_LOG` shipper
+row (the live probe found 0 `SOLEUR_ZOT_DISK` rows carrying a `clientIP` in 7 days; the disk arm's
+`zot_last_err=` tail carries zot's own log line only on the non-fallback tiers, the tier-4 fallback emits
+the parsed message alone), and masking becomes a CLO decision again (runbook
+`registry-clientip-rfc1918-7530.md`).

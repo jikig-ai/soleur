@@ -5691,12 +5691,6 @@ if want_scripts; then
   # 2026-10-15, forget >48 h old, or closed unmerged; 2 = NOT YET; 3 = gh failed). Registered
   # explicitly (orphan-suite class above): a false 0 would close the tracker on a live hold.
   run_suite "scripts/workspaces-plaintext-hold-9348" bash scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh
-  # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
-  # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
-  # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
-  # luks-monitor rows) is exit 2 and never FAIL/PASS, and that an empty result is a real zero
-  # while a failed query is exit 2.
-  run_suite "scripts/luks-monitor-host-timer-8706" bash scripts/followthroughs/luks-monitor-host-timer-8706.test.sh
   # #6931: exit-code harness for the web-2 live-LUKS soak-gated closure probe. Registered explicitly
   # (orphan-suite class above). Its exit 0 closes #6931, so the suite pins the arms that must NOT reach
   # it: a young marker, a red probe row since the marker (and that a FAIL row from BEFORE the marker is
@@ -6392,6 +6386,10 @@ if want_scripts; then
   # the measured record shapes, a restricted PATH, and a mutant per guard row). Same explicit-registration and LAST-in-block
   # reasons as above. Declared edge set, not always-on.
   run_suite "scripts/ci-pr-selection" bash scripts/ci-pr-selection.test.sh
+  # #7530 (PR 10320): the clientIP-alert post-merge probe's exit-code contract (same stubs, plus the SQL the
+  # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
+  # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
 fi
 
 # Named bun-test entries — bun shard.

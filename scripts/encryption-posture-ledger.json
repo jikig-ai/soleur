@@ -281,15 +281,15 @@
    },
    "at_rest": {
     "mechanism": "plaintext-exception",
-    "evidence": "apps/web-platform/infra/inngest-provision-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal_inngest\" (RAW — no format attribute, no LUKS apparatus) — a posture mirror of hcloud_volume.inngest_redis's declaration, because the #8539 forced-race rehearsal's two-volume shape must match the production boot it rehearses",
+    "evidence": "apps/web-platform/infra/inngest-provision-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal_inngest\" (RAW — no format attribute, no LUKS apparatus) — UNUSED since #9786: the rendered template no longer takes this volume's id, so the volume is attached and never read; it formerly mirrored the retired plaintext AOF volume of the production boot the #8539 forced-race rehearsal reproduces. Kept pending #10112 (removal changes the rehearsal's attach topology and plan-shape fixtures)",
     "defends_against": "nothing at the volume layer",
     "does_not_defend": "at-rest recovery of the detached device — acceptable here only because the volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown",
     "disclosed_as": "not-publicly-claimed",
     "live_verification": "unavailable:n/a by construction — NO user data ever reaches a rehearsal host. The volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown, with a post-teardown Hetzner API assertion that no soleur-inngest-rehearsal-* object survives (#9175).",
     "exception": {
-     "justification": "It mirrors the PROD plaintext member BY DESIGN. Making the rehearsal volume LUKS while hcloud_volume.inngest_redis is plaintext would rehearse a boot that does not exist — the provision-rehearsal's entire value is that it boots what production would boot, so its dual-volume shape has to match production's, including the currently unencrypted member.",
+     "justification": "UNUSED LEFTOVER since #9786: it mirrored the prod plaintext member, which was destroyed in #8285, and the template no longer takes this volume's id, so it is attached to the rehearsal host and never read, mounted or formatted (the mapper name below is historical). It holds no data and is created empty and destroyed empty with the rehearsal. Removal is tracked in #10112 and changes the rehearsal's attach topology and plan-shape fixtures, so it is not done in the parked strip.",
      "tracking_issue": "#8285",
-     "reevaluate_when": "the #9175 rehearsal completes and the volumes are destroyed — the resource is transient by construction; also reevaluate if hcloud_volume.inngest_redis's posture changes (this mirror must move with it, or the rehearsal stops rehearsing production)",
+     "reevaluate_when": "the #9175 rehearsal completes and the volumes are destroyed — the resource is transient by construction; also reevaluate when #10112 removes this unused volume (nothing in the template reads it any more)",
      "expires_on": "2026-12-31"
     }
    }
@@ -512,7 +512,7 @@
    "in_transit": {
     "tls": "none (plain HTTP on the Hetzner private network by design, ADR-100)",
     "cert_verification": "off",
-    "does_not_defend": "a passive on-net attacker on 10.0.1.0/24 could read INNGEST_EVENT_KEY (in the /e/<key> send path), the hashed signing key (Bearer signkey-prod-<sha256>), event payloads and step outputs; replaying a sniffed key additionally requires sending from a web host's private IP (the inngest host's nftables allows :8288 only from 10.0.1.10/10.0.1.11). The raw signing key never crosses the wire (Inngest->app requests carry only an HMAC).",
+    "does_not_defend": "a passive on-net attacker on 10.0.1.0/24 could read INNGEST_EVENT_KEY (in the /e/<key> send path), the hashed signing key (Bearer signkey-prod-<sha256> on the app's run-list reads — true as of 2026-10-15; before that date apps/web-platform/lib/inngest/list-runs.ts sent the RAW key, and that exposure window plus the rotation question is recorded on #10136), and event payloads; step outputs' transport is not asserted on this link (step execution is attributed to the Cloudflare serve-URL step-call leg, #9139); replaying a sniffed key additionally requires sending from a web host's private IP (the inngest host's nftables allows :8288 only from 10.0.1.10/10.0.1.11). Inngest->app requests carry only an HMAC.",
     "disclosed_as": "not-publicly-claimed",
     "exception": {
      "justification": "the same private-network-only plaintext exception recorded for the zot registry link: the app<->scheduler channel stays inside the Hetzner private network, both ends were recorded as nftables-restricted to the web hosts' private IPs, and the peers on 10.0.1.0/24 are our own hosts (git-data .20, registry .30). Transport confidentiality on this link is accepted, not provided; recorded when the #6178 2.4 app-repoint (#8191) moved the channel off the host loopback. Renewed to 2026-11-12 pending the CLO ruling due 2026-10-24; this hop carries event payloads and step outputs, so it is the priority link to close. Not re-measured 2026-10-12: nftables peer restrictions. The published unqualified TLS sentence (privacy-policy.md / data-protection-disclosure.md, 2026-09-28) is referred to the 2026-10-24 CLO ruling and disclosed_as stays not-publicly-claimed pending it (#10136).",

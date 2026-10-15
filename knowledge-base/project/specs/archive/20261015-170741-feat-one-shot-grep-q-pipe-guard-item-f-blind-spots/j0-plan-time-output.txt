@@ -1,0 +1,12 @@
+swept files: 1858
+functions with a stdin early-exit grep body: 25
+awk-exit                                   lines=   41 files=  34 ctx={'capture': 14, 'cond': 19, 'bare': 8}
+awk-exit-multiline                         lines=   13 files=  12 ctx={'bare': 10, 'cond': 1, 'capture': 2}
+grep-early-plain(V2 sees)                  lines=   22 files=   5 ctx={'cond': 20, 'capture': 1, 'bare': 1}
+grep-early/flag-after-operand              lines=    1 files=   1 ctx={'capture': 1}
+head-N/head-1                              lines=  575 files= 226 ctx={'cond': 142, 'capture': 355, 'bare': 78}
+head-N/head-N                              lines=  179 files=  80 ctx={'capture': 30, 'bare': 122, 'cond': 27}
+read                                       lines=    3 files=   2 ctx={'bare': 3}
+var-binary/early-flag                      lines=    1 files=   1 ctx={'bare': 1}
+var-binary/no-early-flag                   lines=  709 files= 172 ctx={'cond': 155, 'bare': 474, 'capture': 80}
+trailing-bar joined logical lines: 66; of those whose joined text holds a reader stage: 8

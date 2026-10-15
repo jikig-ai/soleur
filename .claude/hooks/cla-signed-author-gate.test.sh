@@ -116,6 +116,11 @@ t1() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch
   out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')"); rc=$?
   assert_deny "T1 unsigned author + gh pr merge denies" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
+# T1b: rtk-prefixed merge reaches the gate identically (#10248)
+t1b() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-rtk "$UNSIGNED")
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'rtk gh pr merge 123 --squash --auto')") || rc=$?
+  assert_deny "T1b unsigned author + rtk gh pr merge denies (#10248)" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
 # T2: all-signed commits + gh pr merge → PASS
 t2() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-y test@test.local)
   out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')"); rc=$?
@@ -147,7 +152,7 @@ t6() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch
   out=$(run_hook "$inc" "$(make_payload "$work" $'git add . && git commit -m "ship note\ngh pr merge must not be hand-rolled\n"')"); rc=$?
   assert_pass "T6 commit-body gh pr merge does not fire (#5192)" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
-t1; t2; t3; t4; t5; t6
+t1; t1b; t2; t3; t4; t5; t6
 echo "----"
 echo "$PASS/$TOTAL passed"
 [[ "$FAIL" -eq 0 ]] || exit 1
