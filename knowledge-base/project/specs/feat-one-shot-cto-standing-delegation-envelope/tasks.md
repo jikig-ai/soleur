@@ -69,9 +69,9 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 
 ## Phase 10: ADR, C4, learning, finalize
 
-- 10.1 `soleur:architecture` ADR-288 plus `Amended by ADR-288` pointer in ADR-084.
-- 10.2 Edit `model.c4` (CTO component, plugin-side and hook-side GitHub edges); run C4 syntax, render and count-parity tests.
-- 10.3 Write the compound learning.
-- 10.4 Finalize, in this order: regenerate shard manifest (`python3 scripts/regenerate-shard-manifest.py --incremental --write`), re-probe the ADR ordinal across every `origin/*` ref, markdownlint plan and tasks, `lint-skill-body-budget.py`, `lint-guard-contract.py`, `bash scripts/test-all.sh --print-selection` then the bounded default run.
-- 10.5 File three follow-up issues (production-change skill, delegated-act digest, receipt-checking hook).
-- 10.6 PR body: `Ref #10333`, `Ref #9757`, `## Changelog`, `semver:minor`, the verifier verdicts, the three hold-probe outputs; leave the PR ready and unarmed until `## Operator Holds` discharge.
+- [x] 10.1 `soleur:architecture` ADR-288 plus `Amended by ADR-288` pointer in ADR-084.
+- [x] 10.2 Edit `model.c4` (CTO component, plugin-side and hook-side GitHub edges); run C4 syntax, render and count-parity tests.
+- [x] 10.3 Write the compound learning.
+- [x] 10.4 (shard manifest, ordinal re-probe, markdownlint, body-budget and guard-contract lints done; `--print-selection` and the bounded default run belong to the ship step) Finalize, in this order: regenerate shard manifest (`python3 scripts/regenerate-shard-manifest.py --incremental --write`), re-probe the ADR ordinal across every `origin/*` ref, markdownlint plan and tasks, `lint-skill-body-budget.py`, `lint-guard-contract.py`, `bash scripts/test-all.sh --print-selection` then the bounded default run.
+- [x] 10.5 File three follow-up issues (production-change skill, delegated-act digest, receipt-checking hook).
+- [ ] 10.6 PR body: `Ref #10333`, `Ref #9757`, `## Changelog`, `semver:minor`, the verifier verdicts, the three hold-probe outputs; leave the PR ready and unarmed until `## Operator Holds` discharge.
