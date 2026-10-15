@@ -16,10 +16,34 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh" --full   # full battery
 2. A repo runner advertising the capability — `scripts/test-all.sh` whose
    `--print-selection` flag is registered at a case-label/usage-table position
    (a comment or prose mention does not count) — delegated `--affected` / `--full`.
+   The probe runs **before** the gate's own base resolution and global/inert
+   classification: a capability-positive runner owns the diff decision, so an
+   all-inert or global-paths diff still delegates, and `--base` does NOT reach
+   it (the runner resolves its own base).
 3. Stack adapters, in order: nx/turbo → JS/TS (vitest `related`, jest
    `--findRelatedTests`) → Python (test-file diffs run those files; source diffs
    via `pytest-testmon` when importable, else full suite; `-n auto` iff
    `pytest-xdist` imports) → Go (changed packages + `go list` reverse-deps).
+   Gate-side base resolution, the changed-set census and `--base` apply only
+   here.
+
+### Runner-authoring contract
+
+A `scripts/test-all.sh` advertises the capability by registering
+`--print-selection` at a case-label or usage-table position; the gate then
+delegates `--affected` / `--full` and maps the runner's exit codes:
+
+| runner rc | runner meaning | gate maps to |
+|-----------|----------------|--------------|
+| 0 | suites ran and passed | rc 0, `reason=delegated` |
+| 1 | a selected suite failed | rc 1 |
+| 2 | usage error / unrecognized flag | rc 4 `runner-refused` |
+| 3 | zero failed but ≥1 suite signal-killed or declined | rc 1 `runner-signal` |
+| 4 | refused — nothing ran | rc 4 `runner-refused` |
+
+`--print-selection` must print the affected selection and exit before any suite
+runs. A runner that cannot honour this table must not register the flag — the
+gate probes registration, not presence.
 
 ## Exit contract
 
@@ -37,12 +61,26 @@ runner `3` → rc 1 `reason=runner-signal`.
 
 ## Output
 
-- Human line: `Ran X of N test files affected by this change: passed.`
-- Machine line: `AFFECTED_GATE ran=X of=N skipped=Y mode=<selected|full|custom> reason=… stack=… ci=<file|none>`
-- `NO_TESTS_AFFECTED` + `No tests ran: docs-only change.` for an all-inert diff.
-- `--explain` prints the selection and per-path reasons without running.
-- `--self-check` validates config + toolchain and prints `AFFECTED_GATE_SELF_CHECK ok`.
-- `--base <ref>` overrides base-ref resolution.
+- Human line: `Ran X of N test files affected by this change: passed.`; a
+  delegated or `test_command` pass (opaque counts) still prints
+  `affected-suite gate passed.`
+- Machine line: `AFFECTED_GATE ran=X of=N skipped=Y mode=<selected|full|custom|explain|none|help> reason=… stack=… ci=<file|none>`
+  on every verdict path, including refusals and non-run paths (`explain`,
+  `help`, `self-check`) — counts are `-` where no honest count exists.
+- `NO_TESTS_AFFECTED` + `No tests ran: docs-only change.` for an all-inert diff
+  (adapter arm only — a capability-positive runner decides inertness itself).
+- `--explain` prints the selection and per-path reasons without running; under
+  `test_command` it reports `mode=custom` plus the configured command, and under
+  a capable runner it reports `mode=delegated` (run
+  `bash scripts/test-all.sh --print-selection` for the runner's own selection).
+- `--self-check` validates config + toolchain and prints
+  `AFFECTED_GATE_SELF_CHECK ok`; bounded — worst case is the per-stack
+  `--version` timeout sum (~80 s), the happy path seconds.
+- `--base <ref>` overrides base-ref resolution — **adapter arm only**; a
+  delegated runner resolves its own base.
+- Malformed (unparseable) `.soleur-test-gate.json` is `rc 4
+  reason=bad-config key=.soleur-test-gate.json` — the filename stands in for
+  the key because no key can be read from a file that does not parse.
 - Wording is always "affected-suite gate passed" — never "tests verified". CI
   stays the authoritative merge gate.
 
@@ -53,8 +91,8 @@ runner `3` → rc 1 `reason=runner-signal`.
 | `test_command` | string | Full-run command via `bash -c` from repo root; vacuous (`true`, `:`, `exit 0`, bare `echo`) → `vacuous-test-command` |
 | `global_paths` | string[] | Replaces built-ins (lockfiles, `package.json`, `pyproject.toml`, `go.mod`, `tsconfig*`, `vitest.config.*`, `jest.config.*`, `conftest.py`, `.github/workflows/**`); any hit forces the full command |
 | `inert_paths` | string[] | Replaces built-ins (default `**/*.md`); all-inert diff → `NO_TESTS_AFFECTED` |
-| `budget_seconds` | number | Wall-clock cap; enforced only when CI detected; default 900 |
-| `max_workers` | number | Overrides `max(1, ncpu/2) / (1 + running gate processes)` |
+| `budget_seconds` | number | Wall-clock cap; enforced only when CI detected; default 900; must be a positive integer |
+| `max_workers` | number | Overrides `max(1, ncpu/2) / (1 + running gate processes)`; positive integer |
 | `budget_ci` | boolean | Forces CI-deferral eligibility |
 
 ## Worked examples

@@ -61,8 +61,10 @@ affected_running_gates() {
     # Self and (when bash >= 4 exposes it) the command-substitution subshell
     # this loop runs in — the subshell INHERITS this script's argv and would
     # otherwise self-count. bash 3.2 has no BASHPID: the substitution then
-    # counts as one extra gate, biasing width DOWN — the safe direction.
-    [[ "$pid" == "$$" || "$pid" == "${BASHPID:-$pid}" ]] && continue
+    # counts as one extra gate, biasing width DOWN — the safe direction (an
+    # undercount would bias width UP, toward oversubscription).
+    [[ "$pid" == "$$" ]] && continue
+    [[ -n "${BASHPID:-}" && "$pid" == "$BASHPID" ]] && continue
     w=()
     read -ra w <<<"${BASH_REMATCH[2]}"
     ((${#w[@]} > 0)) || continue
@@ -95,6 +97,29 @@ affected_running_gates() {
     esac
   done < <(ps -eo pid=,args= 2>/dev/null)
   printf '%s\n' "$n"
+}
+
+# --- file census ---------------------------------------------------------------
+# affected_find_files <count|any> <basename-glob>… — the ONE census walker every
+# adapter shares (consolidates four near-identical find blocks). Prints matching
+# paths; `any` adds -quit so callers can pipe to `grep -q .` without a SIGPIPE
+# short-read. The prune list is the UNION of what any adapter skips — build and
+# vendor output is never a test source.
+affected_find_files() {
+  local mode="$1"; shift
+  local -a expr=()
+  local g first=1
+  for g in "$@"; do
+    (( first )) || expr+=(-o)
+    expr+=(-name "$g")
+    first=0
+  done
+  local -a tail=(-print)
+  [[ "$mode" == any ]] && tail=(-print -quit)
+  find . \( -name .git -o -name node_modules -o -name vendor -o -name .venv \
+       -o -name venv -o -name .tox -o -name __pycache__ -o -name dist \
+       -o -name build -o -name coverage -o -name .next \) -prune \
+    -o -type f \( "${expr[@]}" \) "${tail[@]}" 2>/dev/null
 }
 
 # --- worker width ------------------------------------------------------------
@@ -136,8 +161,21 @@ affected_timeout() {
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if (( waited >= secs )); then
+      # Process-group kill first — a bounded command's own children outlive a
+      # direct-kill of the leader. GUARDED: under non-job-control `&` the child
+      # shares OUR process group, and group-killing that would suicide the
+      # gate; the direct kill below is the fallback that always applies.
+      local pgid="" ownpg=""
+      pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+      ownpg="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
+      if [[ -n "$pgid" && "$pgid" != "$ownpg" ]]; then
+        kill -TERM -- "-$pgid" 2>/dev/null || true
+      fi
       kill -TERM "$pid" 2>/dev/null || true
       sleep 1
+      if [[ -n "$pgid" && "$pgid" != "$ownpg" ]]; then
+        kill -KILL -- "-$pgid" 2>/dev/null || true
+      fi
       kill -KILL "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       return 124
@@ -190,9 +228,14 @@ finish() {
       if [[ "$reason" == inert ]]; then
         echo "NO_TESTS_AFFECTED inert_rule=${INERT_RULE:--}"
         echo "No tests ran: docs-only change."
-      elif [[ "$reason" == help || "$ran" == "-" ]]; then
-        : # non-run paths (help, explain, self-check) emit no verdict sentence —
-          # a `Ran - of -` line would read as a test result that never happened.
+      elif [[ "$ran" == "-" ]]; then
+        # `-` counts mark both real runs whose tallies are opaque (delegated
+        # runner, custom-command — these still owe the verdict line) and paths
+        # where nothing ran (help, explain, self-check — a `Ran - of -` line or
+        # a pass claim would read as a test result that never happened).
+        if [[ "$mode" != explain && ( "$reason" == delegated || "$reason" == custom-command ) ]]; then
+          echo "affected-suite gate passed."
+        fi
       else
         printf 'Ran %s of %s test files affected by this change: passed.\n' "$ran" "$of"
         echo "affected-suite gate passed."
@@ -205,7 +248,12 @@ finish() {
       ;;
     6)
       echo "AFFECTED_GATE_BUDGET_DEFERRED ran=$ran of=$of"
-      echo "Budget expired before the run completed; the detected CI test workflow is the authoritative gate."
+      if [[ "$ci" == config:* ]]; then
+        # budget_ci forced eligibility — no workflow was detected to name.
+        echo "Budget expired before the run completed; CI deferral was forced by ${ci} — the CI gate is authoritative."
+      else
+        echo "Budget expired before the run completed; the detected CI test workflow ($ci) is the authoritative gate."
+      fi
       ;;
     7)
       echo "No test suite detected in this repository; the affected-suite gate had nothing to run."

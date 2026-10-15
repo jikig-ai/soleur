@@ -96,6 +96,18 @@ run_step() {
     echo "  sibling run or a subagent context — resolve the printed reason= and re-run, or wait" >&2
     echo "  for the sibling. An AFFECTED_UNRESOLVED print names the refusal directly." >&2
     exit 4
+  elif (( rc == 6 )); then
+    # affected-tests.sh's AFFECTED_GATE_BUDGET_DEFERRED: the wall-clock budget
+    # expired AND a CI test workflow was detected, which the contract makes the
+    # authoritative gate. Pass WITH a note — the local evidence is partial, the
+    # push is allowed, and the CI `test` context remains the merge blocker
+    # (ADR-288 records the block-vs-pass decision as pass-with-note).
+    echo "[note] $name — exited 6 (budget-deferred): the detected CI test workflow is the authoritative gate; local coverage is partial." >&2
+  elif (( rc == 7 )); then
+    # affected-tests.sh's no-suite verdict: the gate found nothing to run and
+    # disclosed it. Pass WITH a note — disclosed non-coverage, never a silent
+    # pass and never labelled one (same ADR-288 decision).
+    echo "[note] $name — exited 7: no test suite detected; the gate disclosed the gap rather than running tests." >&2
   else
     echo "[FAIL] $name" >&2
     exit 1

@@ -27,7 +27,9 @@
 # itself self-tested against an empty ledger.
 #
 # cloud coverage: run_gate ALWAYS invokes the SUT with `env -u CLAUDE_PLUGIN_ROOT`, so
-# every row exercises the identity-resolver plugin-root path (ADR-179).
+# every row exercises the no-plugin-root path (the gate resolves its libs by
+# BASH_SOURCE; no in-gate resolver exists — ADR-179's three-arm diagnostic lives
+# in commands/go.md, not here).
 #
 # Authoring note (work/SKILL.md): never `producer | grep -q` under pipefail — every rc is
 # captured on its own line before it is inspected.
@@ -256,7 +258,9 @@ case " $* " in
         *) echo "stub nx: expected arg '$want' missing: $*" >&2; exit 64 ;;
       esac
     done
-    echo "nx affected: ran target test"
+    # FAKE_NX_LINE controls the summary line — e.g. "… for 10 tasks" must NOT
+    # read as a vacuous "0 tasks" verdict.
+    echo "${FAKE_NX_LINE:-nx affected: ran target test}"
     exit "${FAKE_NX_RC:-0}" ;;
   *" show "*)
     for p in ${FAKE_NX_PROJECTS:-webapp}; do printf '%s\n' "$p"; done
@@ -395,6 +399,7 @@ mk_repo() { # prints the repo path
 # seal_base <repo> — commit the seeded base, mint origin refs, move to `feature`.
 seal_base() {
   local r="$1" br
+  assert_fixture_dir "$r"
   # symbolic-ref, not rev-parse: HEAD is UNBORN until the commit below lands, and
   # rev-parse --abbrev-ref errors out there while symbolic-ref still reads the
   # branch HEAD points at.
@@ -407,7 +412,7 @@ seal_base() {
 }
 
 chg()        { local r="$1" f="$2"; mkdir -p "$r/$(dirname "$f")"; printf '%b\n' "${3:-change}" > "$r/$f"; }
-commit_chg() { chg "$1" "$2" "${3:-change}"; git -C "$1" add -A; git -C "$1" commit -q -m "change: $2"; }
+commit_chg() { assert_fixture_dir "$1"; chg "$1" "$2" "${3:-change}"; git -C "$1" add -A; git -C "$1" commit -q -m "change: $2"; }
 
 seed_js() { # <repo> — vitest stack: package.json, src, a test file, node_modules stub
   local r="$1"
@@ -616,7 +621,7 @@ reset_fakes() {
   export FAKE_PYTEST_RC=0 FAKE_PYTEST_EXPECT="" FAKE_PYTEST_SLEEP=""
   export FAKE_PY_IMPORTABLE="pytest"
   export FAKE_GO_TEST_RC=0 FAKE_GO_EXPECT="" FAKE_GO_DIR="" FAKE_GO_GOMOD="" FAKE_GO_REQUIRE_P=1
-  export FAKE_NX_RC=0 FAKE_NX_EXPECT="" FAKE_NX_PROJECTS=""
+  export FAKE_NX_RC=0 FAKE_NX_EXPECT="" FAKE_NX_PROJECTS="" FAKE_NX_LINE=""
   export FAKE_TURBO_RC=0 FAKE_TURBO_EXPECT=""
   export FAKE_RUNNER_RC=0 FAKE_RUNNER_AFFECTED_RC="" FAKE_RUNNER_FULL_RC=""
   export FAKE_PM_TEST_RC=0
@@ -727,6 +732,7 @@ run_gate "$R_CAP" gate
 want_rc 0 "B1: capability-positive runner delegates cleanly"
 want_call "B1: runner received --affected" 'test-all.*--affected'
 want_no_call "B1: adapters stay dark under delegation" 'vitest	'
+want_out "B1: a delegated pass still prints the verdict line" 'affected-suite gate passed\.'
 
 # B1b: --full passthrough hands --full to the same runner.
 reset_fakes
@@ -754,6 +760,15 @@ want_call "B2: the custom command ran from the repo root" "custom	cwd=$R_CUST"
 want_no_call "B2: test_command bypasses the repo runner" 'test-all	'
 want_no_call "B2: test_command bypasses adapters" 'vitest	'
 want_field "B2: mode=custom" mode 'custom'
+
+# B2b: --explain under test_command must answer BEFORE the arm runs — the custom
+# command IS the whole selection; explain emits mode=custom + the command, rc 0.
+reset_fakes
+run_gate "$R_CUST" explain --explain
+want_rc 0 "B2b: --explain under test_command exits 0"
+want_out "B2b: explain reports mode=custom" 'mode=custom'
+want_out "B2b: the configured command is printed" 'bash scripts/custom\.sh'
+want_no_call "B2b: explain ran nothing (no command, no runner, no adapter)" 'custom|test-all|vitest'
 
 # B3 [G2-1]: a foreign same-named runner is never handed Soleur flags — the diff
 # falls through to the stack adapter.
@@ -801,14 +816,50 @@ want_rc 1 "B6c: runner rc 1 stays rc 1"
 
 # B7 — the Soleur repo itself delegates: --explain in the real tree must resolve
 # to the repo runner or name its mode. Bounded at 120 s (the affected pre-pass is
-# measured ~150 s contended on a busy host, seconds here).
+# measured ~150 s contended on a busy host, seconds here). REAL_NODE/REAL_PY are
+# passed exactly as run_gate does: the real repo carries a .soleur-test-gate.json,
+# and the shimmed interpreters must delegate the config dump or the gate reads a
+# fake-unparseable config and refuses — a harness artifact, not a gate defect.
 reset_fakes
 ( cd "$REPO_ROOT" && env -u CLAUDE_PLUGIN_ROOT PATH="$BIN:$BASEPATH" FAKE_LOG="$CALLS" \
+    REAL_NODE="$REAL_NODE" REAL_PY="$REAL_PY" \
     timeout 120 bash "$SUT" --explain ) > "$TESTROOT/outs/live.out" 2>&1
 RC=$?; OUT="$(cat "$TESTROOT/outs/live.out")"
 printf 'explain\t%s\t%s\n' "$RC" "$TESTROOT/outs/live.out" >> "$RUNS"
 want_rc 0 "B7: --explain in the Soleur repo exits 0"
 want_out "B7: live explain resolves to the repo runner or names its mode" 'test-all\.sh|mode=|delegat'
+
+# B8 [arch-P1 regression]: the capability probe runs BEFORE the gate's inert/
+# global classification — an all-inert diff under a capability-positive runner
+# still delegates, because the runner's own classifier (and its always-on
+# ratchets, which are live edges on AGENTS.md/SKILL.md diffs) is strictly
+# better informed. The gate-side inert shortcut is the adapter arm's alone.
+R_MD_RUNNER="$(mk_repo inert-delegated)"; write_runner_capable "$R_MD_RUNNER"; seal_base "$R_MD_RUNNER"
+commit_chg "$R_MD_RUNNER" README.md 'docs only'
+reset_fakes
+run_gate "$R_MD_RUNNER" gate
+want_rc 0 "B8: md-only diff delegates to the capable runner"
+want_call "B8: runner received --affected on an inert diff" 'test-all.*--affected'
+want_no_out "B8: the gate's inert shortcut does not preempt delegation" 'NO_TESTS_AFFECTED|reason=inert'
+want_field "B8: delegated marker reason" reason 'delegated'
+
+# B8b: a global-paths diff delegates the same way — the runner's classifier
+# outranks the gate's global table; only an operator --full maps to --full.
+R_GLOB_RUNNER="$(mk_repo global-delegated)"; write_runner_capable "$R_GLOB_RUNNER"; seal_base "$R_GLOB_RUNNER"
+commit_chg "$R_GLOB_RUNNER" package.json '{"name":"x","scripts":{"test":"true"}}'
+reset_fakes
+run_gate "$R_GLOB_RUNNER" gate
+want_rc 0 "B8b: global-paths diff delegates"
+want_call "B8b: runner received --affected, not --full" 'test-all.*--affected'
+want_no_call "B8b: the gate's global table did not force --full" 'test-all.*--full'
+
+# B8c: --explain under a capable runner reports the delegation and runs
+# nothing — not even --print-selection (the runner's own pre-pass has a cost).
+reset_fakes
+run_gate "$R_MD_RUNNER" explain --explain
+want_rc 0 "B8c: --explain under a capable runner exits 0"
+want_out "B8c: explain reports the delegation" 'mode=delegated|test-all\.sh'
+want_no_call "B8c: explain invoked nothing" 'test-all'
 
 # ============================ Guard 3 — config fails closed ===================
 
@@ -872,7 +923,7 @@ cat > "$R_GLOB/package.json" <<'JSON'
 { "name": "fixture-js", "private": true, "scripts": { "test": "vitest run" },
   "devDependencies": { "vitest": "^4.0.0" }, "x": 1 }
 JSON
-git -C "$R_GLOB" add -A; git -C "$R_GLOB" commit -q -m "bump package.json"
+assert_fixture_dir "$R_GLOB"; git -C "$R_GLOB" add -A; git -C "$R_GLOB" commit -q -m "bump package.json"
 reset_fakes; run_gate "$R_GLOB" gate
 want_rc 0 "C6: global-path diff exits 0 via the full command"
 want_field "C6: mode=full" mode 'full'
@@ -887,6 +938,17 @@ for _vac in 'true' ':' 'exit 0' 'echo'; do
   want_out "C7: vacuous reason for '$_vac'" 'AFFECTED_GATE_REFUSED.*reason=vacuous-test-command'
 done
 unset _vac _r
+
+# C8: non-positive budget_seconds / max_workers fail closed as bad-config — a
+# zero budget would defer instantly and a non-positive width is nonsense.
+R_CL1="$(mk_cfg_repo cfg-budget-zero '{"budget_seconds": 0}')"
+reset_fakes; run_gate "$R_CL1" gate
+want_rc 4 "C8a: budget_seconds=0 refused"
+want_out "C8a: reason names the key" 'bad-config.*budget_seconds|budget_seconds.*bad-config'
+R_CL2="$(mk_cfg_repo cfg-maxw-neg '{"max_workers": -2}')"
+reset_fakes; run_gate "$R_CL2" gate
+want_rc 4 "C8b: negative max_workers refused"
+want_out "C8b: reason names the key" 'bad-config.*max_workers|max_workers.*bad-config'
 
 # ============================ Guard 1 — no vacuous green =======================
 
@@ -943,7 +1005,7 @@ fi
 # D4: tests exist but no stack resolves → rc 4 (a Ruby test file no adapter owns).
 R_RB="$(mk_repo no-stack)"; seal_base "$R_RB"
 mkdir -p "$R_RB/test"; printf 'def test_w; end\n' > "$R_RB/test/test_widget.rb"
-git -C "$R_RB" add -A; git -C "$R_RB" commit -q -m "ruby tests"
+assert_fixture_dir "$R_RB"; git -C "$R_RB" add -A; git -C "$R_RB" commit -q -m "ruby tests"
 reset_fakes; run_gate "$R_RB" gate
 # An unrecognized test file sits between the contract's rc-4 (tests exist, no
 # runner resolves) and rc-7 (no suite detected) readings; either is a loud,
@@ -971,7 +1033,7 @@ want_no_out "D6: rc 7 is never labelled passed" 'passed\.|tests verified'
 # D7: the changed set is committed ∪ staged ∪ unstaged ∪ untracked.
 R_UN="$(mk_repo union)"; seed_python "$R_UN"; seal_base "$R_UN"
 printf 'def test_a():\n    assert 1 + 1 == 2\n' > "$R_UN/tests/test_a.py"   # unstaged mod
-printf 'def test_b():\n    assert True\n' > "$R_UN/tests/test_b.py"; git -C "$R_UN" add tests/test_b.py  # staged
+assert_fixture_dir "$R_UN"; printf 'def test_b():\n    assert True\n' > "$R_UN/tests/test_b.py"; git -C "$R_UN" add tests/test_b.py  # staged
 printf 'def test_c():\n    assert True\n' > "$R_UN/tests/test_c.py"   # untracked
 reset_fakes; export FAKE_PYTEST_EXPECT="test_a.py test_b.py test_c.py"
 run_gate "$R_UN" gate
@@ -1002,7 +1064,7 @@ want_out "D8b: refusal emitted" 'AFFECTED_GATE_REFUSED'
 # D9: shallow clone whose one bounded deepen cannot recover a base → rc 4
 # no-base-ref, never a silent full and never a silent empty.
 R_SHSRC="$(mk_repo shallow-src)"; seed_js "$R_SHSRC"
-git -C "$R_SHSRC" add -A; git -C "$R_SHSRC" commit -q -m "base"
+assert_fixture_dir "$R_SHSRC"; git -C "$R_SHSRC" add -A; git -C "$R_SHSRC" commit -q -m "base"
 R_SHALLOW="$WORLD/repos/shallow"
 git clone -q --depth 1 "file://$R_SHSRC" "$R_SHALLOW" 2>/dev/null
 git -C "$R_SHALLOW" config user.email soleur-test@example.invalid
@@ -1046,6 +1108,15 @@ reset_fakes; run_gate "$R_NX" gate
 want_rc 0 "D17: nx fixture exits 0"
 want_call "D17: nx affected ran" 'nx.*affected'
 want_no_call "D17: vitest stays dark under nx" 'vitest	'
+
+# D17b: a scheduler reporting "10 tasks" is NOT the vacuous "0 tasks" shape —
+# an unanchored '0 tasks' grep matches inside the count and false-flags the run
+# as empty, triggering a spurious full retry.
+reset_fakes; export FAKE_NX_LINE="Successfully ran target test for 10 tasks"
+run_gate "$R_NX" gate
+want_rc 0 "D17b: nx '10 tasks' run exits 0"
+want_call "D17b: nx affected ran" 'nx.*affected'
+want_no_call "D17b: no vacuous full-retry on a real task count" 'nx.*run-many'
 
 # D18: turbo.json wins over package.json.
 R_TB="$(mk_repo turbo-repo)"; seed_turbo "$R_TB"; seal_base "$R_TB"
@@ -1098,6 +1169,18 @@ reset_fakes; export FAKE_PYTEST_RC=5
 run_gate "$R_PY5" gate
 want_rc_in "D14: pytest rc 5 is never green" 1 4
 want_no_out "D14: no 'passed' claim on an empty collection" 'Ran .* passed\.|tests verified'
+
+# D24: a bare pyproject.toml is a Python-PROJECT marker, not a pytest-SUITE
+# marker — without a pytest signal in a manifest and without test_*.py files,
+# the py adapter must not claim the repo.
+R_PYNO="$(mk_repo py-nosignal)"
+printf '[project]\nname = "fixture-lib"\n' > "$R_PYNO/pyproject.toml"
+mkdir -p "$R_PYNO/src"; printf 'def f():\n    return 1\n' > "$R_PYNO/src/lib.py"
+seal_base "$R_PYNO"
+commit_chg "$R_PYNO" src/lib.py 'def f():\n    return 2'
+reset_fakes; run_gate "$R_PYNO" gate
+want_rc 7 "D24: pytest-signal-free pyproject.toml is not a py detection"
+want_no_call "D24: pytest never invoked" 'pytest'
 
 # D19 [G1-6]: multi-stack — an empty adapter cannot launder or sink the other.
 R_MS="$(mk_repo multi-stack)"; seed_python "$R_MS"

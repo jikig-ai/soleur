@@ -93,11 +93,7 @@ affected_js_tool() {
 
 # Total test files discoverable in the repo (spec/test conventions + __tests__).
 affected_js_total() {
-  find . \
-    \( -name node_modules -o -name .git -o -name dist -o -name build \
-       -o -name coverage -o -name .next -o -name vendor \) -prune \
-    -o -type f \( -name '*.test.*' -o -name '*.spec.*' \) -print 2>/dev/null \
-    | grep -c .
+  affected_find_files count '*.test.*' '*.spec.*' | grep -c .
 }
 
 # Count the test files a runner reported running, from its own summary line.
@@ -119,6 +115,7 @@ affected_js_parse_ran() { # $1 = log file; prints count or -
 affected_js_run() {
   local mode="$1" width="$2"
   ADP_VACUOUS=0
+  ADP_ESCALATED_FULL=0   # set when a selected run silently became a full one
   ADP_OF="$(affected_js_total)"
   local -a cmd=()
   local log rc=0 ran="-"
@@ -151,8 +148,11 @@ affected_js_run() {
     fi
     cmd=("${ADP_TOOL[@]}" --findRelatedTests "${files[@]}" "--maxWorkers=${width}")
   else
-    # full, or selected on a tool with no native selector (scripts.test).
+    # full, or selected on a tool with no native selector (scripts.test). The
+    # escalation is reported so the gate's marker can say mode=full
+    # reason=no-selector — a full run must never masquerade as a selection.
     if [[ "$mode" == selected ]]; then
+      ADP_ESCALATED_FULL=1
       echo "affected-tests: stack=js has no native selector (scripts.test only) — running the full command (reason=no-selector)." >&2
     fi
     case "$ADP_TOOL_KIND" in

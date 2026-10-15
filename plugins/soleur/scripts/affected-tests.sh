@@ -12,12 +12,19 @@
 #      from the repo root; bypasses selection entirely.
 #   2. A repo runner ADVERTISING the Soleur capability — `scripts/test-all.sh`
 #      whose `--print-selection` flag is registered at a case-label or
-#      usage-table position (a comment-only mention does NOT count). Delegated
-#      `--affected`, or `--full` under this script's `--full`. A foreign script
-#      of that name is NEVER invoked with Soleur flags — it falls through to 3.
+#      usage-table position (a comment-only mention does NOT count). The probe
+#      runs BEFORE any gate-side classification: a capability-positive runner
+#      owns the diff decision (its own inert/global/empty handling is strictly
+#      better informed), so a resolved runner is ALWAYS delegated to —
+#      `--affected`, or `--full` only under this script's `--full`. A foreign
+#      script of that name is NEVER invoked with Soleur flags — it falls
+#      through to 3.
 #   3. Stack adapters, in order: nx/turbo, JS/TS (vitest `related` SUBCOMMAND /
 #      jest --findRelatedTests), Python (pytest + testmon/xdist), Go (`go list`
-#      reverse-dependency closure).
+#      reverse-dependency closure). The gate's own base resolution, changed-set
+#      census and global/inert classification apply ONLY to this arm — under
+#      delegation the runner resolves its own base and classification, and
+#      `--base` steers the adapters alone.
 #
 # Exit contract — produced ONLY by finish() in lib/affected-tests/common.sh,
 # the single exit site for the whole gate:
@@ -37,10 +44,12 @@
 #           never the words "tests verified"; beside it the literal verdict
 #           `affected-suite gate passed.`
 #   inert:  `NO_TESTS_AFFECTED inert_rule=<pat>` + `No tests ran: docs-only change.`
-#   marker: `AFFECTED_GATE ran=<X> of=<N> skipped=<Y> mode=<selected|full|custom>
-#           reason=<…> stack=<…> ci=<file|none>` on every path including
-#           refusals; counts are `-` on paths that produce no honest count
-#           (delegated runner, opaque test_command, refusals).
+#   marker: `AFFECTED_GATE ran=<X> of=<N> skipped=<Y>
+#           mode=<selected|full|custom|explain|none|help> reason=<…> stack=<…>
+#           ci=<file|none>` on every verdict path including refusals; counts
+#           are `-` on paths that produce no honest count (delegated runner,
+#           opaque test_command, refusals) — a delegated or custom rc 0 still
+#           prints `affected-suite gate passed.`
 #
 # `.soleur-test-gate.json` (repo root, committed, every key optional; unknown
 # key / malformed JSON / wrong type → rc 4 reason=bad-config key=<k>):
@@ -51,11 +60,13 @@
 #                           diff → rc 0 NO_TESTS_AFFECTED; a mixed diff is never
 #                           inert
 #   budget_seconds number   wall-clock cap, enforced ONLY when a CI test
-#                           workflow is detected; default 900 (unmeasured)
-#   max_workers    number   overrides the width formula
+#                           workflow is detected; default 900 (unmeasured);
+#                           must be a positive integer
+#   max_workers    number   overrides the width formula; positive integer
 #   budget_ci      boolean  forces CI-deferral eligibility without a workflow
 #
-# Base-ref order: --base > @{upstream} > origin/HEAD > origin/main >
+# Base-ref order (adapter arm only — a delegated runner resolves its own):
+# --base > @{upstream} > origin/HEAD > origin/main >
 # origin/master > merge-base over every remote-tracking ref (newest wins).
 # Changed set = committed-vs-base ∪ staged ∪ unstaged ∪ untracked. A shallow
 # clone gets ONE bounded deepen, then rc 4 reason=no-base-ref — never a silent
@@ -83,10 +94,8 @@
 #             yarn bun pytest go nx turbo
 #   bounds:   timeout gtimeout (either may be absent — watchdog covers)
 #
-# Cloud (Devin): CLAUDE_PLUGIN_ROOT unset → the identity-based plugin-root
-# resolver from commands/go.md (ADR-179, three arms) emits
-# SOLEUR_PLUGIN_ROOT_RESOLVE for diagnosis; the gate itself resolves its libs
-# by BASH_SOURCE and needs no root. A detected stack with no runnable
+# Cloud (Devin): the gate resolves its libs by BASH_SOURCE and needs no plugin
+# root — CLAUDE_PLUGIN_ROOT may be unset. A detected stack with no runnable
 # toolchain → rc 4 reason=toolchain-missing.
 
 set -euo pipefail
@@ -103,40 +112,6 @@ source "$GATE_DIR/lib/affected-tests/js.sh"
 source "$GATE_DIR/lib/affected-tests/python.sh"
 # shellcheck source=plugins/soleur/scripts/lib/affected-tests/go.sh
 source "$GATE_DIR/lib/affected-tests/go.sh"
-
-# --- soleur plugin-root resolver (ADR-179 pattern, copied shape from
-# commands/go.md; same three arms, same identity preflight, diagnostic only —
-# the gate runs from its own BASH_SOURCE either way). -------------------------
-ROOT="${CLAUDE_PLUGIN_ROOT:-}"; SRC=plugin-root-token
-if [ -z "$ROOT" ] && [ -n "${GROK_PLUGIN_ROOT:-}" ]; then
-  ROOT="$GROK_PLUGIN_ROOT"; SRC=grok-env
-fi
-VERIFIED=false
-if [ -n "$ROOT" ] \
-   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
-   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
-  VERIFIED=true
-fi
-PRIOR_SRC="$SRC"
-PRIOR_ROOT="$ROOT"
-if [ "$VERIFIED" != true ]; then
-  ROOT=""; SRC=none
-  for d in "$HOME/.local/share/devin/cli/plugins/cache" "${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}"; do
-    [ -d "$d" ] || continue
-    [ "$SRC" = none ] && SRC=devin-cache-nomatch
-    MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
-      -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
-    if [ -n "$MANIFEST" ]; then
-      ROOT="${MANIFEST%/.claude-plugin/plugin.json}"; SRC=devin-cache; VERIFIED=true
-      break
-    fi
-  done
-  if [ "$VERIFIED" != true ] && [ -n "$PRIOR_ROOT" ]; then
-    SRC="$PRIOR_SRC"
-  fi
-fi
-echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=affected-tests source=${SRC} verified=${VERIFIED}"
-# --- end resolver -------------------------------------------------------------
 
 usage() {
   sed -n '1,20p' "$0" | grep -E '^#' | sed 's/^# \{0,1\}//'
@@ -186,9 +161,11 @@ affected_detect_ci() {
   for f in .github/workflows/*.yml .github/workflows/*.yaml; do
     [[ -f "$f" ]] || continue
     # pull_request or push trigger AND a test-command shape in the same file —
-    # a workflow that merely exists is not a gate to defer to.
-    grep -qE 'pull_request|push' "$f" || continue
-    if grep -qE 'test-all\.sh|npm[[:space:]]+(run[[:space:]]+)?test|yarn[[:space:]]+test|pnpm[[:space:]]+(run[[:space:]]+)?test|bun[[:space:]]+test|vitest|jest|pytest|go[[:space:]]+test|cargo[[:space:]]+test|ctest|make[[:space:]]+test|deno[[:space:]]+test' "$f"; then
+    # a workflow that merely exists is not a gate to defer to. `#` comments are
+    # stripped BEFORE matching: a deploy workflow that only TALKS about tests
+    # in a comment is not a test gate to defer to.
+    grep -qE 'pull_request|push' < <(sed 's/#.*//' "$f") || continue
+    if grep -qE 'test-all\.sh|npm[[:space:]]+(run[[:space:]]+)?test|yarn[[:space:]]+test|pnpm[[:space:]]+(run[[:space:]]+)?test|bun[[:space:]]+test|vitest|jest|pytest|go[[:space:]]+test|cargo[[:space:]]+test|ctest|make[[:space:]]+test|deno[[:space:]]+test' < <(sed 's/#.*//' "$f"); then
       CI_NAME="$f"
       return 0
     fi
@@ -312,10 +289,16 @@ affected_load_config() {
         fi ;;
       budget_seconds)
         [[ "$t" == number ]] || { badkey="$k"; break; }
-        CFG_BUDGET_SECONDS="${v%%.*}" ;;
+        v="${v%%.*}"
+        # Clamped: a zero/negative/decimal-floor-0 budget would defer instantly
+        # or arm a nonsense deadline — that is a config error, fail closed.
+        [[ "$v" =~ ^[0-9]+$ ]] && (( v >= 1 )) || { badkey="$k"; break; }
+        CFG_BUDGET_SECONDS="$v" ;;
       max_workers)
         [[ "$t" == number ]] || { badkey="$k"; break; }
-        CFG_MAX_WORKERS="${v%%.*}" ;;
+        v="${v%%.*}"
+        [[ "$v" =~ ^[0-9]+$ ]] && (( v >= 1 )) || { badkey="$k"; break; }
+        CFG_MAX_WORKERS="$v" ;;
       budget_ci)
         [[ "$t" == boolean ]] || { badkey="$k"; break; }
         CFG_BUDGET_CI="$v" ;;
@@ -353,8 +336,9 @@ fi
 
 # --- self-check -------------------------------------------------------------------
 if (( ARG_SELFCHECK )); then
-  # Config load + toolchain probe only; never runs tests. Under 15 s by
-  # construction — every probe below is `command -v` or a bounded --version.
+  # Config load + toolchain probe only; never runs tests. Bounded, not instant:
+  # every probe is `command -v` or a bounded --version, so the worst case is
+  # the per-stack timeout sum (~80 s over 4 stacks), the happy path seconds.
   command -v git >/dev/null 2>&1 || finish 4 none toolchain-missing config "$CI_NAME" - - -
   # Probe each detected stack's toolchain: detection is free, and each tool()
   # --version probe is already bounded.
@@ -375,6 +359,13 @@ if (( ARG_SELFCHECK )); then
 fi
 
 # --- the custom-command arm -------------------------------------------------------
+# --explain under test_command answers BEFORE the arm can run it: the custom
+# command IS the whole selection, so explain emits mode=custom + the command.
+if (( ARG_EXPLAIN )) && [[ -n "$CFG_TEST_COMMAND" ]]; then
+  echo "SELECTION mode=custom reason=custom-command"
+  printf 'COMMAND %s\n' "$CFG_TEST_COMMAND"
+  finish 0 explain custom-command custom "$CI_NAME" - - -
+fi
 if [[ -n "$CFG_TEST_COMMAND" ]]; then
   if [[ "$CI_NAME" != none ]]; then
     AFFECTED_BUDGET_ACTIVE=1
@@ -390,12 +381,70 @@ if [[ -n "$CFG_TEST_COMMAND" ]]; then
       if [[ "$CI_NAME" != none ]]; then
         finish 6 custom budget-deferred custom "$CI_NAME" - - -
       fi
-      finish 1 custom "ok" custom "$CI_NAME" - - - ;;
+      finish 1 custom failed custom "$CI_NAME" - - - ;;
     *)     finish 1 custom failed custom "$CI_NAME" - - - ;;
   esac
 fi
 
-# --- base ref + changed set ---------------------------------------------------------
+# --- dispatch 2: the capability-positive repo runner -----------------------------------
+# The probe reads the REGISTRATION, not the filename and never a comment: the
+# flag must sit at a case-label or usage-table position — first token on the
+# line (optionally inside a `a|b)` alternation) followed by a flag-table
+# terminator.
+#
+# ORDERING IS THE CONTRACT: the probe runs BEFORE the gate's own base
+# resolution, changed-set census and global/inert classification. A runner that
+# registers --print-selection computes all of those itself, better informed —
+# so a resolved runner is ALWAYS delegated to (--affected; --full only when the
+# operator asked). Delegating an all-inert or global-paths diff is not waste:
+# the runner's own classifier decides, and in this repo the always-on ratchets
+# are live edges the gate's built-ins cannot see. Gate-side classification
+# below is the adapter arm's alone.
+RUNNER=""
+if [[ -f scripts/test-all.sh ]] \
+   && grep -Eq '^[[:space:]]*(--[[:alnum:]_-]+\|)*--print-selection([])|,[:space:]])' scripts/test-all.sh; then
+  RUNNER="scripts/test-all.sh"
+fi
+
+if [[ -n "$RUNNER" ]]; then
+  _flag=--affected
+  (( ARG_FULL )) && _flag=--full
+  _dmode=selected
+  (( ARG_FULL )) && _dmode=full
+  if (( ARG_EXPLAIN )); then
+    # The runner owns the selection; invoking --print-selection here is left to
+    # the operator (it can cost real time), so explain reports the delegation.
+    echo "SELECTION mode=delegated runner=$RUNNER flag=$_flag"
+    echo "runner owns selection — inspect with: bash $RUNNER --print-selection"
+    finish 0 explain delegated runner "$CI_NAME" - - -
+  fi
+  if [[ "$CI_NAME" != none ]]; then
+    AFFECTED_BUDGET_ACTIVE=1
+    AFFECTED_DEADLINE=$(( $(affected_now) + CFG_BUDGET_SECONDS ))
+  else
+    echo "affected-tests: no CI test workflow detected — wall-clock budget not enforced; running to completion."
+  fi
+  rc=0
+  affected_bound bash "$RUNNER" "$_flag" || rc=$?
+  # Delegated-runner rc mapping: 4 (REFUSED — nothing ran) → 4
+  # reason=runner-refused; 3 (UNRESOLVED — killed/declined suites) → 1
+  # reason=runner-signal; 2 (usage) → 4 runner-refused; the rest pass through
+  # as a plain verdict. rc 124/137 means OUR bound expired — deferral only
+  # ever applies with a detected CI, which is the armed-budget condition.
+  case "$rc" in
+    0)   finish 0 "$_dmode" delegated runner "$CI_NAME" - - - ;;
+    124|137)
+      if [[ "$AFFECTED_BUDGET_ACTIVE" == 1 ]]; then
+        finish 6 "$_dmode" budget-deferred runner "$CI_NAME" - - -
+      fi
+      finish 1 "$_dmode" failed runner "$CI_NAME" - - - ;;
+    3)   finish 1 "$_dmode" runner-signal runner "$CI_NAME" - - - ;;
+    2|4) finish 4 "$_dmode" runner-refused runner "$CI_NAME" - - - ;;
+    *)   finish 1 "$_dmode" failed runner "$CI_NAME" - - - ;;
+  esac
+fi
+
+# --- adapter arm: base ref + changed set (delegated runners never reach here) ---------
 BASE=""
 BASE_SRC=""
 affected_resolve_base() {
@@ -437,31 +486,32 @@ affected_resolve_base || {
 }
 
 # Changed set: committed-vs-base ∪ staged ∪ unstaged ∪ untracked. Rename-aware
-# (-M): the new path is what exists on disk.
+# (-M): the new path is what exists on disk. The committed arm is the one that
+# can fail outright (unresolvable base) — it is captured ONCE: its rc is the
+# fail-closed probe and its stdout the first leg of the union, so a bad --base
+# refuses rather than reading as an empty diff and no diff runs twice.
 AFFECTED_CHANGED=()
-_affected_collect_changed() {
-  {
-    git diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null
-    git diff --name-only --cached -M -- 2>/dev/null
-    git diff --name-only -M -- 2>/dev/null
-    git ls-files --others --exclude-standard 2>/dev/null
-  } | grep -v '^[[:space:]]*$' | sort -u
-}
 CHANGED_TMP="$(mktemp "${TMPDIR:-/tmp}/affected-changed.XXXXXX")"
-_affected_collect_changed >"$CHANGED_TMP" || true
-# The committed arm is the one that can fail outright (unresolvable base);
-# probe it explicitly so a bad --base fails closed rather than reading as an
-# empty diff.
-if ! git diff --name-only -M "${BASE}...HEAD" -- >/dev/null 2>&1; then
+_base_rc=0
+_base_diff="$(git diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
+if (( _base_rc != 0 )); then
   if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" == "true" ]]; then
     affected_timeout 60 git fetch --deepen=200 >/dev/null 2>&1 || true
+    _base_rc=0
+    _base_diff="$(git diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
   fi
-  if ! git diff --name-only -M "${BASE}...HEAD" -- >/dev/null 2>&1; then
+  if (( _base_rc != 0 )); then
     rm -f "$CHANGED_TMP"
     finish 4 none no-base-ref - "$CI_NAME" - - -
   fi
-  _affected_collect_changed >"$CHANGED_TMP" || true
 fi
+{
+  printf '%s\n' "$_base_diff"
+  git diff --name-only --cached -M -- 2>/dev/null
+  git diff --name-only -M -- 2>/dev/null
+  git ls-files --others --exclude-standard 2>/dev/null
+} | grep -v '^[[:space:]]*$' | sort -u >"$CHANGED_TMP" || true
+unset _base_rc _base_diff
 while IFS= read -r _p; do
   [[ -n "$_p" ]] && AFFECTED_CHANGED+=("$_p")
 done <"$CHANGED_TMP"
@@ -579,40 +629,6 @@ fi
 
 WIDTH="$(affected_workers "$CFG_MAX_WORKERS")"
 
-# --- dispatch 2: the capability-positive repo runner -----------------------------------
-# The probe reads the REGISTRATION, not the filename and never a comment: the
-# flag must sit at a case-label or usage-table position — first token on the
-# line (optionally inside a `a|b)` alternation) followed by a flag-table
-# terminator.
-RUNNER=""
-if [[ -f scripts/test-all.sh ]] \
-   && grep -Eq '^[[:space:]]*(--[[:alnum:]_-]+\|)*--print-selection([])|,[:space:]])' scripts/test-all.sh; then
-  RUNNER="scripts/test-all.sh"
-fi
-
-if [[ -n "$RUNNER" ]]; then
-  _flag=--affected
-  [[ "$MODE" == full ]] && _flag=--full
-  rc=0
-  affected_bound bash "$RUNNER" "$_flag" || rc=$?
-  # Delegated-runner rc mapping: 4 (REFUSED — nothing ran) → 4
-  # reason=runner-refused; 3 (UNRESOLVED — killed/declined suites) → 1
-  # reason=runner-signal; 2 (usage) → 4 runner-refused; the rest pass through
-  # as a plain verdict. rc 124/137 means OUR bound expired — deferral only
-  # ever applies with a detected CI, which is the armed-budget condition.
-  case "$rc" in
-    0)   finish 0 "$MODE" delegated runner "$CI_NAME" - - - ;;
-    124|137)
-      if [[ "$AFFECTED_BUDGET_ACTIVE" == 1 ]]; then
-        finish 6 "$MODE" budget-deferred runner "$CI_NAME" - - -
-      fi
-      finish 1 "$MODE" failed runner "$CI_NAME" - - - ;;
-    3)   finish 1 "$MODE" runner-signal runner "$CI_NAME" - - - ;;
-    2|4) finish 4 "$MODE" runner-refused runner "$CI_NAME" - - - ;;
-    *)   finish 1 "$MODE" failed runner "$CI_NAME" - - - ;;
-  esac
-fi
-
 # --- dispatch 3: stack adapters ---------------------------------------------------------
 # Worst-of aggregation with precedence 1 > 4 > 6 > 0; rc 7 only when every
 # detected adapter reports no suite AND nothing else resolved the gate.
@@ -623,6 +639,7 @@ RAN_SUM=0
 OF_SUM=0
 RAN_KNOWN=1
 OF_KNOWN=1
+GATE_ESCALATED_FULL=0
 
 _affected_rank() {  # rank <rc> → precedence weight
   case "$1" in
@@ -688,6 +705,9 @@ try_adapter() {
   fi
 
   SAW_SUITE=1
+  # An adapter that could not select (e.g. js scripts.test) ran FULL instead —
+  # the marker must not call that `mode=selected`.
+  (( ${ADP_ESCALATED_FULL:-0} )) && GATE_ESCALATED_FULL=1
   _affected_add_counts "${ADP_RAN:--}" "${ADP_OF:--}"
   case "$arc" in
     0)   _affected_aggregate 0 ;;
@@ -704,14 +724,17 @@ try_adapter() {
 
 AGG_REASON=""
 # nx/turbo FIRST: a workspace scheduler's affected graph subsumes per-package
-# JS selection, so a resolved nx/turbo tool suppresses the js adapter arm.
+# JS selection — but only when it actually RAN a suite. A resolved tool whose
+# affected graph produced nothing (vacuous in both selected and full) must not
+# suppress the js adapter that could still find tests.
 NXT_SUPPRESS=0
 if affected_nxt_detect; then
   _trc=0
   affected_nxt_tool || _trc=$?
   if (( _trc == 0 )); then
-    NXT_SUPPRESS=1
+    _saw_before=$SAW_SUITE
     try_adapter nxt nx-turbo
+    (( SAW_SUITE > _saw_before )) && NXT_SUPPRESS=1
   elif (( _trc == 4 )); then
     echo "affected-tests: stack=nx-turbo detected but its toolchain is missing or unrunnable; falling through to js." >&2
   fi
@@ -728,9 +751,7 @@ if (( SAW_SUITE == 0 )); then
     finish 4 "$MODE" "${AGG_REASON:-toolchain-missing}" "${STACKS:--}" "$CI_NAME" - - -
   fi
   _tests_exist=0
-  if find . \( -name .git -o -name node_modules -o -name vendor -o -name .venv \) -prune \
-      -o -type f \( -name '*.test.*' -o -name '*.spec.*' -o -name 'test_*.py' \
-                    -o -name '*_test.py' -o -name '*_test.go' \) -print -quit 2>/dev/null \
+  if affected_find_files any '*.test.*' '*.spec.*' 'test_*.py' '*_test.py' '*_test.go' \
       | grep -q .; then
     _tests_exist=1
   fi
@@ -751,10 +772,19 @@ OUT_RAN="-"; OUT_OF="-"; SKIP_SUM="-"
 if (( RAN_KNOWN && OF_KNOWN )) && (( OF_SUM >= RAN_SUM )); then
   SKIP_SUM=$((OF_SUM - RAN_SUM))
 fi
+# Marker honesty: an adapter that escalated selected→full (no native selector)
+# makes the emitted mode full with a named reason — never a selected claim
+# over a whole-suite run. MODE itself is untouched: a later adapter's own
+# selection is still scoped.
+OUT_MODE="$MODE"
+if (( GATE_ESCALATED_FULL )) && [[ "$OUT_MODE" == selected ]]; then
+  OUT_MODE=full
+  [[ "$REASON" == ok ]] && REASON=no-selector
+fi
 case "$WORST" in
-  0) finish 0 "$MODE" "$REASON" "${STACKS:--}" "$CI_NAME" "$OUT_RAN" "$OUT_OF" "$SKIP_SUM" ;;
-  4) finish 4 "$MODE" "${AGG_REASON:-failed}" "${STACKS:--}" "$CI_NAME" \
+  0) finish 0 "$OUT_MODE" "$REASON" "${STACKS:--}" "$CI_NAME" "$OUT_RAN" "$OUT_OF" "$SKIP_SUM" ;;
+  4) finish 4 "$OUT_MODE" "${AGG_REASON:-failed}" "${STACKS:--}" "$CI_NAME" \
        "$OUT_RAN" "$OUT_OF" "$SKIP_SUM" ;;
-  6) finish 6 "$MODE" budget-deferred "${STACKS:--}" "$CI_NAME" "$OUT_RAN" "$OUT_OF" "$SKIP_SUM" ;;
-  *) finish 1 "$MODE" failed "${STACKS:--}" "$CI_NAME" "$OUT_RAN" "$OUT_OF" "$SKIP_SUM" ;;
+  6) finish 6 "$OUT_MODE" budget-deferred "${STACKS:--}" "$CI_NAME" "$OUT_RAN" "$OUT_OF" "$SKIP_SUM" ;;
+  *) finish 1 "$OUT_MODE" failed "${STACKS:--}" "$CI_NAME" "$OUT_RAN" "$OUT_OF" "$SKIP_SUM" ;;
 esac
