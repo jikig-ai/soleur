@@ -540,7 +540,7 @@ Appended; nothing above is edited. The Consequences bullet "The wipe branch need
 
 ## Amendment 2026-10-15 — the plaintext-volume wipe is separated from the flip chain (#6897, #10138)
 
-Appended; nothing above is edited, and the three sentences it supersedes carry a marker directly beneath them. Takes effect when the carrying PR (#10294) merges; until then the chained gate in the Amendments of 2026-10-09 and 2026-10-12 is the operative text.
+Appended; nothing above is edited, and the three sentences it supersedes carry a marker directly beneath them. Takes effect when the carrying PR (#10352) merges, and #10352 is not marked ready or enqueued until the CLO re-attestation after the 2026-10-24 re-ruling is recorded (task A.11, CTO ruling 2026-10-15 on the PR topology); merging #10294 (the wipe mechanism) first does not activate it. Until #10352 merges, the chained gate in the Amendments of 2026-10-09 and 2026-10-12 is the operative text.
 
 Ruled by CTO agent, 2026-10-15 (separability, replacement predicates, schedule; follow-up ruling on the leftover-snapshot clear and the post-flip barrier). Ruled by CLO agent, 2026-10-15; v1 internal attestation, provisional to the 2026-10-24 re-ruling (the soak is not a legal gate for the separated variant; evidence record; notice dates). Both rulings are posted on #10138 and recorded in `knowledge-base/project/specs/feat-one-shot-10138-git-data-wipe-body/decision-challenges.md`.
 
