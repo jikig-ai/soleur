@@ -512,8 +512,8 @@ def _note(exc, site):
     try:
         sys.stderr.write("ancestor-signal scan: swallowed %s at %s\n" % (type(exc).__name__, site))
         sys.stderr.flush()
-    except (OSError, ValueError):
-        pass  # a closed or full stderr must not turn a swallowed error into a crash
+    except (OSError, ValueError, AttributeError):
+        pass  # a closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash
 
 
 def flush_stdout():

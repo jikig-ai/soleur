@@ -58,7 +58,7 @@ passes=0
 fails=0
 cases=0
 skipped=0
-PLANNED_TOTAL=137
+PLANNED_TOTAL=139
 
 pass() { passes=$((passes + 1)); printf '[ok] %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '[FAIL] %s\n' "$1"; }
@@ -469,7 +469,7 @@ check "H9 many parent assignments times many kills finish inside the 60 s cap (n
 # F. Swallowed-exception note (PR2 of #10331): class name and a literal site label only, never raises
 # ============================================================================================
 assert_fixture_dir "$TMP"
-python3 -I - "$SCAN" > "$TMP/note-probe.out" 2>&1 <<'PY' || true
+python3 -I - "$SCAN" flush-stdout > "$TMP/note-probe.out" 2>&1 <<'PY' || true
 import ast, importlib.util, io, os, sys
 spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -509,6 +509,12 @@ for name, exc in (("oserror-stderr", OSError("w")), ("valueerror-stderr", ValueE
     except BaseException:
         say(False, name)
 
+try:
+    run_note(Boom("x"), None)
+    say(True, "none-stderr")
+except BaseException:
+    say(False, "none-stderr")
+
 closed = open(os.devnull, "w")
 closed.close()
 try:
@@ -518,32 +524,35 @@ except BaseException:
     say(False, "closed-stderr")
 
 def census(src):
-    calls, bad = 0, []
+    calls, bad, labels = 0, [], set()
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_note":
             calls += 1
             lit = (len(node.args) == 2 and not node.keywords
                    and isinstance(node.args[0], ast.Name)
                    and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str))
-            if not lit:
+            if lit:
+                labels.add(node.args[1].value)
+            else:
                 bad.append(node.lineno)
-    return calls, bad
+    return calls, bad, labels
 
-calls, bad = census(open(sys.argv[1], encoding="utf-8").read())
+calls, bad, labels = census(open(sys.argv[1], encoding="utf-8").read())
 say(calls >= 1 and not bad, "census-literal-labels")
+say(labels == set(sys.argv[2].split(",")), "census-label-set")
 say(census("_note(exc, site='x')")[1] != [], "census-rejects-keyword")
 say(census("_note(str(exc), 'a')")[1] != [], "census-rejects-computed")
-say(census("_note(exc, 'a')") == (1, []), "census-accepts-literal")
+say(census("_note(exc, 'a')")[:2] == (1, []), "census-accepts-literal")
 PY
-for tok in line-shape canary-absent oserror-stderr valueerror-stderr closed-stderr census-literal-labels census-rejects-keyword census-rejects-computed census-accepts-literal; do
+for tok in line-shape canary-absent oserror-stderr valueerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal; do
   check "F-$tok the _note probe reports $tok" grep -qxF "OK $tok" "$TMP/note-probe.out"
 done
 
 # ============================================================================================
 # Anti-vacuity and accounting (direct printf + exit, never through fail())
 # ============================================================================================
-if [[ "$cases" -lt 134 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 134\n' "$cases" >&2
+if [[ "$cases" -lt 136 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 136\n' "$cases" >&2
   exit 1
 fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then

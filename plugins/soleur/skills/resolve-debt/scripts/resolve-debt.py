@@ -214,6 +214,16 @@ def find_frontmatter_block(lines: list[str]) -> tuple[int, int] | None:
     return None
 
 
+def _note(exc: BaseException, site: str) -> None:
+    # Class name and a static site label only. Never str(exc)/repr(exc): exception text can carry a path or
+    # ledger content. `site` is a string literal at every call site.
+    try:
+        sys.stderr.write("resolve-debt: swallowed %s at %s\n" % (type(exc).__name__, site))
+        sys.stderr.flush()
+    except (OSError, ValueError, AttributeError):
+        pass  # a closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash
+
+
 def mutate_entry(fp: Path, new_status: str, linked_issue: int | None) -> None:
     """Rewrite the entry's frontmatter: replace status:, optionally insert linked_issue:.
 
@@ -306,16 +316,6 @@ def mutate_entry(fp: Path, new_status: str, linked_issue: int | None) -> None:
         except OSError as exc:
             _note(exc, "tmp-cleanup")
         raise
-
-
-def _note(exc, site):
-    # Class name and a static site label only. Never str(exc)/repr(exc): exception text can carry a path or
-    # ledger content. `site` is a string literal at every call site.
-    try:
-        sys.stderr.write("resolve-debt: swallowed %s at %s\n" % (type(exc).__name__, site))
-        sys.stderr.flush()
-    except (OSError, ValueError):
-        pass  # a closed or full stderr must not turn a swallowed error into a crash
 
 
 def print_diff(fp: Path) -> None:

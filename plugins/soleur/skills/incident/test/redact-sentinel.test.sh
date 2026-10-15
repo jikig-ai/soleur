@@ -1329,10 +1329,8 @@ fi
 
 
 echo
-echo "Total: ${PASS} pass, ${FAIL} fail"
-
 # ---------------------------------------------------------------------------
-# Test 21c — an engine crash is reported by class name only (PR2 of #10331): the exception text
+# Test 25 — an engine crash is reported by class name only (PR2 of #10331): the exception text
 # can carry scanned content, so the fail-closed arm must not print it.
 # ---------------------------------------------------------------------------
 t21_out="${TMP_DIR}/test21.out"
@@ -1347,15 +1345,17 @@ mod.scan = boom
 sys.argv = ["redact-engine.py", "x"]
 print("RC=%s" % mod.main())
 PY
-assert_grep "Test 21c: a crashing engine exits 2" "^RC=2$" "${t21_out}"
-assert_grep "Test 21c: the crash line names the class" "redact-engine: internal error: ValueError$" "${t21_out}"
+assert_grep "Test 25: a crashing engine exits 2" "^RC=2$" "${t21_out}"
+assert_grep "Test 25: the crash line names the class" "redact-engine: internal error: ValueError at [A-Za-z_]+:[0-9]+$" "${t21_out}"
 if grep -q "CANARY" "${t21_out}"; then
-  echo "FAIL: Test 21c: the exception text reached the output"
+  echo "FAIL: Test 25: the exception text reached the output"
   FAIL=$((FAIL + 1))
 else
-  echo "PASS: Test 21c: the exception text is absent from the output"
+  echo "PASS: Test 25: the exception text is absent from the output"
   PASS=$((PASS + 1))
 fi
+
+echo "Total: ${PASS} pass, ${FAIL} fail"
 
 # ---------------------------------------------------------------------------
 # ANTI-VACUITY FLOOR ON THIS HARNESS'S OWN DISPATCH.

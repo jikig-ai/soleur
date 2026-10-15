@@ -1580,8 +1580,19 @@ def _note(exc, site):
     try:
         sys.stderr.write("founder-check: swallowed %s at %s\n" % (type(exc).__name__, site))
         sys.stderr.flush()
-    except (OSError, ValueError):
-        pass  # a closed or full stderr must not turn a swallowed error into a crash
+    except (OSError, ValueError, AttributeError):
+        pass  # a closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash
+
+
+def _locator(exc):
+    # Exception class plus the innermost frame's function name and line, e.g. "KeyError at cmd_verify:1034".
+    # Never str(exc): that text can carry a path or the founder's command. Needs no import.
+    tb = exc.__traceback__
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    if tb is None:
+        return type(exc).__name__
+    return "%s at %s:%d" % (type(exc).__name__, tb.tb_frame.f_code.co_name, tb.tb_lineno)
 
 
 def _clear_outputs(argv):
@@ -1613,7 +1624,7 @@ def main(argv=None):
         return args.fn(args)
     except Exception as e:  # a traceback is an unreadable verdict: print a one-line FAIL and a distinct rc
         line = json.dumps({"outcome": "FAIL", "reason": "internal-error", "environmental": True,
-                           "detail": type(e).__name__})  # class name only: exception text can carry a path or the command
+                           "detail": _locator(e)})  # class name and innermost frame only: exception text can carry a path or the command
         out = getattr(args, "out", None)
         if out:
             try:

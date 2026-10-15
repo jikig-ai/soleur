@@ -1585,7 +1585,7 @@ describe("verify: outputs and failure modes", () => {
   });
 });
 
-// The probe text is identical in the four suites whose scripts gain a `_note` helper (PR2 of #10331).
+// The probe text is byte-identical in the scan-ancestor, resolve-debt and founder-check suites; the proxy suite carries a superset (PR2 of #10331).
 const NOTE_PROBE = String.raw`import ast, importlib.util, io, os, sys
 spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -1625,6 +1625,12 @@ for name, exc in (("oserror-stderr", OSError("w")), ("valueerror-stderr", ValueE
     except BaseException:
         say(False, name)
 
+try:
+    run_note(Boom("x"), None)
+    say(True, "none-stderr")
+except BaseException:
+    say(False, "none-stderr")
+
 closed = open(os.devnull, "w")
 closed.close()
 try:
@@ -1634,35 +1640,40 @@ except BaseException:
     say(False, "closed-stderr")
 
 def census(src):
-    calls, bad = 0, []
+    calls, bad, labels = 0, [], set()
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_note":
             calls += 1
             lit = (len(node.args) == 2 and not node.keywords
                    and isinstance(node.args[0], ast.Name)
                    and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str))
-            if not lit:
+            if lit:
+                labels.add(node.args[1].value)
+            else:
                 bad.append(node.lineno)
-    return calls, bad
+    return calls, bad, labels
 
-calls, bad = census(open(sys.argv[1], encoding="utf-8").read())
+calls, bad, labels = census(open(sys.argv[1], encoding="utf-8").read())
 say(calls >= 1 and not bad, "census-literal-labels")
+say(labels == set(sys.argv[2].split(",")), "census-label-set")
 say(census("_note(exc, site='x')")[1] != [], "census-rejects-keyword")
 say(census("_note(str(exc), 'a')")[1] != [], "census-rejects-computed")
-say(census("_note(exc, 'a')") == (1, []), "census-accepts-literal")
+say(census("_note(exc, 'a')")[:2] == (1, []), "census-accepts-literal")
 `;
 
 describe("swallowed note: the class name and a literal site label only", () => {
   test("the unit probe: line shape, canary absent, failing and closed stderr safe, literal-label census", () => {
-    const r = spawnSync("python3", ["-I", "-", SCRIPT], { input: NOTE_PROBE, encoding: "utf8", timeout: 25_000, env: process.env });
+    const r = spawnSync("python3", ["-I", "-", SCRIPT, "clear-output,out-file-write"], { input: NOTE_PROBE, encoding: "utf8", timeout: 25_000, env: process.env });
     const lines = (r.stdout ?? "").split("\n");
     for (const tok of [
       "line-shape",
       "canary-absent",
       "oserror-stderr",
       "valueerror-stderr",
+      "none-stderr",
       "closed-stderr",
       "census-literal-labels",
+      "census-label-set",
       "census-rejects-keyword",
       "census-rejects-computed",
       "census-accepts-literal",
@@ -1681,7 +1692,7 @@ describe("swallowed note: the class name and a literal site label only", () => {
     expect([plain.status, noted.status]).toEqual([4, 4]);
     expect(noted.stdout).toBe(plain.stdout);
     expect(noted.stdout.startsWith('{"outcome": "FAIL", "reason": "internal-error", "environmental": true, "detail": "')).toBe(true);
-    expect(String(plain.json?.detail)).toMatch(/^[A-Za-z]+$/); // the class name only: no exception text
+    expect(String(plain.json?.detail)).toMatch(/^[A-Za-z]+ at [A-Za-z_]+:\d+$/); // class name and innermost frame only: no exception text
     expect(plain.stderr).not.toContain("swallowed");
     expect(noted.stderr.split("\n").filter((l) => l.includes("swallowed"))).toEqual(["founder-check: swallowed IsADirectoryError at out-file-write"]);
   });

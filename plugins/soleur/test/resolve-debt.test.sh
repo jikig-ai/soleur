@@ -410,7 +410,7 @@ fi
 echo ""
 echo "--- T-note: swallowed note carries the class name only ---"
 set +e
-note_out=$(python3 -I - "$SCRIPT" 2>&1 <<'PY'
+note_out=$(python3 -I - "$SCRIPT" tmp-cleanup 2>&1 <<'PY'
 import ast, importlib.util, io, os, sys
 spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -450,6 +450,12 @@ for name, exc in (("oserror-stderr", OSError("w")), ("valueerror-stderr", ValueE
     except BaseException:
         say(False, name)
 
+try:
+    run_note(Boom("x"), None)
+    say(True, "none-stderr")
+except BaseException:
+    say(False, "none-stderr")
+
 closed = open(os.devnull, "w")
 closed.close()
 try:
@@ -459,26 +465,29 @@ except BaseException:
     say(False, "closed-stderr")
 
 def census(src):
-    calls, bad = 0, []
+    calls, bad, labels = 0, [], set()
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_note":
             calls += 1
             lit = (len(node.args) == 2 and not node.keywords
                    and isinstance(node.args[0], ast.Name)
                    and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str))
-            if not lit:
+            if lit:
+                labels.add(node.args[1].value)
+            else:
                 bad.append(node.lineno)
-    return calls, bad
+    return calls, bad, labels
 
-calls, bad = census(open(sys.argv[1], encoding="utf-8").read())
+calls, bad, labels = census(open(sys.argv[1], encoding="utf-8").read())
 say(calls >= 1 and not bad, "census-literal-labels")
+say(labels == set(sys.argv[2].split(",")), "census-label-set")
 say(census("_note(exc, site='x')")[1] != [], "census-rejects-keyword")
 say(census("_note(str(exc), 'a')")[1] != [], "census-rejects-computed")
-say(census("_note(exc, 'a')") == (1, []), "census-accepts-literal")
+say(census("_note(exc, 'a')")[:2] == (1, []), "census-accepts-literal")
 PY
 )
 set -e
-for tok in line-shape canary-absent oserror-stderr valueerror-stderr closed-stderr census-literal-labels census-rejects-keyword census-rejects-computed census-accepts-literal; do
+for tok in line-shape canary-absent oserror-stderr valueerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal; do
   if grep -qxF "OK $tok" <<<"$note_out"; then
     echo "  PASS: T-note: swallowed note carries the class name only ($tok)"
     PASS=$((PASS + 1))
@@ -488,4 +497,4 @@ for tok in line-shape canary-absent oserror-stderr valueerror-stderr closed-stde
   fi
 done
 
-print_results
+print_results 61

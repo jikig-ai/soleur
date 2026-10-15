@@ -747,7 +747,7 @@ r="$(odd meta-in-result)"; assert_withheld 'FR11b: _meta in the result → withh
 r="$(odd result-and-method)"; assert_withheld 'FR11b: result AND method → withheld' "$r" 3 'unrecognised result shape'
 r="$(odd no-content)"; assert_withheld 'FR11b: no content key → withheld' "$r" 3 'unrecognised result shape'
 r="$(odd result-string)"; assert_withheld 'FR11b: result is a string → withheld' "$r" 3 'unrecognised result shape'
-for f in unparsable-line value-contains-brace; do
+for f in evaluate-escaped-object run-code-escaped; do
   r="$(odd "$f")"
   assert_true "PR2: non-JSON candidate lines ($f) emit no swallowed marker (characterization)" bash -c 'stderr_has "$1" "child pgid" && ! stderr_has "$1" "swallowed"' _ "$r"
 done
@@ -1365,7 +1365,7 @@ assert_true 'Guard 3 mutant 5: renaming the server key fails the lookup loudly' 
 
 # PR2 (#10331): the swallowed-error note carries a class name and a literal site label only, never raises,
 # and runs after the group kill. The probe text is shared with the other suites except its census and the teardown case.
-note_probe="$(python3 -I - "$PROXY_SHIPPED" 2>&1 <<'PY' || true
+note_probe="$(python3 -I - "$PROXY_SHIPPED" reply-unrelayed-request,teardown-stdin-close,teardown-sigkill,teardown-final-wait,teardown-flush 2>&1 <<'PY' || true
 import ast, importlib.util, io, os, signal, sys
 spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -1405,6 +1405,12 @@ for name, exc in (("oserror-stderr", OSError("w")), ("valueerror-stderr", ValueE
     except BaseException:
         say(False, name)
 
+try:
+    run_note(Boom("x"), None)
+    say(True, "none-stderr")
+except BaseException:
+    say(False, "none-stderr")
+
 closed = open(os.devnull, "w")
 closed.close()
 try:
@@ -1419,7 +1425,7 @@ def literal(node):
 def census(src):
     # the proxy collects (exc, literal-label) pairs in `pending` inside teardown and emits them from _flush_notes,
     # so the loop's own _note(exc, label) call is exempt and every pending.append tuple is checked instead
-    calls, bad = 0, []
+    calls, bad, labels = 0, [], set()
     tree = ast.parse(src)
     exempt = set()
     for fn in ast.walk(tree):
@@ -1430,21 +1436,26 @@ def census(src):
             continue
         if isinstance(node.func, ast.Name) and node.func.id == "_note":
             calls += 1
-            if not (len(node.args) == 2 and not node.keywords and isinstance(node.args[0], ast.Name) and literal(node.args[1])):
+            if len(node.args) == 2 and not node.keywords and isinstance(node.args[0], ast.Name) and literal(node.args[1]):
+                labels.add(node.args[1].value)
+            else:
                 bad.append(node.lineno)
         elif isinstance(node.func, ast.Attribute) and node.func.attr == "append" and isinstance(node.func.value, ast.Name) and node.func.value.id == "pending":
             calls += 1
             tup = node.args[0] if len(node.args) == 1 else None
-            if not (isinstance(tup, ast.Tuple) and len(tup.elts) == 2 and isinstance(tup.elts[0], ast.Name) and literal(tup.elts[1])):
+            if isinstance(tup, ast.Tuple) and len(tup.elts) == 2 and isinstance(tup.elts[0], ast.Name) and literal(tup.elts[1]):
+                labels.add(tup.elts[1].value)
+            else:
                 bad.append(node.lineno)
-    return calls, bad
+    return calls, bad, labels
 
-calls, bad = census(open(sys.argv[1], encoding="utf-8").read())
+calls, bad, labels = census(open(sys.argv[1], encoding="utf-8").read())
 say(calls >= 1 and not bad, "census-literal-labels")
+say(labels == set(sys.argv[2].split(",")), "census-label-set")
 say(census("_note(exc, site='x')")[1] != [], "census-rejects-keyword")
 say(census("_note(str(exc), 'a')")[1] != [], "census-rejects-computed")
-say(census("_note(exc, 'a')") == (1, []), "census-accepts-literal")
-say(census("pending.append((exc, 'a'))") == (1, []), "census-accepts-pending-literal")
+say(census("_note(exc, 'a')")[:2] == (1, []), "census-accepts-literal")
+say(census("pending.append((exc, 'a'))")[:2] == (1, []), "census-accepts-pending-literal")
 say(census("pending.append((exc, str(exc)))")[1] != [], "census-rejects-pending-computed")
 
 class FakeStdin:
@@ -1474,10 +1485,12 @@ def fake_killpg(pg, sig):
     kills.append(sig)
 
 attempts = []
+texts = []
 class FlakyErr(io.StringIO):
     def write(self, s):
         if "swallowed" in s:
             attempts.append(list(kills))
+            texts.append(s)
             raise RuntimeError("reentrant write")
         return super().write(s)
 
@@ -1500,9 +1513,10 @@ finally:
     captured = sys.stderr.getvalue()
     os._exit, os.killpg, sys.stderr = real_exit, real_killpg, real_err
 say(code == 0 and attempts == [[signal.SIGTERM]] and "child exited rc=0" in captured, "teardown-note-after-kill")
+say(texts == [mod.PREFIX + " swallowed OSError at teardown-stdin-close\n"], "teardown-note-text")
 PY
 )"
-for tok in line-shape canary-absent oserror-stderr valueerror-stderr runtimeerror-stderr closed-stderr census-literal-labels census-rejects-keyword census-rejects-computed census-accepts-literal census-accepts-pending-literal census-rejects-pending-computed teardown-note-after-kill; do
+for tok in line-shape canary-absent oserror-stderr valueerror-stderr runtimeerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal census-accepts-pending-literal census-rejects-pending-computed teardown-note-after-kill teardown-note-text; do
   assert_true "PR2 note probe: $tok" grep -qxF "OK $tok" <<<"$note_probe"
 done
 
@@ -1522,7 +1536,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=489
+MIN_ASSERTIONS=492
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

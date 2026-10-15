@@ -134,8 +134,8 @@ def _note(exc: BaseException, site: str) -> None:
     # in the guard because teardown can run from the SIGTERM handler, where a reentrant stderr write raises it.
     try:
         log(f"swallowed {type(exc).__name__} at {site}")
-    except (OSError, ValueError, RuntimeError):
-        pass  # a closed, full or busy stderr must not turn a swallowed error into a crash
+    except (OSError, ValueError, RuntimeError, AttributeError):
+        pass  # a closed, full, busy or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash
 
 
 def _flush_notes(pending: List[Tuple[BaseException, str]]) -> None:
@@ -869,11 +869,11 @@ class Proxy:
         except ProcessLookupError:
             pass  # the group is already empty after a clean exit: the normal outcome of every clean session
         if not self.wait_group_empty(self.grace):
-            log(f"group {self.pgid} survived SIGTERM; SIGKILL sent")
             try:
                 os.killpg(self.pgid, signal.SIGKILL)
             except ProcessLookupError as exc:
                 pending.append((exc, "teardown-sigkill"))
+            log(f"group {self.pgid} survived SIGTERM; SIGKILL sent")  # after the kill: a stderr write that raises must not skip it
             self.wait_group_empty(self.grace)
         try:
             child.wait(timeout=self.grace)
