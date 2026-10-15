@@ -65,3 +65,4 @@ already carries — see
 (#8940). **Why:** #10161 — `test-all-orphan-log-retention` and
 `fanout-suite-scope` were green standalone and red (18 and 26 arms) inside
 `TEST_GROUP=affected`; both needed the scrub.
+- **A "never raises" stderr helper needs a `sys.stderr is None` case, and a baseline run must come from a pristine tree.** `cmd 2>&-` sets `sys.stderr` to `None`, so `except (OSError, ValueError)` does not catch the `AttributeError`; run the helper's probe with `None`, a closed file and a raising stream. Take a baseline for a before/after diff from a detached `git worktree add` at `HEAD`, never the live tree you are about to edit (#10375).
