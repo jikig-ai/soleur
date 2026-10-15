@@ -14,4 +14,9 @@
 ### Pipeline position update (post-work)
 - Implementation committed + pushed: PR #10385, HEAD 482affd91c (12 files, +724/-97).
 - Review panel armed (3 background seats): e6af6521 security-sentinel, 1897aaa9 code-quality, 97760956 data-integrity/cascade. Await findings → resolve ALL → ADR-267 fix-round if any → qa → compound → ship → postmerge → DONE.
-- Known-verify gap to re-check if flagged: verify/162 tgtype value (should be 11 for BEFORE UPDATE ROW if 23 is wrong).
+- Known-verify gap to re-check if flagged: verify/162 tgtype value (correct value is 19 (ROW=1|BEFORE=2|UPDATE=16) — fixed in verify/162).
+
+### Review Phase Complete
+- Panel: 3 seats (security e6af6521, code-quality 1897aaa9, data-integrity 97760956) → 2×P1 (verify tgtype, NULLed-key probes), 2×P2 (down comments, art-30 RESTRICT), P3 batch — all fixed in 10d40a748e.
+- ADR-267 fix-round (agent 4f2f0a3b): all 5 CONFIRMED; Reviewed-Fix-Round:1 Reviewed-Fix-Range:482affd91c..HEAD.
+- Next: qa (Test Scenarios are TENANT_INTEGRATION-gated; node_modules+dev DB unavailable on this host → CI/deployed-surface per plan constraint) → compound → ship → postmerge → DONE.
