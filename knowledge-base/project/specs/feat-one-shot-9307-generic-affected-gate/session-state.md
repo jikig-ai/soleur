@@ -108,3 +108,7 @@ Waiting on 3 seats; then fix agent #2 for round-2 list; then synthesis→gh issu
 - P3: dead GATE_PROG/GLOBAL_RULE/affected_nxt_total; double nxt probe; go.sh hardcodes `go test` not ${ADP_TOOL[@]}; non-ASCII pathnames (core.quotePath); explain emits 2 SELECTION lines on empty-diff; cd "$REPO_ROOT" unguarded; vacuous-normalization variants (exit 0; echo ok etc — dup B); fractional flooring dup; __tests__ census claim dup E; --print-selection terminator too strict (safe direction, note); JSON decoder triplication → extract to lib or keep + pin per-engine rows.
 
 PENDING seats: pattern-recognition (391b64d9), test-design (f947202a).
+
+## test-design seat (f947202a) — TQS 8.1/10 (B), pyramid PASS (no e2e rows, no marker needed)
+- P2: D11 testmon assertion non-discriminating — `grep testmon` matches the import-probe ledger line; pin `pytest\t.*--testmon`/`python3\t-m pytest.*--testmon` instead.
+- P3: D4 want_rc_in 4 7 hedges deterministic contract (rc7 is only for no-suite); delegated-runner rc2→4 arm untested; D19a admits ran=- on a counted path; X1 misses explain/selfcheck finish paths; pm arms (pnpm/yarn/bun) unexercised — add lockfile fixtures; FAKE_PYTEST_SLEEP dead knob; A1 vitest stub counts 2 passed for 1 file; self-check test name vs ~80s bound margin note.

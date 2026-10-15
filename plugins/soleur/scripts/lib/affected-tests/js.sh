@@ -70,7 +70,10 @@ affected_js_tool() {
     case "$pm" in
       pnpm) command -v pnpm >/dev/null 2>&1 && ADP_TOOL=(pnpm exec "$tool") ;;
       yarn) command -v yarn >/dev/null 2>&1 && ADP_TOOL=(yarn "$tool") ;;
-      bun)  command -v bun  >/dev/null 2>&1 && ADP_TOOL=(bun x "$tool") ;;
+      # NO `bun x` arm: bunx auto-installs and executes registry content when
+      # the package is absent — asymmetric with `npx --no-install` below
+      # (oven-sh/bun#23673: bun's --no-install flag is not yet honoured
+      # consistently). A bun-only repo resolves via node_modules/.bin or PATH.
     esac
     if (( ${#ADP_TOOL[@]} == 0 )) && command -v npx >/dev/null 2>&1; then
       ADP_TOOL=(npx --no-install "$tool")
@@ -92,8 +95,13 @@ affected_js_tool() {
 }
 
 # Total test files discoverable in the repo (spec/test conventions + __tests__).
+# jest's `__tests__/**/*.[jt]s` convention carries no .test./.spec. marker in
+# the filename, so the census needs the directory shape too — deduped via
+# sort -u against the pattern-matched set.
 affected_js_total() {
-  affected_find_files count '*.test.*' '*.spec.*' | grep -c .
+  { affected_find_files count '*.test.*' '*.spec.*' || true
+    affected_find_files count '*.[jt]s' '*.[jt]sx' | grep '/__tests__/' || true
+  } | sort -u | grep -c . || true
 }
 
 # Count the test files a runner reported running, from its own summary line.
@@ -101,10 +109,10 @@ affected_js_parse_ran() { # $1 = log file; prints count or -
   local log="$1" n=""
   if [[ "$ADP_TOOL_KIND" == vitest ]]; then
     # `  Test Files  2 passed | 1 failed (3)` — the parenthesised TOTAL.
-    n="$(grep -oE 'Test Files.*\(([0-9]+)\)' "$log" 2>/dev/null | grep -oE '[0-9]+' | tail -n 1)"
+    n="$(grep -oE 'Test Files.*\(([0-9]+)\)' "$log" 2>/dev/null | grep -oE '[0-9]+' | tail -n 1 || true)"
   elif [[ "$ADP_TOOL_KIND" == jest ]]; then
     # `Test Suites: 1 failed, 2 passed, 3 total`
-    n="$(grep -oE 'Test Suites:.*[0-9]+ total' "$log" 2>/dev/null | grep -oE '[0-9]+ total' | grep -oE '[0-9]+' | tail -n 1)"
+    n="$(grep -oE 'Test Suites:.*[0-9]+ total' "$log" 2>/dev/null | grep -oE '[0-9]+ total' | grep -oE '[0-9]+' | tail -n 1 || true)"
   fi
   printf '%s\n' "${n:--}"
 }
@@ -119,7 +127,7 @@ affected_js_run() {
   ADP_OF="$(affected_js_total)"
   local -a cmd=()
   local log rc=0 ran="-"
-  log="$(mktemp "${TMPDIR:-/tmp}/affected-js.XXXXXX")"
+  affected_mktemp js; log="$AFFECTED_TMP"
 
   if [[ "$mode" == selected && "$ADP_TOOL_KIND" == vitest ]]; then
     local -a files=()
