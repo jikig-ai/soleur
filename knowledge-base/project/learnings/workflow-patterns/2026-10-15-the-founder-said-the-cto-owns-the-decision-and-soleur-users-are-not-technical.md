@@ -80,6 +80,50 @@ Recorded operator consent plus a drift guard, recorded in ADR-288 (the first dra
 - **A heartbeat cadence made the probe wait.** The heartbeat's cadence set when the state probe ran, so the probe had to wait for it. **Prevention:** probe on the event or at a short bounded interval, and do not let a heartbeat be the
   only thing that triggers a read.
 
+- **The first design admitted by denylist what the rule said was a closed set.** The verifier's command check was eight text patterns, so
+  quoted spellings (`g''it push`, `--admi""n`), `kubectl apply` and `rm -f -r` verified as delegable while the rule, the ADR and
+  the reference all said "merge/dispatch/revert only". Seven review seats converged on it independently. **Prevention:** when a
+  document names a CLOSED set, the enforcing code is a positive allowlist grammar with a character-class gate, and a denylist is only
+  a second layer; write the escape rows (a corpus the guard must refuse) before the mutation rows.
+- **Scope text was never bound to the command, and the epic was never bound to the envelope.** Only the existence of "Scope item N"
+  was checked. **Prevention:** a record that authorizes an act must be tied to that act by content (the target token) and to the
+  work it belongs to (the epic number), not by an integer that merely exists.
+- **The pre-arming hold re-check was placed after the step that archives the files it reads.** Nothing local could see it because each
+  file was internally right; the consistency seat found that Phase 6.45 moves the plan and rulings away before the check ran.
+  **Prevention:** when adding a step to a pipeline, trace every path it reads against the steps that move or delete them, and keep
+  the wiring block byte-identical in every place that quotes it (a test asserts the equality).
+- **A fix round introduced new gaps in the guards it added.** The second batch narrowed the tool-name denial (`timeout 5 kubectl ...`
+  verified again) and let a comment marker inside a fenced block hide executable lines; the single verification pass caught both.
+  **Prevention:** a fix to a guard gets the same escape-row treatment as the guard; re-run the previous round's reproductions
+  against the fixed code, side by side with the old version.
+- **A stub hid a field the real tool does not have.** `gh pr list --json authorAssociation` does not exist; the suite's stub accepted
+  it and only a live run failed. **Prevention:** a stub for an external CLI rejects the flags and JSON fields the real tool rejects,
+  and one live read-only run happens before the suite is trusted.
+- **A parallel commit swept another agent's staged files into an unrelated commit.** Concurrent agents on one worktree each ran a plain
+  `git commit`. **Prevention:** every concurrent writer commits with an explicit `-- <paths>` pathspec and never `git add -A`.
+- **A scratch directory was assumed to exist.** Writing a file into the session scratchpad failed until `mkdir -p`. **Prevention:**
+  create the directory in the same command that writes into it.
+- **A queued full-gate run sat behind other sessions for half an hour while the tree was about to change.** **Prevention:** a gate
+  queued behind a lock is killed (own-process-group only) and re-queued once the tree stops changing, because the ship phase runs
+  the affected gate on the final tree anyway.
+- **The plan's pre-merge baseline for the registry host was stale.** The PR body's recorded boot id belonged to a host replaced the
+  day before; the live baseline was read again immediately before the merge. **Prevention:** read the live value inside the
+  go/no-go window, never carry a recorded one forward.
+
+### Triage
+
+| Item | Recurring? | Disposition |
+|---|---|---|
+| Denylist for a closed set | recurring | fixed inline (allowlist, escape rows) |
+| Scope/epic binding | recurring | fixed inline (V2, V3) |
+| Hold re-check after archive | one-off for this order, class recurring | fixed inline (moved to the start of Phase 6.45) |
+| Fix round introduces gaps | recurring | covered by the verification pass; rule text in review skill already names it |
+| Stub hides a field | recurring | fixed inline (stub rejects the field; live run) |
+| Parallel commit sweep | recurring | convention (`--` pathspec), no new rule |
+| Scratch dir missing | one-off | none |
+| Gate queued behind others | recurring | none new: `--capacity` and own-pgroup kill already exist |
+| Stale recorded baseline | one-off | none |
+
 ## Tags
 
 category: workflow-patterns
