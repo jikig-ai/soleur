@@ -47,3 +47,7 @@
 - Review fixes committed+pushed (9c650a4f8d). All suites green incl. T37 + D6. E2E verified: real SessionStart envelope at a bare-root fixture carries marker + redirect block; probe prints marker in 0.03s.
 - P3-2 sanitizer follow-up filed: #10395. Test-design seat (b880e82a) still running in background.
 - NEXT: soleur:compound → soleur:ship → merge → postmerge → DONE. PR #10386 draft, issue #10383.
+
+## Compound Phase (complete)
+- Learning written: knowledge-base/project/learnings/2026-10-15-a-predicate-parity-claim-needs-an-env-injection-fixture.md
+- NEXT: soleur:ship (Phases: commit artifacts, docs verify, tests, semver label, PR ready, CI, merge, postmerge) → merge → DONE
