@@ -232,7 +232,7 @@ def _b64_decode(s):
         try:
             return base64.b64decode(body + "=" * ((-len(body)) % 4), validate=True)
         except (binascii.Error, ValueError):
-            continue
+            continue  # a per-candidate decode probe: most candidates are not base64 (ADR-095, 2026-07-06 amendment item 2: decode errors are swallowed, never bubble to exit 2)
     return None
 
 
@@ -336,7 +336,7 @@ def _scan_encoded(norm, seen):
         try:
             raw = bytes.fromhex(blob)
         except ValueError:
-            continue
+            continue  # defensive: the regex and the parity filter above leave only valid even-length hex, so this does not fire today (ADR-095, 2026-07-06 amendment item 2: decode errors never bubble to exit 2)
         if _mostly_text(raw):
             hits += _scan_text(raw.decode("utf-8", "replace"), m.start(), "decoded hex", seen)
     # percent-encoding: unquote once over the normalized text (bounded like the base64/hex paths; a
@@ -388,7 +388,19 @@ def main():
     try:
         return scan(sys.argv[1])
     except Exception as e:  # any engine crash = cannot-evaluate, fail closed
-        sys.stderr.write(f"redact-engine: internal error: {e}\n")
+        tb, own, last = e.__traceback__, None, None
+        while tb is not None:
+            last = tb
+            if tb.tb_frame.f_code.co_filename == __file__:
+                own = tb
+            tb = tb.tb_next
+        tb = own or last
+        where = "" if tb is None else " at %s:%s" % (tb.tb_frame.f_code.co_name, tb.tb_lineno)
+        # class name and innermost frame in this file only: exception text can carry scanned content (mirrors founder-check _locator)
+        try:
+            sys.stderr.write(f"redact-engine: internal error: {type(e).__name__}{where}\n")
+        except (OSError, ValueError, AttributeError):
+            pass  # a closed stderr (None when fd 2 is closed) must not turn the fail-closed rc 2 into an uncaught crash (rc 1 reads as "redaction needed")
         return 2
 
 

@@ -66,6 +66,8 @@ already carries — see
 `fanout-suite-scope` were green standalone and red (18 and 26 arms) inside
 `TEST_GROUP=affected`; both needed the scrub.
 
+- **A "never raises" stderr helper needs a `sys.stderr is None` case, and a baseline run must come from a pristine tree.** `cmd 2>&-` sets `sys.stderr` to `None`, so `except (OSError, ValueError)` does not catch the `AttributeError`; run the helper's probe with `None`, a closed file and a raising stream. Take a baseline for a before/after diff from a detached `git worktree add` at `HEAD`, never the live tree you are about to edit (#10375).
+
 ## A mutation row is vacuous until a fixture distinguishes the mutant
 
 **A mutation row is vacuous until a fixture distinguishes the mutant — fabricate the discriminating state when the live corpus can't produce it.** Before writing a sed-and-diff mutation row, name the input on which the mutant's verdict differs; if the live tree can't supply it, inject synthetic module state (`o._TRACKED = (real | {synthetic}, …)` in an importlib-probed module) or build a scratch `git init`+`git add` index under TESTROOT (`rm -rf` after staging yields the index-dir-absent-on-disk shape). A mutant that lands and emits the same vector is the quietest green. Twin trap: a stale-expectation guard must assert the vector the OLD rule actually emits — a hand-extended "stale" string that no rule produces can never match, and `!=` on it passes vacuously on empty output; shape-pin instead (`=~ ^([01] ){N}[01]$`). **Why:** #10117's review found three mutation rows whose distinguishing fixtures could not exist in the live index. See `knowledge-base/project/learnings/test-failures/2026-10-14-a-mutation-row-is-vacuous-until-a-fixture-distinguishes-the-mutant.md`.
