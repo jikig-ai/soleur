@@ -13,7 +13,7 @@
 # BOTH required: a message that only says `ask the operator` is an ordinary message), the fail-closed wording,
 # the ask-once wording, the owner (the CTO's "Own the epic" interface), the Gate: predicate hand-off to ship
 # Phase 6 with the container-format link, the verifier `render` call made by the CALLING skill after the real
-# question (whose text must render the Scope items, the expiry, 30 days, every merge and every dispatch listed,
+# question (whose text must render the Scope items, the expiry, 30 days, every merge, ready, dispatch and revert-PR listed,
 # posted publicly, and the outcome in business terms), the headless behaviour, ${CLAUDE_PLUGIN_ROOT} script
 # paths, the execution-sentence wiring and the stop sequence (delete, disarm, cancel, say what remains).
 #

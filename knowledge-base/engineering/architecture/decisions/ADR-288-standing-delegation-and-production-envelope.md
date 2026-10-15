@@ -127,7 +127,7 @@ These close the gaps the review found between what the earlier text said and wha
   (`command-not-delegable`). The earlier denylist stays as a second layer, widened, but it is no longer the gate: a denylist over text
   a shell later re-interprets is bypassed by quoting.
 - **V2 scope binding.** The cited Scope item's text must name the command's target as a whole token (the PR number and the word
-  merge or ready; the workflow file name; the word create or revert), else `scope-mismatch`. Before this, only the item's number
+  merge or ready; the workflow file name; the word revert), else `scope-mismatch`. Before this, only the item's number
   was checked.
 - **V3 epic binding.** The envelope carries `Epic: #N`, which must equal the issue number of the delegation comment
   (`envelope-incomplete`, `epic-mismatch`). Any valid delegation on any open epic can no longer authorize any envelope.
