@@ -23,7 +23,10 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
   `gh issue create --label action-required --label decision-challenge --milestone "Post-MVP / Later"` with a plain-language
   title linking the PR, because `operator-digest` Section 4 harvests `action-required` issues, not PR bodies. A split
   item yields both a technical row and an operator row.
-- **A delegated row** (`operator (production-mutating)` with Ruling `Authorized by delegation <comment-url>, envelope <path>`) renders as an informational line naming the act and the delegation link, and files NO issue: the operator already authorised it in the epic's recorded Standing Delegation. The gate verifies the link (`delegation-invalid` / `delegation-unverifiable` mean fix the delegation or the envelope, never ask the operator a technical question); see [standing-delegation.md](../../brainstorm-techniques/references/standing-delegation.md).
+- **A delegated row** (`operator (production-mutating)` with Ruling `Authorized by delegation <comment-url>, envelope <path>[, ran <ISO 8601 UTC time>]`) renders as an informational line naming the act and the delegation link, and files NO issue: the operator already authorised it in the epic's recorded Standing Delegation. The gate verifies it (below). A row WITHOUT `ran` authorises an act that has not happened yet and is verified as of now; a row WITH `ran` records an act that did and is verified as of that time, and also needs its execution receipt. See [standing-delegation.md](../../brainstorm-techniques/references/standing-delegation.md).
+  - `delegation-invalid` / `delegation-unverifiable`: fix the row or the envelope. When the delegation itself is the problem (edited, expired, gone, the epic closed), say the plain sentence for its reason from standing-delegation.md section 7 (Reason tokens); the CALLING skill asks the epic-start question again and only a fresh Yes re-records it. Never re-record a delegation yourself and never put a technical question to the operator. Headless (`HEADLESS_MODE=true`, no TTY, `soleur:one-shot`, `soleur:go --headless`): nobody can be asked, so leave the PR draft, file ONE `action-required` issue that names the ACTION, print one plain sentence, and continue to the draft PR.
+  - **The receipt (a `ran` row):** the epic must carry a comment whose first line is `<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back run=<url|none> -->` (standing-delegation.md section 8), written by an owner, member or collaborator, naming this row's delegation URL, this row's envelope path and the fingerprint the verifier just reported. `receipt-missing` (none for this delegation), `receipt-mismatch` (one exists but not for this envelope and fingerprint, with that result and author) and `receipt-unreadable` (the epic's comments could not be read) are each exit 2: write or correct the receipt, then re-run the gate. The check proves a receipt exists, is attributable and matches the row. It does not prove what ran; a receipt-checking hook is the stronger follow-up (#10361).
+  - When the gate prints `SOLEUR_RULE_APPLIED rule=hr-menu-option-ack-not-prod-write-auth note=delegation-verified` on stdout, repeat that exact line in your own `echo` so the telemetry capture hook (which reads the command text, not script output) sees it.
 - No new top-level PR-body heading: that keeps the diff and the `ship-operator-step-gate` deny-token surface unchanged.
 - `guardrails.sh`'s filing gate refuses the `gh issue create` unless the body names a user-visible consequence; when the
   dissent is about a hook/gate/guard the honest exit is `--label meta/machinery` (measured on PR #8354), which the digest
@@ -32,7 +35,7 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
 
 ## The gate: three call sites, one parser
 
-`bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" <mode>` (exit 0 pass or `[WARN]`, 1 fail, 2 could not measure):
+`bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" <mode>` (exit 0 pass or `[WARN]`, 1 fail, 2 could not measure; any other status, such as 127 script not found, 124 timed out or 137 killed, means the gate did not run: treat it as 2):
 
 1. **one-shot, after the plan phase and before `work`:** `--branch`. A `pending - assumed: <default>` row is resolved
    here, in the main context, so a wrong assumption does not ride through `work` and `review`.
@@ -45,7 +48,7 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
    Phase 6 full-replaces the body, so the body must be checked after it is written.
 
 The plugin root is `${CLAUDE_PLUGIN_ROOT}` (cloud shells do not export it: resolve it as the Cloud Mode paragraph of ship/SKILL.md does).
-An absent artifact is `[PASS] no decision-challenges artifact`. Rulings render into a PUBLIC PR body: leave secrets, credentials and
+An absent artifact is `[PASS] no decision-challenges artifact`. An artifact that `--branch` finds under `specs/archive/` has its delegation rows checked for shape only: they are NOT verified, and the `[NOTE]` and `[PASS]` lines say so; the check that verifies them is the one run on the live path, before the artifact is archived. Rulings render into a PUBLIC PR body: leave secrets, credentials and
 unfixed-vulnerability detail out of the ruling text and out of the `domain/engineering` issue (carry the question and a pointer, not evidence snippets). An artifact with no `| Item | Class | Ruling |` table is a `[WARN]` and exit 0
 (the label and `pending` lints still ran; add the table when the artifact lists decisions). A table with 0 rows, a drifted header, an unclosed code fence, an empty PR body or an unreadable
 file is exit 2: fix the file or the invocation, never continue past it. A table row written after a blank line is outside the
