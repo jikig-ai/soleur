@@ -28,8 +28,12 @@ Recorded operator consent plus a drift guard, recorded in ADR-288 (the first dra
 - **One chokepoint.** `delegation-verify.sh` holds every validity check; the Technical-Ruling Gate, the hold evaluator
   (`hold-gate-eval.sh`) and the CTO's pre-execution call all call it. Anything it cannot evaluate keeps today's
   behaviour: the hold stands, the question is asked, the gate fails.
-- **Holds become predicates.** `soleur:go` routes a brief carrying `HOLDS` or "ask the operator" to the CTO; each hold gets
+- **Holds become predicates.** `soleur:go` routes a brief that carries an epic reference (`#N`) AND a `HOLDS:` list to the CTO; each hold gets
   `Gate:` lines (`pr-merged`, `no-inflight-run`) that ship Phase 6 evaluates mechanically.
+- **Receipts.** After each delegated act the CTO posts a receipt comment on the epic and records the row
+  `Authorized by delegation <url>, envelope <path>, ran <ISO UTC>` in `decision-challenges.md`. The ship gate checks a receipt
+  only for rows that carry `ran`, so recording that row is what turns the check on; the receipt must sit inside the delegation's
+  life, be unedited and user-authored, and serve one row only. It proves a receipt exists and matches, not what ran.
 - **Still the operator's:** money, legal exposure, brand, scope, user-data loss, force-push to main, bypassing checks or
   rulesets, editing the delegation, lock-out credential rotation, third-party systems, any act with no named rollback.
 

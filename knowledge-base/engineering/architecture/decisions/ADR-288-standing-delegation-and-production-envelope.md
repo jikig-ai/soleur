@@ -43,7 +43,9 @@ Be exact about the loss. Commit `fa06eef79a` (#2883, 2026-04-24) wrote that "the
 confirmation (user reads the exact command before approving)", and
 `knowledge-base/project/learnings/2026-04-19-menu-option-ack-not-authorization-for-prod-writes.md` (#2618) records the incident
 behind it: an agent read a menu "A" as authorization for `terraform apply -auto-approve`. Inside a recorded delegation, for merge,
-dispatch and revert only, this ADR removes the operator's per-command read of the exact command. It also makes the epic-start
+dispatch and revert only, this ADR removes the operator's per-command read of the exact command. "Revert only" is exact about
+the command set, not about intent: the closed set is merge, ready, dispatch of a named workflow file and PR creation (`gh pr
+create --fill`, scoped by an item that names create or revert), and never a hook-gated form. It also makes the epic-start
 confirmation a deliberate, single menu-style acknowledgement that DOES extend to commands the operator never saw. The rule's
 sentence "Menu acks and prior approvals do NOT extend to new commands" therefore carries the exception explicitly ("outside a
 recorded delegation"). The trade is accepted because the question is plain-language, names act classes, is recorded verbatim and is
@@ -106,7 +108,7 @@ an envelope checked together:
 
 1. **The Standing Delegation.** An issue comment on the epic: line 1 exactly `<!-- soleur-delegation v1 -->`, authored by a real
    user (not a bot, and not posted through a GitHub App) who is the repository owner or holds `admin` permission, with a verbatim
-   operator quote of at least 40 characters, a `Confirmation:` line that starts with `Yes`, numbered Scope items, the fixed
+   operator quote of at least 40 bytes, a `Confirmation:` line that starts with `Yes`, numbered Scope items, the fixed
    Excluded paragraph, and an expiry no later than 30 days after creation. The epic closing also ends it. Revocation is deleting or
    editing the comment. The operator gives it once, in plain language, at epic start; the calling skill writes the record through
    `delegation-verify.sh render` and reads it straight back through `verify`.
@@ -162,17 +164,23 @@ A resume brief's holds become `Gate:` predicates that `hold-gate-eval.sh` evalua
 STANDS. The grammar is `Gate: pr-merged <N>` and `Gate: no-inflight-run <workflow-file>` only. **`command` and `run-green` are
 deferred. The first real consumer re-adds them, and only by CTO ruling.** (Ruling R1; an unknown kind makes the evaluator exit 2 and
 the hold stands.) With no `Delegation:` line in the plan, the evaluator exits 3 before any other check and the legacy prose path is
-unchanged. `soleur:go` routes a brief carrying the tokens `HOLDS` or "ask the operator" to the CTO, outside the eval-gated routing
-block.
+unchanged. `soleur:go` routes a brief that carries an epic reference (`#N`) AND a structured `HOLDS:` list to the CTO, outside the eval-gated
+routing block; a message that merely says "ask the operator" is an ordinary message (`go.md` Step 1.5 is the authority).
 
 ### What the ship gate checks (execution receipts)
 
-The Technical-Ruling Gate does not and cannot prove what ran. It checks, per delegation row, that the delegation still verifies at
-the recorded act time and, for a row carrying `ran <ISO>`, that the epic holds a **receipt**: a comment starting
+The Technical-Ruling Gate does not and cannot prove what ran. After each delegated act the CTO records the row
+`Authorized by delegation <url>, envelope <path>, ran <ISO UTC>` (class `operator (production-mutating)`) for the calling skill to
+put in `decision-challenges.md`, and posts the receipt. Receipt enforcement fires ONLY for rows carrying `ran`: the gate cannot know
+that an act happened that no row names, so a row without `ran` gets the plain strict `verify` and no receipt check. The gate checks,
+per delegation row, that the delegation still verifies at the recorded act time and, for a row carrying `ran`, that the epic holds a
+**receipt**: a comment starting
 `<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back run=<url|none> -->`
 followed by a plain sentence, whose delegation and envelope equal the row's, whose `sha256` equals the verifier's
-`verified-envelope-sha256`, whose result is `ok` or `rolled-back`, and whose `author_association` is OWNER, MEMBER or COLLABORATOR.
-A missing, mismatched or unreadable receipt exits 2 (`receipt-missing`, `receipt-mismatch`, `receipt-unreadable`). So the gate
+`verified-envelope-sha256`, whose result is `ok` or `rolled-back`, and whose `author_association` is OWNER, MEMBER or COLLABORATOR. The receipt window rules are part of the gate's contract: the
+receipt's `created_at` lies within the delegation's life (from the delegation's `created_at` to the end of its expiry day) and is not
+in the future; the receipt was never edited (`updated_at` equals `created_at`) and was posted by a `User`, not a bot; each receipt
+satisfies at most one row, so three rows cannot share one receipt; and every field matches exactly. A missing, mismatched or unreadable receipt exits 2 (`receipt-missing`, `receipt-mismatch`, `receipt-unreadable`). So the gate
 establishes that a receipt exists, is attributable to a repository participant and matches the envelope; it does not establish that
 the recorded command is the command that ran, because the CTO writes the receipt. The calling skill also states each delegated act
 in-session and lists delegated acts in the run summary, so the operator can see them.
@@ -200,14 +208,23 @@ Ruled by CTO agent, 2026-10-15:
 Each is a statement of what this design does not prevent.
 
 - **Shared gh identity.** The delegation is posted through the same `gh` identity as the agent. The `Confirmation:` line, the
-  40-character quote, the 30-day cap and edit-as-revocation are tamper-evidence and an audit trail, NOT prevention: a same-identity
+  40-byte quote, the 30-day cap and edit-as-revocation are tamper-evidence and an audit trail, NOT prevention: a same-identity
   agent can still render and post a record, delete and re-create a comment (which resets the "never edited" check), or author the
   envelope. The verifier cannot tell who typed a comment, only which account posted it.
 - **The envelope is not pinned to `origin/main`.** V4 reads the committed HEAD blob, but HEAD may be an unpushed local commit that
   no one reviewed, and the CTO authors it. Flip: require the envelope blob to equal `origin/main` once one delegated act has run (so
   an envelope needs a merged PR first), or when #10361 lands, whichever comes first.
-- **Verifier trust base.** `PATH`, the `gh` authentication and the working-tree copy of the scripts are trusted (see above).
+- **Verifier trust base.** `PATH`, the `gh` authentication and the working-tree copy of the scripts (verifier, gate and hold
+  evaluator, all read from the branch under review) are trusted (see above). Flip: refuse at ship when a PR that touches one of
+  these scripts also carries a delegation row, or run them from `origin/main`.
 - **The receipt is authored by the CTO.** It is evidence of a claim, not proof of execution.
+- **`ran` is self-asserted, now bound to a receipt window.** The act time in a row is written by the same agent that did the act. It
+  is no longer free: the delegation must have been in force at that time, the receipt must exist inside the delegation's life and
+  not in the future, and a receipt cannot be reused across rows. A row that omits `ran` skips the receipt check altogether.
+- **A hold discharges when its condition is true, whoever the hold is reserved to.** The evaluator checks facts (`pr-merged`,
+  `no-inflight-run`); it cannot read that a hold was worded as the operator's decision. The mitigation is the `Operator-reserved:`
+  grammar, which marks a hold that only a person may discharge; a hold not marked so, and a gate that does not mention the hold's
+  target, remain the CTO's authoring and review's check.
 - **`updated_at` and reactions.** The verifier treats any `updated_at` different from `created_at` as edited (the strict reading;
   it fails closed). Whether a reaction moves `updated_at` was not probed with a write. As an observation only, not proof for this
   repository: a read-only look at `cli/cli` found 8 of 8 reacted comments with `updated_at` equal to `created_at`. If a reaction
@@ -277,6 +294,6 @@ it carries its own deadline and disclosure and why nothing in the authorization 
 
 ## Diagram
 
-The C4 model shows the CTO component and one read-only edge to GitHub from the plugin side (verifier, hold evaluator, overlap
-preflight; authenticated per-user reads of the user's own repository). There is no hook-side edge: the delegation arm was removed
+The C4 model shows the CTO component and one read-only edge to GitHub from the plugin side (verifier, hold evaluator, ship gate's
+receipt read of the epic's comments, overlap preflight; authenticated per-user reads of the user's own repository). There is no hook-side edge: the delegation arm was removed
 (R2). See `knowledge-base/engineering/architecture/diagrams/model.c4`.

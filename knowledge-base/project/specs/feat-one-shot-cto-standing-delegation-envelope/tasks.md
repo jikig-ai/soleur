@@ -16,8 +16,8 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 ## Phase 1: Format reference
 
 - [x] 1.1 Write `plugins/soleur/skills/brainstorm-techniques/references/standing-delegation.md`:
-  - [x] 1.1.1 delegation record v1 template (marker, blockquote of question plus answer >= 40 chars, `Confirmation:`, numbered Scope, Excluded with ten fixed anchor keywords, `Expiry:` ISO date, `Revoke:`).
-  - [x] 1.1.2 `## Production Envelope` template and the `Gate:` v1 grammar (four kinds).
+  - [x] 1.1.1 delegation record v1 template (marker, blockquote of question plus answer >= 40 chars, `Confirmation:`, numbered Scope, Excluded as one fixed sentence (the ten-keyword check was replaced in the review-fix round), `Expiry:` ISO date, `Revoke:`).
+  - [x] 1.1.2 `## Production Envelope` template and the `Gate:` v1 grammar (two kinds after the review-fix round: `pr-merged`, `no-inflight-run`).
   - [x] 1.1.3 plain-language epic-start confirmation, stall, re-confirm and execution-log wording.
   - [x] 1.1.4 boundaries and residuals (hook-gated forms still defer; shared identity is tamper-evidence only).
 - [x] 1.2 Add the executable-template test: extract the templates, instantiate, expect `delegation-verify.sh` to return `valid`.
@@ -94,7 +94,7 @@ Dispositions by class:
 - Prose and routing (agent F3a): `${CLAUDE_PLUGIN_ROOT}` paths, selector cue anchoring, go Step 1.5 trigger, stop path.
 - Docs (agent F3b, this file's owner):
   - [x] The amended rule's menu-ack sentence carries the exception ("outside a recorded delegation"); line is 596 bytes; new hash
-        `4b86563d5be5ac98e1b377057a0ea34fd0761fd0087258bf9c4b5b4f6c5dd068`.
+        `4b86563d5be5ac98e1b377057a0ea34fd0761fd0087258bf9c4b5b4f6c5dd068` (superseded by the second round below).
   - [x] The ack row states the widening honestly, cites `fa06eef79a` and the 2026-04-19 learning, and asks for human review.
   - [x] The four AGENTS lints plus `lint-rule-bodies --check --base origin/main` pass.
   - [x] ADR-288: claims corrected (no "two independent keys", receipt scope, "no seam in the script", AP-020 and AP-024, 5 s cap
@@ -107,3 +107,24 @@ Dispositions by class:
         states the exit-3 prose path and the second evaluation before arming.
   - [x] Shard weights of the five new suites set from measured seconds.
   - Not done here: `.gitattributes` already marks `model.likec4.json` as `linguist-generated=true` on main.
+
+## Second review-fix round (PR #10348, fix SHA 111cc1b43a)
+
+Two more seats reported (fix-round architecture and security). Items owned by other agents carry no checkbox.
+
+- Docs (agent F3b, this file's owner):
+  - [x] The amended rule names the closed command set (merge, ready, dispatch, revert-PR) instead of "merge/dispatch/revert only";
+        the line is 599 bytes; new hash `62f7ef9a380a9cc426964de82361b71db4fdd0f02cea987c683630a6e694bf7c`; the ack row carries the new
+        sha256 and the same closed set; the five AGENTS lints pass.
+  - [x] ADR-288 and the learning: the CTO records the `ran <ISO>` row after each act, receipt enforcement fires only for rows
+        carrying `ran`, and the receipt window rules are stated as the gate's contract.
+  - [x] ADR-288, the learning and row T5: the routing trigger is an epic reference AND a `HOLDS:` list.
+  - [x] `decision-challenges.md`: T1, T4, T5, C1 and R3 carry a supersession note; rows RF-9 to RF-11 added; the ruling gate passes.
+  - [x] Plan: supersession banner, struck/annotated Gate grammar, `--audit`, `--issue`, Phase 5, Guard 3 and the FR3/FR5 boxes; tasks
+        1.1.1 and 1.1.2 corrected.
+  - [x] C4 and ADR: the plugin-to-github edge names the ship gate's receipt read; model re-rendered; the three C4 tests pass.
+  - [x] Residuals recorded: self-asserted `ran` bound to a receipt window, a hold discharges when its condition is true whoever it is
+        reserved to (mitigated by the `Operator-reserved:` grammar), and the verifier trust base with its flip condition.
+- Not recorded as an ADR residual because another agent may still fix it: the grammar guards `Command:` only while Verification,
+  Abort and Rollback text is not vetted (security N2/N1 of the fix round), and revocation falling back to an older delegation.
+- Verifier, gate, hold evaluator, cto.md and go.md changes from these reports belong to their fix agents.
