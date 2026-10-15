@@ -131,3 +131,14 @@ Class key: P = product code (`apps/web-platform` app, server and components), S 
 
 - Enabling Code Quality bills $10 per active committer per month plus AI credits and Action minutes (GitHub's confirm dialog, 2026-10-14).
 - Runner cost measured by `scripts/ci-demand-census.sh` over 2026-10-14 10:00-12:00Z (the job was already running then, before the re-enable above): the `dynamic/github-code-quality/codeql` job was 141.1 of 3,234.6 job-min (4.4%). The raw census output was not saved; re-run the script to reproduce.
+
+## Resolution: js/comparison-between-incompatible-types (2026-10-15, PR1 of #10331)
+
+Both findings were located through the repository's Code Quality alert list (the code-scanning REST API does not return these alerts). Neither is a behavior bug. Both are `typeof x === "object" && x !== null` guards that CodeQL's type inference reads as comparing a non-null value to null.
+
+| Site | What the code does | Verdict | Action |
+|---|---|---|---|
+| `apps/web-platform/server/account-delete.ts:849` | Formats the failure detail inside `if (anonOrgErr)`, so `anonOrgErr` is already truthy and the `!== null` is always true. The erasure abort and the Sentry mirror happen before this line and are unchanged. | Redundant check, harmless | Removed the redundant comparison and added a characterization test pinning the three detail shapes (object with message, object without, bare string). Alert clears on the next scan of `main`. |
+| `apps/web-platform/server/dsar-export.ts:285` | `isPlainObject` is a standalone `v is Record<string, unknown>` type guard. `typeof null === "object"`, so the `v !== null` is required for the guard's own contract; the single caller pre-filters null, which is what the analysis keys on. | False positive | No production change. Alert dismissed as a false positive (GitHub's dismiss action took no reason field, so the reason is recorded here). Added a test pinning top-level and nested null staying JSON null. |
+
+Neither cross-tenant guard (`assertReadScope`, `CrossTenantViolation`) nor the erasure-outcome handling is involved. No GDPR-sensitive behavior changed, so no Art. 33 assessment was needed.

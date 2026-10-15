@@ -247,6 +247,45 @@ describe("deleteAccount Sentry mirror (#4390)", () => {
     },
   );
 
+  // #10331 — characterization of the failure-detail formatting at the
+  // anonymise-organization-membership stage. The error value the RPC returns is
+  // user-visible in `result.error`, and an erasure that aborts must say why. Pins
+  // the three shapes the formatter distinguishes: an object carrying `message`,
+  // an object without one (falls back to String()), and a bare string.
+  test.each([
+    {
+      name: "object with a message",
+      err: { message: "synthetic_org_membership_error" },
+      expected: "synthetic_org_membership_error",
+    },
+    {
+      name: "object without a message",
+      err: { code: "P0001" },
+      expected: "[object Object]",
+    },
+    {
+      name: "bare string",
+      err: "plain_string_failure",
+      expected: "plain_string_failure",
+    },
+  ])(
+    "anonymise-organization-membership failure detail: $name",
+    async ({ err, expected }) => {
+      mockRpc.mockImplementation(async (name: string) =>
+        name === "anonymise_organization_membership"
+          ? { error: err }
+          : { error: null },
+      );
+
+      const result = await deleteAccount(USER_ID, USER_EMAIL);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe(
+        `Account deletion failed at anonymise-organization-membership: ${expected}`,
+      );
+    },
+  );
+
   test("happy path: all RPCs + auth-delete succeed, neither helper fires", async () => {
     mockRpc.mockResolvedValue({ error: null });
 

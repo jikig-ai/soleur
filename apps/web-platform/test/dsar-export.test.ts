@@ -144,6 +144,18 @@ describe("dsarStringify (AC23 serialization conventions)", () => {
     expect(out).toContain('"b": null');
   });
 
+  // #10331 — `isPlainObject` guards the object branch of the normalizer. `typeof
+  // null === "object"`, so the guard must reject null on its own; the one caller
+  // pre-filters null, which is why static analysis calls the check redundant.
+  // Pin the observable contract: top-level and nested null stay JSON null and
+  // are never walked as objects, while real objects still are.
+  it("keeps top-level and nested null as JSON null, never walking them as objects", () => {
+    expect(dsarStringify(null)).toBe("null");
+    expect(dsarStringify({ outer: { inner: null }, empty: {} })).toBe(
+      JSON.stringify({ empty: {}, outer: { inner: null } }, null, 2),
+    );
+  });
+
   it("recursively normalizes nested objects + arrays of mixed types", () => {
     const out = dsarStringify({
       rows: [

@@ -846,7 +846,8 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_organization_membership failed — aborting deletion",
       });
-      const detail = typeof anonOrgErr === "object" && anonOrgErr !== null && "message" in anonOrgErr ? (anonOrgErr as { message: string }).message : String(anonOrgErr);
+      // `anonOrgErr` is truthy here (the enclosing `if`), so it cannot be null.
+      const detail = typeof anonOrgErr === "object" && "message" in anonOrgErr ? (anonOrgErr as { message: string }).message : String(anonOrgErr);
       return { success: false, error: `Account deletion failed at anonymise-organization-membership: ${detail}` };
     }
     // Surface the reassign count + count of soon-to-be-orphan orgs so a
