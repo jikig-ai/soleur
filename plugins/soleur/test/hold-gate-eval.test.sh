@@ -119,7 +119,7 @@ O3="$TMP/origin3.git"; W6="$TMP/work6"
   git -C "$W" checkout -q main
   printf 'y\n' > "$W/second.txt"; git -C "$W" add second.txt; git -C "$W" commit -q -m "second"; git -C "$W" push -q origin main
   printf 'z\n' > "$W/local.txt"; git -C "$W" add local.txt; git -C "$W" commit -q -m "local only"
-  git -C "$W" fetch -q origin main
+  git -C "$W" fetch --no-tags -q origin main
   git clone -q "$O" "$W7" 2>/dev/null
 ) >/dev/null 2>&1 || { echo "FATAL: fixture repositories not built" >&2; exit 2; }
 SHA_MERGED="$(cat "$TMP/sha-merged")"; SHA_SIDE="$(cat "$TMP/sha-side")"
@@ -241,7 +241,7 @@ scn; mkplan mixed; RUN_REPO="$W7"; run_h --plan "$PLAN"
 expect "XB3: a clone whose origin/HEAD is set resolves the default branch locally" 0 "holds: 3 discharged: 3 standing: 0"
 scn; mkplan mixed; RUN_REPO="$W7"; ( cd "$W7" && git remote remove origin ) >/dev/null 2>&1; run_h --plan "$PLAN"
 expect "XB4: a repository with no origin cannot name its default branch, so the hold stands (exit 2)" 2 "holds: 3 discharged: 1 standing: 2"
-( cd "$W7" && git remote add origin "$O" && git fetch -q origin && git remote set-head origin -a ) >/dev/null 2>&1
+( cd "$W7" && git remote add origin "$O" && git fetch --no-tags -q origin && git remote set-head origin -a ) >/dev/null 2>&1
 
 echo "=== Arm 1c: origin moved after the clone was taken (the fetch is part of the check) ==="
 mkdir -p "$TMP/plans"
@@ -561,7 +561,7 @@ assert_eq "1" "$([ "$(wc -l < "$STUB_DIR/stdin-bytes" | tr -d ' ')" -ge 6 ] && e
 
 echo "=== Arm 6c: no time-limit tool, and tools missing before and after the no-delegation exit ==="
 mkbin() { # <dir> <tools to leave out...>: a PATH with the usual tools (symlinks) and the gh stub
-  local d="$1" t o p; shift; rm -rf "$d"; mkdir -p "$d"
+  local d="$1" t o p; shift; assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d"
   for t in bash git jq awk sed tr cut grep cat head tail wc mktemp rm dirname basename cmp date sort uniq env sleep timeout gtimeout expr tee touch mkdir ln cp mv ls id uname xargs true false find stat sha256sum shasum openssl od readlink realpath; do
     for o in "$@"; do [[ "$t" == "$o" ]] && continue 2; done
     p="$(command -v "$t" 2>/dev/null)"; [[ "$p" == /* && -x "$p" ]] && ln -sf "$p" "$d/$t"

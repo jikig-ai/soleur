@@ -571,7 +571,7 @@ assert_eq "2" "$(dlog_count)" "both delegation rows were examined"
 dscn; mkd both deleg-both-valid.md; run_d "$GATE" "$DF"
 assert_eq "0" "$(last_rc)" "two valid delegation rows pass (an envelope anchored by title included)"
 
-dscn; sed -e "s|https://github.com/example-org/example-repo/issues/77#issuecomment-1001|$DURL1|g" -e 's|knowledge-base/project/specs/example/envelope.md|env-valid.md|g' "$TMP/example-full.md" > "$TMP/df/example-d.md"
+dscn; sed -e "s|https://github.com/example-org/example-repo/issues/77#issuecomment-1001|$DURL1|g" -e 's|knowledge-base\(/project/specs/example/envelope.md\)|env-valid.md|g' "$TMP/example-full.md" > "$TMP/df/example-d.md"
 assert_eq "1" "$(grep -c 'Authorized by delegation' "$TMP/df/example-d.md" || true)" "the canonical example carries one delegation row"
 run_d "$GATE" "$TMP/df/example-d.md"
 assert_eq "0" "$(last_rc)" "FR4: the reference's canonical example (delegation row included) passes the gate against a stubbed verifier"
@@ -715,7 +715,7 @@ assert_eq "0" "$(last_rc)" "RV8c: a receipt created after the ran time passes"
 
 echo "=== Arm 6g4: a time-limit tool is required (timeout OR gtimeout), and its absence is a plain refusal (verification V9a) ==="
 mkbin_t() { # <dir> <tools to leave out...>: reduced PATH with the gate's tools, the stub wrapper and its base stub
-  local d="$1" t o p; shift; rm -rf "$d"; mkdir -p "$d"
+  local d="$1" t o p; shift; assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d"
   for t in bash git jq awk sed tr cut grep cat head tail wc mktemp rm dirname basename cmp date sort uniq env sleep timeout expr tee touch mkdir ln cp mv ls id uname xargs true false find stat sha256sum shasum openssl od readlink realpath; do
     for o in "$@"; do [[ "$t" == "$o" ]] && continue 2; done
     p="$(command -v "$t" 2>/dev/null)"; [[ "$p" == /* && -x "$p" ]] && ln -sf "$p" "$d/$t"

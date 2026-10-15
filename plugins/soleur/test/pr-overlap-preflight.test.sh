@@ -234,6 +234,7 @@ bulk_files_json() { # bulk_files_json <count> -> JSON array of {path:...}
 #   REPO_B  no origin/main at all
 # ---------------------------------------------------------------------------------------------
 repo_base() { # repo_base <dir> <branch>
+  assert_fixture_dir "$1"
   git_fixture_env "$1" || { echo "FATAL: git_fixture_env refused fixture $1" >&2; exit 64; }
   git init -q -b main "$1"
   printf 'echo one\n' > "$1/a.sh"
@@ -278,6 +279,7 @@ git -C "$REPO_R" commit -q -m "feat: rename the old helper to new"
 repo_base "$REPO_S" feat-new-thing
 
 mk_subject_repo() { # mk_subject_repo <dir> <subject> -> a branch with one saved edit under that subject
+  assert_fixture_dir "$1"
   mkdir -p "$1"
   repo_base "$1" feat-subject
   printf 'echo typo\n' > "$1/b.sh"
@@ -818,7 +820,7 @@ row_nobase() {
 }
 row_noise() {
   local nm
-  for nm in package-lock.json bun.lock bun.lockb yarn.lock pnpm-lock.yaml scripts/suite-durations.tsv scripts/suite-shard-legs.tsv knowledge-base/x/model.likec4.json .claude/rule-body-hashes.txt tests/api.baseline.txt npm-shrinkwrap.json Gemfile.lock Cargo.lock poetry.lock uv.lock composer.lock go.sum; do
+  for nm in package-lock.json bun.lock bun.lockb yarn.lock pnpm-lock.yaml scripts/suite-durations.tsv scripts/suite-shard-legs.tsv docs/x/model.likec4.json .claude/rule-body-hashes.txt tests/api.baseline.txt npm-shrinkwrap.json Gemfile.lock Cargo.lock poetry.lock uv.lock composer.lock go.sum; do
     new_scn noise
     mk_list "$(pr_json 240 "feat: something else (#240)" MEMBER feat-else "$nm:3:3")"
     hist 240
