@@ -5,8 +5,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "V2_CASE_COUNT=67\n",
-    "new": "V2_CASE_COUNT=67\nV2_CASES=''\n",
+    "old": "V2_CASE_COUNT=103\n",
+    "new": "V2_CASE_COUNT=103\nV2_CASES=''\n",
     "count": 1
    }
   ],
@@ -45,6 +45,21 @@
   ],
   "expect": [
    "[bad wrap-sudo]"
+  ]
+ },
+ {
+  "id": "M2-ionice",
+  "desc": "remove ionice from the wrapper words",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice)'",
+    "new": "SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs)'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad wrap-ionice]"
   ]
  },
  {
@@ -108,6 +123,21 @@
   ]
  },
  {
+  "id": "M4b",
+  "desc": "env assignment accepts a quoted value",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*",
+    "new": "[A-Za-z_][A-Za-z0-9_]*=(\\\"[^\\\"]*\\\"|[^[:space:]]*)[[:space:]]+)*",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[res env-quoted-value]"
+  ]
+ },
+ {
   "id": "M5-doas",
   "desc": "remove doas",
   "mode": "fast",
@@ -150,6 +180,21 @@
   ],
   "expect": [
    "[bad bin-zgrep]"
+  ]
+ },
+ {
+  "id": "M5-zegrep",
+  "desc": "remove zegrep",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(e|f|z|ze)?grep",
+    "new": "(e|f|z)?grep",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad bin-zegrep]"
   ]
  },
  {
@@ -213,6 +258,96 @@
   ]
  },
  {
+  "id": "M5-arg-f",
+  "desc": "the argument-taking letters lose f",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "-[efABCmdD][[:space:]]+[^[:space:]]+",
+    "new": "-[eABCmdD][[:space:]]+[^[:space:]]+",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad arg-twice-f]"
+  ]
+ },
+ {
+  "id": "M5-arg-A",
+  "desc": "the argument-taking letters lose A",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "-[efABCmdD][[:space:]]+[^[:space:]]+",
+    "new": "-[efBCmdD][[:space:]]+[^[:space:]]+",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad arg-twice-A]"
+  ]
+ },
+ {
+  "id": "M5-arg-B",
+  "desc": "the argument-taking letters lose B",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "-[efABCmdD][[:space:]]+[^[:space:]]+",
+    "new": "-[efACmdD][[:space:]]+[^[:space:]]+",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad arg-twice-B]"
+  ]
+ },
+ {
+  "id": "M5-arg-C",
+  "desc": "the argument-taking letters lose C",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "-[efABCmdD][[:space:]]+[^[:space:]]+",
+    "new": "-[efABmdD][[:space:]]+[^[:space:]]+",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad arg-twice-C]"
+  ]
+ },
+ {
+  "id": "M5-arg-d",
+  "desc": "the argument-taking letters lose d",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "-[efABCmdD][[:space:]]+[^[:space:]]+",
+    "new": "-[efABCmD][[:space:]]+[^[:space:]]+",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad arg-twice-d]"
+  ]
+ },
+ {
+  "id": "M5-arg-D",
+  "desc": "the argument-taking letters lose D",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "-[efABCmdD][[:space:]]+[^[:space:]]+",
+    "new": "-[efABCmd][[:space:]]+[^[:space:]]+",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad arg-twice-D]"
+  ]
+ },
+ {
   "id": "M5-shc",
   "desc": "remove the sh -c alternative",
   "mode": "fast",
@@ -233,13 +368,163 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "SWEEP_SHC='(^|[^|])\\|&?[[:space:]]*(ba|da)?sh[[:space:]]+(-[a-z]+[[:space:]]+)*-[a-z]*c[[:space:]]+['\"'\"'\"]([^'\"'\"'\"]*[^[:alnum:]_/.-])?(e|f)?grep([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?))*[[:space:]]+(-[A-Za-z0-9]*[qm][A-Za-z0-9]*|--quiet|--silent|--max-count)'",
-    "new": "SWEEP_SHC='(^|[^|])\\|&?[[:space:]]*(ba|da)?sh[[:space:]]+(-[a-z]+[[:space:]]+)*-[a-z]*c[[:space:]]+['\"'\"'\"]([^'\"'\"'\"]*[^[:alnum:]_/.-])?(e|f)?grep([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?))*[[:space:]]+(-[A-Za-z0-9]+|--quiet|--silent|--max-count)'",
+    "old": "${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}\"\nPATTERN_V2=",
+    "new": "${SWEEP_BIN}${SWEEP_ARG}[[:space:]]+-[A-Za-z0-9]+\"\nPATTERN_V2=",
     "count": 1
    }
   ],
   "expect": [
    "[good shc-count]"
+  ]
+ },
+ {
+  "id": "M5-shc-bin",
+  "desc": "sh -c reader reads only (e|f)?grep",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}\"\nPATTERN_V2=",
+    "new": "(e|f)?grep${SWEEP_ARG}${SWEEP_EARLY}\"\nPATTERN_V2=",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-rg]"
+  ]
+ },
+ {
+  "id": "M5-shc-arg",
+  "desc": "sh -c reader takes flags only, no operand",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}\"\nPATTERN_V2=",
+    "new": "${SWEEP_BIN}${SWEEP_FLAG}${SWEEP_EARLY}\"\nPATTERN_V2=",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-after-operand]"
+  ]
+ },
+ {
+  "id": "M5-shc-wrap",
+  "desc": "sh -c reader has no wrapper part",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SHC=\"${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_SHELL}",
+    "new": "SWEEP_SHC=\"${SWEEP_LEAD}${SWEEP_SHELL}",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-wrap]"
+  ]
+ },
+ {
+  "id": "M5-shc-lead",
+  "desc": "sh -c reader has its own lead without a group opener",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SHC=\"${SWEEP_LEAD}",
+    "new": "SWEEP_SHC=\"(^|[^|])\\|&?[[:space:]]*",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-group]"
+  ]
+ },
+ {
+  "id": "M5-shc-o",
+  "desc": "sh -c reader loses -o NAME",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(-o[[:space:]]+[a-z]+[[:space:]]+|-[a-z]+[[:space:]]+)*-[a-z]*c",
+    "new": "(-[a-z]+[[:space:]]+)*-[a-z]*c",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-pipefail]"
+  ]
+ },
+ {
+  "id": "M5-shc-path",
+  "desc": "sh -c reader loses the path to the shell",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SHELL='((\\\\|/[^[:space:]]*/)?(ba|da|z|k)?sh)'",
+    "new": "SWEEP_SHELL='((ba|da|z|k)?sh)'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-abs]"
+  ]
+ },
+ {
+  "id": "M5-shell-ba",
+  "desc": "sh -c reader loses bash",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(ba|da|z|k)?sh",
+    "new": "(da|z|k)?sh",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-lc]"
+  ]
+ },
+ {
+  "id": "M5-shell-da",
+  "desc": "sh -c reader loses dash",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(ba|da|z|k)?sh",
+    "new": "(ba|z|k)?sh",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-dash]"
+  ]
+ },
+ {
+  "id": "M5-shell-z",
+  "desc": "sh -c reader loses zsh",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(ba|da|z|k)?sh",
+    "new": "(ba|da|k)?sh",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-zsh]"
+  ]
+ },
+ {
+  "id": "M5-shell-k",
+  "desc": "sh -c reader loses ksh",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(ba|da|z|k)?sh",
+    "new": "(ba|da|z)?sh",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad shc-ksh]"
   ]
  },
  {
@@ -318,6 +603,38 @@
   ]
  },
  {
+  "id": "M7e",
+  "desc": "EARLY terminator is whitespace only",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "([^[:alnum:]_-]|$)'\nSWEEP_SHELL",
+    "new": "([[:space:]]|$)'\nSWEEP_SHELL",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad early-term-semi]",
+   "[bad early-term-quote]"
+  ]
+ },
+ {
+  "id": "M7f",
+  "desc": "EARLY terminator is the old fixed class",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "([^[:alnum:]_-]|$)'\nSWEEP_SHELL",
+    "new": "([[:space:]]|$|[;&)}|])'\nSWEEP_SHELL",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "[bad early-term-quote]",
+   "[bad early-term-redirect]"
+  ]
+ },
+ {
   "id": "M8",
   "desc": "residual flip: head in BIN and a digit-only early flag",
   "mode": "fast",
@@ -339,18 +656,70 @@
  },
  {
   "id": "M9a",
-  "desc": "scan_sweep filters the passes with the old PATTERN",
+  "desc": "scan_sweep filters the split joins with the old PATTERN",
   "mode": "full",
   "edits": [
    {
-    "old": "cand=\"$(grep -E -- \"$PATTERN_V2\" <<<\"$extra\"",
-    "new": "cand=\"$(grep -E -- \"$PATTERN\" <<<\"$extra\"",
+    "old": "cand_split=\"$(grep -aE -- \"$PATTERN_V2\"",
+    "new": "cand_split=\"$(grep -aE -- \"$PATTERN\"",
     "count": 1
    }
   ],
   "expect": [
-   "split-must-report",
-   "pattern-single-source"
+   "split-must-report"
+  ]
+ },
+ {
+  "id": "M9b",
+  "desc": "scan_sweep filters the fence lines with the old PATTERN",
+  "mode": "full",
+  "edits": [
+   {
+    "old": "cand_md=\"$(grep -aE -- \"$PATTERN_V2\"",
+    "new": "cand_md=\"$(grep -aE -- \"$PATTERN\"",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-must-report"
+  ]
+ },
+ {
+  "id": "M10",
+  "desc": "the bar prefilter is not the bar",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_PREFILTER='\\|'",
+    "new": "SWEEP_PREFILTER='\\|\\|'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "UNRESOLVED: the split pass joined"
+  ],
+  "rc": [
+   3
+  ]
+ },
+ {
+  "id": "M10b",
+  "desc": "the bar prefilter is not the bar (floors off, so the probe is reached)",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_PREFILTER='\\|'",
+    "new": "SWEEP_PREFILTER='\\|\\|'",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "sweep-wiring"
   ]
  },
  {
@@ -422,13 +791,16 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "{ scan_split \"$root\"; scan_md \"$root\"; }",
-    "new": "{ scan_md \"$root\"; }",
+    "old": "split_out=\"$(scan_split \"$root\")\"",
+    "new": "split_out=\"\"",
     "count": 1
    }
   ],
   "expect": [
-   "split-must-report"
+   "UNRESOLVED: the split pass joined 0"
+  ],
+  "rc": [
+   3
   ]
  },
  {
@@ -437,8 +809,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "{ scan_split \"$root\"; scan_md \"$root\"; }",
-    "new": "{ scan_split \"$root\"; }",
+    "old": "md_out=\"$(scan_md \"$root\")\"",
+    "new": "md_out=\"\"",
     "count": 1
    }
   ],
@@ -451,12 +823,12 @@
  },
  {
   "id": "G2-2",
-  "desc": "drop the join",
+  "desc": "the join prints a constant",
   "mode": "fast",
   "edits": [
    {
-    "old": "print FILENAME \":\" pn \": | \" t",
-    "new": "t = t",
+    "old": "print nm(FILENAME) \":\" pn \": | \" acc; nj++",
+    "new": "print nm(FILENAME) \":\" pn \": | \" \"x\"; nj++",
     "count": 1
    }
   ],
@@ -473,6 +845,11 @@
     "old": "pend = 1; pn = FNR",
     "new": "if (!done) { pend = 1; pn = FNR; done = 1 }",
     "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
    }
   ],
   "expect": [
@@ -485,7 +862,7 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "      if (line ~ /:[ \\t]*[|>][-+]?[ \\t]*$/ || line ~ /^[ \\t]*-?[ \\t]*[|>][-+]?[ \\t]*$/) next\n",
+    "old": "      if (line ~ /:[ \\t]*[|>][-+]?[ \\t]*(#.*)?$/ || line ~ /^[ \\t]*-?[ \\t]*[|>][-+]?[ \\t]*(#.*)?$/) next\n",
     "new": "",
     "count": 1
    }
@@ -495,13 +872,33 @@
   ]
  },
  {
+  "id": "G2-4b",
+  "desc": "the block-scalar exclusion forgets a trailing comment",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": ":[ \\t]*[|>][-+]?[ \\t]*(#.*)?$/ ||",
+    "new": ":[ \\t]*[|>][-+]?[ \\t]*$/ ||",
+    "count": 1
+   },
+   {
+    "old": "[|>][-+]?[ \\t]*(#.*)?$/) next",
+    "new": "[|>][-+]?[ \\t]*$/) next",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-block-comment"
+  ]
+ },
+ {
   "id": "G2-5",
   "desc": "report the next line's number",
   "mode": "fast",
   "edits": [
    {
-    "old": "print FILENAME \":\" pn \": | \" t",
-    "new": "print FILENAME \":\" FNR \": | \" t",
+    "old": "print nm(FILENAME) \":\" pn \": | \" acc; nj++",
+    "new": "print nm(FILENAME) \":\" FNR \": | \" acc; nj++",
     "count": 1
    }
   ],
@@ -510,13 +907,33 @@
   ]
  },
  {
+  "id": "G2-5b",
+  "desc": "a join is not re-examined as a pipe's own line",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "print nm(FILENAME) \":\" pn \": | \" acc; nj++\n",
+    "new": "print nm(FILENAME) \":\" pn \": | \" acc; nj++; next\n",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-chain3"
+  ]
+ },
+ {
   "id": "G2-6a",
   "desc": "every fence of a listed file counts",
   "mode": "fast",
   "edits": [
    {
-    "old": "if (hasPf) for (i = 1;",
-    "new": "if (1) for (i = 1;",
+    "old": "if (hasPf) { for (i = 1;",
+    "new": "if (1) { for (i = 1;",
     "count": 1
    }
   ],
@@ -560,8 +977,13 @@
     "count": 1
    },
    {
-    "old": "if (hasPf) for (i = 1; i <= n; i++)",
-    "new": "if (hasPf) for (i = pfAt + 1; i <= n; i++)",
+    "old": "if (hasPf) { for (i = 1; i <= n; i++)",
+    "new": "if (hasPf) { for (i = pfAt + 1; i <= n; i++)",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_MD_FENCE_FLOOR=500; SWEEP_MD_FENCE_FLOOR_MIN=400",
+    "new": "SWEEP_MD_FENCE_FLOOR=1; SWEEP_MD_FENCE_FLOOR_MIN=1",
     "count": 1
    }
   ],
@@ -580,8 +1002,8 @@
     "count": 1
    },
    {
-    "old": "if (hasPf) for (i = 1;",
-    "new": "for (i = 1;",
+    "old": "if (hasPf) { for (i = 1;",
+    "new": "if (1) { for (i = 1;",
     "count": 1
    }
   ],
@@ -615,8 +1037,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "js|py|md):[0-9]+:[[:space:]]*#",
-    "new": "js|py):[0-9]+:[[:space:]]*#",
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py)",
     "count": 1
    }
   ],
@@ -630,8 +1052,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "END { if (inf) close_fence() }",
-    "new": "END { }",
+    "old": "END { if (inf) close_fence(); print \"FENCELINES: \"",
+    "new": "END { print \"FENCELINES: \"",
     "count": 1
    }
   ],
@@ -640,28 +1062,113 @@
   ]
  },
  {
+  "id": "G2-10c",
+  "desc": "an unclosed fence at a file boundary is dropped",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "FNR == 1 { if (inf) close_fence(); inf = 0; n = 0; hasPf = 0 }",
+    "new": "FNR == 1 { inf = 0; n = 0; hasPf = 0 }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-unclosed-a"
+  ]
+ },
+ {
+  "id": "G2-10d",
+  "desc": "an unclosed fence is named by the file that flushes it",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "print ofile \":\" ln[i] \":\" tx[i]",
+    "new": "print substr(FILENAME, 3) \":\" ln[i] \":\" tx[i]",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-unclosed-neighbor"
+  ]
+ },
+ {
+  "id": "G2-10e",
+  "desc": "a closing fence may carry an info string",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (ch == fch && len >= flen && rest ~ /^[ \\t]*$/)",
+    "new": "if (ch == fch && len >= flen)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-closer-info"
+  ]
+ },
+ {
+  "id": "G2-10f",
+  "desc": "a fence is cut at 40 lines",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (inf) { n++; ln[n] = FNR;",
+    "new": "if (inf && n < 40) { n++; ln[n] = FNR;",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_MD_FENCE_FLOOR=500; SWEEP_MD_FENCE_FLOOR_MIN=400",
+    "new": "SWEEP_MD_FENCE_FLOOR=1; SWEEP_MD_FENCE_FLOOR_MIN=1",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-long-run"
+  ]
+ },
+ {
+  "id": "G2-10g",
+  "desc": "a marker in a fence is honoured",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "printf '%s\\n' \"$cand_md\" | _strip_comments;",
+    "new": "printf '%s\\n' \"$cand_md\" | _strip_comments --marker;",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-marker"
+  ]
+ },
+ {
+  "id": "G2-10h",
+  "desc": "knowledge-base markdown is read",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_MD_PATHSPEC=(':(glob)**/*.md' ':(exclude)knowledge-base')",
+    "new": "SWEEP_MD_PATHSPEC=(':(glob)**/*.md')",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-kb-excluded"
+  ]
+ },
+ {
   "id": "G2-11-orbar",
   "desc": "a logical OR joins",
   "mode": "fast",
   "edits": [
    {
-    "old": "if (line ~ /[^|][ \\t]*\\|[ \\t]*$/ ||",
-    "new": "if (line ~ /\\|[ \\t]*$/ ||",
-    "count": 1
-   },
-   {
-    "old": "      if (line ~ /\\|\\|[ \\t]*$/) next\n",
-    "new": "",
-    "count": 1
-   },
-   {
-    "old": "-alE -e '(^|[^|])\\|&?[[:space:]]*$'",
-    "new": "-alE -e '\\|&?[[:space:]]*$'",
+    "old": "if (line ~ /[^|][ \\t]*\\|&?[ \\t]*(\\\\[ \\t]*|#.*)?$/ ||",
+    "new": "if (line ~ /.[ \\t]*\\|&?[ \\t]*(\\\\[ \\t]*|#.*)?$/ ||",
     "count": 1
    }
   ],
   "expect": [
-   "split-or-or"
+   "split-or-or-listed"
   ]
  },
  {
@@ -670,8 +1177,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "if (line ~ /^[ \\t]*#/ || line ~ /^[ \\t]*$/) { next }",
-    "new": "if (line ~ /^[ \\t]*$/) { next }",
+    "old": "if (line ~ /^[ \\t]*#/ || line ~ /^[ \\t]*$/ ||",
+    "new": "if (line ~ /^[ \\t]*$/ ||",
     "count": 1
    }
   ],
@@ -685,8 +1192,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "if (line ~ /^[ \\t]*#/ || line ~ /^[ \\t]*$/) { next }",
-    "new": "if (line ~ /^[ \\t]*#/) { next }",
+    "old": "if (line ~ /^[ \\t]*#/ || line ~ /^[ \\t]*$/ ||",
+    "new": "if (line ~ /^[ \\t]*#/ ||",
     "count": 1
    }
   ],
@@ -700,8 +1207,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "  FNR == 1 { pend = 0 }\n",
-    "new": "",
+    "old": "FNR == 1 { pend = 0; cont = 0;",
+    "new": "FNR == 1 { cont = 0;",
     "count": 1
    }
   ],
@@ -715,8 +1222,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": " || line ~ /\\|&[ \\t]*$/) {",
-    "new": ") {",
+    "old": "if (line ~ /[^|][ \\t]*\\|&?[ \\t]*(\\\\[ \\t]*|#.*)?$/ ||",
+    "new": "if (line ~ /[^|][ \\t]*\\|[ \\t]*(\\\\[ \\t]*|#.*)?$/ ||",
     "count": 1
    }
   ],
@@ -730,8 +1237,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": " || line ~ /^[ \\t]*-?[ \\t]*[|>][-+]?[ \\t]*$/) next",
-    "new": ") next",
+    "old": "if (line ~ /:[ \\t]*[|>][-+]?[ \\t]*(#.*)?$/ || line ~ /^[ \\t]*-?[ \\t]*[|>][-+]?[ \\t]*(#.*)?$/) next",
+    "new": "if (line ~ /:[ \\t]*[|>][-+]?[ \\t]*(#.*)?$/) next",
     "count": 1
    }
   ],
@@ -815,18 +1322,430 @@
   ]
  },
  {
+  "id": "G2-12-bs",
+  "desc": "a bar then a backslash is not a join (awk)",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (line ~ /[^|][ \\t]*\\|&?[ \\t]*(\\\\[ \\t]*|#.*)?$/ ||",
+    "new": "if (line ~ /[^|][ \\t]*\\|&?[ \\t]*(#.*)?$/ ||",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-backslash"
+  ]
+ },
+ {
+  "id": "G2-12-bslist",
+  "desc": "a bar then a backslash is not listed",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SPLIT_LIST='(^|[^|])\\|&?[[:space:]]*(\\\\[[:space:]]*|#.*)?$'",
+    "new": "SWEEP_SPLIT_LIST='(^|[^|])\\|&?[[:space:]]*(#.*)?$'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-backslash"
+  ]
+ },
+ {
+  "id": "G2-12-cmt",
+  "desc": "a bar then a comment is not a join",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (line ~ /[^|][ \\t]*\\|&?[ \\t]*(\\\\[ \\t]*|#.*)?$/ ||",
+    "new": "if (line ~ /[^|][ \\t]*\\|&?[ \\t]*(\\\\[ \\t]*)?$/ ||",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-bar-comment"
+  ]
+ },
+ {
+  "id": "G2-12-cont",
+  "desc": "a continued next line is not read to its end",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if (t ~ /\\\\$/) {",
+    "new": "if (0) {",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-continued"
+  ]
+ },
+ {
+  "id": "G2-12-contfast",
+  "desc": "the bar fast-reject skips a continued line",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "!pend && !cont && index($0, \"|\") == 0 { next }",
+    "new": "!pend && index($0, \"|\") == 0 { next }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-continued"
+  ]
+ },
+ {
+  "id": "G2-12-crlf",
+  "desc": "carriage returns are not stripped in the split pass",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "    line = $0; sub(/\\r$/, \"\", line)\n    if (pend) {",
+    "new": "    line = $0\n    if (pend) {",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-crlf"
+  ]
+ },
+ {
+  "id": "G2-12-js",
+  "desc": "a JS comment line between is not skipped",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": " || (js && line ~ /^[ \\t]*(\\/\\/|\\/\\*|\\*)/)) { next }",
+    "new": ") { next }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-js-between"
+  ]
+ },
+ {
+  "id": "G2-12-jstrig",
+  "desc": "a JS comment line ending in a bar starts a join",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "      if (js && line ~ /^[ \\t]*(\\/\\/|\\/\\*|\\*)/) next\n",
+    "new": "",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-js-comment"
+  ]
+ },
+ {
+  "id": "G2-12-cmtbar",
+  "desc": "a comment line ending in a bar starts a join",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "      if (line ~ /^[ \\t]*#/) next\n",
+    "new": "",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-comment-bar"
+  ]
+ },
+ {
+  "id": "G2-12-assign",
+  "desc": "an awk file operand is not prefixed with ./",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "files+=(\"./$l\"); done <<<\"$list\"\n  if (( ${#files[@]} == 0 )); then echo \"SPLITJOINS: 0\"",
+    "new": "files+=(\"$l\"); done <<<\"$list\"\n  if (( ${#files[@]} == 0 )); then echo \"SPLITJOINS: 0\"",
+    "count": 1
+   },
+   {
+    "old": "function nm(f) { return substr(f, 3) }",
+    "new": "function nm(f) { return f }",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-assign-name"
+  ]
+ },
+ {
+  "id": "G2-12-quote",
+  "desc": "git quotes a non-ASCII path",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "-c core.quotePath=false ",
+    "new": "",
+    "count": 2
+   }
+  ],
+  "expect": [
+   "split-nonascii-name"
+  ]
+ },
+ {
+  "id": "G2-12-binary",
+  "desc": "the marker filter reads a non-UTF-8 line as binary",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "grep -avE \"$hash_re\" | grep -avE \"$slash_re\" | grep -avE \"$ALLOW_MARKER\"",
+    "new": "grep -vE \"$hash_re\" | grep -vE \"$slash_re\" | grep -vE \"$ALLOW_MARKER\"",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "split-nonutf8"
+  ]
+ },
+ {
+  "id": "G2-13-dispatch-route",
+  "desc": "the router drops the split half",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "split-*) if [[ \"$half\" == split ]]; then out+=\" $w\"; fi ;;",
+    "new": "split-*) : ;;",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ml-dispatch"
+  ]
+ },
+ {
+  "id": "G2-13-dispatch-not",
+  "desc": "the must-not recorder never records",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "if grep -q -- \"^$path:\" <<<\"$ml_out\"; then ml_over+=\" $name\"; fi",
+    "new": "if false; then ml_over+=\" $name\"; fi",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ml-dispatch"
+  ]
+ },
+ {
+  "id": "G2-13-dispatch-want",
+  "desc": "the must-report recorder never records",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "|| ml_miss+=\" $name${kind:+/}$kind\"",
+    "new": "|| :",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ml-dispatch"
+  ]
+ },
+ {
+  "id": "G2-13-dispatch-del",
+  "desc": "one must-report call deleted",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "_ml_want split-sudo         scripts/ml-split-sudo.sh 1\n",
+    "new": "",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ml-dispatch"
+  ]
+ },
+ {
   "id": "H4",
   "desc": "scan_sweep stops appending the two passes",
   "mode": "fast",
   "edits": [
    {
-    "old": "{ printf '%s\\n' \"$out\"; printf '%s\\n' \"$cand\"; } | _strip_comments",
-    "new": "{ printf '%s\\n' \"$out\"; } | _strip_comments",
+    "old": "{ printf '%s\\n' \"$out\" | _strip_comments --marker; printf '%s\\n' \"$cand_split\" | _strip_comments --marker; printf '%s\\n' \"$cand_md\" | _strip_comments; }",
+    "new": "{ printf '%s\\n' \"$out\" | _strip_comments --marker; }",
     "count": 1
    }
   ],
   "expect": [
    "sweep-wiring-multiline"
+  ]
+ },
+ {
+  "id": "F1",
+  "desc": "the markdown-file floor lowered below its literal minimum",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_MD_FLOOR=18; SWEEP_MD_FLOOR_MIN=15",
+    "new": "SWEEP_MD_FLOOR=1; SWEEP_MD_FLOOR_MIN=15",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-floor-lower-bound"
+  ]
+ },
+ {
+  "id": "F2",
+  "desc": "the fence-line floor lowered below its literal minimum",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_MD_FENCE_FLOOR=500; SWEEP_MD_FENCE_FLOOR_MIN=400",
+    "new": "SWEEP_MD_FENCE_FLOOR=1; SWEEP_MD_FENCE_FLOOR_MIN=400",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-floor-lower-bound"
+  ]
+ },
+ {
+  "id": "F3",
+  "desc": "the split-join floor lowered below its literal minimum",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=250",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-floor-lower-bound"
+  ]
+ },
+ {
+  "id": "F4",
+  "desc": "the markdown-file floor above the population",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_MD_FLOOR=18;",
+    "new": "SWEEP_MD_FLOOR=40;",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "below SWEEP_MD_FLOOR 40"
+  ],
+  "rc": [
+   3
+  ]
+ },
+ {
+  "id": "F5",
+  "desc": "the markdown-file floor comparison disabled",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(( mdn < mdfloor ))",
+    "new": "(( mdn > 99999 ))",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-floor-truncated"
+  ]
+ },
+ {
+  "id": "F6",
+  "desc": "the fence-line floor comparison disabled",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(( fln < fencefloor ))",
+    "new": "(( fln > 99999999 ))",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-floor-truncated"
+  ]
+ },
+ {
+  "id": "F7",
+  "desc": "the split-join floor comparison disabled",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(( sjn < splitfloor ))",
+    "new": "(( sjn > 99999999 ))",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "md-floor-truncated"
+  ]
+ },
+ {
+  "id": "ST1",
+  "desc": "the split pass reads fixtures only",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "list=\"$(sweep_git_grep \"$root\" -alE -e \"$SWEEP_PREFILTER\" --and -e \"$SWEEP_SPLIT_LIST\")\" || rc=$?",
+    "new": "list=\"$(sweep_git_grep \"$root\" -alE -e \"$SWEEP_PREFILTER\" --and -e \"$SWEEP_SPLIT_LIST\" | grep ml-split- || true)\" || rc=$?",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "UNRESOLVED: the split pass joined"
+  ],
+  "rc": [
+   3
+  ]
+ },
+ {
+  "id": "ST2",
+  "desc": "the fence pass reads nothing",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "( cd \"$root\" && LC_ALL=C awk \"$SWEEP_FENCE_AWK\" \"${files[@]}\" )",
+    "new": "( cd \"$root\" && LC_ALL=C awk \"$SWEEP_FENCE_AWK\" /dev/null )",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "UNRESOLVED: the fence pass printed 0"
+  ],
+  "rc": [
+   3
+  ]
+ },
+ {
+  "id": "ST3",
+  "desc": "the split pass prints nothing on a non-fixture root",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "  ( cd \"$root\" && LC_ALL=C awk -v slash_exts=\"${SWEEP_SLASH_EXTS[*]}\" \"$SWEEP_SPLIT_AWK\" \"${files[@]}\" ) ||",
+    "new": "  case \"$root\" in */mlroot) ( cd \"$root\" && LC_ALL=C awk -v slash_exts=\"${SWEEP_SLASH_EXTS[*]}\" \"$SWEEP_SPLIT_AWK\" \"${files[@]}\" ) ;; *) echo \"SPLITJOINS: 0\" ;; esac ||",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "UNRESOLVED: the split pass joined"
+  ],
+  "rc": [
+   3
   ]
  },
  {
@@ -853,6 +1772,11 @@
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
    }
   ],
   "expect": [
@@ -868,6 +1792,11 @@
    {
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bats yml yaml tf template js ts tsx mjs cjs py)",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
     "count": 1
    }
   ],
@@ -885,6 +1814,11 @@
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash yml yaml tf template js ts tsx mjs cjs py)",
     "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
    }
   ],
   "expect": [
@@ -900,6 +1834,11 @@
    {
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yaml tf template js ts tsx mjs cjs py)",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
     "count": 1
    }
   ],
@@ -917,6 +1856,11 @@
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yml tf template js ts tsx mjs cjs py)",
     "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
    }
   ],
   "expect": [
@@ -932,6 +1876,11 @@
    {
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yml yaml template js ts tsx mjs cjs py)",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
     "count": 1
    }
   ],
@@ -949,6 +1898,11 @@
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yml yaml tf js ts tsx mjs cjs py)",
     "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
    }
   ],
   "expect": [
@@ -964,6 +1918,11 @@
    {
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template ts tsx mjs cjs py)",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
     "count": 1
    }
   ],
@@ -981,6 +1940,11 @@
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js tsx mjs cjs py)",
     "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
    }
   ],
   "expect": [
@@ -996,6 +1960,11 @@
    {
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts mjs cjs py)",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
     "count": 1
    }
   ],
@@ -1013,6 +1982,11 @@
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx cjs py)",
     "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
    }
   ],
   "expect": [
@@ -1028,6 +2002,11 @@
    {
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs py)",
+    "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
     "count": 1
    }
   ],
@@ -1045,6 +2024,11 @@
     "old": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)",
     "new": "SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs)",
     "count": 1
+   },
+   {
+    "old": "SWEEP_SPLIT_FLOOR=300; SWEEP_SPLIT_FLOOR_MIN=250",
+    "new": "SWEEP_SPLIT_FLOOR=1; SWEEP_SPLIT_FLOOR_MIN=1",
+    "count": 1
    }
   ],
   "expect": [
@@ -1058,8 +2042,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": ":(exclude,glob)knowledge-base/**/archive/**",
-    "new": ":(exclude)knowledge-base",
+    "old": "  ':(exclude,glob)knowledge-base/**/archive/**'\n",
+    "new": "  ':(exclude)knowledge-base'\n",
     "count": 1
    }
   ],
@@ -1073,8 +2057,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": ":(exclude,glob)knowledge-base/**/archive/**",
-    "new": ":(exclude,glob)knowledge-base/**/*archive*/**",
+    "old": "  ':(exclude,glob)knowledge-base/**/archive/**'\n",
+    "new": "  ':(exclude,glob)knowledge-base/**/*archive*/**'\n",
     "count": 1
    }
   ],
@@ -1103,8 +2087,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "local hash_re='^[^:]+\\.(sh|bash|bats|yml|yaml|tf|template|js|py|md):",
-    "new": "local hash_re='^[^:]+:",
+    "old": "hash_re='^[^:]+\\.('\"${SWEEP_HASH_EXTS[*]}\"'):",
+    "new": "hash_re='^[^:]+:",
     "count": 1
    }
   ],
@@ -1118,8 +2102,8 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "local slash_re='^[^:]+\\.(js|ts|tsx|mjs|cjs):",
-    "new": "local slash_re='^[^:]+:",
+    "old": "slash_re='^[^:]+\\.('\"${SWEEP_SLASH_EXTS[*]}\"'):",
+    "new": "slash_re='^[^:]+:",
     "count": 1
    }
   ],
@@ -1133,7 +2117,7 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "(//|/\\*|\\*)'",
+    "old": "(//|/\\*|\\*([[:space:]/]|$))'",
     "new": "(//|/\\*)'",
     "count": 1
    }
@@ -1144,12 +2128,17 @@
  },
  {
   "id": "G3-6b",
-  "desc": "the star filter applies to sh",
+  "desc": "the star filter applies to sh (and a bare star is a comment)",
   "mode": "fast",
   "edits": [
    {
-    "old": "local slash_re='^[^:]+\\.(js|ts|tsx|mjs|cjs):",
-    "new": "local slash_re='^[^:]+\\.(js|ts|tsx|mjs|cjs|sh):",
+    "old": "SWEEP_SLASH_EXTS=(js ts tsx mjs cjs tf)",
+    "new": "SWEEP_SLASH_EXTS=(js ts tsx mjs cjs tf sh)",
+    "count": 1
+   },
+   {
+    "old": "(//|/\\*|\\*([[:space:]/]|$))'",
+    "new": "(//|/\\*|\\*)'",
     "count": 1
    }
   ],
@@ -1163,13 +2152,253 @@
   "mode": "fast",
   "edits": [
    {
-    "old": "js|py|md):[0-9]+:[[:space:]]*#",
-    "new": "js|md):[0-9]+:[[:space:]]*#",
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template md)",
     "count": 1
    }
   ],
   "expect": [
    "py-hash-comment"
+  ]
+ },
+ {
+  "id": "G3-6d",
+  "desc": "a bare leading star is a comment in the JS family",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "(//|/\\*|\\*([[:space:]/]|$))'",
+    "new": "(//|/\\*|\\*)'",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "ts-star-paren"
+  ]
+ },
+ {
+  "id": "G3-6h-sh",
+  "desc": "sh drops out of the hash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(bash bats yml yaml tf template py md)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "hash-sh(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6h-bash",
+  "desc": "bash drops out of the hash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(sh bats yml yaml tf template py md)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "hash-bash(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6h-bats",
+  "desc": "bats drops out of the hash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(sh bash yml yaml tf template py md)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "hash-bats(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6h-yml",
+  "desc": "yml drops out of the hash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(sh bash bats yaml tf template py md)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "hash-yml(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6h-yaml",
+  "desc": "yaml drops out of the hash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(sh bash bats yml tf template py md)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "hash-yaml(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6h-tf",
+  "desc": "tf drops out of the hash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(sh bash bats yml yaml template py md)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "hash-tf(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6h-template",
+  "desc": "template drops out of the hash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf py md)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "hash-template(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6h-py",
+  "desc": "py drops out of the hash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template py md)",
+    "new": "SWEEP_HASH_EXTS=(sh bash bats yml yaml tf template md)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "hash-py(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6s-js",
+  "desc": "js drops out of the slash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SLASH_EXTS=(js ts tsx mjs cjs tf)",
+    "new": "SWEEP_SLASH_EXTS=(ts tsx mjs cjs tf)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "slash-js(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6s-ts",
+  "desc": "ts drops out of the slash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SLASH_EXTS=(js ts tsx mjs cjs tf)",
+    "new": "SWEEP_SLASH_EXTS=(js tsx mjs cjs tf)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "slash-ts(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6s-tsx",
+  "desc": "tsx drops out of the slash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SLASH_EXTS=(js ts tsx mjs cjs tf)",
+    "new": "SWEEP_SLASH_EXTS=(js ts mjs cjs tf)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "slash-tsx(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6s-mjs",
+  "desc": "mjs drops out of the slash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SLASH_EXTS=(js ts tsx mjs cjs tf)",
+    "new": "SWEEP_SLASH_EXTS=(js ts tsx cjs tf)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "slash-mjs(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6s-cjs",
+  "desc": "cjs drops out of the slash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SLASH_EXTS=(js ts tsx mjs cjs tf)",
+    "new": "SWEEP_SLASH_EXTS=(js ts tsx mjs tf)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "slash-cjs(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6s-tf",
+  "desc": "tf drops out of the slash-comment list",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_SLASH_EXTS=(js ts tsx mjs cjs tf)",
+    "new": "SWEEP_SLASH_EXTS=(js ts tsx mjs cjs)",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "slash-tf(want dropped)"
+  ]
+ },
+ {
+  "id": "G3-6t",
+  "desc": "the style table disagrees with the lists",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_COMMENT_STYLES='sh:# bash:#",
+    "new": "SWEEP_COMMENT_STYLES='sh:#// bash:#",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "comment-style-lists"
   ]
  },
  {
@@ -1298,6 +2527,21 @@
   ]
  },
  {
+  "id": "G3-10b",
+  "desc": "the real scan is never recorded",
+  "mode": "fast",
+  "edits": [
+   {
+    "old": "SWEEP_LAST_SCAN=\"$scan\"",
+    "new": ":",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "spec-dir-zero: this check ran with no scan"
+  ]
+ },
+ {
   "id": "H6",
   "desc": "lower SWEEP_FLOOR toward the old 1400",
   "mode": "fast",
@@ -1318,8 +2562,8 @@
   "mode": "full",
   "edits": [
    {
-    "old": "SWEEP_PROBE_CHECKS=71",
-    "new": "SWEEP_PROBE_CHECKS=70",
+    "old": "SWEEP_PROBE_CHECKS=77",
+    "new": "SWEEP_PROBE_CHECKS=76",
     "count": 1
    }
   ],
@@ -1329,12 +2573,27 @@
  },
  {
   "id": "W2",
-  "desc": "the MD_FLOOR argument dropped from the capture",
+  "desc": "the floors are dropped from the capture",
   "mode": "full",
   "edits": [
    {
-    "old": "sweep_main . \"$SWEEP_FLOOR\" \"$MD_FLOOR\" || sweep_rc=$?",
+    "old": "sweep_main . \"$SWEEP_FLOOR\" \"$SWEEP_MD_FLOOR\" \"$SWEEP_MD_FENCE_FLOOR\" \"$SWEEP_SPLIT_FLOOR\" || sweep_rc=$?",
     "new": "sweep_main . \"$SWEEP_FLOOR\" || sweep_rc=$?",
+    "count": 1
+   }
+  ],
+  "expect": [
+   "needs the markdown-file floor"
+  ]
+ },
+ {
+  "id": "W3",
+  "desc": "the capture no longer feeds the fold",
+  "mode": "full",
+  "edits": [
+   {
+    "old": "sweep_main . \"$SWEEP_FLOOR\" \"$SWEEP_MD_FLOOR\" \"$SWEEP_MD_FENCE_FLOOR\" \"$SWEEP_SPLIT_FLOOR\" || sweep_rc=$?",
+    "new": "sweep_main . \"$SWEEP_FLOOR\" \"$SWEEP_MD_FLOOR\" \"$SWEEP_MD_FENCE_FLOOR\" \"$SWEEP_SPLIT_FLOOR\" || true",
     "count": 1
    }
   ],

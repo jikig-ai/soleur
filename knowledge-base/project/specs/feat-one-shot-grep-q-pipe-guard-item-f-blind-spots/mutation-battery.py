@@ -16,6 +16,10 @@ verdict tail (the rows whose checks sit before that block); mode `full` runs the
 never a trap or a signal helper.
 
 usage: mutation-battery.py [--rows FILE] [--only ID[,ID...]] [--out FILE]
+
+The repository is found with `git rev-parse --show-toplevel` from this file's directory, so the battery runs from the spec directory and from its archived
+location alike. The environment is pinned to a UTF-8 locale: the non-UTF-8 fixture only differs from a plain line there (GNU grep calls such a line binary
+only in a UTF-8 locale).
 """
 import json
 import os
@@ -24,7 +28,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
+REPO = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=HERE, text=True).strip()
 GUARD_REL = ".claude/hooks/grep-q-pipe-guard.test.sh"
 CUT_MARK = "# THE PRODUCER SIDE (S7b, #9217 Arm P; widened by S7c)."
 TAIL = (
@@ -39,7 +43,16 @@ def clean_env():
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "battery"
     env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "battery@example.invalid"
+    env["LC_ALL"] = "C.UTF-8"
     return env
+
+
+def inside(sbx, rel):
+    """The sandbox path for a row's relative path; refuses anything that resolves outside the sandbox."""
+    fp = os.path.realpath(os.path.join(sbx, rel))
+    if fp != os.path.realpath(sbx) and not fp.startswith(os.path.realpath(sbx) + os.sep):
+        raise SystemExit("row path escapes the sandbox: %r" % rel)
+    return fp
 
 
 def run(cmd, cwd=None, timeout=None, env=None):
@@ -88,7 +101,7 @@ def main():
     args = sys.argv[1:]
     rows_file = os.path.join(HERE, "mutation-rows.json")
     only = None
-    out_path = "/var/tmp/itemf/battery-results.txt"
+    out_path = os.path.join(HERE, "battery-results.txt")
     while args:
         a = args.pop(0)
         if a == "--rows":
@@ -97,24 +110,27 @@ def main():
             only = set(args.pop(0).split(","))
         elif a == "--out":
             out_path = args.pop(0)
-    rows = json.load(open(rows_file))
+    with open(rows_file) as fh:
+        rows = json.load(fh)
     if only:
         rows = [r for r in rows if r["id"] in only]
 
     new = run(["bash", "scripts/soleur-sandbox.sh", "new", "itemf-battery"], cwd=REPO)
-    sbx = new.stdout.strip().splitlines()[-1]
-    if not os.path.isdir(sbx):
+    lines = new.stdout.strip().splitlines()
+    sbx = lines[-1] if lines else ""
+    if not sbx or not os.path.isdir(sbx):
         raise SystemExit("sandbox allocation failed: %s" % (new.stdout + new.stderr)[:300])
     results = []
     try:
-        run(["git", "init", "-q"], cwd=sbx)
-        run(["git", "add", "-A"], cwd=sbx)
-        c = run(["git", "commit", "-q", "-m", "sandbox"], cwd=sbx)
-        if c.returncode != 0:
-            raise SystemExit("sandbox commit failed: %s" % c.stderr[:300])
-        pristine = open(os.path.join(REPO, GUARD_REL)).read()
-        if open(os.path.join(sbx, GUARD_REL)).read() != pristine:
-            raise SystemExit("the sandbox guard differs from the working tree guard")
+        for step in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-q", "-m", "sandbox"]):
+            c = run(step, cwd=sbx)
+            if c.returncode != 0:
+                raise SystemExit("sandbox step %s failed: %s" % (" ".join(step), c.stderr[:300]))
+        with open(os.path.join(REPO, GUARD_REL)) as fh:
+            pristine = fh.read()
+        with open(os.path.join(sbx, GUARD_REL)) as fh:
+            if fh.read() != pristine:
+                raise SystemExit("the sandbox guard differs from the working tree guard")
 
         for mode in ("fast", "full"):
             if mode == "full" and not any(r.get("mode") == "full" for r in rows):
@@ -133,8 +149,9 @@ def main():
             text = apply_edits(pristine, r.get("edits", []))
             changed = text != pristine
             for fe in r.get("file_edits", []):
-                fp = os.path.join(sbx, fe["file"])
-                old = open(fp).read()
+                fp = inside(sbx, fe["file"])
+                with open(fp) as fh:
+                    old = fh.read()
                 if fe.get("append") is not None:
                     new_body = old + fe["append"]
                 else:
@@ -142,11 +159,13 @@ def main():
                         raise SystemExit("file edit anchor count for %s in %s" % (r["id"], fe["file"]))
                     new_body = old.replace(fe["old"], fe["new"])
                 changed = changed or (new_body != old)
-                open(fp, "w").write(new_body)
+                with open(fp, "w") as fh:
+                    fh.write(new_body)
             for ad in r.get("add_files", []):
-                fp = os.path.join(sbx, ad["path"])
+                fp = inside(sbx, ad["path"])
                 os.makedirs(os.path.dirname(fp), exist_ok=True)
-                open(fp, "w").write(ad["text"])
+                with open(fp, "w") as fh:
+                    fh.write(ad["text"])
                 changed = True
             if not changed:
                 verdict = "NO-LAND"
@@ -172,6 +191,7 @@ def main():
             restore(sbx, pristine)
     finally:
         run(["bash", "scripts/soleur-sandbox.sh", "rm", sbx], cwd=REPO)
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         with open(out_path, "w") as fh:
             fh.write("\n".join(results) + "\n")
     reds = sum(1 for x in results if " RED " in x)

@@ -148,7 +148,7 @@ PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:sp
 # WHAT A LINE REGEX STILL CANNOT CLOSE (Item F state, measured 2026-10-15 over the 4,494 swept files: code lines, comments dropped, this file excluded; the
 # commands are in evidence.md of the Item F spec dir, archived at ship). Counts rot: re-measure before quoting one. The syntax-level residuals are listed under
 # STATED LIMITS above and pinned as `res` cases in the sweep probe; these are the reader classes:
-#   | head -N          760 lines (578 of them `head -1`) in 309 files. A reader that exits after N lines is dangerous only where the site is a bare pipeline
+#   | head -N          760 lines (578 of them `head -1`) in 290 files. A reader that exits after N lines is dangerous only where the site is a bare pipeline
 #                      under set -e and the producer writes more than a few KB. No static property separates the harmful from the harmless (the chain
 #                      `x | head -1 | grep -q p` is matched by its grep half); a count ratchet would churn on every legitimate site and buy no property.
 #                      A review item, tracked with the awk exit below as one conversion wave.
@@ -1096,6 +1096,7 @@ bad shc-single x | sh -c 'grep -q p'
 bad shc-lc x | bash -lc "grep -qE p"
 bad shc-dash x | dash -c 'grep -q p'
 bad shc-zsh x | zsh -c 'grep -q p'
+bad shc-ksh x | ksh -c 'grep -q p'
 bad shc-abs x | /bin/sh -c 'grep -q p'
 bad shc-wrap x | sudo sh -c 'grep -q p'
 bad shc-group x | { sh -c 'grep -q p'; }
@@ -1144,7 +1145,7 @@ fp fp-rg-type x | rg -tmd p
 fp fp-rg-max-columns x | rg --max-columns 100 p
 fp fp-dashdash x | grep -- -q
 EOF
-V2_CASE_COUNT=102
+V2_CASE_COUNT=103
 v2_case_misses() { # <pattern> -> one "[kind name]" per case the pattern disagrees with, "[INSTRUMENT name rc=N]" when grep itself failed
   local pat="$1" line kind rest name text r out=""
   while IFS= read -r line; do
@@ -1441,6 +1442,7 @@ _ml_put scripts/ml-split-comment-bar.sh   '# note |' '  sudo grep -q p f'
 _ml_put scripts/ml-split-or-or-listed.sh  'x ||' '  sudo grep -q p f' 'y |' '  cat'
 _ml_put scripts/ml-split-block-comment.yml 'run: | # keep' '  sudo grep -q p "$f"'
 _ml_put scripts/ml-split-js-comment.ts    '// choose a |' '  sudo grep -q p f'
+_ml_put scripts/ml-split-js-between.ts    'x |' '// note' '  sudo grep -q p f'
 _ml_put A=b.sh                            'x |' '  sudo grep -q p f'
 _ml_put "scripts/ml-caf"$'\303\251'".sh"    'x |' '  sudo grep -q p f'
 printf 'x | sudo grep -q p \377\n' > "$ml/scripts/ml-nonutf8.sh"
@@ -1488,6 +1490,7 @@ _ml_not  md-grep-c              docs/ml-md-grep-c.md
 _ml_want split-backslash        scripts/ml-split-backslash.sh 1
 _ml_want split-bar-backslash    scripts/ml-split-bar-backslash.sh 1
 _ml_want split-bar-comment      scripts/ml-split-bar-comment.sh 1
+_ml_want split-js-between       scripts/ml-split-js-between.ts 1
 _ml_want split-continued        scripts/ml-split-continued.sh 1
 _ml_want split-crlf             scripts/ml-split-crlf.sh 1
 _ml_want split-chain3           scripts/ml-split-chain3.sh 2
@@ -1519,7 +1522,7 @@ _ml_pick() { # <split|md> <case names...> -> the names of that half, routed by t
 ml_split_miss="$(_ml_pick split $ml_miss)"; ml_md_miss="$(_ml_pick md $ml_miss)"; ml_split_over="$(_ml_pick split $ml_over)"; ml_md_over="$(_ml_pick md $ml_over)"
 # The dispatch above is the part of this block that decides whether a case can fail at all: pin how many calls there are (a deleted call is a case that can
 # no longer fail), drive the two recorders and the router on a synthetic scan, and read both back.
-ML_WANT_CALLS=31; ML_NOT_CALLS=19   # pinned: the number of ^_ml_want and ^_ml_not lines above
+ML_WANT_CALLS=32; ML_NOT_CALLS=19   # pinned: the number of ^_ml_want and ^_ml_not lines above
 ml_nw=$(grep -cE '^_ml_want ' "$_self" || true)
 ml_nn=$(grep -cE '^_ml_not ' "$_self" || true)
 ml_ctl="$( ml_out=$'a/x.sh:1:t'; ml_miss=""; ml_over=""; _ml_want c1 a/x.sh 1; _ml_want c2 a/y.sh 1; _ml_not c3 a/x.sh; _ml_not c4 a/y.sh; echo "$ml_miss|$ml_over" )"

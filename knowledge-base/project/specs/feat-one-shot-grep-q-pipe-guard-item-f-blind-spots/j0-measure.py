@@ -243,6 +243,8 @@ for k, v in rows:
     byctx = collections.Counter(c for c, *_ in v)
     nf = len({x[1] for x in v})
     print(f'{k:42s} lines={len(v):5d} files={nf:4d} ctx={dict(byctx)}')
+hn = [x for k, v in cat.items() if k.startswith('head-N') for x in v]
+print(f'head-N total: lines={len(hn)} files(union)={len({x[1] for x in hn})}')
 print(f'trailing-bar joined logical lines: {len(split_pairs)}; of those whose joined text holds a reader stage: {len(split_readers)}')
 if SAMPLES:
     for k, v in rows:
