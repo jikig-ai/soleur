@@ -2323,7 +2323,8 @@ notify_rows() { # <label-suffix>: every executed notify row against $NJ
     case "$abid" in wipe*|v-*|h-vid*) ;; *) continue ;; esac
     # the html body carries <p> tags around the text: drop those, then no angle bracket may remain in a line naming the command
     _pl="$(nbody "$abid" | sed -E 's#</?p>##g')"
-    if grep -E -- 'gh workflow run' <<<"$_pl" | grep -qE '[<>]'; then ab=$((ab + 1)); fi
+    _pg="$(grep -E -- 'gh workflow run' <<<"$_pl" || true)"
+    if grep -qE '[<>]' <<<"$_pg"; then ab=$((ab + 1)); fi
     abn=$((abn + $(grep -cE -- 'gh workflow run' <<<"$_pl" || true)))
   done
   [ "$ab" = 0 ] && [ "$abn" -ge 12 ] && pass "NB-no-angle$sfx: none of the $abn recovery commands across the wipe-family notifications carries an angle bracket (plain-word placeholders only)" || fail "NB-no-angle$sfx: $ab notification(s) carry an angle bracket in the recovery command ($abn commands)"
