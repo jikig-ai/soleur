@@ -144,15 +144,18 @@ affected_workers() {
 # Returns the command's rc, or 124 on expiry (timeout's own spelling, so callers
 # can treat the three backends uniformly; the watchdog prints 124 the same way).
 # 137 is also an expiry signal when the bound had to escalate to SIGKILL.
+# Both coreutils backends carry `-k <grace>` so a TERM-ignoring child is KILLed
+# 10 s after expiry rather than running unbounded (BSD gtimeout supports -k too);
+# the watchdog arm already escalates on its own schedule.
 affected_timeout() {
   local secs="$1"
   shift
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" "$@"
+    timeout -k 10 "$secs" "$@"
     return $?
   fi
   if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$secs" "$@"
+    gtimeout -k 10 "$secs" "$@"
     return $?
   fi
   # Bounded watchdog: no coreutils on this host (stock macOS). 1 s granularity.
@@ -194,8 +197,13 @@ affected_timeout() {
 # that ordering (failure wins over deferral) is the contract's rc-1-over-rc-6
 # rule and is why the bound is applied per runner invocation rather than once
 # around the whole gate.
-AFFECTED_BUDGET_ACTIVE="${AFFECTED_BUDGET_ACTIVE:-0}"
-AFFECTED_DEADLINE="${AFFECTED_DEADLINE:-0}"
+# INITIALISED UNCONDITIONALLY — these are NEVER inherited from the caller's
+# environment. A forged AFFECTED_BUDGET_ACTIVE=1 + a past AFFECTED_DEADLINE
+# would let every bound expire on its first check and launder a deferral
+# (rc 6 pass-with-note) without a detected CI. The gate arms them itself,
+# only when a CI test workflow was detected.
+AFFECTED_BUDGET_ACTIVE=0
+AFFECTED_DEADLINE=0
 affected_bound() {
   if [[ "$AFFECTED_BUDGET_ACTIVE" == "1" ]]; then
     local rem
@@ -207,7 +215,74 @@ affected_bound() {
   "$@"
 }
 
-# --- emit helpers --------------------------------------------------------------
+# --- scratch files ---------------------------------------------------------------
+# Every mktemp in the gate and its adapters funnels here so an EXIT/INT/TERM
+# trap in affected-tests.sh can remove them all — including on the early-exit
+# refusal paths that never reach the caller's own rm.
+AFFECTED_SCRATCH=()
+affected_mktemp() { # <tag> — sets AFFECTED_TMP to a fresh registered scratch path
+  AFFECTED_TMP="$(mktemp "${TMPDIR:-/tmp}/affected-$1.XXXXXX")" || return 1
+  AFFECTED_SCRATCH+=("$AFFECTED_TMP")
+}
+affected_scratch_clean() {
+  ((${#AFFECTED_SCRATCH[@]} > 0)) && rm -f "${AFFECTED_SCRATCH[@]}"
+  return 0
+}
+
+# --- marker field hygiene -----------------------------------------------------------
+# Config-derived strings (key names, workflow filenames, inert/global patterns)
+# reach marker fields verbatim; a newline or space in one breaks the field
+# shape. Collapse anything outside a printable, whitespace-free set to `_`.
+affected_marker_field() {
+  printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_.:/=+-' '_'
+}
+
+# --- vacuous test_command denylist -----------------------------------------------------
+# A DENYLIST, not a proof: it refuses the shapes that certify nothing — bare
+# `true`/`:`/`exit`/`echo`, every segment vacuous (`echo ok; true`), a
+# true-swallower at the tail (`cmd || true`, `cmd ; exit 0`, `cmd && true`),
+# and exit-inside-subcommand (`bash -c 'exit 0'`, `sh -c '...; exit 0'`).
+# Anything not on the list still runs verbatim and unverified.
+_affected_vacuous_seg() { # <trimmed segment> → rc 0 when it certifies nothing
+  local s="$1"
+  s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  [[ -n "$s" ]] || return 0
+  case "$s" in
+    true|:|exit|"exit "*|echo|"echo "*) return 0 ;;
+  esac
+  # `sh -c '…'` / `bash -c "…"` (optionally env-wrapped): the inner command is
+  # what's vacuous or not — recurse on it.
+  local inner=""
+  case "$s" in
+    env\ *-c\ *|bash\ -c\ *|sh\ -c\ *|dash\ -c\ *|zsh\ -c\ *|ksh\ -c\ *|eval\ *)
+      inner="${s#* -c }"
+      [[ "$inner" == "$s" ]] && inner="${s#eval }"
+      inner="${inner#[\"\']}"; inner="${inner%[\"\']}"
+      _affected_cmd_vacuous "$inner" && return 0 ;;
+  esac
+  return 1
+}
+_affected_cmd_vacuous() { # <command string> → rc 0 when it certifies nothing
+  local norm split seg last=""
+  # Strip comments (`true # ok` is still just `true`), normalise whitespace,
+  # then split on the shell's list operators. The LAST segment decides the
+  # whole command's rc: a vacuous tail is either an all-vacuous command
+  # (`true`, `echo ok; :`) or a true-swallower (`cmd || true`, `cmd ; exit 0`,
+  # `cmd && true`, `cmd | true`) — both refuse.
+  norm="$(printf '%s' "$1" | sed 's/#.*$//' | tr '\n\t' '  ' | tr -s ' ' \
+          | sed 's/^ //; s/ *;*$//; s/ $//')"
+  [[ -n "$norm" ]] || return 0
+  split="${norm//&&/$'\n'}"
+  split="${split//\|\|/$'\n'}"
+  split="${split//|/$'\n'}"
+  split="${split//;/$'\n'}"
+  while IFS= read -r seg; do
+    seg="${seg#"${seg%%[![:space:]]*}"}"
+    [[ -n "$seg" ]] && last="$seg"
+  done <<<"$split"
+  _affected_vacuous_seg "$last"
+}
+
 # Marker + human lines are emitted ONLY from finish(); the guard property is
 # that there is one place a verdict can be written and one place a run can end.
 #
@@ -226,25 +301,42 @@ finish() {
   case "$rc" in
     0)
       if [[ "$reason" == inert ]]; then
-        echo "NO_TESTS_AFFECTED inert_rule=${INERT_RULE:--}"
+        echo "NO_TESTS_AFFECTED inert_rule=$(affected_marker_field "${INERT_RULE:--}")"
         echo "No tests ran: docs-only change."
-      elif [[ "$ran" == "-" ]]; then
+      elif [[ "$ran" == "-" || "$of" == "-" ]]; then
         # `-` counts mark both real runs whose tallies are opaque (delegated
         # runner, custom-command — these still owe the verdict line) and paths
         # where nothing ran (help, explain, self-check — a `Ran - of -` line or
-        # a pass claim would read as a test result that never happened).
+        # a pass claim would read as a test result that never happened). A run
+        # where EITHER count is unknown also suppresses the sentence — a
+        # half-known tally (`Ran 3 of -`) reads as a real count with a broken
+        # denominator.
         if [[ "$mode" != explain && ( "$reason" == delegated || "$reason" == custom-command ) ]]; then
           echo "affected-suite gate passed."
         fi
       else
-        printf 'Ran %s of %s test files affected by this change: passed.\n' "$ran" "$of"
+        # `of` is the repo-wide test-file census, not the affected subset —
+        # `ran` counts files actually executed.
+        printf 'Ran %s of the repo'"'"'s %s test files affected by this change: passed.\n' "$ran" "$of"
         echo "affected-suite gate passed."
       fi
       ;;
     4)
-      # A refusal is a marker line with the reason, plus a human-readable name
-      # for the cause — never a bare rc.
+      # A refusal is a marker line with the reason and a remedy pointer, plus a
+      # human-readable name for the cause — never a bare rc.
+      local remedy="see plugins/soleur/skills/ship/references/affected-gate-contract.md"
+      case "$reason" in
+        vacuous-test-command|bad-config*)
+          remedy="fix .soleur-test-gate.json (the named key)" ;;
+        no-base-ref)
+          remedy="git fetch to unshallow, or pass --base <ref>" ;;
+        toolchain-missing)
+          remedy="install the detected stack's test tool, or set test_command in .soleur-test-gate.json" ;;
+        no-stack|foreign-runner)
+          remedy="set test_command in .soleur-test-gate.json" ;;
+      esac
       echo "AFFECTED_GATE_REFUSED reason=$reason"
+      echo "  remedy: $remedy"
       ;;
     6)
       echo "AFFECTED_GATE_BUDGET_DEFERRED ran=$ran of=$of"

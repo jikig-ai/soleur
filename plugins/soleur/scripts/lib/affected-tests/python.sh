@@ -40,8 +40,10 @@ affected_py_tool() {
     ADP_TOOL=(pytest)
     return 0
   fi
+  # -I: isolated mode — a repo's cwd on sys.path would execute repo-controlled
+  # code (a pytest.py or sitecustomize.py in the tree) during a mere probe.
   if command -v python3 >/dev/null 2>&1 \
-     && affected_timeout 15 python3 -c 'import pytest' >/dev/null 2>&1; then
+     && affected_timeout 15 python3 -I -c 'import pytest' >/dev/null 2>&1; then
     ADP_TOOL=(python3 -m pytest)
     return 0
   fi
@@ -50,7 +52,7 @@ affected_py_tool() {
 }
 
 affected_py_total() {
-  affected_find_files count 'test_*.py' '*_test.py' | grep -c .
+  affected_find_files count 'test_*.py' '*_test.py' | grep -c . || true
 }
 
 # The interpreter backing the resolved ADP_TOOL: a `python3 -m pytest` tool
@@ -70,8 +72,15 @@ affected_py_interpreter() {
     case "$sheb" in
       '#!'*)
         sheb="${sheb#\#!}"
-        set -- $sheb   # shebang argv: "/usr/bin/env python3" | "/venv/bin/python -E"
-        if [[ "${1##*/}" == env && -n "${2:-}" ]]; then interp="$2"; else interp="$1"; fi
+        # `read -ra`, never `set -- $sheb`: unquoted word-splitting also GLOBS,
+        # and clobbering the function's positional params is a side effect.
+        local -a sheb_argv=()
+        read -ra sheb_argv <<<"$sheb"   # "/usr/bin/env python3" | "/venv/bin/python -E"
+        if [[ "${sheb_argv[0]##*/}" == env && -n "${sheb_argv[1]:-}" ]]; then
+          interp="${sheb_argv[1]}"
+        else
+          interp="${sheb_argv[0]:-}"
+        fi
         case "${interp##*/}" in python*|py) ;; *) interp="" ;; esac
         ;;
     esac
@@ -85,7 +94,7 @@ affected_py_interpreter() {
 affected_py_width() {
   local width="$1" pybin
   pybin="$(affected_py_interpreter)"
-  if [[ -n "$pybin" ]] && affected_timeout 15 "$pybin" -c 'import xdist' >/dev/null 2>&1; then
+  if [[ -n "$pybin" ]] && affected_timeout 15 "$pybin" -I -c 'import xdist' >/dev/null 2>&1; then
     printf -- '-n %s' "$width"
   else
     echo "pytest-xdist not importable — running serially" >&2

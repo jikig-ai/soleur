@@ -33,14 +33,16 @@
 #      maps to 1 reason=runner-signal); a failure seen before budget expiry
 #      wins over deferral
 #   4  AFFECTED_GATE_REFUSED — no-stack, bad-config key=<k>,
-#      vacuous-test-command, no-base-ref, toolchain-missing, runner-refused,
+#      vacuous-test-command, no-base-ref, not-a-repo (--self-check outside a
+#      repository), toolchain-missing, runner-refused,
 #      foreign-runner (a foreign scripts/test-all.sh AND no adapter resolves)
 #   6  AFFECTED_GATE_BUDGET_DEFERRED — budget expired AND a CI test workflow was
 #      detected; CI stays the authoritative gate
 #   7  no test suite detected at all — disclosed note, never labelled passed
 #
 # Output contract:
-#   human:  `Ran X of N test files affected by this change: passed.` —
+#   human:  `Ran X of the repo's N test files affected by this change:
+#           passed.` (N is the repo-wide census, not the affected subset) —
 #           never the words "tests verified"; beside it the literal verdict
 #           `affected-suite gate passed.`
 #   inert:  `NO_TESTS_AFFECTED inert_rule=<pat>` + `No tests ran: docs-only change.`
@@ -53,12 +55,17 @@
 #
 # `.soleur-test-gate.json` (repo root, committed, every key optional; unknown
 # key / malformed JSON / wrong type → rc 4 reason=bad-config key=<k>):
-#   test_command   string   full-run command; true/`:`/`exit 0`/bare `echo` →
-#                           rc 4 reason=vacuous-test-command
+#   test_command   string   full-run command; true/`:`/`exit 0`/bare `echo`,
+#                           or any command whose LAST ;/&&/||/| segment is a
+#                           vacuous primitive (`cmd || true`, `cmd ; exit 0`,
+#                           `bash -c 'exit 0'`) → rc 4 reason=vacuous-test-command
+#                           (a documented denylist, not a proof)
 #   global_paths   string[] REPLACES built-ins; any hit forces the full command
 #   inert_paths    string[] REPLACES built-ins (`**/*.md` default); an all-inert
 #                           diff → rc 0 NO_TESTS_AFFECTED; a mixed diff is never
-#                           inert
+#                           inert. A match-everything pattern (`*`, `**`,
+#                           `**/*`, anything matching an arbitrary path) is a
+#                           permanent green → rc 4 bad-config key=inert_paths
 #   budget_seconds number   wall-clock cap, enforced ONLY when a CI test
 #                           workflow is detected; default 900 (unmeasured);
 #                           must be a positive integer
@@ -100,7 +107,6 @@
 
 set -euo pipefail
 
-GATE_PROG="affected-tests.sh"
 GATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=plugins/soleur/scripts/lib/affected-tests/common.sh
 source "$GATE_DIR/lib/affected-tests/common.sh"
@@ -112,6 +118,11 @@ source "$GATE_DIR/lib/affected-tests/js.sh"
 source "$GATE_DIR/lib/affected-tests/python.sh"
 # shellcheck source=plugins/soleur/scripts/lib/affected-tests/go.sh
 source "$GATE_DIR/lib/affected-tests/go.sh"
+
+# Scratch files (config dump, changed-set census, adapter logs) are registered
+# in AFFECTED_SCRATCH by affected_mktemp — remove them on every exit shape,
+# including the early refusal paths that never reach an adapter's own rm.
+trap 'affected_scratch_clean' EXIT INT TERM
 
 usage() {
   sed -n '1,20p' "$0" | grep -E '^#' | sed 's/^# \{0,1\}//'
@@ -140,7 +151,7 @@ while (( $# > 0 )); do
             ARG_BASE="$1" ;;
     --explain) ARG_EXPLAIN=1 ;;
     --self-check) ARG_SELFCHECK=1 ;;
-    -h|--help) usage; finish 0 none help - none - - - ;;
+    -h|--help) usage; finish 0 help help - none - - - ;;
     *) echo "affected-tests: unknown argument '$1' (try --help)" >&2
        finish 4 none bad-usage - none - - - ;;
   esac
@@ -150,9 +161,11 @@ done
 # --- repository root ------------------------------------------------------------
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "$REPO_ROOT" ]]; then
+  # Outside a repository the cause is not a missing base ref — name it.
+  (( ARG_SELFCHECK )) && finish 4 none not-a-repo - none - - -
   finish 4 none no-base-ref - none - - -
 fi
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || finish 4 none no-base-ref - none - - -
 
 # --- CI detection (needed early: it arms the budget and fills ci=) ----------------
 CI_NAME=none
@@ -166,7 +179,7 @@ affected_detect_ci() {
     # in a comment is not a test gate to defer to.
     grep -qE 'pull_request|push' < <(sed 's/#.*//' "$f") || continue
     if grep -qE 'test-all\.sh|npm[[:space:]]+(run[[:space:]]+)?test|yarn[[:space:]]+test|pnpm[[:space:]]+(run[[:space:]]+)?test|bun[[:space:]]+test|vitest|jest|pytest|go[[:space:]]+test|cargo[[:space:]]+test|ctest|make[[:space:]]+test|deno[[:space:]]+test' < <(sed 's/#.*//' "$f"); then
-      CI_NAME="$f"
+      CI_NAME="$(affected_marker_field "$f")"
       return 0
     fi
   done
@@ -191,7 +204,9 @@ CFG_INERT_PATHS=()
 _affected_json_dump() {
   local f="$1"
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$f" <<'PYEOF'
+    # -I: isolated mode keeps the repo's cwd OFF sys.path — a repo-controlled
+    # pytest.py/sitecustomize.py must never execute during a config read.
+    python3 -I - "$f" <<'PYEOF'
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
@@ -240,12 +255,12 @@ JSEOF
     jq -j '
       to_entries[] | .key as $k | (.value | type) as $t |
       if $t == "array" then
-        if (.value | length) == 0 then ($k, " ", "array", " ", " ")
-        else (.value[] | ($k, " ", ("elem:" + (. | type)), " ",
-             (if (. | type) == "string" then . else tojson end), " "))
+        if (.value | length) == 0 then ($k, "\u0000", "array", "\u0000", "\u0000")
+        else (.value[] | ($k, "\u0000", ("elem:" + (. | type)), "\u0000",
+             (if (. | type) == "string" then . else tojson end), "\u0000"))
         end
-      else ($k, " ", $t, " ",
-            (if $t == "string" then .value else (.value | tojson) end), " ")
+      else ($k, "\u0000", $t, "\u0000",
+            (if $t == "string" then .value else (.value | tojson) end), "\u0000")
       end' "$f" 2>/dev/null
     return $?
   fi
@@ -261,15 +276,13 @@ affected_load_config() {
   local cfg=".soleur-test-gate.json"
   [[ -f "$cfg" ]] || return 0
   local tmp rc=0
-  tmp="$(mktemp "${TMPDIR:-/tmp}/affected-cfg.XXXXXX")"
+  affected_mktemp cfg; tmp="$AFFECTED_TMP"
   _affected_json_dump "$cfg" >"$tmp" || rc=$?
   if (( rc == 2 )); then
-    rm -f "$tmp"
     finish 4 none "toolchain-missing" config "$CI_NAME" - - -
   fi
   if (( rc != 0 )); then
-    rm -f "$tmp"
-    finish 4 none "bad-config key=$cfg" config "$CI_NAME" - - -
+    finish 4 none "bad-config key=$(affected_marker_field "$cfg")" config "$CI_NAME" - - -
   fi
 
   local k t v badkey=""
@@ -305,27 +318,21 @@ affected_load_config() {
       *) badkey="$k"; break ;;
     esac
   done <"$tmp"
-  rm -f "$tmp"
   if [[ -n "$badkey" ]]; then
-    finish 4 none "bad-config key=$badkey" config "$CI_NAME" - - -
+    finish 4 none "bad-config key=$(affected_marker_field "$badkey")" config "$CI_NAME" - - -
   fi
 
   if [[ -n "$CFG_TEST_COMMAND" ]]; then
-    # Vacuous escape hatches are refused — `true`, `:`, `exit 0`, a bare echo:
-    # each is the natural repair for a stuck rc 4 and each would certify
-    # nothing. Normalise whitespace before comparing so ` exit 0 ` cannot slip.
-    local norm
-    norm="$(printf '%s' "$CFG_TEST_COMMAND" | tr '\n\t' '  ' | tr -s ' ' | sed 's/^ //; s/ *;*$//; s/ $//')"
-    case "$norm" in
-      ""|true|:|exit|"exit 0"|echo|"sh -c true"|"bash -c true")
-        finish 4 custom vacuous-test-command custom "$CI_NAME" - - - ;;
-      echo\ *)
-        # A bare echo — the whole command is one `echo`, no composition.
-        case "$norm" in
-          *"&&"*|*"||"*|*\;*|*\|*) ;;
-          *) finish 4 custom vacuous-test-command custom "$CI_NAME" - - - ;;
-        esac ;;
-    esac
+    # Vacuous escape hatches are refused — `true`, `:`, `exit 0`, a bare echo,
+    # and every composition that ends in a swallower: `cmd || true`,
+    # `cmd ; exit 0`, `cmd && true`, `cmd | true`, `bash -c 'exit 0'`,
+    # `true # comment`. The check is a documented DENYLIST (common.sh
+    # _affected_cmd_vacuous): comments are stripped, whitespace normalised, the
+    # command split on ;/&&/||/| — a vacuous LAST segment decides the whole
+    # command's rc, so it fails closed. What is not listed still runs verbatim.
+    if _affected_cmd_vacuous "$CFG_TEST_COMMAND"; then
+      finish 4 custom vacuous-test-command custom "$CI_NAME" - - -
+    fi
   fi
 }
 affected_detect_ci || true   # a miss is the common case; never fatal
@@ -342,7 +349,7 @@ if (( ARG_SELFCHECK )); then
   command -v git >/dev/null 2>&1 || finish 4 none toolchain-missing config "$CI_NAME" - - -
   # Probe each detected stack's toolchain: detection is free, and each tool()
   # --version probe is already bounded.
-  _sc_trc=0
+  _sc_trc=0; _sc_missing=0
   for _sc_stack in nxt js py go; do
     if "affected_${_sc_stack}_detect"; then
       _sc_trc=0
@@ -350,10 +357,17 @@ if (( ARG_SELFCHECK )); then
       case "$_sc_trc" in
         0) echo "AFFECTED_GATE_SELF_CHECK stack=${_sc_stack} toolchain=ok" ;;
         2) echo "AFFECTED_GATE_SELF_CHECK stack=${_sc_stack} toolchain=no-test-tool" ;;
-        *) echo "AFFECTED_GATE_SELF_CHECK stack=${_sc_stack} toolchain=missing" ;;
+        *) echo "AFFECTED_GATE_SELF_CHECK stack=${_sc_stack} toolchain=missing"
+           _sc_missing=1 ;;
       esac
     fi
   done
+  # A detected stack whose toolchain cannot run is not "ok" — the gate would
+  # refuse at run time, so the self-check must say so.
+  if (( _sc_missing )); then
+    echo "AFFECTED_GATE_SELF_CHECK toolchain-missing"
+    finish 4 none toolchain-missing - "$CI_NAME" - - -
+  fi
   echo "AFFECTED_GATE_SELF_CHECK ok"
   finish 0 none ok - "$CI_NAME" - - -
 fi
@@ -378,6 +392,7 @@ if [[ -n "$CFG_TEST_COMMAND" ]]; then
   case "$rc" in
     0)     finish 0 custom custom-command custom "$CI_NAME" - - - ;;
     124|137)
+      (( rc == 137 )) && echo "affected-tests: the command exited 137 (SIGKILL — OOM or kill escalation), not necessarily budget expiry; deferral still applies." >&2
       if [[ "$CI_NAME" != none ]]; then
         finish 6 custom budget-deferred custom "$CI_NAME" - - -
       fi
@@ -434,7 +449,8 @@ if [[ -n "$RUNNER" ]]; then
   case "$rc" in
     0)   finish 0 "$_dmode" delegated runner "$CI_NAME" - - - ;;
     124|137)
-      if [[ "$AFFECTED_BUDGET_ACTIVE" == 1 ]]; then
+      (( rc == 137 )) && echo "affected-tests: the runner exited 137 (SIGKILL — OOM or kill escalation), not necessarily budget expiry; deferral still applies." >&2
+      if [[ "$AFFECTED_BUDGET_ACTIVE" == 1 && "$CI_NAME" != none ]]; then
         finish 6 "$_dmode" budget-deferred runner "$CI_NAME" - - -
       fi
       finish 1 "$_dmode" failed runner "$CI_NAME" - - - ;;
@@ -491,31 +507,31 @@ affected_resolve_base || {
 # fail-closed probe and its stdout the first leg of the union, so a bad --base
 # refuses rather than reading as an empty diff and no diff runs twice.
 AFFECTED_CHANGED=()
-CHANGED_TMP="$(mktemp "${TMPDIR:-/tmp}/affected-changed.XXXXXX")"
+affected_mktemp changed; CHANGED_TMP="$AFFECTED_TMP"
 _base_rc=0
-_base_diff="$(git diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
+# -c core.quotePath=false: without it git emits non-ASCII paths C-quoted
+# ("dir/\303\251.txt"), which never matches a glob and misses the file system.
+_base_diff="$(git -c core.quotePath=false diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
 if (( _base_rc != 0 )); then
   if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" == "true" ]]; then
     affected_timeout 60 git fetch --deepen=200 >/dev/null 2>&1 || true
     _base_rc=0
-    _base_diff="$(git diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
+    _base_diff="$(git -c core.quotePath=false diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
   fi
   if (( _base_rc != 0 )); then
-    rm -f "$CHANGED_TMP"
     finish 4 none no-base-ref - "$CI_NAME" - - -
   fi
 fi
 {
   printf '%s\n' "$_base_diff"
-  git diff --name-only --cached -M -- 2>/dev/null
-  git diff --name-only -M -- 2>/dev/null
-  git ls-files --others --exclude-standard 2>/dev/null
+  git -c core.quotePath=false diff --name-only --cached -M -- 2>/dev/null
+  git -c core.quotePath=false diff --name-only -M -- 2>/dev/null
+  git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null
 } | grep -v '^[[:space:]]*$' | sort -u >"$CHANGED_TMP" || true
 unset _base_rc _base_diff
 while IFS= read -r _p; do
   [[ -n "$_p" ]] && AFFECTED_CHANGED+=("$_p")
 done <"$CHANGED_TMP"
-rm -f "$CHANGED_TMP"
 
 # --- classifiers ---------------------------------------------------------------------
 # A pattern containing `/` matches the whole path; `**/` also matches zero
@@ -547,17 +563,27 @@ INERT_PATHS_BUILTIN=('**/*.md')
 GLOBAL_PATHS=("${GLOBAL_PATHS_BUILTIN[@]}")
 INERT_PATHS=("${INERT_PATHS_BUILTIN[@]}")
 (( CFG_GLOBAL_SET )) && GLOBAL_PATHS=(${CFG_GLOBAL_PATHS[@]+"${CFG_GLOBAL_PATHS[@]}"})
-(( CFG_INERT_SET )) && INERT_PATHS=(${CFG_INERT_PATHS[@]+"${CFG_INERT_PATHS[@]}"})
+if (( CFG_INERT_SET )); then
+  # A match-everything inert pattern (`*`, `**`, `**/*` — anything matching an
+  # arbitrary path) is a PERMANENT green: every diff would classify all-inert
+  # and exit 0. Refuse the config rather than certify nothing. Probe with an
+  # improbable nested path through the same matcher the classifier uses.
+  for _ip in ${CFG_INERT_PATHS[@]+"${CFG_INERT_PATHS[@]}"}; do
+    if affected_glob_match "zz9q8/probe.nonexistent" "$_ip"; then
+      finish 4 none "bad-config key=inert_paths" config "$CI_NAME" - - -
+    fi
+  done
+  INERT_PATHS=(${CFG_INERT_PATHS[@]+"${CFG_INERT_PATHS[@]}"})
+fi
 
 GLOBAL_HIT=""
-GLOBAL_RULE="-"
 ALL_INERT=1
 INERT_RULE="-"
 for _p in ${AFFECTED_CHANGED[@]+"${AFFECTED_CHANGED[@]}"}; do
   _hit=0
   for _g in ${GLOBAL_PATHS[@]+"${GLOBAL_PATHS[@]}"}; do
     if affected_glob_match "$_p" "$_g"; then
-      GLOBAL_HIT="$_p"; GLOBAL_RULE="$_g"; _hit=1; break
+      GLOBAL_HIT="$_p"; _hit=1; break
     fi
   done
   if (( _hit == 0 )); then
@@ -574,7 +600,15 @@ done
 # --- explain -------------------------------------------------------------------------
 if (( ARG_EXPLAIN )); then
   echo "AFFECTED_EXPLAIN base=${BASE:-none} base_source=${BASE_SRC:-none} changed=${#AFFECTED_CHANGED[@]}"
+  _xn=0
   for _p in ${AFFECTED_CHANGED[@]+"${AFFECTED_CHANGED[@]}"}; do
+    _xn=$((_xn + 1))
+    if (( _xn > 200 )); then
+      # The PATH dump is capped — a giant diff gets the verdict and a count,
+      # not an unbounded listing.
+      echo "PATH … and $(( ${#AFFECTED_CHANGED[@]} - 200 )) more"
+      break
+    fi
     _cls=changed; _rule=-
     for _g in ${GLOBAL_PATHS[@]+"${GLOBAL_PATHS[@]}"}; do
       affected_glob_match "$_p" "$_g" && { _cls=global; _rule="$_g"; break; }
@@ -584,14 +618,14 @@ if (( ARG_EXPLAIN )); then
         affected_glob_match "$_p" "$_i" && { _cls=inert; _rule="$_i"; break; }
       done
     fi
-    echo "PATH ${_p} class=${_cls} rule=${_rule}"
+    echo "PATH ${_p} class=${_cls} rule=$(affected_marker_field "$_rule")"
   done
 fi
 
 # --- verdicts that need no runner ----------------------------------------------------
 if (( ${#AFFECTED_CHANGED[@]} == 0 )); then
   # An empty diff is an undecidable selection — coverage-favoring, not a pass.
-  (( ARG_EXPLAIN )) && echo "SELECTION mode=full reason=empty-diff"
+  # (explain emits ONE SELECTION line at the block below; nothing extra here.)
   ARG_FULL=1
   EMPTY_REASON="empty-diff"
 else
@@ -599,7 +633,9 @@ else
 fi
 
 if (( ALL_INERT )) && (( ${#AFFECTED_CHANGED[@]} > 0 )) && (( ARG_FULL == 0 )) && [[ -z "$GLOBAL_HIT" ]]; then
-  (( ARG_EXPLAIN )) && echo "SELECTION mode=none reason=inert inert_rule=${INERT_RULE}"
+  (( ARG_EXPLAIN )) && echo "SELECTION mode=none reason=inert inert_rule=$(affected_marker_field "$INERT_RULE")"
+  # UNIT NOTE: on this path of= counts CHANGED files (all inert), not the
+  # repo test-file census other paths emit — units differ by design here.
   finish 0 none inert - "$CI_NAME" 0 "${#AFFECTED_CHANGED[@]}" "${#AFFECTED_CHANGED[@]}"
 fi
 
@@ -659,17 +695,27 @@ _affected_add_counts() {  # add ran/of independently — each keeps `-` honesty
   if [[ "$o" =~ ^[0-9]+$ ]]; then OF_SUM=$((OF_SUM + o)); else OF_KNOWN=0; fi
 }
 
-# try_adapter <fn-name> [label] — detect, toolchain-check, select, run,
-# retry-full on a vacuous selection (the empty-selection arm), then aggregate.
-# <fn-name> is the suffix in affected_<fn-name>_* (hyphen-free, bash-3.2);
-# <label> is what the marker prints.
+# try_adapter <fn-name> [label] [precomputed-tool-rc] — detect, toolchain-check,
+# select, run, retry-full on a vacuous selection (the empty-selection arm), then
+# aggregate. <fn-name> is the suffix in affected_<fn-name>_* (hyphen-free,
+# bash-3.2); <label> is what the marker prints. The optional third argument is a
+# tool() rc the caller already probed — passing it skips a second bounded
+# --version probe (nx/turbo's detect-probe needs the rc before deciding whether
+# to fall through to js).
 try_adapter() {
   local name="$1" label="${2:-$1}"
+  # Per-adapter output flags reset HERE, not only inside adapters that set
+  # them — a js escalation must never stain a later adapter's marker.
+  ADP_ESCALATED_FULL=0
+  ADP_VACUOUS=0
   if ! "affected_${name}_detect"; then
     return 0
   fi
-  local tool_rc=0
-  "affected_${name}_tool" || tool_rc=$?
+  local tool_rc="${3:-}"
+  if [[ -z "$tool_rc" ]]; then
+    tool_rc=0
+    "affected_${name}_tool" || tool_rc=$?
+  fi
   if (( tool_rc == 2 )); then
     return 0  # stack marker present but no test tool configured — not a suite
   fi
@@ -712,7 +758,8 @@ try_adapter() {
   case "$arc" in
     0)   _affected_aggregate 0 ;;
     124|137)
-      if [[ "$AFFECTED_BUDGET_ACTIVE" == 1 ]]; then
+      (( arc == 137 )) && echo "affected-tests: stack=$label exited 137 (SIGKILL — OOM or kill escalation), not necessarily budget expiry; deferral still applies." >&2
+      if [[ "$AFFECTED_BUDGET_ACTIVE" == 1 && "$CI_NAME" != none ]]; then
         _affected_aggregate 6
       else
         _affected_aggregate 1
@@ -733,7 +780,7 @@ if affected_nxt_detect; then
   affected_nxt_tool || _trc=$?
   if (( _trc == 0 )); then
     _saw_before=$SAW_SUITE
-    try_adapter nxt nx-turbo
+    try_adapter nxt nx-turbo 0  # tool already resolved — skip the re-probe
     (( SAW_SUITE > _saw_before )) && NXT_SUPPRESS=1
   elif (( _trc == 4 )); then
     echo "affected-tests: stack=nx-turbo detected but its toolchain is missing or unrunnable; falling through to js." >&2
@@ -769,8 +816,16 @@ fi
 OUT_RAN="-"; OUT_OF="-"; SKIP_SUM="-"
 (( RAN_KNOWN )) && OUT_RAN="$RAN_SUM"
 (( OF_KNOWN )) && OUT_OF="$OF_SUM"
-if (( RAN_KNOWN && OF_KNOWN )) && (( OF_SUM >= RAN_SUM )); then
-  SKIP_SUM=$((OF_SUM - RAN_SUM))
+if (( RAN_KNOWN && OF_KNOWN )); then
+  if (( OF_SUM >= RAN_SUM )); then
+    SKIP_SUM=$((OF_SUM - RAN_SUM))
+  else
+    # ran>of can only mean the two counts use different units (an adapter
+    # counted items/packages where of counted files). Never emit a negative
+    # skipped — disclose the divergence instead.
+    SKIP_SUM="-"
+    echo "affected-tests: ran=$RAN_SUM exceeds the repo census of=$OF_SUM — count units diverged; skipped is not derivable." >&2
+  fi
 fi
 # Marker honesty: an adapter that escalated selected→full (no native selector)
 # makes the emitted mode full with a named reason — never a selected claim
