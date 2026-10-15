@@ -29,7 +29,7 @@ affected_go_tool() {
 }
 
 affected_go_total() {
-  affected_find_files count '*_test.go' | grep -c .
+  affected_find_files count '*_test.go' | grep -c . || true
 }
 
 # Print the selected package set: changed packages plus their reverse-dependency
@@ -48,10 +48,13 @@ affected_go_closure() {
   if (( ${#changed_dirs[@]} == 0 )); then
     return 1
   fi
-  for d in $(printf '%s\n' "${changed_dirs[@]}" | sort -u); do
-    p="$(go list -e -f '{{.ImportPath}}' "$d" 2>/dev/null || true)"
+  # while-read, never `for d in $(…)`: a directory whose name contains a space
+  # must not be split into two bogus operands.
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    p="$("${ADP_TOOL[@]}" list -e -f '{{.ImportPath}}' "$d" 2>/dev/null || true)"
     [[ -n "$p" && "$p" != -* ]] && changed_pkgs+=("$p")
-  done
+  done < <(printf '%s\n' "${changed_dirs[@]}" | sort -u)
   if (( ${#changed_pkgs[@]} == 0 )); then
     return 1
   fi
@@ -59,7 +62,7 @@ affected_go_closure() {
   # Forward edges: pkg -> packages it imports (test imports included — a test
   # file importing the changed package is how the change is observed).
   local graph
-  graph="$(go list -e -f '{{.ImportPath}}|{{join .Imports " "}}|{{join .TestImports " "}}|{{join .XTestImports " "}}' ./... 2>/dev/null)" \
+  graph="$("${ADP_TOOL[@]}" list -e -f '{{.ImportPath}}|{{join .Imports " "}}|{{join .TestImports " "}}|{{join .XTestImports " "}}' ./... 2>/dev/null)" \
     || return 1
   [[ -n "$graph" ]] || return 1
 
@@ -101,9 +104,9 @@ affected_go_run() {
   local mode="$1" width="$2"
   ADP_VACUOUS=0
   ADP_OF="$(affected_go_total)"
-  local -a cmd=(go test -p "$width")
+  local -a cmd=("${ADP_TOOL[@]}" test -p "$width")
   local log rc=0
-  log="$(mktemp "${TMPDIR:-/tmp}/affected-go.XXXXXX")"
+  affected_mktemp go; log="$AFFECTED_TMP"
 
   if [[ "$mode" == selected ]]; then
     local pkgs
@@ -133,7 +136,19 @@ affected_go_run() {
     ADP_RAN=0
     return 5
   fi
-  ADP_RAN="$(grep -cE '^(ok|FAIL)[[:space:]]' "$log")"
+  # ran must be in the same units as of= — test FILES, not packages: count the
+  # *_test.go files under each reported package's directory. Packages outside
+  # the module prefix are skipped; an under-count biases ran DOWN (honest).
+  local modpfx="" pkg dir cnt=0
+  modpfx="$(sed -n 's/^module[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' go.mod 2>/dev/null | head -n 1 || true)"
+  while IFS= read -r pkg; do
+    [[ -n "$modpfx" && "$pkg" == "$modpfx"* ]] || continue
+    dir="${pkg#"$modpfx"}"; dir="${dir#/}"
+    [[ -z "$dir" ]] && dir="."
+    [[ -d "$dir" ]] || continue
+    cnt=$((cnt + $(find "$dir" -maxdepth 1 -type f -name '*_test.go' 2>/dev/null | wc -l || true)))
+  done < <(grep -oE '^(ok|FAIL)[[:space:]]+[^[:space:]]+' "$log" | awk '{print $2}' | sort -u || true)
+  ADP_RAN="$cnt"
   rm -f "$log"
   return "$rc"
 }
