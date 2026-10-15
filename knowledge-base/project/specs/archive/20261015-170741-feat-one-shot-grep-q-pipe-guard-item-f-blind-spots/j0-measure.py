@@ -154,7 +154,15 @@ def ctx(line, bi):
 DEF = re.compile(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_.:-]*)\s*\(\)\s*\{?\s*(#.*)?$')
 funcs = collections.defaultdict(set)   # name -> files
 func_reader = {}                        # name -> (file,line,text)
-GREPQ_STDIN = re.compile(r'(^|[;&|({]\s*|\s)(e?grep)(\s+-[A-Za-z]*[qm][A-Za-z0-9]*)+(\s+("[^"]*"|\'[^\']*\'|[^\s<>|;&)]+))?\s*(\)|;|&&|\|\||$)')
+# The flag run is matched as plain clusters (each starts at whitespace, so no two iterations can overlap: no backtracking blow-up) and the early-exit letter is
+# tested on the captured run afterwards (every cluster must hold q or m, as before), instead of inside a repeated group whose clusters could split a q or m run more than one way.
+GREPQ_STDIN_RUN = re.compile(r'(^|[;&|({]\s*|\s)(e?grep)((?:\s+-[A-Za-z0-9]+)+)(\s+("[^"]*"|\'[^\']*\'|[^\s<>|;&)]+))?\s*(\)|;|&&|\|\||$)')
+class _GrepQ:
+    def search(self, b):
+        for m in GREPQ_STDIN_RUN.finditer(b):
+            if all(re.fullmatch(r'-[A-Za-z]*[qm][A-Za-z0-9]*', c) for c in m.group(3).split()): return m
+        return None
+GREPQ_STDIN = _GrepQ()
 for f in files:
     try: L = open(f, encoding='utf-8', errors='replace').read().split('\n')
     except OSError: continue
