@@ -8,42 +8,42 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 
 ## Phase 0: Preconditions
 
-- 0.1 Probe `updated_at` behaviour on a throwaway comment on the PR (post, react, read, delete) and note the result for the ADR.
-- 0.2 Measure byte headroom: `ship/SKILL.md` vs ceiling 273955, `one-shot/SKILL.md` vs 52000 (`python3 scripts/lint-skill-body-budget.py --base origin/main`); draft the exact insertion text and count it with `wc -c` before touching either file.
-- 0.3 Measure `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` and the rule line byte count.
-- 0.4 Confirm `pre-ask-technical-fork-gate.sh` payload shape with `__HI_RAW` for a two-question fixture.
+- [ ] 0.1 Probe `updated_at` behaviour on a throwaway comment on the PR (post, react, read, delete) and note the result for the ADR.
+- [x] 0.2 Measure byte headroom: `ship/SKILL.md` vs ceiling 273955, `one-shot/SKILL.md` vs 52000 (`python3 scripts/lint-skill-body-budget.py --base origin/main`); draft the exact insertion text and count it with `wc -c` before touching either file.
+- [ ] 0.3 Measure `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` and the rule line byte count.
+- [x] 0.4 Confirm `pre-ask-technical-fork-gate.sh` payload shape with `__HI_RAW` for a two-question fixture.
 
 ## Phase 1: Format reference
 
-- 1.1 Write `plugins/soleur/skills/brainstorm-techniques/references/standing-delegation.md`:
-  - 1.1.1 delegation record v1 template (marker, blockquote of question plus answer >= 40 chars, `Confirmation:`, numbered Scope, Excluded with ten fixed anchor keywords, `Expiry:` ISO date, `Revoke:`).
-  - 1.1.2 `## Production Envelope` template and the `Gate:` v1 grammar (four kinds).
-  - 1.1.3 plain-language epic-start confirmation, stall, re-confirm and execution-log wording.
-  - 1.1.4 boundaries and residuals (hook-gated forms still defer; shared identity is tamper-evidence only).
-- 1.2 Add the executable-template test: extract the templates, instantiate, expect `delegation-verify.sh` to return `valid`.
+- [x] 1.1 Write `plugins/soleur/skills/brainstorm-techniques/references/standing-delegation.md`:
+  - [x] 1.1.1 delegation record v1 template (marker, blockquote of question plus answer >= 40 chars, `Confirmation:`, numbered Scope, Excluded with ten fixed anchor keywords, `Expiry:` ISO date, `Revoke:`).
+  - [x] 1.1.2 `## Production Envelope` template and the `Gate:` v1 grammar (four kinds).
+  - [x] 1.1.3 plain-language epic-start confirmation, stall, re-confirm and execution-log wording.
+  - [x] 1.1.4 boundaries and residuals (hook-gated forms still defer; shared identity is tamper-evidence only).
+- [x] 1.2 Add the executable-template test: extract the templates, instantiate, expect `delegation-verify.sh` to return `valid`.
 
 ## Phase 2: delegation-verify.sh
 
-- 2.1 Write `plugins/soleur/scripts/delegation-verify.test.sh` with a PATH `gh` stub (rejects unknown argv), fixtures under `plugins/soleur/test/fixtures/standing-delegation/`, a row per reason token, harness rows H1/H2, mutation rows.
-- 2.2 Implement `verify`, `--audit`, `render`, `--self-check` in `plugins/soleur/scripts/delegation-verify.sh`.
-- 2.3 Portability pass: no bare `timeout`, `date -d`, `stat -c`, `sed -i`; bash 3.2 and mawk safe.
+- [x] 2.1 Write `plugins/soleur/scripts/delegation-verify.test.sh` with a PATH `gh` stub (rejects unknown argv), fixtures under `plugins/soleur/test/fixtures/standing-delegation/`, a row per reason token, harness rows H1/H2, mutation rows.
+- [x] 2.2 Implement `verify`, `--audit`, `render`, `--self-check` in `plugins/soleur/scripts/delegation-verify.sh`.
+- [x] 2.3 Portability pass: no bare `timeout`, `date -d`, `stat -c`, `sed -i`; bash 3.2 and mawk safe.
 
 ## Phase 3: hold-gate-eval.sh
 
-- 3.1 Write `plugins/soleur/test/hold-gate-eval.test.sh` and fixtures (plans with holds, envelope section).
-- 3.2 Implement `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh` (four kinds, fail closed, exit 0/1/2/3, shared gate-line parser).
-- 3.3 Write `plugins/soleur/skills/ship/references/operator-holds.md`; shrink `ship/SKILL.md` step 5 to a pointer within the +183 byte headroom.
+- [x] 3.1 Write `plugins/soleur/test/hold-gate-eval.test.sh` and fixtures (plans with holds, envelope section).
+- [x] 3.2 Implement `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh` (four kinds, fail closed, exit 0/1/2/3, shared gate-line parser).
+- [x] 3.3 Write `plugins/soleur/skills/ship/references/operator-holds.md`; shrink `ship/SKILL.md` step 5 to a pointer within the +183 byte headroom.
 
 ## Phase 4: technical-ruling-gate.sh
 
-- 4.1 Add RED cases to `plugins/soleur/test/technical-ruling-gate.test.sh` (valid, invalid, unreadable, wrong class, two-row table, stray row, archive mode shape-only).
-- 4.2 Implement the delegation arm (`--audit`), new reasons, `TRG_EXEC_LOG delegation` rows.
-- 4.3 Update `technical-ruling-delegation.md` sections 1, 3, 6, 7 (canonical example row) and `decision-challenges-render.md`.
+- [x] 4.1 Add RED cases to `plugins/soleur/test/technical-ruling-gate.test.sh` (valid, invalid, unreadable, wrong class, two-row table, stray row, archive mode shape-only).
+- [x] 4.2 Implement the delegation arm (`--audit`), new reasons, `TRG_EXEC_LOG delegation` rows.
+- [x] 4.3 Update `technical-ruling-delegation.md` sections 1, 3, 6, 7 (canonical example row) and `decision-challenges-render.md`.
 
 ## Phase 5: pre-ask-technical-fork-gate.sh
 
-- 5.1 Add RED cases to `.claude/hooks/pre-ask-technical-fork-gate.test.sh` (cue, mixed spans, mixed case, timeout, missing verifier, two questions, label-only).
-- 5.2 Implement the arm (raw-payload span extraction, command-shaped spans only, 5 s cap, allow on any doubt, `emit_incident`).
+- [x] 5.1 Add RED cases to `.claude/hooks/pre-ask-technical-fork-gate.test.sh` (cue, mixed spans, mixed case, timeout, missing verifier, two questions, label-only).
+- [x] 5.2 Implement the arm (raw-payload span extraction, command-shaped spans only, 5 s cap, allow on any doubt, `emit_incident`).
 
 ## Phase 6: pr-overlap-preflight.sh
 
