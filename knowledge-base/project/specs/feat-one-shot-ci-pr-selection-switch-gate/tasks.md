@@ -7,7 +7,7 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-ci-pr-selection-switch-gate-
 - 1.1 Add `row_switch_gate` to the suite (AC1, AC2, AC3, AC4 shapes); run against the unmodified driver and confirm it is red.
 - 1.2 Add the gate before `stage=2`: `reason=switch_off`, `[ "$sw" = on ] || return 0  # GUARD:G2-16-SWITCH-GATE`.
 - 1.3 Flip the harness default `SWITCH=` to `SWITCH=on`; rewrite "G2-13 dark: would-skip evidence" and "LEAK the run still reaches stage 2"; keep the explicit unset rows.
-- 1.4 Add the Guard 1 mutants (7 rows, incl. `!= invalid` and the before-`paths_too_long` reorder with an over-cap and a `bigok` fixture), each confirmed LANDED and KILLED; add harness rows (default flipped back reds control rows; `krn` and `k2` must-PASS).
+- 1.4 Add the Guard 1 mutants (10 rows: 9 + 1, incl. `!= invalid` and the before-`paths_too_long` reorder with an over-cap and a `bigok` fixture), each confirmed LANDED and KILLED; add harness rows (default flipped back reds control rows; `krn` and `k2` must-PASS).
 - 1.5 Update the driver header comment (stage 2 only on exactly `on`; `sel_s` is 0 when stage 2 did not run; `switch_off` reason).
 
 ## Phase 2: Job gate (.github/workflows/ci.yml)
@@ -18,7 +18,7 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-ci-pr-selection-switch-gate-
 ## Phase 3: Pin suites
 
 - 3.1 `scripts/ci-push-dedupe.test.sh`: `PRSEL_IF` constant exported to `chk.py`; `P-JOBIF` against it; rebuild the nine `y-prsel-*` anchors and `y-budget-10` from it; no "did NOT land" mutant remains.
-- 3.2 Same file: `darkequiv` mode over the real parsed `if:` strings (AC7) with the Guard 2 mutants (8 job-`if` rows, 3 gated-job rows and, from the review round, 3 switch-census rows) and harness rows; model `vars.CI_PR_AFFECTED` unset as the empty string (documented).
+- 3.2 Same file: `darkequiv` mode over the real parsed `if:` strings (AC7) with the Guard 2 mutants (8 job-`if` rows, 3 gated-job rows and, from the review rounds, 12 switch-census rows) and harness rows; model `vars.CI_PR_AFFECTED` unset as the empty string (documented).
 - 3.3 `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh`: G1-8c rows (add `pull_request` to the existing G1-8 event loop; empty inputs, `HEAD_SHA_OK` in empty and `false`) and the 3 Guard 3 mutants (AC8): a new `tolmut.py` operator loosening `HEAD_SHA_OK`, new probe rows in the `mutate_tol` p-set (non-empty listed skip with `HEAD_SHA_OK=''`; empty-inputs `pull_request`), one compound mutant. `AGG_DIGEST` unchanged.
 - 3.4 Re-run `scripts/ci-draft-light.test.sh` unchanged.
 

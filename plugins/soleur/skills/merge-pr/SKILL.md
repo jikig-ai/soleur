@@ -593,7 +593,7 @@ done
 If the loop exits with state `CLOSED` (not `MERGED`), auto-merge was cancelled — check for CI failures:
 
 ```bash
-gh pr checks --json name,state,bucket,description,link | jq '.[] | select(.bucket != "pass" and .bucket != "skipping")'
+gh pr checks <number> --json name,state,bucket,description,link | jq '.[] | select(.bucket != "pass" and .bucket != "skipping")'
 
 ```
 
@@ -603,7 +603,7 @@ Stop and report:
 STOPPED: CI check failed.
 
 Failed checks:
-<check name>: <description>
+<check name>: <link>
 
 Starting SHA for rollback: <starting-sha>
 To rollback: git reset --hard <starting-sha> && git push --force-with-lease origin <branch-name>

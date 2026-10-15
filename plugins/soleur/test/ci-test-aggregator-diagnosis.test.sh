@@ -602,7 +602,7 @@ tol_exact "G1-16c two tolerated, list in another order (legs print in entries or
 tol_exact "G1-16d a leg listed but ran: the all-six sentence is byte-identical" "$BODY" test-bun $OK $OK $OK "$SIX_LINE"
 # G1-8c a pull_request run whose pr-selection job was SKIPPED (the job-level switch gate: CI_PR_AFFECTED unset or empty) hands the body EMPTY SKIP_LEGS and
 # ACTIVE, and HEAD_SHA_OK is the computed boolean string `false` (`'' != ''` is false) or, defensively, empty. That state is full CI: a must-PASS characterization
-# through the real body (SKIP_LEGS='' fails the regex on its own, so the tolerance arm is dead here; the p23..p25 probes in the mutant set drive this state).
+# through the real body (SKIP_LEGS='' fails the regex on its own, so the tolerance arm is dead here; the G1-8c rows drive this state through the real body; p23 in the mutant set covers the empty HEAD_SHA_OK spelling).
 # All six legs success: rc 0 and EXACTLY the six-leg line (a whole-line match), never the tolerated banner. Each gateable leg skipped: rc 1 naming it. A failed leg: rc 1.
 tol_empty() {  # $1=label $2=head_ok $3=webplat $4=bun $5=heavy $6=want_rc $7=needle ; pull_request, attempt 1, SKIP_LEGS and ACTIVE empty, test-scripts/build/posture success
   run_body "$BODY" "$3" "$4" success pull_request success "$5" success "" "" "" "$2" 1
@@ -717,7 +717,7 @@ elif op == "head-loose-empty":
     sub('"$HEAD_SHA_OK" == "true"', '"$HEAD_SHA_OK" != "false"')
 elif op == "compound-outer-removed-tolerate-skipped":
     # Guard 3 row 2, COMPOUND: the whole outer tolerance condition removed AND any skipped leg tolerated, applied together (the two existing single
-    # operators, no-active/no-regex and tolerate-anything-skipped, each reach part of this; the compound is the named mutant, driven by the new p24 probes).
+    # operators, no-active/no-regex and tolerate-anything-skipped, each reach part of this; the compound is the named mutant; the existing probes p1..p22 kill it).
     sub(COND, 'true')
     sub('if [[ "$tolerated" == *",$shard,"* ]]; then', 'if [[ "$tolerated" == *",$shard,"* || "$result" == "skipped" ]]; then')
 elif op == "banner-when-none-tolerated":
@@ -764,13 +764,8 @@ mutate_tol() {  # $1=label $2=op ; the Guard 1 rows over the mutant: at least on
     tol_exact "p20" "$m" test-bun $OK $S $OK "All legs green or $TOL_MSG tolerated (test-bun); skip_legs=test-bun"
     tol_exact "p21" "$m" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or $TOL_MSG tolerated (test-webplat,test-scripts-heavy); skip_legs=test-scripts-heavy,test-webplat"
     tol_exact "p22" "$m" test-bun $OK $OK $OK "$SIX_LINE"
-    # ADR-276 S4 follow-up (#9729), Guard 3: NEW probe rows (this p-set never runs the main-line G1-8c rows). p23: HEAD_SHA_OK EMPTY (the p-set had only `false`).
-    # p24: pull_request with the empty inputs a skipped pr-selection job produces, each gateable leg skipped. p25: the same empty inputs, all green.
+    # ADR-276 S4 follow-up (#9729), Guard 3: ONE new probe row (this p-set never runs the main-line G1-8c rows). p23: HEAD_SHA_OK EMPTY (the p-set had only `false`).
     tol "p23" "$m" pull_request test-bun true "" 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
-    tol "p24" "$m" pull_request "" "" "" 1 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" "$TOL_MSG"
-    tol "p24b" "$m" pull_request "" "" "" 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
-    tol "p24c" "$m" pull_request "" "" "" 1 $OK $OK $OK $S $OK $OK 1 "test-scripts-heavy: SKIPPED" "$TOL_MSG"
-    tol "p25" "$m" pull_request "" "" "" 1 $OK $OK $OK $OK $OK $OK 0 "$SIX_LINE" "$TOL_MSG"
   } >/dev/null 2>&1
   PROBE=0
   if [ "$PROBE_FAILS" -gt 0 ]; then
@@ -807,9 +802,8 @@ mutate_tol "G1-H1s the final line keeps its trailing comma" final-trailing-comma
 mutate_tol "G1-H1t the final line keeps its leading comma" final-leading-comma
 mutate_tol "G1-H1u the final line drops the skip_legs suffix" final-no-skip-legs
 mutate_tol "G1-H1v the all-six sentence is reworded (byte identity)" six-green-reworded
-# ADR-276 S4 follow-up (#9729), Guard 3 (matrix rows 1 to 3). Measured at review: p23 is the one probe H1w needs (without it H1w survives); H1x is the union of two
-# existing operators and H1y is killed by the existing p1..p22, so p24, p24b, p24c and p25 are NOT additional kills. They are kept because they pin the state this PR
-# creates (a skipped pr-selection: empty outputs, each gateable leg skipped, then all green) through the real body, and they are counted in MIN_ROWS, not credited as kill power.
+# ADR-276 S4 follow-up (#9729), Guard 3 (matrix rows 1 to 3). Measured at review: p23 is the one probe H1w needs (without it H1w survives);
+# H1x is the union of two existing operators and H1y is killed by the existing p1..p22, so they add no kill power beyond their own verdict row.
 mutate_tol "G1-H1w HEAD_SHA_OK loosened to != false (its empty spelling reads as bound)" head-loose-empty
 mutate_tol "G1-H1x COMPOUND: the outer tolerance condition removed AND any skipped leg tolerated" compound-outer-removed-tolerate-skipped
 mutate_tol "G1-H1y the tolerated banner printed when nothing was tolerated" banner-when-none-tolerated

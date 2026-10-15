@@ -347,8 +347,9 @@ jobs:
   # ACTIVE == "true".
   # When the variable is set to any non-empty value the job runs; the driver always runs stage 1 (the pure-bash allowlist) and runs
   # stage 2 (the selector) only for the exact, case-sensitive value `on`; any other value makes no selector call and, on a doc-only diff
-  # that passed the paths cap, reports `reason=switch_off` (a code diff keeps its stage-1 reason; `switch=invalid` is on every notice). Even with `on`, a literal activation lock inside the driver keeps `active=false` until PR C removes it in its
-  # last commit, so this PR alone is not activatable. Activation is a separate, authorized step (ADR-276 S4).
+  # that passed the paths cap, reports `reason=switch_off` (a code diff keeps its stage-1 reason, so read the off switch from `switch=`:
+  # `invalid` for any non-empty value that is not `on`). Even with `on`, a literal activation lock inside the driver keeps `active=false`
+  # until PR C removes it in its last commit, so this PR alone is not activatable. Activation is a separate, authorized step (ADR-276 S4).
   # `sel_s` is no longer measured on every run: it is 0 whenever stage 2 did not run, and where stage 2 does run on a cold hosted runner it
   # can hit its budget (the canary run logged `reason=selector_timeout sel_s=90`), so it is a LOWER BOUND whenever `sel_censored=1`. The one
   # cold/warm measurement is taken in the PR C replay (a workflow_dispatch run cannot reach the selector); see the ADR-276 S4 amendment.

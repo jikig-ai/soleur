@@ -37,9 +37,9 @@
 # a path, a ref name, a SHA from the diff, the repository name or the raw switch value is NEVER echoed) and a short step
 # summary. The notice carries, in this order: switch, locked, attempt, files, stage, reason, would_skip, sel_s, sel_censored,
 # budget, active, groups. `sel_s` is the stage-2 wall time (0 whenever stage 2 did not run), a LOWER BOUND when `sel_censored=1` (budget or
-# per-call timeout hit; a cold runner is expected to censor it). Reason `switch_off`: a doc-only diff past the paths cap whose switch is not
-# `on`; a code diff keeps its stage-1 reason, so read the off switch from `switch=`. `groups` is webplat:TOK,bun:TOK,scripts-heavy:TOK (`-` when
-# stage 2 did not finish). Reason `affected_degraded` replaces `affected` when any group token is timeout|bad_rc|parse|missing_row|no_records|empty, so a degraded enumerate never
+# per-call timeout hit; a cold runner is expected to censor it). Reason `switch_off`: a doc-only diff that passed the paths cap, switch not `on`;
+# a code diff keeps its stage-1 reason, so read the off switch from `switch=` (`invalid`: any non-empty value but `on`). `groups` is webplat:TOK,bun:TOK,scripts-heavy:TOK
+# (`-` when stage 2 did not finish). Reason `affected_degraded` replaces `affected` when any group token is timeout|bad_rc|parse|missing_row|no_records|empty, so a degraded enumerate never
 # reads as the benign `affected would_skip=none`. `affected_degraded` is TELEMETRY ONLY: healthy groups still arm when a sibling
 # group is degraded (per-group evaluation), a decision to revisit before the lock is removed (ADR-276 S4 amendment). Reasons
 # `signalled` (HUP/INT/TERM) and `lever_error` (an internal abort) are the two trap exits: both exit 0 with only the defaults.
@@ -415,8 +415,8 @@ run
 # ---- (7) the arm: switch exactly `on` AND the lock absent AND the selector answered cleanly -------------------------------
 # The `sw = on` conjunct is REDUNDANT with the stage-2 gate (mode=affected already implies it) and is kept on purpose: it is the
 # independent arming check, so a regression that deletes the stage-2 gate still cannot arm a skip for another switch value.
-# Removing it ALONE is an equivalent mutant; the MASKED PAIR (gate bypassed AND this conjunct removed) is killed by the active=false
-# rows of row_switch_gate_unlocked in scripts/ci-pr-selection.test.sh.
+# Removing it ALONE is an equivalent mutant and no test isolates it (a masked-pair mutant was dropped: it was killed by its gate-bypass half).
+# Treat it as defence in depth, not as a separately protected control.
 if [ "$mode" = affected ] && [ "$would_skip" != none ] && [ "$sw" = on ] && [ "$locked" = false ]; then  # GUARD:G2-13-ARM
   active=true
   skip_legs="$would_skip"  # GUARD:G2-13-SKIP-ONLY-WHEN-ACTIVE

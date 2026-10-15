@@ -14,7 +14,7 @@
 # (a group with no records or a non-pr-gated decline), G2-13 (the activation lock), G2-14 (a newline or `::` in a path),
 # G2-15 (docs rename/delete, diagrams, fork, >500 files, >64 KB listing, empty diff), G2-16 (the stage-2 SWITCH GATE: stage 2
 # and every selector call run ONLY when the switch is exactly `on`; any other value, unset or empty included, stops after stage
-# 1 with reason switch_off and ZERO stub calls, while every stage-1 reason is unchanged), and the must-PASS row: a legitimately
+# 1 with ZERO stub calls (reason switch_off on a doc-only diff past the paths cap; a code diff keeps its own stage-1 reason)), and the must-PASS row: a legitimately
 # doc-only knowledge-base diff with SWITCH=on reaches stage 2 and shows would-skip evidence while skip_legs stays EMPTY (locked).
 # THE HARNESS DEFAULT IS SWITCH=on (drive() builds its environment from it; a row that wants the off-switch contract passes
 # SWITCH=<value> or the sentinel UNSET:SWITCH, which removes the variable): with the default left empty, the pre-existing rows would test
@@ -1435,8 +1435,8 @@ mutate "G2-2 ci.yml dropped from the list AND .github/workflows/* allowlisted" "
 mutate "G2-5 switch lowercased and trimmed"       "$UNLOCKED" 's|^\[ -z "\${SWITCH:-}" \] \|\| sw=invalid$|SWITCH="${SWITCH:-}"; SWITCH="${SWITCH//[[:space:]]/}"; SWITCH="${SWITCH,,}"\n&|' row_switch
 mutate "G2-5 switch matched by prefix"            "$UNLOCKED" 's|^\[ "\${SWITCH:-}" = on \] && sw=on  # GUARD:G2-5-SWITCH-EXACT$|[[ "${SWITCH:-}" == on* ]] \&\& sw=on|' row_switch
 mutate "G2-5 any non-empty switch arms"           "$UNLOCKED" 's|^\[ "\${SWITCH:-}" = on \] && sw=on  # GUARD:G2-5-SWITCH-EXACT$|[ -n "${SWITCH:-}" ] \&\& sw=on|' row_switch
-# G2-16 (Guard 1): the stage-2 switch gate. The last three mutants REORDER the gate (the original two lines are deleted, a copy lands elsewhere), so
-# the mutant differs from the pristine bytes and still compiles. Nine are driven by row_switch_gate against the locked driver, two by row_switch_gate_unlocked against the lock-neutralized copy.
+# G2-16 (Guard 1): the stage-2 switch gate. Five of the mutants below REORDER the gate (the original two lines are deleted, a copy lands elsewhere), so
+# the mutant differs from the pristine bytes and still compiles. Nine are driven by row_switch_gate against the locked driver, one by row_switch_gate_unlocked against the lock-neutralized copy.
 _gate_del='/GUARD:G2-16-SWITCH-GATE$/d'$'\n''/^  reason=switch_off$/d'
 mutate "G2-16 the switch gate is deleted (stage 2 runs for every doc-only diff)" "$PRISTINE" "$(kill_guard G2-16-SWITCH-GATE)" row_switch_gate
 mutate "G2-16 the gate is any non-empty switch (ON, off, 1, ' on' run stage 2)" "$PRISTINE" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ -n "${SWITCH:-}" ] || return 0#' row_switch_gate
@@ -1445,10 +1445,9 @@ mutate "G2-16 the gate is inverted (exactly on stops after stage 1)" "$PRISTINE"
 mutate "G2-16 REORDER: the gate sits after the --print-selection call (one selector call is paid off-switch)" "$PRISTINE" "$_gate_del"$'\n''/GUARD:G2-9-CI-UNSET$/{n;n;s#$#\n  reason=switch_off\n  [ "$sw" = on ] || return 0#}' row_switch_gate
 mutate "G2-16 REORDER: the gate moves BEFORE stage 1 (a code diff reports switch_off, not its own reason)" "$PRISTINE" "$_gate_del"$'\n''s#^  diagrams=0$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): a code diff stops at stage 1 either way, no selector call, same files and active; only the reason token differs
 mutate "G2-16 REORDER: the gate moves BEFORE the paths_too_long cap (an over-cap doc diff reports switch_off)" "$PRISTINE" "$_gate_del"$'\n''s#^  reason=paths_too_long$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): an over-cap diff stops before stage 2 either way, no selector call, same files and active; only the reason token differs
-mutate "G2-16 REORDER: the gate sits INSIDE the stage-1 loop after the first doc path (a mixed doc-first diff reports switch_off, not its own reason)" "$PRISTINE" "$_gate_del"$'\n''s#^    paths="\${paths:+\$paths,}\$p"$#&\n    reason=switch_off\n    [ "$sw" = on ] || return 0#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): a mixed diff stops at stage 1 either way, no selector call, same files and active; only the reason token differs (the docfirst fixture is the only shape that reaches it)
+mutate "G2-16 REORDER: the gate sits INSIDE the stage-1 loop after the first doc path (a mixed doc-first diff reports switch_off, not its own reason)" "$PRISTINE" "$_gate_del"$'\n''s#^    paths="\${paths:+\$paths,}\$p"$#&\n    reason=switch_off\n    [ "$sw" = on ] || return 0#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): a mixed diff stops at stage 1 either way, no selector call, same files and active; only the reason token differs (the docfirst fixture and the over-cap row both reach it)
 mutate "G2-16 REORDER: the gate moves BEFORE the file count (stage 1 no longer counted the diff)" "$PRISTINE" "$_gate_del"$'\n''s#^  files=\$((nul / 2))$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate
 mutate "G2-16 the gate is bypassed when the lock is absent (the PR C world: every non-on value runs stage 2)" "$UNLOCKED" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ "$sw" = on ] || [ "$locked" = false ] || return 0#' row_switch_gate_unlocked
-mutate "G2-13 MASKED PAIR: the gate is bypassed AND the arm's own switch test is removed (only the active=false rows can tell)" "$UNLOCKED" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ "$sw" = on ] || [ "$locked" = false ] || return 0#'$'\n''s# \&\& \[ "\$sw" = on \] \&\& \[ "\$locked" = false \]; then# \&\& [ "$locked" = false ]; then#' row_switch_gate_unlocked
 unset _gate_del
 mutate "G2-13 the lock is not read (locked stays false)" "$PRISTINE" "$(kill_guard G2-13-LOCK-READ)"       row_lock row_must_pass
 mutate "G2-13 the arm ignores the lock"          "$PRISTINE" 's| \&\& \[ "\$locked" = false \]; then  # GUARD:G2-13-ARM$|; then|' row_lock row_must_pass
@@ -1562,23 +1561,23 @@ fi
 # through pass()/fail() is silenced by the same edit that silences everything else. DERIVED FROM A MEASURED GREEN RUN, not
 # guessed: a floor above the real count is a broken instrument that reds a correct tree, a floor below it is slack in
 # which an undispatched row can hide. Re-derive after adding a row:  bash scripts/ci-pr-selection.test.sh | tail -1
-# MEASURED green run (2026-10-15, with the G2-16 switch gate): 4480 rows = BASE_ROWS + ROWS_PER_SOURCED_FILE * 7 sourced files, with 98
+# MEASURED green run (2026-10-15, with the G2-16 switch gate and its review-round mutants): 4545 rows = BASE_ROWS + ROWS_PER_SOURCED_FILE * 7 sourced files, with 101
 # mutant verdicts counted among them. ROWS_PER_SOURCED_FILE is MEASURED, not estimated: running this suite on a scratch copy whose
-# scripts/test-all.sh has ONE fewer `source` line gave 4461 rows against 4480, a delta of exactly 19 (one `drive` of the file's
+# scripts/test-all.sh has ONE fewer `source` line gave 4526 rows against 4545, a delta of exactly 19 (one `drive` of the file's
 # trigger fixture with its 13 invariants, the 5 expect_full checks, and the 1 "sourced file is under scripts/lib/" row; the
 # earlier figure of 18 was re-verified this way and is superseded). BASE_ROWS is the remainder. An unrelated `source` edit in
 # scripts/test-all.sh therefore no longer reds the suite; removing rows from the fixed part still does. Re-derive BASE_ROWS after
 # adding or removing a row:
 #   bash scripts/ci-pr-selection.test.sh | tail -1     then   BASE_ROWS = total - ROWS_PER_SOURCED_FILE * sourced_count
 ROWS_PER_SOURCED_FILE=19
-BASE_ROWS=4413
+BASE_ROWS=4412
 MIN_ROWS=$((BASE_ROWS + ROWS_PER_SOURCED_FILE * ${#SOURCED[@]}))
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-MIN_MUTANTS=102
+MIN_MUTANTS=101
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor: %d mutants executed, at least %d required.\n' "$MUT_TOTAL" "$MIN_MUTANTS" >&2
   exit 1

@@ -96,6 +96,8 @@ Cut List (mechanism, property it would buy, what already covers it):
 
 ## Measured Yield (Phase 0.6c)
 
+> **Review-round note (2026-10-15):** the figures below are the PLAN-TIME sample (the first 14 jobs after the PR B merge). The review re-derived them over 44 runs (1.29 billed minutes per executed job, 10 of 34 annotated runs at stage 2, about 300 PR runs per day); the ADR-276 amendment carries the current figures and their method.
+
 Commands that produced the numbers (run 2026-10-15 against the last 40 `ci.yml` pull_request runs):
 `gh run list --workflow ci.yml --event pull_request --limit 60 --json databaseId,createdAt,conclusion,headBranch`, then per run
 `gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs --jq '.jobs[]|select(.name=="pr-selection")|[.conclusion,.started_at,.completed_at]'` and
