@@ -1,0 +1,67 @@
+name: check-inngest-bootstrap-build
+
+# #8781 — the pre-merge CANDIDATE build lane (option a). #8747 made the publish workflow
+# refuse any vinngest-v* tag minted off main, which removed the only pre-merge image build
+# path: a broken baked carrier now reaches merge green and fails FIRST at tag-publish time.
+# This lane runs `docker build` — never push — on PRs that touch the baked carriers or the
+# pins, so the build defect is a PR check failure, not a release-day surprise.
+#
+# DELIBERATELY NOT inside build-inngest-bootstrap-image.yml: that file's header invariant is
+# "Triggered ONLY by workflow_dispatch" and its entire security commentary (concurrency,
+# environment gates, id-token) assumes it. A pull_request trigger there would fork the
+# security contract the comments document.
+#
+# NO PUBLICATION IS POSSIBLE HERE: permissions are contents:read, there is no login step,
+# no packages:write, no id-token, no environment. The script tags a local-only name; the
+# parity guard (test-check-inngest-bootstrap-build.sh) pins every forbidden token absent.
+
+on:
+  pull_request:
+    paths:
+      # Every carrier the Dockerfile COPYs (the cp staging list in
+      # check-inngest-bootstrap-build.sh) + the two pin files it greps + this lane's own
+      # definition. Enumerated, not globbed: `inngest*` matched ~70 files (every
+      # inngest*.test.sh, inngest-host.tf, docs) and paid a cold docker build for
+      # zero signal. Kept in parity with the carrier set by the guard suite — a
+      # carrier added to the build without a covering path reds it.
+      - 'apps/web-platform/infra/inngest-bootstrap.sh'
+      - 'apps/web-platform/infra/vector.toml'
+      - 'apps/web-platform/infra/inngest-redis.conf'
+      - 'apps/web-platform/infra/inngest-redis.service'
+      - 'apps/web-platform/infra/inngest-redis-bootstrap.sh'
+      - 'apps/web-platform/infra/inngest-cutover-flip.sh'
+      - 'apps/web-platform/infra/inngest-server-flip-guard.sh'
+      - 'apps/web-platform/infra/cat-inngest-cutover-state.sh'
+      - 'apps/web-platform/infra/inngest-cutover-flip.service'
+      - 'apps/web-platform/infra/inngest-cutover-flip.timer'
+      - 'apps/web-platform/infra/inngest-luks-cutover.sh'
+      - 'apps/web-platform/infra/inngest-luks-cutover.service'
+      - 'apps/web-platform/infra/inngest-luks-cutover.timer'
+      - 'apps/web-platform/infra/inngest.tf'
+      - 'apps/web-platform/infra/vector.tf'
+      - '.github/workflows/check-inngest-bootstrap-build.yml'
+      - '.github/scripts/check-inngest-bootstrap-build.sh'
+      - '.github/scripts/test/test-check-inngest-bootstrap-build.sh'
+
+permissions:
+  contents: read
+
+# Superseded head SHAs cancel per ref (the rls-authz-fuzz shape): the build is a
+# few minutes of hosted-runner time and a stale-SHA green is worth nothing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    # Above a cold `docker build` + the release-tarball download, so a hung leg
+    # fails as a JOB rather than burning the runner.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # The script only runs `git rev-parse`; nothing authenticates through git.
+          persist-credentials: false
+      - name: Candidate build (no push)
+        run: bash .github/scripts/check-inngest-bootstrap-build.sh

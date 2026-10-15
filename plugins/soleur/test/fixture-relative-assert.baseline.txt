@@ -134,6 +134,14 @@
 #                        POSITIVE: `[[ "$NEWEST_BAD" > "$NEWEST_DONE" ]]` is a LEXICOGRAPHIC
 #                        comparison inside `[[ ]]`, not a redirect. Same reasoning as above.
 #
+#   2026-10-13   #9818 row moves (source edits, not detector). e09e4e614d: ci-draft-light-soak-9728.test.sh
+#                  20->22 (+2) and trusted-verdict.test.sh 18->22 (+4), the fixture writes the probe-trust change
+#                  added to both suites. Then 22->18 in each, in this series: the writes run under the canonical
+#                  `assert_fixture_dir` (the tracker-comment staging block in the S3 suite, the helpers and the
+#                  new rows in the lib suite), as the S2 suite already did with zero rows; the guarded S3 block
+#                  also covers two pre-existing staging writes, hence 22->18 and not 22->20. The lib suite is
+#                  18 -> 18 net, the S3 suite 20 -> 18 net.
+#
 # A future change that SHRINKS this file deserves the scrutiny a growth would get. From the count
 # alone, a better resolver and a detector that stopped looking are indistinguishable, and across
 # three review rounds every defect found in this rule has been in the shrinking direction.
@@ -286,7 +294,7 @@
 2	plugins/soleur/scripts/emit-decision.sh
 1	plugins/soleur/scripts/ext-filter-divergence.sh
 9	plugins/soleur/scripts/lib/operator-script.sh
-4	plugins/soleur/scripts/lib/session-state.sh
+8	plugins/soleur/scripts/lib/session-state.sh
 3	plugins/soleur/scripts/lib/tmp-classify.sh
 1	plugins/soleur/scripts/pipeline-tally.sh
 5	plugins/soleur/scripts/pipeline-tally.test.sh
@@ -298,11 +306,12 @@
 1	plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
 1	plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh
 1	plugins/soleur/skills/code-to-prd/scripts/code-to-prd.sh
-2	plugins/soleur/skills/community/scripts/bsky-setup.sh
+4	plugins/soleur/skills/community/scripts/bsky-setup.sh
 4	plugins/soleur/skills/community/scripts/discord-setup.sh
 1	plugins/soleur/skills/community/scripts/github-community.sh
-2	plugins/soleur/skills/community/scripts/linkedin-setup.sh
-2	plugins/soleur/skills/community/scripts/x-setup.sh
+4	plugins/soleur/skills/community/scripts/linkedin-setup.sh
+4	plugins/soleur/skills/community/scripts/x-setup.sh
+3	plugins/soleur/skills/community/test/community-argv.test.sh
 2	plugins/soleur/skills/community/test/github-community.test.sh
 7	plugins/soleur/skills/compound/scripts/token-efficiency-report.sh
 23	plugins/soleur/skills/compound/test/phase-16.test.sh
@@ -352,6 +361,7 @@
 2	scripts/actions-queue-health.test.sh
 1	scripts/audit-bot-codeql-coverage.sh
 1	scripts/audit-dev-scheduled-shapes.sh
+1	scripts/battery-tag-authorship.test.sh
 1	scripts/capture-web-2-host-key.sh
 1	scripts/check-backstop-revision.sh
 6	scripts/check-backstop-revision.test.sh
@@ -359,6 +369,7 @@
 1	scripts/check-cloudflare-token-drift.test.sh
 8	scripts/ci-draft-push-census.sh
 5	scripts/ci-draft-push-census.test.sh
+8	scripts/ci-pr-selection.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh
@@ -371,7 +382,7 @@
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
-20	scripts/followthroughs/ci-draft-light-soak-9728.test.sh
+18	scripts/followthroughs/ci-draft-light-soak-9728.test.sh
 2	scripts/followthroughs/ci-leg-balance-9232.test.sh
 2	scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
 1	scripts/followthroughs/cwv-field-rum-9178.sh

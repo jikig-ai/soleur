@@ -1238,11 +1238,15 @@ AFFECTED_SCRIPTS_LEARNING_RETRIEVAL_BENCH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
-# scripts/ci-push-dedupe (#9512, ADR-276 S2) — the suite extracts the push-dedupe proof step from ci.yml and executes it,
-# parses the eight gated conditions and pins the test aggregator; the only repo file it reads is the workflow. Declared
-# from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that drives its floor).
+# scripts/ci-push-dedupe (#9512, ADR-276 S2; S4 PR B) — the suite extracts the push-dedupe proof step from ci.yml and executes it,
+# parses the eight gated conditions and pins the test aggregator. It reads two further repo files: the release workflow (it EXTRACTS
+# and EXECUTES that workflow's declared-path budget function against ci.yml) and the pr-selection driver (the leg-parity row reads its
+# gateable-leg list and its final-block regex). Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the
+# meta-guard that drives its floor).
 AFFECTED_SCRIPTS_CI_PUSH_DEDUPE_PATHS=(
   ".github/workflows/ci.yml"
+  ".github/workflows/web-platform-release.yml"
+  "scripts/ci-pr-selection.sh"
   "scripts/ci-push-dedupe.test.sh"
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1261,6 +1265,19 @@ AFFECTED_SCRIPTS_CI_DRAFT_LIGHT_PATHS=(
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/required-checks.txt"
+)
+
+# scripts/ci-pr-selection (#9729, ADR-276 S4) — the suite EXECUTES the pr-selection driver against throwaway git fixtures and a stub
+# runner, derives the trigger list from what scripts/test-all.sh sources and the --pr-gated decline labels from its text, and reads
+# the git-fixture env library. Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that
+# drives its floor).
+AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/ci-pr-selection.sh"
+  "scripts/ci-pr-selection.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
 )
 
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
@@ -1485,6 +1502,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_ZOT_MIRROR_RETRY_TEST_SH_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/zot-mirror-diagnosis.test.sh"
+)
+
+# plugins/soleur/test/inngest-config-bundle-mirror.test.sh — executes the mirror step body extracted from the bundle
+# workflow, so a workflow-only diff must select it; derived edges cannot reach a YAML subject.
+AFFECTED_PLUGINS_SOLEUR_TEST_INNGEST_CONFIG_BUNDLE_MIRROR_TEST_SH_PATHS=(
+  ".github/workflows/build-inngest-config-bundle.yml"
+  "plugins/soleur/test/inngest-config-bundle-mirror.test.sh"
+  "scripts/lib/test-affected-paths.sh"
 )
 
 # plugins/soleur/test/unkept-promise-hook.test.sh — derived edges could not reach its subject; declared from the

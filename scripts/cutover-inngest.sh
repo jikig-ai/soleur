@@ -134,6 +134,22 @@ _sig_curl() {
 INNGEST_HOST="${INNGEST_HOST:-soleur-inngest}"
 INNGEST_HOST_NAME="${INNGEST_HOST_NAME:-soleur-inngest-prd}"
 
+# #6940 item 3 — the optional page-size knob, normalized ONCE here and spliced into every
+# doublefire-probe URL below as ${DF_PAGE_QS}. CUTOVER_PAGE_SIZE comes from the workflow's
+# `page_size` dispatch input; empty/absent = the probe's own default (100). A non-integer
+# or out-of-range value is DROPPED with a named ::error:: — never spliced — because a
+# malformed query param would read as a webhook/hook failure instead of the caller bug it
+# is. The on-host probe re-validates the same bound (1..1000) before it reaches
+# --argjson first (fail-closed FATAL) — this side is advisory, that side is the gate.
+DF_PAGE_QS=""
+if [[ -n "${CUTOVER_PAGE_SIZE:-}" ]]; then
+  if [[ "$CUTOVER_PAGE_SIZE" =~ ^[0-9]+$ ]] && (( 10#$CUTOVER_PAGE_SIZE >= 1 && 10#$CUTOVER_PAGE_SIZE <= 1000 )); then
+    DF_PAGE_QS="&page_size=${CUTOVER_PAGE_SIZE}"
+  else
+    echo "::error::CUTOVER_PAGE_SIZE='${CUTOVER_PAGE_SIZE}' is not an integer in 1..1000 — the page_size parameter is DROPPED (the probe's default page size applies)"
+  fi
+fi
+
 # THE SHARED flip-FSM READER (#7674). One reader, two callers: confirm_flip_state (below) and
 # _flip_liveness_count (G3.7's H signal), and — since #8054 — op=execute 2.0's two reads.
 # Extracted rather than duplicated so the transport, credential config and query shape cannot
@@ -1233,8 +1249,9 @@ missed_tick_report() {
   local RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-server.md § Bounded-outage note"
 
   if [[ "$1" != "true" ]]; then
-    # OFF (the default): the window is echoed but never parsed, so a malformed CUTOVER_WINDOW_*
-    # cannot redden a run whose verdict above was clean.
+    # OFF (the default): the window is echoed but never parsed, so a malformed
+    # CUTOVER_WINDOW_FROM or CUTOVER_WINDOW_UNTIL cannot redden a run whose
+    # verdict above was clean.
     echo "::notice::missed-tick candidates NOT EMITTED (default, #6939). A per-bucket list cannot tell a tick that was due from one that was never due, and re-firing a never-due tick double-fires that cron. Gap window as configured: [$SHOW_FROM, $SHOW_UNTIL]. A tick skipped in the gap is the accepted ADR-100 residual. Recover one ONLY via $RUNBOOK. Unverified per-bucket candidates: re-dispatch op=verify with missed_tick_candidates=true. Proper fix: #6940."
     return 0
   fi
@@ -1576,7 +1593,7 @@ case "$OP" in
     fi
     DF_FNIDS="${CUTOVER_DOUBLEFIRE_FUNCTION_IDS:-}"
     # OPEN-TOPPED (no `until`) — same invariant as the op=verify arm.
-    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
+    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}${DF_PAGE_QS}"
     echo "::notice::doublefire-probe: scanning from=${DF_FROM} anchor_source=${DF_ANCHOR_SOURCE} function_ids=[${DF_FNIDS:-<all>}]"
     rm -f /tmp/doublefire-probe-body
     CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
@@ -2089,8 +2106,8 @@ case "$OP" in
       # row (http_code=000, server_active!=active, registry_fns=__UNREADABLE__, cutover_flag pre-arm,
       # current boot) plus the flip FSM's ~1/min heartbeat on the SAME boot attesting the flag is
       # still pre-arm within 15 min. Silence is not darkness: every state in which darkness cannot
-      # be established refuses. The gate is tests/scripts/lib/inngest-host-dark-gate.sh's second
-      # entry point; its E-table names every lib token below and the remedy each one carries. One
+      # be established refuses. The gate is the one entry point of tests/scripts/lib/inngest-host-dark-gate.sh;
+      # its E-table names every lib token below and the remedy each one carries. One
       # refusal is this script's own and precedes the gate: `webhook_path` (below).
       # THE NON-200 MUST BE THE DEDICATED HOST'S FETCH FAILURE, NOT THE WEBHOOK PATH'S. The web-host
       # probe (inngest-registry-probe.sh) exits 1 — HTTP 500 through the hook's error passthrough —
@@ -2324,6 +2341,13 @@ case "$OP" in
     # cover the web host.
     GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     QUIESCE_PROBES="${CUTOVER_QUIESCE_PROBES:-3}"
+    # #6940 item 2 — now a mapped repo var (was deferred). A malformed count must not reach
+    # `seq`: an empty loop would read as "UNREADABLE" — a real fail-closed outcome but a
+    # misattributed cause. Fail LOUD (named ::error::) and fall back to the default.
+    if ! [[ "$QUIESCE_PROBES" =~ ^[0-9]+$ ]] || (( QUIESCE_PROBES < 1 || QUIESCE_PROBES > 20 )); then
+      echo "::error::CUTOVER_QUIESCE_PROBES='${QUIESCE_PROBES}' is not an integer in 1..20 — using the default 3"
+      QUIESCE_PROBES=3
+    fi
     STILL_RUNNING=0
     UNKNOWN_COUNT=0
     serving=false
@@ -2656,7 +2680,7 @@ case "$OP" in
       clear)
         echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal. Note the two signals cover DIFFERENT windows: H proves the host is audible NOW ($FLIP_LIVENESS_SINCE), which does not prove it was audible across the whole $FLUSH_LATCH_SINCE window L was read over — so an outage inside L's window could still have hidden a flush row." ;;
       latched)
-        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch records can never be deleted, but a SECOND flush can be deliberately authorized: op=reflush (#7777) appends a cleared_at authorization record to the latch ledger — the prior flushed_at is NOT erased — and the on-host FSM then re-enters the flush path and re-engages the latch. Use op=reflush when the operator intent is 'this host may be flushed again'; use op=luks-cutover for the ADDITIVE path that preserves the store, or the inngest-volume-recut apply target when the whole volume goes. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). CORRECTED #6894: `apply_target=inngest-volume-recut` DOES exist (it shipped in #7695) and removes the latch file WITH the volume — but it is refused while the store is populated, which is exactly the case a reflush exists to empty. If a recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
+        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch records can never be deleted, but a SECOND flush can be deliberately authorized: op=reflush (#7777) appends a cleared_at authorization record to the latch ledger — the prior flushed_at is NOT erased — and the on-host FSM then re-enters the flush path and re-engages the latch. Use op=reflush when the operator intent is 'this host may be flushed again'; use op=luks-cutover for the ADDITIVE path that preserves the store (no apply_target recuts the volume: inngest-volume-recut was retired by #8285). CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). If a recut has ALREADY happened (the volume was recreated outside this repo's dispatches), set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
       silent)
         echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-cutover-flip, stamped and ingested after its Hetzner created time; an earlier server with the same name does not count; the generation ::notice:: above gives the server's age, and any ::warning:: under it says whether it is young, clock-skewed or shipping malformed rows) within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND SYSLOG_IDENTIFIER=inngest-cutover-flip (the FSM's own emitter tag, #8846), so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) or that the shipper renamed or dropped the SYSLOG_IDENTIFIER field — check both before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
       unreadable)
@@ -3001,7 +3025,7 @@ case "$OP" in
     # double-fire) lies AFTER CUTOVER_WINDOW_UNTIL, as does every op=rollback-initiated
     # interval. Bounding the top reads like a symmetric tidy-up and would cut out the
     # highest-risk region. Do not "tidy" it.
-    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
+    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}${DF_PAGE_QS}"
     echo "::notice::2.6 doublefire-probe: scanning from=${DF_FROM} anchor_source=${DF_ANCHOR_SOURCE} function_ids=[${DF_FNIDS:-<all>}]"
     # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the doublefire transport curl.
     # The 120s outer budget > the probe's 90s in-script deadline + 8s per-page floor (SUM bound).
@@ -3130,7 +3154,7 @@ case "$OP" in
           DISC_LOOKBACK="${CUTOVER_DISCOVERY_LOOKBACK_S:-15897600}"
           if [[ "$DISC_LOOKBACK" =~ ^[1-9][0-9]*$ ]]; then
             DISC_FROM=$(date -u -d "@$(( $(date -u +%s) - DISC_LOOKBACK ))" +%Y-%m-%dT%H:%M:%SZ)
-            DISC_URL="$BASE/inngest-doublefire-probe?from=${DISC_FROM}&function_ids=${ZERO_RUN_IDS}"
+            DISC_URL="$BASE/inngest-doublefire-probe?from=${DISC_FROM}&function_ids=${ZERO_RUN_IDS}${DF_PAGE_QS}"
             echo "::notice::2.6 zero-run discovery: re-probing registry cron function(s) with zero runs in the verify window over a ${DISC_LOOKBACK}s (~2x max cron period) lookback — function_ids=[$ZERO_RUN_IDS]"
             rm -f /tmp/verify-zero-run
             # Credential headers ride curl's stdin config channel (--config -), never argv —
@@ -3434,8 +3458,9 @@ case "$OP" in
     #     there is no dispatchable path forward. G1 accepts `done` ONLY, and `op=arm` is refused by
     #     its own G3.7 whenever the latch that drove the FSM to `aborted` is still recorded. That
     #     is pre-existing and correct — the latch is what stops a second FLUSHALL — but it means
-    #     recovery from `aborted` is a /mnt/data recut via the inngest-host-replace window, not a
-    #     dispatch. #7462 did not change it; it made the refusal happen before the prod writes.
+    #     recovery from `aborted` is not a dispatch of this op: no apply_target recuts /mnt/data
+    #     (inngest-volume-recut was retired by #8285) and the latch yields only to the authorized
+    #     flush op=reflush (#7777). #7462 did not change it; it made the refusal happen before the prod writes.
     if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
       echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing the post-flush re-entry write."; exit 1
     fi

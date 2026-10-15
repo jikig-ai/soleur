@@ -237,6 +237,14 @@ on:
       # (#9391) The hosts-file GHCR deny lost alert's drift guard resolves the runbook anchor in
       # its incident link against this file; a docs-only heading rename must run the guard.
       - "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"
+      # (#4699) cloud-init-inngest-bootstrap.test.sh's AC6d block asserts the scheduled
+      # published-digest reconciler's wiring — the workflow is dispatched and drives the
+      # script, the checkout carries full history + tags, the GHCR login is present, and
+      # the script keeps the all-tags selector. Neither file is under apps/*/infra/**, so a
+      # PR editing only one of them would skip the suite whose job is to turn that edit
+      # red — the same defect class as the #7278/#8449 entries above.
+      - ".github/workflows/scheduled-vinngest-digest-freshness.yml"
+      - ".github/scripts/vinngest-digest-freshness.sh"
   workflow_dispatch:
 
 permissions:

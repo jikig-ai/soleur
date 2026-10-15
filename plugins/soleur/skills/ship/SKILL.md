@@ -1018,25 +1018,24 @@ For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name
 - `apps/web-platform/infra/hooks.json.tmpl`
 - `apps/web-platform/infra/deploy-inngest-bootstrap.sudoers`
 - `apps/web-platform/infra/infra-config-apply.sh`
-- `apps/web-platform/infra/infra-config-install.sh` (#4829 — delivered by the SSH bridge, kept in the hash for drift-guard sync)
+- `apps/web-platform/infra/infra-config-install.sh` (#4829)
 - `apps/web-platform/infra/push-infra-config.sh`
 - `apps/web-platform/infra/cat-infra-config-state.sh`
-- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492 — webhook-delivered cutover script; registered so a body-only edit re-deploys)
+- `apps/web-platform/infra/inngest-enumerate-reminders.sh` (#5492)
 - `apps/web-platform/infra/inngest-rearm-reminders.sh` (#5492)
 - `apps/web-platform/infra/inngest-wiped-volume-verify.sh` (#5492)
 - `apps/web-platform/infra/cat-inngest-verify-state.sh` (#5492)
-- `apps/web-platform/infra/inngest-inventory.sh` (#5509 — cutover full-state inventory op)
-- `apps/web-platform/infra/git-lock-chardevice-sweep.sh` (#5934 — durable char-device config.lock substrate sweep)
-- `apps/web-platform/infra/inngest-registry-probe.sh` (#6178 — web-host 2.0 empty-registry cutover pre-flight)
-- `apps/web-platform/infra/inngest-doublefire-probe.sh` (#6178 — web-host 2.6 exactly-once run-enumeration probe)
+- `apps/web-platform/infra/inngest-inventory.sh` (#5509)
+- `apps/web-platform/infra/git-lock-chardevice-sweep.sh` (#5934)
+- `apps/web-platform/infra/inngest-registry-probe.sh` (#6178)
+- `apps/web-platform/infra/inngest-doublefire-probe.sh` (#6178)
+- `apps/web-platform/infra/{inngest-redis-bootstrap,inngest-cutover-flip,inngest-server-flip-guard,cat-inngest-cutover-state,inngest-luks-cutover}.sh` (#6780 — the five dedicated-host carriers; ADR-135 refresh-set members)
 - `apps/web-platform/infra/soleur-doppler-token.tmpl` (#7095 — re-deliverable web-host Doppler credential; folded in as `local.webhook_doppler_token_env`, i.e. the RENDERED content, so a secret rotation alone changes the hash)
-- `apps/web-platform/infra/10-vector-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `vector.service` at the credential above)
-- `apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-heartbeat.service` at the credential above)
-- `apps/web-platform/infra/10-inngest-server-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-server.service` at the credential above; it runs `doppler run` UNCONDITIONALLY and is restarted on every co-located deploy)
+- `apps/web-platform/infra/10-{vector,inngest-heartbeat,inngest-server}-doppler-token.conf` (#7095 — systemd drop-ins re-pointing the generated units at the credential above)
 
 **Detection:**
 
-The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: a gate's regex, its documentation block, and its fixtures are one unit — changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
 
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
@@ -1059,13 +1058,18 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
   "apps/web-platform/infra/inngest-registry-probe.sh"
   "apps/web-platform/infra/inngest-doublefire-probe.sh"
+  "apps/web-platform/infra/inngest-redis-bootstrap.sh"
+  "apps/web-platform/infra/inngest-cutover-flip.sh"
+  "apps/web-platform/infra/inngest-server-flip-guard.sh"
+  "apps/web-platform/infra/cat-inngest-cutover-state.sh"
+  "apps/web-platform/infra/inngest-luks-cutover.sh"
   "apps/web-platform/infra/soleur-doppler-token.tmpl"
   "apps/web-platform/infra/10-vector-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-server-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-redis-doppler-token.conf"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|inngest-redis-bootstrap\.sh|inngest-cutover-flip\.sh|inngest-server-flip-guard\.sh|cat-inngest-cutover-state\.sh|inngest-luks-cutover\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -1078,7 +1082,7 @@ The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by 
 
 **Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any trigger file changes. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies the post-apply `files_written == files_total` invariant, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
 
-**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it installs `cloudflared`, opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token, and adds an `iptables -t nat OUTPUT REDIRECT` rule so terraform's Go SSH client transparently reaches sshd. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect (the CI path cannot self-apply `root_authorized_keys` — same firewall reason).
+**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect (the CI path cannot self-apply `root_authorized_keys` — same firewall reason).
 
 **In-session apply (operator-machine fallback, #4829).** When `soleur:ship` runs on the operator's own machine rather than CI — detect via `[[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]` AND `ssh-add -l` listing a key — the agent CAN apply the bridge in-session over the operator's direct SSH (their IP is in `admin_ips`, their ssh-agent key is in root's `authorized_keys`) instead of deferring to the CI auto-apply. This is the rare fallback (transient CI failure, or shipping a handler change you want live immediately); the CI auto-apply above is the default. Run:
 
@@ -1101,10 +1105,12 @@ WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terr
 CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
 CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
 HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
-curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
-  -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
-  -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
-  "https://deploy.$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)/hooks/infra-config-status" \
+# headers ride curl's stdin config, not argv
+APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)
+(LC_ALL=C; for n in HMAC CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE; do case "${!n}" in ''|*[!A-Za-z0-9._~+/=-]*) echo "$n unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1;; esac; done) || exit 1
+curl --disable --proto '=https' -m 30 -fsS --config - \
+  "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" \
+  < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET") \
   | jq -e '.exit_code == 0 and .files_failed == 0 and .files_written == .files_total'
 ```
 
@@ -2809,9 +2815,9 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
   - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
   - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script reads member-authored comments and branches on the LAST verdict — do **not** inline a one-liner here, copy [cpx22-invoice-reconcile-7431.sh](../../../../scripts/followthroughs/cpx22-invoice-reconcile-7431.sh), which is the reference implementation. A `grep -q '^RESULT: (PASS|FAIL)'` in this section's `… && exit 0 || exit 1` idiom **exits 0 on an explicit FAIL** and closes the tracker on the operator's own rejection; that inversion shipped here once and is why this bullet points at code instead of prose. The operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
 
-     **An author filter is mandatory, and it is [trusted-verdict.sh](../../../../scripts/lib/trusted-verdict.sh), never an inline `authorAssociation` select.** The repo is PUBLIC and a probe's exit code closes the tracker, so an unfiltered `.comments[].body` takes a verdict from anyone (#7448). `source` it, call `trusted_verdict_bodies <issue>`: bodies on rc 0, **rc 2 (TRANSIENT) when a comment or permission read fails**, so absence-of-evidence never reads as a pass.
+     **An author filter is mandatory, and it is [trusted-verdict.sh](../../../../scripts/lib/trusted-verdict.sh), never an inline `authorAssociation` select.** The repo is PUBLIC and a probe's exit code closes the tracker, so an unfiltered `.comments[].body` takes a verdict from anyone (#7448). `source` it, call `trusted_verdict_bodies <issue>` (`trusted_verdict_comments` for created times): output on rc 0, **rc 2 (TRANSIENT) when a read fails**, so absence-of-evidence never reads as a pass.
 
-     **Never re-inline `authorAssociation`:** it is computed against the *reading token's* visibility, so under `GITHUB_TOKEN` a member with PRIVATE membership reads as `CONTRIBUTOR` and their verdict is dropped **silently** (#6617 — two months of nightly FAIL on a recorded verdict). [varq-ban](../../../../scripts/lint-followthrough-varq-ban.sh) rule 4 obliges the lib whenever a probe reads comments AND branches on `RESULT:`. Mechanism, its blind spots and the `\b`/no-echo/hardcoded-tracker rules: [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md).
+     **Never re-inline `authorAssociation` / `author_association`:** it is computed against the *reading token's* visibility, so under `GITHUB_TOKEN` a member with PRIVATE membership reads as `CONTRIBUTOR` and their verdict is dropped **silently** (#6617, #9818). [varq-ban](../../../../scripts/lint-followthrough-varq-ban.sh) rule 5 bans either spelling; rule 4 obliges the lib for comment-read spellings and `RESULT:` / `S<n>-<WORD>` markers (COVERAGE paragraph lists the gaps). Mechanism: [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md).
   - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
   - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
 
@@ -2945,12 +2951,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Step 3:** Verify each schema-addition migration is live in production by querying the Supabase REST API:
 
-   ```bash
-   SUPABASE_URL=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)
-   SUPABASE_KEY=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain)
-   curl -s "$SUPABASE_URL/rest/v1/<table>?select=<new_column>&limit=1" \
-     -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY"
-   ```
+   Run the probe in [supabase-column-probe.md](./references/supabase-column-probe.md) (one Bash call).
 
 - If the query returns data (even `null` values): the column exists. Report "Migration verified: `<column>` exists in `<table>`."
 - If the query returns a 400/404 or `column not found` error: the migration was NOT applied. Report the failure and attempt to apply it using the Supabase CLI or Management API. Do NOT silently proceed — the deployed code expects the new schema.

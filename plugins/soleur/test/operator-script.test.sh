@@ -553,15 +553,15 @@ genv_check() {
   fi
   # --- row 4: a value with a line break would inject a second KEY= line --------
   out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD $'one\nEVIL=two')"; rc=$?
-  if [[ "$rc" -eq 0 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_BAD_ARG key=GOOD' <<<"$out"; then
-    echo "genv: upsert accepted a value containing a newline (rc=${rc})"; v=1
+  if [[ "$rc" -eq 0 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_BAD_ARG key=GOOD reason=value-contains-line-break' <<<"$out"; then
+    echo "genv: upsert accepted a value containing a newline, or refused it under another reason (rc=${rc}): ${out}"; v=1
   fi
   if grep -q '^EVIL=' "$envf"; then
     echo "genv: the newline value injected an EVIL= line"; v=1
   fi
   out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD $'one\rtwo')"; rc=$?
-  if [[ "$rc" -eq 0 ]]; then
-    echo "genv: upsert accepted a value containing a carriage return"; v=1
+  if [[ "$rc" -eq 0 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_BAD_ARG key=GOOD reason=value-contains-line-break' <<<"$out"; then
+    echo "genv: upsert accepted a value containing a carriage return, or refused it under another reason (rc=${rc}): ${out}"; v=1
   fi
 
   # --- row 5: an unreadable .env is ENV_READ_FAILED, not an empty file ---------
@@ -669,6 +669,160 @@ if mutate "genv-rF newline value accepted" "$SB/mut/genvF.sh" <<'PROG'
 s{  if \[\[ "\$value" == \*\$'\\n'\* \|\| "\$value" == \*\$'\\r'\* \]\]; then}{  if false; then}
 PROG
 then assert_red genv_check "genv-rF newline in value injects a second line" "$SB/mut/genvF.sh"; fi
+
+# =============================================================================
+# Guard 6b — control characters in an upsert VALUE (#10091)
+# =============================================================================
+#
+# Property. `soleur_op_env_upsert` writes `KEY=value` RAW, so a value must stay one
+# printable line: CR and LF keep their own reason, every other control character
+# (tab, ESC, DEL, the rest of C0) is refused with
+# `SOLEUR_BOOTSTRAP_BAD_ARG key=<K> reason=value-contains-control-char`, the file
+# is untouched, and the marker NEVER carries the value. The class is evaluated
+# under `local LC_ALL=C`, so the verdict is the same in every caller locale, and
+# U+0085 / U+2028 / U+2029 (UTF-8 multibyte, not line ends to any consumer of this
+# file that the rows below grep: the library and the operator-bootstrap template) are written, not refused. The sink is arbitrary operator credentials, so
+# `$ " ' space ! # ?` must still write. The allow-list the community setup
+# scripts use is a DIFFERENT sink's check and is not ported.
+#
+# Decision rule (consumer grep): if any consumer `source`s a file this library
+# writes, the value must be written in a sourceable-safe quoted form. The last
+# rows pin the measured result: no consumer sources it, so the raw form stays.
+
+gctl_val() { # <class> -> GCTL_VAL
+  case "$1" in
+    tab)  GCTL_VAL=$'ab\tcd' ;;
+    esc)  GCTL_VAL=$'ab\x1b[31mcd' ;;
+    del)  GCTL_VAL=$'ab\x7fcd' ;;
+    bell) GCTL_VAL=$'ab\x07cd' ;;
+    bs)   GCTL_VAL=$'ab\x08cd' ;;
+    ff)   GCTL_VAL=$'ab\x0ccd' ;;
+    vt)   GCTL_VAL=$'ab\x0bcd' ;;
+    us)   GCTL_VAL=$'ab\x1fcd' ;;
+    soh) GCTL_VAL=$'ab\x01cd' ;;
+    *) printf 'gctl: unknown class %s\n' "$1" >&2; return 2 ;;
+  esac
+}
+GCTL_CLASSES=(tab esc del bell bs ff vt us soh)
+
+gctl_check() {
+  # gctl_check <lib>: prints one line per violation; rc 1 when any.
+  local lib="$1" v=0 run="$SB/gctlrun" out rc envf ledger cls loc c
+  rm -rf "$run"; mkdir -p "$run"
+  ledger="$run/ledger.jsonl"
+  # --- refusal per class, under the suite's C locale AND a UTF-8 caller ---------
+  for loc in C C.UTF-8; do
+    for cls in "${GCTL_CLASSES[@]}"; do
+      gctl_val "$cls"
+      envf="$run/${cls}.${loc}.env"; printf 'KEEP=1\nGOOD=old\n' > "$envf"
+      out="$(LC_ALL=$loc genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD "${SENTINEL}${GCTL_VAL}")"; rc=$?
+      if [[ "$rc" -eq 0 ]]; then echo "gctl: [${loc}] a '${cls}' value was accepted"; v=1; fi
+      if [[ "$out" != 'SOLEUR_BOOTSTRAP_BAD_ARG key=GOOD reason=value-contains-control-char' ]]; then
+        echo "gctl: [${loc}] the '${cls}' refusal output was not exactly the control-char marker: $(printf '%s' "$out" | head -c 200 | tr '\n' ' ')"; v=1
+      fi
+      if [[ "$out" == *"$SENTINEL"* ]]; then echo "gctl: [${loc}] the '${cls}' marker carried the value"; v=1; fi
+      if [[ "$(cat "$envf")" != $'KEEP=1\nGOOD=old' ]]; then echo "gctl: [${loc}] a refused '${cls}' value changed the file"; v=1; fi
+    done
+  done
+  # --- CR and LF keep their own reason token --------------------------------------
+  envf="$run/lf.env"; printf 'KEEP=1\n' > "$envf"
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD $'a\nb')"; rc=$?
+  if [[ "$rc" -eq 0 || "$out" != 'SOLEUR_BOOTSTRAP_BAD_ARG key=GOOD reason=value-contains-line-break' ]]; then
+    echo "gctl: an LF value did not keep reason=value-contains-line-break (rc=${rc}): ${out}"; v=1
+  fi
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD $'a\rb')"; rc=$?
+  if [[ "$rc" -eq 0 || "$out" != 'SOLEUR_BOOTSTRAP_BAD_ARG key=GOOD reason=value-contains-line-break' ]]; then
+    echo "gctl: a CR value did not keep reason=value-contains-line-break (rc=${rc}): ${out}"; v=1
+  fi
+  # --- must-PASS: the characters a real credential holds still write, byte for byte ---
+  for loc in C C.UTF-8; do
+    for c in '$' '"' "'" ' ' '!' '#' '?' ';' '`' '\' '*' '&' '|' '(' '<' '~' '='; do
+      envf="$run/ok.env"; printf 'KEEP=1\nGOOD=old\n' > "$envf"
+      out="$(LC_ALL=$loc genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD "pa${c}ss${c}w0rd")"; rc=$?
+      if [[ "$rc" -ne 0 || "$out" == *SOLEUR_BOOTSTRAP_BAD_ARG* ]]; then echo "gctl: [${loc}] a value holding '${c}' was refused (rc=${rc}): ${out}"; v=1; fi
+      if [[ "$(cat "$envf")" != "KEEP=1"$'\n'"GOOD=pa${c}ss${c}w0rd" ]]; then echo "gctl: [${loc}] a value holding '${c}' was not written byte for byte"; v=1; fi
+    done
+    envf="$run/ok2.env"; printf 'KEEP=1\n' > "$envf"
+    out="$(LC_ALL=$loc genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD 'p@$$ "w0rd" it'"'"'s #1 ? !')"; rc=$?
+    if [[ "$rc" -ne 0 ]] || ! grep -qxF 'GOOD=p@$$ "w0rd" it'"'"'s #1 ? !' "$envf"; then echo "gctl: [${loc}] the combined punctuation value did not write (rc=${rc}): ${out}"; v=1; fi
+    # U+0085, U+2028, U+2029 as UTF-8 bytes, and a high byte that is not valid UTF-8: not control characters here
+    for c in $'\xc2\x85' $'\xe2\x80\xa8' $'\xe2\x80\xa9' $'caf\xc3\xa9' $'\xff'; do
+      envf="$run/uni.env"; printf 'KEEP=1\n' > "$envf"
+      out="$(LC_ALL=$loc genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD "a${c}b")"; rc=$?
+      if [[ "$rc" -ne 0 ]] || ! cmp -s "$envf" <(printf 'KEEP=1\nGOOD=a%sb\n' "$c"); then
+        echo "gctl: [${loc}] a non-ASCII value ($(printf '%s' "$c" | od -An -tx1 | tr -d ' \n')) was refused or altered (rc=${rc}): ${out}"; v=1
+      fi
+    done
+  done
+  rm -rf "$run"
+  return "$v"
+}
+
+echo "== Guard 6b — control characters in an upsert value =="
+
+assert_green gctl_check "pristine library" "$PRISTINE"
+
+# row A — the control-character check is gone (only CR/LF refused again)
+if mutate "gctl-rA control-char refusal removed" "$SB/mut/gctlA.sh" <<'PROG'
+s{  if soleur_op_has_control_char "\$value"; then}{  if false; then}
+PROG
+then assert_red gctl_check "gctl-rA tab/ESC/DEL values accepted" "$SB/mut/gctlA.sh"; fi
+
+# row B — the class evaluated in the caller's locale (the `local LC_ALL=C` dropped)
+if mutate "gctl-rB local LC_ALL=C dropped from the class check" "$SB/mut/gctlB.sh" <<'PROG'
+s{(soleur_op_has_control_char\(\) \{\n)  local LC_ALL=C\n}{$1}
+PROG
+then assert_red gctl_check "gctl-rB the verdict now depends on the caller's locale (U+0085 refused under UTF-8)" "$SB/mut/gctlB.sh"; fi
+
+# row C — the marker leaks the value
+if mutate "gctl-rC marker carries the value" "$SB/mut/gctlC.sh" <<'PROG'
+s{(reason=value-contains-control-char\\n' )"\$key"}{$1"\$key\$value"}
+PROG
+then assert_red gctl_check "gctl-rC the refusal marker carries the value" "$SB/mut/gctlC.sh"; fi
+
+# row D — the class narrowed to tab only (a [[:cntrl:]] -> literal tab edit)
+if mutate "gctl-rD class narrowed to a tab" "$SB/mut/gctlD.sh" <<'PROG'
+s{\[\[ "\$1" == \*\[\[:cntrl:\]\]\* \]\]}{[[ "\$1" == *\$'\\t'* ]]}
+PROG
+then assert_red gctl_check "gctl-rD only tab refused (ESC/DEL/bell accepted)" "$SB/mut/gctlD.sh"; fi
+
+# row E — the class widened to everything non-alphanumeric: the must-PASS values refused
+if mutate "gctl-rE class widened to punctuation" "$SB/mut/gctlE.sh" <<'PROG'
+s{\[\[ "\$1" == \*\[\[:cntrl:\]\]\* \]\]}{[[ "\$1" == *[[:cntrl:][:punct:]]* ]]}
+PROG
+then assert_red gctl_check "gctl-rE punctuation credentials refused" "$SB/mut/gctlE.sh"; fi
+
+# row F — the CR/LF reason token lost (folded into the control-char reason)
+if mutate "gctl-rF line-break reason token renamed" "$SB/mut/gctlF.sh" <<'PROG'
+s{reason=value-contains-line-break}{reason=value-contains-control-char}
+PROG
+then assert_red gctl_check "gctl-rF CR/LF lost its own reason" "$SB/mut/gctlF.sh"; fi
+
+# --- the decision rule: does ANY consumer source a file the library writes? ------
+# The library writes the credentials file beside a generated bootstrap script
+# (`ENV_FILE`, default `<script dir>/.env`). The consumers read it with
+# `grep -a '^KEY='`; the community scripts source the REPO-ROOT .env, a different
+# file. If a consumer ever sources it, the raw `KEY=value` form stops being safe
+# (a `$(...)` in a value would run) and this row goes RED, forcing the quoted form.
+gctl_sourced_consumers() { # <file>...: lines that source an env-file variable or a literal .env
+  grep -nE '(^|[;&|(]|then|do)[[:space:]]*(source|\.)[[:space:]]+[^#]*(ENV_FILE|\.env)' "$@" 2>/dev/null | grep -v '^[^:]*:[0-9]*:[[:space:]]*#'
+}
+TEMPLATE="${SUITE_DIR}/../skills/operator-bootstrap/template.sh"
+if [[ -r "$TEMPLATE" ]]; then
+  if [[ -z "$(gctl_sourced_consumers "$LIB" "$TEMPLATE")" ]]; then
+    pass "gctl consumers: neither the library nor the generated-script template sources the credentials file (raw KEY=value stays; no sourceable-safe form needed)"
+  else
+    fail "gctl consumers: a consumer SOURCES the file the library writes - the library must write a sourceable-safe quoted form and a round-trip row must prove it: $(gctl_sourced_consumers "$LIB" "$TEMPLATE" | head -3)"
+  fi
+  printf 'source "$ENV_FILE"\n  . "${SCRIPT_DIR}/.env"\n# source "$ENV_FILE"\n' > "$SB/consumer-ctl.sh"
+  if [[ "$(gctl_sourced_consumers "$SB/consumer-ctl.sh" | wc -l)" -eq 2 ]]; then
+    pass "gctl consumers: the consumer grep sees a synthetic 'source \$ENV_FILE' and '. .env' and ignores a comment (it is not vacuous)"
+  else
+    fail "gctl consumers: the consumer grep did not find the two synthetic sourcing lines (or matched the comment)"
+  fi
+else
+  fail "gctl consumers: the generated-script template is not readable at ${TEMPLATE}"
+fi
 
 # =============================================================================
 # Ledger — every line is JSON a reader can parse, and one run lands in one file
@@ -2489,7 +2643,7 @@ PERL
 # an attacker of the guard would neuter next. scripts/guard-vacuity-floor.test.sh
 # measures this shape across the repo and reddens on the fail()-routed form.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=193
+FLOOR=208
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"

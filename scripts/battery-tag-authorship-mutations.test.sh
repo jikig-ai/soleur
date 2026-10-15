@@ -229,11 +229,11 @@ PY'
 
 # Axis: POPULATION GROWTH — a ceiling that cannot bind is not a ceiling.
 row R7 "ledger/ceiling" RED "exceeds ceiling" \
-  'sed -i "s/^LEDGER_CEILING=12$/LEDGER_CEILING=3/" "$1"'
+  'sed -i "s/^LEDGER_CEILING=13$/LEDGER_CEILING=3/" "$1"'
 
 # Axis: AUTHORITY/ROOT INPUT — the ceiling has ONE home; drift from it must red.
 row R8 "ceiling/adr-parity" RED "ceiling drift" \
-  'sed -i "s/^LEDGER_CEILING=12$/LEDGER_CEILING=13/" "$1"'
+  'sed -i "s/^LEDGER_CEILING=13$/LEDGER_CEILING=14/" "$1"'
 
 # Axis: AUTHORITY/ROOT INPUT — a collapsed root set must red BEFORE any classification.
 row R9 "roots/floor" RED "root set collapsed" \

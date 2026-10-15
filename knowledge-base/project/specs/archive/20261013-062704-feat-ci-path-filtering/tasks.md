@@ -1,6 +1,6 @@
 # Tasks: ci: S4 PR affected-only gating, e2e fallback fix, shard-totality gate
 
-Plan: `knowledge-base/project/plans/2026-10-12-feat-ci-pr-affected-only-gating-plan.md`. Issue #9729. Landing order: PR A, then PR B, then PR C. B and C stay dark; activation is locked until PR C removes the sentinel.
+Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-10-12-feat-ci-pr-affected-only-gating-plan.md`. Issue #9729. Landing order: PR A, then PR B, then PR C. B and C stay dark; activation is locked until PR C removes the sentinel.
 
 ## PR A — e2e fallback fix and shard-totality gate (independent, not dark)
 
@@ -11,17 +11,21 @@ Plan: `knowledge-base/project/plans/2026-10-12-feat-ci-pr-affected-only-gating-p
 
 ## PR B — selection job, group gating, aggregator tolerance, ADR amendment (dark, locked)
 
-- 2.1 Spike S-b: measure pre-pass dependencies and wall time; decide `pr-selection` job shape
-- 2.2 Add `pr-selection` (PR-only, `continue-on-error`, `timeout-minutes: 10`, `fetch-depth: 0`); outputs `mode`, `skip_legs`, `active`, `head_sha`, `base_sha`; `active` computed once in bash (exactly `on`); literal activation-lock sentinel; `pr-affected-active` step
-- 2.3 `scripts/ci-pr-selection.sh` driver (+ test): `git diff --name-status --no-renames` against the pinned base; widened full-battery trigger list derived from what `scripts/test-all.sh` sources plus `ci.yml`, the driver, `scripts/lib/**`, the baseline, `scripts/suite-shard-legs.tsv`, the heavy manifest, `scripts/ci-e2e-classify.sh`; any A/D/R outside doc paths is non-skippable
-- 2.4 Group gating of `test-webplat`, `test-bun`, `test-scripts-heavy` (delimited `contains(format(',{0},', ...))`, event and head-SHA terms); `web-platform-build` and `e2e` unchanged
-- 2.5 Aggregator: add `pr-selection` to `needs`, pass `SKIP_LEGS`/`ACTIVE`/`HEAD_SHA_OK` via `env:`, add the named `PR-AFFECTED-SKIP` tolerance; execute Guard 1 rows G1-1..G1-7 in `ci-test-aggregator-diagnosis.test.sh`; update the `ci-push-dedupe` and `ci-draft-light` pins
-- 2.6 Guard 2 rows G2-1..G2-8 executed against the driver
-- 2.7 ADR-276 `## Amendment 2026-10-12 (S4, #9729)`: `CI_PR_AFFECTED`, exit criterion, census link, S2/S3 census waiver, one baseline definition, kill criterion (replay escape over 12%), recorded reversals (no `[full]` marker, no base copy), stage-status line; pointer amendments and `amends:` on ADR-262 and ADR-183
-- 2.8 Run `plugins/soleur/test/c4-count-parity.test.sh`; confirm `scripts/required-checks.txt` unchanged
+Authoritative text: the plan's "PR B contract after plan review (2026-10-14)". Rulings: `decision-challenges.md`.
+
+- 2.1 Spike S-b: measure the selector pre-pass on a cold hosted runner (dependencies, wall time) from real doc-only PR runs via the dark `sel_s` field; record the number in the plan
+- 2.2 `scripts/ci-pr-selection.sh` (+ `.test.sh`): defaults first; merge-ref assertions (`HEAD == GITHUB_SHA`, two parents, `HEAD^2 == PR head`); fork, `run_attempt > 1`, empty and over-500-file diffs mean full; `git diff -z --raw --no-renames --no-abbrev HEAD^1 HEAD` to a file; stage-1 positive allowlist plus widened trigger list (and a test that every file `test-all.sh` sources matches it); stage 2 selector under `the workflow passes timeout 90 (driver default 120)`; group rule; lock literal; one final output write
+- 2.3 `pr-selection` job in `ci.yml` (PR-only, `continue-on-error`, `timeout-minutes: 3` alone on its line, no `needs:`, `contents: read`, `fetch-depth: 0`, no tooling setup); outputs `head_sha`, `base_sha`, `skip_legs`, `active` only; `SOLEUR_PR_SELECTION` notice and step summary
+- 2.4 Group gating of `test-webplat`, `test-bun`, `test-scripts-heavy` (`needs: pr-selection`, delimited `contains(format(...))`, event, `active` and head-SHA terms; existing terms verbatim); `web-platform-build`, `e2e`, `test-scripts` unchanged
+- 2.5 Aggregator: `pr-selection` in `needs` only, env `SKIP_LEGS`/`ACTIVE`/`HEAD_SHA_OK`/`ATTEMPT`, `PR-AFFECTED-SKIP` before `fail=1`, hard-coded allowlist, format validation; execute G1-1..G1-14 as synthetic triples in `ci-test-aggregator-diagnosis.test.sh` with mutants; update `ci-push-dedupe` (extend its evaluator for `contains`/`format`, re-measure `AGG_DIGEST`, classify `pr-selection`) and `ci-draft-light` pins
+- 2.6 Guard 2 rows G2-1, G2-2, G2-5..G2-15 executed against the driver; executed pin running the release workflow's `run_declared_path` awk against `ci.yml` (73, and red on a 10-minute mutant)
+- 2.7 ADR-276 `## Amendment` (S4, `CI_PR_AFFECTED`, 12% kill criterion and rollback, locked status, activation prerequisites, one baseline definition, dark cost, escape responder, supersessions, S2/S3 census waiver, stage-status line, `amends:`); ADR-262 and ADR-183 `amended_by:` plus matching `## Amendment` sections; `--admin` queue-skip sentence verified by API or omitted
+- 2.8 Run the pin suites (every suite from `git grep -l 'ci\.yml' -- '*.test.sh'`), `plugins/soleur/test/c4-count-parity.test.sh`, the orphan lint; register new suites in the affected-paths index and the KB-consumer baseline; confirm `scripts/required-checks.txt` unchanged
+- 2.9 Canary: draft PR based on the PR B branch with one `knowledge-base/**` markdown file; compare job conclusions with a plain run; record the verdict in the PR body
 
 ## PR C — per-suite selection, reduced-run read, probe (dark until activation)
 
+- 3.0a Moved from PR B: `pr-affected-active` step, label/artifact Guard 2 rows (G2-3/G2-4), soak probe and `SOLEUR_FULL_BATTERY_ESCAPE`, PR C pre-merge assertion that `CI_PR_AFFECTED` is unset when the lock is removed
 - 3.0 Go/no-go gate: spikes S-b/S-c measured and replay recorded; proceed only if replay escape is under 2% and the pre-pass does not erase the saving
 - 3.1 Extend `scripts/ci-battery-gate-replay.sh` with the selector (300 first-parent commits vs suite failures)
 - 3.2 Label-keyed `skip_labels` job output; runner consumer in `scripts/test-all.sh` (unknown label or PR-added suite runs; always-on ratchets never skipped); pass through `env:` to `test-scripts` and `test-scripts-heavy` legs

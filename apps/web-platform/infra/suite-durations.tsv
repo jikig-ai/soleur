@@ -78,6 +78,7 @@ apps/web-platform/infra/inngest-cli-staleness-mutation.test.sh	1000	floor
 apps/web-platform/infra/inngest-cli-staleness.test.sh	1000	floor
 apps/web-platform/infra/inngest-config-bundle-pack.test.sh	0	measured
 apps/web-platform/infra/inngest-config-drift-compare.test.sh	0	measured
+apps/web-platform/infra/inngest-config-refresh.test.sh	1000	floor
 apps/web-platform/infra/inngest-consumer-probe.test.sh	500	measured
 apps/web-platform/infra/inngest-cutover-flip.test.sh	2500	measured
 apps/web-platform/infra/inngest-cutover-latch.test.sh	1000	measured

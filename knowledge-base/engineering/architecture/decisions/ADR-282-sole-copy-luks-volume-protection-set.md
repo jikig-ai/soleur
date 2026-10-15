@@ -272,3 +272,7 @@ operator-applied, separately designed change (#9927), not a per-merge step.
 
 ADR-142's mechanism, the additive cutover, or the destruction records (attested; never edited). ADR-142 (which this ADR amends in part), ADR-263
 and ADR-119 carry dated pointer notes to this ADR; the records under `knowledge-base/legal/audits/` are untouched.
+
+## Addendum — 2026-10-14 (#8316)
+
+Appended; nothing above is changed. The retired `inngest_host_dark_gate` (ADR-199) no longer stands behind the lift of this ADR's protection: [ADR-199's addendum](./ADR-199-destructive-clearance-requires-a-measured-empty-store-and-a-dark-host.md#addendum--2026-10-14-8316) records that any destructive-clearing target written after the protection is lifted must reintroduce a measured-empty-store plus dark-host gate before it may plan a destroy. The lift route above (delete protection in its own reviewed change, then `prevent_destroy`) is where that requirement attaches, alongside the Guard 1 rows, `G4_PROTECTED` and `luks_volume_touched` named in this ADR.

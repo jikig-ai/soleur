@@ -313,7 +313,10 @@ prints its marker **and** one plain sentence, and writes a `run_halt` ledger lin
 ## Where the artifact lives
 
 **One location:** `knowledge-base/project/specs/feat-<name>/bootstrap.sh`, with the run ledger
-beside it as `knowledge-base/project/specs/feat-<name>/bootstrap-runs.jsonl`.
+beside it as `knowledge-base/project/specs/feat-<name>/bootstrap-runs.jsonl`. The live ledger
+keeps that fixed name and is gitignored (re-runs would conflict on it); to keep a finished run's
+record, copy it to `bootstrap-runs-<issue>.jsonl` beside the archived script, a name the ignore
+rule does not match, and point to it from the spec's `tasks.md`.
 
 That is the rule's own `<feature>/` prefix (`hr-multi-step-post-merge-bootstrap-script` names
 `<feature>/bootstrap.sh`, and the feature's tracked artifact home is its spec directory); it is
@@ -350,7 +353,8 @@ machine, and routing it anywhere else is a data-controller event, not an observa
   stage's precondition makes the next run skip what is already done.
 - **Delete:** when the follow-through issue that points at the script closes, remove the script,
   the ledger (`bootstrap-runs.jsonl`) and the `.env` together — the `.env` holds live credentials
-  and has no reason to outlive the procedure that needed them. The
+  and has no reason to outlive the procedure that needed them. A kept `bootstrap-runs-<issue>.jsonl`
+  copy is a record, not live state, and stays. The
   `SOLEUR-GENERATED-OPERATOR-SCRIPT v2` header line is what the approval hook and the guard use to
   find every generated script by one grep.
 

@@ -81,6 +81,7 @@ apps/web-platform/infra/inngest-cli-staleness-mutation.test.sh	3
 apps/web-platform/infra/inngest-cli-staleness.test.sh	3
 apps/web-platform/infra/inngest-config-bundle-pack.test.sh	3
 apps/web-platform/infra/inngest-config-drift-compare.test.sh	4
+apps/web-platform/infra/inngest-config-refresh.test.sh	4
 apps/web-platform/infra/inngest-consumer-probe.test.sh	1
 apps/web-platform/infra/inngest-cutover-flip.test.sh	2
 apps/web-platform/infra/inngest-cutover-latch.test.sh	2
