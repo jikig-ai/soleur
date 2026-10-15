@@ -710,7 +710,11 @@ fi
 CLEAN_MOUNTS+=("$B3_MNT")
 arm_reset
 
-# BOOT2-PTR: a pointer to an absent volume REFUSES on reboot too (no fallback).
+# BOOT2-PTR: a pointer to an absent volume REFUSES on reboot too (no fallback). The mapper
+# must be unmounted and CLOSED first — arm_reset umounts only $ARM_MNT and a mounted
+# mapper silently survives its cryptsetup close, which would fail the absent-mapper half.
+umount "$B3_MNT" "${B3_MNT}-luks" >/dev/null 2>&1
+cryptsetup close inngest-redis >/dev/null 2>&1
 rm -f "$B3_BYID/scsi-0HC_Volume_${LUKS_ID}"
 R_RC=0
 INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="$LUKS_ID" LIBMOUNT_FSTAB="$B3_FSTAB" bash "$TMPROOT/reopen-b3.sh" > "$TMPROOT/reopen-b3b.log" 2>&1 || R_RC=$?
