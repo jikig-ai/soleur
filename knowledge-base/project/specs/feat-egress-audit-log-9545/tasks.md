@@ -47,12 +47,12 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-workspace-egress-audit-log-p
 
 ## Phase 5: Records
 
-- [ ] 5.1 New ADR (next free ordinal at the merge base) with alternatives and does-not-defend list
-- [ ] 5.2 C4: read `model.c4`, `views.c4`, `spec.c4`; add the Vector-to-app edge; `bash scripts/regenerate-c4-model.sh`; run the C4 tests and `c4-count-parity`
-- [ ] 5.3 ADR-281 one-line correction ("workflow fired with email action; receipt unobserved") and the runbook sentence
-- [ ] 5.4 `scripts/egress-audit-retention-check.sh` (freshness compared with observed gateway activity, plus retention; non-zero on failure)
-- [ ] 5.5 Bump the `BASELINE_DECLARED_PROBES` ratchet in `plugins/soleur/test/preflight-discoverability-test.test.ts` (66 to 67) with the required comment
-- [ ] 5.6 CI proof that the live-database cases executed (non-zero executed count in `rls-authz-fuzz.yml`)
+- [x] 5.1 New ADR (next free ordinal at the merge base) with alternatives and does-not-defend list
+- [x] 5.2 C4: read `model.c4`, `views.c4`, `spec.c4`; add the Vector-to-app edge; `bash scripts/regenerate-c4-model.sh`; run the C4 tests and `c4-count-parity`
+- [x] 5.3 ADR-281 one-line correction ("workflow fired with email action; receipt unobserved") and the runbook sentence
+- [x] 5.4 `scripts/egress-audit-retention-check.sh` (freshness compared with observed gateway activity, plus retention; non-zero on failure)
+- [x] 5.5 Bump the `BASELINE_DECLARED_PROBES` ratchet in `plugins/soleur/test/preflight-discoverability-test.test.ts` (66 to 67) with the required comment
+- [x] 5.6 CI proof that the live-database cases executed (non-zero executed count in `rls-authz-fuzz.yml`)
 - [ ] 5.7 First line of the PR body states the merge effect: Vector is redelivered to the web hosts on merge
 
 ## Phase 6: Legal commits (last commits of the PR)

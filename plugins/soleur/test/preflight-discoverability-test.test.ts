@@ -2951,7 +2951,14 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the soak probe reads stored Better Stack rows through the ClickHouse HTTP connection credential (Doppler
   // prd_terraform); the warehouse has no unauthenticated read path. NO SUBSTITUTE: the decode and isolation are pinned
   // offline by the probe's own fixture suite, but that verifies code, not the stored stream. Genuine.
-  const BASELINE_DECLARED_PROBES = 66;
+  // #9545 (2026-10-15): +1 (66 -> 67) for `2026-10-15-feat-workspace-egress-audit-log-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: `scripts/egress-audit-retention-check.sh` reads the rollup table through the Supabase PostgREST path with the
+  // prd service-role key (Doppler soleur/prd): RLS is on with no member policy and every privilege is revoked from
+  // anon/authenticated, so the table has no unauthenticated read path. NO SUBSTITUTE: the migration's verify SQL and the
+  // live-database harness prove the schema, grants and sweep, but not that rows are fresh or that old rows are gone in
+  // the stored data. Genuine.
+  const BASELINE_DECLARED_PROBES = 67;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
