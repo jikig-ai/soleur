@@ -9,7 +9,9 @@
 #   * a brainstorm / plan-review assessment prompt                          -> Assess / Recommend (unchanged)
 #   * a prompt that starts "Own the epic" (go's hold routing)               -> Own the epic
 # No existing caller sends a fixed phrase (architecture finding 4 of the plan), so the cues are the ones
-# callers actually emit: a question plus "Do NOT use AskUserQuestion", or BINDING.
+# callers actually emit: a question plus "Do NOT use AskUserQuestion", or BINDING. A plan-review or
+# assessment prompt (`Structured advisory only`, `IMPLEMENTATION PLAN (not code)`) is checked BEFORE the
+# Rule cues, and the Rule cues are CASE-SENSITIVE (the word "binding" in a feature description is not one).
 #
 # THE PHRASES ARE EXTRACTED FROM THE REAL CALLER FILES, not typed here, and the cues are read out of
 # cto.md's own selector section, so the document, the callers and this suite cannot drift apart silently.
@@ -86,27 +88,50 @@ frontmatter_of() { awk 'NR == 1 && $0 == "---" { f = 1; print; next } f { print 
 body_of()        { awk 'NR == 1 && $0 == "---" { f = 1; next } f == 1 && $0 == "---" { f = 2; next } f == 2 { print }' "$1"; }
 
 # --- the selector, read out of cto.md itself -------------------------------------------------------
-# Section "## Interface selector": numbered rules `1.` `2.` `3.`; the backticked tokens on rule 1 are the
-# START cues (Own the epic), on rule 2 the CONTAINS cues (Rule). Rule 3 is the fallback.
-selector_cues() { # <cto.md> <rule-number> -> one cue per line
-  awk -v n="$2" '
-    /^## Interface selector/ { f = 1; next }
-    f && /^## / { f = 0 }
-    f && $0 ~ ("^" n "\\. ") { print }' "$1" | grep -o '`[^`]*`' | tr -d '`'
+# Section "## Interface selector": numbered rules. Per rule the verb (`starts` or `contains`) is read from
+# the prose, the cues are the backticked tokens BEFORE the `->`, the target is the first bold word after it
+# (Own -> own-the-epic, Assess -> assess, Rule -> rule). A rule without cues is the fallback. Cues are
+# matched CASE-SENSITIVELY, in rule order, first match wins.
+selector_rules() { # <cto.md> -> one `N<TAB>verb<TAB>target<TAB>cue` line per cue (cue empty for the fallback)
+  local line n verb head tgt cue cues
+  while IFS= read -r line; do
+    n="${line%%.*}"; head="${line%%->*}"
+    verb=contains; [[ "$head" == *' starts '* ]] && verb=starts
+    tgt="$(printf '%s' "${line#*->}" | grep -o '\*\*[^*]*\*\*' | head -n1 | tr -d '*')"; tgt="$(lower "${tgt%% *}")"
+    case "$tgt" in own) tgt=own-the-epic ;; esac
+    cues="$(printf '%s' "$head" | grep -o '`[^`]*`' | tr -d '`' || true)"
+    if [[ -z "$cues" ]]; then printf '%s\tfallback\t%s\t\n' "$n" "$tgt"; continue; fi
+    while IFS= read -r cue; do printf '%s\t%s\t%s\t%s\n' "$n" "$verb" "$tgt" "$cue"; done <<< "$cues"
+  done < <(awk '/^## Interface selector/ { f = 1; next } f && /^## / { f = 0 } f && /^[0-9]+\. / { print }' "$1")
+}
+selector_cues() { # <cto.md> <target> -> the cues whose rule selects <target>
+  selector_rules "$1" | awk -F'\t' -v t="$2" '$3 == t && $2 != "fallback" { print $4 }'
 }
 # classify <cto.md> <prompt> -> own-the-epic | rule | assess
 classify() {
-  local doc="$1" p t
-  p="$(lower "$2")"; p="${p#"${p%%[![:space:]]*}"}"
-  while IFS= read -r t; do
-    [[ -n "$t" ]] || continue; t="$(lower "$t")"
-    [[ "$p" == "$t"* ]] && { printf 'own-the-epic'; return 0; }
-  done < <(selector_cues "$doc" 1)
-  while IFS= read -r t; do
-    [[ -n "$t" ]] || continue; t="$(lower "$t")"
-    [[ "$p" == *"$t"* ]] && { printf 'rule'; return 0; }
-  done < <(selector_cues "$doc" 2)
+  local doc="$1" p="$2" n verb tgt cue
+  p="${p#"${p%%[![:space:]]*}"}"
+  while IFS=$'\t' read -r n verb tgt cue; do
+    [[ -n "$n" ]] || continue
+    if [[ "$verb" == fallback ]]; then printf '%s' "$tgt"; return 0; fi
+    [[ -n "$cue" ]] || continue
+    if [[ "$verb" == starts ]]; then [[ "$p" == "$cue"* ]] && { printf '%s' "$tgt"; return 0; }
+    else [[ "$p" == *"$cue"* ]] && { printf '%s' "$tgt"; return 0; }; fi
+  done < <(selector_rules "$doc")
   printf 'assess'
+}
+section_of() { awk -v h="$2" 'index($0, h) == 1 { f = 1; next } f && /^## / { f = 0 } f { print }' "$1"; }
+CPR='${CLAUDE_PLUGIN_ROOT}'
+resolve_link() { # <link target as written in cto.md> -> an absolute path (relative links resolve against the REAL agent dir)
+  local l="$1" rest
+  case "$l" in
+    "$CPR"/*) rest="${l#"$CPR"}"; printf '%s' "$ROOT/plugins/soleur$rest" ;;
+    /*)       printf '%s' "$l" ;;
+    *)        printf '%s/%s' "$(cd "$(dirname "$CTO")" && cd "$(dirname "$l")" 2>/dev/null && pwd)" "$(basename "$l")" ;;
+  esac
+}
+link_in() { # <text> <basename-fragment> -> the first markdown link target whose path contains the fragment
+  printf '%s\n' "$1" | grep -Eo '\]\([^)]*'"$2"'[^)]*\)' | head -n1 | sed 's/^](//; s/)$//'
 }
 
 # --- real caller phrases, extracted -----------------------------------------------------------------
@@ -131,78 +156,136 @@ GO_OWN_CUE=""
 _go_para="$(awk '/^## Step 1\.5: Hold routing/ { f = 1; next } f && /^## / { f = 0 } f { print }' "$GO_MD")"
 [[ "$_go_para" =~ $_re ]] && GO_OWN_CUE="${BASH_REMATCH[1]}"
 
+# The FULL plan-review prompt for the `cto` named-panel reviewer, rebuilt from plan-review.workflow.js itself
+# (reviewPrompt()): the opening sentence with the lens substituted, then the named-panel guidance block. The
+# non-named variant is rebuilt the same way. The old row fed only the lens string and so never saw the
+# "Structured advisory only - do NOT use AskUserQuestion" sentence that the real prompt carries.
+PR_OPEN="$(grep -F -m1 -- 'You are reviewing an IMPLEMENTATION PLAN (not code)' "$PLAN_REVIEW_WF" | sed 's/^[^`]*`//')"
+PR_OPEN="${PR_OPEN//\$\{r.lens\}/$PLAN_REVIEW_LENS}"
+PR_NAMED="$(awk '/^    \? `$/ { f = 1; next } /^    : `/ { f = 0 } f { print }' "$PLAN_REVIEW_WF" | sed '$ s/`$//')"
+PR_PLAIN="$(awk '/^    : `$/ { f = 1; next } f && /^  return `/ { f = 0 } f { print }' "$PLAN_REVIEW_WF" | sed '$ s/`$//')"
+PLAN_REVIEW_FULL="$PR_OPEN
+$PR_NAMED"
+PLAN_REVIEW_PLAIN="$PR_OPEN
+$PR_PLAIN"
+
+BASE_REF="$(g merge-base origin/main HEAD 2>/dev/null || true)"
+[[ -n "$BASE_REF" ]] || BASE_REF="refs/unresolvable-merge-base"
+HEAD_SHA="$(g rev-parse HEAD 2>/dev/null || true)"
+
 # --- cto.md evaluation -------------------------------------------------------------------------------
 # evaluate_cto <cto.md> <base-ref> : print one `V:<token>` line per violated property; rc 0 iff none.
+# Properties of a section are asserted against THAT section's text, never the whole body, so words that
+# also appear elsewhere in the document cannot satisfy them.
 evaluate_cto() {
-  local f="$1" base="$2" v=0 base_blob bfm ffm body line link target
+  local f="$1" base="$2" v=0 base_blob bfm ffm body line link target sel rsec esec nd
   emit() { printf 'V:%s\n' "$1"; v=1; }
   body="$(body_of "$f")"
+  sel="$(section_of "$f" '## Interface selector')"
+  rsec="$(section_of "$f" '## Rule interface')"
+  esec="$(section_of "$f" '## Own the epic interface')"
 
-  # Frontmatter byte-identical to the merge base (outside the commit under test).
+  # Anchor: frontmatter byte-identical to the merge base, old body preserved. The base must RESOLVE and
+  # must be the real file (a degenerate anchor would make both checks vacuous when base == HEAD).
   if ! base_blob="$(g show "$base:$CTO_REL" 2>/dev/null)" || [[ -z "$base_blob" ]]; then
     emit base-unresolvable; emit frontmatter-differs; emit preserved-line-missing
   else
     printf '%s\n' "$base_blob" > "$SANDBOX/base-cto.md"
+    [[ "$base_blob" == *'name: cto'* && "$base_blob" == *'## Domain Leader Interface'* && "$base_blob" == *'### 3. Sharp Edges'* ]] || emit base-degenerate
     bfm="$(frontmatter_of "$SANDBOX/base-cto.md" | hash_stdin)"; ffm="$(frontmatter_of "$f" | hash_stdin)"
     [[ -n "$bfm" && "$bfm" == "$ffm" ]] || emit frontmatter-differs
-    # The old body survives: every non-blank base-body line is still a whole line of the new body.
     while IFS= read -r line; do
       [[ -n "${line//[[:space:]]/}" ]] || continue
       grep -Fxq -- "$line" "$f" || { emit preserved-line-missing; break; }
     done < <(body_of "$SANDBOX/base-cto.md")
   fi
 
-  # Selector.
-  [[ -n "$(selector_cues "$f" 1)" && -n "$(selector_cues "$f" 2)" ]] || emit selector-missing
-  [[ "$body" == *'## Interface selector'* ]] || emit selector-missing
+  # Selector: four-shaped, ordered, case-sensitive.
+  [[ -n "$sel" && "$body" == *'## Interface selector'* ]] || emit selector-missing
+  [[ -n "$(selector_cues "$f" own-the-epic)" && -n "$(selector_cues "$f" rule)" && -n "$(selector_cues "$f" assess)" ]] || emit selector-missing
+  local n_assess n_rule
+  n_assess="$(selector_rules "$f" | awk -F'\t' '$3 == "assess" && $2 != "fallback" { print NR; exit }')"
+  n_rule="$(selector_rules "$f" | awk -F'\t' '$3 == "rule" { print NR; exit }')"
+  [[ -n "$n_assess" && -n "$n_rule" && "$n_assess" -lt "$n_rule" ]] || emit selector-assess-after-rule
+  selector_cues "$f" assess | grep -Fxq 'Structured advisory only' || emit selector-assess-cue-structured
+  selector_cues "$f" assess | grep -Fxq 'IMPLEMENTATION PLAN (not code)' || emit selector-assess-cue-plan
+  if selector_cues "$f" rule | grep -Fxq 'binding'; then emit selector-lowercase-binding; fi
+  [[ "$sel" == *'case-sensitive'* ]] || emit selector-case-undeclared
 
   # Rule interface.
-  [[ "$body" == *'## Rule interface'* ]]                 || emit rule-section-missing
+  [[ "$body" == *'## Rule interface'* && -n "$rsec" ]]  || emit rule-section-missing
   local h; for h in 'Decision:' 'Rationale:' 'Rejected alternatives:' 'Dissent:'; do
-    [[ "$body" == *"$h"* ]] || emit "rule-heading-${h%:}"
+    [[ "$rsec" == *"$h"* ]] || emit "rule-heading-${h%:}"
   done
-  [[ "$body" == *'STRICTER'* ]]                          || emit rule-stricter-default
-  [[ "$body" == *'unverified'* ]]                        || emit rule-evidence-bar
-  [[ "$body" == *'never a menu'* ]]                      || emit rule-no-menu
-  [[ "$body" == *'headless'* && "$body" == *'never ask'* ]] || emit rule-headless
-  [[ "$body" == *'Item <id>:'* ]]                        || emit rule-multi-item
+  [[ "$rsec" == *'STRICTER'* ]]                          || emit rule-stricter-default
+  [[ "$rsec" == *'unverified'* ]]                        || emit rule-evidence-bar
+  [[ "$rsec" == *'never a menu'* ]]                      || emit rule-no-menu
+  [[ "$rsec" == *'headless'* && "$rsec" == *'never ask'* ]] || emit rule-headless
+  [[ "$rsec" == *'Item <id>:'* ]]                        || emit rule-multi-item
+  link="$(link_in "$rsec" technical-ruling)"
+  if [[ -z "$link" ]]; then emit rule-link-missing
+  else target="$(resolve_link "$link")"; [[ -f "$target" ]] || emit rule-link-unresolved; fi
 
-  # Own the epic interface.
-  [[ "$body" == *'## Own the epic interface'* ]]         || emit epic-section-missing
-  [[ "$body" == *'delegation-verify.sh'* ]]              || emit epic-verifier
-  [[ "$body" == *'hold-gate-eval.sh'* ]]                 || emit epic-hold-eval
-  [[ "$body" == *'Gate:'* ]]                             || emit epic-gate-predicates
-  [[ "$body" == *'## Production Envelope'* ]]            || emit epic-envelope
-  [[ "$body" == *'last verified item'* ]]                || emit epic-close-on-last
-  [[ "$body" == *'action-required'* ]]                   || emit epic-stall-issue
-  local kw; for kw in 'user-data loss' 'money' 'legal-risk' 'brand' 'scope' 'force-push to main' 'bypassing required checks' 'editing this delegation' 'credential rotation' 'third-party or tenant' 'rollback is not named'; do
-    [[ "$body" == *"$kw"* ]] || { emit epic-nondelegable-list; break; }
+  # Own the epic interface (each property is read from THIS section only).
+  [[ "$body" == *'## Own the epic interface'* && -n "$esec" ]] || emit epic-section-missing
+  [[ "$esec" == *'delegation-verify.sh'* ]]              || emit epic-verifier
+  [[ "$esec" == *'hold-gate-eval.sh'* ]]                 || emit epic-hold-eval
+  [[ "$esec" == *'Gate:'* ]]                             || emit epic-gate-predicates
+  [[ "$esec" == *'## Production Envelope'* ]] || emit epic-envelope
+  [[ "$esec" == *'last verified item'* ]]                || emit epic-close-on-last
+  [[ "$esec" == *'action-required'* ]]                   || emit epic-stall-issue
+  [[ "$esec" == *'issues/<epic>/comments --paginate'* && "$esec" == *'soleur-delegation v1'* && "$esec" == *'sort -r'* ]] || emit epic-discovery
+  [[ "$esec" == *'newest'* && "$esec" == *'delegation: valid'* ]] || emit epic-discovery-pick
+  [[ "$esec" == *'verify --delegation <comment-url> --envelope '* && "$esec" == *'--command '* && "$esec" == *'--audit --at <ISO8601 UTC>'* ]] || emit epic-verify-synopsis
+  [[ "$esec" == *'--section "Production Envelope - <title>"'* ]] || emit epic-section-title
+  [[ "$esec" == *'exit 0'* && "$esec" == *'hold-gate-eval.sh" --file '* ]] || emit epic-hold-eval-exit0
+  [[ "$esec" == *'Epic: #'* ]]                           || emit epic-epic-line
+  [[ "$esec" == *'gh pr merge <N>'* && "$esec" == *'gh pr ready <N>'* && "$esec" == *'gh workflow run <file>.yml'* && "$esec" == *'gh pr create --fill'* ]] || emit epic-allowlist
+  [[ "$esec" == *'must NOT run'* && "$esec" == *'`render`'* && "$esec" == *'calling skill'* ]] || emit epic-no-render
+  [[ "$esec" == *'<!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back run=<url|none> -->'* ]] || emit epic-receipt-format
+  [[ "$esec" == *'verified-envelope-sha256'* && "$esec" == *'run summary'* && "$esec" == *'execution sentence'* ]] || emit epic-receipt-wiring
+  [[ "$esec" == *'gh api -X DELETE repos/{owner}/{repo}/issues/comments/<id>'* && "$esec" == *'gh pr merge <N> --disable-auto'* && "$esec" == *'could not be stopped'* && "$esec" == *'gh run cancel'* ]] || emit epic-stop-sequence
+  [[ "$esec" == *'Headless'* && "$esec" == *'holds stand'* && "$esec" == *'never ask'* ]] || emit epic-headless
+  [[ "$esec" == *'recorded consent'* && "$esec" == *'drift guard'* ]] || emit epic-consent-wording
+  [[ "$esec" != *'two independent keys'* ]]              || emit epic-two-keys-claim
+  nd="$(printf '%s\n' "$esec" | grep -F 'Non-delegable, ever:' || true)"
+  local kw; for kw in 'user-data loss' 'sole-copy destruction' 'money' 'legal-risk' 'brand' 'scope' 'force-push to main' 'bypassing required checks' 'editing this delegation' 'credential rotation' 'third-party or tenant' 'rollback is not named' 'reserves a decision'; do
+    [[ "$nd" == *"$kw"* ]] || { emit epic-nondelegable-list; break; }
   done
-
-  # standing-delegation.md is LINKED (and resolves), never duplicated.
-  link="$(printf '%s\n' "$body" | grep -Eo '\]\([^)]*standing-delegation[^)]*\)' | head -n1 | sed 's/^](//; s/)$//')"
+  [[ "$nd" == *'Undeferred Operator-Step'* ]]            || emit epic-reserved-routing
+  link="$(link_in "$esec" standing-delegation)"
   if [[ -z "$link" ]]; then emit epic-link-missing
-  else
-    # a mutated copy lives in the sandbox, so resolve the link against the REAL agent directory
-    target="$(cd "$(dirname "$CTO")" && cd "$(dirname "$link")" 2>/dev/null && pwd)/$(basename "$link")"
-    [[ -f "$target" ]] || emit epic-link-unresolved
-  fi
-  if [[ "$body" == *'soleur-delegation v1'* || "$body" == *'**Confirmation:**'* || "$body" == *'**Excluded (still operator-only):**'* ]]; then
+  else target="$(resolve_link "$link")"; [[ -f "$target" ]] || emit epic-link-unresolved; fi
+  link="$(link_in "$esec" operator-holds)"
+  if [[ -z "$link" ]]; then emit epic-holds-link-missing
+  else target="$(resolve_link "$link")"; [[ -f "$target" ]] || emit epic-holds-link-unresolved; fi
+
+  # Script paths: ${CLAUDE_PLUGIN_ROOT}, never repo-relative, in every section this PR added.
+  if [[ "$sel$rsec$esec" == *'plugins/soleur/'* ]]; then emit repo-relative-path; fi
+  [[ "$esec" == *'"${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh"'* && "$esec" == *'"${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh"'* ]] || emit plugin-root-paths
+  [[ "$esec" == *"Cloud Mode"* ]]                        || emit plugin-root-unset-undeclared
+
+  # The record format is defined once, in standing-delegation.md: no copy of it here. (The marker string
+  # appears inside the discovery command; what is forbidden is the template's own whole-line marker.)
+  if printf '%s\n' "$body" | grep -Fxq '<!-- soleur-delegation v1 -->' || [[ "$body" == *'**Confirmation:**'* || "$body" == *'**Excluded (still operator-only):**'* ]]; then
     emit format-duplicated
   fi
   return "$v"
 }
 
-BASE_REF="$(g merge-base origin/main HEAD 2>/dev/null || true)"
-[[ -n "$BASE_REF" ]] || BASE_REF="refs/unresolvable-merge-base"
-
 # --- A. the cto.md properties ------------------------------------------------------------------------
 CTO_OUT="$(evaluate_cto "$CTO" "$BASE_REF")"; CTO_RC=$?
-CTO_PROP_LIST=(base-unresolvable frontmatter-differs preserved-line-missing selector-missing
+CTO_PROP_LIST=(base-unresolvable base-degenerate frontmatter-differs preserved-line-missing selector-missing
+  selector-assess-after-rule selector-assess-cue-structured selector-assess-cue-plan selector-lowercase-binding selector-case-undeclared
   rule-section-missing rule-heading-Decision rule-heading-Rationale "rule-heading-Rejected alternatives"
   rule-heading-Dissent rule-stricter-default rule-evidence-bar rule-no-menu rule-headless rule-multi-item
+  rule-link-missing rule-link-unresolved
   epic-section-missing epic-verifier epic-hold-eval epic-gate-predicates epic-envelope epic-close-on-last
-  epic-stall-issue epic-nondelegable-list epic-link-missing epic-link-unresolved format-duplicated)
+  epic-stall-issue epic-discovery epic-discovery-pick epic-verify-synopsis epic-section-title epic-hold-eval-exit0
+  epic-epic-line epic-allowlist epic-no-render epic-receipt-format epic-receipt-wiring epic-stop-sequence
+  epic-headless epic-consent-wording epic-two-keys-claim epic-nondelegable-list epic-reserved-routing
+  epic-link-missing epic-link-unresolved epic-holds-link-missing epic-holds-link-unresolved
+  repo-relative-path plugin-root-paths plugin-root-unset-undeclared format-duplicated)
 nprops=0
 for p in "${CTO_PROP_LIST[@]}"; do
   nprops=$((nprops + 1)); ck
@@ -211,49 +294,79 @@ done
 ck
 [[ "$CTO_RC" -eq 0 && -z "$CTO_OUT" ]] && ok "evaluate_cto agrees: rc=0 and no violation lines" || bad "evaluate_cto reported violations: ${CTO_OUT//$'\n'/ }"
 
+# The merge-base anchor is a PR-diff property. It must never be a silent tautology: the base ref must
+# resolve, its sha is printed, and when base == HEAD (post-merge) that is said out loud.
+ck
+if [[ "$BASE_REF" != refs/unresolvable-merge-base && -n "$(g rev-parse --verify --quiet "${BASE_REF}^{commit}" || true)" ]]; then
+  ok "merge-base anchor resolves: ${BASE_REF:0:12} (HEAD ${HEAD_SHA:0:12})"
+else bad "merge-base anchor does not resolve (origin/main is not fetched?)"; fi
+if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
+  printf '  NOTE: merge base == HEAD, so the frontmatter/old-body comparison is self-identity here; the anchor-content check (base-degenerate) still ran\n'
+fi
+
 # --- B. floors on the extractions --------------------------------------------------------------------
 ck; [[ -n "$ONE_SHOT_PHRASE" ]] && ok "extracted one-shot's spawn phrase: \"$ONE_SHOT_PHRASE\"" || bad "could not extract one-shot's AskUserQuestion spawn phrase"
 ck; [[ -n "$WORK_PHRASE" ]] && ok "extracted work's spawn phrase: \"$WORK_PHRASE\"" || bad "could not extract work's AskUserQuestion spawn phrase"
 ck; [[ -n "$DELEG_OPENER" ]] && ok "extracted the delegation reference's section-3 opener: \`$DELEG_OPENER\`" || bad "section 3 of technical-ruling-delegation.md carries no \`Rule on this technical question ...\` opener"
 ck; [[ "${#DOMAIN_PROMPT}" -ge 80 ]] && ok "extracted brainstorm-domain-config's Engineering task prompt (${#DOMAIN_PROMPT} bytes)" || bad "could not extract the Engineering task prompt from brainstorm-domain-config.md"
 ck; [[ "${#PLAN_REVIEW_LENS}" -ge 40 ]] && ok "extracted plan-review's cto devex lens (${#PLAN_REVIEW_LENS} bytes)" || bad "could not extract the cto lens from plan-review.workflow.js"
+ck; [[ "${#PLAN_REVIEW_FULL}" -ge 900 && "$PLAN_REVIEW_FULL" == *'Structured advisory only'* && "$PLAN_REVIEW_FULL" == *'NAMED CEO/design/devex reviewer'* && "$PLAN_REVIEW_FULL" == *"$PLAN_REVIEW_LENS"* ]] \
+  && ok "rebuilt the full plan-review cto prompt (${#PLAN_REVIEW_FULL} bytes)" || bad "could not rebuild the full reviewPrompt('cto') text (${#PLAN_REVIEW_FULL} bytes)"
+ck; [[ "${#PLAN_REVIEW_PLAIN}" -ge 400 && "$PLAN_REVIEW_PLAIN" == *'Structured advisory only'* && "$PLAN_REVIEW_PLAIN" != *'NAMED CEO'* ]] \
+  && ok "rebuilt the plan-review engineering-reviewer prompt (${#PLAN_REVIEW_PLAIN} bytes)" || bad "could not rebuild the non-named reviewPrompt text (${#PLAN_REVIEW_PLAIN} bytes)"
 ck; [[ -n "$GO_OWN_CUE" ]] && ok "extracted go.md's hold-routing spawn cue: \`$GO_OWN_CUE\`" || bad "go.md's hold-routing paragraph names no 'starts \`Own the epic\`' cue"
 
 # --- C. each existing caller's phrase selects the intended interface ----------------------------------
-CALLER_ROWS="$SANDBOX/callers.tsv"
-{
-  printf 'one-shot Technical-rulings spawn\trule\tEvidence: src/a.ts:10. Options: A or B. %s\n' "$ONE_SHOT_PHRASE"
-  printf 'work Technical-rulings spawn\trule\tEvidence: src/b.ts:22. Options: A or B. %s\n' "$WORK_PHRASE"
-  printf 'delegation reference section-3 brief\trule\t%s Question: which of two designs?\n' "$DELEG_OPENER"
-  printf 'delegation brief that mentions a standing delegation\trule\t%s Question: is the standing delegation for epic #9757 still valid?\n' "$DELEG_OPENER"
-  printf 'brainstorm Phase 0.5 domain assessment\tassess\t%s\n' "${DOMAIN_PROMPT//\{desc\}/add a billing page}"
-  printf 'plan-review named-panel devex lens\tassess\tReview this plan through the lens: %s\n' "$PLAN_REVIEW_LENS"
-  printf 'go hold routing\town-the-epic\t%s #9757: complete the epic from the resume brief.\n' "$GO_OWN_CUE"
-  printf 'go hold routing that also says Do NOT use AskUserQuestion\town-the-epic\t%s #9757: finish it. Do NOT use AskUserQuestion.\n' "$GO_OWN_CUE"
-  printf 'unrecognised prompt falls back to the existing behaviour\tassess\tWhat should we think about before building the export feature?\n'
-  printf 'empty prompt falls back to the existing behaviour\tassess\t \n'
-} > "$CALLER_ROWS"
+CL_LABEL=(); CL_WANT=(); CL_PROMPT=()
+add_caller() { CL_LABEL+=("$1"); CL_WANT+=("$2"); CL_PROMPT+=("$3"); }   # arrays, not a TSV: the full plan-review prompts span lines
+add_caller 'one-shot Technical-rulings spawn' rule "Evidence: src/a.ts:10. Options: A or B. $ONE_SHOT_PHRASE"
+add_caller 'work Technical-rulings spawn' rule "Evidence: src/b.ts:22. Options: A or B. $WORK_PHRASE"
+add_caller 'delegation reference section-3 brief' rule "$DELEG_OPENER Question: which of two designs?"
+add_caller 'delegation brief that mentions a standing delegation' rule "$DELEG_OPENER Question: is the standing delegation for epic #9757 still valid?"
+add_caller 'brainstorm Phase 0.5 domain assessment' assess "${DOMAIN_PROMPT//\{desc\}/add a billing page}"
+add_caller 'brainstorm Phase 0.5 assessment of a feature about key binding settings' assess "${DOMAIN_PROMPT//\{desc\}/key binding settings}"
+add_caller 'brainstorm Phase 0.5 assessment of a feature about data binding in a form' assess "${DOMAIN_PROMPT//\{desc\}/two-way data binding for the settings form}"
+add_caller 'plan-review named-panel devex lens (lens text only)' assess "Review this plan through the lens: $PLAN_REVIEW_LENS"
+add_caller 'plan-review FULL reviewPrompt for the cto named panel' assess "$PLAN_REVIEW_FULL"
+add_caller 'plan-review FULL reviewPrompt for an engineering reviewer' assess "$PLAN_REVIEW_PLAIN"
+add_caller 'plan-review full prompt even if its sentence were capitalised like the Rule cue' assess "${PLAN_REVIEW_FULL//do NOT use AskUserQuestion/Do NOT use AskUserQuestion}"
+add_caller 'go hold routing' own-the-epic "$GO_OWN_CUE #9757: complete the epic from the resume brief."
+add_caller 'go hold routing that also says Do NOT use AskUserQuestion' own-the-epic "$GO_OWN_CUE #9757: finish it. Do NOT use AskUserQuestion."
+add_caller 'unrecognised prompt falls back to the existing behaviour' assess 'What should we think about before building the export feature?'
+add_caller 'empty prompt falls back to the existing behaviour' assess ' '
 caller_n=0
-while IFS=$'\t' read -r label want prompt; do
+for ci in "${!CL_LABEL[@]}"; do
+  label="${CL_LABEL[$ci]}"; want="${CL_WANT[$ci]}"; prompt="${CL_PROMPT[$ci]}"
   caller_n=$((caller_n + 1)); ck
   got="$(classify "$CTO" "$prompt")"
   [[ "$got" == "$want" ]] && ok "caller '$label' selects '$got'" || bad "caller '$label' selects '$got', expected '$want' (prompt: ${prompt:0:100})"
-done < "$CALLER_ROWS"
-ck; [[ "$caller_n" -ge 10 ]] && ok "caller table executed $caller_n rows" || bad "caller table executed $caller_n rows (floor 10)"
+done
+ck; [[ "$caller_n" -ge 15 ]] && ok "caller table executed $caller_n rows" || bad "caller table executed $caller_n rows (floor 15)"
 
 # Callers that spawn THROUGH the delegation step (no phrase of their own) must still point at it.
 for pair in "$RENDER|delegation step" "$REVIEW|technical-ruling-delegation.md" "$ONE_SHOT|technical-ruling-delegation.md" "$WORK|technical-ruling-delegation.md"; do
   file="${pair%%|*}"; needle="${pair#*|}"; ck
-  if grep -Fq -- "$needle" "$file"; then ok "$(basename "$(dirname "$file")")/$(basename "$file") routes its cto spawn through '$needle'"
-  else bad "$file no longer mentions '$needle' near its cto spawn"; fi
+  if grep -Fq -- "$needle" "$file"; then ok "$(basename "$(dirname "$file")")/$(basename "$file") mentions '$needle' (whole-file anchor, not a local one)"
+  else bad "$file no longer mentions '$needle'"; fi
 done
 
-# --- D. section 3 of the delegation reference points at the agent ---------------------------------------
+# --- D. the delegation reference points at the agent and stays consistent with it -----------------------
 _s3="$(section3_of "$DELEG")"
+_s1="$(awk '/^## 1\. /{ f = 1; next } f && /^## / { f = 0 } f { print }' "$DELEG")"
+_s6="$(awk '/^## 6\. /{ f = 1; next } f && /^## / { f = 0 } f { print }' "$DELEG")"
+_s7="$(awk '/^## 7\. /{ f = 1; next } f { print }' "$DELEG")"   # to EOF: the example's own `## Decision Classes` line is inside a fence
 ck; [[ "$_s3" != *'Reply with exactly these four headings'* && "$_s3" != *'Copy this brief'* ]] && ok "section 3 no longer carries the copied brief" || bad "section 3 still restates the brief"
 ck; [[ "$_s3" == *'agents/engineering/cto.md'* && "$_s3" == *'Rule interface'* ]] && ok "section 3 points at the agent's Rule interface" || bad "section 3 does not point at the agent's Rule interface"
 ck; [[ "$_s3" == *'Do NOT use AskUserQuestion'* ]] && ok "section 3 still carries the cue callers rely on" || bad "section 3 lost the 'Do NOT use AskUserQuestion' cue"
 ck; [[ "$_s3" == *'Question'* && "$_s3" == *'Evidence'* && "$_s3" == *'Brand-survival threshold'* && "$_s3" == *'DISQUALIFY'* ]] && ok "section 3 lists the brief's fields" || bad "section 3 lost a brief field name"
+ck; [[ "$_s3" != *'plugins/soleur/'* && "$_s1" != *'plugins/soleur/'* ]] && ok "sections 1 and 3 name no repo-relative plugin path" || bad "section 1 or 3 of the delegation reference names a repo-relative plugins/soleur/ path"
+ck; [[ "$_s1" == *'reserves a decision to the operator'* && "$_s1" == *'Undeferred Operator-Step'* && "$_s1" == *'sole-copy destruction'* && "$_s1" == *'rollback is not named'* ]] \
+  && ok "section 1 carries the non-delegable list incl. operator-reserved decisions" || bad "section 1 lost part of the non-delegable list (operator-reserved decisions / Undeferred Operator-Step routing)"
+ck; [[ "$_s6" == *'Authorized by delegation <comment-url>, envelope <path>[, ran <ISO>]'* ]] && ok "section 6 states the delegation row shape incl. the optional ran clause" || bad "section 6 lost the 'Authorized by delegation <comment-url>, envelope <path>[, ran <ISO>]' row shape"
+ck; [[ "$_s6" == *'overlap vehicle'* && "$_s6" == *'vehicle=<N|this>'* ]] && ok "section 6 names the 'overlap vehicle' ruling row" || bad "section 6 does not describe the 'overlap vehicle' row"
+ck; [[ "$_s7" == *'overlap vehicle'* && "$_s7" == *'Ruled by CTO agent'* ]] && ok "section 7's example carries an 'overlap vehicle' ruling row" || bad "section 7's example has no 'overlap vehicle' row"
+ck; [[ "$(printf '%s\n' "$_s7" | grep -c 'Authorized by delegation' || true)" -eq 1 ]] && ok "section 7's example still carries exactly one delegation row" || bad "section 7's example must carry exactly one delegation row (the gate suite counts it)"
+ck; [[ "$_s1" == *'Rule interface'* || "$_s3" == *'Rule interface'* ]] && ok "the reference points at the Rule interface" || bad "the reference does not point at the Rule interface"
 
 # --- E. mutation rows (each asserts the REASON) --------------------------------------------------------
 row() { # <label> <mutated-cto.md> <base> <expected-token|none>
@@ -274,9 +387,27 @@ misroute_row() { # <label> <mutated-cto.md> <prompt> <must-not-be>
 M="$SANDBOX/m"; mkdir -p "$M"; assert_fixture_dir "$M"
 nrows=0
 
+# --- verdict-helper controls: a helper that can never fail would turn every row below into noise ---------
+# Each control feeds a helper a known-bad input in a subshell (its own ledger is /dev/null) and requires
+# that the helper recorded a FAIL, or, for the green path, a PASS.
+awk 'NR <= 6 && /^description:/ && !d { sub(/Participates/, "Participate"); d = 1 } { print }' "$CTO" > "$M/ctl-bad.md"
+ctl_fails() { ( VERDICT_LOG=/dev/null; b="$fails"; "$@" >/dev/null 2>&1; [[ "$fails" -gt "$b" ]] ); }
+ctl_passes() { ( VERDICT_LOG=/dev/null; b="$passes"; "$@" >/dev/null 2>&1; [[ "$passes" -gt "$b" ]] ); }
+ctl_fails row "ctl" "$M/ctl-bad.md" "$BASE_REF" none                    || { printf 'FATAL: control: row() accepted a RED file as green\n' >&2; exit 2; }
+ctl_fails row "ctl" "$M/ctl-bad.md" "$BASE_REF" rule-no-menu            || { printf 'FATAL: control: row() accepted a RED file for the wrong token\n' >&2; exit 2; }
+ctl_fails row "ctl" "$CTO" "$BASE_REF" frontmatter-differs              || { printf 'FATAL: control: row() accepted a pristine file as RED\n' >&2; exit 2; }
+ctl_passes row "ctl" "$M/ctl-bad.md" "$BASE_REF" frontmatter-differs    || { printf 'FATAL: control: row() did not record a PASS for a correct RED row\n' >&2; exit 2; }
+ctl_passes row "ctl" "$CTO" "$BASE_REF" none                            || { printf 'FATAL: control: row() did not record a PASS for a correct green row\n' >&2; exit 2; }
+ctl_fails misroute_row "ctl" "$CTO" "$ONE_SHOT_PHRASE" rule             || { printf 'FATAL: control: misroute_row() accepted an unchanged selection\n' >&2; exit 2; }
+ctl_passes misroute_row "ctl" "$CTO" "$ONE_SHOT_PHRASE" assess          || { printf 'FATAL: control: misroute_row() did not record a PASS for a changed selection\n' >&2; exit 2; }
+_o="$(evaluate_cto "$M/ctl-bad.md" "$BASE_REF")"; _r=$?
+[[ "$_r" -ne 0 && "$_o" == *'V:frontmatter-differs'* ]] || { printf 'FATAL: control: evaluate_cto() passed a file whose frontmatter changed\n' >&2; exit 2; }
+_o="$(evaluate_cto "$CTO" "refs/does-not-exist")"; _r=$?
+[[ "$_r" -ne 0 && "$_o" == *'V:base-unresolvable'* ]] || { printf 'FATAL: control: evaluate_cto() passed with an unresolvable base\n' >&2; exit 2; }
+[[ "$(classify "$CTO" 'Own the epic #1')" == own-the-epic && "$(classify "$CTO" 'zzz')" == assess ]] || { printf 'FATAL: control: classify() cannot tell an epic prompt from noise\n' >&2; exit 2; }
+
 # F1 flip one byte of the frontmatter description
-awk 'NR <= 6 && /^description:/ && !d { sub(/Participates/, "Participate"); d = 1 } { print }' "$CTO" > "$M/f1.md"
-row "F1 frontmatter description byte changed" "$M/f1.md" "$BASE_REF" frontmatter-differs; nrows=$((nrows + 1))
+row "F1 frontmatter description byte changed" "$M/ctl-bad.md" "$BASE_REF" frontmatter-differs; nrows=$((nrows + 1))
 # F2 drop a heading of the four
 sed 's/Rejected alternatives:/Alternatives:/' "$CTO" > "$M/f2.md"
 row "F2 'Rejected alternatives:' heading renamed" "$M/f2.md" "$BASE_REF" "rule-heading-Rejected alternatives"; nrows=$((nrows + 1))
@@ -295,9 +426,12 @@ row "F6 delegation record format duplicated into the agent" "$M/f6.md" "$BASE_RE
 # F7 delete an old Sharp Edges line
 awk '!/Do not prescribe implementation details/' "$CTO" > "$M/f7.md"
 row "F7 an old body line removed" "$M/f7.md" "$BASE_REF" preserved-line-missing; nrows=$((nrows + 1))
-# F8 drop the non-delegable list's money item
-sed 's/money/cash/g' "$CTO" > "$M/f8.md"
-row "F8 non-delegable list loses an item" "$M/f8.md" "$BASE_REF" epic-nondelegable-list; nrows=$((nrows + 1))
+# F8 drop the money item from the non-delegable LIST LINE ONLY (the Rule section says "money" too, so a global
+# substitution would hide a local deletion)
+awk '/Non-delegable, ever:/ { gsub(/money, /, "") } { print }' "$CTO" > "$M/f8.md"
+row "F8 non-delegable list line loses 'money' (the same word elsewhere is untouched)" "$M/f8.md" "$BASE_REF" epic-nondelegable-list; nrows=$((nrows + 1))
+awk '/Non-delegable, ever:/ { gsub(/reserves a decision to the operator/, "is hard") } { print }' "$CTO" > "$M/f8b.md"
+row "F8b operator-reserved decisions dropped from the list" "$M/f8b.md" "$BASE_REF" epic-nondelegable-list; nrows=$((nrows + 1))
 # F9 close-on-last-verified wording removed
 sed 's/last verified item/final item/g' "$CTO" > "$M/f9.md"
 row "F9 close-only-on-the-last-verified-item wording removed" "$M/f9.md" "$BASE_REF" epic-close-on-last; nrows=$((nrows + 1))
@@ -307,24 +441,76 @@ row "H1 unresolvable base ref" "$CTO" "refs/does-not-exist" base-unresolvable; n
 { cat "$CTO"; printf '\n\n'; } > "$M/h2.md"
 row "H2 trailing blank lines only" "$M/h2.md" "$BASE_REF" none; nrows=$((nrows + 1))
 
+# Own-the-epic mutations: each removes ONE contract element and must red its own property.
+mut() { # <file-out> <sed-expr>
+  sed "$2" "$CTO" > "$M/$1"
+}
+mut e1.md 's/issues\/<epic>\/comments --paginate/issues\/<epic>\/comments/'
+row "E1 discovery loses --paginate" "$M/e1.md" "$BASE_REF" epic-discovery; nrows=$((nrows + 1))
+mut e2.md 's/--audit --at <ISO8601 UTC>/--audit/'
+row "E2 verify synopsis loses --at" "$M/e2.md" "$BASE_REF" epic-verify-synopsis; nrows=$((nrows + 1))
+mut e3.md 's/--section "Production Envelope - <title>"/--section "Production Envelope"/'
+row "E3 the envelope section is not addressed by title" "$M/e3.md" "$BASE_REF" epic-section-title; nrows=$((nrows + 1))
+mut e4.md 's/Epic: #/Epic number /'
+row "E4 the Epic: line dropped" "$M/e4.md" "$BASE_REF" epic-epic-line; nrows=$((nrows + 1))
+mut e5.md 's/gh workflow run <file>\.yml/gh workflow run <file>/'
+row "E5 allowlist loses the workflow-run grammar" "$M/e5.md" "$BASE_REF" epic-allowlist; nrows=$((nrows + 1))
+mut e6.md 's/must NOT run/may run/'
+row "E6 the CTO is allowed to render a delegation" "$M/e6.md" "$BASE_REF" epic-no-render; nrows=$((nrows + 1))
+mut e7.md 's/result=ok|rolled-back/result=done/'
+row "E7 receipt format changed" "$M/e7.md" "$BASE_REF" epic-receipt-format; nrows=$((nrows + 1))
+mut e8.md 's/gh pr merge <N> --disable-auto/gh pr merge <N>/'
+row "E8 stop sequence no longer disarms armed merges" "$M/e8.md" "$BASE_REF" epic-stop-sequence; nrows=$((nrows + 1))
+mut e9.md 's/Headless/Interactive/g'
+row "E9 headless behaviour removed" "$M/e9.md" "$BASE_REF" epic-headless; nrows=$((nrows + 1))
+mut e10.md 's/recorded consent/two independent keys/g'
+row "E10 the two-independent-keys claim returns" "$M/e10.md" "$BASE_REF" epic-two-keys-claim; nrows=$((nrows + 1))
+mut e11.md 's/"${CLAUDE_PLUGIN_ROOT}\/scripts\/delegation-verify.sh"/plugins\/soleur\/scripts\/delegation-verify.sh/'
+row "E11 a repo-relative verifier path" "$M/e11.md" "$BASE_REF" repo-relative-path; nrows=$((nrows + 1))
+mut e12.md 's/operator-holds\.md)/operator-holds-gone.md)/g'
+row "E12 the holds-container link does not resolve" "$M/e12.md" "$BASE_REF" epic-holds-link-unresolved; nrows=$((nrows + 1))
+mut e13.md 's/technical-ruling-delegation\.md)/technical-ruling-gone.md)/g'
+row "E13 the Rule interface's reference link does not resolve" "$M/e13.md" "$BASE_REF" rule-link-unresolved; nrows=$((nrows + 1))
+# The Epic section's own words do not count for the Rule section (and vice versa): delete the Rule section's
+# `never a menu` and the epic section cannot make up for it.
+mut e14.md 's/never a menu/never a list/'
+row "E14 Rule section loses 'never a menu'" "$M/e14.md" "$BASE_REF" rule-no-menu; nrows=$((nrows + 1))
+mut e15.md 's/hold-gate-eval.sh" --file /hold-gate-eval.sh" --plan /'
+row "E15 the envelope check no longer uses --file" "$M/e15.md" "$BASE_REF" epic-hold-eval-exit0; nrows=$((nrows + 1))
+
 # Selector mutations: a cue removed from the document must change what a real caller gets.
-sed 's/`Do NOT use AskUserQuestion`/`do-not-use-the-ask-tool`/' "$CTO" > "$M/s1.md"
-misroute_row "S1 'Do NOT use AskUserQuestion' cue removed (one-shot phrase)" "$M/s1.md" "Evidence: x. $ONE_SHOT_PHRASE" rule; nrows=$((nrows + 1))
+sed 's/`[Dd]o NOT use AskUserQuestion`/`do-not-use-the-ask-tool`/g' "$CTO" > "$M/s1.md"
+misroute_row "S1 both 'Do/do NOT use AskUserQuestion' cues removed (one-shot phrase)" "$M/s1.md" "Evidence: x. $ONE_SHOT_PHRASE" rule; nrows=$((nrows + 1))
 sed 's/`Own the epic`/`Take the epic`/' "$CTO" > "$M/s2.md"
 misroute_row "S2 'Own the epic' cue removed (go phrase)" "$M/s2.md" "$GO_OWN_CUE #1: finish" own-the-epic; nrows=$((nrows + 1))
 # S3 over-broad cue: the word 'question' as a Rule cue would hijack the brainstorm prompt
 sed 's/`BINDING`/`BINDING`, `question`/' "$CTO" > "$M/s3.md"
 misroute_row "S3 over-broad 'question' cue (brainstorm prompt)" "$M/s3.md" "${DOMAIN_PROMPT//\{desc\}/x}" assess; nrows=$((nrows + 1))
+# S4 the assess-first rule removed: a plan-review prompt written with the capitalised cue reaches Rule
+sed 's/`Structured advisory only` or `IMPLEMENTATION PLAN (not code)`/`zz-gone-1` or `zz-gone-2`/' "$CTO" > "$M/s4.md"
+misroute_row "S4 assess-first cues removed (plan-review prompt, capitalised sentence)" "$M/s4.md" "${PLAN_REVIEW_FULL//do NOT use AskUserQuestion/Do NOT use AskUserQuestion}" assess; nrows=$((nrows + 1))
+row "S4b assess-first cues removed" "$M/s4.md" "$BASE_REF" selector-assess-cue-structured; nrows=$((nrows + 1))
+# S5 a lowercase `binding` cue brings back the false positive on feature text
+sed 's/`BINDING`/`BINDING`, `binding`/' "$CTO" > "$M/s5.md"
+misroute_row "S5 lowercase 'binding' cue (a feature about key binding settings)" "$M/s5.md" "${DOMAIN_PROMPT//\{desc\}/key binding settings}" assess; nrows=$((nrows + 1))
+row "S5b lowercase 'binding' cue" "$M/s5.md" "$BASE_REF" selector-lowercase-binding; nrows=$((nrows + 1))
+# S6 the assess rule moved after the Rule rule
+awk '/^2\. The prompt contains `Structured/ { held = $0; next } held != "" && /^3\. / { print; print held; held = ""; next } { print }' "$CTO" > "$M/s6.md"
+row "S6 assess rule placed after the Rule rule" "$M/s6.md" "$BASE_REF" selector-assess-after-rule; nrows=$((nrows + 1))
 
 # --- F. informational census of every cto spawn surface (drift is a WARN, never a vacuous green) ------
 SURFACES="$(cd "$ROOT" && grep -rl 'soleur:engineering:cto' plugins/soleur/skills plugins/soleur/commands .claude/hooks scripts .github/workflows 2>/dev/null | sort || true)"
 ck; [[ "$(printf '%s\n' "$SURFACES" | grep -c . || true)" -ge 8 ]] && ok "cto spawn-surface census found $(printf '%s\n' "$SURFACES" | grep -c .) files" || bad "cto spawn-surface census found fewer than 8 files (grep scope broke)"
 
-# --- ANTI-VACUITY: the assertion floor -------------------------------------------------------------------
-# Derived: properties + aggregate + 6 extraction floors + callers + caller floor + 4 delegation-path rows
-# + 4 section-3 rows + mutation rows + census.
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 6 + caller_n + 1 + 4 + 4 + nrows + 1 ))
-MIN_ASSERTIONS=${EXPECTED_ASSERTIONS:-1}
+# --- ANTI-VACUITY: the assertion floors --------------------------------------------------------------------
+# (1) derived: properties + aggregate + anchor + extraction floors + callers + caller floor + 4 delegation-path
+#     rows + 11 reference rows + mutation rows + census.
+# (2) ABSOLUTE: the count of a green run, committed with ZERO slack. A derived floor moves with the rows it
+#     guards (delete six rows and the floor drops with them), so this constant is the one that bites. Raise it
+#     in the same commit that adds rows, never ahead of them.
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 8 + caller_n + 1 + 4 + 11 + nrows + 1 ))
+ABSOLUTE_FLOOR=130
+MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
