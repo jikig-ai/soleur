@@ -260,7 +260,7 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# THIRTEEN explorations carry this line (monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #8611's three, #8706's
+# FOURTEEN explorations carry this line (monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #7530's registry_clientip_not_rfc1918, #8611's three, #8706's
 # luks_monitor_host_timer_dark, #9045's workspaces_luks_deadman_fired, #9342's bwrap_probe_rollback, #9391's ghcr_hostsfile_deny_lost, #9534's egress_gw_deny_spike and
 # egress_gw_probe_silent, and the review follow-up's egress_gw_probe_fail), and the guard
 # reads the monitor_send_failed block only — so the mutation must land in THAT block, which is the

@@ -111,7 +111,11 @@ In every refusal zot never starts. The zot liveness heartbeat goes absent, which
    A release that WAS published and has since been deleted **cannot** be re-created under the same
    tag, because this repo's releases are immutable. For that case use step 3.
 3. **Revert the PR.** Revert the PR that introduced or moved the pins. The dispatcher sees the
-   rendered `user_data` change and replaces the host back onto the previous render. If its push-arm
+   rendered `user_data` change and replaces the host back onto the previous render, **provided the dispatcher's
+   watermark (the head of its last SUCCESSFUL run) differs from that render**: after a first run that did not
+   succeed (apply-failed, cancelled, dispatch-failed) a revert that restores the pre-merge template renders
+   byte-identical to the watermark, and its push run is a green no-op with no verdict comment. In that case
+   re-fire through the manual arm (step 1), which always delivers. If its push-arm
    run is refused on P1 (deploys fell back to local-cache during the outage), re-fire it through the
    manual arm (step 1), which skips P1.
 4. **zot dark for more than 24 hours.** P5 then finds no container-log rows and refuses even the

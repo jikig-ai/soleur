@@ -22,6 +22,7 @@ re_evaluation_triggers:
   - "First arms-length (non-Jikigai) principal holding `zot-pull` / `zot-push` credentials. The §(g) basis for declining a general free-text scrubber is that zot's identity model carries only service principals; a human-held credential re-opens that reasoning."
   - "Any zot version bump that changes the log schema — in particular one that stops self-masking `Authorization`, moves credentials outside the `headers` object, or adds a top-level identifier field."
   - "Any `clientIP` value observed on Better Stack source 2457081 from the `soleur-registry` plane that is not an RFC1918 address. Post-delivery (2026-08-12T20:54:12Z) this is the observable signature of the public-ingress trigger above having fired, on rows already in flight. The §(c) re-attestation of 2026-08-13 verifies the topology that bounds observable values; it does not audit shipped values."
+clientip_monitoring_pointer: "2026-10-14 (#7530, merge-conditioned on PR #10320): the non-RFC1918 clientIP trigger (the last entry of re_evaluation_triggers) gains a standing Better Stack alert, registry_clientip_not_rfc1918, as its observable alert email. NOT in force until the PR is merged, the push apply created the alert and the #7530 follow-through probe graded the new boot's window. See the appended section at the end of this record."
 ---
 
 # CLO counsel review — #7440 / PR #7444 (registry zot container-log shipper)
@@ -409,3 +410,15 @@ assert deployment state in a tense that silently becomes false; state it as date
 merge, as the amendment above now does. And a topology-dependent legal conclusion reasoned against
 an inert channel is a **prediction**, not an attestation — it must be re-verified, and visibly
 re-dated, on the day the channel starts carrying traffic.
+
+## 12. Addendum 2026-10-14 (#7530, merge-conditioned on PR #10320): the non-RFC1918 clientIP trigger gains a standing monitor
+
+> **Superseded 2026-10-14 (#7530), merge-conditioned on PR #10320 — the observation channel only, never the trigger.** The last re-evaluation trigger in the frontmatter (any `clientIP` on source 2457081 from the `soleur-registry` plane that is not an RFC1918 address) remains a governing trigger. What changes is how it is observed: the 2026-08-13 text left the continuously-enforced check "referred to the CTO and tracked separately", and the earlier plan to enforce it through a follow-through probe arm was withdrawn because that probe's tracker closes on PASS and then drops out of the sweeper's 14-day lookback (the probe has not run since about 2026-08-27). The CTO ruled for a standing Better Stack Logs alert, `registry_clientip_not_rfc1918`. **This addendum fires on merge of PR #10320 and is NOT in force before the merge, the push apply that creates the alert, and the #7530 follow-through probe's PASS over the new boot's window.**
+
+What this addendum records, without changing any conclusion above:
+
+- An alert email from that alert is the observable signature of the first trigger (public ingress) having fired on rows already in flight. It is detection and not prevention (latency up to about 20 minutes), so legal records say "monitored and alerted by email (free tier: email only, no escalation policy)", never "guaranteed". It samples shipped rows only (the shipper rate-caps ordinary rows to 17 per tick), grades the first `clientIP` in zot's own field position, and does not cover a public address in another top-level field. The measured population is the shipper arm only; the `SOLEUR_ZOT_DISK` arm had 0 rows carrying a `clientIP` in the live 7-day probe and is not credited with coverage. Awareness for Art. 33 purposes is not fixed by this record: the alert email's delivery time is the earliest candidate and the CLO fixes the anchor.
+- The responder's steps (fix the cause first; record the exposure window and affected row count, counts only; the CLO classifies and the optional veto stands; the Art. 33 72-hour question; external counsel conditions) are in `knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md`.
+- The measured 7-day population on 2026-10-14 held no non-RFC1918 value, which corroborates, and is not equivalent to, the topology reasoning at §(c) of the register.
+- Cross-reference: `knowledge-base/legal/audits/2026-09-08-clo-attestation-7500-zot-last-err-redaction.md` ("Not attesting to `clientIP`") named #7530 as the owner of the `clientIP` question; this addendum is where that ownership is discharged as monitoring. That attestation's conclusion is unchanged.
+- The Better Stack Vendor DPA remains PENDING (#7529); this addendum does not cure that limb.
