@@ -835,7 +835,10 @@ mutate file-title "$(noop file-title)" && killed file-title "0|holds: 1 discharg
 echo "=== Floor: the SUT answered every row ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
 # Zero-slack floors, committed from a green run: re-measure and raise them when rows are added; a lower number is a deleted row.
-if (( n_calls >= 911 )); then echo "  PASS: gh stub calls $n_calls >= 911"; PASS=$((PASS + 1))
-else echo "  FAIL: gh stub calls $n_calls < 911 -- the rows did not drive the script"; FAIL=$((FAIL + 1)); fi
+if (( n_calls >= 911 )); then
+  echo "  PASS: gh stub calls $n_calls >= 911"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: gh stub calls $n_calls < 911 -- the rows did not drive the script"; FAIL=$((FAIL + 1))
+fi
 
 print_results 537

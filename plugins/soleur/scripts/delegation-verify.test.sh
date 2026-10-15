@@ -1377,7 +1377,10 @@ mutate render-guard 's/\[ \$# -ge 2 \] \|\| die_render "--epic needs a value"; E
 echo "=== Floors: the SUT answered every row (zero slack) ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
 CALLS_FLOOR=2684; RESULTS_FLOOR=1733
-if (( n_calls >= CALLS_FLOOR )); then echo "  PASS: gh stub calls $n_calls >= $CALLS_FLOOR"; PASS=$((PASS + 1))
-else echo "  FAIL: gh stub calls $n_calls < $CALLS_FLOOR -- the rows did not drive the script"; FAIL=$((FAIL + 1)); fi
+if (( n_calls >= CALLS_FLOOR )); then
+  echo "  PASS: gh stub calls $n_calls >= $CALLS_FLOOR"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: gh stub calls $n_calls < $CALLS_FLOOR -- the rows did not drive the script"; FAIL=$((FAIL + 1))
+fi
 
 print_results "$RESULTS_FLOOR"
