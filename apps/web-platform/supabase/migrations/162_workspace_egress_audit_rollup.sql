@@ -25,6 +25,22 @@
 -- function pins `public, pg_temp`. No CREATE INDEX CONCURRENTLY (the migration
 -- runs inside a transaction).
 
+DO $$
+BEGIN
+  IF to_regclass('public.workspaces') IS NULL THEN
+    RAISE EXCEPTION USING
+      MESSAGE = 'Migration 162 precondition failed: public.workspaces does not exist.',
+      DETAIL  = '_schema_migrations may claim 053_organizations_and_workspace_members is applied while the workspaces table is absent (schema-vs-ledger drift class #4338).',
+      HINT    = 'Recovery: knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md.';
+  END IF;
+  IF to_regclass('public.workspace_members') IS NULL THEN
+    RAISE EXCEPTION USING
+      MESSAGE = 'Migration 162 precondition failed: public.workspace_members does not exist.',
+      DETAIL  = 'The ingest and erase functions read public.workspace_members (schema-vs-ledger drift class #4338).',
+      HINT    = 'Recovery: knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md.';
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS public.workspace_egress_audit_rollup (
   workspace_id   uuid        NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
   bucket_start   timestamptz NOT NULL,
