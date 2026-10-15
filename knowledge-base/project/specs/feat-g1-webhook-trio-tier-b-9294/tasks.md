@@ -1,6 +1,6 @@
 # Tasks: G1 webhook trio to Tier B (#9294)
 
-Plan: knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.md. CPO sign-off is withheld pending D-1 and D-2; no work starts until the owner answers them.
+Plan: knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.md. CPO sign-off granted 2026-10-15 (conditions: owner stamps the rotation start date at the wipe). Sequencing: PR-0 now; PR-1 only if released before the rehearsal dispatch; PR-2 to PR-4 only if green by then; nothing between the rehearsal and the wipe; rotation after the wipe; git-data-cutover.yml frozen from the rehearsal dispatch (Ruled by CTO agent, 2026-10-15).
 
 ## 1. PR-0: docs and tests (no behaviour change)
 - 1.1 ADR-241 D1 amendment (inventory, G1b census miss, orphan CF_TUNNEL_TOKEN, narrow project, host-coverage result)

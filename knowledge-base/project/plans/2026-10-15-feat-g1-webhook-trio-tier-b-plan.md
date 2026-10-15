@@ -20,7 +20,7 @@ Planning only. No apply, dispatch or production write is part of this plan's aut
 
 Governing rulings, recorded and not re-opened here: Ruled by CTO agent, 2026-10-12 on #9294 (PR sequence; the Access token is removed from state with `removed { destroy = false }`, never `-replace`; the SSH trio is a separate window) and Ruled by CTO agent, 2026-10-15 (three forks, in Decisions below).
 
-**Plan-review status (2026-10-15):** six reviewers reported; mechanical findings are applied below; taste findings and two owner decisions are listed in "Open decisions". CPO sign-off: **withheld** until Open decisions D-1 and D-2 are answered.
+**Plan-review status (2026-10-15):** six reviewers reported; mechanical findings are applied below. The owner said "go with the CTO's recommendations"; Ruled by CTO agent, 2026-10-15 on D-1, D-2, T-1, T-2 and T-4 (see "Decisions ruled"). CPO re-review of the revised plan: see Domain Review.
 
 ## Research Insights
 
@@ -158,15 +158,25 @@ Every step is run by the agent only after the owner names that exact command; th
 | 6 | Delete the Tier-A copies and repo secrets | `doppler secrets delete <NAME> -p soleur -c prd_terraform --yes`; `gh secret delete <NAME> -R jikig-ai/soleur` | all groups green; baseline empty; the Tier-B copies re-verified equal | the census row reds if a consumer remains |
 | 7 | Rotation | as in the Rotation section; each sub-step its own command | step 6 done; old values in 0600 files; freeze check | an unexpected probe status; stop and do not delete the old value |
 
-## Sequencing against the git-data deadline
+## Sequencing against the git-data deadline (Ruled by CTO agent, 2026-10-15, D-1)
 
-G1 gates #8609, not the git-data flip, but the two collide in three places: PR-2 edits `git-data-cutover.yml`; the flip redeploys both web hosts through the same deploy webhook that the rotation changes; and owner time is shared. Recommended default (open for the owner, D-1): PR-0 and PR-1 (no behaviour change) proceed now; PR-2 to PR-4, the deletions and the rotation do not start between the first git-data rehearsal dispatch and the end of the 7-day soak, because a half-rotated webhook during a flip is exactly the stranded-write-path failure; `git-data-cutover.yml` is frozen against G1 edits from the rehearsal dispatch. If the owner prefers G1 first, the same freeze applies in reverse and the 2026-11-04 date moves to the owner and the CLO.
+G1 gates #8609, not the git-data flip. The git-data date is hard (flip by 2026-11-04, plaintext volume 2026-11-12), and the rehearsal must certify the exact credential path the flip uses, so G1 yields:
 
-## Open decisions (owner)
+- **PR-0 proceeds now** (no behaviour change).
+- **PR-1 proceeds now, but only if** it is merged and deployed through one normal release, with the empty-"next" render proven byte-identical to today's hooks output, **before the owner names the rehearsal dispatch** (`ci-deploy.sh` is on the flip's redeploy path). If it misses that cutoff, all of PR-1 waits until after the wipe.
+- **PR-2 to PR-4 and the Tier-A deletions** may run before the rehearsal only as units that are merged, canaried (`source=tier_b`) and green by the time the owner names the rehearsal dispatch. Whatever is unfinished then resumes after the wipe.
+- **Hard cutoff:** nothing G1-related lands between the rehearsal dispatch and the end of the wipe, because a rollback during the soak still uses the webhook and the builds.
+- **`git-data-cutover.yml` is frozen against G1 edits** from the moment the owner names the rehearsal dispatch until the wipe completes; a later edit invalidates the rehearsal and it is repeated.
+- **The rotation starts only after the wipe**, never before the flip: its phase A to C freeze would block the release builds the git-data gates need and would change credentials between the rehearsal and the flip. The owner stamps a rotation start date at the wipe.
+- **Override:** evidence of credential misuse preempts all of this; the git-data date then moves to the owner and the CLO.
 
-- **D-1 sequencing** (above): the recommended default stands unless the owner names another order.
-- **D-2 interim exposure:** until the rotation completes the old values stay live, and deleting the Tier-A copies does not cure a leak that already happened; the owner accepts that window, or asks for the rotation to precede the deletions. The one-time `deploy-channel` environment has 0 reviewers by design (unattended jobs); the owner accepts that. G1b stays open, so #8609 stays blocked.
-- **Taste items (surfaced, not applied):** T-1 merge PR-3 and PR-4 into one PR (the edit is the same shape; the CTO ruled one PR per consumer group); T-2 drop the `or` rotation and rotate the HMAC by a single-secret change inside a deploy freeze (removes PR-1's template and fan-out changes; accepts a short deploy outage); T-3 do not commit a reconciliation script (applied above as a command in the PR body); T-4 give the apply environments the narrow token too so there is one copy instead of two (reopens Fork 1).
+## Decisions ruled (Ruled by CTO agent, 2026-10-15; the owner said "go with the CTO's recommendations")
+
+- **D-2 interim exposure: "move, delete the Tier-A copies, then rotate" is accepted; rotating first is rejected** (consumers that had not moved would need the new values written into Tier A, which branch workflows can read, defeating P3). What the owner accepts: the old HMAC and old Access pair stay valid until phase C and the old token's deletion, which given D-1 is weeks; deletion stops new reads but does not cure past ones (branch workflows, logs, and R2 state versions that keep the old Access secret until that token is deleted); abuse needs both the Access pair (to pass the edge) and the HMAC (to authorize the hooks); the `deploy-channel` environment has 0 reviewers by design (unattended jobs); G1b stays open, so #8609 stays blocked.
+- **T-1: keep one PR per consumer group** (PR-3 touches the release chain the git-data builds use, so it falls under the cutoff; PR-4 does not; their canaries and reverts differ).
+- **T-2: keep the `or` two-secret HMAC rotation** (a single-secret change is not atomic across two hosts and all signers; every signed request would get 403 in the gap and `fan_out_to_peers` would mis-sign for the peer). PR-1's guard keeps the empty-"next" render identical to today's.
+- **T-3 applied** (no committed reconciliation script).
+- **T-4: keep two copies** (the narrow project exists so unprivileged jobs never hold a token for a project holding more than the trio; the hash-equal check at each rotation step contains drift).
 
 ## Files to Create
 - `apps/web-platform/infra/deploy-channel-environment.tf`
@@ -186,7 +196,7 @@ G1 gates #8609, not the git-data flip, but the two collide in three places: PR-2
 **If this leaks, the user's workflow and data are exposed via:** the three credentials, which together can replace `ci-deploy.sh` and read the host credential file on web-1, reaching every tenant on that host; the window between the move and the rotation, and the temporary second copy and "next" secret, widen that exposure briefly.
 **Brand-survival threshold:** single-user incident
 
-`requires_cpo_signoff: true`. CPO sign-off is **withheld** pending D-1 and D-2; `soleur:engineering:review:user-impact-reviewer` runs at review.
+`requires_cpo_signoff: true`. CPO sign-off: **granted** on re-review (2026-10-15, conditions in Domain Review); `soleur:engineering:review:user-impact-reviewer` runs at review.
 
 ## Domain Review
 
@@ -198,7 +208,9 @@ G1 gates #8609, not the git-data flip, but the two collide in three places: PR-2
 
 ### Product
 **Status:** reviewed
-**Assessment:** CPO advisory 2026-10-15: user-brand impact adequate on exposure and thin on tenant-visible failure (now expanded); web-1 protection per step good; the plan must state where G1 sits relative to the 2026-11-04 git-data deadline and the owner must accept the interim exposure. CPO sign-off: withheld pending D-1 and D-2.
+**Assessment:** CPO advisory 2026-10-15: user-brand impact adequate on exposure and thin on tenant-visible failure (now expanded); web-1 protection per step good; the plan must state where G1 sits relative to the 2026-11-04 git-data deadline and the owner must accept the interim exposure. CPO sign-off: withheld on the first review (no sequencing against the git-data deadline, no acceptance of the interim exposure); the CTO rulings above supply both and the owner has adopted them; re-review result below.
+
+**CPO re-review, 2026-10-15: CPO sign-off: granted**, with two conditions: (1) this result is recorded here (done); (2) the owner stamps the rotation start date at the wipe (D-1). Both of the first review's conditions are met: G1 yields to the 2026-11-04 git-data deadline (PR-0 now; PR-1 only if released before the rehearsal dispatch; PR-2 to PR-4 only if green by then; nothing between the rehearsal and the wipe; the rotation after the wipe), and D-2 names what the owner accepts. No new product or brand risk.
 
 No Marketing, Legal, Sales, Finance or Support implications: no user-facing surface, no personal data processed by these credentials, no vendor or contract change.
 
