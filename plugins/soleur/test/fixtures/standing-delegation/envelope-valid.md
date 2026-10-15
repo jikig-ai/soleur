@@ -3,13 +3,14 @@
 ## Production Envelope - first merge
 
 Delegation: @URL@
+Epic: #77
 Scope item: 1
 
 Command:
 
 ```text
 gh pr merge 123 --squash
-gh workflow run example-release.yml -f target=staging
+gh pr merge 123 --squash --auto
 ```
 
 Blast radius: one example service, staging only.

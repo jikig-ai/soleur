@@ -3,6 +3,7 @@
 ## Production Envelope - alpha merge
 
 Delegation: @URL@
+Epic: #77
 Scope item: 1
 
 Command:
@@ -23,6 +24,7 @@ Stop conditions: the probe fails.
 ## Production Envelope - beta dispatch
 
 Delegation: @URL@
+Epic: #77
 Scope item: 3
 
 Command:

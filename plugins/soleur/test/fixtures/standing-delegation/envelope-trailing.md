@@ -1,12 +1,13 @@
 ## Production Envelope - trailing space
 
 Delegation: @URL@
+Epic: #77
 Scope item: 2
 
 Command:
 
 ```text
-gh pr merge 123 --squash
+gh pr merge 124 --squash --auto
 gh pr merge 124 --squash@TRAILSP@
 ```
 
