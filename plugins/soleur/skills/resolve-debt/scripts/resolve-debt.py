@@ -303,9 +303,19 @@ def mutate_entry(fp: Path, new_status: str, linked_issue: int | None) -> None:
     except Exception:
         try:
             os.unlink(tmp_path)
-        except OSError:
-            pass
+        except OSError as exc:
+            _note(exc, "tmp-cleanup")
         raise
+
+
+def _note(exc, site):
+    # Class name and a static site label only. Never str(exc)/repr(exc): exception text can carry a path or
+    # ledger content. `site` is a string literal at every call site.
+    try:
+        sys.stderr.write("resolve-debt: swallowed %s at %s\n" % (type(exc).__name__, site))
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass  # a closed or full stderr must not turn a swallowed error into a crash
 
 
 def print_diff(fp: Path) -> None:
