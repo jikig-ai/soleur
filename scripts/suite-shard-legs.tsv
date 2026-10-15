@@ -472,6 +472,7 @@ scripts/probe-github-app-mint	1
 scripts/probe-legal-corpus-truth-live	1
 scripts/prod-version-drift-check	5
 scripts/raise-tmp-tmpfs-ceiling	6
+scripts/registry-htpasswd-stdin-10119	2
 scripts/registry-luks-live-8386	7
 scripts/rename-guard	6
 scripts/review-reminder-liveness	2

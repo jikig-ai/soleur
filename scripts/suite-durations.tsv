@@ -469,6 +469,7 @@ scripts/probe-github-app-mint	1180	floor
 scripts/probe-legal-corpus-truth-live	131	measured
 scripts/prod-version-drift-check	22764	measured
 scripts/raise-tmp-tmpfs-ceiling	1186	measured
+scripts/registry-htpasswd-stdin-10119	4200	measured
 scripts/registry-luks-live-8386	2717	measured
 scripts/rename-guard	3196	measured
 scripts/review-reminder-liveness	127	measured
