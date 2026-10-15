@@ -2009,7 +2009,7 @@ check("AC9: DOPPLER_TOKEN_PRD is named only by the three flag reads (cutover.fla
       and all(((s.get("env") or {}).get("DOPPLER_TOKEN")) == "${{ secrets.DOPPLER_TOKEN_PRD }}" for s in _prd_steps.values())
       and set(((_prd_steps.get("cutover.flag_precheck") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE"}
       and set(((_prd_steps.get("wipe.wipe_flag_precheck") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE", "GH_TOKEN", "WIPE_MODE"}
-      and set(((_prd_steps.get("wipe.wipe_flag_reread") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE"}, prd_sites)
+      and set(((_prd_steps.get("wipe.wipe_flag_reread") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE", "WIPE_VARIANT"}, prd_sites)
 # The write-seam token census: bound ONLY on the steps that write prd — flag_write, the
 # cutover-stamp step and the finalizer's unwind. secrets_check's presence probe
 # (FLAG_WRITE_TOKEN_PRESENT, a boolean) is a name-reference, not a binding — exempt.

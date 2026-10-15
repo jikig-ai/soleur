@@ -931,10 +931,48 @@ jobs:
           bash apps/web-platform/infra/git-data-flag-precheck.sh > "$RUNNER_TEMP/precheck.out" || rc=$?
           cat "$RUNNER_TEMP/precheck.out"
           if [[ "$rc" -ne 0 ]]; then exit "$rc"; fi
+          variant="$(sed -n 's/^wipe_variant=//p' "$RUNNER_TEMP/precheck.out" | head -n 1)"
+          case "$variant" in
+            flip_chained|separated|none) : ;;
+            *)
+              echo "::error title=git-data-wipe::verdict=wipe_precondition_variant_unreadable"
+              exit 5
+              ;;
+          esac
           would="$(sed -n 's/^would_refuse=//p' "$RUNNER_TEMP/precheck.out")"
           stamp_epoch="$(sed -n 's/^wipe_soak .*stamp_epoch=\([0-9][0-9]*\).*/\1/p' "$RUNNER_TEMP/precheck.out")"
           if [[ -z "$would" ]]; then would=none; fi
-          if [[ -n "$stamp_epoch" ]]; then
+          if [[ "$variant" == "separated" ]]; then
+            # The separated variant (ADR-239 Amendment 2026-10-15): no flip and no soak, so the run-record scan is the
+            # barrier that a flip never ran. GDSD_SELF_RUN_ID excludes THIS run's current attempt only; the boot_complete
+            # predicates are W5 (both variants) and the on-host store-root count is W7.
+            if ! source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-store-dirty-scan.sh"; then
+              echo "::error title=git-data-wipe::verdict=wipe_separated_scan_unreadable reason=library"
+              exit 5
+            fi
+            sv=""
+            sv="$(git_data_store_dirty_list | GDSD_SELF_RUN_ID="$GITHUB_RUN_ID" git_data_store_dirty_scan)" || true
+            sw=""
+            case "$sv" in
+              store_clean) : ;;
+              "store_dirty "*) sw=wipe_separated_store_dirty ;;
+              "cutover_in_flight "*) sw=wipe_separated_cutover_in_flight ;;
+              *) sw=wipe_separated_scan_unreadable ;;
+            esac
+            echo "separated run-record scan: ${sv%% *}"
+            if [[ -n "$sw" ]]; then
+              if [[ "$WIPE_MODE" == "wipe_check" ]]; then
+                if [[ "$would" == "none" ]]; then would="$sw"; fi
+              else
+                case "$sw" in
+                  wipe_separated_store_dirty) echo "::error title=git-data-wipe::verdict=wipe_separated_store_dirty" ;;
+                  wipe_separated_cutover_in_flight) echo "::error title=git-data-wipe::verdict=wipe_separated_cutover_in_flight" ;;
+                  *) echo "::error title=git-data-wipe::verdict=wipe_separated_scan_unreadable" ;;
+                esac
+                exit 5
+              fi
+            fi
+          elif [[ -n "$stamp_epoch" ]]; then
             if ! source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-wipe-runs.sh"; then
               echo "::error title=git-data-wipe::verdict=wipe_precondition_run_list_unreadable reason=library"
               exit 5
@@ -957,6 +995,7 @@ jobs:
             echo "::error title=git-data-wipe::verdict=wipe_precondition_stamp_absent"
             exit 5
           fi
+          echo "variant=$variant" >> "$GITHUB_OUTPUT"
           echo "would_refuse=$would" >> "$GITHUB_OUTPUT"
 
       - name: Origin run check (the detaching wipe run)
@@ -1213,10 +1252,11 @@ jobs:
           GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
           MODE: wipe_assert
           WIPE_PHASE: ${{ steps.wipe_confirm.outputs.mode == 'wipe_finish' && 'finish' || 'pre' }}
-          WIPE_LISTING: ${{ steps.wipe_confirm.outputs.mode == 'wipe' && 'run' || 'skip' }}
+          WIPE_LISTING: ${{ steps.wipe_confirm.outputs.mode != 'wipe_finish' && 'run' || 'skip' }}
           WIPE_ROW_EPOCH: ${{ steps.wipe_boot_read.outputs.row_epoch }}
           WIPE_RUN_MODE: ${{ steps.wipe_confirm.outputs.mode }}
           W3_WOULD: ${{ steps.wipe_flag_precheck.outputs.would_refuse }}
+          W3_VARIANT: ${{ steps.wipe_flag_precheck.outputs.variant }}
         run: |
           set -euo pipefail
           rec="$RUNNER_TEMP/git-data-wipe-record"
@@ -1233,11 +1273,46 @@ jobs:
           bash apps/web-platform/infra/git-data-cutover.sh
           env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
             bash apps/web-platform/infra/git-data-wipe.sh stamp --epoch w7
+          srr_word=""
+          if [[ "$WIPE_PHASE" == "pre" ]]; then
+            ans="$(sed -n 's/^wipe_assert=//p' "$GITHUB_OUTPUT" | tail -n 1)"
+            srr="$(sed -n 's/.* store_root_repos=\([0-9][0-9]*\)$/\1/p' <<<"$ans")"
+            # The on-host store-root count is the separated variant's second, independent barrier (the host is not told
+            # the variant): anything but an integer 0 refuses. wipe_check reports it instead.
+            if [[ "$W3_VARIANT" == "separated" ]]; then
+              if ! [[ "$srr" =~ ^[0-9]+$ ]]; then
+                srr_word=wipe_separated_store_root_unreadable
+              elif [[ "$srr" -ne 0 ]]; then
+                srr_word=wipe_separated_store_root_populated
+              fi
+            fi
+            if [[ -n "$srr_word" && "$WIPE_RUN_MODE" != "wipe_check" ]]; then
+              case "$srr_word" in
+                wipe_separated_store_root_populated) echo "::error title=git-data-wipe::verdict=wipe_separated_store_root_populated" ;;
+                *) echo "::error title=git-data-wipe::verdict=wipe_separated_store_root_unreadable" ;;
+              esac
+              exit 5
+            fi
+            srv_created="$(sed -n 's/^server_created=//p' "$rec")"
+            row_at="$(TZ=UTC0 printf '%(%Y-%m-%dT%H:%M:%SZ)T' "${WIPE_ROW_EPOCH:-0}")"
+            # Evidence record (CLO, ADR-239 Amendment 2026-10-15): every line says measured, policy or inherited. Counts
+            # only: the host line carries no name and no id.
+            {
+              echo "### git-data wipe evidence, pre-state"
+              echo "- measured, this run: plaintext volume ${WIPE_VOLUME_ID}, server ${WIPE_SERVER_ID}, LUKS volume ${WIPE_LUKS_VOLUME_ID}; server created ${srv_created}"
+              echo "- measured, this run: variant ${W3_VARIANT:-none}; W3 would be ${W3_WOULD:-none}; store-root entries ${srr:-unreadable}"
+              echo "- measured, Better Stack, boot time only: newest boot_complete row at ${row_at}; this is no repository entry at boot, not no residue"
+              echo "- measured, this run, counts only: ${ans}"
+              echo "- inherited, ADR-239 Amendment 2026-10-09: id-bearing .<id>.init.lock files and .gc-cursor residue are presumed possible from 2026-09-14 to 2026-09-24; the count above is the measurement of it when lock_residue is a number, otherwise it is unmeasured; provider snapshot or backup retention is unmeasured"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [[ "$WIPE_RUN_MODE" == "wipe_check" ]]; then
             w4="$(sed -n 's/^w4_epoch=//p' "$rec")"
             w7="$(sed -n 's/^w7_epoch=//p' "$rec")"
             echo "wipe_check elapsed_s=$(( w7 - w4 ))"
-            line="NOT authorization; W3 would be ${W3_WOULD:-none}; UNVERIFIED: layout listing not exercised"
+            verdict="${W3_WOULD:-none}"
+            if [[ "$verdict" == "none" && -n "$srr_word" ]]; then verdict="$srr_word"; fi
+            line="NOT authorization; W3 would be ${W3_VARIANT:-none}/${verdict}; layout listing exercised: counts only"
             echo "$line"
             printf -- '- %s\n' "$line" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -1248,9 +1323,10 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
           FLAG_MODE: wipe_reread
+          WIPE_VARIANT: ${{ steps.wipe_flag_precheck.outputs.variant }}
         run: |
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" FLAG_MODE="$FLAG_MODE" \
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" FLAG_MODE="$FLAG_MODE" WIPE_VARIANT="$WIPE_VARIANT" \
             bash -c 'set -euo pipefail
           IFS= read -r dt
           DOPPLER_TOKEN="$dt" bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-flag-precheck.sh"' <<<"$DOPPLER_TOKEN"
