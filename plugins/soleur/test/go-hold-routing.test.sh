@@ -9,9 +9,13 @@
 # (see plugins/soleur/skills/eval-harness/gated-skills.json), and this feature is routing prose around
 # the table, not a routing change.
 #
-# Members of the paragraph: the two trigger tokens (`HOLDS`, `ask the operator`), the fail-closed
-# wording, the ask-once wording, the owner (the CTO's "Own the epic" interface), the Gate: predicate
-# hand-off to ship Phase 6, the verifier `render` call that records a delegation, and the stop trigger.
+# Members of the paragraph: the routing condition (an epic reference `#N` AND a structured `HOLDS:` list,
+# BOTH required: a message that only says `ask the operator` is an ordinary message), the fail-closed wording,
+# the ask-once wording, the owner (the CTO's "Own the epic" interface), the Gate: predicate hand-off to ship
+# Phase 6 with the container-format link, the verifier `render` call made by the CALLING skill after the real
+# question (whose text must render the Scope items, the expiry, 30 days, every merge and every dispatch listed,
+# posted publicly, and the outcome in business terms), the headless behaviour, ${CLAUDE_PLUGIN_ROOT} script
+# paths, the execution-sentence wiring and the stop sequence (delete, disarm, cancel, say what remains).
 #
 # ANCHOR. The block's hash is compared with `git show $(git merge-base origin/main HEAD):<go.md>`, a
 # value that lives OUTSIDE the commit under test. An unresolvable base is a FAIL, never a skip (H1):
@@ -123,15 +127,23 @@ evaluate() {
   # Members are checked against $para unconditionally: an EMPTY paragraph then fails every member too,
   # so a missing paragraph can never read as a pass on the properties that live inside it.
   [[ -n "$para" ]]                         || emit paragraph-missing
-  [[ "$para" == *'`HOLDS`'* ]]             || emit token-HOLDS
-  [[ "$para" == *'`ask the operator`'* ]]  || emit token-ask-the-operator
+  [[ "$para" == *'`HOLDS:`'* ]]            || emit token-HOLDS
+  [[ "$para" == *'`#N`'* ]]                || emit token-epic-ref
+  [[ "$para" == *'only when'* && "$para" == *'BOTH'* ]] || emit routing-requires-both
+  [[ "$para" == *'`ask the operator`'* && "$para" == *'ordinary message'* ]] || emit ask-the-operator-not-a-trigger
   [[ "$para" == *'fail closed'* || "$para" == *'Fail closed'* ]] || emit wording-fail-closed
   [[ "$para" == *'ask once'* || "$para" == *'Ask once'* ]]       || emit wording-ask-once
   [[ "$para" == *'soleur:engineering:cto'* && "$para" == *'Own the epic'* ]] || emit owner-cto-own-the-epic
   [[ "$para" == *'## Operator Holds'* && "$para" == *'Gate:'* && "$para" == *'hold-gate-eval.sh'* ]] || emit gate-handoff
-  [[ "$para" == *'delegation-verify.sh'* && "$para" == *'render'* ]] || emit delegation-render
+  [[ "$para" == *'operator-holds.md'* ]]   || emit container-link
+  [[ "$para" == *'delegation-verify.sh'* && "$para" == *'`render`'* && "$para" == *'calling skill'* && "$para" == *'AFTER'* ]] || emit delegation-render
+  [[ "$para" == *'Scope items'* && "$para" == *'30 days'* && "$para" == *'every merge and every dispatch'* && "$para" == *'posted publicly'* && "$para" == *'business terms'* && "$para" == *'expiry'* ]] || emit render-text
+  [[ "$para" == *'Headless'* && "$para" == *'do not ask'* && "$para" == *'action-required'* && "$para" == *'draft PR'* ]] || emit headless
+  [[ "$para" == *'"${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh"'* && "$para" == *'"${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh"'* ]] || emit plugin-root-paths
+  if [[ "$para" == *'plugins/soleur/'* ]]; then emit repo-relative-path; fi
+  [[ "$para" == *'execution sentence'* && "$para" == *'run summary'* ]] || emit receipt-wiring
   [[ "$para" == *'AskUserQuestion'* ]]     || emit no-askuserquestion-for-technical-hold
-  [[ "$para" == *'stop'* && "$para" == *'delete'* ]] || emit stop-trigger
+  [[ "$para" == *'delete the delegation comment'* && "$para" == *'gh api -X DELETE'* && "$para" == *'--disable-auto'* && "$para" == *'could not be stopped'* ]] || emit stop-sequence
 
   # Location: after the Step 1 heading, before the start marker, and never between the markers.
   start_ln="$(awk -v s="$BLOCK_START" 'index($0, s) { print NR; exit }' "$f")"
@@ -149,6 +161,8 @@ evaluate() {
   if ! base_blob="$(g show "$base:$GO_REL" 2>/dev/null)" || [[ -z "$base_blob" ]]; then
     emit base-unresolvable; emit block-hash-differs
   else
+    # The anchor must be the real block (a degenerate base would make the comparison vacuous when base == HEAD).
+    [[ "$(printf '%s\n' "$base_blob" | block_of /dev/stdin | grep -c '^| ' || true)" -ge 9 && "$base_blob" == *'## Step 2: Classify and Route'* ]] || emit base-degenerate
     bh="$(printf '%s\n' "$base_blob" | block_of /dev/stdin | hash_stdin)"
     gh="$(block_of "$f" | hash_stdin)"
     [[ -n "$bh" && "$bh" == "$gh" ]] || emit block-hash-differs
@@ -161,13 +175,30 @@ BASE_REF="$(g merge-base origin/main HEAD 2>/dev/null || true)"
 
 # --- real-file verdicts ----------------------------------------------------------------------------
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-ask-the-operator wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff delegation-render no-askuserquestion-for-technical-hold stop-trigger anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold stop-sequence anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   if [[ "$REAL_OUT" == *"V:$p"* ]]; then bad "go.md violates '$p'"; else ok "go.md has no violation of '$p'"; fi
 done
 ck
 [[ "$REAL_RC" -eq 0 && -z "$REAL_OUT" ]] && ok "evaluate() agrees: rc=0 and no violation lines" || bad "evaluate() reported violations: ${REAL_OUT//$'\n'/ }"
+
+# The merge-base anchor must never be a silent tautology: it resolves, its sha is printed, and base == HEAD
+# (post-merge) is announced rather than passing quietly.
+HEAD_SHA="$(g rev-parse HEAD 2>/dev/null || true)"
+ck
+if [[ "$BASE_REF" != refs/unresolvable-merge-base && -n "$(g rev-parse --verify --quiet "${BASE_REF}^{commit}" || true)" ]]; then
+  ok "merge-base anchor resolves: ${BASE_REF:0:12} (HEAD ${HEAD_SHA:0:12})"
+else bad "merge-base anchor does not resolve (origin/main is not fetched?)"; fi
+if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
+  printf '  NOTE: merge base == HEAD, so the block-hash comparison is self-identity here; the anchor-content check (base-degenerate) still ran\n'
+fi
+
+# one-shot carries the one-sentence pointer for a direct run (the go.md paragraph is not reachable from there).
+ONE_SHOT_MD="$ROOT/plugins/soleur/skills/one-shot/SKILL.md"
+ck
+if [[ -r "$ONE_SHOT_MD" ]] && grep -Fq 'follows go.md Step 1.5 in headless form' "$ONE_SHOT_MD" && grep -Fq '`HOLDS:`' "$ONE_SHOT_MD"; then ok "one-shot points a direct HOLDS run at go.md Step 1.5 in headless form"
+else bad "one-shot lost its pointer to go.md Step 1.5 for a direct run with a HOLDS brief"; fi
 
 # Floor on the DERIVATION: exactly one hold-routing paragraph, non-trivial, and the block non-empty.
 PARA_REAL="$(para_awk extract "$GO_MD")"
@@ -194,6 +225,22 @@ row() {
 M="$SANDBOX/m"; mkdir -p "$M"; assert_fixture_dir "$M"
 nrows=0
 
+# --- verdict-helper controls: a helper that can never fail turns every row below into noise ---------------
+# Each control feeds a helper a known-bad input in a subshell (its ledger is /dev/null) and requires that the
+# helper recorded a FAIL, or, for the green path, a PASS.
+para_awk strip "$GO_MD" > "$M/ctl-bad.md"
+ctl_fails() { ( VERDICT_LOG=/dev/null; b="$fails"; "$@" >/dev/null 2>&1; [[ "$fails" -gt "$b" ]] ); }
+ctl_passes() { ( VERDICT_LOG=/dev/null; b="$passes"; "$@" >/dev/null 2>&1; [[ "$passes" -gt "$b" ]] ); }
+ctl_fails row "ctl" "$M/ctl-bad.md" "$BASE_REF" none                  || { printf 'FATAL: control: row() accepted a RED file as green\n' >&2; exit 2; }
+ctl_fails row "ctl" "$M/ctl-bad.md" "$BASE_REF" block-hash-differs     || { printf 'FATAL: control: row() accepted a RED file for the wrong token\n' >&2; exit 2; }
+ctl_fails row "ctl" "$GO_MD" "$BASE_REF" paragraph-missing            || { printf 'FATAL: control: row() accepted a pristine file as RED\n' >&2; exit 2; }
+ctl_passes row "ctl" "$M/ctl-bad.md" "$BASE_REF" paragraph-missing    || { printf 'FATAL: control: row() did not record a PASS for a correct RED row\n' >&2; exit 2; }
+ctl_passes row "ctl" "$GO_MD" "$BASE_REF" none                        || { printf 'FATAL: control: row() did not record a PASS for a correct green row\n' >&2; exit 2; }
+_o="$(evaluate "$M/ctl-bad.md" "$BASE_REF")"; _r=$?
+[[ "$_r" -ne 0 && "$_o" == *'V:paragraph-missing'* ]] || { printf 'FATAL: control: evaluate() passed a file with no hold paragraph\n' >&2; exit 2; }
+_o="$(evaluate "$GO_MD" "refs/does-not-exist")"; _r=$?
+[[ "$_r" -ne 0 && "$_o" == *'V:base-unresolvable'* ]] || { printf 'FATAL: control: evaluate() passed with an unresolvable base\n' >&2; exit 2; }
+
 # M1 edit one table cell inside the markers
 awk -v s="$BLOCK_START" -v e="$BLOCK_END" '
   index($0, s) { f = 1 }
@@ -216,11 +263,11 @@ row "M3 move the paragraph inside the markers" "$M/m3.md" "$BASE_REF" paragraph-
 
 # M4 remove `ask the operator` while HOLDS stays (a second member after a compliant first)
 para_awk sub "$GO_MD" '`ask the operator`' '`ask the owner`' > "$M/m4.md"
-row "M4 remove the 'ask the operator' token, keep HOLDS" "$M/m4.md" "$BASE_REF" token-ask-the-operator; nrows=$((nrows + 1))
+row "M4 remove the 'ask the operator' token, keep HOLDS" "$M/m4.md" "$BASE_REF" ask-the-operator-not-a-trigger; nrows=$((nrows + 1))
 
 # M5 remove the HOLDS token while `ask the operator` stays
-para_awk sub "$GO_MD" '`HOLDS`' '`HOLD`' > "$M/m5.md"
-row "M5 remove the HOLDS token, keep 'ask the operator'" "$M/m5.md" "$BASE_REF" token-HOLDS; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" '`HOLDS:`' '`HOLD:`' > "$M/m5.md"
+row "M5 remove the HOLDS: token, keep 'ask the operator'" "$M/m5.md" "$BASE_REF" token-HOLDS; nrows=$((nrows + 1))
 
 # M6 / M7 the fail-closed and ask-once wording (both spellings are accepted, so both are neutralised)
 para_awk sub "$GO_MD" 'fail closed' 'fail open' > "$M/m6.md"
@@ -243,6 +290,26 @@ awk -v pf="$M/para.txt" '
   { print }' "$M/m2.md" > "$M/m10.md"
 row "M10 paragraph placed before Step 1" "$M/m10.md" "$BASE_REF" paragraph-misplaced; nrows=$((nrows + 1))
 
+# M11..M19 one contract element each, removed from the paragraph only
+para_awk sub "$GO_MD" 'BOTH' 'EITHER' > "$M/m11.md"
+row "M11 routing no longer requires both the epic reference and the HOLDS list" "$M/m11.md" "$BASE_REF" routing-requires-both; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" '`#N`' 'a number' > "$M/m12.md"
+row "M12 the epic reference is no longer required" "$M/m12.md" "$BASE_REF" token-epic-ref; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'operator-holds.md' 'holds-notes.md' > "$M/m13.md"
+row "M13 the container-format link dropped" "$M/m13.md" "$BASE_REF" container-link; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'calling skill' 'agent' > "$M/m14.md"
+row "M14 render is no longer the calling skill's step" "$M/m14.md" "$BASE_REF" delegation-render; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" '30 days' '90 days' > "$M/m15.md"
+row "M15 the question no longer discloses the 30 days" "$M/m15.md" "$BASE_REF" render-text; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'Headless' 'Interactive' > "$M/m16.md"
+row "M16 headless behaviour removed" "$M/m16.md" "$BASE_REF" headless; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" '"${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh"' 'plugins/soleur/scripts/delegation-verify.sh' > "$M/m17.md"
+row "M17 a repo-relative verifier path" "$M/m17.md" "$BASE_REF" repo-relative-path; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" '--disable-auto' '--keep-armed' > "$M/m18.md"
+row "M18 stop no longer disarms armed merges" "$M/m18.md" "$BASE_REF" stop-sequence; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'execution sentence' 'log line' > "$M/m19.md"
+row "M19 the execution sentence is no longer printed" "$M/m19.md" "$BASE_REF" receipt-wiring; nrows=$((nrows + 1))
+
 # H1 the base ref is unresolvable: a FAIL, never a skip
 row "H1 unresolvable base ref" "$GO_MD" "refs/does-not-exist" base-unresolvable; nrows=$((nrows + 1))
 
@@ -254,11 +321,16 @@ awk -v e="$BLOCK_END" '
   END { print "" }' "$GO_MD" > "$M/h2.md"
 row "H2 whitespace-only change outside the block" "$M/h2.md" "$BASE_REF" none; nrows=$((nrows + 1))
 
-# --- ANTI-VACUITY: the assertion floor ---------------------------------------------------------------
-# Derived: one assertion per property, the aggregate, three extraction floors, one per mutation row.
+# --- ANTI-VACUITY: the assertion floors ---------------------------------------------------------------
+# (1) Derived: one assertion per property, the aggregate, the anchor row, three extraction floors, one per
+#     mutation row.
+# (2) ABSOLUTE: the count of a green run, committed with ZERO slack. A derived floor moves with the rows it
+#     guards (delete six rows and the floor drops with them); this constant is the one that bites. Raise it in
+#     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
-EXPECTED_ASSERTIONS=$(( nprops + 1 + 3 + nrows ))
-MIN_ASSERTIONS=${EXPECTED_ASSERTIONS:-1}
+EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows ))
+ABSOLUTE_FLOOR=51
+MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \
     "$asserted" "$MIN_ASSERTIONS" >&2
