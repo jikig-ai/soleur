@@ -62,7 +62,7 @@ by grep, before the first draft.
    `~170 ms/MB` comment figure** — Recovery: scanner, discriminating payloads, token-boundary regexes,
    figure replaced by one re-measured — Prevention: mutation-check every new assertion and re-run every
    cited measurement (this learning).
-6. **A ` ` escape in a test comment became the raw character through the Write tool** — Recovery:
+6. **A `U+2028` escape in a test comment became the raw character through the Write tool** — Recovery:
    replaced, `grep -nP` clean — Prevention: already covered by
    `2026-05-28-unicode-separator-escapes-need-charcode-construction.md`; build separators with
    `String.fromCharCode` and grep for raw ones.
