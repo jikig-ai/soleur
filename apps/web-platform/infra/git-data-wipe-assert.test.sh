@@ -1406,7 +1406,14 @@ loopback_tier() {
   trap 'lb_teardown; cleanup' EXIT
   LB="$T/lb"; assert_fixture_dir "$LB"; mkdir -p "$LB" || instrument "mkdir lb failed"
   declare -gA LOOP_IMG=()
-  lb_attach() { LOOP="$(losetup --find --show "$1")" || instrument "losetup failed for $1"; CLEAN_LOOPS+=("$LOOP"); LOOP_IMG[$LOOP]="$1"; }
+  # A reused loop number can come back kernel read-only: `blockdev --setro` (BLKROSET) survives a detach on newer kernels, and
+  # an earlier loopback suite on the same runner leaves it behind (CI run 38715878045: "source write-protected, mounted
+  # read-only" on the first populate). The image is this run's own, so make it writable and read the flag back.
+  lb_attach() {
+    LOOP="$(losetup --find --show "$1")" || instrument "losetup failed for $1"; CLEAN_LOOPS+=("$LOOP"); LOOP_IMG[$LOOP]="$1"
+    blockdev --setrw "$LOOP" || instrument "setrw failed for $LOOP"
+    [ "$(blockdev --getro "$LOOP")" = 0 ] || instrument "$LOOP is still read-only after setrw"
+  }
   lb_detach() { local i; losetup -d "$1" || instrument "losetup -d $1 failed"; for i in "${!CLEAN_LOOPS[@]}"; do [ "${CLEAN_LOOPS[$i]}" != "$1" ] || unset 'CLEAN_LOOPS[i]'; done; CLEAN_LOOPS=("${CLEAN_LOOPS[@]}"); unset 'LOOP_IMG[$1]'; }
   lb_image() { # <tag> — a fresh 256 MiB ext4 image on a loop device. Sets LOOP and IMG.
     IMG="$LB/$1.img"; truncate -s 256M "$IMG" || instrument "truncate failed"
