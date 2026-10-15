@@ -58,6 +58,7 @@ const ZipArchive = (
 import { createWriteStream } from "node:fs";
 
 import { createServiceClient, serverUrl } from "@/lib/supabase/service";
+import { describeDbError } from "@/server/dsar-db-error";
 import { mirrorCrossTenantViolation, hashUserId } from "./observability";
 import {
   sendDsarExportReadyEmail,
@@ -458,12 +459,12 @@ export async function exportSqlTable(
 
   // -- users -------------------------------------------------------------
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("users")
       .select("*")
       .eq("id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`users read failed: ${error.message}`);
+    if (error) throw new Error(`users read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "users", { ownerField: "id" });
     results.push({ table: "users", spec: DSAR_TABLE_ALLOWLIST.users, rows });
@@ -472,12 +473,12 @@ export async function exportSqlTable(
   // -- api_keys ----------------------------------------------------------
   // -- workspace_engine_settings (migration 138) -----------------------
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("workspace_engine_settings")
       .select("*")
       .eq("updated_by", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`workspace_engine_settings read failed: ${error.message}`);
+    if (error) throw new Error(`workspace_engine_settings read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "workspace_engine_settings", { ownerField: "updated_by" });
     results.push({ table: "workspace_engine_settings", spec: DSAR_TABLE_ALLOWLIST.workspace_engine_settings, rows });
@@ -486,12 +487,12 @@ export async function exportSqlTable(
   // -- agent_engine_runs (migration 138) --------------------------------
   let engineRunIds: string[] = [];
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("agent_engine_runs")
       .select("*")
       .eq("created_by", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`agent_engine_runs read failed: ${error.message}`);
+    if (error) throw new Error(`agent_engine_runs read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "agent_engine_runs", { ownerField: "created_by" });
     engineRunIds = rows.map((row) => row.id).filter((id): id is string => typeof id === "string");
@@ -500,24 +501,24 @@ export async function exportSqlTable(
 
   // -- agent_engine_events (migration 138, join via run) ----------------
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("agent_engine_events")
       .select("*")
       .in("run_id", engineRunIds);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`agent_engine_events read failed: ${error.message}`);
+    if (error) throw new Error(`agent_engine_events read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     results.push({ table: "agent_engine_events", spec: DSAR_TABLE_ALLOWLIST.agent_engine_events, rows });
   }
 
   // -- api_keys ----------------------------------------------------------
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("api_keys")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`api_keys read failed: ${error.message}`);
+    if (error) throw new Error(`api_keys read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "api_keys", {
       ownerField: "user_id",
@@ -537,14 +538,14 @@ export async function exportSqlTable(
   // the PostgREST `.or()` predicate.
   let prefetchWorkspaceIds: string[] = [];
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("workspace_members")
       .select("workspace_id")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (error)
       throw new Error(
-        `workspace_members (conversations prefetch) read failed: ${error.message}`,
+        `workspace_members (conversations prefetch) read failed: ${describeDbError(error, status, statusText)}`,
       );
     prefetchWorkspaceIds = ((data ?? []) as { workspace_id?: unknown }[])
       .map((r) => r.workspace_id)
@@ -566,7 +567,7 @@ export async function exportSqlTable(
     // `.eq()`) to appear in the same chain as the `.from()` call. The
     // ternary below keeps both paths in the single statement the lint
     // parses.
-    const { data, error } =
+    const { data, error, status, statusText } =
       prefetchWorkspaceIds.length > 0
         ? await service
             .from("conversations")
@@ -579,7 +580,7 @@ export async function exportSqlTable(
             .select("*")
             .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`conversations read failed: ${error.message}`);
+    if (error) throw new Error(`conversations read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     // Two-arm cross-tenant assertion (#4358): every returned row MUST
     // satisfy (user_id = expectedUserId) OR (workspace_id is in the
@@ -631,12 +632,12 @@ export async function exportSqlTable(
   // in this set (orphan / foreign-author parents → fail-closed).
   const subjectAuthoredMessageIds = new Set<string>();
   if (conversationIds.length > 0) {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("messages")
       .select("*")
       .in("conversation_id", conversationIds);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`messages read failed: ${error.message}`);
+    if (error) throw new Error(`messages read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     // No direct owner_id; verify every message's conversation_id is in
     // the set we already proved is scope-verified (owned OR workspace-
@@ -707,13 +708,13 @@ export async function exportSqlTable(
   // Foreign-author parents and any parent we couldn't classify (orphan
   // shape) → redact storage_path + filename. Fail-closed.
   if (messageIds.length > 0) {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("message_attachments")
       .select("*")
       .in("message_id", messageIds);
     if (signal.aborted) throw new Error("aborted");
     if (error)
-      throw new Error(`message_attachments read failed: ${error.message}`);
+      throw new Error(`message_attachments read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     const ownedMsgSet = new Set(messageIds);
     for (const row of rows) {
@@ -764,12 +765,12 @@ export async function exportSqlTable(
 
   // -- kb_share_links ----------------------------------------------------
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("kb_share_links")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`kb_share_links read failed: ${error.message}`);
+    if (error) throw new Error(`kb_share_links read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "kb_share_links", {
       ownerField: "user_id",
@@ -783,12 +784,12 @@ export async function exportSqlTable(
 
   // -- team_names --------------------------------------------------------
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("team_names")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`team_names read failed: ${error.message}`);
+    if (error) throw new Error(`team_names read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "team_names", {
       ownerField: "user_id",
@@ -802,12 +803,12 @@ export async function exportSqlTable(
 
   // -- audit_byok_use (founder_id) ---------------------------------------
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("audit_byok_use")
       .select("*")
       .eq("founder_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`audit_byok_use read failed: ${error.message}`);
+    if (error) throw new Error(`audit_byok_use read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "audit_byok_use", {
       ownerField: "founder_id",
@@ -821,12 +822,12 @@ export async function exportSqlTable(
 
   // -- tc_acceptances (T&C consent ledger; migration 044, AC15) ----------
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("tc_acceptances")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`tc_acceptances read failed: ${error.message}`);
+    if (error) throw new Error(`tc_acceptances read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "tc_acceptances", {
       ownerField: "user_id",
@@ -840,12 +841,12 @@ export async function exportSqlTable(
 
   // -- scope_grants (per-action-class consent ledger; migration 048, PR-G #3947) --
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("scope_grants")
       .select("*")
       .eq("founder_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`scope_grants read failed: ${error.message}`);
+    if (error) throw new Error(`scope_grants read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "scope_grants", {
       ownerField: "founder_id",
@@ -859,12 +860,12 @@ export async function exportSqlTable(
 
   // -- audit_github_token_use (GitHub App token use audit; migration 052, PR-H #3244) --
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("audit_github_token_use")
       .select("*")
       .eq("founder_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`audit_github_token_use read failed: ${error.message}`);
+    if (error) throw new Error(`audit_github_token_use read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "audit_github_token_use", {
       ownerField: "founder_id",
@@ -886,12 +887,12 @@ export async function exportSqlTable(
   // the row is platform-generated evidence of the click, not founder-
   // provided content; portability (Art. 20) does not apply.
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("action_sends")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`action_sends read failed: ${error.message}`);
+    if (error) throw new Error(`action_sends read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "action_sends", {
       ownerField: "user_id",
@@ -911,12 +912,12 @@ export async function exportSqlTable(
   // personal data for the class. WORM trigger + anonymise_email_triage_items
   // RPC handle Art. 17 erasure separately (user_id FK ON DELETE RESTRICT).
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("email_triage_items")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`email_triage_items read failed: ${error.message}`);
+    if (error) throw new Error(`email_triage_items read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "email_triage_items", {
       ownerField: "user_id",
@@ -935,12 +936,12 @@ export async function exportSqlTable(
   // notification-interaction history, held in no other allowlisted table. Art. 17
   // erasure is via user_id ON DELETE CASCADE (no anonymise RPC).
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("inbox_item")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`inbox_item read failed: ${error.message}`);
+    if (error) throw new Error(`inbox_item read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "inbox_item", {
       ownerField: "user_id",
@@ -958,12 +959,12 @@ export async function exportSqlTable(
   // legitimate interest (LIA; PA-30). Owner-scoped by user_id. Art. 17 via
   // user_id ON DELETE CASCADE (no anonymise RPC — ADR-102 §4).
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("beta_contacts")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`beta_contacts read failed: ${error.message}`);
+    if (error) throw new Error(`beta_contacts read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "beta_contacts", {
       ownerField: "user_id",
@@ -981,12 +982,12 @@ export async function exportSqlTable(
   // (composite FK guarantees it equals the parent's owner). Art. 17 via the
   // composite FK ON DELETE CASCADE from beta_contacts.
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("interview_notes")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`interview_notes read failed: ${error.message}`);
+    if (error) throw new Error(`interview_notes read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "interview_notes", {
       ownerField: "user_id",
@@ -1003,12 +1004,12 @@ export async function exportSqlTable(
   // to_stage/entered_at), not user-provided content. Owner-scoped by the
   // denormalized user_id. Art. 17 via the composite FK ON DELETE CASCADE.
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("beta_contact_stage_transitions")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`beta_contact_stage_transitions read failed: ${error.message}`);
+    if (error) throw new Error(`beta_contact_stage_transitions read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "beta_contact_stage_transitions", {
       ownerField: "user_id",
@@ -1026,12 +1027,12 @@ export async function exportSqlTable(
   // content. Owner-scoped by the denormalized user_id. Art. 17 via the composite
   // FK (contact_id, user_id) ON DELETE CASCADE from beta_contacts.
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("beta_contact_access_log")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`beta_contact_access_log read failed: ${error.message}`);
+    if (error) throw new Error(`beta_contact_access_log read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "beta_contact_access_log", {
       ownerField: "user_id",
@@ -1051,12 +1052,12 @@ export async function exportSqlTable(
   // resend_id, action_class, sent_at). Art. 15-only — platform-generated audit
   // evidence, not founder-provided content (portability does not apply).
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("outbound_sends")
       .select("*")
       .eq("owner_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`outbound_sends read failed: ${error.message}`);
+    if (error) throw new Error(`outbound_sends read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "outbound_sends", {
       ownerField: "owner_id",
@@ -1073,12 +1074,12 @@ export async function exportSqlTable(
   // (recipient_hash — keyed HMAC, never plaintext — reason, added_at). Art.
   // 15-only: a derived control list, not portable founder-provided content.
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("email_suppression")
       .select("*")
       .eq("owner_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`email_suppression read failed: ${error.message}`);
+    if (error) throw new Error(`email_suppression read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "email_suppression", {
       ownerField: "owner_id",
@@ -1101,13 +1102,13 @@ export async function exportSqlTable(
   // Art. 15 access. WORM trigger + anonymise_template_authorizations
   // RPC handle erasure separately.
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("template_authorizations")
       .select("*")
       .eq("founder_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (error) {
-      throw new Error(`template_authorizations read failed: ${error.message}`);
+      throw new Error(`template_authorizations read failed: ${describeDbError(error, status, statusText)}`);
     }
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "template_authorizations", {
@@ -1125,12 +1126,12 @@ export async function exportSqlTable(
   // when an operator-managed org adopts existing user as owner). Direct
   // ownerField = owner_user_id; no JOIN required.
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("organizations")
       .select("*")
       .eq("owner_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`organizations read failed: ${error.message}`);
+    if (error) throw new Error(`organizations read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "organizations", {
       ownerField: "owner_user_id",
@@ -1152,13 +1153,13 @@ export async function exportSqlTable(
   // they left.
   let workspaceIds: string[] = [];
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("workspace_members")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (error)
-      throw new Error(`workspace_members read failed: ${error.message}`);
+      throw new Error(`workspace_members read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "workspace_members", {
       ownerField: "user_id",
@@ -1182,14 +1183,14 @@ export async function exportSqlTable(
   // silently omits any workspace they left, which fails Art. 15
   // completeness for the workspaces export block below.
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("workspace_member_attestations")
       .select("workspace_id")
       .eq("invitee_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (error)
       throw new Error(
-        `workspace_member_attestations (workspaceIds UNION) read failed: ${error.message}`,
+        `workspace_member_attestations (workspaceIds UNION) read failed: ${describeDbError(error, status, statusText)}`,
       );
     const historicalIds = ((data ?? []) as { workspace_id?: unknown }[])
       .map((r) => r.workspace_id)
@@ -1205,12 +1206,12 @@ export async function exportSqlTable(
   // CrossTenantViolation, mirroring the messages-via-conversations
   // shape).
   if (workspaceIds.length > 0) {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("workspaces")
       .select("*")
       .in("id", workspaceIds);
     if (signal.aborted) throw new Error("aborted");
-    if (error) throw new Error(`workspaces read failed: ${error.message}`);
+    if (error) throw new Error(`workspaces read failed: ${describeDbError(error, status, statusText)}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     const ownedSet = new Set(workspaceIds);
     for (const row of rows) {
@@ -1251,7 +1252,7 @@ export async function exportSqlTable(
   // ownerField) asserts each returned row's owner column matches
   // expectedUserId on EITHER invitee_user_id OR inviter_user_id.
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("workspace_member_attestations")
       .select("*")
       .or(
@@ -1260,7 +1261,7 @@ export async function exportSqlTable(
     if (signal.aborted) throw new Error("aborted");
     if (error)
       throw new Error(
-        `workspace_member_attestations read failed: ${error.message}`,
+        `workspace_member_attestations read failed: ${describeDbError(error, status, statusText)}`,
       );
     const rows = (data ?? []) as Record<string, unknown>[];
     // Two-arm scope check: row belongs to expectedUserId iff EITHER
@@ -1319,11 +1320,11 @@ export async function exportSqlTable(
     if (signal.aborted) throw new Error("aborted");
     if (byInvitee.error)
       throw new Error(
-        `workspace_invitations (invitee) read failed: ${byInvitee.error.message}`,
+        `workspace_invitations (invitee) read failed: ${describeDbError(byInvitee.error, byInvitee.status, byInvitee.statusText)}`,
       );
     if (byInviter.error)
       throw new Error(
-        `workspace_invitations (inviter) read failed: ${byInviter.error.message}`,
+        `workspace_invitations (inviter) read failed: ${describeDbError(byInviter.error, byInviter.status, byInviter.statusText)}`,
       );
     const allRows = [...(byInvitee.data ?? []), ...(byInviter.data ?? [])] as Record<string, unknown>[];
     const seen = new Set<string>();
@@ -1366,14 +1367,14 @@ export async function exportSqlTable(
   // the row stays for the 36-mo retention window and falls out of
   // every owner-scoped SELECT (NULL never matches `.eq(<owner>, X)`).
   {
-    const { data, error } = await service
+    const { data, error, status, statusText } = await service
       .from("workspace_member_removals")
       .select("*")
       .eq("removed_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (error)
       throw new Error(
-        `workspace_member_removals read failed: ${error.message}`,
+        `workspace_member_removals read failed: ${describeDbError(error, status, statusText)}`,
       );
     const rows = (data ?? []) as Record<string, unknown>[];
     assertReadScope(rows, expectedUserId, "workspace_member_removals", {
@@ -1396,28 +1397,28 @@ export async function exportSqlTable(
   // (structurally impossible for v1 RPCs but defensive) is not double-
   // counted.
   {
-    const { data: actorRows, error: actorErr } = await service
+    const { data: actorRows, error: actorErr, status: actorErrStatus, statusText: actorErrStatusText } = await service
       .from("workspace_member_actions")
       .select("*")
       .eq("actor_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (actorErr)
       throw new Error(
-        `workspace_member_actions (actor) read failed: ${actorErr.message}`,
+        `workspace_member_actions (actor) read failed: ${describeDbError(actorErr, actorErrStatus, actorErrStatusText)}`,
       );
     const actorTyped = (actorRows ?? []) as Record<string, unknown>[];
     assertReadScope(actorTyped, expectedUserId, "workspace_member_actions", {
       ownerField: "actor_user_id",
     });
 
-    const { data: targetRows, error: targetErr } = await service
+    const { data: targetRows, error: targetErr, status: targetErrStatus, statusText: targetErrStatusText } = await service
       .from("workspace_member_actions")
       .select("*")
       .eq("target_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (targetErr)
       throw new Error(
-        `workspace_member_actions (target) read failed: ${targetErr.message}`,
+        `workspace_member_actions (target) read failed: ${describeDbError(targetErr, targetErrStatus, targetErrStatusText)}`,
       );
     const targetTyped = (targetRows ?? []) as Record<string, unknown>[];
     assertReadScope(targetTyped, expectedUserId, "workspace_member_actions", {
@@ -1467,70 +1468,70 @@ export async function exportSqlTable(
       }
     };
 
-    const { data: grantorRows, error: grantorErr } = await service
+    const { data: grantorRows, error: grantorErr, status: grantorErrStatus, statusText: grantorErrStatusText } = await service
       .from("byok_delegations")
       .select("*")
       .eq("grantor_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (grantorErr)
       throw new Error(
-        `byok_delegations (grantor) read failed: ${grantorErr.message}`,
+        `byok_delegations (grantor) read failed: ${describeDbError(grantorErr, grantorErrStatus, grantorErrStatusText)}`,
       );
     accumulate(
       (grantorRows ?? []) as Record<string, unknown>[],
       "grantor_user_id",
     );
 
-    const { data: granteeRows, error: granteeErr } = await service
+    const { data: granteeRows, error: granteeErr, status: granteeErrStatus, statusText: granteeErrStatusText } = await service
       .from("byok_delegations")
       .select("*")
       .eq("grantee_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (granteeErr)
       throw new Error(
-        `byok_delegations (grantee) read failed: ${granteeErr.message}`,
+        `byok_delegations (grantee) read failed: ${describeDbError(granteeErr, granteeErrStatus, granteeErrStatusText)}`,
       );
     accumulate(
       (granteeRows ?? []) as Record<string, unknown>[],
       "grantee_user_id",
     );
 
-    const { data: createdByRows, error: createdByErr } = await service
+    const { data: createdByRows, error: createdByErr, status: createdByErrStatus, statusText: createdByErrStatusText } = await service
       .from("byok_delegations")
       .select("*")
       .eq("created_by_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (createdByErr)
       throw new Error(
-        `byok_delegations (created_by) read failed: ${createdByErr.message}`,
+        `byok_delegations (created_by) read failed: ${describeDbError(createdByErr, createdByErrStatus, createdByErrStatusText)}`,
       );
     accumulate(
       (createdByRows ?? []) as Record<string, unknown>[],
       "created_by_user_id",
     );
 
-    const { data: revokedByRows, error: revokedByErr } = await service
+    const { data: revokedByRows, error: revokedByErr, status: revokedByErrStatus, statusText: revokedByErrStatusText } = await service
       .from("byok_delegations")
       .select("*")
       .eq("revoked_by_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (revokedByErr)
       throw new Error(
-        `byok_delegations (revoked_by) read failed: ${revokedByErr.message}`,
+        `byok_delegations (revoked_by) read failed: ${describeDbError(revokedByErr, revokedByErrStatus, revokedByErrStatusText)}`,
       );
     accumulate(
       (revokedByRows ?? []) as Record<string, unknown>[],
       "revoked_by_user_id",
     );
 
-    const { data: capUpdatedByRows, error: capUpdatedByErr } = await service
+    const { data: capUpdatedByRows, error: capUpdatedByErr, status: capUpdatedByErrStatus, statusText: capUpdatedByErrStatusText } = await service
       .from("byok_delegations")
       .select("*")
       .eq("cap_updated_by_user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (capUpdatedByErr)
       throw new Error(
-        `byok_delegations (cap_updated_by) read failed: ${capUpdatedByErr.message}`,
+        `byok_delegations (cap_updated_by) read failed: ${describeDbError(capUpdatedByErr, capUpdatedByErrStatus, capUpdatedByErrStatusText)}`,
       );
     accumulate(
       (capUpdatedByRows ?? []) as Record<string, unknown>[],
@@ -1546,14 +1547,14 @@ export async function exportSqlTable(
 
   // -- byok_delegation_acceptances (migration 074, #4232 PR-B) ------------
   if (DSAR_TABLE_ALLOWLIST.byok_delegation_acceptances) {
-    const { data: acceptRows, error: acceptErr } = await service
+    const { data: acceptRows, error: acceptErr, status: acceptErrStatus, statusText: acceptErrStatusText } = await service
       .from("byok_delegation_acceptances")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (acceptErr)
       throw new Error(
-        `byok_delegation_acceptances read failed: ${acceptErr.message}`,
+        `byok_delegation_acceptances read failed: ${describeDbError(acceptErr, acceptErrStatus, acceptErrStatusText)}`,
       );
     assertReadScope(
       (acceptRows ?? []) as Record<string, unknown>[],
@@ -1569,14 +1570,14 @@ export async function exportSqlTable(
 
   // -- byok_delegation_withdrawals (migration 084, #4625) ----------------
   if (DSAR_TABLE_ALLOWLIST.byok_delegation_withdrawals) {
-    const { data: withdrawRows, error: withdrawErr } = await service
+    const { data: withdrawRows, error: withdrawErr, status: withdrawErrStatus, statusText: withdrawErrStatusText } = await service
       .from("byok_delegation_withdrawals")
       .select("*")
       .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (withdrawErr)
       throw new Error(
-        `byok_delegation_withdrawals read failed: ${withdrawErr.message}`,
+        `byok_delegation_withdrawals read failed: ${describeDbError(withdrawErr, withdrawErrStatus, withdrawErrStatusText)}`,
       );
     assertReadScope(
       (withdrawRows ?? []) as Record<string, unknown>[],
