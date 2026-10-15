@@ -63,6 +63,11 @@
 # at the arm (appending "Approve ...?" exempts a question). Tests R, Z, Q, K, N, M, C, E, F, P, O, T, V4 and V5
 # pin the ordering, the per-question scope, the vocabulary, the veto and the exemption members.
 #
+# THE THIRD CARVE-OUT: the DELEGATION arm (after the expert arm, ahead of the technical-ruling arm and the authority
+# short-circuit) denies a question that asks authorization for an act a VERIFIED Standing Delegation and Production Envelope
+# already cover (ADR-288). Unlike the two above it denies only on a live positive verdict from the shared verifier; every other
+# state allows. Arm order is: expert, delegation, technical-ruling, authority, investigative. Repo-local, like the rest.
+#
 # Escape hatch: SOLEUR_ACK_TECHNICAL_FORK=1 — announced, never silent.
 #
 # Fail-open: any infrastructure error exits 0 (allow), reporting itself via systemMessage and an
@@ -274,6 +279,87 @@ See hr-technical-fork-is-not-an-operator-question."
   jq -n --arg r "$EXPERT_REASON" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   exit 0
 fi
+
+# >>> deleg-arm
+# DELEGATION signal (ADR-288, hr-menu-option-ack-not-prod-write-auth) — a question that asks the operator to AUTHORIZE an
+# act that a recorded Standing Delegation and Production Envelope already cover. The operator is non-technical and has
+# already answered, once, in plain words; asking again is the stall the delegation exists to remove. The deny says: run the
+# verified line yourself, byte-identical, and do not ask.
+#
+# EVALUATED AFTER THE EXPERT ARM AND AHEAD OF THE TECHNICAL-RULING ARM AND `AUTHORITY_RE`, for the same reason those arms are:
+# a covered question carries "approve", "merge" or "deploy", and `AUTHORITY_RE` would allow it outright (suite row DM order).
+#
+# IT DENIES ONLY WHEN THE VERIFIER SAYS `valid`. The question text can assert nothing: the cue is a verb from `AUTHZ_VERB_RE`
+# AND a reference (a delegation comment URL, an envelope path after the word "envelope", or the words "Authorized by
+# delegation"), and then the shared verifier (plugins/soleur/scripts/delegation-verify.sh, 5 s cap) is run against the live
+# comment with EVERY command-shaped span of the question as a `--command`. A span is command-shaped when its first word is one
+# of gh git terraform tofu doppler bash sh curl kubectl docker npm bun python3 node (a file name in backticks is ignored); the
+# arm denies only when at least one such span exists and the verifier finds EVERY one of them to be a byte-identical full line
+# of the envelope's Command block. One uncovered act in the same question keeps the question asked. Spans come from the RAW
+# payload, never from the lowercased and whitespace-squeezed corpora the other arms use (byte identity cannot survive that).
+#
+# EVERY OTHER STATE ALLOWS: no cue, no command-shaped span, `invalid`, `unverifiable`, a missing verifier, missing gh or jq, a
+# timeout. When the cue fired but verification did not pass, the stall is announced on stderr. Each question is judged alone, over
+# its QUESTION TEXT only (an option label is a button). This hook is REPO-LOCAL (.claude/settings.json, not the shipped plugin
+# hooks.json), so Soleur users elsewhere get the verifier, the ship gate and the hold evaluator, not this backstop.
+DELEG_URL_RE='https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull)/[0-9]+#issuecomment-[0-9]+'
+DELEG_ENV_RE='[Ee]nvelope:?[[:space:]]+`?([A-Za-z0-9_./-]+\.md(#[A-Za-z0-9_-]+)?)'
+DELEG_CMD_FIRST_RE='^(gh|git|terraform|tofu|doppler|bash|sh|curl|kubectl|docker|npm|bun|python3|node)$'
+__DV_VERIFIER="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)/plugins/soleur/scripts/delegation-verify.sh"
+__DV_TO=()
+if command -v timeout >/dev/null 2>&1; then __DV_TO=(timeout 5)
+elif command -v gtimeout >/dev/null 2>&1; then __DV_TO=(gtimeout 5); fi
+while IFS= read -r __dq_json; do
+  [[ -n "$__dq_json" ]] || continue
+  __dq="$(printf '%s' "$__dq_json" | jq -r '.' 2>/dev/null)" || continue
+  __dq_lc="$(printf '%s' "$__dq" | tr '[:upper:]' '[:lower:]')"
+  __dq_url=""; [[ "$__dq" =~ $DELEG_URL_RE ]] && __dq_url="${BASH_REMATCH[0]}"
+  __dq_env=""; [[ "$__dq" =~ $DELEG_ENV_RE ]] && __dq_env="${BASH_REMATCH[1]}"
+  __dq_cue=0
+  if grep -qE "$AUTHZ_VERB_RE" <<<"$__dq_lc" && { [[ -n "$__dq_url" || -n "$__dq_env" ]] || grep -qF 'authorized by delegation' <<<"$__dq_lc"; }; then __dq_cue=1; fi
+  [[ "$__dq_cue" -eq 1 && -n "$__dq_url" && -n "$__dq_env" ]] || { [[ "$__dq_cue" -eq 1 ]] && printf 'pre-ask-technical-fork-gate: delegation cue fired but verification did not complete (the question does not name both a delegation link and an envelope path) - the question proceeds.\n' >&2; continue; } # mut:deleg-cue
+  __dq_cmds=()
+  while IFS= read -r __sp; do
+    [[ -n "$__sp" ]] || continue
+    __sp_w="$(printf '%s' "${__sp%%[[:space:]]*}" | tr '[:upper:]' '[:lower:]')"
+    [[ "$__sp_w" =~ $DELEG_CMD_FIRST_RE ]] || continue
+    __dq_cmds[${#__dq_cmds[@]}]="--command"; __dq_cmds[${#__dq_cmds[@]}]="$__sp"
+  done < <(printf '%s\n' "$__dq" | awk '
+    { sub(/\r$/, "") }
+    /^ ? ? ?(```|~~~)/ { infence = !infence; next }
+    infence { if ($0 !~ /^[ \t]*$/) print; next }
+    { line = $0
+      while (match(line, /`[^`]+`/)) { print substr(line, RSTART + 1, RLENGTH - 2); line = substr(line, RSTART + RLENGTH) }
+    }')
+  [[ "${#__dq_cmds[@]}" -gt 0 ]] || continue
+  if [[ ! -f "$__DV_VERIFIER" ]]; then
+    printf 'pre-ask-technical-fork-gate: delegation cue fired but verification did not complete (the verifier %s is missing) - the question proceeds.\n' "$__DV_VERIFIER" >&2
+    continue
+  fi
+  __dv_out="$(${__DV_TO[@]+"${__DV_TO[@]}"} bash "$__DV_VERIFIER" verify --delegation "$__dq_url" --envelope "$__dq_env" "${__dq_cmds[@]}" 2>/dev/null)"; __dv_rc=$?
+  __dv_first="$(printf '%s\n' "$__dv_out" | head -1)"
+  if [[ "$__dv_rc" -ne 0 || "$__dv_first" != "delegation: valid reason=ok" ]]; then
+    printf 'pre-ask-technical-fork-gate: delegation cue fired but verification did not complete or did not pass (%s) - the question proceeds.\n' "${__dv_first:-no answer: timeout or error}" >&2
+    continue
+  fi
+  __dv_lines="$(printf '%s\n' "$__dv_out" | grep '^verified-command: ')"
+  DELEG_REASON="BLOCKED: this AskUserQuestion asks the operator to authorize an act that a recorded Standing Delegation and Production Envelope already cover.
+
+The operator answered once, in plain words, when the epic started; asking again is the stall that delegation exists to remove. The verifier just confirmed the delegation is live and that every command in your question is a line of the envelope:
+
+${__dv_lines}
+
+Run it yourself, byte for byte as printed above, and do not ask. Afterwards say one plain sentence in the session, for example: \"Running this under your standing approval, so I did not ask you.\"
+
+If the act is NOT inside the delegation, do not cite the delegation link or the envelope in the question. The formats are in standing-delegation.md (plugins/soleur/skills/brainstorm-techniques/references/standing-delegation.md).
+
+See hr-menu-option-ack-not-prod-write-auth."
+  declare -f emit_incident >/dev/null 2>&1 && \
+    emit_incident pre-ask-technical-fork-gate deny "standing delegation covers the act asked about" "$__dq" 2>/dev/null || true
+  jq -n --arg r "$DELEG_REASON" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  exit 0
+done < <(printf '%s' "$__HI_RAW" | jq -c '(.tool_input.questions // [])[] | select((.question | type) == "string") | .question' 2>/dev/null) # mut:deleg-perq
+# <<< deleg-arm
 
 # TECHNICAL-RULING signal — a question whose answer is a TECHNICAL RULING: how strict an evidence bar
 # must be, whether evidence suffices, whether an ADR status moves, which of two named technical designs.

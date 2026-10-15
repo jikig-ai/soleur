@@ -7,10 +7,11 @@
 #   run list --workflow <wf> --status <s> --limit 5 --json databaseId
 #   run list --workflow <wf> --commit <sha> --limit 5 --json status,conclusion
 # State comes from files in $STUB_DIR (comment-<id>.json, perm-<login>.json, issue-<n>.json, repo.txt, pr-<n>.json,
-# runs-<wf>-<status>.json, green-<wf>-<sha>.json); mode-<what> files hold `404` or `net` to simulate a failure.
-#!/usr/bin/env bash
+# runs-<wf>-<status>.json, green-<wf>-<sha>.json); mode-<what> files hold `404` or `net` to simulate a failure;
+# a `slow` file makes every call hang for 30 s (timeout rows).
 d="${STUB_DIR:?}"
 echo "$*" >> "$d/calls.log"
+[ -f "$d/slow" ] && sleep 30
 miss() { echo "STUB-MISS $*" >> "$d/calls.log"; echo "gh stub: unsupported argv: $*" >&2; exit 64; }
 fail_mode() {
   case "$(cat "$d/$1" 2>/dev/null)" in

@@ -1147,9 +1147,178 @@ else
   printf '  FAIL: V5 only %s of %s distinct-vocabulary rows reached the ruling reason; missing:%s\n' "$v5_n" "$v5_want" "$v5_missing" >&2; FAIL=$((FAIL+1))
 fi
 
+# --- DELEGATION ARM (ADR-288, Guard 3) ------------------------------------------------------------------------------
+# A question that asks authorization for an act a recorded Standing Delegation and Production Envelope already cover is
+# DENIED (run it yourself, byte-identical); every other state leaves the question to the existing arms. The verifier is
+# the shared plugins/soleur/scripts/delegation-verify.sh, driven here through a `gh` PATH stub and a fixture repository
+# holding committed envelopes. Hook mirrors live in per-mutant trees so the verifier resolves relative to the hook.
+DH_REPO_ROOT="$(cd "$(dirname "$HOOK")/../.." && pwd -P)"
+DFX="$DH_REPO_ROOT/plugins/soleur/test/fixtures/standing-delegation"
+DH_ROOT="${SOLEUR_TEST_INCIDENT_ROOT:?sandbox root unset}/dh"
+assert_fixture_dir "$DH_ROOT"
+DH_BIN="$DH_ROOT/bin"; DH_REPO="$DH_ROOT/repo"; DH_FIXLIB="$DH_REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+mkdir -p "$DH_BIN" "$DH_REPO" || { echo "FATAL: delegation fixture dirs" >&2; exit 2; }
+cp "$DFX/gh-stub.sh" "$DH_BIN/gh" && chmod +x "$DH_BIN/gh"
+DH_U1="https://github.com/example-org/example-repo/issues/77#issuecomment-1001"
+DH_U2="https://github.com/example-org/example-repo/issues/77#issuecomment-1002"
+sed -e "s|@URL@|$DH_U1|g" "$DFX/envelope-valid.md" > "$DH_REPO/env-valid.md"
+sed -e "s|@URL@|$DH_U1|g" "$DFX/envelope-two-sections.md" > "$DH_REPO/env-two.md"
+sed -e "s|@URL@|$DH_U1|g" -e 's/^gh pr merge 123 --squash$/Gh  pr  merge  124 --Squash/' "$DFX/envelope-valid.md" > "$DH_REPO/env-case.md"
+( source "$DH_FIXLIB" && git_fixture_env "$DH_REPO" && git -C "$DH_REPO" init -q && git -C "$DH_REPO" add -A && git -C "$DH_REPO" commit -q -m "fixture envelopes" ) >/dev/null 2>&1 \
+  || { echo "FATAL: delegation fixture repository not built" >&2; exit 2; }
+DH_TODAY="$(date -u +%Y-%m-%d)"; DH_NOW="${DH_TODAY}T00:00:00Z"
+DH_EXP="$(jq -rn --arg d "$DH_TODAY" '($d + "T00:00:00Z" | fromdateiso8601) + 864000 | strftime("%Y-%m-%d")')"
+DH_SC=0
+dh_scn() { # comment 1001 valid, 1002 edited, epic 77 open, admin author
+  DH_SC=$((DH_SC + 1)); STUB_DIR="$DH_ROOT/scn$DH_SC"; mkdir -p "$STUB_DIR"; export STUB_DIR
+  echo "example-org/example-repo" > "$STUB_DIR/repo.txt"
+  sed -e "s/@EXPIRY@/$DH_EXP/" -e "s/@DATE@/$DH_TODAY/" "$DFX/delegation-valid.md" > "$STUB_DIR/body.md"
+  local id upd
+  for id in 1001 1002; do
+    upd="$DH_NOW"; [[ "$id" == 1002 ]] && upd="${DH_TODAY}T00:07:00Z"
+    jq -n --rawfile body "$STUB_DIR/body.md" --arg c "$DH_NOW" --arg u "$upd" --argjson id "$id" \
+      --arg iu "https://api.github.com/repos/example-org/example-repo/issues/77" \
+      '{id:$id, body:$body, user:{login:"owner-user", type:"User"}, author_association:"MEMBER", created_at:$c, updated_at:$u, issue_url:$iu}' > "$STUB_DIR/comment-$id.json"
+  done
+  echo '{"permission":"admin"}' > "$STUB_DIR/perm-owner-user.json"
+  echo '{"number":77,"state":"open"}' > "$STUB_DIR/issue-77.json"
+}
+dh_q() { jq -nc --arg q "$1" --arg l "${2:-Approve}" '{question:$q, options:[{label:$l,description:"go ahead"},{label:"Hold",description:"leave it"}]}'; }
+dh_pay() { local arr; arr="$(printf '%s\n' "$@" | jq -sc '.')"; jq -nc --argjson qs "$arr" '{tool_name:"AskUserQuestion",cwd:".",session_id:"t",tool_input:{questions:$qs}}'; }
+dh_run() { # <hook path> <payload> -> DH_DEC, $DH_ROOT/out, $DH_ROOT/err
+  ( source "$DH_FIXLIB"; git_fixture_env "$DH_REPO"; cd "$DH_REPO" && PATH="$DH_BIN:$PATH" bash "$1" <<<"$2" ) >"$DH_ROOT/out" 2>"$DH_ROOT/err"
+  DH_DEC="$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' "$DH_ROOT/out" 2>/dev/null || echo allow)"
+  [[ -n "$DH_DEC" ]] || DH_DEC=allow   # no output at all is an allow (jq prints nothing for empty input)
+}
+dh_case() { # <name> <expect> <payload> [hook]
+  local hook="${4:-$HOOK}"
+  TOTAL=$((TOTAL+1))
+  dh_run "$hook" "$3"
+  if [[ "$DH_DEC" == "$2" ]]; then printf '  PASS: %s (%s)\n' "$1" "$DH_DEC"; PASS=$((PASS+1))
+  else printf '  FAIL: %s — got %s want %s\n' "$1" "$DH_DEC" "$2" >&2; sed 's/^/    | /' "$DH_ROOT/err" >&2; FAIL=$((FAIL+1)); fi
+}
+dh_err_has() { grep -qF -- "$1" "$DH_ROOT/err"; }
+DH_QCOV="Approve running \`gh pr merge 123 --squash\` under delegation $DH_U1, envelope env-valid.md?"
+DH_REF="under delegation $DH_U1, envelope env-valid.md"
+
+echo "-- delegation arm: deny only a covered, verified act --"
+dh_scn
+dh_case "DG1 a covered, verified, permission-shaped question is denied" deny "$(dh_pay "$(dh_q "$DH_QCOV")")"
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 177 ]]; then echo "  PASS: V1 full inventory ran (177 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 177 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+dg1_reason="$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' "$DH_ROOT/out")"
+if grep -qF 'verified-command: gh pr merge 123 --squash' <<<"$dg1_reason" && grep -qiF 'do not ask' <<<"$dg1_reason" && grep -qF 'hr-menu-option-ack-not-prod-write-auth' <<<"$dg1_reason" \
+   && ! grep -qF 'Soleur operators are non-technical' <<<"$dg1_reason"; then
+  echo "  PASS: DG1b the deny quotes the verified line, says not to ask, and cites the rule (not the investigative ladder)"; PASS=$((PASS+1))
+else echo "  FAIL: DG1b deny reason: $dg1_reason" >&2; FAIL=$((FAIL+1)); fi
+TOTAL=$((TOTAL+1))
+if [[ -f "${SOLEUR_TEST_INCIDENT_ROOT}/.claude/.rule-incidents.jsonl" ]] && grep -q 'standing delegation covers' "${SOLEUR_TEST_INCIDENT_ROOT}/.claude/.rule-incidents.jsonl"; then
+  echo "  PASS: DG1c each delegation deny leaves an incident row"; PASS=$((PASS+1))
+else echo "  FAIL: DG1c no incident row for the delegation deny" >&2; FAIL=$((FAIL+1)); fi
+dh_scn; dh_case "DG2 a command written in mixed case with a double space is denied (spans come from the raw payload)" deny \
+  "$(dh_pay "$(dh_q "Approve running \`Gh  pr  merge  124 --Squash\` $DH_REF" | sed 's/env-valid.md/env-case.md/')")"
+dh_scn; dh_case "DG2b the same command lowercased and squeezed is NOT the envelope line, so the question is asked" allow \
+  "$(dh_pay "$(dh_q "Approve running \`gh pr merge 124 --squash\` $DH_REF" | sed 's/env-valid.md/env-case.md/')")"
+dh_scn; dh_case "DG3 a fenced command line in the question is judged" deny \
+  "$(dh_pay "$(dh_q "$(printf 'Approve this %s?\n```\ngh pr merge 123 --squash\n```' "$DH_REF")")")"
+dh_scn; dh_case "DG4 H2: second envelope section chosen by #title, third Scope item" deny \
+  "$(dh_pay "$(dh_q "Approve running \`gh workflow run example-release.yml -f target=staging\` under delegation $DH_U1, envelope env-two.md#beta?")")"
+
+echo "-- delegation arm: every other state leaves the question to the existing arms --"
+dh_scn; dh_case "DG5 an ordinary approval with a command and NO delegation reference is allowed (cue absent)" allow \
+  "$(dh_pay "$(dh_q "Approve running \`gh pr merge 123 --squash\`?")")"
+dh_scn; dh_case "DG6 a question that mentions 'delegation' with no verb and no reference is allowed" allow \
+  "$(dh_pay "$(dh_q "What does the delegation cover?")")"
+dh_scn; dh_case "DG7 H2: a covered act written WITHOUT backticks is allowed (no command-shaped span)" allow \
+  "$(dh_pay "$(dh_q "Approve merging change 123 with squash $DH_REF?")")"
+dh_scn; dh_case "DG8 only non-command spans (a file name in backticks) is allowed" allow \
+  "$(dh_pay "$(dh_q "Approve the run described in \`env-valid.md\` $DH_REF?")")"
+dh_scn; dh_case "DG9 MIXED spans: one covered, one uncovered command keeps the question asked" allow \
+  "$(dh_pay "$(dh_q "Approve running \`gh pr merge 123 --squash\` and \`gh pr merge 999 --squash\` $DH_REF?")")"
+dh_scn; dh_case "DG10 an uncovered command alone is allowed" allow \
+  "$(dh_pay "$(dh_q "Approve running \`gh pr merge 999 --squash\` $DH_REF?")")"
+dh_scn; dh_case "DG11 an edited delegation is allowed and announced" allow \
+  "$(dh_pay "$(dh_q "$(printf '%s' "$DH_QCOV" | sed 's/-1001/-1002/')")")"
+TOTAL=$((TOTAL+1))
+if dh_err_has 'delegation cue fired but verification did not' ; then echo "  PASS: DG11b the stall is announced on stderr"; PASS=$((PASS+1)); else echo "  FAIL: DG11b no stderr announcement" >&2; FAIL=$((FAIL+1)); fi
+dh_scn; echo 404 > "$STUB_DIR/mode-comment-1001"; dh_case "DG12 a deleted (revoked) delegation is allowed" allow "$(dh_pay "$(dh_q "$DH_QCOV")")"
+dh_scn; echo '{"number":77,"state":"closed"}' > "$STUB_DIR/issue-77.json"; dh_case "DG13 a closed epic is allowed" allow "$(dh_pay "$(dh_q "$DH_QCOV")")"
+dh_scn; echo net > "$STUB_DIR/mode-repo"; dh_case "DG14 an API failure is allowed (cannot verify)" allow "$(dh_pay "$(dh_q "$DH_QCOV")")"
+dh_scn; dh_case "DG15 a delegation link on another repository is allowed" allow \
+  "$(dh_pay "$(dh_q "$(printf '%s' "$DH_QCOV" | sed 's|example-org/example-repo|other-org/other-repo|')")")"
+dh_scn; dh_case "DG16 a cue with no envelope path cannot be verified and is allowed" allow \
+  "$(dh_pay "$(dh_q "Approve running \`gh pr merge 123 --squash\` under delegation $DH_U1?")")"
+dh_scn; dh_case "DG17 an option label alone carrying the reference is a button and never triggers" allow \
+  "$(dh_pay "$(dh_q "Approve this merge?" "Approve \`gh pr merge 123 --squash\` $DH_REF")")"
+dh_scn; dh_case "DG18 two questions: an ordinary first one does not hide a covered second one" deny \
+  "$(dh_pay "$(dh_q "Which of the two reports do you want first?")" "$(dh_q "$DH_QCOV")")"
+dh_scn; dh_case "DG19 two questions: a covered first one denies" deny \
+  "$(dh_pay "$(dh_q "$DH_QCOV")" "$(dh_q "Which of the two reports do you want first?")")"
+
+echo "-- delegation arm: the verifier is part of the install --"
+mkmir() { # <name> [no-verifier|fake-verifier]: a repo-shaped tree around a copy of the hook
+  local d="$DH_ROOT/mir/$1"; mkdir -p "$d/.claude/hooks/lib" "$d/plugins/soleur/scripts"
+  cp "$(dirname "$HOOK")"/lib/*.sh "$d/.claude/hooks/lib/"; cp "$HOOK" "$d/.claude/hooks/pre-ask-technical-fork-gate.sh"
+  case "${2:-}" in
+    no-verifier) : ;;
+    fake-verifier) printf '#!/usr/bin/env bash\necho "delegation: valid reason=ok"\nexit 0\n' > "$d/plugins/soleur/scripts/delegation-verify.sh" ;;
+    *) cp "$DH_REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$d/plugins/soleur/scripts/" ;;
+  esac
+  DH_MIR="$d/.claude/hooks/pre-ask-technical-fork-gate.sh"
+}
+dh_scn; mkmir novf no-verifier
+dh_case "DG20 a missing verifier allows (never denies, never skips silently)" allow "$(dh_pay "$(dh_q "$DH_QCOV")")" "$DH_MIR"
+TOTAL=$((TOTAL+1))
+if dh_err_has 'delegation cue fired but verification did not'; then echo "  PASS: DG20b the missing verifier is announced"; PASS=$((PASS+1)); else echo "  FAIL: DG20b missing verifier not announced" >&2; FAIL=$((FAIL+1)); fi
+dh_scn; mkmir okvf
+dh_case "DG21 control: the same tree WITH the verifier denies" deny "$(dh_pay "$(dh_q "$DH_QCOV")")" "$DH_MIR"
+dh_scn; touch "$STUB_DIR/slow"
+TOTAL=$((TOTAL+1))
+dg22_t0=$(date +%s); dh_run "$HOOK" "$(dh_pay "$(dh_q "$DH_QCOV")")"; dg22_t1=$(date +%s)
+if [[ "$DH_DEC" == "allow" && $((dg22_t1 - dg22_t0)) -lt 20 ]]; then echo "  PASS: DG22 a verifier that hangs is capped and the question is allowed ($((dg22_t1 - dg22_t0)) s)"; PASS=$((PASS+1))
+else echo "  FAIL: DG22 hanging verifier: decision=$DH_DEC after $((dg22_t1 - dg22_t0)) s" >&2; FAIL=$((FAIL+1)); fi
+
+echo "-- delegation arm: mutations (each must change a verdict the cases above pin) --"
+dh_mutate() { # <name> <sed-script-or-awk-file> [fake-verifier]: mutant tree, proves the edit LANDED
+  local mode="${3:-}"; mkmir "$1" "$mode"
+  local f="$DH_MIR"
+  if [[ "$2" == awk:* ]]; then awk -f "${2#awk:}" "$HOOK" > "$f.new" && mv "$f.new" "$f"; else sed -E "$2" "$HOOK" > "$f.new" && mv "$f.new" "$f"; fi
+  chmod +x "$f"
+  TOTAL=$((TOTAL+1))
+  if cmp -s "$HOOK" "$f"; then printf '  FAIL: DM mutation %s did not land\n' "$1" >&2; FAIL=$((FAIL+1)); return 1; fi
+  echo "  PASS: DM mutation $1 landed"; PASS=$((PASS+1))
+}
+dh_kill() { # <name> <pinned decision> <payload>: the real hook gives the pinned decision, the mutant must not
+  TOTAL=$((TOTAL+1))
+  local want="$2" real mut
+  dh_scn; dh_run "$HOOK" "$3"; real="$DH_DEC"
+  dh_scn; dh_run "$DH_ROOT/mir/$1/.claude/hooks/pre-ask-technical-fork-gate.sh" "$3"; mut="$DH_DEC"
+  if [[ "$real" != "$want" ]]; then printf '  FAIL: DM %s: the real hook gives %s, not the pinned %s\n' "$1" "$real" "$want" >&2; FAIL=$((FAIL+1))
+  elif grep -qE 'syntax error|unbound variable|command not found' "$DH_ROOT/err"; then printf '  FAIL: DM %s CRASHED; a crash is not a kill\n' "$1" >&2; FAIL=$((FAIL+1))
+  elif [[ "$mut" != "$want" ]]; then printf '  PASS: DM mutant %s killed (real %s, mutant %s)\n' "$1" "$real" "$mut"; PASS=$((PASS+1))
+  else printf '  FAIL: DM mutant %s SURVIVED (%s)\n' "$1" "$mut" >&2; FAIL=$((FAIL+1)); fi
+}
+# 1 the cue (verb + reference) gate removed while the verifier answers valid for everything
+dh_mutate dm-cue '/# mut:deleg-cue$/ s/^.*$/  : # mut:deleg-cue/' fake-verifier \
+  && dh_kill dm-cue allow "$(dh_pay "$(dh_q "Approve running \`gh pr merge 123 --squash\`?")")"
+# 3 judging only the first question
+dh_mutate dm-perq '/# mut:deleg-perq$/ s/\[\]\)\[\]/[])[0:1][]/' \
+  && dh_kill dm-perq deny "$(dh_pay "$(dh_q "Which of the two reports do you want first?")" "$(dh_q "$DH_QCOV")")"
+# 4 reading option labels as question text
+dh_mutate dm-labels '/# mut:deleg-perq$/ s/\| \.question/| (.question, (.options \/\/ [] | .[] | if type == "string" then . else (.label \/\/ "") end))/' \
+  && dh_kill dm-labels allow "$(dh_pay "$(dh_q "Approve this merge?" "Approve \`gh pr merge 123 --squash\` $DH_REF")")"
+# 6 the arm moved behind the authority short-circuit
+cat > "$DH_ROOT/move.awk" <<'AWK'
+/^# >>> deleg-arm$/ { inb = 1 }
+inb { blk = blk $0 "\n"; if ($0 ~ /^# <<< deleg-arm$/) inb = 0; next }
+{ lines[++n] = $0 }
+END { for (i = 1; i <= n; i++) { print lines[i]; if (lines[i] ~ /^if grep -qE "\$AUTHORITY_RE"/) printf "%s", blk } }
+AWK
+dh_mutate dm-order "awk:$DH_ROOT/move.awk" \
+  && dh_kill dm-order deny "$(dh_pay "$(dh_q "$DH_QCOV")")"
+
+TOTAL=$((TOTAL+1))
+if [[ "$TOTAL" -eq 212 ]]; then echo "  PASS: V1 full inventory ran (212 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 212 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
 #
@@ -1229,7 +1398,7 @@ fi
 # The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
 # added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
 # paying anything, cannot satisfy it.
-MIN_CASES=177
+MIN_CASES=212
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2
