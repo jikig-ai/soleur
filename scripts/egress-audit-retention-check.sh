@@ -4,10 +4,16 @@
 # Prints exactly `OK` on stdout and exits 0 only when:
 #   1. no row in public.workspace_egress_audit_rollup has last_seen older than 35 days
 #      (the daily pg_cron sweep keeps 30; a row past 35 means the sweep has stopped), and
-#   2. when EGRESS_AUDIT_EXPECT_COLLECTION=1: either the newest bucket_start is at most 40
-#      minutes old, or the egress gateway log shows no workspace-attributed decision in the
-#      last 40 minutes (nothing to ingest).
-# Any unavailable read is a failure (exit 1), never a pass; missing credentials exit 2.
+#   2. when EGRESS_AUDIT_EXPECT_COLLECTION=1: either the newest bucket_start is at most 75
+#      minutes old, or the egress gateway log shows no decision of a canary workspace
+#      (EGRESS_AUDIT_CANARY_WORKSPACES, comma-separated ids) between 60 and 35 minutes ago.
+#      Timing: a bucket lands about 31 minutes after its start (15-minute bucket, 15-minute
+#      reduce expiry, flush and batch), so the newest landed bucket is 31-46 minutes old in
+#      steady state, and an event older than 35 minutes must already be in a landed bucket
+#      whose start is at most 75 minutes old. Failed-authentication rows (status 407) are not
+#      ingested and are not counted.
+# Any unavailable read is a failure (exit 1), never a pass; missing credentials or, when
+# freshness is asserted, a missing or malformed canary list exit 2.
 #
 # Freshness is NOT asserted by default: while the pipeline is dark (collection off for every
 # external workspace) the table is legitimately empty, and a stale-table alarm would be a
@@ -17,6 +23,8 @@
 #   doppler run -p soleur -c prd -- bash scripts/egress-audit-retention-check.sh
 # Freshness with collection enabled also reads the gateway log, which needs the Better Stack
 # query credential (prd_terraform); GW_QUERY_CMD overrides the command (tests).
+# NOT scheduled anywhere yet: until it runs on a schedule this is a manual probe, and
+# scheduling it is a precondition of enabling collection for any workspace (ADR-288).
 set -uo pipefail
 
 # Refuse to run under shell tracing while a live credential is set: `set -x` would trace the
@@ -40,7 +48,7 @@ fi
 command -v jq >/dev/null 2>&1 || { echo "UNAVAILABLE: jq is required" >&2; exit 2; }
 
 MAX_ROW_AGE_S=$((35 * 86400))
-MAX_BUCKET_AGE_S=$((40 * 60))
+MAX_BUCKET_AGE_S=$((75 * 60))
 NOW="$(date -u +%s)"
 
 # rest_get <query-string>: prints the JSON body, returns non-zero on any transport or HTTP error.
@@ -75,6 +83,23 @@ fi
 
 # 2. Freshness, only when collection is expected.
 if [[ "${EGRESS_AUDIT_EXPECT_COLLECTION:-0}" == "1" ]]; then
+  # The gateway-activity query is scoped to the canary workspaces: while only a canary is enabled,
+  # the gateway also logs every other workspace's traffic, which the app (rightly) drops, and
+  # counting it would alarm on a healthy pipeline.
+  CANARY_RAW="${EGRESS_AUDIT_CANARY_WORKSPACES:-}"
+  if [[ -z "$CANARY_RAW" ]]; then
+    echo "UNAVAILABLE: EGRESS_AUDIT_EXPECT_COLLECTION=1 needs EGRESS_AUDIT_CANARY_WORKSPACES (comma-separated workspace ids)" >&2
+    exit 2
+  fi
+  canary_or=""
+  IFS=',' read -ra CANARY_IDS <<< "$CANARY_RAW"
+  for id in "${CANARY_IDS[@]}"; do
+    if [[ ! "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+      echo "UNAVAILABLE: EGRESS_AUDIT_CANARY_WORKSPACES holds a value that is not a lower-case workspace id" >&2
+      exit 2
+    fi
+    canary_or="${canary_or:+$canary_or OR }raw LIKE '%${id}%'"
+  done
   body="$(rest_get 'select=bucket_start&order=bucket_start.desc&limit=1')" || exit 1
   newest="$(printf '%s' "$body" | jq -er 'if type == "array" then (.[0].bucket_start // "") else error("not an array") end' 2>/dev/null)" || {
     echo "UNAVAILABLE: the newest-bucket read did not return a JSON array" >&2
@@ -87,7 +112,7 @@ if [[ "${EGRESS_AUDIT_EXPECT_COLLECTION:-0}" == "1" ]]; then
   fi
   if [[ "$fresh" -eq 0 ]]; then
     # Stale or empty: acceptable only if the gateway log shows nothing to ingest. Unknown is a failure.
-    gw_sql="SELECT count() AS n FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 40 MINUTE AND raw LIKE '%requested_host%' AND raw LIKE '%soleur-egress-gw%' AND match(raw, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}') FORMAT JSONEachRow"
+    gw_sql="SELECT count() AS n FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 60 MINUTE AND dt <= now() - INTERVAL 35 MINUTE AND raw LIKE '%requested_host%' AND raw LIKE '%soleur-egress-gw%' AND match(raw, 'status[^0-9]{1,6}(200|403|502|503|504)') AND (${canary_or}) FORMAT JSONEachRow"
     if [[ -n "${GW_QUERY_CMD:-}" ]]; then
       gw_out="$("$GW_QUERY_CMD" "$gw_sql" 2>/dev/null)" || gw_out=""
     else
@@ -97,7 +122,7 @@ if [[ "${EGRESS_AUDIT_EXPECT_COLLECTION:-0}" == "1" ]]; then
     if [[ ! "$n" =~ ^[0-9]+$ ]]; then
       fail "could not read the gateway log to tell an idle gateway from a broken ingest"
     elif [[ "$n" -gt 0 ]]; then
-      fail "no rollup bucket in the last 40 minutes while the gateway logged $n workspace-attributed decisions: ingest is not landing"
+      fail "no rollup bucket in the last 75 minutes while the gateway logged $n canary-workspace decisions 35-60 minutes ago: ingest is not landing"
     fi
   fi
 fi

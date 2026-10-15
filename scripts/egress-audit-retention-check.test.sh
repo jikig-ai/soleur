@@ -46,8 +46,8 @@ for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
 [[ "$url" == *"/rest/v1/workspace_egress_audit_rollup?"* ]] || { echo "shim: unexpected url $url" >&2; exit 64; }
 if [[ "${CURL_FAIL:-0}" == 1 ]]; then exit 7; fi
 case "$url" in
-  *"order=last_seen.asc"*) body="${ROWS_OLDEST:-[]}" ;;
-  *"order=bucket_start.desc"*) body="${ROWS_NEWEST:-[]}" ;;
+  *"?select=last_seen&order=last_seen.asc&limit=1") body="${ROWS_OLDEST:-[]}" ;;
+  *"?select=bucket_start&order=bucket_start.desc&limit=1") body="${ROWS_NEWEST:-[]}" ;;
   *) echo "shim: unexpected query $url" >&2; exit 64 ;;
 esac
 printf '%s\n%s' "$body" "${HTTP_CODE:-200}"
@@ -57,11 +57,13 @@ chmod +x "$ROOT/bin/curl"
 assert_fixture_dir "$ROOT"
 cat > "$ROOT/gw-active" <<'EOF'
 #!/usr/bin/env bash
+printf '%s' "$1" > "$GW_SQL_LOG"
 echo '{"n":3}'
 EOF
 assert_fixture_dir "$ROOT"
 cat > "$ROOT/gw-idle" <<'EOF'
 #!/usr/bin/env bash
+printf '%s' "$1" > "$GW_SQL_LOG"
 echo '{"n":0}'
 EOF
 assert_fixture_dir "$ROOT"
@@ -80,9 +82,10 @@ run() { # run <expected-rc> <description> [VAR=value ...]
   assert_fixture_dir "$ROOT"
   : > "$ROOT/argv.log"
   : > "$ROOT/stdin.log"
+  : > "$ROOT/gwsql.log"
   local out rc
   out="$(env -i PATH="$ROOT/bin:/usr/bin:/bin" HOME="$ROOT" \
-    CURL_ARGV_LOG="$ROOT/argv.log" CURL_STDIN_LOG="$ROOT/stdin.log" \
+    CURL_ARGV_LOG="$ROOT/argv.log" CURL_STDIN_LOG="$ROOT/stdin.log" GW_SQL_LOG="$ROOT/gwsql.log" \
     SUPABASE_URL="https://example-ref.supabase.test" SUPABASE_SERVICE_ROLE_KEY="synthetic-service-key-0001" \
     "$@" bash "$SUT" 2>"$ROOT/stderr.log")"
   rc=$?
@@ -108,14 +111,30 @@ run 2 "no service-role key in the environment" SUPABASE_SERVICE_ROLE_KEY=
 run 2 "no Supabase URL in the environment" SUPABASE_URL=
 
 echo "-- freshness (only when collection is expected) --"
+CANARY="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 FRESH="[{\"bucket_start\":\"$(iso 1200)\"}]"
+STEADY_OLD="[{\"bucket_start\":\"$(iso 2760)\"}]"   # 46 min: the oldest a healthy newest bucket gets
+JUST_IN="[{\"bucket_start\":\"$(iso 4380)\"}]"      # 73 min: inside the 75 min line
 STALE="[{\"bucket_start\":\"$(iso 7200)\"}]"
-run 0 "collection expected, newest bucket 20 min old, gateway active: OK" EGRESS_AUDIT_EXPECT_COLLECTION=1 ROWS_OLDEST="[]" ROWS_NEWEST="$FRESH" GW_QUERY_CMD="$ROOT/gw-active"
-run 1 "collection expected, newest bucket 2 h old, gateway active: stale" EGRESS_AUDIT_EXPECT_COLLECTION=1 ROWS_OLDEST="[]" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-active"
-run 1 "collection expected, no row at all, gateway active: stale" EGRESS_AUDIT_EXPECT_COLLECTION=1 ROWS_OLDEST="[]" ROWS_NEWEST="[]" GW_QUERY_CMD="$ROOT/gw-active"
-run 0 "collection expected, newest bucket 2 h old, gateway idle: nothing to ingest" EGRESS_AUDIT_EXPECT_COLLECTION=1 ROWS_OLDEST="[]" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-idle"
-run 1 "collection expected but the gateway activity query fails: unknown is a failure" EGRESS_AUDIT_EXPECT_COLLECTION=1 ROWS_OLDEST="[]" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-broken"
+EXPECT=(EGRESS_AUDIT_EXPECT_COLLECTION=1 EGRESS_AUDIT_CANARY_WORKSPACES="$CANARY" ROWS_OLDEST="[]")
+run 0 "collection expected, newest bucket 20 min old, gateway active: OK" "${EXPECT[@]}" ROWS_NEWEST="$FRESH" GW_QUERY_CMD="$ROOT/gw-active"
+run 0 "collection expected, newest bucket 46 min old (steady-state worst case), gateway active: OK" "${EXPECT[@]}" ROWS_NEWEST="$STEADY_OLD" GW_QUERY_CMD="$ROOT/gw-active"
+run 0 "collection expected, newest bucket 73 min old, gateway active: still inside the line" "${EXPECT[@]}" ROWS_NEWEST="$JUST_IN" GW_QUERY_CMD="$ROOT/gw-active"
+run 1 "collection expected, newest bucket 2 h old, gateway active: stale" "${EXPECT[@]}" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-active"
+run 1 "collection expected, no row at all, gateway active: stale" "${EXPECT[@]}" ROWS_NEWEST="[]" GW_QUERY_CMD="$ROOT/gw-active"
+run 0 "collection expected, newest bucket 2 h old, gateway idle: nothing to ingest" "${EXPECT[@]}" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-idle"
+run 1 "collection expected but the gateway activity query fails: unknown is a failure" "${EXPECT[@]}" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-broken"
 run 0 "collection NOT expected: a stale bucket is not asserted" ROWS_OLDEST="[]" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-active"
+run 2 "collection expected but no canary workspace list: refuses rather than guess" EGRESS_AUDIT_EXPECT_COLLECTION=1 ROWS_OLDEST="[]" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-active"
+run 2 "a malformed canary id (query-injection shaped) is refused" EGRESS_AUDIT_EXPECT_COLLECTION=1 EGRESS_AUDIT_CANARY_WORKSPACES="x' OR 1=1 --" ROWS_OLDEST="[]" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-active"
+
+echo "-- the gateway query is scoped, lagged and status-allowlisted --"
+run 1 "stale bucket with an active gateway (to capture the query)" "${EXPECT[@]}" ROWS_NEWEST="$STALE" GW_QUERY_CMD="$ROOT/gw-active"
+GWSQL="$(cat "$ROOT/gwsql.log")"
+if [[ "$GWSQL" == *"raw LIKE '%$CANARY%'"* ]]; then pass "the query names the canary workspace"; else fail "the query names the canary workspace (got: $GWSQL)"; fi
+if [[ "$GWSQL" == *"dt <= now() - INTERVAL 35 MINUTE"* && "$GWSQL" == *"dt > now() - INTERVAL 60 MINUTE"* ]]; then pass "the query ignores events newer than 35 minutes (not landed yet)"; else fail "the query ignores events newer than 35 minutes"; fi
+if [[ "$GWSQL" == *"(200|403|502|503|504)"* ]]; then pass "the query counts only the statuses the pipeline ingests (so 407 is excluded)"; else fail "the query counts only the statuses the pipeline ingests"; fi
+if [[ "$GWSQL" != *"[0-9a-f]{8}-"* ]]; then pass "the query no longer matches every UUID-shaped row"; else fail "the query no longer matches every UUID-shaped row"; fi
 
 echo "-- credential hygiene --"
 run 0 "baseline run for the hygiene assertions" ROWS_OLDEST="[]"
@@ -126,8 +145,8 @@ run 78 "refuses to run under shell tracing while the key is set" SHELLOPTS=xtrac
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
-if [[ $((PASS + FAIL)) -lt 24 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 24.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 33 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 33.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1
