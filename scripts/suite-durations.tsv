@@ -325,6 +325,7 @@ scripts/ci-deploy-sentry-post-fail-6475	122	measured
 scripts/ci-draft-light	87009	measured
 scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
+scripts/ci-pr-selection	1180	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
 scripts/compound-promote	1076	measured
@@ -386,6 +387,7 @@ scripts/learning-retrieval-bench	922	measured
 scripts/lib/bearer-curl.test.sh	3576	measured
 scripts/lib/frontmatter-strip.test.sh	197	measured
 scripts/lib/git-data-rotate-stamp.test.sh	1177	floor
+scripts/lib/git-data-wipe-runs.test.sh	1180	floor
 scripts/lib/incidents-roots.test.sh	177	measured
 scripts/lib/inngest-probe-row.test.sh	11441	measured
 scripts/lib/legal-base-ref.test.sh	324	measured
@@ -467,6 +469,7 @@ scripts/probe-github-app-mint	1180	floor
 scripts/probe-legal-corpus-truth-live	131	measured
 scripts/prod-version-drift-check	22764	measured
 scripts/raise-tmp-tmpfs-ceiling	1186	measured
+scripts/registry-htpasswd-stdin-10119	4200	measured
 scripts/registry-luks-live-8386	2717	measured
 scripts/rename-guard	3196	measured
 scripts/review-reminder-liveness	127	measured
@@ -559,6 +562,7 @@ tests/scripts/git-data-root-key-arm	5960	measured
 tests/scripts/git-data-root-token-census	22452	measured
 tests/scripts/git-data-rung2-evidence-capture	14744	measured
 tests/scripts/git-data-rung2-plan-shape	884	measured
+tests/scripts/git-data-wipe-wedge	1180	floor
 tests/scripts/host-image-coherence-preflight	47	measured
 tests/scripts/infra-privileged-tier-census	16830	measured
 tests/scripts/inngest-host-dark-gate	16167	measured

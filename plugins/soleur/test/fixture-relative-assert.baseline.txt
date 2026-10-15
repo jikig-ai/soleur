@@ -213,6 +213,7 @@
 5	apps/web-platform/infra/luks-monitor.test.sh
 1	apps/web-platform/infra/nic-wait-gate.test.sh
 1	apps/web-platform/infra/orphan-reaper.sh
+2	apps/web-platform/infra/registry-boot-guard.test.sh
 2	apps/web-platform/infra/registry-luks.test.sh
 1	apps/web-platform/infra/registry-userdata-budget.sh
 1	apps/web-platform/infra/registry-userdata-budget.test.sh
@@ -369,6 +370,7 @@
 1	scripts/check-cloudflare-token-drift.test.sh
 8	scripts/ci-draft-push-census.sh
 5	scripts/ci-draft-push-census.test.sh
+8	scripts/ci-pr-selection.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh
@@ -472,6 +474,7 @@
 3	tests/hooks/test_hook_emissions.sh
 3	tests/scripts/lib/gate-suite-harness.sh
 2	tests/scripts/lib/inngest-host-dark-gate.sh
+5	tests/scripts/test-argv-bearer-sweep.sh
 5	tests/scripts/test-audit-bot-codeql-coverage.sh
 23	tests/scripts/test-audit-ruleset-bypass.sh
 2	tests/scripts/test-git-data-birth-readiness-gate.sh

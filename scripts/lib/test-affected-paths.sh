@@ -896,6 +896,17 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
 )
 
+# tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
+# (git ls-files .github/workflows filtered to the workflows that plan or apply the web-platform root, plus the root's HCL
+# for the -target dependency closure and the gate libraries those workflows source).
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_WIPE_WEDGE_PATHS=(
+  ".github/workflows/"
+  "glob:apps/web-platform/infra/*.tf"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/"
+  "tests/scripts/test-git-data-wipe-wedge.sh"
+)
+
 # tests/scripts/eu-location-allowset-parity — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_EU_LOCATION_ALLOWSET_PARITY_PATHS=(
@@ -1227,11 +1238,15 @@ AFFECTED_SCRIPTS_LEARNING_RETRIEVAL_BENCH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
-# scripts/ci-push-dedupe (#9512, ADR-276 S2) — the suite extracts the push-dedupe proof step from ci.yml and executes it,
-# parses the eight gated conditions and pins the test aggregator; the only repo file it reads is the workflow. Declared
-# from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that drives its floor).
+# scripts/ci-push-dedupe (#9512, ADR-276 S2; S4 PR B) — the suite extracts the push-dedupe proof step from ci.yml and executes it,
+# parses the eight gated conditions and pins the test aggregator. It reads two further repo files: the release workflow (it EXTRACTS
+# and EXECUTES that workflow's declared-path budget function against ci.yml) and the pr-selection driver (the leg-parity row reads its
+# gateable-leg list and its final-block regex). Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the
+# meta-guard that drives its floor).
 AFFECTED_SCRIPTS_CI_PUSH_DEDUPE_PATHS=(
   ".github/workflows/ci.yml"
+  ".github/workflows/web-platform-release.yml"
+  "scripts/ci-pr-selection.sh"
   "scripts/ci-push-dedupe.test.sh"
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1250,6 +1265,19 @@ AFFECTED_SCRIPTS_CI_DRAFT_LIGHT_PATHS=(
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/required-checks.txt"
+)
+
+# scripts/ci-pr-selection (#9729, ADR-276 S4) — the suite EXECUTES the pr-selection driver against throwaway git fixtures and a stub
+# runner, derives the trigger list from what scripts/test-all.sh sources and the --pr-gated decline labels from its text, and reads
+# the git-fixture env library. Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that
+# drives its floor).
+AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/ci-pr-selection.sh"
+  "scripts/ci-pr-selection.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
 )
 
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in

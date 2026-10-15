@@ -1165,7 +1165,7 @@
 },
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282 accepted 2026-10-15; delete-protection flag read back once, prevent_destroy is plan-time only): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "title": "Inngest Redis",
 "kind": "container",
@@ -2347,7 +2347,7 @@
 "id": "1amybls"
 },
 "1rnkjs7": {
-"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main",
+"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main",
 "technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
 "source": {
 "model": "github"
@@ -2380,7 +2380,7 @@
 "id": "a7lm9k"
 },
 "j1bf5v": {
-"title": "Hetzner Cloud control-plane API (api.hetzner.cloud), never the hosts themselves. Named here: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3, op=arm G3.7 H and op=luks-* G3 do not count a liveness row (ADR-225 section 4 amendment, AP-027), and workspaces-luks-cutover.yml looks up its volume id; both read HCLOUD_TOKEN_READONLY first and fall back to HCLOUD_TOKEN (ADR-241 D4) until it is minted. During #6604 step 7 (2026-10-08) workspaces-luks-cutover.yml ALSO WRITES through this edge, once: its environment-gated `wipe` job, holding the Tier-B token from the infra-credentials loader, proves write capability with an idempotent labels PUT, then DETACHES and DELETES the retired plaintext volume (105149570) — only after the host zeroed and read it back, and only for the pinned id — while its preflight and the single-use workspaces-plaintext-forget.yml read the volume and web-1 (a presence proof: a 404 counted as gone only from a token that could see web-1 holding the LUKS volume 106443278). The `wipe` job and the forget workflow run from main, where they exist until PR #9348 merges (only after both have run), and that PR deletes them; the cutover workflow's remaining Hetzner calls through this edge are reads. From 2026-10-07 until its retirement on 2026-10-12 (#9372) web-host-reboot.yml's environment-gated `reboot` job also WROTE through this edge: one soft-reboot request (POST /servers/{id}/actions/reboot) for the allow-listed web-2 server only, never web-1, with the Tier-B token from the loader, dispatch-only; the workflow is deleted. Other CI callers include op=backup create_image, the git-data rung-2 rehearsal (including a server reset), the #9175 inngest-provision forced-race rehearsal (Phase A births a NIC-less throwaway host, Phase B attaches it to the prod private net at 10.0.1.60, and a soft-reboot action proves the provisioning latch), drift and apply workflows, and every Terraform apply through the hcloud provider.",
+"title": "Hetzner Cloud control-plane API (api.hetzner.cloud), never the hosts themselves. Named here: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3, op=arm G3.7 H and op=luks-* G3 do not count a liveness row (ADR-225 section 4 amendment, AP-027), and workspaces-luks-cutover.yml looks up its volume id; both read HCLOUD_TOKEN_READONLY first and fall back to HCLOUD_TOKEN (ADR-241 D4) until it is minted. During #6604 step 7 (2026-10-08) workspaces-luks-cutover.yml ALSO WRITES through this edge, once: its environment-gated `wipe` job, holding the Tier-B token from the infra-credentials loader, proves write capability with an idempotent labels PUT, then DETACHES and DELETES the retired plaintext volume (105149570) — only after the host zeroed and read it back, and only for the pinned id — while its preflight and the single-use workspaces-plaintext-forget.yml read the volume and web-1 (a presence proof: a 404 counted as gone only from a token that could see web-1 holding the LUKS volume 106443278). The `wipe` job and the forget workflow run from main, where they exist until PR #9348 merges (only after both have run), and that PR deletes them; the cutover workflow's remaining Hetzner calls through this edge are reads. Since #10138 git-data-cutover.yml's environment-gated `wipe` job (ADR-239 DL-2) READS through this edge (the server and volume identity, the volume's action history and the read-back, all with HCLOUD_TOKEN_READONLY and never a fall-back to the write token) and WRITES through it in two modes only: mode=wipe makes one detach and one DELETE, and mode=wipe_finish makes no detach call and at most one DELETE (none when the volume is already absent), each of the allow-listed plaintext volume soleur-git-data-store, named by the owner by id and checked against the API, with the Tier-B token from the infra-credentials loader reaching only those two steps; owner-named, environment-approved, and the only claim it makes about the end state is that the device was deleted at the provider API (a wipe_finish that finds the volume already absent claims only that it is absent, with the delete outcome in the origin run). From 2026-10-07 until its retirement on 2026-10-12 (#9372) web-host-reboot.yml's environment-gated `reboot` job also WROTE through this edge: one soft-reboot request (POST /servers/{id}/actions/reboot) for the allow-listed web-2 server only, never web-1, with the Tier-B token from the loader, dispatch-only; the workflow is deleted. Other CI callers include op=backup create_image, the git-data rung-2 rehearsal (including a server reset), the #9175 inngest-provision forced-race rehearsal (Phase A births a NIC-less throwaway host, Phase B attaches it to the prod private net at 10.0.1.60, and a soft-reboot action proves the provisioning latch), drift and apply workflows, and every Terraform apply through the hcloud provider.",
 "technology": "HTTPS (Hetzner Cloud API)",
 "source": {
 "model": "github"
@@ -2655,7 +2655,7 @@
 "id": "13t65y5"
 },
 "10lhi30": {
-"title": "Transport and root authentication LIVE (ADR-220 D1b accepted 2026-09-27). Reviewer-gated, READ-ONLY root SSH from git-data-cutover.yml (job `cutover`, environment web-platform-infra-apply, main only, serialized on git-data-state): through the ssh. tunnel to web-1 (10.0.1.10 via the bridge NAT rule), then a web-1 direct-tcpip channel (-W 10.0.1.20:22, literal target), authenticating end-to-end with the dedicated root key so no key or agent socket lands on web-1. The key is Terraform-minted in its own root (git-data-root-key), read at run time from the separate Doppler project soleur-git-data-root, and reaches the host only through a create of hcloud_server.git_data checked against a committed fingerprint. After the access gate the proof mode only reads the store (served by the LUKS mapper with its store marker bound, not frozen, empty) and the shape of its pre-receive fence, and exits. The flip, rollback, unfreeze and redeploy modes (#8211 PR2) write the freeze sentinel and clear it, write the prd flag through a windowed write token and redeploy the web fleet through the deploy webhook; the flip and the rollback end with a transactional probe over the same SSH path (provision, fenced push and remove with a synthetic id, zero residue) that proves erasure still works. None of the modes copies, mounts or wipes a volume: the store is born on LUKS (ADR-239) and rollback is flag-off only. A failed, stranded or cancelled run is reported by the separate notify-failure job (an issue plus an ops email) and never by this edge. Host keys PINNED on both hops (ADR-237, accepted 2026-09-27): web-1 by its committed ECDSA-P256 pin, git-data by its Terraform-minted ED25519 key, rotated on every replace and published as the TF-owned prd secret GIT_DATA_SSH_HOST_KEY, which the flag precheck reads with the prd token it already holds. web-1 can no longer impersonate git-data; a pinned key authenticates the host, not its answers (ADR-220 amendment log). THE READ CREDENTIAL'S SCOPE CHANGES (#8209, ADR-241 D7), and it is the half ADR-220 explicitly deferred: DOPPLER_TOKEN_GIT_DATA_ROOT stops being a REPO secret — which any workflow on any branch of this PUBLIC repo could name, so 'reviewer-gated, main only' described the cutover JOB and never the credential — and becomes an ENVIRONMENT secret on web-platform-infra-apply under the SAME NAME. Same name deliberately: this workflow is #8211-owned and needs no edit, because its cutover job already declares that environment and an environment secret overrides a repo secret of the same name. The Terraform-minted token and the repo secret are FORGOTTEN by Terraform (removed blocks carrying lifecycle destroy = false, so both live objects keep serving until they are replaced — that is what makes the change safe to merge ahead of any out-of-band step), then revoked. The second path to the same key moves too: web-platform/git-data-root-key/terraform.tfstate, which the prd_terraform backend keys could read, relocates to the soleur-terraform-state-privileged bucket that only a bucket-scoped Tier-B token reads (see the github -> cloudflare edge). Both paths ADR-220's D4 'repo-secret reach' residual named are therefore closed AS TO BRANCH-WORKFLOW REACH, and NOT as to a prd repo-secret holder: that holder still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can rewrite the very deployment-branch policy the new carrier rests on. That is ADR-241 residual R1, filed at p1, and it is why ADR-241 D2 is `proposed` rather than `accepted` and why ADR-220's D4 residual is addressed but not closed",
+"title": "Transport and root authentication LIVE (ADR-220 D1b accepted 2026-09-27). Reviewer-gated root SSH from git-data-cutover.yml (job `cutover`, environment web-platform-infra-apply, main only, serialized on git-data-state): through the ssh. tunnel to web-1 (10.0.1.10 via the bridge NAT rule), then a web-1 direct-tcpip channel (-W 10.0.1.20:22, literal target), authenticating end-to-end with the dedicated root key so no key or agent socket lands on web-1. The key is Terraform-minted in its own root (git-data-root-key), read at run time from the separate Doppler project soleur-git-data-root, and reaches the host only through a create of hcloud_server.git_data checked against a committed fingerprint. After the access gate the proof mode only reads the store (served by the LUKS mapper with its store marker bound, not frozen, empty) and the shape of its pre-receive fence, and exits. The flip, rollback, unfreeze and redeploy modes (#8211 PR2) write the freeze sentinel and clear it, write the prd flag through a windowed write token and redeploy the web fleet through the deploy webhook; the flip and the rollback end with a transactional probe over the same SSH path (provision, fenced push and remove with a synthetic id, zero residue) that proves erasure still works. None of those five modes copies or mounts a volume: the store is born on LUKS (ADR-239) and rollback is flag-off only. Since #10138 the same environment, bridge and root key also serve a second root-SSH consumer, the `wipe` job (modes wipe_check, wipe, wipe_finish; the cutover job is skipped for them): its host verb (MODE=wipe_assert, one ssh session) writes nothing to the store or to the retired plaintext volume and prints fixed words and per-type counts only, never a name; wipe_check, wipe_finish and the post-detach read create nothing on the host, but in mode=wipe the pre-detach read creates and removes one transient host-local device-mapper snapshot of the kernel read-only plaintext device (its copy-on-write file in RAM) and mounts that snapshot read-only to count top-level entry types. No mode copies a volume, and the retired plaintext volume is deleted through the Hetzner API edge, never through the host. A failed, stranded or cancelled run is reported by the separate notify-failure job (an issue plus an ops email) and never by this edge. Host keys PINNED on both hops (ADR-237, accepted 2026-09-27): web-1 by its committed ECDSA-P256 pin, git-data by its Terraform-minted ED25519 key, rotated on every replace and published as the TF-owned prd secret GIT_DATA_SSH_HOST_KEY, which the flag precheck reads with the prd token it already holds. web-1 can no longer impersonate git-data; a pinned key authenticates the host, not its answers (ADR-220 amendment log). THE READ CREDENTIAL'S SCOPE CHANGES (#8209, ADR-241 D7), and it is the half ADR-220 explicitly deferred: DOPPLER_TOKEN_GIT_DATA_ROOT stops being a REPO secret — which any workflow on any branch of this PUBLIC repo could name, so 'reviewer-gated, main only' described the cutover JOB and never the credential — and becomes an ENVIRONMENT secret on web-platform-infra-apply under the SAME NAME. Same name deliberately: this workflow is #8211-owned and needs no edit, because its cutover job already declares that environment and an environment secret overrides a repo secret of the same name. The Terraform-minted token and the repo secret are FORGOTTEN by Terraform (removed blocks carrying lifecycle destroy = false, so both live objects keep serving until they are replaced — that is what makes the change safe to merge ahead of any out-of-band step), then revoked. The second path to the same key moves too: web-platform/git-data-root-key/terraform.tfstate, which the prd_terraform backend keys could read, relocates to the soleur-terraform-state-privileged bucket that only a bucket-scoped Tier-B token reads (see the github -> cloudflare edge). Both paths ADR-220's D4 'repo-secret reach' residual named are therefore closed AS TO BRANCH-WORKFLOW REACH, and NOT as to a prd repo-secret holder: that holder still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can rewrite the very deployment-branch policy the new carrier rests on. That is ADR-241 residual R1, filed at p1, and it is why ADR-241 D2 is `proposed` rather than `accepted` and why ADR-220's D4 residual is addressed but not closed",
 "technology": "SSH",
 "source": {
 "model": "github"
@@ -18155,7 +18155,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282 accepted 2026-10-15; delete-protection flag read back once, prevent_destroy is plan-time only): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
@@ -18537,15 +18537,15 @@
 1227
 ],
 [
-7279,
-1207
+7341,
+1217
 ],
 [
-6404,
-1241
+6341,
+1230
 ],
 [
-6282,
+6280,
 1219
 ],
 [
@@ -18557,12 +18557,12 @@
 1135
 ],
 [
-5984,
+5986,
 1108
 ],
 [
-5783,
-1069
+5784,
+1068
 ],
 [
 4325,
@@ -21499,19 +21499,19 @@
 1223
 ],
 [
-7704,
+7701,
 1232
 ],
 [
-7747,
+7744,
 1219
 ],
 [
-7829,
-1192
+7827,
+1193
 ],
 [
-7827,
+7826,
 1142
 ],
 [
@@ -21519,8 +21519,8 @@
 1108
 ],
 [
-8034,
-1054
+8035,
+1055
 ],
 [
 8092,
@@ -22039,7 +22039,7 @@
 "id": "e2l047",
 "source": "github",
 "target": "platform.infra.gitDataStore",
-"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated, READ-ONLY root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
+"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
 "points": [
 [
 10686,
@@ -22075,38 +22075,38 @@
 ],
 [
 8144,
-970
+969
 ],
 [
 8020,
 1048
 ],
 [
-7909,
-1118
+7813,
+1180
 ],
 [
-7560,
-1071
+7706,
+1039
 ],
 [
-7434,
+7471,
 1108
 ],
 [
-7330,
+7365,
 1139
 ],
 [
-7322,
+7355,
 1193
 ],
 [
-7216,
+7248,
 1219
 ],
 [
-7197,
+7228,
 1223
 ],
 [
@@ -22167,9 +22167,9 @@
 ]
 ],
 "labelBBox": {
-"x": 7435,
+"x": 7472,
 "y": 1108,
-"width": 284,
+"width": 244,
 "height": 106
 },
 "parent": null,
@@ -22694,24 +22694,24 @@
 1219
 ],
 [
-5729,
+5735,
 1193
 ],
 [
-5801,
-1139
+5809,
+1140
 ],
 [
-6112,
+6125,
 1108
 ],
 [
-6742,
-1045
+6750,
+1046
 ],
 [
-6916,
-1178
+6922,
+1177
 ],
 [
 7536,
@@ -22819,32 +22819,32 @@
 1048
 ],
 [
-7087,
-1146
+7097,
+1144
 ],
 [
-6955,
-1017
+6967,
+1021
 ],
 [
-6505,
+6527,
 1108
 ],
 [
-6273,
-1155
+6287,
+1156
 ],
 [
-6019,
-1253
+6023,
+1255
 ],
 [
 5856,
-1322
+1324
 ]
 ],
 "labelBBox": {
-"x": 6506,
+"x": 6528,
 "y": 1141,
 "width": 93,
 "height": 39
@@ -23082,30 +23082,30 @@
 ],
 [
 6006,
-928
+929
 ],
 [
 6199,
 1048
 ],
 [
-6499,
-1236
+6512,
+1242
 ],
 [
-6625,
-1180
+6643,
+1179
 ],
 [
-6977,
+7009,
 1219
 ],
 [
-7054,
+7084,
 1227
 ],
 [
-8303,
+8305,
 1213
 ],
 [
@@ -23150,7 +23150,7 @@
 ]
 ],
 "labelBBox": {
-"x": 6978,
+"x": 7010,
 "y": 1141,
 "width": 157,
 "height": 39
@@ -24128,32 +24128,32 @@
 1227
 ],
 [
-4090,
+4097,
 1177
 ],
 [
-6305,
+6330,
 1168
 ],
 [
-7190,
+7222,
 1205
 ],
 [
-7991,
+8011,
 1238
 ],
 [
-8944,
+8948,
 1335
 ],
 [
-9340,
+9341,
 1378
 ]
 ],
 "labelBBox": {
-"x": 7164,
+"x": 7196,
 "y": 1151,
 "width": 25,
 "height": 18
@@ -44761,7 +44761,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 7961,
+"width": 7959,
 "height": 1961
 },
 "nodes": [
@@ -44794,7 +44794,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__github",
-"x": 1814,
+"x": 1812,
 "y": 0,
 "width": 353,
 "height": 180,
@@ -44875,7 +44875,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__betterstack",
-"x": 6573,
+"x": 6571,
 "y": 1723,
 "width": 388,
 "height": 180,
@@ -44960,7 +44960,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_engine",
-"x": 2097,
+"x": 2095,
 "y": 871,
 "width": 320,
 "height": 180,
@@ -45046,7 +45046,7 @@
 "notation": "System",
 "kind": "system",
 "depth": 1,
-"x": 2457,
+"x": 2455,
 "y": 358,
 "width": 2719,
 "height": 1595,
@@ -45087,7 +45087,7 @@
 "technology": "cloudflared (ONE tunnel; ONE connector live in prod: web-1 — the fsn1 web-2 was retired 2026-07-17 (#6538/#6463); the cattle web-2 born 2026-07-27 (#6969) runs no connector. The web_tunnel_connector gate is construction-time only)",
 "kind": "container",
 "navigateTo": "__platform_infra_tunnel",
-"x": 3852,
+"x": 3850,
 "y": 451,
 "width": 372,
 "height": 180,
@@ -45124,7 +45124,7 @@
 "technology": "Supabase (inbox_item, mig 122)",
 "kind": "database",
 "navigateTo": "__platform_infra_operationalInbox",
-"x": 2497,
+"x": 2495,
 "y": 441,
 "width": 336,
 "height": 200,
@@ -45161,7 +45161,7 @@
 "technology": "Supabase (beta_contacts, interview_notes, beta_contact_stage_transitions, beta_contact_access_log; mig 126 + 127)",
 "kind": "database",
 "navigateTo": "__platform_infra_crmStore",
-"x": 2944,
+"x": 2942,
 "y": 441,
 "width": 330,
 "height": 200,
@@ -45199,7 +45199,7 @@
 "technology": "Squid CONNECT-only on dedicated docker bridge soleur-egress0 (172.31.100.2:8443)",
 "kind": "container",
 "navigateTo": "__platform_infra_egressGw",
-"x": 4786,
+"x": 4784,
 "y": 451,
 "width": 350,
 "height": 180,
@@ -45236,7 +45236,7 @@
 "technology": "Self-hosted Redis — TLS, EU (Phase 4a)",
 "kind": "database",
 "navigateTo": "__platform_infra_sessionStore",
-"x": 3385,
+"x": 3383,
 "y": 441,
 "width": 356,
 "height": 200,
@@ -45272,7 +45272,7 @@
 "technology": "Nomad (Phase 4a)",
 "kind": "container",
 "navigateTo": "__platform_infra_scheduler",
-"x": 4334,
+"x": 4332,
 "y": 451,
 "width": 341,
 "height": 180,
@@ -45311,7 +45311,7 @@
 "technology": "Node — co-located sticky reverse-proxy",
 "kind": "container",
 "navigateTo": "__platform_infra_coordinator",
-"x": 3397,
+"x": 3389,
 "y": 871,
 "width": 356,
 "height": 180,
@@ -45348,7 +45348,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__publicInternet",
-"x": 7586,
+"x": 7584,
 "y": 871,
 "width": 375,
 "height": 180,
@@ -45399,7 +45399,7 @@
 "technology": "Hetzner Cloud",
 "kind": "container",
 "navigateTo": "__platform_infra_hetzner",
-"x": 3864,
+"x": 3856,
 "y": 871,
 "width": 346,
 "height": 180,
@@ -45438,7 +45438,7 @@
 "technology": "PostgreSQL",
 "kind": "database",
 "navigateTo": "__platform_infra_supabase",
-"x": 3397,
+"x": 3395,
 "y": 1292,
 "width": 356,
 "height": 180,
@@ -45474,7 +45474,7 @@
 "technology": "Hetzner Cloud block volume — guest-side LUKS2, mounted /mnt/data via /dev/mapper/workspaces, bind-mounted into the app container as /workspaces",
 "kind": "database",
 "navigateTo": "__platform_infra_workspacesVolume",
-"x": 3863,
+"x": 3861,
 "y": 1282,
 "width": 363,
 "height": 200,
@@ -45520,7 +45520,7 @@
 "technology": "Dedicated Hetzner host, private-net 10.0.1.40:8288/:8289",
 "kind": "container",
 "navigateTo": "__platform_infra_inngest",
-"x": 2497,
+"x": 2495,
 "y": 1292,
 "width": 346,
 "height": 180,
@@ -45563,7 +45563,7 @@
 "technology": "Bare git repos over private net",
 "kind": "database",
 "navigateTo": "__platform_infra_gitDataStore",
-"x": 2953,
+"x": 2951,
 "y": 1282,
 "width": 333,
 "height": 200,
@@ -45600,7 +45600,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cloudflare",
-"x": 5216,
+"x": 5214,
 "y": 1292,
 "width": 331,
 "height": 180,
@@ -45638,7 +45638,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__zotRegistry",
-"x": 7323,
+"x": 7321,
 "y": 1292,
 "width": 354,
 "height": 180,
@@ -45675,7 +45675,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__sigstore",
-"x": 5658,
+"x": 5656,
 "y": 1292,
 "width": 358,
 "height": 180,
@@ -45711,7 +45711,7 @@
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "kind": "database",
 "navigateTo": "__platform_infra_inngestPostgres",
-"x": 2499,
+"x": 2497,
 "y": 1713,
 "width": 335,
 "height": 200,
@@ -45740,14 +45740,14 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282 accepted 2026-10-15; delete-protection flag read back once, prevent_destroy is plan-time only): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "kind": "container",
 "navigateTo": "__platform_infra_inngestRedis",
-"x": 2945,
+"x": 2943,
 "y": 1723,
 "width": 362,
 "height": 180,
@@ -45784,7 +45784,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__ghcr",
-"x": 5671,
+"x": 5669,
 "y": 1723,
 "width": 356,
 "height": 180,
@@ -45821,7 +45821,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__inngestReleases",
-"x": 5216,
+"x": 5214,
 "y": 1722,
 "width": 344,
 "height": 182,
@@ -45860,7 +45860,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__sentry",
-"x": 6137,
+"x": 6135,
 "y": 1723,
 "width": 325,
 "height": 180,
@@ -45880,60 +45880,72 @@
 "label": "Management API health probe + bounded \nauto-restart \n(scheduled-supabase-watchdog.yml, \n#9168): GET \n/v1/projects/{ref}/health?services=… ",
 "points": [
 [
-1968,
+1961,
 180
 ],
 [
-1928,
-360
+1908,
+367
 ],
 [
-1863,
-777
+1818,
+806
 ],
 [
-2042,
+2040,
 1051
 ],
 [
-2046,
-1059
+2085,
+1102
 ],
 [
-2300,
-1219
+2119,
+1083
 ],
 [
-2309,
+2181,
+1111
+],
+[
+2279,
+1157
+],
+[
+2293,
+1193
+],
+[
+2398,
 1222
 ],
 [
-2746,
-1363
+2802,
+1333
 ],
 [
-2894,
-1177
+2931,
+1185
 ],
 [
-3342,
+3340,
 1282
 ],
 [
-3357,
+3355,
 1285
 ],
 [
-3372,
+3370,
 1290
 ],
 [
-3388,
+3385,
 1295
 ]
 ],
 "labelBBox": {
-"x": 1947,
+"x": 1921,
 "y": 701,
 "width": 264,
 "height": 106
@@ -45954,36 +45966,36 @@
 "label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 25 terraform_data \nSSH provisioners (24 plus the read-only \nweb_1_host_key_probe; #9151 added ",
 "points": [
 [
-2167,
+2165,
 94
 ],
 [
-2616,
+2614,
 104
 ],
 [
-3771,
+3769,
 140
 ],
 [
-3911,
+3909,
 240
 ],
 [
-3975,
+3973,
 287
 ],
 [
-4007,
+4005,
 373
 ],
 [
-4023,
+4021,
 441
 ]
 ],
 "labelBBox": {
-"x": 3994,
+"x": 3992,
 "y": 240,
 "width": 265,
 "height": 106
@@ -46004,72 +46016,72 @@
 "label": "Hetzner Cloud control-plane API \n(api.hetzner.cloud), never the hosts \nthemselves. Named here: \ncutover-inngest.yml resolves the created \ntime of the ONE server named ",
 "points": [
 [
-2001,
+2004,
 180
 ],
 [
-2020,
-298
+2027,
+295
 ],
 [
-2068,
-507
+2079,
+498
 ],
 [
-2184,
+2182,
 641
 ],
 [
-2222,
-684
+2207,
+676
 ],
 [
-2252,
-668
+2226,
+673
 ],
 [
-2299,
+2259,
 701
 ],
 [
-2358,
-743
+2314,
+748
 ],
 [
-2352,
+2312,
 784
 ],
 [
-2419,
+2379,
 811
 ],
 [
-2704,
-930
+2671,
+932
 ],
 [
-3505,
-808
+3490,
+807
 ],
 [
-3808,
+3800,
 871
 ],
 [
-3823,
+3815,
 875
 ],
 [
-3838,
+3830,
 879
 ],
 [
-3853,
+3845,
 883
 ]
 ],
 "labelBBox": {
-"x": 2185,
+"x": 2183,
 "y": 485,
 "width": 255,
 "height": 107
@@ -46087,77 +46099,77 @@
 "id": "e2l047",
 "source": "github",
 "target": "platform.infra.gitDataStore",
-"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated, READ-ONLY root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
+"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
 "points": [
 [
-1831,
+1829,
 180
 ],
 [
-1808,
+1806,
 198
 ],
 [
-1787,
+1785,
 218
 ],
 [
-1770,
+1768,
 240
 ],
 [
-1637,
-412
+1607,
+449
 ],
 [
-1645,
-487
+1514,
+565
 ],
 [
 1608,
-701
+811
 ],
 [
-1564,
-966
+1695,
+1040
 ],
 [
-1678,
-1094
+1755,
+1115
 ],
 [
-1915,
+1976,
 1222
 ],
 [
-2107,
-1326
+2160,
+1311
 ],
 [
-2685,
-1230
+2697,
+1233
 ],
 [
-2898,
+2896,
 1282
 ],
 [
-2912,
+2910,
 1285
 ],
 [
-2927,
+2925,
 1290
 ],
 [
-2942,
+2940,
 1295
 ]
 ],
 "labelBBox": {
 "x": 1609,
 "y": 701,
-"width": 284,
+"width": 244,
 "height": 106
 },
 "parent": null,
@@ -46204,27 +46216,27 @@
 735
 ],
 [
-2535,
+2532,
 765
 ],
 [
-2811,
+2806,
 652
 ],
 [
-3808,
+3800,
 871
 ],
 [
-3823,
+3815,
 875
 ],
 [
-3838,
+3830,
 879
 ],
 [
-3853,
+3845,
 884
 ]
 ],
@@ -46278,15 +46290,15 @@
 1222
 ],
 [
-631,
+630,
 1366
 ],
 [
-1987,
+1985,
 1381
 ],
 [
-2486,
+2484,
 1381
 ]
 ],
@@ -46312,36 +46324,36 @@
 "label": "Origin uptime probe at the LB-fronted \napp.soleur.ai surface \n(betteruptime_monitor.app/soleur_apex) — \ncovers web-1 (the app A-record → web-1, \ndns.tf); the #5933 per-host web-<n> ",
 "points": [
 [
-6802,
+6800,
 1723
 ],
 [
-6856,
+6854,
 1574
 ],
 [
-6934,
+6932,
 1277
 ],
 [
-6778,
+6776,
 1111
 ],
 [
-6690,
-1019
+6687,
+1018
 ],
 [
-4821,
+4813,
 977
 ],
 [
-4220,
+4212,
 966
 ]
 ],
 "labelBBox": {
-"x": 6871,
+"x": 6869,
 "y": 1326,
 "width": 269,
 "height": 107
@@ -46366,63 +46378,63 @@
 180
 ],
 [
-1057,
+1056,
 327
 ],
 [
-983,
-622
+982,
+623
 ],
 [
 1119,
 811
 ],
 [
-1127,
-822
+1136,
+834
 ],
 [
-2002,
-1105
+2040,
+1098
 ],
 [
-2014,
+2064,
 1111
 ],
 [
-2076,
+2126,
 1148
 ],
 [
-2067,
+2117,
 1194
 ],
 [
-2134,
+2184,
 1222
 ],
 [
-2381,
-1326
+2421,
+1321
 ],
 [
-3080,
-1222
+3089,
+1224
 ],
 [
-3342,
+3340,
 1282
 ],
 [
-3357,
+3355,
 1285
 ],
 [
-3372,
+3370,
 1290
 ],
 [
-3388,
+3386,
 1295
 ]
 ],
@@ -46459,28 +46471,28 @@
 164
 ],
 [
-2214,
+2212,
 271
 ],
 [
-2413,
+2411,
 358
 ],
 [
-2458,
+2456,
 378
 ],
 [
-2503,
+2501,
 407
 ],
 [
-2542,
+2540,
 436
 ]
 ],
 "labelBBox": {
-"x": 2378,
+"x": 2376,
 "y": 256,
 "width": 256,
 "height": 73
@@ -46502,47 +46514,47 @@
 "points": [
 [
 1301,
-117
+118
 ],
 [
-1426,
+1425,
 137
 ],
 [
-1603,
+1601,
 164
 ],
 [
-1759,
+1757,
 180
 ],
 [
-2159,
+2157,
 222
 ],
 [
-2275,
+2273,
 131
 ],
 [
-2663,
+2661,
 240
 ],
 [
-2789,
+2787,
 276
 ],
 [
-2912,
+2910,
 364
 ],
 [
-2997,
+2995,
 435
 ]
 ],
 "labelBBox": {
-"x": 2885,
+"x": 2883,
 "y": 240,
 "width": 251,
 "height": 106
@@ -46595,11 +46607,11 @@
 1345
 ],
 [
-1955,
+1954,
 1373
 ],
 [
-2486,
+2484,
 1379
 ]
 ],
@@ -46625,72 +46637,72 @@
 "label": "CONNECT tunnel per entitled session — \nProxy-Authorization Basic \n<workspaceId>:<sessionToken>; TLS \nhandshake metadata only, payloads \nend-to-end",
 "points": [
 [
-1301,
+1302,
 119
 ],
 [
-1426,
-139
+1425,
+140
 ],
 [
-1602,
+1601,
 166
 ],
 [
-1759,
+1757,
 180
 ],
 [
-1953,
+1951,
 197
 ],
 [
-3333,
+3331,
 164
 ],
 [
-3513,
+3511,
 240
 ],
 [
-3577,
+3575,
 268
 ],
 [
-3561,
+3559,
 324
 ],
 [
-3626,
+3624,
 350
 ],
 [
-3655,
+3653,
 362
 ],
 [
-4702,
+4700,
 348
 ],
 [
-4731,
+4729,
 358
 ],
 [
-4781,
+4779,
 376
 ],
 [
-4830,
+4828,
 410
 ],
 [
-4869,
+4867,
 444
 ]
 ],
 "labelBBox": {
-"x": 3627,
+"x": 3625,
 "y": 240,
 "width": 255,
 "height": 106
@@ -46743,47 +46755,47 @@
 925
 ],
 [
-1206,
-984
+1205,
+986
 ],
 [
 1326,
 1051
 ],
 [
-1492,
-1146
+1510,
+1151
 ],
 [
-1534,
+1561,
 1178
 ],
 [
-1721,
+1767,
 1222
 ],
 [
-2231,
-1341
+2258,
+1327
 ],
 [
-2388,
-1160
+2407,
+1164
 ],
 [
-2898,
+2896,
 1282
 ],
 [
-2912,
+2910,
 1285
 ],
 [
-2927,
+2925,
 1290
 ],
 [
-2942,
+2940,
 1295
 ]
 ],
@@ -46813,44 +46825,44 @@
 119
 ],
 [
-1426,
+1425,
 139
 ],
 [
-1603,
+1601,
 165
 ],
 [
-1759,
+1757,
 180
 ],
 [
-2070,
+2068,
 209
 ],
 [
-2869,
+2867,
 137
 ],
 [
-3165,
+3163,
 240
 ],
 [
-3278,
+3276,
 279
 ],
 [
-3385,
+3383,
 364
 ],
 [
-3459,
+3457,
 433
 ]
 ],
 "labelBBox": {
-"x": 3355,
+"x": 3353,
 "y": 273,
 "width": 130,
 "height": 39
@@ -46871,48 +46883,48 @@
 "label": "Sessions and encrypted keys",
 "points": [
 [
-2297,
+2346,
 1051
 ],
 [
-2329,
+2414,
 1111
 ],
 [
-2379,
-1184
+2511,
+1185
 ],
 [
-2447,
+2611,
 1222
 ],
 [
-2622,
-1318
+2916,
+1335
 ],
 [
-3148,
-1236
+3024,
+1204
 ],
 [
-3342,
+3340,
 1282
 ],
 [
-3357,
+3354,
 1285
 ],
 [
-3372,
+3369,
 1290
 ],
 [
-3387,
+3384,
 1295
 ]
 ],
 "labelBBox": {
-"x": 2448,
+"x": 2612,
 "y": 1145,
 "width": 186,
 "height": 39
@@ -46934,36 +46946,36 @@
 "label": "inbox_list agent tool reads the same \nmerged severity-ranked feed \n(agent-native parity)",
 "points": [
 [
-2342,
+2320,
 872
 ],
 [
-2390,
-821
+2360,
+820
 ],
 [
-2452,
-758
+2414,
+754
 ],
 [
-2507,
+2467,
 701
 ],
 [
-2524,
-684
+2486,
+682
 ],
 [
-2542,
-666
+2508,
+663
 ],
 [
-2559,
-649
+2529,
+645
 ]
 ],
 "labelBBox": {
-"x": 2508,
+"x": 2468,
 "y": 717,
 "width": 228,
 "height": 73
@@ -46984,60 +46996,60 @@
 "label": "crm_* MCP tools read AND write the \nowner-private CRM via auth.uid()-pinned \nRPCs (agent-native parity)",
 "points": [
 [
-2416,
+2414,
 876
 ],
 [
-2421,
+2419,
 874
 ],
 [
-2425,
+2423,
 873
 ],
 [
-2430,
+2428,
 871
 ],
 [
-2598,
-817
+2580,
+821
 ],
 [
-2669,
-898
+2644,
+891
 ],
 [
-2824,
+2784,
 811
 ],
 [
-2879,
+2839,
 780
 ],
 [
-2870,
-746
+2828,
+744
 ],
 [
-2915,
+2875,
 701
 ],
 [
-2934,
-682
+2898,
+680
 ],
 [
-2956,
-663
+2924,
+660
 ],
 [
-2977,
-645
+2949,
+642
 ]
 ],
 "labelBBox": {
-"x": 2916,
+"x": 2876,
 "y": 717,
 "width": 256,
 "height": 73
@@ -47058,60 +47070,60 @@
 "label": "Bare repo data; worktrees local (TARGET \nstate — the host is born but the store \nis empty until the LUKS cutover, #5274). \nHost key pinned via \nGIT_DATA_SSH_HOST_KEY (ADR-237), loaded ",
 "points": [
 [
-2097,
-1006
+2095,
+1036
 ],
 [
-2045,
-1029
+2067,
+1056
 ],
 [
-1993,
-1063
+2041,
+1081
 ],
 [
-1963,
+2024,
 1111
 ],
 [
-1938,
-1153
+2001,
+1155
 ],
 [
-1930,
+1991,
 1186
 ],
 [
-1963,
+2024,
 1222
 ],
 [
-2035,
-1298
+2091,
+1293
 ],
 [
-2797,
-1257
+2801,
+1258
 ],
 [
-2898,
+2896,
 1282
 ],
 [
-2912,
+2910,
 1285
 ],
 [
-2927,
+2925,
 1290
 ],
 [
-2942,
+2940,
 1295
 ]
 ],
 "labelBBox": {
-"x": 1964,
+"x": 2025,
 "y": 1111,
 "width": 312,
 "height": 106
@@ -47132,48 +47144,48 @@
 "label": "Replay buffer + control state",
 "points": [
 [
-2416,
+2414,
 875
 ],
 [
-2421,
+2419,
 874
 ],
 [
-2425,
+2423,
 873
 ],
 [
-2430,
+2428,
 871
 ],
 [
-2758,
-778
+2740,
+782
 ],
 [
-2876,
-931
+2850,
+918
 ],
 [
-3197,
+3157,
 811
 ],
 [
-3248,
+3213,
 792
 ],
 [
-3353,
-714
+3329,
+712
 ],
 [
-3437,
-646
+3423,
+645
 ]
 ],
 "labelBBox": {
-"x": 3367,
+"x": 3344,
 "y": 734,
 "width": 179,
 "height": 39
@@ -47194,24 +47206,24 @@
 "label": "Reads worktree lease",
 "points": [
 [
-3575,
+3568,
 1051
 ],
 [
-3575,
+3569,
 1119
 ],
 [
-3575,
+3570,
 1211
 ],
 [
-3575,
+3571,
 1281
 ]
 ],
 "labelBBox": {
-"x": 3576,
+"x": 3571,
 "y": 1145,
 "width": 139,
 "height": 39
@@ -47232,48 +47244,24 @@
 "label": "deploy. → http://10.0.1.10:9000 \n(webhook) and ssh. → ssh://10.0.1.10:22 \n— ORIGIN-RELATIVE to web-1's private IP \nsince #6594/PR-A (was localhost:, the \nADR-114 I2 anti-pattern). Whichever ",
 "points": [
 [
-4051,
-630
+4034,
+631
 ],
 [
-4054,
-653
+4033,
+698
 ],
 [
-4056,
-678
+4031,
+791
 ],
 [
-4058,
-701
-],
-[
-4061,
-750
-],
-[
-4061,
-762
-],
-[
-4058,
-811
-],
-[
-4056,
-828
-],
-[
-4055,
-845
-],
-[
-4052,
+4030,
 861
 ]
 ],
 "labelBBox": {
-"x": 4061,
+"x": 4034,
 "y": 701,
 "width": 272,
 "height": 106
@@ -47294,36 +47282,48 @@
 "label": "Routes traffic",
 "points": [
 [
-3851,
-618
+3849,
+619
 ],
 [
-3752,
-659
+3831,
+627
 ],
 [
-3650,
+3812,
+634
+],
+[
+3794,
+641
+],
+[
+3718,
+670
+],
+[
+3676,
+641
+],
+[
+3623,
 701
 ],
 [
-3650,
-701
-],
-[
-3611,
+3585,
 745
 ],
 [
-3592,
+3570,
 808
 ],
 [
-3583,
-862
+3566,
+861
 ]
 ],
 "labelBBox": {
-"x": 3651,
+"x": 3624,
 "y": 734,
 "width": 86,
 "height": 39
@@ -47344,48 +47344,48 @@
 "label": "ONE web host runs a cloudflared \nconnector in prod (web-1); the fsn1 \nweb-2 was retired 2026-07-17 \n(#6538/#6463). var.web_hosts has two \nkeys again — the cattle web-2 ",
 "points": [
 [
-3863,
-891
+3855,
+901
 ],
 [
-3831,
-871
+3816,
+879
 ],
 [
-3802,
-844
+3780,
+850
 ],
 [
-3783,
+3757,
 811
 ],
 [
-3759,
+3732,
 769
 ],
 [
-3760,
-744
+3733,
+743
 ],
 [
-3783,
+3757,
 701
 ],
 [
-3798,
-675
+3777,
+667
 ],
 [
-3819,
-652
+3807,
+639
 ],
 [
-3843,
-633
+3841,
+618
 ]
 ],
 "labelBBox": {
-"x": 3784,
+"x": 3758,
 "y": 701,
 "width": 245,
 "height": 106
@@ -47406,24 +47406,24 @@
 "label": "Stores every user's checked-out \nrepository. Mounted at /mnt/data and \nbind-mounted into the app container as \n/workspaces (cloud-init.yml). The app \ncontainer is the SOLE writer, which is ",
 "points": [
 [
-4038,
+4032,
 1051
 ],
 [
-4039,
+4034,
 1115
 ],
 [
-4041,
+4037,
 1202
 ],
 [
-4042,
+4039,
 1271
 ]
 ],
 "labelBBox": {
-"x": 4042,
+"x": 4038,
 "y": 1111,
 "width": 247,
 "height": 106
@@ -47444,48 +47444,48 @@
 "label": "[...]",
 "points": [
 [
-3863,
+3855,
 1036
 ],
 [
-3845,
+3837,
 1042
 ],
 [
-3826,
+3818,
 1047
 ],
 [
-3808,
+3800,
 1051
 ],
 [
-3510,
-1121
+3504,
+1120
 ],
 [
-3414,
+3408,
 1018
 ],
 [
-3124,
+3120,
 1111
 ],
 [
-3004,
+3000,
 1150
 ],
 [
-2882,
+2879,
 1225
 ],
 [
-2794,
+2792,
 1286
 ]
 ],
 "labelBBox": {
-"x": 3125,
+"x": 3121,
 "y": 1154,
 "width": 25,
 "height": 18
@@ -47506,48 +47506,48 @@
 "label": "CONSUMER reachability probe (#6548): \nweb-git-data-probe.sh does a bounded SSH \nconnect-and-close to 10.0.1.20:22 over \nthe private net and pings the \ngit_data_prd heartbeat on success. ",
 "points": [
 [
-3863,
+3855,
 1035
 ],
 [
-3845,
+3837,
 1041
 ],
 [
-3826,
+3818,
 1047
 ],
 [
-3808,
+3800,
 1051
 ],
 [
-3690,
+3683,
 1080
 ],
 [
-3369,
+3362,
 1044
 ],
 [
-3268,
+3262,
 1111
 ],
 [
-3212,
+3207,
 1149
 ],
 [
-3176,
+3171,
 1214
 ],
 [
-3152,
-1272
+3149,
+1271
 ]
 ],
 "labelBBox": {
-"x": 3269,
+"x": 3263,
 "y": 1111,
 "width": 277,
 "height": 106
@@ -47568,36 +47568,36 @@
 "label": "Schedules",
 "points": [
 [
-4474,
+4463,
 631
 ],
 [
-4451,
+4434,
 688
 ],
 [
-4413,
-762
+4389,
+761
 ],
 [
-4361,
+4334,
 811
 ],
 [
-4321,
-849
+4298,
+843
 ],
 [
-4269,
-879
+4254,
+870
 ],
 [
-4219,
-901
+4211,
+892
 ]
 ],
 "labelBBox": {
-"x": 4440,
+"x": 4422,
 "y": 734,
 "width": 69,
 "height": 39
@@ -47618,24 +47618,24 @@
 "label": "Config + run history",
 "points": [
 [
-2669,
+2667,
 1472
 ],
 [
-2668,
+2666,
 1538
 ],
 [
-2668,
+2666,
 1630
 ],
 [
-2667,
+2665,
 1701
 ]
 ],
 "labelBBox": {
-"x": 2669,
+"x": 2667,
 "y": 1575,
 "width": 197,
 "height": 39
@@ -47656,36 +47656,36 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-2807,
+2805,
 1472
 ],
 [
-2837,
+2835,
 1493
 ],
 [
-2868,
+2866,
 1517
 ],
 [
-2895,
+2893,
 1542
 ],
 [
-2952,
+2950,
 1594
 ],
 [
-3009,
+3007,
 1661
 ],
 [
-3052,
+3050,
 1714
 ]
 ],
 "labelBBox": {
-"x": 2997,
+"x": 2995,
 "y": 1575,
 "width": 167,
 "height": 39
@@ -47706,48 +47706,48 @@
 "label": "registry. ingress → \ntcp://10.0.1.30:5000. ORIGIN-RELATIVE — \nwhichever connector replica answers \nproxies to the correct zot host, but \nONLY if that replica is a 10.0.1.0/24 ",
 "points": [
 [
-4224,
+4222,
 623
 ],
 [
-4242,
+4240,
 630
 ],
 [
-4261,
+4259,
 636
 ],
 [
-4279,
+4277,
 641
 ],
 [
-4899,
+4897,
 817
 ],
 [
-6548,
+6546,
 858
 ],
 [
-7141,
+7139,
 1111
 ],
 [
-7238,
+7236,
 1153
 ],
 [
-7332,
+7330,
 1226
 ],
 [
-7400,
+7398,
 1285
 ]
 ],
 "labelBBox": {
-"x": 6960,
+"x": 6958,
 "y": 906,
 "width": 273,
 "height": 106
@@ -47768,36 +47768,36 @@
 "label": "Uploads the LUKS header backup off-host \nto an R2 bucket \n(soleur-workspaces-luks-header) DISTINCT \nfrom the tfstate bucket (C4 escrow, \nADR-119 #6649) — a BLOCKING pre-freeze ",
 "points": [
 [
-4210,
+4202,
 996
 ],
 [
-4441,
-1045
+4434,
+1044
 ],
 [
-4862,
+4858,
 1143
 ],
 [
-5203,
+5201,
 1282
 ],
 [
-5207,
+5205,
 1284
 ],
 [
-5212,
+5210,
 1286
 ],
 [
-5216,
+5214,
 1288
 ]
 ],
 "labelBBox": {
-"x": 5018,
+"x": 5016,
 "y": 1111,
 "width": 280,
 "height": 106
@@ -47818,48 +47818,48 @@
 "label": "[...]",
 "points": [
 [
-4210,
+4202,
 963
 ],
 [
-4806,
+4798,
 967
 ],
 [
-6748,
+6745,
 990
 ],
 [
-6999,
+6997,
 1111
 ],
 [
-7057,
+7055,
 1140
 ],
 [
-7042,
+7040,
 1184
 ],
 [
-7096,
+7094,
 1222
 ],
 [
-7106,
+7104,
 1229
 ],
 [
-7212,
+7210,
 1271
 ],
 [
-7313,
+7311,
 1310
 ]
 ],
 "labelBBox": {
-"x": 7097,
+"x": 7095,
 "y": 1154,
 "width": 25,
 "height": 18
@@ -47880,48 +47880,48 @@
 "label": "[...]",
 "points": [
 [
-4210,
-969
+4202,
+968
 ],
 [
-4629,
+4622,
 984
 ],
 [
-5690,
+5686,
 1031
 ],
 [
-6035,
+6033,
 1111
 ],
 [
-6233,
+6231,
 1157
 ],
 [
-6306,
+6304,
 1149
 ],
 [
-6460,
+6458,
 1282
 ],
 [
-6596,
+6594,
 1400
 ],
 [
-6687,
+6685,
 1595
 ],
 [
-6732,
+6730,
 1713
 ]
 ],
 "labelBBox": {
-"x": 6618,
+"x": 6616,
 "y": 1369,
 "width": 25,
 "height": 18
@@ -47942,36 +47942,36 @@
 "label": "Host-side fatal + deploy telemetry, \nPOSTed straight to the store API with \nthe baked ${sentry_dsn} — the boot \nfatal-emit trap armed at the TOP of \n`runcmd:` in cloud-init.yml (before ",
 "points": [
 [
-4210,
+4202,
 963
 ],
 [
-4608,
+4601,
 966
 ],
 [
-5576,
-987
+5573,
+986
 ],
 [
-5874,
+5872,
 1111
 ],
 [
-6121,
+6119,
 1215
 ],
 [
-6235,
+6233,
 1545
 ],
 [
-6278,
+6276,
 1713
 ]
 ],
 "labelBBox": {
-"x": 6195,
+"x": 6193,
 "y": 1326,
 "width": 237,
 "height": 107
@@ -47992,36 +47992,36 @@
 "label": "Anonymous public pull of the \n@sha256-pinned cosign VERIFIER IMAGE \nfrom gcr.io/projectsigstore/cosign \n(Google-hosted, published by the \nSigstore project) on every deploy — ",
 "points": [
 [
-4210,
+4202,
 962
 ],
 [
-4462,
-967
+4454,
+966
 ],
 [
-4940,
-992
+4935,
+991
 ],
 [
-5327,
+5324,
 1111
 ],
 [
-5457,
+5455,
 1152
 ],
 [
-5594,
+5592,
 1226
 ],
 [
-5693,
-1287
+5691,
+1286
 ]
 ],
 "labelBBox": {
-"x": 5573,
+"x": 5571,
 "y": 1111,
 "width": 273,
 "height": 106
@@ -48042,60 +48042,48 @@
 "label": "Hosts",
 "points": [
 [
-3863,
+3855,
 888
 ],
 [
-3845,
+3837,
 881
 ],
 [
-3826,
+3818,
 876
 ],
 [
-3808,
+3800,
 871
 ],
 [
-3355,
-761
+3333,
+759
 ],
 [
-3225,
-700
+3198,
+689
 ],
 [
-2765,
+2725,
 769
 ],
 [
-2611,
-792
+2621,
+786
 ],
 [
-2574,
-812
+2511,
+830
 ],
 [
-2430,
+2424,
 871
-],
-[
-2428,
-872
-],
-[
-2427,
-872
-],
-[
-2426,
-873
 ]
 ],
 "labelBBox": {
-"x": 2766,
+"x": 2726,
 "y": 734,
 "width": 55,
 "height": 39
@@ -48116,72 +48104,72 @@
 "label": "ADOPTING (rides #6178 cutover, PR \n#6348): the config-refresh timer \nresolves INNGEST_CONFIG_DIGEST, pulls \nthe signed bundle @sha256 GHCR-direct, \ncosign-verify-blob OFFLINE against the ",
 "points": [
 [
-2843,
+2841,
 1466
 ],
 [
-2861,
+2859,
 1472
 ],
 [
-2879,
+2877,
 1478
 ],
 [
-2898,
+2896,
 1482
 ],
 [
-3191,
+3189,
 1550
 ],
 [
-3980,
+3978,
 1408
 ],
 [
-4250,
+4248,
 1542
 ],
 [
-4307,
+4305,
 1570
 ],
 [
-4284,
+4282,
 1624
 ],
 [
-4342,
+4340,
 1652
 ],
 [
-4595,
+4593,
 1778
 ],
 [
-5338,
+5336,
 1650
 ],
 [
-5615,
+5613,
 1712
 ],
 [
-5630,
+5628,
 1716
 ],
 [
-5645,
+5643,
 1720
 ],
 [
-5661,
+5659,
 1725
 ]
 ],
 "labelBBox": {
-"x": 4343,
+"x": 4341,
 "y": 1542,
 "width": 281,
 "height": 106
@@ -48202,60 +48190,60 @@
 "label": "Bootstrap downloads the pinned inngest \nCLI tarball \n(inngest_<ver>_linux_<arch>.tar.gz, arch \nfrom local.inngest_arch) and \nsha256-verifies it against the committed ",
 "points": [
 [
-2843,
+2841,
 1464
 ],
 [
-2861,
+2859,
 1470
 ],
 [
-2880,
+2878,
 1477
 ],
 [
-2898,
+2896,
 1482
 ],
 [
-3013,
+3011,
 1516
 ],
 [
-3846,
+3844,
 1640
 ],
 [
-3965,
+3963,
 1652
 ],
 [
-4239,
+4237,
 1681
 ],
 [
-4937,
+4935,
 1639
 ],
 [
-5203,
+5201,
 1712
 ],
 [
-5209,
+5207,
 1714
 ],
 [
-5215,
+5213,
 1716
 ],
 [
-5221,
+5219,
 1718
 ]
 ],
 "labelBBox": {
-"x": 3966,
+"x": 3964,
 "y": 1542,
 "width": 259,
 "height": 106
@@ -48276,72 +48264,72 @@
 "label": "Ships journald + host_metrics via Vector \n(arm64, aarch64 build) to Logs source \n2457081 -- SINCE #8054 the \ninngest-cutover-flip heartbeat on this \nedge (one JSON STRING per 30 s FSM tick ",
 "points": [
 [
-2843,
+2841,
 1466
 ],
 [
-2861,
+2859,
 1472
 ],
 [
-2879,
+2877,
 1478
 ],
 [
-2898,
+2896,
 1482
 ],
 [
-3128,
+3126,
 1533
 ],
 [
-4814,
+4812,
 1436
 ],
 [
-5026,
+5024,
 1542
 ],
 [
-5082,
+5080,
 1570
 ],
 [
-5058,
+5056,
 1624
 ],
 [
-5114,
+5112,
 1652
 ],
 [
-5253,
+5251,
 1723
 ],
 [
-6365,
+6363,
 1680
 ],
 [
-6518,
+6516,
 1712
 ],
 [
-6532,
+6530,
 1716
 ],
 [
-6547,
+6545,
 1720
 ],
 [
-6563,
+6561,
 1724
 ]
 ],
 "labelBBox": {
-"x": 5115,
+"x": 5113,
 "y": 1542,
 "width": 278,
 "height": 106
@@ -48362,72 +48350,72 @@
 "label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
-2843,
+2841,
 1466
 ],
 [
-2861,
+2859,
 1472
 ],
 [
-2879,
+2877,
 1478
 ],
 [
-2898,
+2896,
 1482
 ],
 [
-3087,
+3085,
 1525
 ],
 [
-4473,
+4471,
 1457
 ],
 [
-4648,
+4646,
 1542
 ],
 [
-4705,
+4703,
 1570
 ],
 [
-4682,
+4680,
 1624
 ],
 [
-4740,
+4738,
 1652
 ],
 [
-5007,
+5005,
 1785
 ],
 [
-5791,
+5789,
 1643
 ],
 [
-6082,
+6080,
 1712
 ],
 [
-6097,
+6095,
 1716
 ],
 [
-6112,
+6110,
 1721
 ],
 [
-6128,
+6126,
 1726
 ]
 ],
 "labelBBox": {
-"x": 4741,
+"x": 4739,
 "y": 1542,
 "width": 261,
 "height": 106
@@ -48448,11 +48436,11 @@
 "label": "Invokes function steps at the registered \nserve URL (Cloudflare-proxied; responses \nstream — 201 + 3 s heartbeat, ADR-243). \nEvery Inngest function executes on the \none step-executing host, web-1: ",
 "points": [
 [
-2496,
+2494,
 1380
 ],
 [
-2000,
+1999,
 1377
 ],
 [
@@ -48510,36 +48498,36 @@
 "label": "Allow-listed-by-absence-of-deny CONNECT \nto :443 public hosts only; deny-set \nrefuses private/link-local/metadata \nranges; every decision logged",
 "points": [
 [
-5136,
+5134,
 544
 ],
 [
-5605,
+5603,
 553
 ],
 [
-6880,
+6878,
 586
 ],
 [
-7284,
+7282,
 701
 ],
 [
-7409,
+7407,
 737
 ],
 [
-7539,
+7537,
 807
 ],
 [
-7634,
+7632,
 866
 ]
 ],
 "labelBBox": {
-"x": 7534,
+"x": 7532,
 "y": 709,
 "width": 276,
 "height": 89
@@ -48560,24 +48548,24 @@
 "label": "Places/routes sessions (lease-keyed)",
 "points": [
 [
-3397,
+3389,
 961
 ],
 [
-3142,
+3135,
 961
 ],
 [
-2677,
+2674,
 961
 ],
 [
-2427,
+2425,
 961
 ]
 ],
 "labelBBox": {
-"x": 2789,
+"x": 2784,
 "y": 915,
 "width": 236,
 "height": 39
@@ -48598,23 +48586,23 @@
 "label": "Reads GIT_DATA_LUKS_KEY on EVERY BOOT \n(git-data-luks-reopen.service, #8210) as \nwell as at birth and at the weekly gc, \nunder the baked read-only prd_git_data \nservice token, always with ",
 "points": [
 [
-2952,
+2950,
 1298
 ],
 [
-2934,
+2932,
 1292
 ],
 [
-2916,
+2914,
 1286
 ],
 [
-2898,
+2896,
 1282
 ],
 [
-2787,
+2785,
 1257
 ],
 [
@@ -48660,60 +48648,60 @@
 "label": "A queryable second copy of the \nboot-completion signal and gc-fault \nevents, posted by direct curl (NOT a \nVector agent — git-data ships no \nhost_metrics and so structurally cannot ",
 "points": [
 [
-3287,
+3285,
 1466
 ],
 [
-3305,
+3303,
 1472
 ],
 [
-3324,
+3322,
 1478
 ],
 [
-3342,
+3340,
 1482
 ],
 [
-3877,
+3875,
 1603
 ],
 [
-5267,
+5265,
 1471
 ],
 [
-5812,
+5810,
 1542
 ],
 [
-6132,
+6130,
 1584
 ],
 [
-6210,
+6208,
 1615
 ],
 [
-6518,
+6516,
 1712
 ],
 [
-6532,
+6530,
 1717
 ],
 [
-6548,
+6546,
 1722
 ],
 [
-6563,
+6561,
 1728
 ]
 ],
 "labelBBox": {
-"x": 6317,
+"x": 6315,
 "y": 1542,
 "width": 247,
 "height": 106
@@ -48734,72 +48722,72 @@
 "label": "Boot-stage fatals and stage markers from \na BAKED DSN, with NO Doppler fallback — \nso the channel still works when Doppler \nis itself the broken stage, which on \nthis host is the most likely one. This ",
 "points": [
 [
-3287,
+3285,
 1466
 ],
 [
-3305,
+3303,
 1472
 ],
 [
-3324,
+3322,
 1478
 ],
 [
-3342,
+3340,
 1482
 ],
 [
-3567,
+3565,
 1533
 ],
 [
-5213,
+5211,
 1441
 ],
 [
-5421,
+5419,
 1542
 ],
 [
-5478,
+5476,
 1570
 ],
 [
-5456,
+5454,
 1622
 ],
 [
-5513,
+5511,
 1652
 ],
 [
-5737,
+5735,
 1772
 ],
 [
-5836,
+5834,
 1646
 ],
 [
-6082,
+6080,
 1712
 ],
 [
-6097,
+6095,
 1717
 ],
 [
-6112,
+6110,
 1722
 ],
 [
-6128,
+6126,
 1727
 ]
 ],
 "labelBBox": {
-"x": 5514,
+"x": 5512,
 "y": 1542,
 "width": 274,
 "height": 106
@@ -61669,7 +61657,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282 accepted 2026-10-15; delete-protection flag read back once, prevent_destroy is plan-time only): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
@@ -62681,7 +62669,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282 accepted 2026-10-15; delete-protection flag read back once, prevent_destroy is plan-time only): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and the daily follow-through probe that cross-checked the ledger claim against the device was retired 2026-10-12 (#9703 Stage 3b). A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder is scheduled-inngest-probe-heartbeat.yml, which beats it only on a fresh dedicated probe row and sends nothing while it is paused, armed 2026-10-12: read-back status=up, feeder runs verdict=beat, #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
@@ -63552,41 +63540,41 @@
 "id": "e2l047",
 "source": "github",
 "target": "platform.infra.gitDataStore",
-"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated, READ-ONLY root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
+"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
 "points": [
 [
-221,
+235,
 180
 ],
 [
-254,
+276,
 237
 ],
 [
-305,
+338,
 308
 ],
 [
-369,
+408,
 350
 ],
 [
-521,
-451
+552,
+437
 ],
 [
-729,
-488
+740,
+476
 ],
 [
 876,
-502
+494
 ]
 ],
 "labelBBox": {
-"x": 370,
+"x": 409,
 "y": 240,
-"width": 284,
+"width": 244,
 "height": 106
 },
 "parent": null,

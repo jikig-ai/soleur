@@ -5577,6 +5577,11 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
+  # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
+  # markers) must redden CI.
+  run_suite "scripts/registry-htpasswd-stdin-10119" bash scripts/followthroughs/registry-htpasswd-stdin-10119.test.sh
   # #9826 (W3, epic #9601): exit-code harness for the image-CVE-scan dark-launch window probe. Registered
   # explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close the
   # tracker on an unmeasured window.
@@ -6171,6 +6176,7 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
@@ -6382,6 +6388,10 @@ if want_scripts; then
   # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
   # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
   run_suite "scripts/test-affected-derive-cache" bash scripts/test-affected-derive-cache.test.sh
+  # #9729 (ADR-276 S4, PR B): the pr-selection driver EXECUTED (real merge-commit fixture repos, a stub test-all.sh replaying
+  # the measured record shapes, a restricted PATH, and a mutant per guard row). Same explicit-registration and LAST-in-block
+  # reasons as above. Declared edge set, not always-on.
+  run_suite "scripts/ci-pr-selection" bash scripts/ci-pr-selection.test.sh
 fi
 
 # Named bun-test entries — bun shard.

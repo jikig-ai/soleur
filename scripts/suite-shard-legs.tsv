@@ -328,6 +328,7 @@ scripts/ci-deploy-sentry-post-fail-6475	6
 scripts/ci-draft-light	7
 scripts/ci-draft-push-census	3
 scripts/ci-leg-balance-9232	8
+scripts/ci-pr-selection	1
 scripts/ci-push-dedupe	5
 scripts/classify-workflow-transitions	5
 scripts/compound-promote	6
@@ -389,6 +390,7 @@ scripts/learning-retrieval-bench	7
 scripts/lib/bearer-curl.test.sh	8
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/git-data-rotate-stamp.test.sh	1
+scripts/lib/git-data-wipe-runs.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/inngest-probe-row.test.sh	6
 scripts/lib/legal-base-ref.test.sh	7
@@ -470,6 +472,7 @@ scripts/probe-github-app-mint	1
 scripts/probe-legal-corpus-truth-live	1
 scripts/prod-version-drift-check	5
 scripts/raise-tmp-tmpfs-ceiling	6
+scripts/registry-htpasswd-stdin-10119	2
 scripts/registry-luks-live-8386	7
 scripts/rename-guard	6
 scripts/review-reminder-liveness	2
@@ -562,6 +565,7 @@ tests/scripts/git-data-root-key-arm	5
 tests/scripts/git-data-root-token-census	2
 tests/scripts/git-data-rung2-evidence-capture	6
 tests/scripts/git-data-rung2-plan-shape	7
+tests/scripts/git-data-wipe-wedge	1
 tests/scripts/host-image-coherence-preflight	5
 tests/scripts/infra-privileged-tier-census	3
 tests/scripts/inngest-host-dark-gate	8
