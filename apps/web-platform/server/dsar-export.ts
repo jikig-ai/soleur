@@ -2208,7 +2208,11 @@ export async function enqueueExport(
   const row = inserted as { id: string; acknowledged_at: string };
 
   // Audit PII (separate table, WORM-trigger gated, service-role only).
-  const { error: auditErr } = await service.rpc("write_dsar_export_audit_pii", {
+  const {
+    error: auditErr,
+    status: auditErrStatus,
+    statusText: auditErrStatusText,
+  } = await service.rpc("write_dsar_export_audit_pii", {
     p_job_id: row.id,
     p_user_id: input.userId,
     p_event_type: "enqueue",
@@ -2216,7 +2220,10 @@ export async function enqueueExport(
     p_user_agent: input.userAgent,
   });
   if (auditErr) {
-    log.error({ jobId: row.id, err: auditErr.message }, "audit PII write failed (non-fatal)");
+    log.error(
+      { jobId: row.id, err: describeDbError(auditErr, auditErrStatus, auditErrStatusText) },
+      "audit PII write failed (non-fatal)",
+    );
   }
 
   return { jobId: row.id, acknowledgedAt: row.acknowledged_at };
@@ -2354,13 +2361,17 @@ export async function startDsarExportReaper(): Promise<NodeJS.Timeout> {
   // On-startup orphan reset per S3.
   try {
     const service = createServiceClient();
-    const { error: resetErr } = await service
+    const {
+      error: resetErr,
+      status: resetErrStatus,
+      statusText: resetErrStatusText,
+    } = await service
       .from("dsar_export_jobs")
       .update({ status: "pending", started_at: null })
       .eq("status", "running");
     if (resetErr) {
       log.error(
-        { err: resetErr.message },
+        { err: describeDbError(resetErr, resetErrStatus, resetErrStatusText) },
         "DSAR orphan reset failed at startup",
       );
     }
@@ -2371,9 +2382,14 @@ export async function startDsarExportReaper(): Promise<NodeJS.Timeout> {
   const timer = setInterval(async () => {
     try {
       const service = createServiceClient();
-      const { data, error } = await service.rpc("claim_next_dsar_export_job");
+      const { data, error, status, statusText } = await service.rpc(
+        "claim_next_dsar_export_job",
+      );
       if (error) {
-        log.error({ err: error.message }, "claim_next_dsar_export_job error");
+        log.error(
+          { err: describeDbError(error, status, statusText) },
+          "claim_next_dsar_export_job error",
+        );
         return;
       }
       const rows = (data ?? []) as Array<{

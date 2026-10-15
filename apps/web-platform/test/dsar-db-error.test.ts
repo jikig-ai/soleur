@@ -42,7 +42,7 @@ describe("describeDbError", () => {
       want: "m [code=42P01]",
     },
     {
-      name: "PostgREST code longer than a SQLSTATE",
+      name: "PostgREST code, longer than a SQLSTATE",
       error: { message: "m", code: "PGRST116" },
       status: 406,
       statusText: "Not Acceptable",
@@ -56,9 +56,16 @@ describe("describeDbError", () => {
       want: "m",
     },
     {
-      name: "negative, fractional and NaN status are omitted",
+      name: "negative status is omitted",
       error: { message: "m" },
       status: -1,
+      statusText: "x",
+      want: "m",
+    },
+    {
+      name: "status outside 100-599 is omitted",
+      error: { message: "m" },
+      status: 1e21,
       statusText: "x",
       want: "m",
     },
@@ -106,12 +113,21 @@ describe("describeDbError", () => {
     expect(out).toBe("m [status=409]");
   });
 
+  it("accepts a 5-character SQLSTATE and a PGRST code, and nothing at the length boundaries around them", () => {
+    expect(describeDbError({ message: "m", code: "23505" })).toBe("m [code=23505]");
+    expect(describeDbError({ message: "m", code: "PGRST116" })).toBe("m [code=PGRST116]");
+    expect(describeDbError({ message: "m", code: "2350" })).toBe("m");
+    expect(describeDbError({ message: "m", code: "235055" })).toBe("m");
+  });
+
   it("drops a `code` that does not have the shape of a SQLSTATE or PostgREST code", () => {
     for (const code of [
       "has space",
       "a".repeat(17),
       "x]\ny=1",
       "name@example.com",
+      "hello",
+      "pgrst116",
       "",
     ]) {
       expect(describeDbError({ message: "m", code })).toBe("m");
@@ -124,13 +140,13 @@ describe("describeDbError", () => {
       502,
       `Bad${ESC}[2J${LS}Gateway${RLO}${ZWSP}`,
     );
-    expect(out).toBe("m [status=502 Bad[2J Gateway]");
+    expect(out).toBe("m [status=502 Bad [2J Gateway]");
   });
 
   it("collapses whitespace and strips control, separator, format and C1 characters", () => {
     const body = ["line1", "line2", `${ESC}[2Jx`, `${LS}y${PS}z`, `a${RLO}b${ZWSP}c${C1}d`].join("\n");
     const out = describeDbError({ message: body });
-    expect(out).toBe("line1 line2 [2Jx y z abcd");
+    expect(out).toBe("line1 line2 [2Jx y z a b c d");
     // Spot-check against the raw character classes, independent of the literal above.
     expect(out).not.toMatch(/[\r\n]/);
     expect(out).not.toContain(ESC);
@@ -158,25 +174,46 @@ describe("describeDbError", () => {
     const astral = ch(0xd83d) + ch(0xde00); // U+1F600
     const out = describeDbError({ message: astral.repeat(301) });
     expect(out).toBe(`${astral.repeat(300)}...`);
-    // No lone surrogate survives.
+  });
+
+  it("leaves no lone surrogate when the input bound lands inside a surrogate pair", () => {
+    const astral = ch(0xd83d) + ch(0xde00);
+    // 1199 units, then a pair that straddles the 1200-unit bound.
+    const out = describeDbError({ message: `${"x".repeat(1199)}${astral}tail` });
+    expect(out).toBe(`${"x".repeat(300)}...`);
     expect(out).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
   });
 
-  it("bounds the work on a multi-megabyte body (input is cut before the regexes run)", () => {
-    const huge = `${"a ".repeat(100)}${"x".repeat(3_000_000)}`;
+  it("replaces a lone surrogate with a space", () => {
+    expect(describeDbError({ message: `a${ch(0xd800)}b` })).toBe("a b");
+  });
+
+  it("drops a trailing partial email address left by a cut, which the sinks' redaction could not match", () => {
+    const out = describeDbError({ message: `${"x ".repeat(149)}jane.doe@example.com` });
+    expect(out).not.toContain("@");
+    expect(out.endsWith("...")).toBe(true);
+    // A complete address inside the cap is left whole (the sinks redact it).
+    expect(describeDbError({ message: "who jane.doe@example.com" })).toBe(
+      "who jane.doe@example.com",
+    );
+  });
+
+  it("applies the input bound: real text after more than 1200 characters of whitespace is cut away", () => {
+    // Without the prefix cut this would read "tail".
+    expect(describeDbError({ message: `${" ".repeat(2000)}tail` }, 500)).toBe(
+      "(no message) [status=500]",
+    );
+  });
+
+  it("bounds the work on a multi-megabyte word-and-space body", () => {
+    // ~434 ms unbounded on the review host, ~0.1 ms bounded.
+    const huge = "a ".repeat(1_500_000);
     const t0 = performance.now();
     const out = describeDbError({ message: huge }, 502);
     const ms = performance.now() - t0;
     expect(out.length).toBeLessThan(400);
     expect(out.endsWith("[status=502]")).toBe(true);
-    // Generous ceiling: the unbounded version measured ~170 ms per MB.
     expect(ms).toBeLessThan(100);
-  });
-
-  it("reads a body that is nothing but whitespace past the input bound as no message", () => {
-    expect(describeDbError({ message: " ".repeat(5000) }, 500)).toBe(
-      "(no message) [status=500]",
-    );
   });
 
   it("ignores non-string fields instead of throwing", () => {
