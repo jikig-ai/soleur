@@ -185,7 +185,8 @@ the same owner and the `soleur:incident` skill as the route.
 - **Hetzner project deletion or account loss** is not covered; whether delete protection blocks a project deletion is
   unverified.
 - **A holder of the read/write Hetzner token can lift protection.** Protection defends against mistaken deletes (a console
-  click, a wrong id, a pasted recipe, the drift workflow's runnable DELETE recipes), not against a leaked read/write token.
+  click, a wrong id, a pasted recipe; the drift workflow's issue bodies printed runnable DELETE recipes until #9927 item 8c
+  removed them on 2026-10-15), not against a leaked read/write token.
   That token is also the silent fallback of the read-only loader; a no-fallback loader is carried by #9927.
 - **Other credentials can overwrite or delete the key:** the three writers of the Doppler copy are the inngest cutover arm
   token `doppler_service_token.inngest_arm_write` (read/write on `soleur-inngest/prd`, published as

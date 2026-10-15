@@ -2068,25 +2068,26 @@ jobs:
             echo "Hetzner rather than trusting \`terraform destroy\`'s exit code — so if state"
             echo "has forgotten the resource, the dispatch will say so instead of exiting 0."
             echo ""
-            echo "If that arm reports survivors, they are unreachable through Terraform and are"
-            echo "reclaimed by the API directly. No console step, and nothing for a human to"
-            echo "look up — the exact calls are:"
+            echo "If that arm reports survivors, they are unreachable through Terraform. The"
+            echo "block below is **read-only**: it lists every object still carrying the"
+            echo "rehearsal label, with its id. It prints no delete call on purpose. Reclaiming"
+            echo "a survivor is a Hetzner write, so it is an owner-authorised action (the owner"
+            echo "tells an agent session to reclaim the listed ids), not a command to paste from"
+            echo "an issue body."
             echo ""
             echo '```bash'
             echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"'
-            echo '# list every stranded rehearsal object with its id'
+            echo '# READ-ONLY: list every stranded rehearsal object with its id'
             echo 'for k in servers volumes ssh_keys firewalls; do'
             echo '  curl -sS -H "Authorization: Bearer $TOKEN" \'
             echo '    "https://api.hetzner.cloud/v1/$k?label_selector=app%3Dsoleur-rung2-rehearsal" \'
             echo '    | jq -r --arg k "$k" ".[\$k][]? | \"\(\$k) \(.id) \(.name)\""'
             echo 'done'
-            echo '# then, per object (detach a volume before deleting it):'
-            echo 'curl -sS -X DELETE -H "Authorization: Bearer $TOKEN" \'
-            echo '  "https://api.hetzner.cloud/v1/<kind>/<id>"'
             echo '```'
             echo ""
-            echo "The scratch Doppler config, if listed above, goes with"
-            echo "\`doppler configs delete <name> -p soleur\` — it holds a live"
+            echo "The scratch Doppler config, if listed above, is destroyed with the box by that"
+            echo "arm when state still owns it. If it survives, removing it is the same"
+            echo "owner-authorised reclaim, not a command printed here. It holds a live"
             echo "GIT_DATA_LUKS_KEY and the production Better Stack ingest token, so it matters"
             echo "more than the box does."
             echo ""
@@ -2433,23 +2434,26 @@ jobs:
             echo ""
             echo "Dispatch **inngest provision forced-race rehearsal** with \`teardown_only=true\`."
             echo "That arm exists for exactly this case. If state has forgotten the resource,"
-            echo "reclaim it by the API directly — the exact calls are:"
+            echo "Terraform cannot reach it. The block below is **read-only**: it lists every"
+            echo "object still carrying the rehearsal label, with its id. It prints no delete"
+            echo "call on purpose. Reclaiming a survivor is a Hetzner write, so it is an"
+            echo "owner-authorised action (the owner tells an agent session to reclaim the"
+            echo "listed ids), not a command to paste from an issue body."
             echo ""
             echo '```bash'
             echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"'
+            echo '# READ-ONLY: list every stranded rehearsal object with its id'
             echo 'for k in servers volumes ssh_keys firewalls; do'
             echo '  curl -sS -H "Authorization: Bearer $TOKEN" \'
             echo '    "https://api.hetzner.cloud/v1/$k?label_selector=app%3Dsoleur-inngest-provision-rehearsal" \'
             echo '    | jq -r --arg k "$k" ".[\$k][]? | \"\(\$k) \(.id) \(.name)\""'
             echo 'done'
-            echo 'curl -sS -X DELETE -H "Authorization: Bearer $TOKEN" \'
-            echo '  "https://api.hetzner.cloud/v1/<kind>/<id>"'
             echo '```'
             echo ""
             echo "A stranded scratch Doppler environment (slug \`rehearsal_*\` in project"
-            echo "\`soleur-inngest\`) goes with \`doppler environments delete <slug> -p"
-            echo "soleur-inngest\`. It holds only throwaway values — the worst it leaks is the"
-            echo "write-only ingest tokens — but it is not free to leave."
+            echo "\`soleur-inngest\`) is reclaimed the same way, as an owner-authorised action."
+            echo "It holds only throwaway values — the worst it leaks is the write-only ingest"
+            echo "tokens — but it is not free to leave."
             echo ""
             echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml)._"
           } > /tmp/orphan-body-inngest.md

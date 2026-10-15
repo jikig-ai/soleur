@@ -164,7 +164,9 @@ required (the validate step is unconditional):
 gh workflow run inngest-provision-rehearsal.yml --ref main   -f confirm=REHEARSE-INNGEST-PROVISION -f teardown_only=true
 ```
 
-or reclaim by API — the filed issue prints the exact calls.
+If the arm cannot remove a survivor (state forgot it), the filed issue lists the stranded objects read-only, with their
+ids. Reclaiming them is an owner-authorised action: ask an agent session to delete those ids. The issue no longer prints
+a delete call.
 
 ## Failure table
 
