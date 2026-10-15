@@ -535,7 +535,7 @@ assert "(hb-s) the guard-class literal is DEFINED (source order) before the sing
   "[[ \"\$(grep -cF -e '$HB_CLASS' <<<\"\$HB_CODE_TXT\")\" -eq 1 && \"\$(grep -cF -e 'url = \"' <<<\"\$HB_CODE_TXT\")\" -eq 1 && -n \"\$(hb_line_of '$HB_CLASS')\" && \"\$(hb_line_of '$HB_CLASS')\" -lt \"\$(hb_line_of 'url = \"')\" ]]"
 assert "(hb-s) _hb_curl is defined once and called twice (one fresh process substitution per attempt)" "[[ \"\$(hb_code | grep -oE '_hb_curl' | wc -l)\" -eq 3 ]]"
 assert "(hb-s) the heartbeat curl keeps -g and the --disable --noproxy '*' confinement" \
-  "[[ \"\$(hb_code | grep -cF -e \"curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config -\")\" -eq 1 ]]"
+  "[[ \"\$(grep -cF -e \"curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config -\" <<<\"\$HB_CODE_TXT\")\" -eq 1 ]]"
 
 # REAL-curl smoke. Every row above runs a stub curl, which accepts any argv, so a flag the real curl rejects (exit 2,
 # "curl: option ...") would pass them all. Extract the SUT's own _hb_curl definition and run it against the real curl at a
