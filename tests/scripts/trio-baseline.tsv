@@ -1,0 +1,102 @@
+# tests/scripts/trio-baseline.tsv  (#9294 G1; read by tests/scripts/test-trio-baseline-census.sh)
+#
+# The expiring baseline of the deploy-channel trio consumers: every (file, name) pair that names
+# WEBHOOK_DEPLOY_SECRET, WEBHOOK_DEPLOY_SECRET_NEXT, CF_ACCESS_CLIENT_ID or CF_ACCESS_CLIENT_SECRET in code
+# (a FALLBACK:<NAME> row records a read that falls back to another credential). It SHRINKS ONLY:
+#   - a row absent from the merge-base copy of this file is RED (a new consumer is a reviewed decision);
+#   - a row whose consumer no longer reads the name is RED (the PR that moves a consumer deletes its row);
+#   - a row past its expiry is RED (the move, or a reviewed re-date with the CLO and CTO's sequencing in the plan).
+# The final G1 PR asserts this file holds no rows. There is no permanent allowlist (ADR-241 D8).
+#
+# Columns (tab-separated): file, name, expires (YYYY-MM-DD), issue tag (#9294:PR-2 | PR-3 | PR-4).
+# The tag is the consumer group of knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.md.
+#
+# EXPIRY 2026-11-30. The git-data plaintext-volume date is 2026-11-12 and the plan sequences G1 behind the
+# git-data rehearsal and wipe (Ruled by CTO agent, 2026-10-15, D-1): PR-2 to PR-4 either finish before the
+# rehearsal dispatch or resume after the wipe, so every row must outlive the wipe window and force the move
+# soon after it. A past-expiry row reds the census; re-dating it is a reviewed edit.
+#
+# REGENERATE (derived from the tree, never hand-listed):
+#   bash tests/scripts/test-trio-baseline-census.sh --emit-baseline
+.github/actions/dispatch-web-redeploy/track.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+.github/actions/dispatch-web-redeploy/track.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+.github/actions/dispatch-web-redeploy/track.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+.github/workflows/apply-deploy-pipeline-fix.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+.github/workflows/apply-deploy-pipeline-fix.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+.github/workflows/apply-deploy-pipeline-fix.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+.github/workflows/canary-status.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-3
+.github/workflows/canary-status.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-3
+.github/workflows/canary-status.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-3
+.github/workflows/cutover-inngest.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+.github/workflows/cutover-inngest.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/cutover-inngest.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/deploy-inngest-image.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+.github/workflows/deploy-inngest-image.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/deploy-inngest-image.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/git-data-cutover.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+.github/workflows/git-data-cutover.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+.github/workflows/git-data-cutover.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+.github/workflows/restart-inngest-server.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+.github/workflows/restart-inngest-server.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/restart-inngest-server.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-followthrough-sweeper.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-followthrough-sweeper.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-followthrough-sweeper.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-inngest-health.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-inngest-health.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-inngest-health.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/web-platform-release.yml	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-3
+.github/workflows/web-platform-release.yml	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-3
+.github/workflows/web-platform-release.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-3
+apps/web-platform/infra/cloud-init.yml	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/hooks.json.tmpl	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/server.tf	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+apps/web-platform/infra/server.tf	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/server.tf	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/soleur-host-bootstrap.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/variables.tf	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+apps/web-platform/infra/variables.tf	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/variables.tf	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/scripts/github-app-key-status.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+apps/web-platform/scripts/github-app-key-status.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+apps/web-platform/scripts/github-app-key-status.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+scripts/check-deploy-script-parity.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+scripts/check-deploy-script-parity.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+scripts/check-deploy-script-parity.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-2
+scripts/cutover-inngest.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-2
+scripts/cutover-inngest.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-2
+scripts/followthroughs/canary-promotion-5875.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+scripts/followthroughs/canary-promotion-5875.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/canary-promotion-5875.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/infra-config-activation-7220.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+scripts/followthroughs/infra-config-activation-7220.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/infra-config-activation-7220.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/infra-config-fatal-channel-7220.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+scripts/followthroughs/infra-config-fatal-channel-7220.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/infra-config-fatal-channel-7220.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/inngest-soak-6178.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+scripts/followthroughs/inngest-soak-6178.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/inngest-soak-6178.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/workspace-isolation-verdict-2640.sh	CF_ACCESS_CLIENT_ID	2026-11-30	#9294:PR-4
+scripts/followthroughs/workspace-isolation-verdict-2640.sh	CF_ACCESS_CLIENT_SECRET	2026-11-30	#9294:PR-4
+scripts/followthroughs/workspace-isolation-verdict-2640.sh	WEBHOOK_DEPLOY_SECRET	2026-11-30	#9294:PR-4
+.github/workflows/apply-deploy-pipeline-fix.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	2026-11-30	#9294:PR-2
+.github/workflows/apply-deploy-pipeline-fix.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	2026-11-30	#9294:PR-2
+.github/workflows/git-data-cutover.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	2026-11-30	#9294:PR-2
+.github/workflows/git-data-cutover.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	2026-11-30	#9294:PR-2

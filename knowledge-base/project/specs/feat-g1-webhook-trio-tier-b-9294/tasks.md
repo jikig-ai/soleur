@@ -3,11 +3,11 @@
 Plan: knowledge-base/project/plans/2026-10-15-feat-g1-webhook-trio-tier-b-plan.md. CPO sign-off granted 2026-10-15 (conditions: owner stamps the rotation start date at the wipe). Sequencing: PR-0 now; PR-1 only if released before the rehearsal dispatch; PR-2 to PR-4 only if green by then; nothing between the rehearsal and the wipe; rotation after the wipe; git-data-cutover.yml frozen from the rehearsal dispatch (Ruled by CTO agent, 2026-10-15).
 
 ## 1. PR-0: docs and tests (no behaviour change)
-- 1.1 ADR-241 D1 amendment (inventory, G1b census miss, orphan CF_TUNNEL_TOKEN, narrow project, host-coverage result)
-- 1.2 Census: trio and WEBHOOK_DEPLOY_SECRET_NEXT into TIER_B_NAMES; classifiers for the secrets.X and env-passthrough shapes
-- 1.3 Census: tests/scripts/trio-baseline.tsv, merge-base comparison via git show, rows for fallback ban, empty-secret render, HMAC-not-in-state
-- 1.4 Read-only id reconciliation command, result pasted in the PR body
-- 1.5 Comment on #9294 adding G1b (owner approves)
+- [x] 1.1 ADR-241 D1 amendment (inventory, G1b census miss, orphan CF_TUNNEL_TOKEN, narrow project, host-coverage result)
+- [x] 1.2 Census as its own suite (tests/scripts/test-trio-baseline-census.sh): derived (file, name) scan over every read shape; TIER_B_NAMES left for the migrating PRs
+- [x] 1.3 Census: tests/scripts/trio-baseline.tsv, merge-base comparison via git show, rows for fallback ban, empty-secret render, HMAC-not-in-state
+- [x] 1.4 Read-only id reconciliation command, result pasted in the PR body
+- [x] 1.5 Comment on #9294 adding G1b: drafted in issue-comment-g1b-draft.md, NOT posted (owner approves)
 
 ## 2. PR-1: prep
 - 2.1 ci-deploy.sh fan_out_to_peers reads the first secret under trigger-rule; ci-deploy.test.sh both shapes (lands first)

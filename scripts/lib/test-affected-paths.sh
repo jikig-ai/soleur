@@ -1884,6 +1884,19 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# tests/scripts/trio-baseline-census — the deploy-channel trio census (#9294 G1): scans every non-test
+# file under the workflow, composite-action, scripts and infra directories for the trio names and
+# compares them with tests/scripts/trio-baseline.tsv (and its merge-base copy).
+AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
+  ".github/"
+  "scripts/"
+  "apps/web-platform/scripts/"
+  "apps/web-platform/infra/"
+  "tests/scripts/test-trio-baseline-census.sh"
+  "tests/scripts/trio-baseline.tsv"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/battery-tag-authorship — census of tag-authoring git commands reachable from the battery:
 # the write-boundary softening in repo-write-boundary.sh and the runner's own command surface.
 AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
