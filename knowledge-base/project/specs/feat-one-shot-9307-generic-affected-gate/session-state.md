@@ -81,3 +81,20 @@ THEN: spawn remaining 5 code-panel seats (correctness, security-sentinel, patter
 - Code panel: 7 seats spawned (git-history, pattern-recognition, security-sentinel, data-integrity, agent-native, code-quality, test-design) — semgrep skipped (no supported source in .sh diff), rails/migration/deploy n/a
 - Next: synthesize findings → gh issues (code-review label, "PR #10389") → fix P1/P2 (+P3) → fix-round → qa → compound → ship
 - Gate run still queued: /tmp/soleur-9307-gate.log
+
+## Panel round findings (4 of 7 seats in; pending: pattern-recognition, code-quality, test-design)
+
+P1: none new. git-history P2: ADR-288 ordinal contested by open PRs #10348 + #10349 (check-adr-ordinals is required CI — re-probe + renumber before merge); P3 PR body still placeholder (ship fills).
+
+ROUND-2 MUST-FIX:
+A. run_step rc6/7 arms apply to ALL ~10 steps (data-integrity + agent-native agree) → scope arms to the affected-gate step only (match $name or per-step rc map). grok-pre-push-gate.sh:96-113.
+B. Vacuous test_command denylist bypassed by `|| true`, `echo done; exit 0`, `bash -c 'exit 0'`, `true # c` → harden: reject `|| true`/`&& true`/`|| :`/`; exit`/exit-in-subcommand shapes + document denylist-not-proof.
+C. AFFECTED_BUDGET_ACTIVE/AFFECTED_DEADLINE env-inheritable → forged rc6 deferral → pass-with-note → push with zero tests. Fix: init both unconditionally; every 124→6 map requires CI_NAME != none (custom arm already does).
+D. inert_paths `["*"]` = permanent green → reject match-everything patterns (`*`,`**`,`**/*` shapes) or refuse when inert set is total.
+E. ran/of unit integrity: pytest items≠files + testmon `collected N/M deselected` takes pre-slash total (overstates); go packages≠files; jest __tests__/*.js not counted in of; nx `0 successful` numeric ran=0 isn't caught as vacuous → treat numeric ran=0 as vacuous too; finish() suppress human line when of=-; disclose ran>of as unit-broken not skipped=-. Add suite rows: fake pytest emits `collected N items`, go packages, turbo `0 successful`.
+F. bun x auto-installs/executes registry pkg — asymmetric with npx --no-install → drop `bun x` exec arm (require node_modules/.bin or PATH) or `bun x --no-install` w/ upstream caveat.
+G. review/SKILL.md seat prescription still says `TEST_GROUP=affected bash scripts/test-all.sh` — add repo-conditional fallback to affected-tests.sh for founder repos (byte-tight).
+
+P3 batch-2 (cheap): python3 -I for import probes (cwd on sys.path executes repo pytest.py/sitecustomize); sanitize marker fields to printable-no-space (key=, ci=, inert_rule=); document watchdog grandchildren gap; `set -- $sheb` glob→safe parse; go.sh `for d in $(...)` word-splits dirs w/ spaces→use while-read; mktemp trap cleanup on signals; --self-check emits reason=ok despite toolchain=missing → per-stack missing should downgrade marker or reason=toolchain-missing; self-check outside git repo → not-a-repo not no-base-ref; mode=help emitted as mode=none reason=help — doc OR emit mode=help; review lead gate: full `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` fence not bare token; refusals add remedy pointer (test_command override / contract doc); work §9 rc4 taxonomy needs founder-repo vocabulary (no-base-ref/toolchain-missing/foreign-runner); --explain PATH dump unbounded → head-limit; stale narration grok-pre-push "test-all.sh"→"affected gate", one-shot SKILL.md:25 mechanism description, test-fix-loop ordering note re test_command precedence; rc137→budget-deferred mislabel (keep non-green; note cause OOM-kill); inert path of=N counts changed files not test files (field unit drift).
+
+Waiting on 3 seats; then fix agent #2 for round-2 list; then synthesis→gh issues→qa→compound→ship.
