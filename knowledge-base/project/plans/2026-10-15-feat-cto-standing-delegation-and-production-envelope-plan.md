@@ -15,6 +15,43 @@ requires_cpo_signoff: true
 
 # feat: CTO-owned autonomy tooling - Standing Delegation, Production Envelope, overlap preflight, go hold routing
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-15
+**Sections enhanced:** Phase 2 (verifier), Phase 3 (hold evaluator), Phase 5 (hook), Phase 6 (preflight), Phase 7 (agent selector), Guard Contract, Acceptance Criteria
+**Research and review inputs:** CTO rulings T1-T7, C1, C2; scoped advisor consult (ADR-083); CPO plan-time sign-off; plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, CTO devex lens); deepen halts 4.6-4.12 run mechanically; live GitHub and baseline-gate probes below.
+
+### Key Improvements
+
+1. The verifier gained a `render` subcommand (the real owner of "the skill writes the record"), an `--audit` mode (a legitimate past act must not fail its own audit row after the epic closes), a committed-envelope requirement, a closed non-delegable command denylist, epic-issue binding and a bounded retry that is never converted into a pass.
+2. The overlap preflight gained a graduated exit table: only a duplicate or a designated vehicle stops a merge; shared files alone are informational (exit 13), so routine hot files and this branch's own overlap with #9745 and #7390 never stall unrelated work. The 100-file field cap on `gh pr list` is handled by a paginated re-read that fails to exit 2.
+3. The CTO agent gained an interface selector keyed on what existing callers actually send (a question plus "Do NOT use AskUserQuestion"), so the five existing spawn surfaces keep their shape.
+4. The CPO conditions made the confirmation name the delegated acts, embed the exact question as the quote, widen the jargon test to every user-facing string, add an in-session stall sentence, a stop path and a per-act epic comment.
+5. Nine review items that revisit CTO rulings or the brief's scope are persisted as `taste` / `operator (scope)` rows (R1-R9 in `decision-challenges.md`), not silently applied.
+
+### New Considerations Discovered
+
+- The live canonical delegation predates `Confirmation:` and keeps its envelope inline, so it verifies `invalid`; it is re-recorded at first use through `render` (an operator-confirmed act, outside this PR's ACs).
+- The hook arm is repo-local; Soleur users elsewhere get the verifier, the gate and the hold evaluator, not that backstop.
+- A hook-written receipt of the operator's answer is the cheapest strict route if shared-identity self-authorization is ever observed (follow-up issue 3).
+
+### Pinned live facts (resolved in this pass, not from memory)
+
+```text
+$ gh api repos/jikig-ai/soleur/issues/comments/6188015049 --jq '{type:.user.type, login:.user.login, assoc:.author_association, created:.created_at, updated:.updated_at, issue_url:.issue_url, app:.performed_via_github_app}'
+{"app":null,"assoc":"MEMBER","created":"2026-10-15T08:37:44Z","issue_url":"https://api.github.com/repos/jikig-ai/soleur/issues/9757","login":"deruelle","type":"User","updated":"2026-10-15T08:37:44Z"}
+$ gh api repos/jikig-ai/soleur/collaborators/deruelle/permission --jq .permission
+admin
+$ gh pr list --state open -L 2 --json number,files,commits --jq '.[0]|keys'
+["commits","files","number"]
+$ jq --version; jq -n '"2026-10-15T23:59:59Z"|fromdateiso8601'; jq -n '"2026-10-15"|fromdateiso8601'
+jq-1.8.2
+1792108799
+jq: error ... date "2026-10-15" does not match format "%Y-%m-%dT%H:%M:%SZ"
+```
+
+Baselines green before any edit (so a later red is this PR's): `lint-skill-body-budget.py --base origin/main` OK (ship 183 B, one-shot 1150 B of headroom), `lint-rule-bodies.py --check` OK, `go-routing-table-parity.test.sh` 42 passed, `sync-cursor-name-map.ts --check` ok. Deepen halts: User-Brand Impact present (`single-user incident`), Observability present with an allowlisted-verb, shell-inert, offline probe, no PAT-shaped variable, no UI-surface file, no `.tf`/migration/cloud-init file (Encryption Posture not triggered), `lint-guard-contract.py` green over 6 guards, one unfenced Scope Check with zero `unmapped` rows, every cited rule id resolves to an active rule, every prescribed label exists (`domain/engineering`, `action-required`, `priority/p2-medium`, `priority/p3-low`, `type/chore`).
+
 References, not closures: `Ref #10333` (only its collision-pre-check bullet is built here; the bounded-default lead-gate bullets stay open), `Ref #9757` (the epic whose delegation record is the canonical example). The PR body must NOT carry `Closes`.
 
 ## Overview
@@ -40,7 +77,7 @@ What ships:
 - `#9757` is OPEN and its delegation comment exists (author `deruelle`, marker on line 1, verbatim quote, three numbered Scope items, Excluded list, Envelope for act 1, `Expiry:` 2026-11-14 = created + 30 d, `Revoke:`). It is used as the SHAPE for synthesized fixtures only; no test embeds its URL.
 - Cited paths exist on `origin/main`: `cto.md`, `technical-ruling-delegation.md` (sections 1, 3, 6, 7), `technical-ruling-gate.sh`, `pre-ask-technical-fork-gate.sh`, `commands/go.md` (the "go skill source of truth": `skills/go/SKILL.md` is a Devin shim that declares `commands/go.md` the AUTHORITY), `plugins/soleur/cursor/agents/soleur-engineering-cto.md`.
 - Mirrors: `agents.manifest.json`, `.grok/agents/soleur-engineering-cto.md` and the cursor stub embed the agent DESCRIPTION. T6 keeps it byte-identical, so none regenerates; AC proves it with the two `--check` generators.
-- ADR corpus grep (`technical-ruling`, `hr-menu-option`, `delegation`): ADR-084 owns the decision-class taxonomy; no ADR rejects a standing authorization record. The new ADR extends ADR-084 and does not supersede it.
+- ADR corpus grep (`technical-ruling`, `hr-menu-option-ack-not-prod-write-auth`, `delegation`): ADR-084 owns the decision-class taxonomy; no ADR rejects a standing authorization record. The new ADR extends ADR-084 and does not supersede it.
 - Hidden constraints found by reading the enforcers (not in the brief): the ship SKILL.md body ceiling has 183 bytes of headroom and one-shot's 1150 (`plugins/soleur/test/skill-body-budget.json`, ratchets down only); hard-rule body edits need `lint-rule-bodies.py --write` plus an append-only ack row; `B_ALWAYS` is 44069 against a 46000 critical line; new test suites need shard-manifest and duration rows; `commands/go.md` carries an eval-gated routing block.
 - Live overlap (dogfooding the feature): open PR #9745 edits `plugins/soleur/commands/go.md` and `help.md`; open WIP PR #7390 edits `AGENTS.rules.md`. Neither is the same work. Rebase risk only; the preflight output for this branch must list both.
 
