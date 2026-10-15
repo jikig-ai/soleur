@@ -56,6 +56,7 @@
 #   35 wipe_boot_layout_signal_unparseable                    36 wipe_snapshot_teardown_failed
 #   37 wipe_plaintext_not_empty   38 wipe_luks_identity_mismatch
 #   40 wipe_device_still_attached 41 wipe_mapper_read_failed  42 wipe_store_root_unreadable
+#   43 wipe_snapshot_not_ours (phase=clear only: a leftover snapshot this file did not make)
 # (git-data-cutover.sh itself refuses wipe_target_is_luks, before any call, when the two ids are equal.)
 # Keep the table, the `die` calls below and the case in git-data-cutover.sh equal (the suite derives
 # the set from all three).
@@ -181,7 +182,7 @@ wa_main() {
   local PHASE="${WIPE_PHASE-}" TYPED="${WIPE_TYPED_ID-}" LUKSID="${WIPE_LUKS_ID-}" SERVERID="${WIPE_SERVER_ID-}"
   local OLD_ROOT="${WIPE_OLD_ROOT-}" MAPPER="${WIPE_LUKS_MAPPER-}" MARKER="${WIPE_STORE_VERIFIED-}"
   local ROW_DT="${WIPE_ROW_DT-}" LISTING="${WIPE_LISTING-}" w_late
-  [[ "$PHASE" =~ ^(pre|finish|post_detach)$ ]] || die 16 arg_phase
+  [[ "$PHASE" =~ ^(pre|finish|post_detach|clear)$ ]] || die 16 arg_phase
   [[ "$TYPED" =~ ^[0-9]{1,12}$ && "$LUKSID" =~ ^[0-9]{1,12}$ && "$SERVERID" =~ ^[0-9]{1,12}$ ]] || die 16 arg_ids
   [ "$TYPED" != "$LUKSID" ] || die 16 arg_ids_equal
   [[ "$OLD_ROOT" =~ ^/[A-Za-z0-9/_.-]+$ && "$MARKER" =~ ^/[A-Za-z0-9/_.-]+$ && "$MAPPER" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || die 16 arg_paths
@@ -439,6 +440,66 @@ wa_main() {
     esac
   }
 
+  # clear_origin_ok — the retained device is untouched and kernel read-only (before AND after a clear).
+  clear_origin_ok() {
+    local ro
+    W0="$(wstat)" || die 16 stat_unreadable
+    case "$W0" in "0 0") : ;; *) die 29 sectors_written ;; esac
+    ro="$(blockdev --getro "$DEV")" || die 16 getro_unreadable
+    case "$ro" in 1) : ;; *) die 30 ro_flag_lost ;; esac
+  }
+  # clear_snapshot (phase=clear; A1 2026-10-15, CTO follow-up ruling) — remove a LEFTOVER git-data-pt-snap that a run
+  # killed with SIGKILL (which no trap can catch) left behind. It touches nothing it cannot prove it made: the
+  # snapshot's origin must be the typed device and it must be non-persistent (N); its COW must be a loop device whose
+  # backing file lives in a /dev/shm/tmp.<id> directory, and a mount of the snapshot, if any, must be that directory's
+  # mnt. Anything else is rc 43 and NOTHING is removed. The removal is wa_release, the one function that also tears
+  # down this file's own listing (its single `dmsetup remove` names the pinned constant; no name is an input).
+  clear_snapshot() {
+    local names tbl a b c d e f g h dmn rc try hits tgt mntdir lo lk lf cowdir
+    names="$(dmsetup ls)" || die 16 dmsetup_ls
+    if ! awk_hit "$names" -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then CLEAR_RESULT=absent; return 0; fi
+    tbl="$(dmsetup table "$WA_SNAP")" || die 16 table_unreadable
+    read -r a b c d e f g h <<< "$tbl"
+    [ "$c" = snapshot ] && [ "$d" = "$(devno_dec "$MM")" ] && [ "$f" = N ] && [ -z "$h" ] || die 43 snapshot_not_ours
+    dmn="$(dmsetup info -c --noheadings -o blkdevname "$WA_SNAP")" || die 16 blkdevname_unreadable
+    [[ "$dmn" =~ ^dm-[0-9]+$ ]] || die 16 blkdevname_unparseable
+    for try in 1 2; do
+      rc=0
+      hits="$(timeout 20 find /proc -ignore_readdir_race -maxdepth 3 -type l -regex '/proc/[[:digit:]]+/fd/[[:digit:]]+' -lname "/dev/$dmn" -print -quit)" || rc=$?
+      [ -z "$hits" ] || die 27 handle_open
+      [ "$rc" -eq 0 ] && break
+      [ "$try" = 2 ] && die 27 handle_unknown
+      sleep 1
+    done
+    rc=0
+    tgt="$(findmnt -n -o TARGET -S "/dev/mapper/$WA_SNAP")" || rc=$?
+    { [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; } || die 16 findmnt_snapshot_lookup
+    mntdir=""
+    if [ -n "$tgt" ]; then
+      case "$tgt" in *$'\n'*) die 43 snapshot_not_ours ;; esac
+      [[ "$tgt" =~ ^(/dev/shm/tmp\.[A-Za-z0-9]{6,12})/mnt$ ]] || die 43 snapshot_not_ours
+      mntdir="${BASH_REMATCH[1]}"
+    fi
+    lo="$(losetup -l -n -O NAME,BACK-FILE)" || die 16 losetup_list
+    # The COW must be a LOOP device: only a loop device appears in the loop listing under its /dev/loop<minor> name, and the
+    # lookup below refuses (rc 43) for anything that does not, so no separate check of the major number is needed.
+    [[ "$e" =~ ^[0-9]+:[0-9]+$ ]] || die 43 snapshot_not_ours
+    lk="/dev/loop${e#*:}"
+    lf="$(printf '%s\n' "$lo" | sed -n "s#^${lk}[[:space:]][[:space:]]*\(.*\)\$#\1#p")"
+    case "$lf" in "" | *$'\n'*) die 43 snapshot_not_ours ;; esac
+    [[ "$lf" =~ ^(/dev/shm/tmp\.[A-Za-z0-9]{6,12})/cow(\ \(deleted\))?$ ]] || die 43 snapshot_not_ours
+    cowdir="${BASH_REMATCH[1]}"
+    if [ -n "$mntdir" ] && [ "$mntdir" != "$cowdir" ]; then die 43 snapshot_not_ours; fi
+    clear_origin_ok
+    WA_DIR="$cowdir"; WA_MNT="$cowdir/mnt"; WA_LOOP="$lk"; WA_SNAP_UP=1
+    if [ -n "$mntdir" ]; then WA_MOUNTED=1; fi
+    if ! wa_release; then die 36 teardown_failed; fi
+    names="$(dmsetup ls)" || die 16 dmsetup_ls
+    if awk_hit "$names" -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then die 36 snapshot_remains; fi
+    clear_origin_ok
+    CLEAR_RESULT=cleared
+  }
+
   line_pre() {
     local lsig journal d f l o r k
     if [ "$LISTING" = run ]; then
@@ -466,6 +527,14 @@ wa_main() {
     printf 'wipe_assert %s ok byid=gone mapper_read=ok store_root=ok\n' "$PHASE" >&4
   }
 
+  if [ "$PHASE" = clear ]; then
+    store_facts
+    h3_to_h5
+    budget
+    clear_snapshot
+    printf 'wipe_assert clear ok snapshot=%s\n' "$CLEAR_RESULT" >&4
+    return 0
+  fi
   if [ "$PHASE" != pre ]; then phase_post; return 0; fi
   store_facts
   h3_to_h5

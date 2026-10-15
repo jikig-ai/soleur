@@ -909,7 +909,7 @@ mode_wipe_assert() {
   local phase="${WIPE_PHASE:-}" typed="${WIPE_VOLUME_ID:-}" luks="${WIPE_LUKS_VOLUME_ID:-}" srv="${WIPE_SERVER_ID:-}"
   local row="${WIPE_ROW_DT:-}" listing="${WIPE_LISTING:-}" body pat cmd tmo rc=0 qa qb qc qr qm qk qp ql qd
   local here iso_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z?$'
-  [[ "$phase" =~ ^(pre|finish|post_detach)$ ]] || _wipe_refuse probe_failed "" arg_phase
+  [[ "$phase" =~ ^(pre|finish|post_detach|clear)$ ]] || _wipe_refuse probe_failed "" arg_phase
   [[ "$typed" =~ ^[0-9]{1,12}$ ]] || _wipe_refuse probe_failed "" arg_volume_id
   [[ "$luks" =~ ^[0-9]{1,12}$ ]] || _wipe_refuse probe_failed "" arg_luks_volume_id
   [[ "$srv" =~ ^[0-9]{1,12}$ ]] || _wipe_refuse probe_failed "" arg_server_id
@@ -945,6 +945,10 @@ mode_wipe_assert() {
   if [ "$phase" = pre ]; then
     pat='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+ lock_residue=([0-9]+|na) store_root_repos=[0-9]+$'
     if [ "$listing" = run ]; then tmo=300; else tmo=90; fi
+  elif [ "$phase" = clear ]; then
+    # A1 (2026-10-15): clearing a leftover throwaway snapshot; the answer says only whether one was cleared or none existed.
+    pat='^wipe_assert clear ok snapshot=(cleared|absent)$'
+    tmo=120
   else
     pat="^wipe_assert $phase ok byid=gone mapper_read=ok store_root=ok\$"
     tmo=90
@@ -979,6 +983,7 @@ mode_wipe_assert() {
     40) _wipe_refuse wipe_device_still_attached ;;
     41) _wipe_refuse wipe_mapper_read_failed ;;
     42) _wipe_refuse wipe_store_root_unreadable ;;
+    43) _wipe_refuse wipe_snapshot_not_ours ;;
     *) _wipe_refuse probe_failed "$rc" ;;
   esac
   # The answer matched the phase's fixed shape in full: digits and fixed words only.

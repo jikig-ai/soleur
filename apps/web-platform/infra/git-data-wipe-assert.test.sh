@@ -208,6 +208,11 @@ case "$n" in
       [ "$prev" = "-S" ] && src="$a"
       prev="$a"
     done
+    if [ "$src" = "/dev/mapper/git-data-pt-snap" ]; then
+      # the leftover snapshot's own mount (phase=clear): present only while the world says it is mounted
+      if [ -e "$ST/mounted" ] && [ -s "$W/clear_mnt" ]; then cat "$W/clear_mnt"; exit 0; fi
+      exit 1
+    fi
     if [ -n "$src" ]; then
       if [ -s "$W/findmnt_S" ]; then cat "$W/findmnt_S"; exit 0; fi
       exit 1
@@ -270,6 +275,7 @@ case "$n" in
     case "${1-}" in
       --find) flag fail_losetup && exit 1; : > "$ST/loop"; echo /dev/loop99; exit 0 ;;
       -d) flag fail_losetup_d && exit 1; rm -f "$ST/loop"; exit 0 ;;
+      -l) [ -e "$ST/loop" ] && [ -f "$W/losetup_l" ] && cat "$W/losetup_l"; exit 0 ;;
     esac
     exit 9 ;;
   dmsetup)
@@ -286,6 +292,7 @@ case "$n" in
         exit 1 ;;
       create) note create; flag fail_create && exit 1; : > "$ST/snap_up"; exit 0 ;;
       deps) cat "$W/deps"; exit 0 ;;
+      table) [ -e "$ST/snap_up" ] || exit 1; cat "$W/dm_table"; exit 0 ;;
       remove) note remove; flag fail_remove && exit 1; rm -f "$ST/snap_up"; exit 0 ;;
       status) if flag snap_invalid; then echo "0 2097152 snapshot Invalid"; else echo "0 2097152 snapshot 16/1000000 16"; fi; exit 0 ;;
     esac
@@ -304,7 +311,7 @@ case "$n" in
     note umount
     mnt="$last"
     flag fail_umount && exit 32
-    find "$mnt" -mindepth 1 -delete
+    [ ! -d "$mnt" ] || find "$mnt" -mindepth 1 -delete
     rm -f "$ST/mounted"
     if flag written_on_umount; then cp "$W/written_on_umount" "$W/files/sys/dev/block/8:16/stat"; fi
     exit 0 ;;
@@ -651,6 +658,128 @@ mkdir -p "$W/root/repositories/$CORPUS_REPO_A"
 run_script pre WIPE_LISTING=skip
 expect_line "A99 the store-root count runs even when the snapshot listing is skipped (lock_residue=na)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200 lock_residue=na store_root_repos=1$'
 
+# ── A1 (2026-10-15) phase=clear: clear a LEFTOVER git-data-pt-snap (CTO follow-up ruling) ───────────────────────────
+# A SIGKILL during the listing cannot be trapped, so the throwaway snapshot, its mount, its loop device and its COW file
+# can outlive the run. The clear proves the leftover is OURS before it touches it: the snapshot's origin is the typed
+# device, its COW is a loop device backed by a COW file inside the pinned /dev/shm directory that also holds the mount.
+RE_CLEAR='^wipe_assert clear ok snapshot=(cleared|absent)$'
+CLR_DIR=/dev/shm/tmp.AbCdEfGhIj
+clear_state() { # the state a SIGKILLed listing leaves behind, in the CURRENT world
+  : > "$W/state/snap_up"; : > "$W/state/mounted"; : > "$W/state/loop"
+  printf '0 2097152 snapshot 8:16 7:99 N 8\n' > "$W/dm_table"
+  printf '%s/mnt\n' "$CLR_DIR" > "$W/clear_mnt"
+  printf '/dev/loop99 %s/cow\n' "$CLR_DIR" > "$W/losetup_l"
+}
+clear_world() { world "$1"; clear_state; }
+clear_inv() { # <label> — the grammar, the name leak and the write-shape invariants of a clear run (the teardown one is the assertion itself)
+  local label="$1" bad=0 got lines leak
+  INVARIANT_RUNS=$((INVARIANT_RUNS + 1))
+  leak="$(grep -rlF -f "$PATS" "$W/out" "$W/err" "$W/state" || true)"
+  if [ -z "$leak" ]; then ok "$label: no synthesized tenant name in stdout, stderr or any state file"; else no "$label: a synthesized name reached: $leak"; fi
+  lines="$(wc -l < "$W/out")"; got="$(cat "$W/out")"
+  if [ "$lines" -gt 1 ]; then bad=1; fi
+  if [ "$lines" -eq 1 ] && ! [[ "$got" =~ $RE_CLEAR ]]; then bad=1; fi
+  while IFS= read -r l; do [[ "$l" =~ $RE_ERR ]] || bad=1; done < "$W/err"
+  if [ "$bad" = 0 ]; then ok "$label: stdout is empty or one fixed-shape clear line, every stderr line is a fixed reason line"; else no "$label: output grammar violated: out=[$got] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+  if argv_safe "$W/state/argv"; then ok "$label: no write-shaped argv"; else no "$label: a write-shaped argv was recorded"; fi
+}
+clear_detaches() { grep -c "^losetup	-d	" "$W/state/argv" 2>/dev/null || true; }
+clear_removals() { grep -c "^dmsetup	remove	--retry	git-data-pt-snap$" "$W/state/argv" 2>/dev/null || true; }
+clear_expect_refuse() { # <label> <rc> <reason> — a refusal removes NOTHING
+  local label="$1" rc="$2" reason="$3" last
+  last="$(tail -n 1 "$W/err")"
+  if [ "$RC" = "$rc" ] && [ ! -s "$W/out" ] && [[ "$last" == "wipe-assert: rc=$rc reason=$reason"* ]] && [ "$(clear_removals)" = 0 ] && [ "$(called umount)" = 0 ] && [ "$(clear_detaches)" = 0 ] && [ -e "$W/state/snap_up" ]; then
+    ok "$label -> rc $rc reason=$reason, stdout empty, nothing removed (no remove, umount or loop detach; the snapshot is still up)"
+  else no "$label: expected rc=$rc reason=$reason with nothing removed; got rc=$RC removals=$(clear_removals) umount=$(called umount) out=[$(cut -c1-80 "$W/out")] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+  clear_inv "$label"
+}
+clear_world c-ok
+run_script clear
+if [ "$RC" = 0 ] && [ "$(cat "$W/out")" = "wipe_assert clear ok snapshot=cleared" ] && [ ! -s "$W/err" ] && [ "$(clear_removals)" = 1 ] && [ "$(called umount)" = 1 ] && [ "$(clear_detaches)" = 1 ] \
+   && [ ! -e "$W/state/snap_up" ] && [ ! -e "$W/state/mounted" ] && [ ! -e "$W/state/loop" ]; then
+  ok "C01 a leftover snapshot of the typed device is cleared: ONE remove of the pinned name (--retry), ONE umount, ONE loop detach, nothing left -> rc 0, snapshot=cleared"
+else no "C01 clear failed: rc=$RC out=[$(cat "$W/out")] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)] removals=$(clear_removals) umount=$(called umount) detaches=$(clear_detaches)"; fi
+clear_inv "C01"
+if grep -qE "^dmsetup	remove	--retry	git-data-pt-snap$" "$W/state/argv" && ! grep -E "^dmsetup	remove" "$W/state/argv" | grep -vq "git-data-pt-snap$"; then
+  ok "C01 the only dmsetup remove ever sent names the pinned snapshot (git-data-pt-snap); no name comes from an input"
+else no "C01 a dmsetup remove named something else"; fi
+world c-absent
+run_script clear
+if [ "$RC" = 0 ] && [ "$(cat "$W/out")" = "wipe_assert clear ok snapshot=absent" ] && [ "$(clear_removals)" = 0 ] && [ "$(called umount)" = 0 ] && [ "$(clear_detaches)" = 0 ]; then
+  ok "C02 no leftover snapshot -> rc 0, snapshot=absent, nothing removed (idempotent)"
+else no "C02 absent case: rc=$RC out=[$(cat "$W/out")] removals=$(clear_removals)"; fi
+clear_inv "C02"
+clear_world c-origin-other
+printf '0 2097152 snapshot 8:32 7:99 N 8\n' > "$W/dm_table"
+run_script clear
+clear_expect_refuse "C03 a snapshot whose origin is another device is not ours" 43 snapshot_not_ours
+clear_world c-cow-notloop
+printf '0 2097152 snapshot 8:16 8:48 N 8\n' > "$W/dm_table"
+run_script clear
+clear_expect_refuse "C04 a snapshot whose COW is not a loop device (major 7) is not ours" 43 snapshot_not_ours
+clear_world c-persistent
+printf '0 2097152 snapshot 8:16 7:99 P 8\n' > "$W/dm_table"
+run_script clear
+clear_expect_refuse "C04b a PERSISTENT snapshot (P) is not ours: ours is always N" 43 snapshot_not_ours
+clear_world c-mnt-outside
+printf '/mnt/elsewhere/mnt\n' > "$W/clear_mnt"
+run_script clear
+clear_expect_refuse "C05 a mount outside the pinned /dev/shm/tmp.<id>/mnt shape is not ours" 43 snapshot_not_ours
+clear_world c-mnt-two
+printf '%s/mnt\n%s/mnt\n' "$CLR_DIR" "/dev/shm/tmp.ZyXwVuTsRq" > "$W/clear_mnt"
+run_script clear
+clear_expect_refuse "C06 two mounts of the snapshot are not ours" 43 snapshot_not_ours
+clear_world c-loop-backing
+printf '/dev/loop99 /var/tmp/cow\n' > "$W/losetup_l"
+run_script clear
+clear_expect_refuse "C07 a loop device backed by a file outside the pinned /dev/shm/tmp.<id>/cow is not ours" 43 snapshot_not_ours
+clear_world c-loop-absent
+printf '/dev/loop5 %s/cow\n' "$CLR_DIR" > "$W/losetup_l"
+run_script clear
+clear_expect_refuse "C08 a COW loop the loop listing does not show is not ours" 43 snapshot_not_ours
+clear_world c-dirs-differ
+printf '/dev/loop99 /dev/shm/tmp.ZyXwVuTsRq/cow\n' > "$W/losetup_l"
+run_script clear
+clear_expect_refuse "C09 a mount and a COW file in DIFFERENT directories are not ours" 43 snapshot_not_ours
+clear_world c-open
+printf '/proc/4242/fd/7\n' > "$W/open_handles"
+run_script clear
+clear_expect_refuse "C10 a process holding the snapshot open is never torn down underneath" 27 handle_open
+clear_world c-lname
+run_script clear
+if grep -q "^find	/proc	.*	-lname	/dev/dm-3	" "$W/state/argv"; then ok "C10b the open-handle scan names the snapshot's own device node (/dev/dm-N from the pinned name's blkdevname), not an input"
+else no "C10b the /proc scan did not name /dev/dm-3: $(grep '^find	/proc' "$W/state/argv" | tr '\t' ' ' | cut -c1-200)"; fi
+clear_world c-notluks-host
+printf '0\n' > "$W/isluks_rc"
+run_script clear
+clear_expect_refuse "C11 the typed device being LUKS (or unknown) stops a clear exactly as it stops a wipe" 23 luks_or_unknown
+clear_world c-args
+run_script clear WIPE_ROW_DT=1760000000
+if [ "$RC" = 16 ] && [[ "$(tail -n 1 "$W/err")" == "wipe-assert: rc=16 reason=arg_pre_only"* ]] && [ "$(clear_removals)" = 0 ]; then ok "C12 a clear that is handed a boot row date or a listing mode refuses (arg_pre_only), nothing removed"
+else no "C12 clear accepted pre-only inputs: rc=$RC"; fi
+clear_inv "C12"
+clear_world c-remove-fails
+touch "$W/fail_remove"
+run_script clear
+if [ "$RC" = 36 ] && [ ! -s "$W/out" ] && [[ "$(tail -n 1 "$W/err")" == "wipe-assert: rc=36 reason=teardown_failed"* ]]; then ok "C13 a remove that fails is wipe_snapshot_teardown_failed (rc 36), never a success"
+else no "C13 failed remove: rc=$RC out=[$(cat "$W/out")] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+clear_inv "C13"
+clear_world c-umount-fails
+touch "$W/fail_umount"
+run_script clear
+if [ "$RC" = 36 ] && [ ! -s "$W/out" ] && [[ "$(tail -n 1 "$W/err")" == "wipe-assert: rc=36 reason=teardown_failed"* ]] && [ "$(clear_removals)" = 1 ]; then ok "C14 a failed umount is rc 36 and the remaining steps are still attempted (collect-then-continue)"
+else no "C14 failed umount: rc=$RC removals=$(clear_removals) err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+clear_inv "C14"
+clear_world c-written
+printf '0 0 0 0 0 0 8 0 0 0 0 0 0 0\n' > "$W/written_on_umount"
+run_script clear
+if [ "$RC" = 29 ] && [ ! -s "$W/out" ] && [[ "$(tail -n 1 "$W/err")" == "wipe-assert: rc=29 reason=sectors_written"* ]]; then ok "C15 origin write counters that moved during the clear are wipe_device_written (rc 29): the clear proves the origin untouched after the removal"
+else no "C15 written origin: rc=$RC err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+clear_inv "C15"
+clear_world c-ro-lost
+printf '0\n' > "$W/ro"
+run_script clear
+clear_expect_refuse "C16 an origin whose kernel read-only flag is not 1 is wipe_ro_flag_lost, nothing removed" 30 ro_flag_lost
 # ── the layout-independent signal: off-list, non-empty, unparseable ──────────────────────────────
 world a-offdir
 mkdir -p "$W/tree/$CORPUS_TOP_DIR"
@@ -1104,6 +1233,7 @@ caught_rc()   { # <rc> — true when the run is refused with that rc and prints 
 caught_16() { caught_rc 16; }
 caught_34() { caught_rc 34; }
 caught_29() { caught_rc 29; }
+caught_30() { caught_rc 30; }
 caught_23() { caught_rc 23; }
 caught_33() { caught_rc 33; }
 caught_15() { caught_rc 15; }
@@ -1177,6 +1307,28 @@ mutant_row m24-store-root-count-hardcoded '        SRR="$n" ;;' '        SRR=0 ;
 mutant_row m25-store-root-lock-counted '! \( -type f \( -name '"'"'.*.init.lock'"'"' -o -name '"'"'.init.lock'"'"' \) \) ! \( -type d -name lost+found -empty \) -printf x | wc -c)" || die 42 store_root_unreadable' '-printf x | wc -c)" || die 42 store_root_unreadable' set_srlocks pre caught_srr0
 mutant_row m26-store-root-symlink-accepted '      *) die 42 store_root_unreadable ;;' '      *) SRR=0 ;;' set_srsymlink pre caught_42
 mutant_row m27-lock-residue-repos-dropped '      LOCKS=$((LOCKS + lk))' '      LOCKS="$LOCKS_TOP"' set_lockres pre caught_lockres1
+# A1 (2026-10-15): the clear phase (CTO follow-up ruling, Guard 9 rows 7-13). Each edit makes a leftover this file did not
+# make removable, or lets a touched origin / a failed removal pass; the named clear case must go RED against it.
+set_cl_ok()      { clear_state; }
+set_cl_origin()  { clear_state; printf '0 2097152 snapshot 8:32 7:99 N 8\n' > "$W/dm_table"; }
+set_cl_persist() { clear_state; printf '0 2097152 snapshot 8:16 7:99 P 8\n' > "$W/dm_table"; }
+set_cl_dirs()    { clear_state; printf '/dev/loop99 /dev/shm/tmp.ZyXwVuTsRq/cow\n' > "$W/losetup_l"; }
+set_cl_open()    { clear_state; printf '/proc/4242/fd/7\n' > "$W/open_handles"; }
+set_cl_written() { clear_state; printf '0 0 0 0 0 0 8 0 0 0 0 0 0 0\n' > "$W/written_on_umount"; }
+set_cl_ro()      { clear_state; printf '0\n' > "$W/ro"; }
+set_cl_rmfail()  { clear_state; touch "$W/fail_remove"; }
+caught_43() { caught_rc 43; }
+caught_27c() { caught_rc 27; }
+caught_lname() { [ "$RC" = 0 ] && grep -q "^find	/proc	.*	-lname	/dev/dm-3	" "$W/state/argv"; }
+caught_36td() { [ "$RC" = 36 ] && [ ! -s "$W/out" ] && [[ "$(head -n 1 "$W/err")" == "wipe-assert: rc=36 reason=teardown_failed"* ]]; }
+caught_clear_ok() { [ "$RC" = 0 ] && [ "$(cat "$W/out")" = "wipe_assert clear ok snapshot=cleared" ]; }
+mutant_row m50-clear-origin-unchecked '[ "$d" = "$(devno_dec "$MM")" ] && ' '' set_cl_origin clear caught_43
+mutant_row m52-clear-persistent-accepted ' [ "$f" = N ] &&' '' set_cl_persist clear caught_43
+mutant_row m53-clear-dirs-unchecked 'if [ -n "$mntdir" ] && [ "$mntdir" != "$cowdir" ]; then die 43 snapshot_not_ours; fi' ':' set_cl_dirs clear caught_43
+mutant_row m54-clear-handles-unchecked '-lname "/dev/$dmn" -print -quit)" || rc=$?' '-lname "/dev/never" -print -quit)" || rc=$?' set_cl_ok clear caught_lname
+mutant_row m55-clear-counters-unchecked 'case "$W0" in "0 0") : ;; *) die 29 sectors_written ;; esac' ':' set_cl_written clear caught_29
+mutant_row m56-clear-ro-unchecked 'case "$ro" in 1) : ;; *) die 30 ro_flag_lost ;; esac' ':' set_cl_ro clear caught_30
+mutant_row m57-clear-removal-swallowed 'if ! wa_release; then die 36 teardown_failed; fi' 'wa_release || true' set_cl_rmfail clear caught_36td
 mutant_row m20-byid-stat-fails-open '    while byid_present; do' '    while stat -- "$BYID"; do' set_stat_denied post_detach caught_40
 mutant_row m21-freeze-by-test-e '    fz="$(find -H "$OLD_ROOT" -mindepth 1 -maxdepth 1 -name .cutover-freeze -print)" || die 16 freeze_probe' '    fz=""; [ ! -e "$OLD_ROOT/.cutover-freeze" ] || fz=x' set_noroot pre caught_16
 # M22-M33: the selector mutants (each aims one call at the wrong operand or drops/adds one flag): the clean run's
@@ -1284,6 +1436,24 @@ else no "B06 post_detach: rc=$VRC"; fi
 run_verb b07 "wipe_assert finish ok byid=gone mapper_read=ok store_root=ok" 0 "${V_POST[@]/post_detach/finish}"
 if [ "$VRC" = 0 ]; then ok "B07 finish: exit 0"; else no "B07 finish: rc=$VRC"; fi
 
+# A1 (2026-10-15) phase=clear through the cutover verb: its own fixed answer shape, a 120 s bound, no pre-only input
+V_CLEAR=(WIPE_PHASE=clear WIPE_VOLUME_ID="$ID_T" WIPE_LUKS_VOLUME_ID="$ID_L" WIPE_SERVER_ID="$ID_S")
+run_verb b20 "wipe_assert clear ok snapshot=cleared" 0 "${V_CLEAR[@]}"
+if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT clear ok snapshot=cleared" "$TL/out" && has_store ok && [ "$(paste -sd' ' "$TL/timeouts" | awk '{print $NF}')" = 120 ] && ! grep -q 'WIPE_ROW_DT\|WIPE_LISTING' "$TL/cmd" \
+   && grep -qxF "wipe_assert=wipe_assert clear ok snapshot=cleared" "$TL/gh_output"; then
+  ok "B20 clear: exit 0, 120 s, the answer is logged and written to GITHUB_OUTPUT verbatim, no pre-only input is sent"
+else no "B20 clear: rc=$VRC out=[$(tr '\n' '|' < "$TL/out" | cut -c1-200)]"; fi
+run_verb b21 "wipe_assert clear ok snapshot=absent" 0 "${V_CLEAR[@]}"
+if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT clear ok snapshot=absent" "$TL/out"; then ok "B21 clear with no leftover: exit 0, snapshot=absent"; else no "B21 clear absent: rc=$VRC"; fi
+run_verb b22 "wipe_assert clear ok snapshot=wiped" 0 "${V_CLEAR[@]}"
+if [ "$VRC" != 0 ] && ! grep -q "WIPE_ASSERT clear" "$TL/out"; then ok "B22 an answer outside the two fixed clear words is never accepted"; else no "B22 clear accepted an off-shape answer: rc=$VRC"; fi
+run_verb b23 "wipe_assert pre ok layout_signal=ok" 0 "${V_CLEAR[@]}"
+if [ "$VRC" != 0 ] && ! grep -q "WIPE_ASSERT" "$TL/out"; then ok "B23 a pre-shaped answer cannot satisfy a clear call"; else no "B23 a pre answer satisfied a clear call: rc=$VRC"; fi
+run_verb b24 - 43 "${V_CLEAR[@]}"
+if [ "$VRC" = 5 ] && has_store wipe_snapshot_not_ours; then ok "B24 clear: script rc 43 -> exit 5, verdict=wipe_snapshot_not_ours"; else no "B24 clear rc 43: rc=$VRC"; fi
+run_verb b25 "wipe_assert clear ok snapshot=cleared" 0 "${V_CLEAR[@]}" WIPE_LISTING=run
+if [ "$VRC" != 0 ] && grep -q "arg_pre_only" "$TL/out"; then ok "B25 clear refuses a listing mode input (arg_pre_only): the pre-only inputs are not accepted"; else no "B25 clear accepted WIPE_LISTING: rc=$VRC"; fi
+
 # row dt as the ISO form the Better Stack row carries
 run_verb b08 "$PRE_ANS" 0 "${V_PRE[@]/WIPE_ROW_DT=$ROWDT/WIPE_ROW_DT=2026-10-11 12:51:03}"
 _iso_epoch="$(date -u -d '2026-10-11 12:51:03' +%s)"
@@ -1300,6 +1470,7 @@ declare -A WORD=(
   [33]=wipe_boot_layout_signal_absent [34]=wipe_boot_layout_signal_offlist [35]=wipe_boot_layout_signal_unparseable
   [36]=wipe_snapshot_teardown_failed [37]=wipe_plaintext_not_empty [38]=wipe_luks_identity_mismatch
   [40]=wipe_device_still_attached [41]=wipe_mapper_read_failed [42]=wipe_store_root_unreadable
+  [43]=wipe_snapshot_not_ours
 )
 for rc in "${!WORD[@]}"; do
   run_verb "r$rc" - "$rc" "${V_PRE[@]}"
@@ -1638,12 +1809,12 @@ fi
 # FLOOR — self-contained: bash builtins and this suite's own counters, reported by printf + exit and
 # never through ok()/no() (ADR-193). Each bound is a literal on the line directly above its `if`.
 # ══════════════════════════════════════════════════════════════════════════════════════════
-EXPECTED_INVARIANT_RUNS=97
+EXPECTED_INVARIANT_RUNS=114
 if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=607
+MIN_ASSERTIONS=691
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1
