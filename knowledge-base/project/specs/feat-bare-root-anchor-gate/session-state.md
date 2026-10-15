@@ -37,3 +37,8 @@
 - Implementation commit: 6fc8f59869 pushed to origin/feat-bare-root-anchor-gate (PR #10386 draft)
 - All suites green: bare-root-cwd-guard.test.sh 30/30, session-rules-loader.test.sh 35/35, git-repo-readiness-diag.test.sh 8/8, git-lock-marker-telemetry.test.ts 32/32, probe verified.
 - NEXT: soleur:review (Step 4) → resolve findings → soleur:qa → soleur:compound → soleur:ship → merge → postmerge → DONE
+
+## Review Phase (in progress)
+- Review commit 2: review fixes pushed. Security seat: clean except P3-1 (fixed) + P3-2 sanitizer gap (pre-existing codebase-wide: DEL/U+2028/U+2029 pass `tr -d '\000-\037'` — follow-up issue to file). Simplicity+arch seat: A-P2 fixed (diag env scrub); A-P3s noted (guard↔heal parity unpinned — acknowledge; MARKER_RE bare-token vs loader space asymmetry — note only).
+- Test-design seat (b880e82a) still running.
+- NEXT: collect test-design seat → file P3-2 follow-up issue → soleur:qa → soleur:compound → soleur:ship → merge → postmerge → DONE
