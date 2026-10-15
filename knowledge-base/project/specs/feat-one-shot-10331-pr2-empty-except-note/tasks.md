@@ -40,7 +40,7 @@ Four suites (proxy, founder-check, resolve-debt, scan-ancestor); per-suite copie
 
 - 2.1 Add `_note(exc, site)` (guard `(OSError, ValueError)`; proxy adds `RuntimeError` and routes through the unmodified `log()`) to proxy, founder-check, resolve-debt, scan-ancestor
 - 2.2 Call it from the nine paths in the plan's table (proxy 5 via a deferred list emitted after the kill ladder and before `child exited`, founder-check 2, resolve-debt 1, scan-ancestor 1)
-- 2.3 Add greppable justification comments to the seven silent handlers (proxy `escaped_tree_in`, `wait_group_empty`, `teardown` stdin-wait and SIGTERM; scan-ancestor `reconfigure`; redact-engine two decode probes citing ADR-095); keep `pass`/`continue`, no `noqa`
+- 2.3 Add greppable justification comments to the seven silent handlers (proxy `escaped_tree_in`, `wait_group_empty`, `teardown` stdin-wait and SIGTERM; scan-ancestor `reconfigure`; redact-engine two decode probes citing ADR-095); keep `pass`/`continue`, no `noqa`; the comment sits INSIDE the handler (trailing on the `except` line or within the body), because CodeQL only counts comments from the `except` line to the last body statement
 - 2.4 Do not touch fail-closed arms, the proxy `log()` line, or founder-check's imports
 
 ## Phase 3 - Verify

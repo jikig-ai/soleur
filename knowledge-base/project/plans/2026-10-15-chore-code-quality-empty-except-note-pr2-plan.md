@@ -13,6 +13,29 @@ requires_cpo_signoff: true
 
 # chore(quality): guarded class-name-only exception notes in shipped plugin scripts (PR2 of #10331)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-15. **Sections enhanced:** Research Insights, Observability, Sharp Edges. **Inputs:** the six-seat plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO devex), the gdpr-gate run, eleven CTO rulings, and the mechanical halts of this skill (4.6 user-brand, 4.7 observability, 4.8 PAT-shaped variables, 4.11 guard contract, 4.12 scope check; 4.5, 4.55, 4.9 and 4.10 do not fire: no network symptom, no downtime-inducing change, no UI surface, no store or `.tf`/migration file). No further agent fan-out was run: the plan is small (one subsystem, nine files), the review panel already covered the review, research and flow lenses, and every claim the plan rests on was re-verified live below.
+
+### Key improvements
+
+1. The CodeQL `py/empty-except` unknown is closed at plan time from the query source, and the design consequence (a comment inside the handler suffices) is now explicit, including where the comment must sit.
+2. Two review-found P1 bugs are designed out: notes on a clean proxy teardown (sigterm and stdin-wait stay silent) and a note ahead of `os.killpg` in signal context (deferred emit, widened proxy guard).
+3. The discoverability probe can now fail on the feature (`PASS: T-note`) instead of passing on the unchanged tree.
+
+### Live verification (commands run 2026-10-15)
+
+```text
+gh api repos/github/codeql/contents/python/ql/src/Exceptions/EmptyExcept.ql  -> no_comment(): comment start line >= except line and end line <= last body item end; empty_except(): all body stmts are Pass
+gh pr view 10342 --json state,title,mergedAt  -> MERGED 2026-10-15T11:15:41Z
+git merge-base --is-ancestor 084a5b0dda origin/main  -> on main
+gh issue view 7980  -> CLOSED (the CLO attestation's issue)
+gh label list: type/chore, priority/p3-low, type/security, deferred-scope-out, priority/p2-medium all exist; milestone "Post-MVP / Later" is open
+uvx ruff==0.17.0 ... (derivation command)  -> 30 findings; S110/S112 only in the five target scripts (16)
+bash plugins/soleur/test/resolve-debt.test.sh  -> 3.6 s, Passed: 50, ALL TESTS PASSED
+python3 scripts/lint-guard-contract.py <plan>  -> 1 guard entry; scripts/lint-infra-no-human-steps.py <plan> -> OK
+```
+
 ## Overview
 
 Second slice of the #10331 umbrella (GitHub Code Quality triage). PR1 merged on 2026-10-15
@@ -411,7 +434,11 @@ measured 13 s and the proxy suite is far longer). The expected literal is the ne
 `PASS: T-note` line, which does not exist on the unchanged tree, so the probe can fail on the feature
 (the generic `ALL TESTS PASSED` line would pass with the new cases deleted). A one-line `python3 -c`
 probe was rejected: Check 10 refuses `;` anywhere in the command, and a loader one-liner needs
-several. The command contains none of the shell-active characters Check 10 rejects.
+several. The command contains none of the shell-active characters Check 10 rejects. The command is
+suite-shaped, which deepen-plan 4.7 flags by pattern; the argument for keeping it: the signal is a
+rare runtime event on a customer terminal that cannot be triggered without a harness, this is the
+smallest of the four suites, and it runs at 3.6 s against the 15 s cap, so the cap condition the
+pattern is a proxy for does not bite.
 
 ## Guard Contract
 
@@ -528,6 +555,7 @@ by the Phase 3 scratch-copy spot-check, not by a CI gate.
 - Guard 1's mutation rows touch the proxy's `teardown`, which contains `os.killpg`. Apply every mutant to a scratch copy, never in place and never by inverting a signalling line; follow `plugins/soleur/skills/work/references/work-scratch-sandboxes.md` (section "Mutating a signalling or file-removing helper").
 - `redact-sentinel.test.sh` and `resolve-debt.test.sh` capture `2>&1` into one stream, and `preflight-founder-check.test.ts` and `scan-ancestor-signal-helpers.test.sh` assert on stderr content, so a new stderr line can land inside assertions written before PR2. Run each suite on the unchanged tree first (Phase 0) and diff the captured outputs after Phase 2.
 - CodeQL `py/empty-except` treatment is read from the query source on `main` (comment or non-`pass` body clears it); Code Quality may run a pinned older pack, so do not state in the PR body that CodeQL is clean before a scan has run on the branch. Ruff `noqa` is not honoured by CodeQL and is not used.
+- Place each justification comment INSIDE the handler (a trailing comment on the `except` line, or a line within the body): the CodeQL `no_comment` predicate only counts comments from the `except` line to the end of its last body statement, so a comment on the line above the `except` does not clear the alert. Keep the existing trailing comment on scan-ancestor's `flush_stdout` handler when its `pass` becomes a `_note` call.
 - The discoverability command was executed at plan time (3.6 s) and contains none of the shell-active characters preflight Check 10 rejects; re-run it after Phase 2, because the new `PASS: T-note` line only exists then.
 - `plugins/soleur/test/resolve-debt.test.sh` is named by open code-review issue #8659 (EXIT-trap composition); add assertions without touching its trap setup.
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails `deepen-plan` Phase 4.6; this plan's section is filled.
