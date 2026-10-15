@@ -6350,15 +6350,14 @@ echo "=== stage S5: Guard 1 and Guard 2 rows for the apply workflow and the regi
 # through a variable, an `eval` or a `bash -c` string whose `htpasswd` is not followed by an option on the same line, and an invocation hidden
 # behind ` # ` inside a quoted string earlier on the same line.
 #
-# THE ONE-PR-LATER RESIDUAL. This PR converts only the registry-luks-recut rehearsal step (one site). The registry template
-# (apps/web-platform/infra/cloud-init-registry.yml: the `_htp_verify` probe and the two boot-step htpasswd lines) ships as its own follow-up PR
-# because merging that file replaces the production registry host unattended, so its three invocations stay argv-form here and are carried as an
-# EXPLICIT RESIDUAL ALLOWLIST (S6_ALLOW below, named by file and the whole stripped line). THE ALLOWLIST SHRINKS BY DELETION ONLY: the follow-up
-# registry PR deletes it, and an entry the scan no longer sees is itself RED ("stale-allowlist"), so converting a site without deleting its entry
-# fails here. The ceiling row pins the entry count, so growing the allowlist is an edit to a literal this stage asserts, never a quiet addition.
+# NO RESIDUAL. The registry template (apps/web-platform/infra/cloud-init-registry.yml: the `_htp_verify` probe and the two boot-step htpasswd lines)
+# was carried here as an explicit residual allowlist (S6_ALLOW) while its conversion waited for its own PR, because merging that file replaces the
+# production registry host unattended. #10119 converted all three sites and DELETED the allowlist: S6_ALLOW is empty and S6_ALLOW_CEIL is 0, so a site
+# that goes back to argv form is `bad:<file>` with no entry to hide behind. The allowlist machinery stays (an entry the scan no longer sees is RED,
+# "stale-allowlist"; the ceiling row pins the entry count) so growing it again is an edit to literals this stage asserts, never a quiet addition.
 #
-# FLOOR. The scan saw 4 invocations in 2 files on the real tree: 1 in the workflow + 3 residual in the registry template. The floor is 4 sites
-# in 2 files; it is also the count after the follow-up (workflow 1 + boot step 2 + probe 1), so it does not move when the allowlist is deleted.
+# FLOOR. The scan sees 4 invocations in 2 files on the real tree: 1 in the workflow + 3 in the registry template (the boot step's two entries and the
+# probe), all stdin form. The floor is 4 sites in 2 files; it did not move when the allowlist was deleted.
 # A scan that sees fewer (renamed binary, moved roots, a broken regex) is RED, never a clean bill.
 #
 # The executable rows run the REAL step text (PyYAML-extracted from the workflow, up to and including the htpasswd line) under
@@ -6369,17 +6368,17 @@ echo "=== stage S5: Guard 1 and Guard 2 rows for the apply workflow and the regi
 # =====================================================================================
 S6_WF=".github/workflows/apply-web-platform-infra.yml"
 S6_REG="apps/web-platform/infra/cloud-init-registry.yml"
-S6_SITE_FLOOR=4; S6_FILE_FLOOR=2; S6_ALLOW_CEIL=3
+S6_SITE_FLOOR=4; S6_FILE_FLOOR=2; S6_ALLOW_CEIL=0
 S6_WF_LINE="$(cat <<'S6EOF'
 printf '%s' "$RP" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin "$RU" > "${RUNNER_TEMP}/zot/htpasswd"
 S6EOF
 )"
-# The residual allowlist: <file><TAB><the whole stripped line>. The follow-up registry PR deletes every entry.
-S6_ALLOW=(
-"$S6_REG	htpasswd -vb /etc/zot/htpasswd \"\$1\" \"\$2\" >/dev/null 2>&1"
-"$S6_REG	htpasswd -Bbn '\${zot_pull_user}' \"\$ZOT_PULL_TOKEN\"  > /etc/zot/htpasswd"
-"$S6_REG	htpasswd -Bbn '\${zot_push_user}' \"\$ZOT_PUSH_TOKEN\" >> /etc/zot/htpasswd"
-)
+# The residual allowlist: <file><TAB><the whole stripped line>. EMPTY since #10119 deleted the three registry entries; it shrinks by deletion only.
+S6_ALLOW=()
+# The three registry-template sites, by identity (file and the whole stripped line), all stdin form.
+S6_REG_PROBE="printf '%s' \"\$2\" | htpasswd -vi /etc/zot/htpasswd \"\$1\" >/dev/null 2>&1"
+S6_REG_PULL="printf '%s' \"\$ZOT_PULL_TOKEN\" | htpasswd -Bin '\${zot_pull_user}'  > /etc/zot/htpasswd"
+S6_REG_PUSH="printf '%s' \"\$ZOT_PUSH_TOKEN\" | htpasswd -Bin '\${zot_push_user}' >> /etc/zot/htpasswd"
 S6_ERE='(^|[^[:alnum:]_./-])htpasswd[[:space:]]+-[A-Za-z]'
 S6_ERE_INV='(^|[^[:alnum:]_./-])htpasswd([[:space:]]+-[A-Za-z]+)+'
 
@@ -6445,8 +6444,8 @@ S6_REAL_REASONS="$S6_J_REASONS"; S6_REAL_SITES="$S6_J_SITES"; S6_REAL_FILES="$S6
 S6_REAL_SCAN="$(s6_scan "$REPO_ROOT")"
 if [[ -z "$S6_REAL_REASONS" ]]; then row "S6 Guard 3: no tracked htpasswd invocation outside the residual allowlist carries a password on argv ($S6_REAL_SITES invocations in $S6_REAL_FILES files, derived by git grep over apps/ scripts/ .github/)" ok
 else row "S6 Guard 3: an htpasswd invocation carries a password on argv outside the residual allowlist, or the workflow site or an allowlist entry drifted" fail "reasons='$S6_REAL_REASONS' sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
-if [[ "$S6_REAL_SITES" -ge "$S6_SITE_FLOOR" && "$S6_REAL_FILES" -ge "$S6_FILE_FLOOR" && "$S6_REAL_SITES" -eq 4 && "$S6_REAL_FILES" -eq 2 ]]; then row "S6 floor: the scan saw $S6_REAL_SITES invocations in $S6_REAL_FILES files (workflow 1 + registry template 3: the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files, and is the same after the follow-up converts the registry sites)" ok
-else row "S6 floor: the scan saw an unexpected population (the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files; exactly 4 in 2 are expected until the follow-up registry PR)" fail "sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
+if [[ "$S6_REAL_SITES" -ge "$S6_SITE_FLOOR" && "$S6_REAL_FILES" -ge "$S6_FILE_FLOOR" && "$S6_REAL_SITES" -eq 4 && "$S6_REAL_FILES" -eq 2 ]]; then row "S6 floor: the scan saw $S6_REAL_SITES invocations in $S6_REAL_FILES files (workflow 1 + registry template 3: the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files)" ok
+else row "S6 floor: the scan saw an unexpected population (the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files; exactly 4 in 2 are expected)" fail "sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
 # One anchored row per site: identity (file and the whole stripped line), never only a count.
 s6_site_is() { # <file> <whole line> <expect-b: 0|1>: exactly one record of <file> has that line, and its options hold a lowercase b iff <expect-b>
   awk -F'\t' -v f="$1" -v c="$2" -v b="$3" '$1 == f { n++; if ($4 == c && (($3 ~ /b/) ? 1 : 0) == b) ok++ } END { exit !(n == 1 && ok == 1) }' <<<"$S6_REAL_SCAN"
@@ -6456,16 +6455,17 @@ s6_site_in_file_is() { # <file> <whole line> <expect-b>: the file holds exactly 
 }
 if s6_site_is "$S6_WF" "$S6_WF_LINE" 0; then row "S6 site (workflow): the registry-luks-recut rehearsal step's single htpasswd invocation is exactly the stdin form with docker's own -i, and its options hold no b" ok
 else row "S6 site (workflow): the rehearsal step's htpasswd line is not the exact stdin form (printf '%s' \"\$RP\" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin \"\$RU\" > ...)" fail "records=$(awk -F'\t' -v f="$S6_WF" '$1 == f' <<<"$S6_REAL_SCAN" | cut -f2,3 | tr '\t\n' ' :')"; fi
-S6_ALLOW_I=0
-for a in "${S6_ALLOW[@]}"; do
-  S6_ALLOW_I=$((S6_ALLOW_I + 1)); a_file="${a%%$'\t'*}"; a_line="${a#*$'\t'}"
-  case "$S6_ALLOW_I" in 1) a_name="the _htp_verify probe (htpasswd -vb)" ;; 2) a_name="the boot step's pull entry (htpasswd -Bbn)" ;; *) a_name="the boot step's push entry (htpasswd -Bbn)" ;; esac
-  if s6_site_in_file_is "$a_file" "$a_line" 1; then row "S6 residual site $S6_ALLOW_I (cloud-init-registry.yml): $a_name is still argv-form, present exactly once, and named by the allowlist (the follow-up registry PR converts it and deletes the entry)" ok
-  else row "S6 residual site $S6_ALLOW_I (cloud-init-registry.yml): $a_name is not present exactly once in its allowlisted form (converted without deleting its allowlist entry, or moved)" fail "line=$(cut -c1-60 <<<"$a_line")"; fi
+S6_SITE_I=0
+for a_line in "$S6_REG_PROBE" "$S6_REG_PULL" "$S6_REG_PUSH"; do
+  S6_SITE_I=$((S6_SITE_I + 1))
+  case "$S6_SITE_I" in 1) a_name="the _htp_verify probe (htpasswd -vi, password piped from printf)" ;; 2) a_name="the boot step's pull entry (htpasswd -Bin, creates the file)" ;; *) a_name="the boot step's push entry (htpasswd -Bin, appends)" ;; esac
+  if s6_site_in_file_is "$S6_REG" "$a_line" 0; then row "S6 registry site $S6_SITE_I (cloud-init-registry.yml): $a_name is the stdin form, present exactly once, and its options hold no b" ok
+  else row "S6 registry site $S6_SITE_I (cloud-init-registry.yml): $a_name is not present exactly once in its stdin form" fail "line=$(cut -c1-70 <<<"$a_line")"; fi
 done
-S6_ALLOW_FILES="$(for a in "${S6_ALLOW[@]}"; do printf '%s\n' "${a%%$'\t'*}"; done | sort -u)"
-if [[ "${#S6_ALLOW[@]}" -eq "$S6_ALLOW_CEIL" && "$S6_ALLOW_FILES" == "$S6_REG" ]]; then row "S6 allowlist ceiling: exactly $S6_ALLOW_CEIL residual entries, all in $S6_REG (it shrinks by deletion only; the follow-up registry PR deletes it)" ok
-else row "S6 allowlist ceiling: the residual allowlist grew or spread beyond the three registry-template entries" fail "entries=${#S6_ALLOW[@]} files='${S6_ALLOW_FILES//$'\n'/,}'"; fi
+# The ceiling is a predicate over a count so a grow-by-one mutant can be judged by the SAME function: 0 passes, 1 must not.
+s6_ceiling_ok() { [[ "$1" -eq "$S6_ALLOW_CEIL" && "$S6_ALLOW_CEIL" -eq 0 ]]; }
+if s6_ceiling_ok "${#S6_ALLOW[@]}" && ! s6_ceiling_ok $((${#S6_ALLOW[@]} + 1)); then row "S6 allowlist ceiling: the residual allowlist is EMPTY (ceiling $S6_ALLOW_CEIL; #10119 deleted the three registry entries), and a grow-by-one allowlist is judged RED by the same predicate" ok
+else row "S6 allowlist ceiling: the residual allowlist is not empty, or the ceiling predicate accepts a grown allowlist" fail "entries=${#S6_ALLOW[@]} ceiling=$S6_ALLOW_CEIL"; fi
 
 # --- mutations, on a scratch repository ----------------------------------------------------
 # M1 reintroduce the argv form in the workflow site.
@@ -6488,7 +6488,7 @@ else row "S6 mutation 2: the fifth/sixth-site pair is judged wrong" fail "fifth=
 S6_M3="$(s6_fresh m3)"; assert_fixture_dir "$S6_M3"
 printf '%s\n' "    htpasswd -Bbn 'extra' \"\$EXTRA_TOKEN\" >> /etc/zot/htpasswd" >> "$S6_M3/$S6_REG"
 s6_judge "$S6_M3"
-if [[ "$S6_J_REASONS" == *"bad:$S6_REG"* && "$S6_J_SITES" -eq $((S6_REAL_SITES + 1)) ]]; then row "S6 mutation 3: a fourth argv htpasswd line added to the allowlisted registry file is RED (the allowlist names lines, not the file)" ok
+if [[ "$S6_J_REASONS" == *"bad:$S6_REG"* && "$S6_J_SITES" -eq $((S6_REAL_SITES + 1)) ]]; then row "S6 mutation 3: a fourth argv htpasswd line added to the registry file is RED (a site is judged by its line, never by its file)" ok
 else row "S6 mutation 3: an extra argv line in the allowlisted file slips through" fail "reasons='$S6_J_REASONS' sites=$S6_J_SITES"; fi
 # M4 every spelling of the password-on-argv option cluster is RED, in any order and combination.
 S6_M4="$(s6_fresh m4)"; assert_fixture_dir "$S6_M4"; mkdir -p "$S6_M4/scripts"; S6_M4_MISS=""
@@ -6504,14 +6504,29 @@ for f in "$S6_WF" "$S6_REG"; do sed -i -E 's/htpasswd([[:space:]]+-)/htpassw0\1/
 s6_judge "$S6_M5"
 if [[ "$S6_J_SITES" -eq 0 && "$S6_J_REASONS" == *floor* ]]; then row "S6 mutation 5: with the scanned binary renamed the scan sees 0 sites and the floor is RED" ok
 else row "S6 mutation 5: a scan that sees nothing is not RED" fail "sites=$S6_J_SITES reasons='$S6_J_REASONS'"; fi
-# M6 an allowlist entry the scan no longer sees is RED (the follow-up PR must delete the allowlist when it converts the sites). A compliant site is added so the floor is not what trips.
+# M6 an allowlist entry the scan no longer sees is RED. The real allowlist is empty now, so the mutant INJECTS an entry for a line the scan cannot see (the
+# retired argv probe line); a compliant extra site keeps the floor from being what trips.
 S6_M6="$(s6_fresh m6)"; assert_fixture_dir "$S6_M6"; mkdir -p "$S6_M6/scripts"
 printf '%s\n' "printf '%s' \"\$p\" | htpasswd -Bin svc > \"\$out\"" > "$S6_M6/scripts/zz-ok.sh"
-if s6_edit "$S6_M6/$S6_REG" '        htpasswd -vb /etc/zot/htpasswd "$1" "$2" >/dev/null 2>&1' '        printf '"'"'%s'"'"' "$2" | htpasswd -vi /etc/zot/htpasswd "$1" >/dev/null 2>&1'; then
-  s6_judge "$S6_M6"
-  if [[ "$S6_J_REASONS" == "stale-allowlist" ]]; then row "S6 mutation 6: converting a residual site without deleting its allowlist entry is RED (stale-allowlist, and nothing else)" ok
-  else row "S6 mutation 6: a stale allowlist entry is not (only) reported" fail "reasons='$S6_J_REASONS'"; fi
-else row "S6 mutation 6: the _htp_verify line was not found once with its exact text (re-anchor this row with the registry template)" fail "edit did not land"; fi
+S6_ALLOW_SAVE=("${S6_ALLOW[@]}")
+S6_ALLOW+=("$S6_REG	htpasswd -vb /etc/zot/htpasswd \"\$1\" \"\$2\" >/dev/null 2>&1")
+s6_judge "$S6_M6"; S6_M6_R="$S6_J_REASONS"
+S6_ALLOW=("${S6_ALLOW_SAVE[@]}")
+if [[ "$S6_M6_R" == "stale-allowlist" ]]; then row "S6 mutation 6: an allowlist entry for a site that is gone (the retired -vb probe line) is RED (stale-allowlist, and nothing else)" ok
+else row "S6 mutation 6: a stale allowlist entry is not (only) reported" fail "reasons='$S6_M6_R'"; fi
+# M8 reintroduce each of the three registry sites in argv form, one at a time, with NO allowlist to hide behind: each is RED by its own identity.
+S6_M8_MISS=""; S6_M8_I=0
+for old_new in \
+  "$S6_REG_PROBE"$'\x1f'"htpasswd -vb /etc/zot/htpasswd \"\$1\" \"\$2\" >/dev/null 2>&1" \
+  "$S6_REG_PULL"$'\x1f'"htpasswd -Bbn '\${zot_pull_user}' \"\$ZOT_PULL_TOKEN\"  > /etc/zot/htpasswd" \
+  "$S6_REG_PUSH"$'\x1f'"htpasswd -Bbn '\${zot_push_user}' \"\$ZOT_PUSH_TOKEN\" >> /etc/zot/htpasswd"; do
+  S6_M8_I=$((S6_M8_I + 1)); S6_M8="$(s6_fresh "m8-$S6_M8_I")"
+  if s6_edit "$S6_M8/$S6_REG" "${old_new%%$'\x1f'*}" "${old_new##*$'\x1f'}"; then
+    s6_judge "$S6_M8"; [[ "$S6_J_REASONS" == *"bad:$S6_REG"* ]] || S6_M8_MISS+=" site$S6_M8_I(not-red:$S6_J_REASONS)"
+  else S6_M8_MISS+=" site$S6_M8_I(edit-missed)"; fi
+done
+if [[ -z "$S6_M8_MISS" ]]; then row "S6 mutation 8: reintroducing the argv form at the probe, the pull entry or the push entry of the registry template is RED each time (the allowlist is empty, so nothing hides it)" ok
+else row "S6 mutation 8: an argv registry site is not caught" fail "missed:$S6_M8_MISS"; fi
 # Must-PASS: other order/case (-iB, -iBn, -vi, -Bin, -Bn), `-vb` only in comments (a whole-line comment, a trailing YAML comment), and files outside the population.
 S6_M7="$(s6_fresh m7)"; assert_fixture_dir "$S6_M7"; mkdir -p "$S6_M7/scripts" "$S6_M7/.github/workflows" "$S6_M7/apps/web-platform/infra" "$S6_M7/knowledge-base"
 { printf '%s\n' "printf '%s' \"\$p\" | htpasswd -iB svc > \"\$out\""
@@ -6526,6 +6541,95 @@ printf '%s\n' 'htpasswd -Bbn svc "$p"' > "$S6_M7/knowledge-base/zz-notes.sh"    
 s6_judge "$S6_M7"
 if [[ -z "$S6_J_REASONS" && "$S6_J_SITES" -eq $((S6_REAL_SITES + 3)) ]]; then row "S6 must-pass: other option orders and cases (-iB, -iBn, -vi), -vb only inside whole-line and trailing YAML comments, and a test file, a markdown file and a path outside the roots are GREEN (the three compliant sites are seen)" ok
 else row "S6 must-pass: a compliant or excluded form is flagged, or the compliant sites were not seen" fail "reasons='$S6_J_REASONS' sites=$S6_J_SITES want=$((S6_REAL_SITES + 3))"; fi
+
+# --- the registry template's two heartbeat curls (#10093): the URL is a stdin config line, never an argument ----------------------------------------------
+# PROPERTY. In cloud-init-registry.yml no `curl` argument holds a `*_heartbeat_url` interpolation: the URL's path is the secret, argv is readable by every local
+# user. DERIVATION: every LOGICAL line of the YAML (backslash continuations joined), whole-line comments dropped, with a `curl` command word AND `heartbeat_url`
+# is a heartbeat site; with the stdin feed `< <(printf 'url = "%s"\n' '<literal>')` removed, a site that still holds `heartbeat_url` is VIOLATING. The two converted
+# sites (disk, liveness) are asserted by IDENTITY. A comment line is never continued by a trailing backslash (bash does not continue it either), and an absolute
+# path (`/usr/bin/curl`) is a curl command word. NOT COVERED, named: a URL carried through a variable or an `eval`, another HTTP client (wget, python), a
+# template variable of another name, and any file other than the registry template.
+S6R_PY="$S6/regheartbeat.py"
+cat > "$S6R_PY" <<'S6RPY'
+import re, sys
+lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+i, out = 0, []
+while i < len(lines):
+    ln = i + 1
+    t = lines[i]
+    while not t.lstrip().startswith("#") and t.rstrip().endswith("\\") and i + 1 < len(lines):
+        i += 1
+        t = t.rstrip()[:-1] + " " + lines[i].strip()
+    i += 1
+    s = t.strip()
+    if s.startswith("#"):
+        continue
+    if not re.search(r"(^|[^A-Za-z0-9_.-])curl([^A-Za-z0-9_-]|$)", s) or "heartbeat_url" not in s:
+        continue
+    feed = re.sub(r"< <\(printf 'url = \"%s\"\\n' '[^']*'\)", "", s)
+    out.append(("V" if "heartbeat_url" in feed else "S", ln, s))
+for k, ln, s in out:
+    print("%s\t%d\t%s" % (k, ln, s))
+S6RPY
+S6R_DISK="curl --disable --noproxy '*' -g -fsS -m 10 --config - >/dev/null 2>&1 < <(printf 'url = \"%s\"\\n' '\${disk_heartbeat_url}') || PING_RC=\$?"
+S6R_LIVE="if curl --disable --noproxy '*' -g -fsS -m 10 -o /dev/null --config - < <(printf 'url = \"%s\"\\n' '\${liveness_heartbeat_url}'); then PING=ok; else PING=fail; fi"
+S6R_REAL_SCAN="" ; S6R_J_REASONS="unscanned"   # non-empty until s6r_judge has actually run: deleting the real-tree call must not read as GREEN
+s6r_judge() { # <root>: sets S6R_J_REASONS (empty = GREEN) and S6R_REAL_SCAN. Reasons: floor, argv, disk-identity, liveness-identity.
+  local scan sites
+  scan="$(python3 -I "$S6R_PY" "$1/$S6_REG" 2>/dev/null)" || { S6R_J_REASONS="scan-failed"; return 0; }
+  S6R_REAL_SCAN="$scan"; S6R_J_REASONS=""
+  sites="$(grep -c . <<<"$scan" || true)"
+  [[ "$sites" -ge 2 ]] || S6R_J_REASONS+=" floor"
+  grep -q $'^V\t' <<<"$scan" && S6R_J_REASONS+=" argv"
+  # ENVIRON, not -v: awk -v interprets backslash escapes, and these lines carry a literal \n inside the printf format.
+  [[ "$(S6R_C="$S6R_DISK" awk -F'\t' '$1 == "S" && $3 == ENVIRON["S6R_C"] { n++ } END { print n + 0 }' <<<"$scan")" == 1 ]] || S6R_J_REASONS+=" disk-identity"
+  [[ "$(S6R_C="$S6R_LIVE" awk -F'\t' '$1 == "S" && $3 == ENVIRON["S6R_C"] { n++ } END { print n + 0 }' <<<"$scan")" == 1 ]] || S6R_J_REASONS+=" liveness-identity"
+  S6R_J_REASONS="${S6R_J_REASONS# }"
+}
+s6r_judge "$REPO_ROOT"; S6R_REAL="$S6R_J_REASONS"
+if [[ -z "$S6R_REAL" ]]; then row "S6-REG heartbeat: the registry template's two heartbeat curls (disk, liveness) carry their URL only in the stdin config feed, never on curl argv, each by exact identity ($(grep -c . <<<"$S6R_REAL_SCAN") sites seen)" ok
+else row "S6-REG heartbeat: a registry heartbeat URL is on curl argv, or a converted site drifted from its exact stdin form" fail "reasons='$S6R_REAL'"; fi
+# M-R1 put the URL back on the curl argument list (disk): RED by the derived scan, not only by the identity row.
+S6R_M1="$(s6_fresh r1)"
+if s6_edit "$S6R_M1/$S6_REG" "curl --disable --noproxy '*' -g -fsS -m 10 --config - >/dev/null 2>&1 < <(printf 'url = \"%s\"\\n' '\${disk_heartbeat_url}') || PING_RC=\$?" "curl -fsS -m 10 \"\${disk_heartbeat_url}\" >/dev/null 2>&1 || PING_RC=\$?"; then
+  s6r_judge "$S6R_M1"
+  if [[ "$S6R_J_REASONS" == *argv* && "$S6R_J_REASONS" == *disk-identity* ]]; then row "S6-REG mutation 1: the disk heartbeat URL back on curl argv is RED (the derived scan and the site's identity)" ok
+  else row "S6-REG mutation 1: an argv heartbeat URL in the registry template is not caught" fail "reasons='$S6R_J_REASONS'"; fi
+else row "S6-REG mutation 1: the argv edit did not land on the disk heartbeat curl (re-anchor with the template)" fail "the converted disk curl was not found once"; fi
+# M-R2 argv URL on the liveness curl too, as a SECOND site, while the first stays compliant: identity per site, not a count.
+S6R_M2="$(s6_fresh r2)"
+printf '%s\n' "      curl -fsS -m 10 -o /dev/null \"\${liveness_heartbeat_url}\"" >> "$S6R_M2/$S6_REG"
+s6r_judge "$S6R_M2"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 2: an extra argv heartbeat curl appended after the compliant two is RED (a violating logical line, not a count)" ok
+else row "S6-REG mutation 2: an extra argv heartbeat curl slips through" fail "reasons='$S6R_J_REASONS'"; fi
+# M-R3 the scanned word renamed everywhere: the scan sees 0 sites and must be RED (floor), never a clean bill.
+S6R_M3="$(s6_fresh r3)"; sed -i 's/heartbeat_url/hb_url/g' "$S6R_M3/$S6_REG"
+s6r_judge "$S6R_M3"
+if [[ "$S6R_J_REASONS" == *floor* ]]; then row "S6-REG mutation 3: with the scanned variable renamed the scan sees no heartbeat site and the floor is RED" ok
+else row "S6-REG mutation 3: a scan that sees nothing is not RED" fail "reasons='$S6R_J_REASONS'"; fi
+# Must-pass: a whole-line comment naming curl and the variable is not a violation.
+S6R_M4="$(s6_fresh r4)"
+printf '%s\n' "      # curl -fsS -m 10 \"\${disk_heartbeat_url}\" would carry the URL on argv" >> "$S6R_M4/$S6_REG"
+s6r_judge "$S6R_M4"
+if [[ -z "$S6R_J_REASONS" ]]; then row "S6-REG must-pass: a whole-line comment that names curl and the heartbeat variable is not a violation" ok
+else row "S6-REG must-pass: a comment line is flagged" fail "reasons='$S6R_J_REASONS'"; fi
+
+# Evasions the first scanner missed: a comment line ending in a backslash swallowed the live line under it; an absolute curl path was not a command word.
+S6R_M5="$(s6_fresh r5)"
+printf '%s\n' "      # a note that ends in a backslash \\" "      curl -fsS -m 10 \"\${disk_heartbeat_url}\"" >> "$S6R_M5/$S6_REG"
+s6r_judge "$S6R_M5"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 5: a live argv curl under a comment line that ends in a backslash is RED (a comment is never continued)" ok
+else row "S6-REG mutation 5: a comment ending in a backslash hides the live line under it" fail "reasons='$S6R_J_REASONS'"; fi
+S6R_M6="$(s6_fresh r6)"
+printf '%s\n' "      /usr/bin/curl -fsS -m 10 \"\${liveness_heartbeat_url}\"" >> "$S6R_M6/$S6_REG"
+s6r_judge "$S6R_M6"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 6: an argv heartbeat curl spelled with an absolute path is RED" ok
+else row "S6-REG mutation 6: /usr/bin/curl is not seen as a curl command word" fail "reasons='$S6R_J_REASONS'"; fi
+S6R_M7="$(s6_fresh r7)"
+printf '%s\n' "      curl -fsS -m 10 \\" "        \"\${disk_heartbeat_url}\"" >> "$S6R_M7/$S6_REG"
+s6r_judge "$S6R_M7"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 7: an argv heartbeat curl split across two physical lines by a backslash continuation is RED (the logical line is joined)" ok
+else row "S6-REG mutation 7: a continuation-split argv heartbeat curl slips through" fail "reasons='$S6R_J_REASONS'"; fi
 
 # --- the executable rows: the REAL workflow step under a refusing stub docker -----------------
 # The step is extracted with PyYAML (job registry_pull_path_gate, step id `throwaway`) and cut at the htpasswd line: everything before it (the zot pin
@@ -6623,7 +6727,7 @@ echo "=== stage S6: Guard 3 rows (htpasswd password off argv: workflow site, res
 # (continuations joined, whole-line comments dropped) has its `< <(...)` stdin feed removed, is split into segments on `||`, `&&`, `;` and `|`, and every
 # segment holding a `curl` command word whose remaining text names `$URL`, `$hb_url` or a `*HEARTBEAT_URL` variable is a VIOLATION: the URL is on argv.
 # (`$INNGEST_HEALTH_URL`, the local health probe in the same file as the heartbeat, is not a heartbeat variable.) NOT COVERED, named: a URL carried in a
-# variable that is none of those names, an `eval`, and the registry template's own heartbeat curls (cloud-init-registry.yml, tracked in #10093).
+# variable that is none of those names, and an `eval`. The registry template's own heartbeat curls are S6-REG's (above).
 #
 # EXPLICIT RESIDUAL ALLOWLIST (S6H_ALLOW: file, the segment text, the exact number of occurrences): the same-class probe scripts that still carry the
 # URL on argv, tracked in #10093. THE ALLOWLIST SHRINKS BY DELETION ONLY: an entry the scan no longer sees, or a count that moved, is RED.
@@ -7451,7 +7555,8 @@ SELFTEST_PASSES=0
 # 781 -> 796 at #10093 (stage S7, Guard 3 for markdown: bearer and apikey headers off curl argv in plugins/**/*.md): the 15 S7 rows, measured (796 passed, 0 failed).
 # 796 -> 801 at the PR #10185 fix round (S7: the Rule E header names, the executed-snippet rows and their control): 5 more S7 rows, measured (801 passed, 0 failed).
 # 801 -> 802 at the fix-round batch (S7: an executed row for the deploy-status-debugging snippet; the ship row also covers APP_DOMAIN_BASE): measured (802 passed, 0 failed).
-EXPECTED_TESTS=802
+# 802 -> 808 at PR B (#10119, registry template): S6 registry site rows now identity rows, the ceiling row also judges a grow-by-one allowlist, mutation 8 (each registry site back to argv) and the S6-REG heartbeat scan (real tree, three mutations, one must-pass): measured (808 passed, 0 failed). 808 -> 811 at review (S6-REG mutations 5-7: comment-backslash, absolute curl path, continuation split).
+EXPECTED_TESTS=811
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
