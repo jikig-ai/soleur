@@ -693,27 +693,6 @@ fi
 
 # ── BOOT2 under a pointer: the reopen unit opens exactly the volume the pointer names ─────────
 B3_BYID="$TMPROOT/b3-byid"; mkdir -p "$B3_BYID"
-ln -sf "$L_RAW" "$B3_BYID/scsi-0HC_Volume_${LUKS_ID}"
-render_reopen "$B3_BYID" "$TMPROOT/reopen-b3.sh"
-R_RC=0
-INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="$LUKS_ID" bash "$TMPROOT/reopen-b3.sh" > "$TMPROOT/reopen-b3.log" 2>&1 || R_RC=$?
-if [ "$R_RC" -eq 0 ] && [ "$(backing_of inngest-redis)" = "$(basename "$L_RAW")" ]; then ok "BOOT2-PTR reboot reopens the volume as the canonical mapper"; else no "BOOT2-PTR rc=$R_RC canonical backing='$(backing_of inngest-redis)'"; sed -n '1,8p' "$TMPROOT/reopen-b3.log" >&2; fi
-mkdir -p "$TMPROOT/b3mnt"
-if mount /dev/mapper/inngest-redis "$TMPROOT/b3mnt" >/dev/null 2>&1; then
-  CLEAN_MOUNTS+=("$TMPROOT/b3mnt")
-  if [ -f "$TMPROOT/b3mnt/canary" ]; then ok "BOOT2-PTR the store survives the reboot"; else no "BOOT2-PTR the reopened store is not the formatted one"; fi
-  umount "$TMPROOT/b3mnt" >/dev/null 2>&1
-else
-  no "BOOT2-PTR could not mount the reopened canonical mapper"
-fi
-umount "$B3_MNT" "${B3_MNT}-luks" >/dev/null 2>&1
-arm_reset
-rm -f "$B3_BYID/scsi-0HC_Volume_${LUKS_ID}"
-R_RC=0
-INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="$LUKS_ID" LIBMOUNT_FSTAB="$B3_FSTAB" bash "$TMPROOT/reopen-b3.sh" > "$TMPROOT/reopen-b3b.log" 2>&1 || R_RC=$?
-if [ "$R_RC" -ne 0 ] && [ ! -e /dev/mapper/inngest-redis ]; then ok "BOOT2-PTR a pointer to an absent volume REFUSES on reboot too (no fallback)"; else no "BOOT2-PTR absent-volume reboot: rc=$R_RC, canonical mapper present=$([ -e /dev/mapper/inngest-redis ] && echo yes || echo no)"; fi
-umount "$B3_MNT" "${B3_MNT}-luks" >/dev/null 2>&1
-arm_reset
 B3_MNT="$TMPROOT/b3-mnt"; B3_FSTAB="$TMPROOT/b3-fstab"
 mkdir -p "$B3_MNT"; : > "$B3_FSTAB"
 ln -sf "$L_RAW" "$B3_BYID/scsi-0HC_Volume_${LUKS_ID}"
@@ -724,6 +703,14 @@ if [ "$R_RC" -eq 0 ] && [ "$(backing_of inngest-redis)" = "$(basename "$L_RAW")"
 # The reopen now also COMPLETES the mount (ensure_mount): register its mountpoint for teardown and
 # umount before the next arm — a mounted mapper refuses cryptsetup close.
 CLEAN_MOUNTS+=("$B3_MNT")
+arm_reset
+
+# BOOT2-PTR: a pointer to an absent volume REFUSES on reboot too (no fallback).
+rm -f "$B3_BYID/scsi-0HC_Volume_${LUKS_ID}"
+R_RC=0
+INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="$LUKS_ID" LIBMOUNT_FSTAB="$B3_FSTAB" bash "$TMPROOT/reopen-b3.sh" > "$TMPROOT/reopen-b3b.log" 2>&1 || R_RC=$?
+if [ "$R_RC" -ne 0 ] && [ ! -e /dev/mapper/inngest-redis ]; then ok "BOOT2-PTR a pointer to an absent volume REFUSES on reboot too (no fallback)"; else no "BOOT2-PTR absent-volume reboot: rc=$R_RC, canonical mapper present=$([ -e /dev/mapper/inngest-redis ] && echo yes || echo no)"; fi
+umount "$B3_MNT" "${B3_MNT}-luks" >/dev/null 2>&1
 arm_reset
 
 # ═══ #10217 BOOT2 SELF-HEAL — the reopen COMPLETES the mount ══════════════════════════════════
