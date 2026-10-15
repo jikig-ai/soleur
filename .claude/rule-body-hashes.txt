@@ -16,7 +16,7 @@ f986fe104836beadb13264dfdf5223c2a13cac35b29e54a9d5226d1cf8144a7b  hr-exhaust-all
 221d3ef7d81bdfaea8e0aae386eef875f51dda5ae23847d069fccd7c9ded8f3b  hr-github-api-endpoints-with-enum
 87b13f93ec4e0da7508b061cf18200d53f91b746ecb98563f1e6f42e1c6f9db8  hr-github-app-auth-not-pat
 738a82a8ccf5c3187525393771e88e94c478d4b219ede66c2db4ba2ce504591c  hr-mcp-tools-playwright-etc-resolve-paths
-4b86563d5be5ac98e1b377057a0ea34fd0761fd0087258bf9c4b5b4f6c5dd068  hr-menu-option-ack-not-prod-write-auth
+62f7ef9a380a9cc426964de82361b71db4fdd0f02cea987c683630a6e694bf7c  hr-menu-option-ack-not-prod-write-auth
 f8a323e9c2570956a875ac91fa6a915df7dfad6b28513eee83dd5be0592f0c93  hr-monitor-not-run-in-background-for-polling
 29514c8270d1e3e410842b549c09c74b52471f28ce357751c7a9a1f6cdd0bbba  hr-multi-step-post-merge-bootstrap-script
 9173df3a578ecdc1a4a64c3eccede6dcb7a57fed6474cb696875c2d5d7ff7e57  hr-never-git-add-a-in-user-repo-agents
