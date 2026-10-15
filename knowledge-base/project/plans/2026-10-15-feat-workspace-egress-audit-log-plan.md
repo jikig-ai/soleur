@@ -46,6 +46,8 @@ Per the binding CTO ruling the work splits in two (the CTO folded the legal-word
 | New Inngest prune function | P5 | Would add a Sentry cron monitor, which the two-PR rule forbids routing in the PR that creates it. `pg_cron` retention sweeps already exist (migrations 029, 038, 041). |
 | Destination view and wireframe | P1 | Deferred to PR2 by the ruled split. |
 
+**ADR corpus.** ADR-278 (the gateway), ADR-052 (container egress firewall) and ADR-286 (Vector journald source admission: sources are admitted by OR, so adding the rollup transform and sink must be checked against the admission test) bound this design.
+
 **Learnings applied.** Reading Better Stack from the app is contradicted by the log-query runbook (three credentials, only the operator-held one reads content). Per-event inserts conflict with the WAL learning, so the rollup happens before the app. Workspace-attributed host data is personal data and earlier per-user histories were steered to aggregates. Tenant-side writes fail silently without an RPC (RLS plus column grant), so writes go through a `SECURITY DEFINER` function with no tenant `INSERT` policy. The viewer must filter by `workspace_id` with the same predicate as RLS (client/server mismatch learning). Committed `.pen` files must be committed before Pencil opens them (PR2).
 
 ## Research Reconciliation: Spec vs. Codebase
@@ -66,11 +68,11 @@ Per the binding CTO ruling the work splits in two (the CTO folded the legal-word
 - Stored fields: `workspace_id, bucket_start, requested_host, decision, source_host, request_count, bytes_out, first_seen, last_seen`. Not stored: `resolved_ip, client, duration_ms`, any user, session, path or IP value.
 - Attribution hardening (plan review, architecture seat; verified by reading `egress-gateway-squid.conf` and `egress-auth-helper.sh`, not yet tested against Squid): `%un` logs the PRESENTED username even when authentication fails, and the helper only guards the allow path, so a bad-credential attempt naming another workspace id would produce a row attributed to that workspace. Add the HTTP status (`%>Hs`) to the logformat, drop failed-authentication (407) rows in VRL, JSON-safe the value, and require `workspace` to match a UUID pattern in VRL. The gateway's own probe username (`probe`) is not a workspace: it becomes a liveness heartbeat with no database write. A gateway test must prove it: a failed-authentication attempt naming a victim id yields a 407 row that VRL drops.
 - Time bucketing: compute `bucket_start = floor(ts, 15 min)` in VRL and put it in the `reduce` group key. Vector windows are relative to the first event, so without this a restart re-emits the same real bucket under a shifted key.
-- Cardinality: `requested_host` is agent-controlled. Cap distinct hosts per workspace per bucket and fold the overflow into one `(other)` row so memory (`MemoryMax=256M`) and WAL stay bounded; test with a 100,000-unique-host flood.
+- Cardinality: `requested_host` is agent-controlled and VRL is stateless per event, so VRL cannot count distinct hosts. Cap events per workspace per window upstream of the `reduce` with Vector's `throttle` transform keyed on `workspace` (threshold chosen from the Phase 0 volume measurement; excess events are discarded and counted), bound `requested_host` length in VRL, and fold any overflow into one `(other)` row in the RPC. The mechanism is chosen from a `vector test` prototype and a 100,000-unique-host flood test, not assumed, so memory (`MemoryMax=256M`) and WAL stay bounded.
 - Rejection semantics: the RPC skips and counts rows for unknown or unattributable workspaces and never raises; the route returns 2xx for them. Raising would make the sink retry the same batch forever.
 - Route order: runtime flag off returns 2xx first, then the secret check, then the body. A missing secret must not return 5xx (Vector retries forever).
 - Route surface: the app container is published on `0.0.0.0:3000`, so the hop is not strictly loopback. The route requires a loopback `Host`, rejects forwarding headers, and gets an exact entry in `lib/routes.ts` `PUBLIC_PATHS` plus the csrf-coverage exemption (the `kb-drift-ingest` precedent). Without the `PUBLIC_PATHS` entry middleware redirects Vector to the login page before any gate runs.
-- Delivery (CTO plan-review ruling, reversing the earlier per-row HMAC): Vector's native HTTP-sink bearer auth (`auth.strategy = "bearer"`) with a bounded disk buffer using `drop_newest` on overflow. The app compares the token in constant time and accepts a current and a previous token so the secret can rotate. Body cap, zod validation, a per-batch row cap and the workspace foreign key stay. The bearer secret lives in a Vector config fragment delivered only to the web hosts, never in the shared `vector.toml` (which also runs on the inngest host and must not need the secret); `${...}` interpolation in the shared file stays forbidden. There is no replay window: `bucket_start` is validated instead (reject rows older than the 30-day retention or later than now plus one bucket plus skew), so a buffered backlog after an app outage is still accepted. The trust root is app-environment compromise (anything that can read the app env can forge rows); it goes in the ADR's does-not-defend list. Verify whether `/api/internal/*` is already blocked at the ingress and block it if not, because the container listens on `0.0.0.0:3000`.
+- Delivery (CTO plan-review ruling, reversing the earlier per-row HMAC): Vector's native HTTP-sink bearer auth (`auth.strategy = "bearer"`) with a bounded disk buffer using `drop_newest` on overflow. The app compares the token in constant time and accepts a current and a previous token so the secret can rotate. Body cap, zod validation, a per-batch row cap and the workspace foreign key stay. The web Vector unit loads a single file (`--config /etc/vector/vector.toml`, `soleur-host-bootstrap.sh:926`), so there is no separate fragment: the sink reads its token through Vector's default-value interpolation `${EGRESS_AUDIT_INGEST_TOKEN:-}`, which does not stop startup where the variable is unset (strict `${VAR}` would). The secret exists only in Doppler `soleur/prd` (the web hosts); the inngest host uses a different Doppler project, never receives it, and runs no gateway, so the sink never fires there. The shared file already interpolates `${BETTERSTACK_LOGS_TOKEN}` (validated with dummy values at `server.tf:1445`). Support for the `:-` default in Vector 0.43.1 is verified by a Phase 3 test (`vector validate` with the variable unset and set) before the design is frozen. There is no replay window: `bucket_start` is validated instead (reject rows older than the 30-day retention or later than now plus one bucket plus skew), so a buffered backlog after an app outage is still accepted. The trust root is app-environment compromise (anything that can read the app env can forge rows); it goes in the ADR's does-not-defend list. Verify whether `/api/internal/*` is already blocked at the ingress and block it if not, because the container listens on `0.0.0.0:3000`.
 - Target: `http://127.0.0.1:3000/api/internal/egress-audit-ingest` (Vector and the app share the host; no firewall change, per the IaC read of ADR-052 and the inbound-only Hetzner firewall).
 - Write path: route validates with zod, then calls one `SECURITY DEFINER` RPC that batch-upserts with `GREATEST` on conflict, key `(workspace_id, bucket_start, requested_host, decision, source_host)`. The workspace foreign key is a second check that rejects unknown workspaces.
 - With the flag off the route returns 2xx and drops the batch, so the sink never retries into a full buffer.
@@ -88,13 +90,14 @@ Per the binding CTO ruling the work splits in two (the CTO folded the legal-word
 1. Write the DPIA screening addendum (CLO): record that the rollup changes the facts of the 2026-10-05 memo (app-database persistence, a 30-day store, a table that will become member-readable), that WP248 "systematic monitoring of employees" is now partly engaged, and add trigger **t7**: retention above 30 days, or any user, session, IP or path field added. The full t6 re-screen (viewer lands) stays a PR2 merge gate.
 2. Measure real daily CONNECT volume from the Better Stack copy (self-pull, 7-day window if retained) and record rows/day and the resulting rollup row estimate in this plan before the migration is written. This sizes the WAL estimate; the CTO's figure (about 80k rows/day at 1,000 workspaces) is the starting assumption, not the measurement.
 3. Decide, via the surfaced operator decisions below, whether PR1 may be enabled before PR2 exists. PR1 ships dark regardless.
+4. Measure before the acceptance criteria are frozen (the attribution and cardinality claims rest on reading, not on a test): on the pinned Squid image, whether `%un` logs the presented username on a failed login and whether `%>Hs` renders 407; with `vector test`, the `reduce` window and `throttle` behaviour including a 100,000-unique-host flood and its memory; and that Vector 0.43.1 accepts the default-value interpolation. The volume figures in this plan come from `betterstack-query.sh --since 24h --grep requested_host` (100 rows, the query cap: `TCP_TUNNEL` 50, `TCP_DENIED` 49, `TCP_DENIED_ABORTED` 1).
 
 ### Phase 1: migration (RED tests first)
 
 `apps/web-platform/supabase/migrations/162_workspace_egress_audit_rollup.sql` (re-check the number at work time; 161 is the latest today) with `.down.sql`, `supabase/verify/162_*.sql`, and `test/supabase-migrations/162-*.test.ts`.
 
 - Table `workspace_egress_audit_rollup` with the composite primary key above, `decision` stored as text and normalised in VRL (a CHECK would drift: Squid emits many `%Ss` values), `request_count`, `bytes_out` non-negative, `workspace_id` FK `ON DELETE CASCADE`.
-- `ENABLE ROW LEVEL SECURITY`; `REVOKE INSERT, UPDATE, DELETE, SELECT` from `anon` and `authenticated` (as in migration 058); no member policy in this migration.
+- `ENABLE ROW LEVEL SECURITY`; `REVOKE INSERT, UPDATE, DELETE, SELECT` from `anon` and `authenticated` (migration 058 revokes only INSERT, UPDATE and DELETE; this migration also revokes SELECT because no member policy exists yet); no member policy in this migration.
 - `ingest_egress_audit_rollup(rows jsonb)`: `SECURITY DEFINER`, `search_path` pinned including `pg_temp`, `GRANT EXECUTE` to `service_role` only with `REVOKE ... FROM PUBLIC`, bounded row count per call, skips and counts rows for unknown workspaces and for workspaces whose `web_egress` is false, joining `workspaces.web_egress` (never raises).
 - `purge_egress_audit_rollup(retention interval)` batched delete (name follows `purge_workspace_member_actions`, migration 063), `REVOKE EXECUTE` from PUBLIC, anon and authenticated, scheduled with `pg_cron` daily inside a `DO` block catching `duplicate_object`; the `.down.sql` calls `cron.unschedule` and drops both functions; the verify SQL uses the `bad=1` row format of migration 158 for the grants, the table comment and the `cron.job` row.
 - Register the new table in `test/rls-fuzz/targets.ts`: `workspaceTenancyTables` flags any RLS table with a `workspace_id` column until it is a target or an `EXCLUDED_ISOLATION` entry with a rationale. `rpc-cases.ts` covers only RPCs that `authenticated` can execute, and the ingest RPC is service-role only, so it is not registered there.
@@ -106,11 +109,11 @@ Per the binding CTO ruling the work splits in two (the CTO folded the legal-word
 
 ### Phase 3: Vector config (RED tests first)
 
-`apps/web-platform/infra/vector.toml`: the `reduce` transform fed from `egress_gw_journald`, the VRL steps that compute `bucket_start`, filter and cap (attribution hardening, cardinality), and a new HTTP sink using native bearer auth with a bounded disk buffer. The sink and its secret live in a Vector config fragment delivered only to the web hosts; the shared `vector.toml` (also run on the dedicated inngest host, which lacks the secret) must contain no `${...}` interpolation and no reference to the secret. Add a `vector-egress-rollup` test file with fixtures, extend the admission-test model for the new sink, and keep `validate-vector-config.yml` green.
+`apps/web-platform/infra/vector.toml`: the `reduce` transform fed from `egress_gw_journald`, the VRL steps that compute `bucket_start`, filter (attribution hardening) and bound `requested_host` length, a `throttle` transform for the per-workspace event cap upstream of the `reduce`, and a new HTTP sink using native bearer auth with a bounded disk buffer. The sink reads its token through `${EGRESS_AUDIT_INGEST_TOKEN:-}` (default-empty, so the shared file still starts on the dedicated inngest host, where the sink never fires); there is no separate fragment because the unit loads one file. Add a `vector-egress-rollup` test file with fixtures, extend the admission-test model for the new sink, and keep `validate-vector-config.yml` green.
 
 ### Phase 4: secret and delivery
 
-Terraform carrier for the bearer secret following `github-app.tf`: a `random_id` plus a `doppler_secret` in project `soleur`, config `prd`, masked, with no Terraform variable and no default (`hr-tf-variable-no-operator-mint-default`). The same `prd` secret reaches the app and Vector (Vector already runs under `doppler run --config prd`), so no unit or drop-in change is needed; the web-host-only Vector fragment is rendered and delivered by the same `journald_persistent{,_web2}` provisioners and the inngest host never receives it. The secret must exist, and the app must be redeployed with the route, before Vector is redelivered. Delivery to running hosts uses the existing push apply for `terraform_data.journald_persistent` and `journald_persistent_web2` (`vector-redeliver` covers web-1 only; web-2 needs the push apply), which is a hash-triggered replace of those provisioners with a validate-and-restore gate: no host replace, no serving downtime, journald cursor-resumed so no log gap. This is the documented exception to `hr-prod-host-config-change-immutable-redeploy`: `vector.toml` is declared, hashed configuration with a validated reload.
+Terraform carrier for the bearer secret following `github-app.tf`: a `random_id` plus a `doppler_secret` in project `soleur`, config `prd`, masked, with no Terraform variable and no default (`hr-tf-variable-no-operator-mint-default`). The same `prd` secret reaches the app and Vector (Vector already runs under `doppler run --config prd`), so no unit or drop-in change is needed. The inngest host uses a different Doppler project and never receives it. Merge effect (state this as the first line of the PR body): merging triggers `apply-web-platform-infra.yml` (`paths: apps/web-platform/infra/**`), whose targets include `journald_persistent{,_web2}`, so Vector is redelivered to the web hosts and restarted (no serving downtime) independently of the app deploy and with no `depends_on` on the new secret. The ordering 'secret and route first' is therefore not enforceable, and the design makes it harmless: the sink's default-empty token and bounded retries mean that until the route and secret exist events are retried a bounded number of times and dropped, which loses nothing while the pipeline is dark. Delivery to running hosts uses the existing push apply for `terraform_data.journald_persistent` and `journald_persistent_web2` (`vector-redeliver` covers web-1 only; web-2 needs the push apply), which is a hash-triggered replace of those provisioners with a validate-and-restore gate: no host replace, no serving downtime, journald cursor-resumed so no log gap. This is the documented exception to `hr-prod-host-config-change-immutable-redeploy`: `vector.toml` is declared, hashed configuration with a validated reload.
 
 ### Phase 5: documentation carried by PR1
 
@@ -140,6 +143,7 @@ Turning the flag on in production is a separate, operator-authorized step after 
 - `apps/web-platform/infra/egress-gateway-squid.conf` (add `%>Hs` to the logformat) and `apps/web-platform/infra/egress-gateway.test.sh` (failed-authentication attribution test); delivery path for the gateway config confirmed with the IaC architect at work time
 - `apps/web-platform/lib/routes.ts` (`PUBLIC_PATHS` exact entry) and `apps/web-platform/lib/auth/csrf-coverage.test.ts`
 - `apps/web-platform/test/rls-fuzz/targets.ts`
+- `plugins/soleur/test/preflight-discoverability-test.test.ts` (bump the `BASELINE_DECLARED_PROBES` ratchet from 66 to 67 with the required placement/truth/no-substitute comment, because this plan declares `credentials_required`; the test fails today at 67 declared against 66)
 - Terraform for the bearer secret (extend the existing Doppler secrets file or add alongside `github-app.tf`)
 - `apps/web-platform/lib/feature-flags/server.ts` (new runtime flag name, created through `soleur:flag-create`; the typed-`yes` creation step is handed to the operator) and `.env.example`
 - `apps/web-platform/test/infra/vector-admission.test.sh`
@@ -152,7 +156,7 @@ PR1 legal commits (the last commits of the same PR, a clean seam): `docs/legal/p
 
 ## Open Code-Review Overlap
 
-None. Five planned or likely-touched files (`vector.toml`, `egress-gateway-squid.conf`, the Scope Grants page, the web-egress toggle, `workspace-action-audit`) were checked against all open `code-review` issues; no body names any of them.
+Re-run over the final file list. Four open `code-review` issues name a planned file and none concerns this work: #9705 (names `model.c4`; dead-probe heartbeat for an inngest alert), #3216 and #2197 (name `server.tf`; resolved-inline review notes and a billing refactor) and #8436 (names the GDPR policy; CCLA execution docs). Disposition for all four: **acknowledge** - different concerns, left open, no overlap in the edited regions.
 
 ## User-Brand Impact
 
@@ -166,13 +170,14 @@ CPO sign-off is required at plan time before `soleur:work` begins (frontmatter `
 
 ```yaml
 liveness_signal:
-  what: ingest freshness - the newest bucket_start in workspace_egress_audit_rollup is within 40 minutes while the runtime flag is on and at least one workspace has web access enabled, read from the database by the committed probe (the app's info-level log lines are dropped by app_container_warn_filter, so a log marker cannot carry this signal); the gateway's own probe username provides a no-database-write heartbeat for the log path
+  what: ingest freshness - the newest bucket_start in workspace_egress_audit_rollup is within 40 minutes whenever the gateway raw log (Better Stack) shows non-probe decisions for a web-access-enabled workspace in the same window; when the gateway log shows none the workspace set is idle and the probe passes, so the committed probe can tell idle from broken only by reading both sides (the app's info-level log lines are dropped by app_container_warn_filter, so a log marker cannot carry this signal); the gateway's own probe username provides a no-database-write heartbeat for the log path
   cadence: every 15-minute bucket flush
   alert_target: the freshness probe, read by the existing scheduled supabase watchdog or a follow-through; the gateway log path keeps its existing egress_gw_probe_silent alert
   configured_in: apps/web-platform/infra/betterstack-logs-alerts.tf and apps/web-platform/infra/vector.toml
 error_reporting:
   destination: Sentry via the repo's silent-fallback mirror for every ingest failure path (bad token, schema reject, bucket out of bounds, RPC error, body over cap); Vector sink errors have no Better Stack source today (see failure modes)
   fail_loud: true
+  payload_rule: Sentry events carry reason codes and counts only, never `requested_host` or workspace values (host names can reveal user behaviour)
 failure_modes:
   - mode: Vector restarts and loses partial buckets
     detection: counts undercount; set of hosts stays exact; documented as best-effort in the contract
@@ -237,7 +242,7 @@ Push apply of `terraform_data.journald_persistent` and `terraform_data.journald_
 
 ### Host fan-out
 
-Gateway and Vector run on the web hosts only: `egress_gateway` and `egress_gateway_web2`. web-2 is a `twin` already covered by `journald_persistent_web2`. The inngest host receives the same `vector.toml` but runs no gateway, so the rollup transform is inert there; the bearer sink and its secret are in the web-host-only fragment, so the inngest host never needs the secret.
+Gateway and Vector run on the web hosts only: `egress_gateway` and `egress_gateway_web2`. web-2 is a `twin` already covered by `journald_persistent_web2`. The inngest host receives the same `vector.toml` but runs no gateway, so the rollup transform is inert there; the sink's token is default-empty (`${EGRESS_AUDIT_INGEST_TOKEN:-}`) and the secret exists only in the web hosts' Doppler config, so the inngest host neither needs nor receives it.
 
 ### Distinctness / drift safeguards
 
@@ -319,10 +324,10 @@ The ADR is authored now describing the target state with status "adopting"; it i
 
 ### Split Assessment
 
-- Subsystems touched: 4 - `apps/web-platform`, `knowledge-base`, `docs`, `plugins/soleur` (the last two only through the PR1 legal commits' mirrors)
-- Planned files: about 20 | Estimated changed lines: about 750
+- Subsystems touched: 5 - `apps/web-platform`, `knowledge-base`, `docs`, `plugins/soleur`, `scripts` (docs and plugins only through the PR1 legal commits' mirrors)
+- Planned files: about 38 (13 to create, 15 to edit, 10 legal documents and mirrors) | Estimated changed lines: about 900
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: the tunables say split (4 roots); the CTO ruling on plan review overrides to two PRs: PR1 (dark pipeline plus the legal wording as its last commits, a clean seam that can be split back out if counsel review stalls) and PR2 (read route and card, planned after volume is measured)
+- Recommendation: the tunables say split (5 roots, about 38 files); the CTO ruling on plan review overrides to two PRs: PR1 (dark pipeline plus the legal wording as its last commits, a clean seam that can be split back out if counsel review stalls) and PR2 (read route and card, planned after volume is measured)
 
 ## Acceptance Criteria
 
@@ -333,12 +338,14 @@ The ADR is authored now describing the target state with status "adopting"; it i
 - [ ] With the runtime flag injected off (not read from the ambient environment) the route returns 2xx and writes nothing, and it does so before the secret check, so a missing secret cannot return 5xx.
 - [ ] A failed-authentication attempt naming a victim workspace id produces a 407 gateway row that VRL drops; a non-UUID or `probe` username never reaches the database; the gateway test asserts both.
 - [ ] `bucket_start` is computed from the event timestamp, a Vector restart does not shift bucket keys, and a 100,000-unique-host flood is capped per workspace per bucket with an `(other)` overflow row.
+- [ ] CI proves the live-database cases executed: the `rls-authz-fuzz.yml` run asserts a non-zero executed count for the new cases, because the harness is wired through `describe.skipIf` and a skipped run exits 0.
+- [ ] The preflight discoverability ratchet (`BASELINE_DECLARED_PROBES`) is bumped to the new count with the required comment and its test passes.
 - [ ] Token rotation works: the previous token is still accepted during rotation, an unrelated token is rejected, and the comparison is constant-time.
 - [ ] The RPC drops (and counts) rows for a workspace whose `web_egress` is false and accepts them once it is true, tested in the live-database harness; toggle-off does not purge existing rows in this PR.
 - [ ] The new route has an exact `PUBLIC_PATHS` entry and passes the csrf-coverage test; the new table is a target (or an `EXCLUDED_ISOLATION` entry with rationale) in `test/rls-fuzz/targets.ts`.
 - [ ] The RPC is executable by `service_role` only; `anon` and `authenticated` have no table privileges.
 - [ ] The retention sweep deletes rows older than 30 days in bounded batches and is verified by a test that inserts an aged row (this table is not WORM-protected, so no trigger blocks the delete).
-- [ ] `vector validate` passes; the new sink has a bounded disk buffer with `drop_newest`; the bearer sink and secret appear only in the web-host fragment (the shared `vector.toml` has none); the admission test and the new rollup test pass.
+- [ ] `vector validate` passes; the new sink has a bounded disk buffer with `drop_newest`; the shared `vector.toml` carries no literal secret and reads the token only through `${EGRESS_AUDIT_INGEST_TOKEN:-}`, and `vector validate` passes with that variable unset (as on the inngest host) and set; the admission test and the new rollup test pass.
 - [ ] (work-time gate, not a test) A measured rows/day figure from the real gateway log and the resulting WAL estimate are recorded in this plan before the migration is written.
 - [ ] Counts are documented and tested as best-effort lower bounds; the set of hosts and decisions is exact.
 - [ ] The new ADR (next free ordinal at the merge base), the C4 edge and the DPIA addendum (with trigger t7) are committed; `c4-count-parity` and the C4 render tests pass.
@@ -394,7 +401,7 @@ Five-seat panel (simplicity, architecture, flow, convention, over-engineering cr
 
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails the deepen-plan gate; this one declares `single-user incident` and therefore needs CPO sign-off before work begins.
 - The ordinal `ADR-288` and migration number `162` are provisional: sibling PRs claim them. Re-check at work time; the ship gate re-verifies.
-- Any `${NAME}` interpolation or secret reference in the shared `vector.toml` breaks Vector startup on the inngest host; the secret belongs only in the web-host fragment.
-- The bearer secret must exist in `soleur/prd`, and the app route must be deployed, before Vector is redelivered; the secret goes only into the web-host Vector fragment, never the shared `vector.toml`.
+- Strict `${NAME}` interpolation of the egress-ingest token in the shared `vector.toml` would break Vector startup on the inngest host; use only the default-value form `${EGRESS_AUDIT_INGEST_TOKEN:-}` (the file already interpolates `${BETTERSTACK_LOGS_TOKEN}`, validated with dummy values at `server.tf:1445`).
+- Merging redelivers Vector to the web hosts immediately (the apply workflow triggers on `apps/web-platform/infra/**`); until the route is deployed the sink's bounded retries drop events, which loses nothing while the pipeline is dark. State this as the first line of the PR body.
 - Do not add a member read path, a session id, an IP, a client address or any per-user field without reopening trigger t7.
 - The route must return success when the flag is off; returning an error fills the disk buffer and then drops newer events.
